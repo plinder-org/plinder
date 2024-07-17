@@ -1,9 +1,9 @@
-plinder-data versions
+plinder.data versions
 ---------------------
 
 The latest version of this `manifest.md` is available [here](https://storage.googleapis.com/plinder/manifest.md).
 
-The `plinder-data` dataset itself comes in releases based on when the seed data was synced from the RCSB.
+The `plinder.data` dataset itself comes in releases based on when the seed data was synced from the RCSB.
 It is additionally versioned by the iteration of the pipeline that produced the dataset.
 The numbers reported in the manuscripts for ML4LMS and NeurIPS can be derived from files contained
 within the `2024-04/v1` version of the dataset at `gs://plinder/2024-04/v1`. A full end-to-end reproduced
