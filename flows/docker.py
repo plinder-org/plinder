@@ -126,8 +126,7 @@ def get_env(tag: str | None = None) -> dict[str, str]:
     env : dict[str, str]
         the build environment
     """
-    image = get_image()
-    image_repo = image.replace("/plinder", "")
+    image_repo = "/".join(get_image().split("/")[:-1])
     dev_tag = get_dev_tag()
     base_tag = dev_tag.split("-")[0]
     build_tag = tag or dev_tag
