@@ -1,3 +1,5 @@
+# Copyright (c) 2024, Plinder Development Team
+# Distributed under the terms of the Apache License 2.0
 from typing import Any, Optional, Union
 
 from omegaconf import DictConfig

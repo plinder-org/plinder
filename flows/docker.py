@@ -1,3 +1,5 @@
+# Copyright (c) 2024, Plinder Development Team
+# Distributed under the terms of the Apache License 2.0
 from __future__ import annotations
 
 import logging
@@ -14,41 +16,6 @@ from proc import Proc
 
 logging.basicConfig(level=logging.INFO)
 LOG = logging.getLogger("doc")
-
-
-def query_gar(image: str, tag: str) -> List[str]:
-    """
-    Simply check the artifact registry for a particular image.
-    This is an eager validation to ensure that a flow does not
-    get stuck in a ImagePullBackOff state because k8s cannot find
-    the image in the artifact registry.
-
-    Parameters
-    ----------
-    image : str
-        image name leading up to the tag
-    tag : str
-        image tag itself
-
-    Returns
-    -------
-    out : List[str]
-        the output of the gcloud command for downstream processing
-    """
-    cmd = " ".join(
-        [
-            "gcloud",
-            "artifacts",
-            "docker",
-            "images",
-            "list",
-            image,
-            "--include-tags",
-            "--format='(tags)'",
-            f"--filter=tags~{tag}",
-        ]
-    )
-    return check_output(cmd, stderr=PIPE, text=True, shell=True).splitlines()
 
 
 def get_dev_tag() -> str:
@@ -125,11 +92,10 @@ def get_image() -> str:
     """
     Minimize the diff if any of this changes
     """
-    url = "us-east1-docker.pkg.dev"
-    project = "vantai-analysis"
-    registry = "vantai-rnd-images"
+    url = "ghcr.io"
+    organization = "plinder-org"
     image_name = "plinder"
-    return f"{url}/{project}/{registry}/{image_name}"
+    return f"{url}/{organization}/{image_name}"
 
 
 def get_docker() -> str:
@@ -170,36 +136,9 @@ def get_env(tag: str | None = None) -> dict[str, str]:
             "BASE_TAG": base_tag,
             "IMAGE_REPO": image_repo,
             "BUILD_TAG": build_tag,
+            "INDEX_URL": "https://pypi.org/simple",
         },
     }
-
-
-def get_flow_image() -> str:
-    """
-    metaflow integration to ensure the image passed to the kubernetes
-    decorator is in sync with the current dev tag
-    """
-    image = get_image()
-    tag = "latest"
-    # if we're already in kubernetes then image
-    # doesn't really matter anymore so short circuit
-    if "METAFLOW_KUBERNETES_WORKLOAD" in environ:
-        return f"{image}:{tag}"
-    tag = get_dev_tag()
-    if not len(query_gar(image, tag)):
-        build_image(push=True)
-    return f"{image}:{tag}"
-
-
-def get_index_url() -> str:
-    try:
-        token = check_output(
-            ["gcloud", "auth", "print-access-token"], text=True
-        ).strip()
-        return f"https://oauth2accesstoken:{token}@us-east1-python.pkg.dev/vantai-analysis/internal/simple"
-    except Exception as e:
-        LOG.error(f"error getting token: {e}")
-        return "https://pypi.org/simple"
 
 
 def pull_base_image(build: bool = False, promote: bool = False) -> None:
@@ -218,7 +157,6 @@ def pull_base_image(build: bool = False, promote: bool = False) -> None:
     cmd = [docker, "compose", "pull", "base", "--quiet"]
     Proc(cmd, env=env).execute()
     if build:
-        env["INDEX_URL"] = get_index_url()
         cmd = [
             docker,
             "build",
@@ -278,16 +216,13 @@ def build_image(tag: str | None = None, push: bool = False) -> str:
     env = get_env(tag)
     image = f"{env['IMAGE_REPO']}/plinder"
     build_tag = env["BUILD_TAG"]
-    if tag is None and len(query_gar(image, build_tag)):
-        return f"{image}:{build_tag}"
-    env["INDEX_URL"] = get_index_url()
     cmd = [
         docker,
         "build",
         "-f",
         "dockerfiles/main/Dockerfile",
         "-t",
-        f"{env['IMAGE_REPO']}/plinder:{env['BUILD_TAG']}",
+        f"{env['IMAGE_REPO']}/plinder:{build_tag}",
         "--secret",
         "id=INDEX_URL",
         "--build-arg",
@@ -325,8 +260,6 @@ def test_image(
         the arguments to pass to the image
     """
     env = get_env(tag)
-    # if not push:
-    #     build_image(tag=tag)
     docker = get_docker()
     cmd = [docker, "compose", "run", "test"]
     if args is not None and len(args):

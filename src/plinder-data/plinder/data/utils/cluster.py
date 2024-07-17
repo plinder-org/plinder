@@ -1,3 +1,5 @@
+# Copyright (c) 2024, Plinder Development Team
+# Distributed under the terms of the Apache License 2.0
 import networkx as nx
 import numpy as np
 import pandas as pd

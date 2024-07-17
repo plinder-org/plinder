@@ -1,3 +1,5 @@
+# Copyright (c) 2024, Plinder Development Team
+# Distributed under the terms of the Apache License 2.0
 from functools import wraps
 from time import sleep
 from typing import Callable, Optional, TypeVar, Union, overload

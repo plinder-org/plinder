@@ -1,23 +1,23 @@
 services:
 
   base:
-    image: ${IMAGE_REPO:-docker.io}/plinder-base:${BASE_TAG:-latest}
+    image: ${IMAGE_REPO:-ghcr.io/plinder-org}/plinder-base:${BASE_TAG:-latest}
     build:
       context: ./dockerfiles/base
 
   plinder:
-    image: ${IMAGE_REPO:-docker.io}/plinder:${BUILD_TAG:-latest}
+    image: ${IMAGE_REPO:-ghcr.io/plinder-org}/plinder:${BUILD_TAG:-latest}
     build:
       context: .
       dockerfile: ./dockerfiles/main/Dockerfile
       args:
-        BASE_IMAGE: ${IMAGE_REPO:-docker.io}/plinder-base
+        BASE_IMAGE: ${IMAGE_REPO:-ghcr.io/plinder-org}/plinder-base
         BASE_TAG: ${BASE_TAG:-latest}
     depends_on:
       - base
 
   test:
-    image: ${IMAGE_REPO:-docker.io}/plinder:${BUILD_TAG:-latest}
+    image: ${IMAGE_REPO:-ghcr.io/plinder-org}/plinder:${BUILD_TAG:-latest}
     depends_on:
       - plinder
     volumes:

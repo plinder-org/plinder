@@ -1,3 +1,5 @@
+# Copyright (c) 2024, Plinder Development Team
+# Distributed under the terms of the Apache License 2.0
 # mypy: disable-error-code="no-untyped-def, no-untyped-call, attr-defined, assignment, arg-type, var-annotated"
 
 from plinder.data.common.log import setup_logger
