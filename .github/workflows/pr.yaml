@@ -55,7 +55,7 @@ jobs:
         run: gcloud auth configure-docker us-east1-docker.pkg.dev
       - name: Get changed files
         id: changed-files
-        uses: tj-actions/changed-files@v39
+        uses: tj-actions/changed-files@v41
         with:
           files: dockerfiles/base/*
       - name: Pull base image and build
