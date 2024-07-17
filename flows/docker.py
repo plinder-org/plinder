@@ -82,7 +82,9 @@ def get_version_bump(base_tag: str | None = None) -> str:
         import semver
 
         new_version = getattr(semver, f"bump_{bump}")(base_tag.lstrip("v"))
-        return f"v{new_version}"
+        new_version = f"v{new_version}"
+        print(new_version)
+        return new_version
     except ImportError:
         LOG.error("could not import semver")
         return ""
@@ -124,8 +126,7 @@ def get_env(tag: str | None = None) -> dict[str, str]:
     env : dict[str, str]
         the build environment
     """
-    image = get_image()
-    image_repo = image.replace("/plinder", "")
+    image_repo = "/".join(get_image().split("/")[:-1])
     dev_tag = get_dev_tag()
     base_tag = dev_tag.split("-")[0]
     build_tag = tag or dev_tag

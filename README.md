@@ -147,6 +147,8 @@ This code is split into 4 sub-packages
 
 # 💽 Dataset Generation
 
+![Workflow](./assets/workflow.png)
+
 See the [End-to-end pipeline](#src/plinder-data/README.md) description for technical details about the dataset generation.
 
 
