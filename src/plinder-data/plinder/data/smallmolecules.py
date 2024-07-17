@@ -1,3 +1,5 @@
+# Copyright (c) 2024, Plinder Development Team
+# Distributed under the terms of the Apache License 2.0
 # This script contains all funcs related to small molecules.
 from __future__ import annotations
 

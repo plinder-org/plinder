@@ -1,3 +1,5 @@
+# Copyright (c) 2024, Plinder Development Team
+# Distributed under the terms of the Apache License 2.0
 from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field

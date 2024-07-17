@@ -1,3 +1,5 @@
+# Copyright (c) 2024, Plinder Development Team
+# Distributed under the terms of the Apache License 2.0
 
 def test_get_smiles_dict(mock_alternative_datasets):
     entry_dir = mock_alternative_datasets("test")
