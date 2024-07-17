@@ -20,17 +20,8 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.9"
-      - name: Install semver
-        run: python -m pip install semver
-      - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@v1
-        with:
-          workload_identity_provider: projects/1045208284552/locations/global/workloadIdentityPools/vantai-github-actions-pool/providers/vantai-github-actions-provider
-          service_account: default-gha@vantai-analysis.iam.gserviceaccount.com
-      - name: Setup gcloud
-        uses: google-github-actions/setup-gcloud@v1
       - name: Configure docker
-        run: gcloud auth configure-docker us-east1-docker.pkg.dev
+        run: echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.repository_owner }} --password-stdin
       - name: Get version bump
         id: get-tag
         run: echo "bump=$(python flows/docker.py bump)" >> $GITHUB_OUTPUT
@@ -44,5 +35,5 @@ jobs:
         if: steps.get-tag.outputs.bump != ''
         run: python flows/docker.py test --push
       - name: Save git tag
-        if: steps.get-tag.outputs.bump != ''
+        if: steps.get-tag.outputs.bump != 'skip'
         run: git push origin ${{ steps.get-tag.outputs.bump }}
