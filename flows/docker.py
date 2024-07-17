@@ -82,7 +82,9 @@ def get_version_bump(base_tag: str | None = None) -> str:
         import semver
 
         new_version = getattr(semver, f"bump_{bump}")(base_tag.lstrip("v"))
-        return f"v{new_version}"
+        new_version = f"v{new_version}"
+        print(new_version)
+        return new_version
     except ImportError:
         LOG.error("could not import semver")
         return ""
