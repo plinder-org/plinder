@@ -1,5 +1,7 @@
+![plinder](./assets/plinder.png)
+
 <div align="center">
-    <h1>PLINDER: The Protein Ligand INteractions Dataset and Evaluation Resource</h1>
+    <h1>The Protein Ligand INteractions Dataset and Evaluation Resource</h1>
 </div>
 
 ---
