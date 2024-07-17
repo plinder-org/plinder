@@ -127,11 +127,10 @@ def get_image() -> str:
     """
     Minimize the diff if any of this changes
     """
-    url = "us-east1-docker.pkg.dev"
-    project = "vantai-analysis"
-    registry = "vantai-rnd-images"
+    url = "ghcr.io"
+    organization = "plinder-org"
     image_name = "plinder"
-    return f"{url}/{project}/{registry}/{image_name}"
+    return f"{url}/{organization}/{image_name}"
 
 
 def get_docker() -> str:
@@ -194,14 +193,7 @@ def get_flow_image() -> str:
 
 
 def get_index_url() -> str:
-    try:
-        token = check_output(
-            ["gcloud", "auth", "print-access-token"], text=True
-        ).strip()
-        return f"https://oauth2accesstoken:{token}@us-east1-python.pkg.dev/vantai-analysis/internal/simple"
-    except Exception as e:
-        LOG.error(f"error getting token: {e}")
-        return "https://pypi.org/simple"
+    return "https://pypi.org/simple"
 
 
 def pull_base_image(build: bool = False, promote: bool = False) -> None:

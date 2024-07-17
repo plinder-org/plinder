@@ -44,15 +44,8 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
-      - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@v1
-        with:
-          workload_identity_provider: projects/1045208284552/locations/global/workloadIdentityPools/vantai-github-actions-pool/providers/vantai-github-actions-provider
-          service_account: default-gha@vantai-analysis.iam.gserviceaccount.com
-      - name: Setup gcloud
-        uses: google-github-actions/setup-gcloud@v1
       - name: Configure docker
-        run: gcloud auth configure-docker us-east1-docker.pkg.dev
+        run: echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.repository_owner }} --password-stdin
       - name: Get changed files
         id: changed-files
         uses: tj-actions/changed-files@v41
@@ -65,7 +58,7 @@ jobs:
         if: steps.changed-files.outputs.any_changed != 'true'
         run: python flows/docker.py pull
       - name: Build image
-        run: python flows/docker.py build --push
+        run: python flows/docker.py build
       - name: Run test image
         run: python flows/docker.py test
       - name: Copy coverage
