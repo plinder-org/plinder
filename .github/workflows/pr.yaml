@@ -3,6 +3,7 @@ name: CI Workflow
 permissions:
   contents: write
   id-token: write
+  packages: read
   pull-requests: write
 
 concurrency:
