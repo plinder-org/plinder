@@ -265,7 +265,7 @@ def test_image(
     cmd = [docker, "compose", "run", "test"]
     if args is not None and len(args):
         cmd.extend(
-            split(f'''/bin/bash -c "python -m pytest -v -n auto {' '.join(args)} && sqlite3 .coverage 'update file set path=substr(path, 40);' && cp .coverage reports/.coverage"''')
+            split(f'''/bin/bash -c "python -m pytest -v -n auto {' '.join(args)} && cp .coverage reports/.coverage"''')
         )
     Proc(cmd, env=env).execute()
     if push:
@@ -316,24 +316,17 @@ def run_image(
         "PLINDER_LOG_LEVEL=10",
         "-v",
         f"{home}/.local/share/plinder:/plinder",
+        "-v",
+        f"{host}:{guest}",
+        "-v",
+        f"{host}:{app}",
     ]
-    if it:
-        cmd.append("-it")
-    for ns in ["core", "data", "eval", "methods"]:
-        cmd.extend(
-            [
-                "-v",
-                f"{host}/plinder-{ns}/plinder/{ns}:{guest}/{ns}",
-                "-v",
-                f"{host}/plinder-{ns}/plinder/{ns}:{app}/plinder-{ns}/plinder/{ns}",
-            ]
-        )
-    cmd.append(image)
     if it:
         import pty
 
-        pty.spawn(cmd + ["/bin/bash"])
+        pty.spawn(cmd + ["-it", image, "/bin/bash"])
         return
+    cmd.append(image)
     if args is not None:
         cmd.extend(args)
     Proc(cmd).execute()
