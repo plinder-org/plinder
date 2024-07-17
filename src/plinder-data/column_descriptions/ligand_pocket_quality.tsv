@@ -1,0 +1,77 @@
+Name	Type	Description
+ligand_neighboring_protein_chains_atom_count	list[int]	The number of atoms in each neighboring protein chain of the given ligand
+ligand_neighboring_protein_chains_average_b_factor	list[float]	The mean B-value of each neighboring protein chain of the given ligand
+ligand_neighboring_protein_chains_average_occupancy	list[float]	The mean occupancy of each neighboring protein chain of the given ligand
+ligand_neighboring_protein_chains_average_rscc	list[float]	The mean Real-Space Correlation Coefficient across all residues in each neighboring protein chain of the given ligand
+ligand_neighboring_protein_chains_average_rsr	list[float]	The mean Real-Space R-value across all residues in each neighboring protein chain of the given ligand
+ligand_neighboring_protein_chains_average_rsrz	list[float]	The mean RSRZ across all residues in each neighboring protein chain of the given ligand
+ligand_neighboring_protein_chains_heavy_atom_count	list[int]	The number of heavy atoms in each neighboring protein chain of the given ligand
+ligand_neighboring_protein_chains_max_alt_count	list[int]	The maximum number of configurations across all residues in each neighboring protein chain of the given ligand
+ligand_neighboring_protein_chains_num_processed_residues	list[int]	The number of residues which were processed in the validation report for each neighboring protein chain of the given ligand
+ligand_neighboring_protein_chains_num_unresolved_heavy_atoms	list[int]	The number of unresolved heavy atoms across all residues in each neighboring protein chain of the given ligand
+ligand_neighboring_protein_chains_percent_occupancy_over_threshold	list[float]	The fraction of residues with full occupancy in each neighboring protein chain of the given ligand
+ligand_neighboring_protein_chains_percent_outliers_chirality	list[float]	The fraction of chirality outliers (see https://www.wwpdb.org/validation/XrayValidationReportHelp) in each neighboring protein chain of the given ligand
+ligand_neighboring_protein_chains_percent_outliers_clashes	list[float]	The fraction of clash outliers (see https://www.wwpdb.org/validation/XrayValidationReportHelp) in each neighboring protein chain of the given ligand
+ligand_neighboring_protein_chains_percent_outliers_density	list[float]	The fraction of density outliers (see https://www.wwpdb.org/validation/XrayValidationReportHelp) in each neighboring protein chain of the given ligand
+ligand_neighboring_protein_chains_percent_outliers_geometry	list[float]	The fraction of geometry outliers (see https://www.wwpdb.org/validation/XrayValidationReportHelp) in each neighboring protein chain of the given ligand
+ligand_neighboring_protein_chains_percent_processed_residues	list[float]	The fraction of residues processed in the validation file in each neighboring protein chain of the given ligand
+ligand_neighboring_protein_chains_percent_rscc_over_threshold	list[float]	The fraction of residues with RSCC >= 0.8 in each neighboring protein chain of the given ligand
+ligand_neighboring_protein_chains_percent_rsr_under_threshold	list[float]	The fraction of residues with RSR <= 0.3 in each neighboring protein chain of the given ligand
+ligand_neighboring_protein_chains_unknown_residue_count	list[int]	The number of unknown residues in each neighboring protein chain of the given ligand
+ligand_interacting_protein_chains_atom_count	list[int]	The number of atoms in each interacting protein chain of the given ligand
+ligand_interacting_protein_chains_average_b_factor	list[float]	The mean B-value of each interacting protein chain of the given ligand
+ligand_interacting_protein_chains_average_occupancy	list[float]	The mean occupancy of each interacting protein chain of the given ligand
+ligand_interacting_protein_chains_average_rscc	list[float]	The mean Real-Space Correlation Coefficient across all residues in each interacting protein chain of the given ligand
+ligand_interacting_protein_chains_average_rsr	list[float]	The mean Real-Space R-value across all residues in each interacting protein chain of the given ligand
+ligand_interacting_protein_chains_average_rsrz	list[float]	The mean RSRZ across all residues in each interacting protein chain of the given ligand
+ligand_interacting_protein_chains_heavy_atom_count	list[int]	The number of heavy atoms in each interacting protein chain of the given ligand
+ligand_interacting_protein_chains_max_alt_count	list[int]	The maximum number of configurations across all residues in each interacting protein chain of the given ligand
+ligand_interacting_protein_chains_num_processed_residues	list[int]	The number of residues which were processed in the validation report for each interacting protein chain of the given ligand
+ligand_interacting_protein_chains_num_unresolved_heavy_atoms	list[int]	The number of unresolved heavy atoms across all residues in each interacting protein chain of the given ligand
+ligand_interacting_protein_chains_percent_occupancy_over_threshold	list[float]	The fraction of residues with full occupancy in each interacting protein chain of the given ligand
+ligand_interacting_protein_chains_percent_outliers_chirality	list[float]	The fraction of chirality outliers (see https://www.wwpdb.org/validation/XrayValidationReportHelp) in each interacting protein chain of the given ligand
+ligand_interacting_protein_chains_percent_outliers_clashes	list[float]	The fraction of clash outliers (see https://www.wwpdb.org/validation/XrayValidationReportHelp) in each interacting protein chain of the given ligand
+ligand_interacting_protein_chains_percent_outliers_density	list[float]	The fraction of density outliers (see https://www.wwpdb.org/validation/XrayValidationReportHelp) in each interacting protein chain of the given ligand
+ligand_interacting_protein_chains_percent_outliers_geometry	list[float]	The fraction of geometry outliers (see https://www.wwpdb.org/validation/XrayValidationReportHelp) in each interacting protein chain of the given ligand
+ligand_interacting_protein_chains_percent_processed_residues	list[float]	The fraction of residues processed in the validation file in each interacting protein chain of the given ligand
+ligand_interacting_protein_chains_percent_rscc_over_threshold	list[float]	The fraction of residues with RSCC >= 0.8 in each interacting protein chain of the given ligand
+ligand_interacting_protein_chains_percent_rsr_under_threshold	list[float]	The fraction of residues with RSR <= 0.3 in each interacting protein chain of the given ligand
+ligand_interacting_protein_chains_unknown_residue_count	list[int]	The number of unknown residues in each interacting protein chain of the given ligand
+ligand_neighboring_ligand_chains_atom_count	list[int]	The number of atoms in each neighboring ligand chain of the given ligand
+ligand_neighboring_ligand_chains_average_b_factor	list[float]	The mean B-value of each neighboring ligand chain of the given ligand
+ligand_neighboring_ligand_chains_average_occupancy	list[float]	The mean occupancy of each neighboring ligand chain of the given ligand
+ligand_neighboring_ligand_chains_average_rscc	list[float]	The mean Real-Space Correlation Coefficient across all residues in each neighboring ligand chain of the given ligand
+ligand_neighboring_ligand_chains_average_rsr	list[float]	The mean Real-Space R-value across all residues in each neighboring ligand chain of the given ligand
+ligand_neighboring_ligand_chains_average_rsrz	list[float]	The mean RSRZ across all residues in each neighboring ligand chain of the given ligand
+ligand_neighboring_ligand_chains_heavy_atom_count	list[int]	The number of heavy atoms in each neighboring ligand chain of the given ligand
+ligand_neighboring_ligand_chains_max_alt_count	list[int]	The maximum number of configurations across all residues in each neighboring ligand chain of the given ligand
+ligand_neighboring_ligand_chains_num_processed_residues	list[int]	The number of residues which were processed in the validation report for each neighboring ligand chain of the given ligand
+ligand_neighboring_ligand_chains_num_unresolved_heavy_atoms	list[int]	The number of unresolved heavy atoms across all residues in each neighboring ligand chain of the given ligand
+ligand_neighboring_ligand_chains_percent_occupancy_over_threshold	list[float]	The fraction of residues with full occupancy in each neighboring ligand chain of the given ligand
+ligand_neighboring_ligand_chains_percent_outliers_chirality	list[float]	The fraction of chirality outliers (see https://www.wwpdb.org/validation/XrayValidationReportHelp) in each neighboring ligand chain of the given ligand
+ligand_neighboring_ligand_chains_percent_outliers_clashes	list[float]	The fraction of clash outliers (see https://www.wwpdb.org/validation/XrayValidationReportHelp) in each neighboring ligand chain of the given ligand
+ligand_neighboring_ligand_chains_percent_outliers_density	list[float]	The fraction of density outliers (see https://www.wwpdb.org/validation/XrayValidationReportHelp) in each neighboring ligand chain of the given ligand
+ligand_neighboring_ligand_chains_percent_outliers_geometry	list[float]	The fraction of geometry outliers (see https://www.wwpdb.org/validation/XrayValidationReportHelp) in each neighboring ligand chain of the given ligand
+ligand_neighboring_ligand_chains_percent_processed_residues	list[float]	The fraction of residues processed in the validation file in each neighboring ligand chain of the given ligand
+ligand_neighboring_ligand_chains_percent_rscc_over_threshold	list[float]	The fraction of residues with RSCC >= 0.8 in each interacting ligand chain of the given ligand
+ligand_neighboring_ligand_chains_percent_rsr_under_threshold	list[float]	The fraction of residues with RSR <= 0.3 in each interacting ligand chain of the given ligand
+ligand_neighboring_ligand_chains_unknown_residue_count	list[int]	The number of unknown residues in each interacting ligand chain of the given ligand
+ligand_interacting_ligand_chains_atom_count	list[int]	The number of atoms in each interacting ligand chain of the given ligand
+ligand_interacting_ligand_chains_average_b_factor	list[float]	The mean B-value of each interacting ligand chain of the given ligand
+ligand_interacting_ligand_chains_average_occupancy	list[float]	The mean occupancy of each interacting ligand chain of the given ligand
+ligand_interacting_ligand_chains_average_rscc	list[float]	The mean Real-Space Correlation Coefficient across all residues in each interacting ligand chain of the given ligand
+ligand_interacting_ligand_chains_average_rsr	list[float]	The mean Real-Space R-value across all residues in each interacting ligand chain of the given ligand
+ligand_interacting_ligand_chains_average_rsrz	list[float]	The mean RSRZ across all residues in each interacting ligand chain of the given ligand
+ligand_interacting_ligand_chains_heavy_atom_count	list[int]	The number of heavy atoms in each interacting ligand chain of the given ligand
+ligand_interacting_ligand_chains_max_alt_count	list[int]	The maximum number of configurations across all residues in each interacting ligand chain of the given ligand
+ligand_interacting_ligand_chains_num_processed_residues	list[int]	The number of residues which were processed in the validation report for each interacting ligand chain of the given ligand
+ligand_interacting_ligand_chains_num_unresolved_heavy_atoms	list[int]	The number of unresolved heavy atoms across all residues in each interacting ligand chain of the given ligand
+ligand_interacting_ligand_chains_percent_occupancy_over_threshold	list[float]	The fraction of residues with full occupancy in each interacting ligand chain of the given ligand
+ligand_interacting_ligand_chains_percent_outliers_chirality	list[float]	The fraction of chirality outliers (see https://www.wwpdb.org/validation/XrayValidationReportHelp) in each interacting ligand chain of the given ligand
+ligand_interacting_ligand_chains_percent_outliers_clashes	list[float]	The fraction of clash outliers (see https://www.wwpdb.org/validation/XrayValidationReportHelp) in each interacting ligand chain of the given ligand
+ligand_interacting_ligand_chains_percent_outliers_density	list[float]	The fraction of density outliers (see https://www.wwpdb.org/validation/XrayValidationReportHelp) in each interacting ligand chain of the given ligand
+ligand_interacting_ligand_chains_percent_outliers_geometry	list[float]	The fraction of geometry outliers (see https://www.wwpdb.org/validation/XrayValidationReportHelp) in each interacting ligand chain of the given ligand
+ligand_interacting_ligand_chains_percent_processed_residues	list[float]	The fraction of residues processed in the validation file in each interacting ligand chain of the given ligand
+ligand_interacting_ligand_chains_percent_rscc_over_threshold	list[float]	The fraction of residues with RSCC >= 0.8 in each interacting ligand chain of the given ligand
+ligand_interacting_ligand_chains_percent_rsr_under_threshold	list[float]	The fraction of residues with RSR <= 0.3 in each interacting ligand chain of the given ligand
+ligand_interacting_ligand_chains_unknown_residue_count	list[int]	The number of unknown residues in each interacting ligand chain of the given ligand

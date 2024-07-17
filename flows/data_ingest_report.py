@@ -1,0 +1,44 @@
+"""
+The filestore instance name is: plinder-data-gen.
+"""
+
+from metaflow import FlowSpec, kubernetes, environment, step, retry
+
+import report
+
+MOUNT = "/plinder"
+
+K8S = dict(
+    cpu=1,
+    image="us-east1-docker.pkg.dev/vantai-analysis/metaflow/vai-metaflow:latest-py3.9",
+    persistent_volume_claims={
+        "plinder-data-gen-pvc": MOUNT,
+    },
+)
+ENV = dict(
+    vars=dict(
+        PLINDER_MOUNT=MOUNT,
+        PLINDER_RELEASE="2024-04",
+    )
+)
+
+
+class PlinderDataIngestReportFlow(FlowSpec):
+
+    @kubernetes(**K8S)
+    @environment(**ENV)
+    @retry
+    @step
+    def start(self):
+        self.dfs = report.main(upload=True)
+        self.next(self.end)
+
+    @step
+    def end(self):
+        for name, df in self.dfs.items():
+            df.to_csv(f"reports/{name}.csv", index=False)
+
+
+
+if __name__ == '__main__':
+    PlinderDataIngestReportFlow()

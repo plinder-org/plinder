@@ -1,0 +1,10 @@
+ingest:
+  run_specific_stages: make_entries,structure_qc,make_system_archives,make_ligands,compute_ligand_fingerprints,make_ligand_scores
+  plinder_mount: /plinder
+  plinder_release: 2024-06
+scatter:
+  two_char_batch_size: 1
+  annotation_batch_size: 120
+  make_ligands_batch_size: 220
+  skip_existing_entries: true
+  skip_missing_annotations: true

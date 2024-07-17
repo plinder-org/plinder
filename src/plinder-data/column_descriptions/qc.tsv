@@ -1,0 +1,14 @@
+Name	Type	Description
+all_ligand_chains_present	bool	all the ligand chains detected for the system are present in the system CIF, PDB and SDF files
+all_protein_chains_present	bool	all the protein chains detected for the system are present in the system CIF, PDB and SDF files
+complex_loadbable_via_biotite	bool	the complex can successfully be loaded with the biotite library
+ligand_is_obabel_loadable	bool	the ligand can successfully be loaded with the OpenBabel library
+ligand_is_obabel_loadable_with_rdkit_fix	bool	the ligand can successfully be loaded with the OpenBabel library after fixing valence and chirality issues
+ligand_is_rdkit_loadable	bool	the ligand can successfully be loaded with the RDKit library
+ligand_is_rdkit_loadable_with_fix	bool	the ligand can successfully be loaded with the RDKit library after fixing valence and chirality issues
+ligand_loadbable_via_biotite	bool	the ligand can successfully be loaded with the biotite library
+ligand_matches_smiles_atom_num	bool	the number of atoms in the saved ligand matches the expected number from the resolved SMILES
+ligand_positions_correct	bool	the positions of the saved ligand atoms match the expected positions from the PDB entry
+ligand_protein_neighbor_still_preserved_complex	bool	the neighboring protein chains of the saved complex match what was annotated from the PDB entry
+ligand_rdkit_validation	list[str]	list of RDKit fixes performed
+suitable_for_ml_training	bool	passes all the QC checks

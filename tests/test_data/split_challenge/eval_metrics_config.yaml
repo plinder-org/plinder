@@ -1,0 +1,14 @@
+overlap_cols_list:
+  tanisim_0.26:
+    pass_percentage: 0.1
+    higher_than: false
+  plip_0.7:
+    pass_percentage: 0.2
+    higher_than: false
+test_set_quantile_dicts:
+  entry_rfree:
+    cutoff: 0.45
+    higher_than: false
+  entry_r_minus_rfree:
+    cutoff: 0.05
+    higher_than: false

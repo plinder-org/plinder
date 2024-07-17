@@ -1,0 +1,48 @@
+name: Publish
+permissions:
+  contents: write
+  id-token: write
+on:
+  push:
+    branches:
+      - main
+jobs:
+  publish:
+    name: Publish
+    if: ${{ ! contains(toJSON(github.event.commits.*.message), '[skip ci]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Setup python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+      - name: Install semver
+        run: python -m pip install semver
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v1
+        with:
+          workload_identity_provider: projects/1045208284552/locations/global/workloadIdentityPools/vantai-github-actions-pool/providers/vantai-github-actions-provider
+          service_account: default-gha@vantai-analysis.iam.gserviceaccount.com
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v1
+      - name: Configure docker
+        run: gcloud auth configure-docker us-east1-docker.pkg.dev
+      - name: Get version bump
+        id: get-tag
+        run: echo "bump=$(python flows/docker.py bump)" >> $GITHUB_OUTPUT
+      - name: Pull, build, tag, bump base image
+        if: steps.get-tag.outputs.bump != ''
+        run: python flows/docker.py pull --build --promote
+      - name: Build image
+        if: steps.get-tag.outputs.bump != ''
+        run: python flows/docker.py build
+      - name: Run tests against new image and save images
+        if: steps.get-tag.outputs.bump != ''
+        run: python flows/docker.py test --push
+      - name: Save git tag
+        if: steps.get-tag.outputs.bump != ''
+        run: git push origin ${{ steps.get-tag.outputs.bump }}

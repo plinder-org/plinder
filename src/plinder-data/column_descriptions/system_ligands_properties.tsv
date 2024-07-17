@@ -1,0 +1,24 @@
+Name	Type	Description
+system_ligand_chains	list[str]	   List of all ligand asymmmetric chain ids in a protein-ligand system
+system_ligand_chains_BIRD	list[list[str]]	 List of all ligand chain BIRD ids in a protein-ligand system
+system_ligand_chains_ECOD	list[list[str]]	 List of all ligand chain ECOD tnames in a protein-ligand system
+system_ligand_chains_PANTHER	list[list[str]]	 List of all ligand chain PANTHER ids in a protein-ligand system
+system_ligand_chains_Pfam	list[list[str]]	 List of all ligand chain Pfam ids in a protein-ligand system
+system_ligand_chains_SCOP2	list[list[str]]	 List of all ligand chain SCOP2 ids in a protein-ligand system
+system_ligand_chains_SCOP2B	list[list[str]]	 List of all ligand chain SCOP2B ids in a protein-ligand system
+system_ligand_chains_UniProt	list[list[str]]	 List of all ligand chain uniprot ids in a protein-ligand system
+system_ligand_chains_auth_id	list[str]	   List of all ligand author chain ids in a protein-ligand system
+system_ligand_chains_entity_id	list[int]	   List of all ligand entity ids in a protein-ligand system
+system_ligand_chains_length	list[int]	   List of all ligand chain lengths in a protein-ligand system
+system_ligand_chains_num_residues	list[int]	   List of all ligand chain lengths in a protein-ligand system
+system_ligand_chains_num_unresolved_heavy_atoms	list[int]	   List of number of unresolved heavy atoms for all ligands in a system.
+system_ligand_chains_percent_occupancy_over_threshold	list[float]	 Percent occupancy over threshold for all ligand in a system.
+system_ligand_chains_percent_outliers_chirality	list[float]	 The fraction of chirality outliers (see https://www.wwpdb.org/validation/XrayValidationReportHelp) in each ligand in a given system.
+system_ligand_chains_percent_outliers_clashes	list[float]	 The fraction of clash outliers (see https://www.wwpdb.org/validation/XrayValidationReportHelp) in each ligand in a given system.
+system_ligand_chains_percent_outliers_density	list[float]	 The fraction of density outliers (see https://www.wwpdb.org/validation/XrayValidationReportHelp) in each ligand in a given system.
+system_ligand_chains_percent_outliers_geometry	list[float]	 The fraction of geometry outliers (see https://www.wwpdb.org/validation/XrayValidationReportHelp) in each ligand in a given system.
+system_ligand_chains_percent_processed_residues	list[float]	 The number of residues which were processed in the validation report for each ligand in a given system.
+system_ligand_chains_percent_rscc_over_threshold	list[float]	 The fraction of Real-Space Correlation Coefficient above a given threshold for all ligands in a system.
+system_ligand_chains_percent_rsr_under_threshold	list[float]	 The fraction of Real-Space R-value above a given threshold for all ligands in a system.
+system_ligand_chains_unknown_residue_count	list[int]	   The number of unknown residues for all ligands in a system.
+system_ligand_num_residues	int	 Number of ligands in a system.

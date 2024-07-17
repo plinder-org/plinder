@@ -1,0 +1,5 @@
+ligand_ccd_code,ligtype,ligand_type,ligand_smiles,rdkit_valid,smiles_nochiral,organic,nha,mw,n_ring,numhacceptors,numhdonors,n_ro_bonds,fcsp3,ecfp6,tanisim_0.26,tanisim_0.5,tanisim_0.7,tanisim_0.99,tanisim_0.95,tanisim_0.9,tanisim_0.85,kinase_inhibitor
+NHE,SMALLMOLECULE,drug-like,C1CCC(CC1)NCCS(=O)(=O)O,True,O=S(=O)(O)CCNC1CCCCC1,True,13,207.09,1,3,2,4,1.0,[0 0 1 ... 0 0 0],0,0,0,0,0,0,0,False
+3VN,SMALLMOLECULE,other,C(CCN)C[C@@](CC[C@](CCCCN)(C(=O)O)N)(C(=O)O)N,True,NCCCCC(N)(CCC(N)(CCCCN)C(=O)O)C(=O)O,True,22,318.23,0,6,6,13,0.86,[0 0 0 ... 0 0 0],0,1,1,1,1,1,1,False
+DMU,SMALLMOLECULE,oligosaccharide,CCCCCCCCCCO[C@H]1[C@@H]([C@H]([C@@H]([C@H](O1)CO)O[C@@H]2[C@@H]([C@H]([C@@H]([C@H](O2)CO)O)O)O)O)O,True,CCCCCCCCCCOC1OC(CO)C(OC2OC(CO)C(O)C(O)C2O)C(O)C1O,True,33,482.27,2,11,7,14,1.0,[0 0 0 ... 1 0 0],0,2,2,2,2,2,2,False
+78P,SMALLMOLECULE,fragment,C[C@@]1(CCCN1)c2[nH]c3c(cccc3n2)C(=O)N,True,CC1(c2nc3cccc(C(N)=O)c3[nH]2)CCCN1,True,18,244.13,3,3,3,2,0.38,[0 0 0 ... 0 0 0],0,3,3,3,3,3,3,False

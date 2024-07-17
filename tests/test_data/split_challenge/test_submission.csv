@@ -1,0 +1,7 @@
+system_ID,split
+7KKZ__1__1.A_1.B__1.C__NHE,train
+7KKT__1__1.A_1.F__1.G__3VN,train
+7KKR__1__1.A_1.B__1.E__DMU,test
+7KKR__1__1.A_1.B_1.C__1.H_1.J__DMU_DMU,test
+7KKR__1__1.A_1.B_1.C__1.H_1.J__DMU_DMU,val
+7KKQ__1__1.A__1.E__78P,val

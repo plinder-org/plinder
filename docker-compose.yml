@@ -1,0 +1,29 @@
+services:
+
+  base:
+    image: ${IMAGE_REPO:-docker.io}/plinder-base:${BASE_TAG:-latest}
+    build:
+      context: ./dockerfiles/base
+
+  plinder:
+    image: ${IMAGE_REPO:-docker.io}/plinder:${BUILD_TAG:-latest}
+    build:
+      context: .
+      dockerfile: ./dockerfiles/main/Dockerfile
+      args:
+        BASE_IMAGE: ${IMAGE_REPO:-docker.io}/plinder-base
+        BASE_TAG: ${BASE_TAG:-latest}
+    depends_on:
+      - base
+
+  test:
+    image: ${IMAGE_REPO:-docker.io}/plinder:${BUILD_TAG:-latest}
+    depends_on:
+      - plinder
+    volumes:
+      - ./tests/:/app/tests/
+      - ./pytest.ini:/app/pytest.ini
+      - ./.coveragerc:/app/.coveragerc
+      - ./reports/:/app/reports/
+      - ./examples/:/app/examples/
+    command: /bin/bash -c "python -m pytest -v -n auto && sqlite3 .coverage 'update file set path=substr(path, 40);' && cp .coverage reports/.coverage"

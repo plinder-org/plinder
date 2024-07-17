@@ -1,0 +1,19 @@
+#
+# Conda environment definition with dependencies
+#
+name: plinder
+channels:
+  - metalcycling
+  - conda-forge
+  - defaults
+  - bioconda
+dependencies:
+  - python=3.9
+  - reduce
+  - openstructure
+  - boost=1.82
+  - mmseqs2
+  - foldseek
+  - plip
+  - pip:
+    - keyrings.google-artifactregistry-auth==1.1.2

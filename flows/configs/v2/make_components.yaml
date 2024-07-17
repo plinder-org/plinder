@@ -1,0 +1,6 @@
+ingest:
+  run_specific_stages: make_components_and_communities,make_mmp_index
+  plinder_mount: /plinder
+  plinder_release: 2024-06
+scatter:
+  skip_existing_clusters: False

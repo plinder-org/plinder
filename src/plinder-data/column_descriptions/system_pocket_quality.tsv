@@ -1,0 +1,57 @@
+Name	Type	Description
+system_interacting_protein_chains_atom_count	list[int]	   List of number of atoms of each interacting protein chain for all ligands in a system
+system_interacting_protein_chains_average_b_factor	list[float]	 List of average b-factor of each interacting protein chain for all ligands in a system
+system_interacting_protein_chains_average_occupancy	list[float]	 List of average occupancy of each interacting protein chain for all ligands in a system
+system_interacting_protein_chains_average_rscc	list[float]	 List of mean Real-Space Correlation Coefficient of each interacting protein chain for all ligands in a system
+system_interacting_protein_chains_average_rsr	list[float]	 List of mean Real-Space R-value of each interacting protein chain for all ligands in a system
+system_interacting_protein_chains_average_rsrz	list[float]	 List of mean RSRZ of each interacting protein chain for all ligands in a system
+system_interacting_protein_chains_heavy_atom_count	list[int]	   List of number of heavy atom count of each interacting protein chain for all ligands in a system
+system_interacting_protein_chains_max_alt_count	list[int]	   List of maximum number of configurations across all residues in each interacting with all ligands in a system.
+system_interacting_protein_chains_num_processed_residues	list[int]	   List of fraction of residues processed in the validation file in each interacting ligand chain for all ligands in a system
+system_interacting_protein_chains_num_unresolved_heavy_atoms	list[int]	   The number of unresolved heavy atoms across all residues in each interacting ligand chain for all ligands in a system
+system_interacting_protein_chains_percent_occupancy_over_threshold	list[float] 	The fraction of residues with full occupancy in each interacting protein chain for all ligands in a system
+system_interacting_protein_chains_percent_outliers_chirality	list[float]	 The fraction of chirality outliers (see https://www.wwpdb.org/validation/XrayValidationReportHelp) in each interacting protein chain for all ligands in a system
+system_interacting_protein_chains_percent_outliers_clashes	list[float]	 The fraction of clash outliers (see https://www.wwpdb.org/validation/XrayValidationReportHelp) in each interacting protein chain for all ligands in a system
+system_interacting_protein_chains_percent_outliers_density	list[float]	 The fraction of density outliers (see https://www.wwpdb.org/validation/XrayValidationReportHelp) in each interacting protein chain for all ligands in a system
+system_interacting_protein_chains_percent_outliers_geometry	list[float]	 The fraction of geometry outliers (see https://www.wwpdb.org/validation/XrayValidationReportHelp) in each interacting protein chain for all ligands in a system
+system_interacting_protein_chains_percent_processed_residues	list[float]	 The fraction of residues processed in the validation file in each interacting protein chain for all ligands in a system
+system_interacting_protein_chains_percent_rscc_over_threshold	list[float]	 The fraction of residues with RSCC >= 0.8 in each interacting protein chain for all ligands in a system
+system_interacting_protein_chains_percent_rsr_under_threshold	list[float]	 The fraction of residues with RSR <= 0.3 in each interacting protein chain for all ligands in a system
+system_neighboring_protein_chains_atom_count	list[int]	   The number of atoms in each neighboring protein chain for all ligands in a system
+system_neighboring_protein_chains_average_b_factor	list[float]	 The mean B-value of each neighboring protein chain for all ligands in a system
+system_neighboring_protein_chains_average_occupancy	list[float]	 The fraction of residues with full occupancy in each neighboring protein chain for all ligands in a system
+system_neighboring_protein_chains_average_rscc	list[float]	 The mean Real-Space Correlation Coefficient across all residues in each neighboring protein chain for all ligands in a system
+system_neighboring_protein_chains_average_rsr	list[float]	 The mean Real-Space R-value across all residues in each neighboring protein chain for all ligands in a system
+system_neighboring_protein_chains_average_rsrz	list[float]	 The mean RSRZ across all residues in each neighboring protein chain for all ligands in a system
+system_neighboring_protein_chains_heavy_atom_count	list[int]	   The number of heavy atoms in each neighboring protein chain for all ligands in a system
+system_neighboring_protein_chains_max_alt_count	list[int]	   The maximum number of configurations across all residues in each neighboring protein chain for all ligands in a system
+system_neighboring_protein_chains_num_processed_residues	list[int]	   The number of residues which were processed in the validation report for each neighboring protein chain for all ligands in a system
+system_neighboring_protein_chains_num_unresolved_heavy_atoms	list[int]	   The number of unresolved heavy atoms across all residues in each neighboring protein chain for all ligands in a system
+system_neighboring_protein_chains_percent_occupancy_over_threshold	list[float]	 The fraction of residues with full occupancy in each neighboring protein chain for all ligands in a system
+system_neighboring_protein_chains_percent_outliers_chirality	list[float]	 The fraction of chirality outliers (see https://www.wwpdb.org/validation/XrayValidationReportHelp) in each neighboring protein chain for all ligands in a system
+system_neighboring_protein_chains_percent_outliers_clashes	list[float]	 The fraction of clash outliers (see https://www.wwpdb.org/validation/XrayValidationReportHelp) in each neighboring protein chain for all ligands in a system
+system_neighboring_protein_chains_percent_outliers_density	list[float]	 The fraction of density outliers (see https://www.wwpdb.org/validation/XrayValidationReportHelp) in each neighboring protein chain for all ligands in a system
+system_neighboring_protein_chains_percent_outliers_geometry	list[float]	 The fraction of geometry outliers (see https://www.wwpdb.org/validation/XrayValidationReportHelp) in each neighboring protein chain for all ligands in a system
+system_neighboring_protein_chains_percent_processed_residues	list[float]	 The fraction of residues processed in the validation file in each neighboring protein chain for all ligands in a system
+system_neighboring_protein_chains_percent_rscc_over_threshold	list[float]	 The fraction of residues with RSCC >= 0.8 in each neighboring protein chain for all ligands in a system
+system_neighboring_protein_chains_percent_rsr_under_threshold	list[float]	 The fraction of residues with RSR <= 0.3 in each neighboring protein chain for all ligands in a system
+system_neighboring_protein_chains_unknown_residue_count	list[int]	   The number of unknown residues in each neighboring protein chain for all ligands in a system
+system_pocket_atom_count	int	 The number of atoms from each of the pocket residues of a system
+system_pocket_average_b_factor	float	   The mean B-value of each of pocket atoms of a given system
+system_pocket_average_occupancy	float	   The fraction of pocket atoms with full occupancy in a given system
+system_pocket_average_rscc	float	   The mean Real-Space Correlation Coefficient across all pocket residues in a given system
+system_pocket_average_rsr	float	   he mean Real-Space R-value across all pocket residues in a given system
+system_pocket_average_rsrz	float	   The mean RSRZ across all pocket residues in a given system
+system_pocket_heavy_atom_count	int	 List of number of pocket heavy atom count in a given system
+system_pocket_max_alt_count	int	 The maximum number of configurations across all pocket residues in a given system
+system_pocket_num_processed_residues	int	 The number of pocket residues which were processed in the validation report in a given system
+system_pocket_num_unresolved_heavy_atoms	int	 The number of unresolved heavy atoms all pocket residues in a given system
+system_pocket_percent_occupancy_over_threshold	float	   The fraction of pocket residues with full occupancy in a given system
+system_pocket_percent_outliers_chirality	float	   The fraction of pocket residues with chirality outliers (see https://www.wwpdb.org/validation/XrayValidationReportHelp) in a given system
+system_pocket_percent_outliers_clashes	float	   The fraction of pocket residues with clash outliers (see https://www.wwpdb.org/validation/XrayValidationReportHelp) in a given system
+system_pocket_percent_outliers_density	float	   The fraction of density outliers (see https://www.wwpdb.org/validation/XrayValidationReportHelp) in a given system
+system_pocket_percent_outliers_geometry	float	   The fraction of geometry outliers (see https://www.wwpdb.org/validation/XrayValidationReportHelp) in a given system
+system_pocket_percent_processed_residues	float	   The fraction of pocket residues processed in the validation file in a given system
+system_pocket_percent_rscc_over_threshold	float	   The fraction of pocket residues with RSCC >= 0.8 in a given system
+system_pocket_percent_rsr_under_threshold	float	   The fraction of residues with RSR <= 0.3 in a given system
+system_pocket_unknown_residue_count	int	 The number of unknown pocket residues in a given system

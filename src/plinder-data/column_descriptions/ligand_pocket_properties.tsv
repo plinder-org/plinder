@@ -1,0 +1,42 @@
+Name	Type	Description
+ligand_interacting_protein_chains	list[str]	   RSCB chain asymmetric ids of proteins interacting with a given ligand
+ligand_interacting_protein_chains_CATH	list[list[str]]	 CATH ids of protein residues interacting with a given ligand.
+ligand_interacting_protein_chains_ECOD	list[list[str]]	 ECOD tnames of protein residues interacting with a given ligand.
+ligand_interacting_protein_chains_Kinase	 name	list[list[str]] Kinase names of proteins interacting with a given ligand, if interacting protein(s) is/are kinases.
+ligand_interacting_protein_chains_PANTHER	list[list[str]]	 Panther ids of protein residues interacting with a given ligand.
+ligand_interacting_protein_chains_Pfam	list[list[str]]	 Pfam ids of protein residues interacting with a given ligand.
+ligand_interacting_protein_chains_SCOP2	list[list[str]]	 SCOP2 ids of protein residues interacting with a given ligand.
+ligand_interacting_protein_chains_SCOP2B	list[list[str]]	 SCOP2B ids of protein residues interacting with a given ligand.
+ligand_interacting_protein_chains_UniProt	list[list[str]]	 UNIPROT ids of protein residues interacting with a given ligand.
+ligand_interacting_protein_chains_auth_id	list[str]	   RCSB chain author ids of protein residues interacting with a given ligand.
+ligand_interacting_protein_chains_entity_id	list[str]	   RSCB entity ids of proteins interacting with a given ligand
+ligand_interacting_protein_chains_length	list[int]	   Whole-ligand residues count (not just pocket) of each of the proteins interacting with a given ligand.
+ligand_interacting_protein_chains_num_residues	list[int]	   Number of residues of each of the proteins interacting with a given ligand.
+ligand_interacting_residues	list[str]	   Residues of each of the proteins interacting with a given ligand.
+ligand_interactions	list[dict[str,str]]	 Dictionary of semicolon-separated ligand interactions.
+ligand_neighboring_ligand_chains	list[str]	   List of ligand asymmetric chain ids within 4 Å of ligand of interest.
+ligand_neighboring_ligand_chains_BIRD	list[list[str]]	 BIRD ids of ligand residues  within 4 Å of ligand of interest. This field is important for peptide ligands.
+ligand_neighboring_ligand_chains_ECOD	list[list[str]]	 ECOD tnames of ligand residues within 4 Å of ligand of interest. This field is important for peptide ligands.
+ligand_neighboring_ligand_chains_PANTHER	list[list[str]]	 PANTHER ids of ligand residues within 4 Å  of ligand of interest. This field is important for peptide ligands.
+ligand_neighboring_ligand_chains_Pfam	list[list[str]]	 Pfam ids of ligand residues within 4 Å of ligand of interest. This field is important for peptide ligands.
+ligand_neighboring_ligand_chains_UniProt	list[list[str]]	 UniProt ids of ligand residues within 4 Å of ligand of interest. This field is important for peptide ligands.
+ligand_neighboring_ligand_chains_atom_count	list[int]	   Atom count of ligand residues within 4 Å of ligand of interest.
+ligand_neighboring_ligand_chains_auth_id	list[str]	   List of ligand author chain ids within 4 Å of ligand of interest.
+ligand_neighboring_ligand_chains_entity_id	list[int]	   List of ligand entity ids within 4 Å of ligand of interest.
+ligand_neighboring_ligand_chains_length	list[int]	    Whole-ligand residues count (not just pocket) of each of the ligands within 4 Å of ligand of interest.
+ligand_neighboring_ligand_chains_num_residues	list[int]	   Residue count of each of the ligands within 4 Å of ligand of interest.
+ligand_neighboring_protein_chains	list[str]	   List of RCSB asymmetric chain ids of protein residues within 6 Å of ligand of interest.
+ligand_neighboring_protein_chains_BIRD	list[list[str]]	 List of BIRD ids of protein residues within 6 Å of ligand of interest.
+ligand_neighboring_protein_chains_CATH	list[list[str]]	 List of CATH domains of protein residues within 6 Å of ligand of interest.
+ligand_neighboring_protein_chains_ECOD	list[list[str]]	 List of ECOD tnames of protein residues within 6 Å of ligand of interest.
+ligand_neighboring_protein_chains_Kinase	 name	list[list[str]] List of kinase names of protein residues within 6 Å of ligand of interest, if neighboring residues is in kinase domain.
+ligand_neighboring_protein_chains_PANTHER	list[list[str]]	 List of PANTHER ids of protein residues within 6 Å of ligand of interest.
+ligand_neighboring_protein_chains_Pfam	list[list[str]]	 List of Pfam ids of protein residues within 6 Å of ligand of interest.
+ligand_neighboring_protein_chains_SCOP2	list[list[str]]	 List of SCOP2 ids of protein residues within 6 Å of ligand of interest.
+ligand_neighboring_protein_chains_SCOP2B	list[list[str]]	 List of SCOP2B ids of protein residues within 6 Å of ligand of interest.
+ligand_neighboring_protein_chains_UniProt	list[list[str]]	  List of UniProt ids of protein residues within 6 Å of ligand of interest.
+ligand_neighboring_protein_chains_auth_id	list[str]	   List of protein author chain ids of protein residues within 6 Å of ligand of interest.
+ligand_neighboring_protein_chains_entity_id	list[int]	   List of protein chain entity ids of protein residues within 6 Å of ligand of interest.
+ligand_neighboring_protein_chains_length	list[int]	   Whole-protein residues count (not just pocket) of each of the protein chains within 6 Å of ligand of interest.
+ligand_neighboring_protein_chains_num_residues	list[int]	   Residue count of each of the proteins within 6 Å of ligand of interest.
+ligand_neighboring_residues	list[str]	   Residues of each of the proteins within 6 Å of ligand of interest.

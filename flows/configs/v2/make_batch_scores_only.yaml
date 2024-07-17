@@ -1,0 +1,9 @@
+ingest:
+  run_specific_stages: make_batch_scores
+  plinder_mount: /plinder
+  plinder_release: 2024-06
+scorer:
+  sub_databases: holo,apo,pred
+scatter:
+  run_batch_searches_batch_size: 10050
+  make_batch_scores_batch_size: 90

@@ -1,0 +1,10 @@
+[run]
+branch = true
+parallel = true
+relative_files = true
+source =
+    src
+
+[report]
+show_missing = true
+precision = 4

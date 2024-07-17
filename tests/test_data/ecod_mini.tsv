@@ -1,0 +1,44 @@
+#uid	ecod_domain_id	manual_rep	f_id	pdb	chain	pdb_range	seqid_range	unp_acc	arch_name	x_name	h_name	t_name	f_name	asm_status	ligand
+002858230	e7qsdT1	AUTO_NONREP	132.1.1	7qsd	T	T:7-82	T:75-150	NO_UNP	alpha bundles	"ACP-like"	"NO_H_NAME"	"Acyl-carrier protein (ACP)"	F_UNCLASSIFIED	NOT_DOMAIN_ASSEMBLY	NO_LIGANDS_4A
+002858231	e7qsdU1	AUTO_NONREP	132.1.1	7qsd	U	U:3-88	U:71-156	NO_UNP	alpha bundles	"ACP-like"	"NO_H_NAME"	"Acyl-carrier protein (ACP)"	F_UNCLASSIFIED	NOT_DOMAIN_ASSEMBLY	NO_LIGANDS_4A
+002832986	e7qsde1	AUTO_NONREP	5071.2.1.1	7qsd	e	e:1-97	e:2-98	NO_UNP	alpha bundles	"cytochrome bc1 complex 11 kDa protein-like"	"NO_H_NAME"	"CHCH domain"	Ndufs5	NOT_DOMAIN_ASSEMBLY	PC1
+002858221	e7qsdF2	AUTO_NONREP	633.11.1	7qsd	F	F:340-438	F:360-458	NO_UNP	alpha bundles	"Bromodomain-like"	"NO_H_NAME"	"Nqo1C-terminal domain-like"	F_UNCLASSIFIED	NOT_DOMAIN_ASSEMBLY	NO_LIGANDS_4A
+002858219	e7qsdE2	AUTO_NONREP	3697.1.1	7qsd	E	E:5-94	E:37-126	NO_UNP	alpha bundles	"NO_X_NAME"	"NO_H_NAME"	"NQO2 helical bundle domain"	F_UNCLASSIFIED	NOT_DOMAIN_ASSEMBLY	NO_LIGANDS_4A
+002858232	e7qsdW1	AUTO_NONREP	1128.1.1	7qsd	W	W:15-128	W:15-128	NO_UNP	alpha bundles	"NO_X_NAME"	"NO_H_NAME"	"LYR protein"	F_UNCLASSIFIED	NOT_DOMAIN_ASSEMBLY	NO_LIGANDS_4A
+002858235	e7qsdn1	AUTO_NONREP	1128.1.1	7qsd	n	n:7-178	n:8-179	NO_UNP	alpha bundles	"NO_X_NAME"	"NO_H_NAME"	"LYR protein"	F_UNCLASSIFIED	NOT_DOMAIN_ASSEMBLY	NO_LIGANDS_4A
+002832989	e7qsdp1	AUTO_NONREP	1130.1.1.1	7qsd	p	p:2-172	p:3-173	NO_UNP	alpha bundles	"NO_X_NAME"	"NO_H_NAME"	"Mitochondrial complex I, PDSW subunit"	NDUFB10	NOT_DOMAIN_ASSEMBLY	CDL
+002832974	e7qsdM1	AUTO_NONREP	3281.1.1.8	7qsd	M	M:1-459	M:1-459	NO_UNP	alpha complex topology	"NO_X_NAME"	"Sodium/proton antiporter subunits-like"	"NADH-quinone oxidoreductase subunit L (NuoL)-related"	Proton_antipo_M	NOT_DOMAIN_ASSEMBLY	3PE,CDL,LMT,PC1
+002832973	e7qsdL1	AUTO_NONREP	3281.1.1.8	7qsd	L	L:1-606	L:1-606	NO_UNP	alpha complex topology	"NO_X_NAME"	"Sodium/proton antiporter subunits-like"	"NADH-quinone oxidoreductase subunit L (NuoL)-related"	Proton_antipo_M	NOT_DOMAIN_ASSEMBLY	3PE,CDL,EHZ,LMT,PC1
+002832975	e7qsdN1	AUTO_NONREP	3281.1.1.8	7qsd	N	N:1-347	N:1-347	NO_UNP	alpha complex topology	"NO_X_NAME"	"Sodium/proton antiporter subunits-like"	"NADH-quinone oxidoreductase subunit L (NuoL)-related"	Proton_antipo_M	NOT_DOMAIN_ASSEMBLY	3PE,CDL,LMT,PC1
+002832969	e7qsdH1	AUTO_NONREP	3281.1.2.1	7qsd	H	H:1-318	H:1-318	NO_UNP	alpha complex topology	"NO_X_NAME"	"Sodium/proton antiporter subunits-like"	"NADH-quinone oxidoreductase subunit 8 (Nqo8)-related"	NADHdh	NOT_DOMAIN_ASSEMBLY	3PE,CDL,PC1
+002832972	e7qsdK1	AUTO_NONREP	3843.1.1.1	7qsd	K	K:1-98	K:1-98	NO_UNP	alpha complex topology	"NO_X_NAME"	"NO_H_NAME"	"NADH-quinone oxidoreductase subunit K"	Oxidored_q2	NOT_DOMAIN_ASSEMBLY	3PE
+002858225	e7qsdG3	AUTO_NONREP	205.1.1	7qsd	G	G:137-217	G:160-240	NO_UNP	a+b two layers	"NO_X_NAME"	"NO_H_NAME"	"4Fe-4S ferredoxin"	F_UNCLASSIFIED	NOT_DOMAIN_ASSEMBLY	NO_LIGANDS_4A
+002832970	e7qsdI1	AUTO_NONREP	205.1.1.93	7qsd	I	I:1-176	I:37-212	NO_UNP	a+b two layers	"NO_X_NAME"	"NO_H_NAME"	"4Fe-4S ferredoxin"	Fer4_21_1	NOT_DOMAIN_ASSEMBLY	3PE,SF4
+002858224	e7qsdG2	AUTO_NONREP	221.1.1	7qsd	G	G:6-81	G:29-104	NO_UNP	a+b two layers	"beta-Grasp"	"Ubiquitin-related"	"Ubiquitin-like"	F_UNCLASSIFIED	NOT_DOMAIN_ASSEMBLY	NO_LIGANDS_4A
+002858222	e7qsdF3	AUTO_NONREP	221.1.4	7qsd	F	F:254-339	F:274-359	NO_UNP	a+b two layers	"beta-Grasp"	"Ubiquitin-related"	"Nqo1 middle domain-like"	F_UNCLASSIFIED	NOT_DOMAIN_ASSEMBLY	NO_LIGANDS_4A
+002832978	e7qsdQ1	AUTO_NONREP	3203.1.1.1	7qsd	Q	Q:9-133	Q:51-175	NO_UNP	a+b two layers	"NO_X_NAME"	"NO_H_NAME"	"Putative oxidoreductase"	ETC_C1_NDUFA4	NOT_DOMAIN_ASSEMBLY	NO_LIGANDS_4A
+002858217	e7qsdC1	AUTO_NONREP	4272.1.1	7qsd	C	C:7-213	C:45-251	NO_UNP	a+b two layers	"Nqo5-like"	"NO_H_NAME"	"Nqo5-like"	F_UNCLASSIFIED	NOT_DOMAIN_ASSEMBLY	NO_LIGANDS_4A
+002858227	e7qsdG5	AUTO_NONREP	1001.1.1	7qsd	G	G:218-277	G:241-300	NO_UNP	a+b two layers	"NO_X_NAME"	"NO_H_NAME"	"Formate dehydrogenase/DMSO reductase, domain 1"	F_UNCLASSIFIED	NOT_DOMAIN_ASSEMBLY	NO_LIGANDS_4A
+002832990	e7qsdq1	AUTO_NONREP	1129.1.1.1	7qsd	q	q:2-145	q:2-145	NO_UNP	a+b three layers	"NO_X_NAME"	"NO_H_NAME"	"Mitochondrial complex I, B17.2 subunit"	NDUFA12	NOT_DOMAIN_ASSEMBLY	CDL,PC1
+002858218	e7qsdE1	AUTO_NONREP	2485.1.1	7qsd	E	E:95-217	E:127-249	NO_UNP	a+b three layers	"Thioredoxin-like"	"NO_H_NAME"	"Thioredoxin-like"	F_UNCLASSIFIED	NOT_DOMAIN_ASSEMBLY	NO_LIGANDS_4A
+002858229	e7qsdS1	AUTO_NONREP	2485.1.1	7qsd	S	S:13-96	S:14-97	NO_UNP	a+b three layers	"Thioredoxin-like"	"NO_H_NAME"	"Thioredoxin-like"	F_UNCLASSIFIED	NOT_DOMAIN_ASSEMBLY	NO_LIGANDS_4A
+002832977	e7qsdP1	AUTO_NONREP	2003.1.1.43	7qsd	P	P:1-341	P:36-376	NO_UNP	a/b three-layered sandwiches	"Rossmann-like"	"Rossmann-related"	"NAD(P)-binding Rossmann-fold domains"	NAD_binding_10	NOT_DOMAIN_ASSEMBLY	NDP,PC1
+002858223	e7qsdG1	AUTO_NONREP	2003.2.1	7qsd	G	G:278-347,G:496-693	G:301-370,G:519-716	NO_UNP	a/b three-layered sandwiches	"Rossmann-like"	"NO_H_NAME"	"Formate dehydrogenase/DMSO reductase, domains 2 and 3"	F_UNCLASSIFIED	NOT_DOMAIN_ASSEMBLY	NO_LIGANDS_4A
+002858226	e7qsdG4	AUTO_NONREP	2003.2.1	7qsd	G	G:348-495	G:371-518	NO_UNP	a/b three-layered sandwiches	"Rossmann-like"	"NO_H_NAME"	"Formate dehydrogenase/DMSO reductase, domains 2 and 3"	F_UNCLASSIFIED	NOT_DOMAIN_ASSEMBLY	NO_LIGANDS_4A
+002832976	e7qsdO1	AUTO_NONREP	2004.1.1.1416	7qsd	O	O:1-320	O:24-343	NO_UNP	a/b three-layered sandwiches	"P-loop domains-like"	"P-loop domains-related"	"P-loop containing nucleoside triphosphate hydrolases"	dNK_2	NOT_DOMAIN_ASSEMBLY	3PE,GTP,MG
+002858216	e7qsdB1	AUTO_NONREP	2007.1.3	7qsd	B	B:25-179	B:62-216	NO_UNP	a/b three-layered sandwiches	"Flavodoxin-like"	"Class I glutamine amidotransferase-like"	"CheY-like"	F_UNCLASSIFIED	NOT_DOMAIN_ASSEMBLY	NO_LIGANDS_4A
+002858220	e7qsdF1	AUTO_NONREP	4335.1.1	7qsd	F	F:8-253	F:28-273	NO_UNP	a/b three-layered sandwiches	"NO_X_NAME"	"NO_H_NAME"	"Nqo1 FMN-binding domain-like"	F_UNCLASSIFIED	NOT_DOMAIN_ASSEMBLY	NO_LIGANDS_4A
+002832979	e7qsdR1	AUTO_NONREP	375.1.8.2	7qsd	R	R:1-95	R:29-123	NO_UNP	few secondary structure elements	"Rubredoxin-like"	"Rubredoxin-related"	"Cytochrome c oxidase Subunit F"	zf-CHCC	NOT_DOMAIN_ASSEMBLY	ZN
+002832981	e7qsdX1	AUTO_NONREP	568.1.1.1	7qsd	X	X:1-171	X:2-172	NO_UNP	few secondary structure elements	"NO_X_NAME"	"NO_H_NAME"	"p8-MTCP1-related"	CHCH	NOT_DOMAIN_ASSEMBLY	3PE
+002832968	e7qsdA1	AUTO_NONREP	3456.1.1.1	7qsd	A	A:1-115	A:1-115	NO_UNP	extended segments	"NO_X_NAME"	"NO_H_NAME"	"NADH-quinone oxidoreductase subunit A"	Oxidored_q4	NOT_DOMAIN_ASSEMBLY	3PE,LMT,PC1
+002832971	e7qsdJ1	AUTO_NONREP	3579.1.1.3	7qsd	J	J:1-174	J:1-174	NO_UNP	extended segments	"NO_X_NAME"	"NO_H_NAME"	"NADH-quinone oxidoreductase subunit J"	Oxidored_q3_1	NOT_DOMAIN_ASSEMBLY	3PE
+002858228	e7qsdG6	AUTO_NONREP	5100.1.1	7qsd	G	G:82-136	G:105-159	NO_UNP	extended segments	"NO_X_NAME"	"NO_H_NAME"	"iron-sulfur center-binding helical hairpin"	F_UNCLASSIFIED	NOT_DOMAIN_ASSEMBLY	NO_LIGANDS_4A
+002832980	e7qsdV1	AUTO_NONREP	6004.1.1.2	7qsd	V	V:3-115	V:4-116	NO_UNP	extended segments	"NO_X_NAME"	"NO_H_NAME"	"FATC domain"	ETC_C1_NDUFA5	NOT_DOMAIN_ASSEMBLY	NO_LIGANDS_4A
+002832984	e7qsdb1	AUTO_NONREP	1122.1.1.1	7qsd	b	b:1-83	b:2-84	NO_UNP	extended segments	"NO_X_NAME"	"NO_H_NAME"	"Mitochondrial complex I, B9 subunit"	NADHdh_A3	NOT_DOMAIN_ASSEMBLY	3PE,LMT
+002858234	e7qsdj1	AUTO_NONREP	1123.1.1	7qsd	j	j:7-70	j:43-106	NO_UNP	extended segments	"NO_X_NAME"	"NO_H_NAME"	"Mitochondrial complex I, AGGG subunit"	F_UNCLASSIFIED	NOT_DOMAIN_ASSEMBLY	NO_LIGANDS_4A
+002858233	e7qsdc1	AUTO_NONREP	1124.1.1	7qsd	c	c:1-48	c:28-75	NO_UNP	extended segments	"NO_X_NAME"	"NO_H_NAME"	"Mitochondrial complex I, KFYI subunit"	F_UNCLASSIFIED	NOT_DOMAIN_ASSEMBLY	NO_LIGANDS_4A
+002832987	e7qsdf1	AUTO_NONREP	1125.1.1.1	7qsd	f	f:8-57	f:8-57	NO_UNP	extended segments	"NO_X_NAME"	"NO_H_NAME"	"Mitochondrial complex I, MNLL subunit"	NADH_oxidored	NOT_DOMAIN_ASSEMBLY	3PE
+002832983	e7qsda1	AUTO_NONREP	1126.1.1.1	7qsd	a	a:1-70	a:1-70	NO_UNP	extended segments	"NO_X_NAME"	"NO_H_NAME"	"Mitochondrial complex I, MWFE subunit"	MWFE	NOT_DOMAIN_ASSEMBLY	3PE,CDL
+002832988	e7qsdh1	AUTO_NONREP	1127.1.1.1	7qsd	h	h:6-143	h:52-189	NO_UNP	extended segments	"NO_X_NAME"	"NO_H_NAME"	"Mitochondrial complex I, SGDH subunit"	NDUF_B5	NOT_DOMAIN_ASSEMBLY	CDL,PC1
+002832985	e7qsdd1	AUTO_NONREP	1131.1.1.1	7qsd	d	d:1-120	d:1-120	NO_UNP	extended segments	"NO_X_NAME"	"NO_H_NAME"	"Mitochondrial complex I, B14.5b subunit"	NDUF_C2	NOT_DOMAIN_ASSEMBLY	3PE,PC1
+002832982	e7qsdZ1	AUTO_NONREP	1132.1.1.1	7qsd	Z	Z:4-144	Z:4-144	NO_UNP	extended segments	"NO_X_NAME"	"NO_H_NAME"	"Mitochondrial complex I, B16.6 subunit"	GRIM-19	NOT_DOMAIN_ASSEMBLY	3PE

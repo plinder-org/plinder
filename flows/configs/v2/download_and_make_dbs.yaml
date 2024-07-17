@@ -1,0 +1,7 @@
+ingest:
+  run_specific_stages: download_rcsb_files,download_alternative_datasets,make_dbs
+  plinder_mount: /plinder
+  plinder_release: 2024-06
+  force_update: true
+scatter:
+  two_char_batch_size: 4

@@ -1,0 +1,77 @@
+name: CI Workflow
+
+permissions:
+  contents: write
+  id-token: write
+  pull-requests: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  pull_request:
+
+jobs:
+  test:
+    name: Code quality checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+      - name: Setup python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+      - name: Install tox
+        run: pip install tox
+      - name: Run quality checks
+        run: tox -e py39-lint,py39-type
+      - name: Directory Cache
+        uses: actions/cache@v4
+        with:
+          path: .tox
+          key: tox-${{ runner.os }}-3.9-${{ hashFiles('tox.ini') }}
+          restore-keys: |
+            tox-${{ runner.os }}-3.9-
+
+  build:
+    name: Build and test docker image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v1
+        with:
+          workload_identity_provider: projects/1045208284552/locations/global/workloadIdentityPools/vantai-github-actions-pool/providers/vantai-github-actions-provider
+          service_account: default-gha@vantai-analysis.iam.gserviceaccount.com
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v1
+      - name: Configure docker
+        run: gcloud auth configure-docker us-east1-docker.pkg.dev
+      - name: Get changed files
+        id: changed-files
+        uses: tj-actions/changed-files@v39
+        with:
+          files: dockerfiles/base/*
+      - name: Pull base image and build
+        if: steps.changed-files.outputs.any_changed == 'true'
+        run: python flows/docker.py pull --build
+      - name: Pull base image
+        if: steps.changed-files.outputs.any_changed != 'true'
+        run: python flows/docker.py pull
+      - name: Build image
+        run: python flows/docker.py build --push
+      - name: Run test image
+        run: python flows/docker.py test
+      - name: Copy coverage
+        run: cp reports/.coverage .
+      - name: Post coverage comment
+        uses: py-cov-action/python-coverage-comment-action@v3
+        continue-on-error: true
+        with:
+          GITHUB_TOKEN: ${{ github.token }}

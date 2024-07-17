@@ -1,0 +1,5 @@
+system_id	ligand_instance	ligand_asym_id	ligand_is_rdkit_loadable	ligand_is_rdkit_loadable_with_fix	ligand_is_obabel_loadable	ligand_is_obabel_loadable_with_rdkit_fix	ligand_matches_smiles_atom_num	ligand_positions_correct	ligand_loadbable_via_biotite	ligand_molvs_validation	ligand_rdkit_validation	complex_loadbable_via_biotite	ligand_protein_neighbor_still_preserved_complex	all_ligand_chains_present	all_protein_chains_present
+1fbz__1__1.A__1.C	1	C	True	True	True	True	True	True	True	[]	[]	True	True	True	True
+3fbp__1__1.A_1.B__1.C	1	C	True	True	True	True	True	True	True	[]	[]	True	True	True	True
+1fbh__1__1.A_1.B__1.E_1.F	1	E	True	True	True	True	True	True	True	[]	[]	True	True	True	True
+1fbh__1__1.A_1.B__1.E_1.F	1	F	True	True	True	True	True	True	True	[]	[]	True	True	True	True

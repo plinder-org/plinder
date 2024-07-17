@@ -1,0 +1,15 @@
+split:
+  graph_configs:
+    - metric: pocket_qcov
+      threshold: 20
+      depth: 2
+  sampling_cluster_metric: pli_qcov
+  sampling_cluster_threshold: 70
+  sampling_cluster_directed: true
+  val_cluster_metric: pocket_lddt
+  val_cluster_threshold: 50
+  val_cluster_directed: false
+  num_representatives: 10
+  min_sample_cluster_size: 2
+  max_leakage_count: 400
+  mms_unique_quality_count: 3

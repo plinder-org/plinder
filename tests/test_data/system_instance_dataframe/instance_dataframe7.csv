@@ -1,0 +1,8 @@
+id,primary_id,structure_file,chain_id,structure_type,fasta,molecule_type,smiles,uniprot,addons
+1,1,holo/2Y4I__1__1.B__1.E_1.F__ATP_MG/system.cif,R,Holo,holo/2Y4I__1__1.B__1.E_1.F__ATP_MG/sequences.fasta,protein,UNDEFINED,UNDEFINED,"('MG',1,'1.F')"
+2,2,holo/2Y4I__1__1.B__1.E_1.F__ATP_MG/ligand_files/1.E.sdf,S,Holo,UNDEFINED,small_molecule,Nc1ncnc2c1ncn2[C@@H]1O[C@H](CO[P@](=O)(O)O[P@](=O)(O)OP(=O)(O)O)[C@@H](O)[C@H]1O,UNDEFINED,
+3,3,holo/8BCH__1__1.A__1.B__QA9/system.cif,R,Holo,holo/8BCH__1__1.A__1.B__QA9/sequences.fasta,protein,UNDEFINED,UNDEFINED,
+4,4,holo/8BCH__1__1.A__1.B__QA9/ligand_files/1.B.sdf,S,Holo,UNDEFINED,small_molecule,N=C(N)NS(=O)(=O)c1ccc(N)cc1,UNDEFINED,
+5,3,apo/7OS1__1__1.A.cif,A,Apo,UNDEFINED,protein,UNDEFINED,O75643,
+6,3,apo/6S8O__1__1.A.cif,A,Apo,UNDEFINED,protein,UNDEFINED,O75643,
+7,3,predicted/AF_O75643.cif,R,Predicted,UNDEFINED,protein,UNDEFINED,O75643,

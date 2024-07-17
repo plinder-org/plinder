@@ -1,0 +1,211 @@
+data_MFU
+#
+
+_chem_comp.id                                   MFU
+_chem_comp.name                                 "methyl alpha-L-fucopyranoside"
+_chem_comp.type                                 L-saccharide
+_chem_comp.pdbx_type                            ATOMS
+_chem_comp.formula                              "C7 H14 O5"
+_chem_comp.mon_nstd_parent_comp_id              FUC
+_chem_comp.pdbx_synonyms                        
+;ALPHA-L-METHYL-FUCOSE; methyl 6-deoxy-alpha-L-galactopyranoside; methyl alpha-L-fucoside; methyl L-fucoside; methyl
+fucoside
+;
+
+_chem_comp.pdbx_formal_charge                   0
+_chem_comp.pdbx_initial_date                    1999-07-08
+_chem_comp.pdbx_modified_date                   2020-07-17
+_chem_comp.pdbx_ambiguous_flag                  N
+_chem_comp.pdbx_release_status                  REL
+_chem_comp.pdbx_replaced_by                     ?
+_chem_comp.pdbx_replaces                        MFA
+_chem_comp.formula_weight                       178.183
+_chem_comp.one_letter_code                      ?
+_chem_comp.three_letter_code                    MFU
+_chem_comp.pdbx_model_coordinates_details       ?
+_chem_comp.pdbx_model_coordinates_missing_flag  N
+_chem_comp.pdbx_ideal_coordinates_details       ?
+_chem_comp.pdbx_ideal_coordinates_missing_flag  N
+_chem_comp.pdbx_model_coordinates_db_code       1RDI
+_chem_comp.pdbx_subcomponent_list               ?
+_chem_comp.pdbx_processing_site                 PDBJ
+#   #
+loop_
+_pdbx_chem_comp_synonyms.ordinal
+_pdbx_chem_comp_synonyms.comp_id
+_pdbx_chem_comp_synonyms.name
+_pdbx_chem_comp_synonyms.provenance
+_pdbx_chem_comp_synonyms.type
+1  MFU  ALPHA-L-METHYL-FUCOSE                       PDB  ?  
+2  MFU  "methyl 6-deoxy-alpha-L-galactopyranoside"  PDB  ?  
+3  MFU  "methyl alpha-L-fucoside"                   PDB  ?  
+4  MFU  "methyl L-fucoside"                         PDB  ?  
+5  MFU  "methyl fucoside"                           PDB  ?  
+#   #
+loop_
+_chem_comp_atom.comp_id
+_chem_comp_atom.atom_id
+_chem_comp_atom.alt_atom_id
+_chem_comp_atom.type_symbol
+_chem_comp_atom.charge
+_chem_comp_atom.pdbx_align
+_chem_comp_atom.pdbx_aromatic_flag
+_chem_comp_atom.pdbx_leaving_atom_flag
+_chem_comp_atom.pdbx_stereo_config
+_chem_comp_atom.model_Cartn_x
+_chem_comp_atom.model_Cartn_y
+_chem_comp_atom.model_Cartn_z
+_chem_comp_atom.pdbx_model_Cartn_x_ideal
+_chem_comp_atom.pdbx_model_Cartn_y_ideal
+_chem_comp_atom.pdbx_model_Cartn_z_ideal
+_chem_comp_atom.pdbx_component_atom_id
+_chem_comp_atom.pdbx_component_comp_id
+_chem_comp_atom.pdbx_ordinal
+MFU  C1   C1   C  0  1  N  N  R  4.235  -10.410  6.587  -0.873  -0.638   0.792  C1   MFU   1  
+MFU  C2   C2   C  0  1  N  N  S  4.659   -9.283  5.642  -1.048  -0.552  -0.725  C2   MFU   2  
+MFU  C3   C3   C  0  1  N  N  R  3.437   -8.526  5.147  -0.221   0.620  -1.259  C3   MFU   3  
+MFU  C4   C4   C  0  1  N  N  S  2.619   -8.010  6.336   1.225   0.458  -0.779  C4   MFU   4  
+MFU  C5   C5   C  0  1  N  N  S  2.260   -9.174  7.274   1.230   0.296   0.742  C5   MFU   5  
+MFU  C6   C6   C  0  1  N  N  N  1.583   -8.697  8.552   2.672   0.167   1.234  C6   MFU   6  
+MFU  O1   O1   O  0  1  N  N  N  3.556  -11.390  5.864  -1.294   0.589   1.389  O1   MFU   7  
+MFU  O2   O2   O  0  1  N  N  N  5.337   -9.841  4.530  -2.427  -0.345  -1.036  O2   MFU   8  
+MFU  O3   O3   O  0  1  N  N  N  3.852   -7.439  4.332  -0.254   0.624  -2.688  O3   MFU   9  
+MFU  O4   O4   O  0  1  N  N  N  3.352   -7.021  7.047   1.805  -0.698  -1.385  O4   MFU  10  
+MFU  O5   O5   O  0  1  N  N  N  3.453   -9.897  7.670   0.498  -0.872   1.106  O5   MFU  11  
+MFU  CM   CM   C  0  1  N  N  N  3.309  -12.607  6.602  -1.110   0.447   2.799  CM   MFU  12  
+MFU  H1   H1   H  0  1  N  N  N  5.139  -10.878  7.040  -1.478  -1.457   1.181  H1   MFU  13  
+MFU  H2   H2   H  0  1  N  N  N  5.328   -8.580  6.190  -0.705  -1.479  -1.185  H2   MFU  14  
+MFU  H3   H3   H  0  1  N  N  N  2.796   -9.213  4.546  -0.629   1.558  -0.882  H3   MFU  15  
+MFU  H4   H4   H  0  1  N  N  N  1.678   -7.551  5.950   1.801   1.341  -1.054  H4   MFU  16  
+MFU  H5   H5   H  0  1  N  N  N  1.561   -9.827  6.700   0.767   1.170   1.201  H5   MFU  17  
+MFU  H61  H61  H  0  1  N  N  N  1.322   -9.541  9.232   2.678   0.057   2.318  H61  MFU  18  
+MFU  H62  H62  H  0  1  N  N  N  2.204   -7.933  9.076   3.135  -0.708   0.777  H62  MFU  19  
+MFU  H63  H63  H  0  1  N  N  N  0.688   -8.071  8.324   3.232   1.060   0.956  H63  MFU  20  
+MFU  HO2  HO2  H  0  1  N  Y  N  5.600   -9.141  3.943  -2.910  -1.105  -0.683  HO2  MFU  21  
+MFU  HO3  HO3  H  0  1  N  Y  N  3.088   -6.966  4.022  -1.180   0.728  -2.946  HO3  MFU  22  
+MFU  HO4  HO4  H  0  1  N  Y  N  2.845   -6.701  7.784   2.710  -0.765  -1.050  HO4  MFU  23  
+MFU  HM1  HM1  H  0  1  N  N  N  2.766  -13.390  6.023  -1.420   1.364   3.300  HM1  MFU  24  
+MFU  HM2  HM2  H  0  1  N  N  N  4.262  -13.015  7.011  -1.713  -0.385   3.161  HM2  MFU  25  
+MFU  HM3  HM3  H  0  1  N  N  N  2.773  -12.383  7.554  -0.059   0.255   3.011  HM3  MFU  26  
+#   #
+loop_
+_chem_comp_bond.comp_id
+_chem_comp_bond.atom_id_1
+_chem_comp_bond.atom_id_2
+_chem_comp_bond.value_order
+_chem_comp_bond.pdbx_aromatic_flag
+_chem_comp_bond.pdbx_stereo_config
+_chem_comp_bond.pdbx_ordinal
+MFU  C1  C2   SING  N  N   1  
+MFU  C1  O1   SING  N  N   2  
+MFU  C1  O5   SING  N  N   3  
+MFU  C1  H1   SING  N  N   4  
+MFU  C2  C3   SING  N  N   5  
+MFU  C2  O2   SING  N  N   6  
+MFU  C2  H2   SING  N  N   7  
+MFU  C3  C4   SING  N  N   8  
+MFU  C3  O3   SING  N  N   9  
+MFU  C3  H3   SING  N  N  10  
+MFU  C4  C5   SING  N  N  11  
+MFU  C4  O4   SING  N  N  12  
+MFU  C4  H4   SING  N  N  13  
+MFU  C5  C6   SING  N  N  14  
+MFU  C5  O5   SING  N  N  15  
+MFU  C5  H5   SING  N  N  16  
+MFU  C6  H61  SING  N  N  17  
+MFU  C6  H62  SING  N  N  18  
+MFU  C6  H63  SING  N  N  19  
+MFU  O1  CM   SING  N  N  20  
+MFU  O2  HO2  SING  N  N  21  
+MFU  O3  HO3  SING  N  N  22  
+MFU  O4  HO4  SING  N  N  23  
+MFU  CM  HM1  SING  N  N  24  
+MFU  CM  HM2  SING  N  N  25  
+MFU  CM  HM3  SING  N  N  26  
+#   #
+loop_
+_pdbx_chem_comp_descriptor.comp_id
+_pdbx_chem_comp_descriptor.type
+_pdbx_chem_comp_descriptor.program
+_pdbx_chem_comp_descriptor.program_version
+_pdbx_chem_comp_descriptor.descriptor
+MFU  SMILES            ACDLabs               10.04  "OC1C(O)C(O)C(OC1OC)C"  
+MFU  SMILES_CANONICAL  CACTVS                3.341  "CO[C@@H]1O[C@@H](C)[C@@H](O)[C@@H](O)[C@@H]1O"  
+MFU  SMILES            CACTVS                3.341  "CO[CH]1O[CH](C)[CH](O)[CH](O)[CH]1O"  
+MFU  SMILES_CANONICAL  "OpenEye OEToolkits"  1.5.0  "C[C@H]1[C@H]([C@H]([C@@H]([C@@H](O1)OC)O)O)O"  
+MFU  SMILES            "OpenEye OEToolkits"  1.5.0  "CC1C(C(C(C(O1)OC)O)O)O"  
+MFU  InChI             InChI                 1.03   "InChI=1S/C7H14O5/c1-3-4(8)5(9)6(10)7(11-2)12-3/h3-10H,1-2H3/t3-,4+,5+,6-,7+/m0/s1"  
+MFU  InChIKey          InChI                 1.03   OHWCAVRRXKJCRB-CXNFULCWSA-N  
+#   #
+loop_
+_pdbx_chem_comp_identifier.comp_id
+_pdbx_chem_comp_identifier.type
+_pdbx_chem_comp_identifier.program
+_pdbx_chem_comp_identifier.program_version
+_pdbx_chem_comp_identifier.identifier
+MFU  "SYSTEMATIC NAME"                      ACDLabs               10.04  "methyl 6-deoxy-alpha-L-galactopyranoside"  
+MFU  "SYSTEMATIC NAME"                      "OpenEye OEToolkits"  1.5.0  "(2R,3S,4R,5S,6S)-2-methoxy-6-methyl-oxane-3,4,5-triol"  
+MFU  "CONDENSED IUPAC CARBOHYDRATE SYMBOL"  GMML                  1.0    LFucp[1Me]a  
+MFU  "COMMON NAME"                          GMML                  1.0    1-methyl-a-L-fucopyranose  
+MFU  "IUPAC CARBOHYDRATE SYMBOL"            PDB-CARE              1.0    o1-methyl-a-L-fucose  
+#
+_pdbx_chem_comp_related.comp_id            MFU
+_pdbx_chem_comp_related.related_comp_id    FUC
+_pdbx_chem_comp_related.relationship_type  "Carbohydrate core"
+_pdbx_chem_comp_related.details            ?
+#   #
+loop_
+_pdbx_chem_comp_atom_related.ordinal
+_pdbx_chem_comp_atom_related.comp_id
+_pdbx_chem_comp_atom_related.atom_id
+_pdbx_chem_comp_atom_related.related_comp_id
+_pdbx_chem_comp_atom_related.related_atom_id
+_pdbx_chem_comp_atom_related.related_type
+ 1  MFU  C1   FUC  C1   "Carbohydrate core"  
+ 2  MFU  C2   FUC  C2   "Carbohydrate core"  
+ 3  MFU  C3   FUC  C3   "Carbohydrate core"  
+ 4  MFU  C4   FUC  C4   "Carbohydrate core"  
+ 5  MFU  C5   FUC  C5   "Carbohydrate core"  
+ 6  MFU  C6   FUC  C6   "Carbohydrate core"  
+ 7  MFU  O1   FUC  O1   "Carbohydrate core"  
+ 8  MFU  O2   FUC  O2   "Carbohydrate core"  
+ 9  MFU  O3   FUC  O3   "Carbohydrate core"  
+10  MFU  O4   FUC  O4   "Carbohydrate core"  
+11  MFU  O5   FUC  O5   "Carbohydrate core"  
+12  MFU  H1   FUC  H1   "Carbohydrate core"  
+13  MFU  H2   FUC  H2   "Carbohydrate core"  
+14  MFU  H3   FUC  H3   "Carbohydrate core"  
+15  MFU  H4   FUC  H4   "Carbohydrate core"  
+16  MFU  H5   FUC  H5   "Carbohydrate core"  
+17  MFU  H61  FUC  H61  "Carbohydrate core"  
+18  MFU  H62  FUC  H62  "Carbohydrate core"  
+19  MFU  H63  FUC  H63  "Carbohydrate core"  
+20  MFU  HO2  FUC  HO2  "Carbohydrate core"  
+21  MFU  HO3  FUC  HO3  "Carbohydrate core"  
+22  MFU  HO4  FUC  HO4  "Carbohydrate core"  
+#   #
+loop_
+_pdbx_chem_comp_feature.comp_id
+_pdbx_chem_comp_feature.type
+_pdbx_chem_comp_feature.value
+_pdbx_chem_comp_feature.source
+_pdbx_chem_comp_feature.support
+MFU  "CARBOHYDRATE ISOMER"                  L         PDB  ?  
+MFU  "CARBOHYDRATE RING"                    pyranose  PDB  ?  
+MFU  "CARBOHYDRATE ANOMER"                  alpha     PDB  ?  
+MFU  "CARBOHYDRATE PRIMARY CARBONYL GROUP"  aldose    PDB  ?  
+#   #
+loop_
+_pdbx_chem_comp_audit.comp_id
+_pdbx_chem_comp_audit.action_type
+_pdbx_chem_comp_audit.date
+_pdbx_chem_comp_audit.processing_site
+MFU  "Create component"          1999-07-08  PDBJ  
+MFU  "Modify descriptor"         2011-06-04  RCSB  
+MFU  "Other modification"        2020-07-03  RCSB  
+MFU  "Modify parent residue"     2020-07-17  RCSB  
+MFU  "Modify name"               2020-07-17  RCSB  
+MFU  "Modify synonyms"           2020-07-17  RCSB  
+MFU  "Modify linking type"       2020-07-17  RCSB  
+MFU  "Modify leaving atom flag"  2020-07-17  RCSB  
+##

@@ -1,0 +1,29 @@
+Name	Type	Description
+system_ligand_atom_count	int	The number of atoms across all ligands in the system
+system_ligand_average_b_factor	float	The mean B-value across all ligands in the system
+system_ligand_average_occupancy	float	The mean occupancy across all ligands in the system
+system_ligand_average_rscc	float	The mean Real-Space Correlation Coefficient across all ligands in the system
+system_ligand_average_rsr	float	The mean Real-Space R-value across all ligands in the system
+system_ligand_average_rsrz	float	The mean RSRZ across all ligands in the system
+system_ligand_heavy_atom_count	int	The number of heavy atoms across all ligands in the system
+system_ligand_max_alt_count	int	The maximum number of configurations across across all ligands in the system
+system_ligand_num_processed_residues	int	 Number of ligand residues processed in the validation file in a given system
+system_ligand_num_unresolved_heavy_atoms	int	 The number of unresolved heavy atoms in ligand residues in a given system
+system_ligand_percent_occupancy_over_threshold	float	   The fraction of atoms in ligands residues with full occupancy in a given system
+system_ligand_percent_outliers_chirality	float	   The fraction of ligand residues with chirality outliers (see https://www.wwpdb.org/validation/XrayValidationReportHelp) in a given system
+system_ligand_percent_outliers_clashes	float	   The fraction of ligand residues with clash outliers (see https://www.wwpdb.org/validation/XrayValidationReportHelp)  in a given system
+system_ligand_percent_outliers_density	float	   The fraction of ligand residues with density outliers (see https://www.wwpdb.org/validation/XrayValidationReportHelp)  in a given system
+system_ligand_percent_outliers_geometry	float	   The fraction of ligand residues with geometry outliers (see https://www.wwpdb.org/validation/XrayValidationReportHelp) in a given system
+system_ligand_percent_processed_residues	float	   The fraction of ligands residues processed in the validation file in a given system
+system_ligand_percent_rscc_over_threshold	float	   The fraction of ligands residues with RSCC >= 0.8 in a given system
+system_ligand_percent_rsr_under_threshold	float	   The fraction of residues with RSR <= 0.3 in a given system
+system_ligand_unknown_residue_count	int	 The number of unknown ligand residues in a given system
+system_ligand_chains_atom_count	list[int]	The number of atoms in each ligand chain in the system
+system_ligand_chains_average_b_factor	list[float]	The mean B-value of each ligand chain in the system
+system_ligand_chains_average_occupancy	list[float]	The mean occupancy of each ligand chain in the system
+system_ligand_chains_average_rscc	list[float]	The mean Real-Space Correlation Coefficient of each ligand chain in the system
+system_ligand_chains_average_rsr	list[float]	The mean Real-Space R-value of each ligand chain in the system
+system_ligand_chains_average_rsrz	list[float]	The mean RSRZ of each ligand chain in the system
+system_ligand_chains_heavy_atom_count	list[int]	The number of heavy atoms for each ligand chain in the system
+system_ligand_chains_max_alt_count	list[int]	The maximum number of configurations for each ligand chain in the system
+system_ligand_chains_num_processed_residues	list[int]	The number of residues which were processed in the validation report for each neighboring protein chain of the given ligand

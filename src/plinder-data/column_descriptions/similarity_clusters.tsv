@@ -1,0 +1,4 @@
+Name	Type	Description
+pli_qcov__100__strong__component	str	 Cluster ids based strongly connected components of a graph made from pli_qcov (PLIP interaction similarity * query coverage), at a threshold of 100% similarity.
+protein_lddt_qcov_weighted_sum__100__strong__component	str	 Cluster ids based strongly connected components of a graph made from protein_lddt_qcov_weighted_sum (System-level aggregated protein lddt * query coverage), at a threshold of 100% similarity.
+uniqueness	str

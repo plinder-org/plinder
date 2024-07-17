@@ -1,0 +1,6 @@
+ingest:
+  run_specific_stages: make_splits
+  plinder_mount: /plinder
+  plinder_release: 2024-06
+scatter:
+  split_config_dir: gs://plinder-collab-bucket/metaflow/config/split/v2/

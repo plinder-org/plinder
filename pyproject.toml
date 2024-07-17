@@ -1,0 +1,120 @@
+[project]
+name = "plinder"
+dynamic = ["version"]
+dependencies = [
+    "biotite == 0.39.0",
+    "numpy",
+    "pandas",
+    "typing_extensions",
+    "pydantic",
+    "tqdm",
+    "plotly",
+    "nbformat",
+    "google-cloud-storage",
+    "gcsfs",
+    "tabulate",
+    "gemmi",
+    "rdkit==2023.9.5",
+    "pytest",
+    "pdb2pqr",
+    "molecular-rectifier",
+    "hydride",
+    "pdbeccdutils",
+    "oddt",
+    "pyarrow",
+    "omegaconf",
+    "mmcif",
+    "pdb-validation @ git+https://git.scicore.unibas.ch/schwede/ligand-validation.git",
+    "mmpdb @ git+https://github.com/rdkit/mmpdb.git",
+    "eval_type_backport",
+    "posebusters",
+    "duckdb",
+    "cloudpathlib",
+    "networkit >= 11.0",
+]
+
+[project.scripts]
+plinder_download = "plinder.core.index.utils:download_plinder_cmd"
+plinder_eval = "plinder.eval.run:main"
+plinder_create_submission = "plinder.eval.create_submission:main"
+
+[project.optional-dependencies]
+lint = [
+    "ruff == 0.1.2",
+    "pre-commit == 2.21.0",
+]
+core = [
+]
+pipeline = [
+    "vai_metaflow",
+]
+test = [
+    "tox >= 4",
+    "pytest == 7.2.0",
+    "pytest-cov == 4.0.0",
+    "pytest-xdist == 3.6.1",
+    "build == 0.9.0",
+    "setuptools_scm[toml] == 7.0.5",
+]
+type = [
+    "mypy==1.2.0",
+    "types-PyYAML",
+    "types-requests",
+]
+dev = [
+    "plinder[lint,test,type]",
+]
+
+[build-system]
+build-backend = "setuptools.build_meta"
+requires = [
+    "build == 0.9.0",
+    "setuptools == 65.4.0",
+    "setuptools_scm[toml] == 7.0.5",
+]
+
+[tool.setuptools_scm]
+root = "."
+
+[tool.setuptools.packages.find]
+where = [
+    "src/plinder-core",
+    "src/plinder-data",
+    "src/plinder-eval",
+    "src/plinder-methods",
+]
+include = ["plinder.*"]
+namespaces = true
+
+[tool.setuptools.package-data]
+plinder = [
+    "**.yaml",
+    "plinder/data/utils/annotations/static_files/artifacts_badlist.csv",
+]
+
+[tool.ruff]
+line-length = 88
+select = [
+    "F",
+    "I",
+]
+ignore = [
+    "E",
+    "W",
+]
+preview = true
+
+[tool.ruff.isort]
+known-first-party = ["plinder"]
+
+[tool.ruff.flake8-tidy-imports]
+ban-relative-imports = "all"
+
+[tool.mypy]
+ignore_missing_imports = true
+strict = true
+disallow_untyped_decorators = false
+
+[[tool.mypy.overrides]]
+module = "plinder.core._version"
+ignore_errors = true

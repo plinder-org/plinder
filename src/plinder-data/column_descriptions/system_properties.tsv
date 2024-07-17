@@ -1,0 +1,12 @@
+Name	Type	Description
+system_biounit_id	str	 Bioassembly identification tag/number
+system_ccd_codes	list[str]	 List of all ligand CCD codes in a given system
+system_has_kinase_inhibitor	bool	 Indicator of whether a system contains any ligand that is a kinase inhibitor
+system_id	str	 The unique identification tag assigned to a system.
+system_num_interacting_protein_chains	int	 Number of protein chains interacting with at least one ligand
+system_num_interactions	int	 Total number of interaction in a system
+system_num_ligand_chains	int	 Number of ligand chains in a system
+system_num_neighboring_protein_chains	int	 Total number of protein chains within  6 Å of any ligand chain in a given system
+system_num_pocket_residues	int	 Number of pocket residues in a given system
+system_pdb_id	str	 PDBID associated with a given system
+system_type	str	 System type
