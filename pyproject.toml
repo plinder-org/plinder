@@ -43,11 +43,6 @@ lint = [
     "ruff == 0.1.2",
     "pre-commit == 2.21.0",
 ]
-core = [
-]
-pipeline = [
-    "vai_metaflow",
-]
 test = [
     "tox >= 4",
     "pytest == 7.2.0",

@@ -231,7 +231,7 @@ def build_image(tag: str | None = None, push: bool = False) -> str:
         "--build-arg",
         f"BASE_TAG={env['BASE_TAG']}",
         "--build-arg",
-        "DEPENDENCY_BLOCKS=test,pipeline",
+        "DEPENDENCY_BLOCKS=test",
         Path.cwd().as_posix(),
     ]
     Proc(cmd, env=env).execute()
