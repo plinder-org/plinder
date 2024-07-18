@@ -10,7 +10,7 @@
 [![test](https://github.com/plinder-org/plinder/actions/workflows/pr.yaml/badge.svg)](https://github.com/plinder-org/plinder/actions/workflows/pr.yaml)
 [![coverage](https://github.com/plinder-org/plinder/raw/python-coverage-comment-action-data/badge.svg)](https://github.com/plinder-org/plinder/tree/python-coverage-comment-action-data)
 
-![overview](https://github.com/user-attachments/assets/ab65129e-1640-40c2-a3be-0c9dd0dcdb67)
+![overview](https://github.com/user-attachments/assets/39d251b1-8114-4242-b9fc-e0cce900d22f)
 
 # 📚 About
 
