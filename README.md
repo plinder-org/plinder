@@ -118,10 +118,10 @@ Our latest test split [#TODO] contains:
 
 | Novel   |   # of systems | # of high quality |  stratification criteria | 
 |:--------|---------------:|------------------:|:---------------:|
-| pocket  | 5152 | 5149 | PLI shared < 50 _&_  Pocket shared lDDT < 0.5 |
-| ligand  | 2375 | 2375 | ECFP4 fingerprint similarity < 0.3 |
-| protein |  960 |  960 | Protein Seq. Sim. < 0.3 _&_ Protein lDDT > 0.7 |
-| all     |  249 |  249 | all of the above |
+| pocket  | 5206 | 5203 | PLI shared < 50 _&_  Pocket shared lDDT < 0.5 |
+| ligand  | 2395 | 2395 | ECFP4 fingerprint similarity < 0.3 |
+| protein |  983 |  983 | Protein Seq. Sim. < 0.3 _&_ Protein lDDT > 0.7 |
+| all     |  268 |  268 | all of the above |
 | none    |    0 |    0 | none of the above |
 
 
