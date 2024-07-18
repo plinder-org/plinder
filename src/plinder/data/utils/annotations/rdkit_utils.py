@@ -247,8 +247,7 @@ def remove_unmatched_atoms(mol: Chem.Mol, match: NDArray) -> Chem.Mol:
 
 
 def get_matched_template(template: Chem.Mol, mol: Chem.Mol) -> Chem.Mol:
-    """Roughly based on
-    https://github.com/aivant/vantaiqueue/blob/master/vantaiqueue/design/ternarycomplex/corermsd.py#L10-L64 (05/03/24)
+    """
     Perform MCS matching between a (subject) mol and a template; and return the matched template with
     the bond orders of the template. Used to assign bond orders in
     `safe_mol_from_pdb_assign_bond_orders`. Known limitation: if the template has

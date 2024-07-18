@@ -12,7 +12,7 @@ MOUNT = "/plinder"
 
 K8S = dict(
     cpu=1,
-    image="us-east1-docker.pkg.dev/vantai-analysis/metaflow/vai-metaflow:latest-py3.9",
+    image="ghcr.io/plinder-org/plinder:v0.1.1",
     persistent_volume_claims={
         "plinder-data-gen-pvc": MOUNT,
     },

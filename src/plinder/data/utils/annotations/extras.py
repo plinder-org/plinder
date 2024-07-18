@@ -647,14 +647,6 @@ def extract_rdk_mol_from_cif(
     return mol
 
 
-def list_all_processed_pdbids(bucket_str: str) -> Any:
-    import gcsfs
-
-    bucket, bucket_path = bucket_str.replace("gs://", "").split("/", 1)
-    f = gcsfs.GCSFileSystem("vantai-analysis")
-    return f.ls(f"{bucket}/{bucket_path}")[1:]
-
-
 def get_covalent_connections(pdbx_file: PDBxFile) -> Tuple[Any, Any]:
     """ "
     Use full mmcif.gz
