@@ -109,7 +109,23 @@ with the dataset.
 
 ## 🏅 Gold standard benchmark sets
 
-Discuss stratification efforts
+As part of `plinder` resource we also provide train, validation and test splits that are curated to minimize the information leakage based on protein-ligand interaction similarity. In addition, we have prioritized the systems that has a linked experimental `apo` structure or matched molecular series to support realistic inference scenarios for hit discovery and optimization.
+Finally, a particular care is taken for test set that is further prioritized to contain high quality structures to provide unambiguous ground-truths for performance benchmarking.
+
+![plinder](./assets/plinder_test_stratification.png)
+
+Moreover, as we enticipate this resource to be used for benchmarking a wide range of methods, including those simultaneously predicting protein structure (aka. co-folding) or those generating novel ligand structures, we further stratified test (by novel ligand, pocket, protein or all) to cover a wide range of tasks.
+
+Our latest test split [#TODO] contains:
+
+| Novel   |   # of systems | # of high quality |  stratification criteria | 
+|:--------|---------------:|------------------:|:---------------:|
+| pocket  | 5152 | 5149 | PLI shared < 50 _&_  Pocket shared lDDT < 0.5 |
+| ligand  | 2375 | 2375 | ECFP4 fingerprint similarity < 0.3 |
+| protein |  960 |  960 | Protein Seq. Sim. < 0.3 _&_ Protein lDDT > 0.7 |
+| all     |  249 |  249 | all of the above |
+| none    |    0 |    0 | none of the above |
+
 
 ## 🧪 Training set
 
@@ -224,6 +240,5 @@ since the previous release:
 
 # 📃 Publications
 Durairaj, Janani, Yusuf Adeshina, Zhonglin Cao, Xuejin Zhang, Vladas Oleinikovas, Thomas Duignan, Zachary McClure, Xavier Robin, Emanuele Rossi, Guoqing Zhou, Srimukh Prasad Veccham, Clemens Isert, Yuxing Peng, Prabindh Sundareson, Mehmet Akdel, Gabriele Corso, Hannes Stärk, Zachary Wayne Carpenter, Michael M. Bronstein, Emine Kucukbenli, Torsten Schwede, Luca Naef. 2024. “PLINDER: The Protein-Ligand Interactions Dataset and Evaluation Resource.” 
-
-[bioRxiv](https://doi.org/10.1101/2024.07.17.603955)
-[ICML'24 ML4LMS](https://openreview.net/forum?id=7UvbaTrNbP)
+- [bioRxiv](https://doi.org/10.1101/2024.07.17.603955)
+- [ICML'24 ML4LMS](https://openreview.net/forum?id=7UvbaTrNbP)
