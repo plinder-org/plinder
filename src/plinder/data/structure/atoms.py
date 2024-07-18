@@ -134,7 +134,7 @@ def atom_vdw_radius(at: Atom) -> float:
 def backbone_mask(
     atoms: _AtomArrayOrStack, backbone_definition: BackboneDefinition
 ) -> NDArray[np.bool_]:
-    if backbone_definition.value == "dockq":
+    if backbone_definition == "dockq":
         mask = np.isin(atoms.atom_name, DOCKQ_BACKBONE_ATOMS)
     else:
         mask = struc.filter_peptide_backbone(atoms)
