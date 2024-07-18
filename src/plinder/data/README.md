@@ -1,21 +1,8 @@
 plinder-data
 ============
 
-This `README.md` is available [here](https://storage.googleapis.com/plinder/2024-04/v1/README.md).
-Alternatively, you can download this `README.md` file using the following command:
-
-```bash
-gsutil cp gs://plinder/2024-04/v1/README.md README.md
-```
-
-The nearest version of the source code which should run can be found here:
-
-```bash
-gsutil cp gs://plinder/2024-04/v1/plinder.tar.gz plinder.tar.gz
-```
-
 The end-to-end `plinder` pipeline relies on source data which is
-obtainable using source code in the `plinder-data` package (to be open-sourced)
+obtainable using source code in the `plinder-data` package
 and is not included in the `plinder` dataset itself. The source
 data can be obtained from directly the following URLs:
 
