@@ -227,8 +227,8 @@ class System(BaseModel):
         sub_chain_list = [ch.split(".") for ch in sub_chains]
 
         sub_chain_list = [
-            chains[c].to_dict(int(instance))
-            for instance, c in sub_chain_list  # type: ignore
+            chains[c].to_dict(int(instance))  # type: ignore
+            for instance, c in sub_chain_list
         ]
 
         if len(sub_chain_list) == 0:
