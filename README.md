@@ -10,6 +10,20 @@
 [![test](https://github.com/plinder-org/plinder/actions/workflows/pr.yaml/badge.svg)](https://github.com/plinder-org/plinder/actions/workflows/pr.yaml)
 [![Coverage badge](https://github.com/plinder-org/plinder/raw/python-coverage-comment-action-data/badge.svg)](https://github.com/plinder-org/plinder/tree/python-coverage-comment-action-data)
 
+# 📚 About
+
+**plinder**, short for **p**rotein **l**igand **in**teractions **d**ataset and **e**valuation **r**esource,
+is a dataset and resource for training and evaluation of protein-ligand docking algorithms.
+It is a comprehensive, annotated, high quality dataset:
+
+- > 400k PLI systems across > 11k SCOP domains and > 50k unique small molecules
+- 500+ annotations for each system, including protein and ligand properties, quality, matched molecular series and more
+- Automated curation pipeline to keep up with the PDB
+- 14 PLI metrics and over 20 billion similarity scores
+- Unbound (_apo_) and _pred_icted Alphafold2 structures linked to _holo_ systems
+- `train-val-test` splits and ability to tune splitting based on the learning task
+
+
 
 # 📢 Notice
 
@@ -18,20 +32,6 @@ University of Basel, SIB Swiss Institute of Bioinformatics,
 VantAI, NVIDIA, MIT CSAIL, and the community at large.
 If you find `plinder` useful,
 please see the citation file for details on how to cite.
-
-# 🚧 Under construction
-
-Please bear with us as we migrate the `plinder` project to
-open source as we work to share it with the world. There are
-some gaps in the code and documentation, which will be fixed
-as soon as possible. The dataset itself is complete, but the
-code to interact with some parts of the dataset is still under
-development.
-
-# 📚 About
-
-**plinder**, short for **p**rotein **l**igand **in**teractions **d**ataset and **e**valuation **r**esource,
-is a dataset and resource for training and evaluation of protein-ligand docking algorithms.
 
 # 👨💻 Getting Started
 
