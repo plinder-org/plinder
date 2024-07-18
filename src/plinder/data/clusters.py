@@ -1,7 +1,5 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
-import logging
-import os
 from pathlib import Path
 from time import time
 from typing import Callable, TypeVar
@@ -9,10 +7,8 @@ from typing import Callable, TypeVar
 import networkit as nk
 import numpy as np
 import pandas as pd
-import pyarrow as pa
 
 from plinder.core import scores
-from plinder.core.utils import cpl
 from plinder.core.utils.log import setup_logger
 from plinder.core.utils.schemas import CLUSTER_SCHEMA
 

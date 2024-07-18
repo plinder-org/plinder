@@ -2,17 +2,14 @@
 # Distributed under the terms of the Apache License 2.0
 from __future__ import annotations
 
-import os
-import subprocess
-from pathlib import Path
-import sys
 import logging
-import subprocess
 import shutil
-from pathlib import Path
-import pandas as pd
-from typing import Generator, Any
+import subprocess
 from itertools import zip_longest
+from pathlib import Path
+from typing import Any, Generator
+
+import pandas as pd
 from rdkit import Chem
 
 from plinder.core.utils.log import setup_logger

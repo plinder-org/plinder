@@ -2,14 +2,14 @@
 # Distributed under the terms of the Apache License 2.0
 from __future__ import annotations
 
+from functools import wraps
+from hashlib import md5
 from json import dumps
 from os import listdir
-from time import time
-from hashlib import md5
-from functools import wraps
 from pathlib import Path
+from time import time
+from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, TypeVar
 from zipfile import ZipFile
-from typing import TYPE_CHECKING, Any, Callable, Dict, TypeVar, Optional
 
 import pandas as pd
 from omegaconf import DictConfig

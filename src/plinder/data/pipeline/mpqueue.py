@@ -2,16 +2,15 @@
 # Distributed under the terms of the Apache License 2.0
 #!/usr/bin/env python
 
-import time
 import argparse
 import logging
-import os
 import multiprocessing
+import os
+import time
 from itertools import repeat
-from subprocess import check_output
 from multiprocessing import cpu_count
+from subprocess import check_output
 from typing import List, Optional
-
 
 logging.basicConfig(format="[MPQueue] %(levelname)s: %(message)s", level=logging.DEBUG)
 

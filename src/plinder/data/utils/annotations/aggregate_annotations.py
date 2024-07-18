@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import typing as ty
 from collections import Counter, defaultdict
 from functools import cached_property
@@ -11,12 +12,18 @@ from pathlib import Path
 import networkx as nx
 import pandas as pd
 from ost import conop, io, mol
+from PDBValidation.ValidationFactory import ValidationFactory
 from plip.basic import config
 from posebusters import PoseBusters
 from pydantic import BaseModel, Field
 from rdkit import RDLogger
 
 from plinder.core.utils.log import setup_logger
+from plinder.data.utils.annotations.get_ligand_validation import (
+    EntryValidation,
+    ResidueListValidation,
+    SystemValidationThresholds,
+)
 from plinder.data.utils.annotations.interaction_utils import (
     get_covalent_connections,
     run_plip_on_split_structure,
@@ -35,13 +42,6 @@ from plinder.data.utils.annotations.save_utils import (
     save_ligands,
     save_pdb_file,
 )
-from plinder.data.utils.annotations.get_ligand_validation import (
-    EntryValidation,
-    SystemValidationThresholds,
-    ResidueListValidation,
-)
-from PDBValidation.ValidationFactory import ValidationFactory
-import re
 
 LOG = setup_logger(__name__)
 RDLogger.DisableLog("rdApp.*")
@@ -909,7 +909,7 @@ class Entry(BaseModel):
             "apo",
             "holo",
             "pred",
-        ), f"chain_type must be 'apo', 'holo', or 'pred'"
+        ), "chain_type must be 'apo', 'holo', or 'pred'"
         if chain_type == "holo":
             chains = set(
                 self.chains[i_c.split(".")[1]].auth_id
@@ -1088,7 +1088,7 @@ class Entry(BaseModel):
         max_ligand_chains: int,
     ) -> None:
         if save_folder is None:
-            LOG.warn(f"run_posebusters got save_folder=None so skipping")
+            LOG.warn("run_posebusters got save_folder=None so skipping")
             return
         for system_id, system in self.iter_systems(
             max_protein_chains, max_ligand_chains

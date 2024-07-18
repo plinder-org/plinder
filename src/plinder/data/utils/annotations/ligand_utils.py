@@ -2,37 +2,35 @@
 # Distributed under the terms of the Apache License 2.0
 from __future__ import annotations
 
+import itertools
 import logging
+import typing as ty
 from collections import Counter, defaultdict
 from functools import cache, cached_property
 from pathlib import Path
-import itertools
 
 import numpy as np
 import pandas as pd
-import typing as ty
 from mmcif.api.PdbxContainers import DataContainer
+from openbabel import pybel
 from ost import io, mol
 from ost.conop import GetDefaultLib
 from plip.structure.preparation import PLInteraction
 from pydantic import BaseModel, Field
 from rdkit import Chem, RDLogger
 from rdkit.Chem import QED, AllChem, Crippen, rdMolDescriptors
-from rdkit.Chem.rdchem import RWMol
-from rdkit.Chem.rdchem import Mol
-from openbabel import pybel
-from plinder.data.common.constants import BASE_DIR
+from rdkit.Chem.rdchem import Mol, RWMol
 
+from plinder.data.common.constants import BASE_DIR
+from plinder.data.utils.annotations.extras import (
+    get_ccd_smiles_dict,
+    sort_ccd_codes,
+)
 from plinder.data.utils.annotations.interaction_utils import (
     extract_other_covalent_subunit,
     get_hash,
     pdbize,
 )
-from plinder.data.utils.annotations.extras import (
-    get_ccd_smiles_dict,
-    sort_ccd_codes,
-)
-
 from plinder.data.utils.annotations.protein_utils import Chain
 from plinder.data.utils.annotations.rdkit_utils import set_smiles_from_ligand_ost
 

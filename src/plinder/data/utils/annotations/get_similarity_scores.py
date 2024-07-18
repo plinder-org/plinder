@@ -5,7 +5,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 from collections import abc, defaultdict
-from dataclasses import dataclass, field, InitVar
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
@@ -14,18 +14,18 @@ import biotite.sequence.align as align
 import numpy as np
 import pandas as pd
 import pyarrow
-from pyarrow import csv
 import pyarrow.dataset as ds
 import pyarrow.parquet as pq
+from pyarrow import csv
 from tqdm import tqdm
 
-from plinder.core.utils.log import setup_logger
 from plinder.core.utils import schemas
+from plinder.core.utils.log import setup_logger
 from plinder.data import databases
+from plinder.data.pipeline.config import FoldseekConfig, MMSeqsConfig
+from plinder.data.pipeline.utils import load_entries_from_zips
 from plinder.data.utils.annotations.aggregate_annotations import Entry, System
 from plinder.data.utils.annotations.ligand_utils import Ligand
-from plinder.data.pipeline.utils import load_entries_from_zips
-from plinder.data.pipeline.config import FoldseekConfig, MMSeqsConfig
 
 LOG = setup_logger(__name__)
 

@@ -7,7 +7,6 @@ import pandas as pd
 from plinder.core.utils import gcs
 from plinder.core.utils.log import setup_logger
 
-
 LOG = setup_logger(__name__)
 
 

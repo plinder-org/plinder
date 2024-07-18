@@ -6,24 +6,23 @@ and use a convention of looking for a file in a
 pre-determined location before fetching it from
 the network.
 """
-import os
 import gzip
 import json
+import os
 import shutil
 from concurrent.futures import ALL_COMPLETED, ThreadPoolExecutor, wait
-from time import sleep
 from functools import wraps
 from pathlib import Path
-from typing import Any, Callable, Optional, Literal, TypeVar
 from subprocess import check_output
+from time import sleep
+from typing import Any, Callable, Literal, Optional, TypeVar
 
-import requests
 import pandas as pd
+import requests
 from tqdm import tqdm
-import numpy as np
+
 from plinder.core.utils.log import setup_logger
 from plinder.data.pipeline import transform
-
 
 CIF_PATH = "rsync-nextgen.wwpdb.org::rsync/data/entries/divided"
 CIF_GLOB = "*-enrich.cif.gz"
@@ -415,7 +414,7 @@ def download_kinase_data(
         kinase_struc.to_parquet(kinase_struc_path, index=False)
     kinase_uniprotac_path = kinase_info_path.parent / "kinase_uniprotac.parquet"
     if not kinase_uniprotac_path.is_file() or force_update:
-        LOG.info(f"download_kinase_data: merging information and structure")
+        LOG.info("download_kinase_data: merging information and structure")
         kinase_info = pd.read_parquet(kinase_info_path)
         kinase_struc = pd.read_parquet(kinase_struc_path)
         df = pd.merge(

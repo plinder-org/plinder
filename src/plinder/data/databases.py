@@ -1,8 +1,8 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
 import json
-from pathlib import Path
 import subprocess as sp
+from pathlib import Path
 from typing import TYPE_CHECKING, Dict, Optional
 
 import pandas as pd

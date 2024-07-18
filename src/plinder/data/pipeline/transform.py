@@ -2,10 +2,10 @@
 # Distributed under the terms of the Apache License 2.0
 import tarfile
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
-from typing import Any
 
 
 def parse_pdb_range(pdb_range: str) -> tuple[str, str, str]:

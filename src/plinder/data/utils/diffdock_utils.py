@@ -1,15 +1,18 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
 # mypy: disable-error-code="no-untyped-def, no-untyped-call, attr-defined, assignment, arg-type, var-annotated"
+# ruff: noqa
 
-from plinder.data.common.log import setup_logger
 import copy
+
+import networkx as nx
 import numpy as np
 from rdkit import Chem, RDLogger
-from rdkit.Chem.rdchem import BondType as BT
 from rdkit.Chem import AllChem, GetPeriodicTable, rdMolTransforms
-import networkx as nx
+from rdkit.Chem.rdchem import BondType as BT
 from scipy.optimize import differential_evolution
+
+from plinder.data.common.log import setup_logger
 
 RDLogger.DisableLog("rdApp.*")
 LOG = setup_logger(__name__)
@@ -155,7 +158,7 @@ def read_molecule(
         if remove_hs:
             mol = Chem.RemoveHs(mol, sanitize=sanitize)
 
-    except Exception as e:
+    except Exception:
         # Print stacktrace
         import traceback
 

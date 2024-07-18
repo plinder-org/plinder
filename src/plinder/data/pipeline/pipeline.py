@@ -1,15 +1,12 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
 from pathlib import Path
-from typing import Optional, Any
+from typing import Any, Optional
 
-from omegaconf import OmegaConf, DictConfig
+from omegaconf import DictConfig, OmegaConf
 
 from plinder.core.utils.log import setup_logger
-from plinder.data.pipeline import config
-from plinder.data.pipeline import tasks
-from plinder.data.pipeline import utils
-
+from plinder.data.pipeline import config, tasks, utils
 
 LOG = setup_logger(__name__)
 

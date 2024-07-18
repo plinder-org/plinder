@@ -2,22 +2,19 @@
 # Distributed under the terms of the Apache License 2.0
 from __future__ import annotations
 
-import logging
-import tempfile
-from pathlib import Path
+import copy
 
 import numpy as np
 from numpy.typing import NDArray
+from openbabel import pybel
 from ost import conop, io
 from ost import mol as omol
 from rdkit import Chem
 from rdkit.Chem import AllChem
 from rdkit.Chem.rdchem import Mol
 from rdkit.Chem.rdFMCS import FindMCS
-from openbabel import pybel
-from collections import defaultdict
+
 from plinder.core.utils.log import setup_logger
-import copy
 
 LOG = setup_logger(__name__)
 COMPOUND_LIB = conop.GetDefaultLib()
@@ -71,7 +68,7 @@ def sanitize_mol(mol: Mol) -> None:
     """
     try:
         Chem.SanitizeMol(mol)
-    except Exception as e:
+    except Exception:
         Chem.SanitizeMol(
             mol,
             # sanitize all but keep hydrogens as is
@@ -314,7 +311,7 @@ def make_rdkit_compatible_mol(mol: Mol) -> Mol | None:
         try:
             # fix N, O, C, H valency issues and then sanitize
             mol = fix_valency_issues(mol)
-        except Exception as e:
+        except Exception:
             mol = None
     return mol
 
@@ -353,7 +350,7 @@ def ligand_ost_ent_to_rdkit_mol(
             # attempt to pre-emptively fix some valency problems
             try:
                 rdkit_mol_tmp = fix_valency_issues(rdkit_mol_tmp)
-            except Exception as e:
+            except Exception:
                 LOG.warn(
                     "fix_valency_issues: failed before mol_assigned_bond_orders_by_template"
                 )
@@ -396,9 +393,9 @@ def set_smiles_from_ligand_ost(ent: omol.EntityHandle) -> str:
                 rdkit_mol = Chem.MolFromSmiles(str(mol.smiles), sanitize=False)
                 rdkit_mol = make_rdkit_compatible_mol(rdkit_mol)
                 return str(Chem.MolToSmiles(rdkit_mol))
-            except Exception as e:
+            except Exception:
                 LOG.warn(
-                    f"set_smiles_from_ligand_ost: CCD smiles could not be loaded by rdkit, moving to fix"
+                    "set_smiles_from_ligand_ost: CCD smiles could not be loaded by rdkit, moving to fix"
                 )
     rdkit_mol = ligand_ost_ent_to_rdkit_mol(ent)
     return str(Chem.MolToSmiles(rdkit_mol))

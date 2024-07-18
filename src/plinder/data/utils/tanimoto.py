@@ -1,7 +1,7 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional, Any
+from typing import TYPE_CHECKING, Any, Optional
 
 import numpy as np
 import pandas as pd
@@ -192,7 +192,7 @@ def ligand_scores(
     if all_ligs_ids[number_id_col].min() != 0:
         raise ValueError("inconsistency in ligand ids, no index=zero found!")
     if all_ligs_ids[number_id_col].max() != all_ligs_ids.shape[0] - 1:
-        raise ValueError(f"inconsistency in ligand ids, max index != ids shape!")
+        raise ValueError("inconsistency in ligand ids, max index != ids shape!")
 
     query_ecfp = fingerprints[ligand_ids]
     # target_list = fingerprints

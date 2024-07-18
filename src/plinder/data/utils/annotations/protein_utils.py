@@ -11,14 +11,14 @@ from typing import Any
 from mmcif.api.PdbxContainers import DataContainer
 from mmcif.io.PdbxReader import PdbxReader
 from ost import conop, io, mol
+from PDBValidation.Validation import PDBValidation
 from pydantic import BaseModel, ConfigDict, Field
+
 from plinder.data.utils.annotations.get_ligand_validation import (
-    ResidueValidation,
     ResidueListValidation,
+    ResidueValidation,
     ResidueValidationThresholds,
 )
-from PDBValidation.Validation import PDBValidation
-
 
 NON_SMALL_MOL_LIG_TYPES = [
     mol.CHAINTYPE_POLY,

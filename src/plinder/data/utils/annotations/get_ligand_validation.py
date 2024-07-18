@@ -2,12 +2,12 @@
 # Distributed under the terms of the Apache License 2.0
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field
+import numpy as np
+from PDBValidation.PDBXReader import ResidueNotFound
+from PDBValidation.Residue import Residue
 from PDBValidation.Validation import PDBValidation
 from PDBValidation.XML import ModelledSubgroupNotFound
-from PDBValidation.Residue import Residue
-from PDBValidation.PDBXReader import ResidueNotFound
-import numpy as np
+from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 from plinder.core.utils.log import setup_logger
 

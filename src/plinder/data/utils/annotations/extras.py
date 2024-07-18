@@ -2,22 +2,17 @@
 # Distributed under the terms of the Apache License 2.0
 from __future__ import annotations
 
-import glob
 import gzip
-import logging
-import os
-import pickle
 import random
+import re
 import shutil
 import tarfile
 import tempfile
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, Dict, List, Tuple, Union, Set
-import re
+from typing import Any, Dict, List, Tuple, Union
 
 import biotite.structure as struc
-import gcsfs
 import gemmi
 import networkx as nx
 import numpy as np

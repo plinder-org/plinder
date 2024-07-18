@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import gzip
-import logging
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
@@ -13,8 +12,8 @@ import numpy as np
 from biotite.structure.io.pdbx import PDBxFile
 from mmcif.api.PdbxContainers import DataContainer
 from ost import io, mol
-from plip.structure.preparation import PDBComplex, PLInteraction
 from plip.basic.supplemental import whichchain, whichresnumber
+from plip.structure.preparation import PDBComplex, PLInteraction
 
 from plinder.core.utils.log import setup_logger
 

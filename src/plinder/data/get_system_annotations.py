@@ -13,7 +13,6 @@ from tqdm import tqdm
 from plinder.core.utils.log import setup_logger
 from plinder.data.utils.annotations.aggregate_annotations import Entry
 
-
 LOG = setup_logger(__name__, log_level=logging.DEBUG)
 
 
@@ -123,6 +122,7 @@ def hpc_save_batch(
 
 def cloud_save_annotation() -> None:
     from omegaconf import OmegaConf
+
     from plinder.data.pipeline.config import AnnotationConfig, EntryConfig
 
     cfg = dict(

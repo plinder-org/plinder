@@ -1,24 +1,21 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
 import os
-from textwrap import dedent
 from pathlib import Path
 from shutil import rmtree
 from subprocess import check_output
+from textwrap import dedent
 from zipfile import ZIP_DEFLATED, ZipFile
 
-from omegaconf import DictConfig
 import pandas as pd
-import numpy as np
+from omegaconf import DictConfig
 
 from plinder.core.utils import gcs
 from plinder.core.utils.log import setup_logger
 from plinder.data import clusters, databases, leakage, splits
-from plinder.data.pipeline import io
-from plinder.data.pipeline import utils
-from plinder.data.utils import tanimoto
+from plinder.data.pipeline import io, utils
 from plinder.data.pipeline.config import METRICS
-
+from plinder.data.utils import tanimoto
 
 LOG = setup_logger(__name__)
 STAGES = [
@@ -140,19 +137,19 @@ def download_alternative_datasets(
 
     """
     kws = dict(data_dir=data_dir, force_update=force_update)
-    LOG.info(f"download_alternative_datasets: cofactors")
+    LOG.info("download_alternative_datasets: cofactors")
     io.download_cofactors(**kws)
-    LOG.info(f"download_alternative_datasets: seqres")
+    LOG.info("download_alternative_datasets: seqres")
     io.download_seqres_data(**kws)
-    LOG.info(f"download_alternative_datasets: kinase")
+    LOG.info("download_alternative_datasets: kinase")
     io.download_kinase_data(**kws)
-    LOG.info(f"download_alternative_datasets: ecod")
+    LOG.info("download_alternative_datasets: ecod")
     io.download_ecod_data(**kws)
-    LOG.info(f"download_alternative_datasets: panther")
+    LOG.info("download_alternative_datasets: panther")
     io.download_panther_data(**kws)
-    LOG.info(f"download_alternative_datasets: components")
+    LOG.info("download_alternative_datasets: components")
     io.download_components_cif(**kws)
-    LOG.info(f"download_alternative_datasets: affinity")
+    LOG.info("download_alternative_datasets: affinity")
     io.download_affinity_data(**kws)
 
 
@@ -405,11 +402,11 @@ def structure_qc(
     data_dir: Path,
     two_char_codes: list[str],
 ) -> None:
-    from plinder.data.utils.annotations.aggregate_annotations import Entry
     from plinder.data.final_structure_qc import (
         prepare_system_dict,
         run_structure_checks,
     )
+    from plinder.data.utils.annotations.aggregate_annotations import Entry
 
     entry_dir = data_dir / "raw_entries"
     err_dir = data_dir / "qc" / "logs"
@@ -596,7 +593,7 @@ def make_ligands(
     output_dir = data_dir / "ligands"
     output_dir.mkdir(exist_ok=True, parents=True)
     output_path = output_dir / f"{hashed_contents}.parquet"
-    LOG.info(f"make_ligands: running save_ligand_batch")
+    LOG.info("make_ligands: running save_ligand_batch")
     utils.save_ligand_batch(
         entries=entries,
         output_path=output_path,
@@ -611,7 +608,7 @@ def compute_ligand_fingerprints(
     nbits: int = 1024,
 ) -> None:
     """ """
-    LOG.info(f"compute_ligand_fingerprints: running")
+    LOG.info("compute_ligand_fingerprints: running")
     #  data_dir / "fingerprints" / ligands_per_system.parquet
     #  data_dir / "fingerprints"  / ligands_per_inchikey.parquet
     #  data_dir / "fingerprints" /ligands_per_inchikey_ecfp4.npy
