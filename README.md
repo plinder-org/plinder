@@ -1,4 +1,4 @@
-![plinder](./assets/plinder.png)
+![plinder](https://github.com/user-attachments/assets/05088c51-36c8-48c6-a7b2-8a69bd40fb44)
 
 <div align="center">
     <h1>The Protein Ligand INteractions Dataset and Evaluation Resource</h1>
@@ -8,7 +8,9 @@
 
 [![license](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://github.com/plinder-org/plinder/blob/master/LICENSE.txt)
 [![test](https://github.com/plinder-org/plinder/actions/workflows/pr.yaml/badge.svg)](https://github.com/plinder-org/plinder/actions/workflows/pr.yaml)
-[![Coverage badge](https://github.com/plinder-org/plinder/raw/python-coverage-comment-action-data/badge.svg)](https://github.com/plinder-org/plinder/tree/python-coverage-comment-action-data)
+[![coverage](https://github.com/plinder-org/plinder/raw/python-coverage-comment-action-data/badge.svg)](https://github.com/plinder-org/plinder/tree/python-coverage-comment-action-data)
+
+![overview](https://github.com/user-attachments/assets/88b04376-bb8d-4cd6-afaf-06b586c4ddb9)
 
 # 📚 About
 
@@ -147,7 +149,7 @@ This code is split into 4 sub-packages
 
 # 💽 Dataset Generation
 
-![Workflow](./assets/workflow.png)
+![workflow](https://github.com/user-attachments/assets/cde72643-5fdf-4998-8719-216d0cef2706)
 
 See the [End-to-end pipeline](#src/plinder-data/README.md) description for technical details about the dataset generation.
 
