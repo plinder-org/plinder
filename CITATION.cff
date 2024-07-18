@@ -99,7 +99,7 @@ preferred-citation:
     given-names: "Luca"
   doi: "10.1101/2024.07.17.603955"
   journal: "bioRxiv"
-  eventtitle: "Machine Learning for Life and Material Science, ICML 2024",
+  eventtitle: "Machine Learning for Life and Material Science, ICML 2024"
   month: 7
   title: "PLINDER: The Protein-Ligand Interactions Dataset and Evaluation Resource"
   year: 2024
