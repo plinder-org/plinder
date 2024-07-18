@@ -40,3 +40,7 @@ jobs:
       - name: Save git tag
         if: steps.get-tag.outputs.bump != 'skip'
         run: git push origin ${{ steps.get-tag.outputs.bump }}
+      - name: Post coverage comment
+        uses: py-cov-action/python-coverage-comment-action@v3
+        with:
+          GITHUB_TOKEN: ${{ github.token }}
