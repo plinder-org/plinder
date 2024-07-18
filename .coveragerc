@@ -2,8 +2,7 @@
 branch = true
 parallel = true
 relative_files = true
-source =
-    src
+source = plinder
 
 [report]
 show_missing = true

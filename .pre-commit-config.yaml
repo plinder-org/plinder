@@ -23,6 +23,6 @@ repos:
         types: [python]
       - id: ruff-linter
         name: ruff-linter
-        entry: bash -c 'ruff check --fix src/plinder-core'
+        entry: bash -c 'ruff check --fix src'
         language: system
         types: [python]

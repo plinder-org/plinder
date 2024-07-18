@@ -26,4 +26,4 @@ services:
       - ./.coveragerc:/app/.coveragerc
       - ./reports/:/app/reports/
       - ./examples/:/app/examples/
-    command: /bin/bash -c "python -m pytest -v -n auto && sqlite3 .coverage 'update file set path=substr(path, 40);' && cp .coverage reports/.coverage"
+    command: /bin/bash -c "python -m pytest -v -n auto && cp .coverage reports/.coverage"

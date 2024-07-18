@@ -72,14 +72,8 @@ requires = [
 root = "."
 
 [tool.setuptools.packages.find]
-where = [
-    "src/plinder-core",
-    "src/plinder-data",
-    "src/plinder-eval",
-    "src/plinder-methods",
-]
+where = ["src"]
 include = ["plinder.*"]
-namespaces = true
 
 [tool.setuptools.package-data]
 plinder = [

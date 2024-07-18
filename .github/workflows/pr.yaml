@@ -62,10 +62,11 @@ jobs:
         run: python flows/docker.py build
       - name: Run test image
         run: python flows/docker.py test
-      - name: Copy coverage
-        run: cp reports/.coverage .
+      - name: Copy and surgery coverage
+        run: |
+          cp reports/.coverage .
+          sqlite3 .coverage "update file set path='src/' || substr(path, 40);"
       - name: Post coverage comment
         uses: py-cov-action/python-coverage-comment-action@v3
-        continue-on-error: true
         with:
           GITHUB_TOKEN: ${{ github.token }}

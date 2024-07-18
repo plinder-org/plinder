@@ -6,9 +6,9 @@
 
 ---
 
-[![license](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://github.com/aivant/plinder/blob/master/LICENSE)
-[![test](https://github.com/aivant/plinder/actions/workflows/pr.yaml/badge.svg)](https://github.com/aivant/plinder/actions/workflows/pr.yaml)
-[![Coverage badge](https://github.com/aivant/plinder/raw/python-coverage-comment-action-data/badge.svg)](https://github.com/aivant/plinder/tree/python-coverage-comment-action-data)
+[![license](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://github.com/plinder-org/plinder/blob/master/LICENSE.txt)
+[![test](https://github.com/plinder-org/plinder/actions/workflows/pr.yaml/badge.svg)](https://github.com/plinder-org/plinder/actions/workflows/pr.yaml)
+[![Coverage badge](https://github.com/plinder-org/plinder/raw/python-coverage-comment-action-data/badge.svg)](https://github.com/plinder-org/plinder/tree/python-coverage-comment-action-data)
 
 
 # 📢 Notice
@@ -49,7 +49,7 @@ For MacOS users, please see the relevant [docker](#package-publishing) resources
 
 The `plinder` package can be obtained from GitHub:
 
-    git clone https://github.com/aivant/plinder.git
+    git clone https://github.com/plinder-org/plinder.git
     cd plinder
     mamba env create -f environment.yml
     mamba activate plinder
@@ -162,9 +162,9 @@ To develop and test changes to the source code, please use a development install
 
 ## Dev mode install
 
-    git clone https://github.com/aivant/plinder.git
+    git clone https://github.com/plinder-org/plinder.git
     # OR
-    git clone git@github.com:aivant/plinder.git
+    git clone git@github.com:plinder-org/plinder.git
     cd plinder
     mamba env create -f environment.yml
     mamba activate plinder
