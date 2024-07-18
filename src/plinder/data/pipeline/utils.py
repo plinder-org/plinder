@@ -15,8 +15,8 @@ import pandas as pd
 from omegaconf import DictConfig
 
 from plinder.core.utils import schemas
+from plinder.core.utils.log import setup_logger
 from plinder.data.utils import tanimoto
-from plinder.data.common.log import setup_logger
 
 if TYPE_CHECKING:
     from plinder.data.utils.annotations.aggregate_annotations import Entry

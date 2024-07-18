@@ -16,7 +16,7 @@ from ost import io, mol
 from plip.structure.preparation import PDBComplex, PLInteraction
 from plip.basic.supplemental import whichchain, whichresnumber
 
-from plinder.data.common.log import setup_logger
+from plinder.core.utils.log import setup_logger
 
 log = setup_logger(__name__)
 

@@ -10,7 +10,7 @@ import pandas as pd
 from biotite import structure as struc
 from biotite.structure import AtomArray
 
-from plinder.data.common.log import setup_logger
+from plinder.core.utils.log import setup_logger
 from plinder.data.structure.atoms import (
     atom_array_from_cif_file,
 )

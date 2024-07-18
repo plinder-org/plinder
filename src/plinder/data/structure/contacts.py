@@ -11,7 +11,7 @@ import pandas as pd
 from biotite.structure.atoms import AtomArray
 from numpy.typing import NDArray
 
-from plinder.data.common import setup_logger
+from plinder.core.utils.log import setup_logger
 
 _Contacts = Set[Tuple[str, str, int, int]]
 _StackContacts = List[_Contacts]

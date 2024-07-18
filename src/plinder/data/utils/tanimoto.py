@@ -12,8 +12,8 @@ from rdkit.Chem import AllChem
 from scipy.spatial.distance import cdist
 
 from plinder.core.utils import schemas
+from plinder.core.utils.log import setup_logger
 from plinder.data import smallmolecules
-from plinder.data.common.log import setup_logger
 
 if TYPE_CHECKING:
     from plinder.data.utils.annotations.aggregate_annotations import Entry

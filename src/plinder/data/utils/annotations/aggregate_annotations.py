@@ -16,7 +16,7 @@ from posebusters import PoseBusters
 from pydantic import BaseModel, Field
 from rdkit import RDLogger
 
-from plinder.data.common.log import setup_logger
+from plinder.core.utils.log import setup_logger
 from plinder.data.utils.annotations.interaction_utils import (
     get_covalent_connections,
     run_plip_on_split_structure,
@@ -35,7 +35,6 @@ from plinder.data.utils.annotations.save_utils import (
     save_ligands,
     save_pdb_file,
 )
-from plinder.data.common.log import setup_logger
 from plinder.data.utils.annotations.get_ligand_validation import (
     EntryValidation,
     SystemValidationThresholds,
@@ -223,10 +222,13 @@ class System(BaseModel):
             sub_chains = self.neighboring_protein_chains
         elif chain_type == "ligand":
             sub_chains = self.ligand_chains
+        else:
+            raise ValueError(f"chain_type={chain_type} not understood")
         sub_chain_list = [ch.split(".") for ch in sub_chains]
 
         sub_chain_list = [
-            chains[c].to_dict(int(instance)) for instance, c in sub_chain_list
+            chains[c].to_dict(int(instance))
+            for instance, c in sub_chain_list  # type: ignore
         ]
 
         if len(sub_chain_list) == 0:
@@ -370,7 +372,7 @@ class System(BaseModel):
     ) -> None:
         self.ligand_validation = ResidueListValidation.from_residues(
             [
-                chains[c.split(".")[1]].residues[r].validation
+                chains[c.split(".")[1]].residues[r].validation  # type: ignore
                 for c in self.ligand_chains
                 for r in chains[c.split(".")[1]].residues
             ],
@@ -378,7 +380,7 @@ class System(BaseModel):
         )
         self.pocket_validation = ResidueListValidation.from_residues(
             [
-                chains[c.split(".")[1]].residues[r].validation
+                chains[c.split(".")[1]].residues[r].validation  # type: ignore
                 for c in self.pocket_residues
                 for r in self.pocket_residues[c]
             ],
@@ -459,6 +461,7 @@ class System(BaseModel):
                         for i in chains_dict[neighboring_chain].mappings[mapping_name][
                             domain
                         ]
+                        if i is not None
                     }
                     unrolled_v_2 = {j for i in unrolled_v for j in i}
                     if mapping_name == "ECOD":
@@ -714,12 +717,13 @@ class Entry(BaseModel):
         entry_info = get_entry_info(cif_data)
         per_chain = get_chain_external_mappings(cif_data)
         interface_proximal_gaps = annotate_interface_gaps(cif_file)
-        resolution = entry_info.get("entry_resolution", None)
-        if resolution is not None and type(resolution) == str:
+        resolution = entry_info.get("entry_resolution")
+        r = None
+        if resolution is not None:
             try:
-                resolution = float(resolution)
+                r = float(resolution)
             except ValueError:
-                resolution = None
+                r = None
         entry = cls(
             pdb_id=info.struct_details.entry_id.lower(),
             release_date=info.revisions.GetDateOriginal(),
@@ -727,7 +731,7 @@ class Entry(BaseModel):
             determination_method=entry_info.get("entry_determination_method", None),
             keywords=entry_info.get("entry_keywords", None),
             pH=entry_info.get("entry_pH", None),
-            resolution=resolution,
+            resolution=r,
             covalent_bonds=get_covalent_connections(cif_data),
             chain_to_seqres={c.name: c.string for c in seqres},
         )
@@ -788,7 +792,7 @@ class Entry(BaseModel):
                     interactions,
                     plip_chain_mapping,
                     interface_proximal_gaps,
-                    entry.covalent_bonds,
+                    entry.covalent_bonds,  # type: ignore
                     neighboring_residue_threshold,
                     neighboring_ligand_threshold,
                     data_dir=data_dir,
@@ -851,7 +855,7 @@ class Entry(BaseModel):
                 )
                 if neighboring_ligand_id in ligands:
                     G.add_edge(ligand_id, neighboring_ligand_id)
-        system_ligands: dict[int, Ligand] = {}
+        system_ligands: dict[int, list[Ligand]] = {}
         for idx, component in enumerate(
             sorted(nx.connected_components(G), key=len, reverse=True)
         ):
@@ -863,7 +867,7 @@ class Entry(BaseModel):
             system = System(
                 pdb_id=self.pdb_id,
                 biounit_id=ligs[0].biounit_id,
-                ligands=sorted(ligs, key=lambda x: x.id),  # type: ignore
+                ligands=sorted(ligs, key=lambda x: x.id),
             )
             if len(system.interacting_protein_chains):
                 self.systems[system.id] = system
@@ -1124,7 +1128,7 @@ class Entry(BaseModel):
         """
         Remove non-pocket residues from chains
         """
-        all_pocket_residues = defaultdict(set)
+        all_pocket_residues: dict[str, set[int]] = defaultdict(set)
         for system in self.systems.values():
             for ligand in system.ligands:
                 for chain in ligand.pocket_residues:
@@ -1219,7 +1223,7 @@ class Entry(BaseModel):
                     ).set_index("uniprotac")
                 if uniprot in dfs[shard].index:
                     mappings[dfs[shard].loc[uniprot]["panther"]] |= set(
-                        uniprots[uniprot]
+                        uniprots[uniprot]  # type: ignore
                     )
             if len(mappings):
                 self.chains[chain_id].mappings["PANTHER"] = {
@@ -1243,7 +1247,7 @@ class Entry(BaseModel):
             for row in kinase_df_chain.T.to_dict().values():
                 uniprot = uniprots.get(row["uniprot"])
                 if uniprot is not None:
-                    mappings[row["kinase"]] |= set(uniprot)
+                    mappings[row["kinase"]] |= set(uniprot)  # type: ignore
             if len(mappings):
                 self.chains[chain_id].mappings["Kinase name"] = {
                     k: list(v) for k, v in mappings.items()

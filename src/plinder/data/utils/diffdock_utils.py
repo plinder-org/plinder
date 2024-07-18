@@ -118,7 +118,9 @@ def get_torsion_angles(mol):
     return torsions_list
 
 
-def read_molecule(molecule_file, sanitize=False, calc_charges=False, remove_hs=False):
+def read_molecule(
+    molecule_file, sanitize=False, calc_charges=False, remove_hs=False
+) -> Chem.rdchem.Mol:
     if molecule_file.endswith(".mol2"):
         mol = Chem.MolFromMol2File(molecule_file, sanitize=False, removeHs=False)
     elif molecule_file.endswith(".sdf"):
@@ -467,7 +469,7 @@ def get_lig_graph_with_matching(
     remove_hs=False,
     tries=10,
     skip_matching=False,
-):
+) -> None:
     mol_maybe_noh = copy.deepcopy(mol_)
     if remove_hs:
         mol_maybe_noh = Chem.RemoveHs(mol_maybe_noh, sanitize=True)

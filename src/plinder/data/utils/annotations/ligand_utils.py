@@ -888,7 +888,7 @@ class Ligand(BaseModel):
         interactions: PLInteraction,
         plip_chain_mapping: dict[str, str],
         interface_proximal_gaps: dict[str, dict[tuple[str, str], dict[str, int]]],
-        all_covalent_dict: list[set[str]],
+        all_covalent_dict: dict[str, list[set[str]]],
         neighboring_residue_threshold: float = 6.0,
         neighboring_ligand_threshold: float = 4.0,
         data_dir: ty.Optional[Path] = None,
@@ -965,7 +965,7 @@ class Ligand(BaseModel):
             instance=ligand_instance,
             ccd_code=ccd_code,
             plip_type=get_chain_type(ligand_chain.chain_type, interactions.ligand.type),
-            bird_id=list(ligand_chain.mappings.get("BIRD", {"": None}))[0],
+            bird_id=list(ligand_chain.mappings.get("BIRD", {"": None}))[0],  # type: ignore
             num_rot_bonds=interactions.ligand.num_rot_bonds,
             centroid=list(interactions.ligand.centroid),
             smiles=smiles,
@@ -1231,8 +1231,10 @@ class Ligand(BaseModel):
             sub_chains = self.interacting_ligands
         elif chain_type == "neighboring_ligand":
             sub_chains = self.neighboring_ligands
+        else:
+            raise ValueError(f"chain_type={chain_type} not understood")
         sub_chains = [
-            chains[instance_chain.split(".")[-1]].to_dict(instance_chain.split(".")[0])
+            chains[instance_chain.split(".")[-1]].to_dict(instance_chain.split(".")[0])  # type: ignore
             for instance_chain in sub_chains
         ]
         data: dict[str, list[ty.Any]] = defaultdict(list)

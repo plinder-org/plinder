@@ -16,7 +16,7 @@ from rdkit.Chem.rdchem import Mol
 from rdkit.Chem.rdFMCS import FindMCS
 from openbabel import pybel
 from collections import defaultdict
-from plinder.data.common.log import setup_logger
+from plinder.core.utils.log import setup_logger
 import copy
 
 LOG = setup_logger(__name__)

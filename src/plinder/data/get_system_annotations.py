@@ -10,7 +10,7 @@ from typing import Any, Dict, Optional
 import pandas as pd
 from tqdm import tqdm
 
-from plinder.data.common.log import setup_logger
+from plinder.core.utils.log import setup_logger
 from plinder.data.utils.annotations.aggregate_annotations import Entry
 
 
@@ -57,7 +57,7 @@ class GetPlinderAnnotation:
             entry_cfg.update(self.entry_cfg)
         self.entry = Entry.from_cif_file(
             self.mmcif_file,
-            **entry_cfg,
+            **entry_cfg,  # type: ignore
         )
         LOG.info(f"created entry for {self.mmcif_file}")
         self.entry.set_validation(self.validation_xml, self.mmcif_file)

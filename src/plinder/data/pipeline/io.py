@@ -21,7 +21,7 @@ import requests
 import pandas as pd
 from tqdm import tqdm
 import numpy as np
-from plinder.data.common.log import setup_logger
+from plinder.core.utils.log import setup_logger
 from plinder.data.pipeline import transform
 
 

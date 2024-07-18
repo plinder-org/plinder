@@ -310,33 +310,29 @@ def prep_data_for_desired_properties(
     quality = set(entries[entries["proto_test"]]["system_id"])
     LOG.info(f"{len(quality)} systems are of high quality")
 
-    num_apo_links = (
-        scores.query_protein_similarity(
-            search_db="apo",
-            columns=["query_system", "target_system"],
-            filters=[
-                ("similarity", ">=", 95),
-                ("metric", "==", "pocket_fident"),
-            ],
-        )
-        .groupby("query_system")
-        .size()
+    apo_links = scores.query_protein_similarity(
+        search_db="apo",
+        columns=["query_system", "target_system"],
+        filters=[
+            ("similarity", ">=", 95),
+            ("metric", "==", "pocket_fident"),
+        ],
     )
+    assert apo_links is not None, "apo_links is None"
+    num_apo_links = apo_links.groupby("query_system").size()
     LOG.info(f"num_apo_links has {len(num_apo_links)} elements")
 
-    num_pred_links = (
-        scores.query_protein_similarity(
-            search_db="pred",
-            columns=["query_system", "target_system"],
-            filters=[
-                ("similarity", ">=", 100),
-                ("search_db", "==", "pred"),
-                ("metric", "==", "pocket_fident"),
-            ],
-        )
-        .groupby("query_system")
-        .size()
+    pred_links = scores.query_protein_similarity(
+        search_db="pred",
+        columns=["query_system", "target_system"],
+        filters=[
+            ("similarity", ">=", 100),
+            ("search_db", "==", "pred"),
+            ("metric", "==", "pocket_fident"),
+        ],
     )
+    assert pred_links is not None, "pred_links is None"
+    num_pred_links = pred_links.groupby("query_system").size()
     LOG.info(f"num_pred_links has {len(num_pred_links)} elements")
 
     entries["has_apo"] = entries["system_id"].map(lambda x: num_apo_links.get(x, 0) > 0)

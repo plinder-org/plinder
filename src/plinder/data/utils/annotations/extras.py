@@ -31,7 +31,7 @@ from rdkit.Chem import AllChem
 from rdkit.Chem.rdchem import Mol, RWMol
 from rdkit.DataStructs.cDataStructs import ExplicitBitVect
 
-from plinder.data.common import setup_logger
+from plinder.core.utils.log import setup_logger
 from plinder.data.structure.atoms import get_original_chain_mapping
 
 log = setup_logger(__name__)

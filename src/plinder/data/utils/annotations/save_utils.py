@@ -21,7 +21,7 @@ def save_ligands(
     ent: mol.EntityHandle,
     ligand_chains: list[str],
     ligand_smiles: list[str],
-    ligand_num_unresolved_heavy_atoms: list[int],
+    ligand_num_unresolved_heavy_atoms: list[int | None],
     output_folder: str | Path,
 ) -> None:
     for chain, smiles, num_unresolved_heavy_atoms in zip(
@@ -29,7 +29,7 @@ def save_ligands(
     ):
         ligand_ost = mol.CreateEntityFromView(ent.Select(f"chain='{chain}'"), True)
         rdkit_mol = ligand_ost_ent_to_rdkit_mol(
-            ligand_ost, smiles, num_unresolved_heavy_atoms
+            ligand_ost, smiles, num_unresolved_heavy_atoms or 0
         )
         rdkit_mol.SetProp("_Name", chain)
         with Chem.SDWriter(str(Path(output_folder) / f"{chain}.sdf")) as w:

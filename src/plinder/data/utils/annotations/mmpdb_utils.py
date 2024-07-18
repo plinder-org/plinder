@@ -15,7 +15,7 @@ from typing import Generator, Any
 from itertools import zip_longest
 from rdkit import Chem
 
-from plinder.data.common.log import setup_logger
+from plinder.core.utils.log import setup_logger
 
 LOG = setup_logger(__name__)
 

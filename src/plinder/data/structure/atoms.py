@@ -21,7 +21,7 @@ from rdkit.Chem import AllChem, Mol
 from rdkit.DataStructs import cDataStructs
 from rdkit.ML.Descriptors.MoleculeDescriptors import MolecularDescriptorCalculator
 
-from plinder.data.common import setup_logger
+from plinder.core.utils.log import setup_logger
 from plinder.data.structure.models import BackboneDefinition
 
 log = setup_logger(__name__)
@@ -134,7 +134,7 @@ def atom_vdw_radius(at: Atom) -> float:
 def backbone_mask(
     atoms: _AtomArrayOrStack, backbone_definition: BackboneDefinition
 ) -> NDArray[np.bool_]:
-    if backbone_definition == "dockq":
+    if backbone_definition.value == "dockq":
         mask = np.isin(atoms.atom_name, DOCKQ_BACKBONE_ATOMS)
     else:
         mask = struc.filter_peptide_backbone(atoms)
@@ -180,7 +180,7 @@ def filter_atoms(
     calpha_only: bool = False,
     backbone_only: bool = False,
     heavy_only: bool = True,
-    backbone_definition: BackboneDefinition = "dockq",
+    backbone_definition: BackboneDefinition = BackboneDefinition.dockq,
 ) -> _AtomArrayOrStack:
     if calpha_only:
         atoms = apply_mask(atoms, atoms.atom_name == "CA")

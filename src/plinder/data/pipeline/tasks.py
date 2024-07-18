@@ -648,7 +648,7 @@ def make_ligand_scores(
     multiply_by: int = 100,
     number_id_col: str = "number_id_by_inchikeys",
 ) -> None:
-    hashid = utils.hash_contents(ligand_ids)
+    hashid = utils.hash_contents([str(i) for i in ligand_ids])
     output_path = data_dir / "ligand_scores" / f"{hashid}.parquet"
     output_path.parent.mkdir(exist_ok=True, parents=True)
     tanimoto.ligand_scores(
@@ -1052,13 +1052,17 @@ def compute_protein_leakage(
 def assign_apo_pred_systems(
     *,
     data_dir: Path,
-    sub_databases: list[str],
+    search_db: str,
+    cpu: int = 8,
 ) -> None:
-    from plinder.data.save_linked_structures import Linker
+    from plinder.data.save_linked_structures import make_linked_structures_data_file
 
     save_dir = data_dir / "assignments"
-    Linker(
+    linked_structures = data_dir / "linked_structures"
+    make_linked_structures_data_file(
         data_dir=data_dir,
-        save_dir=save_dir,
-        sub_databases=sub_databases,
-    ).save()
+        search_db="holo",
+        superposed_folder=save_dir,
+        output_file=linked_structures / f"{search_db}_links.parquet",
+        num_processes=cpu,
+    )

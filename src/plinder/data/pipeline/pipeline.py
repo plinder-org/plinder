@@ -328,7 +328,8 @@ class IngestPipeline:
     def assign_apo_pred_systems(self) -> None:
         tasks.assign_apo_pred_systems(
             data_dir=self.plinder_dir,
-            sub_databases=self.cfg.scorer.sub_databases,
+            # TODO: pass this and cpu in from config
+            search_db="holo",
         )
 
     def run_stage(self, stage: str) -> None:

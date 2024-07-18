@@ -64,7 +64,7 @@ METRICS = [
 
 
 @dataclass
-class IngestConfig(_config.DataConfig):  # type: ignore
+class IngestConfig(_config.DataConfig):
     """
     Control re-processing logic for the pipeline
 

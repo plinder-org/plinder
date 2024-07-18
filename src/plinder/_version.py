@@ -19,4 +19,3 @@ def _get_version() -> str:
             version = "unknown"
 
     return version
-

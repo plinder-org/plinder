@@ -9,7 +9,7 @@ from PDBValidation.Residue import Residue
 from PDBValidation.PDBXReader import ResidueNotFound
 import numpy as np
 
-from plinder.data.common.log import setup_logger
+from plinder.core.utils.log import setup_logger
 
 LOG = setup_logger(__name__)
 
@@ -55,7 +55,7 @@ class SystemValidationThresholds(BaseModel):
         rscc=0.8, rsr=0.3, average_occupancy=1.0
     )
     residue_list_thresholds: dict[str, ResidueListValidationThresholds] = Field(
-        {
+        default_factory=lambda: {
             "ligand": ResidueListValidationThresholds(
                 percent_rsr_under_threshold=100.0,
                 percent_rscc_over_threshold=100.0,

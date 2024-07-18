@@ -12,7 +12,7 @@ import pandas as pd
 from ost import io, mol
 from tqdm import tqdm
 
-from plinder.data.common.log import setup_logger
+from plinder.core.utils.log import setup_logger
 from plinder.data.utils.annotations.save_utils import save_cif_file
 from plinder.eval.docking import utils
 

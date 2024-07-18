@@ -410,6 +410,10 @@ class Chain(BaseModel):
             self.residues[residue].validation = ResidueValidation.from_residue(
                 self.asym_id, residue, self.entity_id, doc
             )
+        validations = []
+        for r in self.residues.values():
+            if r.validation is not None:
+                validations.append(r.validation)
         self.validation = ResidueListValidation.from_residues(
-            [self.residues[r].validation for r in self.residues], residue_thresholds
+            validations, residue_thresholds
         )

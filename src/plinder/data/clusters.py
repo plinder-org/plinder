@@ -261,7 +261,6 @@ def make_components_and_communities(
     if not len(system_ids_and_singletons):
         LOG.info("no system_ids found, returning")
         return
-    t0 = time()
     df = scores.query_protein_similarity(
         search_db="holo",
         columns=[
@@ -274,11 +273,10 @@ def make_components_and_communities(
             ("metric", "==", metric),
         ],
     )
-    t1 = time()
-    LOG.info(f"getting {len(df.index)} similarity scores took {t1-t0:.2f}s")
-    if df.empty:
+    if df is None or df.empty:
         LOG.info("no protein similarity scores found, returning")
         return
+    LOG.info(f"found {len(df.index)} similarity scores")
     system_ids_df = set(df["query_system"]).union(set(df["target_system"]))
     system_ids_cat = pd.CategoricalDtype(categories=list(system_ids_df))
     df[["query_system", "target_system"]] = df[

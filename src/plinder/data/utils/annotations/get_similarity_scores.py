@@ -19,9 +19,9 @@ import pyarrow.dataset as ds
 import pyarrow.parquet as pq
 from tqdm import tqdm
 
+from plinder.core.utils.log import setup_logger
 from plinder.core.utils import schemas
 from plinder.data import databases
-from plinder.data.common.log import setup_logger
 from plinder.data.utils.annotations.aggregate_annotations import Entry, System
 from plinder.data.utils.annotations.ligand_utils import Ligand
 from plinder.data.pipeline.utils import load_entries_from_zips
@@ -326,6 +326,7 @@ class Scorer:
 
     @staticmethod
     def get_config(search_db: str, aln_type: str) -> FoldseekConfig | MMSeqsConfig:
+        config: FoldseekConfig | MMSeqsConfig
         if aln_type == "foldseek":
             config = FoldseekConfig()
         else:
@@ -1217,7 +1218,7 @@ class Scorer:
                         for k in pocket_scores:
                             sv = sorted(
                                 pocket_scores[k],
-                                key=lambda x: x[1] / x[2],  # type: ignore
+                                key=lambda x: x[1] / x[2],
                                 reverse=True,
                             )
                             # q_t_scores[f"{k}_weighted_sum"] = sum(
