@@ -1,0 +1,10 @@
+PLINDER - The Protein Ligand INteractions Dataset and Evaluation Resource
+Copyright (c) 2024, Plinder Development Team
+
+The PLINDER project is a collaboration between the
+University of Basel, SIB Swiss Institute of Bioinformatics,
+VantAI, NVIDIA, and MIT CSAIL.
+
+If you find this software useful, please cite:
+
+Durairaj, Janani, Yusuf Adeshina, Zhonglin Cao, Xuejin Zhang, Vladas Oleinikovas, Thomas Duignan, Zachary McClure, et al. “PLINDER: The Protein-Ligand Interactions Dataset and Evaluation Resource.” bioRxiv, July 17, 2024, 2024.07.17.603955. https://doi.org/10.1101/2024.07.17.603955.
