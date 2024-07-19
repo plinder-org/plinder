@@ -1,6 +1,6 @@
 # Evaluating docking poses across a stratified test set
 
-The `plinder-eval` package allows (1) assessing protein-ligand complex predictions against reference `plinder` systems, and 
+The `plinder-eval` package allows (1) assessing protein-ligand complex predictions against reference `plinder` systems, and
 (2) correlating the performance of these predictions against the level of similarity of each test system to the corresponding training set.
 
 The output file from running `plinder-eval` can be used as a submission to the leaderboard (coming soon).
