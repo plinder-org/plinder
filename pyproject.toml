@@ -60,7 +60,6 @@ dev = [
     "plinder[lint,test,type]",
 ]
 docs = [
-    "six",
     "jupyter-sphinx",
     "jupyterlab_myst",
     "jupytext",

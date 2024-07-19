@@ -37,6 +37,7 @@ jobs:
         id: build
         run: |
           which python
+          python -m pip install six
           python -m pip install '.[docs]'
           pushd docs && bash build.sh && popd
           echo "artifact=test" >> $GITHUB_OUTPUT
