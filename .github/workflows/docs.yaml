@@ -15,11 +15,12 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build:
-    name: Build docs
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    name: Deploy docs
     runs-on: ubuntu-latest
-    outputs:
-      artifact: ${{ steps.build.outputs.artifact }}
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -40,25 +41,10 @@ jobs:
           python -m pip install six
           python -m pip install '.[docs]'
           pushd docs && bash build.sh && popd
-          echo "artifact=test" >> $GITHUB_OUTPUT
-      - name: Upload artifact
+      - name: Upload build artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          name: ${{ steps.build.outputs.artifact }}
-          path: docs/build/html
-
-  deploy:
-    needs: build
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: Setup Pages
-        uses: actions/configure-pages@v5
+          path: docs/build/html/
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
-        with:
-          name: ${{ needs.build.outputs.artifact }}
-          path: docs/build/html
