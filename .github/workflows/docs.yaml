@@ -27,15 +27,13 @@ jobs:
         uses: mamba-org/setup-micromamba@v1
         with:
           environment-file: environment.yml
-          environment-name: plinder
-          create-args: >-
-            python=3.9
+          create-args: python=3.9
           init-shell: bash
-          channel-priority: flexible
           cache-downloads: true
           cache-environment: true
           post-cleanup: all
       - name: Build docs
+        shell: bash -el {0}
         id: build
         run: |
           which python
