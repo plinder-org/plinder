@@ -1,0 +1,60 @@
+name: Documentation
+on:
+  push:
+    branches:
+     - main
+     - publish-docs
+
+permissions:
+  contents: read
+  id-token: write
+  pages: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build docs
+    runs-on: ubuntu-latest
+    outputs:
+      artifact: ${{ steps.build.outputs.artifact }}
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+      - name: Setup micromamba
+        uses: mamba-org/provision-with-micromamba@main
+        with:
+          environment-file: environment.yaml
+          environment-name: plinder
+          channel-priority: flexible
+          cache-downloads: true
+          cache-env: true
+      - name: Build docs
+        id: build
+        run: |
+          python -m pip install '.[docs]'
+          pushd docs && bash build.sh && popd
+          echo "artifact=$(ls -t docs/build/html | head -n 1)" >> $GITHUB_OUTPUT
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          name: ${{ steps.build.outputs.artifact }}
+          path: docs/build/html
+
+  deploy:
+    needs: build
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+        with:
+          name: ${{ needs.build.outputs.artifact }}
+          path: docs/build/html
