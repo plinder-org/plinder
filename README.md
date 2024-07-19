@@ -127,7 +127,7 @@ Our latest test split contains:
 
 ## ⚖️ Evaluation harness
 
-See the [`plinder.eval`](#src/plinder-eval/plinder/eval/docking/README.md) docs for more details.
+See the [`plinder.eval`](docs/eval/README.md) docs for more details.
 
 ## 📦 Dataloader
 
@@ -135,7 +135,7 @@ Dataloader is currently under construction.
 
 ## ℹ️ Filters & Annotations
 
-See the [`plinder.data`](#src/plinder-data/plinder/data/README.md) docs for more details.
+See the [`plinder.data`](docs/data/README.md) docs for more details.
 
 ## 📡 Future work
 
@@ -158,7 +158,7 @@ This code is split into 4 sub-packages
 
 ![workflow](https://github.com/user-attachments/assets/cde72643-5fdf-4998-8719-216d0cef2706)
 
-See the [End-to-end pipeline](#src/plinder-data/README.md) description for technical details about the dataset generation.
+See the [End-to-end pipeline](docs/data/README.md) description for technical details about the dataset generation.
 
 # 📝 Examples & documentation
 
