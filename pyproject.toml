@@ -30,6 +30,7 @@ dependencies = [
     "posebusters",
     "duckdb",
     "cloudpathlib",
+    "networkit >= 11.0",
 ]
 
 [project.scripts]
