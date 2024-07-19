@@ -59,6 +59,22 @@ type = [
 dev = [
     "plinder[lint,test,type]",
 ]
+docs = [
+    "jupyter-sphinx",
+    "jupyterlab_myst",
+    "jupytext",
+    "myst-nb",
+    "myst-parser[linkify]",
+    "piccolo-theme",
+    "sphinxcontrib-applehelp",
+    "sphinxcontrib-bibtex",
+    "sphinxcontrib-devhelp",
+    "sphinxcontrib-htmlhelp",
+    "sphinxcontrib-jquery",
+    "sphinxcontrib-jsmath",
+    "sphinxcontrib-qthelp",
+    "sphinxcontrib-serializinghtml",
+]
 
 [build-system]
 build-backend = "setuptools.build_meta"

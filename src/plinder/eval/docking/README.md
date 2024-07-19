@@ -1,9 +1,14 @@
 # Evaluating docking poses across a stratified test set
 
+The `plinder-eval` package allows (1) assessing protein-ligand complex predictions against reference `plinder` systems, and
+(2) correlating the performance of these predictions against the level of similarity of each test system to the corresponding training set.
+
+The output file from running `plinder-eval` can be used as a submission to the leaderboard (coming soon).
+
 ## Input
 `predictions.csv` with each row representating a protein-ligand pose, and the following columns:
 - `id`: An identifier for the prediction (same across different ranked poses of the same prediction)
-- `reference_system_id`: PLINDER system ID to use as reference
+- `reference_system_id`: `plinder` system ID to use as reference
 - `receptor_file`: Path to protein CIF file. Leave blank if rigid docking, the system's receptor file will be used.
 - `rank`: The rank of the pose (1-indexed)
 - `confidence`: Optional score associated with the pose
@@ -15,7 +20,7 @@
 
 ### Write scores
 ```bash
-python src/plinder-eval/plinder/eval/docking/write_scores.py --prediction_file predictions.csv --data_dir PLINDER_DATA_DIR --output_dir scores --num_processes 64
+python src/plinder/eval/docking/write_scores.py --prediction_file predictions.csv --data_dir PLINDER_DATA_DIR --output_dir scores --num_processes 64
 ```
 This calculates accuracy metrics for all predicted poses compared to the reference. JSON files of each pose are stored in `scores/scores` and the summary file across all poses is stored in `scores.parquet`.
 
@@ -49,8 +54,10 @@ If `score_posebusters` is True, all posebusters checks are saved.
 
 
 ### Write test stratification data
+(This command will not need to be run by a user, the `test_set.parquet` and `val_set.parquet` file will be provided with the split release)
+
 ```bash
-python src/plinder-eval/plinder/eval/docking/stratify_test_set.py --split_file split.csv --data_dir PLINDER_DATA_DIR --output_dir test_data --num_processes 16
+python src/plinder/eval/docking/stratify_test_set.py --split_file split.csv --data_dir PLINDER_DATA_DIR --output_dir test_data --num_processes 16
 ```
 
 Makes `test_data/test_set.parquet` which
@@ -62,7 +69,7 @@ Makes `test_data/test_set.parquet` which
 ### Write evaluation results
 
 ```bash
-python src/plinder-eval/plinder/eval/docking/make_plots.py --score_file scores/scores.parquet --data_file test_data/test_set.parquet --output_dir results
+python src/plinder/eval/docking/make_plots.py --score_file scores/scores.parquet --data_file test_data/test_set.parquet --output_dir results
 ```
 
 Writes out results.csv and plots of performance as a function of training set similarity across different similarity metrics.

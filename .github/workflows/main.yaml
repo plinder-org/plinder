@@ -38,5 +38,15 @@ jobs:
         if: steps.get-tag.outputs.bump != ''
         run: python flows/docker.py test --push
       - name: Save git tag
-        if: steps.get-tag.outputs.bump != 'skip'
+        if: steps.get-tag.outputs.bump != ''
         run: git push origin ${{ steps.get-tag.outputs.bump }}
+      - name: Copy and surgery coverage
+        if: steps.get-tag.outputs.bump != ''
+        run: |
+          cp reports/.coverage .
+          sqlite3 .coverage "update file set path='src/' || substr(path, 40);"
+      - name: Post coverage comment
+        if: steps.get-tag.outputs.bump != ''
+        uses: py-cov-action/python-coverage-comment-action@v3
+        with:
+          GITHUB_TOKEN: ${{ github.token }}

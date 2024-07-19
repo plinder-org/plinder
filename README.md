@@ -1,4 +1,4 @@
-![plinder](./assets/plinder.png)
+![plinder](https://github.com/user-attachments/assets/05088c51-36c8-48c6-a7b2-8a69bd40fb44)
 
 <div align="center">
     <h1>The Protein Ligand INteractions Dataset and Evaluation Resource</h1>
@@ -8,8 +8,23 @@
 
 [![license](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://github.com/plinder-org/plinder/blob/master/LICENSE.txt)
 [![test](https://github.com/plinder-org/plinder/actions/workflows/pr.yaml/badge.svg)](https://github.com/plinder-org/plinder/actions/workflows/pr.yaml)
-[![Coverage badge](https://github.com/plinder-org/plinder/raw/python-coverage-comment-action-data/badge.svg)](https://github.com/plinder-org/plinder/tree/python-coverage-comment-action-data)
+[![coverage](https://github.com/plinder-org/plinder/raw/python-coverage-comment-action-data/badge.svg)](https://github.com/plinder-org/plinder/tree/python-coverage-comment-action-data)
 
+![overview](https://github.com/user-attachments/assets/39d251b1-8114-4242-b9fc-e0cce900d22f)
+
+# 📚 About
+
+**plinder**, short for **p**rotein **l**igand **in**teractions **d**ataset and **e**valuation **r**esource,
+is a dataset and resource for training and evaluation of protein-ligand docking algorithms.
+It is a comprehensive, annotated, high quality dataset:
+
+- \> 400k PLI systems across > 11k SCOP domains and > 50k unique small molecules
+- 500+ annotations for each system, including protein and ligand properties, quality, matched molecular series and more
+- Automated curation pipeline to keep up with the PDB
+- 14 PLI metrics and over 20 billion similarity scores
+- Unbound \(_apo_\) and _predicted_ Alphafold2 structures linked to _holo_ systems
+- `train-val-test` splits and ability to tune splitting based on the learning task
+- Robust evaluation harness to simplify and standard performance comparison between models
 
 # 📢 Notice
 
@@ -19,31 +34,15 @@ VantAI, NVIDIA, MIT CSAIL, and the community at large.
 If you find `plinder` useful,
 please see the citation file for details on how to cite.
 
-# 🚧 Under construction
-
-Please bear with us as we migrate the `plinder` project to
-open source as we work to share it with the world. There are
-some gaps in the code and documentation, which will be fixed
-as soon as possible. The dataset itself is complete, but the
-code to interact with some parts of the dataset is still under
-development.
-
-# 📚 About
-
-**plinder**, short for **p**rotein **l**igand **in**teractions **d**ataset and **e**valuation **r**esource,
-is a dataset and resource for training and evaluation of protein-ligand docking algorithms.
-
 # 👨💻 Getting Started
 
 Please use a virtual environment for the `plinder` project.
 We recommend the [miniforge](https://github.com/conda-forge/miniforge) environment manager.
 
-
 **NOTE**: We currently only support a Linux environment. `plinder`
 uses `openstructure` for some of its functionality and is available
 from the `aivant` conda channel using `conda install aivant::openstructure`, but it is only built targeting Linux architectures.
 For MacOS users, please see the relevant [docker](#package-publishing) resources below.
-
 
 ## Install plinder
 
@@ -60,8 +59,7 @@ Or with a development installation:
     cd plinder
     pip install -e '.[dev]'
 
-
-# ⬇️  Getting the dataset
+# ⬇️ Getting the dataset
 
 Using the `plinder.core` API, you can transparently and lazily
 download and interact with most of the components of the dataset.
@@ -109,13 +107,29 @@ with the dataset.
 
 ## 🏅 Gold standard benchmark sets
 
-Discuss stratification efforts
+As part of `plinder` resource we also provide train, validation and test splits that are curated to minimize the information leakage based on protein-ligand interaction similarity. In addition, we have prioritized the systems that has a linked experimental `apo` structure or matched molecular series to support realistic inference scenarios for hit discovery and optimization.
+Finally, a particular care is taken for test set that is further prioritized to contain high quality structures to provide unambiguous ground-truths for performance benchmarking.
+
+![plinder](./assets/plinder_test_stratification.png)
+
+Moreover, as we enticipate this resource to be used for benchmarking a wide range of methods, including those simultaneously predicting protein structure (aka. co-folding) or those generating novel ligand structures, we further stratified test (by novel ligand, pocket, protein or all) to cover a wide range of tasks.
+
+Our latest test split [#TODO] contains:
+
+| Novel   |   # of systems | # of high quality |  stratification criteria |
+|:--------|---------------:|------------------:|:---------------:|
+| pocket  | 5206 | 5203 | PLI shared < 50 _&_  Pocket shared lDDT < 0.5 |
+| ligand  | 2395 | 2395 | ECFP4 fingerprint similarity < 0.3 |
+| protein |  983 |  983 | Protein Seq. Sim. < 0.3 _&_ Protein lDDT > 0.7 |
+| all     |  268 |  268 | all of the above |
+| none    |    0 |    0 | none of the above |
+
 
 ## 🧪 Training set
 
 Discuss the splits
 
-## ⚖️  Evaluation harness
+## ⚖️ Evaluation harness
 
 See the [`plinder.eval`](#src/plinder-eval/plinder/eval/docking/README.md) docs for more details.
 
@@ -123,7 +137,7 @@ See the [`plinder.eval`](#src/plinder-eval/plinder/eval/docking/README.md) docs 
 
 Dataloader is currently under construction.
 
-## ℹ️  Filters & Annotations
+## ℹ️ Filters & Annotations
 
 See the [`plinder.data`](#src/plinder-data/plinder/data/README.md) docs for more details.
 
@@ -134,7 +148,6 @@ We are currently working on the following:
 - Implementing the Dataloader
 - Establishing a leaderboard
 - Improving the documentation and examples
-
 
 # 👨💻 Code organization
 
@@ -147,16 +160,15 @@ This code is split into 4 sub-packages
 
 # 💽 Dataset Generation
 
-![Workflow](./assets/workflow.png)
+![workflow](https://github.com/user-attachments/assets/cde72643-5fdf-4998-8719-216d0cef2706)
 
 See the [End-to-end pipeline](#src/plinder-data/README.md) description for technical details about the dataset generation.
-
 
 # 📝 Examples & documentation
 
 Package documentation, including API documentation, [example notebooks](examples/), and supplementary guides, are made available.
 
-# ⚙️  Dev guide
+# ⚙️ Dev guide
 
 To develop and test changes to the source code, please use a development installation:
 
@@ -221,3 +233,8 @@ since the previous release:
 - If `bumpversion patch` is present in the commit message (or nothing is found), the patch version will be bumped
 
 **NOTE**: The CI workflow will use the __most recent__ match in the commit history to make its decision.
+
+# 📃 Publications
+Durairaj, Janani, Yusuf Adeshina, Zhonglin Cao, Xuejin Zhang, Vladas Oleinikovas, Thomas Duignan, Zachary McClure, Xavier Robin, Emanuele Rossi, Guoqing Zhou, Srimukh Prasad Veccham, Clemens Isert, Yuxing Peng, Prabindh Sundareson, Mehmet Akdel, Gabriele Corso, Hannes Stärk, Zachary Wayne Carpenter, Michael M. Bronstein, Emine Kucukbenli, Torsten Schwede, Luca Naef. 2024. “PLINDER: The Protein-Ligand Interactions Dataset and Evaluation Resource.”
+[bioRxiv](https://doi.org/10.1101/2024.07.17.603955)
+[ICML'24 ML4LMS](https://openreview.net/forum?id=7UvbaTrNbP)
