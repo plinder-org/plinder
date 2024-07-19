@@ -33,7 +33,7 @@ The `plinder` project is a community effort, launched by the University of Basel
 We highly welcome contributions!
 If you find `plinder` useful, please see the citation file for details on how to cite.
 
-To accelerate community adoption, PLINDER will be used as the field’s new Protein-Ligand interaction dataset standard as part of an exciting competition at the upcoming 2024 ![Machine Learning in Structural Biology (MLSB)](https://mlsb.io/) Workshop at NeurIPS, one of the fields’ premiere academic gatherings, which will be announced shortly.
+To accelerate community adoption, PLINDER will be used as the field’s new Protein-Ligand interaction dataset standard as part of an exciting competition at the upcoming 2024 [Machine Learning in Structural Biology (MLSB)](https://mlsb.io/) Workshop at NeurIPS, one of the fields’ premiere academic gatherings, which will be announced shortly.
 
 # 👨💻 Getting Started
 
