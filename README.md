@@ -14,6 +14,8 @@
 
 # 📚 About
 
+![plinder_banner](https://github.com/user-attachments/assets/43d129f2-3bb6-4903-81fa-182c351c64b6)
+
 **plinder**, short for **p**rotein **l**igand **in**teractions **d**ataset and **e**valuation **r**esource, is a dataset and resource for training and evaluation of protein-ligand docking algorithms.
 It is a comprehensive, annotated, high quality dataset:
 
