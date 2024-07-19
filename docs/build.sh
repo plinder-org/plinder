@@ -13,4 +13,4 @@ if [[ -n "$1" ]]; then
 else
   echo "View docs at build/html/index.html"
 fi
-rm *.ipynb
+rm -f *.ipynb
