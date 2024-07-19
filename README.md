@@ -14,8 +14,7 @@
 
 # 📚 About
 
-**plinder**, short for **p**rotein **l**igand **in**teractions **d**ataset and **e**valuation **r**esource,
-is a dataset and resource for training and evaluation of protein-ligand docking algorithms.
+**plinder**, short for **p**rotein **l**igand **in**teractions **d**ataset and **e**valuation **r**esource, is a dataset and resource for training and evaluation of protein-ligand docking algorithms.
 It is a comprehensive, annotated, high quality dataset:
 
 - \> 400k PLI systems across > 11k SCOP domains and > 50k unique small molecules
@@ -26,13 +25,9 @@ It is a comprehensive, annotated, high quality dataset:
 - `train-val-test` splits and ability to tune splitting based on the learning task
 - Robust evaluation harness to simplify and standard performance comparison between models
 
-# 📢 Notice
-
-The `plinder` project is a collaboration between the
-University of Basel, SIB Swiss Institute of Bioinformatics,
-VantAI, NVIDIA, MIT CSAIL, and the community at large.
-If you find `plinder` useful,
-please see the citation file for details on how to cite.
+The `plinder` project is a community effort, launched by the University of Basel, SIB Swiss Institute of Bioinformatics, VantAI, NVIDIA, MIT CSAIL.
+We highly welcome contributions!
+If you find `plinder` useful, please see the citation file for details on how to cite.
 
 # 👨💻 Getting Started
 
