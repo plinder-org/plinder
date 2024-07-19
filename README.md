@@ -10,7 +10,7 @@
 [![test](https://github.com/plinder-org/plinder/actions/workflows/pr.yaml/badge.svg)](https://github.com/plinder-org/plinder/actions/workflows/pr.yaml)
 [![coverage](https://github.com/plinder-org/plinder/raw/python-coverage-comment-action-data/badge.svg)](https://github.com/plinder-org/plinder/tree/python-coverage-comment-action-data)
 
-![plinder_features](https://github.com/user-attachments/assets/20ce0974-3649-421e-ac8f-6178e76b8443)
+![overview](https://github.com/user-attachments/assets/ab65129e-1640-40c2-a3be-0c9dd0dcdb67)
 
 # 📚 About
 
@@ -22,10 +22,8 @@ It is a comprehensive, annotated, high quality dataset:
 - 500+ annotations for each system, including protein and ligand properties, quality, matched molecular series and more
 - Automated curation pipeline to keep up with the PDB
 - 14 PLI metrics and over 20 billion similarity scores
-- Unbound (_apo_) and _pred_icted Alphafold2 structures linked to _holo_ systems
+- Unbound (_apo_) and _pred_icted Alphafold2 structures linked to \_holo_ systems
 - `train-val-test` splits and ability to tune splitting based on the learning task
-
-
 
 # 📢 Notice
 
@@ -40,12 +38,10 @@ please see the citation file for details on how to cite.
 Please use a virtual environment for the `plinder` project.
 We recommend the [miniforge](https://github.com/conda-forge/miniforge) environment manager.
 
-
 **NOTE**: We currently only support a Linux environment. `plinder`
 uses `openstructure` for some of its functionality and is available
 from the `aivant` conda channel using `conda install aivant::openstructure`, but it is only built targeting Linux architectures.
 For MacOS users, please see the relevant [docker](#package-publishing) resources below.
-
 
 ## Install plinder
 
@@ -62,8 +58,7 @@ Or with a development installation:
     cd plinder
     pip install -e '.[dev]'
 
-
-# ⬇️  Getting the dataset
+# ⬇️ Getting the dataset
 
 Using the `plinder.core` API, you can transparently and lazily
 download and interact with most of the components of the dataset.
@@ -117,7 +112,7 @@ Discuss stratification efforts
 
 Discuss the splits
 
-## ⚖️  Evaluation harness
+## ⚖️ Evaluation harness
 
 See the [`plinder.eval`](#src/plinder-eval/plinder/eval/docking/README.md) docs for more details.
 
@@ -125,7 +120,7 @@ See the [`plinder.eval`](#src/plinder-eval/plinder/eval/docking/README.md) docs 
 
 Dataloader is currently under construction.
 
-## ℹ️  Filters & Annotations
+## ℹ️ Filters & Annotations
 
 See the [`plinder.data`](#src/plinder-data/plinder/data/README.md) docs for more details.
 
@@ -136,7 +131,6 @@ We are currently working on the following:
 - Implementing the Dataloader
 - Establishing a leaderboard
 - Improving the documentation and examples
-
 
 # 👨💻 Code organization
 
@@ -153,12 +147,11 @@ This code is split into 4 sub-packages
 
 See the [End-to-end pipeline](#src/plinder-data/README.md) description for technical details about the dataset generation.
 
-
 # 📝 Examples & documentation
 
 Package documentation, including API documentation, [example notebooks](examples/), and supplementary guides, are made available.
 
-# ⚙️  Dev guide
+# ⚙️ Dev guide
 
 To develop and test changes to the source code, please use a development installation:
 
@@ -222,4 +215,4 @@ since the previous release:
 - If `bumpversion minor` is present in the commit message, the minor version will be bumped
 - If `bumpversion patch` is present in the commit message (or nothing is found), the patch version will be bumped
 
-**NOTE**: The CI workflow will use the __most recent__ match in the commit history to make its decision.
+**NOTE**: The CI workflow will use the **most recent** match in the commit history to make its decision.
