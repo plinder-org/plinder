@@ -18,12 +18,13 @@
 is a dataset and resource for training and evaluation of protein-ligand docking algorithms.
 It is a comprehensive, annotated, high quality dataset:
 
-- > 400k PLI systems across > 11k SCOP domains and > 50k unique small molecules
+- \> 400k PLI systems across > 11k SCOP domains and > 50k unique small molecules
 - 500+ annotations for each system, including protein and ligand properties, quality, matched molecular series and more
 - Automated curation pipeline to keep up with the PDB
 - 14 PLI metrics and over 20 billion similarity scores
-- Unbound (_apo_) and _pred_icted Alphafold2 structures linked to \_holo_ systems
+- Unbound \(_apo_\) and _predicted_ Alphafold2 structures linked to _holo_ systems
 - `train-val-test` splits and ability to tune splitting based on the learning task
+- Robust evaluation harness to simplify and standard performance comparison between models
 
 # 📢 Notice
 
