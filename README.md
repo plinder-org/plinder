@@ -14,9 +14,12 @@
 
 # 📚 About
 
-**plinder**, short for **p**rotein **l**igand **in**teractions **d**ataset and **e**valuation **r**esource,
-is a dataset and resource for training and evaluation of protein-ligand docking algorithms.
-It is a comprehensive, annotated, high quality dataset:
+![plinder_banner](https://github.com/user-attachments/assets/43d129f2-3bb6-4903-81fa-182c351c64b6)
+
+**plinder**, short for **p**rotein **l**igand **in**teractions **d**ataset and **e**valuation **r**esource, is a dataset and resource for training and evaluation of protein-ligand docking algorithms.
+
+
+It is a comprehensive, annotated, high quality dataset, including:
 
 - \> 400k PLI systems across > 11k SCOP domains and > 50k unique small molecules
 - 500+ annotations for each system, including protein and ligand properties, quality, matched molecular series and more
@@ -26,13 +29,11 @@ It is a comprehensive, annotated, high quality dataset:
 - `train-val-test` splits and ability to tune splitting based on the learning task
 - Robust evaluation harness to simplify and standard performance comparison between models
 
-# 📢 Notice
+The `plinder` project is a community effort, launched by the University of Basel, SIB Swiss Institute of Bioinformatics, VantAI, NVIDIA, MIT CSAIL, and will be regularly updated
+We highly welcome contributions!
+If you find `plinder` useful, please see the citation file for details on how to cite.
 
-The `plinder` project is a collaboration between the
-University of Basel, SIB Swiss Institute of Bioinformatics,
-VantAI, NVIDIA, MIT CSAIL, and the community at large.
-If you find `plinder` useful,
-please see the citation file for details on how to cite.
+To accelerate community adoption, PLINDER will be used as the field’s new Protein-Ligand interaction dataset standard as part of an exciting competition at the upcoming 2024 [Machine Learning in Structural Biology (MLSB)](https://mlsb.io/) Workshop at NeurIPS, one of the fields’ premiere academic gatherings, which will be announced shortly.
 
 # 👨💻 Getting Started
 
@@ -114,7 +115,7 @@ Finally, a particular care is taken for test set that is further prioritized to 
 
 Moreover, as we enticipate this resource to be used for benchmarking a wide range of methods, including those simultaneously predicting protein structure (aka. co-folding) or those generating novel ligand structures, we further stratified test (by novel ligand, pocket, protein or all) to cover a wide range of tasks.
 
-Our latest test split [#TODO] contains:
+Our latest test split contains:
 
 | Novel   |   # of systems | # of high quality |  stratification criteria |
 |:--------|---------------:|------------------:|:---------------:|
@@ -123,11 +124,6 @@ Our latest test split [#TODO] contains:
 | protein |  983 |  983 | Protein Seq. Sim. < 0.3 _&_ Protein lDDT > 0.7 |
 | all     |  268 |  268 | all of the above |
 | none    |    0 |    0 | none of the above |
-
-
-## 🧪 Training set
-
-Discuss the splits
 
 ## ⚖️ Evaluation harness
 
