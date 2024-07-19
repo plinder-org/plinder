@@ -26,7 +26,7 @@ jobs:
       - name: Setup micromamba
         uses: mamba-org/provision-with-micromamba@main
         with:
-          environment-file: environment.yaml
+          environment-file: environment.yml
           environment-name: plinder
           channel-priority: flexible
           cache-downloads: true
