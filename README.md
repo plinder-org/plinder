@@ -117,7 +117,7 @@ Moreover, as we enticipate this resource to be used for benchmarking a wide rang
 
 Our latest test split [#TODO] contains:
 
-| Novel   |   # of systems | # of high quality |  stratification criteria | 
+| Novel   |   # of systems | # of high quality |  stratification criteria |
 |:--------|---------------:|------------------:|:---------------:|
 | pocket  | 5206 | 5203 | PLI shared < 50 _&_  Pocket shared lDDT < 0.5 |
 | ligand  | 2395 | 2395 | ECFP4 fingerprint similarity < 0.3 |
