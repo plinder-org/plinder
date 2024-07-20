@@ -6,9 +6,9 @@ import multiprocessing
 import os
 import re
 import subprocess
-import pandas as pd
 from pathlib import Path
-from typing import Tuple
+
+import pandas as pd
 
 from plinder.core.utils.log import setup_logger
 
