@@ -9,7 +9,9 @@ from typing import Any
 
 import numpy as np
 from ost import io, mol
-from ost.mol.alg import LDDTPLIScorer, Scorer, SCRMSDScorer
+from ost.mol.alg.scoring import Scorer
+from ost.mol.alg.ligand_scoring_lddtpli import LDDTPLIScorer
+from ost.mol.alg.ligand_scoring_scrmsd import SCRMSDScorer
 from posebusters import PoseBusters
 
 
