@@ -156,6 +156,10 @@ class System(BaseModel):
         return sum(l.num_interactions for l in self.ligands)
 
     @cached_property
+    def num_covalent_ligands(self) -> int:
+        return sum(ligand.is_covalent for ligand in self.ligands)
+
+    @cached_property
     def id(self) -> str:
         return "__".join(
             [
@@ -264,6 +268,7 @@ class System(BaseModel):
             ),
             "system_num_ligand_chains": len(self.ligand_chains),
             "system_has_kinase_inhibitor": self.has_kinase_inhibitor,
+            "system_num_covalent_ligands": self.num_covalent_ligands,
         }
         pocket_mapping = self.get_pocket_domains(chains)
         for mapping in pocket_mapping:
@@ -402,7 +407,8 @@ class System(BaseModel):
             self.pass_criteria = (
                 entry_pass_criteria
                 and self.ligand_validation.pass_criteria(
-                    thresholds.residue_list_thresholds["ligand"]
+                    thresholds.residue_list_thresholds["ligand"],
+                    self.num_covalent_ligands,
                 )
                 and self.pocket_validation.pass_criteria(
                     thresholds.residue_list_thresholds["pocket"]

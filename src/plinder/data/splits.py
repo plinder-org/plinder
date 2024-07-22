@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Any
 
 import networkit as nk
-import numpy as np
 import pandas as pd
 from omegaconf import DictConfig, ListConfig, OmegaConf
 from tqdm import tqdm
@@ -25,26 +24,6 @@ LOG = setup_logger(__name__)
 
 
 @dataclass
-class TestCriteria:
-    max_entry_resolution: float = 3.5
-    max_entry_r: float = 0.4
-    max_entry_rfree: float = 0.45
-    max_entry_r_minus_rfree: float = 0.05
-    ligand_max_num_unresolved_heavy_atoms: int = 0
-    ligand_max_alt_count: int = 1
-    ligand_min_average_occupancy: float = 0.8
-    ligand_min_average_rscc: float = 0.8
-    ligand_max_average_rsr: float = 0.3
-    ligand_max_percent_outliers_clashes: float = 0
-    pocket_max_num_unresolved_heavy_atoms: int = 0
-    pocket_max_alt_count: int = 1
-    pocket_min_average_occupancy: float = 0.8
-    pocket_min_average_rscc: float = 0.8
-    pocket_max_average_rsr: float = 0.3
-    pocket_max_percent_outliers_clashes: int = 100
-
-
-@dataclass
 class GraphConfig:
     metric: str
     threshold: int  # edges above this threshold are kept
@@ -53,7 +32,6 @@ class GraphConfig:
 
 @dataclass
 class SplitConfig:
-    proto_test_criteria: TestCriteria = field(default_factory=lambda: TestCriteria())
     graph_configs: list[GraphConfig] = field(
         default_factory=lambda: [
             GraphConfig("pli_qcov", 30, 1),
@@ -89,7 +67,6 @@ class SplitConfig:
 
 
 _map = {
-    "test": TestCriteria,
     "split": SplitConfig,
 }
 
@@ -142,7 +119,6 @@ def get_default_config() -> DictConfig:
     default = DictConfig(
         OmegaConf.merge(
             {
-                "test": OmegaConf.structured(TestCriteria()),
                 "split": OmegaConf.structured(SplitConfig()),
             }
         )
@@ -155,44 +131,6 @@ def get_config(config_contents: str) -> DictConfig:
     from_file = DictConfig(OmegaConf.load(StringIO(config_contents)))
     cfg = OmegaConf.merge(default, from_file)
     return DictConfig({str(k): _map[str(k)](**v) for k, v in cfg.items()})
-
-
-def get_high_quality_systems(row: pd.Series, criteria: TestCriteria) -> bool:
-    if row.system_type != "holo":
-        return False
-    if row.entry_r is not None and row.system_ligand_average_rscc is not None:
-        quality = [
-            # ENTRY
-            row.entry_resolution <= criteria.max_entry_resolution,
-            row.entry_r <= criteria.max_entry_r,
-            row.entry_rfree <= criteria.max_entry_rfree,
-            row.entry_r_minus_rfree <= criteria.max_entry_r_minus_rfree,
-            # LIGAND
-            row.system_ligand_num_unresolved_heavy_atoms
-            <= row.system_num_covalent_ligands
-            + criteria.ligand_max_num_unresolved_heavy_atoms,
-            row.system_ligand_max_alt_count
-            <= criteria.ligand_max_alt_count,  # NOTE: max_alt_count is misnomer - this counts number of total conformers!
-            row.system_ligand_average_occupancy
-            >= criteria.ligand_min_average_occupancy,
-            row.system_ligand_average_rscc >= criteria.ligand_min_average_rscc,
-            row.system_ligand_average_rsr <= criteria.ligand_max_average_rsr,
-            row.system_ligand_percent_outliers_clashes
-            <= criteria.ligand_max_percent_outliers_clashes,
-            # POCKET
-            row.system_pocket_num_unresolved_heavy_atoms
-            <= criteria.pocket_max_num_unresolved_heavy_atoms,
-            row.system_pocket_max_alt_count <= criteria.pocket_max_alt_count,
-            row.system_pocket_average_occupancy
-            >= criteria.pocket_min_average_occupancy,
-            row.system_pocket_average_rscc >= criteria.pocket_min_average_rscc,
-            row.system_pocket_average_rsr <= criteria.pocket_max_average_rsr,
-            row.system_pocket_percent_outliers_clashes
-            <= criteria.pocket_max_percent_outliers_clashes,
-        ]
-        if np.logical_and.reduce(quality):
-            return True
-    return False
 
 
 def find_neighbors_upto_specific_depth(
@@ -301,12 +239,8 @@ def prep_data_for_desired_properties(
 
     LOG.info(f"loaded {len(all_system_ids)} from annotation table")
 
-    entries["system_num_covalent_ligands"] = entries["system_id"].map(
-        entries.groupby("system_id")["ligand_is_covalent"].sum()
-    )
-    entries["proto_test"] = entries.apply(
-        get_high_quality_systems, criteria=cfg.split.proto_test_criteria, axis=1
-    )
+    entries["proto_test"] = entries["system_pass_validation_criteria"]
+    entries["proto_test"].fillna(False)
     quality = set(entries[entries["proto_test"]]["system_id"])
     LOG.info(f"{len(quality)} systems are of high quality")
 
