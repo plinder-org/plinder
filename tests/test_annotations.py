@@ -575,7 +575,8 @@ def test_get_validation(
         'entry_percent_rama_outliers': 0.00,
         'entry_molprobity': 1.408352978496041,
         'entry_r_minus_rfree': 0.01999999999999999,
-        'system_pass_validation_criteria': True,
+        'system_pocket_max_alt_count': 2,
+        'system_pass_validation_criteria': False,
         'entry_pass_validation_criteria': True}, orient="index").T.infer_objects()
     entry = GetPlinderAnnotation(cif_1qz5,validation_1qz5, save_folder=entry_dir)
     entry.annotate()
