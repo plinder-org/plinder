@@ -985,7 +985,7 @@ class Ligand(BaseModel):
             return None
         (interactions, plip_chain_mapping) = plip_output
         ccd_code = "-".join(
-            biounit_selection.FindResidue(ligand_instance_chain, residue_number).name
+            biounit.FindResidue(ligand_instance_chain, residue_number).name
             for residue_number in residue_numbers
         )
         ligand_ost_ent = mol.CreateEntityFromView(
@@ -1012,7 +1012,7 @@ class Ligand(BaseModel):
         # Add covalency annotation
         linked_residues = {
             (
-                f"{biounit_selection.FindResidue(ligand_instance_chain, residue_number).name}:{ligand.asym_id}"
+                f"{biounit.FindResidue(ligand_instance_chain, residue_number).name}:{ligand.asym_id}"
             )
             for residue_number in residue_numbers
         }
@@ -1167,7 +1167,7 @@ class Ligand(BaseModel):
         pocket_residues_set = set()
         for chain in self.pocket_residues:
             for residue_number in self.pocket_residues[chain]:
-                pocket_residues_set.add((chain, residue_number))
+                pocket_residues_set.add((chain.split(".")[1], residue_number))
         return pocket_residues_set
 
     @cached_property
