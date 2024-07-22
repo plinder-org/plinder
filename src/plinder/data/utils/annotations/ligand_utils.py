@@ -687,6 +687,7 @@ class Ligand(BaseModel):
     posebusters_result: dict[str, ty.Any] = Field(default_factory=dict)
     unique_ccd_code: str | None = None
     waters: dict[str, list[int]] = Field(default_factory=dict)
+    crystal_contacts: set[tuple[str, int]] = Field(default_factory=set)
 
     """
     This dataclass defines as system which included a protein-ligand complex
@@ -1161,6 +1162,13 @@ class Ligand(BaseModel):
             for residue in self.interacting_residues[chain]:
                 residues[chain][residue] = "interacting"
         return residues
+
+    def get_pocket_residues_set(self) -> set[tuple[str, int]]:
+        pocket_residues_set = set()
+        for chain in self.pocket_residues:
+            for residue_number in self.pocket_residues[chain]:
+                pocket_residues_set.add((chain, residue_number))
+        return pocket_residues_set
 
     @cached_property
     def num_pocket_residues(self) -> int:

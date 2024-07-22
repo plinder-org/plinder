@@ -26,6 +26,7 @@ from plinder.data.utils.annotations.get_ligand_validation import (
 )
 from plinder.data.utils.annotations.interaction_utils import (
     get_covalent_connections,
+    get_symmetry_mate_contacts,
 )
 from plinder.data.utils.annotations.interface_gap import annotate_interface_gaps
 from plinder.data.utils.annotations.ligand_utils import Ligand
@@ -74,6 +75,7 @@ class System(BaseModel):
     ligand_validation: ResidueListValidation | None = None
     pocket_validation: ResidueListValidation | None = None
     pass_criteria: bool | None = None
+    crystal_contacts: dict[str, set[tuple[str, int]]] = Field(default_factory=dict)
 
     """
     This dataclass defines as system which included a protein-ligand complex
@@ -551,6 +553,9 @@ class Entry(BaseModel):
     validation: EntryValidation | None = None
     pass_criteria: bool | None = None
     water_chains: list[str] = Field(default_factory=list)
+    symmetry_mate_contacts: dict[tuple[str, int], set[tuple[str, int]]] = Field(
+        default_factory=dict
+    )
 
     """
     This dataclass defines as system which included a protein-ligand complex
@@ -680,6 +685,7 @@ class Entry(BaseModel):
         plip_complex_threshold: float = 10.0,
         skip_save_systems: bool = False,
         skip_posebusters: bool = False,
+        symmetry_mate_contact_threshold: float = 5.0,
         artifact_within_entry_threshold: int = 15,
         artifact_interacting_residue_count_threshold: int = 2,
     ) -> Entry:
@@ -724,6 +730,9 @@ class Entry(BaseModel):
             str(cif_file), seqres=True, info=True, remote=False
         )
         cif_data = read_mmcif_container(cif_file)
+        symmetry_mate_contacts = get_symmetry_mate_contacts(
+            cif_file, symmetry_mate_contact_threshold
+        )
         entry_info = get_entry_info(cif_data)
         per_chain = get_chain_external_mappings(cif_data)
         interface_proximal_gaps = annotate_interface_gaps(cif_file)
@@ -744,6 +753,7 @@ class Entry(BaseModel):
             resolution=r,
             covalent_bonds=get_covalent_connections(cif_data),
             chain_to_seqres={c.name: c.string for c in seqres},
+            symmetry_mate_contacts=symmetry_mate_contacts,
         )
         entry.chains = {
             chain.name: Chain.from_ost_chain(
@@ -1165,6 +1175,7 @@ class Entry(BaseModel):
             )
             return
         try:
+            self.label_crystal_contacts()
             doc = ValidationFactory(
                 str(validation_file), mmcif_path=str(cif_file)
             ).getValidation()
@@ -1187,6 +1198,25 @@ class Entry(BaseModel):
             LOG.error(
                 f"set_validation: Error setting validation for {self.pdb_id}: {e}"
             )
+
+    def label_crystal_contacts(self) -> None:
+        """
+        Label contacts of ligand residues to other symmetry mates
+        Excludes neighboring residues (i.e same biounit)
+        """
+        for system in self.systems:
+            self.systems[system].crystal_contacts = dict()
+            for ligand in self.systems[system].ligands:
+                ligand.crystal_contacts = set()
+                for residue_number in ligand.residue_numbers:
+                    ligand.crystal_contacts |= self.symmetry_mate_contacts.get(
+                        (ligand.asym_id, residue_number), set()
+                    )
+                ligand.crystal_contacts -= ligand.get_pocket_residues_set()
+                if len(ligand.crystal_contacts):
+                    self.systems[system].crystal_contacts[
+                        ligand.instance_chain
+                    ] = ligand.crystal_contacts
 
     def add_ecod(self) -> None:
         """

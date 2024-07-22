@@ -7,6 +7,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
+import gemmi
 import networkx as nx
 import numpy as np
 from biotite.structure.io.pdbx import PDBxFile
@@ -73,6 +74,27 @@ def read_mmcif_file(mmcif_filename: Path) -> PDBxFile:
     else:
         pdbx_file = PDBxFile.read(mmcif_filename)
     return pdbx_file
+
+
+def get_symmetry_mate_contacts(
+    mmcif_filename: Path, contact_threshold: float = 5.0
+) -> dict[tuple[str, int], set[tuple[str, int]]]:
+    """
+    Get all contacts within a given threshold between residues which are not in the same asymmetric unit (symmetry mates)
+    """
+    cif = gemmi.read_structure(mmcif_filename)
+    cif.setup_entities()
+    ns = gemmi.NeighborSearch(cif[0], cif.cell, contact_threshold).populate()
+    cs = gemmi.ContactSearch(contact_threshold)
+    cs.ignore = gemmi.ContactSearch.Ignore.SameAsu
+    cs.twice = True
+    pairs = cs.find_contacts(ns)
+    results = defaultdict(set)
+    for p in pairs:
+        results[(p.partner1.chain.name, p.partner1.residue.seqid)].add(
+            (p.partner2.chain.name, p.partner2.residue.seqid)
+        )
+    return results
 
 
 def get_covalent_connections(data: DataContainer) -> dict[str, list[dict[str, str]]]:

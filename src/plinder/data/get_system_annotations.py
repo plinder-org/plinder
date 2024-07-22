@@ -24,7 +24,8 @@ class GetPlinderAnnotation:
         save_folder: Optional[Path] = None,
         neighboring_residue_threshold: float = 6.0,
         neighboring_ligand_threshold: float = 4.0,  # TODO: review @VO
-        min_polymer_size: int = 10,  # TODO: review @VO
+        min_polymer_size: int = 10,  # TODO: review @VO,
+        symmetry_mate_contact_threshold: float = 5.0,
         artifact_within_entry_threshold: int = 15,  # TODO: review @VO
         artifact_interacting_residue_count_threshold: int = 2,  # TODO: review @VO
         entry_cfg: Optional[Dict[Any, Any]] = None,
@@ -39,6 +40,7 @@ class GetPlinderAnnotation:
         self.artifact_interacting_residue_count_threshold = (
             artifact_interacting_residue_count_threshold
         )
+        self.symmetry_mate_contact_threshold = symmetry_mate_contact_threshold
         self.entry_cfg = entry_cfg
 
     def annotate(self) -> Optional[pd.DataFrame]:
@@ -51,6 +53,7 @@ class GetPlinderAnnotation:
             artifact_interacting_residue_count_threshold=(
                 self.artifact_interacting_residue_count_threshold
             ),
+            symmetry_mate_contact_threshold=self.symmetry_mate_contact_threshold,
         )
         if self.entry_cfg is not None:
             entry_cfg.update(self.entry_cfg)
