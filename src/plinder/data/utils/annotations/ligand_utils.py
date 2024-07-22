@@ -674,6 +674,7 @@ class Ligand(BaseModel):
     num_pli_atoms_within_8A_of_gap: int | None = None
     num_missing_pli_interface_residues: int | None = None
     num_unresolved_heavy_atoms: int | None = None
+    tpsa: float | None = None
     qed: float | None = None
     is_ion: bool = False
     is_lipinski: bool = False
@@ -731,6 +732,8 @@ class Ligand(BaseModel):
         Number of rings
     num_heavy_atoms: int
         Number of heavy atoms
+    tpsa: float
+        Topological polar surface area
     qed: float
         ligand QED score
     is_covalent: bool = False
@@ -806,6 +809,7 @@ class Ligand(BaseModel):
             self.num_heavy_atoms = rdMolDescriptors.CalcNumHeavyAtoms(
                 rdkit_compatible_mol
             )
+            self.tpsa = rdMolDescriptors.CalcTPSA(rdkit_compatible_mol)
             self.qed = QED.qed(rdkit_compatible_mol)
 
             if self.num_heavy_atoms:
@@ -1378,6 +1382,7 @@ class Ligand(BaseModel):
             "ligand_num_hba": self.num_hba,
             "ligand_num_rings": self.num_rings,
             "ligand_num_heavy_atoms": self.num_heavy_atoms,
+            "ligand_tpsa": self.tpsa,
             "ligand_qed": self.qed,
             "ligand_is_covalent": self.is_covalent,
             "ligand_covalent_linkages": ";".join(self.covalent_linkages),
