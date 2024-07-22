@@ -988,10 +988,12 @@ class Ligand(BaseModel):
         if plip_output is None:
             return None
         (interactions, plip_chain_mapping) = plip_output
-        ccd_code = "-".join(
-            biounit_selection.FindResidue(ligand_instance_chain, residue_number).name
-            for residue_number in residue_numbers
-        )
+        ccd_code = interactions.ligand.longname
+        # TODO: bug fix the biounit_selection.FindResidue
+        # ccd_code = "-".join(
+        #     biounit_selection.FindResidue(ligand_instance_chain, residue_number).name
+        #     for residue_number in residue_numbers
+        # )
         ligand_ost_ent = mol.CreateEntityFromView(
             biounit.Select(ligand_selection), True
         )
@@ -1016,7 +1018,9 @@ class Ligand(BaseModel):
         # Add covalency annotation
         linked_residues = {
             (
-                f"{biounit_selection.FindResidue(ligand_instance_chain, residue_number).name}:{ligand.asym_id}"
+                # TODO: bug fix the biounit_selection.FindResidue
+                # f"{biounit_selection.FindResidue(ligand_instance_chain, residue_number).name}:{ligand.asym_id}"
+                f"{ccd_code}:{ligand.asym_id}"
             )
             for residue_number in residue_numbers
         }
