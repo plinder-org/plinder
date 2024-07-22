@@ -17,8 +17,7 @@ LOG = setup_logger(__name__)
 SYSTEM_PROPS = {
     # ligand
     "ligand_molecular_weight": 50,
-    # would be nice to add tpsa, but currently not calculated in annotations
-    # 'ligand_tpsa' : 10,
+    'ligand_tpsa' : 10,
     "ligand_num_heavy_atoms": 5,
     "ligand_num_rot_bonds": 2,
     "ligand_num_rings": 1,
