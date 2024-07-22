@@ -10,7 +10,7 @@ from zipfile import ZipFile
 import pandas as pd
 from omegaconf import DictConfig
 
-from plinder.core.utils import gcs
+from plinder.core.utils import cpl, gcs
 from plinder.core.utils.config import get_config
 from plinder.core.utils.dec import timeit
 from plinder.core.utils.log import setup_logger
@@ -219,3 +219,18 @@ def load_entries(
         prune=prune,
     )
     return result
+
+
+def download_plinder_cmd() -> None:
+    """
+    Download the full plinder dataset for the current configuration.
+    Note that even though this is wrapped in a progress bar, the estimated
+    completion time can vary wildly as it iterates over larger files vs.
+    smaller ones.
+    """
+    cfg = get_config()
+    LOG.info(f"downloading {cfg.data.plinder_remote} -> {cfg.data.plinder_dir}")
+    LOG.info("if this is the first time you are running this command, it will take a while!")
+    LOG.info("the estimated time on the progress bar will vary wildly based on file size")
+    LOG.info("if you need to cancel this and come back to it, it will pick up where it left off")
+    cpl.download_many(rel="")

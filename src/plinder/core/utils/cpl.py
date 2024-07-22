@@ -61,8 +61,11 @@ def ping(path: AnyPath) -> None:
 @timeit
 def download_many(*, rel: str) -> None:
     """
-    Download many files from GCS concurrently. This us useful when
+    Download many files from GCS concurrently. This is useful when
     it is known that we need access to many files in a single operation.
+    If the files were already downloaded, you still pay the cost of
+    checking if the remote file has drifted from the local file even
+    if they are identical.
 
     Parameters
     ----------
@@ -70,13 +73,12 @@ def download_many(*, rel: str) -> None:
         Relative path to the files to download.
     """
     root = get_plinder_path(rel=rel)
-    paths = [path for path in root.rglob("*") if not path.is_dir()]
 
     @retry
     def _ping(path: AnyPath) -> None:
         path.fspath
 
-    thread_map(_ping, paths)
+    thread_map(_ping, list(root.rglob("*")))
 
 
 def get_plinder_path(*, rel: str) -> AnyPath:
