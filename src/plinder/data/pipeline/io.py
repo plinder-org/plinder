@@ -144,24 +144,28 @@ def download_affinity_data(
     moad_raw_affinity_path.parent.mkdir(parents=True, exist_ok=True)
     if not affinity_path.is_file() or force_update:
         # Download Papyrus
-        LOG.info(f"download_papyrus_affinity_data: {papyrus_url}")
-        resp = requests.get(papyrus_url)
-        resp.raise_for_status()
-        papyrus_raw_affinity_path.write_bytes(resp.content)
+        if not papyrus_raw_affinity_path.exists():
+            LOG.info(f"download_papyrus_affinity_data: {papyrus_url}")
+            resp = requests.get(papyrus_url)
+            resp.raise_for_status()
+            papyrus_raw_affinity_path.write_bytes(resp.content)
 
         # Download BindingDB
-        LOG.info(f"download_bindingdb_affinity_data: {bindinddb_url}")
-        with urlopen(bindinddb_url) as zipresp:
-            with ZipFile(BytesIO(zipresp.read())) as zfile:
-                zfile.extractall()
-        with open(bindingdb_raw_affinity_path, "w") as out:
-            with open(Path.cwd() / "BindingDB_All_202401_tsv") as f:
-                out.write(f.read())
-        # Download MOAD
-        LOG.info(f"download_moad_affinity_data: {moad_url}")
-        r = requests.get(moad_url, allow_redirects=True)
-        with open(moad_raw_affinity_path, "wb") as out:
-            out.write(r.content)
+        if not bindingdb_raw_affinity_path.exists():
+            LOG.info(f"download_bindingdb_affinity_data: {bindinddb_url}")
+            with urlopen(bindinddb_url) as zipresp:
+                with ZipFile(BytesIO(zipresp.read())) as zfile:
+                    zfile.extractall()
+            with open(bindingdb_raw_affinity_path, "w") as out:
+                with open(Path.cwd() / "BindingDB_All_202401.tsv") as f:
+                    out.write(f.read())
+        # # Download MOAD
+        # TODO: moad URL not working
+        # if not moad_raw_affinity_path.exists():       
+        #     LOG.info(f"download_moad_affinity_data: {moad_url}")
+        #     r = requests.get(moad_url, allow_redirects=True)
+        #     with open(moad_raw_affinity_path, "wb") as out:
+        #         out.write(r.content)
 
         LOG.info("transforming_affinity_data: extracting median affinity")
         binding_db_affinity_df = transform.transform_bindingdb_affinity_data(
@@ -169,17 +173,18 @@ def download_affinity_data(
         )
         binding_db_affinity_df["preference"] = 1
 
-        moad_affinity_df = transform.transform_moad_affinity_data(
-            raw_affinity_path=moad_raw_affinity_path
-        )
-        moad_affinity_df["preference"] = 2
+        # moad_affinity_df = transform.transform_moad_affinity_data(
+        #     raw_affinity_path=moad_raw_affinity_path
+        # )
+        # moad_affinity_df["preference"] = 2
 
         papyrus_affinity_df = transform.transform_papyrus_affinity_data(
             raw_affinity_path=papyrus_raw_affinity_path
         )
         papyrus_affinity_df["preference"] = 3
         all_affinity_df = pd.concat(
-            [papyrus_affinity_df, binding_db_affinity_df, moad_affinity_df],
+            # [papyrus_affinity_df, binding_db_affinity_df, moad_affinity_df],
+            [papyrus_affinity_df, binding_db_affinity_df],
             ignore_index=True,
         ).drop_duplicates()
         all_affinity_df = all_affinity_df[all_affinity_df["pchembl"].notna()]
