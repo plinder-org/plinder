@@ -161,7 +161,7 @@ def download_affinity_data(
                     out.write(f.read())
         # # Download MOAD
         # TODO: moad URL not working
-        # if not moad_raw_affinity_path.exists():       
+        # if not moad_raw_affinity_path.exists():
         #     LOG.info(f"download_moad_affinity_data: {moad_url}")
         #     r = requests.get(moad_url, allow_redirects=True)
         #     with open(moad_raw_affinity_path, "wb") as out:
