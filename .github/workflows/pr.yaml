@@ -14,7 +14,7 @@ on:
   pull_request:
 
 jobs:
-  test:
+  qa:
     name: Code quality checks
     runs-on: ubuntu-latest
     steps:
@@ -36,7 +36,7 @@ jobs:
           restore-keys: |
             tox-${{ runner.os }}-3.9-
 
-  build:
+  test:
     name: Build and test docker image
     runs-on: ubuntu-latest
     steps:
@@ -47,26 +47,36 @@ jobs:
           fetch-depth: 0
       - name: Configure docker
         run: echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.repository_owner }} --password-stdin
-      - name: Get changed files
-        id: changed-files
+      - name: Get changed source files
+        id: changed-src
+        uses: tj-actions/changed-files@v41
+        with:
+          files: src/**
+      - name: Get changed base image files
+        if: steps.changed-src.outputs.any_changed == 'true'
+        id: changed-base
         uses: tj-actions/changed-files@v41
         with:
           files: dockerfiles/base/*
       - name: Pull base image and build
-        if: steps.changed-files.outputs.any_changed == 'true'
+        if: steps.changed-src.outputs.any_changed == 'true' && steps.changed-base.outputs.any_changed == 'true'
         run: python flows/docker.py pull --build
       - name: Pull base image
-        if: steps.changed-files.outputs.any_changed != 'true'
+        if: steps.changed-src.outputs.any_changed == 'true' && steps.changed-base.outputs.any_changed != 'true'
         run: python flows/docker.py pull
       - name: Build image
+        if: steps.changed-src.outputs.any_changed == 'true'
         run: python flows/docker.py build
       - name: Run test image
+        if: steps.changed-src.outputs.any_changed == 'true'
         run: python flows/docker.py test
       - name: Copy and surgery coverage
+        if: steps.changed-src.outputs.any_changed == 'true'
         run: |
           cp reports/.coverage .
           sqlite3 .coverage "update file set path='src/' || substr(path, 40);"
       - name: Post coverage comment
+        if: steps.changed-src.outputs.any_changed == 'true'
         uses: py-cov-action/python-coverage-comment-action@v3
         with:
           GITHUB_TOKEN: ${{ github.token }}

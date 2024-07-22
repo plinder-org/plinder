@@ -2,7 +2,7 @@
 # Distributed under the terms of the Apache License 2.0
 from __future__ import annotations
 
-from plinder.data import _root
+from plinder.core import _root
 
 PDB_FILE_COUNT = 615616
 CSV_FILE_COUNT = 331541

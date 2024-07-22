@@ -1,11 +1,12 @@
 #!/bin/bash
 
-rm source/plinder.*
-cp ../examples/*.ipynb .
-sphinx-apidoc -o source -d 10 -f ../src/plinder/
-cp plinder.rst source/
 rm -r build/doctrees
 rm -r build/html
+rm source/plinder.*
+
+cp ../examples/*.ipynb source/
+sphinx-apidoc -o source -d 10 -f ../src/plinder/
+cp plinder.rst source/
 make html
 
 if [[ -n "$1" ]]; then
@@ -13,4 +14,4 @@ if [[ -n "$1" ]]; then
 else
   echo "View docs at build/html/index.html"
 fi
-rm *.ipynb
+rm -f source/*.ipynb
