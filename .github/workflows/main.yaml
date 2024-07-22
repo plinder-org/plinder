@@ -1,4 +1,4 @@
-name: Publish
+name: Package
 permissions:
   contents: write
   id-token: write
@@ -9,7 +9,7 @@ on:
       - main
 jobs:
   publish:
-    name: Publish
+    name: Package
     if: ${{ ! contains(toJSON(github.event.commits.*.message), '[skip ci]') }}
     runs-on: ubuntu-latest
     steps:
