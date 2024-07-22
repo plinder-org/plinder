@@ -26,7 +26,6 @@ from plinder.data.utils.annotations.get_ligand_validation import (
 )
 from plinder.data.utils.annotations.interaction_utils import (
     get_covalent_connections,
-    run_plip_on_split_structure,
 )
 from plinder.data.utils.annotations.interface_gap import annotate_interface_gaps
 from plinder.data.utils.annotations.ligand_utils import Ligand
@@ -295,12 +294,26 @@ class System(BaseModel):
             query.append(f"(chain='{chain}' and ({chain_query}))")
         return " or ".join(query)
 
+    def selection(self, include_waters: bool = True) -> str:
+        ligand_selection = " or ".join(
+            f"({ligand.selection})" for ligand in self.ligands
+        )
+        protein_selection = " or ".join(
+            f"(cname={mol.QueryQuoteName(chain)})"
+            for chain in self.interacting_protein_chains
+        )
+        selection = f"({ligand_selection}) or ({protein_selection})"
+        if include_waters and len(self.waters):
+            selection += f" or {self.select_waters}"
+        return selection
+
     def save_system(
         self,
         chain_to_seqres: dict[str, str],
         biounit: mol.EntityHandle,
         info: io.MMCifInfoBioUnit,
         system_folder: Path,
+        include_waters: bool = True,
     ) -> None:
         system_folder.mkdir(exist_ok=True)
         with open(system_folder / "sequences.fasta", "w") as f:
@@ -309,11 +322,7 @@ class System(BaseModel):
                 if c in chain_to_seqres:
                     f.write(f">{i_c}\n")
                     f.write(chain_to_seqres[c] + "\n")
-        selection = " or ".join(
-            f"chain='{c}'" for c in self.interacting_protein_chains + self.ligand_chains
-        )
-        if len(self.waters):
-            selection += f" or {self.select_waters}"
+        selection = self.selection(include_waters=include_waters)
         ent_system = mol.CreateEntityFromView(
             biounit.Select(selection),
             True,
@@ -321,6 +330,7 @@ class System(BaseModel):
         (system_folder / "ligand_files").mkdir(exist_ok=True)
         save_ligands(
             ent_system,
+            [ligand.selection for ligand in self.ligands],
             self.ligand_chains,
             [l.smiles for l in self.ligands],
             [l.num_unresolved_heavy_atoms for l in self.ligands],
@@ -767,37 +777,32 @@ class Entry(BaseModel):
                 for chain in biounit.chains
                 if chain.name.split(".")[1] in entry.ligand_like_chains
             ]
-            entry_pdb_id = entry.pdb_id
             for ligand_chain in biounit_ligand_chains:
                 ligand_instance, ligand_asym_id = ligand_chain.split(".")
-                plip_output = run_plip_on_split_structure(
-                    entry_pdb_id,
-                    biounit,
-                    ligand_chain,  # see func definition - consider adding entry.ligand_like_chains
-                    plip_complex_threshold,
-                )
-                if plip_output is None:
-                    continue
-                (interactions, plip_chain_mapping) = plip_output
                 data_dir = None
                 if save_folder is not None:
                     data_dir = Path(save_folder).parent.parent
+                residue_numbers = [
+                    residue.number.num
+                    for residue in biounit.FindChain(ligand_chain).residues
+                ]
                 ligand = Ligand.from_pli(
-                    entry.pdb_id,
-                    biounit_info.id,
-                    biounit,
-                    int(ligand_instance),
-                    entry.chains[ligand_asym_id],
-                    entry.ligand_like_chains,
-                    interactions,
-                    plip_chain_mapping,
-                    interface_proximal_gaps,
-                    entry.covalent_bonds,  # type: ignore
-                    neighboring_residue_threshold,
-                    neighboring_ligand_threshold,
+                    pdb_id=entry.pdb_id,
+                    biounit_id=biounit_info.id,
+                    biounit=biounit,
+                    ligand_instance=int(ligand_instance),
+                    ligand_chain=entry.chains[ligand_asym_id],
+                    residue_numbers=residue_numbers,
+                    ligand_like_chains=entry.ligand_like_chains,
+                    interface_proximal_gaps=interface_proximal_gaps,
+                    all_covalent_dict=entry.covalent_bonds,  # type: ignore
+                    plip_complex_threshold=plip_complex_threshold,
+                    neighboring_residue_threshold=neighboring_residue_threshold,
+                    neighboring_ligand_threshold=neighboring_ligand_threshold,
                     data_dir=data_dir,
                 )
-                ligands[ligand.id] = ligand
+                if ligand is not None:
+                    ligands[ligand.id] = ligand
             biounits[biounit_info.id] = biounit
         entry.set_systems(ligands)
         # NOTE: this is done at init now

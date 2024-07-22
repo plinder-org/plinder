@@ -15,7 +15,6 @@ from mmcif.api.PdbxContainers import DataContainer
 from openbabel import pybel
 from ost import io, mol
 from ost.conop import GetDefaultLib
-from plip.structure.preparation import PLInteraction
 from pydantic import BaseModel, Field
 from rdkit import Chem, RDLogger
 from rdkit.Chem import QED, AllChem, Crippen, rdMolDescriptors
@@ -28,8 +27,9 @@ from plinder.data.utils.annotations.extras import (
 )
 from plinder.data.utils.annotations.interaction_utils import (
     extract_other_covalent_subunit,
-    get_hash,
+    get_plip_hash,
     pdbize,
+    run_plip_on_split_structure,
 )
 from plinder.data.utils.annotations.protein_utils import Chain
 from plinder.data.utils.annotations.rdkit_utils import set_smiles_from_ligand_ost
@@ -298,17 +298,14 @@ def get_rdkit_mol_with_bond_order_from_cif(
     return rdk_smiles_dict.get(chain_id, "")
 
 
-def get_chain_type(chain_type: str, plip_type: str) -> str:
+def get_chain_type(chain_type: str) -> str:
     """
-    Convert the default non-small molecule plip types to
-    chain type
+    Get chain type
 
     Parameter
     ---------
     chain_type : str,
         ost chain type
-    plip_type : str
-        plip type, usually peptide id config.PEPTIDE is used
 
     Return
     ------
@@ -330,7 +327,7 @@ def get_chain_type(chain_type: str, plip_type: str) -> str:
     elif chain_type in MACROCYCLE_TYPES:
         return "MACROCYCLES"
     else:
-        return plip_type
+        return "UNKNOWN"
 
 
 @cache
@@ -648,13 +645,14 @@ class Ligand(BaseModel):
     ccd_code: str
     plip_type: str
     bird_id: str
-    num_rot_bonds: int
     centroid: list[float]
     smiles: str
     resolved_smiles: str
+    residue_numbers: list[int] = Field(default_factory=list)
     rdkit_canonical_smiles: str | None = None
     molecular_weight: float | None = None
     crippen_clogp: float | None = None
+    num_rot_bonds: int | None = None
     num_hbd: int | None = None
     num_hba: int | None = None
     num_rings: int | None = None
@@ -776,6 +774,16 @@ class Ligand(BaseModel):
         Is ligand classified as invalid
     is_other: bool = False
         Is ligand classified as other
+    is_invalid: bool = False
+        RDKit invalid
+    posebusters_result: dict[str, ty.Any]
+        Results from running posebusters with "re-dock"
+    unique_ccd_code: str | None = None
+        de-duplicated CCD code
+    waters: dict[str, list[int]]
+        residue numbers and chains of interacting waters
+    residue_numbers: list[int] | None = None
+        residue number(s) of ligand
     """
 
     def set_rdkit(self) -> None:
@@ -785,6 +793,9 @@ class Ligand(BaseModel):
             # https://github.com/rdkit/rdkit/issues/1740
             self.rdkit_canonical_smiles = Chem.CanonSmiles(self.smiles)
             self.molecular_weight = rdMolDescriptors.CalcExactMolWt(
+                rdkit_compatible_mol
+            )
+            self.num_rot_bonds = rdMolDescriptors.CalcNumRotatableBonds(
                 rdkit_compatible_mol
             )
             self.num_hba = rdMolDescriptors.CalcNumHBA(rdkit_compatible_mol)
@@ -882,15 +893,15 @@ class Ligand(BaseModel):
         biounit: mol.EntityHandle,
         ligand_instance: int,
         ligand_chain: Chain,
+        residue_numbers: list[int],
         ligand_like_chains: dict[str, str],
-        interactions: PLInteraction,
-        plip_chain_mapping: dict[str, str],
         interface_proximal_gaps: dict[str, dict[tuple[str, str], dict[str, int]]],
         all_covalent_dict: dict[str, list[set[str]]],
+        plip_complex_threshold: float = 10.0,
         neighboring_residue_threshold: float = 6.0,
         neighboring_ligand_threshold: float = 4.0,
         data_dir: ty.Optional[Path] = None,
-    ) -> Ligand:
+    ) -> Ligand | None:
         """
         Load ligand object from protein-ligand interaction complex
         along with other information binding site information
@@ -908,11 +919,12 @@ class Ligand(BaseModel):
             Ligand biounit instance
         ligand_chain : Chain
             Ligand chain object
-        interactions : PLInteraction
-            Ligand interaction object
-        plip_chain_mapping : dict[str, str]
-            Protein chain mapping from PLIP `pdbized` chain id \
-                to biounit asym chain ids
+        residue_numbers: list[int]
+            List of residue numbers to use for ligand
+        ligand_like_chains: dict[str, str]
+            Chain: chain type for other ligand-like chains in the entry
+        interface_proximal_gaps: dict[str, dict[tuple[str, str], dict[str, int]]]
+            TODO: document
         all_covalent_dict : list[set[str]]
             All "covalent" residue in entry as defined by mmcif annotations.
             They types are separated by dictionary key and they include:
@@ -922,6 +934,9 @@ class Ligand(BaseModel):
                 "hydrogc": strong hydorogen bonding of nucleic acid
             For the purpose of covalent annotations, we selected "covale" for
             downstream processing.
+        plip_complex_threshold: float = 10.0
+            Maximum distance from ligand to residues to be
+            included for pli calculations.
         neighboring_residue_threshold : float = 6.0
             Maximum distance for protein residue to be considered neighboring
         neighboring_ligand_threshold : float = 4.0
@@ -950,10 +965,30 @@ class Ligand(BaseModel):
             KINASE_INHIBITORS = parse_kinase_inhibitors(data_dir)
         if BINDING_AFFINITY is None:
             BINDING_AFFINITY = get_binding_affinity(data_dir)
-        ccd_code = interactions.ligand.longname
-        # smiles = interactions.ligand.smiles
+        ligand_instance_chain = f"{ligand_instance}.{ligand_chain.asym_id}"
+        residue_selection = " or ".join(f"rnum={rnum}" for rnum in residue_numbers)
+        ligand_selection = f"cname={mol.QueryQuoteName(ligand_instance_chain)} and ({residue_selection})"
+        biounit_selection = mol.CreateEntityFromView(
+            biounit.Select(
+                f"{plip_complex_threshold} <> [{ligand_selection}]",
+                mol.QueryFlag.MATCH_RESIDUES,
+            ),
+            True,
+        )
+        plip_output = run_plip_on_split_structure(
+            biounit,
+            biounit_selection,
+            ligand_instance_chain,
+        )
+        if plip_output is None:
+            return None
+        (interactions, plip_chain_mapping) = plip_output
+        ccd_code = "-".join(
+            biounit_selection.FindResidue(ligand_instance_chain, residue_number).name
+            for residue_number in residue_numbers
+        )
         ligand_ost_ent = mol.CreateEntityFromView(
-            biounit.Select(f"cname='{ligand_instance}.{ligand_chain.asym_id}'"), True
+            biounit.Select(ligand_selection), True
         )
         smiles = set_smiles_from_ligand_ost(ligand_ost_ent)
         ligand = cls(
@@ -962,24 +997,23 @@ class Ligand(BaseModel):
             asym_id=ligand_chain.asym_id,
             instance=ligand_instance,
             ccd_code=ccd_code,
-            plip_type=get_chain_type(ligand_chain.chain_type, interactions.ligand.type),
+            plip_type=get_chain_type(
+                ligand_chain.chain_type
+            ),  # TODO: rename variable, no longer uses plip
             bird_id=list(ligand_chain.mappings.get("BIRD", {"": None}))[0],  # type: ignore
-            num_rot_bonds=interactions.ligand.num_rot_bonds,
-            centroid=list(interactions.ligand.centroid),
+            centroid=list(ligand_ost_ent.GetCenterOfMass()),
             smiles=smiles,
             neighboring_residue_threshold=neighboring_residue_threshold,
             neighboring_ligand_threshold=neighboring_ligand_threshold,
-            resolved_smiles=interactions.ligand.smiles,
+            resolved_smiles=interactions.ligand.smiles,  # TODO only thing left that depends on PLIP
+            residue_numbers=residue_numbers,
         )
         # Add covalency annotation
         linked_residues = {
             (
-                f"{res}:{plip_chain_mapping[resnr].split('.')[-1]}"
-                if chain == "_"
-                else f"{res}:{plip_chain_mapping[chain].split('.')[-1]}"
+                f"{biounit_selection.FindResidue(ligand_instance_chain, residue_number).name}:{ligand.asym_id}"
             )
-            for res, chain, resnr in interactions.ligand.members
-            if chain in plip_chain_mapping
+            for residue_number in residue_numbers
         }
         ligand.covalent_linkages = extract_other_covalent_subunit(
             all_covalent_dict,
@@ -987,7 +1021,7 @@ class Ligand(BaseModel):
             link_type="covale",
         )
         neighboring_residue_selection = biounit.Select(
-            f"{ligand.neighboring_residue_threshold} <> [cname='{ligand.instance_chain}']"
+            f"{ligand.neighboring_residue_threshold} <> [{ligand_selection}]"
             + " and protein=True"
         )
 
@@ -1024,26 +1058,21 @@ class Ligand(BaseModel):
         check_covalent = []
         for cov in ligand.covalent_linkages:
             linkage_chain = f"{cov.split(':', 2)[1]}"
-            chains_without_instance = [
-                i.split(".")[-1] for i in plip_chain_mapping.values()
-            ]
-            if (linkage_chain in neighboring_asym_ids) and (
-                linkage_chain in chains_without_instance
-            ):
+            if linkage_chain in neighboring_asym_ids:
                 check_covalent.append(linkage_chain)
         ligand.is_covalent = (
             len(check_covalent) > 0
         )  # TODO: Check to make sure we are catching all edge cases
 
         neighboring_ligand_selection = biounit.Select(
-            f"{ligand.neighboring_ligand_threshold} <> [cname='{ligand.instance_chain}']"
+            f"{ligand.neighboring_ligand_threshold} <> [{ligand_selection}]"
         )
 
         ligand.neighboring_ligands = list(
             set(
                 residue.chain.name
                 for residue in neighboring_ligand_selection.residues
-                if residue.chain.name.split(".")[1] != ligand_chain.asym_id
+                if residue.chain.name != ligand.instance_chain
                 and residue.chain.name.split(".")[1] in ligand_like_chains
             )
         )
@@ -1054,6 +1083,8 @@ class Ligand(BaseModel):
         for residue in interactions.interacting_res:
             residue_number, plip_chain = int(residue[:-1]), residue[-1]
             instance_chain = plip_chain_mapping[plip_chain]
+            if instance_chain == ligand.instance_chain:
+                continue
             if instance_chain in water_chains:
                 ligand.waters[instance_chain].append(int(residue_number))
                 continue
@@ -1063,7 +1094,9 @@ class Ligand(BaseModel):
                 if instance_chain not in ligand.interacting_residues:
                     ligand.interacting_residues[instance_chain] = []
                 ligand.interacting_residues[instance_chain].append(int(residue_number))
-        ligand.interactions, waters = get_hash(interactions, plip_chain_mapping)
+        ligand.interactions, waters = get_plip_hash(
+            interactions, ligand.instance_chain, plip_chain_mapping
+        )
         for plip_chain, resnum in waters:
             ligand.waters[plip_chain_mapping[plip_chain]].append(resnum)
         # add rdkit properties and type assignments
@@ -1074,6 +1107,14 @@ class Ligand(BaseModel):
         ligand.unique_ccd_code = get_unique_ccd_longname(ligand.ccd_code)
 
         return ligand
+
+    @property
+    def selection(self) -> str:
+        residue_selection = " or ".join(f"rnum={rnum}" for rnum in self.residue_numbers)
+        ligand_selection = f"cname={mol.QueryQuoteName(self.instance_chain)}"
+        if len(self.residue_numbers):
+            ligand_selection += f"and ({residue_selection})"
+        return ligand_selection
 
     @cached_property
     def interacting_protein_chains(self) -> list[str]:

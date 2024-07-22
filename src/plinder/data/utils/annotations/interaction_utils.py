@@ -286,10 +286,9 @@ def pdbize(
 
 
 def run_plip_on_split_structure(
-    entry_pdb_id: str,
     biounit: mol.EntityHandle,
+    biounit_selection: mol.EntityHandle,
     ligand_chain: str,
-    plip_threshold: float = 10,
 ) -> tuple[PLInteraction, dict[str, str]] | None:
     """Split structure into small PLI complex by ligand
 
@@ -299,14 +298,12 @@ def run_plip_on_split_structure(
 
     Parameters
     ----------
-    entry_pdb_id : str
-        pdb entry
     biounit : mol.EntityHandle
         biounit
-    ligand_chain : int
+    biounit_selection : mol.EntityHandle
+        selection in biounit of threshold around ligand
+    ligand_chain: str
         {instance}.{chain} of ligand
-    plip_threshold: int = 10
-        distance from ligand chain for atoms to be included in plip calculations
 
     Returns
     -------
@@ -316,16 +313,7 @@ def run_plip_on_split_structure(
     from plip.basic import config
 
     config.biolip_list = []
-    split_structure, chain_mapping = pdbize(
-        biounit,
-        mol.CreateEntityFromView(
-            biounit.Select(
-                f"{plip_threshold} <> [cname='{ligand_chain}']",
-                mol.QueryFlag.MATCH_RESIDUES,
-            ),
-            True,
-        ),
-    )
+    split_structure, chain_mapping = pdbize(biounit, biounit_selection)
     ligand_plip_chain = chain_mapping[ligand_chain]
     config.PEPTIDES = (
         [ligand_plip_chain] if biounit.FindChain(ligand_chain).is_polymer else []
@@ -337,7 +325,7 @@ def run_plip_on_split_structure(
     ligand_list = [l for l in complex_obj.ligands if l.chain == ligand_plip_chain]
     if not len(ligand_list):
         log.warning(
-            f"Could not find ligand at chain {ligand_plip_chain}, originally {ligand_chain} in {entry_pdb_id}"
+            f"Could not find ligand at chain {ligand_plip_chain}, originally {ligand_chain}"  # in {entry_pdb_id}"
         )
         return None
     ligand = ligand_list[0]
@@ -347,16 +335,19 @@ def run_plip_on_split_structure(
     return interactions, chain_mapping
 
 
-def get_hash(
+def get_plip_hash(
     interactions: PLInteraction,
+    chain: str,
     plip_chain_mapping: dict[str, str],
 ) -> tuple[dict[str, dict[int, list[str]]], set[(tuple[str, int])]]:
     """Get fingerprint hash from plip interaction object
 
     Parameters
     ----------
-    intercation : PLInteraction
+    interactions : PLInteraction
         plip interaction object for a given ligand
+    chain: str
+        ligand chain
     plip_chain_mapping : Dict[str, str]
         chain mapping from plip chain ID to instance.asym ID
 
@@ -434,6 +425,8 @@ def get_hash(
                 plip_chain_mapping[int_obj.reschain],
                 int(int_obj.resnr),
             )
+            if instance_chain == chain:
+                continue
             if instance_chain not in interaction_hashes:
                 interaction_hashes[instance_chain] = dict()
             if resnr not in interaction_hashes[instance_chain]:
