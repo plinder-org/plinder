@@ -283,6 +283,7 @@ def mol_assigned_bond_orders_by_template(template_mol: Mol, mol: Mol) -> Mol:
         # Assign bonds according to template smiles!
         fixed_mol = AllChem.AssignBondOrdersFromTemplate(template_mol, mol)
     except Exception as e:
+        # raise AssertionError(f"mol_assigned_bond_orders_by_template: {e}")
         # update template in case fully resovled mol but bonding is an issue
         LOG.warn(
             f"mol_assigned_bond_orders_by_template: {e} - try get_matched_template"
@@ -336,6 +337,16 @@ def ligand_ost_ent_to_rdkit_mol(
 
     if ligand_smiles:
         try:
+            rdkit_mol = make_rdkit_compatible_mol(rdkit_mol)
+            # if smiles match - no fix is needed!
+            if Chem.CanonSmiles(ligand_smiles) == Chem.CanonSmiles(Chem.MolToSmiles(rdkit_mol)):
+                return rdkit_mol
+        except Exception as e:
+            LOG.warn(
+                "ligand_ost_ent_to_rdkit_mol: SMILES do not match reference - will try fixing"
+            )
+        # another try via OST SDF
+        try:
             # open structure output singly bonded SDF that can be adjusted with template
             # first - try to get a fixed molecule
             sdfstring_ost = io.EntityToSDFStr(ent).strip()
@@ -376,8 +387,12 @@ def ligand_ost_ent_to_rdkit_mol(
     try:
         # Fix issues if any
         rdkit_mol = make_rdkit_compatible_mol(rdkit_mol)
-        if rdkit_mol and len(Chem.MolToSmiles(rdkit_mol).split(".")) > 1:
-            raise ValueError("rdkit_mol seems fragmented: molecule is not connected!")
+        if rdkit_mol is None:
+            raise ValueError(f"make_rdkit_compatible_mol: returned None")
+        elif len(Chem.MolToSmiles(rdkit_mol).split(".")) > 1:
+            raise ValueError(
+                f"rdkit_mol seems fragmented: molecule is not connected: {Chem.MolToSmiles(rdkit_mol)}"
+            )
     except Exception as e:
         LOG.error(f"ligand_ost_ent_to_rdkit_mol: could not fix: {e}")
     return rdkit_mol
