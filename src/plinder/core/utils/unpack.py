@@ -3,15 +3,15 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 from omegaconf import DictConfig
 
 from plinder.core.utils import gcs
 from plinder.core.utils.config import get_config
 
-ZIP_KINDS = ["entries", "systems"]
-ID_KINDS = ["system_id", "pdb_id", "two_char_code"]
+ZIP_KINDS = Literal["entries", "systems"]
+ID_KINDS = Literal["system_id", "pdb_id", "two_char_code"]
 
 
 def expand_config_context(
@@ -49,7 +49,7 @@ def expand_config_context(
 
 def get_zips_to_unpack(
     *,
-    kind: str,
+    kind: ID_KINDS,
     system_ids: Optional[str | list[str]] = None,
     pdb_ids: Optional[str | list[str]] = None,
     two_char_codes: Optional[str | list[str]] = None,
@@ -89,7 +89,11 @@ def get_zips_to_unpack(
     return zips
 
 
-def unpack_zips(*, zips: dict[Path, list[str]], kind: str) -> None:
+def unpack_zips(
+    *,
+    zips: dict[Path, list[str]],
+    kind: str,
+) -> None:
     pass
 
 

@@ -11,18 +11,27 @@ LOG = setup_logger(__name__)
 
 
 class PlinderSystem:
+    """
+    Core class for interacting with a single system and its assets.
+    Relies on the entry data to populate the system which can be looked
+    up automatically using the from_system_id class method.
+
+    """
+
     def __init__(
         self,
         system_id: str,
         entry: dict[str, Any],
     ) -> None:
         self.system_id = system_id
+        entry_pdb_id = system_id.split("__")[0]
         self._entry = entry
-        if system_id not in entry["systems"]:
+        if system_id not in entry[entry_pdb_id]["systems"]:
             raise ValueError(f"system_id={system_id} not in entry")
-        self.system = entry["systems"][system_id]
+        self.system = entry[entry_pdb_id]["systems"][system_id]
 
     def structures(self) -> list[str]:
+        zips = utils.get_zips_to_unpack(kind="system_id", system_ids=[self.system_id])
         return []
 
     @classmethod
