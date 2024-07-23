@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 from rdkit import RDLogger
 
 from plinder.core.utils.log import setup_logger
+from plinder.core.utils.config import get_config
 from plinder.data.utils.annotations.get_ligand_validation import (
     EntryValidation,
     ResidueListValidation,
@@ -491,9 +492,7 @@ class System(BaseModel):
     def get_pocket_domains(self, chains_dict: dict[str, Chain]) -> dict[str, str]:
         global ECOD_DATA
         if ECOD_DATA is None:
-            from plinder.data.pipeline.config import IngestConfig
-
-            data_dir = Path(IngestConfig().plinder_dir)
+            data_dir = Path(get_config().data.plinder_dir)
             ECOD_DATA = pd.read_parquet(data_dir / "dbs" / "ecod" / "ecod.parquet")
         ecod_df = ECOD_DATA[ECOD_DATA["pdb"] == self.pdb_id]
         ecod_mapping = dict(zip(ecod_df["domainid"], ecod_df["domain"]))
@@ -1262,9 +1261,7 @@ class Entry(BaseModel):
         """
         global ECOD_DATA
         if ECOD_DATA is None:
-            from plinder.data.pipeline.config import IngestConfig
-
-            data_dir = Path(IngestConfig().plinder_dir)
+            data_dir = Path(get_config().data.plinder_dir)
             ECOD_DATA = pd.read_parquet(data_dir / "dbs" / "ecod" / "ecod.parquet")
         ecod_df = ECOD_DATA[ECOD_DATA["pdb"] == self.pdb_id]
         if not len(ecod_df):

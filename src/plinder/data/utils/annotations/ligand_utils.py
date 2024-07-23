@@ -20,6 +20,7 @@ from rdkit import Chem, RDLogger
 from rdkit.Chem import QED, AllChem, Crippen, rdMolDescriptors
 from rdkit.Chem.rdchem import Mol, RWMol
 
+from plinder.core.utils.config import get_config
 from plinder.data.common.constants import BASE_DIR
 from plinder.data.utils.annotations.extras import (
     get_ccd_smiles_dict,
@@ -1227,9 +1228,7 @@ class Ligand(BaseModel):
     def is_kinase_inhibitor(self) -> bool:
         global KINASE_INHIBITORS
         if KINASE_INHIBITORS is None:
-            from plinder.data.pipeline.config import IngestConfig
-
-            data_dir = Path(IngestConfig().plinder_dir)
+            data_dir = Path(get_config().data.plinder_dir)
             KINASE_INHIBITORS = parse_kinase_inhibitors(data_dir)
         return any(c in KINASE_INHIBITORS for c in self.ccd_code.split("-"))
 
@@ -1241,9 +1240,7 @@ class Ligand(BaseModel):
         global BINDING_AFFINITY
         pdbid_ligid = f"{self.pdb_id}_{self.ccd_code}".upper()
         if BINDING_AFFINITY is None:
-            from plinder.data.pipeline.config import IngestConfig
-
-            data_dir = Path(IngestConfig().plinder_dir)
+            data_dir = Path(get_config().data.plinder_dir)
             BINDING_AFFINITY = get_binding_affinity(data_dir)
         affinity = BINDING_AFFINITY.get(pdbid_ligid)
         if affinity is not None:
