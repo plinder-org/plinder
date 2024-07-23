@@ -108,7 +108,7 @@ def get_symmetry_contact_number(
                 cmd.delete(symmate)
                 continue
             # this is a real symmetry mate that is not part of biounit
-            xyz = get_pymol_coordinates(symmate)
+            xyz = get_pymol_coordinates(f"({symmate} & polymer)")
             pair_contacts = get_pairwise_distances(xyz_lig, xyz) < cutoff
             lig_atoms_in_crystal_contact += np.max(pair_contacts, axis=1)
             # print(lig_atoms_in_crystal_contact)
@@ -139,7 +139,7 @@ def main() -> None:
     with open(output_file, "w") as out:
         out.write(",".join([str(num_cont_lig), str(num_cont_symm)]))
     # save file to check visually
-    cmd.select("lattice_contact", "symexp* within 5 of ligand")
+    cmd.select("lattice_contact", "(symexp* & polymer) within 5 of ligand")
     cmd.show("spheres", "lattice_contact")
     cmd.save(output_file + ".pse")
 
