@@ -288,7 +288,17 @@ def test_synthetic_cov_peptide_detection(cif_6lu7, mock_alternative_datasets):
         sum(["B" in i for i in df["ligand_neighboring_protein_chains_auth_id"].values])
         == 0
     )
-
+    lig = plinder_anno.entry.systems["6lu7__1__1.A_2.A__1.B"].ligands[0]
+    assert lig.is_invalid == False
+    outsdffile = entry_dir / "6lu7__1__1.A_2.A__1.B/ligand_files/1.B.sdf"
+    assert outsdffile.is_file()
+    rdmol = Chem.SDMolSupplier(outsdffile, removeHs=True)[0]
+    assert (
+        Chem.SanitizeMol(rdmol) == Chem.rdmolops.SanitizeFlags.SANITIZE_NONE
+    )
+    assert (
+        len(Chem.MolToSmiles(rdmol).split(".")) == 1
+    )
 
 def test_simple_covalency_detection(cif_7gl9, mock_alternative_datasets):
     entry_dir = mock_alternative_datasets("7gl9")
