@@ -95,7 +95,15 @@ def get_symmetry_contact_number(
             cog_mate = get_cog(f"({symmate} & polymer)", ca_only=True)
             # given some buffer for numerical error
             # only consider symmetry mates that are not part of receptor
-            if sum([np.linalg.norm(cog_mate - cog_rec) < 0.5 for cog_rec in receptor_cogs]) > 0:
+            if (
+                sum(
+                    [
+                        np.linalg.norm(cog_mate - cog_rec) < 0.5
+                        for cog_rec in receptor_cogs
+                    ]
+                )
+                > 0
+            ):
                 # this is part of biounit!
                 cmd.delete(symmate)
                 continue
@@ -131,9 +139,9 @@ def main() -> None:
     with open(output_file, "w") as out:
         out.write(",".join([str(num_cont_lig), str(num_cont_symm)]))
     # save file to check visually
-    cmd.select('lattice_contact', 'symexp* within 5 of ligand')
+    cmd.select("lattice_contact", "symexp* within 5 of ligand")
     cmd.show("spheres", "lattice_contact")
-    cmd.save(output_file + '.pse')
+    cmd.save(output_file + ".pse")
 
 
 if __name__ == "__main__":
