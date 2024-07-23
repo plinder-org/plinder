@@ -10,7 +10,7 @@ from zipfile import ZipFile
 import pandas as pd
 from omegaconf import DictConfig
 
-from plinder.core.utils import cpl, gcs
+from plinder.core.utils import cpl, gcs, unpack
 from plinder.core.utils.config import get_config
 from plinder.core.utils.dec import timeit
 from plinder.core.utils.log import setup_logger
@@ -125,9 +125,9 @@ def _prune_entry(entry: dict[str, Any]) -> dict[str, Any]:
 
 
 @timeit
-def _load_entries_from_zips(
+def load_entries(
     *,
-    cfg: DictConfig,
+    cfg: Optional[DictConfig] = None,
     two_char_codes: list[str] | None = None,
     pdb_ids: list[str] | None = None,
     prune: bool = True,
@@ -154,71 +154,30 @@ def _load_entries_from_zips(
     entry_dir = Path(cfg.data.plinder_dir) / cfg.data.entries
     entry_dir.mkdir(exist_ok=True, parents=True)
 
-    per_zip: dict[str, list[str]] | None = None
-    entry_msg = "all"
-    if pdb_ids is not None:
-        zip_paths_set = set()
-        per_zip = {}
-        for pdb_id in pdb_ids:
-            code = pdb_id[-3:-1]
-            zip_paths_set.add(entry_dir / f"{code}.zip")
-            per_zip.setdefault(code, [])
-            per_zip[code].append(f"{pdb_id}.json")
-        entry_msg = str(sum((len(pz) for pz in per_zip.values())))
-        zip_paths = list(zip_paths_set)
-    elif two_char_codes is not None:
-        zip_paths = [entry_dir / f"{code}.zip" for code in two_char_codes]
-    else:
-        # start with remote paths in case we have not downloaded them yet
-        zip_paths = [
-            entry_dir / Path(blob).name
-            for blob in gcs.list_dir(
-                gcs_path=(Path(cfg.data.plinder_remote) / cfg.data.entries).as_posix(),
-                cfg=cfg,
-            )
-        ]
-    gcs.download_if_not_exists(
-        local_paths=zip_paths,
-        remote_root=Path(cfg.data.plinder_remote) / cfg.data.entries,
+    zips = unpack.get_zips_to_unpack(
+        kind=cfg.data.entries,
         cfg=cfg,
+        two_char_codes=two_char_codes,
+        pdb_ids=pdb_ids,
     )
     reduced: dict[str, Any] = {}
-    LOG.info(f"attempting to load {entry_msg} entries from {len(zip_paths)} zips")
-    for zip_path in zip_paths:
+    LOG.info(f"loading entries from {len(zips)} zips")
+    for zip_path, pdb_ids in zips.items():
         with ZipFile(zip_path) as archive:
-            names = archive.namelist()
-            if per_zip is not None:
-                names = per_zip[zip_path.stem]
+            if len(pdb_ids):
+                names = [f"{pdb_id}.json" for pdb_id in pdb_ids]
+            else:
+                names = archive.namelist()
             for name in names:
                 with archive.open(name) as obj:
                     pdb_id = name.replace(".json", "")
-                    # TODO: port Entry to plinder-core for better validation
+                    # TODO: port Entry to plinder.core for model validation
                     if prune:
                         reduced[pdb_id] = _prune_entry(load(obj))
                     else:
                         reduced[pdb_id] = load(obj)
     LOG.info(f"loaded {len(reduced)} entries")
     return reduced
-
-
-def load_entries(
-    *,
-    pdb_ids: str | list[str] | None = None,
-    two_char_codes: str | list[str] | None = None,
-    cfg: Optional[DictConfig] = None,
-    prune: bool = True,
-) -> dict[str, Any]:
-    if isinstance(pdb_ids, str):
-        pdb_ids = [pdb_ids]
-    if isinstance(two_char_codes, str):
-        two_char_codes = [two_char_codes]
-    result: dict[str, Any] = _load_entries_from_zips(
-        cfg=cfg,
-        two_char_codes=two_char_codes,
-        pdb_ids=pdb_ids,
-        prune=prune,
-    )
-    return result
 
 
 def download_plinder_cmd() -> None:
