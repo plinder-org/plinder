@@ -47,7 +47,7 @@ def get_cog(selection: str, ca_only: bool = True) -> NDArray[np.float64]:
     if ca_only:
         selection = f"(({selection}) and name CA)"
     xyz = get_pymol_coordinates(selection)
-    return np.mean(xyz, axis=1)
+    return np.mean(xyz, axis=0)
 
 
 def get_symmetry_contact_number(
@@ -76,12 +76,16 @@ def get_symmetry_contact_number(
         # detect and remove symmetry mates that overlap with receptor
         # eg. receptor incorporates more than assymetric unit to complete biounit
         cmd.load(receptor_cif, "receptor")
+        cmd.split_chains("receptor")
+        receptor_chains = cmd.get_object_list("receptor_*")
 
         # before getting coords - remove any ambiguous atoms and hydrogens
         cmd.remove("name *?")
         cmd.remove("e. h")
 
-        cog_rec = get_cog("receptor", ca_only=True)
+        receptor_cogs = []
+        for rec_chain in receptor_chains:
+            receptor_cogs.append(get_cog(f"({rec_chain} & polymer)", ca_only=True))
         xyz_lig = get_pymol_coordinates("ligand")
         # store ligand atom contacts as array in case of multiple symmetry mates in contact
         lig_atoms_in_crystal_contact = np.zeros(len(xyz_lig))
@@ -90,15 +94,19 @@ def get_symmetry_contact_number(
             # get distance between CoG of CAs and compare if within tolerance
             cog_mate = get_cog(f"({symmate} & polymer)", ca_only=True)
             # given some buffer for numerical error
-            if np.linalg.norm(cog_mate - cog_rec) > 0.1:
-                # this is a real symmetry mate that is not part of biounit
-                xyz = get_pymol_coordinates(symmate)
-                pair_contacts = get_pairwise_distances(xyz_lig, xyz) < cutoff
-                lig_atoms_in_crystal_contact += np.max(pair_contacts, axis=1)
-                # print(lig_atoms_in_crystal_contact)
-                # print(np.shape(pair_contacts))
-                # crystal_contacts as number of symmetry mate atoms within cutoff
-                num_symmetry_mates_contacts += np.sum(np.max(pair_contacts, axis=0))
+            # only consider symmetry mates that are not part of receptor
+            if sum([np.linalg.norm(cog_mate - cog_rec) < 0.5 for cog_rec in receptor_cogs]) > 0:
+                # this is part of biounit!
+                cmd.delete(symmate)
+                continue
+            # this is a real symmetry mate that is not part of biounit
+            xyz = get_pymol_coordinates(symmate)
+            pair_contacts = get_pairwise_distances(xyz_lig, xyz) < cutoff
+            lig_atoms_in_crystal_contact += np.max(pair_contacts, axis=1)
+            # print(lig_atoms_in_crystal_contact)
+            # print(np.shape(pair_contacts))
+            # crystal_contacts as number of symmetry mate atoms within cutoff
+            num_symmetry_mates_contacts += np.sum(np.max(pair_contacts, axis=0))
         # count each ligand atom only once!
         num_lig_contacts = np.sum(lig_atoms_in_crystal_contact > 0)
         # TODO: test for multiple symmetry mates in contact
@@ -122,6 +130,10 @@ def main() -> None:
     # print(','.join([str(num_cont_lig), str(num_cont_symm)]))
     with open(output_file, "w") as out:
         out.write(",".join([str(num_cont_lig), str(num_cont_symm)]))
+    # save file to check visually
+    cmd.select('lattice_contact', 'symexp* within 5 of ligand')
+    cmd.show("spheres", "lattice_contact")
+    cmd.save(output_file + '.pse')
 
 
 if __name__ == "__main__":
