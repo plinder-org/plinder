@@ -317,7 +317,7 @@ def run_image(
         "-v",
         f"{home}/.local/share/plinder:/plinder",
         "-v",
-        f"{host}:{guest}",
+        f"{host}/plinder:{guest}",
         "-v",
         f"{host}:{app}",
     ]
@@ -388,6 +388,9 @@ def main(argv: Optional[List[str]] = None):
         "run": run_image,
     }
     kwargs = {} if command == "bump" else nsargs
+    if command is None:
+        parser.print_help()
+        exit()
     func[command](**kwargs)
 
 

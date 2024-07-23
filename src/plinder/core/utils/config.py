@@ -66,7 +66,7 @@ def _clean_sort_config(*, cfg: Any) -> Any:
 
 class _get_config:
     _schema: dict[str, Any] = {}
-    _packages: set[str] = set()
+    _packages: dict[str, set[str]] = {}
     _cfg = DictConfig({})
 
     def __call__(
@@ -119,12 +119,17 @@ class _get_config:
         ):
             return self._cfg
         if package_schema not in self._packages:
-            self._packages.add(package_schema)
             dups = set(self._schema.keys()).intersection(schema.keys())
-            if len(dups):
+            degenerate = False
+            for keys in self._packages.values():
+                if dups == keys:
+                    degenerate = True
+                    break
+            if len(dups) and not degenerate:
                 raise ValueError(
                     f"schema keys must be unique: found keys {dups} in schema='{package_schema}'"
                 )
+            self._packages[package_schema] = set(schema.keys())
         self._schema.update(schema)
         args = []
         if config is not None:

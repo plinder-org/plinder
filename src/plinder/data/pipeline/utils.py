@@ -14,6 +14,7 @@ from zipfile import ZipFile
 import pandas as pd
 from omegaconf import DictConfig
 
+from plinder.core.utils.unpack import expand_config_context
 from plinder.core.utils import schemas
 from plinder.core.utils.log import setup_logger
 from plinder.data.utils import tanimoto
@@ -51,32 +52,21 @@ def timeit(func: Callable[..., T]) -> Callable[..., T]:
     return wrapped
 
 
-def entry_exists(
-    *,
-    entry_dir: Path,
-    pdb_id: str,
-    wipe_entries: bool,
-    wipe_annotations: bool,
-    skip_existing_entries: bool,
-    skip_missing_annotations: bool,
-) -> bool:
+def entry_exists(*, entry_dir: Path, pdb_id: str) -> bool:
+    """
+    Check if the entry JSON file exists.
+
+    Parameters
+    ----------
+    entry_dir : Path
+        the directory containing entries
+    pdb_id : str
+        the PDB ID
+    """
     two_char_code = pdb_id[-3:-1]
     output = entry_dir / two_char_code / (pdb_id + ".json")
     output.parent.mkdir(exist_ok=True, parents=True)
-    pqt_df = entry_dir / two_char_code / (pdb_id + ".parquet")
-    if wipe_entries:
-        return False
-    if not skip_existing_entries:
-        return False
-    if output.is_file() and pqt_df.is_file():
-        return True
-    if output.is_file() and not pqt_df.is_file():
-        if wipe_annotations:
-            return False
-        if skip_missing_annotations:
-            return True
-        return False
-    return False
+    return output.is_file()
 
 
 @timeit
@@ -291,14 +281,13 @@ def get_local_contents(
     contents : list[str]
         list of directory-derived metadata contents
     """
-    if pdb_ids is not None and len(pdb_ids):
-        if as_four_char_ids:
-            return pdb_ids
-        return [f"pdb_0000{pdb_id}" for pdb_id in pdb_ids]
-    elif two_char_codes is not None and len(two_char_codes):
-        codes = two_char_codes
-    else:
-        codes = listdir(data_dir.as_posix())
+    kind, values = expand_config_context(
+        pdb_ids=pdb_ids,
+        two_char_codes=two_char_codes,
+    )
+    if kind == "pdb_id":
+        return values if as_four_char_ids else [f"pdb_0000{pdb_id}" for pdb_id in values]
+    codes = values if kind == "two_char_code" and len(values) else listdir(data_dir.as_posix())
     contents = []
     for code in codes:
         contents.extend(listdir((data_dir / code).as_posix()))
@@ -388,8 +377,8 @@ def ingest_flow_control(func: Callable[..., T]) -> Callable[..., T]:
             name = func.__name__.replace("join_", "", 1)
         if should_run_stage(
             name,
-            pipe.cfg.ingest.run_specific_stages,
-            pipe.cfg.ingest.skip_specific_stages,
+            pipe.cfg.flow.run_specific_stages,
+            pipe.cfg.flow.skip_specific_stages,
         ):
             chunks = None
             if len(args) and args[0] is not None:

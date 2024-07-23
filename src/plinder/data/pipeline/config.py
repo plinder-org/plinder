@@ -43,7 +43,7 @@ METRICS = [
 
 
 @dataclass
-class IngestConfig(_config.DataConfig):
+class FlowConfig:
     """
     Control re-processing logic for the pipeline
 
@@ -57,13 +57,40 @@ class IngestConfig(_config.DataConfig):
         if set, comma-separated list of specific stages to run
     skip_specific_stages : str, default=""
         if set, comma-separated list of specific stages to skip
+    download_rcsb_files_batch_size: int
+        Target number of two_char_codes per task batch.
+    annotation_batch_size : int, default=220
+        How many system annotations to generate in a given chunk
+    skip_existing_entries : bool, default=True
+        if the entry JSON already exists, skip generation
+    make_entries_cpu : int, default=1
+        misguided experiments in multiprocessing over C++ libs (bad idea)
     """
-
     run_specific_stages: Any = ""
     skip_specific_stages: Any = ""
+    # 1060 codes but RCSB limits rsync connections
+    download_rcsb_files_batch_size: int = 4
+
+    # 220K PDB IDs but cluster has max workers
+    make_entries_batch_size: int = 220
+    make_entries_force_update: bool = False
+    make_entries_cpu: int = 4
+
+    scorer_batch_size: int = 220
+    make_sub_dbs_cpu: int = 4
+    make_scorers_cpu: int = 4
+    download_alternative_datasets_threads: int = 10
+    make_ligands_batch_size: int = 100
+    number_id_col: str = "number_id_by_inchikeys"
+    cluster_thresholds: list[int] = field(default_factory=lambda: [50, 70, 95, 100])
+    skip_existing_clusters: bool = True
+    stop_on_cluster: int = 0
+    run_batch_searches_batch_size: int = 10050
+    make_batch_scores_batch_size: int = 90
+    split_config_dir: str = ""
+    test_leakage: bool = False
 
     def __post_init__(self) -> None:
-        super().__post_init__()
         if isinstance(self.run_specific_stages, str):
             self.run_specific_stages = [
                 stage for stage in self.run_specific_stages.split(",") if stage
@@ -186,60 +213,6 @@ Added updated artifacts list and curation, please, review the logic!
 
 
 @dataclass
-class ScatterConfig:
-    """
-    A class to represent batching parameters used to scatter data pipeline tasks.
-
-    Attributes
-    ----------
-    two_char_batch_size: int
-        Target number of two_char_codes per task batch.
-    two_char_codes: str, default=None
-        Only consider particular two character codes.
-    pdb_ids : str, default=None
-        Only consider particular pdb IDs.
-    annotation_batch_size : int, default=220
-        How many system annotations to generate in a given chunk
-    skip_existing_entries : bool, default=True
-        if the entry JSON already exists, skip generation
-    make_entries_cpu : int, default=1
-        misguided experiments in multiprocessing over C++ libs (bad idea)
-    """
-
-    two_char_batch_size: int = 2  # ~1060 codes / 500 workers
-    two_char_codes: Any = ""
-    pdb_ids: Any = ""
-    annotation_batch_size: int = 220  # ~220000 PDB IDs / 1000 workers
-    scorer_batch_size: int = 220
-    skip_existing_entries: bool = True
-    skip_missing_annotations: bool = True
-    wipe_entries: bool = False
-    wipe_annotations: bool = False
-    make_entries_cpu: int = 4
-    make_sub_dbs_cpu: int = 4
-    make_scorers_cpu: int = 4
-    download_alternative_datasets_threads: int = 10
-    make_ligands_batch_size: int = 100
-    number_id_col: str = "number_id_by_inchikeys"
-    cluster_thresholds: list[int] = field(default_factory=lambda: [50, 70, 95, 100])
-    skip_existing_clusters: bool = True
-    stop_on_cluster: int = 0
-    run_batch_searches_batch_size: int = 10050
-    make_batch_scores_batch_size: int = 90
-    split_config_dir: str = ""
-    test_leakage: bool = False
-
-    def __post_init__(self) -> None:
-        for attr in [
-            "two_char_codes",
-            "pdb_ids",
-        ]:
-            value = getattr(self, attr, None)
-            if isinstance(value, str):
-                setattr(self, attr, [val for val in value.split(",") if val])
-
-
-@dataclass
 class LigandConfig:
     radius: int = 2
     nbits: int = 1024
@@ -250,16 +223,16 @@ class LigandConfig:
 
 
 SCHEMA = {
-    "ingest": IngestConfig,
+    "flow": FlowConfig,
     "foldseek": FoldseekConfig,
     "mmseqs": MMSeqsConfig,
     "graph": GraphConfig,
     "annotation": AnnotationConfig,
     "entry": EntryConfig,
     "scorer": ScorerConfig,
-    "scatter": ScatterConfig,
     "ligand": LigandConfig,
 }
 
+SCHEMA.update(_config.SCHEMA)
 
 get_config = partial(_config._config, schema=SCHEMA, package_schema="data")

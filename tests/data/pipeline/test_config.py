@@ -46,7 +46,7 @@ def test_get_config_metaflow(tmp_path):
     )
     contents = dedent(
         """
-        scatter:
+        data:
           two_char_codes: xx
         """
     )
@@ -56,13 +56,13 @@ def test_get_config_metaflow(tmp_path):
         config_contents=contents,
     )
     assert cfg.ingest.skip_specific_stages == ["foo"]
-    assert cfg.scatter.two_char_codes == ["xx"]
+    assert cfg.data.two_char_codes == ["xx"]
 
 
 def test_get_config_comma_delimited():
     contents = dedent(
         """
-        scatter:
+        data:
           two_char_codes: xx,yy,zz
         """
     )
@@ -70,11 +70,11 @@ def test_get_config_comma_delimited():
         cached=False,
         config_contents=contents,
     )
-    assert cfg.scatter.two_char_codes == ["xx", "yy", "zz"]
+    assert cfg.data.two_char_codes == ["xx", "yy", "zz"]
 
 
 def test_get_config_cli():
-    test_args = ["prog", "scatter.two_char_batch_size=4"]
+    test_args = ["prog", "flow.download_rcsb_files_batch_size=4"]
     with unittest.mock.patch("sys.argv", test_args):
         cfg = config.get_config(cached=False)
-        assert cfg.scatter.two_char_batch_size == 4
+        assert cfg.flow.download_rcsb_files_batch_size == 4

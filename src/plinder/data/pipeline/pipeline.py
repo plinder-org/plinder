@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Any, Optional
 
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig
 
 from plinder.core.utils.log import setup_logger
 from plinder.data.pipeline import config, tasks, utils
@@ -39,33 +39,29 @@ class IngestPipeline:
         config_args: Optional[list[str]] = None,
         cached: bool = True,
     ):
-        self.cfg = conf or config.get_config(
+        self.cfg = config.get_config(
+            config=conf,
             config_file=config_file,
             config_contents=config_contents,
             config_args=config_args,
             cached=cached,
         )
-        self.plinder_dir = Path(self.cfg.ingest.plinder_dir)
+        self.plinder_dir = Path(self.cfg.data.plinder_dir)
         LOG.info(f"plinder_dir={self.plinder_dir}")
 
     def __setstate__(self, state: dict[str, Any]) -> None:
-        cfg = OmegaConf.to_container(state.pop("cfg"))
-        cfg.get("data", {}).pop("plinder_dir", None)
-        cfg.get("data", {}).pop("plinder_remote", None)
-        cfg.get("ingest", {}).pop("plinder_dir", None)
-        cfg.get("ingest", {}).pop("plinder_remote", None)
+        self.cfg = config.get_config(config=state.pop("cfg"))
         for k, v in state.items():
             setattr(self, k, v)
-        self.cfg = config.get_config(config=cfg)
-        self.plinder_dir = Path(self.cfg.ingest.plinder_dir)
+        self.plinder_dir = Path(self.cfg.data.plinder_dir)
         LOG.info(f"plinder_dir={self.plinder_dir}")
 
     @utils.ingest_flow_control
     def scatter_download_rcsb_files(self) -> list[list[str]]:
         chunks: list[list[str]] = tasks.scatter_download_rcsb_files(
             data_dir=self.plinder_dir,
-            two_char_codes=self.cfg.scatter.two_char_codes,
-            batch_size=self.cfg.scatter.two_char_batch_size,
+            two_char_codes=self.cfg.context.two_char_codes,
+            batch_size=self.cfg.flow.download_rcsb_files_batch_size,
         )
         return chunks
 
@@ -80,8 +76,8 @@ class IngestPipeline:
     def download_alternative_datasets(self) -> None:
         tasks.download_alternative_datasets(
             data_dir=self.plinder_dir,
-            threads=self.cfg.scatter.download_alternative_datasets_threads,
-            force_update=self.cfg.ingest.force_update,
+            threads=self.cfg.flow.download_alternative_datasets_threads,
+            force_update=self.cfg.data.force_update,
         )
 
     @utils.ingest_flow_control
@@ -93,28 +89,24 @@ class IngestPipeline:
 
     @utils.ingest_flow_control
     def scatter_make_entries(self) -> list[list[str]]:
+        force_update = self.cfg.data.force_update or self.cfg.flow.make_entries_force_update
         chunks: list[list[str]] = tasks.scatter_make_entries(
             data_dir=self.plinder_dir,
-            two_char_codes=self.cfg.scatter.two_char_codes,
-            pdb_ids=self.cfg.scatter.pdb_ids,
-            batch_size=self.cfg.scatter.annotation_batch_size,
-            wipe_entries=self.cfg.scatter.wipe_entries,
-            wipe_annotations=self.cfg.scatter.wipe_annotations,
-            skip_existing_entries=self.cfg.scatter.skip_existing_entries,
-            skip_missing_annotations=self.cfg.scatter.skip_missing_annotations,
+            batch_size=self.cfg.flow.make_entries_batch_size,
+            two_char_codes=self.cfg.context.two_char_codes,
+            pdb_ids=self.cfg.context.pdb_ids,
+            force_update=force_update,
         )
         return chunks
 
     @utils.ingest_flow_control
     def make_entries(self, pdb_dirs: list[str]) -> list[str]:
+        force_update = self.cfg.data.force_update or self.cfg.flow.make_entries_force_update
         failed: list[str] = tasks.make_entries(
             data_dir=self.plinder_dir,
             pdb_dirs=pdb_dirs,
-            skip_existing_entries=self.cfg.scatter.skip_existing_entries,
-            skip_missing_annotations=self.cfg.scatter.skip_missing_annotations,
-            wipe_entries=self.cfg.scatter.wipe_entries,
-            wipe_annotations=self.cfg.scatter.wipe_annotations,
-            cpu=self.cfg.scatter.make_entries_cpu,
+            force_update=force_update,
+            cpu=self.cfg.flow.make_entries_cpu,
             annotation_cfg=self.cfg.annotation,
             entry_cfg=self.cfg.entry,
         )
@@ -132,7 +124,7 @@ class IngestPipeline:
         chunks: list[list[str]] = tasks.scatter_structure_qc(
             data_dir=self.plinder_dir,
             two_char_codes=self.cfg.scatter.two_char_codes,
-            batch_size=self.cfg.scatter.two_char_batch_size,
+            batch_size=self.cfg.flow.download_rcsb_files_batch_size,
         )
         return chunks
 
@@ -199,7 +191,7 @@ class IngestPipeline:
         chunks: list[list[str]] = tasks.scatter_make_system_archives(
             data_dir=self.plinder_dir,
             two_char_codes=self.cfg.scatter.two_char_codes,
-            batch_size=self.cfg.scatter.two_char_batch_size,
+            batch_size=self.cfg.flow.download_rcsb_files_batch_size,
         )
         return chunks
 
