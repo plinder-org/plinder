@@ -15,9 +15,13 @@ from rdkit.Chem.rdchem import Mol
 from rdkit.Chem.rdFMCS import FindMCS
 
 from plinder.core.utils.log import setup_logger
+from plinder.data.common.constants import BASE_DIR
 
 LOG = setup_logger(__name__)
 COMPOUND_LIB = conop.GetDefaultLib()
+PRD_LIB = conop.CompoundLib.Load(
+    str(BASE_DIR / "data/utils/annotations/static_files/prdcc.chemlib")
+)
 
 
 # def process_organometalics(mol: Mol) -> Mol:
@@ -403,7 +407,13 @@ def ligand_ost_ent_to_rdkit_mol(
 def set_smiles_from_ligand_ost(ent: omol.EntityHandle) -> str:
     residues = [res.name for res in ent.residues]
     if len(residues) == 1:
-        mol = COMPOUND_LIB.FindCompound(residues[0])
+        resname = residues[0]
+        if resname.startswith("PRD_"):
+            # TODO - need to make this line used!
+            # currently, PRD_entries are not mapped to residue names and are more than one residue!
+            mol = PRD_LIB.FindCompound(resname)
+        else:
+            mol = COMPOUND_LIB.FindCompound(resname)
         if mol is not None:
             try:
                 rdkit_mol = Chem.MolFromSmiles(str(mol.smiles), sanitize=False)

@@ -45,7 +45,6 @@ from plinder.data.utils.annotations.save_utils import (
 
 LOG = setup_logger(__name__)
 RDLogger.DisableLog("rdApp.*")
-COMPOUND_LIB = conop.GetDefaultLib()
 ECOD_DATA = None
 
 # Ignore Biolip artifacts
