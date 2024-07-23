@@ -35,6 +35,9 @@ def _validate_cfg(*, cfg: DictConfig, schema: dict[str, Any]) -> DictConfig:
         the validated config with post-init validation logic
     """
     keys = set(cfg.keys()).union(set(schema.keys()))
+    cfg = OmegaConf.to_container(cfg)
+    cfg.get("data", {}).pop("plinder_dir", None)
+    cfg.get("data", {}).pop("plinder_remote", None)
     return DictConfig({str(k): schema[str(k)](**cfg.get(k, {})) for k in keys})
 
 
@@ -226,7 +229,10 @@ class _BaseConfig:
         suffix = self.plinder_release
         if self.plinder_iteration:
             suffix = f"{self.plinder_release}/{self.plinder_iteration}"
-        self.plinder_dir = f"{self.plinder_mount}/{self.plinder_bucket}/{suffix}"
+        if self.plinder_mount in ["/plinder", "/", ""]:
+            self.plinder_dir = f"{self.plinder_mount}/{suffix}"
+        else:
+            self.plinder_dir = f"{self.plinder_mount}/{self.plinder_bucket}/{suffix}"
         self.plinder_remote = f"gs://{self.plinder_bucket}/{suffix}"
 
 

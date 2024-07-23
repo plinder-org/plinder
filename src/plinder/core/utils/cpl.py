@@ -119,11 +119,7 @@ def _get_fsroot(cfg: DictConfig) -> str:
     Kludge mainly for dealing with the NFS
     """
     root = cfg.data.plinder_mount
-    if hasattr(cfg, "ingest"):
-        root = cfg.ingest.plinder_mount
-    if root == "/plinder":
-        root = "/"
-    elif root == "":
+    if root in ["/plinder", "/", ""]:
         root = "/"
     return root
 
