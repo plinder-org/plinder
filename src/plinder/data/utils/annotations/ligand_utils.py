@@ -1175,6 +1175,10 @@ class Ligand(BaseModel):
         return pocket_residues_set
 
     @cached_property
+    def num_crystal_contacts(self) -> int:
+        return len(self.crystal_contacts)
+
+    @cached_property
     def num_pocket_residues(self) -> int:
         return sum([len(self.pocket_residues[chain]) for chain in self.pocket_residues])
 
@@ -1406,6 +1410,7 @@ class Ligand(BaseModel):
             "ligand_num_neighboring_ppi_atoms_within_4A_of_gap": self.num_neighboring_ppi_atoms_within_4A_of_gap,
             "ligand_num_unresolved_heavy_atoms": self.num_unresolved_heavy_atoms,
             "ligand_is_kinase_inhibitor": self.is_kinase_inhibitor,
+            "ligand_num_crystal_contacts": self.num_crystal_contacts,
         }
         if self.posebusters_result is not None:
             for k in self.posebusters_result:

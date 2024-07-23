@@ -269,6 +269,7 @@ class System(BaseModel):
             "system_num_ligand_chains": len(self.ligand_chains),
             "system_has_kinase_inhibitor": self.has_kinase_inhibitor,
             "system_num_covalent_ligands": self.num_covalent_ligands,
+            "system_num_crystal_contacts": self.num_crystal_contacts,
         }
         pocket_mapping = self.get_pocket_domains(chains)
         for mapping in pocket_mapping:
@@ -300,6 +301,10 @@ class System(BaseModel):
             chain_query = " or ".join(f"rnum={resnum}" for resnum in self.waters[chain])
             query.append(f"(chain='{chain}' and ({chain_query}))")
         return " or ".join(query)
+
+    @property
+    def num_crystal_contacts(self) -> int:
+        return sum(len(x) for x in self.crystal_contacts.values())
 
     def selection(self, include_waters: bool = True) -> str:
         ligand_selection = " or ".join(
@@ -413,6 +418,7 @@ class System(BaseModel):
                 and self.pocket_validation.pass_criteria(
                     thresholds.residue_list_thresholds["pocket"]
                 )
+                and self.num_crystal_contacts == 0
             )
         else:
             self.pass_criteria = None
@@ -1215,9 +1221,16 @@ class Entry(BaseModel):
             for ligand in self.systems[system].ligands:
                 ligand.crystal_contacts = set()
                 for residue_number in ligand.residue_numbers:
-                    ligand.crystal_contacts |= self.symmetry_mate_contacts.get(
+                    # get all contacts with chains in other asymmetric units
+                    contacts = self.symmetry_mate_contacts.get(
                         (ligand.asym_id, residue_number), set()
                     )
+                    # keep only contacts with receptor
+                    contacts = {
+                        x for x in contacts if x[0] not in self.ligand_like_chains
+                    }
+                    ligand.crystal_contacts |= contacts
+                # exclude contacts from neighboring residues in same biounit
                 ligand.crystal_contacts -= ligand.get_pocket_residues_set()
                 if len(ligand.crystal_contacts):
                     self.systems[system].crystal_contacts[
