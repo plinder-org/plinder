@@ -343,12 +343,12 @@ def ligand_ost_ent_to_rdkit_mol(
                 Chem.MolToSmiles(rdkit_mol)
             ):
                 return rdkit_mol
-        except Exception as e:
-            LOG.warn(
-                "ligand_ost_ent_to_rdkit_mol: SMILES do not match reference - will try fixing"
-            )
-        # another try via OST SDF
+            else:
+                raise AssertionError("SMILES do not match reference - will try fixing")
+        except Exception:
+            LOG.warn("ligand_ost_ent_to_rdkit_mol: {e}")
         try:
+            # another try via OST SDF
             # open structure output singly bonded SDF that can be adjusted with template
             # first - try to get a fixed molecule
             sdfstring_ost = io.EntityToSDFStr(ent).strip()
@@ -390,7 +390,7 @@ def ligand_ost_ent_to_rdkit_mol(
         # Fix issues if any
         rdkit_mol = make_rdkit_compatible_mol(rdkit_mol)
         if rdkit_mol is None:
-            raise ValueError(f"make_rdkit_compatible_mol: returned None")
+            raise ValueError("make_rdkit_compatible_mol: returned None")
         elif len(Chem.MolToSmiles(rdkit_mol).split(".")) > 1:
             raise ValueError(
                 f"rdkit_mol seems fragmented: molecule is not connected: {Chem.MolToSmiles(rdkit_mol)}"
