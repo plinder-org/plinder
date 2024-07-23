@@ -349,8 +349,8 @@ def ligand_ost_ent_to_rdkit_mol(
                 return rdkit_mol
             else:
                 raise AssertionError("SMILES do not match reference - will try fixing")
-        except Exception:
-            LOG.warn("ligand_ost_ent_to_rdkit_mol: {e}")
+        except Exception as e:
+            LOG.warn(f"ligand_ost_ent_to_rdkit_mol: {e}")
         try:
             # another try via OST SDF
             # open structure output singly bonded SDF that can be adjusted with template
