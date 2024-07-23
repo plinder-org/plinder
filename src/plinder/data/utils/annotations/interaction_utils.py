@@ -82,7 +82,7 @@ def get_symmetry_mate_contacts(
     """
     Get all contacts within a given threshold between residues which are not in the same asymmetric unit (symmetry mates)
     """
-    cif = gemmi.read_structure(mmcif_filename.__str__())
+    cif = gemmi.read_structure(mmcif_filename.__str__(), merge_chain_parts=False)
     cif.setup_entities()
     ns = gemmi.NeighborSearch(cif[0], cif.cell, contact_threshold).populate()
     cs = gemmi.ContactSearch(contact_threshold)
@@ -93,9 +93,13 @@ def get_symmetry_mate_contacts(
     for p in pairs:
         if p.partner1.residue.is_water() or p.partner2.residue.is_water():
             continue
-        results[(p.partner1.chain.name, p.partner1.residue.seqid.num)].add(
-            (p.partner2.chain.name, p.partner2.residue.seqid.num)
-        )
+        i1, i2 = p.partner1.residue.label_seq, p.partner2.residue.label_seq
+        if i1 is None:
+            i1 = 1
+        if i2 is None:
+            i2 = 1
+        c1, c2 = p.partner1.residue.subchain, p.partner2.residue.subchain
+        results[(c1, i1)].add((c2, i2))
     return results
 
 
