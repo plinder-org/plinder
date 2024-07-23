@@ -11,7 +11,7 @@ from pathlib import Path
 
 import networkx as nx
 import pandas as pd
-from ost import conop, io, mol
+from ost import io, mol
 from PDBValidation.ValidationFactory import ValidationFactory
 from plip.basic import config
 from posebusters import PoseBusters
