@@ -7,7 +7,10 @@
 ---
 
 [![license](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://github.com/plinder-org/plinder/blob/master/LICENSE.txt)
-[![test](https://github.com/plinder-org/plinder/actions/workflows/pr.yaml/badge.svg)](https://github.com/plinder-org/plinder/actions/workflows/pr.yaml)
+[![publish](https://github.com/plinder-org/plinder/actions/workflows/main.yaml/badge.svg)](https://github.com/plinder-org/plinder/pkgs/container/plinder)
+[![website](https://img.shields.io/badge/website-plinder-blue.svg)](https://www.plinder.sh/)
+[![bioarXiv](https://img.shields.io/badge/bioarXiv-2024.07.17.603955v1-blue.svg)](https://www.biorxiv.org/content/10.1101/2024.07.17.603955v1)
+[![docs](https://github.com/plinder-org/plinder/actions/workflows/docs.yaml/badge.svg)](https://plinder-org.github.io/plinder/)
 [![coverage](https://github.com/plinder-org/plinder/raw/python-coverage-comment-action-data/badge.svg)](https://github.com/plinder-org/plinder/tree/python-coverage-comment-action-data)
 
 ![overview](https://github.com/user-attachments/assets/39d251b1-8114-4242-b9fc-e0cce900d22f)
@@ -111,7 +114,7 @@ with the dataset.
 As part of `plinder` resource we also provide train, validation and test splits that are curated to minimize the information leakage based on protein-ligand interaction similarity. In addition, we have prioritized the systems that has a linked experimental `apo` structure or matched molecular series to support realistic inference scenarios for hit discovery and optimization.
 Finally, a particular care is taken for test set that is further prioritized to contain high quality structures to provide unambiguous ground-truths for performance benchmarking.
 
-![plinder](./assets/plinder_test_stratification.png)
+![test_stratification](https://github.com/user-attachments/assets/5bb96534-f939-42b5-bf85-5ac3a71aa324)
 
 Moreover, as we enticipate this resource to be used for benchmarking a wide range of methods, including those simultaneously predicting protein structure (aka. co-folding) or those generating novel ligand structures, we further stratified test (by novel ligand, pocket, protein or all) to cover a wide range of tasks.
 
@@ -127,7 +130,7 @@ Our latest test split contains:
 
 ## ⚖️ Evaluation harness
 
-See the [`plinder.eval`](#src/plinder-eval/plinder/eval/docking/README.md) docs for more details.
+See the [`plinder.eval`](docs/eval/README.md) docs for more details.
 
 ## 📦 Dataloader
 
@@ -135,7 +138,7 @@ Dataloader is currently under construction.
 
 ## ℹ️ Filters & Annotations
 
-See the [`plinder.data`](#src/plinder-data/plinder/data/README.md) docs for more details.
+See the [`plinder.data`](docs/data/README.md) docs for more details.
 
 ## 📡 Future work
 
@@ -158,7 +161,7 @@ This code is split into 4 sub-packages
 
 ![workflow](https://github.com/user-attachments/assets/cde72643-5fdf-4998-8719-216d0cef2706)
 
-See the [End-to-end pipeline](#src/plinder-data/README.md) description for technical details about the dataset generation.
+See the [End-to-end pipeline](docs/data/README.md) description for technical details about the dataset generation.
 
 # 📝 Examples & documentation
 
