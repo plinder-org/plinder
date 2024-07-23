@@ -149,7 +149,7 @@ def add_missed_synonyms(current_set: set[str]) -> set[str]:
 def get_unique_ccd_longname(longname: str) -> str:
     assert CCD_SYNONYMS_DICT is not None
 
-    if longname.startswith("PRD-"):
+    if longname.startswith("PRD_"):
         return longname
     else:
         return "-".join([CCD_SYNONYMS_DICT.get(s, s) for s in longname.split("-")])
@@ -423,7 +423,9 @@ def parse_artifacts() -> set[str]:
     Returns:
         set[str]: set[str]
     """
-    artifact_log = BASE_DIR / "utils/annotations/static_files/artifacts_badlist.csv"
+    artifact_log = (
+        BASE_DIR / "data/utils/annotations/static_files/artifacts_badlist.csv"
+    )
     with open(artifact_log, "r") as f:
         lines = f.readlines()
     artifacts = {l.strip() for l in lines if not l.startswith("#")}

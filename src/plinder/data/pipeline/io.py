@@ -390,9 +390,10 @@ def download_kinase_data(
     kinase_uniprotac_path : Path
         location of downloaded kinase data
     """
-    LOG.info(f"download_kinase_data: data_dir={data_dir}")
     kinase_info_path = data_dir / "dbs" / "kinase" / "kinase_information.parquet"
-    kinase_info_path.parent.mkdir(exist_ok=True, parents=True)
+    if not kinase_info_path.parent.exists() or force_update:
+        LOG.info(f"download_kinase_data: data_dir={data_dir}")
+        kinase_info_path.parent.mkdir(exist_ok=True, parents=True)
     if not kinase_info_path.is_file() or force_update:
         LOG.info(f"download_kinase_data: {url}/kinase_information")
         resp = requests.get(f"{url}/kinase_information")

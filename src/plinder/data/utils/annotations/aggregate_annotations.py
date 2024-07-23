@@ -11,7 +11,7 @@ from pathlib import Path
 
 import networkx as nx
 import pandas as pd
-from ost import conop, io, mol
+from ost import io, mol
 from PDBValidation.ValidationFactory import ValidationFactory
 from plip.basic import config
 from posebusters import PoseBusters
@@ -45,7 +45,6 @@ from plinder.data.utils.annotations.save_utils import (
 
 LOG = setup_logger(__name__)
 RDLogger.DisableLog("rdApp.*")
-COMPOUND_LIB = conop.GetDefaultLib()
 ECOD_DATA = None
 
 # Ignore Biolip artifacts
