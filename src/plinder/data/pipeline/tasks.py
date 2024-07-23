@@ -145,7 +145,8 @@ def download_alternative_datasets(
             executor.submit(io.download_kinase_data, **kws),
             executor.submit(io.download_panther_data, **kws),
             executor.submit(io.download_components_cif, **kws),
-            # executor.submit(io.download_affinity_data, **kws),
+            executor.submit(io.download_ecod_data, **kws),
+            executor.submit(io.download_affinity_data, **kws),
         ]
         wait(futures, return_when=ALL_COMPLETED)
         for future in futures:
