@@ -339,7 +339,9 @@ def ligand_ost_ent_to_rdkit_mol(
         try:
             rdkit_mol = make_rdkit_compatible_mol(rdkit_mol)
             # if smiles match - no fix is needed!
-            if Chem.CanonSmiles(ligand_smiles) == Chem.CanonSmiles(Chem.MolToSmiles(rdkit_mol)):
+            if Chem.CanonSmiles(ligand_smiles) == Chem.CanonSmiles(
+                Chem.MolToSmiles(rdkit_mol)
+            ):
                 return rdkit_mol
         except Exception as e:
             LOG.warn(
