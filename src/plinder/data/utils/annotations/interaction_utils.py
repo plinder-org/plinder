@@ -78,18 +78,22 @@ def read_mmcif_file(mmcif_filename: Path) -> PDBxFile:
 
 def get_symmetry_mate_contacts(
     mmcif_filename: Path, contact_threshold: float = 5.0
-) -> dict[tuple[str, int], set[tuple[str, int]]]:
+) -> dict[tuple[str, int], dict[tuple[str, int], set[int]]]:
     """
     Get all contacts within a given threshold between residues which are not in the same asymmetric unit (symmetry mates)
     """
     cif = gemmi.read_structure(mmcif_filename.__str__(), merge_chain_parts=False)
     cif.setup_entities()
-    ns = gemmi.NeighborSearch(cif[0], cif.cell, contact_threshold).populate()
+    ns = gemmi.NeighborSearch(cif[0], cif.cell, contact_threshold).populate(
+        include_h=False
+    )
     cs = gemmi.ContactSearch(contact_threshold)
     cs.ignore = gemmi.ContactSearch.Ignore.SameAsu
     cs.twice = True
     pairs = cs.find_contacts(ns)
-    results = defaultdict(set)
+    results: dict[tuple[str, int], dict[tuple[str, int], set[int]]] = defaultdict(
+        lambda: defaultdict(set)
+    )
     for p in pairs:
         if p.partner1.residue.is_water() or p.partner2.residue.is_water():
             continue
@@ -99,7 +103,7 @@ def get_symmetry_mate_contacts(
         if i2 is None:
             i2 = 1
         c1, c2 = p.partner1.residue.subchain, p.partner2.residue.subchain
-        results[(c1, i1)].add((c2, i2))
+        results[(c1, i1)][(c2, i2)].add(p.partner1.atom.serial)
     return results
 
 

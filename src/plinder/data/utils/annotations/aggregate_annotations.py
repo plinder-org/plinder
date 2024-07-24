@@ -74,7 +74,6 @@ class System(BaseModel):
     ligand_validation: ResidueListValidation | None = None
     pocket_validation: ResidueListValidation | None = None
     pass_criteria: bool | None = None
-    crystal_contacts: dict[str, set[tuple[str, int]]] = Field(default_factory=dict)
 
     """
     This dataclass defines as system which included a protein-ligand complex
@@ -279,7 +278,9 @@ class System(BaseModel):
             "system_num_ligand_chains": len(self.ligand_chains),
             "system_has_kinase_inhibitor": self.has_kinase_inhibitor,
             "system_num_covalent_ligands": self.num_covalent_ligands,
-            "system_num_crystal_contacts": self.num_crystal_contacts,
+            "system_num_heavy_atoms": self.num_heavy_atoms,
+            "system_num_atoms_with_crystal_contacts": self.num_atoms_with_crystal_contacts,
+            "system_fraction_atoms_with_crystal_contacts": self.fraction_atoms_with_crystal_contacts,
         }
         pocket_mapping = self.get_pocket_domains(chains)
         for mapping in pocket_mapping:
@@ -312,9 +313,25 @@ class System(BaseModel):
             query.append(f"(chain='{chain}' and ({chain_query}))")
         return " or ".join(query)
 
-    @property
-    def num_crystal_contacts(self) -> int:
-        return sum(len(x) for x in self.crystal_contacts.values())
+    @cached_property
+    def num_atoms_with_crystal_contacts(self) -> int:
+        return sum(ligand.num_atoms_with_crystal_contacts for ligand in self.ligands)
+
+    @cached_property
+    def num_heavy_atoms(self) -> int | None:
+        if any(ligand.num_heavy_atoms is None for ligand in self.ligands):
+            return None
+        return sum(
+            ligand.num_heavy_atoms
+            for ligand in self.ligands
+            if ligand.num_heavy_atoms is not None
+        )
+
+    @cached_property
+    def fraction_atoms_with_crystal_contacts(self) -> float | None:
+        if self.num_heavy_atoms is None:
+            return None
+        return self.num_atoms_with_crystal_contacts / self.num_heavy_atoms
 
     def selection(self, include_waters: bool = True) -> str:
         ligand_selection = " or ".join(
@@ -428,7 +445,9 @@ class System(BaseModel):
                 and self.pocket_validation.pass_criteria(
                     thresholds.residue_list_thresholds["pocket"]
                 )
-                and self.num_crystal_contacts == 0
+                and self.fraction_atoms_with_crystal_contacts is not None
+                and self.fraction_atoms_with_crystal_contacts
+                <= thresholds.max_fraction_atoms_with_crystal_contacts
             )
         else:
             self.pass_criteria = None
@@ -575,9 +594,9 @@ class Entry(BaseModel):
     validation: EntryValidation | None = None
     pass_criteria: bool | None = None
     water_chains: list[str] = Field(default_factory=list)
-    symmetry_mate_contacts: dict[tuple[str, int], set[tuple[str, int]]] = Field(
-        default_factory=dict
-    )
+    symmetry_mate_contacts: dict[
+        tuple[str, int], dict[tuple[str, int], set[int]]
+    ] = Field(default_factory=dict)
 
     """
     This dataclass defines as system which included a protein-ligand complex
@@ -1180,17 +1199,16 @@ class Entry(BaseModel):
         cif_file: Path,
         thresholds: SystemValidationThresholds = SystemValidationThresholds(),
     ) -> None:
-        if not validation_file.exists():
-            LOG.error(f"set_validation: Validation file not found {validation_file}")
-            return
-
         if self.determination_method != "X-RAY DIFFRACTION":
             LOG.warning(
                 f"set_validation: Skipping validation for {self.pdb_id} as method is not X-RAY DIFFRACTION"
             )
             return
+        self.label_crystal_contacts()
+        if not validation_file.exists():
+            LOG.error(f"set_validation: Validation file not found {validation_file}")
+            return
         try:
-            self.label_crystal_contacts()
             doc = ValidationFactory(
                 str(validation_file), mmcif_path=str(cif_file)
             ).getValidation()
@@ -1220,25 +1238,18 @@ class Entry(BaseModel):
         Excludes neighboring residues (i.e same biounit)
         """
         for system in self.systems:
-            self.systems[system].crystal_contacts = dict()
             for ligand in self.systems[system].ligands:
-                ligand.crystal_contacts = set()
+                crystal_contacts: dict[tuple[str, int], set[int]] = defaultdict(set)
                 for residue_number in ligand.residue_numbers:
                     # get all contacts with chains in other asymmetric units
                     contacts = self.symmetry_mate_contacts.get(
-                        (ligand.asym_id, residue_number), set()
+                        (ligand.asym_id, residue_number), dict()
                     )
-                    # keep only contacts with receptor
-                    contacts = {
-                        x for x in contacts if x[0] not in self.ligand_like_chains
-                    }
-                    ligand.crystal_contacts |= contacts
-                # exclude contacts from neighboring residues in same biounit
-                ligand.crystal_contacts -= ligand.get_pocket_residues_set()
-                if len(ligand.crystal_contacts):
-                    self.systems[system].crystal_contacts[
-                        ligand.instance_chain
-                    ] = ligand.crystal_contacts
+                    for x, y in contacts.items():
+                        # keep only contacts with receptor
+                        if x[0] not in self.ligand_like_chains:
+                            crystal_contacts[x] |= y
+                ligand.set_crystal_contacts(crystal_contacts)
 
     def add_ecod(self) -> None:
         """

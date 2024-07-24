@@ -690,7 +690,7 @@ class Ligand(BaseModel):
     posebusters_result: dict[str, ty.Any] = Field(default_factory=dict)
     unique_ccd_code: str | None = None
     waters: dict[str, list[int]] = Field(default_factory=dict)
-    crystal_contacts: set[tuple[str, int]] = Field(default_factory=set)
+    crystal_contacts: dict[tuple[str, int], set[int]] = Field(default_factory=dict)
 
     """
     This dataclass defines as system which included a protein-ligand complex
@@ -1176,9 +1176,24 @@ class Ligand(BaseModel):
                 pocket_residues_set.add((chain.split(".")[1], residue_number))
         return pocket_residues_set
 
+    def set_crystal_contacts(
+        self, crystal_contacts: dict[tuple[str, int], set[int]]
+    ) -> None:
+        # exclude contacts from neighboring residues in same biounit
+        pocket_residues = self.get_pocket_residues_set()
+        self.crystal_contacts = {
+            x: y for x, y in crystal_contacts.items() if x not in pocket_residues
+        }
+
     @cached_property
-    def num_crystal_contacts(self) -> int:
-        return len(self.crystal_contacts)
+    def num_atoms_with_crystal_contacts(self) -> int:
+        return len(set.union(*self.crystal_contacts.values()))
+
+    @cached_property
+    def fraction_atoms_with_crystal_contacts(self) -> float | None:
+        if self.num_heavy_atoms is None:
+            return None
+        return self.num_atoms_with_crystal_contacts / self.num_heavy_atoms
 
     @cached_property
     def num_pocket_residues(self) -> int:
@@ -1412,7 +1427,8 @@ class Ligand(BaseModel):
             "ligand_num_neighboring_ppi_atoms_within_4A_of_gap": self.num_neighboring_ppi_atoms_within_4A_of_gap,
             "ligand_num_unresolved_heavy_atoms": self.num_unresolved_heavy_atoms,
             "ligand_is_kinase_inhibitor": self.is_kinase_inhibitor,
-            "ligand_num_crystal_contacts": self.num_crystal_contacts,
+            "ligand_num_atoms_with_crystal_contacts": self.num_atoms_with_crystal_contacts,
+            "ligand_fraction_atoms_with_crystal_contacts": self.fraction_atoms_with_crystal_contacts,
         }
         if self.posebusters_result is not None:
             for k in self.posebusters_result:

@@ -85,6 +85,7 @@ class SystemValidationThresholds(BaseModel):
             ),
         }
     )
+    max_fraction_atoms_with_crystal_contacts: float = 0.0
 
     @classmethod
     def get_iridium_criteria(cls) -> SystemValidationThresholds:
@@ -119,6 +120,7 @@ class SystemValidationThresholds(BaseModel):
                     min_percent_occupancy_over_threshold=100.0,
                 ),
             },
+            max_fraction_atoms_with_crystal_contacts=0.0,
         )
 
 
