@@ -708,8 +708,6 @@ class Entry(BaseModel):
         skip_save_systems: bool = False,
         skip_posebusters: bool = False,
         symmetry_mate_contact_threshold: float = 5.0,
-        artifact_within_entry_threshold: int = 15,
-        artifact_interacting_residue_count_threshold: int = 2,
     ) -> Entry:
         """
         Load an entry object from mmcif files
@@ -837,11 +835,6 @@ class Entry(BaseModel):
                     ligands[ligand.id] = ligand
             biounits[biounit_info.id] = biounit
         entry.set_systems(ligands)
-        # NOTE: this is done at init now
-        # entry.label_artifacts(
-        #     # within_entry_threshold=artifact_within_entry_threshold,
-        #     # interacting_residue_count_threshold=artifact_interacting_residue_count_threshold,
-        # )
         entry.label_chains()
         if save_folder is not None and not skip_save_systems:
             entry.save_systems(

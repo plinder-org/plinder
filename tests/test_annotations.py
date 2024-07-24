@@ -349,8 +349,6 @@ def test_plip_entry_binary(cif_4ci1, mock_alternative_datasets, lig_code="EF2"):
         neighboring_ligand_threshold=4.0,
         min_polymer_size=10,
         save_folder=entry_dir,
-        artifact_within_entry_threshold=15,
-        artifact_interacting_residue_count_threshold=5,
     )
 
     for system in entry.systems:
@@ -405,8 +403,6 @@ def test_plip_entry_ternary(cif_2p1q, mock_alternative_datasets, lig_code="IAC")
         neighboring_ligand_threshold=4.0,
         min_polymer_size=10,
         save_folder=entry_dir,
-        artifact_within_entry_threshold=15,
-        artifact_interacting_residue_count_threshold=5,
     )
 
     for system in entry.systems:

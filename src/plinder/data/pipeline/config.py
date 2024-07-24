@@ -187,9 +187,6 @@ class AnnotationConfig:
     neighboring_residue_threshold: float = 6.0
     neighboring_ligand_threshold: float = 4.0
     min_polymer_size: int = 10
-    artifact_within_entry_threshold: int = 0
-    artifact_interacting_residue_count_threshold: int = 15
-    # TODO-tjd: remove the two above
 
 
 """ From
@@ -198,9 +195,6 @@ OleinikovasV commented Apr 22, 2024
 
 Added updated artifacts list and curation, please, review the logic!
 
-This no longer uses these at all:
-artifact_within_entry_threshold: int = 15,
-artifact_interacting_residue_count_threshold: int = 2,
 """
 
 
