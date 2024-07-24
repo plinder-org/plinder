@@ -133,14 +133,15 @@ def transform_bindingdb_affinity_data(*, raw_affinity_path: Path) -> pd.DataFram
         "Ligand HET ID in PDB",
         "PDB ID(s) for Ligand-Target Complex",
         "Ki (nM)",
-        "IC50 (nM)",
+        # "IC50 (nM)",
         "Kd (nM)",
         "EC50 (nM)",
     ]
     df = pd.read_csv(raw_affinity_path, sep="\t", usecols=cols, low_memory=False)
 
     df["pchembl"] = (
-        df[["Ki (nM)", "IC50 (nM)", "Kd (nM)"]]
+        # df[["Ki (nM)", "IC50 (nM)", "Kd (nM)"]]
+        df[["Ki (nM)", "Kd (nM)"]]
         .apply(set, axis=1)
         .apply(lambda x: [i for i in x if str(i) != "nan"])
     )
