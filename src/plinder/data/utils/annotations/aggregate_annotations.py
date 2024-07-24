@@ -2,7 +2,6 @@
 # Distributed under the terms of the Apache License 2.0
 from __future__ import annotations
 
-import json
 import re
 import typing as ty
 from collections import Counter, defaultdict
@@ -382,7 +381,7 @@ class System(BaseModel):
         )
         save_cif_file(ent_system, info, self.id, system_folder / "system.cif")
         selection = " or ".join(f"chain='{c}'" for c in self.interacting_protein_chains)
-        if len(self.waters):
+        if include_waters and len(self.waters):
             selection += f" or {self.select_waters}"
         save_cif_file(
             ent_system.Select(selection),
@@ -394,26 +393,13 @@ class System(BaseModel):
             # TODO: move out and add a flag instead
             save_pdb_file(
                 biounit,
-                ent_system.Copy(),
+                mol.CreateEntityFromView(ent_system.Select(selection), True),
                 self.interacting_protein_chains,
-                self.ligand_chains,
-                system_folder / "system.pdb",
+                [],
+                system_folder / "receptor.pdb",
                 system_folder / "chain_mapping.json",
-                self.waters,
+                self.waters if include_waters else {},
                 system_folder / "water_mapping.json",
-            )
-            with open(system_folder / "chain_mapping.json") as f:
-                chain_mapping = json.load(f)
-            system_pdb = io.LoadPDB(str(system_folder / "system.pdb"))
-            io.SavePDB(
-                system_pdb.Select(
-                    " or ".join(
-                        f"chain='{chain_mapping[c]}'"
-                        for c in self.interacting_protein_chains
-                    )
-                    + " or chain='_'"
-                ),
-                str(system_folder / "receptor.pdb"),
             )
         except Exception as e:
             LOG.error(f"save_system: Error saving system in PDB format {self.id}: {e}")

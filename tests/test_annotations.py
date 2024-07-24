@@ -477,7 +477,6 @@ def test_water_saving(cif_2p1q, mock_alternative_datasets):
     Entry.from_cif_file(cif_2p1q, save_folder=entry_dir)
     for filename in [
         "sequences.fasta",
-        "system.pdb",
         "receptor.pdb",
         "system.cif",
         "receptor.cif",
@@ -485,8 +484,8 @@ def test_water_saving(cif_2p1q, mock_alternative_datasets):
         "water_mapping.json"
     ]:
         assert (entry_dir / system_tag / filename).exists()
-    assert (entry_dir / system_tag / "ligand_files" / f"2.E.sdf").exists()
-    ent = io.LoadPDB(str(entry_dir / system_tag / "system.pdb"))
+    assert (entry_dir / system_tag / "ligand_files" / "2.E.sdf").exists()
+    ent = io.LoadPDB(str(entry_dir / system_tag / "receptor.pdb"))
     assert len(ent.FindChain("_").residues) == 3
 
 
@@ -539,7 +538,6 @@ def test_system_saving(cif_2y4i, mock_alternative_datasets):
         assert len(chain.mappings["ECOD"])
     for filename in [
         "sequences.fasta",
-        "system.pdb",
         "receptor.pdb",
         "system.cif",
         "receptor.cif",
