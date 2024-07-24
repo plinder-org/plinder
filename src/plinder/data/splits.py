@@ -571,8 +571,13 @@ def prioritize_test_sample(
     )
     test_data = (
         test_data.sort_values(
-            ["system_has_mms", "has_apo", "has_binding_affinity", "leakage_count"],
-            ascending=[False, False, True],
+            [
+                "system_has_mms",
+                "has_apo",
+                "system_has_binding_affinity",
+                "leakage_count",
+            ],
+            ascending=[False, False, False, True],
         )
         .drop_duplicates("system_id")
         .groupby(cfg.split.cluster_column)
