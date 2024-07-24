@@ -1187,7 +1187,10 @@ class Ligand(BaseModel):
 
     @cached_property
     def num_atoms_with_crystal_contacts(self) -> int:
-        return len(set.union(*self.crystal_contacts.values()))
+        all_atoms = set()
+        for x in self.crystal_contacts.values():
+            all_atoms |= x
+        return len(all_atoms)
 
     @cached_property
     def fraction_atoms_with_crystal_contacts(self) -> float | None:
