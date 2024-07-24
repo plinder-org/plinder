@@ -775,6 +775,8 @@ def test_binding_affinity(cif_4jvn, mock_alternative_datasets):
     target_value = 7.638272164
     affinity = 0.0
     for sys in entry.systems.values():
+        if "YUG" in set(l.ccd_code for l in sys.ligands):
+            assert sys.has_binding_affinity
         for ligand in sys.ligands:
             if ligand.ccd_code == "YUG":
                 affinity = ligand.binding_affinity

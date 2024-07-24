@@ -1240,7 +1240,10 @@ class Ligand(BaseModel):
 
             data_dir = Path(IngestConfig().plinder_dir)
             BINDING_AFFINITY = get_binding_affinity(data_dir)
-        return float(BINDING_AFFINITY.get(pdbid_ligid))
+        affinity = BINDING_AFFINITY.get(pdbid_ligid)
+        if affinity is not None:
+            return float(affinity)
+        return None
 
     def identify_artifact(
         self,
@@ -1429,6 +1432,7 @@ class Ligand(BaseModel):
             "ligand_is_kinase_inhibitor": self.is_kinase_inhibitor,
             "ligand_num_atoms_with_crystal_contacts": self.num_atoms_with_crystal_contacts,
             "ligand_fraction_atoms_with_crystal_contacts": self.fraction_atoms_with_crystal_contacts,
+            "ligand_binding_affinity": self.binding_affinity,
         }
         if self.posebusters_result is not None:
             for k in self.posebusters_result:

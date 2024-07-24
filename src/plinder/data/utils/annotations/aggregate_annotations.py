@@ -192,6 +192,10 @@ class System(BaseModel):
         return any(l.is_kinase_inhibitor for l in self.ligands)
 
     @cached_property
+    def has_binding_affinity(self) -> bool:
+        return any(l.binding_affinity is not None for l in self.ligands)
+
+    @cached_property
     def pocket_residues(self) -> dict[str, dict[int, str]]:
         all_residues: dict[str, dict[int, str]] = defaultdict(dict)
         for ligand in self.ligands:
@@ -277,6 +281,7 @@ class System(BaseModel):
             ),
             "system_num_ligand_chains": len(self.ligand_chains),
             "system_has_kinase_inhibitor": self.has_kinase_inhibitor,
+            "system_has_binding_affinity": self.has_binding_affinity,
             "system_num_covalent_ligands": self.num_covalent_ligands,
             "system_num_heavy_atoms": self.num_heavy_atoms,
             "system_num_atoms_with_crystal_contacts": self.num_atoms_with_crystal_contacts,
