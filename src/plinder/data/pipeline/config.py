@@ -76,15 +76,18 @@ class FlowConfig:
     make_entries_force_update: bool = False
     make_entries_cpu: int = 4
 
-    scorer_batch_size: int = 220
     make_sub_dbs_cpu: int = 4
     make_scorers_cpu: int = 4
     download_alternative_datasets_threads: int = 10
+
     make_ligands_batch_size: int = 100
-    number_id_col: str = "number_id_by_inchikeys"
+    make_ligands_force_update: bool = False
+
+    cluster_metrics: list[str] = field(default_factory=lambda: METRICS.copy())
     cluster_thresholds: list[int] = field(default_factory=lambda: [50, 70, 95, 100])
-    skip_existing_clusters: bool = True
-    stop_on_cluster: int = 0
+    make_components_force_update: bool = True
+    make_components_stop_on_cluster: int = 0
+
     run_batch_searches_batch_size: int = 10050
     make_batch_scores_batch_size: int = 90
     split_config_dir: str = ""
@@ -219,6 +222,7 @@ class LigandConfig:
     ligand_id_split_char: str = "__"
     save_top_k_similar_ligands: int = 5000
     multiply_by: int = 100
+    number_id_col: str = "number_id_by_inchikeys"
     score_name: str = "tanimoto_similarity_max"
 
 

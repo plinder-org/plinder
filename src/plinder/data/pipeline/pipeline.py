@@ -123,7 +123,7 @@ class IngestPipeline:
     def scatter_structure_qc(self) -> list[list[str]]:
         chunks: list[list[str]] = tasks.scatter_structure_qc(
             data_dir=self.plinder_dir,
-            two_char_codes=self.cfg.scatter.two_char_codes,
+            two_char_codes=self.cfg.context.two_char_codes,
             batch_size=self.cfg.flow.download_rcsb_files_batch_size,
         )
         return chunks
@@ -137,24 +137,19 @@ class IngestPipeline:
 
     @utils.ingest_flow_control
     def scatter_make_ligands(self) -> list[list[str]]:
+        force_update = self.cfg.data.force_update or self.cfg.flow.make_ligands_force_update
         chunks: list[list[str]] = tasks.scatter_make_ligands(
             data_dir=self.plinder_dir,
-            batch_size=self.cfg.scatter.make_ligands_batch_size,
-            two_char_codes=self.cfg.scatter.two_char_codes,
-            pdb_ids=self.cfg.scatter.pdb_ids,
-            skip_existing_entries=self.cfg.scatter.skip_existing_entries,
-            skip_missing_annotations=self.cfg.scatter.skip_missing_annotations,
-            wipe_entries=self.cfg.scatter.wipe_entries,
-            wipe_annotations=self.cfg.scatter.wipe_annotations,
+            batch_size=self.cfg.flow.make_ligands_batch_size,
+            two_char_codes=self.cfg.context.two_char_codes,
+            pdb_ids=self.cfg.context.pdb_ids,
+            force_update=force_update,
         )
         return chunks
 
     @utils.ingest_flow_control
     def make_ligands(self, pdb_ids: list[str]) -> None:
-        tasks.make_ligands(
-            data_dir=self.plinder_dir,
-            pdb_ids=pdb_ids,
-        )
+        tasks.make_ligands(data_dir=self.plinder_dir, pdb_ids=pdb_ids)
 
     @utils.ingest_flow_control
     def compute_ligand_fingerprints(self) -> None:
@@ -167,8 +162,8 @@ class IngestPipeline:
     def scatter_make_ligand_scores(self) -> list[list[int]]:
         ligand_ids: list[list[int]] = tasks.scatter_make_ligand_scores(
             data_dir=self.plinder_dir,
-            batch_size=self.cfg.scatter.make_ligands_batch_size,
-            number_id_col=self.cfg.scatter.number_id_col,
+            batch_size=self.cfg.flow.make_ligands_batch_size,
+            number_id_col=self.cfg.ligand.number_id_col,
         )
         return ligand_ids
 
@@ -179,7 +174,7 @@ class IngestPipeline:
             ligand_ids=ligand_ids,
             save_top_k_similar_ligands=self.cfg.ligand.save_top_k_similar_ligands,
             multiply_by=self.cfg.ligand.multiply_by,
-            number_id_col=self.cfg.scatter.number_id_col,
+            number_id_col=self.cfg.ligand.number_id_col,
         )
 
     @utils.ingest_flow_control
@@ -190,7 +185,7 @@ class IngestPipeline:
     def scatter_make_system_archives(self) -> list[list[str]]:
         chunks: list[list[str]] = tasks.scatter_make_system_archives(
             data_dir=self.plinder_dir,
-            two_char_codes=self.cfg.scatter.two_char_codes,
+            two_char_codes=self.cfg.context.two_char_codes,
             batch_size=self.cfg.flow.download_rcsb_files_batch_size,
         )
         return chunks
@@ -213,9 +208,9 @@ class IngestPipeline:
     def scatter_run_batch_searches(self) -> list[list[str]]:
         chunks: list[list[str]] = tasks.scatter_run_batch_searches(
             data_dir=self.plinder_dir,
-            batch_size=self.cfg.scatter.run_batch_searches_batch_size,
-            two_char_codes=self.cfg.scatter.two_char_codes,
-            pdb_ids=self.cfg.scatter.pdb_ids,
+            batch_size=self.cfg.flow.run_batch_searches_batch_size,
+            two_char_codes=self.cfg.context.two_char_codes,
+            pdb_ids=self.cfg.context.pdb_ids,
         )
         return chunks
 
@@ -231,9 +226,9 @@ class IngestPipeline:
     def scatter_make_batch_scores(self) -> list[list[str]]:
         chunks: list[list[str]] = tasks.scatter_run_batch_searches(
             data_dir=self.plinder_dir,
-            batch_size=self.cfg.scatter.make_batch_scores_batch_size,
-            two_char_codes=self.cfg.scatter.two_char_codes,
-            pdb_ids=self.cfg.scatter.pdb_ids,
+            batch_size=self.cfg.flow.make_batch_scores_batch_size,
+            two_char_codes=self.cfg.context.two_char_codes,
+            pdb_ids=self.cfg.context.pdb_ids,
         )
         return chunks
 
@@ -254,8 +249,9 @@ class IngestPipeline:
         chunks: list[
             list[tuple[str, int]]
         ] = tasks.scatter_make_components_and_communities(
-            thresholds=self.cfg.scatter.cluster_thresholds,
-            stop_on_cluster=self.cfg.scatter.stop_on_cluster,
+            metrics=self.cfg.flow.cluster_metrics,
+            thresholds=self.cfg.flow.cluster_thresholds,
+            stop_on_cluster=self.cfg.flow.make_components_stop_on_cluster,
         )
         return chunks
 
@@ -263,17 +259,18 @@ class IngestPipeline:
     def make_components_and_communities(
         self, metric_thresholds: list[tuple[str, int]]
     ) -> None:
+        force_update = self.cfg.data.force_update or self.cfg.flow.make_components_force_update
         tasks.make_components_and_communities(
             data_dir=self.plinder_dir,
             metric_threshold=metric_thresholds,
-            skip_existing_clusters=self.cfg.scatter.skip_existing_clusters,
+            skip_existing_clusters=not force_update,
         )
 
     @utils.ingest_flow_control
     def scatter_make_splits(self) -> list[list[tuple[DictConfig, str]]]:
         chunks: list[list[tuple[DictConfig, str]]] = tasks.scatter_make_splits(
             data_dir=self.plinder_dir,
-            split_config_dir=self.cfg.scatter.split_config_dir,
+            split_config_dir=self.cfg.flow.split_config_dir,
         )
         return chunks
 
@@ -285,7 +282,7 @@ class IngestPipeline:
     def scatter_compute_ligand_leakage(self) -> list[list[tuple[str, str, str]]]:
         chunks: list[list[tuple[str, str, str]]] = tasks.scatter_compute_ligand_leakage(
             data_dir=self.plinder_dir,
-            test_leakage=self.cfg.scatter.test_leakage,
+            test_leakage=self.cfg.flow.test_leakage,
         )
         return chunks
 
@@ -302,7 +299,7 @@ class IngestPipeline:
             list[tuple[str, str, str]]
         ] = tasks.scatter_compute_protein_leakage(
             data_dir=self.plinder_dir,
-            test_leakage=self.cfg.scatter.test_leakage,
+            test_leakage=self.cfg.flow.test_leakage,
         )
         return chunks
 

@@ -13,6 +13,7 @@ from omegaconf import DictConfig
 
 from plinder.core.utils import gcs
 from plinder.core.utils.log import setup_logger
+from plinder.core.index.utils import load_entries
 from plinder.data import clusters, databases, leakage, splits
 from plinder.data.pipeline import io, utils
 from plinder.data.pipeline.config import METRICS
@@ -518,36 +519,24 @@ def scatter_make_ligands(
     batch_size: int,
     two_char_codes: list[str],
     pdb_ids: list[str],
-    skip_existing_entries: bool,
-    skip_missing_annotations: bool,
-    wipe_entries: bool,
-    wipe_annotations: bool,
+    force_update: bool,
 ) -> list[list[str]]:
     """ """
-    path_to_check = data_dir / "ingest"
-    LOG.info(f"scatter_make_ligands: {path_to_check} {path_to_check.exists()}")
-
     pdb_dirs = utils.get_local_contents(
         data_dir=data_dir / "ingest",
         two_char_codes=two_char_codes,
         pdb_ids=pdb_ids,
-        as_four_char_ids=True,
     )
-    LOG.info(f"scatter_make_ligands: pdb_dirs of {len(pdb_dirs)}")
-    entry_dir = data_dir / "raw_entries"
-    pdb_dirs = [
-        pdb_dir
-        for pdb_dir in pdb_dirs
-        if utils.entry_exists(
-            entry_dir=entry_dir,
-            pdb_id=pdb_dir,
-            wipe_entries=wipe_entries,
-            wipe_annotations=wipe_annotations,
-            skip_existing_entries=skip_existing_entries,
-            skip_missing_annotations=skip_missing_annotations,
-        )
-    ]
-    LOG.info(f"scatter_make_ligands: found {len(pdb_dirs)} valid entries")
+    if not force_update:
+        pdb_dirs = [
+            pdb_dir
+            for pdb_dir in pdb_dirs
+            if not utils.entry_exists(
+                entry_dir=data_dir / "raw_entries",
+                pdb_id=pdb_dir[-4:],
+            )
+        ]
+    LOG.info(f"scatter_make_ligands: found {len(pdb_dirs)} PDBs")
     return [
         pdb_dirs[pos : pos + batch_size] for pos in range(0, len(pdb_dirs), batch_size)
     ]
@@ -815,10 +804,13 @@ def collate_partitions(*, data_dir: Path, row_group_size: int = 500_000) -> None
 
 
 def scatter_make_components_and_communities(
+    *,
+    metrics: list[str],
     thresholds: list[int],
     stop_on_cluster: int,
 ) -> list[list[tuple[str, int]]]:
-    values = [[(metric, threshold)] for metric in METRICS for threshold in thresholds]
+    values = [[(metric, threshold)] for metric in metrics for threshold in thresholds]
+
     if stop_on_cluster:
         values = values[:stop_on_cluster]
     return values
