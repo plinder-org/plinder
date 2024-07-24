@@ -18,7 +18,6 @@ from plinder.core import scores
 from plinder.core.utils.log import setup_logger
 from plinder.data import clusters
 from plinder.data.databases import get_ids_in_db
-from plinder.data.pipeline.utils import remove_biounit
 
 LOG = setup_logger(__name__)
 
@@ -225,7 +224,6 @@ def prep_data_for_desired_properties(
         & (entries["system_num_ligand_chains"] <= 5)
         & (entries["entry_pdb_id"].isin(all_entries_present))
     ].reset_index(drop=True)
-    entries["system_id_no_biounit"] = entries["system_id"].map(remove_biounit)
     entries["uniqueness"] = (
         entries["system_id_no_biounit"]
         + "_"

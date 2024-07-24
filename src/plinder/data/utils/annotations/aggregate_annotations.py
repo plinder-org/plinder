@@ -143,6 +143,16 @@ class System(BaseModel):
         )
 
     @cached_property
+    def id_no_biounit(self) -> str:
+        return "__".join(
+            [
+                self.pdb_id,
+                "_".join(x.split(".")[1] for x in self.interacting_protein_chains),
+                "_".join(x.split(".")[1] for x in self.ligand_chains),
+            ]
+        )
+
+    @cached_property
     def ligand_chains(self) -> list[str]:
         return [f"{ligand.instance}.{ligand.asym_id}" for ligand in self.ligands]
 
@@ -254,6 +264,7 @@ class System(BaseModel):
     def format_system(self, chains: dict[str, Chain]) -> dict[str, ty.Any]:
         data = {
             "system_id": self.id,
+            "system_id_no_biounit": self.id_no_biounit,
             "system_pdb_id": self.pdb_id,
             "system_biounit_id": self.biounit_id,
             "system_type": self.system_type,
