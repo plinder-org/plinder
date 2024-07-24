@@ -37,32 +37,48 @@ class SplitConfig:
             GraphConfig("pocket_qcov", 50, 1),
         ]
     )
+    # how many unique congeneric IDs passing quality to consider as MMS
+    mms_unique_quality_count: int = 3
+    # what kind of cluster to use for sampling test
     test_cluster_cluster: str = "communities"
-    # metric to use for sampling representatives from each component
+    # metric to use for sampling representatives from each test cluster
     test_cluster_metric: str = "pli_qcov"
-    # threshold to use for sampling representatives from each component
+    # threshold to use for sampling representatives from each test cluster
     test_cluster_threshold: int = 50
-    # directed to use for sampling representatives from each component
+    # directed to use for sampling representatives from each test cluster
     test_cluster_directed: bool = False
+    # ?
     cluster_column: str = "cluster"
-    # max number of representatives from each community
+    # max number of representatives from each test cluster
     num_test_representatives: int = 3
     # test should not be singletons
     min_test_cluster_size: int = 5
-    # test/val should not be in too big communities or cause too many train cases to be removed
+    # test should not be in too big communities or cause too many train cases to be removed
     max_test_leakage_count: int = 300
-    mms_unique_quality_count: int = 3
+    # test should not have too few or too many interactions
+    min_max_test_pli: tuple[int, int] = (2, 50)
+    # test should not have too few or too many pocket residues
+    min_max_test_pocket: tuple[int, int] = (5, 100)
+    # fraction of systems to choose for test
     test_fraction: float = 0.01
-
+    # what kind of cluster to use for sampling val
     val_cluster_cluster: str = "components"
-    val_cluster_metric: str = "pocket_qcov"  # metric to use for splitting train and val
-    val_cluster_threshold: int = 50  # threshold to use for splitting train and val
-    val_cluster_directed: bool = False  # directed to use for splitting train and val
+    # metric to use for splitting train and val
+    val_cluster_metric: str = "pocket_qcov"
+    # threshold to use for splitting train and val
+    val_cluster_threshold: int = 50
+    # directed to use for splitting train and val
+    val_cluster_directed: bool = False
+    # max number of representatives from each val cluster
+    num_val_representatives: int = 3
+    # val should not be singletons
+    min_val_cluster_size: int = 5
+    # val should not have too few or too many interactions
+    min_max_val_pli: tuple[int, int] = (2, 50)
+    # val should not have too few or too many pocket residues
+    min_max_val_pocket: tuple[int, int] = (5, 100)
+    # fraction of systems to choose for val
     val_fraction: float = 0.01
-    min_val_cluster_size: int = 5  # val should not be singletons
-    num_val_representatives: (
-        int
-    ) = 3  # max number of val representatives from each community
 
 
 _map = {
@@ -544,7 +560,11 @@ def prioritize_test_sample(
 
     test_data = test_data[
         (test_data["leakage_count"] >= cfg.split.min_test_cluster_size)
-        & (test_data["leakage_count"] < cfg.split.max_test_leakage_count)
+        & (test_data["leakage_count"] <= cfg.split.max_test_leakage_count)
+        & (test_data["system_num_pocket_residues"] >= cfg.split.min_max_test_pocket[0])
+        & (test_data["system_num_pocket_residues"] <= cfg.split.min_max_test_pocket[1])
+        & (test_data["system_num_interactions"] >= cfg.split.min_max_test_pli[0])
+        & (test_data["system_num_interactions"] <= cfg.split.min_max_test_pli[1])
     ]
     LOG.info(
         f"found {len(set(test_data['system_id']))} test systems after removing by second pass neighbor leakage count"
@@ -633,7 +653,23 @@ def assign_split_membership(
         "split",
     ] = "removed"
 
-    train_val_systems = list(set(entries[entries["split"] == "train"]["system_id"]))
+    train_val_systems = list(
+        set(
+            entries[
+                (entries["split"] == "train")
+                & (
+                    entries["system_num_pocket_residues"]
+                    >= cfg.split.min_max_val_pocket[0]
+                )
+                & (
+                    entries["system_num_pocket_residues"]
+                    <= cfg.split.min_max_val_pocket[1]
+                )
+                & (entries["system_num_interactions"] >= cfg.split.min_max_val_pli[0])
+                & (entries["system_num_interactions"] <= cfg.split.min_max_val_pli[1])
+            ]["system_id"]
+        )
+    )
     train_val_clusters = defaultdict(list)
 
     for x in train_val_systems:
