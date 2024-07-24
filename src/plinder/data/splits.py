@@ -504,7 +504,7 @@ def prioritize_test_sample(
     specified number of potential leaky systems.
     - We are prioritizing representatives that have have:
        - high apo links
-       - high pred links
+       - has binding affinity
        - high mms links
        - low leaky count
 
@@ -551,7 +551,7 @@ def prioritize_test_sample(
     )
     test_data = (
         test_data.sort_values(
-            ["system_has_mms", "has_apo", "leakage_count"],
+            ["system_has_mms", "has_apo", "has_binding_affinity", "leakage_count"],
             ascending=[False, False, True],
         )
         .drop_duplicates("system_id")
