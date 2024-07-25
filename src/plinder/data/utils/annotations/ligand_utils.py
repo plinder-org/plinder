@@ -1193,6 +1193,10 @@ class Ligand(BaseModel):
         }
 
     @cached_property
+    def num_crystal_contacted_residues(self) -> int:
+        return len(self.crystal_contacts)
+
+    @cached_property
     def num_atoms_with_crystal_contacts(self) -> int:
         all_atoms = set()
         for x in self.crystal_contacts.values():
@@ -1442,6 +1446,7 @@ class Ligand(BaseModel):
             "ligand_is_kinase_inhibitor": self.is_kinase_inhibitor,
             "ligand_num_atoms_with_crystal_contacts": self.num_atoms_with_crystal_contacts,
             "ligand_fraction_atoms_with_crystal_contacts": self.fraction_atoms_with_crystal_contacts,
+            "ligand_num_crystal_contacted_residues": self.num_crystal_contacted_residues,
             "ligand_binding_affinity": self.binding_affinity,
         }
         if self.posebusters_result is not None:

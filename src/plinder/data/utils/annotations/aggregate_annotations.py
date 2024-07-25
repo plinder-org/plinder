@@ -289,6 +289,7 @@ class System(BaseModel):
             "system_num_heavy_atoms": self.num_heavy_atoms,
             "system_num_atoms_with_crystal_contacts": self.num_atoms_with_crystal_contacts,
             "system_fraction_atoms_with_crystal_contacts": self.fraction_atoms_with_crystal_contacts,
+            "system_num_crystal_contacted_residues": self.num_crystal_contacted_residues,
         }
         pocket_mapping = self.get_pocket_domains(chains)
         for mapping in pocket_mapping:
@@ -321,6 +322,13 @@ class System(BaseModel):
             query.append(f"(chain='{chain}' and ({chain_query}))")
         return " or ".join(query)
 
+    @cached_property
+    def num_crystal_contacted_residues(self) -> int:
+        residues = set()
+        for ligand in self.ligands:
+            residues |= set(ligand.crystal_contacts.keys())
+        return len(residues)
+    
     @cached_property
     def num_atoms_with_crystal_contacts(self) -> int:
         return sum(ligand.num_atoms_with_crystal_contacts for ligand in self.ligands)

@@ -307,7 +307,7 @@ def test_crystal_contact_detection(cif_6lu7, mock_alternative_datasets):
     df = plinder_anno.annotated_df
     assert len(df) == 2
     assert all(x == 2 for x in df["system_num_atoms_with_crystal_contacts"])
-    assert [('A', 74)] == list(plinder_anno.entry.systems["6lu7__1__1.A_2.A__1.B"].ligands[0].crystal_contacts.keys())
+    assert all(x == 1 for x in df["system_num_crystal_contacted_residues"])
 
 def test_simple_covalency_detection(cif_7gl9, mock_alternative_datasets):
     entry_dir = mock_alternative_datasets("7gl9")
