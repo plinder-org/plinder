@@ -675,6 +675,7 @@ class Ligand(BaseModel):
     num_pli_atoms_within_4A_of_gap: int | None = None
     num_pli_atoms_within_8A_of_gap: int | None = None
     num_missing_pli_interface_residues: int | None = None
+    num_resolved_heavy_atoms: int | None = None
     num_unresolved_heavy_atoms: int | None = None
     tpsa: float | None = None
     qed: float | None = None
@@ -760,6 +761,8 @@ class Ligand(BaseModel):
         Maximum distance to consider protein residues neighboring
     neighboring_ligand_threshold: float = 4.0
         Maximum distance to consider ligands neighboring
+    num_resolved_heavy_atoms: int | None = None
+        Number of heavy atoms resolved in ligand
     num_unresolved_heavy_atoms: int | None = None
         Number of heavy atoms not resolved in ligand
     is_ion: bool = False
@@ -813,11 +816,11 @@ class Ligand(BaseModel):
             )
             self.tpsa = rdMolDescriptors.CalcTPSA(rdkit_compatible_mol)
             self.qed = QED.qed(rdkit_compatible_mol)
+            self.num_resolved_heavy_atoms = get_num_resolved_heavy_atoms(self.resolved_smiles)
 
-            if self.num_heavy_atoms:
+            if self.num_heavy_atoms and self.num_resolved_heavy_atoms:
                 self.num_unresolved_heavy_atoms = (
-                    self.num_heavy_atoms
-                    - get_num_resolved_heavy_atoms(self.resolved_smiles)
+                    self.num_heavy_atoms - self.num_resolved_heavy_atoms
                 )
             # classify ligand based on above molecule
             self.classify_ligand_type(rdkit_compatible_mol)
@@ -1442,6 +1445,7 @@ class Ligand(BaseModel):
             "ligand_num_missing_neighboring_ppi_residues": self.num_missing_ppi_interface_residues,
             "ligand_num_neighboring_ppi_atoms_within_8A_of_gap": self.num_neighboring_ppi_atoms_within_8A_of_gap,
             "ligand_num_neighboring_ppi_atoms_within_4A_of_gap": self.num_neighboring_ppi_atoms_within_4A_of_gap,
+            "ligand_num_resolved_heavy_atoms": self.num_resolved_heavy_atoms,
             "ligand_num_unresolved_heavy_atoms": self.num_unresolved_heavy_atoms,
             "ligand_is_kinase_inhibitor": self.is_kinase_inhibitor,
             "ligand_num_atoms_with_crystal_contacts": self.num_atoms_with_crystal_contacts,
