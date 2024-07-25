@@ -1155,6 +1155,13 @@ class Ligand(BaseModel):
         )
 
     @cached_property
+    def num_unique_interactions(self) -> int:
+        return sum(
+            sum(len(set(i)) for i in self.interactions[chain].values())
+            for chain in self.interactions
+        )
+
+    @cached_property
     def pocket_residues(self) -> dict[str, dict[int, str]]:
         residues: dict[str, dict[int, str]] = {}
         for chain in self.neighboring_residues:

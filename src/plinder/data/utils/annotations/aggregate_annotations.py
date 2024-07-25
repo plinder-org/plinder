@@ -163,6 +163,10 @@ class System(BaseModel):
         return sum(l.num_interactions for l in self.ligands)
 
     @cached_property
+    def num_unique_interactions(self) -> int:
+        return sum(l.num_unique_interactions for l in self.ligands)
+
+    @cached_property
     def num_covalent_ligands(self) -> int:
         return sum(ligand.is_covalent for ligand in self.ligands)
 

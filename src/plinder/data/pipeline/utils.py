@@ -220,7 +220,6 @@ def get_scorer(
         source_to_full_db_file=db_sources,
         db_dir=sub_db_dir,
         scores_dir=scores_dir,
-        score_ligand_level=scorer_cfg.score_ligand_level,
         minimum_threshold=scorer_cfg.minimum_threshold,
     ), entry_ids, batch_db_dir
 
