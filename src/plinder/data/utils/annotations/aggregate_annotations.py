@@ -328,7 +328,7 @@ class System(BaseModel):
         for ligand in self.ligands:
             residues |= set(ligand.crystal_contacts.keys())
         return len(residues)
-    
+
     @cached_property
     def num_atoms_with_crystal_contacts(self) -> int:
         return sum(ligand.num_atoms_with_crystal_contacts for ligand in self.ligands)
