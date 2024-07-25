@@ -23,15 +23,15 @@ def test_foldseek_config(value, raises):
         config.FoldseekConfig(alignment_type=value)
 
 
-def test_ingest_config():
-    dc = config.IngestConfig()
-    cfg = OmegaConf.structured(config.IngestConfig())
+def test_flow_config():
+    dc = config._config.DataConfig()
+    cfg = OmegaConf.structured(config._config.DataConfig())
     assert dc.plinder_mount == cfg.plinder_mount
 
 
 def test_default_config():
     cfg = config.get_config(cached=False)
-    assert cfg.ingest.plinder_release is not None
+    assert cfg.data.plinder_release is not None
 
 
 def test_get_config_metaflow(tmp_path):
@@ -39,14 +39,14 @@ def test_get_config_metaflow(tmp_path):
     file.write_text(
         dedent(
             """
-            ingest:
+            flow:
               skip_specific_stages: foo
             """
         )
     )
     contents = dedent(
         """
-        data:
+        context:
           two_char_codes: xx
         """
     )
@@ -55,14 +55,14 @@ def test_get_config_metaflow(tmp_path):
         config_file=file.as_posix(),
         config_contents=contents,
     )
-    assert cfg.ingest.skip_specific_stages == ["foo"]
-    assert cfg.data.two_char_codes == ["xx"]
+    assert cfg.flow.skip_specific_stages == ["foo"]
+    assert cfg.context.two_char_codes == ["xx"]
 
 
 def test_get_config_comma_delimited():
     contents = dedent(
         """
-        data:
+        context:
           two_char_codes: xx,yy,zz
         """
     )
@@ -70,7 +70,7 @@ def test_get_config_comma_delimited():
         cached=False,
         config_contents=contents,
     )
-    assert cfg.data.two_char_codes == ["xx", "yy", "zz"]
+    assert cfg.context.two_char_codes == ["xx", "yy", "zz"]
 
 
 def test_get_config_cli():

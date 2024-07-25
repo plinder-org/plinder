@@ -137,13 +137,11 @@ class IngestPipeline:
 
     @utils.ingest_flow_control
     def scatter_make_ligands(self) -> list[list[str]]:
-        force_update = self.cfg.data.force_update or self.cfg.flow.make_ligands_force_update
         chunks: list[list[str]] = tasks.scatter_make_ligands(
             data_dir=self.plinder_dir,
             batch_size=self.cfg.flow.make_ligands_batch_size,
             two_char_codes=self.cfg.context.two_char_codes,
             pdb_ids=self.cfg.context.pdb_ids,
-            force_update=force_update,
         )
         return chunks
 
@@ -206,7 +204,7 @@ class IngestPipeline:
 
     @utils.ingest_flow_control
     def scatter_run_batch_searches(self) -> list[list[str]]:
-        chunks: list[list[str]] = tasks.scatter_run_batch_searches(
+        chunks: list[list[str]] = tasks.scatter_protein_scoring(
             data_dir=self.plinder_dir,
             batch_size=self.cfg.flow.run_batch_searches_batch_size,
             two_char_codes=self.cfg.context.two_char_codes,
@@ -224,7 +222,7 @@ class IngestPipeline:
 
     @utils.ingest_flow_control
     def scatter_make_batch_scores(self) -> list[list[str]]:
-        chunks: list[list[str]] = tasks.scatter_run_batch_searches(
+        chunks: list[list[str]] = tasks.scatter_protein_scoring(
             data_dir=self.plinder_dir,
             batch_size=self.cfg.flow.make_batch_scores_batch_size,
             two_char_codes=self.cfg.context.two_char_codes,

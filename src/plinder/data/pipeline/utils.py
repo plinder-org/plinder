@@ -415,6 +415,7 @@ def create_nonredundant_dataset(*, data_dir: Path) -> None:
         for path in (data_dir / "qc" / "index").glob("*"):
             dfs.append(pd.read_parquet(path))
         df = pd.concat(dfs).reset_index(drop=True)
+        (data_dir / "index").mkdir(exist_ok=True, parents=True)
         df.to_parquet(data_dir / "index" / "annotation_table.parquet", index=False)
     else:
         df = pd.read_parquet(data_dir / "index" / "annotation_table.parquet")

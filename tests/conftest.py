@@ -473,7 +473,8 @@ def raw_panther_path(test_env, raw_panther_data):
 
 @pytest.fixture
 def kinase_uniprotac():
-    return pd.read_parquet(test_asset_fp / "kinase_uniprotac.parquet")
+    df = pd.read_parquet(test_asset_fp / "kinase_uniprotac.parquet")
+    return df
 
 
 @pytest.fixture
@@ -506,19 +507,46 @@ def components_path(test_env, mini_component_cif, mini_components_pqt):
 
 
 @pytest.fixture
-def mock_alternative_datasets(
-    test_env,
-    raw_ecod_path,
-    raw_panther_path,
-    all_kinase_paths,
-    components_path,
-):
-    def inner(pdb_id: str):
-        entry_dir = test_env / "raw_entries" / pdb_id[-3:-1]
-        entry_dir.mkdir(parents=True)
-        affinity_path = test_env / "dbs" / "affinity" / "affinity.json"
-        affinity_path.parent.mkdir(parents=True, exist_ok=True)
-        affinity = """\
+def cofactors_path(test_env):
+    cofactors_path = test_env / "dbs" / "cofactors" / "cofactors.json"
+    cofactors_path.parent.mkdir(parents=True)
+    mini_cofactors = """\
+{
+    "Coenzyme A": [
+        {
+            "cofactors": [
+                "01A"
+            ],
+            "EC": [
+                "1.1.1.34"
+            ]
+        }
+    ],
+    "Orthoquinone residues (LTQ, TTQ, CTQ)": [
+        {
+            "cofactors": [
+                "0AF",
+                "TOQ",
+                "TQQ",
+                "TRQ"
+            ],
+            "EC": [
+                "1.4.99.3"
+            ]
+        }
+    ]
+}"""
+    cofactors_path.write_text(mini_cofactors)
+    with cofactors_path.open("r") as f:
+        cofactors = json.load(f)
+    return cofactors_path
+
+
+@pytest.fixture
+def affinity_path(test_env):
+    affinity_path = test_env / "dbs" / "affinity" / "affinity.json"
+    affinity_path.parent.mkdir(parents=True)
+    affinity = """\
 {
 "pchembl": {
     "4JVM_XDI": 5.3979400087,
@@ -528,35 +556,67 @@ def mock_alternative_datasets(
     "4JVQ_1ML": 6.2006594505,
     "4JVR_1MT": 8.0268721464}
 }"""
-        affinity  = json.loads(affinity)
-        with open(affinity_path, "w") as f:
-            json.dump(affinity, f)
-        ecod_path = test_env / "dbs" / "ecod" / "ecod.parquet"
-        ecod = pd.read_fwf(StringIO("""\
+    affinity  = json.loads(affinity)
+    with open(affinity_path, "w") as f:
+        json.dump(affinity, f)
+    return affinity_path
+
+
+@pytest.fixture
+def ecod_path(test_env, raw_ecod_path):
+    # TODO : combine with ecod_mini and raw_ecod_path for consistency of test data
+    ecod_path = test_env / "dbs" / "ecod" / "ecod.parquet"
+    ecod = pd.read_fwf(StringIO("""\
          pdb chain domainid          domain pdb_from pdb_to
 786775  2y4i     C  e2y4iC1  Protein kinase       37    277
 786776  2y4i     C  e2y4iC1  Protein kinase      307    381
 795072  2y4i     B  e2y4iB1  Protein kinase      653    931"""))
-        ecod.to_parquet(ecod_path, index=False)
-        panther_path = test_env / "dbs" / "panther" / "panther.parquet"
-        panther = pd.read_fwf(StringIO("""\
+    ecod.to_parquet(ecod_path, index=False)
+    return ecod_path
+
+
+@pytest.fixture
+def panther_path(test_env, raw_panther_path):
+    # TODO : combine with raw_panther_path for consistency of test data
+    panther_path = test_env / "dbs" / "panther" / "panther.parquet"
+    panther = pd.read_fwf(StringIO("""\
            uniprotac          panther                  panther_class
 3399199       K9UFQ1  PTHR43464:SF101     Chamaesiphon_minutus_CHAP6
 2534477   A0A8I6S536    PTHR15954:SF4        Cimex_lectularius_CIMLE
 514536    A0A3Q1J8D7   PTHR24248:SF25       Anabas_testudineus_ANATE
 5222120       G8BJ17  PTHR23073:SF162     Candida_parapsilosis_CANPC
 16087460      L0FTL5   PTHR13355:SF24  Echinicola_vietnamensis_ECHVK"""))
-        panther["shard"] = panther["uniprotac"].str[-1]
-        for i in range(10):
-            panther[panther["shard"] == str(i)].to_parquet(panther_path.parent / f"panther_{i}.parquet")
+    panther["shard"] = panther["uniprotac"].str[-1]
+    for i in range(10):
+        panther[panther["shard"] == str(i)].to_parquet(panther_path.parent / f"panther_{i}.parquet")
+    return panther_path
+
+
+@pytest.fixture
+def seqres_path(test_env):
+    seqres_path = test_env / "dbs" / "seqres" / "pdb_seqres.txt.gz"
+    fixture_path = test_asset_fp / "pdb_seqres.txt.gz"
+    seqres_path.parent.mkdir(parents=True)
+    seqres_path.write_bytes(fixture_path.read_bytes())
+    return seqres_path
+
+
+
+@pytest.fixture
+def mock_alternative_datasets(
+    test_env,
+    ecod_path,
+    panther_path,
+    seqres_path,
+    all_kinase_paths,
+    components_path,
+    cofactors_path,
+    affinity_path,
+):
+    def inner(pdb_id: str):
+        entry_dir = test_env / "raw_entries" / pdb_id[-3:-1]
+        entry_dir.mkdir(parents=True)
         return entry_dir
-#         kinase_path = test_env / "dbs" / "kinase" / "kinase_uniprotac.parquet"
-#         kinase_path.parent.mkdir(parents=True)
-#         kinase = pd.read_fwf(StringIO("""\
-#        structure_ID kinase species  kinase_ID   pdb alt chain  rmsd1  rmsd2                                             pocket  resolution  quality_score  missing_residues  missing_atoms ligand  ... bp_II_A_in bp_II_B_in bp_II_out  bp_II_B  bp_III  bp_IV   bp_V  name  HGNC family group kinase_class                   full_name uniprot pdbid_chainid
-# 12104          1244   KSR2   Human        507  2y4i         B  0.854  2.188  ELIGKGRFGQVYHVAIRLIAFKREVMAYRQTRENVVLFMGAAIITS...        3.46            9.4                 0              6    ATP  ...      False      False     False    False   False  False  False  KSR2  KSR2    RAF   TKL          KSR  kinase suppressor of ras 2  Q6VAB6        2y4i_B"""))
-#         kinase.to_parquet(kinase_path, index=False)
-#         return entry_dir
     return inner
 
 

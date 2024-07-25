@@ -33,7 +33,6 @@ STAGES = [
     "make_sub_dbs",
     "run_batch_searches",
     "make_batch_scores",
-    "collate_partitions",
     "make_mmp_index",
     "make_components_and_communities",
     "make_splits",
@@ -519,26 +518,26 @@ def scatter_make_ligands(
     batch_size: int,
     two_char_codes: list[str],
     pdb_ids: list[str],
-    force_update: bool,
 ) -> list[list[str]]:
     """ """
-    pdb_dirs = utils.get_local_contents(
+    pdb_ids = utils.get_local_contents(
         data_dir=data_dir / "ingest",
         two_char_codes=two_char_codes,
         pdb_ids=pdb_ids,
+        as_four_char_ids=True,
     )
-    if not force_update:
-        pdb_dirs = [
-            pdb_dir
-            for pdb_dir in pdb_dirs
-            if not utils.entry_exists(
-                entry_dir=data_dir / "raw_entries",
-                pdb_id=pdb_dir[-4:],
-            )
-        ]
-    LOG.info(f"scatter_make_ligands: found {len(pdb_dirs)} PDBs")
+    LOG.info(f"scatter_make_ligands: found {len(pdb_ids)} PDBs from ingest")
+    pdb_ids = [
+        pdb_id
+        for pdb_id in pdb_ids
+        if utils.entry_exists(
+            entry_dir=data_dir / "raw_entries",
+            pdb_id=pdb_id,
+        )
+    ]
+    LOG.info(f"scatter_make_ligands: found {len(pdb_ids)} PDBs from raw_entries")
     return [
-        pdb_dirs[pos : pos + batch_size] for pos in range(0, len(pdb_dirs), batch_size)
+        pdb_ids[pos : pos + batch_size] for pos in range(0, len(pdb_ids), batch_size)
     ]
 
 
@@ -618,7 +617,7 @@ def make_ligand_scores(
     )
 
 
-def scatter_make_scorers(
+def scatter_protein_scoring(
     *,
     data_dir: Path,
     batch_size: int,
@@ -651,71 +650,14 @@ def scatter_make_scorers(
         pdb_ids=pdb_ids,
         as_four_char_ids=True,
     )
-    # entry_dir = data_dir / "raw_entries"
-    # pdb_ids = [
-    #     pdb_id
-    #     for pdb_id in pdb_ids
-    #     if utils.entry_exists(
-    #         entry_dir=entry_dir,
-    #         pdb_id=pdb_id,
-    #         wipe_entries=False,
-    #         wipe_annotations=False,
-    #         skip_existing_entries=True,
-    #         skip_missing_annotations=True,
-    #     )
-    # ]
-    LOG.info(f"scatter_make_scorers: found {len(pdb_ids)} pdb IDs")
-    return [
-        pdb_ids[pos : pos + batch_size] for pos in range(0, len(pdb_ids), batch_size)
+    pdb_ids = [
+        pdb_id
+        for pdb_id in pdb_ids
+        if utils.entry_exists(
+            entry_dir=data_dir / "raw_entries",
+            pdb_id=pdb_id,
+        )
     ]
-
-
-def scatter_run_batch_searches(
-    *,
-    data_dir: Path,
-    batch_size: int,
-    two_char_codes: list[str],
-    pdb_ids: list[str],
-) -> list[list[str]]:
-    """
-    Split all the PDB IDs in the dataset
-    to be used in score generation.
-
-    Parameters
-    ----------
-    data_dir : Path
-        the root plinder dir
-    batch_size : int
-        how many codes to put in a chunk
-    two_char_codes : list[str], default=[]
-        only consider particular codes
-    pdb_ids : list[str], default=[]
-        only consider particular pdb IDs
-
-    Returns
-    -------
-    codes : list[list[str]]
-        list of lists of chunks of two character codes
-    """
-    pdb_ids = utils.get_local_contents(
-        data_dir=data_dir / "ingest",
-        two_char_codes=two_char_codes,
-        pdb_ids=pdb_ids,
-        as_four_char_ids=True,
-    )
-    # entry_dir = data_dir / "raw_entries"
-    # pdb_ids = [
-    #     pdb_id
-    #     for pdb_id in pdb_ids
-    #     if utils.entry_exists(
-    #         entry_dir=entry_dir,
-    #         pdb_id=pdb_id,
-    #         wipe_entries=False,
-    #         wipe_annotations=False,
-    #         skip_existing_entries=True,
-    #         skip_missing_annotations=True,
-    #     )
-    # ]
     LOG.info(f"scatter_make_scorers: found {len(pdb_ids)} pdb IDs")
     return [
         pdb_ids[pos : pos + batch_size] for pos in range(0, len(pdb_ids), batch_size)

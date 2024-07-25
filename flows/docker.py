@@ -245,6 +245,7 @@ def test_image(
     tag: str,
     push: bool = False,
     args: Optional[List[str]] = None,
+    dirty: bool = False,
 ) -> None:
     """
     Run the test service from docker compose. Optionally
@@ -259,10 +260,14 @@ def test_image(
         if True, push images to the artifact registry
     args : List[str], default=None
         the arguments to pass to the image
+    dirty : bool, default=False
+        if True, mount the current working tree
     """
     env = get_env(tag)
     docker = get_docker()
     cmd = [docker, "compose", "run", "test"]
+    if dirty:
+        cmd = cmd[:-1] + ["-v", f"{Path.cwd()}/src/plinder:/opt/conda/lib/python3.9/site-packages/plinder"] + cmd[-1:]
     if args is not None and len(args):
         cmd.extend(
             split(f'''/bin/bash -c "python -m pytest -v -n auto {' '.join(args)} && cp .coverage reports/.coverage"''')
@@ -355,6 +360,7 @@ def main(argv: Optional[List[str]] = None):
     )
     build = subs.add_parser("build", help="Build the app image")
     test = subs.add_parser("test", help="Test the app image")
+    test.add_argument("--dirty", default=False, action="store_true", help="Mount current working tree")
     run = subs.add_parser("run", help="Run the app image")
     run.add_argument("--it", default=False, action="store_true", help="Run in interactive mode")
     for sub in [build, test, run]:
