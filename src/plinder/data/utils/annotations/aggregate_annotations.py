@@ -810,7 +810,7 @@ class Entry(BaseModel):
 
         data_dir = None
         if save_folder is not None:
-            data_dir = Path(save_folder).parent.parent
+            data_dir = save_folder.parent.parent
         for chain in per_chain:
             entry.chains[chain].mappings = per_chain[chain]
         if data_dir is not None:
@@ -833,7 +833,7 @@ class Entry(BaseModel):
                 ligand_instance, ligand_asym_id = ligand_chain.split(".")
                 data_dir = None
                 if save_folder is not None:
-                    data_dir = Path(save_folder).parent.parent
+                    data_dir = save_folder.parent.parent
                 residue_numbers = [
                     residue.number.num
                     for residue in biounit.FindChain(ligand_chain).residues
@@ -1145,7 +1145,7 @@ class Entry(BaseModel):
         for system_id, system in self.iter_systems(
             max_protein_chains, max_ligand_chains
         ):
-            save_folder_system = Path(save_folder) / system.id
+            save_folder_system = save_folder / system.id
             self.systems[system_id].run_posebusters_on_system(save_folder_system)
 
     def save_systems(
@@ -1168,7 +1168,7 @@ class Entry(BaseModel):
         pd.DataFrame
         """
         for _, system in self.iter_systems(max_protein_chains, max_ligand_chains):
-            save_folder_system = Path(save_folder) / system.id
+            save_folder_system = save_folder / system.id
             system.save_system(
                 self.chain_to_seqres,
                 biounits[system.biounit_id],
