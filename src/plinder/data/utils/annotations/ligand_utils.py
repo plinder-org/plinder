@@ -816,7 +816,9 @@ class Ligand(BaseModel):
             )
             self.tpsa = rdMolDescriptors.CalcTPSA(rdkit_compatible_mol)
             self.qed = QED.qed(rdkit_compatible_mol)
-            self.num_resolved_heavy_atoms = get_num_resolved_heavy_atoms(self.resolved_smiles)
+            self.num_resolved_heavy_atoms = get_num_resolved_heavy_atoms(
+                self.resolved_smiles
+            )
 
             if self.num_heavy_atoms and self.num_resolved_heavy_atoms:
                 self.num_unresolved_heavy_atoms = (
