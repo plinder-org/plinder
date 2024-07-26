@@ -99,9 +99,9 @@ def download_cofactors(
 def download_affinity_data(
     *,
     data_dir: Path,
-    papyrus_url: str = "https://static-content.springer.com/esm/art%3A10.1186%2Fs13321-022-00672-x/MediaObjects/13321_2022_672_MOESM4_ESM.zip",
+    # papyrus_url: str = "https://static-content.springer.com/esm/art%3A10.1186%2Fs13321-022-00672-x/MediaObjects/13321_2022_672_MOESM4_ESM.zip",
     bindinddb_url: str = "https://www.bindingdb.org/bind/downloads/BindingDB_All_202401_tsv.zip",
-    moad_url: str = "http://www.bindingmoad.org/files/csv/every.csv",
+    # moad_url: str = "http://www.bindingmoad.org/files/csv/every.csv",
     force_update: bool = False,
 ) -> Any:
     """
@@ -111,12 +111,12 @@ def download_affinity_data(
     ----------
     data_dir : Path
         the root plinder dir
-    papyrus_url : str
-        papyrus url
+    # papyrus_url : str
+    #     papyrus url
     bindinddb_url : str
         bindingdb : url
-    moad_url :
-         moad url
+    # moad_url :
+    #      moad url
     force_update : bool, default=False
         if True, re-download data
 
@@ -143,12 +143,12 @@ def download_affinity_data(
     bindingdb_raw_affinity_path.parent.mkdir(parents=True, exist_ok=True)
     moad_raw_affinity_path.parent.mkdir(parents=True, exist_ok=True)
     if not affinity_path.is_file() or force_update:
-        # Download Papyrus
-        if not papyrus_raw_affinity_path.exists():
-            LOG.info(f"download_papyrus_affinity_data: {papyrus_url}")
-            resp = requests.get(papyrus_url)
-            resp.raise_for_status()
-            papyrus_raw_affinity_path.write_bytes(resp.content)
+        # # Download Papyrus
+        # if not papyrus_raw_affinity_path.exists():
+        #     LOG.info(f"download_papyrus_affinity_data: {papyrus_url}")
+        #     resp = requests.get(papyrus_url)
+        #     resp.raise_for_status()
+        #     papyrus_raw_affinity_path.write_bytes(resp.content)
 
         # Download BindingDB
         if not bindingdb_raw_affinity_path.exists():
@@ -178,15 +178,16 @@ def download_affinity_data(
         # )
         # moad_affinity_df["preference"] = 2
 
-        papyrus_affinity_df = transform.transform_papyrus_affinity_data(
-            raw_affinity_path=papyrus_raw_affinity_path
-        )
-        papyrus_affinity_df["preference"] = 3
-        all_affinity_df = pd.concat(
-            # [papyrus_affinity_df, binding_db_affinity_df, moad_affinity_df],
-            [papyrus_affinity_df, binding_db_affinity_df],
-            ignore_index=True,
-        ).drop_duplicates()
+        # papyrus_affinity_df = transform.transform_papyrus_affinity_data(
+        #     raw_affinity_path=papyrus_raw_affinity_path
+        # )
+        # papyrus_affinity_df["preference"] = 3
+        # all_affinity_df = pd.concat(
+        #     # [papyrus_affinity_df, binding_db_affinity_df, moad_affinity_df],
+        #     [papyrus_affinity_df, binding_db_affinity_df],
+        #     ignore_index=True,
+        # ).drop_duplicates()
+        all_affinity_df = binding_db_affinity_df.drop_duplicates()
         all_affinity_df = all_affinity_df[all_affinity_df["pchembl"].notna()]
 
         all_affinity_df = all_affinity_df.loc[
