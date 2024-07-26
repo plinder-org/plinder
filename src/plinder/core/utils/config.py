@@ -238,6 +238,7 @@ class DataConfig:
     manifest: str = "manifest"
     ligand_scores: str = "ligand_scores"
     ligands: str = "ligands"
+    linked_systems: str = "linked_systems"
     mmp: str = "mmp"
     scores: str = "scores"
     splits: str = "splits"

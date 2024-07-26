@@ -73,3 +73,9 @@ def test_query_ligand_similarity_empty(read_plinder_mount):
         filters=[]
     )
     assert df is None
+
+
+def test_query_links(read_plinder_mount):
+    system_id = "4dd7__1__1.A__1.B"
+    df = scores.query_links(filters=[("system_id", "==", system_id)])
+    assert len(df.index)
