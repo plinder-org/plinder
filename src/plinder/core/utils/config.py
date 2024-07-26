@@ -188,9 +188,9 @@ def _getenv_default(key: str, default: str) -> str:
 
 
 @dataclass
-class _BaseConfig:
+class DataConfig:
     """
-    A class to represent batching parameters used to scatter data pipeline tasks.
+    A class for all the data configuration.
 
     Note
     ----
@@ -212,7 +212,6 @@ class _BaseConfig:
     plinder_remote : str
         set automatically
     """
-
     plinder_release: str = field(
         default_factory=partial(_getenv_default, "PLINDER_RELEASE", "2024-06")
     )
@@ -230,25 +229,13 @@ class _BaseConfig:
     plinder_dir: str = field(init=False)
     plinder_remote: str = field(init=False)
 
-    def __post_init__(self) -> None:
-        suffix = self.plinder_release
-        if self.plinder_iteration:
-            suffix = f"{self.plinder_release}/{self.plinder_iteration}"
-        if self.plinder_mount in ["/plinder", "/", ""]:
-            self.plinder_dir = f"{self.plinder_mount}/{suffix}"
-        else:
-            self.plinder_dir = f"{self.plinder_mount}/{self.plinder_bucket}/{suffix}"
-        self.plinder_remote = f"gs://{self.plinder_bucket}/{suffix}"
-
-
-@dataclass
-class DataConfig(_BaseConfig):
     ingest: str = "ingest"
     validation: str = "validation"
     clusters: str = "clusters"
     entries: str = "entries"
     fingerprints: str = "fingerprints"
     index: str = "index"
+    manifest: str = "manifest"
     ligand_scores: str = "ligand_scores"
     ligands: str = "ligands"
     mmp: str = "mmp"
@@ -259,6 +246,15 @@ class DataConfig(_BaseConfig):
     manifest_file: str = "manifest.parquet"
     force_update: bool = False
 
+    def __post_init__(self) -> None:
+        suffix = self.plinder_release
+        if self.plinder_iteration:
+            suffix = f"{self.plinder_release}/{self.plinder_iteration}"
+        if self.plinder_mount in ["/plinder", "/", ""]:
+            self.plinder_dir = f"{self.plinder_mount}/{suffix}"
+        else:
+            self.plinder_dir = f"{self.plinder_mount}/{self.plinder_bucket}/{suffix}"
+        self.plinder_remote = f"gs://{self.plinder_bucket}/{suffix}"
 
 @dataclass
 class ContextConfig:

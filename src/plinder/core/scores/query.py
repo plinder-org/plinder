@@ -166,6 +166,7 @@ def make_query_no_schema(
     filters: list[tuple[str, str, str]] | None = None,
     nested: bool = False,
     allow_no_filters: bool = False,
+    filename: str | None = None,
 ) -> str:
     """
     Query a parquet dataset without a provided schema
@@ -182,6 +183,8 @@ def make_query_no_schema(
         if True, select all parquet files in the dataset
     allow_no_filters : bool, default=False
         if True, allow no filters
+    filename : str, default=None
+        a specific filename to read from if present
 
     Returns
     -------
@@ -205,6 +208,8 @@ def make_query_no_schema(
     glob = f"{margin}'{dataset}/*.parquet'"
     if nested:
         glob = f"{margin}'{dataset}/**/*.parquet'"
+    if filename is not None:
+        glob = f"{margin}'{dataset}/{filename}'"
     qry = dedent(
         f"""\
         SELECT {select}

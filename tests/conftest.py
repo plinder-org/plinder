@@ -634,8 +634,6 @@ def read_plinder_mount(monkeypatch):
     monkeypatch.setenv("PLINDER_RELEASE", "mount")
     monkeypatch.setenv("PLINDER_BUCKET", "plinder")
     monkeypatch.setenv("PLINDER_ITERATION", "")
-    # import sys
-    # print(config.get_config(config_args=[]), file=sys.stderr, flush=True)
     return plinder_mount
 
 
@@ -696,10 +694,6 @@ def predicted_pose_1ai5():
 
 @pytest.fixture(autouse=True)
 def failfast(monkeypatch):
-    """
-    Dev toggle which pairs with client but can't be session scoped.
-    Uncomment the patch to avoid exponential backoff if tests are stalling
-    """
     monkeypatch.setattr("plinder.data.pipeline.io.sleep", lambda x: None)
     def f(*args, **kwargs):
         class obj:

@@ -45,16 +45,10 @@ def get_plindex(
         return _PLINDEX
     cfg = cfg or get_config()
     suffix = f"{cfg.data.index}/{cfg.data.index_file}"
-    local = Path(f"{cfg.data.plinder_dir}/{suffix}")
-    if not local.exists() or cfg.data.force_update:
-        remote = f"{cfg.data.plinder_remote}/{suffix}"
-        LOG.info(f"downloading {remote}")
-        df = pd.read_parquet(remote)
-        local.parent.mkdir(exist_ok=True, parents=True)
-        df.to_parquet(local, index=False)
-        return df
-    LOG.info(f"reading {local}")
-    _PLINDEX = pd.read_parquet(local)
+    index = cpl.get_plinder_path(rel=suffix)
+    cpl.download_many(rel=suffix)
+    LOG.info(f"reading {index.fspath}")
+    _PLINDEX = pd.read_parquet(index.fspath)
     return _PLINDEX
 
 
@@ -83,9 +77,10 @@ def get_manifest(
     if _MANIFEST is not None:
         return _MANIFEST
     cfg = cfg or get_config()
-    suffix = f"{cfg.data.index}/{cfg.data.manifest_file}"
+    suffix = f"{cfg.data.manifest}/{cfg.data.manifest_file}"
     manifest = Path(f"{cfg.data.plinder_dir}/{suffix}")
     if not manifest.exists() or cfg.data.force_update:
+        manifest.parent.mkdir(exist_ok=True, parents=True)
         if plindex is None:
             plindex = get_plindex(cfg=cfg)
         plindex[["system_id", "entry_pdb_id"]].to_parquet(manifest, index=False)
