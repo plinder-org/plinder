@@ -56,7 +56,7 @@ class SplitConfig:
     # test should not be in too big communities or cause too many train cases to be removed
     max_test_leakage_count: int = 300
     # test should not have too few or too many interactions
-    min_max_test_pli: tuple[int, int] = (2, 50)
+    min_max_test_pli: tuple[int, int] = (3, 50)
     # test should not have too few or too many pocket residues
     min_max_test_pocket: tuple[int, int] = (5, 100)
     # fraction of systems to choose for test
