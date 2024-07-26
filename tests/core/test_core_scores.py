@@ -5,6 +5,11 @@ import pytest
 from plinder.core import scores
 
 
+def test_query_index(read_plinder_mount):
+    df = scores.query_index(columns=["system_id"])
+    assert len(df.index) == 10
+
+
 def test_query_protein_similarity(read_plinder_mount):
 
     df = scores.query_protein_similarity(
@@ -14,6 +19,7 @@ def test_query_protein_similarity(read_plinder_mount):
             ("similarity", ">=", 90),
         ]
     )
+    assert df is not None
     assert len(df.index)
 
 
@@ -34,6 +40,7 @@ def test_query_protein_similarity_removes_search_db(read_plinder_mount):
             ("similarity", ">=", 90),
         ],
     )
+    assert df is not None
     assert len(df.index)
 
 
@@ -56,6 +63,7 @@ def test_query_ligand_similarity(read_plinder_mount):
             ("query_ligand_id", "<", "100"),
         ]
     )
+    assert df is not None
     assert len(df.index)
 
 

@@ -122,7 +122,7 @@ class _get_config:
             dups = set(self._schema.keys()).intersection(schema.keys())
             degenerate = False
             for keys in self._packages.values():
-                if dups == keys:
+                if dups <= keys:
                     degenerate = True
                     break
             if len(dups) and not degenerate:
