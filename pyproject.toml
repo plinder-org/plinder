@@ -59,6 +59,10 @@ type = [
 dev = [
     "plinder[lint,test,type]",
 ]
+loader = [
+    "torch",
+    "atom3d",
+]
 docs = [
     "jupyter-sphinx",
     "jupyterlab_myst",

@@ -185,7 +185,12 @@ See the [`plinder.eval`](docs/eval/README.md) docs for more details.
 
 ## 📦 Dataloader
 
-Dataloader is currently under construction.
+The `plinder.data.loader` package contains a `PyTorch` dataloader for the dataset using the `atom3d` format. It is an example of using the `plinder.core` API
+to implement a dataloader, but is not the only way to use the dataset. 
+
+**Note**: The dataloader requires both `torch` and `atom3d` to be installed. You use the `[loader]` dependency block when installing `plinder`:
+
+    pip install .[loader]
 
 ## ℹ️ Filters & Annotations
 
