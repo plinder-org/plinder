@@ -1,6 +1,7 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
 import json
+from io import StringIO
 from pathlib import Path
 from typing import Any, Optional
 from zipfile import ZipFile
@@ -22,6 +23,9 @@ class PlinderSystem:
     Relies on the entry data to populate the system which can be looked
     up automatically using the from_system_id class method.
     """
+
+    def __repr__(self) -> str:
+        return f"PlinderSystem(system_id={self.system_id})"
 
     def __init__(
         self,
@@ -47,7 +51,8 @@ class PlinderSystem:
     def system_cif(self) -> str:
         with ZipFile(self.archive) as arch:
             with arch.open(f"{self.system_id}/system.cif") as f:
-                return f.read().decode("utf8")
+                return StringIO(f.read().decode("utf8"))
+                # return f.read().decode("utf8")
 
     @property
     def receptor_cif(self) -> str:
@@ -105,11 +110,9 @@ class PlinderSystem:
 
     @property
     def linked_systems(self) -> pd.DataFrame:
-        filters=[("query_system", "==", self.system_id)]
-        df = query_links(
+        return query_links(
             filters=[("query_system", "==", self.system_id)],
         )
-        return df
 
     @classmethod
     def from_system_id(

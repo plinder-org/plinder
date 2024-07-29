@@ -1,61 +1,36 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
-import json
+from __future__ import annotations
 from pathlib import Path
+from typing import Callable
 
 from torch.utils.data import Dataset
 import atom3d.util.formats as fo
+from biotite.structure.io.pdbx import PDBxFile
 
-
-@cache
-def load_apo_and_prep_data(
-    representative_apo_pred_json: Path
-) -> dict[str, dict[str, dict[str, str]]]:
-    """
-    Sample
-    {
-    "sys_id1": {
-        "apo": {"A": "apo_id1",
-                "B": "apo_id2"},
-        "pred": {"A": "pred_id1",
-            "B": "pred_id2"}
-        },
-    "sys_id2": {
-        "apo": {"A": "apo_id1",
-                "B": "apo_id2"},
-        "pred": {"A": "pred_id1",
-            "B": "pred_id2"}
-        },
-    }
-    """
-    with open(representative_apo_pred_json, "rb") as f:
-        data = json.load(f)
-    return data
-
-
-APO_PRED_PATH = Path("")
-APO_PRED_JSON = load_apo_and_prep_data(APO_PRED_PATH)
+from plinder.core.index import utils
+from plinder.core.system import system
 
 
 class PlinderDataset(Dataset):
     """
-    Creates a dataset from a list of PDB files.
-    :param file_list: path to LMDB file containing dataset
-    :type file_list: list[Union[str, Path]]
-    :param transform: transformation function for data augmentation, defaults to None
-    :type transform: function, optional
+    Creates a dataset from plinder systems
+
+
+    Parameters
+    ----------
+    transform : Callable, default=None
+        transformation function for data augmentation
     """
 
     def __init__(
         self,
-        file_list,
-        transform=None,
-        store_file_path=True,
-        load_alternative_structures=False,
+        transform: Callable | None = None,
+        store_file_path: bool = True,
+        load_alternative_structures: bool = False,
     ):
-        """constructor"""
-        self._file_list = [Path(x).absolute() for x in file_list]
-        self._num_examples = len(self._file_list)
+        self._system_ids = utils.get_manifest()["system_id"].to_list()
+        self._num_examples = len(self._system_ids)
         self._transform = transform
         self._store_file_path = store_file_path
         self.load_alternative_structures = load_alternative_structures
@@ -67,25 +42,43 @@ class PlinderDataset(Dataset):
         if not 0 <= index < self._num_examples:
             raise IndexError(index)
 
-        file_path = self._file_list[index]
-        apo_pred_path = file_path.parent
+        s = system.PlinderSystem.from_system_id(self._system_ids[index])
 
-        id = file_path.name
+        buf = s.system_cif
+        print("buf", buf)
+        r = PDBxFile.read(buf)
+        #s.system_cif)
+        print("read", r)
+
+
         item = {
-            "atoms": fo.bp_to_df(fo.read_any(file_path)),
-            "id": id,
+            "id": s.system_id,
+            "system": s,
+            "struc": r, # r.read(s.system_cif),
+            "atoms": None, # s.
             "alternative_structures": {},
         }
-        if self.load_alternative_structures:
-            item["alternative_structures"] = {
-                tag: {
-                    chain: fo.bp_to_df(fo.read_any(apo_pred_path / tag / apo_pred_name))
-                    for chain, apo_pred_name in chain_map.items
-                }
-                for tag, chain_map in APO_PRED_JSON[id].items
-            }
-        if self._store_file_path:
-            item["file_path"] = str(file_path)
-        if self._transform:
-            item = self._transform(item)
+
+
+        # file_path = self._file_list[index]
+        # apo_pred_path = file_path.parent
+        #
+        # id = file_path.name
+        # item = {
+        #     "atoms": fo.bp_to_df(fo.read_any(file_path)),
+        #     "id": id,
+        #     "alternative_structures": {},
+        # }
+        # if self.load_alternative_structures:
+        #     item["alternative_structures"] = {
+        #         tag: {
+        #             chain: fo.bp_to_df(fo.read_any(apo_pred_path / tag / apo_pred_name))
+        #             for chain, apo_pred_name in chain_map.items
+        #         }
+        #         for tag, chain_map in APO_PRED_JSON[id].items
+        #     }
+        # if self._store_file_path:
+        #     item["file_path"] = str(file_path)
+        # if self._transform:
+        #     item = self._transform(item)
         return item
