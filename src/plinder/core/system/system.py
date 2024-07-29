@@ -1,13 +1,11 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
 import json
-from io import StringIO
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 from zipfile import ZipFile
 
 import pandas as pd
-from omegaconf import DictConfig
 
 from plinder.core.index import utils
 from plinder.core.scores.links import query_links
@@ -29,107 +27,84 @@ class PlinderSystem:
 
     def __init__(
         self,
+        *,
         system_id: str,
-        entry: dict[str, Any],
+        prune: bool = True,
     ) -> None:
         self.system_id = system_id
-        entry_pdb_id = system_id.split("__")[0]
-        self._entry = entry
-        if system_id not in entry[entry_pdb_id]["systems"]:
-            raise ValueError(f"system_id={system_id} not in entry")
-        self.system = entry[entry_pdb_id]["systems"][system_id]
+        self.prune = prune
+        self._system = None
         self._archive = None
+        self._chain_mapping = None
+        self._water_mapping = None
+
+    @property
+    def system(self) -> dict[str, Any]:
+        if self._system is None:
+            entry_pdb_id = self.system_id.split("__")[0]
+            try:
+                entry = utils.load_entries(pdb_ids=[entry_pdb_id], prune=self.prune)
+                self._system = entry[entry_pdb_id]["systems"][self.system_id]
+            except KeyError:
+                raise ValueError(f"system_id={self.system_id} not found in entry={entry_pdb_id}")
+        return self._system
 
     @property
     def archive(self) -> Path:
         if self._archive is None:
             zips = get_zips_to_unpack(kind="systems", system_ids=[self.system_id])
-            [self._archive] = list(zips.keys())
+            [archive] = list(zips.keys())
+            self._archive = Path(archive.fspath).parent / archive.stem
+            if not self._archive.is_dir():
+                with ZipFile(archive) as arch:
+                    arch.extractall(path=self._archive)
         return self._archive
 
     @property
     def system_cif(self) -> str:
-        with ZipFile(self.archive) as arch:
-            with arch.open(f"{self.system_id}/system.cif") as f:
-                return StringIO(f.read().decode("utf8"))
-                # return f.read().decode("utf8")
+        return (self.archive / f"{self.system_id}/system.cif").as_posix()
 
     @property
     def receptor_cif(self) -> str:
-        with ZipFile(self.archive) as arch:
-            with arch.open(f"{self.system_id}/receptor.cif") as f:
-                return f.read().decode("utf8")
+        return (self.archive / f"{self.system_id}/receptor.cif").as_posix()
 
     @property
     def receptor_pdb(self) -> str:
-        with ZipFile(self.archive) as arch:
-            with arch.open(f"{self.system_id}/receptor.pdb") as f:
-                return f.read().decode("utf8")
+        return (self.archive / f"{self.system_id}/receptor.pdb").as_posix()
 
     @property
     def system_pdb(self) -> str:
-        with ZipFile(self.archive) as arch:
-            with arch.open(f"{self.system_id}/system.pdb") as f:
-                return f.read().decode("utf8")
+        return (self.archive / f"{self.system_id}/system.pdb").as_posix()
 
     @property
     def sequences(self) -> str:
-        with ZipFile(self.archive) as arch:
-            with arch.open(f"{self.system_id}/sequences.fasta") as f:
-                return f.read().decode("utf8")
+        return (self.archive / f"{self.system_id}/sequences.fasta").as_posix()
 
     @property
     def chain_mapping(self) -> dict[str, Any]:
-        with ZipFile(self.archive) as arch:
-            with arch.open(f"{self.system_id}/chain_mapping.json") as f:
-                return json.load(f)
+        if self._chain_mapping is None:
+            with (self.archive / f"{self.system_id}/chain_mapping.json").open() as f:
+                self._chain_mapping = json.load(f)
+        return self._chain_mapping
 
     @property
     def water_mapping(self) -> dict[str, Any]:
-        with ZipFile(self.archive) as arch:
-            with arch.open(f"{self.system_id}/water_mapping.json") as f:
-                return json.load(f)
+        if self._water_mapping is None:
+            with (self.archive / f"{self.system_id}/water_mapping.json").open() as f:
+                self._water_mapping = json.load(f)
+        return self._water_mapping
 
     @property
     def ligands(self) -> dict[str, str]:
         ligands = {}
-        with ZipFile(self.archive) as arch:
-            for name in arch.namelist():
-                if name.startswith(f"{self.system_id}/ligand_files"):
-                    ligands[Path(name).stem] = arch.read(name).decode("utf8")
+        for ligand in (self.archive / f"{self.system_id}/ligand_files/").glob("*.sdf"):
+            ligands[ligand.stem] = ligand.as_posix()
         return ligands
 
     @property
     def structures(self) -> list[str]:
-        structures = []
-        with ZipFile(self.archive) as arch:
-                for name in arch.namelist():
-                    if name.startswith(f"{self.system_id}"):
-                        structures.append(name)
-        return structures
+        return [path.as_posix() for path in (self.archive / f"{self.system_id}/").rglob("*")]
 
     @property
     def linked_systems(self) -> pd.DataFrame:
-        return query_links(
-            filters=[("query_system", "==", self.system_id)],
-        )
-
-    @classmethod
-    def from_system_id(
-        cls,
-        system_id: str,
-        cfg: Optional[DictConfig] = None,
-        prune: bool = True,
-    ) -> "PlinderSystem":
-        entry_pdb_id = system_id.split("__")[0]
-        try:
-            entry = utils.load_entries(pdb_ids=[entry_pdb_id], cfg=cfg, prune=prune)
-            system = entry[entry_pdb_id]["systems"].get(system_id)
-        except KeyError:
-            raise ValueError(f"system_id={system_id} not in entry={entry_pdb_id}")
-        if system is None:
-            raise ValueError(f"system_id={system_id} not in entry={entry_pdb_id}")
-        return cls(
-            system_id=system_id,
-            entry=entry,
-        )
+        return query_links(filters=[("query_system", "==", self.system_id)])

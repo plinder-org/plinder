@@ -67,9 +67,9 @@ def thread_pool(func: Callable[..., T], iter: Iterable[T]) -> None:
 
 @retry
 def _quiet_ping(path: GSPath) -> None:
+    LOG.debug(f"_ping: type(path)={type(path)} local={path.fspath}")
     if isinstance(path, CloudPath):
         path.fspath
-        LOG.debug(f"fspath: local={path.fspath}")
 
 
 @timeit

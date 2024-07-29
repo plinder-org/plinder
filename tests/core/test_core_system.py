@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from plinder.core import system
@@ -10,22 +12,22 @@ from plinder.core import system
     "19hc__1__1.A__1.G",
     "19hc__1__1.A__1.I",
 ])
-def test_plinder_system_from_system_id(system_id, read_plinder_mount):
-    system.PlinderSystem.from_system_id(system_id)
+def test_plinder_system(system_id, read_plinder_mount):
+    system.PlinderSystem(system_id=system_id)
 
 
 @pytest.mark.parametrize("system_id", [
     "19hc__1__1.A__1.C",
     "19hc__1__1.B__1.P",
 ])
-def test_plinder_system_from_system_id_fails(system_id, read_plinder_mount):
+def test_plinder_system_fails(system_id, read_plinder_mount):
     with pytest.raises(ValueError):
-        system.PlinderSystem.from_system_id(system_id)
+        system.PlinderSystem(system_id=system_id)
 
 
 def test_plinder_system_system_files(read_plinder_mount):
     system_id = "19hc__1__1.A_1.B__1.V_1.X_1.Y"
-    s = system.PlinderSystem.from_system_id(system_id)
+    s = system.PlinderSystem(system_id=system_id)
     assert len(s.structures) == 10
     assert len(s.ligands) == 3
     assert len(s.system_cif)
@@ -35,3 +37,10 @@ def test_plinder_system_system_files(read_plinder_mount):
     assert len(s.sequences)
     assert len(s.chain_mapping)
     assert len(s.water_mapping)
+    assert Path(s.system_cif).is_file()
+    assert Path(s.system_pdb).is_file()
+    assert Path(s.receptor_cif).is_file()
+    assert Path(s.receptor_pdb).is_file()
+    assert Path(s.sequences).is_file()
+    assert isinstance(s.chain_mapping, dict)
+    assert isinstance(s.water_mapping, dict)
