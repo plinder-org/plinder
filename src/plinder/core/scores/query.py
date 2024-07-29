@@ -85,14 +85,49 @@ def _handle_condition_by_type(val: str) -> str:
     """
     if isinstance(val, str):
         val = f"'{val}'"
+    if isinstance(val, list):
+        val = f"({str(val)[1:-1]})"
     return val
 
 
+def _handle_inner_filter(
+    filter: tuple[str, str, str], schema: pa.Schema | None,
+) -> str:
+    """
+    Convert the tuple format of a filter into a valid SQL substring
+
+    Parameters
+    ----------
+    filter : tuple[str, str, str]
+        the filter to apply
+    schema : pa.Schema | None
+        the schema to use
+
+    Returns
+    -------
+    str
+        the formatted SQL filter
+    """
+    if len(filter) != 3:
+        raise ValueError(f"filters must be (column, operator, value): got {filter}")
+    col, op, val = filter
+    if op == "in":
+        val = _handle_condition_by_type(val)
+    else:
+        if schema is not None:
+            if col not in schema.names:
+                raise ValueError(f"column={col} not in schema={schema.names}")
+            val = _handle_condition_by_schema(schema, col, val)
+        else:
+            val = _handle_condition_by_type(val)
+    return f"{col} {SQL_OP_MAP.get(op, op)} {val}"
+
+
 def _handle_filters(
-    filters: list[tuple[str, str, str]] | None,
+    filters: list[list[tuple[str, str, str]]] | list[tuple[str, str, str]] | None,
     allow_no_filters: bool,
     schema: pa.Schema | None,
-) -> list[str]:
+) -> list[list[str]] | list[str]:
     """
     Format the filters for the query
 
@@ -118,16 +153,13 @@ def _handle_filters(
             filters = []
     wheres = []
     for filter in filters:
-        if len(filter) != 3:
-            raise ValueError(f"filters must be (column, operator, value): got {filter}")
-        col, op, val = filter
-        if schema is not None:
-            if col not in schema.names:
-                raise ValueError(f"column={col} not in schema={schema.names}")
-            val = _handle_condition_by_schema(schema, col, val)
+        if isinstance(filter, list):
+            inner_wheres = []
+            for inner_filter in filter:
+                inner_wheres.append(_handle_inner_filter(inner_filter, schema))
+            wheres.append(inner_wheres)
         else:
-            val = _handle_condition_by_type(val)
-        wheres.append(f"{col} {SQL_OP_MAP.get(op, op)} {val}")
+            wheres.append(_handle_inner_filter(filter, schema))
     return wheres
 
 
@@ -199,18 +231,43 @@ def _handle_source(
 
 def _format_query(
     columns: list[str],
-    filters: list[str],
+    filters: list[list[str]] | list[str],
     source: str,
 ) -> str:
-    margin = "\n            "
+    """
+    Pretty format the SQL query for readability of the SQL
+    syntax when debugging.
+
+    Parameters
+    ----------
+    columns : list[str]
+        the columns to select
+    filters : list[list[str]] | list[str]
+        the filters to apply
+    source : str
+        the source of the data
+
+    Returns
+    -------
+    qry : str
+        the formatted SQL query
+    """
+    margin = "\n    "
     select = margin.join(["", f",{margin}".join(columns)])
-    where = margin.join(["", f" AND {margin}".join(filters)])
-    qry = dedent(
-        f"""\
-        SELECT {select}
-        FROM {source}
-        """
-    )
+    ands = []
+    union = "AND"
+    for ors in filters:
+        if isinstance(ors, list):
+            inner = f"{margin}    "
+            union = "OR"
+            ands.append("".join([f"({inner}", f"{inner}AND ".join(ors), f"{margin})"]))
+        else:
+            ands.append(f"{ors}")
+    where = margin.join(["", f"{margin}{union} {margin}".join(ands)])
+    qry = f"""\
+SELECT {select}
+FROM
+    {source}"""
     if len(filters):
         qry += f"\nWHERE {where}"
     if ";" in qry:
@@ -223,7 +280,7 @@ def make_query(
     dataset: Path,
     schema: pa.Schema | None = None,
     columns: list[str] | None = None,
-    filters: list[tuple[str, str, str]] | None = None,
+    filters: list[list[tuple[str, str, str]]] | list[tuple[str, str, str]] | None = None,
     nested: bool = False,
     allow_no_filters: bool = False,
     include_filename: bool = False,
