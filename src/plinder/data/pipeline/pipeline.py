@@ -89,7 +89,9 @@ class IngestPipeline:
 
     @utils.ingest_flow_control
     def scatter_make_entries(self) -> list[list[str]]:
-        force_update = self.cfg.data.force_update or self.cfg.flow.make_entries_force_update
+        force_update = (
+            self.cfg.data.force_update or self.cfg.flow.make_entries_force_update
+        )
         chunks: list[list[str]] = tasks.scatter_make_entries(
             data_dir=self.plinder_dir,
             batch_size=self.cfg.flow.make_entries_batch_size,
@@ -101,7 +103,9 @@ class IngestPipeline:
 
     @utils.ingest_flow_control
     def make_entries(self, pdb_dirs: list[str]) -> list[str]:
-        force_update = self.cfg.data.force_update or self.cfg.flow.make_entries_force_update
+        force_update = (
+            self.cfg.data.force_update or self.cfg.flow.make_entries_force_update
+        )
         failed: list[str] = tasks.make_entries(
             data_dir=self.plinder_dir,
             pdb_dirs=pdb_dirs,
@@ -257,7 +261,9 @@ class IngestPipeline:
     def make_components_and_communities(
         self, metric_thresholds: list[tuple[str, int]]
     ) -> None:
-        force_update = self.cfg.data.force_update or self.cfg.flow.make_components_force_update
+        force_update = (
+            self.cfg.data.force_update or self.cfg.flow.make_components_force_update
+        )
         tasks.make_components_and_communities(
             data_dir=self.plinder_dir,
             metric_threshold=metric_thresholds,

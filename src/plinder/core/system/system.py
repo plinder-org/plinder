@@ -9,8 +9,8 @@ import pandas as pd
 
 from plinder.core.index import utils
 from plinder.core.scores.links import query_links
-from plinder.core.utils.unpack import get_zips_to_unpack
 from plinder.core.utils.log import setup_logger
+from plinder.core.utils.unpack import get_zips_to_unpack
 
 LOG = setup_logger(__name__)
 
@@ -46,7 +46,9 @@ class PlinderSystem:
                 entry = utils.load_entries(pdb_ids=[entry_pdb_id], prune=self.prune)
                 self._system = entry[entry_pdb_id]["systems"][self.system_id]
             except KeyError:
-                raise ValueError(f"system_id={self.system_id} not found in entry={entry_pdb_id}")
+                raise ValueError(
+                    f"system_id={self.system_id} not found in entry={entry_pdb_id}"
+                )
         return self._system
 
     @property
@@ -103,7 +105,9 @@ class PlinderSystem:
 
     @property
     def structures(self) -> list[str]:
-        return [path.as_posix() for path in (self.archive / f"{self.system_id}/").rglob("*")]
+        return [
+            path.as_posix() for path in (self.archive / f"{self.system_id}/").rglob("*")
+        ]
 
     @property
     def linked_systems(self) -> pd.DataFrame:

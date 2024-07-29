@@ -17,8 +17,8 @@ from posebusters import PoseBusters
 from pydantic import BaseModel, Field
 from rdkit import RDLogger
 
-from plinder.core.utils.log import setup_logger
 from plinder.core.utils.config import get_config
+from plinder.core.utils.log import setup_logger
 from plinder.data.utils.annotations.get_ligand_validation import (
     EntryValidation,
     ResidueListValidation,

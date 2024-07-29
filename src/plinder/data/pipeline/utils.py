@@ -14,9 +14,9 @@ from zipfile import ZipFile
 import pandas as pd
 from omegaconf import DictConfig
 
-from plinder.core.utils.unpack import expand_config_context
 from plinder.core.utils import schemas
 from plinder.core.utils.log import setup_logger
+from plinder.core.utils.unpack import expand_config_context
 from plinder.data.utils import tanimoto
 
 if TYPE_CHECKING:
@@ -286,8 +286,14 @@ def get_local_contents(
         two_char_codes=two_char_codes,
     )
     if kind == "pdb_id":
-        return values if as_four_char_ids else [f"pdb_0000{pdb_id}" for pdb_id in values]
-    codes = values if kind == "two_char_code" and len(values) else listdir(data_dir.as_posix())
+        return (
+            values if as_four_char_ids else [f"pdb_0000{pdb_id}" for pdb_id in values]
+        )
+    codes = (
+        values
+        if kind == "two_char_code" and len(values)
+        else listdir(data_dir.as_posix())
+    )
     contents = []
     for code in codes:
         contents.extend(listdir((data_dir / code).as_posix()))

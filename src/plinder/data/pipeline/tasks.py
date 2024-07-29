@@ -1,7 +1,7 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
-from concurrent.futures import ALL_COMPLETED, ThreadPoolExecutor, wait
 import os
+from concurrent.futures import ALL_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 from shutil import rmtree
 from subprocess import check_output
@@ -13,10 +13,8 @@ from omegaconf import DictConfig
 
 from plinder.core.utils import gcs
 from plinder.core.utils.log import setup_logger
-from plinder.core.index.utils import load_entries
 from plinder.data import clusters, databases, leakage, splits
 from plinder.data.pipeline import io, utils
-from plinder.data.pipeline.config import METRICS
 from plinder.data.utils import tanimoto
 
 LOG = setup_logger(__name__)

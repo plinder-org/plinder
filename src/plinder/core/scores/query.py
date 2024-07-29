@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from textwrap import dedent
 
 import numpy as np
 import pyarrow as pa
@@ -93,7 +92,8 @@ def _handle_condition_by_type(val: str) -> str:
 
 
 def _handle_inner_filter(
-    filter: tuple[str, str, str], schema: pa.Schema | None,
+    filter: tuple[str, str, str],
+    schema: pa.Schema | None,
 ) -> str:
     """
     Convert the tuple format of a filter into a valid SQL substring
@@ -282,7 +282,9 @@ def make_query(
     dataset: Path,
     schema: pa.Schema | None = None,
     columns: list[str] | None = None,
-    filters: list[list[tuple[str, str, str]]] | list[tuple[str, str, str]] | None = None,
+    filters: list[list[tuple[str, str, str]]]
+    | list[tuple[str, str, str]]
+    | None = None,
     nested: bool = False,
     allow_no_filters: bool = False,
     include_filename: bool = False,

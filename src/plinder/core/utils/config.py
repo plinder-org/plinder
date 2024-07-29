@@ -212,6 +212,7 @@ class DataConfig:
     plinder_remote : str
         set automatically
     """
+
     plinder_release: str = field(
         default_factory=partial(_getenv_default, "PLINDER_RELEASE", "2024-06")
     )
@@ -256,6 +257,7 @@ class DataConfig:
         else:
             self.plinder_dir = f"{self.plinder_mount}/{self.plinder_bucket}/{suffix}"
         self.plinder_remote = f"gs://{self.plinder_bucket}/{suffix}"
+
 
 @dataclass
 class ContextConfig:

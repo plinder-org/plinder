@@ -61,7 +61,9 @@ def query_protein_similarity(
 
 
 @timeit
-def map_cross_similarity(df: pd.DataFrame, target_systems: set[str], metric: str) -> pd.DataFrame:
+def map_cross_similarity(
+    df: pd.DataFrame, target_systems: set[str], metric: str
+) -> pd.DataFrame:
     updated_query_systems = []
     updated_target_systems = []
     for q, t in zip(df["query_system"], df["target_system"]):

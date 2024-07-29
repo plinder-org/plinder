@@ -1,14 +1,13 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
 from __future__ import annotations
-from io import StringIO
+
 from pathlib import Path
 from typing import Callable
 
+import atom3d.util.formats as fo
 import pandas as pd
 from torch.utils.data import Dataset
-import atom3d.util.formats as fo
-from biotite.structure.io.pdbx import PDBxFile, get_structure
 
 from plinder.core.index import utils
 from plinder.core.system import system

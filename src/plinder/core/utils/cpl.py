@@ -1,12 +1,12 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
-from concurrent.futures import ThreadPoolExecutor, wait, ALL_COMPLETED
+from concurrent.futures import ALL_COMPLETED, ThreadPoolExecutor, wait
 from functools import wraps
 from pathlib import Path
 from time import sleep
 from typing import Callable, Iterable, Optional, TypeVar, Union, overload
 
-from cloudpathlib import GSPath, CloudPath, GSClient
+from cloudpathlib import CloudPath, GSClient, GSPath
 from omegaconf import DictConfig
 from tqdm.contrib.concurrent import thread_map
 

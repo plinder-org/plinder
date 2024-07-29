@@ -54,7 +54,9 @@ def query_ligand_similarity(
 
 
 @timeit
-def map_cross_similarity(df: pd.DataFrame, target_ligands: set[str], metric: str) -> pd.DataFrame:
+def map_cross_similarity(
+    df: pd.DataFrame, target_ligands: set[str], metric: str
+) -> pd.DataFrame:
     updated_query_ligands = []
     for q, t in zip(df["query_ligand_id"], df["target_ligand_id"]):
         if t in target_ligands:
@@ -72,11 +74,16 @@ def map_cross_similarity(df: pd.DataFrame, target_ligands: set[str], metric: str
     for ligand_id, group in ligands_per_system.groupby("number_id_by_inchikeys"):
         ligand_to_system[int(ligand_id)] = set(group["system_id"])
     df["query_system"] = df["query_ligand_id"].map(ligand_to_system)
-    return df.explode("query_system").rename(
-        columns={
-            "query_system": "system_id",
-        }
-    ).drop_duplicates("system_id")[["system_id", metric]].reset_index(drop=True)
+    return (
+        df.explode("query_system")
+        .rename(
+            columns={
+                "query_system": "system_id",
+            }
+        )
+        .drop_duplicates("system_id")[["system_id", metric]]
+        .reset_index(drop=True)
+    )
 
 
 @timeit
