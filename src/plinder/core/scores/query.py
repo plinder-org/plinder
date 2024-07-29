@@ -85,8 +85,10 @@ def _handle_condition_by_type(val: str) -> str:
     """
     if isinstance(val, str):
         val = f"'{val}'"
-    if isinstance(val, list):
+    elif isinstance(val, (list, set)):
         val = f"({str(val)[1:-1]})"
+    else:
+        LOG.debug(f"_handle_condition_by_type: type(val)={type(val)} not mutated")
     return val
 
 

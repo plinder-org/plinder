@@ -61,10 +61,35 @@ def query_protein_similarity(
 
 
 @timeit
+def map_cross_similarity(df: pd.DataFrame, target_systems: set[str], metric: str) -> pd.DataFrame:
+    updated_query_systems = []
+    updated_target_systems = []
+    for q, t in zip(df["query_system"], df["target_system"]):
+        if t in target_systems:
+            updated_query_systems.append(t)
+            updated_target_systems.append(q)
+        else:
+            updated_query_systems.append(q)
+            updated_target_systems.append(t)
+    df["updated_query_system"] = updated_query_systems
+    df["updated_target_system"] = updated_target_systems
+    idx = df.groupby("updated_query_system")["similarity"].idxmax()
+    return df.loc[idx][
+        ["updated_query_system", "updated_target_system", "similarity"]
+    ].rename(
+        columns={
+            "updated_query_system": "query_system",
+            "updated_target_system": "target_system",
+            "similarity": metric,
+        }
+    )
+
+
+@timeit
 def cross_similarity(
     *,
-    query_systems: list[str],
-    target_systems: list[str],
+    query_systems: set[str],
+    target_systems: set[str],
     metric: str,
 ) -> pd.DataFrame:
     cfg = get_config()
@@ -89,4 +114,4 @@ def cross_similarity(
         filters=filters,
     )
     assert query is not None
-    return sql(query).to_df()
+    return map_cross_similarity(sql(query).to_df(), target_systems, metric)

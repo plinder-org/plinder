@@ -106,7 +106,6 @@ class PlinderSystem:
     @property
     def linked_systems(self) -> pd.DataFrame:
         filters=[("query_system", "==", self.system_id)]
-        print(filters)
         df = query_links(
             filters=[("query_system", "==", self.system_id)],
         )
