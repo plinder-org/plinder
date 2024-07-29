@@ -24,9 +24,8 @@ class GetPlinderAnnotation:
         save_folder: Optional[Path] = None,
         neighboring_residue_threshold: float = 6.0,
         neighboring_ligand_threshold: float = 4.0,  # TODO: review @VO
-        min_polymer_size: int = 10,  # TODO: review @VO
-        artifact_within_entry_threshold: int = 15,  # TODO: review @VO
-        artifact_interacting_residue_count_threshold: int = 2,  # TODO: review @VO
+        min_polymer_size: int = 10,  # TODO: review @VO,
+        symmetry_mate_contact_threshold: float = 5.0,
         entry_cfg: Optional[Dict[Any, Any]] = None,
     ) -> None:
         self.mmcif_file = mmcif_file
@@ -35,10 +34,7 @@ class GetPlinderAnnotation:
         self.neighboring_residue_threshold = neighboring_residue_threshold
         self.neighboring_ligand_threshold = neighboring_ligand_threshold
         self.min_polymer_size = min_polymer_size
-        self.artifact_within_entry_threshold = artifact_within_entry_threshold
-        self.artifact_interacting_residue_count_threshold = (
-            artifact_interacting_residue_count_threshold
-        )
+        self.symmetry_mate_contact_threshold = symmetry_mate_contact_threshold
         self.entry_cfg = entry_cfg
 
     def annotate(self) -> Optional[pd.DataFrame]:
@@ -47,10 +43,7 @@ class GetPlinderAnnotation:
             neighboring_ligand_threshold=self.neighboring_ligand_threshold,
             min_polymer_size=self.min_polymer_size,
             save_folder=self.save_folder,
-            artifact_within_entry_threshold=self.artifact_within_entry_threshold,
-            artifact_interacting_residue_count_threshold=(
-                self.artifact_interacting_residue_count_threshold
-            ),
+            symmetry_mate_contact_threshold=self.symmetry_mate_contact_threshold,
         )
         if self.entry_cfg is not None:
             entry_cfg.update(self.entry_cfg)
@@ -100,7 +93,6 @@ def hpc_save_batch(
                     cif_file,
                     validation_file,
                     save_folder=save_folder,
-                    artifact_within_entry_threshold=0,
                 )
                 plinder_anno.annotate()
                 json_list.append(plinder_anno.entry)

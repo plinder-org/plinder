@@ -19,15 +19,19 @@ WATER_CHAIN_NAME = "_"
 
 def save_ligands(
     ent: mol.EntityHandle,
+    ligand_selections: list[str],
     ligand_chains: list[str],
     ligand_smiles: list[str],
     ligand_num_unresolved_heavy_atoms: list[int | None],
     output_folder: str | Path,
 ) -> None:
-    for chain, smiles, num_unresolved_heavy_atoms in zip(
-        ligand_chains, ligand_smiles, ligand_num_unresolved_heavy_atoms
+    for selection, chain, smiles, num_unresolved_heavy_atoms in zip(
+        ligand_selections,
+        ligand_chains,
+        ligand_smiles,
+        ligand_num_unresolved_heavy_atoms,
     ):
-        ligand_ost = mol.CreateEntityFromView(ent.Select(f"chain='{chain}'"), True)
+        ligand_ost = mol.CreateEntityFromView(ent.Select(selection), True)
         rdkit_mol = ligand_ost_ent_to_rdkit_mol(
             ligand_ost, smiles, num_unresolved_heavy_atoms or 0
         )

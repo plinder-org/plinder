@@ -25,7 +25,6 @@ from plinder.data import databases
 from plinder.data.pipeline.config import FoldseekConfig, MMSeqsConfig
 from plinder.data.pipeline.utils import load_entries_from_zips
 from plinder.data.utils.annotations.aggregate_annotations import Entry, System
-from plinder.data.utils.annotations.ligand_utils import Ligand
 
 LOG = setup_logger(__name__)
 
@@ -39,8 +38,6 @@ INFO_COLUMNS = (
     "target_system",
     "protein_mapping",
     "protein_mapper",
-    # "ligand_mapping",
-    # "ligand_mapper",
 )
 SCORE_NAMES = (
     "protein_lddt",
@@ -56,6 +53,7 @@ SCORE_NAMES = (
     "pocket_fident",
     "pocket_fident_qcov",
     "pli_qcov",
+    "pli_unique_qcov",
 )
 
 _ChainInstanceMapping = str
@@ -242,7 +240,6 @@ def combine_scores(
     q_t_scores: _SimilarityScoreDictType,
     q_t_mappings: dict[str, list[_ChainPairType]],
     protein_chain_mapper: str = "",
-    ligand_chain_mapper: str = "",
 ) -> dict[str, str | float]:
     def make_mapping(mapping: list[_ChainPairType]) -> str:
         return ";".join(f"{a}:{b}" if len(b) else a for a, b in mapping)
@@ -281,13 +278,6 @@ def combine_scores(
         q_t_scores_combined["protein_mapper"] = (
             "foldseek" if "lddt" in protein_chain_mapper else "mmseqs"
         )
-    # if ligand_chain_mapper != "":
-    #     q_t_scores_combined["ligand_mapping"] = make_mapping(
-    #         q_t_mappings.get(f"{ligand_chain_mapper}_weighted_sum", [])
-    #     )
-    #     q_t_scores_combined["ligand_mapper"] = (
-    #         "foldseek" if "lddt" in ligand_chain_mapper else "mmseqs"
-    #     )
     return q_t_scores_combined
 
 
@@ -309,12 +299,11 @@ class Scorer:
             "pocket_fident_qcov_mmseqs",
         ]
     )
-    score_ligand_level: bool = True
     # default minimum threshold for every metric BEFORE scaling to 100
     minimum_threshold: int = 0
     # optional custom minimum threshold for each metric BEFORE scaling to 100
     minimum_thresholds: dict[str, int] = field(
-        default_factory=lambda: {"pli_qcov": 0, "pocket_qcov": 0}
+        default_factory=lambda: {"pli_qcov": 0, "pocket_qcov": 0, "pli_unique_qcov": 0}
     )
 
     def __post_init__(self) -> None:
@@ -742,53 +731,7 @@ class Scorer:
                 scores[score] /= query_system_length
         return mappings, scores, alns, protein_chain_mapper
 
-    def get_pocket_pli_scores_pair(
-        self,
-        alns: dict[_ChainPairType, pd.DataFrame],
-        query_ligand: Ligand,
-        target_ligand: Ligand | None = None,
-    ) -> tuple[_SimilarityScoreDictType, ...]:
-        pocket_scores: dict[str, float] = defaultdict(float)
-        pli_scores: dict[str, float] = defaultdict(float)
-        for q_instance_chain, t_instance_chain in alns:
-            q_pocket = query_ligand.pocket_residues.get(q_instance_chain, {})
-            q_interactions = query_ligand.interactions_counter.get(q_instance_chain, {})
-            if target_ligand is not None:
-                t_pocket = target_ligand.pocket_residues.get(t_instance_chain, {})
-                t_interactions = target_ligand.interactions_counter.get(
-                    t_instance_chain, {}
-                )
-            aln = alns[(q_instance_chain, t_instance_chain)]
-            for source, aln_source in aln.iterrows():
-                for i in aln_source["qrnum"]:
-                    q_a, t_a, lddt, q_n, t_n = (
-                        aln_source["qaln"][i],
-                        aln_source["taln"][i],
-                        aln_source["lddtfull"].get(i, 0),
-                        aln_source["qrnum"][i],
-                        aln_source["trnum"].get(i, None),
-                    )
-                    assert q_a != "-" and t_a != "-"
-                    if q_n in q_pocket:
-                        pocket_scores[f"pocket_lddt_{source}"] += lddt
-                        if q_a == t_a:
-                            pocket_scores[f"pocket_fident_{source}"] += 1
-                        if (
-                            target_ligand is not None
-                            and t_n is not None
-                            and t_n in t_pocket
-                        ):
-                            pocket_scores[f"pocket_qcov_{source}"] += 1
-                            pocket_scores[f"pocket_lddt_qcov_{source}"] += lddt
-                            if q_a == t_a:
-                                pocket_scores[f"pocket_fident_qcov_{source}"] += 1
-                            if q_n in q_interactions and t_n in t_interactions:
-                                pli_scores[f"pli_qcov_{source}"] += sum(
-                                    (q_interactions[q_n] & t_interactions[t_n]).values()
-                                )
-        return pocket_scores, pli_scores
-
-    def get_pocket_pli_scores_system(
+    def get_pocket_pli_scores(
         self,
         alns: dict[_ChainPairType, pd.DataFrame],
         query_system: System,
@@ -801,6 +744,7 @@ class Scorer:
         pli_scores: _SimilarityScoreDictType = defaultdict(float)
         pocket_length = query_system.num_pocket_residues
         pli_length = query_system.num_interactions
+        pli_unique_length = query_system.num_unique_interactions
         for q_instance_chain, t_instance_chain in alns:
             aln = alns[(q_instance_chain, t_instance_chain)]
             q_pocket = query_system.pocket_residues.get(q_instance_chain, {})
@@ -837,125 +781,20 @@ class Scorer:
                                 pli_scores[f"pli_qcov_{source}"] += sum(
                                     (q_interactions[q_n] & t_interactions[t_n]).values()
                                 )
+                                pli_scores[f"pli_unique_qcov_{source}"] += len(
+                                    (
+                                        set(q_interactions[q_n].values())
+                                        & set(t_interactions[t_n].values())
+                                    )
+                                )
         for score in pocket_scores:
             pocket_scores[score] /= pocket_length
         for score in pli_scores:
-            pli_scores[score] /= pli_length
+            if "unique" in score:
+                pli_scores[score] /= pli_unique_length
+            else:
+                pli_scores[score] /= pli_length
         return pocket_scores, pli_scores
-
-    def get_pocket_pli_scores(
-        self,
-        alns: dict[_ChainPairType, pd.DataFrame],
-        query_system: System,
-        target_system: System,
-    ) -> tuple[
-        dict[str, list[_ChainPairType]],
-        _SimilarityScoreDictType,
-        dict[str, list[_ChainPairType]],
-        _SimilarityScoreDictType,
-        str,
-    ]:
-        pocket_scores, pli_scores = self.get_pocket_pli_scores_system(
-            alns, query_system, target_system
-        )
-        if not self.score_ligand_level:
-            return {}, pocket_scores, {}, pli_scores, ""
-        pocket_mappings: dict[str, list[_ChainPairType]] = defaultdict(list)
-        pli_mappings: dict[str, list[_ChainPairType]] = defaultdict(list)
-        max_pocket_lengths: dict[str, float] = defaultdict(float)
-        max_pli_lengths: dict[str, float] = defaultdict(float)
-        s_matrix = np.zeros((len(query_system.ligands), len(target_system.ligands)))
-        ligand_chain_mapper = ""
-
-        for i, query_ligand in enumerate(query_system.ligands):
-            pocket_length = query_ligand.num_pocket_residues
-            if pocket_length == 0:
-                continue
-            pli_length = query_ligand.num_interactions
-            for j, target_ligand in enumerate(target_system.ligands):
-                pocket_pair_scores, pli_pair_scores = self.get_pocket_pli_scores_pair(
-                    alns, query_ligand, target_ligand=target_ligand
-                )
-                pair = (
-                    query_ligand.instance_chain,
-                    target_ligand.instance_chain,
-                )
-                if ligand_chain_mapper == "":
-                    for chain_mapper in self.ligand_chain_mappers:
-                        if chain_mapper in pocket_pair_scores:
-                            ligand_chain_mapper = chain_mapper
-                            break
-                s_matrix[i, j] = pocket_pair_scores[ligand_chain_mapper] / pocket_length
-                for score in pocket_pair_scores:
-                    if (
-                        pocket_pair_scores[score]
-                        > pocket_scores[f"{score}_weighted_max"]
-                    ):
-                        pocket_scores[f"{score}_weighted_max"] = pocket_pair_scores[
-                            score
-                        ]
-                        max_pocket_lengths[f"{score}_weighted_max"] = pocket_length
-                        pocket_mappings[f"{score}_weighted_max"] = [pair]
-                    normalized_score = pocket_pair_scores[score] / pocket_length
-                    if normalized_score > pocket_scores[f"{score}_max"]:
-                        pocket_scores[f"{score}_max"] = normalized_score
-                        pocket_mappings[f"{score}_max"] = [pair]
-                for score in pli_pair_scores:
-                    if pli_length == 0:
-                        continue
-                    if pli_pair_scores[score] > pli_scores[f"{score}_weighted_max"]:
-                        pli_scores[f"{score}_weighted_max"] = pli_pair_scores[score]
-                        max_pli_lengths[f"{score}_weighted_max"] = pli_length
-                        pli_mappings[f"{score}_weighted_max"] = [pair]
-                    if pli_pair_scores[score] / pli_length > pli_scores[f"{score}_max"]:
-                        pli_scores[f"{score}_max"] = pli_pair_scores[score] / pli_length
-                        pli_mappings[f"{score}_max"] = [pair]
-        for score in pocket_scores:
-            if score.endswith("_weighted_max") and max_pocket_lengths[score] > 0:
-                pocket_scores[score] /= max_pocket_lengths[score]
-        for score in pli_scores:
-            if score.endswith("_weighted_max") and max_pli_lengths[score] > 0:
-                pli_scores[score] /= max_pli_lengths[score]
-
-        # while np.any(s_matrix):
-        #     # score variable name used to mean two different things, renaming to score_val
-        #     score_val = np.amax(s_matrix)
-        #     if score_val == 0:
-        #         break
-        #     q_idx, t_idx = np.unravel_index(np.argmax(s_matrix), s_matrix.shape)
-        #     query_ligand, target_ligand = (
-        #         query_system.ligands[q_idx],
-        #         target_system.ligands[t_idx],
-        #     )
-        #     pair = (
-        #         query_ligand.instance_chain,
-        #         target_ligand.instance_chain,
-        #     )
-        #     pocket_pair_scores, pli_pair_scores = self.get_pocket_pli_scores_pair(
-        #         alns, query_ligand, target_ligand
-        #     )
-        #     for score in pocket_pair_scores:
-        #         pocket_scores[f"{score}_weighted_sum"] += pocket_pair_scores[score]
-        #     for score in pli_pair_scores:
-        #         pli_scores[f"{score}_weighted_sum"] += pli_pair_scores[score]
-        #     pocket_mappings[f"{ligand_chain_mapper}_weighted_sum"].append(pair)
-        #     s_matrix[q_idx, :] = 0
-        #     s_matrix[:, t_idx] = 0
-        # q_system_pocket_length = query_system.num_pocket_residues
-        # q_system_pli_length = query_system.num_interactions
-        # for score in pocket_scores:
-        #     if score.endswith("_weighted_sum") and q_system_pocket_length > 0:
-        #         pocket_scores[score] /= q_system_pocket_length
-        # for score in pli_scores:
-        #     if score.endswith("_weighted_sum") and q_system_pli_length > 0:
-        #         pli_scores[score] /= q_system_pli_length
-        return (
-            pocket_mappings,
-            pocket_scores,
-            pli_mappings,
-            pli_scores,
-            ligand_chain_mapper,
-        )
 
     def get_scores(
         self, search_db: str, query_system: System, query_entry_alignments: pd.DataFrame
@@ -1017,11 +856,10 @@ class Scorer:
                     # Same as query system or No alignments for this target system
                     continue
                 q_t_scores: dict[str, float] = {}
-                q_t_mappings: dict[str, list[_ChainPairType]] = {}
 
                 # Protein score calculation
                 (
-                    protein_mappings,
+                    q_t_mappings,
                     protein_scores,
                     alns,
                     protein_chain_mapper,
@@ -1034,22 +872,16 @@ class Scorer:
                 if not len(protein_scores):
                     continue
                 q_t_scores.update(protein_scores)
-                q_t_mappings.update(protein_mappings)
 
                 # Pocket and PLI score calculation
                 (
-                    pocket_mappings,
                     pocket_scores,
-                    pli_mappings,
                     pli_scores,
-                    ligand_chain_mapper,
                 ) = self.get_pocket_pli_scores(alns, query_system, target_system)
                 q_t_scores.update(pocket_scores)
-                q_t_mappings.update(pocket_mappings)
                 q_t_scores.update(pli_scores)
-                q_t_mappings.update(pli_mappings)
                 q_t_scores_combined = combine_scores(
-                    q_t_scores, q_t_mappings, protein_chain_mapper, ligand_chain_mapper
+                    q_t_scores, q_t_mappings, protein_chain_mapper
                 )
                 q_t_scores_combined["target_system"] = target_system.id
                 q_t_scores_combined["query_system"] = query_system.id
@@ -1058,10 +890,7 @@ class Scorer:
     def _get_suffixes(self, s: str) -> list[str]:
         suffixes = ["_weighted_sum", "_weighted_max", "_max"]
         if not s.startswith("protein"):
-            if self.score_ligand_level:
-                suffixes = ["", "_weighted_max", "_max"]
-            else:
-                suffixes = [""]
+            suffixes = [""]
         return suffixes
 
     def get_column_mapr(self) -> dict[str, list[str]]:
@@ -1172,17 +1001,9 @@ class Scorer:
                     ):
                         continue
                     q_t_scores: dict[str, float] = {}
-                    q_t_mappings: dict[str, list[_ChainPairType]] = {}
-                    # Add quality measure
-                    # target_entry_resolution = self.entries[target_entry].resolution
-                    # target_entry_method = self.entries[
-                    #     target_entry
-                    # ].determination_method
-                    # q_t_scores["target_resolution"] = target_entry_resolution
-                    # q_t_scores["target_exp_method"] = target_entry_method
                     # Protein score calculation
                     (
-                        protein_mappings,
+                        q_t_mappings,
                         protein_scores,
                         alns,
                         protein_chain_mapper,
@@ -1196,43 +1017,10 @@ class Scorer:
                     if len(alns) == 0 or not len(protein_scores):
                         continue
                     q_t_scores.update(protein_scores)
-                    q_t_mappings.update(protein_mappings)
                     # Pocket score calculation
-                    q_t_scores.update(
-                        self.get_pocket_pli_scores_system(alns, query_system)[0]
-                    )
-                    if self.score_ligand_level:
-                        pocket_scores = defaultdict(list)
-                        for q_ligand in query_system.ligands:
-                            pocket_pair_scores, _ = self.get_pocket_pli_scores_pair(
-                                alns, q_ligand
-                            )
-                            for k in pocket_pair_scores:
-                                pocket_scores[k].append(
-                                    (
-                                        q_ligand.instance_chain,
-                                        pocket_pair_scores[k],
-                                        q_ligand.num_pocket_residues,
-                                    )
-                                )
-                        for k in pocket_scores:
-                            sv = sorted(
-                                pocket_scores[k],
-                                key=lambda x: x[1] / x[2],
-                                reverse=True,
-                            )
-                            # q_t_scores[f"{k}_weighted_sum"] = sum(
-                            #     x[2] * (x[1] / x[2]) for x in sv
-                            # ) / sum(x[2] for x in sv)
-                            q_t_scores[f"{k}_weighted_max"] = sv[0][1] / sv[0][2]
-                            q_t_mappings[f"{k}_weighted_max"] = [(sv[0][0], "")]
-                            max_ = sorted(
-                                pocket_scores[k], key=lambda x: x[1], reverse=True
-                            )[0]
-                            q_t_scores[f"{k}_max"] = max_[1] / max_[2]
-                            q_t_mappings[f"{k}_max"] = [(max_[0], "")]
+                    q_t_scores.update(self.get_pocket_pli_scores(alns, query_system)[0])
                     q_t_scores_combined = combine_scores(
-                        q_t_scores, q_t_mappings, protein_chain_mapper, ""
+                        q_t_scores, q_t_mappings, protein_chain_mapper
                     )
                     q_t_scores_combined["target_system"] = f"{target_entry}_{t_chain}"
                     q_t_scores_combined["query_system"] = query_system.id

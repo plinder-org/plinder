@@ -15,9 +15,13 @@ from rdkit.Chem.rdchem import Mol
 from rdkit.Chem.rdFMCS import FindMCS
 
 from plinder.core.utils.log import setup_logger
+from plinder.data.common.constants import BASE_DIR
 
 LOG = setup_logger(__name__)
 COMPOUND_LIB = conop.GetDefaultLib()
+PRD_LIB = conop.CompoundLib.Load(
+    str(BASE_DIR / "data/utils/annotations/static_files/prdcc.chemlib")
+)
 
 
 # def process_organometalics(mol: Mol) -> Mol:
@@ -283,6 +287,7 @@ def mol_assigned_bond_orders_by_template(template_mol: Mol, mol: Mol) -> Mol:
         # Assign bonds according to template smiles!
         fixed_mol = AllChem.AssignBondOrdersFromTemplate(template_mol, mol)
     except Exception as e:
+        # raise AssertionError(f"mol_assigned_bond_orders_by_template: {e}")
         # update template in case fully resovled mol but bonding is an issue
         LOG.warn(
             f"mol_assigned_bond_orders_by_template: {e} - try get_matched_template"
@@ -336,6 +341,18 @@ def ligand_ost_ent_to_rdkit_mol(
 
     if ligand_smiles:
         try:
+            rdkit_mol = make_rdkit_compatible_mol(rdkit_mol)
+            # if smiles match - no fix is needed!
+            if Chem.CanonSmiles(ligand_smiles) == Chem.CanonSmiles(
+                Chem.MolToSmiles(rdkit_mol)
+            ):
+                return rdkit_mol
+            else:
+                raise AssertionError("SMILES do not match reference - will try fixing")
+        except Exception as e:
+            LOG.warn(f"ligand_ost_ent_to_rdkit_mol: {e}")
+        try:
+            # another try via OST SDF
             # open structure output singly bonded SDF that can be adjusted with template
             # first - try to get a fixed molecule
             sdfstring_ost = io.EntityToSDFStr(ent).strip()
@@ -376,8 +393,12 @@ def ligand_ost_ent_to_rdkit_mol(
     try:
         # Fix issues if any
         rdkit_mol = make_rdkit_compatible_mol(rdkit_mol)
-        if rdkit_mol and len(Chem.MolToSmiles(rdkit_mol).split(".")) > 1:
-            raise ValueError("rdkit_mol seems fragmented: molecule is not connected!")
+        if rdkit_mol is None:
+            raise ValueError("make_rdkit_compatible_mol: returned None")
+        elif len(Chem.MolToSmiles(rdkit_mol).split(".")) > 1:
+            raise ValueError(
+                f"rdkit_mol seems fragmented: molecule is not connected: {Chem.MolToSmiles(rdkit_mol)}"
+            )
     except Exception as e:
         LOG.error(f"ligand_ost_ent_to_rdkit_mol: could not fix: {e}")
     return rdkit_mol
@@ -386,7 +407,13 @@ def ligand_ost_ent_to_rdkit_mol(
 def set_smiles_from_ligand_ost(ent: omol.EntityHandle) -> str:
     residues = [res.name for res in ent.residues]
     if len(residues) == 1:
-        mol = COMPOUND_LIB.FindCompound(residues[0])
+        resname = residues[0]
+        if resname.startswith("PRD_"):
+            # TODO - need to make this line used!
+            # currently, PRD_entries are not mapped to residue names and are more than one residue!
+            mol = PRD_LIB.FindCompound(resname)
+        else:
+            mol = COMPOUND_LIB.FindCompound(resname)
         if mol is not None:
             try:
                 rdkit_mol = Chem.MolFromSmiles(str(mol.smiles), sanitize=False)

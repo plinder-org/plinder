@@ -35,64 +35,6 @@ SIMILARITY_METRICS = (
 )
 
 
-@dataclass
-class TestCriteria:
-    max_entry_resolution: float = 3.5
-    max_entry_r: float = 0.4
-    max_entry_rfree: float = 0.45
-    max_entry_r_minus_rfree: float = 0.05
-    ligand_max_num_unresolved_heavy_atoms: int = 0
-    ligand_max_alt_count: int = 1
-    ligand_min_average_occupancy: float = 0.8
-    ligand_min_average_rscc: float = 0.8
-    ligand_max_average_rsr: float = 0.3
-    ligand_max_percent_outliers_clashes: float = 0
-    pocket_max_num_unresolved_heavy_atoms: int = 0
-    pocket_max_alt_count: int = 1
-    pocket_min_average_occupancy: float = 0.8
-    pocket_min_average_rscc: float = 0.8
-    pocket_max_average_rsr: float = 0.3
-    pocket_max_percent_outliers_clashes: int = 100
-
-
-def get_high_quality_systems(row: pd.Series, criteria: TestCriteria) -> bool:
-    if row.system_type != "holo":
-        return False
-    if row.entry_r is not None and row.system_ligand_average_rscc is not None:
-        quality = [
-            # ENTRY
-            row.entry_resolution <= criteria.max_entry_resolution,
-            row.entry_r <= criteria.max_entry_r,
-            row.entry_rfree <= criteria.max_entry_rfree,
-            row.entry_r_minus_rfree <= criteria.max_entry_r_minus_rfree,
-            # LIGAND
-            row.system_ligand_num_unresolved_heavy_atoms
-            <= row.system_num_covalent_ligands
-            + criteria.ligand_max_num_unresolved_heavy_atoms,
-            row.system_ligand_max_alt_count
-            <= criteria.ligand_max_alt_count,  # NOTE: max_alt_count is misnomer - this counts number of total conformers!
-            row.system_ligand_average_occupancy
-            >= criteria.ligand_min_average_occupancy,
-            row.system_ligand_average_rscc >= criteria.ligand_min_average_rscc,
-            row.system_ligand_average_rsr <= criteria.ligand_max_average_rsr,
-            row.system_ligand_percent_outliers_clashes
-            <= criteria.ligand_max_percent_outliers_clashes,
-            # POCKET
-            row.system_pocket_num_unresolved_heavy_atoms
-            <= criteria.pocket_max_num_unresolved_heavy_atoms,
-            row.system_pocket_max_alt_count <= criteria.pocket_max_alt_count,
-            row.system_pocket_average_occupancy
-            >= criteria.pocket_min_average_occupancy,
-            row.system_pocket_average_rscc >= criteria.pocket_min_average_rscc,
-            row.system_pocket_average_rsr <= criteria.pocket_max_average_rsr,
-            row.system_pocket_percent_outliers_clashes
-            <= criteria.pocket_max_percent_outliers_clashes,
-        ]
-        if np.logical_and.reduce(quality):
-            return True
-    return False
-
-
 def compute_ligand_max_similarities(
     data_dir: Path, left: set[str], right: set[str], metric: str, output_file: Path
 ) -> None:
@@ -375,12 +317,7 @@ class StratifiedTestSet:
                 self.split_df[self.split_df["split"] == self.test_label]["system_id"]
             )
         ]
-        df["system_num_covalent_ligands"] = df["system_id"].map(
-            df.groupby("system_id")["ligand_is_covalent"].sum()
-        )
-        criteria = TestCriteria()
-        df["quality"] = df.apply(get_high_quality_systems, criteria=criteria, axis=1)
-        quality = dict(zip(df["system_id"], df["quality"]))
+        quality = dict(zip(df["system_id"], df["system_pass_validation_criteria"]))
         missing_systems = set(
             self.max_similarities[~self.max_similarities["system_id"].isin(quality)][
                 "system_id"

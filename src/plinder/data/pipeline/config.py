@@ -8,9 +8,8 @@ from plinder.core.utils import config as _config
 
 METRICS = [
     # pli_qcov:
-    "pli_qcov_max",
-    "pli_qcov_weighted_max",
     "pli_qcov",
+    "pli_unique_qcov",
     # seq_sim:
     "protein_seqsim_qcov_max",
     "protein_seqsim_qcov_weighted_max",
@@ -35,21 +34,10 @@ METRICS = [
     "protein_qcov_weighted_max",
     "protein_qcov_weighted_sum",
     # pocket
-    "pocket_fident_qcov_max",
-    "pocket_fident_qcov_weighted_max",
     "pocket_fident_qcov",
-    "pocket_fident_max",
-    "pocket_fident_weighted_max",
     "pocket_fident",
-    "pocket_lddt_max",
-    "pocket_lddt_qcov_max",
-    "pocket_lddt_qcov_weighted_max",
     "pocket_lddt_qcov",
-    "pocket_lddt_weighted_max",
-    "pocket_lddt_max",
     "pocket_lddt",
-    "pocket_qcov_max",
-    "pocket_qcov_weighted_max",
     "pocket_qcov",
 ]
 
@@ -136,7 +124,6 @@ class GraphConfig:
 
 @dataclass
 class ScorerConfig:
-    score_ligand_level: bool = False
     wipe_partition: bool = False
     rerun_existing_batch: bool = False
     minimum_threshold: float = 0.2
@@ -187,9 +174,6 @@ class AnnotationConfig:
     neighboring_residue_threshold: float = 6.0
     neighboring_ligand_threshold: float = 4.0
     min_polymer_size: int = 10
-    artifact_within_entry_threshold: int = 0
-    artifact_interacting_residue_count_threshold: int = 15
-    # TODO-tjd: remove the two above
 
 
 """ From
@@ -198,9 +182,6 @@ OleinikovasV commented Apr 22, 2024
 
 Added updated artifacts list and curation, please, review the logic!
 
-This no longer uses these at all:
-artifact_within_entry_threshold: int = 15,
-artifact_interacting_residue_count_threshold: int = 2,
 """
 
 

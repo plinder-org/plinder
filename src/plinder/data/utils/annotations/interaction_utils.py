@@ -7,6 +7,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
+import gemmi
 import networkx as nx
 import numpy as np
 from biotite.structure.io.pdbx import PDBxFile
@@ -73,6 +74,37 @@ def read_mmcif_file(mmcif_filename: Path) -> PDBxFile:
     else:
         pdbx_file = PDBxFile.read(mmcif_filename)
     return pdbx_file
+
+
+def get_symmetry_mate_contacts(
+    mmcif_filename: Path, contact_threshold: float = 5.0
+) -> dict[tuple[str, int], dict[tuple[str, int], set[int]]]:
+    """
+    Get all contacts within a given threshold between residues which are not in the same asymmetric unit (symmetry mates)
+    """
+    cif = gemmi.read_structure(mmcif_filename.__str__(), merge_chain_parts=False)
+    cif.setup_entities()
+    ns = gemmi.NeighborSearch(cif[0], cif.cell, contact_threshold).populate(
+        include_h=False
+    )
+    cs = gemmi.ContactSearch(contact_threshold)
+    cs.ignore = gemmi.ContactSearch.Ignore.SameAsu
+    cs.twice = True
+    pairs = cs.find_contacts(ns)
+    results: dict[tuple[str, int], dict[tuple[str, int], set[int]]] = defaultdict(
+        lambda: defaultdict(set)
+    )
+    for p in pairs:
+        if p.partner1.residue.is_water() or p.partner2.residue.is_water():
+            continue
+        i1, i2 = p.partner1.residue.label_seq, p.partner2.residue.label_seq
+        if i1 is None:
+            i1 = 1
+        if i2 is None:
+            i2 = 1
+        c1, c2 = p.partner1.residue.subchain, p.partner2.residue.subchain
+        results[(c1, i1)][(c2, i2)].add(p.partner1.atom.serial)
+    return results
 
 
 def get_covalent_connections(data: DataContainer) -> dict[str, list[dict[str, str]]]:
@@ -286,10 +318,9 @@ def pdbize(
 
 
 def run_plip_on_split_structure(
-    entry_pdb_id: str,
     biounit: mol.EntityHandle,
+    biounit_selection: mol.EntityHandle,
     ligand_chain: str,
-    plip_threshold: float = 10,
 ) -> tuple[PLInteraction, dict[str, str]] | None:
     """Split structure into small PLI complex by ligand
 
@@ -299,14 +330,12 @@ def run_plip_on_split_structure(
 
     Parameters
     ----------
-    entry_pdb_id : str
-        pdb entry
     biounit : mol.EntityHandle
         biounit
-    ligand_chain : int
+    biounit_selection : mol.EntityHandle
+        selection in biounit of threshold around ligand
+    ligand_chain: str
         {instance}.{chain} of ligand
-    plip_threshold: int = 10
-        distance from ligand chain for atoms to be included in plip calculations
 
     Returns
     -------
@@ -316,16 +345,7 @@ def run_plip_on_split_structure(
     from plip.basic import config
 
     config.biolip_list = []
-    split_structure, chain_mapping = pdbize(
-        biounit,
-        mol.CreateEntityFromView(
-            biounit.Select(
-                f"{plip_threshold} <> [cname='{ligand_chain}']",
-                mol.QueryFlag.MATCH_RESIDUES,
-            ),
-            True,
-        ),
-    )
+    split_structure, chain_mapping = pdbize(biounit, biounit_selection)
     ligand_plip_chain = chain_mapping[ligand_chain]
     config.PEPTIDES = (
         [ligand_plip_chain] if biounit.FindChain(ligand_chain).is_polymer else []
@@ -337,7 +357,7 @@ def run_plip_on_split_structure(
     ligand_list = [l for l in complex_obj.ligands if l.chain == ligand_plip_chain]
     if not len(ligand_list):
         log.warning(
-            f"Could not find ligand at chain {ligand_plip_chain}, originally {ligand_chain} in {entry_pdb_id}"
+            f"Could not find ligand at chain {ligand_plip_chain}, originally {ligand_chain}"  # in {entry_pdb_id}"
         )
         return None
     ligand = ligand_list[0]
@@ -347,16 +367,19 @@ def run_plip_on_split_structure(
     return interactions, chain_mapping
 
 
-def get_hash(
+def get_plip_hash(
     interactions: PLInteraction,
+    chain: str,
     plip_chain_mapping: dict[str, str],
 ) -> tuple[dict[str, dict[int, list[str]]], set[(tuple[str, int])]]:
     """Get fingerprint hash from plip interaction object
 
     Parameters
     ----------
-    intercation : PLInteraction
+    interactions : PLInteraction
         plip interaction object for a given ligand
+    chain: str
+        ligand chain
     plip_chain_mapping : Dict[str, str]
         chain mapping from plip chain ID to instance.asym ID
 
@@ -434,6 +457,8 @@ def get_hash(
                 plip_chain_mapping[int_obj.reschain],
                 int(int_obj.resnr),
             )
+            if instance_chain == chain:
+                continue
             if instance_chain not in interaction_hashes:
                 interaction_hashes[instance_chain] = dict()
             if resnr not in interaction_hashes[instance_chain]:

@@ -58,7 +58,7 @@ def superpose_to_system(
     Parameters
     ----------
     system_mol : mol.EntityHandle
-        system.cif loaded into an EntityHandle
+        receptor.cif loaded into an EntityHandle
     target_cif_file : Path
         Path to the target asymmetric unit cif file
     save_folder : Path
@@ -228,7 +228,7 @@ def get_cif_file(data_dir: Path, search_db: str, system: str) -> Path:
             / f"AF-{system.split('_')[0]}-F1-model_v4.cif"
         )
     elif search_db == "holo":
-        return data_dir / "raw_entries" / system[1:3] / system / "system.cif"
+        return data_dir / "raw_entries" / system[1:3] / system / "receptor.cif"
     else:
         raise ValueError("search_db much be apo, holo or pred")
 

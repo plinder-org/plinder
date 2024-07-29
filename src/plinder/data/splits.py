@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Any
 
 import networkit as nk
-import numpy as np
 import pandas as pd
 from omegaconf import DictConfig, ListConfig, OmegaConf
 from tqdm import tqdm
@@ -19,29 +18,8 @@ from plinder.core import scores
 from plinder.core.utils.log import setup_logger
 from plinder.data import clusters
 from plinder.data.databases import get_ids_in_db
-from plinder.data.pipeline.utils import remove_biounit
 
 LOG = setup_logger(__name__)
-
-
-@dataclass
-class TestCriteria:
-    max_entry_resolution: float = 3.5
-    max_entry_r: float = 0.4
-    max_entry_rfree: float = 0.45
-    max_entry_r_minus_rfree: float = 0.05
-    ligand_max_num_unresolved_heavy_atoms: int = 0
-    ligand_max_alt_count: int = 1
-    ligand_min_average_occupancy: float = 0.8
-    ligand_min_average_rscc: float = 0.8
-    ligand_max_average_rsr: float = 0.3
-    ligand_max_percent_outliers_clashes: float = 0
-    pocket_max_num_unresolved_heavy_atoms: int = 0
-    pocket_max_alt_count: int = 1
-    pocket_min_average_occupancy: float = 0.8
-    pocket_min_average_rscc: float = 0.8
-    pocket_max_average_rsr: float = 0.3
-    pocket_max_percent_outliers_clashes: int = 100
 
 
 @dataclass
@@ -53,43 +31,57 @@ class GraphConfig:
 
 @dataclass
 class SplitConfig:
-    proto_test_criteria: TestCriteria = field(default_factory=lambda: TestCriteria())
     graph_configs: list[GraphConfig] = field(
         default_factory=lambda: [
             GraphConfig("pli_qcov", 30, 1),
             GraphConfig("pocket_qcov", 50, 1),
         ]
     )
+    # how many unique congeneric IDs passing quality to consider as MMS
+    mms_unique_quality_count: int = 3
+    # what kind of cluster to use for sampling test
     test_cluster_cluster: str = "communities"
-    # metric to use for sampling representatives from each component
+    # metric to use for sampling representatives from each test cluster
     test_cluster_metric: str = "pli_qcov"
-    # threshold to use for sampling representatives from each component
+    # threshold to use for sampling representatives from each test cluster
     test_cluster_threshold: int = 50
-    # directed to use for sampling representatives from each component
+    # directed to use for sampling representatives from each test cluster
     test_cluster_directed: bool = False
+    # ?
     cluster_column: str = "cluster"
-    # max number of representatives from each community
+    # max number of representatives from each test cluster
     num_test_representatives: int = 3
     # test should not be singletons
     min_test_cluster_size: int = 5
-    # test/val should not be in too big communities or cause too many train cases to be removed
+    # test should not be in too big communities or cause too many train cases to be removed
     max_test_leakage_count: int = 300
-    mms_unique_quality_count: int = 3
+    # test should not have too few or too many interactions
+    min_max_test_pli: tuple[int, int] = (3, 50)
+    # test should not have too few or too many pocket residues
+    min_max_test_pocket: tuple[int, int] = (5, 100)
+    # fraction of systems to choose for test
     test_fraction: float = 0.01
-
+    # what kind of cluster to use for sampling val
     val_cluster_cluster: str = "components"
-    val_cluster_metric: str = "pocket_qcov"  # metric to use for splitting train and val
-    val_cluster_threshold: int = 50  # threshold to use for splitting train and val
-    val_cluster_directed: bool = False  # directed to use for splitting train and val
+    # metric to use for splitting train and val
+    val_cluster_metric: str = "pocket_qcov"
+    # threshold to use for splitting train and val
+    val_cluster_threshold: int = 50
+    # directed to use for splitting train and val
+    val_cluster_directed: bool = False
+    # max number of representatives from each val cluster
+    num_val_representatives: int = 3
+    # val should not be singletons
+    min_val_cluster_size: int = 5
+    # val should not have too few or too many interactions
+    min_max_val_pli: tuple[int, int] = (2, 50)
+    # val should not have too few or too many pocket residues
+    min_max_val_pocket: tuple[int, int] = (5, 100)
+    # fraction of systems to choose for val
     val_fraction: float = 0.01
-    min_val_cluster_size: int = 5  # val should not be singletons
-    num_val_representatives: (
-        int
-    ) = 3  # max number of val representatives from each community
 
 
 _map = {
-    "test": TestCriteria,
     "split": SplitConfig,
 }
 
@@ -142,7 +134,6 @@ def get_default_config() -> DictConfig:
     default = DictConfig(
         OmegaConf.merge(
             {
-                "test": OmegaConf.structured(TestCriteria()),
                 "split": OmegaConf.structured(SplitConfig()),
             }
         )
@@ -155,44 +146,6 @@ def get_config(config_contents: str) -> DictConfig:
     from_file = DictConfig(OmegaConf.load(StringIO(config_contents)))
     cfg = OmegaConf.merge(default, from_file)
     return DictConfig({str(k): _map[str(k)](**v) for k, v in cfg.items()})
-
-
-def get_high_quality_systems(row: pd.Series, criteria: TestCriteria) -> bool:
-    if row.system_type != "holo":
-        return False
-    if row.entry_r is not None and row.system_ligand_average_rscc is not None:
-        quality = [
-            # ENTRY
-            row.entry_resolution <= criteria.max_entry_resolution,
-            row.entry_r <= criteria.max_entry_r,
-            row.entry_rfree <= criteria.max_entry_rfree,
-            row.entry_r_minus_rfree <= criteria.max_entry_r_minus_rfree,
-            # LIGAND
-            row.system_ligand_num_unresolved_heavy_atoms
-            <= row.system_num_covalent_ligands
-            + criteria.ligand_max_num_unresolved_heavy_atoms,
-            row.system_ligand_max_alt_count
-            <= criteria.ligand_max_alt_count,  # NOTE: max_alt_count is misnomer - this counts number of total conformers!
-            row.system_ligand_average_occupancy
-            >= criteria.ligand_min_average_occupancy,
-            row.system_ligand_average_rscc >= criteria.ligand_min_average_rscc,
-            row.system_ligand_average_rsr <= criteria.ligand_max_average_rsr,
-            row.system_ligand_percent_outliers_clashes
-            <= criteria.ligand_max_percent_outliers_clashes,
-            # POCKET
-            row.system_pocket_num_unresolved_heavy_atoms
-            <= criteria.pocket_max_num_unresolved_heavy_atoms,
-            row.system_pocket_max_alt_count <= criteria.pocket_max_alt_count,
-            row.system_pocket_average_occupancy
-            >= criteria.pocket_min_average_occupancy,
-            row.system_pocket_average_rscc >= criteria.pocket_min_average_rscc,
-            row.system_pocket_average_rsr <= criteria.pocket_max_average_rsr,
-            row.system_pocket_percent_outliers_clashes
-            <= criteria.pocket_max_percent_outliers_clashes,
-        ]
-        if np.logical_and.reduce(quality):
-            return True
-    return False
 
 
 def find_neighbors_upto_specific_depth(
@@ -287,7 +240,6 @@ def prep_data_for_desired_properties(
         & (entries["system_num_ligand_chains"] <= 5)
         & (entries["entry_pdb_id"].isin(all_entries_present))
     ].reset_index(drop=True)
-    entries["system_id_no_biounit"] = entries["system_id"].map(remove_biounit)
     entries["uniqueness"] = (
         entries["system_id_no_biounit"]
         + "_"
@@ -301,12 +253,8 @@ def prep_data_for_desired_properties(
 
     LOG.info(f"loaded {len(all_system_ids)} from annotation table")
 
-    entries["system_num_covalent_ligands"] = entries["system_id"].map(
-        entries.groupby("system_id")["ligand_is_covalent"].sum()
-    )
-    entries["proto_test"] = entries.apply(
-        get_high_quality_systems, criteria=cfg.split.proto_test_criteria, axis=1
-    )
+    entries["proto_test"] = entries["system_pass_validation_criteria"]
+    entries["proto_test"].fillna(False)
     quality = set(entries[entries["proto_test"]]["system_id"])
     LOG.info(f"{len(quality)} systems are of high quality")
 
@@ -572,7 +520,7 @@ def prioritize_test_sample(
     specified number of potential leaky systems.
     - We are prioritizing representatives that have have:
        - high apo links
-       - high pred links
+       - has binding affinity
        - high mms links
        - low leaky count
 
@@ -612,15 +560,24 @@ def prioritize_test_sample(
 
     test_data = test_data[
         (test_data["leakage_count"] >= cfg.split.min_test_cluster_size)
-        & (test_data["leakage_count"] < cfg.split.max_test_leakage_count)
+        & (test_data["leakage_count"] <= cfg.split.max_test_leakage_count)
+        & (test_data["system_num_pocket_residues"] >= cfg.split.min_max_test_pocket[0])
+        & (test_data["system_num_pocket_residues"] <= cfg.split.min_max_test_pocket[1])
+        & (test_data["system_num_interactions"] >= cfg.split.min_max_test_pli[0])
+        & (test_data["system_num_interactions"] <= cfg.split.min_max_test_pli[1])
     ]
     LOG.info(
         f"found {len(set(test_data['system_id']))} test systems after removing by second pass neighbor leakage count"
     )
     test_data = (
         test_data.sort_values(
-            ["system_has_mms", "has_apo", "leakage_count"],
-            ascending=[False, False, True],
+            [
+                "system_has_mms",
+                "has_apo",
+                "system_has_binding_affinity",
+                "leakage_count",
+            ],
+            ascending=[False, False, False, True],
         )
         .drop_duplicates("system_id")
         .groupby(cfg.split.cluster_column)
@@ -701,7 +658,23 @@ def assign_split_membership(
         "split",
     ] = "removed"
 
-    train_val_systems = list(set(entries[entries["split"] == "train"]["system_id"]))
+    train_val_systems = list(
+        set(
+            entries[
+                (entries["split"] == "train")
+                & (
+                    entries["system_num_pocket_residues"]
+                    >= cfg.split.min_max_val_pocket[0]
+                )
+                & (
+                    entries["system_num_pocket_residues"]
+                    <= cfg.split.min_max_val_pocket[1]
+                )
+                & (entries["system_num_interactions"] >= cfg.split.min_max_val_pli[0])
+                & (entries["system_num_interactions"] <= cfg.split.min_max_val_pli[1])
+            ]["system_id"]
+        )
+    )
     train_val_clusters = defaultdict(list)
 
     for x in train_val_systems:

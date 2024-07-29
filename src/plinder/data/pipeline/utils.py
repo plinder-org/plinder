@@ -220,7 +220,6 @@ def get_scorer(
         source_to_full_db_file=db_sources,
         db_dir=sub_db_dir,
         scores_dir=scores_dir,
-        score_ligand_level=scorer_cfg.score_ligand_level,
         minimum_threshold=scorer_cfg.minimum_threshold,
     ), entry_ids, batch_db_dir
 
@@ -416,13 +415,6 @@ def ingest_flow_control(func: Callable[..., T]) -> Callable[..., T]:
     return inner
 
 
-def remove_biounit(system_id: str) -> str:
-    pdb_id, _, protein_chains, ligand_chains = system_id.split("__")
-    protein_chains = "_".join(x.split(".")[1] for x in protein_chains.split("_"))
-    ligand_chains = "_".join(x.split(".")[1] for x in ligand_chains.split("_"))
-    return "__".join([pdb_id, protein_chains, ligand_chains])
-
-
 def create_nonredundant_dataset(*, data_dir: Path) -> None:
     """
     This is called in make_mmp_index to ensure the existence of the index
@@ -447,7 +439,6 @@ def create_nonredundant_dataset(*, data_dir: Path) -> None:
         & (df.ligand_rdkit_canonical_smiles.notna())
     ].reset_index(drop=True)
 
-    df_trainable["system_id_no_biounit"] = df_trainable["system_id"].map(remove_biounit)
     df_trainable["uniqueness"] = (
         df_trainable["system_id_no_biounit"]
         + "_"

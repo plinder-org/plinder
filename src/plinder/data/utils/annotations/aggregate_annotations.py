@@ -2,7 +2,6 @@
 # Distributed under the terms of the Apache License 2.0
 from __future__ import annotations
 
-import json
 import re
 import typing as ty
 from collections import Counter, defaultdict
@@ -11,7 +10,7 @@ from pathlib import Path
 
 import networkx as nx
 import pandas as pd
-from ost import conop, io, mol
+from ost import io, mol
 from PDBValidation.ValidationFactory import ValidationFactory
 from plip.basic import config
 from posebusters import PoseBusters
@@ -26,7 +25,7 @@ from plinder.data.utils.annotations.get_ligand_validation import (
 )
 from plinder.data.utils.annotations.interaction_utils import (
     get_covalent_connections,
-    run_plip_on_split_structure,
+    get_symmetry_mate_contacts,
 )
 from plinder.data.utils.annotations.interface_gap import annotate_interface_gaps
 from plinder.data.utils.annotations.ligand_utils import Ligand
@@ -45,7 +44,6 @@ from plinder.data.utils.annotations.save_utils import (
 
 LOG = setup_logger(__name__)
 RDLogger.DisableLog("rdApp.*")
-COMPOUND_LIB = conop.GetDefaultLib()
 ECOD_DATA = None
 
 # Ignore Biolip artifacts
@@ -143,6 +141,16 @@ class System(BaseModel):
         )
 
     @cached_property
+    def id_no_biounit(self) -> str:
+        return "__".join(
+            [
+                self.pdb_id,
+                "_".join(x.split(".")[1] for x in self.interacting_protein_chains),
+                "_".join(x.split(".")[1] for x in self.ligand_chains),
+            ]
+        )
+
+    @cached_property
     def ligand_chains(self) -> list[str]:
         return [f"{ligand.instance}.{ligand.asym_id}" for ligand in self.ligands]
 
@@ -153,6 +161,14 @@ class System(BaseModel):
     @cached_property
     def num_interactions(self) -> int:
         return sum(l.num_interactions for l in self.ligands)
+
+    @cached_property
+    def num_unique_interactions(self) -> int:
+        return sum(l.num_unique_interactions for l in self.ligands)
+
+    @cached_property
+    def num_covalent_ligands(self) -> int:
+        return sum(ligand.is_covalent for ligand in self.ligands)
 
     @cached_property
     def id(self) -> str:
@@ -177,6 +193,10 @@ class System(BaseModel):
     @cached_property
     def has_kinase_inhibitor(self) -> bool:
         return any(l.is_kinase_inhibitor for l in self.ligands)
+
+    @cached_property
+    def has_binding_affinity(self) -> bool:
+        return any(l.binding_affinity is not None for l in self.ligands)
 
     @cached_property
     def pocket_residues(self) -> dict[str, dict[int, str]]:
@@ -250,6 +270,7 @@ class System(BaseModel):
     def format_system(self, chains: dict[str, Chain]) -> dict[str, ty.Any]:
         data = {
             "system_id": self.id,
+            "system_id_no_biounit": self.id_no_biounit,
             "system_pdb_id": self.pdb_id,
             "system_biounit_id": self.biounit_id,
             "system_type": self.system_type,
@@ -263,6 +284,12 @@ class System(BaseModel):
             ),
             "system_num_ligand_chains": len(self.ligand_chains),
             "system_has_kinase_inhibitor": self.has_kinase_inhibitor,
+            "system_has_binding_affinity": self.has_binding_affinity,
+            "system_num_covalent_ligands": self.num_covalent_ligands,
+            "system_num_heavy_atoms": self.num_heavy_atoms,
+            "system_num_atoms_with_crystal_contacts": self.num_atoms_with_crystal_contacts,
+            "system_fraction_atoms_with_crystal_contacts": self.fraction_atoms_with_crystal_contacts,
+            "system_num_crystal_contacted_residues": self.num_crystal_contacted_residues,
         }
         pocket_mapping = self.get_pocket_domains(chains)
         for mapping in pocket_mapping:
@@ -295,12 +322,53 @@ class System(BaseModel):
             query.append(f"(chain='{chain}' and ({chain_query}))")
         return " or ".join(query)
 
+    @cached_property
+    def num_crystal_contacted_residues(self) -> int:
+        residues = set()
+        for ligand in self.ligands:
+            residues |= set(ligand.crystal_contacts.keys())
+        return len(residues)
+
+    @cached_property
+    def num_atoms_with_crystal_contacts(self) -> int:
+        return sum(ligand.num_atoms_with_crystal_contacts for ligand in self.ligands)
+
+    @cached_property
+    def num_heavy_atoms(self) -> int | None:
+        if any(ligand.num_heavy_atoms is None for ligand in self.ligands):
+            return None
+        return sum(
+            ligand.num_heavy_atoms
+            for ligand in self.ligands
+            if ligand.num_heavy_atoms is not None
+        )
+
+    @cached_property
+    def fraction_atoms_with_crystal_contacts(self) -> float | None:
+        if self.num_heavy_atoms is None:
+            return None
+        return self.num_atoms_with_crystal_contacts / self.num_heavy_atoms
+
+    def selection(self, include_waters: bool = True) -> str:
+        ligand_selection = " or ".join(
+            f"({ligand.selection})" for ligand in self.ligands
+        )
+        protein_selection = " or ".join(
+            f"(cname={mol.QueryQuoteName(chain)})"
+            for chain in self.interacting_protein_chains
+        )
+        selection = f"({ligand_selection}) or ({protein_selection})"
+        if include_waters and len(self.waters):
+            selection += f" or {self.select_waters}"
+        return selection
+
     def save_system(
         self,
         chain_to_seqres: dict[str, str],
         biounit: mol.EntityHandle,
         info: io.MMCifInfoBioUnit,
         system_folder: Path,
+        include_waters: bool = True,
     ) -> None:
         system_folder.mkdir(exist_ok=True)
         with open(system_folder / "sequences.fasta", "w") as f:
@@ -309,11 +377,7 @@ class System(BaseModel):
                 if c in chain_to_seqres:
                     f.write(f">{i_c}\n")
                     f.write(chain_to_seqres[c] + "\n")
-        selection = " or ".join(
-            f"chain='{c}'" for c in self.interacting_protein_chains + self.ligand_chains
-        )
-        if len(self.waters):
-            selection += f" or {self.select_waters}"
+        selection = self.selection(include_waters=include_waters)
         ent_system = mol.CreateEntityFromView(
             biounit.Select(selection),
             True,
@@ -321,6 +385,7 @@ class System(BaseModel):
         (system_folder / "ligand_files").mkdir(exist_ok=True)
         save_ligands(
             ent_system,
+            [ligand.selection for ligand in self.ligands],
             self.ligand_chains,
             [l.smiles for l in self.ligands],
             [l.num_unresolved_heavy_atoms for l in self.ligands],
@@ -328,7 +393,7 @@ class System(BaseModel):
         )
         save_cif_file(ent_system, info, self.id, system_folder / "system.cif")
         selection = " or ".join(f"chain='{c}'" for c in self.interacting_protein_chains)
-        if len(self.waters):
+        if include_waters and len(self.waters):
             selection += f" or {self.select_waters}"
         save_cif_file(
             ent_system.Select(selection),
@@ -340,26 +405,13 @@ class System(BaseModel):
             # TODO: move out and add a flag instead
             save_pdb_file(
                 biounit,
-                ent_system.Copy(),
+                mol.CreateEntityFromView(ent_system.Select(selection), True),
                 self.interacting_protein_chains,
-                self.ligand_chains,
-                system_folder / "system.pdb",
+                [],
+                system_folder / "receptor.pdb",
                 system_folder / "chain_mapping.json",
-                self.waters,
+                self.waters if include_waters else {},
                 system_folder / "water_mapping.json",
-            )
-            with open(system_folder / "chain_mapping.json") as f:
-                chain_mapping = json.load(f)
-            system_pdb = io.LoadPDB(str(system_folder / "system.pdb"))
-            io.SavePDB(
-                system_pdb.Select(
-                    " or ".join(
-                        f"chain='{chain_mapping[c]}'"
-                        for c in self.interacting_protein_chains
-                    )
-                    + " or chain='_'"
-                ),
-                str(system_folder / "receptor.pdb"),
             )
         except Exception as e:
             LOG.error(f"save_system: Error saving system in PDB format {self.id}: {e}")
@@ -390,11 +442,15 @@ class System(BaseModel):
             self.pass_criteria = (
                 entry_pass_criteria
                 and self.ligand_validation.pass_criteria(
-                    thresholds.residue_list_thresholds["ligand"]
+                    thresholds.residue_list_thresholds["ligand"],
+                    self.num_covalent_ligands,
                 )
                 and self.pocket_validation.pass_criteria(
                     thresholds.residue_list_thresholds["pocket"]
                 )
+                and self.fraction_atoms_with_crystal_contacts is not None
+                and self.fraction_atoms_with_crystal_contacts
+                <= thresholds.max_fraction_atoms_with_crystal_contacts
             )
         else:
             self.pass_criteria = None
@@ -541,6 +597,9 @@ class Entry(BaseModel):
     validation: EntryValidation | None = None
     pass_criteria: bool | None = None
     water_chains: list[str] = Field(default_factory=list)
+    symmetry_mate_contacts: dict[
+        tuple[str, int], dict[tuple[str, int], set[int]]
+    ] = Field(default_factory=dict)
 
     """
     This dataclass defines as system which included a protein-ligand complex
@@ -670,8 +729,7 @@ class Entry(BaseModel):
         plip_complex_threshold: float = 10.0,
         skip_save_systems: bool = False,
         skip_posebusters: bool = False,
-        artifact_within_entry_threshold: int = 15,
-        artifact_interacting_residue_count_threshold: int = 2,
+        symmetry_mate_contact_threshold: float = 5.0,
     ) -> Entry:
         """
         Load an entry object from mmcif files
@@ -714,6 +772,9 @@ class Entry(BaseModel):
             str(cif_file), seqres=True, info=True, remote=False
         )
         cif_data = read_mmcif_container(cif_file)
+        symmetry_mate_contacts = get_symmetry_mate_contacts(
+            cif_file, symmetry_mate_contact_threshold
+        )
         entry_info = get_entry_info(cif_data)
         per_chain = get_chain_external_mappings(cif_data)
         interface_proximal_gaps = annotate_interface_gaps(cif_file)
@@ -734,6 +795,7 @@ class Entry(BaseModel):
             resolution=r,
             covalent_bonds=get_covalent_connections(cif_data),
             chain_to_seqres={c.name: c.string for c in seqres},
+            symmetry_mate_contacts=symmetry_mate_contacts,
         )
         entry.chains = {
             chain.name: Chain.from_ost_chain(
@@ -748,7 +810,7 @@ class Entry(BaseModel):
 
         data_dir = None
         if save_folder is not None:
-            data_dir = Path(save_folder).parent.parent
+            data_dir = save_folder.parent.parent
         for chain in per_chain:
             entry.chains[chain].mappings = per_chain[chain]
         if data_dir is not None:
@@ -767,44 +829,34 @@ class Entry(BaseModel):
                 for chain in biounit.chains
                 if chain.name.split(".")[1] in entry.ligand_like_chains
             ]
-            entry_pdb_id = entry.pdb_id
             for ligand_chain in biounit_ligand_chains:
                 ligand_instance, ligand_asym_id = ligand_chain.split(".")
-                plip_output = run_plip_on_split_structure(
-                    entry_pdb_id,
-                    biounit,
-                    ligand_chain,  # see func definition - consider adding entry.ligand_like_chains
-                    plip_complex_threshold,
-                )
-                if plip_output is None:
-                    continue
-                (interactions, plip_chain_mapping) = plip_output
                 data_dir = None
                 if save_folder is not None:
-                    data_dir = Path(save_folder).parent.parent
+                    data_dir = save_folder.parent.parent
+                residue_numbers = [
+                    residue.number.num
+                    for residue in biounit.FindChain(ligand_chain).residues
+                ]
                 ligand = Ligand.from_pli(
-                    entry.pdb_id,
-                    biounit_info.id,
-                    biounit,
-                    int(ligand_instance),
-                    entry.chains[ligand_asym_id],
-                    entry.ligand_like_chains,
-                    interactions,
-                    plip_chain_mapping,
-                    interface_proximal_gaps,
-                    entry.covalent_bonds,  # type: ignore
-                    neighboring_residue_threshold,
-                    neighboring_ligand_threshold,
+                    pdb_id=entry.pdb_id,
+                    biounit_id=biounit_info.id,
+                    biounit=biounit,
+                    ligand_instance=int(ligand_instance),
+                    ligand_chain=entry.chains[ligand_asym_id],
+                    residue_numbers=residue_numbers,
+                    ligand_like_chains=entry.ligand_like_chains,
+                    interface_proximal_gaps=interface_proximal_gaps,
+                    all_covalent_dict=entry.covalent_bonds,  # type: ignore
+                    plip_complex_threshold=plip_complex_threshold,
+                    neighboring_residue_threshold=neighboring_residue_threshold,
+                    neighboring_ligand_threshold=neighboring_ligand_threshold,
                     data_dir=data_dir,
                 )
-                ligands[ligand.id] = ligand
+                if ligand is not None:
+                    ligands[ligand.id] = ligand
             biounits[biounit_info.id] = biounit
         entry.set_systems(ligands)
-        # NOTE: this is done at init now
-        # entry.label_artifacts(
-        #     # within_entry_threshold=artifact_within_entry_threshold,
-        #     # interacting_residue_count_threshold=artifact_interacting_residue_count_threshold,
-        # )
         entry.label_chains()
         if save_folder is not None and not skip_save_systems:
             entry.save_systems(
@@ -1093,7 +1145,7 @@ class Entry(BaseModel):
         for system_id, system in self.iter_systems(
             max_protein_chains, max_ligand_chains
         ):
-            save_folder_system = Path(save_folder) / system.id
+            save_folder_system = save_folder / system.id
             self.systems[system_id].run_posebusters_on_system(save_folder_system)
 
     def save_systems(
@@ -1116,7 +1168,7 @@ class Entry(BaseModel):
         pd.DataFrame
         """
         for _, system in self.iter_systems(max_protein_chains, max_ligand_chains):
-            save_folder_system = Path(save_folder) / system.id
+            save_folder_system = save_folder / system.id
             system.save_system(
                 self.chain_to_seqres,
                 biounits[system.biounit_id],
@@ -1150,14 +1202,14 @@ class Entry(BaseModel):
         cif_file: Path,
         thresholds: SystemValidationThresholds = SystemValidationThresholds(),
     ) -> None:
-        if not validation_file.exists():
-            LOG.error(f"set_validation: Validation file not found {validation_file}")
-            return
-
         if self.determination_method != "X-RAY DIFFRACTION":
             LOG.warning(
                 f"set_validation: Skipping validation for {self.pdb_id} as method is not X-RAY DIFFRACTION"
             )
+            return
+        self.label_crystal_contacts()
+        if not validation_file.exists():
+            LOG.error(f"set_validation: Validation file not found {validation_file}")
             return
         try:
             doc = ValidationFactory(
@@ -1182,6 +1234,25 @@ class Entry(BaseModel):
             LOG.error(
                 f"set_validation: Error setting validation for {self.pdb_id}: {e}"
             )
+
+    def label_crystal_contacts(self) -> None:
+        """
+        Label contacts of ligand residues to other symmetry mates
+        Excludes neighboring residues (i.e same biounit)
+        """
+        for system in self.systems:
+            for ligand in self.systems[system].ligands:
+                crystal_contacts: dict[tuple[str, int], set[int]] = defaultdict(set)
+                for residue_number in ligand.residue_numbers:
+                    # get all contacts with chains in other asymmetric units
+                    contacts = self.symmetry_mate_contacts.get(
+                        (ligand.asym_id, residue_number), dict()
+                    )
+                    for x, y in contacts.items():
+                        # keep only contacts with receptor
+                        if x[0] not in self.ligand_like_chains:
+                            crystal_contacts[x] |= y
+                ligand.set_crystal_contacts(crystal_contacts)
 
     def add_ecod(self) -> None:
         """

@@ -288,7 +288,26 @@ def test_synthetic_cov_peptide_detection(cif_6lu7, mock_alternative_datasets):
         sum(["B" in i for i in df["ligand_neighboring_protein_chains_auth_id"].values])
         == 0
     )
+    lig = plinder_anno.entry.systems["6lu7__1__1.A_2.A__1.B"].ligands[0]
+    assert lig.is_invalid == False
+    outsdffile = entry_dir / "6lu7__1__1.A_2.A__1.B/ligand_files/1.B.sdf"
+    assert outsdffile.is_file()
+    rdmol = Chem.SDMolSupplier(outsdffile, removeHs=True)[0]
+    assert (
+        Chem.SanitizeMol(rdmol) == Chem.rdmolops.SanitizeFlags.SANITIZE_NONE
+    )
+    assert (
+        len(Chem.MolToSmiles(rdmol).split(".")) == 1
+    )
 
+def test_crystal_contact_detection(cif_6lu7, mock_alternative_datasets):
+    entry_dir = mock_alternative_datasets("6lu7")
+    plinder_anno = GetPlinderAnnotation(cif_6lu7, "", save_folder=entry_dir)
+    plinder_anno.annotate()
+    df = plinder_anno.annotated_df
+    assert len(df) == 2
+    assert all(x == 2 for x in df["system_num_atoms_with_crystal_contacts"])
+    assert all(x == 1 for x in df["system_num_crystal_contacted_residues"])
 
 def test_simple_covalency_detection(cif_7gl9, mock_alternative_datasets):
     entry_dir = mock_alternative_datasets("7gl9")
@@ -339,8 +358,6 @@ def test_plip_entry_binary(cif_4ci1, mock_alternative_datasets, lig_code="EF2"):
         neighboring_ligand_threshold=4.0,
         min_polymer_size=10,
         save_folder=entry_dir,
-        artifact_within_entry_threshold=15,
-        artifact_interacting_residue_count_threshold=5,
     )
 
     for system in entry.systems:
@@ -395,8 +412,6 @@ def test_plip_entry_ternary(cif_2p1q, mock_alternative_datasets, lig_code="IAC")
         neighboring_ligand_threshold=4.0,
         min_polymer_size=10,
         save_folder=entry_dir,
-        artifact_within_entry_threshold=15,
-        artifact_interacting_residue_count_threshold=5,
     )
 
     for system in entry.systems:
@@ -462,7 +477,6 @@ def test_water_saving(cif_2p1q, mock_alternative_datasets):
     Entry.from_cif_file(cif_2p1q, save_folder=entry_dir)
     for filename in [
         "sequences.fasta",
-        "system.pdb",
         "receptor.pdb",
         "system.cif",
         "receptor.cif",
@@ -470,8 +484,8 @@ def test_water_saving(cif_2p1q, mock_alternative_datasets):
         "water_mapping.json"
     ]:
         assert (entry_dir / system_tag / filename).exists()
-    assert (entry_dir / system_tag / "ligand_files" / f"2.E.sdf").exists()
-    ent = io.LoadPDB(str(entry_dir / system_tag / "system.pdb"))
+    assert (entry_dir / system_tag / "ligand_files" / "2.E.sdf").exists()
+    ent = io.LoadPDB(str(entry_dir / system_tag / "receptor.pdb"))
     assert len(ent.FindChain("_").residues) == 3
 
 
@@ -524,7 +538,6 @@ def test_system_saving(cif_2y4i, mock_alternative_datasets):
         assert len(chain.mappings["ECOD"])
     for filename in [
         "sequences.fasta",
-        "system.pdb",
         "receptor.pdb",
         "system.cif",
         "receptor.cif",
@@ -575,7 +588,8 @@ def test_get_validation(
         'entry_percent_rama_outliers': 0.00,
         'entry_molprobity': 1.408352978496041,
         'entry_r_minus_rfree': 0.01999999999999999,
-        'system_pass_validation_criteria': True,
+        'system_pocket_max_alt_count': 2,
+        'system_pass_validation_criteria': False,
         'entry_pass_validation_criteria': True}, orient="index").T.infer_objects()
     entry = GetPlinderAnnotation(cif_1qz5,validation_1qz5, save_folder=entry_dir)
     entry.annotate()
@@ -759,8 +773,9 @@ def test_binding_affinity(cif_4jvn, mock_alternative_datasets):
     target_value = 7.638272164
     affinity = 0.0
     for sys in entry.systems.values():
+        if "YUG" in set(l.ccd_code for l in sys.ligands):
+            assert sys.has_binding_affinity
         for ligand in sys.ligands:
-            print(ligand.ccd_code)
             if ligand.ccd_code == "YUG":
                 affinity = ligand.binding_affinity
     assert affinity == target_value
