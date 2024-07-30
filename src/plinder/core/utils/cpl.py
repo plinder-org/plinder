@@ -121,7 +121,7 @@ def _get_fsroot(cfg: DictConfig) -> str:
     root = cfg.data.plinder_mount
     if root in ["/plinder", "/", ""]:
         root = "/"
-    return root
+    return str(root)
 
 
 def get_plinder_path(*, rel: str = "") -> CloudPath:

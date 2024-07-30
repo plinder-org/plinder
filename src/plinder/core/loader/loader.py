@@ -32,7 +32,7 @@ class PlinderDataset(Dataset):
         load_alternative_structures: bool = False,
     ):
         if file_with_system_ids is None:
-            self._system_ids = utils.get_manifest()["system_id"].to_list()
+            self._system_ids: list[str] = utils.get_manifest()["system_id"].to_list()
         else:
             self._system_ids = pd.read_csv(file_with_system_ids)["system_id"].to_list()
         self._num_examples = len(self._system_ids)

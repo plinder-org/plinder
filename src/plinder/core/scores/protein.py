@@ -19,7 +19,7 @@ def query_protein_similarity(
     *,
     search_db: str,
     columns: list[str] | None = None,
-    filters: list[tuple[str, str, str]] | None = None,
+    filters: list[tuple[str, str, str | set[str]]] | None = None,
 ) -> pd.DataFrame | None:
     """
     Query the protein similarity database for
@@ -31,7 +31,7 @@ def query_protein_similarity(
         the name of the search database
     columns : list[str], default=None
         the columns to return
-    filters : list[tuple[str, str, str]]
+    filters : list[tuple[str, str, str | set[str]]]
         the filters to apply
 
     Returns

@@ -1,5 +1,6 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
+from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any
@@ -39,7 +40,7 @@ class PlinderSystem:
         self._water_mapping = None
 
     @property
-    def system(self) -> dict[str, Any]:
+    def system(self) -> dict[str, Any] | None:
         if self._system is None:
             entry_pdb_id = self.system_id.split("__")[0]
             try:

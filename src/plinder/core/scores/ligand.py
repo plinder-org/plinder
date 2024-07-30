@@ -18,7 +18,7 @@ LOG = setup_logger(__name__)
 def query_ligand_similarity(
     *,
     columns: list[str] | None = None,
-    filters: list[tuple[str, str, str]] | None = None,
+    filters: list[tuple[str, str, str | set[str]]] | None = None,
 ) -> pd.DataFrame | None:
     """
     Query the ligand similarity database
@@ -28,7 +28,7 @@ def query_ligand_similarity(
     ----------
     columns : list[str], default=None
         the columns to return
-    filters : list[tuple[str, str, str]]
+    filters : list[tuple[str, str, str | set[str]]]
         the filters to apply
 
     Returns

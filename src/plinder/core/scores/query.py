@@ -37,7 +37,7 @@ def ensure_dataset(rel: str) -> Path:
     return local
 
 
-def _handle_condition_by_schema(schema: pa.Schema, col: str, val: str) -> str:
+def _handle_condition_by_schema(schema: pa.Schema, col: str, val: str | set[str]) -> str:
     """
     Deal with quoting hell for the varied conditions
     and types in the schema.
@@ -64,10 +64,12 @@ def _handle_condition_by_schema(schema: pa.Schema, col: str, val: str) -> str:
             val = f"'{val}'"
     except NotImplementedError:
         val = f"'{val}'"
+    if isinstance(val, set):
+        val = f"({str(val)[1:-1]})"
     return val
 
 
-def _handle_condition_by_type(val: str) -> str:
+def _handle_condition_by_type(val: str | set[str]) -> str:
     """
     Deal with quoting hell for the varied types passed
     in the filters.
@@ -92,7 +94,7 @@ def _handle_condition_by_type(val: str) -> str:
 
 
 def _handle_inner_filter(
-    filter: tuple[str, str, str],
+    filter: tuple[str, str, str | set[str]],
     schema: pa.Schema | None,
 ) -> str:
     """
@@ -100,7 +102,7 @@ def _handle_inner_filter(
 
     Parameters
     ----------
-    filter : tuple[str, str, str]
+    filter : tuple[str, str, str | set[str]]
         the filter to apply
     schema : pa.Schema | None
         the schema to use
@@ -126,16 +128,16 @@ def _handle_inner_filter(
 
 
 def _handle_filters(
-    filters: list[list[tuple[str, str, str]]] | list[tuple[str, str, str]] | None,
+    filters: list[list[tuple[str, str, str | set[str]]]] | list[tuple[str, str, str | set[str]]] | None,
     allow_no_filters: bool,
     schema: pa.Schema | None,
-) -> list[list[str]] | list[str]:
+) -> list[str | list[str]]:
     """
     Format the filters for the query
 
     Parameters
     ----------
-    filters : list[tuple[str, str, str]], default=None
+    filters : list[tuple[str, str, str | set[str]]], default=None
         the filters to apply
     allow_no_filters : bool
         if True, allow no filters
@@ -144,19 +146,18 @@ def _handle_filters(
 
     Returns
     -------
-    filters : list[tuple[str, str, str]]
+    filters : list[tuple[str, str, str | set[str]]]
         the formatted filters
     """
     if filters is None or not len(filters):
         if not allow_no_filters:
-            LOG.error("no filters provided, aborting query generation!")
-            return []
+            raise ValueError("no filters provided, aborting query generation!")
         if filters is None:
             filters = []
-    wheres = []
+    wheres: list[str | list[str]] = []
     for filter in filters:
         if isinstance(filter, list):
-            inner_wheres = []
+            inner_wheres: list[str] = []
             for inner_filter in filter:
                 inner_wheres.append(_handle_inner_filter(inner_filter, schema))
             wheres.append(inner_wheres)
@@ -282,8 +283,8 @@ def make_query(
     dataset: Path,
     schema: pa.Schema | None = None,
     columns: list[str] | None = None,
-    filters: list[list[tuple[str, str, str]]]
-    | list[tuple[str, str, str]]
+    filters: list[list[tuple[str, str, str | set[str]]]]
+    | list[tuple[str, str, str | set[str]]]
     | None = None,
     nested: bool = False,
     allow_no_filters: bool = False,
