@@ -22,7 +22,7 @@ def test_plinder_system(system_id, read_plinder_mount):
 ])
 def test_plinder_system_fails(system_id, read_plinder_mount):
     with pytest.raises(ValueError):
-        system.PlinderSystem(system_id=system_id)
+        system.PlinderSystem(system_id=system_id).system
 
 
 def test_plinder_system_system_files(read_plinder_mount):

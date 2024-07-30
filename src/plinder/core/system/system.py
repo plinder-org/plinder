@@ -107,7 +107,9 @@ class PlinderSystem:
     @property
     def structures(self) -> list[str]:
         return [
-            path.as_posix() for path in (self.archive / f"{self.system_id}/").rglob("*")
+            path.as_posix()
+            for path in (self.archive / f"{self.system_id}/").rglob("*")
+            if path.is_file()
         ]
 
     @property

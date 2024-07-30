@@ -24,11 +24,11 @@ def test_query_protein_similarity(read_plinder_mount):
 
 
 def test_query_protein_similarity_empty(read_plinder_mount):
-    df = scores.query_protein_similarity(
-        search_db="holo",
-        filters=[],
-    )
-    assert df is None
+    with pytest.raises(ValueError):
+        scores.query_protein_similarity(
+            search_db="holo",
+            filters=[],
+        )
 
 
 def test_query_protein_similarity_removes_search_db(read_plinder_mount):
@@ -68,14 +68,13 @@ def test_query_ligand_similarity(read_plinder_mount):
 
 
 def test_query_ligand_similarity_empty(read_plinder_mount):
-
-    df = scores.query_ligand_similarity(
-        filters=[]
-    )
-    assert df is None
+    with pytest.raises(ValueError):
+        scores.query_ligand_similarity(
+            filters=[]
+        )
 
 
 def test_query_links(read_plinder_mount):
     system_id = "4dd7__1__1.A__1.B"
-    df = scores.query_links(filters=[("system_id", "==", system_id)])
+    df = scores.query_links(filters=[("query_system", "==", system_id)])
     assert len(df.index)
