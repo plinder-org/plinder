@@ -425,7 +425,7 @@ def parse_artifacts() -> set[str]:
         set[str]: set[str]
     """
     artifact_log = (
-        BASE_DIR / "data/utils/annotations/static_files/artifacts_badlist.csv"
+        BASE_DIR / "utils/annotations/static_files/artifacts_badlist.csv"
     )
     with open(artifact_log, "r") as f:
         lines = f.readlines()

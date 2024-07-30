@@ -117,7 +117,7 @@ def cloud_save_annotation() -> None:
 
     from plinder.data.pipeline.config import AnnotationConfig, EntryConfig
 
-    cfg = dict(
+    cfg = OmegaConf.to_container(
         OmegaConf.merge(
             {
                 "mmcif_file": None,
@@ -139,7 +139,9 @@ def cloud_save_annotation() -> None:
     annotation_cfg = cfg.pop("annotation")
     save_folder = entry_cfg.get("save_folder")
     if save_folder is not None:
-        Path(save_folder).mkdir(exist_ok=True, parents=True)
+        save_folder = Path(save_folder)
+        save_folder.mkdir(exist_ok=True, parents=True)
+        entry_cfg["save_folder"] = save_folder
     LOG.info(f"annotating {cif}")
     gpa = GetPlinderAnnotation(
         cif,
