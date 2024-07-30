@@ -140,6 +140,16 @@ class IngestPipeline:
         )
 
     @utils.ingest_flow_control
+    def join_structure_qc(self) -> None:
+        force_update = (
+            self.cfg.data.force_update or self.cfg.flow.structure_qc_force_update
+        )
+        utils.create_index(
+            data_dir=self.plinder_dir,
+            force_update=force_update,
+        )
+
+    @utils.ingest_flow_control
     def scatter_make_ligands(self) -> list[list[str]]:
         chunks: list[list[str]] = tasks.scatter_make_ligands(
             data_dir=self.plinder_dir,

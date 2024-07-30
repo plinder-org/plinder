@@ -410,21 +410,60 @@ def ingest_flow_control(func: Callable[..., T]) -> Callable[..., T]:
     return inner
 
 
+def create_index(*, data_dir: Path, force_update: bool = False) -> pd.DataFrame:
+    """
+    Create the index
+    """
+    if not (data_dir / "index" / "annotation_table.parquet").exists() or force_update:
+        dfs = []
+        for path in (data_dir / "qc" / "index").glob("*"):
+            df = pd.read_parquet(path)
+            if not df.empty:
+                dfs.append(df)
+        df = pd.concat(dfs).reset_index(drop=True)
+        (data_dir / "index").mkdir(exist_ok=True, parents=True)
+        df.to_parquet(data_dir / "index" / "annotation_table.parquet", index=False)
+    else:
+        df = pd.read_parquet(data_dir / "index" / "annotation_table.parquet")
+    update = False
+    if "pli_qcov__100__strong__component" not in df.columns or force_update:
+        update = True
+        pli_qcov_cluster = pd.read_parquet(
+            data_dir
+            / "clusters"
+            / "cluster=components"
+            / "directed=True"
+            / "metric=pli_qcov"
+            / "threshold=100.parquet"
+        )
+        df["pli_qcov__100__strong__component"] = df["system_id"].map(
+            dict(zip(pli_qcov_cluster["system_id"], pli_qcov_cluster["label"]))
+        )
+    if "protein_lddt_qcov_weighted_sum__100__strong__component" not in df.columns or force_update:
+        update = True
+        lddt_qcov_cluster = pd.read_parquet(
+            data_dir
+            / "clusters"
+            / "cluster=components"
+            / "directed=True"
+            / "metric=protein_lddt_qcov_weighted_sum"
+            / "threshold=100.parquet"
+        )
+        df["protein_lddt_qcov_weighted_sum__100__strong__component"] = df["system_id"].map(
+            dict(zip(lddt_qcov_cluster["system_id"], lddt_qcov_cluster["label"]))
+        )
+    if update or force_update:
+        df.to_parquet(data_dir / "index" / "annotation_table.parquet", index=False)
+    return df
+
+
 def create_nonredundant_dataset(*, data_dir: Path) -> None:
     """
     This is called in make_mmp_index to ensure the existence of the index
     and simultaneously generates a non-redundant index for various use
     cases. Ultimately this should run as the join step of structure_qc.
     """
-    if not (data_dir / "index" / "annotation_table.parquet").exists():
-        dfs = []
-        for path in (data_dir / "qc" / "index").glob("*"):
-            dfs.append(pd.read_parquet(path))
-        df = pd.concat(dfs).reset_index(drop=True)
-        (data_dir / "index").mkdir(exist_ok=True, parents=True)
-        df.to_parquet(data_dir / "index" / "annotation_table.parquet", index=False)
-    else:
-        df = pd.read_parquet(data_dir / "index" / "annotation_table.parquet")
+    df = create_index(data_dir=data_dir)
     df_trainable = df[
         ~(df.ligand_is_invalid | df.ligand_is_artifact | df.ligand_is_ion)
         & (df.ligand_passes_valence_checks)

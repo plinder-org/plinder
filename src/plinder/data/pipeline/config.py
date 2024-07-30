@@ -77,6 +77,8 @@ class FlowConfig:
     make_entries_force_update: bool = False
     make_entries_cpu: int = 4
 
+    structure_qc_force_update: bool = False
+
     make_sub_dbs_cpu: int = 4
     make_scorers_cpu: int = 4
     download_alternative_datasets_threads: int = 10
