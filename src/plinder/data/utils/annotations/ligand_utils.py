@@ -15,7 +15,7 @@ from mmcif.api.PdbxContainers import DataContainer
 from openbabel import pybel
 from ost import io, mol
 from ost.conop import GetDefaultLib
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, BeforeValidator, Field
 from rdkit import Chem, RDLogger
 from rdkit.Chem import QED, AllChem, Crippen, rdMolDescriptors
 from rdkit.Chem.rdchem import Mol, RWMol
@@ -65,6 +65,17 @@ NON_SMALL_MOL_LIG_TYPES = (
     + OLIGOSACCHARIDE_TYPES
     + MACROCYCLE_TYPES
 )
+
+
+def validate_chain_residue(obj: dict[str, ty.Any]) -> dict[str, ty.Any]:
+    clean = {}
+    for k, v in obj.items():
+        key = tuple(k.split(",")) if isinstance(k, str) else k
+        if isinstance(v, dict):
+            clean[key] = validate_chain_residue(v)
+        else:
+            clean[key] = v
+    return clean
 
 
 def lig_has_dummies(
@@ -640,6 +651,13 @@ def annotate_interface_gaps_per_chain(
     )
 
 
+CrystalContacts = ty.Annotated[
+    dict[tuple[str, int], set[int]],
+    BeforeValidator(validate_chain_residue),
+    Field(default_factory=dict),
+]
+
+
 class Ligand(BaseModel):
     pdb_id: str
     biounit_id: str
@@ -692,7 +710,7 @@ class Ligand(BaseModel):
     posebusters_result: dict[str, ty.Any] = Field(default_factory=dict)
     unique_ccd_code: str | None = None
     waters: dict[str, list[int]] = Field(default_factory=dict)
-    crystal_contacts: dict[tuple[str, int], set[int]] = Field(default_factory=dict)
+    crystal_contacts: CrystalContacts
 
     """
     This dataclass defines as system which included a protein-ligand complex
