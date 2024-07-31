@@ -11,6 +11,7 @@ from torch.utils.data import Dataset
 
 from plinder.core.index import utils
 from plinder.core.system import system
+from plinder.core.loader.utils import download_apo_pred_structures
 
 
 class PlinderDataset(Dataset):
@@ -39,6 +40,8 @@ class PlinderDataset(Dataset):
         self._transform = transform
         self._store_file_path = store_file_path
         self.load_alternative_structures = load_alternative_structures
+        if self.load_alternative_structures:
+            download_apo_pred_structures()
 
     def __len__(self) -> int:
         return self._num_examples

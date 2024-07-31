@@ -450,16 +450,21 @@ def rsync_rcsb(
     """
     if kind not in KINDS:
         raise ValueError(f"kind={kind} not in {KINDS}")
+    suffix = None
     if kind == "cif":
         server = CIF_PATH
         contents = CIF_GLOB
+        if pdb_id is not None:
+            suffix = f"pdb_0000{pdb_id}"
     else:
         server = VAL_PATH
         contents = VAL_GLOB
+        if pdb_id is not None:
+            suffix = pdb_id
 
     server = f"{server}/{two_char_code}/"
-    if pdb_id is not None:
-        server = f"{server}{pdb_id}"
+    if suffix is not None:
+        server = f"{server}{suffix}"
     dest = f"{data_dir}/{two_char_code}/"
     Path(dest).mkdir(exist_ok=True, parents=True)
 

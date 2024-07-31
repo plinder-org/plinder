@@ -188,6 +188,8 @@ def _handle_columns(
         if cols != ["*"]:
             for col in cols:
                 if col not in schema.names:
+                    if include_filename and col == "filename":
+                        continue
                     raise ValueError(f"column={col} not in schema={schema.names}")
     else:
         cols = columns if columns is not None else ["*"]

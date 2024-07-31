@@ -20,7 +20,7 @@ LOG = setup_logger(__name__)
 def query_links(
     *,
     columns: list[str] | None = None,
-    filters: list[tuple[str, str, str]] | None = None,
+    filters: list[tuple[str, str, str | set[str]]] | None = None,
 ) -> pd.DataFrame:
     """
     Query the linked systems dataset
