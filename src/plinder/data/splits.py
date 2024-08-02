@@ -7,7 +7,7 @@ from hashlib import md5
 from io import StringIO
 from json import dumps
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict, List, Set, Tuple
 
 import networkit as nk
 import numpy as np
@@ -128,7 +128,7 @@ def get_config_hash(config_obj: Any) -> str:
     config_hash : str
         the hash of the configuration
     """
-    if isinstance(config_obj, dict):
+    if isinstance(config_obj, Dict):
         contents = config_obj
     elif isinstance(config_obj, DictConfig):
         contents = _clean_to_python(config_obj)
@@ -196,8 +196,8 @@ def get_high_quality_systems(row: pd.Series, criteria: TestCriteria) -> bool:
 
 
 def find_neighbors_upto_specific_depth(
-    graph: nk.graph.Graph, depth: int, target_nodes: set[int]
-) -> set[int]:
+    graph: nk.graph.Graph, depth: int, target_nodes: Set[int]
+) -> Set[int]:
     """
     Find neighbors of a set of nodes
 
@@ -227,12 +227,12 @@ def find_neighbors_upto_specific_depth(
 
 def deleak_entry_nk_single(
     system_id: str,
-    cluster_members: set[str],
-    graphs: list[nk.graph.Graph],
-    graph_configs: list[GraphConfig],
-    vertex_mappings: list[dict[str, int]],
-    vertex_ids: list[list[str]],
-) -> set[str]:
+    cluster_members: Set[str],
+    graphs: List[nk.graph.Graph],
+    graph_configs: List[GraphConfig],
+    vertex_mappings: List[Dict[str, int]],
+    vertex_ids: List[List[str]],
+) -> Set[str]:
     leaked_systems = set(cluster_members) - {system_id}
     for graph, graph_config, system_id_to_vertex, vertex_ids_x in zip(
         graphs, graph_configs, vertex_mappings, vertex_ids
@@ -252,7 +252,7 @@ def deleak_entry_nk_single(
 
 def prep_data_for_desired_properties(
     data_dir: Path, cfg: DictConfig
-) -> tuple[pd.DataFrame, pd.DataFrame, set[str], dict[str, set[str]]]:
+) -> Tuple[pd.DataFrame, pd.DataFrame, Set[str], Dict[str, set[str]]]:
     """
     Deleak a specific fraction of systems id
 
@@ -364,9 +364,9 @@ def prep_data_for_desired_properties(
 
 def load_graphs(
     data_dir: Path,
-    systems: set[str],
+    systems: Set[str],
     cfg: DictConfig,
-) -> tuple[list[nk.graph.Graph], list[dict[str, int]], list[list[str]]]:
+) -> Tuple[List[nk.graph.Graph], List[Dict[str, int]], List[List[str]]]:
     """
     Load graph into networkit graph
 
@@ -425,7 +425,7 @@ def load_graphs(
 
 def get_sampling_clusters(
     cfg: DictConfig, data_dir: Path, entries: pd.DataFrame
-) -> tuple[dict[str, set[str]], dict[str, str], pd.DataFrame, set[str], dict[str, str]]:
+) -> Tuple[Dict[str, Set[str]], Dict[str, str], pd.DataFrame, Set[str], Dict[str, str]]:
     """
     Get sampling clusters
 
@@ -513,9 +513,9 @@ def get_sampling_clusters(
 def remove_high_degree_systems(
     graphs: nk.graph.Graph,
     max_test_leakage_count: int,
-    test_systems: set[str],
-    vertex_mappings: list[dict[str, int]],
-) -> set[str]:
+    test_systems: Set[str],
+    vertex_mappings: List[Dict[str, int]],
+) -> Set[str]:
     """
     Prune system id list to remove high degree nodes
 
@@ -559,13 +559,13 @@ def remove_high_degree_systems(
 def prioritize_test_sample(
     cfg: DictConfig,
     entries: pd.DataFrame,
-    system_id_to_leakage: dict[str, set[str]],
-    test_systems: set[str],
+    system_id_to_leakage: Dict[str, Set[str]],
+    test_systems: Set[str],
     mms_df: pd.DataFrame,
-    cluster_to_systems: dict[str, set[str]],
-    system_to_cluster: dict[str, str],
-    quality: set[str],
-) -> tuple[dict[str, set[str]], set[str]]:
+    cluster_to_systems: Dict[str, Set[str]],
+    system_to_cluster: Dict[str, str],
+    quality: Set[str],
+) -> Tuple[Dict[str, Set[str]], Set[str]]:
     """
     Prioritize test systems to ensure selected clusters met a certain criteria.
     - Minimum cluster size and doesn't have more than a \
@@ -656,10 +656,10 @@ def prioritize_test_sample(
 def assign_split_membership(
     cfg: DictConfig,
     entries: pd.DataFrame,
-    nonredundant_to_all: dict[str, set[str]],
-    test_system_ids: set[str],
-    system_id_to_leakage: dict[str, set[str]],
-    system_to_cluster_val: dict[str, str],
+    nonredundant_to_all: Dict[str, Set[str]],
+    test_system_ids: Set[str],
+    system_id_to_leakage: Dict[str, Set[str]],
+    system_to_cluster_val: Dict[str, str],
     split_path: Path,
 ) -> pd.DataFrame:
     """
@@ -827,42 +827,75 @@ def split(*, data_dir: Path, cfg: DictConfig, relpath: str) -> pd.DataFrame:
         split_path,
     )
 
-def sort_ccd_codes(ccd_codes_str):
+
+def sort_ccd_codes(ccd_codes_str: str) -> str:
     return "-".join(sorted(ccd_codes_str.split("-")))
 
-def map_pdb_ccd_code_to_system_ids(data_dir: Path, pdbid_ccd_codes: list[str]):
-    annotations = pd.read_parquet(
-        data_dir / "index/annotation_table.parquet"
+
+def ccd_codes_to_set(ccd_codes_str: str) -> Set[str]:
+    return set(ccd_codes_str.split("-"))
+
+
+def map_pdb_ccd_code_to_system_ids(
+    data_dir: Path, pdbid_ccd_codes: Set[str]
+) -> Tuple[Dict[str, str], Set[str]]:
+    annotations = pd.read_parquet(data_dir / "index/annotation_table.parquet")
+    pdbid_ccd_codes = {i.upper() for i in pdbid_ccd_codes}
+
+    # VO: not sure if we need this here
+    # annotations["ligand_ccd_code"] = annotations["ligand_ccd_code"].apply(
+    #     lambda x: sort_ccd_codes(x)
+    # )
+
+    # deal with multiligand cases!
+    annotations["ligand_ccd_code"] = annotations["ligand_ccd_code"].apply(
+        lambda x: ccd_codes_to_set(x)
     )
-    pdbid_ccd_codes = [i.upper() for i in pdbid_ccd_codes]
-    annotations["ligand_ccd_code"] = annotations["ligand_ccd_code"].apply(lambda x: sort_ccd_codes(x))
-    annotations["pdbid_ligand_ccd_code"] = annotations["entry_pdb_id"]  + "_" + annotations["ligand_ccd_code"]
-    annotations["pdbid_ligand_ccd_code"]  = annotations["pdbid_ligand_ccd_code"].str.upper()
-    annotations = annotations[annotations["pdbid_ligand_ccd_code"].isin(pdbid_ccd_codes)]
-    pdb_id_ccd_to_system_ids = annotations[["pdbid_ligand_ccd_code", "system_id"]].copy()
-    pdb_id_ccd_to_system_ids_dict = pdb_id_ccd_to_system_ids.groupby("pdbid_ligand_ccd_code").first().to_dict()['system_id']
-    not_in_plinder = [code for code in pdbid_ccd_codes if code not in pdb_id_ccd_to_system_ids_dict]
-    LOG.warn(f"Could not map {len(not_in_plinder)} out of {len(pdbid_ccd_codes)} systems")
+    annotations = annotations.explode("ligand_ccd_code")
+
+    annotations["pdbid_ligand_ccd_code"] = (
+        annotations["entry_pdb_id"] + "_" + annotations["ligand_ccd_code"]
+    )
+    annotations["pdbid_ligand_ccd_code"] = annotations[
+        "pdbid_ligand_ccd_code"
+    ].str.upper()
+    annotations = annotations[
+        annotations["pdbid_ligand_ccd_code"].isin(pdbid_ccd_codes)
+    ]
+    pdb_id_ccd_to_system_ids = annotations[
+        ["pdbid_ligand_ccd_code", "system_id"]
+    ].copy()
+    pdb_id_ccd_to_system_ids_dict = (
+        pdb_id_ccd_to_system_ids.groupby("pdbid_ligand_ccd_code")
+        .first()
+        .to_dict()["system_id"]
+    )
+    not_in_plinder = {
+        code for code in pdbid_ccd_codes if code not in pdb_id_ccd_to_system_ids_dict
+    }
+    LOG.warn(
+        f"Could not map {len(not_in_plinder)} out of {len(pdbid_ccd_codes)} systems"
+    )
     return pdb_id_ccd_to_system_ids_dict, not_in_plinder
 
 
 def deleak_specific_test_systems(
-        data_dir: Path,
-        cfg: DictConfig,
-        system_ids_to_deleak: list[str],
-        output_tag: str,
-        id_is_pdb_ccd_codes: bool = True) -> pd.DataFrame:
-    not_in_plinder = []
+    data_dir: Path,
+    cfg: DictConfig,
+    system_ids_to_deleak: Set[str],
+    output_tag: str,
+    id_is_pdb_ccd_codes: bool = True,
+) -> pd.DataFrame:
     if id_is_pdb_ccd_codes:
-        system_ids_to_deleak, not_in_plinder = \
-            map_pdb_ccd_code_to_system_ids(data_dir, system_ids_to_deleak)
-        system_ids_to_deleak = system_ids_to_deleak.values()
+        system_ids_to_deleak_dict, not_in_plinder = map_pdb_ccd_code_to_system_ids(
+            data_dir, system_ids_to_deleak
+        )
+        system_ids_to_deleak = set(system_ids_to_deleak_dict.values())
 
-    system_id_to_leakage ={}
-    (mms_df, entries, quality, nonredundant_to_all) =\
-          prep_data_for_desired_properties(
-    data_dir, cfg
-)
+    system_id_to_leakage = {}
+    (mms_df, entries, quality, nonredundant_to_all) = prep_data_for_desired_properties(
+        data_dir, cfg
+    )
 
     graphs, vertex_mappings, vertex_ids = load_graphs(
         data_dir, set(entries["system_id"]), cfg
