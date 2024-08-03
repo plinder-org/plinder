@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import gzip
-from collections import Counter, defaultdict
+from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
 import gemmi
-import networkx as nx
 import numpy as np
 from biotite.structure.io.pdbx import PDBxFile
 from mmcif.api.PdbxContainers import DataContainer
@@ -107,7 +106,7 @@ def get_symmetry_mate_contacts(
     return results
 
 
-def get_covalent_connections(data: DataContainer) -> dict[str, list[dict[str, str]]]:
+def get_covalent_connections(data: DataContainer) -> dict[str, list[tuple[str, str]]]:
     """
     Get covalent connections from any mmcif file with
     _struct_conn. attribute
@@ -123,12 +122,16 @@ def get_covalent_connections(data: DataContainer) -> dict[str, list[dict[str, st
         Mapping of covalent residues
     """
 
-    graph_dict = defaultdict(list)
+    cov_dict = defaultdict(list)
     nucleobase_list = ["A", "C", "U", "G", "DA", "DC", "DG", "DT", "PSU"]
-    node_lookup = defaultdict(list)
+
     to_extract = [
         "ptnr1_label_asym_id",
         "ptnr2_label_asym_id",
+        "ptnr1_label_seq_id",
+        "ptnr2_label_seq_id",
+        "ptnr1_auth_seq_id",
+        "ptnr2_auth_seq_id",
         "ptnr1_label_comp_id",
         "ptnr2_label_comp_id",
         "ptnr1_label_atom_id",
@@ -142,120 +145,140 @@ def get_covalent_connections(data: DataContainer) -> dict[str, list[dict[str, st
         to_extract, [("conn_type_id", "in", ["covale", "metalc", "hydrog"])]
     ):
         con = dict(zip(to_extract, con))
-        if con["conn_type_id"] == "covale":
-            node1 = f'{con["ptnr1_label_comp_id"]}:' + f'{con["ptnr1_label_asym_id"]}'
-            node2 = f'{con["ptnr2_label_comp_id"]}:' + f'{con["ptnr2_label_asym_id"]}'
-            node_lookup[node1].append(node1 + f':{con["ptnr1_label_atom_id"]}')
-            node_lookup[node2].append(node2 + f':{con["ptnr2_label_atom_id"]}')
-            graph_dict["covale"].append((node1, node2))
-        elif con["conn_type_id"] == "metalc":
-            node1 = f'{con["ptnr1_label_comp_id"]}:' + f'{con["ptnr1_label_asym_id"]}'
-            node2 = f'{con["ptnr2_label_comp_id"]}:' + f'{con["ptnr2_label_asym_id"]}'
-            node_lookup[node1].append(node1 + f':{con["ptnr1_label_atom_id"]}')
-            node_lookup[node2].append(node2 + f':{con["ptnr2_label_atom_id"]}')
-            graph_dict["metalc"].append((node1, node2))
-        elif con["conn_type_id"] == "hydrog":
-            node1 = f'{con["ptnr1_label_comp_id"]}:' + f'{con["ptnr1_label_asym_id"]}'
-            node2 = f'{con["ptnr2_label_comp_id"]}:' + f'{con["ptnr2_label_asym_id"]}'
-            node_lookup[node1].append(node1)
-            node_lookup[node2].append(node2)
-            if con["ptnr1_label_comp_id"].strip() in nucleobase_list:
-                graph_dict["hydrog"].append((node1, node2))
 
-    output_graph = {k: nx.from_edgelist(set(v)) for k, v in graph_dict.items()}
-    components = defaultdict(list)
-    for k, v in output_graph.items():
-        for com in nx.connected_components(v):
-            components[k].append(com)
-    return {
-        cov_type: [{j: i for i in d for j in node_lookup[i]} for d in data]
-        for cov_type, data in components.items()
-    }
-
-
-def merge_covalent_ligands_with_gaps(
-    list_of_linked_ligands: list[set[str]],
-) -> list[set[str]]:
-    """
-    Merge ligands artifical considered as not linked
-    because of gap. The logic is, if it's the same chain,
-    then it's linked.
-
-    Parameters
-    ----------
-    mmcif_file :  list[set[str]]
-        List of set of linked residues tags.
-        Residue tags formated as <resname>:<chainid>:<atomid>
-
-    Returns
-    -------
-    list[set[str]]
-    """
-    merged = defaultdict(set)
-    for idx, links1 in enumerate(list_of_linked_ligands):
-        links1_chains = [res.split(":")[1] for res in links1]
-        links1_chain_dict = dict(Counter(links1_chains))
-        links1_main_chain = max(links1_chain_dict, key=links1_chain_dict.get)  # type: ignore
-        for links2 in list_of_linked_ligands[: idx + 1]:
-            links2_chains = {res.split(":")[1] for res in links2}
-            links2_chain_dict = dict(Counter(links1_chains))
-            links2_main_chain = max(links2_chain_dict, key=links2_chain_dict.get)  # type: ignore
-            if len(set(links1_chains).intersection(set(links2_chains))) > 0:
-                merged[links1_main_chain].update(set(links1).union(set(links2)))
-            else:
-                merged[links1_main_chain].update(set(links1))
-                merged[links2_main_chain].update(set(links2))
-    return list(merged.values())
-
-
-def extract_other_covalent_subunit(
-    all_linkages_dict: dict[str, list[set[str]]],
-    cov_units: set[str],
-    link_type: str = "covale",
-) -> list[str]:
-    """
-    Lookup other linked subunit of a multipart ligand given the
-    residue name and chain id of one of it's subunits.
-
-    Parameters
-    ----------
-    all_linkages_dict :  Dict[str, List[Set[str]]]
-        Mapping of all covalent linkages
-    cov_units: set[str],
-        Set of covalently linked residue tags
-    link_type="covale : str
-        linkage type, could be "covale", "metalc", "hydrog"
-        representing covalent, metal adduct or \
-        hydrogen bonding (mostly nucleic acid related)
-
-    Returns
-    -------
-    Dict[str, List[Set[str]]]
-        Mapping of covalent residues
-    """
-    if link_type not in all_linkages_dict:
-        return []
-    try:
-        specific_linkages = all_linkages_dict[link_type]
-        specific_linkages = merge_covalent_ligands_with_gaps(specific_linkages)
-        linkage_no_atoms = [
-            {":".join(link.split(":")[:2]) for link in links}
-            for links in specific_linkages
-        ]
-        fragments = [
-            specific_linkages[idx]
-            for idx, link in enumerate(linkage_no_atoms)
-            if len(cov_units.intersection(link))
-        ]
-        if len(fragments):
-            return list(fragments[0])
-        else:
-            return []
-    except (IndexError, KeyError) as e:
-        log.error(
-            f"extract_other_covalent_subunit: Could not find {link_type} linkages: {e}"
+        if con["conn_type_id"] == "hydrog":
+            if con["ptnr1_label_comp_id"].strip() not in nucleobase_list:
+                continue
+        cov_dict[con["conn_type_id"]].append(
+            (
+                ":".join(
+                    [
+                        con["ptnr1_auth_seq_id"],
+                        con["ptnr1_label_comp_id"],
+                        con["ptnr1_label_asym_id"],
+                        con["ptnr1_label_seq_id"],
+                        con["ptnr1_label_atom_id"],
+                    ]
+                ),
+                ":".join(
+                    [
+                        con["ptnr2_auth_seq_id"],
+                        con["ptnr2_label_comp_id"],
+                        con["ptnr2_label_asym_id"],
+                        con["ptnr2_label_seq_id"],
+                        con["ptnr2_label_atom_id"],
+                    ]
+                ),
+            )
         )
-        return []
+    return cov_dict
+
+
+def extract_ligand_links_to_neighbouring_chains(
+    all_covalent_dict: dict[str, list[tuple[str, str]]],
+    ligand_asym_id: str,
+    neighboring_asym_ids: set[str],
+    link_type: str = "covale",
+) -> set[str]:
+    covalent_linkages = set()
+    for link1, link2 in all_covalent_dict[link_type]:
+        chains = {link1.split(":")[2], link2.split(":")[2]}
+        if len(chains) == 1:
+            # remove linkages that are to the same chain!
+            continue
+        if chains.intersection(ligand_asym_id):
+            # only if ligand is involved
+            if chains.difference(ligand_asym_id).intersection(neighboring_asym_ids):
+                # only if the other chain is neighbour!
+                covalent_linkages.add(f"{link1}__{link2}")
+    return covalent_linkages
+
+
+# def merge_covalent_ligands_with_gaps(
+#     list_of_linked_ligands: list[set[str]],
+# ) -> list[set[str]]:
+#     """
+#     Merge ligands artifical considered as not linked
+#     because of gap. The logic is, if it's the same chain,
+#     then it's linked.
+
+#     Parameters
+#     ----------
+#     mmcif_file :  list[set[str]]
+#         List of set of linked residues tags.
+#         Residue tags formated as <resname>:<chainid>:<atomid>
+
+#     Returns
+#     -------
+#     list[set[str]]
+#     """
+#     merged = defaultdict(set)
+#     for idx, links1 in enumerate(list_of_linked_ligands):
+#         links1_chains = [res.split(":")[1] for res in links1]
+#         links1_chain_dict = dict(Counter(links1_chains))
+#         links1_main_chain = max(links1_chain_dict, key=links1_chain_dict.get)  # type: ignore
+#         for links2 in list_of_linked_ligands[: idx + 1]:
+#             links2_chains = {res.split(":")[1] for res in links2}
+#             links2_chain_dict = dict(Counter(links1_chains))
+#             links2_main_chain = max(links2_chain_dict, key=links2_chain_dict.get)  # type: ignore
+#             if len(set(links1_chains).intersection(set(links2_chains))) > 0:
+#                 merged[links1_main_chain].update(set(links1).union(set(links2)))
+#             else:
+#                 merged[links1_main_chain].update(set(links1))
+#                 merged[links2_main_chain].update(set(links2))
+#     return list(merged.values())
+
+
+# def extract_other_covalent_subunit(
+#     all_linkages_dict: dict[str, list[tuple[str, str]]],
+#     cov_units: set[str],
+#     link_type: str = "covale",
+# ) -> list[str]:
+#     """
+#     Lookup other linked subunit of a multipart ligand given the
+#     residue name and chain id of one of it's subunits.
+
+#     Parameters
+#     ----------
+#     all_linkages_dict :  Dict[str, List[Set[str]]]
+#         Mapping of all covalent linkages
+#     cov_units: set[str],
+#         Set of covalently linked residue tags
+#     link_type="covale : str
+#         linkage type, could be "covale", "metalc", "hydrog"
+#         representing covalent, metal adduct or \
+#         hydrogen bonding (mostly nucleic acid related)
+
+#     Returns
+#     -------
+#     Dict[str, List[Set[str]]]
+#         Mapping of covalent residues
+#     """
+#     if link_type not in all_linkages_dict:
+#         return []
+#     try:
+#         specific_linkages = all_linkages_dict[link_type]
+#         # VO: is there a test case for this?
+#         # does this fix anything?
+#         # specific_linkages = merge_covalent_ligands_with_gaps(specific_linkages)
+#         linkage_no_atoms = [
+#             {":".join(link.split(":")[1:3]) for link in links}
+#             for links in specific_linkages
+#         ]
+#         fragments = [
+#             specific_linkages[idx]
+#             for idx, link in enumerate(linkage_no_atoms)
+#             if len(cov_units.intersection(link))
+#         ]
+#         if len(fragments):
+#             return list(fragments[0])
+#         else:
+#             return []
+#     except (IndexError, KeyError) as e:
+#         log.error(
+#             f"extract_other_covalent_subunit: Could not find {link_type} linkages: {e}"
+#         )
+#         return []
 
 
 def run_plip(biounit_pdbized: mol.EntityHandle) -> PDBComplex:

@@ -26,7 +26,7 @@ from plinder.data.utils.annotations.extras import (
     sort_ccd_codes,
 )
 from plinder.data.utils.annotations.interaction_utils import (
-    extract_other_covalent_subunit,
+    extract_ligand_links_to_neighbouring_chains,
     get_plip_hash,
     pdbize,
     run_plip_on_split_structure,
@@ -660,7 +660,7 @@ class Ligand(BaseModel):
     num_rings: int | None = None
     num_heavy_atoms: int | None = None
     is_covalent: bool = False
-    covalent_linkages: list[str] = Field(default_factory=list)
+    covalent_linkages: set[str] = Field(default_factory=list)
     neighboring_residues: dict[str, list[int]] = Field(default_factory=dict)
     # neighboring_protein_chain_objects: list[Chain] = Field(default_factory=list)
     neighboring_ligands: list[str] = Field(default_factory=list)
@@ -741,7 +741,7 @@ class Ligand(BaseModel):
         ligand QED score
     is_covalent: bool = False
         Is ligand covalently bound to protein
-    covalent_linkages: list[str] = field(default_factory=list)
+    covalent_linkages: set[str] = field(default_factory=list)
         Residue tags of covalently linked residues in ligand
     neighboring_residues: dict[str, list[int]] = field(default_factory=dict)
         Dictionary of neighboring residues, with \
@@ -908,7 +908,7 @@ class Ligand(BaseModel):
         residue_numbers: list[int],
         ligand_like_chains: dict[str, str],
         interface_proximal_gaps: dict[str, dict[tuple[str, str], dict[str, int]]],
-        all_covalent_dict: dict[str, list[set[str]]],
+        all_covalent_dict: dict[str, list[tuple[str, str]]],
         plip_complex_threshold: float = 10.0,
         neighboring_residue_threshold: float = 6.0,
         neighboring_ligand_threshold: float = 4.0,
@@ -937,7 +937,7 @@ class Ligand(BaseModel):
             Chain: chain type for other ligand-like chains in the entry
         interface_proximal_gaps: dict[str, dict[tuple[str, str], dict[str, int]]]
             TODO: document
-        all_covalent_dict : list[set[str]]
+        all_covalent_dict : dict[str, list[tuple[str, str]]]
             All "covalent" residue in entry as defined by mmcif annotations.
             They types are separated by dictionary key and they include:
                 "covale": actual covalent linkage
@@ -1017,21 +1017,10 @@ class Ligand(BaseModel):
             smiles=smiles,
             neighboring_residue_threshold=neighboring_residue_threshold,
             neighboring_ligand_threshold=neighboring_ligand_threshold,
-            resolved_smiles=interactions.ligand.smiles,  # TODO only thing left that depends on PLIP
+            resolved_smiles=interactions.ligand.smiles,  # TODO: only thing left that depends on PLIP
             residue_numbers=residue_numbers,
         )
-        # Add covalency annotation
-        linked_residues = {
-            (
-                f"{biounit.FindResidue(ligand_instance_chain, residue_number).name}:{ligand.asym_id}"
-            )
-            for residue_number in residue_numbers
-        }
-        ligand.covalent_linkages = extract_other_covalent_subunit(
-            all_covalent_dict,
-            linked_residues,
-            link_type="covale",
-        )
+
         neighboring_residue_selection = biounit.Select(
             f"{ligand.neighboring_residue_threshold} <> [{ligand_selection}]"
             + " and protein=True"
@@ -1066,14 +1055,12 @@ class Ligand(BaseModel):
         # TODO: make output more compatible with RFAA, eg. [(("A", "74", "ND2"), ("B", "1"), ("CW", "null"))]
         # see: https://github.com/baker-laboratory/RoseTTAFold-All-Atom?tab=readme-ov-file#predicting-covalently-modified-proteins
 
-        # check if any chain is polypeptide and not ligand
-        check_covalent = []
-        for cov in ligand.covalent_linkages:
-            linkage_chain = f"{cov.split(':', 2)[1]}"
-            if linkage_chain in neighboring_asym_ids:
-                check_covalent.append(linkage_chain)
+        ligand.covalent_linkages = extract_ligand_links_to_neighbouring_chains(
+            all_covalent_dict, ligand.asym_id, neighboring_asym_ids, link_type="covale"
+        )
+
         ligand.is_covalent = (
-            len(check_covalent) > 0
+            len(ligand.covalent_linkages) > 0
         )  # TODO: Check to make sure we are catching all edge cases
 
         neighboring_ligand_selection = biounit.Select(

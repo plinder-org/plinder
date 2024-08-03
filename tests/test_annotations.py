@@ -32,7 +32,7 @@ from plinder.data.utils.annotations.extras import (
     convert_chain,
     extract_rcsb_info,
     extract_rdk_mol_from_cif,
-    extract_small_mol_entities,
+    # extract_small_mol_entities,
     generate_bio_assembly,
     get_all_bound_molecules,
     get_chain_mapping,
@@ -41,7 +41,7 @@ from plinder.data.utils.annotations.extras import (
     get_selected_residues_pdb_block,
     get_specific_bound_molecules,
     read_mmcif_file,
-    sequence_mapping,
+    # sequence_mapping,
 )
 from plinder.data.utils.annotations.interface_gap import annotate_interface_gaps
 from plinder.data.utils.annotations.mmpdb_utils import add_mmp_clusters_to_data
@@ -237,13 +237,13 @@ def test_extract_rdk_mol_from_cif(cif_1qz5_unzipped):
         == "ATP"
     )
 
+# not used
+# def test_get_covalent_connections_2(cif_1qz5):
+#     assert sequence_mapping(cif_1qz5, "A1").resi.to_list() == list(range(1, 376))
 
-def test_get_covalent_connections_2(cif_1qz5):
-    assert sequence_mapping(cif_1qz5, "A1").resi.to_list() == list(range(1, 376))
 
-
-def test_extract_small_mol_entities(cif_1qz5_processed):
-    assert extract_small_mol_entities(cif_1qz5_processed)["A1"][0][0] == [("CA", "376")]
+# def test_extract_small_mol_entities(cif_1qz5_processed):
+#     assert extract_small_mol_entities(cif_1qz5_processed)["A1"][0][0] == [("CA", "376")]
 
 
 def test_short_noncov_peptide_detection(cif_6i41, mock_alternative_datasets):
@@ -290,6 +290,8 @@ def test_synthetic_cov_peptide_detection(cif_6lu7, mock_alternative_datasets):
     )
     lig = plinder_anno.entry.systems["6lu7__1__1.A_2.A__1.B"].ligands[0]
     assert lig.is_invalid == False
+    assert lig.is_covalent == True
+    assert lig.covalent_linkages == {'145:CYS:A:145:SG__5:PJE:B:5:C20'}
     outsdffile = entry_dir / "6lu7__1__1.A_2.A__1.B/ligand_files/1.B.sdf"
     assert outsdffile.is_file()
     rdmol = Chem.SDMolSupplier(outsdffile, removeHs=True)[0]
@@ -321,9 +323,11 @@ def test_simple_covalency_detection_found(cif_7gj7, mock_alternative_datasets):
     plinder_anno_cov = GetPlinderAnnotation(cif_7gj7, "", save_folder=entry_dir)
     plinder_anno_cov.annotate()
     df_cov = plinder_anno_cov.annotated_df
-    # TODO: test 'ligand_covalent_linkages'
     assert df_cov["ligand_is_covalent"].sum() == 2
-
+    # test 'ligand_covalent_linkages'
+    lig = plinder_anno_cov.entry.systems['7gj7__1__1.B__1.N_1.P'].ligands[0]
+    assert lig.is_covalent == True
+    assert lig.covalent_linkages == {'145:CYS:B:145:SG__404:Q0I:N:.:C'}
 
 def test_simple_ternary_detection(cif_2p1q, mock_alternative_datasets):
     entry_dir = mock_alternative_datasets("2p1q")
