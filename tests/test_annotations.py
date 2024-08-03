@@ -111,13 +111,10 @@ def test_entity_type(cif_assembly_1qz5):
 
 
 def test_covalent_linkage(cif_1qz5):
-    reference = {"GLU:A:C", "HIC:A:C", "HIC:A:N", "GLY:A:N"}
+    reference = [('72:GLU:A:72:C', '73:HIC:A:73:N'), ('73:HIC:A:73:C', '74:GLY:A:74:N')]
 
     assert (
-        set(
-            get_covalent_connections(read_mmcif_container(cif_1qz5))["covale"][0].keys()
-        )
-        == reference
+        get_covalent_connections(read_mmcif_container(cif_1qz5))["covale"] == reference
     )
 
 
@@ -302,6 +299,7 @@ def test_synthetic_cov_peptide_detection(cif_6lu7, mock_alternative_datasets):
         len(Chem.MolToSmiles(rdmol).split(".")) == 1
     )
 
+
 def test_crystal_contact_detection(cif_6lu7, mock_alternative_datasets):
     entry_dir = mock_alternative_datasets("6lu7")
     plinder_anno = GetPlinderAnnotation(cif_6lu7, "", save_folder=entry_dir)
@@ -310,6 +308,7 @@ def test_crystal_contact_detection(cif_6lu7, mock_alternative_datasets):
     assert len(df) == 2
     assert all(x == 2 for x in df["system_num_atoms_with_crystal_contacts"])
     assert all(x == 1 for x in df["system_num_crystal_contacted_residues"])
+
 
 def test_simple_covalency_detection(cif_7gl9, mock_alternative_datasets):
     entry_dir = mock_alternative_datasets("7gl9")
