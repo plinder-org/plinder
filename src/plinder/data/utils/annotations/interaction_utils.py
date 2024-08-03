@@ -181,16 +181,25 @@ def extract_ligand_links_to_neighbouring_chains(
     link_type: str = "covale",
 ) -> set[str]:
     covalent_linkages = set()
-    for link1, link2 in all_covalent_dict[link_type]:
-        chains = {link1.split(":")[2], link2.split(":")[2]}
-        if len(chains) == 1:
-            # remove linkages that are to the same chain!
-            continue
-        if chains.intersection(ligand_asym_id):
-            # only if ligand is involved
-            if chains.difference(ligand_asym_id).intersection(neighboring_asym_ids):
-                # only if the other chain is neighbour!
-                covalent_linkages.add(f"{link1}__{link2}")
+    if link_type in all_covalent_dict:
+        for link1, link2 in all_covalent_dict[link_type]:
+            chains = {link1.split(":")[2], link2.split(":")[2]}
+            if len(chains) == 1:
+                # remove linkages that are to the same chain!
+                continue
+            if chains.intersection(ligand_asym_id):
+                # only if ligand is involved
+                # now check that one chain is neighbour and the other is ligand
+                chain1, chain2 = list(chains)
+                # enforce receptor_ligand ordering
+                if neighboring_asym_ids.intersection([chain1]) and set(
+                    [chain2]
+                ).intersection(ligand_asym_id):
+                    covalent_linkages.add(f"{link1}__{link2}")
+                elif neighboring_asym_ids.intersection(chain2) and set(
+                    [chain1]
+                ).intersection(ligand_asym_id):
+                    covalent_linkages.add(f"{link2}__{link1}")
     return covalent_linkages
 
 
