@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import gzip
+import tempfile
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
 import gemmi
 import numpy as np
+from arpeggio.core import InteractionComplex
 from biotite.structure.io.pdbx import PDBxFile
 from mmcif.api.PdbxContainers import DataContainer
 from ost import io, mol
@@ -16,6 +18,7 @@ from plip.basic.supplemental import whichchain, whichresnumber
 from plip.structure.preparation import PDBComplex, PLInteraction
 
 from plinder.core.utils.log import setup_logger
+from plinder.data.utils.annotations.save_utils import save_cif_file
 
 log = setup_logger(__name__)
 
@@ -409,4 +412,46 @@ def get_plip_hash(
             if resnr not in interaction_hashes[instance_chain]:
                 interaction_hashes[instance_chain][resnr] = []
             interaction_hashes[instance_chain][resnr].append(int_attr)
+    return interaction_hashes, waters
+
+
+def run_arpeggio_on_split_structure(
+    biounit_selection: mol.EntityHandle,
+    info: mol.MMCifInfo,
+    selection: list[str],
+    vdw_comp: float = 0.1,
+    interacting: float = 5.0,
+) -> InteractionComplex:
+    tmp_cif_file = tempfile.NamedTemporaryFile(suffix=".cif")
+    save_cif_file(biounit_selection, info, "tmp", tmp_cif_file.name)
+    i_complex = InteractionComplex(
+        tmp_cif_file.name, vdw_comp=vdw_comp, interacting=interacting
+    )
+    i_complex.structure_checks()
+    i_complex.initialize()
+    i_complex.run_arpeggio(
+        selection,
+        interacting_cutoff=interacting,
+        vdw_comp=vdw_comp,
+        include_sequence_adjacent=False,
+    )
+    return i_complex
+
+
+def get_arpeggio_hash(
+    interactions: InteractionComplex, chain: str
+) -> tuple[dict[str, dict[int, list[str]]], set[(tuple[str, int])]]:
+    interaction_hashes: dict[str, dict[int, list[str]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
+    waters = set()
+    for interaction in interactions.get_contacts():
+        instance_chain = interaction["end"]["auth_asym_id"]
+        resnr = interaction["end"]["auth_seq_id"]
+        if interaction["bgn"]["auth_asym_id"] == chain and instance_chain != chain:
+            for contact in interaction["contact"]:
+                if not contact == "proximal":
+                    interaction_hashes[instance_chain][resnr].append(f"type:{contact}")
+                    if interaction["interacting_entities"] == "SELECTION_WATER":
+                        waters.add((instance_chain, resnr))
     return interaction_hashes, waters
