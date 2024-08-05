@@ -118,7 +118,7 @@ Finally, a particular care is taken for test set that is further prioritized to 
 
 Moreover, as we enticipate this resource to be used for benchmarking a wide range of methods, including those simultaneously predicting protein structure (aka. co-folding) or those generating novel ligand structures, we further stratified test (by novel ligand, pocket, protein or all) to cover a wide range of tasks.
 
-Our latest test split contains:
+Our latest test split [#TODO] contains:
 
 | Novel   |   # of systems | # of high quality |  stratification criteria |
 |:--------|---------------:|------------------:|:---------------:|
@@ -128,7 +128,12 @@ Our latest test split contains:
 | all     |  268 |  268 | all of the above |
 | none    |    0 |    0 | none of the above |
 
-## ⚖️ Evaluation harness
+
+## 🧪 Training set
+
+Discuss the splits
+
+## ⚖️  Evaluation harness
 
 See the [`plinder.eval`](docs/eval/README.md) docs for more details.
 
@@ -235,5 +240,6 @@ since the previous release:
 
 # 📃 Publications
 Durairaj, Janani, Yusuf Adeshina, Zhonglin Cao, Xuejin Zhang, Vladas Oleinikovas, Thomas Duignan, Zachary McClure, Xavier Robin, Emanuele Rossi, Guoqing Zhou, Srimukh Prasad Veccham, Clemens Isert, Yuxing Peng, Prabindh Sundareson, Mehmet Akdel, Gabriele Corso, Hannes Stärk, Zachary Wayne Carpenter, Michael M. Bronstein, Emine Kucukbenli, Torsten Schwede, Luca Naef. 2024. “PLINDER: The Protein-Ligand Interactions Dataset and Evaluation Resource.”
+
 [bioRxiv](https://doi.org/10.1101/2024.07.17.603955)
 [ICML'24 ML4LMS](https://openreview.net/forum?id=7UvbaTrNbP)
