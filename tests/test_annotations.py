@@ -314,7 +314,7 @@ def test_simple_covalency_detection_found(cif_7gj7, mock_alternative_datasets):
     df_cov = plinder_anno_cov.annotated_df
     assert df_cov["ligand_is_covalent"].sum() == 2
     # test 'ligand_covalent_linkages'
-    lig = plinder_anno_cov.entry.systems['7gj7__1__1.B__1.N_1.P'].ligands[0]
+    lig = plinder_anno_cov.entry.systems['7gj7__1__1.A_1.B__1.N_1.P'].ligands[0]
     assert lig.is_covalent == True
     assert lig.covalent_linkages == {'145:CYS:B:145:SG__404:Q0I:N:.:C'}
 
