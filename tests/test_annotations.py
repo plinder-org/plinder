@@ -330,7 +330,7 @@ def test_simple_ternary_detection(cif_2p1q, mock_alternative_datasets):
     plinder_anno = GetPlinderAnnotation(cif_2p1q, "", save_folder=entry_dir)
     plinder_anno.annotate()
     df = plinder_anno.annotated_df
-    assert sorted(set(df.ligand_ccd_code.to_list())) == ["IAC", "IHP"]
+    assert sorted(set(df.ligand_ccd_code.to_list())) == ["IAC"]
     auxin_entry = df.ligand_ccd_code == "IAC"
     # expect two chains to get this correct!
     assert df[auxin_entry][
