@@ -1117,9 +1117,8 @@ class Ligand(BaseModel):
 
     @cached_property
     def interacting_protein_chains(self) -> list[str]:
-        interacting_chains = list(sorted(self.interacting_residues.keys()))
-        if len(interacting_chains):
-            return interacting_chains
+        if self.is_artifact:
+            return []
         else:
             return self.neighboring_protein_chains
 

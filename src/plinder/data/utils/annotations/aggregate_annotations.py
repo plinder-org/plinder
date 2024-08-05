@@ -213,6 +213,8 @@ class System(BaseModel):
             lambda: defaultdict(list)
         )
         for ligand in self.ligands:
+            if ligand.is_artifact:
+                continue
             for chain in ligand.interactions:
                 for residue in ligand.interactions[chain]:
                     all_interactions[chain][residue].extend(
