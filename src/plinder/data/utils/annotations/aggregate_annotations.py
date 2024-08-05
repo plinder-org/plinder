@@ -594,7 +594,7 @@ class Entry(BaseModel):
     chains: dict[str, Chain] = Field(default_factory=dict)
     ligand_like_chains: dict[str, str] = Field(default_factory=dict)
     systems: dict[str, System] = Field(default_factory=dict)
-    covalent_bonds: dict[str, list[dict[str, str]]] = Field(default_factory=dict)
+    covalent_bonds: dict[str, list[tuple[str, str]]] = Field(default_factory=dict)
     chain_to_seqres: dict[str, str] = Field(default_factory=dict)
     validation: EntryValidation | None = None
     pass_criteria: bool | None = None
@@ -844,13 +844,14 @@ class Entry(BaseModel):
                     pdb_id=entry.pdb_id,
                     biounit_id=biounit_info.id,
                     biounit=biounit,
+                    info=info,
                     ligand_instance=int(ligand_instance),
                     ligand_chain=entry.chains[ligand_asym_id],
                     residue_numbers=residue_numbers,
                     ligand_like_chains=entry.ligand_like_chains,
                     interface_proximal_gaps=interface_proximal_gaps,
-                    all_covalent_dict=entry.covalent_bonds,  # type: ignore
-                    plip_complex_threshold=plip_complex_threshold,
+                    all_covalent_dict=entry.covalent_bonds,
+                    pli_complex_threshold=plip_complex_threshold,
                     neighboring_residue_threshold=neighboring_residue_threshold,
                     neighboring_ligand_threshold=neighboring_ligand_threshold,
                     data_dir=data_dir,
