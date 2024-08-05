@@ -646,7 +646,6 @@ def extract_rdk_mol_from_cif(
     return mol
 
 
-
 def save_new_cif_file(
     cif_path: Path, metadata_df: pd.DataFrame, output_path: Path
 ) -> None:

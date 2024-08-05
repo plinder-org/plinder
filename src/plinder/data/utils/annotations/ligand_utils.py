@@ -1052,7 +1052,7 @@ class Ligand(BaseModel):
             if ch.name != ligand.instance_chain
         }
 
-        # TODO: make output more compatible with RFAA, eg. [(("A", "74", "ND2"), ("B", "1"), ("CW", "null"))]
+        # DONE: output should be sufficient for RFAA, eg. [(("A", "74", "ND2"), ("B", "1"), ("CW", "null"))]
         # see: https://github.com/baker-laboratory/RoseTTAFold-All-Atom?tab=readme-ov-file#predicting-covalently-modified-proteins
 
         ligand.covalent_linkages = extract_ligand_links_to_neighbouring_chains(

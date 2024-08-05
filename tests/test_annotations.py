@@ -329,18 +329,6 @@ def test_simple_ternary_detection(cif_2p1q, mock_alternative_datasets):
     assert df[auxin_entry][
         "ligand_neighboring_protein_chains_auth_id"
     ].drop_duplicates().to_list() == ["B;C"]
-    # # In the case where a small molecule ligand sits at the interface of a peptide that \
-    # # could be a ligand, we still want to treat the peptide as part of receptor \
-    # # a could example of this are molecular glue crystal where the second protein is
-    # # crystallized as peptides
-    # plinder_anno_v2 = GetPlinderAnnotation(cif_2p1q, "", min_polymer_size=20)
-    # plinder_anno_v2.annotate()
-    # df2 = plinder_anno_v2.annotated_df
-    # assert 'GLN-VAL-VAL-GLY-TRP-PRO-PRO-VAL-ARG-ASN-TYR-ARG-LYS' in df2.ligand_ccd_code.to_list()
-    # pep_entry2 = df2.ligand_ccd_code == 'GLN-VAL-VAL-GLY-TRP-PRO-PRO-VAL-ARG-ASN-TYR-ARG-LYS'
-    # assert df2[pep_entry2]['ligand_neighboring_protein_chains_auth_id'].drop_duplicates().to_list() == ['B']
-    # auxin_entry2 = df2.ligand_ccd_code == 'IAC'
-    # assert df2[auxin_entry2]['ligand_neighboring_protein_chains_auth_id'].drop_duplicates().to_list() == ['B;C']
 
 
 def test_plip_entry_binary(cif_4ci1, mock_alternative_datasets, lig_code="EF2"):
