@@ -32,7 +32,6 @@ from plinder.data.utils.annotations.extras import (
     convert_chain,
     extract_rcsb_info,
     extract_rdk_mol_from_cif,
-    # extract_small_mol_entities,
     generate_bio_assembly,
     get_all_bound_molecules,
     get_chain_mapping,
@@ -41,7 +40,6 @@ from plinder.data.utils.annotations.extras import (
     get_selected_residues_pdb_block,
     get_specific_bound_molecules,
     read_mmcif_file,
-    # sequence_mapping,
 )
 from plinder.data.utils.annotations.interface_gap import annotate_interface_gaps
 from plinder.data.utils.annotations.mmpdb_utils import add_mmp_clusters_to_data
@@ -233,14 +231,6 @@ def test_extract_rdk_mol_from_cif(cif_1qz5_unzipped):
         .GetResidueName()
         == "ATP"
     )
-
-# not used
-# def test_get_covalent_connections_2(cif_1qz5):
-#     assert sequence_mapping(cif_1qz5, "A1").resi.to_list() == list(range(1, 376))
-
-
-# def test_extract_small_mol_entities(cif_1qz5_processed):
-#     assert extract_small_mol_entities(cif_1qz5_processed)["A1"][0][0] == [("CA", "376")]
 
 
 def test_short_noncov_peptide_detection(cif_6i41, mock_alternative_datasets):
