@@ -34,21 +34,33 @@ class PlinderSystem:
     ) -> None:
         self.system_id = system_id
         self.prune = prune
+        self._entry = None
         self._system = None
         self._archive = None
         self._chain_mapping = None
         self._water_mapping = None
 
     @property
-    def system(self) -> dict[str, Any] | None:
-        if self._system is None:
+    def entry(self) -> dict[str, Any]:
+        if self._entry is None:
             entry_pdb_id = self.system_id.split("__")[0]
             try:
                 entry = utils.load_entries(pdb_ids=[entry_pdb_id], prune=self.prune)
-                self._system = entry[entry_pdb_id]["systems"][self.system_id]
+                self._entry = entry[entry_pdb_id]
             except KeyError:
                 raise ValueError(
-                    f"system_id={self.system_id} not found in entry={entry_pdb_id}"
+                    f"pdb_id={entry_pdb_id} not found in entries"
+                )
+        return self._entry
+
+    @property
+    def system(self) -> dict[str, Any] | None:
+        if self._system is None:
+            try:
+                self._system = self.entry["systems"][self.system_id]
+            except KeyError:
+                raise ValueError(
+                    f"system_id={self.system_id} not found in entry"
                 )
         return self._system
 
