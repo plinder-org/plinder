@@ -32,7 +32,6 @@ from plinder.data.utils.annotations.extras import (
     convert_chain,
     extract_rcsb_info,
     extract_rdk_mol_from_cif,
-    extract_small_mol_entities,
     generate_bio_assembly,
     get_all_bound_molecules,
     get_chain_mapping,
@@ -41,7 +40,6 @@ from plinder.data.utils.annotations.extras import (
     get_selected_residues_pdb_block,
     get_specific_bound_molecules,
     read_mmcif_file,
-    sequence_mapping,
 )
 from plinder.data.utils.annotations.interface_gap import annotate_interface_gaps
 from plinder.data.utils.annotations.mmpdb_utils import add_mmp_clusters_to_data
@@ -111,13 +109,10 @@ def test_entity_type(cif_assembly_1qz5):
 
 
 def test_covalent_linkage(cif_1qz5):
-    reference = {"GLU:A:C", "HIC:A:C", "HIC:A:N", "GLY:A:N"}
+    reference = [('72:GLU:A:72:C', '73:HIC:A:73:N'), ('73:HIC:A:73:C', '74:GLY:A:74:N')]
 
     assert (
-        set(
-            get_covalent_connections(read_mmcif_container(cif_1qz5))["covale"][0].keys()
-        )
-        == reference
+        get_covalent_connections(read_mmcif_container(cif_1qz5))["covale"] == reference
     )
 
 
@@ -238,14 +233,6 @@ def test_extract_rdk_mol_from_cif(cif_1qz5_unzipped):
     )
 
 
-def test_get_covalent_connections_2(cif_1qz5):
-    assert sequence_mapping(cif_1qz5, "A1").resi.to_list() == list(range(1, 376))
-
-
-def test_extract_small_mol_entities(cif_1qz5_processed):
-    assert extract_small_mol_entities(cif_1qz5_processed)["A1"][0][0] == [("CA", "376")]
-
-
 def test_short_noncov_peptide_detection(cif_6i41, mock_alternative_datasets):
     entry_dir = mock_alternative_datasets("6i41")
     plinder_anno = GetPlinderAnnotation(cif_6i41, "", min_polymer_size=10, save_folder=entry_dir)
@@ -290,6 +277,8 @@ def test_synthetic_cov_peptide_detection(cif_6lu7, mock_alternative_datasets):
     )
     lig = plinder_anno.entry.systems["6lu7__1__1.A_2.A__1.B"].ligands[0]
     assert lig.is_invalid == False
+    assert lig.is_covalent == True
+    assert lig.covalent_linkages == {'145:CYS:A:145:SG__5:PJE:B:5:C20'}
     outsdffile = entry_dir / "6lu7__1__1.A_2.A__1.B/ligand_files/1.B.sdf"
     assert outsdffile.is_file()
     rdmol = Chem.SDMolSupplier(outsdffile, removeHs=True)[0]
@@ -300,6 +289,7 @@ def test_synthetic_cov_peptide_detection(cif_6lu7, mock_alternative_datasets):
         len(Chem.MolToSmiles(rdmol).split(".")) == 1
     )
 
+
 def test_crystal_contact_detection(cif_6lu7, mock_alternative_datasets):
     entry_dir = mock_alternative_datasets("6lu7")
     plinder_anno = GetPlinderAnnotation(cif_6lu7, "", save_folder=entry_dir)
@@ -308,6 +298,7 @@ def test_crystal_contact_detection(cif_6lu7, mock_alternative_datasets):
     assert len(df) == 2
     assert all(x == 2 for x in df["system_num_atoms_with_crystal_contacts"])
     assert all(x == 1 for x in df["system_num_crystal_contacted_residues"])
+
 
 def test_simple_covalency_detection(cif_7gl9, mock_alternative_datasets):
     entry_dir = mock_alternative_datasets("7gl9")
@@ -321,9 +312,11 @@ def test_simple_covalency_detection_found(cif_7gj7, mock_alternative_datasets):
     plinder_anno_cov = GetPlinderAnnotation(cif_7gj7, "", save_folder=entry_dir)
     plinder_anno_cov.annotate()
     df_cov = plinder_anno_cov.annotated_df
-    # TODO: test 'ligand_covalent_linkages'
     assert df_cov["ligand_is_covalent"].sum() == 2
-
+    # test 'ligand_covalent_linkages'
+    lig = plinder_anno_cov.entry.systems['7gj7__1__1.A_1.B__1.N_1.P'].ligands[0]
+    assert lig.is_covalent == True
+    assert lig.covalent_linkages == {'145:CYS:B:145:SG__404:Q0I:N:.:C'}
 
 def test_simple_ternary_detection(cif_2p1q, mock_alternative_datasets):
     entry_dir = mock_alternative_datasets("2p1q")
@@ -336,18 +329,6 @@ def test_simple_ternary_detection(cif_2p1q, mock_alternative_datasets):
     assert df[auxin_entry][
         "ligand_neighboring_protein_chains_auth_id"
     ].drop_duplicates().to_list() == ["B;C"]
-    # # In the case where a small molecule ligand sits at the interface of a peptide that \
-    # # could be a ligand, we still want to treat the peptide as part of receptor \
-    # # a could example of this are molecular glue crystal where the second protein is
-    # # crystallized as peptides
-    # plinder_anno_v2 = GetPlinderAnnotation(cif_2p1q, "", min_polymer_size=20)
-    # plinder_anno_v2.annotate()
-    # df2 = plinder_anno_v2.annotated_df
-    # assert 'GLN-VAL-VAL-GLY-TRP-PRO-PRO-VAL-ARG-ASN-TYR-ARG-LYS' in df2.ligand_ccd_code.to_list()
-    # pep_entry2 = df2.ligand_ccd_code == 'GLN-VAL-VAL-GLY-TRP-PRO-PRO-VAL-ARG-ASN-TYR-ARG-LYS'
-    # assert df2[pep_entry2]['ligand_neighboring_protein_chains_auth_id'].drop_duplicates().to_list() == ['B']
-    # auxin_entry2 = df2.ligand_ccd_code == 'IAC'
-    # assert df2[auxin_entry2]['ligand_neighboring_protein_chains_auth_id'].drop_duplicates().to_list() == ['B;C']
 
 
 def test_plip_entry_binary(cif_4ci1, mock_alternative_datasets, lig_code="EF2"):
