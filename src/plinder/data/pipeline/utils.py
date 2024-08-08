@@ -427,31 +427,37 @@ def create_index(*, data_dir: Path, force_update: bool = False) -> pd.DataFrame:
         df = pd.read_parquet(data_dir / "index" / "annotation_table.parquet")
     update = False
     if "pli_qcov__100__strong__component" not in df.columns or force_update:
-        update = True
-        pli_qcov_cluster = pd.read_parquet(
-            data_dir
-            / "clusters"
-            / "cluster=components"
-            / "directed=True"
-            / "metric=pli_qcov"
-            / "threshold=100.parquet"
-        )
-        df["pli_qcov__100__strong__component"] = df["system_id"].map(
-            dict(zip(pli_qcov_cluster["system_id"], pli_qcov_cluster["label"]))
-        )
+        try:
+            pli_qcov_cluster = pd.read_parquet(
+                data_dir
+                / "clusters"
+                / "cluster=components"
+                / "directed=True"
+                / "metric=pli_qcov"
+                / "threshold=100.parquet"
+            )
+            df["pli_qcov__100__strong__component"] = df["system_id"].map(
+                dict(zip(pli_qcov_cluster["system_id"], pli_qcov_cluster["label"]))
+            )
+            update = True
+        except Exception:
+            pass
     if "protein_lddt_qcov_weighted_sum__100__strong__component" not in df.columns or force_update:
-        update = True
-        lddt_qcov_cluster = pd.read_parquet(
-            data_dir
-            / "clusters"
-            / "cluster=components"
-            / "directed=True"
-            / "metric=protein_lddt_qcov_weighted_sum"
-            / "threshold=100.parquet"
-        )
-        df["protein_lddt_qcov_weighted_sum__100__strong__component"] = df["system_id"].map(
-            dict(zip(lddt_qcov_cluster["system_id"], lddt_qcov_cluster["label"]))
-        )
+        try:
+            lddt_qcov_cluster = pd.read_parquet(
+                data_dir
+                / "clusters"
+                / "cluster=components"
+                / "directed=True"
+                / "metric=protein_lddt_qcov_weighted_sum"
+                / "threshold=100.parquet"
+            )
+            df["protein_lddt_qcov_weighted_sum__100__strong__component"] = df["system_id"].map(
+                dict(zip(lddt_qcov_cluster["system_id"], lddt_qcov_cluster["label"]))
+            )
+            update = True
+        except Exception:
+            pass
     if update or force_update:
         df.to_parquet(data_dir / "index" / "annotation_table.parquet", index=False)
     return df
