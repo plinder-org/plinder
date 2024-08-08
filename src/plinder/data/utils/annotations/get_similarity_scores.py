@@ -381,10 +381,17 @@ class Scorer:
                     aln_file.with_suffix(".parquet") / f"query_pdb_id={pdb_id}"
                 )
                 if not pdb_id_file.exists():
+                    scratch = Path(*output_folder.parts[:3]) / "scratch" / "scores" / "run_alignments_failures"
+                    scratch.mkdir(exist_ok=True, parents=True)
+                    (scratch / f"{search_db}_{aln_type}_{pdb_id}.txt").write_text("")
                     continue
                 pdb_id_df = pd.read_parquet(pdb_id_file)
                 if not pdb_id_df.empty:
                     pdb_id_df.to_parquet(aln_dir / f"{pdb_id}.parquet")
+                else:
+                    scratch = Path(*output_folder.parts[:3]) / "scratch" / "scores" / "run_alignments_empty"
+                    scratch.mkdir(exist_ok=True, parents=True)
+                    (scratch / f"{search_db}_{aln_type}_{pdb_id}.txt").write_text("")
 
     def aggregate_batch_scores(
         self,
@@ -461,6 +468,9 @@ class Scorer:
                         pdb_file, index=True
                     )
                 except Exception as e:
+                    scratch = Path(*pdb_id_file.parts[:3]) / "scratch" / "scores" / "map_alignment_df_failures"
+                    scratch.mkdir(exist_ok=True, parents=True)
+                    (scratch / f"{search_db}_{aln_type}_{pdb_id}.txt").write_text(f"{repr(e)}: {e}")
                     LOG.error(
                         f"scoring: Error in map_alignment_df: {pdb_id} searching against {search_db} with {aln_type}: {repr(e)}"
                     )

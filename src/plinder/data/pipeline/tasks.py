@@ -693,6 +693,7 @@ def make_batch_scores(
     data_dir: Path,
     pdb_ids: list[str],
     scorer_cfg: DictConfig,
+    force_update: bool,
 ) -> None:
     scorer, entry_ids, batch_db_dir = utils.get_scorer(
         data_dir=data_dir,
@@ -707,7 +708,7 @@ def make_batch_scores(
             batch_id=batch_db_dir.stem,
             pdb_ids=entry_ids,
             search_db=search_db,
-            overwrite=True,
+            overwrite=force_update,
         )
 
 

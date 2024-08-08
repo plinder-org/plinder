@@ -246,10 +246,12 @@ class IngestPipeline:
 
     @utils.ingest_flow_control
     def make_batch_scores(self, pdb_ids: list[str]) -> None:
+        force_update = self.cfg.data.force_update or self.cfg.flow.make_batch_scores_force_update
         tasks.make_batch_scores(
             data_dir=self.plinder_dir,
             pdb_ids=pdb_ids,
             scorer_cfg=self.cfg.scorer,
+            force_update=force_update,
         )
 
     @utils.ingest_flow_control
