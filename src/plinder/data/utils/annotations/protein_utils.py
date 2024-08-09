@@ -40,25 +40,6 @@ NON_SMALL_MOL_LIG_TYPES = [
 ]
 
 
-def format_residues(
-    residues: list[dict[str, Any]], chain_info: dict[str, dict[str, str]]
-) -> list[str]:
-    """Format residues for DataFrame"""
-    return [
-        "__".join(
-            [
-                f"chain:{r['instance']}.{r['chain']}",
-                f"auth_chain:{chain_info[r['chain']]['auth_chain']}",
-                f"entity_id:{chain_info[r['chain']]['entity_id']}",
-                f"residue_index:{r['residue_index']}",
-                f"residue_number:{r['residue_number']}",
-                f"aa:{r['one_letter_code']}",
-            ]
-        )
-        for r in residues
-    ]
-
-
 def read_mmcif_container(mmcif_filename: Path) -> DataContainer:
     """Parse mmcif file with PDBxReader
 
@@ -100,12 +81,27 @@ def get_entry_info(data: DataContainer) -> dict[str, str]:
         ("entry_determination_method", "exptl", "method"),
         ("entry_keywords", "struct_keywords", "pdbx_keywords"),
         ("entry_pH", "exptl_crystal_grow", "pH"),
-        ("entry_resolution", "refine", "ls_d_res_high"),
     ]
     for key, obj_name, attr_name in mappings:
         x = data.getObj(obj_name)
         if x is not None:
             entry_info[key] = x.getValueOrDefault(attr_name)
+    resolution_options = [
+        ("refine", "ls_d_res_high"),
+        ("em_3d_reconstruction", "resolution"),
+    ]
+    resolution = None
+    for obj_name, attr_name in resolution_options:
+        x = data.getObj(obj_name)
+        if x is not None:
+            r = x.getValueOrDefault(attr_name)
+            if r is not None:
+                resolution = r
+                break
+    if resolution is not None:
+        entry_info["entry_resolution"] = resolution
+    else:
+        entry_info["entry_resolution"] = "nan"
     return entry_info
 
 
