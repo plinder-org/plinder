@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import itertools
 import logging
+import re
 import typing as ty
 from collections import Counter, defaultdict
 from functools import cache, cached_property
@@ -22,10 +23,6 @@ from rdkit.Chem.rdchem import Mol, RWMol
 
 from plinder.core.utils.config import get_config
 from plinder.data.common.constants import BASE_DIR
-from plinder.data.utils.annotations.extras import (
-    get_ccd_smiles_dict,
-    sort_ccd_codes,
-)
 from plinder.data.utils.annotations.interaction_utils import (
     extract_ligand_links_to_neighbouring_chains,
     get_plip_hash,
@@ -67,15 +64,24 @@ NON_SMALL_MOL_LIG_TYPES = (
 )
 
 
-def validate_chain_residue(obj: dict[str, ty.Any]) -> dict[str, ty.Any]:
-    clean = {}
-    for k, v in obj.items():
-        key = tuple(k.split(",")) if isinstance(k, str) else k
-        if isinstance(v, dict):
-            clean[key] = validate_chain_residue(v)
-        else:
-            clean[key] = v
-    return clean  # type: ignore
+def sort_ccd_codes(code_list: list[str]) -> list[str]:
+    """Pick long first, then alphabetical letters followed by numbers
+    Args:
+        code_list (Set[str]): set of CCD strings
+
+    Returns:
+        List[str]: list of sorted CCD string set
+    """
+    code_list = sorted(sorted(code_list), key=len, reverse=True)
+    final_list = [code for code in code_list if not re.findall("([0-9])", code[0])] + [
+        code for code in code_list if re.findall("([0-9])", code[0])
+    ]
+    return final_list
+
+
+def get_ccd_smiles_dict(ciffile: Path) -> dict[str, str]:
+    df = pd.read_parquet(ciffile.parent / "components.parquet")
+    return dict(zip(df["binder_id"], df["canonical_smiles"]))
 
 
 def lig_has_dummies(
