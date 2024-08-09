@@ -253,8 +253,7 @@ def prep_data_for_desired_properties(
 
     LOG.info(f"loaded {len(all_system_ids)} from annotation table")
 
-    entries["proto_test"] = entries["system_pass_validation_criteria"]
-    entries["proto_test"].fillna(False)
+    entries["proto_test"] = entries["system_pass_validation_criteria"].fillna(False)
     quality = set(entries[entries["proto_test"]]["system_id"])
     LOG.info(f"{len(quality)} systems are of high quality")
 

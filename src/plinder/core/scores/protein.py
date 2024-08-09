@@ -19,7 +19,7 @@ def query_protein_similarity(
     *,
     search_db: str,
     columns: list[str] | None = None,
-    filters: list[tuple[str, str, str]] | None = None,
+    filters: list[tuple[str, str, str | set[str]]] | None = None,
 ) -> pd.DataFrame | None:
     """
     Query the protein similarity database for
@@ -31,7 +31,7 @@ def query_protein_similarity(
         the name of the search database
     columns : list[str], default=None
         the columns to return
-    filters : list[tuple[str, str, str]]
+    filters : list[tuple[str, str, str | set[str]]]
         the filters to apply
 
     Returns
@@ -58,3 +58,62 @@ def query_protein_similarity(
         LOG.warning("try minimally passing filters=[('similarity', '>', 90)]")
         return None
     return sql(query).to_df()
+
+
+@timeit
+def map_cross_similarity(
+    df: pd.DataFrame, target_systems: set[str], metric: str
+) -> pd.DataFrame:
+    updated_query_systems = []
+    updated_target_systems = []
+    for q, t in zip(df["query_system"], df["target_system"]):
+        if t in target_systems:
+            updated_query_systems.append(t)
+            updated_target_systems.append(q)
+        else:
+            updated_query_systems.append(q)
+            updated_target_systems.append(t)
+    df["updated_query_system"] = updated_query_systems
+    df["updated_target_system"] = updated_target_systems
+    idx = df.groupby("updated_query_system")["similarity"].idxmax()
+    return df.loc[idx][
+        ["updated_query_system", "updated_target_system", "similarity"]
+    ].rename(
+        columns={
+            "updated_query_system": "query_system",
+            "updated_target_system": "target_system",
+            "similarity": metric,
+        }
+    )
+
+
+@timeit
+def cross_similarity(
+    *,
+    query_systems: set[str],
+    target_systems: set[str],
+    metric: str,
+) -> pd.DataFrame:
+    cfg = get_config()
+    dataset = ensure_dataset(rel=f"{cfg.data.scores}/search_db=holo")
+    filters = [
+        [
+            ("metric", "==", metric),
+            ("query_system", "in", query_systems),
+            ("target_system", "in", target_systems),
+        ],
+        [
+            ("metric", "==", metric),
+            ("query_system", "in", target_systems),
+            ("target_system", "in", query_systems),
+        ],
+    ]
+    columns = ["query_system", "target_system", "similarity"]
+    query = make_query(
+        schema=PROTEIN_SIMILARITY_SCHEMA,
+        dataset=dataset,
+        columns=columns,
+        filters=filters,
+    )
+    assert query is not None
+    return map_cross_similarity(sql(query).to_df(), target_systems, metric)

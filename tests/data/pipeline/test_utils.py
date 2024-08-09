@@ -29,76 +29,18 @@ def test_should_run_stage(funcname, run, skip, expect):
     assert utils.should_run_stage(funcname, run, skip) == expect
 
 
-@pytest.mark.parametrize("skip_existing_entries, skip_missing_annotations, wipe_entries, wipe_annotations, expect", [
-    (True, True, False, False, True),
-    (True, False, False, False, True),
-    (False, True, False, False, False),
-    (False, False, False, False, False),
-    (True, True, True, False, False),
-    (True, False, True, False, False),
-    (False, True, False, False, False),
-    (False, True, False, True, False),
-    (False, False, False, False, False),
+@pytest.mark.parametrize("expect", [
+    (False),
+    (True),
 ])
-def test_entry_exists(skip_existing_entries, skip_missing_annotations, wipe_entries, wipe_annotations, expect, tmp_path):
-    path = tmp_path / "aa" / "aaaa.json"
-    opath = tmp_path / "aa" / "aaaa.parquet"
-    path.parent.mkdir(parents=True)
-    path.write_text("")
-    opath.write_text("")
-    assert utils.entry_exists(
-        entry_dir=tmp_path,
-        pdb_id="aaaa",
-        wipe_entries=wipe_entries,
-        wipe_annotations=wipe_annotations,
-        skip_existing_entries=skip_existing_entries,
-        skip_missing_annotations=skip_missing_annotations,
-    ) == expect
-
-
-@pytest.mark.parametrize("skip_existing_entries, skip_missing_annotations, wipe_entries, wipe_annotations, expect", [
-    (True, True, False, False, False),
-    (True, False, False, False, False),
-    (False, True, False, False, False),
-    (False, False, False, False, False),
-    (True, True, True, False, False),
-    (True, False, True, False, False),
-    (False, True, True, False, False),
-    (False, False, True, False, False),
-    (True, True, True, True, False),
-    (True, False, True, True, False),
-    (False, True, True, True, False),
-    (False, False, True, True, False),
-])
-def test_entry_dne(skip_existing_entries, skip_missing_annotations, wipe_entries, wipe_annotations, expect, tmp_path):
-    assert utils.entry_exists(
-        entry_dir=tmp_path,
-        pdb_id="aaaa",
-        wipe_entries=wipe_entries,
-        wipe_annotations=wipe_annotations,
-        skip_existing_entries=skip_existing_entries,
-        skip_missing_annotations=skip_missing_annotations,
-    ) == expect
-
-
-@pytest.mark.parametrize("skip_existing_entries, skip_missing_annotations, wipe_entries, wipe_annotations, expect", [
-    (True, True, False, False, True),
-    (True, True, False, True, False),
-    (True, False, False, False, False),
-    (False, True, False, False, False),
-    (False, False, False, False, False),
-])
-def test_entry_missing_annotations(skip_existing_entries, skip_missing_annotations, wipe_entries, wipe_annotations, expect, tmp_path):
+def test_entry_exists(expect, tmp_path):
     path = tmp_path / "aa" / "aaaa.json"
     path.parent.mkdir(parents=True)
-    path.write_text("")
+    if expect:
+        path.write_text("")
     assert utils.entry_exists(
         entry_dir=tmp_path,
         pdb_id="aaaa",
-        wipe_entries=wipe_entries,
-        wipe_annotations=wipe_annotations,
-        skip_existing_entries=skip_existing_entries,
-        skip_missing_annotations=skip_missing_annotations,
     ) == expect
 
 
