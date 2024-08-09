@@ -1443,7 +1443,7 @@ class Ligand(BaseModel):
         }
         if self.posebusters_result is not None:
             for k in self.posebusters_result:
-                data[f"ligand_{k}"] = self.posebusters_result[k]
+                data[f"ligand_posebusters_{k}"] = self.posebusters_result[k]
 
         data.update(self.format_interactions())
         for chain_type in [

@@ -7,7 +7,7 @@ from PDBValidation.PDBXReader import ResidueNotFound
 from PDBValidation.Residue import Residue
 from PDBValidation.Validation import PDBValidation
 from PDBValidation.XML import ModelledSubgroupNotFound
-from pydantic import BaseModel, ConfigDict, Field, computed_field
+from pydantic import BaseModel, ConfigDict, computed_field
 
 from plinder.core.utils.log import setup_logger
 
@@ -16,112 +16,9 @@ LOG = setup_logger(__name__)
 
 class ResidueValidationThresholds(BaseModel):
     model_config = ConfigDict(ser_json_inf_nan="constants")
-    min_rscc: float
-    max_rsr: float
-    min_average_occupancy: float
-
-
-class ResidueListValidationThresholds(BaseModel):
-    model_config = ConfigDict(ser_json_inf_nan="constants")
-    max_num_unresolved_heavy_atoms: int
-    max_alt_count: int
-    min_average_occupancy: float
-    min_average_rscc: float
-    max_average_rsr: float
-    max_percent_outliers_clashes: float
-    min_percent_rsr_under_threshold: float
-    min_percent_rscc_over_threshold: float
-    min_percent_occupancy_over_threshold: float
-
-
-class EntryValidationThresholds(BaseModel):
-    model_config = ConfigDict(ser_json_inf_nan="constants")
-    max_resolution: float
-    max_rfree: float
-    max_r: float
-    max_r_minus_rfree: float
-
-
-class SystemValidationThresholds(BaseModel):
-    """
-    A class to represent thresholds used in accepting or rejecting a ligand during validation.
-
-
-    Attributes
-    ----------
-    ...
-
-    """
-
-    entry_thresholds: EntryValidationThresholds = EntryValidationThresholds(
-        max_resolution=3.5, max_rfree=0.45, max_r=0.4, max_r_minus_rfree=0.05
-    )
-    residue_thresholds: ResidueValidationThresholds = ResidueValidationThresholds(
-        min_rscc=0.8, max_rsr=0.3, min_average_occupancy=1.0
-    )
-    residue_list_thresholds: dict[str, ResidueListValidationThresholds] = Field(
-        default_factory=lambda: {
-            "ligand": ResidueListValidationThresholds(
-                max_num_unresolved_heavy_atoms=0,
-                max_alt_count=1,
-                min_average_occupancy=0.8,
-                min_average_rscc=0.8,
-                max_average_rsr=0.3,
-                max_percent_outliers_clashes=0.0,
-                min_percent_rsr_under_threshold=0.0,
-                min_percent_rscc_over_threshold=0.0,
-                min_percent_occupancy_over_threshold=0.0,
-            ),
-            "pocket": ResidueListValidationThresholds(
-                max_num_unresolved_heavy_atoms=0,
-                max_alt_count=1,
-                min_average_occupancy=0.8,
-                min_average_rscc=0.8,
-                max_average_rsr=0.3,
-                max_percent_outliers_clashes=100.0,
-                min_percent_rsr_under_threshold=0.0,
-                min_percent_rscc_over_threshold=0.0,
-                min_percent_occupancy_over_threshold=0.0,
-            ),
-        }
-    )
-    max_fraction_atoms_with_crystal_contacts: float = 0.0
-
-    @classmethod
-    def get_iridium_criteria(cls) -> SystemValidationThresholds:
-        return cls(
-            entry_thresholds=EntryValidationThresholds(
-                max_resolution=3.5, max_rfree=0.45, max_r=0.4, max_r_minus_rfree=0.05
-            ),
-            residue_thresholds=ResidueValidationThresholds(
-                min_rscc=0.9, max_rsr=0.1, min_average_occupancy=1.0
-            ),
-            residue_list_thresholds={
-                "ligand": ResidueListValidationThresholds(
-                    max_num_unresolved_heavy_atoms=0,
-                    max_alt_count=1,
-                    min_average_occupancy=1.0,
-                    min_average_rscc=0.9,
-                    max_average_rsr=0.1,
-                    max_percent_outliers_clashes=0.0,
-                    min_percent_rsr_under_threshold=100.0,
-                    min_percent_rscc_over_threshold=100.0,
-                    min_percent_occupancy_over_threshold=100.0,
-                ),
-                "pocket": ResidueListValidationThresholds(
-                    max_num_unresolved_heavy_atoms=0,
-                    max_alt_count=1,
-                    min_average_occupancy=1.0,
-                    min_average_rscc=0.9,
-                    max_average_rsr=0.1,
-                    max_percent_outliers_clashes=0.0,
-                    min_percent_rsr_under_threshold=100.0,
-                    min_percent_rscc_over_threshold=100.0,
-                    min_percent_occupancy_over_threshold=100.0,
-                ),
-            },
-            max_fraction_atoms_with_crystal_contacts=0.0,
-        )
+    min_rscc: float = 0.8
+    max_rsr: float = 0.3
+    min_average_occupancy: float = 1.0
 
 
 class ResidueValidation(BaseModel):
@@ -277,35 +174,13 @@ class ResidueListValidation(BaseModel):
             },
         )
 
-    def pass_criteria(
-        self, thresholds: ResidueListValidationThresholds, num_covalent_ligands: int = 0
-    ) -> bool:
-        return all(
-            [
-                self.num_unresolved_heavy_atoms
-                <= thresholds.max_num_unresolved_heavy_atoms + num_covalent_ligands,
-                self.average_occupancy >= thresholds.min_average_occupancy,
-                self.average_rscc >= thresholds.min_average_rscc,
-                self.average_rsr <= thresholds.max_average_rsr,
-                self.percent_outliers["clashes"]
-                <= thresholds.max_percent_outliers_clashes,
-                self.percent_rsr_under_threshold
-                >= thresholds.min_percent_rsr_under_threshold,
-                self.percent_rscc_over_threshold
-                >= thresholds.min_percent_rscc_over_threshold,
-                self.percent_occupancy_over_threshold
-                >= thresholds.min_percent_occupancy_over_threshold,
-                self.max_alt_count <= thresholds.max_alt_count,
-            ]
-        )
-
     def to_dict(self) -> dict[str, float]:
         # TODO : compare with self.model_dump
         data = {k: v for k, v in self.__dict__.items()}
         for key in data["percent_outliers"]:
             data[f"percent_outliers_{key}"] = data["percent_outliers"][key]
         data.pop("percent_outliers")
-        return data
+        return {f"validation_{k}": v for k, v in data.items()}
 
 
 class EntryValidation(BaseModel):
@@ -365,18 +240,7 @@ class EntryValidation(BaseModel):
             return np.abs(self.r - self.rfree)  # type: ignore
         return np.nan
 
-    def pass_criteria(self, thresholds: EntryValidationThresholds) -> bool:
-        return all(
-            [
-                self.resolution <= thresholds.max_resolution,
-                self.r <= thresholds.max_r,
-                np.isnan(self.rfree) or self.rfree <= thresholds.max_rfree,
-                np.isnan(self.rfree)
-                or self.r_minus_rfree <= thresholds.max_r_minus_rfree,
-            ]
-        )
-
     def to_dict(self) -> dict[str, float | None]:
         data = self.__dict__
         data["r_minus_rfree"] = self.r_minus_rfree
-        return data
+        return {f"validation_{k}": v for k, v in data.items()}

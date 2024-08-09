@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 import typing as ty
 from collections import Counter, defaultdict
+from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
 
@@ -21,7 +22,7 @@ from plinder.core.utils.log import setup_logger
 from plinder.data.utils.annotations.get_ligand_validation import (
     EntryValidation,
     ResidueListValidation,
-    SystemValidationThresholds,
+    ResidueValidationThresholds,
 )
 from plinder.data.utils.annotations.interaction_utils import (
     get_covalent_connections,
@@ -64,6 +65,27 @@ def remove_alphabets(x: str) -> int:
     """
 
     return int(re.sub("[^0-9]", "", x))
+
+
+@dataclass
+class QualityCriteria:
+    max_entry_resolution: float = 3.5
+    max_entry_r: float = 0.4
+    max_entry_rfree: float = 0.45
+    max_entry_r_minus_rfree: float = 0.05
+    ligand_max_num_unresolved_heavy_atoms: int = 0
+    ligand_max_alt_count: int = 1
+    ligand_min_average_occupancy: float = 0.8
+    ligand_min_average_rscc: float = 0.8
+    ligand_max_average_rsr: float = 0.3
+    ligand_max_percent_outliers_clashes: float = 0
+    ligand_max_fraction_atoms_with_crystal_contacts: float = 0
+    pocket_max_num_unresolved_heavy_atoms: int = 0
+    pocket_max_alt_count: int = 1
+    pocket_min_average_occupancy: float = 0.8
+    pocket_min_average_rscc: float = 0.8
+    pocket_max_average_rsr: float = 0.3
+    pocket_max_percent_outliers_clashes: int = 100
 
 
 class System(BaseModel):
@@ -269,7 +291,67 @@ class System(BaseModel):
     def num_ligand_chains(self) -> int:
         return len(self.ligands)
 
-    def format_system(self, chains: dict[str, Chain]) -> dict[str, ty.Any]:
+    def format_validation(
+        self, entry_pass_criteria: bool | None, criteria: QualityCriteria
+    ) -> dict[str, ty.Any]:
+        data = {}
+        if self.ligand_validation:
+            ligand_validation = self.ligand_validation.to_dict()
+            data.update({f"system_ligand_{k}": v for k, v in ligand_validation.items()})
+        if self.pocket_validation:
+            pocket_validation = self.pocket_validation.to_dict()
+            data.update({f"system_pocket_{k}": v for k, v in pocket_validation.items()})
+        if (
+            self.pocket_validation is None
+            or self.ligand_validation is None
+            or entry_pass_criteria is None
+            or not entry_pass_criteria
+        ):
+            self.pass_criteria = False
+        else:
+            quality = [
+                # LIGAND
+                self.num_unresolved_heavy_atoms is not None
+                and self.num_unresolved_heavy_atoms
+                <= self.num_covalent_ligands
+                + criteria.ligand_max_num_unresolved_heavy_atoms,
+                data["system_ligand_validation_max_alt_count"]
+                <= criteria.ligand_max_alt_count,
+                data["system_ligand_validation_average_occupancy"]
+                >= criteria.ligand_min_average_occupancy,
+                data["system_ligand_validation_average_rscc"]
+                >= criteria.ligand_min_average_rscc,
+                data["system_ligand_validation_average_rsr"]
+                <= criteria.ligand_max_average_rsr,
+                data["system_ligand_validation_percent_outliers_clashes"]
+                <= criteria.ligand_max_percent_outliers_clashes,
+                self.fraction_atoms_with_crystal_contacts is not None
+                and self.fraction_atoms_with_crystal_contacts
+                <= criteria.ligand_max_fraction_atoms_with_crystal_contacts,
+                # POCKET
+                data["system_pocket_validation_num_unresolved_heavy_atoms"]
+                <= criteria.pocket_max_num_unresolved_heavy_atoms,
+                data["system_pocket_validation_max_alt_count"]
+                <= criteria.pocket_max_alt_count,
+                data["system_pocket_validation_average_occupancy"]
+                >= criteria.pocket_min_average_occupancy,
+                data["system_pocket_validation_average_rscc"]
+                >= criteria.pocket_min_average_rscc,
+                data["system_pocket_validation_average_rsr"]
+                <= criteria.pocket_max_average_rsr,
+                data["system_pocket_validation_percent_outliers_clashes"]
+                <= criteria.pocket_max_percent_outliers_clashes,
+            ]
+            self.pass_criteria = all(quality)
+        data["system_validation_pass_criteria"] = self.pass_criteria
+        return data
+
+    def format_system(
+        self,
+        chains: dict[str, Chain],
+        entry_pass_criteria: bool | None,
+        criteria: QualityCriteria = QualityCriteria(),
+    ) -> dict[str, ty.Any]:
         data = {
             "system_id": self.id,
             "system_id_no_biounit": self.id_no_biounit,
@@ -296,14 +378,7 @@ class System(BaseModel):
         pocket_mapping = self.get_pocket_domains(chains)
         for mapping in pocket_mapping:
             data[f"system_pocket_{mapping}"] = pocket_mapping[mapping]
-        data["suitable_for_ml_training"] = self.suitable_for_ml_training()
-        if self.ligand_validation:
-            ligand_validation = self.ligand_validation.to_dict()
-            data.update({f"system_ligand_{k}": v for k, v in ligand_validation.items()})
-        if self.pocket_validation:
-            pocket_validation = self.pocket_validation.to_dict()
-            data.update({f"system_pocket_{k}": v for k, v in pocket_validation.items()})
-        data["system_pass_validation_criteria"] = self.pass_criteria
+        data.update(self.format_validation(entry_pass_criteria, criteria))
         for chain_type in ["interacting_protein", "neighboring_protein", "ligand"]:
             data.update(self.format_chains(chain_type, chains))
         return data
@@ -343,6 +418,26 @@ class System(BaseModel):
             ligand.num_heavy_atoms
             for ligand in self.ligands
             if ligand.num_heavy_atoms is not None
+        )
+
+    @cached_property
+    def num_resolved_heavy_atoms(self) -> int | None:
+        if any(ligand.num_resolved_heavy_atoms is None for ligand in self.ligands):
+            return None
+        return sum(
+            ligand.num_resolved_heavy_atoms
+            for ligand in self.ligands
+            if ligand.num_resolved_heavy_atoms is not None
+        )
+
+    @cached_property
+    def num_unresolved_heavy_atoms(self) -> int | None:
+        if any(ligand.num_unresolved_heavy_atoms is None for ligand in self.ligands):
+            return None
+        return sum(
+            ligand.num_unresolved_heavy_atoms
+            for ligand in self.ligands
+            if ligand.num_unresolved_heavy_atoms is not None
         )
 
     @cached_property
@@ -421,8 +516,7 @@ class System(BaseModel):
     def set_validation(
         self,
         chains: dict[str, Chain],
-        thresholds: SystemValidationThresholds,
-        entry_pass_criteria: bool,
+        thresholds: ResidueValidationThresholds = ResidueValidationThresholds(),
     ) -> None:
         self.ligand_validation = ResidueListValidation.from_residues(
             [
@@ -430,7 +524,7 @@ class System(BaseModel):
                 for c in self.ligand_chains
                 for r in chains[c.split(".")[1]].residues
             ],
-            thresholds.residue_thresholds,
+            thresholds,
         )
         self.pocket_validation = ResidueListValidation.from_residues(
             [
@@ -438,24 +532,8 @@ class System(BaseModel):
                 for c in self.pocket_residues
                 for r in self.pocket_residues[c]
             ],
-            thresholds.residue_thresholds,
+            thresholds,
         )
-        if self.ligand_validation is not None and self.pocket_validation is not None:
-            self.pass_criteria = (
-                entry_pass_criteria
-                and self.ligand_validation.pass_criteria(
-                    thresholds.residue_list_thresholds["ligand"],
-                    self.num_covalent_ligands,
-                )
-                and self.pocket_validation.pass_criteria(
-                    thresholds.residue_list_thresholds["pocket"]
-                )
-                and self.fraction_atoms_with_crystal_contacts is not None
-                and self.fraction_atoms_with_crystal_contacts
-                <= thresholds.max_fraction_atoms_with_crystal_contacts
-            )
-        else:
-            self.pass_criteria = None
 
     def run_posebusters_on_system(self, system_folder: Path) -> None:
         """
@@ -542,45 +620,6 @@ class System(BaseModel):
         for k, values in pocket_mapping.items():
             result[k] = sorted(values.items(), key=lambda x: x[1], reverse=True)[0][0]
         return result
-
-    def suitable_for_ml_training(self) -> bool:
-        """Defines what suitable for ml training
-
-        Returns
-        -------
-        bool
-            True if it should be included for ml training
-        """
-        return bool(
-            (self.num_interactions > 2)
-            and (not any(ligand.is_artifact for ligand in self.ligands))
-            and (not any(ligand.is_invalid for ligand in self.ligands))
-            and (not any(ligand.is_ion for ligand in self.ligands))
-            and (
-                all(
-                    ligand.posebusters_result.get("mol_pred_loaded", False)
-                    for ligand in self.ligands
-                )
-            )
-            and (
-                all(
-                    ligand.posebusters_result.get("passes_valence_checks", False)
-                    for ligand in self.ligands
-                )
-            )
-            and (
-                all(
-                    ligand.posebusters_result.get("sanitization", False)
-                    for ligand in self.ligands
-                )
-            )
-            and (
-                all(
-                    ligand.posebusters_result.get("passes_kekulization", False)
-                    for ligand in self.ligands
-                )
-            )
-        )
 
 
 class Entry(BaseModel):
@@ -1005,43 +1044,6 @@ class Entry(BaseModel):
                 return [f"{self.pdb_id}_{c}" for c in chains]
         return []
 
-    # def label_artifacts(
-    #     self,
-    #     within_entry_threshold: int = 15,
-    #     interacting_residue_count_threshold: int = 2,
-    # ) -> None:
-    #     """
-    #     Label artifacts
-
-    #     Parameters
-    #     ----------
-    #     self : Entry
-    #         Entry object
-    #     within_entry_threshold : int
-    #         Exclusion criteria for maximum \
-    #         count of a particular ligand in entry
-    #     interacting_residue_count_threshold : int
-    #         Interacting residue count
-
-    #     Returns
-    #     -------
-    #     TODO:Check to be sure what this function should not be returning anything
-    #     None
-    #     """
-    #     artifact_ligand_chains = {}
-    #     for system in self.systems:
-    #         for ligand in self.systems[system].ligands:
-    #             if ligand.in_artifact_list:
-    #                 artifact_ligand_chains[ligand.asym_id] = ligand.ccd_code
-    #     entry_ccd_to_count: dict[str, int] = defaultdict(int)
-    #     for c in self.chains:
-    #         if c in artifact_ligand_chains:
-    #             entry_ccd_to_count[artifact_ligand_chains[c]] += 1
-
-    #     for s in self.systems:
-    #         for ligand in self.systems[s].ligands:
-    #             ligand.identify_artifact()
-
     def label_chains(self) -> None:
         """
         Label chains as apo/holo/ligand
@@ -1068,7 +1070,35 @@ class Entry(BaseModel):
             elif chain in holo_chains:
                 self.chains[chain].holo = True
 
-    def format_entry(self) -> dict[str, ty.Any]:
+    def format_validation(
+        self, criteria: QualityCriteria = QualityCriteria()
+    ) -> dict[str, ty.Any]:
+        assert self.validation is not None
+        data = self.validation.to_dict()
+        data = {f"entry_{k}": v for k, v in data.items()}
+        if data["entry_validation_r"] is None:
+            self.pass_criteria = False
+        else:
+            quality = [
+                # ENTRY
+                data["entry_validation_resolution"] is not None
+                and data["entry_validation_resolution"]
+                <= criteria.max_entry_resolution,
+                data["entry_validation_r"] is not None
+                and data["entry_validation_r"] <= criteria.max_entry_r,
+                data["entry_validation_rfree"] is not None
+                and data["entry_validation_rfree"] <= criteria.max_entry_rfree,
+                data["entry_validation_r_minus_rfree"] is not None
+                and data["entry_validation_r_minus_rfree"]
+                <= criteria.max_entry_r_minus_rfree,
+            ]
+            self.pass_criteria = all(quality)
+        data["entry_validation_pass_criteria"] = self.pass_criteria
+        return data
+
+    def format_entry(
+        self, criteria: QualityCriteria = QualityCriteria()
+    ) -> dict[str, ty.Any]:
         """
         Format label for entry-level annotations by prepending \
             label with "entry_"
@@ -1092,15 +1122,7 @@ class Entry(BaseModel):
             "entry_resolution": self.resolution,
         }
         if self.validation:
-            validation = self.validation.to_dict()
-            data.update(
-                {
-                    f"entry_{k}": v
-                    for k, v in validation.items()
-                    if f"entry_{k}" not in data
-                }
-            )
-            data["entry_pass_validation_criteria"] = self.pass_criteria
+            data.update(self.format_validation(criteria))
         return data
 
     def to_df(self) -> pd.DataFrame:
@@ -1118,7 +1140,9 @@ class Entry(BaseModel):
         rows = []
         entry_data = self.format_entry()
         for system in self.systems:
-            system_data = self.systems[system].format_system(self.chains)
+            system_data = self.systems[system].format_system(
+                self.chains, self.pass_criteria
+            )
             for ligand in self.systems[system].ligands:
                 ligand_data = ligand.format_ligand(self.chains)
                 rows.append({**entry_data, **system_data, **ligand_data})
@@ -1202,7 +1226,7 @@ class Entry(BaseModel):
         self,
         validation_file: Path,
         cif_file: Path,
-        thresholds: SystemValidationThresholds = SystemValidationThresholds(),
+        thresholds: ResidueValidationThresholds = ResidueValidationThresholds(),
     ) -> None:
         if self.determination_method != "X-RAY DIFFRACTION":
             LOG.warning(
@@ -1218,20 +1242,11 @@ class Entry(BaseModel):
                 str(validation_file), mmcif_path=str(cif_file)
             ).getValidation()
             self.validation = EntryValidation.from_entry(doc)
-            if self.validation:
-                self.pass_criteria = self.validation.pass_criteria(
-                    thresholds.entry_thresholds
-                )
-                if self.pass_criteria is None:
-                    return
+            if self.validation and self.validation.r is not None:
                 for chain in self.chains:
-                    self.chains[chain].set_validation(
-                        doc, thresholds.residue_thresholds
-                    )
+                    self.chains[chain].set_validation(doc, thresholds)
                 for system in self.systems:
-                    self.systems[system].set_validation(
-                        self.chains, thresholds, self.pass_criteria
-                    )
+                    self.systems[system].set_validation(self.chains, thresholds)
         except Exception as e:
             LOG.error(
                 f"set_validation: Error setting validation for {self.pdb_id}: {e}"
