@@ -15,7 +15,6 @@ from rdkit.Chem.MolStandardize import rdMolStandardize
 
 from plinder.core.utils.log import setup_logger
 from plinder.data.structure.contacts import get_atom_neighbors
-from plinder.data.utils import diffdock_utils
 from plinder.data.utils.annotations.rdkit_utils import fix_valency_issues
 
 if TYPE_CHECKING:
@@ -354,15 +353,6 @@ def all_protein_chains_present(protein_chains: set[str], complex_file: Path) -> 
     # chains = {ch for ch in protein_arr.chain_id}
     chains = {ch for ch in complex_arr.chain_id}
     return bool(protein_chains.issubset(chains))
-
-
-def ligand_is_diffdock_loadable(ligand_file: Path) -> bool:
-    try:
-        lig = diffdock_utils.read_molecule(str(ligand_file))
-        diffdock_utils.get_lig_graph_with_matching(lig)
-        return True
-    except Exception:
-        return False
 
 
 def run_structure_checks(system_dict: dict[str, Any]) -> list[dict[str, Any]]:

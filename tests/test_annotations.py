@@ -26,26 +26,10 @@ from plinder.data.utils.annotations.interface_gap import annotate_interface_gaps
 from plinder.data.utils.annotations.aggregate_annotations import Entry
 from plinder.data.utils.annotations.protein_utils import read_mmcif_container
 from plinder.data.utils.annotations.interaction_utils import get_covalent_connections
-from plinder.data.utils.annotations.ligand_utils import get_smiles_from_cif
-from plinder.data.utils.annotations.extras import (
-    add_extra_loop_to_bioassembly,
-    convert_chain,
-    extract_rcsb_info,
-    extract_rdk_mol_from_cif,
-    generate_bio_assembly,
-    get_all_bound_molecules,
-    get_chain_mapping,
-    get_ec,
-    get_entity_type,
-    get_selected_residues_pdb_block,
-    get_specific_bound_molecules,
-    read_mmcif_file,
-)
+from plinder.data.utils.annotations.ligand_utils import get_smiles_from_cif, sort_ccd_codes, get_ccd_smiles_dict
 from plinder.data.utils.annotations.interface_gap import annotate_interface_gaps
 from plinder.data.utils.annotations.mmpdb_utils import add_mmp_clusters_to_data
 from plinder.data.get_system_annotations import GetPlinderAnnotation
-from plinder.data.utils.annotations.extras import sort_ccd_codes
-
 
 
 @pytest.fixture(autouse=True)
@@ -74,39 +58,15 @@ def mock_ccd_lookups(monkeypatch):
 def test_ccd_name_sorter():
     assert sort_ccd_codes({'G', 'G25', 'CPG', '5GP'}) == ['CPG', 'G25', 'G', '5GP']
 
+def test_get_smiles_dict(mock_alternative_datasets):
+    entry_dir = mock_alternative_datasets("test")
+    obj = get_ccd_smiles_dict(entry_dir.parent.parent / "dbs" / "components" / "components.cif")
+    assert len(obj)
 
 def test_morgan_fingerprint():
     reference = "4P///wAIAAARAAAAAAIAXQYUuFEAGhwdAjS5A40BNPSKeHY="
     fp = get_morgan_fingerprint(Chem.MolFromSmiles("CCCCOOO"))
     assert fp == reference
-
-
-def test_rcsb_info(cif_4ci1):
-    reference = ("2013-12-05", 2.98, "X-RAY DIFFRACTION")
-    rcsb_info = extract_rcsb_info(read_mmcif_file(cif_4ci1))
-    assert rcsb_info == reference
-
-
-def test_get_ec(cif_3g32):
-    reference = "3.5.2.6"
-    extracted_ec = get_ec(read_mmcif_file(cif_3g32), ["A1"])
-    assert extracted_ec == reference
-
-
-def test_convert_chain():
-    reference = {"A1": "A", "B1": "B"}
-    assert convert_chain(["A1", "B1"]) == reference
-
-
-def test_chain_mapping(cif_assembly_1qz5):
-    reference = {"A1": "A"}
-    assert get_chain_mapping(cif_assembly_1qz5) == reference
-
-
-def test_entity_type(cif_assembly_1qz5):
-    reference = "NonPolymer"
-    assert get_entity_type(cif_assembly_1qz5, "A1", "500", "KAB") == reference
-
 
 def test_covalent_linkage(cif_1qz5):
     reference = [('72:GLU:A:72:C', '73:HIC:A:73:N'), ('73:HIC:A:73:C', '74:GLY:A:74:N')]
@@ -115,45 +75,6 @@ def test_covalent_linkage(cif_1qz5):
         get_covalent_connections(read_mmcif_container(cif_1qz5))["covale"] == reference
     )
 
-
-def test_bsite_metal(cif_assembly_5a7w):
-    reference = {"MN,1356,A1"}
-    pdbx_file = read_mmcif_file(cif_assembly_5a7w)
-    atm_array = get_structure(pdbx_file, model=1)
-    prot = atm_array[struc.filter_amino_acids(atm_array)]
-    metal = atm_array[atm_array.res_name == "MN"]
-    assert extract_bsite_metal(metal, prot) == reference
-
-
-def test_bsite_water(cif_assembly_4ci1):
-    reference = "HOH,2006,B1"
-    pdbx_file = read_mmcif_file(Path(cif_assembly_4ci1))
-    atm_array = get_structure(pdbx_file, model=1)
-    water = atm_array[(atm_array.res_name == "HOH") & (atm_array.chain_id == "B1")]
-    prot = atm_array[struc.filter_amino_acids(atm_array)]
-    assert reference in extract_bsite_water(water, prot)
-
-
-def test_ligand_hydrogenation(cif_assembly_5a7w, sdf_5a7w_lig):
-    pdbx_file = read_mmcif_file(cif_assembly_5a7w)
-    atm_array = get_structure(pdbx_file, model=1)
-
-    lig = atm_array[
-        (atm_array.res_name == "35M")
-        & (atm_array.chain_id == "A1")
-        & (atm_array.res_id == 1355)
-    ]
-
-    reference = next(Chem.SDMolSupplier(str(sdf_5a7w_lig), removeHs=False))
-    mol = add_hydrogen_to_lig_array(
-        lig,
-        "c1cc(ccc1C(=O)Nc2ccc(c(c2)c3cc(ccn3)C(=O)O)O)O",
-        lig_resn="35M",
-        chain_mapping={"A1": "A"},
-        add_h=True,
-    )
-
-    assert len(mol.GetAtoms()) == len(reference.GetAtoms())
 
 
 def test_find_missing_residues(cif_2y4i_system):
@@ -167,71 +88,6 @@ def test_find_missing_residues(cif_2y4i_system):
         "missing_interface_residues_8A": 0,
     }
     assert actual == expected
-
-
-def test_read_mmcif(cif_1qz5_unzipped):
-    assert isinstance(read_mmcif_file(cif_1qz5_unzipped), PDBxFile)
-
-
-def test_get_all_bound_molecules(cif_1qz5_unzipped):
-    assert list(
-        get_all_bound_molecules(
-            cif_1qz5_unzipped,
-        ).keys()
-    ) == [("A376",), ("A380",), ("A500",)]
-
-
-def test_get_specific_bound_molecules(cif_1qz5_unzipped):
-    assert (
-        Chem.MolToSmiles(
-            get_specific_bound_molecules(cif_1qz5_unzipped, residue_list=[("A", 380)])
-        )
-        == "[H]OC1([H])C([H])(N2C([H])=NC3=C2N=C([H])N=C3N([H])[H])OC([H])(C([H])([H])OP(=O)(O[H])OP(=O)(O[H])OP(=O)(O[H])O[H])C1([H])O[H]"
-    )
-
-
-def test_get_selected_residues_pdb_block(cif_1qz5_unzipped):
-    assert (
-        Chem.MolFromPDBBlock(
-            get_selected_residues_pdb_block(
-                Path(cif_1qz5_unzipped), residue_criteria=[("ATP", 380, "A")]
-            )
-        )
-        .GetAtomWithIdx(0)
-        .GetPDBResidueInfo()
-        .GetResidueName()
-        == "ATP"
-    )
-
-
-def test_generate_bio_assembly(cif_1qz5_unzipped, tmp_path):
-    assert generate_bio_assembly(cif_1qz5_unzipped, tmp_path)[1] == {"A": "A1"}
-
-
-def test_add_extra_loop_to_bioassembly(cif_1qz5, cif_1qz5_unzipped, tmp_path):
-    block = gemmi.cif.read(
-        str(
-            add_extra_loop_to_bioassembly(
-                cif_1qz5,
-                cif_1qz5_unzipped,
-                {"A": "A1"},
-                tmp_path / "1qz5-processed.cif",
-            )
-        )
-    )
-
-    assert block.sole_block().find_loop("_pdbx_nonpoly_scheme.mon_id")[2] == "KAB"
-
-
-def test_extract_rdk_mol_from_cif(cif_1qz5_unzipped):
-    assert (
-        extract_rdk_mol_from_cif(cif_1qz5_unzipped, "ATP", 380, "A")
-        .GetAtomWithIdx(0)
-        .GetPDBResidueInfo()
-        .GetResidueName()
-        == "ATP"
-    )
-
 
 def test_short_noncov_peptide_detection(cif_6i41, mock_alternative_datasets):
     entry_dir = mock_alternative_datasets("6i41")
