@@ -3,6 +3,7 @@
 import os
 from concurrent.futures import ALL_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
+from string import digits, ascii_lowercase
 from shutil import rmtree
 from subprocess import check_output
 from textwrap import dedent
@@ -32,6 +33,7 @@ STAGES = [
     "make_sub_dbs",
     "run_batch_searches",
     "make_batch_scores",
+    "collate_partitions",
     "make_mmp_index",
     "make_components_and_communities",
     "make_splits",
@@ -726,7 +728,12 @@ def make_batch_scores(
             scorer.get_score_df(data_dir, pdb_id, search_db=search_db, overwrite=force_update)
 
 
-def collate_partitions(*, data_dir: Path, row_group_size: int = 500_000) -> None:
+def scatter_collate_partitions() -> list[list[str]]:
+    partitions = [[i] for i in digits + ascii_lowercase] + [["apo"], ["pred"]]
+    return partitions[:1]
+
+
+def collate_partitions(*, data_dir: Path, partition: str) -> None:
     """
     Collate the batch results from make_batch_scores into a partitioned
     sorted dataset using duckdb.
@@ -735,27 +742,39 @@ def collate_partitions(*, data_dir: Path, row_group_size: int = 500_000) -> None
     ----------
     data_dir : Path
         plinder root dir
-    partitions : Path
-        root directory of batch partitions
+    partition : list[str]
+        partitions to re-write
     """
     import duckdb
 
-    score_dir = data_dir / "scores"
-    for search_db in ["holo", "apo", "pred"]:
-        LOG.info(f"collate_partitions: collating search_db={search_db}")
-        dst_dir = Path("/plinder/2024-06/duckdb/search_db={search_db}/")
-        dst_dir.mkdir(exist_ok=True, parents=True)
-        duckdb.sql(
-            dedent(
-                f"""
-                    COPY
-                        (select * from '{score_dir}/search_db={search_db}/*.parquet')
-                    TO
-                        '{dst_dir}/*.parquet'
-                    (FORMAT PARQUET, ROW_GROUP_SIZE {row_group_size}, PARTITION_BY (metric))
-                """
-            )
+    [part] = partition
+    con = duckdb.connect()
+    con.sql(f"set temp_directory='/plinder/tmp/{part}';")
+
+    search_db = "holo"
+    src = "*.parquet"
+    tgt = "*.parquet"
+    if part in ["apo", "pred"]:
+        search_db = part
+        src = f"*{part}.parquet"
+        tgt = f"{part}.parquet"
+    score_dir = data_dir / "scores" / f"search_db={search_db}"
+    source_dir = data_dir / "dbs" / "subdbs" / f"search_db={search_db}"
+    source = f"{source_dir}/{src}"
+    target = f"{score_dir}/{tgt}"
+
+    score_dir.mkdir(exist_ok=True, parents=True)
+    con.sql(
+        dedent(
+            f"""
+                COPY
+                    (select * from '{source}' order by metric, similarity desc)
+                TO
+                    '{target}'
+                (FORMAT PARQUET, ROW_GROUP_SIZE 500_000);
+            """
         )
+    )
 
 
 def scatter_make_components_and_communities(

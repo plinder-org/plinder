@@ -253,8 +253,13 @@ class IngestPipeline:
         )
 
     @utils.ingest_flow_control
-    def collate_partitions(self) -> None:
-        tasks.collate_partitions(data_dir=self.plinder_dir)
+    def scatter_collate_partitions(self) -> list[list[str]]:
+        chunks: list[list[str]] = tasks.scatter_collate_partitions()
+        return chunks
+
+    @utils.ingest_flow_control
+    def collate_partitions(self, partition: list[str]) -> None:
+        tasks.collate_partitions(data_dir=self.plinder_dir, partition=partition)
 
     @utils.ingest_flow_control
     def scatter_make_components_and_communities(self) -> list[list[tuple[str, int]]]:
