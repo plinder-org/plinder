@@ -317,7 +317,7 @@ class StratifiedTestSet:
                 self.split_df[self.split_df["split"] == self.test_label]["system_id"]
             )
         ]
-        quality = dict(zip(df["system_id"], df["system_pass_validation_criteria"]))
+        quality = dict(zip(df["system_id"], df["system_validation_pass_criteria"]))
         missing_systems = set(
             self.max_similarities[~self.max_similarities["system_id"].isin(quality)][
                 "system_id"

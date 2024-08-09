@@ -400,7 +400,7 @@ class Chain(BaseModel):
         if self.validation is not None:
             validation_dict = self.validation.to_dict()
             for key in validation_dict:
-                data[f"_{key}"] = validation_dict[key]
+                data[f"_validation_{key}"] = validation_dict[key]
         return data
 
     def set_validation(
