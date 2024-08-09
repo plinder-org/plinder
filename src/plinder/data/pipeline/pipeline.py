@@ -236,11 +236,9 @@ class IngestPipeline:
 
     @utils.ingest_flow_control
     def scatter_make_batch_scores(self) -> list[list[str]]:
-        chunks: list[list[str]] = tasks.scatter_protein_scoring(
+        chunks: list[list[str]] = tasks.scatter_missing_scores(
             data_dir=self.plinder_dir,
             batch_size=self.cfg.flow.make_batch_scores_batch_size,
-            two_char_codes=self.cfg.context.two_char_codes,
-            pdb_ids=self.cfg.context.pdb_ids,
         )
         return chunks
 

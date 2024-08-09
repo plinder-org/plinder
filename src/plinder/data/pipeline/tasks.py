@@ -9,6 +9,7 @@ from textwrap import dedent
 from zipfile import ZIP_DEFLATED, ZipFile
 
 import pandas as pd
+from tqdm import tqdm
 from omegaconf import DictConfig
 
 from plinder.core.utils import gcs
@@ -688,6 +689,25 @@ def run_batch_searches(
     rmtree(batch_db_dir)
 
 
+def scatter_missing_scores(
+    *,
+    data_dir: Path,
+    batch_size: int,
+) -> list[list[str]]:
+    present = utils.get_pdb_ids_in_scoring_dataset(data_dir=data_dir)
+    alns = utils.get_alns(data_dir=data_dir, mapped=True)
+    rerun = set()
+    for search_db, pdb_ids in present.items():
+        aln_foldseek = alns[search_db]["foldseek"]
+        aln_mmseqs = alns[search_db]["mmseqs"]
+        aln = set(aln_foldseek).union(aln_mmseqs)
+        rerun |= aln.difference(pdb_ids)
+    rerun = sorted(rerun)
+    return [
+        rerun[pos : pos + batch_size] for pos in range(0, len(rerun), batch_size)
+    ]
+
+
 def make_batch_scores(
     *,
     data_dir: Path,
@@ -695,21 +715,15 @@ def make_batch_scores(
     scorer_cfg: DictConfig,
     force_update: bool,
 ) -> None:
-    scorer, entry_ids, batch_db_dir = utils.get_scorer(
+    scorer, entry_ids, _ = utils.get_scorer(
         data_dir=data_dir,
         pdb_ids=pdb_ids,
         scorer_cfg=scorer_cfg,
         load_entries=False,
     )
     for search_db in scorer_cfg.sub_databases:
-        LOG.info("make_batch_scores: aggregating batch scores")
-        scorer.aggregate_batch_scores(
-            data_dir=data_dir,
-            batch_id=batch_db_dir.stem,
-            pdb_ids=entry_ids,
-            search_db=search_db,
-            overwrite=force_update,
-        )
+        for pdb_id in tqdm(entry_ids):
+            scorer.get_score_df(data_dir, pdb_id, search_db=search_db, overwrite=force_update)
 
 
 def collate_partitions(*, data_dir: Path, row_group_size: int = 500_000) -> None:

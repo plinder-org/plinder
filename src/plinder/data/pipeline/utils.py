@@ -333,6 +333,42 @@ def partition_batch_scores(*, partition_dir: Path, scores_dir: Path) -> None:
         )
 
 
+def get_pdb_ids_in_scoring_dataset(*, data_dir: Path) -> dict[str, list[str]]:
+    """
+    Get all the pdb IDs that are present in the raw scoring dataset
+
+    Parameters
+    ----------
+    data_dir : Path
+        the root plinder dir
+    """
+    found = {}
+    dbs = data_dir / "dbs" / "subdbs"
+    for search_db in ["holo", "apo", "pred"]:
+        found[search_db] = [path.stem for path in (dbs / f"search_db={search_db}").glob("*parquet")]
+    return found
+
+
+def get_alns(*, data_dir: Path, mapped: bool = False) -> dict[str, dict[str, list[str]]]:
+    """
+    Get all the pdb IDs that are present in the raw alignment dataset
+
+    Parameters
+    ----------
+    data_dir : Path
+        the root plinder dir
+    """
+    sub = "mapped_aln" if mapped else "aln"
+    found = {}
+    dbs = data_dir / "dbs" / "subdbs"
+    for search_db in ["holo", "apo", "pred"]:
+        found.setdefault(search_db, {})
+        for aln_type in ["foldseek", "mmseqs"]:
+            found[search_db].setdefault(aln_type, {})
+            found[search_db][aln_type] = [path.stem for path in (dbs / f"{search_db}_{aln_type}/{sub}/").glob("*parquet")]
+    return found
+
+
 def should_run_stage(stage: str, run: list[str], skip: list[str]) -> bool:
     """
     Compare function name to list of whitelisted / blacklisted
