@@ -139,7 +139,7 @@ The naming of the directory is by `system` - since a given PDB entry can contain
 With the `system_id` contained in these split files, you can load the respective train, val & test splits **after unzipping** the `systems` directory. E.g. as shown in the Dataframe above, `~/.local/share/plinder/2024-04/v1/systems/1grx__1__1.A__1.B/system.cif` will contain the full mmcif of the system. We also provide cif files of seperated receptors (`*/receptor.cif`) and ligands (`*/ligand_files/*.sdf`) as well as pdb files (`*/receptor.pdb`) but **strongly encourage cif**, pdb is considered a [legacy file format](https://pdb101.rcsb.org/learn/guide-to-understanding-pdb-data/beginner%E2%80%99s-guide-to-pdbx-mmcif).
 
 
-Note: a non-redundant and single-ligand smaller subset of this version was to train diffdock in the paper and is available at 2024-04/v0.
+Note: a non-redundant and single-ligand smaller subset of this version was used to train diffdock in the paper and is available at 2024-04/v0.
 
 The folder also contains a `.yaml` which is the config used to generate the split and can be ignored unless you want to reproduce the splits.
 
@@ -158,14 +158,15 @@ release and the `plinder.core` package makes it easy to interact
 with the dataset.
 
 Changelog:
-2024-06/v2 (Upcoming):
-- Improved SDF saving to handle some bond order issues
-- Updated system definition to be more stable and independent of PLIP
-- Added binding affinities from BindingDB and added "has_affinity" as priority for test split
-- Annotated all crystal contacts
-- Improved covalency detection
-2024-04/v1 (Current): Version with redundancy removal by protein pocket and ligand similarity.
-2024-04/v0: Version used to re-train DiffDock in the paper, with redundancy removal based on \<pdbid\>\_\<ligand ccd codes\>
+- 2024-06/v2 (Upcoming):
+    - Improved SDF saving to handle some bond order issues
+    - Updated system definition to be more stable and independent of PLIP
+    - Added binding affinities from BindingDB and added "has_affinity" as priority for test split
+    - Annotated all crystal contacts
+    - Improved covalency detection
+
+- 2024-04/v1 (Current): Version with redundancy removal by protein pocket and ligand similarity.
+- 2024-04/v0: Version used to re-train DiffDock in the paper, with redundancy removal based on \<pdbid\>\_\<ligand ccd codes\>
 
 ## 🏅 Gold standard benchmark sets
 
