@@ -9,7 +9,7 @@ from metaflow import FlowSpec, Parameter, kubernetes, environment, step, retry
 MOUNT = "/plinder"
 K8S = dict(
     cpu=1,
-    image="ghcr.io/plinder-org/plinder:v0.1.1",
+    image="us-east1-docker.pkg.dev/vantai-analysis/metaflow/plinder:v0.1.3-28-gabeb88fa-dirty",
     node_selector={
         "topology.kubernetes.io/zone": "us-east1-b",
     },
@@ -19,7 +19,7 @@ K8S = dict(
 )
 ENV = dict(
     vars=dict(
-        PLINDER_MOUNT="",
+        PLINDER_MOUNT=MOUNT,
         PLINDER_RELEASE="2024-06",
         PLINDER_ITERATION="",
     )
@@ -88,57 +88,57 @@ class PlinderSplitEvalFlow(FlowSpec):
     def join_make_splits(self, inputs):
         self.pipeline = inputs[0].pipeline
         self.merge_artifacts(inputs, exclude=["chunks"])
-        self.next(self.scatter_compute_ligand_leakage)
-
-    @kubernetes(**K8S)
-    @environment(**ENV)
-    @retry
-    @step
-    def scatter_compute_ligand_leakage(self):
-        self.chunks = self.pipeline.scatter_compute_ligand_leakage()
-        self.next(self.compute_ligand_leakage, foreach="chunks")
-
-    @kubernetes(**{**K8S, **LIGAND_LEAKAGE})
-    @environment(**ENV)
-    @retry
-    @step
-    def compute_ligand_leakage(self):
-        self.pipeline.compute_ligand_leakage(self.input)
-        self.next(self.join_compute_ligand_leakage)
-
-    @kubernetes(**K8S)
-    @environment(**ENV)
-    @retry
-    @step
-    def join_compute_ligand_leakage(self, inputs):
-        self.pipeline = inputs[0].pipeline
-        self.merge_artifacts(inputs, exclude=["chunks"])
-        self.next(self.scatter_compute_protein_leakage)
-
-    @kubernetes(**K8S)
-    @environment(**ENV)
-    @retry
-    @step
-    def scatter_compute_protein_leakage(self):
-        self.chunks = self.pipeline.scatter_compute_protein_leakage()
-        self.next(self.compute_protein_leakage, foreach="chunks")
-
-    @kubernetes(**{**K8S, **PROTEIN_LEAKAGE})
-    @environment(**ENV)
-    @retry
-    @step
-    def compute_protein_leakage(self):
-        self.pipeline.compute_protein_leakage(self.input)
-        self.next(self.join_compute_protein_leakage)
-
-    @kubernetes(**K8S)
-    @environment(**ENV)
-    @retry
-    @step
-    def join_compute_protein_leakage(self, inputs):
-        self.pipeline = inputs[0].pipeline
-        self.merge_artifacts(inputs, exclude=["chunks", "run_leakage"])
         self.next(self.end)
+
+    # @kubernetes(**K8S)
+    # @environment(**ENV)
+    # @retry
+    # @step
+    # def scatter_compute_ligand_leakage(self):
+    #     self.chunks = self.pipeline.scatter_compute_ligand_leakage()
+    #     self.next(self.compute_ligand_leakage, foreach="chunks")
+    #
+    # @kubernetes(**{**K8S, **LIGAND_LEAKAGE})
+    # @environment(**ENV)
+    # @retry
+    # @step
+    # def compute_ligand_leakage(self):
+    #     self.pipeline.compute_ligand_leakage(self.input)
+    #     self.next(self.join_compute_ligand_leakage)
+    #
+    # @kubernetes(**K8S)
+    # @environment(**ENV)
+    # @retry
+    # @step
+    # def join_compute_ligand_leakage(self, inputs):
+    #     self.pipeline = inputs[0].pipeline
+    #     self.merge_artifacts(inputs, exclude=["chunks"])
+    #     self.next(self.scatter_compute_protein_leakage)
+    #
+    # @kubernetes(**K8S)
+    # @environment(**ENV)
+    # @retry
+    # @step
+    # def scatter_compute_protein_leakage(self):
+    #     self.chunks = self.pipeline.scatter_compute_protein_leakage()
+    #     self.next(self.compute_protein_leakage, foreach="chunks")
+    #
+    # @kubernetes(**{**K8S, **PROTEIN_LEAKAGE})
+    # @environment(**ENV)
+    # @retry
+    # @step
+    # def compute_protein_leakage(self):
+    #     self.pipeline.compute_protein_leakage(self.input)
+    #     self.next(self.join_compute_protein_leakage)
+    #
+    # @kubernetes(**K8S)
+    # @environment(**ENV)
+    # @retry
+    # @step
+    # def join_compute_protein_leakage(self, inputs):
+    #     self.pipeline = inputs[0].pipeline
+    #     self.merge_artifacts(inputs, exclude=["chunks", "run_leakage"])
+    #     self.next(self.end)
 
     @kubernetes(**K8S)
     @environment(**ENV)

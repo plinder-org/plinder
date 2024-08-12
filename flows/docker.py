@@ -217,6 +217,7 @@ def build_image(tag: str | None = None, push: bool = False) -> str:
     env = get_env(tag)
     image = f"{env['IMAGE_REPO']}/plinder"
     build_tag = env["BUILD_TAG"]
+    registry = environ.get("PLINDER_REGISTRY")
     cmd = [
         docker,
         "build",
@@ -224,6 +225,8 @@ def build_image(tag: str | None = None, push: bool = False) -> str:
         "dockerfiles/main/Dockerfile",
         "-t",
         f"{env['IMAGE_REPO']}/plinder:{build_tag}",
+        "-t",
+        f"{registry}/plinder:{build_tag}",
         "--secret",
         "id=INDEX_URL",
         "--build-arg",
@@ -236,7 +239,7 @@ def build_image(tag: str | None = None, push: bool = False) -> str:
     ]
     Proc(cmd, env=env).execute()
     if push:
-        cmd = [docker, "compose", "push", "plinder", "--quiet"]
+        cmd = [docker, "push", f"{registry}/plinder:{build_tag}"]
         Proc(cmd, env=env).execute()
     return f"{image}:{build_tag}"
 
@@ -282,6 +285,7 @@ def run_image(
     args: Optional[List[str]] = None,
     build: bool = False,
     tag: str | None = None,
+    dirty: bool = False,
     it: bool = False,
 ) -> None:
     """
@@ -401,4 +405,7 @@ def main(argv: Optional[List[str]] = None):
 
 
 if __name__ == "__main__":
+    if not environ.get("PLINDER_REGISTRY"):
+        print("PLINDER_REGISTRY not set, exiting")
+        exit()
     main()

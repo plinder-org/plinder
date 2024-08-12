@@ -12,7 +12,7 @@ from metaflow import FlowSpec, Parameter, kubernetes, environment, step, retry
 MOUNT = "/plinder"
 K8S = dict(
     cpu=1,
-    image="us-east1-docker.pkg.dev/vantai-analysis/metaflow/plinder:v0.1.3-39-g8d1c57e2-dirty",
+    image="us-east1-docker.pkg.dev/vantai-analysis/metaflow/plinder:v0.1.3-41-gd139d52b-dirty",
     node_selector={
         "topology.kubernetes.io/zone": "us-east1-b",
     },
