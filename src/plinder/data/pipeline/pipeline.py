@@ -263,12 +263,17 @@ class IngestPipeline:
 
     @utils.ingest_flow_control
     def scatter_make_components_and_communities(self) -> list[list[tuple[str, int]]]:
+        force_update = (
+            self.cfg.data.force_update or self.cfg.flow.make_components_force_update
+        )
         chunks: list[
             list[tuple[str, int]]
         ] = tasks.scatter_make_components_and_communities(
+            data_dir=data_dir,
             metrics=self.cfg.flow.cluster_metrics,
             thresholds=self.cfg.flow.cluster_thresholds,
             stop_on_cluster=self.cfg.flow.make_components_stop_on_cluster,
+            skip_existing_cluster=not force_update,
         )
         return chunks
 

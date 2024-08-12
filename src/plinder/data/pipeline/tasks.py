@@ -779,12 +779,26 @@ def collate_partitions(*, data_dir: Path, partition: str) -> None:
 
 def scatter_make_components_and_communities(
     *,
+    data_dir: Path,
     metrics: list[str],
     thresholds: list[int],
     stop_on_cluster: int,
+    skip_existing_clusters: bool,
 ) -> list[list[tuple[str, int]]]:
     values = [[(metric, threshold)] for metric in metrics for threshold in thresholds]
 
+    rerun = []
+    for tup in values:
+        metric, threshold = tup[0]
+        do = False
+        for cluster in ["components", "communities"]:
+            for directed in [True, False]:
+                if do:
+                    continue
+                if not (data_dir / f"clusters/cluster={cluster}/directed={directed}/metric={metric}/threshold={threshold}.parquet").is_file() and not skip_existing_clusters:
+                    do = True
+        if do:
+            rerun.append(tup)
     if stop_on_cluster:
         values = values[:stop_on_cluster]
     return values

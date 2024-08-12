@@ -12,7 +12,7 @@ from metaflow import FlowSpec, Parameter, kubernetes, environment, step, retry
 MOUNT = "/plinder"
 K8S = dict(
     cpu=1,
-    image="ghcr.io/plinder-org/plinder:v0.1.1",
+    image="us-east1-docker.pkg.dev/vantai-analysis/metaflow/plinder:v0.1.3-39-g8d1c57e2-dirty",
     node_selector={
         "topology.kubernetes.io/zone": "us-east1-b",
     },
@@ -22,7 +22,7 @@ K8S = dict(
 )
 ENV = dict(
     vars=dict(
-        PLINDER_MOUNT="",
+        PLINDER_MOUNT=MOUNT,
         PLINDER_RELEASE="2024-06",
         PLINDER_ITERATION="",
     )
@@ -31,8 +31,8 @@ DATABASES = dict(cpu=90, memory=82000)
 WORKSTATION = dict(cpu=14, memory=14000)
 WORKSTATION_MEM = dict(cpu=5, memory=48000)
 LARGE_MEM = dict(
-    cpu=1.75,
-    memory=95000,
+    cpu=7,
+    memory=380000,
     tolerations=[
         dict(
             effect="NoSchedule",
@@ -61,9 +61,37 @@ class PlinderDataIngestFlow(FlowSpec):
         print(f"started data ingest run with config: {self.config_file}")
         contents = gcs.download_as_str(gcs_path=self.config_file, bucket_name="plinder-collab-bucket")
         self.pipeline = IngestPipeline(conf=get_config(config_contents=contents))
+        # self.next(self.scatter_download_rcsb_files)
+        # self.next(self.scatter_make_entries)
+        # self.next(self.scatter_structure_qc)
+        # self.next(self.scatter_collate_partitions)
         self.next(self.scatter_make_components_and_communities)
-    #     self.next(self.scatter_download_rcsb_files)
+
+    # @kubernetes(**{**K8S, **LARGE_MEM, **{"cpu": 3.5, "memory": 175000}})
+    # @environment(**ENV)
+    # @retry
+    # @step
+    # def scatter_collate_partitions(self):
+    #     self.chunks = self.pipeline.scatter_collate_partitions()
+    #     self.next(self.collate_partitions, foreach="chunks")
     #
+    # @kubernetes(**K8S)
+    # @environment(**ENV)
+    # @retry
+    # @step
+    # def collate_partitions(self):
+    #     self.pipeline.collate_partitions(self.input)
+    #     self.next(self.join_collate_partitions)
+    #
+    # @kubernetes(**K8S)
+    # @environment(**ENV)
+    # @retry
+    # @step
+    # def join_collate_partitions(self, inputs):
+    #     self.pipeline = inputs[0].pipeline
+    #     self.merge_artifacts(inputs, exclude=["chunks"])
+    #     self.next(self.make_mmp_index)
+
     # @kubernetes(**K8S)
     # @environment(**ENV)
     # @retry
@@ -85,6 +113,7 @@ class PlinderDataIngestFlow(FlowSpec):
     # @retry
     # @step
     # def join_download_rcsb_files(self, inputs):
+    #     self.pipeline = inputs[0].pipeline
     #     self.merge_artifacts(inputs, exclude=["chunks"])
     #     self.next(self.download_alternative_datasets)
     #
@@ -103,7 +132,7 @@ class PlinderDataIngestFlow(FlowSpec):
     # def make_dbs(self):
     #     self.pipeline.make_dbs()
     #     self.next(self.scatter_make_entries)
-    #
+
     # @kubernetes(**K8S)
     # @environment(**ENV)
     # @retry
@@ -117,7 +146,7 @@ class PlinderDataIngestFlow(FlowSpec):
     # @retry
     # @step
     # def make_entries(self):
-    #     self.pipeline.cfg.scatter.make_entries_cpu = WORKSTATION["cpu"]
+    #     self.pipeline.cfg.flow.make_entries_cpu = WORKSTATION["cpu"]
     #     self.reruns = self.pipeline.make_entries(self.input)
     #     self.next(self.join_make_entries)
     #
@@ -126,6 +155,7 @@ class PlinderDataIngestFlow(FlowSpec):
     # @retry
     # @step
     # def join_make_entries(self, inputs):
+    #     self.pipeline = inputs[0].pipeline
     #     self.merge_artifacts(inputs, exclude=["chunks", "reruns"])
     #     self.rerun = self.pipeline.join_make_entries([inp.reruns for inp in inputs])
     #     self.next(self.scatter_make_entries_second_try)
@@ -135,8 +165,8 @@ class PlinderDataIngestFlow(FlowSpec):
     # @retry
     # @step
     # def scatter_make_entries_second_try(self):
-    #     self.original_pdb_ids = self.pipeline.cfg.scatter.pdb_ids
-    #     self.pipeline.cfg.scatter.pdb_ids = self.rerun
+    #     self.original_pdb_ids = self.pipeline.cfg.context.pdb_ids
+    #     self.pipeline.cfg.context.pdb_ids = self.rerun
     #     self.chunks = self.pipeline.scatter_make_entries()
     #     self.next(self.make_entries_second_try, foreach="chunks")
     #
@@ -145,7 +175,7 @@ class PlinderDataIngestFlow(FlowSpec):
     # @retry
     # @step
     # def make_entries_second_try(self):
-    #     self.pipeline.cfg.scatter.make_entries_cpu = WORKSTATION_MEM["cpu"]
+    #     self.pipeline.cfg.flow.make_entries_cpu = WORKSTATION_MEM["cpu"]
     #     self.pipeline.make_entries(self.input)
     #     self.next(self.join_make_entries_second_try)
     #
@@ -154,8 +184,9 @@ class PlinderDataIngestFlow(FlowSpec):
     # @retry
     # @step
     # def join_make_entries_second_try(self, inputs):
+    #     self.pipeline = inputs[0].pipeline
     #     self.merge_artifacts(inputs, exclude=["chunks", "reruns"])
-    #     self.pipeline.cfg.scatter.pdb_ids = self.original_pdb_ids
+    #     self.pipeline.cfg.context.pdb_ids = self.original_pdb_ids
     #     self.next(self.scatter_structure_qc)
     #
     # @kubernetes(**K8S)
@@ -179,7 +210,9 @@ class PlinderDataIngestFlow(FlowSpec):
     # @retry
     # @step
     # def join_structure_qc(self, inputs):
+    #     self.pipeline = inputs[0].pipeline
     #     self.merge_artifacts(inputs, exclude=["chunks"])
+    #     self.pipeline.join_structure_qc()
     #     self.next(self.scatter_make_system_archives)
     #
     # @kubernetes(**K8S)
@@ -203,6 +236,7 @@ class PlinderDataIngestFlow(FlowSpec):
     # @retry
     # @step
     # def join_make_system_archives(self, inputs):
+    #     self.pipeline = inputs[0].pipeline
     #     self.merge_artifacts(inputs, exclude=["chunks"])
     #     self.next(self.scatter_make_ligands)
     #
@@ -227,6 +261,7 @@ class PlinderDataIngestFlow(FlowSpec):
     # @retry
     # @step
     # def join_make_ligands(self, inputs):
+    #     self.pipeline = inputs[0].pipeline
     #     self.merge_artifacts(inputs, exclude=["chunks"])
     #     self.next(self.compute_ligand_fingerprints)
     #
@@ -259,6 +294,7 @@ class PlinderDataIngestFlow(FlowSpec):
     # @retry
     # @step
     # def join_make_ligand_scores(self, inputs):
+    #     self.pipeline = inputs[0].pipeline
     #     self.merge_artifacts(inputs, exclude=["chunks"])
     #     self.next(self.make_sub_dbs)
     #
@@ -291,6 +327,7 @@ class PlinderDataIngestFlow(FlowSpec):
     # @retry
     # @step
     # def join_run_batch_searches(self, inputs):
+    #     self.pipeline = inputs[0].pipeline
     #     self.merge_artifacts(inputs, exclude=["chunks"])
     #     self.next(self.scatter_make_batch_scores)
     #
@@ -315,8 +352,10 @@ class PlinderDataIngestFlow(FlowSpec):
     # @retry
     # @step
     # def join_make_batch_scores(self, inputs):
+    #     self.pipeline = inputs[0].pipeline
     #     self.merge_artifacts(inputs, exclude=["chunks"])
-    #     self.next(self.scatter_make_components_and_communities)
+    #     # self.next(self.scatter_make_components_and_communities)
+    #     self.next(self.make_mmp_index)  # scatter_make_components_and_communities)
 
     @kubernetes(**K8S)
     @environment(**ENV)
