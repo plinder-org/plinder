@@ -67,7 +67,7 @@ Or with a development installation:
 
 A work-in-progress documentation is available [here](https://plinder-org.github.io/plinder/), but in short we provide 2 ways of interacting with `plinder`:
 
-1. A python api: using the `plinder.core` API, you can transparently and lazily
+1. A python API: using the `plinder.core` API, you can transparently and lazily
 download and interact with most of the components of the dataset.
 
 2. However, if you prefer to use the dataset directly, you can fetch it using [`gsutil`](https://cloud.google.com/storage/docs/gsutil) to directly fetch it from google cloud storage.
@@ -81,9 +81,9 @@ If you go with route 2:
     export PLINDER_ITERATION=v1 # Current iteration
     gsutil -m cp -r gs://plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/* ~/.local/share/plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/
 
-**NOTE!**: the version used for the preprint is `gs://plinder/2024-04/v1`, however, we plan to release a newer version to be used for the MLSB challenge (`gs://plinder/2024-08/v2`) by Aug 18th.
+**NOTE!**: the version used for the preprint is `gs://plinder/2024-04/v1`, however, we plan to release a newer version with updated annotations to be used for the MLSB challenge (`gs://plinder/2024-06/v2`) by Aug 18th.
 
-This yields the following structure, with the `systems` and `splits` being most important for direct usage and the rest containing useful annotations and medadata.
+This yields the following structure, with the `systems`, `splits`, and `index/annotation_table.parquet` being most important for direct usage and the rest containing useful annotations and medadata.
 
 
 ```bash
@@ -107,7 +107,7 @@ This yields the following structure, with the `systems` and `splits` being most 
 
 ## Unpacking the structure files:
 
-Identical to the PDB NextGen Archive, we split the structures into subdirectory of chunks to make loading and querying speed palatable.
+Identical to the PDB NextGen Archive, we split the structures into subdirectories of chunks to make loading and querying speed palatable.
 
 The structure files can be found in the subfolder `plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/systems`. To unpack the structures do the following
 
@@ -115,17 +115,18 @@ The structure files can be found in the subfolder `plinder/${PLINDER_RELEASE}/${
 cd plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/systems; for i in ls *zip; do unzip $i; done
 ```
 
-This will yield directories named like like e.g. `7zzh__1__1.A_4.A__4.C`, which is what we call a `plinder system id` containing `mmcif`, `pdb` and `sdf` file format as well as some additional metadata (like chain mapping and fastas).
+This will yield directories such as `7zzh__1__1.A_4.A__4.C`, which is what we call a `plinder system id` of the form `<pdbid>__<biounit>__<chain_ids_of_receptor>__<chain_ids_of_ligand>`.
+The directory contains `mmcif`, `pdb` and `sdf` file formats as well as some additional metadata (like chain mapping and fastas).
 
 The naming of the directory is by `system` - since a given PDB entry can contain multiple protein-ligand complexes, we assign a plinder system id to every system. These `system id`s are also used for retrieving the splits, as shown in the next step
 
 ### Accessing the splits files:
 
-`plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/splits` contains an index for splits contained in a single parquet file. The most current split is `gs://plinder/2024-04/v1/splits/plinder-pl50.parquet` containing the pl50 split from the preprint. (Again: note this will be shortly updated to v2)
+`plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/splits` contains an index for splits contained in a single parquet file. The most current split is `gs://plinder/2024-04/v1/splits/plinder-pl50.parquet` containing the pl50 split from the preprint. (Again: note this will be shortly updated to v2 and the v2 split will be used for the MLSB leaderboard)
 
 ```python
 >>> import pandas as pd
->>> df = pd.read_parquet("gs://plinder/2024-06/v2/splits/plinder-pl50.parquet")
+>>> df = pd.read_parquet("gs://plinder/2024-04/v1/splits/plinder-pl50.parquet")
 >>> df.head()
                system_id  split  cluster cluster_for_val_split
 0      3grt__1__1.A__1.B  train  c100718                    c0
@@ -135,7 +136,7 @@ The naming of the directory is by `system` - since a given PDB entry can contain
 4      1grx__1__1.A__1.B  train  c186691                  c154
 ```
 
-With the `system_id` contained in these split files, you can load the respective train, val & test splits **after unzipping** the `systems` directory. E.g. as shown in the Dataframe above, `gs://plinder/2024-06/v2/systems/1grx__1__1.A__1.B/system.cif` will contain the full mmcif of the system. We also provide pdb files of seperated receptors (`*/receptor.pdb`) and ligands (`*/ligand_files/*.sdf` but **strongly encourage cif**, pdb is considered a [legacy file format](https://pdb101.rcsb.org/learn/guide-to-understanding-pdb-data/beginner%E2%80%99s-guide-to-pdbx-mmcif) and not all systems can be stored in the pdb format.
+With the `system_id` contained in these split files, you can load the respective train, val & test splits **after unzipping** the `systems` directory. E.g. as shown in the Dataframe above, `~/.local/share/plinder/2024-04/v1/systems/gr/1grx__1__1.A__1.B/system.cif` will contain the full mmcif of the system. We also provide cif files of seperated receptors (`*/receptor.cif`) and ligands (`*/ligand_files/*.sdf`) as well as pdb files (`*/receptor.pdb`) but **strongly encourage cif**, pdb is considered a [legacy file format](https://pdb101.rcsb.org/learn/guide-to-understanding-pdb-data/beginner%E2%80%99s-guide-to-pdbx-mmcif).
 
 
 Note: a non-redundant and quality-filtered smaller subset of this version was to train diffdock in the paper and is available at 2024-04/v0.
@@ -157,7 +158,12 @@ release and the `plinder.core` package makes it easy to interact
 with the dataset.
 
 Changelog:
-2024-06/v2 (Current): Version with fixed ligand annotations issues.
+2024-06/v2 (Current):
+- Improved SDF saving to handle some bond order issues
+- Updated system definition to be more stable and independent of PLIP
+- Added binding affinities from BindingDB and added "has_affinity" as priority for test split
+- Annotated all crystal contacts
+- Improved covalency detection
 2024-04/v1: Version with redundancy removal by protein pocket and ligand similarity.
 2024-04/v0: Version used to re-train DiffDock in the paper, with redundancy removal based on \<pdbid\>\_\<ligand ccd codes\>
 
@@ -170,15 +176,7 @@ Finally, a particular care is taken for test set that is further prioritized to 
 
 Moreover, as we enticipate this resource to be used for benchmarking a wide range of methods, including those simultaneously predicting protein structure (aka. co-folding) or those generating novel ligand structures, we further stratified test (by novel ligand, pocket, protein or all) to cover a wide range of tasks.
 
-Our latest test split contains:
-
-| Novel   | # of systems | # of high quality |            stratification criteria             |
-| :------ | -----------: | ----------------: | :--------------------------------------------: |
-| pocket  |         5206 |              5203 |  PLI shared < 50 _&_ Pocket shared lDDT < 0.5  |
-| ligand  |         2395 |              2395 |       ECFP4 fingerprint similarity < 0.3       |
-| protein |          983 |               983 | Protein Seq. Sim. < 0.3 _&_ Protein lDDT > 0.7 |
-| all     |          268 |               268 |                all of the above                |
-| none    |            0 |                 0 |               none of the above                |
+**This will be made available for the v2 split on August 18th**
 
 ## ⚖️ Evaluation harness
 
