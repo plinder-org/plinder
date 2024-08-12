@@ -65,11 +65,16 @@ class ResidueValidation(BaseModel):
             heavy_atom_count_conop = residue.countAtomsHeavyConop()
             if heavy_atom_count_conop is None:
                 heavy_atom_count_conop = 0
-            if (
-                residue.isType("PolymerChainResidue")
-                and np.abs(heavy_atom_count - heavy_atom_count_conop) <= 1
-            ):
-                heavy_atom_count_conop = heavy_atom_count
+                # set -1 as value for cases where no reference was found
+                num_unresolved_heavy_atoms = -1
+            else:
+                num_unresolved_heavy_atoms = heavy_atom_count_conop - heavy_atom_count
+                if (
+                    residue.isType("PolymerChainResidue")
+                    and num_unresolved_heavy_atoms >= 1
+                ):
+                    # residues have one atom less when in polymer - adjust for it
+                    num_unresolved_heavy_atoms -= 1
             return cls(
                 altcode=residue.getAltCode(),
                 inscode=residue.getInsertionCode(),
@@ -82,7 +87,7 @@ class ResidueValidation(BaseModel):
                 unknown_residue=residue.getResName() in PDBValidation.unknown_resnames,
                 atom_count=residue.countAtomsPDBX(),
                 heavy_atom_count=heavy_atom_count,
-                num_unresolved_heavy_atoms=heavy_atom_count_conop - heavy_atom_count,
+                num_unresolved_heavy_atoms=num_unresolved_heavy_atoms,
                 unknown_atom_count=residue.countUnknownAtoms(),
                 is_outlier={
                     s: residue.isOutlier(s)
