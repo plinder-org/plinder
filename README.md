@@ -78,20 +78,37 @@ To download the manifest of available versions:
 
 Then you can choose to download a particular README version or download the entire dataset with:
 
-    export PLINDER_RELEASE=2024-06
+    export PLINDER_RELEASE=2024-06 # Current version
     export PLINDER_ITERATION=v2
     gsutil -m cp -r gs://plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/* ~/.local/share/plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/
+See Sud-directory description here [here](https://storage.googleapis.com/plinder/2024-04/v1/README.md)
 
-View the hierarchy of a particular version of the dataset with:
+### Unpacking the structure files:
+The structure files can be found in the subfolder plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/systems. To unpack the structures do
+the following
+```bash
+cd plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/systems; for i in ls *zip; do unzip $i; done
+```
 
-    gsutil ls gs://plinder/2024-06/v2/
+### Accessing the splits files:
+- Check the subfolder plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/splits for the splits file parquet and their corresponding config yaml files. The most current release and version are 2024-06/v2, while the version used to train diffdock in the paper is 2024-04/v0. To list the files, do:
 
-Note that `gsutil` also supports glob patterns like:
-
-    gsutil ls 'gs://plinder/2024-04/v1/fingerprints/*'
-
-This will list the files at the given path in cloud storage.
-
+```bash
+❯ ls splits
+plinder-pl50.parquet  plinder-pl50.yaml
+```
+Here, the `plinder-pl50.parquet`  and `plinder-pl50.yaml` are the split parquet file and config yaml respectively. To load the split parquet file and inspect the content, do:
+```python
+>>> import pandas as pd
+>>> df = pd.read_parquet("gs://plinder/2024-06/v2/splits/plinder-pl50.parquet")
+>>> df.head()
+               system_id  split  cluster cluster_for_val_split
+0      3grt__1__1.A__1.B  train  c100718                    c0
+1  3grt__1__1.A_2.A__1.C  train  c196491                    c0
+2      3grt__1__2.A__2.B  train  c100727                    c0
+3  3grt__1__1.A_2.A__2.C  train  c234445                    c0
+4      1grx__1__1.A__1.B  train  c186691                  c154
+```
 **NOTE**: We keep the default `PLINDER_RELEASE` and `PLINDER_ITERATION` in the source code up-to-date
 with the latest version of the dataset, so if you plan to use a different version, be sure to set
 the environment variables accordingly.
@@ -108,6 +125,14 @@ versioning scheme based on the `git` commit history.
 The `plinder.data` package is responsible for generating a dataset
 release and the `plinder.core` package makes it easy to interact
 with the dataset.
+
+Changelog:
+2024-06/v2 (Current): Version with fixed ligand annotations issues.
+2024-04/v1: Version with redundancy removed by protein pocket and ligand similarity.
+2024-04/v0: Version used to re-train DiffDock in the paper.
+
+
+
 
 ## 🏅 Gold standard benchmark sets
 
