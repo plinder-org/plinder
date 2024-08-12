@@ -64,44 +64,64 @@ Or with a development installation:
 
 # ⬇️ Getting the dataset
 
-Using the `plinder.core` API, you can transparently and lazily
+
+A work-in-progress documentation is available [here](https://plinder-org.github.io/plinder/), but in short we provide 2 ways of interacting with `plinder`:
+
+1. A python api: using the `plinder.core` API, you can transparently and lazily
 download and interact with most of the components of the dataset.
-However, if you prefer to use the dataset directly, you can
-fetch it using [`gsutil`](https://cloud.google.com/storage/docs/gsutil).
-For portions of the code that still assume
-an already available pre-existing dataset, you will need to use `gsutil`.
 
-To download the manifest of available versions:
+2. However, if you prefer to use the dataset directly, you can fetch it using [`gsutil`](https://cloud.google.com/storage/docs/gsutil) to directly fetch it from google cloud storage.
 
-    gsutil -m cp -r gs://plinder/manifest.md .
 
-Then you can choose to download a particular README version or download the entire dataset with:
+If you go with route 2:
 
-    export PLINDER_RELEASE=2024-06 # Current version
-    export PLINDER_ITERATION=v2
+## Downloading the dataset
+
+    export PLINDER_RELEASE=2024-04 # Current release
+    export PLINDER_ITERATION=v1 # Current iteration
     gsutil -m cp -r gs://plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/* ~/.local/share/plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/
 
-See Sud-directory description here [here](https://storage.googleapis.com/plinder/2024-04/v1/README.md)
+**NOTE!**: the version used for the preprint is `gs://plinder/2024-04/v1`, however, we plan to release a newer version to be used for the MLSB challenge (`gs://plinder/2024-08/v2`) by Aug 18th.
 
-### Unpacking the structure files:
+This yields the following structure, with the `systems` and `splits` being most important for direct usage and the rest containing useful annotations and medadata.
 
-The structure files can be found in the subfolder plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/systems. To unpack the structures do
-the following
+
+```bash
+2024-04/                     # The "`plinder` release" (`PLINDER_RELEASE`)
+|-- v1                       # The "`plinder` iteration" (`PLINDER_ITERATION`)
+|   |-- systems              # Actual structure files for all systems (split by `two_char_code` and zipped)
+|   |-- splits               # List of system ids in a .parquet and each split  the configs used to generate them (if available)
+|   |-- clusters             # Pre-calculated cluster labels derived from the protein similarity dataset
+|   |-- entries              # Raw annotations prior to consolidation (split by `two_char_code` and zipped)
+|   |-- fingerprints         # Index mapping files for the ligand similarity dataset
+|   |-- index                # Consolidated tabular annotations
+|   |-- leakage              # Leakage results
+|   |-- ligand_scores        # Ligand similarity parquet dataset
+|   |-- ligands              # Ligand data expanded from entries for computing similarity
+|   |-- linked_structures    # Linked structures
+|   |-- mmp                  # Matched Molecular Series/Pair data
+|   |-- scores               # Extended protein similarity parquet dataset
+```
+
+
+
+## Unpacking the structure files:
+
+Identical to the PDB NextGen Archive, we split the structures into subdirectory of chunks to make loading and querying speed palatable.
+
+The structure files can be found in the subfolder `plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/systems`. To unpack the structures do the following
 
 ```bash
 cd plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/systems; for i in ls *zip; do unzip $i; done
 ```
 
+This will yield directories named like like e.g. `7zzh__1__1.A_4.A__4.C`, which is what we call a `plinder system id` containing `mmcif`, `pdb` and `sdf` file format as well as some additional metadata (like chain mapping and fastas).
+
+The naming of the directory is by `system` - since a given PDB entry can contain multiple protein-ligand complexes, we assign a plinder system id to every system. These `system id`s are also used for retrieving the splits, as shown in the next step
+
 ### Accessing the splits files:
 
-- Check the subfolder plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/splits for the splits file parquet and their corresponding config yaml files. The most current release and version are 2024-06/v2, while the version used to train diffdock in the paper is 2024-04/v0. To list the files, do:
-
-```bash
-❯ ls splits
-plinder-pl50.parquet  plinder-pl50.yaml
-```
-
-Here, the `plinder-pl50.parquet` and `plinder-pl50.yaml` are the split parquet file and config yaml respectively. To load the split parquet file and inspect the content, do:
+`plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/splits` contains an index for splits contained in a single parquet file. The most current split is `gs://plinder/2024-04/v1/splits/plinder-pl50.parquet` containing the pl50 split from the preprint. (Again: note this will be shortly updated to v2)
 
 ```python
 >>> import pandas as pd
@@ -115,9 +135,13 @@ Here, the `plinder-pl50.parquet` and `plinder-pl50.yaml` are the split parquet f
 4      1grx__1__1.A__1.B  train  c186691                  c154
 ```
 
-**NOTE**: We keep the default `PLINDER_RELEASE` and `PLINDER_ITERATION` in the source code up-to-date
-with the latest version of the dataset, so if you plan to use a different version, be sure to set
-the environment variables accordingly.
+With the `system_id` contained in these split files, you can load the respective train, val & test splits **after unzipping** the `systems` directory. E.g. as shown in the Dataframe above, `gs://plinder/2024-06/v2/systems/1grx__1__1.A__1.B/system.cif` will contain the full mmcif of the system. We also provide pdb files of seperated receptors (`*/receptor.pdb`) and ligands (`*/ligand_files/*.sdf` but **strongly encourage cif**, pdb is considered a [legacy file format](https://pdb101.rcsb.org/learn/guide-to-understanding-pdb-data/beginner%E2%80%99s-guide-to-pdbx-mmcif) and not all systems can be stored in the pdb format.
+
+
+Note: a non-redundant and quality-filtered smaller subset of this version was to train diffdock in the paper and is available at 2024-04/v0.
+
+The folder also contains a `.yaml` which is the config used to generate the split and can be ignored unless you want to reproduce the splits.
+
 
 ## 🔢 Plinder versions
 
