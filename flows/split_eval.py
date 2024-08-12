@@ -9,7 +9,7 @@ from metaflow import FlowSpec, Parameter, kubernetes, environment, step, retry
 MOUNT = "/plinder"
 K8S = dict(
     cpu=1,
-    image="us-east1-docker.pkg.dev/vantai-analysis/metaflow/plinder:v0.1.3-28-gabeb88fa-dirty",
+    image="us-east1-docker.pkg.dev/vantai-analysis/metaflow/plinder:v0.1.3-41-gd139d52b-dirty",
     node_selector={
         "topology.kubernetes.io/zone": "us-east1-b",
     },
@@ -25,8 +25,8 @@ ENV = dict(
     )
 )
 LARGE_MEM = dict(
-    cpu=1.75,
-    memory=95000,
+    cpu=7,
+    memory=360000,
     tolerations=[
         dict(
             effect="NoSchedule",
@@ -35,6 +35,7 @@ LARGE_MEM = dict(
         )
     ]
 )
+WORKSTATION = dict(cpu=14, memory=14000)
 PROTEIN_LEAKAGE = dict(
     cpu=10,
     memory=40000,
@@ -63,6 +64,14 @@ class PlinderSplitEvalFlow(FlowSpec):
         print(f"started split eval run with config: {self.config_file}")
         contents = gcs.download_as_str(gcs_path=self.config_file, bucket_name="plinder-collab-bucket")
         self.pipeline = IngestPipeline(conf=get_config(config_contents=contents))
+        self.next(self.make_mmp_index)
+
+    @kubernetes(**{**K8S, **WORKSTATION})
+    @environment(**ENV)
+    @retry
+    @step
+    def make_mmp_index(self):
+        self.pipeline.make_mmp_index()
         self.next(self.scatter_make_splits)
 
     @kubernetes(**K8S)
