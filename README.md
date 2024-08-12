@@ -21,7 +21,6 @@
 
 **plinder**, short for **p**rotein **l**igand **in**teractions **d**ataset and **e**valuation **r**esource, is a dataset and resource for training and evaluation of protein-ligand docking algorithms.
 
-
 It is a comprehensive, annotated, high quality dataset, including:
 
 - \> 400k PLI systems across > 11k SCOP domains and > 50k unique small molecules
@@ -81,23 +80,29 @@ Then you can choose to download a particular README version or download the enti
     export PLINDER_RELEASE=2024-06 # Current version
     export PLINDER_ITERATION=v2
     gsutil -m cp -r gs://plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/* ~/.local/share/plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/
+
 See Sud-directory description here [here](https://storage.googleapis.com/plinder/2024-04/v1/README.md)
 
 ### Unpacking the structure files:
+
 The structure files can be found in the subfolder plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/systems. To unpack the structures do
 the following
+
 ```bash
 cd plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/systems; for i in ls *zip; do unzip $i; done
 ```
 
 ### Accessing the splits files:
+
 - Check the subfolder plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/splits for the splits file parquet and their corresponding config yaml files. The most current release and version are 2024-06/v2, while the version used to train diffdock in the paper is 2024-04/v0. To list the files, do:
 
 ```bash
 ❯ ls splits
 plinder-pl50.parquet  plinder-pl50.yaml
 ```
-Here, the `plinder-pl50.parquet`  and `plinder-pl50.yaml` are the split parquet file and config yaml respectively. To load the split parquet file and inspect the content, do:
+
+Here, the `plinder-pl50.parquet` and `plinder-pl50.yaml` are the split parquet file and config yaml respectively. To load the split parquet file and inspect the content, do:
+
 ```python
 >>> import pandas as pd
 >>> df = pd.read_parquet("gs://plinder/2024-06/v2/splits/plinder-pl50.parquet")
@@ -109,6 +114,7 @@ Here, the `plinder-pl50.parquet`  and `plinder-pl50.yaml` are the split parquet 
 3  3grt__1__1.A_2.A__2.C  train  c234445                    c0
 4      1grx__1__1.A__1.B  train  c186691                  c154
 ```
+
 **NOTE**: We keep the default `PLINDER_RELEASE` and `PLINDER_ITERATION` in the source code up-to-date
 with the latest version of the dataset, so if you plan to use a different version, be sure to set
 the environment variables accordingly.
@@ -128,11 +134,8 @@ with the dataset.
 
 Changelog:
 2024-06/v2 (Current): Version with fixed ligand annotations issues.
-2024-04/v1: Version with redundancy removed by protein pocket and ligand similarity.
-2024-04/v0: Version used to re-train DiffDock in the paper.
-
-
-
+2024-04/v1: Version with redundancy removal by protein pocket and ligand similarity.
+2024-04/v0: Version used to re-train DiffDock in the paper, with redundancy removal based on \<pdbid\>\_\<ligand ccd codes\>
 
 ## 🏅 Gold standard benchmark sets
 
@@ -145,13 +148,13 @@ Moreover, as we enticipate this resource to be used for benchmarking a wide rang
 
 Our latest test split contains:
 
-| Novel   |   # of systems | # of high quality |  stratification criteria |
-|:--------|---------------:|------------------:|:---------------:|
-| pocket  | 5206 | 5203 | PLI shared < 50 _&_  Pocket shared lDDT < 0.5 |
-| ligand  | 2395 | 2395 | ECFP4 fingerprint similarity < 0.3 |
-| protein |  983 |  983 | Protein Seq. Sim. < 0.3 _&_ Protein lDDT > 0.7 |
-| all     |  268 |  268 | all of the above |
-| none    |    0 |    0 | none of the above |
+| Novel   | # of systems | # of high quality |            stratification criteria             |
+| :------ | -----------: | ----------------: | :--------------------------------------------: |
+| pocket  |         5206 |              5203 |  PLI shared < 50 _&_ Pocket shared lDDT < 0.5  |
+| ligand  |         2395 |              2395 |       ECFP4 fingerprint similarity < 0.3       |
+| protein |          983 |               983 | Protein Seq. Sim. < 0.3 _&_ Protein lDDT > 0.7 |
+| all     |          268 |               268 |                all of the above                |
+| none    |            0 |                 0 |               none of the above                |
 
 ## ⚖️ Evaluation harness
 
@@ -256,9 +259,10 @@ since the previous release:
 - If `bumpversion minor` is present in the commit message, the minor version will be bumped
 - If `bumpversion patch` is present in the commit message (or nothing is found), the patch version will be bumped
 
-**NOTE**: The CI workflow will use the __most recent__ match in the commit history to make its decision.
+**NOTE**: The CI workflow will use the **most recent** match in the commit history to make its decision.
 
 # 📃 Publications
+
 Durairaj, Janani, Yusuf Adeshina, Zhonglin Cao, Xuejin Zhang, Vladas Oleinikovas, Thomas Duignan, Zachary McClure, Xavier Robin, Emanuele Rossi, Guoqing Zhou, Srimukh Prasad Veccham, Clemens Isert, Yuxing Peng, Prabindh Sundareson, Mehmet Akdel, Gabriele Corso, Hannes Stärk, Zachary Wayne Carpenter, Michael M. Bronstein, Emine Kucukbenli, Torsten Schwede, Luca Naef. 2024. “PLINDER: The Protein-Ligand Interactions Dataset and Evaluation Resource.”
 [bioRxiv](https://doi.org/10.1101/2024.07.17.603955)
 [ICML'24 ML4LMS](https://openreview.net/forum?id=7UvbaTrNbP)
