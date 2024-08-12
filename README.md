@@ -70,10 +70,10 @@ A work-in-progress documentation is available [here](https://plinder-org.github.
 1. A python API: using the `plinder.core` API, you can transparently and lazily
 download and interact with most of the components of the dataset.
 
-2. However, if you prefer to use the dataset directly, you can fetch it using [`gsutil`](https://cloud.google.com/storage/docs/gsutil) to directly fetch it from google cloud storage.
+2. Via raw files on bucket: if you prefer to use the dataset directly, you can fetch it using [`gsutil`](https://cloud.google.com/storage/docs/gsutil) from google cloud storage.
 
 
-If you go with route 2:
+If you go with route 2, see below sections.
 
 ## Downloading the dataset
 
