@@ -269,11 +269,11 @@ class IngestPipeline:
         chunks: list[
             list[tuple[str, int]]
         ] = tasks.scatter_make_components_and_communities(
-            data_dir=data_dir,
+            data_dir=self.plinder_dir,
             metrics=self.cfg.flow.cluster_metrics,
             thresholds=self.cfg.flow.cluster_thresholds,
             stop_on_cluster=self.cfg.flow.make_components_stop_on_cluster,
-            skip_existing_cluster=not force_update,
+            skip_existing_clusters=not force_update,
         )
         return chunks
 
