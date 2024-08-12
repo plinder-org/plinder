@@ -157,8 +157,7 @@ release and the `plinder.core` package makes it easy to interact
 with the dataset.
 
 Changelog:
-2024-06/v2 (Current): Version with fixed ligand annotations issues.
-2024-04/v1: Version with redundancy removal by protein pocket and ligand similarity.
+2024-04/v1 (Current): Version with redundancy removal by protein pocket and ligand similarity.
 2024-04/v0: Version used to re-train DiffDock in the paper, with redundancy removal based on \<pdbid\>\_\<ligand ccd codes\>
 
 ## 🏅 Gold standard benchmark sets
