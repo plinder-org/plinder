@@ -43,10 +43,11 @@ def query_protein_similarity(
         raise ValueError(f"search_db={search_db} not in ['apo', 'holo', 'pred']")
     cfg = get_config()
     if isinstance(filters, list):
-        for i, (col, _, _) in enumerate(filters):
-            if col == "search_db":
-                filters = filters[:i] + filters[i + 1 :]
-                break
+        if len(filters) and not isinstance(filters[0], list):
+            for i, (col, _, _) in enumerate(filters):
+                if col == "search_db":
+                    filters = filters[:i] + filters[i + 1 :]
+                    break
     dataset = ensure_dataset(rel=f"{cfg.data.scores}/search_db={search_db}")
     query = make_query(
         schema=PROTEIN_SIMILARITY_SCHEMA,

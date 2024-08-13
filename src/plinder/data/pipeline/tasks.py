@@ -1011,7 +1011,7 @@ def assign_apo_pred_systems(
         output_file = linked_structures / f"{search_db}_links.parquet"
         make_linked_structures_data_file(
             data_dir=data_dir,
-            search_db="holo",
+            search_db=search_db,
             superposed_folder=save_dir,
             output_file=output_file,
             num_processes=cpu,

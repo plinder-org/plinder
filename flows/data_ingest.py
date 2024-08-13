@@ -12,7 +12,7 @@ from metaflow import FlowSpec, Parameter, kubernetes, environment, step, retry
 MOUNT = "/plinder"
 K8S = dict(
     cpu=1,
-    image="us-east1-docker.pkg.dev/vantai-analysis/metaflow/plinder:v0.1.3-41-gd139d52b-dirty",
+    image="us-east1-docker.pkg.dev/vantai-analysis/metaflow/plinder:v0.1.3-44-gd1c62992",
     node_selector={
         "topology.kubernetes.io/zone": "us-east1-b",
     },
@@ -390,7 +390,7 @@ class PlinderDataIngestFlow(FlowSpec):
         self.pipeline.make_mmp_index()
         self.next(self.assign_apo_pred_systems)
 
-    @kubernetes(**{**K8S, **DATABASES})
+    @kubernetes(**{**K8S, **DATABASES, **{"memory": 340000}})
     @environment(**ENV)
     @retry
     @step

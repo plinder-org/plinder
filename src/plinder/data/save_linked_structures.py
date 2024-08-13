@@ -12,6 +12,7 @@ import pandas as pd
 from ost import io, mol
 from tqdm import tqdm
 
+from plinder.core import scores
 from plinder.core.utils.log import setup_logger
 from plinder.data.utils.annotations.save_utils import save_cif_file
 from plinder.eval.docking import utils
@@ -143,12 +144,12 @@ def make_linked_structures_data_file(
     filters = []
     for metric, threshold in cfg.filter_criteria.items():
         filters.append([("metric", "==", metric), ("similarity", ">=", threshold)])
-    score_file = data_dir / "scores" / f"search_db={search_db}"
-    links = pd.read_parquet(
-        score_file,
+    links = scores.query_protein_similarity(
+        search_db=search_db,
         columns=["query_system", "target_system", "metric", "similarity"],
         filters=filters,
     )
+    assert links is not None
     links = links.iloc[
         links.groupby(["query_system", "target_system", "metric"], observed=True)[
             "similarity"
