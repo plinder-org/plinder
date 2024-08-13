@@ -30,6 +30,8 @@ from plinder.data.utils.annotations.interaction_utils import (
 )
 from plinder.data.utils.annotations.protein_utils import Chain
 from plinder.data.utils.annotations.rdkit_utils import set_smiles_from_ligand_ost
+#TODO: replace above with below
+# from plinder.data.utils.annotations.rdkit_utils import set_smiles_from_ligand_ost_v2
 
 COMPOUND_LIB = GetDefaultLib()
 PEPTIDE_TYPES = [
@@ -472,6 +474,10 @@ def get_num_resolved_heavy_atoms(resolved_smiles: str) -> int:
     obmol = pybel.readstring("smi", resolved_smiles)
     obmol.removeh()
     return len(obmol.atoms)
+#TODO: replace above with below
+# def get_num_resolved_heavy_atoms(matched_smiles: str) -> int:
+#     matched_mol = Chem.MolFromSmiles(matched_smiles, sanitize=False)
+#     return rdMolDescriptors.CalcNumHeavyAtoms(matched_mol)
 
 
 def get_len_of_longest_linear_hydrocarbon_linker(
@@ -906,13 +912,6 @@ class Ligand(BaseModel):
                 and self.num_hba <= 10
             ):
                 self.is_lipinski = True
-        else:
-            self.is_other = True
-
-    def classify_ligand_by_attributes(self) -> None:
-        """Get more granular classification of ligand.
-        Use Lipinski rules to assign ligand classifications
-        """
 
     @classmethod
     def from_pli(
@@ -1020,6 +1019,8 @@ class Ligand(BaseModel):
             biounit.Select(ligand_selection), True
         )
         smiles = set_smiles_from_ligand_ost(ligand_ost_ent)
+        #TODO: replace above with below
+        # smiles, matched_smiles = set_smiles_from_ligand_ost_v2(ligand_ost_ent)
         ligand = cls(
             pdb_id=pdb_id,
             biounit_id=biounit_id,
@@ -1035,6 +1036,8 @@ class Ligand(BaseModel):
             neighboring_residue_threshold=neighboring_residue_threshold,
             neighboring_ligand_threshold=neighboring_ligand_threshold,
             resolved_smiles=interactions.ligand.smiles,  # TODO: only thing left that depends on PLIP
+            #TODO: replace above with below
+            # resolved_smiles=matched_smiles,
             residue_numbers=residue_numbers,
         )
 
@@ -1117,8 +1120,8 @@ class Ligand(BaseModel):
             ligand.waters[plip_chain_mapping[plip_chain]].append(resnum)
         # add rdkit properties and type assignments
         ligand.set_rdkit()
-        # set is_artifact
-        ligand.identify_artifact()
+        # set is_artifact and is_cofactor and is_other
+        ligand.identify_artifacts_cofactors_and_other()
         # unique code parsing!
         ligand.unique_ccd_code = get_unique_ccd_longname(ligand.ccd_code)
 
@@ -1267,11 +1270,11 @@ class Ligand(BaseModel):
             return float(affinity)
         return None
 
-    def identify_artifact(
+    def identify_artifacts_cofactors_and_other(
         self,
     ) -> None:
         """
-        Label artifacts, cofactors
+        Label artifacts, cofactors and other
 
         Parameters
         ----------
@@ -1299,6 +1302,21 @@ class Ligand(BaseModel):
             self.is_artifact = True
         else:
             self.is_artifact = False
+
+        # Indicator of whether a ligand type is not any of small molecule (lipinski, frag, coval), ion, cofactor, oligopeptide, oligosaccharide or oligopeptide.
+        if not any(
+            [
+                self.is_invalid,
+                self.is_ion,
+                self.is_oligo,
+                self.is_artifact,
+                self.is_cofactor,
+                self.is_lipinski,
+                self.is_fragment,
+                self.is_covalent,
+            ]
+        ):
+            self.is_other = True
 
     def format_chains(
         self,

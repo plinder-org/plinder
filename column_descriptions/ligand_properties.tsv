@@ -3,7 +3,7 @@ ligand_asym_id	str	 Ligand chain asymmetric id
 ligand_auth_id	str	 Ligand chain author id
 ligand_ccd_code	str	 Ligand Chemical Component Dictionary (CCD) code
 ligand_centroid	str	 Ligand center of geometry
-ligand_covalent_linkages	str	 Ligand covalent linkages as described in https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Categories/struct_conn.html with _struct_conn.conn_type_id == 'covale'
+ligand_covalent_linkages	str	 Ligand covalent linkages as described in https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Categories/struct_conn.html with _struct_conn.conn_type_id == 'covale', reported in format `{auth_resid}:{resname}{assym_id}{seq_resid}{atom_name}__{auth_resid}:{resname}{assym_id}{seq_resid}{atom_name}`
 ligand_crippen_clogp	float	   Ligand Crippen MlogP. See https://www.rdkit.org/docs/source/rdkit.Chem.Crippen.html
 ligand_id	str	 The "__"-separated string of pdb_id, biounit_id, instance_chain
 ligand_in_artifact_list	bool	    Boolean indicating whether ligand CCD code is in a pre-defined list of artifact.
