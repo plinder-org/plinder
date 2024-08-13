@@ -12,7 +12,7 @@ from metaflow import FlowSpec, Parameter, kubernetes, environment, step, retry
 MOUNT = "/plinder"
 K8S = dict(
     cpu=1,
-    image="us-east1-docker.pkg.dev/vantai-analysis/metaflow/plinder:v0.1.3-44-gd1c62992",
+    image="us-east1-docker.pkg.dev/vantai-analysis/metaflow/plinder:v0.1.3-45-g451ed836",
     node_selector={
         "topology.kubernetes.io/zone": "us-east1-b",
     },
@@ -65,7 +65,8 @@ class PlinderDataIngestFlow(FlowSpec):
         # self.next(self.scatter_make_entries)
         # self.next(self.scatter_structure_qc)
         # self.next(self.scatter_collate_partitions)
-        self.next(self.scatter_make_components_and_communities)
+        # self.next(self.scatter_make_components_and_communities)
+        self.next(self.assign_apo_pred_systems)
 
     # @kubernetes(**{**K8S, **LARGE_MEM, **{"cpu": 3.5, "memory": 175000}})
     # @environment(**ENV)
@@ -356,40 +357,40 @@ class PlinderDataIngestFlow(FlowSpec):
     #     self.merge_artifacts(inputs, exclude=["chunks"])
     #     # self.next(self.scatter_make_components_and_communities)
     #     self.next(self.make_mmp_index)  # scatter_make_components_and_communities)
-
-    @kubernetes(**K8S)
-    @environment(**ENV)
-    @retry
-    @step
-    def scatter_make_components_and_communities(self):
-        self.chunks = self.pipeline.scatter_make_components_and_communities()
-        self.next(self.make_components_and_communities, foreach="chunks")
-
-    @kubernetes(**{**K8S, **LARGE_MEM})
-    @environment(**ENV)
-    @retry
-    @step
-    def make_components_and_communities(self):
-        self.pipeline.make_components_and_communities(self.input)
-        self.next(self.join_make_components_and_communities)
-
-    @kubernetes(**K8S)
-    @environment(**ENV)
-    @retry
-    @step
-    def join_make_components_and_communities(self, inputs):
-        self.pipeline = inputs[0].pipeline
-        self.merge_artifacts(inputs, exclude=["chunks"])
-        self.next(self.make_mmp_index)
-
-    @kubernetes(**{**K8S, **WORKSTATION})
-    @environment(**ENV)
-    @retry
-    @step
-    def make_mmp_index(self):
-        self.pipeline.make_mmp_index()
-        self.next(self.assign_apo_pred_systems)
-
+    #
+    # @kubernetes(**K8S)
+    # @environment(**ENV)
+    # @retry
+    # @step
+    # def scatter_make_components_and_communities(self):
+    #     self.chunks = self.pipeline.scatter_make_components_and_communities()
+    #     self.next(self.make_components_and_communities, foreach="chunks")
+    #
+    # @kubernetes(**{**K8S, **LARGE_MEM})
+    # @environment(**ENV)
+    # @retry
+    # @step
+    # def make_components_and_communities(self):
+    #     self.pipeline.make_components_and_communities(self.input)
+    #     self.next(self.join_make_components_and_communities)
+    #
+    # @kubernetes(**K8S)
+    # @environment(**ENV)
+    # @retry
+    # @step
+    # def join_make_components_and_communities(self, inputs):
+    #     self.pipeline = inputs[0].pipeline
+    #     self.merge_artifacts(inputs, exclude=["chunks"])
+    #     self.next(self.make_mmp_index)
+    #
+    # @kubernetes(**{**K8S, **WORKSTATION})
+    # @environment(**ENV)
+    # @retry
+    # @step
+    # def make_mmp_index(self):
+    #     self.pipeline.make_mmp_index()
+    #     self.next(self.assign_apo_pred_systems)
+    #
     @kubernetes(**{**K8S, **DATABASES, **{"memory": 340000}})
     @environment(**ENV)
     @retry
