@@ -30,7 +30,8 @@ from plinder.data.utils.annotations.interaction_utils import (
 )
 from plinder.data.utils.annotations.protein_utils import Chain
 from plinder.data.utils.annotations.rdkit_utils import set_smiles_from_ligand_ost
-#TODO: replace above with below
+
+# TODO: replace above with below
 # from plinder.data.utils.annotations.rdkit_utils import set_smiles_from_ligand_ost_v2
 
 COMPOUND_LIB = GetDefaultLib()
@@ -474,7 +475,9 @@ def get_num_resolved_heavy_atoms(resolved_smiles: str) -> int:
     obmol = pybel.readstring("smi", resolved_smiles)
     obmol.removeh()
     return len(obmol.atoms)
-#TODO: replace above with below
+
+
+# TODO: replace above with below
 # def get_num_resolved_heavy_atoms(matched_smiles: str) -> int:
 #     matched_mol = Chem.MolFromSmiles(matched_smiles, sanitize=False)
 #     return rdMolDescriptors.CalcNumHeavyAtoms(matched_mol)
@@ -1019,7 +1022,7 @@ class Ligand(BaseModel):
             biounit.Select(ligand_selection), True
         )
         smiles = set_smiles_from_ligand_ost(ligand_ost_ent)
-        #TODO: replace above with below
+        # TODO: replace above with below
         # smiles, matched_smiles = set_smiles_from_ligand_ost_v2(ligand_ost_ent)
         ligand = cls(
             pdb_id=pdb_id,
@@ -1036,7 +1039,7 @@ class Ligand(BaseModel):
             neighboring_residue_threshold=neighboring_residue_threshold,
             neighboring_ligand_threshold=neighboring_ligand_threshold,
             resolved_smiles=interactions.ligand.smiles,  # TODO: only thing left that depends on PLIP
-            #TODO: replace above with below
+            # TODO: replace above with below
             # resolved_smiles=matched_smiles,
             residue_numbers=residue_numbers,
         )
