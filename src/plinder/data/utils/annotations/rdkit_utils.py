@@ -10,7 +10,7 @@ from openbabel import pybel
 from ost import conop, io
 from ost import mol as omol
 from rdkit import Chem
-from rdkit.Chem import AllChem
+from rdkit.Chem import AllChem, rdMolDescriptors, rdRascalMCES
 from rdkit.Chem.rdchem import Mol
 from rdkit.Chem.rdFMCS import FindMCS
 
@@ -22,40 +22,6 @@ COMPOUND_LIB = conop.GetDefaultLib()
 PRD_LIB = conop.CompoundLib.Load(
     str(BASE_DIR / "data/utils/annotations/static_files/prdcc.chemlib")
 )
-
-
-# def process_organometalics(mol: Mol) -> Mol:
-#     """Converts covalent organometallic bond to dative bond.
-#     This is helpful in cases where covalent metal bonding to
-#     ligands is causing rdkit to try errors
-
-#     Parameters
-#     ----------
-#     mol : Chem.rdchem.Mol
-
-#     Returns
-#     -------
-#     Chem.rdchem.Mol
-#         Mol with covalent organometallic bond
-#         replaced with dative bond
-#     """
-#     metals = ["Ti", "Al", "Mo", "Ru", "Co", "Rh", "Ir", "Ni", "Zr", "Hf", "W", "Fe"]
-#     for bond in mol.GetBonds():
-#         if (bond.GetEndAtom().GetSymbol()) in metals or (
-#             bond.GetBeginAtom().GetSymbol() in metals
-#         ):
-#             logging.info("found metal-ligand bond")
-#             logging.info("original type: " + str(bond.GetBondType()))
-#             btype = Chem.rdchem.BondType.DATIVE
-#             bond.SetBondType(btype)
-#             logging.info(
-#                 "changed to: " + str(mol.GetBonds()[bond.GetIdx()].GetBondType())
-#             )
-#             try:
-#                 sanitize_mol(mol)
-#             except ValueError:
-#                 logging.error("Sanitization failed: {e}")
-#     return mol
 
 
 def sanitize_mol(mol: Mol) -> None:
@@ -282,6 +248,122 @@ def get_matched_template(template: Chem.Mol, mol: Chem.Mol) -> Chem.Mol:
     return matched_template_mol
 
 
+def remove_unmatched_atoms_and_bonds(
+    mol: Chem.Mol, matched_atoms: NDArray, matched_bonds: NDArray
+) -> Chem.Mol:
+    """Remove atoms and bonds in mol whose indices are not in match.
+    Parameters
+    ----------
+    mol : Chem.Mol
+        the mol to be modified
+    match_bonds : NDArray
+        indices that are matches and should not be removed
+    matched_bonds : NDArray
+        indices that are matches and should not be removed
+    Returns
+    -------
+    Chem.Mol
+        the mol with unmatched atoms removed
+    """
+    res = Chem.RWMol(mol)
+    bonds_to_remove = [
+        (b.GetBeginAtomIdx(), b.GetEndAtomIdx())
+        for b in mol.GetBonds()
+        if b.GetIdx() not in matched_bonds
+    ]
+    atoms_to_remove = [
+        a.GetIdx() for a in mol.GetAtoms() if a.GetIdx() not in matched_atoms
+    ]
+    res.BeginBatchEdit()
+    for atom_idx in atoms_to_remove:
+        neighbors = res.GetAtomWithIdx(atom_idx).GetNeighbors()
+        for neighbor in neighbors:
+            bonds_to_remove.append((atom_idx, neighbor.GetIdx()))
+            # if atom to be removed is neighbour to double bond - set that stereo bond to undefined
+            [
+                nb.SetStereo(Chem.rdchem.BondStereo.STEREONONE)
+                for nb in neighbor.GetBonds()
+                if nb.GetBondType() == Chem.rdchem.BondType.DOUBLE
+            ]
+        res.RemoveAtom(atom_idx)
+    # now remove all unmatched bonds!
+    for bond_idx1, bond_idx2 in bonds_to_remove:
+        res.RemoveBond(bond_idx1, bond_idx2)
+
+    res.CommitBatchEdit()
+    res = Chem.Mol(res)
+    try:
+        Chem.SanitizeMol(res)
+    except:
+        pass
+    [a.SetNumRadicalElectrons(0) for a in res.GetAtoms()]
+    return res
+
+
+def get_matched_template_v2(template: Chem.Mol, mol: Chem.Mol) -> Chem.Mol:
+    """
+    Function that works a lot like get_matched_template but can better deal with fragmented molecules
+    """
+    rascal_opts = rdRascalMCES.RascalOptions()
+    rascal_opts.similarityThreshold = 0.1
+    rascal_opts.allBestMCESs = False
+    rascal_opts.returnEmptyMCES = True
+    rascal_opts.completeAromaticRings = False
+    rascal_opts.ringMatchesRingOnly = False
+    rascal_opts.timeout = 20
+
+    result = rdRascalMCES.FindMCES(mol, template, rascal_opts)[0]
+    atom_matches = np.array(result.atomMatches())
+    bond_matches = np.array(result.bondMatches())
+
+    numHA_template = rdMolDescriptors.CalcNumHeavyAtoms(template)
+    numHA_mol = rdMolDescriptors.CalcNumHeavyAtoms(mol)
+
+    if len(atom_matches) < min(numHA_template, numHA_mol):
+        # if not complete molecule is matched
+        match_mol = copy.deepcopy(mol)
+        ref_mol = copy.deepcopy(template)
+
+        LOG.warn(
+            "get_matched_template_v2: could not match template fully - retry with unmatched bonds set as UNSPECIFIED"
+        )
+        # set all unmatched bonds to UNSPECIFIED to help with the match
+        if len(bond_matches):
+            [
+                b.SetBondType(Chem.BondType.UNSPECIFIED)
+                for b in match_mol.GetBonds()
+                if not b in bond_matches[:, 0]
+            ]
+            [
+                b.SetBondType(Chem.BondType.UNSPECIFIED)
+                for b in ref_mol.GetBonds()
+                if not b in bond_matches[:, 1]
+            ]
+            # run again
+            result = rdRascalMCES.FindMCES(match_mol, ref_mol, rascal_opts)[0]
+
+        # if still not fully matched - attempt one more!
+        if len(result.atomMatches()) < min(numHA_template, numHA_mol):
+            [b.SetBondType(Chem.BondType.UNSPECIFIED) for b in match_mol.GetBonds()]
+            [b.SetBondType(Chem.BondType.UNSPECIFIED) for b in ref_mol.GetBonds()]
+            # run again
+            result2 = rdRascalMCES.FindMCES(match_mol, ref_mol, rascal_opts)[0]
+            if len(result2.atomMatches()) > len(result.atomMatches()):
+                result = result2
+
+    # used to remove all atoms and bonds from the ref that are not matched
+    atom_map_template = np.array([j for i, j in result.atomMatches()])
+    bond_map_template = np.array([j for i, j in result.bondMatches()])
+    if len(atom_map_template) == 0:
+        raise ValueError("get_matched_template_v2: cannot match mol to template")
+
+    # Removes unmatched atoms and bonds from the template
+    matched_template_mol = remove_unmatched_atoms_and_bonds(
+        template, atom_map_template, bond_map_template
+    )
+    return matched_template_mol
+
+
 def mol_assigned_bond_orders_by_template(template_mol: Mol, mol: Mol) -> Mol:
     try:
         # Assign bonds according to template smiles!
@@ -374,6 +456,7 @@ def ligand_ost_ent_to_rdkit_mol(
             template = Chem.MolFromSmiles(ligand_smiles)
             if ligand_num_unresolved_heavy_atoms > 0:
                 # update template
+                # TODO: could be replaced by get_matched_template_v2
                 template = get_matched_template(template, rdkit_mol_tmp)
             try:
                 # Assign bonds by template
@@ -425,3 +508,34 @@ def set_smiles_from_ligand_ost(ent: omol.EntityHandle) -> str:
                 )
     rdkit_mol = ligand_ost_ent_to_rdkit_mol(ent)
     return str(Chem.MolToSmiles(rdkit_mol))
+
+
+def set_smiles_from_ligand_ost_v2(ent: omol.EntityHandle) -> tuple[str, str]:
+    input_smiles = ""
+    residues = [res.name for res in ent.residues]
+    if len(residues) == 1:
+        resname = residues[0]
+        if resname.startswith("PRD_"):
+            # TODO - need to make this line used!
+            # currently, PRD_entries are not mapped to residue names and are more than one residue!
+            mol = PRD_LIB.FindCompound(resname)
+        else:
+            mol = COMPOUND_LIB.FindCompound(resname)
+        if mol is not None:
+            try:
+                template_mol = Chem.MolFromSmiles(str(mol.smiles), sanitize=False)
+                template_mol = make_rdkit_compatible_mol(template_mol)
+                input_smiles = str(Chem.MolToSmiles(template_mol))
+            except Exception:
+                LOG.warn(
+                    "set_smiles_from_ligand_ost_v2: CCD smiles could not be loaded by RDKit, moving to fix"
+                )
+    resolved_mol = ligand_ost_ent_to_rdkit_mol(ent)
+    if input_smiles:
+        matched_template = get_matched_template_v2(template_mol, resolved_mol)
+        matched_smiles = Chem.CanonSmiles(Chem.MolToSmiles(matched_template))
+    else:
+        # when no reference - define this as a match and ground truth
+        matched_smiles = Chem.CanonSmiles(str(Chem.MolToSmiles(resolved_mol)))
+        input_smiles = matched_smiles
+    return input_smiles, matched_smiles
