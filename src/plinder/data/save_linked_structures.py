@@ -144,52 +144,54 @@ def make_linked_structures_data_file(
     filters = []
     for metric, threshold in cfg.filter_criteria.items():
         filters.append([("metric", "==", metric), ("similarity", ">=", threshold)])
-    links = scores.query_protein_similarity(
-        search_db=search_db,
-        columns=["query_system", "target_system", "metric", "similarity"],
-        filters=filters,
-    )
-    assert links is not None
-    links = links.iloc[
-        links.groupby(["query_system", "target_system", "metric"], observed=True)[
-            "similarity"
-        ].idxmax()
-    ]
-    links = links[
-        links["query_system"].str[:4] != links["target_system"].str[:4]
-    ].reset_index(drop=True)
-    links = links.pivot(
-        index=["query_system", "target_system"],
-        columns="metric",
-        values="similarity",
-    ).reset_index()
-    query = " and ".join([f"{m} >= {t}" for (m, t) in cfg.filter_criteria.items()])
-    links = links.query(query)
-    links["target_id"] = links["target_system"].map(lambda x: x.split("_")[0])
+    if (output_file.parent / f"{output_file.stem}_intermediate.parquet").is_file():
+        links = pd.read_parquet(output_file.parent / f"{output_file.stem}_intermediate.parquet")
+    else:
+        links = scores.query_protein_similarity(
+            search_db=search_db,
+            columns=["query_system", "target_system", "metric", "similarity"],
+            filters=filters,
+        )
+        assert links is not None
+        links = links.iloc[
+            links.groupby(["query_system", "target_system", "metric"], observed=True)[
+                "similarity"
+            ].idxmax()
+        ]
+        links = links[
+            links["query_system"].str[:4] != links["target_system"].str[:4]
+        ].reset_index(drop=True)
+        links = links.pivot(
+            index=["query_system", "target_system"],
+            columns="metric",
+            values="similarity",
+        ).reset_index()
+        query = " and ".join([f"{m} >= {t}" for (m, t) in cfg.filter_criteria.items()])
+        links = links.query(query)
+        links["target_id"] = links["target_system"].map(lambda x: x.split("_")[0])
+        links.to_parquet(output_file.parent / f"{output_file.stem}_intermediate.parquet", index=False)
 
     targets = set(links["target_id"])
     score_dir = search_db
     if search_db == "holo":
         score_dir = "apo"  # always get resolution from ingest
     target_files = [get_cif_file(data_dir, score_dir, x) for x in targets]
+    del links
 
     sort_scores = {}
     if search_db == "pred":
-        with multiprocessing.Pool(num_processes) as pool:
-            for target_id, resolution in tqdm(
-                pool.imap(get_plddt, target_files), total=len(target_files)
-            ):
-                sort_scores[target_id] = resolution
+        func = get_plddt
         ascending = False
     else:
-        with multiprocessing.Pool(num_processes) as pool:
-            for target_id, resolution in tqdm(
-                pool.imap(get_resolution, target_files), total=len(target_files)
-            ):
-                sort_scores[target_id] = resolution
+        func = get_resolution
         ascending = True
+    with multiprocessing.Pool(num_processes) as pool:
+        resolutions = pool.map(func, target_files)
+    sort_scores = dict(zip(targets, resolutions))
+
     nonnull = sum((v for v in sort_scores.values() if v is not None))
     LOG.info(f"non null scores: {nonnull}")
+    links = pd.read_parquet(output_file.parent / f"{output_file.stem}_intermediate.parquet")
     links["sort_score"] = links["target_id"].map(sort_scores)
     links = (
         links[links["sort_score"].notna()]
