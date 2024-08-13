@@ -340,6 +340,7 @@ class IngestPipeline:
             data_dir=self.plinder_dir,
             # TODO: pass this and cpu in from config
             search_db="holo",
+            cpu=self.cfg.flow.assign_apo_pred_systems_cpus,
         )
 
     def run_stage(self, stage: str) -> None:

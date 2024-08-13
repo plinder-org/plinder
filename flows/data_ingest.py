@@ -388,6 +388,15 @@ class PlinderDataIngestFlow(FlowSpec):
     @step
     def make_mmp_index(self):
         self.pipeline.make_mmp_index()
+        self.next(self.assign_apo_pred_systems)
+
+    @kubernetes(**{**K8S, **DATABASES})
+    @environment(**ENV)
+    @retry
+    @step
+    def assign_apo_pred_systems(self):
+        self.pipeline.cfg.flow.assign_apo_pred_systems_cpus = DATABASES["cpu"]
+        self.pipeline.assign_apo_pred_systems()
         self.next(self.end)
 
     @kubernetes(**K8S)

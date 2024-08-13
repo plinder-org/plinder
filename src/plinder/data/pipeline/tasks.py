@@ -1003,14 +1003,24 @@ def assign_apo_pred_systems(
     search_db: str,
     cpu: int = 8,
 ) -> None:
-    from plinder.data.save_linked_structures import make_linked_structures_data_file
+    from plinder.data.save_linked_structures import save_linked_structures, make_linked_structures_data_file
 
     save_dir = data_dir / "assignments"
     linked_structures = data_dir / "linked_structures"
-    make_linked_structures_data_file(
-        data_dir=data_dir,
-        search_db="holo",
-        superposed_folder=save_dir,
-        output_file=linked_structures / f"{search_db}_links.parquet",
-        num_processes=cpu,
-    )
+    for search_db in ["apo", "pred"]:
+        output_file = linked_structures / f"{search_db}_links.parquet"
+        make_linked_structures_data_file(
+            data_dir=data_dir,
+            search_db="holo",
+            superposed_folder=save_dir,
+            output_file=output_file,
+            num_processes=cpu,
+        )
+
+        save_linked_structures(
+            links_file=output_file,
+            data_dir=data_dir,
+            search_db=search_db,
+            output_folder=linked_structures,
+            num_threads=cpu,
+        )
