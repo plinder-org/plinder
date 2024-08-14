@@ -666,160 +666,170 @@ def annotate_interface_gaps_per_chain(
 
 
 class Ligand(BaseModel):
-    pdb_id: str
-    biounit_id: str
-    asym_id: str
-    instance: int
-    ccd_code: str
-    plip_type: str
-    bird_id: str
-    centroid: list[float]
-    smiles: str
-    resolved_smiles: str
-    residue_numbers: list[int] = Field(default_factory=list)
-    rdkit_canonical_smiles: str | None = None
-    molecular_weight: float | None = None
-    crippen_clogp: float | None = None
-    num_rot_bonds: int | None = None
-    num_hbd: int | None = None
-    num_hba: int | None = None
-    num_rings: int | None = None
-    num_heavy_atoms: int | None = None
-    is_covalent: bool = False
-    covalent_linkages: set[str] = Field(default_factory=list)
-    neighboring_residues: dict[str, list[int]] = Field(default_factory=dict)
-    # neighboring_protein_chain_objects: list[Chain] = Field(default_factory=list)
-    neighboring_ligands: list[str] = Field(default_factory=list)
-    interacting_residues: dict[str, list[int]] = Field(default_factory=dict)
-    interacting_ligands: list[str] = Field(default_factory=list)
-    interactions: dict[str, dict[int, list[str]]] = Field(default_factory=dict)
-    neighboring_residue_threshold: float = 6.0
-    neighboring_ligand_threshold: float = 4.0
-    num_neighboring_ppi_atoms_within_4A_of_gap: int | None = None
-    num_neighboring_ppi_atoms_within_8A_of_gap: int | None = None
-    num_missing_ppi_interface_residues: int | None = None
-    num_pli_atoms_within_4A_of_gap: int | None = None
-    num_pli_atoms_within_8A_of_gap: int | None = None
-    num_missing_pli_interface_residues: int | None = None
-    num_resolved_heavy_atoms: int | None = None
-    num_unresolved_heavy_atoms: int | None = None
-    tpsa: float | None = None
-    qed: float | None = None
-    is_ion: bool = False
-    is_lipinski: bool = False
-    is_fragment: bool = False
-    is_oligo: bool = False
-    is_cofactor: bool = False
-    in_artifact_list: bool = False
-    is_artifact: bool = False
-    is_other: bool = False
-    is_invalid: bool = False
-    posebusters_result: dict[str, ty.Any] = Field(default_factory=dict)
-    unique_ccd_code: str | None = None
-    waters: dict[str, list[int]] = Field(default_factory=dict)
-    crystal_contacts: dict[tuple[str, int], set[int]] = Field(default_factory=dict)
-
+    pdb_id: str = Field(
+        default_factory=str,
+        help="RCSB PDB ID, see https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_entry.id.html",
+    )
+    biounit_id: str = Field(default_factory=str, help="__Biounit id")
+    asym_id: str = Field(default_factory=str, help="Ligand chain asymmetric id")
+    instance: int = Field(default_factory=int, help="__Biounit instance ID")
+    ccd_code: str = Field(
+        default_factory=str, help="Ligand Chemical Component Dictionary (CCD) code"
+    )
+    plip_type: str = Field(default_factory=str, help="PLIP ligand type")
+    bird_id: str = Field(default_factory=str, help="Ligand BIRD id")
+    centroid: list[float] = Field(
+        default_factory=list, help="Ligand center of geometry"
+    )
+    smiles: str = Field(default_factory=str, help="Ligand OpenBabel SMILES")
+    resolved_smiles: str = Field(
+        default_factory=str, help="SMILES of only resolved ligand atoms"
+    )
+    residue_numbers: list[int] = Field(
+        default_factory=list, help="__Ligand residue numbers"
+    )
+    rdkit_canonical_smiles: str | None = Field(default=None, help="RDKit canonical SMILES")
+    molecular_weight: float | None = Field(default=None, help="Molecular weight")
+    crippen_clogp: float | None = Field(
+        default=None,
+        help="Ligand Crippen MlogP, see https://www.rdkit.org/docs/source/rdkit.Chem.Crippen.html",
+    )
+    num_rot_bonds: int | None = Field(default=None, help="Number of rotatable bonds")
+    num_hbd: int | None = Field(default=None, help="Number of hydrogen bond donors")
+    num_hba: int | None = Field(default=None, help="Number of hydrogen bond acceptors")
+    num_rings: int | None = Field(default=None, help="Number of rings")
+    num_heavy_atoms: int | None = Field(default=None, help="Number of heavy atoms")
+    is_covalent: bool = Field(
+        default=False, help="Indicator of whether a ligand  is a covalent ligand"
+    )
+    covalent_linkages: set[str] = Field(
+        default_factory=set[str],
+        help="Ligand covalent linkages as described in https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Categories/struct_conn.html "
+        + "with _struct_conn.conn_type_id == 'covale', reported in format "
+        + "{auth_resid}:{resname}{assym_id}{seq_resid}{atom_name}__{auth_resid}:{resname}{assym_id}{seq_resid}{atom_name}",
+    )
+    neighboring_residues: dict[str, list[int]] = Field(
+        default_factory=dict,
+        help="__Dictionary of neighboring residues, with {instance}.{chain} key and residue number value",
+    )
+    neighboring_ligands: list[str] = Field(
+        default_factory=list, help="__List of neighboring ligands {instance}.{chain}"
+    )
+    interacting_residues: dict[str, list[int]] = Field(
+        default_factory=dict,
+        help="__Dictionary of interacting residues, with {instance}.{chain} key and residue number value",
+    )
+    interacting_ligands: list[str] = Field(
+        default_factory=list, help="__List of interacting ligands {instance}.{chain}"
+    )
+    interactions: dict[str, dict[int, list[str]]] = Field(
+        default_factory=dict,
+        help="__Dictionary of {instance}.{chain} to residue number to list of PLIP hashes",
+    )
+    neighboring_residue_threshold: float = Field(
+        default=6.0, help="__Maximum distance to consider protein residues neighboring"
+    )
+    neighboring_ligand_threshold: float = Field(
+        default=4.0, help="__Maximum distance to consider ligands neighboring"
+    )
+    num_neighboring_ppi_atoms_within_4A_of_gap: int | None = Field(
+        default=None,
+        help="Number of missing neighboring protein-protein interface atoms within 4 Å of ligand of interest",
+    )
+    num_neighboring_ppi_atoms_within_8A_of_gap: int | None = Field(
+        default=None,
+        help="Number of missing neighboring protein-protein interface atoms within 8 Å of ligand of interest",
+    )
+    num_missing_ppi_interface_residues: int | None = Field(
+        default=None,
+        help="Number of missing neighboring protein-protein interface residues within 4 Å of ligand of interest",
+    )
+    num_pli_atoms_within_4A_of_gap: int | None = Field(
+        default=None,
+        help="Number of missing neighboring protein-ligand interface atoms within 4 Å of ligand of interest",
+    )
+    num_pli_atoms_within_8A_of_gap: int | None = Field(
+        default=None,
+        help="Number of missing neighboring protein-ligand interface atoms within 8 Å of ligand of interest",
+    )
+    num_missing_pli_interface_residues: int | None = Field(
+        default=None,
+        help="Number of missing neighboring protein-ligand interface residues within 4 Å of ligand of interest",
+    )
+    num_resolved_heavy_atoms: int | None = Field(
+        default=None, help="Number of resolved heavy atoms in a ligand"
+    )
+    num_unresolved_heavy_atoms: int | None = Field(
+        default=None, help="Number of unresolved heavy atoms in a ligand"
+    )
+    tpsa: float | None = Field(default=None, help="Topological polar surface area")
+    qed: float | None = Field(
+        default=None,
+        help="Ligand QED score, a measure of drug-likeness, see https://www.rdkit.org/new_docs/source/rdkit.Chem.QED.html",
+    )
+    is_ion: bool = Field(default=False, help="Indicator of whether a ligand  is an ion")
+    is_lipinski: bool = Field(
+        default=False, help="Indicator of whether a ligand satisfies Lipinski Ro5"
+    )
+    is_fragment: bool = Field(
+        default=False, help="Indicator of whether a ligand satisfies fragment Ro3"
+    )
+    is_oligo: bool = Field(
+        default=False,
+        help="Indicator of whether a ligand  is an oligopeptide, oligosaccharide or oligopeptide",
+    )
+    is_cofactor: bool = Field(
+        default=False, help="Indicator of whether a ligand is a cofactor"
+    )
+    in_artifact_list: bool = Field(
+        default=False, help="Indicator of whether a ligand is in the artifact list"
+    )
+    is_artifact: bool = Field(
+        default=False, help="Indicator of whether a ligand is an artifact"
+    )
+    is_other: bool = Field(
+        default=False,
+        help="Indicator of whether a ligand type is not classified as any types of small molecule "
+        + "(Lipinski, Fragment or covalent), ion, cofactor, oligo (peptide, saccharide or nucleotide) or artifact",
+    )
+    is_invalid: bool = Field(
+        default=False, help="Indicator of whether a ligand is invalid"
+    )
+    unique_ccd_code: str | None = Field(
+        default=None, help="Ligand representative CCD code after de-duplicating"
+    )
+    crystal_contacts: dict[tuple[str, int], set[int]] = Field(
+        default_factory=dict,
+        help="__Dictionary of {instance}.{chain} to residue number to set of interacting crystal contacts",
+    )
+    waters: dict[str, list[int]] = Field(
+        default_factory=dict,
+        help="__Dictionary of {instance}.{chain} to list of interacting water residue numbers",
+    )
+    posebusters_result: dict[str, ty.Any] = Field(
+        default_factory=dict, help="__Results from running posebusters with 're-dock'"
+    )
     """
     This dataclass defines as system which included a protein-ligand complex
     and it's neighboring ligands and protein residues
 
-    Attributes
-    ----------
-    pdb_id: str
-        4-letter pdb code
-    biounit_id: str
-        Biounit id
-    asym_id: str
-        Ligand chain asym chain id
-    instance: int
-        Biouni instance ID
-    ccd_code: str
-        Ligand ccd code
-    plip_type: str
-        plip ligand type
-    bird_id: str
-        ligand bird id
-    num_rot_bonds: int
-        Number of rotatable bonds
-    centroid: np.ndarray[float, Any]
-        Ligand centroid
-    smiles: str
-        Ligand openbabel smiles
-    resolved_smiles: str
-        SMILES of only resolved ligand atoms
-    rdkit_canonical_smiles: str
-        rdkit smiles
-    molecular_weight: float
-        Molecular weight
-    crippen_clogp: float
-        Crippen clogp
-    num_hbd: int
-        Number of hydrogen bonds donor
-    num_hba: int
-        Number of hydrogen bind acceptor
-    num_rings: int
-        Number of rings
-    num_heavy_atoms: int
-        Number of heavy atoms
-    tpsa: float
-        Topological polar surface area
-    qed: float
-        ligand QED score
-    is_covalent: bool = False
-        Is ligand covalently bound to protein
-    covalent_linkages: set[str] = field(default_factory=list)
-        Residue tags of covalently linked residues in ligand
-    neighboring_residues: dict[str, list[int]] = field(default_factory=dict)
-        Dictionary of neighboring residues, with \
-            {instance}.{chain} key and residue number value
-    neighboring_ligands: list[str] = field(default_factory=list)
-        List of neighboring ligands {instance}.{chain}
-    interacting_residues: dict[str, list[int]] = field(default_factory=dict)
-        Dictionary of interacting residues, with \
-            {instance}.{chain} key and residue number value
-    interacting_ligands: list[str] = field(default_factory=list)
-        List of interacting ligands {instance}.{chain}
-    interactions: dict[str, dict[int, list[str]]] = field(
-                    default_factory=dict
-                )
-        Dictionary of {instance}.{chain} to residue number to list of PLIP hashes
-    neighboring_residue_threshold: float = 6.0
-        Maximum distance to consider protein residues neighboring
-    neighboring_ligand_threshold: float = 4.0
-        Maximum distance to consider ligands neighboring
-    num_resolved_heavy_atoms: int | None = None
-        Number of heavy atoms resolved in ligand
-    num_unresolved_heavy_atoms: int | None = None
-        Number of heavy atoms not resolved in ligand
-    is_ion: bool = False
-        Is ligand an ion
-    is_lipinski: bool = False
-        Does ligand satisfy Lipinski Ro5
-    is_fragment: bool = False
-        Does ligand satisfy fragment Ro3
-    is_oligo: bool = False
-        Does ligand match smarts for oligonucleotide, oligosacharide or oligopeptide
-    is_cofactor: bool = False
-        Is ligand in cofactor list
-    in_artifact_list: bool = False
-        Is ligand in artifact list
-    is_artifact: bool = False
-        Is ligand an artifact
-    is_invalid: bool = False
-        Is ligand classified as invalid
-    is_other: bool = False
-        Is ligand classified as other
-    is_invalid: bool = False
-        RDKit invalid
-    posebusters_result: dict[str, ty.Any]
-        Results from running posebusters with "re-dock"
-    unique_ccd_code: str | None = None
-        de-duplicated CCD code
-    waters: dict[str, list[int]]
-        residue numbers and chains of interacting waters
-    residue_numbers: list[int] | None = None
-        residue number(s) of ligand
     """
+
+    def document_ligand_properties_to_tsv(self, filename: str) -> dict[str, ty.Any]:
+        with open(filename, "w") as tsv:
+            # write header
+            tsv.write("\t".join(["Name", "Type", "Description"])+"\n")
+            # write fields info
+            for field, field_info in self.__fields__.items():
+                name = f"ligand_{field}"
+                dtype = str(field_info.default_factory)
+                if field_info.json_schema_extra:
+                    descr = field_info.json_schema_extra["help"]
+                    if descr.startswith("__"):
+                        continue
+                else:
+                    descr = "[DESCRIPTION MISSING]"
+                tsv.write("\t".join([name, dtype, descr])+"\n")
 
     def set_rdkit(self) -> None:
         try:
@@ -1415,75 +1425,129 @@ class Ligand(BaseModel):
                     interactions.append(f"{chain}_{residue}_{interaction}")
         return {"ligand_interactions": ";".join(interactions)}
 
-    def format_ligand(self, chains: dict[str, Chain]) -> dict[str, ty.Any]:
-        """
-        Format interactions for pd.DataFrame
+    # def format_ligand(self, chains: dict[str, Chain]) -> dict[str, ty.Any]:
+    #     """
+    #     Format interactions for pd.DataFrame
 
-        Parameters
-        ----------
-        self : Ligand
-            Ligand object
-        chains : dict[str, Chain]
-            Chain dictionary
+    #     Parameters
+    #     ----------
+    #     self : Ligand
+    #         Ligand object
+    #     chains : dict[str, Chain]
+    #         Chain dictionary
 
-        Returns
-        -------
-        dict[str, Any]
-        """
+    #     Returns
+    #     -------
+    #     dict[str, Any]
+    #     """
+    #     data = {
+    #         "ligand_id": self.id,
+    #         "ligand_instance": self.instance,
+    #         "ligand_asym_id": self.asym_id,
+    #         "ligand_ccd_code": self.ccd_code,
+    #         "ligand_unique_ccd_code": self.unique_ccd_code,
+    #         "ligand_plip_type": self.plip_type,
+    #         "ligand_num_rot_bonds": self.num_rot_bonds,
+    #         "ligand_smiles": self.smiles,
+    #         "ligand_resolved_smiles": self.resolved_smiles,
+    #         "ligand_rdkit_canonical_smiles": self.rdkit_canonical_smiles,
+    #         "ligand_molecular_weight": self.molecular_weight,
+    #         "ligand_crippen_clogp": self.crippen_clogp,
+    #         "ligand_num_hbd": self.num_hbd,
+    #         "ligand_num_hba": self.num_hba,
+    #         "ligand_num_rings": self.num_rings,
+    #         "ligand_num_heavy_atoms": self.num_heavy_atoms,
+    #         "ligand_tpsa": self.tpsa,
+    #         "ligand_qed": self.qed,
+    #         "ligand_is_covalent": self.is_covalent,
+    #         "ligand_is_ion": self.is_ion,
+    #         "ligand_is_lipinski": self.is_lipinski,
+    #         "ligand_is_fragment": self.is_fragment,
+    #         "ligand_is_oligo": self.is_oligo,
+    #         "ligand_is_cofactor": self.is_cofactor,
+    #         "ligand_is_other": self.is_other,
+    #         "ligand_is_invalid": self.is_invalid,
+    #         "ligand_in_artifact_list": self.in_artifact_list,
+    #         "ligand_is_artifact": self.is_artifact,
+    #         "ligand_num_interacting_residues": self.num_interacting_residues,
+    #         "ligand_num_neighboring_residues": self.num_neighboring_residues,
+    #         "ligand_num_interactions": self.num_interactions,
+    #         "ligand_num_missing_pli_interface_residues": self.num_missing_pli_interface_residues,
+    #         "ligand_num_pli_atoms_within_4A_of_gap": self.num_pli_atoms_within_4A_of_gap,
+    #         "ligand_num_pli_atoms_within_8A_of_gap": self.num_pli_atoms_within_8A_of_gap,
+    #         "ligand_num_missing_ppi_interface_residues": self.num_missing_ppi_interface_residues,
+    #         "ligand_num_neighboring_ppi_atoms_within_8A_of_gap": self.num_neighboring_ppi_atoms_within_8A_of_gap,
+    #         "ligand_num_neighboring_ppi_atoms_within_4A_of_gap": self.num_neighboring_ppi_atoms_within_4A_of_gap,
+    #         "ligand_num_resolved_heavy_atoms": self.num_resolved_heavy_atoms,
+    #         "ligand_num_unresolved_heavy_atoms": self.num_unresolved_heavy_atoms,
+    #         "ligand_is_kinase_inhibitor": self.is_kinase_inhibitor,
+    #         "ligand_num_atoms_with_crystal_contacts": self.num_atoms_with_crystal_contacts,
+    #         "ligand_fraction_atoms_with_crystal_contacts": self.fraction_atoms_with_crystal_contacts,
+    #         "ligand_num_crystal_contacted_residues": self.num_crystal_contacted_residues,
+    #         "ligand_binding_affinity": self.binding_affinity,
+    #     }
+    #     if self.posebusters_result is not None:
+    #         for k in self.posebusters_result:
+    #             data[f"ligand_posebusters_{k}"] = self.posebusters_result[k]
+
+    #     data.update(self.format_interactions())
+    #     for chain_type in [
+    #         "interacting_protein",
+    #         "neighboring_protein",
+    #         "interacting_ligand",
+    #         "neighboring_ligand",
+    #     ]:
+    #         data.update(self.format_chains(chain_type, chains))
+    #     for residue_type in ["interacting", "neighboring"]:
+    #         data.update(self.format_residues(residue_type, chains))
+    #     return data
+
+    def format_ligand(self, chains: dict[str, Chain]) -> dict[str, ty.Any]: 
+        # all these fields are cached_properties in Ligand class
+        # these fields are not in __fields__ and are not written to tsv!!
+        # TODO: add them to tsv 
         data = {
             "ligand_id": self.id,
-            "ligand_instance": self.instance,
-            "ligand_asym_id": self.asym_id,
-            "ligand_auth_id": chains[self.asym_id].auth_id,
-            "ligand_ccd_code": self.ccd_code,
-            "ligand_unique_ccd_code": self.unique_ccd_code,
-            "ligand_plip_type": self.plip_type,
-            "ligand_num_rot_bonds": self.num_rot_bonds,
-            "ligand_centroid": ";".join(map(str, self.centroid)),
-            "ligand_smiles": self.smiles,
-            "ligand_resolved_smiles": self.resolved_smiles,
-            "ligand_rdkit_canonical_smiles": self.rdkit_canonical_smiles,
-            "ligand_molecular_weight": self.molecular_weight,
-            "ligand_crippen_clogp": self.crippen_clogp,
-            "ligand_num_hbd": self.num_hbd,
-            "ligand_num_hba": self.num_hba,
-            "ligand_num_rings": self.num_rings,
-            "ligand_num_heavy_atoms": self.num_heavy_atoms,
-            "ligand_tpsa": self.tpsa,
-            "ligand_qed": self.qed,
-            "ligand_is_covalent": self.is_covalent,
-            "ligand_covalent_linkages": ";".join(self.covalent_linkages),
-            "ligand_is_ion": self.is_ion,
-            "ligand_is_lipinski": self.is_lipinski,
-            "ligand_is_fragment": self.is_fragment,
-            "ligand_is_oligo": self.is_oligo,
-            "ligand_is_cofactor": self.is_cofactor,
-            "ligand_is_other": self.is_other,
-            "ligand_is_invalid": self.is_invalid,
-            "ligand_in_artifact_list": self.in_artifact_list,
-            "ligand_is_artifact": self.is_artifact,
-            "ligand_num_interacting_residues": self.num_interacting_residues,
-            "ligand_num_neighboring_residues": self.num_neighboring_residues,
-            "ligand_num_interactions": self.num_interactions,
-            "ligand_num_missing_pli_interface_residues": self.num_missing_pli_interface_residues,
-            "ligand_num_pli_atoms_within_4A_of_gap": self.num_pli_atoms_within_4A_of_gap,
-            "ligand_num_pli_atoms_within_8A_of_gap": self.num_pli_atoms_within_8A_of_gap,
-            "ligand_num_missing_neighboring_ppi_residues": self.num_missing_ppi_interface_residues,
-            "ligand_num_neighboring_ppi_atoms_within_8A_of_gap": self.num_neighboring_ppi_atoms_within_8A_of_gap,
-            "ligand_num_neighboring_ppi_atoms_within_4A_of_gap": self.num_neighboring_ppi_atoms_within_4A_of_gap,
-            "ligand_num_resolved_heavy_atoms": self.num_resolved_heavy_atoms,
-            "ligand_num_unresolved_heavy_atoms": self.num_unresolved_heavy_atoms,
+            "ligand_binding_affinity": self.binding_affinity,
             "ligand_is_kinase_inhibitor": self.is_kinase_inhibitor,
             "ligand_num_atoms_with_crystal_contacts": self.num_atoms_with_crystal_contacts,
             "ligand_fraction_atoms_with_crystal_contacts": self.fraction_atoms_with_crystal_contacts,
             "ligand_num_crystal_contacted_residues": self.num_crystal_contacted_residues,
-            "ligand_binding_affinity": self.binding_affinity,
+            "ligand_num_interacting_residues": self.num_interacting_residues,
+            "ligand_num_neighboring_residues": self.num_neighboring_residues,
+            "ligand_num_interactions": self.num_interactions,
         }
+        # data = defaultdict(str)
+
+        for field in self.__fields__:
+            # blacklist fields that will be added with custom formatters below
+            # these may also be not written to tsv!!
+            # TODO: add them to tsv 
+            if field in [
+                "posebusters_result",
+                "interactions",
+                "ligand_auth_id",
+                "interacting_protein_chains","neighboring_protein_chains",
+                "interacting_ligands", "neighboring_ligands",
+                "interacting_residues", "neighboring_residues",
+            ]:
+                continue
+            name = f"ligand_{field}"
+            value = getattr(self, field, None)
+            print(name, value)
+            # maybe not add if the value is None?
+            # if value is None:
+            #     continue
+            data.update({name: str(value) if isinstance(value, ty.get_args(ty.Union[str, int, float, None])) else ";".join(map(str,value))})
+        
+        # posebusters
         if self.posebusters_result is not None:
             for k in self.posebusters_result:
                 data[f"ligand_posebusters_{k}"] = self.posebusters_result[k]
-
+        # interactions
         data.update(self.format_interactions())
+        # chains
+        data.update({"ligand_auth_id": chains[self.asym_id].auth_id})
         for chain_type in [
             "interacting_protein",
             "neighboring_protein",
@@ -1491,6 +1555,8 @@ class Ligand(BaseModel):
             "neighboring_ligand",
         ]:
             data.update(self.format_chains(chain_type, chains))
+        # residues
         for residue_type in ["interacting", "neighboring"]:
             data.update(self.format_residues(residue_type, chains))
+
         return data
