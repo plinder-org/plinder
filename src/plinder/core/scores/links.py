@@ -2,8 +2,6 @@
 # Distributed under the terms of the Apache License 2.0
 from __future__ import annotations
 
-from pathlib import Path
-
 import pandas as pd
 from duckdb import sql
 
@@ -38,7 +36,7 @@ def query_links(
         the linked systems results
     """
     cfg = get_config()
-    dataset = ensure_dataset(rel=cfg.data.linked_systems)
+    dataset = ensure_dataset(rel=cfg.data.links)
     query = make_query(
         dataset=dataset,
         filters=filters,
@@ -49,5 +47,5 @@ def query_links(
     )
     assert query is not None
     df = sql(query).to_df()
-    df["filename"] = df["filename"].apply(lambda x: Path(x).stem)
+    df["kind"] = df["filename"].apply(lambda x: x.split("_links")[0])
     return df

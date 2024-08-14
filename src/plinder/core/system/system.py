@@ -11,6 +11,8 @@ import pandas as pd
 
 from plinder.core.index import utils
 from plinder.core.scores.links import query_links
+from plinder.core.utils import cpl
+from plinder.core.utils.config import get_config
 from plinder.core.utils.log import setup_logger
 from plinder.core.utils.unpack import get_zips_to_unpack
 
@@ -20,8 +22,9 @@ LOG = setup_logger(__name__)
 class PlinderSystem:
     """
     Core class for interacting with a single system and its assets.
-    Relies on the entry data to populate the system which can be looked
-    up automatically using the from_system_id class method.
+    Relies on the entry data to populate the system, system zips
+    to obtain structure files, and the linked_structures archive
+    for linked structures.
     """
 
     def __repr__(self) -> str:
@@ -40,6 +43,8 @@ class PlinderSystem:
         self._archive = None
         self._chain_mapping = None
         self._water_mapping = None
+        self._linked_structures = None
+        self._linked_archive = None
 
     @property
     def entry(self) -> dict[str, Any]:
@@ -122,5 +127,24 @@ class PlinderSystem:
         ]
 
     @property
-    def linked_systems(self) -> pd.DataFrame:
-        return query_links(filters=[("query_system", "==", self.system_id)])
+    def linked_structures(self) -> pd.DataFrame:
+        if self._linked_structures is None:
+            links = query_links(filters=[("query_system", "==", self.system_id)])
+            self._linked_structures = links
+        return self._linked_structures
+
+    @property
+    def linked_archive(self) -> Path:
+        if self._linked_archive is None:
+            cfg = get_config()
+            structure_archive = cpl.get_plinder_path(rel=cfg.data.linked_structures)
+            self._linked_archive = Path(structure_archive.fspath)
+            if not (self._linked_archive / "apo").is_dir():
+                with ZipFile(structure_archive) as arch:
+                    arch.extractall(path=structure_archive)
+        return self._linked_archive
+
+    def get_linked_structure(self, link_kind: str, link_id: str, ext: str = "cif") -> str:
+        if ext not in ["cif", "pdb"]:
+            raise ValueError(f"extension must be cif or pdb, got {ext}")
+        return (self.linked_archive / link_kind / self.system_id / link_id / "receptor.{ext}").as_posix()

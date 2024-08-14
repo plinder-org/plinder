@@ -10,7 +10,6 @@ import pandas as pd
 from torch.utils.data import Dataset
 
 from plinder.core.index import utils
-from plinder.core.loader.utils import download_apo_pred_structures
 from plinder.core.system import system
 
 
@@ -18,19 +17,27 @@ class PlinderDataset(Dataset):
     """
     Creates a dataset from plinder systems
 
-
     Parameters
     ----------
+    file_with_system_ids : str | Path
+        path to a file containing a list of system ids (default: full index)
     transform : Callable, default=None
         transformation function for data augmentation
+    store_file_path : bool, default=True
+        if True, include the file path of the source structures in the dataset
+    load_alternative_structures : bool, default=False
+        if True, include alternative structures in the dataset
+    num_alternative_structures : int, default=1
+        number of alternative structures (apo and pred) to include
     """
 
     def __init__(
         self,
-        file_with_system_ids: str | Path,
+        file_with_system_ids: str | Path | None = None,
         transform: Callable | None = None,
         store_file_path: bool = True,
         load_alternative_structures: bool = False,
+        num_alternative_structures: int = 1,
     ):
         if file_with_system_ids is None:
             self._system_ids: list[str] = utils.get_manifest()["system_id"].to_list()
@@ -40,8 +47,7 @@ class PlinderDataset(Dataset):
         self._transform = transform
         self._store_file_path = store_file_path
         self.load_alternative_structures = load_alternative_structures
-        if self.load_alternative_structures:
-            download_apo_pred_structures()
+        self.num_alternative_structures = num_alternative_structures
 
     def __len__(self) -> int:
         return self._num_examples
@@ -58,17 +64,17 @@ class PlinderDataset(Dataset):
             "df": fo.bp_to_df(fo.read_any(s.system_cif)),
             "alternative_structures": {},
         }
+        if self._store_file_path:
+            item["path"] = s.system_cif
 
         if self.load_alternative_structures:
-            links = s.linked_systems
-            raise NotImplementedError
-            # item["alternative_structures"] = {
-            #     tag: {
-            #         chain: fo.bp_to_df(fo.read_any(apo_pred_path / tag / apo_pred_name))
-            #         for chain, apo_pred_name in chain_map.items
-            #     }
-            #     for tag, chain_map in APO_PRED_JSON[id].items
-            # }
+            links = s.linked_structures.groupby("kind")
+            for kind, group in links:
+                for link_id in group["id"].values[:self.num_alternative_structures]:
+                    structure = s.get_linked_structure(link_kind=str(kind), link_id=link_id)
+                    item["alternative_structures"][f"{kind}_{link_id}_df"] = fo.bp_to_df(fo.read_any(structure))
+                    if self._store_file_path:
+                        item["alternative_structures"][f"{kind}_{link_id}_path"] = structure
         if self._transform:
             item = self._transform(item)
         return item
