@@ -1,8 +1,10 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
+from __future__ import annotations
 import os
-from concurrent.futures import ALL_COMPLETED, ThreadPoolExecutor, wait
+from concurrent.futures import ALL_COMPLETED, Future, ThreadPoolExecutor, wait
 from pathlib import Path
+from typing import Any
 from shutil import rmtree
 from string import ascii_lowercase, digits
 from subprocess import check_output
@@ -140,7 +142,7 @@ def download_alternative_datasets(
     """
     kws = dict(data_dir=data_dir, force_update=force_update)
     with ThreadPoolExecutor() as executor:
-        futures = [
+        futures: list[Future[Any]] = [
             executor.submit(io.download_cofactors, **kws),
             executor.submit(io.download_seqres_data, **kws),
             executor.submit(io.download_kinase_data, **kws),
@@ -704,8 +706,8 @@ def scatter_missing_scores(
         aln_mmseqs = alns[search_db]["mmseqs"]
         aln = set(aln_foldseek).union(aln_mmseqs)
         rerun |= aln.difference(pdb_ids)
-    rerun = sorted(rerun)
-    return [rerun[pos : pos + batch_size] for pos in range(0, len(rerun), batch_size)]
+    run = sorted(rerun)
+    return [run[pos : pos + batch_size] for pos in range(0, len(run), batch_size)]
 
 
 def make_batch_scores(
@@ -733,7 +735,7 @@ def scatter_collate_partitions() -> list[list[str]]:
     return partitions[:1]
 
 
-def collate_partitions(*, data_dir: Path, partition: str) -> None:
+def collate_partitions(*, data_dir: Path, partition: list[str]) -> None:
     """
     Collate the batch results from make_batch_scores into a partitioned
     sorted dataset using duckdb.
@@ -747,6 +749,7 @@ def collate_partitions(*, data_dir: Path, partition: str) -> None:
     """
     import duckdb
 
+    part: str
     [part] = partition
     con = duckdb.connect()
     con.sql(f"set temp_directory='/plinder/tmp/{part}';")

@@ -363,12 +363,12 @@ def get_alns(
         the root plinder dir
     """
     sub = "mapped_aln" if mapped else "aln"
-    found = {}
+    found: dict[str, dict[str, list[str]]] = {}
     dbs = data_dir / "dbs" / "subdbs"
     for search_db in ["holo", "apo", "pred"]:
         found.setdefault(search_db, {})
         for aln_type in ["foldseek", "mmseqs"]:
-            found[search_db].setdefault(aln_type, {})
+            found[search_db].setdefault(aln_type, [])
             found[search_db][aln_type] = [
                 path.stem
                 for path in (dbs / f"{search_db}_{aln_type}/{sub}/").glob("*parquet")

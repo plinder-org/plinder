@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import NewType, List, Tuple, Union, Set
 
 import numpy as np
 import pyarrow as pa
@@ -12,29 +13,8 @@ from plinder.core.utils.log import setup_logger
 
 LOG = setup_logger(__name__)
 SQL_OP_MAP = {"==": "="}
-
-
-def ensure_dataset(rel: str) -> Path:
-    """
-    Check if the dataset exists and download it if not.
-
-    Parameters
-    ----------
-    rel : str
-        the relative path to the dataset
-
-    Returns
-    -------
-    root : Path
-        the local path to the dataset
-    """
-    root = cpl.get_plinder_path(rel=rel)
-    local = Path(root.fspath)
-    LOG.debug(f"ensure_dataset: root={root}, local={local}")
-    if not local.exists():
-        LOG.info(f"downloading {rel}, stand by...")
-        cpl.download_many(rel=rel)
-    return local
+FILTER = NewType("FILTER", Tuple[str, str, Union[str, Set[str]]])
+FILTERS = Union[List[List[FILTER]], List[FILTER], None]
 
 
 def _handle_condition_by_schema(
@@ -96,7 +76,7 @@ def _handle_condition_by_type(val: str | set[str]) -> str:
 
 
 def _handle_inner_filter(
-    filter: tuple[str, str, str | set[str]],
+    filter: FILTER,
     schema: pa.Schema | None,
 ) -> str:
     """
@@ -130,9 +110,7 @@ def _handle_inner_filter(
 
 
 def _handle_filters(
-    filters: list[list[tuple[str, str, str | set[str]]]]
-    | list[tuple[str, str, str | set[str]]]
-    | None,
+    filters: FILTERS,
     allow_no_filters: bool,
     schema: pa.Schema | None,
 ) -> list[str | list[str]]:
@@ -153,20 +131,23 @@ def _handle_filters(
     filters : list[tuple[str, str, str | set[str]]]
         the formatted filters
     """
-    if filters is None or not len(filters):
-        if not allow_no_filters:
-            raise ValueError("no filters provided, aborting query generation!")
-        if filters is None:
-            filters = []
+    missing = False
+    if filters is None:
+        missing = True
+    elif not len(filters):
+        missing = True
+    if missing and not allow_no_filters:
+        raise ValueError("no filters provided, aborting query generation!")
     wheres: list[str | list[str]] = []
-    for filter in filters:
-        if isinstance(filter, list):
-            inner_wheres: list[str] = []
-            for inner_filter in filter:
-                inner_wheres.append(_handle_inner_filter(inner_filter, schema))
-            wheres.append(inner_wheres)
-        else:
-            wheres.append(_handle_inner_filter(filter, schema))
+    if filters is not None:
+        for filter in filters:
+            if isinstance(filter, list):
+                inner_wheres: list[str] = []
+                for inner_filter in filter:
+                    inner_wheres.append(_handle_inner_filter(inner_filter, schema))
+                wheres.append(inner_wheres)
+            else:
+                wheres.append(_handle_inner_filter(filter, schema))
     return wheres
 
 
@@ -187,6 +168,7 @@ def _handle_columns(
     schema : pa.Schema, default=None
         the schema to validate the columns against
     """
+    cols: list[str]
     if schema is not None:
         cols = schema.names if columns is None or not len(columns) else columns
         if cols != ["*"]:
@@ -240,7 +222,7 @@ def _handle_source(
 
 def _format_query(
     columns: list[str],
-    filters: list[list[str]] | list[str],
+    filters: list[str | list[str]],
     source: str,
 ) -> str:
     """
@@ -289,9 +271,7 @@ def make_query(
     dataset: Path,
     schema: pa.Schema | None = None,
     columns: list[str] | None = None,
-    filters: list[list[tuple[str, str, str | set[str]]]]
-    | list[tuple[str, str, str | set[str]]]
-    | None = None,
+    filters: FILTERS = None,
     nested: bool = False,
     allow_no_filters: bool = False,
     include_filename: bool = False,

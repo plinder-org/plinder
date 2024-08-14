@@ -140,7 +140,7 @@ class IngestPipeline:
         )
 
     @utils.ingest_flow_control
-    def join_structure_qc(self) -> None:
+    def join_structure_qc(self, qcs: list[None]) -> None:
         force_update = (
             self.cfg.data.force_update or self.cfg.flow.structure_qc_force_update
         )

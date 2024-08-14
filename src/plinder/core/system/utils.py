@@ -4,7 +4,9 @@ from typing import Any, Optional, Union
 
 from omegaconf import DictConfig
 
-from plinder.core.index.utils import _load_entries_from_zips
+from plinder.core.index.utils import get_manifest, load_entries
+from plinder.core.utils.unpack import expand_config_context
+from plinder.core.system.system import PlinderSystem
 
 
 def load_systems(
@@ -14,13 +16,20 @@ def load_systems(
     two_char_codes: Optional[Union[str, list[str]]] = None,
     cfg: Optional[DictConfig] = None,
 ) -> dict[str, Any]:
-    if isinstance(pdb_ids, str):
-        pdb_ids = [pdb_ids]
-    if isinstance(two_char_codes, str):
-        two_char_codes = [two_char_codes]
-    result: dict[str, Any] = _load_entries_from_zips(
-        cfg=cfg,
-        two_char_codes=two_char_codes,
-        pdb_ids=pdb_ids,
-    )
-    return result
+    kind, items = expand_config_context(system_ids=system_ids, pdb_ids=pdb_ids, two_char_codes=two_char_codes, cfg=cfg)
+    if kind == "system_id":
+        return {system_id: PlinderSystem(system_id=system_id) for system_id in items}
+    manifest = get_manifest(cfg=cfg)
+    systems = {}
+    if kind == "pdb_id":
+        for pdb_id in items:
+            ids = manifest[manifest["pdb_id"] == pdb_id]["system_id"].to_list()
+            for system_id in ids:
+                systems[system_id] = PlinderSystem(system_id=system_id)
+        return systems
+    manifest["two_char_code"] = manifest["entry_pdb_id"].str[1:3]
+    for two_char_code in items:
+        ids = manifest[manifest["two_char_code"] == two_char_code]["system_id"].to_list()
+        for system_id in ids:
+            systems[system_id] = PlinderSystem(system_id=system_id)
+    return systems

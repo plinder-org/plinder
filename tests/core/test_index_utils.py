@@ -7,15 +7,15 @@ import pytest
 
 from plinder.core.index import utils
 
-def mock_path(rel):
-    return Path(
+def mock_path(*, rel: str = "", download: bool = False):
+    obj = Path(
         "/".join([
             str(os.getenv("PLINDER_MOUNT")),
             str(os.getenv("PLINDER_BUCKET")),
             str(os.getenv("PLINDER_RELEASE")),
-            str(rel),
         ])
     )
+    return obj / rel if rel else obj
 
 @pytest.fixture
 def mock_cpl(read_plinder_mount, monkeypatch):

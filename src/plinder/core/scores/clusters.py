@@ -5,7 +5,8 @@ from __future__ import annotations
 import pandas as pd
 from duckdb import sql
 
-from plinder.core.scores.query import ensure_dataset, make_query
+from plinder.core.scores.query import FILTERS, make_query
+from plinder.core.utils import cpl
 from plinder.core.utils.config import get_config
 from plinder.core.utils.dec import timeit
 from plinder.core.utils.log import setup_logger
@@ -18,7 +19,7 @@ LOG = setup_logger(__name__)
 def query_clusters(
     *,
     columns: list[str] | None = None,
-    filters: list[tuple[str, str, str]] | None = None,
+    filters: FILTERS = None,
 ) -> pd.DataFrame | None:
     """
     Query the cluster database.
@@ -37,7 +38,7 @@ def query_clusters(
     """
 
     cfg = get_config()
-    dataset = ensure_dataset(rel=f"{cfg.data.clusters}/")
+    dataset = cpl.get_plinder_path(rel=cfg.data.clusters)
     query = make_query(
         schema=CLUSTER_SCHEMA,
         dataset=dataset,

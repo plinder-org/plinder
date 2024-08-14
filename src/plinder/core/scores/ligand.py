@@ -5,7 +5,8 @@ from __future__ import annotations
 import pandas as pd
 from duckdb import sql
 
-from plinder.core.scores.query import ensure_dataset, make_query
+from plinder.core.scores.query import FILTER, FILTERS, make_query
+from plinder.core.utils import cpl
 from plinder.core.utils.config import get_config
 from plinder.core.utils.dec import timeit
 from plinder.core.utils.log import setup_logger
@@ -18,7 +19,7 @@ LOG = setup_logger(__name__)
 def query_ligand_similarity(
     *,
     columns: list[str] | None = None,
-    filters: list[tuple[str, str, str | set[str]]] | None = None,
+    filters: FILTERS = None,
 ) -> pd.DataFrame | None:
     """
     Query the ligand similarity database
@@ -37,7 +38,7 @@ def query_ligand_similarity(
         the protein similarity results
     """
     cfg = get_config()
-    dataset = ensure_dataset(rel=cfg.data.ligand_scores)
+    dataset = cpl.get_plinder_path(rel=cfg.data.ligand_scores)
     query = make_query(
         schema=TANIMOTO_SCORE_SCHEMA,
         dataset=dataset,
@@ -68,7 +69,7 @@ def map_cross_similarity(
     df = df.loc[idx]
 
     cfg = get_config()
-    dataset = ensure_dataset(rel=cfg.data.fingerprints)
+    dataset = cpl.get_plinder_path(rel=cfg.data.fingerprints)
     ligands_per_system = pd.read_parquet(dataset)
     ligand_to_system: dict[int, set[str]] = {}
     for ligand_id, group in ligands_per_system.groupby("number_id_by_inchikeys"):
@@ -111,15 +112,15 @@ def cross_similarity(
         the cross similarity results
     """
     cfg = get_config()
-    dataset = ensure_dataset(rel=cfg.data.ligand_scores)
+    dataset = cpl.get_plinder_path(rel=cfg.data.ligand_scores)
     filters = [
         [
-            ("query_ligand_id", "in", query_ligands),
-            ("target_ligand_id", "in", target_ligands),
+            FILTER(("query_ligand_id", "in", query_ligands)),
+            FILTER(("target_ligand_id", "in", target_ligands)),
         ],
         [
-            ("query_ligand_id", "in", target_ligands),
-            ("target_ligand_id", "in", query_ligands),
+            FILTER(("query_ligand_id", "in", target_ligands)),
+            FILTER(("target_ligand_id", "in", query_ligands)),
         ],
     ]
     columns = ["query_ligand_id", "target_ligand_id", "tanimoto_similarity_max"]

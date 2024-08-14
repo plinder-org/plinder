@@ -5,7 +5,8 @@ from __future__ import annotations
 import pandas as pd
 from duckdb import sql
 
-from plinder.core.scores.query import ensure_dataset, make_query
+from plinder.core.scores.query import FILTERS, FILTER, make_query
+from plinder.core.utils import cpl
 from plinder.core.utils.config import get_config
 from plinder.core.utils.dec import timeit
 from plinder.core.utils.log import setup_logger
@@ -19,7 +20,7 @@ def query_protein_similarity(
     *,
     search_db: str,
     columns: list[str] | None = None,
-    filters: list[tuple[str, str, str | set[str]]] | None = None,
+    filters: FILTERS = None,
 ) -> pd.DataFrame | None:
     """
     Query the protein similarity database for
@@ -46,9 +47,9 @@ def query_protein_similarity(
         if len(filters) and not isinstance(filters[0], list):
             for i, (col, _, _) in enumerate(filters):
                 if col == "search_db":
-                    filters = filters[:i] + filters[i + 1 :]
+                    filters.pop(i)
                     break
-    dataset = ensure_dataset(rel=f"{cfg.data.scores}/search_db={search_db}")
+    dataset = cpl.get_plinder_path(rel=f"{cfg.data.scores}/search_db={search_db}")
     query = make_query(
         schema=PROTEIN_SIMILARITY_SCHEMA,
         dataset=dataset,
@@ -96,17 +97,17 @@ def cross_similarity(
     metric: str,
 ) -> pd.DataFrame:
     cfg = get_config()
-    dataset = ensure_dataset(rel=f"{cfg.data.scores}/search_db=holo")
-    filters = [
+    dataset = cpl.get_plinder_path(rel=f"{cfg.data.scores}/search_db=holo")
+    filters: list[list[FILTER]] = [
         [
-            ("metric", "==", metric),
-            ("query_system", "in", query_systems),
-            ("target_system", "in", target_systems),
+            FILTER(("metric", "==", metric)),
+            FILTER(("query_system", "in", query_systems)),
+            FILTER(("target_system", "in", target_systems)),
         ],
         [
-            ("metric", "==", metric),
-            ("query_system", "in", target_systems),
-            ("target_system", "in", query_systems),
+            FILTER(("metric", "==", metric)),
+            FILTER(("query_system", "in", target_systems)),
+            FILTER(("target_system", "in", query_systems)),
         ],
     ]
     columns = ["query_system", "target_system", "similarity"]

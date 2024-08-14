@@ -226,7 +226,7 @@ class ModelScores:
                 chain_name = residue.chain.name
                 residue_number = residue.number.num
                 ligand_class = LigandScores(
-                    chain_name, residue_number, sdf_file, len(residue.atoms)
+                    chain_name, residue_number, Path(sdf_file), len(residue.atoms)
                 )
                 scrmsd_aux_ligand = scrmsd_aux.get(chain_name, {}).get(
                     residue_number, {}
@@ -268,9 +268,15 @@ class ModelScores:
                         full_report=False,
                     ).to_dict()
                     key = (str(ligand_class.sdf_file), chain_name.split("_")[-1])
-                    ligand_class.posebusters = {
-                        k: v[key] for k, v in result_dict.items()
-                    }
+                    try:
+                        ligand_class.posebusters = {
+                            k: v[key] for k, v in result_dict.items()
+                        }
+                    except KeyError:
+                        key = (str(ligand_class.sdf_file), "mol_at_pos_0")
+                        ligand_class.posebusters = {
+                            k: v[key] for k, v in result_dict.items()
+                        }
                 if ligand_class.protein_chain_mapping is not None:
                     assigned_model.add(chain_name)
                     assigned_target.add(ligand_class.reference_ligand["scrmsd"].chain)

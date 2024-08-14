@@ -75,7 +75,7 @@ def validate_chain_residue(obj: dict[str, ty.Any]) -> dict[str, ty.Any]:
             clean[key] = validate_chain_residue(v)
         else:
             clean[key] = v
-    return clean
+    return clean  # type: ignore
 
 
 def lig_has_dummies(
