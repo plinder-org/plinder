@@ -137,9 +137,12 @@ def download_affinity_data(
     bindingdb_raw_affinity_path.parent.mkdir(parents=True, exist_ok=True)
     moad_raw_affinity_path.parent.mkdir(parents=True, exist_ok=True)
     if not affinity_path.is_file() or force_update:
-
         # Download BindingDB
-        if not bindingdb_raw_affinity_path.is_file() or bindingdb_raw_affinity_path.stat().st_size == 0 or force_update:
+        if (
+            not bindingdb_raw_affinity_path.is_file()
+            or bindingdb_raw_affinity_path.stat().st_size == 0
+            or force_update
+        ):
             LOG.info(f"download_bindingdb_affinity_data: {bindingdb_url}...")
             with urlopen(bindingdb_url) as zipresp:
                 with ZipFile(BytesIO(zipresp.read())) as zfile:

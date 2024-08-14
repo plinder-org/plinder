@@ -1,6 +1,7 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
 from __future__ import annotations
+
 import json
 from pathlib import Path
 from typing import Any
@@ -48,9 +49,7 @@ class PlinderSystem:
                 entry = utils.load_entries(pdb_ids=[entry_pdb_id], prune=self.prune)
                 self._entry = entry[entry_pdb_id]
             except KeyError:
-                raise ValueError(
-                    f"pdb_id={entry_pdb_id} not found in entries"
-                )
+                raise ValueError(f"pdb_id={entry_pdb_id} not found in entries")
         return self._entry
 
     @property
@@ -59,9 +58,7 @@ class PlinderSystem:
             try:
                 self._system = self.entry["systems"][self.system_id]
             except KeyError:
-                raise ValueError(
-                    f"system_id={self.system_id} not found in entry"
-                )
+                raise ValueError(f"system_id={self.system_id} not found in entry")
         return self._system
 
     @property

@@ -435,9 +435,7 @@ def parse_artifacts() -> set[str]:
     Returns:
         set[str]: set[str]
     """
-    artifact_log = (
-        BASE_DIR / "utils/annotations/static_files/artifacts_badlist.csv"
-    )
+    artifact_log = BASE_DIR / "utils/annotations/static_files/artifacts_badlist.csv"
     with open(artifact_log, "r") as f:
         lines = f.readlines()
     artifacts = {l.strip() for l in lines if not l.startswith("#")}

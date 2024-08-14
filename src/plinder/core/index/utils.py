@@ -183,9 +183,11 @@ def download_plinder_cmd() -> None:
     smaller ones.
     """
     cfg = get_config()
-    LOG.info(f"""
+    LOG.info(
+        f"""
 downloading {cfg.data.plinder_remote} -> {cfg.data.plinder_dir}
 if this is the first time you are running this command, it will take a while!
 the estimated time on the progress bar may vary wildly based on file size
-if you need to cancel this and come back to it, it will pick up where it left off""")
+if you need to cancel this and come back to it, it will pick up where it left off"""
+    )
     cpl.download_many(rel="")

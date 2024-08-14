@@ -345,11 +345,15 @@ def get_pdb_ids_in_scoring_dataset(*, data_dir: Path) -> dict[str, list[str]]:
     found = {}
     dbs = data_dir / "dbs" / "subdbs"
     for search_db in ["holo", "apo", "pred"]:
-        found[search_db] = [path.stem for path in (dbs / f"search_db={search_db}").glob("*parquet")]
+        found[search_db] = [
+            path.stem for path in (dbs / f"search_db={search_db}").glob("*parquet")
+        ]
     return found
 
 
-def get_alns(*, data_dir: Path, mapped: bool = False) -> dict[str, dict[str, list[str]]]:
+def get_alns(
+    *, data_dir: Path, mapped: bool = False
+) -> dict[str, dict[str, list[str]]]:
     """
     Get all the pdb IDs that are present in the raw alignment dataset
 
@@ -365,7 +369,10 @@ def get_alns(*, data_dir: Path, mapped: bool = False) -> dict[str, dict[str, lis
         found.setdefault(search_db, {})
         for aln_type in ["foldseek", "mmseqs"]:
             found[search_db].setdefault(aln_type, {})
-            found[search_db][aln_type] = [path.stem for path in (dbs / f"{search_db}_{aln_type}/{sub}/").glob("*parquet")]
+            found[search_db][aln_type] = [
+                path.stem
+                for path in (dbs / f"{search_db}_{aln_type}/{sub}/").glob("*parquet")
+            ]
     return found
 
 
@@ -478,7 +485,10 @@ def create_index(*, data_dir: Path, force_update: bool = False) -> pd.DataFrame:
             update = True
         except Exception:
             pass
-    if "protein_lddt_qcov_weighted_sum__100__strong__component" not in df.columns or force_update:
+    if (
+        "protein_lddt_qcov_weighted_sum__100__strong__component" not in df.columns
+        or force_update
+    ):
         try:
             lddt_qcov_cluster = pd.read_parquet(
                 data_dir
@@ -488,9 +498,9 @@ def create_index(*, data_dir: Path, force_update: bool = False) -> pd.DataFrame:
                 / "metric=protein_lddt_qcov_weighted_sum"
                 / "threshold=100.parquet"
             )
-            df["protein_lddt_qcov_weighted_sum__100__strong__component"] = df["system_id"].map(
-                dict(zip(lddt_qcov_cluster["system_id"], lddt_qcov_cluster["label"]))
-            )
+            df["protein_lddt_qcov_weighted_sum__100__strong__component"] = df[
+                "system_id"
+            ].map(dict(zip(lddt_qcov_cluster["system_id"], lddt_qcov_cluster["label"])))
             update = True
         except Exception:
             pass

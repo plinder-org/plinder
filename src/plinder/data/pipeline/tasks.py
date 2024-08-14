@@ -3,15 +3,15 @@
 import os
 from concurrent.futures import ALL_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
-from string import digits, ascii_lowercase
 from shutil import rmtree
+from string import ascii_lowercase, digits
 from subprocess import check_output
 from textwrap import dedent
 from zipfile import ZIP_DEFLATED, ZipFile
 
 import pandas as pd
-from tqdm import tqdm
 from omegaconf import DictConfig
+from tqdm import tqdm
 
 from plinder.core.utils import gcs
 from plinder.core.utils.log import setup_logger
@@ -705,9 +705,7 @@ def scatter_missing_scores(
         aln = set(aln_foldseek).union(aln_mmseqs)
         rerun |= aln.difference(pdb_ids)
     rerun = sorted(rerun)
-    return [
-        rerun[pos : pos + batch_size] for pos in range(0, len(rerun), batch_size)
-    ]
+    return [rerun[pos : pos + batch_size] for pos in range(0, len(rerun), batch_size)]
 
 
 def make_batch_scores(
@@ -725,7 +723,9 @@ def make_batch_scores(
     )
     for search_db in scorer_cfg.sub_databases:
         for pdb_id in tqdm(entry_ids):
-            scorer.get_score_df(data_dir, pdb_id, search_db=search_db, overwrite=force_update)
+            scorer.get_score_df(
+                data_dir, pdb_id, search_db=search_db, overwrite=force_update
+            )
 
 
 def scatter_collate_partitions() -> list[list[str]]:
@@ -795,7 +795,10 @@ def scatter_make_components_and_communities(
             for directed in [True, False]:
                 if do:
                     continue
-                if not (data_dir / f"clusters/cluster={cluster}/directed={directed}/metric={metric}/threshold={threshold}.parquet").is_file() and not skip_existing_clusters:
+                if not (
+                    data_dir
+                    / f"clusters/cluster={cluster}/directed={directed}/metric={metric}/threshold={threshold}.parquet"
+                ).is_file() and not skip_existing_clusters:
                     do = True
         if do:
             rerun.append(tup)
@@ -1003,7 +1006,10 @@ def assign_apo_pred_systems(
     search_db: str,
     cpu: int = 8,
 ) -> None:
-    from plinder.data.save_linked_structures import save_linked_structures, make_linked_structures_data_file
+    from plinder.data.save_linked_structures import (
+        make_linked_structures_data_file,
+        save_linked_structures,
+    )
 
     save_dir = data_dir / "assignments"
     linked_structures = data_dir / "linked_structures"

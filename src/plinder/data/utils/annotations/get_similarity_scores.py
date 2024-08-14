@@ -14,12 +14,10 @@ import biotite.sequence.align as align
 import numpy as np
 import pandas as pd
 import pyarrow
-import pyarrow.dataset as ds
 import pyarrow.parquet as pq
 from pyarrow import csv
 from tqdm import tqdm
 
-from plinder.core.utils import schemas
 from plinder.core.utils.log import setup_logger
 from plinder.data import databases
 from plinder.data.pipeline.config import FoldseekConfig, MMSeqsConfig
@@ -365,7 +363,12 @@ class Scorer:
                     alignment_config=self.get_config(search_db, aln_type),
                 )
             except Exception as e:
-                scratch = Path(*output_folder.parts[:3]) / "scratch" / "scores" / "run_alignment_failures"
+                scratch = (
+                    Path(*output_folder.parts[:3])
+                    / "scratch"
+                    / "scores"
+                    / "run_alignment_failures"
+                )
                 scratch.mkdir(exist_ok=True, parents=True)
                 (scratch / f"{search_db}_{aln_type}.txt").write_text(f"{repr(e)}: {e}")
                 LOG.error(f"scoring: Error for {search_db}_{aln_type}: {e}")
@@ -377,7 +380,12 @@ class Scorer:
                     aln_file.with_suffix(".parquet") / f"query_pdb_id={pdb_id}"
                 )
                 if not pdb_id_file.exists():
-                    scratch = Path(*output_folder.parts[:3]) / "scratch" / "scores" / "run_alignments_failures"
+                    scratch = (
+                        Path(*output_folder.parts[:3])
+                        / "scratch"
+                        / "scores"
+                        / "run_alignments_failures"
+                    )
                     scratch.mkdir(exist_ok=True, parents=True)
                     (scratch / f"{search_db}_{aln_type}_{pdb_id}.txt").write_text("")
                     continue
@@ -385,7 +393,12 @@ class Scorer:
                 if not pdb_id_df.empty:
                     pdb_id_df.to_parquet(aln_dir / f"{pdb_id}.parquet")
                 else:
-                    scratch = Path(*output_folder.parts[:3]) / "scratch" / "scores" / "run_alignments_empty"
+                    scratch = (
+                        Path(*output_folder.parts[:3])
+                        / "scratch"
+                        / "scores"
+                        / "run_alignments_empty"
+                    )
                     scratch.mkdir(exist_ok=True, parents=True)
                     (scratch / f"{search_db}_{aln_type}_{pdb_id}.txt").write_text("")
 
@@ -446,9 +459,16 @@ class Scorer:
                         pdb_file, index=True
                     )
                 except Exception as e:
-                    scratch = Path(*pdb_id_file.parts[:3]) / "scratch" / "scores" / "map_alignment_df_failures"
+                    scratch = (
+                        Path(*pdb_id_file.parts[:3])
+                        / "scratch"
+                        / "scores"
+                        / "map_alignment_df_failures"
+                    )
                     scratch.mkdir(exist_ok=True, parents=True)
-                    (scratch / f"{search_db}_{aln_type}_{pdb_id}.txt").write_text(f"{repr(e)}: {e}")
+                    (scratch / f"{search_db}_{aln_type}_{pdb_id}.txt").write_text(
+                        f"{repr(e)}: {e}"
+                    )
                     LOG.error(
                         f"scoring: Error in map_alignment_df: {pdb_id} searching against {search_db} with {aln_type}: {repr(e)}"
                     )
@@ -463,7 +483,12 @@ class Scorer:
             if df is not None and not df.empty:
                 df.to_parquet(score_df_path, index=False)
         except Exception as e:
-            scratch = Path(*score_df_path.parts[:3]) / "scratch" / "scores" / "aggregate_scores_failures"
+            scratch = (
+                Path(*score_df_path.parts[:3])
+                / "scratch"
+                / "scores"
+                / "aggregate_scores_failures"
+            )
             scratch.mkdir(exist_ok=True, parents=True)
             (scratch / f"{search_db}_{pdb_id}.txt").write_text(f"{repr(e)}: {e}")
             LOG.error(

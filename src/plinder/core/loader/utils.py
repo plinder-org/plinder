@@ -2,11 +2,12 @@
 # Distributed under the terms of the Apache License 2.0
 from pathlib import Path
 
-from plinder.core.utils.cpl import thread_pool
 from plinder.core.utils.config import get_config
+from plinder.core.utils.cpl import thread_pool
 from plinder.core.utils.log import setup_logger
 
 LOG = setup_logger(__name__)
+
 
 def download_apo_structures(targets: list[str]) -> None:
     from plinder.data.pipeline.io import rsync_rcsb
@@ -14,11 +15,13 @@ def download_apo_structures(targets: list[str]) -> None:
     cfg = get_config()
     data_dir = Path(cfg.data.plinder_dir) / cfg.data.ingest
 
-    def inner(tup: tuple[str, list[str]]) -> None: # two_char_code: str, pdb_ids: list[str]) -> None:
+    def inner(
+        tup: tuple[str, list[str]]
+    ) -> None:  # two_char_code: str, pdb_ids: list[str]) -> None:
         two_char_code, pdb_ids = tup
         print(two_char_code, len(pdb_ids))
         if len(pdb_ids) > 20:
-        # two_char_code, pdb_id = tup
+            # two_char_code, pdb_id = tup
             rsync_rcsb(
                 kind="cif",
                 two_char_code=two_char_code,
@@ -48,7 +51,7 @@ def download_apo_structures(targets: list[str]) -> None:
     tuples = sorted(tuples)
     LOG.info(f"set after dedupe: {len(tuples)}")
     LOG.info(f"downloading {len(tuples)} RCSB codes for apo structures")
-    thread_pool(inner, sorted(counts.items())) # tuples)
+    thread_pool(inner, sorted(counts.items()))  # tuples)
 
 
 def download_pred_structures(targets: list[str]) -> None:

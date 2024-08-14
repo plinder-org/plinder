@@ -10,7 +10,6 @@ from pathlib import Path
 import gemmi
 import pandas as pd
 from ost import io, mol
-from tqdm import tqdm
 
 from plinder.core import scores
 from plinder.core.utils.log import setup_logger
@@ -131,7 +130,6 @@ def make_linked_structures_data_file(
     cfg: LinkedStructureConfig = LinkedStructureConfig(),
     num_processes: int = 8,
 ) -> None:
-
     def get_system_ligand_files(system_id: str) -> list[str]:
         system_folder = get_cif_file(data_dir, "holo", system_id).parent
         return [
@@ -145,7 +143,9 @@ def make_linked_structures_data_file(
         filters.append([("metric", "==", metric), ("similarity", ">=", threshold)])
     output_file.parent.mkdir(exist_ok=True, parents=True)
     if (output_file.parent / f"{output_file.stem}_intermediate.parquet").is_file():
-        links = pd.read_parquet(output_file.parent / f"{output_file.stem}_intermediate.parquet")
+        links = pd.read_parquet(
+            output_file.parent / f"{output_file.stem}_intermediate.parquet"
+        )
     else:
         links = scores.query_protein_similarity(
             search_db=search_db,
@@ -169,7 +169,9 @@ def make_linked_structures_data_file(
         query = " and ".join([f"{m} >= {t}" for (m, t) in cfg.filter_criteria.items()])
         links = links.query(query)
         links["target_id"] = links["target_system"].map(lambda x: x.split("_")[0])
-        links.to_parquet(output_file.parent / f"{output_file.stem}_intermediate.parquet", index=False)
+        links.to_parquet(
+            output_file.parent / f"{output_file.stem}_intermediate.parquet", index=False
+        )
 
     targets = set(links["target_id"])
     score_dir = search_db
@@ -191,7 +193,9 @@ def make_linked_structures_data_file(
 
     nonnull = sum((v for v in sort_scores.values() if v is not None))
     LOG.info(f"non null scores: {nonnull}")
-    links = pd.read_parquet(output_file.parent / f"{output_file.stem}_intermediate.parquet")
+    links = pd.read_parquet(
+        output_file.parent / f"{output_file.stem}_intermediate.parquet"
+    )
     links["sort_score"] = links["target_id"].map(sort_scores)
     links = (
         links[links["sort_score"].notna()]
@@ -200,13 +204,18 @@ def make_linked_structures_data_file(
         .head(cfg.num_per_system)
         .reset_index(drop=True)
     )
-    links.rename(columns={"query_system": "reference_system_id", "target_system": "id"}, inplace=True)
+    links.rename(
+        columns={"query_system": "reference_system_id", "target_system": "id"},
+        inplace=True,
+    )
     links["receptor_file"] = links.apply(
-        lambda row: (superposed_folder
-        / search_db
-        / row.reference_system_id
-        / row.id
-        / "superposed.cif").as_posix(),
+        lambda row: (
+            superposed_folder
+            / search_db
+            / row.reference_system_id
+            / row.id
+            / "superposed.cif"
+        ).as_posix(),
         axis=1,
     )
     links["ligand_files"] = links["reference_system_id"].apply(get_system_ligand_files)

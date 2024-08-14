@@ -37,7 +37,9 @@ def ensure_dataset(rel: str) -> Path:
     return local
 
 
-def _handle_condition_by_schema(schema: pa.Schema, col: str, val: str | set[str]) -> str:
+def _handle_condition_by_schema(
+    schema: pa.Schema, col: str, val: str | set[str]
+) -> str:
     """
     Deal with quoting hell for the varied conditions
     and types in the schema.
@@ -128,7 +130,9 @@ def _handle_inner_filter(
 
 
 def _handle_filters(
-    filters: list[list[tuple[str, str, str | set[str]]]] | list[tuple[str, str, str | set[str]]] | None,
+    filters: list[list[tuple[str, str, str | set[str]]]]
+    | list[tuple[str, str, str | set[str]]]
+    | None,
     allow_no_filters: bool,
     schema: pa.Schema | None,
 ) -> list[str | list[str]]:

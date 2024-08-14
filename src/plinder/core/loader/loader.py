@@ -10,8 +10,8 @@ import pandas as pd
 from torch.utils.data import Dataset
 
 from plinder.core.index import utils
-from plinder.core.system import system
 from plinder.core.loader.utils import download_apo_pred_structures
+from plinder.core.system import system
 
 
 class PlinderDataset(Dataset):
