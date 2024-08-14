@@ -14,6 +14,10 @@ from ost.mol.alg.ligand_scoring_scrmsd import SCRMSDScorer
 from ost.mol.alg.scoring import Scorer
 from posebusters import PoseBusters
 
+from plinder.core.utils.log import setup_logger
+
+LOG = setup_logger(__name__)
+
 
 @dataclass
 class LigandScores:
@@ -84,7 +88,7 @@ class ModelScores:
     structure_file: Path
     entity: mol.EntityHandle
     ligands: list[mol.EntityHandle]
-    ligand_sdf_files: list[Path]
+    ligand_sdf_files: list[str | Path]
     num_ligands: int
     num_proteins: int
     num_mapped_reference_ligands: int = 0
@@ -103,16 +107,20 @@ class ModelScores:
         cls,
         model_system: str,
         model_file: Path,
-        model_ligand_sdf_files: list[Path],
+        model_ligand_sdf_files: list[str | Path],
         reference: ReferenceSystem,
         rigid: bool = True,
         score_protein: bool = False,
         score_posebusters: bool = False,
     ) -> "ModelScores":
         entity = io.LoadEntity(model_file.as_posix())
+        sdf_files = [
+            sdf_file.as_posix() if isinstance(sdf_file, Path) else sdf_file
+            for sdf_file in model_ligand_sdf_files
+        ]
         ligands = [
-            io.LoadEntity(ligand_sdf_file.as_posix(), format="sdf").Select("ele != H")
-            for ligand_sdf_file in model_ligand_sdf_files
+            io.LoadEntity(ligand_sdf_file, format="sdf").Select("ele != H")
+            for ligand_sdf_file in sdf_files
         ]
         model_class = cls(
             reference=reference,
@@ -259,7 +267,7 @@ class ModelScores:
                         mol_cond=self.reference.receptor_pdb_file,
                         full_report=False,
                     ).to_dict()
-                    key = (str(ligand_class.sdf_file), "mol_at_pos_0")
+                    key = (str(ligand_class.sdf_file), chain_name.split("_")[-1])
                     ligand_class.posebusters = {
                         k: v[key] for k, v in result_dict.items()
                     }
