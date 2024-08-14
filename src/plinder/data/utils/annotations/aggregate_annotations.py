@@ -623,13 +623,38 @@ class System(BaseModel):
 
 
 class Entry(BaseModel):
-    pdb_id: str
-    release_date: str
-    oligomeric_state: str | None
-    determination_method: str | None
-    keywords: str | None
-    pH: str | None
-    resolution: float | None
+    pdb_id: str = Field(
+        default_factory=str,
+        help="RCSB PDB ID. See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_entry.id.html",
+        aliases="entry_pdb_id")
+    release_date: str = Field(
+        default_factory=str,
+        help="RCSB structure release date. See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_database_PDB_rev.date_original.html",
+        aliases="entry_release_date")
+    oligomeric_state: str | None = Field(
+        default_factory=str,
+        help="Author's provided description of quaternary structure in RCSB. See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_pdbx_struct_assembly.oligomeric_details.html",
+        aliases="entry_oligomeric_state")
+    determination_method: str | None = Field(
+        default_factory=str,
+        help="RCSB method of structure determination. See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_exptl.method.html",
+        aliases="entry_determination_method")
+    keywords: str | None = Field(
+        default_factory=str,
+        help="RCSB keywords describing the structure. See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_struct_keywords.pdbx_keywords.html",
+        aliases="entry_determination_method")
+    keywords: str | None = Field(
+        default_factory=str,
+        help="pH at which structure is solved. See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_exptl_crystal_grow.pH.html",
+        aliases="entry_determination_method")
+    pH: str | None = Field(
+        default_factory=str,
+        help="pH at which structure is solved. See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_exptl_crystal_grow.pH.html",
+        aliases="entry_pH")
+    resolution: float | None = Field(
+        default_factory=float,
+        help="RCSB structure resolution. See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_refine.ls_d_res_high.html",
+        aliases="entry_pH")
     chains: dict[str, Chain] = Field(default_factory=dict)
     ligand_like_chains: dict[str, str] = Field(default_factory=dict)
     systems: dict[str, System] = Field(default_factory=dict)
@@ -641,7 +666,6 @@ class Entry(BaseModel):
     symmetry_mate_contacts: dict[
         tuple[str, int], dict[tuple[str, int], set[int]]
     ] = Field(default_factory=dict)
-
     """
     This dataclass defines as system which included a protein-ligand complex
     and it's neighboring ligands and protein residues. For access to all
