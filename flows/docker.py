@@ -73,7 +73,7 @@ def get_version_bump(base_tag: str | None = None) -> str:
             ),
             text=True,
         ).strip()
-        if log:
+        if log and "origin/main" in log:
             bump = token.split()[1]
             break
     if bump == "skip":
