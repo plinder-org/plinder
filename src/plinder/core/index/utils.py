@@ -46,16 +46,14 @@ def get_plindex(
     cfg = cfg or get_config()
     suffix = f"{cfg.data.index}/{cfg.data.index_file}"
     index = cpl.get_plinder_path(rel=suffix)
-    cpl.download_many(rel=suffix)
-    LOG.info(f"reading {index.fspath}")
-    _PLINDEX = pd.read_parquet(index.fspath)
+    LOG.info(f"reading {index}")
+    _PLINDEX = pd.read_parquet(index)
     return _PLINDEX
 
 
 def get_manifest(
     *,
     cfg: Optional[DictConfig] = None,
-    plindex: Optional[pd.DataFrame] = None,
 ) -> pd.DataFrame:
     """
     Fetch the manifest and cache it
@@ -81,8 +79,7 @@ def get_manifest(
     manifest = Path(f"{cfg.data.plinder_dir}/{suffix}")
     if not manifest.exists() or cfg.data.force_update:
         manifest.parent.mkdir(exist_ok=True, parents=True)
-        if plindex is None:
-            plindex = get_plindex(cfg=cfg)
+        plindex = get_plindex(cfg=cfg)
         plindex[["system_id", "entry_pdb_id"]].to_parquet(manifest, index=False)
     _MANIFEST = pd.read_parquet(manifest)
     return _MANIFEST
@@ -190,4 +187,4 @@ if this is the first time you are running this command, it will take a while!
 the estimated time on the progress bar may vary wildly based on file size
 if you need to cancel this and come back to it, it will pick up where it left off"""
     )
-    cpl.download_many(rel="")
+    cpl.get_plinder_path()

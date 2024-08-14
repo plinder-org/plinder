@@ -1,5 +1,6 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
+import os
 from concurrent.futures import ALL_COMPLETED, ThreadPoolExecutor, wait
 from functools import wraps
 from pathlib import Path
@@ -69,33 +70,10 @@ def thread_pool(func: Callable[..., T], iter: Iterable[T]) -> None:
 def _quiet_ping(path: GSPath) -> None:
     if isinstance(path, CloudPath):
         LOG.debug(f"_ping: type(path)={type(path)} local={path.fspath}")
-        path.fspath
+        if not os.getenv("PLINDER_OFFLINE"):
+            path.fspath
     else:
         LOG.debug(f"_ping: type(path)={type(path)} local={path}")
-
-
-@timeit
-def download_many(*, rel: str) -> None:
-    """
-    Download many files from GCS concurrently. This is useful when
-    it is known that we need access to many files in a single operation.
-    If the files were already downloaded, you still pay the cost of
-    checking if the remote file has drifted from the local file even
-    if they are identical.
-
-    Parameters
-    ----------
-    rel : str
-        Relative path to the files to download.
-    """
-    root = get_plinder_path(rel=rel)
-
-    paths = list(root.rglob("*"))
-
-    if len(paths) > 10:
-        thread_map(_quiet_ping, paths)
-    else:
-        thread_pool(_quiet_ping, paths)
 
 
 @timeit
@@ -126,7 +104,7 @@ def _get_fsroot(cfg: DictConfig) -> str:
     return str(root)
 
 
-def get_plinder_path(*, rel: str = "") -> CloudPath:
+def get_plinder_path(*, rel: str = "", download: bool = True) -> Path:
     """
     Get a cloudpathlib path to a file or directory in the plinder bucket.
     This provides a convenient way to manage local file caching since it
@@ -137,6 +115,8 @@ def get_plinder_path(*, rel: str = "") -> CloudPath:
     ----------
     rel : str
         Relative path to the file or directory.
+    download : bool, default=True
+        if True, download the files
 
     Returns
     -------
@@ -151,14 +131,21 @@ def get_plinder_path(*, rel: str = "") -> CloudPath:
         remote = f"{cfg.data.plinder_remote}/{rel}"
     path = GSPath(remote, client=client)
     LOG.debug(f"get_plinder_path: remote={path} root={root}")
-    return path
+    if os.getenv("PLINDER_OFFLINE"):
+        return Path(path._local)
+    if download:
+        paths = [path] if path.is_file() else list(path.rglob("*"))
+        download_paths(paths=paths)
+    return Path(path.fspath)
 
 
-def get_plinder_paths(*, paths: list[Path]) -> list[CloudPath]:
+def get_plinder_paths(*, paths: list[Path]) -> list[Path]:
     cfg = get_config()
     root = _get_fsroot(cfg)
     client = GSClient(local_cache_dir=root)
     remote = GSPath(cfg.data.plinder_remote, client=client)
-    LOG.debug(f"get_plinder_paths: remote={remote} root={root}")
-    anypaths = [remote / path.relative_to(root) for path in paths]
+    LOG.debug(f"get_plinder_paths: remote={remote} root={root} npaths={len(paths)}")
+    anypaths = [remote / path.relative_to(cfg.data.plinder_dir) for path in paths]
+    if not os.getenv("PLINDER_OFFLINE"):
+        download_paths(paths=anypaths)
     return anypaths

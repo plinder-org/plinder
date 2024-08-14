@@ -63,7 +63,7 @@ def get_zips_to_unpack(
         cfg=cfg,
     )
 
-    root = cpl.get_plinder_path(rel="") / getattr(conf.data, kind)
+    root = cpl.get_plinder_path(rel=getattr(conf.data, kind), download=False)
     zips: dict[Path, list[str]] = {}
     if id_kind == "system_id":
         for system_id in ids:
@@ -83,5 +83,5 @@ def get_zips_to_unpack(
             zips.setdefault(key, [])
 
     paths = list(zips.keys())
-    cpl.download_paths(paths=paths)
+    cpl.download_paths(paths=cpl.get_plinder_paths(paths=paths))
     return zips

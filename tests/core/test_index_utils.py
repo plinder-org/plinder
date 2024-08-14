@@ -8,17 +8,14 @@ import pytest
 from plinder.core.index import utils
 
 def mock_path(rel):
-    class obj:
-        def __init__(self, rel):
-            self.fspath = Path("/".join([
-                str(os.getenv("PLINDER_MOUNT")),
-                str(os.getenv("PLINDER_BUCKET")),
-                str(os.getenv("PLINDER_RELEASE")),
-                str(rel),
-            ]))
-        def __truediv__(self, other):
-            return self.fspath / other
-    return obj(rel)
+    return Path(
+        "/".join([
+            str(os.getenv("PLINDER_MOUNT")),
+            str(os.getenv("PLINDER_BUCKET")),
+            str(os.getenv("PLINDER_RELEASE")),
+            str(rel),
+        ])
+    )
 
 @pytest.fixture
 def mock_cpl(read_plinder_mount, monkeypatch):
@@ -33,7 +30,7 @@ def mock_cpl(read_plinder_mount, monkeypatch):
     #     mock_path,
     # )
     monkeypatch.setattr(
-        "plinder.core.utils.cpl.download_many",
+        "plinder.core.utils.cpl.download_paths",
         lambda **kws: None,
     )
 

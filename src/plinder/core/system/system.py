@@ -137,11 +137,10 @@ class PlinderSystem:
     def linked_archive(self) -> Path:
         if self._linked_archive is None:
             cfg = get_config()
-            structure_archive = cpl.get_plinder_path(rel=cfg.data.linked_structures)
-            self._linked_archive = Path(structure_archive.fspath)
+            self._linked_archive = cpl.get_plinder_path(rel=cfg.data.linked_structures)
             if not (self._linked_archive / "apo").is_dir():
-                with ZipFile(structure_archive) as arch:
-                    arch.extractall(path=structure_archive)
+                with ZipFile(self._linked_archive) as arch:
+                    arch.extractall(path=self._linked_archive)
         return self._linked_archive
 
     def get_linked_structure(self, link_kind: str, link_id: str, ext: str = "cif") -> str:
