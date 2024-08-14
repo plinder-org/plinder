@@ -668,146 +668,146 @@ def annotate_interface_gaps_per_chain(
 class Ligand(BaseModel):
     pdb_id: str = Field(
         default_factory=str,
-        help="RCSB PDB ID, see https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_entry.id.html",
+        description="RCSB PDB ID, see https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_entry.id.html",
     )
-    biounit_id: str = Field(default_factory=str, help="__Biounit id")
-    asym_id: str = Field(default_factory=str, help="Ligand chain asymmetric id")
-    instance: int = Field(default_factory=int, help="__Biounit instance ID")
+    biounit_id: str = Field(default_factory=str, description="__Biounit id")
+    asym_id: str = Field(default_factory=str, description="Ligand chain asymmetric id")
+    instance: int = Field(default_factory=int, description="__Biounit instance ID")
     ccd_code: str = Field(
-        default_factory=str, help="Ligand Chemical Component Dictionary (CCD) code"
+        default_factory=str, description="Ligand Chemical Component Dictionary (CCD) code"
     )
-    plip_type: str = Field(default_factory=str, help="PLIP ligand type")
-    bird_id: str = Field(default_factory=str, help="Ligand BIRD id")
+    plip_type: str = Field(default_factory=str, description="PLIP ligand type")
+    bird_id: str = Field(default_factory=str, description="Ligand BIRD id")
     centroid: list[float] = Field(
-        default_factory=list, help="Ligand center of geometry"
+        default_factory=list, description="Ligand center of geometry"
     )
-    smiles: str = Field(default_factory=str, help="Ligand OpenBabel SMILES")
+    smiles: str = Field(default_factory=str, description="Ligand OpenBabel SMILES")
     resolved_smiles: str = Field(
-        default_factory=str, help="SMILES of only resolved ligand atoms"
+        default_factory=str, description="SMILES of only resolved ligand atoms"
     )
     residue_numbers: list[int] = Field(
-        default_factory=list, help="__Ligand residue numbers"
+        default_factory=list, description="__Ligand residue numbers"
     )
-    rdkit_canonical_smiles: str | None = Field(default=None, help="RDKit canonical SMILES")
-    molecular_weight: float | None = Field(default=None, help="Molecular weight")
+    rdkit_canonical_smiles: str | None = Field(default=None, description="RDKit canonical SMILES")
+    molecular_weight: float | None = Field(default=None, description="Molecular weight")
     crippen_clogp: float | None = Field(
         default=None,
-        help="Ligand Crippen MlogP, see https://www.rdkit.org/docs/source/rdkit.Chem.Crippen.html",
+        description="Ligand Crippen MlogP, see https://www.rdkit.org/docs/source/rdkit.Chem.Crippen.html",
     )
-    num_rot_bonds: int | None = Field(default=None, help="Number of rotatable bonds")
-    num_hbd: int | None = Field(default=None, help="Number of hydrogen bond donors")
-    num_hba: int | None = Field(default=None, help="Number of hydrogen bond acceptors")
-    num_rings: int | None = Field(default=None, help="Number of rings")
-    num_heavy_atoms: int | None = Field(default=None, help="Number of heavy atoms")
+    num_rot_bonds: int | None = Field(default=None, description="Number of rotatable bonds")
+    num_hbd: int | None = Field(default=None, description="Number of hydrogen bond donors")
+    num_hba: int | None = Field(default=None, description="Number of hydrogen bond acceptors")
+    num_rings: int | None = Field(default=None, description="Number of rings")
+    num_heavy_atoms: int | None = Field(default=None, description="Number of heavy atoms")
     is_covalent: bool = Field(
-        default=False, help="Indicator of whether a ligand  is a covalent ligand"
+        default=False, description="Indicator of whether a ligand  is a covalent ligand"
     )
     covalent_linkages: set[str] = Field(
         default_factory=set[str],
-        help="Ligand covalent linkages as described in https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Categories/struct_conn.html "
+        description="Ligand covalent linkages as described in https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Categories/struct_conn.html "
         + "with _struct_conn.conn_type_id == 'covale', reported in format "
         + "{auth_resid}:{resname}{assym_id}{seq_resid}{atom_name}__{auth_resid}:{resname}{assym_id}{seq_resid}{atom_name}",
     )
     neighboring_residues: dict[str, list[int]] = Field(
         default_factory=dict,
-        help="__Dictionary of neighboring residues, with {instance}.{chain} key and residue number value",
+        description="__Dictionary of neighboring residues, with {instance}.{chain} key and residue number value",
     )
     neighboring_ligands: list[str] = Field(
-        default_factory=list, help="__List of neighboring ligands {instance}.{chain}"
+        default_factory=list, description="__List of neighboring ligands {instance}.{chain}"
     )
     interacting_residues: dict[str, list[int]] = Field(
         default_factory=dict,
-        help="__Dictionary of interacting residues, with {instance}.{chain} key and residue number value",
+        description="__Dictionary of interacting residues, with {instance}.{chain} key and residue number value",
     )
     interacting_ligands: list[str] = Field(
-        default_factory=list, help="__List of interacting ligands {instance}.{chain}"
+        default_factory=list, description="__List of interacting ligands {instance}.{chain}"
     )
     interactions: dict[str, dict[int, list[str]]] = Field(
         default_factory=dict,
-        help="__Dictionary of {instance}.{chain} to residue number to list of PLIP hashes",
+        description="__Dictionary of {instance}.{chain} to residue number to list of PLIP hashes",
     )
     neighboring_residue_threshold: float = Field(
-        default=6.0, help="__Maximum distance to consider protein residues neighboring"
+        default=6.0, description="__Maximum distance to consider protein residues neighboring"
     )
     neighboring_ligand_threshold: float = Field(
-        default=4.0, help="__Maximum distance to consider ligands neighboring"
+        default=4.0, description="__Maximum distance to consider ligands neighboring"
     )
     num_neighboring_ppi_atoms_within_4A_of_gap: int | None = Field(
         default=None,
-        help="Number of missing neighboring protein-protein interface atoms within 4 Å of ligand of interest",
+        description="Number of missing neighboring protein-protein interface atoms within 4 Å of ligand of interest",
     )
     num_neighboring_ppi_atoms_within_8A_of_gap: int | None = Field(
         default=None,
-        help="Number of missing neighboring protein-protein interface atoms within 8 Å of ligand of interest",
+        description="Number of missing neighboring protein-protein interface atoms within 8 Å of ligand of interest",
     )
     num_missing_ppi_interface_residues: int | None = Field(
         default=None,
-        help="Number of missing neighboring protein-protein interface residues within 4 Å of ligand of interest",
+        description="Number of missing neighboring protein-protein interface residues within 4 Å of ligand of interest",
     )
     num_pli_atoms_within_4A_of_gap: int | None = Field(
         default=None,
-        help="Number of missing neighboring protein-ligand interface atoms within 4 Å of ligand of interest",
+        description="Number of missing neighboring protein-ligand interface atoms within 4 Å of ligand of interest",
     )
     num_pli_atoms_within_8A_of_gap: int | None = Field(
         default=None,
-        help="Number of missing neighboring protein-ligand interface atoms within 8 Å of ligand of interest",
+        description="Number of missing neighboring protein-ligand interface atoms within 8 Å of ligand of interest",
     )
     num_missing_pli_interface_residues: int | None = Field(
         default=None,
-        help="Number of missing neighboring protein-ligand interface residues within 4 Å of ligand of interest",
+        description="Number of missing neighboring protein-ligand interface residues within 4 Å of ligand of interest",
     )
     num_resolved_heavy_atoms: int | None = Field(
-        default=None, help="Number of resolved heavy atoms in a ligand"
+        default=None, description="Number of resolved heavy atoms in a ligand"
     )
     num_unresolved_heavy_atoms: int | None = Field(
-        default=None, help="Number of unresolved heavy atoms in a ligand"
+        default=None, description="Number of unresolved heavy atoms in a ligand"
     )
-    tpsa: float | None = Field(default=None, help="Topological polar surface area")
+    tpsa: float | None = Field(default=None, description="Topological polar surface area")
     qed: float | None = Field(
         default=None,
-        help="Ligand QED score, a measure of drug-likeness, see https://www.rdkit.org/new_docs/source/rdkit.Chem.QED.html",
+        description="Ligand QED score, a measure of drug-likeness, see https://www.rdkit.org/new_docs/source/rdkit.Chem.QED.html",
     )
-    is_ion: bool = Field(default=False, help="Indicator of whether a ligand  is an ion")
+    is_ion: bool = Field(default=False, description="Indicator of whether a ligand  is an ion")
     is_lipinski: bool = Field(
-        default=False, help="Indicator of whether a ligand satisfies Lipinski Ro5"
+        default=False, description="Indicator of whether a ligand satisfies Lipinski Ro5"
     )
     is_fragment: bool = Field(
-        default=False, help="Indicator of whether a ligand satisfies fragment Ro3"
+        default=False, description="Indicator of whether a ligand satisfies fragment Ro3"
     )
     is_oligo: bool = Field(
         default=False,
-        help="Indicator of whether a ligand  is an oligopeptide, oligosaccharide or oligopeptide",
+        description="Indicator of whether a ligand  is an oligopeptide, oligosaccharide or oligopeptide",
     )
     is_cofactor: bool = Field(
-        default=False, help="Indicator of whether a ligand is a cofactor"
+        default=False, description="Indicator of whether a ligand is a cofactor"
     )
     in_artifact_list: bool = Field(
-        default=False, help="Indicator of whether a ligand is in the artifact list"
+        default=False, description="Indicator of whether a ligand is in the artifact list"
     )
     is_artifact: bool = Field(
-        default=False, help="Indicator of whether a ligand is an artifact"
+        default=False, description="Indicator of whether a ligand is an artifact"
     )
     is_other: bool = Field(
         default=False,
-        help="Indicator of whether a ligand type is not classified as any types of small molecule "
+        description="Indicator of whether a ligand type is not classified as any types of small molecule "
         + "(Lipinski, Fragment or covalent), ion, cofactor, oligo (peptide, saccharide or nucleotide) or artifact",
     )
     is_invalid: bool = Field(
-        default=False, help="Indicator of whether a ligand is invalid"
+        default=False, description="Indicator of whether a ligand is invalid"
     )
     unique_ccd_code: str | None = Field(
-        default=None, help="Ligand representative CCD code after de-duplicating"
+        default=None, description="Ligand representative CCD code after de-duplicating"
     )
     crystal_contacts: dict[tuple[str, int], set[int]] = Field(
         default_factory=dict,
-        help="__Dictionary of {instance}.{chain} to residue number to set of interacting crystal contacts",
+        description="__Dictionary of {instance}.{chain} to residue number to set of interacting crystal contacts",
     )
     waters: dict[str, list[int]] = Field(
         default_factory=dict,
-        help="__Dictionary of {instance}.{chain} to list of interacting water residue numbers",
+        description="__Dictionary of {instance}.{chain} to list of interacting water residue numbers",
     )
     posebusters_result: dict[str, ty.Any] = Field(
-        default_factory=dict, help="__Results from running posebusters with 're-dock'"
+        default_factory=dict, description="__Results from running posebusters with 're-dock'"
     )
     """
     This dataclass defines as system which included a protein-ligand complex
@@ -823,8 +823,8 @@ class Ligand(BaseModel):
             for field, field_info in self.__fields__.items():
                 name = f"ligand_{field}"
                 dtype = str(field_info.default_factory)
-                if field_info.json_schema_extra:
-                    descr = field_info.json_schema_extra["help"]
+                if field_info.description:
+                    descr = field_info.description
                     if descr.startswith("__"):
                         continue
                 else:

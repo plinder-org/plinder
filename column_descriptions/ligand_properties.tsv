@@ -33,7 +33,7 @@ ligand_num_hbd	int	 Number of hydrogen bond donor of a ligand of interest
 ligand_num_heavy_atoms	int	 Heavy atom count of a ligand of interest
 ligand_num_interacting_residues	int	 Number of interacting residues with ligand of interest
 ligand_num_interactions	int	 Interaction count with ligand of interest
-ligand_num_missing_neighboring_ppi_residues	int	 Number of missing neighboring protein-protein interface residues within 8 Å of ligand of interest
+ligand_num_missing_ppi_interface_residues	int	 Number of missing neighboring protein-protein interface residues within 8 Å of ligand of interest
 ligand_num_missing_pli_interface_residues	int	 Number of missing neighboring protein-ligand interface residues within 8 Å of ligand of interest
 ligand_num_neighboring_ppi_atoms_within_4A_of_gap	int	  Number of missing neighboring protein-protein interface atoms within 4 Å of ligand of interest
 ligand_num_neighboring_ppi_atoms_within_8A_of_gap	int	  Number of missing neighboring protein-protein interface atoms within 8 Å of ligand of interest
