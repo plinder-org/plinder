@@ -287,6 +287,7 @@ def run_image(
     tag: str | None = None,
     dirty: bool = False,
     it: bool = False,
+    script: str | None = None,
 ) -> None:
     """
     Run the image mounting the current working tree. This can be
@@ -330,6 +331,8 @@ def run_image(
         "-v",
         f"{host}:{app}",
     ]
+    if script:
+        cmd.extend(["-v", f"{host.parent}/{script}:{Path(app).parent}/{script}"])
     if it:
         import pty
 
@@ -367,6 +370,7 @@ def main(argv: Optional[List[str]] = None):
     test.add_argument("--dirty", default=False, action="store_true", help="Mount current working tree")
     run = subs.add_parser("run", help="Run the app image")
     run.add_argument("--it", default=False, action="store_true", help="Run in interactive mode")
+    run.add_argument("--script", default="", help="Script to run")
     for sub in [build, test, run]:
         sub.add_argument(
             "--tag", default=None, help="The image tag to pass to build_image",
