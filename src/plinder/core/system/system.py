@@ -156,8 +156,16 @@ class PlinderSystem:
                     arch.extractall(path=self._linked_archive)
         return self._linked_archive
 
-    def get_linked_structure(self, link_kind: str, link_id: str, ext: str = "cif") -> str:
+    def get_linked_structure(
+        self, link_kind: str, link_id: str, ext: str = "cif"
+    ) -> str:
         if ext not in ["cif", "pdb"]:
             raise ValueError(f"extension must be cif or pdb, got {ext}")
         assert self.linked_archive is not None
-        return (self.linked_archive / link_kind / self.system_id / link_id / "receptor.{ext}").as_posix()
+        return (
+            self.linked_archive
+            / link_kind
+            / self.system_id
+            / link_id
+            / "receptor.{ext}"
+        ).as_posix()

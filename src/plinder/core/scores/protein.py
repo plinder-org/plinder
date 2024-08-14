@@ -5,7 +5,7 @@ from __future__ import annotations
 import pandas as pd
 from duckdb import sql
 
-from plinder.core.scores.query import FILTERS, FILTER, make_query
+from plinder.core.scores.query import FILTER, FILTERS, make_query
 from plinder.core.utils import cpl
 from plinder.core.utils.config import get_config
 from plinder.core.utils.dec import timeit

@@ -47,7 +47,9 @@ class PlinderDataset(Dataset):  # type: ignore
     def __len__(self) -> int:
         return self._num_examples
 
-    def __getitem__(self, index: int) -> dict[str, int | str | pd.DataFrame | dict[str, str | pd.DataFrame]]:
+    def __getitem__(
+        self, index: int
+    ) -> dict[str, int | str | pd.DataFrame | dict[str, str | pd.DataFrame]]:
         if not 0 <= index < self._num_examples:
             raise IndexError(index)
 
@@ -66,9 +68,17 @@ class PlinderDataset(Dataset):  # type: ignore
             if s.linked_structures is not None:
                 links = s.linked_structures.groupby("kind")
                 for kind, group in links:
-                    for link_id in group["id"].values[:self.num_alternative_structures]:
-                        structure = s.get_linked_structure(link_kind=str(kind), link_id=link_id)
-                        item["alternative_structures"][f"{kind}_{link_id}_df"] = fo.bp_to_df(fo.read_any(structure))
+                    for link_id in group["id"].values[
+                        : self.num_alternative_structures
+                    ]:
+                        structure = s.get_linked_structure(
+                            link_kind=str(kind), link_id=link_id
+                        )
+                        item["alternative_structures"][
+                            f"{kind}_{link_id}_df"
+                        ] = fo.bp_to_df(fo.read_any(structure))
                         if self._store_file_path:
-                            item["alternative_structures"][f"{kind}_{link_id}_path"] = structure
+                            item["alternative_structures"][
+                                f"{kind}_{link_id}_path"
+                            ] = structure
         return item

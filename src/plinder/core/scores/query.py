@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import NewType, List, Tuple, Union, Set
+from typing import List, NewType, Set, Tuple, Union
 
 import numpy as np
 import pyarrow as pa
 
-from plinder.core.utils import cpl
 from plinder.core.utils.log import setup_logger
 
 LOG = setup_logger(__name__)
