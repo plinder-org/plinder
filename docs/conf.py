@@ -82,9 +82,16 @@ pygments_style = "sphinx"
 html_theme = "pydata_sphinx_theme"
 
 html_static_path = ["static"]
-html_css_files = ["plinder.css", "fonts.css"]
+html_css_files = [
+    "plinder.css",
+    # Get fonts from Google Fonts CDN
+    "https://fonts.googleapis.com/css2"
+    "?family=Geologica:wght@100..900"
+    "&family=Montserrat:ital,wght@0,100..900;1,100..900"
+    "&display=swap",
+]
 html_title = "Plinder"
-html_logo = "static/assets/general/plinder_logo.webp"
+html_logo = "static/assets/general/plinder_logo.png"
 html_favicon = "static/assets/general/plinder_icon.png"
 html_baseurl = f"https://plinder-org.github.io/plinder/"
 html_theme_options = {
