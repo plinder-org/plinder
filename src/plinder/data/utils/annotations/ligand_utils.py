@@ -840,7 +840,7 @@ class Ligand(BaseModel):
 
     """
 
-    def document_ligand_properties_to_tsv(self, filename: str) -> dict[str, ty.Any]:
+    def document_ligand_properties_to_tsv(self, filename: str) -> None:
         with open(filename, "w") as tsv:
             # write header
             tsv.write("\t".join(["Name", "Type", "Description"]) + "\n")
@@ -974,19 +974,13 @@ class Ligand(BaseModel):
         Parameters
         ----------
         cls : Ligand
-            Ligand class
-        pdb_id : str
-            pdb code
-        biounit_id : str
-            Biounit id
+            Ligand class with its attributes: pdb_id, biounit_id, ligand_instance, neighboring_residue_threshold, neighboring_ligand_threshold, residue_numbers
         biounit : mol.EntityHandle
             Biounit openstructure mol.EntityHandle
         ligand_instance : int
             Ligand biounit instance
         ligand_chain : Chain
             Ligand chain object
-        residue_numbers: list[int]
-            List of residue numbers to use for ligand
         ligand_like_chains: dict[str, str]
             Chain: chain type for other ligand-like chains in the entry
         interface_proximal_gaps: dict[str, dict[tuple[str, str], dict[str, int]]]
@@ -1003,10 +997,6 @@ class Ligand(BaseModel):
         plip_complex_threshold: float = 10.0
             Maximum distance from ligand to residues to be
             included for pli calculations.
-        neighboring_residue_threshold : float = 6.0
-            Maximum distance for protein residue to be considered neighboring
-        neighboring_ligand_threshold : float = 4.0
-            Maximum distance for protein residue to be considered neighboring
         data_dir : Path, optional
             location of plinder root
         """
@@ -1563,16 +1553,15 @@ class Ligand(BaseModel):
             name = f"ligand_{field}"
             value = getattr(self, field, None)
             print(name, value)
-            # maybe not add if the value is None?
-            # if value is None:
-            #     continue
-            data.update(
-                {
-                    name: str(value)
-                    if isinstance(value, ty.get_args(ty.Union[str, int, float, None]))
-                    else ";".join(map(str, value))
-                }
-            )
+
+            if value is None:
+                # maybe not add if the value is None?
+                # continue
+                data.update({name: str(value)})
+            elif isinstance(value, ty.get_args(ty.Union[str, int, float])):
+                data.update({name: str(value)})
+            elif isinstance(value, ty.Iterable):
+                data.update({name: ";".join(map(str, value))})
 
         # posebusters
         if self.posebusters_result is not None:

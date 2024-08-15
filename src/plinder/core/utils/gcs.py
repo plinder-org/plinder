@@ -5,7 +5,8 @@ from functools import wraps
 from pathlib import Path
 from time import sleep
 from typing import Any, Callable, Optional, TypeVar
-from zipfile import ZipFile, error as zip_error
+from zipfile import ZipFile
+from zipfile import error as zip_error
 
 from google.cloud.storage.bucket import Bucket
 from google.cloud.storage.client import Client
@@ -168,63 +169,75 @@ def download_if_not_exists(
             cfg=cfg,
         )
 
-def download_dataset(
-        *,
-        bucket_name: str,
-        release: str,
-        iteration: str,
-        specific_dirs: list = [],
-        unpack: bool = True,
-        skip_download: bool = False) -> None:
 
+def download_dataset(
+    *,
+    bucket_name: str,
+    release: str,
+    iteration: str,
+    specific_dirs: list[str] = [],
+    unpack: bool = True,
+    skip_download: bool = False,
+) -> None:
     if specific_dirs == []:
         gcs_paths = list_dir(
             gcs_path=f"gs://{bucket_name}/{release}/{iteration}",
-            bucket_name=bucket_name)
+            bucket_name=bucket_name,
+        )
     else:
-        gcs_paths = [ path for dir in specific_dirs for path in list_dir(
-            gcs_path=f"gs://{bucket_name}/{release}/{iteration}/{dir}",
-            bucket_name=bucket_name)]
+        gcs_paths = [
+            path
+            for dir in specific_dirs
+            for path in list_dir(
+                gcs_path=f"gs://{bucket_name}/{release}/{iteration}/{dir}",
+                bucket_name=bucket_name,
+            )
+        ]
 
     # list all remote path and check if it's been downloaded
     gcs_paths_to_download = []
     local_paths = []
 
     for fl in gcs_paths:
-        local_path = Path.home()/f".local/share/plinder/{'/'.join(Path(fl).parts[2:])}"
-        local_path_unpacked = local_path.parent/ local_path.name.replace(".zip", "")
+        local_path = (
+            Path.home() / f".local/share/plinder/{'/'.join(Path(fl).parts[2:])}"
+        )
+        local_path_unpacked = local_path.parent / local_path.name.replace(".zip", "")
         if (not local_path.exists()) and (not local_path_unpacked.exists()):
-
             gcs_paths_to_download.append(fl)
             local_paths.append(local_path)
 
-    [path.parent.mkdir(parents=True, exist_ok=True) for path in local_paths]
+    for path in local_paths:
+        path.parent.mkdir(parents=True, exist_ok=True)
     archive_paths = [path for path in local_paths if path.suffix == ".zip"]
 
-    def unzip(arch_paths):
-            for local_arch in arch_paths:
-                if local_arch.is_file():
-                    with ZipFile(local_arch, "r") as archive:
-                        for member in tqdm(archive.infolist(), desc=f"Extracting {local_arch}"):
-                            try:
-                                archive.extract(member, local_arch.parent)
-                            except zip_error as e:
-                                LOG.error(str(e))
-                    local_arch.unlink()
+    def unzip(arch_paths: list[Path]) -> None:
+        for local_arch in arch_paths:
+            if local_arch.is_file():
+                with ZipFile(local_arch, "r") as archive:
+                    for member in tqdm(
+                        archive.infolist(), desc=f"Extracting {local_arch}"
+                    ):
+                        try:
+                            archive.extract(member, local_arch.parent)
+                        except zip_error as e:
+                            LOG.error(str(e))
+                local_arch.unlink()
 
     if not skip_download:
         # download all files in parallel
         download_many(
             gcs_paths=gcs_paths_to_download,
             local_paths=local_paths,
-            bucket_name=bucket_name
+            bucket_name=bucket_name,
         )
 
     if unpack:
         archive_paths = []
         for fl in gcs_paths:
-
-            if Path(fl).suffix ==  ".zip":
-                archive_paths.append(Path.home()/f".local/share/plinder/{'/'.join(Path(fl).parts[2:])}")
+            if Path(fl).suffix == ".zip":
+                archive_paths.append(
+                    Path.home() / f".local/share/plinder/{'/'.join(Path(fl).parts[2:])}"
+                )
 
         unzip(archive_paths)
