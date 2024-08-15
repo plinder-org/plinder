@@ -1,5 +1,6 @@
 import sys
 from pathlib import Path
+
 import plinder
 
 # TODO: Use proper __version__ attribute from the Plinder package
@@ -12,27 +13,25 @@ COLUMN_REFERENCE_PATH = DOC_PATH.parent / "column_descriptions"
 # Include documentation in PYTHONPATH
 # in order to import modules for API doc generation etc.
 sys.path.insert(0, str(DOC_PATH))
-import apidoc
 import tablegen
-import viewcode
 
 # Pregeneration of files
-#apidoc.create_api_doc(PACKAGE_PATH, DOC_PATH / "apidoc")
+# apidoc.create_api_doc(PACKAGE_PATH, DOC_PATH / "apidoc")
 tablegen.generate_table(COLUMN_REFERENCE_PATH, DOC_PATH / "table.html")
 
 #### Source code link ###
 
-#linkcode_resolve = viewcode.linkcode_resolve
+# linkcode_resolve = viewcode.linkcode_resolve
 
 #### General ####
 
 extensions = [
     "jupyter_sphinx",
     "sphinx.ext.autodoc",
-    #"sphinx.ext.autosummary",
+    # "sphinx.ext.autosummary",
     "sphinx.ext.doctest",
     "sphinx.ext.mathjax",
-    #"sphinx.ext.linkcode",
+    # "sphinx.ext.linkcode",
     "sphinx.ext.todo",
     "sphinx_design",
     "sphinx_copybutton",
@@ -70,9 +69,9 @@ templates_path = ["templates"]
 source_suffix = {".md": "markdown"}
 master_doc = "index"
 
-project = "Plinder"
-copyright = '2024, Plinder Development Team'
-author = 'Plinder Development Team'
+project = "PLINDER"
+copyright = "2024, PLINDER Development Team"
+author = "Plinder Development Team"
 version = plinder.__version__
 release = plinder.__version__
 
@@ -85,16 +84,23 @@ html_theme = "pydata_sphinx_theme"
 html_static_path = ["static"]
 html_css_files = [
     "plinder.css",
+    # For rendering the column descriptions table
+    "https://cdn.datatables.net/2.1.3/css/dataTables.dataTables.css",
     # Get fonts from Google Fonts CDN
     "https://fonts.googleapis.com/css2"
     "?family=Geologica:wght@100..900"
     "&family=Montserrat:ital,wght@0,100..900;1,100..900"
     "&display=swap",
 ]
-html_title = "Plinder"
+html_js_files = [
+    # For rendering the column descriptions table
+    "https://code.jquery.com/jquery-3.7.1.js",
+    "https://cdn.datatables.net/2.1.3/js/dataTables.js",
+]
+html_title = "PLINDER"
 html_logo = "static/assets/general/plinder_logo.png"
 html_favicon = "static/assets/general/plinder_icon.png"
-html_baseurl = f"https://plinder-org.github.io/plinder/"
+html_baseurl = "https://plinder-org.github.io/plinder/"
 html_theme_options = {
     "header_links_before_dropdown": 7,
     "pygments_light_style": "friendly",
@@ -106,9 +112,9 @@ html_theme_options = {
             "type": "fontawesome",
         },
         {
-            "name": "PyPI",
-            "url": "https://pypi.org/project/plinder/",
-            "icon": "fa-solid fa-box-open",
+            "name": "Article",
+            "url": "https://www.biorxiv.org/content/10.1101/2024.07.17.603955v3",
+            "icon": "fa-solid fa-file-lines",
             "type": "fontawesome",
         },
     ],
@@ -131,5 +137,5 @@ html_context = {
 #### App setup ####
 
 
-#def setup(app):
+# def setup(app):
 #    app.connect("autodoc-skip-member", apidoc.skip_nonrelevant)
