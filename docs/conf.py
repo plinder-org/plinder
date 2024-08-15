@@ -18,7 +18,7 @@ import viewcode
 
 # Pregeneration of files
 #apidoc.create_api_doc(PACKAGE_PATH, DOC_PATH / "apidoc")
-#tablegen.generate_table(COLUMN_REFERENCE_PATH, DOC_PATH / "table.md")
+tablegen.generate_table(COLUMN_REFERENCE_PATH, DOC_PATH / "table.html")
 
 #### Source code link ###
 
@@ -117,8 +117,7 @@ html_theme_options = {
 }
 html_sidebars = {
     # No primary sidebar for these pages
-    "tutorial/dataset": [],
-    "tutorial/api": [],
+    "dataset": [],
 }
 html_context = {
     "github_user": "plinder-org",
