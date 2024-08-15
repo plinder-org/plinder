@@ -178,9 +178,6 @@ def _handle_columns(
                     raise ValueError(f"column={col} not in schema={schema.names}")
     else:
         cols = columns if columns is not None else ["*"]
-    if include_filename:
-        if cols != ["*"] and "filename" not in cols:
-            cols.append("filename")
     return cols
 
 
@@ -209,7 +206,10 @@ def _handle_source(
     content : str
         the formatted source
     """
-    content = f"'{dataset}/*.parquet'"
+    if dataset.is_file():
+        content = f"'{dataset.as_posix()}'"
+    else:
+        content = f"'{dataset}/*.parquet'"
     if nested:
         content = f"'{dataset}/**/*.parquet'"
     if filename is not None:
