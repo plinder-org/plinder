@@ -217,7 +217,7 @@ def build_image(tag: str | None = None, push: bool = False) -> str:
     env = get_env(tag)
     image = f"{env['IMAGE_REPO']}/plinder"
     build_tag = env["BUILD_TAG"]
-    registry = environ.get("PLINDER_REGISTRY")
+    registry = environ.get("PLINDER_REGISTRY", "/".join(get_image().split("/")[:-1]))
     cmd = [
         docker,
         "build",
@@ -409,7 +409,4 @@ def main(argv: Optional[List[str]] = None):
 
 
 if __name__ == "__main__":
-    if not environ.get("PLINDER_REGISTRY"):
-        print("PLINDER_REGISTRY not set, exiting")
-        exit()
     main()
