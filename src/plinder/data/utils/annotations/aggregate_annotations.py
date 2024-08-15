@@ -630,32 +630,26 @@ class Entry(BaseModel):
     release_date: str = Field(
         default_factory=str,
         description="RCSB structure release date. See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_database_PDB_rev.date_original.html",
-        serialization_alias="entry_release_date",
     )
     oligomeric_state: str | None = Field(
         default_factory=str,
         description="Author's provided description of quaternary structure in RCSB. See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_pdbx_struct_assembly.oligomeric_details.html",
-        serialization_alias="entry_oligomeric_state",
     )
     determination_method: str | None = Field(
         default_factory=str,
         description="RCSB method of structure determination. See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_exptl.method.html",
-        serialization_alias="entry_determination_method",
     )
     keywords: str | None = Field(
         default_factory=str,
         description="RCSB keywords describing the structure. See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_struct_keywords.pdbx_keywords.html",
-        serialization_alias="entry_determination_method",
     )
     pH: str | None = Field(
         default_factory=str,
         description="pH at which structure is solved. See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_exptl_crystal_grow.pH.html",
-        serialization_alias="entry_pH",
     )
     resolution: float | None = Field(
         default_factory=float,
         description="RCSB structure resolution. See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_refine.ls_d_res_high.html",
-        serialization_alias="entry_pH",
     )
     chains: dict[str, Chain] = Field(
         default_factory=dict,
