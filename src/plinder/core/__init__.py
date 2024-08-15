@@ -6,9 +6,9 @@ from pathlib import Path
 _root = Path(__file__).parent.parent
 
 from plinder.core.index.utils import get_manifest, get_plindex
+from plinder.core.split.utils import get_split
 from plinder.core.system.system import PlinderSystem
 from plinder.core.utils.config import get_config
-from plinder.core.split.utils import get_split
 
 __all__ = [
     "get_config",
