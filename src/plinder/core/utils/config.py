@@ -235,6 +235,7 @@ class DataConfig:
     clusters: str = "clusters"
     entries: str = "entries"
     fingerprints: str = "fingerprints"
+    fingerprint_file: str = "ligands_per_system.parquet"
     index: str = "index"
     manifest: str = "manifest"
     ligand_scores: str = "ligand_scores"

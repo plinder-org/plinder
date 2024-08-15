@@ -65,11 +65,11 @@ def map_cross_similarity(
         else:
             updated_query_ligands.append(q)
     df["updated_query_ligand_id"] = updated_query_ligands
-    idx = df.groupby("updated_query_ligand_id")["tanimoto_similarity_max"]
+    idx = df.groupby("updated_query_ligand_id")["tanimoto_similarity_max"].idxmax()
     df = df.loc[idx]
 
     cfg = get_config()
-    dataset = cpl.get_plinder_path(rel=cfg.data.fingerprints)
+    dataset = cpl.get_plinder_path(rel=f"{cfg.data.fingerprints}/{cfg.data.fingerprint_file}")
     ligands_per_system = pd.read_parquet(dataset)
     ligand_to_system: dict[int, set[str]] = {}
     for ligand_id, group in ligands_per_system.groupby("number_id_by_inchikeys"):
