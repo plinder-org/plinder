@@ -41,7 +41,6 @@ def query_index(
         dataset=dataset,
         columns=columns,
         filters=filters,
-        filename=cfg.data.index_file,
         allow_no_filters=True,
     )
     assert query is not None
