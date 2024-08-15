@@ -268,9 +268,10 @@ def test_image(
     """
     env = get_env(tag)
     docker = get_docker()
-    cmd = [docker, "compose", "run", "test"]
+    cmd = [docker, "compose", "run", "-e", "PLINDER_OFFLINE=true"]
     if dirty:
-        cmd = cmd[:-1] + ["-v", f"{Path.cwd()}/src/plinder:/opt/conda/lib/python3.9/site-packages/plinder"] + cmd[-1:]
+        cmd.extend(["-v", f"{Path.cwd()}/src/plinder:/opt/conda/lib/python3.9/site-packages/plinder"])
+    cmd.append("test")
     if args is not None and len(args):
         cmd.extend(
             split(f'''/bin/bash -c "python -m pytest -v -n auto {' '.join(args)} && cp .coverage reports/.coverage"''')
