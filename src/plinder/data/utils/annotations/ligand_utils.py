@@ -674,31 +674,45 @@ class Ligand(BaseModel):
     asym_id: str = Field(default_factory=str, description="Ligand chain asymmetric id")
     instance: int = Field(default_factory=int, description="__Biounit instance ID")
     ccd_code: str = Field(
-        default_factory=str, description="Ligand Chemical Component Dictionary (CCD) code"
+        default_factory=str,
+        description="Ligand Chemical Component Dictionary (CCD) code",
     )
     plip_type: str = Field(default_factory=str, description="PLIP ligand type")
     bird_id: str = Field(default_factory=str, description="Ligand BIRD id")
     centroid: list[float] = Field(
         default_factory=list, description="Ligand center of geometry"
     )
-    smiles: str = Field(default_factory=str, description="Ligand OpenBabel SMILES")
+    smiles: str = Field(
+        default_factory=str,
+        description="Ligand SMILES based on OpenStructure dictionary lookup, or resolved SMILES if not in dictionary",
+    )
     resolved_smiles: str = Field(
         default_factory=str, description="SMILES of only resolved ligand atoms"
     )
     residue_numbers: list[int] = Field(
         default_factory=list, description="__Ligand residue numbers"
     )
-    rdkit_canonical_smiles: str | None = Field(default=None, description="RDKit canonical SMILES")
+    rdkit_canonical_smiles: str | None = Field(
+        default=None, description="RDKit canonical SMILES"
+    )
     molecular_weight: float | None = Field(default=None, description="Molecular weight")
     crippen_clogp: float | None = Field(
         default=None,
         description="Ligand Crippen MlogP, see https://www.rdkit.org/docs/source/rdkit.Chem.Crippen.html",
     )
-    num_rot_bonds: int | None = Field(default=None, description="Number of rotatable bonds")
-    num_hbd: int | None = Field(default=None, description="Number of hydrogen bond donors")
-    num_hba: int | None = Field(default=None, description="Number of hydrogen bond acceptors")
+    num_rot_bonds: int | None = Field(
+        default=None, description="Number of rotatable bonds"
+    )
+    num_hbd: int | None = Field(
+        default=None, description="Number of hydrogen bond donors"
+    )
+    num_hba: int | None = Field(
+        default=None, description="Number of hydrogen bond acceptors"
+    )
     num_rings: int | None = Field(default=None, description="Number of rings")
-    num_heavy_atoms: int | None = Field(default=None, description="Number of heavy atoms")
+    num_heavy_atoms: int | None = Field(
+        default=None, description="Number of heavy atoms"
+    )
     is_covalent: bool = Field(
         default=False, description="Indicator of whether a ligand  is a covalent ligand"
     )
@@ -713,21 +727,24 @@ class Ligand(BaseModel):
         description="__Dictionary of neighboring residues, with {instance}.{chain} key and residue number value",
     )
     neighboring_ligands: list[str] = Field(
-        default_factory=list, description="__List of neighboring ligands {instance}.{chain}"
+        default_factory=list,
+        description="__List of neighboring ligands {instance}.{chain}",
     )
     interacting_residues: dict[str, list[int]] = Field(
         default_factory=dict,
         description="__Dictionary of interacting residues, with {instance}.{chain} key and residue number value",
     )
     interacting_ligands: list[str] = Field(
-        default_factory=list, description="__List of interacting ligands {instance}.{chain}"
+        default_factory=list,
+        description="__List of interacting ligands {instance}.{chain}",
     )
     interactions: dict[str, dict[int, list[str]]] = Field(
         default_factory=dict,
         description="__Dictionary of {instance}.{chain} to residue number to list of PLIP hashes",
     )
     neighboring_residue_threshold: float = Field(
-        default=6.0, description="__Maximum distance to consider protein residues neighboring"
+        default=6.0,
+        description="__Maximum distance to consider protein residues neighboring",
     )
     neighboring_ligand_threshold: float = Field(
         default=4.0, description="__Maximum distance to consider ligands neighboring"
@@ -762,17 +779,23 @@ class Ligand(BaseModel):
     num_unresolved_heavy_atoms: int | None = Field(
         default=None, description="Number of unresolved heavy atoms in a ligand"
     )
-    tpsa: float | None = Field(default=None, description="Topological polar surface area")
+    tpsa: float | None = Field(
+        default=None, description="Topological polar surface area"
+    )
     qed: float | None = Field(
         default=None,
         description="Ligand QED score, a measure of drug-likeness, see https://www.rdkit.org/new_docs/source/rdkit.Chem.QED.html",
     )
-    is_ion: bool = Field(default=False, description="Indicator of whether a ligand  is an ion")
+    is_ion: bool = Field(
+        default=False, description="Indicator of whether a ligand  is an ion"
+    )
     is_lipinski: bool = Field(
-        default=False, description="Indicator of whether a ligand satisfies Lipinski Ro5"
+        default=False,
+        description="Indicator of whether a ligand satisfies Lipinski Ro5",
     )
     is_fragment: bool = Field(
-        default=False, description="Indicator of whether a ligand satisfies fragment Ro3"
+        default=False,
+        description="Indicator of whether a ligand satisfies fragment Ro3",
     )
     is_oligo: bool = Field(
         default=False,
@@ -782,7 +805,8 @@ class Ligand(BaseModel):
         default=False, description="Indicator of whether a ligand is a cofactor"
     )
     in_artifact_list: bool = Field(
-        default=False, description="Indicator of whether a ligand is in the artifact list"
+        default=False,
+        description="Indicator of whether a ligand is in the artifact list",
     )
     is_artifact: bool = Field(
         default=False, description="Indicator of whether a ligand is an artifact"
@@ -807,7 +831,8 @@ class Ligand(BaseModel):
         description="__Dictionary of {instance}.{chain} to list of interacting water residue numbers",
     )
     posebusters_result: dict[str, ty.Any] = Field(
-        default_factory=dict, description="__Results from running posebusters with 're-dock'"
+        default_factory=dict,
+        description="__Results from running posebusters with 're-dock'",
     )
     """
     This dataclass defines as system which included a protein-ligand complex
@@ -818,7 +843,7 @@ class Ligand(BaseModel):
     def document_ligand_properties_to_tsv(self, filename: str) -> dict[str, ty.Any]:
         with open(filename, "w") as tsv:
             # write header
-            tsv.write("\t".join(["Name", "Type", "Description"])+"\n")
+            tsv.write("\t".join(["Name", "Type", "Description"]) + "\n")
             # write fields info
             for field, field_info in self.__fields__.items():
                 name = f"ligand_{field}"
@@ -829,7 +854,7 @@ class Ligand(BaseModel):
                         continue
                 else:
                     descr = "[DESCRIPTION MISSING]"
-                tsv.write("\t".join([name, dtype, descr])+"\n")
+                tsv.write("\t".join([name, dtype, descr]) + "\n")
 
     def set_rdkit(self) -> None:
         try:
@@ -1502,10 +1527,10 @@ class Ligand(BaseModel):
     #         data.update(self.format_residues(residue_type, chains))
     #     return data
 
-    def format_ligand(self, chains: dict[str, Chain]) -> dict[str, ty.Any]: 
+    def format_ligand(self, chains: dict[str, Chain]) -> dict[str, ty.Any]:
         # all these fields are cached_properties in Ligand class
         # these fields are not in __fields__ and are not written to tsv!!
-        # TODO: add them to tsv 
+        # TODO: add them to tsv
         data = {
             "ligand_id": self.id,
             "ligand_binding_affinity": self.binding_affinity,
@@ -1522,14 +1547,17 @@ class Ligand(BaseModel):
         for field in self.__fields__:
             # blacklist fields that will be added with custom formatters below
             # these may also be not written to tsv!!
-            # TODO: add them to tsv 
+            # TODO: add them to tsv
             if field in [
                 "posebusters_result",
                 "interactions",
                 "ligand_auth_id",
-                "interacting_protein_chains","neighboring_protein_chains",
-                "interacting_ligands", "neighboring_ligands",
-                "interacting_residues", "neighboring_residues",
+                "interacting_protein_chains",
+                "neighboring_protein_chains",
+                "interacting_ligands",
+                "neighboring_ligands",
+                "interacting_residues",
+                "neighboring_residues",
             ]:
                 continue
             name = f"ligand_{field}"
@@ -1538,8 +1566,14 @@ class Ligand(BaseModel):
             # maybe not add if the value is None?
             # if value is None:
             #     continue
-            data.update({name: str(value) if isinstance(value, ty.get_args(ty.Union[str, int, float, None])) else ";".join(map(str,value))})
-        
+            data.update(
+                {
+                    name: str(value)
+                    if isinstance(value, ty.get_args(ty.Union[str, int, float, None]))
+                    else ";".join(map(str, value))
+                }
+            )
+
         # posebusters
         if self.posebusters_result is not None:
             for k in self.posebusters_result:
@@ -1547,7 +1581,9 @@ class Ligand(BaseModel):
         # interactions
         data.update(self.format_interactions())
         # chains
-        data.update({"ligand_auth_id": chains[self.asym_id].auth_id})
+        data.update(
+            {"ligand_auth_id": chains[self.asym_id].auth_id}
+        )  # not a cached_property!
         for chain_type in [
             "interacting_protein",
             "neighboring_protein",
