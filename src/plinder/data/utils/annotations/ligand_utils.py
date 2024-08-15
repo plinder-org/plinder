@@ -1554,7 +1554,9 @@ class Ligand(BaseModel):
             value = getattr(self, field, None)
             print(name, value)
 
-            if value is None:
+            if isinstance(value, bool):
+                data.update({name: value})
+            elif value is None:
                 # maybe not add if the value is None?
                 # continue
                 data.update({name: str(value)})
