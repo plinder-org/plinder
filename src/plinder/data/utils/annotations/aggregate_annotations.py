@@ -625,8 +625,7 @@ class System(BaseModel):
 class Entry(BaseModel):
     pdb_id: str = Field(
         default_factory=str,
-        help="RCSB PDB ID. See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_entry.id.html",
-        serialization_alias="entry_pdb_id")
+        help="RCSB PDB ID. See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_entry.id.html")
     release_date: str = Field(
         default_factory=str,
         help="RCSB structure release date. See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_database_PDB_rev.date_original.html",
@@ -642,10 +641,6 @@ class Entry(BaseModel):
     keywords: str | None = Field(
         default_factory=str,
         help="RCSB keywords describing the structure. See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_struct_keywords.pdbx_keywords.html",
-        serialization_alias="entry_determination_method")
-    keywords: str | None = Field(
-        default_factory=str,
-        help="pH at which structure is solved. See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_exptl_crystal_grow.pH.html",
         serialization_alias="entry_determination_method")
     pH: str | None = Field(
         default_factory=str,
