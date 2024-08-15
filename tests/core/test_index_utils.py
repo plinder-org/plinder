@@ -25,10 +25,6 @@ def mock_cpl(read_plinder_mount, monkeypatch):
         "plinder.core.utils.cpl.get_plinder_path",
         mock_path,
     )
-    # monkeypatch.setattr(
-    #     "plinder.core.index.utils.cpl.get_plinder_path",
-    #     mock_path,
-    # )
     monkeypatch.setattr(
         "plinder.core.utils.cpl.download_paths",
         lambda **kws: None,

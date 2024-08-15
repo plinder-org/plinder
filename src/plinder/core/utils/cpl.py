@@ -88,6 +88,8 @@ def download_paths(*, paths: list[GSPath]) -> None:
     paths : list[GSPath]
         the paths to download
     """
+    if os.getenv("PLINDER_OFFLINE"):
+        return
     if len(paths) > 10:
         thread_map(_quiet_ping, paths)
     else:

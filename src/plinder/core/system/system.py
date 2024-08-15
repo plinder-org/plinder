@@ -72,7 +72,7 @@ class PlinderSystem:
         if self._archive is None:
             zips = get_zips_to_unpack(kind="systems", system_ids=[self.system_id])
             [archive] = list(zips.keys())
-            self._archive = archive.parent / self.system_id
+            self._archive = archive.parent / self.system_id  # type: ignore
             assert self._archive is not None
             if not self._archive.is_dir():
                 with ZipFile(archive) as arch:
@@ -131,11 +131,7 @@ class PlinderSystem:
     @property
     def structures(self) -> list[str]:
         assert self.archive is not None
-        return [
-            path.as_posix()
-            for path in self.archive.rglob("*")
-            if path.is_file()
-        ]
+        return [path.as_posix() for path in self.archive.rglob("*") if path.is_file()]
 
     @property
     def linked_structures(self) -> pd.DataFrame | None:

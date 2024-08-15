@@ -11,5 +11,5 @@ except ImportError:
 def test_data_loader(read_plinder_mount):
     from plinder.core.loader import PlinderDataset
 
-    ds = PlinderDataset(file_with_system_ids=read_plinder_mount / "index/annotation_table.parquet")
+    ds = PlinderDataset(split="removed")
     assert len(ds[0])
