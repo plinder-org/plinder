@@ -244,6 +244,7 @@ class DataConfig:
     mmp: str = "mmp"
     scores: str = "scores"
     splits: str = "splits"
+    split_file: str = "split.parquet"
     systems: str = "systems"
     index_file: str = "annotation_table.parquet"
     manifest_file: str = "manifest.parquet"
