@@ -1554,12 +1554,9 @@ class Ligand(BaseModel):
             value = getattr(self, field, None)
             print(name, value)
 
-            if isinstance(value, bool):
-                data.update({name: value})
-            elif value is None:
+            if value is None or isinstance(value, bool):
                 # maybe not add if the value is None?
-                # continue
-                data.update({name: str(value)})
+                data.update({name: value})
             elif isinstance(value, ty.get_args(ty.Union[str, int, float])):
                 data.update({name: str(value)})
             elif isinstance(value, ty.Iterable):
