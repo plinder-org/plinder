@@ -930,10 +930,10 @@ class Ligand(BaseModel):
 
         # Lipinski like Ro3 and Ro5
         if (
-            self.molecular_weight
-            and self.crippen_clogp
-            and self.num_hbd
-            and self.num_hba
+            self.molecular_weight is not None
+            and self.crippen_clogp is not None
+            and self.num_hbd is not None
+            and self.num_hba is not None
         ):
             if (
                 self.molecular_weight < 300
