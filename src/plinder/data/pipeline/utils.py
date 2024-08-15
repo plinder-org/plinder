@@ -285,13 +285,13 @@ def get_local_contents(
         pdb_ids=pdb_ids,
         two_char_codes=two_char_codes,
     )
-    if kind == "pdb_id":
+    if kind == "pdb_ids":
         return (
             values if as_four_char_ids else [f"pdb_0000{pdb_id}" for pdb_id in values]
         )
     codes = (
         values
-        if kind == "two_char_code" and len(values)
+        if kind == "two_char_codes" and len(values)
         else listdir(data_dir.as_posix())
     )
     contents = []

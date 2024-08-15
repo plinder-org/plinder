@@ -8,7 +8,7 @@ import atom3d.util.formats as fo
 import pandas as pd
 from torch.utils.data import Dataset
 
-from plinder.core.index import utils
+from plinder.core import get_split
 from plinder.core.system import system
 
 
@@ -30,13 +30,16 @@ class PlinderDataset(Dataset):  # type: ignore
 
     def __init__(
         self,
+        split: pd.DataFrame | None = None,
         file_with_system_ids: str | Path | None = None,
         store_file_path: bool = True,
         load_alternative_structures: bool = False,
         num_alternative_structures: int = 1,
     ):
-        if file_with_system_ids is None:
-            self._system_ids: list[str] = utils.get_manifest()["system_id"].to_list()
+        if split is not None:
+            self._system_ids = split["system_id"].to_list()
+        elif file_with_system_ids is None:
+            self._system_ids: list[str] = get_split()["system_id"].to_list()
         else:
             self._system_ids = pd.read_csv(file_with_system_ids)["system_id"].to_list()
         self._num_examples = len(self._system_ids)

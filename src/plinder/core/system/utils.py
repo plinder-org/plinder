@@ -19,11 +19,11 @@ def load_systems(
     kind, items = expand_config_context(
         system_ids=system_ids, pdb_ids=pdb_ids, two_char_codes=two_char_codes, cfg=cfg
     )
-    if kind == "system_id":
+    if kind == "system_ids":
         return {system_id: PlinderSystem(system_id=system_id) for system_id in items}
     manifest = get_manifest(cfg=cfg)
     systems = {}
-    if kind == "pdb_id":
+    if kind == "pdb_ids":
         for pdb_id in items:
             ids = manifest[manifest["pdb_id"] == pdb_id]["system_id"].to_list()
             for system_id in ids:

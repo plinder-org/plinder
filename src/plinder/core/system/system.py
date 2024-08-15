@@ -72,44 +72,43 @@ class PlinderSystem:
         if self._archive is None:
             zips = get_zips_to_unpack(kind="systems", system_ids=[self.system_id])
             [archive] = list(zips.keys())
-            assert archive is not None
-            self._archive = archive.parent / archive.stem  # type: ignore
+            self._archive = archive.parent / self.system_id
             assert self._archive is not None
             if not self._archive.is_dir():
                 with ZipFile(archive) as arch:
-                    arch.extractall(path=self._archive)
+                    arch.extractall(path=archive.parent)
         return self._archive
 
     @property
     def system_cif(self) -> str:
         assert self.archive is not None
-        return (self.archive / f"{self.system_id}/system.cif").as_posix()
+        return (self.archive / "system.cif").as_posix()
 
     @property
     def receptor_cif(self) -> str:
         assert self.archive is not None
-        return (self.archive / f"{self.system_id}/receptor.cif").as_posix()
+        return (self.archive / "receptor.cif").as_posix()
 
     @property
     def receptor_pdb(self) -> str:
         assert self.archive is not None
-        return (self.archive / f"{self.system_id}/receptor.pdb").as_posix()
+        return (self.archive / "receptor.pdb").as_posix()
 
     @property
     def system_pdb(self) -> str:
         assert self.archive is not None
-        return (self.archive / f"{self.system_id}/system.pdb").as_posix()
+        return (self.archive / "system.pdb").as_posix()
 
     @property
     def sequences(self) -> str:
         assert self.archive is not None
-        return (self.archive / f"{self.system_id}/sequences.fasta").as_posix()
+        return (self.archive / "sequences.fasta").as_posix()
 
     @property
     def chain_mapping(self) -> dict[str, Any] | None:
         if self._chain_mapping is None:
             assert self.archive is not None
-            with (self.archive / f"{self.system_id}/chain_mapping.json").open() as f:
+            with (self.archive / "chain_mapping.json").open() as f:
                 self._chain_mapping = json.load(f)
         return self._chain_mapping
 
@@ -117,7 +116,7 @@ class PlinderSystem:
     def water_mapping(self) -> dict[str, Any] | None:
         if self._water_mapping is None:
             assert self.archive is not None
-            with (self.archive / f"{self.system_id}/water_mapping.json").open() as f:
+            with (self.archive / "water_mapping.json").open() as f:
                 self._water_mapping = json.load(f)
         return self._water_mapping
 
@@ -125,7 +124,7 @@ class PlinderSystem:
     def ligands(self) -> dict[str, str]:
         assert self.archive is not None
         ligands = {}
-        for ligand in (self.archive / f"{self.system_id}/ligand_files/").glob("*.sdf"):
+        for ligand in (self.archive / "ligand_files/").glob("*.sdf"):
             ligands[ligand.stem] = ligand.as_posix()
         return ligands
 
@@ -134,7 +133,7 @@ class PlinderSystem:
         assert self.archive is not None
         return [
             path.as_posix()
-            for path in (self.archive / f"{self.system_id}/").rglob("*")
+            for path in self.archive.rglob("*")
             if path.is_file()
         ]
 

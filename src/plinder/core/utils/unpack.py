@@ -11,7 +11,7 @@ from plinder.core.utils import cpl
 from plinder.core.utils.config import get_config
 
 ZIP_KINDS = Literal["entries", "systems"]
-ID_KINDS = Literal["system_id", "pdb_id", "two_char_code"]
+ID_KINDS = Literal["system_ids", "pdb_ids", "two_char_code"]
 
 
 def expand_config_context(
@@ -41,10 +41,10 @@ def expand_config_context(
     else:
         two_chars = two_char_codes
     if systems:
-        return "system_id", systems
+        return "system_ids", systems
     if pdbs:
-        return "pdb_id", pdbs
-    return "two_char_code", two_chars
+        return "pdb_ids", pdbs
+    return "two_char_codes", two_chars
 
 
 def get_zips_to_unpack(
@@ -65,19 +65,19 @@ def get_zips_to_unpack(
 
     root = cpl.get_plinder_path(rel=getattr(conf.data, kind), download=False)
     zips: dict[Path, list[str]] = {}
-    if id_kind == "system_id":
+    if id_kind == "system_ids":
         for system_id in ids:
             two_char_code = system_id[1:3]
             key = root / f"{two_char_code}.zip"
             zips.setdefault(key, [])
             zips[key].append(system_id)
-    elif id_kind == "pdb_id":
+    elif id_kind == "pdb_ids":
         for pdb_id in ids:
             code = pdb_id[-3:-1]
             key = root / f"{code}.zip"
             zips.setdefault(key, [])
             zips[key].append(pdb_id)
-    elif id_kind == "two_char_code":
+    elif id_kind == "two_char_codes":
         for two_char_code in ids:
             key = root / f"{two_char_code}.zip"
             zips.setdefault(key, [])
