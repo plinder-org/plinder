@@ -5,7 +5,7 @@ def test_end_to_end(mock_alternative_datasets):
 
     mock_alternative_datasets("4jvm")   # different from 19hc
 
-    stages = ",".join(tasks.STAGES[:tasks.STAGES.index("make_mmp_index")])
+    stages = ",".join(tasks.STAGES[:tasks.STAGES.index("collate_partitions")])
     import sys
     print(stages, file=sys.stderr, flush=True)
     conf = {
