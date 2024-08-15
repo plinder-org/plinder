@@ -69,7 +69,9 @@ def map_cross_similarity(
     df = df.loc[idx]
 
     cfg = get_config()
-    dataset = cpl.get_plinder_path(rel=f"{cfg.data.fingerprints}/{cfg.data.fingerprint_file}")
+    dataset = cpl.get_plinder_path(
+        rel=f"{cfg.data.fingerprints}/{cfg.data.fingerprint_file}"
+    )
     ligands_per_system = pd.read_parquet(dataset)
     ligand_to_system: dict[int, set[str]] = {}
     for ligand_id, group in ligands_per_system.groupby("number_id_by_inchikeys"):
