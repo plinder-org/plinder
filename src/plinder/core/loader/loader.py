@@ -18,6 +18,10 @@ class PlinderDataset(Dataset):  # type: ignore
 
     Parameters
     ----------
+    df : pd.DataFrame | None
+        the split to use
+    split : str
+        the split to sample from
     file_with_system_ids : str | Path
         path to a file containing a list of system ids (default: full index)
     store_file_path : bool, default=True
@@ -30,18 +34,19 @@ class PlinderDataset(Dataset):  # type: ignore
 
     def __init__(
         self,
-        split: pd.DataFrame | None = None,
-        file_with_system_ids: str | Path | None = None,
+        df: pd.DataFrame | None = None,
+        split: str = "train",
+        split_parquet_path: str | Path | None = None,
         store_file_path: bool = True,
         load_alternative_structures: bool = False,
         num_alternative_structures: int = 1,
     ):
-        if split is not None:
-            self._system_ids = split["system_id"].to_list()
-        elif file_with_system_ids is None:
-            self._system_ids: list[str] = get_split()["system_id"].to_list()
-        else:
-            self._system_ids = pd.read_csv(file_with_system_ids)["system_id"].to_list()
+        if df is None:
+            if split_parquet_path is None:
+                df = get_split()
+            else:
+                df = pd.read_parquet(split_parquet_path)
+        self._system_ids = df.loc[df["split"] == split, "system_id"].to_list()
         self._num_examples = len(self._system_ids)
         self._store_file_path = store_file_path
         self.load_alternative_structures = load_alternative_structures
