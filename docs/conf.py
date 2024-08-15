@@ -36,8 +36,7 @@ extensions = [
     "sphinx_design",
     "sphinx_copybutton",
     "numpydoc",
-    "myst_parser",
-    #"myst_nb",
+    "myst_nb",
 ]
 
 # TODO: remove this for production
@@ -63,10 +62,13 @@ myst_enable_extensions = [
     "tasklist",
 ]
 myst_url_schemes = ("http", "https", "mailto")
-myst_heading_anchors = 3
 
 templates_path = ["templates"]
-source_suffix = {".md": "markdown"}
+source_suffix = {
+    '.rst': 'restructuredtext',
+    '.ipynb': 'myst-nb',
+    '.myst': 'myst-nb',
+}
 master_doc = "index"
 
 project = "PLINDER"

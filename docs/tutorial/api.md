@@ -29,7 +29,7 @@ We currently only support a Linux environment.
 `aivant` conda channel using `conda install aivant::openstructure`, but it is only built
 targeting Linux architectures.
 For Windows and MacOS users, please see the relevant
-[_Docker_](#alternative-docker-container) resources.
+[_Docker_](#docker-target) resources.
 :::
 
 ```console
@@ -45,6 +45,7 @@ Now `plinder` can be installed into the created environment:
 $ pip install .
 ```
 
+(docker-target)=
 ### Alternative: Using a Docker container
 
 We also publish the `plinder` project as a docker container as alternative to the
