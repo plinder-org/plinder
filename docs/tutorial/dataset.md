@@ -1,6 +1,6 @@
 # Dataset tutorial
 
-# Getting the data
+## Getting the data
 
 :::{todo}
 - link the data location
@@ -9,7 +9,7 @@
 - give CLI commands for getting the the parquet file
 :::
 
-# Understanding the directory structure
+## Understanding the directory structure
 
 The directory downloaded from the bucket has the following structure:
 
@@ -36,7 +36,7 @@ The directory downloaded from the bucket has the following structure:
 - mention location of central `.parquet` file
 :::
 
-# Interpreting the table
+## Interpreting the table
 
 :::{todo}
 - explain what a parquet file is and link to parquet reference
@@ -45,7 +45,7 @@ The directory downloaded from the bucket has the following structure:
 - explain how to to interpret the columns in general
 :::
 
-# Inspecting the entries
+## Inspecting the entries
 
 :::{todo}
 - transition from system name in table to structure entries

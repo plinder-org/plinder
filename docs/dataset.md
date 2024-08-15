@@ -62,6 +62,13 @@ sd_hide_title: true
 `annotation_table.parquet` harbours the main table listing all systems and their annotations.
 The descriptions for each column in this table are listed here.
 
+:::{todo}
+- Add `Mandatory` column
+- Add `Example` column
+- Plugin [datatables](https://datatables.net/) to enable sorting, filtering and pagination
+- Then customize table style to fit all columns into the page
+:::
+
 :::{raw} html
 <div>
 :::

@@ -64,6 +64,7 @@ myst_enable_extensions = [
     "tasklist",
 ]
 myst_url_schemes = ("http", "https", "mailto")
+myst_heading_anchors = 3
 
 templates_path = ["templates"]
 source_suffix = {".md": "markdown"}
