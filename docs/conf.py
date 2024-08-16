@@ -3,9 +3,6 @@ from pathlib import Path
 
 import plinder
 
-# TODO: Use proper __version__ attribute from the Plinder package
-plinder.__version__ = "0.1.0"
-
 DOC_PATH = Path(__file__).parent
 PACKAGE_PATH = DOC_PATH.parent / "src"
 COLUMN_REFERENCE_PATH = DOC_PATH.parent / "column_descriptions"

@@ -32,6 +32,9 @@ jobs:
           cache-downloads: true
           cache-environment: true
           post-cleanup: all
+      - name: Get version bump
+        id: get-tag
+        run: echo "bump=$(python flows/docker.py bump)" >> $GITHUB_OUTPUT
       - name: Build docs
         shell: bash -el {0}
         id: build
