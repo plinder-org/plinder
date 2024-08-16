@@ -4,14 +4,6 @@ from xml.etree import ElementTree
 
 import pandas as pd
 
-DESCRIPTION_COLUMNS = {
-    "Name": "str",
-    "Description": "str",
-    "Type": "str",
-    "Mandatory": "bool",
-    "Example": "str",
-}
-
 
 def generate_table(description_dir: Path, output_html_path: Path) -> None:
     """
@@ -27,9 +19,6 @@ def generate_table(description_dir: Path, output_html_path: Path) -> None:
     output_html_path : Path
         Path to the output HTML file.
     """
-    column_descriptions = pd.DataFrame(
-        {name: pd.Series(dtype=dtype) for name, dtype in DESCRIPTION_COLUMNS.items()}
-    )
     column_descriptions = []
     for description_file in glob(str(description_dir / "*.tsv")):
         with open(description_file, "r") as f:

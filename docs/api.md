@@ -6,4 +6,4 @@ sd_hide_title: true
 
 ## API reference
 
-Coming soon
+**Coming soon**

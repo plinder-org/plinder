@@ -23,8 +23,8 @@ $ export PLINDER_ITERATION=tutorial
 $ gsutil -m cp -r gs://plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/* ~/.local/share/plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/
 ```
 
-The full dataset (`PLINDER_ITERATION=v1`) is approximately 700 GB in size, so you are
-advised to have sufficient space for production usage.
+The full dataset (`PLINDER_ITERATION=v1`) has a size of hundreds of GB, so you are
+advised to have sufficient space for usage of the production dataset.
 
 :::{note}
 The version used for the preprint is `gs://plinder/2024-04/v1`, however, we plan to
@@ -80,8 +80,8 @@ cd plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/systems; for i in ls *zip; do
 This will yield directories such as `6lpf__2__1.B__1.D`, which is what we call a PLINDER
 system ID in the form
 `<PDB ID>__<biological assembly>__<receptor chain ID>__<ligand chain ID>`.
-Each system represent a complex between protein(s) and a small molecule(s), derived
-from a biological assembly in the PDB.
+Each system represent a complex between one or multiple proteins and a small molecules,
+derived from a biological assembly in the PDB.
 The directory contains _mmCIF_, _PDB_ and _SDF_ file formats as well as some additional
 metadata files, for e.g. chain mapping and sequences.
 
@@ -123,16 +123,16 @@ While `index/annotation_table.parquet` contains annotation for all PLINDER syste
 ligand-protein redundancy removal.
 
 (cluster-target)=
-## Accessing the clusters
+## Inspecting the clusters
 
-This directory is organized by the similarity metrics used in generating the clusters
+This directory is organized by the similarity metrics used for generating the clusters
 and further nested by whether clustering is done with directed or undirected graph and
 by the threshold for clustering.
 
 Show nested structure
 
 ```console
-$ tree  clusters
+$ tree clusters
 
 clusters
 ├── metric=pli_qcov
@@ -208,21 +208,21 @@ The columns are:
 - `split`: split category, either `train` (training set), `test` (test set),
   `val` (training set) or `removed`.
 - `cluster`: cluster used in de-leaking the training vs test dataset.
-- `cluster_for_val_split`: cluster used in sampling validation set from training set
+- `cluster_for_val_split`: cluster used in sampling validation set from training set.
 
-## Inspecting leakage files:
+## Checking leakage
 
 For each of the cluster metric described [above](cluster-target), we calculated the
 maximum similarity for each system in a evaluation set (i.e. validation or test) to any
 system the learning set (i.e. training or validation).
 The parquet files are formatted like
-`<split method>__<similarity metric>__<learning set>__<evaluation set>.parquet`.
+`plinder_<split method>__<similarity metric>__<learning set>__<evaluation set>.parquet`.
 For example `plinder-ECOD__pli_qcov__train_posebusters.parquet` means the file contains
 a maximum `pli_qcov` similarity of posebusters (evaluation set) to any system in the
 train set from a split based on the ECOD domain.
 
-```bash
-❯ ls  ~/.local/share/plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/leakage/
+```console
+$ ls leakage
 plinder-ECOD__pli_qcov__train_posebusters.parquet
 plinder-ECOD__pli_qcov__train_test.parquet
 plinder-ECOD__pli_qcov__train_val.parquet
