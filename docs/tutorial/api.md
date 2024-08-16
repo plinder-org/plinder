@@ -61,3 +61,78 @@ See the relevant docker resources here for more details:
 ## Overview
 
 The user-faced subpackage of `plinder` is `plinder.core`.
+
+## Example Usage
+
+### Configure dataset environment variable
+> We need to set environment variables to point to the release and iteration of choice. For the sake of demonstartion, this will be set to point to a smaller toy example dataset, which are `PLINDER_RELEASE=2024-06` and `PLINDER_ITERATION=toy`.
+
+>NOTE!: the version used for the preprint is `PLINDER_RELEASE=2024-04` and `PLINDER_ITERATION=v1`, while the current version with updated annotations to be used for the MLSB challenge is`PLINDER_RELEASE=2024-06` and `PLINDER_ITERATION=v2`. You could do this directly from a shell terminal with `export PLINDER_RELEASE=2024-04 && export PLINDER_ITERATION=toy` or do it with python with `os.environ`.
+
+```python
+from __future__ import annotations
+import os
+from pathlib import Path
+
+release = "2024-04"
+iteration = "tutorial"
+os.environ["PLINDER_RELEASE"] = release
+os.environ["PLINDER_ITERATION"] = iteration
+os.environ["PLINDER_REPO"] =  str(Path.home()/"plinder-org/plinder")
+os.environ["PLINDER_LOCAL_DIR"] =  str(Path.home()/".local/share/plinder")
+version = f"{release}/{iteration}"
+```
+
+### Get config
+
+```python
+import plinder.core.utils.config
+
+cfg = plinder.core.utils.config.get_config()
+print(f"""
+local cache directory: {cfg.data.plinder_dir}
+remote data directory: {cfg.data.plinder_remote}
+""")
+data_dir = Path(cfg.data.plinder_dir)
+```
+
+### Inspect annotation file
+```python
+from plinder.core.index.utils import get_plindex
+get_plindex(cfg=cfg)
+```
+
+### Query protein similarity
+```python
+from plinder.core.scores.protein import query_protein_similarity
+query_protein_similarity(
+    search_db="apo",
+    filters=[("similarity", ">", "50")]
+)
+```
+
+### Load plinder system data onject from system_id
+```python
+from plinder.core.system.utils import load_systems
+load_systems(
+    system_ids=["5dax__1__1.A__1.B_1.C_1.D", "3to9__2__2.A__2.B"]
+)
+```
+
+### Inspect manifest table
+```python
+from plinder.core.index.utils import get_manifest
+get_manifest(cfg=cfg)
+```
+
+### Load entries
+```python
+from plinder.core.index.utils import load_entries
+entries = load_entries(
+    two_char_codes="lp"
+
+)
+entries["2lp7"].keys()
+```
+
+
