@@ -16,7 +16,6 @@ sys.path.insert(0, str(DOC_PATH))
 import tablegen
 
 # Pregeneration of files
-# apidoc.create_api_doc(PACKAGE_PATH, DOC_PATH / "apidoc")
 tablegen.generate_table(COLUMN_REFERENCE_PATH, DOC_PATH / "table.html")
 
 #### Source code link ###
@@ -28,7 +27,7 @@ tablegen.generate_table(COLUMN_REFERENCE_PATH, DOC_PATH / "table.html")
 extensions = [
     "jupyter_sphinx",
     "sphinx.ext.autodoc",
-    # "sphinx.ext.autosummary",
+    "sphinx.ext.autosummary",
     "sphinx.ext.doctest",
     "sphinx.ext.mathjax",
     # "sphinx.ext.linkcode",
@@ -38,9 +37,6 @@ extensions = [
     "numpydoc",
     "myst_nb",
 ]
-
-# TODO: remove this for production
-todo_include_todos = True
 
 nb_custom_formats = {".ipynb": ["jupytext.reads", {"fmt": "ipynb"}]}
 nb_execution_timeout = 720
