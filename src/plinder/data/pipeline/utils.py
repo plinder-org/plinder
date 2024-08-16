@@ -2,14 +2,16 @@
 # Distributed under the terms of the Apache License 2.0
 from __future__ import annotations
 
+import multiprocessing
 from functools import wraps
 from hashlib import md5
-from json import dumps
+from itertools import repeat
+from json import dumps, load
 from os import listdir
 from pathlib import Path
 from time import time
 from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, TypeVar
-from zipfile import ZipFile
+from zipfile import ZIP_DEFLATED, ZipFile
 
 import pandas as pd
 from omegaconf import DictConfig
@@ -537,3 +539,78 @@ def create_nonredundant_dataset(*, data_dir: Path) -> None:
     df_trainable_nonredundant.to_parquet(
         data_dir / "index" / "annotation_table_nonredundant.parquet", index=False
     )
+
+
+def pack_linked_structures(*, data_dir: Path, code: str) -> None:
+    """
+    Pack generated linked structures into a zip file for a particular
+    two character code.
+
+    Parameters
+    ----------
+    data_dir : Path
+        plinder root dir
+    code : str
+        two character code
+    """
+    (data_dir / "links").mkdir(exist_ok=True, parents=True)
+    with ZipFile(data_dir / "links" / f"{code}.zip", "w", compression=ZIP_DEFLATED) as archive:
+        for search_db in ["apo", "pred"]:
+            jsons = []
+            root = data_dir / "linked_structures" / search_db
+            system_ids = [system_id for system_id in listdir(root) if system_id[1:3] == code]
+            for system_id in system_ids:
+                link_ids = listdir(f"{root}/{system_id}")
+                for link_id in link_ids:
+                    link = f"{root}/{system_id}/{link_id}"
+                    try:
+                        with open(f"{link}/scores.json") as f:
+                            jsons.append(load(f))
+                    except Exception:
+                        pass
+                    try:
+                        archive.write(
+                            f"{link}/superposed.cif",
+                            f"{search_db}/{system_id}/{link_id}/superposed.cif",
+                        )
+                    except Exception:
+                        pass
+            df = pd.DataFrame(jsons).rename(columns={"reference": "reference_system_id", "model": "id"})
+            df.to_parquet(data_dir / "links" / f"{search_db}_{code}.parquet", index=False)
+
+
+def mp_pack_linked_structures(*, data_dir: Path) -> None:
+    """
+    Use a process pool to pack linked structures into two character code archives.
+
+    Parameters
+    ----------
+    data_dir : Path
+        plinder root dir
+    """
+
+    with multiprocessing.get_context("spawn").Pool() as pool:
+        pool.starmap(pack_linked_structures, zip(repeat(data_dir), listdir(data_dir / "ingest")))
+
+
+def consolidate_linked_scores(*, data_dir: Path) -> None:
+    """
+    Consolidate linked scores into a single parquet file. Assumes
+    that pack_linked_structures has been run.
+
+    Parameters
+    ----------
+    data_dir : Path
+        plinder root dir
+    """
+    for search_db in ["apo", "pred"]:
+        paths = list((data_dir / "links").glob(f"{search_db}_*.parquet"))
+        dfs = []
+        for path in paths:
+            df = pd.read_parquet(path)
+            if not df.empty:
+                dfs.append(df)
+        ndf = pd.concat(dfs)
+        odf = pd.read_parquet(data_dir / "linked_structures" / f"{search_db}_links.parquet")
+        df = pd.merge(odf, ndf, on=["reference_system_id", "id"])
+        df.to_parquet(data_dir / "links" / f"{search_db}_links.parquet", index=False)
