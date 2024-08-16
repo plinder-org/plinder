@@ -22,7 +22,7 @@ $ export PLINDER_RELEASE=2024-04
 $ export PLINDER_ITERATION=tutorial
 $ mkdir -p ~/.local/share/plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/
 $ gsutil -m cp -r gs://plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/* ~/.local/share/plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/
-
+````
 The full dataset (`PLINDER_ITERATION=v1`) has a size of hundreds of GB, so you are
 advised to have sufficient space for usage of the production dataset.
 
@@ -70,7 +70,7 @@ Similar to the
 structures into subdirectories of chunks to make loading and querying speed palatable.
 
 The structure files can be found in the subfolder
-`plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/systems`.
+`~/.local/share/plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/systems`.
 To unpack the structures run
 
 ```bash
