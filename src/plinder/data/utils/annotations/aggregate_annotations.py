@@ -90,6 +90,10 @@ class QualityCriteria:
 
 class System(BaseModel):
     pdb_id: str
+    smiles: str = Field(
+        default_factory=str,
+        description="Ligand SMILES based on OpenStructure dictionary lookup, or resolved SMILES if not in dictionary",
+    )
     biounit_id: str
     ligands: list[Ligand]
     ligand_validation: ResidueListValidation | None = None
