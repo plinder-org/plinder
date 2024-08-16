@@ -17,11 +17,11 @@ The PLINDER dataset is versioned via two parameters:
 For the purpose of this tutorial we set `PLINDER_ITERATION` to `tutorial`, to download
 only a small manageable excerpt of the entries.
 
-```console
+````console
 $ export PLINDER_RELEASE=2024-04
 $ export PLINDER_ITERATION=tutorial
+$ mkdir -p ~/.local/share/plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/
 $ gsutil -m cp -r gs://plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/* ~/.local/share/plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/
-```
 
 The full dataset (`PLINDER_ITERATION=v1`) has a size of hundreds of GB, so you are
 advised to have sufficient space for usage of the production dataset.
@@ -47,11 +47,11 @@ The directory downloaded from the bucket has the following structure:
 |   |-- leakage              # leakage results
 |   |-- ligand_scores        # ligand similarity parquet dataset
 |   |-- ligands              # ligand data expanded from entries for computing similarity
-|   |-- mmp                  # MMP and MMS data
+|   |-- mmp                  # Matched molecular pairs (MMP) and Matched molecular series (MMS) data
 |   |-- scores               # protein similarity parquet dataset
 |   |-- splits               # split files and the configs used to generate them (if available)
 |   |-- systems              # structure files for all systems (split by `two_char_code` and zipped)
-```
+````
 
 The `systems`, `index`, `clusters`, `splits` and `leakage` directories are most the
 important ones for PLINDER utilization and will be covered in the tutorial, while the
@@ -74,7 +74,7 @@ The structure files can be found in the subfolder
 To unpack the structures run
 
 ```bash
-cd plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/systems; for i in ls *zip; do unzip $i; done
+cd ~/.local/share/plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/systems; for i in ls *zip; do unzip $i; done
 ```
 
 This will yield directories such as `6lpf__2__1.B__1.D`, which is what we call a PLINDER
@@ -123,6 +123,7 @@ While `index/annotation_table.parquet` contains annotation for all PLINDER syste
 ligand-protein redundancy removal.
 
 (cluster-target)=
+
 ## Inspecting the clusters
 
 This directory is organized by the similarity metrics used for generating the clusters
