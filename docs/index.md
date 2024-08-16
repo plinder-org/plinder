@@ -21,9 +21,14 @@ resource for training and evaluation of protein-ligand docking algorithms:
 - Robust evaluation harness to simplify and standard performance comparison between models.
 
 
-::::::{grid} 1
+::::::{grid} 3
+
+:::::{grid-item}
+:columns: 3
+:::::
 
 :::::{grid-item-card}
+:columns: 6
 :link: tutorial/dataset
 :link-type: doc
 
@@ -65,11 +70,11 @@ Access the PLI systems and their annotations directly via the files
 % :::
 % ::::
 % :::::
-%
-% ::::::
+
+::::::
 
 
-% TODO: re-add `contribution/index` to `toctree`
+% TODO: re-add `contribution/index` and `api` to `toctree`
 
 :::{toctree}
 :maxdepth: 1
@@ -77,6 +82,5 @@ Access the PLI systems and their annotations directly via the files
 
 tutorial/index
 dataset
-api
 citation
 :::
