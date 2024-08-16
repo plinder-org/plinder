@@ -4,22 +4,21 @@
 
 We version the plinder dataset with two controls:
 
-PLINDER_RELEASE: the month stamp of the last RCSB sync
-PLINDER_ITERATION: value that enables iterative development within a release
-We version the plinder application using an automated semantic versioning scheme based on the git commit history. The plinder.data package is responsible for generating a dataset release and the plinder.core package makes it easy to interact with the dataset.
+`PLINDER_RELEASE`: the month stamp of the last RCSB sync
+`PLINDER_ITERATION`: value that enables iterative development within a release
 
 Changelog:
 
 2024-06/v2 (Upcoming):
 
-Improved SDF saving to handle some bond order issues
-Updated system definition to be more stable and independent of PLIP
-Added binding affinities from BindingDB and added "has_affinity" as priority for test split
-Annotated all crystal contacts
-Improved covalency detection
-2024-04/v1 (Current): Version with redundancy removal by protein pocket and ligand similarity.
+- Improved SDF saving to handle some bond order issues
+- Updated system definition to be more stable and independent of PLIP
+- Added binding affinities from BindingDB and added "has_affinity" as priority for test split
+- Annotated all crystal contacts
+- Improved covalency detection
+  2024-04/v1 (Current): Version with redundancy removal by protein pocket and ligand similarity.
 
-2024-04/v0: Version used to re-train DiffDock in the paper, with redundancy removal based on <pdbid>\_<ligand ccd codes>
+2024-04/v0: Version used to re-train DiffDock in the paper, with redundancy removal based on \<pdbid\>\_\<ligand ccd codes\>
 
 ## Getting the data
 
@@ -35,7 +34,7 @@ gsutil -m cp -r gs://plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/* ~/.local/
 
 This full dataset is XGB in size; to download run `export PLINDER_RELEASE=2024-04 && export PLINDER_ITERATION=v1`, followed by the `gsutil` command above.
 
-NOTE!: the version used for the preprint is gs://plinder/2024-04/v1, however, we plan to release a newer version with updated annotations to be used for the MLSB challenge (gs://plinder/2024-06/v2) in the future.
+NOTE!: the version used for the preprint is gs://plinder/2024-04/v1, however, we plan to release a newer version with updated annotations to be used for the MLSB challenge (`gs://plinder/2024-06/v2`) in the future.
 
 Downloading with the commands above will yield the following folder structure shown in **Understanding the directory structure** section, with the `systems`, `splits`, `clusters` and `index` being most important for direct usage while the rest are for more curios users.
 
@@ -68,27 +67,27 @@ gsutil -m cp -r gs://plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/splits ~/.l
 
 ### Unpacking the structure files:
 
-Identical to the PDB NextGen Archive, we split the structures into sub-directories of chunks to make loading and querying speed palatable.
+Identical to the PDB NextGen Archive, we split the structures into subdirectories of chunks to make loading and querying speed palatable.
 
-The structure files can be found in the subfolder `~/.local/share/plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/systems`. To unpack the structures do the following
+The structure files can be found in the subfolder `plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/systems`. To unpack the structures do the following
 
 ```bash
-cd ~/.local/share/plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/systems; for i in ls *zip; do unzip $i; done
+cd plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/systems; for i in ls *zip; do unzip $i; done
 ```
 
-This will yield directories such as 3to9**2**2.A**2.B, which is what we call a plinder system id of the form <pdbid>**<biounit>**<chain_ids_of_receptor>**<chain_ids_of_ligand>. The directory contains mmcif, pdb and sdf file formats as well as some additional metadata (like chain mapping and fastas).
+This will yield directories such as `6lpf__2__1.B__1.D`, which is what we call a plinder system id of the form `<pdbid>__<biounit>__<chain_ids_of_receptor>__<chain_ids_of_ligand>`. The directory contains mmcif, pdb and sdf file formats as well as some additional metadata (like chain mapping and fastas).
 
 The naming of the directory is by system - since a given PDB entry can contain multiple protein-ligand complexes, we assign a plinder system id to every system. These system ids are also used for retrieving the splits, as shown in the next step
 
-With the system*id contained in these split files, you can load the respective train, val & test splits after unzipping the systems directory. E.g. as shown in the Dataframe above, ~/.local/share/plinder/2024-04/tutorial/systems/3to9**2**2.A\_\_2.B/system.cif will contain the full mmcif of the system. We also provide cif files of seperated receptors (*/receptor.cif) and ligands (_/ligand_files/_.sdf) as well as pdb files (\_/receptor.pdb) but strongly encourage cif, pdb is considered a legacy file format.
+With the `system_id` contained in these split files, you can load the respective train, val & test splits after unzipping the systems directory. E.g. `~/.local/share/plinder/2024-04/v1/systems/6lpf__2__1.B__1.D/system.cif` will contain the full mmcif of the system. We also provide cif files of seperated receptors (\*/receptor.cif) and ligands (\*/ligand_files/\*.sdf) as well as pdb files (\*/receptor.pdb) but strongly encourage cif, pdb is considered a legacy file format.
 
-Note: a non-redundant and single-ligand smaller subset of this version was used to train diffdock in the paper and is available at 2024-04/v0.
+Note: a non-redundant and single-ligand smaller subset of this version was used to train diffdock in the paper and is available at `2024-04/v0`.
 
 The folder also contains a .yaml which is the config used to generate the split and can be ignored unless you want to reproduce the splits.
 
 ## Accessing the splits files:
 
-`~/.local/share/plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/splits` contains an index for splits contained in a single parquet file. The most current split is `gs://plinder/2024-04/v1/splits/plinder-pl50.parquet` containing the pl50 split from the preprint. (Again: note this will be shortly updated to v2 and the v2 split will be used for the MLSB leaderboard).
+`~/.local/share/plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/splits` contains an index for splits contained in a single parquet file. The most current split is `gs://plinder/2024-04/v1/splits/plinder-pl50.parquet` containing the pl50 split from the preprint. (Again: note this will be shortly updated to `v2` and the `v2` split will be used for the MLSB leaderboard).
 
 ```python
 >>> import pandas as pd
@@ -102,7 +101,12 @@ The folder also contains a .yaml which is the config used to generate the split 
 4      1grx__1__1.A__1.B  train  c186691                  c154
 ```
 
-The columns are: - `system_id`: plinder id assigned to every protein-ligand system in a given PDB entry - `split`: split category, either `train` (training set), `test` (test set), `val` (training set)or `removed`.
+The columns are:
+
+- `system_id`: plinder id assigned to every protein-ligand system in a given PDB entry
+- `split`: split category, either `train` (training set), `test` (test set), `val` (training set)or `removed`.
+- `cluster`: cluster used in de-leaking the training vs test dataset.
+- `cluster`: cluster used in sampling validation set from training set
 
 ## Inspecting the annotation files
 
@@ -235,7 +239,7 @@ plinder
 
 Each of the sub-directories is further nested by the whether clustering is done with directed or undirected graph and the threshold for clustering.
 
-To load and show the content of one of the cluster files, for example, loading cluster based on pocket sequence similarity from an undirected graph at threshold=70, do:
+To load and show the content of one of the cluster files, for example, loading cluster based on pocket sequence similarity from an undirected graph at `threshold=70`, do:
 
 ```python
 >>> import pandas as pd
@@ -263,7 +267,7 @@ To load and show the content of one of the cluster files, for example, loading c
 
 ## Inspecting leakage files:
 
-For each of the metric described in **Inspecting the clusters** section above, we calculated the maximum similarity for each system in a evaluation (could be validation or test) set to any system the learning (could be training or validation) set. The parquet files are formatted like <split_method>**<similarity_metric>**<learning_set>**<evaluation_set>.parquet. For example `plinder-ECOD**pli_qcov\_\_train_posebusters.parquet`mean the file contains maximum`pli_qcov` similarity of posebusters (evaluation set) to any system in the train set from a split based on ECOD domain.
+For each of the metric described in **Inspecting the clusters** section above, we calculated the maximum similarity for each system in a evaluation (could be validation or test) set to any system the learning (could be training or validation) set. The parquet files are formatted like `<split_method>__<similarity_metric>__<learning_set>__<evaluation_set>.parquet`. For example `plinder-ECOD**pli_qcov__train_posebusters.parquet`mean the file contains maximum`pli_qcov` similarity of posebusters (evaluation set) to any system in the train set from a split based on ECOD domain.
 
 ```bash
 ❯ ls  ~/.local/share/plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/leakage/
