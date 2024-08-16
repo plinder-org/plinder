@@ -1007,7 +1007,7 @@ def compute_protein_leakage(
 def assign_apo_pred_systems(
     *,
     data_dir: Path,
-    search_db: str,
+    search_dbs: list[str],
     cpu: int = 8,
 ) -> None:
     from plinder.data.save_linked_structures import (
@@ -1017,7 +1017,7 @@ def assign_apo_pred_systems(
 
     save_dir = data_dir / "assignments"
     linked_structures = data_dir / "linked_structures"
-    for search_db in ["apo", "pred"]:
+    for search_db in search_dbs:
         output_file = linked_structures / f"{search_db}_links.parquet"
         make_linked_structures_data_file(
             data_dir=data_dir,
