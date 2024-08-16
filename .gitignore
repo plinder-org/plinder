@@ -86,11 +86,9 @@ instance/
 # Scrapy stuff:
 .scrapy
 
-# Sphinx documentation
+# Generated files in Sphinx documentation
 docs/_build/
-docs/source/_static
-docs/source/plinder*
-docs/source/modules*
+docs/table.html
 
 # PyBuilder
 .pybuilder/

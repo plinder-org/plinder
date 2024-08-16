@@ -69,15 +69,12 @@ docs = [
     "jupytext",
     "myst-nb",
     "myst-parser[linkify]",
-    "piccolo-theme",
-    "sphinxcontrib-applehelp",
-    "sphinxcontrib-bibtex",
-    "sphinxcontrib-devhelp",
-    "sphinxcontrib-htmlhelp",
-    "sphinxcontrib-jquery",
-    "sphinxcontrib-jsmath",
-    "sphinxcontrib-qthelp",
-    "sphinxcontrib-serializinghtml",
+    "numpydoc",
+    "pydata-sphinx-theme == 0.15.4",
+    "sphinx",
+    "sphinx-copybutton",
+    "sphinx-design",
+    "sphinx-gallery",
 ]
 
 [build-system]

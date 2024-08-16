@@ -32,6 +32,9 @@ jobs:
           cache-downloads: true
           cache-environment: true
           post-cleanup: all
+      - name: Get version bump
+        id: get-tag
+        run: echo "bump=$(python flows/docker.py bump)" >> $GITHUB_OUTPUT
       - name: Build docs
         shell: bash -el {0}
         id: build
@@ -39,11 +42,11 @@ jobs:
           which python
           python -m pip install six
           python -m pip install '.[docs]'
-          pushd docs && bash build.sh && popd
+          sphinx-build docs build/docs
       - name: Upload build artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: docs/build/html/
+          path: build/docs
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
