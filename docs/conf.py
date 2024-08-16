@@ -61,9 +61,9 @@ myst_url_schemes = ("http", "https", "mailto")
 
 templates_path = ["templates"]
 source_suffix = {
-    '.rst': 'restructuredtext',
-    '.ipynb': 'myst-nb',
-    '.myst': 'myst-nb',
+    ".rst": "restructuredtext",
+    ".ipynb": "myst-nb",
+    ".myst": "myst-nb",
 }
 master_doc = "index"
 
