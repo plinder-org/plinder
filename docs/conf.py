@@ -69,7 +69,7 @@ master_doc = "index"
 
 project = "PLINDER"
 copyright = "2024, PLINDER Development Team"
-author = "Plinder Development Team"
+author = "PLINDER Development Team"
 version = plinder.__version__
 release = plinder.__version__
 
