@@ -3,7 +3,7 @@ name = "plinder"
 dynamic = ["version"]
 dependencies = [
     "biotite == 0.39.0",
-    "numpy",
+    "numpy<2",
     "pandas",
     "typing_extensions",
     "pydantic",
@@ -59,6 +59,10 @@ type = [
 dev = [
     "plinder[lint,test,type]",
 ]
+loader = [
+    "torch",
+    "atom3d",
+]
 docs = [
     "jupyter-sphinx",
     "jupyterlab_myst",
@@ -89,7 +93,8 @@ root = "."
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["plinder.*"]
+include = ["plinder*"]
+namespaces = false
 
 [tool.setuptools.package-data]
 plinder = [
@@ -109,9 +114,6 @@ ignore = [
 ]
 preview = true
 
-[tool.ruff.isort]
-known-first-party = ["plinder"]
-
 [tool.ruff.flake8-tidy-imports]
 ban-relative-imports = "all"
 
@@ -121,5 +123,5 @@ strict = true
 disallow_untyped_decorators = false
 
 [[tool.mypy.overrides]]
-module = "plinder.core._version"
+module = "plinder._version"
 ignore_errors = true

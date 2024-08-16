@@ -10,8 +10,8 @@ from pathlib import Path
 import gemmi
 import pandas as pd
 from ost import io, mol
-from tqdm import tqdm
 
+from plinder.core import scores
 from plinder.core.utils.log import setup_logger
 from plinder.data.utils.annotations.save_utils import save_cif_file
 from plinder.eval.docking import utils
@@ -82,14 +82,14 @@ def superpose_to_system(
     if name_mapping is None:
         assert target_chain is not None
         # Rename target_chain to A for PDB format
-        target_pdb = target_mol.copy()
+        target_pdb = target_mol.Copy()
         if target_chain != "A":
             edi = target_pdb.EditXCS(mol.BUFFERED_EDIT)
-            edi.RenameChain(target_chain, "A")
+            edi.RenameChain(target_pdb.FindChain(target_chain), "A")
             edi.UpdateICS()
     else:
         # Rename target system according to its existing name mapping for PDB format
-        target_pdb = target_mol.copy()
+        target_pdb = target_mol.Copy()
         intermediate_names = {}
         edi = target_pdb.EditXCS(mol.BUFFERED_EDIT)
         for i, chain in enumerate(target_pdb.GetChainList()):
@@ -130,12 +130,10 @@ def make_linked_structures_data_file(
     cfg: LinkedStructureConfig = LinkedStructureConfig(),
     num_processes: int = 8,
 ) -> None:
-    multiprocessing.set_start_method("spawn")
-
-    def get_system_ligand_files(system_id: str) -> list[Path]:
+    def get_system_ligand_files(system_id: str) -> list[str]:
         system_folder = get_cif_file(data_dir, "holo", system_id).parent
         return [
-            system_folder / "ligand_files" / f"{c}.sdf"
+            (system_folder / "ligand_files" / f"{c}.sdf").as_posix()
             for c in system_id.split("__")[-1].split("_")
         ]
 
@@ -143,52 +141,61 @@ def make_linked_structures_data_file(
     filters = []
     for metric, threshold in cfg.filter_criteria.items():
         filters.append([("metric", "==", metric), ("similarity", ">=", threshold)])
-    score_file = data_dir / "scores" / f"search_db={search_db}"
-    links = pd.read_parquet(
-        score_file,
-        columns=["query_system", "target_system", "metric", "similarity"],
-        filters=filters,
-    )
-    links = links.iloc[
-        links.groupby(["query_system", "target_system", "metric"], observed=True)[
-            "similarity"
-        ].idxmax()
-    ]
-    links = links[
-        links["query_system"].str[:4] != links["target_system"].str[:4]
-    ].reset_index(drop=True)
-    links = links.pivot(
-        index=["query_system", "target_system"],
-        columns="metric",
-        values="similarity",
-    ).reset_index()
-    query = " and ".join([f"{m} >= {t}" for (m, t) in cfg.filter_criteria.items()])
-    links = links.query(query)
-    links["target_id"] = links["target_system"].map(lambda x: x.split("_")[0])
+    output_file.parent.mkdir(exist_ok=True, parents=True)
+    if (output_file.parent / f"{output_file.stem}_intermediate.parquet").is_file():
+        links = pd.read_parquet(
+            output_file.parent / f"{output_file.stem}_intermediate.parquet"
+        )
+    else:
+        links = scores.query_protein_similarity(
+            search_db=search_db,
+            columns=["query_system", "target_system", "metric", "similarity"],
+            filters=filters,
+        )
+        assert links is not None
+        links = links.iloc[
+            links.groupby(["query_system", "target_system", "metric"], observed=True)[
+                "similarity"
+            ].idxmax()
+        ]
+        links = links[
+            links["query_system"].str[:4] != links["target_system"].str[:4]
+        ].reset_index(drop=True)
+        links = links.pivot(
+            index=["query_system", "target_system"],
+            columns="metric",
+            values="similarity",
+        ).reset_index()
+        query = " and ".join([f"{m} >= {t}" for (m, t) in cfg.filter_criteria.items()])
+        links = links.query(query)
+        links["target_id"] = links["target_system"].map(lambda x: x.split("_")[0])
+        links.to_parquet(
+            output_file.parent / f"{output_file.stem}_intermediate.parquet", index=False
+        )
 
     targets = set(links["target_id"])
     score_dir = search_db
     if search_db == "holo":
         score_dir = "apo"  # always get resolution from ingest
     target_files = [get_cif_file(data_dir, score_dir, x) for x in targets]
+    del links
 
     sort_scores = {}
     if search_db == "pred":
-        with multiprocessing.Pool(num_processes) as pool:
-            for target_id, resolution in tqdm(
-                pool.imap(get_plddt, target_files), total=len(target_files)
-            ):
-                sort_scores[target_id] = resolution
+        func = get_plddt
         ascending = False
     else:
-        with multiprocessing.Pool(num_processes) as pool:
-            for target_id, resolution in tqdm(
-                pool.imap(get_resolution, target_files), total=len(target_files)
-            ):
-                sort_scores[target_id] = resolution
+        func = get_resolution
         ascending = True
+    with multiprocessing.get_context("spawn").Pool(num_processes) as pool:
+        resolutions = pool.map(func, target_files)
+    sort_scores = dict(zip(targets, resolutions))
+
     nonnull = sum((v for v in sort_scores.values() if v is not None))
     LOG.info(f"non null scores: {nonnull}")
+    links = pd.read_parquet(
+        output_file.parent / f"{output_file.stem}_intermediate.parquet"
+    )
     links["sort_score"] = links["target_id"].map(sort_scores)
     links = (
         links[links["sort_score"].notna()]
@@ -197,17 +204,21 @@ def make_linked_structures_data_file(
         .head(cfg.num_per_system)
         .reset_index(drop=True)
     )
-    links.rename(columns={"query_system": "reference_system_id", "target_system": "id"})
-    links["receptor_file"] = links[["reference_system_id", "id"]].map(
-        lambda row: superposed_folder
-        / search_db
-        / row.reference_system_id
-        / row.id
-        / "superposed.cif"
+    links.rename(
+        columns={"query_system": "reference_system_id", "target_system": "id"},
+        inplace=True,
     )
-    links["ligand_files"] = links["reference_system_id"].map(
-        lambda x: get_system_ligand_files(x)
+    links["receptor_file"] = links.apply(
+        lambda row: (
+            superposed_folder
+            / search_db
+            / row.reference_system_id
+            / row.id
+            / "superposed.cif"
+        ).as_posix(),
+        axis=1,
     )
+    links["ligand_files"] = links["reference_system_id"].apply(get_system_ligand_files)
     links.to_parquet(output_file, index=False)
 
 
@@ -301,7 +312,7 @@ def system_save_and_score_representatives(
 ) -> None:
     try:
         reference_system = utils.ReferenceSystem.from_reference_system(
-            data_dir / "raw_entries", system
+            data_dir / "raw_entries" / system[1:3], system
         )
     except Exception as e:
         LOG.error(
@@ -345,8 +356,7 @@ def save_linked_structures(
         Skips existing files if False
     """
     links = pd.read_parquet(links_file)
-    multiprocessing.set_start_method("spawn")
-    with multiprocessing.Pool(num_threads) as p:
+    with multiprocessing.get_context("spawn").Pool(num_threads) as p:
         p.starmap(
             system_save_and_score_representatives,
             [

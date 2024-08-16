@@ -35,6 +35,9 @@ def _validate_cfg(*, cfg: DictConfig, schema: dict[str, Any]) -> DictConfig:
         the validated config with post-init validation logic
     """
     keys = set(cfg.keys()).union(set(schema.keys()))
+    cfg = OmegaConf.to_container(cfg)
+    cfg.get("data", {}).pop("plinder_dir", None)
+    cfg.get("data", {}).pop("plinder_remote", None)
     return DictConfig({str(k): schema[str(k)](**cfg.get(k, {})) for k in keys})
 
 
@@ -63,7 +66,7 @@ def _clean_sort_config(*, cfg: Any) -> Any:
 
 class _get_config:
     _schema: dict[str, Any] = {}
-    _packages: set[str] = set()
+    _packages: dict[str, set[str]] = {}
     _cfg = DictConfig({})
 
     def __call__(
@@ -116,12 +119,17 @@ class _get_config:
         ):
             return self._cfg
         if package_schema not in self._packages:
-            self._packages.add(package_schema)
             dups = set(self._schema.keys()).intersection(schema.keys())
-            if len(dups):
+            degenerate = False
+            for keys in self._packages.values():
+                if dups <= keys:
+                    degenerate = True
+                    break
+            if len(dups) and not degenerate:
                 raise ValueError(
                     f"schema keys must be unique: found keys {dups} in schema='{package_schema}'"
                 )
+            self._packages[package_schema] = set(schema.keys())
         self._schema.update(schema)
         args = []
         if config is not None:
@@ -180,9 +188,9 @@ def _getenv_default(key: str, default: str) -> str:
 
 
 @dataclass
-class _BaseConfig:
+class DataConfig:
     """
-    A class to represent batching parameters used to scatter data pipeline tasks.
+    A class for all the data configuration.
 
     Note
     ----
@@ -206,10 +214,10 @@ class _BaseConfig:
     """
 
     plinder_release: str = field(
-        default_factory=partial(_getenv_default, "PLINDER_RELEASE", "2024-06")
+        default_factory=partial(_getenv_default, "PLINDER_RELEASE", "2024-04")
     )
     plinder_iteration: str = field(
-        default_factory=partial(_getenv_default, "PLINDER_ITERATION", "v2")
+        default_factory=partial(_getenv_default, "PLINDER_ITERATION", "v1")
     )
     plinder_mount: str = field(
         default_factory=partial(
@@ -222,31 +230,36 @@ class _BaseConfig:
     plinder_dir: str = field(init=False)
     plinder_remote: str = field(init=False)
 
-    def __post_init__(self) -> None:
-        suffix = self.plinder_release
-        if self.plinder_iteration:
-            suffix = f"{self.plinder_release}/{self.plinder_iteration}"
-        self.plinder_dir = f"{self.plinder_mount}/{self.plinder_bucket}/{suffix}"
-        self.plinder_remote = f"gs://{self.plinder_bucket}/{suffix}"
-
-
-@dataclass
-class DataConfig(_BaseConfig):
     ingest: str = "ingest"
     validation: str = "validation"
     clusters: str = "clusters"
     entries: str = "entries"
     fingerprints: str = "fingerprints"
+    fingerprint_file: str = "ligands_per_system.parquet"
     index: str = "index"
+    manifest: str = "manifest"
     ligand_scores: str = "ligand_scores"
     ligands: str = "ligands"
+    links: str = "links"
+    linked_structures: str = "linked_structures"
     mmp: str = "mmp"
     scores: str = "scores"
     splits: str = "splits"
+    split_file: str = "split.parquet"
     systems: str = "systems"
     index_file: str = "annotation_table.parquet"
     manifest_file: str = "manifest.parquet"
     force_update: bool = False
+
+    def __post_init__(self) -> None:
+        suffix = self.plinder_release
+        if self.plinder_iteration:
+            suffix = f"{self.plinder_release}/{self.plinder_iteration}"
+        if self.plinder_mount in ["/plinder", "/", ""]:
+            self.plinder_dir = f"{self.plinder_mount}/{suffix}"
+        else:
+            self.plinder_dir = f"{self.plinder_mount}/{self.plinder_bucket}/{suffix}"
+        self.plinder_remote = f"gs://{self.plinder_bucket}/{suffix}"
 
 
 @dataclass

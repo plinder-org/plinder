@@ -16,6 +16,7 @@ from omegaconf import DictConfig
 
 from plinder.core.utils import schemas
 from plinder.core.utils.log import setup_logger
+from plinder.core.utils.unpack import expand_config_context
 from plinder.data.utils import tanimoto
 
 if TYPE_CHECKING:
@@ -51,32 +52,21 @@ def timeit(func: Callable[..., T]) -> Callable[..., T]:
     return wrapped
 
 
-def entry_exists(
-    *,
-    entry_dir: Path,
-    pdb_id: str,
-    wipe_entries: bool,
-    wipe_annotations: bool,
-    skip_existing_entries: bool,
-    skip_missing_annotations: bool,
-) -> bool:
+def entry_exists(*, entry_dir: Path, pdb_id: str) -> bool:
+    """
+    Check if the entry JSON file exists.
+
+    Parameters
+    ----------
+    entry_dir : Path
+        the directory containing entries
+    pdb_id : str
+        the PDB ID
+    """
     two_char_code = pdb_id[-3:-1]
     output = entry_dir / two_char_code / (pdb_id + ".json")
     output.parent.mkdir(exist_ok=True, parents=True)
-    pqt_df = entry_dir / two_char_code / (pdb_id + ".parquet")
-    if wipe_entries:
-        return False
-    if not skip_existing_entries:
-        return False
-    if output.is_file() and pqt_df.is_file():
-        return True
-    if output.is_file() and not pqt_df.is_file():
-        if wipe_annotations:
-            return False
-        if skip_missing_annotations:
-            return True
-        return False
-    return False
+    return output.is_file()
 
 
 @timeit
@@ -291,14 +281,19 @@ def get_local_contents(
     contents : list[str]
         list of directory-derived metadata contents
     """
-    if pdb_ids is not None and len(pdb_ids):
-        if as_four_char_ids:
-            return pdb_ids
-        return [f"pdb_0000{pdb_id}" for pdb_id in pdb_ids]
-    elif two_char_codes is not None and len(two_char_codes):
-        codes = two_char_codes
-    else:
-        codes = listdir(data_dir.as_posix())
+    kind, values = expand_config_context(
+        pdb_ids=pdb_ids,
+        two_char_codes=two_char_codes,
+    )
+    if kind == "pdb_ids":
+        return (
+            values if as_four_char_ids else [f"pdb_0000{pdb_id}" for pdb_id in values]
+        )
+    codes = (
+        values
+        if kind == "two_char_codes" and len(values)
+        else listdir(data_dir.as_posix())
+    )
     contents = []
     for code in codes:
         contents.extend(listdir((data_dir / code).as_posix()))
@@ -336,6 +331,49 @@ def partition_batch_scores(*, partition_dir: Path, scores_dir: Path) -> None:
             max_partitions=3939,
             schema=schemas.PROTEIN_SIMILARITY_SCHEMA,
         )
+
+
+def get_pdb_ids_in_scoring_dataset(*, data_dir: Path) -> dict[str, list[str]]:
+    """
+    Get all the pdb IDs that are present in the raw scoring dataset
+
+    Parameters
+    ----------
+    data_dir : Path
+        the root plinder dir
+    """
+    found = {}
+    dbs = data_dir / "dbs" / "subdbs"
+    for search_db in ["holo", "apo", "pred"]:
+        found[search_db] = [
+            path.stem for path in (dbs / f"search_db={search_db}").glob("*parquet")
+        ]
+    return found
+
+
+def get_alns(
+    *, data_dir: Path, mapped: bool = False
+) -> dict[str, dict[str, list[str]]]:
+    """
+    Get all the pdb IDs that are present in the raw alignment dataset
+
+    Parameters
+    ----------
+    data_dir : Path
+        the root plinder dir
+    """
+    sub = "mapped_aln" if mapped else "aln"
+    found: dict[str, dict[str, list[str]]] = {}
+    dbs = data_dir / "dbs" / "subdbs"
+    for search_db in ["holo", "apo", "pred"]:
+        found.setdefault(search_db, {})
+        for aln_type in ["foldseek", "mmseqs"]:
+            found[search_db].setdefault(aln_type, [])
+            found[search_db][aln_type] = [
+                path.stem
+                for path in (dbs / f"{search_db}_{aln_type}/{sub}/").glob("*parquet")
+            ]
+    return found
 
 
 def should_run_stage(stage: str, run: list[str], skip: list[str]) -> bool:
@@ -388,8 +426,8 @@ def ingest_flow_control(func: Callable[..., T]) -> Callable[..., T]:
             name = func.__name__.replace("join_", "", 1)
         if should_run_stage(
             name,
-            pipe.cfg.ingest.run_specific_stages,
-            pipe.cfg.ingest.skip_specific_stages,
+            pipe.cfg.flow.run_specific_stages,
+            pipe.cfg.flow.skip_specific_stages,
         ):
             chunks = None
             if len(args) and args[0] is not None:
@@ -415,20 +453,69 @@ def ingest_flow_control(func: Callable[..., T]) -> Callable[..., T]:
     return inner
 
 
+def create_index(*, data_dir: Path, force_update: bool = False) -> pd.DataFrame:
+    """
+    Create the index
+    """
+    if not (data_dir / "index" / "annotation_table.parquet").exists() or force_update:
+        dfs = []
+        for path in (data_dir / "qc" / "index").glob("*"):
+            df = pd.read_parquet(path)
+            if not df.empty:
+                dfs.append(df)
+        df = pd.concat(dfs).reset_index(drop=True)
+        (data_dir / "index").mkdir(exist_ok=True, parents=True)
+        df.to_parquet(data_dir / "index" / "annotation_table.parquet", index=False)
+    else:
+        df = pd.read_parquet(data_dir / "index" / "annotation_table.parquet")
+    update = False
+    if "pli_qcov__100__strong__component" not in df.columns or force_update:
+        try:
+            pli_qcov_cluster = pd.read_parquet(
+                data_dir
+                / "clusters"
+                / "cluster=components"
+                / "directed=True"
+                / "metric=pli_qcov"
+                / "threshold=100.parquet"
+            )
+            df["pli_qcov__100__strong__component"] = df["system_id"].map(
+                dict(zip(pli_qcov_cluster["system_id"], pli_qcov_cluster["label"]))
+            )
+            update = True
+        except Exception:
+            pass
+    if (
+        "protein_lddt_qcov_weighted_sum__100__strong__component" not in df.columns
+        or force_update
+    ):
+        try:
+            lddt_qcov_cluster = pd.read_parquet(
+                data_dir
+                / "clusters"
+                / "cluster=components"
+                / "directed=True"
+                / "metric=protein_lddt_qcov_weighted_sum"
+                / "threshold=100.parquet"
+            )
+            df["protein_lddt_qcov_weighted_sum__100__strong__component"] = df[
+                "system_id"
+            ].map(dict(zip(lddt_qcov_cluster["system_id"], lddt_qcov_cluster["label"])))
+            update = True
+        except Exception:
+            pass
+    if update or force_update:
+        df.to_parquet(data_dir / "index" / "annotation_table.parquet", index=False)
+    return df
+
+
 def create_nonredundant_dataset(*, data_dir: Path) -> None:
     """
     This is called in make_mmp_index to ensure the existence of the index
     and simultaneously generates a non-redundant index for various use
     cases. Ultimately this should run as the join step of structure_qc.
     """
-    if not (data_dir / "index" / "annotation_table.parquet").exists():
-        dfs = []
-        for path in (data_dir / "qc" / "index").glob("*"):
-            dfs.append(pd.read_parquet(path))
-        df = pd.concat(dfs).reset_index(drop=True)
-        df.to_parquet(data_dir / "index" / "annotation_table.parquet", index=False)
-    else:
-        df = pd.read_parquet(data_dir / "index" / "annotation_table.parquet")
+    df = create_index(data_dir=data_dir)
     df_trainable = df[
         ~(df.ligand_is_invalid | df.ligand_is_artifact | df.ligand_is_ion)
         & (df.ligand_passes_valence_checks)

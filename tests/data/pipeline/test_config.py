@@ -23,15 +23,15 @@ def test_foldseek_config(value, raises):
         config.FoldseekConfig(alignment_type=value)
 
 
-def test_ingest_config():
-    dc = config.IngestConfig()
-    cfg = OmegaConf.structured(config.IngestConfig())
+def test_flow_config():
+    dc = config._config.DataConfig()
+    cfg = OmegaConf.structured(config._config.DataConfig())
     assert dc.plinder_mount == cfg.plinder_mount
 
 
 def test_default_config():
     cfg = config.get_config(cached=False)
-    assert cfg.ingest.plinder_release is not None
+    assert cfg.data.plinder_release is not None
 
 
 def test_get_config_metaflow(tmp_path):
@@ -39,14 +39,14 @@ def test_get_config_metaflow(tmp_path):
     file.write_text(
         dedent(
             """
-            ingest:
+            flow:
               skip_specific_stages: foo
             """
         )
     )
     contents = dedent(
         """
-        scatter:
+        context:
           two_char_codes: xx
         """
     )
@@ -55,14 +55,14 @@ def test_get_config_metaflow(tmp_path):
         config_file=file.as_posix(),
         config_contents=contents,
     )
-    assert cfg.ingest.skip_specific_stages == ["foo"]
-    assert cfg.scatter.two_char_codes == ["xx"]
+    assert cfg.flow.skip_specific_stages == ["foo"]
+    assert cfg.context.two_char_codes == ["xx"]
 
 
 def test_get_config_comma_delimited():
     contents = dedent(
         """
-        scatter:
+        context:
           two_char_codes: xx,yy,zz
         """
     )
@@ -70,11 +70,11 @@ def test_get_config_comma_delimited():
         cached=False,
         config_contents=contents,
     )
-    assert cfg.scatter.two_char_codes == ["xx", "yy", "zz"]
+    assert cfg.context.two_char_codes == ["xx", "yy", "zz"]
 
 
 def test_get_config_cli():
-    test_args = ["prog", "scatter.two_char_batch_size=4"]
+    test_args = ["prog", "flow.download_rcsb_files_batch_size=4"]
     with unittest.mock.patch("sys.argv", test_args):
         cfg = config.get_config(cached=False)
-        assert cfg.scatter.two_char_batch_size == 4
+        assert cfg.flow.download_rcsb_files_batch_size == 4

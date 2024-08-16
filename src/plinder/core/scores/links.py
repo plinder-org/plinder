@@ -2,6 +2,8 @@
 # Distributed under the terms of the Apache License 2.0
 from __future__ import annotations
 
+from pathlib import Path
+
 import pandas as pd
 from duckdb import sql
 
@@ -10,19 +12,19 @@ from plinder.core.utils import cpl
 from plinder.core.utils.config import get_config
 from plinder.core.utils.dec import timeit
 from plinder.core.utils.log import setup_logger
-from plinder.core.utils.schemas import CLUSTER_SCHEMA
+from plinder.core.utils.schemas import STRUCTURE_LINK_SCHEMA
 
 LOG = setup_logger(__name__)
 
 
 @timeit
-def query_clusters(
+def query_links(
     *,
     columns: list[str] | None = None,
     filters: FILTERS = None,
-) -> pd.DataFrame | None:
+) -> pd.DataFrame:
     """
-    Query the cluster database.
+    Query the linked systems dataset
 
     Parameters
     ----------
@@ -33,21 +35,20 @@ def query_clusters(
 
     Returns
     -------
-    df : pd.DataFrame | None
-        the cluster results
+    df : pd.DataFrame
+        the linked systems results
     """
-
     cfg = get_config()
-    dataset = cpl.get_plinder_path(rel=cfg.data.clusters)
+    dataset = cpl.get_plinder_path(rel=cfg.data.links)
     query = make_query(
-        schema=CLUSTER_SCHEMA,
         dataset=dataset,
         filters=filters,
-        columns=columns,
-        nested=True,
+        columns=columns or ["*"],
+        schema=STRUCTURE_LINK_SCHEMA,
         allow_no_filters=True,
+        include_filename=True,
     )
-    if query is None:
-        LOG.warning("try minimally passing filters=[('metric', '==', 'pli_qcov')]")
-        return None
-    return sql(query).to_df()
+    assert query is not None
+    df = sql(query).to_df()
+    df["kind"] = df["filename"].apply(lambda x: Path(x).stem.split("_links")[0])
+    return df

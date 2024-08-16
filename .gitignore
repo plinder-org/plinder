@@ -189,4 +189,5 @@ src/plinder-data/plinder/data/artifacts
 *.bak*
 *.1.*
 tests/xx
+tests/test_data/plinder/mount/systems/
 artifacts

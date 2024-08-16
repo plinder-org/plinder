@@ -14,12 +14,10 @@ import biotite.sequence.align as align
 import numpy as np
 import pandas as pd
 import pyarrow
-import pyarrow.dataset as ds
 import pyarrow.parquet as pq
 from pyarrow import csv
 from tqdm import tqdm
 
-from plinder.core.utils import schemas
 from plinder.core.utils.log import setup_logger
 from plinder.data import databases
 from plinder.data.pipeline.config import FoldseekConfig, MMSeqsConfig
@@ -350,15 +348,8 @@ class Scorer:
             aln_file = sub_db / f"aln_{search_db}.tsv"
             LOG.info("run_alignments calling run_alignment:")
             LOG.info(f"    sub_db={sub_db}")
-            LOG.info(f"    query_db={sub_db / sub_db.name}")
-            LOG.info(f"    search_db={sub_db / 'search'}")
-            LOG.info(f"    tmp_dir={tmp_dir / output_folder.stem}")
             LOG.info(f"    aln_file={aln_file.with_suffix('.tsv')}")
-            # LOG.info(f"    aln_dir={aln_dir}")
             LOG.info(f"    aln_type={aln_type}")
-            LOG.info(
-                f"    target_db={self.db_dir / f'{search_db}_{aln_type}' / f'{search_db}_{aln_type}'}"
-            )
             try:
                 run_alignment(
                     aln_type=aln_type,
@@ -372,6 +363,14 @@ class Scorer:
                     alignment_config=self.get_config(search_db, aln_type),
                 )
             except Exception as e:
+                scratch = (
+                    Path(*output_folder.parts[:3])
+                    / "scratch"
+                    / "scores"
+                    / "run_alignment_failures"
+                )
+                scratch.mkdir(exist_ok=True, parents=True)
+                (scratch / f"{search_db}_{aln_type}.txt").write_text(f"{repr(e)}: {e}")
                 LOG.error(f"scoring: Error for {search_db}_{aln_type}: {e}")
                 continue
             aln_dir = self.db_dir / f"{search_db}_{aln_type}" / "aln"
@@ -381,49 +380,48 @@ class Scorer:
                     aln_file.with_suffix(".parquet") / f"query_pdb_id={pdb_id}"
                 )
                 if not pdb_id_file.exists():
+                    scratch = (
+                        Path(*output_folder.parts[:3])
+                        / "scratch"
+                        / "scores"
+                        / "run_alignments_failures"
+                    )
+                    scratch.mkdir(exist_ok=True, parents=True)
+                    (scratch / f"{search_db}_{aln_type}_{pdb_id}.txt").write_text("")
                     continue
                 pdb_id_df = pd.read_parquet(pdb_id_file)
                 if not pdb_id_df.empty:
                     pdb_id_df.to_parquet(aln_dir / f"{pdb_id}.parquet")
-
-    def aggregate_batch_scores(
-        self,
-        data_dir: Path,
-        batch_id: str,
-        pdb_ids: list[str],
-        search_db: str,
-        overwrite: bool = True,
-    ) -> None:
-        results = []
-        for pdb_id in tqdm(pdb_ids):
-            LOG.info(f"aggregating {pdb_id} scores for {search_db}")
-            score_path = self.get_score_df(
-                data_dir, pdb_id, search_db=search_db, overwrite=overwrite
-            )
-            if score_path.is_file():
-                results.append(score_path.as_posix())
-        sorting_columns = pq.SortingColumn.from_ordering(
-            schemas.PROTEIN_SIMILARITY_SCHEMA,
-            SORT_ORDER,
-        )
-        pqt_file = self.scores_dir / f"search_db={search_db}" / (batch_id + ".parquet")
-        pqt_file.parent.mkdir(exist_ok=True, parents=True)
-        LOG.info(f"writing {pqt_file}")
-        data = ds.dataset(results, schema=schemas.PROTEIN_SIMILARITY_SCHEMA)
-        LOG.info(f"rows of data {data.count_rows()}")
-        pq.write_table(
-            data.to_table().sort_by(SORT_ORDER),
-            pqt_file,
-            sorting_columns=sorting_columns,
-        )
+                else:
+                    scratch = (
+                        Path(*output_folder.parts[:3])
+                        / "scratch"
+                        / "scores"
+                        / "run_alignments_empty"
+                    )
+                    scratch.mkdir(exist_ok=True, parents=True)
+                    (scratch / f"{search_db}_{aln_type}_{pdb_id}.txt").write_text("")
 
     def get_score_df(
         self, data_dir: Path, pdb_id: str, search_db: str, overwrite: bool = True
     ) -> Path:
+        """
+        Convert aligmnent results to mapped alignment results. Then
+        aggregate the mapped alignment results into the scores dataset.
+        """
+        score_df_path = self.db_dir / f"search_db={search_db}" / f"{pdb_id}.parquet"
+        if overwrite or not score_df_path.exists():
+            LOG.info(f"get_score_df: aggregating scores for {pdb_id} to {search_db}")
+        else:
+            LOG.info(f"get_score_df: skipping existing {score_df_path}")
+            return score_df_path
         for aln_type in ["foldseek", "mmseqs"]:
             pdb_id_file = (
                 self.db_dir / f"{search_db}_{aln_type}" / "aln" / f"{pdb_id}.parquet"
             )
+            if not pdb_id_file.exists():
+                LOG.info(f"get_score_df: pdb_id_file={pdb_id_file} does not exist")
+                continue
             pdb_file = (
                 self.db_dir
                 / f"{search_db}_{aln_type}"
@@ -461,6 +459,16 @@ class Scorer:
                         pdb_file, index=True
                     )
                 except Exception as e:
+                    scratch = (
+                        Path(*pdb_id_file.parts[:3])
+                        / "scratch"
+                        / "scores"
+                        / "map_alignment_df_failures"
+                    )
+                    scratch.mkdir(exist_ok=True, parents=True)
+                    (scratch / f"{search_db}_{aln_type}_{pdb_id}.txt").write_text(
+                        f"{repr(e)}: {e}"
+                    )
                     LOG.error(
                         f"scoring: Error in map_alignment_df: {pdb_id} searching against {search_db} with {aln_type}: {repr(e)}"
                     )
@@ -468,20 +476,24 @@ class Scorer:
             else:
                 LOG.info(f"skipping creating {pdb_file} because it already exists")
 
-        score_df_path = self.db_dir / f"search_db={search_db}" / f"{pdb_id}.parquet"
-        if overwrite or not score_df_path.exists():
-            try:
-                score_df_path.parent.mkdir(exist_ok=True, parents=True)
-                LOG.info(f"aggregating scores for {pdb_id} to {search_db}")
-                df = self.aggregate_scores(pdb_id, search_db=search_db)
-                if df is not None and not df.empty:
-                    df.to_parquet(score_df_path, index=False)
-            except Exception as e:
-                LOG.error(
-                    f"scoring: Error in aggregate_scores: {pdb_id} searching against {search_db} with {aln_type}: {repr(e)}"
-                )
-        else:
-            LOG.info(f"skipping creating {score_df_path} because it already exists")
+        try:
+            score_df_path.parent.mkdir(exist_ok=True, parents=True)
+            LOG.info(f"aggregating scores for {pdb_id} to {search_db}")
+            df = self.aggregate_scores(pdb_id, search_db=search_db)
+            if df is not None and not df.empty:
+                df.to_parquet(score_df_path, index=False)
+        except Exception as e:
+            scratch = (
+                Path(*score_df_path.parts[:3])
+                / "scratch"
+                / "scores"
+                / "aggregate_scores_failures"
+            )
+            scratch.mkdir(exist_ok=True, parents=True)
+            (scratch / f"{search_db}_{pdb_id}.txt").write_text(f"{repr(e)}: {e}")
+            LOG.error(
+                f"scoring: Error in aggregate_scores: {pdb_id} searching against {search_db}: {repr(e)}"
+            )
         return score_df_path
 
     def load_alignments(

@@ -10,7 +10,7 @@ from zipfile import ZipFile
 import pandas as pd
 from omegaconf import DictConfig
 
-from plinder.core.utils import gcs
+from plinder.core.utils import cpl, unpack
 from plinder.core.utils.config import get_config
 from plinder.core.utils.dec import timeit
 from plinder.core.utils.log import setup_logger
@@ -45,23 +45,15 @@ def get_plindex(
         return _PLINDEX
     cfg = cfg or get_config()
     suffix = f"{cfg.data.index}/{cfg.data.index_file}"
-    local = Path(f"{cfg.data.plinder_dir}/{suffix}")
-    if not local.exists() or cfg.data.force_update:
-        remote = f"{cfg.data.plinder_remote}/{suffix}"
-        LOG.info(f"downloading {remote}")
-        df = pd.read_parquet(remote)
-        local.parent.mkdir(exist_ok=True, parents=True)
-        df.to_parquet(local, index=False)
-        return df
-    LOG.info(f"reading {local}")
-    _PLINDEX = pd.read_parquet(local)
+    index = cpl.get_plinder_path(rel=suffix)
+    LOG.info(f"reading {index}")
+    _PLINDEX = pd.read_parquet(index)
     return _PLINDEX
 
 
 def get_manifest(
     *,
     cfg: Optional[DictConfig] = None,
-    plindex: Optional[pd.DataFrame] = None,
 ) -> pd.DataFrame:
     """
     Fetch the manifest and cache it
@@ -83,11 +75,11 @@ def get_manifest(
     if _MANIFEST is not None:
         return _MANIFEST
     cfg = cfg or get_config()
-    suffix = f"{cfg.data.index}/{cfg.data.manifest_file}"
+    suffix = f"{cfg.data.manifest}/{cfg.data.manifest_file}"
     manifest = Path(f"{cfg.data.plinder_dir}/{suffix}")
     if not manifest.exists() or cfg.data.force_update:
-        if plindex is None:
-            plindex = get_plindex(cfg=cfg)
+        manifest.parent.mkdir(exist_ok=True, parents=True)
+        plindex = get_plindex(cfg=cfg)
         plindex[["system_id", "entry_pdb_id"]].to_parquet(manifest, index=False)
     _MANIFEST = pd.read_parquet(manifest)
     return _MANIFEST
@@ -125,9 +117,9 @@ def _prune_entry(entry: dict[str, Any]) -> dict[str, Any]:
 
 
 @timeit
-def _load_entries_from_zips(
+def load_entries(
     *,
-    cfg: DictConfig,
+    cfg: Optional[DictConfig] = None,
     two_char_codes: list[str] | None = None,
     pdb_ids: list[str] | None = None,
     prune: bool = True,
@@ -154,45 +146,24 @@ def _load_entries_from_zips(
     entry_dir = Path(cfg.data.plinder_dir) / cfg.data.entries
     entry_dir.mkdir(exist_ok=True, parents=True)
 
-    per_zip: dict[str, list[str]] | None = None
-    entry_msg = "all"
-    if pdb_ids is not None:
-        zip_paths_set = set()
-        per_zip = {}
-        for pdb_id in pdb_ids:
-            code = pdb_id[-3:-1]
-            zip_paths_set.add(entry_dir / f"{code}.zip")
-            per_zip.setdefault(code, [])
-            per_zip[code].append(f"{pdb_id}.json")
-        entry_msg = str(sum((len(pz) for pz in per_zip.values())))
-        zip_paths = list(zip_paths_set)
-    elif two_char_codes is not None:
-        zip_paths = [entry_dir / f"{code}.zip" for code in two_char_codes]
-    else:
-        # start with remote paths in case we have not downloaded them yet
-        zip_paths = [
-            entry_dir / Path(blob).name
-            for blob in gcs.list_dir(
-                gcs_path=(Path(cfg.data.plinder_remote) / cfg.data.entries).as_posix(),
-                cfg=cfg,
-            )
-        ]
-    gcs.download_if_not_exists(
-        local_paths=zip_paths,
-        remote_root=Path(cfg.data.plinder_remote) / cfg.data.entries,
+    zips = unpack.get_zips_to_unpack(
+        kind=cfg.data.entries,
         cfg=cfg,
+        two_char_codes=two_char_codes,
+        pdb_ids=pdb_ids,
     )
     reduced: dict[str, Any] = {}
-    LOG.info(f"attempting to load {entry_msg} entries from {len(zip_paths)} zips")
-    for zip_path in zip_paths:
+    LOG.info(f"loading entries from {len(zips)} zips")
+    for zip_path, pdb_ids in zips.items():
         with ZipFile(zip_path) as archive:
-            names = archive.namelist()
-            if per_zip is not None:
-                names = per_zip[zip_path.stem]
+            if len(pdb_ids):
+                names = [f"{pdb_id}.json" for pdb_id in pdb_ids]
+            else:
+                names = archive.namelist()
             for name in names:
                 with archive.open(name) as obj:
                     pdb_id = name.replace(".json", "")
-                    # TODO: port Entry to plinder-core for better validation
+                    # TODO: port Entry to plinder.core for model validation
                     if prune:
                         reduced[pdb_id] = _prune_entry(load(obj))
                     else:
@@ -201,21 +172,19 @@ def _load_entries_from_zips(
     return reduced
 
 
-def load_entries(
-    *,
-    pdb_ids: str | list[str] | None = None,
-    two_char_codes: str | list[str] | None = None,
-    cfg: Optional[DictConfig] = None,
-    prune: bool = True,
-) -> dict[str, Any]:
-    if isinstance(pdb_ids, str):
-        pdb_ids = [pdb_ids]
-    if isinstance(two_char_codes, str):
-        two_char_codes = [two_char_codes]
-    result: dict[str, Any] = _load_entries_from_zips(
-        cfg=cfg,
-        two_char_codes=two_char_codes,
-        pdb_ids=pdb_ids,
-        prune=prune,
+def download_plinder_cmd() -> None:
+    """
+    Download the full plinder dataset for the current configuration.
+    Note that even though this is wrapped in a progress bar, the estimated
+    completion time can vary wildly as it iterates over larger files vs.
+    smaller ones.
+    """
+    cfg = get_config()
+    LOG.info(
+        f"""
+downloading {cfg.data.plinder_remote} -> {cfg.data.plinder_dir}
+if this is the first time you are running this command, it will take a while!
+the estimated time on the progress bar may vary wildly based on file size
+if you need to cancel this and come back to it, it will pick up where it left off"""
     )
-    return result
+    cpl.get_plinder_path()

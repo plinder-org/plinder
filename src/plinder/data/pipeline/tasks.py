@@ -1,20 +1,25 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
+from __future__ import annotations
+
 import os
+from concurrent.futures import ALL_COMPLETED, Future, ThreadPoolExecutor, wait
 from pathlib import Path
 from shutil import rmtree
+from string import ascii_lowercase, digits
 from subprocess import check_output
 from textwrap import dedent
+from typing import Any
 from zipfile import ZIP_DEFLATED, ZipFile
 
 import pandas as pd
 from omegaconf import DictConfig
+from tqdm import tqdm
 
 from plinder.core.utils import gcs
 from plinder.core.utils.log import setup_logger
 from plinder.data import clusters, databases, leakage, splits
 from plinder.data.pipeline import io, utils
-from plinder.data.pipeline.config import METRICS
 from plinder.data.utils import tanimoto
 
 LOG = setup_logger(__name__)
@@ -137,20 +142,21 @@ def download_alternative_datasets(
 
     """
     kws = dict(data_dir=data_dir, force_update=force_update)
-    LOG.info("download_alternative_datasets: cofactors")
-    io.download_cofactors(**kws)
-    LOG.info("download_alternative_datasets: seqres")
-    io.download_seqres_data(**kws)
-    LOG.info("download_alternative_datasets: kinase")
-    io.download_kinase_data(**kws)
-    LOG.info("download_alternative_datasets: ecod")
-    io.download_ecod_data(**kws)
-    LOG.info("download_alternative_datasets: panther")
-    io.download_panther_data(**kws)
-    LOG.info("download_alternative_datasets: components")
-    io.download_components_cif(**kws)
-    LOG.info("download_alternative_datasets: affinity")
-    io.download_affinity_data(**kws)
+    with ThreadPoolExecutor() as executor:
+        futures: list[Future[Any]] = [
+            executor.submit(io.download_cofactors, **kws),
+            executor.submit(io.download_seqres_data, **kws),
+            executor.submit(io.download_kinase_data, **kws),
+            executor.submit(io.download_panther_data, **kws),
+            executor.submit(io.download_components_cif, **kws),
+            executor.submit(io.download_ecod_data, **kws),
+            executor.submit(io.download_affinity_data, **kws),
+        ]
+        wait(futures, return_when=ALL_COMPLETED)
+        for future in futures:
+            exc = future.exception()
+            if exc is not None:
+                raise exc
 
 
 def make_dbs(*, data_dir: Path, sub_databases: list[str]) -> None:
@@ -181,10 +187,7 @@ def scatter_make_entries(
     batch_size: int,
     two_char_codes: list[str],
     pdb_ids: list[str],
-    wipe_entries: bool,
-    wipe_annotations: bool,
-    skip_existing_entries: bool,
-    skip_missing_annotations: bool,
+    force_update: bool,
 ) -> list[list[str]]:
     """
     Distribute annotation generation by pdb id rather than
@@ -197,38 +200,29 @@ def scatter_make_entries(
         the root plinder dir
     batch_size : int
         how many codes to put in a chunk
+    force_update : bool
     two_char_codes : list[str], default=[]
         only consider particular codes
     pdb_ids : list[str], default=[]
         only consider particular pdb IDs
-    wipe_entries : bool
-        don't actually wipe but incorporate logic in entry_exists
-    wipe_annotations : bool
-        don't actually wipe but incorporate logic in entry_exists
-    skip_existing_entries : bool
-        don't include pdb_dir if entry exists
-    skip_missing_annotations : bool
-        don't include pdb_dir even if annotation doesn't exist
+    force_update : bool
+        if True, re-process existing entries
     """
     pdb_dirs = utils.get_local_contents(
         data_dir=data_dir / "ingest",
         two_char_codes=two_char_codes,
         pdb_ids=pdb_ids,
     )
-    entry_dir = data_dir / "raw_entries"
-    pdb_dirs = [
-        pdb_dir
-        for pdb_dir in pdb_dirs
-        if not utils.entry_exists(
-            entry_dir=entry_dir,
-            pdb_id=pdb_dir[-4:],
-            wipe_entries=wipe_entries,
-            wipe_annotations=wipe_annotations,
-            skip_existing_entries=skip_existing_entries,
-            skip_missing_annotations=skip_missing_annotations,
-        )
-    ]
-    LOG.info(f"scatter_make_entries: found {len(pdb_dirs)} CIFs")
+    if not force_update:
+        pdb_dirs = [
+            pdb_dir
+            for pdb_dir in pdb_dirs
+            if not utils.entry_exists(
+                entry_dir=data_dir / "raw_entries",
+                pdb_id=pdb_dir[-4:],
+            )
+        ]
+    LOG.info(f"scatter_make_entries: found {len(pdb_dirs)} PDBs")
     return [
         pdb_dirs[pos : pos + batch_size] for pos in range(0, len(pdb_dirs), batch_size)
     ]
@@ -238,10 +232,7 @@ def make_entries(
     *,
     data_dir: Path,
     pdb_dirs: list[str],
-    wipe_entries: bool,
-    wipe_annotations: bool,
-    skip_existing_entries: bool,
-    skip_missing_annotations: bool,
+    force_update: bool,
     annotation_cfg: DictConfig,
     entry_cfg: DictConfig,
     cpu: int = 1,
@@ -261,14 +252,8 @@ def make_entries(
         the root plinder dir
     pdb_dirs : list[str]
         list of pdb directories to process
-    wipe_entries : bool
-        wipe entry prior to generating
-    wipe_annotations : bool
-        wipe annotation prior to generating
-    skip_existing_entries : bool
-        if True (and files exist) don't process
-    skip_missing_annotations : bool
-        if True (and entry exists) don't process
+    force_update : bool
+        if True, force re-processing
     annotation_cfg : DictConfig
         from plinder.data.pipeline.config.AnnotationConfig
     entry_cfg : DictConfig
@@ -296,21 +281,11 @@ def make_entries(
             two_char_code = pdb_dir[-3:-1]
             pdb_id = pdb_dir[-4:]
             output = output_dir / two_char_code / (pdb_id + ".json")
-            if wipe_entries and output.is_file():
-                output.unlink()
-
-            pqt_df = output_dir / two_char_code / (pdb_id + ".parquet")
-            if wipe_annotations and pqt_df.is_file():
-                pqt_df.unlink()
+            if not force_update and output.is_file():
+                LOG.info(f"skipping {pdb_id} since entry exists already")
+                continue
             output.parent.mkdir(exist_ok=True, parents=True)
-            if output.is_file():
-                if skip_existing_entries:
-                    LOG.info(f"skipping {pdb_id} since entry exist already")
-                    continue
-            #     elif not pqt_df.is_file() and skip_missing_annotations:
-            #         LOG.info(f"skipping {pdb_id} since skip_missing_annotations is set")
-            #         continue
-            check_finished.append((pdb_dir, output, pqt_df))
+            check_finished.append((pdb_dir, output))
             # cifs are in ingest/{two_char_code}/pdb_0000{pdb_id}/
             # but vals are in reports/{two_char_code}/{pdb_id}/
             # and not all cifs have vals so gracefully handle
@@ -351,7 +326,7 @@ def make_entries(
         LOG.error("beep boop mpqueue timed out")
 
     rerun = []
-    for pdb_dir, output, pqt_df in check_finished:
+    for pdb_dir, output in check_finished:
         if output.is_file():
             continue
         rerun.append(pdb_dir)
@@ -547,38 +522,26 @@ def scatter_make_ligands(
     batch_size: int,
     two_char_codes: list[str],
     pdb_ids: list[str],
-    skip_existing_entries: bool,
-    skip_missing_annotations: bool,
-    wipe_entries: bool,
-    wipe_annotations: bool,
 ) -> list[list[str]]:
     """ """
-    path_to_check = data_dir / "ingest"
-    LOG.info(f"scatter_make_ligands: {path_to_check} {path_to_check.exists()}")
-
-    pdb_dirs = utils.get_local_contents(
+    pdb_ids = utils.get_local_contents(
         data_dir=data_dir / "ingest",
         two_char_codes=two_char_codes,
         pdb_ids=pdb_ids,
         as_four_char_ids=True,
     )
-    LOG.info(f"scatter_make_ligands: pdb_dirs of {len(pdb_dirs)}")
-    entry_dir = data_dir / "raw_entries"
-    pdb_dirs = [
-        pdb_dir
-        for pdb_dir in pdb_dirs
+    LOG.info(f"scatter_make_ligands: found {len(pdb_ids)} PDBs from ingest")
+    pdb_ids = [
+        pdb_id
+        for pdb_id in pdb_ids
         if utils.entry_exists(
-            entry_dir=entry_dir,
-            pdb_id=pdb_dir,
-            wipe_entries=wipe_entries,
-            wipe_annotations=wipe_annotations,
-            skip_existing_entries=skip_existing_entries,
-            skip_missing_annotations=skip_missing_annotations,
+            entry_dir=data_dir / "raw_entries",
+            pdb_id=pdb_id,
         )
     ]
-    LOG.info(f"scatter_make_ligands: found {len(pdb_dirs)} valid entries")
+    LOG.info(f"scatter_make_ligands: found {len(pdb_ids)} PDBs from raw_entries")
     return [
-        pdb_dirs[pos : pos + batch_size] for pos in range(0, len(pdb_dirs), batch_size)
+        pdb_ids[pos : pos + batch_size] for pos in range(0, len(pdb_ids), batch_size)
     ]
 
 
@@ -658,7 +621,7 @@ def make_ligand_scores(
     )
 
 
-def scatter_make_scorers(
+def scatter_protein_scoring(
     *,
     data_dir: Path,
     batch_size: int,
@@ -691,71 +654,14 @@ def scatter_make_scorers(
         pdb_ids=pdb_ids,
         as_four_char_ids=True,
     )
-    # entry_dir = data_dir / "raw_entries"
-    # pdb_ids = [
-    #     pdb_id
-    #     for pdb_id in pdb_ids
-    #     if utils.entry_exists(
-    #         entry_dir=entry_dir,
-    #         pdb_id=pdb_id,
-    #         wipe_entries=False,
-    #         wipe_annotations=False,
-    #         skip_existing_entries=True,
-    #         skip_missing_annotations=True,
-    #     )
-    # ]
-    LOG.info(f"scatter_make_scorers: found {len(pdb_ids)} pdb IDs")
-    return [
-        pdb_ids[pos : pos + batch_size] for pos in range(0, len(pdb_ids), batch_size)
+    pdb_ids = [
+        pdb_id
+        for pdb_id in pdb_ids
+        if utils.entry_exists(
+            entry_dir=data_dir / "raw_entries",
+            pdb_id=pdb_id,
+        )
     ]
-
-
-def scatter_run_batch_searches(
-    *,
-    data_dir: Path,
-    batch_size: int,
-    two_char_codes: list[str],
-    pdb_ids: list[str],
-) -> list[list[str]]:
-    """
-    Split all the PDB IDs in the dataset
-    to be used in score generation.
-
-    Parameters
-    ----------
-    data_dir : Path
-        the root plinder dir
-    batch_size : int
-        how many codes to put in a chunk
-    two_char_codes : list[str], default=[]
-        only consider particular codes
-    pdb_ids : list[str], default=[]
-        only consider particular pdb IDs
-
-    Returns
-    -------
-    codes : list[list[str]]
-        list of lists of chunks of two character codes
-    """
-    pdb_ids = utils.get_local_contents(
-        data_dir=data_dir / "ingest",
-        two_char_codes=two_char_codes,
-        pdb_ids=pdb_ids,
-        as_four_char_ids=True,
-    )
-    # entry_dir = data_dir / "raw_entries"
-    # pdb_ids = [
-    #     pdb_id
-    #     for pdb_id in pdb_ids
-    #     if utils.entry_exists(
-    #         entry_dir=entry_dir,
-    #         pdb_id=pdb_id,
-    #         wipe_entries=False,
-    #         wipe_annotations=False,
-    #         skip_existing_entries=True,
-    #         skip_missing_annotations=True,
-    #     )
-    # ]
     LOG.info(f"scatter_make_scorers: found {len(pdb_ids)} pdb IDs")
     return [
         pdb_ids[pos : pos + batch_size] for pos in range(0, len(pdb_ids), batch_size)
@@ -788,30 +694,49 @@ def run_batch_searches(
     rmtree(batch_db_dir)
 
 
+def scatter_missing_scores(
+    *,
+    data_dir: Path,
+    batch_size: int,
+) -> list[list[str]]:
+    present = utils.get_pdb_ids_in_scoring_dataset(data_dir=data_dir)
+    alns = utils.get_alns(data_dir=data_dir, mapped=True)
+    rerun = set()
+    for search_db, pdb_ids in present.items():
+        aln_foldseek = alns[search_db]["foldseek"]
+        aln_mmseqs = alns[search_db]["mmseqs"]
+        aln = set(aln_foldseek).union(aln_mmseqs)
+        rerun |= aln.difference(pdb_ids)
+    run = sorted(rerun)
+    return [run[pos : pos + batch_size] for pos in range(0, len(run), batch_size)]
+
+
 def make_batch_scores(
     *,
     data_dir: Path,
     pdb_ids: list[str],
     scorer_cfg: DictConfig,
+    force_update: bool,
 ) -> None:
-    scorer, entry_ids, batch_db_dir = utils.get_scorer(
+    scorer, entry_ids, _ = utils.get_scorer(
         data_dir=data_dir,
         pdb_ids=pdb_ids,
         scorer_cfg=scorer_cfg,
         load_entries=False,
     )
     for search_db in scorer_cfg.sub_databases:
-        LOG.info("make_batch_scores: aggregating batch scores")
-        scorer.aggregate_batch_scores(
-            data_dir=data_dir,
-            batch_id=batch_db_dir.stem,
-            pdb_ids=entry_ids,
-            search_db=search_db,
-            overwrite=True,
-        )
+        for pdb_id in tqdm(entry_ids):
+            scorer.get_score_df(
+                data_dir, pdb_id, search_db=search_db, overwrite=force_update
+            )
 
 
-def collate_partitions(*, data_dir: Path, row_group_size: int = 500_000) -> None:
+def scatter_collate_partitions() -> list[list[str]]:
+    partitions = [[i] for i in digits + ascii_lowercase] + [["apo"], ["pred"]]
+    return partitions[:1]
+
+
+def collate_partitions(*, data_dir: Path, partition: list[str]) -> None:
     """
     Collate the batch results from make_batch_scores into a partitioned
     sorted dataset using duckdb.
@@ -820,34 +745,67 @@ def collate_partitions(*, data_dir: Path, row_group_size: int = 500_000) -> None
     ----------
     data_dir : Path
         plinder root dir
-    partitions : Path
-        root directory of batch partitions
+    partition : list[str]
+        partitions to re-write
     """
     import duckdb
 
-    score_dir = data_dir / "scores"
-    for search_db in ["holo", "apo", "pred"]:
-        LOG.info(f"collate_partitions: collating search_db={search_db}")
-        dst_dir = Path("/plinder/2024-06/duckdb/search_db={search_db}/")
-        dst_dir.mkdir(exist_ok=True, parents=True)
-        duckdb.sql(
-            dedent(
-                f"""
-                    COPY
-                        (select * from '{score_dir}/search_db={search_db}/*.parquet')
-                    TO
-                        '{dst_dir}/*.parquet'
-                    (FORMAT PARQUET, ROW_GROUP_SIZE {row_group_size}, PARTITION_BY (metric))
-                """
-            )
+    part: str
+    [part] = partition
+    con = duckdb.connect()
+    con.sql(f"set temp_directory='/plinder/tmp/{part}';")
+
+    search_db = "holo"
+    src = "*.parquet"
+    tgt = "*.parquet"
+    if part in ["apo", "pred"]:
+        search_db = part
+        src = f"*{part}.parquet"
+        tgt = f"{part}.parquet"
+    score_dir = data_dir / "scores" / f"search_db={search_db}"
+    source_dir = data_dir / "dbs" / "subdbs" / f"search_db={search_db}"
+    source = f"{source_dir}/{src}"
+    target = f"{score_dir}/{tgt}"
+
+    score_dir.mkdir(exist_ok=True, parents=True)
+    con.sql(
+        dedent(
+            f"""
+                COPY
+                    (select * from '{source}' order by metric, similarity desc)
+                TO
+                    '{target}'
+                (FORMAT PARQUET, ROW_GROUP_SIZE 500_000);
+            """
         )
+    )
 
 
 def scatter_make_components_and_communities(
+    *,
+    data_dir: Path,
+    metrics: list[str],
     thresholds: list[int],
     stop_on_cluster: int,
+    skip_existing_clusters: bool,
 ) -> list[list[tuple[str, int]]]:
-    values = [[(metric, threshold)] for metric in METRICS for threshold in thresholds]
+    values = [[(metric, threshold)] for metric in metrics for threshold in thresholds]
+
+    rerun = []
+    for tup in values:
+        metric, threshold = tup[0]
+        do = False
+        for cluster in ["components", "communities"]:
+            for directed in [True, False]:
+                if do:
+                    continue
+                if not (
+                    data_dir
+                    / f"clusters/cluster={cluster}/directed={directed}/metric={metric}/threshold={threshold}.parquet"
+                ).is_file() and not skip_existing_clusters:
+                    do = True
+        if do:
+            rerun.append(tup)
     if stop_on_cluster:
         values = values[:stop_on_cluster]
     return values
@@ -1052,14 +1010,27 @@ def assign_apo_pred_systems(
     search_db: str,
     cpu: int = 8,
 ) -> None:
-    from plinder.data.save_linked_structures import make_linked_structures_data_file
+    from plinder.data.save_linked_structures import (
+        make_linked_structures_data_file,
+        save_linked_structures,
+    )
 
     save_dir = data_dir / "assignments"
     linked_structures = data_dir / "linked_structures"
-    make_linked_structures_data_file(
-        data_dir=data_dir,
-        search_db="holo",
-        superposed_folder=save_dir,
-        output_file=linked_structures / f"{search_db}_links.parquet",
-        num_processes=cpu,
-    )
+    for search_db in ["apo", "pred"]:
+        output_file = linked_structures / f"{search_db}_links.parquet"
+        make_linked_structures_data_file(
+            data_dir=data_dir,
+            search_db=search_db,
+            superposed_folder=save_dir,
+            output_file=output_file,
+            num_processes=cpu,
+        )
+
+        save_linked_structures(
+            links_file=output_file,
+            data_dir=data_dir,
+            search_db=search_db,
+            output_folder=linked_structures,
+            num_threads=cpu,
+        )

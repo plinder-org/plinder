@@ -1,10 +1,14 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
+import os
+from concurrent.futures import ALL_COMPLETED, ThreadPoolExecutor, wait
 from functools import wraps
+from pathlib import Path
 from time import sleep
-from typing import Callable, Optional, TypeVar, Union, overload
+from typing import Callable, Iterable, Optional, TypeVar, Union, overload
 
-from cloudpathlib import AnyPath, GSClient
+from cloudpathlib import CloudPath, GSClient, GSPath
+from omegaconf import DictConfig
 from tqdm.contrib.concurrent import thread_map
 
 from plinder.core.utils.config import get_config
@@ -18,7 +22,7 @@ LOG = setup_logger(__name__)
 def _retry_decorator(retries: int) -> Callable[[Callable[..., T]], Callable[..., T]]:
     def decorator(func: Callable[..., T]) -> Callable[..., T]:
         @wraps(func)
-        def inner(path: AnyPath) -> T:
+        def inner(path: GSPath) -> T:
             exc: Optional[Exception] = None
             for i in range(1, retries + 1):
                 try:
@@ -52,34 +56,57 @@ def retry(
     return _retry_decorator(retries)(f)
 
 
+def thread_pool(func: Callable[..., T], iter: Iterable[T]) -> None:
+    with ThreadPoolExecutor() as executor:
+        futures = [executor.submit(func, item) for item in iter]
+        wait(futures, return_when=ALL_COMPLETED)
+        for future in futures:
+            exc = future.exception()
+            if exc is not None:
+                raise exc
+
+
 @retry
-@timeit
-def ping(path: AnyPath) -> None:
-    path.fspath
+def _quiet_ping(path: GSPath) -> None:
+    if isinstance(path, CloudPath):
+        LOG.debug(f"_ping: type(path)={type(path)} local={path.fspath}")
+        if not os.getenv("PLINDER_OFFLINE"):
+            path.fspath
+    else:
+        LOG.debug(f"_ping: type(path)={type(path)} local={path}")
 
 
 @timeit
-def download_many(*, rel: str) -> None:
+def download_paths(*, paths: list[GSPath]) -> None:
     """
-    Download many files from GCS concurrently. This us useful when
-    it is known that we need access to many files in a single operation.
+    Download pre-determined paths from GCS concurrently. This is useful
+    when we want to process a pre-determined subset of the data rather
+    than all of the contents of the dataset.
 
     Parameters
     ----------
-    rel : str
-        Relative path to the files to download.
+    paths : list[GSPath]
+        the paths to download
     """
-    root = get_plinder_path(rel=rel)
-    paths = [path for path in root.rglob("*") if not path.is_dir()]
-
-    @retry
-    def _ping(path: AnyPath) -> None:
-        path.fspath
-
-    thread_map(_ping, paths)
+    if os.getenv("PLINDER_OFFLINE"):
+        return
+    if len(paths) > 10:
+        thread_map(_quiet_ping, paths)
+    else:
+        thread_pool(_quiet_ping, paths)
 
 
-def get_plinder_path(*, rel: str) -> AnyPath:
+def _get_fsroot(cfg: DictConfig) -> str:
+    """
+    Kludge mainly for dealing with the NFS
+    """
+    root = cfg.data.plinder_mount
+    if root in ["/plinder", "/", ""]:
+        root = "/"
+    return str(root)
+
+
+def get_plinder_path(*, rel: str = "", download: bool = True) -> Path:
     """
     Get a cloudpathlib path to a file or directory in the plinder bucket.
     This provides a convenient way to manage local file caching since it
@@ -90,24 +117,38 @@ def get_plinder_path(*, rel: str) -> AnyPath:
     ----------
     rel : str
         Relative path to the file or directory.
+    download : bool, default=True
+        if True, download the files
 
     Returns
     -------
-    AnyPath
+    GSPath
         The cloudpathlib path.
     """
     cfg = get_config()
-    root = cfg.data.plinder_mount
-    if hasattr(cfg, "ingest"):
-        root = cfg.ingest.plinder_mount
-    if root == "/plinder":
-        root = "/"
-    elif root == "":
-        root = "/"
+    root = _get_fsroot(cfg)
     client = GSClient(local_cache_dir=root)
-    remote = f"{cfg.data.plinder_remote}/{rel}"
-    path = AnyPath(remote, client=client)
-    LOG.debug(f"gspath: remote={remote}")
-    ping(path)
-    LOG.debug(f"fspath: local={path.fspath}")
-    return path
+    remote = cfg.data.plinder_remote
+    if rel:
+        remote = f"{cfg.data.plinder_remote}/{rel}"
+    path = GSPath(remote, client=client)
+    LOG.debug(f"get_plinder_path: remote={path} root={root}")
+    if os.getenv("PLINDER_OFFLINE"):
+        return Path(path._local)
+    if download:
+        paths = [path] if path.is_file() else list(path.rglob("*"))
+        download_paths(paths=paths)
+    return Path(path.fspath)
+
+
+def get_plinder_paths(*, paths: list[Path]) -> list[Path]:
+    cfg = get_config()
+    root = _get_fsroot(cfg)
+    client = GSClient(local_cache_dir=root)
+    remote = GSPath(cfg.data.plinder_remote, client=client)
+    LOG.debug(f"get_plinder_paths: remote={remote} root={root} npaths={len(paths)}")
+    anypaths = [remote / path.relative_to(cfg.data.plinder_dir) for path in paths]
+    print(anypaths)
+    if not os.getenv("PLINDER_OFFLINE"):
+        download_paths(paths=anypaths)
+    return anypaths

@@ -73,7 +73,7 @@ def get_version_bump(base_tag: str | None = None) -> str:
             ),
             text=True,
         ).strip()
-        if log:
+        if log and "origin/main" in log:
             bump = token.split()[1]
             break
     if bump == "skip":
@@ -217,6 +217,7 @@ def build_image(tag: str | None = None, push: bool = False) -> str:
     env = get_env(tag)
     image = f"{env['IMAGE_REPO']}/plinder"
     build_tag = env["BUILD_TAG"]
+    registry = environ.get("PLINDER_REGISTRY", "/".join(get_image().split("/")[:-1]))
     cmd = [
         docker,
         "build",
@@ -224,6 +225,8 @@ def build_image(tag: str | None = None, push: bool = False) -> str:
         "dockerfiles/main/Dockerfile",
         "-t",
         f"{env['IMAGE_REPO']}/plinder:{build_tag}",
+        "-t",
+        f"{registry}/plinder:{build_tag}",
         "--secret",
         "id=INDEX_URL",
         "--build-arg",
@@ -236,7 +239,7 @@ def build_image(tag: str | None = None, push: bool = False) -> str:
     ]
     Proc(cmd, env=env).execute()
     if push:
-        cmd = [docker, "compose", "push", "plinder", "--quiet"]
+        cmd = [docker, "push", f"{registry}/plinder:{build_tag}"]
         Proc(cmd, env=env).execute()
     return f"{image}:{build_tag}"
 
@@ -245,6 +248,7 @@ def test_image(
     tag: str,
     push: bool = False,
     args: Optional[List[str]] = None,
+    dirty: bool = False,
 ) -> None:
     """
     Run the test service from docker compose. Optionally
@@ -259,10 +263,15 @@ def test_image(
         if True, push images to the artifact registry
     args : List[str], default=None
         the arguments to pass to the image
+    dirty : bool, default=False
+        if True, mount the current working tree
     """
     env = get_env(tag)
     docker = get_docker()
-    cmd = [docker, "compose", "run", "test"]
+    cmd = [docker, "compose", "run", "-e", "PLINDER_OFFLINE=true"]
+    if dirty:
+        cmd.extend(["-v", f"{Path.cwd()}/src/plinder:/opt/conda/lib/python3.9/site-packages/plinder"])
+    cmd.append("test")
     if args is not None and len(args):
         cmd.extend(
             split(f'''/bin/bash -c "python -m pytest -v -n auto {' '.join(args)} && cp .coverage reports/.coverage"''')
@@ -277,7 +286,9 @@ def run_image(
     args: Optional[List[str]] = None,
     build: bool = False,
     tag: str | None = None,
+    dirty: bool = False,
     it: bool = False,
+    script: str | None = None,
 ) -> None:
     """
     Run the image mounting the current working tree. This can be
@@ -317,10 +328,12 @@ def run_image(
         "-v",
         f"{home}/.local/share/plinder:/plinder",
         "-v",
-        f"{host}:{guest}",
+        f"{host}/plinder:{guest}",
         "-v",
         f"{host}:{app}",
     ]
+    if script:
+        cmd.extend(["-v", f"{host.parent}/{script}:{Path(app).parent}/{script}"])
     if it:
         import pty
 
@@ -355,8 +368,10 @@ def main(argv: Optional[List[str]] = None):
     )
     build = subs.add_parser("build", help="Build the app image")
     test = subs.add_parser("test", help="Test the app image")
+    test.add_argument("--dirty", default=False, action="store_true", help="Mount current working tree")
     run = subs.add_parser("run", help="Run the app image")
     run.add_argument("--it", default=False, action="store_true", help="Run in interactive mode")
+    run.add_argument("--script", default="", help="Script to run")
     for sub in [build, test, run]:
         sub.add_argument(
             "--tag", default=None, help="The image tag to pass to build_image",
@@ -388,6 +403,9 @@ def main(argv: Optional[List[str]] = None):
         "run": run_image,
     }
     kwargs = {} if command == "bump" else nsargs
+    if command is None:
+        parser.print_help()
+        exit()
     func[command](**kwargs)
 
 

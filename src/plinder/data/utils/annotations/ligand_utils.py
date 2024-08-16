@@ -15,11 +15,12 @@ from mmcif.api.PdbxContainers import DataContainer
 from openbabel import pybel
 from ost import io, mol
 from ost.conop import GetDefaultLib
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, BeforeValidator, Field
 from rdkit import Chem, RDLogger
 from rdkit.Chem import QED, AllChem, Crippen, rdMolDescriptors
 from rdkit.Chem.rdchem import Mol, RWMol
 
+from plinder.core.utils.config import get_config
 from plinder.data.common.constants import BASE_DIR
 from plinder.data.utils.annotations.extras import (
     get_ccd_smiles_dict,
@@ -64,6 +65,17 @@ NON_SMALL_MOL_LIG_TYPES = (
     + OLIGOSACCHARIDE_TYPES
     + MACROCYCLE_TYPES
 )
+
+
+def validate_chain_residue(obj: dict[str, ty.Any]) -> dict[str, ty.Any]:
+    clean = {}
+    for k, v in obj.items():
+        key = tuple(k.split(",")) if isinstance(k, str) else k
+        if isinstance(v, dict):
+            clean[key] = validate_chain_residue(v)
+        else:
+            clean[key] = v
+    return clean  # type: ignore
 
 
 def lig_has_dummies(
@@ -423,9 +435,7 @@ def parse_artifacts() -> set[str]:
     Returns:
         set[str]: set[str]
     """
-    artifact_log = (
-        BASE_DIR / "data/utils/annotations/static_files/artifacts_badlist.csv"
-    )
+    artifact_log = BASE_DIR / "utils/annotations/static_files/artifacts_badlist.csv"
     with open(artifact_log, "r") as f:
         lines = f.readlines()
     artifacts = {l.strip() for l in lines if not l.startswith("#")}
@@ -639,6 +649,13 @@ def annotate_interface_gaps_per_chain(
     )
 
 
+CrystalContacts = ty.Annotated[
+    dict[tuple[str, int], set[int]],
+    BeforeValidator(validate_chain_residue),
+    Field(default_factory=dict),
+]
+
+
 class Ligand(BaseModel):
     pdb_id: str
     biounit_id: str
@@ -691,7 +708,7 @@ class Ligand(BaseModel):
     posebusters_result: dict[str, ty.Any] = Field(default_factory=dict)
     unique_ccd_code: str | None = None
     waters: dict[str, list[int]] = Field(default_factory=dict)
-    crystal_contacts: dict[tuple[str, int], set[int]] = Field(default_factory=dict)
+    crystal_contacts: CrystalContacts
 
     """
     This dataclass defines as system which included a protein-ligand complex
@@ -1227,9 +1244,7 @@ class Ligand(BaseModel):
     def is_kinase_inhibitor(self) -> bool:
         global KINASE_INHIBITORS
         if KINASE_INHIBITORS is None:
-            from plinder.data.pipeline.config import IngestConfig
-
-            data_dir = Path(IngestConfig().plinder_dir)
+            data_dir = Path(get_config().data.plinder_dir)
             KINASE_INHIBITORS = parse_kinase_inhibitors(data_dir)
         return any(c in KINASE_INHIBITORS for c in self.ccd_code.split("-"))
 
@@ -1241,9 +1256,7 @@ class Ligand(BaseModel):
         global BINDING_AFFINITY
         pdbid_ligid = f"{self.pdb_id}_{self.ccd_code}".upper()
         if BINDING_AFFINITY is None:
-            from plinder.data.pipeline.config import IngestConfig
-
-            data_dir = Path(IngestConfig().plinder_dir)
+            data_dir = Path(get_config().data.plinder_dir)
             BINDING_AFFINITY = get_binding_affinity(data_dir)
         affinity = BINDING_AFFINITY.get(pdbid_ligid)
         if affinity is not None:

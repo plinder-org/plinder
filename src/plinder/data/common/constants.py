@@ -2,12 +2,12 @@
 # Distributed under the terms of the Apache License 2.0
 from __future__ import annotations
 
-from plinder.core import _root
+from plinder import _root
 
 PDB_FILE_COUNT = 615616
 CSV_FILE_COUNT = 331541
 
-BASE_DIR = _root
+BASE_DIR = _root / "data"
 
 three_to_one_noncanonical_mapping = {
     "004": "X",

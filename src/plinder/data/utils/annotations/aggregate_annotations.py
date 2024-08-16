@@ -14,9 +14,10 @@ from ost import io, mol
 from PDBValidation.ValidationFactory import ValidationFactory
 from plip.basic import config
 from posebusters import PoseBusters
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, BeforeValidator, Field
 from rdkit import RDLogger
 
+from plinder.core.utils.config import get_config
 from plinder.core.utils.log import setup_logger
 from plinder.data.utils.annotations.get_ligand_validation import (
     EntryValidation,
@@ -28,7 +29,7 @@ from plinder.data.utils.annotations.interaction_utils import (
     get_symmetry_mate_contacts,
 )
 from plinder.data.utils.annotations.interface_gap import annotate_interface_gaps
-from plinder.data.utils.annotations.ligand_utils import Ligand
+from plinder.data.utils.annotations.ligand_utils import Ligand, validate_chain_residue
 from plinder.data.utils.annotations.protein_utils import (
     Chain,
     detect_ligand_chains,
@@ -48,6 +49,13 @@ ECOD_DATA = None
 
 # Ignore Biolip artifacts
 config.biolip_list = []
+
+
+SymmetryMateContacts = ty.Annotated[
+    dict[tuple[str, int], dict[tuple[str, int], set[int]]],
+    BeforeValidator(validate_chain_residue),
+    Field(default_factory=dict),
+]
 
 
 def remove_alphabets(x: str) -> int:
@@ -491,9 +499,7 @@ class System(BaseModel):
     def get_pocket_domains(self, chains_dict: dict[str, Chain]) -> dict[str, str]:
         global ECOD_DATA
         if ECOD_DATA is None:
-            from plinder.data.pipeline.config import IngestConfig
-
-            data_dir = Path(IngestConfig().plinder_dir)
+            data_dir = Path(get_config().data.plinder_dir)
             ECOD_DATA = pd.read_parquet(data_dir / "dbs" / "ecod" / "ecod.parquet")
         ecod_df = ECOD_DATA[ECOD_DATA["pdb"] == self.pdb_id]
         ecod_mapping = dict(zip(ecod_df["domainid"], ecod_df["domain"]))
@@ -599,9 +605,7 @@ class Entry(BaseModel):
     validation: EntryValidation | None = None
     pass_criteria: bool | None = None
     water_chains: list[str] = Field(default_factory=list)
-    symmetry_mate_contacts: dict[
-        tuple[str, int], dict[tuple[str, int], set[int]]
-    ] = Field(default_factory=dict)
+    symmetry_mate_contacts: SymmetryMateContacts
 
     """
     This dataclass defines as system which included a protein-ligand complex
@@ -1262,9 +1266,7 @@ class Entry(BaseModel):
         """
         global ECOD_DATA
         if ECOD_DATA is None:
-            from plinder.data.pipeline.config import IngestConfig
-
-            data_dir = Path(IngestConfig().plinder_dir)
+            data_dir = Path(get_config().data.plinder_dir)
             ECOD_DATA = pd.read_parquet(data_dir / "dbs" / "ecod" / "ecod.parquet")
         ecod_df = ECOD_DATA[ECOD_DATA["pdb"] == self.pdb_id]
         if not len(ecod_df):
