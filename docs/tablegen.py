@@ -28,7 +28,9 @@ def generate_table(description_dir: Path, output_html_path: Path) -> None:
     _write_table(
         column_descriptions,
         output_html_path,
-        table_class="display",
+        # 'table' class is also used by Sphinx for all other tables,
+        # hence this class applies the same styling to this table as well.
+        table_class="table",
         table_id="tableReference",
     )
 
