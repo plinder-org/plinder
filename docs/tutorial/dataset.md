@@ -44,10 +44,10 @@ The directory downloaded from the bucket has the following structure:
 |   |-- entries              # raw annotations prior to consolidation (split by `two_char_code` and zipped)
 |   |-- fingerprints         # index mapping files for the ligand similarity dataset
 |   |-- index                # consolidated tabular annotations
-|   |-- leakage              # leakage results
+|   |-- leakage              # leakage analysis results for evaluation sets
 |   |-- ligand_scores        # ligand similarity parquet dataset
 |   |-- ligands              # ligand data expanded from entries for computing similarity
-|   |-- mmp                  # Matched molecular pairs (MMP) and Matched molecular series (MMS) data
+|   |-- mmp                  # ligand matched molecular pairs (MMP) and series (MMS) data
 |   |-- scores               # protein similarity parquet dataset
 |   |-- splits               # split files and the configs used to generate them (if available)
 |   |-- systems              # structure files for all systems (split by `two_char_code` and zipped)
@@ -55,7 +55,7 @@ The directory downloaded from the bucket has the following structure:
 
 The `systems`, `index`, `clusters`, `splits` and `leakage` directories are most the
 important ones for PLINDER utilization and will be covered in the tutorial, while the
-rest are for more curios users.
+rest are for more curious users.
 
 To download specific directories of interest, for example `splits`, run:
 
@@ -67,7 +67,7 @@ $ gsutil -m cp -r gs://plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/splits ~/
 
 Similar to the
 [PDB NextGen Archive](https://www.wwpdb.org/ftp/pdb-nextgen-archive-site), we split the
-structures into subdirectories of chunks to make loading and querying speed palatable.
+structures into subdirectories of chunks (using two penultimate characters of PDB code) to make loading and querying speed palatable.
 
 The structure files can be found in the subfolder
 `~/.local/share/plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/systems`.
@@ -92,7 +92,7 @@ All systems are listed and annotated in the table contained in the
 The [_Parquet_ format](https://parquet.apache.org/) is an efficient binary data format
 for storing table data.
 There is a multitude of tools that support reading `.parquet` files.
-Here we will use the Python package `pandas` to inspect `annotation_table.parquet`.
+Here we will use the Python package [`pandas`](https://pandas.pydata.org) to inspect `annotation_table.parquet`.
 
 ```python
 >>> df = pd.read_parquet("index/annotation_table.parquet")
@@ -208,8 +208,8 @@ The columns are:
 - `system_id`: the PLINDER system ID
 - `split`: split category, either `train` (training set), `test` (test set),
   `val` (training set) or `removed`.
-- `cluster`: cluster used in de-leaking the training vs test dataset.
-- `cluster_for_val_split`: cluster used in sampling validation set from training set.
+- `cluster`: cluster metric used in sampling test dataset.
+- `cluster_for_val_split`: cluster metric used in sampling validation set from training set.
 
 ## Checking leakage
 
