@@ -44,8 +44,11 @@ We recommend the [miniforge](https://github.com/conda-forge/miniforge) environme
 
 **NOTE**: We currently only support a Linux environment. `plinder`
 uses `openstructure` for some of its functionality and is available
-from the `aivant` conda channel using `conda install aivant::openstructure`, but it is only built targeting Linux architectures.
-For MacOS users, please see the relevant [docker](#package-publishing) resources below.
+from the `aivant` conda channel using `conda install aivant::openstructure`,
+but it is only built targeting Linux architectures. We also depend on
+`networkit>=11.0` which as of the time of writing does not build from source
+cleanly on MacOS. For MacOS users, please see the relevant
+[docker](#package-publishing) resources below.
 
 ## Install plinder
 

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from glob import glob
 from pathlib import Path
 from xml.etree import ElementTree
