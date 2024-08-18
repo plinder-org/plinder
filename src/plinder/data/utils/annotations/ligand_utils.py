@@ -928,9 +928,11 @@ class Ligand(BaseModel):
         else:
             self.is_invalid = True
 
-        # Lipinski like Ro3 and Ro5
+        # Lipinski like Ro3 and Ro5 - for non ions only
         if (
-            self.molecular_weight is not None
+            self.is_ion == False
+            and self.is_invalid == False
+            and self.molecular_weight is not None
             and self.crippen_clogp is not None
             and self.num_hbd is not None
             and self.num_hba is not None
@@ -1330,6 +1332,15 @@ class Ligand(BaseModel):
             self.is_artifact = True
         else:
             self.is_artifact = False
+        
+        #reset: artifacts should not count to other ligand class definitions
+        if self.is_artifact:
+            self.is_ion = False
+            self.is_oligo = False
+            self.is_cofactor = False
+            self.is_lipinski = False
+            self.is_fragment = False
+            self.is_covalent = False
 
         # Indicator of whether a ligand type is not any of small molecule (lipinski, frag, coval), ion, cofactor, oligopeptide, oligosaccharide or oligopeptide.
         if not any(
