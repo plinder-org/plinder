@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import multiprocessing
+import shutil
 from functools import wraps
 from hashlib import md5
 from itertools import repeat
@@ -541,7 +542,7 @@ def create_nonredundant_dataset(*, data_dir: Path) -> None:
     )
 
 
-def pack_linked_structures(*, data_dir: Path, code: str) -> None:
+def pack_linked_structures(data_dir: Path, code: str) -> None:
     """
     Pack generated linked structures into a zip file for a particular
     two character code.
@@ -614,3 +615,24 @@ def consolidate_linked_scores(*, data_dir: Path) -> None:
         odf = pd.read_parquet(data_dir / "linked_structures" / f"{search_db}_links.parquet")
         df = pd.merge(odf, ndf, on=["reference_system_id", "id"])
         df.to_parquet(data_dir / "links" / f"{search_db}_links.parquet", index=False)
+
+
+def rename_clusters(*, data_dir: Path) -> None:
+    """
+    Rename cluster files to match the hive layout convention.
+
+    Parameters
+    ----------
+    data_dir : Path
+        plinder root dir
+    """
+    cluster_dir = data_dir / "clusters"
+    cluster_paths = [path for path in cluster_dir.rglob("*") if path.is_file()]
+    for path in cluster_paths:
+        if path.name == "data.parquet":
+            continue
+        base = path.parent
+        name = path.stem
+        apath = base / name / "data.parquet"
+        apath.parent.mkdir(exist_ok=True, parents=True)
+        shutil.move(path, apath)
