@@ -19,7 +19,7 @@ from plinder.core.utils.log import setup_logger
 from plinder.data import clusters
 from plinder.data.compare_split_props import (
     label_has_mms_within_subset,
-    reset_lipinski_and_other,
+    load_plindex,
 )
 
 LOG = setup_logger(__name__)
@@ -38,11 +38,11 @@ class SplitConfig:
         default_factory=lambda: [
             GraphConfig("pli_unique_qcov", 50, 1),
             # GraphConfig("pocket_qcov", 50, 1),
-            GraphConfig("protein_seqsim_weighted_sum", 30, 1),
+            GraphConfig("protein_seqsim_weighted_sum", 50, 2),
         ]
     )
     # how many unique congeneric IDs passing quality to consider as MMS
-    mms_unique_quality_count: int = 5
+    mms_unique_quality_count: int = 3
     # what kind of cluster to use for sampling test
     test_cluster_cluster: str = "communities"
     # metric to use for sampling representatives from each test cluster
@@ -52,7 +52,9 @@ class SplitConfig:
     # directed to use for sampling representatives from each test cluster
     test_cluster_directed: bool = False
     # max number of representatives from each test cluster
-    num_test_representatives: int = 1
+    num_test_representatives: int = 2
+    # max number of systems to choose per entry pdb id and unique ccd codes
+    num_per_entry_pdb_id_and_unique_ccd_codes: int = 1
     # test should not be singletons
     min_test_cluster_size: int = 5
     # test should not be too unique
@@ -60,12 +62,12 @@ class SplitConfig:
     # test should not be in too big communities or cause too many train cases to be removed
     max_test_leakage_count: int = 1000
     # maximum fraction of systems that can be removed due to test set selection
-    max_removed_fraction: float = 0.15
-    # fraction of systems to choose for test
-    test_fraction: float = 0.0025
+    max_removed_fraction: float = 1
+    # test set size
+    num_test: int = 1000
     # what kind of cluster to use for sampling val
     val_cluster_cluster: str = "components"
-    # metric to use for splitting train and val
+    # metric to use for splitting train and vcaal
     val_cluster_metric: str = "pocket_qcov"
     # threshold to use for splitting train and val
     val_cluster_threshold: int = 50
@@ -75,8 +77,8 @@ class SplitConfig:
     num_val_representatives: int = 3
     # val should not be singletons
     min_val_cluster_size: int = 30
-    # fraction of systems to choose for val
-    val_fraction: float = 0.0025
+    # val set size
+    num_val: int = 1000
     # test/val should not have too few or too many interactions
     min_max_pli: tuple[int, int] = (3, 50)
     # test/val should not have too few or too many pocket residues
@@ -84,12 +86,19 @@ class SplitConfig:
     # test/val should not have too small or too large ligands
     min_max_ligand: tuple[int, int] = (200, 800)
     # priority columns to use for scoring systems with a weight attached to each column
+    test_additional_criteria: list[list[str]] = field(
+        default_factory=lambda: [
+            ["system_pass_validation_criteria", "==", "True"],
+            ["system_pass_statistics_criteria", "==", "True"],
+            ["system_num_ligands_in_biounit", "<=", 20],
+        ]
+    )
     priority_columns: dict[str, float] = field(
         default_factory=lambda: {
-            "system_has_mms": 0.5,
-            "system_has_binding_affinity": 1.0,
-            "leakage_count": 0,
-            "system_has_cofactor": -0.5,
+            # "system_has_mms": 40,
+            "system_ligand_has_cofactor": -0.5,
+            # "system_has_binding_affinity": 0.5,
+            "leakage_count": -1,
         }
     )
 
@@ -256,43 +265,7 @@ def prep_data_for_desired_properties(
         & (entries["entry_pdb_id"].isin(all_entries_present))
     ].reset_index(drop=True)
     LOG.info(f"loaded {entries['system_id'].nunique()} systems from annotation table")
-    entries = reset_lipinski_and_other(entries)
-    entries["system_has_lipinski"] = entries.groupby("system_id")[
-        "ligand_is_lipinski"
-    ].transform("any")
-    entries["system_has_cofactor"] = entries.groupby("system_id")[
-        "ligand_is_cofactor"
-    ].transform("any")
-    entries["ligand_is_proper"] = (
-        ~entries["ligand_is_ion"] & ~entries["ligand_is_artifact"]
-    )
-    entries["system_proper_num_ligand_chains"] = entries.groupby("system_id")[
-        "ligand_is_proper"
-    ].transform("sum")
-    entries["system_proper_num_interactions"] = (
-        entries["ligand_num_interactions"]
-        .where(entries["ligand_is_proper"], other=0)
-        .groupby(entries["system_id"])
-        .transform("sum")
-    )
-    entries["system_proper_pocket_num_residues"] = (
-        entries["ligand_num_neighboring_residues"]
-        .where(entries["ligand_is_proper"], other=0)
-        .groupby(entries["system_id"])
-        .transform("sum")
-    )
-    entries["system_proper_ligand_max_molecular_weight"] = (
-        entries["ligand_molecular_weight"]
-        .where(entries["ligand_is_proper"], other=float("-inf"))
-        .groupby(entries["system_id"])
-        .transform("max")
-    )
-
-    entries["uniqueness"] = (
-        entries["system_id_no_biounit"]
-        + "_"
-        + entries["pli_qcov__100__strong__component"]
-    )
+    entries = load_plindex(entries)
     nonredundant_to_all = defaultdict(set)
     for system_id, unique_id in zip(entries["system_id"], entries["uniqueness"]):
         nonredundant_to_all[unique_id].add(system_id)
@@ -326,9 +299,10 @@ def prep_data_for_desired_properties(
     LOG.info(
         f"{entries['system_pass_statistics_criteria'].sum()} systems pass statistics criteria"
     )
-    entries["proto_test"] = (
-        entries["system_pass_validation_criteria"]
-        & entries["system_pass_statistics_criteria"]
+    entries["proto_test"] = entries.eval(
+        " & ".join(
+            [f"({k} {op} {v})" for k, op, v in cfg.split.test_additional_criteria]
+        )
     )
     LOG.info(
         f"{len(entries[entries['proto_test']].index)} systems pass quality and statistics filters"
@@ -365,10 +339,13 @@ def prep_data_for_desired_properties(
         entries["system_has_apo"] | entries["system_has_pred"]
     )
 
-    mms_df = pd.read_parquet(data_dir / "mmp/plinder_mmp_series.parquet")
+    mms_df = pd.read_parquet(
+        data_dir / "mmp/plinder_mmp_series.parquet",
+        filters=[("system_id", "in", list(entries["system_id"]))],
+    )
     LOG.info(f"read mmp series has {len(mms_df.index)} records")
     quality = set(entries[entries["system_pass_validation_criteria"]]["system_id"])
-    good_mms_systems = label_has_mms_within_subset(
+    mms_df, good_mms_systems = label_has_mms_within_subset(
         mms_df, quality, cfg.split.mms_unique_quality_count
     )
     # mms_df = mms_df[mms_df["system_id"].isin(quality)]
@@ -627,75 +604,101 @@ def prioritize_test_sample(
     LOG.info(
         f"found {len(set(test_data['system_id']))} test systems after removing by second pass neighbor leakage count"
     )
-    priority_column_order = sorted(
-        cfg.split.priority_columns,
-        key=lambda x: cfg.split.priority_columns[x],
-        reverse=True,
-    )
-    ascending = [cfg.split.priority_columns[x] <= 0 for x in priority_column_order]
-    test_data = (
-        test_data.sort_values(
-            priority_column_order,
-            ascending=ascending,
-        )
-        .groupby("cluster")
-        .head(cfg.split.num_test_representatives)
-        .reset_index(drop=True)
-    )
-    LOG.info(
-        f"test_data after groupby.head of num_test_representatives: {len(set(test_data['system_id']))}"
-    )
-    max_test = int(cfg.split.test_fraction * entries["system_id"].nunique())
+    # priority_column_order = sorted(
+    #     cfg.split.priority_columns,
+    #     key=lambda x: cfg.split.priority_columns[x],
+    #     reverse=True,
+    # )
+    # ascending = [cfg.split.priority_columns[x] <= 0 for x in priority_column_order]
+    # test_data = (
+    #     test_data.sort_values(
+    #         priority_column_order,
+    #         ascending=ascending,
+    #     )
+    #     .groupby("cluster")
+    #     .head(cfg.split.num_test_representatives)
+    #     .reset_index(drop=True)
+    # )
 
     test_data["system_score"] = (
-        test_data[priority_column_order].mul(cfg.split.priority_columns).sum(axis=1)
+        test_data[list(cfg.split.priority_columns)]
+        .mul(cfg.split.priority_columns)
+        .sum(axis=1)
     )
     test_data["cluster_score"] = test_data.groupby("cluster")["system_score"].transform(
         "max"
     )
-    all_test_system_ids = (
+    test_data = (
+        test_data.sort_values("system_score", ascending=False)
+        .groupby(["entry_pdb_id", "system_proper_ligands_unique_ccd_codes"])
+        .head(cfg.split.num_per_entry_pdb_id_and_unique_ccd_codes)
+        .reset_index(drop=True)
+    )
+    test_data = (
         test_data.sort_values(
-            ["cluster_score", "system_score", "leakage_count"],
-            ascending=[False, False, True],
+            ["cluster_score", "system_score"],
+            ascending=[False, False],
         )
         .groupby("cluster", sort=False)
-        .apply(
-            lambda x: x.sort_values(
-                ["system_score", "leakage_count"], ascending=[False, True]
-            )
-        )
-        .reset_index(drop=True)["system_id"]
-        .tolist()
+        .head(cfg.split.num_test_representatives)
+        .groupby("cluster")
+        .apply(lambda x: x.sort_values("system_score", ascending=False))
+        .reset_index(drop=True)
     )
+    all_test_system_ids = test_data["system_id"].tolist()
     max_removed = int(cfg.split.max_removed_fraction * entries["system_id"].nunique())
     test_system_ids = set()
     to_remove = set()
+    # mms_df = mms_df[
+    #     mms_df["mms_unique_quality_count"] >= cfg.split.mms_unique_quality_count
+    # ]
+    # good_mms_systems = set(mms_df["system_id"])
+    because_of_mms = set()
     for x in all_test_system_ids:
-        if len(test_system_ids) < max_test:
+        if len(test_system_ids) < cfg.split.num_test:
+            # system_pdb_id = x.split("__")[0]
             test_system_ids.add(x)
             to_remove |= system_id_to_leakage.get(x, set())
+            # if x in good_mms_systems:
+            #     to_remove_mms = set()
+            #     test_congeneric_ids = set(
+            #         mms_df[(mms_df["system_id"] == x)]["congeneric_id"]
+            #     )
+            #     to_add = set(
+            #         mms_df[mms_df["congeneric_id"].isin(test_congeneric_ids)][
+            #             "system_id"
+            #         ]
+            #     )
+            #     to_add -= set(y for y in to_add if y.split("__")[0] == system_pdb_id)
+            #     for y in to_add:
+            #         current_to_remove = system_id_to_leakage.get(y, set())
+            #         to_remove_mms.update(current_to_remove)
+            #     if len(to_remove_mms) < cfg.split.max_mms_test_leakage_count:
+            #         test_system_ids |= to_add
+            #         to_remove.update(to_remove_mms)
+            #         because_of_mms.update(to_remove_mms)
         if len(to_remove) > max_removed:
+            remaining = set(all_test_system_ids).difference(test_system_ids)
+            test_clusters = set(system_to_cluster[x] for x in test_system_ids)
+            for x in remaining:
+                if system_to_cluster[x] in test_clusters:
+                    test_system_ids.add(x)
             break
-    # test_system_ids = set(all_test_system_ids[:max_test])
-    remaining = set(all_test_system_ids).difference(test_system_ids)
-    test_clusters = set(system_to_cluster[x] for x in test_system_ids)
-    for x in remaining:
-        if system_to_cluster[x] in test_clusters:
-            test_system_ids.add(x)
     LOG.info(
-        f"test_data after max_test of {cfg.split.test_fraction} ({max_test}): {len(test_system_ids)}"
+        f"test_data after max_test of {cfg.split.num_test}: {len(test_system_ids)}"
     )
+    LOG.info(f"Removed because of mms: {len(because_of_mms)}")
 
-    test_congeneric_ids = set(
-        mms_df[
-            mms_df["system_id"].isin(test_system_ids)
-            & (mms_df["mms_unique_quality_count"] >= cfg.split.mms_unique_quality_count)
-        ]["congeneric_id"]
-    )
-    test_system_ids |= set(
-        mms_df[mms_df["congeneric_id"].isin(test_congeneric_ids)]["system_id"]
-    )
-    LOG.info(f"test_data after adding congeneric series: {len(test_system_ids)}")
+    # test_congeneric_ids = set(
+    #     mms_df[
+    #         mms_df["system_id"].isin(test_system_ids)
+    #         & (mms_df["mms_unique_quality_count"] >= cfg.split.mms_unique_quality_count)
+    #     ]["congeneric_id"]
+    # )
+    # test_system_ids |= set(
+    #     mms_df[mms_df["congeneric_id"].isin(test_congeneric_ids)]["system_id"]
+    # )
+    # LOG.info(f"test_data after adding congeneric series: {len(test_system_ids)}")
     return entries, test_system_ids
 
 
@@ -754,7 +757,7 @@ def assign_split_membership(
 
     # Group all train systems by their validation clusters
     entries["system_score_val"] = (
-        entries["system_pass_validation_criteria"]
+        2 * entries["system_pass_validation_criteria"]
         + entries["system_pass_statistics_criteria"]
     )
     train_val_clusters = (
@@ -785,7 +788,6 @@ def assign_split_membership(
 
     val_system_ids = []
     remove_ids = set()
-    max_val = int(cfg.split.val_fraction * entries["system_id"].nunique())
 
     for cluster in cluster_order[start_cluster_index:]:
         systems = train_val_clusters[cluster]
@@ -801,11 +803,11 @@ def assign_split_membership(
         # Remove all systems with this cluster ID from train
         remove_ids.update(systems)
 
-        if len(val_system_ids) >= max_val:
+        if len(val_system_ids) >= cfg.split.num_val:
             break
     remove_ids -= set(val_system_ids)
     LOG.info(
-        f"val_system_ids after max_val of {cfg.split.val_fraction} ({max_val}): {len(val_system_ids)}"
+        f"val_system_ids after max_val of {cfg.split.num_val}: {len(val_system_ids)}"
     )
 
     # Remove val PDB IDs
@@ -830,12 +832,17 @@ def assign_split_membership(
             "system_proper_num_interactions",
             "system_proper_ligand_max_molecular_weight",
             "system_has_binding_affinity",
-            "system_has_lipinski",
             "system_has_apo_or_pred",
             "system_has_mms",
+            # "system_score",
+            # "cluster_score",
         ]
     ].reset_index(drop=True)
-    final["system_id"] = final["uniqueness"].map(nonredundant_to_all)
+    mask = final["split"] == "train"
+    final.loc[mask, "system_id"] = final.loc[mask, "uniqueness"].map(
+        nonredundant_to_all
+    )
+    final.loc[~mask, "system_id"] = final.loc[~mask, "system_id"].map(lambda x: [x])
     final = final.explode("system_id")
     for k, v in final.value_counts("split").items():
         LOG.info(f"final system splits {k} {v}")

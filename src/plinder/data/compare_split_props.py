@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+import mols2grid
 import numpy as np
 import pandas as pd
 import seaborn as sns
@@ -35,10 +36,85 @@ def get_ks_test(
     return res.statistic, res.pvalue
 
 
+def load_plindex(plindex: pd.DataFrame):
+    plindex = reset_lipinski_and_other(plindex)
+    plindex["system_ligand_max_qed"] = plindex.groupby("system_id")[
+        "ligand_qed"
+    ].transform("max")
+    plindex["system_pass_validation_criteria"] = plindex[
+        "system_pass_validation_criteria"
+    ].fillna(False)
+    for n in [
+        "lipinski",
+        "cofactor",
+        "fragment",
+        "oligo",
+        "artifact",
+        "other",
+        "covalent",
+        "invalid",
+        "ion",
+    ]:
+        plindex[f"system_ligand_has_{n}"] = plindex.groupby("system_id")[
+            f"ligand_is_{n}"
+        ].transform("any")
+    plindex["system_interacting_protein_chains_total_length"] = plindex[
+        "system_interacting_protein_chains_length"
+    ].apply(lambda x: sum(int(i) for i in x.split(";")))
+    plindex["ligand_is_proper"] = (
+        ~plindex["ligand_is_ion"] & ~plindex["ligand_is_artifact"]
+    )
+    plindex["system_proper_num_ligand_chains"] = plindex.groupby("system_id")[
+        "ligand_is_proper"
+    ].transform("sum")
+    plindex["system_proper_num_interactions"] = (
+        plindex["ligand_num_interactions"]
+        .where(plindex["ligand_is_proper"], other=0)
+        .groupby(plindex["system_id"])
+        .transform("sum")
+    )
+    plindex["system_proper_pocket_num_residues"] = (
+        plindex["ligand_num_neighboring_residues"]
+        .where(plindex["ligand_is_proper"], other=0)
+        .groupby(plindex["system_id"])
+        .transform("sum")
+    )
+    plindex["system_proper_ligand_max_molecular_weight"] = (
+        plindex["ligand_molecular_weight"]
+        .where(plindex["ligand_is_proper"], other=float("-inf"))
+        .groupby(plindex["system_id"])
+        .transform("max")
+    )
+    plindex["uniqueness"] = (
+        plindex["system_id_no_biounit"]
+        + "_"
+        + plindex["pli_qcov__100__strong__component"]
+    )
+    plindex["system_num_ligands_in_biounit"] = plindex.groupby(
+        ["entry_pdb_id", "system_biounit_id"]
+    )["system_id"].transform("count")
+    plindex["system_num_unique_ligands_in_biounit"] = plindex.groupby(
+        ["entry_pdb_id", "system_biounit_id"]
+    )["ligand_unique_ccd_code"].transform("nunique")
+    plindex["system_proper_num_ligands_in_biounit"] = plindex.groupby(
+        ["entry_pdb_id", "system_biounit_id"]
+    )["ligand_is_proper"].transform("sum")
+    ccd_dict = (
+        plindex[plindex["ligand_is_proper"]]
+        .groupby("system_id")["ligand_unique_ccd_code"]
+        .agg(lambda x: "-".join(sorted(set(x))))
+        .to_dict()
+    )
+    plindex["system_proper_ligands_unique_ccd_codes"] = plindex["system_id"].map(
+        ccd_dict
+    )
+    return plindex
+
+
 def label_has_mms_within_subset(
     mms_df: pd.DataFrame, subset: set[str], minimum_count: int
 ):
-    mms_df = mms_df[mms_df["system_id"].isin(subset)]
+    mms_df = mms_df[mms_df["system_id"].isin(subset)].reset_index(drop=True)
     LOG.info(
         f"mmp series after subset {len(mms_df.index)} records for {mms_df['system_id'].nunique()} systems"
     )
@@ -47,7 +123,7 @@ def label_has_mms_within_subset(
     good_mms_systems = set(
         mms_df[mms_df["mms_unique_quality_count"] >= minimum_count]["system_id"]
     )
-    return good_mms_systems
+    return mms_df, good_mms_systems
 
 
 # TODO: this can be removed after cleanup merge
@@ -109,6 +185,7 @@ class SplitPropertiesPlotter:
     stratified_files: dict[str, Path] = field(default_factory=dict)
     plindex: pd.DataFrame = field(init=False)
     system_plindex: pd.DataFrame = field(init=False)
+    mms_count: int = field(default=3)
     colors: dict = field(
         default_factory=lambda: {
             "train": "#ff9999",  # Light red
@@ -142,7 +219,7 @@ class SplitPropertiesPlotter:
             "system_has_binding_affinity",
             "system_has_mms",
             "system_has_apo_or_pred",
-            "system_has_lipinski",
+            "system_ligand_has_lipinski",
             "system_pass_validation_criteria",
             "system_pass_statistics_criteria",
         ]
@@ -190,6 +267,7 @@ class SplitPropertiesPlotter:
         stratified_train_test_file: Path | None = None,
         stratified_train_val_file: Path | None = None,
         stratified_val_test_file: Path | None = None,
+        mms_count: int = 3,
     ):
         stratified_files = {}
         if stratified_train_test_file is not None:
@@ -203,6 +281,7 @@ class SplitPropertiesPlotter:
             split_file=split_file,
             stratified_files=stratified_files,
             output_dir=output_dir,
+            mms_count=mms_count,
         )
         if plindex_file is None:
             plindex = plotter.load_plindex()
@@ -217,34 +296,7 @@ class SplitPropertiesPlotter:
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
     def load_plindex(self):
-        plindex = get_plindex()
-        plindex = reset_lipinski_and_other(plindex)
-        plindex["system_ligand_max_qed"] = plindex.groupby("system_id")[
-            "ligand_qed"
-        ].transform("max")
-        plindex["system_pass_validation_criteria"] = plindex[
-            "system_pass_validation_criteria"
-        ].fillna(False)
-        for n in [
-            "lipinski",
-            "cofactor",
-            "fragment",
-            "oligo",
-            "artifact",
-            "other",
-            "covalent",
-            "invalid",
-            "ion",
-        ]:
-            plindex[f"system_ligand_has_{n}"] = plindex.groupby("system_id")[
-                f"ligand_is_{n}"
-            ].transform("any")
-        plindex["system_interacting_protein_chains_total_length"] = plindex[
-            "system_interacting_protein_chains_length"
-        ].apply(lambda x: sum(int(i) for i in x.split(";")))
-        plindex["ligand_is_proper"] = (
-            ~plindex["ligand_is_ion"] & ~plindex["ligand_is_artifact"]
-        )
+        plindex = load_plindex(get_plindex())
         clusters = query_clusters(
             columns=["system_id", "label", "threshold", "metric", "cluster"],
             filters=[("directed", "==", "False")],
@@ -260,7 +312,59 @@ class SplitPropertiesPlotter:
         ]
         clusters.reset_index(inplace=True)
         plindex = pd.merge(plindex, clusters, on="system_id", how="left")
-        return plindex
+
+    def save_ligand_report_html(
+        self,
+        split_name: str,
+        smiles_col: str = "ligand_rdkit_canonical_smiles",
+    ) -> None:
+        df = self.plindex[
+            (self.plindex["split"] == split_name)
+            & (~self.plindex["ligand_is_ion"])
+            & (~self.plindex["ligand_is_artifact"])
+        ]
+        system_df = df.drop_duplicates("system_id")
+        grouped_smiles_df = (
+            df.groupby("system_id")[smiles_col].agg(list).apply(".".join).reset_index()
+        )
+        df = system_df.merge(grouped_smiles_df, on="system_id", suffixes=["_", ""])
+
+        grid = mols2grid.MolGrid(
+            df,
+            smiles_col=smiles_col,
+        )
+        return grid
+        # grid.save(
+        #     # output file
+        #     self.output_dir / f"{split_name}.html",
+        #     # rename fields for the output document
+        #     # rename={"SOL": "Solubility", "SOL_classification": "Class", "NAME": "Name"},
+        #     # set what's displayed on the grid
+        #     subset=[
+        #         "img",
+        #         "system_id",
+        #         "system_num_interacting_protein_chains",
+        #         "system_proper_num_ligand_chains",
+        #         # "tanimoto_similarity_max",
+        #         "system_ligand_has_cofactor",
+        #     ],
+        #     n_items_per_page=48,
+        #     # set what's displayed on the hover tooltip
+        #     # tooltip=["Name", "SMILES", "Class", "Solubility"],
+        #     # style for the grid labels and tooltips
+        #     # style={
+        #     #     "tanimoto_similarity_max": lambda x: "color: red; font-weight: bold;"
+        #     #     if x > 30
+        #     #     else "",
+        #     #     "__all__": lambda x: "background-color: azure;"
+        #     #     if x["system_ligand_has_lipinski"]
+        #     #     else "",
+        #     # },
+        #     # change the precision and format (or other transformations)
+        #     # transform={"tanimoto_similarity_max": lambda x: round(x, 0)},
+        #     # sort the grid in a different order by default
+        #     sort_by="system_ligand_has_cofactor",
+        # )
 
     def merge_plindex(self, plindex: pd.DataFrame):
         split = pd.read_parquet(self.split_file)
@@ -269,20 +373,20 @@ class SplitPropertiesPlotter:
         )
         plindex = pd.merge(plindex, split, on="system_id", suffixes=("", "_y"))
         mms_df = pd.read_parquet(self.data_dir / "mmp/plinder_mmp_series.parquet")
+        split_subdf = plindex[
+            plindex["system_pass_validation_criteria"].fillna(False)
+        ].drop_duplicates("system_id")
+        good_mms_systems = set()
         for split in plindex["split"].unique():
-            good_mms_systems = label_has_mms_within_subset(
-                mms_df,
-                set(
-                    plindex[
-                        (plindex["split"] == split)
-                        & (plindex["system_pass_validation_criteria"])
-                    ]["system_id"]
-                ),
-                5,
+            split_systems = set(
+                split_subdf[split_subdf["split"] == split]["system_id"].unique()
             )
-            plindex.loc[plindex["split"] == split, "system_has_mms"] = plindex[
-                plindex["split"] == split
-            ]["system_id"].isin(good_mms_systems)
+            good_mms_systems |= label_has_mms_within_subset(
+                mms_df,
+                split_systems,
+                self.mms_count,
+            )[1]
+        plindex["system_has_mms"] = plindex["system_id"].isin(good_mms_systems)
 
         return plindex
 
