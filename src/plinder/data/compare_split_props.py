@@ -2,31 +2,23 @@
 # Distributed under the terms of the Apache License 2.0
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from pathlib import Path
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
+from matplotlib import pyplot as plt
+from matplotlib_venn import venn3
 from scipy.stats import ks_2samp
+from tabulate import tabulate
 
+from plinder.core.index.utils import get_plindex
+from plinder.core.scores.clusters import query_clusters
 from plinder.core.utils.log import setup_logger
 
 LOG = setup_logger(__name__)
-
-
-SYSTEM_PROPS = {
-    # ligand
-    "ligand_molecular_weight": 50,
-    "ligand_tpsa": 10,
-    "ligand_num_heavy_atoms": 5,
-    "ligand_num_rot_bonds": 2,
-    "ligand_num_rings": 1,
-    "ligand_crippen_clogp": 1,
-    # pocket
-    "system_num_pocket_residues": 20,
-    # protein
-    "system_interacting_protein_chains_length": None,
-}
 
 
 def get_ks_test(
@@ -43,82 +35,760 @@ def get_ks_test(
     return res.statistic, res.pvalue
 
 
-def plot_hist_plot(
-    df: pd.DataFrame,
-    plot_metric: str,
-    output_png_file: Path,
-    overwrite: bool = False,
-) -> None:
-    g = sns.histplot(
-        df,
-        x=plot_metric,
-        hue="split",
-        element="step",
-        stat="density",
-        common_norm=False,
-        binwidth=SYSTEM_PROPS[plot_metric],
-        bins=None if SYSTEM_PROPS[plot_metric] else np.linspace(0, 4, 50),
-        log_scale=plot_metric.startswith("system_interacting_protein_chains_length"),
+def label_has_mms_within_subset(
+    mms_df: pd.DataFrame, subset: set[str], minimum_count: int
+):
+    mms_df = mms_df[mms_df["system_id"].isin(subset)]
+    LOG.info(
+        f"mmp series after subset {len(mms_df.index)} records for {mms_df['system_id'].nunique()} systems"
     )
-    if overwrite or not output_png_file.exists():
-        g.figure.savefig(output_png_file)
-    g.figure.clf()
+    mms_count = mms_df.groupby("congeneric_id").size()
+    mms_df["mms_unique_quality_count"] = mms_df["congeneric_id"].map(mms_count)
+    good_mms_systems = set(
+        mms_df[mms_df["mms_unique_quality_count"] >= minimum_count]["system_id"]
+    )
+    return good_mms_systems
 
 
-def plot_molecular_descriptor_splits(
-    split_file: Path,
-    data_dir: Path,
-    output_dir: Path,
-    train_label: str = "train",
-    val_label: str = "val",
-    test_label: str = "test",
-    overwrite: bool = False,
-) -> None:
-    if split_file.name.endswith(".csv"):
-        split_df = pd.read_csv(split_file)
-    else:
-        split_df = pd.read_parquet(split_file)
-        assert all(x in split_df.columns for x in ["split", "system_id"])
-
-    # remove other splits that are not used
-    split_df = split_df[split_df.split.isin([train_label, val_label, test_label])]
-    # add annotations
-    annotation_df = pd.read_parquet(
-        data_dir / "index" / "annotation_table.parquet",
-        filters=[
-            ("system_type", "==", "holo"),
-            ("system_num_interacting_protein_chains", "<=", 5),
-            ("system_num_ligand_chains", "<=", 5),
+# TODO: this can be removed after cleanup merge
+def reset_lipinski_and_other(df):
+    # Reset artifacts/ions
+    mask_reset = df["ligand_is_ion"] | df["ligand_is_artifact"]
+    df.loc[
+        mask_reset,
+        [
+            "ligand_is_fragment",
+            "ligand_is_lipinski",
+            "ligand_is_cofactor",
+            "ligand_is_covalent",
+            "ligand_is_oligo",
         ],
+    ] = False
+
+    # Lipinski like Ro3
+    mask_ro3 = (
+        (df["ligand_molecular_weight"] < 300)
+        & (df["ligand_crippen_clogp"] < 3)
+        & (df["ligand_num_hbd"] <= 3)
+        & (df["ligand_num_hba"] <= 3)
+        & ~mask_reset
     )
-    # sum all residues
-    annotation_df["system_interacting_protein_chains_length"] = annotation_df[
-        "system_interacting_protein_chains_length"
-    ].apply(lambda x: sum(int(i) for i in x.split(";")))
+    df.loc[mask_ro3, ["ligand_is_fragment", "ligand_is_lipinski"]] = True
 
-    split_df = split_df.merge(annotation_df, on="system_id", how="left")
+    # Lipinski like Ro5
+    mask_ro5 = (
+        (df["ligand_molecular_weight"] < 500)
+        & (df["ligand_crippen_clogp"] < 5)
+        & (df["ligand_num_hbd"] <= 5)
+        & (df["ligand_num_hba"] <= 10)
+        & ~mask_reset
+        & ~mask_ro3
+    )
+    df.loc[mask_ro5, "ligand_is_lipinski"] = True
 
-    for prop in SYSTEM_PROPS:
-        stat, pval = get_ks_test(
-            split_df[split_df.split == val_label],
-            split_df[split_df.split == test_label],
-            metric=prop,
+    # ligand_is_other
+    df["ligand_is_other"] = ~(
+        df["ligand_is_invalid"]
+        | df["ligand_is_ion"]
+        | df["ligand_is_oligo"]
+        | df["ligand_is_artifact"]
+        | df["ligand_is_cofactor"]
+        | df["ligand_is_lipinski"]
+        | df["ligand_is_fragment"]
+        | df["ligand_is_covalent"]
+    )
+
+    return df
+
+
+@dataclass
+class SplitPropertiesPlotter:
+    data_dir: Path
+    split_file: Path
+    output_dir: Path
+    stratified_files: dict[str, Path] = field(default_factory=dict)
+    plindex: pd.DataFrame = field(init=False)
+    system_plindex: pd.DataFrame = field(init=False)
+    colors: dict = field(
+        default_factory=lambda: {
+            "train": "#ff9999",  # Light red
+            "test": "#66b3ff",  # Light blue
+            "val": "#99ff99",  # Light green
+            "removed": "#d3d3d3",  # Light grey
+            "train_text": "red",
+            "test_text": "blue",
+            "val_text": "green",
+            "False": "#D3D3D3",
+            "True": "#99ff99",
+        }
+    )
+    system_descriptors: dict = field(
+        default_factory=lambda: {
+            # ligand
+            "ligand_molecular_weight": 50,
+            "ligand_tpsa": 10,
+            "ligand_num_heavy_atoms": 5,
+            "ligand_num_rot_bonds": 2,
+            "ligand_num_rings": 1,
+            "ligand_crippen_clogp": 1,
+            # pocket
+            "system_proper_pocket_num_residues": 5,
+            # protein
+            "system_interacting_protein_chains_total_length": None,
+        }
+    )
+    priority_columns: list = field(
+        default_factory=lambda: [
+            "system_has_binding_affinity",
+            "system_has_mms",
+            "system_has_apo_or_pred",
+            "system_has_lipinski",
+            "system_pass_validation_criteria",
+            "system_pass_statistics_criteria",
+        ]
+    )
+    domain_columns: list = field(
+        default_factory=lambda: [
+            "system_pocket_ECOD_t_name",
+            "system_pocket_CATH",
+            "system_pocket_SCOP2B",
+            "system_pocket_Pfam",
+        ]
+    )
+    ligand_types: list = field(
+        default_factory=lambda: [
+            f"system_ligand_has_{x}"
+            for x in [
+                "lipinski",
+                "covalent",
+                "cofactor",
+                "oligo",
+                "ion",
+                "fragment",
+                "artifact",
+                "other",
+            ]
+        ]
+    )
+    diversity_columns: dict = field(
+        default_factory=lambda: {
+            "system_id": "Systems",
+            "entry_pdb_id": "PDB IDs",
+            "pli_unique_qcov__50__communities": "PLI communities",
+            "pocket_qcov__50__communities": "Pocket communities",
+            "tanimoto_similarity_max__30__communities": "Ligand communities",
+        }
+    )
+
+    @classmethod
+    def from_files(
+        cls,
+        data_dir: Path,
+        split_file: Path,
+        output_dir: Path = Path("split_plots"),
+        plindex_file: Path | None = None,
+        stratified_train_test_file: Path | None = None,
+        stratified_train_val_file: Path | None = None,
+        stratified_val_test_file: Path | None = None,
+    ):
+        stratified_files = {}
+        if stratified_train_test_file is not None:
+            stratified_files["train_vs_test"] = stratified_train_test_file
+        if stratified_train_val_file is not None:
+            stratified_files["train_vs_val"] = stratified_train_val_file
+        if stratified_val_test_file is not None:
+            stratified_files["val_vs_test"] = stratified_val_test_file
+        plotter = cls(
+            data_dir=data_dir,
+            split_file=split_file,
+            stratified_files=stratified_files,
+            output_dir=output_dir,
         )
-        LOG.info(
-            f"KS test statistic for {prop} {val_label}/{test_label}: {stat} (p-value {pval})"
+        if plindex_file is None:
+            plindex = plotter.load_plindex()
+        else:
+            plindex = pd.read_parquet(plindex_file)
+        plotter.plindex = plotter.merge_plindex(plindex)
+        plotter.system_plindex = plotter.plindex.drop_duplicates("system_id")
+        plotter.plot_all()
+        return plotter
+
+    def __post_init__(self):
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+
+    def load_plindex(self):
+        plindex = get_plindex()
+        plindex = reset_lipinski_and_other(plindex)
+        plindex["system_ligand_max_qed"] = plindex.groupby("system_id")[
+            "ligand_qed"
+        ].transform("max")
+        plindex["system_pass_validation_criteria"] = plindex[
+            "system_pass_validation_criteria"
+        ].fillna(False)
+        for n in [
+            "lipinski",
+            "cofactor",
+            "fragment",
+            "oligo",
+            "artifact",
+            "other",
+            "covalent",
+            "invalid",
+            "ion",
+        ]:
+            plindex[f"system_ligand_has_{n}"] = plindex.groupby("system_id")[
+                f"ligand_is_{n}"
+            ].transform("any")
+        plindex["system_interacting_protein_chains_total_length"] = plindex[
+            "system_interacting_protein_chains_length"
+        ].apply(lambda x: sum(int(i) for i in x.split(";")))
+        plindex["ligand_is_proper"] = (
+            ~plindex["ligand_is_ion"] & ~plindex["ligand_is_artifact"]
         )
-        output_png_file = output_dir / f"hist1d_{prop}.png"
-        plot_hist_plot(split_df, prop, output_png_file, overwrite=overwrite)
+        clusters = query_clusters(
+            columns=["system_id", "label", "threshold", "metric", "cluster"],
+            filters=[("directed", "==", "False")],
+        ).pivot_table(
+            values="label",
+            index="system_id",
+            columns=["metric", "cluster", "threshold"],
+            aggfunc="first",
+        )
+        clusters.columns = [
+            f"{metric}__{threshold.replace('.parquet', '')}__{cluster}"
+            for metric, cluster, threshold in clusters.columns
+        ]
+        clusters.reset_index(inplace=True)
+        plindex = pd.merge(plindex, clusters, on="system_id", how="left")
+        return plindex
+
+    def merge_plindex(self, plindex: pd.DataFrame):
+        split = pd.read_parquet(self.split_file)
+        plindex = plindex[plindex["system_id"].isin(split["system_id"])].reset_index(
+            drop=True
+        )
+        plindex = pd.merge(plindex, split, on="system_id", suffixes=("", "_y"))
+        mms_df = pd.read_parquet(self.data_dir / "mmp/plinder_mmp_series.parquet")
+        for split in plindex["split"].unique():
+            good_mms_systems = label_has_mms_within_subset(
+                mms_df,
+                set(
+                    plindex[
+                        (plindex["split"] == split)
+                        & (plindex["system_pass_validation_criteria"])
+                    ]["system_id"]
+                ),
+                5,
+            )
+            plindex.loc[plindex["split"] == split, "system_has_mms"] = plindex[
+                plindex["split"] == split
+            ]["system_id"].isin(good_mms_systems)
+
+        return plindex
+
+    def plot_ligands(self, split_names=["test", "val"]):
+        plindex = self.plindex[
+            self.plindex["ligand_is_proper"] & self.plindex["split"].isin(split_names)
+        ]
+        for split in split_names:
+            ligand_df = plindex[plindex["split"] == split][
+                ["system_id", "ligand_rdkit_canonical_smiles"]
+            ].reset_index(drop=True)
+            if split in self.stratified_files:
+                stratified = pd.read_parquet(self.stratified_files[split])
+                stratified["novel_ligand"] = stratified["tanimoto_similarity_max"] < 30
+                ligand_df = ligand_df.merge(
+                    stratified[
+                        ["system_id", "tanimoto_similarity_max", "novel_ligand"]
+                    ],
+                    on="system_id",
+                    how="left",
+                )
+
+            print(f"{split}: {len(ligand_df)}")
+
+    def plot_split_proportions(self):
+        fig, ax = plt.subplots()
+        counts = self.system_plindex["split"].value_counts()
+        ax.pie(
+            counts,
+            labels=counts.index,
+            autopct="%1.1f%%",
+            colors=[self.colors[x] for x in counts.index],
+        )
+        ax.set_title("Split proportions")
+        plt.savefig(self.output_dir / "split_proportions.png")
+
+    def print_stratification_table(self):
+        if not len(self.stratified_files) > 0:
+            LOG.info("No stratified files provided")
+            return
+        stratified = {
+            split: pd.read_parquet(self.stratified_files[split]).drop_duplicates(
+                "system_id"
+            )
+            for split in self.stratified_files
+        }
+        stratified_dfs = {
+            split: stratified[split][
+                [c for c in stratified[split].columns if "novel" in c]
+            ]
+            .apply(lambda x: x.value_counts())
+            .fillna(0)
+            .astype(int)
+            for split in stratified
+        }
+        df_combined = pd.concat(stratified_dfs.values(), keys=stratified_dfs.keys())
+        df_combined = df_combined.reset_index().rename(columns={"level_0": "split"})
+        df_combined = (
+            df_combined[df_combined["level_1"]]
+            .drop(columns=["level_1"])
+            .reset_index(drop=True)
+        )
+        df_combined["total"] = df_combined["split"].apply(
+            lambda x: self.system_plindex[
+                self.system_plindex["split"] == x.split("_")[-1]
+            ].shape[0]
+        )
+        df_combined["split"] = df_combined["split"].apply(
+            lambda x: x.replace("_", " ").upper()
+        )
+        df_combined.columns = [
+            c.replace("system_novel_", "").replace("_", " ").upper()
+            for c in df_combined.columns
+        ]
+        print(tabulate(df_combined, headers="keys", tablefmt="pipe", showindex=False))
+        df_combined.to_csv(self.output_dir / "stratification_table.csv", index=False)
+
+    def print_overall_diversity(self):
+        cluster_df = pd.DataFrame(
+            {
+                col: self.system_plindex.groupby("split")[col].nunique()
+                for col in self.diversity_columns
+            }
+        ).rename(columns=self.diversity_columns)
+        print(
+            tabulate(
+                cluster_df,
+                headers="keys",
+                tablefmt="pipe",
+                showindex=True,
+            )
+        )
+        cluster_df.to_csv(self.output_dir / "overall_diversity.csv", index=True)
+
+    def plot_molecular_descriptors(self, val_label="val", test_label="test"):
+        fig, axes = self.get_axes(len(self.system_descriptors))
+        plindex_to_use = self.plindex[self.plindex["ligand_is_proper"]].reset_index(
+            drop=True
+        )
+        for i, prop in enumerate(self.system_descriptors):
+            stat, pval = get_ks_test(
+                plindex_to_use[plindex_to_use.split == val_label][[prop]],
+                plindex_to_use[plindex_to_use.split == test_label][[prop]],
+                metric=prop,
+            )
+            self.plot_hist_plot(
+                plindex_to_use,
+                prop,
+                axes[i],
+            )
+            ks_info = f"KS test ({val_label}/{test_label}):\nstatistic = {stat:.3f}\np-value = {pval:.3e}"
+            axes[i].text(
+                0.95,
+                0.05,
+                ks_info,
+                transform=axes[i].transAxes,
+                verticalalignment="bottom",
+                horizontalalignment="right",
+                bbox=dict(boxstyle="round", facecolor="white", alpha=0.8),
+                fontsize=8,
+            )
+        self.clear_unused_axes(axes, len(self.system_descriptors))
+        plt.tight_layout()
+        plt.savefig(self.output_dir / "molecular_descriptors.png")
+
+    def plot_hist_plot(self, df: pd.DataFrame, plot_metric: str, ax: plt.Axes) -> None:
+        if plot_metric.startswith("system"):
+            df = df.drop(columns=["system_id"])
+        sns.histplot(
+            df,
+            x=plot_metric,
+            hue="split",
+            hue_order=["train", "val", "test"],
+            element="step",
+            stat="density",
+            common_norm=False,
+            binwidth=self.system_descriptors[plot_metric],
+            bins=None
+            if self.system_descriptors[plot_metric]
+            else np.linspace(0, 4, 50),
+            log_scale=plot_metric.startswith(
+                "system_interacting_protein_chains_total_length"
+            ),
+            ax=ax,
+            palette=self.colors,
+        )
+        ax.set_xlabel("")
+        name = (
+            plot_metric.replace("system_", "")
+            .replace("proper", "")
+            .replace("ligand_", "")
+            .replace("interacting_protein_chains", "protein")
+            .replace("interacting_protein_chains_", "")
+            .replace("interacting_protein_chains_", "")
+            .replace("_", " ")
+            .upper()
+        )
+        ax.set_title(name)
+
+    def plot_priorities(self):
+        fig, axes = self.get_axes(len(self.priority_columns))
+
+        for idx, column in enumerate(self.priority_columns):
+            column_data = self.system_plindex[["split", column]].astype(str)
+            data = column_data.groupby("split")[column].value_counts()
+            percentages = column_data.groupby("split")[column].value_counts(
+                normalize=True
+            )
+            split_order = ["train", "val", "test", "removed"]
+            percentages = percentages.reindex(split_order, level=0)
+            unstacked = percentages.unstack().loc[split_order].fillna(0) * 100
+            unstacked = unstacked[["True", "False"]]
+
+            unstacked.plot(
+                kind="bar",
+                stacked=True,
+                ax=axes[idx],
+                color=[self.colors[x] for x in unstacked.columns],
+                rot=0,
+                legend=False,
+            )
+
+            axes[idx].set_title(column.replace("system_", "").replace("_", " ").title())
+            axes[idx].set_ylabel("Systems (%)")
+            axes[idx].set_ylim(0, 100)
+            axes[idx].set_xlabel("")
+
+            names = percentages.index.get_level_values(0).unique()
+            for c in axes[idx].containers:
+                labels = []
+                for v in names:
+                    key = (v, c.get_label())
+                    if key in data.index:
+                        labels.append(int(data[key]))
+                    else:
+                        labels.append(0)
+                axes[idx].bar_label(c, labels=labels, label_type="center", fontsize=12)
+        self.clear_unused_axes(axes, len(self.priority_columns))
+        fig.suptitle("Priorities across splits", fontsize=16)
+        handles, labels = axes[0].get_legend_handles_labels()
+        fig.legend(handles, labels, loc="upper left", ncol=2)
+        plt.tight_layout()
+        plt.savefig(self.output_dir / "priorities.png")
+
+    def plot_venn(self, column: str, ax: plt.Axes, label: str):
+        per_split = {
+            split: self.system_plindex[
+                self.system_plindex[column].notna()
+                & (self.system_plindex["split"] == split)
+            ][["system_id", column]]
+            for split in ["train", "val", "test"]
+        }
+
+        per_split_groups = {split: set(per_split[split][column]) for split in per_split}
+
+        v = venn3(
+            (
+                per_split_groups["train"],
+                per_split_groups["val"],
+                per_split_groups["test"],
+            ),
+            set_labels=None,
+            ax=ax,
+            alpha=0.6,
+            set_colors=(
+                self.colors["train"],
+                self.colors["val"],
+                self.colors["test"],
+            ),
+        )
+
+        for idx in ["100", "010", "001", "110", "101", "011", "111"]:
+            if v.get_patch_by_id(idx):
+                if idx == "100":
+                    groups = per_split_groups["train"] - (
+                        per_split_groups["val"] | per_split_groups["test"]
+                    )
+                    systems = {
+                        "train": per_split["train"][
+                            per_split["train"][column].isin(groups)
+                        ]
+                    }
+                elif idx == "010":
+                    groups = per_split_groups["val"] - (
+                        per_split_groups["train"] | per_split_groups["test"]
+                    )
+                    systems = {
+                        "val": per_split["val"][per_split["val"][column].isin(groups)]
+                    }
+                elif idx == "001":
+                    groups = per_split_groups["test"] - (
+                        per_split_groups["train"] | per_split_groups["val"]
+                    )
+                    systems = {
+                        "test": per_split["test"][
+                            per_split["test"][column].isin(groups)
+                        ]
+                    }
+                elif idx == "110":
+                    groups = (
+                        per_split_groups["train"]
+                        & per_split_groups["val"] - per_split_groups["test"]
+                    )
+                    systems = {
+                        "train": per_split["train"][
+                            per_split["train"][column].isin(groups)
+                        ],
+                        "val": per_split["val"][per_split["val"][column].isin(groups)],
+                    }
+                elif idx == "101":
+                    groups = (
+                        per_split_groups["train"]
+                        & per_split_groups["test"] - per_split_groups["val"]
+                    )
+                    systems = {
+                        "train": per_split["train"][
+                            per_split["train"][column].isin(groups)
+                        ],
+                        "test": per_split["test"][
+                            per_split["test"][column].isin(groups)
+                        ],
+                    }
+                elif idx == "011":
+                    groups = (
+                        per_split_groups["val"]
+                        & per_split_groups["test"] - per_split_groups["train"]
+                    )
+                    systems = {
+                        "val": per_split["val"][per_split["val"][column].isin(groups)],
+                        "test": per_split["test"][
+                            per_split["test"][column].isin(groups)
+                        ],
+                    }
+                elif idx == "111":
+                    groups = (
+                        per_split_groups["train"]
+                        & per_split_groups["val"]
+                        & per_split_groups["test"]
+                    )
+                    systems = {
+                        "train": per_split["train"][
+                            per_split["train"][column].isin(groups)
+                        ],
+                        "val": per_split["val"][per_split["val"][column].isin(groups)],
+                        "test": per_split["test"][
+                            per_split["test"][column].isin(groups)
+                        ],
+                    }
+
+                n = len(groups)
+                if n == 0:
+                    v.get_label_by_id(idx).set_text("")
+                    continue
+                v.get_label_by_id(idx).set_text(str(n))
+
+                x, y = v.get_label_by_id(idx).get_position()
+                y += 0.06
+                v.get_label_by_id(idx).set_position((x, y))
+                for split in systems:
+                    n = len(systems[split])
+                    if n == 0:
+                        continue
+                    y -= 0.04
+                    ax.text(
+                        x,
+                        y,
+                        str(n),
+                        color=self.colors[f"{split}_text"],
+                        ha="center",
+                        va="center",
+                    )
+
+        ax.set_title(label, fontsize=15)
+
+    def plot_domain_classifications(self):
+        fig, axes = self.get_axes(len(self.domain_columns))
+        for i, c in enumerate(self.domain_columns):
+            self.plot_venn(
+                c, axes[i], c.replace("system_pocket_", "").replace("_", " ").upper()
+            )
+        self.clear_unused_axes(axes, len(self.domain_columns))
+        fig.suptitle("Domain Classifications")
+        plt.tight_layout()
+        plt.savefig(self.output_dir / "domain_classifications.png")
+
+    def get_axes(self, num_plots: int):
+        num_cols = int(np.ceil(np.sqrt(num_plots)))
+        num_rows = int(np.ceil(num_plots / num_cols))
+        fig, axes = plt.subplots(
+            num_rows, num_cols, figsize=(5 * num_cols, 5 * num_rows)
+        )
+        return fig, axes.flatten()
+
+    def clear_unused_axes(self, axes: np.ndarray, num_plots: int):
+        for j in range(num_plots, len(axes)):
+            axes[j].axis("off")
+
+    def plot_clusters(self, cluster: str = "communities", threshold: int = 50):
+        cluster_names = [
+            c
+            for c in self.system_plindex.columns
+            if c.endswith(f"__{threshold}__{cluster}")
+            and "weighted_max" not in c
+            and ("tanimoto" in c or "max" not in c)
+        ]
+
+        fig, axes = self.get_axes(len(cluster_names))
+
+        for i, c in enumerate(cluster_names):
+            name = (
+                c.replace(f"__{threshold}__{cluster}", "")
+                .replace("weighted_sum", "")
+                .replace("max", "")
+            )
+            if name.startswith("protein"):
+                name = name.replace("qcov", "global")
+            else:
+                name = name.replace("qcov", "shared")
+            name = name.replace("_", " ").upper()
+            self.plot_venn(
+                c,
+                axes[i],
+                name,
+            )
+
+        self.clear_unused_axes(axes, len(cluster_names))
+
+        fig.suptitle(f"Clusters ({cluster.capitalize()}, {threshold}%)", fontsize=16)
+        plt.tight_layout()
+        plt.savefig(self.output_dir / "plinder_clusters.png")
+
+    def plot_ligand_types(self):
+        counts_per_split = (
+            self.system_plindex.groupby("split")[self.ligand_types]
+            .mean()
+            .mul(100)
+            .to_dict()
+        )
+        labels = [
+            c.replace("system_ligand_has_", "").capitalize() for c in self.ligand_types
+        ]
+        split_names = ["train", "val", "test", "removed"]
+        fig, axes = self.get_axes(len(split_names))
+
+        bar_colors = plt.cm.Pastel2.colors
+        for i, split in enumerate(split_names):
+            split_data = self.system_plindex[self.system_plindex["split"] == split]
+            total_systems = len(split_data)
+            percentages = [counts_per_split[c][split] for c in self.ligand_types]
+            counts = [int(p / 100 * total_systems) for p in percentages]
+
+            bars = axes[i].bar(
+                np.arange(len(labels)),
+                percentages,
+                width=1,
+                color=bar_colors,
+                edgecolor="black",
+                label=split,
+                linewidth=1,
+            )
+            axes[i].set_xticks(np.arange(len(labels)))
+            axes[i].set_xticklabels(labels, rotation=70)
+            axes[i].set_ylim(0, 100)
+            axes[i].set_title(f"{split.capitalize()} (Total: {total_systems})")
+
+            # Add count labels to bars
+            for bar, count in zip(bars, counts):
+                axes[i].text(
+                    bar.get_x() + bar.get_width() / 2.0,
+                    bar.get_height() + 2,
+                    f"{count}",
+                    ha="center",
+                    va="bottom",
+                    rotation=70,
+                    fontsize=10,
+                )
+        fig.suptitle("Distribution of Ligand Types Contained in Systems")
+        self.clear_unused_axes(axes, len(split_names))
+        plt.tight_layout()
+        plt.savefig(self.output_dir / "ligand_types.png")
+
+    def plot_chain_composition(self):
+        split_names = ["train", "val", "test", "removed"]
+        fig, axes = self.get_axes(len(split_names))
+
+        for i, split in enumerate(split_names):
+            split_stats = self.system_plindex[self.system_plindex["split"] == split][
+                [
+                    "system_num_interacting_protein_chains",
+                    "system_proper_num_ligand_chains",
+                ]
+            ]
+            counts = {
+                "Single Protein & Single Ligand": split_stats[
+                    (split_stats["system_num_interacting_protein_chains"] == 1)
+                    & (split_stats["system_proper_num_ligand_chains"] == 1)
+                ].shape[0],
+                "Single Protein & Multiple Ligands": split_stats[
+                    (split_stats["system_num_interacting_protein_chains"] == 1)
+                    & (split_stats["system_proper_num_ligand_chains"] > 1)
+                ].shape[0],
+                "Multiple Proteins & Single Ligand": split_stats[
+                    (split_stats["system_proper_num_ligand_chains"] == 1)
+                    & (split_stats["system_num_interacting_protein_chains"] > 1)
+                ].shape[0],
+                "Multiple Proteins & Multiple Ligands": split_stats[
+                    (split_stats["system_proper_num_ligand_chains"] > 1)
+                    & (split_stats["system_num_interacting_protein_chains"] > 1)
+                ].shape[0],
+            }
+
+            wedges, texts, autotexts = axes[i].pie(
+                list(counts.values()),
+                colors=plt.cm.Pastel2.colors,
+                autopct=lambda pct: f"{pct:.1f}%\n{int(pct/100.*sum(counts.values())):d}",
+                textprops={"fontsize": 8},
+                wedgeprops={"linewidth": 0.5, "edgecolor": "black"},
+            )
+            axes[i].set_title(f"{split.capitalize()} ({sum(counts.values())})")
+
+        self.clear_unused_axes(axes, len(split_names))
+        fig.suptitle("System Chain Composition")
+        fig.legend(wedges, list(counts.keys()), loc="lower center", ncol=2)
+        plt.tight_layout()
+        plt.savefig(self.output_dir / "chain_composition.png")
+
+    def plot_all(self):
+        self.plot_split_proportions()
+        self.print_stratification_table()
+        self.print_overall_diversity()
+        self.plot_molecular_descriptors()
+        self.plot_priorities()
+        self.plot_domain_classifications()
+        self.plot_clusters()
+        self.plot_ligand_types()
+        self.plot_chain_composition()
 
 
 def main() -> None:
     import argparse
 
-    parser = argparse.ArgumentParser(description="Annotate and stratify a test set")
+    parser = argparse.ArgumentParser(description="Compare split properties")
     parser.add_argument(
         "--split_file",
         type=Path,
-        help="Path to split file with [system_id, split] as columns",
+        help="Path to split file",
     )
     parser.add_argument(
         "--data_dir",
@@ -126,44 +796,23 @@ def main() -> None:
         help="Path to plinder data",
     )
     parser.add_argument(
-        "--output_dir",
+        "--stratified_test_file",
         type=Path,
-        help="Path to output folder where similarity and stratification data are saved",
+        help="Path to stratified test file",
     )
     parser.add_argument(
-        "--train_label",
-        type=str,
-        default="train",
-        help="split=<train_label> is used to get train systems",
-    )
-    parser.add_argument(
-        "--val_label",
-        type=str,
-        default="val",
-        help="split=<val_label> is used to get val systems",
-    )
-    parser.add_argument(
-        "--test_label",
-        type=str,
-        default="test",
-        help="split=<test_label> is used to get test systems",
-    )
-    parser.add_argument(
-        "--overwrite",
-        action="store_true",
-        help="Overwrite max similarity files",
+        "--stratified_val_file",
+        type=Path,
+        help="Path to stratified val file",
     )
 
     args = parser.parse_args()
 
-    plot_molecular_descriptor_splits(
+    SplitPropertiesPlotter.from_files(
         split_file=args.split_file,
         data_dir=args.data_dir,
-        output_dir=args.output_dir,
-        train_label=args.train_label,
-        val_label=args.val_label,
-        test_label=args.test_label,
-        overwrite=args.overwrite,
+        stratified_test_file=args.stratified_test_file,
+        stratified_val_file=args.stratified_val_file,
     )
 
 
