@@ -186,6 +186,51 @@ def get_labels(
     return labels
 
 
+def explode_ligand_clusters(
+    *,
+    data_dir: Path,
+    labeldf: pd.DataFrame,
+) -> None:
+    ligands_per_system = pd.read_parquet(
+        data_dir / "fingerprints/ligands_per_system.parquet"
+    )
+    annotation_df = pd.read_parquet(
+        data_dir / "index" / "annotation_table.parquet",
+        columns=[
+            "system_id",
+            "ligand_molecular_weight",
+            "ligand_rdkit_canonical_smiles",
+        ],
+        filters=[
+            ("system_id", "in", set(ligands_per_system["system_id"])),
+            ("ligand_is_ion", "==", False),
+            ("ligand_is_artifact", "==", False),
+        ],
+    )
+    mapr = dict(
+        zip(
+            ligands_per_system["ligand_rdkit_canonical_smiles"],
+            ligands_per_system["number_id_by_inchikeys"],
+        )
+    )
+    annotation_df["number_id_by_inchikeys"] = annotation_df[
+        "ligand_rdkit_canonical_smiles"
+    ].map(mapr)
+    annotation_df.dropna(subset=["number_id_by_inchikeys"], inplace=True)
+    annotation_df["number_id_by_inchikeys"] = annotation_df[
+        "number_id_by_inchikeys"
+    ].astype(int)
+    annotation_df = annotation_df.sort_values(
+        by=["system_id", "ligand_molecular_weight"], ascending=[True, False]
+    ).drop_duplicates(subset=["system_id"], keep="first")
+    ligand_to_system: dict[int, set[str]] = {}
+    for ligand_id, group in annotation_df.groupby("number_id_by_inchikeys"):
+        ligand_to_system[int(ligand_id)] = set(group["system_id"])
+    labeldf["system_id"] = labeldf["system_id"].astype(int).map(ligand_to_system)
+    labeldf = labeldf.dropna(subset=["system_id"]).explode("system_id")
+    return labeldf
+
+
 def make_cluster_file(
     *,
     graph: nk.graph.Graph,
@@ -224,6 +269,8 @@ def make_cluster_file(
         labeldf["directed"] = False
         labeldf["threshold"] = threshold
         labeldf["cluster"] = cluster
+        if metric == "tanimoto_similarity_max":
+            labeldf = explode_ligand_clusters(data_dir=data_dir, labeldf=labeldf)
         LOG.info(f"saving {cluster_file}")
         t0 = time()
         cluster_file.parent.mkdir(exist_ok=True, parents=True)
@@ -232,13 +279,12 @@ def make_cluster_file(
         LOG.info(f"make_cluster_file: saving took {t1-t0:.2f}s")
 
 
-def make_components_and_communities(
+def prepare_df_protein(
     *,
     data_dir: Path,
     metric: str,
     threshold: int,
-    skip_existing_clusters: bool = False,
-) -> None:
+) -> pd.DataFrame:
     LOG.info(f"threshold={threshold} metric={metric} getting system_ids")
     t0 = time()
     system_ids_and_singletons = set(
@@ -273,6 +319,74 @@ def make_components_and_communities(
         LOG.info("no protein similarity scores found, returning")
         return
     LOG.info(f"found {len(df.index)} similarity scores")
+    return df, system_ids_and_singletons
+
+
+def prepare_df_ligand(
+    *,
+    data_dir: Path,
+    metric: str,
+    threshold: int,
+) -> pd.DataFrame:
+    LOG.info(f"threshold={threshold} metric={metric} getting ligand_ids")
+    t0 = time()
+    system_ids_and_singletons = set(
+        pd.read_parquet(data_dir / "fingerprints/ligands_per_system.parquet")[
+            "number_id_by_inchikeys"
+        ].astype(str)
+    )
+    t1 = time()
+    LOG.info(f"getting {len(system_ids_and_singletons)} ligand_ids took {t1-t0:.2f}s")
+    if not len(system_ids_and_singletons):
+        LOG.info("no ligand_ids found, returning")
+        return
+    df = scores.query_ligand_similarity(
+        columns=[
+            "query_ligand_id",
+            "target_ligand_id",
+            "tanimoto_similarity_max",
+        ],
+        filters=[
+            ("tanimoto_similarity_max", ">=", threshold),
+        ],
+    )
+    df[["query_ligand_id", "target_ligand_id"]] = df[
+        ["query_ligand_id", "target_ligand_id"]
+    ].astype(str)
+    if df is None or df.empty:
+        LOG.info("no ligand similarity scores found, returning")
+        return
+    LOG.info(f"found {len(df.index)} similarity scores")
+    df.rename(
+        columns={
+            "query_ligand_id": "query_system",
+            "target_ligand_id": "target_system",
+            "tanimoto_similarity_max": "similarity",
+        },
+        inplace=True,
+    )
+    return df, system_ids_and_singletons
+
+
+def make_components_and_communities(
+    *,
+    data_dir: Path,
+    metric: str,
+    threshold: int,
+    skip_existing_clusters: bool = False,
+) -> None:
+    if metric == "tanimoto_similarity_max":
+        df, system_ids_and_singletons = prepare_df_ligand(
+            data_dir=data_dir,
+            metric=metric,
+            threshold=threshold,
+        )
+    else:
+        df, system_ids_and_singletons = prepare_df_protein(
+            data_dir=data_dir,
+            metric=metric,
+            threshold=threshold,
+        )
     system_ids_df = set(df["query_system"]).union(set(df["target_system"]))
     system_ids_cat = pd.CategoricalDtype(categories=list(system_ids_df))
     df[["query_system", "target_system"]] = df[
