@@ -756,12 +756,11 @@ def collate_partitions(*, data_dir: Path, partition: list[str]) -> None:
     con.sql(f"set temp_directory='/plinder/tmp/{part}';")
 
     search_db = "holo"
-    src = "*.parquet"
-    tgt = "*.parquet"
+    src = f"*{part}.parquet"
+    tgt = f"{part}.parquet"
     if part in ["apo", "pred"]:
         search_db = part
-        src = f"*{part}.parquet"
-        tgt = f"{part}.parquet"
+        src = "*.parquet"
     score_dir = data_dir / "scores" / f"search_db={search_db}"
     source_dir = data_dir / "dbs" / "subdbs" / f"search_db={search_db}"
     source = f"{source_dir}/{src}"
@@ -772,7 +771,7 @@ def collate_partitions(*, data_dir: Path, partition: list[str]) -> None:
         dedent(
             f"""
                 COPY
-                    (select * from '{source}' order by metric, similarity desc)
+                    (select * from '{source}')
                 TO
                     '{target}'
                 (FORMAT PARQUET, ROW_GROUP_SIZE 500_000);
