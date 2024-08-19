@@ -17,12 +17,134 @@ from tqdm import tqdm
 from plinder.core import scores
 from plinder.core.utils.log import setup_logger
 from plinder.data import clusters
-from plinder.data.compare_split_props import (
-    label_has_mms_within_subset,
-    load_plindex,
-)
 
 LOG = setup_logger(__name__)
+
+
+# TODO: this can be removed after cleanup merge
+def reset_lipinski_and_other(df):
+    # Reset artifacts/ions
+    mask_reset = df["ligand_is_ion"] | df["ligand_is_artifact"]
+    df.loc[
+        mask_reset,
+        [
+            "ligand_is_fragment",
+            "ligand_is_lipinski",
+            "ligand_is_cofactor",
+            "ligand_is_covalent",
+            "ligand_is_oligo",
+        ],
+    ] = False
+
+    # Lipinski like Ro3
+    mask_ro3 = (
+        (df["ligand_molecular_weight"] < 300)
+        & (df["ligand_crippen_clogp"] < 3)
+        & (df["ligand_num_hbd"] <= 3)
+        & (df["ligand_num_hba"] <= 3)
+        & ~mask_reset
+    )
+    df.loc[mask_ro3, ["ligand_is_fragment", "ligand_is_lipinski"]] = True
+
+    # Lipinski like Ro5
+    mask_ro5 = (
+        (df["ligand_molecular_weight"] < 500)
+        & (df["ligand_crippen_clogp"] < 5)
+        & (df["ligand_num_hbd"] <= 5)
+        & (df["ligand_num_hba"] <= 10)
+        & ~mask_reset
+        & ~mask_ro3
+    )
+    df.loc[mask_ro5, "ligand_is_lipinski"] = True
+
+    # ligand_is_other
+    df["ligand_is_other"] = ~(
+        df["ligand_is_invalid"]
+        | df["ligand_is_ion"]
+        | df["ligand_is_oligo"]
+        | df["ligand_is_artifact"]
+        | df["ligand_is_cofactor"]
+        | df["ligand_is_lipinski"]
+        | df["ligand_is_fragment"]
+        | df["ligand_is_covalent"]
+    )
+
+    return df
+
+
+def load_plindex(plindex: pd.DataFrame):
+    plindex = reset_lipinski_and_other(plindex)
+    plindex["system_ligand_max_qed"] = plindex.groupby("system_id")[
+        "ligand_qed"
+    ].transform("max")
+    plindex["system_pass_validation_criteria"] = plindex[
+        "system_pass_validation_criteria"
+    ].fillna(False)
+    for n in [
+        "lipinski",
+        "cofactor",
+        "fragment",
+        "oligo",
+        "artifact",
+        "other",
+        "covalent",
+        "invalid",
+        "ion",
+    ]:
+        plindex[f"system_ligand_has_{n}"] = plindex.groupby("system_id")[
+            f"ligand_is_{n}"
+        ].transform("any")
+    plindex["system_interacting_protein_chains_total_length"] = plindex[
+        "system_interacting_protein_chains_length"
+    ].apply(lambda x: sum(int(i) for i in x.split(";")))
+    plindex["ligand_is_proper"] = (
+        ~plindex["ligand_is_ion"] & ~plindex["ligand_is_artifact"]
+    )
+    plindex["system_proper_num_ligand_chains"] = plindex.groupby("system_id")[
+        "ligand_is_proper"
+    ].transform("sum")
+    plindex["system_proper_num_interactions"] = (
+        plindex["ligand_num_interactions"]
+        .where(plindex["ligand_is_proper"], other=0)
+        .groupby(plindex["system_id"])
+        .transform("sum")
+    )
+    plindex["system_proper_pocket_num_residues"] = (
+        plindex["ligand_num_neighboring_residues"]
+        .where(plindex["ligand_is_proper"], other=0)
+        .groupby(plindex["system_id"])
+        .transform("sum")
+    )
+    plindex["system_proper_ligand_max_molecular_weight"] = (
+        plindex["ligand_molecular_weight"]
+        .where(plindex["ligand_is_proper"], other=float("-inf"))
+        .groupby(plindex["system_id"])
+        .transform("max")
+    )
+    plindex["uniqueness"] = (
+        plindex["system_id_no_biounit"]
+        + "_"
+        + plindex["pli_qcov__100__strong__component"]
+    )
+    plindex["system_num_ligands_in_biounit"] = plindex.groupby(
+        ["entry_pdb_id", "system_biounit_id"]
+    )["system_id"].transform("count")
+    plindex["system_num_unique_ligands_in_biounit"] = plindex.groupby(
+        ["entry_pdb_id", "system_biounit_id"]
+    )["ligand_unique_ccd_code"].transform("nunique")
+    plindex["system_proper_num_ligands_in_biounit"] = plindex.groupby(
+        ["entry_pdb_id", "system_biounit_id"]
+    )["ligand_is_proper"].transform("sum")
+    ccd_dict = (
+        plindex[plindex["ligand_is_proper"]]
+        .groupby("system_id")["ligand_unique_ccd_code"]
+        .agg(lambda x: "-".join(sorted(set(x))))
+        .to_dict()
+    )
+    plindex["system_proper_ligands_unique_ccd_codes"] = plindex["system_id"].map(
+        ccd_dict
+    )
+    return plindex
 
 
 @dataclass
@@ -37,8 +159,7 @@ class SplitConfig:
     graph_configs: list[GraphConfig] = field(
         default_factory=lambda: [
             GraphConfig("pli_unique_qcov", 50, 1),
-            # GraphConfig("pocket_qcov", 50, 1),
-            GraphConfig("protein_seqsim_weighted_sum", 50, 2),
+            GraphConfig("protein_seqsim_weighted_sum", 30, 1),
         ]
     )
     # how many unique congeneric IDs passing quality to consider as MMS
@@ -62,7 +183,7 @@ class SplitConfig:
     # test should not be in too big communities or cause too many train cases to be removed
     max_test_leakage_count: int = 1000
     # maximum fraction of systems that can be removed due to test set selection
-    max_removed_fraction: float = 1
+    max_removed_fraction: float = 0.2
     # test set size
     num_test: int = 1000
     # what kind of cluster to use for sampling val
@@ -95,9 +216,7 @@ class SplitConfig:
     )
     priority_columns: dict[str, float] = field(
         default_factory=lambda: {
-            # "system_has_mms": 40,
-            "system_ligand_has_cofactor": -0.5,
-            # "system_has_binding_affinity": 0.5,
+            "system_ligand_has_cofactor": -40,
             "leakage_count": -1,
         }
     )
@@ -242,28 +361,19 @@ def prep_data_for_desired_properties(
     """
     LOG.info(OmegaConf.to_yaml(cfg))
 
-    entries = pd.read_parquet(data_dir / "index" / "annotation_table.parquet")
-
-    # sanity check to only split entries that were successfully scored
-    # foldseek_ids = get_ids_in_db(
-    #     data_dir=data_dir, search_db="holo", aln_type="foldseek"
-    # )
-    # mmseqs_ids = get_ids_in_db(data_dir=data_dir, search_db="holo", aln_type="mmseqs")
-    # foldseek_entries_present = foldseek_ids[1].str.replace("pdb_0000", "").str[:4]
-    # mmseqs_entries_present = mmseqs_ids[1].str.replace("pdb_0000", "").str[:4]
-    # all_entries_present = set(foldseek_entries_present).intersection(
-    #     mmseqs_entries_present
-    # )
     all_entries_present = set(
         pd.read_csv(data_dir / "dbs" / "subdbs" / "holo_ids.csv")["pdb_id"]
     )
 
-    entries = entries[
-        (entries["system_type"] == "holo")
-        & (entries["system_num_interacting_protein_chains"] <= 5)
-        & (entries["system_num_ligand_chains"] <= 5)
-        & (entries["entry_pdb_id"].isin(all_entries_present))
-    ].reset_index(drop=True)
+    entries = pd.read_parquet(
+        data_dir / "index" / "annotation_table.parquet",
+        filters=[
+            ("system_type", "==", "holo"),
+            ("system_num_interacting_protein_chains", "<=", 5),
+            ("system_num_ligand_chains", "<=", 5),
+            ("entry_pdb_id", "in", all_entries_present),
+        ],
+    )
     LOG.info(f"loaded {entries['system_id'].nunique()} systems from annotation table")
     entries = load_plindex(entries)
     nonredundant_to_all = defaultdict(set)
@@ -305,7 +415,7 @@ def prep_data_for_desired_properties(
         )
     )
     LOG.info(
-        f"{len(entries[entries['proto_test']].index)} systems pass quality and statistics filters"
+        f"{len(entries[entries['proto_test']].index)} systems pass quality, statistics, and additional filters"
     )
 
     apo_links = pd.read_parquet(
@@ -316,6 +426,7 @@ def prep_data_for_desired_properties(
     num_apo_links = apo_links.groupby("system_id").size()
     LOG.info(f"num_apo_links has {len(num_apo_links)} elements")
 
+    # TODO: replace with pred_links.parquet once available
     pred_links = scores.query_protein_similarity(
         search_db="pred",
         columns=["query_system", "target_system"],
@@ -338,30 +449,7 @@ def prep_data_for_desired_properties(
     entries["system_has_apo_or_pred"] = (
         entries["system_has_apo"] | entries["system_has_pred"]
     )
-
-    mms_df = pd.read_parquet(
-        data_dir / "mmp/plinder_mmp_series.parquet",
-        filters=[("system_id", "in", list(entries["system_id"]))],
-    )
-    LOG.info(f"read mmp series has {len(mms_df.index)} records")
-    quality = set(entries[entries["system_pass_validation_criteria"]]["system_id"])
-    mms_df, good_mms_systems = label_has_mms_within_subset(
-        mms_df, quality, cfg.split.mms_unique_quality_count
-    )
-    # mms_df = mms_df[mms_df["system_id"].isin(quality)]
-    # LOG.info(
-    #     f"mmp series after quality control {len(mms_df.index)} records for {mms_df['system_id'].nunique()} systems"
-    # )
-    # mms_count = mms_df.groupby("congeneric_id").size()
-    # mms_df["mms_unique_quality_count"] = mms_df["congeneric_id"].map(mms_count)
-    # good_mms_systems = set(
-    #     mms_df[
-    #         mms_df["mms_unique_quality_count"] >= cfg.split.mms_unique_quality_count
-    #     ]["system_id"]
-    # )
-    entries["system_has_mms"] = entries["system_id"].isin(good_mms_systems)
-    LOG.info(f"entries with good mms: {len(entries[entries['system_has_mms']].index)}")
-    return mms_df, entries, nonredundant_to_all
+    return entries, nonredundant_to_all
 
 
 def load_graphs(
@@ -553,7 +641,6 @@ def prioritize_test_sample(
     entries: pd.DataFrame,
     system_id_to_leakage: dict[str, set[str]],
     test_systems: set[str],
-    mms_df: pd.DataFrame,
     cluster_to_systems: dict[str, set[str]],
     system_to_cluster: dict[str, str],
 ) -> tuple[dict[str, set[str]], set[str]]:
@@ -577,8 +664,6 @@ def prioritize_test_sample(
         test system id mapped to leakage
     test_systems : set[str]
         test system ids
-    mms_df : pd.DataFrame
-        matched-molecular series dataframe
     cluster_to_systems : dict[str, set[str]]
         cluster ids mapped to sets of  system ids
     system_to_cluster : dict[str, str]
@@ -604,21 +689,6 @@ def prioritize_test_sample(
     LOG.info(
         f"found {len(set(test_data['system_id']))} test systems after removing by second pass neighbor leakage count"
     )
-    # priority_column_order = sorted(
-    #     cfg.split.priority_columns,
-    #     key=lambda x: cfg.split.priority_columns[x],
-    #     reverse=True,
-    # )
-    # ascending = [cfg.split.priority_columns[x] <= 0 for x in priority_column_order]
-    # test_data = (
-    #     test_data.sort_values(
-    #         priority_column_order,
-    #         ascending=ascending,
-    #     )
-    #     .groupby("cluster")
-    #     .head(cfg.split.num_test_representatives)
-    #     .reset_index(drop=True)
-    # )
 
     test_data["system_score"] = (
         test_data[list(cfg.split.priority_columns)]
@@ -649,34 +719,10 @@ def prioritize_test_sample(
     max_removed = int(cfg.split.max_removed_fraction * entries["system_id"].nunique())
     test_system_ids = set()
     to_remove = set()
-    # mms_df = mms_df[
-    #     mms_df["mms_unique_quality_count"] >= cfg.split.mms_unique_quality_count
-    # ]
-    # good_mms_systems = set(mms_df["system_id"])
-    because_of_mms = set()
     for x in all_test_system_ids:
         if len(test_system_ids) < cfg.split.num_test:
-            # system_pdb_id = x.split("__")[0]
             test_system_ids.add(x)
             to_remove |= system_id_to_leakage.get(x, set())
-            # if x in good_mms_systems:
-            #     to_remove_mms = set()
-            #     test_congeneric_ids = set(
-            #         mms_df[(mms_df["system_id"] == x)]["congeneric_id"]
-            #     )
-            #     to_add = set(
-            #         mms_df[mms_df["congeneric_id"].isin(test_congeneric_ids)][
-            #             "system_id"
-            #         ]
-            #     )
-            #     to_add -= set(y for y in to_add if y.split("__")[0] == system_pdb_id)
-            #     for y in to_add:
-            #         current_to_remove = system_id_to_leakage.get(y, set())
-            #         to_remove_mms.update(current_to_remove)
-            #     if len(to_remove_mms) < cfg.split.max_mms_test_leakage_count:
-            #         test_system_ids |= to_add
-            #         to_remove.update(to_remove_mms)
-            #         because_of_mms.update(to_remove_mms)
         if len(to_remove) > max_removed:
             remaining = set(all_test_system_ids).difference(test_system_ids)
             test_clusters = set(system_to_cluster[x] for x in test_system_ids)
@@ -687,23 +733,12 @@ def prioritize_test_sample(
     LOG.info(
         f"test_data after max_test of {cfg.split.num_test}: {len(test_system_ids)}"
     )
-    LOG.info(f"Removed because of mms: {len(because_of_mms)}")
-
-    # test_congeneric_ids = set(
-    #     mms_df[
-    #         mms_df["system_id"].isin(test_system_ids)
-    #         & (mms_df["mms_unique_quality_count"] >= cfg.split.mms_unique_quality_count)
-    #     ]["congeneric_id"]
-    # )
-    # test_system_ids |= set(
-    #     mms_df[mms_df["congeneric_id"].isin(test_congeneric_ids)]["system_id"]
-    # )
-    # LOG.info(f"test_data after adding congeneric series: {len(test_system_ids)}")
     return entries, test_system_ids
 
 
 def assign_split_membership(
     cfg: DictConfig,
+    data_dir: Path,
     entries: pd.DataFrame,
     nonredundant_to_all: dict[str, set[str]],
     test_system_ids: set[str],
@@ -721,6 +756,8 @@ def assign_split_membership(
         Data directory
     entries : pd.DataFrame
         entries annotations
+    mms_df : pd.DataFrame
+        matched-molecular series dataframe
     test_system_ids : set[str]
         set of test systems ids
     system_id_to_leakage : dict[str, set[str]]
@@ -738,8 +775,6 @@ def assign_split_membership(
         entries.groupby("entry_pdb_id")["system_id"].apply(set).to_dict()
     )
 
-    entries["split"] = "train"
-    entries.loc[entries["system_id"].isin(test_system_ids), "split"] = "test"
     remove_from_train = (
         set.union(
             *(
@@ -750,6 +785,45 @@ def assign_split_membership(
         - test_system_ids
     )
     LOG.info(f"found {len(remove_from_train)} entries to remove from train")
+
+    # Add back MMS of test systems present in remove_from_train
+    quality_test_removed = (test_system_ids.union(remove_from_train)).intersection(
+        entries[entries["system_pass_validation_criteria"]]["system_id"]
+    )
+    mms_df = pd.read_parquet(
+        data_dir / "mmp/plinder_mmp_series.parquet",
+        filters=[("system_id", "in", quality_test_removed)],
+    )
+    mms_count = mms_df.groupby("congeneric_id").size()
+    mms_df["mms_unique_count_in_test"] = mms_df["congeneric_id"].map(mms_count)
+    good_mms_systems = set(
+        mms_df[
+            mms_df["mms_unique_count_in_test"] >= cfg.split.mms_unique_quality_count
+        ]["system_id"]
+    )
+    test_congeneric_ids = set(
+        mms_df[(mms_df["system_id"].isin(test_system_ids))]["congeneric_id"]
+    )
+    to_add = set(
+        mms_df[mms_df["congeneric_id"].isin(test_congeneric_ids)]["system_id"]
+    ).intersection(good_mms_systems)
+    LOG.info(f"found {len(to_add)} MMS systems to add back")
+    test_system_ids |= to_add
+    remove_from_train = (
+        set.union(
+            *(
+                system_id_to_leakage.get(system_id, set())
+                for system_id in test_system_ids
+            )
+        )
+        - test_system_ids
+    )
+    LOG.info(
+        f"found {len(remove_from_train)} entries to remove from train after adding back MMS"
+    )
+
+    entries["split"] = "train"
+    entries.loc[entries["system_id"].isin(test_system_ids), "split"] = "test"
     entries.loc[
         (entries["split"] == "train") & entries["system_id"].isin(remove_from_train),
         "split",
@@ -833,9 +907,6 @@ def assign_split_membership(
             "system_proper_ligand_max_molecular_weight",
             "system_has_binding_affinity",
             "system_has_apo_or_pred",
-            "system_has_mms",
-            # "system_score",
-            # "cluster_score",
         ]
     ].reset_index(drop=True)
     mask = final["split"] == "train"
@@ -854,7 +925,7 @@ def assign_split_membership(
 def split(*, data_dir: Path, cfg: DictConfig, relpath: str) -> pd.DataFrame:
     OmegaConf.save(config=cfg, f=data_dir / "splits" / f"split_{relpath}.yaml")
 
-    mms_df, entries, nonredundant_to_all = prep_data_for_desired_properties(
+    entries, nonredundant_to_all = prep_data_for_desired_properties(
         data_dir=data_dir,
         cfg=cfg,
     )
@@ -896,7 +967,6 @@ def split(*, data_dir: Path, cfg: DictConfig, relpath: str) -> pd.DataFrame:
         entries=entries,
         system_id_to_leakage=system_id_to_leakage,
         test_systems=low_degree_test_systems,
-        mms_df=mms_df,
         cluster_to_systems=cluster_to_systems,
         system_to_cluster=system_to_cluster,
     )
@@ -915,6 +985,7 @@ def split(*, data_dir: Path, cfg: DictConfig, relpath: str) -> pd.DataFrame:
     split_path = data_dir / "splits" / f"split_{relpath}.parquet"
     return assign_split_membership(
         cfg=cfg,
+        data_dir=data_dir,
         entries=entries,
         nonredundant_to_all=nonredundant_to_all,
         test_system_ids=test_system_ids,
