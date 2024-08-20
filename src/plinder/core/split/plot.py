@@ -210,14 +210,14 @@ class SplitPropertiesPlotter:
             subset=[
                 "system_id",
                 "img",
-                "Ligand community ID",
-                "PLI community ID",
+                "tanimoto_similarity_max__30__communities",
+                "pli_unique_qcov__50__communities",
                 color_col,
             ],
             # set what's displayed on the hover tooltip
             tooltip=[
-                "Receptor chain count",
-                "Ligand count",
+                "system_num_interacting_protein_chains",
+                "system_proper_num_ligand_chains",
                 "system_has_binding_affinity",
                 "system_has_mms",
                 "system_has_apo_or_pred",
