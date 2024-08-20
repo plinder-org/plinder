@@ -141,6 +141,7 @@ class SplitPropertiesPlotter:
         stratified_train_val_file: Path | None = None,
         stratified_val_test_file: Path | None = None,
         mms_count: int = 3,
+        make_plots: bool = True,
     ) -> "SplitPropertiesPlotter":
         stratified_files = {}
         if stratified_train_test_file is not None:
@@ -163,7 +164,8 @@ class SplitPropertiesPlotter:
         plotter.plindex = plotter.merge_plindex(plindex)
         plotter.system_plindex = plotter.plindex.drop_duplicates("system_id")
         plotter.merge_stratification()
-        plotter.plot_all()
+        if make_plots:
+            plotter.plot_all()
         return plotter
 
     def __post_init__(self) -> None:
@@ -265,7 +267,12 @@ class SplitPropertiesPlotter:
         self.stratified = {
             split: pd.read_parquet(self.stratified_files[split])
             .drop_duplicates("system_id")
-            .rename(mapper=lambda x: f"{x}__{split}" if x != "system_id" else x, axis=1)
+            .rename(
+                mapper=lambda x: f"{x}__{split}"
+                if x != "system_id" and "novel" not in x
+                else x,
+                axis=1,
+            )
             for split in self.stratified_files
         }
         for split in self.stratified:
@@ -315,6 +322,7 @@ class SplitPropertiesPlotter:
 
     def print_stratification_table(self) -> None:
         if len(self.stratified) == 0:
+            LOG.info("No stratified data found, skipping stratification table")
             return
         stratified_dfs = {
             split: self.stratified[split][
@@ -748,7 +756,8 @@ class SplitPropertiesPlotter:
     def plot_all(self) -> None:
         self.plot_split_proportions()
         self.print_stratification_table()
-        # self.save_ligand_report_html("test")
+        if "train_vs_test" in self.stratified.keys():
+            self.save_ligand_report_html("test")
         self.print_overall_diversity()
         self.plot_molecular_descriptors()
         self.plot_priorities()
