@@ -9,9 +9,9 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
-from plinder.core.scores.ligand import cross_similarity as ligand_cross_similarity
 from plinder.core.scores.protein import cross_similarity as protein_cross_similarity
 from plinder.core.utils.log import setup_logger
+from plinder.data.smallmolecules import mol2morgan_fp, tanimoto_maxsim_matrix
 
 LOG = setup_logger(__name__)
 
@@ -73,26 +73,48 @@ def get_ligand_ids(data_dir: Path, left: set[str], right: set[str]) -> pd.DataFr
     return left_ligand_ids, right_ligand_ids
 
 
-def compute_max_similarities(
-    data_dir: Path, left: set[str], right: set[str], metric: str, output_file: Path
+def compute_protein_max_similarities(
+    left: set[str], right: set[str], metric: str, output_file: Path
 ) -> None:
-    LOG.info(f"compute_max_similarities: Computing max similarities for {metric}")
-    if metric == "tanimoto_similarity_max":
-        left_ligand_ids, right_ligand_ids = get_ligand_ids(data_dir, left, right)
-        ligand_cross_similarity(
-            query_ligands=left_ligand_ids,
-            target_ligands=right_ligand_ids,
-            metric=metric,
-        ).to_parquet(output_file, index=False)
-    else:
-        protein_cross_similarity(
-            query_systems=left,
-            target_systems=right,
-            metric=metric,
-        ).rename(
-            columns={"query_system": "system_id", "target_system": "train_system_id"}
-        ).to_parquet(output_file, index=False)
-    LOG.info(f"compute_max_similarities: Done computing max similarities for {metric}")
+    LOG.info(
+        f"compute_protein_max_similarities: Computing max similarities for {metric}"
+    )
+    protein_cross_similarity(
+        query_systems=left,
+        target_systems=right,
+        metric=metric,
+    ).rename(
+        columns={"query_system": "system_id", "target_system": "train_system_id"}
+    ).to_parquet(output_file, index=False)
+    LOG.info(
+        f"compute_protein_max_similarities: Done computing max similarities for {metric}"
+    )
+
+
+def compute_ligand_max_similarities(
+    df: pd.DataFrame, train_label: str, test_label: str, output_file: Path
+) -> None:
+    if "fp" not in df.columns():
+        df["ligand_is_proper"] = ~df["ligand_is_ion"] & ~df["ligand_is_artifact"]
+        smiles_fp_dict = {
+            smi: mol2morgan_fp(smi)
+            for smi in df[df["ligand_is_proper"]]["ligand_rdkit_canonical_smiles"]
+            .drop_duplicates()
+            .to_list()
+        }
+        df["fp"] = df["ligand_rdkit_canonical_smiles"].map(smiles_fp_dict)
+
+    df_test = df.loc[df["ligand_is_proper"] & df["split"] == test_label][
+        ["system_id", "fp"]
+    ].copy()
+
+    df_test["tanimoto_similarity_max"] = tanimoto_maxsim_matrix(
+        df.loc[df["ligand_is_proper"] & (df["split"] == train_label)]["fp"].to_list(),
+        df_test["fp"].to_list(),
+    )
+    df_test.drop("fp", axis=1).groupby("system_id").agg("max").reset_index().to_parquet(
+        output_file, index=False
+    )
 
 
 @dataclass
@@ -209,9 +231,18 @@ class StratifiedTestSet:
         )
         for metric in tqdm(SIMILARITY_METRICS):
             if overwrite or not (self.get_filename(metric)).exists():
-                compute_max_similarities(
-                    self.data_dir, left, right, metric, self.get_filename(metric)
-                )
+                if metric == "tanimoto_similarity_max":
+                    compute_ligand_max_similarities(
+                        self.split_df,
+                        self.train_label,
+                        self.test_label,
+                        self.get_filename(metric),
+                    )
+                else:
+                    compute_protein_max_similarities(
+                        left, right, metric, self.get_filename(metric)
+                    )
+
         per_metric_similarities = []
         for metric in SIMILARITY_METRICS:
             df = pd.read_parquet(self.get_filename(metric))
