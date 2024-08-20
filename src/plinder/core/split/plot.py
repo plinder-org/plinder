@@ -178,8 +178,8 @@ class SplitPropertiesPlotter:
         self,
         split_name: str,
         smiles_col: str = "ligand_rdkit_canonical_smiles",
-        bg_color_col: str = "system_ligand_has_lipinski",
-        sort_col: str = "system_ligand_has_cofactor",
+        bg_color_col: str = "system_has_mms",
+        sort_col: str = "system_id",
     ) -> None:
         color_col = f"tanimoto_similarity_max__train_vs_{split_name}"
         df = self.plindex[
@@ -199,12 +199,29 @@ class SplitPropertiesPlotter:
         )
         grid.save(
             self.output_dir / f"{split_name}.html",
+            # rename columns for easier interpretation and formatting
+            rename={
+                "pli_unique_qcov__50__communities": "PLI community ID",
+                "tanimoto_similarity_max__30__communities": "Ligand community ID",
+                "system_num_interacting_protein_chains": "Receptor chain count",
+                "system_proper_num_ligand_chains": "Ligand count",
+            },
+            # set what's displayed on the grid
             subset=[
-                "img",
                 "system_id",
-                "system_num_interacting_protein_chains",
-                "system_proper_num_ligand_chains",
+                "img",
+                "Ligand community ID",
+                "PLI community ID",
                 color_col,
+            ],
+            # set what's displayed on the hover tooltip
+            tooltip=[
+                "Receptor chain count",
+                "Ligand count",
+                "system_has_binding_affinity",
+                "system_has_mms",
+                "system_has_apo_or_pred",
+                "system_ligand_has_lipinski",
                 "system_ligand_has_cofactor",
             ],
             n_items_per_page=48,
