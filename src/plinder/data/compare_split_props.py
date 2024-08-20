@@ -164,6 +164,7 @@ class SplitPropertiesPlotter:
             plindex = pd.read_parquet(plindex_file)
         plotter.plindex = plotter.merge_plindex(plindex)
         plotter.system_plindex = plotter.plindex.drop_duplicates("system_id")
+        plotter.merge_stratification()
         plotter.plot_all()
         return plotter
 
@@ -192,7 +193,10 @@ class SplitPropertiesPlotter:
         self,
         split_name: str,
         smiles_col: str = "ligand_rdkit_canonical_smiles",
+        bg_color_col: str = "system_ligand_has_lipinski",
+        sort_col: str = "system_ligand_has_cofactor",
     ) -> None:
+        color_col = f"tanimoto_similarity_max__train_vs_{split_name}"
         df = self.plindex[
             (self.plindex["split"] == split_name)
             & (~self.plindex["ligand_is_ion"])
@@ -208,38 +212,28 @@ class SplitPropertiesPlotter:
             df,
             smiles_col=smiles_col,
         )
-        return grid
-        # grid.save(
-        #     # output file
-        #     self.output_dir / f"{split_name}.html",
-        #     # rename fields for the output document
-        #     # rename={"SOL": "Solubility", "SOL_classification": "Class", "NAME": "Name"},
-        #     # set what's displayed on the grid
-        #     subset=[
-        #         "img",
-        #         "system_id",
-        #         "system_num_interacting_protein_chains",
-        #         "system_proper_num_ligand_chains",
-        #         # "tanimoto_similarity_max",
-        #         "system_ligand_has_cofactor",
-        #     ],
-        #     n_items_per_page=48,
-        #     # set what's displayed on the hover tooltip
-        #     # tooltip=["Name", "SMILES", "Class", "Solubility"],
-        #     # style for the grid labels and tooltips
-        #     # style={
-        #     #     "tanimoto_similarity_max": lambda x: "color: red; font-weight: bold;"
-        #     #     if x > 30
-        #     #     else "",
-        #     #     "__all__": lambda x: "background-color: azure;"
-        #     #     if x["system_ligand_has_lipinski"]
-        #     #     else "",
-        #     # },
-        #     # change the precision and format (or other transformations)
-        #     # transform={"tanimoto_similarity_max": lambda x: round(x, 0)},
-        #     # sort the grid in a different order by default
-        #     sort_by="system_ligand_has_cofactor",
-        # )
+        grid.save(
+            self.output_dir / f"{split_name}.html",
+            subset=[
+                "img",
+                "system_id",
+                "system_num_interacting_protein_chains",
+                "system_proper_num_ligand_chains",
+                color_col,
+                "system_ligand_has_cofactor",
+            ],
+            n_items_per_page=48,
+            # style for the grid labels and tooltips
+            style={
+                color_col: lambda x: "color: red; font-weight: bold;" if x > 30 else "",
+                "__all__": lambda x: "background-color: azure;"
+                if x[bg_color_col]
+                else "",
+            },
+            transform={color_col: lambda x: round(x, 0)},
+            # sort the grid in a different order by default
+            sort_by=sort_col,
+        )
 
     def merge_plindex(self, plindex: pd.DataFrame):
         split = pd.read_parquet(self.split_file)
@@ -264,6 +258,25 @@ class SplitPropertiesPlotter:
         plindex["system_has_mms"] = plindex["system_id"].isin(good_mms_systems)
 
         return plindex
+
+    def merge_stratification(self):
+        self.stratified = {
+            split: pd.read_parquet(self.stratified_files[split])
+            .drop_duplicates("system_id")
+            .rename(mapper=lambda x: f"{x}__{split}" if x != "system_id" else x, axis=1)
+            for split in self.stratified_files
+        }
+        for split in self.stratified:
+            self.system_plindex = self.system_plindex.merge(
+                self.stratified[split],
+                on="system_id",
+                how="left",
+            )
+            self.plindex = self.plindex.merge(
+                self.stratified[split],
+                on="system_id",
+                how="left",
+            )
 
     def plot_ligands(self, split_names=["test", "val"]):
         plindex = self.plindex[
@@ -299,23 +312,14 @@ class SplitPropertiesPlotter:
         plt.savefig(self.output_dir / "split_proportions.png")
 
     def print_stratification_table(self):
-        if not len(self.stratified_files) > 0:
-            LOG.info("No stratified files provided")
-            return
-        stratified = {
-            split: pd.read_parquet(self.stratified_files[split]).drop_duplicates(
-                "system_id"
-            )
-            for split in self.stratified_files
-        }
         stratified_dfs = {
-            split: stratified[split][
-                [c for c in stratified[split].columns if "novel" in c]
+            split: self.stratified[split][
+                [c for c in self.stratified[split].columns if "novel" in c]
             ]
             .apply(lambda x: x.value_counts())
             .fillna(0)
             .astype(int)
-            for split in stratified
+            for split in self.stratified
         }
         df_combined = pd.concat(stratified_dfs.values(), keys=stratified_dfs.keys())
         df_combined = df_combined.reset_index().rename(columns={"level_0": "split"})
@@ -332,10 +336,6 @@ class SplitPropertiesPlotter:
         df_combined["split"] = df_combined["split"].apply(
             lambda x: x.replace("_", " ").upper()
         )
-        df_combined.columns = [
-            c.replace("system_novel_", "").replace("_", " ").upper()
-            for c in df_combined.columns
-        ]
         print(tabulate(df_combined, headers="keys", tablefmt="pipe", showindex=False))
         df_combined.to_csv(self.output_dir / "stratification_table.csv", index=False)
 
@@ -751,6 +751,7 @@ class SplitPropertiesPlotter:
     def plot_all(self):
         self.plot_split_proportions()
         self.print_stratification_table()
+        self.save_ligand_report_html("test")
         self.print_overall_diversity()
         self.plot_molecular_descriptors()
         self.plot_priorities()
