@@ -314,6 +314,8 @@ class SplitPropertiesPlotter:
         plt.savefig(self.output_dir / "split_proportions.png")
 
     def print_stratification_table(self) -> None:
+        if len(self.stratified) == 0:
+            return
         stratified_dfs = {
             split: self.stratified[split][
                 [c for c in self.stratified[split].columns if "novel" in c]
@@ -746,7 +748,7 @@ class SplitPropertiesPlotter:
     def plot_all(self) -> None:
         self.plot_split_proportions()
         self.print_stratification_table()
-        self.save_ligand_report_html("test")
+        # self.save_ligand_report_html("test")
         self.print_overall_diversity()
         self.plot_molecular_descriptors()
         self.plot_priorities()
