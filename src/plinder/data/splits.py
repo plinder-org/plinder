@@ -158,7 +158,7 @@ class GraphConfig:
 class SplitConfig:
     graph_configs: list[GraphConfig] = field(
         default_factory=lambda: [
-            GraphConfig("pli_unique_qcov", 50, 1),
+            GraphConfig("pli_unique_qcov", 30, 1),
             GraphConfig("protein_seqsim_weighted_sum", 30, 1),
         ]
     )
@@ -794,7 +794,29 @@ def assign_split_membership(
         data_dir / "mmp/plinder_mmp_series.parquet",
         filters=[("system_id", "in", quality_test_removed)],
     )
-    mms_count = mms_df.groupby("congeneric_id").size()
+    mms_df["system_score"] = mms_df.groupby("system_id")["congeneric_id"].transform(
+        lambda x: x.nunique()
+    )
+    system_plindex = entries.drop_duplicates(subset=["system_id"]).reset_index(
+        drop=True
+    )
+    system_to_entry_pdb_id = dict(
+        zip(system_plindex["system_id"], system_plindex["entry_pdb_id"])
+    )
+    mms_df["entry_pdb_id"] = mms_df["system_id"].map(system_to_entry_pdb_id)
+    system_to_ligand_ccd_codes = dict(
+        zip(
+            system_plindex["system_id"],
+            system_plindex["system_proper_ligands_unique_ccd_codes"],
+        )
+    )
+    mms_df["system_proper_ligands_unique_ccd_codes"] = mms_df["system_id"].map(
+        system_to_ligand_ccd_codes
+    )
+    mms_df["unique_id"] = (
+        mms_df["entry_pdb_id"] + "__" + mms_df["system_proper_ligands_unique_ccd_codes"]
+    )
+    mms_count = mms_df.groupby("congeneric_id")["unique_id"].nunique()
     mms_df["mms_unique_count_in_test"] = mms_df["congeneric_id"].map(mms_count)
     good_mms_systems = set(
         mms_df[
@@ -805,7 +827,11 @@ def assign_split_membership(
         mms_df[(mms_df["system_id"].isin(test_system_ids))]["congeneric_id"]
     )
     to_add = set(
-        mms_df[mms_df["congeneric_id"].isin(test_congeneric_ids)]["system_id"]
+        mms_df[mms_df["congeneric_id"].isin(test_congeneric_ids)]
+        .sort_values("system_score", ascending=False)
+        .groupby("unique_id")
+        .head(cfg.split.num_per_entry_pdb_id_and_unique_ccd_codes)
+        .reset_index(drop=True)["system_id"]
     ).intersection(good_mms_systems)
     LOG.info(f"found {len(to_add)} MMS systems to add back")
     test_system_ids |= to_add
