@@ -70,12 +70,15 @@ Tables that lists all systems along with their annotations.
 - Add `Example` column
 - Sort by mandatory columns
 - Show `system_id` as first column
-- Plugin [datatables](https://datatables.net/) to enable sorting, filtering and pagination
 - Then customize table style to fit all columns into the page
 :::
 
+
 :::{include} table.html
 :::
+
+`Mandatory` means, that the column has a value in all PLINDER systems.
+
 
 ### Clusters (`clusters/`)
 

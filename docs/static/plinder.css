@@ -34,11 +34,36 @@ html[data-theme="dark"] {
     padding-bottom: 30px;
 }
 
+/* The tutorial buttons on the home page */
 .main-button {
     padding-right: 20px;
     align-self: center;
 }
 
+/* The tutorial button icons on the home page */
 svg.main-button-icon path {
     fill: var(--pst-color-primary);
+}
+
+/* The cross/check marks in the annotation table*/
+svg.marks {
+    height: 32px;
+}
+
+.dt-container table,.pst-scrollable-table-container table {
+    font-size: small;
+}
+
+/* The annotation table column containing the cross/check marks */
+table.dataTable td.dt-type-numeric {
+    text-align: center !important;
+}
+
+
+/* The `Example` column in the annotation table */
+.example {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 150px;
 }
