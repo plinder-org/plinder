@@ -94,22 +94,17 @@ def compute_protein_max_similarities(
 def compute_ligand_max_similarities(
     df: pd.DataFrame, train_label: str, test_label: str, output_file: Path
 ) -> None:
-    if "fp" not in df.columns():
-        df["ligand_is_proper"] = ~df["ligand_is_ion"] & ~df["ligand_is_artifact"]
+    if "fp" not in df.columns:
         smiles_fp_dict = {
             smi: mol2morgan_fp(smi)
-            for smi in df[df["ligand_is_proper"]]["ligand_rdkit_canonical_smiles"]
-            .drop_duplicates()
-            .to_list()
+            for smi in df["ligand_rdkit_canonical_smiles"].drop_duplicates().to_list()
         }
         df["fp"] = df["ligand_rdkit_canonical_smiles"].map(smiles_fp_dict)
 
-    df_test = df.loc[df["ligand_is_proper"] & df["split"] == test_label][
-        ["system_id", "fp"]
-    ].copy()
+    df_test = df.loc[df["split"] == test_label][["system_id", "fp"]].copy()
 
     df_test["tanimoto_similarity_max"] = tanimoto_maxsim_matrix(
-        df.loc[df["ligand_is_proper"] & (df["split"] == train_label)]["fp"].to_list(),
+        df.loc[df["split"] == train_label]["fp"].to_list(),
         df_test["fp"].to_list(),
     )
     df_test.drop("fp", axis=1).groupby("system_id").agg("max").reset_index().to_parquet(
@@ -139,15 +134,12 @@ class StratifiedTestSet:
         default_factory=lambda: {
             "novel_pocket_pli": ["pli_unique_qcov", "pocket_qcov", "pocket_lddt_qcov"],
             "novel_ligand_pli": ["pli_unique_qcov", "tanimoto_similarity_max"],
-            # "novel_pocket_ligand": [
-            #     "pli_unique_qcov",
-            #     "pocket_qcov",
-            #     "pocket_lddt_qcov",
-            #     "tanimoto_similarity_max",
-            # ],
             "novel_protein": [
                 "protein_seqsim_weighted_sum",
                 "protein_lddt_weighted_sum",
+            ],
+            "novel_ligand": [
+                "tanimoto_similarity_max",
             ],
             "novel_all": [
                 "pli_unique_qcov",
@@ -232,8 +224,21 @@ class StratifiedTestSet:
         for metric in tqdm(SIMILARITY_METRICS):
             if overwrite or not (self.get_filename(metric)).exists():
                 if metric == "tanimoto_similarity_max":
+                    df = pd.read_parquet(
+                        self.data_dir / "index" / "annotation_table.parquet",
+                        columns=[
+                            "system_id",
+                            "ligand_rdkit_canonical_smiles",
+                        ],
+                        filters=[
+                            ("system_id", "in", left.union(right)),
+                            ("ligand_is_ion", "==", False),
+                            ("ligand_is_artifact", "==", False),
+                        ],
+                    )
+                    df = df.merge(self.split_df, on="system_id", how="left")
                     compute_ligand_max_similarities(
-                        self.split_df,
+                        df,
                         self.train_label,
                         self.test_label,
                         self.get_filename(metric),
