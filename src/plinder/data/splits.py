@@ -940,7 +940,7 @@ def assign_split_membership(
         nonredundant_to_all
     )
     final.loc[~mask, "system_id"] = final.loc[~mask, "system_id"].map(lambda x: [x])
-    final = final.explode("system_id")
+    final = final.explode("system_id").sort_values("system_id")
     for k, v in final.value_counts("split").items():
         LOG.info(f"final system splits {k} {v}")
     LOG.info(f"writing out final system splits {len(final.index)} records")
