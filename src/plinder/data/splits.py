@@ -815,14 +815,7 @@ def assign_split_membership(
             f"{cfg.split.ligand_cluster_metric}__{cfg.split.ligand_cluster_threshold}__{cfg.split.ligand_cluster_cluster}"
         ]
     )
-    test_ligand_clusters = set(
-        entries[entries["split"] == "test"][
-            f"{cfg.split.ligand_cluster_metric}__{cfg.split.ligand_cluster_threshold}__{cfg.split.ligand_cluster_cluster}"
-        ]
-    )
-    novel_ligand_clusters = (
-        removed_ligand_clusters - train_val_ligand_clusters - test_ligand_clusters
-    )
+    novel_ligand_clusters = removed_ligand_clusters - train_val_ligand_clusters
     novel_ligand_systems = set(
         entries[
             entries[
@@ -839,18 +832,21 @@ def assign_split_membership(
         .reset_index(drop=True)["system_id"]
     )
     LOG.info(f"Found {len(novel_ligand_systems)} novel ligand systems in removed")
-    to_remove: set[str] = set()
+    to_remove_from_train_val: set[str] = set()
+    to_add_to_test: set[str] = set()
     for x in novel_ligand_systems:
-        to_remove.update(system_id_to_leakage.get(x, []))
-    to_remove = to_remove.intersection(
+        if x in system_id_to_leakage:
+            to_remove_from_train_val.update(system_id_to_leakage[x])
+            to_add_to_test.add(x)
+    to_remove_from_train_val = to_remove_from_train_val.intersection(
         set(entries[entries["split"].isin(["train", "val"])]["system_id"])
     )
     LOG.info(
-        f"Found {len(to_remove)} systems to remove from train/val due to novel ligands"
+        f"Found {len(to_add_to_test)} systems to add to test and {len(to_remove_from_train_val)} systems to remove from train/val due to novel ligands"
     )
-    entries.loc[entries["system_id"].isin(novel_ligand_systems), "split"] = "test"
+    entries.loc[entries["system_id"].isin(to_add_to_test), "split"] = "test"
     entries.loc[
-        (entries["system_id"].isin(to_remove))
+        (entries["system_id"].isin(to_remove_from_train_val))
         & (entries["split"].isin(["train", "val"])),
         "split",
     ] = "removed"
