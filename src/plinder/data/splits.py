@@ -22,7 +22,7 @@ LOG = setup_logger(__name__)
 
 
 # TODO: this can be removed after cleanup merge
-def reset_lipinski_and_other(df):
+def reset_lipinski_and_other(df: pd.DataFrame) -> pd.DataFrame:
     # Reset artifacts/ions
     mask_reset = df["ligand_is_ion"] | df["ligand_is_artifact"]
     df.loc[
@@ -72,7 +72,7 @@ def reset_lipinski_and_other(df):
     return df
 
 
-def load_plindex(plindex: pd.DataFrame):
+def load_plindex(plindex: pd.DataFrame) -> pd.DataFrame:
     plindex = reset_lipinski_and_other(plindex)
     plindex["system_ligand_max_qed"] = plindex.groupby("system_id")[
         "ligand_qed"
@@ -207,7 +207,7 @@ class SplitConfig:
     # test/val should not have too small or too large ligands
     min_max_ligand: tuple[int, int] = (200, 800)
     # priority columns to use for scoring systems with a weight attached to each column
-    test_additional_criteria: list[list[str]] = field(
+    test_additional_criteria: list[list[Any]] = field(
         default_factory=lambda: [
             ["system_pass_validation_criteria", "==", "True"],
             ["system_pass_statistics_criteria", "==", "True"],
@@ -345,7 +345,7 @@ def deleak_entry_nk_single(
 def prep_data_for_desired_properties(
     data_dir: Path,
     cfg: DictConfig,
-) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, set[str]]]:
+) -> tuple[pd.DataFrame, dict[str, set[str]]]:
     """
     Load data and add annotations relevant for splitting
 
@@ -356,8 +356,8 @@ def prep_data_for_desired_properties(
 
     Returns
     -------
-    tuple[pd.DataFrame, pd.DataFrame, dict[str, set[str]]]
-        mms dataframe, entries annotations, mapping of nonredundant systems to all systems
+    tuple[pd.DataFrame, dict[str, set[str]]]
+        entries annotations, mapping of nonredundant systems to all systems
     """
     LOG.info(OmegaConf.to_yaml(cfg))
 
@@ -515,7 +515,7 @@ def load_graphs(
 
 def get_sampling_clusters(
     cfg: DictConfig, data_dir: Path, entries: pd.DataFrame
-) -> tuple[dict[str, set[str]], dict[str, str], pd.DataFrame, set[str], dict[str, str]]:
+) -> tuple[dict[str, set[str]], dict[str, str], pd.DataFrame, set[str]]:
     """
     Get sampling clusters
 
@@ -528,7 +528,7 @@ def get_sampling_clusters(
     -------
     tuple[
         dict[str, set], dict[str, str],
-        pd.DataFrame, set[str], dict[str, str]]
+        pd.DataFrame, set[str]]
         (test-sampling-cluster-to-systems dictionary,
         test-systems-to-sampling-cluster dictionary,
         entries annotations,
@@ -717,8 +717,8 @@ def prioritize_test_sample(
     )
     all_test_system_ids = test_data["system_id"].tolist()
     max_removed = int(cfg.split.max_removed_fraction * entries["system_id"].nunique())
-    test_system_ids = set()
-    to_remove = set()
+    test_system_ids: set[str] = set()
+    to_remove: set[str] = set()
     for x in all_test_system_ids:
         if len(test_system_ids) < cfg.split.num_test:
             test_system_ids.add(x)

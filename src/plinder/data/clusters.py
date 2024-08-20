@@ -190,7 +190,7 @@ def explode_ligand_clusters(
     *,
     data_dir: Path,
     labeldf: pd.DataFrame,
-) -> None:
+) -> pd.DataFrame:
     ligands_per_system = pd.read_parquet(
         data_dir / "fingerprints/ligands_per_system.parquet"
     )
@@ -350,12 +350,12 @@ def prepare_df_ligand(
             ("tanimoto_similarity_max", ">=", threshold),
         ],
     )
-    df[["query_ligand_id", "target_ligand_id"]] = df[
-        ["query_ligand_id", "target_ligand_id"]
-    ].astype(str)
     if df is None or df.empty:
         LOG.info("no ligand similarity scores found, returning")
         return
+    df[["query_ligand_id", "target_ligand_id"]] = df[
+        ["query_ligand_id", "target_ligand_id"]
+    ].astype(str)
     LOG.info(f"found {len(df.index)} similarity scores")
     df.rename(
         columns={

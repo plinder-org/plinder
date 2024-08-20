@@ -116,12 +116,13 @@ class StratifiedTestSet:
     similarity_combinations: dict[str, list[str]] = field(
         default_factory=lambda: {
             "novel_pocket_pli": ["pli_unique_qcov", "pocket_qcov", "pocket_lddt_qcov"],
-            "novel_pocket_ligand": [
-                "pli_unique_qcov",
-                "pocket_qcov",
-                "pocket_lddt_qcov",
-                "tanimoto_similarity_max",
-            ],
+            "novel_ligand_pli": ["pli_unique_qcov", "tanimoto_similarity_max"],
+            # "novel_pocket_ligand": [
+            #     "pli_unique_qcov",
+            #     "pocket_qcov",
+            #     "pocket_lddt_qcov",
+            #     "tanimoto_similarity_max",
+            # ],
             "novel_protein": [
                 "protein_seqsim_weighted_sum",
                 "protein_lddt_weighted_sum",

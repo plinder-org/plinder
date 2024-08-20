@@ -10,10 +10,8 @@ import mols2grid
 import numpy as np
 import pandas as pd
 import seaborn as sns
-from matplotlib import pyplot as plt
 from matplotlib_venn import venn3
 from scipy.stats import ks_2samp
-from tabulate import tabulate
 
 from plinder.core.index.utils import get_plindex
 from plinder.core.scores.clusters import query_clusters
@@ -39,7 +37,7 @@ def get_ks_test(
 
 def label_has_mms_within_subset(
     mms_df: pd.DataFrame, subset: set[str], minimum_count: int
-):
+) -> tuple[pd.DataFrame, set[str]]:
     mms_df = mms_df[mms_df["system_id"].isin(subset)].reset_index(drop=True)
     LOG.info(
         f"mmp series after subset {len(mms_df.index)} records for {mms_df['system_id'].nunique()} systems"
@@ -61,7 +59,7 @@ class SplitPropertiesPlotter:
     plindex: pd.DataFrame = field(init=False)
     system_plindex: pd.DataFrame = field(init=False)
     mms_count: int = field(default=3)
-    colors: dict = field(
+    colors: dict[str, str] = field(
         default_factory=lambda: {
             "train": "#ff9999",  # Light red
             "test": "#66b3ff",  # Light blue
@@ -74,7 +72,7 @@ class SplitPropertiesPlotter:
             "True": "#99ff99",
         }
     )
-    system_descriptors: dict = field(
+    system_descriptors: dict[str, int | None] = field(
         default_factory=lambda: {
             # ligand
             "ligand_molecular_weight": 50,
@@ -89,7 +87,7 @@ class SplitPropertiesPlotter:
             "system_interacting_protein_chains_total_length": None,
         }
     )
-    priority_columns: list = field(
+    priority_columns: list[str] = field(
         default_factory=lambda: [
             "system_has_binding_affinity",
             "system_has_mms",
@@ -99,7 +97,7 @@ class SplitPropertiesPlotter:
             "system_pass_statistics_criteria",
         ]
     )
-    domain_columns: list = field(
+    domain_columns: list[str] = field(
         default_factory=lambda: [
             "system_pocket_ECOD_t_name",
             "system_pocket_CATH",
@@ -107,7 +105,7 @@ class SplitPropertiesPlotter:
             "system_pocket_Pfam",
         ]
     )
-    ligand_types: list = field(
+    ligand_types: list[str] = field(
         default_factory=lambda: [
             f"system_ligand_has_{x}"
             for x in [
@@ -122,7 +120,7 @@ class SplitPropertiesPlotter:
             ]
         ]
     )
-    diversity_columns: dict = field(
+    diversity_columns: dict[str, str] = field(
         default_factory=lambda: {
             "system_id": "Systems",
             "entry_pdb_id": "PDB IDs",
@@ -143,7 +141,7 @@ class SplitPropertiesPlotter:
         stratified_train_val_file: Path | None = None,
         stratified_val_test_file: Path | None = None,
         mms_count: int = 3,
-    ):
+    ) -> "SplitPropertiesPlotter":
         stratified_files = {}
         if stratified_train_test_file is not None:
             stratified_files["train_vs_test"] = stratified_train_test_file
@@ -168,15 +166,19 @@ class SplitPropertiesPlotter:
         plotter.plot_all()
         return plotter
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-    def load_plindex(self):
+    def load_plindex(self) -> pd.DataFrame:
         plindex = load_plindex(get_plindex())
         clusters = query_clusters(
             columns=["system_id", "label", "threshold", "metric", "cluster"],
             filters=[("directed", "==", "False")],
-        ).pivot_table(
+        )
+        if clusters is None:
+            LOG.error("No clusters found")
+            return pd.DataFrame()
+        clusters = clusters.pivot_table(
             values="label",
             index="system_id",
             columns=["metric", "cluster", "threshold"],
@@ -235,7 +237,7 @@ class SplitPropertiesPlotter:
             sort_by=sort_col,
         )
 
-    def merge_plindex(self, plindex: pd.DataFrame):
+    def merge_plindex(self, plindex: pd.DataFrame) -> pd.DataFrame:
         split = pd.read_parquet(self.split_file)
         plindex = plindex[plindex["system_id"].isin(split["system_id"])].reset_index(
             drop=True
@@ -259,7 +261,7 @@ class SplitPropertiesPlotter:
 
         return plindex
 
-    def merge_stratification(self):
+    def merge_stratification(self) -> None:
         self.stratified = {
             split: pd.read_parquet(self.stratified_files[split])
             .drop_duplicates("system_id")
@@ -278,7 +280,7 @@ class SplitPropertiesPlotter:
                 how="left",
             )
 
-    def plot_ligands(self, split_names=["test", "val"]):
+    def plot_ligands(self, split_names: list[str] = ["test", "val"]) -> None:
         plindex = self.plindex[
             self.plindex["ligand_is_proper"] & self.plindex["split"].isin(split_names)
         ]
@@ -299,7 +301,7 @@ class SplitPropertiesPlotter:
 
             print(f"{split}: {len(ligand_df)}")
 
-    def plot_split_proportions(self):
+    def plot_split_proportions(self) -> None:
         fig, ax = plt.subplots()
         counts = self.system_plindex["split"].value_counts()
         ax.pie(
@@ -311,7 +313,7 @@ class SplitPropertiesPlotter:
         ax.set_title("Split proportions")
         plt.savefig(self.output_dir / "split_proportions.png")
 
-    def print_stratification_table(self):
+    def print_stratification_table(self) -> None:
         stratified_dfs = {
             split: self.stratified[split][
                 [c for c in self.stratified[split].columns if "novel" in c]
@@ -336,27 +338,20 @@ class SplitPropertiesPlotter:
         df_combined["split"] = df_combined["split"].apply(
             lambda x: x.replace("_", " ").upper()
         )
-        print(tabulate(df_combined, headers="keys", tablefmt="pipe", showindex=False))
         df_combined.to_csv(self.output_dir / "stratification_table.csv", index=False)
 
-    def print_overall_diversity(self):
+    def print_overall_diversity(self) -> None:
         cluster_df = pd.DataFrame(
             {
                 col: self.system_plindex.groupby("split")[col].nunique()
                 for col in self.diversity_columns
             }
         ).rename(columns=self.diversity_columns)
-        print(
-            tabulate(
-                cluster_df,
-                headers="keys",
-                tablefmt="pipe",
-                showindex=True,
-            )
-        )
         cluster_df.to_csv(self.output_dir / "overall_diversity.csv", index=True)
 
-    def plot_molecular_descriptors(self, val_label="val", test_label="test"):
+    def plot_molecular_descriptors(
+        self, val_label: str = "val", test_label: str = "test"
+    ) -> None:
         fig, axes = self.get_axes(len(self.system_descriptors))
         plindex_to_use = self.plindex[self.plindex["ligand_is_proper"]].reset_index(
             drop=True
@@ -421,7 +416,7 @@ class SplitPropertiesPlotter:
         )
         ax.set_title(name)
 
-    def plot_priorities(self):
+    def plot_priorities(self) -> None:
         fig, axes = self.get_axes(len(self.priority_columns))
 
         for idx, column in enumerate(self.priority_columns):
@@ -466,7 +461,7 @@ class SplitPropertiesPlotter:
         plt.tight_layout()
         plt.savefig(self.output_dir / "priorities.png")
 
-    def plot_venn(self, column: str, ax: plt.Axes, label: str):
+    def plot_venn(self, column: str, ax: plt.Axes, label: str) -> None:
         per_split = {
             split: self.system_plindex[
                 self.system_plindex[column].notna()
@@ -596,7 +591,7 @@ class SplitPropertiesPlotter:
 
         ax.set_title(label, fontsize=15)
 
-    def plot_domain_classifications(self):
+    def plot_domain_classifications(self) -> None:
         fig, axes = self.get_axes(len(self.domain_columns))
         for i, c in enumerate(self.domain_columns):
             self.plot_venn(
@@ -607,7 +602,7 @@ class SplitPropertiesPlotter:
         plt.tight_layout()
         plt.savefig(self.output_dir / "domain_classifications.png")
 
-    def get_axes(self, num_plots: int):
+    def get_axes(self, num_plots: int) -> tuple[plt.Figure, np.ndarray]:
         num_cols = int(np.ceil(np.sqrt(num_plots)))
         num_rows = int(np.ceil(num_plots / num_cols))
         fig, axes = plt.subplots(
@@ -615,11 +610,11 @@ class SplitPropertiesPlotter:
         )
         return fig, axes.flatten()
 
-    def clear_unused_axes(self, axes: np.ndarray, num_plots: int):
+    def clear_unused_axes(self, axes: np.ndarray, num_plots: int) -> None:
         for j in range(num_plots, len(axes)):
             axes[j].axis("off")
 
-    def plot_clusters(self, cluster: str = "communities", threshold: int = 50):
+    def plot_clusters(self, cluster: str = "communities", threshold: int = 50) -> None:
         cluster_names = [
             c
             for c in self.system_plindex.columns
@@ -653,7 +648,7 @@ class SplitPropertiesPlotter:
         plt.tight_layout()
         plt.savefig(self.output_dir / "plinder_clusters.png")
 
-    def plot_ligand_types(self):
+    def plot_ligand_types(self) -> None:
         counts_per_split = (
             self.system_plindex.groupby("split")[self.ligand_types]
             .mean()
@@ -703,7 +698,7 @@ class SplitPropertiesPlotter:
         plt.tight_layout()
         plt.savefig(self.output_dir / "ligand_types.png")
 
-    def plot_chain_composition(self):
+    def plot_chain_composition(self) -> None:
         split_names = ["train", "val", "test", "removed"]
         fig, axes = self.get_axes(len(split_names))
 
@@ -748,7 +743,7 @@ class SplitPropertiesPlotter:
         plt.tight_layout()
         plt.savefig(self.output_dir / "chain_composition.png")
 
-    def plot_all(self):
+    def plot_all(self) -> None:
         self.plot_split_proportions()
         self.print_stratification_table()
         self.save_ligand_report_html("test")
@@ -776,14 +771,31 @@ def main() -> None:
         help="Path to plinder data",
     )
     parser.add_argument(
-        "--stratified_test_file",
+        "--stratified_train_test_file",
         type=Path,
-        help="Path to stratified test file",
+        help="Path to stratified train vs test file",
     )
     parser.add_argument(
-        "--stratified_val_file",
+        "--stratified_train_val_file",
         type=Path,
-        help="Path to stratified val file",
+        help="Path to stratified train vs val file",
+    )
+    parser.add_argument(
+        "--stratified_val_test_file",
+        type=Path,
+        help="Path to stratified val vs test file",
+    )
+    parser.add_argument(
+        "--output_dir",
+        type=Path,
+        help="Path to output directory",
+        default=Path("split_plots"),
+    )
+    parser.add_argument(
+        "--mms_count",
+        type=int,
+        help="Number of systems to consider as an MMS",
+        default=3,
     )
 
     args = parser.parse_args()
@@ -791,8 +803,11 @@ def main() -> None:
     SplitPropertiesPlotter.from_files(
         split_file=args.split_file,
         data_dir=args.data_dir,
-        stratified_test_file=args.stratified_test_file,
-        stratified_val_file=args.stratified_val_file,
+        stratified_train_test_file=args.stratified_train_test_file,
+        stratified_train_val_file=args.stratified_train_val_file,
+        stratified_val_test_file=args.stratified_val_test_file,
+        mms_count=args.mms_count,
+        output_dir=args.output_dir,
     )
 
 
