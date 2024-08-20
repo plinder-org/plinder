@@ -64,6 +64,13 @@ loader = [
     "torch",
     "atom3d",
 ]
+plots = [
+    "matplotlib",
+    "seaborn",
+    "mols2grid",
+    "matplotlib_venn",
+    "scipy",
+]
 docs = [
     "itables",
     "jupyter-sphinx",

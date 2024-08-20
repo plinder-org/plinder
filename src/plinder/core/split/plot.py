@@ -5,18 +5,21 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import matplotlib.pyplot as plt
-import mols2grid
 import numpy as np
 import pandas as pd
-import seaborn as sns
-from matplotlib_venn import venn3
-from scipy.stats import ks_2samp
 
-from plinder.core.index.utils import get_plindex
-from plinder.core.scores.clusters import query_clusters
+try:
+    import matplotlib.pyplot as plt
+    import mols2grid
+    import seaborn as sns
+    from matplotlib_venn import venn3
+    from scipy.stats import ks_2samp
+except ImportError:
+    raise ImportError("Please run: pip install plinder[plots] to use this module")
+
+
+from plinder.core.split.utils import get_extended_plindex
 from plinder.core.utils.log import setup_logger
-from plinder.data.splits import load_plindex
 
 LOG = setup_logger(__name__)
 
@@ -158,10 +161,10 @@ class SplitPropertiesPlotter:
             mms_count=mms_count,
         )
         if plindex_file is None:
-            plindex = plotter.load_plindex()
+            plindex = get_extended_plindex()
         else:
             plindex = pd.read_parquet(plindex_file)
-        plotter.plindex = plotter.merge_plindex(plindex)
+        plotter.plindex = plotter.merge_splits_and_plindex(plindex)
         plotter.system_plindex = plotter.plindex.drop_duplicates("system_id")
         plotter.merge_stratification()
         if make_plots:
@@ -170,28 +173,6 @@ class SplitPropertiesPlotter:
 
     def __post_init__(self) -> None:
         self.output_dir.mkdir(parents=True, exist_ok=True)
-
-    def load_plindex(self) -> pd.DataFrame:
-        plindex = load_plindex(get_plindex())
-        clusters = query_clusters(
-            columns=["system_id", "label", "threshold", "metric", "cluster"],
-            filters=[("directed", "==", "False")],
-        )
-        if clusters is None:
-            LOG.error("No clusters found")
-            return pd.DataFrame()
-        clusters = clusters.pivot_table(
-            values="label",
-            index="system_id",
-            columns=["metric", "cluster", "threshold"],
-            aggfunc="first",
-        )
-        clusters.columns = [
-            f"{metric}__{threshold.replace('.parquet', '')}__{cluster}"
-            for metric, cluster, threshold in clusters.columns
-        ]
-        clusters.reset_index(inplace=True)
-        plindex = pd.merge(plindex, clusters, on="system_id", how="left")
 
     def save_ligand_report_html(
         self,
@@ -239,7 +220,7 @@ class SplitPropertiesPlotter:
             sort_by=sort_col,
         )
 
-    def merge_plindex(self, plindex: pd.DataFrame) -> pd.DataFrame:
+    def merge_splits_and_plindex(self, plindex: pd.DataFrame) -> pd.DataFrame:
         split = pd.read_parquet(self.split_file)
         plindex = plindex[plindex["system_id"].isin(split["system_id"])].reset_index(
             drop=True

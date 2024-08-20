@@ -15,136 +15,11 @@ from omegaconf import DictConfig, ListConfig, OmegaConf
 from tqdm import tqdm
 
 from plinder.core import scores
+from plinder.core.split.utils import get_extended_plindex
 from plinder.core.utils.log import setup_logger
 from plinder.data import clusters
 
 LOG = setup_logger(__name__)
-
-
-# TODO: this can be removed after cleanup merge
-def reset_lipinski_and_other(df: pd.DataFrame) -> pd.DataFrame:
-    # Reset artifacts/ions
-    mask_reset = df["ligand_is_ion"] | df["ligand_is_artifact"]
-    df.loc[
-        mask_reset,
-        [
-            "ligand_is_fragment",
-            "ligand_is_lipinski",
-            "ligand_is_cofactor",
-            "ligand_is_covalent",
-            "ligand_is_oligo",
-        ],
-    ] = False
-
-    # Lipinski like Ro3
-    mask_ro3 = (
-        (df["ligand_molecular_weight"] < 300)
-        & (df["ligand_crippen_clogp"] < 3)
-        & (df["ligand_num_hbd"] <= 3)
-        & (df["ligand_num_hba"] <= 3)
-        & ~mask_reset
-    )
-    df.loc[mask_ro3, ["ligand_is_fragment", "ligand_is_lipinski"]] = True
-
-    # Lipinski like Ro5
-    mask_ro5 = (
-        (df["ligand_molecular_weight"] < 500)
-        & (df["ligand_crippen_clogp"] < 5)
-        & (df["ligand_num_hbd"] <= 5)
-        & (df["ligand_num_hba"] <= 10)
-        & ~mask_reset
-        & ~mask_ro3
-    )
-    df.loc[mask_ro5, "ligand_is_lipinski"] = True
-
-    # ligand_is_other
-    df["ligand_is_other"] = ~(
-        df["ligand_is_invalid"]
-        | df["ligand_is_ion"]
-        | df["ligand_is_oligo"]
-        | df["ligand_is_artifact"]
-        | df["ligand_is_cofactor"]
-        | df["ligand_is_lipinski"]
-        | df["ligand_is_fragment"]
-        | df["ligand_is_covalent"]
-    )
-
-    return df
-
-
-def load_plindex(plindex: pd.DataFrame) -> pd.DataFrame:
-    plindex = reset_lipinski_and_other(plindex)
-    plindex["system_ligand_max_qed"] = plindex.groupby("system_id")[
-        "ligand_qed"
-    ].transform("max")
-    plindex["system_pass_validation_criteria"] = plindex[
-        "system_pass_validation_criteria"
-    ].fillna(False)
-    for n in [
-        "lipinski",
-        "cofactor",
-        "fragment",
-        "oligo",
-        "artifact",
-        "other",
-        "covalent",
-        "invalid",
-        "ion",
-    ]:
-        plindex[f"system_ligand_has_{n}"] = plindex.groupby("system_id")[
-            f"ligand_is_{n}"
-        ].transform("any")
-    plindex["system_interacting_protein_chains_total_length"] = plindex[
-        "system_interacting_protein_chains_length"
-    ].apply(lambda x: sum(int(i) for i in x.split(";")))
-    plindex["ligand_is_proper"] = (
-        ~plindex["ligand_is_ion"] & ~plindex["ligand_is_artifact"]
-    )
-    plindex["system_proper_num_ligand_chains"] = plindex.groupby("system_id")[
-        "ligand_is_proper"
-    ].transform("sum")
-    plindex["system_proper_num_interactions"] = (
-        plindex["ligand_num_interactions"]
-        .where(plindex["ligand_is_proper"], other=0)
-        .groupby(plindex["system_id"])
-        .transform("sum")
-    )
-    plindex["system_proper_pocket_num_residues"] = (
-        plindex["ligand_num_neighboring_residues"]
-        .where(plindex["ligand_is_proper"], other=0)
-        .groupby(plindex["system_id"])
-        .transform("sum")
-    )
-    plindex["system_proper_ligand_max_molecular_weight"] = (
-        plindex["ligand_molecular_weight"]
-        .where(plindex["ligand_is_proper"], other=float("-inf"))
-        .groupby(plindex["system_id"])
-        .transform("max")
-    )
-    plindex["uniqueness"] = (
-        plindex["system_id_no_biounit"]
-        + "_"
-        + plindex["pli_qcov__100__strong__component"]
-    )
-    plindex["system_num_ligands_in_biounit"] = plindex.groupby(
-        ["entry_pdb_id", "system_biounit_id"]
-    )["system_id"].transform("count")
-    plindex["system_num_unique_ligands_in_biounit"] = plindex.groupby(
-        ["entry_pdb_id", "system_biounit_id"]
-    )["ligand_unique_ccd_code"].transform("nunique")
-    plindex["system_proper_num_ligands_in_biounit"] = plindex.groupby(
-        ["entry_pdb_id", "system_biounit_id"]
-    )["ligand_is_proper"].transform("sum")
-    ccd_dict = (
-        plindex[plindex["ligand_is_proper"]]
-        .groupby("system_id")["ligand_unique_ccd_code"]
-        .agg(lambda x: "-".join(sorted(set(x))))
-        .to_dict()
-    )
-    plindex["system_proper_ligands_unique_ccd_codes"] = plindex["system_id"].map(
-        ccd_dict
-    )
-    return plindex
 
 
 @dataclass
@@ -164,6 +39,12 @@ class SplitConfig:
     )
     # how many unique congeneric IDs passing quality to consider as MMS
     mms_unique_quality_count: int = 3
+    # which metric to use for ligand clusters (these are added to test from removed if they are different from train/val and corresponding leaked systems are removed from train/val)
+    ligand_cluster_metric: str = "tanimoto_similarity_max"
+    # which threshold to use for ligand clusters
+    ligand_cluster_threshold: int = 50
+    # which cluster to use for ligand clusters
+    ligand_cluster_cluster: str = "components"
     # what kind of cluster to use for sampling test
     test_cluster_cluster: str = "communities"
     # metric to use for sampling representatives from each test cluster
@@ -375,7 +256,7 @@ def prep_data_for_desired_properties(
         ],
     )
     LOG.info(f"loaded {entries['system_id'].nunique()} systems from annotation table")
-    entries = load_plindex(entries)
+    entries = get_extended_plindex(plindex=entries)
     nonredundant_to_all = defaultdict(set)
     for system_id, unique_id in zip(entries["system_id"], entries["uniqueness"]):
         nonredundant_to_all[unique_id].add(system_id)
@@ -700,7 +581,7 @@ def prioritize_test_sample(
     )
     test_data = (
         test_data.sort_values("system_score", ascending=False)
-        .groupby(["entry_pdb_id", "system_proper_ligands_unique_ccd_codes"])
+        .groupby(["entry_pdb_id", "system_proper_ligand_unique_ccd_codes"])
         .head(cfg.split.num_per_entry_pdb_id_and_unique_ccd_codes)
         .reset_index(drop=True)
     )
@@ -807,14 +688,14 @@ def assign_split_membership(
     system_to_ligand_ccd_codes = dict(
         zip(
             system_plindex["system_id"],
-            system_plindex["system_proper_ligands_unique_ccd_codes"],
+            system_plindex["system_proper_ligand_unique_ccd_codes"],
         )
     )
-    mms_df["system_proper_ligands_unique_ccd_codes"] = mms_df["system_id"].map(
+    mms_df["system_proper_ligand_unique_ccd_codes"] = mms_df["system_id"].map(
         system_to_ligand_ccd_codes
     )
     mms_df["unique_id"] = (
-        mms_df["entry_pdb_id"] + "__" + mms_df["system_proper_ligands_unique_ccd_codes"]
+        mms_df["entry_pdb_id"] + "__" + mms_df["system_proper_ligand_unique_ccd_codes"]
     )
     mms_count = mms_df.groupby("congeneric_id")["unique_id"].nunique()
     mms_df["mms_unique_count_in_test"] = mms_df["congeneric_id"].map(mms_count)
@@ -918,6 +799,62 @@ def assign_split_membership(
     entries.loc[entries["system_id"].isin(set(val_system_ids)), "split"] = "val"
     LOG.info(f"Additional {len(remove_ids)} to be removed due to val")
     entries.loc[entries["system_id"].isin(remove_ids), "split"] = "removed"
+
+    # Add back systems in removed with novel ligands compared to train
+    train_val_ligand_clusters = set(
+        entries[entries["split"].isin(["train", "val"])][
+            f"{cfg.split.ligand_cluster_metric}__{cfg.split.ligand_cluster_threshold}__{cfg.split.ligand_cluster_cluster}"
+        ]
+    )
+    removed_ligand_clusters = set(
+        entries[
+            (entries["split"] == "removed")
+            & (entries["system_pass_validation_criteria"])
+            & (entries["system_pass_statistics_criteria"])
+        ][
+            f"{cfg.split.ligand_cluster_metric}__{cfg.split.ligand_cluster_threshold}__{cfg.split.ligand_cluster_cluster}"
+        ]
+    )
+    test_ligand_clusters = set(
+        entries[entries["split"] == "test"][
+            f"{cfg.split.ligand_cluster_metric}__{cfg.split.ligand_cluster_threshold}__{cfg.split.ligand_cluster_cluster}"
+        ]
+    )
+    novel_ligand_clusters = (
+        removed_ligand_clusters - train_val_ligand_clusters - test_ligand_clusters
+    )
+    novel_ligand_systems = set(
+        entries[
+            entries[
+                f"{cfg.split.ligand_cluster_metric}__{cfg.split.ligand_cluster_threshold}__{cfg.split.ligand_cluster_cluster}"
+            ].isin(novel_ligand_clusters)
+            & (entries["split"] == "removed")
+            & (entries["system_pass_validation_criteria"])
+            & (entries["system_pass_statistics_criteria"])
+        ]
+        .groupby(["entry_pdb_id", "system_proper_ligand_unique_ccd_codes"])
+        .head(cfg.split.num_per_entry_pdb_id_and_unique_ccd_codes)
+        .groupby("cluster")
+        .head(cfg.split.num_test_representatives)
+        .reset_index(drop=True)["system_id"]
+    )
+    LOG.info(f"Found {len(novel_ligand_systems)} novel ligand systems in removed")
+    to_remove: set[str] = set()
+    for x in novel_ligand_systems:
+        to_remove.update(system_id_to_leakage.get(x, []))
+    to_remove = to_remove.intersection(
+        set(entries[entries["split"].isin(["train", "val"])]["system_id"])
+    )
+    LOG.info(
+        f"Found {len(to_remove)} systems to remove from train/val due to novel ligands"
+    )
+    entries.loc[entries["system_id"].isin(novel_ligand_systems), "split"] = "test"
+    entries.loc[
+        (entries["system_id"].isin(to_remove))
+        & (entries["split"].isin(["train", "val"])),
+        "split",
+    ] = "removed"
+
     final = entries[
         [
             "system_id",
