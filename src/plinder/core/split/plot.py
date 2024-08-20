@@ -127,9 +127,10 @@ class SplitPropertiesPlotter:
         default_factory=lambda: {
             "system_id": "Systems",
             "entry_pdb_id": "PDB IDs",
+            "system_proper_ligand_unique_ccd_codes": "Ligand CCD codes",
             "pli_unique_qcov__50__communities": "PLI communities",
             "pocket_qcov__50__communities": "Pocket communities",
-            "tanimoto_similarity_max__30__communities": "Ligand communities",
+            "tanimoto_similarity_max__50__communities": "Ligand communities",
         }
     )
 
@@ -202,7 +203,7 @@ class SplitPropertiesPlotter:
             # rename columns for easier interpretation and formatting
             rename={
                 "pli_unique_qcov__50__communities": "PLI community ID",
-                "tanimoto_similarity_max__30__communities": "Ligand community ID",
+                "tanimoto_similarity_max__50__communities": "Ligand community ID",
                 "system_num_interacting_protein_chains": "Receptor chain count",
                 "system_proper_num_ligand_chains": "Ligand count",
             },
@@ -210,7 +211,7 @@ class SplitPropertiesPlotter:
             subset=[
                 "system_id",
                 "img",
-                "tanimoto_similarity_max__30__communities",
+                "tanimoto_similarity_max__50__communities",
                 "pli_unique_qcov__50__communities",
                 color_col,
             ],
