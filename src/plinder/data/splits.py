@@ -707,8 +707,16 @@ def assign_split_membership(
     test_congeneric_ids = set(
         mms_df[(mms_df["system_id"].isin(test_system_ids))]["congeneric_id"]
     )
+    test_ccd_codes = set(
+        entries[entries["system_id"].isin(test_system_ids)][
+            "system_proper_ligand_unique_ccd_codes"
+        ]
+    )
     to_add = set(
-        mms_df[mms_df["congeneric_id"].isin(test_congeneric_ids)]
+        mms_df[
+            (mms_df["congeneric_id"].isin(test_congeneric_ids))
+            & (~mms_df["system_proper_ligand_unique_ccd_codes"].isin(test_ccd_codes))
+        ]
         .sort_values("system_score", ascending=False)
         .groupby("unique_id")
         .head(cfg.split.num_per_entry_pdb_id_and_unique_ccd_codes)
@@ -816,11 +824,15 @@ def assign_split_membership(
         ]
     )
     novel_ligand_clusters = removed_ligand_clusters - train_val_ligand_clusters
+    test_ccd_codes = set(
+        entries[entries["split"] == "test"]["system_proper_ligand_unique_ccd_codes"]
+    )
     novel_ligand_systems = set(
         entries[
             entries[
                 f"{cfg.split.ligand_cluster_metric}__{cfg.split.ligand_cluster_threshold}__{cfg.split.ligand_cluster_cluster}"
             ].isin(novel_ligand_clusters)
+            & (~entries["system_proper_ligand_unique_ccd_codes"].isin(test_ccd_codes))
             & (entries["split"] == "removed")
             & (entries["system_pass_validation_criteria"])
             & (entries["system_pass_statistics_criteria"])
