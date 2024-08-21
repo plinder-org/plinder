@@ -87,6 +87,7 @@ class QualityCriteria:
     pocket_max_average_rsr: float = 0.3
     pocket_max_percent_outliers_clashes: int = 100
 
+
 class System(BaseModel):
     pdb_id: str
     smiles: str = Field(
