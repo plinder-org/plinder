@@ -1167,6 +1167,9 @@ class Ligand(BaseModel):
 
     @cached_property
     def interacting_protein_chains(self) -> list[str]:
+        """
+        RSCB chain asymmetric ids of proteins interacting with a given ligand
+        """
         if self.is_artifact:
             return []
         else:
@@ -1174,22 +1177,34 @@ class Ligand(BaseModel):
 
     @cached_property
     def neighboring_protein_chains(self) -> list[str]:
+        """
+        List of RCSB asymmetric chain ids of protein residues within 6 Å of ligand of interest.
+        """
         return list(sorted(self.neighboring_residues.keys()))
 
     @cached_property
     def num_interacting_residues(self) -> int:
+        """
+        Number of residues of each of the proteins interacting with a given ligand.
+        """
         return sum(
             len(self.interacting_residues[chain]) for chain in self.interacting_residues
         )
 
     @cached_property
     def num_neighboring_residues(self) -> int:
+        """
+        Residue count of each of the proteins within 6 Å of ligand of interest.
+        """
         return sum(
             len(self.neighboring_residues[chain]) for chain in self.neighboring_residues
         )
 
     @cached_property
     def num_interactions(self) -> int:
+        """
+        Number of interactions for a given ligand.
+        """
         return sum(
             sum(len(i) for i in self.interactions[chain].values())
             for chain in self.interactions
@@ -1197,6 +1212,9 @@ class Ligand(BaseModel):
 
     @cached_property
     def num_unique_interactions(self) -> int:
+        """
+        Number of unique interactions.
+        """
         return sum(
             sum(len(set(i)) for i in self.interactions[chain].values())
             for chain in self.interactions
@@ -1235,6 +1253,7 @@ class Ligand(BaseModel):
 
     @cached_property
     def num_crystal_contacted_residues(self) -> int:
+
         return len(self.crystal_contacts)
 
     @cached_property
@@ -1332,7 +1351,7 @@ class Ligand(BaseModel):
             self.is_artifact = True
         else:
             self.is_artifact = False
-        
+
         #reset: artifacts should not count to other ligand class definitions
         if self.is_artifact:
             self.is_ion = False
