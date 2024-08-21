@@ -77,7 +77,7 @@ Tables that lists all systems along with their annotations.
 :::{include} table.html
 :::
 
-`Mandatory` means, that the column has a value in all PLINDER systems.
+`Mandatory`: The column has a non-empty, non-NaN value in for all PLINDER systems.
 
 
 ### Clusters (`clusters/`)
