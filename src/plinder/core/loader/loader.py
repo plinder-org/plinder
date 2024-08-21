@@ -73,7 +73,7 @@ class PlinderDataset(Dataset):  # type: ignore
             item["path"] = s.system_cif
 
         if self.load_alternative_structures:
-            if s.linked_structures is not None:
+            if s.linked_structures is not None and not s.linked_structures.empty:
                 links = s.linked_structures.groupby("kind")
                 for kind, group in links:
                     for link_id in group["id"].values[

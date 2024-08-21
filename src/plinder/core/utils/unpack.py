@@ -10,7 +10,7 @@ from omegaconf import DictConfig
 from plinder.core.utils import cpl
 from plinder.core.utils.config import get_config
 
-ZIP_KINDS = Literal["entries", "systems"]
+ZIP_KINDS = Literal["entries", "linked_structures", "systems"]
 ID_KINDS = Literal["system_ids", "pdb_ids", "two_char_code"]
 
 
