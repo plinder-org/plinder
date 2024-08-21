@@ -98,6 +98,10 @@ class QualityCriteria:
 
 class System(BaseModel):
     pdb_id: str
+    smiles: str = Field(
+        default_factory=str,
+        description="Ligand SMILES based on OpenStructure dictionary lookup, or resolved SMILES if not in dictionary",
+    )
     biounit_id: str
     ligands: list[Ligand]
     ligand_validation: ResidueListValidation | None = None
@@ -629,23 +633,65 @@ class System(BaseModel):
 
 
 class Entry(BaseModel):
-    pdb_id: str
-    release_date: str
-    oligomeric_state: str | None
-    determination_method: str | None
-    keywords: str | None
-    pH: str | None
-    resolution: float | None
-    chains: dict[str, Chain] = Field(default_factory=dict)
-    ligand_like_chains: dict[str, str] = Field(default_factory=dict)
-    systems: dict[str, System] = Field(default_factory=dict)
-    covalent_bonds: dict[str, list[tuple[str, str]]] = Field(default_factory=dict)
-    chain_to_seqres: dict[str, str] = Field(default_factory=dict)
-    validation: EntryValidation | None = None
-    pass_criteria: bool | None = None
-    water_chains: list[str] = Field(default_factory=list)
-    symmetry_mate_contacts: SymmetryMateContacts
-
+    pdb_id: str = Field(
+        default_factory=str,
+        description="RCSB PDB ID. See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_entry.id.html",
+    )
+    release_date: str = Field(
+        default_factory=str,
+        description="RCSB structure release date. See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_database_PDB_rev.date_original.html",
+    )
+    oligomeric_state: str | None = Field(
+        default_factory=str,
+        description="Author's provided description of quaternary structure in RCSB. See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_pdbx_struct_assembly.oligomeric_details.html",
+    )
+    determination_method: str | None = Field(
+        default_factory=str,
+        description="RCSB method of structure determination. See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_exptl.method.html",
+    )
+    keywords: str | None = Field(
+        default_factory=str,
+        description="RCSB keywords describing the structure. See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_struct_keywords.pdbx_keywords.html",
+    )
+    pH: str | None = Field(
+        default_factory=str,
+        description="pH at which structure is solved. See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_exptl_crystal_grow.pH.html",
+    )
+    resolution: float | None = Field(
+        default_factory=float,
+        description="RCSB structure resolution. See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_refine.ls_d_res_high.html",
+    )
+    chains: dict[str, Chain] = Field(
+        default_factory=dict,
+        description="Chains dictionary with chain name mapped to chain object",
+    )
+    ligand_like_chains: dict[str, str] = Field(
+        default_factory=dict,
+        description="Chain: chain type for other ligand-like chains in the entry",
+    )
+    systems: dict[str, System] = Field(
+        default_factory=dict,
+        description="System dictionary with system id mapped to system object",
+    )
+    covalent_bonds: dict[str, list[tuple[str, str]]] = Field(
+        default_factory=dict,
+        description="All covalent interactions in the entry as defined by mmcif annotations. They types are separated by dictionary key and they include: "
+        + "covale: actual covalent linkage, metalc: other dative bond interactions like metal-ligand dative bond, "
+        + "hydrogc: strong hydorogen bonding of nucleic acid. For the purpose of covalent annotations, we use only covale for downstream processing.",
+    )
+    chain_to_seqres: dict[str, str] = Field(
+        default_factory=dict, description="Chain to sequence mapping"
+    )
+    validation: EntryValidation | None = Field(
+        default=None, description="Entry validation"
+    )
+    pass_criteria: bool | None = Field(default=None, description="Entry pass criteria")
+    water_chains: list[str] = Field(
+        default_factory=list, description="Water chains in the entry"
+    )
+    symmetry_mate_contacts: dict[
+        tuple[str, int], dict[tuple[str, int], set[int]]
+    ] = Field(default_factory=dict, description="Symmetry mate contacts in the entry")
     """
     This dataclass defines as system which included a protein-ligand complex
     and it's neighboring ligands and protein residues. For access to all
@@ -653,33 +699,6 @@ class Entry(BaseModel):
 
     Parameters
     ----------
-    pdb_id : str
-        4-letter pdb code
-    release_date: str
-        Entry release date
-    oligomeric_state: str
-        Oligomeric state decription
-    determination_method: str
-        Structure determination method, CRYSTAL, NMR, etc
-    keywords: str
-        Other keywords like "SUGAR-BINDING PROTEIN"
-    pH: str
-        pH used in structure determination
-    resolution: float
-        Strucure resolution
-    chains: dict[str, Chain] = field(default_factory=dict)
-        Chains dictionary with chain name mapped to chain object
-    systems: dict[str, System] = field(default_factory=dict)
-        System dictionary with system id mapped to system object
-    covalent_bonds: dict[str, set[str]] = field(default_factory=dict)
-        Covalent interation type mapped to all linkages of that type
-    chain_to_seqres: dict[str, str] = field(default_factory=dict)
-        Chain to sequence mapping
-
-    Attributes
-    ----------
-    author_to_asym : dict[str, str]
-        Mapping of author to asym chain ids
 
     Methods
     -------
@@ -1339,6 +1358,6 @@ class Entry(BaseModel):
                 if uniprot is not None:
                     mappings[row["kinase"]] |= set(uniprot)  # type: ignore
             if len(mappings):
-                self.chains[chain_id].mappings["Kinase name"] = {
+                self.chains[chain_id].mappings["kinase_name"] = {
                     k: list(v) for k, v in mappings.items()
                 }
