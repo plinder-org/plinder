@@ -1470,147 +1470,79 @@ class Ligand(BaseModel):
                     interactions.append(f"{chain}_{residue}_{interaction}")
         return {"ligand_interactions": ";".join(interactions)}
 
-    # def format_ligand(self, chains: dict[str, Chain]) -> dict[str, ty.Any]:
-    #     """
-    #     Format interactions for pd.DataFrame
-
-    #     Parameters
-    #     ----------
-    #     self : Ligand
-    #         Ligand object
-    #     chains : dict[str, Chain]
-    #         Chain dictionary
-
-    #     Returns
-    #     -------
-    #     dict[str, Any]
-    #     """
-    #     data = {
-    #         "ligand_id": self.id,
-    #         "ligand_instance": self.instance,
-    #         "ligand_asym_id": self.asym_id,
-    #         "ligand_ccd_code": self.ccd_code,
-    #         "ligand_unique_ccd_code": self.unique_ccd_code,
-    #         "ligand_plip_type": self.plip_type,
-    #         "ligand_num_rot_bonds": self.num_rot_bonds,
-    #         "ligand_smiles": self.smiles,
-    #         "ligand_resolved_smiles": self.resolved_smiles,
-    #         "ligand_rdkit_canonical_smiles": self.rdkit_canonical_smiles,
-    #         "ligand_molecular_weight": self.molecular_weight,
-    #         "ligand_crippen_clogp": self.crippen_clogp,
-    #         "ligand_num_hbd": self.num_hbd,
-    #         "ligand_num_hba": self.num_hba,
-    #         "ligand_num_rings": self.num_rings,
-    #         "ligand_num_heavy_atoms": self.num_heavy_atoms,
-    #         "ligand_tpsa": self.tpsa,
-    #         "ligand_qed": self.qed,
-    #         "ligand_is_covalent": self.is_covalent,
-    #         "ligand_is_ion": self.is_ion,
-    #         "ligand_is_lipinski": self.is_lipinski,
-    #         "ligand_is_fragment": self.is_fragment,
-    #         "ligand_is_oligo": self.is_oligo,
-    #         "ligand_is_cofactor": self.is_cofactor,
-    #         "ligand_is_other": self.is_other,
-    #         "ligand_is_invalid": self.is_invalid,
-    #         "ligand_in_artifact_list": self.in_artifact_list,
-    #         "ligand_is_artifact": self.is_artifact,
-    #         "ligand_num_interacting_residues": self.num_interacting_residues,
-    #         "ligand_num_neighboring_residues": self.num_neighboring_residues,
-    #         "ligand_num_interactions": self.num_interactions,
-    #         "ligand_num_missing_pli_interface_residues": self.num_missing_pli_interface_residues,
-    #         "ligand_num_pli_atoms_within_4A_of_gap": self.num_pli_atoms_within_4A_of_gap,
-    #         "ligand_num_pli_atoms_within_8A_of_gap": self.num_pli_atoms_within_8A_of_gap,
-    #         "ligand_num_missing_ppi_interface_residues": self.num_missing_ppi_interface_residues,
-    #         "ligand_num_neighboring_ppi_atoms_within_8A_of_gap": self.num_neighboring_ppi_atoms_within_8A_of_gap,
-    #         "ligand_num_neighboring_ppi_atoms_within_4A_of_gap": self.num_neighboring_ppi_atoms_within_4A_of_gap,
-    #         "ligand_num_resolved_heavy_atoms": self.num_resolved_heavy_atoms,
-    #         "ligand_num_unresolved_heavy_atoms": self.num_unresolved_heavy_atoms,
-    #         "ligand_is_kinase_inhibitor": self.is_kinase_inhibitor,
-    #         "ligand_num_atoms_with_crystal_contacts": self.num_atoms_with_crystal_contacts,
-    #         "ligand_fraction_atoms_with_crystal_contacts": self.fraction_atoms_with_crystal_contacts,
-    #         "ligand_num_crystal_contacted_residues": self.num_crystal_contacted_residues,
-    #         "ligand_binding_affinity": self.binding_affinity,
-    #     }
-    #     if self.posebusters_result is not None:
-    #         for k in self.posebusters_result:
-    #             data[f"ligand_posebusters_{k}"] = self.posebusters_result[k]
-
-    #     data.update(self.format_interactions())
-    #     for chain_type in [
-    #         "interacting_protein",
-    #         "neighboring_protein",
-    #         "interacting_ligand",
-    #         "neighboring_ligand",
-    #     ]:
-    #         data.update(self.format_chains(chain_type, chains))
-    #     for residue_type in ["interacting", "neighboring"]:
-    #         data.update(self.format_residues(residue_type, chains))
-    #     return data
-
     def format_ligand(self, chains: dict[str, Chain]) -> dict[str, ty.Any]:
-        # all these fields are cached_properties in Ligand class
-        # these fields are not in __fields__ and are not written to tsv!!
-        # TODO: add them to tsv
-        data = {
-            "ligand_id": self.id,
-            "ligand_binding_affinity": self.binding_affinity,
-            "ligand_is_kinase_inhibitor": self.is_kinase_inhibitor,
-            "ligand_num_atoms_with_crystal_contacts": self.num_atoms_with_crystal_contacts,
-            "ligand_fraction_atoms_with_crystal_contacts": self.fraction_atoms_with_crystal_contacts,
-            "ligand_num_crystal_contacted_residues": self.num_crystal_contacted_residues,
-            "ligand_num_interacting_residues": self.num_interacting_residues,
-            "ligand_num_neighboring_residues": self.num_neighboring_residues,
-            "ligand_num_interactions": self.num_interactions,
-        }
-        # data = defaultdict(str)
+         """
+         Format interactions for pd.DataFrame
 
-        for field in self.__fields__:
-            # blacklist fields that will be added with custom formatters below
-            # these may also be not written to tsv!!
-            # TODO: add them to tsv
-            if field in [
-                "posebusters_result",
-                "interactions",
-                "ligand_auth_id",
-                "interacting_protein_chains",
-                "neighboring_protein_chains",
-                "interacting_ligands",
-                "neighboring_ligands",
-                "interacting_residues",
-                "neighboring_residues",
-            ]:
-                continue
-            name = f"ligand_{field}"
-            value = getattr(self, field, None)
-            print(name, value)
+         Parameters
+         ----------
+         self : Ligand
+             Ligand object
+         chains : dict[str, Chain]
+             Chain dictionary
 
-            if value is None or isinstance(value, bool):
-                # maybe not add if the value is None?
-                data.update({name: value})
-            elif isinstance(value, ty.get_args(ty.Union[str, int, float])):
-                data.update({name: str(value)})
-            elif isinstance(value, ty.Iterable):
-                data.update({name: ";".join(map(str, value))})
+         Returns
+         -------
+         dict[str, Any]
+         """
+         data = {
+             "ligand_id": self.id,
+             "ligand_instance": self.instance,
+             "ligand_asym_id": self.asym_id,
+             "ligand_ccd_code": self.ccd_code,
+             "ligand_unique_ccd_code": self.unique_ccd_code,
+             "ligand_plip_type": self.plip_type,
+             "ligand_num_rot_bonds": self.num_rot_bonds,
+             "ligand_smiles": self.smiles,
+             "ligand_resolved_smiles": self.resolved_smiles,
+             "ligand_rdkit_canonical_smiles": self.rdkit_canonical_smiles,
+             "ligand_molecular_weight": self.molecular_weight,
+             "ligand_crippen_clogp": self.crippen_clogp,
+             "ligand_num_hbd": self.num_hbd,
+             "ligand_num_hba": self.num_hba,
+             "ligand_num_rings": self.num_rings,
+             "ligand_num_heavy_atoms": self.num_heavy_atoms,
+             "ligand_tpsa": self.tpsa,
+             "ligand_qed": self.qed,
+             "ligand_is_covalent": self.is_covalent,
+             "ligand_is_ion": self.is_ion,
+             "ligand_is_lipinski": self.is_lipinski,
+             "ligand_is_fragment": self.is_fragment,
+             "ligand_is_oligo": self.is_oligo,
+             "ligand_is_cofactor": self.is_cofactor,
+             "ligand_is_other": self.is_other,
+             "ligand_is_invalid": self.is_invalid,
+             "ligand_in_artifact_list": self.in_artifact_list,
+             "ligand_is_artifact": self.is_artifact,
+             "ligand_num_interacting_residues": self.num_interacting_residues,
+             "ligand_num_neighboring_residues": self.num_neighboring_residues,
+             "ligand_num_interactions": self.num_interactions,
+             "ligand_num_missing_pli_interface_residues": self.num_missing_pli_interface_residues,
+             "ligand_num_pli_atoms_within_4A_of_gap": self.num_pli_atoms_within_4A_of_gap,
+             "ligand_num_pli_atoms_within_8A_of_gap": self.num_pli_atoms_within_8A_of_gap,
+             "ligand_num_missing_ppi_interface_residues": self.num_missing_ppi_interface_residues,
+             "ligand_num_neighboring_ppi_atoms_within_8A_of_gap": self.num_neighboring_ppi_atoms_within_8A_of_gap,
+             "ligand_num_neighboring_ppi_atoms_within_4A_of_gap": self.num_neighboring_ppi_atoms_within_4A_of_gap,
+             "ligand_num_resolved_heavy_atoms": self.num_resolved_heavy_atoms,
+             "ligand_num_unresolved_heavy_atoms": self.num_unresolved_heavy_atoms,
+             "ligand_is_kinase_inhibitor": self.is_kinase_inhibitor,
+             "ligand_num_atoms_with_crystal_contacts": self.num_atoms_with_crystal_contacts,
+             "ligand_fraction_atoms_with_crystal_contacts": self.fraction_atoms_with_crystal_contacts,
+             "ligand_num_crystal_contacted_residues": self.num_crystal_contacted_residues,
+             "ligand_binding_affinity": self.binding_affinity,
+         }
+         if self.posebusters_result is not None:
+             for k in self.posebusters_result:
+                 data[f"ligand_posebusters_{k}"] = self.posebusters_result[k]
 
-        # posebusters
-        if self.posebusters_result is not None:
-            for k in self.posebusters_result:
-                data[f"ligand_posebusters_{k}"] = self.posebusters_result[k]
-        # interactions
-        data.update(self.format_interactions())
-        # chains
-        data.update(
-            {"ligand_auth_id": chains[self.asym_id].auth_id}
-        )  # not a cached_property!
-        for chain_type in [
-            "interacting_protein",
-            "neighboring_protein",
-            "interacting_ligand",
-            "neighboring_ligand",
-        ]:
-            data.update(self.format_chains(chain_type, chains))
-        # residues
-        for residue_type in ["interacting", "neighboring"]:
-            data.update(self.format_residues(residue_type, chains))
-
-        return data
+         data.update(self.format_interactions())
+         for chain_type in [
+             "interacting_protein",
+             "neighboring_protein",
+             "interacting_ligand",
+             "neighboring_ligand",
+         ]:
+             data.update(self.format_chains(chain_type, chains))
+         for residue_type in ["interacting", "neighboring"]:
+             data.update(self.format_residues(residue_type, chains))
+         return data
