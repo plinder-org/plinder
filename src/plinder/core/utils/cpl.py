@@ -8,6 +8,7 @@ from time import sleep
 from typing import Callable, Iterable, Optional, TypeVar, Union, overload
 
 from cloudpathlib import CloudPath, GSClient, GSPath
+from cloudpathlib.exceptions import OverwriteNewerLocalError
 from omegaconf import DictConfig
 from tqdm.contrib.concurrent import thread_map
 
@@ -69,9 +70,15 @@ def thread_pool(func: Callable[..., T], iter: Iterable[T]) -> None:
 @retry
 def _quiet_ping(path: GSPath) -> None:
     if isinstance(path, CloudPath):
-        LOG.debug(f"_ping: type(path)={type(path)} local={path.fspath}")
+        LOG.debug(f"_ping: type(path)={type(path)} local={path._local}")
         if not os.getenv("PLINDER_OFFLINE"):
-            path.fspath
+            try:
+                path.fspath
+            except OverwriteNewerLocalError:
+                if path._local.exists():
+                    pass
+                else:
+                    raise
     else:
         LOG.debug(f"_ping: type(path)={type(path)} local={path}")
 
@@ -138,7 +145,13 @@ def get_plinder_path(*, rel: str = "", download: bool = True) -> Path:
     if download:
         paths = [path] if path.is_file() else list(path.rglob("*"))
         download_paths(paths=paths)
-    return Path(path.fspath)
+    try:
+        return Path(path.fspath)
+    except OverwriteNewerLocalError:
+        if path._local.exists():
+            return path._local
+        else:
+            raise
 
 
 def get_plinder_paths(*, paths: list[Path]) -> list[Path]:
