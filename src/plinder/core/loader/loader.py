@@ -8,7 +8,7 @@ import atom3d.util.formats as fo
 import pandas as pd
 from torch.utils.data import Dataset
 
-from plinder.core import get_split
+from plinder.core.split.utils import get_split
 from plinder.core.system import system
 
 
