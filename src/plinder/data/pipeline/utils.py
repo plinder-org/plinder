@@ -555,11 +555,15 @@ def pack_linked_structures(data_dir: Path, code: str) -> None:
         two character code
     """
     (data_dir / "links").mkdir(exist_ok=True, parents=True)
-    with ZipFile(data_dir / "links" / f"{code}.zip", "w", compression=ZIP_DEFLATED) as archive:
+    with ZipFile(
+        data_dir / "links" / f"{code}.zip", "w", compression=ZIP_DEFLATED
+    ) as archive:
         for search_db in ["apo", "pred"]:
             jsons = []
             root = data_dir / "linked_structures" / search_db
-            system_ids = [system_id for system_id in listdir(root) if system_id[1:3] == code]
+            system_ids = [
+                system_id for system_id in listdir(root) if system_id[1:3] == code
+            ]
             for system_id in system_ids:
                 link_ids = listdir(f"{root}/{system_id}")
                 for link_id in link_ids:
@@ -576,8 +580,12 @@ def pack_linked_structures(data_dir: Path, code: str) -> None:
                         )
                     except Exception:
                         pass
-            df = pd.DataFrame(jsons).rename(columns={"reference": "reference_system_id", "model": "id"})
-            df.to_parquet(data_dir / "links" / f"{search_db}_{code}.parquet", index=False)
+            df = pd.DataFrame(jsons).rename(
+                columns={"reference": "reference_system_id", "model": "id"}
+            )
+            df.to_parquet(
+                data_dir / "links" / f"{search_db}_{code}.parquet", index=False
+            )
 
 
 def mp_pack_linked_structures(*, data_dir: Path) -> None:
@@ -591,7 +599,9 @@ def mp_pack_linked_structures(*, data_dir: Path) -> None:
     """
 
     with multiprocessing.get_context("spawn").Pool() as pool:
-        pool.starmap(pack_linked_structures, zip(repeat(data_dir), listdir(data_dir / "ingest")))
+        pool.starmap(
+            pack_linked_structures, zip(repeat(data_dir), listdir(data_dir / "ingest"))
+        )
 
 
 def consolidate_linked_scores(*, data_dir: Path) -> None:
@@ -612,7 +622,9 @@ def consolidate_linked_scores(*, data_dir: Path) -> None:
             if not df.empty:
                 dfs.append(df)
         ndf = pd.concat(dfs)
-        odf = pd.read_parquet(data_dir / "linked_structures" / f"{search_db}_links.parquet")
+        odf = pd.read_parquet(
+            data_dir / "linked_structures" / f"{search_db}_links.parquet"
+        )
         df = pd.merge(odf, ndf, on=["reference_system_id", "id"])
         df.to_parquet(data_dir / "links" / f"{search_db}_links.parquet", index=False)
 

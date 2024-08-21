@@ -114,7 +114,9 @@ class ModelScores:
         score_posebusters: bool = False,
     ) -> "ModelScores":
         if model_file.suffix not in [".cif", ".pdb"]:
-            raise ValueError(f"model_file must be a .cif or .pdb file, got {model_file}")
+            raise ValueError(
+                f"model_file must be a .cif or .pdb file, got {model_file}"
+            )
         if model_file.suffix == ".cif":
             entity = io.LoadMMCIF(model_file.as_posix(), fault_tolerant=True)
         else:

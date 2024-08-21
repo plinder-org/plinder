@@ -67,7 +67,9 @@ def superpose_to_system(
         Chain of the target asymmetric unit to superpose
     """
     # Load target asymmetric unit and chain
-    target_mol, info = io.LoadMMCIF(target_cif_file.as_posix(), info=True, fault_tolerant=True)
+    target_mol, info = io.LoadMMCIF(
+        target_cif_file.as_posix(), info=True, fault_tolerant=True
+    )
     if target_chain is not None:
         target_mol = mol.CreateEntityFromView(
             target_mol.Select(f"chain='{target_chain}'"), True
