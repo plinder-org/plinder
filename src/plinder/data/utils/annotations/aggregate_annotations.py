@@ -1354,6 +1354,6 @@ class Entry(BaseModel):
                 if uniprot is not None:
                     mappings[row["kinase"]] |= set(uniprot)  # type: ignore
             if len(mappings):
-                self.chains[chain_id].mappings["Kinase name"] = {
+                self.chains[chain_id].mappings["kinase_name"] = {
                     k: list(v) for k, v in mappings.items()
                 }
