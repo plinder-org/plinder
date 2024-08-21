@@ -44,7 +44,7 @@ class PlinderSystem:
         self._chain_mapping = None
         self._water_mapping = None
         self._linked_structures = None
-        self._linked_archive = None
+        self._linked_archive: Path | None = None
 
     @property
     def entry(self) -> dict[str, Any] | None:
@@ -245,7 +245,7 @@ class PlinderSystem:
         if self._linked_structures is None:
             links = query_links(filters=[("reference_system_id", "==", self.system_id)])
             self._linked_structures = links
-            if not self._linked_structures.empty:
+            if self._linked_structures is not None and not self._linked_structures.empty:
                 zips = get_zips_to_unpack(kind="linked_structures", system_ids=[self.system_id])
                 [archive] = list(zips.keys())
                 self._linked_archive = archive.parent

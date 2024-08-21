@@ -149,7 +149,7 @@ def get_plinder_path(*, rel: str = "", download: bool = True) -> Path:
         return Path(path.fspath)
     except OverwriteNewerLocalError:
         if path._local.exists():
-            return path._local
+            return Path(path._local)
         else:
             raise
 
