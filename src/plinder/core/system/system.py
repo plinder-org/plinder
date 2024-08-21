@@ -11,8 +11,6 @@ import pandas as pd
 
 from plinder.core.index import utils
 from plinder.core.scores.links import query_links
-from plinder.core.utils import cpl
-from plinder.core.utils.config import get_config
 from plinder.core.utils.log import setup_logger
 from plinder.core.utils.unpack import get_zips_to_unpack
 
@@ -245,11 +243,18 @@ class PlinderSystem:
         if self._linked_structures is None:
             links = query_links(filters=[("reference_system_id", "==", self.system_id)])
             self._linked_structures = links
-            if self._linked_structures is not None and not self._linked_structures.empty:
-                zips = get_zips_to_unpack(kind="linked_structures", system_ids=[self.system_id])
+            if (
+                self._linked_structures is not None
+                and not self._linked_structures.empty
+            ):
+                zips = get_zips_to_unpack(
+                    kind="linked_structures", system_ids=[self.system_id]
+                )
                 [archive] = list(zips.keys())
                 self._linked_archive = archive.parent
-                if not (self._linked_archive / "apo" / self.system_id).is_dir() or not (self._linked_archive / "pred" / self.system_id).is_dir():
+                if not (self._linked_archive / "apo" / self.system_id).is_dir() or not (
+                    self._linked_archive / "pred" / self.system_id
+                ).is_dir():
                     with ZipFile(archive) as arch:
                         arch.extractall(path=archive.parent)
         return self._linked_structures
