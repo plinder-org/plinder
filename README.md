@@ -75,7 +75,7 @@ The documentation can be found [here](https://plinder-org.github.io/plinder/). W
 We provide 2 ways of interacting with `plinder`:
 
 1. A python API: using the `plinder.core` API, you can transparently and lazily
-download and interact with most of the components of the dataset.
+download and interact with most of the components of the dataset. **(WIP)**
 
 2. Via raw files on bucket: if you prefer to use the dataset directly, you can fetch it using [`gsutil`](https://cloud.google.com/storage/docs/gsutil) from google cloud storage. **(recommended)**
 
