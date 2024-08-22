@@ -106,7 +106,7 @@ This yields the following structure, with the `systems`, `splits`, and `index/an
 |   |-- mmp                  # Matched Molecular Series/Pair data
 |   |-- scores               # Extended protein similarity parquet dataset
 ```
-**Note:** We added a new sub-directory to `links` which contains table of linked (apo and pred) structures and their respective similarity scores.
+**Note:** We added a new sub-directory to `links` to v2 which contains table of linked (apo and pred) structures and their respective similarity scores.
 
 
 ## Unpacking the structure files:
@@ -183,7 +183,7 @@ Moreover, as we enticipate this resource to be used for benchmarking a wide rang
 
 ## ⚖️ Evaluation harness
 
-See the [`plinder.eval`](docs/eval/README.md) docs for more details.
+See the [`plinder.eval`](docs/eval.md) docs for more details.
 
 ## 📦 Dataloader
 
@@ -193,10 +193,6 @@ to implement a dataloader, but is not the only way to use the dataset.
 **Note**: The dataloader requires both `torch` and `atom3d` to be installed. You use the `[loader]` dependency block when installing `plinder`:
 
     pip install .[loader]
-
-## ℹ️ Filters & Annotations
-
-See the [`plinder.data`](docs/data/README.md) docs for more details.
 
 ## 📡 Future work
 
@@ -219,7 +215,7 @@ This code is split into 4 sub-packages
 
 ![workflow](https://github.com/user-attachments/assets/cde72643-5fdf-4998-8719-216d0cef2706)
 
-See the [End-to-end pipeline](docs/data/README.md) description for technical details about the dataset generation.
+See the [End-to-end pipeline](docs/data/process.md) description for technical details about the dataset generation.
 
 # 📝 Examples & documentation
 
