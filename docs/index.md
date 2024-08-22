@@ -77,7 +77,7 @@ Use the dedicated Python package to explore the data
 
 tutorial/index
 dataset
-api
+api/index
 evaluation
 contribution/index
 citation

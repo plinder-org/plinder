@@ -5,7 +5,6 @@ from pathlib import Path
 import plinder
 
 DOC_PATH = Path(__file__).parent
-PACKAGE_PATH = DOC_PATH.parent / "src"
 COLUMN_REFERENCE_PATH = DOC_PATH.parent / "column_descriptions"
 
 # Avoid verbose logs in rendered notebooks
@@ -14,9 +13,12 @@ os.environ["PLINDER_LOG_LEVEL"] = "0"
 # Include documentation in PYTHONPATH
 # in order to import modules for API doc generation etc.
 sys.path.insert(0, str(DOC_PATH))
+import apidoc
 import tablegen
 
 # Pregeneration of files
+apidoc.generate_api_reference("plinder.core", DOC_PATH / "api" / "core")
+apidoc.generate_api_reference("plinder.core.scores", DOC_PATH / "api" / "scores")
 tablegen.generate_table(COLUMN_REFERENCE_PATH, DOC_PATH / "table.html")
 
 #### Source code link ###
@@ -59,6 +61,11 @@ myst_enable_extensions = [
     "tasklist",
 ]
 myst_url_schemes = ("http", "https", "mailto")
+
+numpydoc_show_class_members = False
+# Prevent autosummary from using sphinx-autogen, since it would
+# overwrite the document structure given by apidoc.json
+autosummary_generate = False
 
 templates_path = ["templates"]
 source_suffix = {
@@ -131,5 +138,5 @@ html_context = {
 #### App setup ####
 
 
-# def setup(app):
-#    app.connect("autodoc-skip-member", apidoc.skip_nonrelevant)
+def setup(app):
+    app.connect("autodoc-skip-member", apidoc.skip_nonrelevant)
