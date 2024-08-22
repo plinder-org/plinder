@@ -31,7 +31,7 @@ It is a comprehensive, annotated, high quality dataset, including:
 - `train-val-test` splits and ability to tune splitting based on the learning task
 - Robust evaluation harness to simplify and standard performance comparison between models
 
-The `plinder` project is a community effort, launched by the University of Basel, SIB Swiss Institute of Bioinformatics, VantAI, NVIDIA, MIT CSAIL, and will be regularly updated
+The `plinder` project is a community effort, launched by the University of Basel, SIB Swiss Institute of Bioinformatics, VantAI, NVIDIA, MIT CSAIL, and will be regularly updated.
 We highly welcome contributions!
 If you find `plinder` useful, please see the citation file for details on how to cite.
 
@@ -84,14 +84,14 @@ If you go with route 2, see below sections.
     export PLINDER_ITERATION=v1 # Current iteration
     gsutil -m cp -r gs://plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/* ~/.local/share/plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/
 
-**NOTE!**: the version used for the preprint is `gs://plinder/2024-04/v1`, however, we plan to release a newer version with updated annotations to be used for the MLSB challenge (`gs://plinder/2024-06/v2`) by Aug 18th.
+**NOTE!**: the version used for the preprint is `gs://plinder/2024-04/v1`, while the current version we plan to use for the MLSB challenge is `gs://plinder/2024-06/v2`.
 
 This yields the following structure, with the `systems`, `splits`, and `index/annotation_table.parquet` being most important for direct usage and the rest containing useful annotations and medadata.
 
 
 ```bash
-2024-04/                     # The "`plinder` release" (`PLINDER_RELEASE`)
-|-- v1                       # The "`plinder` iteration" (`PLINDER_ITERATION`)
+2024-06/                     # The "`plinder` release" (`PLINDER_RELEASE`)
+|-- v2                       # The "`plinder` iteration" (`PLINDER_ITERATION`)
 |   |-- systems              # Actual structure files for all systems (split by `two_char_code` and zipped)
 |   |-- splits               # List of system ids in a .parquet and each split  the configs used to generate them (if available)
 |   |-- clusters             # Pre-calculated cluster labels derived from the protein similarity dataset
@@ -102,10 +102,11 @@ This yields the following structure, with the `systems`, `splits`, and `index/an
 |   |-- ligand_scores        # Ligand similarity parquet dataset
 |   |-- ligands              # Ligand data expanded from entries for computing similarity
 |   |-- linked_structures    # Linked structures
+|   |-- links                # Table of linked (apo and pred) structures and their respective similarity scores.
 |   |-- mmp                  # Matched Molecular Series/Pair data
 |   |-- scores               # Extended protein similarity parquet dataset
 ```
-
+**Note:** We added a new sub-directory to `links` which contains table of linked (apo and pred) structures and their respective similarity scores.
 
 
 ## Unpacking the structure files:
@@ -161,7 +162,7 @@ release and the `plinder.core` package makes it easy to interact
 with the dataset.
 
 Changelog:
-- 2024-06/v2 (Upcoming):
+- 2024-06/v2:
     - Improved SDF saving to handle some bond order issues
     - Updated system definition to be more stable and independent of PLIP
     - Added binding affinities from BindingDB and added "has_affinity" as priority for test split
@@ -179,8 +180,6 @@ Finally, a particular care is taken for test set that is further prioritized to 
 ![test_stratification](https://github.com/user-attachments/assets/5bb96534-f939-42b5-bf85-5ac3a71aa324)
 
 Moreover, as we enticipate this resource to be used for benchmarking a wide range of methods, including those simultaneously predicting protein structure (aka. co-folding) or those generating novel ligand structures, we further stratified test (by novel ligand, pocket, protein or all) to cover a wide range of tasks.
-
-**This will be made available for the v2 split on August 18th**
 
 ## ⚖️ Evaluation harness
 
