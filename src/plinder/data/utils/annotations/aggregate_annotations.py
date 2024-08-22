@@ -271,7 +271,7 @@ class System(BaseModel):
         self,
         chain_type: str,
         chains: dict[str, Chain],
-    ) -> dict[str, str]:
+    ) -> dict[str, ty.Any]:
         if chain_type == "interacting_protein":
             sub_chains = self.interacting_protein_chains
         elif chain_type == "neighboring_protein":
@@ -282,18 +282,17 @@ class System(BaseModel):
             raise ValueError(f"chain_type={chain_type} not understood")
         sub_chain_list = [ch.split(".") for ch in sub_chains]
 
-        sub_chain_list = [
-            chains[c].to_dict(int(instance))  # type: ignore
-            for instance, c in sub_chain_list
+        sub_chains_data = [
+            chains[c].to_dict(int(instance)) for instance, c in sub_chain_list
         ]
 
-        if len(sub_chain_list) == 0:
+        if len(sub_chains_data) == 0:
             return {}
         data: dict[str, list[str]] = defaultdict(list)
-        for sub_chain in sub_chain_list:
+        for sub_chain in sub_chains_data:
             for key in sub_chain:
-                data[f"system_{chain_type}_chains{key}"].append(str(sub_chain[key]))  # type: ignore
-        return {k: ";".join(v) for k, v in data.items()}
+                data[f"system_{chain_type}_chains{key}"].append(sub_chain[key])
+        return data
 
     @property
     def num_interacting_protein_chains(self) -> int:
