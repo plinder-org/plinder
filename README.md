@@ -165,13 +165,13 @@ with the dataset.
 
 Changelog:
 - 2024-06/v2:
-    - Improved SDF saving to handle some bond order issues
     - Updated system definition to be more stable and independent of PLIP
-    - Added binding affinities from BindingDB
-    - Annotated all crystal contacts
-    - Improved covalency detection
+    - Improved SDF saving to handle some bond order issues
+    - Added annotations for binding affinities from BindingDB
+    - Added annotations for crystal contacts
+    - Improved covalency detection and added annotations to reference each bond explicitly
     - Added linked apo/pred structures to v2/links and v2/linked_structures
-    - Added statistics requirement in the split, and lots of deduplication and enrichment for unique ligand.
+    - Added statistics requirement and other changes in the split to enrichment diversity in test set
 
 - 2024-04/v1 (Current): Version with redundancy removal by protein pocket and ligand similarity.
 - 2024-04/v0: Version used to re-train DiffDock in the paper, with redundancy removal based on \<pdbid\>\_\<ligand ccd codes\>
@@ -222,7 +222,7 @@ See the [End-to-end pipeline](docs/data/process.md) description for technical de
 
 # 📝 Examples & documentation
 
-Package documentation, including API documentation, [example notebooks](examples/), and supplementary guides, are made available.
+Package documentation, including API documentation, example notebooks, and supplementary guides, are made available.
 
 # ⚙️ Dev guide
 
