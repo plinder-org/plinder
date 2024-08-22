@@ -169,9 +169,11 @@ Changelog:
 - 2024-06/v2:
     - Improved SDF saving to handle some bond order issues
     - Updated system definition to be more stable and independent of PLIP
-    - Added binding affinities from BindingDB and added "has_affinity" as priority for test split
+    - Added binding affinities from BindingDB
     - Annotated all crystal contacts
     - Improved covalency detection
+    - Added linked apo/pred structures to v2/links and v2/linked_structures
+    - Added statistics requirement in the split, and lots of deduplication and enrichment for unique ligand.
 
 - 2024-04/v1 (Current): Version with redundancy removal by protein pocket and ligand similarity.
 - 2024-04/v0: Version used to re-train DiffDock in the paper, with redundancy removal based on \<pdbid\>\_\<ligand ccd codes\>
