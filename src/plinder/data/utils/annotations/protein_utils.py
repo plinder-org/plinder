@@ -88,7 +88,7 @@ def get_entry_info(data: DataContainer) -> dict[str, str]:
             entry_info[key] = x.getValueOrDefault(attr_name)
     resolution_options = [
         ("refine", "ls_d_res_high"),
-        ("em_3d_reconstruction", "resolution"),
+        # ("em_3d_reconstruction", "resolution"), # TODO: add this back for next annotation rerun
     ]
     resolution = None
     for obj_name, attr_name in resolution_options:
