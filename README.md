@@ -65,15 +65,19 @@ Or with a development installation:
     cd plinder
     pip install -e '.[dev]'
 
+# 📚 Documentation
+
+The documentation can be found [here](https://plinder-org.github.io/plinder/). We also provide a quick "Getting started" below.
+
+
 # ⬇️ Getting the dataset
 
-
-A work-in-progress documentation is available [here](https://plinder-org.github.io/plinder/), but in short we provide 2 ways of interacting with `plinder`:
+We provide 2 ways of interacting with `plinder`:
 
 1. A python API: using the `plinder.core` API, you can transparently and lazily
 download and interact with most of the components of the dataset.
 
-2. Via raw files on bucket: if you prefer to use the dataset directly, you can fetch it using [`gsutil`](https://cloud.google.com/storage/docs/gsutil) from google cloud storage.
+2. Via raw files on bucket: if you prefer to use the dataset directly, you can fetch it using [`gsutil`](https://cloud.google.com/storage/docs/gsutil) from google cloud storage. **(recommended)**
 
 
 If you go with route 2, see below sections.
