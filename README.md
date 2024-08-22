@@ -69,16 +69,14 @@ Or with a development installation:
 
 The documentation can be found [here](https://plinder-org.github.io/plinder/). We also provide a quick "Getting started" below.
 
-
 # ⬇️ Getting the dataset
 
 We provide 2 ways of interacting with `plinder`:
 
 1. A python API: using the `plinder.core` API, you can transparently and lazily
-download and interact with most of the components of the dataset. **(WIP)**
+   download and interact with most of the components of the dataset. **(WIP)**
 
 2. Via raw files on bucket: if you prefer to use the dataset directly, you can fetch it using [`gsutil`](https://cloud.google.com/storage/docs/gsutil) from google cloud storage. **(recommended)**
-
 
 If you go with route 2, see below sections.
 
@@ -91,7 +89,6 @@ If you go with route 2, see below sections.
 **NOTE!**: the version used for the preprint is `gs://plinder/2024-04/v1`, while the current version we plan to use for the MLSB challenge is `gs://plinder/2024-06/v2`.
 
 This yields the following structure, with the `systems`, `splits`, and `index/annotation_table.parquet` being most important for direct usage and the rest containing useful annotations and medadata.
-
 
 ```bash
 2024-04/                     # The "`plinder` release" (`PLINDER_RELEASE`)
@@ -109,7 +106,6 @@ This yields the following structure, with the `systems`, `splits`, and `index/an
 |   |-- mmp                  # Matched Molecular Series/Pair data
 |   |-- scores               # Extended protein similarity parquet dataset
 ```
-
 
 ## Unpacking the structure files:
 
@@ -144,11 +140,9 @@ The naming of the directory is by `system` - since a given PDB entry can contain
 
 With the `system_id` contained in these split files, you can load the respective train, val & test splits **after unzipping** the `systems` directory. E.g. as shown in the Dataframe above, `~/.local/share/plinder/2024-04/v1/systems/1grx__1__1.A__1.B/system.cif` will contain the full mmcif of the system. We also provide cif files of seperated receptors (`*/receptor.cif`) and ligands (`*/ligand_files/*.sdf`) as well as pdb files (`*/receptor.pdb`) but **strongly encourage cif**, pdb is considered a [legacy file format](https://pdb101.rcsb.org/learn/guide-to-understanding-pdb-data/beginner%E2%80%99s-guide-to-pdbx-mmcif).
 
-
 Note: a non-redundant and single-ligand smaller subset of this version was used to train diffdock in the paper and is available at 2024-04/v0.
 
 The folder also contains a `.yaml` which is the config used to generate the split and can be ignored unless you want to reproduce the splits.
-
 
 ## 🔢 Plinder versions
 
@@ -164,14 +158,16 @@ release and the `plinder.core` package makes it easy to interact
 with the dataset.
 
 Changelog:
+
 - 2024-06/v2:
-    - Improved SDF saving to handle some bond order issues
-    - Updated system definition to be more stable and independent of PLIP
-    - Added binding affinities from BindingDB
-    - Annotated all crystal contacts
-    - Improved covalency detection
-    - Added linked apo/pred structures to v2/links and v2/linked_structures
-    - Added statistics requirement in the split, and lots of deduplication and enrichment for unique ligand.
+
+  - Improved SDF saving to handle some bond order issues
+  - Updated system definition to be more stable and independent of PLIP
+  - Added binding affinities from BindingDB
+  - Annotated all crystal contacts
+  - Improved covalency detection
+  - Added linked apo/pred structures to v2/links and v2/linked_structures
+  - Added statistics requirement in the split, and lots of deduplication and enrichment for unique ligand.
 
 - 2024-04/v1 (Current): Version with redundancy removal by protein pocket and ligand similarity.
 - 2024-04/v0: Version used to re-train DiffDock in the paper, with redundancy removal based on \<pdbid\>\_\<ligand ccd codes\>
@@ -218,7 +214,7 @@ This code is split into 4 sub-packages
 
 ![workflow](https://github.com/user-attachments/assets/cde72643-5fdf-4998-8719-216d0cef2706)
 
-See the [End-to-end pipeline](docs/data/process.md) description for technical details about the dataset generation.
+See the [End-to-end pipeline](docs/process.md) description for technical details about the dataset generation.
 
 # 📝 Examples & documentation
 
@@ -286,7 +282,7 @@ since the previous release:
 - If `bumpversion skip` is present in the commit message, the version will not be bumped
 - If `bumpversion major` is present in the commit message, the major version will be bumped
 - If `bumpversion minor` is present in the commit message, the minor version will be bumped
-- If `bumpversion patch` is present in the commit message (or nothing is found), the patch version will be bumped
+- If `bumpversion patch` is present in the co®mit message (or nothing is found), the patch version will be bumped
 
 **NOTE**: The CI workflow will use the **most recent** match in the commit history to make its decision.
 
