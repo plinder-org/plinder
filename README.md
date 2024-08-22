@@ -165,7 +165,7 @@ with the dataset.
 
 Changelog:
 - 2024-06/v2:
-    - Updated system definition to be more stable and independent of PLIP
+    - Updated system definition to be more stable and depend only on ligand distance rather than PLIP
     - Improved SDF saving to handle some bond order issues
     - Added annotations for binding affinities from BindingDB
     - Added annotations for crystal contacts
