@@ -106,7 +106,6 @@ This yields the following structure, with the `systems`, `splits`, and `index/an
 |   |-- ligand_scores        # Ligand similarity parquet dataset
 |   |-- ligands              # Ligand data expanded from entries for computing similarity
 |   |-- linked_structures    # Linked structures
-|   |-- links                # Table of linked (apo and pred) structures and their respective similarity scores.
 |   |-- mmp                  # Matched Molecular Series/Pair data
 |   |-- scores               # Extended protein similarity parquet dataset
 ```
