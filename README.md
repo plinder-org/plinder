@@ -94,8 +94,8 @@ This yields the following structure, with the `systems`, `splits`, and `index/an
 
 
 ```bash
-2024-06/                     # The "`plinder` release" (`PLINDER_RELEASE`)
-|-- v2                       # The "`plinder` iteration" (`PLINDER_ITERATION`)
+2024-04/                     # The "`plinder` release" (`PLINDER_RELEASE`)
+|-- v1                       # The "`plinder` iteration" (`PLINDER_ITERATION`)
 |   |-- systems              # Actual structure files for all systems (split by `two_char_code` and zipped)
 |   |-- splits               # List of system ids in a .parquet and each split  the configs used to generate them (if available)
 |   |-- clusters             # Pre-calculated cluster labels derived from the protein similarity dataset
@@ -109,7 +109,6 @@ This yields the following structure, with the `systems`, `splits`, and `index/an
 |   |-- mmp                  # Matched Molecular Series/Pair data
 |   |-- scores               # Extended protein similarity parquet dataset
 ```
-**Note:** We added a new sub-directory to `links` to v2 which contains table of linked (apo and pred) structures and their respective similarity scores.
 
 
 ## Unpacking the structure files:
@@ -129,7 +128,7 @@ The naming of the directory is by `system` - since a given PDB entry can contain
 
 ### Accessing the splits files:
 
-`plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/splits` contains an index for splits contained in a single parquet file. The most current split is `gs://plinder/2024-04/v1/splits/plinder-pl50.parquet` containing the pl50 split from the preprint. (Again: note this will be shortly updated to v2 and the v2 split will be used for the MLSB leaderboard)
+`plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/splits` contains an index for splits contained in a single parquet file. The most current split is `gs://plinder/2024-06/v2/splits/split.parquet` while `gs://plinder/2024-04/v1/splits/plinder-pl50.parquet` contains the pl50 split from the preprint.
 
 ```python
 >>> import pandas as pd
@@ -203,7 +202,6 @@ to implement a dataloader, but is not the only way to use the dataset.
 
 We are currently working on the following:
 
-- Implementing the Dataloader
 - Establishing a leaderboard
 - Improving the documentation and examples
 
