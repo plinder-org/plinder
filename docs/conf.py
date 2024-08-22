@@ -133,6 +133,7 @@ html_context = {
     "github_version": "main",
     "doc_path": "doc",
 }
+html_scaled_image_link = False
 
 
 #### App setup ####
