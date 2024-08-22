@@ -664,6 +664,17 @@ def annotate_interface_gaps_per_chain(
     )
 
 
+def validate_chain_residue(obj: dict[str, ty.Any]) -> dict[str, ty.Any]:
+    clean = {}
+    for k, v in obj.items():
+        key = tuple(k.split(",")) if isinstance(k, str) else k
+        if isinstance(v, dict):
+            clean[key] = validate_chain_residue(v)
+        else:
+            clean[key] = v
+    return clean  # type: ignore
+
+
 CrystalContacts = ty.Annotated[
     dict[tuple[str, int], set[int]],
     BeforeValidator(validate_chain_residue),
@@ -828,7 +839,7 @@ class Ligand(BaseModel):
     unique_ccd_code: str | None = Field(
         default=None, description="Ligand representative CCD code after de-duplicating"
     )
-    crystal_contacts: dict[tuple[str, int], set[int]] = Field(
+    crystal_contacts: CrystalContacts = Field(
         default_factory=dict,
         description="__Dictionary of {instance}.{chain} to residue number to set of interacting crystal contacts",
     )

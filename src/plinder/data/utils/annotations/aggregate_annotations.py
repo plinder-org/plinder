@@ -689,9 +689,9 @@ class Entry(BaseModel):
     water_chains: list[str] = Field(
         default_factory=list, description="Water chains in the entry"
     )
-    symmetry_mate_contacts: dict[
-        tuple[str, int], dict[tuple[str, int], set[int]]
-    ] = Field(default_factory=dict, description="Symmetry mate contacts in the entry")
+    symmetry_mate_contacts: SymmetryMateContacts = Field(
+        default_factory=dict, description="Symmetry mate contacts in the entry"
+    )
     """
     This dataclass defines as system which included a protein-ligand complex
     and it's neighboring ligands and protein residues. For access to all
