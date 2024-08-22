@@ -15,6 +15,7 @@ os.environ["PLINDER_LOG_LEVEL"] = "0"
 sys.path.insert(0, str(DOC_PATH))
 import apidoc
 import tablegen
+import viewcode
 
 # Pregeneration of files
 apidoc.generate_api_reference("plinder.core", DOC_PATH / "api" / "core")
@@ -33,7 +34,7 @@ extensions = [
     "sphinx.ext.autosummary",
     "sphinx.ext.doctest",
     "sphinx.ext.mathjax",
-    # "sphinx.ext.linkcode",
+    "sphinx.ext.linkcode",
     "sphinx.ext.todo",
     "sphinx_design",
     "sphinx_copybutton",
@@ -66,6 +67,7 @@ numpydoc_show_class_members = False
 # Prevent autosummary from using sphinx-autogen, since it would
 # overwrite the document structure given by apidoc.json
 autosummary_generate = False
+linkcode_resolve = viewcode.linkcode_resolve
 
 templates_path = ["templates"]
 source_suffix = {
