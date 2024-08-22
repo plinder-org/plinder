@@ -65,7 +65,7 @@ Or with a development installation:
     cd plinder
     pip install -e '.[dev]'
 
-# 📚 Documentation
+# 📝 Documentation
 
 The documentation can be found [here](https://plinder-org.github.io/plinder/). We also provide a quick "Getting started" below.
 
