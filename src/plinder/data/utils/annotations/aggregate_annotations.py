@@ -15,11 +15,12 @@ from ost import io, mol
 from PDBValidation.ValidationFactory import ValidationFactory
 from plip.basic import config
 from posebusters import PoseBusters
-from pydantic import BaseModel, BeforeValidator, Field
+from pydantic import BeforeValidator, Field, computed_field
 from rdkit import RDLogger
 
 from plinder.core.utils.config import get_config
 from plinder.core.utils.log import setup_logger
+from plinder.data.structure.models import ExcludeComputedModel
 from plinder.data.utils.annotations.get_ligand_validation import (
     EntryValidation,
     ResidueListValidation,
@@ -96,7 +97,7 @@ class QualityCriteria:
     pocket_max_percent_outliers_clashes: int = 100
 
 
-class System(BaseModel):
+class System(ExcludeComputedModel):
     pdb_id: str
     smiles: str = Field(
         default_factory=str,
@@ -154,6 +155,7 @@ class System(BaseModel):
 
     """
 
+    @computed_field(description="")  # type: ignore
     @cached_property
     def interacting_protein_chains(self) -> list[str]:
         return sorted(
@@ -164,6 +166,7 @@ class System(BaseModel):
             )
         )
 
+    @computed_field(description="")  # type: ignore
     @cached_property
     def neighboring_protein_chains(self) -> list[str]:
         return sorted(
@@ -174,6 +177,7 @@ class System(BaseModel):
             )
         )
 
+    @computed_field(description="")  # type: ignore
     @cached_property
     def id_no_biounit(self) -> str:
         return "__".join(
@@ -184,26 +188,32 @@ class System(BaseModel):
             ]
         )
 
+    @computed_field(description="")  # type: ignore
     @cached_property
     def ligand_chains(self) -> list[str]:
         return [f"{ligand.instance}.{ligand.asym_id}" for ligand in self.ligands]
 
+    @computed_field(description="")  # type: ignore
     @cached_property
     def num_pocket_residues(self) -> int:
         return sum(l.num_pocket_residues for l in self.ligands)
 
+    @computed_field(description="")  # type: ignore
     @cached_property
     def num_interactions(self) -> int:
         return sum(l.num_interactions for l in self.ligands)
 
+    @computed_field(description="")  # type: ignore
     @cached_property
     def num_unique_interactions(self) -> int:
         return sum(l.num_unique_interactions for l in self.ligands)
 
+    @computed_field(description="")  # type: ignore
     @cached_property
     def num_covalent_ligands(self) -> int:
         return sum(ligand.is_covalent for ligand in self.ligands)
 
+    @computed_field(description="")  # type: ignore
     @cached_property
     def id(self) -> str:
         return "__".join(
@@ -215,6 +225,7 @@ class System(BaseModel):
             ]
         )
 
+    @computed_field(description="")  # type: ignore
     @cached_property
     def system_type(self) -> str:
         if any(not l.is_ion and not l.is_artifact for l in self.ligands):
@@ -224,14 +235,17 @@ class System(BaseModel):
         else:
             return "artifact"
 
+    @computed_field(description="")  # type: ignore
     @cached_property
     def has_kinase_inhibitor(self) -> bool:
         return any(l.is_kinase_inhibitor for l in self.ligands)
 
+    @computed_field(description="")  # type: ignore
     @cached_property
     def has_binding_affinity(self) -> bool:
         return any(l.binding_affinity is not None for l in self.ligands)
 
+    @computed_field(description="")  # type: ignore
     @cached_property
     def pocket_residues(self) -> dict[str, dict[int, str]]:
         all_residues: dict[str, dict[int, str]] = defaultdict(dict)
@@ -241,6 +255,7 @@ class System(BaseModel):
                 all_residues[chain].update(ligand_pocket_residues[chain])
         return all_residues
 
+    @computed_field(description="")  # type: ignore
     @cached_property
     def interactions(self) -> dict[str, dict[int, list[str]]]:
         all_interactions: dict[str, dict[int, list[str]]] = defaultdict(
@@ -256,6 +271,7 @@ class System(BaseModel):
                     )
         return all_interactions
 
+    @computed_field(description="")  # type: ignore
     @cached_property
     def interactions_counter(self) -> dict[str, dict[int, ty.Counter[str]]]:
         interactions_counter: dict[str, dict[int, ty.Counter[str]]] = {}
@@ -410,6 +426,7 @@ class System(BaseModel):
             query.append(f"(chain='{chain}' and ({chain_query}))")
         return " or ".join(query)
 
+    @computed_field(description="")  # type: ignore
     @cached_property
     def num_crystal_contacted_residues(self) -> int:
         residues = set()
@@ -417,10 +434,12 @@ class System(BaseModel):
             residues |= set(ligand.crystal_contacts.keys())
         return len(residues)
 
+    @computed_field(description="")  # type: ignore
     @cached_property
     def num_atoms_with_crystal_contacts(self) -> int:
         return sum(ligand.num_atoms_with_crystal_contacts for ligand in self.ligands)
 
+    @computed_field(description="")  # type: ignore
     @cached_property
     def num_heavy_atoms(self) -> int | None:
         if any(ligand.num_heavy_atoms is None for ligand in self.ligands):
@@ -431,6 +450,7 @@ class System(BaseModel):
             if ligand.num_heavy_atoms is not None
         )
 
+    @computed_field(description="")  # type: ignore
     @cached_property
     def num_resolved_heavy_atoms(self) -> int | None:
         if any(ligand.num_resolved_heavy_atoms is None for ligand in self.ligands):
@@ -441,6 +461,7 @@ class System(BaseModel):
             if ligand.num_resolved_heavy_atoms is not None
         )
 
+    @computed_field(description="")  # type: ignore
     @cached_property
     def num_unresolved_heavy_atoms(self) -> int | None:
         if any(ligand.num_unresolved_heavy_atoms is None for ligand in self.ligands):
@@ -451,6 +472,7 @@ class System(BaseModel):
             if ligand.num_unresolved_heavy_atoms is not None
         )
 
+    @computed_field(description="")  # type: ignore
     @cached_property
     def fraction_atoms_with_crystal_contacts(self) -> float | None:
         if self.num_heavy_atoms is None:
@@ -631,7 +653,7 @@ class System(BaseModel):
         return result
 
 
-class Entry(BaseModel):
+class Entry(ExcludeComputedModel):
     pdb_id: str = Field(
         default_factory=str,
         description="RCSB PDB ID. See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_entry.id.html",
@@ -987,6 +1009,7 @@ class Entry(BaseModel):
             if len(system.interacting_protein_chains):
                 self.systems[system.id] = system
 
+    @computed_field(description="")  # type: ignore
     @cached_property
     def author_to_asym(self) -> dict[str, str]:
         """

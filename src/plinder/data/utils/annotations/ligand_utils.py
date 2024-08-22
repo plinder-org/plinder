@@ -16,13 +16,14 @@ from mmcif.api.PdbxContainers import DataContainer
 from openbabel import pybel
 from ost import io, mol
 from ost.conop import GetDefaultLib
-from pydantic import BaseModel, BeforeValidator, Field
+from pydantic import BeforeValidator, Field, computed_field
 from rdkit import Chem, RDLogger
 from rdkit.Chem import QED, AllChem, Crippen, rdMolDescriptors
 from rdkit.Chem.rdchem import Mol, RWMol
 
 from plinder.core.utils.config import get_config
 from plinder.data.common.constants import BASE_DIR
+from plinder.data.structure.models import ExcludeComputedModel
 from plinder.data.utils.annotations.interaction_utils import (
     extract_ligand_links_to_neighbouring_chains,
     get_plip_hash,
@@ -682,7 +683,7 @@ CrystalContacts = ty.Annotated[
 ]
 
 
-class Ligand(BaseModel):
+class Ligand(ExcludeComputedModel):
     pdb_id: str = Field(
         default_factory=str,
         description="RCSB PDB ID, see https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_entry.id.html",
@@ -1174,7 +1175,8 @@ class Ligand(BaseModel):
 
         return ligand
 
-    @property
+    @computed_field(description="")  # type: ignore
+    @cached_property
     def selection(self) -> str:
         residue_selection = " or ".join(f"rnum={rnum}" for rnum in self.residue_numbers)
         ligand_selection = f"cname={mol.QueryQuoteName(self.instance_chain)}"
@@ -1182,6 +1184,7 @@ class Ligand(BaseModel):
             ligand_selection += f"and ({residue_selection})"
         return ligand_selection
 
+    @computed_field(description="")  # type: ignore
     @cached_property
     def interacting_protein_chains(self) -> list[str]:
         """
@@ -1192,6 +1195,7 @@ class Ligand(BaseModel):
         else:
             return self.neighboring_protein_chains
 
+    @computed_field(description="")  # type: ignore
     @cached_property
     def neighboring_protein_chains(self) -> list[str]:
         """
@@ -1199,6 +1203,7 @@ class Ligand(BaseModel):
         """
         return list(sorted(self.neighboring_residues.keys()))
 
+    @computed_field(description="")  # type: ignore
     @cached_property
     def num_interacting_residues(self) -> int:
         """
@@ -1208,6 +1213,7 @@ class Ligand(BaseModel):
             len(self.interacting_residues[chain]) for chain in self.interacting_residues
         )
 
+    @computed_field(description="")  # type: ignore
     @cached_property
     def num_neighboring_residues(self) -> int:
         """
@@ -1217,6 +1223,7 @@ class Ligand(BaseModel):
             len(self.neighboring_residues[chain]) for chain in self.neighboring_residues
         )
 
+    @computed_field(description="")  # type: ignore
     @cached_property
     def num_interactions(self) -> int:
         """
@@ -1227,6 +1234,7 @@ class Ligand(BaseModel):
             for chain in self.interactions
         )
 
+    @computed_field(description="")  # type: ignore
     @cached_property
     def num_unique_interactions(self) -> int:
         """
@@ -1237,6 +1245,7 @@ class Ligand(BaseModel):
             for chain in self.interactions
         )
 
+    @computed_field(description="")  # type: ignore
     @cached_property
     def pocket_residues(self) -> dict[str, dict[int, str]]:
         residues: dict[str, dict[int, str]] = {}
@@ -1268,10 +1277,12 @@ class Ligand(BaseModel):
             x: y for x, y in crystal_contacts.items() if x not in pocket_residues
         }
 
+    @computed_field(description="")  # type: ignore
     @cached_property
     def num_crystal_contacted_residues(self) -> int:
         return len(self.crystal_contacts)
 
+    @computed_field(description="")  # type: ignore
     @cached_property
     def num_atoms_with_crystal_contacts(self) -> int:
         all_atoms = set()
@@ -1279,24 +1290,29 @@ class Ligand(BaseModel):
             all_atoms |= x
         return len(all_atoms)
 
+    @computed_field(description="")  # type: ignore
     @cached_property
     def fraction_atoms_with_crystal_contacts(self) -> float | None:
         if self.num_heavy_atoms is None:
             return None
         return self.num_atoms_with_crystal_contacts / self.num_heavy_atoms
 
+    @computed_field(description="")  # type: ignore
     @cached_property
     def num_pocket_residues(self) -> int:
         return sum([len(self.pocket_residues[chain]) for chain in self.pocket_residues])
 
+    @computed_field(description="")  # type: ignore
     @cached_property
     def id(self) -> str:
         return "__".join([self.pdb_id, self.biounit_id, self.instance_chain])
 
+    @computed_field(description="")  # type: ignore
     @cached_property
     def instance_chain(self) -> str:
         return f"{self.instance}.{self.asym_id}"
 
+    @computed_field(description="")  # type: ignore
     @cached_property
     def interactions_counter(self) -> dict[str, dict[int, ty.Counter[str]]]:
         interactions_counter: dict[str, dict[int, ty.Counter[str]]] = {}
@@ -1308,6 +1324,7 @@ class Ligand(BaseModel):
                 )
         return interactions_counter
 
+    @computed_field(description="")  # type: ignore
     @cached_property
     def is_kinase_inhibitor(self) -> bool:
         global KINASE_INHIBITORS
@@ -1316,6 +1333,7 @@ class Ligand(BaseModel):
             KINASE_INHIBITORS = parse_kinase_inhibitors(data_dir)
         return any(c in KINASE_INHIBITORS for c in self.ccd_code.split("-"))
 
+    @computed_field(description="")  # type: ignore
     @cached_property
     def binding_affinity(self) -> float | None:
         """
