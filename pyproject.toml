@@ -33,6 +33,7 @@ dependencies = [
     "networkit >= 11.0",
     "six",
     "mols2grid",
+    "six",
 ]
 
 [project.scripts]
