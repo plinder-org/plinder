@@ -28,7 +28,7 @@ The full dataset (`PLINDER_ITERATION=v2`) has a size of hundreds of GB, so you a
 advised to have sufficient space for usage of the production dataset.
 
 :::{note}
-The version used for the preprint is `gs://plinder/2024-04/v2`, however, we plan to
+The version used for the preprint is `gs://plinder/2024-04/v1`, however, we plan to
 release a newer version with updated annotations to be used for the
 [MLSB challenge](https://www.mlsb.io/) (`gs://plinder/2024-06/v2`) in the future.
 :::
