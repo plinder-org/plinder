@@ -27,13 +27,13 @@ It is a comprehensive, annotated, high quality dataset, including:
 - 500+ annotations for each system, including protein and ligand properties, quality, matched molecular series and more
 - Automated curation pipeline to keep up with the PDB
 - 14 PLI metrics and over 20 billion similarity scores
-- Unbound \(_apo_\) and _predicted_ Alphafold2 structures linked to _holo_ systems
+- Unbound \(_apo_\) and _predicted_ AlphaFold2 structures linked to _holo_ systems
 - `train-val-test` splits and ability to tune splitting based on the learning task
 - Robust evaluation harness to simplify and standard performance comparison between models
 
 The `plinder` project is a community effort, launched by the University of Basel, SIB Swiss Institute of Bioinformatics, VantAI, NVIDIA, MIT CSAIL, and will be regularly updated.
 We highly welcome contributions!
-If you find `plinder` useful, please see the citation file for details on how to cite.
+If you find `plinder` useful, please see the citation [file](CITATION.cff) for details on how to cite.
 
 To accelerate community adoption, PLINDER will be used as the field’s new Protein-Ligand interaction dataset standard as part of an exciting competition at the upcoming 2024 [Machine Learning in Structural Biology (MLSB)](https://mlsb.io/) Workshop at NeurIPS, one of the fields’ premiere academic gatherings, which will be announced shortly.
 
@@ -42,7 +42,7 @@ To accelerate community adoption, PLINDER will be used as the field’s new Prot
 Please use a virtual environment for the `plinder` project.
 We recommend the [miniforge](https://github.com/conda-forge/miniforge) environment manager.
 
-**NOTE**: We currently only support a Linux environment. `plinder`
+**❗NOTE**: We currently only support a Linux environment. `plinder`
 uses `openstructure` for some of its functionality and is available
 from the `aivant` conda channel using `conda install aivant::openstructure`,
 but it is only built targeting Linux architectures. We also depend on
@@ -86,7 +86,7 @@ If you go with route 2, see below sections.
     export PLINDER_ITERATION=v2 # Current iteration
     gsutil -m cp -r gs://plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/* ~/.local/share/plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/
 
-**NOTE!**: the version used for the preprint is `gs://plinder/2024-04/v1`, while the current version we plan to use for the MLSB challenge is `gs://plinder/2024-06/v2`.
+**❗NOTE**: The version used for the preprint is `gs://plinder/2024-04/v1`, while the current version and the one we plan to use for the MLSB challenge is `gs://plinder/2024-06/v2`.
 
 This yields the following structure, with the `systems`, `splits`, and `index/annotation_table.parquet` being most important for direct usage and the rest containing useful annotations and medadata.
 
@@ -139,9 +139,9 @@ The naming of the directory is by `system` - since a given PDB entry can contain
 4  105m__1__1.A__1.C_1.D  train
 ```
 
-With the `system_id` contained in these split files, you can load the respective train, val & test splits **after unzipping** the `systems` directory. E.g. as shown in the Dataframe above, `~/.local/share/plinder/2024-04/v1/systems/1grx__1__1.A__1.B/system.cif` will contain the full mmcif of the system. We also provide cif files of seperated receptors (`*/receptor.cif`) and ligands (`*/ligand_files/*.sdf`) as well as pdb files (`*/receptor.pdb`) but **strongly encourage cif**, pdb is considered a [legacy file format](https://pdb101.rcsb.org/learn/guide-to-understanding-pdb-data/beginner%E2%80%99s-guide-to-pdbx-mmcif).
+With the `system_id` contained in these split files, you can load the respective train, val & test splits **after unzipping** the `systems` directory. E.g. as shown in the DataFrame above, `~/.local/share/plinder/2024-06/v2/systems/101m__1__1.A__1.C_1.D/system.cif` will contain the full mmcif of the system. We also provide cif files of seperated receptors (`*/receptor.cif`) and ligands (`*/ligand_files/*.sdf`) as well as pdb files (`*/receptor.pdb`) but **strongly encourage cif**, pdb is considered a [legacy file format](https://pdb101.rcsb.org/learn/guide-to-understanding-pdb-data/beginner%E2%80%99s-guide-to-pdbx-mmcif).
 
-Note: The most current split is `gs://plinder/2024-06/v2/splits/split.parquet` while `gs://plinder/2024-04/v1/splits/plinder-pl50.parquet` contains the pl50 split described in the preprint. A non-redundant and single-ligand smaller subset of this version was used to train DiffDock in the paper and is available at `gs://plinder/2024-04/v0/splits`.
+**❗NOTE**: The most current and recommended split is `gs://plinder/2024-06/v2/splits/split.parquet` while `gs://plinder/2024-04/v1/splits/plinder-pl50.parquet` contains the pl50 split described in the preprint. A non-redundant and single-ligand smaller subset of this version was used to train DiffDock in the paper and its splits are available at `gs://plinder/2024-04/v0/splits`.
 
 ## 🔢 Plinder versions
 
@@ -156,9 +156,9 @@ The `plinder.data` package is responsible for generating a dataset
 release and the `plinder.core` package makes it easy to interact
 with the dataset.
 
-Changelog:
+#### Changelog:
 
-- 2024-06/v2:
+- 2024-06/v2 (Current):
     - Updated system definition to be more stable and depend only on ligand distance rather than PLIP
     - Improved SDF saving to handle some bond order issues
     - Added annotations for binding affinities from BindingDB
@@ -167,8 +167,7 @@ Changelog:
     - Added linked apo/pred structures to v2/links and v2/linked_structures
     - Added statistics requirement and other changes in the split to enrichment diversity in test set
 
-
-- 2024-04/v1 (Current): Version with redundancy removal by protein pocket and ligand similarity.
+- 2024-04/v1: Version with redundancy removal by protein pocket and ligand similarity described in the preprint.
 - 2024-04/v0: Version used to re-train DiffDock in the paper, with redundancy removal based on \<pdbid\>\_\<ligand ccd codes\>
 
 ## 🏅 Gold standard benchmark sets
@@ -186,7 +185,7 @@ Moreover, as we enticipate this resource to be used for benchmarking a wide rang
 The `plinder.data.loader` package contains a `PyTorch` dataloader for the dataset using the `atom3d` format. It is an example of using the `plinder.core` API
 to implement a dataloader, but is not the only way to use the dataset.
 
-**NOTE**: The dataloader requires both `torch` and `atom3d` to be installed. You use the `[loader]` dependency block when installing `plinder`:
+**❗NOTE**: The dataloader requires both `torch` and `atom3d` to be installed. You use the `[loader]` dependency block when installing `plinder`:
 
     pip install .[loader]
 
@@ -280,10 +279,10 @@ since the previous release:
 - If `bumpversion minor` is present in the commit message, the minor version will be bumped
 - If `bumpversion patch` is present in the co®mit message (or nothing is found), the patch version will be bumped
 
-**NOTE**: The CI workflow will use the **most recent** match in the commit history to make its decision.
+**❗NOTE**: The CI workflow will use the **most recent** match in the commit history to make its decision.
 
 # 📃 Publications
 
-Durairaj, Janani, Yusuf Adeshina, Zhonglin Cao, Xuejin Zhang, Vladas Oleinikovas, Thomas Duignan, Zachary McClure, Xavier Robin, Emanuele Rossi, Guoqing Zhou, Srimukh Prasad Veccham, Clemens Isert, Yuxing Peng, Prabindh Sundareson, Mehmet Akdel, Gabriele Corso, Hannes Stärk, Zachary Wayne Carpenter, Michael M. Bronstein, Emine Kucukbenli, Torsten Schwede, Luca Naef. 2024. “PLINDER: The Protein-Ligand Interactions Dataset and Evaluation Resource.”
+Durairaj, Janani, Yusuf Adeshina, Zhonglin Cao, Xuejin Zhang, Vladas Oleinikovas, Thomas Duignan, Zachary McClure, Xavier Robin, Gabriel Studer, Daniel Kovtun, Emanuele Rossi, Guoqing Zhou, Srimukh Prasad Veccham, Clemens Isert, Yuxing Peng, Prabindh Sundareson, Mehmet Akdel, Gabriele Corso, Hannes Stärk, Gerardo Tauriello, Zachary Wayne Carpenter, Michael M. Bronstein, Emine Kucukbenli, Torsten Schwede, Luca Naef. 2024. “PLINDER: The Protein-Ligand Interactions Dataset and Evaluation Resource.”
 [bioRxiv](https://doi.org/10.1101/2024.07.17.603955)
 [ICML'24 ML4LMS](https://openreview.net/forum?id=7UvbaTrNbP)
