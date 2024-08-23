@@ -35,7 +35,7 @@ The `plinder` project is a community effort, launched by the University of Basel
 We highly welcome contributions!
 If you find `plinder` useful, please see the citation [file](CITATION.cff) for details on how to cite.
 
-To accelerate community adoption, PLINDER will be used as the field’s new Protein-Ligand interaction dataset standard as part of an exciting competition at the upcoming 2024 [Machine Learning in Structural Biology (MLSB)](https://mlsb.io/) Workshop at NeurIPS, one of the fields’ premiere academic gatherings, which will be announced shortly.
+To accelerate community adoption, PLINDER will be used as the field’s new Protein-Ligand interaction dataset standard as part of an exciting competition at the upcoming 2024 [Machine Learning in Structural Biology (MLSB)](https://mlsb.io) Workshop at NeurIPS, one of the fields’ premiere academic gatherings. More details about the competition will be announced shortly.
 
 # 👨💻 Getting Started
 
@@ -86,7 +86,7 @@ If you go with route 2, see below sections.
     export PLINDER_ITERATION=v2 # Current iteration
     gsutil -m cp -r gs://plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/* ~/.local/share/plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/
 
-**❗NOTE**: The version used for the preprint is `gs://plinder/2024-04/v1`, while the current version and the one we plan to use for the MLSB challenge is `gs://plinder/2024-06/v2`.
+**❗NOTE**: The current version and the one we plan to use for the MLSB challenge is `gs://plinder/2024-06/v2`, while the version described in the preprint is `gs://plinder/2024-04/v1`.
 
 This yields the following structure, with the `systems`, `splits`, and `index/annotation_table.parquet` being most important for direct usage and the rest containing useful annotations and medadata.
 
@@ -165,7 +165,7 @@ with the dataset.
     - Improved ligand handling and saving to fix some bond order issues
     - Improved covalency detection and annotation to reference each bond explicitly
     - Added linked apo/pred structures to v2/links and v2/linked_structures
-    - Added binding affinity annotations from BindingDB
+    - Added binding affinity annotations from [BindingDB](https://bindingdb.org)
     - Added statistics requirement and other changes in the split to enrich test set diversity
 
 - 2024-04/v1: Version described in the preprint, with updated redundancy removal by protein pocket and ligand similarity.
