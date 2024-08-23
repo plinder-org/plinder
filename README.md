@@ -82,8 +82,8 @@ If you go with route 2, see below sections.
 
 ## Downloading the dataset
 
-    export PLINDER_RELEASE=2024-04 # Current release
-    export PLINDER_ITERATION=v1 # Current iteration
+    export PLINDER_RELEASE=2024-06 # Current release
+    export PLINDER_ITERATION=v2 # Current iteration
     gsutil -m cp -r gs://plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/* ~/.local/share/plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/
 
 **NOTE!**: the version used for the preprint is `gs://plinder/2024-04/v1`, while the current version we plan to use for the MLSB challenge is `gs://plinder/2024-06/v2`.
@@ -91,20 +91,21 @@ If you go with route 2, see below sections.
 This yields the following structure, with the `systems`, `splits`, and `index/annotation_table.parquet` being most important for direct usage and the rest containing useful annotations and medadata.
 
 ```bash
-2024-04/                     # The "`plinder` release" (`PLINDER_RELEASE`)
-|-- v1                       # The "`plinder` iteration" (`PLINDER_ITERATION`)
-|   |-- systems              # Actual structure files for all systems (split by `two_char_code` and zipped)
-|   |-- splits               # List of system ids in a .parquet and each split  the configs used to generate them (if available)
-|   |-- clusters             # Pre-calculated cluster labels derived from the protein similarity dataset
-|   |-- entries              # Raw annotations prior to consolidation (split by `two_char_code` and zipped)
-|   |-- fingerprints         # Index mapping files for the ligand similarity dataset
-|   |-- index                # Consolidated tabular annotations
-|   |-- leakage              # Leakage results
-|   |-- ligand_scores        # Ligand similarity parquet dataset
-|   |-- ligands              # Ligand data expanded from entries for computing similarity
-|   |-- linked_structures    # Linked structures
-|   |-- mmp                  # Matched Molecular Series/Pair data
-|   |-- scores               # Extended protein similarity parquet dataset
+2024-06/                     # The "`plinder` release" (`PLINDER_RELEASE`)
+|-- v2                       # The "`plinder` iteration" (`PLINDER_ITERATION`)
+|   |-- systems              # structure files for all systems (split by `two_char_code` and zipped)
+|   |-- splits               # split files and the configs used to generate them
+|   |-- clusters             # pre-calculated cluster labels derived from the protein similarity dataset
+|   |-- entries              # raw annotations prior to consolidation (split by `two_char_code` and zipped)
+|   |-- fingerprints         # index mapping files for the ligand similarity dataset
+|   |-- index                # consolidated tabular annotations
+|   |-- leakage              # leakage analysis results for evaluation sets
+|   |-- ligand_scores        # ligand similarity parquet dataset
+|   |-- ligands              # ligand data expanded from entries for computing similarity
+|   |-- linked_structures    # linked apo and predicted structure files
+|   |-- links                # parquet files linking systems to apo and predicted structures
+|   |-- mmp                  # ligand matched molecular pairs (MMP) and series (MMS) data
+|   |-- scores               # protein similarity parquet dataset
 ```
 
 ## Unpacking the structure files:
