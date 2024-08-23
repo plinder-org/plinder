@@ -141,19 +141,6 @@ class PlinderSystem:
         return (self.archive / "receptor.pdb").as_posix()
 
     @property
-    def system_pdb(self) -> str:
-        """
-        Path to the system.pdb file
-
-        Returns
-        -------
-        str
-            path
-        """
-        assert self.archive is not None
-        return (self.archive / "system.pdb").as_posix()
-
-    @property
     def sequences(self) -> str:
         """
         Path to the sequences.fasta file

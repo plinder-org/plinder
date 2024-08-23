@@ -3,7 +3,7 @@
 from textwrap import dedent
 
 try:
-    import ost
+    import ost  # noqa
 except (ImportError, ModuleNotFoundError):
     raise ImportError(
         dedent(
@@ -16,7 +16,7 @@ except (ImportError, ModuleNotFoundError):
     )
 
 try:
-    import networkit
+    import networkit  # noqa
 except (ImportError, ModuleNotFoundError):
     raise ImportError(
         dedent(
