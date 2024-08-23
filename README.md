@@ -181,9 +181,6 @@ Finally, a particular care is taken for test set that is further prioritized to 
 
 Moreover, as we enticipate this resource to be used for benchmarking a wide range of methods, including those simultaneously predicting protein structure (aka. co-folding) or those generating novel ligand structures, we further stratified test (by novel ligand, pocket, protein or all) to cover a wide range of tasks.
 
-## ⚖️ Evaluation harness
-
-See the [`plinder.eval`](docs/eval.md) docs for more details.
 
 ## 📦 Dataloader
 
