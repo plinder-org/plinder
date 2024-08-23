@@ -9,7 +9,7 @@
 [![license](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://github.com/plinder-org/plinder/blob/master/LICENSE.txt)
 [![publish](https://github.com/plinder-org/plinder/actions/workflows/main.yaml/badge.svg)](https://github.com/plinder-org/plinder/pkgs/container/plinder)
 [![website](https://img.shields.io/badge/website-plinder-blue.svg)](https://www.plinder.sh/)
-[![bioarXiv](https://img.shields.io/badge/bioarXiv-2024.07.17.603955v1-blue.svg)](https://www.biorxiv.org/content/10.1101/2024.07.17.603955v1)
+[![bioarXiv](https://img.shields.io/badge/bioarXiv-2024.07.17.603955v1-blue.svg)](https://www.biorxiv.org/content/10.1101/2024.07.17.603955)
 [![docs](https://github.com/plinder-org/plinder/actions/workflows/docs.yaml/badge.svg)](https://plinder-org.github.io/plinder/)
 [![coverage](https://github.com/plinder-org/plinder/raw/python-coverage-comment-action-data/badge.svg)](https://github.com/plinder-org/plinder/tree/python-coverage-comment-action-data)
 
@@ -159,15 +159,16 @@ with the dataset.
 #### Changelog:
 
 - 2024-06/v2 (Current):
+    - New systems added based on the 2024-06 RCSB sync
     - Updated system definition to be more stable and depend only on ligand distance rather than PLIP
-    - Improved SDF saving to handle some bond order issues
-    - Added annotations for binding affinities from BindingDB
     - Added annotations for crystal contacts
-    - Improved covalency detection and added annotations to reference each bond explicitly
+    - Improved ligand handling and saving to fix some bond order issues
+    - Improved covalency detection and annotation to reference each bond explicitly
     - Added linked apo/pred structures to v2/links and v2/linked_structures
-    - Added statistics requirement and other changes in the split to enrichment diversity in test set
+    - Added binding affinity annotations from BindingDB
+    - Added statistics requirement and other changes in the split to enrich test set diversity
 
-- 2024-04/v1: Version with redundancy removal by protein pocket and ligand similarity described in the preprint.
+- 2024-04/v1: Version described in the preprint, with updated redundancy removal by protein pocket and ligand similarity.
 - 2024-04/v0: Version used to re-train DiffDock in the paper, with redundancy removal based on \<pdbid\>\_\<ligand ccd codes\>
 
 ## 🏅 Gold standard benchmark sets
