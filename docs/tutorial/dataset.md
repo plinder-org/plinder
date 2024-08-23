@@ -18,16 +18,16 @@ For the purpose of this tutorial we set `PLINDER_ITERATION` to `tutorial`, to do
 only a small manageable excerpt of the entries.
 
 ````console
-$ export PLINDER_RELEASE=2024-04
+$ export PLINDER_RELEASE=2024-06
 $ export PLINDER_ITERATION=tutorial
 $ mkdir -p ~/.local/share/plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/
 $ gsutil -m cp -r gs://plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/* ~/.local/share/plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/
 ````
-The full dataset (`PLINDER_ITERATION=v1`) has a size of hundreds of GB, so you are
+The full dataset (`PLINDER_ITERATION=v2`) has a size of hundreds of GB, so you are
 advised to have sufficient space for usage of the production dataset.
 
 :::{note}
-The version used for the preprint is `gs://plinder/2024-04/v1`, however, we plan to
+The version used for the preprint is `gs://plinder/2024-04/v2`, however, we plan to
 release a newer version with updated annotations to be used for the
 [MLSB challenge](https://www.mlsb.io/) (`gs://plinder/2024-06/v2`) in the future.
 :::
@@ -37,22 +37,22 @@ release a newer version with updated annotations to be used for the
 The directory downloaded from the bucket has the following structure:
 
 ```bash
-2024-04/                     # the PLINDER release
+2024-06/                     # the PLINDER release
 |-- tutorial                 # the PLINDER iteration
 |   |-- clusters             # pre-calculated cluster labels derived from the protein similarity dataset
 |   |-- dbs                  # TSVs containing the raw files and IDs in the foldseek and mmseqs sub-databases
 |   |-- entries              # raw annotations prior to consolidation (split by `two_char_code` and zipped)
 |   |-- fingerprints         # index mapping files for the ligand similarity dataset
 |   |-- index                # consolidated tabular annotations
-|   |-- leakage              # leakage analysis results for evaluation sets
 |   |-- ligand_scores        # ligand similarity parquet dataset
 |   |-- ligands              # ligand data expanded from entries for computing similarity
+|   |-- linked_structures    # Apo and predicted structures linked to their holo systems
+|   |-- links                # Apo and predicted structures similarity to their holo structures
 |   |-- mmp                  # ligand matched molecular pairs (MMP) and series (MMS) data
 |   |-- scores               # protein similarity parquet dataset
 |   |-- splits               # split files and the configs used to generate them (if available)
 |   |-- systems              # structure files for all systems (split by `two_char_code` and zipped)
 ````
-
 The `systems`, `index`, `clusters`, `splits` and `leakage` directories are most the
 important ones for PLINDER utilization and will be covered in the tutorial, while the
 rest are for more curious users.
@@ -77,7 +77,7 @@ To unpack the structures run
 cd ~/.local/share/plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/systems; for i in ls *zip; do unzip $i; done
 ```
 
-This will yield directories such as `6lpf__2__1.B__1.D`, which is what we call a PLINDER
+This will yield directories such as `7eek__1__1.A__1.I`, which is what we call a PLINDER
 system ID in the form
 `<PDB ID>__<biological assembly>__<receptor chain ID>__<ligand chain ID>`.
 Each system represent a complex between one or multiple proteins and a small molecules,
@@ -101,14 +101,15 @@ Index(['entry_pdb_id', 'entry_release_date', 'entry_oligomeric_state',
        'entry_determination_method', 'entry_keywords', 'entry_pH',
        'entry_resolution', 'entry_rfree', 'entry_r', 'entry_clashscore',
        ...
-       'ligand_interacting_ligand_chains_Pfam',
+       'ligand_interacting_ligand_chains_UniProt',
+       'system_ligand_chains_PANTHER', 'ligand_interacting_ligand_chains_Pfam',
        'ligand_neighboring_ligand_chains_Pfam',
        'ligand_interacting_ligand_chains_PANTHER',
        'ligand_neighboring_ligand_chains_PANTHER',
        'system_ligand_chains_SCOP2', 'system_ligand_chains_SCOP2B',
-       'protein_lddt_qcov_weighted_sum__100__strong__component',
-       'pli_qcov__100__strong__component', 'system_ccd_codes', 'uniqueness'],
-      dtype='object', length=488)
+       'pli_qcov__100__strong__component',
+       'protein_lddt_qcov_weighted_sum__100__strong__component'],
+      dtype='object', length=500)
 ```
 
 We see that the table contains hundreds of columns.
@@ -135,24 +136,27 @@ Show nested structure
 ```console
 $ tree clusters
 
-clusters
-├── metric=pli_qcov
-│   ├── directed=False
-│   │   ├── threshold=100.parquet
-│   │   ├── threshold=50.parquet
-│   │   ├── threshold=70.parquet
-│   │   └── threshold=95.parquet
-│   └── directed=True
-│       ├── threshold=100.parquet
-│       ├── threshold=50.parquet
-│       ├── threshold=70.parquet
-│       └── threshold=95.parquet
-└── metric=pocket_fident
-    └── directed=False
-        ├── threshold=100.parquet
-        ├── threshold=50.parquet
-        ├── threshold=70.parquet
-        └── threshold=95.parquet
+clusters/
+├── cluster=communities
+│   └── directed=False
+│       ├── metric=pli_qcov
+│       │   ├── threshold=100
+│       │   │   └── data.parquet
+│       │   ├── threshold=50
+│       │   │   └── data.parquet
+│       │   ├── threshold=70
+│       │   │   └── data.parquet
+│       │   └── threshold=95
+│       │       └── data.parquet
+│       ├── metric=pli_unique_qcov
+│       │   ├── threshold=100
+│       │   │   └── data.parquet
+│       │   ├── threshold=50
+│       │   │   └── data.parquet
+│       │   ├── threshold=70
+│       │   │   └── data.parquet
+│       │   └── threshold=95
+│       │       └── data.parquet
 ```
 
 As example, we will load the clusters based on pocket sequence similarity from an
@@ -161,23 +165,23 @@ undirected graph at a similarity threshold of 70 %.
 ```python
 >>> import pandas as pd
 
->>> clus_file = "clusters/metric=pocket_fident/directed=False/threshold=70.parquet"
+>>> clus_file = "clusters/cluster=communities/directed=False/metric=pli_qcov/threshold=70/data.parquet"
 >>> df = pd.read_parquet(clus_file)
 >>> df
-                        system_id component
-0               4wk0__1__1.A__1.F        c0
-1               7q6e__1__1.B__1.R        c0
-2               4dvl__1__1.A__1.I      c314
-3           4zqc__1__1.B__1.H_1.I        c0
-4       2gtl__1__1.E_1.H__1.X_1.Y        c0
-...                           ...       ...
-449378      1mqn__2__1.A_1.C__1.K        c0
-449379          8sb4__1__1.A__1.O        c0
-449380      4lys__1__1.A__1.B_1.D        c0
-449381      3h2n__2__2.B__2.H_2.I        c0
-449382          5thk__5__1.H__1.S     c1673
+                            system_id   label    metric      cluster  directed  threshold
+0                   3mj2__1__1.A__1.B      c0  pli_qcov  communities     False         70
+1       4dh8__1__1.A_1.B__1.C_1.D_1.E      c0  pli_qcov  communities     False         70
+2                   7akb__1__1.A__1.C      c0  pli_qcov  communities     False         70
+3                   7mgj__2__1.B__1.F      c0  pli_qcov  communities     False         70
+4                   4fr4__6__1.F__1.S      c0  pli_qcov  communities     False         70
+...                               ...     ...       ...          ...       ...        ...
+479806          7xpv__1__2.A__2.C_2.D  c77190  pli_qcov  communities     False         70
+479807              4ret__1__1.A__1.I  c77191  pli_qcov  communities     False         70
+479808              7ks9__1__1.C__1.R  c77192  pli_qcov  communities     False         70
+479809              7s6n__1__1.A__1.H  c77193  pli_qcov  communities     False         70
+479810              7sc5__1__1.A__1.H  c77194  pli_qcov  communities     False         70
 
-[449383 rows x 2 columns]
+[479811 rows x 6 columns]
 ```
 
 The table assigns a cluster to each system, depicted by the cluster ID in the
@@ -193,69 +197,29 @@ can be found in `gs://plinder/2024-04/v1/splits/plinder-pl50.parquet`.
 
 ```python
 >>> import pandas as pd
->>> df = pd.read_parquet("splits/plinder-pl50.parquet")
+>>> df = pd.read_parquet("splits/split.parquet")
 >>> df.head()
-               system_id  split  cluster cluster_for_val_split
-0      3grt__1__1.A__1.B  train  c100718                    c0
-1  3grt__1__1.A_2.A__1.C  train  c196491                    c0
-2      3grt__1__2.A__2.B  train  c100727                    c0
-3  3grt__1__1.A_2.A__2.C  train  c234445                    c0
-4      1grx__1__1.A__1.B  train  c186691                  c154
+               system_id            uniqueness  split cluster  ... system_proper_num_interactions  system_proper_ligand_max_molecular_weight  system_has_binding_affinity  system_has_apo_or_pred
+0  101m__1__1.A__1.C_1.D  101m__A__C_D_c188899  train     c14  ...                             20                                 616.177293                        False                   False
+1      102m__1__1.A__1.C    102m__A__C_c237197  train     c14  ...                             20                                 616.177293                        False                    True
+2  103m__1__1.A__1.C_1.D  103m__A__C_D_c252759  train     c14  ...                             16                                 616.177293                        False                   False
+3  104m__1__1.A__1.C_1.D  104m__A__C_D_c274687  train     c14  ...                             21                                 616.177293                        False                   False
+4  105m__1__1.A__1.C_1.D  105m__A__C_D_c221688  train     c14  ...                             20                                 616.177293                        False                   False
+
+[5 rows x 13 columns]
 ```
 
 The columns are:
-
-- `system_id`: the PLINDER system ID
-- `split`: split category, either `train` (training set), `test` (test set),
-  `val` (training set) or `removed`.
+- `system_id`:the PLINDER system ID
+- `uniqueness`: : split category, either `train` (training set), `test` (test set),
+- `split`: split category, either `train` (training set), `test` (test set)
 - `cluster`: cluster metric used in sampling test dataset.
 - `cluster_for_val_split`: cluster metric used in sampling validation set from training set.
-
-## Checking leakage
-
-For each of the cluster metric described [above](cluster-target), we calculated the
-maximum similarity for each system in a evaluation set (i.e. validation or test) to any
-system the learning set (i.e. training or validation).
-The parquet files are formatted like
-`plinder_<split method>__<similarity metric>__<learning set>__<evaluation set>.parquet`.
-For example `plinder-ECOD__pli_qcov__train_posebusters.parquet` means the file contains
-a maximum `pli_qcov` similarity of posebusters (evaluation set) to any system in the
-train set from a split based on the ECOD domain.
-
-```console
-$ ls leakage
-plinder-ECOD__pli_qcov__train_posebusters.parquet
-plinder-ECOD__pli_qcov__train_test.parquet
-plinder-ECOD__pli_qcov__train_val.parquet
-plinder-ECOD__pli_qcov__val_test.parquet
-plinder-ECOD__pocket_lddt__train_posebusters.parquet
-plinder-ECOD__pocket_lddt__train_test.parquet
-plinder-ECOD__pocket_lddt__train_val.parquet
-plinder-ECOD__pocket_lddt__val_test.parquet
-plinder-ECOD__pocket_qcov__train_posebusters.parquet
-plinder-ECOD__pocket_qcov__train_test.parquet
-plinder-ECOD__pocket_qcov__train_val.parquet
-plinder-ECOD__pocket_qcov__val_test.parquet
-```
-
-```python
->>> import pandas as pd
-
->>> leak_file = "leakage/plinder-ECOD__pli_qcov__train_posebusters.parquet"
->>> df = pd.read_parquet(leak_file)
->>> df
-                      query_system  similarity
-0                5s8i__1__1.A__1.B         100
-1        5sak__1__1.A__1.B_1.C_1.E         100
-2                5sb2__1__1.A__1.G         100
-3    5sd5__1__1.A__1.B_1.C_1.D_1.E          89
-4                5sis__1__1.A__1.D         100
-..                             ...         ...
-506      8h0m__1__1.A__1.B_1.C_1.F          75
-507          8hfn__1__1.A__1.C_1.D          22
-508          8ho0__1__1.A__1.B_1.C          75
-509              8slg__1__1.A__1.C          89
-510              8slg__1__1.B__1.I          75
-
-[511 rows x 2 columns]
-```
+- `system_pass_validation_criteria`: boolean indicating whether a system pass all the quality criteria
+- `system_pass_statistics_criteria`: boolean indicating whether a system pass the desired statistics criteria
+- `system_proper_num_ligand_chains`: number of chains ligands adjusted for redundancy
+- `system_proper_pocket_num_residues`: number of pocket residues adjusted for redundancy
+- `system_proper_num_interactions`: number of interactions adjusted for redundancy
+- `system_proper_ligand_max_molecular_weight`: adjusted molecular weight
+- `system_has_binding_affinity`: boolean indicator of whether a system has binding affinity or not
+- `system_has_apo_or_pred`: boolean indicator of whether a system apo or predicted structures linked
