@@ -17,12 +17,13 @@ The PLINDER dataset is versioned via two parameters:
 For the purpose of this tutorial we set `PLINDER_ITERATION` to `tutorial`, to download
 only a small manageable excerpt of the entries.
 
-````console
+```console
 $ export PLINDER_RELEASE=2024-06
 $ export PLINDER_ITERATION=tutorial
 $ mkdir -p ~/.local/share/plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/
 $ gsutil -m cp -r gs://plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/* ~/.local/share/plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/
-````
+```
+
 The full dataset (`PLINDER_ITERATION=v2`) has a size of hundreds of GB, so you are
 advised to have sufficient space for usage of the production dataset.
 
@@ -52,8 +53,9 @@ The directory downloaded from the bucket has the following structure:
 |   |-- scores               # protein similarity parquet dataset
 |   |-- splits               # split files and the configs used to generate them (if available)
 |   |-- systems              # structure files for all systems (split by `two_char_code` and zipped)
-````
-The `systems`, `index`, `clusters`, `splits` and `leakage` directories are most the
+```
+
+The `systems`, `index`, `clusters` and `splits` directories are most the
 important ones for PLINDER utilization and will be covered in the tutorial, while the
 rest are for more curious users.
 
@@ -210,6 +212,7 @@ can be found in `gs://plinder/2024-04/v1/splits/plinder-pl50.parquet`.
 ```
 
 The columns are:
+
 - `system_id`:the PLINDER system ID
 - `uniqueness`: : split category, either `train` (training set), `test` (test set),
 - `split`: split category, either `train` (training set), `test` (test set)
