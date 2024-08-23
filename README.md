@@ -125,25 +125,23 @@ The naming of the directory is by `system` - since a given PDB entry can contain
 
 ### Accessing the splits files:
 
-`plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/splits` contains an index for splits contained in a single parquet file. The most current split is `gs://plinder/2024-06/v2/splits/split.parquet` while `gs://plinder/2024-04/v1/splits/plinder-pl50.parquet` contains the pl50 split from the preprint.
+`plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/splits` contains an index for splits contained in a single parquet file. The folder also contains a `.yaml` which is the config used to generate the split and can be ignored unless you want to reproduce the splits.
 
 ```python
 >>> import pandas as pd
->>> df = pd.read_parquet("gs://plinder/2024-04/v1/splits/plinder-pl50.parquet")
->>> df.head()
-               system_id  split  cluster cluster_for_val_split
-0      3grt__1__1.A__1.B  train  c100718                    c0
-1  3grt__1__1.A_2.A__1.C  train  c196491                    c0
-2      3grt__1__2.A__2.B  train  c100727                    c0
-3  3grt__1__1.A_2.A__2.C  train  c234445                    c0
-4      1grx__1__1.A__1.B  train  c186691                  c154
+>>> df = pd.read_parquet("gs://plinder/2024-06/v2/splits/split.parquet")
+>>> df.head()[['system_id', 'split']]
+               system_id  split
+0  101m__1__1.A__1.C_1.D  train
+1      102m__1__1.A__1.C  train
+2  103m__1__1.A__1.C_1.D  train
+3  104m__1__1.A__1.C_1.D  train
+4  105m__1__1.A__1.C_1.D  train
 ```
 
 With the `system_id` contained in these split files, you can load the respective train, val & test splits **after unzipping** the `systems` directory. E.g. as shown in the Dataframe above, `~/.local/share/plinder/2024-04/v1/systems/1grx__1__1.A__1.B/system.cif` will contain the full mmcif of the system. We also provide cif files of seperated receptors (`*/receptor.cif`) and ligands (`*/ligand_files/*.sdf`) as well as pdb files (`*/receptor.pdb`) but **strongly encourage cif**, pdb is considered a [legacy file format](https://pdb101.rcsb.org/learn/guide-to-understanding-pdb-data/beginner%E2%80%99s-guide-to-pdbx-mmcif).
 
-Note: a non-redundant and single-ligand smaller subset of this version was used to train diffdock in the paper and is available at 2024-04/v0.
-
-The folder also contains a `.yaml` which is the config used to generate the split and can be ignored unless you want to reproduce the splits.
+Note: The most current split is `gs://plinder/2024-06/v2/splits/split.parquet` while `gs://plinder/2024-04/v1/splits/plinder-pl50.parquet` contains the pl50 split described in the preprint. A non-redundant and single-ligand smaller subset of this version was used to train DiffDock in the paper and is available at `gs://plinder/2024-04/v0/splits`.
 
 ## 🔢 Plinder versions
 
@@ -188,7 +186,7 @@ Moreover, as we enticipate this resource to be used for benchmarking a wide rang
 The `plinder.data.loader` package contains a `PyTorch` dataloader for the dataset using the `atom3d` format. It is an example of using the `plinder.core` API
 to implement a dataloader, but is not the only way to use the dataset.
 
-**Note**: The dataloader requires both `torch` and `atom3d` to be installed. You use the `[loader]` dependency block when installing `plinder`:
+**NOTE**: The dataloader requires both `torch` and `atom3d` to be installed. You use the `[loader]` dependency block when installing `plinder`:
 
     pip install .[loader]
 
