@@ -1,8 +1,9 @@
 # Tutorial
 
 The following tutorials represent the two approaches to using PLINDER:
-You can either use the files from the dataset directly using your preferred tooling, or
-you can utilize the dedicated `plinder` Python package for interfacing the data.
+The files from the dataset can be accessed directly using your preferred tooling.
+On the other side, the dedicated `plinder` Python package provides a simplified
+efficient way for working with the data.
 
 ```{toctree}
 :maxdepth: 1

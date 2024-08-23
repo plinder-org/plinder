@@ -1,9 +1,11 @@
-# End-to-end pipeline
+# Pipeline
 
 We outline conceptually the steps of the end-to-end pipeline in the following sections.
 We briefly describe some of the abstractions that are used to orchestrate the entire
 pipeline, but they are to be considered an implementation detail because they rely
 on our choice of orchestration framework for job execution.
+
+![workflow](workflow.png)
 
 ## Ingestion
 
