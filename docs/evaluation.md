@@ -6,6 +6,11 @@ sd_hide_title: true
 
 ## Evaluating docking poses across a stratified test set
 
+The `plinder.eval` subpackage allows (1) assessing protein-ligand complex predictions against reference `plinder` systems, and
+(2) correlating the performance of these predictions against the level of similarity of each test system to the corresponding training set.
+
+The output file from running the scripts `src/plinder/eval/docking/write_scores.py` and `src/plinder/eval/docking/stratify_test_set.py` generates the same evaluation metrics as the ones we have on the public leaderboard.
+
 The `plinder-eval` package allows
 
 1. assessing protein-ligand complex predictions against reference `plinder` systems, and
@@ -26,17 +31,17 @@ leaderboard (coming soon).
 - `confidence`: Optional score associated with the pose
 - `ligand_file`: Path to the SDF file of the pose
 
-`split.csv` with `system_id` and `split` columns mapping PLINDER systems to `train`, or `test`.
+`split.parquet` with, at a minimum, `system_id` and `split` columns mapping PLINDER systems to `train`, or `test`.
 
 ### Commands
 
 #### Write scores
 
 ```bash
-python src/plinder/eval/docking/write_scores.py --prediction_file predictions.csv --data_dir PLINDER_DATA_DIR --output_dir scores --num_processes 64
+python src/plinder/eval/docking/write_scores.py --prediction_file tests/test_data/eval/predictions.csv --data_dir tests/test_data/eval --output_dir /tmp --num_processes 64
 ```
 
-This calculates accuracy metrics for all predicted poses compared to the reference. JSON files of each pose are stored in `scores/scores` and the summary file across all poses is stored in `scores.parquet`.
+This calculates accuracy metrics for all predicted poses compared to the reference. JSON files of each pose are stored in `/tmp/scores` and the summary file across all poses is stored in `/tmp/scores.parquet`.
 
 The predicted pose is compared to the reference system and the following ligand scores are calculated:
 
@@ -69,6 +74,30 @@ For oligomeric complexes:
 
 If `score_posebusters` is True, all posebusters checks are saved.
 
+You can inspect the results at `/tmp/scores.parquet`
+
+```python
+>>> import pandas as pd
+>>> df = pd.read_parquet("/tmp/scores.parquet")
+>>> df.T
+                                                   0                      1
+model                              1a3b__1__1.B__1.D  1ai5__1__1.A_1.B__1.D
+reference                          1a3b__1__1.B__1.D  1ai5__1__1.A_1.B__1.D
+num_reference_ligands                              1                      1
+num_model_ligands                                  1                      1
+num_reference_proteins                             1                      2
+num_model_proteins                                 1                      2
+fraction_reference_ligands_mapped                1.0                    1.0
+fraction_model_ligands_mapped                    1.0                    1.0
+lddt_pli_ave                                0.889506               0.557841
+lddt_pli_wave                               0.889506               0.557841
+lddt_pli_amd_ave                             0.85815               0.510695
+lddt_pli_amd_wave                            0.85815               0.510695
+scrmsd_ave                                  1.617184               3.665143
+scrmsd_wave                                 1.617184               3.665143
+rank                                               1                      1
+```
+
 #### Write test stratification data
 
 (This command will not need to be run by a user, the `test_set.parquet` and `val_set.parquet` file will be provided with the split release)
@@ -81,12 +110,34 @@ Makes `test_data/test_set.parquet` which
 
 - Labels the maximum similarity of each test system to the training set across all the similarity metrics
 - Stratifies the test set based on training set similarity into `novel_pocket_pli`, `novel_pocket_ligand`, `novel_protein`, `novel_all`, and `not_novel`
-- Labels test systems with high quality
+- Labels test systems with high quality.
 
-#### Write evaluation results
-
-```bash
-python src/plinder/eval/docking/make_plots.py --score_file scores/scores.parquet --data_file test_data/test_set.parquet --output_dir results
+To inspect the result of the run, do:
+```python
+>>> import pandas as pd
+>>> df = pd.read_parquet("/tmp/test_set.parquet")
+>>> df.T
+                                                  0                      1
+system_id                         1a3b__1__1.B__1.D  1ai5__1__1.A_1.B__1.D
+pli_qcov                                        0.0                    0.0
+protein_seqsim_qcov_weighted_sum                0.0                    0.0
+protein_seqsim_weighted_sum                     0.0                    0.0
+protein_fident_qcov_weighted_sum                0.0                    0.0
+protein_fident_weighted_sum                     0.0                    0.0
+protein_lddt_qcov_weighted_sum                  0.0                    0.0
+protein_lddt_weighted_sum                       0.0                    0.0
+protein_qcov_weighted_sum                       0.0                    0.0
+pocket_fident_qcov                              0.0                    0.0
+pocket_fident                                   0.0                    0.0
+pocket_lddt_qcov                                0.0                    0.0
+pocket_lddt                                     0.0                    0.0
+pocket_qcov                                     0.0                    0.0
+tanimoto_similarity_max                         0.0                    0.0
+passes_quality                                False                  False
+novel_pocket_pli                               True                   True
+novel_pocket_ligand                            True                   True
+novel_protein                                  True                   True
+novel_all                                      True                   True
+not_novel                                     False                  False
+>>>
 ```
-
-Writes out results.csv and plots of performance as a function of training set similarity across different similarity metrics.

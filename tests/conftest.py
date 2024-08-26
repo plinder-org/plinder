@@ -37,6 +37,28 @@ def load_mini_seq_dataset():
     return ds.dataset(sample_scores_dataset)
 
 
+@pytest.fixture
+def prediction_csv(tmpdir):
+    plinder_root = Path(__file__).absolute().parent.parent
+    csv = f"""
+id,reference_system_id,receptor_file,rank,confidence,ligand_file
+1ai5__1__1.A_1.B__1.D,1ai5__1__1.A_1.B__1.D,,1,1.0,{plinder_root}/tests/test_data/eval/predicted_poses/1ai5__1__1.A_1.B__1.D/rank1.sdf
+1a3b__1__1.B__1.D,1a3b__1__1.B__1.D,,1,1.0,{plinder_root}/tests/test_data/eval/predicted_poses/1a3b__1__1.B__1.D/rank1.sdf
+"""
+    
+    fn = Path(tmpdir / "prediction.csv")
+    with open(fn, "w") as f:
+        f.write(csv)
+    print(csv)
+    return fn
+
+
+@pytest.fixture(scope="session")
+def plinder_src():
+    plinder_root = Path(__file__).absolute().parent.parent
+    return plinder_root
+
+
 @pytest.fixture(scope="session")
 def test_dir():
     return test_asset_fp

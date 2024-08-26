@@ -132,3 +132,33 @@ def test_multi_protein_single_ligand_scoring(system_1ai5, predicted_pose_1ai5):
             assert np.isclose(scores[k], true_scores[k])
         else:
             assert scores[k] == true_scores[k]
+
+
+def test_write_docking_eval(plinder_src, prediction_csv):
+    import subprocess
+    import pandas as pd
+    cmd1 = f"python {plinder_src}/src/plinder/eval/docking/write_scores.py" +\
+            f" --prediction_file {prediction_csv} --data_dir "+\
+            f"{plinder_src}/tests/test_data/eval --output_dir "+\
+            f"{prediction_csv.parent}  --num_processes 65"
+    p1 = subprocess.Popen(
+            cmd1, shell=True, 
+            stdout=subprocess.PIPE, 
+            stderr=subprocess.PIPE)
+    p1.communicate()
+
+    score_df = pd.read_parquet(f"{prediction_csv.parent}/scores.parquet")
+    assert np.allclose(score_df.scrmsd_wave.to_list(), [1.617184, 3.665143])
+    
+    cmd2 = f"python {plinder_src}/src/plinder/eval/docking/stratify_test_set.py "+\
+            f"--split_file {plinder_src}/tests/test_data/eval/test_split.parquet "+\
+            f"--data_dir {plinder_src}/tests/test_data/eval --output_dir "+\
+            f"{prediction_csv.parent} --num_processes 16"
+    p2 = subprocess.Popen(
+            cmd2, shell=True, 
+            stdout=subprocess.PIPE, 
+            stderr=subprocess.PIPE)
+    p2.communicate()
+ 
+    stratify_df = pd.read_parquet(f"{prediction_csv.parent}/test_set.parquet")
+    assert np.allclose(stratify_df.novel_all.to_list(), [True, True])
