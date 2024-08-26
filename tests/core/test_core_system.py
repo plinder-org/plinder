@@ -31,14 +31,12 @@ def test_plinder_system_system_files(read_plinder_mount):
     assert len(s.structures) == 10
     assert len(s.ligands) == 3
     assert len(s.system_cif)
-    assert len(s.system_pdb)
     assert len(s.receptor_cif)
     assert len(s.receptor_pdb)
     assert len(s.sequences)
     assert len(s.chain_mapping)
     assert len(s.water_mapping)
     assert Path(s.system_cif).is_file()
-    assert Path(s.system_pdb).is_file()
     assert Path(s.receptor_cif).is_file()
     assert Path(s.receptor_pdb).is_file()
     assert Path(s.sequences).is_file()

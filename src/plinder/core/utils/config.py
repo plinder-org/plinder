@@ -214,10 +214,10 @@ class DataConfig:
     """
 
     plinder_release: str = field(
-        default_factory=partial(_getenv_default, "PLINDER_RELEASE", "2024-04")
+        default_factory=partial(_getenv_default, "PLINDER_RELEASE", "2024-06")
     )
     plinder_iteration: str = field(
-        default_factory=partial(_getenv_default, "PLINDER_ITERATION", "v1")
+        default_factory=partial(_getenv_default, "PLINDER_ITERATION", "v2")
     )
     plinder_mount: str = field(
         default_factory=partial(

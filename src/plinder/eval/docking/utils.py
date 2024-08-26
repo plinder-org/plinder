@@ -113,7 +113,14 @@ class ModelScores:
         score_protein: bool = False,
         score_posebusters: bool = False,
     ) -> "ModelScores":
-        entity = io.LoadEntity(model_file.as_posix())
+        if model_file.suffix not in [".cif", ".pdb"]:
+            raise ValueError(
+                f"model_file must be a .cif or .pdb file, got {model_file}"
+            )
+        if model_file.suffix == ".cif":
+            entity = io.LoadMMCIF(model_file.as_posix(), fault_tolerant=True)
+        else:
+            entity = io.LoadPDB(model_file.as_posix(), fault_tolerant=True)
         sdf_files = [
             sdf_file.as_posix() if isinstance(sdf_file, Path) else sdf_file
             for sdf_file in model_ligand_sdf_files

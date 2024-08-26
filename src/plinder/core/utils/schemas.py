@@ -79,6 +79,8 @@ SPLIT_DATASET_SCHEMA = pa.schema(
 
 
 # subject to criteria used in save_linked_structures.py
+# TODO: this schema is now out of date since addition of
+#       scores.json contents but it now contains >50 columns
 STRUCTURE_LINK_SCHEMA = pa.schema(
     [
         ("query_system", pa.string()),

@@ -8,7 +8,7 @@ import atom3d.util.formats as fo
 import pandas as pd
 from torch.utils.data import Dataset
 
-from plinder.core import get_split
+from plinder.core.split.utils import get_split
 from plinder.core.system import system
 
 
@@ -73,7 +73,7 @@ class PlinderDataset(Dataset):  # type: ignore
             item["path"] = s.system_cif
 
         if self.load_alternative_structures:
-            if s.linked_structures is not None:
+            if s.linked_structures is not None and not s.linked_structures.empty:
                 links = s.linked_structures.groupby("kind")
                 for kind, group in links:
                     for link_id in group["id"].values[

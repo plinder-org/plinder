@@ -12,7 +12,6 @@ from plinder.core.utils import cpl
 from plinder.core.utils.config import get_config
 from plinder.core.utils.dec import timeit
 from plinder.core.utils.log import setup_logger
-from plinder.core.utils.schemas import STRUCTURE_LINK_SCHEMA
 
 LOG = setup_logger(__name__)
 
@@ -44,7 +43,6 @@ def query_links(
         dataset=dataset,
         filters=filters,
         columns=columns or ["*"],
-        schema=STRUCTURE_LINK_SCHEMA,
         allow_no_filters=True,
         include_filename=True,
     )

@@ -11,8 +11,6 @@ import pandas as pd
 
 from plinder.core.index import utils
 from plinder.core.scores.links import query_links
-from plinder.core.utils import cpl
-from plinder.core.utils.config import get_config
 from plinder.core.utils.log import setup_logger
 from plinder.core.utils.unpack import get_zips_to_unpack
 
@@ -44,10 +42,18 @@ class PlinderSystem:
         self._chain_mapping = None
         self._water_mapping = None
         self._linked_structures = None
-        self._linked_archive = None
+        self._linked_archive: Path | None = None
 
     @property
     def entry(self) -> dict[str, Any] | None:
+        """
+        Store a reference to the entry JSON for this system
+
+        Returns
+        -------
+        dict[str, Any] | None
+            entry JSON
+        """
         if self._entry is None:
             entry_pdb_id = self.system_id.split("__")[0]
             try:
@@ -59,6 +65,14 @@ class PlinderSystem:
 
     @property
     def system(self) -> dict[str, Any] | None:
+        """
+        Return the system metadata from the original entry JSON
+
+        Returns
+        -------
+        dict[str, Any] | None
+            system metadata
+        """
         if self._system is None:
             try:
                 assert self.entry is not None
@@ -69,6 +83,14 @@ class PlinderSystem:
 
     @property
     def archive(self) -> Path | None:
+        """
+        Return the path to the directory containing the plinder system
+
+        Returns
+        -------
+        Path | None
+            directory containing the plinder system
+        """
         if self._archive is None:
             zips = get_zips_to_unpack(kind="systems", system_ids=[self.system_id])
             [archive] = list(zips.keys())
@@ -81,31 +103,66 @@ class PlinderSystem:
 
     @property
     def system_cif(self) -> str:
+        """
+        Path to the system.cif file
+
+        Returns
+        -------
+        str
+            path
+        """
         assert self.archive is not None
         return (self.archive / "system.cif").as_posix()
 
     @property
     def receptor_cif(self) -> str:
+        """
+        Path to the receptor.cif file
+
+        Returns
+        -------
+        str
+            path
+        """
         assert self.archive is not None
         return (self.archive / "receptor.cif").as_posix()
 
     @property
     def receptor_pdb(self) -> str:
+        """
+        Path to the receptor.pdb file
+
+        Returns
+        -------
+        str
+            path
+        """
         assert self.archive is not None
         return (self.archive / "receptor.pdb").as_posix()
 
     @property
-    def system_pdb(self) -> str:
-        assert self.archive is not None
-        return (self.archive / "system.pdb").as_posix()
-
-    @property
     def sequences(self) -> str:
+        """
+        Path to the sequences.fasta file
+
+        Returns
+        -------
+        str
+            path
+        """
         assert self.archive is not None
         return (self.archive / "sequences.fasta").as_posix()
 
     @property
     def chain_mapping(self) -> dict[str, Any] | None:
+        """
+        Chain mapping metadata
+
+        Returns
+        -------
+        dict[str, Any] | None
+            chain mapping
+        """
         if self._chain_mapping is None:
             assert self.archive is not None
             with (self.archive / "chain_mapping.json").open() as f:
@@ -114,6 +171,14 @@ class PlinderSystem:
 
     @property
     def water_mapping(self) -> dict[str, Any] | None:
+        """
+        Water mapping metadata
+
+        Returns
+        -------
+        dict[str, Any] | None
+            water mapping
+        """
         if self._water_mapping is None:
             assert self.archive is not None
             with (self.archive / "water_mapping.json").open() as f:
@@ -122,6 +187,14 @@ class PlinderSystem:
 
     @property
     def ligands(self) -> dict[str, str]:
+        """
+        Return a dictionary of ligand names to paths to ligand sdf files
+
+        Returns
+        -------
+        dict[str, str]
+            dictionary of ligand names to paths to ligand sdf files
+        """
         assert self.archive is not None
         ligands = {}
         for ligand in (self.archive / "ligand_files/").glob("*.sdf"):
@@ -130,37 +203,87 @@ class PlinderSystem:
 
     @property
     def structures(self) -> list[str]:
+        """
+        Return a list of paths to all structures in the plinder system
+
+        Returns
+        -------
+        list[str]
+            list of paths to structures
+        """
         assert self.archive is not None
         return [path.as_posix() for path in self.archive.rglob("*") if path.is_file()]
 
     @property
     def linked_structures(self) -> pd.DataFrame | None:
+        """
+        Return a dataframe of linked structures for this system. Note
+        that the dataframe will include all of the scores for the linked
+        structures as well, so that particular alternatives can be chosen
+        accordingly.
+
+        Returns
+        -------
+        pd.DataFrame | None
+            dataframe of linked structures if present in plinder
+        """
         if self._linked_structures is None:
-            links = query_links(filters=[("query_system", "==", self.system_id)])
+            links = query_links(filters=[("reference_system_id", "==", self.system_id)])
             self._linked_structures = links
+            if (
+                self._linked_structures is not None
+                and not self._linked_structures.empty
+            ):
+                zips = get_zips_to_unpack(
+                    kind="linked_structures", system_ids=[self.system_id]
+                )
+                [archive] = list(zips.keys())
+                self._linked_archive = archive.parent
+                if not (self._linked_archive / "apo" / self.system_id).is_dir() or not (
+                    self._linked_archive / "pred" / self.system_id
+                ).is_dir():
+                    with ZipFile(archive) as arch:
+                        arch.extractall(path=archive.parent)
         return self._linked_structures
 
     @property
     def linked_archive(self) -> Path | None:
-        if self._linked_archive is None:
-            cfg = get_config()
-            self._linked_archive = cpl.get_plinder_path(rel=cfg.data.linked_structures)  # type: ignore
-            assert self._linked_archive is not None
-            if not (self._linked_archive / "apo").is_dir():
-                with ZipFile(self._linked_archive) as arch:
-                    arch.extractall(path=self._linked_archive)
+        """
+        Path to linked structures archive if it exists
+
+        Returns
+        -------
+        Path | None
+            path to linked structures archive
+        """
+        self.linked_structures
         return self._linked_archive
 
-    def get_linked_structure(
-        self, link_kind: str, link_id: str, ext: str = "cif"
-    ) -> str:
-        if ext not in ["cif", "pdb"]:
-            raise ValueError(f"extension must be cif or pdb, got {ext}")
-        assert self.linked_archive is not None
-        return (
+    def get_linked_structure(self, link_kind: str, link_id: str) -> str:
+        """
+        Get the path to the requested linked structure
+
+        Parameters
+        ----------
+        link_kind : str
+            kind of linked structure ('apo' or 'pred')
+        link_id : str
+            id of linked structure
+
+        Returns
+        -------
+        str
+            path to linked structure
+        """
+        if self.linked_archive is None:
+            raise ValueError("linked_archive is None!")
+        structure = (
             self.linked_archive
             / link_kind
             / self.system_id
             / link_id
-            / "receptor.{ext}"
-        ).as_posix()
+            / "superposed.cif"
+        )
+        if not structure.is_file():
+            raise ValueError(f"structure={structure} does not exist!")
+        return structure.as_posix()

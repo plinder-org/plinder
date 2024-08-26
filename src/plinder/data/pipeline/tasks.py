@@ -756,12 +756,11 @@ def collate_partitions(*, data_dir: Path, partition: list[str]) -> None:
     con.sql(f"set temp_directory='/plinder/tmp/{part}';")
 
     search_db = "holo"
-    src = "*.parquet"
-    tgt = "*.parquet"
+    src = f"*{part}.parquet"
+    tgt = f"{part}.parquet"
     if part in ["apo", "pred"]:
         search_db = part
-        src = f"*{part}.parquet"
-        tgt = f"{part}.parquet"
+        src = "*.parquet"
     score_dir = data_dir / "scores" / f"search_db={search_db}"
     source_dir = data_dir / "dbs" / "subdbs" / f"search_db={search_db}"
     source = f"{source_dir}/{src}"
@@ -772,7 +771,7 @@ def collate_partitions(*, data_dir: Path, partition: list[str]) -> None:
         dedent(
             f"""
                 COPY
-                    (select * from '{source}' order by metric, similarity desc)
+                    (select * from '{source}')
                 TO
                     '{target}'
                 (FORMAT PARQUET, ROW_GROUP_SIZE 500_000);
@@ -1007,7 +1006,7 @@ def compute_protein_leakage(
 def assign_apo_pred_systems(
     *,
     data_dir: Path,
-    search_db: str,
+    search_dbs: list[str],
     cpu: int = 8,
 ) -> None:
     from plinder.data.save_linked_structures import (
@@ -1017,7 +1016,7 @@ def assign_apo_pred_systems(
 
     save_dir = data_dir / "assignments"
     linked_structures = data_dir / "linked_structures"
-    for search_db in ["apo", "pred"]:
+    for search_db in search_dbs:
         output_file = linked_structures / f"{search_db}_links.parquet"
         make_linked_structures_data_file(
             data_dir=data_dir,
