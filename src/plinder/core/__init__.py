@@ -26,7 +26,7 @@ except (ImportError, ModuleNotFoundError):
             """
         )
     )
-    PlinderDataset = None
+    PlinderDataset = None  # type: ignore
 
 __all__ = [
     "get_config",
