@@ -38,21 +38,21 @@ release a newer version with updated annotations to be used for the
 The directory downloaded from the bucket has the following structure:
 
 ```bash
-2024-06/                     # the PLINDER release
-|-- tutorial                 # the PLINDER iteration
-|   |-- clusters             # pre-calculated cluster labels derived from the protein similarity dataset
+2024-06/                     # The PLINDER release
+|-- tutorial                 # The PLINDER iteration
+|   |-- clusters             # Pre-calculated cluster labels derived from the protein similarity dataset
 |   |-- dbs                  # TSVs containing the raw files and IDs in the foldseek and mmseqs sub-databases
-|   |-- entries              # raw annotations prior to consolidation (split by `two_char_code` and zipped)
-|   |-- fingerprints         # index mapping files for the ligand similarity dataset
-|   |-- index                # consolidated tabular annotations
-|   |-- ligand_scores        # ligand similarity parquet dataset
-|   |-- ligands              # ligand data expanded from entries for computing similarity
+|   |-- entries              # Raw annotations prior to consolidation (split by `two_char_code` and zipped)
+|   |-- fingerprints         # Index mapping files for the ligand similarity dataset
+|   |-- index                # Consolidated tabular annotations
+|   |-- ligand_scores        # Ligand similarity parquet dataset
+|   |-- ligands              # Ligand data expanded from entries for computing similarity
 |   |-- linked_structures    # Apo and predicted structures linked to their holo systems
 |   |-- links                # Apo and predicted structures similarity to their holo structures
-|   |-- mmp                  # ligand matched molecular pairs (MMP) and series (MMS) data
-|   |-- scores               # protein similarity parquet dataset
-|   |-- splits               # split files and the configs used to generate them (if available)
-|   |-- systems              # structure files for all systems (split by `two_char_code` and zipped)
+|   |-- mmp                  # Ligand matched molecular pairs (MMP) and series (MMS) data
+|   |-- scores               # Protein similarity parquet dataset
+|   |-- splits               # Split files and the configs used to generate them (if available)
+|   |-- systems              # Structure files for all systems (split by `two_char_code` and zipped)
 ```
 
 The `systems`, `index`, `clusters` and `splits` directories are most the
@@ -213,16 +213,16 @@ can be found in `gs://plinder/2024-04/v1/splits/plinder-pl50.parquet`.
 
 The columns are:
 
-- `system_id`:the PLINDER system ID
-- `uniqueness`: : split category, either `train` (training set), `test` (test set),
-- `split`: split category, either `train` (training set), `test` (test set)
-- `cluster`: cluster metric used in sampling test dataset.
-- `cluster_for_val_split`: cluster metric used in sampling validation set from training set.
-- `system_pass_validation_criteria`: boolean indicating whether a system pass all the quality criteria
-- `system_pass_statistics_criteria`: boolean indicating whether a system pass the desired statistics criteria
-- `system_proper_num_ligand_chains`: number of chains ligands adjusted for redundancy
-- `system_proper_pocket_num_residues`: number of pocket residues adjusted for redundancy
-- `system_proper_num_interactions`: number of interactions adjusted for redundancy
-- `system_proper_ligand_max_molecular_weight`: adjusted molecular weight
-- `system_has_binding_affinity`: boolean indicator of whether a system has binding affinity or not
-- `system_has_apo_or_pred`: boolean indicator of whether a system apo or predicted structures linked
+- `system_id`: The PLINDER system ID
+- `uniqueness`: An id tag that captures system redundancy based on ligand and pocket similarity
+- `split`: Split category, either `train` (training set), `test` (test set)
+- `cluster`: Cluster metric used in sampling test dataset.
+- `cluster_for_val_split`: Cluster metric used in sampling validation set from training set.
+- `system_pass_validation_criteria`: Boolean indicating whether a system pass all the quality criteria
+- `system_pass_statistics_criteria`: Boolean indicating whether a system pass the desired statistics criteria
+- `system_proper_num_ligand_chains`: Number of chains ligands that are not ions or artifacts
+- `system_proper_pocket_num_residues`: Number of pocket residues around ligands that are not ions or artifacts
+- `system_proper_num_interactions`: Number of interactions based on ligands that are not ions or artifacts
+- `system_proper_ligand_max_molecular_weight`: Maximum molecular weight of ligands that are not ions or artifacts
+- `system_has_binding_affinity`: Boolean indicator of whether a system has binding affinity or not
+- `system_has_apo_or_pred`: Boolean indicator of whether a system apo or predicted structures linked
