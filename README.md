@@ -38,7 +38,7 @@ updated.
 To accelerate community adoption, PLINDER will be used as the field’s new Protein-Ligand
 interaction dataset standard as part of an exciting competition at the upcoming 2024
 [Machine Learning in Structural Biology (MLSB)](https://mlsb.io) Workshop at NeurIPS,
-one of the fields’ premiere academic gatherings.
+one of the field's premiere academic gatherings.
 More details about the competition will be announced shortly.
 
 ## 🏅 Gold standard benchmark sets
@@ -101,6 +101,6 @@ Durairaj, Janani, Yusuf Adeshina, Zhonglin Cao, Xuejin Zhang, Vladas Oleinikovas
 [bioRxiv](https://doi.org/10.1101/2024.07.17.603955)
 [ICML'24 ML4LMS](https://openreview.net/forum?id=7UvbaTrNbP)
 
-PLease see the [citation file](CITATION.cff) for details.
+Please see the [citation file](CITATION.cff) for details.
 
 ![plinder_banner](https://github.com/user-attachments/assets/43d129f2-3bb6-4903-81fa-182c351c64b6)
