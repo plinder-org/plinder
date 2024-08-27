@@ -162,7 +162,7 @@ def extract_and_score_test_set(
     test_systems = set(predictions["reference_system_id"])
     system_dir = output_dir / "test_systems"
     system_dir.mkdir(parents=True, exist_ok=True)
-    (output_dir/"scores").mkdir(parents=True, exist_ok=True)
+    (output_dir / "scores").mkdir(parents=True, exist_ok=True)
     if not overwrite:
         test_systems = test_systems - set(x.name for x in system_dir.iterdir())
     system_dir.mkdir(exist_ok=True)
