@@ -636,18 +636,21 @@ def read_plinder_mount(monkeypatch):
     monkeypatch.setenv("PLINDER_ITERATION", "")
     config.get_config(cached=False)
 
-    return plinder_mount
+    return plinder_mount / "plinder" / "mount"
 
 
 @pytest.fixture
 def write_plinder_mount(monkeypatch, tmp_path):
-    read_plinder_mount = test_asset_fp / "mount"
-    write_plinder_mount = tmp_path / "mount"
-    write_plinder_mount.mkdir()
+    read_plinder_mount = test_asset_fp / "plinder" / "mount"
+    write_plinder_mount = tmp_path / "plinder" / "mount"
+    write_plinder_mount.mkdir(parents=True)
     monkeypatch.setenv("PLINDER_MOUNT", tmp_path.as_posix())
     monkeypatch.setenv("PLINDER_RELEASE", "mount")
+    monkeypatch.setenv("PLINDER_BUCKET", "plinder")
     monkeypatch.setenv("PLINDER_ITERATION", "")
     for path in read_plinder_mount.rglob("*"):
+        if path.is_dir():
+            continue
         write_path = write_plinder_mount / path.relative_to(read_plinder_mount)
         write_path.parent.mkdir(exist_ok=True, parents=True)
         write_path.write_bytes(path.read_bytes())

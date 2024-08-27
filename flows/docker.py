@@ -16,6 +16,7 @@ from proc import Proc
 
 logging.basicConfig(level=logging.INFO)
 LOG = logging.getLogger("doc")
+DEPENDENCY_BLOCKS = "test,pipeline,plots"
 
 
 def get_dev_tag() -> str:
@@ -170,7 +171,7 @@ def pull_base_image(build: bool = False, promote: bool = False) -> None:
             "--build-arg",
             f"BASE_TAG={env['BASE_TAG']}",
             "--build-arg",
-            "DEPENDENCY_BLOCKS=test,pipeline",
+            f"DEPENDENCY_BLOCKS={DEPENDENCY_BLOCKS}",
             (Path.cwd() / "dockerfiles/base").as_posix(),
         ]
         Proc(cmd, env=env).execute()
@@ -234,7 +235,7 @@ def build_image(tag: str | None = None, push: bool = False) -> str:
         "--build-arg",
         f"BASE_TAG={env['BASE_TAG']}",
         "--build-arg",
-        "DEPENDENCY_BLOCKS=test",
+        f"DEPENDENCY_BLOCKS={DEPENDENCY_BLOCKS}",
         Path.cwd().as_posix(),
     ]
     Proc(cmd, env=env).execute()

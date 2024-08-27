@@ -759,10 +759,13 @@ class SplitPropertiesPlotter:
     def plot_all(self) -> None:
         self.plot_split_proportions()
         self.print_stratification_table()
-        if "train_vs_test" in self.stratified.keys():
-            self.save_ligand_report_html("test")
-        if "train_vs_val" in self.stratified.keys():
-            self.save_ligand_report_html("val")
+        try:
+            if "train_vs_test" in self.stratified.keys():
+                self.save_ligand_report_html("test")
+            if "train_vs_val" in self.stratified.keys():
+                self.save_ligand_report_html("val")
+        except Exception as e:
+            LOG.error(f"error saving ligand report: {e}")
         self.print_overall_diversity()
         self.plot_molecular_descriptors()
         self.plot_priorities()
