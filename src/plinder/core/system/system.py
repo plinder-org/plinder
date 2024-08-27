@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any
-from zipfile import ZipFile
+from zipfile import BadZipFile, ZipFile
 
 import pandas as pd
 
@@ -94,13 +94,17 @@ class PlinderSystem:
         if self._archive is None:
             zips = get_zips_to_unpack(kind="systems", system_ids=[self.system_id])
             [archive] = list(zips.keys())
-            self._archive = archive.parent / self.system_id  # type: ignore
-            assert self._archive is not None
-            if not self._archive.is_dir():
+            _archive = archive.parent / self.system_id
+            if not _archive.is_dir():
                 assert self.entry is not None
                 if len(self.entry['systems']):
-                    with ZipFile(archive) as arch:
-                        arch.extractall(path=archive.parent)
+                    try:
+                        with ZipFile(archive) as arch:
+                            arch.extractall(path=archive.parent)
+                    except BadZipFile:
+                        archive.unlink()
+                        return self.archive
+            self._archive = _archive
         return self._archive
 
     @property
@@ -232,22 +236,6 @@ class PlinderSystem:
         if self._linked_structures is None:
             links = query_links(filters=[("reference_system_id", "==", self.system_id)])
             self._linked_structures = links
-            if (
-                self._linked_structures is not None
-                and not self._linked_structures.empty
-            ):
-                zips = get_zips_to_unpack(
-                    kind="linked_structures", system_ids=[self.system_id]
-                )
-                [archive] = list(zips.keys())
-                self._linked_archive = archive.parent
-                if not (self._linked_archive / "apo" / self.system_id).is_dir() or not (
-                    self._linked_archive / "pred" / self.system_id
-                ).is_dir():
-                    assert self.entry is not None
-                    if len(self.entry['systems']):
-                        with ZipFile(archive) as arch:
-                            arch.extractall(path=archive.parent)
         return self._linked_structures
 
     @property
@@ -260,7 +248,19 @@ class PlinderSystem:
         Path | None
             path to linked structures archive
         """
-        self.linked_structures
+        if self._linked_archive is None:
+            zips = get_zips_to_unpack(
+                kind="linked_structures", system_ids=[self.system_id]
+            )
+            [archive] = list(zips.keys())
+            self._linked_archive = archive.parent
+            if not (self._linked_archive / "apo" / self.system_id).is_dir() or not (
+                self._linked_archive / "pred" / self.system_id
+            ).is_dir():
+                assert self.entry is not None
+                if len(self.entry['systems']):
+                    with ZipFile(archive) as arch:
+                        arch.extractall(path=archive.parent)
         return self._linked_archive
 
     def get_linked_structure(self, link_kind: str, link_id: str) -> str:
