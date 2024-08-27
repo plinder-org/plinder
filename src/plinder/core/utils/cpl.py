@@ -18,6 +18,7 @@ from plinder.core.utils.log import setup_logger
 
 T = TypeVar("T")
 LOG = setup_logger(__name__)
+_CLIENTS: dict[str, GSClient] = {}
 
 
 def _retry_decorator(retries: int) -> Callable[[Callable[..., T]], Callable[..., T]]:
@@ -134,7 +135,10 @@ def get_plinder_path(*, rel: str = "", download: bool = True) -> Path:
     """
     cfg = get_config()
     root = _get_fsroot(cfg)
-    client = GSClient(local_cache_dir=root)
+    client = _CLIENTS.get(root)
+    if client is None:
+        client = GSClient(local_cache_dir=root)
+        _CLIENTS[root] = client
     remote = cfg.data.plinder_remote
     if rel:
         remote = f"{cfg.data.plinder_remote}/{rel}"
@@ -157,7 +161,10 @@ def get_plinder_path(*, rel: str = "", download: bool = True) -> Path:
 def get_plinder_paths(*, paths: list[Path]) -> list[Path]:
     cfg = get_config()
     root = _get_fsroot(cfg)
-    client = GSClient(local_cache_dir=root)
+    client = _CLIENTS.get(root)
+    if client is None:
+        client = GSClient(local_cache_dir=root)
+        _CLIENTS[root] = client
     remote = GSPath(cfg.data.plinder_remote, client=client)
     LOG.debug(f"get_plinder_paths: remote={remote} root={root} npaths={len(paths)}")
     anypaths = [remote / path.relative_to(cfg.data.plinder_dir) for path in paths]
