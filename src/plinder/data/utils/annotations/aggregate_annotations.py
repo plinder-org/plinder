@@ -15,11 +15,12 @@ from ost import io, mol
 from PDBValidation.ValidationFactory import ValidationFactory
 from plip.basic import config
 from posebusters import PoseBusters
-from pydantic import BaseModel, BeforeValidator, Field
+from pydantic import BeforeValidator, Field
 from rdkit import RDLogger
 
 from plinder.core.utils.config import get_config
 from plinder.core.utils.log import setup_logger
+from plinder.data.structure.models import DocBaseModel
 from plinder.data.utils.annotations.get_ligand_validation import (
     EntryValidation,
     ResidueListValidation,
@@ -96,7 +97,7 @@ class QualityCriteria:
     pocket_max_percent_outliers_clashes: int = 100
 
 
-class System(BaseModel):
+class System(DocBaseModel):
     pdb_id: str
     smiles: str = Field(
         default_factory=str,
@@ -271,7 +272,7 @@ class System(BaseModel):
         self,
         chain_type: str,
         chains: dict[str, Chain],
-    ) -> dict[str, str]:
+    ) -> dict[str, ty.Any]:
         if chain_type == "interacting_protein":
             sub_chains = self.interacting_protein_chains
         elif chain_type == "neighboring_protein":
@@ -282,18 +283,17 @@ class System(BaseModel):
             raise ValueError(f"chain_type={chain_type} not understood")
         sub_chain_list = [ch.split(".") for ch in sub_chains]
 
-        sub_chain_list = [
-            chains[c].to_dict(int(instance))  # type: ignore
-            for instance, c in sub_chain_list
+        sub_chains_data = [
+            chains[c].to_dict(int(instance)) for instance, c in sub_chain_list
         ]
 
-        if len(sub_chain_list) == 0:
+        if len(sub_chains_data) == 0:
             return {}
         data: dict[str, list[str]] = defaultdict(list)
-        for sub_chain in sub_chain_list:
+        for sub_chain in sub_chains_data:
             for key in sub_chain:
-                data[f"system_{chain_type}_chains{key}"].append(str(sub_chain[key]))  # type: ignore
-        return {k: ";".join(v) for k, v in data.items()}
+                data[f"system_{chain_type}_chains{key}"].append(sub_chain[key])
+        return data
 
     @property
     def num_interacting_protein_chains(self) -> int:
@@ -632,7 +632,7 @@ class System(BaseModel):
         return result
 
 
-class Entry(BaseModel):
+class Entry(DocBaseModel):
     pdb_id: str = Field(
         default_factory=str,
         description="RCSB PDB ID. See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_entry.id.html",

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from enum import Enum
+from functools import cached_property
 from typing import List
 
 from pydantic import BaseModel, ConfigDict
@@ -46,3 +47,23 @@ class MonomerName(str, Enum):
     holo = "holo"
     apo = "apo"
     predicted = "predicted"
+
+
+class DocBaseModel(BaseModel):
+    @classmethod
+    def get_descriptions(cls) -> dict[str, str | None]:
+        """
+        Returns a dictionary mapping attribute and property names to their descriptions.
+
+        Returns:
+        --------
+        dict[str, str | None]
+            A dictionary mapping attribute and property names to their descriptions.
+        """
+        descriptions = {}
+        for name, value in cls.model_fields.items():
+            descriptions[name] = value.description
+        for name, prop in cls.__dict__.items():
+            if isinstance(prop, cached_property) or isinstance(prop, property):
+                descriptions[name] = prop.__doc__
+        return descriptions

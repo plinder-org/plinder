@@ -12,8 +12,9 @@ from mmcif.api.PdbxContainers import DataContainer
 from mmcif.io.PdbxReader import PdbxReader
 from ost import conop, io, mol
 from PDBValidation.Validation import PDBValidation
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import ConfigDict, Field
 
+from plinder.data.structure.models import DocBaseModel
 from plinder.data.utils.annotations.get_ligand_validation import (
     ResidueListValidation,
     ResidueValidation,
@@ -222,7 +223,7 @@ def detect_ligand_chains(
     return ligand_chains
 
 
-class Residue(BaseModel):
+class Residue(DocBaseModel):
     chain: str
     index: int
     number: int
@@ -268,7 +269,7 @@ class Residue(BaseModel):
         )
 
 
-class Chain(BaseModel):
+class Chain(DocBaseModel):
     asym_id: str
     auth_id: str
     entity_id: str
@@ -382,7 +383,7 @@ class Chain(BaseModel):
     def residue_index_to_number(self) -> dict[int, int]:
         return {self.residues[r].index: r for r in self.residues}
 
-    def to_dict(self, instance: int) -> dict[str, str | int]:
+    def to_dict(self, instance: int) -> dict[str, Any]:
         data: dict[str, Any] = {
             "": f"{instance}.{self.asym_id}",
             "_auth_id": self.auth_id,
@@ -392,7 +393,7 @@ class Chain(BaseModel):
             data["_length"] = self.length
         if len(self.mappings):
             for key in self.mappings:
-                data[f"_{key}"] = ",".join(self.mappings[key])
+                data[f"_{key}"] = list(self.mappings[key].keys())
         if self.validation is not None:
             validation_dict = self.validation.to_dict()
             for key in validation_dict:

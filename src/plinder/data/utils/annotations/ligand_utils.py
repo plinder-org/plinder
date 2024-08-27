@@ -16,13 +16,14 @@ from mmcif.api.PdbxContainers import DataContainer
 from openbabel import pybel
 from ost import io, mol
 from ost.conop import GetDefaultLib
-from pydantic import BaseModel, BeforeValidator, Field
+from pydantic import BeforeValidator, Field
 from rdkit import Chem, RDLogger
 from rdkit.Chem import QED, AllChem, Crippen, rdMolDescriptors
 from rdkit.Chem.rdchem import Mol, RWMol
 
 from plinder.core.utils.config import get_config
 from plinder.data.common.constants import BASE_DIR
+from plinder.data.structure.models import DocBaseModel
 from plinder.data.utils.annotations.interaction_utils import (
     extract_ligand_links_to_neighbouring_chains,
     get_plip_hash,
@@ -682,7 +683,7 @@ CrystalContacts = ty.Annotated[
 ]
 
 
-class Ligand(BaseModel):
+class Ligand(DocBaseModel):
     pdb_id: str = Field(
         default_factory=str,
         description="RCSB PDB ID, see https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_entry.id.html",
@@ -1174,7 +1175,7 @@ class Ligand(BaseModel):
 
         return ligand
 
-    @property
+    @cached_property
     def selection(self) -> str:
         residue_selection = " or ".join(f"rnum={rnum}" for rnum in self.residue_numbers)
         ligand_selection = f"cname={mol.QueryQuoteName(self.instance_chain)}"
@@ -1319,7 +1320,7 @@ class Ligand(BaseModel):
     @cached_property
     def binding_affinity(self) -> float | None:
         """
-        Get binding affinity
+        Binding affinity from BindingDB
         """
         global BINDING_AFFINITY
         pdbid_ligid = f"{self.pdb_id}_{self.ccd_code}".upper()
@@ -1392,7 +1393,7 @@ class Ligand(BaseModel):
         self,
         chain_type: str,
         chains: dict[str, Chain],
-    ) -> dict[str, str]:
+    ) -> dict[str, ty.Any]:
         """
         Format chains for pd.DataFrame
 
@@ -1418,21 +1419,23 @@ class Ligand(BaseModel):
             sub_chains = self.neighboring_ligands
         else:
             raise ValueError(f"chain_type={chain_type} not understood")
-        sub_chains = [
-            chains[instance_chain.split(".")[-1]].to_dict(instance_chain.split(".")[0])  # type: ignore
+        sub_chains_data = [
+            chains[instance_chain.split(".")[-1]].to_dict(
+                int(instance_chain.split(".")[0])
+            )
             for instance_chain in sub_chains
         ]
         data: dict[str, list[ty.Any]] = defaultdict(list)
-        if len(sub_chains) == 0:
+        if len(sub_chains_data) == 0:
             return {}
-        for sub_chain in sub_chains:
+        for sub_chain in sub_chains_data:
             for key in sub_chain:
-                data[f"ligand_{chain_type}_chains{key}"].append(str(sub_chain[key]))  # type: ignore
-        return {k: ";".join(v) for k, v in data.items()}
+                data[f"ligand_{chain_type}_chains{key}"].append(sub_chain[key])
+        return data
 
     def format_residues(
         self, residue_type: str, chains: dict[str, Chain]
-    ) -> dict[str, str]:
+    ) -> dict[str, list[str]]:
         """
         Format residues for pd.DataFrame
 
@@ -1447,7 +1450,8 @@ class Ligand(BaseModel):
 
         Returns
         -------
-        dict[str, str]
+        List of residues in the format "<chain>_<residue_number>_<residue_index>"
+        dict[str, list[str]]
         """
         if residue_type == "interacting":
             residues = self.interacting_residues
@@ -1460,9 +1464,9 @@ class Ligand(BaseModel):
                 res.append(
                     f"{instance_chain}_{residue_number}_{chains[chain].residues[residue_number].index}"
                 )
-        return {f"ligand_{residue_type}_residues": ";".join(res)}
+        return {f"ligand_{residue_type}_residues": res}
 
-    def format_interactions(self) -> dict[str, str]:
+    def format_interactions(self) -> dict[str, list[str]]:
         """
         Format interactions for pd.DataFrame
 
@@ -1472,7 +1476,8 @@ class Ligand(BaseModel):
 
         Returns
         -------
-        dict[str, str]
+        List of interactions in the format "<chain>_<residue_number>_<interaction>"
+        dict[str, list[str]]
 
         """
         interactions: list[str] = []
@@ -1480,7 +1485,7 @@ class Ligand(BaseModel):
             for residue in self.interactions[chain]:
                 for interaction in self.interactions[chain][int(residue)]:
                     interactions.append(f"{chain}_{residue}_{interaction}")
-        return {"ligand_interactions": ";".join(interactions)}
+        return {"ligand_interactions": interactions}
 
     def format_ligand(self, chains: dict[str, Chain]) -> dict[str, ty.Any]:
         """
