@@ -1,3 +1,4 @@
+import os
 import sys
 from pathlib import Path
 
@@ -6,6 +7,9 @@ import plinder
 DOC_PATH = Path(__file__).parent
 PACKAGE_PATH = DOC_PATH.parent / "src"
 COLUMN_REFERENCE_PATH = DOC_PATH.parent / "column_descriptions"
+
+# Avoid verbose logs in rendered notebooks
+os.environ["PLINDER_LOG_LEVEL"] = "0"
 
 # Include documentation in PYTHONPATH
 # in order to import modules for API doc generation etc.
