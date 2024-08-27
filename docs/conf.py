@@ -79,18 +79,11 @@ html_theme = "pydata_sphinx_theme"
 html_static_path = ["static"]
 html_css_files = [
     "plinder.css",
-    # For rendering the column descriptions table
-    "https://cdn.datatables.net/2.1.3/css/dataTables.dataTables.css",
     # Get fonts from Google Fonts CDN
     "https://fonts.googleapis.com/css2"
     "?family=Geologica:wght@100..900"
     "&family=Montserrat:ital,wght@0,100..900;1,100..900"
     "&display=swap",
-]
-html_js_files = [
-    # For rendering the column descriptions table
-    "https://code.jquery.com/jquery-3.7.1.js",
-    "https://cdn.datatables.net/2.1.3/js/dataTables.js",
 ]
 html_title = "PLINDER"
 html_logo = "static/assets/general/plinder_logo.png"

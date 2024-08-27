@@ -65,17 +65,11 @@ Tables that lists all systems along with their annotations.
 - `annotation_table.parquet`: Lists all systems and their annotations.
 - `annotation_table_nonredundant.parquet`: Subset of systems without redundant systems.
 
-:::{todo}
-- Add `Mandatory` column
-- Add `Example` column
-- Sort by mandatory columns
-- Show `system_id` as first column
-- Plugin [datatables](https://datatables.net/) to enable sorting, filtering and pagination
-- Then customize table style to fit all columns into the page
-:::
-
 :::{include} table.html
 :::
+
+`Mandatory`: The column has a non-empty, non-NaN value in for all PLINDER systems.
+
 
 ### Clusters (`clusters/`)
 
