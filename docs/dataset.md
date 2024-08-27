@@ -13,12 +13,14 @@ sd_hide_title: true
 :::
 
 ```bash
-2024-04/
-|-- v1
+2024-06/
+|-- v2
     |-- clusters
-    |   |-- metric={metric}
+    |   |--cluster=communities
     |       |-- directed={directed}
-    |           |-- threshold={threshold}.pqt
+    |           |-- metric={metric}
+    |               |-- threshold={threshold}
+    |                   |--data.parquet
     |-- dbs
     |   |-- subdbs
     |       |-- {search_db}_{aln_type}
@@ -32,8 +34,6 @@ sd_hide_title: true
     |-- index
     |   |-- annotation_table.parquet
     |   |-- annotation_table_nonredundant.parquet
-    |-- leakage
-    |   |-- {split}_{metric}_{compare_pair}.parquet
     |-- ligand_scores
     |   |-- {fragment}.parquet
     |-- ligands
@@ -49,10 +49,8 @@ sd_hide_title: true
     |   |-- search_db=pred
     |       |-- {fragment}.parquet
     |-- splits
-    |   |-- {category}
-    |       |-- {split_config}.parquet
-    |       |-- [{split_config}.yaml]
-    |       |-- [{split_flavor}.csv]
+    |   |-- split.parquet
+    |   |-- split.yaml
     |-- systems
         |-- {two_char_code}.zip
 ```
