@@ -51,21 +51,19 @@ class MonomerName(str, Enum):
 
 class DocBaseModel(BaseModel):
     @classmethod
-    def get_docstrings(cls) -> list[tuple[str, str | None]]:
+    def get_descriptions(cls) -> dict[str, str | None]:
         """
-        Returns a list of all properties in the class.
+        Returns a dictionary mapping attribute and property names to their descriptions.
 
         Returns:
         --------
-        list
-            A list of tuples containing the name and docstring of each property.
+        dict[str, str | None]
+            A dictionary mapping attribute and property names to their descriptions.
         """
-        attributes = [
-            (name, value.description) for name, value in cls.model_fields.items()
-        ]
-        others = [
-            (name, prop.__doc__)
-            for name, prop in cls.__dict__.items()
-            if isinstance(prop, cached_property) or isinstance(prop, property)
-        ]
-        return attributes + others
+        descriptions = {}
+        for name, value in cls.model_fields.items():
+            descriptions[name] = value.description
+        for name, prop in cls.__dict__.items():
+            if isinstance(prop, cached_property) or isinstance(prop, property):
+                descriptions[name] = prop.__doc__
+        return descriptions
