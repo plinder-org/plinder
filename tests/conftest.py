@@ -45,7 +45,7 @@ id,reference_system_id,receptor_file,rank,confidence,ligand_file
 1ai5__1__1.A_1.B__1.D,1ai5__1__1.A_1.B__1.D,,1,1.0,{plinder_root}/tests/test_data/eval/predicted_poses/1ai5__1__1.A_1.B__1.D/rank1.sdf
 1a3b__1__1.B__1.D,1a3b__1__1.B__1.D,,1,1.0,{plinder_root}/tests/test_data/eval/predicted_poses/1a3b__1__1.B__1.D/rank1.sdf
 """
-    
+
     fn = Path(tmpdir / "prediction.csv")
     with open(fn, "w") as f:
         f.write(csv)
