@@ -97,8 +97,10 @@ class PlinderSystem:
             self._archive = archive.parent / self.system_id  # type: ignore
             assert self._archive is not None
             if not self._archive.is_dir():
-                with ZipFile(archive) as arch:
-                    arch.extractall(path=archive.parent)
+                assert self.entry is not None
+                if len(self.entry['systems']):
+                    with ZipFile(archive) as arch:
+                        arch.extractall(path=archive.parent)
         return self._archive
 
     @property
