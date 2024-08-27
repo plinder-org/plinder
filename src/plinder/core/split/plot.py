@@ -46,7 +46,9 @@ def label_has_mms_within_subset(
         f"mmp series after subset {len(mms_df.index)} records for {mms_df['system_id'].nunique()} systems"
     )
     # count number of unique ligands (not counting repeats)
-    mms_count = mms_df.groupby("congeneric_id")["congeneric_ligand_ccd_code"].agg('nunique')
+    mms_count = mms_df.groupby("congeneric_id")["congeneric_ligand_ccd_code"].agg(
+        "nunique"
+    )
     mms_df["mms_unique_count"] = mms_df["congeneric_id"].map(mms_count)
     good_mms_systems = set(
         mms_df[mms_df["mms_unique_count"] >= minimum_count]["system_id"]
