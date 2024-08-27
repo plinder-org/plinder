@@ -244,8 +244,10 @@ class PlinderSystem:
                 if not (self._linked_archive / "apo" / self.system_id).is_dir() or not (
                     self._linked_archive / "pred" / self.system_id
                 ).is_dir():
-                    with ZipFile(archive) as arch:
-                        arch.extractall(path=archive.parent)
+                    assert self.entry is not None
+                    if len(self.entry['systems']):
+                        with ZipFile(archive) as arch:
+                            arch.extractall(path=archive.parent)
         return self._linked_structures
 
     @property
