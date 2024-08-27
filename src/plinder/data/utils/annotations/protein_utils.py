@@ -12,9 +12,9 @@ from mmcif.api.PdbxContainers import DataContainer
 from mmcif.io.PdbxReader import PdbxReader
 from ost import conop, io, mol
 from PDBValidation.Validation import PDBValidation
-from pydantic import ConfigDict, Field, computed_field
+from pydantic import ConfigDict, Field
 
-from plinder.data.structure.models import ExcludeComputedModel
+from plinder.data.structure.models import DocBaseModel
 from plinder.data.utils.annotations.get_ligand_validation import (
     ResidueListValidation,
     ResidueValidation,
@@ -223,7 +223,7 @@ def detect_ligand_chains(
     return ligand_chains
 
 
-class Residue(ExcludeComputedModel):
+class Residue(DocBaseModel):
     chain: str
     index: int
     number: int
@@ -261,7 +261,6 @@ class Residue(ExcludeComputedModel):
     TODO: Add example
     """
 
-    @computed_field(description="")  # type: ignore
     @cached_property
     def is_ptm(self) -> bool:
         return (
@@ -270,7 +269,7 @@ class Residue(ExcludeComputedModel):
         )
 
 
-class Chain(ExcludeComputedModel):
+class Chain(DocBaseModel):
     asym_id: str
     auth_id: str
     entity_id: str
@@ -376,12 +375,10 @@ class Chain(ExcludeComputedModel):
             num_unresolved_residues=length - len(residues),
         )
 
-    @computed_field(description="")  # type: ignore
     @cached_property
     def chain_type(self) -> mol.ChainType:
         return mol.ChainTypeFromString(self.chain_type_str)
 
-    @computed_field(description="")  # type: ignore
     @cached_property
     def residue_index_to_number(self) -> dict[int, int]:
         return {self.residues[r].index: r for r in self.residues}

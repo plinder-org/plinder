@@ -2,12 +2,11 @@
 # Distributed under the terms of the Apache License 2.0
 from __future__ import annotations
 
-import abc
 from enum import Enum
-from typing import Any, List
+from functools import cached_property
+from typing import List
 
-from pydantic import BaseModel, ConfigDict, PlainSerializer
-from typing_extensions import Annotated
+from pydantic import BaseModel, ConfigDict
 
 DOCKQ_BACKBONE_ATOMS = ["C", "CA", "N", "O"]
 
@@ -50,23 +49,23 @@ class MonomerName(str, Enum):
     predicted = "predicted"
 
 
-class ExcludeComputedModelBase(BaseModel, metaclass=abc.ABCMeta):
-    def model_dump(self, **kwargs) -> dict[str, Any]:  # type: ignore
-        model_dict = super().model_dump(**kwargs)
-        model_fields = set(self.model_fields.keys())
-        return {key: value for key, value in model_dict.items() if key in model_fields}
+class DocBaseModel(BaseModel):
+    @classmethod
+    def get_docstrings(cls) -> list[tuple[str, str | None]]:
+        """
+        Returns a list of all properties in the class.
 
-    # @model_serializer()
-    # def exclude_computed(self) -> dict[str, Any]:
-    #     model_dict = super().model_dump()
-    #     model_fields = set(self.model_fields.keys())
-    #     return {key: value for key, value in model_dict.items() if key in model_fields}
-
-
-def manual_model_dump(model_to_dump: ExcludeComputedModelBase) -> dict[str, Any]:
-    return model_to_dump.model_dump()
-
-
-ExcludeComputedModel = Annotated[
-    ExcludeComputedModelBase, PlainSerializer(manual_model_dump)
-]
+        Returns:
+        --------
+        list
+            A list of tuples containing the name and docstring of each property.
+        """
+        attributes = [
+            (name, value.description) for name, value in cls.model_fields.items()
+        ]
+        others = [
+            (name, prop.__doc__)
+            for name, prop in cls.__dict__.items()
+            if isinstance(prop, cached_property) or isinstance(prop, property)
+        ]
+        return attributes + others

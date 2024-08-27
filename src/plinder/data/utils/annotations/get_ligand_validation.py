@@ -7,22 +7,22 @@ from PDBValidation.PDBXReader import ResidueNotFound
 from PDBValidation.Residue import Residue
 from PDBValidation.Validation import PDBValidation
 from PDBValidation.XML import ModelledSubgroupNotFound
-from pydantic import ConfigDict, computed_field
+from pydantic import ConfigDict
 
 from plinder.core.utils.log import setup_logger
-from plinder.data.structure.models import ExcludeComputedModel
+from plinder.data.structure.models import DocBaseModel
 
 LOG = setup_logger(__name__)
 
 
-class ResidueValidationThresholds(ExcludeComputedModel):
+class ResidueValidationThresholds(DocBaseModel):
     model_config = ConfigDict(ser_json_inf_nan="constants")
     min_rscc: float = 0.8
     max_rsr: float = 0.3
     min_average_occupancy: float = 1.0
 
 
-class ResidueValidation(ExcludeComputedModel):
+class ResidueValidation(DocBaseModel):
     model_config = ConfigDict(ser_json_inf_nan="constants")
     altcode: str
     inscode: str
@@ -104,7 +104,7 @@ class ResidueValidation(ExcludeComputedModel):
             return None
 
 
-class ResidueListValidation(ExcludeComputedModel):
+class ResidueListValidation(DocBaseModel):
     model_config = ConfigDict(ser_json_inf_nan="constants")
     num_residues: int
     num_processed_residues: int
@@ -189,7 +189,7 @@ class ResidueListValidation(ExcludeComputedModel):
         return {f"validation_{k}": v for k, v in data.items()}
 
 
-class EntryValidation(ExcludeComputedModel):
+class EntryValidation(DocBaseModel):
     model_config = ConfigDict(ser_json_inf_nan="constants")
     resolution: float
     rfree: float
@@ -239,7 +239,6 @@ class EntryValidation(ExcludeComputedModel):
             meanI_over_sigI_obs=meanI_over_sigI_obs,
         )
 
-    @computed_field(description="")  # type: ignore
     @property
     def r_minus_rfree(self) -> float:
         if isinstance(self.r, float) and isinstance(self.rfree, float):
