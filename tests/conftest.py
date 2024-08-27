@@ -634,9 +634,13 @@ def read_plinder_mount(monkeypatch):
     monkeypatch.setenv("PLINDER_RELEASE", "mount")
     monkeypatch.setenv("PLINDER_BUCKET", "plinder")
     monkeypatch.setenv("PLINDER_ITERATION", "")
-    config.get_config(cached=False)
+    cfg = config.get_config(cached=False)
+    cfg = config.get_config()
 
-    return plinder_mount / "plinder" / "mount"
+    adir = plinder_mount / "plinder" / "mount"
+    assert Path(cfg.data.plinder_dir) == adir
+
+    return adir
 
 
 @pytest.fixture
