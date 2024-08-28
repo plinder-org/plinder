@@ -13,6 +13,14 @@ test_asset_fp = Path(__file__).absolute().parent / "test_data"
 test_output_fp = Path(__file__).absolute().parent / "xx/output"
 
 
+def _reset_config():
+    from omegaconf import DictConfig
+    from plinder.core.utils import config
+
+    config._config._schema = {}
+    config._config._packages = {}
+    config._config._cfg = DictConfig({})
+
 # Loads a mock score dataset
 def load_mini_dataset():
     sample_scores_dataset = (
@@ -439,6 +447,7 @@ def raw_ecod_data():
 
 @pytest.fixture
 def test_env(tmp_path, monkeypatch):
+    _reset_config()
     from plinder.core.utils import config
 
     monkeypatch.setenv("PLINDER_MOUNT", tmp_path.as_posix())
@@ -627,6 +636,7 @@ def final_json_7nac():
 
 @pytest.fixture
 def read_plinder_mount(monkeypatch):
+    _reset_config()
     monkeypatch.setenv("PLINDER_MOUNT", test_asset_fp.as_posix())
     monkeypatch.setenv("PLINDER_RELEASE", "mount")
     monkeypatch.setenv("PLINDER_BUCKET", "plinder")
@@ -648,6 +658,7 @@ def read_plinder_mount(monkeypatch):
 
 @pytest.fixture
 def write_plinder_mount(monkeypatch, tmp_path):
+    _reset_config()
     read_plinder_mount = test_asset_fp / "plinder" / "mount"
     write_plinder_mount = tmp_path / "plinder" / "mount"
     write_plinder_mount.mkdir(parents=True)
