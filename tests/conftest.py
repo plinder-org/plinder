@@ -627,15 +627,18 @@ def final_json_7nac():
 
 @pytest.fixture
 def read_plinder_mount(monkeypatch):
-    from plinder.core.utils import config
-
-    plinder_mount = test_asset_fp
     monkeypatch.setenv("PLINDER_MOUNT", test_asset_fp.as_posix())
     monkeypatch.setenv("PLINDER_RELEASE", "mount")
     monkeypatch.setenv("PLINDER_BUCKET", "plinder")
     monkeypatch.setenv("PLINDER_ITERATION", "")
+    from plinder.core.utils import config
+
+    plinder_mount = test_asset_fp
     cfg = config.get_config(cached=False)
+    import sys
+    print("cached=False", cfg.data.plinder_dir, file=sys.stderr, flush=True)
     cfg = config.get_config()
+    print("blank call", cfg.data.plinder_dir, file=sys.stderr, flush=True)
 
     adir = plinder_mount / "plinder" / "mount"
     assert Path(cfg.data.plinder_dir) == adir
