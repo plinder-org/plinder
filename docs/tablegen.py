@@ -1,9 +1,5 @@
 from __future__ import annotations
 
-import os
-
-os.environ["GCLOUD_PROJECT"] = "plinder"
-
 from glob import glob
 from pathlib import Path
 
@@ -11,6 +7,7 @@ import numpy as np
 import pandas as pd
 from itables import to_html_datatable
 from sphinx.util import logging
+from google.cloud import storage
 
 ROWS_PER_PAGE = 10
 # The columns that should be displayed first in the table
@@ -201,9 +198,12 @@ def _get_annotation_table(release: str, iteration: str) -> pd.DataFrame:
     pd.DataFrame
         Annotation table.
     """
-    return pd.read_parquet(
-        f"gs://plinder/{release}/{iteration}/index/annotation_table.parquet"
-    )
+    storage.Client.create_anonymous_client().get_bucket("plinder").blob(
+        blob_name=f"{release}/{iteration}/index/annotation_table.parquet"
+    ).download_to_filename("index.parquet")
+    df = pd.read_parquet("index.parquet")
+    Path("index.parquet").unlink()
+    return df
 
 
 def _is_value(column: pd.Series, data_type) -> pd.Series:
