@@ -117,6 +117,8 @@ html_theme_options = {
 html_sidebars = {
     # No primary sidebar for these pages
     "dataset": [],
+    "evaluation": [],
+    "citation": [],
 }
 html_context = {
     "github_user": "plinder-org",

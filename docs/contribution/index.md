@@ -5,55 +5,30 @@ SIB Swiss Institute of Bioinformatics, VantAI, NVIDIA, MIT CSAIL, and will be re
 updated.
 We highly welcome contributions!
 
-## Development installation
+This guide gives an introduction about how to maintain and improve `plinder` as
+developer
 
-```console
-$ git clone git@github.com:plinder-org/plinder.git
-$ cd plinder
-$ mamba env create -f environment.yml
-$ mamba activate plinder
-$ pip install -e '.[dev]'
-```
+# Code organization
 
-Please install pre-commit hooks (the same checks will run in CI):
+This code is split into 4 sub-packages
 
-```console
-$ pre-commit install
-```
+- `plinder.core`: Provides core data structures for interacting with
+  and loading the dataset.
+  Parts of it are exposed as the [public API](/api).
+- `plinder.data`: Contains core code for generating the PLINDER dataset.
+- `plinder.eval`: Offers evaluation harness for the dataset that takes as an input
+  predicted and ground truth structures in a pre-determined folder structure an
+  returns a leaderboard-ready set of entries.
+  Parts of it are user-faced via [CLI scripts](/evaluation).
+- `plinder.methods`: Implements methods in the leaderboard that leverage
+  PLINDER primitives for training and running.
 
-## Test suite
+:::{toctree}
+:maxdepth: 1
+:hidden:
 
-Test linting checks:
-
-```console
-$ tox -e lint
-```
-
-Run typing checks:
-
-```console
-$ tox -e type
-```
-
-Run the test suite:
-
-```console
-$ tox -e test
-```
-
-We lint with `ruff`.
-See `tox.ini` and `.pre-commit-config.yaml` for details.
-
-## Debugging
-
-In order to change log levels in `plinder`, please set:
-
-```console
-export PLINDER_LOG_LEVEL=10
-```
-
-:::{todo}
-- more details for each command
-- add detailed information on other `plinder` subpackages aprt from `core`
-- split into multiple documents
+pipeline
+development
+documentation
+release
 :::

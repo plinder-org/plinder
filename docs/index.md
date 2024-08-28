@@ -3,7 +3,7 @@ sd_hide_title: true
 html_theme.sidebar_secondary.remove: true
 ---
 
-# Plinder documentation
+# PLINDER documentation
 
 
 ![plinder](/static/assets/general/plinder_logo.png){w=40em align=center}
@@ -13,7 +13,8 @@ html_theme.sidebar_secondary.remove: true
 resource for training and evaluation of protein-ligand docking algorithms:
 
 - \> 400k PLI systems across > 11k SCOP domains and > 50k unique small molecules
-- 500+ annotations for each system, including protein and ligand properties, quality, matched molecular series and more
+- 500+ annotations for each system, including protein and ligand properties, quality,
+  matched molecular series and more
 - Automated curation pipeline to keep up with the PDB
 - 14 PLI metrics and over 20 billion similarity scores
 - Unbound \(_apo_\) and _predicted_ Alphafold2 structures linked to _holo_ systems
@@ -82,5 +83,7 @@ Access the PLI systems and their annotations directly via the files
 
 tutorial/index
 dataset
+evaluation
+contribution/index
 citation
 :::

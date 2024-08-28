@@ -1,11 +1,21 @@
-# Evaluating docking poses across a stratified test set
+---
+sd_hide_title: true
+---
 
-The `plinder-eval` package allows (1) assessing protein-ligand complex predictions against reference `plinder` systems, and
-(2) correlating the performance of these predictions against the level of similarity of each test system to the corresponding training set.
+# Evaluation tools
 
-The output file from running `plinder-eval` can be used as a submission to the leaderboard (coming soon).
+## Evaluating docking poses across a stratified test set
 
-## Input
+The `plinder-eval` package allows
+
+1. assessing protein-ligand complex predictions against reference `plinder` systems, and
+2. correlating the performance of these predictions against the level of similarity of
+each test system to the corresponding training set.
+
+The output file from running `plinder-eval` can be used as a submission to the
+leaderboard (coming soon).
+
+### Input
 
 `predictions.csv` with each row representating a protein-ligand pose, and the following columns:
 
@@ -18,9 +28,9 @@ The output file from running `plinder-eval` can be used as a submission to the l
 
 `split.csv` with `system_id` and `split` columns mapping PLINDER systems to `train`, or `test`.
 
-## Commands
+### Commands
 
-### Write scores
+#### Write scores
 
 ```bash
 python src/plinder/eval/docking/write_scores.py --prediction_file predictions.csv --data_dir PLINDER_DATA_DIR --output_dir scores --num_processes 64
@@ -59,7 +69,7 @@ For oligomeric complexes:
 
 If `score_posebusters` is True, all posebusters checks are saved.
 
-### Write test stratification data
+#### Write test stratification data
 
 (This command will not need to be run by a user, the `test_set.parquet` and `val_set.parquet` file will be provided with the split release)
 
@@ -73,7 +83,7 @@ Makes `test_data/test_set.parquet` which
 - Stratifies the test set based on training set similarity into `novel_pocket_pli`, `novel_pocket_ligand`, `novel_protein`, `novel_all`, and `not_novel`
 - Labels test systems with high quality
 
-### Write evaluation results
+#### Write evaluation results
 
 ```bash
 python src/plinder/eval/docking/make_plots.py --score_file scores/scores.parquet --data_file test_data/test_set.parquet --output_dir results
