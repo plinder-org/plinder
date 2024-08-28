@@ -1,13 +1,11 @@
 name: Documentation
 on:
-  pull_request:
   push:
     branches:
      - main
 
 permissions:
   contents: read
-  id-token: write
   pages: write
 
 concurrency:
