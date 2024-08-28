@@ -15,22 +15,22 @@ sd_hide_title: true
 ```bash
 2024-06/
 |-- v2
-    |-- index
+    |-- index # Consolidated tabular annotations
     |   |-- annotation_table.parquet
     |   |-- annotation_table_nonredundant.parquet
-    |-- systems
+    |-- systems  # Structure files for all systems (split by `two_char_code` and zipped)
     |   |-- {two_char_code}.zip
-    |-- clusters
+    |-- clusters # Pre-calculated cluster labels derived from the protein similarity dataset
     |   |-- cluster=communities
     |       |-- ...
     |   |-- cluster=components
     |       |-- ...
-    |-- splits
+    |-- splits # Split files and the configs used to generate them (if available)
     |   |-- split.parquet
     |   |-- split.yaml
-    |-- linked_structures
+    |-- linked_structures # Apo and predicted structures linked to their holo systems
     |   |-- {two_char_code}.zip
-    |-- links
+    |-- links # Apo and predicted structures similarity to their holo structures
     |   |-- apo_links.parquet
     |   |-- pred_links.parquet
 
@@ -38,25 +38,25 @@ sd_hide_title: true
                             miscellaneous data below
 --------------------------------------------------------------------------------
 
-    |-- dbs
+    |-- dbs # TSVs containing the raw files and IDs in the foldseek and mmseqs sub-databases
     |   |-- subdbs
     |       |-- apo.csv
     |       |-- holo.csv
     |       |-- pred.csv
-    |-- entries
+    |-- entries # Raw annotations prior to consolidation (split by `two_char_code` and zipped)
     |   |-- {two_char_code}.zip
-    |-- fingerprints
+    |-- fingerprints # Index mapping files for the ligand similarity dataset
     |   |-- ligands_per_inchikey.parquet
     |   |-- ligands_per_inchikey_ecfp4.npy
     |   |-- ligands_per_system.parquet
-    |-- ligand_scores
+    |-- ligand_scores # Ligand similarity parquet dataset
     |   |-- {hashid}.parquet
-    |-- ligands
+    |-- ligands # Ligand data expanded from entries for computing similarity
     |   |-- {hashid}.parquet
-    |-- mmp
+    |-- mmp # Ligand matched molecular pairs (MMP) and series (MMS) data
     |   |-- plinder_mmp_series.parquet
     |   |-- plinder_mms.csv.gz
-    |-- scores
+    |-- scores # Protein similarity parquet dataset
     |   |-- search_db=apo
     |       |-- apo.parquet
     |   |-- search_db=holo
@@ -104,13 +104,13 @@ Each unzipped subdirectory, contains folders named by `system_id` that contain t
 ```bash
 |-- {two_char_code}
     |-- {system_id}
-        |-- chain_mapping.json # mapping between the chains in the receptor and the chains in the system
-        |-- ligand_files # mapping between the ligand in the receptor and the ligands in the system
-        |-- receptor.cif
-        |-- receptor.pdb
-        |-- sequences.fasta
-        |-- system.cif
-        |-- water_mapping.json
+        |-- chain_mapping.json # Mapping between the chains in the receptor and the chains in the system
+        |-- ligand_files # Mapping between the ligand in the receptor and the ligands in the system
+        |-- receptor.cif  # Receptor mmcif file
+        |-- receptor.pdb # Receptor pdb file
+        |-- sequences.fasta # Receptor sequence fasta
+        |-- system.cif # System mmcif file
+        |-- water_mapping.json # Receptor binding site water map json file
 ```
 
 ### Clusters (`clusters/`)
@@ -132,12 +132,13 @@ The nested structure is as follows:
             |-- threshold={threshold}.parquet
 ```
 
+- `cluster`: whether clusters generated from community detection algorithm or via disconnected component
 - `directed`: whether clustering is done with directed or undirected graph
 - `metric`: the similarity metrics used for generating the clusters
 - `threshold`: similarity threshold in percent done at pre-defined levels
 
 Currently, we provide cluster labels based on undirected commnunities and both directed and undirected components.
-This is performed using metrics the metrics below with pre-defined thresholds (eg. 50, 70, 95 and 100 % for `pli_unique_qcov`).
+This is performed using metrics the metrics below with pre-defined thresholds (eg. 50, 70, 95 and 100 %).
 
 - `pli_qcov`
 - `pli_unique_qcov`
@@ -374,3 +375,53 @@ Tables that contains all the protein similarity scores used in calculating the s
 |-- search_db=pred
 |   |-- pred.parquet
 ```
+All the parquet files have the save columns in the header.
+E.g
+```
+                    query_system target_system protein_mapping protein_mapper  ...    source                            metric  mapping search_db
+1070886    1b5d__1__1.A_1.B__1.D        1b49_A         1.A:0.A       foldseek  ...    mmseqs         protein_qcov_weighted_max  1.A:0.A       apo
+1070887    1b5d__1__1.A_1.B__1.D        1b49_A         1.A:0.A       foldseek  ...    mmseqs                  protein_qcov_max  1.A:0.A       apo
+1070888    1b5d__1__1.A_1.B__1.D        1b49_A         1.A:0.A       foldseek  ...      both       protein_fident_weighted_max  1.A:0.A       apo
+1070889    1b5d__1__1.A_1.B__1.D        1b49_A         1.A:0.A       foldseek  ...      both                protein_fident_max  1.A:0.A       apo
+1070890    1b5d__1__1.A_1.B__1.D        1b49_A         1.A:0.A       foldseek  ...    mmseqs  protein_fident_qcov_weighted_max  1.A:0.A       apo
+...                          ...           ...             ...            ...  ...       ...                               ...      ...       ...
+213471528      7eek__1__1.A__1.I        1uor_A         1.A:0.A       foldseek  ...  foldseek    protein_lddt_qcov_weighted_max  1.A:0.A       apo
+213471529      7eek__1__1.A__1.I        1uor_A         1.A:0.A       foldseek  ...  foldseek             protein_lddt_qcov_max  1.A:0.A       apo
+213471536      7eek__1__1.A__1.I        1uor_A         1.A:0.A       foldseek  ...  foldseek                       pocket_lddt     None       apo
+213471540      7eek__1__1.A__1.I        6zl1_A         1.A:0.A       foldseek  ...  foldseek                       pocket_lddt     None       apo
+213471541      7eek__1__1.A__1.I        6zl1_B         1.A:0.B       foldseek  ...  foldseek                       pocket_lddt     None       apo
+```
+:::{list-table} `apo.parquet` columns
+:widths: 10 5 30
+:header-rows: 1
+
+*   - Name
+    - Type
+    - Description
+*   - query_system
+    - str
+    - The PLINDER system ID of query system
+*   - target_system
+    - str
+    - The PLINDER system ID of target system
+*   - protein_mapping
+    - str
+    - Chain mapping between query system and target system
+*   - protein_mapper
+    - str
+    - Alignment method used for mapping.
+*   - similarity
+    - int
+    - Similarity metric of interest
+*   - source
+    - str
+    - Source of similarity metric. It could either be `foldseek`, `mmseqs` or `both`
+*   - metric
+    - str
+    - Similarity metric of interest
+*   - mapping
+    - str
+    - ??
+*   - search_db
+    - str
+    - Search database type. Could be `apo`, `holo` or `pred`
