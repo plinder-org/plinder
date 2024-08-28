@@ -231,6 +231,7 @@ This directory contains split files and the configs used to generate them.
 
 :::
 
+:::{todo}
 ```
 >>> df.head()
                system_id            uniqueness  split cluster  ... system_proper_num_interactions  system_proper_ligand_max_molecular_weight  system_has_binding_affinity  system_has_apo_or_pred
@@ -240,13 +241,6 @@ This directory contains split files and the configs used to generate them.
 3  104m__1__1.A__1.C_1.D  104m__A__C_D_c274687  train     c14  ...                             21                                 616.177293                        False                   False
 4  105m__1__1.A__1.C_1.D  105m__A__C_D_c221688  train     c14  ...                             20                                 616.177293                        False                   False
 ```
-:::{todo}
-Index(['system_id', 'uniqueness', 'split', 'cluster', 'cluster_for_val_split',
-       'system_pass_validation_criteria', 'system_pass_statistics_criteria',
-       'system_proper_num_ligand_chains', 'system_proper_pocket_num_residues',
-       'system_proper_num_interactions',
-       'system_proper_ligand_max_molecular_weight',
-       'system_has_binding_affinity', 'system_has_apo_or_pred'],
 :::
 
 ### Linked structures (`linked_structures/`)
@@ -260,44 +254,165 @@ Inside each `apo/{system_id}` and `pred/{system_id}` folder is another directory
 This directory contains parquet files linking PLINDER systems to their apo and predicted structures in `linked_structures/`.
 
 
-```
->>> df.head()
-  reference_system_id      id  pocket_fident  pocket_lddt  protein_fident_qcov_weighted_sum  ...  fraction_model_proteins_mapped      lddt   bb_lddt  per_chain_lddt_ave per_chain_bb_lddt_ave
-0   6pl9__1__1.A__1.C  2vb1_A          100.0         86.0                             100.0  ...                             1.0  0.903772  0.968844            0.890822              0.959674
-1   6ahh__1__1.A__1.G  2vb1_A          100.0         98.0                             100.0  ...                             1.0  0.894349  0.962846            0.883217              0.954721
-2   5b59__1__1.A__1.B  2vb1_A          100.0         91.0                             100.0  ...                             1.0  0.903266  0.962318            0.890656              0.955258
-3   3ato__1__1.A__1.B  2vb1_A          100.0         99.0                             100.0  ...                             1.0  0.890530  0.954696            0.879496              0.946326
-4   6mx9__1__1.A__1.K  2vb1_A          100.0         98.0                             100.0  ...                             1.0  0.904116  0.964309            0.892434              0.955853
-```
+:::{list-table} `{apo|pred}_links.parquet` columns
+:widths: 10 5 30
+:header-rows: 1
 
-:::{todo}
-Index(['reference_system_id', 'id', 'pocket_fident', 'pocket_lddt',
-       'protein_fident_qcov_weighted_sum', 'protein_fident_weighted_sum',
-       'protein_lddt_weighted_sum', 'target_id', 'sort_score', 'receptor_file',
-       'ligand_files', 'num_reference_ligands', 'num_model_ligands',
-       'num_reference_proteins', 'num_model_proteins',
-       'fraction_reference_ligands_mapped', 'fraction_model_ligands_mapped',
-       'lddt_pli_ave', 'lddt_pli_wave', 'lddt_pli_amd_ave',
-       'lddt_pli_amd_wave', 'scrmsd_ave', 'scrmsd_wave', 'lddt_lp_ave',
-       'lddt_lp_wave', 'posebusters_mol_pred_loaded',
-       'posebusters_mol_cond_loaded', 'posebusters_sanitization',
-       'posebusters_all_atoms_connected', 'posebusters_bond_lengths',
-       'posebusters_bond_angles', 'posebusters_internal_steric_clash',
-       'posebusters_aromatic_ring_flatness',
-       'posebusters_double_bond_flatness', 'posebusters_internal_energy',
-       'posebusters_protein-ligand_maximum_distance',
-       'posebusters_minimum_distance_to_protein',
-       'posebusters_minimum_distance_to_organic_cofactors',
-       'posebusters_minimum_distance_to_inorganic_cofactors',
-       'posebusters_minimum_distance_to_waters',
-       'posebusters_volume_overlap_with_protein',
-       'posebusters_volume_overlap_with_organic_cofactors',
-       'posebusters_volume_overlap_with_inorganic_cofactors',
-       'posebusters_volume_overlap_with_waters',
-       'fraction_reference_proteins_mapped', 'fraction_model_proteins_mapped',
-       'lddt', 'bb_lddt', 'per_chain_lddt_ave', 'per_chain_bb_lddt_ave'],
-      dtype='object')
+*   - Name
+    - Type
+    - Description
+*   - reference_system_id
+    - str
+    - The PLINDER system ID
+*   - id
+    - str
+    - The PDB or AF2DB (for `apo` and `pred`, respectively) `{source_id}_{chain_id}` tag
+*   - pocket_fident
+    - float
+    - sequence identity for pocket residues
+*   - pocket_lddt
+    - float
+    - Local Distance Difference Test (lDDT) score for the pocket residues
+*   - protein_fident_qcov_weighted_sum
+    - float
+    - Sum of fident * qcov for all templates, weighted by the number of residues in the template
+*   - protein_fident_weighted_sum
+    - float
+    - Sum of fident for all templates, weighted by the number of residues in the template
+*   - protein_lddt_weighted_sum
+    - float
+    - Sum of lDDT for all residues, weighted by the number of residues in the template
+*   - target_id
+    - str
+    - apo or pred stucture `{source_id}` tag
+*   - sort_score
+    - float
+    - score used to sort linked structures
+*   - receptor_file
+    - str
+    - intermediate aligned linked receptor file path
+*   - ligand_files
+    - str
+    - intermediate file path for ligands used in calculations
+*   - num_reference_ligands
+    - int
+    - number of ligands in reference structure
+*   - num_model_ligands
+    - int
+    - number of ligands in model structure
+*   - num_reference_proteins
+    - int
+    - number of protein chains in reference structure
+*   - num_model_proteins
+    - int
+    - number of protein chains in model structure
+*   - fraction_reference_ligands_mapped
+    - float
+    - Fraction of reference ligands that were successfully mapped to model ligands
+*   - fraction_model_ligands_mapped
+    - float
+    - Fraction of model ligands that were successfully mapped to reference ligands
+*   - lddt_pli_ave
+    - float
+    - Average lDDT score for protein-ligand interactions
+*   - lddt_pli_wave
+    - float
+    - Weighted average lDDT score for protein-ligand interactions
+*   - lddt_pli_amd_ave
+    - float
+    - Average lDDT score for protein-ligand interactions, considering only atoms matched during docking
+*   - lddt_pli_amd_wave
+    - float
+    - Weighted average lDDT score for protein-ligand interactions, considering only atoms matched during docking
+*   - scrmsd_ave
+    - float
+    - Average symmetry-corrected RMSD between reference and model ligands
+*   - scrmsd_wave
+    - float
+    - Weighted average symmetry-corrected RMSD between reference and model ligands
+*   - lddt_lp_ave
+    - float
+    - Average lDDT score for ligand poses
+*   - lddt_lp_wave
+    - float
+    - Weighted average lDDT score for ligand poses
+*   - posebusters_mol_pred_loaded
+    - bool
+    - PoseBusters metric: boolean indicator of whether the predicted ligand could be loaded
+*   - posebusters_mol_cond_loaded
+    - bool
+    - PoseBusters metric: boolean indicator of whether the conditional ligand could be loaded
+*   - posebusters_sanitization
+    - bool
+    - PoseBusters metric: boolean indicator of whether the ligand could be sanitized
+*   - posebusters_all_atoms_connected
+    - bool
+    - PoseBusters metric: boolean indicator of whether all atoms in the ligand are connected
+*   - posebusters_bond_lengths
+    - bool
+    - PoseBusters metric: boolean indicator of whether all bond lengths in the ligand are within 4 standard deviations of the mean
+*   - posebusters_bond_angles
+    - bool
+    - PoseBusters metric: boolean indicator of whether all bond angles in the ligand are within 4 standard deviations of the mean
+*   - posebusters_internal_steric_clash
+    - bool
+    - PoseBusters metric: boolean indicator of whether there are no internal steric clashes in the ligand
+*   - posebusters_aromatic_ring_flatness
+    - bool
+    - PoseBusters metric: boolean indicator of whether all aromatic rings in the ligand are flat
+*   - posebusters_double_bond_flatness
+    - bool
+    - PoseBusters metric: boolean indicator of whether all double bonds in the ligand are flat
+*   - posebusters_internal_energy
+    - bool
+    - PoseBusters metric: boolean indicator of whether the internal energy of the ligand is below 0 kcal/mol
+*   - posebusters_protein-ligand_maximum_distance
+    - bool
+    - PoseBusters metric: boolean indicator of whether the maximum distance between the ligand and the protein is less than 5 Angstrom
+*   - posebusters_minimum_distance_to_protein
+    - bool
+    - PoseBusters metric: boolean indicator of whether the minimum distance between the ligand and the protein is greater than 1.5 Angstrom
+*   - posebusters_minimum_distance_to_organic_cofactors
+    - float
+    - PoseBusters metric: Minimum distance between the ligand and any organic cofactor
+*   - posebusters_minimum_distance_to_inorganic_cofactors
+    - bool
+    - PoseBusters metric: Minimum distance between the ligand and any inorganic cofactor
+*   - posebusters_minimum_distance_to_waters
+    - float
+    - PoseBusters metric: Minimum distance between the ligand and any water molecule
+*   - posebusters_volume_overlap_with_protein
+    - float
+    - PoseBusters metric: Fraction of ligand volume that overlaps with the protein
+*   - posebusters_volume_overlap_with_organic_cofactors
+    - bool
+    - PoseBusters metric: boolean indicator of whether the share of ligand volume that intersects with the organic cofactor is less than 7.5%. The volumes are defined by the van der Waals radii around the heavy atoms scaled by 0.8.
+*   - posebusters_volume_overlap_with_inorganic_cofactors
+    - bool
+    - PoseBusters metric: boolean indicator of whether the share of ligand volume that intersects with the inorganic cofactor is less than 7.5%. The volumes are defined by the van der Waals radii around the heavy atoms scaled by 0.8.
+*   - posebusters_volume_overlap_with_waters
+    - bool
+    - PoseBusters metric: boolean indicator of whether the share of ligand volume that intersects with the linked system waters is less than 7.5%. The volumes are defined by the van der Waals radii around the heavy atoms scaled by 0.8.
+*   - fraction_reference_proteins_mapped
+    - float
+    - Fraction of reference protein chains with corresponding model chains
+*   - fraction_model_proteins_mapped
+    - float
+    - Fraction of model protein chains mapped to corresponding reference chains
+*   - lddt
+    - float
+    - Global lDDT score calculated over all atoms in the structure
+*   - bb_lddt
+    - float
+    - Global lDDT score calculated over backbone atoms (N, CA, C, O) in the structure
+*   - per_chain_lddt_ave
+    - float
+    - Average per-chain lDDT score calculated over all atoms
+*   - per_chain_bb_lddt_ave
+    - float
+    - Average per-chain lDDT score calculated over backbone atoms (N, CA, C, O)
 :::
+
 
 ### Miscellaneous
 
@@ -305,7 +420,7 @@ Here we briefly describe subdirectories and their files that are not part of the
 These files should be considered intermediate products and are not intended to be used directly, only for development purposes.
 
 #### Database processed files (`dbs/`)
-This directory contains the intermediate files of PDB structures that were successfully processed and scored by foldseek and mmseqs pipeline.
+This directory contains the intermediate files of PDB structures that were successfully processed and scored by Foldseek and MMseqs2 pipeline.
 It is used in splitting to make sure that only successfully computed systems are used for splitting.
 ```bash
 |-- subdbs
@@ -331,6 +446,7 @@ Tables that contains all the ligand fingerprints used in calculating ligand simi
 
 #### Small molecule data (`ligands/`)
 Ligand data expanded from entries for computing similarity, saved in distributed files `{hashid}.parquet`.
+
 Eg.
 
 ```
@@ -345,6 +461,7 @@ Eg.
 #### Small molecule similarity scores (`ligand_scores/`)
 
 Tables that contains all the ligand similarity scores used in calculating the similarity between two ligands, saved in distributed files `{hashid}.parquet`.
+
 Eg.
 ```
    query_ligand_id  target_ligand_id  tanimoto_similarity_max
@@ -363,9 +480,7 @@ Files that contains all the ligand matched molecular pairs (MMP) and matched mol
 
 #### Protein similarity dataset (`scores/`)
 
-TODO
-
-Tables that contains all the protein similarity scores used in calculating the similarity between two proteins.
+Tables that contains all the protein or pocket similarity scores used in calculating the similarity between two systems.
 
 ```bash
 |-- search_db=apo
