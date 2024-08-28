@@ -210,7 +210,7 @@ This directory contains split files and the configs used to generate them.
     - does a system fit the statistics criteria for test?
 *   - system_proper_num_ligand_chains
     - int
-    - number of ligand entries in a system that are not classified as ion or artifact (i.e. "proper" ligands) 
+    - number of ligand entries in a system that are not classified as ion or artifact (i.e. "proper" ligands)
 *   - system_proper_pocket_num_residues
     - int
     - total number of pocket residues that are within 6 Å distance to a "proper" ligand(s) in a system
