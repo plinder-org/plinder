@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import os
+
+os.environ["GCLOUD_PROJECT"] = "plinder"
+
 from glob import glob
 from pathlib import Path
 
