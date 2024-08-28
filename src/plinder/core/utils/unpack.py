@@ -2,16 +2,16 @@
 # Distributed under the terms of the Apache License 2.0
 from __future__ import annotations
 
-from time import time
 from pathlib import Path
+from time import time
 from typing import Literal, Optional
 from zipfile import BadZipFile, ZipFile
 
 from omegaconf import DictConfig
 
 from plinder.core.utils import cpl
-from plinder.core.utils.log import setup_logger
 from plinder.core.utils.config import get_config
+from plinder.core.utils.log import setup_logger
 
 LOG = setup_logger(__name__)
 ZIP_KINDS = Literal["entries", "linked_structures", "systems"]
@@ -61,6 +61,7 @@ def _unpack_zip(path: Path) -> None:
         arch.extractall(path=path.parent)
         done.touch()
     LOG.info(f"validating and extracting {path} took {time() - t0:.2f}s")
+    return
 
 
 def get_zips_to_unpack(

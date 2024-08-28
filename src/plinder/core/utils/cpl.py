@@ -58,7 +58,7 @@ def retry(
     return _retry_decorator(retries)(f)
 
 
-def thread_pool(func: Callable[..., T], iter: Iterable[T]) -> None:
+def thread_pool(func: Callable[..., None], iter: Iterable[T]) -> None:
     with ThreadPoolExecutor() as executor:
         futures = [executor.submit(func, item) for item in iter]
         wait(futures, return_when=ALL_COMPLETED)

@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any
-from zipfile import BadZipFile, ZipFile
 
 import pandas as pd
 
@@ -34,14 +33,14 @@ class PlinderSystem:
         system_id: str,
         prune: bool = True,
     ) -> None:
-        self.system_id = system_id
-        self.prune = prune
-        self._entry = None
-        self._system = None
-        self._archive = None
-        self._chain_mapping = None
-        self._water_mapping = None
-        self._linked_structures = None
+        self.system_id: str = system_id
+        self.prune: bool = prune
+        self._entry: dict[str, Any] | None = None
+        self._system: dict[str, Any] | None = None
+        self._archive: Path | None = None
+        self._chain_mapping: dict[str, Any] | None = None
+        self._water_mapping: dict[str, Any] | None = None
+        self._linked_structures: pd.DataFrame | None = None
         self._linked_archive: Path | None = None
 
     @property
