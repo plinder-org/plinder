@@ -75,7 +75,8 @@ The dataset can be downloaded from the bucket with
 ```console
 $ export PLINDER_RELEASE=2024-06 # Current release
 $ export PLINDER_ITERATION=v2 # Current iteration
-$ gsutil -m cp -r gs://plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/* ~/.local/share/plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/
+$ mkdir -p ~/.local/share/plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/
+$ gsutil -m cp -r "gs://plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/*" ~/.local/share/plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/
 ```
 For details on the sub-directories, see [Documentation](https://plinder-org.github.io/plinder/).
 
