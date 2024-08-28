@@ -21,7 +21,7 @@ only a small manageable excerpt of the entries.
 $ export PLINDER_RELEASE=2024-06
 $ export PLINDER_ITERATION=tutorial
 $ mkdir -p ~/.local/share/plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/
-$ gsutil -m cp -r gs://plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/* ~/.local/share/plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/
+$ gsutil -m cp -r "gs://plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/*" ~/.local/share/plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/
 ```
 
 The full dataset (`PLINDER_ITERATION=v2`) has a size of hundreds of GB, so you are
