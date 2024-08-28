@@ -94,17 +94,9 @@ class PlinderSystem:
         if self._archive is None:
             zips = get_zips_to_unpack(kind="systems", system_ids=[self.system_id])
             [archive] = list(zips.keys())
-            _archive = archive.parent / self.system_id
-            if not _archive.is_dir():
-                assert self.entry is not None
-                if len(self.entry['systems']):
-                    try:
-                        with ZipFile(archive) as arch:
-                            arch.extractall(path=archive.parent)
-                    except BadZipFile:
-                        archive.unlink()
-                        return self.archive
-            self._archive = _archive
+            self._archive = archive.parent / self.system_id
+            if not self._archive.is_dir():
+                raise ValueError(f"system_id={self.system_id} not found in systems")
         return self._archive
 
     @property
@@ -254,13 +246,6 @@ class PlinderSystem:
             )
             [archive] = list(zips.keys())
             self._linked_archive = archive.parent
-            if not (self._linked_archive / "apo" / self.system_id).is_dir() or not (
-                self._linked_archive / "pred" / self.system_id
-            ).is_dir():
-                assert self.entry is not None
-                if len(self.entry['systems']):
-                    with ZipFile(archive) as arch:
-                        arch.extractall(path=archive.parent)
         return self._linked_archive
 
     def get_linked_structure(self, link_kind: str, link_id: str) -> str:

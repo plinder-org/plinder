@@ -2,14 +2,18 @@
 # Distributed under the terms of the Apache License 2.0
 from __future__ import annotations
 
+from time import time
 from pathlib import Path
 from typing import Literal, Optional
+from zipfile import BadZipFile, ZipFile
 
 from omegaconf import DictConfig
 
 from plinder.core.utils import cpl
+from plinder.core.utils.log import setup_logger
 from plinder.core.utils.config import get_config
 
+LOG = setup_logger(__name__)
 ZIP_KINDS = Literal["entries", "linked_structures", "systems"]
 ID_KINDS = Literal["system_ids", "pdb_ids", "two_char_code"]
 
@@ -45,6 +49,18 @@ def expand_config_context(
     if pdbs:
         return "pdb_ids", pdbs
     return "two_char_codes", two_chars
+
+
+def _unpack_zip(path: Path) -> None:
+    t0 = time()
+    done = path.parent / (path.stem + "_done")
+    if done.is_file():
+        LOG.debug(f"skipping {path} as it was already extracted")
+        return
+    with ZipFile(path) as arch:
+        arch.extractall(path=path.parent)
+        done.touch()
+    LOG.info(f"validating and extracting {path} took {time() - t0:.2f}s")
 
 
 def get_zips_to_unpack(
@@ -83,5 +99,22 @@ def get_zips_to_unpack(
             zips.setdefault(key, [])
 
     paths = list(zips.keys())
-    cpl.download_paths(paths=cpl.get_plinder_paths(paths=paths))
+    for path in paths:
+        if path.is_file():
+            try:
+                with ZipFile(path):
+                    pass
+            except BadZipFile:
+                LOG.error(f"removing malformed zip {path}")
+                path.unlink()
+
+    cpl.download_paths(
+        paths=cpl.get_plinder_paths(
+            paths=[path for path in paths if not path.is_file()]
+        )
+    )
+
+    if kind in ["systems", "linked_structures"]:
+        cpl.thread_pool(_unpack_zip, paths)
+
     return zips
