@@ -210,7 +210,7 @@ This directory contains split files and the configs used to generate them.
 - does the system have either `apo` or `pred` structure linked?
 :::
 
-The content of split.yaml is described below:
+The content of `split.yaml` is described below:
 
 ```bash
 split:
