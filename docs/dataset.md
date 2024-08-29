@@ -190,13 +190,13 @@ This directory contains split files and the configs used to generate them.
     - Cluster label used in sampling test set
 *   - cluster_for_val_split
     - str
-    - Cluster label used in sampling validation set from training set
+    - Cluster label used in sampling validation set.
 *   - uniqueness
     - str
     - system label used to remove redundant systems from the split
 *   - system_pass_validation_criteria
     - bool
-    - does as system pass the validation quality criteria for test?
+    - does as system pass the crystal quality for test?
 *   - system_pass_statistics_criteria
     - bool
     - does a system fit the statistics criteria for test?
@@ -263,7 +263,7 @@ This directory contains parquet files linking PLINDER systems to their apo and p
     - sequence identity for pocket residues
 *   - pocket_lddt
     - float
-    - Local Distance Difference Test (lDDT) score for the pocket residues
+    - Local Distance Difference Test (lDDT) score for the pocket residue alpha carbons as returned by Foldseek.
 *   - protein_fident_qcov_weighted_sum
     - float
     - Sum of fident * qcov for all templates, weighted by the number of residues in the template
@@ -278,7 +278,7 @@ This directory contains parquet files linking PLINDER systems to their apo and p
     - apo or pred stucture `{source_id}` tag
 *   - sort_score
     - float
-    - score used to sort linked structures
+    - Score used to sort linked structures. This is resolution for apos and plddt for preds.
 *   - receptor_file
     - str
     - intermediate aligned linked receptor file path
@@ -528,7 +528,7 @@ E.g
     - Similarity metric of interest
 *   - mapping
     - str
-    - ??
+    - Local region mapping between query system and target system
 *   - search_db
     - str
     - Search database type. Could be `apo`, `holo` or `pred`
