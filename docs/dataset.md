@@ -65,11 +65,6 @@ sd_hide_title: true
     |       |-- pred.parquet
 ```
 
-:::{todo}
-- Add sections for missing tables
-- Fill missing elements into tables
-- Add descriptions for missing files
-:::
 
 We will describe the content of the `index`, `systems`, `clusters`, `splits`, `links` and `linked_structures` directories in detail below, the rest are described in the [miscellaneous section](#miscellaneous-target).
 
