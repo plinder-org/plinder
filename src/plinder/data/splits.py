@@ -694,6 +694,9 @@ def assign_split_membership(
     mms_df["system_proper_ligand_unique_ccd_codes"] = mms_df["system_id"].map(
         system_to_ligand_ccd_codes
     )
+
+    # TODO: should we better count for MMS uniqueness only when
+    #       system_proper_ligand_unique_ccd_codes is different and ignore entry_pdb_id here?
     mms_df["unique_id"] = (
         mms_df["entry_pdb_id"] + "__" + mms_df["system_proper_ligand_unique_ccd_codes"]
     )
@@ -827,6 +830,9 @@ def assign_split_membership(
     test_ccd_codes = set(
         entries[entries["split"] == "test"]["system_proper_ligand_unique_ccd_codes"]
     )
+    # TODO: should we group here only by "system_proper_ligand_unique_ccd_codes"
+    #       to only be adding a novel ligand once?
+    #       Here it can add as many as there are but from different PDB?
     novel_ligand_systems = set(
         entries[
             entries[
