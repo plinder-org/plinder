@@ -137,7 +137,7 @@ def test_multi_protein_single_ligand_scoring(system_1ai5, predicted_pose_1ai5):
 def test_write_docking_eval(plinder_src, prediction_csv):
     import subprocess
     import pandas as pd
-    cmd1 = f"python {plinder_src}/src/plinder/eval/docking/write_scores.py" +\
+    cmd1 = "plinder_eval" + \
             f" --prediction_file {prediction_csv} --data_dir "+\
             f"{plinder_src}/tests/test_data/eval --output_dir "+\
             f"{prediction_csv.parent}  --num_processes 65"
@@ -150,7 +150,7 @@ def test_write_docking_eval(plinder_src, prediction_csv):
     score_df = pd.read_parquet(f"{prediction_csv.parent}/scores.parquet")
     assert np.allclose(score_df.scrmsd_wave.to_list(), [1.617184, 3.665143])
 
-    cmd2 = f"python {plinder_src}/src/plinder/eval/docking/stratify_test_set.py "+\
+    cmd2 = "plinder_stratify "+\
             f"--split_file {plinder_src}/tests/test_data/eval/test_split.parquet "+\
             f"--data_dir {plinder_src}/tests/test_data/eval --output_dir "+\
             f"{prediction_csv.parent} --num_processes 16"

@@ -36,8 +36,8 @@ dependencies = [
 
 [project.scripts]
 plinder_download = "plinder.core.index.utils:download_plinder_cmd"
-plinder_eval = "plinder.eval.run:main"
-plinder_create_submission = "plinder.eval.create_submission:main"
+plinder_eval = "plinder.eval.docking.write_scores:main"
+plinder_stratify = "plinder.eval.docking.stratify_test_set:main"
 
 [project.optional-dependencies]
 lint = [
