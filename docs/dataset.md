@@ -8,10 +8,6 @@ sd_hide_title: true
 
 ### Directory structure
 
-:::{todo}
-- give short description for each file/subdirectory
-:::
-
 ```bash
 2024-06/
 |-- v2
@@ -165,10 +161,6 @@ This directory contains split files and the configs used to generate them.
 - `split.parquet`: listing the split category for each system
 - `split.yaml`: the config used to generate the split
 
-:::{todo}
-- Add missing descriptions for yaml and csv files
-:::
-
 :::{list-table} `split.parquet` columns
 :widths: 10 5 30
 :header-rows: 1
@@ -217,17 +209,62 @@ This directory contains split files and the configs used to generate them.
     - bool
     - does the system have either `apo` or `pred` structure linked?
 
-:::{todo}
+The content of split.yaml is described below:
 ```
->>> df.head()
-               system_id            uniqueness  split cluster  ... system_proper_num_interactions  system_proper_ligand_max_molecular_weight  system_has_binding_affinity  system_has_apo_or_pred
-0  101m__1__1.A__1.C_1.D  101m__A__C_D_c188899  train     c14  ...                             20                                 616.177293                        False                   False
-1      102m__1__1.A__1.C    102m__A__C_c237197  train     c14  ...                             20                                 616.177293                        False                    True
-2  103m__1__1.A__1.C_1.D  103m__A__C_D_c252759  train     c14  ...                             16                                 616.177293                        False                   False
-3  104m__1__1.A__1.C_1.D  104m__A__C_D_c274687  train     c14  ...                             21                                 616.177293                        False                   False
-4  105m__1__1.A__1.C_1.D  105m__A__C_D_c221688  train     c14  ...                             20                                 616.177293                        False                   False
+split:
+  graph_configs: # Similarity graph configuration
+  - metric: pli_unique_qcov # Metric used to generate the base graph from which all partitioning is done.
+    threshold: 30 # Threshold used to generate the base graph from which all partitioning is done.
+    depth: 1 # Depth at which the neighbors are defined.
+  - metric: protein_seqsim_weighted_sum # Same as above
+    threshold: 30 # Same as above
+    depth: 1 # Same as above
+  mms_unique_quality_count: 3 # How many unique congeneric IDs passing quality to consider as MMS
+  ligand_cluster_metric: Tanimoto_similarity_max # which metric to use for ligand clusters (these are added to test from removed if they are different from train/val and corresponding leaked systems are removed from train/val)
+  ligand_cluster_threshold: 50 # Which threshold to use for ligand clusters
+
+  ligand_cluster_cluster: components # Which cluster to use for ligand clusters
+  test_cluster_cluster: communities # What kind of cluster to use for sampling test
+  test_cluster_metric: pli_unique_qcov # Metric to use for sampling representatives from each test cluster
+  test_cluster_threshold: 50  # Threshold to use for sampling representatives from each test cluster
+  test_cluster_directed: false # Directed to use for sampling representatives from each test cluster
+  num_test_representatives: 2 # Max number of representatives from each test cluster
+  num_per_entry_pdb_id_and_unique_ccd_codes: 1 # Max number of systems to choose per entry pdb id and unique ccd codes
+  min_test_cluster_size: 5 # Test should not be singletons
+  min_test_leakage_count: 30  # Test should not be too unique
+  max_test_leakage_count: 1000 # Test should not be in too big communities or cause too many train cases to be removed
+  max_removed_fraction: 0.2 # Maximum fraction of systems that can be removed due to test set selection
+  num_test: 1000 # test set size
+  val_cluster_cluster: components # What kind of cluster to use for sampling val
+  val_cluster_metric: pocket_qcov # Metric to use for splitting train and val
+  val_cluster_threshold: 50  # Threshold to use for splitting train and val
+  val_cluster_directed: false # Directed to use for splitting train and val
+  num_val_representatives: 3 # Max number of representatives from each val cluster
+  min_val_cluster_size: 30  # Val should not be singletons
+  num_val: 1000  # Val set size
+  min_max_pli: # Test/val should not have too few or too many interactions
+  - 3
+  - 50
+  min_max_pocket: # Test/val should not have too few or too many pocket residues
+  - 5
+  - 100
+  min_max_ligand: # Test/val should not have too small or too large ligands
+  - 200
+  - 800
+  test_additional_criteria: # Priority columns to use for scoring systems with a weight attached to each column
+  - - system_pass_validation_criteria # Indicator of whether a system is passing validation criteria
+    - ==
+    - 'True'
+  - - system_pass_statistics_criteria # Indicator of whether a system is passing statistic criteria
+    - ==
+    - 'True'
+  - - system_num_ligands_in_biounit # Number of ligands in the biounit.
+    - <=
+    - 20
+  priority_columns:
+    system_ligand_has_cofactor: -40.0
+    leakage_count: -1.0
 ```
-:::
 
 ### Linked structures (`linked_structures/`)
 This directory contains the linked apo and predicted structures for PLINDER systems. These structures are intended to be used for augmenting the PLINDER dataset, eg. for flexible docking or pocket prediction purposes.
