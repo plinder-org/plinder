@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
-    <title>Coverage for src/plinder/data/utils/annotations/ligand_utils.py: 85.2205%</title>
+    <title>Coverage for src/plinder/data/utils/annotations/ligand_utils.py: 84.8629%</title>
     <link rel="icon" sizes="32x32" href="favicon_32_cb_58284776.png">
     <link rel="stylesheet" href="style_cb_8e611ae1.css" type="text/css">
     <script src="coverage_html_cb_6fb7b396.js" defer></script>
@@ -12,7 +12,7 @@
     <div class="content">
         <h1>
             <span class="text">Coverage for </span><b>src/plinder/data/utils/annotations/ligand_utils.py</b>:
-            <span class="pc_cov">85.2205%</span>
+            <span class="pc_cov">84.8629%</span>
         </h1>
         <aside id="help_panel_wrapper">
             <input id="help_panel_state" type="checkbox">
@@ -56,10 +56,10 @@
         </aside>
         <h2>
             <span class="text">567 statements &nbsp;</span>
-            <button type="button" class="run button_toggle_run" value="run" data-shortcut="r" title="Toggle lines run">507<span class="text"> run</span></button>
-            <button type="button" class="mis show_mis button_toggle_mis" value="mis" data-shortcut="m" title="Toggle lines missing">60<span class="text"> missing</span></button>
+            <button type="button" class="run button_toggle_run" value="run" data-shortcut="r" title="Toggle lines run">505<span class="text"> run</span></button>
+            <button type="button" class="mis show_mis button_toggle_mis" value="mis" data-shortcut="m" title="Toggle lines missing">62<span class="text"> missing</span></button>
             <button type="button" class="exc show_exc button_toggle_exc" value="exc" data-shortcut="x" title="Toggle lines excluded">0<span class="text"> excluded</span></button>
-            <button type="button" class="par run show_par button_toggle_par" value="par" data-shortcut="p" title="Toggle lines partially run">52<span class="text"> partial</span></button>
+            <button type="button" class="par run show_par button_toggle_par" value="par" data-shortcut="p" title="Toggle lines partially run">53<span class="text"> partial</span></button>
         </h2>
         <p class="text">
             <a id="prevFileLink" class="nav" href="z_e8e9a5deec38c7b6_interface_gap_py.html">&#xab; prev</a> &nbsp; &nbsp;
@@ -67,7 +67,7 @@
             <a id="nextFileLink" class="nav" href="z_e8e9a5deec38c7b6_mmpdb_utils_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.6.1">coverage.py v7.6.1</a>,
-            created at 2024-08-29 16:12 +0000
+            created at 2024-08-29 17:00 +0000
         </p>
         <aside class="hidden">
             <button type="button" class="button_next_chunk" data-shortcut="j"></button>
@@ -1339,9 +1339,9 @@
     <p class="pln"><span class="n"><a id="t1255" href="#t1255">1255</a></span><span class="t"><span class="str">        """</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t1256" href="#t1256">1256</a></span><span class="t">        <span class="key">global</span> <span class="nam">BINDING_AFFINITY</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t1257" href="#t1257">1257</a></span><span class="t">        <span class="nam">pdbid_ligid</span> <span class="op">=</span> <span class="fst">f"</span><span class="op">{</span><span class="nam">self</span><span class="op">.</span><span class="nam">pdb_id</span><span class="op">}</span><span class="fst">_</span><span class="op">{</span><span class="nam">self</span><span class="op">.</span><span class="nam">ccd_code</span><span class="op">}</span><span class="fst">"</span><span class="op">.</span><span class="nam">upper</span><span class="op">(</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
-    <p class="run"><span class="n"><a id="t1258" href="#t1258">1258</a></span><span class="t">        <span class="key">if</span> <span class="nam">BINDING_AFFINITY</span> <span class="key">is</span> <span class="key">None</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
-    <p class="run"><span class="n"><a id="t1259" href="#t1259">1259</a></span><span class="t">            <span class="nam">data_dir</span> <span class="op">=</span> <span class="nam">Path</span><span class="op">(</span><span class="nam">get_config</span><span class="op">(</span><span class="op">)</span><span class="op">.</span><span class="nam">data</span><span class="op">.</span><span class="nam">plinder_dir</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
-    <p class="run"><span class="n"><a id="t1260" href="#t1260">1260</a></span><span class="t">            <span class="nam">BINDING_AFFINITY</span> <span class="op">=</span> <span class="nam">get_binding_affinity</span><span class="op">(</span><span class="nam">data_dir</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="par run show_par"><span class="n"><a id="t1258" href="#t1258">1258</a></span><span class="t">        <span class="key">if</span> <span class="nam">BINDING_AFFINITY</span> <span class="key">is</span> <span class="key">None</span><span class="op">:</span>&nbsp;</span><span class="r"><span class="annotate short">1258&#x202F;&#x219B;&#x202F;1259</span><span class="annotate long">line 1258 didn't jump to line 1259 because the condition on line 1258 was never true</span></span></p>
+    <p class="mis show_mis"><span class="n"><a id="t1259" href="#t1259">1259</a></span><span class="t">            <span class="nam">data_dir</span> <span class="op">=</span> <span class="nam">Path</span><span class="op">(</span><span class="nam">get_config</span><span class="op">(</span><span class="op">)</span><span class="op">.</span><span class="nam">data</span><span class="op">.</span><span class="nam">plinder_dir</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="mis show_mis"><span class="n"><a id="t1260" href="#t1260">1260</a></span><span class="t">            <span class="nam">BINDING_AFFINITY</span> <span class="op">=</span> <span class="nam">get_binding_affinity</span><span class="op">(</span><span class="nam">data_dir</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t1261" href="#t1261">1261</a></span><span class="t">        <span class="nam">affinity</span> <span class="op">=</span> <span class="nam">BINDING_AFFINITY</span><span class="op">.</span><span class="nam">get</span><span class="op">(</span><span class="nam">pdbid_ligid</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t1262" href="#t1262">1262</a></span><span class="t">        <span class="key">if</span> <span class="nam">affinity</span> <span class="key">is</span> <span class="key">not</span> <span class="key">None</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t1263" href="#t1263">1263</a></span><span class="t">            <span class="key">return</span> <span class="nam">float</span><span class="op">(</span><span class="nam">affinity</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
@@ -1562,7 +1562,7 @@
             <a class="nav" href="z_e8e9a5deec38c7b6_mmpdb_utils_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.6.1">coverage.py v7.6.1</a>,
-            created at 2024-08-29 16:12 +0000
+            created at 2024-08-29 17:00 +0000
         </p>
     </div>
 </footer>
