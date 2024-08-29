@@ -275,7 +275,7 @@ def test_image(
     cmd.append("test")
     if args is not None and len(args):
         cmd.extend(
-            split(f'''/bin/bash -c "python -m pytest -v {' '.join(args)} && cp .coverage reports/.coverage"''')
+            split(f'''/bin/bash -c "python -m pytest -n auto -v {' '.join(args)} && cp .coverage reports/.coverage"''')
         )
     Proc(cmd, env=env).execute()
     if push:

@@ -11,7 +11,7 @@ from tqdm import tqdm
 
 from plinder.core.scores.protein import cross_similarity as protein_cross_similarity
 from plinder.core.utils.log import setup_logger
-from plinder.data.smallmolecules import mol2morgan_fp, tanimoto_maxsim_matrix
+from plinder.data import smallmolecules
 
 LOG = setup_logger(__name__)
 
@@ -96,14 +96,14 @@ def compute_ligand_max_similarities(
 ) -> None:
     if "fp" not in df.columns:
         smiles_fp_dict = {
-            smi: mol2morgan_fp(smi)
+            smi: smallmolecules.mol2morgan_fp(smi)
             for smi in df["ligand_rdkit_canonical_smiles"].drop_duplicates().to_list()
         }
         df["fp"] = df["ligand_rdkit_canonical_smiles"].map(smiles_fp_dict)
 
     df_test = df.loc[df["split"] == test_label][["system_id", "fp"]].copy()
 
-    df_test["tanimoto_similarity_max"] = tanimoto_maxsim_matrix(
+    df_test["tanimoto_similarity_max"] = smallmolecules.tanimoto_maxsim_matrix(
         df.loc[df["split"] == train_label]["fp"].to_list(),
         df_test["fp"].to_list(),
     )
@@ -359,9 +359,9 @@ def main() -> None:
     args = parser.parse_args()
 
     StratifiedTestSet.from_split(
-        split_file=args.split_file,
-        data_dir=args.data_dir,
-        output_dir=args.output_dir,
+        split_file=Path(args.split_file),
+        data_dir=Path(args.data_dir),
+        output_dir=Path(args.output_dir),
         train_label=args.train_label,
         test_label=args.test_label,
         overwrite=args.overwrite,

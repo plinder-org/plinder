@@ -1,4 +1,5 @@
 reports/
+test_eval/
 tox_conda*
 
 # Byte-compiled / optimized / DLL files

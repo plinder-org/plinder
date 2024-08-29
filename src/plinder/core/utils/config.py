@@ -69,6 +69,11 @@ class _get_config:
     _packages: dict[str, set[str]] = {}
     _cfg = DictConfig({})
 
+    def _clear(self) -> None:
+        self._schema = {}
+        self._packages = {}
+        self._cfg = DictConfig({})
+
     def __call__(
         self,
         *,

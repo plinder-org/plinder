@@ -26,4 +26,4 @@ services:
       - ./.coveragerc:/app/.coveragerc
       - ./reports/:/app/reports/
       - ./examples/:/app/examples/
-    command: /bin/bash -c "python -m pytest -v && cp .coverage reports/.coverage"
+    command: /bin/bash -c "python -m pytest -n auto -v && cp .coverage reports/.coverage"
