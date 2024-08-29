@@ -448,14 +448,10 @@ def raw_ecod_data():
 @pytest.fixture
 def test_env(tmp_path, monkeypatch):
     _reset_config()
-    from plinder.core.utils import config
-
     monkeypatch.setenv("PLINDER_MOUNT", tmp_path.as_posix())
     monkeypatch.setenv("PLINDER_BUCKET", "bucket")
     monkeypatch.setenv("PLINDER_RELEASE", "test")
     monkeypatch.setenv("PLINDER_ITERATION", "v0")
-    # import sys
-    # print(config.get_config(config_args=[]), file=sys.stderr, flush=True)
     return tmp_path / "bucket" / "test" / "v0"
 
 
@@ -644,12 +640,8 @@ def read_plinder_mount(monkeypatch):
     from plinder.core.utils import config
 
     plinder_mount = test_asset_fp
-    cfg = config.get_config(cached=False)
-    import sys
-    print("cached=False", cfg.data.plinder_dir, file=sys.stderr, flush=True)
+    config.get_config(cached=False)
     cfg = config.get_config()
-    print("blank call", cfg.data.plinder_dir, file=sys.stderr, flush=True)
-
     adir = plinder_mount / "plinder" / "mount"
     assert Path(cfg.data.plinder_dir) == adir
 
