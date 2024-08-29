@@ -118,41 +118,45 @@ The nested structure is as follows:
         |-- metric={metric}
             |-- threshold={threshold}.parquet
 ```
-
-- `cluster`: whether clusters generated from community detection algorithm or via disconnected component
-- `directed`: whether clustering is done with directed or undirected graph
+- `cluster`: the cluster algorithm used
+  - `communities`: clusters derived from community detection algorithm
+  - `components`: clusters derived from disconnected component of similarity graph
+- `directed`: type of graph used for cluster input
+  - `False`: undirected
+  - `True`: directed
 - `metric`: the similarity metrics used for generating the clusters
-- `threshold`: similarity threshold in percent done at pre-defined levels
+  - `pli_qcov`: Protein-ligand interaction similarity between aligned ligand-binding region (pocket) residues of two systems.
+  - `pli_unique_qcov`: Protein-ligand interaction similarity between aligned pocket residues of two systems, taking only unique interaction type into consideration.
+  - `pocket_fident`: Pocket region sequence identity of the ligand-binding (pocket) region of a system to a (possibly non-pocket) region of another system.
+  - `pocket_fident_qcov`: Sequence identity between ligand binding region (pocket) of two systems.
+  - `pocket_lddt`: Structural similarity between ligand-binding region (pocket) of a system to any region (possibly non-pocket) of another system.
+  - `pocket_lddt_qcov`: Structural similarity between ligand-binding region (pocket) two systems.
+  - `pocket_qcov`: Query coverage between ligand-binding region of two systems.
+  - `protein_fident_max`: Local sequence identity between components of two systems, aggregated by max score across all pairs of protein chains or ligand chains.
+  - `protein_fident_qcov_max`: Global protein sequence identity between components of two systems multiplied by query system coverage, aggregated by max score across all pairs of protein chains or ligand chains.
+  - `protein_fident_qcov_weighted_max`: Global protein sequence identity between components of two systems, aggregated by length-weighted sum of scores across mapped protein or ligand chains.
+  - `protein_fident_qcov_weighted_sum`: Global protein sequence identity between components of two systems, aggregated by length-weighted max score across all pairs of protein chains or ligand chains.
+  - `protein_fident_weighted_max`: Local sequence identity between components of two systems, aggregated by length-weighted max score across all pairs of protein chains or ligand chains.
+  - `protein_fident_weighted_sum`: Local sequence identity between components of two systems, aggregated by length-weighted sum of scores across mapped protein or ligand chains.
+  - `protein_lddt_max`: Local structural similarity between chains of two systems, aggregated by max score across all pairs of protein chains or ligand chains.
+  - `protein_lddt_qcov_max`: Global protein structural similarity multiplied by query system coverage, aggregated by max score across all pairs of protein chains or ligand chains.
+  - `protein_lddt_qcov_weighted_max`: Global protein structural similarity multiplied by query system coverage, aggregated by length-weighted max score across all pairs of protein chains or ligand chains.
+  - `protein_lddt_qcov_weighted_sum`: Global protein structural similarity multiplied by query system coverage, aggregated by length-weighted sum of scores across mapped protein or ligand chains.
+  - `protein_lddt_weighted_max`: Local structural similarity between chains of two systems, aggregated by length-weighted max score across all pairs of protein chains or ligand chains.
+  - `protein_lddt_weighted_sum`: Local structural similarity between chains of two systems, aggregated by length-weighted sum of scores across mapped protein or ligand chains.
+  - `protein_qcov_weighted_sum`: Global protein query coverage, aggregated by length-weighted sum of scores across mapped protein or ligand chains.
+  - `protein_seqsim_max`: Global protein sequence similarity between components of two systems, aggregated by max score across all pairs of protein chains or ligand chains.
+  - `protein_seqsim_qcov_max`:  Global  protein sequence similarity between components of two systems multiplied by query system coverage,  aggregated by max score across all pairs of protein chains or ligand chains.
+  - `protein_seqsim_qcov_weighted_max`: Global  protein sequence similarity between components of two systems multiplied by query system coverage, aggregated by length-weighted max score across all pairs of protein chains or ligand chains.
+  - `protein_seqsim_qcov_weighted_sum`: Global  protein sequence similarity between components of two systems multiplied by query system coverage, aggregated by length-weighted sum of scores across mapped protein or ligand chains.
+  - `protein_seqsim_weighted_max`:  Global protein sequence similarity between components of two systems, aggregated by length-weighted max score across all pairs of protein chains or ligand chains.
+  - `protein_seqsim_weighted_sum`: Global protein sequence similarity between components of two systems, aggregated by length-weighted sum of scores across mapped protein or ligand chains.
+- `threshold`: similarity threshold in percent.
+  - `50`
+  - `70`
+  - `95`
+  - `100`
 
-Currently, we provide cluster labels based on undirected commnunities and both directed and undirected components.
-This is performed using metrics the metrics below with pre-defined thresholds (eg. 50, 70, 95 and 100 %).
-
-- `pli_qcov`: Protein-ligand interaction similarity between aligned ligand-binding region (pocket) residues of two systems.
-- `pli_unique_qcov`: Protein-ligand interaction similarity between aligned pocket residues of two systems, taking only unique interaction type into consideration.
-- `pocket_fident`: Pocket region sequence identity of the ligand-binding (pocket) region of a system to a (possibly non-pocket) region of another system.
-- `pocket_fident_qcov`: Sequence identity between ligand binding region (pocket) of two systems.
-- `pocket_lddt`: Structural similarity between ligand-binding region (pocket) of a system to any region (possibly non-pocket) of another system.
-- `pocket_lddt_qcov`: Structural similarity between ligand-binding region (pocket) two systems.
-- `pocket_qcov`: Query coverage between ligand-binding region of two systems.
-- `protein_fident_max`: Local sequence identity between components of two systems, aggregated by max score across all pairs of protein chains or ligand chains.
-- `protein_fident_qcov_max`: Global protein sequence identity between components of two systems multiplied by query system coverage, aggregated by max score across all pairs of protein chains or ligand chains.
-- `protein_fident_qcov_weighted_max`: Global protein sequence identity between components of two systems, aggregated by length-weighted sum of scores across mapped protein or ligand chains.
-- `protein_fident_qcov_weighted_sum`: Global protein sequence identity between components of two systems, aggregated by length-weighted max score across all pairs of protein chains or ligand chains.
-- `protein_fident_weighted_max`: Local sequence identity between components of two systems, aggregated by length-weighted max score across all pairs of protein chains or ligand chains.
-- `protein_fident_weighted_sum`: Local sequence identity between components of two systems, aggregated by length-weighted sum of scores across mapped protein or ligand chains.
-- `protein_lddt_max`: Local structural similarity between chains of two systems, aggregated by max score across all pairs of protein chains or ligand chains.
-- `protein_lddt_qcov_max`: Global protein structural similarity multiplied by query system coverage, aggregated by max score across all pairs of protein chains or ligand chains.
-- `protein_lddt_qcov_weighted_max`: Global protein structural similarity multiplied by query system coverage, aggregated by length-weighted max score across all pairs of protein chains or ligand chains.
-- `protein_lddt_qcov_weighted_sum`: Global protein structural similarity multiplied by query system coverage, aggregated by length-weighted sum of scores across mapped protein or ligand chains.
-- `protein_lddt_weighted_max`: Local structural similarity between chains of two systems, aggregated by length-weighted max score across all pairs of protein chains or ligand chains.
-- `protein_lddt_weighted_sum`: Local structural similarity between chains of two systems, aggregated by length-weighted sum of scores across mapped protein or ligand chains.
-- `protein_qcov_weighted_sum`: Global protein query coverage, aggregated by length-weighted sum of scores across mapped protein or ligand chains.
-- `protein_seqsim_max`: Global protein sequence similarity between components of two systems, aggregated by max score across all pairs of protein chains or ligand chains.
-- `protein_seqsim_qcov_max`:  Global  protein sequence similarity between components of two systems multiplied by query system coverage,  aggregated by max score across all pairs of protein chains or ligand chains.
-- `protein_seqsim_qcov_weighted_max`: Global  protein sequence similarity between components of two systems multiplied by query system coverage, aggregated by length-weighted max score across all pairs of protein chains or ligand chains.
-- `protein_seqsim_qcov_weighted_sum`: Global  protein sequence similarity between components of two systems multiplied by query system coverage, aggregated by length-weighted sum of scores across mapped protein or ligand chains.
-- `protein_seqsim_weighted_max`:  Global protein sequence similarity between components of two systems, aggregated by length-weighted max score across all pairs of protein chains or ligand chains.
-- `protein_seqsim_weighted_sum`: Global protein sequence similarity between components of two systems, aggregated by length-weighted sum of scores across mapped protein or ligand chains.
 
 
 
