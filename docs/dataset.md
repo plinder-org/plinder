@@ -152,13 +152,11 @@ The nested structure is as follows:
   - `protein_seqsim_weighted_max`:  Global protein sequence similarity between components of two systems, aggregated by length-weighted max score across all pairs of protein chains or ligand chains.
   - `protein_seqsim_weighted_sum`: Global protein sequence similarity between components of two systems, aggregated by length-weighted sum of scores across mapped protein or ligand chains.
 - `threshold`: similarity threshold in percent.
+  - ...
   - `50`
   - `70`
   - `95`
   - `100`
-
-
-
 
 ### Splits (`splits/`)
 
@@ -218,9 +216,6 @@ This directory contains split files and the configs used to generate them.
 *   - system_has_apo_or_pred
     - bool
     - does the system have either `apo` or `pred` structure linked?
-
-
-:::
 
 :::{todo}
 ```
