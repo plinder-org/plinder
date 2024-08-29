@@ -8,7 +8,7 @@ except (ImportError, ModuleNotFoundError):
     raise ImportError(
         dedent(
             """\
-            plinder.data requires the OpenStructureToolkit (ost) to be installed.
+            plinder.data requires the OpenStructureToolkit >= 2.8.0 (ost) to be installed.
             Please refer to the documentation for installation instructions and current limitations.
             See the note here: https://github.com/plinder-org/plinder?tab=readme-ov-file#-getting-started
             """
@@ -21,7 +21,7 @@ except (ImportError, ModuleNotFoundError):
     raise ImportError(
         dedent(
             """\
-            plinder.data requires the networkit library to be installed.
+            plinder.data requires the networkit >= 11.0 library to be installed.
             Please refer to the documentation for installation instructions and current limitations.
             See the note here: https://github.com/plinder-org/plinder?tab=readme-ov-file#-getting-started
             """
