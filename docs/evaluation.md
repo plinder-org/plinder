@@ -38,10 +38,10 @@ leaderboard (coming soon).
 #### Write scores
 
 ```bash
-python src/plinder/eval/docking/write_scores.py --prediction_file tests/test_data/eval/predictions.csv --data_dir tests/test_data/eval --output_dir /tmp --num_processes 64
+plinder_eval --prediction_file tests/test_data/eval/predictions.csv --data_dir tests/test_data/eval --output_dir test_eval/ --num_processes 8
 ```
 
-This calculates accuracy metrics for all predicted poses compared to the reference. JSON files of each pose are stored in `/tmp/scores` and the summary file across all poses is stored in `/tmp/scores.parquet`.
+This calculates accuracy metrics for all predicted poses compared to the reference. JSON files of each pose are stored in `test_eval/scores` and the summary file across all poses is stored in `test_eval/scores.parquet`.
 
 The predicted pose is compared to the reference system and the following ligand scores are calculated:
 
@@ -74,11 +74,11 @@ For oligomeric complexes:
 
 If `score_posebusters` is True, all posebusters checks are saved.
 
-You can inspect the results at `/tmp/scores.parquet`
+You can inspect the results at `test_eval/scores.parquet`
 
 ```python
 >>> import pandas as pd
->>> df = pd.read_parquet("/tmp/scores.parquet")
+>>> df = pd.read_parquet("test_eval/scores.parquet")
 >>> df.T
                                                    0                      1
 model                              1a3b__1__1.B__1.D  1ai5__1__1.A_1.B__1.D
@@ -103,19 +103,19 @@ rank                                               1                      1
 (This command will not need to be run by a user, the `test_set.parquet` and `val_set.parquet` file will be provided with the split release)
 
 ```bash
-python src/plinder/eval/docking/stratify_test_set.py --split_file split.csv --data_dir PLINDER_DATA_DIR --output_dir test_data --num_processes 16
+plinder_stratify --split_file split.csv --data_dir PLINDER_DATA_DIR --output_dir test_data
 ```
 
 Makes `test_data/test_set.parquet` which
 
 - Labels the maximum similarity of each test system to the training set across all the similarity metrics
-- Stratifies the test set based on training set similarity into `novel_pocket_pli`, `novel_pocket_ligand`, `novel_protein`, `novel_all`, and `not_novel`
+- Stratifies the test set based on training set similarity into `novel_pocket_pli`, `novel_ligand_pli`, `novel_protein`, `novel_ligand`, `novel_all` and `not_novel`
 - Labels test systems with high quality.
 
 To inspect the result of the run, do:
 ```python
 >>> import pandas as pd
->>> df = pd.read_parquet("/tmp/test_set.parquet")
+>>> df = pd.read_parquet("test_eval/test_set.parquet")
 >>> df.T
                                                   0                      1
 system_id                         1a3b__1__1.B__1.D  1ai5__1__1.A_1.B__1.D
