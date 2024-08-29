@@ -30,7 +30,7 @@ dependencies = [
     "posebusters",
     "duckdb",
     "cloudpathlib",
-    "networkit >= 11.0",
+    "mols2grid",
     "six",
 ]
 
@@ -63,6 +63,13 @@ dev = [
 loader = [
     "torch",
     "atom3d",
+]
+plots = [
+    "matplotlib",
+    "seaborn",
+    "mols2grid",
+    "matplotlib_venn",
+    "scipy",
 ]
 docs = [
     "itables",

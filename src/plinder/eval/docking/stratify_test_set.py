@@ -2,31 +2,28 @@
 # Distributed under the terms of the Apache License 2.0
 from __future__ import annotations
 
-import multiprocessing
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from tqdm import tqdm
 
+from plinder.core.scores.protein import cross_similarity as protein_cross_similarity
 from plinder.core.utils.log import setup_logger
+from plinder.data.smallmolecules import mol2morgan_fp, tanimoto_maxsim_matrix
 
 LOG = setup_logger(__name__)
 
 SIMILARITY_METRICS = (
     # pli
-    "pli_qcov",
+    "pli_unique_qcov",
     # protein
-    "protein_seqsim_qcov_weighted_sum",
     "protein_seqsim_weighted_sum",
-    "protein_fident_qcov_weighted_sum",
     "protein_fident_weighted_sum",
-    "protein_lddt_qcov_weighted_sum",
     "protein_lddt_weighted_sum",
-    "protein_qcov_weighted_sum",
     # pocket
     "pocket_fident_qcov",
-    "pocket_fident",
     "pocket_lddt_qcov",
     "pocket_lddt",
     "pocket_qcov",
@@ -35,18 +32,23 @@ SIMILARITY_METRICS = (
 )
 
 
-def compute_ligand_max_similarities(
-    data_dir: Path, left: set[str], right: set[str], metric: str, output_file: Path
-) -> None:
+def get_ligand_ids(data_dir: Path, left: set[str], right: set[str]) -> pd.DataFrame:
     ligands_per_system = pd.read_parquet(
-        data_dir / "fingerprints/ligands_per_system.parquet"
+        data_dir / "fingerprints/ligands_per_system.parquet",
+        filters=[
+            ("system_id", "in", left.union(right)),
+        ],
     )
     annotation_df = pd.read_parquet(
         data_dir / "index" / "annotation_table.parquet",
+        columns=[
+            "system_id",
+            "ligand_rdkit_canonical_smiles",
+        ],
         filters=[
-            ("system_type", "==", "holo"),
-            ("system_num_interacting_protein_chains", "<=", 5),
-            ("system_num_ligand_chains", "<=", 5),
+            ("system_id", "in", set(ligands_per_system["system_id"])),
+            ("ligand_is_ion", "==", False),
+            ("ligand_is_artifact", "==", False),
         ],
     )
     mapr = dict(
@@ -58,99 +60,56 @@ def compute_ligand_max_similarities(
     annotation_df["number_id_by_inchikeys"] = annotation_df[
         "ligand_rdkit_canonical_smiles"
     ].map(mapr)
-
+    annotation_df.dropna(subset=["number_id_by_inchikeys"], inplace=True)
+    annotation_df["number_id_by_inchikeys"] = annotation_df[
+        "number_id_by_inchikeys"
+    ].astype(int)
     left_ligand_ids = set(
         annotation_df[annotation_df["system_id"].isin(left)]["number_id_by_inchikeys"]
     )
     right_ligand_ids = set(
         annotation_df[annotation_df["system_id"].isin(right)]["number_id_by_inchikeys"]
     )
-
-    ligands = pd.read_parquet(
-        data_dir / "ligand_scores",
-        columns=["query_ligand_id", "target_ligand_id", metric],
-        filters=[
-            [
-                ("query_ligand_id", "in", left_ligand_ids),
-                ("target_ligand_id", "in", right_ligand_ids),
-            ],
-            [
-                ("query_ligand_id", "in", right_ligand_ids),
-                ("target_ligand_id", "in", left_ligand_ids),
-            ],
-        ],
-    )
-    updated_query_ligand_ids = []
-    for q, t in zip(ligands["query_ligand_id"], ligands["target_ligand_id"]):
-        if t in right_ligand_ids:
-            updated_query_ligand_ids.append(t)
-        else:
-            updated_query_ligand_ids.append(q)
-    ligands["updated_query_ligand_id"] = updated_query_ligand_ids
-
-    idx = ligands.groupby("updated_query_ligand_id")[metric].idxmax()
-    ligands = ligands.loc[idx]
-    ligand_to_system = {}
-    for ligand_id, group in ligands_per_system.groupby("number_id_by_inchikeys"):
-        ligand_to_system[ligand_id] = set(group["system_id"])
-    ligands["query_system"] = ligands["query_ligand_id"].map(ligand_to_system)
-    (
-        ligands.explode("query_system")
-        .rename(
-            columns={
-                "query_system": "system_id",
-            }
-        )
-        .drop_duplicates("system_id")[["system_id", metric]]
-        .reset_index(drop=True)
-    ).to_parquet(output_file)
+    return left_ligand_ids, right_ligand_ids
 
 
-def compute_max_similarities(
-    data_dir: Path, left: set[str], right: set[str], metric: str, output_file: Path
+def compute_protein_max_similarities(
+    left: set[str], right: set[str], metric: str, output_file: Path
 ) -> None:
-    if metric == "tanimoto_similarity_max":
-        compute_ligand_max_similarities(data_dir, left, right, metric, output_file)
-    else:
-        scores = pd.read_parquet(
-            data_dir / "scores" / "search_db=holo",
-            columns=["query_system", "target_system", "similarity"],
-            filters=[
-                [
-                    ("query_system", "in", left),
-                    ("target_system", "in", right),
-                    ("metric", "==", metric),
-                ],
-                [
-                    ("query_system", "in", right),
-                    ("target_system", "in", left),
-                    ("metric", "==", metric),
-                ],
-            ],
-        )
-        updated_query_systems = []
-        updated_target_systems = []
-        for q, t in zip(scores["query_system"], scores["target_system"]):
-            if t in right:
-                updated_query_systems.append(t)
-                updated_target_systems.append(q)
-            else:
-                updated_query_systems.append(q)
-                updated_target_systems.append(t)
+    LOG.info(
+        f"compute_protein_max_similarities: Computing max similarities for {metric}"
+    )
+    protein_cross_similarity(
+        query_systems=left,
+        target_systems=right,
+        metric=metric,
+    ).rename(
+        columns={"query_system": "system_id", "target_system": "train_system_id"}
+    ).to_parquet(output_file, index=False)
+    LOG.info(
+        f"compute_protein_max_similarities: Done computing max similarities for {metric}"
+    )
 
-        scores["updated_query_system"] = updated_query_systems
-        scores["updated_target_system"] = updated_target_systems
-        idx = scores.groupby("updated_query_system")["similarity"].idxmax()
-        scores = scores.loc[idx][
-            ["updated_query_system", "similarity", "updated_target_system"]
-        ].rename(
-            columns={
-                "updated_query_system": "system_id",
-                "updated_target_system": "train_system_id",
-                "similarity": metric,
-            }
-        )
-        scores.reset_index(drop=True).to_parquet(output_file)
+
+def compute_ligand_max_similarities(
+    df: pd.DataFrame, train_label: str, test_label: str, output_file: Path
+) -> None:
+    if "fp" not in df.columns:
+        smiles_fp_dict = {
+            smi: mol2morgan_fp(smi)
+            for smi in df["ligand_rdkit_canonical_smiles"].drop_duplicates().to_list()
+        }
+        df["fp"] = df["ligand_rdkit_canonical_smiles"].map(smiles_fp_dict)
+
+    df_test = df.loc[df["split"] == test_label][["system_id", "fp"]].copy()
+
+    df_test["tanimoto_similarity_max"] = tanimoto_maxsim_matrix(
+        df.loc[df["split"] == train_label]["fp"].to_list(),
+        df_test["fp"].to_list(),
+    )
+    df_test.drop("fp", axis=1).groupby("system_id").agg("max").reset_index().to_parquet(
+        output_file, index=False
+    )
 
 
 @dataclass
@@ -162,34 +121,32 @@ class StratifiedTestSet:
     test_label: str = "test"
     similarity_thresholds: dict[str, int] = field(
         default_factory=lambda: dict(
-            pli_qcov=50,
+            pli_unique_qcov=50,
             pocket_lddt_qcov=50,
             pocket_lddt=50,
             pocket_qcov=50,
             protein_seqsim_weighted_sum=30,
-            protein_lddt_qcov_weighted_sum=70,
+            protein_lddt_weighted_sum=50,
             tanimoto_similarity_max=30,
         )
     )
     similarity_combinations: dict[str, list[str]] = field(
         default_factory=lambda: {
-            "novel_pocket_pli": ["pli_qcov", "pocket_qcov", "pocket_lddt_qcov"],
-            "novel_pocket_ligand": [
-                "pli_qcov",
-                "pocket_qcov",
-                "pocket_lddt_qcov",
-                "tanimoto_similarity_max",
-            ],
+            "novel_pocket_pli": ["pli_unique_qcov", "pocket_qcov", "pocket_lddt_qcov"],
+            "novel_ligand_pli": ["pli_unique_qcov", "tanimoto_similarity_max"],
             "novel_protein": [
                 "protein_seqsim_weighted_sum",
-                "protein_lddt_qcov_weighted_sum",
+                "protein_lddt_weighted_sum",
+            ],
+            "novel_ligand": [
+                "tanimoto_similarity_max",
             ],
             "novel_all": [
-                "pli_qcov",
+                "pli_unique_qcov",
                 "pocket_qcov",
                 "pocket_lddt",
                 "protein_seqsim_weighted_sum",
-                "protein_lddt_qcov_weighted_sum",
+                "protein_lddt_weighted_sum",
                 "tanimoto_similarity_max",
             ],
         }
@@ -206,7 +163,6 @@ class StratifiedTestSet:
         output_dir: Path,
         train_label: str = "train",
         test_label: str = "test",
-        num_processes: int = 8,
         overwrite: bool = False,
     ) -> "StratifiedTestSet":
         if split_file.name.endswith(".csv"):
@@ -214,6 +170,9 @@ class StratifiedTestSet:
         else:
             split_df = pd.read_parquet(split_file)
         assert all(x in split_df.columns for x in ["split", "system_id"])
+        split_df = split_df[split_df["split"].isin([train_label, test_label])][
+            ["system_id", "split"]
+        ].reset_index(drop=True)
         data = cls(
             split_df=split_df,
             data_dir=data_dir,
@@ -222,9 +181,7 @@ class StratifiedTestSet:
             test_label=test_label,
         )
         data.output_dir.mkdir(exist_ok=True)
-        data.compute_train_test_max_similarity(
-            num_processes=num_processes, overwrite=overwrite
-        )
+        data.compute_train_test_max_similarity(overwrite=overwrite)
         data.assign_test_set_quality()
         data.stratify_test_set()
         data.max_similarities.to_parquet(data.output_dir / f"{test_label}_set.parquet")
@@ -255,7 +212,7 @@ class StratifiedTestSet:
         )
 
     def compute_train_test_max_similarity(
-        self, num_processes: int, overwrite: bool = False
+        self, overwrite: bool = False
     ) -> pd.DataFrame:
         left, right = (
             set(self.split_df[self.split_df["split"] == self.train_label]["system_id"]),
@@ -264,22 +221,33 @@ class StratifiedTestSet:
         LOG.info(
             f"compute_train_test_max_similarity: Found {len(left)} train and {len(right)} test systems"
         )
-        multiprocessing.set_start_method("spawn")
-        with multiprocessing.Pool(num_processes) as p:
-            p.starmap(
-                compute_max_similarities,
-                [
-                    (
-                        self.data_dir,
-                        left,
-                        right,
-                        metric,
+        for metric in tqdm(SIMILARITY_METRICS):
+            if overwrite or not (self.get_filename(metric)).exists():
+                if metric == "tanimoto_similarity_max":
+                    df = pd.read_parquet(
+                        self.data_dir / "index" / "annotation_table.parquet",
+                        columns=[
+                            "system_id",
+                            "ligand_rdkit_canonical_smiles",
+                        ],
+                        filters=[
+                            ("system_id", "in", left.union(right)),
+                            ("ligand_is_ion", "==", False),
+                            ("ligand_is_artifact", "==", False),
+                        ],
+                    )
+                    df = df.merge(self.split_df, on="system_id", how="left")
+                    compute_ligand_max_similarities(
+                        df,
+                        self.train_label,
+                        self.test_label,
                         self.get_filename(metric),
                     )
-                    for metric in SIMILARITY_METRICS
-                    if overwrite or not (self.get_filename(metric)).exists()
-                ],
-            )
+                else:
+                    compute_protein_max_similarities(
+                        left, right, metric, self.get_filename(metric)
+                    )
+
         per_metric_similarities = []
         for metric in SIMILARITY_METRICS:
             df = pd.read_parquet(self.get_filename(metric))
@@ -311,13 +279,25 @@ class StratifiedTestSet:
         self.max_similarities = self.max_similarities.fillna(0)
 
     def assign_test_set_quality(self) -> None:
-        df = pd.read_parquet(self.data_dir / "index" / "annotation_table.parquet")
-        df = df[
-            df["system_id"].isin(
-                self.split_df[self.split_df["split"] == self.test_label]["system_id"]
-            )
-        ]
-        quality = dict(zip(df["system_id"], df["system_pass_validation_criteria"]))
+        df = pd.read_parquet(
+            self.data_dir / "index" / "annotation_table.parquet",
+            filters=[
+                [
+                    (
+                        "system_id",
+                        "in",
+                        set(
+                            self.split_df[self.split_df["split"] == self.test_label][
+                                "system_id"
+                            ]
+                        ),
+                    )
+                ]
+            ],
+        )
+        quality = dict(
+            zip(df["system_id"], df["system_pass_validation_criteria"].fillna(False))
+        )
         missing_systems = set(
             self.max_similarities[~self.max_similarities["system_id"].isin(quality)][
                 "system_id"
@@ -359,12 +339,6 @@ def main() -> None:
         help="Path to output folder where similarity and stratification data are saved",
     )
     parser.add_argument(
-        "--num_processes",
-        type=int,
-        default=8,
-        help="Number of processes to use",
-    )
-    parser.add_argument(
         "--train_label",
         type=str,
         default="train",
@@ -390,7 +364,6 @@ def main() -> None:
         output_dir=args.output_dir,
         train_label=args.train_label,
         test_label=args.test_label,
-        num_processes=args.num_processes,
         overwrite=args.overwrite,
     )
 

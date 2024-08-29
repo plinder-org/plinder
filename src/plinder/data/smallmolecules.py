@@ -6,8 +6,8 @@ from __future__ import annotations
 from typing import Any, Optional
 
 import numpy as np
-from rdkit import Chem
-from rdkit.Chem import AllChem, Descriptors, rdDepictor
+from rdkit import Chem, DataStructs
+from rdkit.Chem import AllChem, Descriptors, rdDepictor, rdFingerprintGenerator
 from rdkit.Chem.rdchem import Mol
 
 rdDepictor.SetPreferCoordGen(True)
@@ -138,3 +138,29 @@ def get_ecfp_fingerprint(
         return np.array(fp)
     except:
         return None
+
+
+def mol2morgan_fp(
+    mol: Mol | str, radius: int = 2, nbits: int = 2048
+) -> DataStructs.ExplicitBitVect:
+    """Convert an RDKit molecule to a Morgan fingerprint
+    :param mol: RDKit molecule or SMILES str
+    :param radius: fingerprint radius
+    :param nbits: number of fingerprint bits
+    :return: RDKit Morgan fingerprint
+    """
+    if type(mol) == str:
+        mol = Chem.MolFromSmiles(mol)
+    mfpgen = rdFingerprintGenerator.GetMorganGenerator(radius=radius, fpSize=nbits)
+    fp = mfpgen.GetFingerprint(mol)
+    return fp
+
+
+def tanimoto_maxsim_matrix(
+    fp_list1: list[Any], fp_list2: list[Any]
+) -> np.ndarray[float]:
+    """Calculate maximum similarity for the fingerprint second list to the first fingerprint lists"""
+    similarity_matrix = [
+        np.max(DataStructs.BulkTanimotoSimilarity(fp, fp_list1)) for fp in fp_list2
+    ]
+    return np.array(similarity_matrix) * 100
