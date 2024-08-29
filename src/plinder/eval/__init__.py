@@ -10,7 +10,9 @@ except (ImportError, ModuleNotFoundError):
             """\
             plinder.eval requires the OpenStructureToolkit >= 2.8.0 (ost) to be installed.
             Please refer to the documentation for installation instructions and current limitations.
-            See the details here: https://plinder-org.github.io/plinder/contribution/development.html
+            See details here:
+
+                https://plinder-org.github.io/plinder/contribution/development.html#creating-the-conda-environment
             """
         )
     )
