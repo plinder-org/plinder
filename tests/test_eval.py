@@ -1,7 +1,12 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
-from plinder.eval.docking import utils
+import os
+import subprocess
+
 import numpy as np
+import pandas as pd
+
+from plinder.eval.docking import utils
 
 
 def test_single_protein_single_ligand_scoring(system_1a3b, predicted_pose_1a3b):
@@ -134,31 +139,89 @@ def test_multi_protein_single_ligand_scoring(system_1ai5, predicted_pose_1ai5):
             assert scores[k] == true_scores[k]
 
 
-def test_write_docking_eval(plinder_src, prediction_csv):
-    import subprocess
-    import pandas as pd
-    cmd1 = "plinder_eval" + \
-            f" --prediction_file {prediction_csv} --data_dir "+\
-            f"{plinder_src}/tests/test_data/eval --output_dir "+\
-            f"{prediction_csv.parent}  --num_processes 65"
-    p1 = subprocess.Popen(
-            cmd1, shell=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE)
-    p1.communicate()
+def test_write_docking_eval_cmd(monkeypatch, plinder_src, prediction_csv):
+    """
+    We prefer to test the command line interface to the module.
+    However, it's wrapped in subprocess calls and not so easy
+    to debug. If this test is failing, uncomment the code for
+    calling the code directly to see where it's erroring out.
+    """
+    def mock_tanimoto(x, y):
+        return np.random.rand(max(len(x), len(y)))
+
+    plinder_dir = plinder_src / "tests" / "test_data"
+    monkeypatch.setenv("PLINDER_MOUNT", plinder_dir.as_posix())
+    monkeypatch.setenv("PLINDER_BUCKET", "eval")
+    monkeypatch.setenv("PLINDER_RELEASE", "")
+    monkeypatch.setenv("PLINDER_ITERATION", "")
+    monkeypatch.setattr(
+        "plinder.eval.docking.stratify_test_set.smallmolecules.tanimoto_maxsim_matrix",
+        mock_tanimoto,
+    )
+    from plinder.core.utils import config
+
+    config._config._clear()
+
+    # this calls the same function as the command line interface
+    # call below
+    #
+    # from plinder.eval.docking.write_scores import extract_and_score_test_set
+    #
+    # extract_and_score_test_set(
+    #     prediction_file=prediction_csv,
+    #     data_dir=plinder_src / "tests/test_data/eval",
+    #     output_dir=prediction_csv.parent,
+    #     num_processes=8,
+    # )
+
+    cmd1 = [
+        "plinder_eval",
+        "--prediction_file",
+        f"{prediction_csv}",
+        "--data_dir",
+        f"{plinder_src}/tests/test_data/eval",
+        "--output_dir",
+        f"{prediction_csv.parent}",
+        "--num_processes",
+        "8",
+    ]
+    subprocess.check_output(
+        " ".join(cmd1),
+        shell=True,
+        stderr=subprocess.PIPE,
+        env=os.environ.copy(),
+    )
 
     score_df = pd.read_parquet(f"{prediction_csv.parent}/scores.parquet")
-    assert np.allclose(score_df.scrmsd_wave.to_list(), [1.617184, 3.665143])
+    assert np.allclose(score_df.sort_values(by="reference").scrmsd_wave.to_list(), [1.617184, 3.665143])
 
-    cmd2 = "plinder_stratify "+\
-            f"--split_file {plinder_src}/tests/test_data/eval/test_split.parquet "+\
-            f"--data_dir {plinder_src}/tests/test_data/eval --output_dir "+\
-            f"{prediction_csv.parent} --num_processes 16"
-    p2 = subprocess.Popen(
-            cmd2, shell=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE)
-    p2.communicate()
+    # here we fall back to the python function call because
+    # we have to mock the tanimoto_maxsim_matrix function
+    # which we cannot do simply using a subprocess call
+    #
+    from plinder.eval.docking.stratify_test_set import StratifiedTestSet
+
+    StratifiedTestSet.from_split(
+        split_file=plinder_src / "tests/test_data/eval/test_split.parquet",
+        data_dir=plinder_src / "tests/test_data/eval",
+        output_dir=prediction_csv.parent,
+    )
+
+    # otherwise we'd prefer to call it this way
+    # cmd2 = [
+    #     "plinder_stratify",
+    #     "--split_file",
+    #     f"{plinder_src}/tests/test_data/eval/test_split.parquet",
+    #     "--data_dir",
+    #     f"{plinder_src}/tests/test_data/eval",
+    #     "--output_dir",
+    #     f"{prediction_csv.parent}",
+    # ]
+    # out = subprocess.check_output(
+    #     cmd2,
+    #     shell=True,
+    #     stderr=subprocess.STDOUT,
+    # )
 
     stratify_df = pd.read_parquet(f"{prediction_csv.parent}/test_set.parquet")
     assert np.allclose(stratify_df.novel_all.to_list(), [True, True])
