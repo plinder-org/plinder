@@ -70,7 +70,7 @@ The *PLINDER* dataset is provided in two ways:
 ## Downloading the dataset
 
 The dataset can be downloaded from the bucket with
-[gsutil](https://cloud.google.com/storage/docs/gsutil_install):
+[gsutil](https://cloud.google.com/storage/docs/gsutil_install).
 
 ```console
 $ export PLINDER_RELEASE=2024-06 # Current release
@@ -82,14 +82,10 @@ For details on the sub-directories, see [Documentation](https://plinder-org.gith
 
 ## Installing the Python package
 
-The `plinder` package can be installed via
+`plinder` is available on *PyPI*.
 
 ```
-git clone https://github.com/plinder-org/plinder.git
-cd plinder
-mamba env create -f environment.yml
-mamba activate plinder
-pip install .
+pip install plinder
 ```
 
 # 📝 Documentation
