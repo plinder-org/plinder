@@ -1,5 +1,6 @@
 # The code in this file is based on the file with the same name in the Biotite project
 # licensed under BSD-3-clause license.
+from __future__ import annotations
 
 import inspect
 from importlib import import_module

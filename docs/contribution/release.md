@@ -10,7 +10,7 @@ release:
 - If `bumpversion skip` is present in the commit message, the version will not be bumped
 - If `bumpversion major` is present in the commit message, the major version will be bumped
 - If `bumpversion minor` is present in the commit message, the minor version will be bumped
-- If `bumpversion patch` is present in the co®mit message (or nothing is found), the patch version will be bumped
+- If `bumpversion patch` is present in the commit message (or nothing is found), the patch version will be bumped
 
 :::{note}
 The CI workflow will use the **most recent** match in the commit history to make its decision.

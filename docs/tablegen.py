@@ -14,6 +14,7 @@ ROWS_PER_PAGE = 10
 PRIMARY_COLUMNS = [
     "system_id",
 ]
+CACHE_FILE = "index.parquet"
 
 CHECKMARK = '<svg class="marks" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--!Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free Copyright 2024 Fonticons, Inc.--><path fill="#5c7ec0" d="M438.6 105.4c12.5 12.5 12.5 32.8 0 45.3l-256 256c-12.5 12.5-32.8 12.5-45.3 0l-128-128c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0L160 338.7 393.4 105.4c12.5-12.5 32.8-12.5 45.3 0z"/></svg>'
 CROSSMARK = '<svg class="marks" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--!Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free Copyright 2024 Fonticons, Inc.--><path fill="#cccccc" d="M342.6 150.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0L192 210.7 86.6 105.4c-12.5-12.5-32.8-12.5-45.3 0s-12.5 32.8 0 45.3L146.7 256 41.4 361.4c-12.5 12.5-12.5 32.8 0 45.3s32.8 12.5 45.3 0L192 301.3 297.4 406.6c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L237.3 256 342.6 150.6z"/></svg>'
@@ -54,7 +55,7 @@ def generate_table(description_dir: Path, output_html_path: Path) -> None:
         ~column_descriptions["Name"].str.contains("Kinase")
     ]
 
-    annotation_table = _get_annotation_table("2024-06", "v2")
+    annotation_table = _get_annotation_table("2024-06", "v2", Path(CACHE_FILE))
 
     is_mandatory = np.zeros(column_descriptions.shape[0], dtype=bool)
     examples = [None] * column_descriptions.shape[0]
@@ -182,7 +183,7 @@ def _to_example(values: pd.Series) -> pd.Series:
     return values.map(lambda x: f'<div class="example">{x}</div>')
 
 
-def _get_annotation_table(release: str, iteration: str) -> pd.DataFrame:
+def _get_annotation_table(release: str, iteration: str, cache_path: Path) -> pd.DataFrame:
     """
     Read the annotation table from the Parquet file.
 
@@ -192,17 +193,18 @@ def _get_annotation_table(release: str, iteration: str) -> pd.DataFrame:
         Time stamp of the last RCSB sync.
     iteration : str
         Iterative development within a release, i.e. the version
+    cache_path : str
 
     Returns
     -------
     pd.DataFrame
         Annotation table.
     """
-    storage.Client.create_anonymous_client().get_bucket("plinder").blob(
-        blob_name=f"{release}/{iteration}/index/annotation_table.parquet"
-    ).download_to_filename("index.parquet")
-    df = pd.read_parquet("index.parquet")
-    Path("index.parquet").unlink()
+    if not cache_path.exists():
+        storage.Client.create_anonymous_client().get_bucket("plinder").blob(
+            blob_name=f"{release}/{iteration}/index/annotation_table.parquet"
+        ).download_to_filename(cache_path)
+    df = pd.read_parquet(cache_path)
     return df
 
 

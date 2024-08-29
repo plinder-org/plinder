@@ -91,6 +91,7 @@ docs/_build/
 docs/table.html
 docs/api/core
 docs/api/scores
+docs/index.parquet
 
 # PyBuilder
 .pybuilder/
