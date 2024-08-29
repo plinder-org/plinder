@@ -11,7 +11,7 @@ Building the documentation requires some extra requirements that are specified
 in the `pyproject.toml`.
 
 ```console
-$ pip install ".[docs]"
+$ pip install -e ".[docs]"
 ```
 
 To build the documentation run
