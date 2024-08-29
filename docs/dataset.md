@@ -207,7 +207,7 @@ This directory contains split files and the configs used to generate them.
   - does the system have a ligand with an annotated binding affinity?
 - - system_has_apo_or_pred
   - bool
-  - does the system have either `apo` or `pred` structure linked?
+- does the system have either `apo` or `pred` structure linked?
 :::
 
 The content of split.yaml is described below:
@@ -435,7 +435,7 @@ This directory contains parquet files linking PLINDER systems to their apo and p
   - Average per-chain lDDT score calculated over all atoms
 - - per_chain_bb_lddt_ave
   - float
-  - Average per-chain lDDT score calculated over backbone atoms (N, CA, C, O)
+- Average per-chain lDDT score calculated over backbone atoms (N, CA, C, O)
 :::
 
 (miscellaneous-target)=
@@ -572,6 +572,6 @@ E.g
   - str
   - Local region mapping between query system and target system
 - - search_db
-  - str
-  - Search database type. Could be `apo`, `holo` or `pred`
+    - str
+    - Search database type. Could be `apo`, `holo` or `pred`
 :::
