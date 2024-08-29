@@ -33,11 +33,11 @@ sd_hide_title: true
     |-- links # Apo and predicted structures similarity to their holo structures
     |   |-- apo_links.parquet
     |   |-- pred_links.parquet
-
+    |
 --------------------------------------------------------------------------------
                             miscellaneous data below
 --------------------------------------------------------------------------------
-
+    |
     |-- dbs # TSVs containing the raw files and IDs in the foldseek and mmseqs sub-databases
     |   |-- subdbs
     |       |-- apo.csv
@@ -71,7 +71,7 @@ sd_hide_title: true
 - Add descriptions for missing files
 :::
 
-We will describe the content of the `index`, `systems`, `clusters`, `splits`, `links` and `linked_structures` directories in detail below, the rest are described in the [miscellaneous section](#miscellaneous).
+We will describe the content of the `index`, `systems`, `clusters`, `splits`, `links` and `linked_structures` directories in detail below, the rest are described in the [miscellaneous section](#miscellaneous-target).
 
 (annotation-table-target)=
 ### Annotation tables (`index/`)
@@ -80,15 +80,6 @@ Tables that lists all systems along with their annotations.
 
 - `annotation_table.parquet`: Lists all systems and their annotations.
 - `annotation_table_nonredundant.parquet`: Subset of systems without redundant systems.
-
-:::{todo}
-- Add `Mandatory` column
-- Add `Example` column
-- Sort by mandatory columns
-- Show `system_id` as first column
-- Plugin [datatables](https://datatables.net/) to enable sorting, filtering and pagination
-- Then customize table style to fit all columns into the page
-:::
 
 :::{include} table.html
 :::
@@ -415,6 +406,7 @@ This directory contains parquet files linking PLINDER systems to their apo and p
 :::
 
 
+(miscellaneous-target)=
 ### Miscellaneous
 
 Here we briefly describe subdirectories and their files that are not part of the main dataset but are used in the dataset processing pipeline.
