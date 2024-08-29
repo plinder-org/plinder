@@ -6,10 +6,9 @@ sd_hide_title: true
 
 ## API reference
 
-:::{todo}
-- Add a short description that the public API is split into two packages and
-  roughly what these packages do
-:::
+The ``plinder.core`` package provides utilities for interacting with the PLINDER dataset.
+
+It contains an additional ``plinder.core.scores`` sub-package for querying parquet collections.
 
 :::{toctree}
 :maxdepth: 1
