@@ -23,8 +23,8 @@ jobs:
           python-version: "3.9"
       - name: Configure docker
         run: echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.repository_owner }} --password-stdin
-      - name: Install semver
-        run: python -m pip install semver
+      - name: Install build and tag requirements
+        run: python -m pip install build semver
       - name: Get version bump
         id: get-tag
         run: echo "bump=$(python flows/docker.py bump)" >> $GITHUB_OUTPUT
@@ -37,6 +37,11 @@ jobs:
       - name: Run tests against new image and save images
         if: steps.get-tag.outputs.bump != ''
         run: python flows/docker.py test --push
+      - name: Build distribution
+        run: python -m build
+      - name: Publish package distributions to PyPI
+        if: steps.get-tag.outputs.bump != ''
+        uses: pypa/gh-action-pypi-publish@release/v1
       - name: Save git tag
         if: steps.get-tag.outputs.bump != ''
         run: git push origin ${{ steps.get-tag.outputs.bump }}
