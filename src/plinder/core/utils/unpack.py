@@ -8,6 +8,7 @@ from typing import Literal, Optional
 from zipfile import BadZipFile, ZipFile
 
 from omegaconf import DictConfig
+from tqdm.contrib.concurrent import thread_map
 
 from plinder.core.utils import cpl
 from plinder.core.utils.config import get_config
@@ -139,7 +140,7 @@ def get_zips_to_unpack(
 
     if kind in ["systems", "linked_structures"]:
         if len(paths) > 10:
-            cpl.thread_map(_unpack_zip, paths)
+            thread_map(_unpack_zip, paths)
         else:
             cpl.thread_pool(_unpack_zip, paths)
 

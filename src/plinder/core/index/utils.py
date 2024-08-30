@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from argparse import ArgumentParser
-from textwrap import dedent
 from json import load
 from pathlib import Path
+from textwrap import dedent
 from time import time
 from typing import Any, Optional
 from zipfile import ZipFile
@@ -74,7 +74,6 @@ def get_manifest() -> pd.DataFrame:
         return _MANIFEST
     _MANIFEST = query_index(columns=["system_id", "entry_pdb_id"])
     return _MANIFEST
-
 
 
 def _prune_entry(entry: dict[str, Any]) -> dict[str, Any]:
@@ -201,31 +200,45 @@ def download_plinder_cmd() -> None:
         )
     )
     for attr in cfg.data:
-        if attr.startswith("plinder_") or attr.endswith("_file") or attr in ["ingest", "validation", "force_update"]:
+        if (
+            attr.startswith("plinder_")
+            or attr.endswith("_file")
+            or attr in ["ingest", "validation", "force_update"]
+        ):
             continue
         path = None
         if attr == "scores":
-            do = input("Download the full scores dataset? [Y/n] ") if not autodo else "y"
-            if do.lower() in ["", "y", "yes"]:
+            do = (
+                input("Download the full scores dataset? [Y/n] ").lower() in ["", "y", "yes"] if not autodo else True
+            )
+            if do:
                 for subdb in ["apo", "pred", "holo"]:
                     msg = f"Syncing {getattr(cfg.data, attr)}/search_db={subdb}"
                     if subdb == "holo":
                         msg += ", this may take a while!"
                     LOG.info(msg)
                     if subdb == "holo":
-                        LOG.info("Note that the tqdm progress bar for holo is not very useful, please be patient!")
+                        LOG.info(
+                            "Note that the tqdm progress bar for holo is not very useful, please be patient!"
+                        )
                     cpl.get_plinder_path(
                         rel=f"{getattr(cfg.data, attr)}/search_db={subdb}",
                         force_progress=True,
                     )
             else:
-                LOG.info("skipping scores download, plinder.core.scores will download it lazily on request!")
+                LOG.info(
+                    "skipping scores download, plinder.core.scores will download it lazily on request!"
+                )
         else:
             msg = f"Syncing {getattr(cfg.data, attr)}"
             do = True
             if attr in ["linked_structures", "systems"]:
                 if not autodo:
-                    do = input(f"Download the {attr} dataset? [Y/n] ").lower() in ["", "y", "yes"]
+                    do = input(f"Download the {attr} dataset? [Y/n] ").lower() in [
+                        "",
+                        "y",
+                        "yes",
+                    ]
                 else:
                     do = True
                 msg += ", this may take a while!"
@@ -236,9 +249,13 @@ def download_plinder_cmd() -> None:
                     force_progress=True,
                 )
             else:
-                LOG.info(f"skipping {attr} download, plinder.core.PlinderSystem will download lazily as needed on request!")
+                LOG.info(
+                    f"skipping {attr} download, plinder.core.PlinderSystem will download lazily as needed on request!"
+                )
         if path is not None and attr in ["linked_structures", "systems"]:
-            LOG.info(f"extracting {getattr(cfg.data, attr)} archives, you may want to stretch your legs.")
+            LOG.info(
+                f"extracting {getattr(cfg.data, attr)} archives, you may want to stretch your legs."
+            )
             codes = [p.stem for p in path.glob("*zip")]
             get_zips_to_unpack(kind=attr, two_char_codes=codes)
 

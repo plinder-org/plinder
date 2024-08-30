@@ -8,8 +8,8 @@ import atom3d.util.formats as fo
 import pandas as pd
 from torch.utils.data import Dataset
 
-from plinder.core.split.utils import get_split
 from plinder.core.scores.links import query_links
+from plinder.core.split.utils import get_split
 from plinder.core.system import system
 
 
@@ -80,14 +80,14 @@ class PlinderDataset(Dataset):  # type: ignore
             if not links.empty:
                 alts = links.groupby("kind").head(self.num_alternative_structures)
                 for kind, link_id in zip(alts["kind"], alts["id"]):
-                        structure = s.get_linked_structure(
-                            link_kind=str(kind), link_id=link_id
-                        )
+                    structure = s.get_linked_structure(
+                        link_kind=str(kind), link_id=link_id
+                    )
+                    item["alternative_structures"][
+                        f"{kind}_{link_id}_df"
+                    ] = fo.bp_to_df(fo.read_any(structure))
+                    if self._store_file_path:
                         item["alternative_structures"][
-                            f"{kind}_{link_id}_df"
-                        ] = fo.bp_to_df(fo.read_any(structure))
-                        if self._store_file_path:
-                            item["alternative_structures"][
-                                f"{kind}_{link_id}_path"
-                            ] = structure
+                            f"{kind}_{link_id}_path"
+                        ] = structure
         return item

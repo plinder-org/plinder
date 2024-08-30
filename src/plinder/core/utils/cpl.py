@@ -114,7 +114,9 @@ def _get_fsroot(cfg: DictConfig) -> str:
     return str(root)
 
 
-def get_plinder_path(*, rel: str = "", download: bool = True, force_progress: bool = False) -> Path:
+def get_plinder_path(
+    *, rel: str = "", download: bool = True, force_progress: bool = False
+) -> Path:
     """
     Get a cloudpathlib path to a file or directory in the plinder bucket.
     This provides a convenient way to manage local file caching since it
