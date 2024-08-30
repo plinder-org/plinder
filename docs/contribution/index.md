@@ -14,7 +14,7 @@ This code is split into 4 sub-packages
 
 - `plinder.core`: Provides core data structures for interacting with
   and loading the dataset.
-  Parts of it are exposed as the [public API](/api).
+  Parts of it are exposed as the [public API](/api/index).
 - `plinder.data`: Contains core code for generating the PLINDER dataset.
 - `plinder.eval`: Offers evaluation harness for the dataset that takes as an input
   predicted and ground truth structures in a pre-determined folder structure an
