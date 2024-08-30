@@ -39,6 +39,9 @@ def query_links(
     """
     cfg = get_config()
     dataset = cpl.get_plinder_path(rel=cfg.data.links)
+    # bugfix: necessary for determining the "kind" below
+    if columns and "filename" not in columns:
+        columns.append("filename")
     query = make_query(
         dataset=dataset,
         filters=filters,
