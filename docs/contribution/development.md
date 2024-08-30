@@ -27,10 +27,19 @@ repository clone.
 
 :::{note}
 We currently only support a Linux environment.
-`plinder.data` uses `openstructure` for some of its functionality and is available from the
+`plinder.data` uses a number of dependencies which are not simply pip-installable.
+`openstructure` is for some of its functionality and is available from the
 `aivant` conda channel using `conda install aivant::openstructure`, but it is only built
-targeting Linux architectures. It additionally uses `networkit>=11.0`, which at the time of writing,
-does not install cleanly on MacOS. `plinder.eval` also relies on `openstructure` for metrics
+targeting Linux architectures. Additionally, `networkit>=11.0`, which at the time of writing,
+does not install cleanly on MacOS, along with a number of dependencies which are referenced
+by a GitHub link directly, make a pip-installable package problematic. These additional
+dependencies can be installed by running:
+
+```console
+$ pip install plinder[data]
+```
+
+`plinder.eval` also relies on `openstructure` for metrics
 calculations. For Windows and MacOS users, please see the relevant
 [_Docker_](#docker-target) resources.
 :::

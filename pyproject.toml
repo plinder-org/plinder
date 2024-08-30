@@ -24,8 +24,6 @@ dependencies = [
     "pyarrow",
     "omegaconf",
     "mmcif",
-    "pdb-validation @ git+https://git.scicore.unibas.ch/schwede/ligand-validation.git",
-    "mmpdb @ git+https://github.com/rdkit/mmpdb.git",
     "eval_type_backport",
     "posebusters",
     "duckdb",
@@ -71,6 +69,11 @@ type = [
 ]
 dev = [
     "plinder[lint,test,type]",
+]
+data = [
+    "networkit >= 11.0",
+    "pdb-validation @ git+https://git.scicore.unibas.ch/schwede/ligand-validation.git",
+    "mmpdb @ git+https://github.com/rdkit/mmpdb.git",
 ]
 loader = [
     "torch",
