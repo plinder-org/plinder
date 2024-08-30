@@ -49,8 +49,17 @@ def test_load_entries(mock_cpl):
     assert len(blob) == 1
 
 
-def test_download_cmd(mock_cpl):
-    utils.download_plinder_cmd()
+@pytest.mark.parametrize(
+    "args",
+    [
+        [],
+        ["--release", "2024-04"],
+        ["--iteration", "v1"],
+        ["--release", "2024-06", "--iteration", "v2"]
+    ]
+)
+def test_download_cmd(args, mock_cpl):
+    utils.download_plinder_cmd(args=args + ["-y"])
 
 
 def test_get_extended_plindex(mock_cpl):
