@@ -55,9 +55,8 @@ The directory downloaded from the bucket has the following structure:
 |   |-- systems              # Structure files for all systems (split by `two_char_code` and zipped)
 ```
 
-The `systems`, `index`, `clusters` and `splits` directories are most the
-important ones for PLINDER utilization and will be covered in the tutorial, while the
-rest are for more curious users.
+The `systems`, `index`, `clusters`, `splits`, `linked_structures` and `links` directories are most the
+important ones for PLINDER utilization and will be covered in the tutorial, while the rest are for more curious users.
 
 To download specific directories of interest, for example `splits`, run:
 
@@ -65,27 +64,66 @@ To download specific directories of interest, for example `splits`, run:
 $ gsutil -m cp -r gs://plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/splits ~/.local/share/plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/
 ```
 
-## Unpacking the structure files
+## Unpacking the holo structure files
 
 Similar to the
 [PDB NextGen Archive](https://www.wwpdb.org/ftp/pdb-nextgen-archive-site), we split the
 structures into subdirectories of chunks (using two penultimate characters of PDB code) to make loading and querying speed palatable.
 
-The structure files can be found in the subfolder
+The structure files of holo systems can be found in the subfolder
 `~/.local/share/plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/systems`.
 To unpack the structures run
 
 ```bash
-cd ~/.local/share/plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/systems; for i in ls *zip; do unzip $i; done
+$ cd ~/.local/share/plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/systems; for i in ls *zip; do unzip $i; done
 ```
 
-This will yield directories such as `7eek__1__1.A__1.I`, which is what we call a PLINDER
-system ID in the form
-`<PDB ID>__<biological assembly>__<receptor chain ID>__<ligand chain ID>`.
-Each system represent a complex between one or multiple proteins and a small molecules,
-derived from a biological assembly in the PDB.
-The directory contains _mmCIF_, _PDB_ and _SDF_ file formats as well as some additional
-metadata files, for e.g. chain mapping and sequences.
+This will yield directories such as `7eek__1__1.A__1.I`, which is what we call a PLINDER system ID in the form `<PDB ID>__<biological assembly>__<receptor chain ID>__<ligand chain ID>`.
+Each system represent a complex between one or multiple proteins and a small molecules, derived from a biological assembly in the PDB.
+The directory contains _mmCIF_, _PDB_ and _SDF_ file formats as well as some additional metadata files, for e.g. chain mapping and sequences.
+
+## Unpacking the apo/predicted structure files
+
+For apo and predicted structures, the structure files can be found in `linked_structures`. Like the `systems` sub-directory, `linked_structures` contains zip files chunked by two penultimate characters of PDB code. To unpack the structures, run
+
+```bash
+$ cd ~/.local/share/plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/linked_structures; for i in ls *zip; do unzip $i; done
+```
+This will yield two sub-directories `apo` and `pred` with the following file structure:
+```bash
+apo
+├── 1avd__1__1.A__1.C # PLINDER system_id
+│   ├── 1nqn_A # Linked apo chain. With ID of the format <PDB ID>_<chain ID>
+│   │   └── superposed.cif # mmcif file of apo structure transformed to align with the mapped chain of holo system
+
+pred
+├── 1avb__1__1.A__1.E # PLINDER system_id
+│   └── P19329_A # Linked apo chain. With ID of the format <UNIPROT ID>_<chain ID>
+│       └── superposed.cif # mmcif file of predicted structure transformed to align with the mapped chain of holo system
+```
+To understand the relationship between the PLINDER system_id and linked apo/pred structure, let's examine the content of `links` sub-directory. This sub-directories contains two files `apo_links.parquet` and `pred_links.parquet`, both of which stores mapping between holo systems and their apo and predicted structures respective. The content of `apo_links.parquet` is shown below:
+
+```python
+>>> import pandas as pd
+
+>>> df = pd.read_parquet("links/apo_links.parquet")
+>>> df
+       reference_system_id      id  pocket_fident  pocket_lddt  ...      lddt   bb_lddt  per_chain_lddt_ave per_chain_bb_lddt_ave
+0        6pl9__1__1.A__1.C  2vb1_A          100.0         86.0  ...  0.903772  0.968844            0.890822              0.959674
+1        6ahh__1__1.A__1.G  2vb1_A          100.0         98.0  ...  0.894349  0.962846            0.883217              0.954721
+2        5b59__1__1.A__1.B  2vb1_A          100.0         91.0  ...  0.903266  0.962318            0.890656              0.955258
+3        3ato__1__1.A__1.B  2vb1_A          100.0         99.0  ...  0.890530  0.954696            0.879496              0.946326
+4        6mx9__1__1.A__1.K  2vb1_A          100.0         98.0  ...  0.904116  0.964309            0.892434              0.955853
+...                    ...     ...            ...          ...  ...       ...       ...                 ...                   ...
+433940   7smt__1__1.E__1.W  4bor_E          100.0         54.0  ...  0.432360  0.514335            0.418897              0.498007
+433941   7ql5__1__1.E__1.L  4bor_E          100.0         38.0  ...  0.428964  0.508190            0.417126              0.493473
+433942   7ql5__1__1.E__1.L  4bot_E          100.0         38.0  ...  0.428968  0.508162            0.417138              0.493441
+433943   7smq__1__1.E__1.J  4bot_E          100.0         38.0  ...  0.432428  0.514050            0.418411              0.496222
+433944   7smm__1__1.E__1.V  4bot_E          100.0         54.0  ...  0.432235  0.512908            0.418438              0.495479
+
+[433945 rows x 50 columns]
+```
+`pred_links.parquet` has exactly the same columns as above.
 
 ## Exploring the annotation table
 
