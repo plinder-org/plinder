@@ -8,7 +8,7 @@ from plinder.core.index import utils
 from plinder.core.split import utils as split_utils
 
 
-def mock_path(*, rel: str = "", download: bool = False):
+def mock_path(*, rel: str = "", download: bool = False, force_progress: bool = False):
     obj = Path(
         "/".join(
             [
