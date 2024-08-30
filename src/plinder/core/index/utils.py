@@ -6,6 +6,7 @@ from argparse import ArgumentParser
 from textwrap import dedent
 from json import load
 from pathlib import Path
+from time import time
 from typing import Any, Optional
 from zipfile import ZipFile
 
@@ -170,6 +171,7 @@ def download_plinder_cmd() -> None:
     completion time can vary wildly as it iterates over larger files vs.
     smaller ones.
     """
+    t0 = time()
     parser = ArgumentParser(usage=download_plinder_cmd.__doc__)
     parser.add_argument("--release", default=None, help="plinder release")
     parser.add_argument("--iteration", default=None, help="plinder iteration")
@@ -199,16 +201,19 @@ def download_plinder_cmd() -> None:
         )
     )
     for attr in cfg.data:
-        if attr.startswith("plinder_") or attr.endswith("_file") or attr in ["validation", "force_update"]:
+        if attr.startswith("plinder_") or attr.endswith("_file") or attr in ["ingest", "validation", "force_update"]:
             continue
         path = None
         if attr == "scores":
             do = input("Download the full scores dataset? [Y/n] ") if not autodo else "y"
             if do.lower() in ["", "y", "yes"]:
                 for subdb in ["apo", "pred", "holo"]:
-                    LOG.info(f"Syncing {getattr(cfg.data, attr)}/search_db={subdb}, this may take a while!")
+                    msg = f"Syncing {getattr(cfg.data, attr)}/search_db={subdb}"
                     if subdb == "holo":
-                        LOG.info("the tqdm progress bar for holo is not very useful, please be patient!")
+                        msg += ", this may take a while!"
+                    LOG.info(msg)
+                    if subdb == "holo":
+                        LOG.info("Note that the tqdm progress bar for holo is not very useful, please be patient!")
                     cpl.get_plinder_path(
                         rel=f"{getattr(cfg.data, attr)}/search_db={subdb}",
                         force_progress=True,
@@ -236,3 +241,28 @@ def download_plinder_cmd() -> None:
             LOG.info(f"extracting {getattr(cfg.data, attr)} archives, you may want to stretch your legs.")
             codes = [p.stem for p in path.glob("*zip")]
             get_zips_to_unpack(kind=attr, two_char_codes=codes)
+
+    t1 = time()
+    total = t1 - t0
+    timing = f"{total:.2f}s"
+    if total > 60:
+        timing = f"{total / 60:.2f}m"
+    elif total > 3600:
+        timing = f"{total / 3600:.2f}h"
+
+    LOG.info(
+        dedent(
+            f"""
+            Sync complete in {timing}!
+
+            If you downloaded all of the data, you can run:
+
+                export PLINDER_OFFLINE=true
+
+            This will avoid checking that files are still in sync when using plinder.core.
+            If you didn't download all of the data, plinder.core will download it lazily when
+            it's needed. By default, plinder.core will check that files are still in sync
+            in case any of the files for an existing release need to be patched.
+            """
+        )
+    )
