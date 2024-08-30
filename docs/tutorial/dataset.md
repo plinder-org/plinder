@@ -75,7 +75,8 @@ The structure files can be found in the subfolder
 To unpack the structures run
 
 ```bash
-cd ~/.local/share/plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/systems; for i in ls *zip; do unzip $i; done
+cd ~/.local/share/plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/systems; for i in ls *zip; do unzip $i; touch $(i//.zip//)_done; done
+cd ~/.local/share/plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/linked_structures; for i in ls *zip; do unzip $i; touch $(i//.zip//)_done; done
 ```
 
 This will yield directories such as `7eek__1__1.A__1.I`, which is what we call a PLINDER
