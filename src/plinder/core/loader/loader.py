@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List, Literal, Tuple
+from typing import Any, Dict, List, Literal, Tuple
 
 import atom3d.util.formats as fo
 import pandas as pd
 from torch.utils.data import Dataset
-from rdkit import Chem
 
 from plinder.core.scores.links import query_links
 from plinder.core.split.utils import get_split
@@ -73,7 +72,7 @@ class PlinderDataset(Dataset):  # type: ignore
         else:
             structure_df = fo.bp_to_df(fo.read_any(s.system_cif))
 
-        item = {
+        item: Dict[str, Any] = {
             "id": index,
             "system_id": s.system_id,
             "df": structure_df,
@@ -115,15 +114,16 @@ class PlinderDataset(Dataset):  # type: ignore
 def get_model_input_files(
     split_df: pd.DataFrame,
     split: Literal["train", "val", "test"] = "train",
-    custom_sampler: None = None,  # type: ignore
+    # custom_sampler: None = None,
     max_num_sample: int = 10,
     num_alternative_structures: int = 1,
-) -> List[Tuple[Path, Path, str]]:
+) -> List[Tuple[Path, str, List[Any]]]:
     model_inputs = []
 
     smiles_in_df = True
     if "ligand_rdkit_canonical_smiles" not in split_df.columns:
         smiles_in_df = False
+        from rdkit import Chem
 
     dataset = PlinderDataset(
         df=split_df,
