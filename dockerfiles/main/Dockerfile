@@ -6,7 +6,6 @@ ARG DEPENDENCY_BLOCKS=test
 
 WORKDIR /app
 COPY src src
-COPY requirements_data.txt requirements_data.txt
 COPY pyproject.toml pyproject.toml
 RUN --mount=source=.git,target=.git,type=bind \
     --mount=type=secret,id=INDEX_URL \
