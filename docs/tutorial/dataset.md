@@ -28,9 +28,8 @@ The full dataset (`PLINDER_ITERATION=v2`) has a size of hundreds of GB, so you a
 advised to have sufficient space for usage of the production dataset.
 
 :::{note}
-The versions used for the preprint are `gs://plinder/2024-04/v1` (full dataset) and `gs://plinder/2024-04/v0` (non-redundant set used to train DffDock). However, we plan to
-release a newer version with updated annotations to be used for the
-[MLSB challenge](https://www.mlsb.io/) (`gs://plinder/2024-06/v2`) in the future.
+The versions used for the preprint are `gs://plinder/2024-04/v1` (full dataset) and `gs://plinder/2024-04/v0` (non-redundant set used to train DffDock). However, the current version with updated annotations to be used for the
+[MLSB challenge](https://www.mlsb.io/) is `gs://plinder/2024-06/v2`.
 :::
 
 ## Understanding the directory structure
