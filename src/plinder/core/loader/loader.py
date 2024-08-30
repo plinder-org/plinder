@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import List, Literal, Tuple
 
 import atom3d.util.formats as fo
 import pandas as pd
 from torch.utils.data import Dataset
+from rdkit import Chem
 
 from plinder.core.scores.links import query_links
 from plinder.core.split.utils import get_split
@@ -108,3 +110,56 @@ class PlinderDataset(Dataset):  # type: ignore
                 pass
             item["alternative_structures"] = alternatives
         return item
+
+
+def get_model_input_files(
+    split_df: pd.DataFrame,
+    split: Literal["train", "val", "test"] = "train",
+    custom_sampler: None = None,  # type: ignore
+    max_num_sample: int = 10,
+    num_alternative_structures: int = 1,
+) -> List[Tuple[Path, Path, str]]:
+    model_inputs = []
+
+    smiles_in_df = True
+    if "ligand_rdkit_canonical_smiles" not in split_df.columns:
+        smiles_in_df = False
+
+    dataset = PlinderDataset(
+        df=split_df,
+        split=split,
+        num_alternative_structures=num_alternative_structures,
+        file_paths_only=True,
+    )
+
+    count = 0
+    for data in dataset:
+        system_dir = Path(data["path"]).parent
+        protein_fasta_filepath = system_dir / "sequences.fasta"
+
+        if num_alternative_structures:
+            alt_structure_filepaths = [
+                val
+                for key, val in data["alternative_structures"].items()
+                if key.endswith("_path")
+            ]
+        else:
+            alt_structure_filepaths = []
+
+        if smiles_in_df:
+            smiles_array = split_df.loc[
+                split_df["system_id"] == data["system_id"],
+                "ligand_rdkit_canonical_smiles",
+            ].values
+        else:
+            smiles_array = [
+                Chem.MolToSmiles(next(Chem.SDMolSupplier(ligand_sdf)))
+                for ligand_sdf in (system_dir / "ligand_files/").glob("*sdf")
+            ]
+        # in case there's more than one!
+        smiles = ".".join(smiles_array)
+        model_inputs.append((protein_fasta_filepath, smiles, alt_structure_filepaths))
+        count += 1
+        if count >= max_num_sample:
+            break
+    return model_inputs
