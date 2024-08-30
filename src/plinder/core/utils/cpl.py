@@ -71,7 +71,7 @@ def thread_pool(func: Callable[..., None], iter: Iterable[T]) -> None:
 @retry
 def _quiet_ping(path: GSPath) -> None:
     if isinstance(path, CloudPath):
-        LOG.debug(f"_ping: type(path)={type(path)} local={path._local}")
+        LOG.debug(f"_ping: type(path)={path.__class__.__name__} local={path._local}")
         if not os.getenv("PLINDER_OFFLINE"):
             try:
                 path.fspath
@@ -85,7 +85,7 @@ def _quiet_ping(path: GSPath) -> None:
 
 
 @timeit
-def download_paths(*, paths: list[GSPath]) -> None:
+def download_paths(*, paths: list[GSPath], force_progress: bool = False) -> None:
     """
     Download pre-determined paths from GCS concurrently. This is useful
     when we want to process a pre-determined subset of the data rather
@@ -98,7 +98,7 @@ def download_paths(*, paths: list[GSPath]) -> None:
     """
     if os.getenv("PLINDER_OFFLINE"):
         return
-    if len(paths) > 10:
+    if len(paths) > 10 or force_progress:
         thread_map(_quiet_ping, paths)
     else:
         thread_pool(_quiet_ping, paths)
@@ -114,7 +114,7 @@ def _get_fsroot(cfg: DictConfig) -> str:
     return str(root)
 
 
-def get_plinder_path(*, rel: str = "", download: bool = True) -> Path:
+def get_plinder_path(*, rel: str = "", download: bool = True, force_progress: bool = False) -> Path:
     """
     Get a cloudpathlib path to a file or directory in the plinder bucket.
     This provides a convenient way to manage local file caching since it
@@ -127,6 +127,8 @@ def get_plinder_path(*, rel: str = "", download: bool = True) -> Path:
         Relative path to the file or directory.
     download : bool, default=True
         if True, download the files
+    force_progress : bool, default=False
+        if True, force progress bar even if < 10 files
 
     Returns
     -------
@@ -148,7 +150,7 @@ def get_plinder_path(*, rel: str = "", download: bool = True) -> Path:
         return Path(path._local)
     if download:
         paths = [path] if path.is_file() else list(path.rglob("*"))
-        download_paths(paths=paths)
+        download_paths(paths=paths, force_progress=force_progress)
     try:
         return Path(path.fspath)
     except OverwriteNewerLocalError:
