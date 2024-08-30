@@ -76,18 +76,22 @@ class PlinderDataset(Dataset):  # type: ignore
             item["path"] = s.system_cif
 
         if self._links is not None:
-            links = self._links.get_group(s.system_id)
-            if not links.empty:
-                alts = links.groupby("kind").head(self.num_alternative_structures)
-                for kind, link_id in zip(alts["kind"], alts["id"]):
-                    structure = s.get_linked_structure(
-                        link_kind=str(kind), link_id=link_id
-                    )
-                    item["alternative_structures"][
-                        f"{kind}_{link_id}_df"
-                    ] = fo.bp_to_df(fo.read_any(structure))
-                    if self._store_file_path:
+            try:
+                # catch no linked structures KeyError
+                links = self._links.get_group(s.system_id)
+                if not links.empty:
+                    alts = links.groupby("kind").head(self.num_alternative_structures)
+                    for kind, link_id in zip(alts["kind"], alts["id"]):
+                        structure = s.get_linked_structure(
+                            link_kind=str(kind), link_id=link_id
+                        )
                         item["alternative_structures"][
-                            f"{kind}_{link_id}_path"
-                        ] = structure
+                            f"{kind}_{link_id}_df"
+                        ] = fo.bp_to_df(fo.read_any(structure))
+                        if self._store_file_path:
+                            item["alternative_structures"][
+                                f"{kind}_{link_id}_path"
+                            ] = structure
+            except KeyError:
+                pass
         return item
