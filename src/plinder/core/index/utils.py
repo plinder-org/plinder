@@ -22,10 +22,7 @@ _MANIFEST = None
 
 
 @timeit
-def get_plindex(
-    *,
-    cfg: Optional[DictConfig] = None,
-) -> pd.DataFrame:
+def get_plindex() -> pd.DataFrame:
     """
     Fetch the plindex and cache it
 
@@ -39,22 +36,17 @@ def get_plindex(
     pd.DataFrame
         the plindex
     """
+    from plinder.core.scores import query_index
+
     global _PLINDEX
 
     if _PLINDEX is not None:
         return _PLINDEX
-    cfg = cfg or get_config()
-    suffix = f"{cfg.data.index}/{cfg.data.index_file}"
-    index = cpl.get_plinder_path(rel=suffix)
-    LOG.info(f"reading {index}")
-    _PLINDEX = pd.read_parquet(index)
+    _PLINDEX = query_index(columns=["*"])
     return _PLINDEX
 
 
-def get_manifest(
-    *,
-    cfg: Optional[DictConfig] = None,
-) -> pd.DataFrame:
+def get_manifest() -> pd.DataFrame:
     """
     Fetch the manifest and cache it
 
@@ -70,19 +62,15 @@ def get_manifest(
     pd.DataFrame
         the manifest
     """
+    from plinder.core.scores import query_index
+
     global _MANIFEST
 
     if _MANIFEST is not None:
         return _MANIFEST
-    cfg = cfg or get_config()
-    suffix = f"{cfg.data.manifest}/{cfg.data.manifest_file}"
-    manifest = Path(f"{cfg.data.plinder_dir}/{suffix}")
-    if not manifest.exists() or cfg.data.force_update:
-        manifest.parent.mkdir(exist_ok=True, parents=True)
-        plindex = get_plindex(cfg=cfg)
-        plindex[["system_id", "entry_pdb_id"]].to_parquet(manifest, index=False)
-    _MANIFEST = pd.read_parquet(manifest)
+    _MANIFEST = query_index(columns=["system_id", "entry_pdb_id"])
     return _MANIFEST
+
 
 
 def _prune_entry(entry: dict[str, Any]) -> dict[str, Any]:
