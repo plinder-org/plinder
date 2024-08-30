@@ -9,6 +9,7 @@ import pandas as pd
 from torch.utils.data import Dataset
 
 from plinder.core.split.utils import get_split
+from plinder.core.scores.links import query_links
 from plinder.core.system import system
 
 
@@ -49,7 +50,9 @@ class PlinderDataset(Dataset):  # type: ignore
         self._system_ids = df.loc[df["split"] == split, "system_id"].to_list()
         self._num_examples = len(self._system_ids)
         self._store_file_path = store_file_path
-        self.load_alternative_structures = load_alternative_structures
+        self._links = None
+        if load_alternative_structures:
+            self._links = query_links().groupby("reference_system_id")
         self.num_alternative_structures = num_alternative_structures
 
     def __len__(self) -> int:
@@ -72,13 +75,11 @@ class PlinderDataset(Dataset):  # type: ignore
         if self._store_file_path:
             item["path"] = s.system_cif
 
-        if self.load_alternative_structures:
-            if s.linked_structures is not None and not s.linked_structures.empty:
-                links = s.linked_structures.groupby("kind")
-                for kind, group in links:
-                    for link_id in group["id"].values[
-                        : self.num_alternative_structures
-                    ]:
+        if self._links is not None:
+            links = self._links.get_group(s.system_id)
+            if not links.empty:
+                alts = links.groupby("kind").head(self.num_alternative_structures)
+                for kind, link_id in zip(alts["kind"], alts["id"]):
                         structure = s.get_linked_structure(
                             link_kind=str(kind), link_id=link_id
                         )
