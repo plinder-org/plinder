@@ -36,7 +36,7 @@ by a GitHub link directly, make a pip-installable package problematic. These add
 dependencies can be installed by running:
 
 ```console
-$ pip install -r requirements_data.txt
+$ pip install plinder[data]
 ```
 
 `plinder.eval` also relies on `openstructure` for metrics
