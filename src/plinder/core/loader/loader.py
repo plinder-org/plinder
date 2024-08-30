@@ -52,6 +52,7 @@ class PlinderDataset(Dataset):  # type: ignore
         self._links = None
         if num_alternative_structures > 0:
             self._links = query_links().groupby("reference_system_id")
+
         self.num_alternative_structures = num_alternative_structures
         self._file_paths_only = file_paths_only
 
