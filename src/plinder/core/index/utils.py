@@ -173,7 +173,7 @@ def download_plinder_cmd() -> None:
     LOG.info(
         dedent(
             f"""
-            Downloading {cfg.data.plinder_remote} -> {cfg.data.plinder_dir}.
+            Syncing {cfg.data.plinder_remote} -> {cfg.data.plinder_dir}.
             If this is the first time you are running this command, it will take a while!
 
             The estimated time on the progress bar may vary wildly based on varied file sizes.
@@ -191,7 +191,7 @@ def download_plinder_cmd() -> None:
             do = input("Download the full scores dataset? [Y/n] ")
             if do.lower() in ["", "y", "yes"]:
                 for subdb in ["apo", "pred", "holo"]:
-                    LOG.info(f"downloading {getattr(cfg.data, attr)}/search_db={subdb}, this may take a while!")
+                    LOG.info(f"Syncing {getattr(cfg.data, attr)}/search_db={subdb}, this may take a while!")
                     if subdb == "holo":
                         LOG.info("the tqdm progress bar for holo is not very useful, please be patient!")
                     cpl.get_plinder_path(
@@ -201,7 +201,7 @@ def download_plinder_cmd() -> None:
             else:
                 LOG.info("skipping scores download, plinder.core.scores will download it lazily on request!")
         else:
-            msg = f"downloading {getattr(cfg.data, attr)}"
+            msg = f"Syncing {getattr(cfg.data, attr)}"
             do = True
             if attr in ["linked_structures", "systems"]:
                 do = input("Download the linked_structures dataset? [Y/n] ").lower() in ["", "y", "yes"]
@@ -215,6 +215,6 @@ def download_plinder_cmd() -> None:
             else:
                 LOG.info(f"skipping {attr} download, plinder.core.PlinderSystem will download lazily as needed on request!")
         if path is not None and attr in ["linked_structures", "systems"]:
-            LOG.info(f"extracting {getattr(cfg.data, attr)} archives")
+            LOG.info(f"extracting {getattr(cfg.data, attr)} archives, you may want to stretch your legs.")
             codes = [p.stem for p in path.glob("*zip")]
             get_zips_to_unpack(kind=attr, two_char_codes=codes)
