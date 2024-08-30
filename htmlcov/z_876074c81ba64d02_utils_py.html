@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
-    <title>Coverage for src/plinder/eval/docking/utils.py: 92.0635%</title>
+    <title>Coverage for src/plinder/eval/docking/utils.py: 94.0476%</title>
     <link rel="icon" sizes="32x32" href="favicon_32_cb_58284776.png">
     <link rel="stylesheet" href="style_cb_8e611ae1.css" type="text/css">
     <script src="coverage_html_cb_6fb7b396.js" defer></script>
@@ -12,7 +12,7 @@
     <div class="content">
         <h1>
             <span class="text">Coverage for </span><b>src/plinder/eval/docking/utils.py</b>:
-            <span class="pc_cov">92.0635%</span>
+            <span class="pc_cov">94.0476%</span>
         </h1>
         <aside id="help_panel_wrapper">
             <input id="help_panel_state" type="checkbox">
@@ -59,7 +59,7 @@
             <button type="button" class="run button_toggle_run" value="run" data-shortcut="r" title="Toggle lines run">179<span class="text"> run</span></button>
             <button type="button" class="mis show_mis button_toggle_mis" value="mis" data-shortcut="m" title="Toggle lines missing">5<span class="text"> missing</span></button>
             <button type="button" class="exc show_exc button_toggle_exc" value="exc" data-shortcut="x" title="Toggle lines excluded">0<span class="text"> excluded</span></button>
-            <button type="button" class="par run show_par button_toggle_par" value="par" data-shortcut="p" title="Toggle lines partially run">15<span class="text"> partial</span></button>
+            <button type="button" class="par run show_par button_toggle_par" value="par" data-shortcut="p" title="Toggle lines partially run">10<span class="text"> partial</span></button>
         </h2>
         <p class="text">
             <a id="prevFileLink" class="nav" href="z_876074c81ba64d02_stratify_test_set_py.html">&#xab; prev</a> &nbsp; &nbsp;
@@ -67,7 +67,7 @@
             <a id="nextFileLink" class="nav" href="z_876074c81ba64d02_write_scores_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.6.1">coverage.py v7.6.1</a>,
-            created at 2024-08-30 13:33 +0000
+            created at 2024-08-30 20:23 +0000
         </p>
         <aside class="hidden">
             <button type="button" class="button_next_chunk" data-shortcut="j"></button>
@@ -228,7 +228,7 @@
     <p class="pln"><span class="n"><a id="t144" href="#t144">144</a></span><span class="t">            <span class="nam">score_protein</span><span class="op">=</span><span class="nam">score_protein</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t145" href="#t145">145</a></span><span class="t">            <span class="nam">score_posebusters</span><span class="op">=</span><span class="nam">score_posebusters</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t146" href="#t146">146</a></span><span class="t">        <span class="op">)</span>&nbsp;</span><span class="r"></span></p>
-    <p class="par run show_par"><span class="n"><a id="t147" href="#t147">147</a></span><span class="t">        <span class="key">if</span> <span class="nam">model_class</span><span class="op">.</span><span class="nam">score_protein</span><span class="op">:</span>&nbsp;</span><span class="r"><span class="annotate short">147&#x202F;&#x219B;&#x202F;149</span><span class="annotate long">line 147 didn't jump to line 149 because the condition on line 147 was always true</span></span></p>
+    <p class="run"><span class="n"><a id="t147" href="#t147">147</a></span><span class="t">        <span class="key">if</span> <span class="nam">model_class</span><span class="op">.</span><span class="nam">score_protein</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t148" href="#t148">148</a></span><span class="t">            <span class="nam">model_class</span><span class="op">.</span><span class="nam">calculate_protein_scores</span><span class="op">(</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t149" href="#t149">149</a></span><span class="t">        <span class="nam">model_class</span><span class="op">.</span><span class="nam">calculate_ligand_scores</span><span class="op">(</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t150" href="#t150">150</a></span><span class="t">        <span class="key">return</span> <span class="nam">model_class</span>&nbsp;</span><span class="r"></span></p>
@@ -345,7 +345,7 @@
     <p class="pln"><span class="n"><a id="t261" href="#t261">261</a></span><span class="t">                            <span class="op">]</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t262" href="#t262">262</a></span><span class="t">                            <span class="nam">len</span><span class="op">(</span><span class="nam">aux</span><span class="op">[</span><span class="str">"target_ligand"</span><span class="op">]</span><span class="op">.</span><span class="nam">atoms</span><span class="op">)</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t263" href="#t263">263</a></span><span class="t">                        <span class="op">)</span>&nbsp;</span><span class="r"></span></p>
-    <p class="par run show_par"><span class="n"><a id="t264" href="#t264">264</a></span><span class="t">                <span class="key">if</span> <span class="op">(</span>&nbsp;</span><span class="r"><span class="annotate short">264&#x202F;&#x219B;&#x202F;287</span><span class="annotate long">line 264 didn't jump to line 287</span></span></p>
+    <p class="run"><span class="n"><a id="t264" href="#t264">264</a></span><span class="t">                <span class="key">if</span> <span class="op">(</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t265" href="#t265">265</a></span><span class="t">                    <span class="nam">self</span><span class="op">.</span><span class="nam">score_posebusters</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t266" href="#t266">266</a></span><span class="t">                    <span class="key">and</span> <span class="nam">ligand_class</span><span class="op">.</span><span class="nam">reference_ligand</span><span class="op">.</span><span class="nam">get</span><span class="op">(</span><span class="nam">self</span><span class="op">.</span><span class="nam">posebusters_mapper</span><span class="op">,</span> <span class="key">None</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t267" href="#t267">267</a></span><span class="t">                    <span class="key">is</span> <span class="key">not</span> <span class="key">None</span>&nbsp;</span><span class="r"></span></p>
@@ -417,16 +417,16 @@
     <p class="pln"><span class="n"><a id="t333" href="#t333">333</a></span><span class="t">            <span class="nam">fraction_model_ligands_mapped</span><span class="op">=</span><span class="nam">self</span><span class="op">.</span><span class="nam">num_mapped_ligands</span> <span class="op">/</span> <span class="nam">self</span><span class="op">.</span><span class="nam">num_ligands</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t334" href="#t334">334</a></span><span class="t">        <span class="op">)</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t335" href="#t335">335</a></span><span class="t">        <span class="nam">score_list</span> <span class="op">=</span> <span class="op">[</span><span class="str">"lddt_pli"</span><span class="op">,</span> <span class="str">"lddt_pli_amd"</span><span class="op">,</span> <span class="str">"scrmsd"</span><span class="op">]</span>&nbsp;</span><span class="r"></span></p>
-    <p class="par run show_par"><span class="n"><a id="t336" href="#t336">336</a></span><span class="t">        <span class="key">if</span> <span class="nam">self</span><span class="op">.</span><span class="nam">score_protein</span><span class="op">:</span>&nbsp;</span><span class="r"><span class="annotate short">336&#x202F;&#x219B;&#x202F;338</span><span class="annotate long">line 336 didn't jump to line 338 because the condition on line 336 was always true</span></span></p>
+    <p class="run"><span class="n"><a id="t336" href="#t336">336</a></span><span class="t">        <span class="key">if</span> <span class="nam">self</span><span class="op">.</span><span class="nam">score_protein</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t337" href="#t337">337</a></span><span class="t">            <span class="nam">score_list</span><span class="op">.</span><span class="nam">append</span><span class="op">(</span><span class="str">"lddt_lp"</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t338" href="#t338">338</a></span><span class="t">        <span class="key">for</span> <span class="nam">score_name</span> <span class="key">in</span> <span class="nam">score_list</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t339" href="#t339">339</a></span><span class="t">            <span class="op">(</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t340" href="#t340">340</a></span><span class="t">                <span class="nam">scores</span><span class="op">[</span><span class="fst">f"</span><span class="op">{</span><span class="nam">score_name</span><span class="op">}</span><span class="fst">_ave</span><span class="fst">"</span><span class="op">]</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t341" href="#t341">341</a></span><span class="t">                <span class="nam">scores</span><span class="op">[</span><span class="fst">f"</span><span class="op">{</span><span class="nam">score_name</span><span class="op">}</span><span class="fst">_wave</span><span class="fst">"</span><span class="op">]</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t342" href="#t342">342</a></span><span class="t">            <span class="op">)</span> <span class="op">=</span> <span class="nam">self</span><span class="op">.</span><span class="nam">get_average_ligand_scores</span><span class="op">(</span><span class="nam">score_name</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
-    <p class="par run show_par"><span class="n"><a id="t343" href="#t343">343</a></span><span class="t">        <span class="key">if</span> <span class="nam">self</span><span class="op">.</span><span class="nam">score_posebusters</span><span class="op">:</span>&nbsp;</span><span class="r"><span class="annotate short">343&#x202F;&#x219B;&#x202F;345</span><span class="annotate long">line 343 didn't jump to line 345 because the condition on line 343 was always true</span></span></p>
+    <p class="run"><span class="n"><a id="t343" href="#t343">343</a></span><span class="t">        <span class="key">if</span> <span class="nam">self</span><span class="op">.</span><span class="nam">score_posebusters</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t344" href="#t344">344</a></span><span class="t">            <span class="nam">scores</span><span class="op">.</span><span class="nam">update</span><span class="op">(</span><span class="nam">self</span><span class="op">.</span><span class="nam">get_passing_posebusters</span><span class="op">(</span><span class="op">)</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
-    <p class="par run show_par"><span class="n"><a id="t345" href="#t345">345</a></span><span class="t">        <span class="key">if</span> <span class="nam">self</span><span class="op">.</span><span class="nam">score_protein</span> <span class="key">and</span> <span class="nam">self</span><span class="op">.</span><span class="nam">protein_scores</span> <span class="key">is</span> <span class="key">not</span> <span class="key">None</span><span class="op">:</span>&nbsp;</span><span class="r"><span class="annotate short">345&#x202F;&#x219B;&#x202F;360</span><span class="annotate long">line 345 didn't jump to line 360 because the condition on line 345 was always true</span></span></p>
+    <p class="run"><span class="n"><a id="t345" href="#t345">345</a></span><span class="t">        <span class="key">if</span> <span class="nam">self</span><span class="op">.</span><span class="nam">score_protein</span> <span class="key">and</span> <span class="nam">self</span><span class="op">.</span><span class="nam">protein_scores</span> <span class="key">is</span> <span class="key">not</span> <span class="key">None</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t346" href="#t346">346</a></span><span class="t">            <span class="nam">scores</span><span class="op">[</span><span class="str">"fraction_reference_proteins_mapped"</span><span class="op">]</span> <span class="op">=</span> <span class="op">(</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t347" href="#t347">347</a></span><span class="t">                <span class="nam">self</span><span class="op">.</span><span class="nam">num_mapped_reference_proteins</span> <span class="op">/</span> <span class="nam">self</span><span class="op">.</span><span class="nam">reference</span><span class="op">.</span><span class="nam">num_proteins</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t348" href="#t348">348</a></span><span class="t">            <span class="op">)</span>&nbsp;</span><span class="r"></span></p>
@@ -451,7 +451,7 @@
             <a class="nav" href="z_876074c81ba64d02_write_scores_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.6.1">coverage.py v7.6.1</a>,
-            created at 2024-08-30 13:33 +0000
+            created at 2024-08-30 20:23 +0000
         </p>
     </div>
 </footer>
