@@ -24,6 +24,12 @@ $ mkdir -p ~/.local/share/plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/
 $ gsutil -m cp -r "gs://plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/*" ~/.local/share/plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/
 ```
 
+Alternatively, you can download (and unpack) the tutorial dataset with:
+
+```bash
+pip install plinder
+plinder_download --release 2024-06 --iteration tutorial
+```
 The full dataset (`PLINDER_ITERATION=v2`) has a size of hundreds of GB, so you are
 advised to have sufficient space for usage of the production dataset.
 
@@ -75,8 +81,8 @@ The structure files can be found in the subfolder
 To unpack the structures run
 
 ```bash
-cd ~/.local/share/plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/systems; for i in ls *zip; do unzip $i; touch $(i//.zip//)_done; done
-cd ~/.local/share/plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/linked_structures; for i in ls *zip; do unzip $i; touch $(i//.zip//)_done; done
+cd ~/.local/share/plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/systems; for i in `ls *zip`; do unzip $i; touch ${i//.zip/}_done; done
+cd ~/.local/share/plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/linked_structures; for i in `ls *zip`; do unzip $i; touch ${i//.zip/}_done; done
 ```
 
 This will yield directories such as `7eek__1__1.A__1.I`, which is what we call a PLINDER

@@ -170,11 +170,23 @@ def download_plinder_cmd() -> None:
     completion time can vary wildly as it iterates over larger files vs.
     smaller ones.
     """
-    _, args = ArgumentParser(usage=download_plinder_cmd.__doc__).parse_known_args()
+    parser = ArgumentParser(usage=download_plinder_cmd.__doc__)
+    parser.add_argument("--release", default=None, help="plinder release")
+    parser.add_argument("--iteration", default=None, help="plinder iteration")
+    parser.add_argument("-y", "--yes", action="store_true", help="skip confirmation")
+    ns, args = parser.parse_known_args()
+    autodo = ns.yes
     if len(args):
         LOG.warning(f"ignoring arguments {args}")
-
-    cfg = get_config()
+    kwargs = None
+    if ns.release is not None:
+        kwargs = dict(data=dict(plinder_release=ns.release))
+    if ns.iteration is not None:
+        if kwargs is None:
+            kwargs = dict(data=dict(plinder_iteration=ns.iteration))
+        else:
+            kwargs["data"]["plinder_iteration"] = ns.iteration
+    cfg = get_config(config=kwargs)
     LOG.info(
         dedent(
             f"""
@@ -191,7 +203,7 @@ def download_plinder_cmd() -> None:
             continue
         path = None
         if attr == "scores":
-            do = input("Download the full scores dataset? [Y/n] ")
+            do = input("Download the full scores dataset? [Y/n] ") if not autodo else "y"
             if do.lower() in ["", "y", "yes"]:
                 for subdb in ["apo", "pred", "holo"]:
                     LOG.info(f"Syncing {getattr(cfg.data, attr)}/search_db={subdb}, this may take a while!")
@@ -207,7 +219,10 @@ def download_plinder_cmd() -> None:
             msg = f"Syncing {getattr(cfg.data, attr)}"
             do = True
             if attr in ["linked_structures", "systems"]:
-                do = input(f"Download the {attr} dataset? [Y/n] ").lower() in ["", "y", "yes"]
+                if not autodo:
+                    do = input(f"Download the {attr} dataset? [Y/n] ").lower() in ["", "y", "yes"]
+                else:
+                    do = True
                 msg += ", this may take a while!"
             if do:
                 LOG.info(msg)
