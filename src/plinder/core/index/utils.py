@@ -207,7 +207,7 @@ def download_plinder_cmd() -> None:
             msg = f"Syncing {getattr(cfg.data, attr)}"
             do = True
             if attr in ["linked_structures", "systems"]:
-                do = input("Download the linked_structures dataset? [Y/n] ").lower() in ["", "y", "yes"]
+                do = input(f"Download the {attr} dataset? [Y/n] ").lower() in ["", "y", "yes"]
                 msg += ", this may take a while!"
             if do:
                 LOG.info(msg)
