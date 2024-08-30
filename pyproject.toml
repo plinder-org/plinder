@@ -24,8 +24,6 @@ dependencies = [
     "pyarrow",
     "omegaconf",
     "mmcif",
-    "pdb-validation @ git+https://git.scicore.unibas.ch/schwede/ligand-validation.git",
-    "mmpdb @ git+https://github.com/rdkit/mmpdb.git",
     "eval_type_backport",
     "posebusters",
     "duckdb",
