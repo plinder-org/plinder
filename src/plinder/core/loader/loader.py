@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Literal, Tuple
 import atom3d.util.formats as fo
 import pandas as pd
 from torch.utils.data import Dataset
+from typing import List, Literal, Tuple
 
 from plinder.core.scores.links import query_links
 from plinder.core.split.utils import get_split
@@ -119,6 +120,7 @@ def get_model_input_files(
     max_num_sample: int = 10,
     num_alternative_structures: int = 1,
 ) -> List[Tuple[Path, str, List[Any]]]:
+
     model_inputs = []
 
     smiles_in_df = True
@@ -164,3 +166,4 @@ def get_model_input_files(
         if count >= max_num_sample:
             break
     return model_inputs
+
