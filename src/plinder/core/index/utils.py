@@ -2,6 +2,7 @@
 # Distributed under the terms of the Apache License 2.0
 from __future__ import annotations
 
+from textwrap import dedent
 from json import load
 from pathlib import Path
 from typing import Any, Optional
@@ -14,6 +15,7 @@ from plinder.core.utils import cpl, unpack
 from plinder.core.utils.config import get_config
 from plinder.core.utils.dec import timeit
 from plinder.core.utils.log import setup_logger
+from plinder.core.utils.unpack import get_zips_to_unpack
 
 LOG = setup_logger(__name__)
 
@@ -169,10 +171,50 @@ def download_plinder_cmd() -> None:
     """
     cfg = get_config()
     LOG.info(
-        f"""
-downloading {cfg.data.plinder_remote} -> {cfg.data.plinder_dir}
-if this is the first time you are running this command, it will take a while!
-the estimated time on the progress bar may vary wildly based on file size
-if you need to cancel this and come back to it, it will pick up where it left off"""
+        dedent(
+            f"""
+            Downloading {cfg.data.plinder_remote} -> {cfg.data.plinder_dir}.
+            If this is the first time you are running this command, it will take a while!
+
+            The estimated time on the progress bar may vary wildly based on varied file sizes.
+            If you need to cancel this and come back to it, it will pick up where it left off.
+            """
+        )
     )
-    cpl.get_plinder_path()
+    for attr in cfg.data:
+        if attr.startswith("plinder_") or attr.endswith("_file"):
+            continue
+        if attr in ["validation"]:
+            continue
+        path = None
+        if attr == "scores":
+            do = input("Download the full scores dataset? [Y/n] ")
+            if do.lower() in ["", "y", "yes"]:
+                for subdb in ["apo", "pred", "holo"]:
+                    LOG.info(f"downloading {getattr(cfg.data, attr)}/search_db={subdb}, this may take a while!")
+                    if subdb == "holo":
+                        LOG.info("the tqdm progress bar for holo is not very useful, please be patient!")
+                    cpl.get_plinder_path(
+                        rel=f"{getattr(cfg.data, attr)}/search_db={subdb}",
+                        force_progress=True,
+                    )
+            else:
+                LOG.info("skipping scores download, plinder.core.scores will download it lazily on request!")
+        else:
+            msg = f"downloading {getattr(cfg.data, attr)}"
+            do = True
+            if attr in ["linked_structures", "systems"]:
+                do = input("Download the linked_structures dataset? [Y/n] ").lower() in ["", "y", "yes"]
+                msg += ", this may take a while!"
+            if do:
+                LOG.info(msg)
+                path = cpl.get_plinder_path(
+                    rel=getattr(cfg.data, attr),
+                    force_progress=True,
+                )
+            else:
+                LOG.info(f"skipping {attr} download, plinder.core.PlinderSystem will download lazily as needed on request!")
+        if path is not None and attr in ["linked_structures", "systems"]:
+            LOG.info(f"extracting {getattr(cfg.data, attr)} archives")
+            codes = [p.stem for p in path.glob("*zip")]
+            get_zips_to_unpack(kind=attr, two_char_codes=codes)

@@ -60,7 +60,7 @@ def _unpack_zip(path: Path) -> None:
     with ZipFile(path) as arch:
         arch.extractall(path=path.parent)
         done.touch()
-    LOG.info(f"validating and extracting {path} took {time() - t0:.2f}s")
+    LOG.debug(f"validating and extracting {path} took {time() - t0:.2f}s")
     return
 
 
@@ -72,6 +72,28 @@ def get_zips_to_unpack(
     two_char_codes: Optional[str | list[str]] = None,
     cfg: Optional[DictConfig] = None,
 ) -> dict[Path, list[str]]:
+    """
+    Get the zips to unpack (and unpack them if necessary) for
+    the context provided (or configured).
+
+    Parameters
+    ----------
+    kind : ZIP_KINDS
+        the kind of zips to unpack
+    system_ids : Optional[str | list[str]], default=None
+        the system IDs to unpack
+    pdb_ids : Optional[str | list[str]], default=None
+        the PDB IDs to unpack
+    two_char_codes : Optional[str | list[str]], default=None
+        the two character codes to unpack
+    cfg : Optional[DictConfig], default=None
+        the plinder.core config
+
+    Returns
+    -------
+    dict[Path, list[str]]
+        the zips to unpack and the list of IDs (based on kind) in each zip
+    """
     conf = cfg or get_config()
     id_kind, ids = expand_config_context(
         system_ids=system_ids,
@@ -116,6 +138,9 @@ def get_zips_to_unpack(
     )
 
     if kind in ["systems", "linked_structures"]:
-        cpl.thread_pool(_unpack_zip, paths)
+        if len(paths) > 10:
+            cpl.thread_map(_unpack_zip, paths)
+        else:
+            cpl.thread_pool(_unpack_zip, paths)
 
     return zips
