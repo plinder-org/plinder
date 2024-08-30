@@ -163,7 +163,7 @@ def load_entries(
     return reduced
 
 
-def download_plinder_cmd() -> None:
+def download_plinder_cmd(args: list[str] | None = None) -> None:
     """
     Download the full plinder dataset for the current configuration.
     Note that even though this is wrapped in a progress bar, the estimated
@@ -175,7 +175,7 @@ def download_plinder_cmd() -> None:
     parser.add_argument("--release", default=None, help="plinder release")
     parser.add_argument("--iteration", default=None, help="plinder iteration")
     parser.add_argument("-y", "--yes", action="store_true", help="skip confirmation")
-    ns, args = parser.parse_known_args()
+    ns, args = parser.parse_known_args(args=args)
     autodo = ns.yes
     if len(args):
         LOG.warning(f"ignoring arguments {args}")
@@ -209,7 +209,10 @@ def download_plinder_cmd() -> None:
         path = None
         if attr == "scores":
             do = (
-                input("Download the full scores dataset? [Y/n] ").lower() in ["", "y", "yes"] if not autodo else True
+                input("Download the full scores dataset? [Y/n] ").lower()
+                in ["", "y", "yes"]
+                if not autodo
+                else True
             )
             if do:
                 for subdb in ["apo", "pred", "holo"]:
