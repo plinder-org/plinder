@@ -33,6 +33,18 @@ dependencies = [
     "mols2grid",
     "six",
 ]
+description = "PLINDER: The Protein-Ligand INteraction Dataset and Evaluation Resource"
+readme = "README.md"
+requires-python = ">=3.9"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+]
+
+[project.urls]
+Homepage = "https://github.com/plinder-org/plinder"
+Issues = "https://github.com/plinder-org/plinder/issues"
 
 [project.scripts]
 plinder_download = "plinder.core.index.utils:download_plinder_cmd"
