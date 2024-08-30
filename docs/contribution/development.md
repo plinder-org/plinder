@@ -32,7 +32,8 @@ We currently only support a Linux environment.
 `aivant` conda channel using `conda install aivant::openstructure`, but it is only built
 targeting Linux architectures. Additionally, `networkit>=11.0`, which at the time of writing,
 does not install cleanly on MacOS, along with a number of dependencies which are referenced
-by a GitHub link directly. These additional dependencies can be installed by running:
+by a GitHub link directly, make a pip-installable package problematic. These additional
+dependencies can be installed by running:
 
 ```console
 $ pip install -r requirements_data.txt
