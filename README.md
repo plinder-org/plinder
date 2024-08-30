@@ -78,7 +78,7 @@ $ export PLINDER_ITERATION=v2 # Current iteration
 $ mkdir -p ~/.local/share/plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/
 $ gsutil -m cp -r "gs://plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/*" ~/.local/share/plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/
 ```
-For details on the sub-directories, see [Documentation](https://plinder-org.github.io/plinder/).
+For details on the sub-directories, see [Documentation](https://plinder-org.github.io/plinder/tutorial/dataset.html).
 
 ## Installing the Python package
 
