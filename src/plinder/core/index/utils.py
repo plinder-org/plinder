@@ -2,6 +2,7 @@
 # Distributed under the terms of the Apache License 2.0
 from __future__ import annotations
 
+from argparse import ArgumentParser
 from textwrap import dedent
 from json import load
 from pathlib import Path
@@ -169,6 +170,10 @@ def download_plinder_cmd() -> None:
     completion time can vary wildly as it iterates over larger files vs.
     smaller ones.
     """
+    _, args = ArgumentParser(usage=download_plinder_cmd.__doc__).parse_known_args()
+    if len(args):
+        LOG.warning(f"ignoring arguments {args}")
+
     cfg = get_config()
     LOG.info(
         dedent(
@@ -182,9 +187,7 @@ def download_plinder_cmd() -> None:
         )
     )
     for attr in cfg.data:
-        if attr.startswith("plinder_") or attr.endswith("_file"):
-            continue
-        if attr in ["validation"]:
+        if attr.startswith("plinder_") or attr.endswith("_file") or attr in ["validation", "force_update"]:
             continue
         path = None
         if attr == "scores":
