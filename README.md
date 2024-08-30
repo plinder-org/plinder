@@ -41,6 +41,34 @@ interaction dataset standard as part of an exciting competition at the upcoming 
 one of the field's premiere academic gatherings.
 More details about the competition will be announced shortly.
 
+## 🔢 Plinder versions
+
+We version the `plinder` dataset with two controls:
+
+- `PLINDER_RELEASE`: the month stamp of the last RCSB sync
+- `PLINDER_ITERATION`: value that enables iterative development within a release
+
+We version the `plinder` application using an automated semantic
+versioning scheme based on the `git` commit history.
+The `plinder.data` package is responsible for generating a dataset
+release and the `plinder.core` package makes it easy to interact
+with the dataset.
+
+#### Changelog:
+
+- 2024-06/v2 (Current):
+    - New systems added based on the 2024-06 RCSB sync
+    - Updated system definition to be more stable and depend only on ligand distance rather than PLIP
+    - Added annotations for crystal contacts
+    - Improved ligand handling and saving to fix some bond order issues
+    - Improved covalency detection and annotation to reference each bond explicitly
+    - Added linked apo/pred structures to v2/links and v2/linked_structures
+    - Added binding affinity annotations from [BindingDB](https://bindingdb.org)
+    - Added statistics requirement and other changes in the split to enrich test set diversity
+
+- 2024-04/v1: Version described in the preprint, with updated redundancy removal by protein pocket and ligand similarity.
+- 2024-04/v0: Version used to re-train DiffDock in the paper, with redundancy removal based on \<pdbid\>\_\<ligand ccd codes\>
+
 ## 🏅 Gold standard benchmark sets
 
 As part of *PLINDER* resource we provide train, validation and test splits that are
