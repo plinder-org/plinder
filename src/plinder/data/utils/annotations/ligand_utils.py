@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import itertools
 import logging
+import re
 import typing as ty
 from collections import Counter, defaultdict
 from functools import cache, cached_property
