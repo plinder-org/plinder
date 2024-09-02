@@ -33,12 +33,9 @@ from plinder.data.utils.annotations.extras import (
     extract_rcsb_info,
     extract_rdk_mol_from_cif,
     generate_bio_assembly,
-    get_all_bound_molecules,
     get_chain_mapping,
     get_ec,
     get_entity_type,
-    get_selected_residues_pdb_block,
-    get_specific_bound_molecules,
     read_mmcif_file,
 )
 from plinder.data.utils.annotations.interface_gap import annotate_interface_gaps
@@ -171,37 +168,6 @@ def test_find_missing_residues(cif_2y4i_system):
 
 def test_read_mmcif(cif_1qz5_unzipped):
     assert isinstance(read_mmcif_file(cif_1qz5_unzipped), PDBxFile)
-
-
-def test_get_all_bound_molecules(cif_1qz5_unzipped):
-    assert list(
-        get_all_bound_molecules(
-            cif_1qz5_unzipped,
-        ).keys()
-    ) == [("A376",), ("A380",), ("A500",)]
-
-
-def test_get_specific_bound_molecules(cif_1qz5_unzipped):
-    assert (
-        Chem.MolToSmiles(
-            get_specific_bound_molecules(cif_1qz5_unzipped, residue_list=[("A", 380)])
-        )
-        == "[H]OC1([H])C([H])(N2C([H])=NC3=C2N=C([H])N=C3N([H])[H])OC([H])(C([H])([H])OP(=O)(O[H])OP(=O)(O[H])OP(=O)(O[H])O[H])C1([H])O[H]"
-    )
-
-
-def test_get_selected_residues_pdb_block(cif_1qz5_unzipped):
-    assert (
-        Chem.MolFromPDBBlock(
-            get_selected_residues_pdb_block(
-                Path(cif_1qz5_unzipped), residue_criteria=[("ATP", 380, "A")]
-            )
-        )
-        .GetAtomWithIdx(0)
-        .GetPDBResidueInfo()
-        .GetResidueName()
-        == "ATP"
-    )
 
 
 def test_generate_bio_assembly(cif_1qz5_unzipped, tmp_path):

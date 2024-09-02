@@ -22,10 +22,6 @@ from rdkit.Chem.rdchem import Mol, RWMol
 
 from plinder.core.utils.config import get_config
 from plinder.data.common.constants import BASE_DIR
-from plinder.data.utils.annotations.extras import (
-    get_ccd_smiles_dict,
-    sort_ccd_codes,
-)
 from plinder.data.utils.annotations.interaction_utils import (
     extract_ligand_links_to_neighbouring_chains,
     get_plip_hash,
@@ -104,6 +100,26 @@ def lig_has_dummies(
     """
     # check for dummy list including composites, too!
     return len(set(ligand_code.split("-")).intersection(dummy_lig_list)) > 0
+
+
+def get_ccd_smiles_dict(ciffile: Path) -> dict[str, str]:
+    df = pd.read_parquet(ciffile.parent / "components.parquet")
+    return dict(zip(df["binder_id"], df["canonical_smiles"]))
+
+
+def sort_ccd_codes(code_list: list[str]) -> list[str]:
+    """Pick long first, then alphabetical letters followed by numbers
+    Args:
+        code_list (Set[str]): set of CCD strings
+
+    Returns:
+        List[str]: list of sorted CCD string set
+    """
+    code_list = sorted(sorted(code_list), key=len, reverse=True)
+    final_list = [code for code in code_list if not re.findall("([0-9])", code[0])] + [
+        code for code in code_list if re.findall("([0-9])", code[0])
+    ]
+    return final_list
 
 
 @cache
