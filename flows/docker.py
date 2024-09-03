@@ -74,7 +74,9 @@ def get_version_bump(base_tag: str | None = None) -> str:
             ),
             text=True,
         ).strip()
-        if log and "origin/main" in log:
+        # origin/main hack was to get around docs branch but isn'try:
+        # present before pushing the tag back to main so just search for PR number
+        if log and "(#" in log:
             bump = token.split()[1]
             break
     if bump == "skip":
