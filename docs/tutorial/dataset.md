@@ -14,9 +14,22 @@ The PLINDER dataset is versioned via two parameters:
 - `PLINDER_RELEASE`: the time stamp of the last RCSB sync
 - `PLINDER_ITERATION`: iterative development within a release
 
+There are two ways to obtain the data:
+
+1. Use the `plinder` python package and corresponding API
+2. Use the `gsutil` command line tool directly
+
 For the purpose of this tutorial we set `PLINDER_ITERATION` to `tutorial`, to download
 only a small manageable excerpt of the entries.
 
+Using the `plinder` package:
+```bash
+pip install plinder
+# adding --yes will skip all confirmation prompts
+plinder_download --release 2024-06 --iteration tutorial --yes
+```
+
+Using `gsutil`:
 ```console
 $ export PLINDER_RELEASE=2024-06
 $ export PLINDER_ITERATION=tutorial
@@ -24,13 +37,6 @@ $ mkdir -p ~/.local/share/plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/
 $ gsutil -m cp -r "gs://plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/*" ~/.local/share/plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/
 ```
 
-Alternatively, you can download (and unpack) the tutorial dataset with:
-
-```bash
-pip install plinder
-# adding --yes will skip all confirmation prompts
-plinder_download --release 2024-06 --iteration tutorial --yes
-```
 The full dataset (`PLINDER_ITERATION=v2`) has a size of hundreds of GB, so you are
 advised to have sufficient space for usage of the production dataset.
 
