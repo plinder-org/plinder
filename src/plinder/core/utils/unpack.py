@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 from pathlib import Path
+from time import time
 from typing import Literal, Optional
+from zipfile import BadZipFile, ZipFile
 
 from omegaconf import DictConfig
+from tqdm.contrib.concurrent import thread_map
 
 from plinder.core.utils import cpl
 from plinder.core.utils.config import get_config
+from plinder.core.utils.log import setup_logger
 
+LOG = setup_logger(__name__)
 ZIP_KINDS = Literal["entries", "linked_structures", "systems"]
 ID_KINDS = Literal["system_ids", "pdb_ids", "two_char_code"]
 
@@ -47,6 +52,19 @@ def expand_config_context(
     return "two_char_codes", two_chars
 
 
+def _unpack_zip(path: Path) -> None:
+    t0 = time()
+    done = path.parent / (path.stem + "_done")
+    if done.is_file():
+        LOG.debug(f"skipping {path} as it was already extracted")
+        return
+    with ZipFile(path) as arch:
+        arch.extractall(path=path.parent)
+        done.touch()
+    LOG.debug(f"validating and extracting {path} took {time() - t0:.2f}s")
+    return
+
+
 def get_zips_to_unpack(
     *,
     kind: ZIP_KINDS,
@@ -55,6 +73,28 @@ def get_zips_to_unpack(
     two_char_codes: Optional[str | list[str]] = None,
     cfg: Optional[DictConfig] = None,
 ) -> dict[Path, list[str]]:
+    """
+    Get the zips to unpack (and unpack them if necessary) for
+    the context provided (or configured).
+
+    Parameters
+    ----------
+    kind : ZIP_KINDS
+        the kind of zips to unpack
+    system_ids : Optional[str | list[str]], default=None
+        the system IDs to unpack
+    pdb_ids : Optional[str | list[str]], default=None
+        the PDB IDs to unpack
+    two_char_codes : Optional[str | list[str]], default=None
+        the two character codes to unpack
+    cfg : Optional[DictConfig], default=None
+        the plinder.core config
+
+    Returns
+    -------
+    dict[Path, list[str]]
+        the zips to unpack and the list of IDs (based on kind) in each zip
+    """
     conf = cfg or get_config()
     id_kind, ids = expand_config_context(
         system_ids=system_ids,
@@ -83,5 +123,25 @@ def get_zips_to_unpack(
             zips.setdefault(key, [])
 
     paths = list(zips.keys())
-    cpl.download_paths(paths=cpl.get_plinder_paths(paths=paths))
+    for path in paths:
+        if path.is_file():
+            try:
+                with ZipFile(path):
+                    pass
+            except BadZipFile:
+                LOG.error(f"removing malformed zip {path}")
+                path.unlink()
+
+    cpl.download_paths(
+        paths=cpl.get_plinder_paths(
+            paths=[path for path in paths if not path.is_file()]
+        )
+    )
+
+    if kind in ["systems", "linked_structures"]:
+        if len(paths) > 10:
+            thread_map(_unpack_zip, paths)
+        else:
+            cpl.thread_pool(_unpack_zip, paths)
+
     return zips

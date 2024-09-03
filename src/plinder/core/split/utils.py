@@ -101,7 +101,7 @@ def get_extended_plindex(
     plindex: Optional[pd.DataFrame] = None,
 ) -> pd.DataFrame:
     if plindex is None:
-        plindex = get_plindex(cfg=cfg)
+        plindex = get_plindex()
     plindex = reset_lipinski_and_other(plindex)
     plindex["system_ligand_max_qed"] = plindex.groupby("system_id")[
         "ligand_qed"

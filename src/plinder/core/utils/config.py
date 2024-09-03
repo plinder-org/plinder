@@ -242,7 +242,6 @@ class DataConfig:
     fingerprints: str = "fingerprints"
     fingerprint_file: str = "ligands_per_system.parquet"
     index: str = "index"
-    manifest: str = "manifest"
     ligand_scores: str = "ligand_scores"
     ligands: str = "ligands"
     links: str = "links"
@@ -253,7 +252,6 @@ class DataConfig:
     split_file: str = "split.parquet"
     systems: str = "systems"
     index_file: str = "annotation_table.parquet"
-    manifest_file: str = "manifest.parquet"
     force_update: bool = False
 
     def __post_init__(self) -> None:

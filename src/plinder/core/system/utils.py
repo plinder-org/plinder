@@ -21,7 +21,7 @@ def load_systems(
     )
     if kind == "system_ids":
         return {system_id: PlinderSystem(system_id=system_id) for system_id in items}
-    manifest = get_manifest(cfg=cfg)
+    manifest = get_manifest()
     systems = {}
     if kind == "pdb_ids":
         for pdb_id in items:
