@@ -79,6 +79,7 @@ tutorial/index
 dataset
 api/index
 evaluation
+examples/index
 contribution/index
 citation
 :::
