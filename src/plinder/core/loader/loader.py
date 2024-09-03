@@ -82,7 +82,7 @@ class PlinderDataset(Dataset):  # type: ignore
             item["path"] = s.system_cif
 
         if self._links is not None:
-            alternatives = {}
+            alternatives: dict[str, pd.DataFrame | str | None] = {}
             try:
                 links = self._links.get_group(s.system_id)
                 if not links.empty:
