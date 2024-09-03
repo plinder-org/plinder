@@ -6,8 +6,6 @@ The PLINDER data is accessible from a _Google Cloud Platform_
 [bucket](https://cloud.google.com/storage/docs/buckets), a container for cloud storage
 of data.
 The bucket URL of PLINDER is `gs://plinder`.
-To interact with the data, we
-[install `gsutil`](https://cloud.google.com/storage/docs/gsutil_install) first.
 
 The PLINDER dataset is versioned via two parameters:
 
@@ -17,14 +15,15 @@ The PLINDER dataset is versioned via two parameters:
 There are two ways to obtain the data:
 
 1. Use the `plinder` python package and corresponding API
+    - `pip install plinder`
 2. Use the `gsutil` command line tool directly
+   - [installing `gsutil`](https://cloud.google.com/storage/docs/gsutil_install)
 
 For the purpose of this tutorial we set `PLINDER_ITERATION` to `tutorial`, to download
 only a small manageable excerpt of the entries.
 
 Using the `plinder` package:
 ```bash
-pip install plinder
 # adding --yes will skip all confirmation prompts
 plinder_download --release 2024-06 --iteration tutorial --yes
 ```
@@ -78,6 +77,8 @@ $ gsutil -m cp -r gs://plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/splits ~/
 ```
 
 ## Unpacking the structure files
+
+If you used the `plinder_download` command, you can skip this section.
 
 Similar to the
 [PDB NextGen Archive](https://www.wwpdb.org/ftp/pdb-nextgen-archive-site), we split the
