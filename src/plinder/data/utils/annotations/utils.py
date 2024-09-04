@@ -30,3 +30,20 @@ class DocBaseModel(BaseModel):
                     prop.func.__annotations__.get("return", None),
                 )
         return descriptions
+
+    @classmethod
+    def document_properties_to_tsv(cls, prefix: str, filename: str) -> None:
+        with open(filename, "w") as tsv:
+            # write header
+            tsv.write("\t".join(["Name", "Type", "Description"]) + "\n")
+            # write fields info
+            for field, field_info in cls.get_descriptions_and_types().items():
+                description, dtype = field_info
+                name = f"{prefix}_{field}"
+                if description:
+                    descr = description
+                    if descr.startswith("__"):
+                        continue
+                else:
+                    descr = "[DESCRIPTION MISSING]"
+                tsv.write("\t".join([name, dtype, descr]) + "\n")

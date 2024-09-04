@@ -858,22 +858,6 @@ class Ligand(DocBaseModel):
 
     """
 
-    def document_ligand_properties_to_tsv(self, filename: str) -> None:
-        with open(filename, "w") as tsv:
-            # write header
-            tsv.write("\t".join(["Name", "Type", "Description"]) + "\n")
-            # write fields info
-            for field, field_info in self.get_descriptions_and_types().items():
-                description, dtype = field_info
-                name = f"ligand_{field}"
-                if description:
-                    descr = description
-                    if descr.startswith("__"):
-                        continue
-                else:
-                    descr = "[DESCRIPTION MISSING]"
-                tsv.write("\t".join([name, dtype, descr]) + "\n")
-
     def set_rdkit(self) -> None:
         try:
             rdkit_compatible_mol = Chem.MolFromSmiles(self.smiles)
@@ -1449,7 +1433,7 @@ class Ligand(DocBaseModel):
         else:
             raise ValueError(f"chain_type={chain_type} not understood")
         sub_chains_data = [
-            chains[instance_chain.split(".")[-1]].to_dict(
+            chains[instance_chain.split(".")[-1]].format_chain(
                 int(instance_chain.split(".")[0])
             )
             for instance_chain in sub_chains
@@ -1459,7 +1443,7 @@ class Ligand(DocBaseModel):
             return {}
         for sub_chain in sub_chains_data:
             for key in sub_chain:
-                data[f"ligand_{chain_type}_chains{key}"].append(sub_chain[key])
+                data[f"ligand_{chain_type}_chains_{key}"].append(sub_chain[key])
         return data
 
     def format_residues(
@@ -1492,7 +1476,7 @@ class Ligand(DocBaseModel):
             for residue_number in residues[instance_chain]:
                 res.append(
                     f"{instance_chain}_{residue_number}_{chains[chain].residues[residue_number].index}"
-                )
+                )  # TODO: move some of this logic to Residue
         return {f"ligand_{residue_type}_residues": res}
 
     def format_interactions(self) -> dict[str, list[str]]:
