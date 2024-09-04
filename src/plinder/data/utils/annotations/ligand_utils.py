@@ -1433,7 +1433,7 @@ class Ligand(DocBaseModel):
         else:
             raise ValueError(f"chain_type={chain_type} not understood")
         sub_chains_data = [
-            chains[instance_chain.split(".")[-1]].format_chain(
+            chains[instance_chain.split(".")[-1]].format(
                 int(instance_chain.split(".")[0])
             )
             for instance_chain in sub_chains
@@ -1500,7 +1500,7 @@ class Ligand(DocBaseModel):
                     interactions.append(f"{chain}_{residue}_{interaction}")
         return {"ligand_interactions": interactions}
 
-    def format_ligand(self, chains: dict[str, Chain]) -> dict[str, ty.Any]:
+    def format(self, chains: dict[str, Chain]) -> dict[str, ty.Any]:
         data = defaultdict(str)
 
         for field in self.get_descriptions_and_types():

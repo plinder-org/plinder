@@ -360,7 +360,7 @@ class Chain(DocBaseModel):
         """
         return {self.residues[r].index: r for r in self.residues}
 
-    def format_chain(self, instance: int) -> dict[str, Any]:
+    def format(self, instance: int) -> dict[str, Any]:
         """
         Format chain as a dictionary
         """
@@ -372,7 +372,7 @@ class Chain(DocBaseModel):
         }
         data.update(self.mappings)
         if self.validation is not None:
-            data.update(self.validation.to_dict())
+            data.update(self.validation.format())
         return data
 
     def set_validation(
