@@ -295,6 +295,7 @@ def system_save_and_score_representative(
             reference_system,
             score_protein=True,
             score_posebusters=True,
+            rigid=False,
         ).summarize_scores()
         with open(save_folder / "scores.json", "w") as f:
             json.dump(scores, f)
