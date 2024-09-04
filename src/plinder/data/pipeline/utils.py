@@ -519,25 +519,15 @@ def create_nonredundant_dataset(*, data_dir: Path) -> None:
     cases. Ultimately this should run as the join step of structure_qc.
     """
     df = create_index(data_dir=data_dir)
-    df_trainable = df[
-        ~(df.ligand_is_invalid | df.ligand_is_artifact | df.ligand_is_ion)
-        & (df.ligand_passes_valence_checks)
-        & (df.ligand_sanitization)
-        & (df.ligand_passes_kekulization)
-        & (df.ligand_mol_pred_loaded)
-        & (df.system_num_ligand_chains == 1)
-        & (df.ligand_rdkit_canonical_smiles.notna())
-    ].reset_index(drop=True)
-
-    df_trainable["uniqueness"] = (
-        df_trainable["system_id_no_biounit"]
+    df["uniqueness"] = (
+        df["system_id_no_biounit"]
         + "_"
-        + df_trainable["pli_qcov__100__strong__component"]
+        + df["pli_qcov__100__strong__component"]
     )
-    df_trainable_nonredundant = df_trainable.sort_values(
+    df_nonredundant = df.sort_values(
         "system_biounit_id"
     ).drop_duplicates("uniqueness")
-    df_trainable_nonredundant.to_parquet(
+    df_nonredundant.to_parquet(
         data_dir / "index" / "annotation_table_nonredundant.parquet", index=False
     )
 

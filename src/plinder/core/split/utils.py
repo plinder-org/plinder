@@ -44,57 +44,6 @@ def get_split(
     return _SPLIT
 
 
-# TODO: this can be removed after cleanup merge
-def reset_lipinski_and_other(df: pd.DataFrame) -> pd.DataFrame:
-    # Reset artifacts/ions
-    mask_reset = df["ligand_is_ion"] | df["ligand_is_artifact"]
-    df.loc[
-        mask_reset,
-        [
-            "ligand_is_fragment",
-            "ligand_is_lipinski",
-            "ligand_is_cofactor",
-            "ligand_is_covalent",
-            "ligand_is_oligo",
-        ],
-    ] = False
-
-    # Lipinski like Ro3
-    mask_ro3 = (
-        (df["ligand_molecular_weight"] < 300)
-        & (df["ligand_crippen_clogp"] < 3)
-        & (df["ligand_num_hbd"] <= 3)
-        & (df["ligand_num_hba"] <= 3)
-        & ~mask_reset
-    )
-    df.loc[mask_ro3, ["ligand_is_fragment", "ligand_is_lipinski"]] = True
-
-    # Lipinski like Ro5
-    mask_ro5 = (
-        (df["ligand_molecular_weight"] < 500)
-        & (df["ligand_crippen_clogp"] < 5)
-        & (df["ligand_num_hbd"] <= 5)
-        & (df["ligand_num_hba"] <= 10)
-        & ~mask_reset
-        & ~mask_ro3
-    )
-    df.loc[mask_ro5, "ligand_is_lipinski"] = True
-
-    # ligand_is_other
-    df["ligand_is_other"] = ~(
-        df["ligand_is_invalid"]
-        | df["ligand_is_ion"]
-        | df["ligand_is_oligo"]
-        | df["ligand_is_artifact"]
-        | df["ligand_is_cofactor"]
-        | df["ligand_is_lipinski"]
-        | df["ligand_is_fragment"]
-        | df["ligand_is_covalent"]
-    )
-
-    return df
-
-
 def get_extended_plindex(
     *,
     cfg: Optional[DictConfig] = None,
@@ -118,13 +67,9 @@ def get_extended_plindex(
         the extended PLINDER index
     """
     if plindex is None:
-        plindex = get_plindex()
-    plindex = reset_lipinski_and_other(plindex)
-    plindex["system_ligand_max_qed"] = plindex.groupby("system_id")[
-        "ligand_qed"
-    ].transform("max")
-    plindex["system_pass_validation_criteria"] = plindex[
-        "system_pass_validation_criteria"
+        plindex = get_plindex(cfg=cfg)
+    plindex["system_validation_pass_criteria"] = plindex[
+        "system_validation_pass_criteria"
     ].fillna(False)
     for n in [
         "lipinski",
@@ -140,33 +85,10 @@ def get_extended_plindex(
         plindex[f"system_ligand_has_{n}"] = plindex.groupby("system_id")[
             f"ligand_is_{n}"
         ].transform("any")
-    plindex["system_interacting_protein_chains_total_length"] = plindex[
-        "system_interacting_protein_chains_length"
-    ].apply(lambda x: sum(int(i) for i in x.split(";")))
-    plindex["ligand_is_proper"] = (
-        ~plindex["ligand_is_ion"] & ~plindex["ligand_is_artifact"]
-    )
-    plindex["system_proper_num_ligand_chains"] = plindex.groupby("system_id")[
-        "ligand_is_proper"
-    ].transform("sum")
-    plindex["system_proper_num_interactions"] = (
-        plindex["ligand_num_interactions"]
-        .where(plindex["ligand_is_proper"], other=0)
-        .groupby(plindex["system_id"])
-        .transform("sum")
-    )
-    plindex["system_proper_pocket_num_residues"] = (
-        plindex["ligand_num_neighboring_residues"]
-        .where(plindex["ligand_is_proper"], other=0)
-        .groupby(plindex["system_id"])
-        .transform("sum")
-    )
-    plindex["system_proper_ligand_max_molecular_weight"] = (
-        plindex["ligand_molecular_weight"]
-        .where(plindex["ligand_is_proper"], other=float("-inf"))
-        .groupby(plindex["system_id"])
-        .transform("max")
-    )
+    plindex["system_protein_chains_total_length"] = plindex[
+        "system_protein_chains_length"
+    ].apply(lambda x: sum(x))
+
     plindex["uniqueness"] = (
         plindex["system_id_no_biounit"]
         + "_"

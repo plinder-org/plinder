@@ -2,6 +2,8 @@
 # Distributed under the terms of the Apache License 2.0
 from __future__ import annotations
 
+from functools import cached_property
+
 import numpy as np
 from PDBValidation.PDBXReader import ResidueNotFound
 from PDBValidation.Residue import Residue
@@ -320,7 +322,7 @@ class EntryValidation(DocBaseModel):
         )
 
     @computed_field  # type: ignore
-    @property
+    @cached_property
     def r_minus_rfree(self) -> float:
         """
         The difference between r and rfree

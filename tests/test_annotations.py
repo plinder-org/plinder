@@ -73,8 +73,8 @@ def test_short_noncov_peptide_detection(cif_6i41, mock_alternative_datasets):
     assert set(df.ligand_ccd_code.to_list()) == {"LYS-ALA-ASP-THR-THR-THR-PRO"}
     # Note: chain 'B' is ligand = should not be in protein neigh list
     assert df[
-        "ligand_neighboring_protein_chains_auth_id"
-    ].drop_duplicates().to_list() == ["A"]
+        "ligand_protein_chains_auth_id"
+    ].drop_duplicates().to_list() == [["A"]]
 
 
 def test_synthetic_noncov_peptide_detection(cif_6u6k, mock_alternative_datasets):
@@ -102,7 +102,7 @@ def test_synthetic_cov_peptide_detection(cif_6lu7, mock_alternative_datasets):
     assert ligname in ["02J-ALA-VAL-LEU-PJE-010", "PRD_002214"]
     # peptide ligand chain 'B' should not be in protein chains!
     assert (
-        sum(["B" in i for i in df["ligand_neighboring_protein_chains_auth_id"].values])
+        sum(["B" in i for i in df["ligand_protein_chains_auth_id"].values])
         == 0
     )
     lig = plinder_anno.entry.systems["6lu7__1__1.A_2.A__1.B"].ligands[0]
@@ -157,8 +157,8 @@ def test_simple_ternary_detection(cif_2p1q, mock_alternative_datasets):
     auxin_entry = df.ligand_ccd_code == "IAC"
     # expect two chains to get this correct!
     assert df[auxin_entry][
-        "ligand_neighboring_protein_chains_auth_id"
-    ].drop_duplicates().to_list() == ["B;C"]
+        "ligand_protein_chains_auth_id"
+    ].drop_duplicates().to_list() == [["B", "C"]]
 
 
 def test_plip_entry_binary(cif_4ci1, mock_alternative_datasets, lig_code="EF2"):
@@ -387,21 +387,21 @@ def test_get_validation(
     entry_dir = mock_alternative_datasets("1qz5")
     reference_df = pd.DataFrame.from_dict({
         'system_id': '1qz5__1__1.A__1.D',
-        'system_ligand_atom_count': 67,
-        'system_ligand_average_occupancy': 1.000,
-        'system_ligand_average_rscc': 0.958,
-        'system_ligand_average_rsr': 0.098,
+        'system_ligand_validation_atom_count': 67,
+        'system_ligand_validation_average_occupancy': 1.000,
+        'system_ligand_validation_average_rscc': 0.958,
+        'system_ligand_validation_average_rsr': 0.098,
         'ligand_ccd_code': 'KAB',
-        'entry_resolution': 1.45,
-        'entry_rfree': 0.19,
-        'entry_r': 0.17,
-        'entry_clashscore': 3.93,
-        'entry_percent_rama_outliers': 0.00,
-        'entry_molprobity': 1.408352978496041,
-        'entry_r_minus_rfree': 0.01999999999999999,
-        'system_pocket_max_alt_count': 2,
-        'system_pass_validation_criteria': False,
-        'entry_pass_validation_criteria': True}, orient="index").T.infer_objects()
+        'entry_validation_resolution': 1.45,
+        'entry_validation_rfree': 0.19,
+        'entry_validation_r': 0.17,
+        'entry_validation_clashscore': 3.93,
+        'entry_validation_percent_rama_outliers': 0.00,
+        'entry_validation_molprobity': 1.408352978496041,
+        'entry_validation_r_minus_rfree': 0.01999999999999999,
+        'system_pocket_validation_max_alt_count': 2,
+        'system_validation_pass_criteria': False,
+        'entry_validation_pass_criteria': True}, orient="index").T.infer_objects()
     entry = GetPlinderAnnotation(cif_1qz5,validation_1qz5, save_folder=entry_dir)
     entry.annotate()
     validation_df = entry.annotated_df[reference_df.columns]
