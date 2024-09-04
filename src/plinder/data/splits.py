@@ -250,7 +250,7 @@ def prep_data_for_desired_properties(
         data_dir / "index" / "annotation_table.parquet",
         filters=[
             ("system_type", "==", "holo"),
-            ("system_num_interacting_protein_chains", "<=", 5),
+            ("system_num_protein_chains", "<=", 5),
             ("system_num_ligand_chains", "<=", 5),
             ("entry_pdb_id", "in", all_entries_present),
         ],
@@ -268,8 +268,8 @@ def prep_data_for_desired_properties(
     LOG.info(f"loaded {len(all_system_ids)} nonredundant systems from annotation table")
 
     entries["system_pass_statistics_criteria"] = (
-        (entries["system_proper_pocket_num_residues"] >= cfg.split.min_max_pocket[0])
-        & (entries["system_proper_pocket_num_residues"] <= cfg.split.min_max_pocket[1])
+        (entries["system_proper_num_pocket_residues"] >= cfg.split.min_max_pocket[0])
+        & (entries["system_proper_num_pocket_residues"] <= cfg.split.min_max_pocket[1])
         & (entries["system_proper_num_interactions"] >= cfg.split.min_max_pli[0])
         & (entries["system_proper_num_interactions"] <= cfg.split.min_max_pli[1])
         & (
@@ -282,7 +282,7 @@ def prep_data_for_desired_properties(
         )
     )
     entries["system_pass_validation_criteria"] = (
-        entries["system_pass_validation_criteria"].fillna(False).astype(bool)
+        entries["system_validation_pass_criteria"].fillna(False).astype(bool)
     )
     LOG.info(
         f"{entries['system_pass_validation_criteria'].sum()} systems pass validation criteria"

@@ -277,7 +277,7 @@ class Chain(DocBaseModel):
         description="Chain type string representation as defined https://openstructure.org/docs/2.8/mol/base/entity/#ost.mol.ChainType"
     )
     residues: dict[int, Residue] = Field(
-        description="Dictionary of residues in chain with keys as residue number"
+        description="__Dictionary of residues in chain with keys as residue number"
     )
     length: int = Field(description="SEQRES length")
     num_unresolved_residues: int = Field(
@@ -285,14 +285,14 @@ class Chain(DocBaseModel):
     )
     mappings: dict[str, dict[str, list[tuple[str, str] | None]]] = Field(
         default_factory=dict,
-        description="Mapping of metadata associated with chain with keys as chain asym id",
+        description="__Mapping of metadata associated with chain with keys as chain asym id",
     )
     holo: bool = Field(
-        default=True, description="Is the chain part of a holo system or not"
+        default=True, description="__Is the chain part of a holo system or not"
     )
     validation: ResidueListValidation | None = Field(
         default=None,
-        description="Crystal validation information for the residues in the chain",
+        description="__Crystal validation information for the residues in the chain",
     )
 
     # Added this because pydantic doesn't know how to validate mol.ChainType
@@ -365,7 +365,7 @@ class Chain(DocBaseModel):
         Format chain as a dictionary
         """
         data: dict[str, Any] = {
-            "": f"{instance}.{self.asym_id}",
+            "asym_id": f"{instance}.{self.asym_id}",
             "auth_id": self.auth_id,
             "entity_id": self.entity_id,
             "length": self.length,

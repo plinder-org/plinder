@@ -450,7 +450,7 @@ def prepare_system_dict(
                 "complex_path": complex_file,
                 "receptor_path": receptor_path,
                 "ligands": ligands,
-                "protein_chains": set(annotation.interacting_protein_chains),
+                "protein_chains": set(annotation.protein_chains),
                 "ligand_chains": set(annotation.ligand_chains),
             }
         else:

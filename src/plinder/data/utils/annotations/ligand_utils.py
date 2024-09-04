@@ -1169,7 +1169,7 @@ class Ligand(DocBaseModel):
         return ligand_selection
 
     @cached_property
-    def interacting_protein_chains(self) -> list[str]:
+    def protein_chains(self) -> list[str]:
         """
         List of RCSB asymmetric chain ids of protein residues within 6 Å of ligand of interest unless
         the ligand is an artifact, in which case we return an empty list.
@@ -1177,14 +1177,7 @@ class Ligand(DocBaseModel):
         if self.is_artifact:
             return []
         else:
-            return self.neighboring_protein_chains
-
-    @cached_property
-    def neighboring_protein_chains(self) -> list[str]:
-        """
-        List of RCSB asymmetric chain ids of protein residues within 6 Å of ligand of interest.
-        """
-        return list(sorted(self.neighboring_residues.keys()))
+            return list(sorted(self.neighboring_residues.keys()))
 
     @cached_property
     def num_interacting_residues(self) -> int:
@@ -1203,6 +1196,13 @@ class Ligand(DocBaseModel):
         return sum(
             len(self.neighboring_residues[chain]) for chain in self.neighboring_residues
         )
+
+    @cached_property
+    def is_proper(self) -> bool:
+        """
+        Check if ligand is a proper ligand (not an ion or artifact)
+        """
+        return not self.is_ion and not self.is_artifact
 
     @cached_property
     def num_interactions(self) -> int:
@@ -1422,10 +1422,8 @@ class Ligand(DocBaseModel):
         -------
         dict[str, str]
         """
-        if chain_type == "interacting_protein":
-            sub_chains = self.interacting_protein_chains
-        elif chain_type == "neighboring_protein":
-            sub_chains = self.neighboring_protein_chains
+        if chain_type == "protein":
+            sub_chains = self.protein_chains
         elif chain_type == "interacting_ligand":
             sub_chains = self.interacting_ligands
         elif chain_type == "neighboring_ligand":
@@ -1509,8 +1507,7 @@ class Ligand(DocBaseModel):
                 "posebusters_result",
                 "interactions",
                 "ligand_auth_id",
-                "interacting_protein_chains",
-                "neighboring_protein_chains",
+                "protein_chains",
                 "interacting_ligands",
                 "neighboring_ligands",
                 "interacting_residues",
@@ -1531,8 +1528,7 @@ class Ligand(DocBaseModel):
             {"ligand_auth_id": chains[self.asym_id].auth_id}
         )  # not a cached_property b/c it needs chains!
         for chain_type in [
-            "interacting_protein",
-            "neighboring_protein",
+            "protein",
             "interacting_ligand",
             "neighboring_ligand",
         ]:

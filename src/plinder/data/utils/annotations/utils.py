@@ -41,9 +41,9 @@ class DocBaseModel(BaseModel):
                 description, dtype = field_info
                 name = f"{prefix}_{field}"
                 if description:
-                    descr = description
+                    descr = description.lstrip()
                     if descr.startswith("__"):
                         continue
                 else:
                     descr = "[DESCRIPTION MISSING]"
-                tsv.write("\t".join([name, dtype, descr]) + "\n")
+                tsv.write("\t".join([name, str(dtype), descr]) + "\n")
