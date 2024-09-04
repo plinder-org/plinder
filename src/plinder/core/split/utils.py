@@ -100,6 +100,23 @@ def get_extended_plindex(
     cfg: Optional[DictConfig] = None,
     plindex: Optional[pd.DataFrame] = None,
 ) -> pd.DataFrame:
+    """
+    The extended PLINDER index includes all of the cluster
+    labels and additional columns that are used in the
+    scoring and splitting.
+
+    Parameters
+    ----------
+    cfg : DictConfig, default=None
+        the plinder-core config
+    plindex : pd.DataFrame, default=None
+        the full PLINDER index
+
+    Returns
+    -------
+    pd.DataFrame
+        the extended PLINDER index
+    """
     if plindex is None:
         plindex = get_plindex()
     plindex = reset_lipinski_and_other(plindex)

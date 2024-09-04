@@ -19,7 +19,7 @@ from textwrap import dedent
 _root = Path(__file__).parent.parent
 
 from plinder.core.index.utils import get_manifest, get_plindex
-from plinder.core.split.utils import get_split
+from plinder.core.split.utils import get_extended_plindex, get_split
 from plinder.core.system.system import PlinderSystem
 from plinder.core.utils.config import get_config
 
@@ -43,6 +43,7 @@ except (ImportError, ModuleNotFoundError):
 
 __all__ = [
     "get_config",
+    "get_extended_plindex",
     "get_plindex",
     "get_manifest",
     "get_split",
