@@ -27,8 +27,8 @@ def setup_logger(
     Setup logger for the module name as the logger name by default
     for easy tracing of what's happening in the code
 
-    Parameters:
-    -----------
+    Parameters
+    ----------
     logger_name : str
         Name of the logger
     log_level : int
@@ -38,8 +38,8 @@ def setup_logger(
     propagate : bool
         propagate log events to parent loggers, default = False
 
-    Returns:
-    --------
+    Returns
+    -------
     logging.Logger:
         logger object
 
