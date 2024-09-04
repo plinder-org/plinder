@@ -28,8 +28,10 @@ class PlinderDataset(Dataset):  # type: ignore
         path to a file containing a list of system ids (default: full index)
     store_file_path : bool, default=True
         if True, include the file path of the source structures in the dataset
-    num_alternative_structures : int, default=0
-        if available, load up to this number of alternative structures (apo and pred)
+    load_alternative_structures : bool, default=False
+        if True, include alternative structures in the dataset
+    num_alternative_structures : int, default=1
+        number of alternative structures (apo and pred) to include
     """
 
     def __init__(
@@ -38,8 +40,8 @@ class PlinderDataset(Dataset):  # type: ignore
         split: str = "train",
         split_parquet_path: str | Path | None = None,
         store_file_path: bool = True,
-        num_alternative_structures: int = 0,
-        file_paths_only: bool = False,
+        load_alternative_structures: bool = False,
+        num_alternative_structures: int = 1,
     ):
         if df is None:
             if split_parquet_path is None:
@@ -52,9 +54,7 @@ class PlinderDataset(Dataset):  # type: ignore
         self._links = None
         if num_alternative_structures > 0:
             self._links = query_links().groupby("reference_system_id")
-
         self.num_alternative_structures = num_alternative_structures
-        self._file_paths_only = file_paths_only
 
     def __len__(self) -> int:
         return self._num_examples
@@ -67,16 +67,10 @@ class PlinderDataset(Dataset):  # type: ignore
 
         s = system.PlinderSystem(system_id=self._system_ids[index])
 
-        if self._file_paths_only:
-            # avoid loading structure if not needed
-            structure_df = None
-        else:
-            structure_df = fo.bp_to_df(fo.read_any(s.system_cif))
-
-        item: Dict[str, Any] = {
+        item = {
             "id": index,
             "system_id": s.system_id,
-            "df": structure_df,
+            "df": fo.bp_to_df(fo.read_any(s.system_cif)),
             "alternative_structures": {},
         }
         if self._store_file_path:
@@ -99,6 +93,7 @@ class PlinderDataset(Dataset):  # type: ignore
                             alternatives[df_key] = None
                         else:
                             alternatives[df_key] = fo.bp_to_df(fo.read_any(structure))
+
                         if self._store_file_path:
                             alternatives[f"{kind}_{link_id}_path"] = structure
                         count += 1
@@ -108,6 +103,7 @@ class PlinderDataset(Dataset):  # type: ignore
                             return item
             except KeyError:
                 pass
+
             item["alternative_structures"] = alternatives
         return item
 
@@ -164,4 +160,3 @@ def get_model_input_files(
         if count >= max_num_sample:
             break
     return model_inputs
-
