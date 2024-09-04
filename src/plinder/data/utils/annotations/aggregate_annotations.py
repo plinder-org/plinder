@@ -840,6 +840,8 @@ class Entry(DocBaseModel):
         )
         entry_info = get_entry_info(cif_data)
         per_chain = get_chain_external_mappings(cif_data)
+        # TODO: annotate_interface_gaps does not use the same ligand chain definitions as the rest
+        # move this to later after protein/ligand chain assignment?
         interface_proximal_gaps = annotate_interface_gaps(cif_file)
         resolution = entry_info.get("entry_resolution")
         r = None
