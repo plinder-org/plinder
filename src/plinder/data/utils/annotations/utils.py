@@ -9,19 +9,24 @@ from pydantic import BaseModel
 
 class DocBaseModel(BaseModel):
     @classmethod
-    def get_descriptions(cls) -> dict[str, str | None]:
+    def get_descriptions_and_types(cls) -> dict[str, tuple[str | None, str | None]]:
         """
-        Returns a dictionary mapping attribute and property names to their descriptions.
+        Returns a dictionary mapping attribute and property names to their descriptions and types.
 
         Returns:
         --------
         dict[str, str | None]
-            A dictionary mapping attribute and property names to their descriptions.
+            A dictionary mapping attribute and property names to their descriptions and types.
         """
         descriptions = {}
+        annotations = cls.__annotations__
         for name, value in cls.model_fields.items():
-            descriptions[name] = value.description
+            descriptions[name] = (value.description, annotations[name])
+
         for name, prop in cls.__dict__.items():
             if isinstance(prop, cached_property) or isinstance(prop, property):
-                descriptions[name] = prop.__doc__
+                descriptions[name] = (
+                    prop.__doc__,
+                    prop.func.__annotations__.get("return", None),
+                )
         return descriptions
