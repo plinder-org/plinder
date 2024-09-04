@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 import typing as ty
 from collections import Counter, defaultdict
+from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
 
@@ -14,7 +15,7 @@ from ost import io, mol
 from PDBValidation.ValidationFactory import ValidationFactory
 from plip.basic import config
 from posebusters import PoseBusters
-from pydantic import BaseModel, BeforeValidator, Field
+from pydantic import BeforeValidator, Field
 from rdkit import RDLogger
 
 from plinder.core.utils.config import get_config
@@ -22,7 +23,7 @@ from plinder.core.utils.log import setup_logger
 from plinder.data.utils.annotations.get_ligand_validation import (
     EntryValidation,
     ResidueListValidation,
-    SystemValidationThresholds,
+    ResidueValidationThresholds,
 )
 from plinder.data.utils.annotations.interaction_utils import (
     get_covalent_connections,
@@ -42,6 +43,7 @@ from plinder.data.utils.annotations.save_utils import (
     save_ligands,
     save_pdb_file,
 )
+from plinder.data.utils.annotations.utils import DocBaseModel
 
 LOG = setup_logger(__name__)
 RDLogger.DisableLog("rdApp.*")
@@ -74,62 +76,53 @@ def remove_alphabets(x: str) -> int:
     return int(re.sub("[^0-9]", "", x))
 
 
-class System(BaseModel):
-    pdb_id: str
-    biounit_id: str
-    ligands: list[Ligand]
-    ligand_validation: ResidueListValidation | None = None
-    pocket_validation: ResidueListValidation | None = None
-    pass_criteria: bool | None = None
+@dataclass
+class QualityCriteria:
+    max_entry_resolution: float = 3.5
+    max_entry_r: float = 0.4
+    max_entry_rfree: float = 0.45
+    max_entry_r_minus_rfree: float = 0.05
+    ligand_max_num_unresolved_heavy_atoms: int = 0
+    ligand_max_alt_count: int = 1
+    ligand_min_average_occupancy: float = 0.8
+    ligand_min_average_rscc: float = 0.8
+    ligand_max_average_rsr: float = 0.3
+    ligand_max_percent_outliers_clashes: float = 0
+    ligand_max_fraction_atoms_with_crystal_contacts: float = 0
+    pocket_max_num_unresolved_heavy_atoms: int = 0
+    pocket_max_alt_count: int = 1
+    pocket_min_average_occupancy: float = 0.8
+    pocket_min_average_rscc: float = 0.8
+    pocket_max_average_rsr: float = 0.3
+    pocket_max_percent_outliers_clashes: int = 100
+
+
+class System(DocBaseModel):
+    pdb_id: str = Field(description="PDB ID")
+    biounit_id: str = Field(description="Biounit ID")
+    ligands: list[Ligand] = Field(description="List of Ligands in a systems")
+    ligand_validation: ResidueListValidation | None = Field(
+        default=None,
+        description="Validation object for the ligand residues in the system",
+    )
+    pocket_validation: ResidueListValidation | None = Field(
+        default=None, description="Validation object for the system's pocket residues"
+    )
+    pass_criteria: bool | None = Field(
+        default=None, description="Passes quality criteria"
+    )  # TODO: remove as attribute and have as function
 
     """
-    This dataclass defines as system which included a protein-ligand complex
+    This class defines a system which includes a protein-ligand complex
     and it's neighboring ligands and protein residues
-
-    Parameters
-    ----------
-    pdb_id : str
-        4-letter pdbid of interest
-    biounit_id: str
-        biounit id
-    ligands: list[Ligand]
-        List of Ligands in a systems
-
-    Attributes
-    ----------
-    interacting_protein_chains : list[tuple[int, str]]
-
-    neighboring_protein_chains: list[tuple[int, str]]
-        biounit id
-    ligand_chains: list[tuple[int, str]]
-        List of Ligands in a systems
-    num_pocket_residues : int
-        Number of protein residues in pocket
-    num_interactions : int
-        Number of interactions
-    id : str
-        system id
-    system_type : str
-        system type, whether real ligand, ion, artifacts, etc
-
-    Methods
-    -------
-    format_chains : dict[str, str]
-        Add descriptive-formating to chain, where neighboring, \
-            interacting residues or ligand
-    format_system : dict[str, ty.Any]
-        Add descriptive-formating to systems
-    save_system : None
-        Save systems into cif, odb and sdf files
-
-    Examples
-    --------
-    TODO: Add example
 
     """
 
     @cached_property
     def interacting_protein_chains(self) -> list[str]:
+        """
+        Interacting protein chains of the system
+        """
         return sorted(
             set(
                 chain
@@ -140,6 +133,9 @@ class System(BaseModel):
 
     @cached_property
     def neighboring_protein_chains(self) -> list[str]:
+        """
+        Neighboring protein chains of the system
+        """
         return sorted(
             set(
                 chain
@@ -150,6 +146,9 @@ class System(BaseModel):
 
     @cached_property
     def id_no_biounit(self) -> str:
+        """
+        ID of the system without the biounit
+        """
         return "__".join(
             [
                 self.pdb_id,
@@ -160,26 +159,44 @@ class System(BaseModel):
 
     @cached_property
     def ligand_chains(self) -> list[str]:
+        """
+        Ligand chains of the system
+        """
         return [f"{ligand.instance}.{ligand.asym_id}" for ligand in self.ligands]
 
     @cached_property
     def num_pocket_residues(self) -> int:
+        """
+        Number of pocket residues of the system
+        """
         return sum(l.num_pocket_residues for l in self.ligands)
 
     @cached_property
     def num_interactions(self) -> int:
+        """
+        Number of interactions of the system
+        """
         return sum(l.num_interactions for l in self.ligands)
 
     @cached_property
     def num_unique_interactions(self) -> int:
+        """
+        Number of unique interactions of the system
+        """
         return sum(l.num_unique_interactions for l in self.ligands)
 
     @cached_property
     def num_covalent_ligands(self) -> int:
+        """
+        Number of covalent ligands of the system
+        """
         return sum(ligand.is_covalent for ligand in self.ligands)
 
     @cached_property
     def id(self) -> str:
+        """
+        ID of the system
+        """
         return "__".join(
             [
                 self.pdb_id,
@@ -191,6 +208,9 @@ class System(BaseModel):
 
     @cached_property
     def system_type(self) -> str:
+        """
+        Type of the system (one of: holo, ion, artifact)
+        """
         if any(not l.is_ion and not l.is_artifact for l in self.ligands):
             return "holo"
         elif any(l.is_ion for l in self.ligands):
@@ -200,14 +220,23 @@ class System(BaseModel):
 
     @cached_property
     def has_kinase_inhibitor(self) -> bool:
+        """
+        Whether the system has a kinase inhibitor
+        """
         return any(l.is_kinase_inhibitor for l in self.ligands)
 
     @cached_property
     def has_binding_affinity(self) -> bool:
+        """
+        Whether any ligand in the system has a binding affinity from BindingDB
+        """
         return any(l.binding_affinity is not None for l in self.ligands)
 
-    @cached_property
+    @cached_property  # TODO: change this to exclude residues only interacting with artifacts or ions
     def pocket_residues(self) -> dict[str, dict[int, str]]:
+        """
+        Pockets residues of the system
+        """
         all_residues: dict[str, dict[int, str]] = defaultdict(dict)
         for ligand in self.ligands:
             ligand_pocket_residues = ligand.pocket_residues
@@ -217,6 +246,9 @@ class System(BaseModel):
 
     @cached_property
     def interactions(self) -> dict[str, dict[int, list[str]]]:
+        """
+        Interactions of the system
+        """
         all_interactions: dict[str, dict[int, list[str]]] = defaultdict(
             lambda: defaultdict(list)
         )
@@ -232,6 +264,9 @@ class System(BaseModel):
 
     @cached_property
     def interactions_counter(self) -> dict[str, dict[int, ty.Counter[str]]]:
+        """
+        Counter of interactions of the system
+        """
         interactions_counter: dict[str, dict[int, ty.Counter[str]]] = {}
         for chain in self.interactions:
             interactions_counter[chain] = {}
@@ -245,7 +280,7 @@ class System(BaseModel):
         self,
         chain_type: str,
         chains: dict[str, Chain],
-    ) -> dict[str, str]:
+    ) -> dict[str, ty.Any]:
         if chain_type == "interacting_protein":
             sub_chains = self.interacting_protein_chains
         elif chain_type == "neighboring_protein":
@@ -256,75 +291,122 @@ class System(BaseModel):
             raise ValueError(f"chain_type={chain_type} not understood")
         sub_chain_list = [ch.split(".") for ch in sub_chains]
 
-        sub_chain_list = [
-            chains[c].to_dict(int(instance))  # type: ignore
-            for instance, c in sub_chain_list
+        sub_chains_data = [
+            chains[c].format(int(instance)) for instance, c in sub_chain_list
         ]
 
-        if len(sub_chain_list) == 0:
+        if len(sub_chains_data) == 0:
             return {}
         data: dict[str, list[str]] = defaultdict(list)
-        for sub_chain in sub_chain_list:
+        for sub_chain in sub_chains_data:
             for key in sub_chain:
-                data[f"system_{chain_type}_chains{key}"].append(str(sub_chain[key]))  # type: ignore
-        return {k: ";".join(v) for k, v in data.items()}
+                data[f"system_{chain_type}_chains_{key}"].append(sub_chain[key])
+        return data
 
     @property
     def num_interacting_protein_chains(self) -> int:
+        """
+        Number of interacting protein chains of the system
+        """
         return len(self.interacting_protein_chains)
 
     @property
     def num_ligand_chains(self) -> int:
+        """
+        Number of ligand chains of the system
+        """
         return len(self.ligands)
 
-    def format_system(self, chains: dict[str, Chain]) -> dict[str, ty.Any]:
-        data = {
-            "system_id": self.id,
-            "system_id_no_biounit": self.id_no_biounit,
-            "system_pdb_id": self.pdb_id,
-            "system_biounit_id": self.biounit_id,
-            "system_type": self.system_type,
-            "system_num_pocket_residues": self.num_pocket_residues,
-            "system_num_interactions": self.num_interactions,
-            "system_num_interacting_protein_chains": len(
-                self.interacting_protein_chains
-            ),
-            "system_num_neighboring_protein_chains": len(
-                self.neighboring_protein_chains
-            ),
-            "system_num_ligand_chains": len(self.ligand_chains),
-            "system_has_kinase_inhibitor": self.has_kinase_inhibitor,
-            "system_has_binding_affinity": self.has_binding_affinity,
-            "system_num_covalent_ligands": self.num_covalent_ligands,
-            "system_num_heavy_atoms": self.num_heavy_atoms,
-            "system_num_atoms_with_crystal_contacts": self.num_atoms_with_crystal_contacts,
-            "system_fraction_atoms_with_crystal_contacts": self.fraction_atoms_with_crystal_contacts,
-            "system_num_crystal_contacted_residues": self.num_crystal_contacted_residues,
-        }
+    def format_validation(
+        self, entry_pass_criteria: bool | None, criteria: QualityCriteria
+    ) -> dict[str, ty.Any]:
+        data = {}
+        if self.ligand_validation:
+            ligand_validation = self.ligand_validation.format()
+            data.update({f"system_ligand_{k}": v for k, v in ligand_validation.items()})
+        if self.pocket_validation:
+            pocket_validation = self.pocket_validation.format()
+            data.update({f"system_pocket_{k}": v for k, v in pocket_validation.items()})
+        if (
+            self.pocket_validation is None
+            or self.ligand_validation is None
+            or entry_pass_criteria is None
+            or not entry_pass_criteria
+        ):
+            self.pass_criteria = False
+        else:
+            """
+            Quality criteria for the system
+            """
+            quality = [
+                # LIGAND
+                self.num_unresolved_heavy_atoms is not None
+                and self.num_unresolved_heavy_atoms
+                <= self.num_covalent_ligands
+                + criteria.ligand_max_num_unresolved_heavy_atoms,
+                data["system_ligand_validation_max_alt_count"]
+                <= criteria.ligand_max_alt_count,
+                data["system_ligand_validation_average_occupancy"]
+                >= criteria.ligand_min_average_occupancy,
+                data["system_ligand_validation_average_rscc"]
+                >= criteria.ligand_min_average_rscc,
+                data["system_ligand_validation_average_rsr"]
+                <= criteria.ligand_max_average_rsr,
+                data["system_ligand_validation_percent_outliers_clashes"]
+                <= criteria.ligand_max_percent_outliers_clashes,
+                self.fraction_atoms_with_crystal_contacts is not None
+                and self.fraction_atoms_with_crystal_contacts
+                <= criteria.ligand_max_fraction_atoms_with_crystal_contacts,
+                # POCKET
+                data["system_pocket_validation_num_unresolved_heavy_atoms"]
+                <= criteria.pocket_max_num_unresolved_heavy_atoms,
+                data["system_pocket_validation_max_alt_count"]
+                <= criteria.pocket_max_alt_count,
+                data["system_pocket_validation_average_occupancy"]
+                >= criteria.pocket_min_average_occupancy,
+                data["system_pocket_validation_average_rscc"]
+                >= criteria.pocket_min_average_rscc,
+                data["system_pocket_validation_average_rsr"]
+                <= criteria.pocket_max_average_rsr,
+                data["system_pocket_validation_percent_outliers_clashes"]
+                <= criteria.pocket_max_percent_outliers_clashes,
+            ]
+            self.pass_criteria = all(quality)
+        data["system_validation_pass_criteria"] = self.pass_criteria
+        return data
+
+    def format(
+        self,
+        chains: dict[str, Chain],
+        entry_pass_criteria: bool | None,
+        criteria: QualityCriteria = QualityCriteria(),
+    ) -> dict[str, ty.Any]:
+        data = defaultdict(str)
+        for field in self.get_descriptions_and_types():
+            if field in self.model_fields:
+                continue
+            name = f"system_{field}"
+            data[name] = getattr(self, field, None)
+
         pocket_mapping = self.get_pocket_domains(chains)
         for mapping in pocket_mapping:
             data[f"system_pocket_{mapping}"] = pocket_mapping[mapping]
-        data["suitable_for_ml_training"] = self.suitable_for_ml_training()
-        if self.ligand_validation:
-            ligand_validation = self.ligand_validation.to_dict()
-            data.update({f"system_ligand_{k}": v for k, v in ligand_validation.items()})
-        if self.pocket_validation:
-            pocket_validation = self.pocket_validation.to_dict()
-            data.update({f"system_pocket_{k}": v for k, v in pocket_validation.items()})
-        data["system_pass_validation_criteria"] = self.pass_criteria
+        data.update(self.format_validation(entry_pass_criteria, criteria))
         for chain_type in ["interacting_protein", "neighboring_protein", "ligand"]:
             data.update(self.format_chains(chain_type, chains))
         return data
 
-    @property
+    @cached_property
     def waters(self) -> dict[str, list[int]]:
+        """
+        Waters interacting (as detected by PLIP) with any of the ligands in the system
+        """
         waters: dict[str, list[int]] = defaultdict(list)
         for ligand in self.ligands:
             for chain in ligand.waters:
                 waters[chain] += ligand.waters[chain]
         return waters
 
-    @property
     def select_waters(self) -> str:
         query = []
         for chain in self.waters:
@@ -334,6 +416,9 @@ class System(BaseModel):
 
     @cached_property
     def num_crystal_contacted_residues(self) -> int:
+        """
+        Number of residues from other symmetry mates which are in contact with any ligand in the system.
+        """
         residues = set()
         for ligand in self.ligands:
             residues |= set(ligand.crystal_contacts.keys())
@@ -341,10 +426,16 @@ class System(BaseModel):
 
     @cached_property
     def num_atoms_with_crystal_contacts(self) -> int:
+        """
+        Number of atoms in the system ligands which are in contact with residues from other symmetry mates.
+        """
         return sum(ligand.num_atoms_with_crystal_contacts for ligand in self.ligands)
 
     @cached_property
     def num_heavy_atoms(self) -> int | None:
+        """
+        Number of heavy atoms in the system ligands
+        """
         if any(ligand.num_heavy_atoms is None for ligand in self.ligands):
             return None
         return sum(
@@ -354,7 +445,36 @@ class System(BaseModel):
         )
 
     @cached_property
+    def num_resolved_heavy_atoms(self) -> int | None:
+        """
+        Number of resolved heavy atoms in the system ligands
+        """
+        if any(ligand.num_resolved_heavy_atoms is None for ligand in self.ligands):
+            return None
+        return sum(
+            ligand.num_resolved_heavy_atoms
+            for ligand in self.ligands
+            if ligand.num_resolved_heavy_atoms is not None
+        )
+
+    @cached_property
+    def num_unresolved_heavy_atoms(self) -> int | None:
+        """
+        Number of unresolved heavy atoms in the system ligands
+        """
+        if any(ligand.num_unresolved_heavy_atoms is None for ligand in self.ligands):
+            return None
+        return sum(
+            ligand.num_unresolved_heavy_atoms
+            for ligand in self.ligands
+            if ligand.num_unresolved_heavy_atoms is not None
+        )
+
+    @cached_property
     def fraction_atoms_with_crystal_contacts(self) -> float | None:
+        """
+        Fraction of atoms in the system ligands which are in contact with residues from other symmetry mates.
+        """
         if self.num_heavy_atoms is None:
             return None
         return self.num_atoms_with_crystal_contacts / self.num_heavy_atoms
@@ -369,7 +489,7 @@ class System(BaseModel):
         )
         selection = f"({ligand_selection}) or ({protein_selection})"
         if include_waters and len(self.waters):
-            selection += f" or {self.select_waters}"
+            selection += f" or {self.select_waters()}"
         return selection
 
     def save_system(
@@ -404,7 +524,7 @@ class System(BaseModel):
         save_cif_file(ent_system, info, self.id, system_folder / "system.cif")
         selection = " or ".join(f"chain='{c}'" for c in self.interacting_protein_chains)
         if include_waters and len(self.waters):
-            selection += f" or {self.select_waters}"
+            selection += f" or {self.select_waters()}"
         save_cif_file(
             ent_system.Select(selection),
             info,
@@ -429,8 +549,7 @@ class System(BaseModel):
     def set_validation(
         self,
         chains: dict[str, Chain],
-        thresholds: SystemValidationThresholds,
-        entry_pass_criteria: bool,
+        thresholds: ResidueValidationThresholds = ResidueValidationThresholds(),
     ) -> None:
         self.ligand_validation = ResidueListValidation.from_residues(
             [
@@ -438,7 +557,7 @@ class System(BaseModel):
                 for c in self.ligand_chains
                 for r in chains[c.split(".")[1]].residues
             ],
-            thresholds.residue_thresholds,
+            thresholds,
         )
         self.pocket_validation = ResidueListValidation.from_residues(
             [
@@ -446,24 +565,8 @@ class System(BaseModel):
                 for c in self.pocket_residues
                 for r in self.pocket_residues[c]
             ],
-            thresholds.residue_thresholds,
+            thresholds,
         )
-        if self.ligand_validation is not None and self.pocket_validation is not None:
-            self.pass_criteria = (
-                entry_pass_criteria
-                and self.ligand_validation.pass_criteria(
-                    thresholds.residue_list_thresholds["ligand"],
-                    self.num_covalent_ligands,
-                )
-                and self.pocket_validation.pass_criteria(
-                    thresholds.residue_list_thresholds["pocket"]
-                )
-                and self.fraction_atoms_with_crystal_contacts is not None
-                and self.fraction_atoms_with_crystal_contacts
-                <= thresholds.max_fraction_atoms_with_crystal_contacts
-            )
-        else:
-            self.pass_criteria = None
 
     def run_posebusters_on_system(self, system_folder: Path) -> None:
         """
@@ -549,115 +652,69 @@ class System(BaseModel):
             result[k] = sorted(values.items(), key=lambda x: x[1], reverse=True)[0][0]
         return result
 
-    def suitable_for_ml_training(self) -> bool:
-        """Defines what suitable for ml training
 
-        Returns
-        -------
-        bool
-            True if it should be included for ml training
-        """
-        return bool(
-            (self.num_interactions > 2)
-            and (not any(ligand.is_artifact for ligand in self.ligands))
-            and (not any(ligand.is_invalid for ligand in self.ligands))
-            and (not any(ligand.is_ion for ligand in self.ligands))
-            and (
-                all(
-                    ligand.posebusters_result.get("mol_pred_loaded", False)
-                    for ligand in self.ligands
-                )
-            )
-            and (
-                all(
-                    ligand.posebusters_result.get("passes_valence_checks", False)
-                    for ligand in self.ligands
-                )
-            )
-            and (
-                all(
-                    ligand.posebusters_result.get("sanitization", False)
-                    for ligand in self.ligands
-                )
-            )
-            and (
-                all(
-                    ligand.posebusters_result.get("passes_kekulization", False)
-                    for ligand in self.ligands
-                )
-            )
-        )
-
-
-class Entry(BaseModel):
-    pdb_id: str
-    release_date: str
-    oligomeric_state: str | None
-    determination_method: str | None
-    keywords: str | None
-    pH: str | None
-    resolution: float | None
-    chains: dict[str, Chain] = Field(default_factory=dict)
-    ligand_like_chains: dict[str, str] = Field(default_factory=dict)
-    systems: dict[str, System] = Field(default_factory=dict)
-    covalent_bonds: dict[str, list[tuple[str, str]]] = Field(default_factory=dict)
-    chain_to_seqres: dict[str, str] = Field(default_factory=dict)
-    validation: EntryValidation | None = None
-    pass_criteria: bool | None = None
-    water_chains: list[str] = Field(default_factory=list)
-    symmetry_mate_contacts: SymmetryMateContacts
-
-    """
-    This dataclass defines as system which included a protein-ligand complex
-    and it's neighboring ligands and protein residues. For access to all
-    cached properties when loading from a stored JSON file, please use Entry.from_json.
-
-    Parameters
-    ----------
-    pdb_id : str
-        4-letter pdb code
-    release_date: str
-        Entry release date
-    oligomeric_state: str
-        Oligomeric state decription
-    determination_method: str
-        Structure determination method, CRYSTAL, NMR, etc
-    keywords: str
-        Other keywords like "SUGAR-BINDING PROTEIN"
-    pH: str
-        pH used in structure determination
-    resolution: float
-        Strucure resolution
-    chains: dict[str, Chain] = field(default_factory=dict)
-        Chains dictionary with chain name mapped to chain object
-    systems: dict[str, System] = field(default_factory=dict)
-        System dictionary with system id mapped to system object
-    covalent_bonds: dict[str, set[str]] = field(default_factory=dict)
-        Covalent interation type mapped to all linkages of that type
-    chain_to_seqres: dict[str, str] = field(default_factory=dict)
-        Chain to sequence mapping
-
-    Attributes
-    ----------
-    author_to_asym : dict[str, str]
-        Mapping of author to asym chain ids
-
-    Methods
-    -------
-    from_cif_file
-    set_systems
-    author_to_asym
-    chains_for_alignment
-    label_artifacts
-    label_chains
-    format_entry
-    to_df
-    save_systems
-
-    Examples
-    --------
-    TODO: Add example
-    """
+class Entry(DocBaseModel):
+    pdb_id: str = Field(
+        default_factory=str,
+        description="RCSB PDB ID. See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_entry.id.html",
+    )
+    release_date: str = Field(
+        default_factory=str,
+        description="RCSB structure release date. See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_database_PDB_rev.date_original.html",
+    )
+    oligomeric_state: str | None = Field(
+        default_factory=str,
+        description="Author's provided description of quaternary structure in RCSB. See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_pdbx_struct_assembly.oligomeric_details.html",
+    )
+    determination_method: str | None = Field(
+        default_factory=str,
+        description="RCSB method of structure determination. See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_exptl.method.html",
+    )
+    keywords: str | None = Field(
+        default_factory=str,
+        description="RCSB keywords describing the structure. See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_struct_keywords.pdbx_keywords.html",
+    )
+    pH: str | None = Field(
+        default_factory=str,
+        description="pH at which structure is solved. See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_exptl_crystal_grow.pH.html",
+    )
+    resolution: float | None = Field(
+        default_factory=float,
+        description="RCSB structure resolution. See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_refine.ls_d_res_high.html",
+    )
+    chains: dict[str, Chain] = Field(
+        default_factory=dict,
+        description="Chains dictionary with chain name mapped to chain object",
+    )
+    ligand_like_chains: dict[str, str] = Field(
+        default_factory=dict,
+        description="Chain: chain type for other ligand-like chains in the entry",
+    )
+    systems: dict[str, System] = Field(
+        default_factory=dict,
+        description="System dictionary with system id mapped to system object",
+    )
+    covalent_bonds: dict[str, list[tuple[str, str]]] = Field(
+        default_factory=dict,
+        description="All covalent interactions in the entry as defined by mmcif annotations. They types are separated by dictionary key and they include: "
+        + "covale: actual covalent linkage, metalc: other dative bond interactions like metal-ligand dative bond, "
+        + "hydrogc: strong hydorogen bonding of nucleic acid. For the purpose of covalent annotations, we use only covale for downstream processing.",
+    )
+    chain_to_seqres: dict[str, str] = Field(
+        default_factory=dict, description="Chain to sequence mapping"
+    )
+    validation: EntryValidation | None = Field(
+        default=None, description="Entry validation"
+    )
+    pass_criteria: bool | None = Field(
+        default=None, description="Entry pass validation criteria"
+    )
+    water_chains: list[str] = Field(
+        default_factory=list, description="Water chains in the entry"
+    )
+    symmetry_mate_contacts: SymmetryMateContacts = Field(
+        default_factory=dict, description="Symmetry mate contacts in the entry"
+    )
 
     def prune(
         self,
@@ -933,7 +990,7 @@ class Entry(BaseModel):
     @cached_property
     def author_to_asym(self) -> dict[str, str]:
         """
-        Map autho chain id to asym id
+        Map author chain id to asym id
         Parameters
         ----------
         self : Entry
@@ -1009,43 +1066,6 @@ class Entry(BaseModel):
                 return [f"{self.pdb_id}_{c}" for c in chains]
         return []
 
-    # def label_artifacts(
-    #     self,
-    #     within_entry_threshold: int = 15,
-    #     interacting_residue_count_threshold: int = 2,
-    # ) -> None:
-    #     """
-    #     Label artifacts
-
-    #     Parameters
-    #     ----------
-    #     self : Entry
-    #         Entry object
-    #     within_entry_threshold : int
-    #         Exclusion criteria for maximum \
-    #         count of a particular ligand in entry
-    #     interacting_residue_count_threshold : int
-    #         Interacting residue count
-
-    #     Returns
-    #     -------
-    #     TODO:Check to be sure what this function should not be returning anything
-    #     None
-    #     """
-    #     artifact_ligand_chains = {}
-    #     for system in self.systems:
-    #         for ligand in self.systems[system].ligands:
-    #             if ligand.in_artifact_list:
-    #                 artifact_ligand_chains[ligand.asym_id] = ligand.ccd_code
-    #     entry_ccd_to_count: dict[str, int] = defaultdict(int)
-    #     for c in self.chains:
-    #         if c in artifact_ligand_chains:
-    #             entry_ccd_to_count[artifact_ligand_chains[c]] += 1
-
-    #     for s in self.systems:
-    #         for ligand in self.systems[s].ligands:
-    #             ligand.identify_artifact()
-
     def label_chains(self) -> None:
         """
         Label chains as apo/holo/ligand
@@ -1072,7 +1092,35 @@ class Entry(BaseModel):
             elif chain in holo_chains:
                 self.chains[chain].holo = True
 
-    def format_entry(self) -> dict[str, ty.Any]:
+    def format_validation(
+        self, criteria: QualityCriteria = QualityCriteria()
+    ) -> dict[str, ty.Any]:
+        assert self.validation is not None
+        data = self.validation.format()
+        data = {f"entry_{k}": v for k, v in data.items()}
+        if data["entry_validation_r"] is None:
+            self.pass_criteria = False
+        else:
+            quality = [
+                # ENTRY
+                data["entry_validation_resolution"] is not None
+                and data["entry_validation_resolution"]
+                <= criteria.max_entry_resolution,
+                data["entry_validation_r"] is not None
+                and data["entry_validation_r"] <= criteria.max_entry_r,
+                data["entry_validation_rfree"] is not None
+                and data["entry_validation_rfree"] <= criteria.max_entry_rfree,
+                data["entry_validation_r_minus_rfree"] is not None
+                and data["entry_validation_r_minus_rfree"]
+                <= criteria.max_entry_r_minus_rfree,
+            ]
+            self.pass_criteria = all(quality)
+        data["entry_validation_pass_criteria"] = self.pass_criteria
+        return data
+
+    def format(
+        self, criteria: QualityCriteria = QualityCriteria()
+    ) -> dict[str, ty.Any]:
         """
         Format label for entry-level annotations by prepending \
             label with "entry_"
@@ -1085,26 +1133,23 @@ class Entry(BaseModel):
         -------
         dict[str, ty.Any]
         """
+        data = defaultdict(str)
+        columns = [
+            "pdb_id",
+            "release_date",
+            "oligomeric_state",
+            "determination_method",
+            "keywords",
+            "pH",
+            "resolution",
+        ]
+        for field in columns:
+            name = f"entry_{field}"
+            data[name] = getattr(self, field, None)
 
-        data = {
-            "entry_pdb_id": self.pdb_id,
-            "entry_release_date": self.release_date,
-            "entry_oligomeric_state": self.oligomeric_state,
-            "entry_determination_method": self.determination_method,
-            "entry_keywords": self.keywords,
-            "entry_pH": self.pH,
-            "entry_resolution": self.resolution,
-        }
         if self.validation:
-            validation = self.validation.to_dict()
-            data.update(
-                {
-                    f"entry_{k}": v
-                    for k, v in validation.items()
-                    if f"entry_{k}" not in data
-                }
-            )
-            data["entry_pass_validation_criteria"] = self.pass_criteria
+            data.update(self.format_validation(criteria))
+            data["entry_validation_pass_criteria"] = self.pass_criteria
         return data
 
     def to_df(self) -> pd.DataFrame:
@@ -1120,11 +1165,11 @@ class Entry(BaseModel):
         pd.DataFrame
         """
         rows = []
-        entry_data = self.format_entry()
+        entry_data = self.format()
         for system in self.systems:
-            system_data = self.systems[system].format_system(self.chains)
+            system_data = self.systems[system].format(self.chains, self.pass_criteria)
             for ligand in self.systems[system].ligands:
-                ligand_data = ligand.format_ligand(self.chains)
+                ligand_data = ligand.format(self.chains)
                 rows.append({**entry_data, **system_data, **ligand_data})
         return pd.DataFrame(rows)
 
@@ -1206,7 +1251,7 @@ class Entry(BaseModel):
         self,
         validation_file: Path,
         cif_file: Path,
-        thresholds: SystemValidationThresholds = SystemValidationThresholds(),
+        thresholds: ResidueValidationThresholds = ResidueValidationThresholds(),
     ) -> None:
         if self.determination_method != "X-RAY DIFFRACTION":
             LOG.warning(
@@ -1222,20 +1267,11 @@ class Entry(BaseModel):
                 str(validation_file), mmcif_path=str(cif_file)
             ).getValidation()
             self.validation = EntryValidation.from_entry(doc)
-            if self.validation:
-                self.pass_criteria = self.validation.pass_criteria(
-                    thresholds.entry_thresholds
-                )
-                if self.pass_criteria is None:
-                    return
+            if self.validation and self.validation.r is not None:
                 for chain in self.chains:
-                    self.chains[chain].set_validation(
-                        doc, thresholds.residue_thresholds
-                    )
+                    self.chains[chain].set_validation(doc, thresholds)
                 for system in self.systems:
-                    self.systems[system].set_validation(
-                        self.chains, thresholds, self.pass_criteria
-                    )
+                    self.systems[system].set_validation(self.chains, thresholds)
         except Exception as e:
             LOG.error(
                 f"set_validation: Error setting validation for {self.pdb_id}: {e}"
@@ -1324,6 +1360,6 @@ class Entry(BaseModel):
                 if uniprot is not None:
                     mappings[row["kinase"]] |= set(uniprot)  # type: ignore
             if len(mappings):
-                self.chains[chain_id].mappings["Kinase name"] = {
+                self.chains[chain_id].mappings["kinase_name"] = {
                     k: list(v) for k, v in mappings.items()
                 }
