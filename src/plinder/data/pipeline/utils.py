@@ -613,7 +613,7 @@ def pack_linked_structures(data_dir: Path, code: str) -> None:
     ) as archive:
         for search_db in ["apo", "pred"]:
             jsons = []
-            root = data_dir / "linked_structures" / search_db
+            root = data_dir / "linked_staging" / search_db
             system_ids = [
                 system_id for system_id in listdir(root) if system_id[1:3] == code
             ]
@@ -675,11 +675,10 @@ def consolidate_linked_scores(*, data_dir: Path) -> None:
             if not df.empty:
                 dfs.append(df)
         ndf = pd.concat(dfs)
-        odf = pd.read_parquet(
-            data_dir / "linked_structures" / f"{search_db}_links.parquet"
-        )
+        odf = pd.read_parquet(data_dir / "linked_staging" / f"{search_db}_links.parquet")
         df = pd.merge(odf, ndf, on=["reference_system_id", "id"])
-        df.to_parquet(data_dir / "links" / f"{search_db}_links.parquet", index=False)
+        (data_dir / "links" / f"kind={search_db}").mkdir(exist_ok=True, parents=True)
+        df.to_parquet(data_dir / "links" / f"kind={search_db}" / "links.parquet", index=False)
 
 
 def rename_clusters(*, data_dir: Path) -> None:

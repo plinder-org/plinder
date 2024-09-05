@@ -246,28 +246,26 @@ def get_cif_file(data_dir: Path, search_db: str, system: str) -> Path:
         raise ValueError("search_db much be apo, holo or pred")
 
 
-def system_save_and_score_representative(
+def save_superposition(
+    *,
+    data_dir: Path,
+    save_folder: Path,
+    search_db: str,
     link: pd.Series,
     reference_system: utils.ReferenceSystem,
-    data_dir: Path,
-    search_db: str,
-    output_folder: Path,
     overwrite: bool = False,
-) -> None:
-    save_folder = output_folder / search_db / link.reference_system_id / link.id
+) -> bool:
     if not overwrite and (save_folder / "superposed.cif").exists():
         LOG.warning(
-            f"system_save_representative: {save_folder / 'superposed.cif'} exists"
+            f"save_superposition: {save_folder / 'superposed.cif'} exists"
         )
-        return
+        return True
     target_cif_file = get_cif_file(data_dir, search_db, link.id)
     if not target_cif_file.exists():
         LOG.error(
             f"get_transplanted_ligand_scores_system: {link.id} cif file doesn't exist"
         )
-        return
-
-    save_folder.mkdir(exist_ok=True, parents=True)
+        return False
     name_mapping, target_chain = None, None
     if search_db == "holo":
         name_mapping_file = target_cif_file.parent / "chain_mapping.json"
@@ -275,7 +273,7 @@ def system_save_and_score_representative(
             LOG.error(
                 f"get_transplanted_ligand_scores_system: {name_mapping_file} does not exist"
             )
-            return
+            return False
         with open(name_mapping_file) as f:
             name_mapping = json.load(f)
     else:
@@ -288,6 +286,34 @@ def system_save_and_score_representative(
             name_mapping=name_mapping,
             target_chain=target_chain,
         )
+        return True
+    except Exception as e:
+        LOG.error(f"save_superposition: Error in superpose_to_system: {repr(e)} {e}")
+        return False
+
+
+def system_save_and_score_representative(
+    link: pd.Series,
+    reference_system: utils.ReferenceSystem,
+    data_dir: Path,
+    search_db: str,
+    output_folder: Path,
+    overwrite: bool = False,
+) -> None:
+    save_folder = output_folder / search_db / link.reference_system_id / link.id
+    save_folder.mkdir(exist_ok=True, parents=True)
+    carry_on = save_superposition(
+        data_dir=data_dir,
+        save_folder=save_folder,
+        search_db=search_db,
+        link=link,
+        reference_system=reference_system,
+        overwrite=overwrite,
+    )
+    if not carry_on:
+        return
+
+    try:
         scores = utils.ModelScores.from_files(
             link.id,
             save_folder / "superposed.cif",

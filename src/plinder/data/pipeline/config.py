@@ -94,7 +94,11 @@ class FlowConfig:
     run_batch_searches_batch_size: int = 10050
     make_batch_scores_batch_size: int = 90
     make_batch_scores_force_update: bool = False
-    assign_apo_pred_systems_cpus: int = 8
+
+    make_links_cpu: int = 8
+    make_linked_structures_cpu: int = 8
+    make_linked_structures_batch_size: int = 100
+    make_linked_structures_force_update: bool = False
 
     split_config_dir: str = ""
     test_leakage: bool = False

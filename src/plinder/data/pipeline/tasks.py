@@ -42,7 +42,8 @@ STAGES = [
     "make_splits",
     "compute_ligand_leakage",
     "compute_protein_leakage",
-    "assign_apo_pred_systems",
+    "make_links",
+    "make_linked_structures",
 ]
 
 
@@ -1003,19 +1004,24 @@ def compute_protein_leakage(
     )
 
 
-def assign_apo_pred_systems(
+def scatter_make_links(
+    *,
+    data_dir: Path,
+    search_dbs: list[str],
+) -> list[list[str]]:
+    return [[obj] for obj in search_dbs]
+
+
+def make_links(
     *,
     data_dir: Path,
     search_dbs: list[str],
     cpu: int = 8,
 ) -> None:
-    from plinder.data.save_linked_structures import (
-        make_linked_structures_data_file,
-        save_linked_structures,
-    )
+    from plinder.data.save_linked_structures import make_linked_structures_data_file
 
     save_dir = data_dir / "assignments"
-    linked_structures = data_dir / "linked_structures"
+    linked_structures = data_dir / "linked_staging"
     for search_db in search_dbs:
         output_file = linked_structures / f"{search_db}_links.parquet"
         make_linked_structures_data_file(
@@ -1026,10 +1032,71 @@ def assign_apo_pred_systems(
             num_processes=cpu,
         )
 
-        save_linked_structures(
-            links_file=output_file,
-            data_dir=data_dir,
-            search_db=search_db,
-            output_folder=linked_structures,
-            num_threads=cpu,
+
+def scatter_make_linked_structures(
+    *,
+    data_dir: Path,
+    search_dbs: list[str],
+    batch_size: int,
+) -> list[list[tuple[str, str]]]:
+    items = []
+    for search_db in search_dbs:
+        links = pd.read_parquet(data_dir / "linked_staging" / f"{search_db}_links.parquet")
+        items.extend([(search_db, system_id) for system_id in sorted(links["reference_system_id"])])
+    return [items[pos:pos + batch_size] for pos in range(0, len(items), batch_size)]
+
+
+def make_linked_structures(
+    *,
+    data_dir: Path,
+    search_dbs: list[str],
+    system_ids: list[tuple[str, str]],
+    cpu: int = 8,
+    force_update: bool = False,
+) -> None:
+    import multiprocessing
+
+    from plinder.data.save_linked_structures import system_save_and_score_representative
+    from plinder.eval.docking.utils import ReferenceSystem
+
+    linked_structures = data_dir / "linked_staging"
+    grouped = {
+        search_db: [tup[1] for tup in system_ids if tup[0] == search_db]
+        for search_db in search_dbs
+    }
+    dfs = []
+    for search_db in search_dbs:
+        df = pd.read_parquet(data_dir / "linked_structures" / f"{search_db}_links.parquet")
+        slc = df[df["reference_system_id"].isin(grouped[search_db])]
+        if not slc.empty:
+            dfs.append(slc.copy())
+            dfs[-1]["kind"] = search_db
+    if not len(dfs):
+        LOG.info("no linked structures to make")
+        return
+    links = pd.concat(dfs).reset_index(drop=True)
+    groups = links.groupby(["kind", "reference_system_id"])
+    to_run = [groups.get_group(tup).squeze() for tup in system_ids]
+    reference_systems = {
+        system_id: ReferenceSystem.from_reference_system(
+            data_dir / "raw_entries" / system_id[1:3], system_id,
+        )
+        for system_id in sorted(set(tup[1] for tup in system_ids))
+    }
+
+    with multiprocessing.get_context("spawn").Pool(cpu) as p:
+        p.starmap(
+            system_save_and_score_representative,
+
+            [
+                (
+                    link,
+                    reference_systems[link.reference_system_id],
+                    data_dir,
+                    link.kind,
+                    linked_structures,
+                    force_update,
+                )
+                for link in to_run
+            ]
         )
