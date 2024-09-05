@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any, Dict, List, Literal, Tuple
 
 import atom3d.util.formats as fo
 import pandas as pd
@@ -27,10 +28,8 @@ class PlinderDataset(Dataset):  # type: ignore
         path to a file containing a list of system ids (default: full index)
     store_file_path : bool, default=True
         if True, include the file path of the source structures in the dataset
-    load_alternative_structures : bool, default=False
-        if True, include alternative structures in the dataset
-    num_alternative_structures : int, default=1
-        number of alternative structures (apo and pred) to include
+    num_alternative_structures : int, default=0
+        if available, load up to this number of alternative structures (apo and pred)
     """
 
     def __init__(
@@ -39,8 +38,8 @@ class PlinderDataset(Dataset):  # type: ignore
         split: str = "train",
         split_parquet_path: str | Path | None = None,
         store_file_path: bool = True,
-        load_alternative_structures: bool = False,
-        num_alternative_structures: int = 1,
+        num_alternative_structures: int = 0,
+        file_paths_only: bool = False,
     ):
         if df is None:
             if split_parquet_path is None:
@@ -49,11 +48,12 @@ class PlinderDataset(Dataset):  # type: ignore
                 df = pd.read_parquet(split_parquet_path)
         self._system_ids = df.loc[df["split"] == split, "system_id"].to_list()
         self._num_examples = len(self._system_ids)
-        self._store_file_path = store_file_path
+        self._store_file_path = store_file_path or file_paths_only
         self._links = None
-        if load_alternative_structures:
+        if num_alternative_structures > 0:
             self._links = query_links().groupby("reference_system_id")
         self.num_alternative_structures = num_alternative_structures
+        self._file_paths_only = file_paths_only
 
     def __len__(self) -> int:
         return self._num_examples
@@ -66,32 +66,99 @@ class PlinderDataset(Dataset):  # type: ignore
 
         s = system.PlinderSystem(system_id=self._system_ids[index])
 
-        item = {
+        if self._file_paths_only:
+            # avoid loading structure if not needed
+            structure_df = None
+        else:
+            structure_df = fo.bp_to_df(fo.read_any(s.system_cif))
+
+        item: Dict[str, Any] = {
             "id": index,
             "system_id": s.system_id,
-            "df": fo.bp_to_df(fo.read_any(s.system_cif)),
+            "df": structure_df,
             "alternative_structures": {},
         }
         if self._store_file_path:
             item["path"] = s.system_cif
 
         if self._links is not None:
+            alternatives: dict[str, pd.DataFrame | str | None] = {}
             try:
-                # catch no linked structures KeyError
                 links = self._links.get_group(s.system_id)
                 if not links.empty:
                     alts = links.groupby("kind").head(self.num_alternative_structures)
+                    # TODO: make better stagger between the kinds!
+                    count = 0
                     for kind, link_id in zip(alts["kind"], alts["id"]):
                         structure = s.get_linked_structure(
                             link_kind=str(kind), link_id=link_id
                         )
-                        item["alternative_structures"][
-                            f"{kind}_{link_id}_df"
-                        ] = fo.bp_to_df(fo.read_any(structure))
+                        df_key = f"{kind}_{link_id}_df"
+                        if self._file_paths_only:
+                            alternatives[df_key] = None
+                        else:
+                            alternatives[df_key] = fo.bp_to_df(fo.read_any(structure))
                         if self._store_file_path:
-                            item["alternative_structures"][
-                                f"{kind}_{link_id}_path"
-                            ] = structure
+                            alternatives[f"{kind}_{link_id}_path"] = structure
+                        count += 1
+                        # if we have enough alternatives, return them
+                        if count >= self.num_alternative_structures:
+                            item["alternative_structures"] = alternatives
+                            return item
             except KeyError:
                 pass
+            item["alternative_structures"] = alternatives
         return item
+
+
+def get_model_input_files(
+    split_df: pd.DataFrame,
+    split: Literal["train", "val", "test"] = "train",
+    max_num_sample: int = 10,
+    num_alternative_structures: int = 1,
+) -> List[Tuple[Path, str, List[Any]]]:
+    model_inputs = []
+
+    smiles_in_df = True
+    if "ligand_rdkit_canonical_smiles" not in split_df.columns:
+        smiles_in_df = False
+        from rdkit import Chem
+
+    dataset = PlinderDataset(
+        df=split_df,
+        split=split,
+        num_alternative_structures=num_alternative_structures,
+        file_paths_only=True,
+    )
+
+    count = 0
+    for data in dataset:
+        system_dir = Path(data["path"]).parent
+        protein_fasta_filepath = system_dir / "sequences.fasta"
+
+        if num_alternative_structures:
+            alt_structure_filepaths = [
+                val
+                for key, val in data["alternative_structures"].items()
+                if key.endswith("_path")
+            ]
+        else:
+            alt_structure_filepaths = []
+
+        if smiles_in_df:
+            smiles_array = split_df.loc[
+                split_df["system_id"] == data["system_id"],
+                "ligand_rdkit_canonical_smiles",
+            ].values
+        else:
+            smiles_array = [
+                Chem.MolToSmiles(next(Chem.SDMolSupplier(ligand_sdf)))
+                for ligand_sdf in (system_dir / "ligand_files/").glob("*sdf")
+            ]
+        # in case there's more than one!
+        smiles = ".".join(smiles_array)
+        model_inputs.append((protein_fasta_filepath, smiles, alt_structure_filepaths))
+        count += 1
+        if count >= max_num_sample:
+            break
+    return model_inputs

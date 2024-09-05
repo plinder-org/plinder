@@ -197,8 +197,8 @@ class DataConfig:
     """
     A class for all the data configuration.
 
-    Note
-    ----
+    Notes
+    -----
     plinder_dir is always derived from plinder_mount/plinder_release
     so do not set it manually!
 
