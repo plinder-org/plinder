@@ -354,17 +354,17 @@ class IngestPipeline:
     def scatter_make_linked_structures(self) -> list[list[tuple[str, str]]]:
         chunks: list[list[tuple[str, str]]] = tasks.scatter_make_linked_structures(
             data_dir=self.plinder_dir,
-            search_dbs=self.cfg.scorer.sub_databases,
+            search_dbs=self.cfg.flow.sub_databases,
             batch_size=self.cfg.flow.make_linked_structures_batch_size,
         )
         return chunks
 
     @utils.ingest_flow_control
-    def make_linked_structures(self, search_dbs: list[str], system_ids: list[tuple[str, str]]) -> None:
+    def make_linked_structures(self, system_ids: list[tuple[str, str]]) -> None:
         force_update = self.cfg.data.force_update or self.cfg.flow.make_linked_structures_force_update
         tasks.make_linked_structures(
             data_dir=self.plinder_dir,
-            search_dbs=search_dbs,
+            search_dbs=self.cfg.flow.sub_databases,
             system_ids=system_ids,
             cpu=self.cfg.flow.make_linked_structures_cpu,
             force_update=force_update,
@@ -372,7 +372,7 @@ class IngestPipeline:
         return
 
     @utils.ingest_flow_control
-    def join_linked_structures(self, outputs: list[None]) -> None:
+    def join_make_linked_structures(self, outputs: list[None]) -> None:
         utils.mp_pack_linked_structures(data_dir=self.plinder_dir)
         utils.consolidate_linked_scores(data_dir=self.plinder_dir)
 

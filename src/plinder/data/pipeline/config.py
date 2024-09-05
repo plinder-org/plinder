@@ -99,6 +99,7 @@ class FlowConfig:
     make_linked_structures_cpu: int = 8
     make_linked_structures_batch_size: int = 100
     make_linked_structures_force_update: bool = False
+    sub_databases: Any = "apo,pred"
 
     split_config_dir: str = ""
     test_leakage: bool = False
@@ -111,6 +112,10 @@ class FlowConfig:
         if isinstance(self.skip_specific_stages, str):
             self.skip_specific_stages = [
                 stage for stage in self.skip_specific_stages.split(",") if stage
+            ]
+        if isinstance(self.sub_databases, str):
+            self.sub_databases = [
+                db for db in self.sub_databases.split(",") if db
             ]
 
 

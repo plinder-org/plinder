@@ -46,13 +46,13 @@ class ReferenceSystem:
     def from_reference_system(
         cls, system_dir: Path, reference_system: str
     ) -> "ReferenceSystem":
-        cif_file = system_dir / reference_system / "receptor.cif"
-        pdb_file = system_dir / reference_system / "receptor.pdb"
+        cif_file = system_dir / "receptor.cif"
+        pdb_file = system_dir / "receptor.pdb"
         entity = io.LoadMMCIF(cif_file.as_posix())
         ligand_sdf_files = {}
         ligands = []
         for chain in reference_system.split("__")[-1].split("_"):
-            sdf_file = system_dir / reference_system / "ligand_files" / f"{chain}.sdf"
+            sdf_file = system_dir / "ligand_files" / f"{chain}.sdf"
             ligand_sdf_files[chain] = sdf_file
             ligands.append(
                 io.LoadEntity(sdf_file.as_posix(), format="sdf").Select("ele != H")

@@ -341,7 +341,7 @@ def system_save_and_score_representatives(
 ) -> None:
     try:
         reference_system = utils.ReferenceSystem.from_reference_system(
-            data_dir / "raw_entries" / system[1:3], system
+            data_dir / "raw_entries" / system[1:3] / system, system,
         )
     except Exception as e:
         LOG.error(

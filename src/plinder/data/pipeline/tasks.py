@@ -1066,7 +1066,7 @@ def make_linked_structures(
     }
     dfs = []
     for search_db in search_dbs:
-        df = pd.read_parquet(data_dir / "linked_structures" / f"{search_db}_links.parquet")
+        df = pd.read_parquet(linked_structures / f"{search_db}_links.parquet")
         slc = df[df["reference_system_id"].isin(grouped[search_db])]
         if not slc.empty:
             dfs.append(slc.copy())
@@ -1076,27 +1076,22 @@ def make_linked_structures(
         return
     links = pd.concat(dfs).reset_index(drop=True)
     groups = links.groupby(["kind", "reference_system_id"])
-    to_run = [groups.get_group(tup).squeze() for tup in system_ids]
-    reference_systems = {
-        system_id: ReferenceSystem.from_reference_system(
-            data_dir / "raw_entries" / system_id[1:3], system_id,
-        )
-        for system_id in sorted(set(tup[1] for tup in system_ids))
-    }
+    reference_systems = {}
+    for system_id in sorted(set(tup[1] for tup in system_ids)):
+        try:
+            reference_systems[system_id] = ReferenceSystem.from_reference_system(
+                data_dir / "systems" / system_id, system_id
+            )
+        except Exception as e:
+            LOG.error(f"failed loading {system_id} due to {repr(e)}")
+
+    to_run = []
+    for tup in system_ids:
+        ref = reference_systems.get(tup[1])
+        if ref is None:
+            continue
+        link = groups.get_group(tup).squeeze()
+        to_run.append((link, ref, data_dir, tup[0], linked_structures, force_update))
 
     with multiprocessing.get_context("spawn").Pool(cpu) as p:
-        p.starmap(
-            system_save_and_score_representative,
-
-            [
-                (
-                    link,
-                    reference_systems[link.reference_system_id],
-                    data_dir,
-                    link.kind,
-                    linked_structures,
-                    force_update,
-                )
-                for link in to_run
-            ]
-        )
+        p.starmap(system_save_and_score_representative, to_run)

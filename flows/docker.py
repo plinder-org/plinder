@@ -375,6 +375,7 @@ def main(argv: Optional[List[str]] = None):
     run = subs.add_parser("run", help="Run the app image")
     run.add_argument("--it", default=False, action="store_true", help="Run in interactive mode")
     run.add_argument("--script", default="", help="Script to run")
+    run.add_argument("--dirty", default=False, action="store_true", help="Mount current working tree")
     for sub in [build, test, run]:
         sub.add_argument(
             "--tag", default=None, help="The image tag to pass to build_image",
