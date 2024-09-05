@@ -204,7 +204,7 @@ def get_extended_plindex(
         aggfunc="first",
     )
     clusters.columns = [
-        f"{metric}__{threshold.replace('.parquet', '')}__{cluster}"
+        f"{metric}__{threshold}__{cluster}"
         for metric, cluster, threshold in clusters.columns
     ]
     clusters.reset_index(inplace=True)

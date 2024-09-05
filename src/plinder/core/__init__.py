@@ -24,7 +24,7 @@ from plinder.core.system.system import PlinderSystem
 from plinder.core.utils.config import get_config
 
 try:
-    from plinder.core.loader.loader import PlinderDataset
+    from plinder.core.loader.loader import PlinderDataset, get_model_input_files
 except (ImportError, ModuleNotFoundError):
     print(
         dedent(
@@ -49,4 +49,5 @@ __all__ = [
     "get_split",
     "PlinderSystem",
     "PlinderDataset",
+    "get_model_input_files"
 ]
