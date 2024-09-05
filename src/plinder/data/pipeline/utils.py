@@ -520,13 +520,9 @@ def create_nonredundant_dataset(*, data_dir: Path) -> None:
     """
     df = create_index(data_dir=data_dir)
     df["uniqueness"] = (
-        df["system_id_no_biounit"]
-        + "_"
-        + df["pli_qcov__100__strong__component"]
+        df["system_id_no_biounit"] + "_" + df["pli_qcov__100__strong__component"]
     )
-    df_nonredundant = df.sort_values(
-        "system_biounit_id"
-    ).drop_duplicates("uniqueness")
+    df_nonredundant = df.sort_values("system_biounit_id").drop_duplicates("uniqueness")
     df_nonredundant.to_parquet(
         data_dir / "index" / "annotation_table_nonredundant.parquet", index=False
     )

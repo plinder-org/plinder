@@ -410,9 +410,7 @@ class SplitPropertiesPlotter:
             bins=None
             if self.system_descriptors[plot_metric]
             else np.linspace(0, 4, 50),
-            log_scale=plot_metric.startswith(
-                "system_protein_chains_total_length"
-            ),
+            log_scale=plot_metric.startswith("system_protein_chains_total_length"),
             ax=ax,
             palette=self.colors,
         )
