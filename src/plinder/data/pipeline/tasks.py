@@ -1056,8 +1056,7 @@ def make_linked_structures(
 ) -> None:
     import multiprocessing
 
-    from plinder.data.save_linked_structures import system_save_and_score_representative
-    from plinder.eval.docking.utils import ReferenceSystem
+    from plinder.data.save_linked_structures import system_save_and_score_representatives
 
     linked_structures = data_dir / "linked_staging"
     grouped = {
@@ -1075,23 +1074,12 @@ def make_linked_structures(
         LOG.info("no linked structures to make")
         return
     links = pd.concat(dfs).reset_index(drop=True)
-    groups = links.groupby(["kind", "reference_system_id"])
-    reference_systems = {}
-    for system_id in sorted(set(tup[1] for tup in system_ids)):
-        try:
-            reference_systems[system_id] = ReferenceSystem.from_reference_system(
-                data_dir / "systems" / system_id, system_id
-            )
-        except Exception as e:
-            LOG.error(f"failed loading {system_id} due to {repr(e)}")
-
-    to_run = []
-    for tup in system_ids:
-        ref = reference_systems.get(tup[1])
-        if ref is None:
-            continue
-        link = groups.get_group(tup).squeeze()
-        to_run.append((link, ref, data_dir, tup[0], linked_structures, force_update))
 
     with multiprocessing.get_context("spawn").Pool(cpu) as p:
-        p.starmap(system_save_and_score_representative, to_run)
+        p.starmap(
+            system_save_and_score_representatives,
+            [
+                (system, group, data_dir, search_db, linked_structures, force_update)
+                for (search_db, system), group in links.groupby(["kind", "reference_system_id"])
+            ]
+        )
