@@ -49,5 +49,5 @@ __all__ = [
     "get_split",
     "PlinderSystem",
     "PlinderDataset",
-    "get_model_input_files"
+    "get_model_input_files",
 ]

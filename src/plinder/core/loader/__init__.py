@@ -3,4 +3,4 @@
 
 from .loader import PlinderDataset, get_model_input_files
 
-__all__ = ["PlinderDataset",  "get_model_input_files"]
+__all__ = ["PlinderDataset", "get_model_input_files"]
