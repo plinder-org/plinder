@@ -364,6 +364,17 @@ class System(DocBaseModel):
             or self.ligand_validation is None
             or entry_pass_criteria is None
             or not entry_pass_criteria
+            or data["system_ligand_validation_max_alt_count"] is None
+            or data["system_ligand_validation_average_occupancy"] is None
+            or data["system_ligand_validation_average_rscc"] is None
+            or data["system_ligand_validation_average_rsr"] is None
+            or data["system_ligand_validation_percent_outliers_clashes"] is None
+            or data["system_pocket_validation_num_unresolved_heavy_atoms"] is None
+            or data["system_pocket_validation_max_alt_count"] is None
+            or data["system_pocket_validation_average_occupancy"] is None
+            or data["system_pocket_validation_average_rscc"] is None
+            or data["system_pocket_validation_average_rsr"] is None
+            or data["system_pocket_validation_percent_outliers_clashes"] is None
         ):
             self.pass_criteria = False
         else:
@@ -413,7 +424,7 @@ class System(DocBaseModel):
         entry_pass_criteria: bool | None,
         criteria: QualityCriteria = QualityCriteria(),
     ) -> dict[str, ty.Any]:
-        data = defaultdict(str)
+        data: dict[str, ty.Any] = defaultdict(str)
         for field in self.get_descriptions_and_types():
             if field in self.model_fields and field != "biounit_id":
                 continue
@@ -490,32 +501,32 @@ class System(DocBaseModel):
         )
 
     @cached_property
-    def ligand_max_qed(self):
+    def ligand_max_qed(self) -> float:
         """
         Maximum QED of the system ligands
         """
         return max(
-            ligand.qed if ligand.qed is not None else 0 for ligand in self.ligands
+            ligand.qed if ligand.qed is not None else -1.0 for ligand in self.ligands
         )
 
     @cached_property
-    def ligand_max_molecular_weight(self):
+    def ligand_max_molecular_weight(self) -> float:
         """
         Maximum molecular weight of the system ligands
         """
         return max(
-            ligand.molecular_weight
+            ligand.molecular_weight if ligand.molecular_weight is not None else -1.0
             for ligand in self.ligands
             if ligand.molecular_weight is not None
         )
-    
+
     @cached_property
-    def proper_ligand_max_molecular_weight(self):
+    def proper_ligand_max_molecular_weight(self) -> float:
         """
         Maximum molecular weight of the system ligands excluding ions and artifacts
         """
         return max(
-            ligand.molecular_weight
+            ligand.molecular_weight if ligand.molecular_weight is not None else -1.0
             for ligand in self.proper_ligands()
             if ligand.molecular_weight is not None
         )
@@ -915,10 +926,18 @@ class Entry(DocBaseModel):
         entry = cls(
             pdb_id=info.struct_details.entry_id.lower(),
             release_date=info.revisions.GetDateOriginal(),
-            oligomeric_state=entry_info.get("entry_oligomeric_state", None),
-            determination_method=entry_info.get("entry_determination_method", None),
-            keywords=entry_info.get("entry_keywords", None),
-            pH=entry_info.get("entry_pH", None),
+            oligomeric_state=str(entry_info.get("entry_oligomeric_state"))
+            if entry_info.get("entry_oligomeric_state") is not None
+            else None,
+            determination_method=str(entry_info.get("entry_oligomeric_state"))
+            if entry_info.get("entry_oligomeric_state") is not None
+            else None,
+            keywords=str(entry_info.get("entry_keywords"))
+            if entry_info.get("entry_keywords", None) is not None
+            else None,
+            pH=str(entry_info.get("entry_pH"))
+            if entry_info.get("entry_pH") is not None
+            else None,
             resolution=r,
             covalent_bonds=get_covalent_connections(cif_data),
             chain_to_seqres={c.name: c.string for c in seqres},
@@ -1181,7 +1200,7 @@ class Entry(DocBaseModel):
         -------
         dict[str, ty.Any]
         """
-        data = defaultdict(str)
+        data: dict[str, ty.Any] = defaultdict(str)
         columns = [
             "pdb_id",
             "release_date",

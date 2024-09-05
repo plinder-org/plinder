@@ -1499,7 +1499,7 @@ class Ligand(DocBaseModel):
         return {"ligand_interactions": interactions}
 
     def format(self, chains: dict[str, Chain]) -> dict[str, ty.Any]:
-        data = defaultdict(str)
+        data: dict[str, ty.Any] = defaultdict(str)
 
         for field in self.get_descriptions_and_types():
             # blacklist fields that will be added with custom formatters below

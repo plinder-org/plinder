@@ -27,7 +27,9 @@ class DocBaseModel(BaseModel):
             if isinstance(prop, cached_property) or isinstance(prop, property):
                 descriptions[name] = (
                     prop.__doc__,
-                    prop.func.__annotations__.get("return", None),
+                    prop.func.__annotations__.get("return", None)
+                    if hasattr(prop, "func")
+                    else None,
                 )
         return descriptions
 
