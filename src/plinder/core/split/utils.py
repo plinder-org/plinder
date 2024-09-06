@@ -68,8 +68,8 @@ def get_extended_plindex(
     """
     if plindex is None:
         plindex = get_plindex(cfg=cfg)
-    plindex["system_validation_pass_criteria"] = plindex[
-        "system_validation_pass_criteria"
+    plindex["system_pass_validation_criteria"] = plindex[
+        "system_pass_validation_criteria"
     ].fillna(False)
     for n in [
         "lipinski",

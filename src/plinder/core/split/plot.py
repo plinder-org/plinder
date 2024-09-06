@@ -250,7 +250,7 @@ class SplitPropertiesPlotter:
         plindex = pd.merge(plindex, split, on="system_id", suffixes=("", "_y"))
         mms_df = pd.read_parquet(self.data_dir / "mmp/plinder_mmp_series.parquet")
         split_subdf = plindex[
-            plindex["system_validation_pass_criteria"].fillna(False)
+            plindex["system_pass_validation_criteria"].fillna(False)
         ].drop_duplicates("system_id")
         good_mms_systems = set()
         for split in plindex["split"].unique():

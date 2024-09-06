@@ -415,7 +415,7 @@ class System(DocBaseModel):
                 <= criteria.pocket_max_percent_outliers_clashes,
             ]
             self.pass_criteria = all(quality)
-        data["system_validation_pass_criteria"] = self.pass_criteria
+        data["system_pass_validation_criteria"] = self.pass_criteria
         return data
 
     def format(
@@ -425,10 +425,20 @@ class System(DocBaseModel):
         criteria: QualityCriteria = QualityCriteria(),
     ) -> dict[str, ty.Any]:
         data: dict[str, ty.Any] = defaultdict(str)
+        ignore_fields = {
+            "interactions_counter",
+            "waters",
+            "selection",
+        }
         for field in self.get_descriptions_and_types():
-            if field in self.model_fields and field != "biounit_id":
+            if (
+                field in self.model_fields and field != "biounit_id"
+            ) or field in ignore_fields:
                 continue
-            name = f"system_{field}"
+            if not field.startswith("system_"):
+                name = f"system_{field}"
+            else:
+                name = field
             data[name] = getattr(self, field, None)
 
         pocket_mapping = self.get_pocket_domains(chains)
@@ -525,11 +535,14 @@ class System(DocBaseModel):
         """
         Maximum molecular weight of the system ligands excluding ions and artifacts
         """
-        return max(
+        ligands = self.proper_ligands()
+        if len(ligands) == 0:
+            return -1.0
+        weights = [
             ligand.molecular_weight if ligand.molecular_weight is not None else -1.0
-            for ligand in self.proper_ligands()
-            if ligand.molecular_weight is not None
-        )
+            for ligand in ligands
+        ]
+        return max(weights)
 
     @cached_property
     def num_unresolved_heavy_atoms(self) -> int | None:
@@ -929,8 +942,8 @@ class Entry(DocBaseModel):
             oligomeric_state=str(entry_info.get("entry_oligomeric_state"))
             if entry_info.get("entry_oligomeric_state") is not None
             else None,
-            determination_method=str(entry_info.get("entry_oligomeric_state"))
-            if entry_info.get("entry_oligomeric_state") is not None
+            determination_method=str(entry_info.get("entry_determination_method"))
+            if entry_info.get("entry_determination_method") is not None
             else None,
             keywords=str(entry_info.get("entry_keywords"))
             if entry_info.get("entry_keywords", None) is not None
@@ -1182,7 +1195,7 @@ class Entry(DocBaseModel):
                 <= criteria.max_entry_r_minus_rfree,
             ]
             self.pass_criteria = all(quality)
-        data["entry_validation_pass_criteria"] = self.pass_criteria
+        data["entry_pass_validation_criteria"] = self.pass_criteria
         return data
 
     def format(
@@ -1216,7 +1229,7 @@ class Entry(DocBaseModel):
 
         if self.validation:
             data.update(self.format_validation(criteria))
-            data["entry_validation_pass_criteria"] = self.pass_criteria
+            data["entry_pass_validation_criteria"] = self.pass_criteria
         return data
 
     def to_df(self) -> pd.DataFrame:

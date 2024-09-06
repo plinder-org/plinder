@@ -296,7 +296,7 @@ class StratifiedTestSet:
             ],
         )
         quality = dict(
-            zip(df["system_id"], df["system_validation_pass_criteria"].fillna(False))
+            zip(df["system_id"], df["system_pass_validation_criteria"].fillna(False))
         )
         missing_systems = set(
             self.max_similarities[~self.max_similarities["system_id"].isin(quality)][
