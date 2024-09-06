@@ -10,5 +10,4 @@ ligand_loadbable_via_biotite	bool	the ligand can successfully be loaded with the
 ligand_matches_smiles_atom_num	bool	the number of atoms in the saved ligand matches the expected number from the resolved SMILES
 ligand_positions_correct	bool	the positions of the saved ligand atoms match the expected positions from the PDB entry
 ligand_protein_neighbor_still_preserved_complex	bool	the neighboring protein chains of the saved complex match what was annotated from the PDB entry
-ligand_rdkit_validation	list[str]	list of RDKit fixes performed
 suitable_for_ml_training	bool	passes all the QC checks
