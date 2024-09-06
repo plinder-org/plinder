@@ -1500,19 +1500,26 @@ class Ligand(DocBaseModel):
 
     def format(self, chains: dict[str, Chain]) -> dict[str, ty.Any]:
         data: dict[str, ty.Any] = defaultdict(str)
-
+        ignore_fields = {
+            "posebusters_result",
+            "interactions",
+            "ligand_auth_id",
+            "protein_chains",
+            "interacting_ligands",
+            "neighboring_ligands",
+            "interacting_residues",
+            "neighboring_residues",
+            "biounit_id",
+            "pdb_id",
+            "interactions_counter",
+            "ligand_neighboring_ligand_threshold",
+            "ligand_neighboring_residue_threshold",
+            "waters",
+            "selection",
+        }
         for field in self.get_descriptions_and_types():
-            # blacklist fields that will be added with custom formatters below
-            if field in [
-                "posebusters_result",
-                "interactions",
-                "ligand_auth_id",
-                "protein_chains",
-                "interacting_ligands",
-                "neighboring_ligands",
-                "interacting_residues",
-                "neighboring_residues",
-            ]:
+            # blacklist fields that will be added with custom formatters below or that we don't want to add to the plindex
+            if field in ignore_fields:
                 continue
             name = f"ligand_{field}"
             data[name] = getattr(self, field, None)

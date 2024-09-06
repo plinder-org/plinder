@@ -282,7 +282,7 @@ def prep_data_for_desired_properties(
         )
     )
     entries["system_pass_validation_criteria"] = (
-        entries["system_validation_pass_criteria"].fillna(False).astype(bool)
+        entries["system_pass_validation_criteria"].fillna(False).astype(bool)
     )
     LOG.info(
         f"{entries['system_pass_validation_criteria'].sum()} systems pass validation criteria"
