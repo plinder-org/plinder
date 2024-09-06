@@ -24,6 +24,12 @@ class ResidueValidationThresholds(DocBaseModel):
     min_average_occupancy: float = 1.0
 
 
+def nanmean_return_nan(arr: list[float]) -> float:
+    if len(arr) == 0 or all(np.isnan(arr)):
+        return float(np.nan)
+    return float(np.nanmean(arr))
+
+
 class ResidueValidation(DocBaseModel):
     model_config = ConfigDict(ser_json_inf_nan="constants")
     altcode: str = Field(description="Alternative conformation code")
@@ -192,11 +198,11 @@ class ResidueListValidation(DocBaseModel):
             num_residues=total_residues,
             num_processed_residues=num_processed,
             percent_processed_residues=100 * num_processed / total_residues,
-            average_rsr=float(np.nanmean([residue.rsr for residue in filtered])),
-            average_rsrz=float(np.nanmean([residue.rsrz for residue in filtered])),
-            average_rscc=float(np.nanmean([residue.rscc for residue in filtered])),
-            average_occupancy=float(
-                np.nanmean([residue.average_occupancy for residue in filtered])
+            average_rsr=nanmean_return_nan([residue.rsr for residue in filtered]),
+            average_rsrz=nanmean_return_nan([residue.rsrz for residue in filtered]),
+            average_rscc=nanmean_return_nan([residue.rscc for residue in filtered]),
+            average_occupancy=nanmean_return_nan(
+                [residue.average_occupancy for residue in filtered]
             ),
             percent_rsr_under_threshold=100
             * sum([residue.rsr <= residue_thresholds.max_rsr for residue in filtered])
