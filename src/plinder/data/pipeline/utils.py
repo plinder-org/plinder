@@ -595,7 +595,7 @@ def create_nonredundant_dataset(*, data_dir: Path) -> None:
     )
 
 
-def pack_linked_structures(data_dir: Path, code: str) -> None:
+def pack_linked_structures(data_dir: Path, code: str, structures: bool = True) -> None:
     """
     Pack generated linked structures into a zip file for a particular
     two character code.
@@ -606,10 +606,13 @@ def pack_linked_structures(data_dir: Path, code: str) -> None:
         plinder root dir
     code : str
         two character code
+    structures : bool, default=True
+        if True, make structure archives
     """
     (data_dir / "links").mkdir(exist_ok=True, parents=True)
+    mode = "w" if structures else "r"
     with ZipFile(
-        data_dir / "links" / f"{code}.zip", "w", compression=ZIP_DEFLATED
+        data_dir / "links" / f"{code}.zip", mode, compression=ZIP_DEFLATED
     ) as archive:
         for search_db in ["apo", "pred"]:
             jsons = []
@@ -626,13 +629,14 @@ def pack_linked_structures(data_dir: Path, code: str) -> None:
                             jsons.append(load(f))
                     except Exception:
                         pass
-                    try:
-                        archive.write(
-                            f"{link}/superposed.cif",
-                            f"{search_db}/{system_id}/{link_id}/superposed.cif",
-                        )
-                    except Exception:
-                        pass
+                    if structures:
+                        try:
+                            archive.write(
+                                f"{link}/superposed.cif",
+                                f"{search_db}/{system_id}/{link_id}/superposed.cif",
+                            )
+                        except Exception:
+                            pass
             df = pd.DataFrame(jsons).rename(
                 columns={"reference": "reference_system_id", "model": "id"}
             )

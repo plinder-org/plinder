@@ -12,7 +12,7 @@ from metaflow import FlowSpec, Parameter, kubernetes, environment, step, retry
 MOUNT = "/plinder"
 K8S = dict(
     cpu=1,
-    image="us-east1-docker.pkg.dev/vantai-analysis/metaflow/plinder:v0.2.0-4-g5ce56a60",
+    image="us-east1-docker.pkg.dev/vantai-analysis/metaflow/plinder:v0.2.1-45-g5fda6e4d",
     node_selector={
         "topology.kubernetes.io/zone": "us-east1-b",
     },
@@ -63,10 +63,10 @@ class PlinderDataIngestFlow(FlowSpec):
         self.pipeline = IngestPipeline(conf=get_config(config_contents=contents))
         # self.next(self.scatter_download_rcsb_files)
         # self.next(self.scatter_make_entries)
-        # self.next(self.scatter_structure_qc)
+        self.next(self.scatter_structure_qc)
         # self.next(self.scatter_collate_partitions)
         # self.next(self.scatter_make_components_and_communities)
-        self.next(self.scatter_make_links)
+        # self.next(self.scatter_make_links)
 
     # @kubernetes(**{**K8S, **LARGE_MEM, **{"cpu": 3.5, "memory": 175000}})
     # @environment(**ENV)
@@ -190,32 +190,32 @@ class PlinderDataIngestFlow(FlowSpec):
     #     self.pipeline.cfg.context.pdb_ids = self.original_pdb_ids
     #     self.next(self.scatter_structure_qc)
     #
-    # @kubernetes(**K8S)
-    # @environment(**ENV)
-    # @retry
-    # @step
-    # def scatter_structure_qc(self):
-    #     self.chunks = self.pipeline.scatter_structure_qc()
-    #     self.next(self.structure_qc, foreach="chunks")
-    #
-    # @kubernetes(**{**K8S, **{"memory": 4000}})
-    # @environment(**ENV)
-    # @retry
-    # @step
-    # def structure_qc(self):
-    #     self.pipeline.structure_qc(self.input)
-    #     self.next(self.join_structure_qc)
-    #
-    # @kubernetes(**K8S)
-    # @environment(**ENV)
-    # @retry
-    # @step
-    # def join_structure_qc(self, inputs):
-    #     self.pipeline = inputs[0].pipeline
-    #     self.merge_artifacts(inputs, exclude=["chunks"])
-    #     self.pipeline.join_structure_qc()
-    #     self.next(self.scatter_make_system_archives)
-    #
+    @kubernetes(**K8S)
+    @environment(**ENV)
+    @retry
+    @step
+    def scatter_structure_qc(self):
+        self.chunks = self.pipeline.scatter_structure_qc()
+        self.next(self.structure_qc, foreach="chunks")
+
+    @kubernetes(**{**K8S, **{"memory": 4000}})
+    @environment(**ENV)
+    @retry
+    @step
+    def structure_qc(self):
+        self.pipeline.structure_qc(self.input)
+        self.next(self.join_structure_qc)
+
+    @kubernetes(**K8S)
+    @environment(**ENV)
+    @retry
+    @step
+    def join_structure_qc(self, inputs):
+        self.pipeline = inputs[0].pipeline
+        self.merge_artifacts(inputs, exclude=["chunks"])
+        self.pipeline.join_structure_qc(inputs)
+        self.next(self.end) # self.scatter_make_system_archives)
+
     # @kubernetes(**K8S)
     # @environment(**ENV)
     # @retry
@@ -400,58 +400,58 @@ class PlinderDataIngestFlow(FlowSpec):
     #     self.pipeline.assign_apo_pred_systems()
     #     self.next(self.end)
 
-    @kubernetes(**K8S)
-    @environment(**ENV)
-    @retry
-    @step
-    def scatter_make_links(self):
-        self.chunks = self.pipeline.scatter_make_links()
-        self.next(self.make_links, foreach="chunks")
-
-    @kubernetes(**{**K8S, **DATABASES})
-    @environment(**ENV)
-    @retry
-    @step
-    def make_links(self):
-        self.pipeline.cfg.flow.make_links_cpu = DATABASES["cpu"] - 1
-        self.pipeline.make_links(self.input)
-        self.next(self.join_make_links)
-
-    @kubernetes(**K8S)
-    @environment(**ENV)
-    @retry
-    @step
-    def join_make_links(self, inputs):
-        self.pipeline = inputs[0].pipeline
-        self.merge_artifacts(inputs, exclude=["chunks"])
-        self.next(self.scatter_make_linked_structures)
-
-    @kubernetes(**{**K8S, **DATABASES})
-    @environment(**ENV)
-    @retry
-    @step
-    def scatter_make_linked_structures(self):
-        self.chunks = self.pipeline.scatter_make_linked_structures()
-        self.next(self.make_linked_structures, foreach="chunks")
-
-    @kubernetes(**{**K8S, **WORKSTATION})
-    @environment(**ENV)
-    @retry
-    @step
-    def make_linked_structures(self):
-        self.pipeline.cfg.flow.make_linked_structures_cpu = WORKSTATION["cpu"] - 1
-        self.pipeline.make_linked_structures(self.input)
-        self.next(self.join_make_linked_structures)
-
-    @kubernetes(**K8S)
-    @environment(**ENV)
-    @retry
-    @step
-    def join_make_linked_structures(self, inputs):
-        self.pipeline = inputs[0].pipeline
-        self.pipeline.join_make_linked_structures(inputs)
-        self.merge_artifacts(inputs, exclude=["chunks"])
-        self.next(self.end)
+    # @kubernetes(**K8S)
+    # @environment(**ENV)
+    # @retry
+    # @step
+    # def scatter_make_links(self):
+    #     self.chunks = self.pipeline.scatter_make_links()
+    #     self.next(self.make_links, foreach="chunks")
+    #
+    # @kubernetes(**{**K8S, **DATABASES})
+    # @environment(**ENV)
+    # @retry
+    # @step
+    # def make_links(self):
+    #     self.pipeline.cfg.flow.make_links_cpu = DATABASES["cpu"] - 1
+    #     self.pipeline.make_links(self.input)
+    #     self.next(self.join_make_links)
+    #
+    # @kubernetes(**K8S)
+    # @environment(**ENV)
+    # @retry
+    # @step
+    # def join_make_links(self, inputs):
+    #     self.pipeline = inputs[0].pipeline
+    #     self.merge_artifacts(inputs, exclude=["chunks"])
+    #     self.next(self.scatter_make_linked_structures)
+    #
+    # @kubernetes(**{**K8S, **DATABASES})
+    # @environment(**ENV)
+    # @retry
+    # @step
+    # def scatter_make_linked_structures(self):
+    #     self.chunks = self.pipeline.scatter_make_linked_structures()
+    #     self.next(self.make_linked_structures, foreach="chunks")
+    #
+    # @kubernetes(**{**K8S, **WORKSTATION})
+    # @environment(**ENV)
+    # @retry
+    # @step
+    # def make_linked_structures(self):
+    #     self.pipeline.cfg.flow.make_linked_structures_cpu = WORKSTATION["cpu"] - 1
+    #     self.pipeline.make_linked_structures(self.input)
+    #     self.next(self.join_make_linked_structures)
+    #
+    # @kubernetes(**K8S)
+    # @environment(**ENV)
+    # @retry
+    # @step
+    # def join_make_linked_structures(self, inputs):
+    #     self.pipeline = inputs[0].pipeline
+    #     self.pipeline.join_make_linked_structures(inputs)
+    #     self.merge_artifacts(inputs, exclude=["chunks"])
+    #     self.next(self.end)
 
     @kubernetes(**K8S)
     @environment(**ENV)
