@@ -13,10 +13,7 @@ Note
 You can disable the MD5 checksum comparison between local files and remote files
 by setting the environment variable `PLINDER_OFFLINE=true`.
 """
-from pathlib import Path
-from textwrap import dedent
-
-_root = Path(__file__).parent.parent
+import warnings
 
 from plinder.core.index.utils import get_manifest, get_plindex
 from plinder.core.split.utils import get_extended_plindex, get_split
@@ -26,18 +23,9 @@ from plinder.core.utils.config import get_config
 try:
     from plinder.core.loader.loader import PlinderDataset, get_model_input_files
 except ImportError:
-    print(
-        dedent(
-            """\
-            plinder.core.PlinderDataset requires pytorch and atom3d.
-
-            please run:
-
-                pip install plinder[loader]
-
-            to enable the data loader
-            """
-        )
+    warnings.warn(
+        "plinder.core.PlinderDataset requires pytorch and atom3d. "
+        "Please run `pip install plinder[loader]` to enable the data loader."
     )
     PlinderDataset = None  # type: ignore
 
