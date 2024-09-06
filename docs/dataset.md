@@ -260,7 +260,7 @@ split:
   - - system_pass_statistics_criteria # Indicator of whether a system is passing statistic criteria
     - ==
     - 'True'
-  - - system_num_ligands_in_biounit # Number of ligands in the biounit.
+  - - biounit_num_ligands # Number of ligands in the biounit.
     - <=
     - 20
   priority_columns:

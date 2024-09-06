@@ -22,9 +22,12 @@ from plinder.core.utils import schemas
 from plinder.core.utils.log import setup_logger
 from plinder.core.utils.unpack import expand_config_context
 from plinder.data.utils import tanimoto
+from plinder.data.utils.annotations.aggregate_annotations import System, Entry
+from plinder.data.utils.annotations.get_ligand_validation import EntryValidation, ResidueListValidation
+from plinder.data.utils.annotations.ligand_utils import Ligand
+from plinder.data.utils.annotations.protein_utils import Chain
 
 if TYPE_CHECKING:
-    from plinder.data.utils.annotations.aggregate_annotations import Entry
     from plinder.data.utils.annotations.get_similarity_scores import Scorer
 
 
@@ -511,13 +514,13 @@ def add_aggregated_columns(*, index: pd.DataFrame) -> pd.DataFrame:
             + "_"
             + index["pli_qcov__100__strong__component"]
         )
-    index["system_num_ligands_in_biounit"] = index.groupby(
+    index["biounit_num_ligands"] = index.groupby(
         ["entry_pdb_id", "system_biounit_id"]
     )["system_id"].transform("count")
-    index["system_num_unique_ligands_in_biounit"] = index.groupby(
+    index["biounit_num_unique_ccd_codes"] = index.groupby(
         ["entry_pdb_id", "system_biounit_id"]
     )["ligand_unique_ccd_code"].transform("nunique")
-    index["system_proper_num_ligands_in_biounit"] = index.groupby(
+    index["biounit_num_proper_ligands"] = index.groupby(
         ["entry_pdb_id", "system_biounit_id"]
     )["ligand_is_proper"].transform("sum")
     for n in [
@@ -695,3 +698,53 @@ def rename_clusters(*, data_dir: Path) -> None:
         apath = base / name / "data.parquet"
         apath.parent.mkdir(exist_ok=True, parents=True)
         shutil.move(path, apath)
+
+
+def make_column_descriptions(*, plindex: pd.DataFrame, output_dir: Path) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    Entry.document_properties_to_tsv(prefix="entry", filename=output_dir / "entry.tsv")
+    EntryValidation.document_properties_to_tsv(
+        prefix="entry_validation", filename=output_dir / "entry_validation.tsv"
+    )
+    System.document_properties_to_tsv(
+        prefix="system", filename=output_dir / "system.tsv"
+    )
+    ResidueListValidation.document_properties_to_tsv(
+        prefix="system_pocket", filename=output_dir / "system_pocket_validation.tsv"
+    )
+    ResidueListValidation.document_properties_to_tsv(
+        prefix="system_ligand", filename=output_dir / "system_ligand_validation.tsv"
+    )
+    Chain.document_properties_to_tsv(
+        prefix="system_protein_chains",
+        filename=output_dir / "system_protein_chains.tsv",
+    )
+    Chain.document_properties_to_tsv(
+        prefix="system_ligand_chains", filename=output_dir / "system_ligand_chains.tsv"
+    )
+    Ligand.document_properties_to_tsv(
+        prefix="ligand", filename=output_dir / "ligands.tsv"
+    )
+    rows = []
+    component_columns = [c for c in plindex.columns if c.endswith("__component")]
+    for column in component_columns:
+        metric, threshold, directed, cluster = column.split("__")
+        rows.append((
+                column,
+                f"Cluster ID for {directed} {cluster} built from {metric} metric with {threshold} threshold",
+                "str",
+        )
+        )
+    community_columns = [c for c in plindex.columns if c.endswith("__community")]
+    for column in community_columns:
+        metric, threshold, cluster = column.split("__")
+        rows.append((
+                column,
+                "str",
+                f"Cluster ID for {cluster} built from {metric} metric with {threshold} threshold",    
+            )
+        )
+    with open(output_dir / "similarity_clusters.tsv", "w") as f:
+        f.write("Name\tType\tDescription\n")
+        for row in rows:
+            f.write(f"{row[0]}\t{row[1]}\t{row[2]}\n")

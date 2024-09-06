@@ -91,7 +91,7 @@ class SplitConfig:
         default_factory=lambda: [
             ["system_pass_validation_criteria", "==", "True"],
             ["system_pass_statistics_criteria", "==", "True"],
-            ["system_num_ligands_in_biounit", "<=", 20],
+            ["biounit_num_ligands", "<=", 20],
         ]
     )
     priority_columns: dict[str, float] = field(
