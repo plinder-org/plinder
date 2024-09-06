@@ -10,7 +10,7 @@ from plinder.eval.docking import utils
 
 def test_single_protein_single_ligand_scoring(system_1a3b, predicted_pose_1a3b):
     reference_system = utils.ReferenceSystem.from_reference_system(
-        system_1a3b.parent, system_1a3b.name
+        system_1a3b, system_1a3b.name
     )
     scores = utils.ModelScores.from_files(
         predicted_pose_1a3b.parent.name,
@@ -73,7 +73,7 @@ def test_single_protein_single_ligand_scoring(system_1a3b, predicted_pose_1a3b):
 
 def test_multi_protein_single_ligand_scoring(system_1ai5, predicted_pose_1ai5):
     reference_system = utils.ReferenceSystem.from_reference_system(
-        system_1ai5.parent, system_1ai5.name
+        system_1ai5, system_1ai5.name
     )
     scores = utils.ModelScores.from_files(
         predicted_pose_1ai5.parent.name,

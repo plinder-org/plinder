@@ -42,7 +42,8 @@ def write_scores_as_json(
             LOG.warning(f"get_scores: {output_file} exists")
             return
         reference_system = utils.ReferenceSystem.from_reference_system(
-            system_dir, scorer_input.reference_system_id
+            system_dir / scorer_input.reference_system_id,
+            scorer_input.reference_system_id,
         )
         receptor_file = scorer_input.receptor_file
         if np.isnan(receptor_file):

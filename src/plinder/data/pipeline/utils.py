@@ -11,7 +11,7 @@ from json import dumps, load
 from os import listdir
 from pathlib import Path
 from time import time
-from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, TypeVar
+from typing import TYPE_CHECKING, Any, Callable, Dict, Literal, Optional, TypeVar
 from zipfile import ZIP_DEFLATED, ZipFile
 
 import pandas as pd
@@ -595,7 +595,7 @@ def create_nonredundant_dataset(*, data_dir: Path) -> None:
     )
 
 
-def pack_linked_structures(data_dir: Path, code: str) -> None:
+def pack_linked_structures(data_dir: Path, code: str, structures: bool = True) -> None:
     """
     Pack generated linked structures into a zip file for a particular
     two character code.
@@ -606,14 +606,17 @@ def pack_linked_structures(data_dir: Path, code: str) -> None:
         plinder root dir
     code : str
         two character code
+    structures : bool, default=True
+        if True, make structure archives
     """
     (data_dir / "links").mkdir(exist_ok=True, parents=True)
+    mode: Literal["r", "w"] = "w" if structures else "r"
     with ZipFile(
-        data_dir / "links" / f"{code}.zip", "w", compression=ZIP_DEFLATED
+        data_dir / "links" / f"{code}.zip", mode, compression=ZIP_DEFLATED
     ) as archive:
         for search_db in ["apo", "pred"]:
             jsons = []
-            root = data_dir / "linked_structures" / search_db
+            root = data_dir / "linked_staging" / search_db
             system_ids = [
                 system_id for system_id in listdir(root) if system_id[1:3] == code
             ]
@@ -626,13 +629,14 @@ def pack_linked_structures(data_dir: Path, code: str) -> None:
                             jsons.append(load(f))
                     except Exception:
                         pass
-                    try:
-                        archive.write(
-                            f"{link}/superposed.cif",
-                            f"{search_db}/{system_id}/{link_id}/superposed.cif",
-                        )
-                    except Exception:
-                        pass
+                    if structures:
+                        try:
+                            archive.write(
+                                f"{link}/superposed.cif",
+                                f"{search_db}/{system_id}/{link_id}/superposed.cif",
+                            )
+                        except Exception:
+                            pass
             df = pd.DataFrame(jsons).rename(
                 columns={"reference": "reference_system_id", "model": "id"}
             )
@@ -676,10 +680,13 @@ def consolidate_linked_scores(*, data_dir: Path) -> None:
                 dfs.append(df)
         ndf = pd.concat(dfs)
         odf = pd.read_parquet(
-            data_dir / "linked_structures" / f"{search_db}_links.parquet"
+            data_dir / "linked_staging" / f"{search_db}_links.parquet"
         )
         df = pd.merge(odf, ndf, on=["reference_system_id", "id"])
-        df.to_parquet(data_dir / "links" / f"{search_db}_links.parquet", index=False)
+        (data_dir / "links" / f"kind={search_db}").mkdir(exist_ok=True, parents=True)
+        df.to_parquet(
+            data_dir / "links" / f"kind={search_db}" / "links.parquet", index=False
+        )
 
 
 def rename_clusters(*, data_dir: Path) -> None:

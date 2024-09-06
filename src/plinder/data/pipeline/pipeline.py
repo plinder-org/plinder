@@ -337,13 +337,48 @@ class IngestPipeline:
         )
 
     @utils.ingest_flow_control
-    def assign_apo_pred_systems(self) -> None:
-        tasks.assign_apo_pred_systems(
+    def scatter_make_links(self) -> list[list[str]]:
+        chunks: list[list[str]] = tasks.scatter_make_links(
             data_dir=self.plinder_dir,
-            # TODO: pass this and cpu in from config
-            cpu=self.cfg.flow.assign_apo_pred_systems_cpus,
             search_dbs=self.cfg.scorer.sub_databases,
         )
+        return chunks
+
+    @utils.ingest_flow_control
+    def make_links(self, search_dbs: list[str]) -> None:
+        tasks.make_links(
+            data_dir=self.plinder_dir,
+            search_dbs=search_dbs,
+        )
+
+    @utils.ingest_flow_control
+    def scatter_make_linked_structures(self) -> list[list[tuple[str, str]]]:
+        chunks: list[list[tuple[str, str]]] = tasks.scatter_make_linked_structures(
+            data_dir=self.plinder_dir,
+            search_dbs=self.cfg.flow.sub_databases,
+            batch_size=self.cfg.flow.make_linked_structures_batch_size,
+        )
+        return chunks
+
+    @utils.ingest_flow_control
+    def make_linked_structures(self, system_ids: list[tuple[str, str]]) -> None:
+        force_update = (
+            self.cfg.data.force_update
+            or self.cfg.flow.make_linked_structures_force_update
+        )
+        tasks.make_linked_structures(
+            data_dir=self.plinder_dir,
+            search_dbs=self.cfg.flow.sub_databases,
+            system_ids=system_ids,
+            cpu=self.cfg.flow.make_linked_structures_cpu,
+            force_update=force_update,
+        )
+        return
+
+    @utils.ingest_flow_control
+    def join_make_linked_structures(self, outputs: list[None]) -> None:
+        utils.mp_pack_linked_structures(data_dir=self.plinder_dir)
+        utils.consolidate_linked_scores(data_dir=self.plinder_dir)
 
     def run_stage(self, stage: str) -> None:
         """

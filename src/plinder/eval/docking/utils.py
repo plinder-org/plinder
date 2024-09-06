@@ -46,13 +46,13 @@ class ReferenceSystem:
     def from_reference_system(
         cls, system_dir: Path, reference_system: str
     ) -> "ReferenceSystem":
-        cif_file = system_dir / reference_system / "receptor.cif"
-        pdb_file = system_dir / reference_system / "receptor.pdb"
+        cif_file = system_dir / "receptor.cif"
+        pdb_file = system_dir / "receptor.pdb"
         entity = io.LoadMMCIF(cif_file.as_posix())
         ligand_sdf_files = {}
         ligands = []
         for chain in reference_system.split("__")[-1].split("_"):
-            sdf_file = system_dir / reference_system / "ligand_files" / f"{chain}.sdf"
+            sdf_file = system_dir / "ligand_files" / f"{chain}.sdf"
             ligand_sdf_files[chain] = sdf_file
             ligands.append(
                 io.LoadEntity(sdf_file.as_posix(), format="sdf").Select("ele != H")
@@ -96,7 +96,7 @@ class ModelScores:
     score_posebusters: bool = False
     posebusters_mapper: str = "scrmsd"
     ligand_scores: list[LigandScores] | None = None
-    rigid: bool = True
+    rigid: bool = False
     score_protein: bool = False
     num_mapped_reference_proteins: int = 0
     num_mapped_proteins: int = 0
@@ -109,7 +109,7 @@ class ModelScores:
         model_file: Path,
         model_ligand_sdf_files: list[str | Path],
         reference: ReferenceSystem,
-        rigid: bool = True,
+        rigid: bool = False,
         score_protein: bool = False,
         score_posebusters: bool = False,
     ) -> "ModelScores":
@@ -272,7 +272,7 @@ class ModelScores:
                             self.posebusters_mapper
                         ].sdf_file,
                         mol_cond=self.reference.receptor_pdb_file,
-                        full_report=False,
+                        full_report=True,
                     ).to_dict()
                     key = (str(ligand_class.sdf_file), chain_name.split("_")[-1])
                     try:
