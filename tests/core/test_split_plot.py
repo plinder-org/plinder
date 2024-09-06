@@ -1,4 +1,3 @@
-
 def test_split_plot(write_plinder_mount, tmp_path):
     from plinder.core.split.plot import SplitPropertiesPlotter
 
