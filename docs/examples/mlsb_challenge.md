@@ -59,7 +59,7 @@ Submission system will use Hugging Face Spaces. To qualify for submission, each 
 ## Metrics
 
 - Primary Ranking Metric:
-  - PLINDER: Mean lDDT-PLI
+  - PLINDER: lDDT-PLI
   - PINDER: Percent CAPRI acceptable or higher
 
 Other metrics computed by PINDER/PLINDER will be displayed on the leaderboard but will not influence the ranking.
