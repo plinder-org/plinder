@@ -25,7 +25,7 @@ from plinder.core.utils.config import get_config
 
 try:
     from plinder.core.loader.loader import PlinderDataset, get_model_input_files
-except (ImportError, ModuleNotFoundError):
+except ImportError:
     print(
         dedent(
             """\
