@@ -256,9 +256,7 @@ def save_superposition(
     overwrite: bool = False,
 ) -> bool:
     if not overwrite and (save_folder / "superposed.cif").exists():
-        LOG.warning(
-            f"save_superposition: {save_folder / 'superposed.cif'} exists"
-        )
+        LOG.warning(f"save_superposition: {save_folder / 'superposed.cif'} exists")
         return True
     target_cif_file = get_cif_file(data_dir, search_db, link.id)
     if not target_cif_file.exists():
@@ -341,7 +339,8 @@ def system_save_and_score_representatives(
 ) -> None:
     try:
         reference_system = utils.ReferenceSystem.from_reference_system(
-            data_dir / "raw_entries" / system[1:3] / system, system,
+            data_dir / "raw_entries" / system[1:3] / system,
+            system,
         )
     except Exception as e:
         LOG.error(

@@ -1041,9 +1041,16 @@ def scatter_make_linked_structures(
 ) -> list[list[tuple[str, str]]]:
     items = []
     for search_db in search_dbs:
-        links = pd.read_parquet(data_dir / "linked_staging" / f"{search_db}_links.parquet")
-        items.extend([(search_db, system_id) for system_id in sorted(links["reference_system_id"])])
-    return [items[pos:pos + batch_size] for pos in range(0, len(items), batch_size)]
+        links = pd.read_parquet(
+            data_dir / "linked_staging" / f"{search_db}_links.parquet"
+        )
+        items.extend(
+            [
+                (search_db, system_id)
+                for system_id in sorted(links["reference_system_id"])
+            ]
+        )
+    return [items[pos : pos + batch_size] for pos in range(0, len(items), batch_size)]
 
 
 def make_linked_structures(
@@ -1056,7 +1063,9 @@ def make_linked_structures(
 ) -> None:
     import multiprocessing
 
-    from plinder.data.save_linked_structures import system_save_and_score_representatives
+    from plinder.data.save_linked_structures import (
+        system_save_and_score_representatives,
+    )
 
     linked_structures = data_dir / "linked_staging"
     grouped = {
@@ -1080,6 +1089,8 @@ def make_linked_structures(
             system_save_and_score_representatives,
             [
                 (system, group, data_dir, search_db, linked_structures, force_update)
-                for (search_db, system), group in links.groupby(["kind", "reference_system_id"])
-            ]
+                for (search_db, system), group in links.groupby(
+                    ["kind", "reference_system_id"]
+                )
+            ],
         )

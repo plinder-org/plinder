@@ -114,9 +114,7 @@ class FlowConfig:
                 stage for stage in self.skip_specific_stages.split(",") if stage
             ]
         if isinstance(self.sub_databases, str):
-            self.sub_databases = [
-                db for db in self.sub_databases.split(",") if db
-            ]
+            self.sub_databases = [db for db in self.sub_databases.split(",") if db]
 
 
 @dataclass

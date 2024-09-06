@@ -675,10 +675,14 @@ def consolidate_linked_scores(*, data_dir: Path) -> None:
             if not df.empty:
                 dfs.append(df)
         ndf = pd.concat(dfs)
-        odf = pd.read_parquet(data_dir / "linked_staging" / f"{search_db}_links.parquet")
+        odf = pd.read_parquet(
+            data_dir / "linked_staging" / f"{search_db}_links.parquet"
+        )
         df = pd.merge(odf, ndf, on=["reference_system_id", "id"])
         (data_dir / "links" / f"kind={search_db}").mkdir(exist_ok=True, parents=True)
-        df.to_parquet(data_dir / "links" / f"kind={search_db}" / "links.parquet", index=False)
+        df.to_parquet(
+            data_dir / "links" / f"kind={search_db}" / "links.parquet", index=False
+        )
 
 
 def rename_clusters(*, data_dir: Path) -> None:

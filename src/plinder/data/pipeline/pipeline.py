@@ -347,7 +347,8 @@ class IngestPipeline:
     @utils.ingest_flow_control
     def make_links(self, search_dbs: list[str]) -> None:
         tasks.make_links(
-            data_dir=self.plinder_dir, search_dbs=search_dbs,
+            data_dir=self.plinder_dir,
+            search_dbs=search_dbs,
         )
 
     @utils.ingest_flow_control
@@ -361,7 +362,10 @@ class IngestPipeline:
 
     @utils.ingest_flow_control
     def make_linked_structures(self, system_ids: list[tuple[str, str]]) -> None:
-        force_update = self.cfg.data.force_update or self.cfg.flow.make_linked_structures_force_update
+        force_update = (
+            self.cfg.data.force_update
+            or self.cfg.flow.make_linked_structures_force_update
+        )
         tasks.make_linked_structures(
             data_dir=self.plinder_dir,
             search_dbs=self.cfg.flow.sub_databases,
