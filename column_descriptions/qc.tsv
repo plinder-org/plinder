@@ -11,3 +11,4 @@ ligand_matches_smiles_atom_num	bool	the number of atoms in the saved ligand matc
 ligand_positions_correct	bool	the positions of the saved ligand atoms match the expected positions from the PDB entry
 ligand_protein_neighbor_still_preserved_complex	bool	the neighboring protein chains of the saved complex match what was annotated from the PDB entry
 ligand_rdkit_validation	list[str]	list of RDKit fixes performed
+ligand_molvs_validation	float	[DESCRIPTION]

@@ -274,7 +274,7 @@ class Chain(DocBaseModel):
     auth_id: str = Field(description="Chain author id")
     entity_id: str = Field(description="Chain entity id")
     chain_type_str: str = Field(
-        description="Chain type string representation as defined https://openstructure.org/docs/2.8/mol/base/entity/#ost.mol.ChainType"
+        description="__Chain type string representation as defined https://openstructure.org/docs/2.8/mol/base/entity/#ost.mol.ChainType"
     )
     residues: dict[int, Residue] = Field(
         description="__Dictionary of residues in chain with keys as residue number"
@@ -349,7 +349,7 @@ class Chain(DocBaseModel):
     @cached_property
     def chain_type(self) -> mol.ChainType:
         """
-        Chain type as defined https://openstructure.org/docs/2.8/mol/base/entity/#ost.mol.ChainType
+        __Chain type as defined https://openstructure.org/docs/2.8/mol/base/entity/#ost.mol.ChainType
         """
         return mol.ChainTypeFromString(self.chain_type_str)
 
@@ -369,6 +369,7 @@ class Chain(DocBaseModel):
             "auth_id": self.auth_id,
             "entity_id": self.entity_id,
             "length": self.length,
+            "num_unresolved_residues": self.num_unresolved_residues,
         }
         data.update(self.mappings)
         if self.validation is not None:
