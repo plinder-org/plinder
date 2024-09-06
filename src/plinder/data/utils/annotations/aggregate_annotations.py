@@ -109,7 +109,7 @@ class System(DocBaseModel):
         default=None, description="__Validation object for the system's pocket residues"
     )
     pass_criteria: bool | None = Field(
-        default=None, description="Passes quality criteria"
+        default=None, description="__Passes quality criteria"
     )  # TODO: remove as attribute and have as function
 
     """

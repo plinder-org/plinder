@@ -1,0 +1,11 @@
+Name	Type	Description
+system_pocket_BIRD	dict[str, tuple[str, str]]	Domains and ranges for BIRD
+system_pocket_CATH	dict[str, tuple[str, str]]	Domains and ranges for CATH
+system_pocket_ECOD	dict[str, tuple[str, str]]	Domains and ranges for ECOD
+system_pocket_ECOD_t_name	dict[str, tuple[str, str]]	Domains and ranges for ECOD_t_name
+system_pocket_Pfam	dict[str, tuple[str, str]]	Domains and ranges for Pfam
+system_pocket_SCOP2	dict[str, tuple[str, str]]	Domains and ranges for SCOP2
+system_pocket_SCOP2B	dict[str, tuple[str, str]]	Domains and ranges for SCOP2B
+system_pocket_PANTHER	dict[str, tuple[str, str]]	Domains and ranges for PANTHER
+system_pocket_UniProt	dict[str, tuple[str, str]]	Domains and ranges for UniProt
+system_pocket_kinase_name	dict[str, tuple[str, str]]	Domains and ranges for kinase_name

@@ -15,3 +15,7 @@ system_pocket_validation_atom_count	int	Number of atoms across all residues in t
 system_pocket_validation_heavy_atom_count	int	Number of heavy atoms across all residues in the list
 system_pocket_validation_num_unresolved_heavy_atoms	int	Number of unresolved heavy atoms across all residues in the list
 system_pocket_validation_max_alt_count	int	The highest number of configurations in a single residue in the list
+system_pocket_validation_percent_outliers_chirality	float	Percent outliers for chirality
+system_pocket_validation_percent_outliers_clashes	float	Percent outliers for clashes
+system_pocket_validation_percent_outliers_density	float	Percent outliers for density
+system_pocket_validation_percent_outliers_geometry	float	Percent outliers for geometry

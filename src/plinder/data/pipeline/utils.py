@@ -725,6 +725,22 @@ def make_column_descriptions(*, plindex: pd.DataFrame, output_dir: Path) -> None
             prefix=f"{validation_type}_validation",
             filename=output_dir / f"{validation_type}_validation.tsv",
         )
+        with open(output_dir / f"{validation_type}_validation.tsv", "a") as f:
+            for key in ["chirality", "clashes", "density", "geometry"]:
+                name = f"{validation_type}_validation_percent_outliers_{key}"
+                f.write(f"{name}\tfloat\tPercent outliers for {key}\n")
+    mapping_names = [
+        "BIRD",
+        "CATH",
+        "ECOD",
+        "ECOD_t_name",
+        "Pfam",
+        "SCOP2",
+        "SCOP2B",
+        "PANTHER",
+        "UniProt",
+        "kinase_name",
+    ]
     for chain_type in [
         "system_protein_chains",
         "system_ligand_chains",
@@ -736,9 +752,19 @@ def make_column_descriptions(*, plindex: pd.DataFrame, output_dir: Path) -> None
             prefix=chain_type,
             filename=output_dir / f"{chain_type}.tsv",
         )
-    Chain.document_properties_to_tsv(
-        prefix="system_ligand_chains", filename=output_dir / "system_ligand_chains.tsv"
-    )
+        with open(output_dir / f"{chain_type}.tsv", "a") as f:
+            for key in mapping_names:
+                name = f"{chain_type}_{key}"
+                f.write(
+                    f"{name}\tdict[str, tuple[str, str]]\tDomains and ranges for {key}\n"
+                )
+    with open(output_dir / "system_pocket.tsv", "w") as f:
+        f.write("Name\tType\tDescription\n")
+        for key in mapping_names:
+            name = f"system_pocket_{key}"
+            f.write(
+                f"{name}\tdict[str, tuple[str, str]]\tDomains and ranges for {key}\n"
+            )
     Ligand.document_properties_to_tsv(
         prefix="ligand", filename=output_dir / "ligands.tsv"
     )

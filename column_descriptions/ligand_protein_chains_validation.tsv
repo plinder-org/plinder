@@ -15,3 +15,7 @@ ligand_protein_chains_validation_atom_count	int	Number of atoms across all resid
 ligand_protein_chains_validation_heavy_atom_count	int	Number of heavy atoms across all residues in the list
 ligand_protein_chains_validation_num_unresolved_heavy_atoms	int	Number of unresolved heavy atoms across all residues in the list
 ligand_protein_chains_validation_max_alt_count	int	The highest number of configurations in a single residue in the list
+ligand_protein_chains_validation_percent_outliers_chirality	float	Percent outliers for chirality
+ligand_protein_chains_validation_percent_outliers_clashes	float	Percent outliers for clashes
+ligand_protein_chains_validation_percent_outliers_density	float	Percent outliers for density
+ligand_protein_chains_validation_percent_outliers_geometry	float	Percent outliers for geometry
