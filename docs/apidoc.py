@@ -82,7 +82,6 @@ def _create_package_page(
     """
     attributes = classes + functions
     # Enumerate classes and functions
-    # `eval-rst` directive is necessary, as `autosummary` directive renders rst
     summary_string = dedent(
         """
 
