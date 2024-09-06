@@ -461,14 +461,21 @@ def add_cluster_columns(*, index: pd.DataFrame) -> pd.DataFrame:
     """
     Add cluster columns to the annotation table
     """
-    # clusters = pd.read_parquet(
-    #     data_dir / "clusters",
-    #     columns=["system_id", "label", "threshold", "metric", "cluster", "directed"],
-    # )
-    clusters = query_clusters(
-        columns=["system_id", "label", "threshold", "metric", "cluster", "directed"],
-        filters=[("system_id", "in", set(index["system_id"]))],
-    )
+    try:
+        clusters = query_clusters(
+            columns=[
+                "system_id",
+                "label",
+                "threshold",
+                "metric",
+                "cluster",
+                "directed",
+            ],
+            filters=[("system_id", "in", set(index["system_id"]))],
+        )
+    except Exception as e:
+        LOG.error(f"Could not query clusters: {e}")
+        return index
     if clusters is None:
         LOG.error("No clusters found")
         return index
