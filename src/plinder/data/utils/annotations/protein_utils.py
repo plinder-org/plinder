@@ -356,7 +356,7 @@ class Chain(DocBaseModel):
     @cached_property
     def residue_index_to_number(self) -> dict[int, int]:
         """
-        Dictionary of residue index to residue number
+        __Dictionary of residue index to residue number
         """
         return {self.residues[r].index: r for r in self.residues}
 

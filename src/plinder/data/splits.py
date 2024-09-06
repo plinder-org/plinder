@@ -15,7 +15,6 @@ from omegaconf import DictConfig, ListConfig, OmegaConf
 from tqdm import tqdm
 
 from plinder.core import scores
-from plinder.core.split.utils import get_extended_plindex
 from plinder.core.utils.log import setup_logger
 from plinder.data import clusters
 
@@ -256,7 +255,6 @@ def prep_data_for_desired_properties(
         ],
     )
     LOG.info(f"loaded {entries['system_id'].nunique()} systems from annotation table")
-    entries = get_extended_plindex(plindex=entries)
     nonredundant_to_all = defaultdict(set)
     for system_id, unique_id in zip(entries["system_id"], entries["uniqueness"]):
         nonredundant_to_all[unique_id].add(system_id)

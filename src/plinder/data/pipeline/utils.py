@@ -17,6 +17,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 import pandas as pd
 from omegaconf import DictConfig
 
+from plinder.core.scores import query_clusters
 from plinder.core.utils import schemas
 from plinder.core.utils.log import setup_logger
 from plinder.core.utils.unpack import expand_config_context
@@ -456,6 +457,92 @@ def ingest_flow_control(func: Callable[..., T]) -> Callable[..., T]:
     return inner
 
 
+def add_cluster_columns(*, index: pd.DataFrame) -> pd.DataFrame:
+    """
+    Add cluster columns to the annotation table
+    """
+    # clusters = pd.read_parquet(
+    #     data_dir / "clusters",
+    #     columns=["system_id", "label", "threshold", "metric", "cluster", "directed"],
+    # )
+    clusters = query_clusters(
+        columns=["system_id", "label", "threshold", "metric", "cluster", "directed"],
+        filters=[("system_id", "in", set(index["system_id"]))],
+    )
+    if clusters is None:
+        LOG.error("No clusters found")
+        return index
+    clusters = clusters.pivot_table(
+        values="label",
+        index="system_id",
+        columns=["metric", "cluster", "directed", "threshold"],
+        aggfunc="first",
+    )
+    new_column_names = []
+    for metric, cluster, directed, threshold in clusters.columns:
+        if cluster == "components":
+            if directed == "True":
+                d = "strong__component"
+            else:
+                d = "weak__component"
+        else:
+            d = "community"
+        new_column_names.append(f"{metric}__{threshold}__{d}")
+    clusters.columns = new_column_names
+    clusters.reset_index(inplace=True)
+    return index.merge(clusters, on="system_id", how="left")
+
+
+def add_aggregated_columns(*, index: pd.DataFrame) -> pd.DataFrame:
+    """
+    Add aggregated columns to the annotation table
+    """
+    index = add_cluster_columns(index=index)
+    index["uniqueness"] = (
+        index["system_id_no_biounit"] + "_" + index["pli_qcov__100__strong__component"]
+    )
+    index["system_num_ligands_in_biounit"] = index.groupby(
+        ["entry_pdb_id", "system_biounit_id"]
+    )["system_id"].transform("count")
+    index["system_num_unique_ligands_in_biounit"] = index.groupby(
+        ["entry_pdb_id", "system_biounit_id"]
+    )["ligand_unique_ccd_code"].transform("nunique")
+    index["system_proper_num_ligands_in_biounit"] = index.groupby(
+        ["entry_pdb_id", "system_biounit_id"]
+    )["ligand_is_proper"].transform("sum")
+    for n in [
+        "lipinski",
+        "cofactor",
+        "fragment",
+        "oligo",
+        "artifact",
+        "other",
+        "covalent",
+        "invalid",
+        "ion",
+    ]:
+        index[f"system_ligand_has_{n}"] = index.groupby("system_id")[
+            f"ligand_is_{n}"
+        ].transform("any")
+    index["system_protein_chains_total_length"] = index[
+        "system_protein_chains_length"
+    ].apply(sum)
+    ccd_dict = (
+        index.groupby("system_id")["ligand_unique_ccd_code"]
+        .agg(lambda x: "-".join(sorted(set(x))))
+        .to_dict()
+    )
+    index["system_unique_ccd_codes"] = index["system_id"].map(ccd_dict)
+    ccd_proper_dict = (
+        index[index["ligand_is_proper"]]
+        .groupby("system_id")["ligand_unique_ccd_code"]
+        .agg(lambda x: "-".join(sorted(set(x))))
+        .to_dict()
+    )
+    index["system_proper_unique_ccd_codes"] = index["system_id"].map(ccd_proper_dict)
+    return index
+
+
 def create_index(*, data_dir: Path, force_update: bool = False) -> pd.DataFrame:
     """
     Create the index
@@ -471,42 +558,9 @@ def create_index(*, data_dir: Path, force_update: bool = False) -> pd.DataFrame:
         df.to_parquet(data_dir / "index" / "annotation_table.parquet", index=False)
     else:
         df = pd.read_parquet(data_dir / "index" / "annotation_table.parquet")
-    update = False
-    if "pli_qcov__100__strong__component" not in df.columns or force_update:
-        try:
-            pli_qcov_cluster = pd.read_parquet(
-                data_dir
-                / "clusters"
-                / "cluster=components"
-                / "directed=True"
-                / "metric=pli_qcov"
-                / "threshold=100.parquet"
-            )
-            df["pli_qcov__100__strong__component"] = df["system_id"].map(
-                dict(zip(pli_qcov_cluster["system_id"], pli_qcov_cluster["label"]))
-            )
-            update = True
-        except Exception:
-            pass
-    if (
-        "protein_lddt_qcov_weighted_sum__100__strong__component" not in df.columns
-        or force_update
-    ):
-        try:
-            lddt_qcov_cluster = pd.read_parquet(
-                data_dir
-                / "clusters"
-                / "cluster=components"
-                / "directed=True"
-                / "metric=protein_lddt_qcov_weighted_sum"
-                / "threshold=100.parquet"
-            )
-            df["protein_lddt_qcov_weighted_sum__100__strong__component"] = df[
-                "system_id"
-            ].map(dict(zip(lddt_qcov_cluster["system_id"], lddt_qcov_cluster["label"])))
-            update = True
-        except Exception:
-            pass
+    old_columns = set(df.columns)
+    df = add_aggregated_columns(index=df)
+    update = old_columns != set(df.columns)
     if update or force_update:
         df.to_parquet(data_dir / "index" / "annotation_table.parquet", index=False)
     return df
@@ -519,9 +573,6 @@ def create_nonredundant_dataset(*, data_dir: Path) -> None:
     cases. Ultimately this should run as the join step of structure_qc.
     """
     df = create_index(data_dir=data_dir)
-    df["uniqueness"] = (
-        df["system_id_no_biounit"] + "_" + df["pli_qcov__100__strong__component"]
-    )
     df_nonredundant = df.sort_values("system_biounit_id").drop_duplicates("uniqueness")
     df_nonredundant.to_parquet(
         data_dir / "index" / "annotation_table_nonredundant.parquet", index=False
