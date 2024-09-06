@@ -127,7 +127,11 @@ class System(DocBaseModel):
         Interacting protein chains of the system
         """
         return sorted(
-            set(chain for ligand in self.ligands for chain in ligand.protein_chains_asym_id)
+            set(
+                chain
+                for ligand in self.ligands
+                for chain in ligand.protein_chains_asym_id
+            )
         )
 
     @cached_property
@@ -566,7 +570,8 @@ class System(DocBaseModel):
             f"({ligand.selection})" for ligand in self.ligands
         )
         protein_selection = " or ".join(
-            f"(cname={mol.QueryQuoteName(chain)})" for chain in self.protein_chains_asym_id
+            f"(cname={mol.QueryQuoteName(chain)})"
+            for chain in self.protein_chains_asym_id
         )
         selection = f"({ligand_selection}) or ({protein_selection})"
         if include_waters and len(self.waters):
@@ -1159,7 +1164,9 @@ class Entry(DocBaseModel):
         ligand_chains = set()
         for system in self.systems.values():
             if system.system_type == "holo":
-                holo_chains.update([c.split(".")[1] for c in system.protein_chains_asym_id])
+                holo_chains.update(
+                    [c.split(".")[1] for c in system.protein_chains_asym_id]
+                )
             ligand_chains.update([l.asym_id for l in system.ligands])
         for chain in self.chains:
             if chain not in ligand_chains and chain not in holo_chains:

@@ -1503,16 +1503,18 @@ class Ligand(DocBaseModel):
 
     def format(self, chains: dict[str, Chain]) -> dict[str, ty.Any]:
         data: dict[str, ty.Any] = defaultdict(str)
-        ignore_fields = set([
-            "posebusters_result",
-            "interactions",
-            "protein_chains",
-            "interacting_ligands",
-            "neighboring_ligands",
-            "interacting_residues",
-            "neighboring_residues",
-            "pocket_residues",
-        ])
+        ignore_fields = set(
+            [
+                "posebusters_result",
+                "interactions",
+                "protein_chains",
+                "interacting_ligands",
+                "neighboring_ligands",
+                "interacting_residues",
+                "neighboring_residues",
+                "pocket_residues",
+            ]
+        )
         for field, desc_type in self.get_descriptions_and_types().items():
             # blacklist fields that will be added with custom formatters below or that we don't want to add to the plindex
             descr = desc_type[0].lstrip().replace("\n", " ")
