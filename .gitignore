@@ -90,8 +90,7 @@ instance/
 # Generated files in Sphinx documentation
 docs/_build/
 docs/table.html
-docs/api/core
-docs/api/scores
+docs/api/*/*
 docs/index.parquet
 
 # PyBuilder

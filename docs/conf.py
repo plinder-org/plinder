@@ -18,8 +18,8 @@ import tablegen
 import viewcode
 
 # Pregeneration of files
-apidoc.generate_api_reference("plinder.core", DOC_PATH / "api" / "core")
-apidoc.generate_api_reference("plinder.core.scores", DOC_PATH / "api" / "scores")
+for package in ["plinder.core", "plinder.core.scores", "plinder.core.loader"]:
+    apidoc.generate_api_reference(package, DOC_PATH / "api" / package.split(".")[-1])
 tablegen.generate_table(COLUMN_REFERENCE_PATH, DOC_PATH / "table.html")
 
 #### Source code link ###
