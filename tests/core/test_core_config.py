@@ -1,8 +1,8 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
-from json import dumps
-from hashlib import md5
 from dataclasses import asdict
+from hashlib import md5
+from json import dumps
 
 from plinder.core.utils import config
 
@@ -15,7 +15,9 @@ def test_get_config():
 
 
 def test_get_config_passed():
-    cfg = config.get_config(config_args=[], config={"data": {"plinder_release": "test"}}, cached=False)
+    cfg = config.get_config(
+        config_args=[], config={"data": {"plinder_release": "test"}}, cached=False
+    )
     assert cfg.data.plinder_release == "test"
 
 
@@ -46,11 +48,15 @@ data:
 
 def test_get_config_file(tmp_path):
     file = tmp_path / "test.yaml"
-    file.write_text("""
+    file.write_text(
+        """
 data:
     plinder_release: test
-""")
-    cfg = config.get_config(config_file=str(file.as_posix()), config_args=[], cached=False)
+"""
+    )
+    cfg = config.get_config(
+        config_file=str(file.as_posix()), config_args=[], cached=False
+    )
     assert cfg.data.plinder_release == "test"
 
 
@@ -67,18 +73,27 @@ def test_get_config_hash_sorted():
     a = {"a": 1, "b": 2}
     b = {"b": 2, "a": 1}
     assert config.get_config_hash(a) == config.get_config_hash(b)
-    assert md5(dumps(a).encode("utf-8")).hexdigest() != md5(dumps(b).encode("utf-8")).hexdigest()
+    assert (
+        md5(dumps(a).encode("utf-8")).hexdigest()
+        != md5(dumps(b).encode("utf-8")).hexdigest()
+    )
 
 
 def test_get_config_hash_sorted_nested():
     a = {"a": 1, "b": 2, "c": {"d": 3, "e": 4}}
     b = {"b": 2, "a": 1, "c": {"e": 4, "d": 3}}
     assert config.get_config_hash(a) == config.get_config_hash(b)
-    assert md5(dumps(a).encode("utf-8")).hexdigest() != md5(dumps(b).encode("utf-8")).hexdigest()
+    assert (
+        md5(dumps(a).encode("utf-8")).hexdigest()
+        != md5(dumps(b).encode("utf-8")).hexdigest()
+    )
 
 
 def test_get_config_hash_sorted_nested_list():
     a = {"a": 1, "b": 2, "c": {"d": 3, "e": 4, "f": [1, 2, 3]}}
     b = {"b": 2, "a": 1, "c": {"e": 4, "d": 3, "f": [3, 2, 1]}}
     assert config.get_config_hash(a) == config.get_config_hash(b)
-    assert md5(dumps(a).encode("utf-8")).hexdigest() != md5(dumps(b).encode("utf-8")).hexdigest()
+    assert (
+        md5(dumps(a).encode("utf-8")).hexdigest()
+        != md5(dumps(b).encode("utf-8")).hexdigest()
+    )

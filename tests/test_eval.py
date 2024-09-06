@@ -5,7 +5,6 @@ import subprocess
 
 import numpy as np
 import pandas as pd
-
 from plinder.eval.docking import utils
 
 
@@ -146,6 +145,7 @@ def test_write_docking_eval_cmd(monkeypatch, plinder_src, prediction_csv):
     to debug. If this test is failing, uncomment the code for
     calling the code directly to see where it's erroring out.
     """
+
     def mock_tanimoto(x, y):
         return np.random.rand(max(len(x), len(y)))
 
@@ -193,7 +193,9 @@ def test_write_docking_eval_cmd(monkeypatch, plinder_src, prediction_csv):
     )
 
     score_df = pd.read_parquet(f"{prediction_csv.parent}/scores.parquet")
-    assert np.allclose(score_df.sort_values(by="reference").scrmsd_wave.to_list(), [1.617184, 3.665143])
+    assert np.allclose(
+        score_df.sort_values(by="reference").scrmsd_wave.to_list(), [1.617184, 3.665143]
+    )
 
     # here we fall back to the python function call because
     # we have to mock the tanimoto_maxsim_matrix function

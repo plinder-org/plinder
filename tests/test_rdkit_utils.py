@@ -2,6 +2,7 @@
 # Distributed under the terms of the Apache License 2.0
 from rdkit import Chem
 
+
 def test_valence_issue_handling():
     from plinder.data.utils.annotations.rdkit_utils import fix_valency_issues
 
@@ -19,7 +20,11 @@ def test_valence_issue_handling():
 
 
 def test_matched_templates():
-    from plinder.data.utils.annotations.rdkit_utils import get_matched_template_v2, mol_assigned_bond_orders_by_template
+    from plinder.data.utils.annotations.rdkit_utils import (
+        get_matched_template_v2,
+        mol_assigned_bond_orders_by_template,
+    )
+
     mol1 = Chem.MolFromSmiles("FC(Cl)(Br)C.CNCC1CCCCC1.CCC(OC)O")
     template = Chem.MolFromSmiles("F[C@@](Br)(Cl)CCCNCc1cc(C(=O)N/C=C/C(OC)=O)ccc1")
     matched_template = get_matched_template_v2(template, mol1)

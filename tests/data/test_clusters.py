@@ -1,4 +1,3 @@
-
 def test_make_components_and_communities(write_plinder_mount):
     from plinder.data.clusters import make_components_and_communities
 
