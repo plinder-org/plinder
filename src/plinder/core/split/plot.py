@@ -8,6 +8,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from plinder.core.index.utils import get_plindex
+
 try:
     import matplotlib.pyplot as plt
     import mols2grid
@@ -18,7 +20,6 @@ except ImportError:
     raise ImportError("Please run: pip install plinder[plots] to use this module")
 
 
-from plinder.core.split.utils import get_extended_plindex
 from plinder.core.utils.log import setup_logger
 
 LOG = setup_logger(__name__)
@@ -165,7 +166,7 @@ class SplitPropertiesPlotter:
             mms_count=mms_count,
         )
         if plindex_file is None:
-            plindex = get_extended_plindex()
+            plindex = get_plindex()
         else:
             plindex = pd.read_parquet(plindex_file)
         plotter.plindex = plotter.merge_splits_and_plindex(plindex)

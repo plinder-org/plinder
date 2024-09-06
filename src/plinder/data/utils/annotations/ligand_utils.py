@@ -1227,7 +1227,7 @@ class Ligand(DocBaseModel):
     @cached_property
     def pocket_residues(self) -> dict[str, dict[int, str]]:
         """
-        Residues in the ligand's binding pocket which includes neighboring and interacting residues.
+        __Residues in the ligand's binding pocket which includes neighboring and interacting residues.
         """
         residues: dict[str, dict[int, str]] = {}
         for chain in self.neighboring_residues:
@@ -1509,6 +1509,7 @@ class Ligand(DocBaseModel):
             "neighboring_ligands",
             "interacting_residues",
             "neighboring_residues",
+            "pocket_residues",
             "biounit_id",
             "pdb_id",
             "interactions_counter",
@@ -1516,6 +1517,7 @@ class Ligand(DocBaseModel):
             "ligand_neighboring_residue_threshold",
             "waters",
             "selection",
+            "crystal_contacts",
         }
         for field in self.get_descriptions_and_types():
             # blacklist fields that will be added with custom formatters below or that we don't want to add to the plindex

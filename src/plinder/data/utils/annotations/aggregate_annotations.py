@@ -249,7 +249,7 @@ class System(DocBaseModel):
     @cached_property  # TODO: change this to exclude residues only interacting with artifacts or ions
     def pocket_residues(self) -> dict[str, dict[int, str]]:
         """
-        Pockets residues of the system
+        __Pockets residues of the system
         """
         all_residues: dict[str, dict[int, str]] = defaultdict(dict)
         for ligand in self.ligands:
@@ -429,6 +429,8 @@ class System(DocBaseModel):
             "interactions_counter",
             "waters",
             "selection",
+            "pocket_residues",
+            "interactions",
         }
         for field in self.get_descriptions_and_types():
             if (
@@ -1443,3 +1445,33 @@ class Entry(DocBaseModel):
                 self.chains[chain_id].mappings["kinase_name"] = {
                     k: list(v) for k, v in mappings.items()
                 }
+
+
+def document(output_dir: Path) -> None:
+    """
+    Document the columns in the annotation files
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+    Entry.document_properties_to_tsv(prefix="entry", filename=output_dir / "entry.tsv")
+    EntryValidation.document_properties_to_tsv(
+        prefix="entry_validation", filename=output_dir / "entry_validation.tsv"
+    )
+    System.document_properties_to_tsv(
+        prefix="system", filename=output_dir / "system.tsv"
+    )
+    ResidueListValidation.document_properties_to_tsv(
+        prefix="system_pocket", filename=output_dir / "system_pocket_validation.tsv"
+    )
+    ResidueListValidation.document_properties_to_tsv(
+        prefix="system_ligand", filename=output_dir / "system_ligand_validation.tsv"
+    )
+    Chain.document_properties_to_tsv(
+        prefix="system_protein_chains",
+        filename=output_dir / "system_protein_chains.tsv",
+    )
+    Chain.document_properties_to_tsv(
+        prefix="system_ligand_chains", filename=output_dir / "system_ligand_chains.tsv"
+    )
+    Ligand.document_properties_to_tsv(
+        prefix="ligand", filename=output_dir / "ligands.tsv"
+    )

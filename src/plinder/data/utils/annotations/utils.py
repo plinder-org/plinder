@@ -43,7 +43,7 @@ class DocBaseModel(BaseModel):
                 description, dtype = field_info
                 name = f"{prefix}_{field}"
                 if description:
-                    descr = description.lstrip()
+                    descr = description.lstrip().replace("\n", " ")
                     if descr.startswith("__"):
                         continue
                 else:

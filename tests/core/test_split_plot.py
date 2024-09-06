@@ -1,21 +1,5 @@
-def test_split_plot(monkeypatch, write_plinder_mount, tmp_path):
-    def update_plindex():
-        from plinder.core.index import utils
 
-        df = utils.get_plindex()
-        utils._PLINDEX = None
-        df["pli_unique_qcov__50__communities"] = 0
-        df["pocket_qcov__50__communities"] = 0
-        df["tanimoto_similarity_max__50__communities"] = 0
-        df["system_proper_ligand_unique_ccd_codes"] = "IDK"
-        df["ligand_is_proper"] = True
-        df.to_parquet(
-            write_plinder_mount / "index" / "annotation_table.parquet", index=False
-        )
-        return df
-
-    monkeypatch.setattr("plinder.core.split.plot.get_extended_plindex", update_plindex)
-
+def test_split_plot(write_plinder_mount, tmp_path):
     from plinder.core.split.plot import SplitPropertiesPlotter
 
     output_dir = tmp_path / "split_plots"
