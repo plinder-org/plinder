@@ -13,7 +13,7 @@ It contains an additional ``plinder.core.scores`` sub-package for querying parqu
 :::{toctree}
 :maxdepth: 1
 :hidden:
+:glob:
 
-core/index
-scores/index
+./*/index
 :::

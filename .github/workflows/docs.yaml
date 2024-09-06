@@ -41,7 +41,7 @@ jobs:
         run: |
           which python
           python -m pip install six
-          python -m pip install '.[docs]'
+          python -m pip install '.[docs,loader]'
           sphinx-build docs build/docs
       - name: Upload build artifact
         uses: actions/upload-pages-artifact@v3
