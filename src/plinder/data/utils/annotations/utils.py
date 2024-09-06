@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from functools import cached_property
+from pathlib import Path
 
 from pydantic import BaseModel
 
@@ -34,7 +35,7 @@ class DocBaseModel(BaseModel):
         return descriptions
 
     @classmethod
-    def document_properties_to_tsv(cls, prefix: str, filename: str) -> None:
+    def document_properties_to_tsv(cls, prefix: str, filename: Path) -> None:
         with open(filename, "w") as tsv:
             # write header
             tsv.write("\t".join(["Name", "Type", "Description"]) + "\n")
