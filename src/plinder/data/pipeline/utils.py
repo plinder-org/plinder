@@ -22,8 +22,11 @@ from plinder.core.utils import schemas
 from plinder.core.utils.log import setup_logger
 from plinder.core.utils.unpack import expand_config_context
 from plinder.data.utils import tanimoto
-from plinder.data.utils.annotations.aggregate_annotations import System, Entry
-from plinder.data.utils.annotations.get_ligand_validation import EntryValidation, ResidueListValidation
+from plinder.data.utils.annotations.aggregate_annotations import Entry, System
+from plinder.data.utils.annotations.get_ligand_validation import (
+    EntryValidation,
+    ResidueListValidation,
+)
 from plinder.data.utils.annotations.ligand_utils import Ligand
 from plinder.data.utils.annotations.protein_utils import Chain
 
@@ -514,9 +517,9 @@ def add_aggregated_columns(*, index: pd.DataFrame) -> pd.DataFrame:
             + "_"
             + index["pli_qcov__100__strong__component"]
         )
-    index["biounit_num_ligands"] = index.groupby(
-        ["entry_pdb_id", "system_biounit_id"]
-    )["system_id"].transform("count")
+    index["biounit_num_ligands"] = index.groupby(["entry_pdb_id", "system_biounit_id"])[
+        "system_id"
+    ].transform("count")
     index["biounit_num_unique_ccd_codes"] = index.groupby(
         ["entry_pdb_id", "system_biounit_id"]
     )["ligand_unique_ccd_code"].transform("nunique")
@@ -729,19 +732,21 @@ def make_column_descriptions(*, plindex: pd.DataFrame, output_dir: Path) -> None
     component_columns = [c for c in plindex.columns if c.endswith("__component")]
     for column in component_columns:
         metric, threshold, directed, cluster = column.split("__")
-        rows.append((
+        rows.append(
+            (
                 column,
                 f"Cluster ID for {directed} {cluster} built from {metric} metric with {threshold} threshold",
                 "str",
-        )
+            )
         )
     community_columns = [c for c in plindex.columns if c.endswith("__community")]
     for column in community_columns:
         metric, threshold, cluster = column.split("__")
-        rows.append((
+        rows.append(
+            (
                 column,
                 "str",
-                f"Cluster ID for {cluster} built from {metric} metric with {threshold} threshold",    
+                f"Cluster ID for {cluster} built from {metric} metric with {threshold} threshold",
             )
         )
     with open(output_dir / "similarity_clusters.tsv", "w") as f:

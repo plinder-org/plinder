@@ -38,18 +38,18 @@ ligand_is_other	bool	Indicator of whether a ligand type is not classified as any
 ligand_is_invalid	bool	Indicator of whether a ligand is invalid
 ligand_unique_ccd_code	str | None	Ligand representative CCD code after de-duplicating
 ligand_selection	str	[DESCRIPTION MISSING]
-ligand_protein_chains	list[str]	List of RCSB asymmetric chain ids of protein residues within 6 Å of ligand of interest unless         the ligand is an artifact, in which case we return an empty list.         
-ligand_num_interacting_residues	int	Number of residues interacting with a given ligand.         
-ligand_num_neighboring_residues	int	Residue count of each of the proteins within 6 Å of ligand of interest.         
-ligand_is_proper	bool	Check if ligand is a proper ligand (not an ion or artifact)         
-ligand_num_interactions	int	Number of interactions for a given ligand.         
-ligand_num_unique_interactions	int	Number of unique interactions         
-ligand_num_crystal_contacted_residues	int	Number of residues from other symmetry mates which are in contact with this ligand.         
-ligand_num_atoms_with_crystal_contacts	int	Number of atoms in this ligand which are in contact with residues from other symmetry mates.         
-ligand_fraction_atoms_with_crystal_contacts	float | None	Fraction of atoms in this ligand which are in contact with residues from other symmetry mates.         
-ligand_num_pocket_residues	int	Number of residues in the ligand's binding pocket.         
-ligand_id	str	Unique identifier for a given ligand.         
-ligand_instance_chain	str	Instance chain for a given ligand.         
-ligand_interactions_counter	dict[str, dict[int, ty.Counter[str]]]	Counter of interactions for a given ligand.         
-ligand_is_kinase_inhibitor	bool	Check if ligand is a kinase inhibitor.         
-ligand_binding_affinity	float | None	Binding affinity (pKd or pKi) from BindingDB when available.         
+ligand_protein_chains	list[str]	List of RCSB asymmetric chain ids of protein residues within 6 Å of ligand of interest unless         the ligand is an artifact, in which case we return an empty list.
+ligand_num_interacting_residues	int	Number of residues interacting with a given ligand.
+ligand_num_neighboring_residues	int	Residue count of each of the proteins within 6 Å of ligand of interest.
+ligand_is_proper	bool	Check if ligand is a proper ligand (not an ion or artifact)
+ligand_num_interactions	int	Number of interactions for a given ligand.
+ligand_num_unique_interactions	int	Number of unique interactions
+ligand_num_crystal_contacted_residues	int	Number of residues from other symmetry mates which are in contact with this ligand.
+ligand_num_atoms_with_crystal_contacts	int	Number of atoms in this ligand which are in contact with residues from other symmetry mates.
+ligand_fraction_atoms_with_crystal_contacts	float | None	Fraction of atoms in this ligand which are in contact with residues from other symmetry mates.
+ligand_num_pocket_residues	int	Number of residues in the ligand's binding pocket.
+ligand_id	str	Unique identifier for a given ligand.
+ligand_instance_chain	str	Instance chain for a given ligand.
+ligand_interactions_counter	dict[str, dict[int, ty.Counter[str]]]	Counter of interactions for a given ligand.
+ligand_is_kinase_inhibitor	bool	Check if ligand is a kinase inhibitor.
+ligand_binding_affinity	float | None	Binding affinity (pKd or pKi) from BindingDB when available.

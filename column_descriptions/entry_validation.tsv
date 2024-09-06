@@ -14,4 +14,4 @@ entry_validation_median_b_factor	float	Median B-value calculated over all modell
 entry_validation_pdbx_resolution	float	See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_refine.ls_d_res_high.html
 entry_validation_pdbx_reflns_resolution	float | None	See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_reflns.d_resolution_high.html
 entry_validation_meanI_over_sigI_obs	float | None	Each reflection has an intensity (I) and an uncertainty in measurement (σ(I)), thus this metric describes the signal-to-noise ratio
-entry_validation_r_minus_rfree	float	The difference between r and rfree         
+entry_validation_r_minus_rfree	float	The difference between r and rfree
