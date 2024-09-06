@@ -1517,7 +1517,7 @@ class Ligand(DocBaseModel):
         )
         for field, desc_type in self.get_descriptions_and_types().items():
             # blacklist fields that will be added with custom formatters below or that we don't want to add to the plindex
-            descr = desc_type[0].lstrip().replace("\n", " ")
+            descr = str(desc_type[0]).lstrip().replace("\n", " ")
             if descr.startswith("__") or field in ignore_fields:
                 continue
             name = f"ligand_{field}"
