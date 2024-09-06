@@ -498,9 +498,12 @@ def add_aggregated_columns(*, index: pd.DataFrame) -> pd.DataFrame:
     Add aggregated columns to the annotation table
     """
     index = add_cluster_columns(index=index)
-    index["uniqueness"] = (
-        index["system_id_no_biounit"] + "_" + index["pli_qcov__100__strong__component"]
-    )
+    if "pli_qcov__100__strong__component" in index.columns:
+        index["uniqueness"] = (
+            index["system_id_no_biounit"]
+            + "_"
+            + index["pli_qcov__100__strong__component"]
+        )
     index["system_num_ligands_in_biounit"] = index.groupby(
         ["entry_pdb_id", "system_biounit_id"]
     )["system_id"].transform("count")
