@@ -1,0 +1,8 @@
+Name	Type	Description
+ligand_chains_asym_id	str	Chain asymmetric id
+ligand_chains_auth_id	str	Chain author id
+ligand_chains_entity_id	str	Chain entity id
+ligand_chains_chain_type_str	str	Chain type string representation as defined https://openstructure.org/docs/2.8/mol/base/entity/#ost.mol.ChainType
+ligand_chains_length	int	SEQRES length
+ligand_chains_num_unresolved_residues	int	Number of unresolved residues (SEQRES length - len(residues))
+ligand_chains_chain_type	mol.ChainType	Chain type as defined https://openstructure.org/docs/2.8/mol/base/entity/#ost.mol.ChainType         

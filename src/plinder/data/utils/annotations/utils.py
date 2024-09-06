@@ -49,4 +49,6 @@ class DocBaseModel(BaseModel):
                         continue
                 else:
                     descr = "[DESCRIPTION MISSING]"
+                if "pass_criteria" in name and "validation" not in name:
+                    name = name.replace("pass_criteria", "pass_validation_criteria")
                 tsv.write("\t".join([name, str(dtype), descr]) + "\n")
