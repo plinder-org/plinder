@@ -1,11 +1,11 @@
 # MLSB/P(L)INDER Challenge: Overview and details
 
-## Objectives:
+## Objectives
 
 **Benchmarking:** Establish a standardized evaluation framework for protein-protein and protein-ligand structure prediction tasks. <br>
 **Progress Tracking:** Track advancements in the field over time through a leaderboard that provides an objective basis for comparing different methods. <br>
 
-## Key Dates:
+## Key Dates
 
 **First Announcement:** September 4th, 2024. <br>
 **Detailed Instructions Release:** September 24th, 2024, at the [training workshop](https://unibas.zoom.us/meeting/register/u5EkcOusrzsiHtLDImocB5PM0RLK9vC-g-kW#/registration).<br>
@@ -15,7 +15,6 @@
 **MLSB Workshop:** December 14-15th, 2024.<br>
 
 (mlsb-rules-target)=
-
 ## Rules for valid model training
 
 - Participants MUST use the provided train and validation sets from PINDER or PLINDER; no external data augmentation is allowed.
