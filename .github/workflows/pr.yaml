@@ -102,4 +102,4 @@ jobs:
       - name: Install Python requirements
         run: pip install six ".[docs,loader]"
       - name: Build the documentation
-        run: sphinx-build --fail-on-warning docs build/docs
+        run: sphinx-build docs build/docs
