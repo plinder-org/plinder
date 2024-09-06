@@ -176,7 +176,7 @@ class ResidueListValidation(DocBaseModel):
         description="The highest number of configurations in a single residue in the list"
     )
     percent_outliers: dict[str, float] = Field(
-        description="Percentage of outliers for each type of outlier"
+        description="__Percentage of outliers for each type of outlier"
     )
     # TODO: add thresholds in rerun
     # thresholds: ResidueValidationThresholds = Field(

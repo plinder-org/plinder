@@ -1,0 +1,6 @@
+Name	Type	Description
+ligand_protein_chains_asym_id	str	Chain asymmetric id
+ligand_protein_chains_auth_id	str	Chain author id
+ligand_protein_chains_entity_id	str	Chain entity id
+ligand_protein_chains_length	int	SEQRES length
+ligand_protein_chains_num_unresolved_residues	int	Number of unresolved residues (SEQRES length - len(residues))

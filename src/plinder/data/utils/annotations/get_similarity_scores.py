@@ -666,9 +666,9 @@ class Scorer:
         max_chain_lengths: dict[str, float] = defaultdict(float)
         protein_chain_mapper = ""
         s_matrix = np.zeros(
-            (len(query_system.protein_chains), len(target_protein_chains))
+            (len(query_system.protein_chains_asym_id), len(target_protein_chains))
         )
-        for i, q_instance_chain in enumerate(query_system.protein_chains):
+        for i, q_instance_chain in enumerate(query_system.protein_chains_asym_id):
             q_chain = q_instance_chain.split(".")[1]
             q_chain_length = self.entries[query_system.pdb_id].chains[q_chain].length
             for j, t_instance_chain in enumerate(target_protein_chains):
@@ -714,7 +714,7 @@ class Scorer:
                 break
             q_idx, t_idx = np.unravel_index(np.argmax(s_matrix), s_matrix.shape)
             q_instance_chain, t_instance_chain = (
-                query_system.protein_chains[q_idx],
+                query_system.protein_chains_asym_id[q_idx],
                 target_protein_chains[t_idx],
             )
             q_chain, t_chain = (
@@ -825,10 +825,10 @@ class Scorer:
             self.entries[query_system.pdb_id]
             .chains[q_instance_chain.split(".")[1]]
             .length
-            for q_instance_chain in query_system.protein_chains
+            for q_instance_chain in query_system.protein_chains_asym_id
         )
         query_instance_chains = [
-            chain.split(".")[1] for chain in query_system.protein_chains
+            chain.split(".")[1] for chain in query_system.protein_chains_asym_id
         ]
         for target_entry in query_entry_alignments.index.get_level_values(
             "target_entry"
@@ -863,7 +863,7 @@ class Scorer:
                     continue
                 if target_system_id == query_system.id or all(
                     target_instance_chain.split(".")[1] not in all_target_chains
-                    for target_instance_chain in target_system.protein_chains
+                    for target_instance_chain in target_system.protein_chains_asym_id
                 ):
                     # Same as query system or No alignments for this target system
                     continue
@@ -878,7 +878,7 @@ class Scorer:
                 ) = self.get_protein_scores(
                     query_target_entry_alignments,
                     query_system,
-                    target_system.protein_chains,
+                    target_system.protein_chains_asym_id,
                     query_system_length,
                 )
                 if not len(protein_scores):
@@ -988,12 +988,12 @@ class Scorer:
     def get_scores_apo_pred(
         self, query_system: System, query_entry_alignments: pd.DataFrame
     ) -> abc.Generator[dict[str, str | float], None, None]:
-        q_chain = query_system.protein_chains[0].split(".")[1]
+        q_chain = query_system.protein_chains_asym_id[0].split(".")[1]
         query_system_length = sum(
             self.entries[query_system.pdb_id]
             .chains[q_instance_chain.split(".")[1]]
             .length
-            for q_instance_chain in query_system.protein_chains
+            for q_instance_chain in query_system.protein_chains_asym_id
         )
         for target_entry in query_entry_alignments.index.get_level_values(
             "target_entry"

@@ -686,11 +686,11 @@ CrystalContacts = ty.Annotated[
 class Ligand(DocBaseModel):
     pdb_id: str = Field(
         default_factory=str,
-        description="RCSB PDB ID, see https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_entry.id.html",
+        description="__RCSB PDB ID, see https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_entry.id.html",
     )
     biounit_id: str = Field(default_factory=str, description="__Biounit id")
     asym_id: str = Field(default_factory=str, description="Ligand chain asymmetric id")
-    instance: int = Field(default_factory=int, description="__Biounit instance ID")
+    instance: int = Field(default_factory=int, description="Biounit instance ID")
     ccd_code: str = Field(
         default_factory=str,
         description="Ligand Chemical Component Dictionary (CCD) code",
@@ -742,7 +742,7 @@ class Ligand(DocBaseModel):
     )
     neighboring_residues: dict[str, list[int]] = Field(
         default_factory=dict,
-        description="__Dictionary of neighboring residues, with {instance}.{chain} key and residue number value",
+        description="Dictionary of neighboring residues, with {instance}.{chain} key and residue number value",
     )
     neighboring_ligands: list[str] = Field(
         default_factory=list,
@@ -750,7 +750,7 @@ class Ligand(DocBaseModel):
     )
     interacting_residues: dict[str, list[int]] = Field(
         default_factory=dict,
-        description="__Dictionary of interacting residues, with {instance}.{chain} key and residue number value",
+        description="Dictionary of interacting residues, with {instance}.{chain} key and residue number value",
     )
     interacting_ligands: list[str] = Field(
         default_factory=list,
@@ -1162,6 +1162,9 @@ class Ligand(DocBaseModel):
 
     @cached_property
     def selection(self) -> str:
+        """
+        __Selection string for ligand
+        """
         residue_selection = " or ".join(f"rnum={rnum}" for rnum in self.residue_numbers)
         ligand_selection = f"cname={mol.QueryQuoteName(self.instance_chain)}"
         if len(self.residue_numbers):
@@ -1169,7 +1172,7 @@ class Ligand(DocBaseModel):
         return ligand_selection
 
     @cached_property
-    def protein_chains(self) -> list[str]:
+    def protein_chains_asym_id(self) -> list[str]:
         """
         List of RCSB asymmetric chain ids of protein residues within 6 Å of ligand of interest unless
         the ligand is an artifact, in which case we return an empty list.
@@ -1308,7 +1311,7 @@ class Ligand(DocBaseModel):
     @cached_property
     def interactions_counter(self) -> dict[str, dict[int, ty.Counter[str]]]:
         """
-        Counter of interactions for a given ligand.
+        __Counter of interactions for a given ligand.
         """
         interactions_counter: dict[str, dict[int, ty.Counter[str]]] = {}
         for chain in self.interactions:
@@ -1423,7 +1426,7 @@ class Ligand(DocBaseModel):
         dict[str, str]
         """
         if chain_type == "protein":
-            sub_chains = self.protein_chains
+            sub_chains = self.protein_chains_asym_id
         elif chain_type == "interacting_ligand":
             sub_chains = self.interacting_ligands
         elif chain_type == "neighboring_ligand":
@@ -1500,28 +1503,20 @@ class Ligand(DocBaseModel):
 
     def format(self, chains: dict[str, Chain]) -> dict[str, ty.Any]:
         data: dict[str, ty.Any] = defaultdict(str)
-        ignore_fields = {
+        ignore_fields = set([
             "posebusters_result",
             "interactions",
-            "ligand_auth_id",
             "protein_chains",
             "interacting_ligands",
             "neighboring_ligands",
             "interacting_residues",
             "neighboring_residues",
             "pocket_residues",
-            "biounit_id",
-            "pdb_id",
-            "interactions_counter",
-            "ligand_neighboring_ligand_threshold",
-            "ligand_neighboring_residue_threshold",
-            "waters",
-            "selection",
-            "crystal_contacts",
-        }
-        for field in self.get_descriptions_and_types():
+        ])
+        for field, desc_type in self.get_descriptions_and_types().items():
             # blacklist fields that will be added with custom formatters below or that we don't want to add to the plindex
-            if field in ignore_fields:
+            descr = desc_type[0].lstrip().replace("\n", " ")
+            if descr.startswith("__") or field in ignore_fields:
                 continue
             name = f"ligand_{field}"
             data[name] = getattr(self, field, None)

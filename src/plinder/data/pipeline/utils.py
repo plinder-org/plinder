@@ -712,16 +712,16 @@ def make_column_descriptions(*, plindex: pd.DataFrame, output_dir: Path) -> None
     System.document_properties_to_tsv(
         prefix="system", filename=output_dir / "system.tsv"
     )
-    ResidueListValidation.document_properties_to_tsv(
-        prefix="system_pocket", filename=output_dir / "system_pocket_validation.tsv"
+    for validation_type in ["system_pocket", "system_ligand", "ligand_interacting_ligand_chains", "ligand_neighboring_ligand_chains", 
+                            "ligand_protein_chains", "system_ligand_chains", "system_protein_chains"]:
+        ResidueListValidation.document_properties_to_tsv(
+            prefix=f"{validation_type}_validation", filename=output_dir / f"{validation_type}_validation.tsv"
     )
-    ResidueListValidation.document_properties_to_tsv(
-        prefix="system_ligand", filename=output_dir / "system_ligand_validation.tsv"
-    )
-    Chain.document_properties_to_tsv(
-        prefix="system_protein_chains",
-        filename=output_dir / "system_protein_chains.tsv",
-    )
+    for chain_type in ["system_protein_chains", "system_ligand_chains", "ligand_interacting_ligand_chains", "ligand_neighboring_ligand_chains", "ligand_protein_chains"]:
+        Chain.document_properties_to_tsv(
+            prefix=chain_type,
+            filename=output_dir / f"{chain_type}.tsv",
+        )
     Chain.document_properties_to_tsv(
         prefix="system_ligand_chains", filename=output_dir / "system_ligand_chains.tsv"
     )

@@ -122,12 +122,12 @@ class System(DocBaseModel):
         return [ligand for ligand in self.ligands if ligand.is_proper]
 
     @cached_property
-    def protein_chains(self) -> list[str]:
+    def protein_chains_asym_id(self) -> list[str]:
         """
         Interacting protein chains of the system
         """
         return sorted(
-            set(chain for ligand in self.ligands for chain in ligand.protein_chains)
+            set(chain for ligand in self.ligands for chain in ligand.protein_chains_asym_id)
         )
 
     @cached_property
@@ -138,7 +138,7 @@ class System(DocBaseModel):
         return "__".join(
             [
                 self.pdb_id,
-                "_".join(x.split(".")[1] for x in self.protein_chains),
+                "_".join(x.split(".")[1] for x in self.protein_chains_asym_id),
                 "_".join(x.split(".")[1] for x in self.ligand_chains),
             ]
         )
@@ -215,7 +215,7 @@ class System(DocBaseModel):
             [
                 self.pdb_id,
                 self.biounit_id,
-                "_".join(self.protein_chains),
+                "_".join(self.protein_chains_asym_id),
                 "_".join(self.ligand_chains),
             ]
         )
@@ -261,7 +261,7 @@ class System(DocBaseModel):
     @cached_property
     def interactions(self) -> dict[str, dict[int, list[str]]]:
         """
-        Interactions of the system
+        __Interactions of the system
         """
         all_interactions: dict[str, dict[int, list[str]]] = defaultdict(
             lambda: defaultdict(list)
@@ -279,7 +279,7 @@ class System(DocBaseModel):
     @cached_property
     def interactions_counter(self) -> dict[str, dict[int, ty.Counter[str]]]:
         """
-        Counter of interactions of the system
+        __Counter of interactions of the system
         """
         interactions_counter: dict[str, dict[int, ty.Counter[str]]] = {}
         for chain in self.interactions:
@@ -296,7 +296,7 @@ class System(DocBaseModel):
         chains: dict[str, Chain],
     ) -> dict[str, ty.Any]:
         if chain_type == "protein":
-            sub_chains = self.protein_chains
+            sub_chains = self.protein_chains_asym_id
         elif chain_type == "ligand":
             sub_chains = self.ligand_chains
         else:
@@ -320,7 +320,7 @@ class System(DocBaseModel):
         """
         Number of interacting protein chains of the system
         """
-        return len(self.protein_chains)
+        return len(self.protein_chains_asym_id)
 
     @cached_property
     def proper_num_protein_chains(self) -> int:
@@ -331,7 +331,7 @@ class System(DocBaseModel):
             set(
                 chain
                 for ligand in self.proper_ligands()
-                for chain in ligand.protein_chains
+                for chain in ligand.protein_chains_asym_id
             )
         )
 
@@ -425,17 +425,10 @@ class System(DocBaseModel):
         criteria: QualityCriteria = QualityCriteria(),
     ) -> dict[str, ty.Any]:
         data: dict[str, ty.Any] = defaultdict(str)
-        ignore_fields = {
-            "interactions_counter",
-            "waters",
-            "selection",
-            "pocket_residues",
-            "interactions",
-        }
-        for field in self.get_descriptions_and_types():
-            if (
-                field in self.model_fields and field != "biounit_id"
-            ) or field in ignore_fields:
+        for field, desc_type in self.get_descriptions_and_types().items():
+            # blacklist fields that will be added with custom formatters below or that we don't want to add to the plindex
+            descr = desc_type[0].lstrip().replace("\n", " ")
+            if descr.startswith("__"):
                 continue
             if not field.startswith("system_"):
                 name = f"system_{field}"
@@ -454,7 +447,7 @@ class System(DocBaseModel):
     @cached_property
     def waters(self) -> dict[str, list[int]]:
         """
-        Waters interacting (as detected by PLIP) with any of the ligands in the system
+        __Waters interacting (as detected by PLIP) with any of the ligands in the system
         """
         waters: dict[str, list[int]] = defaultdict(list)
         for ligand in self.ligands:
@@ -573,7 +566,7 @@ class System(DocBaseModel):
             f"({ligand.selection})" for ligand in self.ligands
         )
         protein_selection = " or ".join(
-            f"(cname={mol.QueryQuoteName(chain)})" for chain in self.protein_chains
+            f"(cname={mol.QueryQuoteName(chain)})" for chain in self.protein_chains_asym_id
         )
         selection = f"({ligand_selection}) or ({protein_selection})"
         if include_waters and len(self.waters):
@@ -590,7 +583,7 @@ class System(DocBaseModel):
     ) -> None:
         system_folder.mkdir(exist_ok=True)
         with open(system_folder / "sequences.fasta", "w") as f:
-            for i_c in self.protein_chains:
+            for i_c in self.protein_chains_asym_id:
                 c = i_c.split(".")[1]
                 if c in chain_to_seqres:
                     f.write(f">{i_c}\n")
@@ -610,7 +603,7 @@ class System(DocBaseModel):
             system_folder / "ligand_files",
         )
         save_cif_file(ent_system, info, self.id, system_folder / "system.cif")
-        selection = " or ".join(f"chain='{c}'" for c in self.protein_chains)
+        selection = " or ".join(f"chain='{c}'" for c in self.protein_chains_asym_id)
         if include_waters and len(self.waters):
             selection += f" or {self.select_waters()}"
         save_cif_file(
@@ -624,7 +617,7 @@ class System(DocBaseModel):
             save_pdb_file(
                 biounit,
                 mol.CreateEntityFromView(ent_system.Select(selection), True),
-                self.protein_chains,
+                self.protein_chains_asym_id,
                 [],
                 system_folder / "receptor.pdb",
                 system_folder / "chain_mapping.json",
@@ -795,7 +788,7 @@ class Entry(DocBaseModel):
         default=None, description="__Entry validation"
     )
     pass_criteria: bool | None = Field(
-        default=None, description="Entry pass validation criteria"
+        default=None, description="__Entry pass validation criteria"
     )
     water_chains: list[str] = Field(
         default_factory=list, description="__Water chains in the entry"
@@ -839,7 +832,7 @@ class Entry(DocBaseModel):
                 s.id: s
                 for s in self.systems.values()
                 if s.system_type == "holo"
-                and len(s.protein_chains) <= max_protein_chains
+                and len(s.protein_chains_asym_id) <= max_protein_chains
                 and len(s.ligand_chains) <= max_ligand_chains
             }
         return self
@@ -1082,7 +1075,7 @@ class Entry(DocBaseModel):
                 biounit_id=ligs[0].biounit_id,
                 ligands=sorted(ligs, key=lambda x: x.id),
             )
-            if len(system.protein_chains):
+            if len(system.protein_chains_asym_id):
                 self.systems[system.id] = system
 
     @cached_property
@@ -1120,7 +1113,7 @@ class Entry(DocBaseModel):
             chains = set(
                 self.chains[i_c.split(".")[1]].auth_id
                 for system in self.systems.values()
-                for i_c in system.protein_chains
+                for i_c in system.protein_chains_asym_id
                 if system.system_type == "holo"
             )
         elif chain_type == "apo":
@@ -1166,7 +1159,7 @@ class Entry(DocBaseModel):
         ligand_chains = set()
         for system in self.systems.values():
             if system.system_type == "holo":
-                holo_chains.update([c.split(".")[1] for c in system.protein_chains])
+                holo_chains.update([c.split(".")[1] for c in system.protein_chains_asym_id])
             ligand_chains.update([l.asym_id for l in system.ligands])
         for chain in self.chains:
             if chain not in ligand_chains and chain not in holo_chains:
@@ -1261,7 +1254,7 @@ class Entry(DocBaseModel):
         for system_id, system in self.systems.items():
             if (
                 system.system_type == "holo"
-                and len(system.protein_chains) <= max_protein_chains
+                and len(system.protein_chains_asym_id) <= max_protein_chains
                 and len(system.ligand_chains) <= max_ligand_chains
             ):
                 yield system_id, system

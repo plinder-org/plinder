@@ -42,7 +42,10 @@ class DocBaseModel(BaseModel):
             # write fields info
             for field, field_info in cls.get_descriptions_and_types().items():
                 description, dtype = field_info
-                name = f"{prefix}_{field}"
+                if field.startswith(prefix):
+                    name = field
+                else:
+                    name = f"{prefix}_{field}"
                 if description:
                     descr = description.lstrip().replace("\n", " ")
                     if descr.startswith("__"):

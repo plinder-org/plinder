@@ -31,7 +31,6 @@ ligand_posebusters_mol_true_loaded	bool	Boolean indicator of whether the ground 
 ligand_posebusters_molecular_bonds	bool	Boolean indicator of whether the bonds in the input molecule are the same as in the true molecule.
 ligand_posebusters_molecular_formula	bool	Boolean indicator of whether the molecular formula of the input molecule is the same as that of the true molecule.
 ligand_posebusters_molecular_weight	bool	Boolean indicator of whether the molecular weight of the input molecule is the same as that of the true molecule.
-ligand_posebusters_molvs_validation float
 ligand_posebusters_most_extreme_clash_inorganic_cofactors	bool	Indicator of whether the most extreme clash involves inorganic cofactor.
 ligand_posebusters_most_extreme_clash_organic_cofactors	bool	Indicator of whether the most extreme clash involves organic cofactor.
 ligand_posebusters_most_extreme_clash_protein	bool	Indicator of whether the most extreme clash involves receptor protein.
