@@ -11,13 +11,13 @@
 **Detailed Instructions Release:** September 24th, 2024, at the [training workshop](https://unibas.zoom.us/meeting/register/u5EkcOusrzsiHtLDImocB5PM0RLK9vC-g-kW#/registration).<br>
 **Leaderboard Opens:** October 9th, 2024 (following acceptance notifications for MLSB).<br>
 **Leaderboard Closes:** November 9th, 2024.<br>
-**Winner Notification:** Wednesday, November 27th, 2024, approximately 2-3 weeks before the workshop (before Thanksgiving).<br>
+**Winner Notification:** Wednesday, November 27th, 2024.<br>
 **MLSB Workshop:** December 14-15th, 2024.<br>
 
 (mlsb-rules-target)=
 ## Rules for valid model training
 
-- Participants MUST use the provided train and validation sets from PINDER or PLINDER; no external data augmentation is allowed.
+- Participants **MUST** use the provided train and validation sets from PINDER or PLINDER; no external data augmentation is allowed.
 - The PINDER and PLINDER datasets should be used independently; combining the sets is considered augmentation and is not allowed.
 - For inference, only the canonical sequences and structures in the evaluation sets may be used; no alternate templates or sequences are permitted. Inputs will be as follows:
   - PLINDER: `(SMILES, monomer protein structure, monomer FASTA)`
@@ -34,7 +34,9 @@
 - No binding site information can be used
 - For each system, you are allowed to submit at most 1 prediction! If your method produces multiple samples, you must rank/score the predictions and only supply a single prediction as the top-ranking prediction that will be used in the leaderboard.
 - Model inference should run in under 10 minutes per system on a GPU like T4, A10G
-- The final predictions must be in PDB file format and contain two chains: Receptor (chain R) and Ligand (chain L)
+- The final predictions must be in:
+   - PDB file format and contain two chains: Receptor (chain R) and Ligand (chain L) for PINDER track
+   - PDB file format for protein and SDF file format for Ligand for PLINDER track
 - Systems without a valid prediction will be penalized.
 
 ## Rules for valid submission:
@@ -56,7 +58,7 @@ Submission system will use Hugging Face Spaces. To qualify for submission, each 
 ## Metrics
 
 - Primary Ranking Metric:
-  - PLINDER: lDDT-PLI
+  - PLINDER: Mean lDDT-PLI
   - PINDER: Percent CAPRI acceptable or higher
 
 Other metrics computed by PINDER/PLINDER will be displayed on the leaderboard but will not influence the ranking.
