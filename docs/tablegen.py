@@ -5,9 +5,9 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from google.cloud import storage
 from itables import to_html_datatable
 from sphinx.util import logging
-from google.cloud import storage
 
 ROWS_PER_PAGE = 10
 # The columns that should be displayed first in the table
@@ -183,7 +183,9 @@ def _to_example(values: pd.Series) -> pd.Series:
     return values.map(lambda x: f'<div class="example">{x}</div>')
 
 
-def _get_annotation_table(release: str, iteration: str, cache_path: Path) -> pd.DataFrame:
+def _get_annotation_table(
+    release: str, iteration: str, cache_path: Path
+) -> pd.DataFrame:
     """
     Read the annotation table from the Parquet file.
 
