@@ -4,3 +4,13 @@ ligand_protein_chains_auth_id	str	Chain author id
 ligand_protein_chains_entity_id	str	Chain entity id
 ligand_protein_chains_length	int	SEQRES length
 ligand_protein_chains_num_unresolved_residues	int	Number of unresolved residues (SEQRES length - len(residues))
+ligand_protein_chains_BIRD	dict[str, tuple[str, str]]	Domains and ranges for BIRD
+ligand_protein_chains_CATH	dict[str, tuple[str, str]]	Domains and ranges for CATH
+ligand_protein_chains_ECOD	dict[str, tuple[str, str]]	Domains and ranges for ECOD
+ligand_protein_chains_ECOD_t_name	dict[str, tuple[str, str]]	Domains and ranges for ECOD_t_name
+ligand_protein_chains_Pfam	dict[str, tuple[str, str]]	Domains and ranges for Pfam
+ligand_protein_chains_SCOP2	dict[str, tuple[str, str]]	Domains and ranges for SCOP2
+ligand_protein_chains_SCOP2B	dict[str, tuple[str, str]]	Domains and ranges for SCOP2B
+ligand_protein_chains_PANTHER	dict[str, tuple[str, str]]	Domains and ranges for PANTHER
+ligand_protein_chains_UniProt	dict[str, tuple[str, str]]	Domains and ranges for UniProt
+ligand_protein_chains_kinase_name	dict[str, tuple[str, str]]	Domains and ranges for kinase_name

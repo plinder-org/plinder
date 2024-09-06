@@ -1,6 +1,5 @@
 Name	Type	Description
 system_biounit_id	str	Biounit ID
-system_pass_validation_criteria	bool | None	Passes quality criteria
 system_protein_chains_asym_id	list[str]	Interacting protein chains of the system
 system_id_no_biounit	str	ID of the system without the biounit
 system_ligand_chains	list[str]	Ligand chains of the system
