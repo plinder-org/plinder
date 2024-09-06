@@ -11,7 +11,7 @@ from json import dumps, load
 from os import listdir
 from pathlib import Path
 from time import time
-from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, TypeVar
+from typing import TYPE_CHECKING, Any, Callable, Dict, Literal, Optional, TypeVar
 from zipfile import ZIP_DEFLATED, ZipFile
 
 import pandas as pd
@@ -610,7 +610,7 @@ def pack_linked_structures(data_dir: Path, code: str, structures: bool = True) -
         if True, make structure archives
     """
     (data_dir / "links").mkdir(exist_ok=True, parents=True)
-    mode = "w" if structures else "r"
+    mode: Literal["r", "w"] = "w" if structures else "r"
     with ZipFile(
         data_dir / "links" / f"{code}.zip", mode, compression=ZIP_DEFLATED
     ) as archive:
