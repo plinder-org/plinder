@@ -36,8 +36,8 @@
 - For each system, you are allowed to submit at most 1 prediction! If your method produces multiple samples, you must rank/score the predictions and only supply a single prediction as the top-ranking prediction that will be used in the leaderboard.
 - Model inference should run in under 10 minutes per system on a GPU like T4, A10G
 - The final predictions must be in:
-  - PDB file format and contain two chains: Receptor (chain R) and Ligand (chain L) for PINDER track
-  - PDB file format for protein and SDF file format for Ligand for PLINDER track
+  - PINDER track: PDB file format and contain two chains: Receptor (chain R) and Ligand (chain L)
+  - PLINDER track: PDB file format for Receptor (protein) and SDF file format for Ligand (small molecule)
 - Systems without a valid prediction will be penalized.
 
 ## Rules for valid submission:
