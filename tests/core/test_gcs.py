@@ -4,7 +4,6 @@ import os
 
 import pytest
 from omegaconf import DictConfig
-
 from plinder.core.utils import gcs
 
 
@@ -49,12 +48,17 @@ def mock_buckets(monkeypatch):
         },
     )
 
+
 def test_download_as_str(mock_buckets):
     assert gcs.download_as_str(gcs_path="gs://plinder/test", cfg=CONF) == "test"
 
 
 def test_download_to_file(mock_buckets, tmp_path):
-    gcs.download_to_file(gcs_path="gs://plinder/test", local_path=(tmp_path / "afile.txt").as_posix(), cfg=CONF)
+    gcs.download_to_file(
+        gcs_path="gs://plinder/test",
+        local_path=(tmp_path / "afile.txt").as_posix(),
+        cfg=CONF,
+    )
 
 
 def test_download_many(mock_buckets, tmp_path):
@@ -68,12 +72,15 @@ def test_download_many(mock_buckets, tmp_path):
     ]
     gcs.download_many(gcs_paths=gcs_paths, local_paths=local_paths, cfg=CONF)
 
+
 def test_list_dir(mock_buckets):
     assert isinstance(gcs.list_dir(gcs_path="gs://plinder/test", cfg=CONF), list)
 
 
 def test_real_download():
-    gcs.download_as_str(gcs_path="gs://plinder/2024-04/v1/README.md", cfg=CONF).startswith("plinder-data")
+    gcs.download_as_str(
+        gcs_path="gs://plinder/2024-04/v1/README.md", cfg=CONF
+    ).startswith("plinder-data")
 
 
 def test_real_list_dir():
@@ -97,4 +104,6 @@ def test_real_download_many(tmp_path):
 
 
 def test_default_behavior():
-    assert gcs.download_as_str(gcs_path="gs://plinder/2024-04/v1/README.md").startswith("plinder-data")
+    assert gcs.download_as_str(gcs_path="gs://plinder/2024-04/v1/README.md").startswith(
+        "plinder-data"
+    )

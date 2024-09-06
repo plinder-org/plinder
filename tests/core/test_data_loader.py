@@ -1,9 +1,12 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
+import importlib
+
 import pytest
 
 try:
-    import atom3d
+    # import atom3d
+    importlib.import_module("atom3d")
 except ImportError:
     pytest.skip(allow_module_level=True)
 

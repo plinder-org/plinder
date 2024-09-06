@@ -1,6 +1,4 @@
-
 def test_split_plot(monkeypatch, write_plinder_mount, tmp_path):
-
     def update_plindex():
         from plinder.core.index import utils
 
@@ -11,7 +9,9 @@ def test_split_plot(monkeypatch, write_plinder_mount, tmp_path):
         df["tanimoto_similarity_max__50__communities"] = 0
         df["system_proper_ligand_unique_ccd_codes"] = "IDK"
         df["ligand_is_proper"] = True
-        df.to_parquet(write_plinder_mount / "index" / "annotation_table.parquet", index=False)
+        df.to_parquet(
+            write_plinder_mount / "index" / "annotation_table.parquet", index=False
+        )
         return df
 
     monkeypatch.setattr("plinder.core.split.plot.get_extended_plindex", update_plindex)
@@ -27,7 +27,10 @@ def test_split_plot(monkeypatch, write_plinder_mount, tmp_path):
         output_dir=output_dir,
         # stratified_train_test_file=write_plinder_mount / "strat" / "train_vs_test_data" / "test_set.parquet",
         # stratified_train_val_file=write_plinder_mount / "strat" / "train_vs_val_data" / "val_set.parquet",
-        stratified_val_test_file=write_plinder_mount / "strat" / "val_vs_test_data" / "test_set.parquet",
+        stratified_val_test_file=write_plinder_mount
+        / "strat"
+        / "val_vs_test_data"
+        / "test_set.parquet",
         make_plots=False,
     )
     try:

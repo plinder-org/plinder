@@ -1,9 +1,7 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
 import pytest
-
 from plinder.data.pipeline import utils
-
 
 _ENTRY = """
 {{
@@ -17,31 +15,41 @@ _ENTRY = """
 }}
 """.format
 
-@pytest.mark.parametrize("funcname, run, skip, expect", [
-    ("a", [], [], True),
-    ("a", ["a"], [], True),
-    ("a", [], ["b"], True),
-    ("a", [], ["a"], False),
-    ("scatter_a", ["a", "b"], ["a"], False),
-    ("join_a", [], [], True),
-])
+
+@pytest.mark.parametrize(
+    "funcname, run, skip, expect",
+    [
+        ("a", [], [], True),
+        ("a", ["a"], [], True),
+        ("a", [], ["b"], True),
+        ("a", [], ["a"], False),
+        ("scatter_a", ["a", "b"], ["a"], False),
+        ("join_a", [], [], True),
+    ],
+)
 def test_should_run_stage(funcname, run, skip, expect):
     assert utils.should_run_stage(funcname, run, skip) == expect
 
 
-@pytest.mark.parametrize("expect", [
-    (False),
-    (True),
-])
+@pytest.mark.parametrize(
+    "expect",
+    [
+        (False),
+        (True),
+    ],
+)
 def test_entry_exists(expect, tmp_path):
     path = tmp_path / "aa" / "aaaa.json"
     path.parent.mkdir(parents=True)
     if expect:
         path.write_text("")
-    assert utils.entry_exists(
-        entry_dir=tmp_path,
-        pdb_id="aaaa",
-    ) == expect
+    assert (
+        utils.entry_exists(
+            entry_dir=tmp_path,
+            pdb_id="aaaa",
+        )
+        == expect
+    )
 
 
 def test_load_entries(tmp_path):
@@ -58,11 +66,14 @@ def test_load_entries(tmp_path):
     assert len(ret) == 2
 
 
-@pytest.mark.parametrize("kwargs, expect", [
-    ({}, 2),
-    ({"two_char_codes": ["2g"]}, 2),
-    ({"pdb_ids": ["22gs"]}, 1),
-])
+@pytest.mark.parametrize(
+    "kwargs, expect",
+    [
+        ({}, 2),
+        ({"two_char_codes": ["2g"]}, 2),
+        ({"pdb_ids": ["22gs"]}, 1),
+    ],
+)
 def test_load_entries_from_zips(kwargs, expect, tmp_path, entry_zip):
     zip_dir = tmp_path / "entries"
     zip_dir.mkdir(parents=True)
@@ -71,20 +82,26 @@ def test_load_entries_from_zips(kwargs, expect, tmp_path, entry_zip):
     assert len(entries) == expect
 
 
-@pytest.mark.parametrize("contents", [
-    ["aaaa", "bbbb"],
-    ["pdb_0000cccc", "pdb_0000dddd"],
-])
+@pytest.mark.parametrize(
+    "contents",
+    [
+        ["aaaa", "bbbb"],
+        ["pdb_0000cccc", "pdb_0000dddd"],
+    ],
+)
 def test_hash_contents(contents):
     utils.hash_contents(contents)
 
 
-@pytest.mark.parametrize("two_char_codes, expect", [
-    (["aa", "bb"], 2),
-    (["aa"], 1),
-    ([], 2),
-    (None, 2),
-])
+@pytest.mark.parametrize(
+    "two_char_codes, expect",
+    [
+        (["aa", "bb"], 2),
+        (["aa"], 1),
+        ([], 2),
+        (None, 2),
+    ],
+)
 def test_get_local_contents(two_char_codes, expect, tmp_path):
     a = tmp_path / "aa" / "aaaa" / "aaaa.json"
     b = tmp_path / "bb" / "bbbb" / "bbbb.json"

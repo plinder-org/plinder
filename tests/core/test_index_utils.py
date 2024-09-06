@@ -55,8 +55,8 @@ def test_load_entries(mock_cpl):
         [],
         ["--release", "2024-04"],
         ["--iteration", "v1"],
-        ["--release", "2024-06", "--iteration", "v2"]
-    ]
+        ["--release", "2024-06", "--iteration", "v2"],
+    ],
 )
 def test_download_cmd(args, mock_cpl):
     utils.download_plinder_cmd(args=args + ["-y"])

@@ -1,13 +1,12 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
-from plinder.data.pipeline import io
-
 import pandas as pd
 import pytest
+from plinder.data.pipeline import io
+
 
 class _resp:
-
-    def __init__(self, body = None, text = None, content = None):
+    def __init__(self, body=None, text=None, content=None):
         self.status_code = 200
         self.called = 0
         self.body = body or {}
@@ -57,8 +56,7 @@ def test_download_cofactors_cached(tmp_path):
 
 def test_download_ecod_data_fetch(tmp_path, raw_ecod_data, monkeypatch):
     monkeypatch.setattr(
-        "plinder.data.pipeline.io.requests.get",
-        lambda _: _resp(text=raw_ecod_data)
+        "plinder.data.pipeline.io.requests.get", lambda _: _resp(text=raw_ecod_data)
     )
     ecod_path = io.download_ecod_data(data_dir=tmp_path)
     assert len(pd.read_parquet(ecod_path).index)
@@ -86,7 +84,7 @@ def test_ecod(test_env, raw_ecod_path):
 def test_download_panther_data_fetch(tmp_path, monkeypatch, raw_panther_data):
     monkeypatch.setattr(
         "plinder.data.pipeline.io.requests.get",
-        lambda _: _resp(content=raw_panther_data)
+        lambda _: _resp(content=raw_panther_data),
     )
     panther_path = io.download_panther_data(data_dir=tmp_path)
     assert panther_path.is_file()
@@ -111,8 +109,7 @@ def test_panther(test_env, raw_panther_path):
 
 def test_download_seqres_data_fetch(tmp_path, monkeypatch):
     monkeypatch.setattr(
-        "plinder.data.pipeline.io.requests.get",
-        lambda _: _resp(content=b"foo")
+        "plinder.data.pipeline.io.requests.get", lambda _: _resp(content=b"foo")
     )
     raw_seqres_path = io.download_seqres_data(data_dir=tmp_path)
     assert raw_seqres_path.is_file()
@@ -128,38 +125,41 @@ def test_download_seqres_data_cached(tmp_path):
 
 
 def test_download_kinase_data_fetch(tmp_path, monkeypatch):
-    resp = _resp(body=[
-        [{
-            "name": "foo",
-            "HGNC": "foo",
-            "family": "foo",
-            "group": "foo",
-            "kinase_class": "foo",
-            "full_name": "foo",
-            "uniprot": "foo",
-            "kinase_ID": "2",
-        }],
-        [{"kinase_ID": "2"}],
-        [{
-            "pdb": "foob",
-            "chain": "A",
-            "structure_ID": "1",
-            "kinase_ID": "2",
-            "missing_atoms": "5",
-            "missing_residues": "6",
-            "rmsd1": "1.00",
-            "rmsd2": "2.00",
-            "resolution": "3.0",
-            "quality_score": "9.2",
-            "Grich_distance": "1.0",
-            "Grich_rotation": "5.6",
-            "Grich_angle": "23.4",
-        }],
-    ])
-    monkeypatch.setattr(
-        "plinder.data.pipeline.io.requests.get",
-        lambda *_, **__: resp
+    resp = _resp(
+        body=[
+            [
+                {
+                    "name": "foo",
+                    "HGNC": "foo",
+                    "family": "foo",
+                    "group": "foo",
+                    "kinase_class": "foo",
+                    "full_name": "foo",
+                    "uniprot": "foo",
+                    "kinase_ID": "2",
+                }
+            ],
+            [{"kinase_ID": "2"}],
+            [
+                {
+                    "pdb": "foob",
+                    "chain": "A",
+                    "structure_ID": "1",
+                    "kinase_ID": "2",
+                    "missing_atoms": "5",
+                    "missing_residues": "6",
+                    "rmsd1": "1.00",
+                    "rmsd2": "2.00",
+                    "resolution": "3.0",
+                    "quality_score": "9.2",
+                    "Grich_distance": "1.0",
+                    "Grich_rotation": "5.6",
+                    "Grich_angle": "23.4",
+                }
+            ],
+        ]
     )
+    monkeypatch.setattr("plinder.data.pipeline.io.requests.get", lambda *_, **__: resp)
     kinase_path = io.download_kinase_data(data_dir=tmp_path)
     assert kinase_path.is_file()
 
@@ -204,7 +204,7 @@ def test_list_rcsb(monkeypatch):
 def test_downloads_components_cif_fetch(tmp_path, monkeypatch, mini_component_cif_gz):
     monkeypatch.setattr(
         "plinder.data.pipeline.io.requests.get",
-        lambda _: _resp(content=mini_component_cif_gz.read_bytes())
+        lambda _: _resp(content=mini_component_cif_gz.read_bytes()),
     )
     components_path = io.download_components_cif(data_dir=tmp_path)
     assert components_path.is_file()
@@ -212,7 +212,9 @@ def test_downloads_components_cif_fetch(tmp_path, monkeypatch, mini_component_ci
     assert len(pd.read_parquet(components_path.parent / "components.parquet").index)
 
 
-def test_download_components_cif_cached(tmp_path, mini_component_cif, mini_components_pqt):
+def test_download_components_cif_cached(
+    tmp_path, mini_component_cif, mini_components_pqt
+):
     components_path = tmp_path / "dbs" / "components" / "components.cif"
     components_pqt = tmp_path / "dbs" / "components" / "components.parquet"
     components_path.parent.mkdir(parents=True)
@@ -235,8 +237,7 @@ def test_ccd(test_env, mock_alternative_datasets):
 
 def test_download_uniprot_fasta_data_fetch(tmp_path, monkeypatch):
     monkeypatch.setattr(
-        "plinder.data.pipeline.io.requests.get",
-        lambda _: _resp(content=b"foo")
+        "plinder.data.pipeline.io.requests.get", lambda _: _resp(content=b"foo")
     )
     raw_path = io.download_uniprot_fasta_data(data_dir=tmp_path)
     assert raw_path.is_file()
