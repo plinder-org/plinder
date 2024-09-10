@@ -22,8 +22,26 @@ from plinder.core.utils.io import (
 )
 from plinder.core.utils.log import setup_logger
 from plinder.core.utils.unpack import get_zips_to_unpack
+from plinder.core.structure.structure import Structure
 
 LOG = setup_logger(__name__)
+
+
+def _align_monomers_with_mask(
+    monomer1: Structure,
+    monomer2: Structure,
+    remove_differing_atoms: bool = True,
+    renumber_residues: bool = False,
+    remove_differing_annotations: bool = False,
+) -> tuple[Structure, Structure]:
+    monomer2, monomer1 = monomer2.align_common_sequence(
+        monomer1,
+        remove_differing_atoms=remove_differing_atoms,
+        renumber_residues=renumber_residues,
+        remove_differing_annotations=remove_differing_annotations,
+    )
+    monomer2, _, _ = monomer2.superimpose(monomer1)
+    return monomer1, monomer2
 
 
 class PlinderSystem:
@@ -358,3 +376,52 @@ class PlinderSystem:
         int
         """
         return len(self.system_id.split("__")[2].split("_"))
+
+    @property
+    def best_linked_structures_ids(
+        self, topn: int = 1) -> dict[str, str] | None:
+        """
+        Return single best apo and pred by sort score.
+
+        Returns
+        -------
+        pd.DataFrame | None
+            dataframe of linked structures if present in plinder
+        """
+        if self._best_linked_structures is None:
+            links = query_links(filters=[("reference_system_id", "==", self.system_id)])
+            best_apo = links[(links.kind == "apo")].sort_values(by="sort_score").id.to_list()[:topn]
+            best_pred = links[(links.kind == "pred")].sort_values(
+                by="sort_score", ascending=False).id.to_list()[:topn]
+            self._best_linked_structures = {
+                "apo": [self.get_linked_structure("apo", apo_id) for apo_id in best_apo],
+                "pred": [self.get_linked_structure("pred", pred_id) for pred_id in best_pred]}
+        return self._best_linked_structures
+
+    def create_masked_bound_unbound_complexes(
+        self,
+
+    ) -> tuple[Structure, Structure, Structure]:
+        """Function to cropped.
+        TODO: Use `_align_monomers_with_mask` for cropping
+        """
+       
+
+    @property
+    def load_holo_structure(self) -> Structure | None:
+        """
+        Load holo structure
+        """
+        return Structure(
+            self.receptor_cif,
+            self.system_id)
+
+    @property
+    def load_alt_structure(self, topn: int = 1) -> Structure | None:
+        """
+        Load apo structure
+        """
+        best_structures = self.best_linked_structures_ids(topn)
+        return {kind: Structure(
+            alt_path,
+            self.system_id) for kind, alt_path in best_structures.items()}
