@@ -1049,8 +1049,7 @@ def make_linked_structures(
         source_structures = linked_structures / "source" / search_db
         source_structures.mkdir(exist_ok=True, parents=True)
         df = pd.read_parquet(linked_structures / f"{search_db}_links.parquet", columns=["id"])
-        df = df.head(100)
-        LOG.info(f"scatter_make_linked_structures: making {search_db} linked structures {df['id'].unique()}")
+        LOG.info(f"make_linked_structures: collecting {df['id'].nunique()} {search_db} linked structures")
         func = lambda *args: None
         if search_db == "apo":
             func = utils.apo_file_from_link_id
