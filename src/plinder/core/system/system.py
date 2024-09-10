@@ -240,10 +240,8 @@ class PlinderSystem:
             path to linked structures archive
         """
         if self._linked_archive is None:
-            zips = get_zips_to_unpack(
-                kind="linked_structures", system_ids=[self.system_id]
-            )
-            [archive] = list(zips.keys())
+            zips = get_zips_to_unpack(kind="linked_structures")
+            archive = list(zips.keys())[0]
             self._linked_archive = archive.parent
         return self._linked_archive
 
@@ -265,13 +263,7 @@ class PlinderSystem:
         """
         if self.linked_archive is None:
             raise ValueError("linked_archive is None!")
-        structure = (
-            self.linked_archive
-            / link_kind
-            / self.system_id
-            / link_id
-            / "superposed.cif"
-        )
+        structure = self.linked_archive / f"{link_id}.cif"
         if not structure.is_file():
             raise ValueError(f"structure={structure} does not exist!")
         return structure.as_posix()

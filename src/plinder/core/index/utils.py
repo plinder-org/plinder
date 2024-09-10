@@ -5,6 +5,7 @@ from __future__ import annotations
 from argparse import ArgumentParser
 from json import load
 from pathlib import Path
+from shutil import rmtree
 from textwrap import dedent
 from time import time
 from typing import Any, Optional
@@ -163,6 +164,23 @@ def load_entries(
     return reduced
 
 
+def _remove_old_linked_structures(data_dir: Path) -> None:
+    zips = (data_dir / "linked_structures").glob("*zip")
+    for zip in zips:
+        if zip.stem in ["apo", "pred"]:
+            continue
+        zip.unlink()
+        done = zip.parent / (zip.stem + "_done")
+        if done.is_file():
+            done.unlink()
+    if (data_dir / "linked_structures" / "apo").is_dir():
+        LOG.info("found old apo linked structures, removing")
+        rmtree(data_dir / "linked_structures" / "apo")
+    if (data_dir / "linked_structures" / "pred").is_dir():
+        LOG.info("found old pred linked structures, removing")
+        rmtree(data_dir / "linked_structures" / "pred")
+
+
 def download_plinder_cmd(args: list[str] | None = None) -> None:
     """
     Download the full plinder dataset for the current configuration.
@@ -199,6 +217,8 @@ def download_plinder_cmd(args: list[str] | None = None) -> None:
             """
         )
     )
+    LOG.debug("cleaning up old linked structures")
+    _remove_old_linked_structures(Path(cfg.data.plinder_dir))
     for attr in cfg.data:
         if (
             attr.startswith("plinder_")
@@ -260,6 +280,8 @@ def download_plinder_cmd(args: list[str] | None = None) -> None:
                 f"extracting {getattr(cfg.data, attr)} archives, you may want to stretch your legs."
             )
             codes = [p.stem for p in path.glob("*zip")]
+            if attr == "linked_structures":
+                codes = None
             get_zips_to_unpack(kind=attr, two_char_codes=codes)
 
     t1 = time()

@@ -96,16 +96,22 @@ def get_zips_to_unpack(
         the zips to unpack and the list of IDs (based on kind) in each zip
     """
     conf = cfg or get_config()
-    id_kind, ids = expand_config_context(
-        system_ids=system_ids,
-        pdb_ids=pdb_ids,
-        two_char_codes=two_char_codes,
-        cfg=cfg,
-    )
+    if kind == "linked_structures":
+        id_kind, ids = None, []
+    else:
+        id_kind, ids = expand_config_context(
+            system_ids=system_ids,
+            pdb_ids=pdb_ids,
+            two_char_codes=two_char_codes,
+            cfg=cfg,
+        )
 
     root = cpl.get_plinder_path(rel=getattr(conf.data, kind), download=False)
     zips: dict[Path, list[str]] = {}
-    if id_kind == "system_ids":
+    if id_kind is None:
+        for zip in root.glob("*.zip"):
+            zips.setdefault(zip, [])
+    elif id_kind == "system_ids":
         for system_id in ids:
             two_char_code = system_id[1:3]
             key = root / f"{two_char_code}.zip"
