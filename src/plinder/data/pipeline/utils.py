@@ -595,6 +595,79 @@ def create_nonredundant_dataset(*, data_dir: Path) -> None:
     )
 
 
+def apo_file_from_link_id(
+    data_dir: Path,
+    output_dir: Path,
+    link_id: str,
+    force_update: bool = False,
+) -> dict[str, str] | None:
+    from ost import io, mol
+
+    from plinder.data.utils.annotations.save_utils import save_cif_file
+
+    if (output_dir / f"{link_id}.cif").exists() and not force_update:
+        LOG.info(f"skipping {link_id}.cif as it already exists")
+        return None
+
+    pdb_id, chain = link_id.split("_")
+    target_cif = data_dir / "ingest" / pdb_id[1:3] / f"pdb_0000{pdb_id}" / f"pdb_0000{pdb_id}_xyz-enrich.cif.gz"
+    if not target_cif.exists():
+        LOG.info(f"skipping {link_id} as {target_cif} does not exist")
+        return None
+
+    target_mol, seqres, info = io.LoadMMCIF(
+        target_cif.as_posix(),
+        seqres=True,
+        info=True,
+        fault_tolerant=True,
+    )
+    chain_to_seqres = {c.name: c.string for c in seqres}
+    target_mol = mol.CreateEntityFromView(
+            target_mol.Select(f"chain='{chain}'"), True
+    )
+    cif_file = output_dir / f"{pdb_id}_{chain}.cif"
+    LOG.info(f"saving {link_id} to {cif_file}")
+    save_cif_file(target_mol, info, cif_file.stem, cif_file)
+    return chain_to_seqres[chain]
+
+
+def pred_file_from_link_id(
+    data_dir: Path,
+    output_dir: Path,
+    link_id: str,
+    force_update: bool = False,
+) -> None:
+    from ost import io, mol
+
+    from plinder.data.utils.annotations.save_utils import save_cif_file
+
+    if (output_dir / f"{link_id}.cif").exists() and not force_update:
+        LOG.info(f"skipping {link_id}.cif as it already exists")
+        return None
+
+
+    uniprot_id, chain = link_id.split("_")
+    target_cif = data_dir / "dbs" / "alphafold" / f"AF-{uniprot_id}-F1-model_v4.cif"
+    if not target_cif.exists():
+        LOG.info(f"skipping {link_id} as {target_cif} does not exist")
+        return None
+
+    target_mol, seqres, info = io.LoadMMCIF(
+        target_cif.as_posix(),
+        seqres=True,
+        info=True,
+        fault_tolerant=True,
+    )
+    chain_to_seqres = {c.name: c.string for c in seqres}
+    target_mol = mol.CreateEntityFromView(
+            target_mol.Select(f"chain='{chain}'"), True
+    )
+    cif_file = output_dir / f"{uniprot_id}_{chain}.cif"
+    LOG.info(f"saving {link_id} to {cif_file}")
+    save_cif_file(target_mol, info, cif_file.stem, cif_file)
+    return chain_to_seqres[chain]
+
+
 def pack_linked_structures(data_dir: Path, code: str, structures: bool = True) -> None:
     """
     Pack generated linked structures into a zip file for a particular
@@ -659,6 +732,16 @@ def mp_pack_linked_structures(*, data_dir: Path) -> None:
         pool.starmap(
             pack_linked_structures, zip(repeat(data_dir), listdir(data_dir / "ingest"))
         )
+
+
+def pack_source_structures(data_dir: Path, search_db: str) -> None:
+    (data_dir / "linked_structures").mkdir(exist_ok=True, parents=True)
+    with ZipFile(
+        data_dir / "linked_structures" / f"{search_db}.zip", "w", compression=ZIP_DEFLATED,
+    ) as archive:
+        source_structures = data_dir / "linked_staging" / "source" / search_db
+        for path in source_structures.rglob("*.cif"):
+            archive.write(path, path.name)
 
 
 def consolidate_linked_scores(*, data_dir: Path) -> None:

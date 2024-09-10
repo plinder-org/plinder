@@ -1033,64 +1033,33 @@ def make_links(
         )
 
 
-def scatter_make_linked_structures(
-    *,
-    data_dir: Path,
-    search_dbs: list[str],
-    batch_size: int,
-) -> list[list[tuple[str, str]]]:
-    items = []
-    for search_db in search_dbs:
-        links = pd.read_parquet(
-            data_dir / "linked_staging" / f"{search_db}_links.parquet"
-        )
-        items.extend(
-            [
-                (search_db, system_id)
-                for system_id in sorted(links["reference_system_id"])
-            ]
-        )
-    return [items[pos : pos + batch_size] for pos in range(0, len(items), batch_size)]
-
-
 def make_linked_structures(
     *,
     data_dir: Path,
     search_dbs: list[str],
-    system_ids: list[tuple[str, str]],
     cpu: int = 8,
     force_update: bool = False,
 ) -> None:
     import multiprocessing
 
-    from plinder.data.save_linked_structures import (
-        system_save_and_score_representatives,
-    )
-
     linked_structures = data_dir / "linked_staging"
-    grouped = {
-        search_db: [tup[1] for tup in system_ids if tup[0] == search_db]
-        for search_db in search_dbs
-    }
-    dfs = []
     for search_db in search_dbs:
-        df = pd.read_parquet(linked_structures / f"{search_db}_links.parquet")
-        slc = df[df["reference_system_id"].isin(grouped[search_db])]
-        if not slc.empty:
-            dfs.append(slc.copy())
-            dfs[-1]["kind"] = search_db
-    if not len(dfs):
-        LOG.info("no linked structures to make")
-        return
-    links = pd.concat(dfs).reset_index(drop=True)
-
-    with multiprocessing.get_context("spawn").Pool(cpu) as p:
-        p.starmap(
-            system_save_and_score_representatives,
-            [
-                (system, group, data_dir, search_db, linked_structures, force_update)
-                for (search_db, system), group in links.groupby(
-                    ["kind", "reference_system_id"]
-                )
-            ],
-        )
+        if search_db == "holo":
+            continue
+        source_structures = linked_structures / "source" / search_db
+        source_structures.mkdir(exist_ok=True, parents=True)
+        df = pd.read_parquet(linked_structures / f"{search_db}_links.parquet", columns=["id"])
+        df = df.head(100)
+        LOG.info(f"scatter_make_linked_structures: making {search_db} linked structures {df['id'].unique()}")
+        func = lambda *args: None
+        if search_db == "apo":
+            func = utils.apo_file_from_link_id
+        elif search_db == "pred":
+            func = utils.pred_file_from_link_id
+        args = [
+            (data_dir, source_structures, link_id, force_update)
+            for link_id in df["id"].unique()
+        ]
+        with multiprocessing.get_context("spawn").Pool(cpu) as p:
+            p.starmap(func, args)
+        utils.pack_source_structures(data_dir, search_db)

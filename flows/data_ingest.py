@@ -214,7 +214,7 @@ class PlinderDataIngestFlow(FlowSpec):
         self.pipeline = inputs[0].pipeline
         self.merge_artifacts(inputs, exclude=["chunks"])
         self.pipeline.join_structure_qc(inputs)
-        self.next(self.end) # self.scatter_make_system_archives)
+        self.next(self.make_linked_structures) # self.scatter_make_system_archives)
 
     # @kubernetes(**K8S)
     # @environment(**ENV)
@@ -433,16 +433,16 @@ class PlinderDataIngestFlow(FlowSpec):
     # def scatter_make_linked_structures(self):
     #     self.chunks = self.pipeline.scatter_make_linked_structures()
     #     self.next(self.make_linked_structures, foreach="chunks")
-    #
-    # @kubernetes(**{**K8S, **WORKSTATION})
-    # @environment(**ENV)
-    # @retry
-    # @step
-    # def make_linked_structures(self):
-    #     self.pipeline.cfg.flow.make_linked_structures_cpu = WORKSTATION["cpu"] - 1
-    #     self.pipeline.make_linked_structures(self.input)
-    #     self.next(self.join_make_linked_structures)
-    #
+
+    @kubernetes(**{**K8S, **DATABASES})
+    @environment(**ENV)
+    @retry
+    @step
+    def make_linked_structures(self):
+        self.pipeline.cfg.flow.make_linked_structures_cpu = WORKSTATION["cpu"] - 1
+        self.pipeline.make_linked_structures(self.input)
+        self.next(self.end)
+
     # @kubernetes(**K8S)
     # @environment(**ENV)
     # @retry
