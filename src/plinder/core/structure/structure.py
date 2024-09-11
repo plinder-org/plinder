@@ -1,8 +1,10 @@
 from __future__ import annotations
+
 from functools import lru_cache
+from pydantic import BaseModel
 
 from pathlib import Path
-from typing import Iterable, TYPE_CHECKING
+from typing import Iterable, Optional, TYPE_CHECKING
 import gzip
 import numpy as np
 import pandas as pd
@@ -31,7 +33,7 @@ from pinder.core.structure.atoms import (
 from pinder.core.structure.contacts import get_atom_neighbors
 from pinder.core.structure import surgery
 
-from plinder.core import get_config
+from plinder.core.utils.config import get_config
 
 if TYPE_CHECKING:
     import torch
@@ -83,16 +85,15 @@ def atom_array_from_cif_file(
     return structure
 
 
-@dataclass(config=ConfigDict(validate_assignment=True, arbitrary_types_allowed=True))
-class Structure:
+class Structure(BaseModel):
     protein_path: Path
     plinder_system_id: str
-    list_ligand_sdf_or_smiles: list[Path |str]| None
-    protein_atom_array: AtomArray | None = None
-    ligand_mols: list[Chem.rdchem.Mol] | None = None
+    list_ligand_sdf_or_smiles: Path list[Path | str] | None = None
+    protein_atom_array: AtomArray | None  = None
+    ligand_mols: list[Chem.rdchem.Mol]  = None
     add_ligand_hydrogen: bool = False
     structure_type: str = "holo"
-
+    
     """Initialize structure.
     This dataclass provides abstraction over plinder systems holo, apo and predicted structures.
     It loads and processes receptor proteins and ligands in a way that allows us to capture the
@@ -227,19 +228,25 @@ class Structure:
             )
         if copy:
             self_struct = Structure(
-                filepath=self.filepath,
-                uniprot_map=self.uniprot_map,
-                pinder_id=self.pinder_id,
-                atom_array=target_at,
-                pdb_engine=self.pdb_engine,
+                protein_path=self.protein_path,
+                plinder_system_id=self.plinder_system_id,
+                list_ligand_sdf_or_smiles=self.list_ligand_sdf_or_smiles,
+                protein_atom_array=target_at,
+                ligand_mols=self.ligand_mols,
+                add_ligand_hydrogen=self.add_ligand_hydrogen,
+                structure_type=self.structure_type
             )
+
             other_struct = Structure(
-                filepath=other.filepath,
-                uniprot_map=other.uniprot_map,
-                pinder_id=other.pinder_id,
-                atom_array=ref_at,
-                pdb_engine=self.pdb_engine,
+                protein_path=other.protein_path,
+                plinder_system_id=other.plinder_system_id,
+                list_ligand_sdf_or_smiles=other.list_ligand_sdf_or_smiles,
+                protein_atom_array=ref_at,
+                ligand_mols=other.ligand_mols,
+                add_ligand_hydrogen=other.add_ligand_hydrogen,
+                structure_type=other.structure_type
             )
+
             return self_struct, other_struct
         other.atom_array = ref_at
         self.atom_array = target_at
@@ -267,11 +274,13 @@ class Structure:
         )
         return (
             Structure(
-                filepath=self.filepath,
-                uniprot_map=self.uniprot_map,
-                pinder_id=self.pinder_id,
-                atom_array=superimposed,
-                pdb_engine=self.pdb_engine,
+                protein_path=self.protein_path,
+                plinder_system_id=self.plinder_system_id,
+                list_ligand_sdf_or_smiles=self.list_ligand_sdf_or_smiles,
+                protein_atom_array=superimposed,
+                ligand_mols=self.ligand_mols,
+                add_ligand_hydrogen=self.add_ligand_hydrogen,
+                structure_type=self.structure_type
             ),
             raw_rmsd,
             refined_rmsd,
@@ -284,13 +293,14 @@ class Structure:
         return protein_coords
 
     @property
-    def ligand_coords(self) -> NDArray[np.double]:
+    def ligand_coords(self) -> dict[str, NDArray[np.double]]:
         """ndarray[np.double]: The coordinates of the ligand atoms in the structure."""
-        protein_coords: NDArray[np.double] = self.protein_atom_array.coord
-        return protein_coords
+        ligand_coords: NDArray[np.double] = {tag: mol.GetConformer().GetPositions() \
+                                              for tag, mol in self.ligand_mols.items()}
+        return ligand_coords
 
     @property
-    def ligand_bonds(self):
+    def ligand_bonds(self) -> dict[str, list[tuple[int, int, str]]]:
         return {
             tag: [(at.GetBeginAtomIdx(), at.GetEndAtomIdx(), at.GetBondType()) for at in mol] \
                 for tag, mol in self.ligand_mols.items()}

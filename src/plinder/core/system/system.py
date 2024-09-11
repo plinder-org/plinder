@@ -400,15 +400,69 @@ class PlinderSystem:
 
     def create_masked_bound_unbound_complexes(
         self,
+        remove_differing_atoms: bool = True,
+        renumber_residues: bool = False,
+        remove_differing_annotations: bool = False,
 
     ) -> tuple[Structure, Structure, Structure]:
-        """Function to cropped.
-        TODO: Use `_align_monomers_with_mask` for cropping
+        """Create complexes for apo and predicted cropped to common holo substructures.
+
+        The method applies a pairwise masking procedure which crops both unbound and bound structures
+        such that they have equal numbers of residues and atom counts.
+
+        Note: this method may result in very distorted holo (ground-truth) structures if
+        the unbound monomer structures have little to no sequence and atoms in common.
+        Unless you need all monomer types to be equal shapes, the `PinderSystem.create_complex` method
+        or pure-superposition without masking (Structure.superimpose) is more appropriate.
+
+        Parameters:
+            monomer_types (Sequence[str]): The unbound monomer types to consider (apo, predicted, or both).
+            remove_differing_atoms (bool):
+                Whether to remove non-overlappings atoms that may still be present even after sequence-based alignment.
+            renumber_residues (bool):
+                Whether to renumber the residues in the receptor and ligand `Structure`'s to match numbering of the holo counterparts.
+            remove_differing_annotations (bool):
+                Whether to remove annotation categories (set to empty str or default value for the category type).
+                This is useful if you need to perform biotite.structure.filter_intersection on the resulting structures.
+                Note: this can have unintended side-effects like stripping the `element` attribute on structures.
+                By default, the annotation categories are removed if they don't match in order to define the intersecting atom mask,
+                after which the original structure annotations are preserved by applying the intersecting mask to the original AtomArray.
+                Default is False.
+
+        Returns:
+            tuple[Structure, Structure, Structure]: A tuple of the cropped holo, apo, and predicted Structure objects, respectively.
+
         """
-       
+        holo_structure = self.holo_structure()
+        alt_structure = self.alt_structure()
+        apo_structure = alt_structure["apo"]
+        pred_structure = alt_structure["pred"]
+
+        if apo_structure is not None:
+            # Ensure same number of chains in apo and holo
+            holo_structure, apo_structure = _align_monomers_with_mask(
+                holo_structure,
+                apo_structure,
+                remove_differing_atoms=remove_differing_atoms,
+                renumber_residues=renumber_residues,
+                remove_differing_annotations=remove_differing_annotations,
+            )
+            apo_structure.ligand_mols = holo_structure.ligand_mols
+        if pred_structure is not None:
+            # Ensure same number of chains in pred and holo
+            holo_structure, pred_structure = _align_monomers_with_mask(
+                holo_structure,
+                pred_structure,
+                remove_differing_atoms=remove_differing_atoms,
+                renumber_residues=renumber_residues,
+                remove_differing_annotations=remove_differing_annotations,
+            )
+            pred_structure.ligand_mols = holo_structure.ligand_mols
+
+        return holo_structure, apo_structure, pred_structure
 
     @property
-    def load_holo_structure(self) -> Structure | None:
+    def holo_structure(self) -> Structure | None:
         """
         Load holo structure
         """
@@ -417,7 +471,7 @@ class PlinderSystem:
             self.system_id)
 
     @property
-    def load_alt_structure(self, topn: int = 1) -> Structure | None:
+    def alt_structures(self, topn: int = 1) -> Structure | None:
         """
         Load apo structure
         """
