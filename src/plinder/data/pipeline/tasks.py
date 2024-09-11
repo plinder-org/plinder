@@ -1048,8 +1048,12 @@ def make_linked_structures(
             continue
         source_structures = linked_structures / "source" / search_db
         source_structures.mkdir(exist_ok=True, parents=True)
-        df = pd.read_parquet(linked_structures / f"{search_db}_links.parquet", columns=["id"])
-        LOG.info(f"make_linked_structures: collecting {df['id'].nunique()} {search_db} linked structures")
+        df = pd.read_parquet(
+            linked_structures / f"{search_db}_links.parquet", columns=["id"]
+        )
+        LOG.info(
+            f"make_linked_structures: collecting {df['id'].nunique()} {search_db} linked structures"
+        )
         func = lambda *args: None
         if search_db == "apo":
             func = utils.apo_file_from_link_id
