@@ -52,7 +52,7 @@ class DocBaseModel(BaseModel):
                 descr = "[DESCRIPTION MISSING]"
             if "pass_criteria" in name and "validation" not in name:
                 name = name.replace("pass_criteria", "pass_validation_criteria")
-            yield name, dtype, descr
+            yield name, dtype, descr.strip()
 
     @classmethod
     def document_properties_to_tsv(cls, prefix: str, filename: Path) -> None:
