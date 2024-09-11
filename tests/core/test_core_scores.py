@@ -93,7 +93,9 @@ def test_query_links(read_plinder_mount):
 
 def test_query_links_columns(read_plinder_mount):
     system_id = "4dd7__1__1.A__1.B"
-    df = scores.query_links(columns=["reference_system_id"], filters=[("query_system", "==", system_id)])
+    df = scores.query_links(
+        columns=["reference_system_id"], filters=[("query_system", "==", system_id)]
+    )
     assert len(df.index)
     assert "reference_system_id" in df.columns
     assert "kind" in df.columns
