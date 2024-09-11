@@ -5,7 +5,7 @@ from pathlib import Path
 import plinder
 
 DOC_PATH = Path(__file__).parent
-COLUMN_REFERENCE_PATH = DOC_PATH.parent / "column_descriptions"
+COLUMN_REFERENCE_PATH = DOC_PATH.parent.parent / "src" / "plinder" / "data" / "column_descriptions"
 
 # Avoid verbose logs in rendered notebooks
 os.environ["PLINDER_LOG_LEVEL"] = "0"
