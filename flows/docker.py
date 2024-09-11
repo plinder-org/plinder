@@ -324,6 +324,8 @@ def run_image(
         "PLINDER_TEST_BASE_DIR=/app",
         "-v",
         f"{host.parent}/tests:/app/tests/",
+        "-v",
+        f"{host.parent}/column_descriptions:/app/column_descriptions/",
         "-e",
         "PLINDER_MOUNT=/plinder",
         "-e",

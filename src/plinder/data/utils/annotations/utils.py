@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from functools import cached_property
 from pathlib import Path
+from typing import Iterator
 
 from pydantic import BaseModel
 
 
 class DocBaseModel(BaseModel):
+
     @classmethod
     def get_descriptions_and_types(cls) -> dict[str, tuple[str | None, str | None]]:
         """
@@ -35,23 +37,27 @@ class DocBaseModel(BaseModel):
         return descriptions
 
     @classmethod
+    def document_properties(cls, prefix: str) -> Iterator[tuple[str, type | None, str]]:
+        for field, field_info in cls.get_descriptions_and_types().items():
+            description, dtype = field_info
+            if field.startswith(prefix):
+                name = field
+            else:
+                name = f"{prefix}_{field}"
+            if description:
+                descr = description.lstrip().replace("\n", " ")
+                if descr.startswith("__"):
+                    continue
+            else:
+                descr = "[DESCRIPTION MISSING]"
+            if "pass_criteria" in name and "validation" not in name:
+                name = name.replace("pass_criteria", "pass_validation_criteria")
+            yield name, dtype, descr
+
+    @classmethod
     def document_properties_to_tsv(cls, prefix: str, filename: Path) -> None:
         with open(filename, "w") as tsv:
             # write header
             tsv.write("\t".join(["Name", "Type", "Description"]) + "\n")
-            # write fields info
-            for field, field_info in cls.get_descriptions_and_types().items():
-                description, dtype = field_info
-                if field.startswith(prefix):
-                    name = field
-                else:
-                    name = f"{prefix}_{field}"
-                if description:
-                    descr = description.lstrip().replace("\n", " ")
-                    if descr.startswith("__"):
-                        continue
-                else:
-                    descr = "[DESCRIPTION MISSING]"
-                if "pass_criteria" in name and "validation" not in name:
-                    name = name.replace("pass_criteria", "pass_validation_criteria")
+            for name, dtype, descr in cls.document_properties(prefix):
                 tsv.write("\t".join([name, str(dtype), descr]) + "\n")
