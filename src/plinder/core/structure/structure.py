@@ -88,12 +88,12 @@ def atom_array_from_cif_file(
 class Structure(BaseModel):
     protein_path: Path
     plinder_system_id: str
-    list_ligand_sdf_or_smiles: Path list[Path | str] | None = None
+    list_ligand_sdf_or_smiles: list[Path | str] | None = None
     protein_atom_array: AtomArray | None  = None
     ligand_mols: list[Chem.rdchem.Mol]  = None
     add_ligand_hydrogen: bool = False
     structure_type: str = "holo"
-    
+
     """Initialize structure.
     This dataclass provides abstraction over plinder systems holo, apo and predicted structures.
     It loads and processes receptor proteins and ligands in a way that allows us to capture the
