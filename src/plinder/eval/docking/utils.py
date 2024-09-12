@@ -311,17 +311,17 @@ class ModelScores:
         )
         return average_score, weighted_average_score
 
-    def get_passing_posebusters(self) -> dict[str, bool]:
-        scores = defaultdict(list)
+    def get_passing_posebusters(self) -> dict[str, list[Any]]:
+        scores = {}
         if self.ligand_scores is None:
-            return {}
+            return scores
         for ligand_scores in self.ligand_scores:
-            for k in ligand_scores.posebusters:
-                scores[k].append(ligand_scores.posebusters[k])
-        return {f"posebusters_{k}": all(v) for k, v in scores.items()}
+            key = f"posebusters_{ligand_scores.sdf_file.stem}"
+            scores[key] = ligand_scores.posebusters.copy()
+        return scores
 
     def summarize_scores(self) -> dict[str, Any]:
-        scores = dict(
+        scores: dict[str, Any] = dict(
             model=self.system,
             reference=self.reference.system_id,
             num_reference_ligands=self.reference.num_ligands,

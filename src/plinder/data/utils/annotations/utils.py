@@ -10,7 +10,6 @@ from pydantic import BaseModel
 
 
 class DocBaseModel(BaseModel):
-
     @classmethod
     def get_descriptions_and_types(cls) -> dict[str, tuple[str | None, str | None]]:
         """
@@ -57,7 +56,6 @@ class DocBaseModel(BaseModel):
     @classmethod
     def document_properties_to_tsv(cls, prefix: str, filename: Path) -> None:
         with open(filename, "w") as tsv:
-            # write header
             tsv.write("\t".join(["Name", "Type", "Description"]) + "\n")
             for name, dtype, descr in cls.document_properties(prefix):
                 tsv.write("\t".join([name, str(dtype), descr]) + "\n")
