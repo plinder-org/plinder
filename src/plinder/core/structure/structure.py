@@ -502,6 +502,10 @@ class Structure(BaseModel):
             prop = sorted(prop)
         return list(prop)
 
+    @classmethod
+    def get_properties(cls):
+        return [name for name in dir(cls) if isinstance(getattr(cls, name), property)]
+
     def model_post_init(self, __context: Any) -> None:
         # pydantic v2 renames this to dataclass post_init
         if (self.structure_type) == "holo":
