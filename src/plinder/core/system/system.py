@@ -44,6 +44,58 @@ def _align_monomers_with_mask(
     return monomer1, monomer2
 
 
+def _align_structures_with_mask(
+    multi_chain_structure: Structure,
+    map_of_alt_monomer_structures: dict[str, Structure],
+    remove_differing_atoms: bool = True,
+    renumber_residues: bool = False,
+    remove_differing_annotations: bool = False,
+) -> tuple[Structure, Structure]:
+    cropped_and_superposed_ref_dict = {}
+    cropped_and_superposed_target_dict = {}
+    for ref_chain, target_monomer_structure in map_of_alt_monomer_structures.items():
+        ref_monomer_structure = multi_chain_structure.filter(
+            property="chain_id", mask={ref_chain}
+        )
+        target_monomer_structure.set_chain(ref_chain)
+
+        ref_monomer_structure, target_monomer_structure = _align_monomers_with_mask(
+            ref_monomer_structure,
+            target_monomer_structure,
+            remove_differing_atoms=remove_differing_atoms,
+            renumber_residues=renumber_residues,
+            remove_differing_annotations=remove_differing_annotations,
+        )
+        cropped_and_superposed_ref_dict[ref_chain] = ref_monomer_structure
+        cropped_and_superposed_target_dict[ref_chain] = target_monomer_structure
+    target_values = list(cropped_and_superposed_target_dict.values())
+    ref_values = list(cropped_and_superposed_ref_dict.values())
+    new_merged_target = target_values[0]
+    new_merged_ref = ref_values[0]
+    for target_val in target_values[1:]:
+        new_merged_target += target_val
+    for ref_val in ref_values[1:]:
+        new_merged_ref += ref_val
+    # Transfer ligand
+    new_merged_target.ligand_mols = multi_chain_structure.ligand_mols
+    new_merged_ref.ligand_mols = multi_chain_structure.ligand_mols
+
+    # merge monomers (and/or part of multi_chain_structure) into single new structure
+    reference_chains = set(multi_chain_structure.protein_atom_array.chain_id)
+    chains_not_mapped = reference_chains - set(map_of_alt_monomer_structures.keys())
+    if len(chains_not_mapped) == 0:
+        return new_merged_ref, new_merged_target
+    else:
+        for chain in chains_not_mapped:
+            unmapped_structure = multi_chain_structure.filter(
+                property="chain_id", mask=chain
+            )
+            new_merged_target += unmapped_structure
+            new_merged_ref += unmapped_structure
+
+    return cropped_and_superposed_ref_dict, cropped_and_superposed_target_dict
+
+
 class PlinderSystem:
     """
     Core class for interacting with a single system and its assets.
@@ -69,6 +121,7 @@ class PlinderSystem:
         self._chain_mapping: dict[str, Any] | None = None
         self._water_mapping: dict[str, Any] | None = None
         self._linked_structures: pd.DataFrame | None = None
+        self._best_linked_structures: pd.DataFrame | None = None
         self._linked_archive: Path | None = None
 
     @property
@@ -378,8 +431,7 @@ class PlinderSystem:
         return len(self.system_id.split("__")[2].split("_"))
 
     @property
-    def best_linked_structures_ids(
-        self, topn: int = 1) -> dict[str, str] | None:
+    def best_linked_structures_paths(self) -> dict[str, str] | None:
         """
         Return single best apo and pred by sort score.
 
@@ -388,14 +440,25 @@ class PlinderSystem:
         pd.DataFrame | None
             dataframe of linked structures if present in plinder
         """
+        # TODO: This assumes single protein chain holo system.
+        # Extend this to make it more general
         if self._best_linked_structures is None:
             links = query_links(filters=[("reference_system_id", "==", self.system_id)])
-            best_apo = links[(links.kind == "apo")].sort_values(by="sort_score").id.to_list()[:topn]
-            best_pred = links[(links.kind == "pred")].sort_values(
-                by="sort_score", ascending=False).id.to_list()[:topn]
+            best_apo = (
+                links[(links.kind == "apo")]
+                .sort_values(by="sort_score")
+                .id.to_list()[0]
+            )
+            best_pred = (
+                links[(links.kind == "pred")]
+                .sort_values(by="sort_score", ascending=False)
+                .id.to_list()[0]
+            )
+            chain_id = self.system_id.split("__")[2]
             self._best_linked_structures = {
-                "apo": [self.get_linked_structure("apo", apo_id) for apo_id in best_apo],
-                "pred": [self.get_linked_structure("pred", pred_id) for pred_id in best_pred]}
+                "apo": {chain_id: self.get_linked_structure("apo", best_apo)},
+                "pred": {chain_id: self.get_linked_structure("pred", best_pred)},
+            }
         return self._best_linked_structures
 
     def create_masked_bound_unbound_complexes(
@@ -403,7 +466,6 @@ class PlinderSystem:
         remove_differing_atoms: bool = True,
         renumber_residues: bool = False,
         remove_differing_annotations: bool = False,
-
     ) -> tuple[Structure, Structure, Structure]:
         """Create complexes for apo and predicted cropped to common holo substructures.
 
@@ -433,31 +495,30 @@ class PlinderSystem:
             tuple[Structure, Structure, Structure]: A tuple of the cropped holo, apo, and predicted Structure objects, respectively.
 
         """
-        holo_structure = self.holo_structure()
-        alt_structure = self.alt_structure()
-        apo_structure = alt_structure["apo"]
-        pred_structure = alt_structure["pred"]
+        holo_structure = self.holo_structure
+        alt_structure = self.alt_structures
+        apo_structure_map = alt_structure["apo"]
+        pred_structure_map = alt_structure["pred"]
 
-        if apo_structure is not None:
+        if apo_structure_map is not None:
             # Ensure same number of chains in apo and holo
-            holo_structure, apo_structure = _align_monomers_with_mask(
-                holo_structure,
-                apo_structure,
-                remove_differing_atoms=remove_differing_atoms,
-                renumber_residues=renumber_residues,
-                remove_differing_annotations=remove_differing_annotations,
+            holo_structure, apo_structure = _align_structures_with_mask(
+                multi_chain_structure=holo_structure,
+                map_of_alt_monomer_structures=apo_structure_map,
+                remove_differing_atoms=True,
+                renumber_residues=False,
+                remove_differing_annotations=False,
             )
-            apo_structure.ligand_mols = holo_structure.ligand_mols
-        if pred_structure is not None:
+
+        if pred_structure_map is not None:
             # Ensure same number of chains in pred and holo
-            holo_structure, pred_structure = _align_monomers_with_mask(
-                holo_structure,
-                pred_structure,
-                remove_differing_atoms=remove_differing_atoms,
-                renumber_residues=renumber_residues,
-                remove_differing_annotations=remove_differing_annotations,
+            holo_structure, pred_structure = _align_structures_with_mask(
+                multi_chain_structure=holo_structure,
+                map_of_alt_monomer_structures=pred_structure_map,
+                remove_differing_atoms=True,
+                renumber_residues=False,
+                remove_differing_annotations=False,
             )
-            pred_structure.ligand_mols = holo_structure.ligand_mols
 
         return holo_structure, apo_structure, pred_structure
 
@@ -466,16 +527,22 @@ class PlinderSystem:
         """
         Load holo structure
         """
-        return Structure(
-            self.receptor_cif,
-            self.system_id)
+        return Structure(protein_path=self.receptor_cif, id=self.system_id)
 
     @property
-    def alt_structures(self, topn: int = 1) -> Structure | None:
+    def alt_structures(self) -> Structure | None:
         """
         Load apo structure
         """
-        best_structures = self.best_linked_structures_ids(topn)
-        return {kind: Structure(
-            alt_path,
-            self.system_id) for kind, alt_path in best_structures.items()}
+        best_structures = self.best_linked_structures_paths
+        return {
+            kind: {
+                chain: Structure(
+                    protein_path=alt_path,
+                    id=Path(alt_path).parent.name,
+                    structure_type=kind,
+                )
+            }
+            for kind, alts in best_structures.items()
+            for chain, alt_path in alts.items()
+        }

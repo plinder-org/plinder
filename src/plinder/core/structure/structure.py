@@ -4,7 +4,7 @@ from functools import lru_cache
 from pydantic import BaseModel
 
 from pathlib import Path
-from typing import Iterable, Optional, TYPE_CHECKING
+from typing import Iterable, Optional, List, Union, Any, TYPE_CHECKING
 import gzip
 import numpy as np
 import pandas as pd
@@ -15,6 +15,7 @@ from rdkit.Chem import rdMolTransforms
 import biotite.structure as struc
 from biotite.structure.atoms import AtomArray
 from biotite.structure.io.pdbx import get_structure
+import biotite.structure.io as strucio
 from biotite import TextFile
 from numpy.typing import NDArray
 from pydantic import ConfigDict
@@ -28,7 +29,8 @@ from pinder.core.structure.atoms import (
     get_seq_aligned_structures,
     get_per_chain_seq_alignments,
     invert_chain_seq_map,
-    resn2seq
+    resn2seq,
+    write_pdb,
 )
 from pinder.core.structure.contacts import get_atom_neighbors
 from pinder.core.structure import surgery
@@ -53,10 +55,11 @@ def get_rdkit_mol(ligand: Path | str):
     elif isinstance(ligand, Path):
         return next(Chem.SDMolSupplier(ligand))
 
+
 def apply_tranform_to_rdkit_mol(mol, transform_matrix):
-    rdMolTransforms.TransformConformer(
-        mol.GetConformer(0), transform_matrix)
+    rdMolTransforms.TransformConformer(mol.GetConformer(0), transform_matrix)
     return mol
+
 
 def biotite_ciffile() -> TextFile:
     from biotite.structure.io.pdbx import PDBxFile
@@ -78,7 +81,9 @@ def atom_array_from_cif_file(
                     mod = reader.read(f)
             else:
                 mod = reader.read(structure)
-            arr = get_structure(mod, model=1, use_author_fields=use_author_fields)  # noqa
+            arr = get_structure(
+                mod, model=1, use_author_fields=use_author_fields
+            )  # noqa
             return arr
         except Exception as e:
             log.error(f"Unable to parse {structure}! {str(e)}")
@@ -87,10 +92,10 @@ def atom_array_from_cif_file(
 
 class Structure(BaseModel):
     protein_path: Path
-    plinder_system_id: str
-    list_ligand_sdf_or_smiles: list[Path | str] | None = None
-    protein_atom_array: AtomArray | None  = None
-    ligand_mols: list[Chem.rdchem.Mol]  = None
+    id: str
+    list_ligand_sdf_or_smiles: Optional[List[Union[Path, str]]] = None
+    protein_atom_array: Optional[AtomArray] = None
+    ligand_mols: Optional[dict[str, Chem.rdchem.Mol]] = None
     add_ligand_hydrogen: bool = False
     structure_type: str = "holo"
 
@@ -104,8 +109,8 @@ class Structure(BaseModel):
     ----------
     protein_path : Path
         Protein structure cif path, could be holo, apo or pred path
-    plinder_system_id : str
-        PLINDER system id. If the structure is holo, this is used to load the holo structure
+    id : str
+        PLINDER system or apo/pred id. If the structure is holo, this is used to load the holo structure
     list_ligand_sdf_or_smiles : list[Path | str] | None
         SDF path or ligand smiles. This is optional for apo and pred structures
     protein_atom_array : AtomArray | None = None
@@ -118,28 +123,41 @@ class Structure(BaseModel):
         Structure type, "holo", "apo" or "pred"
     """
 
+    class Config:
+        arbitrary_types_allowed = True
+
     @staticmethod
     def read_structure_files(
         protein_path: Path,
         list_ligand_sdf_or_smiles: list[Path | str] | None,
-        add_ligand_hydrogen: bool = False) -> tuple[AtomArray | Chem.rdchem.Mol]:
+        add_ligand_hydrogen: bool = False,
+    ) -> tuple[AtomArray | Chem.rdchem.Mol]:
         try:
-            protein_arr = atom_array_from_cif_file(protein_path, use_author_fields = False)
+            protein_arr = atom_array_from_cif_file(
+                protein_path, use_author_fields=False
+            )
         except:
             # Sometimes b-factor field parsing fails, try without it.
-            protein_arr = atom_array_from_cif_file(protein_path, use_author_fields = False)
-            annotation_arr: NDArray[np.double | np.str_] = np.repeat(0.0, protein_arr.shape[0])
+            protein_arr = atom_array_from_cif_file(
+                protein_path, use_author_fields=False
+            )
+            annotation_arr: NDArray[np.double | np.str_] = np.repeat(
+                0.0, protein_arr.shape[0]
+            )
             protein_arr.set_annotation("b_factor", annotation_arr)
         if "" in set(protein_arr.element):
             try:
                 protein_arr.element = struc.infer_elements(protein_arr)
             except Exception:
-                log.debug(f"Found missing elements in {protein_path} but failed to infer")
+                log.debug(
+                    f"Found missing elements in {protein_path} but failed to infer"
+                )
         ligand_mols = {}
         if not (list_ligand_sdf_or_smiles is None):
             for ligand_sdf_or_smiles in list_ligand_sdf_or_smiles:
-                if isinstance(ligand_sdf_or_smiles, Path) \
-                    and (ligand_sdf_or_smiles.suffix == ".sdf"):
+                if isinstance(ligand_sdf_or_smiles, Path) and (
+                    ligand_sdf_or_smiles.suffix == ".sdf"
+                ):
                     ligand_mol = next(Chem.SDMolSupplier(ligand_sdf_or_smiles))
                     if add_ligand_hydrogen:
                         ligand_mol = Chem.AddHs(ligand_mol, addCoords=True)
@@ -152,10 +170,46 @@ class Structure(BaseModel):
                     ligand_mols[ligand_sdf_or_smiles] = ligand_mol
         return protein_arr, ligand_mols
 
-
     def __repr__(self) -> str:
         class_str: str = stringify_dataclass(self, 4)
         return class_str
+
+    def __add__(self, other: Structure) -> Structure:
+        combined_arr = self.protein_atom_array + other.protein_atom_array
+        combined_id = f"{self.id}--{other.id}"
+        combined_path = self.protein_path.parent / combined_id
+        structure_type = "_".join(
+            sorted(list({self.structure_type, other.structure_type}))
+        )
+
+        return Structure(
+            protein_path=combined_path,
+            id=combined_id,
+            list_ligand_sdf_or_smiles=self.list_ligand_sdf_or_smiles,
+            protein_atom_array=combined_arr,
+            ligand_mols=self.ligand_mols,
+            add_ligand_hydrogen=self.add_ligand_hydrogen,
+            structure_type=structure_type,
+        )
+
+    def save_to_disk(self, filepath: Path | None = None) -> None:
+        """Write Structure Atomarray to a PDB file.
+
+        Parameters
+        ----------
+        filepath : Path | None
+            Filepath to output PDB.
+            If not provided, will write to self.protein_path,
+            potentially overwriting if the file already exists!
+
+        Returns
+        -------
+        None
+
+        """
+        if not filepath:
+            filepath = self.protein_path
+        write_pdb(self.protein_atom_array, filepath)
 
     def filter(
         self,
@@ -171,12 +225,12 @@ class Structure(BaseModel):
             arr = self.protein_atom_array[atom_mask].copy()
             return Structure(
                 protein_path=self.protein_path,
-                plinder_system_id=self.plinder_system_id,
+                id=self.id,
                 list_ligand_sdf_or_smiles=self.list_ligand_sdf_or_smiles,
                 protein_atom_array=arr,
                 ligand_mols=self.ligand_mols,
                 add_ligand_hydrogen=self.add_ligand_hydrogen,
-                structure_type=self.structure_type
+                structure_type=self.structure_type,
             )
 
         self.protein_atom_array = self.protein_atom_array[atom_mask]
@@ -199,11 +253,12 @@ class Structure(BaseModel):
         renumber_residues: bool = False,
         remove_differing_annotations: bool = False,
     ) -> tuple[Structure, Structure]:
-        ref_at = other.atom_array.copy()
-        target_at = self.atom_array.copy()
+        ref_at = other.protein_atom_array.copy()
+        target_at = self.protein_atom_array.copy()
         target2ref_seq = get_per_chain_seq_alignments(ref_at, target_at)
         ref2target_seq = invert_chain_seq_map(target2ref_seq)
         ref_at, target_at = get_seq_aligned_structures(ref_at, target_at)
+
         if remove_differing_atoms:
             # Even if atom counts are identical, annotation categories must be the same
             # First modify annotation arrays to use struc.filter_intersection,
@@ -222,35 +277,42 @@ class Structure(BaseModel):
             else:
                 ref_at = ref_at[ref_target_mask].copy()
                 target_at = target_at[target_ref_mask].copy()
+
         if not renumber_residues:
             target_at.res_id = np.array(
                 [ref2target_seq[at.chain_id][at.res_id] for at in target_at]
             )
+
         if copy:
             self_struct = Structure(
                 protein_path=self.protein_path,
-                plinder_system_id=self.plinder_system_id,
+                id=self.id,
                 list_ligand_sdf_or_smiles=self.list_ligand_sdf_or_smiles,
                 protein_atom_array=target_at,
                 ligand_mols=self.ligand_mols,
                 add_ligand_hydrogen=self.add_ligand_hydrogen,
-                structure_type=self.structure_type
+                structure_type=self.structure_type,
             )
 
             other_struct = Structure(
                 protein_path=other.protein_path,
-                plinder_system_id=other.plinder_system_id,
+                id=other.id,
                 list_ligand_sdf_or_smiles=other.list_ligand_sdf_or_smiles,
                 protein_atom_array=ref_at,
                 ligand_mols=other.ligand_mols,
                 add_ligand_hydrogen=other.add_ligand_hydrogen,
-                structure_type=other.structure_type
+                structure_type=other.structure_type,
             )
 
             return self_struct, other_struct
-        other.atom_array = ref_at
-        self.atom_array = target_at
+        other.protein_atom_array = ref_at
+        self.protein_atom_array = target_at
         return self, other
+
+    def set_chain(self, chain_id: str) -> None:
+        self.protein_atom_array.chain_id = np.repeat(
+            chain_id, self.protein_atom_array.shape[0]
+        )
 
     def superimpose(
         self,
@@ -258,29 +320,29 @@ class Structure(BaseModel):
     ) -> tuple[Structure, float, float]:
         # max_iterations=1 -> no outlier removal
         superimposed, _, other_anchors, self_anchors = _superimpose_common_atoms(
-            other.atom_array, self.atom_array, max_iterations=1
+            other.protein_atom_array, self.protein_atom_array, max_iterations=1
         )
         raw_rmsd = struc.rmsd(
-            other.atom_array.coord[other_anchors],
+            other.protein_atom_array.coord[other_anchors],
             superimposed.coord[self_anchors],
         )
 
         superimposed, _, other_anchors, self_anchors = _superimpose_common_atoms(
-            other.atom_array, self.atom_array
+            other.protein_atom_array, self.protein_atom_array
         )
         refined_rmsd = struc.rmsd(
-            other.atom_array.coord[other_anchors],
+            other.protein_atom_array.coord[other_anchors],
             superimposed.coord[self_anchors],
         )
         return (
             Structure(
                 protein_path=self.protein_path,
-                plinder_system_id=self.plinder_system_id,
+                id=self.id,
                 list_ligand_sdf_or_smiles=self.list_ligand_sdf_or_smiles,
                 protein_atom_array=superimposed,
                 ligand_mols=self.ligand_mols,
                 add_ligand_hydrogen=self.add_ligand_hydrogen,
-                structure_type=self.structure_type
+                structure_type=self.structure_type,
             ),
             raw_rmsd,
             refined_rmsd,
@@ -295,15 +357,21 @@ class Structure(BaseModel):
     @property
     def ligand_coords(self) -> dict[str, NDArray[np.double]]:
         """ndarray[np.double]: The coordinates of the ligand atoms in the structure."""
-        ligand_coords: NDArray[np.double] = {tag: mol.GetConformer().GetPositions() \
-                                              for tag, mol in self.ligand_mols.items()}
+        ligand_coords: NDArray[np.double] = {
+            tag: mol.GetConformer().GetPositions()
+            for tag, mol in self.ligand_mols.items()
+        }
         return ligand_coords
 
     @property
     def ligand_bonds(self) -> dict[str, list[tuple[int, int, str]]]:
         return {
-            tag: [(at.GetBeginAtomIdx(), at.GetEndAtomIdx(), at.GetBondType()) for at in mol] \
-                for tag, mol in self.ligand_mols.items()}
+            tag: [
+                (at.GetBeginAtomIdx(), at.GetEndAtomIdx(), at.GetBondType())
+                for at in mol.GetBonds()
+            ]
+            for tag, mol in self.ligand_mols.items()
+        }
 
     @property
     def protein_dataframe(self) -> pd.DataFrame:
@@ -325,33 +393,33 @@ class Structure(BaseModel):
                     "y": at.coord[1],
                     "z": at.coord[2],
                 }
-                for at in self.atom_array
+                for at in self.protein_atom_array
             ]
         )
 
     @property
     def protein_backbone_mask(self) -> NDArray[np.bool_]:
         """ndarray[np.bool\_]: a logical mask for backbone atoms."""
-        mask: NDArray[np.bool_] = struc.filter_peptide_backbone(self.atom_array)
+        mask: NDArray[np.bool_] = struc.filter_peptide_backbone(self.protein_atom_array)
         return mask
 
     @property
     def protein_calpha_mask(self) -> NDArray[np.bool_]:
         """ndarray[np.bool\_]: a logical mask for alpha carbon atoms."""
-        mask: NDArray[np.bool_] = self.atom_array.atom_name == "CA"
+        mask: NDArray[np.bool_] = self.protein_atom_array.atom_name == "CA"
         return mask
 
     @property
     def protein_n_atoms(self) -> int:
         """int: The number of atoms in the structure."""
-        n: int = self.atom_array.shape[0]
+        n: int = self.protein_atom_array.shape[0]
         return n
 
     @property
     def protein_chains(self) -> list[str]:
         """list[str]: The list of chain IDs in the structure."""
         ch_list = self._attr_from_atom_array(
-            self.atom_array, "chain_id", distinct=True, sort=True
+            self.protein_atom_array, "chain_id", distinct=True, sort=True
         )
         return [str(ch) for ch in ch_list]
 
@@ -359,7 +427,7 @@ class Structure(BaseModel):
     def protein_chain_sequence(self) -> dict[str, list[str]]:
         """dict[str, list[str]]: The chain sequence dictionary, where keys are chain IDs and values are lists of residue codes."""
         ch_seq: dict[str, list[str]] = (
-            self.dataframe[["chain_id", "res_code", "res_name", "res_id"]]
+            self.protein_dataframe[["chain_id", "res_code", "res_name", "res_id"]]
             .drop_duplicates()
             .groupby("chain_id")["res_code"]
             .apply(list)
@@ -370,14 +438,16 @@ class Structure(BaseModel):
     @property
     def protein_sequence(self) -> str:
         """str: The amino acid sequence of the structure."""
-        numbering, resn = struc.get_residues(self.atom_array)
+        numbering, resn = struc.get_residues(self.protein_atom_array)
         seq: str = resn2seq(resn)
         return seq
 
     @property
     def protein_fasta(self) -> str:
         """str: The fasta representation of the structure sequence."""
-        fasta_str: str = "\n".join([f">{self.filepath.stem}", self.sequence])
+        fasta_str: str = "\n".join(
+            [f">{self.protein_path.stem}", self.protein_sequence]
+        )
         return fasta_str
 
     @property
@@ -385,7 +455,7 @@ class Structure(BaseModel):
         """torch.Tensor: The tokenized sequence representation of the structure sequence."""
         import torch
 
-        seq_encoding = torch.tensor([pc.AA_TO_INDEX[x] for x in self.sequence])
+        seq_encoding = torch.tensor([pc.AA_TO_INDEX[x] for x in self.protein_sequence])
         tokenized: torch.Tensor = seq_encoding.long()
         return tokenized
 
@@ -393,7 +463,7 @@ class Structure(BaseModel):
     def protein_residue_names(self) -> list[str]:
         """list[str]: The list of distinct residue names in the structure."""
         res_list = self._attr_from_atom_array(
-            self.atom_array, "res_name", distinct=True, sort=True
+            self.protein_atom_array, "res_name", distinct=True, sort=True
         )
         return [str(r) for r in res_list]
 
@@ -401,7 +471,7 @@ class Structure(BaseModel):
     def protein_residues(self) -> list[int]:
         """list[int]: The list of distinct residue IDs in the structure."""
         res_list = self._attr_from_atom_array(
-            self.atom_array, "res_id", distinct=True, sort=True
+            self.protein_atom_array, "res_id", distinct=True, sort=True
         )
         return [int(r) for r in res_list]
 
@@ -409,7 +479,7 @@ class Structure(BaseModel):
     def protein_atom_names(self) -> list[str]:
         """list[str]: The list of distinct atom names in the structure."""
         at_list = self._attr_from_atom_array(
-            self.atom_array, "atom_name", distinct=True, sort=True
+            self.protein_atom_array, "atom_name", distinct=True, sort=True
         )
         return [str(a) for a in at_list]
 
@@ -417,7 +487,7 @@ class Structure(BaseModel):
     def protein_b_factor(self) -> list[float]:
         """list[float]: A list of B-factor values for each atom in the structure."""
         b_factor = self._attr_from_atom_array(
-            self.atom_array, "b_factor", distinct=False, sort=False
+            self.protein_atom_array, "b_factor", distinct=False, sort=False
         )
         return [float(b) for b in b_factor]
 
@@ -432,18 +502,30 @@ class Structure(BaseModel):
             prop = sorted(prop)
         return list(prop)
 
-    def __post_init__(self) -> None:
+    def model_post_init(self, __context: Any) -> None:
         # pydantic v2 renames this to dataclass post_init
         if (self.structure_type) == "holo":
-            self.protein_path = cfg.local_path / "system" / f"{self.plinder_system_id}" / "receptor.cif"
-            self.ligand_dir = cfg.local_path / "system" / f"{self.plinder_system_id}" / "ligand_sdf"
-            self.list_ligand_sdf_or_smiles =  list(self.ligand_dir.glob("*sdf"))
+            self.protein_path = (
+                Path(cfg.data.plinder_dir) / "systems" / f"{self.id}" / "receptor.cif"
+            )
+            ligand_dir = (
+                Path(cfg.data.plinder_dir) / "systems" / f"{self.id}" / "ligand_files"
+            )
+            self.list_ligand_sdf_or_smiles = list(ligand_dir.glob("*sdf"))
 
-        if self.protein_atom_array is None:
-            self.protein_atom_array, self.ligand_mols = self.read_structure_file(
+        if (self.protein_atom_array is None) & (self.ligand_mols is None):
+            self.protein_atom_array, self.ligand_mols = self.read_structure_files(
                 protein_path=self.protein_path,
                 list_ligand_sdf_or_smiles=self.list_ligand_sdf_or_smiles,
-                add_ligand_hydrogen=self.add_ligand_hydrogen)
+                add_ligand_hydrogen=self.add_ligand_hydrogen,
+            )
+        try:
+            getattr(self.protein_atom_array, "b-factor")
+        except AttributeError:
+            b_factors: NDArray[np.double | np.str_] = np.repeat(
+                0.0, self.protein_atom_array.shape[0]
+            )
+            self.protein_atom_array.set_annotation("b_factor", b_factors)
 
 
 def find_potential_interchain_bonded_atoms(
