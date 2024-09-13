@@ -3,20 +3,17 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Tuple, Callable
+from typing import Any, Callable, Dict, List, Literal, Tuple
 
 import pandas as pd
-
 import torch
-from torch.utils.data import Dataset
 from torch.utils.data import DataLoader, Dataset, Sampler
 
+from plinder.core import system
+from plinder.core.loader.transforms import StructureTransform
 from plinder.core.scores.links import query_links
 from plinder.core.split.utils import get_split
-from plinder.core import system
-
 from plinder.core.structure.structure import Structure
-from plinder.core.loader.transforms import StructureTransform
 
 
 def structure2tensor_transform(structure: Structure) -> dict[str, torch.Tensor]:
@@ -102,9 +99,11 @@ class PlinderDataset(Dataset):  # type: ignore
 
         if not self._file_paths_only:
             # avoid loading structure if not needed
-            holo_structure, apo_structure, pred_structure = (
-                s.create_masked_bound_unbound_complexes()
-            )
+            (
+                holo_structure,
+                apo_structure,
+                pred_structure,
+            ) = s.create_masked_bound_unbound_complexes()
             cropped_structures = {
                 "holo": holo_structure,
                 "apo": apo_structure,

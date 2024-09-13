@@ -1,39 +1,35 @@
 from __future__ import annotations
 
-from functools import lru_cache
-from pydantic import BaseModel
-
-from pathlib import Path
-from typing import Iterable, Optional, List, Union, Any, TYPE_CHECKING
 import gzip
-import numpy as np
-import pandas as pd
-from rdkit import Chem
-from rdkit.Chem import rdDistGeom
-from rdkit.Chem import rdMolTransforms
+from functools import lru_cache
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Iterable, List, Optional, Union
 
 import biotite.structure as struc
+import numpy as np
+import pandas as pd
+from biotite import TextFile
 from biotite.structure.atoms import AtomArray
 from biotite.structure.io.pdbx import get_structure
-import biotite.structure.io as strucio
-from biotite import TextFile
 from numpy.typing import NDArray
-from pydantic import ConfigDict
-from pydantic.dataclasses import dataclass
-
-# TODO: Decide whether to lift these from pinder or import them
-from pinder.core.utils import setup_logger, constants as pc
-from pinder.core.structure.superimpose import superimpose_chain
-from pinder.core.utils.dataclass import stringify_dataclass
+from pinder.core.structure import surgery
 from pinder.core.structure.atoms import (
-    get_seq_aligned_structures,
     get_per_chain_seq_alignments,
+    get_seq_aligned_structures,
     invert_chain_seq_map,
     resn2seq,
     write_pdb,
 )
 from pinder.core.structure.contacts import get_atom_neighbors
-from pinder.core.structure import surgery
+from pinder.core.structure.superimpose import superimpose_chain
+from pinder.core.utils import constants as pc
+
+# TODO: Decide whether to lift these from pinder or import them
+from pinder.core.utils import setup_logger
+from pinder.core.utils.dataclass import stringify_dataclass
+from pydantic import BaseModel
+from rdkit import Chem
+from rdkit.Chem import rdDistGeom, rdMolTransforms
 
 from plinder.core.utils.config import get_config
 
@@ -81,9 +77,7 @@ def atom_array_from_cif_file(
                     mod = reader.read(f)
             else:
                 mod = reader.read(structure)
-            arr = get_structure(
-                mod, model=1, use_author_fields=use_author_fields
-            )  # noqa
+            arr = get_structure(mod, model=1, use_author_fields=use_author_fields)  # noqa
             return arr
         except Exception as e:
             log.error(f"Unable to parse {structure}! {str(e)}")

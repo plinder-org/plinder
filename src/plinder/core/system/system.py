@@ -8,10 +8,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Sequence
 
 import numpy as np
-from numpy.typing import NDArray
 import pandas as pd
-from rdkit import Chem
 import torch
+from numpy.typing import NDArray
+from rdkit import Chem
 from torch import Tensor
 
 if TYPE_CHECKING:
@@ -19,7 +19,13 @@ if TYPE_CHECKING:
 
 
 from plinder.core.index import utils
+from plinder.core.loader.ligand_featurizer import (
+    generate_conformer,
+    lig_atom_featurizer,
+)
 from plinder.core.scores.links import query_links
+from plinder.core.structure.structure import Structure
+from plinder.core.utils import constants as pc
 from plinder.core.utils.cpl import get_plinder_path
 from plinder.core.utils.io import (
     download_alphafold_cif_file,
@@ -27,12 +33,6 @@ from plinder.core.utils.io import (
 )
 from plinder.core.utils.log import setup_logger
 from plinder.core.utils.unpack import get_zips_to_unpack
-from plinder.core.structure.structure import Structure
-from plinder.core.utils import constants as pc
-from plinder.core.loader.ligand_featurizer import (
-    lig_atom_featurizer,
-    generate_conformer,
-)
 
 LOG = setup_logger(__name__)
 
@@ -177,7 +177,7 @@ def pad_and_stack(
     """
     assert (
         len({t.ndim for t in tensors}) == 1
-    ), f"All `tensors` must have the same number of dimensions."
+    ), "All `tensors` must have the same number of dimensions."
 
     # Pad all dims if none are specified
     if dims_to_pad is None:
