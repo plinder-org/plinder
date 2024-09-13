@@ -18,13 +18,16 @@
 
 ## Rules for valid model training
 
-- Participants **MUST** use the provided train and validation sets from PINDER or PLINDER; no external data augmentation is allowed.
+- Participants **MUST** use the sequences and SMILES in the provided train and validation sets from PINDER or PLINDER.; In order to ensure no leakage, no external data augmentation is allowed.
+- If starting structures/conformations need to be generated for the model, then this can only be done from the training and validation sequences and SMILES. Note that this is only the case for train & validation - no external folding methods or starting structures are allowed for the test set under any circumstance!. Only the predicted structures/conformers themselves may be used in this way, the embeddings or models used to generate such predictions may not. E.g. it is not valid to “distill” a method that was not trained on PLINDER/PINDER
 - The PINDER and PLINDER datasets should be used independently; combining the sets is considered augmentation and is not allowed.
-- For inference, only the canonical sequences and structures in the evaluation sets may be used; no alternate templates or sequences are permitted. Inputs will be as follows:
-  - PLINDER: `(SMILES, monomer protein structure, monomer FASTA)`
-  - PINDER: `(monomer protein structure 1, monomer protein structure 2, FASTA 1, FASTA 2)`
+- For inference, only the canonical sequences, structures and MSAs in the evaluation sets may be used; no alternate templates or sequences are permitted. Inputs will be as follows:
+  - PLINDER: (SMILES, monomer protein structure, monomer FASTA, monomer MSA)
+  - PINDER: (monomer protein structure 1, monomer protein structure 2, FASTA 1, FASTA 2, MSA 1, MSA 2)
 - Model selection must be performed exclusively on the validation set designed for this purpose within the PINDER and PLINDER datasets.
-- Methods relying on any model derivatives or embeddings trained on structures outside the PINDER/PLINDER training set are not permitted (e.g., ESM2, MSA: ✅; ESM3/ESMFold/SAProt: ❌).
+- Methods relying on any model derivatives or embeddings trained on structures outside the PINDER/PLINDER training set are not permitted (e.g., ESM2, MSA: ✅; ESM3/ESMFold/SAProt/UniMol: ❌).
+
+
 - For instruction on how to load training and validation data, check the links below:
   - [PLINDER](#mlsb-notebook-target)
   - [PINDER](https://pinder-org.github.io/pinder/pinder-mlsb.html#accessing-and-loading-data-for-training)
