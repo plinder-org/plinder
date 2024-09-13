@@ -11,19 +11,21 @@
 **Detailed Instructions Release:** September 24th, 2024, at the [training workshop](https://unibas.zoom.us/meeting/register/u5EkcOusrzsiHtLDImocB5PM0RLK9vC-g-kW#/registration).<br>
 **Leaderboard Opens:** October 9th, 2024 (following acceptance notifications for MLSB).<br>
 **Leaderboard Closes:** November 9th, 2024.<br>
-**Winner Notification:** Wednesday, November 27th, 2024, approximately 2-3 weeks before the workshop (before Thanksgiving).<br>
+**Winner Notification:** Wednesday, November 27th, 2024.<br>
 **MLSB Workshop:** December 14-15th, 2024.<br>
 
 (mlsb-rules-target)=
+
 ## Rules for valid model training
 
-- Participants MUST use the provided train and validation sets from PINDER or PLINDER; no external data augmentation is allowed.
+- Participants **MUST** use the sequences and SMILES in the provided train and validation sets from PINDER or PLINDER. In order to ensure no leakage, external data augmentation is not allowed.
+- If starting structures/conformations need to be generated for the model, then this can only be done from the training and validation sequences and SMILES. Note that this is only the case for train & validation - no external folding methods or starting structures are allowed for the test set under any circumstance!. Only the predicted structures/conformers themselves may be used in this way, the embeddings or models used to generate such predictions may not. E.g. it is not valid to “distill” a method that was not trained on PLINDER/PINDER
 - The PINDER and PLINDER datasets should be used independently; combining the sets is considered augmentation and is not allowed.
-- For inference, only the canonical sequences and structures in the evaluation sets may be used; no alternate templates or sequences are permitted. Inputs will be as follows:
-  - PLINDER: `(SMILES, monomer protein structure, monomer FASTA)`
-  - PINDER: `(monomer protein structure 1, monomer protein structure 2, FASTA 1, FASTA 2)`
+- For inference, only the inputs provided in the evaluation sets may be used: canonical sequences, structures and MSAs; no alternate templates or sequences are permitted. The inputs that will be used by assessors for each challenge track is as follows:
+  - PLINDER: (SMILES, monomer protein structure, monomer FASTA, monomer MSA)
+  - PINDER: (monomer protein structure 1, monomer protein structure 2, FASTA 1, FASTA 2, MSA 1, MSA 2)
 - Model selection must be performed exclusively on the validation set designed for this purpose within the PINDER and PLINDER datasets.
-- Methods relying on any model derivatives or embeddings trained on structures outside the PINDER/PLINDER training set are not permitted (e.g., ESM2, MSA: ✅; ESM3/ESMFold/SAProt: ❌).
+- Methods relying on any model derivatives or embeddings trained on structures outside the PINDER/PLINDER training set are not permitted (e.g., ESM2, MSA: ✅; ESM3/ESMFold/SAProt/UniMol: ❌).
 - For instruction on how to load training and validation data, check the links below:
   - [PLINDER](#mlsb-notebook-target)
   - [PINDER](https://pinder-org.github.io/pinder/pinder-mlsb.html#accessing-and-loading-data-for-training)
@@ -34,7 +36,9 @@
 - No binding site information can be used
 - For each system, you are allowed to submit at most 1 prediction! If your method produces multiple samples, you must rank/score the predictions and only supply a single prediction as the top-ranking prediction that will be used in the leaderboard.
 - Model inference should run in under 10 minutes per system on a GPU like T4, A10G
-- The final predictions must be in PDB file format and contain two chains: Receptor (chain R) and Ligand (chain L)
+- The final predictions must be in:
+  - PINDER track: CIF/PDB file format and contain two chains: Receptor (chain R) and Ligand (chain L)
+  - PLINDER track: CIF/PDB file format for Receptor (protein) and SDF file format for Ligand (small molecule)
 - Systems without a valid prediction will be penalized.
 
 ## Rules for valid submission:
@@ -57,7 +61,7 @@ Submission system will use Hugging Face Spaces. To qualify for submission, each 
 
 - Primary Ranking Metric:
   - PLINDER: lDDT-PLI
-  - PINDER: Percent CAPRI acceptable or higher
+  - PINDER: DockQ
 
 Other metrics computed by PINDER/PLINDER will be displayed on the leaderboard but will not influence the ranking.
 
