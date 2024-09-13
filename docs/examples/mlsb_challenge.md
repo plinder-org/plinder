@@ -26,8 +26,6 @@
   - PINDER: (monomer protein structure 1, monomer protein structure 2, FASTA 1, FASTA 2, MSA 1, MSA 2)
 - Model selection must be performed exclusively on the validation set designed for this purpose within the PINDER and PLINDER datasets.
 - Methods relying on any model derivatives or embeddings trained on structures outside the PINDER/PLINDER training set are not permitted (e.g., ESM2, MSA: ✅; ESM3/ESMFold/SAProt/UniMol: ❌).
-
-
 - For instruction on how to load training and validation data, check the links below:
   - [PLINDER](#mlsb-notebook-target)
   - [PINDER](https://pinder-org.github.io/pinder/pinder-mlsb.html#accessing-and-loading-data-for-training)
