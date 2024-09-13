@@ -5,9 +5,14 @@ from __future__ import annotations
 import json
 from functools import cached_property
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Sequence
 
+import numpy as np
+from numpy.typing import NDArray
 import pandas as pd
+from rdkit import Chem
+import torch
+from torch import Tensor
 
 if TYPE_CHECKING:
     from ost import mol
@@ -23,8 +28,258 @@ from plinder.core.utils.io import (
 from plinder.core.utils.log import setup_logger
 from plinder.core.utils.unpack import get_zips_to_unpack
 from plinder.core.structure.structure import Structure
+from plinder.core.utils import constants as pc
+from plinder.core.loader.ligand_featurizer import (
+    lig_atom_featurizer,
+    generate_conformer,
+)
 
 LOG = setup_logger(__name__)
+
+RES_IDX_PAD_VALUE = -99
+COORDS_PAD_VALUE = -100
+ATOM_TYPE_PAD_VALUE = -1
+
+
+def structure2tensor(
+    protein_atom_coordinates: NDArray[np.double] | None = None,
+    protein_atom_types: NDArray[np.str_] | None = None,
+    protein_residue_coordinates: NDArray[np.double] | None = None,
+    protein_residue_ids: NDArray[np.int_] | None = None,
+    protein_residue_types: NDArray[np.str_] | None = None,
+    ligand_mols: Chem.rdchem.Mol = None,
+    dtype: torch.dtype = torch.float32,
+    use_ligand_conformer: bool = True,
+) -> dict[str, torch.Tensor]:
+    property_dict = {}
+    if protein_atom_types is not None:
+        types_array_ele = np.zeros(
+            (len(protein_atom_types), len(set(list(pc.ELE2NUM.values()))))
+        )
+        for i, name in enumerate(protein_atom_types):
+            types_array_ele[i, pc.ELE2NUM.get(name, "C")] = 1.0
+
+        property_dict["protein_atom_types"] = torch.tensor(types_array_ele).type(dtype)
+
+    if protein_residue_types is not None:
+        unknown_name_idx = max(pc.AA_TO_INDEX.values()) + 1
+        types_array_res = np.zeros((len(protein_residue_types), 1))
+        for i, name in enumerate(protein_residue_types):
+            types_array_res[i] = pc.AA_TO_INDEX.get(name, unknown_name_idx)
+        property_dict["protein_residue_types"] = torch.tensor(types_array_res).type(
+            dtype
+        )
+    if protein_atom_coordinates is not None:
+        property_dict["protein_atom_coordinates"] = torch.tensor(
+            protein_atom_coordinates, dtype=dtype
+        )
+    if protein_residue_coordinates is not None:
+        property_dict["protein_residue_coordinates"] = torch.tensor(
+            protein_residue_coordinates, dtype=dtype
+        )
+    if protein_residue_ids is not None:
+        property_dict["protein_residue_ids"] = torch.tensor(
+            protein_residue_ids, dtype=dtype
+        )
+    if ligand_mols is not None:
+        property_dict["ligand_features"] = torch.tensor(
+            [lig_atom_featurizer(ligand_mol) for ligand_mol in ligand_mols]
+        )
+        if use_ligand_conformer:
+            ligand_mols = [generate_conformer(ligand_mol) for ligand_mol in ligand_mols]
+        lig_coords = torch.tensor(
+            [ligand_mol.GetConformer().GetPositions() for ligand_mol in ligand_mols]
+        ).float()
+
+        property_dict["ligand_atom_coordinates"] = lig_coords
+
+    return property_dict
+
+
+def pad_to_max_length(
+    mat: Tensor,
+    max_length: int | Sequence[int] | Tensor,
+    dims: Sequence[int],
+    value: int | float | None = None,
+) -> Tensor:
+    """Takes a tensor and pads it to maximum length with right padding on the specified dimensions.
+
+    Parameters:
+        mat (Tensor): The tensor to pad. Can be of any shape
+        max_length (int | Sequence[int] | Tensor): The size of the tensor along specified dimensions after padding.
+        dims (Sequence[int]): The dimensions to pad. Must have the same number of elements as `max_length`.
+        value (int, optional): The value to pad with, by default None
+
+    Returns:
+        Tensor : The padded tensor. Below are examples of input and output shapes
+            Example 1:
+                input: (2, 3, 4), max_length: 5, dims: [0, 2]
+                output: (5, 3, 5)
+            Example 2:
+                input: (2, 3, 4), max_length: 5, dims: [0]
+                output: (5, 3, 4)
+            Example 3:
+                input: (2, 3, 4), max_length: [5, 7], dims: [0, 2]
+                output: (5, 3, 7)
+
+    """
+    if not isinstance(max_length, int):
+        assert len(dims) == len(max_length)
+
+    num_dims = len(mat.shape)
+    pad_idxs = [(num_dims - i) * 2 - 1 for i in dims]
+
+    if isinstance(max_length, int):
+        pad_sizes = [
+            max_length - mat.shape[int(-(i + 1) / 2 + num_dims)] if i in pad_idxs else 0
+            for i in range(num_dims * 2)
+        ]
+    else:
+        max_length_list = (
+            list(max_length) if not isinstance(max_length, list) else max_length
+        )
+        pad_sizes = [
+            (
+                max_length_list[int(-(i + 1) / 2 + num_dims)]
+                - mat.shape[int(-(i + 1) / 2 + num_dims)]
+                if i in pad_idxs
+                else 0
+            )
+            for i in range(num_dims * 2)
+        ]
+
+    return torch.nn.functional.pad(input=mat, pad=tuple(pad_sizes), value=value)
+
+
+def pad_and_stack(
+    tensors: list[Tensor],
+    dim: int = 0,
+    dims_to_pad: list[int] | None = None,
+    value: int | float | None = None,
+) -> Tensor:
+    """Pads a list of tensors to the maximum length observed along each dimension and then stacks them along a new dimension (given by `dim`).
+
+    Parameters:
+        tensors (list[Tensor]): A list of tensors to pad and stack
+        dim (int): The new dimension to stack along.
+        dims_to_pad (list[int] | None): The dimensions to pad
+        value (int | float | None, optional): The value to pad with, by default None
+
+    Returns:
+        Tensor: The padded and stacked tensor. Below are examples of input and output shapes
+            Example 1: Sequence features (although redundant with torch.rnn.utils.pad_sequence)
+                input: [(2,), (7,)], dim: 0
+                output: (2, 7)
+            Example 2: Pair features (e.g., pairwise coordinates)
+                input: [(4, 4, 3), (7, 7, 3)], dim: 0
+                output: (2, 7, 7, 3)
+
+    """
+    assert (
+        len({t.ndim for t in tensors}) == 1
+    ), f"All `tensors` must have the same number of dimensions."
+
+    # Pad all dims if none are specified
+    if dims_to_pad is None:
+        dims_to_pad = list(range(tensors[0].ndim))
+
+    # Find the max length of the dims_to_pad
+    shapes = torch.tensor([t.shape for t in tensors])
+    envelope = shapes.max(dim=0).values
+    max_length = envelope[dims_to_pad]
+
+    padded_matrices = [
+        pad_to_max_length(t, max_length, dims_to_pad, value) for t in tensors
+    ]
+    return torch.stack(padded_matrices, dim=dim)
+
+
+def collate_complex(
+    structures: list[dict[str, Tensor]],
+    coords_pad_value: int = COORDS_PAD_VALUE,
+    atom_type_pad_value: int = ATOM_TYPE_PAD_VALUE,
+    residue_id_pad_value: int = RES_IDX_PAD_VALUE,
+) -> dict[str, Tensor]:
+    protein_atom_types = []
+    protein_residue_types = []
+    protein_atom_coordinates = []
+    protein_residue_coordinates = []
+    protein_residue_ids = []
+    ligand_features = []
+    ligand_atom_coordinates = []
+
+    for x in structures:
+        protein_atom_types.append(x["protein_atom_types"])
+        protein_residue_types.append(x["rprotein_esidue_types"])
+        protein_atom_coordinates.append(x["protein_atom_coordinates"])
+        protein_residue_coordinates.append(x["protein_residue_coordinates"])
+        protein_residue_ids.append(x["protein_residue_ids"])
+        ligand_features.append(x["ligand_features"])
+        ligand_atom_coordinates.append(x["ligand_atom_coordinates"])
+    return {
+        "protein_atom_types": pad_and_stack(
+            protein_atom_types, dim=0, value=atom_type_pad_value
+        ),
+        "protein_residue_types": pad_and_stack(
+            protein_residue_types, dim=0, value=atom_type_pad_value
+        ),
+        "protein_atom_coordinates": pad_and_stack(
+            protein_atom_coordinates, dim=0, value=coords_pad_value
+        ),
+        "protein_residue_coordinates": pad_and_stack(
+            protein_residue_coordinates, dim=0, value=coords_pad_value
+        ),
+        "protein_residue_ids": pad_and_stack(
+            protein_residue_ids, dim=0, value=residue_id_pad_value
+        ),
+        "ligand_features": pad_and_stack(
+            ligand_features, dim=0, value=atom_type_pad_value
+        ),
+        "ligand_atom_coordinates": pad_and_stack(
+            ligand_atom_coordinates, dim=0, value=coords_pad_value
+        ),
+    }
+
+
+def collate_batch(
+    batch: list[dict[str, dict[str, Tensor] | str]],
+) -> dict[str, dict[str, Tensor] | list[str]]:
+    """Collate a batch of PlinderDataset items into a merged mini-batch of Tensors.
+
+    Used as the default collate_fn for the torch DataLoader consuming PlinderDataset.
+
+    Parameters:
+        batch (list[dict[str, dict[str, Tensor] | str]]): A list of dictionaries
+        containing the data for each item in the batch.
+
+    Returns:
+        dict[str, dict[str, Tensor] | list[str]]: A dictionary containing
+        the merged Tensors for the batch.
+
+    """
+    sample_ids: list[str] = []
+    target_ids: list[str] = []
+    target_structures: list[dict[str, Tensor]] = []
+    feature_structures: list[dict[str, Tensor]] = []
+    for x in batch:
+        assert isinstance(x["id"], str)
+        assert isinstance(x["input_id"], str)
+        assert isinstance(x["target_id"], str)
+        assert isinstance(x["target"], dict)
+        assert isinstance(x["input_features"], dict)
+
+        sample_ids.append(x["input_id"])
+        target_ids.append(x["target_id"])
+        target_structures.append(x["target"])
+        feature_structures.append(x["input_feature"])
+
+    collated_batch: dict[str, dict[str, Tensor] | list[str]] = {
+        "target": collate_complex(target_structures),
+        "input_features": collate_complex(feature_structures),
+        "input_id": sample_ids,
+        "target_id": target_ids,
+    }
+    return collated_batch
 
 
 def _align_monomers_with_mask(
@@ -505,9 +760,9 @@ class PlinderSystem:
             holo_structure, apo_structure = _align_structures_with_mask(
                 multi_chain_structure=holo_structure,
                 map_of_alt_monomer_structures=apo_structure_map,
-                remove_differing_atoms=True,
-                renumber_residues=False,
-                remove_differing_annotations=False,
+                remove_differing_atoms=remove_differing_atoms,
+                renumber_residues=renumber_residues,
+                remove_differing_annotations=remove_differing_annotations,
             )
 
         if pred_structure_map is not None:
@@ -515,9 +770,9 @@ class PlinderSystem:
             holo_structure, pred_structure = _align_structures_with_mask(
                 multi_chain_structure=holo_structure,
                 map_of_alt_monomer_structures=pred_structure_map,
-                remove_differing_atoms=True,
-                renumber_residues=False,
-                remove_differing_annotations=False,
+                remove_differing_atoms=remove_differing_atoms,
+                renumber_residues=renumber_residues,
+                remove_differing_annotations=remove_differing_annotations,
             )
 
         return holo_structure, apo_structure, pred_structure

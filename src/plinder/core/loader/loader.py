@@ -3,15 +3,34 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, Literal
+from typing import Any, Dict, List, Literal, Tuple, Callable
 
-import atom3d.util.formats as fo
 import pandas as pd
+
+import torch
 from torch.utils.data import Dataset
+from torch.utils.data import DataLoader, Dataset, Sampler
 
 from plinder.core.scores.links import query_links
 from plinder.core.split.utils import get_split
-from plinder.core.system import system
+from plinder.core import system
+
+from plinder.core.structure.structure import Structure
+from plinder.core.loader.transforms import StructureTransform
+
+
+def structure2tensor_transform(structure: Structure) -> dict[str, torch.Tensor]:
+    props: dict[str, torch.Tensor] = system.structure2tensor(
+        protein_atom_coordinates=structure.protein_coords,
+        protein_atom_types=structure.protein_atom_array.element,
+        protein_residue_coordinates=structure.protein_coords,
+        protein_residue_ids=structure.protein_atom_array.res_name,
+        protein_residue_types=structure.protein_atom_array.res_id,
+        ligand_mols=structure.ligand_mols,
+        dtype=torch.float32,
+        use_ligand_conformer=True,
+    )
+    return props
 
 
 class PlinderDataset(Dataset):  # type: ignore
@@ -40,6 +59,16 @@ class PlinderDataset(Dataset):  # type: ignore
         store_file_path: bool = True,
         num_alternative_structures: int = 0,
         file_paths_only: bool = False,
+        input_structure_priority: str = "apo",
+        structure_transforms: list[StructureTransform] = [],
+        transform: Callable[
+            [Structure], torch.Tensor | dict[str, torch.Tensor]
+        ] = structure2tensor_transform,
+        target_transform: Callable[
+            [Structure], torch.Tensor | dict[str, torch.Tensor]
+        ] = structure2tensor_transform,
+        crop_equal_monomer_shapes: bool = True,
+        **kwargs: Any,
     ):
         if df is None:
             if split_parquet_path is None:
@@ -54,6 +83,11 @@ class PlinderDataset(Dataset):  # type: ignore
             self._links = query_links().groupby("reference_system_id")
         self.num_alternative_structures = num_alternative_structures
         self._file_paths_only = file_paths_only
+        self._input_structure_priority = input_structure_priority
+        self._structure_transforms = structure_transforms
+        self._transform = transform
+        self._target_transform = target_transform
+        self._crop_equal_monomer_shapes = crop_equal_monomer_shapes
 
     def __len__(self) -> int:
         return self._num_examples
@@ -66,49 +100,112 @@ class PlinderDataset(Dataset):  # type: ignore
 
         s = system.PlinderSystem(system_id=self._system_ids[index])
 
-        if self._file_paths_only:
+        if not self._file_paths_only:
             # avoid loading structure if not needed
-            structure_df = None
-        else:
-            structure_df = fo.bp_to_df(fo.read_any(s.system_cif))
+            holo_structure, apo_structure, pred_structure = (
+                s.create_masked_bound_unbound_complexes()
+            )
+            cropped_structures = {
+                "holo": holo_structure,
+                "apo": apo_structure,
+                "pred": pred_structure,
+            }
+            input_structure = cropped_structures[self._input_structure_priority]
+            target_structure = holo_structure
+            for transform in self.structure_transforms:
+                input_structure = transform(input_structure)
+                target_structure = transform(target_structure)
+
+            input_id = input_structure.id
+            target_id = target_structure.id
+            if self.transform is not None:
+                input_complex = self.transform(input_structure)
+            if self.target_transform is not None:
+                target_complex = self.target_transform(target_structure)
 
         item: Dict[str, Any] = {
-            "id": index,
-            "system_id": s.system_id,
-            "df": structure_df,
-            "alternative_structures": {},
+            "input_id": input_id,
+            "target_id": target_id,
+            "input_features": input_complex,
+            "target": target_complex,
         }
         if self._store_file_path:
             item["path"] = s.system_cif
 
-        if self._links is not None:
-            alternatives: dict[str, pd.DataFrame | str | None] = {}
-            try:
-                links = self._links.get_group(s.system_id)
-                if not links.empty:
-                    alts = links.groupby("kind").head(self.num_alternative_structures)
-                    # TODO: make better stagger between the kinds!
-                    count = 0
-                    for kind, link_id in zip(alts["kind"], alts["id"]):
-                        structure = s.get_linked_structure(
-                            link_kind=str(kind), link_id=link_id
-                        )
-                        df_key = f"{kind}_{link_id}_df"
-                        if self._file_paths_only:
-                            alternatives[df_key] = None
-                        else:
-                            alternatives[df_key] = fo.bp_to_df(fo.read_any(structure))
-                        if self._store_file_path:
-                            alternatives[f"{kind}_{link_id}_path"] = structure
-                        count += 1
-                        # if we have enough alternatives, return them
-                        if count >= self.num_alternative_structures:
-                            item["alternative_structures"] = alternatives
-                            return item
-            except KeyError:
-                pass
-            item["alternative_structures"] = alternatives
         return item
+
+
+def get_torch_loader(
+    dataset: PlinderDataset,
+    batch_size: int = 2,
+    shuffle: bool = True,
+    sampler: "Sampler[PlinderDataset]" | None = None,
+    num_workers: int = 1,
+    collate_fn: Callable[[list[dict[str, Any]]], dict[str, Any]] = system.collate_batch,
+    **kwargs: Any,
+) -> "DataLoader[PlinderDataset]":
+    return DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=shuffle,
+        num_workers=num_workers,
+        sampler=sampler,
+        collate_fn=collate_fn,
+        **kwargs,
+    )
+
+
+def get_model_input_files(
+    split_df: pd.DataFrame,
+    split: Literal["train", "val", "test"] = "train",
+    max_num_sample: int = 10,
+    num_alternative_structures: int = 1,
+) -> List[Tuple[Path, str, List[Any]]]:
+    model_inputs = []
+
+    smiles_in_df = True
+    if "ligand_rdkit_canonical_smiles" not in split_df.columns:
+        smiles_in_df = False
+        from rdkit import Chem
+
+    dataset = PlinderDataset(
+        df=split_df,
+        split=split,
+        num_alternative_structures=num_alternative_structures,
+        file_paths_only=True,
+    )
+
+    count = 0
+    for data in dataset:
+        system_dir = Path(data["path"]).parent
+        protein_fasta_filepath = system_dir / "sequences.fasta"
+
+        if num_alternative_structures:
+            alt_structure_filepaths = [
+                val
+                for key, val in data["alternative_structures"].items()
+                if key.endswith("_path")
+            ]
+        else:
+            alt_structure_filepaths = []
+
+        if smiles_in_df:
+            smiles_array = split_df.loc[
+                split_df["system_id"] == data["system_id"],
+                "ligand_rdkit_canonical_smiles",
+            ].values
+        else:
+            smiles_array = [
+                Chem.MolToSmiles(next(Chem.SDMolSupplier(ligand_sdf)))
+                for ligand_sdf in (system_dir / "ligand_files/").glob("*sdf")
+            ]
+        # in case there's more than one!
+        smiles = ".".join(smiles_array)
+        model_inputs.append((protein_fasta_filepath, smiles, alt_structure_filepaths))
+        count += 1
+        if count >= max_num_sample:
+            break
+    return model_inputs
 
 
 # Example sampler function, this is for demonstration purposes,
