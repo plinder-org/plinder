@@ -565,7 +565,7 @@ def create_metadata(*, data_dir: Path, force_update: bool = False) -> None:
 
     keep = ["system_id"] + [
         f"{chain_type}_{mapping_name}"
-        for chain_type in CHAIN_TYPES
+        for chain_type in CHAIN_TYPES + ["system_pocket"]
         for mapping_name in MAPPING_NAMES + ["Kinase name"]
     ]
 
@@ -589,7 +589,7 @@ def create_index(*, data_dir: Path, force_update: bool = False) -> pd.DataFrame:
 
     drop = [
         f"{chain_type}_{mapping_name}"
-        for chain_type in CHAIN_TYPES
+        for chain_type in CHAIN_TYPES + ["system_pocket"]
         for mapping_name in MAPPING_NAMES + ["Kinase name"]
     ]
     index = data_dir / "index" / "annotation_table.parquet"
