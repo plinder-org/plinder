@@ -692,6 +692,8 @@ def _align_monomers_with_mask(
     renumber_residues: bool = False,
     remove_differing_annotations: bool = False,
 ) -> tuple[Structure, Structure]:
+    if (monomer1 is None) | (monomer2 is None):
+        return monomer1, monomer2
     monomer2, monomer1 = monomer2.align_common_sequence(
         monomer1,
         remove_differing_atoms=remove_differing_atoms,

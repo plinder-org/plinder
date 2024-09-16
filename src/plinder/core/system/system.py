@@ -667,15 +667,23 @@ class PlinderSystem:
         if self._best_linked_structures is None:
             links = query_links(filters=[("reference_system_id", "==", self.system_id)])
             best_apo = (
-                links[(links.kind == "apo")]
-                .sort_values(by="sort_score")
-                .id.to_list()[0]
+                links[(links.kind == "apo")].sort_values(by="sort_score").id.to_list()
             )
+            print("apo", best_apo)
+            if len(best_apo) > 0:
+                best_apo = best_apo[0]
+            else:
+                best_apo = None
             best_pred = (
                 links[(links.kind == "pred")]
                 .sort_values(by="sort_score", ascending=False)
-                .id.to_list()[0]
+                .id.to_list()
             )
+            print("pred", best_pred)
+            if len(best_pred) > 0:
+                best_pred = best_pred[0]
+            else:
+                best_pred = None
             chain_id = self.system_id.split("__")[2]
             self._best_linked_structures = {
                 "apo": {chain_id: self.get_linked_structure("apo", best_apo)},
@@ -692,9 +700,10 @@ class PlinderSystem:
         """ """
         holo_structure = self.holo_structure
         alt_structure = self.alt_structures
-        apo_structure_map = alt_structure["apo"]
-        pred_structure_map = alt_structure["pred"]
-
+        print(alt_structure)
+        apo_structure_map = alt_structure.get("apo")
+        pred_structure_map = alt_structure.get("pred")
+        print("test", apo_structure_map, pred_structure_map)
         if apo_structure_map is not None:
             # Ensure same number of chains in apo and holo
             holo_structure, apo_structure = _align_structures_with_mask(
@@ -739,15 +748,18 @@ class PlinderSystem:
         Load apo structure
         """
         best_structures = self.best_linked_structures_paths
-        return {
-            kind: {
-                chain: Structure.load_structure(
-                    id=Path(alt_path).parent.name,
-                    protein_path=alt_path,
-                    protein_sequence=Path(self.sequences),
-                    structure_type=kind,
-                )
-            }
-            for kind, alts in best_structures.items()
-            for chain, alt_path in alts.items()
-        }
+        alt_structure_dict = {}
+        for kind, alts in best_structures.items():
+            alt_chain = {}
+            for chain, alt_path in alts.items():
+                try:
+                    alt_chain[chain] = Structure.load_structure(
+                        id=Path(alt_path).parent.name,
+                        protein_path=alt_path,
+                        protein_sequence=Path(self.sequences),
+                        structure_type=kind,
+                    )
+                except Exception:
+                    alt_chain[chain] = None
+            alt_structure_dict[kind] = alt_chain
+        return alt_structure_dict
