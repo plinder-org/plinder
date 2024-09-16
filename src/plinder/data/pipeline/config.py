@@ -97,8 +97,10 @@ class FlowConfig:
 
     make_links_cpu: int = 8
     make_linked_structures_cpu: int = 8
-    make_linked_structures_batch_size: int = 100
     make_linked_structures_force_update: bool = False
+    score_linked_structures_cpu: int = 8
+    score_linked_structures_batch_size: int = 100
+    score_linked_structures_force_update: bool = False
     sub_databases: Any = "apo,pred"
 
     split_config_dir: str = ""

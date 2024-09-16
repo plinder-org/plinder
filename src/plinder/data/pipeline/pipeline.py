@@ -364,6 +364,35 @@ class IngestPipeline:
             force_update=force_update,
         )
 
+    @utils.ingest_flow_control
+    def scatter_score_linked_structures(self) -> list[list[tuple[str, str]]]:
+        chunks: list[list[tuple[str, str]]] = tasks.scatter_score_linked_structures(
+            data_dir=self.plinder_dir,
+            search_dbs=self.cfg.flow.sub_databases,
+            batch_size=self.cfg.flow.score_linked_structures_batch_size,
+        )
+        return chunks
+
+    @utils.ingest_flow_control
+    def score_linked_structures(self, system_ids: list[tuple[str, str]]) -> None:
+        force_update = (
+            self.cfg.data.force_update
+            or self.cfg.flow.score_linked_structures_force_update
+        )
+        tasks.score_linked_structures(
+            data_dir=self.plinder_dir,
+            search_dbs=self.cfg.flow.sub_databases,
+            system_ids=system_ids,
+            cpu=self.cfg.flow.score_linked_structures_cpu,
+            force_update=force_update,
+        )
+        return
+
+    @utils.ingest_flow_control
+    def join_score_linked_structures(self, outputs: list[None]) -> None:
+        utils.mp_pack_linked_structures(data_dir=self.plinder_dir, structures=False)
+        utils.consolidate_linked_scores(data_dir=self.plinder_dir)
+
     def run_stage(self, stage: str) -> None:
         """
         A stage is defined minimally as a {method} that

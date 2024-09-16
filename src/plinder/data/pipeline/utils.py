@@ -557,22 +557,47 @@ def create_index(*, data_dir: Path, force_update: bool = False) -> pd.DataFrame:
     """
     Create the index
     """
-    if not (data_dir / "index" / "annotation_table.parquet").exists() or force_update:
+    from plinder.data.docs import CHAIN_TYPES, MAPPING_NAMES
+
+    drop = [
+        f"{chain_type}_{mapping_name}"
+        for chain_type in CHAIN_TYPES
+        for mapping_name in MAPPING_NAMES + ["Kinase name"]
+    ]
+    index = data_dir / "index" / "annotation_table.parquet"
+    index.parent.mkdir(exist_ok=True, parents=True)
+
+    if not index.exists() or force_update:
         dfs = []
         for path in (data_dir / "qc" / "index").glob("*"):
             df = pd.read_parquet(path)
             if not df.empty:
-                dfs.append(df)
+                dfs.append(df.drop(columns=df.columns.intersection(drop)))
         df = pd.concat(dfs).reset_index(drop=True)
-        (data_dir / "index").mkdir(exist_ok=True, parents=True)
-        df.to_parquet(data_dir / "index" / "annotation_table.parquet", index=False)
+        # TODO: remove these kludges after posebusters bugfix is found and annotations are rerun
+        df["ligand_posebusters_internal_energy"] = df["ligand_posebusters_internal_energy"].astype(bool)
+        df.rename(
+            columns={
+                f"{key}_Kinase name": f"{key}_kinase_name"
+                for key in [
+                    "ligand_interacting_ligand_chains",
+                    "ligand_neighboring_ligand_chains",
+                    "ligand_protein_chains",
+                    "system_ligand_chains",
+                    "system_pocket",
+                    "system_protein_chains",
+                ]
+            },
+            inplace=True,
+        )
+        df.to_parquet(index, index=False)
     else:
-        df = pd.read_parquet(data_dir / "index" / "annotation_table.parquet")
+        df = pd.read_parquet(index)
     old_columns = set(df.columns)
     df = add_aggregated_columns(index=df)
     update = old_columns != set(df.columns)
     if update or force_update:
-        df.to_parquet(data_dir / "index" / "annotation_table.parquet", index=False)
+        df.to_parquet(index, index=False)
     return df
 
 
@@ -582,7 +607,10 @@ def create_nonredundant_dataset(*, data_dir: Path) -> None:
     and simultaneously generates a non-redundant index for various use
     cases. Ultimately this should run as the join step of structure_qc.
     """
-    df = create_index(data_dir=data_dir)
+    if not (data_dir / "index" / "annotation_table.parquet").exists():
+        df = create_index(data_dir=data_dir)
+    else:
+        df = pd.read_parquet(data_dir / "index" / "annotation_table.parquet")
     df_nonredundant = df.sort_values("system_biounit_id").drop_duplicates("uniqueness")
     df_nonredundant.to_parquet(
         data_dir / "index" / "annotation_table_nonredundant.parquet", index=False
@@ -713,7 +741,7 @@ def pack_linked_structures(data_dir: Path, code: str, structures: bool = True) -
             )
 
 
-def mp_pack_linked_structures(*, data_dir: Path) -> None:
+def mp_pack_linked_structures(*, data_dir: Path, structures: bool = True) -> None:
     """
     Use a process pool to pack linked structures into two character code archives.
 
@@ -725,7 +753,7 @@ def mp_pack_linked_structures(*, data_dir: Path) -> None:
 
     with multiprocessing.get_context("spawn").Pool() as pool:
         pool.starmap(
-            pack_linked_structures, zip(repeat(data_dir), listdir(data_dir / "ingest"))
+            pack_linked_structures, zip(repeat(data_dir), listdir(data_dir / "ingest"), repeat(structures))
         )
 
 
