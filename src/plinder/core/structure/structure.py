@@ -108,7 +108,7 @@ class Structure(BaseModel):
         ]
     ]
         Dictionary of tuple of unresolved ligand mol,
-        resolved aligned mol (via rdkit ConstrainedEmbed) and tuple of matched sbstructure indices
+        resolved aligned mol (via rdkit ConstrainedEmbed), resolved mol randon conformer and tuple of matched sbstructure indices
     add_ligand_hydrogen : bool = False
         Whether to add hydrogen to ligand or not
     structure_type : str = "holo"
