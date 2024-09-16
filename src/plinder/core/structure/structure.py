@@ -1,37 +1,38 @@
 from __future__ import annotations
 
-import gzip
 from functools import lru_cache
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Iterable, List, Optional, Union
+from typing import TYPE_CHECKING, Iterable, Optional
 
 import biotite.structure as struc
 import numpy as np
 import pandas as pd
 from biotite import TextFile
 from biotite.structure.atoms import AtomArray
-from biotite.structure.io.pdbx import get_structure
 from numpy.typing import NDArray
-from pinder.core.structure import surgery
-from pinder.core.structure.atoms import (
+from pydantic import BaseModel
+from rdkit import Chem
+from rdkit.Chem import rdMolTransforms
+
+from plinder.core.structure import surgery
+from plinder.core.structure.atoms import (
+    atom_array_from_cif_file,
+    generate_conformer,
     get_per_chain_seq_alignments,
+    get_per_chain_seq_to_structure_alignments,
     get_seq_aligned_structures,
     invert_chain_seq_map,
+    match_ligands,
     resn2seq,
     write_pdb,
 )
-from pinder.core.structure.contacts import get_atom_neighbors
-from pinder.core.structure.superimpose import superimpose_chain
-from pinder.core.utils import constants as pc
+from plinder.core.structure.superimpose import superimpose_chain
+from plinder.core.utils import constants as pc
+from plinder.core.utils.config import get_config
+from plinder.core.utils.dataclass import stringify_dataclass
 
 # TODO: Decide whether to lift these from pinder or import them
-from pinder.core.utils import setup_logger
-from pinder.core.utils.dataclass import stringify_dataclass
-from pydantic import BaseModel
-from rdkit import Chem
-from rdkit.Chem import rdDistGeom, rdMolTransforms
-
-from plinder.core.utils.config import get_config
+from plinder.core.utils.log import setup_logger
 
 if TYPE_CHECKING:
     import torch
@@ -63,33 +64,21 @@ def biotite_ciffile() -> TextFile:
     return PDBxFile
 
 
-def atom_array_from_cif_file(
-    structure: Path | AtomArray, use_author_fields: bool = True
-) -> AtomArray | None:
-    if isinstance(structure, str):
-        structure = Path(structure)
-
-    if isinstance(structure, Path):
-        reader = biotite_ciffile()
-        try:
-            if structure.suffix == ".gz":
-                with gzip.open(str(structure), "rt", encoding="utf-8") as f:
-                    mod = reader.read(f)
-            else:
-                mod = reader.read(structure)
-            arr = get_structure(mod, model=1, use_author_fields=use_author_fields)  # noqa
-            return arr
-        except Exception as e:
-            log.error(f"Unable to parse {structure}! {str(e)}")
-    return structure
-
-
 class Structure(BaseModel):
-    protein_path: Path
     id: str
-    list_ligand_sdf_or_smiles: Optional[List[Union[Path, str]]] = None
+    protein_path: Path
+    protein_sequence: Path
+    list_ligand_sdf_and_resolved_smiles: Optional[list[tuple[Path, str]]] = None
     protein_atom_array: Optional[AtomArray] = None
-    ligand_mols: Optional[dict[str, Chem.rdchem.Mol]] = None
+    renumbered_protein_array_and_seqs: Optional[
+        tuple[AtomArray, dict[str, str], dict[str, list[int]]]
+    ] = None
+    ligand_mols: Optional[
+        dict[
+            str,
+            tuple[Chem.rdchem.Mol, Chem.rdchem.Mol, Chem.rdchem.Mol, tuple[int, ...]],
+        ]
+    ] = None
     add_ligand_hydrogen: bool = False
     structure_type: str = "holo"
 
@@ -105,12 +94,21 @@ class Structure(BaseModel):
         Protein structure cif path, could be holo, apo or pred path
     id : str
         PLINDER system or apo/pred id. If the structure is holo, this is used to load the holo structure
-    list_ligand_sdf_or_smiles : list[Path | str] | None
-        SDF path or ligand smiles. This is optional for apo and pred structures
+    list_ligand_sdf_and_resolved_smiles : Optional[list[tuple[Path, str]]]
+        SDF path and ligand smiles. This is optional for apo and pred structures
     protein_atom_array : AtomArray | None = None
         Protein Biotite atom array
-    ligand_mols : list[Chem.rdchem.Mol] | None = None
-        Ligand rdkit mol
+    renumbered_protein_array_and_seqs: Optional[
+        tuple[AtomArray, dict[str, str], dict[str, list[int]]]] = None
+        Protein array, dictionary of aligned sequences and dictionary of mapped indices
+    ligand_mols : ligand_mols: Optional[
+        dict[
+            str,
+            tuple[Chem.rdchem.Mol, Chem.rdchem.Mol, Chem.rdchem.Mol, tuple[int, ...]],
+        ]
+    ]
+        Dictionary of tuple of unresolved ligand mol,
+        resolved aligned mol (via rdkit ConstrainedEmbed) and tuple of matched sbstructure indices
     add_ligand_hydrogen : bool = False
         Whether to add hydrogen to ligand or not
     structure_type : str = "holo"
@@ -120,17 +118,57 @@ class Structure(BaseModel):
     class Config:
         arbitrary_types_allowed = True
 
-    @staticmethod
-    def read_structure_files(
+    @property
+    def resolved_sequences(self):
+        resolved_sequences = {}
+        with open(self.protein_sequence) as f_seq:
+            lines = f_seq.readlines()
+            for idx, line in enumerate(lines):
+                if ">" in line:
+                    chain = line[1:].strip()
+                    seq = lines[idx + 1].strip().replace("\n", "")
+                    # canonicalize
+                    seq = seq.translate(str.maketrans(pc.non_canonical_aa))
+
+                    resolved_sequences[chain] = seq
+
+        return resolved_sequences
+
+    @classmethod
+    def load_structure(
+        cls,
+        id: str,
         protein_path: Path,
-        list_ligand_sdf_or_smiles: list[Path | str] | None,
+        protein_sequence: Path,
+        list_ligand_sdf_and_resolved_smiles: Optional[list[tuple[Path, str]]] = None,
+        protein_atom_array: Optional[AtomArray] = None,
+        renumbered_protein_array_and_seqs: Optional[
+            tuple[AtomArray, dict[str, str], dict[str, list[int]]]
+        ] = None,
+        ligand_mols: Optional[
+            dict[
+                str,
+                tuple[
+                    Chem.rdchem.Mol, Chem.rdchem.Mol, Chem.rdchem.Mol, tuple[int, ...]
+                ],
+            ]
+        ] = None,
         add_ligand_hydrogen: bool = False,
-    ) -> tuple[AtomArray | Chem.rdchem.Mol]:
-        try:
-            protein_arr = atom_array_from_cif_file(
-                protein_path, use_author_fields=False
-            )
-        except:
+        structure_type: str = "holo",
+    ) -> Structure | None:
+        structure = cls(
+            id=id,
+            protein_path=protein_path,
+            protein_sequence=protein_sequence,
+            list_ligand_sdf_and_resolved_smiles=list_ligand_sdf_and_resolved_smiles,
+            protein_atom_array=protein_atom_array,
+            renumbered_protein_array_and_seqs=renumbered_protein_array_and_seqs,
+            ligand_mols=ligand_mols,
+            add_ligand_hydrogen=add_ligand_hydrogen,
+            structure_type=structure_type,
+        )
+
+        if (structure.protein_atom_array is None) & (structure.ligand_mols is None):
             # Sometimes b-factor field parsing fails, try without it.
             protein_arr = atom_array_from_cif_file(
                 protein_path, use_author_fields=False
@@ -139,30 +177,67 @@ class Structure(BaseModel):
                 0.0, protein_arr.shape[0]
             )
             protein_arr.set_annotation("b_factor", annotation_arr)
-        if "" in set(protein_arr.element):
-            try:
-                protein_arr.element = struc.infer_elements(protein_arr)
-            except Exception:
-                log.debug(
-                    f"Found missing elements in {protein_path} but failed to infer"
+
+            if "" in set(protein_arr.element):
+                try:
+                    protein_arr.element = struc.infer_elements(protein_arr)
+                except Exception:
+                    log.debug(
+                        f"Found missing elements in {protein_path} but failed to infer"
+                    )
+
+            if structure_type == "holo":
+                structure.renumbered_protein_array_and_seqs = (
+                    get_per_chain_seq_to_structure_alignments(
+                        structure.resolved_sequences, protein_arr
+                    )
                 )
-        ligand_mols = {}
-        if not (list_ligand_sdf_or_smiles is None):
-            for ligand_sdf_or_smiles in list_ligand_sdf_or_smiles:
-                if isinstance(ligand_sdf_or_smiles, Path) and (
-                    ligand_sdf_or_smiles.suffix == ".sdf"
-                ):
-                    ligand_mol = next(Chem.SDMolSupplier(ligand_sdf_or_smiles))
-                    if add_ligand_hydrogen:
-                        ligand_mol = Chem.AddHs(ligand_mol, addCoords=True)
-                    ligand_mols[ligand_sdf_or_smiles.stem] = ligand_mol
-                elif isinstance(ligand_sdf_or_smiles, str):
-                    ligand_mol = Chem.MolFromSmiles(ligand_sdf_or_smiles)
-                    if add_ligand_hydrogen:
-                        ligand_mol = Chem.AddHs(ligand_mol)
-                    rdDistGeom.EmbedMolecule(ligand_mol)
-                    ligand_mols[ligand_sdf_or_smiles] = ligand_mol
-        return protein_arr, ligand_mols
+            else:
+                structure.renumbered_protein_array_and_seqs = (protein_arr, {}, {})
+
+            structure.ligand_mols = {}
+            if not (list_ligand_sdf_and_resolved_smiles is None):
+                for ligand_sdf, resolved_smiles in list_ligand_sdf_and_resolved_smiles:
+                    # Match molecules
+                    (
+                        matches,
+                        resolved_ligand_mol,
+                        original_unresolved_mol,
+                    ) = match_ligands(
+                        resolved_smiles,
+                        ligand_sdf,
+                        add_hydrogen=add_ligand_hydrogen,
+                    )
+
+                    resolved_ligand_mol_conformer = generate_conformer(
+                        resolved_ligand_mol
+                    )
+                    structure.ligand_mols[ligand_sdf.stem] = (
+                        original_unresolved_mol,
+                        resolved_ligand_mol,
+                        resolved_ligand_mol_conformer,
+                        matches,
+                    )
+        elif structure.protein_atom_array is not None:
+            if structure_type == "holo":
+                structure.renumbered_protein_array_and_seqs = (
+                    get_per_chain_seq_to_structure_alignments(
+                        structure.resolved_sequences, protein_arr
+                    )
+                )
+            else:
+                structure.renumbered_protein_array_and_seqs = (protein_arr, {}, {})
+
+        structure.protein_atom_array = structure.renumbered_protein_array_and_seqs[0]
+        try:
+            getattr(structure.protein_atom_array, "b-factor")
+        except AttributeError:
+            b_factors: NDArray[np.double | np.str_] = np.repeat(
+                0.0, structure.protein_atom_array.shape[0]
+            )
+            structure.protein_atom_array.set_annotation("b_factor", b_factors)
+
+        return structure
 
     def __repr__(self) -> str:
         class_str: str = stringify_dataclass(self, 4)
@@ -175,12 +250,13 @@ class Structure(BaseModel):
         structure_type = "_".join(
             sorted(list({self.structure_type, other.structure_type}))
         )
-
         return Structure(
-            protein_path=combined_path,
             id=combined_id,
-            list_ligand_sdf_or_smiles=self.list_ligand_sdf_or_smiles,
+            protein_path=combined_path,
+            protein_sequence=self.protein_sequence,
+            list_ligand_sdf_and_resolved_smiles=self.list_ligand_sdf_and_resolved_smiles,
             protein_atom_array=combined_arr,
+            renumbered_protein_array_and_seqs=self.renumbered_protein_array_and_seqs,
             ligand_mols=self.ligand_mols,
             add_ligand_hydrogen=self.add_ligand_hydrogen,
             structure_type=structure_type,
@@ -217,11 +293,14 @@ class Structure(BaseModel):
             atom_mask = ~atom_mask
         if copy:
             arr = self.protein_atom_array[atom_mask].copy()
+
             return Structure(
-                protein_path=self.protein_path,
                 id=self.id,
-                list_ligand_sdf_or_smiles=self.list_ligand_sdf_or_smiles,
+                protein_path=self.protein_path,
+                protein_sequence=self.protein_sequence,
+                list_ligand_sdf_and_resolved_smiles=self.list_ligand_sdf_and_resolved_smiles,
                 protein_atom_array=arr,
+                renumbered_protein_array_and_seqs=self.renumbered_protein_array_and_seqs,
                 ligand_mols=self.ligand_mols,
                 add_ligand_hydrogen=self.add_ligand_hydrogen,
                 structure_type=self.structure_type,
@@ -279,20 +358,24 @@ class Structure(BaseModel):
 
         if copy:
             self_struct = Structure(
-                protein_path=self.protein_path,
                 id=self.id,
-                list_ligand_sdf_or_smiles=self.list_ligand_sdf_or_smiles,
+                protein_path=self.protein_path,
+                protein_sequence=self.protein_sequence,
+                list_ligand_sdf_and_resolved_smiles=self.list_ligand_sdf_and_resolved_smiles,
                 protein_atom_array=target_at,
+                renumbered_protein_array_and_seqs=self.renumbered_protein_array_and_seqs,
                 ligand_mols=self.ligand_mols,
                 add_ligand_hydrogen=self.add_ligand_hydrogen,
                 structure_type=self.structure_type,
             )
 
             other_struct = Structure(
-                protein_path=other.protein_path,
                 id=other.id,
-                list_ligand_sdf_or_smiles=other.list_ligand_sdf_or_smiles,
+                protein_path=other.protein_path,
+                protein_sequence=self.protein_sequence,
+                list_ligand_sdf_and_resolved_smiles=other.list_ligand_sdf_and_resolved_smiles,
                 protein_atom_array=ref_at,
+                renumbered_protein_array_and_seqs=self.renumbered_protein_array_and_seqs,
                 ligand_mols=other.ligand_mols,
                 add_ligand_hydrogen=other.add_ligand_hydrogen,
                 structure_type=other.structure_type,
@@ -328,12 +411,15 @@ class Structure(BaseModel):
             other.protein_atom_array.coord[other_anchors],
             superimposed.coord[self_anchors],
         )
+
         return (
             Structure(
-                protein_path=self.protein_path,
                 id=self.id,
-                list_ligand_sdf_or_smiles=self.list_ligand_sdf_or_smiles,
+                protein_path=self.protein_path,
+                protein_sequence=self.protein_sequence,
+                list_ligand_sdf_and_resolved_smiles=self.list_ligand_sdf_and_resolved_smiles,
                 protein_atom_array=superimposed,
+                renumbered_protein_array_and_seqs=self.renumbered_protein_array_and_seqs,
                 ligand_mols=self.ligand_mols,
                 add_ligand_hydrogen=self.add_ligand_hydrogen,
                 structure_type=self.structure_type,
@@ -343,29 +429,60 @@ class Structure(BaseModel):
         )
 
     @property
+    def aligned_unresolved_seqs(self):
+        return self.renumbered_protein_array_and_seqs[1]
+
+    @property
+    def unresolved_aligned_indices(self):
+        return self.renumbered_protein_array_and_seqs[2]
+
+    @property
     def protein_coords(self) -> NDArray[np.double]:
         """ndarray[np.double]: The coordinates of the protein atoms in the structure."""
         protein_coords: NDArray[np.double] = self.protein_atom_array.coord
         return protein_coords
 
     @property
-    def ligand_coords(self) -> dict[str, NDArray[np.double]]:
-        """ndarray[np.double]: The coordinates of the ligand atoms in the structure."""
+    def original_unresolved_mols(self) -> dict[str, Chem.rdchem.Mol]:
+        """Original ligand mol objects."""
+        return {tag: mol_tuple[0] for tag, mol_tuple in self.ligand_mols.items()}
+
+    @property
+    def resolved_ligand_mols(self) -> dict[str, Chem.rdchem.Mol]:
+        """Original ligand mol objects."""
+        return {tag: mol_tuple[1] for tag, mol_tuple in self.ligand_mols.items()}
+
+    @property
+    def resolved_ligand_conformers(self) -> dict[str, Chem.rdchem.Mol]:
+        """Original ligand mol objects."""
+        return {tag: mol_tuple[2] for tag, mol_tuple in self.ligand_mols.items()}
+
+    @property
+    def resolved_ligand_conformers_coords(self) -> dict[str, NDArray[np.double]]:
+        """ndarray[np.double]: The coordinates of the reinitialized resolved ligand atoms in the structure."""
         ligand_coords: NDArray[np.double] = {
             tag: mol.GetConformer().GetPositions()
-            for tag, mol in self.ligand_mols.items()
+            for tag, mol in self.resolved_ligand_conformers.items()
         }
         return ligand_coords
 
     @property
-    def ligand_bonds(self) -> dict[str, list[tuple[int, int, str]]]:
-        return {
-            tag: [
-                (at.GetBeginAtomIdx(), at.GetEndAtomIdx(), at.GetBondType())
-                for at in mol.GetBonds()
-            ]
-            for tag, mol in self.ligand_mols.items()
+    def resolved_ligand_mols_coords(self) -> dict[str, NDArray[np.double]]:
+        """ndarray[np.double]: The coordinates of the aligned resolved ligand atoms in the structure."""
+        ligand_coords: NDArray[np.double] = {
+            tag: mol.GetConformer().GetPositions()
+            for tag, mol in self.resolved_ligand_mols.items()
         }
+        return ligand_coords
+
+    @property
+    def original_unresolved_mols_coords(self) -> dict[str, NDArray[np.double]]:
+        """ """
+        ligand_coords: NDArray[np.double] = {
+            tag: mol.GetConformer().GetPositions()
+            for tag, mol in self.original_unresolved_mols.items()
+        }
+        return ligand_coords
 
     @property
     def protein_dataframe(self) -> pd.DataFrame:
@@ -418,7 +535,7 @@ class Structure(BaseModel):
         return [str(ch) for ch in ch_list]
 
     @property
-    def protein_chain_sequence(self) -> dict[str, list[str]]:
+    def protein_chain_unresolved_sequence(self) -> dict[str, list[str]]:
         """dict[str, list[str]]: The chain sequence dictionary, where keys are chain IDs and values are lists of residue codes."""
         ch_seq: dict[str, list[str]] = (
             self.protein_dataframe[["chain_id", "res_code", "res_name", "res_id"]]
@@ -430,17 +547,17 @@ class Structure(BaseModel):
         return ch_seq
 
     @property
-    def protein_sequence(self) -> str:
+    def unresolved_protein_sequence(self) -> str:
         """str: The amino acid sequence of the structure."""
         numbering, resn = struc.get_residues(self.protein_atom_array)
         seq: str = resn2seq(resn)
         return seq
 
     @property
-    def protein_fasta(self) -> str:
+    def unresolved_protein_fasta(self) -> str:
         """str: The fasta representation of the structure sequence."""
         fasta_str: str = "\n".join(
-            [f">{self.protein_path.stem}", self.protein_sequence]
+            [f">{self.protein_path.stem}", self.unresolved_protein_sequence]
         )
         return fasta_str
 
@@ -449,7 +566,9 @@ class Structure(BaseModel):
         """torch.Tensor: The tokenized sequence representation of the structure sequence."""
         import torch
 
-        seq_encoding = torch.tensor([pc.AA_TO_INDEX[x] for x in self.protein_sequence])
+        seq_encoding = torch.tensor(
+            [pc.AA_TO_INDEX[x] for x in self.unresolved_protein_sequence]
+        )
         tokenized: torch.Tensor = seq_encoding.long()
         return tokenized
 
@@ -499,126 +618,6 @@ class Structure(BaseModel):
     @classmethod
     def get_properties(cls):
         return [name for name in dir(cls) if isinstance(getattr(cls, name), property)]
-
-    def model_post_init(self, __context: Any) -> None:
-        # pydantic v2 renames this to dataclass post_init
-        if (self.structure_type) == "holo":
-            self.protein_path = (
-                Path(cfg.data.plinder_dir) / "systems" / f"{self.id}" / "receptor.cif"
-            )
-            ligand_dir = (
-                Path(cfg.data.plinder_dir) / "systems" / f"{self.id}" / "ligand_files"
-            )
-            self.list_ligand_sdf_or_smiles = list(ligand_dir.glob("*sdf"))
-
-        if (self.protein_atom_array is None) & (self.ligand_mols is None):
-            self.protein_atom_array, self.ligand_mols = self.read_structure_files(
-                protein_path=self.protein_path,
-                list_ligand_sdf_or_smiles=self.list_ligand_sdf_or_smiles,
-                add_ligand_hydrogen=self.add_ligand_hydrogen,
-            )
-        try:
-            getattr(self.protein_atom_array, "b-factor")
-        except AttributeError:
-            b_factors: NDArray[np.double | np.str_] = np.repeat(
-                0.0, self.protein_atom_array.shape[0]
-            )
-            self.protein_atom_array.set_annotation("b_factor", b_factors)
-
-
-def find_potential_interchain_bonded_atoms(
-    structure: Structure,
-    interface_res: dict[str, list[int]] | None = None,
-    radius: float = 2.3,
-) -> AtomArray:
-    if interface_res is None:
-        interface_res = structure.get_interface_residues(calpha_mask=False)
-    interface_mask = structure.get_interface_mask(interface_res, calpha_only=False)
-    interface = structure.atom_array[interface_mask].copy()
-    assert set(interface_res.keys()) == {"R", "L"}
-    interface_R = interface[(interface.chain_id == "R") & (interface.element != "H")]
-    interface_L = interface[(interface.chain_id == "L") & (interface.element != "H")]
-    L_neigh = get_atom_neighbors(interface_L, interface_R, radius=radius)
-    R_neigh = get_atom_neighbors(interface_R, interface_L, radius=radius)
-    interchain_at = R_neigh + L_neigh
-    return interchain_at
-
-
-def mask_common_uniprot(
-    mono_A: Structure, mono_B: Structure
-) -> tuple[Structure, Structure]:
-    # Ensure mapping only contains those residues that are actually
-    # present in the PDB file
-    map_A = mono_A.resolved_mapping
-    map_B = mono_B.resolved_mapping
-    mask_A: list[int] | None = None
-    mask_B: list[int] | None = None
-    if all(isinstance(df, pd.DataFrame) for df in [map_A, map_B]):
-        # Case when apo and holo uniprot mapping exists
-        assert isinstance(map_A, pd.DataFrame)
-        assert isinstance(map_B, pd.DataFrame)
-        map_A.loc[:, "uniprot_uuid"] = (
-            map_A.resi_uniprot.astype(str) + "-" + map_A.uniprot_acc.astype(str)
-        )
-        map_B.loc[:, "uniprot_uuid"] = (
-            map_B.resi_uniprot.astype(str) + "-" + map_B.uniprot_acc.astype(str)
-        )
-        uniprot_mask = set(map_A.uniprot_uuid).intersection(set(map_B.uniprot_uuid))
-        map_A = map_A[map_A.uniprot_uuid.isin(uniprot_mask)]
-        map_B = map_B[map_B.uniprot_uuid.isin(uniprot_mask)]
-        mask_A = sorted(list(set(map_A.resi.astype(int))))
-        mask_B = sorted(list(set(map_B.resi.astype(int))))
-    elif isinstance(map_A, pd.DataFrame):
-        # Case where mono_B is predicted and already in uniprot numbering
-        # Ensure uniprot used in holo mapping corresponds to predicted (could be chimeric)
-        if isinstance(mono_B.pinder_id, str):
-            mono_B_uniprot = mono_B.pinder_id.split("__")[1].split("-")[0]
-            map_A = map_A.query(f"uniprot_acc == '{mono_B_uniprot}'").reset_index(
-                drop=True
-            )
-        mask_B_resolved = set(map_A.resi_uniprot.astype(int)).intersection(
-            set(mono_B.atom_array.res_id)
-        )
-        mask_B = sorted(list(mask_B_resolved))
-
-        mask_A_resolved = set(map_A.resi.astype(int)).intersection(
-            set(mono_A.atom_array.res_id)
-        )
-        mask_A = sorted(list(mask_A_resolved))
-
-    elif isinstance(map_B, pd.DataFrame):
-        # Case where mono_A is predicted and already in uniprot numbering
-        # Ensure uniprot used in holo mapping corresponds to predicted (could be chimeric)
-        if isinstance(mono_A.pinder_id, str):
-            mono_A_uniprot = mono_A.pinder_id.split("__")[1].split("-")[0]
-            map_B = map_B.query(f"uniprot_acc == '{mono_A_uniprot}'").reset_index(
-                drop=True
-            )
-        mask_A_resolved = set(map_B.resi_uniprot.astype(int)).intersection(
-            set(mono_A.atom_array.res_id)
-        )
-        mask_A = sorted(list(mask_A_resolved))
-        map_B = map_B[map_B["resi_uniprot"].isin(mask_A)].reset_index(drop=True)
-        mask_B_resolved = set(mono_B.atom_array.res_id).intersection(
-            set(map_B.resi.astype(int))
-        )
-        mask_B = sorted(list(mask_B_resolved))
-
-    if not (mask_A and mask_B):
-        # Could happen if different domains are crystallized
-        # Or if our mapping is incorrect
-        log.error(
-            "no common residues found! " f"{mono_A.pinder_id}--{mono_B.pinder_id}"
-        )
-        return mono_A, mono_B
-
-    assert len(mask_A) == len(mask_B)
-
-    mono_A_common = mono_A.filter("res_id", mask_A)
-    mono_B_common = mono_B.filter("res_id", mask_B)
-    assert isinstance(mono_A_common, Structure)
-    assert isinstance(mono_B_common, Structure)
-    return mono_A_common, mono_B_common
 
 
 @lru_cache(maxsize=1)
@@ -684,3 +683,72 @@ def _superimpose_common_atoms(
             np.where(fixed_common_mask)[0],
             np.where(mobile_common_mask)[0],
         )
+
+
+def _align_monomers_with_mask(
+    monomer1: Structure,
+    monomer2: Structure,
+    remove_differing_atoms: bool = True,
+    renumber_residues: bool = False,
+    remove_differing_annotations: bool = False,
+) -> tuple[Structure, Structure]:
+    monomer2, monomer1 = monomer2.align_common_sequence(
+        monomer1,
+        remove_differing_atoms=remove_differing_atoms,
+        renumber_residues=renumber_residues,
+        remove_differing_annotations=remove_differing_annotations,
+    )
+    monomer2, _, _ = monomer2.superimpose(monomer1)
+    return monomer1, monomer2
+
+
+def _align_structures_with_mask(
+    multi_chain_structure: Structure,
+    map_of_alt_monomer_structures: dict[str, Structure],
+    remove_differing_atoms: bool = True,
+    renumber_residues: bool = False,
+    remove_differing_annotations: bool = False,
+) -> tuple[Structure, Structure]:
+    cropped_and_superposed_ref_dict = {}
+    cropped_and_superposed_target_dict = {}
+    for ref_chain, target_monomer_structure in map_of_alt_monomer_structures.items():
+        ref_monomer_structure = multi_chain_structure.filter(
+            property="chain_id", mask=[ref_chain]
+        )
+        target_monomer_structure.set_chain(ref_chain)
+
+        ref_monomer_structure, target_monomer_structure = _align_monomers_with_mask(
+            ref_monomer_structure,
+            target_monomer_structure,
+            remove_differing_atoms=remove_differing_atoms,
+            renumber_residues=renumber_residues,
+            remove_differing_annotations=remove_differing_annotations,
+        )
+        cropped_and_superposed_ref_dict[ref_chain] = ref_monomer_structure
+        cropped_and_superposed_target_dict[ref_chain] = target_monomer_structure
+    target_values = list(cropped_and_superposed_target_dict.values())
+    ref_values = list(cropped_and_superposed_ref_dict.values())
+    new_merged_target = target_values[0]
+    new_merged_ref = ref_values[0]
+    for target_val in target_values[1:]:
+        new_merged_target += target_val
+    for ref_val in ref_values[1:]:
+        new_merged_ref += ref_val
+    # Transfer ligand
+    new_merged_target.ligand_mols = multi_chain_structure.ligand_mols
+    new_merged_ref.ligand_mols = multi_chain_structure.ligand_mols
+
+    # merge monomers (and/or part of multi_chain_structure) into single new structure
+    reference_chains = set(multi_chain_structure.protein_atom_array.chain_id)
+    chains_not_mapped = reference_chains - set(map_of_alt_monomer_structures.keys())
+    if len(chains_not_mapped) == 0:
+        return new_merged_ref, new_merged_target
+    else:
+        for chain in chains_not_mapped:
+            unmapped_structure = multi_chain_structure.filter(
+                property="chain_id", mask=chain
+            )
+            new_merged_target += unmapped_structure
+            new_merged_ref += unmapped_structure
+
+    return cropped_and_superposed_ref_dict, cropped_and_superposed_target_dict
