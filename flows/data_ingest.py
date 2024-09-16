@@ -425,14 +425,6 @@ class PlinderDataIngestFlow(FlowSpec):
     #     self.pipeline = inputs[0].pipeline
     #     self.merge_artifacts(inputs, exclude=["chunks"])
     #     self.next(self.scatter_make_linked_structures)
-    #
-    # @kubernetes(**{**K8S, **DATABASES})
-    # @environment(**ENV)
-    # @retry
-    # @step
-    # def scatter_make_linked_structures(self):
-    #     self.chunks = self.pipeline.scatter_make_linked_structures()
-    #     self.next(self.make_linked_structures, foreach="chunks")
 
     @kubernetes(**{**K8S, **{"cpu": 28, "memory": 24000}})
     @environment(**ENV)
@@ -443,13 +435,30 @@ class PlinderDataIngestFlow(FlowSpec):
         self.pipeline.make_linked_structures()
         self.next(self.end)
 
+    # @kubernetes(**{**K8S, **DATABASES})
+    # @environment(**ENV)
+    # @retry
+    # @step
+    # def scatter_score_linked_structures(self):
+    #     self.chunks = self.pipeline.scatter_score_linked_structures()
+    #     self.next(self.score_linked_structures, foreach="chunks")
+    #
+    # @kubernetes(**{**K8S, **WORKSTATION})
+    # @environment(**ENV)
+    # @retry
+    # @step
+    # def score_linked_structures(self):
+    #     self.pipeline.cfg.flow.score_linked_structures_cpu = WORKSTATION["cpu"] - 1
+    #     self.pipeline.score_linked_structures(self.input)
+    #     self.next(self.join_score_linked_structures)
+    #
     # @kubernetes(**K8S)
     # @environment(**ENV)
     # @retry
     # @step
-    # def join_make_linked_structures(self, inputs):
+    # def join_score_linked_structures(self, inputs):
     #     self.pipeline = inputs[0].pipeline
-    #     self.pipeline.join_make_linked_structures(inputs)
+    #     self.pipeline.join_score_linked_structures(inputs)
     #     self.merge_artifacts(inputs, exclude=["chunks"])
     #     self.next(self.end)
 
