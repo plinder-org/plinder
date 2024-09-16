@@ -12,7 +12,7 @@ from rdkit.Chem import AllChem, GetPeriodicTable, rdMolTransforms
 from rdkit.Chem.rdchem import BondType as BT
 from scipy.optimize import differential_evolution
 
-from plinder.data.common.log import setup_logger
+from plinder.core.utils.log import setup_logger
 
 RDLogger.DisableLog("rdApp.*")
 LOG = setup_logger(__name__)
