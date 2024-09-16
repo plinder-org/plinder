@@ -299,6 +299,35 @@ def get_per_chain_seq_to_structure_alignments(
     return combined_renumbered_arr, subj_seq_dict, subj_numbering_dict
 
 
+def get_residue_index_mapping_mask(
+    ref_seqs: dict[str, str], subject_arr: _AtomArrayOrStack
+) -> dict[str, list[int]]:
+    mask_map = {}
+    for reference_chain, ref_seq in ref_seqs.items():
+        # refernece and subject chain are the same
+        subject_chain = reference_chain
+        subject_mask = subject_arr.chain_id == subject_chain
+        subject_ch_arr = apply_mask(subject_arr, subject_mask)
+
+        subj_info = _get_structure_and_res_info(subject_ch_arr)
+        subj_seq, subj_numbering = _convert_resn_to_sequence_and_numbering(subj_info)
+        alignments = align_sequences(
+            ref_seq, subj_seq, ref_numbering=None, subject_numbering=subj_numbering
+        )
+        (
+            _,
+            _,
+            ref_numbering_mapped,
+            _,
+        ) = alignments
+        mask = np.zeros(len(ref_seq))
+        for i in len(mask):
+            if (i + 1) in ref_numbering_mapped:
+                mask[i] = 1
+        mask_map[reference_chain] = mask
+        return mask_map
+
+
 def _align_and_map_sequences(
     ref_info: tuple[_AtomArrayOrStack, list[int], list[str]],
     subj_info: tuple[_AtomArrayOrStack, list[int], list[str]],

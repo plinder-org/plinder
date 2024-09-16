@@ -70,9 +70,6 @@ class Structure(BaseModel):
     protein_sequence: Path
     list_ligand_sdf_and_resolved_smiles: Optional[list[tuple[Path, str]]] = None
     protein_atom_array: Optional[AtomArray] = None
-    renumbered_protein_array_and_seqs: Optional[
-        tuple[AtomArray, dict[str, str], dict[str, list[int]]]
-    ] = None
     ligand_mols: Optional[
         dict[
             str,
@@ -98,9 +95,6 @@ class Structure(BaseModel):
         SDF path and ligand smiles. This is optional for apo and pred structures
     protein_atom_array : AtomArray | None = None
         Protein Biotite atom array
-    renumbered_protein_array_and_seqs: Optional[
-        tuple[AtomArray, dict[str, str], dict[str, list[int]]]] = None
-        Protein array, dictionary of aligned sequences and dictionary of mapped indices
     ligand_mols : ligand_mols: Optional[
         dict[
             str,
@@ -142,9 +136,6 @@ class Structure(BaseModel):
         protein_sequence: Path,
         list_ligand_sdf_and_resolved_smiles: Optional[list[tuple[Path, str]]] = None,
         protein_atom_array: Optional[AtomArray] = None,
-        renumbered_protein_array_and_seqs: Optional[
-            tuple[AtomArray, dict[str, str], dict[str, list[int]]]
-        ] = None,
         ligand_mols: Optional[
             dict[
                 str,
@@ -162,7 +153,6 @@ class Structure(BaseModel):
             protein_sequence=protein_sequence,
             list_ligand_sdf_and_resolved_smiles=list_ligand_sdf_and_resolved_smiles,
             protein_atom_array=protein_atom_array,
-            renumbered_protein_array_and_seqs=renumbered_protein_array_and_seqs,
             ligand_mols=ligand_mols,
             add_ligand_hydrogen=add_ligand_hydrogen,
             structure_type=structure_type,
@@ -186,12 +176,12 @@ class Structure(BaseModel):
                         f"Found missing elements in {protein_path} but failed to infer"
                     )
 
-            if structure_type == "holo":
-                structure.renumbered_protein_array_and_seqs = (
-                    get_per_chain_seq_to_structure_alignments(
-                        structure.resolved_sequences, protein_arr
-                    )
-                )
+            # if structure_type == "holo":
+            #    structure.renumbered_protein_array_and_seqs = (
+            #        get_per_chain_seq_to_structure_alignments(
+            #            structure.resolved_sequences, protein_arr
+            #        )
+            #    )
             else:
                 structure.renumbered_protein_array_and_seqs = (protein_arr, {}, {})
 
@@ -427,6 +417,12 @@ class Structure(BaseModel):
             raw_rmsd,
             refined_rmsd,
         )
+
+    @property
+    # def seqres_masks(self):
+    #    return get_residue_index_mapping_mask(
+    #            ref_seqs: dict[str, str], subject_arr: _AtomArrayOrStack
+    #        )
 
     @property
     def aligned_unresolved_seqs(self):
@@ -717,7 +713,8 @@ def _align_structures_with_mask(
         ref_monomer_structure = multi_chain_structure.filter(
             property="chain_id", mask=[ref_chain]
         )
-        target_monomer_structure.set_chain(ref_chain)
+        if target_monomer_structure is not None:
+            target_monomer_structure.set_chain(ref_chain)
 
         ref_monomer_structure, target_monomer_structure = _align_monomers_with_mask(
             ref_monomer_structure,
@@ -737,7 +734,8 @@ def _align_structures_with_mask(
     for ref_val in ref_values[1:]:
         new_merged_ref += ref_val
     # Transfer ligand
-    new_merged_target.ligand_mols = multi_chain_structure.ligand_mols
+    if new_merged_target is not None:
+        new_merged_target.ligand_mols = multi_chain_structure.ligand_mols
     new_merged_ref.ligand_mols = multi_chain_structure.ligand_mols
 
     # merge monomers (and/or part of multi_chain_structure) into single new structure
@@ -750,7 +748,8 @@ def _align_structures_with_mask(
             unmapped_structure = multi_chain_structure.filter(
                 property="chain_id", mask=chain
             )
-            new_merged_target += unmapped_structure
+            if new_merged_target is not None:
+                new_merged_target += unmapped_structure
             new_merged_ref += unmapped_structure
 
     return cropped_and_superposed_ref_dict, cropped_and_superposed_target_dict

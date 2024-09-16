@@ -44,6 +44,7 @@ def structure2tensor(
     protein_residue_coordinates: NDArray[np.double] | None = None,
     protein_residue_ids: NDArray[np.int_] | None = None,
     protein_residue_types: NDArray[np.str_] | None = None,
+    resolved_sequence_residue_types: NDArray[np.str_] | None = None,
     protein_chain_ids: NDArray[np.str_] | None = None,
     resolved_ligand_mols: list[Chem.rdchem.Mol] = None,
     resolved_ligand_conformers: list[Chem.rdchem.Mol] = None,
@@ -67,6 +68,21 @@ def structure2tensor(
         property_dict["protein_residue_types"] = torch.tensor(types_array_res).type(
             dtype
         )
+
+    if resolved_sequence_residue_types is not None:
+        resolved_sequence_residue_types = [
+            pc.ONE_TO_THREE.get(x) for x in resolved_sequence_residue_types
+        ]
+        unknown_name_idx = max(pc.AA_TO_INDEX.values()) + 1
+        resolved_residue_types_array_res = np.zeros(
+            (len(resolved_sequence_residue_types), 1)
+        )
+        for i, name in enumerate(resolved_residue_types_array_res):
+            types_array_res[i] = pc.AA_TO_INDEX.get(name, unknown_name_idx)
+        property_dict["resolved_sequence_residue_types"] = torch.tensor(
+            resolved_residue_types_array_res
+        ).type(dtype)
+
     if protein_atom_coordinates is not None:
         property_dict["protein_atom_coordinates"] = torch.tensor(
             protein_atom_coordinates, dtype=dtype
@@ -96,12 +112,6 @@ def structure2tensor(
 
         property_dict["ligand_conformer_atom_coordinates"] = lig_coords
     if resolved_ligand_mols is not None:
-        print(
-            [
-                lig_atom_featurizer(ligand_mol)
-                for _, ligand_mol in sorted(resolved_ligand_mols.items())
-            ]
-        )
         property_dict["ligand_features"] = torch.tensor(
             [
                 lig_atom_featurizer(ligand_mol)
@@ -669,7 +679,6 @@ class PlinderSystem:
             best_apo = (
                 links[(links.kind == "apo")].sort_values(by="sort_score").id.to_list()
             )
-            print("apo", best_apo)
             if len(best_apo) > 0:
                 best_apo = best_apo[0]
             else:
@@ -679,7 +688,6 @@ class PlinderSystem:
                 .sort_values(by="sort_score", ascending=False)
                 .id.to_list()
             )
-            print("pred", best_pred)
             if len(best_pred) > 0:
                 best_pred = best_pred[0]
             else:
@@ -700,10 +708,8 @@ class PlinderSystem:
         """ """
         holo_structure = self.holo_structure
         alt_structure = self.alt_structures
-        print(alt_structure)
         apo_structure_map = alt_structure.get("apo")
         pred_structure_map = alt_structure.get("pred")
-        print("test", apo_structure_map, pred_structure_map)
         if apo_structure_map is not None:
             # Ensure same number of chains in apo and holo
             holo_structure, apo_structure = _align_structures_with_mask(

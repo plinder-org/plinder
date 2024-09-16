@@ -151,7 +151,7 @@ class PlinderDataset(Dataset):  # type: ignore
                 input_structure = transform(input_structure)
                 target_structure = transform(target_structure)
 
-            input_id = input_structure.id
+            input_id = target_structure.id
             target_id = target_structure.id
             if self._transform is not None:
                 input_complex = self._transform(input_structure)
