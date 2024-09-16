@@ -562,23 +562,33 @@ def create_metadata(*, data_dir: Path, force_update: bool = False) -> None:
 
     metadata = data_dir / "metadata"
     metadata.mkdir(exist_ok=True, parents=True)
+    posebusters = data_dir / "posebusters"
+    posebusters.mkdir(exist_ok=True, parents=True)
 
-    keep = ["system_id"] + [
+    keep = [
         f"{chain_type}_{mapping_name}"
         for chain_type in CHAIN_TYPES + ["system_pocket"]
         for mapping_name in MAPPING_NAMES + ["Kinase name"]
     ]
 
-    for part in list(ascii_lowercase + digits):
-        dfs = []
-        partition = metadata / f"{part}.parquet"
-        if partition.is_file() and not force_update:
-            continue
-        for path in (data_dir / "qc" / "index").glob(f"*{part}.parquet"):
-            df = pd.read_parquet(path)
-            if not df.empty:
-                dfs.append(df.drop(columns=df.columns.difference(keep).to_list()))
-        pd.concat(dfs).reset_index(drop=True).to_parquet(partition, index=False)
+    count = 0
+    dfs = []
+    pbs = []
+    for i, path in enumerate((data_dir / "qc" / "index").glob("*.parquet")):
+        df = pd.read_parquet(path)
+        if not df.empty:
+            dfs.append(df.drop(columns=["system_id"] + sorted(set(keep).intersection(df.columns))))
+            pbs.append(df.drop(columns=["system_id"] + [col for col in df.columns if "posebuster" in col]))
+        if i and not i % 10:
+            pd.concat(dfs).reset_index(drop=True).to_parquet(metadata / f"{count}.parquet", index=False)
+            pd.concat(pbs).reset_index(drop=True).to_parquet(posebusters / f"{count}.parquet", index=False)
+            count += 1
+            dfs = []
+            pbs = []
+    if len(dfs):
+        pd.concat(dfs).reset_index(drop=True).to_parquet(metadata / f"{count}.parquet", index=False)
+    if len(pbs):
+        pd.concat(pbs).reset_index(drop=True).to_parquet(posebusters / f"{count}.parquet", index=False)
 
 
 def create_index(*, data_dir: Path, force_update: bool = False) -> pd.DataFrame:
@@ -594,16 +604,25 @@ def create_index(*, data_dir: Path, force_update: bool = False) -> pd.DataFrame:
     ]
     index = data_dir / "index" / "annotation_table.parquet"
     index.parent.mkdir(exist_ok=True, parents=True)
+    lean = data_dir / "qc" / "lean"
+    lean.mkdir(exist_ok=True, parents=True)
 
     if not index.exists() or force_update:
-        dfs = []
         for path in (data_dir / "qc" / "index").glob("*"):
             df = pd.read_parquet(path)
             if not df.empty:
-                dfs.append(df.drop(columns=df.columns.intersection(drop).to_list()))
+                addtl_cols = [col for col in df.columns if "posebuster" in col]
+                to_drop = df.columns.intersection(drop + addtl_cols).to_list()
+                LOG.info(f"{path.name} shape={df.shape} to_drop={len(to_drop)}")
+                df.drop(columns=to_drop).to_parquet(lean / path.name, index=False)
+        dfs = []
+        for path in lean.glob("*.parquet"):
+            df = pd.read_parquet(path)
+            if not df.empty:
+                dfs.append(df)
         df = pd.concat(dfs).reset_index(drop=True)
         # TODO: remove these kludges after posebusters bugfix is found and annotations are rerun
-        df["ligand_posebusters_internal_energy"] = df["ligand_posebusters_internal_energy"].astype(bool)
+        # df["ligand_posebusters_internal_energy"] = df["ligand_posebusters_internal_energy"].astype(bool)
         df.rename(
             columns={
                 f"{key}_Kinase name": f"{key}_kinase_name"
