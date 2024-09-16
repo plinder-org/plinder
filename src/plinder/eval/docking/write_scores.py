@@ -6,7 +6,6 @@ from collections import defaultdict
 from pathlib import Path
 from zipfile import ZipFile
 
-import numpy as np
 import ost
 import pandas as pd
 
@@ -45,7 +44,7 @@ def write_scores_as_json(
             system_dir, scorer_input.reference_system_id
         )
         receptor_file = scorer_input.receptor_file
-        if np.isnan(receptor_file):
+        if not Path(receptor_file).exists():
             # Rigid docking, use reference system's receptor cif file
             receptor_file = reference_system.receptor_cif_file
         scores = utils.ModelScores.from_files(
