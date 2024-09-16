@@ -22,7 +22,7 @@ from rdkit.Chem import QED, AllChem, Crippen, rdMolDescriptors
 from rdkit.Chem.rdchem import Mol, RWMol
 
 from plinder.core.utils.config import get_config
-from plinder.data.common.constants import BASE_DIR
+from plinder.core.utils.constants import BASE_DIR
 from plinder.data.utils.annotations.interaction_utils import (
     extract_ligand_links_to_neighbouring_chains,
     get_plip_hash,

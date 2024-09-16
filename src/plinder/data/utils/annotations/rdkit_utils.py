@@ -14,8 +14,8 @@ from rdkit.Chem import AllChem, rdMolDescriptors, rdRascalMCES
 from rdkit.Chem.rdchem import Mol
 from rdkit.Chem.rdFMCS import FindMCS
 
+from plinder.core.utils.constants import BASE_DIR
 from plinder.core.utils.log import setup_logger
-from plinder.data.common.constants import BASE_DIR
 
 LOG = setup_logger(__name__)
 COMPOUND_LIB = conop.GetDefaultLib()

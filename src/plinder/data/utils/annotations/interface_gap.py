@@ -10,15 +10,15 @@ import pandas as pd
 from biotite import structure as struc
 from biotite.structure import AtomArray
 
-from plinder.core.utils.log import setup_logger
-from plinder.data.structure.atoms import (
+from plinder.core.structure.atoms import (
     atom_array_from_cif_file,
 )
-from plinder.data.structure.contacts import (
+from plinder.core.structure.contacts import (
     get_atom_neighbors,
     label_structure_gaps,
     pairwise_chain_contacts,
 )
+from plinder.core.utils.log import setup_logger
 
 log = setup_logger(__name__)
 
