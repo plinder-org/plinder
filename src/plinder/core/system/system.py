@@ -19,12 +19,9 @@ if TYPE_CHECKING:
 
 
 from plinder.core.index import utils
-from plinder.core.loader.ligand_featurizer import (
-    generate_conformer,
-    lig_atom_featurizer,
-)
 from plinder.core.scores.links import query_links
-from plinder.core.structure.structure import Structure
+from plinder.core.structure.diffdock_utils import lig_atom_featurizer
+from plinder.core.structure.structure import Structure, _align_structures_with_mask
 from plinder.core.utils import constants as pc
 from plinder.core.utils.cpl import get_plinder_path
 from plinder.core.utils.io import (
@@ -47,9 +44,10 @@ def structure2tensor(
     protein_residue_coordinates: NDArray[np.double] | None = None,
     protein_residue_ids: NDArray[np.int_] | None = None,
     protein_residue_types: NDArray[np.str_] | None = None,
-    ligand_mols: Chem.rdchem.Mol = None,
+    protein_chain_ids: NDArray[np.str_] | None = None,
+    resolved_ligand_mols: list[Chem.rdchem.Mol] = None,
+    resolved_ligand_conformers: list[Chem.rdchem.Mol] = None,
     dtype: torch.dtype = torch.float32,
-    use_ligand_conformer: bool = True,
 ) -> dict[str, torch.Tensor]:
     property_dict = {}
     if protein_atom_types is not None:
@@ -81,17 +79,43 @@ def structure2tensor(
         property_dict["protein_residue_ids"] = torch.tensor(
             protein_residue_ids, dtype=dtype
         )
-    if ligand_mols is not None:
-        property_dict["ligand_features"] = torch.tensor(
-            [lig_atom_featurizer(ligand_mol) for ligand_mol in ligand_mols]
+    if protein_chain_ids is not None:
+        chain_tensor_map = {
+            ch_id: idx for idx, ch_id in enumerate(set(protein_chain_ids))
+        }
+        property_dict["protein_chain_ids"] = torch.tensor(
+            [chain_tensor_map[ch] for ch in protein_chain_ids], dtype=dtype
         )
-        if use_ligand_conformer:
-            ligand_mols = [generate_conformer(ligand_mol) for ligand_mol in ligand_mols]
+    if resolved_ligand_conformers is not None:
         lig_coords = torch.tensor(
-            [ligand_mol.GetConformer().GetPositions() for ligand_mol in ligand_mols]
+            [
+                ligand_mol.GetConformer().GetPositions()
+                for _, ligand_mol in sorted(resolved_ligand_conformers.items())
+            ]
         ).float()
 
-        property_dict["ligand_atom_coordinates"] = lig_coords
+        property_dict["ligand_conformer_atom_coordinates"] = lig_coords
+    if resolved_ligand_mols is not None:
+        print(
+            [
+                lig_atom_featurizer(ligand_mol)
+                for _, ligand_mol in sorted(resolved_ligand_mols.items())
+            ]
+        )
+        property_dict["ligand_features"] = torch.tensor(
+            [
+                lig_atom_featurizer(ligand_mol)
+                for _, ligand_mol in sorted(resolved_ligand_mols.items())
+            ]
+        ).float()
+        lig_coords = torch.tensor(
+            [
+                ligand_mol.GetConformer().GetPositions()
+                for _, ligand_mol in sorted(resolved_ligand_mols.items())
+            ]
+        ).float()
+
+        property_dict["ligand_reference_atom_coordinates"] = lig_coords
 
     return property_dict
 
@@ -206,16 +230,21 @@ def collate_complex(
     protein_residue_coordinates = []
     protein_residue_ids = []
     ligand_features = []
-    ligand_atom_coordinates = []
+    protein_chain_ids = []
+    ligand_conformer_atom_coordinates = []
+    ligand_reference_atom_coordinates = []
 
     for x in structures:
         protein_atom_types.append(x["protein_atom_types"])
-        protein_residue_types.append(x["rprotein_esidue_types"])
+        protein_residue_types.append(x["protein_residue_types"])
         protein_atom_coordinates.append(x["protein_atom_coordinates"])
         protein_residue_coordinates.append(x["protein_residue_coordinates"])
         protein_residue_ids.append(x["protein_residue_ids"])
         ligand_features.append(x["ligand_features"])
-        ligand_atom_coordinates.append(x["ligand_atom_coordinates"])
+        protein_chain_ids.append(x["protein_chain_ids"])
+        ligand_conformer_atom_coordinates.append(x["ligand_conformer_atom_coordinates"])
+        ligand_reference_atom_coordinates.append(x["ligand_reference_atom_coordinates"])
+
     return {
         "protein_atom_types": pad_and_stack(
             protein_atom_types, dim=0, value=atom_type_pad_value
@@ -235,8 +264,14 @@ def collate_complex(
         "ligand_features": pad_and_stack(
             ligand_features, dim=0, value=atom_type_pad_value
         ),
-        "ligand_atom_coordinates": pad_and_stack(
-            ligand_atom_coordinates, dim=0, value=coords_pad_value
+        "protein_chain_ids": pad_and_stack(
+            protein_chain_ids, dim=0, value=coords_pad_value
+        ),
+        "ligand_conformer_atom_coordinates": pad_and_stack(
+            ligand_conformer_atom_coordinates, dim=0, value=coords_pad_value
+        ),
+        "ligand_reference_atom_coordinates": pad_and_stack(
+            ligand_conformer_atom_coordinates, dim=0, value=coords_pad_value
         ),
     }
 
@@ -262,7 +297,6 @@ def collate_batch(
     target_structures: list[dict[str, Tensor]] = []
     feature_structures: list[dict[str, Tensor]] = []
     for x in batch:
-        assert isinstance(x["id"], str)
         assert isinstance(x["input_id"], str)
         assert isinstance(x["target_id"], str)
         assert isinstance(x["target"], dict)
@@ -271,7 +305,7 @@ def collate_batch(
         sample_ids.append(x["input_id"])
         target_ids.append(x["target_id"])
         target_structures.append(x["target"])
-        feature_structures.append(x["input_feature"])
+        feature_structures.append(x["input_features"])
 
     collated_batch: dict[str, dict[str, Tensor] | list[str]] = {
         "target": collate_complex(target_structures),
@@ -280,75 +314,6 @@ def collate_batch(
         "target_id": target_ids,
     }
     return collated_batch
-
-
-def _align_monomers_with_mask(
-    monomer1: Structure,
-    monomer2: Structure,
-    remove_differing_atoms: bool = True,
-    renumber_residues: bool = False,
-    remove_differing_annotations: bool = False,
-) -> tuple[Structure, Structure]:
-    monomer2, monomer1 = monomer2.align_common_sequence(
-        monomer1,
-        remove_differing_atoms=remove_differing_atoms,
-        renumber_residues=renumber_residues,
-        remove_differing_annotations=remove_differing_annotations,
-    )
-    monomer2, _, _ = monomer2.superimpose(monomer1)
-    return monomer1, monomer2
-
-
-def _align_structures_with_mask(
-    multi_chain_structure: Structure,
-    map_of_alt_monomer_structures: dict[str, Structure],
-    remove_differing_atoms: bool = True,
-    renumber_residues: bool = False,
-    remove_differing_annotations: bool = False,
-) -> tuple[Structure, Structure]:
-    cropped_and_superposed_ref_dict = {}
-    cropped_and_superposed_target_dict = {}
-    for ref_chain, target_monomer_structure in map_of_alt_monomer_structures.items():
-        ref_monomer_structure = multi_chain_structure.filter(
-            property="chain_id", mask={ref_chain}
-        )
-        target_monomer_structure.set_chain(ref_chain)
-
-        ref_monomer_structure, target_monomer_structure = _align_monomers_with_mask(
-            ref_monomer_structure,
-            target_monomer_structure,
-            remove_differing_atoms=remove_differing_atoms,
-            renumber_residues=renumber_residues,
-            remove_differing_annotations=remove_differing_annotations,
-        )
-        cropped_and_superposed_ref_dict[ref_chain] = ref_monomer_structure
-        cropped_and_superposed_target_dict[ref_chain] = target_monomer_structure
-    target_values = list(cropped_and_superposed_target_dict.values())
-    ref_values = list(cropped_and_superposed_ref_dict.values())
-    new_merged_target = target_values[0]
-    new_merged_ref = ref_values[0]
-    for target_val in target_values[1:]:
-        new_merged_target += target_val
-    for ref_val in ref_values[1:]:
-        new_merged_ref += ref_val
-    # Transfer ligand
-    new_merged_target.ligand_mols = multi_chain_structure.ligand_mols
-    new_merged_ref.ligand_mols = multi_chain_structure.ligand_mols
-
-    # merge monomers (and/or part of multi_chain_structure) into single new structure
-    reference_chains = set(multi_chain_structure.protein_atom_array.chain_id)
-    chains_not_mapped = reference_chains - set(map_of_alt_monomer_structures.keys())
-    if len(chains_not_mapped) == 0:
-        return new_merged_ref, new_merged_target
-    else:
-        for chain in chains_not_mapped:
-            unmapped_structure = multi_chain_structure.filter(
-                property="chain_id", mask=chain
-            )
-            new_merged_target += unmapped_structure
-            new_merged_ref += unmapped_structure
-
-    return cropped_and_superposed_ref_dict, cropped_and_superposed_target_dict
 
 
 class PlinderSystem:
@@ -366,9 +331,11 @@ class PlinderSystem:
         self,
         *,
         system_id: str,
+        resolved_smiles_dict: dict[str, str],
         prune: bool = True,
     ) -> None:
         self.system_id: str = system_id
+        self.resolved_smiles_dict: dict[str, str] = resolved_smiles_dict
         self.prune: bool = prune
         self._entry: dict[str, Any] | None = None
         self._system: dict[str, Any] | None = None
@@ -722,34 +689,7 @@ class PlinderSystem:
         renumber_residues: bool = False,
         remove_differing_annotations: bool = False,
     ) -> tuple[Structure, Structure, Structure]:
-        """Create complexes for apo and predicted cropped to common holo substructures.
-
-        The method applies a pairwise masking procedure which crops both unbound and bound structures
-        such that they have equal numbers of residues and atom counts.
-
-        Note: this method may result in very distorted holo (ground-truth) structures if
-        the unbound monomer structures have little to no sequence and atoms in common.
-        Unless you need all monomer types to be equal shapes, the `PinderSystem.create_complex` method
-        or pure-superposition without masking (Structure.superimpose) is more appropriate.
-
-        Parameters:
-            monomer_types (Sequence[str]): The unbound monomer types to consider (apo, predicted, or both).
-            remove_differing_atoms (bool):
-                Whether to remove non-overlappings atoms that may still be present even after sequence-based alignment.
-            renumber_residues (bool):
-                Whether to renumber the residues in the receptor and ligand `Structure`'s to match numbering of the holo counterparts.
-            remove_differing_annotations (bool):
-                Whether to remove annotation categories (set to empty str or default value for the category type).
-                This is useful if you need to perform biotite.structure.filter_intersection on the resulting structures.
-                Note: this can have unintended side-effects like stripping the `element` attribute on structures.
-                By default, the annotation categories are removed if they don't match in order to define the intersecting atom mask,
-                after which the original structure annotations are preserved by applying the intersecting mask to the original AtomArray.
-                Default is False.
-
-        Returns:
-            tuple[Structure, Structure, Structure]: A tuple of the cropped holo, apo, and predicted Structure objects, respectively.
-
-        """
+        """ """
         holo_structure = self.holo_structure
         alt_structure = self.alt_structures
         apo_structure_map = alt_structure["apo"]
@@ -782,7 +722,16 @@ class PlinderSystem:
         """
         Load holo structure
         """
-        return Structure(protein_path=self.receptor_cif, id=self.system_id)
+        list_ligand_sdf_and_resolved_smiles = [
+            (Path(sdf_path), self.resolved_smiles_dict[chain])
+            for chain, sdf_path in self.ligands.items()
+        ]
+        return Structure.load_structure(
+            id=self.system_id,
+            protein_path=self.receptor_cif,
+            protein_sequence=Path(self.sequences),
+            list_ligand_sdf_and_resolved_smiles=list_ligand_sdf_and_resolved_smiles,
+        )
 
     @property
     def alt_structures(self) -> Structure | None:
@@ -792,9 +741,10 @@ class PlinderSystem:
         best_structures = self.best_linked_structures_paths
         return {
             kind: {
-                chain: Structure(
-                    protein_path=alt_path,
+                chain: Structure.load_structure(
                     id=Path(alt_path).parent.name,
+                    protein_path=alt_path,
+                    protein_sequence=Path(self.sequences),
                     structure_type=kind,
                 )
             }
