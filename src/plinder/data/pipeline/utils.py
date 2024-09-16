@@ -10,6 +10,7 @@ from itertools import repeat
 from json import dumps, load
 from os import listdir
 from pathlib import Path
+from string import ascii_lowercase, digits
 from time import time
 from typing import TYPE_CHECKING, Any, Callable, Dict, Literal, Optional, TypeVar
 from zipfile import ZIP_DEFLATED, ZipFile
@@ -553,6 +554,33 @@ def add_aggregated_columns(*, index: pd.DataFrame) -> pd.DataFrame:
     return index
 
 
+def create_metadata(*, data_dir: Path, force_update: bool = False) -> None:
+    """
+    Isolate bulky columns from the index to additional metadata
+    """
+    from plinder.data.docs import CHAIN_TYPES, MAPPING_NAMES
+
+    metadata = data_dir / "metadata"
+    metadata.mkdir(exist_ok=True, parents=True)
+
+    keep = ["system_id"] + [
+        f"{chain_type}_{mapping_name}"
+        for chain_type in CHAIN_TYPES
+        for mapping_name in MAPPING_NAMES + ["Kinase name"]
+    ]
+
+    for part in list(ascii_lowercase + digits):
+        dfs = []
+        partition = metadata / f"{part}.parquet"
+        if partition.is_file() and not force_update:
+            continue
+        for path in (data_dir / "qc" / "index").glob(f"*{part}.parquet"):
+            df = pd.read_parquet(path)
+            if not df.empty:
+                dfs.append(df.drop(columns=df.columns.difference(keep).to_list()))
+        pd.concat(dfs).reset_index(drop=True).to_parquet(partition, index=False)
+
+
 def create_index(*, data_dir: Path, force_update: bool = False) -> pd.DataFrame:
     """
     Create the index
@@ -572,7 +600,7 @@ def create_index(*, data_dir: Path, force_update: bool = False) -> pd.DataFrame:
         for path in (data_dir / "qc" / "index").glob("*"):
             df = pd.read_parquet(path)
             if not df.empty:
-                dfs.append(df.drop(columns=df.columns.intersection(drop)))
+                dfs.append(df.drop(columns=df.columns.intersection(drop).to_list()))
         df = pd.concat(dfs).reset_index(drop=True)
         # TODO: remove these kludges after posebusters bugfix is found and annotations are rerun
         df["ligand_posebusters_internal_energy"] = df["ligand_posebusters_internal_energy"].astype(bool)
