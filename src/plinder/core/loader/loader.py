@@ -7,25 +7,28 @@ from typing import Any, Callable, Dict, List, Literal, Tuple
 
 import pandas as pd
 import torch
-from torch.utils.data import DataLoader, Dataset, Sampler
+from torch.utils.data import DataLoader, Dataset
 
 from plinder.core import system
 from plinder.core.loader.transforms import StructureTransform
+from plinder.core.scores import query_index
 from plinder.core.scores.links import query_links
 from plinder.core.split.utils import get_split
 from plinder.core.structure.structure import Structure
+from plinder.core.system.system import collate_batch, structure2tensor
 
 
 def structure2tensor_transform(structure: Structure) -> dict[str, torch.Tensor]:
-    props: dict[str, torch.Tensor] = system.structure2tensor(
+    props: dict[str, torch.Tensor] = structure2tensor(
         protein_atom_coordinates=structure.protein_coords,
         protein_atom_types=structure.protein_atom_array.element,
         protein_residue_coordinates=structure.protein_coords,
-        protein_residue_ids=structure.protein_atom_array.res_name,
-        protein_residue_types=structure.protein_atom_array.res_id,
-        ligand_mols=structure.ligand_mols,
+        protein_residue_ids=structure.protein_atom_array.res_id,
+        protein_chain_ids=structure.protein_atom_array.chain_id,
+        protein_residue_types=structure.protein_atom_array.res_name,
+        resolved_ligand_mols=structure.resolved_ligand_mols,
+        resolved_ligand_conformers=structure.resolved_ligand_conformers,
         dtype=torch.float32,
-        use_ligand_conformer=True,
     )
     return props
 
@@ -44,8 +47,22 @@ class PlinderDataset(Dataset):  # type: ignore
         path to a file containing a list of system ids (default: full index)
     store_file_path : bool, default=True
         if True, include the file path of the source structures in the dataset
-    num_alternative_structures : int, default=0
-        if available, load up to this number of alternative structures (apo and pred)
+    input_structure_priority : str, default="apo"
+        Which alternate structure to proritize
+    structure_transforms: list[StructureTransform], default=[]
+        Transformation to be applied on structure object
+    transform: Callable[
+        [Structure], torch.Tensor | dict[str, torch.Tensor]
+    ] = structure2tensor_transform,
+        Transformation to turn structure to input tensors
+    target_transform: Callable[
+        [Structure], torch.Tensor | dict[str, torch.Tensor]
+    ] = structure2tensor_transform,
+        Transformation to turn structure to target tensors
+    crop_equal_monomer_shapes: bool = True,
+        Crop monomers in holo and predicted structure to equal length
+    always_match_alt_struc: bool = True,
+        Boolean to indicate whether to alwayss provide apo-matched holo
     """
 
     def __init__(
@@ -65,6 +82,7 @@ class PlinderDataset(Dataset):  # type: ignore
             [Structure], torch.Tensor | dict[str, torch.Tensor]
         ] = structure2tensor_transform,
         crop_equal_monomer_shapes: bool = True,
+        always_match_alt_struc: bool = True,
         **kwargs: Any,
     ):
         if df is None:
@@ -72,12 +90,14 @@ class PlinderDataset(Dataset):  # type: ignore
                 df = get_split()
             else:
                 df = pd.read_parquet(split_parquet_path)
+        self._always_match_alt_struc = always_match_alt_struc
+        self._sys_ids_with_links = query_links().reference_system_id.unique()
+        if self._always_match_alt_struc:
+            df = df[df.system_id.isin(self._sys_ids_with_links)]
         self._system_ids = df.loc[df["split"] == split, "system_id"].to_list()
         self._num_examples = len(self._system_ids)
         self._store_file_path = store_file_path or file_paths_only
-        self._links = None
-        if num_alternative_structures > 0:
-            self._links = query_links().groupby("reference_system_id")
+
         self.num_alternative_structures = num_alternative_structures
         self._file_paths_only = file_paths_only
         self._input_structure_priority = input_structure_priority
@@ -85,6 +105,20 @@ class PlinderDataset(Dataset):  # type: ignore
         self._transform = transform
         self._target_transform = target_transform
         self._crop_equal_monomer_shapes = crop_equal_monomer_shapes
+
+        plindex = query_index(
+            columns=["system_id", "ligand_id", "ligand_rdkit_canonical_smiles"],
+            filters=[("system_id", "in", self._system_ids)],
+        )
+        plindex["chain_id"] = plindex.ligand_id.apply(lambda x: x.split("__")[-1])
+        grouped_plindex = plindex.groupby("system_id").agg(list)[
+            ["chain_id", "ligand_rdkit_canonical_smiles"]
+        ]
+        self._ligand_smiles_dict = (
+            grouped_plindex[["chain_id", "ligand_rdkit_canonical_smiles"]]
+            .apply(lambda x: dict(zip(x[0], x[1])), axis=1)
+            .to_dict()
+        )
 
     def __len__(self) -> int:
         return self._num_examples
@@ -94,8 +128,10 @@ class PlinderDataset(Dataset):  # type: ignore
     ) -> dict[str, int | str | pd.DataFrame | dict[str, str | pd.DataFrame]]:
         if not 0 <= index < self._num_examples:
             raise IndexError(index)
-
-        s = system.PlinderSystem(system_id=self._system_ids[index])
+        smiles_dict = self._ligand_smiles_dict[self._system_ids[index]]
+        s = system.PlinderSystem(
+            system_id=self._system_ids[index], resolved_smiles_dict=smiles_dict
+        )
 
         if not self._file_paths_only:
             # avoid loading structure if not needed
@@ -111,16 +147,16 @@ class PlinderDataset(Dataset):  # type: ignore
             }
             input_structure = cropped_structures[self._input_structure_priority]
             target_structure = holo_structure
-            for transform in self.structure_transforms:
+            for transform in self._structure_transforms:
                 input_structure = transform(input_structure)
                 target_structure = transform(target_structure)
 
             input_id = input_structure.id
             target_id = target_structure.id
-            if self.transform is not None:
-                input_complex = self.transform(input_structure)
-            if self.target_transform is not None:
-                target_complex = self.target_transform(target_structure)
+            if self._transform is not None:
+                input_complex = self._transform(input_structure)
+            if self._target_transform is not None:
+                target_complex = self._target_transform(target_structure)
 
         item: Dict[str, Any] = {
             "input_id": input_id,
@@ -138,11 +174,11 @@ def get_torch_loader(
     dataset: PlinderDataset,
     batch_size: int = 2,
     shuffle: bool = True,
-    sampler: "Sampler[PlinderDataset]" | None = None,
+    sampler=None,  # None: 'Sampler[PlinderDataset]' | None = None,
     num_workers: int = 1,
-    collate_fn: Callable[[list[dict[str, Any]]], dict[str, Any]] = system.collate_batch,
+    collate_fn: Callable[[list[dict[str, Any]]], dict[str, Any]] = collate_batch,
     **kwargs: Any,
-) -> "DataLoader[PlinderDataset]":
+):  # -> "DataLoader[PlinderDataset]":
     return DataLoader(
         dataset,
         batch_size=batch_size,
