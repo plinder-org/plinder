@@ -434,12 +434,12 @@ class PlinderDataIngestFlow(FlowSpec):
     #     self.chunks = self.pipeline.scatter_make_linked_structures()
     #     self.next(self.make_linked_structures, foreach="chunks")
 
-    @kubernetes(**{**K8S, **{"cpu": 30, "memory": 24000}})
+    @kubernetes(**{**K8S, **{"cpu": 28, "memory": 24000}})
     @environment(**ENV)
     @retry
     @step
     def make_linked_structures(self):
-        self.pipeline.cfg.flow.make_linked_structures_cpu = WORKSTATION["cpu"] - 1
+        self.pipeline.cfg.flow.make_linked_structures_cpu = 26
         self.pipeline.make_linked_structures()
         self.next(self.end)
 

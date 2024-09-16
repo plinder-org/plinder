@@ -311,14 +311,23 @@ class ModelScores:
         )
         return average_score, weighted_average_score
 
-    def get_passing_posebusters(self) -> dict[str, list[Any]]:
+    def get_average_posebusters(self) -> dict[str, list[Any]]:
         scores = {}
+        weights = []
         if self.ligand_scores is None:
             return scores
         for ligand_scores in self.ligand_scores:
-            key = f"posebusters_{ligand_scores.sdf_file.stem}"
-            scores[key] = ligand_scores.posebusters.copy()
-        return scores
+            weights.append(ligand_scores.atom_count)
+            for key, value in ligand_scores.posebusters.items():
+                scores.setdefault(key, [])
+                scores[key].append(value)
+        avg_scores = {}
+        for key, values in scores.items():
+            try:
+                avg_scores[f"posebusters_{key}"] = np.mean([w * v for w, v in zip(weights, values)])
+            except Exception:
+                avg_scores[f"posebusters_{key}"] = np.nan
+        return avg_scores
 
     def summarize_scores(self) -> dict[str, Any]:
         scores: dict[str, Any] = dict(
@@ -341,7 +350,7 @@ class ModelScores:
                 scores[f"{score_name}_wave"],
             ) = self.get_average_ligand_scores(score_name)
         if self.score_posebusters:
-            scores.update(self.get_passing_posebusters())
+            scores.update(self.get_average_posebusters())
         if self.score_protein and self.protein_scores is not None:
             scores["fraction_reference_proteins_mapped"] = (
                 self.num_mapped_reference_proteins / self.reference.num_proteins

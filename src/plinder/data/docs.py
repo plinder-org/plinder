@@ -6,15 +6,16 @@ from pathlib import Path
 
 import pandas as pd
 
+from plinder.data import column_descriptions
 from plinder.data.utils.annotations.aggregate_annotations import Entry, System
-from plinder.data.utils.annotations.protein_utils import Chain
 from plinder.data.utils.annotations.get_ligand_validation import (
     EntryValidation,
     ResidueListValidation,
 )
 from plinder.data.utils.annotations.ligand_utils import Ligand
+from plinder.data.utils.annotations.protein_utils import Chain
 
-
+TSV_DIR = Path(column_descriptions.__file__).parent
 VALIDATION_TYPES = [
     "system_pocket",
     "system_ligand",
@@ -51,7 +52,9 @@ CHAIN_TYPES = [
 ]
 
 
-def get_cluster_column_descriptions(plindex: pd.DataFrame) -> list[tuple[str, str | None, str | None]]:
+def get_cluster_column_descriptions(
+    plindex: pd.DataFrame
+) -> list[tuple[str, str | None, str | None]]:
     rows = []
     component_columns = [c for c in plindex.columns if c.endswith("__component")]
     for column in component_columns:
@@ -76,55 +79,29 @@ def get_cluster_column_descriptions(plindex: pd.DataFrame) -> list[tuple[str, st
     return rows
 
 
-def get_all_column_descriptions(*, plindex: pd.DataFrame) -> list[tuple[str, str | None, str | None]]:
-    descriptions = []
-    descriptions.extend(list(Entry.document_properties("entry")))
-    descriptions.extend(list(EntryValidation.document_properties("entry_validation")))
-    descriptions.extend(list(System.document_properties("system")))
-    for validation_type in VALIDATION_TYPES:
-        descriptions.extend(
-            list(ResidueListValidation.document_properties(f"{validation_type}_validation"))
-        )
-        descriptions.extend([
-            (
-                f"{validation_type}_validation_percent_outliers_{key}",
-                float,
-                f"Percent outliers for {key}",
-            )
-            for key in VALIDATION_OUTLIER_KEYS
-        ])
-    for chain_type in CHAIN_TYPES:
-        descriptions.extend(list(Chain.document_properties(chain_type)))
-        descriptions.extend([
-            (
-                f"{chain_type}_{key}",
-                dict[str, tuple[str, str]],
-                f"Domains and ranges for {key}",
-            )
-            for key in MAPPING_NAMES
-        ])
-    descriptions.extend([
-        (
-            f"system_pocket_{key}",
-            dict[str, tuple[str, str]],
-            f"Domains and ranges for {key}",
-        )
-        for key in MAPPING_NAMES
-    ])
-    descriptions.extend(list(Ligand.document_properties("ligand")))
-    descriptions.extend(get_cluster_column_descriptions(plindex))
+def get_all_column_descriptions(
+    *, plindex: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    if plindex is not None:
+        make_column_descriptions(plindex=plindex)
+    dfs = []
+    for tsv in TSV_DIR.glob("*.tsv"):
+        dfs.append(pd.read_csv(tsv, sep="\t"))
+    return pd.concat(dfs).reset_index(drop=True)
 
-    hack_path = Path.cwd() / "column_descriptions" 
     for tsv in ["extra.tsv", "posebusters_checks.tsv", "qc.tsv"]:
-        if not (hack_path / tsv).is_file():
-            raise ValueError(f"missing {hack_path / tsv}")
-        df = pd.read_csv(hack_path / tsv, sep="\t")
+        if not (TSV_DIR / tsv).is_file():
+            raise ValueError(f"missing {TSV_DIR / tsv}")
+        df = pd.read_csv(TSV_DIR / tsv, sep="\t")
         df["Type"] = df["Type"].apply(eval)
         descriptions.extend(df.itertuples(index=False))
     return descriptions
 
 
-def make_column_descriptions(*, plindex: pd.DataFrame, output_dir: Path) -> None:
+def make_column_descriptions(*, plindex: pd.DataFrame) -> None:
+    from plinder.data import column_descriptions
+
+    output_dir = Path(column_descriptions.__file__).parent
     output_dir.mkdir(parents=True, exist_ok=True)
     Entry.document_properties_to_tsv(prefix="entry", filename=output_dir / "entry.tsv")
     EntryValidation.document_properties_to_tsv(
@@ -167,27 +144,6 @@ def make_column_descriptions(*, plindex: pd.DataFrame, output_dir: Path) -> None
         f.write("Name\tType\tDescription\n")
         rows = get_cluster_column_descriptions(plindex)
         for row in rows:
-            f.write(f"{row[0]}\t{row[1]}\t{row[2]}\n")
+            f.write(f"{row[0]}\t{row[1].__name__}\t{row[2]}\n")
 
 
-if __name__ == "__main__":
-    from plinder.data.pipeline import config
-
-    import types
-
-    cfg = config.get_config()
-    plindex = pd.read_parquet(Path(cfg.data.plinder_dir) / cfg.data.index / cfg.data.index_file)
-    # plindex = pd.read_parquet(Path("column_descriptions/h8.parquet"))
-    count = 0
-    aliases = 0
-    columns = set()
-    for row in get_all_column_descriptions(plindex=plindex):
-        print(row[0], row[1], row[2], type(row[1]))
-        if isinstance(row[1], types.GenericAlias):
-            aliases += 1
-        count += 1
-        columns.add(row[0])
-    print(f"total {count} columns, aliases={aliases}")
-    print("in plindex not in columns", len(set(plindex.columns).difference(columns)))
-    print("in plindex not in columns", set(plindex.columns).difference(columns))
-    print("in columns not in plindex", len(columns.difference(plindex.columns)))
