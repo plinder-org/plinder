@@ -371,7 +371,7 @@ class Chain(DocBaseModel):
             "length": self.length,
             "num_unresolved_residues": self.num_unresolved_residues,
         }
-        data.update(self.mappings)
+        # data.update(self.mappings)
         if self.validation is not None:
             data.update(self.validation.format())
         return data
