@@ -12,7 +12,7 @@ from metaflow import FlowSpec, Parameter, kubernetes, environment, step, retry
 MOUNT = "/plinder"
 K8S = dict(
     cpu=1,
-    image="us-east1-docker.pkg.dev/vantai-analysis/metaflow/plinder:v0.2.2-52-g09bed841",
+    image="us-east1-docker.pkg.dev/vantai-analysis/metaflow/plinder:v0.2.2-63-g71bd2d22",
     node_selector={
         "topology.kubernetes.io/zone": "us-east1-b",
     },
@@ -213,7 +213,7 @@ class PlinderDataIngestFlow(FlowSpec):
     def join_structure_qc(self, inputs):
         self.pipeline = inputs[0].pipeline
         self.merge_artifacts(inputs, exclude=["chunks"])
-        self.pipeline.join_structure_qc(inputs)
+        self.pipeline.join_structure_qc([])
         self.next(self.scatter_score_linked_structures)
 
     # @kubernetes(**K8S)
