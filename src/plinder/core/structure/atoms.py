@@ -9,21 +9,22 @@ import tempfile
 from pathlib import Path
 from typing import Dict, Optional, Union
 
-import biotite.sequence as seq
-import biotite.sequence.align as align
 import biotite.structure as struc
-import biotite.structure.io as strucio
 import numpy as np
 from biotite import TextFile
-from biotite.sequence.align import Alignment
-from biotite.structure import connect_via_residue_names
 from biotite.structure.atoms import AtomArray, AtomArrayStack
 from biotite.structure.io.pdbx import get_structure
 from numpy.typing import NDArray
+from pinder.core.structure.atoms import (
+    _convert_resn_to_sequence_and_numbering,
+    _get_structure_and_res_info,
+    align_sequences,
+    apply_mask,
+    mask_from_res_list,
+)
 from rdkit import Chem
 from rdkit.Chem import AllChem, Mol
 
-from plinder.core.utils import constants as pc
 from plinder.core.utils.log import setup_logger
 
 log = setup_logger(__name__)
@@ -166,12 +167,6 @@ def atom_array_to_rdkit_mol(
         return new_mol_h
 
 
-def add_bond_order_to_protein_atom_array(atom_array: AtomArray) -> AtomArray:
-    bonds = connect_via_residue_names(atom_array)
-    atom_array.bonds = bonds
-    return atom_array
-
-
 def generate_conformer(mol):
     _mol = copy.deepcopy(mol)
     ps = AllChem.ETKDGv2()
@@ -200,41 +195,12 @@ def match_ligands(
     return matches[0], resolved_mol, unresolved_mol
 
 
-def _get_seq_aligned_structures(
-    ref: Path | _AtomArrayOrStack, subject: Path | _AtomArrayOrStack
-) -> tuple[_AtomArrayOrStack, _AtomArrayOrStack]:
-    """Find common sequence and set identical residue numbering for common seq.
-    This method only safely works on a single chain.
-    """
-
-    ref_info = _get_structure_and_res_info(ref)
-    subj_info = _get_structure_and_res_info(subject)
-
-    subj_resid_map, alns = _align_and_map_sequences(ref_info, subj_info)
-
-    # Need to remove ref residues in order to match subject
-    ref_structure, _, _ = ref_info
-    subj_structure, _, _ = subj_info
-
-    assert isinstance(ref_structure, (AtomArray, AtomArrayStack))
-    assert isinstance(subj_structure, (AtomArray, AtomArrayStack))
-
-    ref_mask = mask_from_res_list(ref_structure, list(subj_resid_map.values()))
-    subj_mask = mask_from_res_list(subj_structure, list(subj_resid_map.keys()))
-
-    ref_aligned = apply_mask(ref_structure, ref_mask)
-    subject_aligned = apply_mask(subj_structure, subj_mask)
-    subject_aligned.res_id = np.array(
-        [subj_resid_map[ri] for ri in subject_aligned.res_id]
-    )
-    return ref_aligned, subject_aligned
-
-
 def _align_structure_to_ref_sequence(
     ref_seq: str,
     subject: Path | _AtomArrayOrStack,
 ) -> tuple[_AtomArrayOrStack, str, list[int]]:
     """ """
+
     subj_info = _get_structure_and_res_info(subject)
     subj_seq, subj_numbering = _convert_resn_to_sequence_and_numbering(subj_info)
 
@@ -321,448 +287,16 @@ def get_residue_index_mapping_mask(
             _,
         ) = alignments
         mask = np.zeros(len(ref_seq))
-        for i in len(mask):
+        for i in range(len(mask)):
             if (i + 1) in ref_numbering_mapped:
                 mask[i] = 1
         mask_map[reference_chain] = mask
         return mask_map
 
 
-def _align_and_map_sequences(
-    ref_info: tuple[_AtomArrayOrStack, list[int], list[str]],
-    subj_info: tuple[_AtomArrayOrStack, list[int], list[str]],
-) -> tuple[dict[int, int], tuple[str, str, list[int], list[int]]]:
-    """Aligns two sequences and maps the numbering from the reference to the subject.
-
-    This method only safely works on a single chain.
-    """
-    ref_seq, ref_numbering = _convert_resn_to_sequence_and_numbering(ref_info)
-    subj_seq, subj_numbering = _convert_resn_to_sequence_and_numbering(subj_info)
-
-    alignments = align_sequences(ref_seq, subj_seq, ref_numbering, subj_numbering)
-    (
-        ref_seq_mapped,
-        subj_seq_mapped,
-        ref_numbering_mapped,
-        subj_numbering_mapped,
-    ) = alignments
-
-    subject_common = f"{len(subj_seq_mapped)}/{len(subj_seq)}"
-    ref_common = f"{len(ref_seq_mapped)}/{len(ref_seq)}"
-    log.debug(
-        f"{subject_common} residues in subject matched to "
-        f"{ref_common} residues in ref"
-    )
-
-    # Renumber subject residues to match aligned reference
-    subj_resid_map = dict(zip(subj_numbering_mapped, ref_numbering_mapped))
-    return subj_resid_map, alignments
-
-
-def _get_paired_structures_and_chains(
-    ref: Path | _AtomArrayOrStack,
-    subject: Path | _AtomArrayOrStack,
-) -> tuple[_AtomArrayOrStack, _AtomArrayOrStack, NDArray[np.str_], NDArray[np.str_]]:
-    ref_arr: _AtomArrayOrStack = atom_array_from_pdb_file(ref)
-    subject_arr: _AtomArrayOrStack = atom_array_from_pdb_file(subject)
-    ref_chains = struc.get_chains(ref_arr)
-    subject_chains = struc.get_chains(subject_arr)
-
-    # Sometimes returns repeated chains
-    _, sub_idx = np.unique(subject_chains, return_index=True)
-    subject_chains = subject_chains[np.sort(sub_idx)]
-
-    _, ref_idx = np.unique(ref_chains, return_index=True)
-    ref_chains = ref_chains[np.sort(ref_idx)]
-    if len(ref_chains) != len(subject_chains):
-        raise ValueError("Ref and subject must have same number of chains!")
-
-    if (ref_chains != subject_chains).any():
-        log.error("Ref and subject have different chains!")
-        log.warning(
-            "Sequence alignment will assume this order: "
-            f"{ref_chains}, {subject_chains} "
-        )
-    return ref_arr, subject_arr, ref_chains, subject_chains
-
-
-def get_per_chain_seq_alignments(
-    ref: Path | _AtomArrayOrStack,
-    subject: Path | _AtomArrayOrStack,
-) -> dict[str, dict[int, int]]:
-    """Computes per-chain sequence alignments between reference and subject
-    structures, and provides a mapping of residue numbers from the subject
-    to the reference for each chain.
-
-    This function processes each chain separately, aligns their sequences,
-    and creates a mapping of residue numbering from the subject structure
-    to the reference structure based on sequence alignment. It is designed
-    to work with multi-chain structures, aligning each chain independently.
-
-    Parameters
-    ----------
-    ref : Path | _AtomArrayOrStack
-        The file path or structure array of the reference structure.
-    subject : Path | _AtomArrayOrStack
-        The file path or structure array of the subject structure to align with the reference.
-
-    Returns
-    -------
-    dict[str, dict[int, int]]
-        A dictionary where keys are chain identifiers from the subject structure and values are dictionaries mapping residue numbers in the subject structure to those in the reference structure for the aligned sequence segments.
-
-    Raises
-    ------
-    ValueError
-        If the reference and subject structures do not have the same number of chains or if the chains cannot be matched properly.
-
-    """
-    (
-        ref_arr,
-        subject_arr,
-        ref_chains,
-        subject_chains,
-    ) = _get_paired_structures_and_chains(ref, subject)
-    ch_res_maps: dict[str, dict[int, int]] = {}
-    for ref_ch, subject_ch in zip(ref_chains, subject_chains):
-        ref_mask = ref_arr.chain_id == ref_ch
-        subject_mask = subject_arr.chain_id == subject_ch
-        ref_ch_arr = apply_mask(ref_arr, ref_mask)
-        subject_ch_arr = apply_mask(subject_arr, subject_mask)
-
-        ref_info = _get_structure_and_res_info(ref_ch_arr)
-        subj_info = _get_structure_and_res_info(subject_ch_arr)
-        existing2new, alns = _align_and_map_sequences(ref_info, subj_info)
-        ch_res_maps[subject_ch] = existing2new
-    return ch_res_maps
-
-
-def _get_paired_structures_and_chains(
-    ref: Path | _AtomArrayOrStack,
-    subject: Path | _AtomArrayOrStack,
-) -> tuple[_AtomArrayOrStack, _AtomArrayOrStack, NDArray[np.str_], NDArray[np.str_]]:
-    ref_arr: _AtomArrayOrStack = atom_array_from_pdb_file(ref)
-    subject_arr: _AtomArrayOrStack = atom_array_from_pdb_file(subject)
-    ref_chains = struc.get_chains(ref_arr)
-    subject_chains = struc.get_chains(subject_arr)
-
-    # Sometimes returns repeated chains
-    _, sub_idx = np.unique(subject_chains, return_index=True)
-    subject_chains = subject_chains[np.sort(sub_idx)]
-
-    _, ref_idx = np.unique(ref_chains, return_index=True)
-    ref_chains = ref_chains[np.sort(ref_idx)]
-    if len(ref_chains) != len(subject_chains):
-        raise ValueError("Ref and subject must have same number of chains!")
-
-    if (ref_chains != subject_chains).any():
-        log.error("Ref and subject have different chains!")
-        log.warning(
-            "Sequence alignment will assume this order: "
-            f"{ref_chains}, {subject_chains} "
-        )
-    return ref_arr, subject_arr, ref_chains, subject_chains
-
-
-def get_seq_alignments(
-    ref_seq: str,
-    subject_seq: str,
-    gap_penalty: tuple[float, float] = (-10.0, -1.0),
-) -> list[Alignment]:
-    """Generate optimal global alignments between two sequences using BLOSUM62 matrix.
-
-    Parameters
-    ----------
-    ref_seq : (str)
-        The reference sequence.
-    subject_seq : (str)
-        The subject sequence.
-    gap_penalty : (tuple[float, float], optional)
-        A tuple consisting of the gap open penalty and the gap extension penalty.
-
-    Returns
-    -------
-        list[Alignment]:
-            A list of `Alignment` objects that represent the optimal global alignment(s).
-
-    Note:
-       The function uses the BLOSUM62 matrix by default for alignment scoring.
-    """
-    ref_protein_seq = seq.ProteinSequence(ref_seq)
-    subject_protein_seq = seq.ProteinSequence(subject_seq)
-
-    matrix = align.SubstitutionMatrix.std_protein_matrix()  # BLOSUM62 matrix
-    # matrix = seq.align.SubstitutionMatrix(alph, alph, "IDENTITY")
-    # alph = seq.ProteinSequence.alphabet
-    alignments = align.align_optimal(
-        subject_protein_seq,
-        ref_protein_seq,
-        matrix,
-        gap_penalty=gap_penalty,
-        terminal_penalty=False,
-        local=False,
-        max_number=1,
-    )
-    assert isinstance(alignments, list)
-    return alignments
-
-
-def get_seq_identity(
-    ref_seq: str | None = None,
-    subject_seq: str | None = None,
-    alignments: list[Alignment] | None = None,
-    gap_penalty: tuple[float, float] = (-10.0, -1.0),
-) -> float:
-    """Align an arbitrary sequence with the reference sequence
-    Return sequence identity between the two.
-    """
-
-    all_none = all(arg is None for arg in [ref_seq, subject_seq, alignments])
-    if all_none:
-        raise ValueError("Must provide one of ref_seq and subject_seq or alignments!")
-
-    if not alignments:
-        assert isinstance(ref_seq, str)
-        assert isinstance(subject_seq, str)
-        alignments = get_seq_alignments(ref_seq, subject_seq, gap_penalty)
-
-    aln = alignments[0]
-    identity: float = align.get_sequence_identity(aln, "shortest")
-    if identity < 0.90:
-        log.debug(f"Alignment issue detected with identity of {identity}")
-    return identity
-
-
-def get_seq_aligned_structures(
-    ref: Path | _AtomArrayOrStack,
-    subject: Path | _AtomArrayOrStack,
-) -> tuple[_AtomArrayOrStack, _AtomArrayOrStack]:
-    """Computes per-chain sequence alignments between reference and subject
-    structures, and creates a new set of structures where the residue numbers
-    in the subject structure are renumbered to match those in the reference
-    structure for the aligned sequence segments for each chain.
-
-    This function processes each chain separately, aligns their sequences,
-    and then constructs the multi-chain structure using the chain-aligned
-    sequences.
-
-    Parameters
-    ----------
-    ref : Path | _AtomArrayOrStack
-        The file path or structure array of the reference structure.
-    subject : Path | _AtomArrayOrStack
-        The file path or structure array of the subject structure to align with the reference.
-
-
-    Returns
-    -------
-    tuple
-        A tuple containing:
-        - Reference structure with aligned sequence and residue numbering (_AtomArrayOrStack).
-        - Subject structure with aligned sequence and residue numbering (_AtomArrayOrStack).
-
-    Raises
-    ------
-    ValueError
-        If the reference and subject structures do not have the same number of chains or if the chains cannot be matched properly.
-    """
-    (
-        ref_arr,
-        subject_arr,
-        ref_chains,
-        subject_chains,
-    ) = _get_paired_structures_and_chains(ref, subject)
-    ref_arrays = []
-    subject_arrays = []
-    for ref_ch, subject_ch in zip(ref_chains, subject_chains):
-        ref_mask = ref_arr.chain_id == ref_ch
-        subject_mask = subject_arr.chain_id == subject_ch
-        ref_ch_arr = apply_mask(ref_arr, ref_mask)
-        subject_ch_arr = apply_mask(subject_arr, subject_mask)
-        ref_aligned, subject_aligned = _get_seq_aligned_structures(
-            ref_ch_arr, subject_ch_arr
-        )
-        ref_arrays.append(ref_aligned)
-        subject_arrays.append(subject_aligned)
-
-    # construct multi-chain objects again
-    ref_aligned = ref_arrays.pop(0)
-    subject_aligned = subject_arrays.pop(0)
-    for ref_arr, sub_arr in zip(ref_arrays, subject_arrays):
-        ref_aligned += ref_arr
-        subject_aligned += sub_arr
-    return ref_aligned, subject_aligned
-
-
-def invert_chain_seq_map(
-    seq_map: dict[str, dict[int, int]] | list[dict[str, dict[int, int]]],
-) -> dict[str, dict[int, int]] | list[dict[str, dict[int, int]]]:
-    def _invert(seq_map: dict[str, dict[int, int]]) -> dict[str, dict[int, int]]:
-        rev_map: dict[str, dict[int, int]] = {ch: {} for ch in seq_map}
-        for ch, rmap in seq_map.items():
-            rev_map[ch] = {v: k for k, v in rmap.items()}
-        return rev_map
-
-    inverted: dict[str, dict[int, int]] | list[dict[str, dict[int, int]]]
-    if isinstance(seq_map, list):
-        inverted = []
-        for sm in seq_map:
-            inverted.append(_invert(sm))
-    else:
-        inverted = _invert(seq_map)
-    return inverted
-
-
-def resn2seq(resn: list[str]) -> str:
-    three_to_one = pc.three_to_one_noncanonical_mapping
-    seq_list = [three_to_one.get(three, "X") for three in resn]
-    # Make sure we convert selenocysteine to cysteine
-    # https://github.com/biotite-dev/biotite/blob/master/src/biotite/sequence/seqtypes.py#L364-L369
-    # It appears that pyrrolysine (PYL->O) is also not supported - convert to lysine.
-    seq_str = ""
-    for s in seq_list:
-        if s == "U":
-            seq_str += "C"
-        elif s == "O":
-            seq_str += "K"
-        else:
-            seq_str += s
-    return seq_str
-
-
-def write_pdb(arr: AtomArray, filepath: Path) -> None:
-    """Write AtomArray to a PDB file.
-
-    Parameters
-    ----------
-    arr : AtomArray
-        AtomArray to save to PDB file.
-    filepath : Path
-        Path to outut PDB file.
-
-    Returns
-    -------
-    None
-
-    """
-    if not filepath.parent.is_dir():
-        filepath.parent.mkdir(exist_ok=True, parents=True)
-
-    strucio.save_structure(filepath, arr)
-
-
-def mask_from_res_list(
-    atoms: _AtomArrayOrStack, res_list: list[int]
-) -> NDArray[np.bool_]:
-    mask = np.isin(atoms.res_id, res_list)
+def get_ligand_atom_index_mapping_mask(ref_mol, matching_indices) -> NDArray[np._int]:
+    mask = np.zeros(len(ref_mol.GetAtoms()))
+    for atm_idx in enumerate(range(len(mask))):
+        if atm_idx in matching_indices:
+            mask[atm_idx] = 1
     return mask
-
-
-def apply_mask(atoms: _AtomArrayOrStack, mask: NDArray[np.bool_]) -> _AtomArrayOrStack:
-    """Apply a boolean mask to an AtomArray or AtomArrayStack to filter atoms.
-
-    Parameters
-    ----------
-    atoms : (AtomArray | AtomArrayStack)
-        The atoms to be filtered.
-    mask : NDArray[np.bool\_]
-        The boolean mask that specifies which atoms to keep.
-
-    Returns
-    -------
-        AtomArray | AtomArrayStack:
-            The filtered atoms.
-    """
-    if isinstance(atoms, AtomArray):
-        return atoms[mask]
-    elif isinstance(atoms, AtomArrayStack):
-        return atoms[..., mask]
-    else:
-        raise TypeError("atoms must be an AtomArray or AtomArrayStack")
-
-
-def align_sequences(
-    ref_seq: str,
-    subject_seq: str,
-    ref_numbering: list[int] | None = None,
-    subject_numbering: list[int] | None = None,
-) -> tuple[str, str, list[int], list[int]]:
-    """Aligns two sequences and returns a tuple containing the aligned sequences
-    and their respective numbering.
-
-    Parameters
-    ----------
-    ref_seq : (str)
-        The reference sequence to align to.
-    subject_seq : (str)
-        The subject sequence to be aligned.
-    ref_numbering : (list[int], optional)
-        List of residue numbers for the reference sequence.
-    subject_numbering : (list[int], optional)
-        List of residue numbers for the subject sequence.
-
-    Returns:
-        tuple: A tuple containing:
-            - Aligned reference sequence (str)
-            - Aligned subject sequence (str)
-            - Numbering of the aligned reference sequence (list[int])
-            - Numbering of the aligned subject sequence (list[int])
-
-    Raises
-    ------
-        ValueError if the sequences cannot be aligned.
-    """
-    alignments = get_seq_alignments(ref_seq, subject_seq)
-    get_seq_identity(alignments=alignments)
-    aln = alignments[0]
-    s = align.alignment.get_symbols(aln)
-
-    if ref_numbering is None:
-        ref_numbering = list(range(1, len(ref_seq) + 1))
-
-    if subject_numbering is None:
-        subject_numbering = list(range(1, len(subject_seq) + 1))
-
-    # assigning reference numbering to all residues in a given sequence
-    # (e.g. PDB chain)
-    # p = subject protein sequence, u = ref sequence
-    ref_numbering_mapped = []
-    subject_numbering_mapped = []
-    subject_sequence_mapped = ""
-    ref_sequence_mapped = ""
-    ui = -1
-    pj = -1
-    for p, u in zip(s[0], s[1]):
-        if u:
-            ui += 1
-        if p:
-            pj += 1
-        if u and p and u != "X" and p != "X":
-            # ref_numbering_mapped.append(ui + 1)  # 1-based
-            ref_numbering_mapped.append(ref_numbering[ui])
-            subject_numbering_mapped.append(subject_numbering[pj])
-            ref_sequence_mapped += u
-            subject_sequence_mapped += p
-    return (
-        ref_sequence_mapped,
-        subject_sequence_mapped,
-        ref_numbering_mapped,
-        subject_numbering_mapped,
-    )
-
-
-def _get_structure_and_res_info(
-    structure: Path | _AtomArrayOrStack,
-) -> tuple[_AtomArrayOrStack, list[int], list[str]]:
-    structure = atom_array_from_pdb_file(structure)
-    numbering, resn = struc.get_residues(structure)
-    return structure, numbering, resn
-
-
-def _convert_resn_to_sequence_and_numbering(
-    structure_info: tuple[_AtomArrayOrStack, list[int], list[str]],
-) -> tuple[str, list[int]]:
-    """Converts residue names to a sequence and extracts numbering."""
-    _, numbering, resn = structure_info
-    seq = resn2seq(resn)
-    return seq, numbering

@@ -1,16 +1,4 @@
-from plinder.core import PlinderSystem
 from plinder.core.structure.structure import Structure
-
-
-class TransformBase:
-    def __init__(self) -> None:
-        pass
-
-    def __call__(self, dimer: PlinderSystem) -> PlinderSystem:
-        return self.transform(dimer)
-
-    def transform(self, dimer: PlinderSystem) -> PlinderSystem:
-        raise NotImplementedError
 
 
 class StructureTransform:

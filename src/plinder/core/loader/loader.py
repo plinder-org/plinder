@@ -2,6 +2,7 @@
 # Distributed under the terms of the Apache License 2.0
 from __future__ import annotations
 
+import copy
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Literal, Tuple
 
@@ -20,14 +21,17 @@ from plinder.core.system.system import collate_batch, structure2tensor
 
 def structure2tensor_transform(structure: Structure) -> dict[str, torch.Tensor]:
     props: dict[str, torch.Tensor] = structure2tensor(
-        protein_atom_coordinates=structure.protein_coords,
-        protein_atom_types=structure.protein_atom_array.element,
-        protein_residue_coordinates=structure.protein_coords,
-        protein_residue_ids=structure.protein_atom_array.res_id,
-        protein_chain_ids=structure.protein_atom_array.chain_id,
-        protein_residue_types=structure.protein_atom_array.res_name,
+        protein_atom_array=structure.protein_atom_array,
+        resolved_sequence_residue_types=copy.deepcopy(
+            structure.seqres_list_ordered_by_chain
+        ),
+        resolved_sequence_mask=structure.stack_seqres_masks,
         resolved_ligand_mols=structure.resolved_ligand_mols,
-        resolved_ligand_conformers=structure.resolved_ligand_conformers,
+        resolved_ligand_mols_coords=structure.resolved_ligand_conformers_coords,
+        resolved_ligand_conformers_coords=structure.resolved_ligand_conformers_coords,
+        resolved_ligand_mask=structure.resolved_ligand_mask,
+        protein_chain_in_order=structure.protein_chain_in_order,
+        ligand_chain_in_order=structure.ligand_chain_in_order,
         dtype=torch.float32,
     )
     return props
@@ -73,7 +77,7 @@ class PlinderDataset(Dataset):  # type: ignore
         store_file_path: bool = True,
         num_alternative_structures: int = 0,
         file_paths_only: bool = False,
-        input_structure_priority: str = "apo",
+        input_structure_priority: str = "holo",
         structure_transforms: list[StructureTransform] = [],
         transform: Callable[
             [Structure], torch.Tensor | dict[str, torch.Tensor]
@@ -133,30 +137,27 @@ class PlinderDataset(Dataset):  # type: ignore
             system_id=self._system_ids[index], resolved_smiles_dict=smiles_dict
         )
 
-        if not self._file_paths_only:
-            # avoid loading structure if not needed
-            (
-                holo_structure,
-                apo_structure,
-                pred_structure,
-            ) = s.create_masked_bound_unbound_complexes()
-            cropped_structures = {
-                "holo": holo_structure,
-                "apo": apo_structure,
-                "pred": pred_structure,
-            }
-            input_structure = cropped_structures[self._input_structure_priority]
-            target_structure = holo_structure
-            for transform in self._structure_transforms:
-                input_structure = transform(input_structure)
-                target_structure = transform(target_structure)
+        holo_structure = s.holo_structure
+        alt_structure = s.alt_structures
+        apo_structure_map = alt_structure.get("apo")
+        pred_structure_map = alt_structure.get("pred")
+        _structures = {
+            "holo": holo_structure,
+            "apo": apo_structure_map,
+            "pred": pred_structure_map,
+        }
+        input_structure = _structures[self._input_structure_priority]
+        target_structure = holo_structure
+        for transform in self._structure_transforms:
+            input_structure = transform(input_structure)
+            target_structure = transform(target_structure)
 
-            input_id = target_structure.id
-            target_id = target_structure.id
-            if self._transform is not None:
-                input_complex = self._transform(input_structure)
-            if self._target_transform is not None:
-                target_complex = self._target_transform(target_structure)
+        input_id = target_structure.id
+        target_id = target_structure.id
+        if self._transform is not None:
+            input_complex = self._transform(input_structure)
+        if self._target_transform is not None:
+            target_complex = self._target_transform(target_structure)
 
         item: Dict[str, Any] = {
             "input_id": input_id,

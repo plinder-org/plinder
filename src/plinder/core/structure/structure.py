@@ -8,28 +8,32 @@ import biotite.structure as struc
 import numpy as np
 import pandas as pd
 from biotite import TextFile
+from biotite.structure import stack
 from biotite.structure.atoms import AtomArray
 from numpy.typing import NDArray
+from pinder.core.structure import surgery
+from pinder.core.structure.atoms import (
+    get_per_chain_seq_alignments,
+    get_seq_aligned_structures,
+    invert_chain_seq_map,
+    resn2seq,
+    write_pdb,
+)
+from pinder.core.structure.superimpose import superimpose_chain
+from pinder.core.utils.dataclass import stringify_dataclass
 from pydantic import BaseModel
 from rdkit import Chem
 from rdkit.Chem import rdMolTransforms
 
-from plinder.core.structure import surgery
 from plinder.core.structure.atoms import (
     atom_array_from_cif_file,
     generate_conformer,
-    get_per_chain_seq_alignments,
-    get_per_chain_seq_to_structure_alignments,
-    get_seq_aligned_structures,
-    invert_chain_seq_map,
+    get_ligand_atom_index_mapping_mask,
+    get_residue_index_mapping_mask,
     match_ligands,
-    resn2seq,
-    write_pdb,
 )
-from plinder.core.structure.superimpose import superimpose_chain
 from plinder.core.utils import constants as pc
 from plinder.core.utils.config import get_config
-from plinder.core.utils.dataclass import stringify_dataclass
 
 # TODO: Decide whether to lift these from pinder or import them
 from plinder.core.utils.log import setup_logger
@@ -114,7 +118,7 @@ class Structure(BaseModel):
 
     @property
     def resolved_sequences(self):
-        resolved_sequences = {}
+        _resolvd_sequences = {}
         with open(self.protein_sequence) as f_seq:
             lines = f_seq.readlines()
             for idx, line in enumerate(lines):
@@ -124,9 +128,8 @@ class Structure(BaseModel):
                     # canonicalize
                     seq = seq.translate(str.maketrans(pc.non_canonical_aa))
 
-                    resolved_sequences[chain] = seq
-
-        return resolved_sequences
+                    _resolvd_sequences[chain] = seq
+        return _resolvd_sequences
 
     @classmethod
     def load_structure(
@@ -175,16 +178,8 @@ class Structure(BaseModel):
                     log.debug(
                         f"Found missing elements in {protein_path} but failed to infer"
                     )
-
-            # if structure_type == "holo":
-            #    structure.renumbered_protein_array_and_seqs = (
-            #        get_per_chain_seq_to_structure_alignments(
-            #            structure.resolved_sequences, protein_arr
-            #        )
-            #    )
-            else:
-                structure.renumbered_protein_array_and_seqs = (protein_arr, {}, {})
-
+            # Remove water
+            structure.protein_atom_array = protein_arr[protein_arr.res_name != "HOH"]
             structure.ligand_mols = {}
             if not (list_ligand_sdf_and_resolved_smiles is None):
                 for ligand_sdf, resolved_smiles in list_ligand_sdf_and_resolved_smiles:
@@ -208,17 +203,6 @@ class Structure(BaseModel):
                         resolved_ligand_mol_conformer,
                         matches,
                     )
-        elif structure.protein_atom_array is not None:
-            if structure_type == "holo":
-                structure.renumbered_protein_array_and_seqs = (
-                    get_per_chain_seq_to_structure_alignments(
-                        structure.resolved_sequences, protein_arr
-                    )
-                )
-            else:
-                structure.renumbered_protein_array_and_seqs = (protein_arr, {}, {})
-
-        structure.protein_atom_array = structure.renumbered_protein_array_and_seqs[0]
         try:
             getattr(structure.protein_atom_array, "b-factor")
         except AttributeError:
@@ -246,7 +230,6 @@ class Structure(BaseModel):
             protein_sequence=self.protein_sequence,
             list_ligand_sdf_and_resolved_smiles=self.list_ligand_sdf_and_resolved_smiles,
             protein_atom_array=combined_arr,
-            renumbered_protein_array_and_seqs=self.renumbered_protein_array_and_seqs,
             ligand_mols=self.ligand_mols,
             add_ligand_hydrogen=self.add_ligand_hydrogen,
             structure_type=structure_type,
@@ -290,7 +273,6 @@ class Structure(BaseModel):
                 protein_sequence=self.protein_sequence,
                 list_ligand_sdf_and_resolved_smiles=self.list_ligand_sdf_and_resolved_smiles,
                 protein_atom_array=arr,
-                renumbered_protein_array_and_seqs=self.renumbered_protein_array_and_seqs,
                 ligand_mols=self.ligand_mols,
                 add_ligand_hydrogen=self.add_ligand_hydrogen,
                 structure_type=self.structure_type,
@@ -353,7 +335,6 @@ class Structure(BaseModel):
                 protein_sequence=self.protein_sequence,
                 list_ligand_sdf_and_resolved_smiles=self.list_ligand_sdf_and_resolved_smiles,
                 protein_atom_array=target_at,
-                renumbered_protein_array_and_seqs=self.renumbered_protein_array_and_seqs,
                 ligand_mols=self.ligand_mols,
                 add_ligand_hydrogen=self.add_ligand_hydrogen,
                 structure_type=self.structure_type,
@@ -365,7 +346,6 @@ class Structure(BaseModel):
                 protein_sequence=self.protein_sequence,
                 list_ligand_sdf_and_resolved_smiles=other.list_ligand_sdf_and_resolved_smiles,
                 protein_atom_array=ref_at,
-                renumbered_protein_array_and_seqs=self.renumbered_protein_array_and_seqs,
                 ligand_mols=other.ligand_mols,
                 add_ligand_hydrogen=other.add_ligand_hydrogen,
                 structure_type=other.structure_type,
@@ -409,7 +389,6 @@ class Structure(BaseModel):
                 protein_sequence=self.protein_sequence,
                 list_ligand_sdf_and_resolved_smiles=self.list_ligand_sdf_and_resolved_smiles,
                 protein_atom_array=superimposed,
-                renumbered_protein_array_and_seqs=self.renumbered_protein_array_and_seqs,
                 ligand_mols=self.ligand_mols,
                 add_ligand_hydrogen=self.add_ligand_hydrogen,
                 structure_type=self.structure_type,
@@ -419,18 +398,48 @@ class Structure(BaseModel):
         )
 
     @property
-    # def seqres_masks(self):
-    #    return get_residue_index_mapping_mask(
-    #            ref_seqs: dict[str, str], subject_arr: _AtomArrayOrStack
-    #        )
+    def stack_seqres_masks(self) -> NDArray[np.int]:
+        seqres_masks = get_residue_index_mapping_mask(
+            self.resolved_sequences, self.protein_atom_array
+        )
+        return [seqres_masks[ch] for ch in self.protein_chain_in_order]
 
     @property
-    def aligned_unresolved_seqs(self):
-        return self.renumbered_protein_array_and_seqs[1]
+    def resolved_ligand_mask(self):
+        masks = []
+        for ch in self.ligand_chain_in_order:
+            mol = self.ligand_mols[ch][1]
+            matching_idxs = self.ligand_mols[ch][-1]
+            masks.append(get_ligand_atom_index_mapping_mask(mol, matching_idxs))
+        return masks
 
     @property
-    def unresolved_aligned_indices(self):
-        return self.renumbered_protein_array_and_seqs[2]
+    def seqres_list_ordered_by_chain(self) -> list[str]:
+        return [self.resolved_sequences[ch] for ch in self.protein_chain_in_order]
+
+    @property
+    def protein_chain_in_order(self):
+        chain_order = []
+        for ch_id in self.protein_atom_array.chain_id:
+            if ch_id not in chain_order:
+                chain_order.append(ch_id)
+        return chain_order
+
+    @property
+    def protein_atom_array_stacked_by_chain(self):
+        return stack(
+            [
+                self.protein_atom_array[self.protein_atom_array.chain_id == ch]
+                for ch in self.protein_chain_in_order
+            ]
+        )
+
+    @property
+    def ligand_chain_in_order(self):
+        return [
+            path_and_smiles[0].stem
+            for path_and_smiles in self.list_ligand_sdf_and_resolved_smiles
+        ]
 
     @property
     def protein_coords(self) -> NDArray[np.double]:

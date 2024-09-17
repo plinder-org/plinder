@@ -10,7 +10,9 @@ from typing import TYPE_CHECKING, Any, Sequence
 import numpy as np
 import pandas as pd
 import torch
+from biotite.structure.atoms import AtomArray
 from numpy.typing import NDArray
+from pinder.core.loader.dataset import pad_and_stack
 from rdkit import Chem
 from torch import Tensor
 
@@ -38,194 +40,175 @@ COORDS_PAD_VALUE = -100
 ATOM_TYPE_PAD_VALUE = -1
 
 
+def stack_atom_array_features(atom_arr, atom_arr_feat, chain_order_list):
+    return [
+        getattr(atom_arr[atom_arr.chain_id == chain], atom_arr_feat)
+        for chain in chain_order_list
+    ]
+
+
+def stack_ligand_feat(feat_dict, chain_order_list):
+    return [feat_dict[chain] for chain in chain_order_list]
+
+
 def structure2tensor(
-    protein_atom_coordinates: NDArray[np.double] | None = None,
-    protein_atom_types: NDArray[np.str_] | None = None,
-    protein_residue_coordinates: NDArray[np.double] | None = None,
-    protein_residue_ids: NDArray[np.int_] | None = None,
-    protein_residue_types: NDArray[np.str_] | None = None,
+    protein_atom_array: AtomArray,
     resolved_sequence_residue_types: NDArray[np.str_] | None = None,
-    protein_chain_ids: NDArray[np.str_] | None = None,
-    resolved_ligand_mols: list[Chem.rdchem.Mol] = None,
-    resolved_ligand_conformers: list[Chem.rdchem.Mol] = None,
+    resolved_sequence_mask: NDArray[np.int_] | None = None,
+    resolved_ligand_mols: dict[str, Chem.rdchem.Mol] | None = None,
+    resolved_ligand_mols_coords: dict[str, NDArray[np.float_]] | None = None,
+    resolved_ligand_conformers_coords: dict[str, NDArray[np.float_]] = None,
+    resolved_ligand_mask: list[NDArray[np.int_]] | None = None,
+    protein_chain_in_order: list[str] = None,
+    ligand_chain_in_order: list[str] = None,
+    coords_pad_value: int = COORDS_PAD_VALUE,
+    atom_type_pad_value: int = ATOM_TYPE_PAD_VALUE,
+    residue_id_pad_value: int = RES_IDX_PAD_VALUE,
     dtype: torch.dtype = torch.float32,
 ) -> dict[str, torch.Tensor]:
-    property_dict = {}
-    if protein_atom_types is not None:
-        types_array_ele = np.zeros(
-            (len(protein_atom_types), len(set(list(pc.ELE2NUM.values()))))
+    protein_atom_coordinates = [
+        torch.tensor(coord)
+        for coord in stack_atom_array_features(
+            protein_atom_array, "coord", protein_chain_in_order
         )
-        for i, name in enumerate(protein_atom_types):
-            types_array_ele[i, pc.ELE2NUM.get(name, "C")] = 1.0
+    ]
+    protein_atom_types = stack_atom_array_features(
+        protein_atom_array, "element", protein_chain_in_order
+    )
+    protein_residue_coordinates = [
+        torch.tensor(coord)
+        for coord in stack_atom_array_features(
+            protein_atom_array, "coord", protein_chain_in_order
+        )
+    ]
+    protein_residue_ids = stack_atom_array_features(
+        protein_atom_array, "res_id", protein_chain_in_order
+    )
+    protein_residue_types = stack_atom_array_features(
+        protein_atom_array, "res_name", protein_chain_in_order
+    )
+    property_dict = {}
 
-        property_dict["protein_atom_types"] = torch.tensor(types_array_ele).type(dtype)
+    if protein_atom_types is not None:
+        types_array_ele = []
+        for chain_atom_types in protein_atom_types:
+            types_array_ele_by_chain = np.zeros(
+                (len(chain_atom_types), len(set(list(pc.ELE2NUM.values()))))
+            )
+            for res_index, name in enumerate(chain_atom_types):
+                types_array_ele_by_chain[res_index, pc.ELE2NUM.get(name, "C")] = 1.0
+            types_array_ele.append(torch.tensor(types_array_ele_by_chain).type(dtype))
+        property_dict["protein_atom_types"] = pad_and_stack(
+            types_array_ele, dim=0, value=atom_type_pad_value
+        )
 
     if protein_residue_types is not None:
+        types_array_res = []
         unknown_name_idx = max(pc.AA_TO_INDEX.values()) + 1
-        types_array_res = np.zeros((len(protein_residue_types), 1))
-        for i, name in enumerate(protein_residue_types):
-            types_array_res[i] = pc.AA_TO_INDEX.get(name, unknown_name_idx)
-        property_dict["protein_residue_types"] = torch.tensor(types_array_res).type(
-            dtype
-        )
+        for chain_residue_types in protein_residue_types:
+            types_array_res_by_chain = np.zeros((len(chain_residue_types), 1))
 
-    if resolved_sequence_residue_types is not None:
-        resolved_sequence_residue_types = [
-            pc.ONE_TO_THREE.get(x) for x in resolved_sequence_residue_types
-        ]
-        unknown_name_idx = max(pc.AA_TO_INDEX.values()) + 1
-        resolved_residue_types_array_res = np.zeros(
-            (len(resolved_sequence_residue_types), 1)
+            for res_index, name in enumerate(chain_atom_types):
+                types_array_res_by_chain[res_index] = pc.AA_TO_INDEX.get(
+                    name, unknown_name_idx
+                )
+            types_array_res.append(torch.tensor(types_array_res_by_chain).type(dtype))
+        property_dict["protein_residue_types"] = pad_and_stack(
+            types_array_res, dim=0, value=atom_type_pad_value
         )
-        for i, name in enumerate(resolved_residue_types_array_res):
-            types_array_res[i] = pc.AA_TO_INDEX.get(name, unknown_name_idx)
-        property_dict["resolved_sequence_residue_types"] = torch.tensor(
-            resolved_residue_types_array_res
-        ).type(dtype)
+    if resolved_sequence_residue_types is not None:
+        types_array_res_resolved = []
+        unknown_name_idx = max(pc.AA_TO_INDEX.values()) + 1
+        for chain_residue_types_resolved in resolved_sequence_residue_types:
+            types_array_res_by_chain_resolved = np.zeros(
+                (len(chain_residue_types_resolved), 1)
+            )
+            chain_residue_types_resolved = [
+                pc.ONE_TO_THREE.get(x) for x in chain_residue_types_resolved
+            ]
+            for res_index, name in enumerate(chain_residue_types_resolved):
+                types_array_res_by_chain_resolved[res_index] = pc.AA_TO_INDEX.get(
+                    name, unknown_name_idx
+                )
+            types_array_res_resolved.append(
+                torch.tensor(types_array_res_by_chain_resolved).type(dtype)
+            )
+
+        property_dict["resolved_protein_residue_types"] = pad_and_stack(
+            types_array_res_resolved, dim=0, value=atom_type_pad_value
+        )
 
     if protein_atom_coordinates is not None:
-        property_dict["protein_atom_coordinates"] = torch.tensor(
-            protein_atom_coordinates, dtype=dtype
+        property_dict["protein_atom_coordinates"] = pad_and_stack(
+            protein_atom_coordinates, dim=0, value=coords_pad_value
         )
     if protein_residue_coordinates is not None:
-        property_dict["protein_residue_coordinates"] = torch.tensor(
-            protein_residue_coordinates, dtype=dtype
+        property_dict["protein_residue_coordinates"] = pad_and_stack(
+            protein_atom_coordinates, dim=0, value=coords_pad_value
         )
-    if protein_residue_ids is not None:
-        property_dict["protein_residue_ids"] = torch.tensor(
-            protein_residue_ids, dtype=dtype
-        )
-    if protein_chain_ids is not None:
-        chain_tensor_map = {
-            ch_id: idx for idx, ch_id in enumerate(set(protein_chain_ids))
-        }
-        property_dict["protein_chain_ids"] = torch.tensor(
-            [chain_tensor_map[ch] for ch in protein_chain_ids], dtype=dtype
-        )
-    if resolved_ligand_conformers is not None:
-        lig_coords = torch.tensor(
-            [
-                ligand_mol.GetConformer().GetPositions()
-                for _, ligand_mol in sorted(resolved_ligand_conformers.items())
-            ]
-        ).float()
 
+    if protein_residue_ids is not None:
+        property_dict["protein_residue_ids"] = pad_and_stack(
+            [torch.tensor(res_id) for res_id in protein_residue_ids],
+            dim=0,
+            value=residue_id_pad_value,
+        )
+
+    if resolved_sequence_mask is not None:
+        property_dict["resolved_sequence_mask"] = pad_and_stack(
+            [torch.tensor(mask) for mask in resolved_sequence_mask],
+            dim=0,
+            value=residue_id_pad_value,
+        )
+
+    if resolved_ligand_mols_coords is not None:
+        lig_coords = pad_and_stack(
+            [
+                torch.tensor(coord)
+                for coord in stack_ligand_feat(
+                    resolved_ligand_mols_coords, ligand_chain_in_order
+                )
+            ],
+            dim=0,
+            value=coords_pad_value,
+        )
+        property_dict["resolved_ligand_mols_coords"] = lig_coords
+    if resolved_ligand_conformers_coords is not None:
+        lig_coords = pad_and_stack(
+            [
+                torch.tensor(coord)
+                for coord in stack_ligand_feat(
+                    resolved_ligand_conformers_coords, ligand_chain_in_order
+                )
+            ],
+            dim=0,
+            value=coords_pad_value,
+        )
         property_dict["ligand_conformer_atom_coordinates"] = lig_coords
     if resolved_ligand_mols is not None:
-        property_dict["ligand_features"] = torch.tensor(
-            [
-                lig_atom_featurizer(ligand_mol)
-                for _, ligand_mol in sorted(resolved_ligand_mols.items())
-            ]
-        ).float()
-        lig_coords = torch.tensor(
-            [
-                ligand_mol.GetConformer().GetPositions()
-                for _, ligand_mol in sorted(resolved_ligand_mols.items())
-            ]
-        ).float()
+        ligand_feat = {
+            ch: lig_atom_featurizer(ligand_mol)
+            for ch, ligand_mol in resolved_ligand_mols.items()
+        }
 
-        property_dict["ligand_reference_atom_coordinates"] = lig_coords
+        property_dict["ligand_features"] = pad_and_stack(
+            [
+                torch.tensor(feat)
+                for feat in stack_ligand_feat(ligand_feat, ligand_chain_in_order)
+            ],
+            dim=0,
+            value=coords_pad_value,
+        )
+
+    if resolved_ligand_mask is not None:
+        lig_masks = pad_and_stack(
+            [torch.tensor(mask) for mask in resolved_ligand_mask],
+            dim=0,
+            value=coords_pad_value,
+        )
+        property_dict["resolved_ligand_mask"] = lig_masks
 
     return property_dict
-
-
-def pad_to_max_length(
-    mat: Tensor,
-    max_length: int | Sequence[int] | Tensor,
-    dims: Sequence[int],
-    value: int | float | None = None,
-) -> Tensor:
-    """Takes a tensor and pads it to maximum length with right padding on the specified dimensions.
-
-    Parameters:
-        mat (Tensor): The tensor to pad. Can be of any shape
-        max_length (int | Sequence[int] | Tensor): The size of the tensor along specified dimensions after padding.
-        dims (Sequence[int]): The dimensions to pad. Must have the same number of elements as `max_length`.
-        value (int, optional): The value to pad with, by default None
-
-    Returns:
-        Tensor : The padded tensor. Below are examples of input and output shapes
-            Example 1:
-                input: (2, 3, 4), max_length: 5, dims: [0, 2]
-                output: (5, 3, 5)
-            Example 2:
-                input: (2, 3, 4), max_length: 5, dims: [0]
-                output: (5, 3, 4)
-            Example 3:
-                input: (2, 3, 4), max_length: [5, 7], dims: [0, 2]
-                output: (5, 3, 7)
-
-    """
-    if not isinstance(max_length, int):
-        assert len(dims) == len(max_length)
-
-    num_dims = len(mat.shape)
-    pad_idxs = [(num_dims - i) * 2 - 1 for i in dims]
-
-    if isinstance(max_length, int):
-        pad_sizes = [
-            max_length - mat.shape[int(-(i + 1) / 2 + num_dims)] if i in pad_idxs else 0
-            for i in range(num_dims * 2)
-        ]
-    else:
-        max_length_list = (
-            list(max_length) if not isinstance(max_length, list) else max_length
-        )
-        pad_sizes = [
-            (
-                max_length_list[int(-(i + 1) / 2 + num_dims)]
-                - mat.shape[int(-(i + 1) / 2 + num_dims)]
-                if i in pad_idxs
-                else 0
-            )
-            for i in range(num_dims * 2)
-        ]
-
-    return torch.nn.functional.pad(input=mat, pad=tuple(pad_sizes), value=value)
-
-
-def pad_and_stack(
-    tensors: list[Tensor],
-    dim: int = 0,
-    dims_to_pad: list[int] | None = None,
-    value: int | float | None = None,
-) -> Tensor:
-    """Pads a list of tensors to the maximum length observed along each dimension and then stacks them along a new dimension (given by `dim`).
-
-    Parameters:
-        tensors (list[Tensor]): A list of tensors to pad and stack
-        dim (int): The new dimension to stack along.
-        dims_to_pad (list[int] | None): The dimensions to pad
-        value (int | float | None, optional): The value to pad with, by default None
-
-    Returns:
-        Tensor: The padded and stacked tensor. Below are examples of input and output shapes
-            Example 1: Sequence features (although redundant with torch.rnn.utils.pad_sequence)
-                input: [(2,), (7,)], dim: 0
-                output: (2, 7)
-            Example 2: Pair features (e.g., pairwise coordinates)
-                input: [(4, 4, 3), (7, 7, 3)], dim: 0
-                output: (2, 7, 7, 3)
-
-    """
-    assert (
-        len({t.ndim for t in tensors}) == 1
-    ), "All `tensors` must have the same number of dimensions."
-
-    # Pad all dims if none are specified
-    if dims_to_pad is None:
-        dims_to_pad = list(range(tensors[0].ndim))
-
-    # Find the max length of the dims_to_pad
-    shapes = torch.tensor([t.shape for t in tensors])
-    envelope = shapes.max(dim=0).values
-    max_length = envelope[dims_to_pad]
-
-    padded_matrices = [
-        pad_to_max_length(t, max_length, dims_to_pad, value) for t in tensors
-    ]
-    return torch.stack(padded_matrices, dim=dim)
 
 
 def collate_complex(
@@ -236,24 +219,28 @@ def collate_complex(
 ) -> dict[str, Tensor]:
     protein_atom_types = []
     protein_residue_types = []
+    resolved_protein_residue_types = []
     protein_atom_coordinates = []
     protein_residue_coordinates = []
     protein_residue_ids = []
+    resolved_sequence_mask = []
     ligand_features = []
-    protein_chain_ids = []
     ligand_conformer_atom_coordinates = []
-    ligand_reference_atom_coordinates = []
+    resolved_ligand_mols_coords = []
+    resolved_ligand_mask = []
 
     for x in structures:
         protein_atom_types.append(x["protein_atom_types"])
         protein_residue_types.append(x["protein_residue_types"])
+        resolved_protein_residue_types.append(x["resolved_protein_residue_types"])
         protein_atom_coordinates.append(x["protein_atom_coordinates"])
         protein_residue_coordinates.append(x["protein_residue_coordinates"])
         protein_residue_ids.append(x["protein_residue_ids"])
+        resolved_sequence_mask.append(x["resolved_sequence_mask"])
         ligand_features.append(x["ligand_features"])
-        protein_chain_ids.append(x["protein_chain_ids"])
         ligand_conformer_atom_coordinates.append(x["ligand_conformer_atom_coordinates"])
-        ligand_reference_atom_coordinates.append(x["ligand_reference_atom_coordinates"])
+        resolved_ligand_mols_coords.append(x["resolved_ligand_mols_coords"])
+        resolved_ligand_mask.append(x["resolved_ligand_mask"])
 
     return {
         "protein_atom_types": pad_and_stack(
@@ -261,6 +248,9 @@ def collate_complex(
         ),
         "protein_residue_types": pad_and_stack(
             protein_residue_types, dim=0, value=atom_type_pad_value
+        ),
+        "resolved_protein_residue_type": pad_and_stack(
+            resolved_protein_residue_types, dim=0, value=coords_pad_value
         ),
         "protein_atom_coordinates": pad_and_stack(
             protein_atom_coordinates, dim=0, value=coords_pad_value
@@ -271,17 +261,20 @@ def collate_complex(
         "protein_residue_ids": pad_and_stack(
             protein_residue_ids, dim=0, value=residue_id_pad_value
         ),
+        "resolved_sequence_mask": pad_and_stack(
+            resolved_sequence_mask, dim=0, value=residue_id_pad_value
+        ),
         "ligand_features": pad_and_stack(
             ligand_features, dim=0, value=atom_type_pad_value
-        ),
-        "protein_chain_ids": pad_and_stack(
-            protein_chain_ids, dim=0, value=coords_pad_value
         ),
         "ligand_conformer_atom_coordinates": pad_and_stack(
             ligand_conformer_atom_coordinates, dim=0, value=coords_pad_value
         ),
-        "ligand_reference_atom_coordinates": pad_and_stack(
-            ligand_conformer_atom_coordinates, dim=0, value=coords_pad_value
+        "resolved_ligand_mols_coords": pad_and_stack(
+            resolved_ligand_mols_coords, dim=0, value=coords_pad_value
+        ),
+        "resolved_ligand_mask": pad_and_stack(
+            resolved_ligand_mask, dim=0, value=coords_pad_value
         ),
     }
 
