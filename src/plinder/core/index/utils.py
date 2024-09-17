@@ -279,7 +279,7 @@ def download_plinder_cmd(args: list[str] | None = None) -> None:
             LOG.info(
                 f"extracting {getattr(cfg.data, attr)} archives, you may want to stretch your legs."
             )
-            codes = [p.stem for p in path.glob("*zip")]
+            codes: list[str] | None = [p.stem for p in path.glob("*zip")]
             if attr == "linked_structures":
                 codes = None
             get_zips_to_unpack(kind=attr, two_char_codes=codes)

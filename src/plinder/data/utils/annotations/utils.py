@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from functools import cached_property
 from pathlib import Path
-from typing import Iterator
+from typing import Any, Generator
 
 from pydantic import BaseModel
 
@@ -27,16 +27,16 @@ class DocBaseModel(BaseModel):
 
         for name, prop in cls.__dict__.items():
             if isinstance(prop, cached_property) or isinstance(prop, property):
-                descriptions[name] = (
-                    prop.__doc__,
-                    prop.func.__annotations__.get("return", None)
-                    if hasattr(prop, "func")
-                    else None,
-                )
+                dtype = None
+                if hasattr(prop, "func"):
+                    dtype = prop.func.__annotations__.get("return", None)
+                descriptions[name] = (prop.__doc__, dtype)
         return descriptions
 
     @classmethod
-    def document_properties(cls, prefix: str) -> Iterator[tuple[str, type | None, str]]:
+    def document_properties(
+        cls, prefix: str
+    ) -> Generator[tuple[str, str | None, str], Any, Any]:
         for field, field_info in cls.get_descriptions_and_types().items():
             description, dtype = field_info
             if field.startswith(prefix):
@@ -51,7 +51,7 @@ class DocBaseModel(BaseModel):
                 descr = "[DESCRIPTION MISSING]"
             if "pass_criteria" in name and "validation" not in name:
                 name = name.replace("pass_criteria", "pass_validation_criteria")
-            yield name, dtype, descr.strip()
+            yield (name, dtype, descr.strip())
 
     @classmethod
     def document_properties_to_tsv(cls, prefix: str, filename: Path) -> None:

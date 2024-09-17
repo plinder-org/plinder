@@ -97,7 +97,8 @@ def get_zips_to_unpack(
     """
     conf = cfg or get_config()
     if kind == "linked_structures":
-        id_kind, ids = None, []
+        id_kind = None
+        ids: list[str] = []
     else:
         id_kind, ids = expand_config_context(
             system_ids=system_ids,

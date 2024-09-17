@@ -1055,17 +1055,18 @@ def make_linked_structures(
         LOG.info(
             f"make_linked_structures: collecting {df['id'].nunique()} {search_db} linked structures"
         )
-        func = lambda *args: None
+        func = None
         if search_db == "apo":
             func = utils.apo_file_from_link_id
         elif search_db == "pred":
             func = utils.pred_file_from_link_id
-        args = [
-            (data_dir, source_structures, link_id, force_update)
-            for link_id in df["id"].unique()
-        ]
-        with multiprocessing.get_context("spawn").Pool(cpu) as p:
-            p.starmap(func, args)
+        if func is not None:
+            args = [
+                (data_dir, source_structures, link_id, force_update)
+                for link_id in df["id"].unique()
+            ]
+            with multiprocessing.get_context("spawn").Pool(cpu) as p:
+                p.starmap(func, args)
         utils.pack_source_structures(data_dir, search_db)
 
 

@@ -55,14 +55,14 @@ CHAIN_TYPES = [
 def get_cluster_column_descriptions(
     plindex: pd.DataFrame
 ) -> list[tuple[str, str | None, str | None]]:
-    rows = []
+    rows: list[tuple[str, str | None, str | None]] = []
     component_columns = [c for c in plindex.columns if c.endswith("__component")]
     for column in component_columns:
         metric, threshold, directed, cluster = column.split("__")
         rows.append(
             (
                 column,
-                str,
+                "str",
                 f"Cluster ID for {directed} {cluster} built from {metric} metric with {threshold} threshold",
             )
         )
@@ -72,7 +72,7 @@ def get_cluster_column_descriptions(
         rows.append(
             (
                 column,
-                str,
+                "str",
                 f"Cluster ID for {cluster} built from {metric} metric with {threshold} threshold",
             )
         )
@@ -89,14 +89,6 @@ def get_all_column_descriptions(
     for tsv in TSV_DIR.glob("*.tsv"):
         dfs.append(pd.read_csv(tsv, sep="\t"))
     return pd.concat(dfs).reset_index(drop=True)
-
-    for tsv in ["extra.tsv", "posebusters_checks.tsv", "qc.tsv"]:
-        if not (TSV_DIR / tsv).is_file():
-            raise ValueError(f"missing {TSV_DIR / tsv}")
-        df = pd.read_csv(TSV_DIR / tsv, sep="\t")
-        df["Type"] = df["Type"].apply(eval)
-        descriptions.extend(df.itertuples(index=False))
-    return descriptions
 
 
 def make_column_descriptions(*, plindex: pd.DataFrame) -> None:
@@ -145,4 +137,4 @@ def make_column_descriptions(*, plindex: pd.DataFrame) -> None:
         f.write("Name\tType\tDescription\n")
         rows = get_cluster_column_descriptions(plindex)
         for row in rows:
-            f.write(f"{row[0]}\t{row[1].__name__}\t{row[2]}\n")
+            f.write(f"{row[0]}\t{row[1]}\t{row[2]}\n")

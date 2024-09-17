@@ -311,8 +311,8 @@ class ModelScores:
         return average_score, weighted_average_score
 
     def get_average_posebusters(self) -> dict[str, list[Any]]:
-        scores = {}
-        weights = []
+        scores: dict[str, Any] = {}
+        weights: list[float] = []
         if self.ligand_scores is None:
             return scores
         for ligand_scores in self.ligand_scores:

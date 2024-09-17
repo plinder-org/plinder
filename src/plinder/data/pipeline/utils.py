@@ -716,12 +716,13 @@ def apo_file_from_link_id(
         info=True,
         fault_tolerant=True,
     )
-    chain_to_seqres = {c.name: c.string for c in seqres}
     target_mol = mol.CreateEntityFromView(target_mol.Select(f"chain='{chain}'"), True)
     cif_file = output_dir / f"{pdb_id}_{chain}.cif"
     LOG.info(f"saving {link_id} to {cif_file}")
     save_cif_file(target_mol, info, cif_file.stem, cif_file)
-    return chain_to_seqres[chain]
+    return None
+    # chain_to_seqres = {c.name: c.string for c in seqres}
+    # return chain_to_seqres[chain]
 
 
 def pred_file_from_link_id(
@@ -750,12 +751,13 @@ def pred_file_from_link_id(
         info=True,
         fault_tolerant=True,
     )
-    chain_to_seqres = {c.name: c.string for c in seqres}
     target_mol = mol.CreateEntityFromView(target_mol.Select(f"chain='{chain}'"), True)
     cif_file = output_dir / f"{uniprot_id}_{chain}.cif"
     LOG.info(f"saving {link_id} to {cif_file}")
     save_cif_file(target_mol, info, cif_file.stem, cif_file)
-    return chain_to_seqres[chain]
+    return None
+    # chain_to_seqres = {c.name: c.string for c in seqres}
+    # return chain_to_seqres[chain]
 
 
 def pack_linked_structures(data_dir: Path, code: str, structures: bool = True) -> None:
