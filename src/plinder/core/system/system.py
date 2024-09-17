@@ -334,11 +334,11 @@ class PlinderSystem:
         self,
         *,
         system_id: str,
-        resolved_smiles_dict: dict[str, str],
+        input_smiles_dict: dict[str, str],
         prune: bool = True,
     ) -> None:
         self.system_id: str = system_id
-        self.resolved_smiles_dict: dict[str, str] = resolved_smiles_dict
+        self.input_smiles_dict: dict[str, str] = input_smiles_dict
         self.prune: bool = prune
         self._entry: dict[str, Any] | None = None
         self._system: dict[str, Any] | None = None
@@ -731,7 +731,7 @@ class PlinderSystem:
         Load holo structure
         """
         list_ligand_sdf_and_resolved_smiles = [
-            (Path(sdf_path), self.resolved_smiles_dict[chain])
+            (Path(sdf_path), self.input_smiles_dict[chain])
             for chain, sdf_path in self.ligands.items()
         ]
         return Structure.load_structure(

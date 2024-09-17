@@ -134,7 +134,7 @@ class PlinderDataset(Dataset):  # type: ignore
             raise IndexError(index)
         smiles_dict = self._ligand_smiles_dict[self._system_ids[index]]
         s = system.PlinderSystem(
-            system_id=self._system_ids[index], resolved_smiles_dict=smiles_dict
+            system_id=self._system_ids[index], input_smiles_dict=smiles_dict
         )
 
         holo_structure = s.holo_structure
