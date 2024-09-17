@@ -324,9 +324,15 @@ class ModelScores:
         avg_scores = {}
         for key, values in scores.items():
             try:
-                avg_scores[f"posebusters_{key}"] = np.mean([w * v for w, v in zip(weights, values)])
+                avg_scores[f"posebusters_{key}"] = np.mean([w * v for w, v in zip(weights, values)]) / np.sum(weights)
             except Exception:
-                avg_scores[f"posebusters_{key}"] = np.nan
+                try:
+                    if isinstance(values[0], bool):
+                        avg_scores[f"posebusters_{key}"] = np.mean([float(val) for val in values])
+                    elif isinstance(values[0], str):
+                        avg_scores[f"posebusters_{key}"] = ";".join(values)
+                except Exception:
+                    avg_scores[f"posebusters_{key}"] = None
         return avg_scores
 
     def summarize_scores(self) -> dict[str, Any]:
