@@ -148,10 +148,6 @@ class IngestPipeline:
             data_dir=self.plinder_dir,
             force_update=force_update,
         )
-        # utils.create_metadata(
-        #     data_dir=self.plinder_dir,
-        #     force_update=force_update,
-        # )
 
     @utils.ingest_flow_control
     def scatter_make_ligands(self) -> list[list[str]]:

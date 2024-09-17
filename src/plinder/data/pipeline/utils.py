@@ -557,32 +557,20 @@ def create_index(*, data_dir: Path, force_update: bool = False) -> pd.DataFrame:
     """
     Create the index
     """
-    from plinder.data.docs import CHAIN_TYPES, MAPPING_NAMES
-
-    # drop = [
-    #     f"{chain_type}_{mapping_name}"
-    #     for chain_type in CHAIN_TYPES + ["system_pocket"]
-    #     for mapping_name in MAPPING_NAMES + ["Kinase name"]
-    # ]
     index = data_dir / "index" / "annotation_table.parquet"
     index.parent.mkdir(exist_ok=True, parents=True)
-    lean = data_dir / "qc" / "lean"
-    lean.mkdir(exist_ok=True, parents=True)
 
     if not index.exists() or force_update:
-        for path in (data_dir / "qc" / "index").glob("*"):
-            df = pd.read_parquet(path)
-            if not df.empty:
-                to_drop = [col for col in df.columns if "posebusters" in col]
-                LOG.info(f"{path.name} shape={df.shape} to_drop={len(to_drop)}")
-                df.drop(columns=to_drop).to_parquet(lean / path.name, index=False)
         dfs = []
-        for path in lean.glob("*.parquet"):
+        for i, path in enumerate((data_dir / "qc" / "index").glob("*")):
             df = pd.read_parquet(path)
+            LOG.info(f"{i} {path.name} shape={df.shape}")
             if not df.empty:
                 dfs.append(df)
         df = pd.concat(dfs).reset_index(drop=True)
-        # TODO: remove these kludges after posebusters bugfix is found and annotations are rerun
+        # TODO: remove these kludges after annotations are rerun
+        key = "ligand_posebusters_internal_energy"
+        df[key] = df[key].astype(bool)
         df.rename(
             columns={
                 f"{key}_Kinase name": f"{key}_kinase_name"
