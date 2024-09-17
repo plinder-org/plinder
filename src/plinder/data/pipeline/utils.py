@@ -10,7 +10,6 @@ from itertools import repeat
 from json import dumps, load
 from os import listdir
 from pathlib import Path
-from string import ascii_lowercase, digits
 from time import time
 from typing import TYPE_CHECKING, Any, Callable, Dict, Literal, Optional, TypeVar
 from zipfile import ZIP_DEFLATED, ZipFile
@@ -577,23 +576,39 @@ def create_metadata(*, data_dir: Path, force_update: bool = False) -> None:
     for i, path in enumerate(sorted((data_dir / "qc" / "index").glob("*.parquet"))):
         df = pd.read_parquet(path)
         if not df.empty:
-            drop_meta = list(df.columns.difference(["system_id"] + sorted(set(keep).intersection(df.columns))))
-            drop_pb = list(df.columns.difference(["system_id"] + [col for col in df.columns if "posebuster" in col]))
+            drop_meta = list(
+                df.columns.difference(
+                    ["system_id"] + sorted(set(keep).intersection(df.columns))
+                )
+            )
+            drop_pb = list(
+                df.columns.difference(
+                    ["system_id"] + [col for col in df.columns if "posebuster" in col]
+                )
+            )
             dfs.append(df.drop(columns=drop_meta))
             pbs.append(df.drop(columns=drop_pb))
         if i and not i % 10:
-            pd.concat(dfs).reset_index(drop=True).to_parquet(metadata / f"{count}.parquet", index=False)
+            pd.concat(dfs).reset_index(drop=True).to_parquet(
+                metadata / f"{count}.parquet", index=False
+            )
             pb = pd.concat(pbs).reset_index(drop=True)
-            pb["ligand_posebusters_internal_energy"] = pb["ligand_posebusters_internal_energy"].astype(bool)
+            pb["ligand_posebusters_internal_energy"] = pb[
+                "ligand_posebusters_internal_energy"
+            ].astype(bool)
             pb.to_parquet(posebusters / f"{count}.parquet", index=False)
             count += 1
             dfs = []
             pbs = []
     if len(dfs):
-        pd.concat(dfs).reset_index(drop=True).to_parquet(metadata / f"{count}.parquet", index=False)
+        pd.concat(dfs).reset_index(drop=True).to_parquet(
+            metadata / f"{count}.parquet", index=False
+        )
     if len(pbs):
         pb = pd.concat(pbs).reset_index(drop=True)
-        pb["ligand_posebusters_internal_energy"] = pb["ligand_posebusters_internal_energy"].astype(bool)
+        pb["ligand_posebusters_internal_energy"] = pb[
+            "ligand_posebusters_internal_energy"
+        ].astype(bool)
         pb.to_parquet(posebusters / f"{count}.parquet", index=False)
 
 
@@ -805,7 +820,8 @@ def mp_pack_linked_structures(*, data_dir: Path, structures: bool = True) -> Non
 
     with multiprocessing.get_context("spawn").Pool() as pool:
         pool.starmap(
-            pack_linked_structures, zip(repeat(data_dir), listdir(data_dir / "ingest"), repeat(structures))
+            pack_linked_structures,
+            zip(repeat(data_dir), listdir(data_dir / "ingest"), repeat(structures)),
         )
 
 
