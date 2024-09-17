@@ -87,14 +87,14 @@ def test_query_ligand_cross_similarity(read_plinder_mount):
 
 def test_query_links(read_plinder_mount):
     system_id = "4dd7__1__1.A__1.B"
-    df = scores.query_links(filters=[("query_system", "==", system_id)])
+    df = scores.query_links(filters=[("reference_system_id", "==", system_id)])
     assert len(df.index)
 
 
 def test_query_links_columns(read_plinder_mount):
     system_id = "4dd7__1__1.A__1.B"
     df = scores.query_links(
-        columns=["reference_system_id"], filters=[("query_system", "==", system_id)]
+        columns=["reference_system_id"], filters=[("reference_system_id", "==", system_id)]
     )
     assert len(df.index)
     assert "reference_system_id" in df.columns
