@@ -10,7 +10,5 @@ def test_make_column_descriptions(read_plinder_mount):
     df = query_index(columns=["*"])
 
     schema = docs.get_all_column_descriptions(plindex=df)
-    columns = set([row[0] for row in schema])
-
+    columns = schema["Name"].to_list()
     assert not len(df.columns.difference(columns))
-    print(columns.difference(df.columns))
