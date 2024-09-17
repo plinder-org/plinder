@@ -553,76 +553,17 @@ def add_aggregated_columns(*, index: pd.DataFrame) -> pd.DataFrame:
     return index
 
 
-def create_metadata(*, data_dir: Path, force_update: bool = False) -> None:
-    """
-    Isolate bulky columns from the index to additional metadata
-    """
-    from plinder.data.docs import CHAIN_TYPES, MAPPING_NAMES
-
-    metadata = data_dir / "metadata"
-    metadata.mkdir(exist_ok=True, parents=True)
-    posebusters = data_dir / "posebusters"
-    posebusters.mkdir(exist_ok=True, parents=True)
-
-    keep = [
-        f"{chain_type}_{mapping_name}"
-        for chain_type in CHAIN_TYPES + ["system_pocket"]
-        for mapping_name in MAPPING_NAMES + ["Kinase name"]
-    ]
-
-    count = 0
-    dfs = []
-    pbs = []
-    for i, path in enumerate(sorted((data_dir / "qc" / "index").glob("*.parquet"))):
-        df = pd.read_parquet(path)
-        if not df.empty:
-            drop_meta = list(
-                df.columns.difference(
-                    ["system_id"] + sorted(set(keep).intersection(df.columns))
-                )
-            )
-            drop_pb = list(
-                df.columns.difference(
-                    ["system_id"] + [col for col in df.columns if "posebuster" in col]
-                )
-            )
-            dfs.append(df.drop(columns=drop_meta))
-            pbs.append(df.drop(columns=drop_pb))
-        if i and not i % 10:
-            pd.concat(dfs).reset_index(drop=True).to_parquet(
-                metadata / f"{count}.parquet", index=False
-            )
-            pb = pd.concat(pbs).reset_index(drop=True)
-            pb["ligand_posebusters_internal_energy"] = pb[
-                "ligand_posebusters_internal_energy"
-            ].astype(bool)
-            pb.to_parquet(posebusters / f"{count}.parquet", index=False)
-            count += 1
-            dfs = []
-            pbs = []
-    if len(dfs):
-        pd.concat(dfs).reset_index(drop=True).to_parquet(
-            metadata / f"{count}.parquet", index=False
-        )
-    if len(pbs):
-        pb = pd.concat(pbs).reset_index(drop=True)
-        pb["ligand_posebusters_internal_energy"] = pb[
-            "ligand_posebusters_internal_energy"
-        ].astype(bool)
-        pb.to_parquet(posebusters / f"{count}.parquet", index=False)
-
-
 def create_index(*, data_dir: Path, force_update: bool = False) -> pd.DataFrame:
     """
     Create the index
     """
     from plinder.data.docs import CHAIN_TYPES, MAPPING_NAMES
 
-    drop = [
-        f"{chain_type}_{mapping_name}"
-        for chain_type in CHAIN_TYPES + ["system_pocket"]
-        for mapping_name in MAPPING_NAMES + ["Kinase name"]
-    ]
+    # drop = [
+    #     f"{chain_type}_{mapping_name}"
+    #     for chain_type in CHAIN_TYPES + ["system_pocket"]
+    #     for mapping_name in MAPPING_NAMES + ["Kinase name"]
+    # ]
     index = data_dir / "index" / "annotation_table.parquet"
     index.parent.mkdir(exist_ok=True, parents=True)
     lean = data_dir / "qc" / "lean"
@@ -632,8 +573,7 @@ def create_index(*, data_dir: Path, force_update: bool = False) -> pd.DataFrame:
         for path in (data_dir / "qc" / "index").glob("*"):
             df = pd.read_parquet(path)
             if not df.empty:
-                addtl_cols = [col for col in df.columns if "posebuster" in col]
-                to_drop = df.columns.intersection(drop + addtl_cols).to_list()
+                to_drop = [col for col in df.columns if "posebusters" in col]
                 LOG.info(f"{path.name} shape={df.shape} to_drop={len(to_drop)}")
                 df.drop(columns=to_drop).to_parquet(lean / path.name, index=False)
         dfs = []
