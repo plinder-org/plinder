@@ -8,8 +8,8 @@ from collections import defaultdict
 from pathlib import Path
 from zipfile import ZipFile
 
-import ost
 import numpy as np
+import ost
 import pandas as pd
 
 from plinder.core.utils.log import setup_logger
@@ -49,13 +49,14 @@ def write_scores_as_json(
             scorer_input.reference_system_id,
         )
         import sys
+
         print(scorer_input, file=sys.stderr, flush=True)
         receptor_file = None
-        if scorer_input.receptor_file is not None and not np.isnan(scorer_input.receptor_file):
+        if scorer_input.receptor_file is not None and not np.isnan(
+            scorer_input.receptor_file
+        ):
             receptor_file = Path(scorer_input.receptor_file)
-        ligand_file = None
-        if scorer_input.ligand_file is not None:
-            ligand_file = Path(scorer_input.ligand_file)
+        ligand_file = Path(scorer_input.ligand_file)
 
         if receptor_file is not None and not receptor_file.exists():
             if (
