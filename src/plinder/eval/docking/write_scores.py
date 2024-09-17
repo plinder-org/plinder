@@ -1,13 +1,13 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
 from __future__ import annotations
+
 import json
 import multiprocessing
 from collections import defaultdict
 from pathlib import Path
 from zipfile import ZipFile
 
-import numpy as np
 import ost
 import pandas as pd
 
@@ -23,7 +23,7 @@ def write_scores_as_json(
     system_dir: Path,
     output_file: Path,
     overwrite: bool = False,
-    predictions_dir: Path | None = None
+    predictions_dir: Path | None = None,
 ) -> None:
     """
     Makes score file for a single reference - model pair
@@ -51,7 +51,10 @@ def write_scores_as_json(
         ligand_file = Path(scorer_input.ligand_file)
 
         if not receptor_file.exists():
-            if predictions_dir is not None and (predictions_dir / receptor_file).exists():
+            if (
+                predictions_dir is not None
+                and (predictions_dir / receptor_file).exists()
+            ):
                 receptor_file = predictions_dir / receptor_file
             else:
                 receptor_file = reference_system.receptor_cif_file

@@ -788,7 +788,10 @@ def consolidate_linked_scores(*, data_dir: Path) -> None:
         odf = pd.read_parquet(
             data_dir / "linked_staging" / f"{search_db}_links.parquet"
         )
-        drop = list(set(odf.columns.intersection(ndf.columns)) - set(["reference_system_id", "id"]))
+        drop = list(
+            set(odf.columns.intersection(ndf.columns))
+            - set(["reference_system_id", "id"])
+        )
         df = pd.merge(odf.drop(columns=drop), ndf, on=["reference_system_id", "id"])
         (data_dir / "links" / f"kind={search_db}").mkdir(exist_ok=True, parents=True)
         df.to_parquet(
