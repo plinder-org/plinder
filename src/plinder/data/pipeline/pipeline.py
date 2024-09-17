@@ -394,6 +394,7 @@ class IngestPipeline:
 
     @utils.ingest_flow_control
     def join_score_linked_structures(self, outputs: list[None]) -> None:
+        utils.mp_pack_linked_structures(data_dir=self.plinder_dir, structures=False)
         utils.consolidate_linked_scores(data_dir=self.plinder_dir)
 
     def run_stage(self, stage: str) -> None:
