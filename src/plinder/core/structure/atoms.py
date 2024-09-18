@@ -12,6 +12,7 @@ from typing import Any, Dict, Optional, Union
 import biotite.structure as struc
 import numpy as np
 from biotite import TextFile
+from biotite.structure import get_residues
 from biotite.structure.atoms import AtomArray, AtomArrayStack
 from biotite.structure.io.pdbx import get_structure
 from numpy.typing import NDArray
@@ -20,11 +21,11 @@ from pinder.core.structure.atoms import (
     _get_structure_and_res_info,
     align_sequences,
     apply_mask,
-    mask_from_res_list,
 )
 from rdkit import Chem
 from rdkit.Chem import AllChem, Mol, rdMolDescriptors, rdRascalMCES
 
+from plinder.core.utils import constants as pc
 from plinder.core.utils.log import setup_logger
 
 log = setup_logger(__name__)
@@ -99,7 +100,7 @@ def biotite_ciffile() -> TextFile:
 
 
 def atom_array_from_cif_file(
-    structure: Path | AtomArray, use_author_fields: bool = True
+    structure: Path | _AtomArrayOrStack, use_author_fields: bool = True
 ) -> AtomArray | None:
     if isinstance(structure, str):
         structure = Path(structure)
@@ -121,7 +122,7 @@ def atom_array_from_cif_file(
 
 # TODO: WHY DO WE NEED THIS?
 def atom_array_to_rdkit_mol(
-    lig_atom_array: AtomArray,
+    lig_atom_array: _AtomArrayOrStack,
     smiles: str,
     lig_resn: str = "LIG",
     chain_mapping: Optional[Dict[str, str]] = None,
@@ -271,76 +272,6 @@ def get_template_to_mol_matches(
     ]
 
 
-def _align_structure_to_ref_sequence(
-    ref_seq: str,
-    subject: Path | _AtomArrayOrStack,
-) -> tuple[_AtomArrayOrStack, str, list[int]]:
-    """ """
-
-    subj_info = _get_structure_and_res_info(subject)
-    subj_seq, subj_numbering = _convert_resn_to_sequence_and_numbering(subj_info)
-
-    # Setting ref_numbering=None sets it to 1 -> len(ref_seq)
-    alignments = align_sequences(
-        ref_seq, subj_seq, ref_numbering=None, subject_numbering=subj_numbering
-    )
-    (
-        ref_seq_mapped,
-        subj_seq_mapped,
-        ref_numbering_mapped,
-        subj_numbering_mapped,
-    ) = alignments
-
-    subject_common = f"{len(subj_seq_mapped)}/{len(subj_seq)}"
-    ref_common = f"{len(ref_seq_mapped)}/{len(ref_seq)}"
-    log.debug(
-        f"{subject_common} residues in subject matched to "
-        f"{ref_common} residues in ref"
-    )
-
-    # Renumber subject residues to match aligned reference
-    subj_resid_map = dict(zip(subj_numbering_mapped, ref_numbering_mapped))
-
-    # Need to remove ref residues in order to match subject
-    subj_structure, _, _ = subj_info
-
-    assert isinstance(subj_structure, (AtomArray, AtomArrayStack))
-
-    subj_mask = mask_from_res_list(subj_structure, list(subj_resid_map.keys()))
-
-    subject_aligned = apply_mask(subj_structure, subj_mask)
-    subject_aligned.res_id = np.array(
-        [subj_resid_map[ri] for ri in subject_aligned.res_id]
-    )
-    return subject_aligned, subj_seq, subj_numbering
-
-
-def get_per_chain_seq_to_structure_alignments(
-    ref_seqs: dict[str, str],
-    subject_arr: _AtomArrayOrStack,
-) -> tuple[Any, dict[str, str], Dict[str, list[int]]]:
-    """ """
-    subject_aligned_list: list[AtomArrayStack] = []
-    subj_seq_dict: dict[str, str] = {}
-    subj_numbering_dict: dict[str, list[int]] = {}
-    for reference_chain, ref_seq in ref_seqs.items():
-        # refernece and subject chain are the same
-        subject_chain = reference_chain
-        subject_mask = subject_arr.chain_id == subject_chain
-        subject_ch_arr = apply_mask(subject_arr, subject_mask)
-
-        subject_aligned, subj_seq, subj_numbering = _align_structure_to_ref_sequence(
-            ref_seq, subject_ch_arr
-        )
-        subject_aligned_list.append(subject_aligned)
-        subj_seq_dict[subject_chain] = subj_seq
-        subj_numbering_dict[subject_chain] = subj_numbering
-        combined_renumbered_arr = subject_aligned_list[0]
-        for arr in subject_aligned_list[1:]:
-            combined_renumbered_arr += arr
-    return combined_renumbered_arr, subj_seq_dict, subj_numbering_dict
-
-
 def get_residue_index_mapping_mask(
     ref_seqs: dict[str, str], subject_arr: _AtomArrayOrStack
 ) -> dict[str, list[int]]:
@@ -371,10 +302,53 @@ def get_residue_index_mapping_mask(
 
 
 def get_ligand_atom_index_mapping_mask(
-    ref_mol: Mol, matching_indices: list[int]
+    ref_mol: Mol, matching_indices: tuple[int]
 ) -> NDArray[np._int]:
     mask = np.zeros(len(ref_mol.GetAtoms()))
     for _, atm_idx in enumerate(range(len(mask))):
         if atm_idx in matching_indices:
             mask[atm_idx] = 1
     return mask
+
+
+def make_one_hot_atom_features(atom_name: str) -> list[int]:
+    allowed_atom_names = ["C", "N", "O", "S", "P"]
+    striped_atom_name = "".join(filter(lambda x: not x.isdigit(), atom_name))[0]
+    return [1 if striped_atom_name == atm else 0 for atm in allowed_atom_names]
+
+
+def get_per_residue_nask(
+    residue_reference_atom_list: list[str], atom_list: list[int]
+) -> list[int]:
+    return [1 if i in atom_list else 0 for i in residue_reference_atom_list]
+
+
+def get_per_residue_atoms(
+    atom_array: _AtomArrayOrStack, resi: int, resn: str
+) -> NDArray[np.str_]:
+    return atom_array[
+        (atom_array.res_id == resi) & (atom_array.res_name == resn)
+    ].atom_name
+
+
+def make_atom_mask(
+    atom_array: _AtomArrayOrStack, seq_res: list[str], seq_mask: list[int]
+) -> list[int]:
+    seq_res = [pc.ONE_TO_THREE[aa] for aa in seq_res]
+    resi, resn = get_residues(atom_array)
+    residue_tuple = list(zip(tuple(resi), tuple(resn)))
+
+    atom_mask = []
+    resolved_residue_start = 0
+    for seq_res, mask in zip(seq_res, seq_mask):
+        if mask == 0:
+            atom_mask.append([0 for i in range(len(pc.ORDERED_AA_FULL_ATOM[seq_res]))])
+        else:
+            resi, resn = residue_tuple[resolved_residue_start]
+            atom_mask.append(
+                get_per_residue_nask(
+                    pc.ORDERED_AA_FULL_ATOM[resn],
+                    get_per_residue_atoms(atom_array, resi, resn),
+                )
+            )
+    return [atm for res in atom_mask for atm in res]

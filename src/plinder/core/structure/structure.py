@@ -1,16 +1,14 @@
 from __future__ import annotations
 
-from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Iterable, Optional
 
 import biotite.structure as struc
 import numpy as np
-import pandas as pd
 from biotite import TextFile
-from biotite.structure import stack
 from biotite.structure.atoms import AtomArray
 from numpy.typing import NDArray
+from pinder.core.loader.structure import _superimpose_common_atoms
 from pinder.core.structure import surgery
 from pinder.core.structure.atoms import (
     get_per_chain_seq_alignments,
@@ -19,7 +17,6 @@ from pinder.core.structure.atoms import (
     resn2seq,
     write_pdb,
 )
-from pinder.core.structure.superimpose import superimpose_chain
 from pinder.core.utils.dataclass import stringify_dataclass
 from pydantic import BaseModel
 from rdkit import Chem
@@ -29,6 +26,8 @@ from plinder.core.structure.atoms import (
     atom_array_from_cif_file,
     generate_input_conformer,
     get_residue_index_mapping_mask,
+    make_atom_mask,
+    make_one_hot_atom_features,
     match_ligands,
 )
 from plinder.core.utils import constants as pc
@@ -90,10 +89,10 @@ class Structure(BaseModel):
 
     Parameters
     ----------
-    protein_path : Path
-        Protein structure cif path, could be holo, apo or pred path
     id : str
         PLINDER system or apo/pred id. If the structure is holo, this is used to load the holo structure
+    protein_path : Path
+        Protein structure cif path, could be holo, apo or pred path
     list_ligand_sdf_and_resolved_smiles : Optional[list[tuple[Path, str]]]
         SDF path and ligand smiles. This is optional for apo and pred structures
     protein_atom_array : AtomArray | None = None
@@ -117,7 +116,7 @@ class Structure(BaseModel):
         arbitrary_types_allowed = True
 
     @property
-    def resolved_sequences(self):
+    def resolved_sequences(self) -> dict[str, str]:
         _resolvd_sequences = {}
         with open(self.protein_sequence) as f_seq:
             lines = f_seq.readlines()
@@ -400,11 +399,12 @@ class Structure(BaseModel):
         )
 
     @property
-    def stack_seqres_masks(self) -> NDArray[np.int]:
+    def resolved_sequence_stacked_mask(self) -> NDArray[np.int]:
+        """Resolved sequence stacked by chain"""
         seqres_masks = get_residue_index_mapping_mask(
             self.resolved_sequences, self.protein_atom_array
         )
-        return [seqres_masks[ch] for ch in self.protein_chain_in_order]
+        return [seqres_masks[ch] for ch in self.protein_chain_ordered]
 
     # TODO: review this!!!
     # @property
@@ -415,13 +415,24 @@ class Structure(BaseModel):
     #         matching_idxs = self.ligand_mols[ch][-1]
     #         masks.append(get_ligand_atom_index_mapping_mask(mol, matching_idxs))
     #     return masks
+    @property
+    def resolved_smiles_ligand_mask(self) -> list[list[int]]:
+        """List of protein chains ordered the way it is in structure."""
+        masks = []
+        for ch in self.ligand_chain_ordered:
+            mol = self.ligand_mols[ch][1]
+            matching_idxs = self.ligand_mols[ch][-1]
+            masks.append(get_ligand_atom_index_mapping_mask(mol, matching_idxs))
+        return masks
 
     @property
-    def seqres_list_ordered_by_chain(self) -> list[str]:
-        return [self.resolved_sequences[ch] for ch in self.protein_chain_in_order]
+    def resolved_sequence_list_ordered_by_chain(self) -> list[str]:
+        """List of protein chains ordered the way it is in structure."""
+        return [self.resolved_sequences[ch] for ch in self.protein_chain_ordered]
 
     @property
-    def protein_chain_in_order(self):
+    def protein_chain_ordered(self) -> list[list[int]]:
+        """List of protein chains ordered the way it is in structure"""
         chain_order = []
         for ch_id in self.protein_atom_array.chain_id:
             if ch_id not in chain_order:
@@ -429,16 +440,37 @@ class Structure(BaseModel):
         return chain_order
 
     @property
-    def protein_atom_array_stacked_by_chain(self):
-        return stack(
+    def resolved_sequence_full_atom_feat(self) -> list[list[int]]:
+        """Resolved sequence full atom features."""
+        seq_res_atom_list = [
             [
-                self.protein_atom_array[self.protein_atom_array.chain_id == ch]
-                for ch in self.protein_chain_in_order
+                pc.ORDERED_AA_FULL_ATOM[pc.ONE_TO_THREE[res]]
+                for res in self.resolved_sequences[ch]
             ]
-        )
+            for ch in self.protein_chain_ordered
+        ]
+        return [
+            [make_one_hot_atom_features(res) for res in ch] for ch in seq_res_atom_list
+        ]
 
     @property
-    def ligand_chain_in_order(self):
+    def sequence_atom_mask(self) -> list[list[int]]:
+        """Sequence mask indication which residues are resolved"""
+        seqres_masks = get_residue_index_mapping_mask(
+            self.resolved_sequences, self.protein_atom_array
+        )
+        return [
+            make_atom_mask(
+                self.protein_atom_array[self.protein_atom_array.chain_id == ch],
+                self.resolved_sequences[ch],
+                seqres_masks[ch],
+            )
+            for ch in self.protein_chain_ordered
+        ]
+
+    @property
+    def ligand_chain_ordered(self) -> list[str]:
+        """List of Ligand chains sorted in order."""
         return [
             path_and_smiles[0].stem
             for path_and_smiles in self.list_ligand_sdf_and_resolved_smiles
@@ -454,6 +486,14 @@ class Structure(BaseModel):
     def input_ligand_templates(self) -> dict[str, Chem.rdchem.Mol]:
         """Ligand 2D mol objects from input SMILES"""
         return {tag: mol_tuple[0] for tag, mol_tuple in self.ligand_mols.items()}
+
+    @property
+    def protein_calpha_coords(self) -> NDArray[np.double]:
+        """ndarray[np.double]: The coordinates of the protein clapha atoms in the structure."""
+        protein_calpha_coords: NDArray[np.double] = self.protein_atom_array[
+            self.protein_atom_array.atom_name == "CA"
+        ].coord
+        return protein_calpha_coords
 
     @property
     def input_ligand_conformers(self) -> dict[str, Chem.rdchem.Mol]:
@@ -481,7 +521,7 @@ class Structure(BaseModel):
 
     @property
     def resolved_ligand_structure_atom_index_maps(
-        self
+        self,
     ) -> dict[str, list[dict[int, int]]]:
         """List of resolved holo structure atom index maps to input SMILES"""
         return {tag: mol_tuple[4] for tag, mol_tuple in self.ligand_mols.items()}
@@ -520,30 +560,14 @@ class Structure(BaseModel):
     #     resolved_ligand_structure_masks
     #     input_ligand_conformer_masks
     #     return masks
-
     @property
-    def protein_dataframe(self) -> pd.DataFrame:
-        """pd.DataFrame: The dataframe representation of the structure."""
-        three_to_one = pc.three_to_one_noncanonical_mapping
-        return pd.DataFrame(
-            [
-                {
-                    "chain_id": at.chain_id,
-                    "res_name": at.res_name,
-                    "res_code": three_to_one.get(at.res_name, "X"),
-                    "res_id": at.res_id,
-                    "atom_name": at.atom_name,
-                    "b_factor": at.b_factor,
-                    "ins_code": at.ins_code,
-                    "hetero": at.hetero,
-                    "element": at.element,
-                    "x": at.coord[0],
-                    "y": at.coord[1],
-                    "z": at.coord[2],
-                }
-                for at in self.protein_atom_array
-            ]
-        )
+    def pdb_ligand_mols_coords(self) -> dict[str, NDArray[np.double]]:
+        """Holo PDB ligand coordinate"""
+        ligand_coords: NDArray[np.double] = {
+            tag: mol.GetConformer().GetPositions()
+            for tag, mol in self.original_unresolved_mols.items()
+        }
+        return ligand_coords
 
     @property
     def protein_backbone_mask(self) -> NDArray[np.bool_]:
@@ -584,33 +608,33 @@ class Structure(BaseModel):
         return ch_seq
 
     @property
-    def unresolved_protein_sequence(self) -> str:
+    def protein_sequence_from_structure(self) -> str:
         """str: The amino acid sequence of the structure."""
         numbering, resn = struc.get_residues(self.protein_atom_array)
         seq: str = resn2seq(resn)
         return seq
 
     @property
-    def unresolved_protein_fasta(self) -> str:
+    def protein_structure_sequence_fasta(self) -> str:
         """str: The fasta representation of the structure sequence."""
         fasta_str: str = "\n".join(
-            [f">{self.protein_path.stem}", self.unresolved_protein_sequence]
+            [f">{self.protein_path.stem}", self.protein_sequence_from_structure]
         )
         return fasta_str
 
     @property
-    def protein_tokenized_sequence(self) -> "torch.Tensor":
+    def protein_structure_tokenized_sequence(self) -> "torch.Tensor":
         """torch.Tensor: The tokenized sequence representation of the structure sequence."""
         import torch
 
         seq_encoding = torch.tensor(
-            [pc.AA_TO_INDEX[x] for x in self.unresolved_protein_sequence]
+            [pc.AA_TO_INDEX[x] for x in self.protein_sequence_from_structure]
         )
         tokenized: torch.Tensor = seq_encoding.long()
         return tokenized
 
     @property
-    def protein_residue_names(self) -> list[str]:
+    def protein_structure_residue_names(self) -> list[str]:
         """list[str]: The list of distinct residue names in the structure."""
         res_list = self._attr_from_atom_array(
             self.protein_atom_array, "res_name", distinct=True, sort=True
@@ -618,7 +642,7 @@ class Structure(BaseModel):
         return [str(r) for r in res_list]
 
     @property
-    def protein_residues(self) -> list[int]:
+    def protein_structure_residues(self) -> list[int]:
         """list[int]: The list of distinct residue IDs in the structure."""
         res_list = self._attr_from_atom_array(
             self.protein_atom_array, "res_id", distinct=True, sort=True
@@ -626,7 +650,7 @@ class Structure(BaseModel):
         return [int(r) for r in res_list]
 
     @property
-    def protein_atom_names(self) -> list[str]:
+    def protein_structure_atom_names(self) -> list[str]:
         """list[str]: The list of distinct atom names in the structure."""
         at_list = self._attr_from_atom_array(
             self.protein_atom_array, "atom_name", distinct=True, sort=True
@@ -634,7 +658,7 @@ class Structure(BaseModel):
         return [str(a) for a in at_list]
 
     @property
-    def protein_b_factor(self) -> list[float]:
+    def protein_structure_b_factor(self) -> list[float]:
         """list[float]: A list of B-factor values for each atom in the structure."""
         b_factor = self._attr_from_atom_array(
             self.protein_atom_array, "b_factor", distinct=False, sort=False
@@ -657,72 +681,6 @@ class Structure(BaseModel):
         return [name for name in dir(cls) if isinstance(getattr(cls, name), property)]
 
 
-@lru_cache(maxsize=1)
-def canonical_atom_type_mask(atom_tys: tuple[str]) -> "torch.Tensor":
-    """Canonical atom masks for 21 (20 standard + missing) residue types"""
-    import torch
-
-    msk = torch.zeros(len(pc.INDEX_TO_AA_THREE), len(atom_tys))
-    for aa_idx in range(len(pc.INDEX_TO_AA_THREE)):
-        aa = pc.INDEX_TO_AA_THREE[aa_idx]
-        for atom_idx, atom in enumerate(atom_tys):
-            if atom in pc.BB_ATOMS:
-                msk[aa_idx, atom_idx] = 1
-            elif atom in pc.AA_TO_SC_ATOMS[aa]:
-                msk[aa_idx, atom_idx] = 1
-    atom_mask: torch.Tensor = msk.bool()
-    return atom_mask
-
-
-@lru_cache(maxsize=1)
-def backbone_atom_tensor(atom_tys: tuple[str]) -> "torch.Tensor":
-    import torch
-
-    atoms: torch.Tensor = torch.tensor(
-        [i for i, at in enumerate(atom_tys) if at in pc.BB_ATOMS]
-    ).long()
-    return atoms
-
-
-def _superimpose_common_atoms(
-    fixed: AtomArray, mobile: AtomArray, max_iterations: int = 10
-) -> tuple[
-    AtomArray,
-    struc.AffineTransformation,
-    NDArray[np.int_],
-    NDArray[np.int_],
-]:
-    """Try to superimpose two structures based on homology.
-    If this fails due to a lack of common anchors (e.g. in case of very short peptides),
-    fall back to superimposing corresponding atoms with common atom annotations.
-    """
-    try:
-        return_value: tuple[
-            AtomArray,
-            struc.AffineTransformation,
-            NDArray[np.int_],
-            NDArray[np.int_],
-        ] = superimpose_chain(fixed, mobile, max_iterations=max_iterations)
-        return return_value
-    except ValueError as error:
-        # Only run fallback if number of anchors is the issue
-        if "anchor" not in str(error):
-            raise
-        fixed_common_mask = struc.filter_intersection(fixed, mobile)
-        fixed_coord = fixed.coord[fixed_common_mask]
-        mobile_common_mask = struc.filter_intersection(mobile, fixed)
-        mobile_coord = mobile.coord[mobile_common_mask]
-        _, transformation = struc.superimpose(fixed_coord, mobile_coord)
-        mobile_superimposed = transformation.apply(mobile)
-        return (
-            mobile_superimposed,
-            transformation,
-            np.where(fixed_common_mask)[0],
-            np.where(mobile_common_mask)[0],
-        )
-
-
-# TODO: fix duplicated definition for _align_monomers_with_mask
 def _align_monomers_with_mask(
     monomer1: Structure,
     monomer2: Structure,
@@ -730,6 +688,25 @@ def _align_monomers_with_mask(
     renumber_residues: bool = False,
     remove_differing_annotations: bool = False,
 ) -> tuple[Structure, Structure]:
+    """Align and superpose monomers.
+
+    Parameters
+    ----------
+    monomer1: Structure
+        Monomer structure 1
+    monomer2: Structure
+        Monomer structure 2
+    remove_differing_atoms: bool = True
+        Remove differing atoms between monomers
+    renumber_residues: bool = False
+        renumber of residues
+
+    Returns
+    -------
+    tuple[Structure, Structure]
+        Align and superposed structures
+
+    """
     if (monomer1 is None) | (monomer2 is None):
         return monomer1, monomer2
     monomer2, monomer1 = monomer2.align_common_sequence(
@@ -748,7 +725,29 @@ def _align_structures_with_mask(
     remove_differing_atoms: bool = True,
     renumber_residues: bool = False,
     remove_differing_annotations: bool = False,
-) -> tuple[Structure, Structure]:
+) -> tuple[dict[str, Structure], dict[str, Structure]]:
+    """Align and crop two structures.
+
+    Parameters
+    ----------
+    multi_chain_structure : Structure
+        Reference Structure to align to.
+        This could be multi-chain structure (could be holo structure)
+    map_of_alt_monomer_structures : dict[str, Structure]
+        Dictionary of chains of target structures to align (could be chains of apo/pred)
+    remove_differing_atoms : bool = True
+        Remove atoms different between reference and target
+    renumber_residues : bool = False
+        Renumber residue
+    remove_differing_annotations : bool = False
+        Remove different annotations from AtomArray
+
+    Returns
+    -------
+    tuple[dict[str, Structure], dict[str, Structure]]
+        dictionary of chains of aligned and cropped reference and target chains
+
+    """
     cropped_and_superposed_ref_dict = {}
     cropped_and_superposed_target_dict = {}
     for ref_chain, target_monomer_structure in map_of_alt_monomer_structures.items():

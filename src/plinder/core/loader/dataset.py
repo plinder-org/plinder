@@ -23,9 +23,10 @@ def structure2tensor_transform(structure: Structure) -> dict[str, torch.Tensor]:
     props: dict[str, torch.Tensor] = structure2tensor(
         protein_atom_array=structure.protein_atom_array,
         resolved_sequence_residue_types=copy.deepcopy(
-            structure.seqres_list_ordered_by_chain
+            structure.resolved_sequence_list_ordered_by_chain
         ),
-        resolved_sequence_mask=structure.stack_seqres_masks,
+        resolved_sequence_mask=structure.resolved_sequence_stacked_mask,
+        resolved_sequence_full_atom_feat=structure.resolved_sequence_full_atom_feat,
         resolved_ligand_mols=structure.resolved_ligand_mols,
         resolved_ligand_structure_coords=structure.resolved_ligand_structure_coords,
         resolved_ligand_structure_masks=structure.resolved_ligand_structure_atom_index_maps,
@@ -155,18 +156,14 @@ class PlinderDataset(Dataset):  # type: ignore
             input_structure = transform(input_structure)
             target_structure = transform(target_structure)
 
-        input_id = target_structure.id
-        target_id = target_structure.id
+        id = target_structure.id
         if self._transform is not None:
             input_complex = self._transform(input_structure)
-        if self._target_transform is not None:
-            target_complex = self._target_transform(target_structure)
 
         item: Dict[str, Any] = {
-            "input_id": input_id,
-            "target_id": target_id,
-            "input_features": input_complex,
-            "target": target_complex,
+            "structures": _structures,
+            "id": id,
+            "features_and_coords": input_complex,
         }
         if self._store_file_path:
             item["path"] = s.system_cif
