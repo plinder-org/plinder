@@ -69,6 +69,7 @@ class Structure(BaseModel):
                 tuple[NDArray, NDArray],
                 Chem.Mol,
                 tuple[NDArray, NDArray],
+                tuple[NDArray, NDArray],
             ],
         ]
     ] = None
@@ -589,21 +590,33 @@ class Structure(BaseModel):
         self
     ) -> dict[str, tuple[NDArray, NDArray]]:
         """for every ligand it generates a pair of stacks providing atom index sort to match conformer to input SMILES"""
-        return {tag: mol_tuple[2] for tag, mol_tuple in self.ligand_mols.items()}
+        return (
+            {tag: mol_tuple[2] for tag, mol_tuple in self.ligand_mols.items()}
+            if self.ligand_mols
+            else {}
+        )
 
     @property
     def resolved_ligand_structure2smiles_stacks(
         self,
     ) -> dict[str, tuple[NDArray, NDArray]]:
         """for every ligand it generates a pair of stacks providing atom index sort to match holo to input SMILES"""
-        return {tag: mol_tuple[4] for tag, mol_tuple in self.ligand_mols.items()}
+        return (
+            {tag: mol_tuple[4] for tag, mol_tuple in self.ligand_mols.items()}
+            if self.ligand_mols
+            else {}
+        )
 
     @property
     def input_ligand_conformer2resolved_stacks(
         self
     ) -> dict[str, tuple[NDArray, NDArray]]:
         """for every ligand it generates a pair of stacks providing atom index sort to match conformer to holo"""
-        return {tag: mol_tuple[5] for tag, mol_tuple in self.ligand_mols.items()}
+        return (
+            {tag: mol_tuple[5] for tag, mol_tuple in self.ligand_mols.items()}
+            if self.ligand_mols
+            else {}
+        )
 
     @property
     def resolved_ligand_structure_coords(self) -> dict[str, NDArray[np.double]]:

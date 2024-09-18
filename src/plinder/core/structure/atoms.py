@@ -183,7 +183,7 @@ def generate_input_conformer(template_mol: Mol, addHs: bool = True) -> Mol:
 def match_ligands(
     input_smiles: str,
     resolved_sdf: Path,
-) -> tuple[Chem.Mol, Chem.Mol, list[dict[int, int]]]:
+) -> tuple[Chem.Mol, Chem.Mol, tuple[_AtomArrayOrStack, _AtomArrayOrStack]]:
     template_mol = Chem.MolFromSmiles(input_smiles)
     resolved_mol = Chem.MolFromMolFile(resolved_sdf.__str__())
     atom_matches = get_template_to_mol_matches(template_mol, resolved_mol)
