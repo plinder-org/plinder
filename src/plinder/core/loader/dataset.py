@@ -11,12 +11,12 @@ import torch
 from torch.utils.data import DataLoader, Dataset
 
 from plinder.core import system
+from plinder.core.index.system import collate_batch, structure2tensor
 from plinder.core.loader.transforms import StructureTransform
 from plinder.core.scores import query_index
 from plinder.core.scores.links import query_links
 from plinder.core.split.utils import get_split
 from plinder.core.structure.structure import Structure
-from plinder.core.system.system import collate_batch, structure2tensor
 
 
 def structure2tensor_transform(structure: Structure) -> dict[str, torch.Tensor]:
@@ -27,12 +27,12 @@ def structure2tensor_transform(structure: Structure) -> dict[str, torch.Tensor]:
         ),
         resolved_sequence_mask=structure.stack_seqres_masks,
         resolved_ligand_mols=structure.resolved_ligand_mols,
-        resolved_ligand_mols_coords=structure.resolved_ligand_conformer_coords,
-        resolved_ligand_mols_masks=structure.resolved_ligand_conformer_masks,
-        input_ligand_templates=structure.input_ligand_templates,
+        resolved_ligand_structure_coords=structure.resolved_ligand_structure_coords,
+        resolved_ligand_structure_masks=structure.resolved_ligand_structure_atom_index_maps,
+        # input_ligand_templates=structure.input_ligand_templates,
         input_ligand_conformers=structure.input_ligand_conformers,
-        input_ligand_conformer_masks=structure.input_ligand_conformer_masks,
         input_ligand_conformer_coords=structure.input_ligand_conformer_coords,
+        input_ligand_conformer_masks=structure.input_ligand_conformer_atom_index_maps,
         protein_chain_in_order=structure.protein_chain_in_order,
         ligand_chain_in_order=structure.ligand_chain_in_order,
         dtype=torch.float32,
@@ -178,11 +178,11 @@ def get_torch_loader(
     dataset: PlinderDataset,
     batch_size: int = 2,
     shuffle: bool = True,
-    sampler=None,  # None: 'Sampler[PlinderDataset]' | None = None,
+    sampler: None = None,  # None: 'Sampler[PlinderDataset]' | None = None,
     num_workers: int = 1,
     collate_fn: Callable[[list[dict[str, Any]]], dict[str, Any]] = collate_batch,
     **kwargs: Any,
-):  # -> "DataLoader[PlinderDataset]":
+) -> DataLoader[PlinderDataset]:
     return DataLoader(
         dataset,
         batch_size=batch_size,

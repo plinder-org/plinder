@@ -4,11 +4,12 @@ from typing import Any, Optional, Union
 
 from omegaconf import DictConfig
 
+from plinder.core.index.system import PlinderSystem
 from plinder.core.index.utils import get_manifest
-from plinder.core.system.system import PlinderSystem
 from plinder.core.utils.unpack import expand_config_context
 
 
+# TODO: not used currently
 def load_systems(
     *,
     system_ids: Optional[Union[str, list[str]]] = None,
