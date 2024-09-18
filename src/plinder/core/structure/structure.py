@@ -461,8 +461,8 @@ class Structure(BaseModel):
         return {tag: mol_tuple[1] for tag, mol_tuple in self.ligand_mols.items()}
 
     @property
-    def input_ligand_conformer_masks(self) -> dict[str, list[tuple[int]]]:
-        """List of ligand conformer masks to input SMILES"""
+    def input_ligand_conformer_atom_index_maps(self) -> dict[str, list[dict[int, int]]]:
+        """List of ligand conformer atom index maps to input SMILES"""
         return {tag: mol_tuple[2] for tag, mol_tuple in self.ligand_mols.items()}
 
     @property
@@ -480,8 +480,10 @@ class Structure(BaseModel):
         return {tag: mol_tuple[3] for tag, mol_tuple in self.ligand_mols.items()}
 
     @property
-    def resolved_ligand_structure_masks(self) -> dict[str, list[tuple[int]]]:
-        """List of resolved holo structure masks to input SMILES"""
+    def resolved_ligand_structure_atom_index_maps(
+        self
+    ) -> dict[str, list[dict[int, int]]]:
+        """List of resolved holo structure atom index maps to input SMILES"""
         return {tag: mol_tuple[4] for tag, mol_tuple in self.ligand_mols.items()}
 
     @property
@@ -492,6 +494,23 @@ class Structure(BaseModel):
             for tag, mol in self.resolved_ligand_mols.items()
         }
         return ligand_coords
+
+    @property
+    def conformer2resolved_mapping(self) -> dict[str, list[dict[int, int]]]:
+        """for every ligand it generates a list of dictionaries providing pairwise mapping between conformer and holo"""
+        from itertools import product
+
+        conf2holo_mappings = {}
+        for (
+            tag,
+            smi2holo_maps,
+        ) in self.resolved_ligand_structure_atom_index_maps.items():
+            smi2conf_maps = self.input_ligand_conformer_atom_index_maps[tag]
+            conf2holo_mappings[tag] = [
+                {v: smi2holo[k] for k, v in smi2conf.items() if k in smi2holo}
+                for smi2conf, smi2holo in product(smi2conf_maps, smi2holo_maps)
+            ]
+        return conf2holo_mappings
 
     # TODO: complete
     # @property
@@ -703,6 +722,7 @@ def _superimpose_common_atoms(
         )
 
 
+# TODO: fix duplicated definition for _align_monomers_with_mask
 def _align_monomers_with_mask(
     monomer1: Structure,
     monomer2: Structure,

@@ -7,7 +7,7 @@ import gzip
 import os
 import tempfile
 from pathlib import Path
-from typing import Dict, Optional, Union
+from typing import Any, Dict, Optional, Union
 
 import biotite.structure as struc
 import numpy as np
@@ -204,14 +204,16 @@ def generate_input_conformer(template_mol: Mol, addHs: bool = True) -> Mol:
 def match_ligands(
     input_smiles: str,
     resolved_sdf: Path,
-) -> tuple[tuple[int, ...], Chem.rdchem.Mol, Chem.rdchem.Mol]:
+) -> tuple[Chem.Mol, Chem.Mol, list[dict[int, int]]]:
     template_mol = Chem.MolFromSmiles(input_smiles)
     resolved_mol = Chem.MolFromMolFile(resolved_sdf.__str__())
     atom_matches = get_template_to_mol_matches(template_mol, resolved_mol)
     return template_mol, resolved_mol, atom_matches
 
 
-def get_template_to_mol_matches(template: Chem.Mol, mol: Chem.Mol) -> list[list[int]]:
+def get_template_to_mol_matches(
+    template: Chem.Mol, mol: Chem.Mol
+) -> list[dict[int, int]]:
     """
     Function that works a lot like get_matched_template but can better deal with fragmented molecules
     """
@@ -264,7 +266,9 @@ def get_template_to_mol_matches(template: Chem.Mol, mol: Chem.Mol) -> list[list[
                     results = results3
                 else:
                     results = results2
-    return [match.atomMatches() for match in results]
+    return [
+        {ix_smi: ix_mol for ix_smi, ix_mol in match.atomMatches()} for match in results
+    ]
 
 
 def _align_structure_to_ref_sequence(
@@ -314,7 +318,7 @@ def _align_structure_to_ref_sequence(
 def get_per_chain_seq_to_structure_alignments(
     ref_seqs: dict[str, str],
     subject_arr: _AtomArrayOrStack,
-) -> dict[str, dict[int, int]]:
+) -> tuple[Any, dict[str, str], Dict[str, list[int]]]:
     """ """
     subject_aligned_list: list[AtomArrayStack] = []
     subj_seq_dict: dict[str, str] = {}
@@ -363,12 +367,14 @@ def get_residue_index_mapping_mask(
             if (i + 1) in ref_numbering_mapped:
                 mask[i] = 1
         mask_map[reference_chain] = mask
-        return mask_map
+    return mask_map
 
 
-def get_ligand_atom_index_mapping_mask(ref_mol, matching_indices) -> NDArray[np._int]:
+def get_ligand_atom_index_mapping_mask(
+    ref_mol: Mol, matching_indices: list[int]
+) -> NDArray[np._int]:
     mask = np.zeros(len(ref_mol.GetAtoms()))
-    for atm_idx in enumerate(range(len(mask))):
+    for _, atm_idx in enumerate(range(len(mask))):
         if atm_idx in matching_indices:
             mask[atm_idx] = 1
     return mask
