@@ -76,9 +76,12 @@ def generate_table(description_dir: Path, output_html_path: Path) -> None:
         is_mandatory[i] = is_value.all()
         # Get the first non-empty value as an example
         # whitelist ligand_rdkit_validation because we're only sampling the first 1000 rows
-        if not is_value.any() and column_name not in ["ligand_rdkit_validation"]:
-            logger.warning(f"Column '{column_name}' has no values.")
-            examples[i] = repr(None)
+        if not is_value.any():
+            if column_name in ["ligand_rdkit_validation"]:
+                examples[i] = repr(None)
+            else:
+                logger.warning(f"Column '{column_name}' has no values.")
+                examples[i] = repr(None)
         else:
             examples[i] = repr(column[is_value].iloc[0])
     column_descriptions["Mandatory"] = is_mandatory
