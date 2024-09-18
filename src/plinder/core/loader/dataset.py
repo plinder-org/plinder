@@ -2,7 +2,6 @@
 # Distributed under the terms of the Apache License 2.0
 from __future__ import annotations
 
-import copy
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Literal, Tuple
 
@@ -22,20 +21,16 @@ from plinder.core.structure.structure import Structure
 def structure2tensor_transform(structure: Structure) -> dict[str, torch.Tensor]:
     props: dict[str, torch.Tensor] = structure2tensor(
         protein_atom_array=structure.protein_atom_array,
-        resolved_sequence_residue_types=copy.deepcopy(
-            structure.resolved_sequence_list_ordered_by_chain
-        ),
-        resolved_sequence_mask=structure.resolved_sequence_stacked_mask,
-        resolved_sequence_full_atom_feat=structure.resolved_sequence_full_atom_feat,
-        resolved_ligand_mols=structure.resolved_ligand_mols,
-        resolved_ligand_structure_coords=structure.resolved_ligand_structure_coords,
-        resolved_ligand_structure_masks=structure.resolved_ligand_structure_atom_index_maps,
-        # input_ligand_templates=structure.input_ligand_templates,
+        input_sequence_residue_types=structure.input_sequence_list_ordered_by_chain,
+        input_sequence_mask=structure.input_sequence_stacked_mask,
+        input_sequence_full_atom_feat=structure.input_sequence_full_atom_feat,
+        resolved_ligand_mols_coords=structure.resolved_ligand_mols_coords,
         input_ligand_conformers=structure.input_ligand_conformers,
+        # TODO: Fix this, Using conformer mask don't make any sense
+        input_ligand_conformer_masks=structure.input_ligand_conformer_masks,
         input_ligand_conformer_coords=structure.input_ligand_conformer_coords,
-        input_ligand_conformer_masks=structure.input_ligand_conformer_atom_index_maps,
-        protein_chain_in_order=structure.protein_chain_in_order,
-        ligand_chain_in_order=structure.ligand_chain_in_order,
+        protein_chain_ordered=structure.protein_chain_ordered,
+        ligand_chain_ordered=structure.ligand_chain_ordered,
         dtype=torch.float32,
     )
     return props
@@ -180,6 +175,7 @@ def get_torch_loader(
     collate_fn: Callable[[list[dict[str, Any]]], dict[str, Any]] = collate_batch,
     **kwargs: Any,
 ) -> DataLoader[PlinderDataset]:
+
     return DataLoader(
         dataset,
         batch_size=batch_size,

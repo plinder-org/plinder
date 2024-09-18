@@ -47,20 +47,19 @@ def stack_ligand_feat(
 
 def structure2tensor(
     protein_atom_array: _AtomArrayOrStack,
-    resolved_sequence_residue_types: NDArray[np.str_] | None = None,
-    resolved_sequence_mask: NDArray[np.int_] | None = None,
-    resolved_sequence_full_atom_feat: NDArray[np.int_] | None = None,
-    protein_full_atom_mask: NDArray[np.int_] | None = None,
-    resolved_ligand_mols: dict[str, Chem.rdchem.Mol] | None = None,
+    input_sequence_residue_types: NDArray[np.str_] | None = None,
+    input_sequence_mask: NDArray[np.int_] | None = None,
+    input_sequence_full_atom_feat: NDArray[np.int_] | None = None,
     resolved_ligand_mols_coords: dict[str, NDArray[np.float_]] | None = None,
-    resolved_ligand_conformers_coords: dict[str, NDArray[np.float_]] = None,
-    resolved_smiles_ligand_mask: list[NDArray[np.int_]] | None = None,
+    input_ligand_conformer_coords: dict[str, NDArray[np.float_]] = None,
+    input_ligand_conformer_masks: list[NDArray[np.int_]] | None = None,
+    input_ligand_conformers: dict[str, Chem.rdchem.Mol] | None = None,
     protein_chain_ordered: list[str] = None,
     ligand_chain_ordered: list[str] = None,
-    coords_pad_value: int = COORDS_PAD_VALUE,
     atom_type_pad_value: int = ATOM_TYPE_PAD_VALUE,
     residue_id_pad_value: int = RES_IDX_PAD_VALUE,
-    dtype: torch.dtype = torch.float32,
+    coords_pad_value: int = COORDS_PAD_VALUE,
+    dtype=torch.float32,
 ) -> dict[str, torch.Tensor]:
     protein_atom_coordinates = [
         torch.tensor(coord)
@@ -120,10 +119,10 @@ def structure2tensor(
         property_dict["protein_residue_types"] = pad_and_stack(
             types_array_res, dim=0, value=atom_type_pad_value
         )
-    if resolved_sequence_residue_types is not None:
+    if input_sequence_residue_types is not None:
         types_array_res_resolved = []
         unknown_name_idx = max(pc.AA_TO_INDEX.values()) + 1
-        for chain_residue_types_resolved in resolved_sequence_residue_types:
+        for chain_residue_types_resolved in input_sequence_residue_types:
             types_array_res_by_chain_resolved = np.zeros(
                 (len(chain_residue_types_resolved), 1)
             )
@@ -141,9 +140,9 @@ def structure2tensor(
         property_dict["resolved_protein_residue_types"] = pad_and_stack(
             types_array_res_resolved, dim=0, value=atom_type_pad_value
         )
-    if resolved_sequence_full_atom_feat is not None:
-        property_dict["resolved_sequence_full_atom_feat"] = pad_and_stack(
-            [torch.tensor(feat) for feat in resolved_sequence_full_atom_feat],
+    if input_sequence_full_atom_feat is not None:
+        property_dict["input_sequence_full_atom_feat"] = pad_and_stack(
+            [torch.tensor(feat) for feat in input_sequence_full_atom_feat],
             dim=0,
             value=residue_id_pad_value,
         )
@@ -169,15 +168,9 @@ def structure2tensor(
             value=residue_id_pad_value,
         )
 
-    if resolved_sequence_mask is not None:
-        property_dict["resolved_sequence_mask"] = pad_and_stack(
-            [torch.tensor(mask) for mask in resolved_sequence_mask],
-            dim=0,
-            value=residue_id_pad_value,
-        )
-    if protein_full_atom_mask is not None:
-        property_dict["protein_full_atom_mask"] = pad_and_stack(
-            [torch.tensor(mask) for mask in protein_full_atom_mask],
+    if input_sequence_mask is not None:
+        property_dict["input_sequence_mask"] = pad_and_stack(
+            [torch.tensor(mask) for mask in input_sequence_mask],
             dim=0,
             value=residue_id_pad_value,
         )
@@ -194,22 +187,24 @@ def structure2tensor(
             value=coords_pad_value,
         )
         property_dict["resolved_ligand_mols_coords"] = lig_coords
-    if resolved_ligand_conformers_coords is not None:
+
+    if input_ligand_conformer_coords is not None:
         lig_coords = pad_and_stack(
             [
                 torch.tensor(coord)
                 for coord in stack_ligand_feat(
-                    resolved_ligand_conformers_coords, ligand_chain_ordered
+                    input_ligand_conformer_coords, ligand_chain_ordered
                 )
             ],
             dim=0,
             value=coords_pad_value,
         )
         property_dict["ligand_conformer_atom_coordinates"] = lig_coords
-    if resolved_ligand_mols is not None:
+
+    if input_ligand_conformers is not None:
         ligand_feat = {
             ch: lig_atom_featurizer(ligand_mol)
-            for ch, ligand_mol in resolved_ligand_mols.items()
+            for ch, ligand_mol in input_ligand_conformers.items()
         }
 
         property_dict["ligand_features"] = pad_and_stack(
@@ -221,13 +216,13 @@ def structure2tensor(
             value=coords_pad_value,
         )
 
-    if resolved_smiles_ligand_mask is not None:
+    if input_ligand_conformer_masks is not None:
         lig_masks = pad_and_stack(
-            [torch.tensor(mask) for mask in resolved_smiles_ligand_mask],
+            [torch.tensor(mask) for mask in input_ligand_conformer_masks],
             dim=0,
             value=coords_pad_value,
         )
-        property_dict["resolved_smiles_ligand_mask"] = lig_masks
+        property_dict["input_ligand_conformer_masks"] = lig_masks
 
     return property_dict
 
@@ -244,13 +239,13 @@ def collate_complex(
     protein_atom_coordinates = []
     protein_residue_coordinates = []
     protein_residue_ids = []
-    resolved_sequence_mask = []
-    protein_full_atom_mask = []
+    input_sequence_mask = []
+
     ligand_features = []
     ligand_conformer_atom_coordinates = []
     resolved_ligand_mols_coords = []
-    resolved_smiles_ligand_mask = []
-    resolved_sequence_full_atom_feat = []
+    input_ligand_conformer_masks = []
+    input_sequence_full_atom_feat = []
     protein_calpha_coordinates = []
 
     for x in structures:
@@ -260,13 +255,12 @@ def collate_complex(
         protein_atom_coordinates.append(x["protein_atom_coordinates"])
         protein_residue_coordinates.append(x["protein_residue_coordinates"])
         protein_residue_ids.append(x["protein_residue_ids"])
-        resolved_sequence_mask.append(x["resolved_sequence_mask"])
-        protein_full_atom_mask.append(x["protein_full_atom_mask"])
+        input_sequence_mask.append(x["input_sequence_mask"])
         ligand_features.append(x["ligand_features"])
         ligand_conformer_atom_coordinates.append(x["ligand_conformer_atom_coordinates"])
         resolved_ligand_mols_coords.append(x["resolved_ligand_mols_coords"])
-        resolved_smiles_ligand_mask.append(x["resolved_smiles_ligand_mask"])
-        resolved_sequence_full_atom_feat.append(x["resolved_sequence_full_atom_feat"])
+        input_ligand_conformer_masks.append(x["input_ligand_conformer_masks"])
+        input_sequence_full_atom_feat.append(x["input_sequence_full_atom_feat"])
         protein_calpha_coordinates.append(x["protein_calpha_coordinates"])
 
     return {
@@ -288,11 +282,8 @@ def collate_complex(
         "protein_residue_ids": pad_and_stack(
             protein_residue_ids, dim=0, value=residue_id_pad_value
         ),
-        "resolved_sequence_mask": pad_and_stack(
-            resolved_sequence_mask, dim=0, value=residue_id_pad_value
-        ),
-        "protein_full_atom_mask": pad_and_stack(
-            protein_full_atom_mask, dim=0, value=residue_id_pad_value
+        "input_sequence_mask": pad_and_stack(
+            input_sequence_mask, dim=0, value=residue_id_pad_value
         ),
         "ligand_features": pad_and_stack(
             ligand_features, dim=0, value=atom_type_pad_value
@@ -303,11 +294,11 @@ def collate_complex(
         "resolved_ligand_mols_coords": pad_and_stack(
             resolved_ligand_mols_coords, dim=0, value=coords_pad_value
         ),
-        "resolved_smiles_ligand_mask": pad_and_stack(
-            resolved_smiles_ligand_mask, dim=0, value=coords_pad_value
+        "input_ligand_conformer_masks": pad_and_stack(
+            input_ligand_conformer_masks, dim=0, value=coords_pad_value
         ),
-        "resolved_sequence_full_atom_feat": pad_and_stack(
-            resolved_sequence_full_atom_feat, dim=0, value=coords_pad_value
+        "input_sequence_full_atom_feat": pad_and_stack(
+            input_sequence_full_atom_feat, dim=0, value=coords_pad_value
         ),
         "protein_calpha_coordinates": pad_and_stack(
             protein_calpha_coordinates, dim=0, value=coords_pad_value
@@ -659,7 +650,7 @@ class PlinderSystem:
         """
         Load holo structure
         """
-        list_ligand_sdf_and_resolved_smiles = [
+        list_ligand_sdf_and_input_smiles = [
             (Path(sdf_path), self.input_smiles_dict[chain])
             for chain, sdf_path in self.ligands.items()
         ]
@@ -667,7 +658,7 @@ class PlinderSystem:
             id=self.system_id,
             protein_path=self.receptor_cif,
             protein_sequence=Path(self.sequences),
-            list_ligand_sdf_and_resolved_smiles=list_ligand_sdf_and_resolved_smiles,
+            list_ligand_sdf_and_input_smiles=list_ligand_sdf_and_input_smiles,
         )
 
     @property

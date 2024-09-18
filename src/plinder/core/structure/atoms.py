@@ -305,7 +305,7 @@ def get_ligand_atom_index_mapping_mask(
     ref_mol: Mol, matching_indices: tuple[int]
 ) -> NDArray[np._int]:
     mask = np.zeros(len(ref_mol.GetAtoms()))
-    for _, atm_idx in enumerate(range(len(mask))):
+    for atm_idx in range(len(mask)):
         if atm_idx in matching_indices:
             mask[atm_idx] = 1
     return mask
