@@ -741,7 +741,7 @@ class PlinderSystem:
         )
 
     @property
-    def alt_structures(self) -> Structure | None:
+    def alt_structures(self) -> dict[str, dict[str, Structure]] | None:
         """
         Load apo/pred structure
         """

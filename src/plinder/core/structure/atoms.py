@@ -301,7 +301,7 @@ def get_residue_index_mapping_mask(
 
 
 def get_ligand_atom_index_mapping_mask(
-    ref_mol: Mol, matching_indices: tuple[int]
+    ref_mol: Mol, matching_indices: tuple[int, ...]
 ) -> NDArray[np._int]:
     mask = np.zeros(len(ref_mol.GetAtoms()))
     for atm_idx in range(len(mask)):
@@ -316,10 +316,11 @@ def make_one_hot_atom_features(atom_name: str) -> list[int]:
     return [1 if striped_atom_name == atm else 0 for atm in allowed_atom_names]
 
 
-def get_per_residue_nask(
-    residue_reference_atom_list: list[str], atom_list: list[int]
+def get_per_residue_mask(
+    residue_reference_atom_list: list[int], atom_list: list[str]
 ) -> list[int]:
-    return [1 if i in atom_list else 0 for i in residue_reference_atom_list]
+    res_mask = [1 if i in atom_list else 0 for i in residue_reference_atom_list]
+    return res_mask
 
 
 def get_per_residue_atoms(
@@ -331,21 +332,21 @@ def get_per_residue_atoms(
 
 
 def make_atom_mask(
-    atom_array: _AtomArrayOrStack, seq_res: list[str], seq_mask: list[int]
+    atom_array: _AtomArrayOrStack, seq_res: str, seq_mask: list[int]
 ) -> list[int]:
-    seq_res = [pc.ONE_TO_THREE[aa] for aa in seq_res]
+    seq_res_three_aa = [pc.ONE_TO_THREE[aa] for aa in seq_res]
     resi, resn = get_residues(atom_array)
     residue_tuple = list(zip(tuple(resi), tuple(resn)))
 
     atom_mask = []
     resolved_residue_start = 0
-    for seq_res, mask in zip(seq_res, seq_mask):
+    for seq_, mask in zip(seq_res_three_aa, seq_mask):
         if mask == 0:
-            atom_mask.append([0 for i in range(len(pc.ORDERED_AA_FULL_ATOM[seq_res]))])
+            atom_mask.append([0 for i in range(len(pc.ORDERED_AA_FULL_ATOM[seq_]))])
         else:
             resi, resn = residue_tuple[resolved_residue_start]
             atom_mask.append(
-                get_per_residue_nask(
+                get_per_residue_mask(
                     pc.ORDERED_AA_FULL_ATOM[resn],
                     get_per_residue_atoms(atom_array, resi, resn),
                 )
