@@ -110,6 +110,7 @@ class PlinderDataset(Dataset):  # type: ignore
             item["alternative_structures"] = alternatives
         return item
 
+
 def get_model_input_files(
     split_df: pd.DataFrame,
     split: Literal["train", "val", "test"] = "train",
@@ -161,7 +162,6 @@ def get_model_input_files(
         if count >= max_num_sample:
             break
     return model_inputs
-
 
 
 # Example sampler function, this is for demonstration purposes,
