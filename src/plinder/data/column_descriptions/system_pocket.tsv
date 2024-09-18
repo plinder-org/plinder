@@ -1,11 +1,10 @@
 Name	Type	Description
-system_pocket_BIRD	str	Domains and ranges for BIRD
-system_pocket_CATH	str	Domains and ranges for CATH
-system_pocket_ECOD	str	Domains and ranges for ECOD
-system_pocket_ECOD_t_name	str	Domains and ranges for ECOD_t_name
-system_pocket_Pfam	str	Domains and ranges for Pfam
-system_pocket_SCOP2	str	Domains and ranges for SCOP2
-system_pocket_SCOP2B	str	Domains and ranges for SCOP2B
-system_pocket_PANTHER	str	Domains and ranges for PANTHER
-system_pocket_UniProt	str	Domains and ranges for UniProt
-system_pocket_kinase_name	str	Domains and ranges for kinase_name
+system_pocket_CATH	str	CATH domain for the pocket
+system_pocket_ECOD	str	ECOD domain for the pocket
+system_pocket_ECOD_t_name	str	ECOD_t_name domain for the pocket
+system_pocket_Pfam	str	Pfam domain for the pocket
+system_pocket_SCOP2	str	SCOP2 domain for the pocket
+system_pocket_SCOP2B	str	SCOP2B domain for the pocket
+system_pocket_PANTHER	str	PANTHER domain for the pocket
+system_pocket_UniProt	str	UniProt domain for the pocket
+system_pocket_kinase_name	str	kinase_name domain for the pocket
