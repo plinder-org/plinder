@@ -122,9 +122,7 @@ def make_column_descriptions(*, plindex: pd.DataFrame) -> None:
         f.write("Name\tType\tDescription\n")
         for key in MAPPING_NAMES:
             name = f"system_pocket_{key}"
-            f.write(
-                f"{name}\tstr\tDomains and ranges for {key}\n"
-            )
+            f.write(f"{name}\tstr\tDomains and ranges for {key}\n")
     Ligand.document_properties_to_tsv(
         prefix="ligand", filename=output_dir / "ligands.tsv"
     )

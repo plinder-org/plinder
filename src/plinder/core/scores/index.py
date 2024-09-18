@@ -13,7 +13,6 @@ from plinder.core.utils.log import setup_logger
 LOG = setup_logger(__name__)
 
 
-
 def query_index(
     *,
     columns: list[str] | None = None,
