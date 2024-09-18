@@ -310,7 +310,7 @@ def get_ligand_atom_index_mapping_mask(
     return mask
 
 
-def make_one_hot_atom_features(atom_name: str) -> list[int]:
+def make_one_hot_atom_features(atom_name: list[str]) -> list[int]:
     allowed_atom_names = ["C", "N", "O", "S", "P"]
     striped_atom_name = "".join(filter(lambda x: not x.isdigit(), atom_name))[0]
     return [1 if striped_atom_name == atm else 0 for atm in allowed_atom_names]

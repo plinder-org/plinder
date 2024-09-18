@@ -439,7 +439,7 @@ class Structure(BaseModel):
     #         masks.append(get_ligand_atom_index_mapping_mask(mol, matching_idxs))
     #     return masks
     @property
-    def resolved_smiles_ligand_mask(self) -> list[list[int]]:
+    def resolved_smiles_ligand_mask(self) -> list[NDArray[np._int]]:
         """List of protein chains ordered the way it is in structure."""
         masks: list[int] = []
         assert self.ligand_mols is not None
@@ -466,7 +466,7 @@ class Structure(BaseModel):
         return chain_order
 
     @property
-    def input_sequence_full_atom_feat(self) -> list[list[int]]:
+    def input_sequence_full_atom_feat(self) -> list[list[list[int]]]:
         """Resolved sequence full atom features."""
         seq_res_atom_list = [
             [
@@ -475,7 +475,7 @@ class Structure(BaseModel):
             ]
             for ch in self.protein_chain_ordered
         ]
-        feat: list[list[int]] = [
+        feat: list[list[list[int]]] = [
             [make_one_hot_atom_features(res) for res in ch] for ch in seq_res_atom_list
         ]
         return feat
@@ -499,10 +499,13 @@ class Structure(BaseModel):
     @property
     def ligand_chain_ordered(self) -> list[str]:
         """List of Ligand chains sorted in order."""
-        return [
-            path_and_smiles[0].stem
-            for path_and_smiles in self.list_ligand_sdf_and_input_smiles
-        ]
+        if self.list_ligand_sdf_and_input_smiles is not None:
+            return [
+                path_and_smiles[0].stem
+                for path_and_smiles in self.list_ligand_sdf_and_input_smiles
+            ]
+        else:
+            return []
 
     @property
     def protein_coords(self) -> NDArray[np.double]:
@@ -533,7 +536,7 @@ class Structure(BaseModel):
         return {tag: mol_tuple[1] for tag, mol_tuple in self.ligand_mols.items()}
 
     @property
-    def input_ligand_conformer_atom_index_maps(self) -> dict[str, list[dict[int, int]]]:
+    def input_ligand_conformer_atom_index_maps(self) -> dict[str, tuple[int, ...]]:
         """List of ligand conformer atom index maps to input SMILES"""
         assert self.ligand_mols is not None
         return {tag: mol_tuple[2] for tag, mol_tuple in self.ligand_mols.items()}
@@ -553,7 +556,7 @@ class Structure(BaseModel):
         return masks
 
     @property
-    def input_ligand_template_masks(self) -> dict[str, list[tuple[int]]]:
+    def input_ligand_template_masks(self) -> list[NDArray[np._int[int]]]:
         """
         Map matched template ligands to input resolved ligands
         and convert the indices to binary mask."""
@@ -569,7 +572,7 @@ class Structure(BaseModel):
     @property
     def input_ligand_template_coords(self) -> dict[str, NDArray[np.double]]:
         """ndarray[np.double]: The coordinates of the input 2D conformer generated from input SMILES"""
-        ligand_coords: NDArray[np.double] = {
+        ligand_coords: dict[str, NDArray[np.double]] = {
             tag: mol.GetConformer().GetPositions()
             for tag, mol in self.input_ligand_templates.items()
         }
@@ -578,7 +581,7 @@ class Structure(BaseModel):
     @property
     def input_ligand_conformer_coords(self) -> dict[str, NDArray[np.double]]:
         """ndarray[np.double]: The coordinates of the input 3D conformer generated from input SMILES"""
-        ligand_coords: NDArray[np.double] = {
+        ligand_coords: dict[str, NDArray[np.double]] = {
             tag: mol.GetConformer().GetPositions()
             for tag, mol in self.input_ligand_conformers.items()
         }
@@ -593,19 +596,22 @@ class Structure(BaseModel):
     @property
     def resolved_ligand_structure_atom_index_maps(
         self,
-    ) -> dict[str, list[dict[int, int]]]:
+    ) -> dict[str, tuple[int, ...]]:
         """List of resolved holo structure atom index maps to input SMILES"""
-        assert self.ligand_mols is not None
-        return {tag: mol_tuple[4] for tag, mol_tuple in self.ligand_mols.items()}
+        if self.ligand_mols is not None:
+            return {tag: mol_tuple[4] for tag, mol_tuple in self.ligand_mols.items()}
+        else:
+            return {}
 
     @property
     def resolved_ligand_structure_coords(self) -> dict[str, NDArray[np.double]]:
         """ndarray[np.double]: The coordinates of the holo resolved ligand atoms in the holo structure."""
-        assert self.ligand_mols is not None
-        ligand_coords: NDArray[np.double] = {
-            tag: mol.GetConformer().GetPositions()
-            for tag, mol in self.resolved_ligand_mols.items()
-        }
+        ligand_coords: dict[str, NDArray[np.double]] = {}
+        if self.ligand_mols is not None:
+            ligand_coords = {
+                tag: mol.GetConformer().GetPositions()
+                for tag, mol in self.resolved_ligand_mols.items()
+            }
         return ligand_coords
 
     @property
@@ -636,7 +642,7 @@ class Structure(BaseModel):
     @property
     def resolved_ligand_mols_coords(self) -> dict[str, NDArray[np.double]]:
         """Holo PDB ligand coordinate"""
-        ligand_coords: NDArray[np.double] = {
+        ligand_coords: dict[str, NDArray[np.double]] = {
             tag: mol.GetConformer().GetPositions()
             for tag, mol in self.resolved_ligand_mols.items()
         }
@@ -666,23 +672,13 @@ class Structure(BaseModel):
     @property
     def protein_chains(self) -> list[str]:
         """list[str]: The list of chain IDs in the structure."""
-        assert self.protein_atom_array is not None
-        ch_list = self._attr_from_atom_array(
-            self.protein_atom_array, "chain_id", distinct=True, sort=True
-        )
-        return [str(ch) for ch in ch_list]
-
-    @property
-    def protein_chain_uninput_sequence(self) -> dict[str, list[str]]:
-        """dict[str, list[str]]: The chain sequence dictionary, where keys are chain IDs and values are lists of residue codes."""
-        ch_seq: dict[str, list[str]] = (
-            self.protein_dataframe[["chain_id", "res_code", "res_name", "res_id"]]
-            .drop_duplicates()
-            .groupby("chain_id")["res_code"]
-            .apply(list)
-            .to_dict()
-        )
-        return ch_seq
+        if self.protein_atom_array is not None:
+            ch_list = self._attr_from_atom_array(
+                self.protein_atom_array, "chain_id", distinct=True, sort=True
+            )
+            return [str(ch) for ch in ch_list]
+        else:
+            return []
 
     @property
     def protein_sequence_from_structure(self) -> str:
@@ -759,120 +755,5 @@ class Structure(BaseModel):
         return list(prop)
 
     @classmethod
-    def get_properties(cls):
+    def get_properties(cls) -> list[str]:
         return [name for name in dir(cls) if isinstance(getattr(cls, name), property)]
-
-
-def _align_monomers_with_mask(
-    monomer1: Structure,
-    monomer2: Structure,
-    remove_differing_atoms: bool = True,
-    renumber_residues: bool = False,
-    remove_differing_annotations: bool = False,
-) -> tuple[Structure, Structure]:
-    """Align and superpose monomers.
-
-    Parameters
-    ----------
-    monomer1: Structure
-        Monomer structure 1
-    monomer2: Structure
-        Monomer structure 2
-    remove_differing_atoms: bool = True
-        Remove differing atoms between monomers
-    renumber_residues: bool = False
-        renumber of residues
-
-    Returns
-    -------
-    tuple[Structure, Structure]
-        Align and superposed structures
-
-    """
-    if (monomer1 is None) | (monomer2 is None):
-        return monomer1, monomer2
-    monomer2, monomer1 = monomer2.align_common_sequence(
-        monomer1,
-        remove_differing_atoms=remove_differing_atoms,
-        renumber_residues=renumber_residues,
-        remove_differing_annotations=remove_differing_annotations,
-    )
-    monomer2, _, _ = monomer2.superimpose(monomer1)
-    return monomer1, monomer2
-
-
-def _align_structures_with_mask(
-    multi_chain_structure: Structure,
-    map_of_alt_monomer_structures: dict[str, Structure],
-    remove_differing_atoms: bool = True,
-    renumber_residues: bool = False,
-    remove_differing_annotations: bool = False,
-) -> tuple[dict[str, Structure], dict[str, Structure]]:
-    """Align and crop two structures.
-
-    Parameters
-    ----------
-    multi_chain_structure : Structure
-        Reference Structure to align to.
-        This could be multi-chain structure (could be holo structure)
-    map_of_alt_monomer_structures : dict[str, Structure]
-        Dictionary of chains of target structures to align (could be chains of apo/pred)
-    remove_differing_atoms : bool = True
-        Remove atoms different between reference and target
-    renumber_residues : bool = False
-        Renumber residue
-    remove_differing_annotations : bool = False
-        Remove different annotations from AtomArray
-
-    Returns
-    -------
-    tuple[dict[str, Structure], dict[str, Structure]]
-        dictionary of chains of aligned and cropped reference and target chains
-
-    """
-    cropped_and_superposed_ref_dict = {}
-    cropped_and_superposed_target_dict = {}
-    for ref_chain, target_monomer_structure in map_of_alt_monomer_structures.items():
-        ref_monomer_structure = multi_chain_structure.filter(
-            property="chain_id", mask=[ref_chain]
-        )
-        if target_monomer_structure is not None:
-            target_monomer_structure.set_chain(ref_chain)
-
-        ref_monomer_structure, target_monomer_structure = _align_monomers_with_mask(
-            ref_monomer_structure,
-            target_monomer_structure,
-            remove_differing_atoms=remove_differing_atoms,
-            renumber_residues=renumber_residues,
-            remove_differing_annotations=remove_differing_annotations,
-        )
-        cropped_and_superposed_ref_dict[ref_chain] = ref_monomer_structure
-        cropped_and_superposed_target_dict[ref_chain] = target_monomer_structure
-    target_values = list(cropped_and_superposed_target_dict.values())
-    ref_values = list(cropped_and_superposed_ref_dict.values())
-    new_merged_target = target_values[0]
-    new_merged_ref = ref_values[0]
-    for target_val in target_values[1:]:
-        new_merged_target += target_val
-    for ref_val in ref_values[1:]:
-        new_merged_ref += ref_val
-    # Transfer ligand
-    if new_merged_target is not None:
-        new_merged_target.ligand_mols = multi_chain_structure.ligand_mols
-    new_merged_ref.ligand_mols = multi_chain_structure.ligand_mols
-
-    # merge monomers (and/or part of multi_chain_structure) into single new structure
-    reference_chains = set(multi_chain_structure.protein_atom_array.chain_id)
-    chains_not_mapped = reference_chains - set(map_of_alt_monomer_structures.keys())
-    if len(chains_not_mapped) == 0:
-        return new_merged_ref, new_merged_target
-    else:
-        for chain in chains_not_mapped:
-            unmapped_structure = multi_chain_structure.filter(
-                property="chain_id", mask=chain
-            )
-            if new_merged_target is not None:
-                new_merged_target += unmapped_structure
-            new_merged_ref += unmapped_structure
-
-    return cropped_and_superposed_ref_dict, cropped_and_superposed_target_dict

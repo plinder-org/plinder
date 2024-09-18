@@ -110,7 +110,7 @@ class PlinderDataset(Dataset):  # type: ignore
 
         plindex = query_index(
             columns=["system_id", "ligand_id", "ligand_rdkit_canonical_smiles"],
-            filters=[["system_id", "in", self._system_ids]],
+            filters=[("system_id", "in", self._system_ids)],
         )
         plindex["chain_id"] = plindex.ligand_id.apply(lambda x: x.split("__")[-1])
         grouped_plindex = plindex.groupby("system_id").agg(list)[
@@ -137,12 +137,12 @@ class PlinderDataset(Dataset):  # type: ignore
 
         holo_structure = s.holo_structure
         alt_structure = s.alt_structures
-        if alt_structure is not None:
-            apo_structure_map = alt_structure.get("apo")
-            pred_structure_map = alt_structure.get("pred")
-        else:
-            apo_structure_map = {}
-            pred_structure_map = {}
+        # if alt_structure is not None:
+        apo_structure_map = alt_structure.get("apo")
+        pred_structure_map = alt_structure.get("pred")
+        # else:
+        # apo_structure_map = {}
+        # pred_structure_map = {}
         _structures = {
             "holo": holo_structure,
             "apo": apo_structure_map,
@@ -151,16 +151,16 @@ class PlinderDataset(Dataset):  # type: ignore
         input_structure = _structures[self._input_structure_priority]
         target_structure = holo_structure
         for transform in self._structure_transforms:
-            if input_structure is not None:
-                input_structure = transform(input_structure)
+            # if input_structure is not None:
+            input_structure = transform(input_structure)
 
-            if target_structure is not None:
-                target_structure = transform(target_structure)
+            # if target_structure is not None:
+            target_structure = transform(target_structure)
 
-        if target_structure is not None:
-            id = target_structure.id
-        else:
-            id = None
+        # if target_structure is not None:
+        id = target_structure.id
+        # else:
+        #    id = None
         if self._transform is not None:
             input_complex = self._transform(input_structure)
 

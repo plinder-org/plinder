@@ -375,7 +375,7 @@ def safe_index(l, e):
         return len(l) - 1
 
 
-def lig_atom_featurizer(mol):
+def lig_atom_featurizer(mol: Chem.rdchem.Mol) -> list[list[int]]:
     ringinfo = mol.GetRingInfo()
     atom_features_list = []
     for idx, atom in enumerate(mol.GetAtoms()):
