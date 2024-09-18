@@ -11,9 +11,6 @@ import pandas as pd
 import torch
 from numpy.typing import NDArray
 from pinder.core.loader.dataset import pad_and_stack
-from rdkit import Chem
-from torch import Tensor
-
 from plinder.core.index import utils
 from plinder.core.scores.links import query_links
 from plinder.core.structure.atoms import _AtomArrayOrStack
@@ -22,6 +19,8 @@ from plinder.core.structure.structure import Structure
 from plinder.core.utils import constants as pc
 from plinder.core.utils.log import setup_logger
 from plinder.core.utils.unpack import get_zips_to_unpack
+from rdkit import Chem
+from torch import Tensor
 
 LOG = setup_logger(__name__)
 

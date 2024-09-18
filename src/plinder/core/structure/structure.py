@@ -214,8 +214,11 @@ class Structure(BaseModel):
                     )
                     # TODO: Double check with VO
                     # Extract the template indices that are matches
-                    _conformer_atom_matches = [i[1] for i in conformer_atom_matches[0]]
-                    _resolved_atom_matches = [i[1] for i in resolved_atom_matches[0]]
+                    # _conformer_atom_matches = [i[1] for i in conformer_atom_matches[0]]
+                    # _resolved_atom_matches = [i[1] for i in resolved_atom_matches[0]]
+                    print("A", conformer_atom_matches)
+                    _conformer_atom_matches = tuple(conformer_atom_matches[0].values())
+                    _resolved_atom_matches = tuple(resolved_atom_matches[0].values())
 
                     structure.ligand_mols[ligand_sdf.stem] = (
                         template_mol,
@@ -224,6 +227,7 @@ class Structure(BaseModel):
                         resolved_mol,
                         _resolved_atom_matches,
                     )
+                print(structure.ligand_mols)
 
         try:
             getattr(structure.protein_atom_array, "b-factor")
@@ -446,7 +450,6 @@ class Structure(BaseModel):
             masks.append(get_ligand_atom_index_mapping_mask(mol, matching_idxs))
         return masks
 
-
     @property
     def input_sequence_list_ordered_by_chain(self) -> list[str]:
         """List of protein chains ordered the way it is in structure."""
@@ -523,11 +526,11 @@ class Structure(BaseModel):
         return {tag: mol_tuple[1] for tag, mol_tuple in self.ligand_mols.items()}
 
     @property
-
     def input_ligand_conformer_atom_index_maps(self) -> dict[str, list[dict[int, int]]]:
         """List of ligand conformer atom index maps to input SMILES"""
         return {tag: mol_tuple[2] for tag, mol_tuple in self.ligand_mols.items()}
 
+    @property
     def input_ligand_conformer_masks(self) -> dict[str, list[tuple[int]]]:
         """
         Map matched template ligands to input ligands conformer

@@ -9,8 +9,7 @@ import pandas as pd
 import torch
 from torch.utils.data import DataLoader, Dataset
 
-from plinder.core import system
-from plinder.core.index.system import collate_batch, structure2tensor
+from plinder.core.index.system import PlinderSystem, collate_batch, structure2tensor
 from plinder.core.loader.transforms import StructureTransform
 from plinder.core.scores import query_index
 from plinder.core.scores.links import query_links
@@ -132,7 +131,7 @@ class PlinderDataset(Dataset):  # type: ignore
         if not 0 <= index < self._num_examples:
             raise IndexError(index)
         smiles_dict = self._ligand_smiles_dict[self._system_ids[index]]
-        s = system.PlinderSystem(
+        s = PlinderSystem(
             system_id=self._system_ids[index], input_smiles_dict=smiles_dict
         )
 
@@ -175,7 +174,6 @@ def get_torch_loader(
     collate_fn: Callable[[list[dict[str, Any]]], dict[str, Any]] = collate_batch,
     **kwargs: Any,
 ) -> DataLoader[PlinderDataset]:
-
     return DataLoader(
         dataset,
         batch_size=batch_size,

@@ -7,7 +7,7 @@ import gzip
 import os
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, Optional, Union
+from typing import Dict, Optional, Union
 
 import biotite.structure as struc
 import numpy as np
@@ -232,7 +232,7 @@ def get_template_to_mol_matches(
 
     numHA_template = rdMolDescriptors.CalcNumHeavyAtoms(template)
     numHA_mol = rdMolDescriptors.CalcNumHeavyAtoms(mol)
-
+    print("AAA", mol, template)
     if len(atom_matches) < min(numHA_template, numHA_mol):
         # if not complete molecule is matched
         match_mol = copy.deepcopy(mol)
