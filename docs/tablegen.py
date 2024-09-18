@@ -236,7 +236,7 @@ def _is_value(column: pd.Series, data_type) -> pd.Series:
     """
     if data_type in ("str", "list[str]", "list[list[str]]"):
         # For strings and lists check if they are non-empty
-        return ~pd.Series([obj is None or len(obj) == 0 for obj in column])
+        return ~pd.Series([obj is None or pd.isna(obj).all() if isinstance(obj, np.ndarray) else pd.isna(obj) or len(obj) == 0 for obj in column])
     return column.notna()
 
 
