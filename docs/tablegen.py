@@ -3,6 +3,7 @@ from __future__ import annotations
 from glob import glob
 from pathlib import Path
 
+import duckdb
 import numpy as np
 import pandas as pd
 from google.cloud import storage
@@ -50,10 +51,10 @@ def generate_table(description_dir: Path, output_html_path: Path) -> None:
             column_descriptions_in_file = pd.read_csv(f, sep="\t")
         column_descriptions.append(column_descriptions_in_file)
     column_descriptions = pd.concat(column_descriptions, ignore_index=True)
-    # TODO: Remove as soon as wrong column names are fixed
-    column_descriptions = column_descriptions[
-        ~column_descriptions["Name"].str.contains("Kinase")
-    ]
+#     # TODO: Remove as soon as wrong column names are fixed
+#     column_descriptions = column_descriptions[
+#         ~column_descriptions["Name"].str.contains("Kinase")
+#     ]
 
     annotation_table = _get_annotation_table("2024-06", "v2", Path(CACHE_FILE))
 
@@ -206,6 +207,8 @@ def _get_annotation_table(
         storage.Client.create_anonymous_client().get_bucket("plinder").blob(
             blob_name=f"{release}/{iteration}/index/annotation_table.parquet"
         ).download_to_filename(cache_path)
+    # only load the first 1000 rows to avoid memory issues
+    df = duckdb.sql(f"select * from read_parquet('{cache_path.as_posix()}') limit 1000;").to_df()
     df = pd.read_parquet(cache_path)
     return df
 
