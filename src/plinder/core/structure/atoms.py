@@ -23,7 +23,7 @@ from pinder.core.structure.atoms import (
     mask_from_res_list,
 )
 from rdkit import Chem
-from rdkit.Chem import AllChem, Mol
+from rdkit.Chem import AllChem, Mol, rdMolDescriptors, rdRascalMCES
 
 from plinder.core.utils.log import setup_logger
 
@@ -72,31 +72,30 @@ BINDING_SITE_METALS = [
 _AtomArrayOrStack = Union[AtomArray, AtomArrayStack]
 
 
-def biotite_pdbfile() -> TextFile:
-    from biotite.structure.io.pdb import PDBFile
+# TODO: WHY DO WE NEED THIS?
+# def biotite_pdbfile() -> TextFile:
+#     from biotite.structure.io.pdb import PDBFile
 
-    return PDBFile
+#     return PDBFile
+# def atom_array_from_pdb_file(structure: Path | AtomArray) -> _AtomArrayOrStack | None:
+#     if isinstance(structure, str):
+#         structure = Path(structure)
+
+#     if isinstance(structure, Path):
+#         reader = biotite_pdbfile()
+#         try:
+#             model = reader.read(str(structure))
+#             arr = model.get_structure(model=1)  # noqa
+#             return arr
+#         except Exception as e:
+#             log.error(f"Unable to parse {structure}! {str(e)}")
+#     return structure
 
 
 def biotite_ciffile() -> TextFile:
     from biotite.structure.io.pdbx import PDBxFile
 
     return PDBxFile
-
-
-def atom_array_from_pdb_file(structure: Path | AtomArray) -> _AtomArrayOrStack | None:
-    if isinstance(structure, str):
-        structure = Path(structure)
-
-    if isinstance(structure, Path):
-        reader = biotite_pdbfile()
-        try:
-            model = reader.read(str(structure))
-            arr = model.get_structure(model=1)  # noqa
-            return arr
-        except Exception as e:
-            log.error(f"Unable to parse {structure}! {str(e)}")
-    return structure
 
 
 def atom_array_from_cif_file(
@@ -120,6 +119,7 @@ def atom_array_from_cif_file(
     return structure
 
 
+# TODO: WHY DO WE NEED THIS?
 def atom_array_to_rdkit_mol(
     lig_atom_array: AtomArray,
     smiles: str,
@@ -167,32 +167,104 @@ def atom_array_to_rdkit_mol(
         return new_mol_h
 
 
-def generate_conformer(mol):
-    _mol = copy.deepcopy(mol)
+def generate_input_conformer(template_mol: Mol, addHs: bool = True) -> Mol:
+    _mol = copy.deepcopy(template_mol)
+    if addHs:
+        _mol = Chem.AddHs(_mol, addCoords=True)
+    conformer_atom_matches = get_template_to_mol_matches(template_mol, _mol)
     ps = AllChem.ETKDGv2()
     ps.useRandomCoords = True
     AllChem.EmbedMolecule(_mol, ps)
     AllChem.MMFFOptimizeMolecule(_mol, confId=0)
-    return _mol
+    return _mol, conformer_atom_matches
+
+
+# TODO: check - if this make sense!!!
+# def match_ligands(
+#     resolved_smiles: str,
+#     unresolved_sdf: Path,
+#     add_hydrogen: bool = False
+# ) -> tuple[tuple[int, ...], Chem.rdchem.Mol, Chem.rdchem.Mol]:
+#     try:
+#         resolved_mol = Chem.MolFromSmiles(resolved_smiles)
+#         unresolved_mol = next(Chem.SDMolSupplier(unresolved_sdf))
+#         if add_hydrogen:
+#             resolved_mol = Chem.AddHs(resolved_mol, addCoords=True)
+#             unresolved_mol = Chem.AddHs(unresolved_mol, addCoords=True)
+#         AllChem.ConstrainedEmbed(resolved_mol, unresolved_mol)
+#     except Exception:
+#         # TODO: Need to figure out how to handle failure, for now,
+#         # set it to unresolved
+#         resolved_mol = unresolved_mol = next(Chem.SDMolSupplier(unresolved_sdf))
+#     # Returns all possible set of matches in case of symmetric molecules
+#     matches = resolved_mol.GetSubstructMatches(unresolved_mol)
+#     return matches[0], resolved_mol, unresolved_mol
 
 
 def match_ligands(
-    resolved_smiles: str, unresolved_sdf: Path, add_hydrogen
+    input_smiles: str,
+    resolved_sdf: Path,
 ) -> tuple[tuple[int, ...], Chem.rdchem.Mol, Chem.rdchem.Mol]:
-    try:
-        resolved_mol = Chem.MolFromSmiles(resolved_smiles)
-        unresolved_mol = next(Chem.SDMolSupplier(unresolved_sdf))
-        if add_hydrogen:
-            resolved_mol = Chem.AddHs(resolved_mol, addCoords=True)
-            unresolved_mol = Chem.AddHs(unresolved_mol, addCoords=True)
-        AllChem.ConstrainedEmbed(resolved_mol, unresolved_mol)
-    except Exception:
-        # TODO: Need to figure out how to handle failure, for now,
-        # set it to unresolved
-        resolved_mol = unresolved_mol = next(Chem.SDMolSupplier(unresolved_sdf))
-    # Returns all possible set of matches in case of symmetric molecules
-    matches = resolved_mol.GetSubstructMatches(unresolved_mol)
-    return matches[0], resolved_mol, unresolved_mol
+    template_mol = Chem.MolFromSmiles(input_smiles)
+    resolved_mol = Chem.MolFromMolFile(resolved_sdf.__str__())
+    atom_matches = get_template_to_mol_matches(template_mol, resolved_mol)
+    return template_mol, resolved_mol, atom_matches
+
+
+def get_template_to_mol_matches(template: Chem.Mol, mol: Chem.Mol) -> list[list[int]]:
+    """
+    Function that works a lot like get_matched_template but can better deal with fragmented molecules
+    """
+    rascal_opts = rdRascalMCES.RascalOptions()
+    rascal_opts.similarityThreshold = 0.1
+    rascal_opts.allBestMCESs = True
+    rascal_opts.returnEmptyMCES = True
+    rascal_opts.completeAromaticRings = False
+    rascal_opts.ringMatchesRingOnly = False
+    rascal_opts.timeout = 20
+
+    results = rdRascalMCES.FindMCES(mol, template, rascal_opts)
+    atom_matches = np.array(results[0].atomMatches())
+    bond_matches = np.array(results[0].bondMatches())
+
+    numHA_template = rdMolDescriptors.CalcNumHeavyAtoms(template)
+    numHA_mol = rdMolDescriptors.CalcNumHeavyAtoms(mol)
+
+    if len(atom_matches) < min(numHA_template, numHA_mol):
+        # if not complete molecule is matched
+        match_mol = copy.deepcopy(mol)
+        ref_mol = copy.deepcopy(template)
+
+        log.warning(
+            "get_mol_to_template_matches: could not match template fully - retry with unmatched bonds set as UNSPECIFIED"
+        )
+        # set all unmatched bonds to UNSPECIFIED to help with the match
+        if len(bond_matches):
+            [
+                b.SetBondType(Chem.BondType.UNSPECIFIED)
+                for b in match_mol.GetBonds()
+                if not b in bond_matches[:, 0]
+            ]
+            [
+                b.SetBondType(Chem.BondType.UNSPECIFIED)
+                for b in ref_mol.GetBonds()
+                if not b in bond_matches[:, 1]
+            ]
+            # run again
+            results2 = rdRascalMCES.FindMCES(match_mol, ref_mol, rascal_opts)
+
+        # if still not fully matched - attempt one more!
+        if len(results2[0].atomMatches()) < min(numHA_template, numHA_mol):
+            [b.SetBondType(Chem.BondType.UNSPECIFIED) for b in match_mol.GetBonds()]
+            [b.SetBondType(Chem.BondType.UNSPECIFIED) for b in ref_mol.GetBonds()]
+            # run again
+            results3 = rdRascalMCES.FindMCES(match_mol, ref_mol, rascal_opts)
+            if len(results3[0].atomMatches()) > len(results[0].atomMatches()):
+                if len(results3[0].atomMatches()) > len(results2[0].atomMatches()):
+                    results = results3
+                else:
+                    results = results2
+    return [match.atomMatches() for match in results]
 
 
 def _align_structure_to_ref_sequence(

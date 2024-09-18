@@ -27,8 +27,7 @@ from rdkit.Chem import rdMolTransforms
 
 from plinder.core.structure.atoms import (
     atom_array_from_cif_file,
-    generate_conformer,
-    get_ligand_atom_index_mapping_mask,
+    generate_input_conformer,
     get_residue_index_mapping_mask,
     match_ligands,
 )
@@ -80,7 +79,7 @@ class Structure(BaseModel):
             tuple[Chem.rdchem.Mol, Chem.rdchem.Mol, Chem.rdchem.Mol, tuple[int, ...]],
         ]
     ] = None
-    add_ligand_hydrogen: bool = False
+    add_ligand_hydrogens: bool = False
     structure_type: str = "holo"
 
     """Initialize structure.
@@ -105,9 +104,10 @@ class Structure(BaseModel):
             tuple[Chem.rdchem.Mol, Chem.rdchem.Mol, Chem.rdchem.Mol, tuple[int, ...]],
         ]
     ]
+    # TODO: this is a WRONG description!!
         Dictionary of tuple of unresolved ligand mol,
         resolved aligned mol (via rdkit ConstrainedEmbed), resolved mol randon conformer and tuple of matched sbstructure indices
-    add_ligand_hydrogen : bool = False
+    add_ligand_hydrogens : bool = False
         Whether to add hydrogen to ligand or not
     structure_type : str = "holo"
         Structure type, "holo", "apo" or "pred"
@@ -147,7 +147,7 @@ class Structure(BaseModel):
                 ],
             ]
         ] = None,
-        add_ligand_hydrogen: bool = False,
+        add_ligand_hydrogens: bool = False,
         structure_type: str = "holo",
     ) -> Structure | None:
         structure = cls(
@@ -157,7 +157,7 @@ class Structure(BaseModel):
             list_ligand_sdf_and_resolved_smiles=list_ligand_sdf_and_resolved_smiles,
             protein_atom_array=protein_atom_array,
             ligand_mols=ligand_mols,
-            add_ligand_hydrogen=add_ligand_hydrogen,
+            add_ligand_hydrogens=add_ligand_hydrogens,
             structure_type=structure_type,
         )
 
@@ -182,26 +182,28 @@ class Structure(BaseModel):
             structure.protein_atom_array = protein_arr[protein_arr.res_name != "HOH"]
             structure.ligand_mols = {}
             if not (list_ligand_sdf_and_resolved_smiles is None):
-                for ligand_sdf, resolved_smiles in list_ligand_sdf_and_resolved_smiles:
+                for ligand_sdf, input_smiles in list_ligand_sdf_and_resolved_smiles:
                     # Match molecules
                     (
-                        matches,
-                        resolved_ligand_mol,
-                        original_unresolved_mol,
-                    ) = match_ligands(
-                        resolved_smiles,
-                        ligand_sdf,
-                        add_hydrogen=add_ligand_hydrogen,
+                        template_mol,
+                        resolved_mol,
+                        resolved_atom_matches,
+                    ) = match_ligands(input_smiles, ligand_sdf)
+
+                    # get input_conformer with matches
+                    (
+                        template_mol_conformer,
+                        conformer_atom_matches,
+                    ) = generate_input_conformer(
+                        template_mol, addHs=add_ligand_hydrogens
                     )
 
-                    resolved_ligand_mol_conformer = generate_conformer(
-                        resolved_ligand_mol
-                    )
                     structure.ligand_mols[ligand_sdf.stem] = (
-                        original_unresolved_mol,
-                        resolved_ligand_mol,
-                        resolved_ligand_mol_conformer,
-                        matches,
+                        template_mol,
+                        template_mol_conformer,
+                        conformer_atom_matches,
+                        resolved_mol,
+                        resolved_atom_matches,
                     )
         try:
             getattr(structure.protein_atom_array, "b-factor")
@@ -231,7 +233,7 @@ class Structure(BaseModel):
             list_ligand_sdf_and_resolved_smiles=self.list_ligand_sdf_and_resolved_smiles,
             protein_atom_array=combined_arr,
             ligand_mols=self.ligand_mols,
-            add_ligand_hydrogen=self.add_ligand_hydrogen,
+            add_ligand_hydrogens=self.add_ligand_hydrogens,
             structure_type=structure_type,
         )
 
@@ -274,7 +276,7 @@ class Structure(BaseModel):
                 list_ligand_sdf_and_resolved_smiles=self.list_ligand_sdf_and_resolved_smiles,
                 protein_atom_array=arr,
                 ligand_mols=self.ligand_mols,
-                add_ligand_hydrogen=self.add_ligand_hydrogen,
+                add_ligand_hydrogens=self.add_ligand_hydrogens,
                 structure_type=self.structure_type,
             )
 
@@ -336,7 +338,7 @@ class Structure(BaseModel):
                 list_ligand_sdf_and_resolved_smiles=self.list_ligand_sdf_and_resolved_smiles,
                 protein_atom_array=target_at,
                 ligand_mols=self.ligand_mols,
-                add_ligand_hydrogen=self.add_ligand_hydrogen,
+                add_ligand_hydrogens=self.add_ligand_hydrogens,
                 structure_type=self.structure_type,
             )
 
@@ -347,7 +349,7 @@ class Structure(BaseModel):
                 list_ligand_sdf_and_resolved_smiles=other.list_ligand_sdf_and_resolved_smiles,
                 protein_atom_array=ref_at,
                 ligand_mols=other.ligand_mols,
-                add_ligand_hydrogen=other.add_ligand_hydrogen,
+                add_ligand_hydrogens=other.add_ligand_hydrogens,
                 structure_type=other.structure_type,
             )
 
@@ -390,7 +392,7 @@ class Structure(BaseModel):
                 list_ligand_sdf_and_resolved_smiles=self.list_ligand_sdf_and_resolved_smiles,
                 protein_atom_array=superimposed,
                 ligand_mols=self.ligand_mols,
-                add_ligand_hydrogen=self.add_ligand_hydrogen,
+                add_ligand_hydrogens=self.add_ligand_hydrogens,
                 structure_type=self.structure_type,
             ),
             raw_rmsd,
@@ -404,14 +406,15 @@ class Structure(BaseModel):
         )
         return [seqres_masks[ch] for ch in self.protein_chain_in_order]
 
-    @property
-    def resolved_ligand_mask(self):
-        masks = []
-        for ch in self.ligand_chain_in_order:
-            mol = self.ligand_mols[ch][1]
-            matching_idxs = self.ligand_mols[ch][-1]
-            masks.append(get_ligand_atom_index_mapping_mask(mol, matching_idxs))
-        return masks
+    # TODO: review this!!!
+    # @property
+    # def resolved_ligand_mask(self):
+    #     masks = []
+    #     for ch in self.ligand_chain_in_order:
+    #         mol = self.ligand_mols[ch][1]
+    #         matching_idxs = self.ligand_mols[ch][-1]
+    #         masks.append(get_ligand_atom_index_mapping_mask(mol, matching_idxs))
+    #     return masks
 
     @property
     def seqres_list_ordered_by_chain(self) -> list[str]:
@@ -448,46 +451,56 @@ class Structure(BaseModel):
         return protein_coords
 
     @property
-    def original_unresolved_mols(self) -> dict[str, Chem.rdchem.Mol]:
-        """Original ligand mol objects."""
+    def input_ligand_templates(self) -> dict[str, Chem.rdchem.Mol]:
+        """Ligand 2D mol objects from input SMILES"""
         return {tag: mol_tuple[0] for tag, mol_tuple in self.ligand_mols.items()}
 
     @property
-    def resolved_ligand_mols(self) -> dict[str, Chem.rdchem.Mol]:
-        """Original ligand mol objects."""
+    def input_ligand_conformers(self) -> dict[str, Chem.rdchem.Mol]:
+        """Ligand 3D mol conformer objects from input SMILES"""
         return {tag: mol_tuple[1] for tag, mol_tuple in self.ligand_mols.items()}
 
     @property
-    def resolved_ligand_conformers(self) -> dict[str, Chem.rdchem.Mol]:
-        """Original ligand mol objects."""
+    def input_ligand_conformer_masks(self) -> dict[str, list[tuple[int]]]:
+        """List of ligand conformer masks to input SMILES"""
         return {tag: mol_tuple[2] for tag, mol_tuple in self.ligand_mols.items()}
 
     @property
-    def resolved_ligand_conformers_coords(self) -> dict[str, NDArray[np.double]]:
-        """ndarray[np.double]: The coordinates of the reinitialized resolved ligand atoms in the structure."""
+    def input_ligand_conformer_coords(self) -> dict[str, NDArray[np.double]]:
+        """ndarray[np.double]: The coordinates of the input 3D conformer generated from input SMILES"""
         ligand_coords: NDArray[np.double] = {
             tag: mol.GetConformer().GetPositions()
-            for tag, mol in self.resolved_ligand_conformers.items()
+            for tag, mol in self.input_ligand_conformers.items()
         }
         return ligand_coords
 
     @property
-    def resolved_ligand_mols_coords(self) -> dict[str, NDArray[np.double]]:
-        """ndarray[np.double]: The coordinates of the aligned resolved ligand atoms in the structure."""
+    def resolved_ligand_mols(self) -> dict[str, Chem.rdchem.Mol]:
+        """Resolved ligand mol objects"""
+        return {tag: mol_tuple[3] for tag, mol_tuple in self.ligand_mols.items()}
+
+    @property
+    def resolved_ligand_structure_masks(self) -> dict[str, list[tuple[int]]]:
+        """List of resolved holo structure masks to input SMILES"""
+        return {tag: mol_tuple[4] for tag, mol_tuple in self.ligand_mols.items()}
+
+    @property
+    def resolved_ligand_structure_coords(self) -> dict[str, NDArray[np.double]]:
+        """ndarray[np.double]: The coordinates of the resolved ligand atoms in the holo structure."""
         ligand_coords: NDArray[np.double] = {
             tag: mol.GetConformer().GetPositions()
             for tag, mol in self.resolved_ligand_mols.items()
         }
         return ligand_coords
 
-    @property
-    def original_unresolved_mols_coords(self) -> dict[str, NDArray[np.double]]:
-        """ """
-        ligand_coords: NDArray[np.double] = {
-            tag: mol.GetConformer().GetPositions()
-            for tag, mol in self.original_unresolved_mols.items()
-        }
-        return ligand_coords
+    # TODO: complete
+    # @property
+    # def resolved_to_conformer_masks(self) -> dict[str, list[tuple[int]]]:
+    #     masks = []
+    #     # map the two
+    #     resolved_ligand_structure_masks
+    #     input_ligand_conformer_masks
+    #     return masks
 
     @property
     def protein_dataframe(self) -> pd.DataFrame:
