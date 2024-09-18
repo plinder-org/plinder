@@ -105,14 +105,22 @@ def download_paths(*, paths: list[GSPath], force_progress: bool = False) -> None
         thread_pool(_quiet_ping, paths)
 
 
-def _get_fsroot(cfg: DictConfig) -> str:
-    """
-    Kludge mainly for dealing with the NFS
-    """
-    root = cfg.data.plinder_mount
-    if root in ["/plinder", "/", ""]:
-        root = "/"
-    return str(root)
+def _get_client(cfg: DictConfig) -> GSClient:
+    bucket = cfg.data.plinder_bucket
+    client = _CLIENTS.get(bucket)
+    if client is None:
+        mount = cfg.data.plinder_mount
+        if mount in ["/plinder", "/", ""]:
+            mount = "/"
+        if bucket == "plinder":
+            client = GSClient(
+                local_cache_dir=mount,
+                storage_client=storage.Client.create_anonymous_client(),
+            )
+        else:
+            client = GSClient(local_cache_dir=mount)
+        _CLIENTS[bucket] = client
+    return _CLIENTS[bucket]
 
 
 def get_plinder_path(
@@ -139,22 +147,12 @@ def get_plinder_path(
         The cloudpathlib path.
     """
     cfg = get_config()
-    root = _get_fsroot(cfg)
-    client = _CLIENTS.get(root)
-    if client is None:
-        if cfg.data.plinder_bucket == "plinder":
-            client = GSClient(
-                local_cache_dir=root,
-                storage_client=storage.Client.create_anonymous_client(),
-            )
-        else:
-            client = GSClient(local_cache_dir=root)
-        _CLIENTS[root] = client
+    client = _get_client(cfg)
     remote = cfg.data.plinder_remote
     if rel:
-        remote = f"{cfg.data.plinder_remote}/{rel}"
+        remote += f"/{rel}"
     path = GSPath(remote, client=client)
-    LOG.debug(f"get_plinder_path: remote={path} root={root}")
+    LOG.debug(f"get_plinder_path: remote={path}")
     if os.getenv("PLINDER_OFFLINE"):
         return Path(path._local)
     if download:
@@ -171,13 +169,9 @@ def get_plinder_path(
 
 def get_plinder_paths(*, paths: list[Path]) -> list[Path]:
     cfg = get_config()
-    root = _get_fsroot(cfg)
-    client = _CLIENTS.get(root)
-    if client is None:
-        client = GSClient(local_cache_dir=root)
-        _CLIENTS[root] = client
+    client = _get_client(cfg)
     remote = GSPath(cfg.data.plinder_remote, client=client)
-    LOG.debug(f"get_plinder_paths: remote={remote} root={root} npaths={len(paths)}")
+    LOG.debug(f"get_plinder_paths: remote={remote} npaths={len(paths)}")
     anypaths = [remote / path.relative_to(cfg.data.plinder_dir) for path in paths]
     if not os.getenv("PLINDER_OFFLINE"):
         download_paths(paths=anypaths)
