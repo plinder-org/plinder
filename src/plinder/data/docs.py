@@ -92,9 +92,7 @@ def get_all_column_descriptions(
 
 
 def make_column_descriptions(*, plindex: pd.DataFrame) -> None:
-    from plinder.data import column_descriptions
-
-    output_dir = Path(column_descriptions.__file__).parent
+    output_dir = TSV_DIR
     output_dir.mkdir(parents=True, exist_ok=True)
     Entry.document_properties_to_tsv(prefix="entry", filename=output_dir / "entry.tsv")
     EntryValidation.document_properties_to_tsv(
@@ -112,17 +110,6 @@ def make_column_descriptions(*, plindex: pd.DataFrame) -> None:
             for key in VALIDATION_OUTLIER_KEYS:
                 name = f"{validation_type}_validation_percent_outliers_{key}"
                 f.write(f"{name}\tfloat\tPercent outliers for {key}\n")
-    for chain_type in CHAIN_TYPES:
-        Chain.document_properties_to_tsv(
-            prefix=chain_type,
-            filename=output_dir / f"{chain_type}.tsv",
-        )
-        with open(output_dir / f"{chain_type}.tsv", "a") as f:
-            for key in MAPPING_NAMES:
-                name = f"{chain_type}_{key}"
-                f.write(
-                    f"{name}\tdict[str, tuple[str, str]]\tDomains and ranges for {key}\n"
-                )
     with open(output_dir / "system_pocket.tsv", "w") as f:
         f.write("Name\tType\tDescription\n")
         for key in MAPPING_NAMES:
