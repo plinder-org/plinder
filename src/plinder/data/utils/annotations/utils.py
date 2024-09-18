@@ -54,8 +54,11 @@ class DocBaseModel(BaseModel):
             yield (name, dtype, descr.strip())
 
     @classmethod
-    def document_properties_to_tsv(cls, prefix: str, filename: Path) -> None:
+    def document_properties_to_tsv(cls, prefix: str, filename: Path, nested: bool = False) -> None:
         with open(filename, "w") as tsv:
             tsv.write("\t".join(["Name", "Type", "Description"]) + "\n")
             for name, dtype, descr in cls.document_properties(prefix):
-                tsv.write("\t".join([name, str(dtype), descr]) + "\n")
+                if nested:
+                    tsv.write("\t".join([name, f"list[{str(dtype)}]", descr]) + "\n")
+                else:
+                    tsv.write("\t".join([name, str(dtype), descr]) + "\n")

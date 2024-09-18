@@ -17,5 +17,5 @@ system_unique_ccd_codes	str	Unique CCD codes in the system
 system_proper_unique_ccd_codes	str	Unique CCD codes of proper ligands in the system
 entry_pass_validation_criteria	bool	Whether the entry passes crystal validation criteria
 system_pass_validation_criteria	bool	Whether the system passes crystal validation criteria
-ligand_interactions	str	Interactions of the ligand
+ligand_interactions	list[str]	Interactions of the ligand
 ligand_auth_id	str	Author chain ID of the ligand

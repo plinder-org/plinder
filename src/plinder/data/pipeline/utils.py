@@ -573,20 +573,15 @@ def create_index(*, data_dir: Path, force_update: bool = False) -> pd.DataFrame:
         df[key] = df[key].astype(bool)
         df.rename(
             columns={
-                **{
-                    "entry_pdb_id": "system_pdb_id",
-                },
-                **{
-                    f"{key}_Kinase name": f"{key}_kinase_name"
-                    for key in [
-                        "ligand_interacting_ligand_chains",
-                        "ligand_neighboring_ligand_chains",
-                        "ligand_protein_chains",
-                        "system_ligand_chains",
-                        "system_pocket",
-                        "system_protein_chains",
-                    ]
-                }
+                f"{key}_Kinase name": f"{key}_kinase_name"
+                for key in [
+                    "ligand_interacting_ligand_chains",
+                    "ligand_neighboring_ligand_chains",
+                    "ligand_protein_chains",
+                    "system_ligand_chains",
+                    "system_pocket",
+                    "system_protein_chains",
+                ]
             },
             inplace=True,
         )

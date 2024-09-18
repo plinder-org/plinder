@@ -1,0 +1,6 @@
+Name	Type	Description
+ligand_interacting_ligand_chains_asym_id	list[str]	Chain asymmetric id
+ligand_interacting_ligand_chains_auth_id	list[str]	Chain author id
+ligand_interacting_ligand_chains_entity_id	list[str]	Chain entity id
+ligand_interacting_ligand_chains_length	list[int]	SEQRES length
+ligand_interacting_ligand_chains_num_unresolved_residues	list[int]	Number of unresolved residues (SEQRES length - len(residues))

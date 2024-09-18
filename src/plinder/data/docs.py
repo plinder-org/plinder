@@ -105,17 +105,25 @@ def make_column_descriptions(*, plindex: pd.DataFrame) -> None:
         ResidueListValidation.document_properties_to_tsv(
             prefix=f"{validation_type}_validation",
             filename=output_dir / f"{validation_type}_validation.tsv",
+            nested=validation_type.endswith("_chains"),
         )
         with open(output_dir / f"{validation_type}_validation.tsv", "a") as f:
+            typ = "list[float]" if validation_type.endswith("_chains") else "float"
             for key in VALIDATION_OUTLIER_KEYS:
                 name = f"{validation_type}_validation_percent_outliers_{key}"
-                f.write(f"{name}\tfloat\tPercent outliers for {key}\n")
+                f.write(f"{name}\t{typ}\tPercent outliers for {key}\n")
+    for chain_type in CHAIN_TYPES:
+        Chain.document_properties_to_tsv(
+            prefix=chain_type,
+            filename=output_dir / f"{chain_type}.tsv",
+            nested=True,
+        )
     with open(output_dir / "system_pocket.tsv", "w") as f:
         f.write("Name\tType\tDescription\n")
         for key in MAPPING_NAMES:
             name = f"system_pocket_{key}"
             f.write(
-                f"{name}\tdict[str, tuple[str, str]]\tDomains and ranges for {key}\n"
+                f"{name}\tstr\tDomains and ranges for {key}\n"
             )
     Ligand.document_properties_to_tsv(
         prefix="ligand", filename=output_dir / "ligands.tsv"
