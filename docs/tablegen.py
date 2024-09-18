@@ -213,7 +213,6 @@ def _get_annotation_table(
         ).download_to_filename(cache_path)
     # only load the first 1000 rows to avoid memory issues
     df = duckdb.sql(f"select * from read_parquet('{cache_path.as_posix()}') limit 1000;").to_df()
-    df = pd.read_parquet(cache_path)
     return df
 
 
