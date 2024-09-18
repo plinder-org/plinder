@@ -180,28 +180,6 @@ def generate_input_conformer(template_mol: Mol, addHs: bool = True) -> Mol:
     return _mol, conformer_atom_matches
 
 
-# TODO: check - if this make sense!!!
-# def match_ligands(
-#     resolved_smiles: str,
-#     unresolved_sdf: Path,
-#     add_hydrogen: bool = False
-# ) -> tuple[tuple[int, ...], Chem.rdchem.Mol, Chem.rdchem.Mol]:
-#     try:
-#         resolved_mol = Chem.MolFromSmiles(resolved_smiles)
-#         unresolved_mol = next(Chem.SDMolSupplier(unresolved_sdf))
-#         if add_hydrogen:
-#             resolved_mol = Chem.AddHs(resolved_mol, addCoords=True)
-#             unresolved_mol = Chem.AddHs(unresolved_mol, addCoords=True)
-#         AllChem.ConstrainedEmbed(resolved_mol, unresolved_mol)
-#     except Exception:
-#         # TODO: Need to figure out how to handle failure, for now,
-#         # set it to unresolved
-#         resolved_mol = unresolved_mol = next(Chem.SDMolSupplier(unresolved_sdf))
-#     # Returns all possible set of matches in case of symmetric molecules
-#     matches = resolved_mol.GetSubstructMatches(unresolved_mol)
-#     return matches[0], resolved_mol, unresolved_mol
-
-
 def match_ligands(
     input_smiles: str,
     resolved_sdf: Path,
@@ -238,7 +216,7 @@ def get_template_to_mol_matches(
         ref_mol = copy.deepcopy(template)
 
         log.warning(
-            "get_mol_to_template_matches: could not match template fully - retry with unmatched bonds set as UNSPECIFIED"
+            "get_template_to_mol_matches: could not match template fully - retry with unmatched bonds set as UNSPECIFIED"
         )
         # set all unmatched bonds to UNSPECIFIED to help with the match
         if len(bond_matches):
@@ -254,18 +232,18 @@ def get_template_to_mol_matches(
             ]
             # run again
             results2 = rdRascalMCES.FindMCES(match_mol, ref_mol, rascal_opts)
+            if len(results2[0].atomMatches()) > len(results[0].atomMatches()):
+                results = results2
 
         # if still not fully matched - attempt one more!
-        if len(results2[0].atomMatches()) < min(numHA_template, numHA_mol):
+        if len(results[0].atomMatches()) < min(numHA_template, numHA_mol):
             [b.SetBondType(Chem.BondType.UNSPECIFIED) for b in match_mol.GetBonds()]
             [b.SetBondType(Chem.BondType.UNSPECIFIED) for b in ref_mol.GetBonds()]
             # run again
             results3 = rdRascalMCES.FindMCES(match_mol, ref_mol, rascal_opts)
             if len(results3[0].atomMatches()) > len(results[0].atomMatches()):
-                if len(results3[0].atomMatches()) > len(results2[0].atomMatches()):
-                    results = results3
-                else:
-                    results = results2
+                results = results3
+
     return [
         {ix_smi: ix_mol for ix_smi, ix_mol in match.atomMatches()} for match in results
     ]
