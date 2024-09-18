@@ -110,7 +110,6 @@ class PlinderDataset(Dataset):  # type: ignore
             item["alternative_structures"] = alternatives
         return item
 
-
 def get_model_input_files(
     split_df: pd.DataFrame,
     split: Literal["train", "val", "test"] = "train",
@@ -164,53 +163,22 @@ def get_model_input_files(
     return model_inputs
 
 
+
 # Example sampler function, this is for demonstration purposes,
 # users are advised to write a sampler that suit their need
 def get_diversity_samples(
     split_df: pd.DataFrame,
     split: Literal["train", "val", "test"] = "train",
-    cluster_tag: None | str = None,
-    metric: Literal[
-        "pli_qcov",
-        "pli_unique_qcov",
-        "pocket_fident",
-        "pocket_fident_qcov",
-        "pocket_lddt",
-        "pocket_lddt_qcov",
-        "pocket_qcov",
-        "protein_fident_max",
-        "protein_fident_qcov_max",
-        "protein_fident_qcov_weighted_max",
-        "protein_fident_qcov_weighted_sum",
-        "protein_fident_weighted_max",
-        "protein_fident_weighted_sum",
-        "protein_lddt_max",
-        "protein_lddt_qcov_max",
-        "protein_lddt_qcov_weighted_max",
-        "protein_lddt_qcov_weighted_sum",
-        "protein_lddt_weighted_max",
-        "protein_lddt_weighted_sum",
-        "protein_qcov_weighted_sum",
-        "protein_seqsim_max",
-        "protein_seqsim_qcov_max",
-        "protein_seqsim_qcov_weighted_max",
-        "protein_seqsim_qcov_weighted_sum",
-        "protein_seqsim_weighted_max",
-        "protein_seqsim_weighted_sum",
-    ] = "pli_qcov",
-    directed: bool = True,
-    threshold: int = 100,
-    cluster_type: Literal["component", "communities"] = "component",
+    cluster_column: str = "pli_qcov__70__community",
 ) -> pd.DataFrame:
     from torch.utils.data import WeightedRandomSampler
 
-    if not cluster_tag:
-        direction_tag = "strong" if directed else "weak"
-        cluster_tag = f"{metric}__{threshold}__{direction_tag}__{cluster_type}"
+    if cluster_column not in split_df.columns:
+        raise ValueError(f"cluster_column={cluster_column} not in split_df.columns")
 
     split_df = split_df[split_df.split == split]
-    cluster_counts = split_df[cluster_tag].value_counts().rename("cluster_count")
-    split_df = split_df.merge(cluster_counts, left_on=cluster_tag, right_index=True)
+    cluster_counts = split_df[cluster_column].value_counts().rename("cluster_count")
+    split_df = split_df.merge(cluster_counts, left_on=cluster_column, right_index=True)
     split_df.reset_index(inplace=True)
     cluster_weights = 1.0 / split_df.cluster_count.values
     sampler = WeightedRandomSampler(

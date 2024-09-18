@@ -40,6 +40,12 @@ def query_links(
     cfg = get_config()
     dataset = cpl.get_plinder_path(rel=cfg.data.links)
     new = any((path.parent.stem == "kind=apo" for path in dataset.rglob("*.parquet")))
+    if (dataset / "apo_links.parquet").is_file():
+        LOG.warn("found old apo links, removing")
+        (dataset / "apo_links.parquet").unlink()
+    if (dataset / "pred_links.parquet").is_file():
+        LOG.warn("found old pred links, removing")
+        (dataset / "pred_links.parquet").unlink()
     if not new and columns and "filename" not in columns:
         # bugfix: necessary for determining the "kind" below
         columns.append("filename")
