@@ -232,7 +232,6 @@ def get_template_to_mol_matches(
 
     numHA_template = rdMolDescriptors.CalcNumHeavyAtoms(template)
     numHA_mol = rdMolDescriptors.CalcNumHeavyAtoms(mol)
-    print("AAA", mol, template)
     if len(atom_matches) < min(numHA_template, numHA_mol):
         # if not complete molecule is matched
         match_mol = copy.deepcopy(mol)

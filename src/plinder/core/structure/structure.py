@@ -216,7 +216,6 @@ class Structure(BaseModel):
                     # Extract the template indices that are matches
                     # _conformer_atom_matches = [i[1] for i in conformer_atom_matches[0]]
                     # _resolved_atom_matches = [i[1] for i in resolved_atom_matches[0]]
-                    print("A", conformer_atom_matches)
                     _conformer_atom_matches = tuple(conformer_atom_matches[0].values())
                     _resolved_atom_matches = tuple(resolved_atom_matches[0].values())
 
@@ -227,7 +226,6 @@ class Structure(BaseModel):
                         resolved_mol,
                         _resolved_atom_matches,
                     )
-                print(structure.ligand_mols)
 
         try:
             getattr(structure.protein_atom_array, "b-factor")

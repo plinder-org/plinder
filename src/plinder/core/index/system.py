@@ -226,7 +226,6 @@ def structure2tensor(
         )
 
     if input_ligand_conformer_masks is not None:
-        print(input_ligand_conformer_masks)
         lig_masks = pad_and_stack(
             [torch.tensor(mask) for mask in input_ligand_conformer_masks],
             dim=0,
