@@ -9,6 +9,7 @@ from typing import Callable, Iterable, Optional, TypeVar, Union, overload
 
 from cloudpathlib import CloudPath, GSClient, GSPath
 from cloudpathlib.exceptions import OverwriteNewerLocalError
+from google.cloud import storage
 from omegaconf import DictConfig
 from tqdm.contrib.concurrent import thread_map
 
@@ -141,7 +142,13 @@ def get_plinder_path(
     root = _get_fsroot(cfg)
     client = _CLIENTS.get(root)
     if client is None:
-        client = GSClient(local_cache_dir=root)
+        if cfg.data.plinder_bucket == "plinder":
+            client = GSClient(
+                local_cache_dir=root,
+                storage_client=storage.Client.create_anonymous_client(),
+            )
+        else:
+            client = GSClient(local_cache_dir=root)
         _CLIENTS[root] = client
     remote = cfg.data.plinder_remote
     if rel:
