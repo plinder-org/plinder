@@ -73,7 +73,7 @@ BINDING_SITE_METALS = [
 _AtomArrayOrStack = Union[AtomArray, AtomArrayStack]
 
 
-# TODO: WHY DO WE NEED THIS?
+# TODO: do we need this?
 # def biotite_pdbfile() -> TextFile:
 #     from biotite.structure.io.pdb import PDBFile
 
@@ -120,7 +120,7 @@ def atom_array_from_cif_file(
     return structure
 
 
-# TODO: WHY DO WE NEED THIS?
+# TODO: do we need this?
 def atom_array_to_rdkit_mol(
     lig_atom_array: _AtomArrayOrStack,
     smiles: str,
@@ -192,7 +192,7 @@ def match_ligands(
 
 def get_template_to_mol_matches(
     template: Chem.Mol, mol: Chem.Mol
-) -> list[dict[int, int]]:
+) -> tuple[_AtomArrayOrStack, _AtomArrayOrStack]:
     """
     Function that works a lot like get_matched_template but can better deal with fragmented molecules
     """
@@ -243,10 +243,33 @@ def get_template_to_mol_matches(
             results3 = rdRascalMCES.FindMCES(match_mol, ref_mol, rascal_opts)
             if len(results3[0].atomMatches()) > len(results[0].atomMatches()):
                 results = results3
+    # return [
+    #     {ix_mol: ix_templ for ix_templ, ix_mol in match.atomMatches()}
+    #     for match in results
+    # ]
 
-    return [
-        {ix_smi: ix_mol for ix_smi, ix_mol in match.atomMatches()} for match in results
-    ]
+    # convert to array stacks
+    template_array_stack1 = np.array(
+        [[ix_templ for _, ix_templ in match.atomMatches()] for match in results]
+    )
+    mol_array_stack2 = np.array(
+        [[ix_mol for ix_mol, _ in match.atomMatches()] for match in results]
+    )
+    return template_array_stack1, mol_array_stack2
+
+
+# def get_array_stacks_from_atom_maps(
+#     atom_maps: list[dict[int, int]]
+# ) -> tuple[_AtomArrayOrStack, _AtomArrayOrStack]:
+#     mask_array_list1 = []
+#     mask_array_list2 = []
+#     for atom_map in atom_maps:
+#         mask_array1, mask_array2 = np.array(
+#             [[key, val] for key, val in atom_map.items()]
+#         ).T
+#         mask_array_list1.append(mask_array1)
+#         mask_array_list2.append(mask_array2)
+#     return np.stack(mask_array_list1), np.stack(mask_array_list2)
 
 
 def get_residue_index_mapping_mask(
