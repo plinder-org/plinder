@@ -6,6 +6,7 @@ import pandas as pd
 from duckdb import sql
 
 from plinder.core.scores.query import FILTERS, make_query
+from plinder.core.split.utils import get_split
 from plinder.core.utils import cpl
 from plinder.core.utils.config import get_config
 from plinder.core.utils.log import setup_logger
@@ -16,6 +17,7 @@ LOG = setup_logger(__name__)
 def query_index(
     *,
     columns: list[str] | None = None,
+    splits: list[str] | None = None,
     filters: FILTERS = None,
 ) -> pd.DataFrame:
     """
@@ -44,4 +46,12 @@ def query_index(
         allow_no_filters=True,
     )
     assert query is not None
-    return sql(query).to_df()
+    df = sql(query).to_df()
+    if splits is None:
+        splits = ["train", "val"]
+    split_df = get_split(cfg=cfg)
+    split_dict = dict(zip(split_df["system_id"], split_df["split"]))
+    df["split"] = df["system_id"].map(lambda x: split_dict.get(x, "unassigned"))
+    if "all" not in splits:
+        df = df[df["split"].isin(splits)].reset_index(drop=True)
+    return df
