@@ -290,9 +290,7 @@ class PlinderSystem:
         try:
             from ost import io
         except ImportError:
-            raise ImportError(
-                "Please install openstructure to use this property"
-            )
+            raise ImportError("Please install openstructure to use this property")
         return io.LoadMMCIF(self.receptor_cif)
 
     @cached_property
@@ -307,9 +305,7 @@ class PlinderSystem:
         try:
             from ost import io
         except ImportError:
-            raise ImportError(
-                "Please install openstructure to use this property"
-            )
+            raise ImportError("Please install openstructure to use this property")
 
         ligand_views = {}
         for chain in self.ligands:
