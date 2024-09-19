@@ -13,6 +13,7 @@ from ost.mol.alg.ligand_scoring_scrmsd import SCRMSDScorer
 from ost.mol.alg.scoring import Scorer
 from posebusters import PoseBusters
 
+from plinder.core.system.system import PlinderSystem
 from plinder.core.utils.log import setup_logger
 
 LOG = setup_logger(__name__)
@@ -31,44 +32,6 @@ class LigandScores:
 
 
 @dataclass
-class ReferenceSystem:
-    system_id: str
-    receptor_cif_file: Path
-    receptor_pdb_file: Path
-    entity: mol.EntityHandle
-    ligands: list[mol.ResidueView]
-    ligand_sdf_files: dict[str, Path]
-    num_ligands: int
-    num_proteins: int
-
-    @classmethod
-    def from_reference_system(
-        cls, system_dir: Path, reference_system: str
-    ) -> "ReferenceSystem":
-        cif_file = system_dir / "receptor.cif"
-        pdb_file = system_dir / "receptor.pdb"
-        entity = io.LoadMMCIF(cif_file.as_posix())
-        ligand_sdf_files = {}
-        ligands = []
-        for chain in reference_system.split("__")[-1].split("_"):
-            sdf_file = system_dir / "ligand_files" / f"{chain}.sdf"
-            ligand_sdf_files[chain] = sdf_file
-            ligands.append(
-                io.LoadEntity(sdf_file.as_posix(), format="sdf").Select("ele != H")
-            )
-        return cls(
-            reference_system,
-            cif_file,
-            pdb_file,
-            entity,
-            ligands,
-            ligand_sdf_files,
-            len(ligands),
-            len(reference_system.split("__")[-2].split("_")),
-        )
-
-
-@dataclass
 class ProteinScores:
     chain_mapping: dict[str, str]
     lddt: float
@@ -82,18 +45,19 @@ class ProteinScores:
 
 @dataclass
 class ModelScores:
-    reference: ReferenceSystem
+    reference: PlinderSystem
     system: str
     structure_file: Path
     entity: mol.EntityHandle
-    ligands: list[mol.EntityHandle]
+    ligand_views: list[mol.EntityHandle]
     ligand_sdf_files: list[str | Path]
     num_ligands: int
     num_proteins: int
     num_mapped_reference_ligands: int = 0
     num_mapped_ligands: int = 0
     score_posebusters: bool = False
-    posebusters_mapper: str = "scrmsd"
+    score_posebusters_full_report: bool = False
+    posebusters_mapper: str = "bisy_rmsd"
     ligand_scores: list[LigandScores] | None = None
     rigid: bool = False
     score_protein: bool = False
@@ -107,7 +71,7 @@ class ModelScores:
         model_system: str,
         model_file: Path,
         model_ligand_sdf_files: list[str | Path],
-        reference: ReferenceSystem,
+        reference: PlinderSystem,
         rigid: bool = False,
         score_protein: bool = False,
         score_posebusters: bool = False,
@@ -124,7 +88,7 @@ class ModelScores:
             sdf_file.as_posix() if isinstance(sdf_file, Path) else sdf_file
             for sdf_file in model_ligand_sdf_files
         ]
-        ligands = [
+        ligand_views = [
             io.LoadEntity(ligand_sdf_file, format="sdf").Select("ele != H")
             for ligand_sdf_file in sdf_files
         ]
@@ -133,11 +97,14 @@ class ModelScores:
             system=model_system,
             structure_file=model_file,
             entity=entity,
-            ligands=ligands,
+            ligand_views=ligand_views,
             ligand_sdf_files=model_ligand_sdf_files,
             num_ligands=len(model_ligand_sdf_files),
             num_proteins=sum(
-                1 for x in entity.chains if x.type == mol.CHAINTYPE_POLY_PEPTIDE_L
+                1
+                for x in entity.chains
+                if x.type == mol.CHAINTYPE_POLY_PEPTIDE_L
+                or x.type == mol.CHAINTYPE_UNKNOWN
             ),
             rigid=rigid,
             score_protein=score_protein,
@@ -151,7 +118,7 @@ class ModelScores:
     def calculate_protein_scores(self, lddt_add_mdl_contacts: bool = False) -> None:
         scorer = Scorer(
             model=self.entity,
-            target=self.reference.entity,
+            target=self.reference.receptor_entity,
             lddt_add_mdl_contacts=lddt_add_mdl_contacts,
         )
         self.protein_scores = ProteinScores(
@@ -167,7 +134,7 @@ class ModelScores:
         self.protein_scores.per_chain_bb_lddt = {}
         for reference_chain, model_chain in self.protein_scores.chain_mapping.items():
             reference_chain_length = len(
-                self.reference.entity.FindChain(reference_chain).residues
+                self.reference.receptor_entity.FindChain(reference_chain).residues
             )
             self.protein_scores.per_chain_coverage[model_chain] = (
                 len(local_lddt[model_chain]) / reference_chain_length
@@ -195,39 +162,29 @@ class ModelScores:
 
         scrmsd_scorer = SCRMSDScorer(
             model=self.entity,
-            target=self.reference.entity,
-            model_ligands=self.ligands,
-            target_ligands=self.reference.ligands,
+            target=self.reference.receptor_entity,
+            model_ligands=self.ligand_views,
+            target_ligands=list(self.reference.ligand_views.values()),
             substructure_match=True,
             resnum_alignments=self.rigid,
         )
         lddt_pli_scorer = LDDTPLIScorer(
             model=self.entity,
-            target=self.reference.entity,
-            model_ligands=self.ligands,
-            target_ligands=self.reference.ligands,
-            substructure_match=True,
-            add_mdl_contacts=False,
-            resnum_alignments=self.rigid,
-        )
-        lddt_pli_scorer_amd = LDDTPLIScorer(
-            model=self.entity,
-            target=self.reference.entity,
-            model_ligands=self.ligands,
-            target_ligands=self.reference.ligands,
+            target=self.reference.receptor_entity,
+            model_ligands=self.ligand_views,
+            target_ligands=list(self.reference.ligand_views.values()),
             substructure_match=True,
             add_mdl_contacts=True,
             resnum_alignments=self.rigid,
         )
         self.ligand_scores = []
-        scrmsd_aux, lddt_pli_aux, lddt_pli_amd_aux = (
+        scrmsd_aux, lddt_pli_aux = (
             scrmsd_scorer.aux,
             lddt_pli_scorer.aux,
-            lddt_pli_scorer_amd.aux,
         )
         assigned_model = set()
         assigned_target = set()
-        for ligand, sdf_file in zip(self.ligands, self.ligand_sdf_files):
+        for ligand, sdf_file in zip(self.ligand_views, self.ligand_sdf_files):
             for residue in ligand.residues:
                 chain_name = residue.chain.name
                 residue_number = residue.number.num
@@ -241,23 +198,24 @@ class ModelScores:
                     "chain_mapping", None
                 )
                 for name, aux, score_name in zip(
-                    ["scrmsd", "lddt_lp", "lddt_pli", "lddt_pli_amd"],
+                    ["bisy_rmsd", "lddt_lp", "lddt_pli"],
                     [
                         scrmsd_aux_ligand,
                         scrmsd_aux_ligand,
                         lddt_pli_aux.get(chain_name, {}).get(residue_number, {}),
-                        lddt_pli_amd_aux.get(chain_name, {}).get(residue_number, {}),
                     ],
-                    ["rmsd", "lddt_lp", "lddt_pli", "lddt_pli"],
+                    ["rmsd", "lddt_lp", "lddt_pli"],
                 ):
                     ligand_class.scores[name] = aux.get(score_name, None)
                     if "target_ligand" in aux:
                         ligand_class.reference_ligand[name] = LigandScores(
                             aux["target_ligand"].chain.name,
                             aux["target_ligand"].number.num,
-                            self.reference.ligand_sdf_files[
-                                aux["target_ligand"].chain.name.split("_")[-1]
-                            ],
+                            Path(
+                                self.reference.ligands[
+                                    aux["target_ligand"].chain.name.split("_")[-1]
+                                ]
+                            ),
                             len(aux["target_ligand"].atoms),
                         )
                 if (
@@ -270,8 +228,8 @@ class ModelScores:
                         mol_true=ligand_class.reference_ligand[
                             self.posebusters_mapper
                         ].sdf_file,
-                        mol_cond=self.reference.receptor_pdb_file,
-                        full_report=True,
+                        mol_cond=self.reference.receptor_pdb,
+                        full_report=self.score_posebusters_full_report,
                     ).to_dict()
                     key = (str(ligand_class.sdf_file), chain_name.split("_")[-1])
                     try:
@@ -279,13 +237,24 @@ class ModelScores:
                             k: v[key] for k, v in result_dict.items()
                         }
                     except KeyError:
-                        key = (str(ligand_class.sdf_file), "mol_at_pos_0")
-                        ligand_class.posebusters = {
-                            k: v[key] for k, v in result_dict.items()
-                        }
+                        try:
+                            key = (str(ligand_class.sdf_file), "mol_at_pos_0")
+                            ligand_class.posebusters = {
+                                k: v[key] for k, v in result_dict.items()
+                            }
+                        except KeyError:
+                            key = (
+                                str(ligand_class.sdf_file),
+                                ligand_class.sdf_file.stem,
+                            )
+                            ligand_class.posebusters = {
+                                k: v[key] for k, v in result_dict.items()
+                            }
                 if ligand_class.protein_chain_mapping is not None:
                     assigned_model.add(chain_name)
-                    assigned_target.add(ligand_class.reference_ligand["scrmsd"].chain)
+                    assigned_target.add(
+                        ligand_class.reference_ligand["bisy_rmsd"].chain
+                    )
                 self.ligand_scores.append(ligand_class)
             self.num_mapped_reference_ligands = len(assigned_target)
             self.num_mapped_ligands = len(assigned_model)
@@ -350,9 +319,7 @@ class ModelScores:
             / self.reference.num_ligands,
             fraction_model_ligands_mapped=self.num_mapped_ligands / self.num_ligands,
         )
-        score_list = ["lddt_pli", "lddt_pli_amd", "scrmsd"]
-        if self.score_protein:
-            score_list.append("lddt_lp")
+        score_list = ["lddt_pli", "lddt_lp", "bisy_rmsd"]
         for score_name in score_list:
             (
                 scores[f"{score_name}_ave"],
