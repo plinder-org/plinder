@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
+from plinder.core.scores.index import query_index
 from plinder.core.scores.protein import cross_similarity as protein_cross_similarity
 from plinder.core.utils.log import setup_logger
 from plinder.data import smallmolecules
@@ -31,46 +32,12 @@ SIMILARITY_METRICS = (
     "tanimoto_similarity_max",
 )
 
-
-def get_ligand_ids(data_dir: Path, left: set[str], right: set[str]) -> pd.DataFrame:
-    ligands_per_system = pd.read_parquet(
-        data_dir / "fingerprints/ligands_per_system.parquet",
-        filters=[
-            ("system_id", "in", left.union(right)),
-        ],
-    )
-    annotation_df = pd.read_parquet(
-        data_dir / "index" / "annotation_table.parquet",
-        columns=[
-            "system_id",
-            "ligand_rdkit_canonical_smiles",
-        ],
-        filters=[
-            ("system_id", "in", set(ligands_per_system["system_id"])),
-            ("ligand_is_ion", "==", False),
-            ("ligand_is_artifact", "==", False),
-        ],
-    )
-    mapr = dict(
-        zip(
-            ligands_per_system["ligand_rdkit_canonical_smiles"],
-            ligands_per_system["number_id_by_inchikeys"],
-        )
-    )
-    annotation_df["number_id_by_inchikeys"] = annotation_df[
-        "ligand_rdkit_canonical_smiles"
-    ].map(mapr)
-    annotation_df.dropna(subset=["number_id_by_inchikeys"], inplace=True)
-    annotation_df["number_id_by_inchikeys"] = annotation_df[
-        "number_id_by_inchikeys"
-    ].astype(int)
-    left_ligand_ids = set(
-        annotation_df[annotation_df["system_id"].isin(left)]["number_id_by_inchikeys"]
-    )
-    right_ligand_ids = set(
-        annotation_df[annotation_df["system_id"].isin(right)]["number_id_by_inchikeys"]
-    )
-    return left_ligand_ids, right_ligand_ids
+STRATIFICATION_LABELS = [
+    "novel_pocket_pli",
+    "novel_ligand",
+    "novel_protein",
+    "novel_all",
+]
 
 
 def compute_protein_max_similarities(
@@ -115,7 +82,6 @@ def compute_ligand_max_similarities(
 @dataclass
 class StratifiedTestSet:
     split_df: pd.DataFrame
-    data_dir: Path
     output_dir: Path
     train_label: str = "train"
     test_label: str = "test"
@@ -133,7 +99,6 @@ class StratifiedTestSet:
     similarity_combinations: dict[str, list[str]] = field(
         default_factory=lambda: {
             "novel_pocket_pli": ["pli_unique_qcov", "pocket_qcov", "pocket_lddt_qcov"],
-            "novel_ligand_pli": ["pli_unique_qcov", "tanimoto_similarity_max"],
             "novel_protein": [
                 "protein_seqsim_weighted_sum",
                 "protein_lddt_weighted_sum",
@@ -151,15 +116,16 @@ class StratifiedTestSet:
             ],
         }
     )
-    max_similarities: pd.DataFrame = pd.DataFrame(
-        columns=["system_id"] + list(SIMILARITY_METRICS)
+    max_similarities: pd.DataFrame = field(
+        default_factory=lambda: pd.DataFrame(  # type: ignore
+            columns=["system_id"] + list(SIMILARITY_METRICS)
+        )
     )
 
     @classmethod
     def from_split(
         cls,
         split_file: Path,
-        data_dir: Path,
         output_dir: Path,
         train_label: str = "train",
         test_label: str = "test",
@@ -175,7 +141,6 @@ class StratifiedTestSet:
         ].reset_index(drop=True)
         data = cls(
             split_df=split_df,
-            data_dir=data_dir,
             output_dir=output_dir,
             train_label=train_label,
             test_label=test_label,
@@ -224,13 +189,12 @@ class StratifiedTestSet:
         for metric in tqdm(SIMILARITY_METRICS):
             if overwrite or not (self.get_filename(metric)).exists():
                 if metric == "tanimoto_similarity_max":
-                    df = pd.read_parquet(
-                        self.data_dir / "index" / "annotation_table.parquet",
+                    df = query_index(
                         columns=[
                             "system_id",
                             "ligand_rdkit_canonical_smiles",
                         ],
-                        filters=[
+                        filters=[  # type: ignore
                             ("system_id", "in", left.union(right)),
                             ("ligand_is_ion", "==", False),
                             ("ligand_is_artifact", "==", False),
@@ -279,20 +243,21 @@ class StratifiedTestSet:
         self.max_similarities = self.max_similarities.fillna(0)
 
     def assign_test_set_quality(self) -> None:
-        df = pd.read_parquet(
-            self.data_dir / "index" / "annotation_table.parquet",
+        df = query_index(
             filters=[
-                [
-                    (
-                        "system_id",
-                        "in",
-                        set(
-                            self.split_df[self.split_df["split"] == self.test_label][
-                                "system_id"
-                            ]
-                        ),
-                    )
-                ]
+                (
+                    "system_id",
+                    "in",
+                    set(
+                        self.split_df[self.split_df["split"] == self.test_label][
+                            "system_id"
+                        ]
+                    ),
+                )
+            ],  # type: ignore
+            columns=[
+                "system_id",
+                "system_pass_validation_criteria",
             ],
         )
         quality = dict(
@@ -319,7 +284,7 @@ class StratifiedTestSet:
         )
 
 
-def main() -> None:
+def stratify_cmd(args: list[str] | None = None) -> None:
     import argparse
 
     parser = argparse.ArgumentParser(description="Annotate and stratify a test set")
@@ -327,11 +292,6 @@ def main() -> None:
         "--split_file",
         type=Path,
         help="Path to split file with [system_id, split] as columns",
-    )
-    parser.add_argument(
-        "--data_dir",
-        type=Path,
-        help="Path to plinder data",
     )
     parser.add_argument(
         "--output_dir",
@@ -356,17 +316,18 @@ def main() -> None:
         help="Overwrite max similarity files",
     )
 
-    args = parser.parse_args()
+    ns, unknown_args = parser.parse_known_args(args=args)
+    if len(unknown_args):
+        LOG.warning(f"ignoring arguments {unknown_args}")
 
     StratifiedTestSet.from_split(
-        split_file=Path(args.split_file),
-        data_dir=Path(args.data_dir),
-        output_dir=Path(args.output_dir),
-        train_label=args.train_label,
-        test_label=args.test_label,
-        overwrite=args.overwrite,
+        split_file=Path(ns.split_file),
+        output_dir=Path(ns.output_dir),
+        train_label=ns.train_label,
+        test_label=ns.test_label,
+        overwrite=ns.overwrite,
     )
 
 
 if __name__ == "__main__":
-    main()
+    stratify_cmd()
