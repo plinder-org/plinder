@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import json
+from functools import cached_property
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pandas as pd
+
+if TYPE_CHECKING:
+    from ost import mol
 
 from plinder.core.index import utils
 from plinder.core.scores.links import query_links
@@ -272,3 +276,66 @@ class PlinderSystem:
         if not structure.is_file():
             raise ValueError(f"structure={structure} does not exist!")
         return structure.as_posix()
+
+    @cached_property
+    def receptor_entity(self) -> "mol.EntityHandle":
+        """
+        Return the receptor entity handle
+
+        Returns
+        -------
+        mol.EntityHandle
+            receptor entity handle
+        """
+        try:
+            from ost import io
+        except ImportError:
+            raise ImportError(
+                "Please install openstructure to use this property"
+            )
+        return io.LoadMMCIF(self.receptor_cif)
+
+    @cached_property
+    def ligand_views(self) -> dict[str, "mol.ResidueView"]:
+        """
+        Return the ligand views
+
+        Returns
+        -------
+        dict[str, mol.ResidueView]
+        """
+        try:
+            from ost import io
+        except ImportError:
+            raise ImportError(
+                "Please install openstructure to use this property"
+            )
+
+        ligand_views = {}
+        for chain in self.ligands:
+            ligand_views[chain] = io.LoadEntity(
+                self.ligands[chain], format="sdf"
+            ).Select("ele != H")
+        return ligand_views
+
+    @property
+    def num_ligands(self) -> int:
+        """
+        Return the number of ligands in the system
+
+        Returns
+        -------
+        int
+        """
+        return len(self.ligands)
+
+    @property
+    def num_proteins(self) -> int:
+        """
+        Return the number of proteins in the system
+
+        Returns
+        -------
+        int
+        """
+        return len(self.system_id.split("__")[2].split("_"))
