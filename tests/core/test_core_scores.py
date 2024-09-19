@@ -5,7 +5,7 @@ from plinder.core import scores
 
 
 def test_query_index(read_plinder_mount):
-    df = scores.query_index(columns=["system_id"])
+    df = scores.query_index(columns=["system_id"], splits=["all"])
     assert len(df.index) == 10
 
 

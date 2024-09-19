@@ -7,7 +7,7 @@ from plinder.data import docs
 def test_make_column_descriptions(read_plinder_mount):
     from plinder.core.scores import query_index
 
-    df = query_index(columns=["*"])
+    df = query_index(columns=["*"], splits=["all"]).drop(columns=["split"])
 
     schema = docs.get_all_column_descriptions(plindex=df)
     columns = schema["Name"].to_list()
