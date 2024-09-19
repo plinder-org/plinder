@@ -199,7 +199,8 @@ class StratifiedTestSet:
                             ("ligand_is_ion", "==", False),
                             ("ligand_is_artifact", "==", False),
                         ],
-                    )
+                        splits=["all"],
+                    ).drop(columns=["split"])
                     df = df.merge(self.split_df, on="system_id", how="left")
                     compute_ligand_max_similarities(
                         df,
@@ -259,7 +260,8 @@ class StratifiedTestSet:
                 "system_id",
                 "system_pass_validation_criteria",
             ],
-        )
+            splits=["all"],
+        ).drop(columns=["split"])
         quality = dict(
             zip(df["system_id"], df["system_pass_validation_criteria"].fillna(False))
         )
