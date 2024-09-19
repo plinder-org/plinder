@@ -17,8 +17,7 @@ The `plinder-eval` package allows
 2. correlating the performance of these predictions against the level of similarity of
 each test system to the corresponding training set.
 
-The output file from running `plinder-eval` can be used as a submission to the
-leaderboard (coming soon).
+The output files from running `plinder-eval` will be used to populate the [MLSB leaderboard](https://www.mlsb.io/#challenge).
 
 ### Input
 
