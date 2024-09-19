@@ -69,7 +69,7 @@ class EvaluationResults:
         for label in [
             "all",
             "novel_pocket_pli",
-            "novel_pocket_ligand",
+            "novel_ligand",
             "novel_protein",
             "novel_all",
         ]:
