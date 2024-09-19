@@ -152,7 +152,7 @@ class StratifiedTestSet:
         }
     )
     max_similarities: pd.DataFrame = field(
-        default_factory=pd.DataFrame(columns=["system_id"] + list(SIMILARITY_METRICS))
+            default_factory=lambda: pd.DataFrame(columns=["system_id"] + list(SIMILARITY_METRICS))
     )
 
     @classmethod
