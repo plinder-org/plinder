@@ -343,18 +343,12 @@ This directory contains parquet files linking PLINDER systems to their apo and p
 - - lddt_pli_wave
   - float
   - Weighted average lDDT score for protein-ligand interactions
-- - lddt_pli_amd_ave
+- - bisy_rmsd_ave
   - float
-  - Average lDDT score for protein-ligand interactions, considering only atoms matched during docking
-- - lddt_pli_amd_wave
+  - Average binding-site superposed symmetry-corrected RMSD between reference and model ligands
+- - bisy_rmsd_wave
   - float
-  - Weighted average lDDT score for protein-ligand interactions, considering only atoms matched during docking
-- - scrmsd_ave
-  - float
-  - Average symmetry-corrected RMSD between reference and model ligands
-- - scrmsd_wave
-  - float
-  - Weighted average symmetry-corrected RMSD between reference and model ligands
+  - Weighted average binding-site superposed symmetry-corrected RMSD between reference and model ligands
 - - lddt_lp_ave
   - float
   - Average lDDT score for ligand poses

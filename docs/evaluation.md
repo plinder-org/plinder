@@ -38,7 +38,7 @@ leaderboard (coming soon).
 #### Write scores
 
 ```bash
-plinder_eval --prediction_file tests/test_data/eval/predictions.csv --data_dir tests/test_data/eval --output_dir test_eval/ --num_processes 8
+plinder_eval --prediction_file tests/test_data/eval/predictions.csv --output_dir test_eval/ --num_processes 8
 ```
 
 This calculates accuracy metrics for all predicted poses compared to the reference. JSON files of each pose are stored in `test_eval/scores` and the summary file across all poses is stored in `test_eval/scores.parquet`.
@@ -49,10 +49,8 @@ The predicted pose is compared to the reference system and the following ligand 
 - `fraction_model_ligands_mapped`: Fraction of model ligand chains mapped to corresponding reference chains
 - `lddt_pli_ave`: average lDDT-PLI across mapped ligands
 - `lddt_pli_wave`: average lDDT-PLI across mapped ligands weighted by number of atoms
-- `lddt_pli_amd_ave`: average lDDT-PLI including penalising added model contacts across mapped ligands
-- `lddt_pli_wave`: average lDDT-PLI including penalising added model contacts across mapped ligands weighted by number of atoms
-- `scrmsd_ave`: average symmetry-corrected RMSD across mapped ligands
-- `scrmsd_wave`: average symmetry-corrected RMSD across mapped ligands weighted by number of atoms
+- `bisy_rmsd_ave`: average binding-site superposed symmetry-corrected RMSD across mapped ligands
+- `bisy_rmsd_wave`: average binding-site superposed symmetry-corrected RMSD across mapped ligands weighted by number of atoms
 
 If `score_protein` is set to True, the protein in `receptor_file` is compared to the system receptor file and the following scores are calculated:
 
@@ -89,12 +87,10 @@ num_reference_proteins                             1                      2
 num_model_proteins                                 1                      2
 fraction_reference_ligands_mapped                1.0                    1.0
 fraction_model_ligands_mapped                    1.0                    1.0
-lddt_pli_ave                                0.889506               0.557841
-lddt_pli_wave                               0.889506               0.557841
-lddt_pli_amd_ave                             0.85815               0.510695
-lddt_pli_amd_wave                            0.85815               0.510695
-scrmsd_ave                                  1.617184               3.665143
-scrmsd_wave                                 1.617184               3.665143
+lddt_pli_ave                                 0.85815               0.510695
+lddt_pli_wave                                0.85815               0.510695
+bisy_rmsd_ave                               1.617184               3.665143
+bisy_rmsd_wave                              1.617184               3.665143
 rank                                               1                      1
 ```
 
@@ -103,7 +99,7 @@ rank                                               1                      1
 (This command will not need to be run by a user, the `test_set.parquet` and `val_set.parquet` file will be provided with the split release)
 
 ```bash
-plinder_stratify --split_file split.csv --data_dir PLINDER_DATA_DIR --output_dir test_data
+plinder_stratify --split_file split.csv --output_dir test_data
 ```
 
 Makes `test_data/test_set.parquet` which
@@ -135,7 +131,7 @@ pocket_qcov                                     0.0                    0.0
 tanimoto_similarity_max                         0.0                    0.0
 passes_quality                                False                  False
 novel_pocket_pli                               True                   True
-novel_pocket_ligand                            True                   True
+novel_ligand                                   True                   True
 novel_protein                                  True                   True
 novel_all                                      True                   True
 not_novel                                     False                  False
