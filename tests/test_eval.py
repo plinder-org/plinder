@@ -53,7 +53,7 @@ def test_single_protein_single_ligand_scoring(
     system_1a3b, predicted_pose_1a3b, mock_cpl_eval
 ):
     reference_system = PlinderSystem(system_id=system_1a3b)
-    scores = utils.ModelScores.from_files(
+    scores = utils.ModelScores.from_model_files(
         predicted_pose_1a3b.parent.name,
         Path(reference_system.receptor_cif),
         [predicted_pose_1a3b],
@@ -116,7 +116,7 @@ def test_multi_protein_single_ligand_scoring(
     system_1ai5, predicted_pose_1ai5, mock_cpl_eval
 ):
     reference_system = PlinderSystem(system_id=system_1ai5)
-    scores = utils.ModelScores.from_files(
+    scores = utils.ModelScores.from_model_files(
         predicted_pose_1ai5.parent.name,
         Path(reference_system.receptor_cif),
         [predicted_pose_1ai5],

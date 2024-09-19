@@ -313,14 +313,14 @@ def system_save_and_score_representative(
         return
 
     try:
-        scores = utils.ModelScores.from_files(
+        scores = utils.ModelScores.from_model_files(
             link.id,
             save_folder / "superposed.cif",
             link.ligand_files,
             reference_system,
             score_protein=True,
             score_posebusters=True,
-            rigid=False,
+            score_posebusters_full_report=True,
         ).summarize_scores()
         with open(save_folder / "scores.json", "w") as f:
             json.dump(scores, f)
