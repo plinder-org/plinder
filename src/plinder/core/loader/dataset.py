@@ -10,7 +10,6 @@ import torch
 from torch.utils.data import DataLoader, Dataset
 
 from plinder.core.index.system import PlinderSystem, collate_batch, structure2tensor
-from plinder.core.loader.transforms import StructureTransform
 from plinder.core.scores import query_index
 from plinder.core.scores.links import query_links
 from plinder.core.split.utils import get_split
@@ -45,26 +44,14 @@ class PlinderDataset(Dataset):  # type: ignore
         the split to use
     split : str
         the split to sample from
-    file_with_system_ids : str | Path
-        path to a file containing a list of system ids (default: full index)
-    store_file_path : bool, default=True
-        if True, include the file path of the source structures in the dataset
+    split_parquet_path : str | Path, default=None
+        split parquet file
     input_structure_priority : str, default="apo"
         Which alternate structure to proritize
-    structure_transforms: list[StructureTransform], default=[]
-        Transformation to be applied on structure object
     transform: Callable[
         [Structure], torch.Tensor | dict[str, torch.Tensor]
     ] = structure2tensor_transform,
         Transformation to turn structure to input tensors
-    target_transform: Callable[
-        [Structure], torch.Tensor | dict[str, torch.Tensor]
-    ] = structure2tensor_transform,
-        Transformation to turn structure to target tensors
-    crop_equal_monomer_shapes: bool = True,
-        Crop monomers in holo and predicted structure to equal length
-    always_match_alt_struc: bool = True,
-        Boolean to indicate whether to alwayss provide apo-matched holo
     """
 
     def __init__(
@@ -72,19 +59,10 @@ class PlinderDataset(Dataset):  # type: ignore
         df: pd.DataFrame | None = None,
         split: str = "train",
         split_parquet_path: str | Path | None = None,
-        store_file_path: bool = True,
-        num_alternative_structures: int = 0,
-        file_paths_only: bool = False,
-        input_structure_priority: str = "holo",
-        structure_transforms: list[StructureTransform] = [],
+        input_structure_priority: str = "apo",
         transform: Callable[
             [Structure], torch.Tensor | dict[str, torch.Tensor]
         ] = structure2tensor_transform,
-        target_transform: Callable[
-            [Structure], torch.Tensor | dict[str, torch.Tensor]
-        ] = structure2tensor_transform,
-        crop_equal_monomer_shapes: bool = True,
-        always_match_alt_struc: bool = True,
         **kwargs: Any,
     ):
         if df is None:
@@ -92,25 +70,15 @@ class PlinderDataset(Dataset):  # type: ignore
                 df = get_split()
             else:
                 df = pd.read_parquet(split_parquet_path)
-        self._always_match_alt_struc = always_match_alt_struc
         self._sys_ids_with_links = query_links().reference_system_id.unique()
-        if self._always_match_alt_struc:
-            df = df[df.system_id.isin(self._sys_ids_with_links)]
         self._system_ids = df.loc[df["split"] == split, "system_id"].to_list()
         self._num_examples = len(self._system_ids)
-        self._store_file_path = store_file_path or file_paths_only
-
-        self.num_alternative_structures = num_alternative_structures
-        self._file_paths_only = file_paths_only
-        self._input_structure_priority = input_structure_priority
-        self._structure_transforms = structure_transforms
+        self._alternate_structure_priority = input_structure_priority
         self._transform = transform
-        self._target_transform = target_transform
-        self._crop_equal_monomer_shapes = crop_equal_monomer_shapes
 
         plindex = query_index(
             columns=["system_id", "ligand_id", "ligand_rdkit_canonical_smiles"],
-            filters=[("system_id", "in", self._system_ids)],
+            filters=[("system_id", "in", self._system_ids)],  # type: ignore
         )
         plindex["chain_id"] = plindex.ligand_id.apply(lambda x: x.split("__")[-1])
         grouped_plindex = plindex.groupby("system_id").agg(list)[
@@ -137,41 +105,32 @@ class PlinderDataset(Dataset):  # type: ignore
 
         holo_structure = s.holo_structure
         alt_structure = s.alt_structures
-        # if alt_structure is not None:
         apo_structure_map = alt_structure.get("apo")
         pred_structure_map = alt_structure.get("pred")
-        # else:
-        # apo_structure_map = {}
-        # pred_structure_map = {}
-        _structures = {
-            "holo": holo_structure,
+
+        _alt_structures = {
             "apo": apo_structure_map,
             "pred": pred_structure_map,
         }
-        input_structure = _structures[self._input_structure_priority]
-        target_structure = holo_structure
-        for transform in self._structure_transforms:
-            # if input_structure is not None:
-            input_structure = transform(input_structure)
+        if self._alternate_structure_priority == "apo+pred":
+            alternate_structures = _alt_structures
+        else:
+            alternate_structures = {
+                self._alternate_structure_priority: _alt_structures.get(
+                    self._alternate_structure_priority, {}
+                )
+            }
 
-            # if target_structure is not None:
-            target_structure = transform(target_structure)
-
-        # if target_structure is not None:
-        id = target_structure.id
-        # else:
-        #    id = None
         if self._transform is not None:
-            input_complex = self._transform(input_structure)
+            features_and_coords = self._transform(holo_structure)
 
         item: Dict[str, Any] = {
-            "structures": _structures,
-            "id": id,
-            "features_and_coords": input_complex,
+            "system_id": holo_structure.id,
+            "holo_structure": holo_structure,
+            "alternate_structures": alternate_structures,
+            "features_and_coords": features_and_coords,
+            "path": s.system_cif,
         }
-        if self._store_file_path:
-            item["path"] = s.system_cif
-
         return item
 
 

@@ -318,7 +318,7 @@ def make_one_hot_atom_features(atom_name: list[str]) -> list[int]:
 
 
 def get_per_residue_mask(
-    residue_reference_atom_list: list[int], atom_list: list[str]
+    residue_reference_atom_list: list[str], atom_list: list[str]
 ) -> list[int]:
     res_mask = [1 if i in atom_list else 0 for i in residue_reference_atom_list]
     return res_mask

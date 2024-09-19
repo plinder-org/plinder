@@ -440,6 +440,27 @@ class Structure(BaseModel):
         )
         return [seqres_masks[ch] for ch in self.protein_chain_ordered]
 
+    # TODO: review this!!!
+    # @property
+    # def resolved_ligand_mask(self):
+    #     masks = []
+    #     for ch in self.ligand_chain_ordered:
+    #         mol = self.ligand_mols[ch][1]
+    #         matching_idxs = self.ligand_mols[ch][-1]
+    #         masks.append(get_ligand_atom_index_mapping_mask(mol, matching_idxs))
+    #     return masks
+    @property
+    def resolved_smiles_ligand_mask(self) -> list[NDArray[np._int]]:
+        """List of protein chains ordered the way it is in structure."""
+        masks: list[int] = []
+        assert self.ligand_mols is not None
+        for ch in self.ligand_chain_ordered:
+            mol = self.ligand_mols[ch][1]
+            matching_idxs = self.ligand_mols[ch][-1]
+            masks.append(get_ligand_atom_index_mapping_mask(mol, matching_idxs))
+
+        return masks
+
     @property
     def input_sequence_list_ordered_by_chain(self) -> list[str]:
         """List of protein chains ordered the way it is in structure."""

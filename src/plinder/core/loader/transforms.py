@@ -17,4 +17,4 @@ class SelectAtomTypes(StructureTransform):
         self.atom_types = atom_types
 
     def transform(self, structure: Structure) -> Structure:
-        return structure.filter("atom_name", self.atom_types)
+        return structure.filter("atom_name", self.atom_types)  # type: ignore

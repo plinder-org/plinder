@@ -40,8 +40,11 @@ ATOM_TYPE_PAD_VALUE = -1
 
 
 def stack_atom_array_features(
-    atom_arr: _AtomArrayOrStack, atom_arr_feat: str, chain_order_list: list[str]
+    atom_arr: _AtomArrayOrStack,
+    atom_arr_feat: str,
+    chain_order_list: list[str] | None,
 ) -> list[NDArray[np.int_ | np.str_ | np.float_]]:
+    assert chain_order_list is not None
     return [
         getattr(atom_arr[atom_arr.chain_id == chain], atom_arr_feat)
         for chain in chain_order_list
@@ -49,8 +52,9 @@ def stack_atom_array_features(
 
 
 def stack_ligand_feat(
-    feat_dict: dict[str, Any], chain_order_list: list[str]
+    feat_dict: dict[str, Any], chain_order_list: list[str] | None
 ) -> list[list[list[int]]]:
+    assert chain_order_list is not None
     return [feat_dict[chain] for chain in chain_order_list]
 
 
@@ -68,7 +72,7 @@ def structure2tensor(
     atom_type_pad_value: int = ATOM_TYPE_PAD_VALUE,
     residue_id_pad_value: int = RES_IDX_PAD_VALUE,
     coords_pad_value: int = COORDS_PAD_VALUE,
-    dtype=torch.float32,
+    dtype: float = torch.float32,
 ) -> dict[str, torch.Tensor]:
     protein_atom_coordinates = [
         torch.tensor(coord)
@@ -316,8 +320,24 @@ def collate_complex(
 
 
 def collate_batch(
-    batch: list[dict[str, dict[str, Tensor] | str]],
-) -> dict[str, dict[str, Tensor] | list[str]]:
+    batch: list[
+        dict[
+            str,
+            list[str]
+            | list[Structure]
+            | list[dict[str, dict[str, Structure]]]
+            | list[Path]
+            | list[dict[str, Tensor]],
+        ]
+    ],
+) -> dict[
+    str,
+    list[str]
+    | list[Structure]
+    | list[dict[str, dict[str, Structure]]]
+    | list[Path]
+    | list[dict[str, Tensor]],
+]:
     """Collate a batch of PlinderDataset items into a merged mini-batch of Tensors.
 
     Used as the default collate_fn for the torch DataLoader consuming PlinderDataset.
@@ -331,23 +351,37 @@ def collate_batch(
         the merged Tensors for the batch.
 
     """
-
-    sample_ids: list[str] = []
-    structures: list[dict[str, Tensor]] = []
+    system_ids: list[str] = []
+    holo_structures: list[Structure] = []
+    alternate_structures: list[dict[str, dict[str, Structure]]] = []
     feature_and_coords: list[dict[str, Tensor]] = []
+    paths: list[Path] = []
     for x in batch:
-        assert isinstance(x["id"], str)
-        assert isinstance(x["structures"], dict)
+        assert isinstance(x["system_id"], str)
+        assert isinstance(x["holo_structure"], Structure)
+        assert isinstance(x["alternate_structures"], dict)
         assert isinstance(x["features_and_coords"], dict)
+        assert isinstance(x["path"], Path)
 
-        sample_ids.append(x["id"])
-        structures.append(x["structures"])
+        system_ids.append(x["system_id"])
+        holo_structures.append(x["holo_structure"])
+        alternate_structures.append(x["alternate_structures"])
         feature_and_coords.append(x["features_and_coords"])
+        paths.append(x["paths"])
 
-    collated_batch: dict[str, dict[str, Tensor] | list[str]] = {
-        "features_and_coords": collate_complex(feature_and_coords),
-        "id": sample_ids,
-        "structures": structures,
+    collated_batch: dict[
+        str,
+        list[str]
+        | list[Structure]
+        | list[dict[str, dict[str, Structure]]]
+        | list[Path]
+        | list[dict[str, Tensor]],
+    ] = {
+        "system_ids": system_ids,
+        "holo_structures": holo_structures,
+        "alternate_structures": alternate_structures,
+        "paths": paths,
+        "features_and_coords": collate_complex(feature_and_coords),  # type: ignore
     }
     return collated_batch
 
@@ -379,7 +413,7 @@ class PlinderSystem:
         self._chain_mapping: dict[str, Any] | None = None
         self._water_mapping: dict[str, Any] | None = None
         self._linked_structures: pd.DataFrame | None = None
-        self._best_linked_structures: pd.DataFrame | None = None
+        self._best_linked_structures: dict[str, dict[str, str]] = {}
         self._linked_archive: Path | None = None
 
     @property
@@ -586,6 +620,7 @@ class PlinderSystem:
                 zips = get_zips_to_unpack(kind="linked_structures")
             archive = list(zips.keys())[0]
             self._linked_archive = archive.parent
+
         return self._linked_archive
 
     def get_linked_structure(self, link_kind: str, link_id: str) -> str:
@@ -688,18 +723,18 @@ class PlinderSystem:
         return len(self.system_id.split("__")[2].split("_"))
 
     @property
-    def best_linked_structures_paths(self) -> dict[str, str] | None:
+    def best_linked_structures_paths(self) -> dict[str, dict[str, str]]:
         """
         Return single best apo and pred by sort score.
 
         Returns
         -------
-        pd.DataFrame | None
-            dataframe of linked structures if present in plinder
+        dict[str, dict[str, Path]]
+            dictionary of linked structures if present in plinder
         """
         # TODO: This assumes single protein chain holo system.
         # Extend this to make it more general
-        if self._best_linked_structures is None:
+        if self._best_linked_structures == {}:
             links = query_links(filters=[("reference_system_id", "==", self.system_id)])
             best_apo = (
                 links[(links.kind == "apo")].sort_values(by="sort_score").id.to_list()
@@ -717,15 +752,22 @@ class PlinderSystem:
                 best_pred = best_pred[0]
             else:
                 best_pred = None
+            apo_map = {}
+            pred_map = {}
             chain_id = self.system_id.split("__")[2]
+            if best_apo is not None:
+                apo_map = {chain_id: self.get_linked_structure("apo", best_apo)}
+            if best_pred is not None:
+                pred_map = {chain_id: self.get_linked_structure("pred", best_pred)}
+
             self._best_linked_structures = {
-                "apo": {chain_id: self.get_linked_structure("apo", best_apo)},
-                "pred": {chain_id: self.get_linked_structure("pred", best_pred)},
+                "apo": apo_map,
+                "pred": pred_map,
             }
         return self._best_linked_structures
 
     @property
-    def holo_structure(self) -> Structure | None:
+    def holo_structure(self) -> Structure:
         """
         Load holo structure
         """
@@ -733,31 +775,37 @@ class PlinderSystem:
             (Path(sdf_path), self.input_smiles_dict[chain])
             for chain, sdf_path in self.ligands.items()
         ]
-        return Structure.load_structure(
+        struc = Structure.load_structure(
             id=self.system_id,
-            protein_path=self.receptor_cif,
+            protein_path=Path(self.receptor_cif),
             protein_sequence=Path(self.sequences),
             list_ligand_sdf_and_input_smiles=list_ligand_sdf_and_input_smiles,
         )
+        return struc  # type: ignore
 
     @property
-    def alt_structures(self) -> dict[str, dict[str, Structure]] | None:
+    def alt_structures(self) -> dict[str, dict[str, Structure]]:
         """
         Load apo/pred structure
         """
-        best_structures = self.best_linked_structures_paths
         alt_structure_dict = {}
-        for kind, alts in best_structures.items():
-            alt_chain = {}
-            for chain, alt_path in alts.items():
-                try:
-                    alt_chain[chain] = Structure.load_structure(
-                        id=Path(alt_path).parent.name,
-                        protein_path=alt_path,
-                        protein_sequence=Path(self.sequences),
-                        structure_type=kind,
-                    )
-                except Exception:
-                    alt_chain[chain] = None
-            alt_structure_dict[kind] = alt_chain
-        return alt_structure_dict
+        try:
+            best_structures = self.best_linked_structures_paths
+
+            for kind, alts in best_structures.items():
+                alt_chain = {}
+                for chain, alt_path in alts.items():
+                    try:
+                        alt_chain[chain] = Structure.load_structure(
+                            id=Path(alt_path).parent.name,
+                            protein_path=Path(alt_path),
+                            protein_sequence=Path(self.sequences),
+                            structure_type=kind,
+                        )
+                    except Exception:
+                        LOG.warning(f"alt_structures: no {kind} found for {chain}")
+                alt_structure_dict[kind] = alt_chain
+        except Exception:
+            LOG.warning("alt_structures: alt structure fouend")
+            alt_structure_dict = {"apo": {}, "pred": {}}
+        return alt_structure_dict  # type: ignore
