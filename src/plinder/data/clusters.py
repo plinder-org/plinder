@@ -88,6 +88,9 @@ def make_nk_graph(
     system_ids_cat: pd.CategoricalDtype,
     directed: bool,
     weighted: bool,
+    query_col: str = "query_system",
+    target_col: str = "target_system",
+    similarity_col: str = "similarity",
 ) -> tuple[nk.graph.Graph, pd.CategoricalDtype]:
     """
     Make networkit graphs
@@ -107,16 +110,14 @@ def make_nk_graph(
     -------
     graph
     """
-    df[["query_system", "target_system"]] = df[
-        ["query_system", "target_system"]
-    ].astype(system_ids_cat)
+    df[[query_col, target_col]] = df[[query_col, target_col]].astype(system_ids_cat)
     if weighted:
         graph = nk.GraphFromCoo(
             (
-                df["similarity"].values / 100.0,
+                df[similarity_col].values / 100.0,
                 (
-                    df["query_system"].cat.codes.to_numpy(dtype=np.uint, copy=False),
-                    df["target_system"].cat.codes.to_numpy(dtype=np.uint, copy=False),
+                    df[query_col].cat.codes.to_numpy(dtype=np.uint, copy=False),
+                    df[target_col].cat.codes.to_numpy(dtype=np.uint, copy=False),
                 ),
             ),
             weighted=True,
@@ -126,8 +127,8 @@ def make_nk_graph(
     else:
         graph = nk.GraphFromCoo(
             (
-                df["query_system"].cat.codes.to_numpy(dtype=np.uint, copy=False),
-                df["target_system"].cat.codes.to_numpy(dtype=np.uint, copy=False),
+                df[query_col].cat.codes.to_numpy(dtype=np.uint, copy=False),
+                df[target_col].cat.codes.to_numpy(dtype=np.uint, copy=False),
             ),
             n=num_systems,
             directed=directed,
