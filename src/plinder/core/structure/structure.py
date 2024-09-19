@@ -23,6 +23,7 @@ from rdkit import Chem
 from plinder.core.structure.atoms import (
     atom_array_from_cif_file,
     generate_input_conformer,
+    get_ligand_atom_index_mapping_mask,
     get_residue_index_mapping_mask,
     get_template_to_mol_matches,
     make_atom_mask,
@@ -544,7 +545,7 @@ class Structure(BaseModel):
     def input_ligand_conformers(self) -> dict[str, Chem.Mol]:
         """Ligand 3D mol conformer objects from input SMILES"""
         assert self.ligand_mols is not None
-        return {tag: mol_tuple[1] for tag, mol_tuple in self.ligand_mols.items()}
+        return {tag: mol_tuple[0] for tag, mol_tuple in self.ligand_mols.items()}
 
     # # TODO: discuss if the below masks are useful
     # # maybe best to use index_sorting_masks to be done
@@ -608,7 +609,7 @@ class Structure(BaseModel):
 
     @property
     def input_ligand_conformer2smiles_stacks(
-        self
+        self,
     ) -> dict[str, tuple[NDArray, NDArray]]:
         """for every ligand it generates a pair of stacks providing atom index sort to match conformer to input SMILES"""
         return (
@@ -630,7 +631,7 @@ class Structure(BaseModel):
 
     @property
     def input_ligand_conformer2resolved_stacks(
-        self
+        self,
     ) -> dict[str, tuple[NDArray, NDArray]]:
         """for every ligand it generates a pair of stacks providing atom index sort to match conformer to holo"""
         return (

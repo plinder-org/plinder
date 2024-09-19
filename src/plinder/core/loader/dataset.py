@@ -25,7 +25,6 @@ def structure2tensor_transform(structure: Structure) -> dict[str, torch.Tensor]:
         resolved_ligand_mols_coords=structure.resolved_ligand_mols_coords,
         input_ligand_conformers=structure.input_ligand_conformers,
         # TODO: Fix this, Using conformer mask don't make any sense
-        input_ligand_conformer_masks=structure.input_ligand_conformer_masks,
         input_ligand_conformer_coords=structure.input_ligand_conformer_coords,
         protein_chain_ordered=structure.protein_chain_ordered,
         ligand_chain_ordered=structure.ligand_chain_ordered,
