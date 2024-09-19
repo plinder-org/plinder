@@ -492,22 +492,9 @@ class Structure(BaseModel):
         assert self.ligand_mols is not None
         return {tag: mol_tuple[1] for tag, mol_tuple in self.ligand_mols.items()}
 
-    @property
-    def input_ligand_conformer_masks(self) -> dict[str, list[tuple[int]]]:
-        """
-        Map matched template ligands to input ligands conformer
-        and convert the indices to binary mask.
-        """
-        masks = []
-        for ch in self.ligand_chain_ordered:
-            mol = self.ligand_mols[ch][3]
-            matching_idxs = self.ligand_mols[ch][2]
-            masks.append(get_ligand_atom_index_mapping_mask(mol, matching_idxs))
-        return masks
-
     # TODO: VO check if it makes sense
     @property
-    def ligand_conformer2resolved_mask(self):
+    def ligand_conformer2resolved_mask(self) -> dict[str, NDArray[np.int]]:
         """
         dict[NDArray]: Dictionary of ndarray of matching conformer
         ids sorted by resolved ligand indices"""
@@ -518,7 +505,8 @@ class Structure(BaseModel):
             stacks_zipped = list(zip(stacks[0][0], stacks[1][0]))
             # sort by resolved ligand indices
             stacks_zipped_resolved_indices_sorted = sorted(
-                stacks_zipped, key=lambda x: x[1]
+                stacks_zipped,
+                key=lambda x: x[1],  # type: ignore
             )
             masks[tag] = np.array([i[0] for i in stacks_zipped_resolved_indices_sorted])
         return masks
