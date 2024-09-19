@@ -7,7 +7,6 @@ import biotite.structure as struc
 import numpy as np
 from biotite.structure.atoms import AtomArray
 from numpy.typing import NDArray
-from pinder.core.loader.structure import _superimpose_common_atoms
 from pinder.core.structure import surgery
 from pinder.core.structure.atoms import (
     get_per_chain_seq_alignments,
@@ -32,8 +31,6 @@ from plinder.core.structure.atoms import (
 )
 from plinder.core.utils import constants as pc
 from plinder.core.utils.config import get_config
-
-# TODO: Decide whether to lift these from pinder or import them
 from plinder.core.utils.log import setup_logger
 
 if TYPE_CHECKING:
@@ -96,17 +93,15 @@ class Structure(BaseModel):
     ligand_mols : ligand_mols: Optional[
         dict[
             str,
-            tuple[Chem.rdchem.Mol, Chem.rdchem.Mol, Chem.rdchem.Mol, tuple[int, ...]],
+            tuple[Chem.Mol, Chem.Mol, tuple[NDArray, NDArray], Chem.rdchem.Mol,
+            tuple[NDArray, NDArray], tuple[NDArray, NDArray]]
         ]
     ]
-    # TODO: this is a WRONG description!!
-        Dictionary of template molecule loaded from smiles (2D), template conformer,
-        array of conformer-template matching atom ids, resolved mol, resolved atom matches
-          template_mol,
-                        template_mol_conformer,
-                        _conformer_atom_matches,
-                        resolved_mol,
-                        _resolved_atom_matches,
+    # TODO:
+    Dictionary of template molecule loaded from smiles (2D), template conformer,
+        array of conformer-template matching atom ids, resolved mol,
+        array of resolved molecule-template matching atom ids,
+        array of conformer-resolved molecule matching atom ids
     add_ligand_hydrogens : bool = False
         Whether to add hydrogen to ligand or not
     structure_type : str = "holo"
@@ -207,14 +202,6 @@ class Structure(BaseModel):
                     conformer2resolved_stacks = get_template_to_mol_matches(
                         template_mol_conformer, resolved_mol
                     )
-
-                    # TODO: Double check with VO
-                    # Extract the template indices that are matches
-                    # _conformer_atom_matches = [i[1] for i in conformer_atom_matches[0]]
-                    # _resolved_atom_matches = [i[1] for i in resolved_atom_matches[0]]
-                    # _conformer_atom_matches = tuple(conformer_atom_matches[0].values())
-                    # _resolved_atom_matches = tuple(resolved_atom_matches[0].values())
-
                     structure.ligand_mols[ligand_sdf.stem] = (
                         template_mol,
                         template_mol_conformer,
@@ -392,45 +379,6 @@ class Structure(BaseModel):
                 chain_id, self.protein_atom_array.shape[0]
             )
 
-    def superimpose(
-        self,
-        other: Structure,
-    ) -> tuple[Structure, float, float]:
-        assert (other.protein_atom_array) is not None and (
-            self.protein_atom_array is not None
-        )
-        # max_iterations=1 -> no outlier removal
-        superimposed, _, other_anchors, self_anchors = _superimpose_common_atoms(
-            other.protein_atom_array, self.protein_atom_array, max_iterations=1
-        )
-        raw_rmsd = struc.rmsd(
-            other.protein_atom_array.coord[other_anchors],
-            superimposed.coord[self_anchors],
-        )
-
-        superimposed, _, other_anchors, self_anchors = _superimpose_common_atoms(
-            other.protein_atom_array, self.protein_atom_array
-        )
-        refined_rmsd = struc.rmsd(
-            other.protein_atom_array.coord[other_anchors],
-            superimposed.coord[self_anchors],
-        )
-
-        return (
-            Structure(
-                id=self.id,
-                protein_path=self.protein_path,
-                protein_sequence=self.protein_sequence,
-                list_ligand_sdf_and_input_smiles=self.list_ligand_sdf_and_input_smiles,
-                protein_atom_array=superimposed,
-                ligand_mols=self.ligand_mols,
-                add_ligand_hydrogens=self.add_ligand_hydrogens,
-                structure_type=self.structure_type,
-            ),
-            raw_rmsd,
-            refined_rmsd,
-        )
-
     @property
     def input_sequence_stacked_mask(self) -> list[list[int]]:
         """Input sequence stacked by chain"""
@@ -511,11 +459,8 @@ class Structure(BaseModel):
     @property
     def ligand_chain_ordered(self) -> list[str]:
         """List of Ligand chains sorted in order."""
-        if self.list_ligand_sdf_and_input_smiles is not None:
-            return [
-                path_and_smiles[0].stem
-                for path_and_smiles in self.list_ligand_sdf_and_input_smiles
-            ]
+        if self.ligand_mols is not None:
+            return sorted(self.ligand_mols.keys())
         else:
             return []
 
@@ -545,60 +490,48 @@ class Structure(BaseModel):
     def input_ligand_conformers(self) -> dict[str, Chem.Mol]:
         """Ligand 3D mol conformer objects from input SMILES"""
         assert self.ligand_mols is not None
-        return {tag: mol_tuple[0] for tag, mol_tuple in self.ligand_mols.items()}
+        return {tag: mol_tuple[1] for tag, mol_tuple in self.ligand_mols.items()}
 
-    # # TODO: discuss if the below masks are useful
-    # # maybe best to use index_sorting_masks to be done
-    # @property
-    # def input_ligand_template_masks(self) -> dict[str, list[tuple[int]]]:
-    #     """
-    #     Map matched template ligands to input resolved ligands
-    #     and convert the indices to binary mask."""
-    #     masks = []
-    #     for ch in self.ligand_chain_ordered:
-    #         mol = self.ligand_mols[ch][0]
-    #         matching_idxs = self.ligand_mols[ch][4]
-    #         masks.append(get_ligand_atom_index_mapping_mask(mol, matching_idxs))
-    #     return masks
+    @property
+    def input_ligand_conformer_masks(self) -> dict[str, list[tuple[int]]]:
+        """
+        Map matched template ligands to input ligands conformer
+        and convert the indices to binary mask.
+        """
+        masks = []
+        for ch in self.ligand_chain_ordered:
+            mol = self.ligand_mols[ch][3]
+            matching_idxs = self.ligand_mols[ch][2]
+            masks.append(get_ligand_atom_index_mapping_mask(mol, matching_idxs))
+        return masks
 
-    # @property
-    # def input_ligand_conformer_masks(self) -> dict[str, list[tuple[int]]]:
-    #     """
-    #     Map matched template ligands to input ligands conformer
-    #     and convert the indices to binary mask."""
-    #     masks = []
-    #     for ch in self.ligand_chain_ordered:
-    #         mol = self.ligand_mols[ch][3]
-    #         matching_idxs = self.ligand_mols[ch][2]
-    #         masks.append(get_ligand_atom_index_mapping_mask(mol, matching_idxs))
-    #     return masks
-
-    # @property
-    # def resolved_ligand_masks(self) -> list[list[int]]:
-    #     """List of matched ligand atom lists ordered the way it is in structure."""
-    #     masks = []
-    #     for ch in self.ligand_chain_ordered:
-    #         mol = self.ligand_mols[ch][1]
-    #         matching_idxs = self.ligand_mols[ch][-1]
-    #         masks.append(get_ligand_atom_index_mapping_mask(mol, matching_idxs))
-    #     return masks
-
-    # @property
-    # def input_ligand_template_coords(self) -> dict[str, NDArray[np.double]]:
-    #     """ndarray[np.double]: The coordinates of the input 2D conformer generated from input SMILES"""
-    #     ligand_coords: NDArray[np.double] = {
-    #         tag: mol.GetConformer().GetPositions()
-    #         for tag, mol in self.input_ligand_templates.items()
-    #     }
-    #     return ligand_coords
+    # TODO: VO check if it makes sense
+    @property
+    def ligand_conformer2resolved_mask(self):
+        """
+        dict[NDArray]: Dictionary of ndarray of matching conformer
+        ids sorted by resolved ligand indices"""
+        assert self.ligand_mols is not None
+        masks = {}
+        for tag, stacks in self.input_ligand_conformer2resolved_stacks.items():
+            # Select the best mask
+            stacks_zipped = list(zip(stacks[0][0], stacks[1][0]))
+            # sort by resolved ligand indices
+            stacks_zipped_resolved_indices_sorted = sorted(
+                stacks_zipped, key=lambda x: x[1]
+            )
+            masks[tag] = np.array([i[0] for i in stacks_zipped_resolved_indices_sorted])
+        return masks
 
     @property
     def input_ligand_conformer_coords(self) -> dict[str, NDArray[np.double]]:
-        """ndarray[np.double]: The coordinates of the input 3D conformer generated from input SMILES"""
-        ligand_coords: dict[str, NDArray[np.double]] = {
-            tag: mol.GetConformer().GetPositions()
-            for tag, mol in self.input_ligand_conformers.items()
-        }
+        """dict[NDArray]: The coordinates of the input 3D conformer generated from input SMILES"""
+        ligand_coords: dict[str, NDArray[np.double]] = {}
+        for tag, mol in self.input_ligand_conformers.items():
+            try:
+                ligand_coords[tag] = mol.GetConformer().GetPositions()
+            except ValueError:
+                ligand_coords[tag] = np.array(len(mol.GetAtoms()) * [[0.0, 0.0, 0.0]])
         return ligand_coords
 
     @property

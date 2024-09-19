@@ -65,8 +65,8 @@ def structure2tensor(
     input_sequence_full_atom_feat: NDArray[np.int_] | None = None,
     resolved_ligand_mols_coords: dict[str, NDArray[np.float_]] | None = None,
     input_ligand_conformer_coords: dict[str, NDArray[np.float_]] | None = None,
-    input_ligand_conformer_masks: list[NDArray[np.int_]] | None = None,
     input_ligand_conformers: dict[str, Chem.rdchem.Mol] | None = None,
+    ligand_conformer2resolved_mask: dict[str, NDArray[np.int_]] | None = None,
     protein_chain_ordered: list[str] | None = None,
     ligand_chain_ordered: list[str] | None = None,
     atom_type_pad_value: int = ATOM_TYPE_PAD_VALUE,
@@ -124,7 +124,7 @@ def structure2tensor(
         for chain_residue_types in protein_residue_types:
             types_array_res_by_chain = np.zeros((len(chain_residue_types), 1))
 
-            for res_index, name in enumerate(chain_atom_types):
+            for res_index, name in enumerate(chain_residue_types):
                 types_array_res_by_chain[res_index] = pc.AA_TO_INDEX.get(
                     name, unknown_name_idx
                 )
@@ -228,14 +228,17 @@ def structure2tensor(
             dim=0,
             value=coords_pad_value,
         )
+    if ligand_conformer2resolved_mask is not None:
+        ligand_mask = {ch: mask for ch, mask in ligand_conformer2resolved_mask.items()}
 
-    if input_ligand_conformer_masks is not None:
-        lig_masks = pad_and_stack(
-            [torch.tensor(mask) for mask in input_ligand_conformer_masks],
+        property_dict["ligand_conformer2resolved_mask"] = pad_and_stack(
+            [
+                torch.tensor(m)
+                for m in stack_ligand_feat(ligand_mask, ligand_chain_ordered)
+            ],
             dim=0,
             value=coords_pad_value,
         )
-        property_dict["input_ligand_conformer_masks"] = lig_masks
 
     return property_dict
 
@@ -257,9 +260,9 @@ def collate_complex(
     ligand_features = []
     ligand_conformer_atom_coordinates = []
     resolved_ligand_mols_coords = []
-    input_ligand_conformer_masks = []
     input_sequence_full_atom_feat = []
     protein_calpha_coordinates = []
+    ligand_conformer2resolved_mask = []
 
     for x in structures:
         protein_atom_types.append(x["protein_atom_types"])
@@ -272,7 +275,7 @@ def collate_complex(
         ligand_features.append(x["ligand_features"])
         ligand_conformer_atom_coordinates.append(x["ligand_conformer_atom_coordinates"])
         resolved_ligand_mols_coords.append(x["resolved_ligand_mols_coords"])
-        input_ligand_conformer_masks.append(x["input_ligand_conformer_masks"])
+        ligand_conformer2resolved_mask.append(x["ligand_conformer2resolved_mask"])
         input_sequence_full_atom_feat.append(x["input_sequence_full_atom_feat"])
         protein_calpha_coordinates.append(x["protein_calpha_coordinates"])
 
@@ -307,14 +310,14 @@ def collate_complex(
         "resolved_ligand_mols_coords": pad_and_stack(
             resolved_ligand_mols_coords, dim=0, value=coords_pad_value
         ),
-        "input_ligand_conformer_masks": pad_and_stack(
-            input_ligand_conformer_masks, dim=0, value=coords_pad_value
-        ),
         "input_sequence_full_atom_feat": pad_and_stack(
             input_sequence_full_atom_feat, dim=0, value=coords_pad_value
         ),
         "protein_calpha_coordinates": pad_and_stack(
             protein_calpha_coordinates, dim=0, value=coords_pad_value
+        ),
+        "ligand_conformer2resolved_mask": pad_and_stack(
+            ligand_conformer2resolved_mask, dim=0, value=coords_pad_value
         ),
     }
 
@@ -361,13 +364,13 @@ def collate_batch(
         assert isinstance(x["holo_structure"], Structure)
         assert isinstance(x["alternate_structures"], dict)
         assert isinstance(x["features_and_coords"], dict)
-        assert isinstance(x["path"], Path)
+        assert isinstance(x["path"], str)
 
         system_ids.append(x["system_id"])
         holo_structures.append(x["holo_structure"])
         alternate_structures.append(x["alternate_structures"])
         feature_and_coords.append(x["features_and_coords"])
-        paths.append(x["paths"])
+        paths.append(x["path"])
 
     collated_batch: dict[
         str,

@@ -175,7 +175,12 @@ def generate_input_conformer(template_mol: Mol, addHs: bool = True) -> Mol:
     conformer_atom_matches = get_template_to_mol_matches(template_mol, _mol)
     ps = AllChem.ETKDGv2()
     ps.useRandomCoords = True
-    AllChem.EmbedMolecule(_mol, ps)
+    # Large molecules like peptides fails with default maxAttempts
+    ps.maxAttempts = 5000
+    AllChem.EmbedMolecule(
+        _mol,
+        ps,
+    )
     AllChem.MMFFOptimizeMolecule(_mol, confId=0)
     return _mol, conformer_atom_matches
 

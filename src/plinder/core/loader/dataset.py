@@ -24,7 +24,7 @@ def structure2tensor_transform(structure: Structure) -> dict[str, torch.Tensor]:
         input_sequence_full_atom_feat=structure.input_sequence_full_atom_feat,
         resolved_ligand_mols_coords=structure.resolved_ligand_mols_coords,
         input_ligand_conformers=structure.input_ligand_conformers,
-        # TODO: Fix this, Using conformer mask don't make any sense
+        ligand_conformer2resolved_mask=structure.ligand_conformer2resolved_mask,
         input_ligand_conformer_coords=structure.input_ligand_conformer_coords,
         protein_chain_ordered=structure.protein_chain_ordered,
         ligand_chain_ordered=structure.ligand_chain_ordered,
@@ -103,34 +103,35 @@ class PlinderDataset(Dataset):  # type: ignore
         )
 
         holo_structure = s.holo_structure
-        alt_structure = s.alt_structures
-        apo_structure_map = alt_structure.get("apo")
-        pred_structure_map = alt_structure.get("pred")
+        if len(holo_structure.ligand_mols) != 0:
+            alt_structure = s.alt_structures
+            apo_structure_map = alt_structure.get("apo")
+            pred_structure_map = alt_structure.get("pred")
 
-        _alt_structures = {
-            "apo": apo_structure_map,
-            "pred": pred_structure_map,
-        }
-        if self._alternate_structure_priority == "apo+pred":
-            alternate_structures = _alt_structures
-        else:
-            alternate_structures = {
-                self._alternate_structure_priority: _alt_structures.get(
-                    self._alternate_structure_priority, {}
-                )
+            _alt_structures = {
+                "apo": apo_structure_map,
+                "pred": pred_structure_map,
             }
+            if self._alternate_structure_priority == "apo+pred":
+                alternate_structures = _alt_structures
+            else:
+                alternate_structures = {
+                    self._alternate_structure_priority: _alt_structures.get(
+                        self._alternate_structure_priority, {}
+                    )
+                }
 
-        if self._transform is not None:
-            features_and_coords = self._transform(holo_structure)
+            if self._transform is not None:
+                features_and_coords = self._transform(holo_structure)
 
-        item: Dict[str, Any] = {
-            "system_id": holo_structure.id,
-            "holo_structure": holo_structure,
-            "alternate_structures": alternate_structures,
-            "features_and_coords": features_and_coords,
-            "path": s.system_cif,
-        }
-        return item
+            item: Dict[str, Any] = {
+                "system_id": holo_structure.id,
+                "holo_structure": holo_structure,
+                "alternate_structures": alternate_structures,
+                "features_and_coords": features_and_coords,
+                "path": s.system_cif,
+            }
+            return item
 
 
 def get_torch_loader(
