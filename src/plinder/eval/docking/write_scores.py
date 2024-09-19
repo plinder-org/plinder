@@ -4,14 +4,13 @@ from __future__ import annotations
 
 import json
 import multiprocessing
-from collections import defaultdict
 from pathlib import Path
-from zipfile import ZipFile
 
 import numpy as np
 import ost
 import pandas as pd
 
+from plinder.core.system.system import PlinderSystem
 from plinder.core.utils.log import setup_logger
 from plinder.eval.docking import utils
 
@@ -21,7 +20,6 @@ LOG = setup_logger(__name__)
 
 def write_scores_as_json(
     scorer_input: pd.Series,
-    system_dir: Path,
     output_file: Path,
     overwrite: bool = False,
     predictions_dir: Path | None = None,
@@ -33,8 +31,6 @@ def write_scores_as_json(
     ----------
     scorer_input: pd.Series
         row with [id, reference_system_id, receptor_file, ligand_file, rank, confidence] attributes
-    system_dir: Path
-        Path to *extracted* system files of the test set
     output_file: Path
         Path to save score json file
     overwrite: bool
@@ -44,10 +40,7 @@ def write_scores_as_json(
         if not overwrite and output_file.exists():
             LOG.warning(f"get_scores: {output_file} exists")
             return
-        reference_system = utils.ReferenceSystem.from_reference_system(
-            system_dir / scorer_input.reference_system_id,
-            scorer_input.reference_system_id,
-        )
+        reference_system = PlinderSystem(system_id=scorer_input.reference_system_id)
         import sys
 
         print(scorer_input, file=sys.stderr, flush=True)
@@ -65,13 +58,15 @@ def write_scores_as_json(
             ):
                 receptor_file = predictions_dir / receptor_file
             else:
-                receptor_file = reference_system.receptor_cif_file
+                assert reference_system.receptor_cif is not None
+                receptor_file = Path(reference_system.receptor_cif)
         else:
-            receptor_file = reference_system.receptor_cif_file
+            receptor_file = Path(reference_system.receptor_cif)
         if ligand_file is not None and not ligand_file.exists():
             if predictions_dir is not None and (predictions_dir / ligand_file).exists():
                 ligand_file = predictions_dir / ligand_file
-
+        assert receptor_file is not None
+        assert ligand_file is not None
         scores = utils.ModelScores.from_files(
             scorer_input.id,
             receptor_file,
@@ -90,28 +85,8 @@ def write_scores_as_json(
         return
 
 
-def extract_test_systems(
-    system_dir: Path, systems: list[str], output_dir: Path, overwrite: bool = False
-) -> None:
-    per_two_char = defaultdict(set)
-    for system in systems:
-        per_two_char[system[1:3]].add(system)
-    LOG.info(
-        f"Extracting {len(systems)} systems from {len(per_two_char)} two character codes"
-    )
-    for two_char in per_two_char:
-        with ZipFile(system_dir / f"{two_char}.zip") as archive:
-            for name in archive.namelist():
-                if name.split("/")[0] in per_two_char[two_char]:
-                    output_file = output_dir / name
-                    if not overwrite and output_file.exists():
-                        continue
-                    archive.extract(name, output_dir)
-
-
 def score_test_set(
     prediction_file: Path,
-    system_dir: Path,
     output_dir: Path,
     output_file: Path,
     num_processes: int = 8,
@@ -153,7 +128,6 @@ def score_test_set(
             [
                 (
                     row,
-                    system_dir,
                     row.output_file,
                     overwrite,
                     prediction_file.parent,
@@ -176,54 +150,22 @@ def score_test_set(
     pd.DataFrame(scores).to_parquet(output_file, index=False)
 
 
-def extract_and_score_test_set(
-    prediction_file: Path,
-    data_dir: Path,
-    output_dir: Path,
-    num_processes: int,
-    overwrite: bool = False,
-) -> None:
-    predictions = pd.read_csv(prediction_file)
-    test_systems = set(predictions["reference_system_id"])
-    system_dir = output_dir / "test_systems"
-    system_dir.mkdir(parents=True, exist_ok=True)
-    (output_dir / "scores").mkdir(parents=True, exist_ok=True)
-    if not overwrite:
-        test_systems = test_systems - set(x.name for x in system_dir.iterdir())
-    system_dir.mkdir(exist_ok=True)
-    extract_test_systems(
-        data_dir / "systems", list(test_systems), system_dir, overwrite=overwrite
-    )
-    score_test_set(
-        prediction_file,
-        system_dir,
-        output_dir / "scores",
-        output_dir / "scores.parquet",
-        num_processes=num_processes,
-        overwrite=overwrite,
-    )
-
-
-def main() -> None:
+def evaluate_cmd(args: list[str] | None = None) -> None:
+    """
+    Evaluate a set of docking/cofolding predictions against a set of reference Plinder systems.
+    """
     import argparse
 
-    parser = argparse.ArgumentParser(
-        description="Evaluate a set of docking predictions"
-    )
+    parser = argparse.ArgumentParser(usage=evaluate_cmd.__doc__)
     parser.add_argument(
         "--prediction_file",
         type=Path,
         help="Path to prediction file with [id, reference_system_id, receptor_file, ligand_file, rank, confidence] as columns",
     )
     parser.add_argument(
-        "--data_dir",
-        type=Path,
-        help="Path to plinder data",
-    )
-    parser.add_argument(
         "--output_dir",
         type=Path,
-        help="Path to output folder where test systems and score JSON files are saved",
+        help="Path to output folder where score JSON files are saved",
     )
     parser.add_argument(
         "--num_processes",
@@ -235,17 +177,21 @@ def main() -> None:
         action="store_true",
         help="Overwrite max similarity files",
     )
+    ns, unknown_args = parser.parse_known_args(args=args)
+    if len(unknown_args):
+        LOG.warning(f"ignoring arguments {unknown_args}")
+    LOG.info(f"Evaluating {ns.prediction_file} and saving to {ns.output_dir}")
+    Path(ns.output_dir).mkdir(parents=True, exist_ok=True)
+    Path(ns.output_dir / "scores").mkdir(parents=True, exist_ok=True)
 
-    args = parser.parse_args()
-
-    extract_and_score_test_set(
-        args.prediction_file,
-        args.data_dir,
-        args.output_dir,
-        num_processes=args.num_processes,
-        overwrite=args.overwrite,
+    score_test_set(
+        prediction_file=ns.prediction_file,
+        output_dir=Path(ns.output_dir) / "scores",
+        output_file=Path(ns.output_dir) / "scores.parquet",
+        num_processes=ns.num_processes,
+        overwrite=ns.overwrite,
     )
 
 
 if __name__ == "__main__":
-    main()
+    evaluate_cmd()
