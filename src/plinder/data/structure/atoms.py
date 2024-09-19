@@ -16,9 +16,9 @@ log = setup_logger(__name__)
 
 # TODO: this is likely a redundant function - only used for atom_array_from_cif_file below
 def biotite_ciffile() -> TextFile:
-    from biotite.structure.io.pdbx import PDBxFile
+    from biotite.structure.io.pdbx import CIFFile
 
-    return PDBxFile
+    return CIFFile
 
 
 # TODO: this is likely a redundant function - only used for interface gaps

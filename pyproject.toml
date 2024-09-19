@@ -2,7 +2,7 @@
 name = "plinder"
 dynamic = ["version"]
 dependencies = [
-    "biotite == 0.39.0",
+    "biotite >= 1.0",
     "numpy<2",
     "pandas",
     "typing_extensions",
@@ -26,7 +26,7 @@ dependencies = [
 ]
 description = "PLINDER: The Protein-Ligand INteraction Dataset and Evaluation Resource"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: Apache Software License",
