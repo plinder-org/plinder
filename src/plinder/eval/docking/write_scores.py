@@ -127,15 +127,36 @@ def write_scores_as_json(
         if not overwrite and output_file.exists():
             LOG.warning(f"get_scores: {output_file} exists")
             return
-        import sys
+        reference_system = PlinderSystem(system_id=scorer_input.reference_system_id)
+        receptor_file = None
+        if scorer_input.receptor_file is not None and not np.isnan(
+            scorer_input.receptor_file
+        ):
+            receptor_file = Path(scorer_input.receptor_file)
+        ligand_file = Path(scorer_input.ligand_file)
 
-        print(scorer_input, file=sys.stderr, flush=True)
+        if receptor_file is not None and not receptor_file.exists():
+            if (
+                predictions_dir is not None
+                and (predictions_dir / receptor_file).exists()
+            ):
+                receptor_file = predictions_dir / receptor_file
+            else:
+                assert reference_system.receptor_cif is not None
+                receptor_file = Path(reference_system.receptor_cif)
+        else:
+            receptor_file = Path(reference_system.receptor_cif)
+        if ligand_file is not None and not ligand_file.exists():
+            if predictions_dir is not None and (predictions_dir / ligand_file).exists():
+                ligand_file = predictions_dir / ligand_file
+        assert receptor_file is not None
+        assert ligand_file is not None
         scores = evaluate(
             scorer_input.id,
             scorer_input.reference_system_id,
-            scorer_input.receptor_file,
+            receptor_file,
             [
-                scorer_input.ligand_file
+                ligand_file,
             ],  # TODO: change to accept multi-ligand prediction input
             predictions_dir,
             flexible,
