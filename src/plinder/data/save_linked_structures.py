@@ -12,6 +12,7 @@ import pandas as pd
 from ost import io, mol
 
 from plinder.core import scores
+from plinder.core.system.system import PlinderSystem
 from plinder.core.utils.log import setup_logger
 from plinder.data.utils.annotations.save_utils import save_cif_file
 from plinder.eval.docking import utils
@@ -252,7 +253,7 @@ def save_superposition(
     save_folder: Path,
     search_db: str,
     link: pd.Series,
-    reference_system: utils.ReferenceSystem,
+    reference_system: PlinderSystem,
     overwrite: bool = False,
 ) -> bool:
     if not overwrite and (save_folder / "superposed.cif").exists():
@@ -278,7 +279,7 @@ def save_superposition(
         target_chain = link.id.split("_")[-1]
     try:
         superpose_to_system(
-            system_mol=reference_system.entity,
+            system_mol=reference_system.receptor_entity,
             target_cif_file=target_cif_file,
             save_folder=save_folder,
             name_mapping=name_mapping,
@@ -292,7 +293,7 @@ def save_superposition(
 
 def system_save_and_score_representative(
     link: pd.Series,
-    reference_system: utils.ReferenceSystem,
+    reference_system: PlinderSystem,
     data_dir: Path,
     search_db: str,
     output_folder: Path,
@@ -338,10 +339,7 @@ def system_save_and_score_representatives(
     overwrite: bool = False,
 ) -> None:
     try:
-        reference_system = utils.ReferenceSystem.from_reference_system(
-            data_dir / "raw_entries" / system[1:3] / system,
-            system,
-        )
+        reference_system = PlinderSystem(system_id=system)
     except Exception as e:
         LOG.error(
             f"system_save_and_score_representatives: Error in making reference system: {e}"
