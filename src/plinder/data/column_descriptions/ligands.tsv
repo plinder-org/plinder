@@ -1,0 +1,55 @@
+Name	Type	Description
+ligand_asym_id	str	Ligand chain asymmetric id
+ligand_instance	int	Biounit instance ID
+ligand_ccd_code	str	Ligand Chemical Component Dictionary (CCD) code
+ligand_plip_type	str	PLIP ligand type
+ligand_bird_id	str	Ligand BIRD id
+ligand_centroid	list[float]	Ligand center of geometry
+ligand_smiles	str	Ligand SMILES based on OpenStructure dictionary lookup, or resolved SMILES if not in dictionary
+ligand_resolved_smiles	str	SMILES of only resolved ligand atoms
+ligand_rdkit_canonical_smiles	str | None	RDKit canonical SMILES
+ligand_molecular_weight	float | None	Molecular weight
+ligand_crippen_clogp	float | None	Ligand Crippen MlogP, see https://www.rdkit.org/docs/source/rdkit.Chem.Crippen.html
+ligand_num_rot_bonds	int | None	Number of rotatable bonds
+ligand_num_hbd	int | None	Number of hydrogen bond donors
+ligand_num_hba	int | None	Number of hydrogen bond acceptors
+ligand_num_rings	int | None	Number of rings
+ligand_num_heavy_atoms	int | None	Number of heavy atoms
+ligand_is_covalent	bool	Indicator of whether a ligand  is a covalent ligand
+ligand_covalent_linkages	set[str]	Ligand covalent linkages as described in https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Categories/struct_conn.html with _struct_conn.conn_type_id == 'covale', reported in format {auth_resid}:{resname}{assym_id}{seq_resid}{atom_name}__{auth_resid}:{resname}{assym_id}{seq_resid}{atom_name}
+ligand_neighboring_residues	dict[str, list[int]]	Dictionary of neighboring residues, with {instance}.{chain} key and residue number value
+ligand_interacting_residues	dict[str, list[int]]	Dictionary of interacting residues, with {instance}.{chain} key and residue number value
+ligand_num_neighboring_ppi_atoms_within_4A_of_gap	int | None	Number of missing neighboring protein-protein interface atoms within 4 Å of ligand of interest
+ligand_num_neighboring_ppi_atoms_within_8A_of_gap	int | None	Number of missing neighboring protein-protein interface atoms within 8 Å of ligand of interest
+ligand_num_missing_ppi_interface_residues	int | None	Number of missing neighboring protein-protein interface residues within 4 Å of ligand of interest
+ligand_num_pli_atoms_within_4A_of_gap	int | None	Number of missing neighboring protein-ligand interface atoms within 4 Å of ligand of interest
+ligand_num_pli_atoms_within_8A_of_gap	int | None	Number of missing neighboring protein-ligand interface atoms within 8 Å of ligand of interest
+ligand_num_missing_pli_interface_residues	int | None	Number of missing neighboring protein-ligand interface residues within 4 Å of ligand of interest
+ligand_num_resolved_heavy_atoms	int | None	Number of resolved heavy atoms in a ligand
+ligand_num_unresolved_heavy_atoms	int | None	Number of unresolved heavy atoms in a ligand
+ligand_tpsa	float | None	Topological polar surface area
+ligand_qed	float | None	Ligand QED score, a measure of drug-likeness, see https://www.rdkit.org/new_docs/source/rdkit.Chem.QED.html
+ligand_is_ion	bool	Indicator of whether a ligand  is an ion
+ligand_is_lipinski	bool	Indicator of whether a ligand satisfies Lipinski Ro5
+ligand_is_fragment	bool	Indicator of whether a ligand satisfies fragment Ro3
+ligand_is_oligo	bool	Indicator of whether a ligand  is an oligopeptide, oligosaccharide or oligopeptide
+ligand_is_cofactor	bool	Indicator of whether a ligand is a cofactor
+ligand_in_artifact_list	bool	Indicator of whether a ligand is in the artifact list
+ligand_is_artifact	bool	Indicator of whether a ligand is an artifact
+ligand_is_other	bool	Indicator of whether a ligand type is not classified as any types of small molecule (Lipinski, Fragment or covalent), ion, cofactor, oligo (peptide, saccharide or nucleotide) or artifact
+ligand_is_invalid	bool	Indicator of whether a ligand is invalid
+ligand_unique_ccd_code	str | None	Ligand representative CCD code after de-duplicating
+ligand_protein_chains_asym_id	list[str]	List of RCSB asymmetric chain ids of protein residues within 6 Å of ligand of interest unless         the ligand is an artifact, in which case we return an empty list.
+ligand_num_interacting_residues	int	Number of residues interacting with a given ligand.
+ligand_num_neighboring_residues	int	Residue count of each of the proteins within 6 Å of ligand of interest.
+ligand_is_proper	bool	Check if ligand is a proper ligand (not an ion or artifact)
+ligand_num_interactions	int	Number of interactions for a given ligand.
+ligand_num_unique_interactions	int	Number of unique interactions
+ligand_num_crystal_contacted_residues	int	Number of residues from other symmetry mates which are in contact with this ligand.
+ligand_num_atoms_with_crystal_contacts	int	Number of atoms in this ligand which are in contact with residues from other symmetry mates.
+ligand_fraction_atoms_with_crystal_contacts	float | None	Fraction of atoms in this ligand which are in contact with residues from other symmetry mates.
+ligand_num_pocket_residues	int	Number of residues in the ligand's binding pocket.
+ligand_id	str	Unique identifier for a given ligand.
+ligand_instance_chain	str	Instance chain for a given ligand.
+ligand_is_kinase_inhibitor	bool	Check if ligand is a kinase inhibitor.
+ligand_binding_affinity	float | None	Binding affinity (pKd or pKi) from BindingDB when available.

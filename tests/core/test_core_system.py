@@ -1,25 +1,31 @@
 from pathlib import Path
 
 import pytest
-
 from plinder.core import system
 
-@pytest.mark.parametrize("system_id", [
-    "19hc__1__1.A_1.B__1.D_1.L_1.Q_1.S_1.U",
-    "19hc__1__1.A_1.B__1.E_1.F_1.H_1.J_1.O",
-    "19hc__1__1.A_1.B__1.K_1.M_1.N",
-    "19hc__1__1.A_1.B__1.V_1.X_1.Y",
-    "19hc__1__1.A__1.G",
-    "19hc__1__1.A__1.I",
-])
+
+@pytest.mark.parametrize(
+    "system_id",
+    [
+        "19hc__1__1.A_1.B__1.D_1.L_1.Q_1.S_1.U",
+        "19hc__1__1.A_1.B__1.E_1.F_1.H_1.J_1.O",
+        "19hc__1__1.A_1.B__1.K_1.M_1.N",
+        "19hc__1__1.A_1.B__1.V_1.X_1.Y",
+        "19hc__1__1.A__1.G",
+        "19hc__1__1.A__1.I",
+    ],
+)
 def test_plinder_system(system_id, read_plinder_mount):
     system.PlinderSystem(system_id=system_id)
 
 
-@pytest.mark.parametrize("system_id", [
-    "19hc__1__1.A__1.C",
-    "19hc__1__1.B__1.P",
-])
+@pytest.mark.parametrize(
+    "system_id",
+    [
+        "19hc__1__1.A__1.C",
+        "19hc__1__1.B__1.P",
+    ],
+)
 def test_plinder_system_fails(system_id, read_plinder_mount):
     with pytest.raises(ValueError):
         system.PlinderSystem(system_id=system_id).system

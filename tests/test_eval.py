@@ -5,13 +5,12 @@ import subprocess
 
 import numpy as np
 import pandas as pd
-
 from plinder.eval.docking import utils
 
 
 def test_single_protein_single_ligand_scoring(system_1a3b, predicted_pose_1a3b):
     reference_system = utils.ReferenceSystem.from_reference_system(
-        system_1a3b.parent, system_1a3b.name
+        system_1a3b, system_1a3b.name
     )
     scores = utils.ModelScores.from_files(
         predicted_pose_1a3b.parent.name,
@@ -74,7 +73,7 @@ def test_single_protein_single_ligand_scoring(system_1a3b, predicted_pose_1a3b):
 
 def test_multi_protein_single_ligand_scoring(system_1ai5, predicted_pose_1ai5):
     reference_system = utils.ReferenceSystem.from_reference_system(
-        system_1ai5.parent, system_1ai5.name
+        system_1ai5, system_1ai5.name
     )
     scores = utils.ModelScores.from_files(
         predicted_pose_1ai5.parent.name,
@@ -146,6 +145,7 @@ def test_write_docking_eval_cmd(monkeypatch, plinder_src, prediction_csv):
     to debug. If this test is failing, uncomment the code for
     calling the code directly to see where it's erroring out.
     """
+
     def mock_tanimoto(x, y):
         return np.random.rand(max(len(x), len(y)))
 
@@ -193,7 +193,9 @@ def test_write_docking_eval_cmd(monkeypatch, plinder_src, prediction_csv):
     )
 
     score_df = pd.read_parquet(f"{prediction_csv.parent}/scores.parquet")
-    assert np.allclose(score_df.sort_values(by="reference").scrmsd_wave.to_list(), [1.617184, 3.665143])
+    assert np.allclose(
+        score_df.sort_values(by="reference").scrmsd_wave.to_list(), [1.617184, 3.665143]
+    )
 
     # here we fall back to the python function call because
     # we have to mock the tanimoto_maxsim_matrix function

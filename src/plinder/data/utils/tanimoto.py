@@ -177,6 +177,7 @@ def ligand_scores(
     data_dir: Path,
     output_path: Path,
     number_id_col: str = "number_id_by_inchikeys",
+    # TODO: always save all ligands!!
     save_top_k_similar_ligands: int = 5000,
     multiply_by: int = 100,
 ) -> None:

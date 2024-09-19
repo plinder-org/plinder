@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pytest
 from plinder.core.index import utils
-from plinder.core.split import utils as split_utils
 
 
 def mock_path(*, rel: str = "", download: bool = False, force_progress: bool = False):
@@ -37,6 +36,7 @@ def mock_cpl(read_plinder_mount, monkeypatch):
 def test_get_plindex(mock_cpl):
     df = utils.get_plindex()
     assert len(df.index) == 10
+    assert "pli_unique_qcov__50__strong__component" in df.columns
 
 
 def test_get_manifest(mock_cpl):
@@ -55,14 +55,8 @@ def test_load_entries(mock_cpl):
         [],
         ["--release", "2024-04"],
         ["--iteration", "v1"],
-        ["--release", "2024-06", "--iteration", "v2"]
-    ]
+        ["--release", "2024-06", "--iteration", "v2"],
+    ],
 )
 def test_download_cmd(args, mock_cpl):
     utils.download_plinder_cmd(args=args + ["-y"])
-
-
-def test_get_extended_plindex(mock_cpl):
-    df = split_utils.get_extended_plindex()
-    assert len(df.index) == 10
-    assert "pli_unique_qcov__50__components" in df.columns

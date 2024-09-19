@@ -293,7 +293,7 @@ def prepare_df_protein(
             columns=["system_id"],
             filters=[
                 ("system_type", "==", "holo"),
-                ("system_num_interacting_protein_chains", "<=", 5),
+                ("system_num_protein_chains", "<=", 5),
                 ("system_num_ligand_chains", "<=", 5),
             ],
         )["system_id"]

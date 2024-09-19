@@ -108,6 +108,7 @@ namespaces = false
 [tool.setuptools.package-data]
 plinder = [
     "**.yaml",
+    "**.tsv",
     "plinder/data/utils/annotations/static_files/artifacts_badlist.csv",
 ]
 

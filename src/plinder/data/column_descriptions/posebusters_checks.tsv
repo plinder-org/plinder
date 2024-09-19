@@ -1,0 +1,124 @@
+Name	Type	Description
+ligand_posebusters_all_atoms_connected	bool	True if all atoms form one single connected graph.
+ligand_posebusters_aromatic_ring_flatness	bool	True if all atoms in aromatic rings with 5 or 6 members are within 0.25 Å of the closest shared plane.
+ligand_posebusters_aromatic_ring_maximum_distance_from_plane	float	Maximum distance of any atom from the plane. It's a measure of planarity, the closer to zero the better.
+ligand_posebusters_bond_angles	bool	True if the angles in the input molecule are within 0.75 of the lower and 1.25 of the upper bounds determined by distance geometry.
+ligand_posebusters_bond_lengths	bool	True if the bond lengths in the input molecule are within 0.75 of the lower and 1.25 of the upper bounds determined by distance geometry.
+ligand_posebusters_double_bond_flatness	bool	True if both atoms in a double bond are within 0.25 Å of the double bond plane.
+ligand_posebusters_double_bond_maximum_distance_from_plane	float	The maximum distance of either of the atoms in a double bond to the plane of the double bond.
+ligand_posebusters_double_bond_stereochemistry	bool	The specifed double bond stereochemistry in the input molecule is the same as in the true molecule.
+ligand_posebusters_energy_ratio	float	The ratio of calculated energy of the input molecule to the average energy of an ensemble of 50 conformations generated for the input molecule. The energy is calculated using the UFF32 in RDKit and the conformations are generated with ETKDGv3 followed by force field relaxation using the UFF with up to 200 iterations.
+ligand_posebusters_ensemble_avg_energy	float	The average energy of an ensemble of 50 conformations generated for the input molecule. The energy is calculated using the UFF32 in RDKit and the conformations are generated with ETKDGv3 followed by force field relaxation using the UFF with up to 200 iterations.
+ligand_posebusters_hydrogens	bool	Boolean indicator of whether the ligand has added hydrogens.
+ligand_posebusters_inchi_crystal	str	The Inchi of reference crystal ligand.
+ligand_posebusters_inchi_crystal_valid	bool	Boolean indicator of whether the Inchi of the crystal ligand is valid.
+ligand_posebusters_inchi_docked	str	The Inchi of reference docked ligand.
+ligand_posebusters_inchi_docked_valid	bool	Boolean indicator of whether the Inchi of the docked ligand is valid.
+ligand_posebusters_inchi_overall	bool	Boolean operator to show if overall Inchi of crystal and docked ligand are the same.
+ligand_posebusters_inchi_version	bool	The Inchi version.
+ligand_posebusters_internal_energy	float	Internal energy of docked ligand.
+ligand_posebusters_internal_steric_clash	bool	The interatomic distance between pairs of non-covalently bound atoms is above 0.7 of the lower bound determined by distance geometry.
+ligand_posebusters_kabsch_rmsd	float	Closest RSMD between docked and crystal ligand that takes isomers into consideration.
+ligand_posebusters_longest_bond_relative_length	float	Maximum ratio between length of a given bond and upper limit of bond distance.
+ligand_posebusters_minimum_distance_to_inorganic_cofactors	bool	Minimum intermolecular distance of docked ligand atoms to atoms of inorganic cofactor.
+ligand_posebusters_minimum_distance_to_organic_cofactors	bool	Minimum intermolecular distance of docked ligand atoms to atoms of organic cofactor.
+ligand_posebusters_minimum_distance_to_protein	bool	Minimum intermolecular distance of docked ligand atoms to receptor protein atoms.
+ligand_posebusters_minimum_distance_to_waters	bool	Minimum intermolecular distance of docked ligand atoms to water atoms.
+ligand_posebusters_mol_cond_loaded	bool	Boolean indicator of whether the conditioning molecule loaded correctly.
+ligand_posebusters_mol_pred_energy	float	Internal energy of predicted molecule.
+ligand_posebusters_mol_pred_loaded	bool	Boolean indicator of whether the predicted molecule loaded correctly.
+ligand_posebusters_mol_true_loaded	bool	Boolean indicator of whether the ground truth molecule loaded correctly.
+ligand_posebusters_molecular_bonds	bool	Boolean indicator of whether the bonds in the input molecule are the same as in the true molecule.
+ligand_posebusters_molecular_formula	bool	Boolean indicator of whether the molecular formula of the input molecule is the same as that of the true molecule.
+ligand_posebusters_most_extreme_clash_inorganic_cofactors	bool	Indicator of whether the most extreme clash involves inorganic cofactor.
+ligand_posebusters_most_extreme_clash_organic_cofactors	bool	Indicator of whether the most extreme clash involves organic cofactor.
+ligand_posebusters_most_extreme_clash_protein	bool	Indicator of whether the most extreme clash involves receptor protein.
+ligand_posebusters_most_extreme_clash_waters	bool	Indicator of whether the most extreme clash involves binding site water.
+ligand_posebusters_most_extreme_distance_inorganic_cofactors	float	The most extreme distance between atoms of predicted ligand and inorganic cofactor.
+ligand_posebusters_most_extreme_distance_organic_cofactors	float	The most extreme distance between atoms of predicted ligand and organic cofactor.
+ligand_posebusters_most_extreme_distance_protein	float	The most extreme distance between atoms of predicted ligand and protein.
+ligand_posebusters_most_extreme_distance_waters	float	The most extreme distance between atoms of predicted ligand and binding site water.
+ligand_posebusters_most_extreme_ligand_atom_id_inorganic_cofactors	int	Atom ID of the most extremely clashing ligand atom with an inorganic cofactor.
+ligand_posebusters_most_extreme_ligand_atom_id_organic_cofactors	int	Atom ID of the most extremely clashing ligand atom with an organic cofactor.
+ligand_posebusters_most_extreme_ligand_atom_id_protein	int	Atom ID of the most extremely clashing ligand atom with receptor protein.
+ligand_posebusters_most_extreme_ligand_atom_id_waters	int	Atom ID of the most extremely clashing ligand atom with binding site water.
+ligand_posebusters_most_extreme_ligand_element_inorganic_cofactors	str	Element symbol of the most extremely clashing ligand atom with an inorganic cofactor.
+ligand_posebusters_most_extreme_ligand_element_organic_cofactors	str	Element symbol of the most extremely clashing ligand atom with an organic cofactor.
+ligand_posebusters_most_extreme_ligand_element_protein	str	Element symbol of the most extremely clashing ligand atom with receptor protein.
+ligand_posebusters_most_extreme_ligand_element_waters	str	Element symbol of the most extremely clashing ligand atom with binding site water.
+ligand_posebusters_most_extreme_ligand_vdw_inorganic_cofactors	float	van der Waals radius of the most extremely clashing ligand atom with an inorganic cofactor.
+ligand_posebusters_most_extreme_ligand_vdw_organic_cofactors	float	van der Waals radius of the most extremely clashing ligand atom with an organic cofactor.
+ligand_posebusters_most_extreme_ligand_vdw_protein	float	van der Waals radius of the most extremely clashing ligand atom with receptor protein.
+ligand_posebusters_most_extreme_ligand_vdw_waters	float	van der Waals radius of the most extremely clashing ligand atom with binding site water.
+ligand_posebusters_most_extreme_protein_atom_id_inorganic_cofactors	int	Atom ID of the most extremely clashing inorganic cofactors atom with predicted ligand.
+ligand_posebusters_most_extreme_protein_atom_id_organic_cofactors	int	Atom ID of the most extremely clashing organic cofactors atom with predicted ligand.
+ligand_posebusters_most_extreme_protein_atom_id_protein	int	Atom ID of the most extremely clashing receptor protein atom with predicted ligand.
+ligand_posebusters_most_extreme_protein_atom_id_waters	int	Atom ID of the most extremely clashing binding site water atom with predicted ligand.
+ligand_posebusters_most_extreme_protein_element_inorganic_cofactors	str	Element symbol of the most extremely clashing inorganic cofactors atom with predicted ligand.
+ligand_posebusters_most_extreme_protein_element_organic_cofactors	str	Element symbol of the most extremely clashing organic cofactors atom with predicted ligand.
+ligand_posebusters_most_extreme_protein_element_protein	str	Element symbol of the most extremely clashing receptor protein atom with predicted ligand.
+ligand_posebusters_most_extreme_protein_element_waters	str	Element symbol of the most extremely clashing binding site water atom with predicted ligand.
+ligand_posebusters_most_extreme_protein_vdw_inorganic_cofactors	float	van der Waals radius of the most extremely clashing inorganic cofactors atom with predicted ligand.
+ligand_posebusters_most_extreme_protein_vdw_organic_cofactors	float	van der Waals radius of the most extremely clashing organic cofactors atom with predicted ligand.
+ligand_posebusters_most_extreme_protein_vdw_protein	float	van der Waals radius of the most extremely clashing receptor protein atom with predicted ligand.
+ligand_posebusters_most_extreme_protein_vdw_waters	float	van der Waals radius of the most extremely clashing binding site water atom with predicted ligand.
+ligand_posebusters_most_extreme_relative_angle	float	See https://github.com/maabuu/posebusters/blob/6062b9981cbc8843b93c3c889779f6fde5f94f02/posebusters/modules/distance_geometry.py#L39
+ligand_posebusters_most_extreme_relative_distance_inorganic_cofactors	float	The smallest ratio of the distance between ligand and inorganic cofactor atoms to the sum of the pairs covalent radii.
+ligand_posebusters_most_extreme_relative_distance_organic_cofactors	float	The smallest ratio of the distance between ligand and organic cofactor atoms to the sum of the pairs van der Waals radii.
+ligand_posebusters_most_extreme_relative_distance_protein	float	The smallest ratio of the distance between protein–ligand atom pairs to the sum of the pairs van der Waals radii.
+ligand_posebusters_most_extreme_relative_distance_waters	float	The smallest ratio of the distance between ligand and binding site water atoms to the sum of the pairs van der Waals radii.
+ligand_posebusters_most_extreme_sum_radii_inorganic_cofactors	float	The sum of covalent radii of the closest ligand-inorganic cofactor atom pairs.
+ligand_posebusters_most_extreme_sum_radii_organic_cofactors	float	The sum of van der Waals radii of the closest ligand-organic cofactor atom pairs.
+ligand_posebusters_most_extreme_sum_radii_protein	float	The sum of van der Waals radii of the closest protein-ligand atom pairs.
+ligand_posebusters_most_extreme_sum_radii_scaled_inorganic_cofactors	float	The sum of van der Waals radii of the closest ligand and inorganic cofactors scaled by 0.5.
+ligand_posebusters_most_extreme_sum_radii_scaled_organic_cofactors	float	The sum of van der Waals radii of the closest ligand and organic cofactors scaled by 0.8.
+ligand_posebusters_most_extreme_sum_radii_scaled_protein	float	The sum of van der Waals radii of the closest ligand and protein scaled by 0.8.
+ligand_posebusters_most_extreme_sum_radii_scaled_waters	float	The sum of van der Waals radii of the closest ligand and binding site water scaled by 0.8.
+ligand_posebusters_most_extreme_sum_radii_waters	float	The sum of van der Waals radii of the closest ligand and binding site water.
+ligand_posebusters_net_charge	bool	Ligand net charge.
+ligand_posebusters_not_too_far_away_inorganic_cofactors	bool	Boolean indicator of whether ligand is too far away from inorganic cofactor.
+ligand_posebusters_not_too_far_away_organic_cofactors	bool	Boolean indicator of whether ligand is too far away from organic cofactor.
+ligand_posebusters_not_too_far_away_waters	bool	Boolean indicator of whether ligand is too far away from binding site water.
+ligand_posebusters_num_pairwise_clashes_inorganic_cofactors	int	Number of pairwise clashes between ligand and inorganic cofactor.
+ligand_posebusters_num_pairwise_clashes_organic_cofactors	int	Number of pairwise clashes between ligand and organic cofactor.
+ligand_posebusters_num_pairwise_clashes_protein	int	Number of pairwise clashes between ligand and receptor protein.
+ligand_posebusters_num_pairwise_clashes_waters	int	Number of pairwise clashes between ligand and binding site water.
+ligand_posebusters_number_angles	int	Number of angles checked.
+ligand_posebusters_number_aromatic_rings_checked	int	Number of aromatic rings checked.
+ligand_posebusters_number_aromatic_rings_pass	int	Number of aromatic ring that passes sanity checks.
+ligand_posebusters_number_bonds	int	Number of bonds in ligand.
+ligand_posebusters_number_clashes	int	Number of clashes in ligand.
+ligand_posebusters_number_double_bonds_checked	int	Number of double bonds checked.
+ligand_posebusters_number_double_bonds_pass	int	Number of double bonds that passes sanity check.
+ligand_posebusters_number_long_outlier_bonds	int	Number of long outlier bonds in predicted ligand.
+ligand_posebusters_number_noncov_pairs	int	Number of non-covalent pairs of atoms in predicted ligand.
+ligand_posebusters_number_outlier_angles	int	Number of outlier angles in predicted ligand.
+ligand_posebusters_number_short_outlier_bonds	int	Number of short outlier bonds.
+ligand_posebusters_number_valid_angles	int	Number of valid angles in predicted ligand.
+ligand_posebusters_number_valid_bonds	int	Number of valid bonds in predicted ligand.
+ligand_posebusters_number_valid_noncov_pairs	int	Number of valid non-covalent atom pairs.
+ligand_posebusters_passes_kekulization	bool	Boolean indicatoe of whether a ligand passes RDKit kekulization checks.
+ligand_posebusters_passes_valence_checks	bool	Boolean indicator of whether a ligand passes valence checks.
+ligand_posebusters_protein-ligand_maximum_distance	bool	The maximum interatomic distance between predicted ligand and receptor protein.
+ligand_posebusters_protons	bool	Boolean indicator of whether ligand has protons.
+ligand_posebusters_rmsd_≤_2å	bool	Boolean indicator of whether the predicted ligand is within 2å from the ground truth ligand.
+ligand_posebusters_sanitization	bool	Boolean indicator of whether predicted ligand passes RDKit sanitization.
+ligand_posebusters_shortest_bond_relative_length	float	The shortest bond length scaled by the lower bound of interatomic distance.
+ligand_posebusters_shortest_noncovalent_relative_distance	float	The shortest non-covalent interatomic distance divided by the sum of van der Waals radii of the two atoms.
+ligand_posebusters_smallest_distance_inorganic_cofactors	float	The smallest distance between ligand atoms and inorganic cofactor atoms.
+ligand_posebusters_smallest_distance_organic_cofactors	float	The smallest distance between ligand atoms and organic cofactor atoms.
+ligand_posebusters_smallest_distance_protein	float	The smallest distance between ligand atoms and receptor protein atoms.
+ligand_posebusters_smallest_distance_waters	float	The smallest distance between ligand atoms and bind site water atoms.
+ligand_posebusters_stereo_sp3	bool	Boolean indicator of whether the sp3 stereo-centers in the input molecule are the same as in the true molecule.
+ligand_posebusters_stereo_sp3_inverted	bool	Boolean indicator of whether the inverted sp3 stereo-centers in the input molecule are the same as in the true molecule.
+ligand_posebusters_stereo_type	bool	Boolean indicator of whether the stereocenter type in the input molecule is the same as in the true molecule.
+ligand_posebusters_stereochemistry_preserved	bool	Boolean indicator of whether the specified stereochemistry in the input molecule is the same as in the true molecule.
+ligand_posebusters_tetrahedral_chirality	bool	Boolean indicator of whether the specified tetrahedral chirality in the input molecule is the same as in the true molecule.
+ligand_posebusters_volume_overlap_inorganic_cofactors	float	The share of ligand volume that intersects with inorganic cofactors. The volumes are defined by the van der Waals radii around the heavy atoms scaled by 0.5.
+ligand_posebusters_volume_overlap_organic_cofactors	float	The share of ligand volume that intersects with organic cofactors. The volumes are defined by the van der Waals radii around the heavy atoms scaled by 0.8.
+ligand_posebusters_volume_overlap_protein	float	The share of ligand volume that intersects with protein. The volumes are defined by the van der Waals radii around the heavy atoms scaled by 0.8.
+ligand_posebusters_volume_overlap_waters	float	The share of ligand volume that intersects with binding site water. The volumes are defined by the van der Waals radii around the heavy atoms scaled by 0.8.
+ligand_posebusters_volume_overlap_with_inorganic_cofactors	bool	Boolean indicator of whether the share of ligand volume that intersects with the inorganic cofactor is less than 7.5%. The volumes are defined by the van der Waals radii around the heavy atoms scaled by 0.5.
+ligand_posebusters_volume_overlap_with_organic_cofactors	bool	Boolean indicator of whether the share of ligand volume that intersects with the organic cofactor is less than 7.5%. The volumes are defined by the van der Waals radii around the heavy atoms scaled by 0.8.
+ligand_posebusters_volume_overlap_with_protein	bool	Boolean indicator of whether the share of ligand volume that intersects with the protein is less than 7.5%. The volumes are defined by the van der Waals radii around the heavy atoms scaled by 0.5.
+ligand_posebusters_volume_overlap_with_waters	bool	Boolean indicator of whether the share of ligand volume that intersects with the binding site water is less than 7.5%. The volumes are defined by the van der Waals radii around the heavy atoms scaled by 0.5.

@@ -1,20 +1,22 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
+import pytest
 from plinder.data.pipeline import transform
 
-import pytest
 
-
-@pytest.mark.parametrize("pdb_range", [
-    "SM:9-163",
-    "SM:9--163",
-    "SM:-9--163",
-    "SM:9-163L",
-    "B:-3-715",
-    "A:-4-131",
-    "B:-1-75",
-    "B:-4-1927",
-])
+@pytest.mark.parametrize(
+    "pdb_range",
+    [
+        "SM:9-163",
+        "SM:9--163",
+        "SM:-9--163",
+        "SM:9-163L",
+        "B:-3-715",
+        "A:-4-131",
+        "B:-1-75",
+        "B:-4-1927",
+    ],
+)
 def test_parse_pdb_range(pdb_range):
     assert len(transform.parse_pdb_range(pdb_range)) == 3
 

@@ -1,0 +1,310 @@
+Name	Type	Description
+pli_qcov__50__weak__component	str	Cluster ID for weak component built from pli_qcov metric with 50 threshold
+pli_qcov__70__weak__component	str	Cluster ID for weak component built from pli_qcov metric with 70 threshold
+pli_qcov__95__weak__component	str	Cluster ID for weak component built from pli_qcov metric with 95 threshold
+pli_qcov__100__weak__component	str	Cluster ID for weak component built from pli_qcov metric with 100 threshold
+pli_qcov__50__strong__component	str	Cluster ID for strong component built from pli_qcov metric with 50 threshold
+pli_qcov__70__strong__component	str	Cluster ID for strong component built from pli_qcov metric with 70 threshold
+pli_qcov__95__strong__component	str	Cluster ID for strong component built from pli_qcov metric with 95 threshold
+pli_qcov__100__strong__component	str	Cluster ID for strong component built from pli_qcov metric with 100 threshold
+pli_unique_qcov__0__weak__component	str	Cluster ID for weak component built from pli_unique_qcov metric with 0 threshold
+pli_unique_qcov__50__weak__component	str	Cluster ID for weak component built from pli_unique_qcov metric with 50 threshold
+pli_unique_qcov__70__weak__component	str	Cluster ID for weak component built from pli_unique_qcov metric with 70 threshold
+pli_unique_qcov__95__weak__component	str	Cluster ID for weak component built from pli_unique_qcov metric with 95 threshold
+pli_unique_qcov__100__weak__component	str	Cluster ID for weak component built from pli_unique_qcov metric with 100 threshold
+pli_unique_qcov__0__strong__component	str	Cluster ID for strong component built from pli_unique_qcov metric with 0 threshold
+pli_unique_qcov__50__strong__component	str	Cluster ID for strong component built from pli_unique_qcov metric with 50 threshold
+pli_unique_qcov__70__strong__component	str	Cluster ID for strong component built from pli_unique_qcov metric with 70 threshold
+pli_unique_qcov__95__strong__component	str	Cluster ID for strong component built from pli_unique_qcov metric with 95 threshold
+pli_unique_qcov__100__strong__component	str	Cluster ID for strong component built from pli_unique_qcov metric with 100 threshold
+pocket_fident__50__weak__component	str	Cluster ID for weak component built from pocket_fident metric with 50 threshold
+pocket_fident__70__weak__component	str	Cluster ID for weak component built from pocket_fident metric with 70 threshold
+pocket_fident__95__weak__component	str	Cluster ID for weak component built from pocket_fident metric with 95 threshold
+pocket_fident__100__weak__component	str	Cluster ID for weak component built from pocket_fident metric with 100 threshold
+pocket_fident__50__strong__component	str	Cluster ID for strong component built from pocket_fident metric with 50 threshold
+pocket_fident__70__strong__component	str	Cluster ID for strong component built from pocket_fident metric with 70 threshold
+pocket_fident__95__strong__component	str	Cluster ID for strong component built from pocket_fident metric with 95 threshold
+pocket_fident__100__strong__component	str	Cluster ID for strong component built from pocket_fident metric with 100 threshold
+pocket_fident_qcov__50__weak__component	str	Cluster ID for weak component built from pocket_fident_qcov metric with 50 threshold
+pocket_fident_qcov__70__weak__component	str	Cluster ID for weak component built from pocket_fident_qcov metric with 70 threshold
+pocket_fident_qcov__95__weak__component	str	Cluster ID for weak component built from pocket_fident_qcov metric with 95 threshold
+pocket_fident_qcov__100__weak__component	str	Cluster ID for weak component built from pocket_fident_qcov metric with 100 threshold
+pocket_fident_qcov__50__strong__component	str	Cluster ID for strong component built from pocket_fident_qcov metric with 50 threshold
+pocket_fident_qcov__70__strong__component	str	Cluster ID for strong component built from pocket_fident_qcov metric with 70 threshold
+pocket_fident_qcov__95__strong__component	str	Cluster ID for strong component built from pocket_fident_qcov metric with 95 threshold
+pocket_fident_qcov__100__strong__component	str	Cluster ID for strong component built from pocket_fident_qcov metric with 100 threshold
+pocket_lddt__50__weak__component	str	Cluster ID for weak component built from pocket_lddt metric with 50 threshold
+pocket_lddt__70__weak__component	str	Cluster ID for weak component built from pocket_lddt metric with 70 threshold
+pocket_lddt__95__weak__component	str	Cluster ID for weak component built from pocket_lddt metric with 95 threshold
+pocket_lddt__100__weak__component	str	Cluster ID for weak component built from pocket_lddt metric with 100 threshold
+pocket_lddt__50__strong__component	str	Cluster ID for strong component built from pocket_lddt metric with 50 threshold
+pocket_lddt__70__strong__component	str	Cluster ID for strong component built from pocket_lddt metric with 70 threshold
+pocket_lddt__95__strong__component	str	Cluster ID for strong component built from pocket_lddt metric with 95 threshold
+pocket_lddt__100__strong__component	str	Cluster ID for strong component built from pocket_lddt metric with 100 threshold
+pocket_lddt_qcov__50__weak__component	str	Cluster ID for weak component built from pocket_lddt_qcov metric with 50 threshold
+pocket_lddt_qcov__70__weak__component	str	Cluster ID for weak component built from pocket_lddt_qcov metric with 70 threshold
+pocket_lddt_qcov__95__weak__component	str	Cluster ID for weak component built from pocket_lddt_qcov metric with 95 threshold
+pocket_lddt_qcov__100__weak__component	str	Cluster ID for weak component built from pocket_lddt_qcov metric with 100 threshold
+pocket_lddt_qcov__50__strong__component	str	Cluster ID for strong component built from pocket_lddt_qcov metric with 50 threshold
+pocket_lddt_qcov__70__strong__component	str	Cluster ID for strong component built from pocket_lddt_qcov metric with 70 threshold
+pocket_lddt_qcov__95__strong__component	str	Cluster ID for strong component built from pocket_lddt_qcov metric with 95 threshold
+pocket_lddt_qcov__100__strong__component	str	Cluster ID for strong component built from pocket_lddt_qcov metric with 100 threshold
+pocket_qcov__50__weak__component	str	Cluster ID for weak component built from pocket_qcov metric with 50 threshold
+pocket_qcov__70__weak__component	str	Cluster ID for weak component built from pocket_qcov metric with 70 threshold
+pocket_qcov__95__weak__component	str	Cluster ID for weak component built from pocket_qcov metric with 95 threshold
+pocket_qcov__100__weak__component	str	Cluster ID for weak component built from pocket_qcov metric with 100 threshold
+pocket_qcov__50__strong__component	str	Cluster ID for strong component built from pocket_qcov metric with 50 threshold
+pocket_qcov__70__strong__component	str	Cluster ID for strong component built from pocket_qcov metric with 70 threshold
+pocket_qcov__95__strong__component	str	Cluster ID for strong component built from pocket_qcov metric with 95 threshold
+pocket_qcov__100__strong__component	str	Cluster ID for strong component built from pocket_qcov metric with 100 threshold
+protein_fident_max__50__weak__component	str	Cluster ID for weak component built from protein_fident_max metric with 50 threshold
+protein_fident_max__70__weak__component	str	Cluster ID for weak component built from protein_fident_max metric with 70 threshold
+protein_fident_max__95__weak__component	str	Cluster ID for weak component built from protein_fident_max metric with 95 threshold
+protein_fident_max__100__weak__component	str	Cluster ID for weak component built from protein_fident_max metric with 100 threshold
+protein_fident_max__50__strong__component	str	Cluster ID for strong component built from protein_fident_max metric with 50 threshold
+protein_fident_max__70__strong__component	str	Cluster ID for strong component built from protein_fident_max metric with 70 threshold
+protein_fident_max__95__strong__component	str	Cluster ID for strong component built from protein_fident_max metric with 95 threshold
+protein_fident_max__100__strong__component	str	Cluster ID for strong component built from protein_fident_max metric with 100 threshold
+protein_fident_qcov_max__50__weak__component	str	Cluster ID for weak component built from protein_fident_qcov_max metric with 50 threshold
+protein_fident_qcov_max__70__weak__component	str	Cluster ID for weak component built from protein_fident_qcov_max metric with 70 threshold
+protein_fident_qcov_max__95__weak__component	str	Cluster ID for weak component built from protein_fident_qcov_max metric with 95 threshold
+protein_fident_qcov_max__100__weak__component	str	Cluster ID for weak component built from protein_fident_qcov_max metric with 100 threshold
+protein_fident_qcov_max__50__strong__component	str	Cluster ID for strong component built from protein_fident_qcov_max metric with 50 threshold
+protein_fident_qcov_max__70__strong__component	str	Cluster ID for strong component built from protein_fident_qcov_max metric with 70 threshold
+protein_fident_qcov_max__95__strong__component	str	Cluster ID for strong component built from protein_fident_qcov_max metric with 95 threshold
+protein_fident_qcov_max__100__strong__component	str	Cluster ID for strong component built from protein_fident_qcov_max metric with 100 threshold
+protein_fident_qcov_weighted_max__50__weak__component	str	Cluster ID for weak component built from protein_fident_qcov_weighted_max metric with 50 threshold
+protein_fident_qcov_weighted_max__70__weak__component	str	Cluster ID for weak component built from protein_fident_qcov_weighted_max metric with 70 threshold
+protein_fident_qcov_weighted_max__95__weak__component	str	Cluster ID for weak component built from protein_fident_qcov_weighted_max metric with 95 threshold
+protein_fident_qcov_weighted_max__100__weak__component	str	Cluster ID for weak component built from protein_fident_qcov_weighted_max metric with 100 threshold
+protein_fident_qcov_weighted_max__50__strong__component	str	Cluster ID for strong component built from protein_fident_qcov_weighted_max metric with 50 threshold
+protein_fident_qcov_weighted_max__70__strong__component	str	Cluster ID for strong component built from protein_fident_qcov_weighted_max metric with 70 threshold
+protein_fident_qcov_weighted_max__95__strong__component	str	Cluster ID for strong component built from protein_fident_qcov_weighted_max metric with 95 threshold
+protein_fident_qcov_weighted_max__100__strong__component	str	Cluster ID for strong component built from protein_fident_qcov_weighted_max metric with 100 threshold
+protein_fident_qcov_weighted_sum__50__weak__component	str	Cluster ID for weak component built from protein_fident_qcov_weighted_sum metric with 50 threshold
+protein_fident_qcov_weighted_sum__70__weak__component	str	Cluster ID for weak component built from protein_fident_qcov_weighted_sum metric with 70 threshold
+protein_fident_qcov_weighted_sum__95__weak__component	str	Cluster ID for weak component built from protein_fident_qcov_weighted_sum metric with 95 threshold
+protein_fident_qcov_weighted_sum__100__weak__component	str	Cluster ID for weak component built from protein_fident_qcov_weighted_sum metric with 100 threshold
+protein_fident_qcov_weighted_sum__50__strong__component	str	Cluster ID for strong component built from protein_fident_qcov_weighted_sum metric with 50 threshold
+protein_fident_qcov_weighted_sum__70__strong__component	str	Cluster ID for strong component built from protein_fident_qcov_weighted_sum metric with 70 threshold
+protein_fident_qcov_weighted_sum__95__strong__component	str	Cluster ID for strong component built from protein_fident_qcov_weighted_sum metric with 95 threshold
+protein_fident_qcov_weighted_sum__100__strong__component	str	Cluster ID for strong component built from protein_fident_qcov_weighted_sum metric with 100 threshold
+protein_fident_weighted_max__50__weak__component	str	Cluster ID for weak component built from protein_fident_weighted_max metric with 50 threshold
+protein_fident_weighted_max__70__weak__component	str	Cluster ID for weak component built from protein_fident_weighted_max metric with 70 threshold
+protein_fident_weighted_max__95__weak__component	str	Cluster ID for weak component built from protein_fident_weighted_max metric with 95 threshold
+protein_fident_weighted_max__100__weak__component	str	Cluster ID for weak component built from protein_fident_weighted_max metric with 100 threshold
+protein_fident_weighted_max__50__strong__component	str	Cluster ID for strong component built from protein_fident_weighted_max metric with 50 threshold
+protein_fident_weighted_max__70__strong__component	str	Cluster ID for strong component built from protein_fident_weighted_max metric with 70 threshold
+protein_fident_weighted_max__95__strong__component	str	Cluster ID for strong component built from protein_fident_weighted_max metric with 95 threshold
+protein_fident_weighted_max__100__strong__component	str	Cluster ID for strong component built from protein_fident_weighted_max metric with 100 threshold
+protein_fident_weighted_sum__50__weak__component	str	Cluster ID for weak component built from protein_fident_weighted_sum metric with 50 threshold
+protein_fident_weighted_sum__70__weak__component	str	Cluster ID for weak component built from protein_fident_weighted_sum metric with 70 threshold
+protein_fident_weighted_sum__95__weak__component	str	Cluster ID for weak component built from protein_fident_weighted_sum metric with 95 threshold
+protein_fident_weighted_sum__100__weak__component	str	Cluster ID for weak component built from protein_fident_weighted_sum metric with 100 threshold
+protein_fident_weighted_sum__50__strong__component	str	Cluster ID for strong component built from protein_fident_weighted_sum metric with 50 threshold
+protein_fident_weighted_sum__70__strong__component	str	Cluster ID for strong component built from protein_fident_weighted_sum metric with 70 threshold
+protein_fident_weighted_sum__95__strong__component	str	Cluster ID for strong component built from protein_fident_weighted_sum metric with 95 threshold
+protein_fident_weighted_sum__100__strong__component	str	Cluster ID for strong component built from protein_fident_weighted_sum metric with 100 threshold
+protein_lddt_max__70__weak__component	str	Cluster ID for weak component built from protein_lddt_max metric with 70 threshold
+protein_lddt_max__95__weak__component	str	Cluster ID for weak component built from protein_lddt_max metric with 95 threshold
+protein_lddt_max__100__weak__component	str	Cluster ID for weak component built from protein_lddt_max metric with 100 threshold
+protein_lddt_max__70__strong__component	str	Cluster ID for strong component built from protein_lddt_max metric with 70 threshold
+protein_lddt_max__95__strong__component	str	Cluster ID for strong component built from protein_lddt_max metric with 95 threshold
+protein_lddt_max__100__strong__component	str	Cluster ID for strong component built from protein_lddt_max metric with 100 threshold
+protein_lddt_qcov_max__50__weak__component	str	Cluster ID for weak component built from protein_lddt_qcov_max metric with 50 threshold
+protein_lddt_qcov_max__70__weak__component	str	Cluster ID for weak component built from protein_lddt_qcov_max metric with 70 threshold
+protein_lddt_qcov_max__95__weak__component	str	Cluster ID for weak component built from protein_lddt_qcov_max metric with 95 threshold
+protein_lddt_qcov_max__100__weak__component	str	Cluster ID for weak component built from protein_lddt_qcov_max metric with 100 threshold
+protein_lddt_qcov_max__50__strong__component	str	Cluster ID for strong component built from protein_lddt_qcov_max metric with 50 threshold
+protein_lddt_qcov_max__70__strong__component	str	Cluster ID for strong component built from protein_lddt_qcov_max metric with 70 threshold
+protein_lddt_qcov_max__95__strong__component	str	Cluster ID for strong component built from protein_lddt_qcov_max metric with 95 threshold
+protein_lddt_qcov_max__100__strong__component	str	Cluster ID for strong component built from protein_lddt_qcov_max metric with 100 threshold
+protein_lddt_qcov_weighted_max__50__weak__component	str	Cluster ID for weak component built from protein_lddt_qcov_weighted_max metric with 50 threshold
+protein_lddt_qcov_weighted_max__70__weak__component	str	Cluster ID for weak component built from protein_lddt_qcov_weighted_max metric with 70 threshold
+protein_lddt_qcov_weighted_max__95__weak__component	str	Cluster ID for weak component built from protein_lddt_qcov_weighted_max metric with 95 threshold
+protein_lddt_qcov_weighted_max__100__weak__component	str	Cluster ID for weak component built from protein_lddt_qcov_weighted_max metric with 100 threshold
+protein_lddt_qcov_weighted_max__50__strong__component	str	Cluster ID for strong component built from protein_lddt_qcov_weighted_max metric with 50 threshold
+protein_lddt_qcov_weighted_max__70__strong__component	str	Cluster ID for strong component built from protein_lddt_qcov_weighted_max metric with 70 threshold
+protein_lddt_qcov_weighted_max__95__strong__component	str	Cluster ID for strong component built from protein_lddt_qcov_weighted_max metric with 95 threshold
+protein_lddt_qcov_weighted_max__100__strong__component	str	Cluster ID for strong component built from protein_lddt_qcov_weighted_max metric with 100 threshold
+protein_lddt_qcov_weighted_sum__50__weak__component	str	Cluster ID for weak component built from protein_lddt_qcov_weighted_sum metric with 50 threshold
+protein_lddt_qcov_weighted_sum__70__weak__component	str	Cluster ID for weak component built from protein_lddt_qcov_weighted_sum metric with 70 threshold
+protein_lddt_qcov_weighted_sum__95__weak__component	str	Cluster ID for weak component built from protein_lddt_qcov_weighted_sum metric with 95 threshold
+protein_lddt_qcov_weighted_sum__100__weak__component	str	Cluster ID for weak component built from protein_lddt_qcov_weighted_sum metric with 100 threshold
+protein_lddt_qcov_weighted_sum__50__strong__component	str	Cluster ID for strong component built from protein_lddt_qcov_weighted_sum metric with 50 threshold
+protein_lddt_qcov_weighted_sum__70__strong__component	str	Cluster ID for strong component built from protein_lddt_qcov_weighted_sum metric with 70 threshold
+protein_lddt_qcov_weighted_sum__95__strong__component	str	Cluster ID for strong component built from protein_lddt_qcov_weighted_sum metric with 95 threshold
+protein_lddt_qcov_weighted_sum__100__strong__component	str	Cluster ID for strong component built from protein_lddt_qcov_weighted_sum metric with 100 threshold
+protein_lddt_weighted_max__70__weak__component	str	Cluster ID for weak component built from protein_lddt_weighted_max metric with 70 threshold
+protein_lddt_weighted_max__95__weak__component	str	Cluster ID for weak component built from protein_lddt_weighted_max metric with 95 threshold
+protein_lddt_weighted_max__100__weak__component	str	Cluster ID for weak component built from protein_lddt_weighted_max metric with 100 threshold
+protein_lddt_weighted_max__70__strong__component	str	Cluster ID for strong component built from protein_lddt_weighted_max metric with 70 threshold
+protein_lddt_weighted_max__95__strong__component	str	Cluster ID for strong component built from protein_lddt_weighted_max metric with 95 threshold
+protein_lddt_weighted_max__100__strong__component	str	Cluster ID for strong component built from protein_lddt_weighted_max metric with 100 threshold
+protein_lddt_weighted_sum__50__weak__component	str	Cluster ID for weak component built from protein_lddt_weighted_sum metric with 50 threshold
+protein_lddt_weighted_sum__70__weak__component	str	Cluster ID for weak component built from protein_lddt_weighted_sum metric with 70 threshold
+protein_lddt_weighted_sum__95__weak__component	str	Cluster ID for weak component built from protein_lddt_weighted_sum metric with 95 threshold
+protein_lddt_weighted_sum__100__weak__component	str	Cluster ID for weak component built from protein_lddt_weighted_sum metric with 100 threshold
+protein_lddt_weighted_sum__50__strong__component	str	Cluster ID for strong component built from protein_lddt_weighted_sum metric with 50 threshold
+protein_lddt_weighted_sum__70__strong__component	str	Cluster ID for strong component built from protein_lddt_weighted_sum metric with 70 threshold
+protein_lddt_weighted_sum__95__strong__component	str	Cluster ID for strong component built from protein_lddt_weighted_sum metric with 95 threshold
+protein_lddt_weighted_sum__100__strong__component	str	Cluster ID for strong component built from protein_lddt_weighted_sum metric with 100 threshold
+protein_qcov_weighted_sum__100__weak__component	str	Cluster ID for weak component built from protein_qcov_weighted_sum metric with 100 threshold
+protein_qcov_weighted_sum__100__strong__component	str	Cluster ID for strong component built from protein_qcov_weighted_sum metric with 100 threshold
+protein_seqsim_max__70__weak__component	str	Cluster ID for weak component built from protein_seqsim_max metric with 70 threshold
+protein_seqsim_max__95__weak__component	str	Cluster ID for weak component built from protein_seqsim_max metric with 95 threshold
+protein_seqsim_max__100__weak__component	str	Cluster ID for weak component built from protein_seqsim_max metric with 100 threshold
+protein_seqsim_max__70__strong__component	str	Cluster ID for strong component built from protein_seqsim_max metric with 70 threshold
+protein_seqsim_max__95__strong__component	str	Cluster ID for strong component built from protein_seqsim_max metric with 95 threshold
+protein_seqsim_max__100__strong__component	str	Cluster ID for strong component built from protein_seqsim_max metric with 100 threshold
+protein_seqsim_qcov_max__50__weak__component	str	Cluster ID for weak component built from protein_seqsim_qcov_max metric with 50 threshold
+protein_seqsim_qcov_max__70__weak__component	str	Cluster ID for weak component built from protein_seqsim_qcov_max metric with 70 threshold
+protein_seqsim_qcov_max__95__weak__component	str	Cluster ID for weak component built from protein_seqsim_qcov_max metric with 95 threshold
+protein_seqsim_qcov_max__100__weak__component	str	Cluster ID for weak component built from protein_seqsim_qcov_max metric with 100 threshold
+protein_seqsim_qcov_max__50__strong__component	str	Cluster ID for strong component built from protein_seqsim_qcov_max metric with 50 threshold
+protein_seqsim_qcov_max__70__strong__component	str	Cluster ID for strong component built from protein_seqsim_qcov_max metric with 70 threshold
+protein_seqsim_qcov_max__95__strong__component	str	Cluster ID for strong component built from protein_seqsim_qcov_max metric with 95 threshold
+protein_seqsim_qcov_max__100__strong__component	str	Cluster ID for strong component built from protein_seqsim_qcov_max metric with 100 threshold
+protein_seqsim_qcov_weighted_max__50__weak__component	str	Cluster ID for weak component built from protein_seqsim_qcov_weighted_max metric with 50 threshold
+protein_seqsim_qcov_weighted_max__70__weak__component	str	Cluster ID for weak component built from protein_seqsim_qcov_weighted_max metric with 70 threshold
+protein_seqsim_qcov_weighted_max__95__weak__component	str	Cluster ID for weak component built from protein_seqsim_qcov_weighted_max metric with 95 threshold
+protein_seqsim_qcov_weighted_max__100__weak__component	str	Cluster ID for weak component built from protein_seqsim_qcov_weighted_max metric with 100 threshold
+protein_seqsim_qcov_weighted_max__50__strong__component	str	Cluster ID for strong component built from protein_seqsim_qcov_weighted_max metric with 50 threshold
+protein_seqsim_qcov_weighted_max__70__strong__component	str	Cluster ID for strong component built from protein_seqsim_qcov_weighted_max metric with 70 threshold
+protein_seqsim_qcov_weighted_max__95__strong__component	str	Cluster ID for strong component built from protein_seqsim_qcov_weighted_max metric with 95 threshold
+protein_seqsim_qcov_weighted_max__100__strong__component	str	Cluster ID for strong component built from protein_seqsim_qcov_weighted_max metric with 100 threshold
+protein_seqsim_qcov_weighted_sum__50__weak__component	str	Cluster ID for weak component built from protein_seqsim_qcov_weighted_sum metric with 50 threshold
+protein_seqsim_qcov_weighted_sum__70__weak__component	str	Cluster ID for weak component built from protein_seqsim_qcov_weighted_sum metric with 70 threshold
+protein_seqsim_qcov_weighted_sum__95__weak__component	str	Cluster ID for weak component built from protein_seqsim_qcov_weighted_sum metric with 95 threshold
+protein_seqsim_qcov_weighted_sum__100__weak__component	str	Cluster ID for weak component built from protein_seqsim_qcov_weighted_sum metric with 100 threshold
+protein_seqsim_qcov_weighted_sum__50__strong__component	str	Cluster ID for strong component built from protein_seqsim_qcov_weighted_sum metric with 50 threshold
+protein_seqsim_qcov_weighted_sum__70__strong__component	str	Cluster ID for strong component built from protein_seqsim_qcov_weighted_sum metric with 70 threshold
+protein_seqsim_qcov_weighted_sum__95__strong__component	str	Cluster ID for strong component built from protein_seqsim_qcov_weighted_sum metric with 95 threshold
+protein_seqsim_qcov_weighted_sum__100__strong__component	str	Cluster ID for strong component built from protein_seqsim_qcov_weighted_sum metric with 100 threshold
+protein_seqsim_weighted_max__70__weak__component	str	Cluster ID for weak component built from protein_seqsim_weighted_max metric with 70 threshold
+protein_seqsim_weighted_max__95__weak__component	str	Cluster ID for weak component built from protein_seqsim_weighted_max metric with 95 threshold
+protein_seqsim_weighted_max__100__weak__component	str	Cluster ID for weak component built from protein_seqsim_weighted_max metric with 100 threshold
+protein_seqsim_weighted_max__70__strong__component	str	Cluster ID for strong component built from protein_seqsim_weighted_max metric with 70 threshold
+protein_seqsim_weighted_max__95__strong__component	str	Cluster ID for strong component built from protein_seqsim_weighted_max metric with 95 threshold
+protein_seqsim_weighted_max__100__strong__component	str	Cluster ID for strong component built from protein_seqsim_weighted_max metric with 100 threshold
+protein_seqsim_weighted_sum__50__weak__component	str	Cluster ID for weak component built from protein_seqsim_weighted_sum metric with 50 threshold
+protein_seqsim_weighted_sum__70__weak__component	str	Cluster ID for weak component built from protein_seqsim_weighted_sum metric with 70 threshold
+protein_seqsim_weighted_sum__95__weak__component	str	Cluster ID for weak component built from protein_seqsim_weighted_sum metric with 95 threshold
+protein_seqsim_weighted_sum__100__weak__component	str	Cluster ID for weak component built from protein_seqsim_weighted_sum metric with 100 threshold
+protein_seqsim_weighted_sum__50__strong__component	str	Cluster ID for strong component built from protein_seqsim_weighted_sum metric with 50 threshold
+protein_seqsim_weighted_sum__70__strong__component	str	Cluster ID for strong component built from protein_seqsim_weighted_sum metric with 70 threshold
+protein_seqsim_weighted_sum__95__strong__component	str	Cluster ID for strong component built from protein_seqsim_weighted_sum metric with 95 threshold
+protein_seqsim_weighted_sum__100__strong__component	str	Cluster ID for strong component built from protein_seqsim_weighted_sum metric with 100 threshold
+tanimoto_similarity_max__30__weak__component	str	Cluster ID for weak component built from tanimoto_similarity_max metric with 30 threshold
+tanimoto_similarity_max__50__weak__component	str	Cluster ID for weak component built from tanimoto_similarity_max metric with 50 threshold
+tanimoto_similarity_max__70__weak__component	str	Cluster ID for weak component built from tanimoto_similarity_max metric with 70 threshold
+tanimoto_similarity_max__95__weak__component	str	Cluster ID for weak component built from tanimoto_similarity_max metric with 95 threshold
+tanimoto_similarity_max__100__weak__component	str	Cluster ID for weak component built from tanimoto_similarity_max metric with 100 threshold
+tanimoto_similarity_max__30__strong__component	str	Cluster ID for strong component built from tanimoto_similarity_max metric with 30 threshold
+tanimoto_similarity_max__50__strong__component	str	Cluster ID for strong component built from tanimoto_similarity_max metric with 50 threshold
+tanimoto_similarity_max__70__strong__component	str	Cluster ID for strong component built from tanimoto_similarity_max metric with 70 threshold
+tanimoto_similarity_max__95__strong__component	str	Cluster ID for strong component built from tanimoto_similarity_max metric with 95 threshold
+tanimoto_similarity_max__100__strong__component	str	Cluster ID for strong component built from tanimoto_similarity_max metric with 100 threshold
+pli_qcov__50__community	str	Cluster ID for community built from pli_qcov metric with 50 threshold
+pli_qcov__70__community	str	Cluster ID for community built from pli_qcov metric with 70 threshold
+pli_qcov__95__community	str	Cluster ID for community built from pli_qcov metric with 95 threshold
+pli_qcov__100__community	str	Cluster ID for community built from pli_qcov metric with 100 threshold
+pli_unique_qcov__0__community	str	Cluster ID for community built from pli_unique_qcov metric with 0 threshold
+pli_unique_qcov__50__community	str	Cluster ID for community built from pli_unique_qcov metric with 50 threshold
+pli_unique_qcov__70__community	str	Cluster ID for community built from pli_unique_qcov metric with 70 threshold
+pli_unique_qcov__95__community	str	Cluster ID for community built from pli_unique_qcov metric with 95 threshold
+pli_unique_qcov__100__community	str	Cluster ID for community built from pli_unique_qcov metric with 100 threshold
+pocket_fident__50__community	str	Cluster ID for community built from pocket_fident metric with 50 threshold
+pocket_fident__70__community	str	Cluster ID for community built from pocket_fident metric with 70 threshold
+pocket_fident__95__community	str	Cluster ID for community built from pocket_fident metric with 95 threshold
+pocket_fident__100__community	str	Cluster ID for community built from pocket_fident metric with 100 threshold
+pocket_fident_qcov__50__community	str	Cluster ID for community built from pocket_fident_qcov metric with 50 threshold
+pocket_fident_qcov__70__community	str	Cluster ID for community built from pocket_fident_qcov metric with 70 threshold
+pocket_fident_qcov__95__community	str	Cluster ID for community built from pocket_fident_qcov metric with 95 threshold
+pocket_fident_qcov__100__community	str	Cluster ID for community built from pocket_fident_qcov metric with 100 threshold
+pocket_lddt__50__community	str	Cluster ID for community built from pocket_lddt metric with 50 threshold
+pocket_lddt__70__community	str	Cluster ID for community built from pocket_lddt metric with 70 threshold
+pocket_lddt__95__community	str	Cluster ID for community built from pocket_lddt metric with 95 threshold
+pocket_lddt__100__community	str	Cluster ID for community built from pocket_lddt metric with 100 threshold
+pocket_lddt_qcov__50__community	str	Cluster ID for community built from pocket_lddt_qcov metric with 50 threshold
+pocket_lddt_qcov__70__community	str	Cluster ID for community built from pocket_lddt_qcov metric with 70 threshold
+pocket_lddt_qcov__95__community	str	Cluster ID for community built from pocket_lddt_qcov metric with 95 threshold
+pocket_lddt_qcov__100__community	str	Cluster ID for community built from pocket_lddt_qcov metric with 100 threshold
+pocket_qcov__50__community	str	Cluster ID for community built from pocket_qcov metric with 50 threshold
+pocket_qcov__70__community	str	Cluster ID for community built from pocket_qcov metric with 70 threshold
+pocket_qcov__95__community	str	Cluster ID for community built from pocket_qcov metric with 95 threshold
+pocket_qcov__100__community	str	Cluster ID for community built from pocket_qcov metric with 100 threshold
+protein_fident_max__50__community	str	Cluster ID for community built from protein_fident_max metric with 50 threshold
+protein_fident_max__70__community	str	Cluster ID for community built from protein_fident_max metric with 70 threshold
+protein_fident_max__95__community	str	Cluster ID for community built from protein_fident_max metric with 95 threshold
+protein_fident_max__100__community	str	Cluster ID for community built from protein_fident_max metric with 100 threshold
+protein_fident_qcov_max__50__community	str	Cluster ID for community built from protein_fident_qcov_max metric with 50 threshold
+protein_fident_qcov_max__70__community	str	Cluster ID for community built from protein_fident_qcov_max metric with 70 threshold
+protein_fident_qcov_max__95__community	str	Cluster ID for community built from protein_fident_qcov_max metric with 95 threshold
+protein_fident_qcov_max__100__community	str	Cluster ID for community built from protein_fident_qcov_max metric with 100 threshold
+protein_fident_qcov_weighted_max__50__community	str	Cluster ID for community built from protein_fident_qcov_weighted_max metric with 50 threshold
+protein_fident_qcov_weighted_max__70__community	str	Cluster ID for community built from protein_fident_qcov_weighted_max metric with 70 threshold
+protein_fident_qcov_weighted_max__95__community	str	Cluster ID for community built from protein_fident_qcov_weighted_max metric with 95 threshold
+protein_fident_qcov_weighted_max__100__community	str	Cluster ID for community built from protein_fident_qcov_weighted_max metric with 100 threshold
+protein_fident_qcov_weighted_sum__50__community	str	Cluster ID for community built from protein_fident_qcov_weighted_sum metric with 50 threshold
+protein_fident_qcov_weighted_sum__70__community	str	Cluster ID for community built from protein_fident_qcov_weighted_sum metric with 70 threshold
+protein_fident_qcov_weighted_sum__95__community	str	Cluster ID for community built from protein_fident_qcov_weighted_sum metric with 95 threshold
+protein_fident_qcov_weighted_sum__100__community	str	Cluster ID for community built from protein_fident_qcov_weighted_sum metric with 100 threshold
+protein_fident_weighted_max__50__community	str	Cluster ID for community built from protein_fident_weighted_max metric with 50 threshold
+protein_fident_weighted_max__70__community	str	Cluster ID for community built from protein_fident_weighted_max metric with 70 threshold
+protein_fident_weighted_max__95__community	str	Cluster ID for community built from protein_fident_weighted_max metric with 95 threshold
+protein_fident_weighted_max__100__community	str	Cluster ID for community built from protein_fident_weighted_max metric with 100 threshold
+protein_fident_weighted_sum__50__community	str	Cluster ID for community built from protein_fident_weighted_sum metric with 50 threshold
+protein_fident_weighted_sum__70__community	str	Cluster ID for community built from protein_fident_weighted_sum metric with 70 threshold
+protein_fident_weighted_sum__95__community	str	Cluster ID for community built from protein_fident_weighted_sum metric with 95 threshold
+protein_fident_weighted_sum__100__community	str	Cluster ID for community built from protein_fident_weighted_sum metric with 100 threshold
+protein_lddt_max__70__community	str	Cluster ID for community built from protein_lddt_max metric with 70 threshold
+protein_lddt_max__95__community	str	Cluster ID for community built from protein_lddt_max metric with 95 threshold
+protein_lddt_max__100__community	str	Cluster ID for community built from protein_lddt_max metric with 100 threshold
+protein_lddt_qcov_max__50__community	str	Cluster ID for community built from protein_lddt_qcov_max metric with 50 threshold
+protein_lddt_qcov_max__70__community	str	Cluster ID for community built from protein_lddt_qcov_max metric with 70 threshold
+protein_lddt_qcov_max__95__community	str	Cluster ID for community built from protein_lddt_qcov_max metric with 95 threshold
+protein_lddt_qcov_max__100__community	str	Cluster ID for community built from protein_lddt_qcov_max metric with 100 threshold
+protein_lddt_qcov_weighted_max__50__community	str	Cluster ID for community built from protein_lddt_qcov_weighted_max metric with 50 threshold
+protein_lddt_qcov_weighted_max__70__community	str	Cluster ID for community built from protein_lddt_qcov_weighted_max metric with 70 threshold
+protein_lddt_qcov_weighted_max__95__community	str	Cluster ID for community built from protein_lddt_qcov_weighted_max metric with 95 threshold
+protein_lddt_qcov_weighted_max__100__community	str	Cluster ID for community built from protein_lddt_qcov_weighted_max metric with 100 threshold
+protein_lddt_qcov_weighted_sum__50__community	str	Cluster ID for community built from protein_lddt_qcov_weighted_sum metric with 50 threshold
+protein_lddt_qcov_weighted_sum__70__community	str	Cluster ID for community built from protein_lddt_qcov_weighted_sum metric with 70 threshold
+protein_lddt_qcov_weighted_sum__95__community	str	Cluster ID for community built from protein_lddt_qcov_weighted_sum metric with 95 threshold
+protein_lddt_qcov_weighted_sum__100__community	str	Cluster ID for community built from protein_lddt_qcov_weighted_sum metric with 100 threshold
+protein_lddt_weighted_max__70__community	str	Cluster ID for community built from protein_lddt_weighted_max metric with 70 threshold
+protein_lddt_weighted_max__95__community	str	Cluster ID for community built from protein_lddt_weighted_max metric with 95 threshold
+protein_lddt_weighted_max__100__community	str	Cluster ID for community built from protein_lddt_weighted_max metric with 100 threshold
+protein_lddt_weighted_sum__50__community	str	Cluster ID for community built from protein_lddt_weighted_sum metric with 50 threshold
+protein_lddt_weighted_sum__70__community	str	Cluster ID for community built from protein_lddt_weighted_sum metric with 70 threshold
+protein_lddt_weighted_sum__95__community	str	Cluster ID for community built from protein_lddt_weighted_sum metric with 95 threshold
+protein_lddt_weighted_sum__100__community	str	Cluster ID for community built from protein_lddt_weighted_sum metric with 100 threshold
+protein_qcov_weighted_sum__100__community	str	Cluster ID for community built from protein_qcov_weighted_sum metric with 100 threshold
+protein_seqsim_max__70__community	str	Cluster ID for community built from protein_seqsim_max metric with 70 threshold
+protein_seqsim_max__95__community	str	Cluster ID for community built from protein_seqsim_max metric with 95 threshold
+protein_seqsim_max__100__community	str	Cluster ID for community built from protein_seqsim_max metric with 100 threshold
+protein_seqsim_qcov_max__50__community	str	Cluster ID for community built from protein_seqsim_qcov_max metric with 50 threshold
+protein_seqsim_qcov_max__70__community	str	Cluster ID for community built from protein_seqsim_qcov_max metric with 70 threshold
+protein_seqsim_qcov_max__95__community	str	Cluster ID for community built from protein_seqsim_qcov_max metric with 95 threshold
+protein_seqsim_qcov_max__100__community	str	Cluster ID for community built from protein_seqsim_qcov_max metric with 100 threshold
+protein_seqsim_qcov_weighted_max__50__community	str	Cluster ID for community built from protein_seqsim_qcov_weighted_max metric with 50 threshold
+protein_seqsim_qcov_weighted_max__70__community	str	Cluster ID for community built from protein_seqsim_qcov_weighted_max metric with 70 threshold
+protein_seqsim_qcov_weighted_max__95__community	str	Cluster ID for community built from protein_seqsim_qcov_weighted_max metric with 95 threshold
+protein_seqsim_qcov_weighted_max__100__community	str	Cluster ID for community built from protein_seqsim_qcov_weighted_max metric with 100 threshold
+protein_seqsim_qcov_weighted_sum__50__community	str	Cluster ID for community built from protein_seqsim_qcov_weighted_sum metric with 50 threshold
+protein_seqsim_qcov_weighted_sum__70__community	str	Cluster ID for community built from protein_seqsim_qcov_weighted_sum metric with 70 threshold
+protein_seqsim_qcov_weighted_sum__95__community	str	Cluster ID for community built from protein_seqsim_qcov_weighted_sum metric with 95 threshold
+protein_seqsim_qcov_weighted_sum__100__community	str	Cluster ID for community built from protein_seqsim_qcov_weighted_sum metric with 100 threshold
+protein_seqsim_weighted_max__70__community	str	Cluster ID for community built from protein_seqsim_weighted_max metric with 70 threshold
+protein_seqsim_weighted_max__95__community	str	Cluster ID for community built from protein_seqsim_weighted_max metric with 95 threshold
+protein_seqsim_weighted_max__100__community	str	Cluster ID for community built from protein_seqsim_weighted_max metric with 100 threshold
+protein_seqsim_weighted_sum__50__community	str	Cluster ID for community built from protein_seqsim_weighted_sum metric with 50 threshold
+protein_seqsim_weighted_sum__70__community	str	Cluster ID for community built from protein_seqsim_weighted_sum metric with 70 threshold
+protein_seqsim_weighted_sum__95__community	str	Cluster ID for community built from protein_seqsim_weighted_sum metric with 95 threshold
+protein_seqsim_weighted_sum__100__community	str	Cluster ID for community built from protein_seqsim_weighted_sum metric with 100 threshold
+tanimoto_similarity_max__30__community	str	Cluster ID for community built from tanimoto_similarity_max metric with 30 threshold
+tanimoto_similarity_max__50__community	str	Cluster ID for community built from tanimoto_similarity_max metric with 50 threshold
+tanimoto_similarity_max__70__community	str	Cluster ID for community built from tanimoto_similarity_max metric with 70 threshold
+tanimoto_similarity_max__95__community	str	Cluster ID for community built from tanimoto_similarity_max metric with 95 threshold
+tanimoto_similarity_max__100__community	str	Cluster ID for community built from tanimoto_similarity_max metric with 100 threshold

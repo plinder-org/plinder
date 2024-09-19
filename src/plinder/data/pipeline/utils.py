@@ -11,19 +11,20 @@ from json import dumps, load
 from os import listdir
 from pathlib import Path
 from time import time
-from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, TypeVar
+from typing import TYPE_CHECKING, Any, Callable, Dict, Literal, Optional, TypeVar
 from zipfile import ZIP_DEFLATED, ZipFile
 
 import pandas as pd
 from omegaconf import DictConfig
 
+from plinder.core.scores import query_clusters
 from plinder.core.utils import schemas
 from plinder.core.utils.log import setup_logger
 from plinder.core.utils.unpack import expand_config_context
 from plinder.data.utils import tanimoto
+from plinder.data.utils.annotations.aggregate_annotations import Entry
 
 if TYPE_CHECKING:
-    from plinder.data.utils.annotations.aggregate_annotations import Entry
     from plinder.data.utils.annotations.get_similarity_scores import Scorer
 
 
@@ -456,59 +457,142 @@ def ingest_flow_control(func: Callable[..., T]) -> Callable[..., T]:
     return inner
 
 
+def add_cluster_columns(*, index: pd.DataFrame) -> pd.DataFrame:
+    """
+    Add cluster columns to the annotation table
+    """
+    try:
+        clusters = query_clusters(
+            columns=[
+                "system_id",
+                "label",
+                "threshold",
+                "metric",
+                "cluster",
+                "directed",
+            ],
+            filters=[("system_id", "in", set(index["system_id"]))],
+        )
+    except Exception as e:
+        LOG.error(f"Could not query clusters: {e}")
+        return index
+    if clusters is None:
+        LOG.error("No clusters found")
+        return index
+    clusters = clusters.pivot_table(
+        values="label",
+        index="system_id",
+        columns=["metric", "cluster", "directed", "threshold"],
+        aggfunc="first",
+    )
+    new_column_names = []
+    for metric, cluster, directed, threshold in clusters.columns:
+        if cluster == "components":
+            if directed == "True":
+                d = "strong__component"
+            else:
+                d = "weak__component"
+        else:
+            d = "community"
+        new_column_names.append(f"{metric}__{threshold}__{d}")
+    clusters.columns = new_column_names
+    clusters.reset_index(inplace=True)
+    return index.merge(clusters, on="system_id", how="left")
+
+
+def add_aggregated_columns(*, index: pd.DataFrame) -> pd.DataFrame:
+    """
+    Add aggregated columns to the annotation table
+    """
+    index = add_cluster_columns(index=index)
+    if "pli_qcov__100__strong__component" in index.columns:
+        index["uniqueness"] = (
+            index["system_id_no_biounit"]
+            + "_"
+            + index["pli_qcov__100__strong__component"]
+        )
+    index["biounit_num_ligands"] = index.groupby(["entry_pdb_id", "system_biounit_id"])[
+        "system_id"
+    ].transform("count")
+    index["biounit_num_unique_ccd_codes"] = index.groupby(
+        ["entry_pdb_id", "system_biounit_id"]
+    )["ligand_unique_ccd_code"].transform("nunique")
+    index["biounit_num_proper_ligands"] = index.groupby(
+        ["entry_pdb_id", "system_biounit_id"]
+    )["ligand_is_proper"].transform("sum")
+    for n in [
+        "lipinski",
+        "cofactor",
+        "fragment",
+        "oligo",
+        "artifact",
+        "other",
+        "covalent",
+        "invalid",
+        "ion",
+    ]:
+        index[f"system_ligand_has_{n}"] = index.groupby("system_id")[
+            f"ligand_is_{n}"
+        ].transform("any")
+    index["system_protein_chains_total_length"] = index[
+        "system_protein_chains_length"
+    ].apply(sum)
+    ccd_dict = (
+        index.groupby("system_id")["ligand_unique_ccd_code"]
+        .agg(lambda x: "-".join(sorted(set(x))))
+        .to_dict()
+    )
+    index["system_unique_ccd_codes"] = index["system_id"].map(ccd_dict)
+    ccd_proper_dict = (
+        index[index["ligand_is_proper"]]
+        .groupby("system_id")["ligand_unique_ccd_code"]
+        .agg(lambda x: "-".join(sorted(set(x))))
+        .to_dict()
+    )
+    index["system_proper_unique_ccd_codes"] = index["system_id"].map(ccd_proper_dict)
+    return index
+
+
 def create_index(*, data_dir: Path, force_update: bool = False) -> pd.DataFrame:
     """
     Create the index
     """
-    if not (data_dir / "index" / "annotation_table.parquet").exists() or force_update:
+    index = data_dir / "index" / "annotation_table.parquet"
+    index.parent.mkdir(exist_ok=True, parents=True)
+
+    if not index.exists() or force_update:
         dfs = []
-        for path in (data_dir / "qc" / "index").glob("*"):
+        for i, path in enumerate((data_dir / "qc" / "index").glob("*")):
             df = pd.read_parquet(path)
+            LOG.info(f"{i} {path.name} shape={df.shape}")
             if not df.empty:
                 dfs.append(df)
         df = pd.concat(dfs).reset_index(drop=True)
-        (data_dir / "index").mkdir(exist_ok=True, parents=True)
-        df.to_parquet(data_dir / "index" / "annotation_table.parquet", index=False)
+        # TODO: remove these kludges after annotations are rerun
+        key = "ligand_posebusters_internal_energy"
+        df[key] = df[key].astype(bool)
+        df.rename(
+            columns={
+                f"{key}_Kinase name": f"{key}_kinase_name"
+                for key in [
+                    "ligand_interacting_ligand_chains",
+                    "ligand_neighboring_ligand_chains",
+                    "ligand_protein_chains",
+                    "system_ligand_chains",
+                    "system_pocket",
+                    "system_protein_chains",
+                ]
+            },
+            inplace=True,
+        )
+        df.to_parquet(index, index=False)
     else:
-        df = pd.read_parquet(data_dir / "index" / "annotation_table.parquet")
-    update = False
-    if "pli_qcov__100__strong__component" not in df.columns or force_update:
-        try:
-            pli_qcov_cluster = pd.read_parquet(
-                data_dir
-                / "clusters"
-                / "cluster=components"
-                / "directed=True"
-                / "metric=pli_qcov"
-                / "threshold=100.parquet"
-            )
-            df["pli_qcov__100__strong__component"] = df["system_id"].map(
-                dict(zip(pli_qcov_cluster["system_id"], pli_qcov_cluster["label"]))
-            )
-            update = True
-        except Exception:
-            pass
-    if (
-        "protein_lddt_qcov_weighted_sum__100__strong__component" not in df.columns
-        or force_update
-    ):
-        try:
-            lddt_qcov_cluster = pd.read_parquet(
-                data_dir
-                / "clusters"
-                / "cluster=components"
-                / "directed=True"
-                / "metric=protein_lddt_qcov_weighted_sum"
-                / "threshold=100.parquet"
-            )
-            df["protein_lddt_qcov_weighted_sum__100__strong__component"] = df[
-                "system_id"
-            ].map(dict(zip(lddt_qcov_cluster["system_id"], lddt_qcov_cluster["label"])))
-            update = True
-        except Exception:
-            pass
+        df = pd.read_parquet(index)
+    old_columns = set(df.columns)
+    df = add_aggregated_columns(index=df)
+    update = old_columns != set(df.columns)
     if update or force_update:
-        df.to_parquet(data_dir / "index" / "annotation_table.parquet", index=False)
+        df.to_parquet(index, index=False)
     return df
 
 
@@ -518,31 +602,93 @@ def create_nonredundant_dataset(*, data_dir: Path) -> None:
     and simultaneously generates a non-redundant index for various use
     cases. Ultimately this should run as the join step of structure_qc.
     """
-    df = create_index(data_dir=data_dir)
-    df_trainable = df[
-        ~(df.ligand_is_invalid | df.ligand_is_artifact | df.ligand_is_ion)
-        & (df.ligand_passes_valence_checks)
-        & (df.ligand_sanitization)
-        & (df.ligand_passes_kekulization)
-        & (df.ligand_mol_pred_loaded)
-        & (df.system_num_ligand_chains == 1)
-        & (df.ligand_rdkit_canonical_smiles.notna())
-    ].reset_index(drop=True)
-
-    df_trainable["uniqueness"] = (
-        df_trainable["system_id_no_biounit"]
-        + "_"
-        + df_trainable["pli_qcov__100__strong__component"]
-    )
-    df_trainable_nonredundant = df_trainable.sort_values(
-        "system_biounit_id"
-    ).drop_duplicates("uniqueness")
-    df_trainable_nonredundant.to_parquet(
+    if not (data_dir / "index" / "annotation_table.parquet").exists():
+        df = create_index(data_dir=data_dir)
+    else:
+        df = pd.read_parquet(data_dir / "index" / "annotation_table.parquet")
+    df_nonredundant = df.sort_values("system_biounit_id").drop_duplicates("uniqueness")
+    df_nonredundant.to_parquet(
         data_dir / "index" / "annotation_table_nonredundant.parquet", index=False
     )
 
 
-def pack_linked_structures(data_dir: Path, code: str) -> None:
+def apo_file_from_link_id(
+    data_dir: Path,
+    output_dir: Path,
+    link_id: str,
+    force_update: bool = False,
+) -> dict[str, str] | None:
+    from ost import io, mol
+
+    from plinder.data.utils.annotations.save_utils import save_cif_file
+
+    if (output_dir / f"{link_id}.cif").exists() and not force_update:
+        LOG.info(f"skipping {link_id}.cif as it already exists")
+        return None
+
+    pdb_id, chain = link_id.split("_")
+    target_cif = (
+        data_dir
+        / "ingest"
+        / pdb_id[1:3]
+        / f"pdb_0000{pdb_id}"
+        / f"pdb_0000{pdb_id}_xyz-enrich.cif.gz"
+    )
+    if not target_cif.exists():
+        LOG.info(f"skipping {link_id} as {target_cif} does not exist")
+        return None
+
+    target_mol, seqres, info = io.LoadMMCIF(
+        target_cif.as_posix(),
+        seqres=True,
+        info=True,
+        fault_tolerant=True,
+    )
+    target_mol = mol.CreateEntityFromView(target_mol.Select(f"chain='{chain}'"), True)
+    cif_file = output_dir / f"{pdb_id}_{chain}.cif"
+    LOG.info(f"saving {link_id} to {cif_file}")
+    save_cif_file(target_mol, info, cif_file.stem, cif_file)
+    return None
+    # chain_to_seqres = {c.name: c.string for c in seqres}
+    # return chain_to_seqres[chain]
+
+
+def pred_file_from_link_id(
+    data_dir: Path,
+    output_dir: Path,
+    link_id: str,
+    force_update: bool = False,
+) -> None:
+    from ost import io, mol
+
+    from plinder.data.utils.annotations.save_utils import save_cif_file
+
+    if (output_dir / f"{link_id}.cif").exists() and not force_update:
+        LOG.info(f"skipping {link_id}.cif as it already exists")
+        return None
+
+    uniprot_id, chain = link_id.split("_")
+    target_cif = data_dir / "dbs" / "alphafold" / f"AF-{uniprot_id}-F1-model_v4.cif"
+    if not target_cif.exists():
+        LOG.info(f"skipping {link_id} as {target_cif} does not exist")
+        return None
+
+    target_mol, seqres, info = io.LoadMMCIF(
+        target_cif.as_posix(),
+        seqres=True,
+        info=True,
+        fault_tolerant=True,
+    )
+    target_mol = mol.CreateEntityFromView(target_mol.Select(f"chain='{chain}'"), True)
+    cif_file = output_dir / f"{uniprot_id}_{chain}.cif"
+    LOG.info(f"saving {link_id} to {cif_file}")
+    save_cif_file(target_mol, info, cif_file.stem, cif_file)
+    return None
+    # chain_to_seqres = {c.name: c.string for c in seqres}
+    # return chain_to_seqres[chain]
+
+
+def pack_linked_structures(data_dir: Path, code: str, structures: bool = True) -> None:
     """
     Pack generated linked structures into a zip file for a particular
     two character code.
@@ -553,14 +699,17 @@ def pack_linked_structures(data_dir: Path, code: str) -> None:
         plinder root dir
     code : str
         two character code
+    structures : bool, default=True
+        if True, make structure archives
     """
     (data_dir / "links").mkdir(exist_ok=True, parents=True)
+    mode: Literal["r", "w"] = "w" if structures else "r"
     with ZipFile(
-        data_dir / "links" / f"{code}.zip", "w", compression=ZIP_DEFLATED
+        data_dir / "links" / f"{code}.zip", mode, compression=ZIP_DEFLATED
     ) as archive:
         for search_db in ["apo", "pred"]:
             jsons = []
-            root = data_dir / "linked_structures" / search_db
+            root = data_dir / "linked_staging" / search_db
             system_ids = [
                 system_id for system_id in listdir(root) if system_id[1:3] == code
             ]
@@ -573,13 +722,14 @@ def pack_linked_structures(data_dir: Path, code: str) -> None:
                             jsons.append(load(f))
                     except Exception:
                         pass
-                    try:
-                        archive.write(
-                            f"{link}/superposed.cif",
-                            f"{search_db}/{system_id}/{link_id}/superposed.cif",
-                        )
-                    except Exception:
-                        pass
+                    if structures:
+                        try:
+                            archive.write(
+                                f"{link}/superposed.cif",
+                                f"{search_db}/{system_id}/{link_id}/superposed.cif",
+                            )
+                        except Exception:
+                            pass
             df = pd.DataFrame(jsons).rename(
                 columns={"reference": "reference_system_id", "model": "id"}
             )
@@ -588,7 +738,7 @@ def pack_linked_structures(data_dir: Path, code: str) -> None:
             )
 
 
-def mp_pack_linked_structures(*, data_dir: Path) -> None:
+def mp_pack_linked_structures(*, data_dir: Path, structures: bool = True) -> None:
     """
     Use a process pool to pack linked structures into two character code archives.
 
@@ -600,8 +750,21 @@ def mp_pack_linked_structures(*, data_dir: Path) -> None:
 
     with multiprocessing.get_context("spawn").Pool() as pool:
         pool.starmap(
-            pack_linked_structures, zip(repeat(data_dir), listdir(data_dir / "ingest"))
+            pack_linked_structures,
+            zip(repeat(data_dir), listdir(data_dir / "ingest"), repeat(structures)),
         )
+
+
+def pack_source_structures(data_dir: Path, search_db: str) -> None:
+    (data_dir / "linked_structures").mkdir(exist_ok=True, parents=True)
+    with ZipFile(
+        data_dir / "linked_structures" / f"{search_db}.zip",
+        "w",
+        compression=ZIP_DEFLATED,
+    ) as archive:
+        source_structures = data_dir / "linked_staging" / "source" / search_db
+        for path in source_structures.rglob("*.cif"):
+            archive.write(path, path.name)
 
 
 def consolidate_linked_scores(*, data_dir: Path) -> None:
@@ -623,10 +786,17 @@ def consolidate_linked_scores(*, data_dir: Path) -> None:
                 dfs.append(df)
         ndf = pd.concat(dfs)
         odf = pd.read_parquet(
-            data_dir / "linked_structures" / f"{search_db}_links.parquet"
+            data_dir / "linked_staging" / f"{search_db}_links.parquet"
         )
-        df = pd.merge(odf, ndf, on=["reference_system_id", "id"])
-        df.to_parquet(data_dir / "links" / f"{search_db}_links.parquet", index=False)
+        drop = list(
+            set(odf.columns.intersection(ndf.columns))
+            - set(["reference_system_id", "id"])
+        )
+        df = pd.merge(odf.drop(columns=drop), ndf, on=["reference_system_id", "id"])
+        (data_dir / "links" / f"kind={search_db}").mkdir(exist_ok=True, parents=True)
+        df.to_parquet(
+            data_dir / "links" / f"kind={search_db}" / "links.parquet", index=False
+        )
 
 
 def rename_clusters(*, data_dir: Path) -> None:

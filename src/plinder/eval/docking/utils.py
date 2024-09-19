@@ -2,7 +2,6 @@
 # Distributed under the terms of the Apache License 2.0
 from __future__ import annotations
 
-from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -46,13 +45,13 @@ class ReferenceSystem:
     def from_reference_system(
         cls, system_dir: Path, reference_system: str
     ) -> "ReferenceSystem":
-        cif_file = system_dir / reference_system / "receptor.cif"
-        pdb_file = system_dir / reference_system / "receptor.pdb"
+        cif_file = system_dir / "receptor.cif"
+        pdb_file = system_dir / "receptor.pdb"
         entity = io.LoadMMCIF(cif_file.as_posix())
         ligand_sdf_files = {}
         ligands = []
         for chain in reference_system.split("__")[-1].split("_"):
-            sdf_file = system_dir / reference_system / "ligand_files" / f"{chain}.sdf"
+            sdf_file = system_dir / "ligand_files" / f"{chain}.sdf"
             ligand_sdf_files[chain] = sdf_file
             ligands.append(
                 io.LoadEntity(sdf_file.as_posix(), format="sdf").Select("ele != H")
@@ -96,7 +95,7 @@ class ModelScores:
     score_posebusters: bool = False
     posebusters_mapper: str = "scrmsd"
     ligand_scores: list[LigandScores] | None = None
-    rigid: bool = True
+    rigid: bool = False
     score_protein: bool = False
     num_mapped_reference_proteins: int = 0
     num_mapped_proteins: int = 0
@@ -109,7 +108,7 @@ class ModelScores:
         model_file: Path,
         model_ligand_sdf_files: list[str | Path],
         reference: ReferenceSystem,
-        rigid: bool = True,
+        rigid: bool = False,
         score_protein: bool = False,
         score_posebusters: bool = False,
     ) -> "ModelScores":
@@ -272,7 +271,7 @@ class ModelScores:
                             self.posebusters_mapper
                         ].sdf_file,
                         mol_cond=self.reference.receptor_pdb_file,
-                        full_report=False,
+                        full_report=True,
                     ).to_dict()
                     key = (str(ligand_class.sdf_file), chain_name.split("_")[-1])
                     try:
@@ -311,17 +310,36 @@ class ModelScores:
         )
         return average_score, weighted_average_score
 
-    def get_passing_posebusters(self) -> dict[str, bool]:
-        scores = defaultdict(list)
+    def get_average_posebusters(self) -> dict[str, list[Any]]:
+        scores: dict[str, Any] = {}
+        weights: list[float] = []
         if self.ligand_scores is None:
-            return {}
+            return scores
         for ligand_scores in self.ligand_scores:
-            for k in ligand_scores.posebusters:
-                scores[k].append(ligand_scores.posebusters[k])
-        return {f"posebusters_{k}": all(v) for k, v in scores.items()}
+            weights.append(ligand_scores.atom_count)
+            for key, value in ligand_scores.posebusters.items():
+                scores.setdefault(key, [])
+                scores[key].append(value)
+        avg_scores = {}
+        for key, values in scores.items():
+            try:
+                avg_scores[f"posebusters_{key}"] = np.mean(
+                    [w * v for w, v in zip(weights, values)]
+                ) / np.sum(weights)
+            except Exception:
+                try:
+                    if isinstance(values[0], bool):
+                        avg_scores[f"posebusters_{key}"] = np.mean(
+                            [float(val) for val in values]
+                        )
+                    elif isinstance(values[0], str):
+                        avg_scores[f"posebusters_{key}"] = ";".join(values)
+                except Exception:
+                    avg_scores[f"posebusters_{key}"] = None
+        return avg_scores
 
     def summarize_scores(self) -> dict[str, Any]:
-        scores = dict(
+        scores: dict[str, Any] = dict(
             model=self.system,
             reference=self.reference.system_id,
             num_reference_ligands=self.reference.num_ligands,
@@ -341,7 +359,7 @@ class ModelScores:
                 scores[f"{score_name}_wave"],
             ) = self.get_average_ligand_scores(score_name)
         if self.score_posebusters:
-            scores.update(self.get_passing_posebusters())
+            scores.update(self.get_average_posebusters())
         if self.score_protein and self.protein_scores is not None:
             scores["fraction_reference_proteins_mapped"] = (
                 self.num_mapped_reference_proteins / self.reference.num_proteins

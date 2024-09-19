@@ -15,7 +15,6 @@ from omegaconf import DictConfig, ListConfig, OmegaConf
 from tqdm import tqdm
 
 from plinder.core import scores
-from plinder.core.split.utils import get_extended_plindex
 from plinder.core.utils.log import setup_logger
 from plinder.data import clusters
 
@@ -92,7 +91,7 @@ class SplitConfig:
         default_factory=lambda: [
             ["system_pass_validation_criteria", "==", "True"],
             ["system_pass_statistics_criteria", "==", "True"],
-            ["system_num_ligands_in_biounit", "<=", 20],
+            ["biounit_num_ligands", "<=", 20],
         ]
     )
     priority_columns: dict[str, float] = field(
@@ -250,13 +249,12 @@ def prep_data_for_desired_properties(
         data_dir / "index" / "annotation_table.parquet",
         filters=[
             ("system_type", "==", "holo"),
-            ("system_num_interacting_protein_chains", "<=", 5),
+            ("system_num_protein_chains", "<=", 5),
             ("system_num_ligand_chains", "<=", 5),
             ("entry_pdb_id", "in", all_entries_present),
         ],
     )
     LOG.info(f"loaded {entries['system_id'].nunique()} systems from annotation table")
-    entries = get_extended_plindex(plindex=entries)
     nonredundant_to_all = defaultdict(set)
     for system_id, unique_id in zip(entries["system_id"], entries["uniqueness"]):
         nonredundant_to_all[unique_id].add(system_id)
@@ -268,8 +266,8 @@ def prep_data_for_desired_properties(
     LOG.info(f"loaded {len(all_system_ids)} nonredundant systems from annotation table")
 
     entries["system_pass_statistics_criteria"] = (
-        (entries["system_proper_pocket_num_residues"] >= cfg.split.min_max_pocket[0])
-        & (entries["system_proper_pocket_num_residues"] <= cfg.split.min_max_pocket[1])
+        (entries["system_proper_num_pocket_residues"] >= cfg.split.min_max_pocket[0])
+        & (entries["system_proper_num_pocket_residues"] <= cfg.split.min_max_pocket[1])
         & (entries["system_proper_num_interactions"] >= cfg.split.min_max_pli[0])
         & (entries["system_proper_num_interactions"] <= cfg.split.min_max_pli[1])
         & (

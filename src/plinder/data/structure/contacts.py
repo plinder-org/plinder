@@ -162,6 +162,7 @@ def get_contact_df(
     return pd.DataFrame()
 
 
+# TODO: review to replace with more consistent functions
 def pairwise_chain_contacts(
     atom_array: AtomArray, radius: float = 4.5, cell_size: float | None = None
 ) -> pd.DataFrame:
@@ -184,8 +185,8 @@ def pairwise_chain_contacts(
 
     Examples
     --------
-    >>> from plinder.data.structure.atoms import atom_array_from_pdb_file
-    >>> atom_array = atom_array_from_pdb_file('1abc.pdb') # doctest: +SKIP
+    >>> from plinder.data.structure.atoms import atom_array_from_cif_file
+    >>> atom_array = atom_array_from_cif_file('1abc.pdb') # doctest: +SKIP
     >>> pairwise_chain_contacts(atom_array) # doctest: +SKIP
     """
     if not cell_size:

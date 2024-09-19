@@ -12,13 +12,14 @@ from mmcif.api.PdbxContainers import DataContainer
 from mmcif.io.PdbxReader import PdbxReader
 from ost import conop, io, mol
 from PDBValidation.Validation import PDBValidation
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import ConfigDict, Field
 
 from plinder.data.utils.annotations.get_ligand_validation import (
     ResidueListValidation,
     ResidueValidation,
     ResidueValidationThresholds,
 )
+from plinder.data.utils.annotations.utils import DocBaseModel
 
 NON_SMALL_MOL_LIG_TYPES = [
     mol.CHAINTYPE_POLY,
@@ -38,25 +39,6 @@ NON_SMALL_MOL_LIG_TYPES = [
     mol.CHAINTYPE_OLIGOSACCHARIDE,
     mol.CHAINTYPE_N_CHAINTYPES,
 ]
-
-
-def format_residues(
-    residues: list[dict[str, Any]], chain_info: dict[str, dict[str, str]]
-) -> list[str]:
-    """Format residues for DataFrame"""
-    return [
-        "__".join(
-            [
-                f"chain:{r['instance']}.{r['chain']}",
-                f"auth_chain:{chain_info[r['chain']]['auth_chain']}",
-                f"entity_id:{chain_info[r['chain']]['entity_id']}",
-                f"residue_index:{r['residue_index']}",
-                f"residue_number:{r['residue_number']}",
-                f"aa:{r['one_letter_code']}",
-            ]
-        )
-        for r in residues
-    ]
 
 
 def read_mmcif_container(mmcif_filename: Path) -> DataContainer:
@@ -81,7 +63,7 @@ def read_mmcif_container(mmcif_filename: Path) -> DataContainer:
     return data[0]
 
 
-def get_entry_info(data: DataContainer) -> dict[str, str]:
+def get_entry_info(data: DataContainer) -> dict[str, str | float | None]:
     """Get entry-level information from DataContainer
 
     Parameters
@@ -90,7 +72,7 @@ def get_entry_info(data: DataContainer) -> dict[str, str]:
         Data container fot mmcif attributes
     Returns
     -------
-    dict[str, str]
+    dict[str, str | float | None]
         Dictionary of entry-level information
 
     """
@@ -100,12 +82,24 @@ def get_entry_info(data: DataContainer) -> dict[str, str]:
         ("entry_determination_method", "exptl", "method"),
         ("entry_keywords", "struct_keywords", "pdbx_keywords"),
         ("entry_pH", "exptl_crystal_grow", "pH"),
-        ("entry_resolution", "refine", "ls_d_res_high"),
     ]
     for key, obj_name, attr_name in mappings:
         x = data.getObj(obj_name)
         if x is not None:
             entry_info[key] = x.getValueOrDefault(attr_name)
+    resolution_options = [
+        ("refine", "ls_d_res_high"),
+        # ("em_3d_reconstruction", "resolution"), # TODO: add this back for next annotation rerun
+    ]
+    resolution = None
+    for obj_name, attr_name in resolution_options:
+        x = data.getObj(obj_name)
+        if x is not None:
+            r = x.getValueOrDefault(attr_name)
+            if r is not None:
+                resolution = r
+                break
+    entry_info["entry_resolution"] = resolution
     return entry_info
 
 
@@ -226,7 +220,7 @@ def detect_ligand_chains(
     return ligand_chains
 
 
-class Residue(BaseModel):
+class Residue(DocBaseModel):
     chain: str
     index: int
     number: int
@@ -266,66 +260,40 @@ class Residue(BaseModel):
 
     @cached_property
     def is_ptm(self) -> bool:
+        """
+        Does the residue have a post translational modification.
+        """
         return (
             mol.ChemType(self.chem_type).IsAminoAcid()
             and self.name not in conop.STANDARD_AMINOACIDS
         )
 
 
-class Chain(BaseModel):
-    asym_id: str
-    auth_id: str
-    entity_id: str
-    chain_type_str: str
-    residues: dict[int, Residue]
-    length: int
-    num_unresolved_residues: int
-    mappings: dict[str, dict[str, list[tuple[str, str] | None]]] = Field(
-        default_factory=dict
+class Chain(DocBaseModel):
+    asym_id: str = Field(description="Chain asymmetric id")
+    auth_id: str = Field(description="Chain author id")
+    entity_id: str = Field(description="Chain entity id")
+    chain_type_str: str = Field(
+        description="__Chain type string representation as defined https://openstructure.org/docs/2.8/mol/base/entity/#ost.mol.ChainType"
     )
-    holo: bool = True
-    validation: ResidueListValidation | None = None
-    """
-    This dataclass defines as system which included a protein-ligand complex
-    and it's neighboring ligands and protein residues
-
-    Parameters
-    ----------
-    asym_id : str
-        Chain asymmetric id
-    auth_id : str
-        Chain author id
-    entity_id : str
-        Chain entity id
-    chain_type_str : str
-        Chain chemical type
-    residues : dict[int, Residue]
-        Dictionary of residues in chain
-    mappings : dict[str, str] = field(default_factory=dict)
-        Mapping of metadata associated with chain
-    length : int
-        SEQRES length
-    num_unresolved_residues: int
-        Number of unresolved residues (SEQRES length - len(residues))
-    holo : bool = True
-        IS chain holo or not
-
-    Attributes
-    ----------
-    residue_index_to_number : dict[int, int]
-        Mapping of residue indices to their respective rsidue numbers
-
-    Methods
-    -------
-    from_ost_chain : Chain
-        Load Chain from ost Chain
-    to_dict : dict[str, str | int]
-        Convert chain to dictionary
-
-    Examples
-    --------
-    TODO: Add example
-    """
+    residues: dict[int, Residue] = Field(
+        description="__Dictionary of residues in chain with keys as residue number"
+    )
+    length: int = Field(description="SEQRES length")
+    num_unresolved_residues: int = Field(
+        description="Number of unresolved residues (SEQRES length - len(residues))"
+    )
+    mappings: dict[str, dict[str, list[tuple[str, str] | None]]] = Field(
+        default_factory=dict,
+        description="__Mapping of metadata associated with chain with keys as chain asym id",
+    )
+    holo: bool = Field(
+        default=True, description="__Is the chain part of a holo system or not"
+    )
+    validation: ResidueListValidation | None = Field(
+        default=None,
+        description="__Crystal validation information for the residues in the chain",
+    )
 
     # Added this because pydantic doesn't know how to validate mol.ChainType
     model_config = ConfigDict(
@@ -380,27 +348,32 @@ class Chain(BaseModel):
 
     @cached_property
     def chain_type(self) -> mol.ChainType:
+        """
+        __Chain type as defined https://openstructure.org/docs/2.8/mol/base/entity/#ost.mol.ChainType
+        """
         return mol.ChainTypeFromString(self.chain_type_str)
 
     @cached_property
     def residue_index_to_number(self) -> dict[int, int]:
+        """
+        __Dictionary of residue index to residue number
+        """
         return {self.residues[r].index: r for r in self.residues}
 
-    def to_dict(self, instance: int) -> dict[str, str | int]:
+    def format(self, instance: int) -> dict[str, Any]:
+        """
+        Format chain as a dictionary
+        """
         data: dict[str, Any] = {
-            "": f"{instance}.{self.asym_id}",
-            "_auth_id": self.auth_id,
-            "_entity_id": self.entity_id,
+            "asym_id": f"{instance}.{self.asym_id}",
+            "auth_id": self.auth_id,
+            "entity_id": self.entity_id,
+            "length": self.length,
+            "num_unresolved_residues": self.num_unresolved_residues,
         }
-        if self.length is not None:
-            data["_length"] = self.length
-        if len(self.mappings):
-            for key in self.mappings:
-                data[f"_{key}"] = ",".join(self.mappings[key])
+        # data.update(self.mappings)
         if self.validation is not None:
-            validation_dict = self.validation.to_dict()
-            for key in validation_dict:
-                data[f"_{key}"] = validation_dict[key]
+            data.update(self.validation.format())
         return data
 
     def set_validation(

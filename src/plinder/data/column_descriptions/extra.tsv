@@ -1,0 +1,21 @@
+Name	Type	Description
+uniqueness	str	Uniqueness identifier differentiating systems which are simple crystal symmetries in a biounit
+biounit_num_ligands	int	Number of ligands within systems in the biounit
+biounit_num_unique_ccd_codes	int	Number of unique CCD codes within systems in the biounit
+biounit_num_proper_ligands	int	Number of proper ligands within systems in the biounit
+system_ligand_has_lipinski	bool	Whether the biounit has a fragment
+system_ligand_has_cofactor	bool	Whether the system has a cofactor
+system_ligand_has_fragment	bool	Whether the biounit has a fragment
+system_ligand_has_oligo	bool	Whether the system has an oligomer ligand
+system_ligand_has_artifact	bool	Whether the system has an artifact
+system_ligand_has_other	bool	Whether the system has other ligands
+system_ligand_has_covalent	bool	Whether the system has a covalent ligand
+system_ligand_has_invalid	bool	Whether the system has an invalid ligand
+system_ligand_has_ion	bool	Whether the system has an ion
+system_protein_chains_total_length	int	Total length of all protein chains in the system
+system_unique_ccd_codes	str	Unique CCD codes in the system
+system_proper_unique_ccd_codes	str	Unique CCD codes of proper ligands in the system
+entry_pass_validation_criteria	bool	Whether the entry passes crystal validation criteria
+system_pass_validation_criteria	bool	Whether the system passes crystal validation criteria
+ligand_interactions	list[str]	Interactions of the ligand
+ligand_auth_id	str	Author chain ID of the ligand

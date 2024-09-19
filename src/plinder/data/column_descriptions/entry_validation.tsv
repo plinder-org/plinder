@@ -1,0 +1,17 @@
+Name	Type	Description
+entry_validation_resolution	float	Resolution of the PDB entry
+entry_validation_rfree	float	The similarity between the observed structure-factor amplitudes and those calculated from the model. Rfree should be higher than R because it is calculated using reflections not used in the refinement. See https://www.wwpdb.org/validation/XrayValidationReportHelp
+entry_validation_r	float	The similarity between the observed structure-factor amplitudes and those calculated from the model. See https://www.wwpdb.org/validation/XrayValidationReportHelp
+entry_validation_clashscore	float	The Molprobity Clashscore is an approximation of the overall severity of the clashes in a structure, which is defined as the number of clashes per 1000 atoms (including hydrogens). See https://www.wwpdb.org/validation/XrayValidationReportHelp
+entry_validation_percent_rama_outliers	float | None	The percentage of Ramachandran outliers with respect to the total number of residues in the entry for which the outlier assessment is available. See https://www.wwpdb.org/validation/XrayValidationReportHelp
+entry_validation_percent_rota_outliers	float | None	The percentage of residues with an unusual sidechain conformation with respect to the total number of residues for which the assessment is available. See https://www.wwpdb.org/validation/XrayValidationReportHelp
+entry_validation_data_completeness	float | None	The number of expected diffraction spots is a function of data resolution and the space group. This metric describes the number of recorded reflections as a percentage of the number expected. See https://www.wwpdb.org/validation/XrayValidationReportHelp
+entry_validation_percent_RSRZ_outliers	float | None	The percentage Real-Space R-value Z-score outliers with respect to the total number of residues for which RSRZ was computed. See https://www.wwpdb.org/validation/XrayValidationReportHelp
+entry_validation_atom_count	int	Number of atoms in the asymmetric unit of the PDB entry
+entry_validation_molprobity	float | None	Overall Molprobity "effective resolution", a single-score validation number based on the correlation of multiple criteria with crystallographic resolution. as described here: https://github.com/rlabduke/MolProbity/blob/6e7512e85bdea23f7ffb16e606d1f9a0abf6e5d4/cmdline/molparser.py#L662
+entry_validation_mean_b_factor	float	Mean B-value calculated over all modelled atoms
+entry_validation_median_b_factor	float	Median B-value calculated over all modelled atoms
+entry_validation_pdbx_resolution	float	See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_refine.ls_d_res_high.html
+entry_validation_pdbx_reflns_resolution	float | None	See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_reflns.d_resolution_high.html
+entry_validation_meanI_over_sigI_obs	float | None	Each reflection has an intensity (I) and an uncertainty in measurement (σ(I)), thus this metric describes the signal-to-noise ratio
+entry_validation_r_minus_rfree	float	The difference between r and rfree

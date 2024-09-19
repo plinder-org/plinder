@@ -8,6 +8,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from plinder.core.index.utils import get_plindex
+
 try:
     import matplotlib.pyplot as plt
     import mols2grid
@@ -18,7 +20,6 @@ except ImportError:
     raise ImportError("Please run: pip install plinder[plots] to use this module")
 
 
-from plinder.core.split.utils import get_extended_plindex
 from plinder.core.utils.log import setup_logger
 
 LOG = setup_logger(__name__)
@@ -88,9 +89,9 @@ class SplitPropertiesPlotter:
             "ligand_num_rings": 1,
             "ligand_crippen_clogp": 1,
             # pocket
-            "system_proper_pocket_num_residues": 5,
+            "system_proper_num_pocket_residues": 5,
             # protein
-            "system_interacting_protein_chains_total_length": None,
+            "system_protein_chains_total_length": None,
         }
     )
     priority_columns: list[str] = field(
@@ -165,7 +166,7 @@ class SplitPropertiesPlotter:
             mms_count=mms_count,
         )
         if plindex_file is None:
-            plindex = get_extended_plindex()
+            plindex = get_plindex()
         else:
             plindex = pd.read_parquet(plindex_file)
         plotter.plindex = plotter.merge_splits_and_plindex(plindex)
@@ -208,7 +209,7 @@ class SplitPropertiesPlotter:
                 "pli_unique_qcov__50__communities": "PLI community ID",
                 "tanimoto_similarity_max__50__communities": "Ligand community ID",
                 "tanimoto_similarity_max__30__communities": "Ligand community ID",
-                "system_num_interacting_protein_chains": "Receptor chain count",
+                "system_num_protein_chains": "Receptor chain count",
                 "system_proper_num_ligand_chains": "Ligand count",
             },
             # set what's displayed on the grid
@@ -410,9 +411,7 @@ class SplitPropertiesPlotter:
             bins=None
             if self.system_descriptors[plot_metric]
             else np.linspace(0, 4, 50),
-            log_scale=plot_metric.startswith(
-                "system_interacting_protein_chains_total_length"
-            ),
+            log_scale=plot_metric.startswith("system_protein_chains_total_length"),
             ax=ax,
             palette=self.colors,
         )
@@ -421,9 +420,8 @@ class SplitPropertiesPlotter:
             plot_metric.replace("system_", "")
             .replace("proper", "")
             .replace("ligand_", "")
-            .replace("interacting_protein_chains", "protein")
-            .replace("interacting_protein_chains_", "")
-            .replace("interacting_protein_chains_", "")
+            .replace("protein_chains_asym_id", "protein")
+            .replace("protein_chains_", "")
             .replace("_", " ")
             .upper()
         )
@@ -718,26 +716,26 @@ class SplitPropertiesPlotter:
         for i, split in enumerate(split_names):
             split_stats = self.system_plindex[self.system_plindex["split"] == split][
                 [
-                    "system_num_interacting_protein_chains",
+                    "system_num_protein_chains",
                     "system_proper_num_ligand_chains",
                 ]
             ]
             counts = {
                 "Single Protein & Single Ligand": split_stats[
-                    (split_stats["system_num_interacting_protein_chains"] == 1)
+                    (split_stats["system_num_protein_chains"] == 1)
                     & (split_stats["system_proper_num_ligand_chains"] == 1)
                 ].shape[0],
                 "Single Protein & Multiple Ligands": split_stats[
-                    (split_stats["system_num_interacting_protein_chains"] == 1)
+                    (split_stats["system_num_protein_chains"] == 1)
                     & (split_stats["system_proper_num_ligand_chains"] > 1)
                 ].shape[0],
                 "Multiple Proteins & Single Ligand": split_stats[
                     (split_stats["system_proper_num_ligand_chains"] == 1)
-                    & (split_stats["system_num_interacting_protein_chains"] > 1)
+                    & (split_stats["system_num_protein_chains"] > 1)
                 ].shape[0],
                 "Multiple Proteins & Multiple Ligands": split_stats[
                     (split_stats["system_proper_num_ligand_chains"] > 1)
-                    & (split_stats["system_num_interacting_protein_chains"] > 1)
+                    & (split_stats["system_num_protein_chains"] > 1)
                 ].shape[0],
             }
 

@@ -1,0 +1,21 @@
+Name	Type	Description
+ligand_interacting_ligand_chains_validation_num_residues	list[int]	Number of residues in the list
+ligand_interacting_ligand_chains_validation_num_processed_residues	list[int]	Number of processed residues in the list
+ligand_interacting_ligand_chains_validation_percent_processed_residues	list[float]	Percentage of processed residues in the list
+ligand_interacting_ligand_chains_validation_average_rsr	list[float]	Average Real-Space R-value across all residues in the list
+ligand_interacting_ligand_chains_validation_average_rsrz	list[float]	Average Real-Space R-value Z-score across all residues in the list
+ligand_interacting_ligand_chains_validation_average_rscc	list[float]	Average Real-Space Correlation Coefficient across all residues in the list
+ligand_interacting_ligand_chains_validation_average_occupancy	list[float]	Average occupancy across all residues in the list
+ligand_interacting_ligand_chains_validation_percent_rsr_under_threshold	list[float]	Percentage of residues with RSR under the threshold
+ligand_interacting_ligand_chains_validation_percent_rscc_over_threshold	list[float]	Percentage of residues with RSCC over the threshold
+ligand_interacting_ligand_chains_validation_percent_occupancy_over_threshold	list[float]	Percentage of residues with occupancy over the threshold
+ligand_interacting_ligand_chains_validation_average_b_factor	list[float]	Average B factor across all residues in the list
+ligand_interacting_ligand_chains_validation_unknown_residue_count	list[int]	Number of unknown residues in the list
+ligand_interacting_ligand_chains_validation_atom_count	list[int]	Number of atoms across all residues in the list
+ligand_interacting_ligand_chains_validation_heavy_atom_count	list[int]	Number of heavy atoms across all residues in the list
+ligand_interacting_ligand_chains_validation_num_unresolved_heavy_atoms	list[int]	Number of unresolved heavy atoms across all residues in the list
+ligand_interacting_ligand_chains_validation_max_alt_count	list[int]	The highest number of configurations in a single residue in the list
+ligand_interacting_ligand_chains_validation_percent_outliers_chirality	list[float]	Percent outliers for chirality
+ligand_interacting_ligand_chains_validation_percent_outliers_clashes	list[float]	Percent outliers for clashes
+ligand_interacting_ligand_chains_validation_percent_outliers_density	list[float]	Percent outliers for density
+ligand_interacting_ligand_chains_validation_percent_outliers_geometry	list[float]	Percent outliers for geometry

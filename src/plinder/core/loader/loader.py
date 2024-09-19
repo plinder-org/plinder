@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Tuple
+from typing import Any, Dict, Literal
 
 import atom3d.util.formats as fo
 import pandas as pd
@@ -111,106 +111,21 @@ class PlinderDataset(Dataset):  # type: ignore
         return item
 
 
-def get_model_input_files(
-    split_df: pd.DataFrame,
-    split: Literal["train", "val", "test"] = "train",
-    max_num_sample: int = 10,
-    num_alternative_structures: int = 1,
-) -> List[Tuple[Path, str, List[Any]]]:
-    model_inputs = []
-
-    smiles_in_df = True
-    if "ligand_rdkit_canonical_smiles" not in split_df.columns:
-        smiles_in_df = False
-        from rdkit import Chem
-
-    dataset = PlinderDataset(
-        df=split_df,
-        split=split,
-        num_alternative_structures=num_alternative_structures,
-        file_paths_only=True,
-    )
-
-    count = 0
-    for data in dataset:
-        system_dir = Path(data["path"]).parent
-        protein_fasta_filepath = system_dir / "sequences.fasta"
-
-        if num_alternative_structures:
-            alt_structure_filepaths = [
-                val
-                for key, val in data["alternative_structures"].items()
-                if key.endswith("_path")
-            ]
-        else:
-            alt_structure_filepaths = []
-
-        if smiles_in_df:
-            smiles_array = split_df.loc[
-                split_df["system_id"] == data["system_id"],
-                "ligand_rdkit_canonical_smiles",
-            ].values
-        else:
-            smiles_array = [
-                Chem.MolToSmiles(next(Chem.SDMolSupplier(ligand_sdf)))
-                for ligand_sdf in (system_dir / "ligand_files/").glob("*sdf")
-            ]
-        # in case there's more than one!
-        smiles = ".".join(smiles_array)
-        model_inputs.append((protein_fasta_filepath, smiles, alt_structure_filepaths))
-        count += 1
-        if count >= max_num_sample:
-            break
-    return model_inputs
-
-
 # Example sampler function, this is for demonstration purposes,
 # users are advised to write a sampler that suit their need
 def get_diversity_samples(
     split_df: pd.DataFrame,
     split: Literal["train", "val", "test"] = "train",
-    cluster_tag: None | str = None,
-    metric: Literal[
-        "pli_qcov",
-        "pli_unique_qcov",
-        "pocket_fident",
-        "pocket_fident_qcov",
-        "pocket_lddt",
-        "pocket_lddt_qcov",
-        "pocket_qcov",
-        "protein_fident_max",
-        "protein_fident_qcov_max",
-        "protein_fident_qcov_weighted_max",
-        "protein_fident_qcov_weighted_sum",
-        "protein_fident_weighted_max",
-        "protein_fident_weighted_sum",
-        "protein_lddt_max",
-        "protein_lddt_qcov_max",
-        "protein_lddt_qcov_weighted_max",
-        "protein_lddt_qcov_weighted_sum",
-        "protein_lddt_weighted_max",
-        "protein_lddt_weighted_sum",
-        "protein_qcov_weighted_sum",
-        "protein_seqsim_max",
-        "protein_seqsim_qcov_max",
-        "protein_seqsim_qcov_weighted_max",
-        "protein_seqsim_qcov_weighted_sum",
-        "protein_seqsim_weighted_max",
-        "protein_seqsim_weighted_sum",
-    ] = "pli_qcov",
-    directed: bool = True,
-    threshold: int = 100,
-    cluster_type: Literal["component", "communities"] = "component",
+    cluster_column: str = "pli_qcov__70__community",
 ) -> pd.DataFrame:
     from torch.utils.data import WeightedRandomSampler
 
-    if not cluster_tag:
-        direction_tag = "strong" if directed else "weak"
-        cluster_tag = f"{metric}__{threshold}__{direction_tag}__{cluster_type}"
+    if cluster_column not in split_df.columns:
+        raise ValueError(f"cluster_column={cluster_column} not in split_df.columns")
 
     split_df = split_df[split_df.split == split]
-    cluster_counts = split_df[cluster_tag].value_counts().rename("cluster_count")
-    split_df = split_df.merge(cluster_counts, left_on=cluster_tag, right_index=True)
+    cluster_counts = split_df[cluster_column].value_counts().rename("cluster_count")
+    split_df = split_df.merge(cluster_counts, left_on=cluster_column, right_index=True)
     split_df.reset_index(inplace=True)
     cluster_weights = 1.0 / split_df.cluster_count.values
     sampler = WeightedRandomSampler(

@@ -2,146 +2,58 @@
 # Distributed under the terms of the Apache License 2.0
 from __future__ import annotations
 
+from functools import cached_property
+
 import numpy as np
 from PDBValidation.PDBXReader import ResidueNotFound
 from PDBValidation.Residue import Residue
 from PDBValidation.Validation import PDBValidation
 from PDBValidation.XML import ModelledSubgroupNotFound
-from pydantic import BaseModel, ConfigDict, Field, computed_field
+from pydantic import ConfigDict, Field, computed_field
 
 from plinder.core.utils.log import setup_logger
+from plinder.data.utils.annotations.utils import DocBaseModel
 
 LOG = setup_logger(__name__)
 
 
-class ResidueValidationThresholds(BaseModel):
+class ResidueValidationThresholds(DocBaseModel):
     model_config = ConfigDict(ser_json_inf_nan="constants")
-    min_rscc: float
-    max_rsr: float
-    min_average_occupancy: float
+    min_rscc: float = 0.8
+    max_rsr: float = 0.3
+    min_average_occupancy: float = 1.0
 
 
-class ResidueListValidationThresholds(BaseModel):
+def nanmean_return_nan(arr: list[float]) -> float:
+    if len(arr) == 0 or all(np.isnan(arr)):
+        return float(np.nan)
+    return float(np.nanmean(arr))
+
+
+class ResidueValidation(DocBaseModel):
     model_config = ConfigDict(ser_json_inf_nan="constants")
-    max_num_unresolved_heavy_atoms: int
-    max_alt_count: int
-    min_average_occupancy: float
-    min_average_rscc: float
-    max_average_rsr: float
-    max_percent_outliers_clashes: float
-    min_percent_rsr_under_threshold: float
-    min_percent_rscc_over_threshold: float
-    min_percent_occupancy_over_threshold: float
-
-
-class EntryValidationThresholds(BaseModel):
-    model_config = ConfigDict(ser_json_inf_nan="constants")
-    max_resolution: float
-    max_rfree: float
-    max_r: float
-    max_r_minus_rfree: float
-
-
-class SystemValidationThresholds(BaseModel):
-    """
-    A class to represent thresholds used in accepting or rejecting a ligand during validation.
-
-
-    Attributes
-    ----------
-    ...
-
-    """
-
-    entry_thresholds: EntryValidationThresholds = EntryValidationThresholds(
-        max_resolution=3.5, max_rfree=0.45, max_r=0.4, max_r_minus_rfree=0.05
+    altcode: str = Field(description="Alternative conformation code")
+    inscode: str = Field(description="Insertion code")
+    rsr: float = Field(description="Real-Space R-value")
+    rsrz: float = Field(description="Real-Space R-value Z-score")
+    rscc: float = Field(description="Real-Space Correlation Coefficient")
+    average_occupancy: float = Field(description="Average occupancy")
+    average_b_factor: float = Field(description="Average B factor")
+    unknown_residue: bool = Field(description="Whether the residue is unknown")
+    atom_count: int = Field(description="Number of atoms")
+    unknown_atom_count: int = Field(description="Number of unknown atoms")
+    heavy_atom_count: int = Field(description="Number of heavy atoms")
+    num_unresolved_heavy_atoms: int = Field(
+        description="Number of unresolved heavy atoms"
     )
-    residue_thresholds: ResidueValidationThresholds = ResidueValidationThresholds(
-        min_rscc=0.8, max_rsr=0.3, min_average_occupancy=1.0
+    is_outlier: dict[str, bool] = Field(description="Whether the residue is an outlier")
+    is_atom_count_consistent: bool = Field(
+        description="Whether the atom count is consistent"
     )
-    residue_list_thresholds: dict[str, ResidueListValidationThresholds] = Field(
-        default_factory=lambda: {
-            "ligand": ResidueListValidationThresholds(
-                max_num_unresolved_heavy_atoms=0,
-                max_alt_count=1,
-                min_average_occupancy=0.8,
-                min_average_rscc=0.8,
-                max_average_rsr=0.3,
-                max_percent_outliers_clashes=0.0,
-                min_percent_rsr_under_threshold=0.0,
-                min_percent_rscc_over_threshold=0.0,
-                min_percent_occupancy_over_threshold=0.0,
-            ),
-            "pocket": ResidueListValidationThresholds(
-                max_num_unresolved_heavy_atoms=0,
-                max_alt_count=1,
-                min_average_occupancy=0.8,
-                min_average_rscc=0.8,
-                max_average_rsr=0.3,
-                max_percent_outliers_clashes=100.0,
-                min_percent_rsr_under_threshold=0.0,
-                min_percent_rscc_over_threshold=0.0,
-                min_percent_occupancy_over_threshold=0.0,
-            ),
-        }
+    has_clashing_partial_occupancy_atoms: bool = Field(
+        description="Whether the residue has clashing partial occupancy atoms"
     )
-    max_fraction_atoms_with_crystal_contacts: float = 0.0
-
-    @classmethod
-    def get_iridium_criteria(cls) -> SystemValidationThresholds:
-        return cls(
-            entry_thresholds=EntryValidationThresholds(
-                max_resolution=3.5, max_rfree=0.45, max_r=0.4, max_r_minus_rfree=0.05
-            ),
-            residue_thresholds=ResidueValidationThresholds(
-                min_rscc=0.9, max_rsr=0.1, min_average_occupancy=1.0
-            ),
-            residue_list_thresholds={
-                "ligand": ResidueListValidationThresholds(
-                    max_num_unresolved_heavy_atoms=0,
-                    max_alt_count=1,
-                    min_average_occupancy=1.0,
-                    min_average_rscc=0.9,
-                    max_average_rsr=0.1,
-                    max_percent_outliers_clashes=0.0,
-                    min_percent_rsr_under_threshold=100.0,
-                    min_percent_rscc_over_threshold=100.0,
-                    min_percent_occupancy_over_threshold=100.0,
-                ),
-                "pocket": ResidueListValidationThresholds(
-                    max_num_unresolved_heavy_atoms=0,
-                    max_alt_count=1,
-                    min_average_occupancy=1.0,
-                    min_average_rscc=0.9,
-                    max_average_rsr=0.1,
-                    max_percent_outliers_clashes=0.0,
-                    min_percent_rsr_under_threshold=100.0,
-                    min_percent_rscc_over_threshold=100.0,
-                    min_percent_occupancy_over_threshold=100.0,
-                ),
-            },
-            max_fraction_atoms_with_crystal_contacts=0.0,
-        )
-
-
-class ResidueValidation(BaseModel):
-    model_config = ConfigDict(ser_json_inf_nan="constants")
-    altcode: str
-    inscode: str
-    rsr: float
-    rsrz: float
-    rscc: float
-    average_occupancy: float
-    average_b_factor: float
-    unknown_residue: bool
-    atom_count: int
-    unknown_atom_count: int
-    heavy_atom_count: int
-    num_unresolved_heavy_atoms: int
-    is_outlier: dict[str, bool]
-    is_atom_count_consistent: bool
-    has_clashing_partial_occupancy_atoms: bool
-    alt_count: int
+    alt_count: int = Field(description="Number of conformations")
 
     @classmethod
     def from_residue(
@@ -173,6 +85,20 @@ class ResidueValidation(BaseModel):
                 and np.abs(heavy_atom_count - heavy_atom_count_conop) <= 1
             ):
                 heavy_atom_count_conop = heavy_atom_count
+            num_unresolved_heavy_atoms = heavy_atom_count_conop - heavy_atom_count
+
+            # TODO: uncomment for rerun
+            #     # set -1 as value for cases where no reference was found
+            #     num_unresolved_heavy_atoms = -1
+            # else:
+            #     num_unresolved_heavy_atoms = heavy_atom_count_conop - heavy_atom_count
+            #     if (
+            #         residue.isType("PolymerChainResidue")
+            #         and num_unresolved_heavy_atoms >= 1
+            #     ):
+            #         # residues have one atom less when in polymer - adjust for it
+            #         num_unresolved_heavy_atoms -= 1
+
             return cls(
                 altcode=residue.getAltCode(),
                 inscode=residue.getInsertionCode(),
@@ -185,7 +111,7 @@ class ResidueValidation(BaseModel):
                 unknown_residue=residue.getResName() in PDBValidation.unknown_resnames,
                 atom_count=residue.countAtomsPDBX(),
                 heavy_atom_count=heavy_atom_count,
-                num_unresolved_heavy_atoms=heavy_atom_count_conop - heavy_atom_count,
+                num_unresolved_heavy_atoms=num_unresolved_heavy_atoms,
                 unknown_atom_count=residue.countUnknownAtoms(),
                 is_outlier={
                     s: residue.isOutlier(s)
@@ -201,25 +127,61 @@ class ResidueValidation(BaseModel):
             return None
 
 
-class ResidueListValidation(BaseModel):
+class ResidueListValidation(DocBaseModel):
     model_config = ConfigDict(ser_json_inf_nan="constants")
-    num_residues: int
-    num_processed_residues: int
-    percent_processed_residues: float
-    average_rsr: float
-    average_rsrz: float
-    average_rscc: float
-    average_occupancy: float
-    percent_rsr_under_threshold: float
-    percent_rscc_over_threshold: float
-    percent_occupancy_over_threshold: float
-    average_b_factor: float
-    unknown_residue_count: int
-    atom_count: int
-    heavy_atom_count: int
-    num_unresolved_heavy_atoms: int
-    max_alt_count: int
-    percent_outliers: dict[str, float]
+    num_residues: int = Field(description="Number of residues in the list")
+    num_processed_residues: int = Field(
+        description="Number of processed residues in the list"
+    )
+    percent_processed_residues: float = Field(
+        description="Percentage of processed residues in the list"
+    )
+    average_rsr: float = Field(
+        description="Average Real-Space R-value across all residues in the list"
+    )
+    average_rsrz: float = Field(
+        description="Average Real-Space R-value Z-score across all residues in the list"
+    )
+    average_rscc: float = Field(
+        description="Average Real-Space Correlation Coefficient across all residues in the list"
+    )
+    average_occupancy: float = Field(
+        description="Average occupancy across all residues in the list"
+    )
+    percent_rsr_under_threshold: float = Field(
+        description="Percentage of residues with RSR under the threshold"
+    )
+    percent_rscc_over_threshold: float = Field(
+        description="Percentage of residues with RSCC over the threshold"
+    )
+    percent_occupancy_over_threshold: float = Field(
+        description="Percentage of residues with occupancy over the threshold"
+    )
+    average_b_factor: float = Field(
+        description="Average B factor across all residues in the list"
+    )
+    unknown_residue_count: int = Field(
+        description="Number of unknown residues in the list"
+    )
+    atom_count: int = Field(
+        description="Number of atoms across all residues in the list"
+    )
+    heavy_atom_count: int = Field(
+        description="Number of heavy atoms across all residues in the list"
+    )
+    num_unresolved_heavy_atoms: int = Field(
+        description="Number of unresolved heavy atoms across all residues in the list"
+    )
+    max_alt_count: int = Field(
+        description="The highest number of configurations in a single residue in the list"
+    )
+    percent_outliers: dict[str, float] = Field(
+        description="__Percentage of outliers for each type of outlier"
+    )
+    # TODO: add thresholds in rerun
+    # thresholds: ResidueValidationThresholds = Field(
+    #     description="Thresholds used to determine if a residue is valid"
+    # )
 
     @classmethod
     def from_residues(
@@ -236,11 +198,11 @@ class ResidueListValidation(BaseModel):
             num_residues=total_residues,
             num_processed_residues=num_processed,
             percent_processed_residues=100 * num_processed / total_residues,
-            average_rsr=float(np.nanmean([residue.rsr for residue in filtered])),
-            average_rsrz=float(np.nanmean([residue.rsrz for residue in filtered])),
-            average_rscc=float(np.nanmean([residue.rscc for residue in filtered])),
-            average_occupancy=float(
-                np.nanmean([residue.average_occupancy for residue in filtered])
+            average_rsr=nanmean_return_nan([residue.rsr for residue in filtered]),
+            average_rsrz=nanmean_return_nan([residue.rsrz for residue in filtered]),
+            average_rscc=nanmean_return_nan([residue.rscc for residue in filtered]),
+            average_occupancy=nanmean_return_nan(
+                [residue.average_occupancy for residue in filtered]
             ),
             percent_rsr_under_threshold=100
             * sum([residue.rsr <= residue_thresholds.max_rsr for residue in filtered])
@@ -275,56 +237,63 @@ class ResidueListValidation(BaseModel):
                 / total_residues
                 for s in ["geometry", "density", "chirality", "clashes"]
             },
+            # TODO: add thresholds in rerun
+            # thresholds=residue_thresholds,
         )
 
-    def pass_criteria(
-        self, thresholds: ResidueListValidationThresholds, num_covalent_ligands: int = 0
-    ) -> bool:
-        return all(
-            [
-                self.num_unresolved_heavy_atoms
-                <= thresholds.max_num_unresolved_heavy_atoms + num_covalent_ligands,
-                self.average_occupancy >= thresholds.min_average_occupancy,
-                self.average_rscc >= thresholds.min_average_rscc,
-                self.average_rsr <= thresholds.max_average_rsr,
-                self.percent_outliers["clashes"]
-                <= thresholds.max_percent_outliers_clashes,
-                self.percent_rsr_under_threshold
-                >= thresholds.min_percent_rsr_under_threshold,
-                self.percent_rscc_over_threshold
-                >= thresholds.min_percent_rscc_over_threshold,
-                self.percent_occupancy_over_threshold
-                >= thresholds.min_percent_occupancy_over_threshold,
-                self.max_alt_count <= thresholds.max_alt_count,
-            ]
-        )
-
-    def to_dict(self) -> dict[str, float]:
-        # TODO : compare with self.model_dump
-        data = {k: v for k, v in self.__dict__.items()}
+    def format(self) -> dict[str, float | int | None]:
+        data = {k: v for k, v in self.__dict__.items() if k != "thresholds"}
         for key in data["percent_outliers"]:
             data[f"percent_outliers_{key}"] = data["percent_outliers"][key]
         data.pop("percent_outliers")
-        return data
+        return {f"validation_{k}": v for k, v in data.items()}
 
 
-class EntryValidation(BaseModel):
+class EntryValidation(DocBaseModel):
     model_config = ConfigDict(ser_json_inf_nan="constants")
-    resolution: float
-    rfree: float
-    r: float
-    clashscore: float
-    percent_rama_outliers: float | None
-    percent_rota_outliers: float | None
-    data_completeness: float | None
-    percent_RSRZ_outliers: float | None
-    atom_count: int
-    molprobity: float | None
-    mean_b_factor: float
-    median_b_factor: float
-    pdbx_resolution: float
-    pdbx_reflns_resolution: float | None
-    meanI_over_sigI_obs: float | None
+    resolution: float = Field(description="Resolution of the PDB entry")
+    rfree: float = Field(
+        description="The similarity between the observed structure-factor amplitudes and those calculated from the model. Rfree should be higher than R because it is calculated using reflections not used in the refinement. See https://www.wwpdb.org/validation/XrayValidationReportHelp"
+    )
+    r: float = Field(
+        description="The similarity between the observed structure-factor amplitudes and those calculated from the model. See https://www.wwpdb.org/validation/XrayValidationReportHelp"
+    )
+    clashscore: float = Field(
+        description="The Molprobity Clashscore is an approximation of the overall severity of the clashes in a structure, which is defined as the number of clashes per 1000 atoms (including hydrogens). See https://www.wwpdb.org/validation/XrayValidationReportHelp"
+    )
+    percent_rama_outliers: float | None = Field(
+        description="The percentage of Ramachandran outliers with respect to the total number of residues in the entry for which the outlier assessment is available. See https://www.wwpdb.org/validation/XrayValidationReportHelp"
+    )
+    percent_rota_outliers: float | None = Field(
+        description="The percentage of residues with an unusual sidechain conformation with respect to the total number of residues for which the assessment is available. See https://www.wwpdb.org/validation/XrayValidationReportHelp"
+    )
+    data_completeness: float | None = Field(
+        description="The number of expected diffraction spots is a function of data resolution and the space group. This metric describes the number of recorded reflections as a percentage of the number expected. See https://www.wwpdb.org/validation/XrayValidationReportHelp"
+    )
+    percent_RSRZ_outliers: float | None = Field(
+        description="The percentage Real-Space R-value Z-score outliers with respect to the total number of residues for which RSRZ was computed. See https://www.wwpdb.org/validation/XrayValidationReportHelp"
+    )
+    atom_count: int = Field(
+        description="Number of atoms in the asymmetric unit of the PDB entry"
+    )
+    molprobity: float | None = Field(
+        description='Overall Molprobity "effective resolution", a single-score validation number based on the correlation of multiple criteria with crystallographic resolution. as described here: https://github.com/rlabduke/MolProbity/blob/6e7512e85bdea23f7ffb16e606d1f9a0abf6e5d4/cmdline/molparser.py#L662'
+    )
+    mean_b_factor: float = Field(
+        description="Mean B-value calculated over all modelled atoms"
+    )
+    median_b_factor: float = Field(
+        description="Median B-value calculated over all modelled atoms"
+    )
+    pdbx_resolution: float = Field(
+        description="See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_refine.ls_d_res_high.html"
+    )
+    pdbx_reflns_resolution: float | None = Field(
+        description="See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_reflns.d_resolution_high.html"
+    )
+    meanI_over_sigI_obs: float | None = Field(
+        description="Each reflection has an intensity (I) and an uncertainty in measurement (σ(I)), thus this metric describes the signal-to-noise ratio"
+    )
 
     @classmethod
     def from_entry(cls, doc: PDBValidation) -> EntryValidation:
@@ -359,24 +328,16 @@ class EntryValidation(BaseModel):
         )
 
     @computed_field  # type: ignore
-    @property
+    @cached_property
     def r_minus_rfree(self) -> float:
+        """
+        The difference between r and rfree
+        """
         if isinstance(self.r, float) and isinstance(self.rfree, float):
             return np.abs(self.r - self.rfree)  # type: ignore
         return np.nan
 
-    def pass_criteria(self, thresholds: EntryValidationThresholds) -> bool:
-        return all(
-            [
-                self.resolution <= thresholds.max_resolution,
-                self.r <= thresholds.max_r,
-                np.isnan(self.rfree) or self.rfree <= thresholds.max_rfree,
-                np.isnan(self.rfree)
-                or self.r_minus_rfree <= thresholds.max_r_minus_rfree,
-            ]
-        )
-
-    def to_dict(self) -> dict[str, float | None]:
+    def format(self) -> dict[str, float | None]:
         data = self.__dict__
         data["r_minus_rfree"] = self.r_minus_rfree
-        return data
+        return {f"validation_{k}": v for k, v in data.items()}

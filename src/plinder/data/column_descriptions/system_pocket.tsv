@@ -1,0 +1,10 @@
+Name	Type	Description
+system_pocket_CATH	str	CATH domain for the pocket
+system_pocket_ECOD	str	ECOD domain for the pocket
+system_pocket_ECOD_t_name	str	ECOD_t_name domain for the pocket
+system_pocket_Pfam	str	Pfam domain for the pocket
+system_pocket_SCOP2	str	SCOP2 domain for the pocket
+system_pocket_SCOP2B	str	SCOP2B domain for the pocket
+system_pocket_PANTHER	str	PANTHER domain for the pocket
+system_pocket_UniProt	str	UniProt domain for the pocket
+system_pocket_kinase_name	str	kinase_name domain for the pocket

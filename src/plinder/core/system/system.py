@@ -10,6 +10,7 @@ import pandas as pd
 
 from plinder.core.index import utils
 from plinder.core.scores.links import query_links
+from plinder.core.utils.cpl import get_plinder_path
 from plinder.core.utils.log import setup_logger
 from plinder.core.utils.unpack import get_zips_to_unpack
 
@@ -240,10 +241,12 @@ class PlinderSystem:
             path to linked structures archive
         """
         if self._linked_archive is None:
-            zips = get_zips_to_unpack(
-                kind="linked_structures", system_ids=[self.system_id]
-            )
-            [archive] = list(zips.keys())
+            zips = get_zips_to_unpack(kind="linked_structures")
+            if not len(zips):
+                LOG.info("no linked_structures found, downloading now, stand by")
+                get_plinder_path(rel="linked_structures")
+                zips = get_zips_to_unpack(kind="linked_structures")
+            archive = list(zips.keys())[0]
             self._linked_archive = archive.parent
         return self._linked_archive
 
@@ -265,13 +268,7 @@ class PlinderSystem:
         """
         if self.linked_archive is None:
             raise ValueError("linked_archive is None!")
-        structure = (
-            self.linked_archive
-            / link_kind
-            / self.system_id
-            / link_id
-            / "superposed.cif"
-        )
+        structure = self.linked_archive / f"{link_id}.cif"
         if not structure.is_file():
             raise ValueError(f"structure={structure} does not exist!")
         return structure.as_posix()

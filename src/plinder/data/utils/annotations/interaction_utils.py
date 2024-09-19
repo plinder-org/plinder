@@ -2,14 +2,10 @@
 # Distributed under the terms of the Apache License 2.0
 from __future__ import annotations
 
-import gzip
 from collections import defaultdict
 from pathlib import Path
-from typing import Any
 
 import gemmi
-import numpy as np
-from biotite.structure.io.pdbx import PDBxFile
 from mmcif.api.PdbxContainers import DataContainer
 from ost import io, mol
 from plip.basic.supplemental import whichchain, whichresnumber
@@ -36,43 +32,6 @@ INTERACTION_TYPES = [
 # Define available names for chains in PDB format
 PDB_AVAILABLE_CHAINS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 PDB_AVAILABLE_CHAINS += PDB_AVAILABLE_CHAINS.lower() + "0123456789"
-
-
-def convert_category(category: dict[str, np.ndarray[int, Any]]) -> dict[Any, Any]:
-    """
-    Convert a PDBx/mmCIF category to a dictionary indexed by sequential ids.
-    with keys and values taken from the original value arrays.
-
-    Parameters
-    ----------
-    category: Dict[str, np.ndarray[int, Any]])
-        PDBx/mmCIF category to a dictionary
-
-
-    Returns
-    -------
-    Dict[Any, Any]
-        Dictionary indexed by sequential ids.
-    """
-    category_dict: dict[Any, Any] = {}
-    if category is not None:
-        for i in range(len(category[list(category.keys())[0]])):
-            category_dict[i] = {}
-            for key, value in category.items():
-                category_dict[i][key] = value[i]
-    return category_dict
-
-
-def read_mmcif_file(mmcif_filename: Path) -> PDBxFile:
-    """
-    Read a PDBx/mmCIF file.
-    """
-    if mmcif_filename.suffix == ".gz":
-        with gzip.open(mmcif_filename, "rt") as mmcif_file:
-            pdbx_file = PDBxFile.read(mmcif_file)
-    else:
-        pdbx_file = PDBxFile.read(mmcif_filename)
-    return pdbx_file
 
 
 def get_symmetry_mate_contacts(

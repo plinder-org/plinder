@@ -1,20 +1,21 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
-import sys
 import unittest.mock
 from textwrap import dedent
-from omegaconf import OmegaConf, DictConfig
-
-from plinder.data.pipeline import config
 
 import pytest
+from omegaconf import OmegaConf
+from plinder.data.pipeline import config
 
 
-@pytest.mark.parametrize("value, raises", [
-    (0, True),
-    (1, False),
-    (2, False),
-])
+@pytest.mark.parametrize(
+    "value, raises",
+    [
+        (0, True),
+        (1, False),
+        (2, False),
+    ],
+)
 def test_foldseek_config(value, raises):
     if raises:
         with pytest.raises(ValueError):

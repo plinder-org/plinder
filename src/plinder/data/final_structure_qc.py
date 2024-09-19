@@ -139,11 +139,18 @@ def ligand_matches_smiles_atom_num(smiles: str, sdf_path: Path) -> bool:
         True if matching, False otherwise.
     """
     mol = next(Chem.SDMolSupplier(str(sdf_path), sanitize=False))
-    mol = fix_valency_issues(mol)
-
-    target_mol = Chem.MolFromSmiles(smiles, sanitize=False)
-    target_mol = fix_valency_issues(target_mol)
+    try:
+        mol = fix_valency_issues(mol)
+    except Exception:
+        return False
     if mol is None:
+        return False
+    try:
+        target_mol = Chem.MolFromSmiles(smiles, sanitize=False)
+        target_mol = fix_valency_issues(target_mol)
+    except Exception:
+        return False
+    if target_mol is None:
         return False
     else:
         # atms = [i.GetSymbol() for i in mol.GetAtoms() if i.GetSymbol() != "H"]
@@ -450,7 +457,7 @@ def prepare_system_dict(
                 "complex_path": complex_file,
                 "receptor_path": receptor_path,
                 "ligands": ligands,
-                "protein_chains": set(annotation.interacting_protein_chains),
+                "protein_chains": set(annotation.protein_chains_asym_id),
                 "ligand_chains": set(annotation.ligand_chains),
             }
         else:

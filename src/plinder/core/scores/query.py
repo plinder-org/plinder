@@ -45,7 +45,7 @@ def _handle_condition_by_schema(
             val = f"'{val}'"
     except NotImplementedError:
         val = f"'{val}'"
-    if isinstance(val, set):
+    if isinstance(val, (set, list, tuple)):
         val = f"({str(val)[1:-1]})"
     return val
 

@@ -101,6 +101,8 @@ def get_contacts_gaps_overlap(
     return annotations
 
 
+# TODO: review this function
+# it does not use the ligand chain definitions!
 def annotate_interface_gaps(
     cif_file: Path,
     protein_chains: list[str] | None = None,

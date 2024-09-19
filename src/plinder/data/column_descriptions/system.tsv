@@ -1,0 +1,30 @@
+Name	Type	Description
+system_biounit_id	str	Biounit ID
+system_protein_chains_asym_id	list[str]	Interacting protein chains of the system
+system_id_no_biounit	str	ID of the system without the biounit
+system_ligand_chains	list[str]	Ligand chains of the system
+system_num_pocket_residues	int	Number of pocket residues of the system
+system_proper_num_pocket_residues	int	Number of pocket residues of the system excluding ions and artifacts
+system_num_interactions	int	Number of interactions of the system
+system_proper_num_interactions	int	Number of interactions of the system
+system_num_unique_interactions	int	Number of unique interactions of the system
+system_proper_num_unique_interactions	int	Number of unique interactions of the system
+system_num_covalent_ligands	int	Number of covalent ligands of the system
+system_proper_num_covalent_ligands	int	Number of covalent ligands of the system
+system_id	str	ID of the system
+system_type	str	Type of the system (one of: holo, ion, artifact)
+system_has_kinase_inhibitor	bool	Whether the system has a kinase inhibitor
+system_has_binding_affinity	bool	Whether any ligand in the system has a binding affinity from BindingDB
+system_num_protein_chains	int	Number of interacting protein chains of the system
+system_proper_num_protein_chains	int	Number of interacting protein chains of the system excluding ions and artifacts
+system_num_ligand_chains	int	Number of ligand chains of the system
+system_proper_num_ligand_chains	int	Number of ligand chains of the system excluding ions and artifacts
+system_num_crystal_contacted_residues	int	Number of residues from other symmetry mates which are in contact with any ligand in the system.
+system_num_atoms_with_crystal_contacts	int	Number of atoms in the system ligands which are in contact with residues from other symmetry mates.
+system_num_heavy_atoms	int | None	Number of heavy atoms in the system ligands
+system_num_resolved_heavy_atoms	int | None	Number of resolved heavy atoms in the system ligands
+system_ligand_max_qed	float	Maximum QED of the system ligands
+system_ligand_max_molecular_weight	float	Maximum molecular weight of the system ligands
+system_proper_ligand_max_molecular_weight	float	Maximum molecular weight of the system ligands excluding ions and artifacts
+system_num_unresolved_heavy_atoms	int | None	Number of unresolved heavy atoms in the system ligands
+system_fraction_atoms_with_crystal_contacts	float | None	Fraction of atoms in the system ligands which are in contact with residues from other symmetry mates.

@@ -1,5 +1,7 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
+from __future__ import annotations
+
 import json
 import multiprocessing
 from collections import defaultdict
@@ -22,6 +24,7 @@ def write_scores_as_json(
     system_dir: Path,
     output_file: Path,
     overwrite: bool = False,
+    predictions_dir: Path | None = None,
 ) -> None:
     """
     Makes score file for a single reference - model pair
@@ -42,17 +45,38 @@ def write_scores_as_json(
             LOG.warning(f"get_scores: {output_file} exists")
             return
         reference_system = utils.ReferenceSystem.from_reference_system(
-            system_dir, scorer_input.reference_system_id
+            system_dir / scorer_input.reference_system_id,
+            scorer_input.reference_system_id,
         )
-        receptor_file = scorer_input.receptor_file
-        if np.isnan(receptor_file):
-            # Rigid docking, use reference system's receptor cif file
+        import sys
+
+        print(scorer_input, file=sys.stderr, flush=True)
+        receptor_file = None
+        if scorer_input.receptor_file is not None and not np.isnan(
+            scorer_input.receptor_file
+        ):
+            receptor_file = Path(scorer_input.receptor_file)
+        ligand_file = Path(scorer_input.ligand_file)
+
+        if receptor_file is not None and not receptor_file.exists():
+            if (
+                predictions_dir is not None
+                and (predictions_dir / receptor_file).exists()
+            ):
+                receptor_file = predictions_dir / receptor_file
+            else:
+                receptor_file = reference_system.receptor_cif_file
+        else:
             receptor_file = reference_system.receptor_cif_file
+        if ligand_file is not None and not ligand_file.exists():
+            if predictions_dir is not None and (predictions_dir / ligand_file).exists():
+                ligand_file = predictions_dir / ligand_file
+
         scores = utils.ModelScores.from_files(
             scorer_input.id,
-            Path(receptor_file),
+            receptor_file,
             [
-                Path(scorer_input.ligand_file)
+                ligand_file,
             ],  # TODO: change to accept multi-ligand prediction input
             reference_system,
             score_protein=False,  # TODO: add to ScorerConfig class
@@ -132,6 +156,7 @@ def score_test_set(
                     system_dir,
                     row.output_file,
                     overwrite,
+                    prediction_file.parent,
                 )
                 for _, row in predictions.iterrows()
             ],
