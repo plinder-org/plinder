@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import multiprocessing
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import ost
@@ -18,11 +19,89 @@ ost.PushVerbosityLevel(-1)
 LOG = setup_logger(__name__)
 
 
+def evaluate(
+    model_system_id: str,
+    reference_system_id: str,
+    receptor_file: Path | None,
+    ligand_files: list[Path],
+    predictions_dir: Path | None = None,
+    flexible: bool = False,
+    posebusters: bool = False,
+    posebusters_full: bool = False,
+) -> dict[str, Any]:
+    """
+    Evaluate a single receptor - ligand pair
+
+    Parameters
+    ----------
+    model_system_id: str
+        The ID of the model system (e.g "prediction_0_rank1")
+    reference_system_id: str
+        The PLINDER systemID of the reference system
+    receptor_file: Path | None
+        The path to the receptor CIF/PDB file
+        If None, the receptor is taken from the reference system (rigid re-docking)
+        This is not the default as it is not recommended to rigid re-dock the receptor
+    ligand_files: list[Path]
+        The path to the ligand SDF files
+    predictions_dir: Path | None
+        The path to the directory containing the predictions (used if receptor/ligand files are not provided)
+    flexible: bool
+        Run protein scoring, for flexible docking and cofolding
+    posebusters: bool
+        Run posebuster scoring
+    posebusters_full: bool
+        Run posebuster scoring and return full report
+    """
+    reference_system = PlinderSystem(system_id=reference_system_id)
+    receptor_file = None
+    if receptor_file is not None and not np.isnan(receptor_file):
+        receptor_file = Path(receptor_file)
+    ligand_files = [Path(ligand_file) for ligand_file in ligand_files]
+
+    if receptor_file is not None and not receptor_file.exists():
+        if predictions_dir is not None and (predictions_dir / receptor_file).exists():
+            receptor_file = predictions_dir / receptor_file
+        else:
+            assert reference_system.receptor_cif is not None
+            receptor_file = Path(reference_system.receptor_cif)
+    else:
+        LOG.info(
+            f"Using receptor file {receptor_file} from the reference system (i.e rigid re-docking)"
+        )
+        receptor_file = Path(reference_system.receptor_cif)
+    if ligand_files is not None and not all(
+        ligand_file.exists() for ligand_file in ligand_files
+    ):
+        if predictions_dir is not None:
+            ligand_files = [
+                predictions_dir / ligand_file for ligand_file in ligand_files
+            ]
+    assert (
+        receptor_file is not None and receptor_file.exists()
+    ), f"Receptor file {receptor_file} could not be found"
+    assert ligand_files is not None and all(
+        ligand_file.exists() for ligand_file in ligand_files
+    ), f"Ligand files {ligand_files} could not be found"
+    return utils.ModelScores.from_model_files(
+        model_system_id,
+        receptor_file,
+        ligand_files,
+        reference_system,
+        score_protein=flexible,
+        score_posebusters=posebusters,
+        score_posebusters_full_report=posebusters_full,
+    ).summarize_scores()
+
+
 def write_scores_as_json(
     scorer_input: pd.Series,
     output_file: Path,
     overwrite: bool = False,
     predictions_dir: Path | None = None,
+    flexible: bool = False,
+    posebusters: bool = False,
+    posebusters_full: bool = False,
 ) -> None:
     """
     Makes score file for a single reference - model pair
@@ -35,48 +114,34 @@ def write_scores_as_json(
         Path to save score json file
     overwrite: bool
         Skips existing if False
+    predictions_dir: Path | None
+        Path to predictions directory
+    flexible: bool
+        Run protein scoring, for flexible docking and cofolding
+    posebusters: bool
+        Run posebuster scoring
+    posebusters_full: bool
+        Run posebuster scoring and return full report
     """
     try:
         if not overwrite and output_file.exists():
             LOG.warning(f"get_scores: {output_file} exists")
             return
-        reference_system = PlinderSystem(system_id=scorer_input.reference_system_id)
         import sys
 
         print(scorer_input, file=sys.stderr, flush=True)
-        receptor_file = None
-        if scorer_input.receptor_file is not None and not np.isnan(
-            scorer_input.receptor_file
-        ):
-            receptor_file = Path(scorer_input.receptor_file)
-        ligand_file = Path(scorer_input.ligand_file)
-
-        if receptor_file is not None and not receptor_file.exists():
-            if (
-                predictions_dir is not None
-                and (predictions_dir / receptor_file).exists()
-            ):
-                receptor_file = predictions_dir / receptor_file
-            else:
-                assert reference_system.receptor_cif is not None
-                receptor_file = Path(reference_system.receptor_cif)
-        else:
-            receptor_file = Path(reference_system.receptor_cif)
-        if ligand_file is not None and not ligand_file.exists():
-            if predictions_dir is not None and (predictions_dir / ligand_file).exists():
-                ligand_file = predictions_dir / ligand_file
-        assert receptor_file is not None
-        assert ligand_file is not None
-        scores = utils.ModelScores.from_files(
+        scores = evaluate(
             scorer_input.id,
-            receptor_file,
+            scorer_input.reference_system_id,
+            scorer_input.receptor_file,
             [
-                ligand_file,
+                scorer_input.ligand_file
             ],  # TODO: change to accept multi-ligand prediction input
-            reference_system,
-            score_protein=False,  # TODO: add to ScorerConfig class
-            score_posebusters=False,  # TODO: add to ScorerConfig class
-        ).summarize_scores()
+            predictions_dir,
+            flexible,
+            posebusters,
+            posebusters_full,
+        )
         output_file.parent.mkdir(exist_ok=True, parents=True)
         with open(output_file, "w") as f:
             json.dump(scores, f)
@@ -91,6 +156,9 @@ def score_test_set(
     output_file: Path,
     num_processes: int = 8,
     overwrite: bool = False,
+    posebusters: bool = False,
+    flexible: bool = False,
+    posebusters_full: bool = False,
 ) -> None:
     """
     Makes score files for a test set
@@ -109,6 +177,12 @@ def score_test_set(
         Number of processes to use
     overwrite: bool
         Skips existing files if False
+    posebusters: bool
+        Run posebuster scoring
+    flexible: bool
+        Run protein scoring, for flexible docking and cofolding
+    posebusters_full: bool
+        Run posebuster scoring and return full report
     """
     predictions = pd.read_csv(prediction_file)
     predictions["output_file"] = predictions.apply(
@@ -131,6 +205,9 @@ def score_test_set(
                     row.output_file,
                     overwrite,
                     prediction_file.parent,
+                    flexible,
+                    posebusters,
+                    posebusters_full,
                 )
                 for _, row in predictions.iterrows()
             ],
@@ -177,6 +254,21 @@ def evaluate_cmd(args: list[str] | None = None) -> None:
         action="store_true",
         help="Overwrite max similarity files",
     )
+    parser.add_argument(
+        "--posebusters",
+        action="store_true",
+        help="Run posebuster scoring",
+    )
+    parser.add_argument(
+        "--flexible",
+        action="store_true",
+        help="Run protein scoring, for flexible docking and cofolding",
+    )
+    parser.add_argument(
+        "--posebusters_full",
+        action="store_true",
+        help="Run posebuster scoring and return full report",
+    )
     ns, unknown_args = parser.parse_known_args(args=args)
     if len(unknown_args):
         LOG.warning(f"ignoring arguments {unknown_args}")
@@ -190,6 +282,9 @@ def evaluate_cmd(args: list[str] | None = None) -> None:
         output_file=Path(ns.output_dir) / "scores.parquet",
         num_processes=ns.num_processes,
         overwrite=ns.overwrite,
+        posebusters=ns.posebusters,
+        flexible=ns.flexible,
+        posebusters_full=ns.posebusters_full,
     )
 
 
