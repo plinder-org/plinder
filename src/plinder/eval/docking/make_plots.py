@@ -10,9 +10,9 @@ import plotly.express as px
 METRICS_DICT = {
     "pocket_qcov": "POCKET SHARED",
     "pocket_lddt": "POCKET LDDT",
-    "protein_lddt_qcov_weighted_sum": "PROTEIN LDDT",
+    "protein_lddt_weighted_sum": "PROTEIN LDDT",
     "protein_seqsim_weighted_sum": "PROTEIN SEQSIM",
-    "pli_qcov": "PLI SHARED",
+    "pli_unique_qcov": "PLI SHARED",
     "tanimoto_similarity_max": "LIGAND SIMILARITY",
 }
 
