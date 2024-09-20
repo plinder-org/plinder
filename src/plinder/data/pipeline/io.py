@@ -19,6 +19,8 @@ from typing import Any, Callable, Literal, Optional, TypeVar
 
 import pandas as pd
 import requests
+from biotite.database.rcsb import fetch
+from biotite.structure.io.pdbx import CIFFile, get_structure, set_structure
 from tqdm import tqdm
 
 from plinder.core.utils.log import setup_logger
@@ -563,6 +565,24 @@ def download_alphafold_cif_file(
         with open(cif_file_path, "w") as f:
             f.write(resp.text)
     return cif_file_path
+
+
+@retry
+def download_pdb_chain_cif_file(pdb_id: str, chain_id: str, filename: Path) -> None:
+    structure = get_structure(
+        CIFFile.read(
+            fetch(
+                pdb_ids=pdb_id,
+                format="cif",
+                overwrite=False,
+            )
+        ),
+        model=1,
+        use_author_fields=False,
+    )
+    write_file = CIFFile()
+    set_structure(write_file, structure[structure.chain_id == chain_id])
+    write_file.write(filename.as_posix())
 
 
 @retry
