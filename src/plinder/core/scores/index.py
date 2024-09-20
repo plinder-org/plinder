@@ -39,6 +39,8 @@ def query_index(
     dataset = cpl.get_plinder_path(rel=f"{cfg.data.index}/{cfg.data.index_file}")
     if columns is None:
         columns = ["system_id", "entry_pdb_id"]
+    if "system_id" not in columns:
+        columns = ["system_id"] + columns
     query = make_query(
         dataset=dataset,
         columns=columns,
