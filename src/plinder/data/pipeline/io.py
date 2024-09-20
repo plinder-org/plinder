@@ -11,18 +11,15 @@ import json
 import os
 import shutil
 from concurrent.futures import ALL_COMPLETED, ThreadPoolExecutor, wait
-from functools import wraps
 from pathlib import Path
 from subprocess import check_output
-from time import sleep
-from typing import Any, Callable, Literal, Optional, TypeVar
+from typing import Any, Literal, Optional, TypeVar
 
 import pandas as pd
 import requests
-from biotite.database.rcsb import fetch
-from biotite.structure.io.pdbx import CIFFile, get_structure, set_structure
 from tqdm import tqdm
 
+from plinder.core.utils.io import download_alphafold_cif_file, retry
 from plinder.core.utils.log import setup_logger
 from plinder.data.pipeline import transform
 
@@ -35,27 +32,6 @@ KINDS = ["cif", "val"]
 KIND_TYPES = Literal["cif", "val"]
 LOG = setup_logger(__name__)
 T = TypeVar("T")
-
-
-def retry(func: Callable[..., T]) -> Callable[..., T]:
-    @wraps(func)
-    def inner(*args: Any, **kwargs: Any) -> T:
-        name = func.__name__
-        mod = func.__module__
-        log = setup_logger(".".join([mod, name]))
-        retries = 5
-        exc = None
-        for i in range(1, retries + 1):
-            try:
-                return func(*args, **kwargs)
-            except Exception as e:
-                wait = 2**i
-                log.error(f"failed: {repr(e)}, retry in: {wait}s")
-                exc = e
-                sleep(wait)
-        raise Exception(f"Timeout error {exc}")
-
-    return inner
 
 
 @retry
@@ -546,43 +522,6 @@ def get_missing_pdb_ids(
         if not len(list(pdb_dir.glob(glob))):
             missing.append(pdb_id)
     return missing
-
-
-@retry
-def download_alphafold_cif_file(
-    uniprot_id: str,
-    output_folder: Path,
-    url: str = "https://alphafold.ebi.ac.uk/files",
-    force_update: bool = False,
-) -> Optional[Path]:
-    cif_file_path = output_folder / f"AF-{uniprot_id}-F1-model_v4.cif"
-    if not cif_file_path.is_file() or force_update:
-        resp = requests.get(f"{url}/{cif_file_path.name}")
-        if resp.status_code == 404:
-            LOG.info(f"UniProt ID {uniprot_id} not in AlphaFold database")
-            return None
-        resp.raise_for_status()
-        with open(cif_file_path, "w") as f:
-            f.write(resp.text)
-    return cif_file_path
-
-
-@retry
-def download_pdb_chain_cif_file(pdb_id: str, chain_id: str, filename: Path) -> None:
-    structure = get_structure(
-        CIFFile.read(
-            fetch(
-                pdb_ids=pdb_id,
-                format="cif",
-                overwrite=False,
-            )
-        ),
-        model=1,
-        use_author_fields=False,
-    )
-    write_file = CIFFile()
-    set_structure(write_file, structure[structure.chain_id == chain_id])
-    write_file.write(filename.as_posix())
 
 
 @retry

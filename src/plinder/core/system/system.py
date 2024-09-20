@@ -16,12 +16,12 @@ if TYPE_CHECKING:
 from plinder.core.index import utils
 from plinder.core.scores.links import query_links
 from plinder.core.utils.cpl import get_plinder_path
-from plinder.core.utils.log import setup_logger
-from plinder.core.utils.unpack import get_zips_to_unpack
-from plinder.data.pipeline.io import (
+from plinder.core.utils.io import (
     download_alphafold_cif_file,
     download_pdb_chain_cif_file,
 )
+from plinder.core.utils.log import setup_logger
+from plinder.core.utils.unpack import get_zips_to_unpack
 
 LOG = setup_logger(__name__)
 
