@@ -124,7 +124,7 @@ class ModelScores:
         cls,
         model_name: str,
         model_receptor_file: Path,
-        model_ligand_files: list[str | Path],
+        model_ligand_files: list[Path],
         reference: PlinderSystem,
         score_protein: bool = False,
         score_posebusters: bool = False,
