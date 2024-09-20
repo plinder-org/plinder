@@ -120,54 +120,6 @@ def atom_array_from_cif_file(
     return structure
 
 
-# TODO: do we need this?
-def atom_array_to_rdkit_mol(
-    lig_atom_array: _AtomArrayOrStack,
-    smiles: str,
-    lig_resn: str = "LIG",
-    chain_mapping: Optional[Dict[str, str]] = None,
-    add_h: bool = True,
-) -> Mol:
-    # Change chain from two letters to one
-    if chain_mapping is None:
-        lig_atom_array.chain_id[:] = "X"
-    else:
-        lig_ch_id = list(set(lig_atom_array.chain_id))[0]
-        lig_atom_array.chain_id[:] = chain_mapping.get(lig_ch_id, "X")
-
-    temp1 = tempfile.NamedTemporaryFile(delete=False, suffix=".pdb")
-    file = struc.io.pdbx.PDBxFile()
-    struc.io.pdbx.set_structure(file, lig_atom_array, data_block=lig_resn)
-    struc.io.save_structure(temp1.name, lig_atom_array)
-    pdb_block = temp1.read()
-    os.unlink(temp1.name)
-    ligand_pose = Chem.MolFromPDBBlock(pdb_block)
-    try:
-        if smiles != "":
-            # If we have smiles, use it to assign bond orders
-            # Load original molecule from smiles
-            template = Chem.MolFromSmiles(smiles)
-            new_mol = AllChem.AssignBondOrdersFromTemplate(template, ligand_pose)
-        else:
-            new_mol = Chem.Mol(ligand_pose)
-    except (ValueError, TypeError) as e:
-        log.warning(f"Bond assignment to ligand failed...: {e}")
-        # If bond assignment or addition of H fails
-        new_mol = Chem.Mol(ligand_pose)
-    try:
-        if add_h:
-            log.info("Adding Hs ...")
-            new_mol_h = Chem.AddHs(new_mol, addCoords=True)
-            return new_mol_h
-        else:
-            new_mol_h = Chem.Mol(new_mol)
-            return new_mol_h
-    except (ValueError, TypeError) as e:
-        log.warning(f"Addition of H to ligand failed...: {e}")
-        new_mol_h = Chem.Mol(new_mol)
-        return new_mol_h
-
-
 def generate_input_conformer(template_mol: Mol, addHs: bool = True) -> Mol:
     _mol = copy.deepcopy(template_mol)
     if addHs:

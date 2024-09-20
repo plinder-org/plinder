@@ -61,10 +61,9 @@ def atom_array_from_pdb_file(
         structure = Path(structure)
 
     if isinstance(structure, Path):
-        reader = rust_pdbfile() if backend == "fastpdb" else biotite_pdbfile()
         try:
-            model = reader.read(str(structure))
-            arr = model.get_structure(model=1, extra_fields=extra_fields)  # noqa
+            arr = strucio.load_structure(structure.as_posix(), extra_fields=extra_fields)
+            assert isinstance(arr, (AtomArray, AtomArrayStack))
             return arr
         except Exception as e:
             log.error(f"Unable to parse {structure}! {str(e)}")
