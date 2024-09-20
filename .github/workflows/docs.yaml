@@ -32,9 +32,11 @@ jobs:
           cache-downloads: true
           cache-environment: true
           post-cleanup: all
+      - name: Install build and tag requirements
+        run: python -m pip install build semver
       - name: Get version bump
         id: get-tag
-        run: echo "bump=$(python flows/docker.py bump)" >> $GITHUB_OUTPUT
+        run: git tag $(python flows/docker.py bump)
       - name: Build docs
         shell: bash -el {0}
         id: build
