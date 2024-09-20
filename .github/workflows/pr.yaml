@@ -23,18 +23,18 @@ jobs:
       - name: Setup python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.9"
+          python-version: "3.10"
       - name: Install tox
         run: pip install tox
       - name: Run quality checks
-        run: tox -e py39-lint,py39-type
+        run: tox -e py310-lint,py310-type
       - name: Directory Cache
         uses: actions/cache@v4
         with:
           path: .tox
-          key: tox-${{ runner.os }}-3.9-${{ hashFiles('tox.ini') }}
+          key: tox-${{ runner.os }}-3.10-${{ hashFiles('tox.ini') }}
           restore-keys: |
-            tox-${{ runner.os }}-3.9-
+            tox-${{ runner.os }}-3.10-
 
   test:
     name: Build and test docker image
@@ -94,7 +94,7 @@ jobs:
         uses: mamba-org/setup-micromamba@v1
         with:
           environment-file: environment.yml
-          create-args: python=3.9
+          create-args: python=3.10
           init-shell: bash
           cache-downloads: true
           cache-environment: true

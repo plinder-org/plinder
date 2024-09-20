@@ -28,19 +28,6 @@ def load_mini_seq_dataset():
     return ds.dataset(sample_scores_dataset)
 
 
-@pytest.fixture
-def prediction_csv(plinder_src, tmp_path):
-    csv = f"""\
-id,reference_system_id,receptor_file,rank,confidence,ligand_file
-1ai5__1__1.A_1.B__1.D,1ai5__1__1.A_1.B__1.D,,1,1.0,{plinder_src}/tests/test_data/eval/predicted_poses/1ai5__1__1.A_1.B__1.D/rank1.sdf
-1a3b__1__1.B__1.D,1a3b__1__1.B__1.D,,1,1.0,{plinder_src}/tests/test_data/eval/predicted_poses/1a3b__1__1.B__1.D/rank1.sdf
-"""
-    fn = tmp_path / "prediction.csv"
-    with fn.open("w") as f:
-        f.write(csv)
-    return fn
-
-
 @pytest.fixture(scope="session")
 def plinder_src():
     plinder_root = Path(__file__).absolute().parent.parent
@@ -656,6 +643,24 @@ def read_plinder_mount(monkeypatch):
     plinder_mount = test_asset_fp
     cfg = config.get_config()
     adir = plinder_mount / "plinder" / "mount"
+    assert Path(cfg.data.plinder_dir) == adir
+
+    return adir
+
+
+@pytest.fixture
+def read_plinder_eval_mount(monkeypatch):
+    monkeypatch.setenv("PLINDER_MOUNT", test_asset_fp.as_posix())
+    monkeypatch.setenv("PLINDER_RELEASE", "")
+    monkeypatch.setenv("PLINDER_BUCKET", "eval")
+    monkeypatch.setenv("PLINDER_ITERATION", "")
+    monkeypatch.setenv("PLINDER_OFFLINE", True)
+    from plinder.core.utils import config
+
+    config._config._clear()
+    plinder_mount = test_asset_fp
+    cfg = config.get_config()
+    adir = plinder_mount / "eval"
     assert Path(cfg.data.plinder_dir) == adir
 
     return adir
@@ -6979,7 +6984,7 @@ def mock_ccd_lookups(monkeypatch):
 
 @pytest.fixture(scope="session")
 def system_1a3b():
-    return test_asset_fp / "eval/systems/1a3b__1__1.B__1.D"
+    return "1a3b__1__1.B__1.D"
 
 
 @pytest.fixture(scope="session")
@@ -6989,7 +6994,7 @@ def predicted_pose_1a3b():
 
 @pytest.fixture(scope="session")
 def system_1ai5():
-    return test_asset_fp / "eval/systems/1ai5__1__1.A_1.B__1.D"
+    return "1ai5__1__1.A_1.B__1.D"
 
 
 @pytest.fixture(scope="session")

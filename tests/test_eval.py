@@ -1,20 +1,61 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
 import os
-import subprocess
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
+from plinder.core.system.system import PlinderSystem
 from plinder.eval.docking import utils
+from plinder.eval.docking.make_plots import plot_cmd
+from plinder.eval.docking.stratify_test_set import stratify_cmd
+from plinder.eval.docking.write_scores import evaluate_cmd
 
 
-def test_single_protein_single_ligand_scoring(system_1a3b, predicted_pose_1a3b):
-    reference_system = utils.ReferenceSystem.from_reference_system(
-        system_1a3b, system_1a3b.name
+def mock_path_eval(
+    *, rel: str = "", download: bool = False, force_progress: bool = False
+):
+    obj = Path(
+        "/".join(
+            [
+                str(os.getenv("PLINDER_MOUNT")),
+                str(os.getenv("PLINDER_BUCKET")),
+                str(os.getenv("PLINDER_RELEASE")),
+            ]
+        )
     )
-    scores = utils.ModelScores.from_files(
+    return obj / rel if rel else obj
+
+
+def mock_tanimoto(x, y):
+    return np.random.rand(max(len(x), len(y)))
+
+
+@pytest.fixture
+def mock_cpl_eval(read_plinder_eval_mount, monkeypatch):
+    # patch cpl at core.utils not core.index.utils because of unpack
+    monkeypatch.setattr(
+        "plinder.core.utils.cpl.get_plinder_path",
+        mock_path_eval,
+    )
+    monkeypatch.setattr(
+        "plinder.core.utils.cpl.download_paths",
+        lambda **kws: None,
+    )
+    monkeypatch.setattr(
+        "plinder.eval.docking.stratify_test_set.smallmolecules.tanimoto_maxsim_matrix",
+        mock_tanimoto,
+    )
+
+
+def test_single_protein_single_ligand_scoring(
+    system_1a3b, predicted_pose_1a3b, mock_cpl_eval
+):
+    reference_system = PlinderSystem(system_id=system_1a3b)
+    scores = utils.ModelScores.from_model_files(
         predicted_pose_1a3b.parent.name,
-        reference_system.receptor_cif_file,
+        Path(reference_system.receptor_cif),
         [predicted_pose_1a3b],
         reference_system,
         score_protein=True,
@@ -29,12 +70,10 @@ def test_single_protein_single_ligand_scoring(system_1a3b, predicted_pose_1a3b):
         "num_model_proteins": 1,
         "fraction_reference_ligands_mapped": 1.0,
         "fraction_model_ligands_mapped": 1.0,
-        "lddt_pli_ave": 0.8895061728395062,
-        "lddt_pli_wave": 0.8895061728395062,
-        "lddt_pli_amd_ave": 0.8581504702194357,
-        "lddt_pli_amd_wave": 0.8581504702194357,
-        "scrmsd_ave": 1.6171839155715722,
-        "scrmsd_wave": 1.6171839155715722,
+        "lddt_pli_ave": 0.8581504702194357,
+        "lddt_pli_wave": 0.8581504702194357,
+        "bisy_rmsd_ave": 1.6171839155715722,
+        "bisy_rmsd_wave": 1.6171839155715722,
         "lddt_lp_ave": 1.0,
         "lddt_lp_wave": 1.0,
         "posebusters_mol_pred_loaded": True,
@@ -66,18 +105,20 @@ def test_single_protein_single_ligand_scoring(system_1a3b, predicted_pose_1a3b):
     for k in true_scores:
         assert k in scores
         if type(true_scores[k]) == float:
-            assert np.isclose(scores[k], true_scores[k])
+            assert np.isclose(
+                scores[k], true_scores[k]
+            ), f"{k}: {scores[k]} != {true_scores[k]}"
         else:
-            assert scores[k] == true_scores[k]
+            assert scores[k] == true_scores[k], f"{k}: {scores[k]} != {true_scores[k]}"
 
 
-def test_multi_protein_single_ligand_scoring(system_1ai5, predicted_pose_1ai5):
-    reference_system = utils.ReferenceSystem.from_reference_system(
-        system_1ai5, system_1ai5.name
-    )
-    scores = utils.ModelScores.from_files(
+def test_multi_protein_single_ligand_scoring(
+    system_1ai5, predicted_pose_1ai5, mock_cpl_eval
+):
+    reference_system = PlinderSystem(system_id=system_1ai5)
+    scores = utils.ModelScores.from_model_files(
         predicted_pose_1ai5.parent.name,
-        reference_system.receptor_cif_file,
+        Path(reference_system.receptor_cif),
         [predicted_pose_1ai5],
         reference_system,
         score_protein=True,
@@ -92,12 +133,10 @@ def test_multi_protein_single_ligand_scoring(system_1ai5, predicted_pose_1ai5):
         "num_model_proteins": 2,
         "fraction_reference_ligands_mapped": 1.0,
         "fraction_model_ligands_mapped": 1.0,
-        "lddt_pli_ave": 0.557840616966581,
-        "lddt_pli_wave": 0.557840616966581,
-        "lddt_pli_amd_ave": 0.5106951871657754,
-        "lddt_pli_amd_wave": 0.5106951871657754,
-        "scrmsd_ave": 3.6651428915654645,
-        "scrmsd_wave": 3.6651428915654645,
+        "lddt_pli_ave": 0.5106951871657754,
+        "lddt_pli_wave": 0.5106951871657754,
+        "bisy_rmsd_ave": 3.6651428915654645,
+        "bisy_rmsd_wave": 3.6651428915654645,
         "lddt_lp_ave": 1.0,
         "lddt_lp_wave": 1.0,
         "posebusters_mol_pred_loaded": True,
@@ -133,97 +172,74 @@ def test_multi_protein_single_ligand_scoring(system_1ai5, predicted_pose_1ai5):
     for k in true_scores:
         assert k in scores
         if type(true_scores[k]) == float:
-            assert np.isclose(scores[k], true_scores[k])
+            assert np.isclose(
+                scores[k], true_scores[k]
+            ), f"{k}: {scores[k]} != {true_scores[k]}"
         else:
-            assert scores[k] == true_scores[k]
+            assert scores[k] == true_scores[k], f"{k}: {scores[k]} != {true_scores[k]}"
 
 
-def test_write_docking_eval_cmd(monkeypatch, plinder_src, prediction_csv):
-    """
-    We prefer to test the command line interface to the module.
-    However, it's wrapped in subprocess calls and not so easy
-    to debug. If this test is failing, uncomment the code for
-    calling the code directly to see where it's erroring out.
-    """
+@pytest.fixture
+def prediction_csv(read_plinder_eval_mount, mock_cpl_eval, tmp_path):
+    csv = f"""\
+id,reference_system_id,receptor_file,rank,confidence,ligand_file
+1ai5__1__1.A_1.B__1.D,1ai5__1__1.A_1.B__1.D,,1,1.0,{read_plinder_eval_mount}/predicted_poses/1ai5__1__1.A_1.B__1.D/rank1.sdf
+1a3b__1__1.B__1.D,1a3b__1__1.B__1.D,,1,1.0,{read_plinder_eval_mount}/predicted_poses/1a3b__1__1.B__1.D/rank1.sdf
+"""
+    fn = tmp_path / "prediction.csv"
+    with fn.open("w") as f:
+        f.write(csv)
+    return fn
 
-    def mock_tanimoto(x, y):
-        return np.random.rand(max(len(x), len(y)))
 
-    plinder_dir = plinder_src / "tests" / "test_data"
-    monkeypatch.setenv("PLINDER_MOUNT", plinder_dir.as_posix())
-    monkeypatch.setenv("PLINDER_BUCKET", "eval")
-    monkeypatch.setenv("PLINDER_RELEASE", "")
-    monkeypatch.setenv("PLINDER_ITERATION", "")
-    monkeypatch.setattr(
-        "plinder.eval.docking.stratify_test_set.smallmolecules.tanimoto_maxsim_matrix",
-        mock_tanimoto,
-    )
+def test_evaluate_stratify_plot_cmds(prediction_csv, mock_cpl_eval):
     from plinder.core.utils import config
 
     config._config._clear()
+    cfg = config.get_config()
 
-    # this calls the same function as the command line interface
-    # call below
-    #
-    # from plinder.eval.docking.write_scores import extract_and_score_test_set
-    #
-    # extract_and_score_test_set(
-    #     prediction_file=prediction_csv,
-    #     data_dir=plinder_src / "tests/test_data/eval",
-    #     output_dir=prediction_csv.parent,
-    #     num_processes=8,
-    # )
-
-    cmd1 = [
-        "plinder_eval",
+    args = [
         "--prediction_file",
         f"{prediction_csv}",
-        "--data_dir",
-        f"{plinder_src}/tests/test_data/eval",
         "--output_dir",
         f"{prediction_csv.parent}",
         "--num_processes",
         "8",
     ]
-    subprocess.check_output(
-        " ".join(cmd1),
-        shell=True,
-        stderr=subprocess.PIPE,
-        env=os.environ.copy(),
-    )
+    evaluate_cmd(args=args)
 
     score_df = pd.read_parquet(f"{prediction_csv.parent}/scores.parquet")
     assert np.allclose(
-        score_df.sort_values(by="reference").scrmsd_wave.to_list(), [1.617184, 3.665143]
+        score_df.sort_values(by="reference").bisy_rmsd_wave.to_list(),
+        [1.617184, 3.665143],
     )
 
-    # here we fall back to the python function call because
-    # we have to mock the tanimoto_maxsim_matrix function
-    # which we cannot do simply using a subprocess call
-    #
-    from plinder.eval.docking.stratify_test_set import StratifiedTestSet
-
-    StratifiedTestSet.from_split(
-        split_file=plinder_src / "tests/test_data/eval/test_split.parquet",
-        data_dir=plinder_src / "tests/test_data/eval",
-        output_dir=prediction_csv.parent,
-    )
-
-    # otherwise we'd prefer to call it this way
-    # cmd2 = [
-    #     "plinder_stratify",
-    #     "--split_file",
-    #     f"{plinder_src}/tests/test_data/eval/test_split.parquet",
-    #     "--data_dir",
-    #     f"{plinder_src}/tests/test_data/eval",
-    #     "--output_dir",
-    #     f"{prediction_csv.parent}",
-    # ]
-    # out = subprocess.check_output(
-    #     cmd2,
-    #     shell=True,
-    #     stderr=subprocess.STDOUT,
-    # )
+    args = [
+        "--split_file",
+        f"{Path(cfg.data.plinder_dir) / 'test_split.parquet'}",
+        "--output_dir",
+        f"{prediction_csv.parent}",
+    ]
+    stratify_cmd(args=args)
 
     stratify_df = pd.read_parquet(f"{prediction_csv.parent}/test_set.parquet")
     assert np.allclose(stratify_df.novel_all.to_list(), [True, True])
+
+    args = [
+        "--score_file",
+        f"{prediction_csv.parent}/scores.parquet",
+        "--data_file",
+        f"{prediction_csv.parent}/test_set.parquet",
+        "--output_dir",
+        f"{prediction_csv.parent}/plots",
+        "--max_top_n",
+        "1",
+    ]
+    plot_cmd(args=args)
+    result_df = pd.read_csv(Path(prediction_csv.parent) / "plots" / "results.csv")
+    truth = pd.read_csv(Path(cfg.data.plinder_dir) / "results.csv")
+    assert result_df.equals(truth)
+    assert (Path(prediction_csv.parent) / "plots" / "merged.parquet").exists()
+    assert (
+        Path(prediction_csv.parent) / "plots" / "delta_lDDT_PLI_topn1.html"
+    ).exists()

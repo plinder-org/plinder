@@ -2,7 +2,7 @@
 name = "plinder"
 dynamic = ["version"]
 dependencies = [
-    "biotite == 0.39.0",
+    "biotite >= 1.0",
     "numpy<2",
     "pandas",
     "typing_extensions",
@@ -26,7 +26,7 @@ dependencies = [
 ]
 description = "PLINDER: The Protein-Ligand INteraction Dataset and Evaluation Resource"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: Apache Software License",
@@ -39,8 +39,9 @@ Issues = "https://github.com/plinder-org/plinder/issues"
 
 [project.scripts]
 plinder_download = "plinder.core.index.utils:download_plinder_cmd"
-plinder_eval = "plinder.eval.docking.write_scores:main"
-plinder_stratify = "plinder.eval.docking.stratify_test_set:main"
+plinder_eval = "plinder.eval.docking.write_scores:evaluate_cmd"
+plinder_stratify = "plinder.eval.docking.stratify_test_set:stratify_cmd"
+plinder_plot = "plinder.eval.docking.make_plots:plot_cmd"
 
 [project.optional-dependencies]
 lint = [

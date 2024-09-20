@@ -9,7 +9,7 @@ channels:
   - defaults
   - bioconda
 dependencies:
-  - python=3.9
+  - python=3.10.*
   - reduce
   - aivant::openstructure=2.8.0
   - boost=1.82
