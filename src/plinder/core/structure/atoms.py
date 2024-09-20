@@ -16,15 +16,15 @@ from biotite.structure import get_residues
 from biotite.structure.atoms import AtomArray, AtomArrayStack
 from biotite.structure.io.pdbx import get_structure
 from numpy.typing import NDArray
-from pinder.core.structure.atoms import (
+from rdkit import Chem
+from rdkit.Chem import AllChem, Mol, rdMolDescriptors, rdRascalMCES
+
+from plinder.core.structure.vendored import (
     _convert_resn_to_sequence_and_numbering,
     _get_structure_and_res_info,
     align_sequences,
     apply_mask,
 )
-from rdkit import Chem
-from rdkit.Chem import AllChem, Mol, rdMolDescriptors, rdRascalMCES
-
 from plinder.core.utils import constants as pc
 from plinder.core.utils.log import setup_logger
 

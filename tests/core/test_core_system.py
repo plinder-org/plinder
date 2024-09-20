@@ -1,7 +1,7 @@
 from pathlib import Path
 
 import pytest
-from plinder.core import system
+from plinder.core import index
 
 
 @pytest.mark.parametrize(
@@ -16,7 +16,7 @@ from plinder.core import system
     ],
 )
 def test_plinder_system(system_id, read_plinder_mount):
-    system.PlinderSystem(system_id=system_id)
+    index.PlinderSystem(system_id=system_id)
 
 
 @pytest.mark.parametrize(
@@ -28,20 +28,20 @@ def test_plinder_system(system_id, read_plinder_mount):
 )
 def test_plinder_system_fails(system_id, read_plinder_mount):
     with pytest.raises(ValueError):
-        system.PlinderSystem(system_id=system_id).system
+        index.PlinderSystem(system_id=system_id).system
 
 
 def test_plinder_system_system_files(read_plinder_mount):
     system_id = "19hc__1__1.A_1.B__1.V_1.X_1.Y"
-    s = system.PlinderSystem(system_id=system_id)
+    s = index.PlinderSystem(system_id=system_id)
     assert len(s.structures) == 10
     assert len(s.ligands) == 3
     assert len(s.system_cif)
     assert len(s.receptor_cif)
     assert len(s.receptor_pdb)
     assert len(s.sequences)
-    assert len(s.chain_mapping)
-    assert len(s.water_mapping)
+    assert s.chain_mapping is not None and len(s.chain_mapping)
+    assert s.water_mapping is not None and len(s.water_mapping)
     assert Path(s.system_cif).is_file()
     assert Path(s.receptor_cif).is_file()
     assert Path(s.receptor_pdb).is_file()

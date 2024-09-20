@@ -1,24 +1,25 @@
 from __future__ import annotations
 
+from dataclasses import fields, is_dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Iterable, Optional
+from typing import TYPE_CHECKING, Iterable, Optional, Any, Mapping
 
 import biotite.structure as struc
 import numpy as np
 from biotite.structure.atoms import AtomArray
 from numpy.typing import NDArray
-from pinder.core.structure import surgery
-from pinder.core.structure.atoms import (
+from plinder.core.structure.vendored import (
     get_per_chain_seq_alignments,
     get_seq_aligned_structures,
     invert_chain_seq_map,
     resn2seq,
     write_pdb,
 )
-from pinder.core.utils.dataclass import stringify_dataclass
 from pydantic import BaseModel
 from rdkit import Chem
 
+from plinder.core.utils.dataclass import stringify_dataclass
+from plinder.core.structure import surgery
 from plinder.core.structure.atoms import (
     atom_array_from_cif_file,
     generate_input_conformer,
@@ -38,8 +39,43 @@ if TYPE_CHECKING:
 
 
 log = setup_logger(__name__)
-cfg = get_config()
 
+def _superimpose_common_atoms(
+    fixed: AtomArray, mobile: AtomArray, max_iterations: int = 10
+) -> tuple[
+    AtomArray,
+    struc.AffineTransformation,
+    NDArray[np.int_],
+    NDArray[np.int_],
+]:
+    """Try to superimpose two structures based on homology.
+    If this fails due to a lack of common anchors (e.g. in case of very short peptides),
+    fall back to superimposing corresponding atoms with common atom annotations.
+    """
+    try:
+        return_value: tuple[
+            AtomArray,
+            struc.AffineTransformation,
+            NDArray[np.int_],
+            NDArray[np.int_],
+        ] = superimpose_chain(fixed, mobile, max_iterations=max_iterations)
+        return return_value
+    except ValueError as error:
+        # Only run fallback if number of anchors is the issue
+        if "anchor" not in str(error):
+            raise
+        fixed_common_mask = struc.filter_intersection(fixed, mobile)
+        fixed_coord = fixed.coord[fixed_common_mask]
+        mobile_common_mask = struc.filter_intersection(mobile, fixed)
+        mobile_coord = mobile.coord[mobile_common_mask]
+        _, transformation = struc.superimpose(fixed_coord, mobile_coord)
+        mobile_superimposed = transformation.apply(mobile)
+        return (
+            mobile_superimposed,
+            transformation,
+            np.where(fixed_common_mask)[0],
+            np.where(mobile_common_mask)[0],
+        )
 
 def reverse_dict(mapping: dict[int, int]) -> dict[int, int]:
     return {v: k for k, v in mapping.items()}
