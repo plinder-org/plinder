@@ -47,7 +47,7 @@ def get_plindex() -> pd.DataFrame:
 
     if _PLINDEX is not None:
         return _PLINDEX
-    _PLINDEX = query_index(columns=["*"], splits=["all"])
+    _PLINDEX = query_index(columns=["*"], splits=["*"])
     return _PLINDEX
 
 
@@ -73,7 +73,7 @@ def get_manifest() -> pd.DataFrame:
 
     if _MANIFEST is not None:
         return _MANIFEST
-    _MANIFEST = query_index(columns=["system_id", "entry_pdb_id"], splits=["all"])
+    _MANIFEST = query_index(columns=["system_id", "entry_pdb_id"], splits=["*"])
     return _MANIFEST
 
 

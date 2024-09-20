@@ -199,7 +199,7 @@ class StratifiedTestSet:
                             ("ligand_is_ion", "==", False),
                             ("ligand_is_artifact", "==", False),
                         ],
-                        splits=["all"],
+                        splits=["*"],
                     ).drop(columns=["split"])
                     df = df.merge(self.split_df, on="system_id", how="left")
                     compute_ligand_max_similarities(
