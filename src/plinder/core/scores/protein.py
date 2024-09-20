@@ -5,7 +5,6 @@ from __future__ import annotations
 import pandas as pd
 from duckdb import sql
 
-from plinder.core.scores.clusters import query_clusters
 from plinder.core.scores.index import query_index
 from plinder.core.scores.query import FILTER, FILTERS, make_query
 from plinder.core.utils import cpl
@@ -130,10 +129,32 @@ def multi_query_protein_similarity(
     search_db: str,
     filter_criteria: dict[str, int],
     splits: list[str] | None = None,
-    cluster_column: str = "protein_fident_qcov_weighted_sum__95__community",
 ) -> pd.DataFrame:
     """
-    searches the protein similarity database for systems satisfying ALL filter criteria
+    Searches the protein similarity database for systems satisfying ALL filter criteria
+
+    Parameters
+    ----------
+    system_id : str
+        the system_id to search for
+    search_db : str
+        the search database to search in
+    filter_criteria : dict[str, int]
+        metric and threshold pairs
+        e.g {
+            "pocket_fident": 100,
+            "protein_fident_weighted_sum": 95,
+            "protein_fident_qcov_weighted_sum": 80,
+            "pocket_lddt": 20,
+            "protein_lddt_weighted_sum": 20,
+        }
+    splits : list[str] | None, default=None
+        the splits to search in (only used if search_db="holo")
+
+    Returns
+    -------
+    df : pd.DataFrame
+        the protein similarity results across all metrics in filter_criteria
     """
     if splits is None:
         splits = ["train"]
@@ -141,35 +162,14 @@ def multi_query_protein_similarity(
         columns=["query_system", "target_system"] + list(filter_criteria.keys())
     )
     if search_db == "holo":
-        cluster_metric, cluster_threshold, cluster_cluster = cluster_column.split("__")
-        if "__" in cluster_cluster:
-            cluster_directed, cluster_cluster = cluster_cluster.split("__")
-        else:
-            cluster_directed = "weak"
-        if cluster_cluster == "community":
-            cluster_cluster = "communities"
-        if cluster_cluster == "component":
-            cluster_cluster = "components"
-
-        clusters = query_clusters(
-            columns=["system_id", "label"],
-            filters=[
-                ("metric", "==", cluster_metric),
-                ("threshold", "==", cluster_threshold),
-                ("cluster", "==", cluster_cluster),
-                ("directed", "==", cluster_directed == "strong"),
-            ],
+        target_systems_df = query_index(
+            columns=["system_id"],
+            splits=splits,
         )
-        if clusters is None:
+        if target_systems_df is None:
             return empty_df
-        cluster_members = set(
-            query_index(
-                columns=["system_id"],
-                filters=[(cluster_column, "in", set(clusters["label"]))],  # type: ignore
-                splits=splits,
-            )["system_id"]
-        )
-        if len(cluster_members) == 0:
+        target_systems = set(target_systems_df["system_id"])
+        if len(target_systems) == 0:
             return empty_df
     filters = []
     for metric, threshold in filter_criteria.items():
@@ -179,7 +179,7 @@ def multi_query_protein_similarity(
             ("query_system", "==", system_id),
         ]
         if search_db == "holo":
-            filter.append(("target_system", "in", cluster_members))
+            filter.append(("target_system", "in", target_systems))
         filters.append(filter)
     links = query_protein_similarity(
         search_db=search_db,
