@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
-from plinder.core import PlinderSystem
+from plinder.core.index.system import PlinderSystem
 from plinder.eval.docking import utils
 from plinder.eval.docking.make_plots import plot_cmd
 from plinder.eval.docking.stratify_test_set import stratify_cmd
