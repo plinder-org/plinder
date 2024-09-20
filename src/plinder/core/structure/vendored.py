@@ -27,9 +27,9 @@ _AtomArrayOrStack = Union[AtomArray, AtomArrayStack]
 
 
 def biotite_pdbxfile() -> TextFile:
-    from biotite.structure.io.pdbx import PDBxFile
+    from biotite.structure.io.pdbx import CIFFile
 
-    return PDBxFile
+    return CIFFile
 
 
 def biotite_pdbfile() -> TextFile:

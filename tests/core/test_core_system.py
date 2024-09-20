@@ -35,7 +35,7 @@ def test_plinder_system_system_files(read_plinder_mount):
     system_id = "19hc__1__1.A_1.B__1.V_1.X_1.Y"
     s = index.PlinderSystem(system_id=system_id)
     assert len(s.structures) == 10
-    assert len(s.ligands) == 3
+    assert len(s.ligand_sdfs) == 3
     assert len(s.system_cif)
     assert len(s.receptor_cif)
     assert len(s.receptor_pdb)
@@ -45,6 +45,6 @@ def test_plinder_system_system_files(read_plinder_mount):
     assert Path(s.system_cif).is_file()
     assert Path(s.receptor_cif).is_file()
     assert Path(s.receptor_pdb).is_file()
-    assert Path(s.sequences).is_file()
+    assert Path(s.sequences_fasta).is_file()
     assert isinstance(s.chain_mapping, dict)
     assert isinstance(s.water_mapping, dict)

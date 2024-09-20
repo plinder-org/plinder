@@ -5,12 +5,14 @@ from __future__ import annotations
 import json
 from functools import cached_property
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Sequence
+from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
 if TYPE_CHECKING:
     from ost import mol
+
+from biotite.sequence.io.fasta import FastaFile
 
 from plinder.core.index import utils
 from plinder.core.scores.links import query_links
@@ -151,7 +153,7 @@ class PlinderSystem:
         return (self.archive / "receptor.pdb").as_posix()
 
     @property
-    def sequences(self) -> str:
+    def sequences_fasta(self) -> str:
         """
         Path to the sequences.fasta file
 
@@ -162,6 +164,19 @@ class PlinderSystem:
         """
         assert self.archive is not None
         return (self.archive / "sequences.fasta").as_posix()
+
+    @cached_property
+    def sequences(self) -> dict[str, str]:
+        """
+        Path to the sequences.fasta file
+
+        Returns
+        -------
+        str
+            path
+        """
+        assert self.archive is not None
+        return {k: v for k, v in FastaFile.read_iter(self.sequences_fasta)}
 
     @property
     def chain_mapping(self) -> dict[str, Any] | None:
@@ -196,7 +211,7 @@ class PlinderSystem:
         return self._water_mapping
 
     @property
-    def ligands(self) -> dict[str, str]:
+    def ligand_sdfs(self) -> dict[str, str]:
         """
         Return a dictionary of ligand names to paths to ligand sdf files
 
@@ -335,9 +350,9 @@ class PlinderSystem:
             raise ImportError("Please install openstructure to use this property")
 
         ligand_views = {}
-        for chain in self.ligands:
+        for chain in self.ligand_sdfs:
             ligand_views[chain] = io.LoadEntity(
-                self.ligands[chain], format="sdf"
+                self.ligand_sdfs[chain], format="sdf"
             ).Select("ele != H")
         return ligand_views
 
@@ -350,7 +365,7 @@ class PlinderSystem:
         -------
         int
         """
-        return len(self.ligands)
+        return len(self.ligand_sdfs)
 
     @property
     def num_proteins(self) -> int:
@@ -416,12 +431,12 @@ class PlinderSystem:
             raise ValueError("input_smiles_dict is None!")
         list_ligand_sdf_and_input_smiles = [
             (Path(sdf_path), self.input_smiles_dict[chain])
-            for chain, sdf_path in self.ligands.items()
+            for chain, sdf_path in self.ligand_sdfs.items()
         ]
         struc = Structure.load_structure(
             id=self.system_id,
             protein_path=Path(self.receptor_cif),
-            protein_sequence=Path(self.sequences),
+            protein_sequence=Path(self.sequences_fasta),
             list_ligand_sdf_and_input_smiles=list_ligand_sdf_and_input_smiles,
         )
         assert struc is not None
@@ -443,7 +458,7 @@ class PlinderSystem:
                         alt_chain[chain] = Structure.load_structure(
                             id=Path(alt_path).parent.name,
                             protein_path=Path(alt_path),
-                            protein_sequence=Path(self.sequences),
+                            protein_sequence=Path(self.sequences_fasta),
                             structure_type=kind,
                         )
                     except Exception:
@@ -453,3 +468,20 @@ class PlinderSystem:
             LOG.warning("alt_structures: alt structure fouend")
             alt_structure_dict = {"apo": {}, "pred": {}}
         return alt_structure_dict  # type: ignore
+
+    @cached_property
+    def smiles(self) -> dict[str, str] | None:
+        if self.system is None:
+            return None
+        smiles_dict = {}
+        try_smiles = ["rdkit_canonical_smiles", "smiles", "resolved_smiles"]
+        for ligand in self.system["ligands"]:
+            found = False
+            for s in try_smiles:
+                if s in ligand and ligand[s] is not None and len(ligand[s]):
+                    smiles_dict[f"{ligand['instance']}.{ligand['asym_id']}"] = s
+                    found = True
+                    break
+            if not found:
+                smiles_dict[f"{ligand['instance']}.{ligand['asym_id']}"] = ""
+        return smiles_dict

@@ -711,7 +711,7 @@ class Ligand(DocBaseModel):
         default_factory=list, description="__Ligand residue numbers"
     )
     rdkit_canonical_smiles: str | None = Field(
-        default=None, description="RDKit canonical SMILES"
+        default=None, description="RDKit canonical SMILES (Recommended)"
     )
     molecular_weight: float | None = Field(default=None, description="Molecular weight")
     crippen_clogp: float | None = Field(

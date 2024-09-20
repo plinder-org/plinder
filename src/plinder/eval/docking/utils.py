@@ -13,7 +13,7 @@ from ost.mol.alg.ligand_scoring_scrmsd import SCRMSDScorer
 from ost.mol.alg.scoring import Scorer
 from posebusters import PoseBusters
 
-from plinder.core.system.system import PlinderSystem
+from plinder.core import PlinderSystem
 from plinder.core.utils.log import setup_logger
 
 LOG = setup_logger(__name__)
@@ -57,9 +57,9 @@ class ComplexData:
     def from_plinder_system(cls, system: PlinderSystem) -> "ComplexData":
         ligand_views = []
         ligand_files = []
-        for ligand in system.ligands:
+        for ligand in system.ligand_sdfs:
             ligand_views.append(system.ligand_views[ligand])
-            ligand_files.append(Path(system.ligands[ligand]))
+            ligand_files.append(Path(system.ligand_sdfs[ligand]))
         return cls(
             name=system.system_id,
             receptor_file=Path(

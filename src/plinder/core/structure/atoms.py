@@ -94,9 +94,9 @@ _AtomArrayOrStack = Union[AtomArray, AtomArrayStack]
 
 
 def biotite_ciffile() -> TextFile:
-    from biotite.structure.io.pdbx import PDBxFile
+    from biotite.structure.io.pdbx import CIFFile
 
-    return PDBxFile
+    return CIFFile
 
 
 def atom_array_from_cif_file(
