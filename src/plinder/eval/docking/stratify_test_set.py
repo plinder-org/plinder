@@ -260,7 +260,7 @@ class StratifiedTestSet:
                 "system_id",
                 "system_pass_validation_criteria",
             ],
-            splits=["all"],
+            splits=["*"],
         ).drop(columns=["split"])
         quality = dict(
             zip(df["system_id"], df["system_pass_validation_criteria"].fillna(False))
