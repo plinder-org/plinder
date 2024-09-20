@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 from functools import lru_cache
 from pathlib import Path
 from typing import Union
@@ -14,8 +15,8 @@ from biotite.structure.atoms import Atom, AtomArray, AtomArrayStack, stack
 from numpy.typing import NDArray
 
 import plinder.core.utils.constants as pc
-from plinder.core.utils.log import setup_logger
 from plinder.core.structure.models import BackboneDefinition
+from plinder.core.utils.log import setup_logger
 
 log = setup_logger(__name__)
 
@@ -271,7 +272,7 @@ def stack_filter_intersect(
 
     try:
         return stack(common_decoys), standardize_order
-    except Exception as e:
+    except Exception:
         if standardize_order and remove_elements:
             # log.warning(
             #     "Caution: results will only represent the atoms in common! "

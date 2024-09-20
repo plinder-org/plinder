@@ -1,24 +1,15 @@
 from __future__ import annotations
 
-from dataclasses import fields, is_dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Iterable, Optional, Any, Mapping
+from typing import TYPE_CHECKING, Iterable, Optional
 
 import biotite.structure as struc
 import numpy as np
 from biotite.structure.atoms import AtomArray
 from numpy.typing import NDArray
-from plinder.core.structure.vendored import (
-    get_per_chain_seq_alignments,
-    get_seq_aligned_structures,
-    invert_chain_seq_map,
-    resn2seq,
-    write_pdb,
-)
 from pydantic import BaseModel
 from rdkit import Chem
 
-from plinder.core.utils.dataclass import stringify_dataclass
 from plinder.core.structure import surgery
 from plinder.core.structure.atoms import (
     atom_array_from_cif_file,
@@ -30,8 +21,15 @@ from plinder.core.structure.atoms import (
     make_one_hot_atom_features,
     match_ligands,
 )
+from plinder.core.structure.vendored import (
+    get_per_chain_seq_alignments,
+    get_seq_aligned_structures,
+    invert_chain_seq_map,
+    resn2seq,
+    write_pdb,
+)
 from plinder.core.utils import constants as pc
-from plinder.core.utils.config import get_config
+from plinder.core.utils.dataclass import stringify_dataclass
 from plinder.core.utils.log import setup_logger
 
 if TYPE_CHECKING:
@@ -39,6 +37,7 @@ if TYPE_CHECKING:
 
 
 log = setup_logger(__name__)
+
 
 def _superimpose_common_atoms(
     fixed: AtomArray, mobile: AtomArray, max_iterations: int = 10
@@ -76,6 +75,7 @@ def _superimpose_common_atoms(
             np.where(fixed_common_mask)[0],
             np.where(mobile_common_mask)[0],
         )
+
 
 def reverse_dict(mapping: dict[int, int]) -> dict[int, int]:
     return {v: k for k, v in mapping.items()}

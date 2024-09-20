@@ -1,7 +1,6 @@
 from typing import Any, Sequence
 
 import numpy as np
-import pandas as pd
 import torch
 from numpy.typing import NDArray
 from rdkit import Chem
@@ -15,6 +14,7 @@ from plinder.core.utils import constants as pc
 RES_IDX_PAD_VALUE = -99
 COORDS_PAD_VALUE = -100
 ATOM_TYPE_PAD_VALUE = -1
+
 
 def pad_to_max_length(
     mat: Tensor,
@@ -95,7 +95,7 @@ def pad_and_stack(
     """
     assert (
         len({t.ndim for t in tensors}) == 1
-    ), f"All `tensors` must have the same number of dimensions."
+    ), "All `tensors` must have the same number of dimensions."
 
     # Pad all dims if none are specified
     if dims_to_pad is None:

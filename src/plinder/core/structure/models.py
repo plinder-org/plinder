@@ -2,6 +2,7 @@ from enum import Enum
 
 from pydantic import BaseModel, ConfigDict
 
+
 class Base(BaseModel):
     model_config = ConfigDict(
         extra="forbid", validate_assignment=True, use_enum_values=True
@@ -26,5 +27,3 @@ class BackboneDefinition(str, Enum):
     biotite = "biotite"
     # DockQ definition: C, CA, N, O
     dockq = "dockq"
-
-

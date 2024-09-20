@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import biotite.structure as struc
 import numpy as np
-from numpy.typing import NDArray
 from biotite.structure.atoms import AtomArray, AtomArrayStack
-from plinder.core.utils.log import setup_logger
-from plinder.core.structure.vendored import apply_mask, get_seq_aligned_structures
+from numpy.typing import NDArray
+
 from plinder.core.structure.models import ChainConfig
+from plinder.core.structure.vendored import apply_mask, get_seq_aligned_structures
+from plinder.core.utils.log import setup_logger
 
 log = setup_logger(__name__)
 
