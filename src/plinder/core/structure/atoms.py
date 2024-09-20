@@ -117,25 +117,8 @@ def atom_array_from_cif_file(
     return structure
 
 
-# def generate_input_conformer(template_mol: Mol, addHs: bool = True) -> Mol:
-#     _mol = copy.deepcopy(template_mol)
-#     if addHs:
-#         _mol = Chem.AddHs(_mol, addCoords=True)
-#     conformer_atom_matches = get_template_to_mol_matches(template_mol, _mol)
-#     ps = AllChem.ETKDGv2()
-#     ps.useRandomCoords = True
-#     # Large molecules like peptides fails with default maxAttempts
-#     ps.maxAttempts = 5000
-#     AllChem.EmbedMolecule(
-#         _mol,
-#         ps,
-#     )
-#     AllChem.MMFFOptimizeMolecule(_mol, confId=0)
-#     return _mol, conformer_atom_matches
-
-
 def generate_input_conformer(
-    template_mol: Chem.Mol, addHs=False
+    template_mol: Chem.Mol, addHs: bool = False
 ) -> tuple[Chem.Mol, tuple[_AtomArrayOrStack, _AtomArrayOrStack]]:
     _mol = copy.deepcopy(template_mol)
     # need to add Hs to generate sensible conformers
