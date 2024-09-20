@@ -21,6 +21,7 @@ from plinder.core.structure.atoms import (
     make_one_hot_atom_features,
     match_ligands,
 )
+from plinder.core.structure.superimpose import superimpose_chain
 from plinder.core.structure.vendored import (
     get_per_chain_seq_alignments,
     get_seq_aligned_structures,

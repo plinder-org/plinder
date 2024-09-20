@@ -9,7 +9,8 @@ import pandas as pd
 import torch
 from torch.utils.data import DataLoader, Dataset
 
-from plinder.core.index.system import PlinderSystem, collate_batch, structure2tensor
+from plinder.core.index.system import PlinderSystem
+from plinder.core.loader.utils import collate_batch, structure2tensor
 from plinder.core.scores import query_index
 from plinder.core.scores.links import query_links
 from plinder.core.split.utils import get_split

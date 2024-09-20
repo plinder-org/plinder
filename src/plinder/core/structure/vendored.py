@@ -87,7 +87,7 @@ def atom_vdw_radius(at: Atom) -> float:
 
 
 def backbone_mask(
-    atoms: _AtomArrayOrStack, backbone_definition: BackboneDefinition
+    atoms: _AtomArrayOrStack, backbone_definition: str | BackboneDefinition
 ) -> NDArray[np.bool_]:
     if backbone_definition == "dockq":
         mask = np.isin(atoms.atom_name, DOCKQ_BACKBONE_ATOMS)
@@ -131,7 +131,7 @@ def filter_atoms(
     calpha_only: bool = False,
     backbone_only: bool = False,
     heavy_only: bool = True,
-    backbone_definition: BackboneDefinition = "dockq",
+    backbone_definition: str | BackboneDefinition = "dockq",
 ) -> _AtomArrayOrStack:
     if calpha_only:
         atoms = apply_mask(atoms, atoms.atom_name == "CA")
@@ -147,7 +147,7 @@ def get_backbone_atom_masks(
     decoy_stack: AtomArrayStack,
     backbone_only: bool,
     calpha_only: bool,
-    backbone_definition: BackboneDefinition = "dockq",
+    backbone_definition: str | BackboneDefinition = "dockq",
 ) -> tuple[NDArray[np.bool_], NDArray[np.bool_]]:
     # superimpose
     if backbone_only:
@@ -246,7 +246,7 @@ def stack_filter_intersect(
 
     in_common = min(common.shape[0] for common in common_decoys)
     max_in_common = max(common.shape[0] for common in common_decoys)
-    smallest_decoy = sorted(common_decoys, key=lambda x: x.shape[0])[0]
+    smallest_decoy = sorted(common_decoys, key=lambda x: x.shape[0])[0]  # type: ignore
     mismatch = largest_decoy - in_common
     if in_common < max_in_common:
         # Make sure all of the common atoms that exceed smallest are filtered out
