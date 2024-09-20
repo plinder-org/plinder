@@ -62,7 +62,9 @@ def atom_array_from_pdb_file(
 
     if isinstance(structure, Path):
         try:
-            arr = strucio.load_structure(structure.as_posix(), extra_fields=extra_fields)
+            arr = strucio.load_structure(
+                structure.as_posix(), extra_fields=extra_fields
+            )
             assert isinstance(arr, (AtomArray, AtomArrayStack))
             return arr
         except Exception as e:

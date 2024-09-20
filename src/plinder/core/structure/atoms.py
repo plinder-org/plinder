@@ -4,12 +4,9 @@ from __future__ import annotations
 
 import copy
 import gzip
-import os
-import tempfile
 from pathlib import Path
-from typing import Dict, Optional, Union
+from typing import Union
 
-import biotite.structure as struc
 import numpy as np
 from biotite import TextFile
 from biotite.structure import get_residues
@@ -17,7 +14,7 @@ from biotite.structure.atoms import AtomArray, AtomArrayStack
 from biotite.structure.io.pdbx import get_structure
 from numpy.typing import NDArray
 from rdkit import Chem
-from rdkit.Chem import AllChem, Mol, rdMolDescriptors, rdRascalMCES
+from rdkit.Chem import AllChem, Mol, rdDepictor, rdMolDescriptors, rdRascalMCES
 
 from plinder.core.structure.vendored import (
     _convert_resn_to_sequence_and_numbering,
@@ -120,21 +117,96 @@ def atom_array_from_cif_file(
     return structure
 
 
-def generate_input_conformer(template_mol: Mol, addHs: bool = True) -> Mol:
+# def generate_input_conformer(template_mol: Mol, addHs: bool = True) -> Mol:
+#     _mol = copy.deepcopy(template_mol)
+#     if addHs:
+#         _mol = Chem.AddHs(_mol, addCoords=True)
+#     conformer_atom_matches = get_template_to_mol_matches(template_mol, _mol)
+#     ps = AllChem.ETKDGv2()
+#     ps.useRandomCoords = True
+#     # Large molecules like peptides fails with default maxAttempts
+#     ps.maxAttempts = 5000
+#     AllChem.EmbedMolecule(
+#         _mol,
+#         ps,
+#     )
+#     AllChem.MMFFOptimizeMolecule(_mol, confId=0)
+#     return _mol, conformer_atom_matches
+
+
+def generate_input_conformer(
+    template_mol: Chem.Mol, addHs=False
+) -> tuple[Chem.Mol, tuple[_AtomArrayOrStack, _AtomArrayOrStack]]:
     _mol = copy.deepcopy(template_mol)
-    if addHs:
-        _mol = Chem.AddHs(_mol, addCoords=True)
-    conformer_atom_matches = get_template_to_mol_matches(template_mol, _mol)
-    ps = AllChem.ETKDGv2()
-    ps.useRandomCoords = True
-    # Large molecules like peptides fails with default maxAttempts
-    ps.maxAttempts = 5000
-    AllChem.EmbedMolecule(
+    # need to add Hs to generate sensible conformers
+    _mol = Chem.AddHs(_mol)
+    # try embedding molecule using ETKDGv2 (default)
+    confid = AllChem.EmbedMolecule(
         _mol,
-        ps,
+        useRandomCoords=True,
+        useBasicKnowledge=True,
+        maxAttempts=100,
+        randomSeed=42,
     )
-    AllChem.MMFFOptimizeMolecule(_mol, confId=0)
-    return _mol, conformer_atom_matches
+    if confid != -1:
+        # molecule successfully embedded - minimize
+        success = AllChem.MMFFOptimizeMolecule(_mol, maxIters=200)
+        # 0 if the optimization converged,
+        # -1 if the forcefield could not be set up,
+        # 1 if more iterations are required.
+        if success == 1:
+            log.info(
+                "generate_conformer: MMFFOptimizeMolecule - more iterations are required, extending by 500 steps"
+            )
+            # extend optimization to more steps
+            AllChem.MMFFOptimizeMolecule(_mol, maxIters=500)
+        elif success == -1:
+            log.warning(
+                "generate_conformer: MMFFOptimizeMolecule - the forcefield could not be set up"
+            )
+
+    else:
+        # this means EmbedMolecule failed
+        log.warning(
+            "generate_conformer: EmbedMolecule - failed, try using useBasicKnowledge=False"
+        )
+        # try less optimal approach
+        confid = AllChem.EmbedMolecule(
+            _mol,
+            useRandomCoords=True,
+            useBasicKnowledge=False,
+            maxAttempts=100,
+            randomSeed=42,
+        )
+        if confid == -1:
+            # if that still fails - try generating just 2D conformer
+            log.warning(
+                "generate_conformer: EmbedMolecule - failed, trying rdDepictor.Compute2DCoords instead"
+            )
+            confid = rdDepictor.Compute2DCoords(_mol)
+
+    # verify that mol has conformers
+    if _mol.GetNumConformers() == 0:
+        raise ValueError("Could not generate conformer")
+
+    if not addHs:
+        # remove Hs if they should not be kept
+        _mol = params_removeHs(_mol)
+
+    # generate matching array index to input 2D structure
+    conformer_atoms2smiles_stacks = get_template_to_mol_matches(template_mol, _mol)
+
+    return _mol, conformer_atoms2smiles_stacks
+
+
+def params_removeHs(mol: Chem.Mol) -> Chem.Mol:
+    params = Chem.rdmolops.RemoveHsParameters()
+    params.removeIsotopes = True
+    params.removeDegreeZero = True
+    params.removeHigherDegrees = True
+    params.removeOnlyHNeighbors = True
+    params.removeNontetrahedralNeighbors = True
+    return Chem.rdmolops.RemoveHs(mol, params, sanitize=False)
 
 
 def match_ligands(

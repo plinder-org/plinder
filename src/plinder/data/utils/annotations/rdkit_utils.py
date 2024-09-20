@@ -14,6 +14,7 @@ from rdkit.Chem import AllChem, rdMolDescriptors, rdRascalMCES
 from rdkit.Chem.rdchem import Mol
 from rdkit.Chem.rdFMCS import FindMCS
 
+from plinder.core.structure.atoms import params_removeHs
 from plinder.core.utils.constants import BASE_DIR
 from plinder.core.utils.log import setup_logger
 
@@ -45,16 +46,6 @@ def sanitize_mol(mol: Mol) -> None:
             sanitizeOps=Chem.SanitizeFlags.SANITIZE_ALL
             ^ Chem.SanitizeFlags.SANITIZE_ADJUSTHS,
         )
-
-
-def params_removeHs(mol: Chem.Mol) -> Chem.Mol:
-    params = Chem.rdmolops.RemoveHsParameters()
-    params.removeIsotopes = True
-    params.removeDegreeZero = True
-    params.removeHigherDegrees = True
-    params.removeOnlyHNeighbors = True
-    params.removeNontetrahedralNeighbors = True
-    return Chem.rdmolops.RemoveHs(mol, params, sanitize=False)
 
 
 def explicit_H_remover(mol: Mol, remove_hydrogens: list[int]) -> Mol:
