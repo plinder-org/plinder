@@ -39,7 +39,7 @@ def query_index(
     dataset = cpl.get_plinder_path(rel=f"{cfg.data.index}/{cfg.data.index_file}")
     if columns is None:
         columns = ["system_id", "entry_pdb_id"]
-    if "system_id" not in columns:
+    if "system_id" not in columns and "*" not in columns:
         columns = ["system_id"] + columns
     query = make_query(
         dataset=dataset,
@@ -54,6 +54,6 @@ def query_index(
     split_df = get_split(cfg=cfg)
     split_dict = dict(zip(split_df["system_id"], split_df["split"]))
     df["split"] = df["system_id"].map(lambda x: split_dict.get(x, "unassigned"))
-    if "all" not in splits:
+    if "*" not in splits:
         df = df[df["split"].isin(splits)].reset_index(drop=True)
     return df
