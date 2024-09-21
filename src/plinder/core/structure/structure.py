@@ -7,7 +7,7 @@ import biotite.structure as struc
 import numpy as np
 from biotite.structure.atoms import AtomArray
 from numpy.typing import NDArray
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 from rdkit import Chem
 
 from plinder.core.structure import surgery
@@ -92,10 +92,11 @@ def get_rdkit_mol(ligand: Path | str) -> Chem.rdchem.Mol:
 class Structure(BaseModel):
     id: str
     protein_path: Path
-    protein_sequence: Path
-    list_ligand_sdf_and_input_smiles: Optional[list[tuple[Path, str]]] = None
-    protein_atom_array: Optional[AtomArray] = None
-    ligand_mols: Optional[
+    protein_sequence: dict[str, str] | None = None
+    ligand_sdfs: dict[str, str] | None = None
+    ligand_smiles: dict[str, str] | None = None
+    protein_atom_array: AtomArray | None = None
+    ligand_mols: (
         dict[
             str,
             tuple[
@@ -107,7 +108,8 @@ class Structure(BaseModel):
                 tuple[NDArray, NDArray],
             ],
         ]
-    ] = None
+        | None
+    ) = None
     add_ligand_hydrogens: bool = False
     structure_type: str = "holo"
 
@@ -123,8 +125,13 @@ class Structure(BaseModel):
         PLINDER system or apo/pred id. If the structure is holo, this is used to load the holo structure
     protein_path : Path
         Protein structure cif path, could be holo, apo or pred path
-    list_ligand_sdf_and_input_smiles : Optional[list[tuple[Path, str]]]
-        SDF path and ligand smiles. This is optional for apo and pred structures
+    protein_sequence : dict[str, str] | None = None
+        Protein sequence dictionary with chain id as key and sequence as value
+        Set from protein_path if not provided
+    ligand_sdfs : dict[str, str] | None = None
+        Dictionary of ligand sdf file paths with chain id as key and sdf file path as value
+    ligand_smiles : dict[str, str] | None = None
+        Dictionary of ligand smiles with chain id as key and smiles as value
     protein_atom_array : AtomArray | None = None
         Protein Biotite atom array
     ligand_mols : ligand_mols: Optional[
@@ -148,115 +155,91 @@ class Structure(BaseModel):
     class Config:
         arbitrary_types_allowed = True
 
-    @property
-    def input_sequences(self) -> dict[str, str]:
-        _resolvd_sequences = {}
-        with open(self.protein_sequence) as f_seq:
-            lines = f_seq.readlines()
-            for idx, line in enumerate(lines):
-                if ">" in line:
-                    chain = line[1:].strip()
-                    seq = lines[idx + 1].strip().replace("\n", "")
-                    # canonicalize
-                    seq = seq.translate(str.maketrans(pc.non_canonical_aa))  # type: ignore
+    @model_validator(mode="after")
+    def initialize(self):
+        if self.protein_atom_array is None:
+            self.load_protein()
+        if self.protein_sequence is None:
+            self.load_sequence()
+        if self.ligand_sdfs is not None or self.ligand_smiles is not None:
+            self.load_ligands()
+        return self
 
-                    _resolvd_sequences[chain] = seq
-        return _resolvd_sequences
-
-    @classmethod
-    def load_structure(
-        cls,
-        id: str,
-        protein_path: Path,
-        protein_sequence: Path,
-        list_ligand_sdf_and_input_smiles: Optional[list[tuple[Path, str]]] = None,
-        protein_atom_array: Optional[AtomArray] = None,
-        ligand_mols: Optional[
-            dict[
-                str,
-                tuple[
-                    Chem.Mol,
-                    Chem.Mol,
-                    tuple[NDArray, NDArray],
-                    Chem.Mol,
-                    tuple[NDArray, NDArray],
-                    tuple[NDArray, NDArray],
-                ],
-            ]
-        ] = None,
-        add_ligand_hydrogens: bool = False,
-        structure_type: str = "holo",
-    ) -> Structure | None:
-        structure = cls(
-            id=id,
-            protein_path=protein_path,
-            protein_sequence=protein_sequence,
-            list_ligand_sdf_and_input_smiles=list_ligand_sdf_and_input_smiles,
-            protein_atom_array=protein_atom_array,
-            ligand_mols=ligand_mols,
-            add_ligand_hydrogens=add_ligand_hydrogens,
-            structure_type=structure_type,
+    def load_protein(self):
+        protein_arr = atom_array_from_cif_file(
+            self.protein_path, use_author_fields=False
         )
+        if protein_arr is None:
+            raise ValueError("Protein atom array could not be loaded")
+        annotation_arr: NDArray[np.double | np.str_] = np.repeat(
+            0.0, protein_arr.shape[0]
+        )
+        protein_arr.set_annotation("b_factor", annotation_arr)
 
-        if (structure.protein_atom_array is None) & (structure.ligand_mols is None):
-            # Sometimes b-factor field parsing fails, try without it.
-            protein_arr = atom_array_from_cif_file(
-                protein_path, use_author_fields=False
-            )
-            assert protein_arr is not None
-            annotation_arr: NDArray[np.double | np.str_] = np.repeat(
-                0.0, protein_arr.shape[0]
-            )
-            protein_arr.set_annotation("b_factor", annotation_arr)
-
-            if "" in set(protein_arr.element):
-                try:
-                    protein_arr.element = struc.infer_elements(protein_arr)
-                except Exception:
-                    log.debug(
-                        f"Found missing elements in {protein_path} but failed to infer"
-                    )
-            # Remove water
-            structure.protein_atom_array = protein_arr[protein_arr.res_name != "HOH"]
-            structure.ligand_mols = {}
-            if not (list_ligand_sdf_and_input_smiles is None):
-                for ligand_sdf, input_smiles in list_ligand_sdf_and_input_smiles:
-                    # Match molecules
-                    (
-                        template_mol,
-                        resolved_mol,
-                        resolved_atoms2smiles_stacks,
-                    ) = match_ligands(input_smiles, ligand_sdf)
-
-                    # get input_conformer with matches
-                    (
-                        template_mol_conformer,
-                        conformer_atoms2smiles_stacks,
-                    ) = generate_input_conformer(
-                        template_mol, addHs=add_ligand_hydrogens
-                    )
-
-                    conformer2resolved_stacks = get_template_to_mol_matches(
-                        template_mol_conformer, resolved_mol
-                    )
-                    structure.ligand_mols[ligand_sdf.stem] = (
-                        template_mol,
-                        template_mol_conformer,
-                        conformer_atoms2smiles_stacks,
-                        resolved_mol,
-                        resolved_atoms2smiles_stacks,
-                        conformer2resolved_stacks,
-                    )
-        if structure.protein_atom_array is not None:
+        if "" in set(protein_arr.element):
             try:
-                getattr(structure.protein_atom_array, "b-factor")
-            except AttributeError:
-                b_factors: NDArray[np.double | np.str_] = np.repeat(
-                    0.0, structure.protein_atom_array.shape[0]
+                protein_arr.element = struc.infer_elements(protein_arr)
+            except Exception:
+                log.debug(
+                    f"Found missing elements in {self.protein_path} but failed to infer"
                 )
-                structure.protein_atom_array.set_annotation("b_factor", b_factors)
 
-        return structure
+        # Remove water
+        self.protein_atom_array = protein_arr[protein_arr.res_name != "HOH"]
+
+        # Set b-factor again
+        try:
+            getattr(self.protein_atom_array, "b-factor")
+        except AttributeError:
+            b_factors: NDArray[np.double | np.str_] = np.repeat(
+                0.0, self.protein_atom_array.shape[0]
+            )
+            self.protein_atom_array.set_annotation("b_factor", b_factors)
+
+    def load_sequence(self):
+        if self.protein_atom_array is None:
+            raise ValueError("Protein atom array not loaded")
+        self.protein_sequence = {}
+        for chain in self.protein_chain_ordered:
+            self.protein_sequence[chain] = struc.to_sequence(
+                self.protein_atom_array[self.protein_atom_array.chain_id == chain]
+            )
+        if not len(self.protein_sequence):
+            raise ValueError("Protein sequence could not be loaded")
+
+    def load_ligands(self):
+        if self.ligand_sdfs is None:
+            raise ValueError("Ligand SDFs not provided")
+        if self.ligand_smiles is None:
+            raise ValueError("Ligand SMILES not provided")
+        if set(self.ligand_smiles.keys()) != set(self.ligand_sdfs.keys()):
+            raise ValueError("Ligand SMILES and SDFs keys do not match")
+        self.ligand_mols = {}
+        for name, sdf in self.ligand_sdfs.items():
+            # Match molecules
+            (
+                template_mol,
+                resolved_mol,
+                resolved_atoms2smiles_stacks,
+            ) = match_ligands(self.ligand_smiles[name], sdf)
+
+            # get input_conformer with matches
+            (
+                template_mol_conformer,
+                conformer_atoms2smiles_stacks,
+            ) = generate_input_conformer(template_mol, addHs=self.add_ligand_hydrogens)
+
+            conformer2resolved_stacks = get_template_to_mol_matches(
+                template_mol_conformer, resolved_mol
+            )
+            self.ligand_mols[name] = (
+                template_mol,
+                template_mol_conformer,
+                conformer_atoms2smiles_stacks,
+                resolved_mol,
+                resolved_atoms2smiles_stacks,
+                conformer2resolved_stacks,
+            )
 
     def __repr__(self) -> str:
         class_str: str = stringify_dataclass(self, 4)
@@ -276,7 +259,8 @@ class Structure(BaseModel):
                 id=combined_id,
                 protein_path=combined_path,
                 protein_sequence=self.protein_sequence,
-                list_ligand_sdf_and_input_smiles=self.list_ligand_sdf_and_input_smiles,
+                ligand_sdfs=self.ligand_sdfs,
+                ligand_smiles=self.ligand_smiles,
                 protein_atom_array=combined_arr,
                 ligand_mols=self.ligand_mols,
                 add_ligand_hydrogens=self.add_ligand_hydrogens,
@@ -322,7 +306,8 @@ class Structure(BaseModel):
                 id=self.id,
                 protein_path=self.protein_path,
                 protein_sequence=self.protein_sequence,
-                list_ligand_sdf_and_input_smiles=self.list_ligand_sdf_and_input_smiles,
+                ligand_sdfs=self.ligand_sdfs,
+                ligand_smiles=self.ligand_smiles,
                 protein_atom_array=arr,
                 ligand_mols=self.ligand_mols,
                 add_ligand_hydrogens=self.add_ligand_hydrogens,
@@ -387,7 +372,8 @@ class Structure(BaseModel):
                 id=self.id,
                 protein_path=self.protein_path,
                 protein_sequence=self.protein_sequence,
-                list_ligand_sdf_and_input_smiles=self.list_ligand_sdf_and_input_smiles,
+                ligand_sdfs=self.ligand_sdfs,
+                ligand_smiles=self.ligand_smiles,
                 protein_atom_array=target_at,
                 ligand_mols=self.ligand_mols,
                 add_ligand_hydrogens=self.add_ligand_hydrogens,
@@ -398,7 +384,8 @@ class Structure(BaseModel):
                 id=other.id,
                 protein_path=other.protein_path,
                 protein_sequence=self.protein_sequence,
-                list_ligand_sdf_and_input_smiles=other.list_ligand_sdf_and_input_smiles,
+                ligand_sdfs=other.ligand_sdfs,
+                ligand_smiles=other.ligand_smiles,
                 protein_atom_array=ref_at,
                 ligand_mols=other.ligand_mols,
                 add_ligand_hydrogens=other.add_ligand_hydrogens,
@@ -422,7 +409,7 @@ class Structure(BaseModel):
         assert self.protein_atom_array is not None
 
         seqres_masks = get_residue_index_mapping_mask(
-            self.input_sequences, self.protein_atom_array
+            self.protein_sequence, self.protein_atom_array
         )
         return [seqres_masks[ch] for ch in self.protein_chain_ordered]
 
@@ -450,7 +437,7 @@ class Structure(BaseModel):
     @property
     def input_sequence_list_ordered_by_chain(self) -> list[str]:
         """List of protein chains ordered the way it is in structure."""
-        return [self.input_sequences[ch] for ch in self.protein_chain_ordered]
+        return [self.protein_sequence[ch] for ch in self.protein_chain_ordered]
 
     @property
     def protein_chain_ordered(self) -> list[str]:
@@ -468,7 +455,7 @@ class Structure(BaseModel):
         seq_res_atom_list = [
             [
                 pc.ORDERED_AA_FULL_ATOM[pc.ONE_TO_THREE[res]]
-                for res in self.input_sequences[ch]
+                for res in self.protein_sequence[ch]
             ]
             for ch in self.protein_chain_ordered
         ]
@@ -482,12 +469,12 @@ class Structure(BaseModel):
         """Sequence mask indicating which residues are resolved"""
         assert self.protein_atom_array is not None
         seqres_masks = get_residue_index_mapping_mask(
-            self.input_sequences, self.protein_atom_array
+            self.protein_sequence, self.protein_atom_array
         )
         return [
             make_atom_mask(
                 self.protein_atom_array[self.protein_atom_array.chain_id == ch],
-                self.input_sequences[ch],
+                self.protein_sequence[ch],
                 seqres_masks[ch],
             )
             for ch in self.protein_chain_ordered
@@ -659,14 +646,6 @@ class Structure(BaseModel):
         return seq
 
     @property
-    def protein_structure_sequence_fasta(self) -> str:
-        """str: The fasta representation of the structure sequence."""
-        fasta_str: str = "\n".join(
-            [f">{self.protein_path.stem}", self.protein_sequence_from_structure]
-        )
-        return fasta_str
-
-    @property
     def protein_structure_tokenized_sequence(self) -> "torch.Tensor":
         """torch.Tensor: The tokenized sequence representation of the structure sequence."""
         import torch
@@ -678,7 +657,7 @@ class Structure(BaseModel):
         return tokenized
 
     @property
-    def protein_structure_residue_names(self) -> list[str]:
+    def protein_unique_residue_names(self) -> list[str]:
         """list[str]: The list of distinct residue names in the structure."""
         assert self.protein_atom_array is not None
         res_list = self._attr_from_atom_array(
@@ -687,7 +666,7 @@ class Structure(BaseModel):
         return [str(r) for r in res_list]
 
     @property
-    def protein_structure_residues(self) -> list[int]:
+    def protein_unique_residue_ids(self) -> list[int]:
         """list[int]: The list of distinct residue IDs in the structure."""
         assert self.protein_atom_array is not None
         res_list = self._attr_from_atom_array(
@@ -696,7 +675,7 @@ class Structure(BaseModel):
         return [int(r) for r in res_list]
 
     @property
-    def protein_structure_atom_names(self) -> list[str]:
+    def protein_unique_atom_names(self) -> list[str]:
         """list[str]: The list of distinct atom names in the structure."""
         assert self.protein_atom_array is not None
         at_list = self._attr_from_atom_array(
