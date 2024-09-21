@@ -206,8 +206,11 @@ class PlinderSystem:
         """
         if self._water_mapping is None:
             assert self.archive is not None
-            with (self.archive / "water_mapping.json").open() as f:
-                self._water_mapping = json.load(f)
+            try:
+                with (self.archive / "water_mapping.json").open() as f:
+                    self._water_mapping = json.load(f)
+            except FileNotFoundError:
+                return None
         return self._water_mapping
 
     @property
@@ -393,16 +396,14 @@ class PlinderSystem:
         if self._best_linked_structures == {}:
             links = query_links(filters=[("reference_system_id", "==", self.system_id)])
             best_apo = (
-                links[(links.kind == "apo")].sort_values(by="sort_score").id.to_list()
+                links[(links.kind == "apo")].sort_values(by="scrmsd_wave").id.to_list()
             )
             if len(best_apo) > 0:
                 best_apo = best_apo[0]
             else:
                 best_apo = None
             best_pred = (
-                links[(links.kind == "pred")]
-                .sort_values(by="sort_score", ascending=False)
-                .id.to_list()
+                links[(links.kind == "pred")].sort_values(by="scrmsd_wave").id.to_list()
             )
             if len(best_pred) > 0:
                 best_pred = best_pred[0]
@@ -413,6 +414,7 @@ class PlinderSystem:
             chain_id = self.system_id.split("__")[2]
             if best_apo is not None:
                 apo_map = {chain_id: self.get_linked_structure("apo", best_apo)}
+
             if best_pred is not None:
                 pred_map = {chain_id: self.get_linked_structure("pred", best_pred)}
 
@@ -447,10 +449,9 @@ class PlinderSystem:
         """
         Load apo/pred structure
         """
-        alt_structure_dict = {}
+        alt_structure_dict = {"apo": {}, "pred": {}}
         try:
             best_structures = self.best_linked_structures_paths
-
             for kind, alts in best_structures.items():
                 alt_chain = {}
                 for chain, alt_path in alts.items():
@@ -465,8 +466,7 @@ class PlinderSystem:
                         LOG.warning(f"alt_structures: no {kind} found for {chain}")
                 alt_structure_dict[kind] = alt_chain
         except Exception:
-            LOG.warning("alt_structures: alt structure fouend")
-            alt_structure_dict = {"apo": {}, "pred": {}}
+            LOG.warning("alt_structures: alt structure found")
         return alt_structure_dict  # type: ignore
 
     @cached_property
