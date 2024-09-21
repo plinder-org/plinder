@@ -203,8 +203,11 @@ class PlinderSystem:
         """
         if self._water_mapping is None:
             assert self.archive is not None
-            with (self.archive / "water_mapping.json").open() as f:
-                self._water_mapping = json.load(f)
+            try:
+                with (self.archive / "water_mapping.json").open() as f:
+                    self._water_mapping = json.load(f)
+            except FileNotFoundError:
+                return None
         return self._water_mapping
 
     @property
