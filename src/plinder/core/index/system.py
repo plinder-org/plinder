@@ -43,11 +43,9 @@ class PlinderSystem:
         self,
         *,
         system_id: str,
-        input_smiles_dict: dict[str, str] | None = None,
         prune: bool = True,
     ) -> None:
         self.system_id: str = system_id
-        self.input_smiles_dict: dict[str, str] | None = input_smiles_dict
         self.prune: bool = prune
         self._entry: dict[str, Any] | None = None
         self._system: dict[str, Any] | None = None
@@ -55,7 +53,6 @@ class PlinderSystem:
         self._chain_mapping: dict[str, Any] | None = None
         self._water_mapping: dict[str, Any] | None = None
         self._linked_structures: pd.DataFrame | None = None
-        self._best_linked_structures: dict[str, dict[str, str]] = {}
         self._linked_archive: Path | None = None
 
     @property
@@ -379,95 +376,37 @@ class PlinderSystem:
         return len(self.system_id.split("__")[2].split("_"))
 
     @property
-    def best_linked_structures_paths(self) -> dict[str, dict[str, str]]:
+    def alternate_structures(self) -> dict[str, Structure]:
         """
-        Return single best apo and pred by sort score.
-
-        Returns
-        -------
-        dict[str, dict[str, Path]]
-            dictionary of linked structures if present in plinder
+        load all alternate structures
         """
-        # TODO: This assumes single protein chain holo system.
-        # Extend this to make it more general
-        if self._best_linked_structures == {}:
-            links = query_links(filters=[("reference_system_id", "==", self.system_id)])
-            best_apo = (
-                links[(links.kind == "apo")].sort_values(by="sort_score").id.to_list()
+        structures = {}
+        for id, kind in self.linked_structures[["id", "kind"]].values:
+            protein_path = self.get_linked_structure(
+                kind,
+                id,
             )
-            if len(best_apo) > 0:
-                best_apo = best_apo[0]
-            else:
-                best_apo = None
-            best_pred = (
-                links[(links.kind == "pred")]
-                .sort_values(by="sort_score", ascending=False)
-                .id.to_list()
+            structures[id] = Structure(
+                id=id,
+                protein_path=Path(protein_path),
+                protein_sequence=self.sequences,
+                structure_type=kind,
             )
-            if len(best_pred) > 0:
-                best_pred = best_pred[0]
-            else:
-                best_pred = None
-            apo_map = {}
-            pred_map = {}
-            chain_id = self.system_id.split("__")[2]
-            if best_apo is not None:
-                apo_map = {chain_id: self.get_linked_structure("apo", best_apo)}
-            if best_pred is not None:
-                pred_map = {chain_id: self.get_linked_structure("pred", best_pred)}
-
-            self._best_linked_structures = {
-                "apo": apo_map,
-                "pred": pred_map,
-            }
-        return self._best_linked_structures
+        return structures
 
     @property
     def holo_structure(self) -> Structure:
         """
         Load holo structure
         """
-        if self.input_smiles_dict is None:
-            raise ValueError("input_smiles_dict is None!")
-        list_ligand_sdf_and_input_smiles = [
-            (Path(sdf_path), self.input_smiles_dict[chain])
-            for chain, sdf_path in self.ligand_sdfs.items()
-        ]
-        struc = Structure.load_structure(
+        return Structure(
             id=self.system_id,
             protein_path=Path(self.receptor_cif),
-            protein_sequence=Path(self.sequences_fasta),
-            list_ligand_sdf_and_input_smiles=list_ligand_sdf_and_input_smiles,
+            protein_sequence=self.sequences,
+            ligand_sdfs=self.ligand_sdfs,
+            ligand_smiles=self.smiles,
+            structure_type="holo",
         )
-        assert struc is not None
-        return struc
-
-    @property
-    def alt_structures(self) -> dict[str, dict[str, Structure]]:
-        """
-        Load apo/pred structure
-        """
-        alt_structure_dict = {}
-        try:
-            best_structures = self.best_linked_structures_paths
-
-            for kind, alts in best_structures.items():
-                alt_chain = {}
-                for chain, alt_path in alts.items():
-                    try:
-                        alt_chain[chain] = Structure.load_structure(
-                            id=Path(alt_path).parent.name,
-                            protein_path=Path(alt_path),
-                            protein_sequence=Path(self.sequences_fasta),
-                            structure_type=kind,
-                        )
-                    except Exception:
-                        LOG.warning(f"alt_structures: no {kind} found for {chain}")
-                alt_structure_dict[kind] = alt_chain
-        except Exception:
-            LOG.warning("alt_structures: alt structure fouend")
-            alt_structure_dict = {"apo": {}, "pred": {}}
-        return alt_structure_dict  # type: ignore
 
     @cached_property
     def smiles(self) -> dict[str, str] | None:
@@ -479,7 +418,7 @@ class PlinderSystem:
             found = False
             for s in try_smiles:
                 if s in ligand and ligand[s] is not None and len(ligand[s]):
-                    smiles_dict[f"{ligand['instance']}.{ligand['asym_id']}"] = s
+                    smiles_dict[f"{ligand['instance']}.{ligand['asym_id']}"] = ligand[s]
                     found = True
                     break
             if not found:
