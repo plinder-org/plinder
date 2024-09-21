@@ -7004,7 +7004,7 @@ def predicted_pose_1ai5():
 
 @pytest.fixture(autouse=True)
 def failfast(monkeypatch):
-    monkeypatch.setattr("plinder.data.pipeline.io.sleep", lambda x: None)
+    monkeypatch.setattr("plinder.core.utils.io.sleep", lambda x: None)
 
     def f(*args, **kwargs):
         class obj:

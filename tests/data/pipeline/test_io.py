@@ -2,6 +2,7 @@
 # Distributed under the terms of the Apache License 2.0
 import pandas as pd
 import pytest
+from plinder.core.utils import io as core_io
 from plinder.data.pipeline import io
 
 
@@ -25,11 +26,11 @@ class _resp:
 
 def test_retry_fail(monkeypatch):
     monkeypatch.setattr(
-        "plinder.data.pipeline.io.sleep",
+        "plinder.core.utils.io.sleep",
         lambda _: None,
     )
 
-    @io.retry
+    @core_io.retry
     def f():
         raise Exception("intentional")
 
@@ -253,5 +254,5 @@ def test_download_uniprot_fasta_cached(tmp_path):
 
 
 def test_download_alphafold_cif_file(tmp_path):
-    cif_file = io.download_alphafold_cif_file("P05067", tmp_path)
+    cif_file = core_io.download_alphafold_cif_file("P05067", tmp_path)
     assert cif_file is not None and cif_file.exists()

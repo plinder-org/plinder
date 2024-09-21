@@ -12,9 +12,14 @@ import pandas as pd
 if TYPE_CHECKING:
     from ost import mol
 
+
 from plinder.core.index import utils
 from plinder.core.scores.links import query_links
 from plinder.core.utils.cpl import get_plinder_path
+from plinder.core.utils.io import (
+    download_alphafold_cif_file,
+    download_pdb_chain_cif_file,
+)
 from plinder.core.utils.log import setup_logger
 from plinder.core.utils.unpack import get_zips_to_unpack
 
@@ -274,7 +279,25 @@ class PlinderSystem:
             raise ValueError("linked_archive is None!")
         structure = self.linked_archive / f"{link_id}.cif"
         if not structure.is_file():
-            raise ValueError(f"structure={structure} does not exist!")
+            if link_kind == "apo":
+                pdb_id, chain_id = link_id.split("_")
+                try:
+                    download_pdb_chain_cif_file(pdb_id, chain_id, structure)
+                except Exception as e:
+                    raise ValueError(f"Unable to download {link_id}! {str(e)}")
+            elif link_kind == "pred":
+                uniprot_id = link_id.split("_")[0]
+                cif_file_path = download_alphafold_cif_file(
+                    uniprot_id, self.linked_archive
+                )
+                if cif_file_path is None:
+                    raise ValueError(f"Unable to download {link_id}")
+                cif_file_path.rename(structure)
+            elif link_kind == "holo":
+                structure = Path(PlinderSystem(system_id=link_id).receptor_cif)
+            if structure is None or not structure.is_file():
+                raise ValueError(f"structure={structure} does not exist!")
+
         return structure.as_posix()
 
     @cached_property

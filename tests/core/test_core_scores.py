@@ -2,11 +2,12 @@
 # Distributed under the terms of the Apache License 2.0
 import pytest
 from plinder.core import scores
+from plinder.core.scores.protein import multi_query_protein_similarity
 
 
 def test_query_index(read_plinder_mount):
-    df = scores.query_index(columns=["system_id"])
-    assert len(df.index) == 10
+    df = scores.query_index(columns=["system_id"], splits=["*"])
+    assert len(df.index) == 34
 
 
 def test_query_protein_similarity(read_plinder_mount):
@@ -100,3 +101,19 @@ def test_query_links_columns(read_plinder_mount):
     assert len(df.index)
     assert "reference_system_id" in df.columns
     assert "kind" in df.columns
+
+
+def test_multi_query_protein_similarity(read_plinder_mount):
+    system_id = "8t49__1__1.G__1.AB"
+    filter_criteria: dict[str, int] = {
+        "protein_fident_qcov_weighted_sum": 0,
+        "pocket_lddt": 90,
+    }
+    df = multi_query_protein_similarity(
+        system_id=system_id,
+        search_db="holo",
+        filter_criteria=filter_criteria,
+        splits=["*"],
+    )
+    assert len(df.index)
+    assert all(k in df.columns for k in filter_criteria)

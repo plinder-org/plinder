@@ -5,6 +5,7 @@ from __future__ import annotations
 import pandas as pd
 from duckdb import sql
 
+from plinder.core.scores.index import query_index
 from plinder.core.scores.query import FILTER, FILTERS, make_query
 from plinder.core.utils import cpl
 from plinder.core.utils.config import get_config
@@ -119,3 +120,84 @@ def cross_similarity(
     )
     assert query is not None
     return map_cross_similarity(sql(query).to_df(), target_systems, metric)
+
+
+@timeit
+def multi_query_protein_similarity(
+    *,
+    system_id: str,
+    search_db: str,
+    filter_criteria: dict[str, int],
+    splits: list[str] | None = None,
+) -> pd.DataFrame:
+    """
+    Searches the protein similarity database for systems satisfying ALL filter criteria
+
+    Parameters
+    ----------
+    system_id : str
+        the system_id to search for
+    search_db : str
+        the search database to search in
+    filter_criteria : dict[str, int]
+        metric and threshold pairs
+        e.g {
+            "pocket_fident": 100,
+            "protein_fident_weighted_sum": 95,
+            "protein_fident_qcov_weighted_sum": 80,
+            "pocket_lddt": 20,
+            "protein_lddt_weighted_sum": 20,
+        }
+    splits : list[str] | None, default=None
+        the splits to search in (only used if search_db="holo")
+
+    Returns
+    -------
+    df : pd.DataFrame
+        the protein similarity results across all metrics in filter_criteria
+    """
+    if splits is None:
+        splits = ["train"]
+    empty_df = pd.DataFrame(
+        columns=["query_system", "target_system"] + list(filter_criteria.keys())
+    )
+    if search_db == "holo":
+        target_systems_df = query_index(
+            columns=["system_id"],
+            splits=splits,
+        )
+        if target_systems_df is None:
+            return empty_df
+        target_systems = set(target_systems_df["system_id"])
+        if len(target_systems) == 0:
+            return empty_df
+    filters = []
+    for metric, threshold in filter_criteria.items():
+        filter = [
+            ("metric", "==", metric),
+            ("similarity", ">=", threshold),
+            ("query_system", "==", system_id),
+        ]
+        if search_db == "holo":
+            filter.append(("target_system", "in", target_systems))
+        filters.append(filter)
+    links = query_protein_similarity(
+        search_db=search_db,
+        columns=["query_system", "target_system", "metric", "similarity"],
+        filters=filters,
+    )
+    if links is None or len(links) == 0:
+        return empty_df
+    links = links.iloc[
+        links.groupby(["query_system", "target_system", "metric"], observed=True)[
+            "similarity"
+        ].idxmax()
+    ]
+    links = links.pivot(
+        index=["query_system", "target_system"],
+        columns="metric",
+        values="similarity",
+    ).reset_index()
+    found_metrics = set(links.columns).intersection(filter_criteria.keys())
+    query = " and ".join([f"{m} >= {filter_criteria[m]}" for m in found_metrics])
+    return links.query(query)
