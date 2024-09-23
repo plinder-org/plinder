@@ -393,6 +393,45 @@ class Structure(BaseModel):
                 chain_id, self.protein_atom_array.shape[0]
             )
 
+    def superimpose(
+        self,
+        other: Structure,
+    ) -> tuple[Structure, float, float]:
+        assert (other.protein_atom_array) is not None and (
+            self.protein_atom_array is not None
+        )
+        # max_iterations=1 -> no outlier removal
+        superimposed, _, other_anchors, self_anchors = _superimpose_common_atoms(
+            other.protein_atom_array, self.protein_atom_array, max_iterations=1
+        )
+        raw_rmsd = struc.rmsd(
+            other.protein_atom_array.coord[other_anchors],
+            superimposed.coord[self_anchors],
+        )
+
+        superimposed, _, other_anchors, self_anchors = _superimpose_common_atoms(
+            other.protein_atom_array, self.protein_atom_array
+        )
+        refined_rmsd = struc.rmsd(
+            other.protein_atom_array.coord[other_anchors],
+            superimposed.coord[self_anchors],
+        )
+
+        return (
+            Structure(
+                id=self.id,
+                protein_path=self.protein_path,
+                protein_sequence=self.protein_sequence,
+                list_ligand_sdf_and_input_smiles=self.list_ligand_sdf_and_input_smiles,
+                protein_atom_array=superimposed,
+                ligand_mols=self.ligand_mols,
+                add_ligand_hydrogens=self.add_ligand_hydrogens,
+                structure_type=self.structure_type,
+            ),
+            raw_rmsd,
+            refined_rmsd,
+        )
+
     @property
     def input_sequence_residue_mask_stacked(self) -> list[list[int]]:
         """Input sequence stacked by chain"""
