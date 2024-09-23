@@ -17,7 +17,6 @@ from plinder.core.structure.atoms import (
     generate_input_conformer,
     get_residue_index_mapping_mask,
     make_atom_mask,
-    make_one_hot_atom_features,
     match_ligands,
 )
 from plinder.core.structure.superimpose import superimpose_chain
@@ -445,17 +444,15 @@ class Structure(BaseModel):
         assert self.protein_sequence is not None
         assert self.protein_chain_ordered is not None
 
-        seq_res_atom_list = [
-            [
-                pc.ORDERED_AA_FULL_ATOM[pc.ONE_TO_THREE[res]]
+        seq_res_atom_dict = {
+            ch: [
+                atm
                 for res in self.protein_sequence[ch]
+                for atm in pc.ORDERED_AA_FULL_ATOM[pc.ONE_TO_THREE[res]]
             ]
             for ch in self.protein_chain_ordered
-        ]
-        feat: list[list[list[int]]] = [
-            [make_one_hot_atom_features(res) for res in ch] for ch in seq_res_atom_list
-        ]
-        return feat
+        }
+        return seq_res_atom_dict
 
     @property
     def sequence_atom_mask(self) -> list[list[int]]:

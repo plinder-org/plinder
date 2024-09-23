@@ -18,7 +18,7 @@ def structure_featurizer(
     protein_chain_order = structure.protein_chain_ordered
     ligand_chain_order = structure.ligand_chain_ordered
     protein_atom_array = structure.protein_atom_array
-    sequence_atom_mask_stacked = structure.sequence_atom_mask_stacked
+    sequence_atom_mask_stacked = structure.sequence_atom_mask
     input_sequence_residue_mask_stacked = structure.input_sequence_residue_mask_stacked
     protein_coordinates_stacked = structure.protein_coords
     protein_calpha_coordinates_stacked = structure.protein_calpha_coords
@@ -27,13 +27,11 @@ def structure_featurizer(
     resolved_ligand_mols_coords = structure.resolved_ligand_mols_coords
 
     # Sequence atom-level features
-    input_sequence_full_atom_representation = (
-        structure.input_sequences_full_atom_representation
-    )
+    input_sequence_full_atom_feat = structure.input_sequence_full_atom_feat
 
     # Featurize and sort in input structure order
     input_sequence_full_atom_feat_stack = _one_hot_encode_stack(
-        [input_sequence_full_atom_representation[ch] for ch in protein_chain_order],
+        [input_sequence_full_atom_feat[ch] for ch in protein_chain_order],
         pc.ELE2NUM,
         "other",
     )
