@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import numpy as np
 import pytest
 from plinder.core import index
 
@@ -54,4 +55,7 @@ def test_plinder_structure(read_plinder_mount):
     system_id = "1avd__1__1.A__1.C"
     s = index.PlinderSystem(system_id=system_id)
     holo_struc = s.holo_structure
-    holo_struc
+    ligand_mols = holo_struc.ligand_mols
+    assert ligand_mols[-1][0] == np.array(
+        [[13, 4, 5, 7, 9, 10, 1, 0, 3, 6, 8, 12, 11, 2]]
+    )
