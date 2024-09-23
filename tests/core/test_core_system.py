@@ -48,3 +48,10 @@ def test_plinder_system_system_files(read_plinder_mount):
     assert Path(s.sequences_fasta).is_file()
     assert isinstance(s.chain_mapping, dict)
     assert isinstance(s.water_mapping, dict)
+
+
+def test_plinder_structure(read_plinder_mount):
+    system_id = "1avd__1__1.A__1.C"
+    s = index.PlinderSystem(system_id=system_id)
+    holo_struc = s.holo_structure
+    holo_struc
