@@ -285,7 +285,7 @@ class PlinderSystem:
         Parameters
         ----------
         link_kind : str
-            kind of linked structure ('apo' or 'pred')
+            kind of linked structure ('apo', 'pred', 'holo')
         link_id : str
             id of linked structure
 
@@ -296,7 +296,8 @@ class PlinderSystem:
         """
         if self.linked_archive is None:
             raise ValueError("linked_archive is None!")
-        assert link_kind in ["apo", "pred"]
+        allowed = ["apo", "pred", "holo"]
+        assert link_kind in allowed, f"link_kind={link_kind} not in {allowed}"
         structure = self.linked_archive / f"{link_id}.cif"
         if not structure.is_file():
             if link_kind == "apo":
