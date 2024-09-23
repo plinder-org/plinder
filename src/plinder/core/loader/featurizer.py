@@ -1,3 +1,5 @@
+from typing import Any
+
 import torch
 
 from plinder.core.loader.utils import pad_and_stack
@@ -11,9 +13,7 @@ from plinder.core.structure.structure import Structure
 from plinder.core.utils import constants as pc
 
 
-def structure_featurizer(
-    structure: Structure, pad_value: int = -100
-) -> tuple[Structure, list[str]]:
+def structure_featurizer(structure: Structure, pad_value: int = -100) -> dict[str, Any]:
     # This must be used to order the chain features
     protein_chain_order = structure.protein_chain_ordered
     ligand_chain_order = structure.ligand_chain_ordered
@@ -22,8 +22,13 @@ def structure_featurizer(
     input_sequence_residue_mask_stacked = structure.input_sequence_residue_mask_stacked
     protein_coordinates_stacked = structure.protein_coords
     protein_calpha_coordinates_stacked = structure.protein_calpha_coords
-    input_ligand_conformers = structure.input_ligand_conformers  #
-    input_ligand_conformers_coords = structure.input_ligand_conformers_coords  #
+    input_ligand_templates = (
+        structure.input_ligand_templates
+    )  # 2D templates from SMILES
+    # input_ligand_conformers = structure.input_ligand_conformers  # not needed as features are assigned from 2D
+    input_ligand_conformers_coords = (
+        structure.input_ligand_conformers_coords
+    )  # 3D (random) conformer
     resolved_ligand_mols_coords = structure.resolved_ligand_mols_coords
 
     # Sequence atom-level features
@@ -48,9 +53,10 @@ def structure_featurizer(
     ]
     # TODO: Fix issues with ligands conformer generation
     # Featurize and stack ligand chains
+    # VO: try passing the 2D - does not need a conformer!
     input_conformer_ligand_feat = {
         ch: lig_atom_featurizer(ligand_mol)
-        for ch, ligand_mol in input_ligand_conformers.items()
+        for ch, ligand_mol in input_ligand_templates.items()
     }
     # Stack in ligand_chain_order order
     input_conformer_ligand_feat_stack = [
