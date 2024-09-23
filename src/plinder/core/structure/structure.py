@@ -15,9 +15,7 @@ from plinder.core.structure.atoms import (
     _stack_atom_array_features,
     atom_array_from_cif_file,
     generate_input_conformer,
-    get_ligand_atom_index_mapping_mask,
     get_residue_index_mapping_mask,
-    get_template_to_mol_matches,
     make_atom_mask,
     match_ligands,
 )
@@ -102,9 +100,9 @@ class Structure(BaseModel):
             tuple[
                 Chem.Mol,
                 Chem.Mol,
-                tuple[NDArray, NDArray],
+                # tuple[NDArray, NDArray],
                 Chem.Mol,
-                tuple[NDArray, NDArray],
+                # tuple[NDArray, NDArray],
                 tuple[NDArray, NDArray],
             ],
         ]
@@ -137,15 +135,14 @@ class Structure(BaseModel):
     ligand_mols : ligand_mols: Optional[
         dict[
             str,
-            tuple[Chem.Mol, Chem.Mol, tuple[NDArray, NDArray], Chem.rdchem.Mol,
-            tuple[NDArray, NDArray], tuple[NDArray, NDArray]]
+            tuple[Chem.Mol, Chem.Mol, Chem.Mol, tuple[NDArray, NDArray]]
         ]
     ]
-    # TODO:
-    Dictionary of template molecule loaded from smiles (2D), template conformer,
-        array of conformer-template matching atom ids, resolved mol,
-        array of resolved molecule-template matching atom ids,
-        array of conformer-resolved molecule matching atom ids
+        Dictionary of ligand molecule id to
+            molecule loaded from smiles (2D),
+            template (random) conformer generated from 2D,
+            resolved (holo) mol conformer,
+            paired stacked arrays (template vs holo) mapping atom order by index
     add_ligand_hydrogens : bool = False
         Whether to add hydrogen to ligand or not
     structure_type : str = "holo"
@@ -156,7 +153,7 @@ class Structure(BaseModel):
         arbitrary_types_allowed = True
 
     @model_validator(mode="after")
-    def initialize(self):
+    def initialize(self) -> Structure:
         if self.protein_atom_array is None:
             self.load_protein()
         if self.protein_sequence is None:
@@ -165,7 +162,7 @@ class Structure(BaseModel):
             self.load_ligands()
         return self
 
-    def load_protein(self):
+    def load_protein(self) -> None:
         protein_arr = atom_array_from_cif_file(
             self.protein_path, use_author_fields=False
         )
@@ -195,7 +192,7 @@ class Structure(BaseModel):
             )
             self.protein_atom_array.set_annotation("b_factor", b_factors)
 
-    def load_sequence(self):
+    def load_sequence(self) -> None:
         if self.protein_atom_array is None:
             raise ValueError("Protein atom array not loaded")
         self.protein_sequence = {}
@@ -206,7 +203,7 @@ class Structure(BaseModel):
         if not len(self.protein_sequence):
             raise ValueError("Protein sequence could not be loaded")
 
-    def load_ligands(self):
+    def load_ligands(self) -> None:
         if self.ligand_sdfs is None:
             raise ValueError("Ligand SDFs not provided")
         if self.ligand_smiles is None:
@@ -219,25 +216,19 @@ class Structure(BaseModel):
             (
                 template_mol,
                 resolved_mol,
-                resolved_atoms2smiles_stacks,
+                atoms_order_stacks,
             ) = match_ligands(self.ligand_smiles[name], sdf)
 
             # get input_conformer with matches
-            (
-                template_mol_conformer,
-                conformer_atoms2smiles_stacks,
-            ) = generate_input_conformer(template_mol, addHs=self.add_ligand_hydrogens)
-
-            conformer2resolved_stacks = get_template_to_mol_matches(
-                template_mol_conformer, resolved_mol
+            (template_mol_conformer) = generate_input_conformer(
+                template_mol, addHs=self.add_ligand_hydrogens
             )
+
             self.ligand_mols[name] = (
                 template_mol,
                 template_mol_conformer,
-                conformer_atoms2smiles_stacks,
                 resolved_mol,
-                resolved_atoms2smiles_stacks,
-                conformer2resolved_stacks,
+                atoms_order_stacks,
             )
 
     def __repr__(self) -> str:
@@ -405,29 +396,35 @@ class Structure(BaseModel):
     @property
     def input_sequence_residue_mask_stacked(self) -> list[list[int]]:
         """Input sequence stacked by chain"""
+        # TODO: do we want to keep this as assertion?
+        # better if then raise?
         assert self.protein_atom_array is not None
+        assert self.protein_sequence is not None
 
         seqres_masks = get_residue_index_mapping_mask(
             self.protein_sequence, self.protein_atom_array
         )
         return [seqres_masks[ch] for ch in self.protein_chain_ordered]
 
-    @property
-    def resolved_smiles_ligand_mask_stacked(self) -> list[NDArray[np._int]]:
-        """List of protein chains ordered the way it is in structure."""
-        masks: list[int] = []
-        assert self.ligand_mols is not None
-        for ch in self.ligand_chain_ordered:
-            mol = self.ligand_mols[ch][1]
-            matching_idxs = self.ligand_mols[ch][-1]
-            masks.append(get_ligand_atom_index_mapping_mask(mol, matching_idxs))
+    # @property
+    # # TODO: check if this logic make sense - VO
+    # def resolved_smiles_ligand_mask(self) -> list[NDArray[np._int]]:
+    #     """List of protein chains ordered the way it is in structure."""
+    #     masks: list[int] = []
+    #     assert self.ligand_mols is not None
+    #     for ch in self.ligand_chain_ordered:
+    #         mol = self.ligand_mols[ch][1]
+    #         matching_idxs = self.ligand_mols[ch][-1]
+    #         masks.append(get_ligand_atom_index_mapping_mask(mol, matching_idxs))
+    #     return masks
 
-        return masks
-
     @property
-    def input_sequence_list_ordered_by_chain(self) -> list[str]:
+    def input_sequence_list_ordered_by_chain(self) -> list[str] | None:
         """List of protein chains ordered the way it is in structure."""
-        return [self.protein_sequence[ch] for ch in self.protein_chain_ordered]
+        if self.protein_chain_ordered and self.protein_sequence:
+            return [self.protein_sequence[ch] for ch in self.protein_chain_ordered]
+        else:
+            return []
 
     @property
     def protein_chain_ordered(self) -> list[str]:
@@ -440,9 +437,33 @@ class Structure(BaseModel):
         return chain_order
 
     @property
-    def sequence_atom_mask_stacked(self) -> list[list[int]]:
+    def input_sequence_full_atom_feat(self) -> list[list[list[int]]]:
+        """Resolved sequence full atom features."""
+        # TODO: do we want to keep this as assertion?
+        # better if then raise?
+        assert self.protein_sequence is not None
+        assert self.protein_chain_ordered is not None
+
+        seq_res_atom_list = [
+            [
+                pc.ORDERED_AA_FULL_ATOM[pc.ONE_TO_THREE[res]]
+                for res in self.protein_sequence[ch]
+            ]
+            for ch in self.protein_chain_ordered
+        ]
+        feat: list[list[list[int]]] = [
+            [make_one_hot_atom_features(res) for res in ch] for ch in seq_res_atom_list
+        ]
+        return feat
+
+    @property
+    def sequence_atom_mask(self) -> list[list[int]]:
         """Sequence mask indicating which residues are resolved"""
+        # TODO: do we want to keep this as assertion?
+        # better if then raise?
         assert self.protein_atom_array is not None
+        assert self.protein_sequence is not None
+
         seqres_masks = get_residue_index_mapping_mask(
             self.protein_sequence, self.protein_atom_array
         )
@@ -503,27 +524,27 @@ class Structure(BaseModel):
         assert self.ligand_mols is not None
         return {tag: mol_tuple[1] for tag, mol_tuple in self.ligand_mols.items()}
 
-    # TODO: VO check if it makes sense
-    @property
-    def ligand_conformer2resolved_mask(self) -> dict[str, NDArray[np.int]]:
-        """
-        dict[NDArray]: Dictionary of ndarray of matching conformer
-        ids sorted by resolved ligand indices"""
-        assert self.ligand_mols is not None
-        masks = {}
-        for tag, stacks in self.input_ligand_conformer2resolved_stacks.items():
-            # Select the best mask
-            stacks_zipped = list(zip(stacks[0][0], stacks[1][0]))
-            # sort by resolved ligand indices
-            stacks_zipped_resolved_indices_sorted = sorted(
-                stacks_zipped,
-                key=lambda x: x[1],  # type: ignore
-            )
-            masks[tag] = np.array([i[0] for i in stacks_zipped_resolved_indices_sorted])
-        return masks
+    # # TODO: VO check if it makes sense
+    # @property
+    # def ligand_conformer2resolved_mask(self) -> dict[str, NDArray[np.int]]:
+    #     """
+    #     dict[NDArray]: Dictionary of ndarray of matching conformer
+    #     ids sorted by resolved ligand indices"""
+    #     assert self.ligand_mols is not None
+    #     masks = {}
+    #     for tag, stacks in self.ligand_template2resolved_atom_order_stacks.items():
+    #         # Select the best mask
+    #         stacks_zipped = list(zip(stacks[0][0], stacks[1][0]))
+    #         # sort by resolved ligand indices
+    #         stacks_zipped_resolved_indices_sorted = sorted(
+    #             stacks_zipped,
+    #             key=lambda x: x[1],  # type: ignore
+    #         )
+    #         masks[tag] = np.array([i[0] for i in stacks_zipped_resolved_indices_sorted])
+    #     return masks
 
     @property
-    def input_ligand_conformer_coords(self) -> dict[str, NDArray[np.double]]:
+    def input_ligand_conformers_coords(self) -> dict[str, NDArray[np.double]]:
         """dict[NDArray]: The coordinates of the input 3D conformer generated from input SMILES"""
         ligand_coords: dict[str, NDArray[np.double]] = {}
         for tag, mol in self.input_ligand_conformers.items():
@@ -534,62 +555,44 @@ class Structure(BaseModel):
         return ligand_coords
 
     @property
-    def resolved_ligand_mols(self) -> dict[str, Chem.rdchem.Mol]:
+    def resolved_ligand_mols(self) -> dict[str, Chem.Mol]:
         """Resolved holo ligand mol objects"""
         assert self.ligand_mols is not None
-        return {tag: mol_tuple[3] for tag, mol_tuple in self.ligand_mols.items()}
+        return {tag: mol_tuple[2] for tag, mol_tuple in self.ligand_mols.items()}
 
     @property
-    def input_ligand_conformer2smiles_stacks(
+    def ligand_template2resolved_atom_order_stacks(
         self,
     ) -> dict[str, tuple[NDArray, NDArray]]:
-        """for every ligand it generates a pair of stacks providing atom index sort to match conformer to input SMILES"""
+        """for every ligand this gets a pair of atom order array stacks providing index sort to match template atoms to holo conformer atoms"""
         return (
-            {tag: mol_tuple[2] for tag, mol_tuple in self.ligand_mols.items()}
+            {tag: mol_tuple[3] for tag, mol_tuple in self.ligand_mols.items()}
             if self.ligand_mols
             else {}
         )
 
-    @property
-    def resolved_ligand_structure2smiles_stacks(
-        self,
-    ) -> dict[str, tuple[NDArray, NDArray]]:
-        """for every ligand it generates a pair of stacks providing atom index sort to match holo to input SMILES"""
-        return (
-            {tag: mol_tuple[4] for tag, mol_tuple in self.ligand_mols.items()}
-            if self.ligand_mols
-            else {}
-        )
+    # @property
+    # def resolved_ligand_structure_coords(self) -> dict[str, NDArray[np.double]]:
+    # # TODO: duplicated?
+
+    #     """Dictionary of ligands and their resolved atom coordinates in the holo structure."""
+    #     ligand_coords: dict[str, NDArray[np.double]] = {}
+    #     if self.ligand_mols is not None:
+    #         ligand_coords = {
+    #             tag: mol.GetConformer().GetPositions()
+    #             for tag, mol in self.resolved_ligand_mols.items()
+    #         }
+    #     return ligand_coords
 
     @property
-    def input_ligand_conformer2resolved_stacks(
-        self,
-    ) -> dict[str, tuple[NDArray, NDArray]]:
-        """for every ligand it generates a pair of stacks providing atom index sort to match conformer to holo"""
-        return (
-            {tag: mol_tuple[5] for tag, mol_tuple in self.ligand_mols.items()}
-            if self.ligand_mols
-            else {}
-        )
-
-    @property
-    def resolved_ligand_structure_coords(self) -> dict[str, NDArray[np.double]]:
-        """ndarray[np.double]: The coordinates of the holo resolved ligand atoms in the holo structure."""
+    def resolved_ligand_mols_coords(self) -> dict[str, NDArray[np.double]]:
+        """Dictionary of ligands and their resolved atom coordinates in the holo structure."""
         ligand_coords: dict[str, NDArray[np.double]] = {}
         if self.ligand_mols is not None:
             ligand_coords = {
                 tag: mol.GetConformer().GetPositions()
                 for tag, mol in self.resolved_ligand_mols.items()
             }
-        return ligand_coords
-
-    @property
-    def resolved_ligand_mols_coords(self) -> dict[str, NDArray[np.double]]:
-        """Holo PDB ligand coordinate"""
-        ligand_coords: dict[str, NDArray[np.double]] = {
-            tag: mol.GetConformer().GetPositions()
-            for tag, mol in self.resolved_ligand_mols.items()
-        }
         return ligand_coords
 
     @property

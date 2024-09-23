@@ -97,11 +97,7 @@ def atom_array_from_cif_file(
     return structure
 
 
-"""
-TODO: Fix this!
-def generate_input_conformer(
-    template_mol: Chem.Mol, addHs: bool = False
-) -> tuple[Chem.Mol, tuple[_AtomArrayOrStack, _AtomArrayOrStack]]:
+def generate_input_conformer(template_mol: Chem.Mol, addHs: bool = False) -> Chem.Mol:
     _mol = copy.deepcopy(template_mol)
     # need to add Hs to generate sensible conformers
     _mol = Chem.AddHs(_mol)
@@ -160,37 +156,7 @@ def generate_input_conformer(
         # remove Hs if they should not be kept
         _mol = params_removeHs(_mol)
 
-    # generate matching array index to input 2D structure
-    conformer_atoms2smiles_stacks = get_template_to_mol_matches(template_mol, _mol)
-    #conformer_atoms2smiles_stacks = [[], []]
-    return _mol, conformer_atoms2smiles_stacks
-"""
-
-
-def generate_input_conformer(
-    template_mol: Chem.Mol, addHs: bool = False
-) -> tuple[Chem.Mol, tuple[NDArray, NDArray]]:
-    ps = AllChem.ETKDGv2()
-    _mol = copy.deepcopy(template_mol)
-
-    if addHs:
-        _mol = Chem.AddHs(_mol)
-
-    failures, id = 0, -1
-    while failures < 3 and id == -1:
-        if failures > 0:
-            log.debug(f"rdkit coords could not be generated. trying again {failures}.")
-        id = AllChem.EmbedMolecule(_mol, ps)
-        failures += 1
-    if id == -1:
-        log.debug(
-            "rdkit coords could not be generated without using random coords. using random coords now."
-        )
-        ps.useRandomCoords = True
-        AllChem.EmbedMolecule(_mol, ps)
-        AllChem.MMFFOptimizeMolecule(_mol, confId=0)
-    conformer_atoms2smiles_stacks = get_template_to_mol_matches(template_mol, _mol)
-    return _mol, conformer_atoms2smiles_stacks
+    return _mol
 
 
 def params_removeHs(mol: Chem.Mol) -> Chem.Mol:
@@ -205,12 +171,12 @@ def params_removeHs(mol: Chem.Mol) -> Chem.Mol:
 
 def match_ligands(
     input_smiles: str,
-    resolved_sdf: Path,
+    resolved_sdf: str | Path,
 ) -> tuple[Chem.Mol, Chem.Mol, tuple[_AtomArrayOrStack, _AtomArrayOrStack]]:
     template_mol = Chem.MolFromSmiles(input_smiles)
     resolved_mol = Chem.MolFromMolFile(resolved_sdf.__str__())
-    atom_matches = get_template_to_mol_matches(template_mol, resolved_mol)
-    return template_mol, resolved_mol, atom_matches
+    atom_order_stacks = get_template_to_mol_matches(template_mol, resolved_mol)
+    return template_mol, resolved_mol, atom_order_stacks
 
 
 def get_template_to_mol_matches(
@@ -267,14 +233,14 @@ def get_template_to_mol_matches(
             if len(results3[0].atomMatches()) > len(results[0].atomMatches()):
                 results = results3
 
-    # convert to array stacks
-    template_array_stack1 = np.array(
+    # convert to atom order array stacks
+    template_atom_order_stack1 = np.array(
         [[ix_templ for _, ix_templ in match.atomMatches()] for match in results]
     )
-    mol_array_stack2 = np.array(
+    mol_atom_order_stack2 = np.array(
         [[ix_mol for ix_mol, _ in match.atomMatches()] for match in results]
     )
-    return template_array_stack1, mol_array_stack2
+    return template_atom_order_stack1, mol_atom_order_stack2
 
 
 def get_residue_index_mapping_mask(

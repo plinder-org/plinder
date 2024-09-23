@@ -383,6 +383,10 @@ class PlinderSystem:
         """
         load all alternate structures
         """
+        # TODO: do we want to keep this as assertion?
+        # better if then raise?
+        assert self.linked_structures is not None
+
         structures = {}
         for id, kind in self.linked_structures[["id", "kind"]].values:
             protein_path = self.get_linked_structure(
