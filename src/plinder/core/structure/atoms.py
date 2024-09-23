@@ -5,7 +5,7 @@ from __future__ import annotations
 import copy
 import gzip
 from pathlib import Path
-from typing import Union
+from typing import Any, Union
 
 import numpy as np
 from biotite import TextFile
@@ -14,7 +14,7 @@ from biotite.structure.atoms import AtomArray, AtomArrayStack
 from biotite.structure.io.pdbx import get_structure
 from numpy.typing import NDArray
 from rdkit import Chem
-from rdkit.Chem import AllChem, Mol, rdDepictor, rdMolDescriptors, rdRascalMCES
+from rdkit.Chem import AllChem, Mol, rdMolDescriptors, rdRascalMCES
 
 from plinder.core.structure.vendored import (
     _convert_resn_to_sequence_and_numbering,
@@ -70,26 +70,6 @@ BINDING_SITE_METALS = [
 _AtomArrayOrStack = Union[AtomArray, AtomArrayStack]
 
 
-# TODO: do we need this?
-# def biotite_pdbfile() -> TextFile:
-#     from biotite.structure.io.pdb import PDBFile
-
-#     return PDBFile
-# def atom_array_from_pdb_file(structure: Path | AtomArray) -> _AtomArrayOrStack | None:
-#     if isinstance(structure, str):
-#         structure = Path(structure)
-
-#     if isinstance(structure, Path):
-#         reader = biotite_pdbfile()
-#         try:
-#             model = reader.read(str(structure))
-#             arr = model.get_structure(model=1)  # noqa
-#             return arr
-#         except Exception as e:
-#             log.error(f"Unable to parse {structure}! {str(e)}")
-#     return structure
-
-
 def biotite_ciffile() -> TextFile:
     from biotite.structure.io.pdbx import CIFFile
 
@@ -117,19 +97,23 @@ def atom_array_from_cif_file(
     return structure
 
 
+"""
+TODO: Fix this!
 def generate_input_conformer(
     template_mol: Chem.Mol, addHs: bool = False
 ) -> tuple[Chem.Mol, tuple[_AtomArrayOrStack, _AtomArrayOrStack]]:
     _mol = copy.deepcopy(template_mol)
     # need to add Hs to generate sensible conformers
     _mol = Chem.AddHs(_mol)
+    ps = AllChem.ETKDGv2()
     # try embedding molecule using ETKDGv2 (default)
     confid = AllChem.EmbedMolecule(
         _mol,
-        useRandomCoords=True,
-        useBasicKnowledge=True,
-        maxAttempts=100,
-        randomSeed=42,
+        ps,
+        # useRandomCoords=True,
+        # useBasicKnowledge=True,
+        # maxAttempts=100,
+        # randomSeed=42,
     )
     if confid != -1:
         # molecule successfully embedded - minimize
@@ -157,8 +141,8 @@ def generate_input_conformer(
         confid = AllChem.EmbedMolecule(
             _mol,
             useRandomCoords=True,
-            useBasicKnowledge=False,
-            maxAttempts=100,
+            # useBasicKnowledge=False,
+            maxAttempts=500,
             randomSeed=42,
         )
         if confid == -1:
@@ -178,7 +162,34 @@ def generate_input_conformer(
 
     # generate matching array index to input 2D structure
     conformer_atoms2smiles_stacks = get_template_to_mol_matches(template_mol, _mol)
+    #conformer_atoms2smiles_stacks = [[], []]
+    return _mol, conformer_atoms2smiles_stacks
+"""
 
+
+def generate_input_conformer(
+    template_mol: Chem.Mol, addHs: bool = False
+) -> tuple[Chem.Mol, tuple[NDArray, NDArray]]:
+    ps = AllChem.ETKDGv2()
+    _mol = copy.deepcopy(template_mol)
+
+    if addHs:
+        _mol = Chem.AddHs(_mol)
+
+    failures, id = 0, -1
+    while failures < 3 and id == -1:
+        if failures > 0:
+            log.debug(f"rdkit coords could not be generated. trying again {failures}.")
+        id = AllChem.EmbedMolecule(_mol, ps)
+        failures += 1
+    if id == -1:
+        log.debug(
+            "rdkit coords could not be generated without using random coords. using random coords now."
+        )
+        ps.useRandomCoords = True
+        AllChem.EmbedMolecule(_mol, ps)
+        AllChem.MMFFOptimizeMolecule(_mol, confId=0)
+    conformer_atoms2smiles_stacks = get_template_to_mol_matches(template_mol, _mol)
     return _mol, conformer_atoms2smiles_stacks
 
 
@@ -255,10 +266,6 @@ def get_template_to_mol_matches(
             results3 = rdRascalMCES.FindMCES(match_mol, ref_mol, rascal_opts)
             if len(results3[0].atomMatches()) > len(results[0].atomMatches()):
                 results = results3
-    # return [
-    #     {ix_mol: ix_templ for ix_templ, ix_mol in match.atomMatches()}
-    #     for match in results
-    # ]
 
     # convert to array stacks
     template_array_stack1 = np.array(
@@ -268,20 +275,6 @@ def get_template_to_mol_matches(
         [[ix_mol for ix_mol, _ in match.atomMatches()] for match in results]
     )
     return template_array_stack1, mol_array_stack2
-
-
-# def get_array_stacks_from_atom_maps(
-#     atom_maps: list[dict[int, int]]
-# ) -> tuple[_AtomArrayOrStack, _AtomArrayOrStack]:
-#     mask_array_list1 = []
-#     mask_array_list2 = []
-#     for atom_map in atom_maps:
-#         mask_array1, mask_array2 = np.array(
-#             [[key, val] for key, val in atom_map.items()]
-#         ).T
-#         mask_array_list1.append(mask_array1)
-#         mask_array_list2.append(mask_array2)
-#     return np.stack(mask_array_list1), np.stack(mask_array_list2)
 
 
 def get_residue_index_mapping_mask(
@@ -329,6 +322,10 @@ def make_one_hot_atom_features(atom_name: list[str]) -> list[int]:
     return [1 if striped_atom_name == atm else 0 for atm in allowed_atom_names]
 
 
+def _convert_pdb_atom_name_to_elem_symbol(atom_name: str) -> str:
+    return "".join(filter(lambda x: not x.isdigit(), atom_name))[0]
+
+
 def get_per_residue_mask(
     residue_reference_atom_list: list[str], atom_list: list[str]
 ) -> list[int]:
@@ -365,3 +362,55 @@ def make_atom_mask(
                 )
             )
     return [atm for res in atom_mask for atm in res]
+
+
+def _stack_atom_array_features(
+    atom_arr: _AtomArrayOrStack,
+    atom_arr_feat: str,
+    chain_order_list: list[str] | None,
+) -> list[NDArray[np.int_ | np.str_ | np.float_]]:
+    assert chain_order_list is not None
+    return [
+        getattr(atom_arr[atom_arr.chain_id == chain], atom_arr_feat)
+        for chain in chain_order_list
+    ]
+
+
+def _stack_ligand_feat(
+    feat_dict: dict[str, Any], chain_order_list: list[str] | None
+) -> list[list[list[int]]]:
+    assert chain_order_list is not None
+    return [feat_dict[chain] for chain in chain_order_list]
+
+
+def _one_hot_encode_stack(
+    stack: list[NDArray],
+    feature_dict: dict[str, int],
+    unknown_name_filler: str,
+) -> list[NDArray]:
+    feat_array = []
+    unknown_name_filler_value = feature_dict[unknown_name_filler]
+    for per_chain_feat in stack:
+        feat_array_by_chain = np.zeros(
+            (len(per_chain_feat), len(set(list(feature_dict.values()))))
+        )
+        for index, value in enumerate(per_chain_feat):
+            feat_array_by_chain[
+                index, feature_dict.get(value, unknown_name_filler_value)
+            ] = 1.0
+        feat_array.append(feat_array_by_chain)
+    return feat_array
+
+
+def _sequence_full_atom_type_array(
+    input_sequences: dict[str, str]
+) -> dict[str, NDArray]:
+    """Resolved sequence full atom features."""
+    seq_atom_dict = {}
+    for chain, sequence in input_sequences.items():
+        feat = []
+        for res in sequence:
+            for atom in pc.ORDERED_AA_FULL_ATOM[pc.ONE_TO_THREE[res]]:
+                feat.append(_convert_pdb_atom_name_to_elem_symbol(atom))
+        seq_atom_dict[chain] = np.array(feat)
+    return seq_atom_dict

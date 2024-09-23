@@ -9,27 +9,11 @@ import torch
 from torch.utils.data import DataLoader, Dataset
 
 from plinder.core.index.system import PlinderSystem
-from plinder.core.loader.utils import collate_batch, structure2tensor
-from plinder.core.scores.index import query_index
+from plinder.core.loader.featurizer import structure_featurizer
+from plinder.core.loader.utils import collate_batch
+from plinder.core.scores import query_index
 from plinder.core.scores.query import FILTERS
 from plinder.core.structure.structure import Structure
-
-
-def structure2tensor_transform(structure: Structure) -> dict[str, torch.Tensor]:
-    props: dict[str, torch.Tensor] = structure2tensor(
-        protein_atom_array=structure.protein_atom_array,
-        input_sequence_residue_types=structure.input_sequence_list_ordered_by_chain,
-        input_sequence_mask=structure.input_sequence_stacked_mask,
-        input_sequence_full_atom_feat=structure.input_sequence_full_atom_feat,
-        resolved_ligand_mols_coords=structure.resolved_ligand_mols_coords,
-        input_ligand_conformers=structure.input_ligand_conformers,
-        ligand_conformer2resolved_mask=structure.ligand_conformer2resolved_mask,
-        input_ligand_conformer_coords=structure.input_ligand_conformer_coords,
-        protein_chain_ordered=structure.protein_chain_ordered,
-        ligand_chain_ordered=structure.ligand_chain_ordered,
-        dtype=torch.float32,
-    )
-    return props
 
 
 class PlinderDataset(Dataset):  # type: ignore
@@ -38,15 +22,13 @@ class PlinderDataset(Dataset):  # type: ignore
 
     Parameters
     ----------
-    df : pd.DataFrame | None
-        the split to use
     split : str
         the split to sample from
-    input_structure_priority : str, default="apo"
-        Which alternate structure to proritize
-    transform: Callable[
-        [Structure], torch.Tensor | dict[str, torch.Tensor]
-    ] = structure2tensor_transform,
+    filters: FILTERS, default=None
+        Index filter to select specific system ids
+    featurizer: Callable[
+            [Structure, int], dict[str, torch.Tensor]
+    ] = structure_featurizer,
         Transformation to turn structure to input tensors
     """
 
@@ -54,16 +36,17 @@ class PlinderDataset(Dataset):  # type: ignore
         self,
         split: str,
         filters: FILTERS = None,
-        transform: Callable[
+        featurizer: Callable[
             [Structure], torch.Tensor | dict[str, torch.Tensor]
-        ] = structure2tensor_transform,
+        ] = structure_featurizer,
         **kwargs: Any,
     ):
         self._system_ids = list(
             set(query_index(splits=[split], filters=filters)["system_id"])
         )
         self._num_examples = len(self._system_ids)
-        self._transform = transform
+
+        self._featurizer = featurizer
 
     def __len__(self) -> int:
         return self._num_examples
@@ -76,8 +59,8 @@ class PlinderDataset(Dataset):  # type: ignore
         s = PlinderSystem(system_id=self._system_ids[index])
 
         holo_structure = s.holo_structure
-        if self._transform is not None:
-            features_and_coords = self._transform(holo_structure)
+        if self._featurizer is not None:
+            features_and_coords = self._featurizer(holo_structure)
 
         item: dict[str, Any] = {
             "system_id": holo_structure.id,

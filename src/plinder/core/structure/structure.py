@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Iterable, Optional
+from typing import TYPE_CHECKING, Iterable
 
 import biotite.structure as struc
 import numpy as np
@@ -12,13 +12,13 @@ from rdkit import Chem
 
 from plinder.core.structure import surgery
 from plinder.core.structure.atoms import (
+    _stack_atom_array_features,
     atom_array_from_cif_file,
     generate_input_conformer,
     get_ligand_atom_index_mapping_mask,
     get_residue_index_mapping_mask,
     get_template_to_mol_matches,
     make_atom_mask,
-    make_one_hot_atom_features,
     match_ligands,
 )
 from plinder.core.structure.superimpose import superimpose_chain
@@ -175,7 +175,6 @@ class Structure(BaseModel):
             0.0, protein_arr.shape[0]
         )
         protein_arr.set_annotation("b_factor", annotation_arr)
-
         if "" in set(protein_arr.element):
             try:
                 protein_arr.element = struc.infer_elements(protein_arr)
@@ -404,7 +403,7 @@ class Structure(BaseModel):
             )
 
     @property
-    def input_sequence_stacked_mask(self) -> list[list[int]]:
+    def input_sequence_residue_mask_stacked(self) -> list[list[int]]:
         """Input sequence stacked by chain"""
         assert self.protein_atom_array is not None
 
@@ -413,17 +412,8 @@ class Structure(BaseModel):
         )
         return [seqres_masks[ch] for ch in self.protein_chain_ordered]
 
-    # TODO: review this!!!
-    # @property
-    # def resolved_ligand_mask(self):
-    #     masks = []
-    #     for ch in self.ligand_chain_ordered:
-    #         mol = self.ligand_mols[ch][1]
-    #         matching_idxs = self.ligand_mols[ch][-1]
-    #         masks.append(get_ligand_atom_index_mapping_mask(mol, matching_idxs))
-    #     return masks
     @property
-    def resolved_smiles_ligand_mask(self) -> list[NDArray[np._int]]:
+    def resolved_smiles_ligand_mask_stacked(self) -> list[NDArray[np._int]]:
         """List of protein chains ordered the way it is in structure."""
         masks: list[int] = []
         assert self.ligand_mols is not None
@@ -450,22 +440,7 @@ class Structure(BaseModel):
         return chain_order
 
     @property
-    def input_sequence_full_atom_feat(self) -> list[list[list[int]]]:
-        """Resolved sequence full atom features."""
-        seq_res_atom_list = [
-            [
-                pc.ORDERED_AA_FULL_ATOM[pc.ONE_TO_THREE[res]]
-                for res in self.protein_sequence[ch]
-            ]
-            for ch in self.protein_chain_ordered
-        ]
-        feat: list[list[list[int]]] = [
-            [make_one_hot_atom_features(res) for res in ch] for ch in seq_res_atom_list
-        ]
-        return feat
-
-    @property
-    def sequence_atom_mask(self) -> list[list[int]]:
+    def sequence_atom_mask_stacked(self) -> list[list[int]]:
         """Sequence mask indicating which residues are resolved"""
         assert self.protein_atom_array is not None
         seqres_masks = get_residue_index_mapping_mask(
@@ -489,10 +464,17 @@ class Structure(BaseModel):
             return []
 
     @property
-    def protein_coords(self) -> NDArray[np.double]:
-        """ndarray[np.double]: The coordinates of the protein atoms in the structure."""
+    def protein_coords(self) -> list[NDArray]:
+        """list[NDArray]: The coordinates of the protein atoms in the structure."""
         assert self.protein_atom_array is not None
-        protein_coords: NDArray[np.double] = self.protein_atom_array.coord
+
+        protein_coords: list[NDArray] = [
+            coord
+            for coord in _stack_atom_array_features(
+                self.protein_atom_array, "coord", self.protein_chain_ordered
+            )
+        ]
+
         return protein_coords
 
     @property
@@ -504,10 +486,15 @@ class Structure(BaseModel):
     @property
     def protein_calpha_coords(self) -> NDArray[np.double]:
         assert self.protein_atom_array is not None
-        """ndarray[np.double]: The coordinates of the protein clapha atoms in the structure."""
-        protein_calpha_coords: NDArray[np.double] = self.protein_atom_array[
-            self.protein_atom_array.atom_name == "CA"
-        ].coord
+        """list[NDArray]: The coordinates of the protein clapha atoms in the structure."""
+        protein_calpha_coords: list[NDArray] = [
+            coord
+            for coord in _stack_atom_array_features(
+                self.protein_atom_array[self.protein_atom_array.atom_name == "CA"],
+                "coord",
+                self.protein_chain_ordered,
+            )
+        ]
         return protein_calpha_coords
 
     @property
