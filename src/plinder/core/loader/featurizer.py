@@ -27,16 +27,16 @@ def structure_featurizer(
     resolved_ligand_mols_coords = structure.resolved_ligand_mols_coords
 
     # Sequence atom-level features
-    # input_sequence_full_atom_representation = (
-    #    structure.input_sequences_full_atom_representation
-    # )
+    input_sequence_full_atom_representation = (
+        structure.input_sequences_full_atom_representation
+    )
 
     # Featurize and sort in input structure order
-    # input_sequence_full_atom_feat_stack = _one_hot_encode_stack(
-    #    [input_sequence_full_atom_representation[ch] for ch in protein_chain_order],
-    #    pc.ELE2NUM,
-    #    "other",
-    # )
+    input_sequence_full_atom_feat_stack = _one_hot_encode_stack(
+        [input_sequence_full_atom_representation[ch] for ch in protein_chain_order],
+        pc.ELE2NUM,
+        "other",
+    )
 
     # Get residue type feature
     protein_structure_residue_type_arr = _stack_atom_array_features(
@@ -77,7 +77,7 @@ def structure_featurizer(
         "input_sequence_residue_mask_feature": input_sequence_residue_mask_stacked,
         "protein_coordinates": protein_coordinates_stacked,
         "protein_calpha_coordinates": protein_calpha_coordinates_stacked,
-        # "input_sequence_full_atom_feature": input_sequence_full_atom_feat_stack,
+        "input_sequence_full_atom_feature": input_sequence_full_atom_feat_stack,
         "protein_structure_residue_feature": protein_structure_residue_type_stack,
         "input_conformer_ligand_feature": input_conformer_ligand_feat_stack,
         "input_conformer_ligand_coordinates": input_conformer_ligand_coords_stack,
