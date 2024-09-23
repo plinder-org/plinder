@@ -14,7 +14,7 @@ from biotite.structure.atoms import AtomArray, AtomArrayStack
 from biotite.structure.io.pdbx import get_structure
 from numpy.typing import NDArray
 from rdkit import Chem
-from rdkit.Chem import AllChem, Mol, rdMolDescriptors, rdRascalMCES
+from rdkit.Chem import AllChem, Mol, rdDepictor, rdMolDescriptors, rdRascalMCES
 
 from plinder.core.structure.vendored import (
     _convert_resn_to_sequence_and_numbering,

@@ -23,7 +23,7 @@ def structure_featurizer(
     protein_coordinates_stacked = structure.protein_coords
     protein_calpha_coordinates_stacked = structure.protein_calpha_coords
     input_ligand_conformers = structure.input_ligand_conformers  #
-    input_ligand_conformer_coords = structure.input_ligand_conformer_coords  #
+    input_ligand_conformers_coords = structure.input_ligand_conformers_coords  #
     resolved_ligand_mols_coords = structure.resolved_ligand_mols_coords
 
     # Sequence atom-level features
@@ -63,7 +63,7 @@ def structure_featurizer(
     input_conformer_ligand_coords_stack = [
         coord
         for coord in _stack_ligand_feat(
-            input_ligand_conformer_coords, ligand_chain_order
+            input_ligand_conformers_coords, ligand_chain_order
         )
     ]
 

@@ -17,6 +17,7 @@ from plinder.core.structure.atoms import (
     generate_input_conformer,
     get_residue_index_mapping_mask,
     make_atom_mask,
+    make_one_hot_atom_features,
     match_ligands,
 )
 from plinder.core.structure.superimpose import superimpose_chain
