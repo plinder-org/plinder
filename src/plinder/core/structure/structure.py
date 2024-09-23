@@ -734,3 +734,37 @@ class Structure(BaseModel):
     @classmethod
     def get_properties(cls) -> list[str]:
         return [name for name in dir(cls) if isinstance(getattr(cls, name), property)]
+
+    def superimpose(
+        self,
+        other: Structure,
+    ) -> tuple[Structure, float, float]:
+        # max_iterations=1 -> no outlier removal
+        if self.protein_atom_array is None:
+            raise ValueError("both structures must have protein atom arrays")
+        if other.protein_atom_array is None:
+            raise ValueError("both structures must have protein atom arrays")
+        superimposed, _, other_anchors, self_anchors = _superimpose_common_atoms(
+            other.protein_atom_array, self.protein_atom_array, max_iterations=1
+        )
+        raw_rmsd = struc.rmsd(
+            other.protein_atom_array.coord[other_anchors],
+            superimposed.coord[self_anchors],
+        )
+
+        superimposed, _, other_anchors, self_anchors = _superimpose_common_atoms(
+            other.protein_atom_array, self.protein_atom_array
+        )
+        refined_rmsd = struc.rmsd(
+            other.protein_atom_array.coord[other_anchors],
+            superimposed.coord[self_anchors],
+        )
+        return (
+            Structure(
+                protein_path=self.protein_path,
+                id=f"{self.id}--{other.id}"
+                protein_atom_array=superimposed,
+            ),
+            raw_rmsd,
+            refined_rmsd,
+        )
