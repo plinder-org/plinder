@@ -40,6 +40,7 @@ def biotite_pdbfile() -> TextFile:
 
 @lru_cache(maxsize=None)
 def rust_pdbfile() -> TextFile:
+    # TODO: is this used anywhere?
     try:
         import fastpdb
 
@@ -456,9 +457,8 @@ def align_sequences(
 
 def _get_structure_and_res_info(
     structure: Path | _AtomArrayOrStack,
-    pdb_engine: str = "fastpdb",
 ) -> tuple[_AtomArrayOrStack, list[int], list[str]]:
-    structure = atom_array_from_pdb_file(structure, pdb_engine)
+    structure = atom_array_from_pdb_file(structure)
     numbering, resn = struc.get_residues(structure)
     return structure, numbering, resn
 
@@ -523,14 +523,13 @@ def resn2seq(resn: list[str]) -> str:
 def _get_seq_aligned_structures(
     ref: Path | _AtomArrayOrStack,
     subject: Path | _AtomArrayOrStack,
-    pdb_engine: str = "fastpdb",
 ) -> tuple[_AtomArrayOrStack, _AtomArrayOrStack]:
     """Find common sequence and set identical residue numbering for common seq.
     This method only safely works on a single chain.
     """
 
-    ref_info = _get_structure_and_res_info(ref, pdb_engine)
-    subj_info = _get_structure_and_res_info(subject, pdb_engine)
+    ref_info = _get_structure_and_res_info(ref)
+    subj_info = _get_structure_and_res_info(subject)
 
     subj_resid_map, alns = _align_and_map_sequences(ref_info, subj_info)
 
@@ -555,10 +554,9 @@ def _get_seq_aligned_structures(
 def _get_paired_structures_and_chains(
     ref: Path | _AtomArrayOrStack,
     subject: Path | _AtomArrayOrStack,
-    pdb_engine: str = "fastpdb",
 ) -> tuple[_AtomArrayOrStack, _AtomArrayOrStack, NDArray[np.str_], NDArray[np.str_]]:
-    ref_arr: _AtomArrayOrStack = atom_array_from_pdb_file(ref, pdb_engine)
-    subject_arr: _AtomArrayOrStack = atom_array_from_pdb_file(subject, pdb_engine)
+    ref_arr: _AtomArrayOrStack = atom_array_from_pdb_file(ref)
+    subject_arr: _AtomArrayOrStack = atom_array_from_pdb_file(subject)
     ref_chains = struc.get_chains(ref_arr)
     subject_chains = struc.get_chains(subject_arr)
 
@@ -583,7 +581,6 @@ def _get_paired_structures_and_chains(
 def get_seq_aligned_structures(
     ref: Path | _AtomArrayOrStack,
     subject: Path | _AtomArrayOrStack,
-    pdb_engine: str = "fastpdb",
 ) -> tuple[_AtomArrayOrStack, _AtomArrayOrStack]:
     """Computes per-chain sequence alignments between reference and subject
     structures, and creates a new set of structures where the residue numbers
@@ -600,8 +597,6 @@ def get_seq_aligned_structures(
         The file path or structure array of the reference structure.
     subject : Path | _AtomArrayOrStack
         The file path or structure array of the subject structure to align with the reference.
-    pdb_engine : str, optional
-        The backend engine to use for PDB file processing, defaults to "fastpdb".
 
     Returns
     -------
@@ -620,7 +615,7 @@ def get_seq_aligned_structures(
         subject_arr,
         ref_chains,
         subject_chains,
-    ) = _get_paired_structures_and_chains(ref, subject, pdb_engine)
+    ) = _get_paired_structures_and_chains(ref, subject)
     ref_arrays = []
     subject_arrays = []
     for ref_ch, subject_ch in zip(ref_chains, subject_chains):
@@ -629,7 +624,7 @@ def get_seq_aligned_structures(
         ref_ch_arr = apply_mask(ref_arr, ref_mask)
         subject_ch_arr = apply_mask(subject_arr, subject_mask)
         ref_aligned, subject_aligned = _get_seq_aligned_structures(
-            ref_ch_arr, subject_ch_arr, pdb_engine
+            ref_ch_arr, subject_ch_arr
         )
         ref_arrays.append(ref_aligned)
         subject_arrays.append(subject_aligned)
@@ -646,7 +641,6 @@ def get_seq_aligned_structures(
 def get_per_chain_seq_alignments(
     ref: Path | _AtomArrayOrStack,
     subject: Path | _AtomArrayOrStack,
-    pdb_engine: str = "fastpdb",
 ) -> dict[str, dict[int, int]]:
     """Computes per-chain sequence alignments between reference and subject
     structures, and provides a mapping of residue numbers from the subject
@@ -663,8 +657,6 @@ def get_per_chain_seq_alignments(
         The file path or structure array of the reference structure.
     subject : Path | _AtomArrayOrStack
         The file path or structure array of the subject structure to align with the reference.
-    pdb_engine : str, optional
-        The backend engine to use for PDB file processing, defaults to "fastpdb".
 
     Returns
     -------
@@ -681,7 +673,7 @@ def get_per_chain_seq_alignments(
         subject_arr,
         ref_chains,
         subject_chains,
-    ) = _get_paired_structures_and_chains(ref, subject, pdb_engine)
+    ) = _get_paired_structures_and_chains(ref, subject)
     ch_res_maps: dict[str, dict[int, int]] = {}
     for ref_ch, subject_ch in zip(ref_chains, subject_chains):
         ref_mask = ref_arr.chain_id == ref_ch
@@ -689,8 +681,8 @@ def get_per_chain_seq_alignments(
         ref_ch_arr = apply_mask(ref_arr, ref_mask)
         subject_ch_arr = apply_mask(subject_arr, subject_mask)
 
-        ref_info = _get_structure_and_res_info(ref_ch_arr, pdb_engine)
-        subj_info = _get_structure_and_res_info(subject_ch_arr, pdb_engine)
+        ref_info = _get_structure_and_res_info(ref_ch_arr)
+        subj_info = _get_structure_and_res_info(subject_ch_arr)
         existing2new, alns = _align_and_map_sequences(ref_info, subj_info)
         ch_res_maps[subject_ch] = existing2new
     return ch_res_maps

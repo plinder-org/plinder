@@ -1,8 +1,4 @@
-import shutil
-from pathlib import Path
-
 import biotite.structure as struc
-import numpy as np
 import pytest
 from biotite.structure.atoms import AtomArray
 from plinder.core.structure import vendored as atoms
@@ -58,7 +54,12 @@ def test_resn2seq(cif_atom_array):
 
 
 def test_get_seq_alignments(read_plinder_mount):
-    pdb = read_plinder_mount / "systems" / "19hc__1__1.A_1.B__1.K_1.M_1.N" / "receptor.pdb"
+    pdb = (
+        read_plinder_mount
+        / "systems"
+        / "19hc__1__1.A_1.B__1.K_1.M_1.N"
+        / "receptor.pdb"
+    )
     a = atoms.atom_array_from_pdb_file(pdb)
     b = atoms.atom_array_from_pdb_file(pdb)
     a_numbering, a_resn = struc.get_residues(a)
@@ -75,13 +76,18 @@ def test_get_seq_alignments(read_plinder_mount):
     assert matches == len(a_seq)
 
     a_seq_aln, b_seq_aln, a_numbering, b_numbering = atoms.align_sequences(a_seq, b_seq)
-    assert a_seq_aln == b_seq_aln == a_seq  == b_seq
+    assert a_seq_aln == b_seq_aln == a_seq == b_seq
     assert a_numbering == list(range(1, len(a_seq) + 1))
     assert b_numbering == list(range(1, len(b_seq) + 1))
 
 
 def test_buried_sasa(read_plinder_mount):
-    cif = read_plinder_mount / "systems" / "19hc__1__1.A_1.B__1.K_1.M_1.N" / "receptor.pdb"
+    cif = (
+        read_plinder_mount
+        / "systems"
+        / "19hc__1__1.A_1.B__1.K_1.M_1.N"
+        / "receptor.pdb"
+    )
     arr = atoms.atom_array_from_pdb_file(cif)
     a = arr[arr.chain_id == "A"]
     b = arr[arr.chain_id == "B"]

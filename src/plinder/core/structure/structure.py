@@ -398,11 +398,17 @@ class Structure(BaseModel):
     def superimpose(
         self,
         other: Structure,
+        strip_ligands: bool = True,
     ) -> tuple[Structure, float, float]:
-        assert (other.protein_atom_array) is not None and (
-            self.protein_atom_array is not None
-        )
+        """transforms self to superimpose on other"""
+
+        if self.protein_atom_array is None:
+            raise ValueError("both structures must have protein atom arrays")
+        if other.protein_atom_array is None:
+            raise ValueError("both structures must have protein atom arrays")
+
         # max_iterations=1 -> no outlier removal
+        # first structure - fixed (other), second - mobile (self)
         superimposed, _, other_anchors, self_anchors = _superimpose_common_atoms(
             other.protein_atom_array, self.protein_atom_array, max_iterations=1
         )
@@ -424,10 +430,10 @@ class Structure(BaseModel):
                 id=self.id,
                 protein_path=self.protein_path,
                 protein_sequence=self.protein_sequence,
-                ligand_sdfs=self.ligand_sdfs,
-                ligand_smiles=self.ligand_smiles,
+                ligand_sdfs=None if strip_ligands else self.ligand_sdfs,
+                ligand_smiles=None if strip_ligands else self.ligand_smiles,
                 protein_atom_array=superimposed,
-                ligand_mols=self.ligand_mols,
+                ligand_mols=None if strip_ligands else self.ligand_mols,
                 add_ligand_hydrogens=self.add_ligand_hydrogens,
                 structure_type=self.structure_type,
             ),
@@ -447,18 +453,6 @@ class Structure(BaseModel):
             self.protein_sequence, self.protein_atom_array
         )
         return [seqres_masks[ch] for ch in self.protein_chain_ordered]
-
-    # @property
-    # # TODO: check if this logic make sense - VO
-    # def resolved_smiles_ligand_mask(self) -> list[NDArray[np._int]]:
-    #     """List of protein chains ordered the way it is in structure."""
-    #     masks: list[int] = []
-    #     assert self.ligand_mols is not None
-    #     for ch in self.ligand_chain_ordered:
-    #         mol = self.ligand_mols[ch][1]
-    #         matching_idxs = self.ligand_mols[ch][-1]
-    #         masks.append(get_ligand_atom_index_mapping_mask(mol, matching_idxs))
-    #     return masks
 
     @property
     def input_sequence_list_ordered_by_chain(self) -> list[str] | None:
@@ -584,25 +578,6 @@ class Structure(BaseModel):
         assert self.ligand_mols is not None
         return {tag: mol_tuple[1] for tag, mol_tuple in self.ligand_mols.items()}
 
-    # # TODO: VO check if it makes sense
-    # @property
-    # def ligand_conformer2resolved_mask(self) -> dict[str, NDArray[np.int]]:
-    #     """
-    #     dict[NDArray]: Dictionary of ndarray of matching conformer
-    #     ids sorted by resolved ligand indices"""
-    #     assert self.ligand_mols is not None
-    #     masks = {}
-    #     for tag, stacks in self.ligand_template2resolved_atom_order_stacks.items():
-    #         # Select the best mask
-    #         stacks_zipped = list(zip(stacks[0][0], stacks[1][0]))
-    #         # sort by resolved ligand indices
-    #         stacks_zipped_resolved_indices_sorted = sorted(
-    #             stacks_zipped,
-    #             key=lambda x: x[1],  # type: ignore
-    #         )
-    #         masks[tag] = np.array([i[0] for i in stacks_zipped_resolved_indices_sorted])
-    #     return masks
-
     @property
     def input_ligand_conformers_coords(self) -> dict[str, NDArray[np.double]]:
         """dict[NDArray]: The coordinates of the input 3D conformer generated from input SMILES"""
@@ -630,19 +605,6 @@ class Structure(BaseModel):
             if self.ligand_mols
             else {}
         )
-
-    # @property
-    # def resolved_ligand_structure_coords(self) -> dict[str, NDArray[np.double]]:
-    # # TODO: duplicated?
-
-    #     """Dictionary of ligands and their resolved atom coordinates in the holo structure."""
-    #     ligand_coords: dict[str, NDArray[np.double]] = {}
-    #     if self.ligand_mols is not None:
-    #         ligand_coords = {
-    #             tag: mol.GetConformer().GetPositions()
-    #             for tag, mol in self.resolved_ligand_mols.items()
-    #         }
-    #     return ligand_coords
 
     @property
     def resolved_ligand_mols_coords(self) -> dict[str, NDArray[np.double]]:
@@ -756,37 +718,3 @@ class Structure(BaseModel):
     @classmethod
     def get_properties(cls) -> list[str]:
         return [name for name in dir(cls) if isinstance(getattr(cls, name), property)]
-
-    def superimpose(
-        self,
-        other: Structure,
-    ) -> tuple[Structure, float, float]:
-        # max_iterations=1 -> no outlier removal
-        if self.protein_atom_array is None:
-            raise ValueError("both structures must have protein atom arrays")
-        if other.protein_atom_array is None:
-            raise ValueError("both structures must have protein atom arrays")
-        superimposed, _, other_anchors, self_anchors = _superimpose_common_atoms(
-            other.protein_atom_array, self.protein_atom_array, max_iterations=1
-        )
-        raw_rmsd = struc.rmsd(
-            other.protein_atom_array.coord[other_anchors],
-            superimposed.coord[self_anchors],
-        )
-
-        superimposed, _, other_anchors, self_anchors = _superimpose_common_atoms(
-            other.protein_atom_array, self.protein_atom_array
-        )
-        refined_rmsd = struc.rmsd(
-            other.protein_atom_array.coord[other_anchors],
-            superimposed.coord[self_anchors],
-        )
-        return (
-            Structure(
-                protein_path=self.protein_path,
-                id=self.id,
-                protein_atom_array=superimposed,
-            ),
-            raw_rmsd,
-            refined_rmsd,
-        )
