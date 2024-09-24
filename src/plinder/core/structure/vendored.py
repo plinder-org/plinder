@@ -54,7 +54,6 @@ def rust_pdbfile() -> TextFile:
 
 def atom_array_from_pdb_file(
     structure: Path | AtomArray,
-    backend: str = "fastpdb",
     extra_fields: list[str] | None = None,
 ) -> _AtomArrayOrStack:
     if isinstance(structure, str):
