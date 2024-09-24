@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Iterable
 
 import biotite.structure as struc
 import numpy as np
 from biotite.structure.atoms import AtomArray
+from biotite.structure.io.mol import SDFile
 from numpy.typing import NDArray
 from pydantic import BaseModel, model_validator
 from rdkit import Chem
@@ -535,6 +537,26 @@ class Structure(BaseModel):
         ]
 
         return protein_coords
+
+    @property
+    def input_ligand_conformer_atom_array(self) -> dict[str, AtomArray]:
+        """dict[str, AtomArray]: The coordinates of the input 3D conformer generated from input SMILES"""
+        ligands = {}
+        for c in self.input_ligand_conformers:
+            with tempfile.NamedTemporaryFile(suffix=".sdf") as tmp_file:
+                Chem.SDWriter(tmp_file.name).write(self.input_ligand_conformers[c])
+                ligands[c] = SDFile.read(tmp_file.name).record.get_structure()
+        return ligands
+
+    @property
+    def ligand_atom_array(self) -> dict[str, AtomArray]:
+        """dict[str, AtomArray]: The coordinates of the input 3D conformer generated from input SMILES"""
+        if self.ligand_sdfs is None:
+            return {}
+        ligands = {}
+        for c in self.ligand_sdfs:
+            ligands[c] = SDFile.read(self.ligand_sdfs[c]).record.get_structure()
+        return ligands
 
     @property
     def input_ligand_templates(self) -> dict[str, Chem.Mol]:

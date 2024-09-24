@@ -90,7 +90,9 @@ def atom_array_from_cif_file(
                     mod = reader.read(f)
             else:
                 mod = reader.read(structure)
-            arr = get_structure(mod, model=1, use_author_fields=use_author_fields)  # noqa
+            arr = get_structure(
+                mod, model=1, use_author_fields=use_author_fields, include_bonds=True
+            )  # noqa
             return arr
         except Exception as e:
             log.error(f"Unable to parse {structure}! {str(e)}")
