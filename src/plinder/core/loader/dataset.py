@@ -59,6 +59,7 @@ class PlinderDataset(Dataset):  # type: ignore
         s = PlinderSystem(system_id=self._system_ids[index])
 
         holo_structure = s.holo_structure
+        features_and_coords = None
         if self._featurizer is not None:
             features_and_coords = self._featurizer(holo_structure)
 

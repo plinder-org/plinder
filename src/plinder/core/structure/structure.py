@@ -762,7 +762,6 @@ class Structure(BaseModel):
         return (
             Structure(
                 protein_path=self.protein_path,
-                protein_sequence=self.protein_sequence,
                 id=self.id,
                 protein_atom_array=superimposed,
             ),
