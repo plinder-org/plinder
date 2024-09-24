@@ -645,6 +645,9 @@ def read_plinder_mount(monkeypatch):
     adir = plinder_mount / "plinder" / "mount"
     assert Path(cfg.data.plinder_dir) == adir
 
+    for path in adir.rglob("*_done"):
+        path.unlink()
+
     return adir
 
 
@@ -679,7 +682,7 @@ def write_plinder_mount(monkeypatch, tmp_path):
 
     config._config._clear()
     for path in read_plinder_mount.rglob("*"):
-        if path.is_dir():
+        if path.is_dir() or path.name.endswith("_done"):
             continue
         write_path = write_plinder_mount / path.relative_to(read_plinder_mount)
         write_path.parent.mkdir(exist_ok=True, parents=True)
@@ -7017,3 +7020,17 @@ def failfast(monkeypatch):
         return obj()
 
     monkeypatch.setattr("plinder.data.pipeline.io.requests.get", f)
+
+
+@pytest.fixture(scope="session")
+def pdb_atom_array(pdb_5a7w_hydrogen):
+    from plinder.core.structure import vendored
+
+    return vendored.atom_array_from_pdb_file(pdb_5a7w_hydrogen)
+
+
+@pytest.fixture(scope="session")
+def cif_atom_array(cif_1qz5_processed):
+    from plinder.core.structure import atoms
+
+    return atoms.atom_array_from_cif_file(cif_1qz5_processed)

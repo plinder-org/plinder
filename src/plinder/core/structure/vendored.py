@@ -162,23 +162,6 @@ def get_backbone_atom_masks(
     return native_mask, model_mask
 
 
-def assign_receptor_ligand(
-    arr: AtomArray, chains: list[str]
-) -> tuple[list[str], list[str]]:
-    # Assign bigger chain as receptor, smaller as ligand
-    chain_size: dict[str, int] = {ch: arr[arr.chain_id == ch].shape[0] for ch in chains}
-    if len(chains) > 2:
-        log.warning(
-            f"Detected {len(chains)} chains! "
-            "Will assign ligand chain to smallest chain"
-        )
-
-    ordered = sorted(chain_size, key=lambda x: chain_size.get(x) or -1, reverse=True)
-    rec = ordered[0:-1]
-    lig = ordered[-1:]
-    return rec, lig
-
-
 def renumber_res_ids(arr: _AtomArrayOrStack) -> _AtomArrayOrStack:
     try:
         # biotite for py39 and below does not have this method
@@ -890,41 +873,6 @@ def write_pdb(arr: AtomArray, filepath: Path) -> None:
     strucio.save_structure(filepath, arr)
 
 
-def rename_chains(pdb_path: str, new_chain: str | dict[str, str]) -> None:
-    """Rename chains in a PDB file.
-
-    Parameters
-    ----------
-    pdb_path : str
-        The path to the PDB file whose chains are to be renamed.
-    new_chain : Union[str, dict]
-        The new name(s) for the chain(s). If a string is provided, all chains are renamed to this string.
-        If a dictionary is provided, chains are renamed according to the dictionary. If the key is an integer,
-        the alphabetically sorted chain at that index is renamed to the value. If the key is a string, the chain
-        with that name is renamed to the value.
-
-    Returns
-    -------
-    None
-    """
-    f = biotite_pdbfile()
-    pdb_file = f.read(pdb_path)
-    model = pdb_file.get_structure(model=1)  # , use_author_fields=False)
-    chains = list(set(model.chain_id))
-    if isinstance(new_chain, dict):
-        for chain, new_chain_id in new_chain.items():
-            if isinstance(chain, int) and chain < len(chains):
-                mask = model.chain_id == chains[chain]
-                model.chain_id[mask] = new_chain_id
-            else:
-                # mask = struc.filter_amino_acids(model) & (model.chain_id == chain)
-                mask = model.chain_id == chain
-                model.chain_id[mask] = new_chain_id
-    else:
-        model.chain_id[:] = new_chain
-    write_pdb(model, Path(pdb_path))
-
-
 def cif_to_pdb(
     cif_path: str, pdb_path: str, chains: dict[str, str] | None = None
 ) -> None:
@@ -961,31 +909,3 @@ def cif_to_pdb(
             mask = model_orig.chain_id == old_chain_id
             model.chain_id[mask] = new_chain_id
     write_pdb(model, Path(pdb_path))
-
-
-def normalize_orientation(model: AtomArray) -> AtomArray:
-    """Align the structure along principal axes.
-
-    The structure is transformed such that it is projected on the xy plane,
-    minimizing variance along the z-axis and translating the centroid to the origin.
-
-    Parameters
-    ----------
-    model : AtomArray
-        The AtomArray object to apply the normalization transformation to.
-
-    Returns
-    -------
-    AtomArray
-        The same atoms with transformed coordinates.
-
-    """
-    log.debug("original variance =", model.coord.var(axis=0))
-    center = struc.coord(struc.centroid(model))
-    # 'centroid()' removes the second last dimesion
-    # -> add dimension again to ensure correct translation
-    center = center[..., np.newaxis, :]
-    translated = struc.translate(model, -center)
-    normalized = struc.orient_principal_components(translated, order=(0, 1, 2))
-    log.debug("moved (zyx) variance =", normalized.coord.var(axis=0))
-    return normalized

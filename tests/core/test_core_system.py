@@ -59,3 +59,9 @@ def test_plinder_structure(read_plinder_mount):
     assert ligand_mols[-1][0] == np.array(
         [[13, 4, 5, 7, 9, 10, 1, 0, 3, 6, 8, 12, 11, 2]]
     )
+    assert holo_struc.protein_sequence is not None
+    assert len(holo_struc.protein_sequence)
+    assert holo_struc.protein_atom_array is not None
+    assert len(holo_struc.protein_atom_array)
+    assert holo_struc.ligand_sdfs is not None
+    assert len(holo_struc.ligand_sdfs)
