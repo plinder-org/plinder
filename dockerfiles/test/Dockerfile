@@ -5,4 +5,4 @@ ARG MAMBA_DOCKERFILE_ACTIVATE=1
 COPY src src
 COPY pyproject.toml pyproject.toml
 RUN --mount=source=.git,target=.git,type=bind \
-    python -m pip install --no-cache-dir .
+    python -m pip install --no-cache-dir ".[loader]"
