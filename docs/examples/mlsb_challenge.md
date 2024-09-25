@@ -27,7 +27,7 @@
 - Model selection must be performed exclusively on the validation set designed for this purpose within the PINDER and PLINDER datasets.
 - Methods relying on any model derivatives or embeddings trained on structures outside the PINDER/PLINDER training set are not permitted (e.g., ESM2, MSA: ✅; ESM3/ESMFold/SAProt/UniMol: ❌).
 - For instruction on how to load training and validation data, check the links below:
-  - [PLINDER](#mlsb-notebook-target)
+  - [PLINDER](https://plinder-org.github.io/plinder/examples/index.html)
   - [PINDER](https://pinder-org.github.io/pinder/pinder-mlsb.html#accessing-and-loading-data-for-training)
 
 ## Rules for valid inference pipeline
@@ -41,7 +41,7 @@
   - PLINDER track: CIF/PDB file format for Receptor (protein) and SDF file format for Ligand (small molecule)
 - Systems without a valid prediction will be penalized.
 
-## Rules for valid submission:
+## Rules for valid submission
 
 Submission system will use Hugging Face Spaces. To qualify for submission, each team must:
 
