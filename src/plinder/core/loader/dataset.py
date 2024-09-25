@@ -26,6 +26,8 @@ class PlinderDataset(Dataset):  # type: ignore
         the split to sample from
     filters: FILTERS, default=None
         Index filter to select specific system ids
+    use_alternate_structures: bool, default=True
+        Whether to load alternate structures
     featurizer: Callable[
             [Structure, int], dict[str, torch.Tensor]
     ] = structure_featurizer,
@@ -36,6 +38,7 @@ class PlinderDataset(Dataset):  # type: ignore
         self,
         split: str,
         filters: FILTERS = None,
+        use_alternate_structures: bool = True,
         featurizer: Callable[
             [Structure], torch.Tensor | dict[str, torch.Tensor]
         ] = structure_featurizer,
@@ -47,6 +50,7 @@ class PlinderDataset(Dataset):  # type: ignore
         self._num_examples = len(self._system_ids)
 
         self._featurizer = featurizer
+        self._use_alternate_structures = use_alternate_structures
 
     def __len__(self) -> int:
         return self._num_examples
@@ -66,7 +70,9 @@ class PlinderDataset(Dataset):  # type: ignore
         item: dict[str, Any] = {
             "system_id": holo_structure.id,
             "holo_structure": holo_structure,
-            "alternate_structures": s.alternate_structures,
+            "alternate_structures": s.alternate_structures
+            if self._use_alternate_structures
+            else {},
             "features_and_coords": features_and_coords,
             "path": s.system_cif,
         }
