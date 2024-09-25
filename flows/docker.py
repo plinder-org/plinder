@@ -311,7 +311,7 @@ def run_image(
         raise ValueError("could not find docker executable!")
     home = Path.home()
     host = Path.cwd() / "src"
-    guest = "/opt/conda/lib/python3.9/site-packages/plinder"
+    guest = "/opt/conda/lib/python3.10/site-packages/plinder"
     app = "/app/src"
     if not host.is_dir():
         raise RuntimeError(f"could not find {host}, please run from repo root")

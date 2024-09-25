@@ -3,12 +3,12 @@ uniqueness	str	Uniqueness identifier differentiating systems which are simple cr
 biounit_num_ligands	int	Number of ligands within systems in the biounit
 biounit_num_unique_ccd_codes	int	Number of unique CCD codes within systems in the biounit
 biounit_num_proper_ligands	int	Number of proper ligands within systems in the biounit
-system_ligand_has_lipinski	bool	Whether the biounit has a fragment
-system_ligand_has_cofactor	bool	Whether the system has a cofactor
-system_ligand_has_fragment	bool	Whether the biounit has a fragment
+system_ligand_has_lipinski	bool	Whether the system has a lipinski ligand
+system_ligand_has_cofactor	bool	Whether the system has a cofactor ligand
+system_ligand_has_fragment	bool	Whether the system has a fragment ligand
 system_ligand_has_oligo	bool	Whether the system has an oligomer ligand
-system_ligand_has_artifact	bool	Whether the system has an artifact
-system_ligand_has_other	bool	Whether the system has other ligands
+system_ligand_has_artifact	bool	Whether the system has an artifact ligand
+system_ligand_has_other	bool	Whether the system has a ligand labelled as other
 system_ligand_has_covalent	bool	Whether the system has a covalent ligand
 system_ligand_has_invalid	bool	Whether the system has an invalid ligand
 system_ligand_has_ion	bool	Whether the system has an ion

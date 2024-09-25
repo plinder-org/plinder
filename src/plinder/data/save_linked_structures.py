@@ -11,8 +11,7 @@ import gemmi
 import pandas as pd
 from ost import io, mol
 
-from plinder.core import scores
-from plinder.core.system.system import PlinderSystem
+from plinder.core import PlinderSystem, scores
 from plinder.core.utils.log import setup_logger
 from plinder.data.utils.annotations.save_utils import save_cif_file
 from plinder.eval.docking import utils

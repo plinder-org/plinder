@@ -22,7 +22,7 @@ from rdkit.Chem import QED, AllChem, Crippen, rdMolDescriptors
 from rdkit.Chem.rdchem import Mol, RWMol
 
 from plinder.core.utils.config import get_config
-from plinder.data.common.constants import BASE_DIR
+from plinder.core.utils.constants import BASE_DIR
 from plinder.data.utils.annotations.interaction_utils import (
     extract_ligand_links_to_neighbouring_chains,
     get_plip_hash,
@@ -711,7 +711,7 @@ class Ligand(DocBaseModel):
         default_factory=list, description="__Ligand residue numbers"
     )
     rdkit_canonical_smiles: str | None = Field(
-        default=None, description="RDKit canonical SMILES"
+        default=None, description="RDKit canonical SMILES (Recommended)"
     )
     molecular_weight: float | None = Field(default=None, description="Molecular weight")
     crippen_clogp: float | None = Field(

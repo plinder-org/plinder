@@ -41,6 +41,8 @@ interaction dataset standard as part of an exciting competition at the upcoming 
 More details about the competition and other helpful practical tips can be found at our recent workshop repo:
 [Moving Beyond Memorization](https://github.com/plinder-org/moving_beyond_memorisation).
 
+### 👋 [Join the P(L)INDER user group Discord Server!](https://discord.gg/KgUdMn7TuS)
+
 
 ## 🔢 Plinder versions
 

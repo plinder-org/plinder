@@ -11,7 +11,7 @@ import numpy as np
 import ost
 import pandas as pd
 
-from plinder.core.system.system import PlinderSystem
+from plinder.core import PlinderSystem
 from plinder.core.utils.log import setup_logger
 from plinder.eval.docking import utils
 

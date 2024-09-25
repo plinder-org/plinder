@@ -13,9 +13,9 @@ from openbabel import openbabel as ob
 from rdkit import Chem
 from rdkit.Chem.MolStandardize import rdMolStandardize
 
+from plinder.core.structure import diffdock_utils
+from plinder.core.structure.contacts import get_atom_neighbors
 from plinder.core.utils.log import setup_logger
-from plinder.data.structure.contacts import get_atom_neighbors
-from plinder.data.utils import diffdock_utils
 from plinder.data.utils.annotations.rdkit_utils import fix_valency_issues
 
 if TYPE_CHECKING:

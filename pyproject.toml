@@ -88,6 +88,8 @@ docs = [
     "sphinx-copybutton",
     "sphinx-design",
     "sphinx-gallery",
+    "mols2grid",
+    "matplotlib",
 ]
 
 [build-system]

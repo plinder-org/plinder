@@ -155,6 +155,7 @@ def get_plinder_path(
     LOG.debug(f"get_plinder_path: remote={path}")
     if os.getenv("PLINDER_OFFLINE"):
         return Path(path._local)
+
     if download:
         paths = [path] if path.is_file() else list(path.rglob("*"))
         download_paths(paths=paths, force_progress=force_progress)
