@@ -66,7 +66,6 @@ dev = [
 ]
 loader = [
     "torch",
-    "atom3d",
 ]
 plots = [
     "matplotlib",
