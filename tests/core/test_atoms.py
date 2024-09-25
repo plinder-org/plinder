@@ -4,7 +4,12 @@
 import biotite.structure as struc
 import pytest
 from biotite.structure.atoms import AtomArray
+from plinder.core.index.system import PlinderSystem
 from plinder.core.structure import vendored as atoms
+from plinder.core.structure.atoms import (
+    atom_array_from_cif_file,
+    generate_input_conformer,
+)
 from plinder.core.structure.models import BackboneDefinition
 
 
@@ -16,6 +21,7 @@ def test_pdb_loader(pdb_5a7w_hydrogen):
 
 
 def test_atom_masks(cif_atom_array):
+    print(cif_atom_array)
     arr = cif_atom_array.copy()
     mask = atoms.backbone_mask(arr, BackboneDefinition("dockq"))
     assert mask.sum() == 1794
@@ -57,12 +63,7 @@ def test_resn2seq(cif_atom_array):
 
 
 def test_get_seq_alignments(read_plinder_mount):
-    pdb = (
-        read_plinder_mount
-        / "systems"
-        / "19hc__1__1.A_1.B__1.K_1.M_1.N"
-        / "receptor.pdb"
-    )
+    pdb = PlinderSystem(system_id="19hc__1__1.A_1.B__1.K_1.M_1.N").receptor_pdb
     a = atoms.atom_array_from_pdb_file(pdb)
     b = atoms.atom_array_from_pdb_file(pdb)
     a_numbering, a_resn = struc.get_residues(a)
@@ -85,13 +86,8 @@ def test_get_seq_alignments(read_plinder_mount):
 
 
 def test_buried_sasa(read_plinder_mount):
-    cif = (
-        read_plinder_mount
-        / "systems"
-        / "19hc__1__1.A_1.B__1.K_1.M_1.N"
-        / "receptor.pdb"
-    )
-    arr = atoms.atom_array_from_pdb_file(cif)
+    pdb = PlinderSystem(system_id="19hc__1__1.A_1.B__1.K_1.M_1.N").receptor_pdb
+    arr = atoms.atom_array_from_pdb_file(pdb)
     a = arr[arr.chain_id == "A"]
     b = arr[arr.chain_id == "B"]
     dsasa = atoms.get_buried_sasa(a, b)
@@ -99,9 +95,8 @@ def test_buried_sasa(read_plinder_mount):
     assert dsasa == 2520
 
 
-# TODO: likely not needed
 def test_atom_array_from_cif_file(cif_1qz5_unzipped):
-    arr = atoms.atom_array_from_cif_file(cif_1qz5_unzipped)
+    arr = atom_array_from_cif_file(cif_1qz5_unzipped)
     assert isinstance(arr, AtomArray)
 
 
@@ -111,5 +106,5 @@ def test_generate_input_conformer():
     # ligand_rdkit_canonical_smiles from system_id "102m__1__1.A__1.C"
     hard_smiles = "C=CC1=C(C)C2=Cc3c(C)c(CCC(=O)O)c4n3[Fe]35<-N6=C(C=c7c(C=C)c(C)c(n73)=CC1=N->52)C(C)=C(CCC(=O)O)C6=C4"
     mol = Chem.MolFromSmiles(hard_smiles)
-    mol = atoms.generate_input_conformer(mol)
+    mol = generate_input_conformer(mol)
     assert mol.GetNumConformers() > 0

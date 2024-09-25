@@ -60,11 +60,6 @@ def cif_1qz5_unzipped():
 
 
 @pytest.fixture(scope="session")
-def cif_1qz5_processed():
-    return test_asset_fp / "xx/pdb_00001qz5/1qz5-processed.cif"
-
-
-@pytest.fixture(scope="session")
 def cif_assembly_1qz5():
     return test_asset_fp / "xx/pdb_00001qz5/1qz5-assembly.cif"
 
@@ -7030,7 +7025,12 @@ def pdb_atom_array(pdb_5a7w_hydrogen):
 
 
 @pytest.fixture(scope="session")
-def cif_atom_array(cif_1qz5_processed):
+def cif_atom_array(cif_1qz5_unzipped):
     from plinder.core.structure import atoms
 
-    return atoms.atom_array_from_cif_file(cif_1qz5_processed)
+    print(cif_1qz5_unzipped)
+    atom_array = atoms.atom_array_from_cif_file(
+        cif_1qz5_unzipped, use_author_fields=False
+    )
+    print(atom_array)
+    return atom_array
