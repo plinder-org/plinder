@@ -37,9 +37,10 @@ updated.
 
 To accelerate community adoption, PLINDER will be used as the field’s new Protein-Ligand
 interaction dataset standard as part of an exciting competition at the upcoming 2024
-[Machine Learning in Structural Biology (MLSB)](https://mlsb.io) Workshop at NeurIPS,
-one of the field's premiere academic gatherings.
-More details about the competition will be announced shortly.
+[Machine Learning in Structural Biology (MLSB)](https://mlsb.io#challenge) Workshop at NeurIPS, one of the field's premiere academic gatherings.
+More details about the competition and other helpful practical tips can be found at our recent workshop repo:
+[Moving Beyond Memorization](https://github.com/plinder-org/moving_beyond_memorisation).
+
 
 ## 🔢 Plinder versions
 
