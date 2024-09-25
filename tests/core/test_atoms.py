@@ -100,11 +100,27 @@ def test_atom_array_from_cif_file(cif_1qz5_unzipped):
     assert isinstance(arr, AtomArray)
 
 
-def test_generate_input_conformer():
+def test_generate_input_conformer_easy():
+    from rdkit import Chem
+
+    # ligand_rdkit_canonical_smiles 4v2y__1__1.A__1.E
+    thal_smiles = "O=C1CC[C@H](N2C(=O)c3ccccc3C2=O)C(=O)N1"
+    mol = Chem.MolFromSmiles(thal_smiles)
+    mol = generate_input_conformer(mol)
+    # check that it has a conformer
+    assert mol.GetNumConformers() > 0
+    # check that Z coords are not all zero (only for 2D mols)
+    assert sum(abs(mol.GetConformer().GetPositions()[:, 2])) != 0
+
+
+def test_generate_input_conformer_hard():
     from rdkit import Chem
 
     # ligand_rdkit_canonical_smiles from system_id "102m__1__1.A__1.C"
     hard_smiles = "C=CC1=C(C)C2=Cc3c(C)c(CCC(=O)O)c4n3[Fe]35<-N6=C(C=c7c(C=C)c(C)c(n73)=CC1=N->52)C(C)=C(CCC(=O)O)C6=C4"
     mol = Chem.MolFromSmiles(hard_smiles)
     mol = generate_input_conformer(mol)
+    # check that it has a conformer
     assert mol.GetNumConformers() > 0
+    # check that Z coords are not all zero (only for 2D mols)
+    assert sum(abs(mol.GetConformer().GetPositions()[:, 2])) != 0

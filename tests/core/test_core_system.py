@@ -56,8 +56,10 @@ def test_plinder_structure(read_plinder_mount):
     s = index.PlinderSystem(system_id=system_id)
     holo_struc = s.holo_structure
     ligand_mols = holo_struc.ligand_mols
-    assert ligand_mols["1.C"][0] == np.array(
-        [[13, 4, 5, 7, 9, 10, 1, 0, 3, 6, 8, 12, 11, 2]]
+    # test the mask order for smiles
+    assert np.all(
+        ligand_mols["1.C"][3][0]
+        == np.array([[13, 4, 5, 7, 9, 10, 1, 0, 3, 6, 8, 12, 11, 2]])
     )
     assert holo_struc.protein_sequence is not None
     assert len(holo_struc.protein_sequence)

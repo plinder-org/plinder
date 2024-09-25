@@ -79,6 +79,8 @@ def biotite_ciffile() -> TextFile:
 def atom_array_from_cif_file(
     structure: Path | _AtomArrayOrStack, use_author_fields: bool = True
 ) -> AtomArray | None:
+    # TODO: this conversion may be unnecessary as the annotation is
+    # Path | _AtomArrayOrStack
     if isinstance(structure, str):
         structure = Path(structure)
 
@@ -99,48 +101,51 @@ def atom_array_from_cif_file(
     return structure
 
 
-def generate_input_conformer(template_mol: Chem.Mol, addHs: bool = False) -> Chem.Mol:
+def generate_input_conformer(
+    template_mol: Chem.Mol, addHs: bool = False, minimize_maxIters: int = -1
+) -> Chem.Mol:
     _mol = copy.deepcopy(template_mol)
     # need to add Hs to generate sensible conformers
     _mol = Chem.AddHs(_mol)
-    ps = AllChem.ETKDGv2()
+    # ps = AllChem.ETKDGv2()
     # try embedding molecule using ETKDGv2 (default)
     confid = AllChem.EmbedMolecule(
         _mol,
-        ps,
-        # useRandomCoords=True,
-        # useBasicKnowledge=True,
-        # maxAttempts=100,
-        # randomSeed=42,
+        # ps,
+        useRandomCoords=True,
+        useBasicKnowledge=True,
+        maxAttempts=100,
+        randomSeed=42,
     )
     if confid != -1:
-        # molecule successfully embedded - minimize
-        success = AllChem.MMFFOptimizeMolecule(_mol, maxIters=200)
-        # 0 if the optimization converged,
-        # -1 if the forcefield could not be set up,
-        # 1 if more iterations are required.
-        if success == 1:
-            log.info(
-                "generate_conformer: MMFFOptimizeMolecule - more iterations are required, extending by 500 steps"
-            )
-            # extend optimization to more steps
-            AllChem.MMFFOptimizeMolecule(_mol, maxIters=500)
-        elif success == -1:
-            log.warning(
-                "generate_conformer: MMFFOptimizeMolecule - the forcefield could not be set up"
-            )
+        if minimize_maxIters > 0:
+            # molecule successfully embedded - minimize
+            success = AllChem.MMFFOptimizeMolecule(_mol, maxIters=minimize_maxIters)
+            # 0 if the optimization converged,
+            # -1 if the forcefield could not be set up,
+            # 1 if more iterations are required.
+            if success == 1:
+                log.info(
+                    f"generate_conformer: MMFFOptimizeMolecule - more iterations are required, doubling the steps (2x {minimize_maxIters})"
+                )
+                # extend optimization to double the steps (extends by the same amount)
+                AllChem.MMFFOptimizeMolecule(_mol, maxIters=minimize_maxIters)
+            elif success == -1:
+                log.warning(
+                    "generate_conformer: MMFFOptimizeMolecule - the forcefield could not be set up"
+                )
 
     else:
         # this means EmbedMolecule failed
         log.warning(
-            "generate_conformer: EmbedMolecule - failed, try using useBasicKnowledge=False"
+            "generate_conformer: default EmbedMolecule - failed, try using useBasicKnowledge=False"
         )
         # try less optimal approach
         confid = AllChem.EmbedMolecule(
             _mol,
             useRandomCoords=True,
-            # useBasicKnowledge=False,
-            maxAttempts=500,
+            useBasicKnowledge=False,
+            maxAttempts=100,
             randomSeed=42,
         )
         if confid == -1:
