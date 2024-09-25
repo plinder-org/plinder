@@ -2,6 +2,7 @@
 # Distributed under the terms of the Apache License 2.0
 
 import biotite.structure as struc
+import numpy as np
 import pytest
 from biotite.structure.atoms import AtomArray
 from plinder.core.index.system import PlinderSystem
@@ -106,7 +107,7 @@ def test_generate_input_conformer_easy():
     # ligand_rdkit_canonical_smiles 4v2y__1__1.A__1.E
     thal_smiles = "O=C1CC[C@H](N2C(=O)c3ccccc3C2=O)C(=O)N1"
     mol = Chem.MolFromSmiles(thal_smiles)
-    mol = generate_input_conformer(mol)
+    mol = generate_input_conformer(mol, addHs=True, minimize_maxIters=100)
     # check that it has a conformer
     assert mol.GetNumConformers() > 0
     # check that Z coords are not all zero (only for 2D mols)
@@ -124,3 +125,31 @@ def test_generate_input_conformer_hard():
     assert mol.GetNumConformers() > 0
     # check that Z coords are not all zero (only for 2D mols)
     assert sum(abs(mol.GetConformer().GetPositions()[:, 2])) != 0
+
+
+def test_structure_with_symmetry_in_ligand(read_plinder_mount):
+    # structure with symmetry in ligand
+    holo_struct = PlinderSystem(system_id="4v2y__1__1.A__1.E").holo_structure
+    tag = holo_struct.ligand_chain_ordered[0]
+    holo_struct.input_ligand_templates[tag]
+    holo_struct.ligand_template2resolved_atom_order_stacks[tag]
+    # will get two different atom stacks (two matches for the re-ordering)
+    assert np.shape(holo_struct.ligand_template2resolved_atom_order_stacks[tag]) == (
+        2,
+        2,
+        19,
+    )
+
+
+def test_structure_partially_resolved_ligand(read_plinder_mount):
+    # structure with partially resolved ligand that can be matched piecewise
+    holo_struct = PlinderSystem(system_id="1ngx__1__1.A_1.B__1.E").holo_structure
+    tag = holo_struct.ligand_chain_ordered[0]
+    holo_struct.input_ligand_templates[tag]
+    holo_struct.ligand_template2resolved_atom_order_stacks[tag]
+    # will get three different atom stacks (three partial matches for the re-ordering)
+    assert np.shape(holo_struct.ligand_template2resolved_atom_order_stacks[tag]) == (
+        2,
+        3,
+        28,
+    )
