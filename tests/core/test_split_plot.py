@@ -18,7 +18,8 @@ def test_split_plot(write_plinder_mount, split_plot_split_file, tmp_path):
     )
     try:
         plotter.plot_all()
-    except Exception:
+    except Exception as e:
+        print(e)
         pass
 
     assert len(list(output_dir.rglob("*"))) > 0
