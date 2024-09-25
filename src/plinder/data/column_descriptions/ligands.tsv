@@ -7,7 +7,7 @@ ligand_bird_id	str	Ligand BIRD id
 ligand_centroid	list[float]	Ligand center of geometry
 ligand_smiles	str	Ligand SMILES based on OpenStructure dictionary lookup, or resolved SMILES if not in dictionary
 ligand_resolved_smiles	str	SMILES of only resolved ligand atoms
-ligand_rdkit_canonical_smiles	str | None	RDKit canonical SMILES
+ligand_rdkit_canonical_smiles	str | None	RDKit canonical SMILES (Recommended)
 ligand_molecular_weight	float | None	Molecular weight
 ligand_crippen_clogp	float | None	Ligand Crippen MlogP, see https://www.rdkit.org/docs/source/rdkit.Chem.Crippen.html
 ligand_num_rot_bonds	int | None	Number of rotatable bonds
