@@ -54,7 +54,7 @@ def evaluate(
         Run posebuster scoring and return full report
     """
     reference_system = PlinderSystem(system_id=reference_system_id)
-    if receptor_file is not None and not np.isnan(receptor_file):
+    if receptor_file is not None and not str(receptor_file) == "nan":
         receptor_file = Path(receptor_file)
     ligand_files = [Path(ligand_file) for ligand_file in ligand_files]
 
