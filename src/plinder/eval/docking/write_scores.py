@@ -53,24 +53,24 @@ def evaluate(
     """
     reference_system = PlinderSystem(system_id=reference_system_id)
     receptor_file = Path(receptor_file)
-    ligand_files = [Path(ligand_file) for ligand_file in ligand_files]
+    ligand_file_paths = [Path(ligand_file) for ligand_file in ligand_files]
     if not receptor_file.exists():
         if predictions_dir is not None and (predictions_dir / receptor_file).exists():
             receptor_file = predictions_dir / receptor_file
     if not receptor_file.exists():
         raise FileNotFoundError(f"Receptor file {receptor_file} could not be found")
-    if not all(ligand_file.exists() for ligand_file in ligand_files):
+    if not all(ligand_file.exists() for ligand_file in ligand_file_paths):
         if predictions_dir is not None:
-            ligand_files = [
-                predictions_dir / ligand_file for ligand_file in ligand_files
+            ligand_file_paths = [
+                predictions_dir / ligand_file for ligand_file in ligand_file_paths
             ]
-    assert ligand_files is not None and all(
-        ligand_file.exists() for ligand_file in ligand_files
-    ), f"Ligand files {ligand_files} could not be found"
+    assert ligand_file_paths is not None and all(
+        ligand_file.exists() for ligand_file in ligand_file_paths
+    ), f"Ligand files {ligand_file_paths} could not be found"
     return utils.ModelScores.from_model_files(
         model_system_id,
         receptor_file,
-        ligand_files,
+        ligand_file_paths,
         reference_system,
         score_protein=flexible,
         score_posebusters=posebusters,
