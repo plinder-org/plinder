@@ -325,12 +325,19 @@ def make_atom_mask(
     resolved_residue_start = 0
     for seq_, mask in zip(seq_res_three_aa, seq_mask):
         if mask == 0:
-            atom_mask.append([0 for i in range(len(pc.ORDERED_AA_FULL_ATOM[seq_]))])
+            atom_mask.append(
+                [
+                    0
+                    for i in range(
+                        len(pc.ORDERED_AA_FULL_ATOM.get(seq_, ["N", "CA", "C", "O"]))
+                    )
+                ]
+            )
         else:
             resi, resn = residue_tuple[resolved_residue_start]
             atom_mask.append(
                 get_per_residue_mask(
-                    pc.ORDERED_AA_FULL_ATOM[resn],
+                    pc.ORDERED_AA_FULL_ATOM.get(resn, ["N", "CA", "C", "O"]),
                     get_per_residue_atoms(atom_array, resi, resn),
                 )
             )
@@ -383,7 +390,9 @@ def _sequence_full_atom_type_array(
     for chain, sequence in input_sequences.items():
         feat = []
         for res in sequence:
-            for atom in pc.ORDERED_AA_FULL_ATOM[pc.ONE_TO_THREE[res]]:
+            for atom in pc.ORDERED_AA_FULL_ATOM.get(
+                pc.ONE_TO_THREE[res], ["N", "CA", "C", "O"]
+            ):
                 feat.append(_convert_pdb_atom_name_to_elem_symbol(atom))
         seq_atom_dict[chain] = np.array(feat)
     return seq_atom_dict

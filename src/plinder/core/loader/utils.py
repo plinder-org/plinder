@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Sequence
 
 import torch
 from torch import Tensor
 
-from plinder.core.structure.structure import Structure
+from plinder.core.index.system import PlinderSystem
 
 PAD_VALUE = -100
 
@@ -113,97 +112,77 @@ def collate_complex(
     batch_features: list[dict[str, Tensor]],
     pad_value: int = PAD_VALUE,
 ) -> dict[str, Tensor]:
-    collated_and_padded_properties = {}
+    all_collated_and_padded_properties = {}
     batch_size = len(batch_features)
 
-    feature_names = batch_features[0].keys()
-    for feat_name in feature_names:
-        collated_properties = []
-        for idx in range(batch_size):
-            feat = batch_features[idx][feat_name]
-            collated_properties.append(feat)
-        collated_and_padded_properties[feat_name] = pad_and_stack(
-            collated_properties, dim=0, value=pad_value
-        )
+    feature_groups_and_names = {k: list(v.keys()) for k, v in batch_features[0].items()}
+    for feat_group, feature_names in feature_groups_and_names.items():
+        collated_and_padded_properties = {}
+        for feat_name in feature_names:
+            collated_properties = []
+            for idx in range(batch_size):
+                feat = batch_features[idx][feat_group][feat_name]
+                collated_properties.append(torch.tensor(feat))
+            collated_and_padded_properties[feat_name] = pad_and_stack(
+                collated_properties, dim=0, value=pad_value
+            )
+        all_collated_and_padded_properties[feat_group] = collated_and_padded_properties
     return collated_and_padded_properties
 
 
 def collate_batch(
-    batch: list[
-        dict[
-            str,
-            list[str]
-            | list[Structure]
-            | list[dict[str, dict[str, Structure]]]
-            | list[Path]
-            | list[dict[str, Tensor]],
-        ]
-    ],
+    batch: list[dict[str, str | PlinderSystem | dict[str, dict[str, Tensor]]]]
 ) -> dict[
     str,
-    list[str]
-    | list[Structure]
-    | list[dict[str, dict[str, Structure]]]
-    | list[Path]
-    | list[dict[str, Tensor]],
+    list[str] | list[PlinderSystem] | list[dict[str, dict[str, Tensor]]],
 ]:
     """Collate a batch of PlinderDataset items into a merged mini-batch of Tensors.
 
     Used as the default collate_fn for the torch DataLoader consuming PlinderDataset.
 
     Parameters:
-        batch list[
+       batch: list[
         dict[
             str,
-            list[str]
-            | list[Structure]
-            | list[dict[str, dict[str, Structure]]]
-            | list[Path]
-            | list[dict[str, Tensor]],
-        ]
-    ]: A list of dictionaries
-        containing the data for each item in the batch.
+            str
+            | PlinderSystem
+            | dict[str, dict[str, Tensor]]
+            | Path,
+        ],
+    ]
+        A list of dictionaries
+            containing the data for each item in the batch.
 
     Returns:
         dict[
     str,
-    list[str]
-    | list[Structure]
-    | list[dict[str, dict[str, Structure]]]
-    | list[Path]
-    | list[dict[str, Tensor]]
+    | list[PlinderSystem]
+    | list[dict[str, dict[str, Tensor]]]
+    | list[Path]]
     A dictionary containing the merged items in the batch.
 
     """
     system_ids: list[str] = []
-    holo_structures: list[Structure] = []
-    alternate_structures: list[dict[str, dict[str, Structure]]] = []
+    plinder_system: list[PlinderSystem] = []
     feature_and_coords: list[dict[str, Tensor]] = []
-    paths: list[Path] = []
+    paths: list[str] = []
     for x in batch:
         assert isinstance(x["system_id"], str)
-        assert isinstance(x["holo_structure"], Structure)
-        assert isinstance(x["alternate_structures"], dict)
+        assert isinstance(x["plinder_system"], PlinderSystem)
         assert isinstance(x["features_and_coords"], dict)
         assert isinstance(x["path"], str)
 
         system_ids.append(x["system_id"])
-        holo_structures.append(x["holo_structure"])
-        alternate_structures.append(x["alternate_structures"])
+        plinder_system.append(x["plinder_system"])
         feature_and_coords.append(x["features_and_coords"])
         paths.append(x["path"])
 
     collated_batch: dict[
         str,
-        list[str]
-        | list[Structure]
-        | list[dict[str, dict[str, Structure]]]
-        | list[Path]
-        | list[dict[str, Tensor]],
+        list[str] | list[PlinderSystem] | list[dict[str, dict[str, Tensor]]],
     ] = {
         "system_ids": system_ids,
-        "holo_structures": holo_structures,
-        "alternate_structures": alternate_structures,
+        "plinder_system": plinder_system,
         "paths": paths,
         "features_and_coords": collate_complex(feature_and_coords),  # type: ignore
     }

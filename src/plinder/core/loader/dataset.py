@@ -9,7 +9,7 @@ import torch
 from torch.utils.data import DataLoader, Dataset
 
 from plinder.core.index.system import PlinderSystem
-from plinder.core.loader.featurizer import structure_featurizer
+from plinder.core.loader.featurizer import system_featurizer
 from plinder.core.loader.utils import collate_batch
 from plinder.core.scores import query_index
 from plinder.core.scores.query import FILTERS
@@ -32,8 +32,8 @@ class PlinderDataset(Dataset):  # type: ignore
     use_alternate_structures: bool, default=True
         Whether to load alternate structures
     featurizer: Callable[
-            [Structure, int], dict[str, torch.Tensor]
-    ] = structure_featurizer,
+            [PlinderSystem, int], dict[str, dict[str, torch.Tensor]]
+    ] = system_featurizer,
         Transformation to turn structure to input tensors
     """
 
@@ -43,8 +43,9 @@ class PlinderDataset(Dataset):  # type: ignore
         filters: FILTERS = None,
         use_alternate_structures: bool = True,
         featurizer: Callable[
-            [Structure], torch.Tensor | dict[str, torch.Tensor]
-        ] = structure_featurizer,
+            [PlinderSystem, int, bool],
+            torch.Tensor | dict[str, dict[str, torch.Tensor]],
+        ] = system_featurizer,
         **kwargs: Any,
     ):
         index = query_index(splits=[split], filters=filters)
@@ -68,14 +69,14 @@ class PlinderDataset(Dataset):  # type: ignore
         holo_structure = s.holo_structure
         features_and_coords = None
         if self._featurizer is not None:
-            features_and_coords = self._featurizer(holo_structure)
+            features_and_coords = self._featurizer(
+                s,
+                featurize_apo=self._use_alternate_structures,  # type: ignore
+            )
 
         item: dict[str, Any] = {
             "system_id": holo_structure.id,
-            "holo_structure": holo_structure,
-            "alternate_structures": s.alternate_structures
-            if self._use_alternate_structures
-            else {},
+            "plinder_system": s,
             "features_and_coords": features_and_coords,
             "path": s.system_cif,
         }

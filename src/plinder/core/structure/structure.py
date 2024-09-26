@@ -473,7 +473,7 @@ class Structure(BaseModel):
         return chain_order
 
     @property
-    def input_sequence_full_atom_feat(self) -> dict[str, list[str]]:
+    def input_sequence_full_atom_dict(self) -> dict[str, list[str]]:
         """Resolved sequence full atom features."""
         # TODO: do we want to keep this as assertion?
         # better if then raise?
@@ -484,7 +484,9 @@ class Structure(BaseModel):
             ch: [
                 atm
                 for res in self.protein_sequence[ch]
-                for atm in pc.ORDERED_AA_FULL_ATOM[pc.ONE_TO_THREE[res]]
+                for atm in pc.ORDERED_AA_FULL_ATOM.get(
+                    pc.ONE_TO_THREE[res], ["N", "CA", "C", "O"]
+                )
             ]
             for ch in self.protein_chain_ordered
         }
