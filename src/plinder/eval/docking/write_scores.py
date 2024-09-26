@@ -22,8 +22,8 @@ LOG = setup_logger(__name__)
 def evaluate(
     model_system_id: str,
     reference_system_id: str,
-    receptor_file: Path | None,
-    ligand_files: list[Path],
+    receptor_file: Path | str,
+    ligand_files: list[Path | str],
     predictions_dir: Path | None = None,
     flexible: bool = False,
     posebusters: bool = False,
@@ -38,10 +38,8 @@ def evaluate(
         The ID of the model system (e.g "prediction_0_rank1")
     reference_system_id: str
         The PLINDER systemID of the reference system
-    receptor_file: Path | None
+    receptor_file: Path
         The path to the receptor CIF/PDB file
-        If None, the receptor is taken from the reference system (rigid re-docking)
-        This is not the default as it is not recommended to rigid re-dock the receptor
     ligand_files: list[Path]
         The path to the ligand SDF files
     predictions_dir: Path | None
@@ -54,31 +52,18 @@ def evaluate(
         Run posebuster scoring and return full report
     """
     reference_system = PlinderSystem(system_id=reference_system_id)
-    if receptor_file is not None and not str(receptor_file) == "nan":
-        receptor_file = Path(receptor_file)
+    receptor_file = Path(receptor_file)
     ligand_files = [Path(ligand_file) for ligand_file in ligand_files]
-
-    if receptor_file is not None and not receptor_file.exists():
+    if not receptor_file.exists():
         if predictions_dir is not None and (predictions_dir / receptor_file).exists():
             receptor_file = predictions_dir / receptor_file
-        else:
-            assert reference_system.receptor_cif is not None
-            receptor_file = Path(reference_system.receptor_cif)
-    else:
-        LOG.info(
-            f"Using receptor file {receptor_file} from the reference system (i.e rigid re-docking)"
-        )
-        receptor_file = Path(reference_system.receptor_cif)
-    if ligand_files is not None and not all(
-        ligand_file.exists() for ligand_file in ligand_files
-    ):
+    if not receptor_file.exists():
+        raise FileNotFoundError(f"Receptor file {receptor_file} could not be found")
+    if not all(ligand_file.exists() for ligand_file in ligand_files):
         if predictions_dir is not None:
             ligand_files = [
                 predictions_dir / ligand_file for ligand_file in ligand_files
             ]
-    assert (
-        receptor_file is not None and receptor_file.exists()
-    ), f"Receptor file {receptor_file} could not be found"
     assert ligand_files is not None and all(
         ligand_file.exists() for ligand_file in ligand_files
     ), f"Ligand files {ligand_files} could not be found"
