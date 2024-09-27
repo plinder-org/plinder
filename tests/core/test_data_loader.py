@@ -3,5 +3,5 @@
 def test_data_loader(read_plinder_mount):
     from plinder.core.loader import PlinderDataset
 
-    ds = PlinderDataset(split="train", use_alternate_structures=False)
+    ds = PlinderDataset(split="removed", use_alternate_structures=False)
     assert len(ds[0])
