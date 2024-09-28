@@ -47,9 +47,9 @@ class PlinderDataset(Dataset):  # type: ignore
         ] = structure_featurizer,
         **kwargs: Any,
     ):
-        split = query_index(splits=[split], filters=filters)
-        LOG.info(f"Loading {split.system_id.nunique()} systems")
-        self._system_ids = list(set(split["system_id"]))
+        index = query_index(splits=[split], filters=filters)
+        LOG.info(f"Loading {index.system_id.nunique()} systems")
+        self._system_ids = list(set(index["system_id"]))
         self._num_examples = len(self._system_ids)
 
         self._featurizer = featurizer

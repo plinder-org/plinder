@@ -6,7 +6,6 @@ import pandas as pd
 from duckdb import sql
 
 from plinder.core.scores.query import FILTERS, make_query
-from plinder.core.split.utils import get_split
 from plinder.core.utils import cpl
 from plinder.core.utils.config import get_config
 from plinder.core.utils.log import setup_logger
