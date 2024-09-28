@@ -7034,3 +7034,8 @@ def cif_atom_array(cif_1qz5_unzipped):
     )
     print(atom_array)
     return atom_array
+
+
+@pytest.fixture(scope="session")
+def split_plot_split_file():
+    return test_asset_fp / "split_plot_split.parquet"

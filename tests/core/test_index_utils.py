@@ -35,13 +35,13 @@ def mock_cpl(read_plinder_mount, monkeypatch):
 
 def test_get_plindex(mock_cpl):
     df = utils.get_plindex()
-    assert len(df.index) == 34
+    assert len(df.index) == 57
     assert "pli_unique_qcov__50__strong__component" in df.columns
 
 
 def test_get_manifest(mock_cpl):
     df = utils.get_manifest()
-    assert len(df.index) == 34
+    assert len(df.index) == 57
 
 
 def test_load_entries(mock_cpl):

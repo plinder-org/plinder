@@ -166,7 +166,7 @@ class SplitPropertiesPlotter:
             mms_count=mms_count,
         )
         if plindex_file is None:
-            plindex = get_plindex()
+            plindex = get_plindex().drop(columns=["split"])
         else:
             plindex = pd.read_parquet(plindex_file)
         plotter.plindex = plotter.merge_splits_and_plindex(plindex)

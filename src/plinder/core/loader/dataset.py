@@ -14,6 +14,9 @@ from plinder.core.loader.utils import collate_batch
 from plinder.core.scores import query_index
 from plinder.core.scores.query import FILTERS
 from plinder.core.structure.structure import Structure
+from plinder.core.utils.log import setup_logger
+
+LOG = setup_logger(__name__)
 
 
 class PlinderDataset(Dataset):  # type: ignore
@@ -44,9 +47,9 @@ class PlinderDataset(Dataset):  # type: ignore
         ] = structure_featurizer,
         **kwargs: Any,
     ):
-        self._system_ids = list(
-            set(query_index(splits=[split], filters=filters)["system_id"])
-        )
+        index = query_index(splits=[split], filters=filters)
+        LOG.info(f"Loading {index.system_id.nunique()} systems")
+        self._system_ids = list(set(index["system_id"]))
         self._num_examples = len(self._system_ids)
 
         self._featurizer = featurizer

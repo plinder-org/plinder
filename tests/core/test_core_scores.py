@@ -7,7 +7,7 @@ from plinder.core.scores.protein import multi_query_protein_similarity
 
 def test_query_index(read_plinder_mount):
     df = scores.query_index(columns=["system_id"], splits=["*"])
-    assert len(df.index) == 34
+    assert len(df.index) == 57
 
 
 def test_query_protein_similarity(read_plinder_mount):

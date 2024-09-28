@@ -2,3 +2,4 @@
   tabulate
   pdb-validation @ git+https://git.scicore.unibas.ch/schwede/ligand-validation.git
   mmpdb @ git+https://github.com/rdkit/mmpdb.git
+  torch
