@@ -51,7 +51,8 @@ def query_index(
     df = sql(query).to_df()
     if splits is None:
         splits = ["train", "val"]
-    split_df = get_split(cfg=cfg)
+    split = cpl.get_plinder_path(rel=f"{cfg.data.splits}/{cfg.data.split_file}")
+    split_df = pd.read_parquet(split)
     split_dict = dict(zip(split_df["system_id"], split_df["split"]))
     df["split"] = df["system_id"].map(lambda x: split_dict.get(x, "unassigned"))
     if "*" not in splits:
