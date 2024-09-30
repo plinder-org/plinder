@@ -13,7 +13,6 @@ from plinder.core.loader.featurizer import system_featurizer
 from plinder.core.loader.utils import collate_batch
 from plinder.core.scores import query_index
 from plinder.core.scores.query import FILTERS
-from plinder.core.structure.structure import Structure
 from plinder.core.utils.log import setup_logger
 
 LOG = setup_logger(__name__)
