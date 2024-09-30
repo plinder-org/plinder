@@ -127,7 +127,7 @@ def collate_complex(
                 collated_properties, dim=0, value=pad_value
             )
         all_collated_and_padded_properties[feat_group] = collated_and_padded_properties
-    return collated_and_padded_properties
+    return all_collated_and_padded_properties
 
 
 def collate_batch(

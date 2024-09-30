@@ -455,6 +455,20 @@ class Structure(BaseModel):
         return [seqres_masks[ch] for ch in self.protein_chain_ordered]
 
     @property
+    def protein_structure_residue_mask(self, other: Structure) -> list[list[int]]:
+        """Mask residues from a given structure to another structure"""
+        self_protein_atom_array = self.protein_atom_array
+        other_protein_sequence_from_structure = other.protein_sequence_from_structure
+        other_chain = other_protein_sequence_from_structure.protein_chains[0]
+        assert self_protein_atom_array is not None
+        assert other_protein_sequence_from_structure is not None
+        other_sequence_dict = {other_chain: other_protein_sequence_from_structure}
+        seqres_masks = get_residue_index_mapping_mask(
+            other_sequence_dict, self_protein_atom_array
+        )
+        return [seqres_masks[ch] for ch in self.protein_chain_ordered]
+
+    @property
     def input_sequence_list_ordered_by_chain(self) -> list[str] | None:
         """List of protein chains ordered the way it is in structure."""
         if self.protein_chain_ordered and self.protein_sequence:

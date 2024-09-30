@@ -1,3 +1,4 @@
+import random
 from typing import Any
 
 import torch
@@ -13,8 +14,13 @@ from plinder.core.utils import constants as pc
 
 
 def system_featurizer(
-    system: PlinderSystem, pad_value: int = -100, featurize_apo: bool = True
+    system: PlinderSystem,
+    pad_value: int = -100,
+    featurize_apo: bool = True,
+    seed: int = 42,
 ) -> dict[str, Any]:
+    # Set seed
+    random.seed(seed)
     # Load holo and alternate (apo and pred) structures
     holo_structure = system.holo_structure
     apo_structures = system.alternate_structures
@@ -64,42 +70,39 @@ def system_featurizer(
         "holo_protein_coordinates_stacked": holo_protein_coordinates_stacked,
         "holo_protein_calpha_coordinates_stacked": holo_protein_calpha_coordinates_stacked,
     }
-
-    # Apo features
-    # Note: Since there are multiple apo/pred structures linked to a holo structure, we will
-    # stack all of them and let users choose how the want to use it
     if featurize_apo:
-        all_apo_protein_atom_arrays = []
-        all_apo_sequence_atom_masks_stacked = []
-        all_apo_input_sequence_residue_masks_stacked = []
-        all_apo_protein_coordinates_arrays_stacked = []
-        all_apo_protein_calpha_coordinates_arrays_stacked = []
-        for apo_id, apo_structure in apo_structures.items():
-            apo_structure.set_chain(holo_chain)
-            all_apo_protein_atom_arrays.append(apo_structure.protein_atom_array)
-            all_apo_sequence_atom_masks_stacked.append(apo_structure.sequence_atom_mask)
-            all_apo_input_sequence_residue_masks_stacked.append(
-                apo_structure.input_sequence_residue_mask_stacked
-            )
-            all_apo_protein_coordinates_arrays_stacked.append(
-                apo_structure.protein_coords
-            )
-            all_apo_protein_calpha_coordinates_arrays_stacked.append(
-                apo_structure.protein_calpha_coords
-            )
-        all_apo_features = {
-            "all_apo_sequence_atom_masks_stacked": all_apo_sequence_atom_masks_stacked,
-            "all_apo_input_sequence_residue_masks_stacked": all_apo_input_sequence_residue_masks_stacked,
-            "all_apo_protein_coordinates_arrays_stacked": all_apo_protein_coordinates_arrays_stacked,
-            "all_apo_protein_calpha_coordinates_arrays_stacked": all_apo_protein_calpha_coordinates_arrays_stacked,
+        selected_apo = apo_structures[random.choice(list(apo_structures.keys()))]
+        # Set apo chain to match holo
+        selected_apo.set_chain(holo_chain)
+        apo_sequence_atom_mask_stacked = selected_apo.sequence_atom_mask
+        apo_input_sequence_residue_mask_stacked = (
+            selected_apo.input_sequence_residue_mask_stacked
+        )
+        apo_protein_coordinates_array_stacked = selected_apo.protein_coords
+        apo_protein_calpha_coordinates_array_stacked = (
+            selected_apo.protein_calpha_coords
+        )
+        # Apo to holo cropping mask
+        apo_sequence_to_holo_structure_mask_stacked = (
+            holo_structure.protein_structure_residue_mask(selected_apo)
+        )
+
+        apo_features = {
+            "apo_sequence_atom_masks_stacked": apo_sequence_atom_mask_stacked,
+            "apo_input_sequence_residue_masks_stacked": apo_input_sequence_residue_mask_stacked,
+            "apo_protein_coordinates_arrays_stacked": apo_protein_coordinates_array_stacked,
+            "apo_protein_calpha_coordinates_arrays_stacked": apo_protein_calpha_coordinates_array_stacked,
+            "apo_sequence_to_holo_structure_mask_stacked": apo_sequence_to_holo_structure_mask_stacked,
         }
     else:
-        all_apo_features = {
-            "all_apo_sequence_atom_masks_stacked": [],
-            "all_apo_input_sequence_residue_masks_stacked": [],
-            "all_apo_protein_coordinates_arrays_stacked": [],
-            "all_apo_protein_calpha_coordinates_arrays_stacked": [],
+        apo_features = {
+            "apo_sequence_atom_masks_stacked": [],
+            "apo_input_sequence_residue_masks_stacked": [],
+            "apo_protein_coordinates_arrays_stacked": [],
+            "apo_protein_calpha_coordinates_arrays_stacked": [],
+            "apo_sequence_to_holo_structure_mask_stacked": [],
         }
+
     # Ligand features
     input_ligand_templates = (
         holo_structure.input_ligand_templates
@@ -140,7 +143,7 @@ def system_featurizer(
     features = {
         "sequence_features": sequence_features,
         "holo_features": holo_features,
-        "apo_features": all_apo_features,
+        "apo_features": apo_features,
         "ligand_features": ligand_features,
     }
 
