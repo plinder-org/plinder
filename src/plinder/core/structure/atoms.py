@@ -391,7 +391,7 @@ def _sequence_full_atom_type_array(
 
 
 def make_v2000_from_v3000_sdf(sdf_path: Path) -> Path | str:
-    mol = next(Chem.SDMolSupplier(sdf_path))
+    mol = next(Chem.SDMolSupplier(str(sdf_path)))
     unmodified_mol_block = Chem.MolToMolBlock(mol)
     if "V3000" in unmodified_mol_block:
         for b in mol.GetBonds():

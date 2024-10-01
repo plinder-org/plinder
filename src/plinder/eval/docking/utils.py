@@ -95,7 +95,7 @@ class ComplexData:
                 )
             elif isinstance(ligand_sdf_file_v2000, str):
                 with tempfile.NamedTemporaryFile(suffix=".sdf") as fp:
-                    fp.write(ligand_sdf_file_v2000)
+                    fp.write(ligand_sdf_file_v2000.encode())
                     ligand_views.append(
                         io.LoadEntity(str(fp.name), format="sdf").Select("ele != H")
                     )

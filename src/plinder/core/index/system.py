@@ -354,18 +354,15 @@ class PlinderSystem:
 
         ligand_views = {}
         for chain in self.ligand_sdfs:
-            chain_v2000 = make_v2000_from_v3000_sdf(chain)
-            if isinstance(chain_v2000, Path):
+            lig_v2000 = make_v2000_from_v3000_sdf(self.ligand_sdfs[chain])
+            if isinstance(lig_v2000, Path):
                 ligand_views[chain] = io.LoadEntity(
                     self.ligand_sdfs[chain], format="sdf"
                 ).Select("ele != H")
-            elif isinstance(chain_v2000, str):
+            elif isinstance(lig_v2000, str):
                 with tempfile.NamedTemporaryFile(suffix=".sdf") as fp:
-                    fp.write(chain_v2000)
-                    ligand_views.append(
-                        io.LoadEntity(str(fp.name), format="sdf").Select("ele != H")
-                    )
-
+                    fp.write(lig_v2000.encode())
+                    ligand_views[chain] = io.LoadEntity(str(fp.name), format="sdf").Select("ele != H")
         return ligand_views
 
     @property
