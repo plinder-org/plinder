@@ -354,7 +354,7 @@ class PlinderSystem:
 
         ligand_views = {}
         for chain in self.ligand_sdfs:
-            lig_v2000 = make_v2000_from_v3000_sdf(self.ligand_sdfs[chain])
+            lig_v2000 = make_v2000_from_v3000_sdf(Path(self.ligand_sdfs[chain]))
             if isinstance(lig_v2000, Path):
                 ligand_views[chain] = io.LoadEntity(
                     self.ligand_sdfs[chain], format="sdf"

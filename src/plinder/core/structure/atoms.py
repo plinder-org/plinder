@@ -397,6 +397,7 @@ def make_v2000_from_v3000_sdf(sdf_path: Path) -> Path | str:
         for b in mol.GetBonds():
             if b.GetBondType() == BondType.DATIVE:
                 b.SetBondType(BondType.UNSPECIFIED)
-        return Chem.MolToMolBlock(mol)
+        mol_block: str = Chem.MolToMolBlock(mol)
+        return mol_block
     else:
         return sdf_path
