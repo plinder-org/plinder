@@ -362,7 +362,9 @@ class PlinderSystem:
             elif isinstance(lig_v2000, str):
                 with tempfile.NamedTemporaryFile(suffix=".sdf") as fp:
                     fp.write(lig_v2000.encode())
-                    ligand_views[chain] = io.LoadEntity(str(fp.name), format="sdf").Select("ele != H")
+                    ligand_views[chain] = io.LoadEntity(
+                        str(fp.name), format="sdf"
+                    ).Select("ele != H")
         return ligand_views
 
     @property

@@ -88,6 +88,7 @@ class ComplexData:
             entity = io.LoadPDB(receptor_file.as_posix(), fault_tolerant=True)
         ligand_views = []
         for ligand_sdf_file in ligand_files:
+            # change DATIVE BOND -> UNSPECIFIED
             ligand_sdf_file_v2000 = make_v2000_from_v3000_sdf(ligand_sdf_file)
             if isinstance(ligand_sdf_file_v2000, Path):
                 ligand_views.append(
