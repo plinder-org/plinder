@@ -2,6 +2,7 @@
 # Distributed under the terms of the Apache License 2.0
 from __future__ import annotations
 
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -14,6 +15,7 @@ from ost.mol.alg.scoring import Scorer
 from posebusters import PoseBusters
 
 from plinder.core import PlinderSystem
+from plinder.core.structure.atoms import make_v2000_from_v3000_sdf
 from plinder.core.utils.log import setup_logger
 
 LOG = setup_logger(__name__)
@@ -84,10 +86,20 @@ class ComplexData:
             entity = io.LoadMMCIF(receptor_file.as_posix(), fault_tolerant=True)
         else:
             entity = io.LoadPDB(receptor_file.as_posix(), fault_tolerant=True)
-        ligand_views = [
-            io.LoadEntity(str(ligand_sdf_file), format="sdf").Select("ele != H")
-            for ligand_sdf_file in ligand_files
-        ]
+        ligand_views = []
+        for ligand_sdf_file in ligand_files:
+            ligand_sdf_file_v2000 = make_v2000_from_v3000_sdf(ligand_sdf_file)
+            if isinstance(ligand_sdf_file_v2000, Path):
+                ligand_views.append(
+                    io.LoadEntity(str(ligand_sdf_file), format="sdf").Select("ele != H")
+                )
+            elif isinstance(ligand_sdf_file_v2000, str):
+                with tempfile.NamedTemporaryFile(suffix=".sdf") as fp:
+                    fp.write(ligand_sdf_file_v2000)
+                    ligand_views.append(
+                        io.LoadEntity(str(fp.name), format="sdf").Select("ele != H")
+                    )
+
         return cls(
             name=name,
             receptor_file=receptor_file,

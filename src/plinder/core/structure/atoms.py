@@ -15,6 +15,7 @@ from biotite.structure.io.pdbx import get_structure
 from numpy.typing import NDArray
 from rdkit import Chem
 from rdkit.Chem import AllChem, Mol, rdDepictor, rdMolDescriptors, rdRascalMCES
+from rdkit.Chem.rdchem import BondType
 
 from plinder.core.structure.vendored import (
     _convert_resn_to_sequence_and_numbering,
@@ -387,3 +388,15 @@ def _sequence_full_atom_type_array(
                 feat.append(_convert_pdb_atom_name_to_elem_symbol(atom))
         seq_atom_dict[chain] = np.array(feat)
     return seq_atom_dict
+
+
+def make_v2000_from_v3000_sdf(sdf_path: Path) -> Path | str:
+    mol = next(Chem.SDMolSupplier(sdf_path))
+    unmodified_mol_block = Chem.MolToMolBlock(mol)
+    if "V3000" in unmodified_mol_block:
+        for b in mol.GetBonds():
+            if b.GetBondType() == BondType.DATIVE:
+                b.SetBondType(BondType.UNSPECIFIED)
+        return Chem.MolToMolBlock(mol)
+    else:
+        return sdf_path

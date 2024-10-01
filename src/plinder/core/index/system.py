@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import tempfile
 from functools import cached_property
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -16,6 +17,7 @@ from biotite.sequence.io.fasta import FastaFile
 
 from plinder.core.index import utils
 from plinder.core.scores.links import query_links
+from plinder.core.structure.atoms import make_v2000_from_v3000_sdf
 from plinder.core.structure.structure import Structure
 from plinder.core.utils.cpl import get_plinder_path
 from plinder.core.utils.io import (
@@ -352,9 +354,18 @@ class PlinderSystem:
 
         ligand_views = {}
         for chain in self.ligand_sdfs:
-            ligand_views[chain] = io.LoadEntity(
-                self.ligand_sdfs[chain], format="sdf"
-            ).Select("ele != H")
+            chain_v2000 = make_v2000_from_v3000_sdf(chain)
+            if isinstance(chain_v2000, Path):
+                ligand_views[chain] = io.LoadEntity(
+                    self.ligand_sdfs[chain], format="sdf"
+                ).Select("ele != H")
+            elif isinstance(chain_v2000, str):
+                with tempfile.NamedTemporaryFile(suffix=".sdf") as fp:
+                    fp.write(chain_v2000)
+                    ligand_views.append(
+                        io.LoadEntity(str(fp.name), format="sdf").Select("ele != H")
+                    )
+
         return ligand_views
 
     @property
