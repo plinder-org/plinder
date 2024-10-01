@@ -71,7 +71,8 @@ def system_featurizer(
         "holo_protein_calpha_coordinates_stacked": holo_protein_calpha_coordinates_stacked,
     }
     if featurize_apo:
-        selected_apo = apo_structures[random.choice(list(apo_structures.keys()))]
+        apo_id = random.choice(list(apo_structures.keys()))
+        selected_apo = apo_structures[apo_id]
         # Set apo chain to match holo
         selected_apo.set_chain(holo_chain)
         apo_sequence_atom_mask_stacked = selected_apo.sequence_atom_mask
@@ -95,12 +96,18 @@ def system_featurizer(
             "apo_sequence_to_holo_structure_mask_stacked": apo_sequence_to_holo_structure_mask_stacked,
         }
     else:
+        # Fallback to holo at the alternate structure
+        # Apo to holo cropping mask
+        apo_id = holo_structure.id
+        apo_sequence_to_holo_structure_mask_stacked = (
+            holo_structure.protein_structure_residue_mask(holo_structure)
+        )
         apo_features = {
-            "apo_sequence_atom_masks_stacked": [],
-            "apo_input_sequence_residue_masks_stacked": [],
-            "apo_protein_coordinates_arrays_stacked": [],
-            "apo_protein_calpha_coordinates_arrays_stacked": [],
-            "apo_sequence_to_holo_structure_mask_stacked": [],
+            "apo_sequence_atom_masks_stacked": holo_sequence_atom_mask_stacked,
+            "apo_input_sequence_residue_masks_stacked": holo_input_sequence_residue_mask_stacked,
+            "apo_protein_coordinates_arrays_stacked": holo_protein_coordinates_stacked,
+            "apo_protein_calpha_coordinates_arrays_stacked": holo_protein_calpha_coordinates_stacked,
+            "apo_sequence_to_holo_structure_mask_stacked": apo_sequence_to_holo_structure_mask_stacked,
         }
 
     # Ligand features
@@ -165,4 +172,4 @@ def system_featurizer(
     }
 
     # Set features as new properties
-    return padded_features
+    return padded_features, apo_id

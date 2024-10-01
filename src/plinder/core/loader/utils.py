@@ -163,25 +163,30 @@ def collate_batch(
 
     """
     system_ids: list[str] = []
+    alternate_structure_ids: list[str] = []
     plinder_system: list[PlinderSystem] = []
     feature_and_coords: list[dict[str, Tensor]] = []
     paths: list[str] = []
+
     for x in batch:
         assert isinstance(x["system_id"], str)
         assert isinstance(x["plinder_system"], PlinderSystem)
         assert isinstance(x["features_and_coords"], dict)
         assert isinstance(x["path"], str)
+        assert isinstance(x["alternate_structure_id"], str)
 
         system_ids.append(x["system_id"])
         plinder_system.append(x["plinder_system"])
         feature_and_coords.append(x["features_and_coords"])
         paths.append(x["path"])
+        alternate_structure_ids.append(x["alternate_structure_id"])
 
     collated_batch: dict[
         str,
         list[str] | list[PlinderSystem] | list[dict[str, dict[str, Tensor]]],
     ] = {
         "system_ids": system_ids,
+        "alternate_structure_id": alternate_structure_ids,
         "plinder_system": plinder_system,
         "paths": paths,
         "features_and_coords": collate_complex(feature_and_coords),  # type: ignore

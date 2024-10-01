@@ -68,13 +68,14 @@ class PlinderDataset(Dataset):  # type: ignore
         holo_structure = s.holo_structure
         features_and_coords = None
         if self._featurizer is not None:
-            features_and_coords = self._featurizer(
+            features_and_coords, selected_alternate_structure_id = self._featurizer(
                 s,
                 featurize_apo=self._use_alternate_structures,  # type: ignore
             )
 
         item: dict[str, Any] = {
             "system_id": holo_structure.id,
+            "alternate_structure_id": selected_alternate_structure_id,
             "plinder_system": s,
             "features_and_coords": features_and_coords,
             "path": s.system_cif,
