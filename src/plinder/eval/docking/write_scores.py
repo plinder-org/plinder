@@ -111,8 +111,8 @@ def write_scores_as_json(
             LOG.warning(f"get_scores: {output_file} exists")
             return
         reference_system = PlinderSystem(system_id=scorer_input.reference_system_id)
-        receptor_file = None
-        if not Path(receptor_file).exists():
+        receptor_file: Path | str = scorer_input.receptor_file
+        if Path(receptor_file).exists() and len(scorer_input.receptor_file.strip()) > 0:
             receptor_file = Path(scorer_input.receptor_file)
         ligand_file = Path(scorer_input.ligand_file)
 
