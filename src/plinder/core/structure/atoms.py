@@ -178,7 +178,11 @@ def params_removeHs(mol: Chem.Mol) -> Chem.Mol:
     params.removeDegreeZero = True
     params.removeHigherDegrees = True
     params.removeOnlyHNeighbors = True
+    params.removeDummyNeighbors = True
     params.removeNontetrahedralNeighbors = True
+    params.removeDefiningBondStereo = True
+    params.removeWithWedgedBond = True
+    params.showWarnings = True
     return Chem.rdmolops.RemoveHs(mol, params, sanitize=False)
 
 
