@@ -18,7 +18,7 @@ def system_featurizer(
     pad_value: int = -100,
     featurize_apo: bool = True,
     seed: int = 42,
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], str]:
     # Set seed
     random.seed(seed)
     # Load holo and alternate (apo and pred) structures
