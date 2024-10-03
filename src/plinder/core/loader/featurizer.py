@@ -89,10 +89,10 @@ def system_featurizer(
         )
 
         apo_features = {
-            "apo_sequence_atom_masks_stacked": apo_sequence_atom_mask_stacked,
-            "apo_input_sequence_residue_masks_stacked": apo_input_sequence_residue_mask_stacked,
-            "apo_protein_coordinates_arrays_stacked": apo_protein_coordinates_array_stacked,
-            "apo_protein_calpha_coordinates_arrays_stacked": apo_protein_calpha_coordinates_array_stacked,
+            "apo_sequence_atom_mask_stacked": apo_sequence_atom_mask_stacked,
+            "apo_input_sequence_residue_mask_stacked": apo_input_sequence_residue_mask_stacked,
+            "apo_protein_coordinates_stacked": apo_protein_coordinates_array_stacked,
+            "apo_protein_calpha_coordinates_stacked": apo_protein_calpha_coordinates_array_stacked,
             "apo_sequence_to_holo_structure_mask_stacked": apo_sequence_to_holo_structure_mask_stacked,
         }
     else:
@@ -103,10 +103,10 @@ def system_featurizer(
             holo_structure.protein_structure_residue_mask(holo_structure)
         )
         apo_features = {
-            "apo_sequence_atom_masks_stacked": holo_sequence_atom_mask_stacked,
-            "apo_input_sequence_residue_masks_stacked": holo_input_sequence_residue_mask_stacked,
-            "apo_protein_coordinates_arrays_stacked": holo_protein_coordinates_stacked,
-            "apo_protein_calpha_coordinates_arrays_stacked": holo_protein_calpha_coordinates_stacked,
+            "apo_sequence_atom_mask_stacked": holo_sequence_atom_mask_stacked,
+            "apo_input_sequence_residue_mask_stacked": holo_input_sequence_residue_mask_stacked,
+            "apo_protein_coordinates_stacked": holo_protein_coordinates_stacked,
+            "apo_protein_calpha_coordinates_stacked": holo_protein_calpha_coordinates_stacked,
             "apo_sequence_to_holo_structure_mask_stacked": apo_sequence_to_holo_structure_mask_stacked,
         }
 

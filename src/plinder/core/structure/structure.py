@@ -199,8 +199,10 @@ class Structure(BaseModel):
             raise ValueError("Protein atom array not loaded")
         self.protein_sequence = {}
         for chain in self.protein_chain_ordered:
-            self.protein_sequence[chain] = struc.to_sequence(
-                self.protein_atom_array[self.protein_atom_array.chain_id == chain]
+            self.protein_sequence[chain] = str(
+                struc.to_sequence(
+                    self.protein_atom_array[self.protein_atom_array.chain_id == chain]
+                )[0][0]
             )
         if not len(self.protein_sequence):
             raise ValueError("Protein sequence could not be loaded")
