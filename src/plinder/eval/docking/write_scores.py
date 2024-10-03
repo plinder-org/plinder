@@ -7,6 +7,7 @@ import multiprocessing
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import ost
 import pandas as pd
 
@@ -112,9 +113,8 @@ def write_scores_as_json(
             return
         reference_system = PlinderSystem(system_id=scorer_input.reference_system_id)
         receptor_file = None
-        if (
-            scorer_input.receptor_file is not None
-            and len(scorer_input.receptor_file.strip()) > 0
+        if scorer_input.receptor_file is not None and not np.isnan(
+            scorer_input.receptor_file
         ):
             receptor_file = Path(scorer_input.receptor_file)
         ligand_file = Path(scorer_input.ligand_file)
