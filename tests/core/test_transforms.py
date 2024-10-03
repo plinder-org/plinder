@@ -8,7 +8,9 @@ from plinder.core.utils import constants as pc
 
 
 def test_transform_abc(read_plinder_mount):
-    s = PlinderSystem(system_id="19hc__1__1.A_1.B__1.V_1.X_1.Y").holo_structure
+    s = PlinderSystem(
+            system_id="19hc__1__1.A_1.B__1.V_1.X_1.Y"
+            ).holo_structure
     with pytest.raises(NotImplementedError):
         StructureTransform().transform(s)
 
