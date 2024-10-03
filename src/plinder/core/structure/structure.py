@@ -454,6 +454,7 @@ class Structure(BaseModel):
         seqres_masks = get_residue_index_mapping_mask(
             self.protein_sequence, self.protein_atom_array
         )
+        print(seqres_masks.keys())
         return [seqres_masks[ch] for ch in self.protein_chain_ordered]
 
     def protein_structure_residue_mask(self, other: Structure) -> list[list[int]]:
