@@ -199,8 +199,10 @@ class Structure(BaseModel):
             raise ValueError("Protein atom array not loaded")
         self.protein_sequence = {}
         for chain in self.protein_chain_ordered:
-            self.protein_sequence[chain] = struc.to_sequence(
-                self.protein_atom_array[self.protein_atom_array.chain_id == chain]
+            self.protein_sequence[chain] = str(
+                struc.to_sequence(
+                    self.protein_atom_array[self.protein_atom_array.chain_id == chain]
+                )[0][0]
             )
         if not len(self.protein_sequence):
             raise ValueError("Protein sequence could not be loaded")
@@ -452,6 +454,20 @@ class Structure(BaseModel):
         seqres_masks = get_residue_index_mapping_mask(
             self.protein_sequence, self.protein_atom_array
         )
+        print(seqres_masks.keys())
+        return [seqres_masks[ch] for ch in self.protein_chain_ordered]
+
+    def protein_structure_residue_mask(self, other: Structure) -> list[list[int]]:
+        """Mask residues from a given structure to another structure"""
+        self_protein_atom_array = self.protein_atom_array
+        other_protein_sequence_from_structure = other.protein_sequence_from_structure
+        other_chain = other.protein_chains[0]
+        assert self_protein_atom_array is not None
+        assert other_protein_sequence_from_structure is not None
+        other_sequence_dict = {other_chain: other_protein_sequence_from_structure}
+        seqres_masks = get_residue_index_mapping_mask(
+            other_sequence_dict, self_protein_atom_array
+        )
         return [seqres_masks[ch] for ch in self.protein_chain_ordered]
 
     @property
@@ -473,7 +489,7 @@ class Structure(BaseModel):
         return chain_order
 
     @property
-    def input_sequence_full_atom_feat(self) -> dict[str, list[str]]:
+    def input_sequence_full_atom_dict(self) -> dict[str, list[str]]:
         """Resolved sequence full atom features."""
         # TODO: do we want to keep this as assertion?
         # better if then raise?
@@ -484,7 +500,9 @@ class Structure(BaseModel):
             ch: [
                 atm
                 for res in self.protein_sequence[ch]
-                for atm in pc.ORDERED_AA_FULL_ATOM[pc.ONE_TO_THREE[res]]
+                for atm in pc.ORDERED_AA_FULL_ATOM.get(
+                    pc.ONE_TO_THREE[res], ["N", "CA", "C", "O"]
+                )
             ]
             for ch in self.protein_chain_ordered
         }
