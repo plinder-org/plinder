@@ -70,44 +70,41 @@ def test_plinder_structure(read_plinder_mount):
     assert len(holo_struc.ligand_sdfs)
     feat = system_featurizer(s)
     # Check the selected apo structure
-    feat[1] == "1rav_A"
+    assert feat[1] == "1vyo_B"
     # Check seqres to holo mask
     seqres_holo_mask = feat[0]["holo_features"][
         "holo_input_sequence_residue_mask_stacked"
     ]
-    assert np.array(seqres_holo_mask[:, :2]) == np.array([[0, 0]])
+    assert np.allclose(np.array(seqres_holo_mask[:, :2]), np.array([[0, 0]]))
     # Check seqres to apo mask
     seqres_apo_mask = feat[0]["apo_features"][
-        "apo_input_sequence_residue_masks_stacked"
+        "apo_input_sequence_residue_mask_stacked"
     ]
-    assert np.array(seqres_apo_mask[:, -3:]) == np.array([[0, 0, 0]])
+    assert np.allclose(np.array(seqres_apo_mask[:, -3:]), np.array([[0, 0, 0]]))
     # Check apo to holo mask
-    apo_holo_mask = feat[0]["apo_features"]["apo_input_sequence_residue_masks_stacked"]
-    assert np.array(apo_holo_mask[:, -3:]) == np.array([[0, 0, 0]])
+    apo_holo_mask = feat[0]["apo_features"]["apo_input_sequence_residue_mask_stacked"]
+    assert np.allclose(np.array(apo_holo_mask[:, -3:]), np.array([[0, 0, 0]]))
 
-    assert np.array(
+    assert np.allclose(np.array(
         feat[0]["apo_features"]["apo_protein_coordinates_stacked"].shape
-    ) == np.array([1, 976, 3])
-    assert np.array(
+    ), np.array([1, 958, 3]))
+    assert np.allclose(np.array(
         feat[0]["apo_features"]["apo_protein_calpha_coordinates_stacked"].shape
-    ) == np.array([1, 128, 3])
+    ), np.array([1, 122, 3]))
 
-    assert np.array(
+
+    assert np.allclose(np.array(
         feat[0]["holo_features"]["holo_protein_calpha_coordinates_stacked"].shape
-    ) == np.array([1, 123, 3])
+    ), np.array([1, 123, 3]))
 
-    assert np.array(
-        feat[0]["holo_features"]["holo_protein_calpha_coordinates_stacked"].shape
-    ) == np.array([1, 123, 3])
-
-    assert np.array(
+    assert np.allclose(np.array(
         feat[0]["holo_features"]["holo_protein_coordinates_stacked"].shape
-    ) == np.array([1, 964, 3])
+    ), np.array([1, 964, 3]))
 
-    assert np.array(
+    assert np.allclose(np.array(
         feat[0]["sequence_features"]["input_sequence_residue_feat_stack"].shape
-    ) == np.array([1, 128, 21])
+    ), np.array([1, 128, 21]))
 
-    assert np.array(
+    assert np.allclose(np.array(
         feat[0]["sequence_features"]["input_sequence_full_atom_feat_stack"].shape
-    ) == np.array([1, 1007, 12])
+    ), np.array([1, 1007, 12]))
