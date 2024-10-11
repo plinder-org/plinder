@@ -84,6 +84,7 @@ class ComplexData:
             entity = io.LoadMMCIF(receptor_file.as_posix(), fault_tolerant=True)
         else:
             entity = io.LoadPDB(receptor_file.as_posix(), fault_tolerant=True)
+
         ligand_views = [
             io.LoadEntity(str(ligand_sdf_file), format="sdf").Select("ele != H")
             for ligand_sdf_file in ligand_files
@@ -137,8 +138,8 @@ class ModelScores:
         ----------
         model_file : Path
             The path to the model file.
-        model_ligand_sdf_files : list[str | Path]
-            The list of ligand SDF files.
+        model_ligand_files : list[Path]
+            The list of ligand SDF files OR a path to directory with SDF files.
         reference : PlinderSystem
             The reference system.
         score_protein : bool, default=False
