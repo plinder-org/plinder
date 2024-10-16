@@ -102,58 +102,64 @@ def atom_array_from_cif_file(
 
 
 def generate_input_conformer(
-    template_mol: Chem.Mol, addHs: bool = False, minimize_maxIters: int = -1
+    template_mol: Chem.Mol,
+    addHs: bool = False,
+    minimize_maxIters: int = -1,
+    skip_3d_confgen: bool = False,
 ) -> Chem.Mol:
     _mol = copy.deepcopy(template_mol)
     # need to add Hs to generate sensible conformers
     _mol = Chem.AddHs(_mol)
-    # ps = AllChem.ETKDGv2()
-    # try embedding molecule using ETKDGv2 (default)
-    confid = AllChem.EmbedMolecule(
-        _mol,
-        # ps,
-        useRandomCoords=True,
-        useBasicKnowledge=True,
-        maxAttempts=100,
-        randomSeed=42,
-    )
-    if confid != -1:
-        if minimize_maxIters > 0:
-            # molecule successfully embedded - minimize
-            success = AllChem.MMFFOptimizeMolecule(_mol, maxIters=minimize_maxIters)
-            # 0 if the optimization converged,
-            # -1 if the forcefield could not be set up,
-            # 1 if more iterations are required.
-            if success == 1:
-                log.info(
-                    f"generate_conformer: MMFFOptimizeMolecule - more iterations are required, doubling the steps (2x {minimize_maxIters})"
-                )
-                # extend optimization to double the steps (extends by the same amount)
-                AllChem.MMFFOptimizeMolecule(_mol, maxIters=minimize_maxIters)
-            elif success == -1:
-                log.warning(
-                    "generate_conformer: MMFFOptimizeMolecule - the forcefield could not be set up"
-                )
 
+    if skip_3d_confgen:
+        confid = -1
     else:
-        # this means EmbedMolecule failed
-        log.warning(
-            "generate_conformer: default EmbedMolecule - failed, try using useBasicKnowledge=False"
-        )
-        # try less optimal approach
+        # try embedding molecule using ETKDGv2 (default)
         confid = AllChem.EmbedMolecule(
             _mol,
+            # ps,
             useRandomCoords=True,
-            useBasicKnowledge=False,
+            useBasicKnowledge=True,
             maxAttempts=100,
             randomSeed=42,
         )
-        if confid == -1:
-            # if that still fails - try generating just 2D conformer
+        if confid != -1:
+            if minimize_maxIters > 0:
+                # molecule successfully embedded - minimize
+                success = AllChem.MMFFOptimizeMolecule(_mol, maxIters=minimize_maxIters)
+                # 0 if the optimization converged,
+                # -1 if the forcefield could not be set up,
+                # 1 if more iterations are required.
+                if success == 1:
+                    log.info(
+                        f"generate_conformer: MMFFOptimizeMolecule - more iterations are required, doubling the steps (2x {minimize_maxIters})"
+                    )
+                    # extend optimization to double the steps (extends by the same amount)
+                    AllChem.MMFFOptimizeMolecule(_mol, maxIters=minimize_maxIters)
+                elif success == -1:
+                    log.warning(
+                        "generate_conformer: MMFFOptimizeMolecule - the forcefield could not be set up"
+                    )
+        else:
+            # this means EmbedMolecule failed
             log.warning(
-                "generate_conformer: EmbedMolecule - failed, trying rdDepictor.Compute2DCoords instead"
+                "generate_conformer: default EmbedMolecule - failed, trying using useBasicKnowledge=False"
             )
-            confid = rdDepictor.Compute2DCoords(_mol)
+            # try less optimal approach
+            confid = AllChem.EmbedMolecule(
+                _mol,
+                useRandomCoords=True,
+                useBasicKnowledge=False,
+                maxAttempts=100,
+                randomSeed=42,
+            )
+
+    if confid == -1:
+        # if 3D confgen fails or skipped
+        log.warning(
+            "generate_conformer: using 2D (rdDepictor.Compute2DCoords) instead 3D"
+        )
+        confid = rdDepictor.Compute2DCoords(_mol)
 
     # verify that mol has conformers
     if _mol.GetNumConformers() == 0:
@@ -198,6 +204,7 @@ def get_template_to_mol_matches(
     rascal_opts.returnEmptyMCES = True
     rascal_opts.completeAromaticRings = False
     rascal_opts.ringMatchesRingOnly = False
+    rascal_opts.maxBondMatchPairs = 5000
     rascal_opts.timeout = 20
 
     results = rdRascalMCES.FindMCES(mol, template, rascal_opts)

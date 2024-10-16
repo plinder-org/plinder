@@ -44,9 +44,11 @@ class PlinderSystem:
         *,
         system_id: str,
         prune: bool = True,
+        skip_3d_confgen: bool = False,
     ) -> None:
         self.system_id: str = system_id
         self.prune: bool = prune
+        self.skip_3d_confgen: bool = skip_3d_confgen
         self._entry: dict[str, Any] | None = None
         self._system: dict[str, Any] | None = None
         self._archive: Path | None = None
@@ -413,6 +415,7 @@ class PlinderSystem:
             protein_sequence=self.sequences,
             ligand_sdfs=self.ligand_sdfs,
             ligand_smiles=self.smiles,
+            skip_3d_confgen=self.skip_3d_confgen,
             structure_type="holo",
         )
 
