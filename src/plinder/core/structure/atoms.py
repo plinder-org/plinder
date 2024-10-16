@@ -198,6 +198,7 @@ def get_template_to_mol_matches(
     rascal_opts.returnEmptyMCES = True
     rascal_opts.completeAromaticRings = False
     rascal_opts.ringMatchesRingOnly = False
+    rascal_opts.maxBondMatchPairs = 5000
     rascal_opts.timeout = 20
 
     results = rdRascalMCES.FindMCES(mol, template, rascal_opts)
