@@ -111,6 +111,7 @@ class Structure(BaseModel):
         | None
     ) = None
     add_ligand_hydrogens: bool = False
+    skip_3d_confgen: bool = False
     structure_type: str = "holo"
 
     """Initialize structure.
@@ -147,6 +148,8 @@ class Structure(BaseModel):
             paired stacked arrays (template vs holo) mapping atom order by index
     add_ligand_hydrogens : bool = False
         Whether to add hydrogen to ligand or not
+    skip_3d_confgen : bool = False
+        Use 2D coords instead of (default) 3D conformer generation
     structure_type : str = "holo"
         Structure type, "holo", "apo" or "pred"
     """
@@ -223,7 +226,9 @@ class Structure(BaseModel):
 
             # get input_conformer with matches
             (template_mol_conformer) = generate_input_conformer(
-                template_mol, addHs=self.add_ligand_hydrogens
+                template_mol,
+                addHs=self.add_ligand_hydrogens,
+                skip_3d_confgen=self.skip_3d_confgen,
             )
 
             self.ligand_mols[name] = (
@@ -256,6 +261,7 @@ class Structure(BaseModel):
                 protein_atom_array=combined_arr,
                 ligand_mols=self.ligand_mols,
                 add_ligand_hydrogens=self.add_ligand_hydrogens,
+                skip_3d_confgen=self.skip_3d_confgen,
                 structure_type=structure_type,
             )
         else:
@@ -303,6 +309,7 @@ class Structure(BaseModel):
                 protein_atom_array=arr,
                 ligand_mols=self.ligand_mols,
                 add_ligand_hydrogens=self.add_ligand_hydrogens,
+                skip_3d_confgen=self.skip_3d_confgen,
                 structure_type=self.structure_type,
             )
         assert self.protein_atom_array is not None
@@ -369,6 +376,7 @@ class Structure(BaseModel):
                 protein_atom_array=target_at,
                 ligand_mols=self.ligand_mols,
                 add_ligand_hydrogens=self.add_ligand_hydrogens,
+                skip_3d_confgen=self.skip_3d_confgen,
                 structure_type=self.structure_type,
             )
 
@@ -381,6 +389,7 @@ class Structure(BaseModel):
                 protein_atom_array=ref_at,
                 ligand_mols=other.ligand_mols,
                 add_ligand_hydrogens=other.add_ligand_hydrogens,
+                skip_3d_confgen=other.skip_3d_confgen,
                 structure_type=other.structure_type,
             )
 
@@ -435,6 +444,7 @@ class Structure(BaseModel):
                 protein_atom_array=superimposed,
                 ligand_mols=None if strip_ligands else self.ligand_mols,
                 add_ligand_hydrogens=self.add_ligand_hydrogens,
+                skip_3d_confgen=self.skip_3d_confgen,
                 structure_type=self.structure_type,
             ),
             raw_rmsd,
