@@ -889,11 +889,10 @@ def cif_to_pdb(
     model = pdbx.get_structure(
         pdbx_file, model=1, use_author_fields=False, extra_fields=["b_factor", "charge"]
     )
-    # print(f"DEBUG: {cif_path} has {sorted(np.unique(model.chain_id))} chains")
     if chains is not None:
         mask = np.isin(model.chain_id, list(chains.keys()))
         if np.sum(mask) == 0:
-            print(f"WARNING: chains {list(chains.keys())} not found in {cif_path}")
+            log.warn(f"WARNING: chains {list(chains.keys())} not found in {cif_path}")
             return
         model = model[mask]
         model_orig = model.copy()
