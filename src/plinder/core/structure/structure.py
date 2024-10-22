@@ -551,8 +551,8 @@ class Structure(BaseModel):
         return protein_coords
 
     @property
-    def input_ligand_conformer_atom_array(self) -> dict[str, AtomArray]:
-        """dict[str, AtomArray]: The coordinates of the input 3D conformer generated from input SMILES"""
+    def input_ligand_conformers_atom_array(self) -> dict[str, AtomArray]:
+        """dict[str, AtomArray]: The biotite atom array of the input 3D conformer generated from input SMILES (via RDKit molecule)"""
         ligands = {}
         for c in self.input_ligand_conformers:
             with tempfile.NamedTemporaryFile(suffix=".sdf") as tmp_file:
@@ -561,8 +561,8 @@ class Structure(BaseModel):
         return ligands
 
     @property
-    def ligand_atom_array(self) -> dict[str, AtomArray]:
-        """dict[str, AtomArray]: The coordinates of the input 3D conformer generated from input SMILES"""
+    def resolved_ligand_mols_atom_array(self) -> dict[str, AtomArray]:
+        """dict[str, AtomArray]: The biotite atom array of the resolved ligand"""
         if self.ligand_sdfs is None:
             return {}
         ligands = {}
@@ -579,7 +579,7 @@ class Structure(BaseModel):
     @property
     def protein_calpha_coords(self) -> NDArray[np.double]:
         assert self.protein_atom_array is not None
-        """list[NDArray]: The coordinates of the protein clapha atoms in the structure."""
+        """list[NDArray]: The coordinates of the protein Calpha atoms in the structure"""
         protein_calpha_coords: list[NDArray] = [
             coord
             for coord in _stack_atom_array_features(
@@ -669,9 +669,9 @@ class Structure(BaseModel):
 
     @property
     def protein_sequence_from_structure(self) -> str:
-        """str: The amino acid sequence of the structure."""
+        """str: residue (amino acid) sequence of the structure"""
         assert self.protein_atom_array is not None
-        numbering, resn = struc.get_residues(self.protein_atom_array)
+        _, resn = struc.get_residues(self.protein_atom_array)
         seq: str = resn2seq(resn)
         return seq
 
@@ -715,7 +715,7 @@ class Structure(BaseModel):
 
     @property
     def protein_structure_b_factor(self) -> list[float]:
-        """list[float]: A list of B-factor values for each atom in the structure."""
+        """list[float]: a list of B-factor values for each atom in the structure"""
         assert self.protein_atom_array is not None
         b_factor = self._attr_from_atom_array(
             self.protein_atom_array, "b_factor", distinct=False, sort=False
