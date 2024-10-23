@@ -32,8 +32,6 @@ jobs:
           cache-downloads: true
           cache-environment: true
           post-cleanup: all
-      - name: Install package
-        run: pip install .
       - name: Build docs
         shell: bash -el {0}
         id: build
