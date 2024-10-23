@@ -1,8 +1,8 @@
 name: Documentation
 on:
   push:
-    branches:
-     - main
+    tags:
+      - v*.*.*
 
 permissions:
   id-token: write
@@ -32,11 +32,8 @@ jobs:
           cache-downloads: true
           cache-environment: true
           post-cleanup: all
-      - name: Install build and tag requirements
-        run: python -m pip install build semver
-      - name: Get version bump
-        id: get-tag
-        run: git tag $(python flows/docker.py bump)
+      - name: Install package
+        run: pip install .
       - name: Build docs
         shell: bash -el {0}
         id: build
