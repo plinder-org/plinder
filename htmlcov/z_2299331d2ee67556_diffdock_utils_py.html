@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
-    <title>Coverage for src//plinder/core/structure/diffdock_utils.py: 13.0802%</title>
+    <title>Coverage for src//plinder/core/structure/diffdock_utils.py: 18.2979%</title>
     <link rel="icon" sizes="32x32" href="favicon_32_cb_58284776.png">
     <link rel="stylesheet" href="style_cb_8e611ae1.css" type="text/css">
     <script src="coverage_html_cb_6fb7b396.js" defer></script>
@@ -12,7 +12,7 @@
     <div class="content">
         <h1>
             <span class="text">Coverage for </span><b>src//plinder/core/structure/diffdock_utils.py</b>:
-            <span class="pc_cov">13.0802%</span>
+            <span class="pc_cov">18.2979%</span>
         </h1>
         <aside id="help_panel_wrapper">
             <input id="help_panel_state" type="checkbox">
@@ -56,18 +56,18 @@
         </aside>
         <h2>
             <span class="text">177 statements &nbsp;</span>
-            <button type="button" class="run button_toggle_run" value="run" data-shortcut="r" title="Toggle lines run">31<span class="text"> run</span></button>
-            <button type="button" class="mis show_mis button_toggle_mis" value="mis" data-shortcut="m" title="Toggle lines missing">146<span class="text"> missing</span></button>
+            <button type="button" class="run button_toggle_run" value="run" data-shortcut="r" title="Toggle lines run">40<span class="text"> run</span></button>
+            <button type="button" class="mis show_mis button_toggle_mis" value="mis" data-shortcut="m" title="Toggle lines missing">137<span class="text"> missing</span></button>
             <button type="button" class="exc show_exc button_toggle_exc" value="exc" data-shortcut="x" title="Toggle lines excluded">0<span class="text"> excluded</span></button>
-            <button type="button" class="par run show_par button_toggle_par" value="par" data-shortcut="p" title="Toggle lines partially run">0<span class="text"> partial</span></button>
+            <button type="button" class="par run show_par button_toggle_par" value="par" data-shortcut="p" title="Toggle lines partially run">1<span class="text"> partial</span></button>
         </h2>
         <p class="text">
             <a id="prevFileLink" class="nav" href="z_2299331d2ee67556_contacts_py.html">&#xab; prev</a> &nbsp; &nbsp;
             <a id="indexLink" class="nav" href="index.html">&Hat; index</a> &nbsp; &nbsp;
             <a id="nextFileLink" class="nav" href="z_2299331d2ee67556_models_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
-            <a class="nav" href="https://coverage.readthedocs.io/en/7.6.1">coverage.py v7.6.1</a>,
-            created at 2024-09-25 18:03 +0000
+            <a class="nav" href="https://coverage.readthedocs.io/en/7.6.4">coverage.py v7.6.4</a>,
+            created at 2024-10-23 08:48 +0000
         </p>
         <aside class="hidden">
             <button type="button" class="button_next_chunk" data-shortcut="j"></button>
@@ -453,25 +453,25 @@
     <p class="pln"><span class="n"><a id="t369" href="#t369">369</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t370" href="#t370">370</a></span><span class="t"><span class="key">def</span> <span class="nam">safe_index</span><span class="op">(</span><span class="nam">l</span><span class="op">,</span> <span class="nam">e</span><span class="op">)</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t371" href="#t371">371</a></span><span class="t">    <span class="str">"""Return index of element e in list l. If e is not present, return the last index"""</span>&nbsp;</span><span class="r"></span></p>
-    <p class="mis show_mis"><span class="n"><a id="t372" href="#t372">372</a></span><span class="t">    <span class="key">try</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
-    <p class="mis show_mis"><span class="n"><a id="t373" href="#t373">373</a></span><span class="t">        <span class="key">return</span> <span class="nam">l</span><span class="op">.</span><span class="nam">index</span><span class="op">(</span><span class="nam">e</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t372" href="#t372">372</a></span><span class="t">    <span class="key">try</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t373" href="#t373">373</a></span><span class="t">        <span class="key">return</span> <span class="nam">l</span><span class="op">.</span><span class="nam">index</span><span class="op">(</span><span class="nam">e</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
     <p class="mis show_mis"><span class="n"><a id="t374" href="#t374">374</a></span><span class="t">    <span class="key">except</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
     <p class="mis show_mis"><span class="n"><a id="t375" href="#t375">375</a></span><span class="t">        <span class="key">return</span> <span class="nam">len</span><span class="op">(</span><span class="nam">l</span><span class="op">)</span> <span class="op">-</span> <span class="num">1</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t376" href="#t376">376</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t377" href="#t377">377</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t378" href="#t378">378</a></span><span class="t"><span class="key">def</span> <span class="nam">lig_atom_featurizer</span><span class="op">(</span><span class="nam">mol</span><span class="op">:</span> <span class="nam">Chem</span><span class="op">.</span><span class="nam">rdchem</span><span class="op">.</span><span class="nam">Mol</span><span class="op">)</span> <span class="op">-></span> <span class="nam">list</span><span class="op">[</span><span class="nam">list</span><span class="op">[</span><span class="nam">int</span><span class="op">]</span><span class="op">]</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
-    <p class="mis show_mis"><span class="n"><a id="t379" href="#t379">379</a></span><span class="t">    <span class="nam">ringinfo</span> <span class="op">=</span> <span class="nam">mol</span><span class="op">.</span><span class="nam">GetRingInfo</span><span class="op">(</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
-    <p class="mis show_mis"><span class="n"><a id="t380" href="#t380">380</a></span><span class="t">    <span class="nam">atom_features_list</span> <span class="op">=</span> <span class="op">[</span><span class="op">]</span>&nbsp;</span><span class="r"></span></p>
-    <p class="mis show_mis"><span class="n"><a id="t381" href="#t381">381</a></span><span class="t">    <span class="key">for</span> <span class="nam">idx</span><span class="op">,</span> <span class="nam">atom</span> <span class="key">in</span> <span class="nam">enumerate</span><span class="op">(</span><span class="nam">mol</span><span class="op">.</span><span class="nam">GetAtoms</span><span class="op">(</span><span class="op">)</span><span class="op">)</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
-    <p class="mis show_mis"><span class="n"><a id="t382" href="#t382">382</a></span><span class="t">        <span class="nam">chiral_tag</span> <span class="op">=</span> <span class="nam">str</span><span class="op">(</span><span class="nam">atom</span><span class="op">.</span><span class="nam">GetChiralTag</span><span class="op">(</span><span class="op">)</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
-    <p class="mis show_mis"><span class="n"><a id="t383" href="#t383">383</a></span><span class="t">        <span class="key">if</span> <span class="nam">chiral_tag</span> <span class="key">in</span> <span class="op">[</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t379" href="#t379">379</a></span><span class="t">    <span class="nam">ringinfo</span> <span class="op">=</span> <span class="nam">mol</span><span class="op">.</span><span class="nam">GetRingInfo</span><span class="op">(</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t380" href="#t380">380</a></span><span class="t">    <span class="nam">atom_features_list</span> <span class="op">=</span> <span class="op">[</span><span class="op">]</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t381" href="#t381">381</a></span><span class="t">    <span class="key">for</span> <span class="nam">idx</span><span class="op">,</span> <span class="nam">atom</span> <span class="key">in</span> <span class="nam">enumerate</span><span class="op">(</span><span class="nam">mol</span><span class="op">.</span><span class="nam">GetAtoms</span><span class="op">(</span><span class="op">)</span><span class="op">)</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t382" href="#t382">382</a></span><span class="t">        <span class="nam">chiral_tag</span> <span class="op">=</span> <span class="nam">str</span><span class="op">(</span><span class="nam">atom</span><span class="op">.</span><span class="nam">GetChiralTag</span><span class="op">(</span><span class="op">)</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="par run show_par"><span class="n"><a id="t383" href="#t383">383</a></span><span class="t">        <span class="key">if</span> <span class="nam">chiral_tag</span> <span class="key">in</span> <span class="op">[</span>&nbsp;</span><span class="r"><span class="annotate short">383&#x202F;&#x219B;&#x202F;388</span><span class="annotate long">line 383 didn't jump to line 388 because the condition on line 383 was never true</span></span></p>
     <p class="pln"><span class="n"><a id="t384" href="#t384">384</a></span><span class="t">            <span class="str">"CHI_SQUAREPLANAR"</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t385" href="#t385">385</a></span><span class="t">            <span class="str">"CHI_TRIGONALBIPYRAMIDAL"</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t386" href="#t386">386</a></span><span class="t">            <span class="str">"CHI_OCTAHEDRAL"</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t387" href="#t387">387</a></span><span class="t">        <span class="op">]</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
     <p class="mis show_mis"><span class="n"><a id="t388" href="#t388">388</a></span><span class="t">            <span class="nam">chiral_tag</span> <span class="op">=</span> <span class="str">"CHI_OTHER"</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t389" href="#t389">389</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
-    <p class="mis show_mis"><span class="n"><a id="t390" href="#t390">390</a></span><span class="t">        <span class="nam">atom_features_list</span><span class="op">.</span><span class="nam">append</span><span class="op">(</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t390" href="#t390">390</a></span><span class="t">        <span class="nam">atom_features_list</span><span class="op">.</span><span class="nam">append</span><span class="op">(</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t391" href="#t391">391</a></span><span class="t">            <span class="op">[</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t392" href="#t392">392</a></span><span class="t">                <span class="nam">safe_index</span><span class="op">(</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t393" href="#t393">393</a></span><span class="t">                    <span class="nam">allowable_features</span><span class="op">[</span><span class="str">"possible_atomic_num_list"</span><span class="op">]</span><span class="op">,</span> <span class="nam">atom</span><span class="op">.</span><span class="nam">GetAtomicNum</span><span class="op">(</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
@@ -527,7 +527,7 @@
     <p class="pln"><span class="n"><a id="t443" href="#t443">443</a></span><span class="t">                <span class="com"># g_charge if not np.isnan(g_charge) and not np.isinf(g_charge) else 0.</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t444" href="#t444">444</a></span><span class="t">            <span class="op">]</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t445" href="#t445">445</a></span><span class="t">        <span class="op">)</span>&nbsp;</span><span class="r"></span></p>
-    <p class="mis show_mis"><span class="n"><a id="t446" href="#t446">446</a></span><span class="t">    <span class="key">return</span> <span class="nam">atom_features_list</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t446" href="#t446">446</a></span><span class="t">    <span class="key">return</span> <span class="nam">atom_features_list</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t447" href="#t447">447</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t448" href="#t448">448</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t449" href="#t449">449</a></span><span class="t"><span class="key">def</span> <span class="nam">get_lig_graph</span><span class="op">(</span><span class="nam">mol</span><span class="op">)</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
@@ -610,8 +610,8 @@
             <a class="nav" href="index.html">&Hat; index</a> &nbsp; &nbsp;
             <a class="nav" href="z_2299331d2ee67556_models_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
-            <a class="nav" href="https://coverage.readthedocs.io/en/7.6.1">coverage.py v7.6.1</a>,
-            created at 2024-09-25 18:03 +0000
+            <a class="nav" href="https://coverage.readthedocs.io/en/7.6.4">coverage.py v7.6.4</a>,
+            created at 2024-10-23 08:48 +0000
         </p>
     </div>
 </footer>
