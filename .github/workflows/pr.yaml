@@ -65,13 +65,13 @@ jobs:
         if: steps.changed-src.outputs.any_changed == 'true' && steps.changed-base.outputs.any_changed != 'true'
         run: python flows/docker.py pull
       - name: Build image
-        if: steps.changed-src.outputs.any_changed == 'true'
+        if: steps.changed-base.outputs.any_changed == 'true' || steps.changed-src.outputs.any_changed == 'true'
         run: python flows/docker.py build
       - name: Run test image
-        if: steps.changed-src.outputs.any_changed == 'true'
+        if: steps.changed-base.outputs.any_changed == 'true' || steps.changed-src.outputs.any_changed == 'true'
         run: python flows/docker.py test
       - name: Copy and surgery coverage
-        if: steps.changed-src.outputs.any_changed == 'true'
+        if: steps.changed-base.outputs.any_changed == 'true' || steps.changed-src.outputs.any_changed == 'true'
         run: |
           cp reports/.coverage .
           sqlite3 .coverage "update file set path='src/' || substr(path, 40);"

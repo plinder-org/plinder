@@ -2,4 +2,4 @@
   tabulate
   pdb-validation @ git+https://git.scicore.unibas.ch/schwede/ligand-validation.git
   mmpdb @ git+https://github.com/rdkit/mmpdb.git
-  torch
+  https://download.pytorch.org/whl/cpu/torch-2.5.1%2Bcpu-cp310-cp310-linux_x86_64.whl#sha256=7f91a2200e352745d70e22396bd501448e28350fbdbd8d8b1c83037e25451150

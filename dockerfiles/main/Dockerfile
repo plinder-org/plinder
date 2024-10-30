@@ -6,7 +6,7 @@ ARG DEPENDENCY_BLOCKS=test
 
 WORKDIR /app
 COPY requirements_data.txt requirements_data.txt
-RUN python -m pip install -r --no-deps requirements_data.txt
+RUN python -m pip install -r requirements_data.txt
 COPY src src
 COPY pyproject.toml pyproject.toml
 RUN --mount=source=.git,target=.git,type=bind \
