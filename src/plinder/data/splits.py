@@ -305,23 +305,17 @@ def prep_data_for_desired_properties(
     )
 
     apo_links = pd.read_parquet(
-        data_dir / "links" / "apo_links.parquet", columns=["reference_system_id"]
+        data_dir / "links" / "kind=apo" / "links.parquet", columns=["reference_system_id"]
     )
     apo_links["system_id"] = apo_links["reference_system_id"]
     assert apo_links is not None, "apo_links is None"
     num_apo_links = apo_links.groupby("system_id").size()
     LOG.info(f"num_apo_links has {len(num_apo_links)} elements")
 
-    # TODO: replace with pred_links.parquet once available
-    pred_links = scores.query_protein_similarity(
-        search_db="pred",
-        columns=["query_system", "target_system"],
-        filters=[
-            ("similarity", ">=", 100),
-            ("search_db", "==", "pred"),
-            ("metric", "==", "pocket_fident"),
-        ],
+    pred_links = pd.read_parquet(
+        data_dir / "links" / "kind=pred" / "links.parquet", columns=["reference_system_id"]
     )
+    
     assert pred_links is not None, "pred_links is None"
     num_pred_links = pred_links.groupby("query_system").size()
     LOG.info(f"num_pred_links has {len(num_pred_links)} elements")
