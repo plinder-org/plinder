@@ -112,6 +112,12 @@ def test_params_removeHs():
     mol2 = Chem.MolFromSmiles("[2H]C([2H])(C(=O)[O-])C([2H])([2H])[Si](C)(C)C")
     mol2 = params_removeHs(mol2)
     assert mol2.GetNumAtoms() == mol2.GetNumHeavyAtoms()
+    # more strange explicit Hs
+    mol3 = Chem.MolFromSmiles(
+        "[H]/N=C(\\N)c1ccc(O)c(C=NCCN=Cc2cc(/C(N)=N\\[H])ccc2O)c1"
+    )
+    mol3 = params_removeHs(mol3)
+    assert mol3.GetNumAtoms() == mol3.GetNumHeavyAtoms()
 
 
 def test_generate_input_conformer_easy():

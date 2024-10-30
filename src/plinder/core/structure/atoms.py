@@ -230,12 +230,12 @@ def get_template_to_mol_matches(
             [
                 b.SetBondType(Chem.BondType.UNSPECIFIED)
                 for b in match_mol.GetBonds()
-                if not b in bond_matches[:, 0]
+                if not b.GetIdx() in bond_matches[:, 0]
             ]
             [
                 b.SetBondType(Chem.BondType.UNSPECIFIED)
                 for b in ref_mol.GetBonds()
-                if not b in bond_matches[:, 1]
+                if not b.GetIdx() in bond_matches[:, 1]
             ]
             # run again
             results2 = rdRascalMCES.FindMCES(match_mol, ref_mol, rascal_opts)

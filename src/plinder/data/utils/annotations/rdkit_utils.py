@@ -301,6 +301,7 @@ def get_matched_template_v2(template: Chem.Mol, mol: Chem.Mol) -> Chem.Mol:
     rascal_opts.returnEmptyMCES = True
     rascal_opts.completeAromaticRings = False
     rascal_opts.ringMatchesRingOnly = False
+    rascal_opts.maxBondMatchPairs = 5000
     rascal_opts.timeout = 20
 
     result = rdRascalMCES.FindMCES(mol, template, rascal_opts)[0]
@@ -315,7 +316,7 @@ def get_matched_template_v2(template: Chem.Mol, mol: Chem.Mol) -> Chem.Mol:
         match_mol = copy.deepcopy(mol)
         ref_mol = copy.deepcopy(template)
 
-        LOG.warn(
+        LOG.warning(
             "get_matched_template_v2: could not match template fully - retry with unmatched bonds set as UNSPECIFIED"
         )
         # set all unmatched bonds to UNSPECIFIED to help with the match
@@ -323,12 +324,12 @@ def get_matched_template_v2(template: Chem.Mol, mol: Chem.Mol) -> Chem.Mol:
             [
                 b.SetBondType(Chem.BondType.UNSPECIFIED)
                 for b in match_mol.GetBonds()
-                if not b in bond_matches[:, 0]
+                if not b.GetIdx() in bond_matches[:, 0]
             ]
             [
                 b.SetBondType(Chem.BondType.UNSPECIFIED)
                 for b in ref_mol.GetBonds()
-                if not b in bond_matches[:, 1]
+                if not b.GetIdx() in bond_matches[:, 1]
             ]
             # run again
             result = rdRascalMCES.FindMCES(match_mol, ref_mol, rascal_opts)[0]
