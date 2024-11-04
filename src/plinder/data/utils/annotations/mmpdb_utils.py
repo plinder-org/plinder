@@ -334,12 +334,11 @@ def add_mmp_clusters_to_data(
     grp_congeneric_df = grp_congeneric_df.reset_index()
 
     # Get constant size
-    grp_congeneric_df["const_ROMol"] = grp_congeneric_df.CONSTANT.apply(
-        Chem.MolFromSmarts
-    )
-    grp_congeneric_df["const_size"] = grp_congeneric_df["const_ROMol"].apply(
-        lambda x: x.GetNumHeavyAtoms()
-    )
+    const_size_map = {
+        smarts: Chem.MolFromSmarts(smarts).GetNumHeavyAtoms()
+        for smarts in grp_congeneric_df.CONSTANT.drop_duplicates()
+    }
+    grp_congeneric_df["const_size"] = grp_congeneric_df.CONSTANT.map(const_size_map)
 
     # Extract data with min_constant_size threshold
     grp_congeneric_df_thres = grp_congeneric_df[
@@ -377,7 +376,7 @@ def add_mmp_clusters_to_data(
         .drop_duplicates()
         .merge(grp_congeneric_df_thres, on="prot_pocket_lig_tag", how="left")
         .drop_duplicates()
-        .drop(columns=["const_ROMol", "id1", "id2", "prot_pocket_lig_tag"])
+        .drop(columns=["id1", "id2", "prot_pocket_lig_tag"])
     )
     # remove those that are not mapped!
     final_df = final_df[~final_df["congeneric_id"].isna()]
