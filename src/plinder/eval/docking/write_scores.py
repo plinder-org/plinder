@@ -121,9 +121,7 @@ def write_scores_as_json(
             return
         reference_system = PlinderSystem(system_id=scorer_input.reference_system_id)
         receptor_file = None
-        if scorer_input.receptor_file is not None and not np.isnan(
-            scorer_input.receptor_file
-        ):
+        if scorer_input.receptor_file is not None:
             receptor_file = Path(scorer_input.receptor_file)
         # single ligand file path, directory
         # TODO: or some concatenated list of paths with some separator
@@ -138,7 +136,8 @@ def write_scores_as_json(
             else:
                 assert reference_system.receptor_cif is not None
                 receptor_file = Path(reference_system.receptor_cif)
-        else:
+        elif receptor_file is None or not receptor_file.exists():
+            LOG.warning("No receptor file provided, using reference receptor (RIGID REDOCKING!!)")
             receptor_file = Path(reference_system.receptor_cif)
 
         assert receptor_file is not None
@@ -234,7 +233,7 @@ def score_test_set(
                         f"score_test_set: Error loading scores file {json_file}: {e}"
                     )
                 s["rank"] = json_file.stem
-                scores.append(s)
+                scores.append({k: v for k, v in s.items() if k != "ligand_scores"})
     pd.DataFrame(scores).to_parquet(output_file, index=False)
 
 
