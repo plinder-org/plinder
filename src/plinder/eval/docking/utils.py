@@ -87,19 +87,19 @@ class ComplexData:
         else:
             entity = io.LoadPDB(receptor_file.as_posix(), fault_tolerant=True)
         ligand_views = []
-        for ligand_sdf_file in ligand_files:
+        for i, ligand_sdf_file in enumerate(ligand_files):
             # change DATIVE BOND -> UNSPECIFIED
             ligand_sdf_file_v2000 = make_v2000_from_v3000_sdf(ligand_sdf_file)
             if isinstance(ligand_sdf_file_v2000, Path):
-                ligand_views.append(
-                    io.LoadEntity(str(ligand_sdf_file), format="sdf").Select("ele != H")
-                )
+                ligand_entity = io.LoadEntity(str(ligand_sdf_file), format="sdf")
             elif isinstance(ligand_sdf_file_v2000, str):
                 with tempfile.NamedTemporaryFile(suffix=".sdf") as fp:
                     fp.write(ligand_sdf_file_v2000.encode())
-                    ligand_views.append(
-                        io.LoadEntity(str(fp.name), format="sdf").Select("ele != H")
-                    )
+                    ligand_entity = io.LoadEntity(str(fp.name), format="sdf")
+            editor = ligand_entity.EditXCS()
+            editor.RenameChain(list(ligand_entity.chains)[0], f"LIG_{i}")
+            ligand_entity = ligand_entity.Select("ele != H")
+            ligand_views.append(ligand_entity)
 
         return cls(
             name=name,
