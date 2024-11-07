@@ -7,7 +7,6 @@ import multiprocessing
 from pathlib import Path
 from typing import Any
 
-import numpy as np
 import ost
 import pandas as pd
 
@@ -137,7 +136,9 @@ def write_scores_as_json(
                 assert reference_system.receptor_cif is not None
                 receptor_file = Path(reference_system.receptor_cif)
         elif receptor_file is None or not receptor_file.exists():
-            LOG.warning("No receptor file provided, using reference receptor (RIGID REDOCKING!!)")
+            LOG.warning(
+                "No receptor file provided, using reference receptor (RIGID REDOCKING!!)"
+            )
             receptor_file = Path(reference_system.receptor_cif)
 
         assert receptor_file is not None
