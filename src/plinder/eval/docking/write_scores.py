@@ -27,7 +27,7 @@ def evaluate(
     flexible: bool = False,
     posebusters: bool = False,
     posebusters_full: bool = False,
-) -> dict[str, Any]:
+) -> dict[str, dict[str, Any]]:
     """
     Evaluate a single receptor - ligand pair
 
@@ -75,7 +75,7 @@ def evaluate(
         score_protein=flexible,
         score_posebusters=posebusters,
         score_posebusters_full_report=posebusters_full,
-    ).summarize_scores()
+    ).summarize_scores_multi_ligands()
 
 
 def write_scores_as_json(
@@ -130,7 +130,9 @@ def write_scores_as_json(
                 assert reference_system.receptor_cif is not None
                 receptor_file = Path(reference_system.receptor_cif)
         elif receptor_file is None or not receptor_file.exists():
-            LOG.warning("No receptor file provided, using reference receptor (RIGID REDOCKING!!)")
+            LOG.warning(
+                "No receptor file provided, using reference receptor (RIGID REDOCKING!!)"
+            )
         assert receptor_file is not None
         assert ligand_file_path is not None
         scores = evaluate(
@@ -213,6 +215,7 @@ def score_test_set(
                 for _, row in predictions.iterrows()
             ],
         )
+
     scores = []
     for model_dir in output_dir.iterdir():
         for json_file in model_dir.iterdir():
@@ -224,7 +227,23 @@ def score_test_set(
                         f"score_test_set: Error loading scores file {json_file}: {e}"
                     )
                 s["rank"] = json_file.stem
-                scores.append({k: v for k, v in s.items() if k != "ligand_scores"})
+                # for ligand_chain_name, ligand_scores in s.items():
+                #     if isinstance(ligand_scores, dict):
+                #         scores_dict = {"chain": ligand_chain_name}
+                #         scores_dict.update({k: v for k, v in ligand_scores.items()})
+                #         scores.append(scores_dict)
+                for ligand_chain_name, ligand_scores in s.items():
+                    if isinstance(ligand_scores, dict):
+                        scores_dict = {"chain": ligand_chain_name}
+                        scores_dict.update(
+                            {
+                                k: v
+                                for k, v in ligand_scores.items()
+                                if k != "ligand_scores"
+                            }
+                        )
+                        scores.append(scores_dict)
+
     pd.DataFrame(scores).to_parquet(output_file, index=False)
 
 
