@@ -474,5 +474,5 @@ class ModelScores:
                 if self.protein_scores.score_oligo:
                     scores[ligand_score.chain].update(
                         self.protein_scores.oligomer_scores
-                )
+                    )
         return scores

@@ -227,11 +227,6 @@ def score_test_set(
                         f"score_test_set: Error loading scores file {json_file}: {e}"
                     )
                 s["rank"] = json_file.stem
-                # for ligand_chain_name, ligand_scores in s.items():
-                #     if isinstance(ligand_scores, dict):
-                #         scores_dict = {"chain": ligand_chain_name}
-                #         scores_dict.update({k: v for k, v in ligand_scores.items()})
-                #         scores.append(scores_dict)
                 for ligand_chain_name, ligand_scores in s.items():
                     if isinstance(ligand_scores, dict):
                         scores_dict = {"chain": ligand_chain_name}
