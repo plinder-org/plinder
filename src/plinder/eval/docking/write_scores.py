@@ -75,7 +75,7 @@ def evaluate(
         score_protein=flexible,
         score_posebusters=posebusters,
         score_posebusters_full_report=posebusters_full,
-    ).summarize_scores_multi_ligands()
+    ).summarize_scores()
 
 
 def write_scores_as_json(
