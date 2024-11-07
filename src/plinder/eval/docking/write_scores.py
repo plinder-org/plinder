@@ -27,7 +27,7 @@ def evaluate(
     flexible: bool = False,
     posebusters: bool = False,
     posebusters_full: bool = False,
-) -> dict[str, Any]:
+) -> dict[str, dict[str, Any]]:
     """
     Evaluate a single receptor - ligand pair
 
@@ -234,7 +234,17 @@ def score_test_set(
                         f"score_test_set: Error loading scores file {json_file}: {e}"
                     )
                 s["rank"] = json_file.stem
-                scores.append({k: v for k, v in s.items() if k != "ligand_scores"})
+                for ligand_chain_name, ligand_scores in s.items():
+                    if isinstance(ligand_scores, dict):
+                        scores_dict = {"chain": ligand_chain_name}
+                        scores_dict.update(
+                            {
+                                k: v
+                                for k, v in ligand_scores.items()
+                                if k != "ligand_scores"
+                            }
+                        )
+                        scores.append(scores_dict)
     pd.DataFrame(scores).to_parquet(output_file, index=False)
 
 
