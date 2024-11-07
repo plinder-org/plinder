@@ -85,10 +85,17 @@ class ComplexData:
         else:
             entity = io.LoadPDB(receptor_file.as_posix(), fault_tolerant=True)
 
-        ligand_views = [
-            io.LoadEntity(str(ligand_sdf_file), format="sdf").Select("ele != H")
-            for ligand_sdf_file in ligand_files
-        ]
+        ligand_views = []
+        for i, ligand_file in enumerate(ligand_files):
+            ligand_entity = io.LoadEntity(str(ligand_file), format="sdf")
+
+            # rename ligand chain to have different chain names for each ligand
+            # this is necessary for ost to not complain about duplicate chain names
+            editor = ligand_entity.EditXCS()
+            editor.RenameChain(list(ligand_entity.chains)[0], f"LIG_{i}")
+            ligand_entity = ligand_entity.Select("ele != H")
+            ligand_views.append(ligand_entity)
+
         return cls(
             name=name,
             receptor_file=receptor_file,
