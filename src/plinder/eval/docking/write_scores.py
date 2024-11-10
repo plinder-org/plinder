@@ -7,7 +7,6 @@ import multiprocessing
 from pathlib import Path
 from typing import Any
 
-import numpy as np
 import ost
 import pandas as pd
 
@@ -121,7 +120,10 @@ def write_scores_as_json(
             return
         reference_system = PlinderSystem(system_id=scorer_input.reference_system_id)
         receptor_file = None
-        if scorer_input.receptor_file is not None:
+        if (
+            scorer_input.receptor_file is not None
+            and not str(scorer_input.receptor_file) == "nan"
+        ):
             receptor_file = Path(scorer_input.receptor_file)
         # single ligand file path, directory
         # TODO: or some concatenated list of paths with some separator
@@ -136,9 +138,13 @@ def write_scores_as_json(
             else:
                 assert reference_system.receptor_cif is not None
                 receptor_file = Path(reference_system.receptor_cif)
-        elif receptor_file is None or not receptor_file.exists():
-            LOG.warning("No receptor file provided, using reference receptor (RIGID REDOCKING!!)")
+        elif receptor_file is None:
+            LOG.warning(
+                "No receptor file provided, using reference receptor (RIGID REDOCKING!!)"
+            )
             receptor_file = Path(reference_system.receptor_cif)
+        elif not receptor_file.exists():
+            raise FileNotFoundError(f"Receptor file {receptor_file} could not be found")
 
         assert receptor_file is not None
         assert ligand_file_path is not None
