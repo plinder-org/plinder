@@ -59,7 +59,11 @@ def compute_protein_max_similarities(
 
 
 def compute_ligand_max_similarities(
-    df: pd.DataFrame, split_label: str, train_label: str, test_label: str, output_file: Path
+    df: pd.DataFrame,
+    split_label: str,
+    train_label: str,
+    test_label: str,
+    output_file: Path,
 ) -> None:
     if "fp" not in df.columns:
         smiles_fp_dict = {
@@ -183,12 +187,16 @@ class StratifiedTestSet:
         self, overwrite: bool = False
     ) -> pd.DataFrame:
         left, right = (
-            set(self.split_df[self.split_df[self.split_label] == self.train_label][
-                "system_id"
-            ]),
-            set(self.split_df[self.split_df[self.split_label] == self.test_label][
-                "system_id"
-            ]),
+            set(
+                self.split_df[self.split_df[self.split_label] == self.train_label][
+                    "system_id"
+                ]
+            ),
+            set(
+                self.split_df[self.split_df[self.split_label] == self.test_label][
+                    "system_id"
+                ]
+            ),
         )
         LOG.info(
             f"compute_train_test_max_similarity: Found {len(left)} train and {len(right)} test systems"
@@ -258,9 +266,9 @@ class StratifiedTestSet:
                     "system_id",
                     "in",
                     set(
-                        self.split_df[self.split_df[self.split_label] == self.test_label][
-                            "system_id"
-                        ]
+                        self.split_df[
+                            self.split_df[self.split_label] == self.test_label
+                        ]["system_id"]
                     ),
                 )
             ],  # type: ignore
