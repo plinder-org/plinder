@@ -59,7 +59,11 @@ def compute_protein_max_similarities(
 
 
 def compute_ligand_max_similarities(
-    df: pd.DataFrame, train_label: str, test_label: str, output_file: Path
+    df: pd.DataFrame,
+    split_label: str,
+    train_label: str,
+    test_label: str,
+    output_file: Path,
 ) -> None:
     if "fp" not in df.columns:
         smiles_fp_dict = {
@@ -68,10 +72,10 @@ def compute_ligand_max_similarities(
         }
         df["fp"] = df["ligand_rdkit_canonical_smiles"].map(smiles_fp_dict)
 
-    df_test = df.loc[df["split"] == test_label][["system_id", "fp"]].copy()
+    df_test = df.loc[df[split_label] == test_label][["system_id", "fp"]].copy()
 
     df_test["tanimoto_similarity_max"] = smallmolecules.tanimoto_maxsim_matrix(
-        df.loc[df["split"] == train_label]["fp"].to_list(),
+        df.loc[df[split_label] == train_label]["fp"].to_list(),
         df_test["fp"].to_list(),
     )
     df_test.drop("fp", axis=1).groupby("system_id").agg("max").reset_index().to_parquet(
@@ -83,6 +87,7 @@ def compute_ligand_max_similarities(
 class StratifiedTestSet:
     split_df: pd.DataFrame
     output_dir: Path
+    split_label: str = "split"
     train_label: str = "train"
     test_label: str = "test"
     similarity_thresholds: dict[str, int] = field(
@@ -127,6 +132,7 @@ class StratifiedTestSet:
         cls,
         split_file: Path,
         output_dir: Path,
+        split_label: str = "split",
         train_label: str = "train",
         test_label: str = "test",
         overwrite: bool = False,
@@ -135,13 +141,14 @@ class StratifiedTestSet:
             split_df = pd.read_csv(split_file)
         else:
             split_df = pd.read_parquet(split_file)
-        assert all(x in split_df.columns for x in ["split", "system_id"])
-        split_df = split_df[split_df["split"].isin([train_label, test_label])][
-            ["system_id", "split"]
+        assert all(x in split_df.columns for x in [split_label, "system_id"])
+        split_df = split_df[split_df[split_label].isin([train_label, test_label])][
+            [split_label, "system_id"]
         ].reset_index(drop=True)
         data = cls(
             split_df=split_df,
             output_dir=output_dir,
+            split_label=split_label,
             train_label=train_label,
             test_label=test_label,
         )
@@ -180,8 +187,16 @@ class StratifiedTestSet:
         self, overwrite: bool = False
     ) -> pd.DataFrame:
         left, right = (
-            set(self.split_df[self.split_df["split"] == self.train_label]["system_id"]),
-            set(self.split_df[self.split_df["split"] == self.test_label]["system_id"]),
+            set(
+                self.split_df[self.split_df[self.split_label] == self.train_label][
+                    "system_id"
+                ]
+            ),
+            set(
+                self.split_df[self.split_df[self.split_label] == self.test_label][
+                    "system_id"
+                ]
+            ),
         )
         LOG.info(
             f"compute_train_test_max_similarity: Found {len(left)} train and {len(right)} test systems"
@@ -204,6 +219,7 @@ class StratifiedTestSet:
                     df = df.merge(self.split_df, on="system_id", how="left")
                     compute_ligand_max_similarities(
                         df,
+                        self.split_label,
                         self.train_label,
                         self.test_label,
                         self.get_filename(metric),
@@ -250,9 +266,9 @@ class StratifiedTestSet:
                     "system_id",
                     "in",
                     set(
-                        self.split_df[self.split_df["split"] == self.test_label][
-                            "system_id"
-                        ]
+                        self.split_df[
+                            self.split_df[self.split_label] == self.test_label
+                        ]["system_id"]
                     ),
                 )
             ],  # type: ignore
@@ -301,6 +317,12 @@ def stratify_cmd(args: list[str] | None = None) -> None:
         help="Path to output folder where similarity and stratification data are saved",
     )
     parser.add_argument(
+        "--split_label",
+        type=str,
+        default="split",
+        help="split=<split_label> is used to get split systems",
+    )
+    parser.add_argument(
         "--train_label",
         type=str,
         default="train",
@@ -325,6 +347,7 @@ def stratify_cmd(args: list[str] | None = None) -> None:
     StratifiedTestSet.from_split(
         split_file=Path(ns.split_file),
         output_dir=Path(ns.output_dir),
+        split_label=ns.split_label,
         train_label=ns.train_label,
         test_label=ns.test_label,
         overwrite=ns.overwrite,
