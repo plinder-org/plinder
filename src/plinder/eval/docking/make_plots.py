@@ -43,7 +43,8 @@ class EvaluationResults:
     def from_scores_and_data_files(
         cls, score_file: Path, data_file: Path, output_dir: Path, top_n: int = 10
     ) -> "EvaluationResults":
-        scores_df = pd.read_parquet(score_file).drop_duplicates("system_id")
+        # use only one score per system when plotting aggregated scores
+        scores_df = pd.read_parquet(score_file).drop_duplicates("reference")
         data_df = pd.read_parquet(data_file)
         merged_df = scores_df[scores_df["reference"].isin(data_df["system_id"])].merge(
             data_df, left_on="reference", right_on="system_id", how="left"
