@@ -215,7 +215,7 @@ def test_evaluate_stratify_plot_cmds(prediction_csv, mock_cpl_eval):
 
     score_df = pd.read_parquet(f"{prediction_csv.parent}/scores.parquet")
     assert np.allclose(
-        score_df.sort_values(by="reference").bisy_rmsd_wave.to_list(),
+        score_df.sort_values(by="reference").bisy_rmsd.to_list(),
         [1.617184, 3.665143],
     )
 
