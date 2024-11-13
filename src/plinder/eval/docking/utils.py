@@ -2,6 +2,7 @@
 # Distributed under the terms of the Apache License 2.0
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -430,46 +431,42 @@ class ModelScores:
     def summarize_scores(self) -> dict[str, dict[str, Any]]:
         if self.ligand_scores is None:
             return {}
-        scores: dict[str, dict[str, Any]] = {
-            ligand_score.chain: dict(
-                model=self.model.name,
-                reference=self.reference.name,
-                num_reference_ligands=self.reference.num_ligands,
-                num_model_ligands=self.model.num_ligands,
-                num_reference_proteins=self.reference.num_proteins,
-                num_model_proteins=self.model.num_proteins,
-                fraction_reference_ligands_mapped=self.num_mapped_reference_ligands
-                / self.reference.num_ligands,
-                fraction_model_ligands_mapped=self.num_mapped_model_ligands
-                / self.model.num_ligands,
-            )
-            for ligand_score in self.ligand_scores
-        }
+        scores: dict[str, Any] = dict(
+            model=self.model.name,
+            reference=self.reference.name,
+            num_reference_ligands=self.reference.num_ligands,
+            num_model_ligands=self.model.num_ligands,
+            num_reference_proteins=self.reference.num_proteins,
+            num_model_proteins=self.model.num_proteins,
+            fraction_reference_ligands_mapped=self.num_mapped_reference_ligands
+            / self.reference.num_ligands,
+            fraction_model_ligands_mapped=self.num_mapped_model_ligands
+            / self.model.num_ligands,
+        )
+        if self.score_protein and self.protein_scores is not None:
+            scores["lddt"] = self.protein_scores.lddt
+            scores["bb_lddt"] = self.protein_scores.bb_lddt
+            per_chain_lddt = list(self.protein_scores.per_chain_lddt.values())
+            scores["per_chain_lddt_ave"] = np.mean(per_chain_lddt)
+            per_chain_bb_lddt = list(self.protein_scores.per_chain_bb_lddt.values())
+            scores["per_chain_bb_lddt_ave"] = np.mean(per_chain_bb_lddt)
+            if self.protein_scores.score_oligo:
+                scores.update(self.protein_scores.oligomer_scores)
+        # aggregated shared_scores to add
         score_list = ["lddt_pli", "lddt_lp", "bisy_rmsd"]
+        for score_name in score_list:
+            (
+                scores[f"{score_name}_ave"],
+                scores[f"{score_name}_wave"],
+            ) = self.get_average_ligand_scores(score_name)
+        if self.score_posebusters:
+            scores.update(self.get_average_posebusters())
+        # individual ligand scores
+        per_lig_scores: dict[str, dict[str, Any]] = {}
         for ligand_score in self.ligand_scores:
+            per_lig_scores[ligand_score.chain] = copy.deepcopy(scores)
             for score_name in score_list:
-                scores[ligand_score.chain][score_name] = ligand_score.scores[score_name]
-            if self.score_posebusters:
-                scores[ligand_score.chain].update(self.get_average_posebusters())
-            if self.score_protein and self.protein_scores is not None:
-                scores[ligand_score.chain]["fraction_reference_proteins_mapped"] = (
-                    self.num_mapped_reference_proteins / self.reference.num_proteins
-                )
-                scores[ligand_score.chain]["fraction_model_proteins_mapped"] = (
-                    self.num_mapped_proteins / self.model.num_proteins
-                )
-                scores[ligand_score.chain]["lddt"] = self.protein_scores.lddt
-                scores[ligand_score.chain]["bb_lddt"] = self.protein_scores.bb_lddt
-                per_chain_lddt = list(self.protein_scores.per_chain_lddt.values())
-                scores[ligand_score.chain]["per_chain_lddt_ave"] = np.mean(
-                    per_chain_lddt
-                )
-                per_chain_bb_lddt = list(self.protein_scores.per_chain_bb_lddt.values())
-                scores[ligand_score.chain]["per_chain_bb_lddt_ave"] = np.mean(
-                    per_chain_bb_lddt
-                )
-                if self.protein_scores.score_oligo:
-                    scores[ligand_score.chain].update(
-                        self.protein_scores.oligomer_scores
-                    )
-        return scores
+                per_lig_scores[ligand_score.chain][score_name] = ligand_score.scores[
+                    score_name
+                ]
+        return per_lig_scores
