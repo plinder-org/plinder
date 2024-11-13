@@ -427,7 +427,9 @@ class ModelScores:
                     avg_scores[f"posebusters_{key}"] = None
         return avg_scores
 
-    def summarize_scores(self) -> dict[str, Any]:
+    def summarize_scores(self) -> dict[str, dict[str, Any]]:
+        if self.ligand_scores is None:
+            return {}
         scores: dict[str, dict[str, Any]] = {
             ligand_score.chain: dict(
                 model=self.model.name,
