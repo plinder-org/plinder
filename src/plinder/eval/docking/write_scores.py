@@ -67,11 +67,21 @@ def evaluate(
     assert ligand_file_paths is not None and all(
         ligand_file.exists() for ligand_file in ligand_file_paths
     ), f"Ligand files {ligand_file_paths} could not be found"
-    return utils.ModelScores.from_model_files(
+
+    ############################################################
+    # using the reference systems saved from moleculearn as a workaround.
+    # TODO: fix this, VERY BAD
+    reference_receptor_file = Path(ligand_file.parent.parent / "target/proteins.cif")
+    reference_ligand_files = list(Path(ligand_file.parent.parent / "target").glob("*.sdf"))
+    ############################################################
+
+    return utils.ModelScores.from_model_and_reference_files(
         model_system_id,
         receptor_file,
         ligand_file_paths,
-        reference_system,
+        reference_system_id,
+        reference_receptor_file,
+        reference_ligand_files,
         score_protein=flexible,
         score_posebusters=posebusters,
         score_posebusters_full_report=posebusters_full,
@@ -146,6 +156,8 @@ def write_scores_as_json(
             posebusters_full,
         )
         output_file.parent.mkdir(exist_ok=True, parents=True)
+        if any([v is None for item in scores.values() for v in item.values()]):
+            LOG.warning(f"get_scores: {scorer_input.reference_system_id} scores contain None values")
         with open(output_file, "w") as f:
             json.dump(scores, f)
     except Exception as e:
@@ -198,24 +210,34 @@ def score_test_set(
         )
         predictions = predictions[~predictions["exists"]]
     LOG.info(f"Running evaluation on {predictions.shape[0]} cases")
-    multiprocessing.set_start_method("spawn")
-    with multiprocessing.Pool(num_processes) as p:
-        p.starmap(
-            write_scores_as_json,
-            [
-                (
-                    row,
-                    row.output_file,
-                    overwrite,
-                    prediction_file.parent,
-                    flexible,
-                    posebusters,
-                    posebusters_full,
-                )
-                for _, row in predictions.iterrows()
-            ],
-        )
 
+    if num_processes > 0:
+        multiprocessing.set_start_method("spawn")
+        with multiprocessing.Pool(num_processes) as p:
+            p.starmap(
+                write_scores_as_json,
+                [
+                    (
+                        row,
+                        row.output_file,
+                        overwrite,
+                        prediction_file.parent,
+                        flexible,
+                        posebusters,
+                        posebusters_full,
+                    )
+                    for _, row in predictions.iterrows()
+                ],
+            )
+
+    else:
+        for _, row in predictions.iterrows():
+            write_scores_as_json(
+                row,
+                row.output_file,
+                overwrite,
+                prediction_file.parent,
+            )
     scores = []
     for model_dir in output_dir.iterdir():
         for json_file in model_dir.iterdir():
