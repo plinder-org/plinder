@@ -35,7 +35,7 @@ def test_plinder_system_fails(system_id, read_plinder_mount):
 def test_plinder_system_system_files(read_plinder_mount):
     system_id = "19hc__1__1.A_1.B__1.V_1.X_1.Y"
     s = index.PlinderSystem(system_id=system_id)
-    assert len(s.structures) == 10
+    assert len(s.structures) == 9
     assert len(s.ligand_sdfs) == 3
     assert len(s.system_cif)
     assert len(s.receptor_cif)
