@@ -107,7 +107,7 @@ def fix_valency_issues(mol: Mol) -> Mol:
                 }
     # remove explicit hydrogents when some are causing issues
     if delete_hydrogens:
-        LOG.warn(
+        LOG.warning(
             f"fix_valency_issues: found issues with H atoms {delete_hydrogens} - will try removing these atoms explicitly!"
         )
         mol = explicit_H_remover(mol, list(delete_hydrogens))
@@ -363,7 +363,7 @@ def mol_assigned_bond_orders_by_template(template_mol: Mol, mol: Mol) -> Mol:
     except Exception as e:
         # raise AssertionError(f"mol_assigned_bond_orders_by_template: {e}")
         # update template in case fully resovled mol but bonding is an issue
-        LOG.warn(
+        LOG.warning(
             f"mol_assigned_bond_orders_by_template: {e} - try get_matched_template"
         )
         template_mol = get_matched_template(template_mol, mol)
@@ -424,7 +424,7 @@ def ligand_ost_ent_to_rdkit_mol(
             else:
                 raise AssertionError("SMILES do not match reference - will try fixing")
         except Exception as e:
-            LOG.warn(f"ligand_ost_ent_to_rdkit_mol: {e}")
+            LOG.warning(f"ligand_ost_ent_to_rdkit_mol: {e}")
         try:
             # another try via OST SDF
             # open structure output singly bonded SDF that can be adjusted with template
@@ -441,7 +441,7 @@ def ligand_ost_ent_to_rdkit_mol(
             try:
                 rdkit_mol_tmp = fix_valency_issues(rdkit_mol_tmp)
             except Exception:
-                LOG.warn(
+                LOG.warning(
                     "fix_valency_issues: failed before mol_assigned_bond_orders_by_template"
                 )
             # get template from smiles
@@ -464,7 +464,7 @@ def ligand_ost_ent_to_rdkit_mol(
                     "cannot assign bonds by SMILES, use OpenBabel inference instead"
                 )
         except Exception as e:
-            LOG.warn(f"ligand_ost_ent_to_rdkit_mol: {e}")
+            LOG.warning(f"ligand_ost_ent_to_rdkit_mol: {e}")
     try:
         # Fix issues if any
         rdkit_mol = make_rdkit_compatible_mol(rdkit_mol)
@@ -495,7 +495,7 @@ def set_smiles_from_ligand_ost(ent: omol.EntityHandle) -> str:
                 rdkit_mol = make_rdkit_compatible_mol(rdkit_mol)
                 return str(Chem.MolToSmiles(rdkit_mol))
             except Exception:
-                LOG.warn(
+                LOG.warning(
                     "set_smiles_from_ligand_ost: CCD smiles could not be loaded by rdkit, moving to fix"
                 )
     rdkit_mol = ligand_ost_ent_to_rdkit_mol(ent)
@@ -519,7 +519,7 @@ def set_smiles_from_ligand_ost_v2(ent: omol.EntityHandle) -> tuple[str, str]:
                 template_mol = make_rdkit_compatible_mol(template_mol)
                 input_smiles = str(Chem.MolToSmiles(template_mol))
             except Exception:
-                LOG.warn(
+                LOG.warning(
                     "set_smiles_from_ligand_ost_v2: CCD smiles could not be loaded by RDKit, moving to fix"
                 )
     resolved_mol = ligand_ost_ent_to_rdkit_mol(ent)
