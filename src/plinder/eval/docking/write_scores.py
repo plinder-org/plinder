@@ -7,7 +7,6 @@ import multiprocessing
 from pathlib import Path
 from typing import Any
 
-import numpy as np
 import ost
 import pandas as pd
 
@@ -23,12 +22,12 @@ def evaluate(
     model_system_id: str,
     reference_system_id: str,
     receptor_file: Path | str,
-    ligand_files: list[Path | str],
+    ligand_file_list: list[Path],
     predictions_dir: Path | None = None,
     flexible: bool = False,
     posebusters: bool = False,
     posebusters_full: bool = False,
-) -> dict[str, Any]:
+) -> dict[str, dict[str, Any]]:
     """
     Evaluate a single receptor - ligand pair
 
@@ -40,8 +39,8 @@ def evaluate(
         The PLINDER systemID of the reference system
     receptor_file: Path
         The path to the receptor CIF/PDB file
-    ligand_files: list[Path]
-        The path to the ligand SDF files
+    ligand_file_list: list[Path]
+        The list of Paths to the ligand SDF files OR directory with .sdf files
     predictions_dir: Path | None
         The path to the directory containing the predictions (used if receptor/ligand files are not provided)
     flexible: bool
@@ -53,17 +52,25 @@ def evaluate(
     """
     reference_system = PlinderSystem(system_id=reference_system_id)
     receptor_file = Path(receptor_file)
-    ligand_file_paths = [Path(ligand_file) for ligand_file in ligand_files]
+
     if not receptor_file.exists():
         if predictions_dir is not None and (predictions_dir / receptor_file).exists():
             receptor_file = predictions_dir / receptor_file
     if not receptor_file.exists():
         raise FileNotFoundError(f"Receptor file {receptor_file} could not be found")
-    if not all(ligand_file.exists() for ligand_file in ligand_file_paths):
-        if predictions_dir is not None:
-            ligand_file_paths = [
-                predictions_dir / ligand_file for ligand_file in ligand_file_paths
-            ]
+
+    ligand_file_paths = []
+    for ligand_file in ligand_file_list:
+        if ligand_file.exists():
+            if ligand_file.is_dir():
+                ligand_file_paths += list(ligand_file.glob("*.sdf"))
+            elif ligand_file.suffix == ".sdf":
+                ligand_file_paths.append(ligand_file)
+        elif ligand_file is not None:
+            if predictions_dir is not None and (predictions_dir / ligand_file).exists():
+                ligand_file = predictions_dir / ligand_file
+                ligand_file_paths.append(ligand_file)
+
     assert ligand_file_paths is not None and all(
         ligand_file.exists() for ligand_file in ligand_file_paths
     ), f"Ligand files {ligand_file_paths} could not be found"
@@ -113,11 +120,14 @@ def write_scores_as_json(
             return
         reference_system = PlinderSystem(system_id=scorer_input.reference_system_id)
         receptor_file = None
-        if scorer_input.receptor_file is not None and not np.isnan(
-            scorer_input.receptor_file
+        if (
+            scorer_input.receptor_file is not None
+            and not str(scorer_input.receptor_file) == "nan"
         ):
             receptor_file = Path(scorer_input.receptor_file)
-        ligand_file = Path(scorer_input.ligand_file)
+        # single ligand file path, directory
+        # TODO: or some concatenated list of paths with some separator
+        ligand_file_path = [Path(scorer_input.ligand_file)]
 
         if receptor_file is not None and not receptor_file.exists():
             if (
@@ -128,20 +138,22 @@ def write_scores_as_json(
             else:
                 assert reference_system.receptor_cif is not None
                 receptor_file = Path(reference_system.receptor_cif)
-        else:
+
+        elif receptor_file is None:
+            LOG.warning(
+                "No receptor file provided, using reference receptor (RIGID REDOCKING!!)"
+            )
             receptor_file = Path(reference_system.receptor_cif)
-        if ligand_file is not None and not ligand_file.exists():
-            if predictions_dir is not None and (predictions_dir / ligand_file).exists():
-                ligand_file = predictions_dir / ligand_file
+        elif not receptor_file.exists():
+            raise FileNotFoundError(f"Receptor file {receptor_file} could not be found")
+
         assert receptor_file is not None
-        assert ligand_file is not None
+        assert ligand_file_path is not None
         scores = evaluate(
             scorer_input.id,
             scorer_input.reference_system_id,
             receptor_file,
-            [
-                ligand_file,
-            ],  # TODO: change to accept multi-ligand prediction input
+            ligand_file_path,
             predictions_dir,
             flexible,
             posebusters,
@@ -227,8 +239,20 @@ def score_test_set(
                     LOG.error(
                         f"score_test_set: Error loading scores file {json_file}: {e}"
                     )
-                s["rank"] = json_file.stem
-                scores.append(s)
+                for ligand_chain_name, ligand_scores in s.items():
+                    if isinstance(ligand_scores, dict):
+                        scores_dict = {
+                            "chain": ligand_chain_name,
+                            "rank": json_file.stem,
+                        }
+                        scores_dict.update(
+                            {
+                                k: v
+                                for k, v in ligand_scores.items()
+                                if k != "ligand_scores"
+                            }
+                        )
+                        scores.append(scores_dict)
     pd.DataFrame(scores).to_parquet(output_file, index=False)
 
 
