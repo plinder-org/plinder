@@ -69,7 +69,12 @@ jobs:
         run: python flows/docker.py build
       - name: Run test image
         if: steps.changed-base.outputs.any_changed == 'true' || steps.changed-src.outputs.any_changed == 'true'
-        run: python flows/docker.py test
+        run: |
+          python flows/docker.py test
+          if ! test -f reports/.coverage; then
+            # test failed
+            exit 1
+          fi
       - name: Copy and surgery coverage
         if: steps.changed-base.outputs.any_changed == 'true' || steps.changed-src.outputs.any_changed == 'true'
         run: |
