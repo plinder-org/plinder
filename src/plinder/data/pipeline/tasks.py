@@ -407,7 +407,7 @@ def structure_qc(
                             entry_json, clear_non_pocket_residues=True
                         )
                     except Exception as e:
-                        LOG.warn(f"failed loading {entry_json}")
+                        LOG.warning(f"failed loading {entry_json}")
                         clean = str(e).replace(",", "_").replace("\n", " ")[:50]
                         fails.write(f"{entry_json},{clean}")
                         continue
@@ -422,7 +422,7 @@ def structure_qc(
                         ):
                             structure_qc.extend(run_structure_checks(system_dict))
                     except Exception as e:
-                        LOG.warn(f"failed structure checks for {entry_json}")
+                        LOG.warning(f"failed structure checks for {entry_json}")
                         fails.write(f"{entry_json},{str(e).replace(',', '_')}\n")
                         continue
                 if len(entry_dfs) and len(structure_qc):
