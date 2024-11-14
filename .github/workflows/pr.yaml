@@ -72,7 +72,7 @@ jobs:
         run: |
           python flows/docker.py test
           if ! test -f reports/.coverage; then
-            echo "Not all tests have passed?"
+            echo "Missing test coverage reports (reports/.coverage). Not all tests have passed?"
             exit 1
           else
             echo "Test coverage report found!"
