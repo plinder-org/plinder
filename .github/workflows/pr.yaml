@@ -71,9 +71,12 @@ jobs:
         if: steps.changed-base.outputs.any_changed == 'true' || steps.changed-src.outputs.any_changed == 'true'
         run: |
           python flows/docker.py test
-          if ! test -f reports/.coverage; then
-            # test failed
+          # if ! test -f reports/.coverage; then
+          if test -f reports/.coverage; then
+            echo "Test failed!"
             exit 1
+          else
+            echo "Test coverage report found!"
           fi
       - name: Copy and surgery coverage
         if: steps.changed-base.outputs.any_changed == 'true' || steps.changed-src.outputs.any_changed == 'true'
