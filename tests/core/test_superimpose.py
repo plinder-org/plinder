@@ -1,5 +1,5 @@
-from plinder.core.index import PlinderSystem
-from plinder.core.structure.structure import Structure
+# from plinder.core.index import PlinderSystem
+# from plinder.core.structure.structure import Structure
 
 
 def test_superimpose_chain(read_plinder_mount):
