@@ -16,6 +16,7 @@ from numpy.typing import NDArray
 from rdkit import Chem
 from rdkit.Chem import AllChem, Mol, rdDepictor, rdMolDescriptors, rdRascalMCES
 
+from plinder.core.structure.smallmols_utils import params_removeHs
 from plinder.core.structure.vendored import (
     _convert_resn_to_sequence_and_numbering,
     _get_structure_and_res_info,
@@ -170,20 +171,6 @@ def generate_input_conformer(
         _mol = params_removeHs(_mol)
 
     return _mol
-
-
-def params_removeHs(mol: Chem.Mol) -> Chem.Mol:
-    params = Chem.rdmolops.RemoveHsParameters()
-    params.removeIsotopes = True
-    params.removeDegreeZero = True
-    params.removeHigherDegrees = True
-    params.removeOnlyHNeighbors = True
-    params.removeDummyNeighbors = True
-    params.removeNontetrahedralNeighbors = True
-    params.removeDefiningBondStereo = True
-    params.removeWithWedgedBond = True
-    params.showWarnings = True
-    return Chem.rdmolops.RemoveHs(mol, params, sanitize=False)
 
 
 def match_ligands(

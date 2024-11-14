@@ -18,7 +18,7 @@ import pandas as pd
 from omegaconf import DictConfig
 
 from plinder.core.scores import query_clusters
-from plinder.core.structure import smallmols
+from plinder.core.structure import smallmols_similarity
 from plinder.core.utils import schemas
 from plinder.core.utils.log import setup_logger
 from plinder.core.utils.unpack import expand_config_context
@@ -225,7 +225,7 @@ def save_ligand_batch(
 ) -> None:
     dfs = []
     for entry in entries.values():
-        df = smallmols.load_ligands_from_entry(entry=entry)
+        df = smallmols_similarity.load_ligands_from_entry(entry=entry)
         if df is not None:
             dfs.append(df)
     LOG.info(f"save_ligand_batch: {len(dfs)} entries have usable ligands")

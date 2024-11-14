@@ -16,7 +16,7 @@ import pandas as pd
 from omegaconf import DictConfig
 from tqdm import tqdm
 
-from plinder.core.structure import smallmols
+from plinder.core.structure import smallmols_similarity
 from plinder.core.utils import gcs
 from plinder.core.utils.log import setup_logger
 from plinder.data import clusters, databases, leakage, splits
@@ -577,7 +577,7 @@ def compute_ligand_fingerprints(
     #  data_dir / "fingerprints" / ligands_per_system.parquet
     #  data_dir / "fingerprints"  / ligands_per_inchikey.parquet
     #  data_dir / "fingerprints" /ligands_per_inchikey_ecfp4.npy
-    smallmols.compute_ligand_fingerprints(
+    smallmols_similarity.compute_ligand_fingerprints(
         data_dir=data_dir,
         split_char=split_char,
         radius=radius,
@@ -613,7 +613,7 @@ def make_ligand_scores(
     hashid = utils.hash_contents([str(i) for i in ligand_ids])
     output_path = data_dir / "ligand_scores" / f"{hashid}.parquet"
     output_path.parent.mkdir(exist_ok=True, parents=True)
-    smallmols.ligand_scores(
+    smallmols_similarity.ligand_scores(
         ligand_ids=ligand_ids,
         data_dir=data_dir,
         output_path=output_path,
