@@ -27,7 +27,7 @@ def evaluate(
     flexible: bool = False,
     posebusters: bool = False,
     posebusters_full: bool = False,
-) -> dict[str, Any]:
+) -> dict[str, dict[str, Any]]:
     """
     Evaluate a single receptor - ligand pair
 
@@ -138,6 +138,7 @@ def write_scores_as_json(
             else:
                 assert reference_system.receptor_cif is not None
                 receptor_file = Path(reference_system.receptor_cif)
+
         elif receptor_file is None:
             LOG.warning(
                 "No receptor file provided, using reference receptor (RIGID REDOCKING!!)"
@@ -238,8 +239,20 @@ def score_test_set(
                     LOG.error(
                         f"score_test_set: Error loading scores file {json_file}: {e}"
                     )
-                s["rank"] = json_file.stem
-                scores.append({k: v for k, v in s.items() if k != "ligand_scores"})
+                for ligand_chain_name, ligand_scores in s.items():
+                    if isinstance(ligand_scores, dict):
+                        scores_dict = {
+                            "chain": ligand_chain_name,
+                            "rank": json_file.stem,
+                        }
+                        scores_dict.update(
+                            {
+                                k: v
+                                for k, v in ligand_scores.items()
+                                if k != "ligand_scores"
+                            }
+                        )
+                        scores.append(scores_dict)
     pd.DataFrame(scores).to_parquet(output_file, index=False)
 
 

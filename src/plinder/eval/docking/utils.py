@@ -2,6 +2,7 @@
 # Distributed under the terms of the Apache License 2.0
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -85,10 +86,17 @@ class ComplexData:
         else:
             entity = io.LoadPDB(receptor_file.as_posix(), fault_tolerant=True)
 
-        ligand_views = [
-            io.LoadEntity(str(ligand_sdf_file), format="sdf").Select("ele != H")
-            for ligand_sdf_file in ligand_files
-        ]
+        ligand_views = []
+        for i, ligand_file in enumerate(ligand_files):
+            ligand_entity = io.LoadEntity(str(ligand_file), format="sdf")
+
+            # rename ligand chain to have different chain names for each ligand
+            # this is necessary for ost to not complain about duplicate chain names
+            editor = ligand_entity.EditXCS()
+            editor.RenameChain(list(ligand_entity.chains)[0], f"LIG_{i}")
+            ligand_entity = ligand_entity.Select("ele != H")
+            ligand_views.append(ligand_entity)
+
         return cls(
             name=name,
             receptor_file=receptor_file,
@@ -420,7 +428,9 @@ class ModelScores:
                     avg_scores[f"posebusters_{key}"] = None
         return avg_scores
 
-    def summarize_scores(self) -> dict[str, Any]:
+    def summarize_scores(self) -> dict[str, dict[str, Any]]:
+        if self.ligand_scores is None:
+            return {}
         scores: dict[str, Any] = dict(
             model=self.model.name,
             reference=self.reference.name,
@@ -433,21 +443,7 @@ class ModelScores:
             fraction_model_ligands_mapped=self.num_mapped_model_ligands
             / self.model.num_ligands,
         )
-        score_list = ["lddt_pli", "lddt_lp", "bisy_rmsd"]
-        for score_name in score_list:
-            (
-                scores[f"{score_name}_ave"],
-                scores[f"{score_name}_wave"],
-            ) = self.get_average_ligand_scores(score_name)
-        if self.score_posebusters:
-            scores.update(self.get_average_posebusters())
         if self.score_protein and self.protein_scores is not None:
-            scores["fraction_reference_proteins_mapped"] = (
-                self.num_mapped_reference_proteins / self.reference.num_proteins
-            )
-            scores["fraction_model_proteins_mapped"] = (
-                self.num_mapped_proteins / self.model.num_proteins
-            )
             scores["lddt"] = self.protein_scores.lddt
             scores["bb_lddt"] = self.protein_scores.bb_lddt
             per_chain_lddt = list(self.protein_scores.per_chain_lddt.values())
@@ -456,4 +452,21 @@ class ModelScores:
             scores["per_chain_bb_lddt_ave"] = np.mean(per_chain_bb_lddt)
             if self.protein_scores.score_oligo:
                 scores.update(self.protein_scores.oligomer_scores)
-        return scores
+        # aggregated shared_scores to add
+        score_list = ["lddt_pli", "lddt_lp", "bisy_rmsd"]
+        for score_name in score_list:
+            (
+                scores[f"{score_name}_ave"],
+                scores[f"{score_name}_wave"],
+            ) = self.get_average_ligand_scores(score_name)
+        if self.score_posebusters:
+            scores.update(self.get_average_posebusters())
+        # individual ligand scores
+        per_lig_scores: dict[str, dict[str, Any]] = {}
+        for ligand_score in self.ligand_scores:
+            per_lig_scores[ligand_score.chain] = copy.deepcopy(scores)
+            for score_name in score_list:
+                per_lig_scores[ligand_score.chain][score_name] = ligand_score.scores[
+                    score_name
+                ]
+        return per_lig_scores
