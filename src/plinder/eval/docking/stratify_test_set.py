@@ -13,7 +13,7 @@ from tqdm import tqdm
 import plinder.core.utils.config
 from plinder.core.scores.index import query_index
 from plinder.core.scores.protein import cross_similarity as protein_cross_similarity
-from plinder.core.structure import smallmols
+from plinder.core.structure import smallmols_similarity
 from plinder.core.utils.log import setup_logger
 
 cfg = plinder.core.get_config()
@@ -72,14 +72,14 @@ def compute_ligand_max_similarities(
 ) -> None:
     if "fp" not in df.columns:
         smiles_fp_dict = {
-            smi: smallmols.mol2morgan_fp(smi)
+            smi: smallmols_similarity.mol2morgan_fp(smi)
             for smi in df["ligand_rdkit_canonical_smiles"].drop_duplicates().to_list()
         }
         df["fp"] = df["ligand_rdkit_canonical_smiles"].map(smiles_fp_dict)
 
     df_test = df.loc[df[split_label] == test_label][["system_id", "fp"]].copy()
 
-    df_test["tanimoto_similarity_max"] = smallmols.tanimoto_maxsim_matrix(
+    df_test["tanimoto_similarity_max"] = smallmols_similarity.tanimoto_maxsim_matrix(
         df.loc[df[split_label] == train_label]["fp"].to_list(),
         df_test["fp"].to_list(),
     )

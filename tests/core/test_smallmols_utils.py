@@ -4,7 +4,7 @@ from rdkit import Chem
 
 
 def test_valence_issue_handling():
-    from plinder.data.utils.annotations.rdkit_utils import fix_valency_issues
+    from plinder.core.structure.smallmols_utils import fix_valency_issues
 
     # AtomValenceException
     mol = Chem.MolFromSmiles("CC(=O)OCCN(C)(C)C", sanitize=False)
@@ -20,7 +20,7 @@ def test_valence_issue_handling():
 
 
 def test_matched_templates():
-    from plinder.data.utils.annotations.rdkit_utils import (
+    from plinder.core.structure.smallmols_utils import (
         get_matched_template_v2,
         mol_assigned_bond_orders_by_template,
     )
