@@ -7,13 +7,13 @@ import numpy as np
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
-from rdkit import Chem
-from rdkit.Chem import AllChem
+from rdkit import Chem, DataStructs
+from rdkit.Chem import AllChem, rdFingerprintGenerator
+from rdkit.Chem.rdchem import Mol
 from scipy.spatial.distance import cdist
 
 from plinder.core.utils import schemas
 from plinder.core.utils.log import setup_logger
-from plinder.data import smallmolecules
 
 if TYPE_CHECKING:
     from plinder.data.utils.annotations.aggregate_annotations import Entry
@@ -28,6 +28,43 @@ def get_ecfp_fingerprint(
         mol = Chem.MolFromSmiles(smiles)
         fp = AllChem.GetMorganFingerprintAsBitVect(mol, radius, nBits=nbits)
         return np.array(fp)
+    except:
+        return None
+
+
+def mol2morgan_fp(
+    mol: Mol | str, radius: int = 2, nbits: int = 2048
+) -> DataStructs.ExplicitBitVect:
+    """Convert an RDKit molecule to a Morgan fingerprint
+    :param mol: RDKit molecule or SMILES str
+    :param radius: fingerprint radius
+    :param nbits: number of fingerprint bits
+    :return: RDKit Morgan fingerprint
+    """
+    if type(mol) == str:
+        mol = Chem.MolFromSmiles(mol)
+    mfpgen = rdFingerprintGenerator.GetMorganGenerator(radius=radius, fpSize=nbits)
+    fp = mfpgen.GetFingerprint(mol)
+    return fp
+
+
+def tanimoto_maxsim_matrix(
+    fp_list1: list[Any], fp_list2: list[Any]
+) -> np.ndarray[float]:
+    """Calculate maximum similarity for the fingerprint second list to the first fingerprint lists"""
+    similarity_matrix = [
+        np.max(DataStructs.BulkTanimotoSimilarity(fp, fp_list1)) for fp in fp_list2
+    ]
+    return np.array(similarity_matrix) * 100
+
+
+def smil2inchikey(smiles: str, remove_stereo: bool = False) -> Optional[str]:
+    try:
+        mol = Chem.MolFromSmiles(smiles)
+        if remove_stereo:
+            Chem.RemoveStereochemistry(mol)
+        inchikey = Chem.MolToInchiKey(mol)
+        return str(inchikey)
     except:
         return None
 
@@ -91,9 +128,7 @@ def load_ligands_from_entry(
     )
     LOG.info(f"after deduplication {len(df.index)} entries")
     # aggregate multiple ligands into one:
-    df["inchikeys"] = df["ligand_rdkit_canonical_smiles"].map(
-        smallmolecules.smil2inchikey
-    )
+    df["inchikeys"] = df["ligand_rdkit_canonical_smiles"].apply(smil2inchikey)
     return df
 
 
