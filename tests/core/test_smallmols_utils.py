@@ -1,5 +1,6 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
+import pytest
 from rdkit import Chem
 
 
@@ -32,3 +33,25 @@ def test_matched_templates():
     fixed_mol_SMILES = Chem.CanonSmiles(Chem.MolToSmiles(fixed_mol))
     assert fixed_mol_SMILES.count("=") >= 2
     assert fixed_mol_SMILES == "C=CC(=O)OC.CC(F)(Cl)Br.CNCc1ccccc1"
+
+
+@pytest.mark.parametrize(
+    ["smiles", "inchikey", "remove_stereo"],
+    [
+        ["CC/C=C/Cl", "DUDKKPVINWLFBI-ONEGZZNKSA-N", False],
+        ["CC/C=C\\Cl", "DUDKKPVINWLFBI-ARJAWSKDSA-N", False],
+        ["CC/C=C/Cl", "DUDKKPVINWLFBI-UHFFFAOYSA-N", True],
+        ["CC/C=C\\Cl", "DUDKKPVINWLFBI-UHFFFAOYSA-N", True],
+        ["CCC=CCl", "DUDKKPVINWLFBI-UHFFFAOYSA-N", False],
+        ["CCC=CCl", "DUDKKPVINWLFBI-UHFFFAOYSA-N", True],
+        ["C[C@@](F)(Cl)CBr", "REKDFINPOZVXJS-VKHMYHEASA-N", False],
+        ["C[C@](F)(Cl)CBr", "REKDFINPOZVXJS-GSVOUGTGSA-N", False],
+        ["C[C@](F)(Cl)CBr", "REKDFINPOZVXJS-UHFFFAOYSA-N", True],
+        ["C[C@@](F)(Cl)CBr", "REKDFINPOZVXJS-UHFFFAOYSA-N", True],
+        ["CC(F)(Cl)CBr", "REKDFINPOZVXJS-UHFFFAOYSA-N", True],
+    ],
+)
+def test_inchikey(smiles, inchikey, remove_stereo):
+    from plinder.core.structure.smallmols_similarity import smiles2inchikey
+
+    assert inchikey == smiles2inchikey(smiles, remove_stereo=remove_stereo)
