@@ -65,13 +65,20 @@ jobs:
         if: steps.changed-src.outputs.any_changed == 'true' && steps.changed-base.outputs.any_changed != 'true'
         run: python flows/docker.py pull
       - name: Build image
-        if: steps.changed-src.outputs.any_changed == 'true'
+        if: steps.changed-base.outputs.any_changed == 'true' || steps.changed-src.outputs.any_changed == 'true'
         run: python flows/docker.py build
       - name: Run test image
-        if: steps.changed-src.outputs.any_changed == 'true'
-        run: python flows/docker.py test
+        if: steps.changed-base.outputs.any_changed == 'true' || steps.changed-src.outputs.any_changed == 'true'
+        run: |
+          python flows/docker.py test
+          if ! test -f reports/.coverage; then
+            echo "Missing test coverage reports (reports/.coverage). Not all tests have passed?"
+            exit 1
+          else
+            echo "Test coverage report found!"
+          fi
       - name: Copy and surgery coverage
-        if: steps.changed-src.outputs.any_changed == 'true'
+        if: steps.changed-base.outputs.any_changed == 'true' || steps.changed-src.outputs.any_changed == 'true'
         run: |
           cp reports/.coverage .
           sqlite3 .coverage "update file set path='src/' || substr(path, 40);"

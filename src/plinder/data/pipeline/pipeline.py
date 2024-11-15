@@ -17,8 +17,7 @@ class IngestPipeline:
         - scatter
         - compute
         - join
-    by convention in method names. This could be
-    enforced with a metaclass construct but not enough time.
+    by convention in method names.
 
     scatter methods return lists of lists of primitives
     compute methods may return something if intended to be joined

@@ -19,7 +19,7 @@ async-timeout==4.0.3      # via aiohttp
 attrs==24.2.0             # via aiohttp, jsonschema, pytest, referencing
 babel==2.16.0             # via jupyterlab-server
 beautifulsoup4==4.12.3    # via nbconvert
-biotite==0.39.0           # via plinder (pyproject.toml)
+biotite==1.0.1            # via plinder (pyproject.toml)
 bleach==6.1.0             # via nbconvert
 build==0.9.0              # via plinder (pyproject.toml)
 cachetools==5.5.0         # via google-auth, tox

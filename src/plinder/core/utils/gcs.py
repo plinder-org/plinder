@@ -72,7 +72,7 @@ def download_as_str(
 ) -> str:
     assert bucket is not None
     blob = bucket.blob("/".join(Path(gcs_path).parts[2:]))
-    return str(blob.download_as_string().decode("utf8"))
+    return str(blob.download_as_bytes().decode("utf8"))
 
 
 @retry
