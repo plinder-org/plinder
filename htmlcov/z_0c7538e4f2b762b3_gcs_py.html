@@ -67,7 +67,7 @@
             <a id="nextFileLink" class="nav" href="z_0c7538e4f2b762b3_io_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.6.4">coverage.py v7.6.4</a>,
-            created at 2024-11-14 09:41 +0000
+            created at 2024-11-15 15:13 +0000
         </p>
         <aside class="hidden">
             <button type="button" class="button_next_chunk" data-shortcut="j"></button>
@@ -156,7 +156,7 @@
     <p class="pln"><span class="n"><a id="t72" href="#t72">72</a></span><span class="t"><span class="op">)</span> <span class="op">-></span> <span class="nam">str</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t73" href="#t73">73</a></span><span class="t">    <span class="key">assert</span> <span class="nam">bucket</span> <span class="key">is</span> <span class="key">not</span> <span class="key">None</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t74" href="#t74">74</a></span><span class="t">    <span class="nam">blob</span> <span class="op">=</span> <span class="nam">bucket</span><span class="op">.</span><span class="nam">blob</span><span class="op">(</span><span class="str">"/"</span><span class="op">.</span><span class="nam">join</span><span class="op">(</span><span class="nam">Path</span><span class="op">(</span><span class="nam">gcs_path</span><span class="op">)</span><span class="op">.</span><span class="nam">parts</span><span class="op">[</span><span class="num">2</span><span class="op">:</span><span class="op">]</span><span class="op">)</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
-    <p class="run"><span class="n"><a id="t75" href="#t75">75</a></span><span class="t">    <span class="key">return</span> <span class="nam">str</span><span class="op">(</span><span class="nam">blob</span><span class="op">.</span><span class="nam">download_as_string</span><span class="op">(</span><span class="op">)</span><span class="op">.</span><span class="nam">decode</span><span class="op">(</span><span class="str">"utf8"</span><span class="op">)</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t75" href="#t75">75</a></span><span class="t">    <span class="key">return</span> <span class="nam">str</span><span class="op">(</span><span class="nam">blob</span><span class="op">.</span><span class="nam">download_as_bytes</span><span class="op">(</span><span class="op">)</span><span class="op">.</span><span class="nam">decode</span><span class="op">(</span><span class="str">"utf8"</span><span class="op">)</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t76" href="#t76">76</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t77" href="#t77">77</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t78" href="#t78">78</a></span><span class="t"><span class="op">@</span><span class="nam">retry</span>&nbsp;</span><span class="r"></span></p>
@@ -259,7 +259,7 @@
             <a class="nav" href="z_0c7538e4f2b762b3_io_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.6.4">coverage.py v7.6.4</a>,
-            created at 2024-11-14 09:41 +0000
+            created at 2024-11-15 15:13 +0000
         </p>
     </div>
 </footer>
