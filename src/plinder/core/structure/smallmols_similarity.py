@@ -10,6 +10,7 @@ import pyarrow.parquet as pq
 from rdkit import Chem, DataStructs
 from rdkit.Chem import AllChem, rdFingerprintGenerator
 from rdkit.Chem.rdchem import Mol
+from rdkit.rdBase import BlockLogs
 from scipy.spatial.distance import cdist
 
 from plinder.core.utils import schemas
@@ -58,15 +59,19 @@ def tanimoto_maxsim_matrix(
     return np.array(similarity_matrix) * 100
 
 
-def smil2inchikey(smiles: str, remove_stereo: bool = False) -> Optional[str]:
-    try:
-        mol = Chem.MolFromSmiles(smiles)
-        if remove_stereo:
-            Chem.RemoveStereochemistry(mol)
+def smiles2inchikey(smiles: str, remove_stereo: bool = False) -> str:
+    """
+    Gets inchikey. In case it fails, returns standardized smiles instead of as a unique specifier string.
+    Optional to remove stereo (default: False)
+    """
+    mol = Chem.MolFromSmiles(smiles)
+    if remove_stereo:
+        Chem.RemoveStereochemistry(mol)
+    with BlockLogs():
         inchikey = Chem.MolToInchiKey(mol)
-        return str(inchikey)
-    except:
-        return None
+    if not inchikey:
+        inchikey = Chem.CanonSmiles(Chem.MolToSmiles(mol), useChiral=not remove_stereo)
+    return str(inchikey)
 
 
 def load_ligands_from_entry(
@@ -128,7 +133,7 @@ def load_ligands_from_entry(
     )
     LOG.info(f"after deduplication {len(df.index)} entries")
     # aggregate multiple ligands into one:
-    df["inchikeys"] = df["ligand_rdkit_canonical_smiles"].apply(smil2inchikey)
+    df["inchikeys"] = df["ligand_rdkit_canonical_smiles"].apply(smiles2inchikey)
     return df
 
 

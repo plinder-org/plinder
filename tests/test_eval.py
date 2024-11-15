@@ -44,7 +44,7 @@ def mock_cpl_eval(read_plinder_eval_mount, monkeypatch):
         lambda **kws: None,
     )
     monkeypatch.setattr(
-        "plinder.eval.docking.stratify_test_set.smallmols.tanimoto_maxsim_matrix",
+        "plinder.eval.docking.stratify_test_set.smallmols_similarity.tanimoto_maxsim_matrix",
         mock_tanimoto,
     )
 
