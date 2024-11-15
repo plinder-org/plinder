@@ -20,7 +20,7 @@ from plinder.core import index
     ],
 )
 def test_plinder_system(system_id, read_plinder_mount):
-    index.PlinderSystem(system_id=system_id)
+    index.PlinderSystem(system_id=system_id).system
 
 
 @pytest.mark.parametrize(
