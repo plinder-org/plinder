@@ -29,9 +29,12 @@ def mock_path_eval(
 
 
 def mock_tanimoto_and_argmax(x, y):
-    return np.random.rand(len(y)), np.random.choice(
-        np.arange(np.max(1, len(x))), size=len(y)
-    )
+    max_sim = np.random.rand(len(y))
+    if len(x):
+        argmaxs = np.random.choice(np.arange(len(x)), size=len(y))
+    else:
+        argmaxs = []
+    return max_sim, argmaxs
 
 
 def mock_mmp_sim_dict(mmp_file_path):
