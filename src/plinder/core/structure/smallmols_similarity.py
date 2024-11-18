@@ -8,11 +8,12 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 from rdkit import Chem, DataStructs
-from rdkit.Chem import AllChem, rdFingerprintGenerator
+from rdkit.Chem import AllChem, rdFingerprintGenerator, rdRascalMCES
 from rdkit.Chem.rdchem import Mol
 from rdkit.rdBase import BlockLogs
 from scipy.spatial.distance import cdist
 
+from plinder.core.structure.smallmols_utils import uncharge_mol
 from plinder.core.utils import schemas
 from plinder.core.utils.log import setup_logger
 
@@ -20,6 +21,23 @@ if TYPE_CHECKING:
     from plinder.data.utils.annotations.aggregate_annotations import Entry
 
 LOG = setup_logger(__name__)
+
+
+def smiles2inchikey(smiles: str, remove_stereo: bool = False) -> str:
+    """
+    Gets inchikey. In case it fails, returns standardized smiles instead of as a unique specifier string.
+    Optional to remove stereo (default: False)
+    """
+    mol = Chem.MolFromSmiles(smiles)
+    with BlockLogs():
+        # TODO: this might be unnecesarry if done before
+        mol = uncharge_mol(mol)
+        if remove_stereo:
+            Chem.RemoveStereochemistry(mol)
+        inchikey = Chem.MolToInchiKey(mol)
+    if not inchikey:
+        inchikey = Chem.CanonSmiles(Chem.MolToSmiles(mol), useChiral=not remove_stereo)
+    return str(inchikey)
 
 
 def get_ecfp_fingerprint(
@@ -49,29 +67,86 @@ def mol2morgan_fp(
     return fp
 
 
-def tanimoto_maxsim_matrix(
-    fp_list1: list[Any], fp_list2: list[Any]
-) -> np.ndarray[float]:
+# def tanimoto_maxsim_matrix(
+#     fp_list1: list[Any], fp_list2: list[Any]
+# ) -> np.ndarray[float]:
+#     """Calculate maximum similarity for the fingerprints in the second list to the first lists"""
+#     similarity_matrix = [
+#         np.max(DataStructs.BulkTanimotoSimilarity(fp, fp_list1)) for fp in fp_list2
+#     ]
+#     return np.array(similarity_matrix) * 100
+
+
+def tanimoto_maxsim_and_argmax(
+    long_list: list[Any], test_list: list[Any]
+) -> tuple[np.ndarray[float], np.ndarray[int]]:
     """Calculate maximum similarity for the fingerprint second list to the first fingerprint lists"""
     similarity_matrix = [
-        np.max(DataStructs.BulkTanimotoSimilarity(fp, fp_list1)) for fp in fp_list2
+        DataStructs.BulkTanimotoSimilarity(fp, long_list) for fp in test_list
     ]
-    return np.array(similarity_matrix) * 100
+    return np.max(similarity_matrix, axis=1) * 100, np.argmax(similarity_matrix, axis=1)
 
 
-def smiles2inchikey(smiles: str, remove_stereo: bool = False) -> str:
-    """
-    Gets inchikey. In case it fails, returns standardized smiles instead of as a unique specifier string.
-    Optional to remove stereo (default: False)
-    """
-    mol = Chem.MolFromSmiles(smiles)
-    if remove_stereo:
-        Chem.RemoveStereochemistry(mol)
-    with BlockLogs():
-        inchikey = Chem.MolToInchiKey(mol)
-    if not inchikey:
-        inchikey = Chem.CanonSmiles(Chem.MolToSmiles(mol), useChiral=not remove_stereo)
-    return str(inchikey)
+def get_mmp_similarity_dict(
+    mmp_path: Path, min_constant_size: int = 5
+) -> dict[str, dict[str, float]]:
+    mmp_df = pd.read_csv(
+        mmp_path,
+        sep="\t",
+        compression="gzip",
+        names=["SMILES1", "SMILES2", "id1", "id2", "V1>>V2", "CONSTANT"],
+    )
+
+    const_size_map = {
+        smarts: Chem.MolFromSmarts(smarts).GetNumHeavyAtoms()
+        for smarts in mmp_df.CONSTANT.drop_duplicates()
+    }
+    mmp_df["const_size"] = mmp_df.CONSTANT.map(const_size_map)
+    mmp_df = mmp_df[mmp_df["const_size"] >= min_constant_size]
+
+    # remove stereo as we only care for the graph here - proxy for common edge subgraphs
+    smiles_inchikey_map = {
+        smi: smiles2inchikey(smi, remove_stereo=True)
+        for smi in set(mmp_df.SMILES1.to_list() + mmp_df.SMILES2.to_list())
+    }
+    mmp_df["inchikey1"] = mmp_df.SMILES1.map(smiles_inchikey_map)
+    mmp_df["inchikey2"] = mmp_df.SMILES2.map(smiles_inchikey_map)
+
+    smiles_size_map = {
+        smi: Chem.MolFromSmiles(smi).GetNumHeavyAtoms()
+        for smi in set(mmp_df.SMILES1.to_list() + mmp_df.SMILES2.to_list())
+    }
+    mmp_df["SMILES1_size"] = mmp_df.SMILES1.map(smiles_size_map)
+    mmp_df["SMILES2_size"] = mmp_df.SMILES2.map(smiles_size_map)
+
+    # calculate similarities
+    mmp_df["sim_1_to_2"] = mmp_df["const_size"] / mmp_df["SMILES1_size"]
+    mmp_df["sim_2_to_1"] = mmp_df["const_size"] / mmp_df["SMILES2_size"]
+
+    mmp_sim_dict: dict[str, dict[str, float]] = {}
+    for inchik1, inchik2, sim12, sim21 in mmp_df[
+        ["inchikey1", "inchikey2", "sim_1_to_2", "sim_2_to_1"]
+    ].values:
+        if inchik1 not in mmp_sim_dict.keys():
+            mmp_sim_dict[inchik1] = {}
+        if inchik2 not in mmp_sim_dict.keys():
+            mmp_sim_dict[inchik2] = {}
+        mmp_sim_dict[inchik1][inchik2] = sim12 * 100
+        mmp_sim_dict[inchik2][inchik1] = sim21 * 100
+    return mmp_sim_dict
+
+
+def rdRascalMCES_similarity(mol1: Mol, mol2: Mol, sim_threshold: float = 0.4) -> float:
+    rascal_opts = rdRascalMCES.RascalOptions()
+    rascal_opts.allBestMCESs = False
+    rascal_opts.returnEmptyMCES = True
+    rascal_opts.completeAromaticRings = False
+    rascal_opts.ringMatchesRingOnly = False
+    rascal_opts.maxBondMatchPairs = 1000
+    rascal_opts.timeout = 2
+    rascal_opts.similarityThreshold = sim_threshold
+    res = rdRascalMCES.FindMCES(mol1, mol2, rascal_opts)
+    return float(res[0].tier2Sim) if res else 0.0
 
 
 def load_ligands_from_entry(

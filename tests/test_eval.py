@@ -29,7 +29,7 @@ def mock_path_eval(
 
 
 def mock_tanimoto(x, y):
-    return np.random.rand(max(len(x), len(y)))
+    return np.random.rand(len(y)), np.random.choice(np.arange(len(x)), size=len(y))
 
 
 @pytest.fixture
@@ -44,7 +44,7 @@ def mock_cpl_eval(read_plinder_eval_mount, monkeypatch):
         lambda **kws: None,
     )
     monkeypatch.setattr(
-        "plinder.eval.docking.stratify_test_set.smallmols_similarity.tanimoto_maxsim_matrix",
+        "plinder.eval.docking.stratify_test_set.smallmols_similarity.tanimoto_maxsim_and_argmax",
         mock_tanimoto,
     )
 
