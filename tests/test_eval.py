@@ -28,10 +28,15 @@ def mock_path_eval(
     return obj / rel if rel else obj
 
 
-def mock_tanimoto(x, y):
+def mock_tanimoto_and_argmax(x, y):
     return np.random.rand(len(y)), np.random.choice(
         np.arange(np.max(1, len(x))), size=len(y)
     )
+
+
+def mock_mmp_sim_dict(mmp_file_path):
+    mmp_sim_dict: dict[str, dict[str, float]] = {}
+    return mmp_sim_dict
 
 
 @pytest.fixture
@@ -47,7 +52,11 @@ def mock_cpl_eval(read_plinder_eval_mount, monkeypatch):
     )
     monkeypatch.setattr(
         "plinder.eval.docking.stratify_test_set.smallmols_similarity.tanimoto_maxsim_and_argmax",
-        mock_tanimoto,
+        mock_tanimoto_and_argmax,
+    )
+    monkeypatch.setattr(
+        "plinder.eval.docking.stratify_test_set.smallmols_similarity.get_mmp_similarity_dict",
+        mock_mmp_sim_dict,
     )
 
 

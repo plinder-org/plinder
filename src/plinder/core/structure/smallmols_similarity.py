@@ -67,16 +67,6 @@ def mol2morgan_fp(
     return fp
 
 
-# def tanimoto_maxsim_matrix(
-#     fp_list1: list[Any], fp_list2: list[Any]
-# ) -> np.ndarray[float]:
-#     """Calculate maximum similarity for the fingerprints in the second list to the first lists"""
-#     similarity_matrix = [
-#         np.max(DataStructs.BulkTanimotoSimilarity(fp, fp_list1)) for fp in fp_list2
-#     ]
-#     return np.array(similarity_matrix) * 100
-
-
 def tanimoto_maxsim_and_argmax(
     long_list: list[Any], test_list: list[Any]
 ) -> tuple[np.ndarray[float], np.ndarray[int]]:
