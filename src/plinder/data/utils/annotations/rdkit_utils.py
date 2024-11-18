@@ -15,6 +15,7 @@ from plinder.core.structure.smallmols_utils import (
     make_rdkit_compatible_mol,
     mol_assigned_bond_orders_by_template,
     params_removeHs,
+    uncharge_mol,
 )
 from plinder.core.utils.constants import BASE_DIR
 from plinder.core.utils.log import setup_logger
@@ -100,6 +101,8 @@ def ligand_ost_ent_to_rdkit_mol(
     try:
         # Fix issues if any
         rdkit_mol = make_rdkit_compatible_mol(rdkit_mol)
+        # run uncharger - for consistent protonation
+        rdkit_mol = uncharge_mol(rdkit_mol)
         if rdkit_mol is None:
             raise ValueError("make_rdkit_compatible_mol: returned None")
         elif len(Chem.MolToSmiles(rdkit_mol).split(".")) > 1:
@@ -125,6 +128,8 @@ def set_smiles_from_ligand_ost(ent: omol.EntityHandle) -> str:
             try:
                 rdkit_mol = Chem.MolFromSmiles(str(mol.smiles), sanitize=False)
                 rdkit_mol = make_rdkit_compatible_mol(rdkit_mol)
+                # run uncharger - for consistent protonation
+                rdkit_mol = uncharge_mol(rdkit_mol)
                 return str(Chem.MolToSmiles(rdkit_mol))
             except Exception:
                 LOG.warning(
@@ -159,7 +164,7 @@ def set_smiles_from_ligand_ost_v2(ent: omol.EntityHandle) -> tuple[str, str]:
         matched_template = get_matched_template_v2(template_mol, resolved_mol)
         matched_smiles = Chem.CanonSmiles(Chem.MolToSmiles(matched_template))
     else:
-        # when no reference - define this as a match and ground truth
         matched_smiles = Chem.CanonSmiles(str(Chem.MolToSmiles(resolved_mol)))
+        # when no reference - define this as a match and the ground truth
         input_smiles = matched_smiles
     return input_smiles, matched_smiles
