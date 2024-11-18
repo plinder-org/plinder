@@ -85,12 +85,12 @@ def compute_ligand_ecfp_max_similarities(
         df_test["tanimoto_similarity_max"],
         argmax_array,
     ) = smallmols_similarity.tanimoto_maxsim_and_argmax(
-        df.loc[df[split_label] == train_label]["fp"].to_list(),
+        df.loc[df[split_label] == train_label, "fp"].to_list(),
         df_test["fp"].to_list(),
     )
     # get most similar smiles in train
     train_smiles = df.loc[
-        df["split"] == train_label, "ligand_rdkit_canonical_smiles"
+        df[split_label] == train_label, "ligand_rdkit_canonical_smiles"
     ].to_list()
     df_test[f"tanimoto_most_similar_{train_label}_smiles"] = [
         train_smiles[idx] for idx in argmax_array
@@ -283,6 +283,7 @@ class StratifiedTestSet:
         for metric in tqdm(SIMILARITY_METRICS):
             if overwrite or not (self.get_filename(metric)).exists():
                 if metric in ["tanimoto_similarity_max", "mmp_similarity_max"]:
+                    # TODO: if both metrics - this step is repetitive!
                     df = query_index(
                         columns=[
                             "system_id",
