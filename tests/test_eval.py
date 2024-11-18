@@ -29,7 +29,9 @@ def mock_path_eval(
 
 
 def mock_tanimoto(x, y):
-    return np.random.rand(len(y)), np.random.choice(np.arange(len(x)), size=len(y))
+    return np.random.rand(len(y)), np.random.choice(
+        np.arange(np.max(1, len(x))), size=len(y)
+    )
 
 
 @pytest.fixture

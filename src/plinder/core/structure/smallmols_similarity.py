@@ -146,7 +146,7 @@ def rdRascalMCES_similarity(mol1: Mol, mol2: Mol, sim_threshold: float = 0.4) ->
     rascal_opts.timeout = 2
     rascal_opts.similarityThreshold = sim_threshold
     res = rdRascalMCES.FindMCES(mol1, mol2, rascal_opts)
-    return float(res[0].tier2Sim) if res else 0.0
+    return float(res[0].tier2Sim if res else 0)
 
 
 def load_ligands_from_entry(
