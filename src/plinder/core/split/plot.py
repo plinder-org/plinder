@@ -131,10 +131,10 @@ class SplitPropertiesPlotter:
         default_factory=lambda: {
             "system_id": "Systems",
             "entry_pdb_id": "PDB IDs",
-            "system_proper_ligand_unique_ccd_codes": "Ligand CCD codes",
-            "pli_unique_qcov__50__communities": "PLI communities",
-            "pocket_qcov__50__communities": "Pocket communities",
-            "tanimoto_similarity_max__50__communities": "Ligand communities",
+            "system_proper_unique_ccd_codes": "Ligand CCD codes",
+            "pli_unique_qcov__50__community": "PLI community",
+            "pocket_qcov__50__community": "Pocket community",
+            "tanimoto_similarity_max__50__community": "Ligand community",
         }
     )
 
@@ -206,9 +206,9 @@ class SplitPropertiesPlotter:
             self.output_dir / f"{split_name}.html",
             # rename columns for easier interpretation and formatting
             rename={
-                "pli_unique_qcov__50__communities": "PLI community ID",
-                "tanimoto_similarity_max__50__communities": "Ligand community ID",
-                "tanimoto_similarity_max__30__communities": "Ligand community ID",
+                "pli_unique_qcov__50__community": "PLI community ID",
+                "tanimoto_similarity_max__50__community": "Ligand community ID",
+                "tanimoto_similarity_max__30__community": "Ligand community ID",
                 "system_num_protein_chains": "Receptor chain count",
                 "system_proper_num_ligand_chains": "Ligand count",
             },
@@ -439,7 +439,7 @@ class SplitPropertiesPlotter:
             split_order = ["train", "val", "test", "removed"]
             percentages = percentages.reindex(split_order, level=0)
             unstacked = percentages.unstack().loc[split_order].fillna(0) * 100
-            unstacked = unstacked[["True", "False"]]
+            unstacked = unstacked[list(unstacked.columns)]
 
             unstacked.plot(
                 kind="bar",
@@ -625,7 +625,7 @@ class SplitPropertiesPlotter:
         for j in range(num_plots, len(axes)):
             axes[j].axis("off")
 
-    def plot_clusters(self, cluster: str = "communities", threshold: int = 50) -> None:
+    def plot_clusters(self, cluster: str = "community", threshold: int = 50) -> None:
         cluster_names = [
             c
             for c in self.system_plindex.columns
