@@ -354,7 +354,7 @@ class StratifiedTestSet:
             self.max_similarities = pd.concat(
                 [self.max_similarities, pd.DataFrame(extra_rows)]
             )
-        with pd.option_context('future.no_silent_downcasting', True):
+        with pd.option_context("future.no_silent_downcasting", True):
             # FutureWarning: Downcasting object dtype arrays on .fillna, .ffill, .bfill is deprecated and will change in a future version.
             self.max_similarities = self.max_similarities.fillna(0)
 
