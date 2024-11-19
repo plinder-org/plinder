@@ -16,9 +16,11 @@ from plinder.core.structure import surgery
 from plinder.core.structure.atoms import (
     _stack_atom_array_features,
     atom_array_from_cif_file,
-    generate_input_conformer,
     get_residue_index_mapping_mask,
     make_atom_mask,
+)
+from plinder.core.structure.smallmols_utils import (
+    generate_input_conformer,
     match_ligands,
 )
 from plinder.core.structure.superimpose import superimpose_chain

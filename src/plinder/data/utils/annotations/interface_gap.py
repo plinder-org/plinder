@@ -163,7 +163,9 @@ def annotate_interface_gaps(
         )
         ppi_missing_df.set_index("chain1_chain2", inplace=True)
         if ppi_missing_df.index.duplicated().any():
-            log.warn(f"found duplicate chain1_chain2 in ppi_missing_df for {cif_file}")
+            log.warning(
+                f"found duplicate chain1_chain2 in ppi_missing_df for {cif_file}"
+            )
             ppi_missing_df = ppi_missing_df[
                 ~ppi_missing_df.index.duplicated(keep="first")
             ]
@@ -182,7 +184,9 @@ def annotate_interface_gaps(
 
         pli_missing_df.set_index("chain1_chain2", inplace=True)
         if pli_missing_df.index.duplicated().any():
-            log.warn(f"found duplicate chain1_chain2 in pli_missing_df for {cif_file}")
+            log.warning(
+                f"found duplicate chain1_chain2 in pli_missing_df for {cif_file}"
+            )
             pli_missing_df = pli_missing_df[
                 ~pli_missing_df.index.duplicated(keep="first")
             ]

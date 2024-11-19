@@ -1273,7 +1273,7 @@ class Entry(DocBaseModel):
         max_ligand_chains: int,
     ) -> None:
         if save_folder is None:
-            LOG.warn("run_posebusters got save_folder=None so skipping")
+            LOG.warning("run_posebusters got save_folder=None so skipping")
             return
         for system_id, system in self.iter_systems(
             max_protein_chains, max_ligand_chains
