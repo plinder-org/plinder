@@ -30,14 +30,11 @@ def mock_path_eval(
 
 def mock_tanimoto_and_argmax(x, y):
     max_sim = np.random.rand(len(y))
-    if len(x):
-        argmaxs = np.random.choice(np.arange(len(x)), size=len(y))
-    else:
-        argmaxs = []
+    argmaxs = np.random.choice(np.arange(len(x)), size=len(y))
     return max_sim, argmaxs
 
 
-def mock_mmp_sim_dict(mmp_file_path):
+def mock_mmp_sim_dict(mmp_path):
     mmp_sim_dict: dict[str, dict[str, float]] = {}
     return mmp_sim_dict
 
@@ -240,9 +237,11 @@ def test_evaluate_stratify_plot_cmds(prediction_csv, mock_cpl_eval):
         [1.617184, 3.665143],
     )
 
+    eval_split_file = Path(cfg.data.plinder_dir) / "splits" / "split.parquet"
+
     args = [
         "--split_file",
-        f"{Path(cfg.data.plinder_dir) / 'test_split.parquet'}",
+        f"{eval_split_file}",
         "--output_dir",
         f"{prediction_csv.parent}",
     ]

@@ -135,9 +135,12 @@ def compute_ligand_mmp_max_similarities(
         else:
             # get similarity dictionary
             sim_dict_i = mmp_sim_dict.get(test_ink, {})
-            similarities = [sim_dict_i.get(ink, 0) for ink in train_inchikeys]
-            max_similarity = np.max(similarities)
-            max_sim_inchikey = train_inchikeys[np.argmax(similarities)]
+            if sim_dict_i:
+                similarities = [sim_dict_i.get(ink, 0) for ink in train_inchikeys]
+                max_similarity = np.max(similarities)
+                max_sim_inchikey = train_inchikeys[np.argmax(similarities)]
+            else:
+                max_similarity = 0.0
 
         # get first SMILES in train set that match most similar inchikey
         if max_similarity > 0:
@@ -150,7 +153,7 @@ def compute_ligand_mmp_max_similarities(
         # store
         test_train_sims[test_ink] = [max_similarity, most_similar_smiles_in_train]
 
-    df_test["mmp_const_fraction_max"] = df_test["inchikey"].apply(
+    df_test["mmp_similarity_max"] = df_test["inchikey"].apply(
         lambda x: test_train_sims[x][0]
     )
     df_test[f"mmp_most_similar_{train_label}_smiles"] = df_test["inchikey"].apply(
@@ -178,6 +181,7 @@ class StratifiedTestSet:
             protein_seqsim_weighted_sum=30,
             protein_lddt_weighted_sum=50,
             tanimoto_similarity_max=30,
+            mmp_similarity_max=50,
         )
     )
     similarity_combinations: dict[str, list[str]] = field(
@@ -189,6 +193,7 @@ class StratifiedTestSet:
             ],
             "novel_ligand": [
                 "tanimoto_similarity_max",
+                "mmp_similarity_max",
             ],
             "novel_all": [
                 "pli_unique_qcov",
@@ -283,20 +288,21 @@ class StratifiedTestSet:
         for metric in tqdm(SIMILARITY_METRICS):
             if overwrite or not (self.get_filename(metric)).exists():
                 if metric in ["tanimoto_similarity_max", "mmp_similarity_max"]:
-                    # TODO: if both metrics - this step is repetitive!
-                    df = query_index(
-                        columns=[
-                            "system_id",
-                            "ligand_rdkit_canonical_smiles",
-                        ],
-                        filters=[  # type: ignore
-                            ("system_id", "in", left.union(right)),
-                            ("ligand_is_ion", "==", False),
-                            ("ligand_is_artifact", "==", False),
-                        ],
-                        splits=["*"],
-                    ).drop(columns=["split"])
-                    df = df.merge(self.split_df, on="system_id", how="left")
+                    # avoid repetitive local assignment
+                    if "df" not in locals():
+                        df = query_index(
+                            columns=[
+                                "system_id",
+                                "ligand_rdkit_canonical_smiles",
+                            ],
+                            filters=[  # type: ignore
+                                ("system_id", "in", left.union(right)),
+                                ("ligand_is_ion", "==", False),
+                                ("ligand_is_artifact", "==", False),
+                            ],
+                            splits=["*"],
+                        ).drop(columns=["split"])
+                        df = df.merge(self.split_df, on="system_id", how="left")
                     if metric == "tanimoto_similarity_max":
                         compute_ligand_ecfp_max_similarities(
                             df,
@@ -325,6 +331,8 @@ class StratifiedTestSet:
             df = df[df["system_id"].isin(right)].reset_index(drop=True)
             if "train_system_id" in df.columns:
                 df = df.drop(columns="train_system_id")
+            if "ligand_rdkit_canonical_smiles" in df.columns:
+                df = df.drop(columns="ligand_rdkit_canonical_smiles")
             per_metric_similarities.append(df.set_index("system_id"))
         self.max_similarities = pd.concat(
             per_metric_similarities, join="outer", axis=1
@@ -346,7 +354,9 @@ class StratifiedTestSet:
             self.max_similarities = pd.concat(
                 [self.max_similarities, pd.DataFrame(extra_rows)]
             )
-        self.max_similarities = self.max_similarities.fillna(0)
+        with pd.option_context('future.no_silent_downcasting', True):
+            # FutureWarning: Downcasting object dtype arrays on .fillna, .ffill, .bfill is deprecated and will change in a future version.
+            self.max_similarities = self.max_similarities.fillna(0)
 
     def assign_test_set_quality(self) -> None:
         df = query_index(
