@@ -10,14 +10,17 @@ from plinder.core import index
     [
         "19hc__1__1.A_1.B__1.D_1.L_1.Q_1.S_1.U",
         "19hc__1__1.A_1.B__1.E_1.F_1.H_1.J_1.O",
+        "19hc__1__1.A_1.B__1.G",
         "19hc__1__1.A_1.B__1.K_1.M_1.N",
+        "19hc__1__1.A_1.B__1.R",
         "19hc__1__1.A_1.B__1.V_1.X_1.Y",
-        "19hc__1__1.A__1.G",
+        "19hc__1__1.A_1.B__1.W",
         "19hc__1__1.A__1.I",
+        "19hc__1__1.B__1.T",
     ],
 )
 def test_plinder_system(system_id, read_plinder_mount):
-    index.PlinderSystem(system_id=system_id)
+    index.PlinderSystem(system_id=system_id).system
 
 
 @pytest.mark.parametrize(
@@ -35,7 +38,7 @@ def test_plinder_system_fails(system_id, read_plinder_mount):
 def test_plinder_system_system_files(read_plinder_mount):
     system_id = "19hc__1__1.A_1.B__1.V_1.X_1.Y"
     s = index.PlinderSystem(system_id=system_id)
-    assert len(s.structures) == 10
+    assert len(s.structures) == 9
     assert len(s.ligand_sdfs) == 3
     assert len(s.system_cif)
     assert len(s.receptor_cif)

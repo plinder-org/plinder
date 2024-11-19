@@ -11,7 +11,7 @@ class _Blob:
     def __init__(self, name):
         self.name = name
 
-    def download_as_string(self):
+    def download_as_bytes(self):
         return b"test"
 
     def download_to_filename(self, local_path):
