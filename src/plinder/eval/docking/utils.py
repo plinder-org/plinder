@@ -349,7 +349,9 @@ class ModelScores:
                         mol_true=ligand_class.reference_ligand[
                             self.posebusters_mapper
                         ].sdf_file,
-                        mol_cond=self.reference.receptor_file,
+                        mol_cond=self.reference.receptor_file
+                        if not self.score_protein
+                        else self.model.receptor_file,
                         full_report=self.score_posebusters_full_report,
                     ).to_dict()
                     key = (str(ligand_class.sdf_file), chain_name.split("_")[-1])
