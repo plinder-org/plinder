@@ -648,7 +648,7 @@ class Structure(BaseModel):
         return mask
 
     @property
-    def protein_calpha_mask(self) -> NDArray[np.bool_]:
+    def protein_calpha_mask(self) -> dict[str, NDArray[np.bool_]]:
         """ndarray[np.bool\_]: a logical mask for alpha carbon atoms."""
         assert self.protein_atom_array is not None
         mask: dict[str, NDArray[np.bool_]] = {
@@ -662,7 +662,7 @@ class Structure(BaseModel):
         return mask
 
     @property
-    def protein_n_atoms(self) -> int:
+    def protein_n_atoms(self) -> dict[str, int]:
         """int: The number of atoms in the structure."""
         assert self.protein_atom_array is not None
         n: dict[str, int] = {
@@ -672,7 +672,7 @@ class Structure(BaseModel):
         return n
 
     @property
-    def protein_sequence_from_structure(self) -> str:
+    def protein_sequence_from_structure(self) -> dict[str, str]:
         """str: residue (amino acid) sequence of the structure"""
         assert self.protein_atom_array is not None
         resn = {
