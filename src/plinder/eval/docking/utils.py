@@ -347,6 +347,7 @@ class ModelScores:
                     self.score_posebusters
                     and ligand_class.reference_ligand.get(self.posebusters_mapper, None)
                     is not None
+                    # only score ligands that have been mapped with posebusters_mapper (bisy_rmsd)
                 ):
                     result_dict = pb.bust(
                         mol_pred=ligand_class.sdf_file,
@@ -356,7 +357,7 @@ class ModelScores:
                         mol_cond=self.reference.receptor_file,
                         full_report=self.score_posebusters_full_report,
                     ).to_dict()
-                    # the assumption of key is prepended by ost eg. 00001_6YYO_Q1K_BBB_323
+                    # the assumption of key is prepended by ost, eg. '00001_1.D' or '00001_6YYO_Q1K_BBB_323'
                     key = (
                         str(ligand_class.sdf_file),
                         "_".join(chain_name.split("_")[1:]),
@@ -480,4 +481,10 @@ class ModelScores:
                 per_lig_scores[ligand_score.chain][score_name] = ligand_score.scores[
                     score_name
                 ]
+                # get best matched reference ligand chain id
+                ref_ligand_chain = ligand_score.reference_ligand["bisy_rmsd"].chain
+                # remove ost prefix
+                per_lig_scores[ligand_score.chain][
+                    "best_matched_reference_chain"
+                ] = "_".join(ref_ligand_chain.split("_")[1:])
         return per_lig_scores
