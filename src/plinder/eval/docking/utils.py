@@ -482,9 +482,10 @@ class ModelScores:
                     score_name
                 ]
                 # get best matched reference ligand chain id
-                ref_ligand_chain = ligand_score.reference_ligand["bisy_rmsd"].chain
-                # remove ost prefix
-                per_lig_scores[ligand_score.chain][
-                    "best_matched_reference_chain"
-                ] = "_".join(ref_ligand_chain.split("_")[1:])
+                ref_ligand = ligand_score.reference_ligand.get("bisy_rmsd", None)
+                if ref_ligand:
+                    # remove ost prefix
+                    per_lig_scores[ligand_score.chain][
+                        "best_matched_reference_chain"
+                    ] = "_".join(ref_ligand.chain.split("_")[1:])
         return per_lig_scores
