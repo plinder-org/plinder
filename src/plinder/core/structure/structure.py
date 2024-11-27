@@ -34,7 +34,7 @@ from plinder.core.utils.dataclass import stringify_dataclass
 from plinder.core.utils.log import setup_logger
 
 if TYPE_CHECKING:
-    import torch
+    pass
 
 
 log = setup_logger(__name__)
@@ -454,14 +454,13 @@ class Structure(BaseModel):
         seqres_masks = get_residue_index_mapping_mask(
             self.protein_sequence, self.protein_atom_array
         )
-        print(seqres_masks.keys())
         return [seqres_masks[ch] for ch in self.protein_chain_ordered]
 
     def protein_structure_residue_mask(self, other: Structure) -> list[list[int]]:
         """Mask residues from a given structure to another structure"""
         self_protein_atom_array = self.protein_atom_array
         other_protein_sequence_from_structure = other.protein_sequence_from_structure
-        other_chain = other.protein_chains[0]
+        other_chain = other.protein_chain_ordered[0]
         assert self_protein_atom_array is not None
         assert other_protein_sequence_from_structure is not None
         other_sequence_dict = {other_chain: other_protein_sequence_from_structure}
@@ -639,99 +638,51 @@ class Structure(BaseModel):
     def protein_backbone_mask(self) -> NDArray[np.bool_]:
         """ndarray[np.bool\_]: a logical mask for backbone atoms."""
         assert self.protein_atom_array is not None
-        mask: NDArray[np.bool_] = struc.filter_peptide_backbone(self.protein_atom_array)
+        mask: dict[str, NDArray[np.bool_]] = {
+            ch: struc.filter_peptide_backbone(
+                self.protein_atom_array[self.protein_atom_array.chain_id == ch]
+            )
+            for ch in self.protein_chain_ordered
+        }
+
         return mask
 
     @property
     def protein_calpha_mask(self) -> NDArray[np.bool_]:
         """ndarray[np.bool\_]: a logical mask for alpha carbon atoms."""
         assert self.protein_atom_array is not None
-        mask: NDArray[np.bool_] = self.protein_atom_array.atom_name == "CA"
+        mask: dict[str, NDArray[np.bool_]] = {
+            ch: self.protein_atom_array[
+                self.protein_atom_array.chain_id == ch
+            ].atom_name
+            == "CA"
+            for ch in self.protein_chain_ordered
+        }
+
         return mask
 
     @property
     def protein_n_atoms(self) -> int:
         """int: The number of atoms in the structure."""
         assert self.protein_atom_array is not None
-        n: int = self.protein_atom_array.shape[0]
+        n: dict[str, int] = {
+            ch: self.protein_atom_array[self.protein_atom_array.chain_id == ch].shape[0]
+            for ch in self.protein_chain_ordered
+        }
         return n
-
-    @property
-    def protein_chains(self) -> list[str]:
-        """list[str]: The list of chain IDs in the structure."""
-        if self.protein_atom_array is not None:
-            ch_list = self._attr_from_atom_array(
-                self.protein_atom_array, "chain_id", distinct=True, sort=True
-            )
-            return [str(ch) for ch in ch_list]
-        else:
-            return []
 
     @property
     def protein_sequence_from_structure(self) -> str:
         """str: residue (amino acid) sequence of the structure"""
         assert self.protein_atom_array is not None
-        _, resn = struc.get_residues(self.protein_atom_array)
-        seq: str = resn2seq(resn)
+        resn = {
+            ch: struc.get_residues(
+                self.protein_atom_array[self.protein_atom_array.chain_id == ch]
+            )[1]
+            for ch in self.protein_chain_ordered
+        }
+        seq: dict[str, str] = {resn2seq(resn) for ch, resn in resn.items()}
         return seq
-
-    @property
-    def protein_structure_tokenized_sequence(self) -> "torch.Tensor":
-        """torch.Tensor: The tokenized sequence representation of the structure sequence."""
-        import torch
-
-        seq_encoding = torch.tensor(
-            [pc.AA_TO_INDEX[x] for x in self.protein_sequence_from_structure]
-        )
-        tokenized: torch.Tensor = seq_encoding.long()
-        return tokenized
-
-    @property
-    def protein_unique_residue_names(self) -> list[str]:
-        """list[str]: The list of distinct residue names in the structure."""
-        assert self.protein_atom_array is not None
-        res_list = self._attr_from_atom_array(
-            self.protein_atom_array, "res_name", distinct=True, sort=True
-        )
-        return [str(r) for r in res_list]
-
-    @property
-    def protein_unique_residue_ids(self) -> list[int]:
-        """list[int]: The list of distinct residue IDs in the structure."""
-        assert self.protein_atom_array is not None
-        res_list = self._attr_from_atom_array(
-            self.protein_atom_array, "res_id", distinct=True, sort=True
-        )
-        return [int(r) for r in res_list]
-
-    @property
-    def protein_unique_atom_names(self) -> list[str]:
-        """list[str]: The list of distinct atom names in the structure."""
-        assert self.protein_atom_array is not None
-        at_list = self._attr_from_atom_array(
-            self.protein_atom_array, "atom_name", distinct=True, sort=True
-        )
-        return [str(a) for a in at_list]
-
-    @property
-    def protein_structure_b_factor(self) -> list[float]:
-        """list[float]: a list of B-factor values for each atom in the structure"""
-        assert self.protein_atom_array is not None
-        b_factor = self._attr_from_atom_array(
-            self.protein_atom_array, "b_factor", distinct=False, sort=False
-        )
-        return [float(b) for b in b_factor]
-
-    @staticmethod
-    def _attr_from_atom_array(
-        array: AtomArray, attr: str, distinct: bool = False, sort: bool = False
-    ) -> list[str] | list[int] | list[float]:
-        prop = getattr(array, attr)
-        if distinct:
-            prop = set(prop)
-        if sort:
-            prop = sorted(prop)
-        return list(prop)
 
     @classmethod
     def get_properties(cls) -> list[str]:
