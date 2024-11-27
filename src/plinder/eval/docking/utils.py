@@ -93,7 +93,11 @@ class ComplexData:
             # rename ligand chain to have different chain names for each ligand
             # this is necessary for ost to not complain about duplicate chain names
             editor = ligand_entity.EditXCS()
-            editor.RenameChain(list(ligand_entity.chains)[0], f"LIG_{i}")
+            # default chain name format is 00001_{sdf_mol_name}, but sdf_mol_name is often empty
+            resname = list(ligand_entity.residues)[0].name
+            if not resname:
+                resname = ligand_file.stem
+            editor.RenameChain(list(ligand_entity.chains)[0], f"{i+1:05d}_{resname}")
             ligand_entity = ligand_entity.Select("ele != H")
             ligand_views.append(ligand_entity)
 
@@ -352,18 +356,24 @@ class ModelScores:
                         mol_cond=self.reference.receptor_file,
                         full_report=self.score_posebusters_full_report,
                     ).to_dict()
-                    key = (str(ligand_class.sdf_file), chain_name.split("_")[-1])
+                    # the assumption of key is prepended by ost eg. 00001_6YYO_Q1K_BBB_323
+                    key = (
+                        str(ligand_class.sdf_file),
+                        "_".join(chain_name.split("_")[1:]),
+                    )
                     try:
                         ligand_class.posebusters = {
                             k: v[key] for k, v in result_dict.items()
                         }
                     except KeyError:
                         try:
+                            # posebusters default when no name is present in SDF
                             key = (str(ligand_class.sdf_file), "mol_at_pos_0")
                             ligand_class.posebusters = {
                                 k: v[key] for k, v in result_dict.items()
                             }
                         except KeyError:
+                            # this should not be the case as it should be handled
                             key = (
                                 str(ligand_class.sdf_file),
                                 ligand_class.sdf_file.stem,
@@ -371,6 +381,7 @@ class ModelScores:
                             ligand_class.posebusters = {
                                 k: v[key] for k, v in result_dict.items()
                             }
+                    # print(f"key used {key}")
                 if ligand_class.protein_chain_mapping is not None:
                     assigned_model.add(chain_name)
                     assigned_target.add(

@@ -49,6 +49,21 @@ def mock_cpl_eval(read_plinder_eval_mount, monkeypatch):
     )
 
 
+def test_single_protein_single_ligand_scoring_named_sdf(
+    system_1a3b, predicted_named_pose_1a3b, mock_cpl_eval
+):
+    reference_system = PlinderSystem(system_id=system_1a3b)
+    scores = utils.ModelScores.from_model_files(
+        predicted_named_pose_1a3b.parent.name,
+        Path(reference_system.receptor_cif),
+        [predicted_named_pose_1a3b],
+        reference_system,
+        score_protein=False,
+        score_posebusters=True,
+    ).summarize_scores()
+    assert list(scores.keys())[0] == "00001_ligand_pose_0"
+
+
 def test_single_protein_single_ligand_scoring(
     system_1a3b, predicted_pose_1a3b, mock_cpl_eval
 ):
@@ -62,7 +77,7 @@ def test_single_protein_single_ligand_scoring(
         score_posebusters=True,
     ).summarize_scores()
     true_scores = {
-        "LIG_0": {
+        "00001_rank1": {
             "model": "1a3b__1__1.B__1.D",
             "reference": "1a3b__1__1.B__1.D",
             "num_reference_ligands": 1,
@@ -130,7 +145,7 @@ def test_multi_protein_single_ligand_scoring(
         score_posebusters=True,
     ).summarize_scores()
     true_scores = {
-        "LIG_0": {
+        "00001_rank1": {
             "model": "1ai5__1__1.A_1.B__1.D",
             "reference": "1ai5__1__1.A_1.B__1.D",
             "num_reference_ligands": 1,
