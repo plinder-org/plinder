@@ -225,7 +225,7 @@ def deleak_entry_nk_single(
 def prep_data_for_desired_properties(
     data_dir: Path,
     cfg: DictConfig,
-    selected_systems: set[str] = None,
+    selected_systems: set[str] | None = None,
 ) -> tuple[pd.DataFrame, dict[str, set[str]]]:
     """
     Load data and add annotations relevant for splitting
@@ -903,7 +903,7 @@ def split(*,
     data_dir: Path, 
     cfg: DictConfig, 
     relpath: str,
-    selected_systems: set[str] = None
+    selected_systems: set[str] | None = None
 ) -> pd.DataFrame:
     OmegaConf.save(config=cfg, f=data_dir / "splits" / f"split_{relpath}.yaml")
 
