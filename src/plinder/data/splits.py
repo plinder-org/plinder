@@ -225,6 +225,7 @@ def deleak_entry_nk_single(
 def prep_data_for_desired_properties(
     data_dir: Path,
     cfg: DictConfig,
+    selected_systems: set[str] | None = None,
 ) -> tuple[pd.DataFrame, dict[str, set[str]]]:
     """
     Load data and add annotations relevant for splitting
@@ -245,14 +246,20 @@ def prep_data_for_desired_properties(
         pd.read_csv(data_dir / "dbs" / "subdbs" / "holo_ids.csv")["pdb_id"]
     )
 
+    filters = [
+        ("system_type", "==", "holo"),
+        ("system_num_protein_chains", "<=", 5),
+        ("system_num_ligand_chains", "<=", 5),
+        ("entry_pdb_id", "in", all_entries_present),
+    ]
+
+    # if selected_systems is not None, only load those systems
+    if selected_systems is not None:
+        filters.append(("system_id", "in", selected_systems))
+
     entries = pd.read_parquet(
         data_dir / "index" / "annotation_table.parquet",
-        filters=[
-            ("system_type", "==", "holo"),
-            ("system_num_protein_chains", "<=", 5),
-            ("system_num_ligand_chains", "<=", 5),
-            ("entry_pdb_id", "in", all_entries_present),
-        ],
+        filters=filters,
     )
     LOG.info(f"loaded {entries['system_id'].nunique()} systems from annotation table")
     nonredundant_to_all = defaultdict(set)
@@ -298,23 +305,19 @@ def prep_data_for_desired_properties(
     )
 
     apo_links = pd.read_parquet(
-        data_dir / "links" / "apo_links.parquet", columns=["reference_system_id"]
+        data_dir / "links" / "kind=apo" / "links.parquet",
+        columns=["reference_system_id"],
     )
     apo_links["system_id"] = apo_links["reference_system_id"]
     assert apo_links is not None, "apo_links is None"
     num_apo_links = apo_links.groupby("system_id").size()
     LOG.info(f"num_apo_links has {len(num_apo_links)} elements")
 
-    # TODO: replace with pred_links.parquet once available
-    pred_links = scores.query_protein_similarity(
-        search_db="pred",
-        columns=["query_system", "target_system"],
-        filters=[
-            ("similarity", ">=", 100),
-            ("search_db", "==", "pred"),
-            ("metric", "==", "pocket_fident"),
-        ],
+    pred_links = pd.read_parquet(
+        data_dir / "links" / "kind=pred" / "links.parquet",
+        columns=["reference_system_id"],
     )
+
     assert pred_links is not None, "pred_links is None"
     num_pred_links = pred_links.groupby("query_system").size()
     LOG.info(f"num_pred_links has {len(num_pred_links)} elements")
@@ -368,12 +371,11 @@ def load_graphs(
                 filters=[
                     ("similarity", ">=", graph_config.threshold),
                     ("metric", "==", graph_config.metric),
+                    ("query_system", "in", systems),
+                    ("target_system", "in", systems),
                 ],
             )
             df.to_parquet(graph_file, index=False)
-        df = df[
-            (df["query_system"].isin(systems)) & (df["target_system"].isin(systems))
-        ].reset_index(drop=True)
         LOG.info(f"Loaded {graph_config.metric} similarity dataframe")
         system_ids = set(df.query_system.unique()).union(set(df.target_system))
         system_ids_cat = pd.CategoricalDtype(categories=list(system_ids))
@@ -419,7 +421,8 @@ def get_sampling_clusters(
         / f"cluster={cfg.split.test_cluster_cluster}"
         / f"directed={cfg.split.test_cluster_directed}"
         / f"metric={cfg.split.test_cluster_metric}"
-        / f"threshold={cfg.split.test_cluster_threshold}.parquet"
+        / f"threshold={cfg.split.test_cluster_threshold}"
+        / "data.parquet"
     )
     cluster_pq = pd.read_parquet(sampling_cluster_file)
     labels = dict(zip(cluster_pq["system_id"], cluster_pq["label"]))
@@ -440,7 +443,8 @@ def get_sampling_clusters(
         / f"cluster={cfg.split.val_cluster_cluster}"
         / f"directed={cfg.split.val_cluster_directed}"
         / f"metric={cfg.split.val_cluster_metric}"
-        / f"threshold={cfg.split.val_cluster_threshold}.parquet"
+        / f"threshold={cfg.split.val_cluster_threshold}"
+        / "data.parquet"
     )
     cluster_pq = pd.read_parquet(val_cluster_file)
     labels = dict(zip(cluster_pq["system_id"], cluster_pq["label"]))
@@ -579,7 +583,7 @@ def prioritize_test_sample(
     )
     test_data = (
         test_data.sort_values("system_score", ascending=False)
-        .groupby(["entry_pdb_id", "system_proper_ligand_unique_ccd_codes"])
+        .groupby(["entry_pdb_id", "system_proper_unique_ccd_codes"])
         .head(cfg.split.num_per_entry_pdb_id_and_unique_ccd_codes)
         .reset_index(drop=True)
     )
@@ -686,17 +690,17 @@ def assign_split_membership(
     system_to_ligand_ccd_codes = dict(
         zip(
             system_plindex["system_id"],
-            system_plindex["system_proper_ligand_unique_ccd_codes"],
+            system_plindex["system_proper_unique_ccd_codes"],
         )
     )
-    mms_df["system_proper_ligand_unique_ccd_codes"] = mms_df["system_id"].map(
+    mms_df["system_proper_unique_ccd_codes"] = mms_df["system_id"].map(
         system_to_ligand_ccd_codes
     )
 
     # TODO: should we better count for MMS uniqueness only when
-    #       system_proper_ligand_unique_ccd_codes is different and ignore entry_pdb_id here?
+    #       system_proper_unique_ccd_codes is different and ignore entry_pdb_id here?
     mms_df["unique_id"] = (
-        mms_df["entry_pdb_id"] + "__" + mms_df["system_proper_ligand_unique_ccd_codes"]
+        mms_df["entry_pdb_id"] + "__" + mms_df["system_proper_unique_ccd_codes"]
     )
     mms_count = mms_df.groupby("congeneric_id")["unique_id"].nunique()
     mms_df["mms_unique_count_in_test"] = mms_df["congeneric_id"].map(mms_count)
@@ -710,13 +714,13 @@ def assign_split_membership(
     )
     test_ccd_codes = set(
         entries[entries["system_id"].isin(test_system_ids)][
-            "system_proper_ligand_unique_ccd_codes"
+            "system_proper_unique_ccd_codes"
         ]
     )
     to_add = set(
         mms_df[
             (mms_df["congeneric_id"].isin(test_congeneric_ids))
-            & (~mms_df["system_proper_ligand_unique_ccd_codes"].isin(test_ccd_codes))
+            & (~mms_df["system_proper_unique_ccd_codes"].isin(test_ccd_codes))
         ]
         .sort_values("system_score", ascending=False)
         .groupby("unique_id")
@@ -812,7 +816,7 @@ def assign_split_membership(
     # Add back systems in removed with novel ligands compared to train
     train_val_ligand_clusters = set(
         entries[entries["split"].isin(["train", "val"])][
-            f"{cfg.split.ligand_cluster_metric}__{cfg.split.ligand_cluster_threshold}__{cfg.split.ligand_cluster_cluster}"
+            f"{cfg.split.ligand_cluster_metric}__{cfg.split.ligand_cluster_threshold}__weak__component"
         ]
     )
     removed_ligand_clusters = set(
@@ -821,27 +825,27 @@ def assign_split_membership(
             & (entries["system_pass_validation_criteria"])
             & (entries["system_pass_statistics_criteria"])
         ][
-            f"{cfg.split.ligand_cluster_metric}__{cfg.split.ligand_cluster_threshold}__{cfg.split.ligand_cluster_cluster}"
+            f"{cfg.split.ligand_cluster_metric}__{cfg.split.ligand_cluster_threshold}__weak__component"
         ]
     )
     novel_ligand_clusters = removed_ligand_clusters - train_val_ligand_clusters
     test_ccd_codes = set(
-        entries[entries["split"] == "test"]["system_proper_ligand_unique_ccd_codes"]
+        entries[entries["split"] == "test"]["system_proper_unique_ccd_codes"]
     )
-    # TODO: should we group here only by "system_proper_ligand_unique_ccd_codes"
+    # TODO: should we group here only by "system_proper_unique_ccd_codes"
     #       to only be adding a novel ligand once?
     #       Here it can add as many as there are but from different PDB?
     novel_ligand_systems = set(
         entries[
             entries[
-                f"{cfg.split.ligand_cluster_metric}__{cfg.split.ligand_cluster_threshold}__{cfg.split.ligand_cluster_cluster}"
+                f"{cfg.split.ligand_cluster_metric}__{cfg.split.ligand_cluster_threshold}__weak__component"
             ].isin(novel_ligand_clusters)
-            & (~entries["system_proper_ligand_unique_ccd_codes"].isin(test_ccd_codes))
+            & (~entries["system_proper_unique_ccd_codes"].isin(test_ccd_codes))
             & (entries["split"] == "removed")
             & (entries["system_pass_validation_criteria"])
             & (entries["system_pass_statistics_criteria"])
         ]
-        .groupby(["entry_pdb_id", "system_proper_ligand_unique_ccd_codes"])
+        .groupby(["entry_pdb_id", "system_proper_unique_ccd_codes"])
         .head(cfg.split.num_per_entry_pdb_id_and_unique_ccd_codes)
         .groupby("cluster")
         .head(cfg.split.num_test_representatives)
@@ -877,7 +881,7 @@ def assign_split_membership(
             "system_pass_validation_criteria",
             "system_pass_statistics_criteria",
             "system_proper_num_ligand_chains",
-            "system_proper_pocket_num_residues",
+            "system_proper_num_pocket_residues",  # "system_proper_pocket_num_residues",
             "system_proper_num_interactions",
             "system_proper_ligand_max_molecular_weight",
             "system_has_binding_affinity",
@@ -897,12 +901,17 @@ def assign_split_membership(
     return final
 
 
-def split(*, data_dir: Path, cfg: DictConfig, relpath: str) -> pd.DataFrame:
+def split(
+    *,
+    data_dir: Path,
+    cfg: DictConfig,
+    relpath: str,
+    selected_systems: set[str] | None = None,
+) -> pd.DataFrame:
     OmegaConf.save(config=cfg, f=data_dir / "splits" / f"split_{relpath}.yaml")
 
     entries, nonredundant_to_all = prep_data_for_desired_properties(
-        data_dir=data_dir,
-        cfg=cfg,
+        data_dir=data_dir, cfg=cfg, selected_systems=selected_systems
     )
 
     (
