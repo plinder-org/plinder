@@ -71,7 +71,7 @@ def test_single_protein_single_ligand_scoring(
     scores = utils.ModelScores.from_model_files(
         predicted_pose_1a3b.parent.name,
         Path(reference_system.receptor_cif),
-        [predicted_pose_1a3b],
+        predicted_pose_1a3b,
         reference_system,
         score_protein=True,
         score_posebusters=True,
@@ -140,7 +140,7 @@ def test_multi_protein_single_ligand_scoring(
     scores = utils.ModelScores.from_model_files(
         predicted_pose_1ai5.parent.name,
         Path(reference_system.receptor_cif),
-        [predicted_pose_1ai5],
+        predicted_pose_1ai5,
         reference_system,
         score_protein=True,
         score_posebusters=True,
