@@ -354,7 +354,7 @@ class ModelScores:
                         mol_true=ligand_class.reference_ligand[
                             self.posebusters_mapper
                         ].sdf_file,
-                        mol_cond=self.reference.receptor_file,
+                        mol_cond=self.model.receptor_file,
                         full_report=self.score_posebusters_full_report,
                     ).to_dict()
                     # the assumption of key is prepended by ost, eg. '00001_1.D' or '00001_6YYO_Q1K_BBB_323'
