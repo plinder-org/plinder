@@ -119,7 +119,8 @@ def test_single_protein_single_ligand_scoring(
             "lddt_pli": 0.8581504702194357,
             "lddt_lp": 1.0,
             "bisy_rmsd": 1.6171839155715722,
-            "best_matched_reference_chain": "1.D",
+            "best_rmsd_matched_reference_chain": "1.D",
+            "best_pli_matched_reference_chain": "1.D",
         }
     }
 
@@ -192,7 +193,8 @@ def test_multi_protein_single_ligand_scoring(
             "lddt_pli": 0.5106951871657754,
             "lddt_lp": 1.0,
             "bisy_rmsd": 3.6651428915654645,
-            "best_matched_reference_chain": "1.D",
+            "best_rmsd_matched_reference_chain": "1.D",
+            "best_pli_matched_reference_chain": "1.D",
         }
     }
     for k in true_scores:

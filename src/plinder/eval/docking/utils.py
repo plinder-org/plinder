@@ -481,11 +481,18 @@ class ModelScores:
                 per_lig_scores[ligand_score.chain][score_name] = ligand_score.scores[
                     score_name
                 ]
+            # get best matched reference ligand chain id
+            ref_ligand_rmsd = ligand_score.reference_ligand.get("bisy_rmsd", None)
+            if ref_ligand_rmsd:
+                # remove ost prefix
+                per_lig_scores[ligand_score.chain][
+                    "best_rmsd_matched_reference_chain"
+                ] = "_".join(ref_ligand_rmsd.chain.split("_")[1:])
                 # get best matched reference ligand chain id
-                ref_ligand = ligand_score.reference_ligand.get("bisy_rmsd", None)
-                if ref_ligand:
-                    # remove ost prefix
-                    per_lig_scores[ligand_score.chain][
-                        "best_matched_reference_chain"
-                    ] = "_".join(ref_ligand.chain.split("_")[1:])
+            ref_ligand_pli = ligand_score.reference_ligand.get("lddt_pli", None)
+            if ref_ligand_pli:
+                # remove ost prefix
+                per_lig_scores[ligand_score.chain][
+                    "best_pli_matched_reference_chain"
+                ] = "_".join(ref_ligand_pli.chain.split("_")[1:])
         return per_lig_scores
