@@ -305,7 +305,8 @@ def prep_data_for_desired_properties(
     )
 
     apo_links = pd.read_parquet(
-        data_dir / "links" / "kind=apo" / "links.parquet", columns=["reference_system_id"]
+        data_dir / "links" / "kind=apo" / "links.parquet",
+        columns=["reference_system_id"],
     )
     apo_links["system_id"] = apo_links["reference_system_id"]
     assert apo_links is not None, "apo_links is None"
@@ -313,9 +314,10 @@ def prep_data_for_desired_properties(
     LOG.info(f"num_apo_links has {len(num_apo_links)} elements")
 
     pred_links = pd.read_parquet(
-        data_dir / "links" / "kind=pred" / "links.parquet", columns=["reference_system_id"]
+        data_dir / "links" / "kind=pred" / "links.parquet",
+        columns=["reference_system_id"],
     )
-    
+
     assert pred_links is not None, "pred_links is None"
     num_pred_links = pred_links.groupby("query_system").size()
     LOG.info(f"num_pred_links has {len(num_pred_links)} elements")
@@ -370,8 +372,8 @@ def load_graphs(
                     ("similarity", ">=", graph_config.threshold),
                     ("metric", "==", graph_config.metric),
                     ("query_system", "in", systems),
-                    ("target_system", "in", systems)
-                    ],
+                    ("target_system", "in", systems),
+                ],
             )
             df.to_parquet(graph_file, index=False)
         LOG.info(f"Loaded {graph_config.metric} similarity dataframe")
@@ -879,7 +881,7 @@ def assign_split_membership(
             "system_pass_validation_criteria",
             "system_pass_statistics_criteria",
             "system_proper_num_ligand_chains",
-            "system_proper_num_pocket_residues", #"system_proper_pocket_num_residues",
+            "system_proper_num_pocket_residues",  # "system_proper_pocket_num_residues",
             "system_proper_num_interactions",
             "system_proper_ligand_max_molecular_weight",
             "system_has_binding_affinity",
@@ -899,18 +901,17 @@ def assign_split_membership(
     return final
 
 
-def split(*, 
-    data_dir: Path, 
-    cfg: DictConfig, 
+def split(
+    *,
+    data_dir: Path,
+    cfg: DictConfig,
     relpath: str,
-    selected_systems: set[str] | None = None
+    selected_systems: set[str] | None = None,
 ) -> pd.DataFrame:
     OmegaConf.save(config=cfg, f=data_dir / "splits" / f"split_{relpath}.yaml")
 
     entries, nonredundant_to_all = prep_data_for_desired_properties(
-        data_dir=data_dir,
-        cfg=cfg,
-        selected_systems=selected_systems
+        data_dir=data_dir, cfg=cfg, selected_systems=selected_systems
     )
 
     (
