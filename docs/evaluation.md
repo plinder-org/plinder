@@ -28,7 +28,7 @@ The output files from running `plinder-eval` will be used to populate the [MLSB 
 - `receptor_file`: Path to protein CIF file. Leave blank if rigid docking, the system's receptor file will be used.
 - `rank`: The rank of the pose (1-indexed)
 - `confidence`: Optional score associated with the pose
-- `ligand_file`: Path to the SDF file of the pose
+- `ligand_file`: Path to the pose SDF file or directory of SDF files for multi ligand poses
 
 `split.parquet` with, at a minimum, `system_id` and `split` columns mapping PLINDER systems to `train`, or `test`.
 
@@ -42,16 +42,24 @@ plinder_eval --prediction_file tests/test_data/eval/predictions.csv --output_dir
 
 This calculates accuracy metrics for all predicted poses compared to the reference. JSON files of each pose are stored in `test_eval/scores` and the summary file across all poses is stored in `test_eval/scores.parquet`.
 
-The predicted pose is compared to the reference system and the following ligand scores are calculated:
+The predicted pose is compared to the reference system and the following ligand scores are calculated per each ligand:
+- `lddt_pli`: lDDT-PLI for the matched ligand
+- `bisy_rmsd`: binding-site superposed symmetry-corrected RMSD for the matched ligand
+- `lddt_lp`: lDDT score for the residues in the matched ligand pocket
+- `best_rmsd_matched_reference_chain`: chain tag of the best `bisy_rmsd` matched ligand chain in reference (useful for mutli ligand systems)
+- `best_pli_matched_reference_chain`: chain tag of the best `lddt_pli` matched ligand chain in reference (useful for mutli ligand systems)
 
+and in aggregate per system:
 - `fraction_reference_ligands_mapped`: Fraction of reference ligand chains with corresponding model chains
 - `fraction_model_ligands_mapped`: Fraction of model ligand chains mapped to corresponding reference chains
 - `lddt_pli_ave`: average lDDT-PLI across mapped ligands
 - `lddt_pli_wave`: average lDDT-PLI across mapped ligands weighted by number of atoms
+- `lddt_lp_ave`: average lDDT-LP score for the residues in the matched ligand pocket
+- `lddt_lp_wave`: average lDDT-LP across mapped ligands weighted by number of atoms
 - `bisy_rmsd_ave`: average binding-site superposed symmetry-corrected RMSD across mapped ligands
 - `bisy_rmsd_wave`: average binding-site superposed symmetry-corrected RMSD across mapped ligands weighted by number of atoms
 
-If `score_protein` is set to True, the protein in `receptor_file` is compared to the system receptor file and the following scores are calculated:
+If `--score_receptor` flag is used, then protein in `receptor_file` is compared to the `reference` system receptor file and the following scores are calculated:
 
 - `fraction_reference_proteins_mapped`: Fraction of reference protein chains with corresponding model chains
 - `fraction_model_proteins_mapped`: Fraction of model protein chains mapped to corresponding reference chains
