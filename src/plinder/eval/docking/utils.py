@@ -349,6 +349,12 @@ class ModelScores:
                     is not None
                     # only score ligands that have been mapped with posebusters_mapper (bisy_rmsd)
                 ):
+                    if self.model.receptor_file.suffix != ".pdb":
+                        #  WARNING  posebusters.tools.loading:loading.py:46 Could not load molecule from receptor.cif with error: Unknown file type .cif
+                        # TODO: perform format conversion from .cif to .pdb ?
+                        LOG.warning(
+                            f"PoseBusters may not accept the receptor file ({self.model.receptor_file}) not in PDB format"
+                        )
                     result_dict = pb.bust(
                         mol_pred=ligand_class.sdf_file,
                         mol_true=ligand_class.reference_ligand[
