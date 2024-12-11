@@ -128,10 +128,10 @@ def test_single_protein_single_ligand_scoring(
         assert k in scores
         if type(true_scores[k]) == float:
             assert np.isclose(
-                scores[k], true_scores[k]
-            ), f"{k}: {scores[k]} != {true_scores[k]}"
+                true_scores[k], scores[k]
+            ), f"{k}: {true_scores[k]} != {scores[k]}"
         else:
-            assert scores[k] == true_scores[k], f"{k}: {scores[k]} != {true_scores[k]}"
+            assert true_scores[k] == scores[k], f"{k}: {true_scores[k]} != {scores[k]}"
 
 
 def test_multi_protein_single_ligand_scoring(
