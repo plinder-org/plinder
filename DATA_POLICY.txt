@@ -1,0 +1,9 @@
+Data curated by PLINDER are made available under the Apache License 2.0, provided that PLINDER is appropriately cited. Some binding affinity data from BindingDB originate from ChEMBL and are subject to the Creative Commons Attribution-ShareAlike License. This license requires citation of ChEMBL and mandates that any collection or product derived from ChEMBL data must be redistributed under the same ShareAlike terms.
+
+When using data from PLINDER, you agree to cite PLINDER. Additionally, if you utilize any binding affinity data presented here, you must also cite BindingDB and ChEMBL.
+
+By downloading the data, you acknowledge that you have read, understood, and agree to abide by these terms. For any questions or concerns, please contact:
+
+Jay at janani.durairaj@unibas.ch
+Yusuf at yusuf@vant.ai
+Vladas at vladas@vant.ai
