@@ -2,7 +2,6 @@
 # Distributed under the terms of the Apache License 2.0
 from __future__ import annotations
 
-import copy
 import gzip
 from pathlib import Path
 from typing import Any, Union
@@ -13,8 +12,7 @@ from biotite.structure import get_residues
 from biotite.structure.atoms import AtomArray, AtomArrayStack
 from biotite.structure.io.pdbx import get_structure
 from numpy.typing import NDArray
-from rdkit import Chem
-from rdkit.Chem import AllChem, Mol, rdDepictor, rdMolDescriptors, rdRascalMCES
+from rdkit.Chem import Mol
 
 from plinder.core.structure.vendored import (
     _convert_resn_to_sequence_and_numbering,
@@ -99,162 +97,6 @@ def atom_array_from_cif_file(
         except Exception as e:
             log.error(f"Unable to parse {structure}! {str(e)}")
     return structure
-
-
-def generate_input_conformer(
-    template_mol: Chem.Mol,
-    addHs: bool = False,
-    minimize_maxIters: int = -1,
-    skip_3d_confgen: bool = False,
-) -> Chem.Mol:
-    _mol = copy.deepcopy(template_mol)
-    # need to add Hs to generate sensible conformers
-    _mol = Chem.AddHs(_mol)
-
-    if skip_3d_confgen:
-        confid = -1
-    else:
-        # try embedding molecule using ETKDGv2 (default)
-        confid = AllChem.EmbedMolecule(
-            _mol,
-            # ps,
-            useRandomCoords=True,
-            useBasicKnowledge=True,
-            maxAttempts=100,
-            randomSeed=42,
-        )
-        if confid != -1:
-            if minimize_maxIters > 0:
-                # molecule successfully embedded - minimize
-                success = AllChem.MMFFOptimizeMolecule(_mol, maxIters=minimize_maxIters)
-                # 0 if the optimization converged,
-                # -1 if the forcefield could not be set up,
-                # 1 if more iterations are required.
-                if success == 1:
-                    log.info(
-                        f"generate_conformer: MMFFOptimizeMolecule - more iterations are required, doubling the steps (2x {minimize_maxIters})"
-                    )
-                    # extend optimization to double the steps (extends by the same amount)
-                    AllChem.MMFFOptimizeMolecule(_mol, maxIters=minimize_maxIters)
-                elif success == -1:
-                    log.warning(
-                        "generate_conformer: MMFFOptimizeMolecule - the forcefield could not be set up"
-                    )
-        else:
-            # this means EmbedMolecule failed
-            log.warning(
-                "generate_conformer: default EmbedMolecule - failed, trying using useBasicKnowledge=False"
-            )
-            # try less optimal approach
-            confid = AllChem.EmbedMolecule(
-                _mol,
-                useRandomCoords=True,
-                useBasicKnowledge=False,
-                maxAttempts=100,
-                randomSeed=42,
-            )
-
-    if confid == -1:
-        # if 3D confgen fails or skipped
-        log.warning(
-            "generate_conformer: using 2D (rdDepictor.Compute2DCoords) instead 3D"
-        )
-        confid = rdDepictor.Compute2DCoords(_mol)
-
-    # verify that mol has conformers
-    if _mol.GetNumConformers() == 0:
-        raise ValueError("Could not generate conformer")
-
-    if not addHs:
-        # remove Hs if they should not be kept
-        _mol = params_removeHs(_mol)
-
-    return _mol
-
-
-def params_removeHs(mol: Chem.Mol) -> Chem.Mol:
-    params = Chem.rdmolops.RemoveHsParameters()
-    params.removeIsotopes = True
-    params.removeDegreeZero = True
-    params.removeHigherDegrees = True
-    params.removeOnlyHNeighbors = True
-    params.removeNontetrahedralNeighbors = True
-    return Chem.rdmolops.RemoveHs(mol, params, sanitize=False)
-
-
-def match_ligands(
-    input_smiles: str,
-    resolved_sdf: str | Path,
-) -> tuple[Chem.Mol, Chem.Mol, tuple[_AtomArrayOrStack, _AtomArrayOrStack]]:
-    template_mol = Chem.MolFromSmiles(input_smiles)
-    resolved_mol = Chem.MolFromMolFile(resolved_sdf.__str__())
-    atom_order_stacks = get_template_to_mol_matches(template_mol, resolved_mol)
-    return template_mol, resolved_mol, atom_order_stacks
-
-
-def get_template_to_mol_matches(
-    template: Chem.Mol, mol: Chem.Mol
-) -> tuple[_AtomArrayOrStack, _AtomArrayOrStack]:
-    """
-    Function that works a lot like get_matched_template but can better deal with fragmented molecules
-    """
-    rascal_opts = rdRascalMCES.RascalOptions()
-    rascal_opts.similarityThreshold = 0.1
-    rascal_opts.allBestMCESs = True
-    rascal_opts.returnEmptyMCES = True
-    rascal_opts.completeAromaticRings = False
-    rascal_opts.ringMatchesRingOnly = False
-    rascal_opts.maxBondMatchPairs = 5000
-    rascal_opts.timeout = 20
-
-    results = rdRascalMCES.FindMCES(mol, template, rascal_opts)
-    atom_matches = np.array(results[0].atomMatches())
-    bond_matches = np.array(results[0].bondMatches())
-
-    numHA_template = rdMolDescriptors.CalcNumHeavyAtoms(template)
-    numHA_mol = rdMolDescriptors.CalcNumHeavyAtoms(mol)
-    if len(atom_matches) < min(numHA_template, numHA_mol):
-        # if not complete molecule is matched
-        match_mol = copy.deepcopy(mol)
-        ref_mol = copy.deepcopy(template)
-
-        log.warning(
-            "get_template_to_mol_matches: could not match template fully - retry with unmatched bonds set as UNSPECIFIED"
-        )
-        # set all unmatched bonds to UNSPECIFIED to help with the match
-        if len(bond_matches):
-            [
-                b.SetBondType(Chem.BondType.UNSPECIFIED)
-                for b in match_mol.GetBonds()
-                if not b in bond_matches[:, 0]
-            ]
-            [
-                b.SetBondType(Chem.BondType.UNSPECIFIED)
-                for b in ref_mol.GetBonds()
-                if not b in bond_matches[:, 1]
-            ]
-            # run again
-            results2 = rdRascalMCES.FindMCES(match_mol, ref_mol, rascal_opts)
-            if len(results2[0].atomMatches()) > len(results[0].atomMatches()):
-                results = results2
-
-        # if still not fully matched - attempt one more!
-        if len(results[0].atomMatches()) < min(numHA_template, numHA_mol):
-            [b.SetBondType(Chem.BondType.UNSPECIFIED) for b in match_mol.GetBonds()]
-            [b.SetBondType(Chem.BondType.UNSPECIFIED) for b in ref_mol.GetBonds()]
-            # run again
-            results3 = rdRascalMCES.FindMCES(match_mol, ref_mol, rascal_opts)
-            if len(results3[0].atomMatches()) > len(results[0].atomMatches()):
-                results = results3
-
-    # convert to atom order array stacks
-    template_atom_order_stack1 = np.array(
-        [[ix_templ for _, ix_templ in match.atomMatches()] for match in results]
-    )
-    mol_atom_order_stack2 = np.array(
-        [[ix_mol for ix_mol, _ in match.atomMatches()] for match in results]
-    )
-    return template_atom_order_stack1, mol_atom_order_stack2
 
 
 def get_residue_index_mapping_mask(
