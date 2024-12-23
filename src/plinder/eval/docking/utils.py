@@ -108,6 +108,7 @@ class ComplexData:
             receptor_entity=entity,
             ligand_views=ligand_views,
             num_ligands=len(ligand_files),
+            # TODO: this definition needs a fix due to inconsistencies
             num_proteins=sum(
                 1
                 for x in entity.chains
