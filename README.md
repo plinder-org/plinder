@@ -119,6 +119,11 @@ For details on the sub-directories, see [Documentation](https://plinder-org.gith
 pip install plinder
 ```
 
+## License
+Data curated by PLINDER are made available under the Apache License 2.0.
+All data curated by BindingDB staff are provided under the Creative Commons Attribution 4.0 License. Data imported from ChEMBL are provided under their Creative Commons Attribution-Share Alike 4.0 Unported License.
+
+
 # 📝 Documentation
 
 A more detailed description is available on the
