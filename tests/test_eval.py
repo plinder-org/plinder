@@ -28,8 +28,15 @@ def mock_path_eval(
     return obj / rel if rel else obj
 
 
-def mock_tanimoto(x, y):
-    return np.random.rand(max(len(x), len(y)))
+def mock_tanimoto_and_argmax(x, y):
+    max_sim = np.random.rand(len(y))
+    argmaxs = np.random.choice(np.arange(len(x)), size=len(y))
+    return max_sim, argmaxs
+
+
+def mock_mmp_sim_dict(mmp_path):
+    mmp_sim_dict: dict[str, dict[str, float]] = {}
+    return mmp_sim_dict
 
 
 @pytest.fixture
@@ -44,8 +51,12 @@ def mock_cpl_eval(read_plinder_eval_mount, monkeypatch):
         lambda **kws: None,
     )
     monkeypatch.setattr(
-        "plinder.eval.docking.stratify_test_set.smallmolecules.tanimoto_maxsim_matrix",
-        mock_tanimoto,
+        "plinder.eval.docking.stratify_test_set.smallmols_similarity.tanimoto_maxsim_and_argmax",
+        mock_tanimoto_and_argmax,
+    )
+    monkeypatch.setattr(
+        "plinder.eval.docking.stratify_test_set.smallmols_similarity.get_mmp_similarity_dict",
+        mock_mmp_sim_dict,
     )
 
 
@@ -265,9 +276,11 @@ def test_evaluate_stratify_plot_cmds(prediction_csv, mock_cpl_eval):
         [1.617184, 3.665143],
     )
 
+    eval_split_file = Path(cfg.data.plinder_dir) / "splits" / "split.parquet"
+
     args = [
         "--split_file",
-        f"{Path(cfg.data.plinder_dir) / 'test_split.parquet'}",
+        f"{eval_split_file}",
         "--output_dir",
         f"{prediction_csv.parent}",
     ]
