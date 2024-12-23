@@ -143,7 +143,7 @@ python-json-logger==2.0.7  # via jupyter-events
 pytz==2024.1              # via pandas
 pyyaml==6.0.2             # via jupyter-events, omegaconf, posebusters
 pyzmq==26.2.0             # via ipykernel, jupyter-client, jupyter-server
-rdkit==2023.9.5           # via plinder (pyproject.toml), posebusters
+rdkit>=2023.9.5           # via plinder (pyproject.toml), posebusters
 referencing==0.35.1       # via jsonschema, jsonschema-specifications, jupyter-events
 requests==2.32.3          # via biotite, gcsfs, google-api-core, google-cloud-storage, jupyterlab-server, mmcif, requests-oauthlib
 requests-oauthlib==2.0.0  # via google-auth-oauthlib
