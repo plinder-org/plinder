@@ -125,14 +125,27 @@ def test_single_protein_single_ligand_scoring(
         }
     }
 
-    for k in true_scores:
-        assert k in scores
-        if type(true_scores[k]) == float:
-            assert np.isclose(
-                true_scores[k], scores[k]
-            ), f"{k}: {true_scores[k]} != {scores[k]}"
-        else:
-            assert true_scores[k] == scores[k], f"{k}: {true_scores[k]} != {scores[k]}"
+    # for k in true_scores:
+    #     assert k in scores
+    #     if type(true_scores[k]) == float:
+    #         assert np.isclose(
+    #             true_scores[k], scores[k]
+    #         ), f"{k}: {true_scores[k]} != {scores[k]}"
+    #     else:
+    #         assert true_scores[k] == scores[k], f"{k}: {true_scores[k]} != {scores[k]}"
+
+    for l in true_scores:
+        assert l in scores
+        for k in true_scores[l]:
+            assert k in scores[l]
+            if type(true_scores[l][k]) == float:
+                assert np.isclose(
+                    scores[l][k], true_scores[l][k]
+                ), f"{k}: {scores[l][k]} != {true_scores[l][k]}"
+            else:
+                assert (
+                    scores[l][k] == true_scores[l][k]
+                ), f"{k}: {scores[l][k]} != {true_scores[l][k]}"
 
 
 def test_multi_protein_single_ligand_scoring(
@@ -199,14 +212,19 @@ def test_multi_protein_single_ligand_scoring(
             "best_pli_matched_reference_chain": "1.D",
         }
     }
-    for k in true_scores:
-        assert k in scores
-        if type(true_scores[k]) == float:
-            assert np.isclose(
-                scores[k], true_scores[k]
-            ), f"{k}: {scores[k]} != {true_scores[k]}"
-        else:
-            assert scores[k] == true_scores[k], f"{k}: {scores[k]} != {true_scores[k]}"
+
+    for l in true_scores:
+        assert l in scores
+        for k in true_scores[l]:
+            assert k in scores[l]
+            if type(true_scores[l][k]) == float:
+                assert np.isclose(
+                    scores[l][k], true_scores[l][k]
+                ), f"{k}: {scores[l][k]} != {true_scores[l][k]}"
+            else:
+                assert (
+                    scores[l][k] == true_scores[l][k]
+                ), f"{k}: {scores[l][k]} != {true_scores[l][k]}"
 
 
 # TODO: add multiligand test!
