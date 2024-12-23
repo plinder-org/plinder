@@ -80,11 +80,11 @@ def test_single_protein_single_ligand_scoring(
         "00001_rank1": {
             "model": "1a3b__1__1.B__1.D",
             "reference": "1a3b__1__1.B__1.D",
+            "num_reference_proteins": 1,
             "num_reference_ligands": 1,
             # TODO: fix model protein count
-            # "num_model_ligands": 1,
-            "num_reference_proteins": 1,
-            "num_model_proteins": 1,
+            # "num_model_proteins": 1,
+            "num_model_ligands": 1,
             "fraction_reference_ligands_mapped": 1.0,
             "fraction_model_ligands_mapped": 1.0,
             "lddt": 1.0,
@@ -152,8 +152,10 @@ def test_multi_protein_single_ligand_scoring(
             "model": "1ai5__1__1.A_1.B__1.D",
             "reference": "1ai5__1__1.A_1.B__1.D",
             "num_reference_proteins": 2,
+            "num_reference_ligands": 1,
             # TODO: fix model protein count
             # "num_model_proteins": 2,
+            "num_model_ligands": 1,
             "fraction_reference_ligands_mapped": 1.0,
             "fraction_model_ligands_mapped": 1.0,
             "lddt": 1.0,

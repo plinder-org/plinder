@@ -114,7 +114,7 @@ class ComplexData:
                 for x in entity.chains
                 if x.type == mol.CHAINTYPE_POLY_PEPTIDE_L
                 # Comment out to avoid counting water molecules as proteins!
-                # or x.type == mol.CHAINTYPE_UNKNOWN
+                or x.type == mol.CHAINTYPE_UNKNOWN
             ),
         )
 
