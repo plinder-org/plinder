@@ -22,9 +22,9 @@ def evaluate(
     model_system_id: str,
     reference_system_id: str,
     receptor_file: Path | str,
-    ligand_file_list: list[Path],
+    ligand_file: Path,
     predictions_dir: Path | None = None,
-    flexible: bool = False,
+    score_receptor: bool = False,
     posebusters: bool = False,
     posebusters_full: bool = False,
 ) -> dict[str, dict[str, Any]]:
@@ -39,11 +39,11 @@ def evaluate(
         The PLINDER systemID of the reference system
     receptor_file: Path
         The path to the receptor CIF/PDB file
-    ligand_file_list: list[Path]
-        The list of Paths to the ligand SDF files OR directory with .sdf files
+    ligand_file: Path
+        Path to the ligand sdf file OR directory with .sdf files
     predictions_dir: Path | None
         The path to the directory containing the predictions (used if receptor/ligand files are not provided)
-    flexible: bool
+    score_receptor: bool
         Run protein scoring, for flexible docking and cofolding
     posebusters: bool
         Run posebuster scoring
@@ -60,16 +60,15 @@ def evaluate(
         raise FileNotFoundError(f"Receptor file {receptor_file} could not be found")
 
     ligand_file_paths = []
-    for ligand_file in ligand_file_list:
-        if ligand_file.exists():
-            if ligand_file.is_dir():
-                ligand_file_paths += list(ligand_file.glob("*.sdf"))
-            elif ligand_file.suffix == ".sdf":
-                ligand_file_paths.append(ligand_file)
-        elif ligand_file is not None:
-            if predictions_dir is not None and (predictions_dir / ligand_file).exists():
-                ligand_file = predictions_dir / ligand_file
-                ligand_file_paths.append(ligand_file)
+    if ligand_file.exists():
+        if ligand_file.is_dir():
+            ligand_file_paths += list(ligand_file.glob("*.sdf"))
+        elif ligand_file.suffix == ".sdf":
+            ligand_file_paths.append(ligand_file)
+    elif ligand_file is not None:
+        if predictions_dir is not None and (predictions_dir / ligand_file).exists():
+            ligand_file = predictions_dir / ligand_file
+            ligand_file_paths.append(ligand_file)
 
     assert ligand_file_paths is not None and all(
         ligand_file.exists() for ligand_file in ligand_file_paths
@@ -79,7 +78,7 @@ def evaluate(
         receptor_file,
         ligand_file_paths,
         reference_system,
-        score_protein=flexible,
+        score_protein=score_receptor,
         score_posebusters=posebusters,
         score_posebusters_full_report=posebusters_full,
     ).summarize_scores()
@@ -90,7 +89,7 @@ def write_scores_as_json(
     output_file: Path,
     overwrite: bool = False,
     predictions_dir: Path | None = None,
-    flexible: bool = False,
+    score_receptor: bool = False,
     posebusters: bool = False,
     posebusters_full: bool = False,
 ) -> None:
@@ -107,7 +106,7 @@ def write_scores_as_json(
         Skips existing if False
     predictions_dir: Path | None
         Path to predictions directory
-    flexible: bool
+    score_receptor: bool
         Run protein scoring, for flexible docking and cofolding
     posebusters: bool
         Run posebuster scoring
@@ -125,9 +124,8 @@ def write_scores_as_json(
             and not str(scorer_input.receptor_file) == "nan"
         ):
             receptor_file = Path(scorer_input.receptor_file)
-        # single ligand file path, directory
-        # TODO: or some concatenated list of paths with some separator
-        ligand_file_path = [Path(scorer_input.ligand_file)]
+        # single ligand file path or directory
+        ligand_file = Path(scorer_input.ligand_file)
 
         if receptor_file is not None and not receptor_file.exists():
             if (
@@ -140,6 +138,8 @@ def write_scores_as_json(
                 receptor_file = Path(reference_system.receptor_cif)
 
         elif receptor_file is None:
+            if score_receptor:
+                raise ValueError("Receptor file is None with --score_receptor flag!")
             LOG.warning(
                 "No receptor file provided, using reference receptor (RIGID REDOCKING!!)"
             )
@@ -148,14 +148,14 @@ def write_scores_as_json(
             raise FileNotFoundError(f"Receptor file {receptor_file} could not be found")
 
         assert receptor_file is not None
-        assert ligand_file_path is not None
+        assert ligand_file is not None
         scores = evaluate(
             scorer_input.id,
             scorer_input.reference_system_id,
             receptor_file,
-            ligand_file_path,
+            ligand_file,
             predictions_dir,
-            flexible,
+            score_receptor,
             posebusters,
             posebusters_full,
         )
@@ -174,7 +174,7 @@ def score_test_set(
     num_processes: int = 8,
     overwrite: bool = False,
     posebusters: bool = False,
-    flexible: bool = False,
+    score_receptor: bool = False,
     posebusters_full: bool = False,
 ) -> None:
     """
@@ -196,7 +196,7 @@ def score_test_set(
         Skips existing files if False
     posebusters: bool
         Run posebuster scoring
-    flexible: bool
+    score_receptor: bool
         Run protein scoring, for flexible docking and cofolding
     posebusters_full: bool
         Run posebuster scoring and return full report
@@ -222,7 +222,7 @@ def score_test_set(
                     row.output_file,
                     overwrite,
                     prediction_file.parent,
-                    flexible,
+                    score_receptor,
                     posebusters,
                     posebusters_full,
                 )
@@ -289,9 +289,9 @@ def evaluate_cmd(args: list[str] | None = None) -> None:
         help="Run posebuster scoring",
     )
     parser.add_argument(
-        "--flexible",
+        "--score_receptor",
         action="store_true",
-        help="Run protein scoring, for flexible docking and cofolding",
+        help="Run protein receptor scoring, for flexible docking and cofolding",
     )
     parser.add_argument(
         "--posebusters_full",
@@ -312,7 +312,7 @@ def evaluate_cmd(args: list[str] | None = None) -> None:
         num_processes=ns.num_processes,
         overwrite=ns.overwrite,
         posebusters=ns.posebusters,
-        flexible=ns.flexible,
+        score_receptor=ns.score_receptor,
         posebusters_full=ns.posebusters_full,
     )
 

@@ -6991,6 +6991,11 @@ def predicted_pose_1a3b():
 
 
 @pytest.fixture(scope="session")
+def predicted_named_pose_1a3b():
+    return test_asset_fp / "eval/predicted_poses/1a3b__1__1.B__1.D/rank1_named.sdf"
+
+
+@pytest.fixture(scope="session")
 def system_1ai5():
     return "1ai5__1__1.A_1.B__1.D"
 
