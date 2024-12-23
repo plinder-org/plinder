@@ -4,6 +4,7 @@ exclude: |
     (?x)^(
         docs/.*png|
         tests/test_data/.*|
+        src/plinder/data/utils/annotations/static_files/dates.csv|
         private/.*ipynb
     )$
 repos:

@@ -57,6 +57,13 @@ The `plinder.data` package is responsible for generating a dataset
 release and the `plinder.core` package makes it easy to interact
 with the dataset.
 
+#### Known bugs:
+- For correct `entry_release_date`, please, use the provided `dates.csv` file until full fix in v3 release in 2025Q1:
+    ```
+    plindex.merge(pd.read_csv("./src/plinder/data/utils/annotations/static_files/dates.csv"), on="entry_pdb_id")
+    ```
+- Complexes containing nucleic acid receptors may [not be saved corectly](https://github.com/plinder-org/plinder/issues/61).
+
 #### Changelog:
 
 - 2024-06/v2 (Current):
@@ -118,6 +125,11 @@ For details on the sub-directories, see [Documentation](https://plinder-org.gith
 ```
 pip install plinder
 ```
+
+## License
+Data curated by PLINDER are made available under the Apache License 2.0.
+All data curated by BindingDB staff are provided under the Creative Commons Attribution 4.0 License. Data imported from ChEMBL are provided under their Creative Commons Attribution-Share Alike 4.0 Unported License.
+
 
 # 📝 Documentation
 

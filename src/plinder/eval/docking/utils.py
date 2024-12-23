@@ -93,7 +93,11 @@ class ComplexData:
             # rename ligand chain to have different chain names for each ligand
             # this is necessary for ost to not complain about duplicate chain names
             editor = ligand_entity.EditXCS()
-            editor.RenameChain(list(ligand_entity.chains)[0], f"LIG_{i}")
+            # default chain name format is 00001_{sdf_mol_name}, but sdf_mol_name is often empty
+            resname = list(ligand_entity.residues)[0].name
+            if not resname:
+                resname = ligand_file.stem
+            editor.RenameChain(list(ligand_entity.chains)[0], f"{i+1:05d}_{resname}")
             ligand_entity = ligand_entity.Select("ele != H")
             ligand_views.append(ligand_entity)
 
@@ -104,10 +108,12 @@ class ComplexData:
             receptor_entity=entity,
             ligand_views=ligand_views,
             num_ligands=len(ligand_files),
+            # TODO: this definition needs a fix due to inconsistencies
             num_proteins=sum(
                 1
                 for x in entity.chains
                 if x.type == mol.CHAINTYPE_POLY_PEPTIDE_L
+                # Comment out to avoid counting water molecules as proteins!
                 or x.type == mol.CHAINTYPE_UNKNOWN
             ),
         )
@@ -343,27 +349,40 @@ class ModelScores:
                     self.score_posebusters
                     and ligand_class.reference_ligand.get(self.posebusters_mapper, None)
                     is not None
+                    # only score ligands that have been mapped with posebusters_mapper (bisy_rmsd)
                 ):
+                    if self.model.receptor_file.suffix != ".pdb":
+                        #  WARNING  posebusters.tools.loading:loading.py:46 Could not load molecule from receptor.cif with error: Unknown file type .cif
+                        # TODO: perform format conversion from .cif to .pdb ?
+                        LOG.warning(
+                            f"PoseBusters may not accept the receptor file ({self.model.receptor_file}) not in PDB format"
+                        )
                     result_dict = pb.bust(
                         mol_pred=ligand_class.sdf_file,
                         mol_true=ligand_class.reference_ligand[
                             self.posebusters_mapper
                         ].sdf_file,
-                        mol_cond=self.reference.receptor_file,
+                        mol_cond=self.model.receptor_file,
                         full_report=self.score_posebusters_full_report,
                     ).to_dict()
-                    key = (str(ligand_class.sdf_file), chain_name.split("_")[-1])
+                    # the assumption of key is prepended by ost, eg. '00001_1.D' or '00001_6YYO_Q1K_BBB_323'
+                    key = (
+                        str(ligand_class.sdf_file),
+                        "_".join(chain_name.split("_")[1:]),
+                    )
                     try:
                         ligand_class.posebusters = {
                             k: v[key] for k, v in result_dict.items()
                         }
                     except KeyError:
                         try:
+                            # posebusters default when no name is present in SDF
                             key = (str(ligand_class.sdf_file), "mol_at_pos_0")
                             ligand_class.posebusters = {
                                 k: v[key] for k, v in result_dict.items()
                             }
                         except KeyError:
+                            # this should not be the case as it should be handled
                             key = (
                                 str(ligand_class.sdf_file),
                                 ligand_class.sdf_file.stem,
@@ -371,6 +390,7 @@ class ModelScores:
                             ligand_class.posebusters = {
                                 k: v[key] for k, v in result_dict.items()
                             }
+                    # print(f"key used {key}")
                 if ligand_class.protein_chain_mapping is not None:
                     assigned_model.add(chain_name)
                     assigned_target.add(
@@ -469,4 +489,18 @@ class ModelScores:
                 per_lig_scores[ligand_score.chain][score_name] = ligand_score.scores[
                     score_name
                 ]
+            # get best matched reference ligand chain id
+            ref_ligand_rmsd = ligand_score.reference_ligand.get("bisy_rmsd", None)
+            if ref_ligand_rmsd:
+                # remove ost prefix
+                per_lig_scores[ligand_score.chain][
+                    "best_rmsd_matched_reference_chain"
+                ] = "_".join(ref_ligand_rmsd.chain.split("_")[1:])
+                # get best matched reference ligand chain id
+            ref_ligand_pli = ligand_score.reference_ligand.get("lddt_pli", None)
+            if ref_ligand_pli:
+                # remove ost prefix
+                per_lig_scores[ligand_score.chain][
+                    "best_pli_matched_reference_chain"
+                ] = "_".join(ref_ligand_pli.chain.split("_")[1:])
         return per_lig_scores
