@@ -15,6 +15,6 @@ dependencies:
   - boost=1.82
   - mmseqs2
   - foldseek
-  - plip=2.3.*
+  - plip=2.3.0
   - pip:
     - keyrings.google-artifactregistry-auth==1.1.2

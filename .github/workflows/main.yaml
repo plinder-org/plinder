@@ -38,7 +38,14 @@ jobs:
         run: python flows/docker.py build
       - name: Run tests against new image and save images
         if: steps.get-tag.outputs.bump != ''
-        run: python flows/docker.py test --push
+        run: |
+          python flows/docker.py test --push
+          if ! test -f reports/.coverage; then
+            echo "Missing test coverage reports (reports/.coverage). Not all tests have passed?"
+            exit 1
+          else
+            echo "Test coverage report found!"
+          fi
       - name: Build distribution
         run: python -m build
       - name: Publish package distributions to PyPI
