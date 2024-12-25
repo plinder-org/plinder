@@ -212,8 +212,8 @@ def score_test_set(
         )
         predictions = predictions[~predictions["exists"]]
     LOG.info(f"Running evaluation on {predictions.shape[0]} cases")
-    multiprocessing.set_start_method("spawn")
-    with multiprocessing.Pool(num_processes) as p:
+    ctx = multiprocessing.get_context("spawn")
+    with ctx.Pool(num_processes) as p:
         p.starmap(
             write_scores_as_json,
             [
@@ -245,13 +245,11 @@ def score_test_set(
                             "chain": ligand_chain_name,
                             "rank": json_file.stem,
                         }
-                        scores_dict.update(
-                            {
-                                k: v
-                                for k, v in ligand_scores.items()
-                                if k != "ligand_scores"
-                            }
-                        )
+                        scores_dict.update({
+                            k: v
+                            for k, v in ligand_scores.items()
+                            if k != "ligand_scores"
+                        })
                         scores.append(scores_dict)
     pd.DataFrame(scores).to_parquet(output_file, index=False)
 
