@@ -212,8 +212,8 @@ def score_test_set(
         )
         predictions = predictions[~predictions["exists"]]
     LOG.info(f"Running evaluation on {predictions.shape[0]} cases")
-    multiprocessing.set_start_method("spawn")
-    with multiprocessing.Pool(num_processes) as p:
+    ctx = multiprocessing.get_context("spawn")
+    with ctx.Pool(num_processes) as p:
         p.starmap(
             write_scores_as_json,
             [
