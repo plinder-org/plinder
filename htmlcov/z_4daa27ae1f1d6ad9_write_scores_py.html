@@ -67,7 +67,7 @@
             <a id="nextFileLink" class="nav" href="index.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.6.4">coverage.py v7.6.4</a>,
-            created at 2024-12-23 22:58 +0000
+            created at 2024-12-31 15:13 +0000
         </p>
         <aside class="hidden">
             <button type="button" class="button_next_chunk" data-shortcut="j"></button>
@@ -296,8 +296,8 @@
     <p class="pln"><span class="n"><a id="t212" href="#t212">212</a></span><span class="t">        <span class="op">)</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t213" href="#t213">213</a></span><span class="t">        <span class="nam">predictions</span> <span class="op">=</span> <span class="nam">predictions</span><span class="op">[</span><span class="op">~</span><span class="nam">predictions</span><span class="op">[</span><span class="str">"exists"</span><span class="op">]</span><span class="op">]</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t214" href="#t214">214</a></span><span class="t">    <span class="nam">LOG</span><span class="op">.</span><span class="nam">info</span><span class="op">(</span><span class="fst">f"</span><span class="fst">Running evaluation on </span><span class="op">{</span><span class="nam">predictions</span><span class="op">.</span><span class="nam">shape</span><span class="op">[</span><span class="num">0</span><span class="op">]</span><span class="op">}</span><span class="fst"> cases</span><span class="fst">"</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
-    <p class="run"><span class="n"><a id="t215" href="#t215">215</a></span><span class="t">    <span class="nam">multiprocessing</span><span class="op">.</span><span class="nam">set_start_method</span><span class="op">(</span><span class="str">"spawn"</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
-    <p class="run"><span class="n"><a id="t216" href="#t216">216</a></span><span class="t">    <span class="key">with</span> <span class="nam">multiprocessing</span><span class="op">.</span><span class="nam">Pool</span><span class="op">(</span><span class="nam">num_processes</span><span class="op">)</span> <span class="key">as</span> <span class="nam">p</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t215" href="#t215">215</a></span><span class="t">    <span class="nam">ctx</span> <span class="op">=</span> <span class="nam">multiprocessing</span><span class="op">.</span><span class="nam">get_context</span><span class="op">(</span><span class="str">"spawn"</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t216" href="#t216">216</a></span><span class="t">    <span class="key">with</span> <span class="nam">ctx</span><span class="op">.</span><span class="nam">Pool</span><span class="op">(</span><span class="nam">num_processes</span><span class="op">)</span> <span class="key">as</span> <span class="nam">p</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t217" href="#t217">217</a></span><span class="t">        <span class="nam">p</span><span class="op">.</span><span class="nam">starmap</span><span class="op">(</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t218" href="#t218">218</a></span><span class="t">            <span class="nam">write_scores_as_json</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t219" href="#t219">219</a></span><span class="t">            <span class="op">[</span>&nbsp;</span><span class="r"></span></p>
@@ -412,7 +412,7 @@
             <a class="nav" href="index.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.6.4">coverage.py v7.6.4</a>,
-            created at 2024-12-23 22:58 +0000
+            created at 2024-12-31 15:13 +0000
         </p>
     </div>
 </footer>
