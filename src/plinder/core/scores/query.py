@@ -171,6 +171,16 @@ def _handle_columns(
     if schema is not None:
         cols = schema.names if columns is None or not len(columns) else columns
         if cols != ["*"]:
+            # TODO: remove this patch after binding_affinity is fixed
+            if (
+                "system_has_binding_affinity" in cols
+                or "ligand_binding_affinity" in cols
+            ):
+                raise ValueError(
+                    "columns containing binding_affinity have been removed until bugfix"
+                    "see: https://github.com/plinder-org/plinder/issues/94"
+                )
+            #
             for col in cols:
                 if col not in schema.names:
                     if include_filename and col == "filename":
