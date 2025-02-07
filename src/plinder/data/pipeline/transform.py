@@ -107,6 +107,7 @@ def transform_panther_data(*, raw_panther_path: Path) -> pd.DataFrame:
 
 
 def transform_bindingdb_affinity_data(*, raw_affinity_path: Path) -> pd.DataFrame:
+    # TODO: fix this bug https://github.com/plinder-org/plinder/issues/94
     """
     Unpack the tarball archive and collect the
     contained files to a single parquet file.

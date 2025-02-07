@@ -57,12 +57,13 @@ The `plinder.data` package is responsible for generating a dataset
 release and the `plinder.core` package makes it easy to interact
 with the dataset.
 
-#### Known bugs:
+#### 🐛🐛🐛 Known bugs:
 - For correct `entry_release_date`, please, use the provided `dates.csv` file until full fix in v3 release in 2025Q1:
     ```
     plindex.merge(pd.read_csv("./src/plinder/data/utils/annotations/static_files/dates.csv"), on="entry_pdb_id")
     ```
 - Complexes containing nucleic acid receptors may [not be saved corectly](https://github.com/plinder-org/plinder/issues/61).
+- `ligand_binding_affinity` queries have been disabled due to a [bug found parsing BindingDB](https://github.com/plinder-org/plinder/issues/94)
 
 #### Changelog:
 
@@ -73,7 +74,7 @@ with the dataset.
     - Improved ligand handling and saving to fix some bond order issues
     - Improved covalency detection and annotation to reference each bond explicitly
     - Added linked apo/pred structures to v2/links and v2/linked_structures
-    - Added binding affinity annotations from [BindingDB](https://bindingdb.org)
+    - <del>Added binding affinity annotations from [BindingDB](https://bindingdb.org)</del> (see known bugs!)
     - Added statistics requirement and other changes in the split to enrich test set diversity
 
 - 2024-04/v1: Version described in the preprint, with updated redundancy removal by protein pocket and ligand similarity.
