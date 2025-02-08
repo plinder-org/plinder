@@ -40,6 +40,14 @@ def query_index(
         columns = ["system_id", "entry_pdb_id"]
     if "system_id" not in columns and "*" not in columns:
         columns = ["system_id"] + columns
+    # TODO: remove this patch after binding_affinity is fixed
+    # START patch
+    if "system_has_binding_affinity" in columns or "ligand_binding_affinity" in columns:
+        raise ValueError(
+            "columns containing binding_affinity have been removed until bugfix"
+            "see: https://github.com/plinder-org/plinder/issues/94"
+        )
+    # END patch
     query = make_query(
         dataset=dataset,
         columns=columns,
