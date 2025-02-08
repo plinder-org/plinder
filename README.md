@@ -17,11 +17,11 @@
 | src//plinder/core/loader/utils.py                              |       56 |       29 |       12 |        3 |     44.1176% |41->44, 48, 98->102, 116-128, 178-210 |
 | src//plinder/core/scores/\_\_init\_\_.py                       |        8 |        0 |        0 |        0 |    100.0000% |           |
 | src//plinder/core/scores/clusters.py                           |       19 |        2 |        2 |        1 |     85.7143% |     51-52 |
-| src//plinder/core/scores/index.py                              |       27 |        2 |        8 |        2 |     88.5714% |    42, 52 |
+| src//plinder/core/scores/index.py                              |       29 |        3 |       10 |        3 |     84.6154% |42, 46, 60 |
 | src//plinder/core/scores/ligand.py                             |       46 |        3 |        8 |        2 |     90.7407% | 49-52, 66 |
 | src//plinder/core/scores/links.py                              |       32 |        7 |       10 |        4 |     73.8095% |44-45, 47-48, 51, 65-66 |
 | src//plinder/core/scores/protein.py                            |       77 |        6 |       30 |        8 |     86.9159% |47->53, 61-62, 160, 164->174, 170, 173, 181->183, 190 |
-| src//plinder/core/scores/query.py                              |      106 |       10 |       58 |        9 |     87.1951% |49, 97, 104, 173->191, 179, 186-188, 226, 228, 274 |
+| src//plinder/core/scores/query.py                              |      104 |        9 |       56 |        8 |     88.1250% |49, 97, 104, 173->181, 176-178, 216, 218, 264 |
 | src//plinder/core/split/\_\_init\_\_.py                        |        2 |        0 |        0 |        0 |    100.0000% |           |
 | src//plinder/core/split/plot.py                                |      302 |      182 |       76 |       10 |     35.4497% |19-20, 39, 156, 158, 159->161, 171, 176, 189-205, 295-313, 329-330, 379-397, 400-428, 431-473, 476-603, 606-614, 625-626, 629-660, 663-710, 713-755, 762, 764-766, 769-773, 777-820, 832 |
 | src//plinder/core/split/utils.py                               |       19 |        8 |        2 |        0 |     52.3810% |     35-42 |
