@@ -308,18 +308,16 @@ def prep_data_for_desired_properties(
         data_dir / "links" / "kind=apo" / "links.parquet",
         columns=["reference_system_id"],
     )
-    apo_links["system_id"] = apo_links["reference_system_id"]
     assert apo_links is not None, "apo_links is None"
-    num_apo_links = apo_links.groupby("system_id").size()
+    num_apo_links = apo_links.groupby("reference_system_id").size()
     LOG.info(f"num_apo_links has {len(num_apo_links)} elements")
 
     pred_links = pd.read_parquet(
         data_dir / "links" / "kind=pred" / "links.parquet",
         columns=["reference_system_id"],
     )
-    pred_links["system_id"] = pred_links["reference_system_id"]
     assert pred_links is not None, "pred_links is None"
-    num_pred_links = pred_links.groupby("system_id").size()
+    num_pred_links = pred_links.groupby("reference_system_id").size()
     LOG.info(f"num_pred_links has {len(num_pred_links)} elements")
 
     entries["system_has_apo"] = entries["system_id"].map(
