@@ -30,7 +30,7 @@ We currently only support a Linux environment.
 `plinder.data` uses a number of dependencies which are not simply pip-installable.
 `openstructure` is for some of its functionality and is available from the
 `aivant` conda channel using `conda install aivant::openstructure`, but it is only built
-targeting Linux architectures. Additionally, `networkit==11.0`, which at the time of writing,
+targeting Linux architectures. Additionally, `networkit==11.0.0`, which at the time of writing,
 does not install cleanly on MacOS, along with a number of dependencies which are referenced
 by a GitHub link directly, make a pip-installable package problematic. These additional
 dependencies can be installed by running:

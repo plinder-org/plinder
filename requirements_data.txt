@@ -1,4 +1,4 @@
-  networkit == 11.0
+  networkit == 11.0.0
   tabulate
   pdb-validation @ git+https://git.scicore.unibas.ch/schwede/ligand-validation.git
   mmpdb @ git+https://github.com/rdkit/mmpdb.git
