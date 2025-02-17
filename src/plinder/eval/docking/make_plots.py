@@ -45,7 +45,7 @@ class EvaluationResults:
     ) -> "EvaluationResults":
         # for eval we use aggregate (wave) scores
         # multi ligand systems have them duplicated per each ligand entry
-        # drop them to avoid multiple counting when socring the same pose
+        # drop them to avoid multiple counting when scoring the same pose
         # i.e. keep one aggregate score (wave) per model
         scores_df = pd.read_parquet(score_file).drop_duplicates(["reference", "rank"])
         data_df = pd.read_parquet(data_file)
