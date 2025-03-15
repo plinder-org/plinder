@@ -2,6 +2,7 @@
 name = "plinder"
 dynamic = ["version"]
 dependencies = [
+    "atom3d",
     "biotite >= 1.0",
     "numpy<2",
     "pandas",
