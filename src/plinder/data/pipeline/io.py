@@ -77,7 +77,7 @@ def download_cofactors(
 def download_affinity_data(
     *,
     data_dir: Path,
-    bindingdb_url: str = "https://www.bindingdb.org/bind/downloads/BindingDB_All_202401_tsv.zip",
+    bindingdb_url: str = "https://www.bindingdb.org/bind/downloads/BindingDB_All_202412_tsv.zip",
     force_update: bool = False,
 ) -> Any:
     """
@@ -106,7 +106,7 @@ def download_affinity_data(
         data_dir / "dbs" / "affinity" / "papyrus_affinity_raw.tar.gz"
     )
     bindingdb_raw_affinity_path = (
-        data_dir / "dbs" / "affinity" / "BindingDB_All_202401.tsv"
+        data_dir / "dbs" / "affinity" / "BindingDB_All.tsv"
     )
     moad_raw_affinity_path = data_dir / "dbs" / "affinity" / "moad_affinity.csv"
 

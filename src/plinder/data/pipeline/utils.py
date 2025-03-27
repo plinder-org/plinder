@@ -113,6 +113,8 @@ def load_entries_from_zips(
     two_char_codes: Optional[list[str]] = None,
     pdb_ids: Optional[list[str]] = None,
     load_for_scoring: bool = False,
+    max_protein_chains: int = 5,
+    max_ligand_chains: int = 5,
 ) -> Dict[str, "Entry"]:
     """
     Load entries from the qc zips into a dict
@@ -151,6 +153,8 @@ def load_entries_from_zips(
                         pdb_id = name.replace(".json", "")
                         reduced[pdb_id] = Entry.model_validate_json(obj.read()).prune(
                             load_for_scoring=load_for_scoring,
+                            max_protein_chains=max_protein_chains,
+                            max_ligand_chains=max_ligand_chains
                         )
                 except Exception as e:
                     LOG.error(f"failed to read name={name} failed with {repr(e)}")
