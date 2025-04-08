@@ -534,11 +534,13 @@ class System(DocBaseModel):
         """
         Maximum molecular weight of the system ligands
         """
-        return max(
-            ligand.molecular_weight if ligand.molecular_weight is not None else -1.0
+        max_vals = [ligand.molecular_weight if ligand.molecular_weight is not None else -1.0
             for ligand in self.ligands
-            if ligand.molecular_weight is not None
-        )
+            if ligand.molecular_weight is not None]
+        if len(max_vals):
+            return max(max_vals)
+        else:
+            return 1
 
     @cached_property
     def proper_ligand_max_molecular_weight(self) -> float:
@@ -1057,6 +1059,9 @@ class Entry(DocBaseModel):
         min_polymer_size: int = 10,  # TODO: this used to be max_non_small_mol_ligand_length
         max_non_small_mol_ligand_length: int = 20,  # TODO: review and make consistent
         plip_complex_threshold: float = 10.0,
+        save_folder: Path = None,
+        max_protein_chains_to_save: int = 5,
+        max_ligand_chains_to_save: int = 5,
     ) -> Entry:
         ent, seqres, info = io.LoadMMCIF(
             str(cif_file), seqres=True, info=True, remote=False
@@ -1117,6 +1122,14 @@ class Entry(DocBaseModel):
                 ligands[ligand.id] = ligand
         entry.set_systems(ligands)
         entry.label_chains()
+        if save_folder is not None:
+            entry.save_systems(
+                info,
+                {"1": biounit},
+                save_folder,
+                max_protein_chains_to_save,
+                max_ligand_chains_to_save,
+            )
         return entry
 
     def set_systems(self, ligands: dict[str, Ligand]) -> None:
