@@ -22,7 +22,7 @@
 resource for training and evaluation of protein-ligand docking algorithms:
 
 - \> 400k PLI systems across > 11k SCOP domains and > 50k unique small molecules
-- 500+ annotations for each system, including protein and ligand properties, quality,
+- 750+ annotations for each system, including protein and ligand properties, quality,
   matched molecular series and more
 - Automated curation pipeline to keep up with the PDB
 - 14 PLI metrics and over 20 billion similarity scores
@@ -58,10 +58,7 @@ release and the `plinder.core` package makes it easy to interact
 with the dataset.
 
 #### 🐛🐛🐛 Known bugs:
-- For correct `entry_release_date`, please, use the provided `dates.csv` file until full fix in v3 release in 2025Q1:
-    ```
-    plindex.merge(pd.read_csv("./src/plinder/data/utils/annotations/static_files/dates.csv"), on="entry_pdb_id")
-    ```
+- Source dataset contains incorrect `entry_release_date` dates, please, use `query_index` to get correct dates patched.
 - Complexes containing nucleic acid receptors may [not be saved corectly](https://github.com/plinder-org/plinder/issues/61).
 - `ligand_binding_affinity` queries have been disabled due to a [bug found parsing BindingDB](https://github.com/plinder-org/plinder/issues/94)
 
