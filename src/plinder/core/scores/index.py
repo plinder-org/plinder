@@ -67,7 +67,9 @@ def query_index(
         if "entry_pdb_id" not in df.columns:
             # hacky fix - assuming standard pdb names - to be removed
             df["entry_pdb_id"] = df.system_id.apply(lambda x: x[:4])
-        df = df.drop("entry_release_date").merge(df_fixed_time, on="entry_pdb_id")
+        df = df.drop("entry_release_date", axis=1).merge(
+            df_fixed_time, on="entry_pdb_id"
+        )
     # END patch-2
     if splits is None:
         splits = ["train", "val"]
