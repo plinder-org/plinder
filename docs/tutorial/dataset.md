@@ -7,6 +7,10 @@ The PLINDER data is accessible from a _Google Cloud Platform_
 of data.
 The bucket URL of PLINDER is `gs://plinder`.
 
+Customize where the PLINDER dataset is downloaded:
+
+- `PLINDER_MOUNT`: the location in which the PLINDER dataset should be stored
+
 The PLINDER dataset is versioned via two parameters:
 
 - `PLINDER_RELEASE`: the time stamp of the last RCSB sync
