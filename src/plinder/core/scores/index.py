@@ -39,7 +39,7 @@ def query_index(
     if columns is None:
         columns = ["system_id", "entry_pdb_id"]
     if "system_id" not in columns and "*" not in columns:
-        columns = ["system_id", "entry_pdb_id"] + columns
+        columns = ["system_id"] + columns
     # START patch-1
     # TODO-1: remove this patch after binding_affinity is fixed
     if "system_has_binding_affinity" in columns or "ligand_binding_affinity" in columns:
@@ -64,6 +64,9 @@ def query_index(
         df_fixed_time = pd.read_csv(
             resources.files("plinder") / "data/utils/annotations/static_files/dates.csv"
         )
+        if "entry_pdb_id" not in df.columns:
+            # hacky fix - assuming standard pdb names - to be removed
+            df["entry_pdb_id"] = df.system_id.apply(lambda x: x[:4])
         df = df.drop("entry_release_date").merge(df_fixed_time, on="entry_pdb_id")
     # END patch-2
     if splits is None:
