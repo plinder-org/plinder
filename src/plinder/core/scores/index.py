@@ -63,7 +63,7 @@ def query_index(
 
         df_fixed_time = pd.read_csv(
             resources.files("plinder") / "data/utils/annotations/static_files/dates.csv"
-        )
+        )[["entry_release_date", "entry_pdb_id"]]
         if "entry_pdb_id" not in df.columns:
             # hacky fix - assuming standard pdb names - to be removed
             df["entry_pdb_id"] = df.system_id.apply(lambda x: x[:4])
