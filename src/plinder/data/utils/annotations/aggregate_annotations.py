@@ -1063,7 +1063,7 @@ class Entry(DocBaseModel):
         min_polymer_size: int = 10,  # TODO: this used to be max_non_small_mol_ligand_length
         max_non_small_mol_ligand_length: int = 20,  # TODO: review and make consistent
         plip_complex_threshold: float = 10.0,
-        save_folder: Path = None,
+        save_folder: Path | None = None,
         max_protein_chains_to_save: int = 5,
         max_ligand_chains_to_save: int = 5,
     ) -> Entry:
