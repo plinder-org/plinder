@@ -12,6 +12,7 @@ from biotite.structure import get_residues
 from biotite.structure.atoms import AtomArray, AtomArrayStack
 from biotite.structure.io.pdbx import get_structure
 from numpy.typing import NDArray
+from rdkit import Chem
 from rdkit.Chem import Mol
 from rdkit.Chem.rdchem import BondType
 
