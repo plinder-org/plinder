@@ -199,6 +199,8 @@ def run_alignment(
                 str(x)
                 .replace("_xyz-enrich.cif.gz", "")
                 .replace("_xyz-enrich.cif", "")
+                .replace(".cif.gz", "")
+                .replace(".cif", "")
                 .replace("pdb_0000", "")[:4]
                 for x in table["query"]
             ]
@@ -212,6 +214,8 @@ def run_alignment(
                     str(x)
                     .replace("_xyz-enrich.cif.gz", "")
                     .replace("_xyz-enrich.cif", "")
+                    .replace(".cif.gz", "")
+                    .replace(".cif", "")
                     .replace("pdb_0000", "")[:4]
                     for x in table["target"]
                 ]
@@ -422,6 +426,29 @@ class Scorer:
             if not pdb_id_file.exists():
                 LOG.info(f"get_score_df: pdb_id_file={pdb_id_file} does not exist")
                 continue
+            
+            # self.entries = {}
+            entries_to_load = {pdb_id}
+            if search_db != "pred" and pdb_id_file.exists():
+                entries_to_load |= set(
+                    pd.read_parquet(pdb_id_file, columns=["target_pdb_id"])[
+                        "target_pdb_id"
+                    ]
+                )
+            entries_to_load = entries_to_load.difference(self.entries.keys())
+            LOG.info(f"entries_to_load pdb_id={pdb_id} {len(entries_to_load)}")
+            LOG.info(
+                f"loading {len(entries_to_load)} (additional) entries for {pdb_id}"
+            )
+            self.entries.update(
+                load_entries_from_zips(
+                    data_dir=data_dir,
+                    pdb_ids=entries_to_load,
+                    load_for_scoring=True,
+                    max_protein_chains=20,
+                    max_ligand_chains=20,
+                )
+            )
             pdb_file = (
                 self.db_dir
                 / f"{search_db}_{aln_type}"
@@ -430,30 +457,9 @@ class Scorer:
             )
             pdb_file.parent.mkdir(exist_ok=True, parents=True)
             if overwrite or not pdb_file.exists():
-                self.entries = {}
-                entries_to_load = {pdb_id}
-                if search_db != "pred" and pdb_id_file.exists():
-                    entries_to_load |= set(
-                        pd.read_parquet(pdb_id_file, columns=["target_pdb_id"])[
-                            "target_pdb_id"
-                        ]
-                    )
-                entries_to_load = entries_to_load.difference(self.entries.keys())
-                LOG.info(f"entries_to_load pdb_id={pdb_id} {len(entries_to_load)}")
-                LOG.info(
-                    f"loading {len(entries_to_load)} (additional) entries for {pdb_id}"
-                )
-                self.entries.update(
-                    load_entries_from_zips(
-                        data_dir=data_dir,
-                        pdb_ids=entries_to_load,
-                        load_for_scoring=True,
-                    )
-                )
-
                 try:
                     LOG.info(
-                        f"mapping aligmnet df for {pdb_id} to {search_db} for {aln_type}"
+                        f"mapping aligment df for {pdb_id} to {search_db} for {aln_type}"
                     )
                     self.map_alignment_df(pdb_id_file, aln_type, search_db).to_parquet(
                         pdb_file, index=True
@@ -533,7 +539,12 @@ class Scorer:
         df = pd.read_parquet(df_file)
         if aln_type == "foldseek":
             df["query"] = df["query"].replace(
-                {"_xyz-enrich.cif.gz": "", "_xyz-enrich.cif": "", "pdb_0000": ""},
+                {
+                    "_xyz-enrich.cif.gz": "",
+                    "_xyz-enrich.cif": "",
+                    "pdb_0000": "",
+                    ".cif.gz": "",
+                },
                 regex=True,
             )
             if search_db == "pred":
@@ -542,7 +553,12 @@ class Scorer:
                 )
             else:
                 df["target"] = df["target"].replace(
-                    {"_xyz-enrich.cif.gz": "", "_xyz-enrich.cif": "", "pdb_0000": ""},
+                    {
+                        "_xyz-enrich.cif.gz": "",
+                        "_xyz-enrich.cif": "",
+                        "pdb_0000": "",
+                        ".cif.gz": "",
+                    },
                     regex=True,
                 )
         df["query_chain_mapped"] = (
@@ -754,9 +770,9 @@ class Scorer:
     ]:
         pocket_scores: _SimilarityScoreDictType = defaultdict(float)
         pli_scores: _SimilarityScoreDictType = defaultdict(float)
-        pocket_length = query_system.num_pocket_residues
-        pli_length = query_system.num_interactions
-        pli_unique_length = query_system.num_unique_interactions
+        pocket_length = query_system.proper_num_pocket_residues
+        pli_length = query_system.proper_num_interactions
+        pli_unique_length = query_system.proper_num_unique_interactions
         for q_instance_chain, t_instance_chain in alns:
             aln = alns[(q_instance_chain, t_instance_chain)]
             q_pocket = query_system.pocket_residues.get(q_instance_chain, {})
@@ -856,7 +872,6 @@ class Scorer:
                             q_chain
                         ].index.get_level_values("target_chain_mapped")
                     )
-
             for target_system_id in self.entries[target_entry].systems:
                 target_system = self.entries[target_entry].systems[target_system_id]
                 if target_system.system_type != "holo":
