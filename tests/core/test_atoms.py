@@ -1,6 +1,5 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
-
 import biotite.structure as struc
 import numpy as np
 import pytest
@@ -9,9 +8,13 @@ from plinder.core.index.system import PlinderSystem
 from plinder.core.structure import vendored as atoms
 from plinder.core.structure.atoms import (
     atom_array_from_cif_file,
-    generate_input_conformer,
 )
 from plinder.core.structure.models import BackboneDefinition
+from plinder.core.structure.smallmols_utils import (
+    generate_input_conformer,
+    params_removeHs,
+)
+from rdkit import Chem
 
 
 def test_pdb_loader(pdb_5a7w_hydrogen):
@@ -101,9 +104,24 @@ def test_atom_array_from_cif_file(cif_1qz5_unzipped):
     assert isinstance(arr, AtomArray)
 
 
-def test_generate_input_conformer_easy():
-    from rdkit import Chem
+def test_params_removeHs():
+    # explicit bond stereo - from PDB: 5j1x
+    mol = Chem.MolFromSmiles("[H]/N=C(/N)NCCC[C@H](NC(=O)OC(C)(C)C)C(=O)O")
+    mol = params_removeHs(mol)
+    assert mol.GetNumAtoms() == mol.GetNumHeavyAtoms()
+    # hydrogen isotopes - from PDB: 1tuj
+    mol2 = Chem.MolFromSmiles("[2H]C([2H])(C(=O)[O-])C([2H])([2H])[Si](C)(C)C")
+    mol2 = params_removeHs(mol2)
+    assert mol2.GetNumAtoms() == mol2.GetNumHeavyAtoms()
+    # more strange explicit Hs
+    mol3 = Chem.MolFromSmiles(
+        "[H]/N=C(\\N)c1ccc(O)c(C=NCCN=Cc2cc(/C(N)=N\\[H])ccc2O)c1"
+    )
+    mol3 = params_removeHs(mol3)
+    assert mol3.GetNumAtoms() == mol3.GetNumHeavyAtoms()
 
+
+def test_generate_input_conformer_easy():
     # ligand_rdkit_canonical_smiles 4v2y__1__1.A__1.E
     thal_smiles = "O=C1CC[C@H](N2C(=O)c3ccccc3C2=O)C(=O)N1"
     mol = Chem.MolFromSmiles(thal_smiles)
@@ -115,8 +133,6 @@ def test_generate_input_conformer_easy():
 
 
 def test_generate_input_conformer_hard():
-    from rdkit import Chem
-
     # ligand_rdkit_canonical_smiles from system_id "102m__1__1.A__1.C"
     hard_smiles = "C=CC1=C(C)C2=Cc3c(C)c(CCC(=O)O)c4n3[Fe]35<-N6=C(C=c7c(C=C)c(C)c(n73)=CC1=N->52)C(C)=C(CCC(=O)O)C6=C4"
     mol = Chem.MolFromSmiles(hard_smiles)

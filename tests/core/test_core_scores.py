@@ -10,6 +10,22 @@ def test_query_index(read_plinder_mount):
     assert len(df.index) == 57
 
 
+@pytest.mark.parametrize(
+    "system_id, correct_release_date",
+    [
+        ("6cex__1__1.D__1.M", "2018-04-04"),
+        ("8grn__1__1.A__1.C", "2023-06-14"),
+    ],
+)
+def test_entry_release_date(system_id, correct_release_date):
+    df = scores.query_index(
+        splits=["*"],
+        columns=["entry_release_date"],
+        filters=[("system_id", "==", system_id)],
+    )
+    assert df.iloc[0].entry_release_date == correct_release_date
+
+
 def test_query_protein_similarity(read_plinder_mount):
     df = scores.query_protein_similarity(
         search_db="holo",

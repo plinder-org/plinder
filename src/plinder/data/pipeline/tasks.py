@@ -16,11 +16,11 @@ import pandas as pd
 from omegaconf import DictConfig
 from tqdm import tqdm
 
+from plinder.core.structure import smallmols_similarity
 from plinder.core.utils import gcs
 from plinder.core.utils.log import setup_logger
 from plinder.data import clusters, databases, leakage, splits
 from plinder.data.pipeline import io, utils
-from plinder.data.utils import tanimoto
 
 LOG = setup_logger(__name__)
 STAGES = [
@@ -407,7 +407,7 @@ def structure_qc(
                             entry_json, clear_non_pocket_residues=True
                         )
                     except Exception as e:
-                        LOG.warn(f"failed loading {entry_json}")
+                        LOG.warning(f"failed loading {entry_json}")
                         clean = str(e).replace(",", "_").replace("\n", " ")[:50]
                         fails.write(f"{entry_json},{clean}")
                         continue
@@ -422,7 +422,7 @@ def structure_qc(
                         ):
                             structure_qc.extend(run_structure_checks(system_dict))
                     except Exception as e:
-                        LOG.warn(f"failed structure checks for {entry_json}")
+                        LOG.warning(f"failed structure checks for {entry_json}")
                         fails.write(f"{entry_json},{str(e).replace(',', '_')}\n")
                         continue
                 if len(entry_dfs) and len(structure_qc):
@@ -577,7 +577,7 @@ def compute_ligand_fingerprints(
     #  data_dir / "fingerprints" / ligands_per_system.parquet
     #  data_dir / "fingerprints"  / ligands_per_inchikey.parquet
     #  data_dir / "fingerprints" /ligands_per_inchikey_ecfp4.npy
-    tanimoto.compute_ligand_fingerprints(
+    smallmols_similarity.compute_ligand_fingerprints(
         data_dir=data_dir,
         split_char=split_char,
         radius=radius,
@@ -613,7 +613,7 @@ def make_ligand_scores(
     hashid = utils.hash_contents([str(i) for i in ligand_ids])
     output_path = data_dir / "ligand_scores" / f"{hashid}.parquet"
     output_path.parent.mkdir(exist_ok=True, parents=True)
-    tanimoto.ligand_scores(
+    smallmols_similarity.ligand_scores(
         ligand_ids=ligand_ids,
         data_dir=data_dir,
         output_path=output_path,

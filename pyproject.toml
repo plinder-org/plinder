@@ -13,7 +13,7 @@ dependencies = [
     "google-cloud-storage",
     "gcsfs",
     "gemmi",
-    "rdkit>=2023.9.5",
+    "rdkit>=2024.03.6",
     "pyarrow",
     "omegaconf",
     "mmcif",
