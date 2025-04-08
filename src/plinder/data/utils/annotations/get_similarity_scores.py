@@ -426,7 +426,7 @@ class Scorer:
             if not pdb_id_file.exists():
                 LOG.info(f"get_score_df: pdb_id_file={pdb_id_file} does not exist")
                 continue
-            
+
             # self.entries = {}
             entries_to_load = {pdb_id}
             if search_db != "pred" and pdb_id_file.exists():

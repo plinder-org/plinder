@@ -105,9 +105,7 @@ def download_affinity_data(
     papyrus_raw_affinity_path = (
         data_dir / "dbs" / "affinity" / "papyrus_affinity_raw.tar.gz"
     )
-    bindingdb_raw_affinity_path = (
-        data_dir / "dbs" / "affinity" / "BindingDB_All.tsv"
-    )
+    bindingdb_raw_affinity_path = data_dir / "dbs" / "affinity" / "BindingDB_All.tsv"
     moad_raw_affinity_path = data_dir / "dbs" / "affinity" / "moad_affinity.csv"
 
     # Make sub directories

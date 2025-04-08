@@ -154,7 +154,7 @@ def load_entries_from_zips(
                         reduced[pdb_id] = Entry.model_validate_json(obj.read()).prune(
                             load_for_scoring=load_for_scoring,
                             max_protein_chains=max_protein_chains,
-                            max_ligand_chains=max_ligand_chains
+                            max_ligand_chains=max_ligand_chains,
                         )
                 except Exception as e:
                     LOG.error(f"failed to read name={name} failed with {repr(e)}")

@@ -163,7 +163,9 @@ class System(DocBaseModel):
         for ligand in self.ligands:
             ligand_pocket_residues = ligand.pocket_residues
             for chain in ligand_pocket_residues:
-                pocket_residues |= set((chain, residue) for residue in ligand_pocket_residues[chain])
+                pocket_residues |= set(
+                    (chain, residue) for residue in ligand_pocket_residues[chain]
+                )
         return len(pocket_residues)
 
     @cached_property
@@ -534,9 +536,11 @@ class System(DocBaseModel):
         """
         Maximum molecular weight of the system ligands
         """
-        max_vals = [ligand.molecular_weight if ligand.molecular_weight is not None else -1.0
+        max_vals = [
+            ligand.molecular_weight if ligand.molecular_weight is not None else -1.0
             for ligand in self.ligands
-            if ligand.molecular_weight is not None]
+            if ligand.molecular_weight is not None
+        ]
         if len(max_vals):
             return max(max_vals)
         else:

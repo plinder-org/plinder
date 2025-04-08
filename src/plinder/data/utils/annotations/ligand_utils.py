@@ -32,7 +32,6 @@ from plinder.data.utils.annotations.interaction_utils import (
 from plinder.data.utils.annotations.protein_utils import Chain
 from plinder.data.utils.annotations.rdkit_utils import (
     set_smiles_from_ligand_ost,
-    set_smiles_from_ligand_ost_v2,
 )
 from plinder.data.utils.annotations.utils import DocBaseModel
 
