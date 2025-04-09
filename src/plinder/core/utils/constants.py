@@ -1088,6 +1088,7 @@ ORDERED_AA_FULL_ATOM = {
         "OH",
     ],
     "VAL": ["N", "CA", "C", "O", "CB", "CG1", "CG2"],
+    "UNK": ["N", "CA", "C", "O"],
 }
 
 
