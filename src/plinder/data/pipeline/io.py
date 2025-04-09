@@ -77,7 +77,7 @@ def download_cofactors(
 def download_affinity_data(
     *,
     data_dir: Path,
-    bindingdb_url: str = "https://www.bindingdb.org/bind/downloads/BindingDB_All_202412_tsv.zip",
+    bindingdb_url: str = "https://www.bindingdb.org/bind/downloads/BindingDB_All_202504_tsv.zip",
     force_update: bool = False,
 ) -> Any:
     """
@@ -102,16 +102,10 @@ def download_affinity_data(
     from zipfile import ZipFile
 
     affinity_path = data_dir / "dbs" / "affinity" / "affinity.json"
-    papyrus_raw_affinity_path = (
-        data_dir / "dbs" / "affinity" / "papyrus_affinity_raw.tar.gz"
-    )
     bindingdb_raw_affinity_path = data_dir / "dbs" / "affinity" / "BindingDB_All.tsv"
-    moad_raw_affinity_path = data_dir / "dbs" / "affinity" / "moad_affinity.csv"
 
     # Make sub directories
-    papyrus_raw_affinity_path.parent.mkdir(parents=True, exist_ok=True)
     bindingdb_raw_affinity_path.parent.mkdir(parents=True, exist_ok=True)
-    moad_raw_affinity_path.parent.mkdir(parents=True, exist_ok=True)
     if not affinity_path.is_file() or force_update:
         # Download BindingDB
         if (
