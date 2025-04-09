@@ -217,6 +217,9 @@ def pdbize(
         edi.SetChainDescription(chain, original_chain.description)
         edi.SetChainType(chain, original_chain.type)
         name_mapping[original_name] = final_name
+    for residue in entity.residues:
+        if len(residue.name) > 3:
+            edi.RenameResidue(residue, residue.name[:3])
     edi.UpdateICS()
     return entity, name_mapping
 

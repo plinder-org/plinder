@@ -159,14 +159,25 @@ class System(DocBaseModel):
         """
         Number of pocket residues of the system
         """
-        return sum(l.num_pocket_residues for l in self.ligands)
+        pocket_residues = set()
+        for ligand in self.ligands:
+            ligand_pocket_residues = ligand.pocket_residues
+            for chain in ligand_pocket_residues:
+                pocket_residues |= set(
+                    (chain, residue) for residue in ligand_pocket_residues[chain]
+                )
+        return len(pocket_residues)
 
     @cached_property
     def proper_num_pocket_residues(self) -> int:
         """
         Number of pocket residues of the system excluding ions and artifacts
         """
-        return sum(l.num_pocket_residues for l in self.proper_ligands())
+        pocket_residues = set()
+        for chain in self.pocket_residues:
+            for residue in self.pocket_residues[chain]:
+                pocket_residues.add((chain, residue))
+        return len(pocket_residues)
 
     @cached_property
     def num_interactions(self) -> int:
@@ -257,6 +268,8 @@ class System(DocBaseModel):
         """
         all_residues: dict[str, dict[int, str]] = defaultdict(dict)
         for ligand in self.ligands:
+            if not ligand.is_proper:
+                continue
             ligand_pocket_residues = ligand.pocket_residues
             for chain in ligand_pocket_residues:
                 all_residues[chain].update(ligand_pocket_residues[chain])
@@ -271,7 +284,7 @@ class System(DocBaseModel):
             lambda: defaultdict(list)
         )
         for ligand in self.ligands:
-            if ligand.is_artifact:
+            if not ligand.is_proper:
                 continue
             for chain in ligand.interactions:
                 for residue in ligand.interactions[chain]:
@@ -523,11 +536,15 @@ class System(DocBaseModel):
         """
         Maximum molecular weight of the system ligands
         """
-        return max(
+        max_vals = [
             ligand.molecular_weight if ligand.molecular_weight is not None else -1.0
             for ligand in self.ligands
             if ligand.molecular_weight is not None
-        )
+        ]
+        if len(max_vals):
+            return max(max_vals)
+        else:
+            return 1
 
     @cached_property
     def proper_ligand_max_molecular_weight(self) -> float:
@@ -872,6 +889,7 @@ class Entry(DocBaseModel):
         neighboring_ligand_threshold: float = 4.0,
         min_polymer_size: int = 10,  # TODO: this used to be max_non_small_mol_ligand_length
         max_non_small_mol_ligand_length: int = 20,  # TODO: review and make consistent
+        data_dir: Path | None = None,
         save_folder: Path | None = None,
         max_protein_chains_to_save: int = 5,
         max_ligand_chains_to_save: int = 5,
@@ -938,7 +956,7 @@ class Entry(DocBaseModel):
                 r = None
         entry = cls(
             pdb_id=info.struct_details.entry_id.lower(),
-            release_date=info.revisions.GetDateOriginal(),
+            release_date=info.revisions.GetDate(0),
             oligomeric_state=str(entry_info.get("entry_oligomeric_state"))
             if entry_info.get("entry_oligomeric_state") is not None
             else None,
@@ -967,8 +985,7 @@ class Entry(DocBaseModel):
             chain.name for chain in ent.chains if chain.type == mol.CHAINTYPE_WATER
         ]
 
-        data_dir = None
-        if save_folder is not None:
+        if save_folder is not None and data_dir is None:
             data_dir = save_folder.parent.parent
         for chain in per_chain:
             entry.chains[chain].mappings = per_chain[chain]
@@ -990,8 +1007,7 @@ class Entry(DocBaseModel):
             ]
             for ligand_chain in biounit_ligand_chains:
                 ligand_instance, ligand_asym_id = ligand_chain.split(".")
-                data_dir = None
-                if save_folder is not None:
+                if save_folder is not None and data_dir is None:
                     data_dir = save_folder.parent.parent
                 residue_numbers = [
                     residue.number.num
@@ -1031,6 +1047,89 @@ class Entry(DocBaseModel):
         # VO: added option to skip to speed up testing!
         if not skip_posebusters:
             entry.run_posebusters(
+                save_folder,
+                max_protein_chains_to_save,
+                max_ligand_chains_to_save,
+            )
+        return entry
+
+    @classmethod
+    def from_custom_cif_file(
+        cls,
+        pdb_id: str,
+        cif_file: Path,
+        neighboring_residue_threshold: float = 6.0,
+        neighboring_ligand_threshold: float = 4.0,
+        min_polymer_size: int = 10,  # TODO: this used to be max_non_small_mol_ligand_length
+        max_non_small_mol_ligand_length: int = 20,  # TODO: review and make consistent
+        plip_complex_threshold: float = 10.0,
+        save_folder: Path | None = None,
+        max_protein_chains_to_save: int = 5,
+        max_ligand_chains_to_save: int = 5,
+    ) -> Entry:
+        ent, seqres, info = io.LoadMMCIF(
+            str(cif_file), seqres=True, info=True, remote=False
+        )
+        entry = cls(
+            pdb_id=pdb_id,
+            chain_to_seqres={c.name: c.string for c in seqres},
+        )
+        entry.chains = {
+            chain.name: Chain.from_ost_chain(
+                chain, info, len(entry.chain_to_seqres.get(chain.name, ""))
+            )
+            for chain in ent.chains
+            if chain.type != mol.CHAINTYPE_WATER
+        }
+        entry.water_chains = [
+            chain.name for chain in ent.chains if chain.type == mol.CHAINTYPE_WATER
+        ]
+        entry.ligand_like_chains = detect_ligand_chains(
+            ent, entry, min_polymer_size, max_non_small_mol_ligand_length
+        )
+        biounit = ent.Copy()
+        edi = biounit.EditXCS(mol.BUFFERED_EDIT)
+        for chain in biounit.chains:
+            edi.RenameChain(chain, f"1.{chain.name}")
+        edi.UpdateICS()
+        biounit_ligand_chains = [
+            chain.name
+            for chain in biounit.chains
+            if chain.name.split(".")[1] in entry.ligand_like_chains
+        ]
+        ligands = {}
+        for ligand_chain in biounit_ligand_chains:
+            ligand_instance, ligand_asym_id = ligand_chain.split(".")
+            residue_numbers = [
+                residue.number.num
+                for residue in biounit.FindChain(ligand_chain).residues
+            ]
+            ligand = Ligand.from_pli(
+                pdb_id=entry.pdb_id,
+                biounit_id="1",
+                biounit=biounit,
+                ligand_instance=int(ligand_instance),
+                ligand_chain=entry.chains[ligand_asym_id],
+                residue_numbers=residue_numbers,
+                ligand_like_chains=entry.ligand_like_chains,
+                interface_proximal_gaps={
+                    "ppi_interface_gap_annotation": {},
+                    "ligand_interface_gap_annotation": {},
+                },
+                all_covalent_dict=entry.covalent_bonds,
+                plip_complex_threshold=plip_complex_threshold,
+                neighboring_residue_threshold=neighboring_residue_threshold,
+                neighboring_ligand_threshold=neighboring_ligand_threshold,
+                data_dir=None,
+            )
+            if ligand is not None:
+                ligands[ligand.id] = ligand
+        entry.set_systems(ligands)
+        entry.label_chains()
+        if save_folder is not None:
+            entry.save_systems(
+                info,
+                {"1": biounit},
                 save_folder,
                 max_protein_chains_to_save,
                 max_ligand_chains_to_save,

@@ -30,7 +30,9 @@ from plinder.data.utils.annotations.interaction_utils import (
     run_plip_on_split_structure,
 )
 from plinder.data.utils.annotations.protein_utils import Chain
-from plinder.data.utils.annotations.rdkit_utils import set_smiles_from_ligand_ost
+from plinder.data.utils.annotations.rdkit_utils import (
+    set_smiles_from_ligand_ost,
+)
 from plinder.data.utils.annotations.utils import DocBaseModel
 
 # TODO: replace above with below
@@ -1005,27 +1007,24 @@ class Ligand(DocBaseModel):
         data_dir : Path, optional
             location of plinder root
         """
-        global \
-            COFACTORS, \
-            ARTIFACTS, \
-            LIST_OF_CCD_SYNONYMS, \
-            CCD_SYNONYMS_DICT, \
-            KINASE_INHIBITORS, \
-            BINDING_AFFINITY
-        if LIST_OF_CCD_SYNONYMS is None or CCD_SYNONYMS_DICT is None:
-            if data_dir is None:
-                raise ValueError(
-                    "data_dir must be provided if CCD_SYNONYMS_DICT or LIST_OF_CCD_SYNONYMS is None"
-                )
-            LIST_OF_CCD_SYNONYMS, CCD_SYNONYMS_DICT = get_ccd_synonyms(data_dir)
-        if COFACTORS is None:
-            COFACTORS = parse_cofactors(data_dir)
-        if ARTIFACTS is None:
-            ARTIFACTS = parse_artifacts()
-        if KINASE_INHIBITORS is None:
-            KINASE_INHIBITORS = parse_kinase_inhibitors(data_dir)
-        if BINDING_AFFINITY is None:
-            BINDING_AFFINITY = get_binding_affinity(data_dir)
+        if data_dir is not None:
+            global \
+                COFACTORS, \
+                ARTIFACTS, \
+                LIST_OF_CCD_SYNONYMS, \
+                CCD_SYNONYMS_DICT, \
+                KINASE_INHIBITORS, \
+                BINDING_AFFINITY
+            if LIST_OF_CCD_SYNONYMS is None or CCD_SYNONYMS_DICT is None:
+                LIST_OF_CCD_SYNONYMS, CCD_SYNONYMS_DICT = get_ccd_synonyms(data_dir)
+            if COFACTORS is None:
+                COFACTORS = parse_cofactors(data_dir)
+            if ARTIFACTS is None:
+                ARTIFACTS = parse_artifacts()
+            if KINASE_INHIBITORS is None:
+                KINASE_INHIBITORS = parse_kinase_inhibitors(data_dir)
+            if BINDING_AFFINITY is None:
+                BINDING_AFFINITY = get_binding_affinity(data_dir)
         ligand_instance_chain = f"{ligand_instance}.{ligand_chain.asym_id}"
         residue_selection = " or ".join(f"rnum={rnum}" for rnum in residue_numbers)
         ligand_selection = f"cname={mol.QueryQuoteName(ligand_instance_chain)} and ({residue_selection})"
@@ -1153,10 +1152,11 @@ class Ligand(DocBaseModel):
             ligand.waters[plip_chain_mapping[plip_chain]].append(resnum)
         # add rdkit properties and type assignments
         ligand.set_rdkit()
-        # set is_artifact and is_cofactor and is_other
-        ligand.identify_artifacts_cofactors_and_other()
-        # unique code parsing!
-        ligand.unique_ccd_code = get_unique_ccd_longname(ligand.ccd_code)
+        if data_dir is not None:
+            # set is_artifact and is_cofactor and is_other
+            ligand.identify_artifacts_cofactors_and_other()
+            # unique code parsing!
+            ligand.unique_ccd_code = get_unique_ccd_longname(ligand.ccd_code)
 
         return ligand
 
@@ -1464,7 +1464,7 @@ class Ligand(DocBaseModel):
 
         Returns
         -------
-        List of residues in the format "<chain>_<residue_number>_<residue_index>"
+        List of residues in the format "<chain>_<residue_number>_<residue_index>_<auth_number>"
         dict[str, list[str]]
         """
         if residue_type == "interacting":
@@ -1476,7 +1476,7 @@ class Ligand(DocBaseModel):
             _, chain = instance_chain.split(".")
             for residue_number in residues[instance_chain]:
                 res.append(
-                    f"{instance_chain}_{residue_number}_{chains[chain].residues[residue_number].index}"
+                    f"{instance_chain}_{residue_number}_{chains[chain].residues[residue_number].index}_{chains[chain].residues[residue_number].auth_number}"
                 )  # TODO: move some of this logic to Residue
         return {f"ligand_{residue_type}_residues": res}
 

@@ -36,6 +36,9 @@ def ligand_ost_ent_to_rdkit_mol(
     edi = ent.EditXCS(omol.BUFFERED_EDIT)
     for i, chain in enumerate(ent.GetChainList()):
         edi.RenameChain(chain, f"{new_chains[i]}")
+    for residue in ent.residues:
+        if len(residue.name) > 3:
+            edi.RenameResidue(residue, residue.name[:3])
     edi.UpdateICS()
 
     pdbstring = io.EntityToPDBStr(ent).strip()
@@ -136,7 +139,11 @@ def set_smiles_from_ligand_ost(ent: omol.EntityHandle) -> str:
                     "set_smiles_from_ligand_ost: CCD smiles could not be loaded by rdkit, moving to fix"
                 )
     rdkit_mol = ligand_ost_ent_to_rdkit_mol(ent)
-    return str(Chem.MolToSmiles(rdkit_mol))
+    try:
+        return str(Chem.MolToSmiles(rdkit_mol))
+    except Exception as e:
+        LOG.error(f"set_smiles_from_ligand_ost: {e}")
+        return "None"
 
 
 def set_smiles_from_ligand_ost_v2(ent: omol.EntityHandle) -> tuple[str, str]:
