@@ -36,32 +36,38 @@ PDB_AVAILABLE_CHAINS += PDB_AVAILABLE_CHAINS.lower() + "0123456789"
 
 def get_symmetry_mate_contacts(
     mmcif_filename: Path, contact_threshold: float = 5.0
-) -> dict[tuple[str, int], dict[tuple[str, int], set[int]]]:
+) -> dict[tuple[str, int], dict[tuple[str, int], dict[int, set[tuple[int, int]]]]]:
     """
-    Get all contacts within a given threshold between residues which are not in the same asymmetric unit (symmetry mates)
+    Get all contacts within a given threshold between residues which are not in the same chain (incl. symmetry mates)
     """
     cif = gemmi.read_structure(mmcif_filename.__str__(), merge_chain_parts=False)
+    cif.remove_waters()
+    cif.remove_hydrogens()
+    # cif.remove_alternative_conformations()
+
     cif.setup_entities()
     ns = gemmi.NeighborSearch(cif[0], cif.cell, contact_threshold).populate(
         include_h=False
     )
     cs = gemmi.ContactSearch(contact_threshold)
-    cs.ignore = gemmi.ContactSearch.Ignore.SameAsu
+    cs.ignore = gemmi.ContactSearch.Ignore.SameChain
     cs.twice = True
     pairs = cs.find_contacts(ns)
-    results: dict[tuple[str, int], dict[tuple[str, int], set[int]]] = defaultdict(
-        lambda: defaultdict(set)
-    )
+    results: dict[
+        tuple[str, int], dict[tuple[str, int], dict[int, set[tuple[int, int]]]]
+    ] = defaultdict(lambda: defaultdict(defaultdict(set)))
     for p in pairs:
-        if p.partner1.residue.is_water() or p.partner2.residue.is_water():
-            continue
-        i1, i2 = p.partner1.residue.label_seq, p.partner2.residue.label_seq
-        if i1 is None:
-            i1 = 1
-        if i2 is None:
-            i2 = 1
         c1, c2 = p.partner1.residue.subchain, p.partner2.residue.subchain
-        results[(c1, i1)][(c2, i2)].add(p.partner1.atom.serial)
+        # if p.partner1.residue.is_water() or p.partner2.residue.is_water():
+        #     continue
+        r1, r2 = p.partner1.residue.label_seq, p.partner2.residue.label_seq
+        if r1 is None:
+            r1 = 1
+        if r2 is None:
+            r2 = 1
+        # image_idx - index of the symmetry operation that was used to generate this mark, 0 for identity
+        imi1, imi2 = p.partner1.image_idx, p.partner2.image_idx
+        results[(c1, r1)][(c2, r2)][p.partner1.atom.serial].add((imi1, imi2))
     return results
 
 
@@ -108,28 +114,22 @@ def get_covalent_connections(data: DataContainer) -> dict[str, list[tuple[str, s
         if con["conn_type_id"] == "hydrog":
             if con["ptnr1_label_comp_id"].strip() not in nucleobase_list:
                 continue
-        cov_dict[con["conn_type_id"]].append(
-            (
-                ":".join(
-                    [
-                        con["ptnr1_auth_seq_id"],
-                        con["ptnr1_label_comp_id"],
-                        con["ptnr1_label_asym_id"],
-                        con["ptnr1_label_seq_id"],
-                        con["ptnr1_label_atom_id"],
-                    ]
-                ),
-                ":".join(
-                    [
-                        con["ptnr2_auth_seq_id"],
-                        con["ptnr2_label_comp_id"],
-                        con["ptnr2_label_asym_id"],
-                        con["ptnr2_label_seq_id"],
-                        con["ptnr2_label_atom_id"],
-                    ]
-                ),
-            )
-        )
+        cov_dict[con["conn_type_id"]].append((
+            ":".join([
+                con["ptnr1_auth_seq_id"],
+                con["ptnr1_label_comp_id"],
+                con["ptnr1_label_asym_id"],
+                con["ptnr1_label_seq_id"],
+                con["ptnr1_label_atom_id"],
+            ]),
+            ":".join([
+                con["ptnr2_auth_seq_id"],
+                con["ptnr2_label_comp_id"],
+                con["ptnr2_label_asym_id"],
+                con["ptnr2_label_seq_id"],
+                con["ptnr2_label_atom_id"],
+            ]),
+        ))
     return cov_dict
 
 
@@ -151,13 +151,13 @@ def extract_ligand_links_to_neighbouring_chains(
                 # only if ligand is involved
                 # now check that one chain is neighbour and the other is ligand
                 # enforce receptor_ligand ordering
-                if neighboring_asym_ids.intersection([chain1]) and set(
-                    [chain2]
-                ).intersection(ligand_asym_id):
+                if neighboring_asym_ids.intersection([chain1]) and set([
+                    chain2
+                ]).intersection(ligand_asym_id):
                     covalent_linkages.add(f"{link1}__{link2}")
-                elif neighboring_asym_ids.intersection(chain2) and set(
-                    [chain1]
-                ).intersection(ligand_asym_id):
+                elif neighboring_asym_ids.intersection(chain2) and set([
+                    chain1
+                ]).intersection(ligand_asym_id):
                     covalent_linkages.add(f"{link2}__{link1}")
     return covalent_linkages
 

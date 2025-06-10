@@ -139,13 +139,11 @@ class System(DocBaseModel):
         """
         ID of the system without the biounit
         """
-        return "__".join(
-            [
-                self.pdb_id,
-                "_".join(x.split(".")[1] for x in self.protein_chains_asym_id),
-                "_".join(x.split(".")[1] for x in self.ligand_chains),
-            ]
-        )
+        return "__".join([
+            self.pdb_id,
+            "_".join(x.split(".")[1] for x in self.protein_chains_asym_id),
+            "_".join(x.split(".")[1] for x in self.ligand_chains),
+        ])
 
     @cached_property
     def ligand_chains(self) -> list[str]:
@@ -226,14 +224,12 @@ class System(DocBaseModel):
         """
         ID of the system
         """
-        return "__".join(
-            [
-                self.pdb_id,
-                self.biounit_id,
-                "_".join(self.protein_chains_asym_id),
-                "_".join(self.ligand_chains),
-            ]
-        )
+        return "__".join([
+            self.pdb_id,
+            self.biounit_id,
+            "_".join(self.protein_chains_asym_id),
+            "_".join(self.ligand_chains),
+        ])
 
     @cached_property
     def system_type(self) -> str:
@@ -1000,6 +996,7 @@ class Entry(DocBaseModel):
         biounits = {}
         for biounit_info in info.biounits:
             biounit = mol.alg.CreateBU(ent, biounit_info)
+            # note, biounit chains are renamed to 1.A, 1.B, etc.
             biounit_ligand_chains = [
                 chain.name
                 for chain in biounit.chains
@@ -1030,6 +1027,9 @@ class Entry(DocBaseModel):
                 )
                 if ligand is not None:
                     ligands[ligand.id] = ligand
+                # label crystal contacts
+                ligand.label_crystal_contacts(entry.symmetry_mate_contacts)
+
             biounits[biounit_info.id] = biounit
         entry.set_systems(ligands)
         entry.label_chains()
@@ -1044,7 +1044,7 @@ class Entry(DocBaseModel):
         # TODO: this is backwards because it assumes save_systems
         #       has already run but will fail if it hadn't run previously
         #       so we just check if save_folder is None (which it's not in the pipeline)
-        # VO: added option to skip to speed up testing!
+        # VO: added option to skip posebusters to speed up testing!
         if not skip_posebusters:
             entry.run_posebusters(
                 save_folder,
@@ -1156,13 +1156,11 @@ class Entry(DocBaseModel):
                 ligands[ligand_id].neighboring_ligands
                 + ligands[ligand_id].interacting_ligands
             ):
-                neighboring_ligand_id = "__".join(
-                    [
-                        self.pdb_id,
-                        ligands[ligand_id].biounit_id,
-                        f"{neighboring_ligand_instance_chain}",
-                    ]
-                )
+                neighboring_ligand_id = "__".join([
+                    self.pdb_id,
+                    ligands[ligand_id].biounit_id,
+                    f"{neighboring_ligand_instance_chain}",
+                ])
                 if neighboring_ligand_id in ligands:
                     G.add_edge(ligand_id, neighboring_ligand_id)
         system_ligands: dict[int, list[Ligand]] = {}
@@ -1263,9 +1261,9 @@ class Entry(DocBaseModel):
         ligand_chains = set()
         for system in self.systems.values():
             if system.system_type == "holo":
-                holo_chains.update(
-                    [c.split(".")[1] for c in system.protein_chains_asym_id]
-                )
+                holo_chains.update([
+                    c.split(".")[1] for c in system.protein_chains_asym_id
+                ])
             ligand_chains.update([l.asym_id for l in system.ligands])
         for chain in self.chains:
             if chain not in ligand_chains and chain not in holo_chains:
@@ -1439,7 +1437,6 @@ class Entry(DocBaseModel):
                 f"set_validation: Skipping validation for {self.pdb_id} as method is not X-RAY DIFFRACTION"
             )
             return
-        self.label_crystal_contacts()
         if not validation_file.exists():
             LOG.error(f"set_validation: Validation file not found {validation_file}")
             return
@@ -1457,25 +1454,6 @@ class Entry(DocBaseModel):
             LOG.error(
                 f"set_validation: Error setting validation for {self.pdb_id}: {e}"
             )
-
-    def label_crystal_contacts(self) -> None:
-        """
-        Label contacts of ligand residues to other symmetry mates
-        Excludes neighboring residues (i.e same biounit)
-        """
-        for system in self.systems:
-            for ligand in self.systems[system].ligands:
-                crystal_contacts: dict[tuple[str, int], set[int]] = defaultdict(set)
-                for residue_number in ligand.residue_numbers:
-                    # get all contacts with chains in other asymmetric units
-                    contacts = self.symmetry_mate_contacts.get(
-                        (ligand.asym_id, residue_number), dict()
-                    )
-                    for x, y in contacts.items():
-                        # keep only contacts with receptor
-                        if x[0] not in self.ligand_like_chains:
-                            crystal_contacts[x] |= y
-                ligand.set_crystal_contacts(crystal_contacts)
 
     def add_ecod(self) -> None:
         """
