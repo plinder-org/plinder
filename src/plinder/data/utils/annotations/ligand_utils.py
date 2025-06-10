@@ -1227,7 +1227,7 @@ class Ligand(DocBaseModel):
                 residues[chain][residue] = "interacting"
         return residues
 
-    def get_pocket_residues_set(self) -> set[tuple[str, int]]:
+    def get_pocket_residues_set(self) -> dict[tuple[str, int], set[str]]:
         """
         Get a dict of pocket residues in the format (chain_id, residue_number)
         mapping to biounit instance set
@@ -1244,9 +1244,8 @@ class Ligand(DocBaseModel):
         """
         Label ligand contacts to chains that are not part of the biounit.
         """
-        crystal_contacts: dict[tuple[str, int], set[int]] = defaultdict(
-            lambda: defaultdict(defaultdict(set))
-        )
+        crystal_contacts: dict[tuple[str, int], set[int]] = defaultdict(set)
+        
         # get contacts from neigchboring chain residues within the biounit
         pocket_residues = self.get_pocket_residues_set()
 

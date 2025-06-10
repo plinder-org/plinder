@@ -1027,8 +1027,8 @@ class Entry(DocBaseModel):
                 )
                 if ligand is not None:
                     ligands[ligand.id] = ligand
-                # label crystal contacts
-                ligand.label_crystal_contacts(entry.symmetry_mate_contacts)
+                    # label crystal contacts
+                    ligand.label_crystal_contacts(entry.symmetry_mate_contacts)
 
             biounits[biounit_info.id] = biounit
         entry.set_systems(ligands)
