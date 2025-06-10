@@ -583,59 +583,77 @@ def annotate_interface_gaps_per_chain(
     asym_id: str,
 ) -> tuple[int | None, ...]:
     try:
-        ppi_atoms_within_4A_of_gap = sum([
-            v["interface_atom_gaps_4A"]
-            for k, v in interface_proximal_gaps["ppi_interface_gap_annotation"].items()
-            if asym_id in k
-        ])
+        ppi_atoms_within_4A_of_gap = sum(
+            [
+                v["interface_atom_gaps_4A"]
+                for k, v in interface_proximal_gaps[
+                    "ppi_interface_gap_annotation"
+                ].items()
+                if asym_id in k
+            ]
+        )
     except TypeError:
         ppi_atoms_within_4A_of_gap = None
 
     try:
-        ppi_atoms_within_8A_of_gap = sum([
-            v["interface_atom_gaps_8A"]
-            for k, v in interface_proximal_gaps["ppi_interface_gap_annotation"].items()
-            if asym_id in k
-        ])
+        ppi_atoms_within_8A_of_gap = sum(
+            [
+                v["interface_atom_gaps_8A"]
+                for k, v in interface_proximal_gaps[
+                    "ppi_interface_gap_annotation"
+                ].items()
+                if asym_id in k
+            ]
+        )
     except TypeError:
         ppi_atoms_within_8A_of_gap = None
     try:
-        num_missing_ppi_interface_residues = sum([
-            v["missing_interface_residues_4A"]
-            for k, v in interface_proximal_gaps["ppi_interface_gap_annotation"].items()
-            if asym_id in k
-        ])
+        num_missing_ppi_interface_residues = sum(
+            [
+                v["missing_interface_residues_4A"]
+                for k, v in interface_proximal_gaps[
+                    "ppi_interface_gap_annotation"
+                ].items()
+                if asym_id in k
+            ]
+        )
     except TypeError:
         num_missing_ppi_interface_residues = None
     try:
-        pli_atoms_within_4A_of_gap = sum([
-            v["interface_atom_gaps_4A"]
-            for k, v in interface_proximal_gaps[
-                "ligand_interface_gap_annotation"
-            ].items()
-            if asym_id in k
-        ])
+        pli_atoms_within_4A_of_gap = sum(
+            [
+                v["interface_atom_gaps_4A"]
+                for k, v in interface_proximal_gaps[
+                    "ligand_interface_gap_annotation"
+                ].items()
+                if asym_id in k
+            ]
+        )
     except TypeError:
         pli_atoms_within_4A_of_gap = None
 
     try:
-        pli_atoms_within_8A_of_gap = sum([
-            v["interface_atom_gaps_8A"]
-            for k, v in interface_proximal_gaps[
-                "ligand_interface_gap_annotation"
-            ].items()
-            if asym_id in k
-        ])
+        pli_atoms_within_8A_of_gap = sum(
+            [
+                v["interface_atom_gaps_8A"]
+                for k, v in interface_proximal_gaps[
+                    "ligand_interface_gap_annotation"
+                ].items()
+                if asym_id in k
+            ]
+        )
     except TypeError:
         pli_atoms_within_8A_of_gap = None
     try:
-        num_missing_pli_interface_residues = sum([
-            v["missing_interface_residues_4A"]
-            for k, v in interface_proximal_gaps[
-                "ligand_interface_gap_annotation"
-            ].items()
-            if asym_id in k
-        ])
+        num_missing_pli_interface_residues = sum(
+            [
+                v["missing_interface_residues_4A"]
+                for k, v in interface_proximal_gaps[
+                    "ligand_interface_gap_annotation"
+                ].items()
+                if asym_id in k
+            ]
+        )
     except TypeError:
         num_missing_pli_interface_residues = None
 
@@ -1240,12 +1258,17 @@ class Ligand(DocBaseModel):
                 )
         return pocket_residues_set
 
-    def label_crystal_contacts(self, symmetry_mate_contacts: dict) -> None:
+    def label_crystal_contacts(
+        self,
+        symmetry_mate_contacts: dict[
+            tuple[str, int], dict[tuple[str, int], dict[int, set[tuple[int, int]]]]
+        ],
+    ) -> None:
         """
         Label ligand contacts to chains that are not part of the biounit.
         """
-        crystal_contacts: dict[tuple[str, int], set[int]] = defaultdict(set)
-        
+        crystal_contacts: dict[tuple[str, int], set[int]] = defaultdict(set[int])
+
         # get contacts from neigchboring chain residues within the biounit
         pocket_residues = self.get_pocket_residues_set()
 
@@ -1264,7 +1287,7 @@ class Ligand(DocBaseModel):
                     # on the edge cases it may not be clear which atom is in contact with the symmetry mate, thus better to store all?
                     for atom_id, image_ids in y.items():
                         # for image_id in image_ids:
-                        crystal_contacts[x] |= atom_id
+                        crystal_contacts[x] |= {atom_id}
         # set crystal contacts
         self.crystal_contacts = crystal_contacts
 
@@ -1398,16 +1421,18 @@ class Ligand(DocBaseModel):
             self.is_covalent = False
 
         # Indicator of whether a ligand type is not any of small molecule (lipinski, frag, coval), ion, cofactor, oligopeptide, oligosaccharide or oligopeptide.
-        if not any([
-            self.is_invalid,
-            self.is_ion,
-            self.is_oligo,
-            self.is_artifact,
-            self.is_cofactor,
-            self.is_lipinski,
-            self.is_fragment,
-            self.is_covalent,
-        ]):
+        if not any(
+            [
+                self.is_invalid,
+                self.is_ion,
+                self.is_oligo,
+                self.is_artifact,
+                self.is_cofactor,
+                self.is_lipinski,
+                self.is_fragment,
+                self.is_covalent,
+            ]
+        ):
             self.is_other = True
 
     def format_chains(
@@ -1508,16 +1533,18 @@ class Ligand(DocBaseModel):
 
     def format(self, chains: dict[str, Chain]) -> dict[str, ty.Any]:
         data: dict[str, ty.Any] = defaultdict(str)
-        ignore_fields = set([
-            "posebusters_result",
-            "interactions",
-            "protein_chains",
-            "interacting_ligands",
-            "neighboring_ligands",
-            "interacting_residues",
-            "neighboring_residues",
-            "pocket_residues",
-        ])
+        ignore_fields = set(
+            [
+                "posebusters_result",
+                "interactions",
+                "protein_chains",
+                "interacting_ligands",
+                "neighboring_ligands",
+                "interacting_residues",
+                "neighboring_residues",
+                "pocket_residues",
+            ]
+        )
         for field, desc_type in self.get_descriptions_and_types().items():
             # blacklist fields that will be added with custom formatters below or that we don't want to add to the plindex
             descr = str(desc_type[0]).lstrip().replace("\n", " ")
@@ -1533,9 +1560,9 @@ class Ligand(DocBaseModel):
         # interactions
         data.update(self.format_interactions())
         # chains
-        data.update({
-            "ligand_auth_id": chains[self.asym_id].auth_id
-        })  # not a cached_property b/c it needs chains!
+        data.update(
+            {"ligand_auth_id": chains[self.asym_id].auth_id}
+        )  # not a cached_property b/c it needs chains!
         for chain_type in [
             "protein",
             "interacting_ligand",

@@ -54,7 +54,7 @@ config.biolip_list = []
 
 
 SymmetryMateContacts = ty.Annotated[
-    dict[tuple[str, int], dict[tuple[str, int], set[int]]],
+    dict[tuple[str, int], dict[tuple[str, int], dict[int, set[tuple[int, int]]]]],
     BeforeValidator(validate_chain_residue),
     Field(default_factory=dict),
 ]
@@ -139,11 +139,13 @@ class System(DocBaseModel):
         """
         ID of the system without the biounit
         """
-        return "__".join([
-            self.pdb_id,
-            "_".join(x.split(".")[1] for x in self.protein_chains_asym_id),
-            "_".join(x.split(".")[1] for x in self.ligand_chains),
-        ])
+        return "__".join(
+            [
+                self.pdb_id,
+                "_".join(x.split(".")[1] for x in self.protein_chains_asym_id),
+                "_".join(x.split(".")[1] for x in self.ligand_chains),
+            ]
+        )
 
     @cached_property
     def ligand_chains(self) -> list[str]:
@@ -224,12 +226,14 @@ class System(DocBaseModel):
         """
         ID of the system
         """
-        return "__".join([
-            self.pdb_id,
-            self.biounit_id,
-            "_".join(self.protein_chains_asym_id),
-            "_".join(self.ligand_chains),
-        ])
+        return "__".join(
+            [
+                self.pdb_id,
+                self.biounit_id,
+                "_".join(self.protein_chains_asym_id),
+                "_".join(self.ligand_chains),
+            ]
+        )
 
     @cached_property
     def system_type(self) -> str:
@@ -1156,11 +1160,13 @@ class Entry(DocBaseModel):
                 ligands[ligand_id].neighboring_ligands
                 + ligands[ligand_id].interacting_ligands
             ):
-                neighboring_ligand_id = "__".join([
-                    self.pdb_id,
-                    ligands[ligand_id].biounit_id,
-                    f"{neighboring_ligand_instance_chain}",
-                ])
+                neighboring_ligand_id = "__".join(
+                    [
+                        self.pdb_id,
+                        ligands[ligand_id].biounit_id,
+                        f"{neighboring_ligand_instance_chain}",
+                    ]
+                )
                 if neighboring_ligand_id in ligands:
                     G.add_edge(ligand_id, neighboring_ligand_id)
         system_ligands: dict[int, list[Ligand]] = {}
@@ -1261,9 +1267,9 @@ class Entry(DocBaseModel):
         ligand_chains = set()
         for system in self.systems.values():
             if system.system_type == "holo":
-                holo_chains.update([
-                    c.split(".")[1] for c in system.protein_chains_asym_id
-                ])
+                holo_chains.update(
+                    [c.split(".")[1] for c in system.protein_chains_asym_id]
+                )
             ligand_chains.update([l.asym_id for l in system.ligands])
         for chain in self.chains:
             if chain not in ligand_chains and chain not in holo_chains:
