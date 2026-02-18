@@ -178,7 +178,7 @@ def extract_ligand_links_to_neighbouring_chains(
     -------
     set[str]
         set of covalent linkages in the entry between the ligand and its neighbours
-                    
+
     Notes
     -----
     For the purpose of covalent annotations, we only consider "covale".
