@@ -38,7 +38,19 @@ def get_symmetry_mate_contacts(
     mmcif_filename: Path, contact_threshold: float = 5.0
 ) -> dict[tuple[str, int], dict[tuple[str, int], dict[int, set[tuple[int, int]]]]]:
     """
-    Get all contacts within a given threshold between residues which are not in the same chain (incl. symmetry mates)
+    Get all contacts within a given threshold between residues which are not in
+    the same chain (incl. symmetry mates).
+
+    Parameters
+    ----------
+    mmcif_file : Path
+        mmcif structure file
+
+    Returns
+    -------
+    dict[tuple[str, int], dict[tuple[str, int], dict[int, set[tuple[int, int]]]]]
+        Mapping of symmetry contacts between residue defined by (chain_id, residue_id)
+        and another residue's atom_id including their specific image pairs.
     """
     cif = gemmi.read_structure(mmcif_filename.__str__(), merge_chain_parts=False)
     cif.remove_waters()
@@ -71,20 +83,19 @@ def get_symmetry_mate_contacts(
     return results
 
 
-def get_covalent_connections(data: DataContainer) -> dict[str, list[tuple[str, str]]]:
+def get_covalent_connections(cif_data: DataContainer) -> dict[str, list[tuple[str, str]]]:
     """
-    Get covalent connections from any mmcif file with
-    _struct_conn. attribute
+    Extract covalent connections from mmcif data container
 
     Parameters
     ----------
-    mmcif_file : Path
-        mmcif file with _struct_conn. attribute
+    cif_data : DataContainer
+        mmcif data container
 
     Returns
     -------
-    Dict[str, List[Set[str]]]
-        Mapping of covalent residues
+    dict[str, list[tuple[str, str]]
+        All covalent links as defined by mmcif annotations
     """
 
     cov_dict = defaultdict(list)
@@ -103,7 +114,7 @@ def get_covalent_connections(data: DataContainer) -> dict[str, list[tuple[str, s
         "ptnr2_label_atom_id",
         "conn_type_id",
     ]
-    cons = data.getObj("struct_conn")
+    cons = cif_data.getObj("struct_conn")
     if cons is None:
         return {}
     for con in cons.getCombinationCountsWithConditions(
@@ -145,6 +156,33 @@ def extract_ligand_links_to_neighbouring_chains(
     neighboring_asym_ids: set[str],
     link_type: str = "covale",
 ) -> set[str]:
+    """
+    Parse covalant dictionary for a given ligand and its neighbours.
+
+    Parameters
+    ----------
+    all_covalent_dict : dict[str, list[tuple[str, str]]]
+        All covalent links as defined by mmcif annotations
+    ligand_asym_id : str
+        ligand assymetric identification string
+    neighboring_asym_ids : set[str]
+        set of neighbour assymetric identification strings
+    link_type : str, optional
+        covalent linkage type in dictionary, by default "covale",
+        options include:
+            "covale": actual covalent linkage
+            "metalc": other dative bond, eg. metal-ligand dative bond
+            "hydrogc": strong hydorogen bonding of nucleic acid
+
+    Returns
+    -------
+    set[str]
+        set of covalent linkages in the entry between the ligand and its neighbours
+                    
+    Notes
+    -----
+    For the purpose of covalent annotations, we only consider "covale".
+    """
     covalent_linkages = set()
     if link_type in all_covalent_dict:
         for link1, link2 in all_covalent_dict[link_type]:
