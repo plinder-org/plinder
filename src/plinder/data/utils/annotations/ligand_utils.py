@@ -738,7 +738,7 @@ class Ligand(DocBaseModel):
         default_factory=set[str],
         description="Ligand covalent linkages as described in https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Categories/struct_conn.html "
         + "with _struct_conn.conn_type_id == 'covale', reported in format "
-        + "{auth_resid}:{resname}{assym_id}{seq_resid}{atom_name}__{auth_resid}:{resname}{assym_id}{seq_resid}{atom_name}",
+        + "{auth_resid}:{resname}:{assym_id}:{seq_resid}:{atom_name}__{auth_resid}:{resname}:{assym_id}:{seq_resid}:{atom_name}",
     )
     neighboring_residues: dict[str, list[int]] = Field(
         default_factory=dict,
