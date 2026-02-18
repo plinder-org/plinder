@@ -12,7 +12,7 @@ dependencies = [
     "nbformat",
     "google-cloud-storage",
     "gcsfs",
-    "gemmi",
+    "gemmi==0.6.7",
     "rdkit>=2024.03.6",
     "pyarrow",
     "omegaconf",
