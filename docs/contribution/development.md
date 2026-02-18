@@ -53,7 +53,7 @@ $ mamba activate plinder
 Now `plinder` can be installed into the created environment:
 
 ```console
-$ pip install -e .
+$ pip install -e ".[dev]"
 ```
 
 ### Enabling Pre-commit hooks
