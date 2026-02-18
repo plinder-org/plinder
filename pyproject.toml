@@ -3,7 +3,7 @@ name = "plinder"
 dynamic = ["version"]
 dependencies = [
     "biotite >= 1.0",
-    "numpy<2",
+    "numpy",
     "pandas",
     "typing_extensions",
     "pydantic",
