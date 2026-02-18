@@ -54,7 +54,7 @@ config.biolip_list = []
 
 
 SymmetryMateContacts = ty.Annotated[
-    dict[tuple[str, int], dict[tuple[str, int], dict[int, set[tuple[int, int]]]]],
+    dict[tuple[str, int], dict[tuple[str, int], dict[int, set[int]]]],
     BeforeValidator(validate_chain_residue),
     Field(default_factory=dict),
 ]

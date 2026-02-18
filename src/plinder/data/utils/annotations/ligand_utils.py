@@ -1261,7 +1261,7 @@ class Ligand(DocBaseModel):
     def label_crystal_contacts(
         self,
         symmetry_mate_contacts: dict[
-            tuple[str, int], dict[tuple[str, int], dict[int, set[tuple[int, int]]]]
+            tuple[str, int], dict[tuple[str, int], dict[int, set[int]]]
         ],
     ) -> None:
         """
@@ -1279,14 +1279,13 @@ class Ligand(DocBaseModel):
             )
             for x, y in contacts.items():
                 # x is a tuple rec (chain_id, residue_number)
-                # y is a dict of ligand atom_id : (lig image_id1, rec image_id2)
-                num_crystal_image_contacts = len(set(y.values()))
+                # y is a dict of ligand atom_id : {image_idx} - set of symmetry operations
+                num_crystal_image_contacts = len(y.values())
                 # if detected contacts have more images than contact instances in the biounit pocket
                 # then we assume that this is a crystal contact with a symmetry mate
                 if num_crystal_image_contacts > len(pocket_residues.get(x, set())):
                     # on the edge cases it may not be clear which atom is in contact with the symmetry mate, thus better to store all?
-                    for atom_id, image_ids in y.items():
-                        # for image_id in image_ids:
+                    for atom_id, image_idx in y.items():
                         crystal_contacts[x] |= {atom_id}
         # set crystal contacts
         self.crystal_contacts = crystal_contacts

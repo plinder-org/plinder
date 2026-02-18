@@ -36,10 +36,11 @@ PDB_AVAILABLE_CHAINS += PDB_AVAILABLE_CHAINS.lower() + "0123456789"
 
 def get_symmetry_mate_contacts(
     mmcif_filename: Path, contact_threshold: float = 5.0
-) -> dict[tuple[str, int], dict[tuple[str, int], dict[int, set[tuple[int, int]]]]]:
+) -> dict[tuple[str, int], dict[tuple[str, int], dict[int, set[int]]]]:
     """
     Get all contacts within a given threshold between residues which are not in
-    the same chain (incl. symmetry mates).
+    the same chain. Stores only contacts that were generated using symmetry operations
+    except for identity (self-image).
 
     Parameters
     ----------
@@ -48,9 +49,10 @@ def get_symmetry_mate_contacts(
 
     Returns
     -------
-    dict[tuple[str, int], dict[tuple[str, int], dict[int, set[tuple[int, int]]]]]
+    dict[tuple[str, int], dict[tuple[str, int], dict[int, set[int]]]]
         Mapping of symmetry contacts between residue defined by (chain_id, residue_id)
-        and another residue's atom_id including their specific image pairs.
+        and another residue's atom_id mapped to the symmetry operation (image_idx)
+        that generated the contact.
     """
     cif = gemmi.read_structure(mmcif_filename.__str__(), merge_chain_parts=False)
     cif.remove_waters()
@@ -62,11 +64,12 @@ def get_symmetry_mate_contacts(
         include_h=False
     )
     cs = gemmi.ContactSearch(contact_threshold)
+    # ignore chain contacts with self
     cs.ignore = gemmi.ContactSearch.Ignore.SameChain
     cs.twice = True
     pairs = cs.find_contacts(ns)
     results: dict[
-        tuple[str, int], dict[tuple[str, int], dict[int, set[tuple[int, int]]]]
+        tuple[str, int], dict[tuple[str, int], dict[int, set[int]]]
     ] = defaultdict(lambda: defaultdict(lambda: defaultdict(set)))
     for p in pairs:
         c1, c2 = p.partner1.residue.subchain, p.partner2.residue.subchain
@@ -77,9 +80,11 @@ def get_symmetry_mate_contacts(
             r1 = 1
         if r2 is None:
             r2 = 1
-        # image_idx - index of the symmetry operation that was used to generate this mark, 0 for identity
-        imi1, imi2 = p.partner1.image_idx, p.partner2.image_idx
-        results[(c1, r1)][(c2, r2)][p.partner1.atom.serial].add((imi1, imi2))
+        # The image_idx is an index of the symmetry image (both crystallographic symmetry and strict NCS count)
+        # – it is 0 iff both atoms (partner1 and partner2) are in the same unit, thus we ignore
+        if p.image_idx == 0:
+            continue
+        results[(c1, r1)][(c2, r2)][p.partner1.atom.serial].add(p.image_idx)
     return results
 
 
