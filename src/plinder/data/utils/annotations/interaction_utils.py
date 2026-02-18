@@ -83,7 +83,9 @@ def get_symmetry_mate_contacts(
     return results
 
 
-def get_covalent_connections(cif_data: DataContainer) -> dict[str, list[tuple[str, str]]]:
+def get_covalent_connections(
+    cif_data: DataContainer
+) -> dict[str, list[tuple[str, str]]]:
     """
     Extract covalent connections from mmcif data container
 
