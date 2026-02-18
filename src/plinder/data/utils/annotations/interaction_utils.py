@@ -38,8 +38,9 @@ def get_symmetry_mate_contacts(
     mmcif_filename: Path, contact_threshold: float = 5.0
 ) -> dict[tuple[str, int], dict[tuple[str, int], dict[int, set[int]]]]:
     """
-    Get all contacts within a given threshold between residues which are not in
-    the same chain. Stores only contacts that were generated using symmetry operations
+    Get all contacts within a given threshold between any system residues that
+    are not in the same chain. This includes protein contacts with its images.
+    Stores only contacts that were generated using any symmetry operations
     except for identity (self-image).
 
     Parameters
