@@ -1,7 +1,7 @@
 # Contributor guide
 
 The PLINDER project is a community effort, launched by the University of Basel,
-SIB Swiss Institute of Bioinformatics, VantAI, NVIDIA, MIT CSAIL, and will be regularly
+SIB Swiss Institute of Bioinformatics, Proxima (formerly VantAI), NVIDIA, MIT CSAIL, and will be regularly
 updated.
 We highly welcome contributions!
 

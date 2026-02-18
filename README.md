@@ -32,8 +32,8 @@ resource for training and evaluation of protein-ligand docking algorithms:
   models.
 
 The *PLINDER* project is a community effort, launched by the University of Basel,
-SIB Swiss Institute of Bioinformatics, VantAI, NVIDIA, MIT CSAIL, and will be regularly
-updated.
+SIB Swiss Institute of Bioinformatics, Proxima (formerly VantAI), NVIDIA, MIT CSAIL,
+and will be regularly updated.
 
 To accelerate community adoption, PLINDER will be used as the field’s new Protein-Ligand
 interaction dataset standard as part of an exciting competition at the upcoming 2024
