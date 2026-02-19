@@ -111,6 +111,28 @@ def annotate_interface_gaps(
     larger_radius: float = 8.0,
     use_author_fields: bool = False,
 ) -> dict[str, Any]:
+    """
+    Annotate interface atoms in close proximity to gaps.
+
+    Parameters
+    ----------
+    cif_file: Path
+        System mmcif file
+    protein_chains: list[str] | None = None
+        Protein chains
+    ligand_chains: list[str] | None = None
+        Ligand chains
+    smaller_radius: float = 4.0
+        Smaller radius used for extracting neighboring atoms
+    larger_radius: float = 8.0
+        Larger radius used for extracting neighboring atoms
+    use_author_fields: bool = False
+        Use author-defined fields
+    Returns
+    -------
+    dict[str, Any]
+        Dictionary of interface atoms near gaps
+    """
     pdb_id = cif_file.stem.split("_")[0].replace("pdb_0000", "")
 
     if ".cif" in cif_file.name:

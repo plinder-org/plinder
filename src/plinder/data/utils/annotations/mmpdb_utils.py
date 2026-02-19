@@ -264,10 +264,6 @@ def add_mmp_clusters_to_data(
         pocket_similarity_dict
     )
 
-    # Load mmp index
-    # load_mmp_df = pd.read_csv(mmp_index, compression="gzip", sep="\t", header=None)
-    # load_mmp_df.columns = ["SMILES1", "SMILES2", "id1", "id2", "V1>>V2", "CONSTANT"]
-
     # Pad interger lig ids with zeros
     load_mmp_df["id1"] = load_mmp_df.id1.apply(pad_integer_lig_ids_with_zeros)
     load_mmp_df["id2"] = load_mmp_df.id2.apply(pad_integer_lig_ids_with_zeros)
