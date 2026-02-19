@@ -844,7 +844,7 @@ class Ligand(DocBaseModel):
     )
     crystal_contacts: CrystalContacts = Field(
         default_factory=dict,
-        description="__Dictionary of {instance}.{chain} to residue number to set of interacting crystal contacts",
+        description="__Dictionary of {chain} to residue number to set of interacting crystal contacts",
     )
     waters: dict[str, list[int]] = Field(
         default_factory=dict,
@@ -1245,21 +1245,50 @@ class Ligand(DocBaseModel):
                 residues[chain][residue] = "interacting"
         return residues
 
-    def get_pocket_residues_set(self) -> set[tuple[str, int]]:
-        pocket_residues_set = set()
+    def get_pocket_residues_set(self) -> dict[tuple[str, int], set[str]]:
+        """
+        Get a dict of pocket residues in the format (chain_id, residue_number)
+        mapping to biounit instance set
+        """
+        pocket_residues_set = defaultdict(set)
         for chain in self.pocket_residues:
             for residue_number in self.pocket_residues[chain]:
-                pocket_residues_set.add((chain.split(".")[1], residue_number))
+                pocket_residues_set[(chain.split(".")[1], residue_number)].add(
+                    chain.split(".")[0]
+                )
         return pocket_residues_set
 
-    def set_crystal_contacts(
-        self, crystal_contacts: dict[tuple[str, int], set[int]]
+    def label_crystal_contacts(
+        self,
+        symmetry_mate_contacts: dict[
+            tuple[str, int], dict[tuple[str, int], dict[int, set[int]]]
+        ],
     ) -> None:
-        # exclude contacts from neighboring residues in same biounit
+        """
+        Label ligand contacts to chains that are not part of the biounit.
+        """
+        crystal_contacts: dict[tuple[str, int], set[int]] = defaultdict(set[int])
+
+        # get contacts from neigchboring chain residues within the biounit
         pocket_residues = self.get_pocket_residues_set()
-        self.crystal_contacts = {
-            x: y for x, y in crystal_contacts.items() if x not in pocket_residues
-        }
+
+        for residue_number in self.residue_numbers:
+            # get all inter-chain contacts for a given ligand
+            contacts = symmetry_mate_contacts.get(
+                (self.asym_id, residue_number), dict()
+            )
+            for x, y in contacts.items():
+                # x is a tuple rec (chain_id, residue_number)
+                # y is a dict of ligand atom_id : {image_idx} - set of symmetry operations
+                num_crystal_image_contacts = len(y.values())
+                # if detected contacts have more images than contact instances in the biounit pocket
+                # then we assume that this is a crystal contact with a symmetry mate
+                if num_crystal_image_contacts > len(pocket_residues.get(x, set())):
+                    # on the edge cases it may not be clear which atom is in contact with the symmetry mate, thus better to store all?
+                    for atom_id, image_idx in y.items():
+                        crystal_contacts[x] |= {atom_id}
+        # set crystal contacts
+        self.crystal_contacts = crystal_contacts
 
     @cached_property
     def num_crystal_contacted_residues(self) -> int:

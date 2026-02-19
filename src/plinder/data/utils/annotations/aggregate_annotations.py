@@ -54,7 +54,7 @@ config.biolip_list = []
 
 
 SymmetryMateContacts = ty.Annotated[
-    dict[tuple[str, int], dict[tuple[str, int], set[int]]],
+    dict[tuple[str, int], dict[tuple[str, int], dict[int, set[int]]]],
     BeforeValidator(validate_chain_residue),
     Field(default_factory=dict),
 ]
@@ -1000,6 +1000,7 @@ class Entry(DocBaseModel):
         biounits = {}
         for biounit_info in info.biounits:
             biounit = mol.alg.CreateBU(ent, biounit_info)
+            # note, biounit chains are renamed to 1.A, 1.B, etc.
             biounit_ligand_chains = [
                 chain.name
                 for chain in biounit.chains
@@ -1030,6 +1031,9 @@ class Entry(DocBaseModel):
                 )
                 if ligand is not None:
                     ligands[ligand.id] = ligand
+                    # label crystal contacts
+                    ligand.label_crystal_contacts(entry.symmetry_mate_contacts)
+
             biounits[biounit_info.id] = biounit
         entry.set_systems(ligands)
         entry.label_chains()
@@ -1044,7 +1048,7 @@ class Entry(DocBaseModel):
         # TODO: this is backwards because it assumes save_systems
         #       has already run but will fail if it hadn't run previously
         #       so we just check if save_folder is None (which it's not in the pipeline)
-        # VO: added option to skip to speed up testing!
+        # VO: added option to skip posebusters to speed up testing!
         if not skip_posebusters:
             entry.run_posebusters(
                 save_folder,
@@ -1439,7 +1443,6 @@ class Entry(DocBaseModel):
                 f"set_validation: Skipping validation for {self.pdb_id} as method is not X-RAY DIFFRACTION"
             )
             return
-        self.label_crystal_contacts()
         if not validation_file.exists():
             LOG.error(f"set_validation: Validation file not found {validation_file}")
             return
@@ -1457,25 +1460,6 @@ class Entry(DocBaseModel):
             LOG.error(
                 f"set_validation: Error setting validation for {self.pdb_id}: {e}"
             )
-
-    def label_crystal_contacts(self) -> None:
-        """
-        Label contacts of ligand residues to other symmetry mates
-        Excludes neighboring residues (i.e same biounit)
-        """
-        for system in self.systems:
-            for ligand in self.systems[system].ligands:
-                crystal_contacts: dict[tuple[str, int], set[int]] = defaultdict(set)
-                for residue_number in ligand.residue_numbers:
-                    # get all contacts with chains in other asymmetric units
-                    contacts = self.symmetry_mate_contacts.get(
-                        (ligand.asym_id, residue_number), dict()
-                    )
-                    for x, y in contacts.items():
-                        # keep only contacts with receptor
-                        if x[0] not in self.ligand_like_chains:
-                            crystal_contacts[x] |= y
-                ligand.set_crystal_contacts(crystal_contacts)
 
     def add_ecod(self) -> None:
         """
