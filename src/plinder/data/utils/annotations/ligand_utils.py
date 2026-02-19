@@ -580,6 +580,18 @@ def annotate_interface_gaps_per_chain(
     interface_proximal_gaps: dict[str, dict[tuple[str, str], dict[str, int]]],
     asym_id: str,
 ) -> tuple[int | None, ...]:
+    """Parse protein-ligand and protein-protein interface atoms in proximity to gaps
+    to count interface atoms within 4 Å and within 8 Å of gaps.
+    This focuses on a specific ligand chain and the interfaces and gaps around it.
+
+    Args:
+        interface_proximal_gaps (dict[str, dict[tuple[str, str], dict[str, int]]]):
+            Interface atoms close to gaps (within 4 Å and  8 Å )
+        asym_id: str
+            Asymmetric unit chain id
+    Returns:
+        tuple[int, int, int, int, int, int]
+    """
     try:
         ppi_atoms_within_4A_of_gap = sum(
             [
@@ -989,7 +1001,7 @@ class Ligand(DocBaseModel):
         ligand_like_chains: dict[str, str]
             Chain: chain type for other ligand-like chains in the entry
         interface_proximal_gaps: dict[str, dict[tuple[str, str], dict[str, int]]]
-            TODO: document
+            Dictionary of protein-ligand and protein-protein interface atoms in proximity to residue gaps
         all_covalent_dict : dict[str, list[tuple[str, str]]]
             All "covalent" residue in entry as defined by mmcif annotations.
             They types are separated by dictionary key and they include:
