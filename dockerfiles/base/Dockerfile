@@ -56,6 +56,7 @@ RUN echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] http://packages.c
     && rm -rf /var/lib/apt/lists/*
 
 ENV BASH_ENV=/usr/local/bin/_activate_current_env.sh
+ENV LD_LIBRARY_PATH=/opt/conda/lib
 
 COPY requirements.txt /tmp/requirements.txt
 RUN --mount=type=secret,id=INDEX_URL \

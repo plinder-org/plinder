@@ -3,7 +3,7 @@ name = "plinder"
 dynamic = ["version"]
 dependencies = [
     "biotite >= 1.0",
-    "numpy<2",
+    "numpy",
     "pandas",
     "typing_extensions",
     "pydantic",
@@ -53,8 +53,8 @@ test = [
     "pytest == 7.2.0",
     "pytest-cov == 4.0.0",
     "pytest-xdist == 3.6.1",
-    "build == 0.9.0",
-    "setuptools_scm[toml] == 7.0.5",
+    "build",
+    "setuptools_scm[toml]",
 ]
 type = [
     "mypy==1.2.0",
@@ -94,9 +94,9 @@ docs = [
 [build-system]
 build-backend = "setuptools.build_meta"
 requires = [
-    "build == 0.9.0",
-    "setuptools == 65.4.0",
-    "setuptools_scm[toml] == 7.0.5",
+    "build",
+    "setuptools",
+    "setuptools_scm[toml]",
 ]
 
 [tool.setuptools_scm]

@@ -26,14 +26,13 @@ Afterwards the environment can be created from the `environment.yml` in the loca
 repository clone.
 
 :::{note}
-We currently only support a Linux environment.
+Currently only a Linux environment is fully supported, although the base
+environment also installs to MacOS.
 `plinder.data` uses a number of dependencies which are not simply pip-installable.
-`openstructure` is for some of its functionality and is available from the
-`aivant` conda channel using `conda install aivant::openstructure`, but it is only built
-targeting Linux architectures. Additionally, `networkit==11.0.0`, which at the time of writing,
-does not install cleanly on MacOS, along with a number of dependencies which are referenced
-by a GitHub link directly, make a pip-installable package problematic. These additional
-dependencies can be installed by running:
+Several dependencies which are referenced by a GitHub link directly, make
+a pip-installable package problematic.
+This includes Linux pytorch, which will not work in MacOS.
+These additional dependencies can be installed by running:
 
 ```console
 $ pip install -r requirements_data.txt
@@ -54,7 +53,7 @@ $ mamba activate plinder
 Now `plinder` can be installed into the created environment:
 
 ```console
-$ pip install -e .
+$ pip install -e ".[dev]"
 ```
 
 ### Enabling Pre-commit hooks

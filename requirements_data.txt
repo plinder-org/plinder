@@ -1,5 +1,5 @@
-  networkit == 11.0.0
+  networkit > 11.0
   tabulate
   pdb-validation @ git+https://git.scicore.unibas.ch/schwede/ligand-validation.git
   mmpdb @ git+https://github.com/rdkit/mmpdb.git
-  https://download.pytorch.org/whl/cpu/torch-2.5.1%2Bcpu-cp310-cp310-linux_x86_64.whl#sha256=7f91a2200e352745d70e22396bd501448e28350fbdbd8d8b1c83037e25451150
+  https://download.pytorch.org/whl/cpu/torch-2.5.1%2Bcpu-cp312-cp312-linux_x86_64.whl#sha256=4856f9d6925121d13c2df07aa7580b767f449dfe71ae5acde9c27535d5da4840

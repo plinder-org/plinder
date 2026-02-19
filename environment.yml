@@ -3,16 +3,13 @@
 #
 name: plinder
 channels:
-  - metalcycling
   - conda-forge
-  - aivant
   - defaults
   - bioconda
 dependencies:
   - python=3.10.*
   - reduce
-  - aivant::openstructure=2.8.0
-  - boost=1.82
+  - openstructure
   - mmseqs2
   - foldseek
   - plip=2.3.0

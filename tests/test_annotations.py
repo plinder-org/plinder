@@ -6380,7 +6380,7 @@ def test_synthetic_cov_peptide_detection(cif_6lu7, mock_alternative_datasets):
     assert lig.covalent_linkages == {"145:CYS:A:145:SG__5:PJE:B:5:C20"}
     outsdffile = entry_dir / "6lu7__1__1.A_2.A__1.B/ligand_files/1.B.sdf"
     assert outsdffile.is_file()
-    rdmol = Chem.SDMolSupplier(outsdffile, removeHs=True)[0]
+    rdmol = Chem.SDMolSupplier(str(outsdffile), removeHs=True)[0]
     assert Chem.SanitizeMol(rdmol) == Chem.rdmolops.SanitizeFlags.SANITIZE_NONE
     assert len(Chem.MolToSmiles(rdmol).split(".")) == 1
 
@@ -6642,6 +6642,13 @@ def test_smiles_from_nextgen(test_dir, smiles_sample_csv):
     result_df = result_df.sort_values(by=["pdbid", "chain"]).reset_index(drop=True)
     target_df = pd.read_csv(smiles_sample_csv)
     target_df = target_df.sort_values(by=["pdbid", "chain"]).reset_index(drop=True)
+    # Canonicalize SMILES to absorb differences across OST versions
+    for df in [result_df, target_df]:
+        df["smiles"] = df["smiles"].apply(
+            lambda s: Chem.MolToSmiles(Chem.MolFromSmiles(s))
+            if Chem.MolFromSmiles(s) is not None
+            else s
+        )
     pd.testing.assert_frame_equal(result_df, target_df)
 
 
@@ -6719,7 +6726,7 @@ def test_ligand_fix_to_valid_imatinib(cif_2hyy, mock_alternative_datasets):
     assert lig.is_invalid == False
     outsdffile = entry_dir / "2hyy__1__1.A__1.E/ligand_files/1.E.sdf"
     assert outsdffile.is_file()
-    rdmol_sdf = Chem.SDMolSupplier(outsdffile, removeHs=True)[0]
+    rdmol_sdf = Chem.SDMolSupplier(str(outsdffile), removeHs=True)[0]
     rdmol_smi = Chem.MolFromSmiles(lig.smiles)
     # check that numnber of aromatic rings is undderstood correctly
     # N.B. this is expected to be true for fully resolved systems
@@ -6738,7 +6745,7 @@ def test_ligand_fix_to_valid_thalidomide(cif_7bqu, mock_alternative_datasets):
     assert lig.is_invalid == False
     outsdffile = entry_dir / "7bqu__1__1.A_1.B__1.C/ligand_files/1.C.sdf"
     assert outsdffile.is_file()
-    rdmol_sdf = Chem.SDMolSupplier(outsdffile, removeHs=True)[0]
+    rdmol_sdf = Chem.SDMolSupplier(str(outsdffile), removeHs=True)[0]
     rdmol_smi = Chem.MolFromSmiles(lig.smiles)
     # check that numnber of aromatic rings is undderstood correctly
     # N.B. this is expected to be true for fully resolved systems
@@ -6758,7 +6765,7 @@ def test_partially_resolved_substructure_JEF(cif_1ngx, mock_alternative_datasets
     assert lig.num_unresolved_heavy_atoms == 13
     outsdffile = entry_dir / "1ngx__1__1.A_1.B__1.E/ligand_files/1.E.sdf"
     assert outsdffile.is_file()
-    rdmol = Chem.SDMolSupplier(outsdffile, removeHs=True)[0]
+    rdmol = Chem.SDMolSupplier(str(outsdffile), removeHs=True)[0]
     assert Chem.SanitizeMol(rdmol) == Chem.rdmolops.SanitizeFlags.SANITIZE_NONE
     rdmol_smi = Chem.MolFromSmiles(lig.smiles)
     substruct_matches = rdmol_smi.GetSubstructMatches(rdmol)
@@ -6776,7 +6783,7 @@ def test_distorted_molecule_template_fix(cif_3grt, mock_alternative_datasets):
     assert lig.is_invalid == False
     outsdffile = entry_dir / "3grt__1__1.A_2.A__1.B/ligand_files/1.B.sdf"
     assert outsdffile.is_file()
-    rdmol = Chem.SDMolSupplier(outsdffile, removeHs=True)[0]
+    rdmol = Chem.SDMolSupplier(str(outsdffile), removeHs=True)[0]
     assert Chem.SanitizeMol(rdmol) == Chem.rdmolops.SanitizeFlags.SANITIZE_NONE
 
 
@@ -6789,7 +6796,7 @@ def test_hydrogen_removed_save(cif_7az3, mock_alternative_datasets):
     pli_entry = list(entry.systems.keys())[0]
     outsdffile = entry_dir / pli_entry / f"ligand_files/{pli_entry[-3:]}.sdf"
     assert outsdffile.is_file()
-    rdmol = Chem.SDMolSupplier(outsdffile, removeHs=False, sanitize=False)[0]
+    rdmol = Chem.SDMolSupplier(str(outsdffile), removeHs=False, sanitize=False)[0]
     assert sum([at.GetAtomicNum() == 1 for at in rdmol.GetAtoms()]) == 0
     assert Chem.SanitizeMol(rdmol) == Chem.rdmolops.SanitizeFlags.SANITIZE_NONE
 
@@ -6803,7 +6810,7 @@ def test_too_many_hydrogens(cif_6ntj, mock_alternative_datasets):
     pli_entry = list(entry.systems.keys())[0]
     outsdffile = entry_dir / pli_entry / f"ligand_files/{pli_entry[-3:]}.sdf"
     assert outsdffile.is_file()
-    rdmol = Chem.SDMolSupplier(outsdffile, removeHs=False, sanitize=False)[0]
+    rdmol = Chem.SDMolSupplier(str(outsdffile), removeHs=False, sanitize=False)[0]
     assert sum([at.GetAtomicNum() == 1 for at in rdmol.GetAtoms()]) == 0
     assert Chem.SanitizeMol(rdmol) == Chem.rdmolops.SanitizeFlags.SANITIZE_NONE
 
@@ -6815,7 +6822,7 @@ def test_disconnected_ligand_fix(cif_4nhc, mock_alternative_datasets):
     assert lig.is_invalid == False
     outsdffile = entry_dir / "4nhc__1__1.A_1.B__1.C/ligand_files/1.C.sdf"
     assert outsdffile.is_file()
-    rdmol = Chem.SDMolSupplier(outsdffile, removeHs=True)[0]
+    rdmol = Chem.SDMolSupplier(str(outsdffile), removeHs=True)[0]
     assert Chem.SanitizeMol(rdmol) == Chem.rdmolops.SanitizeFlags.SANITIZE_NONE
     assert len(Chem.MolToSmiles(rdmol).split(".")) == 1
 
