@@ -6645,7 +6645,9 @@ def test_smiles_from_nextgen(test_dir, smiles_sample_csv):
     # Canonicalize SMILES to absorb differences across OST versions
     for df in [result_df, target_df]:
         df["smiles"] = df["smiles"].apply(
-            lambda s: Chem.MolToSmiles(Chem.MolFromSmiles(s)) if Chem.MolFromSmiles(s) is not None else s
+            lambda s: Chem.MolToSmiles(Chem.MolFromSmiles(s))
+            if Chem.MolFromSmiles(s) is not None
+            else s
         )
     pd.testing.assert_frame_equal(result_df, target_df)
 
