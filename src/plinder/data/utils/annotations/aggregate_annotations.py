@@ -671,7 +671,9 @@ class System(DocBaseModel):
             thresholds,
         )
 
-    def run_posebusters_on_system(self, system_folder: Path, pose_index: int = 0) -> None:
+    def run_posebusters_on_system(
+            self, system_folder: Path, pose_index: int = 0
+    ) -> None:
         """
         Run posebusters on the system.
 
