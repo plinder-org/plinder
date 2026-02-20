@@ -57,8 +57,7 @@ def query_index(
     assert query is not None
     df = sql(query).to_df()
     # START patch-2
-    # TODO-2: remove this patch after entry_release_date is fixed
-    # AND !! source data is regenerated
+    # TODO-2: rm this only once source data is regenerated!!
     if "entry_release_date" in df.columns:
         from importlib import resources
 
