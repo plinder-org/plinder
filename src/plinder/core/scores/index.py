@@ -58,6 +58,7 @@ def query_index(
     df = sql(query).to_df()
     # START patch-2
     # TODO-2: remove this patch after entry_release_date is fixed
+    # AND !! source data is regenerated
     if "entry_release_date" in df.columns:
         from importlib import resources
 
