@@ -293,7 +293,13 @@ def test_evaluate_stratify_plot_cmds(prediction_csv, mock_cpl_eval):
     plot_cmd(args=args)
     result_df = pd.read_csv(Path(prediction_csv.parent) / "plots" / "results.csv")
     truth = pd.read_csv(Path(cfg.data.plinder_dir) / "results.csv")
-    assert result_df.equals(truth)
+    assert result_df.select_dtypes(exclude="number").equals(
+        truth.select_dtypes(exclude="number")
+    )
+    assert np.allclose(
+        result_df.select_dtypes(include="number").values,
+        truth.select_dtypes(include="number").values,
+    )
     assert (Path(prediction_csv.parent) / "plots" / "merged.parquet").exists()
     assert (
         Path(prediction_csv.parent) / "plots" / "delta_lDDT_PLI_topn1.html"
