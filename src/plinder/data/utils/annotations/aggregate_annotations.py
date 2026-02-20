@@ -672,7 +672,7 @@ class System(DocBaseModel):
         )
 
     def run_posebusters_on_system(
-            self, system_folder: Path, pose_index: int = 0
+        self, system_folder: Path, pose_index: int = 0
     ) -> None:
         """
         Run posebusters on the system.
