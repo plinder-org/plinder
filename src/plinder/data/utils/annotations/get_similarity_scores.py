@@ -368,7 +368,7 @@ class Scorer:
                 )
             except Exception as e:
                 scratch = (
-                    Path(*output_folder.parts[:3])
+                    output_folder
                     / "scratch"
                     / "scores"
                     / "run_alignment_failures"
@@ -385,7 +385,7 @@ class Scorer:
                 )
                 if not pdb_id_file.exists():
                     scratch = (
-                        Path(*output_folder.parts[:3])
+                        output_folder
                         / "scratch"
                         / "scores"
                         / "run_alignments_failures"
@@ -398,7 +398,7 @@ class Scorer:
                     pdb_id_df.to_parquet(aln_dir / f"{pdb_id}.parquet")
                 else:
                     scratch = (
-                        Path(*output_folder.parts[:3])
+                        output_folder
                         / "scratch"
                         / "scores"
                         / "run_alignments_empty"

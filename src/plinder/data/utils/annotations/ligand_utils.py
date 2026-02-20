@@ -670,7 +670,16 @@ def annotate_interface_gaps_per_chain(
 def validate_chain_residue(obj: dict[str, ty.Any]) -> dict[str, ty.Any]:
     clean = {}
     for k, v in obj.items():
-        key = tuple(k.split(",")) if isinstance(k, str) else k
+        if isinstance(k, str):
+            if "," in k:
+                key: ty.Any = tuple(k.split(","))
+            else:
+                try:
+                    key = int(k)
+                except ValueError:
+                    key = k
+        else:
+            key = k
         if isinstance(v, dict):
             clean[key] = validate_chain_residue(v)
         else:
