@@ -18,7 +18,7 @@ dependencies = [
     "omegaconf",
     "mmcif",
     "eval_type_backport",
-    "posebusters",
+    "posebusters>=0.6.4",
     "duckdb",
     "cloudpathlib",
     "mols2grid",

@@ -72,7 +72,7 @@ def test_single_protein_single_ligand_scoring_named_sdf(
         score_protein=False,
         score_posebusters=True,
     ).summarize_scores()
-    assert list(scores.keys())[0] == "00001_ligand_pose_0"
+    assert list(scores.keys())[0] == "00001_ligand_pose_0", list(scores.keys())
 
 
 def test_single_protein_single_ligand_scoring(
@@ -135,15 +135,6 @@ def test_single_protein_single_ligand_scoring(
             "best_pli_matched_reference_chain": "1.D",
         }
     }
-
-    # for k in true_scores:
-    #     assert k in scores
-    #     if type(true_scores[k]) == float:
-    #         assert np.isclose(
-    #             true_scores[k], scores[k]
-    #         ), f"{k}: {true_scores[k]} != {scores[k]}"
-    #     else:
-    #         assert true_scores[k] == scores[k], f"{k}: {true_scores[k]} != {scores[k]}"
 
     for l in true_scores:
         assert l in scores

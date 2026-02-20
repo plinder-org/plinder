@@ -365,32 +365,11 @@ class ModelScores:
                         mol_cond=self.model.receptor_file,
                         full_report=self.score_posebusters_full_report,
                     ).to_dict()
-                    # the assumption of key is prepended by ost, eg. '00001_1.D' or '00001_6YYO_Q1K_BBB_323'
-                    key = (
-                        str(ligand_class.sdf_file),
-                        "_".join(chain_name.split("_")[1:]),
-                    )
-                    try:
-                        ligand_class.posebusters = {
-                            k: v[key] for k, v in result_dict.items()
-                        }
-                    except KeyError:
-                        try:
-                            # posebusters default when no name is present in SDF
-                            key = (str(ligand_class.sdf_file), "mol_at_pos_0")
-                            ligand_class.posebusters = {
-                                k: v[key] for k, v in result_dict.items()
-                            }
-                        except KeyError:
-                            # this should not be the case as it should be handled
-                            key = (
-                                str(ligand_class.sdf_file),
-                                ligand_class.sdf_file.stem,
-                            )
-                            ligand_class.posebusters = {
-                                k: v[key] for k, v in result_dict.items()
-                            }
-                    # print(f"key used {key}")
+                    # Extract the key directly from the result dict (format varies by posebusters version)
+                    key = next(iter(next(iter(result_dict.values())).keys()))
+                    ligand_class.posebusters = {
+                        k: v[key] for k, v in result_dict.items()
+                    }
                 if ligand_class.protein_chain_mapping is not None:
                     assigned_model.add(chain_name)
                     assigned_target.add(

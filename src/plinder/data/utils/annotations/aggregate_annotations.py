@@ -671,9 +671,16 @@ class System(DocBaseModel):
             thresholds,
         )
 
-    def run_posebusters_on_system(self, system_folder: Path) -> None:
+    def run_posebusters_on_system(self, system_folder: Path, pose_index: int = 0) -> None:
         """
-        Run posebusters on the system
+        Run posebusters on the system.
+
+        Parameters
+        ----------
+        system_folder : Path
+            Folder containing system files.
+        pose_index : int, optional
+            Pose index to use for evaluation, by default 0
         """
         pb = PoseBusters(config="redock")
         receptor_file = system_folder / "receptor.pdb"
@@ -697,7 +704,8 @@ class System(DocBaseModel):
                     f"run_posebusters: Error running posebusters on {ligand.id}: {e}"
                 )
                 continue
-            key = (str(ligand_file), ligand.instance_chain)
+            # posebusters>=0.6.4 produces 3-tuple keys (filename, chain, pose_index)
+            key = (str(ligand_file), ligand.instance_chain, pose_index)
             ligand.posebusters_result = {
                 k: v.get(key) for k, v in result_dict.items() if v.get(key)
             }
