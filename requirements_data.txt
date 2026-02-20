@@ -2,5 +2,9 @@
   tabulate
   pdb-validation @ git+https://git.scicore.unibas.ch/schwede/ligand-validation.git
   mmpdb @ git+https://github.com/rdkit/mmpdb.git
+<<<<<<< custom_cif
   torch @ https://download.pytorch.org/whl/cpu/torch-2.5.1%2Bcpu-cp312-cp312-linux_x86_64.whl#sha256=4856f9d6925121d13c2df07aa7580b767f449dfe71ae5acde9c27535d5da4840 ; sys_platform == "linux"
   torch==2.5.1 ; sys_platform == "darwin"
+=======
+  https://download.pytorch.org/whl/cpu/torch-2.5.1%2Bcpu-cp312-cp312-linux_x86_64.whl#sha256=4856f9d6925121d13c2df07aa7580b767f449dfe71ae5acde9c27535d5da4840
+>>>>>>> main
