@@ -684,7 +684,7 @@ def validate_chain_residue(obj: dict[str, ty.Any]) -> dict[str, ty.Any]:
             clean[key] = validate_chain_residue(v)
         else:
             clean[key] = v
-    return clean  # type: ignore
+    return clean
 
 
 CrystalContacts = ty.Annotated[

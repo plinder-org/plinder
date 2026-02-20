@@ -368,10 +368,7 @@ class Scorer:
                 )
             except Exception as e:
                 scratch = (
-                    output_folder
-                    / "scratch"
-                    / "scores"
-                    / "run_alignment_failures"
+                    output_folder / "scratch" / "scores" / "run_alignment_failures"
                 )
                 scratch.mkdir(exist_ok=True, parents=True)
                 (scratch / f"{search_db}_{aln_type}.txt").write_text(f"{repr(e)}: {e}")
@@ -385,10 +382,7 @@ class Scorer:
                 )
                 if not pdb_id_file.exists():
                     scratch = (
-                        output_folder
-                        / "scratch"
-                        / "scores"
-                        / "run_alignments_failures"
+                        output_folder / "scratch" / "scores" / "run_alignments_failures"
                     )
                     scratch.mkdir(exist_ok=True, parents=True)
                     (scratch / f"{search_db}_{aln_type}_{pdb_id}.txt").write_text("")
@@ -398,10 +392,7 @@ class Scorer:
                     pdb_id_df.to_parquet(aln_dir / f"{pdb_id}.parquet")
                 else:
                     scratch = (
-                        output_folder
-                        / "scratch"
-                        / "scores"
-                        / "run_alignments_empty"
+                        output_folder / "scratch" / "scores" / "run_alignments_empty"
                     )
                     scratch.mkdir(exist_ok=True, parents=True)
                     (scratch / f"{search_db}_{aln_type}_{pdb_id}.txt").write_text("")
