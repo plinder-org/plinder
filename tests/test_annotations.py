@@ -1,8 +1,6 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
 import pandas as pd
-from rdkit import Chem
-
 from plinder.data.get_system_annotations import GetPlinderAnnotation
 from plinder.data.utils.annotations.aggregate_annotations import Entry
 from plinder.data.utils.annotations.interaction_utils import get_covalent_connections
@@ -13,10 +11,12 @@ from plinder.data.utils.annotations.ligand_utils import (
 )
 from plinder.data.utils.annotations.mmpdb_utils import add_mmp_clusters_to_data
 from plinder.data.utils.annotations.protein_utils import read_mmcif_container
+from rdkit import Chem
 
 
 def test_ccd_name_sorter():
     assert sort_ccd_codes({"G", "G25", "CPG", "5GP"}) == ["CPG", "G25", "G", "5GP"]
+
 
 def test_covalent_linkage(cif_1qz5):
     reference = [("72:GLU:A:72:C", "73:HIC:A:73:N"), ("73:HIC:A:73:C", "74:GLY:A:74:N")]
@@ -24,6 +24,7 @@ def test_covalent_linkage(cif_1qz5):
     assert (
         get_covalent_connections(read_mmcif_container(cif_1qz5))["covale"] == reference
     )
+
 
 def test_find_missing_residues(cif_2y4i_system):
     actual = annotate_interface_gaps(
@@ -36,6 +37,7 @@ def test_find_missing_residues(cif_2y4i_system):
         "missing_interface_residues_8A": 0,
     }
     assert actual == expected
+
 
 def test_short_noncov_peptide_detection(cif_6i41, mock_alternative_datasets):
     entry_dir = mock_alternative_datasets("6i41")
@@ -50,6 +52,7 @@ def test_short_noncov_peptide_detection(cif_6i41, mock_alternative_datasets):
     # Note: chain 'B' is ligand = should not be in protein neigh list
     assert df["ligand_protein_chains_auth_id"].drop_duplicates().to_list() == [["A"]]
 
+
 def test_synthetic_noncov_peptide_detection(cif_6u6k, mock_alternative_datasets):
     entry_dir = mock_alternative_datasets("6u6k")
     plinder_anno = GetPlinderAnnotation(cif_6u6k, "", save_folder=entry_dir)
@@ -60,6 +63,7 @@ def test_synthetic_noncov_peptide_detection(cif_6u6k, mock_alternative_datasets)
     assert set(df.ligand_ccd_code.to_list()) == {
         "ACE-TRP-TRP-ILE-ILE-PRO-ALY-VAL-LYS-ALY-GLY-CYS-NH2"
     }
+
 
 def test_synthetic_cov_peptide_detection(cif_6lu7, mock_alternative_datasets):
     entry_dir = mock_alternative_datasets("6lu7")
@@ -84,6 +88,7 @@ def test_synthetic_cov_peptide_detection(cif_6lu7, mock_alternative_datasets):
     assert Chem.SanitizeMol(rdmol) == Chem.rdmolops.SanitizeFlags.SANITIZE_NONE
     assert len(Chem.MolToSmiles(rdmol).split(".")) == 1
 
+
 def test_crystal_contact_detection(cif_6lu7, mock_alternative_datasets):
     entry_dir = mock_alternative_datasets("6lu7")
     plinder_anno = GetPlinderAnnotation(cif_6lu7, "", save_folder=entry_dir)
@@ -93,12 +98,14 @@ def test_crystal_contact_detection(cif_6lu7, mock_alternative_datasets):
     assert all(x == 5 for x in df["system_num_atoms_with_crystal_contacts"])
     assert all(x == 2 for x in df["system_num_crystal_contacted_residues"])
 
+
 def test_simple_covalency_detection(cif_7gl9, mock_alternative_datasets):
     entry_dir = mock_alternative_datasets("7gl9")
     plinder_anno_noncov = GetPlinderAnnotation(cif_7gl9, "", save_folder=entry_dir)
     plinder_anno_noncov.annotate()
     df_noncov = plinder_anno_noncov.annotated_df
     assert df_noncov["ligand_is_covalent"].sum() == 0
+
 
 def test_simple_covalency_detection_found(cif_7gj7, mock_alternative_datasets):
     entry_dir = mock_alternative_datasets("7gj7")
@@ -111,6 +118,7 @@ def test_simple_covalency_detection_found(cif_7gj7, mock_alternative_datasets):
     assert lig.is_covalent == True
     assert lig.covalent_linkages == {"145:CYS:B:145:SG__404:Q0I:N:.:C"}
 
+
 def test_simple_ternary_detection(cif_2p1q, mock_alternative_datasets):
     entry_dir = mock_alternative_datasets("2p1q")
     plinder_anno = GetPlinderAnnotation(cif_2p1q, "", save_folder=entry_dir)
@@ -122,6 +130,7 @@ def test_simple_ternary_detection(cif_2p1q, mock_alternative_datasets):
     assert df[auxin_entry][
         "ligand_protein_chains_auth_id"
     ].drop_duplicates().to_list() == [["B", "C"]]
+
 
 def test_plip_entry_binary(cif_4ci1, mock_alternative_datasets, lig_code="EF2"):
     entry_dir = mock_alternative_datasets("4ci1")
@@ -175,6 +184,7 @@ def test_plip_entry_binary(cif_4ci1, mock_alternative_datasets, lig_code="EF2"):
     assert len(ligand.interactions["1.B"]) == len(expected_interactions)
     # exact report matching
     assert ligand.interactions["1.B"] == expected_interactions
+
 
 def test_plip_entry_ternary(cif_2p1q, mock_alternative_datasets, lig_code="IAC"):
     entry_dir = mock_alternative_datasets("2p1q")
@@ -239,6 +249,7 @@ def test_plip_entry_ternary(cif_2p1q, mock_alternative_datasets, lig_code="IAC")
     # waters
     assert {k: set(v) for k, v in ligand.waters.items()} == expected_waters
 
+
 def test_water_saving(cif_2p1q, mock_alternative_datasets):
     from ost import io
 
@@ -257,6 +268,7 @@ def test_water_saving(cif_2p1q, mock_alternative_datasets):
     assert (entry_dir / system_tag / "ligand_files" / "2.E.sdf").exists()
     ent = io.LoadPDB(str(entry_dir / system_tag / "receptor.pdb"))
     assert len(ent.FindChain("_").residues) == 3
+
 
 def test_plip_same_hinge_binders(cif_2gdo, cif_4qyf, mock_alternative_datasets):
     pdb_ids = ["2gdo", "4qyf"]
@@ -278,6 +290,7 @@ def test_plip_same_hinge_binders(cif_2gdo, cif_4qyf, mock_alternative_datasets):
     for hr in hinge_resids:
         assert len(set(interactions_sets[0][hr]).intersection(interactions_sets[1][hr]))
 
+
 def test_get_single_ligand_system_annotations(cif_6fx1, mock_alternative_datasets):
     entry_dir = mock_alternative_datasets("6fx1")
     entry = Entry.from_cif_file(cif_6fx1, save_folder=entry_dir)
@@ -297,6 +310,7 @@ def test_get_single_ligand_system_annotations(cif_6fx1, mock_alternative_dataset
     }
     assert single_ligand_system_result == single_ligand_system_target
 
+
 def test_system_saving(cif_2y4i, mock_alternative_datasets):
     entry_dir = mock_alternative_datasets("2y4i")
     system_tag = "2y4i__1__1.B__1.E_1.F"
@@ -313,6 +327,7 @@ def test_system_saving(cif_2y4i, mock_alternative_datasets):
         assert (entry_dir / system_tag / filename).exists()
     for chain in ["1.E", "1.F"]:
         assert (entry_dir / system_tag / "ligand_files" / f"{chain}.sdf").exists()
+
 
 def test_smiles_from_nextgen(test_dir, smiles_sample_csv):
     from ost import io
@@ -339,6 +354,7 @@ def test_smiles_from_nextgen(test_dir, smiles_sample_csv):
             else s
         )
     pd.testing.assert_frame_equal(result_df, target_df)
+
 
 def test_get_validation(
     cif_1qz5,
@@ -376,6 +392,7 @@ def test_get_validation(
 
     pd.testing.assert_frame_equal(reference_df, validation_df)
 
+
 def test_mmp(mini_mmp_index, mini_mmp_data_annotation, mini_mmp_cluster_folder):
     system_df = pd.read_csv(mini_mmp_data_annotation, sep="\t")
     load_mmp_df = pd.read_csv(mini_mmp_index, compression="gzip", sep="\t", header=None)
@@ -401,6 +418,7 @@ def test_mmp(mini_mmp_index, mini_mmp_data_annotation, mini_mmp_cluster_folder):
     # Number of unique congeneric ids is equal to number of unique constants
     assert len(mmp_data.congeneric_id.unique()) == len(mmp_data.CONSTANT.unique())
 
+
 def test_ligand_fix_to_valid_imatinib(cif_2hyy, mock_alternative_datasets):
     entry_dir = mock_alternative_datasets("2hyy")
     entry = Entry.from_cif_file(
@@ -420,6 +438,7 @@ def test_ligand_fix_to_valid_imatinib(cif_2hyy, mock_alternative_datasets):
         rdmol_sdf
     ) == Chem.rdMolDescriptors.CalcNumAromaticRings(rdmol_smi)
 
+
 def test_ligand_fix_to_valid_thalidomide(cif_7bqu, mock_alternative_datasets):
     entry_dir = mock_alternative_datasets("7bqu")
     entry = Entry.from_cif_file(
@@ -437,6 +456,7 @@ def test_ligand_fix_to_valid_thalidomide(cif_7bqu, mock_alternative_datasets):
     assert Chem.rdMolDescriptors.CalcNumAromaticRings(
         rdmol_sdf
     ) == Chem.rdMolDescriptors.CalcNumAromaticRings(rdmol_smi)
+
 
 def test_partially_resolved_substructure_JEF(cif_1ngx, mock_alternative_datasets):
     entry_dir = mock_alternative_datasets("1ngx")
@@ -456,6 +476,7 @@ def test_partially_resolved_substructure_JEF(cif_1ngx, mock_alternative_datasets
     assert len(substruct_matches) == 3
     assert len(substruct_matches[0]) == 28
 
+
 def test_distorted_molecule_template_fix(cif_3grt, mock_alternative_datasets):
     entry_dir = mock_alternative_datasets("3grt")
     entry = Entry.from_cif_file(
@@ -468,6 +489,7 @@ def test_distorted_molecule_template_fix(cif_3grt, mock_alternative_datasets):
     assert outsdffile.is_file()
     rdmol = Chem.SDMolSupplier(str(outsdffile), removeHs=True)[0]
     assert Chem.SanitizeMol(rdmol) == Chem.rdmolops.SanitizeFlags.SANITIZE_NONE
+
 
 def test_hydrogen_removed_save(cif_7az3, mock_alternative_datasets):
     entry_dir = mock_alternative_datasets("7az3")
@@ -482,6 +504,7 @@ def test_hydrogen_removed_save(cif_7az3, mock_alternative_datasets):
     assert sum([at.GetAtomicNum() == 1 for at in rdmol.GetAtoms()]) == 0
     assert Chem.SanitizeMol(rdmol) == Chem.rdmolops.SanitizeFlags.SANITIZE_NONE
 
+
 def test_too_many_hydrogens(cif_6ntj, mock_alternative_datasets):
     entry_dir = mock_alternative_datasets("6ntj")
     entry = Entry.from_cif_file(
@@ -495,6 +518,7 @@ def test_too_many_hydrogens(cif_6ntj, mock_alternative_datasets):
     assert sum([at.GetAtomicNum() == 1 for at in rdmol.GetAtoms()]) == 0
     assert Chem.SanitizeMol(rdmol) == Chem.rdmolops.SanitizeFlags.SANITIZE_NONE
 
+
 def test_disconnected_ligand_fix(cif_4nhc, mock_alternative_datasets):
     entry_dir = mock_alternative_datasets("4nhc")
     entry = Entry.from_cif_file(cif_4nhc, save_folder=entry_dir, skip_posebusters=True)
@@ -505,6 +529,7 @@ def test_disconnected_ligand_fix(cif_4nhc, mock_alternative_datasets):
     rdmol = Chem.SDMolSupplier(str(outsdffile), removeHs=True)[0]
     assert Chem.SanitizeMol(rdmol) == Chem.rdmolops.SanitizeFlags.SANITIZE_NONE
     assert len(Chem.MolToSmiles(rdmol).split(".")) == 1
+
 
 def test_binding_affinity(cif_4jvn, mock_alternative_datasets):
     entry_dir = mock_alternative_datasets("4jvn")
