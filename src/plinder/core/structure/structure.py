@@ -36,7 +36,7 @@ from plinder.core.utils.dataclass import stringify_dataclass
 from plinder.core.utils.log import setup_logger
 
 if TYPE_CHECKING:
-    import torch
+    pass
 
 
 log = setup_logger(__name__)
@@ -204,8 +204,10 @@ class Structure(BaseModel):
             raise ValueError("Protein atom array not loaded")
         self.protein_sequence = {}
         for chain in self.protein_chain_ordered:
-            self.protein_sequence[chain] = struc.to_sequence(
-                self.protein_atom_array[self.protein_atom_array.chain_id == chain]
+            self.protein_sequence[chain] = str(
+                struc.to_sequence(
+                    self.protein_atom_array[self.protein_atom_array.chain_id == chain]
+                )[0][0]
             )
         if not len(self.protein_sequence):
             raise ValueError("Protein sequence could not be loaded")
@@ -466,6 +468,18 @@ class Structure(BaseModel):
         )
         return [seqres_masks[ch] for ch in self.protein_chain_ordered]
 
+    def protein_structure_residue_mask(self, other: Structure) -> list[list[int]]:
+        """Mask residues from a given structure to another structure"""
+        self_protein_atom_array = self.protein_atom_array
+        other_sequence_dict = other.protein_sequence_from_structure
+        # = other.protein_chain_ordered[0]
+        assert self_protein_atom_array is not None
+        assert other_sequence_dict is not None
+        seqres_masks = get_residue_index_mapping_mask(
+            other_sequence_dict, self_protein_atom_array
+        )
+        return [seqres_masks[ch] for ch in self.protein_chain_ordered]
+
     @property
     def input_sequence_list_ordered_by_chain(self) -> list[str] | None:
         """List of protein chains ordered the way it is in structure."""
@@ -485,7 +499,7 @@ class Structure(BaseModel):
         return chain_order
 
     @property
-    def input_sequence_full_atom_feat(self) -> dict[str, list[str]]:
+    def input_sequence_full_atom_dict(self) -> dict[str, list[str]]:
         """Resolved sequence full atom features."""
         # TODO: do we want to keep this as assertion?
         # better if then raise?
@@ -496,7 +510,9 @@ class Structure(BaseModel):
             ch: [
                 atm
                 for res in self.protein_sequence[ch]
-                for atm in pc.ORDERED_AA_FULL_ATOM[pc.ONE_TO_THREE[res]]
+                for atm in pc.ORDERED_AA_FULL_ATOM.get(
+                    pc.ONE_TO_THREE[res], ["N", "CA", "C", "O"]
+                )
             ]
             for ch in self.protein_chain_ordered
         }
@@ -545,8 +561,8 @@ class Structure(BaseModel):
         return protein_coords
 
     @property
-    def input_ligand_conformer_atom_array(self) -> dict[str, AtomArray]:
-        """dict[str, AtomArray]: The coordinates of the input 3D conformer generated from input SMILES"""
+    def input_ligand_conformers_atom_array(self) -> dict[str, AtomArray]:
+        """dict[str, AtomArray]: The biotite atom array of the input 3D conformer generated from input SMILES (via RDKit molecule)"""
         ligands = {}
         for c in self.input_ligand_conformers:
             with tempfile.NamedTemporaryFile(suffix=".sdf") as tmp_file:
@@ -555,8 +571,8 @@ class Structure(BaseModel):
         return ligands
 
     @property
-    def ligand_atom_array(self) -> dict[str, AtomArray]:
-        """dict[str, AtomArray]: The coordinates of the input 3D conformer generated from input SMILES"""
+    def resolved_ligand_mols_atom_array(self) -> dict[str, AtomArray]:
+        """dict[str, AtomArray]: The biotite atom array of the resolved ligand"""
         if self.ligand_sdfs is None:
             return {}
         ligands = {}
@@ -573,7 +589,7 @@ class Structure(BaseModel):
     @property
     def protein_calpha_coords(self) -> NDArray[np.double]:
         assert self.protein_atom_array is not None
-        """list[NDArray]: The coordinates of the protein clapha atoms in the structure."""
+        """list[NDArray]: The coordinates of the protein Calpha atoms in the structure"""
         protein_calpha_coords: list[NDArray] = [
             coord
             for coord in _stack_atom_array_features(
@@ -633,99 +649,51 @@ class Structure(BaseModel):
     def protein_backbone_mask(self) -> NDArray[np.bool_]:
         """ndarray[np.bool\_]: a logical mask for backbone atoms."""
         assert self.protein_atom_array is not None
-        mask: NDArray[np.bool_] = struc.filter_peptide_backbone(self.protein_atom_array)
+        mask: dict[str, NDArray[np.bool_]] = {
+            ch: struc.filter_peptide_backbone(
+                self.protein_atom_array[self.protein_atom_array.chain_id == ch]
+            )
+            for ch in self.protein_chain_ordered
+        }
+
         return mask
 
     @property
-    def protein_calpha_mask(self) -> NDArray[np.bool_]:
+    def protein_calpha_mask(self) -> dict[str, NDArray[np.bool_]]:
         """ndarray[np.bool\_]: a logical mask for alpha carbon atoms."""
         assert self.protein_atom_array is not None
-        mask: NDArray[np.bool_] = self.protein_atom_array.atom_name == "CA"
+        mask: dict[str, NDArray[np.bool_]] = {
+            ch: self.protein_atom_array[
+                self.protein_atom_array.chain_id == ch
+            ].atom_name
+            == "CA"
+            for ch in self.protein_chain_ordered
+        }
+
         return mask
 
     @property
-    def protein_n_atoms(self) -> int:
+    def protein_n_atoms(self) -> dict[str, int]:
         """int: The number of atoms in the structure."""
         assert self.protein_atom_array is not None
-        n: int = self.protein_atom_array.shape[0]
+        n: dict[str, int] = {
+            ch: self.protein_atom_array[self.protein_atom_array.chain_id == ch].shape[0]
+            for ch in self.protein_chain_ordered
+        }
         return n
 
     @property
-    def protein_chains(self) -> list[str]:
-        """list[str]: The list of chain IDs in the structure."""
-        if self.protein_atom_array is not None:
-            ch_list = self._attr_from_atom_array(
-                self.protein_atom_array, "chain_id", distinct=True, sort=True
-            )
-            return [str(ch) for ch in ch_list]
-        else:
-            return []
-
-    @property
-    def protein_sequence_from_structure(self) -> str:
-        """str: The amino acid sequence of the structure."""
+    def protein_sequence_from_structure(self) -> dict[str, str]:
+        """str: residue (amino acid) sequence of the structure"""
         assert self.protein_atom_array is not None
-        numbering, resn = struc.get_residues(self.protein_atom_array)
-        seq: str = resn2seq(resn)
+        resn = {
+            ch: struc.get_residues(
+                self.protein_atom_array[self.protein_atom_array.chain_id == ch]
+            )[1]
+            for ch in self.protein_chain_ordered
+        }
+        seq: dict[str, str] = {ch: resn2seq(resn) for ch, resn in resn.items()}
         return seq
-
-    @property
-    def protein_structure_tokenized_sequence(self) -> "torch.Tensor":
-        """torch.Tensor: The tokenized sequence representation of the structure sequence."""
-        import torch
-
-        seq_encoding = torch.tensor(
-            [pc.AA_TO_INDEX[x] for x in self.protein_sequence_from_structure]
-        )
-        tokenized: torch.Tensor = seq_encoding.long()
-        return tokenized
-
-    @property
-    def protein_unique_residue_names(self) -> list[str]:
-        """list[str]: The list of distinct residue names in the structure."""
-        assert self.protein_atom_array is not None
-        res_list = self._attr_from_atom_array(
-            self.protein_atom_array, "res_name", distinct=True, sort=True
-        )
-        return [str(r) for r in res_list]
-
-    @property
-    def protein_unique_residue_ids(self) -> list[int]:
-        """list[int]: The list of distinct residue IDs in the structure."""
-        assert self.protein_atom_array is not None
-        res_list = self._attr_from_atom_array(
-            self.protein_atom_array, "res_id", distinct=True, sort=True
-        )
-        return [int(r) for r in res_list]
-
-    @property
-    def protein_unique_atom_names(self) -> list[str]:
-        """list[str]: The list of distinct atom names in the structure."""
-        assert self.protein_atom_array is not None
-        at_list = self._attr_from_atom_array(
-            self.protein_atom_array, "atom_name", distinct=True, sort=True
-        )
-        return [str(a) for a in at_list]
-
-    @property
-    def protein_structure_b_factor(self) -> list[float]:
-        """list[float]: A list of B-factor values for each atom in the structure."""
-        assert self.protein_atom_array is not None
-        b_factor = self._attr_from_atom_array(
-            self.protein_atom_array, "b_factor", distinct=False, sort=False
-        )
-        return [float(b) for b in b_factor]
-
-    @staticmethod
-    def _attr_from_atom_array(
-        array: AtomArray, attr: str, distinct: bool = False, sort: bool = False
-    ) -> list[str] | list[int] | list[float]:
-        prop = getattr(array, attr)
-        if distinct:
-            prop = set(prop)
-        if sort:
-            prop = sorted(prop)
-        return list(prop)
 
     @classmethod
     def get_properties(cls) -> list[str]:
