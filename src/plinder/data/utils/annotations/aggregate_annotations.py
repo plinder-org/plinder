@@ -139,13 +139,11 @@ class System(DocBaseModel):
         """
         ID of the system without the biounit
         """
-        return "__".join(
-            [
-                self.pdb_id,
-                "_".join(x.split(".")[1] for x in self.protein_chains_asym_id),
-                "_".join(x.split(".")[1] for x in self.ligand_chains),
-            ]
-        )
+        return "__".join([
+            self.pdb_id,
+            "_".join(x.split(".")[1] for x in self.protein_chains_asym_id),
+            "_".join(x.split(".")[1] for x in self.ligand_chains),
+        ])
 
     @cached_property
     def ligand_chains(self) -> list[str]:
@@ -226,14 +224,12 @@ class System(DocBaseModel):
         """
         ID of the system
         """
-        return "__".join(
-            [
-                self.pdb_id,
-                self.biounit_id,
-                "_".join(self.protein_chains_asym_id),
-                "_".join(self.ligand_chains),
-            ]
-        )
+        return "__".join([
+            self.pdb_id,
+            self.biounit_id,
+            "_".join(self.protein_chains_asym_id),
+            "_".join(self.ligand_chains),
+        ])
 
     @cached_property
     def system_type(self) -> str:
@@ -904,6 +900,37 @@ class Entry(DocBaseModel):
             chain.name for chain in ent.chains if chain.type == mol.CHAINTYPE_WATER
         ]
 
+    def _finalize(
+        self,
+        ligands: dict[str, Ligand],
+        info: io.MMCifInfo,
+        biounits: dict[str, ty.Any],
+        save_folder: Path | None,
+        max_protein_chains_to_save: int,
+        max_ligand_chains_to_save: int,
+        skip_posebusters: bool = False,
+    ) -> None:
+        """Label crystal contacts, set systems, save, and run posebusters."""
+        if self.symmetry_mate_contacts:
+            for ligand in ligands.values():
+                ligand.label_crystal_contacts(self.symmetry_mate_contacts)
+        self.set_systems(ligands)
+        self.label_chains()
+        if save_folder is not None:
+            self.save_systems(
+                info,
+                biounits,
+                save_folder,
+                max_protein_chains_to_save,
+                max_ligand_chains_to_save,
+            )
+        if not skip_posebusters:
+            self.run_posebusters(
+                save_folder,
+                max_protein_chains_to_save,
+                max_ligand_chains_to_save,
+            )
+
     def _collect_ligands_from_biounit(
         self,
         biounit: ty.Any,
@@ -1066,30 +1093,17 @@ class Entry(DocBaseModel):
                 neighboring_ligand_threshold,
                 data_dir,
             )
-            for ligand in new_ligands.values():
-                ligand.label_crystal_contacts(entry.symmetry_mate_contacts)
             ligands.update(new_ligands)
             biounits[biounit_info.id] = biounit
-        entry.set_systems(ligands)
-        entry.label_chains()
-        if save_folder is not None and not skip_save_systems:
-            entry.save_systems(
-                info,
-                biounits,
-                save_folder,
-                max_protein_chains_to_save,
-                max_ligand_chains_to_save,
-            )
-        # TODO: this is backwards because it assumes save_systems
-        #       has already run but will fail if it hadn't run previously
-        #       so we just check if save_folder is None (which it's not in the pipeline)
-        # VO: added option to skip posebusters to speed up testing!
-        if not skip_posebusters:
-            entry.run_posebusters(
-                save_folder,
-                max_protein_chains_to_save,
-                max_ligand_chains_to_save,
-            )
+        entry._finalize(
+            ligands,
+            info,
+            biounits,
+            save_folder if not skip_save_systems else None,
+            max_protein_chains_to_save,
+            max_ligand_chains_to_save,
+            skip_posebusters=skip_posebusters,
+        )
         return entry
 
     @classmethod
@@ -1097,6 +1111,7 @@ class Entry(DocBaseModel):
         cls,
         pdb_id: str,
         cif_file: Path,
+        ligand_smiles_dict: dict[str, str] | None = None,
         neighboring_residue_threshold: float = 6.0,
         neighboring_ligand_threshold: float = 4.0,
         min_polymer_size: int = 10,  # TODO: this used to be max_non_small_mol_ligand_length
@@ -1115,6 +1130,11 @@ class Entry(DocBaseModel):
             annotation be used in PDB ID column
         cif_file : Path
             mmcif files of interest
+        ligand_smiles_dict : dict[str, str] | None, optional
+            Mapping of component ID (e.g. ``LIG``) to SMILES.
+            Required for unknown ligands without ``_chem_comp_bond``
+            (typical of cofolding outputs). Known CCD compounds
+            are handled automatically.
         neighboring_residue_threshold : float, optional
             Distance from ligand for protein residues to be considered a ligand,
             by default 6.0
@@ -1134,7 +1154,33 @@ class Entry(DocBaseModel):
         -------
         Entry
             Entry object for the given pdbid
+
+        Raises
+        ------
+        MissingBondOrderError
+            If the CIF contains unknown ligands and no ``ligand_smiles_dict``
+            is provided.
         """
+        from plinder.data.utils.annotations.biotite_utils import (
+            MissingBondOrderError,
+            assign_bond_orders_from_smiles,
+            get_unknown_ligand_ids,
+        )
+
+        # Check for missing bond orders and enrich CIF if needed
+        unknown_ids = get_unknown_ligand_ids(cif_file)
+        if unknown_ids:
+            if ligand_smiles_dict is None:
+                raise MissingBondOrderError(
+                    f"CIF contains unknown ligands {unknown_ids} with no "
+                    "_chem_comp_bond and no CCD match. "
+                    "Provide ligand_smiles_dict to assign bond orders."
+                )
+            assign_bond_orders_from_smiles(
+                cif_file,
+                ligand_smiles=ligand_smiles_dict,
+            )
+
         ent, seqres, info = io.LoadMMCIF(
             str(cif_file), seqres=True, info=True, remote=False
         )
@@ -1159,23 +1205,22 @@ class Entry(DocBaseModel):
         edi.UpdateICS()
         ligands = entry._collect_ligands_from_biounit(
             biounit,
-            "1",  # TODO: @JAY - is this necessary to be different from `from_cif_file` ?
+            "1",  # single assembly; custom CIFs lack _pdbx_struct_assembly
             interface_proximal_gaps,
             plip_complex_threshold,
             neighboring_residue_threshold,
             neighboring_ligand_threshold,
             data_dir=None,
         )
-        entry.set_systems(ligands)
-        entry.label_chains()
-        if save_folder is not None:
-            entry.save_systems(
-                info,
-                {"1": biounit},
-                save_folder,
-                max_protein_chains_to_save,
-                max_ligand_chains_to_save,
-            )
+        entry._finalize(
+            ligands,
+            info,
+            {"1": biounit},
+            save_folder,
+            max_protein_chains_to_save,
+            max_ligand_chains_to_save,
+            skip_posebusters=True,
+        )
         return entry
 
     def set_systems(self, ligands: dict[str, Ligand]) -> None:
@@ -1198,13 +1243,11 @@ class Entry(DocBaseModel):
                 ligands[ligand_id].neighboring_ligands
                 + ligands[ligand_id].interacting_ligands
             ):
-                neighboring_ligand_id = "__".join(
-                    [
-                        self.pdb_id,
-                        ligands[ligand_id].biounit_id,
-                        f"{neighboring_ligand_instance_chain}",
-                    ]
-                )
+                neighboring_ligand_id = "__".join([
+                    self.pdb_id,
+                    ligands[ligand_id].biounit_id,
+                    f"{neighboring_ligand_instance_chain}",
+                ])
                 if neighboring_ligand_id in ligands:
                     G.add_edge(ligand_id, neighboring_ligand_id)
         system_ligands: dict[int, list[Ligand]] = {}
@@ -1305,9 +1348,9 @@ class Entry(DocBaseModel):
         ligand_chains = set()
         for system in self.systems.values():
             if system.system_type == "holo":
-                holo_chains.update(
-                    [c.split(".")[1] for c in system.protein_chains_asym_id]
-                )
+                holo_chains.update([
+                    c.split(".")[1] for c in system.protein_chains_asym_id
+                ])
             ligand_chains.update([l.asym_id for l in system.ligands])
         for chain in self.chains:
             if chain not in ligand_chains and chain not in holo_chains:
