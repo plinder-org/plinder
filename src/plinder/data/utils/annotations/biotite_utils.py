@@ -17,14 +17,13 @@ import logging
 from pathlib import Path
 
 import biotite.structure.io.pdbx as pdbx
-from openbabel import pybel
 from ost import conop, io, mol
 from rdkit import Chem
 
 from plinder.core.structure.smallmols_utils import (
     mol_assigned_bond_orders_by_template,
-    params_removeHs,
 )
+from plinder.data.utils.annotations.rdkit_utils import ost_ent_to_rdkit_mol
 
 LOG = logging.getLogger(__name__)
 _COMPOUND_LIB = conop.GetDefaultLib()
@@ -207,14 +206,9 @@ def assign_bond_orders_from_smiles(
 
         ligand_ent = mol.CreateEntityFromView(ligand_view, True)
 
-        # Convert to RDKit mol via OpenBabel bond perception
-        pdbstring = io.EntityToPDBStr(ligand_ent).strip()
-        sdfstring = pybel.readstring("pdb", pdbstring).write("sdf")
-        rdkit_mol = Chem.MolFromMolBlock(sdfstring, sanitize=False)
+        rdkit_mol = ost_ent_to_rdkit_mol(ligand_ent)
         if rdkit_mol is None:
             raise ValueError(f"Could not parse ligand {comp_id} as RDKit mol")
-
-        rdkit_mol = params_removeHs(rdkit_mol)
         fixed_mol = mol_assigned_bond_orders_by_template(template, rdkit_mol)
 
         atom_names = [a.name.strip() for a in ligand_ent.atoms]

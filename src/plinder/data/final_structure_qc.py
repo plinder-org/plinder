@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING, Any, Generator
 import numpy as np
 import pandas as pd
 from biotite.structure.io import load_structure
-from openbabel import openbabel as ob
 from rdkit import Chem
 from rdkit.Chem.MolStandardize import rdMolStandardize
 
@@ -73,7 +72,10 @@ def ligand_is_rdkit_loadable_with_fix(sdf_path: Path) -> bool:
 
 
 def ligand_is_obabel_loadable(sdf_path: Path) -> bool:
-    """Check if structure is loadable by openbabel
+    """Check if structure is loadable.
+
+    TODO: remove once QC schema is updated to drop obabel columns.
+    Name kept for backwards compatibility with QC schema columns.
 
     Parameters
     ----------
@@ -85,15 +87,19 @@ def ligand_is_obabel_loadable(sdf_path: Path) -> bool:
     bool
         True if loadable, False otherwise.
     """
-
-    obconversion = ob.OBConversion()
-    obconversion.SetInFormat("sdf")
-    obmol = ob.OBMol()
-    return bool(obconversion.ReadFile(obmol, str(sdf_path)))
+    try:
+        supplier = Chem.SDMolSupplier(str(sdf_path), sanitize=False)
+        mol = next(supplier)
+        return mol is not None
+    except Exception:
+        return False
 
 
 def ligand_is_obabel_loadable_with_rdkit_fix(sdf_path: Path) -> bool:
-    """Check if structure is loadable by openbabel after fixing
+    """Check if structure is loadable after fixing valency.
+
+    TODO: remove once QC schema is updated to drop obabel columns.
+    Name kept for backwards compatibility with QC schema columns.
 
     Parameters
     ----------
@@ -105,22 +111,19 @@ def ligand_is_obabel_loadable_with_rdkit_fix(sdf_path: Path) -> bool:
     bool
         True if loadable, False otherwise.
     """
-    obconversion = ob.OBConversion()
-    obconversion.SetInFormat("sdf")
-    obmol = ob.OBMol()
-    if obconversion.ReadFile(obmol, str(sdf_path)):
-        return True
-    else:
+    try:
         mol = next(Chem.SDMolSupplier(str(sdf_path), sanitize=False))
-        try:
-            mol = fix_valency_issues(mol)
-            if mol is not None:
-                fixed_sdf_str = Chem.MolToMolBlock(mol)
-                return bool(obconversion.ReadString(obmol, fixed_sdf_str))
-            else:
-                return False
-        except Exception:
-            return False
+        if mol is not None:
+            return True
+        return False
+    except Exception:
+        pass
+    try:
+        mol = next(Chem.SDMolSupplier(str(sdf_path), sanitize=False))
+        mol = fix_valency_issues(mol)
+        return mol is not None
+    except Exception:
+        return False
 
 
 def ligand_matches_smiles_atom_num(smiles: str, sdf_path: Path) -> bool:

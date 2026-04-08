@@ -2,7 +2,6 @@
 # Distributed under the terms of the Apache License 2.0
 from __future__ import annotations
 
-from openbabel import pybel
 from ost import conop, io
 from ost import mol as omol
 from rdkit import Chem
@@ -27,6 +26,18 @@ PRD_LIB = conop.CompoundLib.Load(
 )
 
 
+def ost_ent_to_rdkit_mol(ent: omol.EntityHandle) -> Mol | None:
+    """Convert an OST entity to an RDKit Mol via PDB block, with SDF fallback."""
+    pdbstring = io.EntityToPDBStr(ent).strip()
+    rdkit_mol = Chem.MolFromPDBBlock(pdbstring, sanitize=False, removeHs=False)
+    if rdkit_mol is None:
+        sdfstring = io.EntityToSDFStr(ent).strip()
+        rdkit_mol = Chem.MolFromMolBlock(sdfstring, sanitize=False)
+    if rdkit_mol is not None:
+        rdkit_mol = params_removeHs(rdkit_mol)
+    return rdkit_mol
+
+
 def ligand_ost_ent_to_rdkit_mol(
     ent: omol.EntityHandle,
     ligand_smiles: str | None = None,
@@ -41,13 +52,7 @@ def ligand_ost_ent_to_rdkit_mol(
             edi.RenameResidue(residue, residue.name[:3])
     edi.UpdateICS()
 
-    pdbstring = io.EntityToPDBStr(ent).strip()
-    # NOTE: rdkit's Chem.MolFromPDBBlock does not read connect records
-    # work around via openbabel bond perception
-    sdfstring = pybel.readstring("pdb", pdbstring).write("sdf")
-    rdkit_mol = Chem.MolFromMolBlock(sdfstring, sanitize=False)  # , removeHs=True,
-    # removeHs does not work when sanitize is False
-    rdkit_mol = params_removeHs(rdkit_mol)
+    rdkit_mol = ost_ent_to_rdkit_mol(ent)
 
     if ligand_smiles:
         try:

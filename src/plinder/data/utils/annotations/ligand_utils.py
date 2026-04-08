@@ -13,12 +13,12 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from mmcif.api.PdbxContainers import DataContainer
-from openbabel import pybel
 from ost import io, mol
 from ost.conop import GetDefaultLib
 from pydantic import BeforeValidator, Field
 from rdkit import Chem, RDLogger
 from rdkit.Chem import QED, AllChem, Crippen, rdMolDescriptors
+from rdkit.Chem import rdMolDescriptors as rdMD
 from rdkit.Chem.rdchem import Mol, RWMol
 
 from plinder.core.utils.config import get_config
@@ -474,15 +474,10 @@ def get_binding_affinity(data_dir: Path) -> ty.Any:
 
 
 def get_num_resolved_heavy_atoms(resolved_smiles: str) -> int:
-    obmol = pybel.readstring("smi", resolved_smiles)
-    obmol.removeh()
-    return len(obmol.atoms)
-
-
-# TODO: replace above with below
-# def get_num_resolved_heavy_atoms(matched_smiles: str) -> int:
-#     matched_mol = Chem.MolFromSmiles(matched_smiles, sanitize=False)
-#     return rdMolDescriptors.CalcNumHeavyAtoms(matched_mol)
+    matched_mol = Chem.MolFromSmiles(resolved_smiles, sanitize=False)
+    if matched_mol is None:
+        return 0
+    return rdMD.CalcNumHeavyAtoms(matched_mol)
 
 
 def get_len_of_longest_linear_hydrocarbon_linker(
