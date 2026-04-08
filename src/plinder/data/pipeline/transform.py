@@ -171,33 +171,33 @@ def transform_bindingdb_affinity_data(*, raw_affinity_path: Path) -> pd.DataFram
 
 
 def transform_components_data(*, raw_components_path: Path) -> pd.DataFrame:
-    import gemmi
+    import biotite.structure.io.pdbx as pdbx
 
-    data = gemmi.cif.read_file(raw_components_path.as_posix())
+    data = pdbx.CIFFile.read(str(raw_components_path))
     rows = []
-    for block in data:
-        (
-            binder_id,
-            chemical_name,
-            molecular_weight,
-        ) = block.find("_chem_comp.", ["id", "name", "formula_weight"])[0]
+    for block in data.values():
+        if "chem_comp" not in block:
+            continue
+        chem_comp = block["chem_comp"]
+        binder_id = chem_comp["id"].as_array()[0]
+        chemical_name = chem_comp["name"].as_array()[0]
+        molecular_weight = chem_comp["formula_weight"].as_array()[0]
+
         canonical_smiles, isomeric_smiles, inchikey = None, None, None
-        for desc_row in block.find(
-            "_pdbx_chem_comp_descriptor.",
-            ["comp_id", "type", "program", "descriptor"],
-        ):
-            if (desc_row[1].strip() == "SMILES_CANONICAL") and (
-                desc_row[2].strip() == '"OpenEye OEToolkits"'
-            ):
-                canonical_smiles = desc_row[3].strip('"').strip(";")
-
-            if (desc_row[1].strip() == "SMILES") and (
-                desc_row[2].strip() == '"OpenEye OEToolkits"'
-            ):
-                isomeric_smiles = desc_row[3].replace('"', "")
-
-            if desc_row[1].strip() == "InChIKey":
-                inchikey = desc_row[3]
+        if "pdbx_chem_comp_descriptor" in block:
+            desc = block["pdbx_chem_comp_descriptor"]
+            types = desc["type"].as_array()
+            programs = desc["program"].as_array()
+            descriptors = desc["descriptor"].as_array()
+            for dtype, prog, val in zip(types, programs, descriptors):
+                dtype_s = dtype.strip()
+                prog_s = prog.strip().strip('"')
+                if dtype_s == "SMILES_CANONICAL" and prog_s == "OpenEye OEToolkits":
+                    canonical_smiles = val.strip('"').strip(";")
+                if dtype_s == "SMILES" and prog_s == "OpenEye OEToolkits":
+                    isomeric_smiles = val.replace('"', "")
+                if dtype_s == "InChIKey":
+                    inchikey = val
         if any((i is None for i in (canonical_smiles, isomeric_smiles, inchikey))):
             continue
         rows.append(

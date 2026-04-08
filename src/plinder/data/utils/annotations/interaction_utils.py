@@ -5,8 +5,9 @@ from __future__ import annotations
 from collections import defaultdict
 from pathlib import Path
 
+import biotite.structure as struc
 import biotite.structure.io.pdbx as pdbx
-import gemmi
+import numpy as np
 from ost import io, mol
 from plip.basic.supplemental import whichchain, whichresnumber
 from plip.structure.preparation import PDBComplex, PLInteraction
@@ -55,37 +56,62 @@ def get_symmetry_mate_contacts(
         and another residue's atom_id mapped to the symmetry operation (image_idx)
         that generated the contact.
     """
-    cif = gemmi.read_structure(mmcif_filename.__str__(), merge_chain_parts=False)
-    cif.remove_waters()
-    cif.remove_hydrogens()
-    # cif.remove_alternative_conformations()
+    cif_file = pdbx.CIFFile.read(str(mmcif_filename))
 
-    cif.setup_entities()
-    ns = gemmi.NeighborSearch(cif[0], cif.cell, contact_threshold).populate(
-        include_h=False
-    )
-    cs = gemmi.ContactSearch(contact_threshold)
-    # ignore chain contacts with self
-    cs.ignore = gemmi.ContactSearch.Ignore.SameChain
-    cs.twice = True
-    pairs = cs.find_contacts(ns)
+    # Load the asymmetric unit
+    try:
+        asu = pdbx.get_structure(cif_file, model=1, use_author_fields=False)
+    except Exception:
+        return {}
+    asu = asu[~struc.filter_solvent(asu)]
+    asu = asu[asu.element != "H"]
+
+    # Build the full unit cell (all symmetry copies)
+    try:
+        unit_cell = pdbx.get_unit_cell(cif_file, model=1, use_author_fields=False)
+    except Exception:
+        # No symmetry information (NMR, computational models)
+        return {}
+    unit_cell = unit_cell[~struc.filter_solvent(unit_cell)]
+    unit_cell = unit_cell[unit_cell.element != "H"]
+
+    n_asu = len(asu)
+    n_total = len(unit_cell)
+    if n_total == n_asu:
+        return {}
+
+    # Determine which symmetry image each atom belongs to
+    image_idx = np.zeros(n_total, dtype=int)
+    for i in range(1, n_total // n_asu):
+        image_idx[i * n_asu : (i + 1) * n_asu] = i
+
+    cell_list = struc.CellList(unit_cell, cell_size=contact_threshold)
+
     results: dict[
         tuple[str, int], dict[tuple[str, int], dict[int, set[int]]]
     ] = defaultdict(lambda: defaultdict(lambda: defaultdict(set)))
-    for p in pairs:
-        c1, c2 = p.partner1.residue.subchain, p.partner2.residue.subchain
-        # if p.partner1.residue.is_water() or p.partner2.residue.is_water():
-        #     continue
-        r1, r2 = p.partner1.residue.label_seq, p.partner2.residue.label_seq
-        if r1 is None:
-            r1 = 1
-        if r2 is None:
-            r2 = 1
-        # The image_idx is an index of the symmetry image (both crystallographic symmetry and strict NCS count)
-        # – it is 0 iff both atoms (partner1 and partner2) are in the same unit, thus we ignore
-        if p.image_idx == 0:
-            continue
-        results[(c1, r1)][(c2, r2)][p.partner1.atom.serial].add(p.image_idx)
+
+    # For each atom in the ASU, find contacts with symmetry mates
+    for i in range(n_asu):
+        neighbors = cell_list.get_atoms(asu.coord[i], radius=contact_threshold)
+        for j in neighbors:
+            if image_idx[j] == 0:
+                continue
+            c1 = (
+                unit_cell.label_asym_id[i]
+                if hasattr(unit_cell, "label_asym_id")
+                else unit_cell.chain_id[i]
+            )
+            c2 = (
+                unit_cell.label_asym_id[j]
+                if hasattr(unit_cell, "label_asym_id")
+                else unit_cell.chain_id[j]
+            )
+            r1 = int(unit_cell.res_id[i]) if unit_cell.res_id[i] else 1
+            r2 = int(unit_cell.res_id[j]) if unit_cell.res_id[j] else 1
+            atom_serial = i + 1
+            results[(c1, r1)][(c2, r2)][atom_serial].add(int(image_idx[j]))
+
     return results
 
 

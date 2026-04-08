@@ -7,12 +7,15 @@ import multiprocessing
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import gemmi
 import pandas as pd
 from ost import io, mol
 
 from plinder.core import PlinderSystem, scores
 from plinder.core.utils.log import setup_logger
+from plinder.data.utils.annotations.protein_utils import (
+    _cif_scalar,
+    read_mmcif_container,
+)
 from plinder.data.utils.annotations.save_utils import save_cif_file
 from plinder.eval.docking import utils
 
@@ -23,12 +26,12 @@ def get_resolution(cif_file: Path) -> float | None:
     if not cif_file.exists():
         LOG.info(f"no such file {cif_file}")
         return None
-    block = gemmi.cif.read(cif_file.as_posix()).sole_block()
-    res = block.find_value("_refine.ls_d_res_high")
-    if not res:
-        res = block.find_value("_em_3d_reconstruction.resolution")
-    if res:
-        return float(gemmi.cif.as_number(res))
+    block = read_mmcif_container(cif_file)
+    res = _cif_scalar(block, "refine", "ls_d_res_high")
+    if res is None:
+        res = _cif_scalar(block, "em_3d_reconstruction", "resolution")
+    if res is not None:
+        return float(res)
     return None
 
 
@@ -37,10 +40,10 @@ def get_plddt(cif_file: Path) -> float | None:
     if not cif_file.exists():
         LOG.info(f"no such file {cif_file}")
         return None
-    block = gemmi.cif.read(str(cif_file.as_posix())).sole_block()
-    metric = block.find_value("_ma_qa_metric_global.metric_value")
-    if metric:
-        return float(gemmi.cif.as_number(metric))
+    block = read_mmcif_container(cif_file)
+    val = _cif_scalar(block, "ma_qa_metric_global", "metric_value")
+    if val is not None:
+        return float(val)
     return None
 
 
