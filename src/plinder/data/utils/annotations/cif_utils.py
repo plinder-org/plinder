@@ -32,24 +32,20 @@ _COMPOUND_LIB = conop.GetDefaultLib()
 # ---------------------------------------------------------------------------
 
 
-def read_mmcif_container(mmcif_filename: Path) -> pdbx.CIFBlock:
-    """Parse mmcif file and return the first data block.
+def read_mmcif_file(mmcif_filename: Path | str) -> pdbx.CIFFile:
+    """Read an mmCIF file, handling .gz transparently."""
+    import gzip
 
-    Parameters
-    ----------
-    mmcif_filename : Path
-    Returns
-    -------
-    pdbx.CIFBlock
-    """
     path = str(mmcif_filename)
     if path.endswith(".gz"):
-        import gzip
-
         with gzip.open(path, "rt", encoding="utf-8") as f:
-            cif_file = pdbx.CIFFile.read(f)
-    else:
-        cif_file = pdbx.CIFFile.read(path)
+            return pdbx.CIFFile.read(f)
+    return pdbx.CIFFile.read(path)
+
+
+def read_mmcif_container(mmcif_filename: Path) -> pdbx.CIFBlock:
+    """Parse mmcif file and return the first data block."""
+    cif_file = read_mmcif_file(mmcif_filename)
     return list(cif_file.values())[0]
 
 
