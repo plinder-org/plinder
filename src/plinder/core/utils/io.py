@@ -74,8 +74,11 @@ def download_pdb_chain_cif_file(pdb_id: str, chain_id: str, filename: Path) -> P
         ),
         model=1,
         use_author_fields=False,
+        include_bonds=True,
     )
     write_file = CIFFile()
-    set_structure(write_file, structure[structure.chain_id == chain_id])
+    set_structure(
+        write_file, structure[structure.chain_id == chain_id], include_bonds=True
+    )
     write_file.write(filename.as_posix())
     return filename

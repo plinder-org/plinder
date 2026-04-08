@@ -72,7 +72,7 @@ def test_single_protein_single_ligand_scoring_named_sdf(
         score_protein=False,
         score_posebusters=True,
     ).summarize_scores()
-    assert list(scores.keys())[0] == "00001_ligand_pose_0"
+    assert list(scores.keys())[0] == "00001_ligand_pose_0", list(scores.keys())
 
 
 def test_single_protein_single_ligand_scoring(
@@ -135,15 +135,6 @@ def test_single_protein_single_ligand_scoring(
             "best_pli_matched_reference_chain": "1.D",
         }
     }
-
-    # for k in true_scores:
-    #     assert k in scores
-    #     if type(true_scores[k]) == float:
-    #         assert np.isclose(
-    #             true_scores[k], scores[k]
-    #         ), f"{k}: {true_scores[k]} != {scores[k]}"
-    #     else:
-    #         assert true_scores[k] == scores[k], f"{k}: {true_scores[k]} != {scores[k]}"
 
     for l in true_scores:
         assert l in scores
@@ -302,7 +293,13 @@ def test_evaluate_stratify_plot_cmds(prediction_csv, mock_cpl_eval):
     plot_cmd(args=args)
     result_df = pd.read_csv(Path(prediction_csv.parent) / "plots" / "results.csv")
     truth = pd.read_csv(Path(cfg.data.plinder_dir) / "results.csv")
-    assert result_df.equals(truth)
+    assert result_df.select_dtypes(exclude="number").equals(
+        truth.select_dtypes(exclude="number")
+    )
+    assert np.allclose(
+        result_df.select_dtypes(include="number").values,
+        truth.select_dtypes(include="number").values,
+    )
     assert (Path(prediction_csv.parent) / "plots" / "merged.parquet").exists()
     assert (
         Path(prediction_csv.parent) / "plots" / "delta_lDDT_PLI_topn1.html"

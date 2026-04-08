@@ -35,6 +35,8 @@ def save_ligands(
         rdkit_mol = ligand_ost_ent_to_rdkit_mol(
             ligand_ost, smiles, num_unresolved_heavy_atoms or 0
         )
+        if rdkit_mol is None:
+            continue
         rdkit_mol.SetProp("_Name", chain)
         with Chem.SDWriter(str(Path(output_folder) / f"{chain}.sdf")) as w:
             w.write(rdkit_mol)

@@ -36,49 +36,74 @@ PDB_AVAILABLE_CHAINS += PDB_AVAILABLE_CHAINS.lower() + "0123456789"
 
 def get_symmetry_mate_contacts(
     mmcif_filename: Path, contact_threshold: float = 5.0
-) -> dict[tuple[str, int], dict[tuple[str, int], set[int]]]:
+) -> dict[tuple[str, int], dict[tuple[str, int], dict[int, set[int]]]]:
     """
-    Get all contacts within a given threshold between residues which are not in the same asymmetric unit (symmetry mates)
+    Get all contacts within a given threshold between any system residues that
+    are not in the same chain. This includes protein contacts with its images.
+    Stores only contacts that were generated using any symmetry operations
+    except for identity (self-image).
+
+    Parameters
+    ----------
+    mmcif_file : Path
+        mmcif structure file
+
+    Returns
+    -------
+    dict[tuple[str, int], dict[tuple[str, int], dict[int, set[int]]]]
+        Mapping of symmetry contacts between residue defined by (chain_id, residue_id)
+        and another residue's atom_id mapped to the symmetry operation (image_idx)
+        that generated the contact.
     """
     cif = gemmi.read_structure(mmcif_filename.__str__(), merge_chain_parts=False)
+    cif.remove_waters()
+    cif.remove_hydrogens()
+    # cif.remove_alternative_conformations()
+
     cif.setup_entities()
     ns = gemmi.NeighborSearch(cif[0], cif.cell, contact_threshold).populate(
         include_h=False
     )
     cs = gemmi.ContactSearch(contact_threshold)
-    cs.ignore = gemmi.ContactSearch.Ignore.SameAsu
+    # ignore chain contacts with self
+    cs.ignore = gemmi.ContactSearch.Ignore.SameChain
     cs.twice = True
     pairs = cs.find_contacts(ns)
-    results: dict[tuple[str, int], dict[tuple[str, int], set[int]]] = defaultdict(
-        lambda: defaultdict(set)
-    )
+    results: dict[
+        tuple[str, int], dict[tuple[str, int], dict[int, set[int]]]
+    ] = defaultdict(lambda: defaultdict(lambda: defaultdict(set)))
     for p in pairs:
-        if p.partner1.residue.is_water() or p.partner2.residue.is_water():
-            continue
-        i1, i2 = p.partner1.residue.label_seq, p.partner2.residue.label_seq
-        if i1 is None:
-            i1 = 1
-        if i2 is None:
-            i2 = 1
         c1, c2 = p.partner1.residue.subchain, p.partner2.residue.subchain
-        results[(c1, i1)][(c2, i2)].add(p.partner1.atom.serial)
+        # if p.partner1.residue.is_water() or p.partner2.residue.is_water():
+        #     continue
+        r1, r2 = p.partner1.residue.label_seq, p.partner2.residue.label_seq
+        if r1 is None:
+            r1 = 1
+        if r2 is None:
+            r2 = 1
+        # The image_idx is an index of the symmetry image (both crystallographic symmetry and strict NCS count)
+        # – it is 0 iff both atoms (partner1 and partner2) are in the same unit, thus we ignore
+        if p.image_idx == 0:
+            continue
+        results[(c1, r1)][(c2, r2)][p.partner1.atom.serial].add(p.image_idx)
     return results
 
 
-def get_covalent_connections(data: DataContainer) -> dict[str, list[tuple[str, str]]]:
+def get_covalent_connections(
+    cif_data: DataContainer
+) -> dict[str, list[tuple[str, str]]]:
     """
-    Get covalent connections from any mmcif file with
-    _struct_conn. attribute
+    Extract covalent connections from mmcif data container
 
     Parameters
     ----------
-    mmcif_file : Path
-        mmcif file with _struct_conn. attribute
+    cif_data : DataContainer
+        mmcif data container
 
     Returns
     -------
-    Dict[str, List[Set[str]]]
-        Mapping of covalent residues
+    dict[str, list[tuple[str, str]]
+        All covalent links as defined by mmcif annotations
     """
 
     cov_dict = defaultdict(list)
@@ -97,7 +122,7 @@ def get_covalent_connections(data: DataContainer) -> dict[str, list[tuple[str, s
         "ptnr2_label_atom_id",
         "conn_type_id",
     ]
-    cons = data.getObj("struct_conn")
+    cons = cif_data.getObj("struct_conn")
     if cons is None:
         return {}
     for con in cons.getCombinationCountsWithConditions(
@@ -139,6 +164,33 @@ def extract_ligand_links_to_neighbouring_chains(
     neighboring_asym_ids: set[str],
     link_type: str = "covale",
 ) -> set[str]:
+    """
+    Parse covalant dictionary for a given ligand and its neighbours.
+
+    Parameters
+    ----------
+    all_covalent_dict : dict[str, list[tuple[str, str]]]
+        All covalent links as defined by mmcif annotations
+    ligand_asym_id : str
+        ligand assymetric identification string
+    neighboring_asym_ids : set[str]
+        set of neighbour assymetric identification strings
+    link_type : str, optional
+        covalent linkage type in dictionary, by default "covale",
+        options include:
+            "covale": actual covalent linkage
+            "metalc": other dative bond, eg. metal-ligand dative bond
+            "hydrogc": strong hydorogen bonding of nucleic acid
+
+    Returns
+    -------
+    set[str]
+        set of covalent linkages in the entry between the ligand and its neighbours
+
+    Notes
+    -----
+    For the purpose of covalent annotations, we only consider "covale".
+    """
     covalent_linkages = set()
     if link_type in all_covalent_dict:
         for link1, link2 in all_covalent_dict[link_type]:
@@ -217,6 +269,9 @@ def pdbize(
         edi.SetChainDescription(chain, original_chain.description)
         edi.SetChainType(chain, original_chain.type)
         name_mapping[original_name] = final_name
+    for residue in entity.residues:
+        if len(residue.name) > 3:
+            edi.RenameResidue(residue, residue.name[:3])
     edi.UpdateICS()
     return entity, name_mapping
 
