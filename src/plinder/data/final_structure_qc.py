@@ -367,6 +367,7 @@ def all_protein_chains_present(protein_chains: set[str], complex_file: Path) -> 
 
 
 def ligand_is_diffdock_loadable(ligand_file: Path) -> bool:
+    # TODO: remove — diffdock_utils is untested and should not be a QC dependency
     try:
         lig = diffdock_utils.read_molecule(str(ligand_file))
         diffdock_utils.get_lig_graph_with_matching(lig)

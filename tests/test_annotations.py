@@ -3,6 +3,7 @@
 import pandas as pd
 from plinder.data.get_system_annotations import GetPlinderAnnotation
 from plinder.data.utils.annotations.aggregate_annotations import Entry
+from plinder.data.utils.annotations.cif_utils import read_mmcif_container
 from plinder.data.utils.annotations.interaction_utils import get_covalent_connections
 from plinder.data.utils.annotations.interface_gap import annotate_interface_gaps
 from plinder.data.utils.annotations.ligand_utils import (
@@ -10,7 +11,6 @@ from plinder.data.utils.annotations.ligand_utils import (
     sort_ccd_codes,
 )
 from plinder.data.utils.annotations.mmpdb_utils import add_mmp_clusters_to_data
-from plinder.data.utils.annotations.protein_utils import read_mmcif_container
 from rdkit import Chem
 
 

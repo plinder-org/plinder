@@ -20,6 +20,11 @@ from rdkit import RDLogger
 
 from plinder.core.utils.config import get_config
 from plinder.core.utils.log import setup_logger
+from plinder.data.utils.annotations.cif_utils import (
+    get_chain_external_mappings,
+    get_entry_info,
+    read_mmcif_container,
+)
 from plinder.data.utils.annotations.get_ligand_validation import (
     EntryValidation,
     ResidueListValidation,
@@ -34,9 +39,6 @@ from plinder.data.utils.annotations.ligand_utils import Ligand, validate_chain_r
 from plinder.data.utils.annotations.protein_utils import (
     Chain,
     detect_ligand_chains,
-    get_chain_external_mappings,
-    get_entry_info,
-    read_mmcif_container,
 )
 from plinder.data.utils.annotations.save_utils import (
     save_cif_file,
@@ -1165,7 +1167,7 @@ class Entry(DocBaseModel):
             If the CIF contains unknown ligands and no ``ligand_smiles_dict``
             is provided.
         """
-        from plinder.data.utils.annotations.biotite_utils import (
+        from plinder.data.utils.annotations.cif_utils import (
             MissingBondOrderError,
             assign_bond_orders_from_smiles,
             get_unknown_ligand_ids,

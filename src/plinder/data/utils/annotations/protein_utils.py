@@ -2,12 +2,9 @@
 # Distributed under the terms of the Apache License 2.0
 from __future__ import annotations
 
-from collections import defaultdict
 from functools import cached_property
-from pathlib import Path
 from typing import Any
 
-import biotite.structure.io.pdbx as pdbx
 from ost import conop, io, mol
 from PDBValidation.Validation import PDBValidation
 from pydantic import ConfigDict, Field
@@ -37,139 +34,6 @@ NON_SMALL_MOL_LIG_TYPES = [
     mol.CHAINTYPE_OLIGOSACCHARIDE,
     mol.CHAINTYPE_N_CHAINTYPES,
 ]
-
-
-def read_mmcif_container(mmcif_filename: Path) -> pdbx.CIFBlock:
-    """Parse mmcif file and return the first data block.
-
-    Parameters
-    ----------
-    mmcif_filename : Path
-    Returns
-    -------
-    pdbx.CIFBlock
-    """
-    cif_file = pdbx.CIFFile.read(str(mmcif_filename))
-    return list(cif_file.values())[0]
-
-
-def _cif_scalar(block: pdbx.CIFBlock, category: str, column: str) -> str | None:
-    """Read a single scalar value from a CIF category, or None."""
-    if category not in block:
-        return None
-    cat = block[category]
-    if column not in cat:
-        return None
-    val = cat[column].as_array()[0]
-    if val in ("?", "."):
-        return None
-    return val
-
-
-def get_entry_info(data: pdbx.CIFBlock) -> dict[str, str | float | None]:
-    """Get entry-level information from a CIF block.
-
-    Parameters
-    ----------
-    data : pdbx.CIFBlock
-    Returns
-    -------
-    dict[str, str | float | None]
-        Dictionary of entry-level information
-    """
-    entry_info = {}
-    mappings = [
-        ("entry_oligomeric_state", "pdbx_struct_assembly", "oligomeric_details"),
-        ("entry_determination_method", "exptl", "method"),
-        ("entry_keywords", "struct_keywords", "pdbx_keywords"),
-        ("entry_pH", "exptl_crystal_grow", "pH"),
-    ]
-    for key, cat_name, col_name in mappings:
-        entry_info[key] = _cif_scalar(data, cat_name, col_name)
-    resolution_options = [
-        ("refine", "ls_d_res_high"),
-        # ("em_3d_reconstruction", "resolution"), # TODO: add this back for next annotation rerun
-    ]
-    resolution = None
-    for cat_name, col_name in resolution_options:
-        r = _cif_scalar(data, cat_name, col_name)
-        if r is not None:
-            resolution = r
-            break
-    entry_info["entry_resolution"] = resolution
-    return entry_info
-
-
-def _iter_category_rows(
-    block: pdbx.CIFBlock, category: str, columns: list[str]
-) -> list[dict[str, str]]:
-    """Iterate over rows of a CIF category as dicts."""
-    if category not in block:
-        return []
-    cat = block[category]
-    arrays = {}
-    for col in columns:
-        if col not in cat:
-            return []
-        arrays[col] = cat[col].as_array()
-    n = len(next(iter(arrays.values())))
-    return [{col: arrays[col][i] for col in columns} for i in range(n)]
-
-
-def get_chain_external_mappings(
-    data: pdbx.CIFBlock,
-) -> dict[str, dict[str, dict[str, list[tuple[str, str] | None]]]]:
-    """Get additional metadata directory from nextgen mmcif
-
-    Parameters
-    ----------
-    data : pdbx.CIFBlock
-
-    Returns
-    -------
-    dict
-        Per-chain external database mappings
-    """
-    per_chain: dict[str, dict[str, dict[str, set[tuple[str, str] | None]]]] = {}
-
-    # SIFTS mapping
-    for row in _iter_category_rows(
-        data,
-        "pdbx_sifts_xref_db_segments",
-        ["asym_id", "xref_db", "xref_db_acc", "seq_id_start", "seq_id_end"],
-    ):
-        if row["asym_id"] not in per_chain:
-            per_chain[row["asym_id"]] = defaultdict(lambda: defaultdict(set))
-        per_chain[row["asym_id"]][row["xref_db"]][row["xref_db_acc"]].add(
-            (row["seq_id_start"], row["seq_id_end"])
-        )
-
-    # UniProt mapping
-    for row in _iter_category_rows(
-        data,
-        "pdbx_sifts_unp_segments",
-        ["asym_id", "unp_acc", "seq_id_start", "seq_id_end"],
-    ):
-        if row["asym_id"] not in per_chain:
-            per_chain[row["asym_id"]] = defaultdict(lambda: defaultdict(set))
-        per_chain[row["asym_id"]]["UniProt"][row["unp_acc"]].add(
-            (row["seq_id_start"], row["seq_id_end"])
-        )
-
-    # BIRD entries with PRD codes: https://www.wwpdb.org/data/bird
-    for row in _iter_category_rows(data, "pdbx_molecule", ["asym_id"]):
-        if row["asym_id"] not in per_chain:
-            per_chain[row["asym_id"]] = defaultdict(lambda: defaultdict(set))
-        per_chain[row["asym_id"]]["BIRD"][row["asym_id"]].add(None)
-
-    per_chain_list: dict[str, dict[str, dict[str, list[tuple[str, str] | None]]]] = {}
-    for chain in per_chain:
-        per_chain_list[chain] = {}
-        for mapping in per_chain[chain]:
-            per_chain_list[chain][mapping] = {
-                k: list(v) for k, v in per_chain[chain][mapping].items()
-            }
-    return per_chain_list
 
 
 def detect_ligand_chains(
