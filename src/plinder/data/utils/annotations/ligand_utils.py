@@ -457,7 +457,7 @@ def get_num_resolved_heavy_atoms(resolved_smiles: str) -> int:
     matched_mol = Chem.MolFromSmiles(resolved_smiles, sanitize=False)
     if matched_mol is None:
         return 0
-    return rdMD.CalcNumHeavyAtoms(matched_mol)
+    return int(rdMD.CalcNumHeavyAtoms(matched_mol))
 
 
 def get_len_of_longest_linear_hydrocarbon_linker(
