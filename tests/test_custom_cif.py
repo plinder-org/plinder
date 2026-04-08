@@ -16,7 +16,6 @@ from pathlib import Path
 
 import biotite.structure.io.pdbx as pdbx
 import pytest
-
 from plinder.data.utils.annotations.biotite_utils import (
     MissingBondOrderError,
     assign_bond_orders_from_smiles,

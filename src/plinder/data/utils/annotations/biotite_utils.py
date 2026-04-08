@@ -228,12 +228,14 @@ def assign_bond_orders_from_smiles(
                 atom_id_2_list.append(atom_names[idx2])
                 value_order_list.append(_rdkit_bond_order_to_cif(bond.GetBondType()))
 
-    bond_cat = pdbx.CIFCategory({
-        "comp_id": comp_id_list,
-        "atom_id_1": atom_id_1_list,
-        "atom_id_2": atom_id_2_list,
-        "value_order": value_order_list,
-    })
+    bond_cat = pdbx.CIFCategory(
+        {
+            "comp_id": comp_id_list,
+            "atom_id_1": atom_id_1_list,
+            "atom_id_2": atom_id_2_list,
+            "value_order": value_order_list,
+        }
+    )
     block["chem_comp_bond"] = bond_cat
 
     cif_file.write(str(output_path))
