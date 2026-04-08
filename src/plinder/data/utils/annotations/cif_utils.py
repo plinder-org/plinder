@@ -17,7 +17,6 @@ import biotite.structure.io.pdbx as pdbx
 import numpy as np
 from ost import conop, io, mol
 from rdkit import Chem
-from rdkit.Chem import AllChem
 from rdkit.Chem.rdchem import RWMol
 
 from plinder.core.structure.smallmols_utils import (
@@ -43,7 +42,14 @@ def read_mmcif_container(mmcif_filename: Path) -> pdbx.CIFBlock:
     -------
     pdbx.CIFBlock
     """
-    cif_file = pdbx.CIFFile.read(str(mmcif_filename))
+    path = str(mmcif_filename)
+    if path.endswith(".gz"):
+        import gzip
+
+        with gzip.open(path, "rt", encoding="utf-8") as f:
+            cif_file = pdbx.CIFFile.read(f)
+    else:
+        cif_file = pdbx.CIFFile.read(path)
     return list(cif_file.values())[0]
 
 
@@ -57,7 +63,7 @@ def _cif_scalar(block: pdbx.CIFBlock, category: str, column: str) -> str | None:
     val = cat[column].as_array()[0]
     if val in ("?", "."):
         return None
-    return val
+    return str(val)
 
 
 def _iter_category_rows(
@@ -76,7 +82,7 @@ def _iter_category_rows(
     return [{col: arrays[col][i] for col in columns} for i in range(n)]
 
 
-def get_entry_info(data: pdbx.CIFBlock) -> dict[str, str | float | None]:
+def get_entry_info(data: pdbx.CIFBlock) -> dict[str, str | None]:
     """Get entry-level information from a CIF block.
 
     Parameters
@@ -84,7 +90,7 @@ def get_entry_info(data: pdbx.CIFBlock) -> dict[str, str | float | None]:
     data : pdbx.CIFBlock
     Returns
     -------
-    dict[str, str | float | None]
+    dict[str, str | None]
     """
     entry_info = {}
     mappings = [
@@ -196,7 +202,7 @@ def get_bond_info(
     return bonds_dict
 
 
-def bond_pdb_order(value_order: str) -> Chem.rdchem.BondType:
+def bond_pdb_order(value_order: str) -> Chem.rdchem.BondType | None:
     """Convert PDB bond order string to RDKit BondType."""
     if value_order.casefold() == "sing":
         return Chem.rdchem.BondType(1)
@@ -211,7 +217,7 @@ def get_rdkit_mol_from_pdb_block(
     pdb_block: str, bonds_dict: dict[str, list[tuple[str, str, str]]]
 ) -> str:
     """Build SMILES from PDB block using _chem_comp_bond info."""
-    rdmol = AllChem.MolFromPDBBlock(pdb_block)
+    rdmol = Chem.MolFromPDBBlock(pdb_block)
     atoms_ids = [
         f"{atm.GetPDBResidueInfo().GetResidueName().strip()}"
         + f":{atm.GetPDBResidueInfo().GetName().strip()}"

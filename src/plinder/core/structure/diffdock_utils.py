@@ -5,7 +5,6 @@
 
 import copy
 
-import networkit as nk
 import numpy as np
 from rdkit import Chem, RDLogger
 from rdkit.Chem import AllChem, GetPeriodicTable, rdMolTransforms
@@ -99,6 +98,8 @@ class OptimizeConformer:
 
 
 def get_torsion_angles(mol):
+    import networkit as nk
+
     torsions_list = []
     n_atoms = mol.GetNumAtoms()
     G = nk.Graph(n_atoms)

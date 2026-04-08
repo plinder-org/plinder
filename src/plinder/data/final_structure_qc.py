@@ -225,7 +225,7 @@ def ligand_positions_correct(
         True if position is maintained, otherwise False
     """
     mol = next(Chem.SDMolSupplier(str(sdf_path), sanitize=False))
-    mol = peppr_sanitize(mol)
+    peppr_sanitize(mol)
     conf = mol.GetConformer()
     return bool(
         np.allclose(

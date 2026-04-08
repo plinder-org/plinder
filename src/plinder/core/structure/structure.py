@@ -631,14 +631,14 @@ class Structure(BaseModel):
 
     @property
     def protein_backbone_mask(self) -> NDArray[np.bool_]:
-        """ndarray[np.bool\_]: a logical mask for backbone atoms."""
+        r"""ndarray[np.bool\_]: a logical mask for backbone atoms."""
         assert self.protein_atom_array is not None
         mask: NDArray[np.bool_] = struc.filter_peptide_backbone(self.protein_atom_array)
         return mask
 
     @property
     def protein_calpha_mask(self) -> NDArray[np.bool_]:
-        """ndarray[np.bool\_]: a logical mask for alpha carbon atoms."""
+        r"""ndarray[np.bool\_]: a logical mask for alpha carbon atoms."""
         assert self.protein_atom_array is not None
         mask: NDArray[np.bool_] = self.protein_atom_array.atom_name == "CA"
         return mask
