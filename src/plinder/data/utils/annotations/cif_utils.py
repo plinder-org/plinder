@@ -1,32 +1,299 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
-"""Check and assign ligand bond orders in mmCIF files.
+"""mmCIF I/O utilities using biotite.
 
-Cofolding tools (AlphaFold3, Boltz, Chai-1) output mmCIF files without
-``_chem_comp_bond``. This module detects missing bond orders and assigns
-them from user-supplied SMILES templates.
-
-Only ligands unknown to the CCD library *and* missing from
-``_chem_comp_bond`` are processed. Known compounds (ATP, NAD, HEM, etc.)
-are skipped automatically.
+Generic helpers for reading CIF blocks, extracting scalar values and
+category rows, plus ligand bond-order detection and assignment from
+SMILES templates.
 """
 
 from __future__ import annotations
 
 import logging
+from collections import defaultdict
 from pathlib import Path
 
 import biotite.structure.io.pdbx as pdbx
+import numpy as np
 from ost import conop, io, mol
 from rdkit import Chem
+from rdkit.Chem import AllChem
+from rdkit.Chem.rdchem import RWMol
 
 from plinder.core.structure.smallmols_utils import (
     mol_assigned_bond_orders_by_template,
 )
-from plinder.data.utils.annotations.rdkit_utils import ost_ent_to_rdkit_mol
 
 LOG = logging.getLogger(__name__)
 _COMPOUND_LIB = conop.GetDefaultLib()
+
+
+# ---------------------------------------------------------------------------
+# Generic CIF I/O helpers
+# ---------------------------------------------------------------------------
+
+
+def read_mmcif_container(mmcif_filename: Path) -> pdbx.CIFBlock:
+    """Parse mmcif file and return the first data block.
+
+    Parameters
+    ----------
+    mmcif_filename : Path
+    Returns
+    -------
+    pdbx.CIFBlock
+    """
+    cif_file = pdbx.CIFFile.read(str(mmcif_filename))
+    return list(cif_file.values())[0]
+
+
+def _cif_scalar(block: pdbx.CIFBlock, category: str, column: str) -> str | None:
+    """Read a single scalar value from a CIF category, or None."""
+    if category not in block:
+        return None
+    cat = block[category]
+    if column not in cat:
+        return None
+    val = cat[column].as_array()[0]
+    if val in ("?", "."):
+        return None
+    return val
+
+
+def _iter_category_rows(
+    block: pdbx.CIFBlock, category: str, columns: list[str]
+) -> list[dict[str, str]]:
+    """Iterate over rows of a CIF category as dicts."""
+    if category not in block:
+        return []
+    cat = block[category]
+    arrays = {}
+    for col in columns:
+        if col not in cat:
+            return []
+        arrays[col] = cat[col].as_array()
+    n = len(next(iter(arrays.values())))
+    return [{col: arrays[col][i] for col in columns} for i in range(n)]
+
+
+def get_entry_info(data: pdbx.CIFBlock) -> dict[str, str | float | None]:
+    """Get entry-level information from a CIF block.
+
+    Parameters
+    ----------
+    data : pdbx.CIFBlock
+    Returns
+    -------
+    dict[str, str | float | None]
+    """
+    entry_info = {}
+    mappings = [
+        ("entry_oligomeric_state", "pdbx_struct_assembly", "oligomeric_details"),
+        ("entry_determination_method", "exptl", "method"),
+        ("entry_keywords", "struct_keywords", "pdbx_keywords"),
+        ("entry_pH", "exptl_crystal_grow", "pH"),
+    ]
+    for key, cat_name, col_name in mappings:
+        entry_info[key] = _cif_scalar(data, cat_name, col_name)
+    resolution_options = [
+        ("refine", "ls_d_res_high"),
+        # ("em_3d_reconstruction", "resolution"), # TODO: add this back for next annotation rerun
+    ]
+    resolution = None
+    for cat_name, col_name in resolution_options:
+        r = _cif_scalar(data, cat_name, col_name)
+        if r is not None:
+            resolution = r
+            break
+    entry_info["entry_resolution"] = resolution
+    return entry_info
+
+
+def get_chain_external_mappings(
+    data: pdbx.CIFBlock,
+) -> dict[str, dict[str, dict[str, list[tuple[str, str] | None]]]]:
+    """Get additional metadata directory from nextgen mmcif."""
+    per_chain: dict[str, dict[str, dict[str, set[tuple[str, str] | None]]]] = {}
+
+    # SIFTS mapping
+    for row in _iter_category_rows(
+        data,
+        "pdbx_sifts_xref_db_segments",
+        ["asym_id", "xref_db", "xref_db_acc", "seq_id_start", "seq_id_end"],
+    ):
+        if row["asym_id"] not in per_chain:
+            per_chain[row["asym_id"]] = defaultdict(lambda: defaultdict(set))
+        per_chain[row["asym_id"]][row["xref_db"]][row["xref_db_acc"]].add(
+            (row["seq_id_start"], row["seq_id_end"])
+        )
+
+    # UniProt mapping
+    for row in _iter_category_rows(
+        data,
+        "pdbx_sifts_unp_segments",
+        ["asym_id", "unp_acc", "seq_id_start", "seq_id_end"],
+    ):
+        if row["asym_id"] not in per_chain:
+            per_chain[row["asym_id"]] = defaultdict(lambda: defaultdict(set))
+        per_chain[row["asym_id"]]["UniProt"][row["unp_acc"]].add(
+            (row["seq_id_start"], row["seq_id_end"])
+        )
+
+    # BIRD entries with PRD codes
+    for row in _iter_category_rows(data, "pdbx_molecule", ["asym_id"]):
+        if row["asym_id"] not in per_chain:
+            per_chain[row["asym_id"]] = defaultdict(lambda: defaultdict(set))
+        per_chain[row["asym_id"]]["BIRD"][row["asym_id"]].add(None)
+
+    per_chain_list: dict[str, dict[str, dict[str, list[tuple[str, str] | None]]]] = {}
+    for chain in per_chain:
+        per_chain_list[chain] = {}
+        for mapping in per_chain[chain]:
+            per_chain_list[chain][mapping] = {
+                k: list(v) for k, v in per_chain[chain][mapping].items()
+            }
+    return per_chain_list
+
+
+# ---------------------------------------------------------------------------
+# CIF ligand parsing
+# ---------------------------------------------------------------------------
+
+
+def get_ligand_chainid_comp_id_map(data: pdbx.CIFBlock) -> dict[str, set[str]]:
+    """Map chain IDs to their non-polymer component IDs."""
+    if "atom_site" not in data:
+        return {}
+    atom_site = data["atom_site"]
+    group_pdb = atom_site["group_PDB"].as_array()
+    comp_ids = atom_site["label_comp_id"].as_array()
+    asym_ids = atom_site["label_asym_id"].as_array()
+
+    chain_comp_id_map: dict[str, set[str]] = defaultdict(set)
+    for i in range(len(group_pdb)):
+        if group_pdb[i] == "HETATM":
+            chain_comp_id_map[asym_ids[i]].add(comp_ids[i])
+    return chain_comp_id_map
+
+
+def get_bond_info(
+    data: pdbx.CIFBlock, comp_ids: set[str]
+) -> dict[str, list[tuple[str, str, str]]]:
+    """Extract _chem_comp_bond info for given component IDs."""
+    if "chem_comp_bond" not in data:
+        return {}
+    bond_cat = data["chem_comp_bond"]
+    cids = bond_cat["comp_id"].as_array()
+    a1s = bond_cat["atom_id_1"].as_array()
+    a2s = bond_cat["atom_id_2"].as_array()
+    orders = bond_cat["value_order"].as_array()
+
+    bonds_dict: dict[str, list[tuple[str, str, str]]] = defaultdict(list)
+    for i in range(len(cids)):
+        if cids[i] not in comp_ids or cids[i] == "HOH":
+            continue
+        bonds_dict[cids[i]].append((a1s[i], a2s[i], orders[i]))
+    return bonds_dict
+
+
+def bond_pdb_order(value_order: str) -> Chem.rdchem.BondType:
+    """Convert PDB bond order string to RDKit BondType."""
+    if value_order.casefold() == "sing":
+        return Chem.rdchem.BondType(1)
+    if value_order.casefold() == "doub":
+        return Chem.rdchem.BondType(2)
+    if value_order.casefold() == "trip":
+        return Chem.rdchem.BondType(3)
+    return None
+
+
+def get_rdkit_mol_from_pdb_block(
+    pdb_block: str, bonds_dict: dict[str, list[tuple[str, str, str]]]
+) -> str:
+    """Build SMILES from PDB block using _chem_comp_bond info."""
+    rdmol = AllChem.MolFromPDBBlock(pdb_block)
+    atoms_ids = [
+        f"{atm.GetPDBResidueInfo().GetResidueName().strip()}"
+        + f":{atm.GetPDBResidueInfo().GetName().strip()}"
+        for atm in rdmol.GetAtoms()
+    ]
+
+    rw_mol = RWMol(rdmol)
+    for comp_id, bonds in bonds_dict.items():
+        for row in bonds:
+            atom_1, atom_2 = row[0], row[1]
+            if (f"{comp_id}:{atom_1}" not in atoms_ids) | (
+                f"{comp_id}:{atom_2}" not in atoms_ids
+            ):
+                pass
+            if atom_1.startswith("H") | atom_2.startswith("H"):
+                pass
+            else:
+                try:
+                    atom_1_ids = _get_all_indices(atoms_ids, f"{comp_id}:{atom_1}")
+                    atom_2_ids = _get_all_indices(atoms_ids, f"{comp_id}:{atom_2}")
+                    for a1, a2, order in zip(
+                        atom_1_ids, atom_2_ids, np.repeat(row[2], len(atom_1_ids))
+                    ):
+                        bo = bond_pdb_order(order)
+                        rw_mol.RemoveBond(int(a1), int(a2))
+                        rw_mol.AddBond(int(a1), int(a2), bo)
+                except ValueError:
+                    LOG.warning(f"Error perceiving {atom_1}-{atom_2} bond")
+                except RuntimeError:
+                    LOG.warning(f"Duplicate bond {atom_1}-{atom_2}")
+
+    return str(Chem.MolToSmiles(rw_mol.GetMol()))
+
+
+def _get_all_indices(lst: list[str], item: str) -> list[int]:
+    arr = np.array(lst)
+    return [int(i) for i in np.where(arr == item)[0]]
+
+
+def get_smiles_from_cif(
+    data: pdbx.CIFBlock, ent: io.EntityHandle, polymer_cutoff: int = 20
+) -> dict[str, str]:
+    """Extract SMILES for each ligand chain using _chem_comp_bond."""
+    from plinder.data.utils.annotations.interaction_utils import pdbize
+
+    rdk_mols = {}
+    chain_id_comp_id_map = get_ligand_chainid_comp_id_map(data)
+    for chain_id, list_of_comp_ids in chain_id_comp_id_map.items():
+        bonds_dict = get_bond_info(data, list_of_comp_ids)
+        mol_ent = mol.CreateEntityFromView(
+            ent.Select(f"chain='{chain_id}'"),
+            True,
+        )
+        if len(mol_ent.residues) < polymer_cutoff:
+            pdb_block = io.EntityToPDBStr(pdbize(ent, mol_ent)[0])
+            rdk_mols[chain_id] = get_rdkit_mol_from_pdb_block(pdb_block, bonds_dict)
+        elif sum([res.name == "HOH" for res in mol_ent.residues]) > 0:
+            continue
+    return rdk_mols
+
+
+def get_rdkit_mol_with_bond_order_from_cif(
+    rdk_smiles_dict: dict[str, str], chain_id: str
+) -> str:
+    return rdk_smiles_dict.get(chain_id, "")
+
+
+def ost_ent_to_rdkit_mol(ent: mol.EntityHandle) -> Chem.Mol | None:
+    """Convert an OST entity to an RDKit Mol via PDB block, with SDF fallback."""
+    pdbstring = io.EntityToPDBStr(ent).strip()
+    rdkit_mol = Chem.MolFromPDBBlock(pdbstring, sanitize=False, removeHs=False)
+    if rdkit_mol is None:
+        sdfstring = io.EntityToSDFStr(ent).strip()
+        rdkit_mol = Chem.MolFromMolBlock(sdfstring, sanitize=False)
+    if rdkit_mol is not None:
+        rdkit_mol = Chem.RemoveAllHs(rdkit_mol, sanitize=False)
+    return rdkit_mol
+
+
+# ---------------------------------------------------------------------------
+# Ligand bond order detection and assignment
+# ---------------------------------------------------------------------------
 
 
 class MissingBondOrderError(ValueError):

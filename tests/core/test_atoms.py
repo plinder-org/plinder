@@ -10,10 +10,7 @@ from plinder.core.structure.atoms import (
     atom_array_from_cif_file,
 )
 from plinder.core.structure.models import BackboneDefinition
-from plinder.core.structure.smallmols_utils import (
-    generate_input_conformer,
-    params_removeHs,
-)
+from plinder.core.structure.smallmols_utils import generate_input_conformer
 from rdkit import Chem
 
 
@@ -104,20 +101,20 @@ def test_atom_array_from_cif_file(cif_1qz5_unzipped):
     assert isinstance(arr, AtomArray)
 
 
-def test_params_removeHs():
+def test_remove_all_hs():
     # explicit bond stereo - from PDB: 5j1x
     mol = Chem.MolFromSmiles("[H]/N=C(/N)NCCC[C@H](NC(=O)OC(C)(C)C)C(=O)O")
-    mol = params_removeHs(mol)
+    mol = Chem.RemoveAllHs(mol, sanitize=False)
     assert mol.GetNumAtoms() == mol.GetNumHeavyAtoms()
     # hydrogen isotopes - from PDB: 1tuj
     mol2 = Chem.MolFromSmiles("[2H]C([2H])(C(=O)[O-])C([2H])([2H])[Si](C)(C)C")
-    mol2 = params_removeHs(mol2)
+    mol2 = Chem.RemoveAllHs(mol2, sanitize=False)
     assert mol2.GetNumAtoms() == mol2.GetNumHeavyAtoms()
     # more strange explicit Hs
     mol3 = Chem.MolFromSmiles(
         "[H]/N=C(\\N)c1ccc(O)c(C=NCCN=Cc2cc(/C(N)=N\\[H])ccc2O)c1"
     )
-    mol3 = params_removeHs(mol3)
+    mol3 = Chem.RemoveAllHs(mol3, sanitize=False)
     assert mol3.GetNumAtoms() == mol3.GetNumHeavyAtoms()
 
 

@@ -12,6 +12,7 @@ dependencies = [
     "nbformat",
     "google-cloud-storage",
     "gcsfs",
+    "peppr>=0.13",
     "rdkit>=2024.03.6",
     "pyarrow",
     "omegaconf",

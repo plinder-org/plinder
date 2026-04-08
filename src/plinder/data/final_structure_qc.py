@@ -9,12 +9,12 @@ from typing import TYPE_CHECKING, Any, Generator
 import numpy as np
 import pandas as pd
 from biotite.structure.io import load_structure
+from peppr import sanitize as peppr_sanitize
 from rdkit import Chem
 from rdkit.Chem.MolStandardize import rdMolStandardize
 
 from plinder.core.structure import diffdock_utils
 from plinder.core.structure.contacts import get_atom_neighbors
-from plinder.core.structure.smallmols_utils import fix_valency_issues
 from plinder.core.utils.log import setup_logger
 
 if TYPE_CHECKING:
@@ -61,7 +61,7 @@ def ligand_is_rdkit_loadable_with_fix(sdf_path: Path) -> bool:
     """
     mol = next(Chem.SDMolSupplier(str(sdf_path), sanitize=False))
     try:
-        mol = fix_valency_issues(mol)
+        peppr_sanitize(mol)
         if mol is not None:
             return True
         else:
@@ -120,7 +120,7 @@ def ligand_is_obabel_loadable_with_rdkit_fix(sdf_path: Path) -> bool:
         pass
     try:
         mol = next(Chem.SDMolSupplier(str(sdf_path), sanitize=False))
-        mol = fix_valency_issues(mol)
+        peppr_sanitize(mol)
         return mol is not None
     except Exception:
         return False
@@ -143,14 +143,14 @@ def ligand_matches_smiles_atom_num(smiles: str, sdf_path: Path) -> bool:
     """
     mol = next(Chem.SDMolSupplier(str(sdf_path), sanitize=False))
     try:
-        mol = fix_valency_issues(mol)
+        peppr_sanitize(mol)
     except Exception:
         return False
     if mol is None:
         return False
     try:
         target_mol = Chem.MolFromSmiles(smiles, sanitize=False)
-        target_mol = fix_valency_issues(target_mol)
+        peppr_sanitize(target_mol)
     except Exception:
         return False
     if target_mol is None:
@@ -182,7 +182,8 @@ def get_molvs_ligand_validation(sdf_path: Path) -> list[str]:
         rdMolStandardize.FragmentValidation(),
         rdMolStandardize.NeutralValidation(),
     ]
-    mol = fix_valency_issues(next(Chem.SDMolSupplier(str(sdf_path), sanitize=False)))
+    mol = next(Chem.SDMolSupplier(str(sdf_path), sanitize=False))
+    peppr_sanitize(mol)
     vm = rdMolStandardize.MolVSValidation(validations)
     return list(vm.validate(mol))
 
@@ -200,7 +201,8 @@ def get_rdkit_ligand_validation(sdf_path: Path) -> list[str]:
     list[str]
         [] if not validation error.
     """
-    mol = fix_valency_issues(next(Chem.SDMolSupplier(str(sdf_path), sanitize=False)))
+    mol = next(Chem.SDMolSupplier(str(sdf_path), sanitize=False))
+    peppr_sanitize(mol)
     vm = rdMolStandardize.RDKitValidation()
     return list(vm.validate(mol))
 
@@ -223,7 +225,7 @@ def ligand_positions_correct(
         True if position is maintained, otherwise False
     """
     mol = next(Chem.SDMolSupplier(str(sdf_path), sanitize=False))
-    mol = fix_valency_issues(mol)
+    mol = peppr_sanitize(mol)
     conf = mol.GetConformer()
     return bool(
         np.allclose(

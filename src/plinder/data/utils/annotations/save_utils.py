@@ -9,7 +9,7 @@ from pathlib import Path
 from ost import conop, io, mol
 from rdkit import Chem
 
-from plinder.data.utils.annotations.rdkit_utils import ligand_ost_ent_to_rdkit_mol
+from plinder.data.utils.annotations.ligand_utils import ligand_ost_ent_to_rdkit_mol
 
 # Define available names for protein and ligand chains in PDB format
 PDB_PROTEIN_CHAINS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"

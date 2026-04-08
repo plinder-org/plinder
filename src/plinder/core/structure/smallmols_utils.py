@@ -17,168 +17,13 @@ from plinder.core.utils.log import setup_logger
 log = setup_logger(__name__)
 
 
-def make_rdkit_compatible_mol(mol: Mol) -> Mol | None:
-    """Process RDKit molecule from input to sanitization
-
-    Parameters
-    ----------
-    mol : Chem.rdchem.Mol
-
-    Returns
-    -------
-    Chem.rdchem.Mol | None
-        Mol of relevant molecule
-    """
-    try:
-        sanitize_mol(mol)
-    except:
-        try:
-            # fix N, O, C, H valency issues and then sanitize
-            mol = fix_valency_issues(mol)
-        except Exception:
-            mol = None
-    return mol
-
-
-def sanitize_mol(mol: Mol) -> None:
-    """Santitize while keeping hydrogen as is.
-
-    Parameters
-    ----------
-    mol : Chem.rdchem.Mol
-
-    Returns
-    -------
-    None
-        Sanitizes molecule in place
-    """
-    try:
-        Chem.SanitizeMol(mol)
-    except Exception:
-        Chem.SanitizeMol(
-            mol,
-            # sanitize all but keep hydrogens as is
-            sanitizeOps=Chem.SanitizeFlags.SANITIZE_ALL
-            ^ Chem.SanitizeFlags.SANITIZE_ADJUSTHS,
-        )
-
-
-def params_removeHs(mol: Chem.Mol) -> Chem.Mol:
-    params = Chem.rdmolops.RemoveHsParameters()
-    params.removeIsotopes = True
-    params.removeDegreeZero = True
-    params.removeHigherDegrees = True
-    params.removeOnlyHNeighbors = True
-    params.removeDummyNeighbors = True
-    params.removeNontetrahedralNeighbors = True
-    params.removeDefiningBondStereo = True
-    params.removeWithWedgedBond = True
-    params.showWarnings = True
-    return Chem.rdmolops.RemoveHs(mol, params, sanitize=False)
-
-
-def explicit_H_remover(mol: Mol, remove_hydrogens: list[int]) -> Mol:
-    """removes all H atoms in the list and all bonds to those hydrogens"""
-    res = Chem.RWMol(mol)
-    res.BeginBatchEdit()
-    for aid in remove_hydrogens:
-        neighbors = res.GetAtomWithIdx(aid).GetNeighbors()
-        for neighbor in neighbors:
-            res.RemoveBond(aid, neighbor.GetIdx())
-        res.RemoveAtom(aid)
-    res.CommitBatchEdit()
-    return res
-
-
 def uncharge_mol(mol: Mol) -> Mol:
-    # check if any atoms have a formal charge
+    """Neutralize formal charges where possible."""
     if sum([at.GetFormalCharge() != 0 for at in mol.GetAtoms()]):
-        # adjust protonation to neutralize, when possible
-        uncharger = rdMolStandardize.Uncharger(
-            canonicalOrder=True, force=False
-        )  # , protonationOnly=True)
+        uncharger = rdMolStandardize.Uncharger(canonicalOrder=True, force=False)
         res = uncharger.uncharge(mol)
         res.UpdatePropertyCache(strict=False)
         return res
-    else:
-        # return unchanged
-        return mol
-
-
-def fix_valency_issues(mol: Mol) -> Mol:
-    """Fix valency issues with rdkit mol and return sanitized.
-    Deals with cases like:
-    Removed hydrogens if there is an issue with their valence!
-    Explicit valence for atom # X N, 4, is greater than permitted
-    Explicit valence for atom # X O, 3, is greater than permitted
-    # NOT: Explicit valence for atom # X C, 5, is greater than permitted
-    # skipped C - as we don't like Texas carbons :)
-
-    Parameters
-    ----------
-    mol : Chem.rdchem.Mol
-
-    Returns
-    -------
-    Chem.rdchem.Mol
-        Sanitized Mol with valency issues fixed
-    """
-    max_explicit_valency_per_element = {
-        # 6: 4,
-        7: 3,
-        8: 2,
-        # 1: 1,
-    }
-    mol.UpdatePropertyCache(strict=False)
-    ps = Chem.DetectChemistryProblems(mol)
-    if not ps:
-        # if no problems - just sanitize and return
-        sanitize_mol(mol)
-        return mol
-
-    # quick scan if the issue with hydrogens - see if needed to remove
-    delete_hydrogens = set()
-    ps = Chem.DetectChemistryProblems(mol)
-    for p in ps:
-        if p.GetType() == "AtomValenceException":
-            at = mol.GetAtomWithIdx(p.GetAtomIdx())
-            atm_no = at.GetAtomicNum()
-            if atm_no == 1:
-                delete_hydrogens.add(p.GetAtomIdx())
-            elif atm_no == 6:
-                delete_hydrogens |= {
-                    nat.GetIdx() for nat in at.GetNeighbors() if nat.GetAtomicNum() == 1
-                }
-    # remove explicit hydrogents when some are causing issues
-    if delete_hydrogens:
-        log.warning(
-            f"fix_valency_issues: found issues with H atoms {delete_hydrogens} - will try removing these atoms explicitly!"
-        )
-        mol = explicit_H_remover(mol, list(delete_hydrogens))
-        # scan again for remaining problems
-        ps = Chem.DetectChemistryProblems(mol)
-
-    # deal with remainng issues, if any
-    for p in ps:
-        if p.GetType() == "AtomValenceException":
-            at = mol.GetAtomWithIdx(p.GetAtomIdx())
-            atm_no = at.GetAtomicNum()
-            formal_charge = at.GetFormalCharge()
-            valency = at.GetExplicitValence()
-            elem_max_explicit_valency = max_explicit_valency_per_element[atm_no]
-            expected_charge = valency - elem_max_explicit_valency
-            if expected_charge > formal_charge:
-                # Fix Explicit valence issue
-                at.SetFormalCharge(expected_charge)
-        if p.GetType() == "KekulizeException":
-            # hack: only works for nitrogens with missing explicit Hs
-            for atidx in p.GetAtomIndices():
-                at = mol.GetAtomWithIdx(atidx)
-                # set one of the nitrogens with two bonds in a ring system as "[nH]"
-                if at.GetAtomicNum() == 7 and at.GetDegree() == 2:
-                    at.SetNumExplicitHs(1)
-                    break
-    sanitize_mol(mol)
     return mol
 
 
@@ -286,7 +131,7 @@ def generate_input_conformer(
 
     if not addHs:
         # remove Hs if they should not be kept
-        _mol = params_removeHs(_mol)
+        _mol = Chem.RemoveAllHs(_mol, sanitize=False)
 
     return _mol
 

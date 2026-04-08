@@ -10,35 +10,158 @@ from collections import Counter, defaultdict
 from functools import cache, cached_property
 from pathlib import Path
 
-import biotite.structure.io.pdbx as pdbx
-import numpy as np
 import pandas as pd
-from ost import io, mol
+from ost import conop, io, mol
 from ost.conop import GetDefaultLib
+from peppr import sanitize as peppr_sanitize
 from pydantic import BeforeValidator, Field
 from rdkit import Chem, RDLogger
-from rdkit.Chem import QED, AllChem, Crippen, rdMolDescriptors
+from rdkit.Chem import QED, Crippen, rdMolDescriptors
 from rdkit.Chem import rdMolDescriptors as rdMD
-from rdkit.Chem.rdchem import Mol, RWMol
+from rdkit.Chem.rdchem import Mol
 
+from plinder.core.structure.smallmols_utils import (
+    get_matched_template,
+    get_matched_template_v2,
+    mol_assigned_bond_orders_by_template,
+    uncharge_mol,
+)
 from plinder.core.utils.config import get_config
 from plinder.core.utils.constants import BASE_DIR
+from plinder.data.utils.annotations.cif_utils import ost_ent_to_rdkit_mol
 from plinder.data.utils.annotations.interaction_utils import (
     extract_ligand_links_to_neighbouring_chains,
     get_plip_hash,
-    pdbize,
     run_plip_on_split_structure,
 )
 from plinder.data.utils.annotations.protein_utils import Chain
-from plinder.data.utils.annotations.rdkit_utils import (
-    set_smiles_from_ligand_ost,
-)
 from plinder.data.utils.annotations.utils import DocBaseModel
 
-# TODO: replace above with below
-# from plinder.data.utils.annotations.rdkit_utils import set_smiles_from_ligand_ost_v2
-
 COMPOUND_LIB = GetDefaultLib()
+PRD_LIB = conop.CompoundLib.Load(
+    str(BASE_DIR / "data/utils/annotations/static_files/prdcc.chemlib")
+)
+LOG = logging.getLogger(__name__)
+
+
+def ligand_ost_ent_to_rdkit_mol(
+    ent: mol.EntityHandle,
+    ligand_smiles: str | None = None,
+    ligand_num_unresolved_heavy_atoms: int = 0,
+) -> Mol:
+    new_chains = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    edi = ent.EditXCS(mol.BUFFERED_EDIT)
+    for i, chain in enumerate(ent.GetChainList()):
+        edi.RenameChain(chain, f"{new_chains[i]}")
+    for residue in ent.residues:
+        if len(residue.name) > 3:
+            edi.RenameResidue(residue, residue.name[:3])
+    edi.UpdateICS()
+
+    rdkit_mol = ost_ent_to_rdkit_mol(ent)
+
+    if ligand_smiles:
+        try:
+            peppr_sanitize(rdkit_mol)
+            if Chem.CanonSmiles(ligand_smiles) == Chem.CanonSmiles(
+                Chem.MolToSmiles(rdkit_mol)
+            ):
+                return rdkit_mol
+            else:
+                raise AssertionError("SMILES do not match reference - will try fixing")
+        except Exception as e:
+            LOG.warning(f"ligand_ost_ent_to_rdkit_mol: {e}")
+        try:
+            sdfstring_ost = io.EntityToSDFStr(ent).strip()
+            rdkit_mol_tmp = Chem.MolFromMolBlock(sdfstring_ost, sanitize=False)
+            rdkit_mol_tmp = Chem.RemoveAllHs(rdkit_mol_tmp, sanitize=False)
+            try:
+                peppr_sanitize(rdkit_mol_tmp)
+            except Exception:
+                LOG.warning(
+                    "peppr_sanitize: failed before mol_assigned_bond_orders_by_template"
+                )
+            template = Chem.MolFromSmiles(ligand_smiles)
+            if ligand_num_unresolved_heavy_atoms > 0:
+                template = get_matched_template(template, rdkit_mol_tmp)
+            try:
+                rdkit_mol = mol_assigned_bond_orders_by_template(
+                    template, rdkit_mol_tmp
+                )
+            except ValueError as e:
+                LOG.error(
+                    f"template bonds could not be assigned: {e}; "
+                    f"template_smiles: {ligand_smiles}"
+                )
+                raise ValueError("cannot assign bonds by SMILES")
+        except Exception as e:
+            LOG.warning(f"ligand_ost_ent_to_rdkit_mol: {e}")
+    try:
+        peppr_sanitize(rdkit_mol)
+        rdkit_mol = uncharge_mol(rdkit_mol)
+        if len(Chem.MolToSmiles(rdkit_mol).split(".")) > 1:
+            raise ValueError(
+                f"rdkit_mol seems fragmented: {Chem.MolToSmiles(rdkit_mol)}"
+            )
+    except Exception as e:
+        LOG.error(f"ligand_ost_ent_to_rdkit_mol: could not fix: {e}")
+    return rdkit_mol
+
+
+def set_smiles_from_ligand_ost(ent: mol.EntityHandle) -> str:
+    residues = [res.name for res in ent.residues]
+    if len(residues) == 1:
+        resname = residues[0]
+        if resname.startswith("PRD_"):
+            comp = PRD_LIB.FindCompound(resname)
+        else:
+            comp = COMPOUND_LIB.FindCompound(resname)
+        if comp is not None:
+            try:
+                rdkit_mol = Chem.MolFromSmiles(str(comp.smiles), sanitize=False)
+                peppr_sanitize(rdkit_mol)
+                rdkit_mol = uncharge_mol(rdkit_mol)
+                return str(Chem.MolToSmiles(rdkit_mol))
+            except Exception:
+                LOG.warning(
+                    "set_smiles_from_ligand_ost: CCD smiles could not be loaded"
+                )
+    rdkit_mol = ligand_ost_ent_to_rdkit_mol(ent)
+    try:
+        return str(Chem.MolToSmiles(rdkit_mol))
+    except Exception as e:
+        LOG.error(f"set_smiles_from_ligand_ost: {e}")
+        return "None"
+
+
+def set_smiles_from_ligand_ost_v2(ent: mol.EntityHandle) -> tuple[str, str]:
+    input_smiles = ""
+    residues = [res.name for res in ent.residues]
+    if len(residues) == 1:
+        resname = residues[0]
+        if resname.startswith("PRD_"):
+            comp = PRD_LIB.FindCompound(resname)
+        else:
+            comp = COMPOUND_LIB.FindCompound(resname)
+        if comp is not None:
+            try:
+                template_mol = Chem.MolFromSmiles(str(comp.smiles), sanitize=False)
+                peppr_sanitize(template_mol)
+                input_smiles = str(Chem.MolToSmiles(template_mol))
+            except Exception:
+                LOG.warning(
+                    "set_smiles_from_ligand_ost_v2: CCD smiles could not be loaded"
+                )
+    resolved_mol = ligand_ost_ent_to_rdkit_mol(ent)
+    if input_smiles:
+        matched_template = get_matched_template_v2(template_mol, resolved_mol)
+        matched_smiles = Chem.CanonSmiles(Chem.MolToSmiles(matched_template))
+    else:
+        matched_smiles = Chem.CanonSmiles(str(Chem.MolToSmiles(resolved_mol)))
+        input_smiles = matched_smiles
+    return input_smiles, matched_smiles
+
+
 PEPTIDE_TYPES = [
     mol.CHAINTYPE_POLY,
     mol.CHAINTYPE_POLY_PEPTIDE_D,
@@ -177,152 +300,6 @@ def get_unique_ccd_longname(longname: str) -> str:
         return longname
     else:
         return "-".join([CCD_SYNONYMS_DICT.get(s, s) for s in longname.split("-")])
-
-
-def get_ligand_chainid_comp_id_map(data: pdbx.CIFBlock) -> dict[str, set[str]]:
-    if "atom_site" not in data:
-        return {}
-    atom_site = data["atom_site"]
-    group_pdb = atom_site["group_PDB"].as_array()
-    comp_ids = atom_site["label_comp_id"].as_array()
-    asym_ids = atom_site["label_asym_id"].as_array()
-
-    chain_comp_id_map: dict[str, set[str]] = defaultdict(set)
-    for i in range(len(group_pdb)):
-        if group_pdb[i] == "HETATM":
-            chain_comp_id_map[asym_ids[i]].add(comp_ids[i])
-    return chain_comp_id_map
-
-
-def get_bond_info(
-    data: pdbx.CIFBlock, comp_ids: set[str]
-) -> dict[str, list[tuple[str, str, str]]]:
-    if "chem_comp_bond" not in data:
-        return {}
-    bond_cat = data["chem_comp_bond"]
-    cids = bond_cat["comp_id"].as_array()
-    a1s = bond_cat["atom_id_1"].as_array()
-    a2s = bond_cat["atom_id_2"].as_array()
-    orders = bond_cat["value_order"].as_array()
-
-    bonds_dict: dict[str, list[tuple[str, str, str]]] = defaultdict(list)
-    for i in range(len(cids)):
-        if cids[i] not in comp_ids or cids[i] == "HOH":
-            continue
-        bonds_dict[cids[i]].append((a1s[i], a2s[i], orders[i]))
-    return bonds_dict
-
-
-def get_all_indices(lst: list[str], item: ty.Any) -> list[int]:
-    """
-    Get all indices of an item in a list
-
-    Parameters
-    ----------
-    lst : lst
-        The first parameter.
-
-    Returns
-    -------
-    list
-       list of indices of the item in the list
-    """
-    my_list = np.array(lst)
-    return [int(i) for i in np.where(my_list == item)[0]]
-
-
-def bond_pdb_order(value_order: str) -> Chem.rdchem.BondType:
-    """
-    Get rdkit bond type from pdb order
-
-    Parameters
-    ----------
-    value_order : str
-
-    Returns
-    -------
-    Chem.rdchem.BondType
-    """
-    if value_order.casefold() == "sing":
-        return Chem.rdchem.BondType(1)
-    if value_order.casefold() == "doub":
-        return Chem.rdchem.BondType(2)
-    if value_order.casefold() == "trip":
-        return Chem.rdchem.BondType(3)
-    return None
-
-
-def get_rdkit_mol_from_pdb_block(
-    pdb_block: str, bonds_dict: dict[str, list[tuple[str, str, str]]]
-) -> str:
-    mol = AllChem.MolFromPDBBlock(pdb_block)
-    atoms_ids = [
-        f"{atm.GetPDBResidueInfo().GetResidueName().strip()}"
-        + f":{atm.GetPDBResidueInfo().GetName().strip()}"
-        for atm in mol.GetAtoms()
-    ]
-
-    rw_mol = RWMol(mol)
-    for comp_id, bonds in bonds_dict.items():
-        for row in bonds:
-            atom_1 = row[0]
-            atom_2 = row[1]
-
-            if (f"{comp_id}:{atom_1}" not in atoms_ids) | (
-                f"{comp_id}:{atom_2}" not in atoms_ids
-            ):
-                # extra atom
-                pass
-
-            if atom_1.startswith("H") | atom_2.startswith("H"):
-                # skip hydrogens
-                pass
-            else:
-                try:
-                    atom_1_ids = get_all_indices(atoms_ids, f"{comp_id}:{atom_1}")
-                    atom_2_ids = get_all_indices(atoms_ids, f"{comp_id}:{atom_2}")
-                    for atom_1_id, atom_2_id, order in zip(
-                        atom_1_ids, atom_2_ids, np.repeat(row[2], len(atom_1_ids))
-                    ):
-                        bond_order = bond_pdb_order(order)
-                        rw_mol.RemoveBond(int(atom_1_id), int(atom_2_id))
-                        rw_mol.AddBond(int(atom_1_id), int(atom_2_id), bond_order)
-                except ValueError:
-                    print(
-                        f"Error perceiving {atom_1} - {atom_2} bond in _chem_comp_bond"
-                    )
-                except RuntimeError:
-                    print(f"Duplicit bond {atom_1} - {atom_2}")
-
-    bonded_mol = rw_mol.GetMol()
-    return str(Chem.MolToSmiles(bonded_mol))
-
-
-def get_smiles_from_cif(
-    data: pdbx.CIFBlock, ent: io.EntityHandle, polymer_cutoff: int = 20
-) -> dict[str, str]:
-    rdk_mols = {}
-    chain_id_comp_id_map = get_ligand_chainid_comp_id_map(data)
-    for chain_id, list_of_comp_ids in chain_id_comp_id_map.items():
-        bonds_dict = get_bond_info(data, list_of_comp_ids)
-        mol_ent = mol.CreateEntityFromView(
-            ent.Select(f"chain='{chain_id}'"),
-            True,
-        )
-        # If number of residue is withing cutoff range
-        if len(mol_ent.residues) < polymer_cutoff:
-            pdb_block = io.EntityToPDBStr(pdbize(ent, mol_ent)[0])
-            rdk_mols[chain_id] = get_rdkit_mol_from_pdb_block(pdb_block, bonds_dict)
-        # Skip water
-        elif sum([res.name == "HOH" for res in mol_ent.residues]) > 0:
-            continue
-    return rdk_mols
-
-
-def get_rdkit_mol_with_bond_order_from_cif(
-    rdk_smiles_dict: dict[str, str], chain_id: str
-) -> str:
-    return rdk_smiles_dict.get(chain_id, "")
 
 
 def get_chain_type(chain_type: str) -> str:

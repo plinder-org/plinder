@@ -12,10 +12,10 @@ from rdkit import Chem
     ],
 )
 def test_valence_issue_handling(smiles, num_problems):
-    from plinder.core.structure.smallmols_utils import fix_valency_issues
+    from peppr import sanitize as peppr_sanitize
 
     mol = Chem.MolFromSmiles(smiles, sanitize=False)
-    mol = fix_valency_issues(mol)
+    peppr_sanitize(mol)
     problems = Chem.DetectChemistryProblems(mol)
     assert len(problems) == num_problems
 
