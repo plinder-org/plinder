@@ -5,7 +5,7 @@
 
 import copy
 
-import networkx as nx
+import networkit as nk
 import numpy as np
 from rdkit import Chem, RDLogger
 from rdkit.Chem import AllChem, GetPeriodicTable, rdMolTransforms
@@ -100,24 +100,24 @@ class OptimizeConformer:
 
 def get_torsion_angles(mol):
     torsions_list = []
-    G = nx.Graph()
-    for i, atom in enumerate(mol.GetAtoms()):
-        G.add_node(i)
-    nodes = set(G.nodes())
+    n_atoms = mol.GetNumAtoms()
+    G = nk.Graph(n_atoms)
     for bond in mol.GetBonds():
-        start, end = bond.GetBeginAtomIdx(), bond.GetEndAtomIdx()
-        G.add_edge(start, end)
-    for e in G.edges():
-        G2 = copy.deepcopy(G)
-        G2.remove_edge(*e)
-        if nx.is_connected(G2):
+        G.addEdge(bond.GetBeginAtomIdx(), bond.GetEndAtomIdx())
+    for u, v in G.iterEdges():
+        G2 = nk.Graph(G)
+        G2.removeEdge(u, v)
+        cc = nk.components.ConnectedComponents(G2)
+        cc.run()
+        if cc.numberOfComponents() == 1:
             continue
-        l = list(sorted(nx.connected_components(G2), key=len)[0])
+        components = cc.getComponents()
+        l = min(components, key=len)
         if len(l) < 2:
             continue
-        n0 = list(G2.neighbors(e[0]))
-        n1 = list(G2.neighbors(e[1]))
-        torsions_list.append((n0[0], e[0], e[1], n1[0]))
+        n0 = list(G2.iterNeighbors(u))
+        n1 = list(G2.iterNeighbors(v))
+        torsions_list.append((n0[0], u, v, n1[0]))
     return torsions_list
 
 

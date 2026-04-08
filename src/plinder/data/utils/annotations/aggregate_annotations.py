@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
 
-import networkx as nx
+import networkit as nk
 import pandas as pd
 from ost import io, mol
 from PDBValidation.ValidationFactory import ValidationFactory
@@ -1240,9 +1240,11 @@ class Entry(DocBaseModel):
         None
         """
 
-        G = nx.Graph()
-        for ligand_id in ligands:
-            G.add_node(ligand_id)
+        # Map string ligand IDs to integer node indices for networkit
+        ligand_ids = list(ligands.keys())
+        id_to_idx = {lid: i for i, lid in enumerate(ligand_ids)}
+        G = nk.Graph(len(ligand_ids))
+        for ligand_id in ligand_ids:
             for neighboring_ligand_instance_chain in (
                 ligands[ligand_id].neighboring_ligands
                 + ligands[ligand_id].interacting_ligands
@@ -1254,15 +1256,16 @@ class Entry(DocBaseModel):
                         f"{neighboring_ligand_instance_chain}",
                     ]
                 )
-                if neighboring_ligand_id in ligands:
-                    G.add_edge(ligand_id, neighboring_ligand_id)
+                if neighboring_ligand_id in id_to_idx:
+                    G.addEdge(id_to_idx[ligand_id], id_to_idx[neighboring_ligand_id])
+        cc = nk.components.ConnectedComponents(G)
+        cc.run()
+        components = cc.getComponents()
         system_ligands: dict[int, list[Ligand]] = {}
-        for idx, component in enumerate(
-            sorted(nx.connected_components(G), key=len, reverse=True)
-        ):
+        for idx, component in enumerate(sorted(components, key=len, reverse=True)):
             system_ligands[idx + 1] = []
-            for ligand_id in component:
-                system_ligands[idx + 1].append(ligands[ligand_id])
+            for node_idx in component:
+                system_ligands[idx + 1].append(ligands[ligand_ids[node_idx]])
         self.systems: dict[str, System] = {}
         for ligs in system_ligands.values():
             system = System(
