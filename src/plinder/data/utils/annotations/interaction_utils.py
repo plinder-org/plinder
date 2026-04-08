@@ -5,8 +5,8 @@ from __future__ import annotations
 from collections import defaultdict
 from pathlib import Path
 
+import biotite.structure.io.pdbx as pdbx
 import gemmi
-from mmcif.api.PdbxContainers import DataContainer
 from ost import io, mol
 from plip.basic.supplemental import whichchain, whichresnumber
 from plip.structure.preparation import PDBComplex, PLInteraction
@@ -90,26 +90,26 @@ def get_symmetry_mate_contacts(
 
 
 def get_covalent_connections(
-    cif_data: DataContainer
+    cif_data: pdbx.CIFBlock,
 ) -> dict[str, list[tuple[str, str]]]:
     """
-    Extract covalent connections from mmcif data container
+    Extract covalent connections from CIF block.
 
     Parameters
     ----------
-    cif_data : DataContainer
-        mmcif data container
+    cif_data : pdbx.CIFBlock
+        biotite CIF block
 
     Returns
     -------
     dict[str, list[tuple[str, str]]
         All covalent links as defined by mmcif annotations
     """
+    if "struct_conn" not in cif_data:
+        return {}
 
-    cov_dict = defaultdict(list)
-    nucleobase_list = ["A", "C", "U", "G", "DA", "DC", "DG", "DT", "PSU"]
-
-    to_extract = [
+    conn = cif_data["struct_conn"]
+    columns = [
         "ptnr1_label_asym_id",
         "ptnr2_label_asym_id",
         "ptnr1_label_seq_id",
@@ -122,39 +122,42 @@ def get_covalent_connections(
         "ptnr2_label_atom_id",
         "conn_type_id",
     ]
-    cons = cif_data.getObj("struct_conn")
-    if cons is None:
-        return {}
-    for con in cons.getCombinationCountsWithConditions(
-        to_extract, [("conn_type_id", "in", ["covale", "metalc", "hydrog"])]
-    ):
-        con = dict(zip(to_extract, con))
+    arrays = {}
+    for col in columns:
+        if col not in conn:
+            return {}
+        arrays[col] = conn[col].as_array()
 
-        if con["conn_type_id"] == "hydrog":
-            if con["ptnr1_label_comp_id"].strip() not in nucleobase_list:
+    nucleobase_list = {"A", "C", "U", "G", "DA", "DC", "DG", "DT", "PSU"}
+    valid_types = {"covale", "metalc", "hydrog"}
+
+    cov_dict: dict[str, list[tuple[str, str]]] = defaultdict(list)
+    for i in range(len(arrays["conn_type_id"])):
+        conn_type = arrays["conn_type_id"][i]
+        if conn_type not in valid_types:
+            continue
+        if conn_type == "hydrog":
+            if arrays["ptnr1_label_comp_id"][i].strip() not in nucleobase_list:
                 continue
-        cov_dict[con["conn_type_id"]].append(
-            (
-                ":".join(
-                    [
-                        con["ptnr1_auth_seq_id"],
-                        con["ptnr1_label_comp_id"],
-                        con["ptnr1_label_asym_id"],
-                        con["ptnr1_label_seq_id"],
-                        con["ptnr1_label_atom_id"],
-                    ]
-                ),
-                ":".join(
-                    [
-                        con["ptnr2_auth_seq_id"],
-                        con["ptnr2_label_comp_id"],
-                        con["ptnr2_label_asym_id"],
-                        con["ptnr2_label_seq_id"],
-                        con["ptnr2_label_atom_id"],
-                    ]
-                ),
-            )
+        link1 = ":".join(
+            [
+                arrays["ptnr1_auth_seq_id"][i],
+                arrays["ptnr1_label_comp_id"][i],
+                arrays["ptnr1_label_asym_id"][i],
+                arrays["ptnr1_label_seq_id"][i],
+                arrays["ptnr1_label_atom_id"][i],
+            ]
         )
+        link2 = ":".join(
+            [
+                arrays["ptnr2_auth_seq_id"][i],
+                arrays["ptnr2_label_comp_id"][i],
+                arrays["ptnr2_label_asym_id"][i],
+                arrays["ptnr2_label_seq_id"][i],
+                arrays["ptnr2_label_atom_id"][i],
+            ]
+        )
+        cov_dict[conn_type].append((link1, link2))
     return cov_dict
 
 

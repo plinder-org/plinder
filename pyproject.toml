@@ -16,7 +16,6 @@ dependencies = [
     "rdkit>=2024.03.6",
     "pyarrow",
     "omegaconf",
-    "mmcif",
     "eval_type_backport",
     "posebusters>=0.6.4",
     "duckdb",

@@ -2,14 +2,12 @@
 # Distributed under the terms of the Apache License 2.0
 from __future__ import annotations
 
-import gzip
 from collections import defaultdict
 from functools import cached_property
 from pathlib import Path
 from typing import Any
 
-from mmcif.api.PdbxContainers import DataContainer
-from mmcif.io.PdbxReader import PdbxReader
+import biotite.structure.io.pdbx as pdbx
 from ost import conop, io, mol
 from PDBValidation.Validation import PDBValidation
 from pydantic import ConfigDict, Field
@@ -41,40 +39,43 @@ NON_SMALL_MOL_LIG_TYPES = [
 ]
 
 
-def read_mmcif_container(mmcif_filename: Path) -> DataContainer:
-    """Parse mmcif file with PDBxReader
+def read_mmcif_container(mmcif_filename: Path) -> pdbx.CIFBlock:
+    """Parse mmcif file and return the first data block.
 
     Parameters
     ----------
     mmcif_filename : Path
     Returns
     -------
-    DataContainer
-
+    pdbx.CIFBlock
     """
-    data: list[DataContainer] = []
-    if mmcif_filename.suffix == ".gz":
-        with gzip.open(str(mmcif_filename), "rt", encoding="utf-8") as f:
-            prd = PdbxReader(f)
-            prd.read(data)
-    else:
-        prd = PdbxReader(mmcif_filename)
-        prd.read(data)
-    return data[0]
+    cif_file = pdbx.CIFFile.read(str(mmcif_filename))
+    return list(cif_file.values())[0]
 
 
-def get_entry_info(data: DataContainer) -> dict[str, str | float | None]:
-    """Get entry-level information from DataContainer
+def _cif_scalar(block: pdbx.CIFBlock, category: str, column: str) -> str | None:
+    """Read a single scalar value from a CIF category, or None."""
+    if category not in block:
+        return None
+    cat = block[category]
+    if column not in cat:
+        return None
+    val = cat[column].as_array()[0]
+    if val in ("?", "."):
+        return None
+    return val
+
+
+def get_entry_info(data: pdbx.CIFBlock) -> dict[str, str | float | None]:
+    """Get entry-level information from a CIF block.
 
     Parameters
     ----------
-    data : DataContainer
-        Data container fot mmcif attributes
+    data : pdbx.CIFBlock
     Returns
     -------
     dict[str, str | float | None]
         Dictionary of entry-level information
-
     """
     entry_info = {}
     mappings = [
@@ -83,76 +84,84 @@ def get_entry_info(data: DataContainer) -> dict[str, str | float | None]:
         ("entry_keywords", "struct_keywords", "pdbx_keywords"),
         ("entry_pH", "exptl_crystal_grow", "pH"),
     ]
-    for key, obj_name, attr_name in mappings:
-        x = data.getObj(obj_name)
-        if x is not None:
-            entry_info[key] = x.getValueOrDefault(attr_name)
+    for key, cat_name, col_name in mappings:
+        entry_info[key] = _cif_scalar(data, cat_name, col_name)
     resolution_options = [
         ("refine", "ls_d_res_high"),
         # ("em_3d_reconstruction", "resolution"), # TODO: add this back for next annotation rerun
     ]
     resolution = None
-    for obj_name, attr_name in resolution_options:
-        x = data.getObj(obj_name)
-        if x is not None:
-            r = x.getValueOrDefault(attr_name)
-            if r is not None:
-                resolution = r
-                break
+    for cat_name, col_name in resolution_options:
+        r = _cif_scalar(data, cat_name, col_name)
+        if r is not None:
+            resolution = r
+            break
     entry_info["entry_resolution"] = resolution
     return entry_info
 
 
+def _iter_category_rows(
+    block: pdbx.CIFBlock, category: str, columns: list[str]
+) -> list[dict[str, str]]:
+    """Iterate over rows of a CIF category as dicts."""
+    if category not in block:
+        return []
+    cat = block[category]
+    arrays = {}
+    for col in columns:
+        if col not in cat:
+            return []
+        arrays[col] = cat[col].as_array()
+    n = len(next(iter(arrays.values())))
+    return [{col: arrays[col][i] for col in columns} for i in range(n)]
+
+
 def get_chain_external_mappings(
-    data: DataContainer
+    data: pdbx.CIFBlock,
 ) -> dict[str, dict[str, dict[str, list[tuple[str, str] | None]]]]:
     """Get additional metadata directory from nextgen mmcif
 
     Parameters
     ----------
-    cif_file : Path
-        Next-gen mmcif file
+    data : pdbx.CIFBlock
 
     Returns
     -------
-    Tuple[Dict[Any, Any], Dict[Any, Any]]
+    dict
+        Per-chain external database mappings
     """
     per_chain: dict[str, dict[str, dict[str, set[tuple[str, str] | None]]]] = {}
 
     # SIFTS mapping
-    xref = data.getObj("pdbx_sifts_xref_db_segments")
-    if xref is not None:
-        columns = xref.getAttributeList()
-        for a in xref:
-            a = dict(zip(columns, a))
-            if a["asym_id"] not in per_chain:
-                per_chain[a["asym_id"]] = defaultdict(lambda: defaultdict(set))
-            per_chain[a["asym_id"]][a["xref_db"]][a["xref_db_acc"]].add(
-                (a["seq_id_start"], a["seq_id_end"])
-            )
+    for row in _iter_category_rows(
+        data,
+        "pdbx_sifts_xref_db_segments",
+        ["asym_id", "xref_db", "xref_db_acc", "seq_id_start", "seq_id_end"],
+    ):
+        if row["asym_id"] not in per_chain:
+            per_chain[row["asym_id"]] = defaultdict(lambda: defaultdict(set))
+        per_chain[row["asym_id"]][row["xref_db"]][row["xref_db_acc"]].add(
+            (row["seq_id_start"], row["seq_id_end"])
+        )
 
     # UniProt mapping
-    uniprot = data.getObj("pdbx_sifts_unp_segments")
-    if uniprot is not None:
-        columns = uniprot.getAttributeList()
-        for a in uniprot:
-            a = dict(zip(columns, a))
-            if a["asym_id"] not in per_chain:
-                per_chain[a["asym_id"]] = defaultdict(lambda: defaultdict(set))
-            per_chain[a["asym_id"]]["UniProt"][a["unp_acc"]].add(
-                (a["seq_id_start"], a["seq_id_end"])
-            )
+    for row in _iter_category_rows(
+        data,
+        "pdbx_sifts_unp_segments",
+        ["asym_id", "unp_acc", "seq_id_start", "seq_id_end"],
+    ):
+        if row["asym_id"] not in per_chain:
+            per_chain[row["asym_id"]] = defaultdict(lambda: defaultdict(set))
+        per_chain[row["asym_id"]]["UniProt"][row["unp_acc"]].add(
+            (row["seq_id_start"], row["seq_id_end"])
+        )
 
     # BIRD entries with PRD codes: https://www.wwpdb.org/data/bird
-    pdbx_molecule = data.getObj("pdbx_molecule")
-    # see: https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Categories/pdbx_molecule.html
-    if pdbx_molecule is not None:
-        columns = pdbx_molecule.getAttributeList()
-        for a in pdbx_molecule:
-            a = dict(zip(columns, a))
-            if a["asym_id"] not in per_chain:
-                per_chain[a["asym_id"]] = defaultdict(lambda: defaultdict(set))
-            per_chain[a["asym_id"]]["BIRD"][f"{a['asym_id']}"].add(None)
+    for row in _iter_category_rows(data, "pdbx_molecule", ["asym_id"]):
+        if row["asym_id"] not in per_chain:
+            per_chain[row["asym_id"]] = defaultdict(lambda: defaultdict(set))
+        per_chain[row["asym_id"]]["BIRD"][row["asym_id"]].add(None)
+
     per_chain_list: dict[str, dict[str, dict[str, list[tuple[str, str] | None]]]] = {}
     for chain in per_chain:
         per_chain_list[chain] = {}

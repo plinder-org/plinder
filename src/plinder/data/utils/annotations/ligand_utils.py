@@ -10,9 +10,9 @@ from collections import Counter, defaultdict
 from functools import cache, cached_property
 from pathlib import Path
 
+import biotite.structure.io.pdbx as pdbx
 import numpy as np
 import pandas as pd
-from mmcif.api.PdbxContainers import DataContainer
 from ost import io, mol
 from ost.conop import GetDefaultLib
 from pydantic import BeforeValidator, Field
@@ -179,34 +179,37 @@ def get_unique_ccd_longname(longname: str) -> str:
         return "-".join([CCD_SYNONYMS_DICT.get(s, s) for s in longname.split("-")])
 
 
-def get_ligand_chainid_comp_id_map(data: DataContainer) -> dict[str, set[str]]:
-    atom_sites = data.getObj("atom_site")
-    atom_site_columns = ["group_PDB", "label_comp_id", "label_asym_id"]
-    if atom_sites is None:
+def get_ligand_chainid_comp_id_map(data: pdbx.CIFBlock) -> dict[str, set[str]]:
+    if "atom_site" not in data:
         return {}
+    atom_site = data["atom_site"]
+    group_pdb = atom_site["group_PDB"].as_array()
+    comp_ids = atom_site["label_comp_id"].as_array()
+    asym_ids = atom_site["label_asym_id"].as_array()
 
-    chain_comp_id_map = defaultdict(set)
-    for atom in atom_sites.getCombinationCountsWithConditions(
-        atom_site_columns, [("group_PDB", "eq", "HETATM")]
-    ):
-        chain_comp_id_map[atom[2]].add(atom[1])
+    chain_comp_id_map: dict[str, set[str]] = defaultdict(set)
+    for i in range(len(group_pdb)):
+        if group_pdb[i] == "HETATM":
+            chain_comp_id_map[asym_ids[i]].add(comp_ids[i])
     return chain_comp_id_map
 
 
 def get_bond_info(
-    data: DataContainer, comp_ids: set[str]
+    data: pdbx.CIFBlock, comp_ids: set[str]
 ) -> dict[str, list[tuple[str, str, str]]]:
-    comp_bond_info = data.getObj("chem_comp_bond")
-    if comp_bond_info is None:
+    if "chem_comp_bond" not in data:
         return {}
-    comp_bond_cols = ["comp_id", "atom_id_1", "atom_id_2", "value_order"]
-    bonds_dict = defaultdict(list)
-    for bond in comp_bond_info.getCombinationCountsWithConditions(
-        comp_bond_cols, [("comp_id", "in", comp_ids)]
-    ):
-        if bond[0] == "HOH":
+    bond_cat = data["chem_comp_bond"]
+    cids = bond_cat["comp_id"].as_array()
+    a1s = bond_cat["atom_id_1"].as_array()
+    a2s = bond_cat["atom_id_2"].as_array()
+    orders = bond_cat["value_order"].as_array()
+
+    bonds_dict: dict[str, list[tuple[str, str, str]]] = defaultdict(list)
+    for i in range(len(cids)):
+        if cids[i] not in comp_ids or cids[i] == "HOH":
             continue
-        bonds_dict[bond[0]].append((bond[1], bond[2], bond[3]))
+        bonds_dict[cids[i]].append((a1s[i], a2s[i], orders[i]))
     return bonds_dict
 
 
@@ -296,7 +299,7 @@ def get_rdkit_mol_from_pdb_block(
 
 
 def get_smiles_from_cif(
-    data: DataContainer, ent: io.EntityHandle, polymer_cutoff: int = 20
+    data: pdbx.CIFBlock, ent: io.EntityHandle, polymer_cutoff: int = 20
 ) -> dict[str, str]:
     rdk_mols = {}
     chain_id_comp_id_map = get_ligand_chainid_comp_id_map(data)
