@@ -42,7 +42,7 @@ def _get_chain_type_from_cif(block: pdbx.CIFBlock, entity_id: str) -> str:
         ep_types = ep["type"].as_array()
         for i, eid in enumerate(ep_ids):
             if eid == entity_id:
-                return ep_types[i]
+                return str(ep_types[i])
     # Fall back to _entity.type
     if "entity" in block:
         ent = block["entity"]
@@ -50,7 +50,7 @@ def _get_chain_type_from_cif(block: pdbx.CIFBlock, entity_id: str) -> str:
         ent_types = ent["type"].as_array()
         for i, eid in enumerate(ent_ids):
             if eid == entity_id:
-                return ent_types[i]
+                return str(ent_types[i])
     return "unknown"
 
 

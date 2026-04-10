@@ -1055,10 +1055,10 @@ class Ligand(DocBaseModel):
             plip_type=get_chain_type(ligand_chain.chain_type_str),
             bird_id=list(ligand_chain.mappings.get("BIRD", {"": None}))[0],  # type: ignore
             centroid=centroid,
-            smiles=smiles,
+            smiles=smiles or "",
             neighboring_residue_threshold=neighboring_residue_threshold,
             neighboring_ligand_threshold=neighboring_ligand_threshold,
-            resolved_smiles=resolved_smiles,
+            resolved_smiles=resolved_smiles or "",
             resolved_stereo_matches_template=stereo_matches,
             residue_numbers=residue_numbers,
         )

@@ -324,7 +324,7 @@ class PlinderSystem:
         return structure.as_posix()
 
     @cached_property
-    def receptor_entity(self):
+    def receptor_entity(self) -> Any:
         """
         Return the receptor entity handle (OST, for eval scoring).
 
@@ -355,7 +355,7 @@ class PlinderSystem:
         return atoms[atoms.element != "H"]
 
     @cached_property
-    def ligand_views(self):
+    def ligand_views(self) -> dict[str, Any]:
         """
         Return the ligand views (OST, for eval scoring).
 
