@@ -40,7 +40,7 @@ ligand_is_artifact	bool	Indicator of whether a ligand is an artifact
 ligand_is_other	bool	Indicator of whether a ligand type is not classified as any types of small molecule (Lipinski, Fragment or covalent), ion, cofactor, oligo (peptide, saccharide or nucleotide) or artifact
 ligand_is_invalid	bool	Indicator of whether a ligand is invalid
 ligand_unique_ccd_code	str | None	Ligand representative CCD code after de-duplicating
-ligand_protein_chains_asym_id	list[str]	Receptor chain IDs (protein/NA) within neighboring threshold of ligand.          Returns empty list if the ligand is an artifact.
+ligand_protein_chains_asym_id	list[str]	Receptor chain IDs (protein/NA) within neighboring threshold of ligand; empty if artifact
 ligand_num_interacting_residues	int	Number of residues interacting with a given ligand.
 ligand_num_neighboring_residues	int	Total count of receptor residues (protein/NA) within neighboring threshold.
 ligand_is_proper	bool	Check if ligand is a proper ligand (not an ion or artifact)
@@ -53,4 +53,4 @@ ligand_num_pocket_residues	int	Number of residues in the ligand's binding pocket
 ligand_id	str	Unique identifier for a given ligand.
 ligand_instance_chain	str	Instance chain for a given ligand.
 ligand_is_kinase_inhibitor	bool	Check if ligand is a kinase inhibitor.
-ligand_binding_affinity	float | None	Binding affinity (pKd or pKi) from BindingDB when available.          The affinity is only returned if the BindingDB target sequence         matches at least one receptor chain SEQRES with 100% identity         in the aligned core (terminal overhangs from tags/truncations         are tolerated).  This guards against BindingDB's 85% sequence         identity matching which can assign values to wrong complexes         (see `#94 <https://github.com/plinder-org/plinder/issues/94>`_).
+ligand_binding_affinity	float | None	Binding affinity (pKd/pKi) from BindingDB, validated against PDB SEQRES with 100% core identity
