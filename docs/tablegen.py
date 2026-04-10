@@ -56,6 +56,7 @@ def generate_table(description_dir: Path, output_html_path: Path) -> None:
 #         ~column_descriptions["Name"].str.contains("Kinase")
 #     ]
 
+    # TODO: update release/version after next dataset regeneration
     annotation_table = _get_annotation_table("2024-06", "v2", Path(CACHE_FILE))
 
     is_mandatory = np.zeros(column_descriptions.shape[0], dtype=bool)
@@ -66,9 +67,9 @@ def generate_table(description_dir: Path, output_html_path: Path) -> None:
         try:
             column = annotation_table[column_name]
         except KeyError:
-            logger.warning(
+            logger.debug(
                 f"Column '{column_name}' is in column descriptions, "
-                "but not found in annotation table."
+                "but not found in annotation table (expected for unreleased columns)."
             )
             continue
         is_value = _is_value(column, data_type)
