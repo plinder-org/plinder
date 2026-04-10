@@ -107,23 +107,34 @@ def transform_panther_data(*, raw_panther_path: Path) -> pd.DataFrame:
 
 
 def transform_bindingdb_affinity_data(*, raw_affinity_path: Path) -> pd.DataFrame:
-    # TODO: fix this bug https://github.com/plinder-org/plinder/issues/94
-    """
-    Unpack the tarball archive and collect the
-    contained files to a single parquet file.
+    """Parse BindingDB TSV into a per-(PDB, ligand) affinity table.
+
+    Each row maps a ``pdbid_ligid`` key (e.g. ``"1ABC_ATP"``) to a
+    median pChEMBL value derived from Ki/Kd measurements, plus the
+    BindingDB target sequence for downstream validation.
+
+    The BindingDB field ``PDB ID(s) for Ligand-Target Complex`` lists
+    PDB IDs matched at 85% sequence identity, which can assign affinity
+    values to the wrong complex (see `#94`_).  To guard against this,
+    the target sequence is preserved so that callers can verify it
+    against the actual PDB chain sequence before accepting the value.
+
+    .. _#94: https://github.com/plinder-org/plinder/issues/94
 
     Parameters
     ----------
     raw_affinity_path : Path
-        location of affinity data
+        Path to the BindingDB TSV file.
 
     Returns
     -------
-    transformed : pd.DataFrame
-        median affinity dataset
+    pd.DataFrame
+        Columns: ``pdbid_ligid``, ``pchembl``, ``target_sequence``.
     """
 
     def calc_pchembl(affinity: float) -> Any:
+        # pchembl = -log10(affinity_M); naming follows the ChEMBL convention
+        # for the log-transformed value, NOT the ChEMBL database itself.
         affinity = affinity * 10**-9
         if affinity > 0:
             return -1.0 * np.log10(affinity)
@@ -134,14 +145,13 @@ def transform_bindingdb_affinity_data(*, raw_affinity_path: Path) -> pd.DataFram
         "Ligand HET ID in PDB",
         "PDB ID(s) for Ligand-Target Complex",
         "Ki (nM)",
-        # "IC50 (nM)",
         "Kd (nM)",
         "EC50 (nM)",
+        "BindingDB Target Chain  Sequence",
     ]
     df = pd.read_csv(raw_affinity_path, sep="\t", usecols=cols, low_memory=False)
 
     df["pchembl"] = (
-        # df[["Ki (nM)", "IC50 (nM)", "Kd (nM)"]]
         df[["Ki (nM)", "Kd (nM)"]]
         .apply(set, axis=1)
         .apply(lambda x: [i for i in x if str(i) != "nan"])
@@ -152,7 +162,12 @@ def transform_bindingdb_affinity_data(*, raw_affinity_path: Path) -> pd.DataFram
     )
 
     df = df[
-        ["PDB ID(s) for Ligand-Target Complex", "Ligand HET ID in PDB", "pchembl"]
+        [
+            "PDB ID(s) for Ligand-Target Complex",
+            "Ligand HET ID in PDB",
+            "BindingDB Target Chain  Sequence",
+            "pchembl",
+        ]
     ].drop_duplicates()
     df = df[
         (df["Ligand HET ID in PDB"].notna())
@@ -165,9 +180,17 @@ def transform_bindingdb_affinity_data(*, raw_affinity_path: Path) -> pd.DataFram
     df["pdbid_ligid"] = (
         df["pdb_id"].str.upper() + "_" + df["Ligand HET ID in PDB"].str.strip()
     )
-    df = df[["pdbid_ligid", "pchembl"]].drop_duplicates()
+    df.rename(
+        columns={"BindingDB Target Chain  Sequence": "target_sequence"}, inplace=True
+    )
+    df = df[["pdbid_ligid", "pchembl", "target_sequence"]].drop_duplicates()
 
-    return df.groupby("pdbid_ligid").median().reset_index()
+    # Per pdbid_ligid: take median pchembl, keep first non-null target sequence
+    grouped = df.groupby("pdbid_ligid").agg(
+        pchembl=("pchembl", "median"),
+        target_sequence=("target_sequence", "first"),
+    )
+    return grouped.reset_index()
 
 
 def transform_components_data(*, raw_components_path: Path) -> pd.DataFrame:

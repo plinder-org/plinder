@@ -2,12 +2,13 @@ Name	Type	Description
 ligand_asym_id	str	Ligand chain asymmetric id
 ligand_instance	int	Biounit instance ID
 ligand_ccd_code	str	Ligand Chemical Component Dictionary (CCD) code
-ligand_plip_type	str	PLIP ligand type
+ligand_plip_type	str	Ligand chain type classification
 ligand_bird_id	str	Ligand BIRD id
 ligand_centroid	list[float]	Ligand center of geometry
-ligand_smiles	str	Ligand SMILES based on OpenStructure dictionary lookup, or resolved SMILES if not in dictionary
-ligand_resolved_smiles	str	SMILES of only resolved ligand atoms
-ligand_rdkit_canonical_smiles	str | None	RDKit canonical SMILES (Recommended)
+ligand_smiles	str	Ligand SMILES from CCD/PRD lookup, or derived from resolved 3D if not in dictionary
+ligand_resolved_smiles	str	SMILES from resolved 3D coordinates: bond orders from CCD template, stereochemistry from 3D geometry
+ligand_resolved_stereo_matches_template	bool | None	Whether resolved 3D stereo matches CCD template (None if achiral or no template)
+ligand_rdkit_canonical_smiles	str | None	RDKit canonical SMILES (same as smiles; kept for schema compatibility)
 ligand_molecular_weight	float | None	Molecular weight
 ligand_crippen_clogp	float | None	Ligand Crippen MlogP, see https://www.rdkit.org/docs/source/rdkit.Chem.Crippen.html
 ligand_num_rot_bonds	int | None	Number of rotatable bonds
@@ -16,7 +17,7 @@ ligand_num_hba	int | None	Number of hydrogen bond acceptors
 ligand_num_rings	int | None	Number of rings
 ligand_num_heavy_atoms	int | None	Number of heavy atoms
 ligand_is_covalent	bool	Indicator of whether a ligand  is a covalent ligand
-ligand_covalent_linkages	set[str]	Ligand covalent linkages as described in https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Categories/struct_conn.html with _struct_conn.conn_type_id == 'covale', reported in format {auth_resid}:{resname}{assym_id}{seq_resid}{atom_name}__{auth_resid}:{resname}{assym_id}{seq_resid}{atom_name}
+ligand_covalent_linkages	set[str]	Ligand covalent linkages from _struct_conn (conn_type_id='covale'), format: {auth_seq}:{comp_id}:{chain}:{seq}:{atom}__{auth_seq}:{comp_id}:{chain}:{seq}:{atom}
 ligand_neighboring_residues	dict[str, list[int]]	Dictionary of neighboring residues, with {instance}.{chain} key and residue number value
 ligand_interacting_residues	dict[str, list[int]]	Dictionary of interacting residues, with {instance}.{chain} key and residue number value
 ligand_num_neighboring_ppi_atoms_within_4A_of_gap	int | None	Number of missing neighboring protein-protein interface atoms within 4 Å of ligand of interest
@@ -39,9 +40,9 @@ ligand_is_artifact	bool	Indicator of whether a ligand is an artifact
 ligand_is_other	bool	Indicator of whether a ligand type is not classified as any types of small molecule (Lipinski, Fragment or covalent), ion, cofactor, oligo (peptide, saccharide or nucleotide) or artifact
 ligand_is_invalid	bool	Indicator of whether a ligand is invalid
 ligand_unique_ccd_code	str | None	Ligand representative CCD code after de-duplicating
-ligand_protein_chains_asym_id	list[str]	List of RCSB asymmetric chain ids of protein residues within 6 Å of ligand of interest unless         the ligand is an artifact, in which case we return an empty list.
+ligand_protein_chains_asym_id	list[str]	Receptor chain IDs (protein/NA) within neighboring threshold of ligand.          Returns empty list if the ligand is an artifact.
 ligand_num_interacting_residues	int	Number of residues interacting with a given ligand.
-ligand_num_neighboring_residues	int	Residue count of each of the proteins within 6 Å of ligand of interest.
+ligand_num_neighboring_residues	int	Total count of receptor residues (protein/NA) within neighboring threshold.
 ligand_is_proper	bool	Check if ligand is a proper ligand (not an ion or artifact)
 ligand_num_interactions	int	Number of interactions for a given ligand.
 ligand_num_unique_interactions	int	Number of unique interactions
@@ -52,4 +53,4 @@ ligand_num_pocket_residues	int	Number of residues in the ligand's binding pocket
 ligand_id	str	Unique identifier for a given ligand.
 ligand_instance_chain	str	Instance chain for a given ligand.
 ligand_is_kinase_inhibitor	bool	Check if ligand is a kinase inhibitor.
-ligand_binding_affinity	float | None	Binding affinity (pKd or pKi) from BindingDB when available.
+ligand_binding_affinity	float | None	Binding affinity (pKd or pKi) from BindingDB when available.          The affinity is only returned if the BindingDB target sequence         matches at least one receptor chain SEQRES with 100% identity         in the aligned core (terminal overhangs from tags/truncations         are tolerated).  This guards against BindingDB's 85% sequence         identity matching which can assign values to wrong complexes         (see `#94 <https://github.com/plinder-org/plinder/issues/94>`_).

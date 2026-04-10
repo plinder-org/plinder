@@ -255,21 +255,27 @@ def cif_2y4i_system():
     return test_asset_fp / "xx/pdb_00002y4i/pdb_00002y4i_xyz-enrich.cif.gz"
 
 
-# To test PLIP - CHK1 inhib 1
+# TODO: PLIP is no longer used — these fixtures test interaction detection (now via peppr)
+# CHK1 inhib 1
 @pytest.fixture(scope="session")
 def cif_2gdo():
     return test_asset_fp / "xx/pdb_00002gdo/pdb_00002gdo_xyz-enrich.cif.gz"
 
 
-# To test PLIP - CHK1 inhib 2
+# CHK1 inhib 2
 @pytest.fixture(scope="session")
 def cif_4qyf():
     return test_asset_fp / "xx/pdb_00004qyf/pdb_00004qyf_xyz-enrich.cif.gz"
 
 
 @pytest.fixture(scope="session")
-def smiles_sample_csv():
-    return test_asset_fp / "smiles_from_nextgen_bonds_data.csv"
+def rcsb_ccd_reference_csv():
+    return test_asset_fp / "rcsb_ccd_smiles_reference.csv"
+
+
+@pytest.fixture(scope="session")
+def resolved_smiles_csv():
+    return test_asset_fp / "resolved_smiles_reference.csv"
 
 
 @pytest.fixture(scope="session")
@@ -287,6 +293,12 @@ def cif_7az3():
 @pytest.fixture(scope="session")
 def cif_6ntj():
     return test_asset_fp / "xx/pdb_00006ntj/pdb_00006ntj_xyz-enrich.cif.gz"
+
+
+# To test nucleic acid receptor detection (issue #61)
+@pytest.fixture(scope="session")
+def cif_8ufz():
+    return test_asset_fp / "xx/pdb_00008ufz/pdb_00008ufz_xyz-enrich.cif.gz"
 
 
 @pytest.fixture(scope="session")

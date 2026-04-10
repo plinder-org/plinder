@@ -41,11 +41,15 @@ def query_index(
     if "system_id" not in columns and "*" not in columns:
         columns = ["system_id"] + columns
     # START patch-1
-    # TODO-1: remove this patch after binding_affinity is fixed
+    # TODO: remove after next dataset regeneration — binding affinity
+    # validation is now fixed (sequence-verified against BindingDB target)
+    # but the current published dataset still has unvalidated values.
+    # See: https://github.com/plinder-org/plinder/issues/94
     if "system_has_binding_affinity" in columns or "ligand_binding_affinity" in columns:
         raise ValueError(
-            "columns containing binding_affinity have been removed until bugfix"
-            "see: https://github.com/plinder-org/plinder/issues/94"
+            "binding_affinity columns are disabled in the current dataset. "
+            "The fix (sequence validation) will take effect after re-generation. "
+            "See: https://github.com/plinder-org/plinder/issues/94"
         )
     # END patch-1
     query = make_query(

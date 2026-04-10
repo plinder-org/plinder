@@ -6,6 +6,7 @@ and use a convention of looking for a file in a
 pre-determined location before fetching it from
 the network.
 """
+
 import gzip
 import json
 import os
@@ -77,7 +78,7 @@ def download_cofactors(
 def download_affinity_data(
     *,
     data_dir: Path,
-    bindingdb_url: str = "https://www.bindingdb.org/bind/downloads/BindingDB_All_202504_tsv.zip",
+    bindingdb_url: str = "https://www.bindingdb.org/bind/downloads/BindingDB_All_202604_tsv.zip",
     force_update: bool = False,
 ) -> Any:
     """
@@ -131,14 +132,18 @@ def download_affinity_data(
             all_affinity_df.groupby("pdbid_ligid")["preference"].idxmin()
         ]
         all_affinity_df = all_affinity_df.set_index("pdbid_ligid")
-        affinity_json = all_affinity_df[["pchembl"]].to_json()
-        obj: dict[str, Any] = json.loads(affinity_json)
+        obj = {
+            "pchembl": json.loads(all_affinity_df[["pchembl"]].to_json())["pchembl"],
+            "target_sequence": json.loads(
+                all_affinity_df[["target_sequence"]].to_json()
+            )["target_sequence"],
+        }
         with affinity_path.open("w") as f:
             json.dump(obj, f, indent=4)
     else:
         with affinity_path.open() as f:
             obj = json.load(f)
-    return obj["pchembl"]
+    return obj
 
 
 @retry

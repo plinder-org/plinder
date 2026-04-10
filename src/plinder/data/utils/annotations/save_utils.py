@@ -3,151 +3,173 @@
 from __future__ import annotations
 
 import json
-import typing as ty
 from pathlib import Path
 
-from ost import conop, io, mol
+import biotite.structure as struc
+import biotite.structure.io.pdb as pdb_io
+import biotite.structure.io.pdbx as pdbx
+import numpy as np
 from rdkit import Chem
 
-from plinder.data.utils.annotations.ligand_utils import ligand_ost_ent_to_rdkit_mol
-
-# Define available names for protein and ligand chains in PDB format
-PDB_PROTEIN_CHAINS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-PDB_LIGAND_CHAINS = PDB_PROTEIN_CHAINS.lower() + "0123456789"
+# Define available names for receptor (protein/NA) and ligand chains in PDB format
+PDB_RECEPTOR_CHAINS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+PDB_LIGAND_CHAINS = PDB_RECEPTOR_CHAINS.lower() + "0123456789"
 WATER_CHAIN_NAME = "_"
 
 
 def save_ligands(
-    ent: mol.EntityHandle,
-    ligand_selections: list[str],
-    ligand_chains: list[str],
+    atoms: struc.AtomArray,
+    ligand_chain_ids: list[str],
     ligand_smiles: list[str],
     ligand_num_unresolved_heavy_atoms: list[int | None],
     output_folder: str | Path,
 ) -> None:
-    for selection, chain, smiles, num_unresolved_heavy_atoms in zip(
-        ligand_selections,
-        ligand_chains,
+    """Save ligand SDF files from AtomArray.
+
+    Parameters
+    ----------
+    atoms : AtomArray
+        Full system atoms with bonds.
+    ligand_chain_ids : list[str]
+        Chain IDs identifying each ligand.
+    ligand_smiles : list[str]
+        Reference SMILES for each ligand.
+    ligand_num_unresolved_heavy_atoms : list[int | None]
+        Number of unresolved heavy atoms per ligand.
+    output_folder : str or Path
+        Directory to write SDF files.
+    """
+    from biotite.interface import rdkit as rdkit_interface
+    from peppr import sanitize as peppr_sanitize
+
+    for chain_id, smiles, num_unresolved in zip(
+        ligand_chain_ids,
         ligand_smiles,
         ligand_num_unresolved_heavy_atoms,
     ):
-        ligand_ost = mol.CreateEntityFromView(ent.Select(selection), True)
-        rdkit_mol = ligand_ost_ent_to_rdkit_mol(
-            ligand_ost, smiles, num_unresolved_heavy_atoms or 0
-        )
+        lig_mask = atoms.chain_id == chain_id
+        if not np.any(lig_mask):
+            continue
+        lig_atoms = atoms[lig_mask]
+        try:
+            lig_heavy = lig_atoms[lig_atoms.element != "H"]
+            rdkit_mol = rdkit_interface.to_mol(lig_heavy)
+            peppr_sanitize(rdkit_mol)
+            rdkit_mol = Chem.RemoveAllHs(rdkit_mol)
+        except Exception:
+            continue
         if rdkit_mol is None:
             continue
-        rdkit_mol.SetProp("_Name", chain)
-        with Chem.SDWriter(str(Path(output_folder) / f"{chain}.sdf")) as w:
+        rdkit_mol.SetProp("_Name", chain_id)
+        with Chem.SDWriter(str(Path(output_folder) / f"{chain_id}.sdf")) as w:
             w.write(rdkit_mol)
 
 
 def save_pdb_file(
-    full_biounit: mol.EntityHandle,
-    ent: mol.EntityHandle,
-    protein_chains: ty.List[str],
-    ligand_chains: ty.List[str],
-    output_pdb_file: ty.Union[str, Path],
-    output_mapping_file: ty.Union[str, Path],
-    waters: ty.Dict[str, ty.List[int]],
-    water_mapping_file: ty.Union[str, Path],
+    full_system: struc.AtomArray,
+    receptor_chains: list[str],
+    ligand_chains: list[str],
+    output_pdb_file: str | Path,
+    output_mapping_file: str | Path,
+    waters: dict[str, list[int]],
+    water_mapping_file: str | Path,
 ) -> None:
-    """Renames protein and ligand chains to fit the PDB single-letter chain name convention, saves the entity to a PDB file
-    and saves the mapping between original and new chain names to a JSON file
+    """Rename chains to PDB single-letter convention and save.
 
-    Args:
-        full_biounit (mol.EntityHandle): original biounit entity with all chains
-        ent (mol.EntityHandle): selected entity with only the protein and ligand chains of the system
-        protein_chains (ty.List[str]): list of protein chains
-        ligand_chains (ty.List[str]): list of ligand chains
-        waters (ty.Dict[str, ty.List[int]]): dictionary with water chain names as keys and list of water residue indices as values
-        output_pdb_file (ty.Union[str, Path]): path to the output PDB file
-        output_mapping_file (ty.Union[str, Path]): path to the output JSON file
+    Parameters
+    ----------
+    full_system : AtomArray
+        System atoms (receptor + ligand, no waters yet).
+    receptor_chains : list[str]
+        Original receptor chain IDs (protein and/or nucleic acid).
+    ligand_chains : list[str]
+        Original ligand chain IDs.
+    output_pdb_file : str or Path
+        Path to output PDB file.
+    output_mapping_file : str or Path
+        Path to output chain mapping JSON.
+    waters : dict[str, list[int]]
+        Water chain IDs mapped to residue numbers.
+    water_mapping_file : str or Path
+        Path to output water mapping JSON.
     """
-    if len(waters):
-        ent = mol.CreateEntityFromView(ent.Select("water=False"), True)
+    # Remove waters from the main structure (added back separately)
+    atoms = full_system[~struc.filter_solvent(full_system)]
 
-    # Intermediate renaming step
-    intermediate_names = {}
-    edi = ent.EditXCS(mol.BUFFERED_EDIT)
-    for i, chain in enumerate(ent.GetChainList()):
-        intermediate_names[f"T{i}"] = chain.name
-        edi.RenameChain(chain, f"T{i}")
-    edi.UpdateICS()
-
-    # Final renaming step
-    protein_chain_index = 0
+    # Build chain renaming
+    receptor_chain_index = 0
     ligand_chain_index = 0
-    name_mapping = {}
-    water_mapping: dict[str, dict[int, int]] = {}
+    name_mapping: dict[str, str] = {}
 
-    for chain in ent.GetChainList():
-        original_name = intermediate_names[chain.name]
-        original_chain = full_biounit.FindChain(original_name)
-        if original_name in protein_chains:
-            final_name = PDB_PROTEIN_CHAINS[protein_chain_index]
-            protein_chain_index += 1
+    for original_name in np.unique(atoms.chain_id):
+        if original_name in receptor_chains:
+            final_name = PDB_RECEPTOR_CHAINS[receptor_chain_index]
+            receptor_chain_index += 1
         elif original_name in ligand_chains:
             final_name = PDB_LIGAND_CHAINS[ligand_chain_index]
             ligand_chain_index += 1
-        edi.RenameChain(chain, final_name)
-        edi.SetChainDescription(chain, original_chain.description)
-        edi.SetChainType(chain, original_chain.type)
+        else:
+            continue
         name_mapping[original_name] = final_name
 
-    if len(waters):
-        water_chain = edi.InsertChain(WATER_CHAIN_NAME)
-        edi.SetChainDescription(water_chain, "Interacting waters")
-        edi.SetChainType(water_chain, mol.CHAINTYPE_WATER)
-        index = 1
-        for chain in waters:
-            water_mapping[chain] = {}
-            for resnum in waters[chain]:
-                new_residue = edi.AppendResidue(
-                    water_chain,
-                    full_biounit.FindChain(chain).FindResidue(resnum),
-                    deep=True,
-                )
-                edi.SetResidueNumber(new_residue, index)
-                water_mapping[chain][int(resnum)] = new_residue.number.num
-                index += 1
+    # Apply renaming
+    new_chain_ids = atoms.chain_id.copy()
+    for old, new in name_mapping.items():
+        new_chain_ids[atoms.chain_id == old] = new
+    atoms.chain_id = new_chain_ids
 
-    edi.UpdateICS()
-    io.SavePDB(ent, str(output_pdb_file))
+    # Add water residues
+    water_mapping: dict[str, dict[int, int]] = {}
+    if waters:
+        water_atoms_list = []
+        index = 1
+        for chain_name, resnums in waters.items():
+            water_mapping[chain_name] = {}
+            chain_mask = full_system.chain_id == chain_name
+            for resnum in resnums:
+                res_mask = chain_mask & (full_system.res_id == resnum)
+                if not np.any(res_mask):
+                    continue
+                water_res = full_system[res_mask].copy()
+                water_res.chain_id[:] = WATER_CHAIN_NAME
+                water_res.res_id[:] = index
+                water_atoms_list.append(water_res)
+                water_mapping[chain_name][int(resnum)] = index
+                index += 1
+        if water_atoms_list:
+            water_arr = water_atoms_list[0]
+            for wa in water_atoms_list[1:]:
+                water_arr = water_arr + wa
+            atoms = atoms + water_arr
+
+    # Write PDB
+    pdb_file = pdb_io.PDBFile()
+    pdb_file.set_structure(atoms)
+    pdb_file.write(str(output_pdb_file))
+
     with open(output_mapping_file, "w") as f:
         json.dump(name_mapping, f)
-    if len(waters):
+    if waters:
         with open(water_mapping_file, "w") as f:
             json.dump(water_mapping, f)
 
 
 def save_cif_file(
-    ent: mol.EntityHandle,
-    info: io.MMCifInfo,
+    atoms: struc.AtomArray,
     name: str,
-    output_cif_file: ty.Union[str, Path],
+    output_cif_file: str | Path,
 ) -> None:
-    lib = conop.GetDefaultLib()
-    entity_info = io.MMCifWriterEntityList()
-    entity_ids = set(
-        info.GetMMCifEntityIdTr(ch.name.split(".")[-1]) for ch in ent.chains
-    )
-    for entity_id in info.GetEntityIdsOfType("polymer"):
-        if entity_id not in entity_ids:
-            continue
-        # Get entity description from info object
-        entity_desc = info.GetEntityDesc(entity_id)
-        e = io.MMCifWriterEntity.FromPolymer(
-            entity_desc.entity_poly_type, entity_desc.mon_ids, lib
-        )
-        entity_info.append(e)
-        # search all chains assigned to the entity we just added
-        for ch in ent.chains:
-            if info.GetMMCifEntityIdTr(ch.name.split(".")[-1]) == entity_id:
-                entity_info[-1].asym_ids.append(ch.name)
-        # deal with heterogeneities
-        for a, b in zip(entity_desc.hetero_num, entity_desc.hetero_ids):
-            entity_info[-1].AddHet(a, b)
-    writer = io.MMCifWriter()
-    writer.SetStructure(ent, lib, entity_info=entity_info)
-    writer.Write(name, str(output_cif_file))
+    """Save structure as mmCIF.
+
+    Parameters
+    ----------
+    atoms : AtomArray
+        Atoms to save.
+    name : str
+        Data block name.
+    output_cif_file : str or Path
+        Output path.
+    """
+    cif_file = pdbx.CIFFile()
+    pdbx.set_structure(cif_file, atoms, data_block=name, include_bonds=True)
+    cif_file.write(str(output_cif_file))

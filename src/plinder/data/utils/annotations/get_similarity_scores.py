@@ -566,9 +566,11 @@ class Scorer:
                 df["target"]
                 .str.split("_", expand=True)
                 .apply(
-                    lambda x: self.entries[x[0]].author_to_asym.get(x[1], None)
-                    if x[0] in self.entries
-                    else None,
+                    lambda x: (
+                        self.entries[x[0]].author_to_asym.get(x[1], None)
+                        if x[0] in self.entries
+                        else None
+                    ),
                     axis=1,
                 )
             )
@@ -630,7 +632,10 @@ class Scorer:
                     if q_n is not None:
                         parts["qrnum"].append((x, q_n))
                         parts["lddtfull"].append(
-                            (x, float(parts["lddtaln"][aln_index]))
+                            (
+                                x,
+                                float(parts["lddtaln"][aln_index]),
+                            )
                         )
                     if t_n is not None:
                         parts["trnum"].append((x, t_n))
@@ -673,7 +678,10 @@ class Scorer:
         max_chain_lengths: dict[str, float] = defaultdict(float)
         protein_chain_mapper = ""
         s_matrix = np.zeros(
-            (len(query_system.protein_chains_asym_id), len(target_protein_chains))
+            (
+                len(query_system.protein_chains_asym_id),
+                len(target_protein_chains),
+            )
         )
         for i, q_instance_chain in enumerate(query_system.protein_chains_asym_id):
             q_chain = q_instance_chain.split(".")[1]

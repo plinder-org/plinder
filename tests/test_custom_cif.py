@@ -51,23 +51,30 @@ def test_unknown_ligand_ids_detects_lig(boltz_cif):
 
 def test_known_compounds_not_flagged(boltz_cif):
     """Known CCD compounds like ATP should not be flagged as unknown."""
-    # Inject a fake ATP HETATM into the CIF to verify it gets skipped
+    # Inject fake ATP HETATMs into the CIF (enough to match CCD atom count)
+    import biotite.structure.info as info
+
+    atp_ref = info.residue("ATP")
+    atp_heavy = atp_ref[atp_ref.element != "H"]
+
     f = pdbx.CIFFile.read(str(boltz_cif))
     block = list(f.values())[0]
     atom_site = block["atom_site"]
 
-    # Read all columns and append one ATP row
     columns = {}
     for col_name in atom_site.keys():
-        arr = list(atom_site[col_name].as_array())
-        # Copy the last row and modify it
-        arr.append(arr[-1])
-        columns[col_name] = arr
+        columns[col_name] = list(atom_site[col_name].as_array())
 
-    # Set the last row to be ATP
-    n = len(columns["group_PDB"]) - 1
-    columns["group_PDB"][n] = "HETATM"
-    columns["label_comp_id"][n] = "ATP"
+    # Add ATP atoms with correct CCD atom names
+    for i in range(len(atp_heavy)):
+        for col_name in columns:
+            columns[col_name].append(columns[col_name][-1])
+        n = len(columns["group_PDB"]) - 1
+        columns["group_PDB"][n] = "HETATM"
+        columns["label_comp_id"][n] = "ATP"
+        columns["label_atom_id"][n] = atp_heavy.atom_name[i]
+        if "type_symbol" in columns:
+            columns["type_symbol"][n] = atp_heavy.element[i]
 
     block["atom_site"] = pdbx.CIFCategory(columns)
     modified = boltz_cif.parent / "with_atp.cif"

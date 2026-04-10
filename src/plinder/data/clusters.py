@@ -287,7 +287,7 @@ def make_cluster_file(
         cluster_file.parent.mkdir(exist_ok=True, parents=True)
         labeldf.to_parquet(cluster_file, schema=CLUSTER_SCHEMA)
         t1 = time()
-        LOG.info(f"make_cluster_file: saving took {t1-t0:.2f}s")
+        LOG.info(f"make_cluster_file: saving took {t1 - t0:.2f}s")
 
 
 def prepare_df_protein(
@@ -310,7 +310,7 @@ def prepare_df_protein(
         )["system_id"]
     )
     t1 = time()
-    LOG.info(f"getting {len(system_ids_and_singletons)} system_ids took {t1-t0:.2f}s")
+    LOG.info(f"getting {len(system_ids_and_singletons)} system_ids took {t1 - t0:.2f}s")
     if not len(system_ids_and_singletons):
         LOG.info("no system_ids found, returning")
         return
@@ -347,7 +347,7 @@ def prepare_df_ligand(
         ].astype(str)
     )
     t1 = time()
-    LOG.info(f"getting {len(system_ids_and_singletons)} ligand_ids took {t1-t0:.2f}s")
+    LOG.info(f"getting {len(system_ids_and_singletons)} ligand_ids took {t1 - t0:.2f}s")
     if not len(system_ids_and_singletons):
         LOG.info("no ligand_ids found, returning")
         return

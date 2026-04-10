@@ -13,18 +13,17 @@ import logging
 from collections import defaultdict
 from pathlib import Path
 
+import biotite.structure as struc
+import biotite.structure.info as bt_info
 import biotite.structure.io.pdbx as pdbx
 import numpy as np
-from ost import conop, io, mol
 from rdkit import Chem
-from rdkit.Chem.rdchem import RWMol
 
 from plinder.core.structure.smallmols_utils import (
     mol_assigned_bond_orders_by_template,
 )
 
 LOG = logging.getLogger(__name__)
-_COMPOUND_LIB = conop.GetDefaultLib()
 
 
 # ---------------------------------------------------------------------------
@@ -126,7 +125,10 @@ def get_chain_external_mappings(
         if row["asym_id"] not in per_chain:
             per_chain[row["asym_id"]] = defaultdict(lambda: defaultdict(set))
         per_chain[row["asym_id"]][row["xref_db"]][row["xref_db_acc"]].add(
-            (row["seq_id_start"], row["seq_id_end"])
+            (
+                row["seq_id_start"],
+                row["seq_id_end"],
+            )
         )
 
     # UniProt mapping
@@ -138,7 +140,10 @@ def get_chain_external_mappings(
         if row["asym_id"] not in per_chain:
             per_chain[row["asym_id"]] = defaultdict(lambda: defaultdict(set))
         per_chain[row["asym_id"]]["UniProt"][row["unp_acc"]].add(
-            (row["seq_id_start"], row["seq_id_end"])
+            (
+                row["seq_id_start"],
+                row["seq_id_end"],
+            )
         )
 
     # BIRD entries with PRD codes
@@ -158,139 +163,318 @@ def get_chain_external_mappings(
 
 
 # ---------------------------------------------------------------------------
+# CIF → RDKit conversion
+# ---------------------------------------------------------------------------
+
+
+def atoms_to_rdkit_mol(
+    atoms: "struc.AtomArray",
+    assign_stereo: bool = True,
+) -> "Chem.Mol":
+    """Convert a biotite AtomArray to a sanitized RDKit Mol.
+
+    Hydrogen atoms are removed.  Bonds are assigned from CCD residue
+    names if not already present.  Stereochemistry is optionally
+    assigned from 3D coordinates.
+
+    Parameters
+    ----------
+    atoms : AtomArray
+        Heavy atoms with optional bonds (e.g. from ``include_bonds=True``).
+        If bonds are missing, ``connect_via_residue_names`` is used.
+    assign_stereo : bool
+        If True, call ``AssignStereochemistryFrom3D`` on the result.
+
+    Returns
+    -------
+    Chem.Mol
+        Sanitized RDKit molecule with 3D coordinates and PDB atom info.
+
+    Raises
+    ------
+    ValueError
+        If the conversion fails.
+    """
+    from biotite.interface import rdkit as rdkit_interface
+    from peppr import sanitize as peppr_sanitize
+
+    heavy = atoms[atoms.element != "H"]
+    if heavy.bonds is None or heavy.bonds.as_array().shape[0] == 0:
+        heavy.bonds = struc.connect_via_residue_names(heavy)
+    mol = rdkit_interface.to_mol(heavy)
+    if mol is None:
+        raise ValueError("Failed to convert AtomArray to RDKit Mol")
+    peppr_sanitize(mol)
+    if assign_stereo:
+        Chem.AssignStereochemistryFrom3D(mol)
+    return mol
+
+
+# ---------------------------------------------------------------------------
 # CIF ligand parsing
 # ---------------------------------------------------------------------------
 
 
-def get_ligand_chainid_comp_id_map(data: pdbx.CIFBlock) -> dict[str, set[str]]:
-    """Map chain IDs to their non-polymer component IDs."""
-    if "atom_site" not in data:
-        return {}
-    atom_site = data["atom_site"]
-    group_pdb = atom_site["group_PDB"].as_array()
-    comp_ids = atom_site["label_comp_id"].as_array()
-    asym_ids = atom_site["label_asym_id"].as_array()
+def parse_struct_conn(
+    block: pdbx.CIFBlock,
+) -> list[dict[str, str]]:
+    """Parse ``_struct_conn`` into a list of connection dicts."""
+    if "struct_conn" not in block:
+        return []
+    conn = block["struct_conn"]
+    cols = {
+        "conn_type_id": "conn_type",
+        "ptnr1_label_asym_id": "chain1",
+        "ptnr1_label_seq_id": "seq1",
+        "ptnr1_label_atom_id": "atom1",
+        "ptnr1_label_comp_id": "comp1",
+        "ptnr2_label_asym_id": "chain2",
+        "ptnr2_label_seq_id": "seq2",
+        "ptnr2_label_atom_id": "atom2",
+        "ptnr2_label_comp_id": "comp2",
+        "ptnr1_auth_seq_id": "auth_seq1",
+        "ptnr2_auth_seq_id": "auth_seq2",
+    }
+    arrays = {}
+    for cif_col, key in cols.items():
+        if cif_col not in conn:
+            return []
+        arrays[key] = conn[cif_col].as_array()
+    n = len(arrays["conn_type"])
+    return [{k: arrays[k][i] for k in arrays} for i in range(n)]
 
-    chain_comp_id_map: dict[str, set[str]] = defaultdict(set)
-    for i in range(len(group_pdb)):
-        if group_pdb[i] == "HETATM":
-            chain_comp_id_map[asym_ids[i]].add(comp_ids[i])
-    return chain_comp_id_map
 
+def apply_struct_conn_bonds(
+    atoms: "struc.AtomArray",
+    block: pdbx.CIFBlock,
+) -> None:
+    """Add inter-residue covalent bonds from ``_struct_conn`` in-place."""
 
-def get_bond_info(
-    data: pdbx.CIFBlock, comp_ids: set[str]
-) -> dict[str, list[tuple[str, str, str]]]:
-    """Extract _chem_comp_bond info for given component IDs."""
-    if "chem_comp_bond" not in data:
-        return {}
-    bond_cat = data["chem_comp_bond"]
-    cids = bond_cat["comp_id"].as_array()
-    a1s = bond_cat["atom_id_1"].as_array()
-    a2s = bond_cat["atom_id_2"].as_array()
-    orders = bond_cat["value_order"].as_array()
+    connections = parse_struct_conn(block)
+    if not connections:
+        return
+    if atoms.bonds is None:
+        atoms.bonds = struc.BondList(atoms.array_length())
 
-    bonds_dict: dict[str, list[tuple[str, str, str]]] = defaultdict(list)
-    for i in range(len(cids)):
-        if cids[i] not in comp_ids or cids[i] == "HOH":
+    existing = set(
+        (min(b[0], b[1]), max(b[0], b[1])) for b in atoms.bonds.as_array()[:, :2]
+    )
+    label_ids = np.array([c.split(".")[-1] if "." in c else c for c in atoms.chain_id])
+
+    for c in connections:
+        if c["conn_type"] != "covale":
             continue
-        bonds_dict[cids[i]].append((a1s[i], a2s[i], orders[i]))
-    return bonds_dict
+        try:
+            r1 = int(c["seq1"]) if c["seq1"] != "." else -1
+            r2 = int(c["seq2"]) if c["seq2"] != "." else -1
+        except ValueError:
+            continue
 
-
-def bond_pdb_order(value_order: str) -> Chem.rdchem.BondType | None:
-    """Convert PDB bond order string to RDKit BondType."""
-    if value_order.casefold() == "sing":
-        return Chem.rdchem.BondType(1)
-    if value_order.casefold() == "doub":
-        return Chem.rdchem.BondType(2)
-    if value_order.casefold() == "trip":
-        return Chem.rdchem.BondType(3)
-    return None
-
-
-def get_rdkit_mol_from_pdb_block(
-    pdb_block: str, bonds_dict: dict[str, list[tuple[str, str, str]]]
-) -> str:
-    """Build SMILES from PDB block using _chem_comp_bond info."""
-    rdmol = Chem.MolFromPDBBlock(pdb_block)
-    atoms_ids = [
-        f"{atm.GetPDBResidueInfo().GetResidueName().strip()}"
-        + f":{atm.GetPDBResidueInfo().GetName().strip()}"
-        for atm in rdmol.GetAtoms()
-    ]
-
-    rw_mol = RWMol(rdmol)
-    for comp_id, bonds in bonds_dict.items():
-        for row in bonds:
-            atom_1, atom_2 = row[0], row[1]
-            if (f"{comp_id}:{atom_1}" not in atoms_ids) | (
-                f"{comp_id}:{atom_2}" not in atoms_ids
-            ):
-                pass
-            if atom_1.startswith("H") | atom_2.startswith("H"):
-                pass
-            else:
-                try:
-                    atom_1_ids = _get_all_indices(atoms_ids, f"{comp_id}:{atom_1}")
-                    atom_2_ids = _get_all_indices(atoms_ids, f"{comp_id}:{atom_2}")
-                    for a1, a2, order in zip(
-                        atom_1_ids, atom_2_ids, np.repeat(row[2], len(atom_1_ids))
-                    ):
-                        bo = bond_pdb_order(order)
-                        rw_mol.RemoveBond(int(a1), int(a2))
-                        rw_mol.AddBond(int(a1), int(a2), bo)
-                except ValueError:
-                    LOG.warning(f"Error perceiving {atom_1}-{atom_2} bond")
-                except RuntimeError:
-                    LOG.warning(f"Duplicate bond {atom_1}-{atom_2}")
-
-    return str(Chem.MolToSmiles(rw_mol.GetMol()))
-
-
-def _get_all_indices(lst: list[str], item: str) -> list[int]:
-    arr = np.array(lst)
-    return [int(i) for i in np.where(arr == item)[0]]
-
-
-def get_smiles_from_cif(
-    data: pdbx.CIFBlock, ent: io.EntityHandle, polymer_cutoff: int = 20
-) -> dict[str, str]:
-    """Extract SMILES for each ligand chain using _chem_comp_bond."""
-    from plinder.data.utils.annotations.interaction_utils import pdbize
-
-    rdk_mols = {}
-    chain_id_comp_id_map = get_ligand_chainid_comp_id_map(data)
-    for chain_id, list_of_comp_ids in chain_id_comp_id_map.items():
-        bonds_dict = get_bond_info(data, list_of_comp_ids)
-        mol_ent = mol.CreateEntityFromView(
-            ent.Select(f"chain='{chain_id}'"),
-            True,
+        mask1 = (
+            (label_ids == c["chain1"])
+            & (atoms.res_id == r1)
+            & (atoms.atom_name == c["atom1"])
         )
-        if len(mol_ent.residues) < polymer_cutoff:
-            pdb_block = io.EntityToPDBStr(pdbize(ent, mol_ent)[0])
-            rdk_mols[chain_id] = get_rdkit_mol_from_pdb_block(pdb_block, bonds_dict)
-        elif sum([res.name == "HOH" for res in mol_ent.residues]) > 0:
+        mask2 = (
+            (label_ids == c["chain2"])
+            & (atoms.res_id == r2)
+            & (atoms.atom_name == c["atom2"])
+        )
+
+        for i1 in np.where(mask1)[0]:
+            for i2 in np.where(mask2)[0]:
+                pair = (min(int(i1), int(i2)), max(int(i1), int(i2)))
+                if pair not in existing:
+                    atoms.bonds.add_bond(int(i1), int(i2), struc.BondType.SINGLE)
+                    existing.add(pair)
+
+
+# ---------------------------------------------------------------------------
+# Bridged interaction detection (synced with peppr-internal)
+# TODO: remove once peppr >= 0.14 is released with these methods.
+# ---------------------------------------------------------------------------
+
+# Water bridge lower bound: 0.75 * VdW_sum (~2.28 A for O-O)
+# avoids clashes but allows short water-mediated H-bonds.
+# Upper bound: 1.15 * VdW_sum (~3.50 A for O-O), standard H-bond max.
+_WATER_BRIDGE_DISTANCE_SCALING = (0.75, 1.15)
+
+# Metals that form coordination bonds (not spectator ions like Na/Cl/K)
+_COORDINATION_METALS = frozenset(
+    {
+        "MG",
+        "CA",
+        "ZN",
+        "FE",
+        "FE2",  # Fe(II)
+        "MN",
+        "CO",
+        "CU",
+        "CU1",  # Cu(I)
+        "NI",
+        "CD",
+        "MO",
+        "4MO",  # Mo(IV)
+        "6MO",  # Mo(VI)
+        "W",
+        "V",
+    }
+)
+_METAL_ACCEPTOR_PATTERN = (
+    "["
+    "$([O]),"
+    "$([#7;!$([nX3]);!$([NX3]-*=[!#6]);!$([NX3]-[a]);!$([NX4])]),"
+    "$([#16]),"
+    "$([*;-{1-};!+{1-}])"
+    "]"
+)
+
+
+def _find_bridged_interactions(
+    receptor: "struc.AtomArray",
+    ligand: "struc.AtomArray",
+    bridge_atoms: "struc.AtomArray",
+    receptor_pattern: str,
+    ligand_pattern: str,
+    distance_scaling: tuple[float, float],
+) -> list[tuple[np.ndarray, np.ndarray, np.ndarray]]:
+    """Find interactions bridged by intermediary atoms (water or metal).
+
+    TODO: remove once peppr has ContactMeasurement.find_bridged_interactions.
+    """
+    import biotite.structure.info as info
+    from peppr.contacts import ContactMeasurement, find_atoms_by_pattern
+
+    if bridge_atoms.array_length() == 0:
+        return []
+
+    try:
+        cm = ContactMeasurement(receptor, ligand)
+    except Exception as e:
+        LOG.warning(f"ContactMeasurement setup failed: {e}")
+        return []
+
+    receptor_matched = find_atoms_by_pattern(cm._binding_site_mol, receptor_pattern)
+    ligand_matched = find_atoms_by_pattern(cm._ligand_mol, ligand_pattern)
+    if len(receptor_matched) == 0 or len(ligand_matched) == 0:
+        return []
+
+    receptor_coords = cm._binding_site.coord[receptor_matched]
+    ligand_coords = cm._ligand.coord[ligand_matched]
+    lo, hi = sorted(distance_scaling)
+
+    r_vdw = np.array(
+        [info.vdw_radius_single(e) for e in cm._binding_site.element[receptor_matched]]
+    )
+    l_vdw = np.array(
+        [info.vdw_radius_single(e) for e in cm._ligand.element[ligand_matched]]
+    )
+
+    bridges: list[tuple[np.ndarray, np.ndarray, np.ndarray]] = []
+    for bi in range(bridge_atoms.array_length()):
+        b_coord = bridge_atoms.coord[bi]
+        b_vdw = info.vdw_radius_single(bridge_atoms.element[bi])
+
+        r_dists = np.linalg.norm(receptor_coords - b_coord, axis=1)
+        r_thresholds = r_vdw + b_vdw
+        r_contacts = receptor_matched[
+            (r_dists >= lo * r_thresholds) & (r_dists <= hi * r_thresholds)
+        ]
+        if len(r_contacts) == 0:
             continue
-    return rdk_mols
+
+        l_dists = np.linalg.norm(ligand_coords - b_coord, axis=1)
+        l_thresholds = l_vdw + b_vdw
+        l_contacts = ligand_matched[
+            (l_dists >= lo * l_thresholds) & (l_dists <= hi * l_thresholds)
+        ]
+        if len(l_contacts) == 0:
+            continue
+
+        for ri in r_contacts:
+            for li in l_contacts:
+                bridges.append(
+                    (
+                        cm._binding_site_indices[ri : ri + 1],
+                        np.array([li], dtype=int),
+                        np.array([bi], dtype=int),
+                    )
+                )
+
+    return bridges
 
 
-def get_rdkit_mol_with_bond_order_from_cif(
-    rdk_smiles_dict: dict[str, str], chain_id: str
-) -> str:
-    return rdk_smiles_dict.get(chain_id, "")
+def find_water_bridges(
+    receptor: "struc.AtomArray",
+    ligand: "struc.AtomArray",
+    waters: "struc.AtomArray",
+    distance_scaling: tuple[float, float] = _WATER_BRIDGE_DISTANCE_SCALING,
+) -> list[tuple[np.ndarray, np.ndarray, np.ndarray]]:
+    """Find water-mediated hydrogen bonds between receptor and ligand."""
+    from peppr.common import ACCEPTOR_PATTERN, DONOR_PATTERN
+
+    water_oxygens = waters[waters.element == "O"]
+    hbond_pattern = "[" + DONOR_PATTERN[1:-1] + "," + ACCEPTOR_PATTERN[1:-1] + "]"
+    return _find_bridged_interactions(
+        receptor,
+        ligand,
+        water_oxygens,
+        hbond_pattern,
+        hbond_pattern,
+        distance_scaling,
+    )
 
 
-def ost_ent_to_rdkit_mol(ent: mol.EntityHandle) -> Chem.Mol | None:
-    """Convert an OST entity to an RDKit Mol via PDB block, with SDF fallback."""
-    pdbstring = io.EntityToPDBStr(ent).strip()
-    rdkit_mol = Chem.MolFromPDBBlock(pdbstring, sanitize=False, removeHs=False)
-    if rdkit_mol is None:
-        sdfstring = io.EntityToSDFStr(ent).strip()
-        rdkit_mol = Chem.MolFromMolBlock(sdfstring, sanitize=False)
-    if rdkit_mol is not None:
-        rdkit_mol = Chem.RemoveAllHs(rdkit_mol, sanitize=False)
-    return rdkit_mol
+def find_metal_bridges(
+    receptor: "struc.AtomArray",
+    ligand: "struc.AtomArray",
+    metals: "struc.AtomArray",
+    cutoff: float = 3.0,
+) -> list[tuple[np.ndarray, np.ndarray, np.ndarray]]:
+    """Find metal-mediated coordination between receptor and ligand."""
+    from peppr.contacts import ContactMeasurement, find_atoms_by_pattern
+
+    coord_mask = np.isin(metals.res_name, list(_COORDINATION_METALS))
+    if not np.any(coord_mask):
+        return []
+    coord_metals = metals[coord_mask]
+
+    try:
+        cm = ContactMeasurement(receptor, ligand)
+    except Exception as e:
+        LOG.warning(f"ContactMeasurement setup failed for metal bridges: {e}")
+        return []
+
+    receptor_matched = find_atoms_by_pattern(
+        cm._binding_site_mol, _METAL_ACCEPTOR_PATTERN
+    )
+    ligand_matched = find_atoms_by_pattern(cm._ligand_mol, _METAL_ACCEPTOR_PATTERN)
+    if len(receptor_matched) == 0 or len(ligand_matched) == 0:
+        return []
+
+    bridges: list[tuple[np.ndarray, np.ndarray, np.ndarray]] = []
+    for bi in range(coord_metals.array_length()):
+        b_coord = coord_metals.coord[bi]
+        r_dists = np.linalg.norm(
+            cm._binding_site.coord[receptor_matched] - b_coord, axis=1
+        )
+        r_contacts = receptor_matched[r_dists < cutoff]
+        if len(r_contacts) == 0:
+            continue
+        l_dists = np.linalg.norm(cm._ligand.coord[ligand_matched] - b_coord, axis=1)
+        l_contacts = ligand_matched[l_dists < cutoff]
+        if len(l_contacts) == 0:
+            continue
+        for ri in r_contacts:
+            for li in l_contacts:
+                bridges.append(
+                    (
+                        cm._binding_site_indices[ri : ri + 1],
+                        np.array([li], dtype=int),
+                        np.array([bi], dtype=int),
+                    )
+                )
+    return bridges
 
 
 # ---------------------------------------------------------------------------
@@ -302,6 +486,11 @@ class MissingBondOrderError(ValueError):
     """Raised when a CIF file has ligands with unresolvable bond orders."""
 
     pass
+
+
+# Minimum fraction of CCD heavy atoms that must be present in a CIF
+# for connect_via_residue_names to produce reliable bonds.
+_MIN_CCD_ATOM_OVERLAP = 0.5
 
 
 def _get_hetatm_comp_ids(block: pdbx.CIFBlock) -> set[str]:
@@ -321,9 +510,34 @@ def _get_cif_bond_comp_ids(block: pdbx.CIFBlock) -> set[str]:
     return set(block["chem_comp_bond"]["comp_id"].as_array())
 
 
-def _is_known_compound(comp_id: str) -> bool:
-    """Check if a component ID is known to the CCD compound library."""
-    return _COMPOUND_LIB.FindCompound(comp_id) is not None
+def _is_known_compound(comp_id: str, atom_names: set[str] | None = None) -> bool:
+    """Check if a component ID is known to the CCD compound library.
+
+    If *atom_names* is provided, also verify that the CIF atom names
+    overlap with the CCD entry. Bond assignment via
+    ``connect_via_residue_names`` relies on atom-name matching, so a
+    compound whose names don't match CCD will get wrong bonds even if
+    the comp_id exists in the dictionary (e.g. Boltz ``LIG`` =/= CCD
+    ``LIG``).
+    """
+    try:
+        ref = bt_info.residue(comp_id)
+        if atom_names is not None:
+            ref_heavy = ref[ref.element != "H"]
+            ref_names = set(ref_heavy.atom_name)
+            if not ref_names or not atom_names:
+                return False
+            # All CIF atom names must exist in the CCD entry
+            unknown_names = atom_names - ref_names
+            if unknown_names:
+                return False
+            # Enough CCD atoms must be present for reliable bond assignment
+            if len(atom_names & ref_names) < _MIN_CCD_ATOM_OVERLAP * len(ref_names):
+                return False
+        return True
+    except Exception as e:
+        LOG.warning(f"CCD lookup failed for {comp_id}: {e}")
+        return False
 
 
 def get_unknown_ligand_ids(cif_input: pdbx.CIFFile | Path | str) -> set[str]:
@@ -349,11 +563,27 @@ def get_unknown_ligand_ids(cif_input: pdbx.CIFFile | Path | str) -> set[str]:
 
     cif_bond_ids = _get_cif_bond_comp_ids(block)
 
+    # Collect heavy-atom names per comp_id for validation
+    atom_names_per_comp: dict[str, set[str]] = {}
+    if "atom_site" in block:
+        atom_site = block["atom_site"]
+        comp_ids = atom_site["label_comp_id"].as_array()
+        a_names = atom_site["label_atom_id"].as_array()
+        elements = (
+            atom_site["type_symbol"].as_array() if "type_symbol" in atom_site else None
+        )
+        for comp_id in hetatm_ids:
+            if elements is not None:
+                mask = (comp_ids == comp_id) & (elements != "H")
+            else:
+                mask = comp_ids == comp_id
+            atom_names_per_comp[comp_id] = set(a_names[mask])
+
     unknown = set()
     for comp_id in hetatm_ids:
         if comp_id in cif_bond_ids:
             continue
-        if _is_known_compound(comp_id):
+        if _is_known_compound(comp_id, atom_names=atom_names_per_comp.get(comp_id)):
             continue
         unknown.add(comp_id)
     return unknown
@@ -448,7 +678,10 @@ def assign_bond_orders_from_smiles(
     if skipped:
         LOG.info(f"Skipping known compounds: {skipped}")
 
-    ent = io.LoadMMCIF(str(cif_path)).Select("")
+    atoms = pdbx.get_structure(
+        cif_file, model=1, use_author_fields=False, include_bonds=True
+    )
+    atoms = atoms[atoms.element != "H"]
 
     # Preserve existing _chem_comp_bond rows
     comp_id_list: list[str] = []
@@ -464,23 +697,44 @@ def assign_bond_orders_from_smiles(
             atom_id_2_list.append(existing["atom_id_2"].as_array()[i])
             value_order_list.append(existing["value_order"].as_array()[i])
 
+    from biotite.interface import rdkit as rdkit_interface
+    from peppr import sanitize as peppr_sanitize
+
     for comp_id, smiles in to_process.items():
         template = Chem.MolFromSmiles(smiles)
         if template is None:
             raise ValueError(f"Invalid SMILES for {comp_id}: {smiles}")
 
-        ligand_view = ent.Select(f"rname={comp_id}")
-        if not ligand_view.IsValid() or ligand_view.GetAtomCount() == 0:
+        lig_mask = atoms.res_name == comp_id
+        if not np.any(lig_mask):
             raise ValueError(f"No atoms found for component {comp_id} in CIF")
 
-        ligand_ent = mol.CreateEntityFromView(ligand_view, True)
+        lig_atoms = atoms[lig_mask]
+        lig_heavy = lig_atoms[lig_atoms.element != "H"]
 
-        rdkit_mol = ost_ent_to_rdkit_mol(ligand_ent)
+        if lig_heavy.bonds is None or lig_heavy.bonds.as_array().shape[0] == 0:
+            # Unknown residue — infer bonds from distances
+            lig_heavy.bonds = struc.connect_via_distances(lig_heavy)
+        # Ensure bond types are SINGLE (1), not ANY/UNSPECIFIED (0),
+        # so RDKit template matching can reassign proper orders
+        bond_arr = lig_heavy.bonds.as_array()
+        bond_arr[:, 2] = np.where(bond_arr[:, 2] == 0, 1, bond_arr[:, 2])
+        lig_heavy.bonds = struc.BondList(lig_heavy.array_length(), bond_arr)
+        rdkit_mol = rdkit_interface.to_mol(lig_heavy)
         if rdkit_mol is None:
             raise ValueError(f"Could not parse ligand {comp_id} as RDKit mol")
+        try:
+            peppr_sanitize(rdkit_mol)
+        except Exception as e:
+            LOG.warning(f"peppr_sanitize failed for {comp_id}: {e}")
         fixed_mol = mol_assigned_bond_orders_by_template(template, rdkit_mol)
 
-        atom_names = [a.name.strip() for a in ligand_ent.atoms]
+        atom_names = [
+            a.GetPDBResidueInfo().GetName().strip()
+            if a.GetPDBResidueInfo()
+            else lig_heavy.atom_name[a.GetIdx()]
+            for a in fixed_mol.GetAtoms()
+        ]
 
         for bond in fixed_mol.GetBonds():
             idx1 = bond.GetBeginAtomIdx()

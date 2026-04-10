@@ -2,10 +2,12 @@
 # Distributed under the terms of the Apache License 2.0
 from __future__ import annotations
 
+import functools
 from functools import cached_property
 from typing import Any
 
-from ost import conop, io, mol
+import biotite.structure as struc
+import biotite.structure.io.pdbx as pdbx
 from PDBValidation.Validation import PDBValidation
 from pydantic import ConfigDict, Field
 
@@ -16,80 +18,167 @@ from plinder.data.utils.annotations.get_ligand_validation import (
 )
 from plinder.data.utils.annotations.utils import DocBaseModel
 
-NON_SMALL_MOL_LIG_TYPES = [
-    mol.CHAINTYPE_POLY,
-    mol.CHAINTYPE_POLY_PEPTIDE_D,
-    mol.CHAINTYPE_POLY_PEPTIDE_L,
-    mol.CHAINTYPE_POLY_PEPTIDE_D,
-    mol.CHAINTYPE_POLY_PEPTIDE_L,
-    mol.CHAINTYPE_POLY_DN,
-    mol.CHAINTYPE_POLY_RN,
-    mol.CHAINTYPE_POLY_SAC_D,
-    mol.CHAINTYPE_POLY_SAC_L,
-    mol.CHAINTYPE_POLY_DN_RN,
-    mol.CHAINTYPE_MACROLIDE,
-    mol.CHAINTYPE_CYCLIC_PSEUDO_PEPTIDE,
-    mol.CHAINTYPE_POLY_PEPTIDE_DN_RN,
-    mol.CHAINTYPE_BRANCHED,
-    mol.CHAINTYPE_OLIGOSACCHARIDE,
-    mol.CHAINTYPE_N_CHAINTYPES,
-]
+
+@functools.cache
+def _standard_aa_names() -> set[str]:
+    """Standard amino acid 3-letter codes."""
+    import biotite.structure.info as info
+
+    return set(info.amino_acid_names())
+
+
+@functools.cache
+def _standard_na_names() -> set[str]:
+    """Standard nucleotide 3-letter codes (RNA + DNA)."""
+    return {"A", "C", "G", "U", "DA", "DC", "DG", "DT", "DU"}
+
+
+def _get_chain_type_from_cif(block: pdbx.CIFBlock, entity_id: str) -> str:
+    """Get chain type string from CIF entity/entity_poly categories."""
+    # Try _entity_poly.type first
+    if "entity_poly" in block:
+        ep = block["entity_poly"]
+        ep_ids = ep["entity_id"].as_array()
+        ep_types = ep["type"].as_array()
+        for i, eid in enumerate(ep_ids):
+            if eid == entity_id:
+                return ep_types[i]
+    # Fall back to _entity.type
+    if "entity" in block:
+        ent = block["entity"]
+        ent_ids = ent["id"].as_array()
+        ent_types = ent["type"].as_array()
+        for i, eid in enumerate(ent_ids):
+            if eid == entity_id:
+                return ent_types[i]
+    return "unknown"
+
+
+def get_seqres_from_cif(block: pdbx.CIFBlock) -> dict[str, str]:
+    """Extract SEQRES (one-letter sequences) per chain from CIF."""
+    seqres: dict[str, str] = {}
+    if "entity_poly" not in block:
+        return seqres
+    ep = block["entity_poly"]
+    if "pdbx_strand_id" not in ep or "pdbx_seq_one_letter_code_can" not in ep:
+        return seqres
+    strand_ids = ep["pdbx_strand_id"].as_array()
+    sequences = ep["pdbx_seq_one_letter_code_can"].as_array()
+    for strands, seq in zip(strand_ids, sequences):
+        # Clean up sequence (remove newlines, semicolons)
+        clean_seq = seq.replace("\n", "").replace(";", "").strip()
+        for chain_id in strands.split(","):
+            seqres[chain_id.strip()] = clean_seq
+    return seqres
+
+
+def _is_polypeptide(chain_type_str: str) -> bool:
+    return "polypeptide" in chain_type_str.lower()
+
+
+def _is_polynucleotide(chain_type_str: str) -> bool:
+    return (
+        "polyribonucleotide" in chain_type_str.lower()
+        or "polydeoxyribonucleotide" in chain_type_str.lower()
+    )
+
+
+def _is_polysaccharide(chain_type_str: str) -> bool:
+    return (
+        "polysaccharide" in chain_type_str.lower()
+        or "oligosaccharide" in chain_type_str.lower()
+        or "branched" in chain_type_str.lower()
+    )
+
+
+def _is_water(chain_type_str: str) -> bool:
+    return "water" in chain_type_str.lower()
+
+
+def _is_polymer(chain_type_str: str) -> bool:
+    return "poly" in chain_type_str.lower()
+
+
+def sequences_match_core(seq_a: str, seq_b: str, min_coverage: float = 0.9) -> bool:
+    """Check that two sequences share an identical core (no internal mutations).
+
+    Allows terminal overhangs (N/C-term tags, signal peptides, construct
+    boundaries) but rejects any substitution in the aligned region.
+
+    Uses local alignment to find the best-scoring overlap, then verifies
+    that every aligned position is identical and the alignment covers at
+    least *min_coverage* of the shorter sequence.
+
+    Parameters
+    ----------
+    seq_a, seq_b : str
+        Protein sequences to compare.
+    min_coverage : float
+        Minimum fraction of the shorter sequence that must be aligned.
+
+    Returns
+    -------
+    bool
+        True if the core overlap is 100% identical and coverage is sufficient.
+    """
+    from biotite.sequence import ProteinSequence
+    from biotite.sequence.align import SubstitutionMatrix, align_optimal
+
+    if not seq_a or not seq_b:
+        return False
+    try:
+        s1 = ProteinSequence(seq_a)
+        s2 = ProteinSequence(seq_b)
+    except Exception:
+        return False
+    matrix = SubstitutionMatrix.std_protein_matrix()
+    alignments = align_optimal(s1, s2, matrix, local=True)
+    if not alignments:
+        return False
+    trace = alignments[0].trace
+    n_aligned = 0
+    n_identical = 0
+    for i, j in trace:
+        if i != -1 and j != -1:
+            n_aligned += 1
+            if s1[i] == s2[j]:
+                n_identical += 1
+    min_len = min(len(s1), len(s2))
+    return n_aligned == n_identical and n_aligned >= min_coverage * min_len
 
 
 def detect_ligand_chains(
-    entity: Any,
     entry: Any,
     min_polymer_size: int = 10,
     max_non_small_mol_ligand_length: int = 20,
 ) -> dict[str, str]:
-    """
-    Note
-    ----
-    entity is the first element of the tuple returned by ost.io.LoadMMCIF
-    entry is an Entry object that contains appropriate mappings
-    """
+    """Detect which chains are ligands based on chain type, length, and annotations."""
     ligand_chains = dict()
-    for chain in entity.chains:
-        if chain.type == mol.CHAINTYPE_WATER:
+    for chain_name, chain in entry.chains.items():
+        ct = chain.chain_type_str
+        if _is_water(ct):
             continue
-        # classifying by polymer length and annotations
+
         chain_length = len(chain.residues)
-        bird_id = list(entry.chains[chain.name].mappings.get("BIRD", {"": None}))[0]
-        uniprot_id = list(entry.chains[chain.name].mappings.get("UniProt", {"": None}))[
-            0
-        ]
-        # TODO: Let's revisit this at some point, but I think this logic is too
-        # complicated, could be simplified.
-        if (
-            # chain has PRD id based on BIRD annotation:
-            # https://www.wwpdb.org/data/bird
-            # thus can be considered as ligand!
-            bird_id
-        ) or (
-            # short/medium synthetic peptides that do not map to UniProt are considered ligand
-            chain.is_polypeptide
+        bird_id = list(chain.mappings.get("BIRD", {"": None}))[0]
+        uniprot_id = list(chain.mappings.get("UniProt", {"": None}))[0]
+
+        if (bird_id) or (
+            _is_polypeptide(ct)
             and chain_length <= max_non_small_mol_ligand_length
             and not uniprot_id
         ):
-            ligand_chains[chain.name] = str(chain.type)
+            ligand_chains[chain_name] = ct
 
         elif (
-            # Polymers that do not fall for the exception above and
-            # are longer that certain length to be considered as ligands
-            # TODO: these are all polymer chains, we might want to separate into protein chains and other
-            (chain.is_polypeptide and chain_length >= min_polymer_size)
-            or (chain.is_polynucleotide and chain_length >= min_polymer_size)
-            or (
-                (chain.is_oligosaccharide or chain.is_polysaccharide)
-                and chain_length >= min_polymer_size
-            )
-            or (chain.type == mol.CHAINTYPE_POLY and chain_length >= min_polymer_size)
+            (_is_polypeptide(ct) and chain_length >= min_polymer_size)
+            or (_is_polynucleotide(ct) and chain_length >= min_polymer_size)
+            or (_is_polysaccharide(ct) and chain_length >= min_polymer_size)
+            or (_is_polymer(ct) and chain_length >= min_polymer_size)
         ):
-            # these are excluded!
             continue
         else:
-            # the rest is guessed as being ligand
-            ligand_chains[chain.name] = str(chain.type)
+            ligand_chains[chain_name] = ct
     return ligand_chains
 
 
@@ -102,9 +191,7 @@ class Residue(DocBaseModel):
     name: str
     chem_type: str
     validation: ResidueValidation | None = None
-    """
-    This dataclass defines as system which included a protein-ligand complex
-    and it's neighboring ligands and protein residues
+    """Single residue in a polymer chain.
 
     Parameters
     ----------
@@ -118,7 +205,7 @@ class Residue(DocBaseModel):
         residue one-letter code
     name : str
         residue name
-    chem_type: mol.ChemType
+    chem_type: str
         residue chemical type
 
     Attributes
@@ -132,14 +219,20 @@ class Residue(DocBaseModel):
     """
 
     @cached_property
+    def is_modified(self) -> bool:
+        """Is this a modified residue (PTM for protein, modified base for NA)."""
+        ct = self.chem_type.lower()
+        if "peptide" in ct:
+            return self.name not in _standard_aa_names()
+        if "rna" in ct or "dna" in ct or "nucleotide" in ct:
+            return self.name not in _standard_na_names()
+        return False
+
+    @cached_property
     def is_ptm(self) -> bool:
-        """
-        Does the residue have a post translational modification.
-        """
-        return (
-            mol.ChemType(self.chem_type).IsAminoAcid()
-            and self.name not in conop.STANDARD_AMINOACIDS
-        )
+        """Does the residue have a post-translational modification (protein only)."""
+        ct = self.chem_type.lower()
+        return "peptide" in ct and self.name not in _standard_aa_names()
 
 
 class Chain(DocBaseModel):
@@ -147,7 +240,7 @@ class Chain(DocBaseModel):
     auth_id: str = Field(description="Chain author id")
     entity_id: str = Field(description="Chain entity id")
     chain_type_str: str = Field(
-        description="__Chain type string representation as defined https://openstructure.org/docs/2.8/mol/base/entity/#ost.mol.ChainType"
+        description="__Chain type string from CIF entity_poly.type"
     )
     residues: dict[int, Residue] = Field(
         description="__Dictionary of residues in chain with keys as residue number"
@@ -168,63 +261,109 @@ class Chain(DocBaseModel):
         description="__Crystal validation information for the residues in the chain",
     )
 
-    # Added this because pydantic doesn't know how to validate mol.ChainType
+    # Allow arbitrary types for cached properties
     model_config = ConfigDict(
         arbitrary_types_allowed=True,
     )
 
     @classmethod
-    def from_ost_chain(
-        cls, chain: mol.ChainHandle, info: io.MMCifInfo, length: int
-    ) -> Chain:
-        """Load Chain from ost Chain.
+    def from_cif_data(
+        cls,
+        asym_id: str,
+        block: "pdbx.CIFBlock",
+        atoms: "struc.AtomArray",
+        seqres_length: int,
+    ) -> "Chain":
+        """Create Chain from biotite CIF data.
 
         Parameters
         ----------
-        cls : Chain
-            Chain class
-        chain: mol.ChainHandle :
-            Openstructure mol.ChainHandle
-        info: io.MMCifInfo
-            Openstructure io.MMCifInfo
-        length: int
-            SEQRES length
-
-        Returns
-        -------
-        Chain
+        asym_id : str
+            Chain asymmetric ID.
+        block : pdbx.CIFBlock
+            CIF data block for metadata lookup.
+        atoms : AtomArray
+            Atoms belonging to this chain.
+        seqres_length : int
+            SEQRES length.
         """
-        residues = {
-            residue.number.num: Residue(
-                chain=chain.name,
-                index=residue_index,
-                number=residue.number.num,
-                auth_number=residue.GetStringProp("pdb_auth_resnum"),
-                one_letter_code=residue.one_letter_code,
-                name=residue.name,
-                chem_type=str(residue.chem_type),
+        import biotite.structure as struc
+        import biotite.structure.info as info
+
+        # Build residue dict
+        residues = {}
+        res_starts = struc.get_residue_starts(atoms)
+        for idx, start in enumerate(res_starts):
+            resnum = int(atoms.res_id[start])
+            resname = atoms.res_name[start]
+            auth_resnum = str(atoms.res_id[start])
+            # One-letter code: try amino acid first, then nucleotide
+            olc = "X"
+            try:
+                olc_aa = info.one_letter_code(resname)
+                if olc_aa is not None:
+                    olc = olc_aa
+            except Exception:
+                pass
+            if olc == "X" and resname in _standard_na_names():
+                # Map standard nucleotides to their base letter
+                olc = resname[-1] if len(resname) <= 2 else resname[1]
+            # Determine chem_type from residue name
+            if resname in _standard_aa_names():
+                chem_type = "Peptide Linking"
+            elif resname in _standard_na_names():
+                chem_type = (
+                    "RNA Linking" if resname in {"A", "C", "G", "U"} else "DNA Linking"
+                )
+            else:
+                chem_type = "Non-Polymer"
+            residues[resnum] = Residue(
+                chain=asym_id,
+                index=idx,
+                number=resnum,
+                auth_number=auth_resnum,
+                one_letter_code=olc,
+                name=resname,
+                chem_type=chem_type,
             )
-            for residue_index, residue in enumerate(chain.residues)
-        }
-        auth_id = ""
-        if "." not in chain.name:
-            auth_id = chain.GetStringProp("pdb_auth_chain_name")
-        return cls(
-            asym_id=chain.name,
-            auth_id=auth_id,
-            entity_id=info.GetMMCifEntityIdTr(chain.name),
-            chain_type_str=str(mol.StringFromChainType(chain.type)),
-            residues=residues,
-            length=length,
-            num_unresolved_residues=length - len(residues),
-        )
 
-    @cached_property
-    def chain_type(self) -> mol.ChainType:
-        """
-        __Chain type as defined https://openstructure.org/docs/2.8/mol/base/entity/#ost.mol.ChainType
-        """
-        return mol.ChainTypeFromString(self.chain_type_str)
+        # Get entity_id from _struct_asym
+        entity_id = ""
+        if "struct_asym" in block:
+            sa = block["struct_asym"]
+            sa_ids = sa["id"].as_array()
+            sa_entities = sa["entity_id"].as_array()
+            for i, sa_id in enumerate(sa_ids):
+                if sa_id == asym_id:
+                    entity_id = sa_entities[i]
+                    break
+
+        # Get auth chain ID
+        auth_id = ""
+        if hasattr(atoms, "auth_asym_id"):
+            auth_id = atoms.auth_asym_id[0]
+        elif "atom_site" in block:
+            atom_site = block["atom_site"]
+            if "auth_asym_id" in atom_site:
+                asym_arr = atom_site["label_asym_id"].as_array()
+                auth_arr = atom_site["auth_asym_id"].as_array()
+                for i, a in enumerate(asym_arr):
+                    if a == asym_id:
+                        auth_id = auth_arr[i]
+                        break
+
+        # Get chain type from _entity_poly.type or _entity.type
+        chain_type_str = _get_chain_type_from_cif(block, entity_id)
+
+        return cls(
+            asym_id=asym_id,
+            auth_id=auth_id,
+            entity_id=entity_id,
+            chain_type_str=chain_type_str,
+            residues=residues,
+            length=seqres_length,
+            num_unresolved_residues=seqres_length - len(residues),
+        )
 
     @cached_property
     def residue_index_to_number(self) -> dict[int, int]:

@@ -47,8 +47,7 @@ def rust_pdbfile() -> TextFile:
         return fastpdb.PDBFile
     except ImportError:
         log.warning(
-            "Requested fastpdb engine, but its not installed. "
-            "Falling back to biotite"
+            "Requested fastpdb engine, but its not installed. Falling back to biotite"
         )
         return biotite_pdbfile()
 
@@ -494,8 +493,7 @@ def _align_and_map_sequences(
     subject_common = f"{len(subj_seq_mapped)}/{len(subj_seq)}"
     ref_common = f"{len(ref_seq_mapped)}/{len(ref_seq)}"
     log.debug(
-        f"{subject_common} residues in subject matched to "
-        f"{ref_common} residues in ref"
+        f"{subject_common} residues in subject matched to {ref_common} residues in ref"
     )
 
     # Renumber subject residues to match aligned reference

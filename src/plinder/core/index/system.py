@@ -10,7 +10,8 @@ from typing import TYPE_CHECKING, Any
 import pandas as pd
 
 if TYPE_CHECKING:
-    from ost import mol
+    import biotite.structure as struc
+    from rdkit import Chem
 
 from biotite.sequence.io.fasta import FastaFile
 
@@ -323,34 +324,50 @@ class PlinderSystem:
         return structure.as_posix()
 
     @cached_property
-    def receptor_entity(self) -> "mol.EntityHandle":
+    def receptor_entity(self):
         """
-        Return the receptor entity handle
+        Return the receptor entity handle (OST, for eval scoring).
 
-        Returns
-        -------
-        mol.EntityHandle
-            receptor entity handle
+        Requires ``pip install plinder[eval]``.
         """
         try:
             from ost import io
         except ImportError:
-            raise ImportError("Please install openstructure to use this property")
+            raise ImportError(
+                "OpenStructure is required for receptor_entity. "
+                "Install with: pip install plinder[eval]"
+            )
         return io.LoadMMCIF(self.receptor_cif)
 
     @cached_property
-    def ligand_views(self) -> dict[str, "mol.ResidueView"]:
+    def receptor_structure(self) -> "struc.AtomArray":
         """
-        Return the ligand views
+        Return the receptor structure as biotite AtomArray.
+        """
+        import biotite.structure.io.pdbx as pdbx
 
-        Returns
-        -------
-        dict[str, mol.ResidueView]
+        from plinder.data.utils.annotations.cif_utils import read_mmcif_file
+
+        cif_file = read_mmcif_file(self.receptor_cif)
+        atoms = pdbx.get_structure(
+            cif_file, model=1, use_author_fields=False, include_bonds=True
+        )
+        return atoms[atoms.element != "H"]
+
+    @cached_property
+    def ligand_views(self):
+        """
+        Return the ligand views (OST, for eval scoring).
+
+        Requires ``pip install plinder[eval]``.
         """
         try:
             from ost import io
         except ImportError:
-            raise ImportError("Please install openstructure to use this property")
+            raise ImportError(
+                "OpenStructure is required for ligand_views. "
+                "Install with: pip install plinder[eval]"
+            )
 
         ligand_views = {}
         for chain in self.ligand_sdfs:
@@ -358,6 +375,24 @@ class PlinderSystem:
                 self.ligand_sdfs[chain], format="sdf"
             ).Select("ele != H")
         return ligand_views
+
+    @cached_property
+    def ligand_mols(self) -> dict[str, "Chem.Mol"]:
+        """
+        Return the ligand molecules as RDKit Mol objects.
+        """
+        from peppr import sanitize as peppr_sanitize
+        from rdkit import Chem
+
+        mols = {}
+        for chain in self.ligand_sdfs:
+            supplier = Chem.SDMolSupplier(self.ligand_sdfs[chain], sanitize=False)
+            mol = next(supplier, None)
+            if mol is not None:
+                peppr_sanitize(mol)
+                mol = Chem.RemoveAllHs(mol)
+                mols[chain] = mol
+        return mols
 
     @property
     def num_ligands(self) -> int:

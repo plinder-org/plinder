@@ -5,14 +5,16 @@ from __future__ import annotations
 import itertools
 import logging
 import re
+import sqlite3
 import typing as ty
 from collections import Counter, defaultdict
 from functools import cache, cached_property
 from pathlib import Path
 
+import biotite.structure as struc
+import biotite.structure.info as bt_info
+import numpy as np
 import pandas as pd
-from ost import conop, io, mol
-from ost.conop import GetDefaultLib
 from peppr import sanitize as peppr_sanitize
 from pydantic import BeforeValidator, Field
 from rdkit import Chem, RDLogger
@@ -20,177 +22,161 @@ from rdkit.Chem import QED, Crippen, rdMolDescriptors
 from rdkit.Chem import rdMolDescriptors as rdMD
 from rdkit.Chem.rdchem import Mol
 
-from plinder.core.structure.smallmols_utils import (
-    get_matched_template,
-    get_matched_template_v2,
-    mol_assigned_bond_orders_by_template,
-    uncharge_mol,
-)
 from plinder.core.utils.config import get_config
 from plinder.core.utils.constants import BASE_DIR
-from plinder.data.utils.annotations.cif_utils import ost_ent_to_rdkit_mol
 from plinder.data.utils.annotations.interaction_utils import (
     extract_ligand_links_to_neighbouring_chains,
-    get_plip_hash,
-    run_plip_on_split_structure,
+    run_peppr_interactions,
 )
-from plinder.data.utils.annotations.protein_utils import Chain
+from plinder.data.utils.annotations.interface_gap import (
+    annotate_interface_gaps_per_chain,
+)
+from plinder.data.utils.annotations.protein_utils import Chain, sequences_match_core
 from plinder.data.utils.annotations.utils import DocBaseModel
 
-COMPOUND_LIB = GetDefaultLib()
-PRD_LIB = conop.CompoundLib.Load(
-    str(BASE_DIR / "data/utils/annotations/static_files/prdcc.chemlib")
-)
+_PRD_DB_PATH = str(BASE_DIR / "data/utils/annotations/static_files/prdcc.chemlib")
 LOG = logging.getLogger(__name__)
 
 
-def ligand_ost_ent_to_rdkit_mol(
-    ent: mol.EntityHandle,
-    ligand_smiles: str | None = None,
-    ligand_num_unresolved_heavy_atoms: int = 0,
-) -> Mol:
-    new_chains = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-    edi = ent.EditXCS(mol.BUFFERED_EDIT)
-    for i, chain in enumerate(ent.GetChainList()):
-        edi.RenameChain(chain, f"{new_chains[i]}")
-    for residue in ent.residues:
-        if len(residue.name) > 3:
-            edi.RenameResidue(residue, residue.name[:3])
-    edi.UpdateICS()
+def _check_stereo_vs_template(resolved_mol: "Chem.Mol") -> bool | None:
+    """Compare per-atom CIP codes between resolved 3D and CCD template.
 
-    rdkit_mol = ost_ent_to_rdkit_mol(ent)
+    Works for single and multi-residue ligands by checking each residue
+    independently against its CCD template.
 
-    if ligand_smiles:
-        try:
-            peppr_sanitize(rdkit_mol)
-            if Chem.CanonSmiles(ligand_smiles) == Chem.CanonSmiles(
-                Chem.MolToSmiles(rdkit_mol)
-            ):
-                return rdkit_mol
-            else:
-                raise AssertionError("SMILES do not match reference - will try fixing")
-        except Exception as e:
-            LOG.warning(f"ligand_ost_ent_to_rdkit_mol: {e}")
-        try:
-            sdfstring_ost = io.EntityToSDFStr(ent).strip()
-            rdkit_mol_tmp = Chem.MolFromMolBlock(sdfstring_ost, sanitize=False)
-            rdkit_mol_tmp = Chem.RemoveAllHs(rdkit_mol_tmp, sanitize=False)
-            try:
-                peppr_sanitize(rdkit_mol_tmp)
-            except Exception:
-                LOG.warning(
-                    "peppr_sanitize: failed before mol_assigned_bond_orders_by_template"
-                )
-            template = Chem.MolFromSmiles(ligand_smiles)
-            if ligand_num_unresolved_heavy_atoms > 0:
-                template = get_matched_template(template, rdkit_mol_tmp)
-            try:
-                rdkit_mol = mol_assigned_bond_orders_by_template(
-                    template, rdkit_mol_tmp
-                )
-            except ValueError as e:
-                LOG.error(
-                    f"template bonds could not be assigned: {e}; "
-                    f"template_smiles: {ligand_smiles}"
-                )
-                raise ValueError("cannot assign bonds by SMILES")
-        except Exception as e:
-            LOG.warning(f"ligand_ost_ent_to_rdkit_mol: {e}")
-    try:
-        peppr_sanitize(rdkit_mol)
-        rdkit_mol = uncharge_mol(rdkit_mol)
-        if len(Chem.MolToSmiles(rdkit_mol).split(".")) > 1:
+    When atoms are missing (partially resolved ligand), the CCD template
+    is trimmed via MCS to match the resolved atom set, then CIP codes
+    are re-assigned on the trimmed template before comparison.  This
+    avoids false mismatches from missing substituents changing CIP
+    priority.
+
+    Only stereocenters that are defined in *both* template and resolved
+    mol are compared.  Centers that are ambiguous (defined in only one
+    side) are skipped — but at least one defined center must be compared
+    for the result to be meaningful.
+
+    Returns True if all compared centers match, False if any differ,
+    None if no CCD template available or no comparable centers.
+    """
+    from plinder.core.structure.smallmols_utils import get_matched_template
+
+    # Group atoms by (resname, res_id) to handle repeated residue names
+    # e.g. a glycan with 3x NAG at different res_ids
+    residue_atoms: dict[tuple[str, int], list[int]] = {}
+    for atom in resolved_mol.GetAtoms():
+        info = atom.GetPDBResidueInfo()
+        if info is None:
             raise ValueError(
-                f"rdkit_mol seems fragmented: {Chem.MolToSmiles(rdkit_mol)}"
+                f"Atom {atom.GetIdx()} in resolved mol has no PDB residue info"
             )
-    except Exception as e:
-        LOG.error(f"ligand_ost_ent_to_rdkit_mol: could not fix: {e}")
-    return rdkit_mol
+        key = (info.GetResidueName().strip(), info.GetResidueNumber())
+        residue_atoms.setdefault(key, []).append(atom.GetIdx())
 
+    has_template = False
+    n_compared = 0
+    for (resname, res_id), atom_indices in residue_atoms.items():
+        ccd_mol = _get_ccd_mol(resname)
+        if ccd_mol is None:
+            continue
+        has_template = True
+        n_resolved = len(atom_indices)
 
-def set_smiles_from_ligand_ost(ent: mol.EntityHandle) -> str:
-    residues = [res.name for res in ent.residues]
-    if len(residues) == 1:
-        resname = residues[0]
-        if resname.startswith("PRD_"):
-            comp = PRD_LIB.FindCompound(resname)
-        else:
-            comp = COMPOUND_LIB.FindCompound(resname)
-        if comp is not None:
+        # Build per-atom CIP map for this specific residue copy
+        resolved_cip: dict[str, str] = {}
+        for idx in atom_indices:
+            atom = resolved_mol.GetAtomWithIdx(idx)
+            info = atom.GetPDBResidueInfo()
+            cip = atom.GetPropsAsDict().get("_CIPCode", "")
+            if cip:
+                resolved_cip[info.GetName().strip()] = cip
+
+        # If partially resolved, trim template via MCS
+        if n_resolved < ccd_mol.GetNumAtoms():
             try:
-                rdkit_mol = Chem.MolFromSmiles(str(comp.smiles), sanitize=False)
-                peppr_sanitize(rdkit_mol)
-                rdkit_mol = uncharge_mol(rdkit_mol)
-                return str(Chem.MolToSmiles(rdkit_mol))
-            except Exception:
-                LOG.warning(
-                    "set_smiles_from_ligand_ost: CCD smiles could not be loaded"
+                # Extract just this residue's fragment for MCS
+                frag = Chem.RWMol(resolved_mol)
+                remove = [
+                    a.GetIdx()
+                    for a in resolved_mol.GetAtoms()
+                    if a.GetIdx() not in atom_indices
+                ]
+                frag.BeginBatchEdit()
+                for idx in sorted(remove, reverse=True):
+                    frag.RemoveAtom(idx)
+                frag.CommitBatchEdit()
+                trimmed = get_matched_template(ccd_mol, frag.GetMol())
+                Chem.AssignStereochemistry(trimmed, cleanIt=True, force=True)
+            except Exception as e:
+                LOG.warning(f"Template trimming failed for {resname}:{res_id}: {e}")
+                trimmed = ccd_mol
+        else:
+            trimmed = ccd_mol
+
+        # Compare CIP codes only where both sides are defined
+        for atom in trimmed.GetAtoms():
+            info = atom.GetPDBResidueInfo()
+            if info is None:
+                raise ValueError(
+                    f"Atom {atom.GetIdx()} in CCD template {resname} "
+                    "lost PDB residue info after trimming"
                 )
-    rdkit_mol = ligand_ost_ent_to_rdkit_mol(ent)
+            template_cip = atom.GetPropsAsDict().get("_CIPCode", "")
+            if not template_cip:
+                continue
+            atom_name = info.GetName().strip()
+            resolved_cip_val = resolved_cip.get(atom_name, "")
+            if not resolved_cip_val:
+                continue
+            n_compared += 1
+            if resolved_cip_val != template_cip:
+                return False
+
+    if not has_template:
+        return None
+    if n_compared == 0:
+        return None
+    return True
+
+
+@cache
+def _get_ccd_mol(comp_id: str) -> "Chem.Mol | None":
+    """Return an RDKit Mol from CCD ideal coordinates with stereo assigned."""
     try:
-        return str(Chem.MolToSmiles(rdkit_mol))
+        from biotite.interface import rdkit as rdkit_interface
+
+        ref = bt_info.residue(comp_id)
+        ref_heavy = ref[ref.element != "H"]
+        ref_heavy.bonds = struc.connect_via_residue_names(ref_heavy)
+        mol = rdkit_interface.to_mol(ref_heavy)
+        peppr_sanitize(mol)
+        Chem.AssignStereochemistryFrom3D(mol)
+        return mol
     except Exception as e:
-        LOG.error(f"set_smiles_from_ligand_ost: {e}")
-        return "None"
+        LOG.warning(f"Failed to get CCD mol for {comp_id}: {e}")
+        return None
 
 
-def set_smiles_from_ligand_ost_v2(ent: mol.EntityHandle) -> tuple[str, str]:
-    input_smiles = ""
-    residues = [res.name for res in ent.residues]
-    if len(residues) == 1:
-        resname = residues[0]
-        if resname.startswith("PRD_"):
-            comp = PRD_LIB.FindCompound(resname)
-        else:
-            comp = COMPOUND_LIB.FindCompound(resname)
-        if comp is not None:
-            try:
-                template_mol = Chem.MolFromSmiles(str(comp.smiles), sanitize=False)
-                peppr_sanitize(template_mol)
-                input_smiles = str(Chem.MolToSmiles(template_mol))
-            except Exception:
-                LOG.warning(
-                    "set_smiles_from_ligand_ost_v2: CCD smiles could not be loaded"
-                )
-    resolved_mol = ligand_ost_ent_to_rdkit_mol(ent)
-    if input_smiles:
-        matched_template = get_matched_template_v2(template_mol, resolved_mol)
-        matched_smiles = Chem.CanonSmiles(Chem.MolToSmiles(matched_template))
-    else:
-        matched_smiles = Chem.CanonSmiles(str(Chem.MolToSmiles(resolved_mol)))
-        input_smiles = matched_smiles
-    return input_smiles, matched_smiles
+def _get_ccd_smiles(comp_id: str) -> str | None:
+    """Get SMILES from CCD via biotite, with stereochemistry from ideal 3D."""
+    mol = _get_ccd_mol(comp_id)
+    if mol is None:
+        return None
+    return str(Chem.MolToSmiles(mol))
 
 
-PEPTIDE_TYPES = [
-    mol.CHAINTYPE_POLY,
-    mol.CHAINTYPE_POLY_PEPTIDE_D,
-    mol.CHAINTYPE_POLY_PEPTIDE_L,
-]
-
-DNA_TYPES = [mol.CHAINTYPE_POLY_DN]
-
-RNA_TYPES = [mol.CHAINTYPE_POLY_RN]
-
-MIXED_NUCLEIC_ACID_TYPES = [mol.CHAINTYPE_POLY_DN_RN, mol.CHAINTYPE_POLY_PEPTIDE_DN_RN]
-
-OLIGOSACCHARIDE_TYPES = [
-    mol.CHAINTYPE_POLY_SAC_D,
-    mol.CHAINTYPE_POLY_SAC_L,
-    mol.CHAINTYPE_OLIGOSACCHARIDE,
-    mol.CHAINTYPE_BRANCHED,
-]
-
-MACROCYCLE_TYPES = [mol.CHAINTYPE_MACROLIDE, mol.CHAINTYPE_CYCLIC_PSEUDO_PEPTIDE]
-
-NON_SMALL_MOL_LIG_TYPES = (
-    PEPTIDE_TYPES
-    + DNA_TYPES
-    + RNA_TYPES
-    + MIXED_NUCLEIC_ACID_TYPES
-    + OLIGOSACCHARIDE_TYPES
-    + MACROCYCLE_TYPES
-)
+def _get_prd_smiles(comp_id: str) -> str | None:
+    """Get SMILES from PRD library (SQLite)."""
+    try:
+        conn = sqlite3.connect(_PRD_DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT smiles FROM chem_compounds WHERE tlc = ?", (comp_id,))
+        row = cursor.fetchone()
+        conn.close()
+        if row and row[0]:
+            return str(row[0])
+    except Exception:
+        LOG.warning(f"Failed to fetch PRD SMILES for {comp_id}")
+    return None
 
 
 def lig_has_dummies(
@@ -222,6 +208,7 @@ def lig_has_dummies(
 
 
 def get_ccd_smiles_dict(ciffile: Path) -> dict[str, str]:
+    """Load CCD component SMILES from a parquet file next to *ciffile*."""
     df = pd.read_parquet(ciffile.parent / "components.parquet")
     return dict(zip(df["binder_id"], df["canonical_smiles"]))
 
@@ -284,6 +271,7 @@ BINDING_AFFINITY = None
 
 
 def add_missed_synonyms(current_set: set[str]) -> set[str]:
+    """Expand a set of CCD codes with any known synonyms."""
     assert LIST_OF_CCD_SYNONYMS is not None
     missed_synonyms = [
         x.difference(current_set)
@@ -294,6 +282,7 @@ def add_missed_synonyms(current_set: set[str]) -> set[str]:
 
 
 def get_unique_ccd_longname(longname: str) -> str:
+    """Map a composite CCD code to its canonical synonym form."""
     assert CCD_SYNONYMS_DICT is not None
 
     if longname.startswith("PRD_"):
@@ -302,36 +291,24 @@ def get_unique_ccd_longname(longname: str) -> str:
         return "-".join([CCD_SYNONYMS_DICT.get(s, s) for s in longname.split("-")])
 
 
-def get_chain_type(chain_type: str) -> str:
-    """
-    Get chain type
-
-    Parameter
-    ---------
-    chain_type : str,
-        ost chain type
-
-    Return
-    ------
-    str
-        ligand type
-    """
-    if chain_type == mol.CHAINTYPE_NON_POLY:
+def get_chain_type(chain_type_str: str) -> str:
+    """Classify chain type string into ligand category."""
+    ct = chain_type_str.lower()
+    if "non-polymer" in ct:
         return "SMALLMOLECULE"
-    if chain_type in PEPTIDE_TYPES:
+    if "polypeptide" in ct:
         return "PEPTIDE"
-    elif chain_type in DNA_TYPES:
-        return "DNA"
-    elif chain_type in RNA_TYPES:
-        return "RNA"
-    elif chain_type in MIXED_NUCLEIC_ACID_TYPES:
+    if "polydeoxyribonucleotide" in ct and "polyribonucleotide" in ct:
         return "MIXED"
-    elif chain_type in OLIGOSACCHARIDE_TYPES:
+    if "polydeoxyribonucleotide" in ct:
+        return "DNA"
+    if "polyribonucleotide" in ct:
+        return "RNA"
+    if "polysaccharide" in ct or "oligosaccharide" in ct or "branched" in ct:
         return "SACCHARIDE"
-    elif chain_type in MACROCYCLE_TYPES:
+    if "macrolide" in ct or "cyclic-pseudo-peptide" in ct:
         return "MACROCYCLES"
-    else:
-        return "UNKNOWN"
+    return "UNKNOWN"
 
 
 @cache
@@ -438,6 +415,7 @@ def parse_artifacts() -> set[str]:
 
 @cache
 def parse_kinase_inhibitors(data_dir: Path) -> set[str]:
+    """Load set of CCD codes for known kinase inhibitors."""
     from plinder.data.pipeline.io import download_kinase_data
 
     kinase_ligand_path = download_kinase_data(data_dir=data_dir)
@@ -448,12 +426,14 @@ def parse_kinase_inhibitors(data_dir: Path) -> set[str]:
 
 @cache
 def get_binding_affinity(data_dir: Path) -> ty.Any:
+    """Load BindingDB affinity data (pchembl values + target sequences)."""
     from plinder.data.pipeline.io import download_affinity_data
 
     return download_affinity_data(data_dir=data_dir)
 
 
 def get_num_resolved_heavy_atoms(resolved_smiles: str) -> int:
+    """Count heavy atoms in the resolved SMILES (0 if unparseable)."""
     matched_mol = Chem.MolFromSmiles(resolved_smiles, sanitize=False)
     if matched_mol is None:
         return 0
@@ -547,102 +527,15 @@ def is_excluded_mol(
 
 
 def is_single_atom_or_ion(mol: Mol) -> bool:
+    """True if the molecule is a single non-organic heavy atom (metal ion)."""
     numHA = mol.GetNumHeavyAtoms()
     skip_single_elems = Chem.MolFromSmarts("[#6,#1,#0,#7,#8,#15,#16,#34,#52]")
     numCHNOPSetc = len(mol.GetSubstructMatches(skip_single_elems))
     return numHA == 1 and numCHNOPSetc == 0
 
 
-def annotate_interface_gaps_per_chain(
-    interface_proximal_gaps: dict[str, dict[tuple[str, str], dict[str, int]]],
-    asym_id: str,
-) -> tuple[int | None, ...]:
-    try:
-        ppi_atoms_within_4A_of_gap = sum(
-            [
-                v["interface_atom_gaps_4A"]
-                for k, v in interface_proximal_gaps[
-                    "ppi_interface_gap_annotation"
-                ].items()
-                if asym_id in k
-            ]
-        )
-    except TypeError:
-        ppi_atoms_within_4A_of_gap = None
-
-    try:
-        ppi_atoms_within_8A_of_gap = sum(
-            [
-                v["interface_atom_gaps_8A"]
-                for k, v in interface_proximal_gaps[
-                    "ppi_interface_gap_annotation"
-                ].items()
-                if asym_id in k
-            ]
-        )
-    except TypeError:
-        ppi_atoms_within_8A_of_gap = None
-    try:
-        num_missing_ppi_interface_residues = sum(
-            [
-                v["missing_interface_residues_4A"]
-                for k, v in interface_proximal_gaps[
-                    "ppi_interface_gap_annotation"
-                ].items()
-                if asym_id in k
-            ]
-        )
-    except TypeError:
-        num_missing_ppi_interface_residues = None
-    try:
-        pli_atoms_within_4A_of_gap = sum(
-            [
-                v["interface_atom_gaps_4A"]
-                for k, v in interface_proximal_gaps[
-                    "ligand_interface_gap_annotation"
-                ].items()
-                if asym_id in k
-            ]
-        )
-    except TypeError:
-        pli_atoms_within_4A_of_gap = None
-
-    try:
-        pli_atoms_within_8A_of_gap = sum(
-            [
-                v["interface_atom_gaps_8A"]
-                for k, v in interface_proximal_gaps[
-                    "ligand_interface_gap_annotation"
-                ].items()
-                if asym_id in k
-            ]
-        )
-    except TypeError:
-        pli_atoms_within_8A_of_gap = None
-    try:
-        num_missing_pli_interface_residues = sum(
-            [
-                v["missing_interface_residues_4A"]
-                for k, v in interface_proximal_gaps[
-                    "ligand_interface_gap_annotation"
-                ].items()
-                if asym_id in k
-            ]
-        )
-    except TypeError:
-        num_missing_pli_interface_residues = None
-
-    return (
-        ppi_atoms_within_4A_of_gap,
-        ppi_atoms_within_8A_of_gap,
-        num_missing_ppi_interface_residues,
-        pli_atoms_within_4A_of_gap,
-        pli_atoms_within_8A_of_gap,
-        num_missing_pli_interface_residues,
-    )
-
-
 def validate_chain_residue(obj: dict[str, ty.Any]) -> dict[str, ty.Any]:
+    """Recursively coerce string dict keys to ints or tuples for pydantic."""
     clean = {}
     for k, v in obj.items():
         if isinstance(k, str):
@@ -681,23 +574,33 @@ class Ligand(DocBaseModel):
         default_factory=str,
         description="Ligand Chemical Component Dictionary (CCD) code",
     )
-    plip_type: str = Field(default_factory=str, description="PLIP ligand type")
+    # TODO: rename plip_type → chain_type; name kept for backward compatibility
+    # (PLIP tool is no longer used — replaced by peppr)
+    plip_type: str = Field(
+        default_factory=str, description="Ligand chain type classification"
+    )
     bird_id: str = Field(default_factory=str, description="Ligand BIRD id")
     centroid: list[float] = Field(
         default_factory=list, description="Ligand center of geometry"
     )
     smiles: str = Field(
         default_factory=str,
-        description="Ligand SMILES based on OpenStructure dictionary lookup, or resolved SMILES if not in dictionary",
+        description="Ligand SMILES from CCD/PRD lookup, or derived from resolved 3D if not in dictionary",
     )
     resolved_smiles: str = Field(
-        default_factory=str, description="SMILES of only resolved ligand atoms"
+        default_factory=str,
+        description="SMILES from resolved 3D coordinates: bond orders from CCD template, stereochemistry from 3D geometry",
+    )
+    resolved_stereo_matches_template: bool | None = Field(
+        default=None,
+        description="Whether resolved 3D stereo matches CCD template (None if achiral or no template)",
     )
     residue_numbers: list[int] = Field(
         default_factory=list, description="__Ligand residue numbers"
     )
     rdkit_canonical_smiles: str | None = Field(
-        default=None, description="RDKit canonical SMILES (Recommended)"
+        default=None,
+        description="RDKit canonical SMILES (same as smiles; kept for schema compatibility)",
     )
     molecular_weight: float | None = Field(default=None, description="Molecular weight")
     crippen_clogp: float | None = Field(
@@ -722,9 +625,8 @@ class Ligand(DocBaseModel):
     )
     covalent_linkages: set[str] = Field(
         default_factory=set[str],
-        description="Ligand covalent linkages as described in https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Categories/struct_conn.html "
-        + "with _struct_conn.conn_type_id == 'covale', reported in format "
-        + "{auth_resid}:{resname}{assym_id}{seq_resid}{atom_name}__{auth_resid}:{resname}{assym_id}{seq_resid}{atom_name}",
+        description="Ligand covalent linkages from _struct_conn (conn_type_id='covale'), "
+        + "format: {auth_seq}:{comp_id}:{chain}:{seq}:{atom}__{auth_seq}:{comp_id}:{chain}:{seq}:{atom}",
     )
     neighboring_residues: dict[str, list[int]] = Field(
         default_factory=dict,
@@ -734,6 +636,10 @@ class Ligand(DocBaseModel):
         default_factory=list,
         description="__List of neighboring ligands {instance}.{chain}",
     )
+    receptor_seqres: dict[str, str] = Field(
+        default_factory=dict,
+        description="__SEQRES sequences of neighboring receptor chains for affinity validation",
+    )
     interacting_residues: dict[str, list[int]] = Field(
         default_factory=dict,
         description="Dictionary of interacting residues, with {instance}.{chain} key and residue number value",
@@ -742,13 +648,15 @@ class Ligand(DocBaseModel):
         default_factory=list,
         description="__List of interacting ligands {instance}.{chain}",
     )
+    # TODO: rename interactions description; hash format kept for backward compatibility
+    # (now computed by peppr, not PLIP)
     interactions: dict[str, dict[int, list[str]]] = Field(
         default_factory=dict,
-        description="__Dictionary of {instance}.{chain} to residue number to list of PLIP hashes",
+        description="__Dictionary of {instance}.{chain} to residue number to list of interaction hashes",
     )
     neighboring_residue_threshold: float = Field(
         default=6.0,
-        description="__Maximum distance to consider protein residues neighboring",
+        description="__Maximum distance to consider receptor residues (protein/NA) neighboring",
     )
     neighboring_ligand_threshold: float = Field(
         default=4.0, description="__Maximum distance to consider ligands neighboring"
@@ -838,18 +746,18 @@ class Ligand(DocBaseModel):
         default_factory=dict,
         description="__Results from running posebusters with 're-dock'",
     )
-    """
-    This dataclass defines as system which included a protein-ligand complex
-    and it's neighboring ligands and protein residues
+    """Ligand annotation dataclass.
 
+    Holds structural, chemical, and interaction annotations for a single
+    ligand chain in a protein–ligand (or NA–ligand) complex.
     """
 
     def set_rdkit(self) -> None:
+        """Compute RDKit molecular descriptors from ``self.smiles``."""
         try:
             rdkit_compatible_mol = Chem.MolFromSmiles(self.smiles)
-            # TODO: Watch out for round trip issues reported in
-            # https://github.com/rdkit/rdkit/issues/1740
-            self.rdkit_canonical_smiles = Chem.CanonSmiles(self.smiles)
+            # smiles is already canonical (from MolToSmiles); kept for schema compat
+            self.rdkit_canonical_smiles = self.smiles
             self.molecular_weight = rdMolDescriptors.CalcExactMolWt(
                 rdkit_compatible_mol
             )
@@ -876,15 +784,18 @@ class Ligand(DocBaseModel):
             # classify ligand based on above molecule
             self.classify_ligand_type(rdkit_compatible_mol)
 
-        except:
+        except Exception:
             logging.warning(f"Error in setting rdkit for {self.id}")
-            self.is_invalid = True
-            pass
+            # Multi-residue ligands (peptides) may fail SMILES derivation
+            # but are still structurally valid
+            if self.smiles is None:
+                self.is_invalid = True
 
     def classify_ligand_type(self, mol: Mol) -> None:
-        """Get more granular classification of ligand.
-        Use oligo smarts and lipinski rules to assign ligand classifications in
-        addition to ligand classification obtained from PLIP
+        """Classify ligand as ion, Lipinski, fragment, oligo, or artifact.
+
+        Uses SMARTS patterns and Lipinski rules to assign granular type
+        beyond the chain-type classification.
 
         Note
         ----
@@ -946,50 +857,61 @@ class Ligand(DocBaseModel):
         cls,
         pdb_id: str,
         biounit_id: str,
-        biounit: mol.EntityHandle,
+        biounit: ty.Any,
         ligand_instance: int,
         ligand_chain: Chain,
         residue_numbers: list[int],
         ligand_like_chains: dict[str, str],
         interface_proximal_gaps: dict[str, dict[tuple[str, str], dict[str, int]]],
         all_covalent_dict: dict[str, list[tuple[str, str]]],
+        # TODO: rename plip_complex_threshold -> complex_threshold
         plip_complex_threshold: float = 10.0,
         neighboring_residue_threshold: float = 6.0,
         neighboring_ligand_threshold: float = 4.0,
         data_dir: ty.Optional[Path] = None,
+        chain_to_seqres: dict[str, str] | None = None,
     ) -> Ligand | None:
-        """
-        Load ligand object from protein-ligand interaction complex
-        along with other information binding site information
+        """Build a Ligand from a biounit AtomArray and chain metadata.
+
+        Extracts SMILES (CCD template → resolved 3D fallback), computes
+        interactions via peppr, finds neighboring residues/ligands, and
+        validates stereochemistry against the CCD template.
+
         Parameters
         ----------
-        cls : Ligand
         pdb_id : str
+            PDB entry identifier.
         biounit_id : str
-        biounit : mol.EntityHandle
-            Biounit openstructure mol.EntityHandle
+            Biological assembly identifier.
+        biounit : struc.AtomArray
+            Full biounit atoms with bonds.
         ligand_instance : int
-            Ligand biounit instance
+            Instance index within the biounit.
         ligand_chain : Chain
-            Ligand chain object
-        ligand_like_chains: dict[str, str]
-            Chain: chain type for other ligand-like chains in the entry
-        interface_proximal_gaps: dict[str, dict[tuple[str, str], dict[str, int]]]
-            TODO: document
+            Chain metadata for the ligand.
+        residue_numbers : list[int]
+            Residue numbers belonging to this ligand.
+        ligand_like_chains : dict[str, str]
+            Other ligand-like chains in the entry ``{chain_id: chain_type}``.
+        interface_proximal_gaps : dict
+            Gap annotation from ``annotate_interface_gaps()``.
         all_covalent_dict : dict[str, list[tuple[str, str]]]
-            All "covalent" residue in entry as defined by mmcif annotations.
-            They types are separated by dictionary key and they include:
-                "covale": actual covalent linkage
-                "metalc": other dative bond interactions\
-                     like metal-ligand dative bond
-                "hydrogc": strong hydorogen bonding of nucleic acid
-            For the purpose of covalent annotations, we selected "covale" for
-            downstream processing.
-        plip_complex_threshold: float = 10.0
-            Maximum distance from ligand to residues to be
-            included for pli calculations.
+            Covalent linkages by type (``"covale"``, ``"metalc"``, ``"hydrogc"``).
+        plip_complex_threshold : float
+            Max distance (Å) for receptor atoms to include in interaction analysis.
+        neighboring_residue_threshold : float
+            Max distance (Å) for neighboring receptor residue detection.
+        neighboring_ligand_threshold : float
+            Max distance (Å) for neighboring ligand detection.
         data_dir : Path, optional
-            location of plinder root
+            Plinder data root for loading cofactors, affinity, etc.
+        chain_to_seqres : dict[str, str], optional
+            SEQRES per chain for binding affinity validation.
+
+        Returns
+        -------
+        Ligand or None
+            Populated Ligand object, or None if no atoms found.
         """
         if data_dir is not None:
             global \
@@ -1009,58 +931,156 @@ class Ligand(DocBaseModel):
                 KINASE_INHIBITORS = parse_kinase_inhibitors(data_dir)
             if BINDING_AFFINITY is None:
                 BINDING_AFFINITY = get_binding_affinity(data_dir)
+
         ligand_instance_chain = f"{ligand_instance}.{ligand_chain.asym_id}"
-        residue_selection = " or ".join(f"rnum={rnum}" for rnum in residue_numbers)
-        ligand_selection = f"cname={mol.QueryQuoteName(ligand_instance_chain)} and ({residue_selection})"
-        biounit_selection = mol.CreateEntityFromView(
-            biounit.Select(
-                f"{plip_complex_threshold} <> [{ligand_selection}]",
-                mol.QueryFlag.MATCH_RESIDUES,
-            ),
-            True,
+
+        # Select ligand atoms from biounit (AtomArray)
+        lig_mask = (biounit.chain_id == ligand_instance_chain) & np.isin(
+            biounit.res_id, residue_numbers
         )
-        plip_output = run_plip_on_split_structure(
-            biounit,
-            biounit_selection,
-            ligand_instance_chain,
-        )
-        if plip_output is None:
+        if not np.any(lig_mask):
+            LOG.warning(f"from_pli: no ligand atoms for {ligand_instance_chain}")
             return None
-        (interactions, plip_chain_mapping) = plip_output
+
+        # Find complete residues within threshold distance of ligand
+        lig_coords = biounit.coord[lig_mask]
+        cell_list = struc.CellList(biounit, plip_complex_threshold)
+        nearby_atom_mask = np.zeros(len(biounit), dtype=bool)
+        for coord in lig_coords:
+            indices = cell_list.get_atoms(coord, radius=plip_complex_threshold)
+            nearby_atom_mask[indices[indices >= 0]] = True
+        # Expand to complete residues to avoid broken aromatic rings
+        nearby_mask = np.any(
+            struc.get_residue_masks(biounit, np.where(nearby_atom_mask)[0]),
+            axis=0,
+        )
+        nearby_atoms = biounit[nearby_mask]
+
+        # Bonds propagate from biounit through array slicing;
+        # only re-derive if missing
+        if nearby_atoms.bonds is None:
+            nearby_atoms.bonds = struc.connect_via_residue_names(nearby_atoms)
+
+        # Split into receptor/ligand/water/metal
+        receptor_mask = struc.filter_amino_acids(
+            nearby_atoms
+        ) | struc.filter_nucleotides(nearby_atoms)
+        ligand_mask_local = nearby_atoms.chain_id == ligand_instance_chain
+        water_mask = struc.filter_solvent(nearby_atoms)
+        metal_mask = struc.filter_monoatomic_ions(nearby_atoms) & ~ligand_mask_local
+
+        receptor_arr = nearby_atoms[receptor_mask & ~water_mask & ~metal_mask]
+        ligand_arr = nearby_atoms[ligand_mask_local & ~water_mask]
+        water_arr = nearby_atoms[water_mask]
+        metal_arr = nearby_atoms[metal_mask]
+
+        if receptor_arr.array_length() == 0 or ligand_arr.array_length() == 0:
+            LOG.warning(
+                f"from_pli: empty receptor or ligand for {ligand_instance_chain}"
+            )
+            return None
+
+        # Chain mapping: chain_id is already in instance.asym format
+        inv_mapping = {c: c for c in np.unique(nearby_atoms.chain_id)}
+
+        peppr_interactions, peppr_waters = run_peppr_interactions(
+            receptor_arr,
+            ligand_arr,
+            water_arr,
+            metal_arr,
+            ligand_instance_chain,
+            inv_mapping,
+        )
+
+        # Get CCD codes from ligand atoms (one per residue, preserving duplicates)
+        lig_atoms = biounit[lig_mask]
         ccd_code = "-".join(
-            biounit.FindResidue(ligand_instance_chain, residue_number).name
-            for residue_number in residue_numbers
+            lig_atoms.res_name[lig_atoms.res_id == rn][0]
+            for rn in residue_numbers
+            if np.any(lig_atoms.res_id == rn)
         )
-        ligand_ost_ent = mol.CreateEntityFromView(
-            biounit.Select(ligand_selection), True
+        # Get SMILES from CCD template via biotite, fall back to structure
+        from biotite.interface import rdkit as rdkit_interface
+
+        smiles = None
+        lig_heavy = lig_atoms[lig_atoms.element != "H"]
+        res_names = list(
+            dict.fromkeys(
+                lig_heavy.res_name[lig_heavy.res_id == rn][0]
+                for rn in residue_numbers
+                if np.any(lig_heavy.res_id == rn)
+            )
         )
-        smiles = set_smiles_from_ligand_ost(ligand_ost_ent)
-        # TODO: replace above with below
-        # smiles, matched_smiles = set_smiles_from_ligand_ost_v2(ligand_ost_ent)
+        if len(res_names) == 1:
+            resname = res_names[0]
+            # Try CCD first, then PRD
+            ccd_smiles = _get_ccd_smiles(resname)
+            if ccd_smiles is None and resname.startswith("PRD_"):
+                ccd_smiles = _get_prd_smiles(resname)
+            if ccd_smiles is not None:
+                smiles = ccd_smiles
+        # Assign bonds once — used for both SMILES derivation and stereo check
+        if lig_heavy.bonds is None:
+            lig_heavy.bonds = struc.connect_via_residue_names(lig_heavy)
+        if smiles is None:
+            try:
+                rdkit_mol = rdkit_interface.to_mol(lig_heavy)
+                peppr_sanitize(rdkit_mol)
+                smiles = str(Chem.MolToSmiles(rdkit_mol))
+            except Exception:
+                LOG.warning(f"Failed to derive SMILES for {ccd_code} from structure")
+        resolved_smiles = smiles
+        stereo_matches: bool | None = None
+        try:
+            resolved_mol = rdkit_interface.to_mol(lig_heavy)
+            peppr_sanitize(resolved_mol)
+
+            # Get stereo from actual 3D coordinates
+            Chem.AssignStereochemistryFrom3D(resolved_mol)
+            resolved_smiles = str(Chem.MolToSmiles(resolved_mol))
+
+            # Compare resolved 3D stereo with CCD template stereo
+            # Works for both single and multi-residue ligands
+            stereo_matches = _check_stereo_vs_template(resolved_mol)
+        except Exception:
+            LOG.warning(f"Failed to compute resolved SMILES for {ccd_code}")
+        # Centroid
+        centroid = list(lig_atoms.coord.mean(axis=0))
         ligand = cls(
             pdb_id=pdb_id,
             biounit_id=biounit_id,
             asym_id=ligand_chain.asym_id,
             instance=ligand_instance,
             ccd_code=ccd_code,
-            plip_type=get_chain_type(
-                ligand_chain.chain_type
-            ),  # TODO: rename variable, no longer uses plip
+            plip_type=get_chain_type(ligand_chain.chain_type_str),
             bird_id=list(ligand_chain.mappings.get("BIRD", {"": None}))[0],  # type: ignore
-            centroid=list(ligand_ost_ent.GetCenterOfMass()),
+            centroid=centroid,
             smiles=smiles,
             neighboring_residue_threshold=neighboring_residue_threshold,
             neighboring_ligand_threshold=neighboring_ligand_threshold,
-            resolved_smiles=interactions.ligand.smiles,  # TODO: only thing left that depends on PLIP
-            # TODO: replace above with below
-            # resolved_smiles=matched_smiles,
+            resolved_smiles=resolved_smiles,
+            resolved_stereo_matches_template=stereo_matches,
             residue_numbers=residue_numbers,
         )
 
-        neighboring_residue_selection = biounit.Select(
-            f"{ligand.neighboring_residue_threshold} <> [{ligand_selection}]"
-            + " and protein=True"
+        # Find neighboring polymer residues (protein + nucleic acid) within threshold
+        polymer_mask = struc.filter_amino_acids(biounit) | struc.filter_nucleotides(
+            biounit
         )
+        polymer_atoms = biounit[polymer_mask]
+        if polymer_atoms.array_length() > 0:
+            neighbor_cell = struc.CellList(
+                polymer_atoms, ligand.neighboring_residue_threshold
+            )
+            near_poly_mask = np.zeros(len(polymer_atoms), dtype=bool)
+            for coord in lig_coords:
+                indices = neighbor_cell.get_atoms(
+                    coord, radius=ligand.neighboring_residue_threshold
+                )
+                near_poly_mask[indices[indices >= 0]] = True
+            near_prot = polymer_atoms[near_poly_mask]
+        else:
+            near_prot = polymer_atoms[:0]  # empty
 
         (
             ligand.num_neighboring_ppi_atoms_within_4A_of_gap,
@@ -1073,67 +1093,72 @@ class Ligand(DocBaseModel):
             interface_proximal_gaps, ligand_chain.asym_id
         )
 
-        for residue in neighboring_residue_selection.residues:
-            instance_chain = residue.chain.name
-            if instance_chain == ligand.instance_chain:
-                # this chain is considered a ligand, thus, skip!
+        for chain_id in np.unique(near_prot.chain_id):
+            if chain_id == ligand.instance_chain:
                 continue
-            if instance_chain not in ligand.neighboring_residues:
-                ligand.neighboring_residues[instance_chain] = []
-            ligand.neighboring_residues[instance_chain].append(residue.number.num)
+            chain_atoms = near_prot[near_prot.chain_id == chain_id]
+            resnums = list(dict.fromkeys(int(r) for r in chain_atoms.res_id))
+            ligand.neighboring_residues[chain_id] = resnums
+            # Store SEQRES for binding affinity validation
+            asym_id = chain_id.split(".")[-1] if "." in chain_id else chain_id
+            if chain_to_seqres and asym_id in chain_to_seqres:
+                ligand.receptor_seqres[chain_id] = chain_to_seqres[asym_id]
 
         neighboring_asym_ids = {
-            ch.name.split(".")[-1]
-            for ch in neighboring_residue_selection.chains
-            if ch.name != ligand.instance_chain
+            c.split(".")[-1]
+            for c in np.unique(near_prot.chain_id)
+            if c != ligand.instance_chain
         }
-
-        # DONE: output should be sufficient for RFAA, eg. [(("A", "74", "ND2"), ("B", "1"), ("CW", "null"))]
-        # see: https://github.com/baker-laboratory/RoseTTAFold-All-Atom?tab=readme-ov-file#predicting-covalently-modified-proteins
 
         ligand.covalent_linkages = extract_ligand_links_to_neighbouring_chains(
             all_covalent_dict, ligand.asym_id, neighboring_asym_ids, link_type="covale"
         )
+        ligand.is_covalent = len(ligand.covalent_linkages) > 0
 
-        ligand.is_covalent = (
-            len(ligand.covalent_linkages) > 0
-        )  # TODO: Check to make sure we are catching all edge cases
-
-        neighboring_ligand_selection = biounit.Select(
-            f"{ligand.neighboring_ligand_threshold} <> [{ligand_selection}]"
-        )
+        # Find neighboring ligand chains
+        near_lig_cell = struc.CellList(biounit, ligand.neighboring_ligand_threshold)
+        near_lig_mask = np.zeros(len(biounit), dtype=bool)
+        for coord in lig_coords:
+            indices = near_lig_cell.get_atoms(
+                coord, radius=ligand.neighboring_ligand_threshold
+            )
+            near_lig_mask[indices[indices >= 0]] = True
+        near_all = biounit[near_lig_mask]
 
         ligand.neighboring_ligands = list(
             set(
-                residue.chain.name
-                for residue in neighboring_ligand_selection.residues
-                if residue.chain.name != ligand.instance_chain
-                and residue.chain.name.split(".")[1] in ligand_like_chains
+                c
+                for c in np.unique(near_all.chain_id)
+                if c != ligand.instance_chain
+                and "." in c
+                and c.split(".")[1] in ligand_like_chains
             )
         )
         water_chains = set(
-            c.name for c in biounit.chains if c.type == mol.CHAINTYPE_WATER
+            c
+            for c in np.unique(biounit.chain_id)
+            if struc.filter_solvent(biounit[biounit.chain_id == c]).all()
         )
+        # Populate interactions and waters from peppr results
+        ligand.interactions = peppr_interactions
         ligand.waters = defaultdict(list)
-        for residue in interactions.interacting_res:
-            residue_number, plip_chain = int(residue[:-1]), residue[-1]
-            instance_chain = plip_chain_mapping[plip_chain]
+        for w_chain, w_resnum in peppr_waters:
+            ligand.waters[w_chain].append(w_resnum)
+
+        # Derive interacting residues from peppr interaction hashes
+        for instance_chain, residues in peppr_interactions.items():
             if instance_chain == ligand.instance_chain:
                 continue
             if instance_chain in water_chains:
-                ligand.waters[instance_chain].append(int(residue_number))
                 continue
             if instance_chain.split(".")[1] in ligand_like_chains:
                 ligand.interacting_ligands.append(instance_chain)
             else:
                 if instance_chain not in ligand.interacting_residues:
                     ligand.interacting_residues[instance_chain] = []
-                ligand.interacting_residues[instance_chain].append(int(residue_number))
-        ligand.interactions, waters = get_plip_hash(
-            interactions, ligand.instance_chain, plip_chain_mapping
-        )
-        for plip_chain, resnum in waters:
-            ligand.waters[plip_chain_mapping[plip_chain]].append(resnum)
+                ligand.interacting_residues[instance_chain].extend(
+                    int(r) for r in residues.keys()
+                )
         # add rdkit properties and type assignments
         ligand.set_rdkit()
         if data_dir is not None:
@@ -1150,16 +1175,16 @@ class Ligand(DocBaseModel):
         __Selection string for ligand
         """
         residue_selection = " or ".join(f"rnum={rnum}" for rnum in self.residue_numbers)
-        ligand_selection = f"cname={mol.QueryQuoteName(self.instance_chain)}"
+        ligand_selection = f"cname='{self.instance_chain}'"
         if len(self.residue_numbers):
             ligand_selection += f"and ({residue_selection})"
         return ligand_selection
 
     @cached_property
     def protein_chains_asym_id(self) -> list[str]:
-        """
-        List of RCSB asymmetric chain ids of protein residues within 6 Å of ligand of interest unless
-        the ligand is an artifact, in which case we return an empty list.
+        """Receptor chain IDs (protein/NA) within neighboring threshold of ligand.
+
+        Returns empty list if the ligand is an artifact.
         """
         if self.is_artifact:
             return []
@@ -1177,9 +1202,7 @@ class Ligand(DocBaseModel):
 
     @cached_property
     def num_neighboring_residues(self) -> int:
-        """
-        Residue count of each of the proteins within 6 Å of ligand of interest.
-        """
+        """Total count of receptor residues (protein/NA) within neighboring threshold."""
         return sum(
             len(self.neighboring_residues[chain]) for chain in self.neighboring_residues
         )
@@ -1348,33 +1371,41 @@ class Ligand(DocBaseModel):
 
     @cached_property
     def binding_affinity(self) -> float | None:
-        """
-        Binding affinity (pKd or pKi) from BindingDB when available.
+        """Binding affinity (pKd or pKi) from BindingDB when available.
+
+        The affinity is only returned if the BindingDB target sequence
+        matches at least one receptor chain SEQRES with 100% identity
+        in the aligned core (terminal overhangs from tags/truncations
+        are tolerated).  This guards against BindingDB's 85% sequence
+        identity matching which can assign values to wrong complexes
+        (see `#94 <https://github.com/plinder-org/plinder/issues/94>`_).
         """
         global BINDING_AFFINITY
         pdbid_ligid = f"{self.pdb_id}_{self.ccd_code}".upper()
         if BINDING_AFFINITY is None:
             data_dir = Path(get_config().data.plinder_dir)
             BINDING_AFFINITY = get_binding_affinity(data_dir)
-        affinity = BINDING_AFFINITY.get(pdbid_ligid)
-        if affinity is not None:
-            return float(affinity)
-        return None
+        pchembl = BINDING_AFFINITY.get("pchembl", {})
+        target_seqs = BINDING_AFFINITY.get("target_sequence", {})
+        affinity = pchembl.get(pdbid_ligid)
+        if affinity is None:
+            return None
+        # Validate: BindingDB target sequence must match a receptor chain
+        bdb_seq = target_seqs.get(pdbid_ligid)
+        if bdb_seq and self.receptor_seqres:
+            if not any(
+                sequences_match_core(bdb_seq, seq)
+                for seq in self.receptor_seqres.values()
+            ):
+                LOG.warning(
+                    f"binding_affinity: rejecting {pdbid_ligid} — "
+                    "BindingDB target sequence does not match any receptor chain"
+                )
+                return None
+        return float(affinity)
 
-    def identify_artifacts_cofactors_and_other(
-        self,
-    ) -> None:
-        """
-        Label artifacts, cofactors and other
-
-        Parameters
-        ----------
-        self : Ligand
-            Ligand object
-        Returns
-        -------
-        dict[str, str]
-        """
+    def identify_artifacts_cofactors_and_other(self) -> None:
+        """Set ``is_artifact``, ``is_cofactor``, and ``is_other`` flags in-place."""
         assert COFACTORS is not None
         assert ARTIFACTS is not None
         if self.ccd_code in COFACTORS:
@@ -1515,6 +1546,7 @@ class Ligand(DocBaseModel):
         return {"ligand_interactions": interactions}
 
     def format(self, chains: dict[str, Chain]) -> dict[str, ty.Any]:
+        """Serialize ligand annotations to a flat dict for DataFrame export."""
         data: dict[str, ty.Any] = defaultdict(str)
         ignore_fields = set(
             [

@@ -16,32 +16,10 @@ $ git clone https://github.com/plinder-org/plinder.git
 
 ### Creating the Conda environment
 
-The `plinder` subpackages beside `plinder.core` require dependencies that are not
-installable via `pip`.
-The most convenient way to install the aforementioned extra dependencies is a _Conda_
-environment.
+The data generation pipeline (`plinder.data`) requires a few tools that are only
+available via _Conda_ (mmseqs2, foldseek, reduce).
 If you have not _Conda_ installed yet, we recommend its installation via
 [miniforge](https://github.com/conda-forge/miniforge).
-Afterwards the environment can be created from the `environment.yml` in the local
-repository clone.
-
-:::{note}
-Currently only a Linux environment is fully supported, although the base
-environment also installs to MacOS.
-`plinder.data` uses a number of dependencies which are not simply pip-installable.
-Several dependencies which are referenced by a GitHub link directly, make
-a pip-installable package problematic.
-This includes Linux pytorch, which will not work in MacOS.
-These additional dependencies can be installed by running:
-
-```console
-$ pip install -r requirements_data.txt
-```
-
-`plinder.eval` also relies on `openstructure` for metrics
-calculations. For Windows and MacOS users, please see the relevant
-[_Docker_](#docker-target) resources.
-:::
 
 ```console
 $ mamba env create -f environment.yml
@@ -50,11 +28,37 @@ $ mamba activate plinder
 
 ### Installing `plinder`
 
-Now `plinder` can be installed into the created environment:
+The base install covers data generation and the core library (numpy 2 compatible):
 
 ```console
 $ pip install -e ".[dev]"
 ```
+
+### Evaluation scoring (optional)
+
+`plinder.eval` requires [OpenStructure](https://openstructure.org/) for
+lDDT/RMSD scoring metrics. OpenStructure currently requires numpy<2, so it
+is kept as an optional dependency:
+
+```console
+$ pip install -e ".[eval]"
+```
+
+:::{note}
+The `eval` extra installs OpenStructure, posebusters and plotly.
+Data generation (`plinder.data`) does **not** require OpenStructure and
+works with numpy 2.
+
+For the full data pipeline, additional dependencies are needed:
+
+```console
+$ pip install -r requirements_data.txt
+```
+
+This includes Linux pytorch (for the loader) and pipeline-specific tools.
+For Windows and MacOS users, please see the relevant
+[_Docker_](#docker-target) resources.
+:::
 
 ### Enabling Pre-commit hooks
 

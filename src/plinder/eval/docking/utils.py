@@ -97,7 +97,7 @@ class ComplexData:
             resname = list(ligand_entity.residues)[0].name
             if not resname:
                 resname = ligand_file.stem
-            editor.RenameChain(list(ligand_entity.chains)[0], f"{i+1:05d}_{resname}")
+            editor.RenameChain(list(ligand_entity.chains)[0], f"{i + 1:05d}_{resname}")
             ligand_entity = ligand_entity.Select("ele != H")
             ligand_views.append(ligand_entity)
 
@@ -483,3 +483,55 @@ class ModelScores:
                     "best_pli_matched_reference_chain"
                 ] = "_".join(ref_ligand_pli.chain.split("_")[1:])
         return per_lig_scores
+
+
+def run_posebusters_on_system(
+    system_folder: Path,
+    pose_index: int = 0,
+    config: str = "redock",
+) -> dict[str, dict[str, Any]]:
+    """Run PoseBusters validation on a saved system.
+
+    Operates on system files produced during ingest (receptor.pdb +
+    ligand SDF files).  Returns per-ligand validation results.
+
+    Parameters
+    ----------
+    system_folder : Path
+        Folder containing ``receptor.pdb`` and ``ligand_files/*.sdf``.
+    pose_index : int
+        Pose index for PoseBusters keying (default 0 for crystal).
+    config : str
+        PoseBusters config name (``"redock"`` or ``"dock"``).
+
+    Returns
+    -------
+    dict[str, dict[str, Any]]
+        Mapping of ligand chain ID to PoseBusters result dict.
+    """
+    pb = PoseBusters(config=config)
+    receptor_file = system_folder / "receptor.pdb"
+    if not receptor_file.exists():
+        LOG.warning(f"run_posebusters_on_system: no receptor.pdb in {system_folder}")
+        return {}
+    ligand_dir = system_folder / "ligand_files"
+    if not ligand_dir.exists():
+        return {}
+    results: dict[str, dict[str, Any]] = {}
+    for ligand_file in sorted(ligand_dir.glob("*.sdf")):
+        chain_id = ligand_file.stem
+        try:
+            result_dict = pb.bust(
+                mol_pred=str(ligand_file),
+                mol_true=str(ligand_file),
+                mol_cond=str(receptor_file),
+                full_report=True,
+            ).to_dict()
+        except Exception as e:
+            LOG.error(f"run_posebusters_on_system: {chain_id}: {e}")
+            continue
+        key = (str(ligand_file), chain_id, pose_index)
+        results[chain_id] = {
+            k: v.get(key) for k, v in result_dict.items() if v.get(key)
+        }
+    return results

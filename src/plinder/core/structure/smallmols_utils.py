@@ -10,7 +10,6 @@ from numpy.typing import NDArray
 from rdkit import Chem
 from rdkit.Chem import AllChem, Mol, rdDepictor, rdMolDescriptors, rdRascalMCES
 from rdkit.Chem.MolStandardize import rdMolStandardize
-from rdkit.Chem.rdFMCS import FindMCS
 
 from plinder.core.utils.log import setup_logger
 
@@ -25,44 +24,6 @@ def uncharge_mol(mol: Mol) -> Mol:
         res.UpdatePropertyCache(strict=False)
         return res
     return mol
-
-
-def assign_bond_from_smiles(smiles: str, mol: Mol) -> Mol:
-    """Assign bonds from a list smiles.
-
-    The goal of this bond assigner is to capture all
-    ligands, including the ones with subunits.
-
-    Parameters
-    ----------
-    smiles : str
-        smiles string of template for bond assignment
-    mol : Chem.rdchem.Mol
-        Mol that needs bond assignment
-
-    Returns
-    -------
-    Chem.rdchem.Mol
-        Mol bonds assigned
-    """
-    try:
-        # Iterative assign bonds to subunits; this captures multisubunit ligands
-        template = AllChem.MolFromSmiles(smiles)
-        return AllChem.AssignBondOrdersFromTemplate(template, mol)
-
-    except ValueError:
-        return None
-
-
-def get_element_count(mol: Mol) -> dict[int, int]:
-    atomic_count: dict[int, int] = {}
-    for atom in mol.GetAtoms():
-        elem = atom.GetAtomicNum()
-        if elem == 1:
-            continue
-        atomic_count.setdefault(elem, 0)
-        atomic_count[elem] += 1
-    return atomic_count
 
 
 def generate_input_conformer(
@@ -214,11 +175,8 @@ def get_template_to_mol_matches(
 # below functions used for data ingest
 def mol_assigned_bond_orders_by_template(template_mol: Mol, mol: Mol) -> Mol:
     try:
-        # Assign bonds according to template smiles!
         fixed_mol = AllChem.AssignBondOrdersFromTemplate(template_mol, mol)
     except Exception as e:
-        # raise AssertionError(f"mol_assigned_bond_orders_by_template: {e}")
-        # update template in case fully resovled mol but bonding is an issue
         log.warning(
             f"mol_assigned_bond_orders_by_template: {e} - try get_matched_template"
         )
@@ -227,71 +185,7 @@ def mol_assigned_bond_orders_by_template(template_mol: Mol, mol: Mol) -> Mol:
     return fixed_mol
 
 
-def get_matched_template(template: Chem.Mol, mol: Chem.Mol) -> Chem.Mol:
-    """
-    Perform MCS matching between a (subject) mol and a template; and return the matched template with
-    the bond orders of the template. Used to assign bond orders in
-    `safe_mol_from_pdb_assign_bond_orders`. Known limitation: if the template has
-    double/triple bonds and the mol doesn't (because it's read from PDB), this leads to
-    removing all atoms that don't match, incl. the ones bound via e.g., a double bond. This is
-    only a problem if we need to use this fallback option because previous attempts in
-    `safe_mol_from_pdb_assign_bond_orders` have failed.
-    Returns
-    -------
-    Chem.Mol
-        the matching template with bond orders from template
-    """
-    # set all bonds to unspecified to help with the match
-    match_mol = copy.deepcopy(mol)
-    [b.SetBondType(Chem.BondType.UNSPECIFIED) for b in match_mol.GetBonds()]
-
-    mcs = FindMCS(
-        [match_mol, template],
-        completeRingsOnly=False,
-        ringMatchesRingOnly=False,
-        timeout=10,
-    )
-    patt = Chem.MolFromSmarts(mcs.smartsString)
-    atom_map_template = np.array(template.GetSubstructMatch(patt))
-    # remove all atoms from the ref that are not in the MCS --> use this as template for
-    # bond orders
-    matched_template_mol = remove_unmatched_atoms(template, atom_map_template)
-    return matched_template_mol
-
-
-def remove_unmatched_atoms(mol: Chem.Mol, match: NDArray) -> Chem.Mol:
-    """Remove atoms in mol whose indices are not in match.
-    Parameters
-    ----------
-    mol : Chem.Mol
-        the mol to be modified
-    match : NDArray
-        indices that are matches and should not be removed
-    Returns
-    -------
-    Chem.Mol
-        the mol with unmatched atoms removed
-    """
-    res = Chem.RWMol(mol)
-    atoms_to_remove = [a.GetIdx() for a in mol.GetAtoms() if a.GetIdx() not in match]
-    res.BeginBatchEdit()
-    for atom_idx in atoms_to_remove:
-        neighbors = res.GetAtomWithIdx(atom_idx).GetNeighbors()
-        for neighbor in neighbors:
-            res.RemoveBond(atom_idx, neighbor.GetIdx())
-        res.RemoveAtom(atom_idx)
-    res.CommitBatchEdit()
-    res = Chem.Mol(res)
-    try:
-        Chem.SanitizeMol(res)
-    except:
-        pass
-    [a.SetNumRadicalElectrons(0) for a in res.GetAtoms()]
-    return res
-
-
-# Version 2 of above functions
-def remove_unmatched_atoms_and_bonds(
+def _remove_unmatched(
     mol: Chem.Mol, matched_atoms: NDArray, matched_bonds: NDArray
 ) -> Chem.Mol:
     """Remove atoms and bonds in mol whose indices are not in match.
@@ -343,9 +237,10 @@ def remove_unmatched_atoms_and_bonds(
     return res
 
 
-def get_matched_template_v2(template: Chem.Mol, mol: Chem.Mol) -> Chem.Mol:
-    """
-    Function that works a lot like get_matched_template but can better deal with fragmented molecules
+def get_matched_template(template: Chem.Mol, mol: Chem.Mol) -> Chem.Mol:
+    """Trim template to the MCS with mol using Rascal MCES.
+
+    Handles fragmented molecules and unmatched bonds correctly.
     """
     rascal_opts = rdRascalMCES.RascalOptions()
     rascal_opts.similarityThreshold = 0.1
@@ -369,7 +264,7 @@ def get_matched_template_v2(template: Chem.Mol, mol: Chem.Mol) -> Chem.Mol:
         ref_mol = copy.deepcopy(template)
 
         log.warning(
-            "get_matched_template_v2: could not match template fully - retry with unmatched bonds set as UNSPECIFIED"
+            "get_matched_template: could not match template fully - retry with unmatched bonds set as UNSPECIFIED"
         )
         # set all unmatched bonds to UNSPECIFIED to help with the match
         if len(bond_matches):
@@ -399,10 +294,10 @@ def get_matched_template_v2(template: Chem.Mol, mol: Chem.Mol) -> Chem.Mol:
     atom_map_template = np.array([j for i, j in result.atomMatches()])
     bond_map_template = np.array([j for i, j in result.bondMatches()])
     if len(atom_map_template) == 0:
-        raise ValueError("get_matched_template_v2: cannot match mol to template")
+        raise ValueError("get_matched_template: cannot match mol to template")
 
     # Removes unmatched atoms and bonds from the template
-    matched_template_mol = remove_unmatched_atoms_and_bonds(
+    matched_template_mol = _remove_unmatched(
         template, atom_map_template, bond_map_template
     )
     return matched_template_mol

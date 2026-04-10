@@ -8,11 +8,13 @@ except (ImportError, ModuleNotFoundError):
     raise ImportError(
         dedent(
             """\
-            plinder.eval requires the OpenStructureToolkit >= 2.8.0 (ost) to be installed.
-            Please refer to the documentation for installation instructions and current limitations.
-            See details here:
+            plinder.eval requires OpenStructure >= 2.8.0 (ost).
+            Install with: pip install plinder[eval]
 
-                https://plinder-org.github.io/plinder/contribution/development.html#creating-the-conda-environment
+            Note: OpenStructure requires numpy<2. Data generation
+            (plinder.data) does NOT require OpenStructure.
+
+            See: https://plinder-org.github.io/plinder/contribution/development.html#creating-the-conda-environment
             """
         )
     )

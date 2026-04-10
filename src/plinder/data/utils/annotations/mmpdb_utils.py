@@ -317,7 +317,10 @@ def add_mmp_clusters_to_data(
     # Identity congeneric series - MMS - group that shares
     # identical constant (with a single vector) and prot_pockets !
     grp_congeneric_df = mmps_pocket_df1.groupby(
-        ["CONSTANT", "prot_pocket_set_shared"]
+        [
+            "CONSTANT",
+            "prot_pocket_set_shared",
+        ]
     ).agg(tuple)[["id1", "id2"]]
     # set to tuple for being hashable
     grp_congeneric_df["congeneric_series"] = grp_congeneric_df[["id1", "id2"]].apply(

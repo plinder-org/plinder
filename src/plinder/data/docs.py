@@ -52,7 +52,7 @@ CHAIN_TYPES = [
 
 
 def get_cluster_column_descriptions(
-    plindex: pd.DataFrame
+    plindex: pd.DataFrame,
 ) -> list[tuple[str, str | None, str | None]]:
     rows: list[tuple[str, str | None, str | None]] = []
     component_columns = [c for c in plindex.columns if c.endswith("__component")]

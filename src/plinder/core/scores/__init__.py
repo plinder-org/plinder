@@ -8,6 +8,7 @@ pandas and pyarrow directly. The internal query API supports converting
 the same pyarrow query filters used in pd.read_parquet into raw SQL for
 duckdb to execute.
 """
+
 from .clusters import query_clusters
 from .index import query_index
 from .ligand import cross_similarity as cross_ligand_similarity

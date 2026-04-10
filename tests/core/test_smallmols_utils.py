@@ -65,13 +65,13 @@ def test_inchikey(smiles, inchikey, remove_stereo):
 
 def test_matched_templates():
     from plinder.core.structure.smallmols_utils import (
-        get_matched_template_v2,
+        get_matched_template,
         mol_assigned_bond_orders_by_template,
     )
 
     mol1 = Chem.MolFromSmiles("FC(Cl)(Br)C.CNCC1CCCCC1.CCC(OC)O")
     template = Chem.MolFromSmiles("F[C@@](Br)(Cl)CCCNCc1cc(C(=O)N/C=C/C(OC)=O)ccc1")
-    matched_template = get_matched_template_v2(template, mol1)
+    matched_template = get_matched_template(template, mol1)
     fixed_mol = mol_assigned_bond_orders_by_template(matched_template, mol1)
     fixed_mol_SMILES = Chem.CanonSmiles(Chem.MolToSmiles(fixed_mol))
     assert fixed_mol_SMILES.count("=") >= 2

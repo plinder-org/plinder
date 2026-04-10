@@ -8,31 +8,11 @@ from pathlib import Path
 import biotite.structure as struc
 import biotite.structure.io.pdbx as pdbx
 import numpy as np
-from ost import io, mol
-from plip.basic.supplemental import whichchain, whichresnumber
-from plip.structure.preparation import PDBComplex, PLInteraction
+from peppr.contacts import ContactMeasurement
 
 from plinder.core.utils.log import setup_logger
 
 log = setup_logger(__name__)
-
-INTERACTION_TYPES = [
-    "hbonds_ldon",
-    "hbonds_pdon",
-    "hydrophobic_contacts",
-    "pication_laro",
-    "pication_paro",
-    "halogen_bonds",
-    "pistacking",
-    "water_bridges",
-    "saltbridge_lneg",
-    "saltbridge_pneg",
-    "metal_complexes",
-]
-
-# Define available names for chains in PDB format
-PDB_AVAILABLE_CHAINS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-PDB_AVAILABLE_CHAINS += PDB_AVAILABLE_CHAINS.lower() + "0123456789"
 
 
 def get_symmetry_mate_contacts(
@@ -139,59 +119,37 @@ def get_covalent_connections(
     dict[str, list[tuple[str, str]]]
         All covalent links as defined by mmcif annotations
     """
-    if "struct_conn" not in cif_data:
-        return {}
-
-    conn = cif_data["struct_conn"]
-    columns = [
-        "ptnr1_label_asym_id",
-        "ptnr2_label_asym_id",
-        "ptnr1_label_seq_id",
-        "ptnr2_label_seq_id",
-        "ptnr1_auth_seq_id",
-        "ptnr2_auth_seq_id",
-        "ptnr1_label_comp_id",
-        "ptnr2_label_comp_id",
-        "ptnr1_label_atom_id",
-        "ptnr2_label_atom_id",
-        "conn_type_id",
-    ]
-    arrays = {}
-    for col in columns:
-        if col not in conn:
-            return {}
-        arrays[col] = conn[col].as_array()
+    from plinder.data.utils.annotations.cif_utils import parse_struct_conn
 
     nucleobase_list = {"A", "C", "U", "G", "DA", "DC", "DG", "DT", "PSU"}
     valid_types = {"covale", "metalc", "hydrog"}
 
     cov_dict: dict[str, list[tuple[str, str]]] = defaultdict(list)
-    for i in range(len(arrays["conn_type_id"])):
-        conn_type = arrays["conn_type_id"][i]
-        if conn_type not in valid_types:
+    for c in parse_struct_conn(cif_data):
+        if c["conn_type"] not in valid_types:
             continue
-        if conn_type == "hydrog":
-            if arrays["ptnr1_label_comp_id"][i].strip() not in nucleobase_list:
+        if c["conn_type"] == "hydrog":
+            if c["comp1"].strip() not in nucleobase_list:
                 continue
         link1 = ":".join(
             [
-                arrays["ptnr1_auth_seq_id"][i],
-                arrays["ptnr1_label_comp_id"][i],
-                arrays["ptnr1_label_asym_id"][i],
-                arrays["ptnr1_label_seq_id"][i],
-                arrays["ptnr1_label_atom_id"][i],
+                c["auth_seq1"],
+                c["comp1"],
+                c["chain1"],
+                c["seq1"],
+                c["atom1"],
             ]
         )
         link2 = ":".join(
             [
-                arrays["ptnr2_auth_seq_id"][i],
-                arrays["ptnr2_label_comp_id"][i],
-                arrays["ptnr2_label_asym_id"][i],
-                arrays["ptnr2_label_seq_id"][i],
-                arrays["ptnr2_label_atom_id"][i],
+                c["auth_seq2"],
+                c["comp2"],
+                c["chain2"],
+                c["seq2"],
+                c["atom2"],
             ]
         )
-        cov_dict[conn_type].append((link1, link2))
+        cov_dict[c["conn_type"]].append((link1, link2))
     return cov_dict
 
 
@@ -209,9 +167,9 @@ def extract_ligand_links_to_neighbouring_chains(
     all_covalent_dict : dict[str, list[tuple[str, str]]]
         All covalent links as defined by mmcif annotations
     ligand_asym_id : str
-        ligand assymetric identification string
+        ligand asymmetric identification string
     neighboring_asym_ids : set[str]
-        set of neighbour assymetric identification strings
+        set of neighbour asymmetric identification strings
     link_type : str, optional
         covalent linkage type in dictionary, by default "covale",
         options include:
@@ -251,213 +209,208 @@ def extract_ligand_links_to_neighbouring_chains(
     return covalent_linkages
 
 
-def run_plip(biounit_pdbized: mol.EntityHandle) -> PDBComplex:
-    """Load pdbized biounit and run plip analysis.
-
-    Parameters
-    ----------
-    biounit_pdbized : mol.EntityHandle
-        pdbized biounit
-
-    Returns
-    -------
-    PDBComplex
-        Complex interaction object with all plip related annotation computed
-    """
-
-    complex_obj = PDBComplex()
-    complex_obj.load_pdb(io.EntityToPDBStr(biounit_pdbized).strip(), as_string=True)
-    complex_obj.analyze()
-    return complex_obj
-
-
-def pdbize(
-    full_biounit: mol.EntityHandle, entity: mol.EntityHandle
-) -> mol.EntityHandle:
-    """PDBize entity chains
-
-    Parameters
-    ----------
-    entity : mol.EntityHandle
-        Entity handle
-    Returns
-    -------
-    mol.EntityHandle
-        PDBized entity handle
-    """
-    # Intermediate renaming step
-    intermediate_names = {}
-    edi = entity.EditXCS(mol.BUFFERED_EDIT)
-    for i, chain in enumerate(entity.GetChainList()):
-        intermediate_names[f"T{i}"] = chain.name
-        edi.RenameChain(chain, f"T{i}")
-    edi.UpdateICS()
-    # Final renaming step
-    chain_index = 0
-    name_mapping = {}
-    for chain in entity.GetChainList():
-        original_name = intermediate_names[chain.name]
-        original_chain = full_biounit.FindChain(original_name)
-        if chain_index >= len(PDB_AVAILABLE_CHAINS):
-            raise ValueError(f"Too many chains ({chain_index}) in entity")
-        final_name = PDB_AVAILABLE_CHAINS[chain_index]
-        chain_index += 1
-        edi.RenameChain(chain, final_name)
-        edi.SetChainDescription(chain, original_chain.description)
-        edi.SetChainType(chain, original_chain.type)
-        name_mapping[original_name] = final_name
-    for residue in entity.residues:
-        if len(residue.name) > 3:
-            edi.RenameResidue(residue, residue.name[:3])
-    edi.UpdateICS()
-    return entity, name_mapping
-
-
-def run_plip_on_split_structure(
-    biounit: mol.EntityHandle,
-    biounit_selection: mol.EntityHandle,
+def run_peppr_interactions(
+    receptor: struc.AtomArray,
+    ligand: struc.AtomArray,
+    waters: struc.AtomArray,
+    metals: struc.AtomArray,
     ligand_chain: str,
-) -> tuple[PLInteraction, dict[str, str]] | None:
-    """Split structure into small PLI complex by ligand
-
-    For every ligand, create a smaller complex for faster plip\
-    process and deal with cases where plip ignores small molecule
-    ligands in the presence of peptides
+    chain_mapping: dict[str, str],
+) -> tuple[dict[str, dict[int, list[str]]], set[tuple[str, int]]]:
+    """Compute interaction hash using peppr ContactMeasurement.
 
     Parameters
     ----------
-    biounit : mol.EntityHandle
-        biounit
-    biounit_selection : mol.EntityHandle
-        selection in biounit of threshold around ligand
-    ligand_chain: str
-        {instance}.{chain} of ligand
+    receptor : AtomArray
+        Receptor heavy atoms.
+    ligand : AtomArray
+        Ligand heavy atoms.
+    waters : AtomArray
+        Water heavy atoms.
+    metals : AtomArray
+        Metal ion heavy atoms (used for metal bridge detection).
+    ligand_chain : str
+        Ligand chain identifier ({instance}.{chain}).
+    chain_mapping : dict[str, str]
+        Mapping from PDB chain to instance.chain.
 
     Returns
     -------
-    Tuple[PlipLigand, PDBComplex, dict[str, str]] | None
-        PLIP ligand, PLIP complex object, mapping of original chain to plip chain
+    interaction_hashes : dict
+        {instance.chain: {residue_number: [interaction_strings]}}
+    water_set : set
+        {(instance.chain, residue_number)} of bridging waters.
     """
-    from plip.basic import config
+    interaction_hashes: dict[str, dict[int, list[str]]] = {}
+    water_set: set[tuple[str, int]] = set()
 
-    config.biolip_list = []
-    split_structure, chain_mapping = pdbize(biounit, biounit_selection)
-    ligand_plip_chain = chain_mapping[ligand_chain]
-    config.PEPTIDES = (
-        [ligand_plip_chain] if biounit.FindChain(ligand_chain).is_polymer else []
+    try:
+        cm = ContactMeasurement(receptor, ligand)
+    except Exception as e:
+        log.warning(f"run_peppr_interactions: ContactMeasurement failed: {e}")
+        return interaction_hashes, water_set
+
+    def _add(chain: str, resnr: int, attr: str) -> None:
+        if chain == ligand_chain:
+            return
+        if chain not in interaction_hashes:
+            interaction_hashes[chain] = {}
+        if resnr not in interaction_hashes[chain]:
+            interaction_hashes[chain][resnr] = []
+        interaction_hashes[chain][resnr].append(attr)
+
+    _PROTEIN_MAINCHAIN = {"N", "CA", "C", "O"}
+    _NA_MAINCHAIN = {"P", "O5'", "C5'", "C4'", "C3'", "O3'"}
+    _mainchain_mask = (
+        np.isin(receptor.atom_name, list(_PROTEIN_MAINCHAIN))
+        & struc.filter_amino_acids(receptor)
+    ) | (
+        np.isin(receptor.atom_name, list(_NA_MAINCHAIN))
+        & struc.filter_nucleotides(receptor)
     )
-    # TODO: review this - we might be treating some peptidic ligands as protein here
-    # Consider passing ligand_like_chains to here, too
 
-    complex_obj = run_plip(split_structure)
-    ligand_list = [l for l in complex_obj.ligands if l.chain == ligand_plip_chain]
-    if not len(ligand_list):
-        log.warning(
-            f"Could not find ligand at chain {ligand_plip_chain}, originally {ligand_chain}"  # in {entry_pdb_id}"
-        )
-        return None
-    ligand = ligand_list[0]
-    lig_tag = f"{ligand.hetid}:{ligand.chain}:{ligand.position}"
-    interactions = complex_obj.interaction_sets[lig_tag]
-    chain_mapping = {v: k for k, v in chain_mapping.items()}
-    return interactions, chain_mapping
+    def _is_sidechain(atom_idx: int) -> bool:
+        return not _mainchain_mask[atom_idx]
 
-
-def get_plip_hash(
-    interactions: PLInteraction,
-    chain: str,
-    plip_chain_mapping: dict[str, str],
-) -> tuple[dict[str, dict[int, list[str]]], set[(tuple[str, int])]]:
-    """Get fingerprint hash from plip interaction object
-
-    Parameters
-    ----------
-    interactions : PLInteraction
-        plip interaction object for a given ligand
-    chain: str
-        ligand chain
-    plip_chain_mapping : Dict[str, str]
-        chain mapping from plip chain ID to instance.asym ID
-
-    Returns
-    -------
-    str
-        plip fingerprint hash
-    """
-
-    interaction_hashes: dict[str, dict[int, list[str]]] = dict()
-    waters = set()
-    for int_type in INTERACTION_TYPES:
-        int_objs = getattr(interactions, int_type)
-        interaction_attributes = []
-        if int_type in ["hbonds_ldon", "hbonds_pdon"]:
-            for int_obj in int_objs:
-                interaction_attributes.append(
-                    "type:hydrogen_bonds"
-                    # + f"__donortype:{int_obj.dtype}__acceptortype:{int_obj.atype}"
-                    + f"__protisdon:{int_obj.protisdon}__sidechain:{int_obj.sidechain}"
-                )
-        elif int_type == "water_bridges":
-            for int_obj in int_objs:
-                interaction_attributes.append(
-                    "type:water_bridges"
-                    # + f"__donortype:{int_obj.dtype}__acceptortype:{int_obj.atype}"
-                    + f"__protisdon:{int_obj.protisdon}"
-                )
-                waters.add((whichchain(int_obj.water), whichresnumber(int_obj.water)))
-        elif int_type == "hydrophobic_contacts":
-            for int_obj in int_objs:
-                interaction_attributes.append("type:hydrophobic_contacts")
-        elif int_type in ["pication_laro", "pication_paro"]:
-            for int_obj in int_objs:
-                if int_obj.protcharged:
-                    group = "Aromatic"
-                else:
-                    # group = int_obj.charge.fgroup
-                    group = "Cation"
-                interaction_attributes.append(
-                    "type:pi_cation"
-                    + f"__lig_group:{group}"
-                    + f"__protcharged:{int_obj.protcharged}"
-                )
-        elif int_type == "halogen_bonds":
-            for int_obj in int_objs:
-                interaction_attributes.append(
-                    "type:halogen_bonds"
-                    # + f"__donortype:{int_obj.donortype}"
-                    # + f"__acceptortype:{int_obj.acctype}"
-                    + f"__sidechain:{int_obj.sidechain}"
-                )
-        elif int_type == "pistacking":
-            for int_obj in int_objs:
-                interaction_attributes.append(
-                    f"type:pi_stacks__stack_type:{int_obj.type}"
-                )
-        elif int_type in ["saltbridge_lneg", "saltbridge_pneg"]:
-            for int_obj in int_objs:
-                interaction_attributes.append(
-                    "type:salt_bridges"
-                    # + f"__pos_group:{int_obj.positive.fgroup}__neg_group:{int_obj.negative.fgroup}"
-                    + f"__protispos:{int_obj.protispos}"
-                )
-        elif int_type == "metal_complexes":
-            for int_obj in int_objs:
-                interaction_attributes.append(
-                    "type:metal_complexes"
-                    + f"__metal_type:{int_obj.metal_type}__target_type:"
-                    + f"{int_obj.target_type}__coordination:{int_obj.coordination_num}__geometry:"
-                    + f"{int_obj.geometry}__location:{int_obj.location}"
-                )
-        for int_obj, int_attr in zip(int_objs, interaction_attributes):
-            instance_chain, resnr = (
-                plip_chain_mapping[int_obj.reschain],
-                int(int_obj.resnr),
+    # H-bonds
+    try:
+        rec_donates, lig_donates = cm.find_hbonds()
+        for ri, _li in rec_donates:
+            c = chain_mapping.get(receptor.chain_id[ri], receptor.chain_id[ri])
+            sc = _is_sidechain(ri)
+            _add(
+                c,
+                int(receptor.res_id[ri]),
+                f"type:hydrogen_bonds__protisdon:True__sidechain:{sc}",
             )
-            if instance_chain == chain:
-                continue
-            if instance_chain not in interaction_hashes:
-                interaction_hashes[instance_chain] = dict()
-            if resnr not in interaction_hashes[instance_chain]:
-                interaction_hashes[instance_chain][resnr] = []
-            interaction_hashes[instance_chain][resnr].append(int_attr)
-    return interaction_hashes, waters
+        for ri, _li in lig_donates:
+            c = chain_mapping.get(receptor.chain_id[ri], receptor.chain_id[ri])
+            sc = _is_sidechain(ri)
+            _add(
+                c,
+                int(receptor.res_id[ri]),
+                f"type:hydrogen_bonds__protisdon:False__sidechain:{sc}",
+            )
+    except Exception as e:
+        log.warning(f"run_peppr_interactions: find_hbonds failed: {e}")
+
+    # Salt bridges
+    try:
+        salt_bridges = cm.find_salt_bridges()
+        for ri, _li in salt_bridges:
+            c = chain_mapping.get(receptor.chain_id[ri], receptor.chain_id[ri])
+            _add(c, int(receptor.res_id[ri]), "type:salt_bridges__protispos:True")
+    except Exception as e:
+        log.warning(f"run_peppr_interactions: find_salt_bridges failed: {e}")
+
+    # Pi-stacking (deduplicate per residue)
+    try:
+        from biotite.structure import PiStacking
+
+        stacking = cm.find_stacking_interactions()
+        seen_stacking: set[tuple[str, int, str]] = set()
+        for rec_idx, _lig_idx, stack_type in stacking:
+            ri = rec_idx[0]
+            c = chain_mapping.get(receptor.chain_id[ri], receptor.chain_id[ri])
+            stype = "T" if stack_type == PiStacking.PERPENDICULAR else "P"
+            key = (c, int(receptor.res_id[ri]), stype)
+            if key not in seen_stacking:
+                seen_stacking.add(key)
+                _add(c, int(receptor.res_id[ri]), f"type:pi_stacks__stack_type:{stype}")
+    except Exception as e:
+        log.warning(f"run_peppr_interactions: find_stacking_interactions failed: {e}")
+
+    # Pi-cation
+    try:
+        pi_cation = cm.find_pi_cation_interactions()
+        for rec_idx, _lig_idx, cation_in_receptor in pi_cation:
+            ri = rec_idx[0]
+            c = chain_mapping.get(receptor.chain_id[ri], receptor.chain_id[ri])
+            if cation_in_receptor:
+                _add(
+                    c,
+                    int(receptor.res_id[ri]),
+                    "type:pi_cation__lig_group:Aromatic__protcharged:True",
+                )
+            else:
+                _add(
+                    c,
+                    int(receptor.res_id[ri]),
+                    "type:pi_cation__lig_group:Cation__protcharged:False",
+                )
+    except Exception as e:
+        log.warning(f"run_peppr_interactions: find_pi_cation_interactions failed: {e}")
+
+    # Halogen bonds
+    try:
+        from peppr.common import (
+            ACCEPTOR_PATTERN,
+            HALOGEN_DISTANCE_SCALING,
+            HALOGEN_PATTERN,
+        )
+
+        halogen_bonds = cm.find_contacts_by_pattern(
+            ACCEPTOR_PATTERN,
+            HALOGEN_PATTERN,
+            HALOGEN_DISTANCE_SCALING,
+        )
+        for ri, _li in halogen_bonds:
+            c = chain_mapping.get(receptor.chain_id[ri], receptor.chain_id[ri])
+            sc = _is_sidechain(ri)
+            _add(c, int(receptor.res_id[ri]), f"type:halogen_bonds__sidechain:{sc}")
+    except Exception as e:
+        log.warning(f"run_peppr_interactions: halogen_bonds failed: {e}")
+
+    # Water bridges (via plinder patch — peppr public doesn't have this yet)
+    try:
+        if waters.array_length() > 0:
+            from peppr.common import DONOR_PATTERN
+            from peppr.contacts import find_atoms_by_pattern
+
+            from plinder.data.utils.annotations.cif_utils import find_water_bridges
+
+            receptor_donors = set(
+                find_atoms_by_pattern(cm._binding_site_mol, DONOR_PATTERN)
+            )
+            w_bridges = find_water_bridges(receptor, ligand, waters)
+            for rec_idx, _lig_idx, water_idx in w_bridges:
+                ri = rec_idx[0]
+                wi = water_idx[0]
+                # Check if receptor atom is a donor
+                bs_idx = None
+                for j, orig_idx in enumerate(cm._binding_site_indices):
+                    if orig_idx == ri:
+                        bs_idx = j
+                        break
+                protisdon = bs_idx in receptor_donors if bs_idx is not None else True
+                c = chain_mapping.get(receptor.chain_id[ri], receptor.chain_id[ri])
+                _add(
+                    c,
+                    int(receptor.res_id[ri]),
+                    f"type:water_bridges__protisdon:{protisdon}",
+                )
+                w_chain = chain_mapping.get(waters.chain_id[wi], waters.chain_id[wi])
+                water_set.add((w_chain, int(waters.res_id[wi])))
+    except Exception as e:
+        log.warning(f"run_peppr_interactions: find_water_bridges failed: {e}")
+
+    # Metal bridges (via plinder patch — peppr public doesn't have this yet)
+    try:
+        if metals.array_length() > 0:
+            from plinder.data.utils.annotations.cif_utils import find_metal_bridges
+
+            m_bridges = find_metal_bridges(receptor, ligand, metals)
+            for rec_idx, _lig_idx, metal_idx in m_bridges:
+                ri = rec_idx[0]
+                mi = metal_idx[0]
+                c = chain_mapping.get(receptor.chain_id[ri], receptor.chain_id[ri])
+                metal_elem = metals.element[mi]
+                _add(
+                    c,
+                    int(receptor.res_id[ri]),
+                    f"type:metal_complexes__metal_type:{metal_elem}",
+                )
+    except Exception as e:
+        log.warning(f"run_peppr_interactions: find_metal_bridges failed: {e}")
+
+    return interaction_hashes, water_set

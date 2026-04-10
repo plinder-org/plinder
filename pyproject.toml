@@ -8,7 +8,6 @@ dependencies = [
     "typing_extensions",
     "pydantic",
     "tqdm",
-    "plotly",
     "nbformat",
     "google-cloud-storage",
     "gcsfs",
@@ -16,10 +15,8 @@ dependencies = [
     "rdkit>=2024.03.6",
     "pyarrow",
     "omegaconf",
-    "posebusters>=0.6.4",
     "duckdb",
     "cloudpathlib",
-    "mols2grid",
     "six",
 ]
 description = "PLINDER: The Protein-Ligand INteraction Dataset and Evaluation Resource"
@@ -64,6 +61,11 @@ dev = [
 ]
 loader = [
     "torch",
+]
+eval = [
+    "openstructure",
+    "posebusters>=0.6.4",
+    "plotly",
 ]
 plots = [
     "matplotlib",

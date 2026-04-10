@@ -1127,7 +1127,10 @@ def score_linked_structures(
             [
                 (system, group, data_dir, search_db, linked_structures, force_update)
                 for (search_db, system), group in links.groupby(
-                    ["kind", "reference_system_id"]
+                    [
+                        "kind",
+                        "reference_system_id",
+                    ]
                 )
             ],
         )

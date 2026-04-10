@@ -234,9 +234,9 @@ class SplitPropertiesPlotter:
             # style for the grid labels and tooltips
             style={
                 color_col: lambda x: "color: red; font-weight: bold;" if x > 30 else "",
-                "__all__": lambda x: "background-color: azure;"
-                if x[bg_color_col]
-                else "",
+                "__all__": lambda x: (
+                    "background-color: azure;" if x[bg_color_col] else ""
+                ),
             },
             transform={color_col: lambda x: round(x, 0)},
             # sort the grid in a different order by default
@@ -272,9 +272,9 @@ class SplitPropertiesPlotter:
             split: pd.read_parquet(self.stratified_files[split])
             .drop_duplicates("system_id")
             .rename(
-                mapper=lambda x: f"{x}__{split}"
-                if x != "system_id" and "novel" not in x
-                else x,
+                mapper=lambda x: (
+                    f"{x}__{split}" if x != "system_id" and "novel" not in x else x
+                ),
                 axis=1,
             )
             for split in self.stratified_files
@@ -742,7 +742,9 @@ class SplitPropertiesPlotter:
             wedges, texts, autotexts = axes[i].pie(
                 list(counts.values()),
                 colors=plt.cm.Pastel2.colors,
-                autopct=lambda pct: f"{pct:.1f}%\n{int(pct/100.*sum(counts.values())):d}",
+                autopct=lambda pct: (
+                    f"{pct:.1f}%\n{int(pct / 100.0 * sum(counts.values())):d}"
+                ),
                 textprops={"fontsize": 8},
                 wedgeprops={"linewidth": 0.5, "edgecolor": "black"},
             )

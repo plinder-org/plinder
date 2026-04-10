@@ -214,7 +214,10 @@ def _one_hot_encode_stack(
     unknown_name_filler_value = feature_dict[unknown_name_filler]
     for per_chain_feat in stack:
         feat_array_by_chain = np.zeros(
-            (len(per_chain_feat), len(set(list(feature_dict.values()))))
+            (
+                len(per_chain_feat),
+                len(set(list(feature_dict.values()))),
+            )
         )
         for index, value in enumerate(per_chain_feat):
             feat_array_by_chain[
@@ -225,7 +228,7 @@ def _one_hot_encode_stack(
 
 
 def _sequence_full_atom_type_array(
-    input_sequences: dict[str, str]
+    input_sequences: dict[str, str],
 ) -> dict[str, NDArray]:
     """Resolved sequence full atom features."""
     seq_atom_dict = {}

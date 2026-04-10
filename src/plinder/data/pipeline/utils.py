@@ -213,13 +213,17 @@ def get_scorer(
     sub_db_dir = data_dir / "dbs" / "subdbs"
     batch_db_dir = data_dir / "dbs" / "subdbs" / "batch_dbs" / hashed_contents
     batch_db_dir.mkdir(exist_ok=True, parents=True)
-    return Scorer(
-        entries=entries,
-        source_to_full_db_file=db_sources,
-        db_dir=sub_db_dir,
-        scores_dir=scores_dir,
-        minimum_threshold=scorer_cfg.minimum_threshold,
-    ), entry_ids, batch_db_dir
+    return (
+        Scorer(
+            entries=entries,
+            source_to_full_db_file=db_sources,
+            db_dir=sub_db_dir,
+            scores_dir=scores_dir,
+            minimum_threshold=scorer_cfg.minimum_threshold,
+        ),
+        entry_ids,
+        batch_db_dir,
+    )
 
 
 def save_ligand_batch(
@@ -519,10 +523,16 @@ def add_aggregated_columns(*, index: pd.DataFrame) -> pd.DataFrame:
         "system_id"
     ].transform("count")
     index["biounit_num_unique_ccd_codes"] = index.groupby(
-        ["entry_pdb_id", "system_biounit_id"]
+        [
+            "entry_pdb_id",
+            "system_biounit_id",
+        ]
     )["ligand_unique_ccd_code"].transform("nunique")
     index["biounit_num_proper_ligands"] = index.groupby(
-        ["entry_pdb_id", "system_biounit_id"]
+        [
+            "entry_pdb_id",
+            "system_biounit_id",
+        ]
     )["ligand_is_proper"].transform("sum")
     for n in [
         "lipinski",
@@ -572,9 +582,7 @@ def create_index(*, data_dir: Path, force_update: bool = False) -> pd.DataFrame:
             if not df.empty:
                 dfs.append(df)
         df = pd.concat(dfs).reset_index(drop=True)
-        # TODO: remove these kludges after annotations are rerun
-        key = "ligand_posebusters_internal_energy"
-        df[key] = df[key].astype(bool)
+        # TODO: remove this rename kludge after annotations are rerun
         df.rename(
             columns={
                 f"{key}_Kinase name": f"{key}_kinase_name"
@@ -622,8 +630,9 @@ def apo_file_from_link_id(
     link_id: str,
     force_update: bool = False,
 ) -> dict[str, str] | None:
-    from ost import io, mol
+    import biotite.structure.io.pdbx as pdbx
 
+    from plinder.data.utils.annotations.cif_utils import read_mmcif_file
     from plinder.data.utils.annotations.save_utils import save_cif_file
 
     if (output_dir / f"{link_id}.cif").exists() and not force_update:
@@ -642,19 +651,15 @@ def apo_file_from_link_id(
         LOG.info(f"skipping {link_id} as {target_cif} does not exist")
         return None
 
-    target_mol, seqres, info = io.LoadMMCIF(
-        target_cif.as_posix(),
-        seqres=True,
-        info=True,
-        fault_tolerant=True,
+    cif_file_obj = read_mmcif_file(target_cif)
+    atoms = pdbx.get_structure(
+        cif_file_obj, model=1, use_author_fields=False, include_bonds=True
     )
-    target_mol = mol.CreateEntityFromView(target_mol.Select(f"chain='{chain}'"), True)
-    cif_file = output_dir / f"{pdb_id}_{chain}.cif"
-    LOG.info(f"saving {link_id} to {cif_file}")
-    save_cif_file(target_mol, info, cif_file.stem, cif_file)
+    atoms = atoms[atoms.chain_id == chain]
+    out_cif = output_dir / f"{pdb_id}_{chain}.cif"
+    LOG.info(f"saving {link_id} to {out_cif}")
+    save_cif_file(atoms, out_cif.stem, out_cif)
     return None
-    # chain_to_seqres = {c.name: c.string for c in seqres}
-    # return chain_to_seqres[chain]
 
 
 def pred_file_from_link_id(
@@ -663,8 +668,9 @@ def pred_file_from_link_id(
     link_id: str,
     force_update: bool = False,
 ) -> None:
-    from ost import io, mol
+    import biotite.structure.io.pdbx as pdbx
 
+    from plinder.data.utils.annotations.cif_utils import read_mmcif_file
     from plinder.data.utils.annotations.save_utils import save_cif_file
 
     if (output_dir / f"{link_id}.cif").exists() and not force_update:
@@ -677,16 +683,14 @@ def pred_file_from_link_id(
         LOG.info(f"skipping {link_id} as {target_cif} does not exist")
         return None
 
-    target_mol, seqres, info = io.LoadMMCIF(
-        target_cif.as_posix(),
-        seqres=True,
-        info=True,
-        fault_tolerant=True,
+    cif_file_obj = read_mmcif_file(target_cif)
+    atoms = pdbx.get_structure(
+        cif_file_obj, model=1, use_author_fields=False, include_bonds=True
     )
-    target_mol = mol.CreateEntityFromView(target_mol.Select(f"chain='{chain}'"), True)
-    cif_file = output_dir / f"{uniprot_id}_{chain}.cif"
-    LOG.info(f"saving {link_id} to {cif_file}")
-    save_cif_file(target_mol, info, cif_file.stem, cif_file)
+    atoms = atoms[atoms.chain_id == chain]
+    out_cif = output_dir / f"{uniprot_id}_{chain}.cif"
+    LOG.info(f"saving {link_id} to {out_cif}")
+    save_cif_file(atoms, out_cif.stem, out_cif)
     return None
     # chain_to_seqres = {c.name: c.string for c in seqres}
     # return chain_to_seqres[chain]

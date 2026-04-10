@@ -143,10 +143,16 @@ def perf_vs_traindist(
         train_leaked = df[metric] >= 100 - dist
         sr = sum(df[train_leaked]["success"]) / np.max([sum(train_leaked), 1])
         mean_rmsd = sum(df["bisy_rmsd_wave"][train_leaked]) / np.max(
-            [sum(train_leaked), 1]
+            [
+                sum(train_leaked),
+                1,
+            ]
         )
         mean_lddt_pli = sum(df["lddt_pli_wave"][train_leaked]) / np.max(
-            [sum(train_leaked), 1]
+            [
+                sum(train_leaked),
+                1,
+            ]
         )
         fraction_leaked = sum(train_leaked) / len(train_leaked)
         y["S"].append(sr)

@@ -101,8 +101,48 @@ def get_contacts_gaps_overlap(
     return annotations
 
 
-# TODO: review this function
-# it does not use the ligand chain definitions!
+def annotate_interface_gaps_per_chain(
+    interface_proximal_gaps: dict[str, dict[tuple[str, str], dict[str, int]]],
+    asym_id: str,
+) -> tuple[int | None, ...]:
+    """Sum gap counts for a given chain across all interface pairs.
+
+    Parameters
+    ----------
+    interface_proximal_gaps : dict
+        Output of ``annotate_interface_gaps``, keyed by
+        ``"ppi_interface_gap_annotation"`` and
+        ``"ligand_interface_gap_annotation"``.
+    asym_id : str
+        Chain asymmetric ID to filter on.
+
+    Returns
+    -------
+    tuple of 6 int | None
+        (ppi_atoms_4A, ppi_atoms_8A, ppi_missing_res,
+         pli_atoms_4A, pli_atoms_8A, pli_missing_res)
+    """
+
+    def _sum_gaps(annotation_key: str, gap_key: str) -> int | None:
+        try:
+            return sum(
+                v[gap_key]
+                for k, v in interface_proximal_gaps[annotation_key].items()
+                if asym_id in k
+            )
+        except TypeError:
+            return None
+
+    return (
+        _sum_gaps("ppi_interface_gap_annotation", "interface_atom_gaps_4A"),
+        _sum_gaps("ppi_interface_gap_annotation", "interface_atom_gaps_8A"),
+        _sum_gaps("ppi_interface_gap_annotation", "missing_interface_residues_4A"),
+        _sum_gaps("ligand_interface_gap_annotation", "interface_atom_gaps_4A"),
+        _sum_gaps("ligand_interface_gap_annotation", "interface_atom_gaps_8A"),
+        _sum_gaps("ligand_interface_gap_annotation", "missing_interface_residues_4A"),
+    )
+
+
 def annotate_interface_gaps(
     cif_file: Path,
     protein_chains: list[str] | None = None,
@@ -119,18 +159,15 @@ def annotate_interface_gaps(
         raise ValueError(f"unsupported file extension: {cif_file}")
     assert atoms is not None
 
-    # Complex atom array
     lig_filter = atoms.hetero
-    prot_filter = struc.filter_amino_acids(atoms)
+    prot_filter = struc.filter_amino_acids(atoms) | struc.filter_nucleotides(atoms)
 
     if ligand_chains is not None:
-        # Filter atoms of interest
         lig_filter = atoms.hetero & np.isin(atoms.chain_id, np.array(ligand_chains))
     if protein_chains is not None:
-        prot_filter = struc.filter_amino_acids(atoms) & np.isin(
-            atoms.chain_id,
-            np.array(protein_chains),
-        )
+        prot_filter = (
+            struc.filter_amino_acids(atoms) | struc.filter_nucleotides(atoms)
+        ) & np.isin(atoms.chain_id, np.array(protein_chains))
     prot_arr = atoms[prot_filter].copy()
     complex_arr = atoms[prot_filter | lig_filter].copy()
     ppi_contacts, pli_contacts = pairwise_chain_contacts(complex_arr)

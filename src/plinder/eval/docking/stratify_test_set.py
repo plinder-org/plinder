@@ -97,7 +97,10 @@ def compute_ligand_ecfp_max_similarities(
     ]
 
     df_test.drop("fp", axis=1).groupby(
-        ["system_id", "ligand_rdkit_canonical_smiles"]
+        [
+            "system_id",
+            "ligand_rdkit_canonical_smiles",
+        ]
     ).agg("max").reset_index().to_parquet(output_file, index=False)
 
 
@@ -252,13 +255,13 @@ class StratifiedTestSet:
                 ]
             )
             LOG.info(
-                f'stratify_test_set: Found {self.max_similarities[self.max_similarities[label]]["system_id"].nunique()} systems labelled {label} ({self.max_similarities[self.max_similarities[label] & self.max_similarities["passes_quality"]]["system_id"].nunique()} passing quality)'
+                f"stratify_test_set: Found {self.max_similarities[self.max_similarities[label]]['system_id'].nunique()} systems labelled {label} ({self.max_similarities[self.max_similarities[label] & self.max_similarities['passes_quality']]['system_id'].nunique()} passing quality)"
             )
         self.max_similarities["not_novel"] = np.logical_and.reduce(
             [~self.max_similarities[label] for label in self.similarity_combinations]
         )
         LOG.info(
-            f'stratify_test_set: Found {self.max_similarities[self.max_similarities["not_novel"]]["system_id"].nunique()} systems labelled not_novel ({self.max_similarities[self.max_similarities["not_novel"] & self.max_similarities["passes_quality"]]["system_id"].nunique()} passing quality)'
+            f"stratify_test_set: Found {self.max_similarities[self.max_similarities['not_novel']]['system_id'].nunique()} systems labelled not_novel ({self.max_similarities[self.max_similarities['not_novel'] & self.max_similarities['passes_quality']]['system_id'].nunique()} passing quality)"
         )
 
     def get_filename(self, metric: str) -> Path:
@@ -338,7 +341,7 @@ class StratifiedTestSet:
             per_metric_similarities, join="outer", axis=1
         ).reset_index()
         LOG.info(
-            f'compute_train_test_max_similarity: Got max similarities for {self.max_similarities["system_id"].nunique()} systems'
+            f"compute_train_test_max_similarity: Got max similarities for {self.max_similarities['system_id'].nunique()} systems"
         )
         systems_with_similarities = set(self.max_similarities["system_id"])
         extra_rows = []
@@ -352,7 +355,10 @@ class StratifiedTestSet:
                 f"compute_train_test_max_similarity: Adding nan similarities for {len(extra_rows)} systems"
             )
             self.max_similarities = pd.concat(
-                [self.max_similarities, pd.DataFrame(extra_rows)]
+                [
+                    self.max_similarities,
+                    pd.DataFrame(extra_rows),
+                ]
             )
         with pd.option_context("future.no_silent_downcasting", True):
             # FutureWarning: Downcasting object dtype arrays on .fillna, .ffill, .bfill is deprecated and will change in a future version.
@@ -396,8 +402,8 @@ class StratifiedTestSet:
             "system_id"
         ].map(lambda x: quality.get(x, False))
         LOG.info(
-            f'assign_test_set_quality: Found {self.max_similarities[self.max_similarities["passes_quality"]]["system_id"].nunique()} '
-            f'out of {self.max_similarities["system_id"].nunique()} systems passing quality'
+            f"assign_test_set_quality: Found {self.max_similarities[self.max_similarities['passes_quality']]['system_id'].nunique()} "
+            f"out of {self.max_similarities['system_id'].nunique()} systems passing quality"
         )
 
 

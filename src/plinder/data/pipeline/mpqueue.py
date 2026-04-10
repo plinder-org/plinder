@@ -82,7 +82,7 @@ class MPQueue(object):
         t0 = time.time()
         task.run()
         t1 = time.time()
-        logging.info(f"running task {item}/{total} took {(t1-t0):.2f}s")
+        logging.info(f"running task {item}/{total} took {(t1 - t0):.2f}s")
 
 
 if __name__ == "__main__":

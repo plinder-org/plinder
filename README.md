@@ -58,13 +58,28 @@ release and the `plinder.core` package makes it easy to interact
 with the dataset.
 
 #### 🐛🐛🐛 Known bugs:
-- Source dataset contains incorrect `entry_release_date` dates, please, use `query_index` to get correct dates patched.
-- Complexes containing nucleic acid receptors may [not be saved corectly](https://github.com/plinder-org/plinder/issues/61).
-- `ligand_binding_affinity` queries have been disabled due to a [bug found parsing BindingDB](https://github.com/plinder-org/plinder/issues/94)
+- ~~Source dataset contains incorrect `entry_release_date` dates, please, use `query_index` to get correct dates patched.~~
+- ~~Complexes containing nucleic acid receptors may [not be saved correctly](https://github.com/plinder-org/plinder/issues/61).~~
+- ~~`ligand_binding_affinity` queries have been disabled due to a [bug found parsing BindingDB](https://github.com/plinder-org/plinder/issues/94)~~
+All fixed in WIP — will take effect after dataset regeneration.
 
 #### Changelog:
 
-- 2024-06/v2 (Current):
+- WIP (Current — unreleased):
+    - **Major backend refactor**: replaced OST, gemmi, plip, openbabel with biotite + peppr for data generation; removed 6 dependencies from ingest pipeline
+    - **Nucleic acid support**: DNA/RNA chains now correctly included as receptor neighbors, mainchain/sidechain detection works for both protein and nucleic acids ([#61](https://github.com/plinder-org/plinder/issues/61))
+    - **Custom CIF support**: parse Boltz/AF3/Chai outputs with bond order assignment from SMILES ([#117](https://github.com/plinder-org/plinder/issues/117))
+    - **Stereochemistry**: CCD ideal 3D coordinates used as stereo ground truth; new `resolved_stereo_matches_template` flag validates resolved structure chirality against CCD template (handles partial resolution via MCS trimming)
+    - **Interactions**: water bridge and metal bridge detection via peppr; halogen bond sidechain flag now computed (was hardcoded)
+    - **Binding affinity**: fixed BindingDB matching — target sequence now validated against PDB SEQRES with 100% core identity, terminal tags/truncations tolerated ([#94](https://github.com/plinder-org/plinder/issues/94)); updated to BindingDB 2026-04
+    - **Optional eval**: OpenStructure and posebusters moved to `pip install plinder[eval]`; base install is numpy 2 compatible; posebusters no longer runs during ingest
+    - **PlinderSystem API**: new `receptor_structure` (biotite AtomArray) and `ligand_mols` (RDKit Mol) properties; OST properties (`receptor_entity`, `ligand_views`) kept for eval but require `plinder[eval]`
+    - **Chain type support**: `Chain.from_cif_data` now assigns proper one-letter codes and chem_types for nucleotides (`RNA Linking`, `DNA Linking`); new `Residue.is_modified` property covers both protein PTMs and modified nucleotide bases
+    - **Save utils**: receptor/ligand chain naming generalized (`PDB_RECEPTOR_CHAINS`); system saving works for protein, NA, and mixed complexes
+    - **Dead code removal**: removed unused OST-based functions, PDB string roundtrips, duplicate SMILES derivation paths, v1 template matching (consolidated to Rascal MCES `get_matched_template`)
+    - **License**: PLIP (GPL-2.0) removal enables clean Apache-2.0 licensing
+
+- 2024-06/v2:
     - New systems added based on the 2024-06 RCSB sync
     - Updated system definition to be more stable and depend only on ligand distance rather than PLIP
     - Added annotations for crystal contacts
@@ -122,6 +137,12 @@ For details on the sub-directories, see [Documentation](https://plinder-org.gith
 
 ```
 pip install plinder
+```
+
+For evaluation scoring (lDDT, RMSD via OpenStructure):
+
+```
+pip install plinder[eval]
 ```
 
 ## License

@@ -7,14 +7,17 @@ import multiprocessing
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import biotite.structure as struc
+import biotite.structure.io.pdb as pdb_io
+import biotite.structure.io.pdbx as pdbx
 import pandas as pd
-from ost import io, mol
 
 from plinder.core import PlinderSystem, scores
 from plinder.core.utils.log import setup_logger
 from plinder.data.utils.annotations.cif_utils import (
     _cif_scalar,
     read_mmcif_container,
+    read_mmcif_file,
 )
 from plinder.data.utils.annotations.save_utils import save_cif_file
 from plinder.eval.docking import utils
@@ -48,7 +51,7 @@ def get_plddt(cif_file: Path) -> float | None:
 
 
 def superpose_to_system(
-    system_mol: mol.EntityHandle,
+    system_atoms: struc.AtomArray,
     target_cif_file: Path,
     save_folder: Path,
     target_chain: str | None = None,
@@ -56,66 +59,69 @@ def superpose_to_system(
 ) -> None:
     """
     Superpose a target asymmetric unit and chain to a system.
-    Score the ligands as if transplanted from the system to the target
 
     Parameters
     ----------
-    system_mol : mol.EntityHandle
-        receptor.cif loaded into an EntityHandle
+    system_atoms : AtomArray
+        Reference system atoms (receptor).
     target_cif_file : Path
-        Path to the target asymmetric unit cif file
+        Path to the target asymmetric unit cif file.
     save_folder : Path
-        Folder to save the superposed target cif and pdb files
-    target_chain : str
-        Chain of the target asymmetric unit to superpose
+        Folder to save the superposed target cif and pdb files.
+    target_chain : str, optional
+        Chain of the target to superpose.
+    name_mapping : dict, optional
+        Chain name mapping for PDB output.
     """
-    # Load target asymmetric unit and chain
-    target_mol, info = io.LoadMMCIF(
-        target_cif_file.as_posix(), info=True, fault_tolerant=True
+    # Load target
+    cif_file_obj = read_mmcif_file(target_cif_file)
+    target_atoms = pdbx.get_structure(
+        cif_file_obj, model=1, use_author_fields=False, include_bonds=True
     )
+    target_atoms = target_atoms[target_atoms.element != "H"]
+
     if target_chain is not None:
-        target_mol = mol.CreateEntityFromView(
-            target_mol.Select(f"chain='{target_chain}'"), True
-        )
-    target_mol = mol.CreateEntityFromView(target_mol.Select("water=False"), True)
+        target_atoms = target_atoms[target_atoms.chain_id == target_chain]
+    target_atoms = target_atoms[~struc.filter_solvent(target_atoms)]
 
-    # Superpose target to query system
-    superposition = mol.alg.Superpose(target_mol, system_mol, match="local-aln")
-    LOG.info(f"target_cif {target_cif_file} rmsd: {superposition.rmsd}")
-    target_mol.FixTransform()
+    # Superpose target to system
+    ref_ca = system_atoms[
+        struc.filter_amino_acids(system_atoms) & (system_atoms.atom_name == "CA")
+    ]
+    target_ca = target_atoms[
+        struc.filter_amino_acids(target_atoms) & (target_atoms.atom_name == "CA")
+    ]
 
-    if name_mapping is None:
-        assert target_chain is not None
-        # Rename target_chain to A for PDB format
-        target_pdb = target_mol.Copy()
-        if target_chain != "A":
-            edi = target_pdb.EditXCS(mol.BUFFERED_EDIT)
-            edi.RenameChain(target_pdb.FindChain(target_chain), "A")
-            edi.UpdateICS()
-    else:
-        # Rename target system according to its existing name mapping for PDB format
-        target_pdb = target_mol.Copy()
-        intermediate_names = {}
-        edi = target_pdb.EditXCS(mol.BUFFERED_EDIT)
-        for i, chain in enumerate(target_pdb.GetChainList()):
-            intermediate_names[f"T{i}"] = chain.name
-            edi.RenameChain(chain, f"T{i}")
-        edi.UpdateICS()
-        for i, chain in enumerate(target_pdb.GetChainList()):
-            edi.RenameChain(chain, name_mapping[intermediate_names[chain.name]])
+    if len(ref_ca) > 0 and len(target_ca) > 0:
+        # Match by sequence alignment
+        fitted, transformation = struc.superimpose(ref_ca, target_ca)
+        # Apply transformation to all target atoms
+        target_atoms = struc.superimpose_apply(target_atoms, transformation)
+        rmsd = struc.rmsd(ref_ca, fitted)
+        LOG.info(f"target_cif {target_cif_file} rmsd: {rmsd:.2f}")
 
-    # Save superposed target cif and pdb
-    cif_file = save_folder / "superposed.cif"
-    save_cif_file(target_mol, info, cif_file.stem, cif_file)
-    pdb_file = save_folder / "superposed.pdb"
-    io.SavePDB(target_pdb, pdb_file.as_posix())
+    # Rename chains for PDB output
+    target_pdb = target_atoms.copy()
+    if name_mapping is not None:
+        new_ids = target_pdb.chain_id.copy()
+        for old, new in name_mapping.items():
+            new_ids[target_pdb.chain_id == old] = new
+        target_pdb.chain_id = new_ids
+    elif target_chain is not None and target_chain != "A":
+        target_pdb.chain_id[target_pdb.chain_id == target_chain] = "A"
+
+    # Save superposed target
+    save_cif_file(target_atoms, "superposed", save_folder / "superposed.cif")
+    pdb_file = pdb_io.PDBFile()
+    pdb_file.set_structure(target_pdb)
+    pdb_file.write(str(save_folder / "superposed.pdb"))
 
 
 @dataclass
 class LinkedStructureConfig:
-    num_per_system: (
-        int
-    ) = 5  # Maximum number of apo/pred/cross structures to keep per system
+    num_per_system: int = (
+        5  # Maximum number of apo/pred/cross structures to keep per system
+    )
     filter_criteria: dict[str, int] = field(
         default_factory=lambda: {
             "pocket_fident": 95,
@@ -281,7 +287,7 @@ def save_superposition(
         target_chain = link.id.split("_")[-1]
     try:
         superpose_to_system(
-            system_mol=reference_system.receptor_entity,
+            system_atoms=reference_system.receptor_structure,
             target_cif_file=target_cif_file,
             save_folder=save_folder,
             name_mapping=name_mapping,
