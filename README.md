@@ -77,7 +77,7 @@ All fixed in WIP — will take effect after dataset regeneration.
     - **Chain type support**: `Chain.from_cif_data` now assigns proper one-letter codes and chem_types for nucleotides (`RNA Linking`, `DNA Linking`); new `Residue.is_modified` property covers both protein PTMs and modified nucleotide bases
     - **Save utils**: receptor/ligand chain naming generalized (`PDB_RECEPTOR_CHAINS`); system saving works for protein, NA, and mixed complexes
     - **Dead code removal**: removed unused OST-based functions, PDB string roundtrips, duplicate SMILES derivation paths, v1 template matching (consolidated to Rascal MCES `get_matched_template`)
-    - **License**: PLIP (GPL-2.0) removal enables clean Apache-2.0 licensing
+    - **License**: changed from GPL-2.0 to Apache-2.0 (GPL was only required by PLIP, now removed)
 
 - 2024-06/v2:
     - New systems added based on the 2024-06 RCSB sync
