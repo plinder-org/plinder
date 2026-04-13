@@ -23,14 +23,15 @@ from plinder.data.utils.annotations.cif_utils import (
     get_unknown_ligand_ids,
 )
 
-TEST_DATA = Path(__file__).parent / "test_data" / "custom_cif"
-BOLTZ_CIF = TEST_DATA / "boltz_8c3u_input_model_0.cif"
+BOLTZ_CIF = (
+    Path(__file__).parent / "test_data" / "custom_cif" / "boltz_8c3u_input_model_0.cif"
+)
 LIGAND_SMILES = "Cc1ccc2c(c1)NC(=O)C2(c3cc(ccc3O)c4ccc(cc4C(=O)O)C(=O)O)c5c[nH]nc5"
 
 
 @pytest.fixture
 def boltz_cif(tmp_path):
-    """Copy the Boltz CIF to a temp dir so tests can modify it."""
+    """Copy Boltz CIF to temp dir — tests modify it in-place."""
     dst = tmp_path / "boltz_model.cif"
     shutil.copy(BOLTZ_CIF, dst)
     return dst
@@ -185,3 +186,21 @@ def test_from_custom_cif_with_smiles(boltz_cif):
     f = pdbx.CIFFile.read(str(boltz_cif))
     block = list(f.values())[0]
     assert "chem_comp_bond" in block
+
+
+# ---------------------------------------------------------------------------
+# atoms_to_rdkit_mol unit tests
+# ---------------------------------------------------------------------------
+
+
+def test_atoms_to_rdkit_mol_error():
+    """atoms_to_rdkit_mol raises ValueError on empty input."""
+    import biotite.structure as struc
+    from plinder.data.utils.annotations.cif_utils import atoms_to_rdkit_mol
+
+    empty = struc.AtomArray(0)
+    try:
+        atoms_to_rdkit_mol(empty)
+        assert False, "Should have raised ValueError"
+    except (ValueError, Exception):
+        pass

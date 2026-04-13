@@ -39,29 +39,19 @@ LOG = logging.getLogger(__name__)
 
 
 def _check_stereo_vs_template(resolved_mol: "Chem.Mol") -> bool | None:
-    """Compare per-atom CIP codes between resolved 3D and CCD template.
+    """Compare resolved 3D stereo against CCD template per residue.
 
-    Works for single and multi-residue ligands by checking each residue
-    independently against its CCD template.
+    Iterates residues in the resolved mol, looks up the CCD template
+    for each, and delegates to ``compare_stereo_to_template`` for the
+    actual CIP comparison.  Handles multi-residue ligands (e.g. glycans)
+    by checking each residue copy independently.
 
-    When atoms are missing (partially resolved ligand), the CCD template
-    is trimmed via MCS to match the resolved atom set, then CIP codes
-    are re-assigned on the trimmed template before comparison.  This
-    avoids false mismatches from missing substituents changing CIP
-    priority.
-
-    Only stereocenters that are defined in *both* template and resolved
-    mol are compared.  Centers that are ambiguous (defined in only one
-    side) are skipped — but at least one defined center must be compared
-    for the result to be meaningful.
-
-    Returns True if all compared centers match, False if any differ,
-    None if no CCD template available or no comparable centers.
+    Returns True if all residues match or are achiral, False if any
+    stereo mismatch, None if no CCD template available.
     """
-    from plinder.core.structure.smallmols_utils import get_matched_template
+    from plinder.core.structure.smallmols_utils import compare_stereo_to_template
 
     # Group atoms by (resname, res_id) to handle repeated residue names
-    # e.g. a glycan with 3x NAG at different res_ids
     residue_atoms: dict[tuple[str, int], list[int]] = {}
     for atom in resolved_mol.GetAtoms():
         info = atom.GetPDBResidueInfo()
@@ -72,70 +62,37 @@ def _check_stereo_vs_template(resolved_mol: "Chem.Mol") -> bool | None:
         key = (info.GetResidueName().strip(), info.GetResidueNumber())
         residue_atoms.setdefault(key, []).append(atom.GetIdx())
 
-    has_template = False
-    n_compared = 0
+    results: list[bool | None] = []
     for (resname, res_id), atom_indices in residue_atoms.items():
         ccd_mol = _get_ccd_mol(resname)
         if ccd_mol is None:
+            results.append(None)
             continue
-        has_template = True
-        n_resolved = len(atom_indices)
 
-        # Build per-atom CIP map for this specific residue copy
-        resolved_cip: dict[str, str] = {}
-        for idx in atom_indices:
-            atom = resolved_mol.GetAtomWithIdx(idx)
-            info = atom.GetPDBResidueInfo()
-            cip = atom.GetPropsAsDict().get("_CIPCode", "")
-            if cip:
-                resolved_cip[info.GetName().strip()] = cip
+        frag = Chem.RWMol(resolved_mol)
+        remove = [
+            a.GetIdx()
+            for a in resolved_mol.GetAtoms()
+            if a.GetIdx() not in atom_indices
+        ]
+        frag.BeginBatchEdit()
+        for idx in sorted(remove, reverse=True):
+            frag.RemoveAtom(idx)
+        frag.CommitBatchEdit()
 
-        # If partially resolved, trim template via MCS
-        if n_resolved < ccd_mol.GetNumAtoms():
-            try:
-                # Extract just this residue's fragment for MCS
-                frag = Chem.RWMol(resolved_mol)
-                remove = [
-                    a.GetIdx()
-                    for a in resolved_mol.GetAtoms()
-                    if a.GetIdx() not in atom_indices
-                ]
-                frag.BeginBatchEdit()
-                for idx in sorted(remove, reverse=True):
-                    frag.RemoveAtom(idx)
-                frag.CommitBatchEdit()
-                trimmed = get_matched_template(ccd_mol, frag.GetMol())
-                Chem.AssignStereochemistry(trimmed, cleanIt=True, force=True)
-            except Exception as e:
-                LOG.warning(f"Template trimming failed for {resname}:{res_id}: {e}")
-                trimmed = ccd_mol
-        else:
-            trimmed = ccd_mol
+        try:
+            results.append(compare_stereo_to_template(frag.GetMol(), ccd_mol))
+        except Exception as e:
+            LOG.warning(f"Stereo comparison failed for {resname}:{res_id}: {e}")
+            results.append(None)
 
-        # Compare CIP codes only where both sides are defined
-        for atom in trimmed.GetAtoms():
-            info = atom.GetPDBResidueInfo()
-            if info is None:
-                raise ValueError(
-                    f"Atom {atom.GetIdx()} in CCD template {resname} "
-                    "lost PDB residue info after trimming"
-                )
-            template_cip = atom.GetPropsAsDict().get("_CIPCode", "")
-            if not template_cip:
-                continue
-            atom_name = info.GetName().strip()
-            resolved_cip_val = resolved_cip.get(atom_name, "")
-            if not resolved_cip_val:
-                continue
-            n_compared += 1
-            if resolved_cip_val != template_cip:
-                return False
-
-    if not has_template:
+    if not results:
         return None
-    if n_compared == 0:
-        return None
-    return True
+    if any(r is False for r in results):
+        return False
+    if any(r is True for r in results):
+        return True
+    return None
 
 
 @cache
@@ -470,9 +427,12 @@ def get_len_of_longest_linear_hydrocarbon_linker(
             if len(mol.GetSubstructMatches(Chem.MolFromSmarts(chain_smarts))) == 0:
                 return i
         # TODO: what to do if fails or not found? now returns -1
-        return -1
-    except:
-        return -1
+        return max_count + 100
+    except Exception as e:
+        logging.warning(
+            f"Error in calculating longest linear hydrocarbon linker for {mol.GetProp('_Name')}: {e}"
+        )
+        return max_count + 100
 
 
 def is_excluded_mol(
@@ -593,7 +553,7 @@ class Ligand(DocBaseModel):
     )
     resolved_stereo_matches_template: bool | None = Field(
         default=None,
-        description="Whether resolved 3D stereo matches CCD template (None if achiral or no template)",
+        description="Whether resolved 3D stereo matches CCD template (True if achiral; None if no template)",
     )
     residue_numbers: list[int] = Field(
         default_factory=list, description="__Ligand residue numbers"
@@ -784,8 +744,8 @@ class Ligand(DocBaseModel):
             # classify ligand based on above molecule
             self.classify_ligand_type(rdkit_compatible_mol)
 
-        except Exception:
-            logging.warning(f"Error in setting rdkit for {self.id}")
+        except Exception as e:
+            logging.warning(f"Error in setting rdkit for {self.id}: {e}")
             # Multi-residue ligands (peptides) may fail SMILES derivation
             # but are still structurally valid
             if self.smiles is None:

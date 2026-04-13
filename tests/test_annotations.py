@@ -16,6 +16,45 @@ def test_ccd_name_sorter():
     assert sort_ccd_codes({"G", "G25", "CPG", "5GP"}) == ["CPG", "G25", "G", "5GP"]
 
 
+def test_chain_from_cif_data_nucleotides(cif_8ufz):
+    """Test Chain.from_cif_data assigns correct one-letter codes and chem_types for DNA.
+
+    8ufz chain A is a 16-nt DNA strand (DA, DT, DC, DG residues).
+    """
+    import biotite.structure.io.pdbx as pdbx
+    from plinder.data.utils.annotations.cif_utils import read_mmcif_file
+    from plinder.data.utils.annotations.protein_utils import Chain, get_seqres_from_cif
+
+    cif_obj = read_mmcif_file(cif_8ufz)
+    block = list(cif_obj.values())[0]
+    atoms = pdbx.get_structure(
+        cif_obj, model=1, use_author_fields=False, include_bonds=True
+    )
+    atoms = atoms[atoms.element != "H"]
+    seqres = get_seqres_from_cif(block)
+
+    chain_a_atoms = atoms[atoms.chain_id == "A"]
+    chain = Chain.from_cif_data(
+        asym_id="A",
+        block=block,
+        atoms=chain_a_atoms,
+        seqres_length=len(seqres.get("A", "")),
+    )
+
+    expected_seq = "AATAAAAGCGGAAGTG"
+    actual_seq = "".join(
+        chain.residues[r].one_letter_code for r in sorted(chain.residues)
+    )
+    assert (
+        actual_seq == expected_seq
+    ), f"DNA sequence mismatch: got '{actual_seq}', expected '{expected_seq}'"
+
+    for resnum, residue in chain.residues.items():
+        assert (
+            residue.chem_type == "DNA Linking"
+        ), f"Residue {residue.name} at {resnum}: expected 'DNA Linking', got '{residue.chem_type}'"
+
+
 def test_covalent_linkage(cif_1qz5):
     reference = [("72:GLU:A:72:C", "73:HIC:A:73:N"), ("73:HIC:A:73:C", "74:GLY:A:74:N")]
 
@@ -421,9 +460,34 @@ def test_stereo_check_single_residue(cif_7gj7):
     assert q0i_flipped is not None, "Q0I should have a chiral center to flip"
     assert _check_stereo_vs_template(q0i_flipped) is False
 
-    # Achiral: DMS (dimethyl sulfoxide) — no stereocenters
+    # Achiral: DMS (dimethyl sulfoxide) — no stereocenters, no conflict
     dms_mol = _build_resolved_mol(cif_7gj7, "C")
-    assert _check_stereo_vs_template(dms_mol) is None
+    assert _check_stereo_vs_template(dms_mol) is True
+
+
+def test_stereo_check_partial_resolution(cif_1ngx):
+    """Test _check_stereo_vs_template with partially resolved ligand.
+
+    JEF in 1ngx chain E has 28/41 heavy atoms resolved. The CCD template
+    must be trimmed via MCS to match only the resolved atoms before CIP
+    comparison.
+    """
+    from plinder.data.utils.annotations.ligand_utils import _check_stereo_vs_template
+
+    jef_mol = _build_resolved_mol(cif_1ngx, "E")
+    assert jef_mol.GetNumAtoms() < 41, "JEF should be partially resolved"
+
+    # Stereo should match in the resolved portion
+    result = _check_stereo_vs_template(jef_mol)
+    assert (
+        result is not None
+    ), "Partially resolved JEF should have comparable stereocenters"
+
+    # Flipping should be detected even on trimmed template
+    jef_flipped = _flip_first_chiral(jef_mol)
+    if jef_flipped is not None:
+        result_flipped = _check_stereo_vs_template(jef_flipped)
+        assert result_flipped is False, "Flipped partial JEF should be detected"
 
 
 def test_stereo_check_multi_residue(cif_6fx1):

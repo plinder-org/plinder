@@ -63,6 +63,67 @@ def test_inchikey(smiles, inchikey, remove_stereo):
     assert inchikey == smiles2inchikey(smiles, remove_stereo=remove_stereo)
 
 
+def test_compare_stereo_to_template():
+    """Test compare_stereo_to_template: match, mismatch, achiral."""
+    import biotite.structure as struc
+    import biotite.structure.info as bt_info
+    from biotite.interface import rdkit as rdkit_interface
+    from peppr import sanitize as peppr_sanitize
+    from plinder.core.structure.smallmols_utils import compare_stereo_to_template
+
+    # Build a CCD mol with stereo (NAG — chiral sugar)
+    ref = bt_info.residue("NAG")
+    ref_heavy = ref[ref.element != "H"]
+    ref_heavy.bonds = struc.connect_via_residue_names(ref_heavy)
+    template = rdkit_interface.to_mol(ref_heavy)
+    peppr_sanitize(template)
+    Chem.AssignStereochemistryFrom3D(template)
+
+    # Resolved mol = same as template (exact match)
+    resolved = rdkit_interface.to_mol(ref_heavy)
+    peppr_sanitize(resolved)
+    Chem.AssignStereochemistryFrom3D(resolved)
+    assert compare_stereo_to_template(resolved, template) is True
+
+    # Flip one chiral center → mismatch
+    flipped = Chem.RWMol(resolved)
+    for atom in flipped.GetAtoms():
+        if atom.GetPropsAsDict().get("_CIPCode", ""):
+            chiral = atom.GetChiralTag()
+            if chiral == Chem.ChiralType.CHI_TETRAHEDRAL_CW:
+                atom.SetChiralTag(Chem.ChiralType.CHI_TETRAHEDRAL_CCW)
+            elif chiral == Chem.ChiralType.CHI_TETRAHEDRAL_CCW:
+                atom.SetChiralTag(Chem.ChiralType.CHI_TETRAHEDRAL_CW)
+            Chem.AssignStereochemistry(flipped, cleanIt=True, force=True)
+            break
+    assert compare_stereo_to_template(flipped.GetMol(), template) is False
+
+    # Achiral mol (DMS — no stereocenters)
+    ref_dms = bt_info.residue("DMS")
+    ref_dms_heavy = ref_dms[ref_dms.element != "H"]
+    ref_dms_heavy.bonds = struc.connect_via_residue_names(ref_dms_heavy)
+    dms_mol = rdkit_interface.to_mol(ref_dms_heavy)
+    peppr_sanitize(dms_mol)
+    dms_template = rdkit_interface.to_mol(ref_dms_heavy)
+    peppr_sanitize(dms_template)
+    assert (
+        compare_stereo_to_template(dms_mol, dms_template) is True
+    )  # achiral = no conflict
+
+
+def test_sequences_match_core():
+    """Test sequence matching for binding affinity validation."""
+    from plinder.data.utils.annotations.protein_utils import sequences_match_core
+
+    assert sequences_match_core("ABCDEFGH", "ABCDEFGH") is True
+    assert sequences_match_core("MHHHHHABCDEFGH", "ABCDEFGH") is True
+    assert sequences_match_core("ABCDEFGHLEVLFQ", "ABCDEFGH") is True
+    assert sequences_match_core("ABXDEFGH", "ABCDEFGH") is False
+    assert sequences_match_core("BCDEFG", "ABCDEFGH") is True
+    assert sequences_match_core("", "ABCDEFGH") is False
+    assert sequences_match_core("AB", "ABCDEFGHIJKLMNOP") is False
+
+
 def test_matched_templates():
     from plinder.core.structure.smallmols_utils import (
         get_matched_template,

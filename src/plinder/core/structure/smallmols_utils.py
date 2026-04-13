@@ -172,6 +172,75 @@ def get_template_to_mol_matches(
     return template_atom_order_stack1, mol_atom_order_stack2
 
 
+def compare_stereo_to_template(
+    resolved_mol: Mol,
+    template_mol: Mol,
+) -> bool:
+    """Compare per-atom CIP codes between a resolved mol and a template.
+
+    If the resolved mol has fewer atoms than the template (partial
+    resolution), the template is trimmed via MCS and CIP codes are
+    re-assigned on the trimmed template before comparison.
+
+    Only stereocenters defined in *both* mols are compared.  Achiral
+    compounds (no stereocenters in either mol) return True — no conflict.
+
+    Parameters
+    ----------
+    resolved_mol : Mol
+        RDKit Mol with ``AssignStereochemistryFrom3D`` already called.
+        Must have PDB residue info on each atom.
+    template_mol : Mol
+        CCD template Mol with stereo assigned from ideal 3D.
+
+    Returns
+    -------
+    bool
+        True if stereo matches (or achiral), False if any center differs.
+    """
+    # Build atom name → CIP map from resolved mol
+    resolved_cip: dict[str, str] = {}
+    for atom in resolved_mol.GetAtoms():
+        info = atom.GetPDBResidueInfo()
+        if info is None:
+            raise ValueError(
+                f"Atom {atom.GetIdx()} in resolved mol has no PDB residue info"
+            )
+        cip = atom.GetPropsAsDict().get("_CIPCode", "")
+        if cip:
+            resolved_cip[info.GetName().strip()] = cip
+
+    # Trim template if partially resolved
+    if resolved_mol.GetNumAtoms() < template_mol.GetNumAtoms():
+        try:
+            trimmed = get_matched_template(template_mol, resolved_mol)
+            Chem.AssignStereochemistry(trimmed, cleanIt=True, force=True)
+        except Exception:
+            trimmed = template_mol
+    else:
+        trimmed = template_mol
+
+    # Compare CIP codes where both sides are defined
+    for atom in trimmed.GetAtoms():
+        info = atom.GetPDBResidueInfo()
+        if info is None:
+            raise ValueError(
+                f"Atom {atom.GetIdx()} in template lost PDB residue info after trimming"
+            )
+        template_cip = atom.GetPropsAsDict().get("_CIPCode", "")
+        if not template_cip:
+            continue
+        atom_name = info.GetName().strip()
+        resolved_cip_val = resolved_cip.get(atom_name, "")
+        if not resolved_cip_val:
+            continue
+        if resolved_cip_val != template_cip:
+            return False
+
+    # No mismatches found (including achiral — no stereocenters = no conflict)
+    return True
+
+
 # below functions used for data ingest
 def mol_assigned_bond_orders_by_template(template_mol: Mol, mol: Mol) -> Mol:
     try:
@@ -231,7 +300,7 @@ def _remove_unmatched(
     res = Chem.Mol(res)
     try:
         Chem.SanitizeMol(res)
-    except:
+    except Exception:
         pass
     [a.SetNumRadicalElectrons(0) for a in res.GetAtoms()]
     return res
