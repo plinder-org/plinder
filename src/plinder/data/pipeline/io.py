@@ -78,7 +78,7 @@ def download_cofactors(
 def download_affinity_data(
     *,
     data_dir: Path,
-    bindingdb_url: str = "https://www.bindingdb.org/bind/downloads/BindingDB_All_202604_tsv.zip",
+    bindingdb_url: str = "https://www.bindingdb.org/rwd/bind/downloads/BindingDB_All_202604_tsv.zip",
     force_update: bool = False,
 ) -> Any:
     """

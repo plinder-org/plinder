@@ -581,6 +581,13 @@ def create_index(*, data_dir: Path, force_update: bool = False) -> pd.DataFrame:
             LOG.info(f"{i} {path.name} shape={df.shape}")
             if not df.empty:
                 dfs.append(df)
+        if not dfs:
+            LOG.warning(
+                f"create_index: no parquet files in {data_dir / 'qc' / 'index'}, "
+                "writing empty index"
+            )
+            pd.DataFrame().to_parquet(index, index=False)
+            return pd.read_parquet(index)
         df = pd.concat(dfs).reset_index(drop=True)
         # TODO: remove this rename kludge after annotations are rerun
         df.rename(

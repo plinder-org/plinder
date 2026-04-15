@@ -890,7 +890,11 @@ class Ligand(DocBaseModel):
             if KINASE_INHIBITORS is None:
                 KINASE_INHIBITORS = parse_kinase_inhibitors(data_dir)
             if BINDING_AFFINITY is None:
-                BINDING_AFFINITY = get_binding_affinity(data_dir)
+                try:
+                    BINDING_AFFINITY = get_binding_affinity(data_dir)
+                except Exception as e:
+                    LOG.warning(f"Failed to load binding affinity data: {e}")
+                    BINDING_AFFINITY = {"pchembl": {}, "target_sequence": {}}
 
         ligand_instance_chain = f"{ligand_instance}.{ligand_chain.asym_id}"
 
@@ -1055,6 +1059,11 @@ class Ligand(DocBaseModel):
 
         for chain_id in np.unique(near_prot.chain_id):
             if chain_id == ligand.instance_chain:
+                continue
+            # Skip chains classified as ligands — they belong in
+            # neighboring_ligands/interacting_ligands, not neighboring_residues
+            asym = chain_id.split(".")[-1] if "." in chain_id else chain_id
+            if asym in ligand_like_chains:
                 continue
             chain_atoms = near_prot[near_prot.chain_id == chain_id]
             resnums = list(dict.fromkeys(int(r) for r in chain_atoms.res_id))

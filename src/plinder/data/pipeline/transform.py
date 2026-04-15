@@ -141,13 +141,29 @@ def transform_bindingdb_affinity_data(*, raw_affinity_path: Path) -> pd.DataFram
         else:
             return np.nan
 
+    # BindingDB renamed the target sequence column across releases:
+    #   old (<=2024): "BindingDB Target Chain  Sequence" (double space)
+    #   new (>=2025): "BindingDB Target Chain Sequence 1" (numbered)
+    _SEQ_COL_NEW = "BindingDB Target Chain Sequence 1"
+    _SEQ_COL_OLD = "BindingDB Target Chain  Sequence"
+    header = set(pd.read_csv(raw_affinity_path, sep="\t", nrows=0).columns)
+    if _SEQ_COL_NEW in header:
+        seq_col = _SEQ_COL_NEW
+    elif _SEQ_COL_OLD in header:
+        seq_col = _SEQ_COL_OLD
+    else:
+        raise ValueError(
+            "BindingDB TSV is missing target sequence column. "
+            f"Expected '{_SEQ_COL_NEW}' or '{_SEQ_COL_OLD}'. "
+            "Required for target sequence validation (#94)."
+        )
     cols = [
         "Ligand HET ID in PDB",
         "PDB ID(s) for Ligand-Target Complex",
         "Ki (nM)",
         "Kd (nM)",
         "EC50 (nM)",
-        "BindingDB Target Chain  Sequence",
+        seq_col,
     ]
     df = pd.read_csv(raw_affinity_path, sep="\t", usecols=cols, low_memory=False)
 
@@ -161,11 +177,12 @@ def transform_bindingdb_affinity_data(*, raw_affinity_path: Path) -> pd.DataFram
         lambda x: calc_pchembl(float(str(x[0]).replace(">", "").replace("<", "")))
     )
 
+    df.rename(columns={seq_col: "target_sequence"}, inplace=True)
     df = df[
         [
             "PDB ID(s) for Ligand-Target Complex",
             "Ligand HET ID in PDB",
-            "BindingDB Target Chain  Sequence",
+            "target_sequence",
             "pchembl",
         ]
     ].drop_duplicates()
@@ -179,9 +196,6 @@ def transform_bindingdb_affinity_data(*, raw_affinity_path: Path) -> pd.DataFram
     df = df.explode(["pdb_id"]).drop_duplicates()
     df["pdbid_ligid"] = (
         df["pdb_id"].str.upper() + "_" + df["Ligand HET ID in PDB"].str.strip()
-    )
-    df.rename(
-        columns={"BindingDB Target Chain  Sequence": "target_sequence"}, inplace=True
     )
     df = df[["pdbid_ligid", "pchembl", "target_sequence"]].drop_duplicates()
 

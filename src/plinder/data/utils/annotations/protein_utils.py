@@ -149,10 +149,17 @@ def sequences_match_core(seq_a: str, seq_b: str, min_coverage: float = 0.9) -> b
 
 def detect_ligand_chains(
     entry: Any,
-    min_polymer_size: int = 10,
-    max_non_small_mol_ligand_length: int = 20,
+    min_polymer_size: int = 12,
 ) -> dict[str, str]:
-    """Detect which chains are ligands based on chain type, length, and annotations."""
+    """Detect which chains are ligands vs receptor polymers.
+
+    A polymer chain (protein, NA, saccharide) with >= min_polymer_size
+    residues is receptor.  Everything else — non-polymers, short
+    polymers, and BIRD-annotated chains — is a ligand.
+
+    Default threshold of 12 is the minimum length for meaningful
+    sequence searches (MMseqs2/Foldseek).
+    """
     ligand_chains = dict()
     for chain_name, chain in entry.chains.items():
         ct = chain.chain_type_str
@@ -161,22 +168,14 @@ def detect_ligand_chains(
 
         chain_length = len(chain.residues)
         bird_id = list(chain.mappings.get("BIRD", {"": None}))[0]
-        uniprot_id = list(chain.mappings.get("UniProt", {"": None}))[0]
 
-        if (bird_id) or (
-            _is_polypeptide(ct)
-            and chain_length <= max_non_small_mol_ligand_length
-            and not uniprot_id
-        ):
+        # BIRD-annotated short chains are ligands irrespective of polymer type or length
+        if bird_id:
             ligand_chains[chain_name] = ct
-
-        elif (
-            (_is_polypeptide(ct) and chain_length >= min_polymer_size)
-            or (_is_polynucleotide(ct) and chain_length >= min_polymer_size)
-            or (_is_polysaccharide(ct) and chain_length >= min_polymer_size)
-            or (_is_polymer(ct) and chain_length >= min_polymer_size)
-        ):
+        # Polymers >= threshold are receptor
+        elif _is_polymer(ct) and chain_length >= min_polymer_size:
             continue
+        # Everything else is ligand
         else:
             ligand_chains[chain_name] = ct
     return ligand_chains

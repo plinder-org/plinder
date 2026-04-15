@@ -196,9 +196,9 @@ class EntryConfig:
     max_ligand_chains_to_save: int = 5
     neighboring_residue_threshold: float = 6.0
     neighboring_ligand_threshold: float = 4.0
-    min_polymer_size: int = 10
-    max_non_small_mol_ligand_length: int = 20
+    min_polymer_size: int = 12
     plip_complex_threshold: float = 10.0
+    min_shared_pocket_members: int = 3
     save_folder: Optional[str] = None
     skip_save_systems: bool = False
 
@@ -218,7 +218,8 @@ class AnnotationConfig:
 
     neighboring_residue_threshold: float = 6.0
     neighboring_ligand_threshold: float = 4.0
-    min_polymer_size: int = 10
+    min_polymer_size: int = 12
+    min_shared_pocket_members: int = 3
 
 
 """ From

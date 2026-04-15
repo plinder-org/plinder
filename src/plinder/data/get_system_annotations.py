@@ -23,8 +23,9 @@ class GetPlinderAnnotation:
         validation_xml: Path,
         save_folder: Optional[Path] = None,
         neighboring_residue_threshold: float = 6.0,
-        neighboring_ligand_threshold: float = 4.0,  # TODO: review @VO
-        min_polymer_size: int = 10,  # TODO: review @VO,
+        neighboring_ligand_threshold: float = 4.0,
+        min_polymer_size: int = 12,
+        min_shared_pocket_members: int = 3,
         symmetry_mate_contact_threshold: float = 5.0,
         entry_cfg: Optional[Dict[Any, Any]] = None,
     ) -> None:
@@ -34,6 +35,7 @@ class GetPlinderAnnotation:
         self.neighboring_residue_threshold = neighboring_residue_threshold
         self.neighboring_ligand_threshold = neighboring_ligand_threshold
         self.min_polymer_size = min_polymer_size
+        self.min_shared_pocket_members = min_shared_pocket_members
         self.symmetry_mate_contact_threshold = symmetry_mate_contact_threshold
         self.entry_cfg = entry_cfg
 
@@ -42,6 +44,7 @@ class GetPlinderAnnotation:
             neighboring_residue_threshold=self.neighboring_residue_threshold,
             neighboring_ligand_threshold=self.neighboring_ligand_threshold,
             min_polymer_size=self.min_polymer_size,
+            min_shared_pocket_members=self.min_shared_pocket_members,
             save_folder=self.save_folder,
             symmetry_mate_contact_threshold=self.symmetry_mate_contact_threshold,
         )

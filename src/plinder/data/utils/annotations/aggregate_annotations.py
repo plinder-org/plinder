@@ -260,7 +260,7 @@ class System(DocBaseModel):
         """
         return any(l.binding_affinity is not None for l in self.ligands)
 
-    @cached_property  # TODO: change this to exclude residues only interacting with artifacts or ions
+    @cached_property
     def pocket_residues(self) -> dict[str, dict[int, str]]:
         """
         __Pockets residues of the system
@@ -901,12 +901,13 @@ class Entry(DocBaseModel):
         save_folder: Path | None,
         max_protein_chains_to_save: int,
         max_ligand_chains_to_save: int,
+        min_shared_pocket_members: int = 3,
     ) -> None:
         """Label crystal contacts, set systems, and save."""
         if self.symmetry_mate_contacts:
             for ligand in ligands.values():
                 ligand.label_crystal_contacts(self.symmetry_mate_contacts)
-        self.set_systems(ligands)
+        self.set_systems(ligands, min_shared_pocket_members=min_shared_pocket_members)
         self.label_chains()
         if save_folder is not None:
             self.save_systems(
@@ -966,8 +967,7 @@ class Entry(DocBaseModel):
         cif_file: Path,
         neighboring_residue_threshold: float = 6.0,
         neighboring_ligand_threshold: float = 4.0,
-        min_polymer_size: int = 10,  # TODO: this used to be max_non_small_mol_ligand_length
-        max_non_small_mol_ligand_length: int = 20,  # TODO: review and make consistent
+        min_polymer_size: int = 12,
         data_dir: Path | None = None,
         save_folder: Path | None = None,
         max_protein_chains_to_save: int = 5,
@@ -975,6 +975,7 @@ class Entry(DocBaseModel):
         plip_complex_threshold: float = 10.0,
         skip_save_systems: bool = False,
         symmetry_mate_contact_threshold: float = 5.0,
+        min_shared_pocket_members: int = 3,
     ) -> Entry:
         """
         Load an entry object from mmCIF files in the pipeline
@@ -987,11 +988,10 @@ class Entry(DocBaseModel):
             Distance from ligand for protein residues to be considered a ligand
         neighboring_ligand_threshold : float
             Distance from ligand for other ligands to be considered a ligand
-        min_polymer_size : int = 10
-            Minimum number of residues for chain to be seen as a polymer,
-            or Maximum number of residues for chain to be seen as a ligand
-        max_non_small_mol_ligand_length: int = 20
-            Maximum length of polymer to be assessed for potentially being ligand
+        min_polymer_size : int = 12
+            Minimum residue count for a polymer chain to be receptor.
+            Shorter polymers are classified as ligands.  Set to 12 as
+            the minimum length for meaningful MMseqs2/Foldseek searches.
         save_folder : Path
             Path to save files
         max_protein_chains_to_save : int
@@ -1002,6 +1002,8 @@ class Entry(DocBaseModel):
             Maximum distance (Å) from ligand for interaction analysis
         skip_save_systems: bool = False
             skips saving system files
+        min_shared_pocket_members : int
+            Minimum shared pocket residues to group non-artifact ligands.
 
         Returns
         -------
@@ -1072,9 +1074,7 @@ class Entry(DocBaseModel):
             entry.add_ecod()
             entry.add_panther(data_dir / "dbs" / "panther")
             entry.add_kinase(data_dir / "dbs" / "kinase" / "kinase_uniprotac.parquet")
-        entry.ligand_like_chains = detect_ligand_chains(
-            entry, min_polymer_size, max_non_small_mol_ligand_length
-        )
+        entry.ligand_like_chains = detect_ligand_chains(entry, min_polymer_size)
         protein_chains = [c for c in entry.chains if c not in entry.ligand_like_chains]
         interface_proximal_gaps = annotate_interface_gaps(
             cif_file,
@@ -1154,6 +1154,7 @@ class Entry(DocBaseModel):
             save_folder if not skip_save_systems else None,
             max_protein_chains_to_save,
             max_ligand_chains_to_save,
+            min_shared_pocket_members=min_shared_pocket_members,
         )
         return entry
 
@@ -1165,15 +1166,15 @@ class Entry(DocBaseModel):
         ligand_smiles_dict: dict[str, str] | None = None,
         neighboring_residue_threshold: float = 6.0,
         neighboring_ligand_threshold: float = 4.0,
-        min_polymer_size: int = 10,  # TODO: this used to be max_non_small_mol_ligand_length
-        max_non_small_mol_ligand_length: int = 20,  # TODO: review and make consistent
+        min_polymer_size: int = 12,
         plip_complex_threshold: float = 10.0,
         save_folder: Path | None = None,
         max_protein_chains_to_save: int = 5,
         max_ligand_chains_to_save: int = 5,
+        min_shared_pocket_members: int = 3,
     ) -> Entry:
         """
-        Creates entry from an extrernal mmCIF file
+        Creates entry from an extrernal (non-PDB) mmCIF file
 
         Parameters
         ----------
@@ -1251,9 +1252,7 @@ class Entry(DocBaseModel):
             chain_to_seqres=chain_to_seqres,
         )
         entry._populate_chains(atoms, cif_data)
-        entry.ligand_like_chains = detect_ligand_chains(
-            entry, min_polymer_size, max_non_small_mol_ligand_length
-        )
+        entry.ligand_like_chains = detect_ligand_chains(entry, min_polymer_size)
         protein_chains = [c for c in entry.chains if c not in entry.ligand_like_chains]
         interface_proximal_gaps = annotate_interface_gaps(
             cif_file,
@@ -1278,40 +1277,69 @@ class Entry(DocBaseModel):
             save_folder,
             max_protein_chains_to_save,
             max_ligand_chains_to_save,
+            min_shared_pocket_members=min_shared_pocket_members,
         )
         return entry
 
-    def set_systems(self, ligands: dict[str, Ligand]) -> None:
-        """
-        Setter method for system ids for ligands
+    def set_systems(
+        self,
+        ligands: dict[str, Ligand],
+        min_shared_pocket_members: int = 3,
+    ) -> None:
+        """Group ligands into systems by shared pocket and proximity.
+
+        Non-artifact ligands (including cofactors and ions) are grouped
+        if they share at least *min_shared_pocket_members* pocket
+        members (receptor residues + neighboring ligand chains).
+
+        Artifacts and cofactors are only attached to a system if they
+        are within 4 Å of a proper ligand.  This prevents merging
+        many cofactor copies (e.g. 18 HEMs) into one giant system.
 
         Parameters
         ----------
         ligands : dict[str, Ligand]
-
-        Returns
-        -------
-        None
+            All ligands in the entry keyed by ligand ID.
+        min_shared_pocket_members : int
+            Minimum shared pocket members to group non-artifact ligands.
         """
-
-        # Map string ligand IDs to integer node indices for networkit
         ligand_ids = list(ligands.keys())
-        id_to_idx = {lid: i for i, lid in enumerate(ligand_ids)}
         G = nk.Graph(len(ligand_ids))
-        for ligand_id in ligand_ids:
-            for neighboring_ligand_instance_chain in (
-                ligands[ligand_id].neighboring_ligands
-                + ligands[ligand_id].interacting_ligands
-            ):
-                neighboring_ligand_id = "__".join(
-                    [
-                        self.pdb_id,
-                        ligands[ligand_id].biounit_id,
-                        f"{neighboring_ligand_instance_chain}",
-                    ]
-                )
-                if neighboring_ligand_id in id_to_idx:
-                    G.addEdge(id_to_idx[ligand_id], id_to_idx[neighboring_ligand_id])
+
+        # Step 1: group proper non-cofactor ligands by shared pocket residues
+        # Cofactors (HEM, FAD, NAD etc.) don't drive pocket grouping to
+        # avoid merging many cofactor copies into one giant system.
+        # They attach via proximity in step 2 instead.
+        pocket_members: dict[int, set[str]] = {}
+        for i, lid in enumerate(ligand_ids):
+            lig = ligands[lid]
+            if lig.is_artifact or lig.is_cofactor:
+                continue
+            members: set[str] = set()
+            for chain, resnums in lig.neighboring_residues.items():
+                for rn in resnums:
+                    members.add(f"res:{chain}:{rn}")
+            for lc in lig.neighboring_ligands + lig.interacting_ligands:
+                members.add(f"lig:{lc}")
+            pocket_members[i] = members
+
+        groupable = list(pocket_members.keys())
+        for ii, i in enumerate(groupable):
+            for j in groupable[ii + 1 :]:
+                shared = pocket_members[i] & pocket_members[j]
+                if len(shared) >= min_shared_pocket_members:
+                    G.addEdge(i, j)
+
+        # Step 2: attach artifacts/cofactors within 4A of a proper ligand
+        for i, lid in enumerate(ligand_ids):
+            lig = ligands[lid]
+            if not (lig.is_artifact or lig.is_cofactor):
+                continue
+            for neighbor_chain in lig.neighboring_ligands + lig.interacting_ligands:
+                neighbor_id = "__".join([self.pdb_id, lig.biounit_id, neighbor_chain])
+                j_idx = {l: idx for idx, l in enumerate(ligand_ids)}.get(neighbor_id)
+                if j_idx is not None and not ligands[ligand_ids[j_idx]].is_artifact:
+                    G.addEdge(i, j_idx)
         cc = nk.components.ConnectedComponents(G)
         cc.run()
         components = cc.getComponents()
@@ -1322,6 +1350,8 @@ class Entry(DocBaseModel):
                 system_ligands[idx + 1].append(ligands[ligand_ids[node_idx]])
         self.systems: dict[str, System] = {}
         for ligs in system_ligands.values():
+            if not ligs:
+                continue
             system = System(
                 pdb_id=self.pdb_id,
                 biounit_id=ligs[0].biounit_id,

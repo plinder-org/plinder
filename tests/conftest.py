@@ -301,6 +301,24 @@ def cif_8ufz():
     return test_asset_fp / "xx/pdb_00008ufz/pdb_00008ufz_xyz-enrich.cif.gz"
 
 
+# To test multi-ligand system grouping (GPCR with adjacent binding sites)
+@pytest.fixture(scope="session")
+def cif_7fee():
+    return test_asset_fp / "xx/pdb_00007fee/pdb_00007fee_xyz-enrich.cif.gz"
+
+
+# To test cofactor-only system classification (HEM in hemoglobin)
+@pytest.fixture(scope="session")
+def cif_19hc():
+    return test_asset_fp / "xx/pdb_000019hc/pdb_000019hc_xyz-enrich.cif.gz"
+
+
+# To test ATP+metal cofactor system grouping (PKA)
+@pytest.fixture(scope="session")
+def cif_1atp():
+    return test_asset_fp / "xx/pdb_00001atp/pdb_00001atp_xyz-enrich.cif.gz"
+
+
 @pytest.fixture(scope="session")
 def ecod_mini():
     ecod_str = """
@@ -536,12 +554,39 @@ def cofactors_path(test_env):
                 "1.4.99.3"
             ]
         }
+    ],
+    "Heme": [
+        {
+            "cofactors": [
+                "HEM",
+                "HEC",
+                "HEB",
+                "HEA"
+            ],
+            "EC": [
+                "1.11.1.5",
+                "1.11.2.2"
+            ]
+        }
+    ],
+    "Adenosine nucleotides": [
+        {
+            "cofactors": [
+                "ATP",
+                "ADP",
+                "AMP"
+            ],
+            "EC": [
+                "2.7.1.1",
+                "2.7.11.1"
+            ]
+        }
     ]
 }"""
     cofactors_path.write_text(mini_cofactors)
     with cofactors_path.open("r") as f:
         cofactors = json.load(f)
-        assert len(cofactors) == 2
+        assert len(cofactors) == 4  # CoA, TTQ, Heme (19hc), ATP (1atp)
     return cofactors_path
 
 

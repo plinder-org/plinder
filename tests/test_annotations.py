@@ -2,6 +2,7 @@
 # Distributed under the terms of the Apache License 2.0
 import numpy as np
 import pandas as pd
+import pytest
 from plinder.data.get_system_annotations import GetPlinderAnnotation
 from plinder.data.utils.annotations.aggregate_annotations import Entry
 from plinder.data.utils.annotations.cif_utils import read_mmcif_container
@@ -90,16 +91,31 @@ def test_short_noncov_peptide_detection(cif_6i41, mock_alternative_datasets):
     assert df["ligand_protein_chains_auth_id"].drop_duplicates().to_list() == [["A"]]
 
 
-def test_synthetic_noncov_peptide_detection(cif_6u6k, mock_alternative_datasets):
+@pytest.mark.parametrize(
+    "min_polymer_size,expect_ligand",
+    [(12, False), (20, True)],
+    ids=["threshold_12_peptide_is_receptor", "threshold_20_peptide_is_ligand"],
+)
+def test_peptide_ligand_threshold(
+    cif_6u6k, mock_alternative_datasets, min_polymer_size, expect_ligand
+):
+    """6u6k: 13-residue synthetic peptide (chain B).
+
+    With min_polymer_size=12, the peptide is receptor (13 >= 12) → no systems.
+    With min_polymer_size=20, the peptide is ligand (13 < 20) → system created.
+    """
     entry_dir = mock_alternative_datasets("6u6k")
-    plinder_anno = GetPlinderAnnotation(cif_6u6k, "", save_folder=entry_dir)
-    plinder_anno.annotate()
-    df = plinder_anno.annotated_df
-    assert len(df) == 1
-    assert df["ligand_is_covalent"].sum() == 0
-    assert set(df.ligand_ccd_code.to_list()) == {
-        "ACE-TRP-TRP-ILE-ILE-PRO-ALY-VAL-LYS-ALY-GLY-CYS-NH2"
-    }
+    entry = Entry.from_cif_file(
+        cif_6u6k, save_folder=entry_dir, min_polymer_size=min_polymer_size
+    )
+    if expect_ligand:
+        assert len(entry.systems) == 1
+        lig = entry.systems[list(entry.systems.keys())[0]].ligands[0]
+        assert lig.ccd_code == "ACE-TRP-TRP-ILE-ILE-PRO-ALY-VAL-LYS-ALY-GLY-CYS-NH2"
+    else:
+        assert (
+            len(entry.systems) == 0
+        ), f"13-residue peptide should be receptor with min_polymer_size={min_polymer_size}"
 
 
 def test_synthetic_cov_peptide_detection(cif_6lu7, mock_alternative_datasets):
@@ -530,6 +546,122 @@ def test_stereo_check_multi_residue(cif_6fx1):
     assert n_chiral > 10, f"Glycan should have many chiral centers, got {n_chiral}"
 
 
+def test_multi_ligand_system_grouping(cif_7fee, mock_alternative_datasets):
+    """Test pocket-based grouping for adjacent drug-like ligands (7fee GPCR).
+
+    7fee: GPCR with 9GF + 7IC binding adjacent pockets (7.9 Å apart,
+    4 shared receptor residues). Uses GetPlinderAnnotation for full
+    classification. 9GF and 7IC must be in the same system.
+    """
+    entry_dir = mock_alternative_datasets("7fee")
+    plinder_anno = GetPlinderAnnotation(cif_7fee, "", save_folder=entry_dir)
+    plinder_anno.annotate()
+
+    systems = plinder_anno.entry.systems
+
+    # 9GF(D) + 7IC(E) grouped by shared pocket residues
+    assert "7fee__1__1.A__1.D_1.E" in systems
+    drug_sys = systems["7fee__1__1.A__1.D_1.E"]
+    assert sorted(l.ccd_code for l in drug_sys.ligands) == ["7IC", "9GF"]
+    assert drug_sys.system_type == "holo"
+    for lig in drug_sys.ligands:
+        assert not lig.is_artifact, f"{lig.ccd_code} should not be artifact"
+        assert lig.is_proper, f"{lig.ccd_code} should be proper"
+
+    # CLR(B) standalone — not chained into drug system
+    assert "7fee__1__1.A__1.B" in systems
+    clr_sys = systems["7fee__1__1.A__1.B"]
+    assert [l.ccd_code for l in clr_sys.ligands] == ["CLR"]
+    assert clr_sys.system_type == "holo"
+    clr = clr_sys.ligands[0]
+    assert clr.is_proper, "CLR should be proper"
+    assert not clr.is_artifact, "CLR should not be artifact"
+    assert not clr.is_cofactor, "CLR is a lipid, not a cofactor"
+
+    # CLR(C) + OLC(L) grouped by proximity
+    assert "7fee__1__1.A__1.C_1.L" in systems
+    clr_olc = systems["7fee__1__1.A__1.C_1.L"]
+    assert sorted(l.ccd_code for l in clr_olc.ligands) == ["CLR", "OLC"]
+    assert clr_olc.system_type == "holo"
+    for lig in clr_olc.ligands:
+        assert not lig.is_cofactor, f"{lig.ccd_code} should not be cofactor"
+
+
+def test_cofactor_system_stays_holo(cif_1atp, mock_alternative_datasets):
+    """Test that cofactor systems are holo via production code path.
+
+    1atp: PKA with ATP (cofactor, from mock DB) + 2x Mn (ions) + PKI peptide.
+    Uses GetPlinderAnnotation for full classification.
+    """
+    entry_dir = mock_alternative_datasets("1atp")
+    plinder_anno = GetPlinderAnnotation(cif_1atp, "", save_folder=entry_dir)
+    plinder_anno.annotate()
+
+    systems = plinder_anno.entry.systems
+
+    # ATP(E) + Mn(C,D) + PKI peptide(B) all in one holo system
+    # B (PKI, 20 res) is receptor with min_polymer_size=12
+    expected = "1atp__1__1.A_1.B__1.C_1.D_1.E"
+    assert expected in systems, f"Expected {expected}, got {sorted(systems.keys())}"
+    atp_sys = systems[expected]
+    assert atp_sys.system_type == "holo"
+    codes = {l.ccd_code for l in atp_sys.ligands}
+    assert "ATP" in codes
+    assert "MN" in codes
+
+    for lig in atp_sys.ligands:
+        if lig.ccd_code == "ATP":
+            assert lig.is_cofactor, "ATP should be cofactor"
+            assert lig.is_proper, "ATP should be proper"
+            assert not lig.is_artifact, "ATP should not be artifact"
+        elif lig.ccd_code == "MN":
+            assert lig.is_ion, "MN should be ion"
+
+
+def test_cofactor_system_holo_19hc(cif_19hc, mock_alternative_datasets):
+    """Test that cofactor-only systems (19hc HEM) are holo.
+
+    19hc: hemoglobin with 18 HEM (cofactor) + 5 ACT (artifact).
+    Uses GetPlinderAnnotation for full classification.
+    HEM systems must be holo; ACT-only systems must be artifact.
+    """
+    entry_dir = mock_alternative_datasets("19hc")
+    plinder_anno = GetPlinderAnnotation(cif_19hc, "", save_folder=entry_dir)
+    plinder_anno.annotate()
+
+    systems = plinder_anno.entry.systems
+
+    # Standalone HEM systems (cofactor only)
+    for sid in [
+        "19hc__1__1.A_1.B__1.G",
+        "19hc__1__1.A_1.B__1.R",
+        "19hc__1__1.A_1.B__1.W",
+        "19hc__1__1.A__1.I",
+        "19hc__1__1.B__1.T",
+    ]:
+        assert sid in systems, f"Expected HEM system {sid}"
+        assert systems[sid].system_type == "holo"
+        assert all(l.ccd_code == "HEM" for l in systems[sid].ligands)
+
+    # HEM + ACT grouped by proximity (ACT within 4A of HEM)
+    assert "19hc__1__1.A_1.B__1.D_1.L_1.Q_1.S_1.U" in systems
+    hem_act = systems["19hc__1__1.A_1.B__1.D_1.L_1.Q_1.S_1.U"]
+    assert hem_act.system_type == "holo"
+    assert sorted(set(l.ccd_code for l in hem_act.ligands)) == ["ACT", "HEM"]
+
+    # All holo systems must have HEM classified correctly
+    holo_ids = [sid for sid, s in systems.items() if s.system_type == "holo"]
+    assert len(holo_ids) >= 9, f"Expected >=9 holo systems, got {len(holo_ids)}"
+    for sid in holo_ids:
+        for lig in systems[sid].ligands:
+            if lig.ccd_code == "HEM":
+                assert lig.is_cofactor, f"HEM in {sid} should be cofactor"
+                assert lig.is_proper, f"HEM in {sid} should be proper"
+                assert not lig.is_artifact, f"HEM in {sid} should not be artifact"
+            if lig.ccd_code == "ACT":
+                assert lig.is_artifact, f"ACT in {sid} should be artifact"
+
+
 def test_nucleic_acid_receptor_detection(cif_8ufz):
     """Verify DNA/RNA chains are included as receptor neighbors (issue #61).
 
@@ -674,9 +806,18 @@ def test_ligand_fix_to_valid_thalidomide(cif_7bqu, mock_alternative_datasets):
         cif_7bqu,
         save_folder=entry_dir,
     )
-    lig = entry.systems["7bqu__1__1.A_1.B__1.C"].ligands[0]
+    # EF2 may group with nearby ZN via shared pocket residues
+    lig = None
+    system_id = None
+    for sid, system in entry.systems.items():
+        for l in system.ligands:
+            if l.ccd_code == "EF2":
+                lig = l
+                system_id = sid
+                break
+    assert lig is not None, "EF2 ligand not found in any system"
     assert lig.is_invalid == False
-    outsdffile = entry_dir / "7bqu__1__1.A_1.B__1.C/ligand_files/1.C.sdf"
+    outsdffile = entry_dir / system_id / "ligand_files/1.C.sdf"
     assert outsdffile.is_file()
     rdmol_sdf = Chem.SDMolSupplier(str(outsdffile), removeHs=True)[0]
     rdmol_smi = Chem.MolFromSmiles(lig.smiles)
@@ -712,10 +853,20 @@ def test_distorted_molecule_template_fix(cif_3grt, mock_alternative_datasets):
         cif_3grt,
         save_folder=entry_dir,
     )
-    lig = entry.systems["3grt__1__1.A_2.A__1.B"].ligands[0]
+    # FAD(B) and TS2(C) may group via shared pocket residues
+    lig = None
+    system_id = None
+    for sid, system in entry.systems.items():
+        for l in system.ligands:
+            if l.ccd_code == "FAD":
+                lig = l
+                system_id = sid
+                break
+    assert lig is not None, "FAD ligand not found in any system"
     assert lig.is_invalid == False
-    outsdffile = entry_dir / "3grt__1__1.A_2.A__1.B/ligand_files/1.B.sdf"
-    assert outsdffile.is_file()
+    # Check SDF was saved and is valid
+    outsdffile = entry_dir / system_id / "ligand_files" / f"{lig.instance_chain}.sdf"
+    assert outsdffile.is_file(), f"SDF not found at {outsdffile}"
     rdmol = Chem.SDMolSupplier(str(outsdffile), removeHs=True)[0]
     assert Chem.SanitizeMol(rdmol) == Chem.rdmolops.SanitizeFlags.SANITIZE_NONE
 
@@ -749,8 +900,13 @@ def test_too_many_hydrogens(cif_6ntj, mock_alternative_datasets):
 
 
 def test_disconnected_ligand_fix(cif_4nhc, mock_alternative_datasets):
+    """4nhc chain C is a 17-residue peptide ligand (with min_polymer_size=20).
+
+    Tests that a fragmented peptide gets fixed to a valid, connected SDF.
+    """
     entry_dir = mock_alternative_datasets("4nhc")
-    entry = Entry.from_cif_file(cif_4nhc, save_folder=entry_dir)
+    # Use threshold 20 so the 17-residue peptide is classified as ligand
+    entry = Entry.from_cif_file(cif_4nhc, save_folder=entry_dir, min_polymer_size=20)
     lig = entry.systems["4nhc__1__1.A_1.B__1.C"].ligands[0]
     assert lig.is_invalid == False
     outsdffile = entry_dir / "4nhc__1__1.A_1.B__1.C/ligand_files/1.C.sdf"
