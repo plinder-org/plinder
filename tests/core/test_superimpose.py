@@ -10,8 +10,8 @@ def test_superimpose_chain(read_plinder_mount):
     """
     # TODO: review if this test is still relevant
     pass
-    system_id_1 = "19hc__1__1.A_1.B__1.G"
-    system_id_2 = "19hc__1__1.A_1.B__1.V_1.X_1.Y"
+    system_id_1 = "1avd__1__1.A_2.A__1.D"
+    system_id_2 = "1avd__1__1.A_2.A__2.D"
     # system_dir_1 = read_plinder_mount / "systems" / system_id_1
     # system_dir_2 = read_plinder_mount / "systems" / system_id_2
     chain_id_1 = "1.A"

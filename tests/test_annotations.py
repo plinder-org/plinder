@@ -619,11 +619,13 @@ def test_cofactor_system_stays_holo(cif_1atp, mock_alternative_datasets):
 
 
 def test_cofactor_system_holo_19hc(cif_19hc, mock_alternative_datasets):
-    """Test that cofactor-only systems (19hc HEM) are holo.
+    """Test that cofactor systems (19hc HEM) are holo.
 
-    19hc: hemoglobin with 18 HEM (cofactor) + 5 ACT (artifact).
-    Uses GetPlinderAnnotation for full classification.
-    HEM systems must be holo; ACT-only systems must be artifact.
+    19hc: erythrocruorin with 18 HEM (cofactor) + 5 ACT (artifact).
+    HEMs share pocket residues on the same protein chain (adjacent
+    binding sites), so pocket-based grouping merges them into one
+    large system.  ACTs attach via 4 Å proximity to HEMs; isolated
+    ACTs (C, P) form standalone artifact systems.
     """
     entry_dir = mock_alternative_datasets("19hc")
     plinder_anno = GetPlinderAnnotation(cif_19hc, "", save_folder=entry_dir)
@@ -631,35 +633,28 @@ def test_cofactor_system_holo_19hc(cif_19hc, mock_alternative_datasets):
 
     systems = plinder_anno.entry.systems
 
-    # Standalone HEM systems (cofactor only)
-    for sid in [
-        "19hc__1__1.A_1.B__1.G",
-        "19hc__1__1.A_1.B__1.R",
-        "19hc__1__1.A_1.B__1.W",
-        "19hc__1__1.A__1.I",
-        "19hc__1__1.B__1.T",
-    ]:
-        assert sid in systems, f"Expected HEM system {sid}"
-        assert systems[sid].system_type == "holo"
-        assert all(l.ccd_code == "HEM" for l in systems[sid].ligands)
+    # All 18 HEMs merge via shared pocket residues + 3 ACTs attach via proximity
+    big = "19hc__1__1.A_1.B__1.D_1.E_1.F_1.G_1.H_1.I_1.J_1.K_1.L_1.M_1.N_1.O_1.Q_1.R_1.S_1.T_1.U_1.V_1.W_1.X_1.Y"
+    assert big in systems, f"Expected merged HEM system, got {sorted(systems.keys())}"
+    big_sys = systems[big]
+    assert big_sys.system_type == "holo"
+    codes = {l.ccd_code for l in big_sys.ligands}
+    assert "HEM" in codes
+    assert "ACT" in codes
+    hem_count = sum(1 for l in big_sys.ligands if l.ccd_code == "HEM")
+    assert hem_count == 18, f"Expected 18 HEMs, got {hem_count}"
 
-    # HEM + ACT grouped by proximity (ACT within 4A of HEM)
-    assert "19hc__1__1.A_1.B__1.D_1.L_1.Q_1.S_1.U" in systems
-    hem_act = systems["19hc__1__1.A_1.B__1.D_1.L_1.Q_1.S_1.U"]
-    assert hem_act.system_type == "holo"
-    assert sorted(set(l.ccd_code for l in hem_act.ligands)) == ["ACT", "HEM"]
+    # Only one system: isolated ACTs (C, P) have no protein neighbors
+    assert len(systems) == 1, f"Expected 1 system, got {sorted(systems.keys())}"
 
-    # All holo systems must have HEM classified correctly
-    holo_ids = [sid for sid, s in systems.items() if s.system_type == "holo"]
-    assert len(holo_ids) >= 9, f"Expected >=9 holo systems, got {len(holo_ids)}"
-    for sid in holo_ids:
-        for lig in systems[sid].ligands:
-            if lig.ccd_code == "HEM":
-                assert lig.is_cofactor, f"HEM in {sid} should be cofactor"
-                assert lig.is_proper, f"HEM in {sid} should be proper"
-                assert not lig.is_artifact, f"HEM in {sid} should not be artifact"
-            if lig.ccd_code == "ACT":
-                assert lig.is_artifact, f"ACT in {sid} should be artifact"
+    # HEM classification checks
+    for lig in big_sys.ligands:
+        if lig.ccd_code == "HEM":
+            assert lig.is_cofactor, "HEM should be cofactor"
+            assert lig.is_proper, "HEM should be proper"
+            assert not lig.is_artifact, "HEM should not be artifact"
+        if lig.ccd_code == "ACT":
+            assert lig.is_artifact, "ACT should be artifact"
 
 
 def test_nucleic_acid_receptor_detection(cif_8ufz):

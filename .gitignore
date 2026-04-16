@@ -149,6 +149,7 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+.claude
 
 # Spyder project settings
 .spyderproject
@@ -186,9 +187,10 @@ cython_debug/
 */*/DS_Store
 
 src/plinder-data/plinder/data/artifacts
-#src/plinder-core
 *.bak*
 *.1.*
 tests/xx
 tests/test_data/plinder/mount/systems/*/
+tmp_foldseek
+tmp_mmseqs
 artifacts

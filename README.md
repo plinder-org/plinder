@@ -77,7 +77,7 @@ All fixed in WIP — will take effect after dataset regeneration.
     - **Chain type support**: `Chain.from_cif_data` now assigns proper one-letter codes and chem_types for nucleotides (`RNA Linking`, `DNA Linking`); new `Residue.is_modified` property covers both protein PTMs and modified nucleotide bases
     - **Save utils**: receptor/ligand chain naming generalized (`PDB_RECEPTOR_CHAINS`); system saving works for protein, NA, and mixed complexes
     - **System definition**: unified `min_polymer_size=12` replaces separate `min_polymer_size`/`max_non_small_mol_ligand_length` — polymers ≥ 12 residues are receptor, shorter are ligands (threshold matches minimum MMseqs2/Foldseek search length); molecules with BIRD annotation are ligands irrespective of size; ligand chains no longer appear in both receptor and ligand parts of system IDs.
-    - **System grouping**: pocket-based grouping (≥ 3 shared receptor residues) for adjacent binding sites (e.g. orthosteric + allosteric); artifacts attach only via 4 Å proximity; cofactors don't drive pocket grouping to prevent merging many copies (e.g. 18 HEMs)
+    - **System grouping**: pocket-based grouping (≥ 3 shared receptor residues on the same chain instance) for adjacent binding sites (e.g. orthosteric + allosteric, cofactor + substrate in same active site); artifacts attach only via 4 Å proximity
     - **Dead code removal**: removed unused OST-based functions, PDB string roundtrips, duplicate SMILES derivation paths, v1 template matching (consolidated to Rascal MCES `get_matched_template`)
     - **License**: changed from GPL-2.0 to Apache-2.0 (GPL was only required by PLIP, now removed)
 

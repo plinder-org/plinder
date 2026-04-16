@@ -8,7 +8,7 @@ from plinder.core.utils import constants as pc
 
 
 def test_transform_abc(read_plinder_mount):
-    s = PlinderSystem(system_id="19hc__1__1.A_1.B__1.V_1.X_1.Y").holo_structure
+    s = PlinderSystem(system_id="1avd__1__1.A__1.C").holo_structure
     with pytest.raises(NotImplementedError):
         StructureTransform().transform(s)
 
@@ -16,9 +16,9 @@ def test_transform_abc(read_plinder_mount):
 @pytest.mark.parametrize(
     "system_id, atom_types",
     [
-        ("19hc__1__1.A_1.B__1.V_1.X_1.Y", ["CA"]),
-        ("19hc__1__1.A_1.B__1.V_1.X_1.Y", ["CA", "N", "C", "O"]),
-        ("19hc__1__1.A_1.B__1.V_1.X_1.Y", ["foo"]),
+        ("1avd__1__1.A__1.C", ["CA"]),
+        ("1avd__1__1.A__1.C", ["CA", "N", "C", "O"]),
+        ("1avd__1__1.A__1.C", ["foo"]),
     ],
 )
 def test_select_atom_types_structure_transform(

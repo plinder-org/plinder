@@ -1288,13 +1288,15 @@ class Entry(DocBaseModel):
     ) -> None:
         """Group ligands into systems by shared pocket and proximity.
 
-        Non-artifact ligands (including cofactors and ions) are grouped
+        Non-artifact ligands (drug-like, cofactors, ions) are grouped
         if they share at least *min_shared_pocket_members* pocket
         members (receptor residues + neighboring ligand chains).
+        Pocket members use chain instance IDs (e.g. ``1.A``) so
+        ligands in different subunits only merge when they genuinely
+        share residues on the same chain copy.
 
-        Artifacts and cofactors are only attached to a system if they
-        are within 4 Å of a proper ligand.  This prevents merging
-        many cofactor copies (e.g. 18 HEMs) into one giant system.
+        Artifacts (GOL, PEG, etc.) are only attached to a system if
+        they are within 4 Å of a non-artifact ligand.
 
         Parameters
         ----------
@@ -1306,14 +1308,11 @@ class Entry(DocBaseModel):
         ligand_ids = list(ligands.keys())
         G = nk.Graph(len(ligand_ids))
 
-        # Step 1: group proper non-cofactor ligands by shared pocket residues
-        # Cofactors (HEM, FAD, NAD etc.) don't drive pocket grouping to
-        # avoid merging many cofactor copies into one giant system.
-        # They attach via proximity in step 2 instead.
+        # Step 1: group non-artifact ligands by shared pocket residues
         pocket_members: dict[int, set[str]] = {}
         for i, lid in enumerate(ligand_ids):
             lig = ligands[lid]
-            if lig.is_artifact or lig.is_cofactor:
+            if lig.is_artifact:
                 continue
             members: set[str] = set()
             for chain, resnums in lig.neighboring_residues.items():
@@ -1330,10 +1329,10 @@ class Entry(DocBaseModel):
                 if len(shared) >= min_shared_pocket_members:
                     G.addEdge(i, j)
 
-        # Step 2: attach artifacts/cofactors within 4A of a proper ligand
+        # Step 2: attach artifacts within 4A of a non-artifact ligand
         for i, lid in enumerate(ligand_ids):
             lig = ligands[lid]
-            if not (lig.is_artifact or lig.is_cofactor):
+            if not lig.is_artifact:
                 continue
             for neighbor_chain in lig.neighboring_ligands + lig.interacting_ligands:
                 neighbor_id = "__".join([self.pdb_id, lig.biounit_id, neighbor_chain])
