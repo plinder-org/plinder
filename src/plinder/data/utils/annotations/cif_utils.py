@@ -163,7 +163,7 @@ def get_chain_external_mappings(
 
 
 # ---------------------------------------------------------------------------
-# CIF → RDKit conversion
+# CIF -> RDKit conversion
 # ---------------------------------------------------------------------------
 
 
@@ -173,14 +173,22 @@ def atoms_to_rdkit_mol(
 ) -> "Chem.Mol":
     """Convert a biotite AtomArray to a sanitized RDKit Mol.
 
-    Hydrogen atoms are removed.  Bonds are assigned from CCD residue
-    names if not already present.  Stereochemistry is optionally
-    assigned from 3D coordinates.
+    Hydrogen atoms **and isotopes** (D, T) are removed. biotite's
+    ``element`` is a string, so a naive ``element != "H"`` filter would
+    leak deuterium/tritium into the mol; we pre-filter the common
+    mass-1 isotopes and additionally call ``RemoveAllHs`` as a
+    belt-and-braces catch for anything RDKit still classifies as
+    hydrogen via atomic number.
+
+    Bonds are assigned from CCD residue names if not already present.
+    Stereochemistry is, optionally, assigned from 3D coordinates before
+    the final ``RemoveAllHs`` so chiral tags are stamped on heavy atoms
+    and survive hydrogen removal.
 
     Parameters
     ----------
     atoms : AtomArray
-        Heavy atoms with optional bonds (e.g. from ``include_bonds=True``).
+        Atoms with optional bonds (e.g. from ``include_bonds=True``).
         If bonds are missing, ``connect_via_residue_names`` is used.
     assign_stereo : bool
         If True, call ``AssignStereochemistryFrom3D`` on the result.
@@ -188,7 +196,8 @@ def atoms_to_rdkit_mol(
     Returns
     -------
     Chem.Mol
-        Sanitized RDKit molecule with 3D coordinates and PDB atom info.
+        Sanitized RDKit molecule with 3D coordinates and PDB atom info,
+        heavy atoms only.
 
     Raises
     ------
@@ -198,7 +207,7 @@ def atoms_to_rdkit_mol(
     from biotite.interface import rdkit as rdkit_interface
     from peppr import sanitize as peppr_sanitize
 
-    heavy = atoms[atoms.element != "H"]
+    heavy = atoms[~np.isin(atoms.element, ["H", "D", "T"])]
     if heavy.bonds is None or heavy.bonds.as_array().shape[0] == 0:
         heavy.bonds = struc.connect_via_residue_names(heavy)
     mol = rdkit_interface.to_mol(heavy)
@@ -207,7 +216,10 @@ def atoms_to_rdkit_mol(
     peppr_sanitize(mol)
     if assign_stereo:
         Chem.AssignStereochemistryFrom3D(mol)
-    return mol
+    # RDKit's RemoveAllHs keys on atomic number, so it strips any
+    # hydrogen isotope atom that survived the element-string filter.
+    # Safe after stereo assignment — chiral tags live on heavy atoms.
+    return Chem.RemoveAllHs(mol)
 
 
 # ---------------------------------------------------------------------------
@@ -582,6 +594,7 @@ def get_unknown_ligand_ids(cif_input: pdbx.CIFFile | Path | str) -> set[str]:
     unknown = set()
     for comp_id in hetatm_ids:
         if comp_id in cif_bond_ids:
+            # if bonds defined in cif - consider chemistry as known
             continue
         if _is_known_compound(comp_id, atom_names=atom_names_per_comp.get(comp_id)):
             continue
@@ -589,14 +602,24 @@ def get_unknown_ligand_ids(cif_input: pdbx.CIFFile | Path | str) -> set[str]:
     return unknown
 
 
-def _rdkit_bond_order_to_cif(bond_type: Chem.rdchem.BondType) -> str:
-    mapping = {
+def _rdkit_bond_to_cif(bond: Chem.rdchem.Bond) -> tuple[str, str]:
+    """Map an RDKit bond to ``(value_order, pdbx_aromatic_flag)``.
+
+    Biotite's ``_parse_intra_residue_bonds`` needs both columns; the
+    ``(order, flag)`` pair keys into
+    :data:`biotite.structure.io.pdbx.convert.COMP_BOND_ORDER_TO_TYPE`
+    — without the aromatic flag biotite silently falls back to the
+    CCD library, which fails for custom residues.
+    """
+    aromatic_flag = "Y" if bond.GetIsAromatic() else "N"
+    order_map = {
         Chem.rdchem.BondType.SINGLE: "SING",
         Chem.rdchem.BondType.DOUBLE: "DOUB",
         Chem.rdchem.BondType.TRIPLE: "TRIP",
         Chem.rdchem.BondType.AROMATIC: "AROM",
     }
-    return mapping.get(bond_type, "SING")
+    order = order_map.get(bond.GetBondType(), "SING")
+    return order, aromatic_flag
 
 
 def check_cif_bond_orders(cif_input: pdbx.CIFFile | Path | str) -> None:
@@ -621,58 +644,151 @@ def check_cif_bond_orders(cif_input: pdbx.CIFFile | Path | str) -> None:
         )
 
 
-def assign_bond_orders_from_smiles(
-    cif_path: Path,
-    ligand_smiles: dict[str, str],
-    output_path: Path | None = None,
-) -> Path:
-    """Assign bond orders to unknown ligands using SMILES templates.
+def _bonds_by_position(
+    comp_id: str,
+    template_heavy: Chem.Mol,
+    lig_heavy: struc.AtomArray,
+) -> list[tuple[str, str, str, str]]:
+    """Assign bonds by trusting positional atom-order correspondence.
 
-    Known CCD compounds are skipped. Writes ``_chem_comp_bond`` into
-    the CIF, preserving any existing entries.
+    Assumes CIF heavy atoms appear in the same order as heavy atoms in
+    the SMILES template (the convention used by Boltz, AlphaFold3,
+    Chai-1, etc.). Verifies by comparing elements at each position and
+    raises ``ValueError`` on any mismatch, pointing at the offending
+    position so the caller can diagnose it quickly.
+
+    Returns a list of ``(atom_name_1, atom_name_2, value_order,
+    pdbx_aromatic_flag)`` tuples ready to be written to
+    ``_chem_comp_bond``.
+    """
+    n_template = template_heavy.GetNumAtoms()
+    n_cif = lig_heavy.array_length()
+    if n_template != n_cif:
+        raise ValueError(
+            f"Atom count mismatch for {comp_id}: CIF has {n_cif} heavy atoms, "
+            f"SMILES has {n_template}."
+        )
+
+    cif_elements = [str(e).upper() for e in lig_heavy.element]
+    for i, (cif_el, tmpl_atom) in enumerate(
+        zip(cif_elements, template_heavy.GetAtoms())
+    ):
+        tmpl_el = tmpl_atom.GetSymbol().upper()
+        if cif_el != tmpl_el:
+            raise ValueError(
+                f"Element mismatch for {comp_id} at position {i}: "
+                f"CIF has {cif_el}, SMILES has {tmpl_el}. Set "
+                "force_substructure_match=True if the CIF doesn't "
+                "preserve SMILES atom order."
+            )
+
+    atom_names = list(lig_heavy.atom_name)
+    out: list[tuple[str, str, str, str]] = []
+    for bond in template_heavy.GetBonds():
+        idx1 = bond.GetBeginAtomIdx()
+        idx2 = bond.GetEndAtomIdx()
+        order, aromatic_flag = _rdkit_bond_to_cif(bond)
+        out.append((atom_names[idx1], atom_names[idx2], order, aromatic_flag))
+    return out
+
+
+def _bonds_by_substructure_match(
+    comp_id: str,
+    template: Chem.Mol,
+    lig_heavy: struc.AtomArray,
+) -> list[tuple[str, str, str, str]]:
+    """Assign bonds via RDKit substructure matching.
+
+    Opt-in alternative to :func:`_bonds_by_position` for CIFs whose
+    atom order does not match SMILES parse order. Invoked only when
+    ``force_substructure_match=True`` is passed to
+    :func:`assign_bond_orders_from_smiles` — there is no automatic
+    fallback between the two paths.
+    """
+    from biotite.interface import rdkit as rdkit_interface
+    from peppr import sanitize as peppr_sanitize
+
+    if lig_heavy.bonds is None or lig_heavy.bonds.as_array().shape[0] == 0:
+        # Unknown residue — infer bonds from distances
+        lig_heavy.bonds = struc.connect_via_distances(lig_heavy)
+    # Ensure bond types are SINGLE (1), not ANY/UNSPECIFIED (0),
+    # so RDKit template matching can reassign proper orders
+    bond_arr = lig_heavy.bonds.as_array()
+    bond_arr[:, 2] = np.where(bond_arr[:, 2] == 0, 1, bond_arr[:, 2])
+    lig_heavy.bonds = struc.BondList(lig_heavy.array_length(), bond_arr)
+    rdkit_mol = rdkit_interface.to_mol(lig_heavy)
+    if rdkit_mol is None:
+        raise ValueError(f"Could not parse ligand {comp_id} as RDKit mol")
+    try:
+        peppr_sanitize(rdkit_mol)
+    except Exception as e:
+        LOG.warning(f"peppr_sanitize failed for {comp_id}: {e}")
+    fixed_mol = mol_assigned_bond_orders_by_template(template, rdkit_mol)
+
+    atom_names = [
+        a.GetPDBResidueInfo().GetName().strip()
+        if a.GetPDBResidueInfo()
+        else lig_heavy.atom_name[a.GetIdx()]
+        for a in fixed_mol.GetAtoms()
+    ]
+
+    out: list[tuple[str, str, str, str]] = []
+    for bond in fixed_mol.GetBonds():
+        idx1 = bond.GetBeginAtomIdx()
+        idx2 = bond.GetEndAtomIdx()
+        if idx1 < len(atom_names) and idx2 < len(atom_names):
+            order, aromatic_flag = _rdkit_bond_to_cif(bond)
+            out.append((atom_names[idx1], atom_names[idx2], order, aromatic_flag))
+    return out
+
+
+def enrich_cif_with_smiles_bonds(
+    cif_file: pdbx.CIFFile,
+    ligand_smiles: dict[str, str],
+    force_substructure_match: bool = False,
+) -> None:
+    """Add ``_chem_comp_bond`` rows to a CIFFile in-memory.
+
+    Mutates ``cif_file`` by appending bond entries for unknown ligands
+    using the provided SMILES templates. Known CCD compounds are
+    skipped. Existing ``_chem_comp_bond`` rows are preserved.
+
+    See :func:`assign_bond_orders_from_smiles` for the full description
+    of the atom-order assumption and the ``force_substructure_match``
+    opt-in.
 
     Parameters
     ----------
-    cif_path : Path
-        Input mmCIF file.
+    cif_file : pdbx.CIFFile
+        CIF object to mutate in place.
     ligand_smiles : dict[str, str]
         Mapping of component ID (e.g. ``LIG``) to SMILES.
-    output_path : Path | None
-        Output path. Defaults to overwriting *cif_path*.
-
-    Returns
-    -------
-    Path
-        Path to the written CIF file.
+    force_substructure_match : bool, default=False
+        If ``True``, skip the positional element check entirely and
+        assign bonds via RDKit substructure matching instead.
 
     Raises
     ------
     MissingBondOrderError
         If unknown ligands remain without SMILES.
     ValueError
-        If SMILES is invalid or template matching fails.
+        If SMILES is invalid, atom counts differ, element order does
+        not match (default path), or template matching fails
+        (substructure path).
     """
-    if output_path is None:
-        output_path = cif_path
-
-    cif_file = pdbx.CIFFile.read(str(cif_path))
     block = list(cif_file.values())[0]
 
-    # Determine which ligands actually need bond order assignment
     unknown_ids = get_unknown_ligand_ids(cif_file)
     if not unknown_ids:
         LOG.info("All ligands are known or already have bond orders, nothing to do")
-        cif_file.write(str(output_path))
-        return output_path
+        return
 
-    # Check that user provided SMILES for all unknown ligands
     missing_smiles = unknown_ids - set(ligand_smiles.keys())
     if missing_smiles:
         raise MissingBondOrderError(
             f"Unknown ligands {missing_smiles} need SMILES but none were provided"
         )
 
-    # Filter to only process unknown ligands
     to_process = {k: v for k, v in ligand_smiles.items() if k in unknown_ids}
     skipped = set(ligand_smiles.keys()) - unknown_ids
     if skipped:
@@ -683,27 +799,36 @@ def assign_bond_orders_from_smiles(
     )
     atoms = atoms[atoms.element != "H"]
 
-    # Preserve existing _chem_comp_bond rows
+    # Preserve existing _chem_comp_bond rows. biotite's parser requires
+    # pdbx_aromatic_flag to consume the category — default to "N" when
+    # absent so pre-existing rows remain parseable.
     comp_id_list: list[str] = []
     atom_id_1_list: list[str] = []
     atom_id_2_list: list[str] = []
     value_order_list: list[str] = []
+    aromatic_flag_list: list[str] = []
 
     if "chem_comp_bond" in block:
         existing = block["chem_comp_bond"]
+        existing_flag = (
+            existing["pdbx_aromatic_flag"].as_array()
+            if "pdbx_aromatic_flag" in existing
+            else None
+        )
         for i in range(existing.row_count):
             comp_id_list.append(existing["comp_id"].as_array()[i])
             atom_id_1_list.append(existing["atom_id_1"].as_array()[i])
             atom_id_2_list.append(existing["atom_id_2"].as_array()[i])
             value_order_list.append(existing["value_order"].as_array()[i])
-
-    from biotite.interface import rdkit as rdkit_interface
-    from peppr import sanitize as peppr_sanitize
+            aromatic_flag_list.append(
+                existing_flag[i] if existing_flag is not None else "N"
+            )
 
     for comp_id, smiles in to_process.items():
         template = Chem.MolFromSmiles(smiles)
         if template is None:
             raise ValueError(f"Invalid SMILES for {comp_id}: {smiles}")
+        template_heavy = Chem.RemoveHs(template, sanitize=False)
 
         lig_mask = atoms.res_name == comp_id
         if not np.any(lig_mask):
@@ -712,48 +837,90 @@ def assign_bond_orders_from_smiles(
         lig_atoms = atoms[lig_mask]
         lig_heavy = lig_atoms[lig_atoms.element != "H"]
 
-        if lig_heavy.bonds is None or lig_heavy.bonds.as_array().shape[0] == 0:
-            # Unknown residue — infer bonds from distances
-            lig_heavy.bonds = struc.connect_via_distances(lig_heavy)
-        # Ensure bond types are SINGLE (1), not ANY/UNSPECIFIED (0),
-        # so RDKit template matching can reassign proper orders
-        bond_arr = lig_heavy.bonds.as_array()
-        bond_arr[:, 2] = np.where(bond_arr[:, 2] == 0, 1, bond_arr[:, 2])
-        lig_heavy.bonds = struc.BondList(lig_heavy.array_length(), bond_arr)
-        rdkit_mol = rdkit_interface.to_mol(lig_heavy)
-        if rdkit_mol is None:
-            raise ValueError(f"Could not parse ligand {comp_id} as RDKit mol")
-        try:
-            peppr_sanitize(rdkit_mol)
-        except Exception as e:
-            LOG.warning(f"peppr_sanitize failed for {comp_id}: {e}")
-        fixed_mol = mol_assigned_bond_orders_by_template(template, rdkit_mol)
+        if force_substructure_match:
+            bonds_to_emit = _bonds_by_substructure_match(comp_id, template, lig_heavy)
+        else:
+            bonds_to_emit = _bonds_by_position(comp_id, template_heavy, lig_heavy)
 
-        atom_names = [
-            a.GetPDBResidueInfo().GetName().strip()
-            if a.GetPDBResidueInfo()
-            else lig_heavy.atom_name[a.GetIdx()]
-            for a in fixed_mol.GetAtoms()
-        ]
+        for atom_name_1, atom_name_2, value_order, aromatic_flag in bonds_to_emit:
+            comp_id_list.append(comp_id)
+            atom_id_1_list.append(atom_name_1)
+            atom_id_2_list.append(atom_name_2)
+            value_order_list.append(value_order)
+            aromatic_flag_list.append(aromatic_flag)
 
-        for bond in fixed_mol.GetBonds():
-            idx1 = bond.GetBeginAtomIdx()
-            idx2 = bond.GetEndAtomIdx()
-            if idx1 < len(atom_names) and idx2 < len(atom_names):
-                comp_id_list.append(comp_id)
-                atom_id_1_list.append(atom_names[idx1])
-                atom_id_2_list.append(atom_names[idx2])
-                value_order_list.append(_rdkit_bond_order_to_cif(bond.GetBondType()))
-
-    bond_cat = pdbx.CIFCategory(
+    block["chem_comp_bond"] = pdbx.CIFCategory(
         {
             "comp_id": comp_id_list,
             "atom_id_1": atom_id_1_list,
             "atom_id_2": atom_id_2_list,
             "value_order": value_order_list,
+            "pdbx_aromatic_flag": aromatic_flag_list,
         }
     )
-    block["chem_comp_bond"] = bond_cat
 
+
+def assign_bond_orders_from_smiles(
+    cif_path: Path,
+    ligand_smiles: dict[str, str],
+    output_path: Path | None = None,
+    force_substructure_match: bool = False,
+) -> Path:
+    """Disk-based wrapper around :func:`enrich_cif_with_smiles_bonds`.
+
+    Reads ``cif_path``, enriches the CIF in memory, and writes the
+    result to ``output_path`` (or overwrites ``cif_path`` when
+    ``output_path`` is ``None``). Callers that already have a
+    ``pdbx.CIFFile`` object in memory should use
+    :func:`enrich_cif_with_smiles_bonds` directly to avoid the read /
+    write round-trip.
+
+    Atom-order assumption
+    ---------------------
+    By default this function assumes that the heavy-atom order in the
+    CIF exactly matches the heavy-atom parse order of the SMILES. This
+    is the convention produced by structure-prediction tools that
+    accept SMILES input (e.g. Boltz, AlphaFold3, Chai-1): their output
+    CIF writes ligand atoms in the same order that the SMILES was
+    parsed. Under this assumption the mapping from CIF atom -> SMILES
+    atom is the identity, and bond orders can be copied directly from
+    the SMILES template with zero ambiguity.
+
+    The function verifies the assumption by comparing the element at
+    each position. If counts or elements don't match, ``ValueError``
+    is raised pointing at the first mismatch.
+
+    Set ``force_substructure_match=True`` to fully replace the default
+    path with RDKit substructure matching. This does NOT fall back on
+    failure — it is the only method used when the flag is set. Slower,
+    can be ambiguous for symmetric molecules, and should only be used
+    for CIFs from tools that don't preserve SMILES atom order.
+
+    Parameters
+    ----------
+    cif_path : Path
+        Input mmCIF file.
+    ligand_smiles : dict[str, str]
+        Mapping of component ID (e.g. ``LIG``) to SMILES.
+    output_path : Path | None
+        Output path. Defaults to overwriting *cif_path*.
+    force_substructure_match : bool, default=False
+        If ``True``, skip the positional element check entirely and
+        assign bonds via RDKit substructure matching instead. Use only
+        when CIF atom order is not guaranteed to match SMILES order.
+
+    Returns
+    -------
+    Path
+        Path to the written CIF file.
+    """
+    if output_path is None:
+        output_path = cif_path
+    cif_file = pdbx.CIFFile.read(str(cif_path))
+    enrich_cif_with_smiles_bonds(
+        cif_file,
+        ligand_smiles=ligand_smiles,
+        force_substructure_match=force_substructure_match,
+    )
     cif_file.write(str(output_path))
     return output_path

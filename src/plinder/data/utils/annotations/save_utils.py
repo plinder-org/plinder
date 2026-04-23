@@ -39,8 +39,7 @@ def save_ligands(
     output_folder : str or Path
         Directory to write SDF files.
     """
-    from biotite.interface import rdkit as rdkit_interface
-    from peppr import sanitize as peppr_sanitize
+    from plinder.data.utils.annotations.cif_utils import atoms_to_rdkit_mol
 
     for chain_id, smiles, num_unresolved in zip(
         ligand_chain_ids,
@@ -52,10 +51,7 @@ def save_ligands(
             continue
         lig_atoms = atoms[lig_mask]
         try:
-            lig_heavy = lig_atoms[lig_atoms.element != "H"]
-            rdkit_mol = rdkit_interface.to_mol(lig_heavy)
-            peppr_sanitize(rdkit_mol)
-            rdkit_mol = Chem.RemoveAllHs(rdkit_mol)
+            rdkit_mol = atoms_to_rdkit_mol(lig_atoms)
         except Exception:
             continue
         if rdkit_mol is None:

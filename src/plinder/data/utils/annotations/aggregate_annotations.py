@@ -926,8 +926,15 @@ class Entry(DocBaseModel):
         neighboring_residue_threshold: float,
         neighboring_ligand_threshold: float,
         data_dir: Path | None,
+        ligand_smiles_dict: dict[str, str] | None = None,
     ) -> dict[str, "Ligand"]:
-        """Create Ligand objects for every ligand chain in a single biounit."""
+        """Create Ligand objects for every ligand chain in a single biounit.
+
+        ``ligand_smiles_dict`` is passed through to :meth:`Ligand.from_pli`
+        and is only set by :meth:`Entry.from_custom_cif_file` — it lets
+        user-supplied SMILES act as the CCD fallback for stereo
+        validation and SMILES assignment on custom residues.
+        """
         ligands: dict[str, Ligand] = {}
         # Find ligand chains: chain_id format is "{instance}.{asym_id}"
         all_chains = np.unique(biounit.chain_id)
@@ -956,6 +963,7 @@ class Entry(DocBaseModel):
                 neighboring_ligand_threshold=neighboring_ligand_threshold,
                 data_dir=data_dir,
                 chain_to_seqres=self.chain_to_seqres,
+                ligand_smiles_dict=ligand_smiles_dict,
             )
             if ligand is not None:
                 ligands[ligand.id] = ligand
@@ -1172,6 +1180,7 @@ class Entry(DocBaseModel):
         max_protein_chains_to_save: int = 5,
         max_ligand_chains_to_save: int = 5,
         min_shared_pocket_members: int = 3,
+        save_fixed_cif: Path | None = None,
     ) -> Entry:
         """
         Creates entry from an extrernal (non-PDB) mmCIF file
@@ -1199,6 +1208,12 @@ class Entry(DocBaseModel):
             Maximum number of receptor chains to save, by default 5
         max_ligand_chains_to_save : int, optional
             Maximum number of ligand chains to save, by default 5
+        save_fixed_cif : Path | None, optional
+            If provided and the CIF needed bond-order enrichment, write
+            the enriched copy to this path. The input CIF at ``cif_file``
+            is never mutated. Raises ``FileExistsError`` if the target
+            already exists and ``ValueError`` if it resolves to the same
+            path as ``cif_file``. By default (``None``) no file is written.
 
         Returns
         -------
@@ -1210,15 +1225,25 @@ class Entry(DocBaseModel):
         MissingBondOrderError
             If the CIF contains unknown ligands and no ``ligand_smiles_dict``
             is provided.
+        FileExistsError
+            If ``save_fixed_cif`` already exists.
+        ValueError
+            If ``save_fixed_cif`` points at the input ``cif_file``.
         """
         from plinder.data.utils.annotations.cif_utils import (
             MissingBondOrderError,
-            assign_bond_orders_from_smiles,
+            enrich_cif_with_smiles_bonds,
             get_unknown_ligand_ids,
+            read_mmcif_file,
         )
+        from plinder.data.utils.annotations.protein_utils import get_seqres_from_cif
 
-        # Check for missing bond orders and enrich CIF if needed
-        unknown_ids = get_unknown_ligand_ids(cif_file)
+        # Read CIF once into memory — we mutate this copy only, never the file on disk.
+        cif_file_obj = read_mmcif_file(cif_file)
+
+        # Check for missing bond orders and enrich CIF in-memory if needed
+        unknown_ids = get_unknown_ligand_ids(cif_file_obj)
+        enrichment_applied = False
         if unknown_ids:
             if ligand_smiles_dict is None:
                 raise MissingBondOrderError(
@@ -1226,16 +1251,28 @@ class Entry(DocBaseModel):
                     "_chem_comp_bond and no CCD match. "
                     "Provide ligand_smiles_dict to assign bond orders."
                 )
-            assign_bond_orders_from_smiles(
-                cif_file,
+            enrich_cif_with_smiles_bonds(
+                cif_file_obj,
                 ligand_smiles=ligand_smiles_dict,
             )
+            enrichment_applied = True
 
-        from plinder.data.utils.annotations.cif_utils import read_mmcif_file
-        from plinder.data.utils.annotations.protein_utils import get_seqres_from_cif
+        # Optionally persist the enriched CIF. Guard against overwriting
+        # the caller's input or an existing file.
+        if save_fixed_cif is not None and enrichment_applied:
+            save_fixed_cif = Path(save_fixed_cif)
+            if save_fixed_cif.resolve() == Path(cif_file).resolve():
+                raise ValueError(
+                    "save_fixed_cif must not point at the input cif_file — "
+                    "the input file is never overwritten."
+                )
+            if save_fixed_cif.exists():
+                raise FileExistsError(
+                    f"save_fixed_cif target already exists: {save_fixed_cif}"
+                )
+            cif_file_obj.write(str(save_fixed_cif))
 
-        cif_data = read_mmcif_container(cif_file)
-        cif_file_obj = read_mmcif_file(cif_file)
+        cif_data = list(cif_file_obj.values())[0]
         atoms = pdbx.get_structure(
             cif_file_obj, model=1, use_author_fields=False, include_bonds=True
         )
@@ -1270,6 +1307,7 @@ class Entry(DocBaseModel):
             neighboring_residue_threshold,
             neighboring_ligand_threshold,
             data_dir=None,
+            ligand_smiles_dict=ligand_smiles_dict,
         )
         entry._finalize(
             ligands,

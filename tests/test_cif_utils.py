@@ -16,6 +16,7 @@ from pathlib import Path
 
 import biotite.structure.io.pdbx as pdbx
 import pytest
+import yaml
 from plinder.data.utils.annotations.cif_utils import (
     MissingBondOrderError,
     assign_bond_orders_from_smiles,
@@ -23,10 +24,21 @@ from plinder.data.utils.annotations.cif_utils import (
     get_unknown_ligand_ids,
 )
 
-BOLTZ_CIF = (
-    Path(__file__).parent / "test_data" / "custom_cif" / "boltz_8c3u_input_model_0.cif"
-)
-LIGAND_SMILES = "Cc1ccc2c(c1)NC(=O)C2(c3cc(ccc3O)c4ccc(cc4C(=O)O)C(=O)O)c5c[nH]nc5"
+CUSTOM_CIF_DIR = Path(__file__).parent / "test_data" / "custom_cif"
+BOLTZ_CIF = CUSTOM_CIF_DIR / "boltz_8c3u_input_model_0.cif"
+BOLTZ_INPUT_YAML = CUSTOM_CIF_DIR / "boltz_8c3u_input.yaml"
+
+
+def _load_boltz_ligand_smiles() -> str:
+    """Parse the ligand SMILES from the Boltz input YAML (single source of truth)."""
+    config = yaml.safe_load(BOLTZ_INPUT_YAML.read_text())
+    for seq in config["sequences"]:
+        if "ligand" in seq:
+            return seq["ligand"]["smiles"]
+    raise ValueError(f"No ligand SMILES found in {BOLTZ_INPUT_YAML}")
+
+
+LIGAND_SMILES = _load_boltz_ligand_smiles()
 
 
 @pytest.fixture
@@ -154,6 +166,45 @@ def test_assign_invalid_smiles_raises(boltz_cif):
         )
 
 
+def test_assign_atom_count_mismatch_raises(boltz_cif):
+    """Default positional path should raise when heavy-atom count differs."""
+    # Truncated SMILES — fewer atoms than the CIF ligand
+    short_smiles = "CC"
+    with pytest.raises(ValueError, match="Atom count mismatch"):
+        assign_bond_orders_from_smiles(
+            boltz_cif,
+            ligand_smiles={"LIG": short_smiles},
+        )
+
+
+def test_assign_element_mismatch_raises(boltz_cif):
+    """Default positional path should raise when elements don't match.
+
+    Same heavy-atom count as LIG but with a different first-atom element
+    (N instead of C) to force a position-0 element mismatch.
+    """
+    # LIG has 35 heavy atoms starting with C (methyl group). Build a
+    # SMILES with the same count but starting with N to trigger a
+    # position-0 element mismatch.
+    lig_atom_count = 35
+    mismatched_smiles = "N" + "C" * (lig_atom_count - 1)
+    with pytest.raises(ValueError, match="Element mismatch.*position 0"):
+        assign_bond_orders_from_smiles(
+            boltz_cif,
+            ligand_smiles={"LIG": mismatched_smiles},
+        )
+
+
+def test_assign_force_substructure_match_succeeds(boltz_cif):
+    """Opt-in substructure match path should still work end-to-end."""
+    assign_bond_orders_from_smiles(
+        boltz_cif,
+        ligand_smiles={"LIG": LIGAND_SMILES},
+        force_substructure_match=True,
+    )
+    check_cif_bond_orders(boltz_cif)
+
+
 # ---------------------------------------------------------------------------
 # Integration tests: Entry.from_custom_cif_file
 # ---------------------------------------------------------------------------
@@ -171,8 +222,14 @@ def test_from_custom_cif_raises_without_smiles(boltz_cif):
 
 
 def test_from_custom_cif_with_smiles(boltz_cif):
-    """from_custom_cif_file should succeed when SMILES are provided."""
+    """from_custom_cif_file should succeed when SMILES are provided.
+
+    The input CIF must not be mutated on disk — bond-order enrichment
+    happens on an in-memory copy.
+    """
     from plinder.data.utils.annotations.aggregate_annotations import Entry
+
+    before_bytes = boltz_cif.read_bytes()
 
     entry = Entry.from_custom_cif_file(
         pdb_id="8c3u",
@@ -182,10 +239,147 @@ def test_from_custom_cif_with_smiles(boltz_cif):
     assert entry.pdb_id == "8c3u"
     assert len(entry.systems) > 0, "Should detect at least one system"
 
-    # Verify the CIF was enriched in-place
+    # Input file on disk must be byte-identical — no side effects
+    assert (
+        boltz_cif.read_bytes() == before_bytes
+    ), "from_custom_cif_file should not mutate the input CIF on disk"
+    # And the original CIF should still have no _chem_comp_bond (unknown LIG)
     f = pdbx.CIFFile.read(str(boltz_cif))
     block = list(f.values())[0]
+    assert "chem_comp_bond" not in block
+
+
+def test_from_custom_cif_user_smiles_takes_precedence(boltz_cif):
+    """User-supplied SMILES wins over the CCD placeholder for custom residues.
+
+    biotite ships a generic placeholder for the CCD code ``LIG`` — if we
+    used it, the ligand's ``smiles`` field would be wrong AND the stereo
+    check would silently pass any 3D conformer. This test asserts:
+      1. ``lig.smiles`` equals the canonical form of the user SMILES
+         (not the CCD placeholder).
+      2. With correct stereo, ``resolved_stereo_matches_template`` is True.
+      3. With inverted stereo, it flips to False — proving the check
+         actually uses the user-provided template.
+    """
+    import shutil
+
+    from plinder.data.utils.annotations.aggregate_annotations import Entry
+    from plinder.data.utils.annotations.ligand_utils import _get_ccd_smiles
+    from rdkit import Chem
+
+    # Sanity: the biotite CCD placeholder for "LIG" is a different molecule
+    placeholder = _get_ccd_smiles("LIG")
+    canonical_user = Chem.MolToSmiles(Chem.MolFromSmiles(LIGAND_SMILES))
+    assert (
+        placeholder is not None and placeholder != canonical_user
+    ), "Expected the biotite LIG placeholder to differ from the user SMILES"
+
+    assert "[C@@]" in LIGAND_SMILES, "YAML SMILES must have the stereo center"
+    inverted = LIGAND_SMILES.replace("[C@@]", "[C@]")
+
+    for expected_stereo, smi in [(True, LIGAND_SMILES), (False, inverted)]:
+        copy = boltz_cif.parent / f"copy_{expected_stereo}.cif"
+        shutil.copy(boltz_cif, copy)
+        entry = Entry.from_custom_cif_file(
+            pdb_id="8c3u",
+            cif_file=copy,
+            ligand_smiles_dict={"LIG": smi},
+        )
+        ligs = [
+            l
+            for sys in entry.systems.values()
+            for l in sys.ligands
+            if l.ccd_code == "LIG"
+        ]
+        assert ligs, "LIG ligand not found in systems"
+        for lig in ligs:
+            expected_canonical = Chem.MolToSmiles(Chem.MolFromSmiles(smi))
+            assert (
+                lig.smiles == expected_canonical
+            ), f"lig.smiles should match user SMILES, got {lig.smiles}"
+            assert (
+                lig.smiles != placeholder
+            ), "lig.smiles fell back to CCD placeholder — user SMILES did not win"
+            assert lig.resolved_stereo_matches_template is expected_stereo, (
+                f"expected stereo_matches={expected_stereo} for "
+                f"{'correct' if expected_stereo else 'inverted'} SMILES, "
+                f"got {lig.resolved_stereo_matches_template}"
+            )
+
+
+def test_from_custom_cif_save_fixed_roundtrip(boltz_cif, tmp_path):
+    """Full round-trip: bad input -> fix -> save -> reload should pass validation.
+
+    1. Input CIF has no _chem_comp_bond (fails check_cif_bond_orders).
+    2. from_custom_cif_file with save_fixed_cif writes the enriched CIF.
+    3. Reloading the saved file:
+       - has _chem_comp_bond
+       - passes check_cif_bond_orders
+       - produces an equivalent Entry without needing SMILES again
+    """
+    from plinder.data.utils.annotations.aggregate_annotations import Entry
+
+    # 1. Input is bad — confirm it fails validation
+    with pytest.raises(MissingBondOrderError):
+        check_cif_bond_orders(boltz_cif)
+
+    fixed_cif = tmp_path / "fixed.cif"
+    input_bytes_before = boltz_cif.read_bytes()
+
+    # 2. Fix + save
+    entry1 = Entry.from_custom_cif_file(
+        pdb_id="8c3u",
+        cif_file=boltz_cif,
+        ligand_smiles_dict={"LIG": LIGAND_SMILES},
+        save_fixed_cif=fixed_cif,
+    )
+    assert fixed_cif.is_file(), "save_fixed_cif target should be written"
+    assert (
+        boltz_cif.read_bytes() == input_bytes_before
+    ), "Input CIF must remain untouched"
+
+    # 3. Reload the saved fixed CIF and confirm it's self-sufficient
+    block = list(pdbx.CIFFile.read(str(fixed_cif)).values())[0]
     assert "chem_comp_bond" in block
+    check_cif_bond_orders(fixed_cif)  # must not raise
+
+    entry2 = Entry.from_custom_cif_file(
+        pdb_id="8c3u",
+        cif_file=fixed_cif,  # no ligand_smiles_dict needed — already enriched
+    )
+    assert sorted(entry1.systems.keys()) == sorted(
+        entry2.systems.keys()
+    ), "Systems from the round-tripped fixed CIF must match the original run"
+
+
+def test_save_fixed_cif_refuses_to_overwrite_input(boltz_cif):
+    """save_fixed_cif pointing at the input path must raise, not overwrite."""
+    from plinder.data.utils.annotations.aggregate_annotations import Entry
+
+    with pytest.raises(ValueError, match="must not point at the input"):
+        Entry.from_custom_cif_file(
+            pdb_id="8c3u",
+            cif_file=boltz_cif,
+            ligand_smiles_dict={"LIG": LIGAND_SMILES},
+            save_fixed_cif=boltz_cif,
+        )
+
+
+def test_save_fixed_cif_refuses_to_overwrite_existing(boltz_cif, tmp_path):
+    """save_fixed_cif pointing at an existing file must raise, not overwrite."""
+    from plinder.data.utils.annotations.aggregate_annotations import Entry
+
+    existing = tmp_path / "existing.cif"
+    existing.write_text("DO NOT OVERWRITE ME")
+
+    with pytest.raises(FileExistsError):
+        Entry.from_custom_cif_file(
+            pdb_id="8c3u",
+            cif_file=boltz_cif,
+            ligand_smiles_dict={"LIG": LIGAND_SMILES},
+            save_fixed_cif=existing,
+        )
+    assert existing.read_text() == "DO NOT OVERWRITE ME"
 
 
 # ---------------------------------------------------------------------------

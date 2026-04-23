@@ -15,7 +15,6 @@ import biotite.structure as struc
 import biotite.structure.info as bt_info
 import numpy as np
 import pandas as pd
-from peppr import sanitize as peppr_sanitize
 from pydantic import BeforeValidator, Field
 from rdkit import Chem, RDLogger
 from rdkit.Chem import QED, Crippen, rdMolDescriptors
@@ -38,16 +37,70 @@ _PRD_DB_PATH = str(BASE_DIR / "data/utils/annotations/static_files/prdcc.chemlib
 LOG = logging.getLogger(__name__)
 
 
-def _check_stereo_vs_template(resolved_mol: "Chem.Mol") -> bool | None:
-    """Compare resolved 3D stereo against CCD template per residue.
+def _template_from_user_smiles(
+    comp_id: str,
+    smiles: str,
+    cif_atom_names: list[str],
+) -> "Chem.Mol | None":
+    """Build a stereo-assigned template Mol from a user-supplied SMILES.
 
-    Iterates residues in the resolved mol, looks up the CCD template
-    for each, and delegates to ``compare_stereo_to_template`` for the
-    actual CIP comparison.  Handles multi-residue ligands (e.g. glycans)
-    by checking each residue copy independently.
+    Used as a CCD fallback when a custom residue (e.g. Boltz ``LIG``) is
+    not in the Chemical Component Dictionary. Assumes the SMILES
+    heavy-atom parse order matches the CIF heavy-atom order — the same
+    positional convention used by :func:`assign_bond_orders_from_smiles`.
 
-    Returns True if all residues match or are achiral, False if any
-    stereo mismatch, None if no CCD template available.
+    Stereo is assigned from SMILES parity tags (``@``/``@@``) directly,
+    no 3D embed needed. PDB atom names from the CIF are stamped onto the
+    template atoms so :func:`compare_stereo_to_template` can match by name.
+
+    Returns ``None`` if the SMILES can't be parsed or the heavy-atom
+    count disagrees with the CIF (the caller then falls back to ``None``
+    for stereo_matches, matching pre-existing behaviour).
+    """
+    mol = Chem.MolFromSmiles(smiles)
+    if mol is None:
+        return None
+    mol = Chem.RemoveHs(mol, sanitize=False)
+    if mol.GetNumAtoms() != len(cif_atom_names):
+        LOG.warning(
+            f"_template_from_user_smiles: atom count mismatch for {comp_id} "
+            f"({mol.GetNumAtoms()} in SMILES vs {len(cif_atom_names)} in CIF) — "
+            "skipping SMILES-based stereo check"
+        )
+        return None
+    Chem.AssignStereochemistry(mol, cleanIt=True, force=True)
+    for atom, atom_name in zip(mol.GetAtoms(), cif_atom_names):
+        info = Chem.AtomPDBResidueInfo()
+        info.SetName(atom_name)
+        info.SetResidueName(comp_id)
+        info.SetResidueNumber(1)
+        atom.SetMonomerInfo(info)
+    return mol
+
+
+def _check_stereo_vs_template(
+    resolved_mol: "Chem.Mol",
+    custom_templates: dict[str, "Chem.Mol"] | None = None,
+) -> bool | None:
+    """Compare resolved 3D stereo against a stereo template per residue.
+
+    Template source precedence:
+      1. ``custom_templates[resname]`` if provided — user-supplied SMILES
+         templates win over CCD because the caller explicitly knows CCD
+         is wrong or missing (biotite ships a generic placeholder for
+         some codes like ``LIG`` that would otherwise silently hide
+         stereo mismatches).
+      2. :func:`_get_ccd_mol(resname)` — CCD ideal coordinates.
+      3. Return ``None`` for this residue if neither source yields a
+         template.
+
+    Delegates to :func:`compare_stereo_to_template` for the actual CIP
+    comparison. Handles multi-residue ligands (e.g. glycans) by
+    checking each residue copy independently.
+
+    Returns ``True`` if all residues match or are achiral, ``False`` if
+    any stereo mismatch, ``None`` if no template was available for any
+    residue.
     """
     from plinder.core.structure.smallmols_utils import compare_stereo_to_template
 
@@ -64,8 +117,17 @@ def _check_stereo_vs_template(resolved_mol: "Chem.Mol") -> bool | None:
 
     results: list[bool | None] = []
     for (resname, res_id), atom_indices in residue_atoms.items():
-        ccd_mol = _get_ccd_mol(resname)
-        if ccd_mol is None:
+        # User-supplied custom templates take precedence over CCD: if
+        # the caller provided a SMILES template for this residue, they
+        # explicitly know CCD is wrong or missing (biotite ships a
+        # generic placeholder for some codes like "LIG" that would
+        # otherwise hide stereo mismatches).
+        template_mol = None
+        if custom_templates is not None:
+            template_mol = custom_templates.get(resname)
+        if template_mol is None:
+            template_mol = _get_ccd_mol(resname)
+        if template_mol is None:
             results.append(None)
             continue
 
@@ -81,7 +143,7 @@ def _check_stereo_vs_template(resolved_mol: "Chem.Mol") -> bool | None:
         frag.CommitBatchEdit()
 
         try:
-            results.append(compare_stereo_to_template(frag.GetMol(), ccd_mol))
+            results.append(compare_stereo_to_template(frag.GetMol(), template_mol))
         except Exception as e:
             LOG.warning(f"Stereo comparison failed for {resname}:{res_id}: {e}")
             results.append(None)
@@ -98,16 +160,12 @@ def _check_stereo_vs_template(resolved_mol: "Chem.Mol") -> bool | None:
 @cache
 def _get_ccd_mol(comp_id: str) -> "Chem.Mol | None":
     """Return an RDKit Mol from CCD ideal coordinates with stereo assigned."""
-    try:
-        from biotite.interface import rdkit as rdkit_interface
+    from plinder.data.utils.annotations.cif_utils import atoms_to_rdkit_mol
 
-        ref = bt_info.residue(comp_id)
-        ref_heavy = ref[ref.element != "H"]
-        ref_heavy.bonds = struc.connect_via_residue_names(ref_heavy)
-        mol = rdkit_interface.to_mol(ref_heavy)
-        peppr_sanitize(mol)
-        Chem.AssignStereochemistryFrom3D(mol)
-        return mol
+    try:
+        # biotite has no chiral tags, so atoms_to_rdkit_mol uses 3D to
+        # assign stereo via AssignStereochemistryFrom3D
+        return atoms_to_rdkit_mol(bt_info.residue(comp_id))
     except Exception as e:
         LOG.warning(f"Failed to get CCD mol for {comp_id}: {e}")
         return None
@@ -830,6 +888,7 @@ class Ligand(DocBaseModel):
         neighboring_ligand_threshold: float = 4.0,
         data_dir: ty.Optional[Path] = None,
         chain_to_seqres: dict[str, str] | None = None,
+        ligand_smiles_dict: dict[str, str] | None = None,
     ) -> Ligand | None:
         """Build a Ligand from a biounit AtomArray and chain metadata.
 
@@ -867,6 +926,14 @@ class Ligand(DocBaseModel):
             Plinder data root for loading cofactors, affinity, etc.
         chain_to_seqres : dict[str, str], optional
             SEQRES per chain for binding affinity validation.
+        ligand_smiles_dict : dict[str, str], optional
+            Per-residue SMILES for components not in CCD (typically
+            custom residues like Boltz's ``LIG``). When a residue's
+            name appears in this dict, the user's SMILES takes
+            precedence over CCD/PRD for both the canonical ``smiles``
+            field and the stereo template used by
+            :func:`_check_stereo_vs_template` — the caller is assumed
+            to know that the CCD entry is absent or a placeholder.
 
         Returns
         -------
@@ -964,8 +1031,6 @@ class Ligand(DocBaseModel):
             if np.any(lig_atoms.res_id == rn)
         )
         # Get SMILES from CCD template via biotite, fall back to structure
-        from biotite.interface import rdkit as rdkit_interface
-
         smiles = None
         lig_heavy = lig_atoms[lig_atoms.element != "H"]
         res_names = list(
@@ -977,37 +1042,59 @@ class Ligand(DocBaseModel):
         )
         if len(res_names) == 1:
             resname = res_names[0]
-            # Try CCD first, then PRD
-            ccd_smiles = _get_ccd_smiles(resname)
-            if ccd_smiles is None and resname.startswith("PRD_"):
-                ccd_smiles = _get_prd_smiles(resname)
-            if ccd_smiles is not None:
-                smiles = ccd_smiles
-        # Assign bonds once — used for both SMILES derivation and stereo check
+            # User-supplied SMILES takes precedence — when the caller
+            # explicitly provided one, CCD is assumed to be wrong or a
+            # generic placeholder (biotite returns one for some codes
+            # like "LIG"). Fall through to CCD then PRD otherwise.
+            if ligand_smiles_dict and resname in ligand_smiles_dict:
+                smiles = ligand_smiles_dict[resname]
+            else:
+                ccd_smiles = _get_ccd_smiles(resname)
+                if ccd_smiles is None and resname.startswith("PRD_"):
+                    ccd_smiles = _get_prd_smiles(resname)
+                if ccd_smiles is not None:
+                    smiles = ccd_smiles
+        # Assign bonds once — used for SMILES derivation and stereo check
         if lig_heavy.bonds is None:
             lig_heavy.bonds = struc.connect_via_residue_names(lig_heavy)
-        if smiles is None:
-            try:
-                rdkit_mol = rdkit_interface.to_mol(lig_heavy)
-                peppr_sanitize(rdkit_mol)
-                smiles = str(Chem.MolToSmiles(rdkit_mol))
-            except Exception:
-                LOG.warning(f"Failed to derive SMILES for {ccd_code} from structure")
-        resolved_smiles = smiles
+        # Build per-residue custom stereo templates from user SMILES (only
+        # populated for custom CIFs via from_custom_cif_file). The CIF atom
+        # names for each residue are taken in file order, matching the
+        # SMILES-parse-order assumption used for bond assignment.
+        custom_templates: dict[str, Chem.Mol] | None = None
+        if ligand_smiles_dict:
+            custom_templates = {}
+            for resname, user_smiles in ligand_smiles_dict.items():
+                res_mask = lig_heavy.res_name == resname
+                if not np.any(res_mask):
+                    continue
+                atom_names = list(lig_heavy.atom_name[res_mask])
+                tmpl = _template_from_user_smiles(resname, user_smiles, atom_names)
+                if tmpl is not None:
+                    custom_templates[resname] = tmpl
+
+        # Build the resolved (from 3D) mol once. It drives:
+        #   - resolved_smiles (bond orders from CCD, stereo from 3D coords)
+        #   - stereo match check against the CCD template (or custom SMILES)
+        #   - fallback SMILES when the CCD/PRD/user-SMILES lookup failed
+        resolved_smiles: str | None = None
         stereo_matches: bool | None = None
         try:
-            resolved_mol = rdkit_interface.to_mol(lig_heavy)
-            peppr_sanitize(resolved_mol)
+            from plinder.data.utils.annotations.cif_utils import atoms_to_rdkit_mol
 
-            # Get stereo from actual 3D coordinates
-            Chem.AssignStereochemistryFrom3D(resolved_mol)
+            # biotite has no chiral tags → stereo assigned from 3D inside helper
+            resolved_mol = atoms_to_rdkit_mol(lig_heavy)
             resolved_smiles = str(Chem.MolToSmiles(resolved_mol))
-
             # Compare resolved 3D stereo with CCD template stereo
-            # Works for both single and multi-residue ligands
-            stereo_matches = _check_stereo_vs_template(resolved_mol)
-        except Exception:
-            LOG.warning(f"Failed to compute resolved SMILES for {ccd_code}")
+            # (works for both single- and multi-residue ligands)
+            stereo_matches = _check_stereo_vs_template(
+                resolved_mol, custom_templates=custom_templates
+            )
+        except Exception as e:
+            LOG.warning(f"Failed to compute resolved SMILES for {ccd_code}: {e}")
+        # Fall back to resolved SMILES if no upstream source yielded one
+        if smiles is None:
+            smiles = resolved_smiles
         # Centroid
         centroid = list(lig_atoms.coord.mean(axis=0))
         ligand = cls(
