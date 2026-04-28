@@ -20,8 +20,6 @@ WATER_CHAIN_NAME = "_"
 def save_ligands(
     atoms: struc.AtomArray,
     ligand_chain_ids: list[str],
-    ligand_smiles: list[str],
-    ligand_num_unresolved_heavy_atoms: list[int | None],
     output_folder: str | Path,
 ) -> None:
     """Save ligand SDF files from AtomArray.
@@ -32,29 +30,27 @@ def save_ligands(
         Full system atoms with bonds.
     ligand_chain_ids : list[str]
         Chain IDs identifying each ligand.
-    ligand_smiles : list[str]
-        Reference SMILES for each ligand.
-    ligand_num_unresolved_heavy_atoms : list[int | None]
-        Number of unresolved heavy atoms per ligand.
     output_folder : str or Path
         Directory to write SDF files.
     """
+    import logging
+
     from plinder.data.utils.annotations.cif_utils import atoms_to_rdkit_mol
 
-    for chain_id, smiles, num_unresolved in zip(
-        ligand_chain_ids,
-        ligand_smiles,
-        ligand_num_unresolved_heavy_atoms,
-    ):
+    log = logging.getLogger(__name__)
+
+    for chain_id in ligand_chain_ids:
         lig_mask = atoms.chain_id == chain_id
         if not np.any(lig_mask):
+            log.warning(f"save_ligands: no atoms for chain {chain_id}, skipping")
             continue
         lig_atoms = atoms[lig_mask]
         try:
             rdkit_mol = atoms_to_rdkit_mol(lig_atoms)
-        except Exception:
-            continue
-        if rdkit_mol is None:
+        except Exception as e:
+            log.warning(
+                f"save_ligands: failed to build RDKit mol for chain {chain_id}: {e}"
+            )
             continue
         rdkit_mol.SetProp("_Name", chain_id)
         with Chem.SDWriter(str(Path(output_folder) / f"{chain_id}.sdf")) as w:

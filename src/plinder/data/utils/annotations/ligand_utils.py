@@ -1031,8 +1031,10 @@ class Ligand(DocBaseModel):
             if np.any(lig_atoms.res_id == rn)
         )
         # Get SMILES from CCD template via biotite, fall back to structure
+        from plinder.core.structure.atoms import _is_hydrogen_isotope
+
         smiles = None
-        lig_heavy = lig_atoms[lig_atoms.element != "H"]
+        lig_heavy = lig_atoms[~_is_hydrogen_isotope(lig_atoms.element)]
         res_names = list(
             dict.fromkeys(
                 lig_heavy.res_name[lig_heavy.res_id == rn][0]
@@ -1054,9 +1056,6 @@ class Ligand(DocBaseModel):
                     ccd_smiles = _get_prd_smiles(resname)
                 if ccd_smiles is not None:
                     smiles = ccd_smiles
-        # Assign bonds once — used for SMILES derivation and stereo check
-        if lig_heavy.bonds is None:
-            lig_heavy.bonds = struc.connect_via_residue_names(lig_heavy)
         # Build per-residue custom stereo templates from user SMILES (only
         # populated for custom CIFs via from_custom_cif_file). The CIF atom
         # names for each residue are taken in file order, matching the

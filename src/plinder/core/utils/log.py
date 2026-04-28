@@ -29,8 +29,8 @@ def setup_logger(
 
     Parameters
     ----------
-    logger_name : str
-        Name of the logger
+    logger_name : str | None
+        Name of the logger; if None, derived from the calling module's filename.
     log_level : int
         Log level
     log_file: str | None
@@ -42,6 +42,13 @@ def setup_logger(
     -------
     logging.Logger:
         logger object
+
+    Notes
+    -----
+    When ``propagate=False`` (the default), pytest's ``caplog`` fixture
+    cannot observe records from this logger because caplog hooks the root logger.
+    Tests asserting on warnings/errors should either pass ``propagate=True`` here
+    or capture via ``monkeypatch.setattr(LOG, "warning", ...)``.
 
     Examples
     --------

@@ -67,6 +67,16 @@ BINDING_SITE_METALS = [
 
 _AtomArrayOrStack = Union[AtomArray, AtomArrayStack]
 
+# biotite's ``element`` is a string, so filtering by ``element != "H"``
+# leaks deuterium ("D") and tritium ("T") atoms. Every heavy-atom filter
+# in the codebase should exclude all three.
+_HYDROGEN_ELEMENTS = ("H", "D", "T")
+
+
+def _is_hydrogen_isotope(elements: NDArray) -> NDArray:
+    """Bool mask for any hydrogen isotope atom (H/D/T)."""
+    return np.isin(elements, _HYDROGEN_ELEMENTS)
+
 
 def biotite_ciffile() -> TextFile:
     from biotite.structure.io.pdbx import CIFFile

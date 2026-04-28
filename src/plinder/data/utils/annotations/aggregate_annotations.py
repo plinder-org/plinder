@@ -21,8 +21,10 @@ from rdkit import RDLogger
 from plinder.core.utils.config import get_config
 from plinder.core.utils.log import setup_logger
 from plinder.data.utils.annotations.cif_utils import (
+    _is_hydrogen_isotope,
     get_chain_external_mappings,
     get_entry_info,
+    get_model_count,
     read_mmcif_container,
 )
 from plinder.data.utils.annotations.get_ligand_validation import (
@@ -628,8 +630,6 @@ class System(DocBaseModel):
         save_ligands(
             system_atoms,
             self.ligand_chains,
-            [l.smiles for l in self.ligands],
-            [l.num_unresolved_heavy_atoms for l in self.ligands],
             system_folder / "ligand_files",
         )
 
@@ -1046,10 +1046,15 @@ class Entry(DocBaseModel):
 
         # Load structure with biotite
         cif_file_obj = read_mmcif_file(cif_file)
+        # Multi-model PDBs (e.g. NMR ensembles) silently use model 1 here;
+        # warn so callers know other models are dropped.
+        n_models = get_model_count(cif_file_obj)
+        if n_models > 1:
+            LOG.warning(f"PDB {pdb_id!r} has {n_models} models — using model 1 only.")
         atoms = pdbx.get_structure(
             cif_file_obj, model=1, use_author_fields=False, include_bonds=True
         )
-        atoms = atoms[atoms.element != "H"]
+        atoms = atoms[~_is_hydrogen_isotope(atoms.element)]
         chain_to_seqres = get_seqres_from_cif(cif_data)
 
         entry = cls(
@@ -1114,14 +1119,29 @@ class Entry(DocBaseModel):
             except Exception as e:
                 LOG.warning(f"Could not build assembly {assembly_id}: {e}")
                 continue
-            biounit = biounit[biounit.element != "H"]
-            # Add inter-residue bonds from _struct_conn
-            # (intra-residue bonds already loaded via include_bonds=True)
-            from plinder.data.utils.annotations.cif_utils import apply_struct_conn_bonds
+            biounit = biounit[~_is_hydrogen_isotope(biounit.element)]
 
             if biounit.bonds is None:
-                biounit.bonds = struc.connect_via_residue_names(biounit)
+                # ``include_bonds=True`` returning ``None`` means biotite
+                # derived **no bonds at all** for the assembly — every
+                # residue lookup failed. This indicates a fundamentally
+                # broken CIF (no _chem_comp_bond, no _struct_conn, and
+                # no CCD coverage for any residue), not just missing
+                # bonds for some non-standard residues.
+                raise ValueError(
+                    f"{pdb_id} assembly {assembly_id}: biotite returned "
+                    "no bonds at all despite include_bonds=True. The CIF "
+                    "is corrupted or has no bond information of any kind."
+                )
+            from plinder.data.utils.annotations.cif_utils import apply_struct_conn_bonds
+
+            # ``include_bonds=True`` loads both intra-residue bonds
+            # (``_chem_comp_bond`` / CCD fallback) and inter-residue bonds
+            # (``_struct_conn``). ``apply_struct_conn_bonds`` then
+            # supplements with any ``covale`` rows biotite may have
+            # missed (idempotent — skips bonds already present).
             apply_struct_conn_bonds(biounit, cif_data)
+
             # Assign instance prefixes to chain IDs
             # Biotite merges all symmetry copies under the same chain ID.
             # Detect copies by comparing assembly size to ASU size and
@@ -1129,7 +1149,7 @@ class Entry(DocBaseModel):
             asu_atoms = pdbx.get_structure(
                 cif_file_obj, model=1, use_author_fields=False
             )
-            asu_atoms = asu_atoms[asu_atoms.element != "H"]
+            asu_atoms = asu_atoms[~_is_hydrogen_isotope(asu_atoms.element)]
             n_asu = len(asu_atoms)
             n_total = len(biounit)
             n_copies = max(1, n_total // n_asu) if n_asu > 0 else 1
@@ -1228,7 +1248,14 @@ class Entry(DocBaseModel):
         FileExistsError
             If ``save_fixed_cif`` already exists.
         ValueError
-            If ``save_fixed_cif`` points at the input ``cif_file``.
+            If ``save_fixed_cif`` points at the input ``cif_file``;
+            if biotite returns no bonds at all (corrupted / missing
+            bond information CIF); or any error propagated from
+            :func:`~plinder.data.utils.annotations.cif_utils.enrich_cif_with_smiles_bonds`
+            (invalid SMILES, atom-count / element-order mismatch in the
+            positional path, sanitize / template-match failure in the
+            opt-in substructure path, or multi-instance comp_id
+            divergence).
         """
         from plinder.data.utils.annotations.cif_utils import (
             MissingBondOrderError,
@@ -1240,6 +1267,17 @@ class Entry(DocBaseModel):
 
         # Read CIF once into memory — we mutate this copy only, never the file on disk.
         cif_file_obj = read_mmcif_file(cif_file)
+
+        # Multi-model CIFs (NMR ensembles, Boltz multi-sample, PyMOL
+        # states) are processed using model 1 only — surface a warning
+        # so users know other models were dropped and can call this
+        # function per-model if they need ensemble analysis.
+        n_models = get_model_count(cif_file_obj)
+        if n_models > 1:
+            LOG.warning(
+                f"Custom CIF has {n_models} models — using model 1 only. "
+                "Call from_custom_cif_file once per model for ensemble analysis."
+            )
 
         # Check for missing bond orders and enrich CIF in-memory if needed
         unknown_ids = get_unknown_ligand_ids(cif_file_obj)
@@ -1276,11 +1314,21 @@ class Entry(DocBaseModel):
         atoms = pdbx.get_structure(
             cif_file_obj, model=1, use_author_fields=False, include_bonds=True
         )
-        atoms = atoms[atoms.element != "H"]
+        atoms = atoms[~_is_hydrogen_isotope(atoms.element)]
+        if atoms.bonds is None:
+            # ``include_bonds=True`` returning ``None`` means biotite
+            # derived **no bonds at all** for the structure — every
+            # residue lookup failed. This is a fundamentally broken or
+            # corrupted CIF (post-enrichment, no _chem_comp_bond, no
+            # _struct_conn, and no CCD coverage for any residue).
+            raise ValueError(
+                f"Custom CIF {cif_file}: biotite returned no bonds at all "
+                "after enrichment — the CIF is corrupted or missing all "
+                "bond information (_chem_comp_bond, _struct_conn, and CCD "
+                "coverage are all absent)."
+            )
         from plinder.data.utils.annotations.cif_utils import apply_struct_conn_bonds
 
-        if atoms.bonds is None:
-            atoms.bonds = struc.connect_via_residue_names(atoms)
         apply_struct_conn_bonds(atoms, cif_data)
         chain_to_seqres = get_seqres_from_cif(cif_data)
 

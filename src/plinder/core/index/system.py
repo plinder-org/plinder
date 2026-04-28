@@ -168,12 +168,12 @@ class PlinderSystem:
     @cached_property
     def sequences(self) -> dict[str, str]:
         """
-        Path to the sequences.fasta file
+        Parsed FASTA contents from ``sequences.fasta``.
 
         Returns
         -------
-        str
-            path
+        dict[str, str]
+            Mapping from chain ID to sequence.
         """
         assert self.archive is not None
         return {k: v for k, v in FastaFile.read_iter(self.sequences_fasta)}
@@ -346,13 +346,14 @@ class PlinderSystem:
         """
         import biotite.structure.io.pdbx as pdbx
 
+        from plinder.core.structure.atoms import _is_hydrogen_isotope
         from plinder.data.utils.annotations.cif_utils import read_mmcif_file
 
         cif_file = read_mmcif_file(self.receptor_cif)
         atoms = pdbx.get_structure(
             cif_file, model=1, use_author_fields=False, include_bonds=True
         )
-        return atoms[atoms.element != "H"]
+        return atoms[~_is_hydrogen_isotope(atoms.element)]
 
     @cached_property
     def ligand_views(self) -> dict[str, Any]:

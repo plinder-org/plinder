@@ -10,6 +10,7 @@ import biotite.structure.io.pdbx as pdbx
 import numpy as np
 from peppr.contacts import ContactMeasurement
 
+from plinder.core.structure.atoms import _is_hydrogen_isotope
 from plinder.core.utils.log import setup_logger
 
 log = setup_logger(__name__)
@@ -47,7 +48,7 @@ def get_symmetry_mate_contacts(
         # No symmetry information (NMR, computational models)
         return {}
     unit_cell = unit_cell[~struc.filter_solvent(unit_cell)]
-    unit_cell = unit_cell[unit_cell.element != "H"]
+    unit_cell = unit_cell[~_is_hydrogen_isotope(unit_cell.element)]
 
     if unit_cell.box is None:
         return {}
@@ -55,7 +56,7 @@ def get_symmetry_mate_contacts(
     # Get ASU to determine atoms per symmetry copy
     asu = pdbx.get_structure(cif_file, model=1, use_author_fields=False)
     asu = asu[~struc.filter_solvent(asu)]
-    asu = asu[asu.element != "H"]
+    asu = asu[~_is_hydrogen_isotope(asu.element)]
     n_asu = len(asu)
     n_total = len(unit_cell)
     if n_total == n_asu:
@@ -232,7 +233,9 @@ def run_peppr_interactions(
     ligand_chain : str
         Ligand chain identifier ({instance}.{chain}).
     chain_mapping : dict[str, str]
-        Mapping from PDB chain to instance.chain.
+        Identity mapping over the chain IDs already in
+        ``{instance}.{chain}`` form (kept as a parameter for legacy
+        reasons; callers pass ``{c: c for c in np.unique(...)}``).
 
     Returns
     -------

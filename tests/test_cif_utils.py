@@ -66,9 +66,10 @@ def test_known_compounds_not_flagged(boltz_cif):
     """Known CCD compounds like ATP should not be flagged as unknown."""
     # Inject fake ATP HETATMs into the CIF (enough to match CCD atom count)
     import biotite.structure.info as info
+    from plinder.core.structure.atoms import _is_hydrogen_isotope
 
     atp_ref = info.residue("ATP")
-    atp_heavy = atp_ref[atp_ref.element != "H"]
+    atp_heavy = atp_ref[~_is_hydrogen_isotope(atp_ref.element)]
 
     f = pdbx.CIFFile.read(str(boltz_cif))
     block = list(f.values())[0]
@@ -205,9 +206,155 @@ def test_assign_force_substructure_match_succeeds(boltz_cif):
     check_cif_bond_orders(boltz_cif)
 
 
+def test_assign_rejects_divergent_atom_naming(boltz_cif, tmp_path):
+    """Multi-instance custom comp_ids with divergent atom names must raise.
+
+    Duplicate the LIG residue and rename atom 0 of the second instance —
+    mmCIF ``_chem_comp_bond`` keys by comp_id, so biotite would silently
+    fail to apply bonds to the second instance. We must raise a clear
+    error rather than emit chemically wrong/incomplete bonds.
+    """
+    f = pdbx.CIFFile.read(str(boltz_cif))
+    block = list(f.values())[0]
+    atom_site = block["atom_site"]
+    columns = {col: list(atom_site[col].as_array()) for col in atom_site.keys()}
+    lig_indices = [i for i, c in enumerate(columns["label_comp_id"]) if c == "LIG"]
+    next_atom_id = max(int(x) for x in columns["id"]) + 1 if "id" in columns else None
+
+    new_indices = []
+    for src in lig_indices:
+        for col_name in columns:
+            columns[col_name].append(columns[col_name][src])
+        n = len(columns["label_comp_id"]) - 1
+        columns["label_asym_id"][n] = "C"
+        if "auth_asym_id" in columns:
+            columns["auth_asym_id"][n] = "C"
+        if next_atom_id is not None:
+            columns["id"][n] = str(next_atom_id)
+            next_atom_id += 1
+        new_indices.append(n)
+    # Rename one atom in the duplicate instance to break alignment
+    columns["label_atom_id"][new_indices[0]] = "X_RENAMED"
+
+    block["atom_site"] = pdbx.CIFCategory(columns)
+    divergent = tmp_path / "divergent.cif"
+    f.write(str(divergent))
+
+    with pytest.raises(ValueError, match="disagree on heavy-atom"):
+        assign_bond_orders_from_smiles(divergent, ligand_smiles={"LIG": LIGAND_SMILES})
+
+
+def test_assign_handles_multi_instance_comp_id(boltz_cif, tmp_path):
+    """Multi-instance custom comp_ids must enrich without atom-count mismatch.
+
+    Duplicate the LIG residue in the CIF so the file has 2 instances of
+    the same comp_id. The positional path used to fail with an atom-count
+    mismatch (2 * 35 != 35); now ``enrich_cif_with_smiles_bonds`` picks
+    one representative instance and writes a single ``_chem_comp_bond``
+    entry that biotite applies to all copies.
+    """
+    f = pdbx.CIFFile.read(str(boltz_cif))
+    block = list(f.values())[0]
+    atom_site = block["atom_site"]
+
+    columns = {col: list(atom_site[col].as_array()) for col in atom_site.keys()}
+    lig_indices = [i for i, c in enumerate(columns["label_comp_id"]) if c == "LIG"]
+    assert lig_indices, "test setup expects original LIG atoms"
+
+    # Duplicate every LIG row, change the chain to 'C' to mark the second
+    # instance as a distinct copy (same comp_id, different chain/res_id).
+    next_atom_id = max(int(x) for x in columns["id"]) + 1 if "id" in columns else None
+    for src in lig_indices:
+        for col_name in columns:
+            columns[col_name].append(columns[col_name][src])
+        n = len(columns["label_comp_id"]) - 1
+        columns["label_asym_id"][n] = "C"
+        if "auth_asym_id" in columns:
+            columns["auth_asym_id"][n] = "C"
+        if next_atom_id is not None:
+            columns["id"][n] = str(next_atom_id)
+            next_atom_id += 1
+
+    block["atom_site"] = pdbx.CIFCategory(columns)
+    duplicated = tmp_path / "duplicated.cif"
+    f.write(str(duplicated))
+
+    # Should NOT raise atom count mismatch
+    output = tmp_path / "enriched.cif"
+    assign_bond_orders_from_smiles(
+        duplicated, ligand_smiles={"LIG": LIGAND_SMILES}, output_path=output
+    )
+    block = list(pdbx.CIFFile.read(str(output)).values())[0]
+    bond_cat = block["chem_comp_bond"]
+    lig_bonds = sum(1 for c in bond_cat["comp_id"].as_array() if c == "LIG")
+    # Bonds defined exactly once for the comp_id, regardless of N copies
+    from rdkit import Chem
+
+    template = Chem.MolFromSmiles(LIGAND_SMILES)
+    expected_bonds = Chem.RemoveHs(template, sanitize=False).GetNumBonds()
+    assert (
+        lig_bonds == expected_bonds
+    ), f"Expected {expected_bonds} LIG bonds (one per template bond), got {lig_bonds}"
+
+
 # ---------------------------------------------------------------------------
 # Integration tests: Entry.from_custom_cif_file
 # ---------------------------------------------------------------------------
+
+
+def test_from_custom_cif_warns_on_multi_model(boltz_cif, tmp_path, monkeypatch):
+    """Multi-model CIFs (NMR ensembles, multi-sample) warn and use model 1."""
+    from plinder.data.utils.annotations import aggregate_annotations as agg
+    from plinder.data.utils.annotations.aggregate_annotations import Entry
+
+    f = pdbx.CIFFile.read(str(boltz_cif))
+    block = list(f.values())[0]
+    atom_site = block["atom_site"]
+    columns = {col: list(atom_site[col].as_array()) for col in atom_site.keys()}
+
+    # If the input has no model-num column, add one with all "1"s first.
+    if "pdbx_PDB_model_num" not in columns:
+        columns["pdbx_PDB_model_num"] = ["1"] * len(columns["label_comp_id"])
+
+    # Duplicate every atom under model "2" to create a 2-model CIF.
+    n_orig = len(columns["label_comp_id"])
+    for i in range(n_orig):
+        for col_name in columns:
+            columns[col_name].append(columns[col_name][i])
+        columns["pdbx_PDB_model_num"][n_orig + i] = "2"
+
+    block["atom_site"] = pdbx.CIFCategory(columns)
+    multi = tmp_path / "two_models.cif"
+    f.write(str(multi))
+
+    # plinder's setup_logger sets propagate=False, so caplog can't see
+    # records via the root logger. Capture LOG.warning calls directly.
+    warnings: list[str] = []
+    real_warning = agg.LOG.warning
+    monkeypatch.setattr(
+        agg.LOG,
+        "warning",
+        lambda msg, *a, **kw: warnings.append(str(msg)) or real_warning(msg, *a, **kw),
+    )
+
+    entry = Entry.from_custom_cif_file(
+        pdb_id="8c3u",
+        cif_file=multi,
+        ligand_smiles_dict={"LIG": LIGAND_SMILES},
+    )
+
+    # A warning was emitted naming the model count
+    assert any(
+        "2 models" in w for w in warnings
+    ), f"Expected warning about 2 models, got: {warnings}"
+    # Parsing succeeded using model 1 — entry has the same systems as
+    # the single-model run.
+    single_entry = Entry.from_custom_cif_file(
+        pdb_id="8c3u",
+        cif_file=boltz_cif,
+        ligand_smiles_dict={"LIG": LIGAND_SMILES},
+    )
+    assert sorted(entry.systems.keys()) == sorted(single_entry.systems.keys())
 
 
 def test_from_custom_cif_raises_without_smiles(boltz_cif):

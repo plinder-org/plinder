@@ -25,6 +25,10 @@ from plinder.core.structure.smallmols_utils import (
 
 LOG = logging.getLogger(__name__)
 
+# Single source of truth lives in ``plinder.core.structure.atoms`` so
+# both ``plinder.core`` and ``plinder.data`` filter H/D/T isotopes
+# consistently.
+from plinder.core.structure.atoms import _is_hydrogen_isotope  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Generic CIF I/O helpers
@@ -46,6 +50,17 @@ def read_mmcif_container(mmcif_filename: Path) -> pdbx.CIFBlock:
     """Parse mmcif file and return the first data block."""
     cif_file = read_mmcif_file(mmcif_filename)
     return list(cif_file.values())[0]
+
+
+def get_model_count(cif_file: pdbx.CIFFile) -> int:
+    """Return the number of models in a CIF (1 if no model column present)."""
+    block = list(cif_file.values())[0]
+    if "atom_site" not in block:
+        return 0
+    atom_site = block["atom_site"]
+    if "pdbx_PDB_model_num" not in atom_site:
+        return 1
+    return int(len(set(atom_site["pdbx_PDB_model_num"].as_array())))
 
 
 def _cif_scalar(block: pdbx.CIFBlock, category: str, column: str) -> str | None:
@@ -173,14 +188,6 @@ def atoms_to_rdkit_mol(
 ) -> "Chem.Mol":
     """Convert a biotite AtomArray to a sanitized RDKit Mol.
 
-    Hydrogen atoms **and isotopes** (D, T) are removed. biotite's
-    ``element`` is a string, so a naive ``element != "H"`` filter would
-    leak deuterium/tritium into the mol; we pre-filter the common
-    mass-1 isotopes and additionally call ``RemoveAllHs`` as a
-    belt-and-braces catch for anything RDKit still classifies as
-    hydrogen via atomic number.
-
-    Bonds are assigned from CCD residue names if not already present.
     Stereochemistry is, optionally, assigned from 3D coordinates before
     the final ``RemoveAllHs`` so chiral tags are stamped on heavy atoms
     and survive hydrogen removal.
@@ -188,8 +195,10 @@ def atoms_to_rdkit_mol(
     Parameters
     ----------
     atoms : AtomArray
-        Atoms with optional bonds (e.g. from ``include_bonds=True``).
-        If bonds are missing, ``connect_via_residue_names`` is used.
+        Atoms with bonds (e.g. from ``include_bonds=True`` or set
+        explicitly by the caller). Multi-atom inputs must carry
+        bonds — missing / empty bonds raise ``ValueError``. Single
+        atoms (ions) are allowed to have no bonds.
     assign_stereo : bool
         If True, call ``AssignStereochemistryFrom3D`` on the result.
 
@@ -202,14 +211,45 @@ def atoms_to_rdkit_mol(
     Raises
     ------
     ValueError
-        If the conversion fails.
+        If the input has no bonds, or if RDKit conversion fails.
+
+    Notes
+    -----
+    Hydrogen atoms *and isotopes* (D, T) are removed. biotite's
+    ``element`` is a string, so a naive ``element != "H"`` filter would
+    leak deuterium/tritium into the mol; we pre-filter the common
+    mass-1 isotopes and additionally call ``RemoveAllHs`` as a
+    belt-and-braces catch for anything RDKit still classifies as
+    hydrogen via atomic number.
+
+    Warnings
+    --------
+    The input **must carry bonds** (``atoms.bonds`` non-empty for
+    multi-atom inputs). Callers are expected to have either loaded the
+    CIF with ``include_bonds=True`` (which reads ``_chem_comp_bond``
+    and ``_struct_conn``) or to have populated bonds themselves. The
+    function will not re-derive bonds via
+    ``connect_via_residue_names`` because that fallback silently drops
+    inter-residue peptide bonds for non-standard residues in
+    multi-residue ligands — better to fail loudly than hand back a
+    structurally-wrong mol.
     """
     from biotite.interface import rdkit as rdkit_interface
     from peppr import sanitize as peppr_sanitize
 
-    heavy = atoms[~np.isin(atoms.element, ["H", "D", "T"])]
-    if heavy.bonds is None or heavy.bonds.as_array().shape[0] == 0:
-        heavy.bonds = struc.connect_via_residue_names(heavy)
+    heavy = atoms[~_is_hydrogen_isotope(atoms.element)]
+    # Multi-atom inputs must carry bonds; single atoms (ions) don't need any.
+    if heavy.array_length() > 1 and (
+        heavy.bonds is None or heavy.bonds.as_array().shape[0] == 0
+    ):
+        raise ValueError(
+            "atoms_to_rdkit_mol requires bonds on multi-atom inputs. "
+            "Load the CIF with include_bonds=True (which parses "
+            "_chem_comp_bond + _struct_conn) or populate atoms.bonds "
+            "before calling. A connect_via_residue_names fallback was "
+            "removed because it silently drops inter-residue peptide "
+            "bonds for non-standard residues in multi-residue ligands."
+        )
     mol = rdkit_interface.to_mol(heavy)
     if mol is None:
         raise ValueError("Failed to convert AtomArray to RDKit Mol")
@@ -535,7 +575,7 @@ def _is_known_compound(comp_id: str, atom_names: set[str] | None = None) -> bool
     try:
         ref = bt_info.residue(comp_id)
         if atom_names is not None:
-            ref_heavy = ref[ref.element != "H"]
+            ref_heavy = ref[~_is_hydrogen_isotope(ref.element)]
             ref_names = set(ref_heavy.atom_name)
             if not ref_names or not atom_names:
                 return False
@@ -586,7 +626,7 @@ def get_unknown_ligand_ids(cif_input: pdbx.CIFFile | Path | str) -> set[str]:
         )
         for comp_id in hetatm_ids:
             if elements is not None:
-                mask = (comp_ids == comp_id) & (elements != "H")
+                mask = (comp_ids == comp_id) & ~_is_hydrogen_isotope(elements)
             else:
                 mask = comp_ids == comp_id
             atom_names_per_comp[comp_id] = set(a_names[mask])
@@ -704,6 +744,25 @@ def _bonds_by_substructure_match(
     ``force_substructure_match=True`` is passed to
     :func:`assign_bond_orders_from_smiles` — there is no automatic
     fallback between the two paths.
+
+    Substructure matching needs CIF connectivity (RDKit can't search
+    a graph that has no edges). If ``lig_heavy.bonds`` is empty, bonds
+    are inferred from interatomic distances
+    (``connect_via_distances``); bond orders are then reassigned from
+    the SMILES template via ``AssignBondOrdersFromTemplate``. The
+    positional path doesn't need this fallback because it never reads
+    the CIF's bond list — it copies bonds straight from the SMILES
+    template using positional atom-name lookup.
+
+    Raises
+    ------
+    ValueError
+        If the ligand cannot be parsed as an RDKit mol, or if
+        :func:`peppr.sanitize` fails — a half-sanitized mol has
+        undefined aromaticity perception, and feeding it to
+        ``AssignBondOrdersFromTemplate`` can silently match the wrong
+        substructure. Better to fail loudly than to emit chemically
+        wrong bond orders.
     """
     from biotite.interface import rdkit as rdkit_interface
     from peppr import sanitize as peppr_sanitize
@@ -722,7 +781,11 @@ def _bonds_by_substructure_match(
     try:
         peppr_sanitize(rdkit_mol)
     except Exception as e:
-        LOG.warning(f"peppr_sanitize failed for {comp_id}: {e}")
+        raise ValueError(
+            f"peppr_sanitize failed for {comp_id}: {e}. "
+            "Proceeding to substructure matching with a half-sanitized "
+            "mol can silently produce wrong bond orders, so aborting."
+        ) from e
     fixed_mol = mol_assigned_bond_orders_by_template(template, rdkit_mol)
 
     atom_names = [
@@ -773,8 +836,13 @@ def enrich_cif_with_smiles_bonds(
         If unknown ligands remain without SMILES.
     ValueError
         If SMILES is invalid, atom counts differ, element order does
-        not match (default path), or template matching fails
-        (substructure path).
+        not match (default path), sanitize / template matching fails
+        (substructure path — this path fails loudly rather than risk
+        emitting chemically wrong bond orders), or multiple instances
+        of the same comp_id disagree on heavy-atom naming/order
+        (mmCIF ``_chem_comp_bond`` is keyed by comp_id so all
+        instances must share atom naming for biotite to apply the
+        single bond definition correctly).
     """
     block = list(cif_file.values())[0]
 
@@ -797,7 +865,7 @@ def enrich_cif_with_smiles_bonds(
     atoms = pdbx.get_structure(
         cif_file, model=1, use_author_fields=False, include_bonds=True
     )
-    atoms = atoms[atoms.element != "H"]
+    atoms = atoms[~_is_hydrogen_isotope(atoms.element)]
 
     # Preserve existing _chem_comp_bond rows. biotite's parser requires
     # pdbx_aromatic_flag to consume the category — default to "N" when
@@ -834,8 +902,50 @@ def enrich_cif_with_smiles_bonds(
         if not np.any(lig_mask):
             raise ValueError(f"No atoms found for component {comp_id} in CIF")
 
-        lig_atoms = atoms[lig_mask]
-        lig_heavy = lig_atoms[lig_atoms.element != "H"]
+        # mmCIF schema keys ``_chem_comp_bond`` by ``comp_id``, not by
+        # instance — biotite applies a single bond definition to every
+        # copy via atom-name lookup. So multi-instance custom residues
+        # (docking ensembles, multi-copy systems) require that all
+        # instances share the same heavy-atom naming, otherwise the
+        # bonds we emit from instance 1 won't be findable in the others.
+        # We validate that explicitly and emit bonds once from the
+        # reference instance — refuse to silently produce wrong bonds.
+        all_lig_atoms = atoms[lig_mask]
+        instances: list[tuple[tuple[str, int], struc.AtomArray]] = []
+        seen_keys: dict[tuple[str, int], None] = {}
+        for chain, res_id in zip(all_lig_atoms.chain_id, all_lig_atoms.res_id):
+            seen_keys.setdefault((str(chain), int(res_id)), None)
+        for chain, res_id in seen_keys:
+            inst_mask = (all_lig_atoms.chain_id == chain) & (
+                all_lig_atoms.res_id == res_id
+            )
+            inst = all_lig_atoms[inst_mask]
+            inst_heavy = inst[~_is_hydrogen_isotope(inst.element)]
+            instances.append(((chain, res_id), inst_heavy))
+
+        ref_key, ref_heavy = instances[0]
+        ref_names = tuple(ref_heavy.atom_name)
+        for key, inst_heavy in instances[1:]:
+            inst_names = tuple(inst_heavy.atom_name)
+            if inst_names != ref_names:
+                raise ValueError(
+                    f"{comp_id}: instances disagree on heavy-atom naming/order. "
+                    f"Instance {ref_key} has {len(ref_names)} atoms "
+                    f"starting with {ref_names[:5]}; instance {key} "
+                    f"has {len(inst_names)} atoms starting with "
+                    f"{inst_names[:5]}. mmCIF ``_chem_comp_bond`` is "
+                    "keyed by comp_id and biotite applies bonds to all "
+                    "copies via atom-name match — every instance must "
+                    "share identical heavy-atom naming. Use distinct "
+                    "comp_ids if instances differ chemically."
+                )
+        if len(instances) > 1:
+            LOG.info(
+                f"{comp_id}: {len(instances)} instances with consistent "
+                "atom naming, defining _chem_comp_bond once "
+                "(biotite applies to all copies via atom-name match)."
+            )
+        lig_heavy = ref_heavy
 
         if force_substructure_match:
             bonds_to_emit = _bonds_by_substructure_match(comp_id, template, lig_heavy)
@@ -913,6 +1023,12 @@ def assign_bond_orders_from_smiles(
     -------
     Path
         Path to the written CIF file.
+
+    Raises
+    ------
+    MissingBondOrderError, ValueError
+        Propagated from :func:`enrich_cif_with_smiles_bonds`. See
+        that function's docstring for the full list of failure modes.
     """
     if output_path is None:
         output_path = cif_path

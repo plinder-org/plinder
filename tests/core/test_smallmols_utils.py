@@ -69,11 +69,12 @@ def test_compare_stereo_to_template():
     import biotite.structure.info as bt_info
     from biotite.interface import rdkit as rdkit_interface
     from peppr import sanitize as peppr_sanitize
+    from plinder.core.structure.atoms import _is_hydrogen_isotope
     from plinder.core.structure.smallmols_utils import compare_stereo_to_template
 
     # Build a CCD mol with stereo (NAG — chiral sugar)
     ref = bt_info.residue("NAG")
-    ref_heavy = ref[ref.element != "H"]
+    ref_heavy = ref[~_is_hydrogen_isotope(ref.element)]
     ref_heavy.bonds = struc.connect_via_residue_names(ref_heavy)
     template = rdkit_interface.to_mol(ref_heavy)
     peppr_sanitize(template)
@@ -100,7 +101,7 @@ def test_compare_stereo_to_template():
 
     # Achiral mol (DMS — no stereocenters)
     ref_dms = bt_info.residue("DMS")
-    ref_dms_heavy = ref_dms[ref_dms.element != "H"]
+    ref_dms_heavy = ref_dms[~_is_hydrogen_isotope(ref_dms.element)]
     ref_dms_heavy.bonds = struc.connect_via_residue_names(ref_dms_heavy)
     dms_mol = rdkit_interface.to_mol(ref_dms_heavy)
     peppr_sanitize(dms_mol)
