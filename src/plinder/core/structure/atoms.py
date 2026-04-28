@@ -73,7 +73,7 @@ _AtomArrayOrStack = Union[AtomArray, AtomArrayStack]
 _HYDROGEN_ELEMENTS = ("H", "D", "T")
 
 
-def _is_hydrogen_isotope(elements: NDArray) -> NDArray:
+def is_hydrogen_isotope(elements: NDArray) -> NDArray:
     """Bool mask for any hydrogen isotope atom (H/D/T)."""
     return np.isin(elements, _HYDROGEN_ELEMENTS)
 

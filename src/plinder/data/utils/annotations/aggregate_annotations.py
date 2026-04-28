@@ -18,10 +18,10 @@ from PDBValidation.ValidationFactory import ValidationFactory
 from pydantic import BeforeValidator, Field
 from rdkit import RDLogger
 
+from plinder.core.structure.atoms import is_hydrogen_isotope
 from plinder.core.utils.config import get_config
 from plinder.core.utils.log import setup_logger
 from plinder.data.utils.annotations.cif_utils import (
-    _is_hydrogen_isotope,
     get_chain_external_mappings,
     get_entry_info,
     get_model_count,
@@ -1054,7 +1054,7 @@ class Entry(DocBaseModel):
         atoms = pdbx.get_structure(
             cif_file_obj, model=1, use_author_fields=False, include_bonds=True
         )
-        atoms = atoms[~_is_hydrogen_isotope(atoms.element)]
+        atoms = atoms[~is_hydrogen_isotope(atoms.element)]
         chain_to_seqres = get_seqres_from_cif(cif_data)
 
         entry = cls(
@@ -1119,7 +1119,7 @@ class Entry(DocBaseModel):
             except Exception as e:
                 LOG.warning(f"Could not build assembly {assembly_id}: {e}")
                 continue
-            biounit = biounit[~_is_hydrogen_isotope(biounit.element)]
+            biounit = biounit[~is_hydrogen_isotope(biounit.element)]
 
             if biounit.bonds is None:
                 # ``include_bonds=True`` returning ``None`` means biotite
@@ -1149,7 +1149,7 @@ class Entry(DocBaseModel):
             asu_atoms = pdbx.get_structure(
                 cif_file_obj, model=1, use_author_fields=False
             )
-            asu_atoms = asu_atoms[~_is_hydrogen_isotope(asu_atoms.element)]
+            asu_atoms = asu_atoms[~is_hydrogen_isotope(asu_atoms.element)]
             n_asu = len(asu_atoms)
             n_total = len(biounit)
             n_copies = max(1, n_total // n_asu) if n_asu > 0 else 1
@@ -1314,7 +1314,7 @@ class Entry(DocBaseModel):
         atoms = pdbx.get_structure(
             cif_file_obj, model=1, use_author_fields=False, include_bonds=True
         )
-        atoms = atoms[~_is_hydrogen_isotope(atoms.element)]
+        atoms = atoms[~is_hydrogen_isotope(atoms.element)]
         if atoms.bonds is None:
             # ``include_bonds=True`` returning ``None`` means biotite
             # derived **no bonds at all** for the structure — every

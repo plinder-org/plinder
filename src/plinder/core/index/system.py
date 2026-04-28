@@ -346,14 +346,14 @@ class PlinderSystem:
         """
         import biotite.structure.io.pdbx as pdbx
 
-        from plinder.core.structure.atoms import _is_hydrogen_isotope
+        from plinder.core.structure.atoms import is_hydrogen_isotope
         from plinder.data.utils.annotations.cif_utils import read_mmcif_file
 
         cif_file = read_mmcif_file(self.receptor_cif)
         atoms = pdbx.get_structure(
             cif_file, model=1, use_author_fields=False, include_bonds=True
         )
-        return atoms[~_is_hydrogen_isotope(atoms.element)]
+        return atoms[~is_hydrogen_isotope(atoms.element)]
 
     @cached_property
     def ligand_views(self) -> dict[str, Any]:

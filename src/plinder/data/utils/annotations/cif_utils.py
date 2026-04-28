@@ -28,7 +28,7 @@ LOG = logging.getLogger(__name__)
 # Single source of truth lives in ``plinder.core.structure.atoms`` so
 # both ``plinder.core`` and ``plinder.data`` filter H/D/T isotopes
 # consistently.
-from plinder.core.structure.atoms import _is_hydrogen_isotope  # noqa: E402
+from plinder.core.structure.atoms import is_hydrogen_isotope  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Generic CIF I/O helpers
@@ -237,7 +237,7 @@ def atoms_to_rdkit_mol(
     from biotite.interface import rdkit as rdkit_interface
     from peppr import sanitize as peppr_sanitize
 
-    heavy = atoms[~_is_hydrogen_isotope(atoms.element)]
+    heavy = atoms[~is_hydrogen_isotope(atoms.element)]
     # Multi-atom inputs must carry bonds; single atoms (ions) don't need any.
     if heavy.array_length() > 1 and (
         heavy.bonds is None or heavy.bonds.as_array().shape[0] == 0
@@ -575,7 +575,7 @@ def _is_known_compound(comp_id: str, atom_names: set[str] | None = None) -> bool
     try:
         ref = bt_info.residue(comp_id)
         if atom_names is not None:
-            ref_heavy = ref[~_is_hydrogen_isotope(ref.element)]
+            ref_heavy = ref[~is_hydrogen_isotope(ref.element)]
             ref_names = set(ref_heavy.atom_name)
             if not ref_names or not atom_names:
                 return False
@@ -626,7 +626,7 @@ def get_unknown_ligand_ids(cif_input: pdbx.CIFFile | Path | str) -> set[str]:
         )
         for comp_id in hetatm_ids:
             if elements is not None:
-                mask = (comp_ids == comp_id) & ~_is_hydrogen_isotope(elements)
+                mask = (comp_ids == comp_id) & ~is_hydrogen_isotope(elements)
             else:
                 mask = comp_ids == comp_id
             atom_names_per_comp[comp_id] = set(a_names[mask])
@@ -865,7 +865,7 @@ def enrich_cif_with_smiles_bonds(
     atoms = pdbx.get_structure(
         cif_file, model=1, use_author_fields=False, include_bonds=True
     )
-    atoms = atoms[~_is_hydrogen_isotope(atoms.element)]
+    atoms = atoms[~is_hydrogen_isotope(atoms.element)]
 
     # Preserve existing _chem_comp_bond rows. biotite's parser requires
     # pdbx_aromatic_flag to consume the category — default to "N" when
@@ -920,7 +920,7 @@ def enrich_cif_with_smiles_bonds(
                 all_lig_atoms.res_id == res_id
             )
             inst = all_lig_atoms[inst_mask]
-            inst_heavy = inst[~_is_hydrogen_isotope(inst.element)]
+            inst_heavy = inst[~is_hydrogen_isotope(inst.element)]
             instances.append(((chain, res_id), inst_heavy))
 
         ref_key, ref_heavy = instances[0]

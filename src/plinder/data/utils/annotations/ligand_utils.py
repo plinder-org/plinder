@@ -1031,10 +1031,10 @@ class Ligand(DocBaseModel):
             if np.any(lig_atoms.res_id == rn)
         )
         # Get SMILES from CCD template via biotite, fall back to structure
-        from plinder.core.structure.atoms import _is_hydrogen_isotope
+        from plinder.core.structure.atoms import is_hydrogen_isotope
 
         smiles = None
-        lig_heavy = lig_atoms[~_is_hydrogen_isotope(lig_atoms.element)]
+        lig_heavy = lig_atoms[~is_hydrogen_isotope(lig_atoms.element)]
         res_names = list(
             dict.fromkeys(
                 lig_heavy.res_name[lig_heavy.res_id == rn][0]
