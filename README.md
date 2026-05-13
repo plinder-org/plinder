@@ -35,9 +35,7 @@ The *PLINDER* project is a community effort, launched by the University of Basel
 SIB Swiss Institute of Bioinformatics, Proxima (formerly VantAI), NVIDIA, MIT CSAIL,
 and will be regularly updated.
 
-To accelerate community adoption, PLINDER will be used as the field’s new Protein-Ligand
-interaction dataset standard as part of an exciting competition at the upcoming 2024
-[Machine Learning in Structural Biology (MLSB)](https://mlsb.io#challenge) Workshop at NeurIPS, one of the field's premiere academic gatherings.
+PLINDER set a new standard for the Protein-Ligand interaction datasets. It was first introduced as part of the 2024 Machine Learning in Structural Biology (MLSB) [Workshop challenge](https://www.mlsb.io/index_2024.html#challenge) at NeurIPS, one of the field's premiere academic gatherings.
 More details about the competition and other helpful practical tips can be found at our recent workshop repo:
 [Moving Beyond Memorization](https://github.com/plinder-org/moving_beyond_memorisation).
 
@@ -68,7 +66,8 @@ All fixed in WIP — will take effect after dataset regeneration.
 - WIP (Current — unreleased):
     - **Major backend refactor**: replaced OST, gemmi, plip, openbabel with biotite + peppr for data generation; removed 6 dependencies from ingest pipeline
     - **Nucleic acid support**: DNA/RNA chains now correctly included as receptor neighbors, mainchain/sidechain detection works for both protein and nucleic acids ([#61](https://github.com/plinder-org/plinder/issues/61))
-    - **Custom CIF support**: new `Entry.from_custom_cif_file` for structure-prediction outputs (Boltz, AlphaFold3, Chai-1) that ship CIFs without `_chem_comp_bond` ([#117](https://github.com/plinder-org/plinder/issues/117)). Bond orders are assigned from user-supplied `ligand_smiles_dict` using positional atom-order correspondence (the convention these tools use — heavy-atom order in the CIF matches SMILES parse order); mismatches raise `ValueError` pointing at the offending position, with `force_substructure_match=True` as an opt-in for CIFs that don't preserve atom order. User SMILES take precedence over CCD for both the canonical `smiles` field and for stereo validation via `resolved_stereo_matches_template` — closes a silent gap where biotite's generic `LIG` placeholder would let any 3D conformer pass. Input CIFs are never mutated on disk; optional `save_fixed_cif` writes the enriched copy elsewhere.
+    - **Custom CIF support**: new `Entry.from_custom_cif_file` for structure-prediction outputs (Boltz, AlphaFold3, Chai-1) that ship CIFs without `_chem_comp_bond` ([#117](https://github.com/plinder-org/plinder/issues/117)). Bond orders come from `ligand_smiles_dict` via positional atom-order match (the convention these tools follow); element/count mismatches raise with the offending position, `force_substructure_match=True` opts into substructure matching when atom order isn't preserved. User SMILES win over CCD for both `smiles` and `resolved_stereo_matches_template` — closes a silent gap where biotite's `LIG` placeholder would pass any 3D conformer. Input CIFs are never mutated; optional `save_fixed_cif` persists the enriched copy.
+    - **Stricter CIF ingest**: H/D/T filtered consistently (`is_hydrogen_isotope`); multi-model CIFs warn and use model 1; multi-instance custom comp_ids must share heavy-atom naming (since `_chem_comp_bond` is comp_id-keyed); silent `connect_via_residue_names` and half-sanitized substructure fallbacks replaced with `ValueError` so corrupt inputs fail loudly.
     - **Stereochemistry**: CCD ideal 3D coordinates used as stereo ground truth; new `resolved_stereo_matches_template` flag validates resolved structure chirality against CCD template (handles partial resolution via MCS trimming)
     - **Interactions**: water bridge and metal bridge detection via peppr; halogen bond sidechain flag now computed (was hardcoded)
     - **Binding affinity**: fixed BindingDB matching — target sequence now validated against PDB SEQRES with 100% core identity, terminal tags/truncations tolerated ([#94](https://github.com/plinder-org/plinder/issues/94)); updated to BindingDB 2026-04
