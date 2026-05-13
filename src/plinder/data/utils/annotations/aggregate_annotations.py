@@ -40,6 +40,8 @@ from plinder.data.utils.annotations.interface_gap import annotate_interface_gaps
 from plinder.data.utils.annotations.ligand_utils import Ligand, validate_chain_residue
 from plinder.data.utils.annotations.protein_utils import (
     Chain,
+    _is_polynucleotide,
+    _is_polypeptide,
     detect_ligand_chains,
 )
 from plinder.data.utils.annotations.save_utils import (
@@ -1477,12 +1479,29 @@ class Entry(DocBaseModel):
             "pred",
         ), "chain_type must be 'apo', 'holo', or 'pred'"
         if chain_type == "holo":
-            chains = set(
-                self.chains[i_c.split(".")[1]].auth_id
+            receptor_asym_ids = {
+                i_c.split(".")[1]
                 for system in self.systems.values()
-                for i_c in system.protein_chains_asym_id
                 if system.system_type == "holo"
+                for i_c in system.protein_chains_asym_id
+            }
+            na_chains = sorted(
+                asym
+                for asym in receptor_asym_ids
+                if _is_polynucleotide(self.chains[asym].chain_type_str)
             )
+            if na_chains:
+                LOG.warning(
+                    f"PDB {self.pdb_id!r}: nucleic acid receptor chains "
+                    f"{na_chains} are excluded from {aln_type} alignment "
+                    "(DBs are protein-only); similarity for NA-only/NA-mixed "
+                    "systems will be missing or zero."
+                )
+            chains = {
+                self.chains[asym].auth_id
+                for asym in receptor_asym_ids
+                if _is_polypeptide(self.chains[asym].chain_type_str)
+            }
         elif chain_type == "apo":
             holo_entities = set(
                 self.chains[c].entity_id for c in self.chains if self.chains[c].holo

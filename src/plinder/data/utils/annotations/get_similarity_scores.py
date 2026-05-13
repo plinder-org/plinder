@@ -61,9 +61,9 @@ _SimilarityScoreDictType = dict[str, float]
 
 def get_sequence_similarity(seq_str1: str, seq_str2: str) -> tuple[float, float]:
     """
-    Calculate the similarity score of an alignment.
+    Calculate the protein similarity score of an alignment.
 
-    If the alignment contains more than two sequences,
+    If the alignment contains more than two protein sequences,
     all pairwise scores are counted.
 
     Parameters
@@ -78,54 +78,25 @@ def get_sequence_similarity(seq_str1: str, seq_str2: str) -> tuple[float, float]
     tuple[float, float]
         Sequence identity and sequence similarity score.
     """
-    non_canonical_aa: dict[str, str | int | None] = {
-        "X": "A",  # Replace X (any a.a with alanine)
-        "B": "D",  # Replace Asx ( with aspartic acid)
-        "J": "L",  # Replace Xle ( with leucine)
-        "Z": "E",  # Replace Glx (any a.a with glutamic acid)
-        "U": "C",  # Replace Selenocysteine(sec) (with cysteine)
-        "O": "K",  # replace Pyrrolysine(Pyl) (any a.a with alanine)
-    }
-    seq_str1 = seq_str1.translate(str.maketrans(non_canonical_aa))
-    seq_str2 = seq_str2.translate(str.maketrans(non_canonical_aa))
-    seq1_arr = np.array(list(seq_str1))
-    seq2_arr = np.array(list(seq_str2))
-    gap1 = np.where(seq1_arr == "-")
-    gap2 = np.where(seq2_arr == "-")
-    all_gaps = np.concatenate([gap1[0], gap2[0]])
-    seq1_arr = np.delete(seq1_arr, all_gaps)
-    seq2_arr = np.delete(seq2_arr, all_gaps)
-    ungapped_seq_str1 = "".join(list(seq1_arr))
-    ungapped_seq_str2 = "".join(list(seq2_arr))
-    seq1 = seq.ProteinSequence(ungapped_seq_str1)
-    seq2 = seq.ProteinSequence(ungapped_seq_str2)
+    # biotite's ProteinSequence handles B/Z/X natively; J/U/O still need mapping.
+    non_canonical_aa = str.maketrans({"J": "L", "U": "C", "O": "K"})
+    s1 = seq_str1.translate(non_canonical_aa).replace("-", "")
+    s2 = seq_str2.translate(non_canonical_aa).replace("-", "")
+    seq1 = seq.ProteinSequence(s1)
+    seq2 = seq.ProteinSequence(s2)
     matrix = align.SubstitutionMatrix.std_protein_matrix()
-    trace = align.Alignment.trace_from_strings([ungapped_seq_str1, ungapped_seq_str2])
+    trace = align.Alignment.trace_from_strings([s1, s2])
     ali = align.Alignment([seq1, seq2], trace)
+
+    # "Similar" position = BLOSUM62 pair score > 20% of max self-score.
+    # TODO: verify the definition for the normalization?
     codes = align.alignment.get_codes(ali)
-    matrix = matrix.score_matrix()
-
-    # Sum similarity scores (without gaps)
-    scores = []
-
-    # Iterate over all positions
-    for pos in range(codes.shape[1]):
-        column = codes[:, pos]
-        # Iterate over all possible pairs
-        # Do not count self-similarity
-        # and do not count similarity twice (not S(i,j) and S(j,i))
-        for i in range(codes.shape[0]):
-            for j in range(i + 1, codes.shape[0]):
-                code_i = column[i]
-                code_j = column[j]
-                # Ignore gaps
-                if code_i != -1 and code_j != -1:
-                    tmp_score = max(0, matrix[code_i, code_j])
-                    normalizing_const = max(
-                        matrix[code_i, code_i], matrix[code_j, code_j]
-                    )
-                    scores.append(tmp_score / normalizing_const > 0.2)
-    similarity_score = sum(scores) / len(scores)
+    score_matrix = matrix.score_matrix()
+    mask = (codes[0] != -1) & (codes[1] != -1)
+    ci, cj = codes[0, mask], codes[1, mask]
+    pair_scores = np.maximum(0, score_matrix[ci, cj])
+    norm = np.maximum(score_matrix[ci, ci], score_matrix[cj, cj])
+    similarity_score = float(np.mean(pair_scores / norm > 0.2))
     return (align.get_sequence_identity(ali), similarity_score)
 
 
