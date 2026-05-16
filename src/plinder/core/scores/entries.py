@@ -109,22 +109,26 @@ def _parse_interaction(s: str) -> tuple[str, int, str]:
     return inst, int(rnum), itype
 
 
-def load_entry_views(*, pdb_ids: Iterable[str]) -> dict[str, EntryView]:
-    """Build :class:`EntryView` objects from the published index parquet."""
-    pdb_ids = list(pdb_ids)
-    df = query_index(columns=["*"], splits=["*"])
-    df = df[df["entry_pdb_id"].isin(pdb_ids)]
-    LOG.info(f"load_entry_views: {len(df)} rows for {len(pdb_ids)} pdb_ids")
+def _as_list(value: object) -> list:
+    """Normalize an array-valued cell (numpy array / None / NaN) to a list."""
+    if value is None:
+        return []
+    try:
+        return list(value)
+    except TypeError:
+        return []
 
-    def _as_list(value: object) -> list:
-        """Normalize an array-valued cell (numpy array / None / NaN) to a list."""
-        if value is None:
-            return []
-        try:
-            return list(value)
-        except TypeError:
-            return []
 
+def entry_views_from_df(df: "pd.DataFrame") -> dict[str, EntryView]:
+    """Build :class:`EntryView` objects from any DataFrame shaped like the
+    published index parquet — i.e. one row per ``(entry, system, ligand)``
+    triple with the same column names produced by ``Entry.to_df()``.
+
+    Source-agnostic: works equally on the published parquet read via
+    :func:`load_entry_views`, a locally-built parquet, or a freshly
+    constructed DataFrame from in-memory ``Entry`` objects
+    (``pd.concat([e.to_df() for e in entries.values()])``).
+    """
     views: dict[str, EntryView] = {}
     for pdb_id, entry_rows in df.groupby("entry_pdb_id", sort=False):
         chains: dict[str, ChainView] = {}
@@ -183,3 +187,16 @@ def load_entry_views(*, pdb_ids: Iterable[str]) -> dict[str, EntryView]:
             author_to_asym=author_to_asym,
         )
     return views
+
+
+def load_entry_views(*, pdb_ids: Iterable[str]) -> dict[str, EntryView]:
+    """Build :class:`EntryView` objects for the given pdb_ids from the
+    published plinder index parquet. Thin convenience wrapper around
+    :func:`entry_views_from_df` — for sources other than the published
+    index, call ``entry_views_from_df`` directly with your own DataFrame.
+    """
+    pdb_ids = list(pdb_ids)
+    df = query_index(columns=["*"], splits=["*"])
+    df = df[df["entry_pdb_id"].isin(pdb_ids)]
+    LOG.info(f"load_entry_views: {len(df)} rows for {len(pdb_ids)} pdb_ids")
+    return entry_views_from_df(df)
