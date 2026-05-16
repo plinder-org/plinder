@@ -1521,7 +1521,7 @@ class Entry(DocBaseModel):
             if chain_type == "pred":
                 return [f"AF-{c}-F1-model_v4_A" for c in chains]
             else:
-                return [f"pdb_0000{self.pdb_id}_xyz-enrich.cif_{c}" for c in chains]
+                return [f"pdb_0000{self.pdb_id}_xyz-enrich_{c}" for c in chains]
         elif aln_type == "mmseqs":
             if chain_type == "pred":
                 return list(chains)

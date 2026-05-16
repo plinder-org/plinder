@@ -170,6 +170,7 @@ def run_alignment(
                 str(x)
                 .replace("_xyz-enrich.cif.gz", "")
                 .replace("_xyz-enrich.cif", "")
+                .replace("_xyz-enrich", "")
                 .replace(".cif.gz", "")
                 .replace(".cif", "")
                 .replace("pdb_0000", "")[:4]
@@ -185,6 +186,7 @@ def run_alignment(
                     str(x)
                     .replace("_xyz-enrich.cif.gz", "")
                     .replace("_xyz-enrich.cif", "")
+                    .replace("_xyz-enrich", "")
                     .replace(".cif.gz", "")
                     .replace(".cif", "")
                     .replace("pdb_0000", "")[:4]
@@ -504,8 +506,10 @@ class Scorer:
                 {
                     "_xyz-enrich.cif.gz": "",
                     "_xyz-enrich.cif": "",
+                    "_xyz-enrich": "",
                     "pdb_0000": "",
                     ".cif.gz": "",
+                    ".cif": "",
                 },
                 regex=True,
             )
@@ -518,8 +522,10 @@ class Scorer:
                     {
                         "_xyz-enrich.cif.gz": "",
                         "_xyz-enrich.cif": "",
+                        "_xyz-enrich": "",
                         "pdb_0000": "",
                         ".cif.gz": "",
+                        ".cif": ""
                     },
                     regex=True,
                 )
