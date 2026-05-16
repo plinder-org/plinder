@@ -12,22 +12,6 @@ test_asset_fp = Path(__file__).absolute().parent / "test_data"
 test_output_fp = Path(__file__).absolute().parent / "xx/output"
 
 
-# Loads a mock score dataset
-def load_mini_dataset():
-    sample_scores_dataset = (
-        Path(__file__).parent / "test_data/mini_score_dataset.parquet"
-    )
-    return ds.dataset(sample_scores_dataset)
-
-
-# Loads a mock sequence similarity dataset
-def load_mini_seq_dataset():
-    sample_scores_dataset = (
-        Path(__file__).parent / "test_data/mini_score_seq_dataset.parquet"
-    )
-    return ds.dataset(sample_scores_dataset)
-
-
 @pytest.fixture(scope="session")
 def plinder_src():
     plinder_root = Path(__file__).absolute().parent.parent
