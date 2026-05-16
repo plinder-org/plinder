@@ -36,8 +36,6 @@ METRICS = [
     # pocket
     "pocket_fident_qcov",
     "pocket_fident",
-    "pocket_lddt_qcov",
-    "pocket_lddt",
     "pocket_qcov",
 ]
 

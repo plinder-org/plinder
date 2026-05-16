@@ -965,7 +965,6 @@ def scatter_compute_protein_leakage(
         for metric in [
             "pli_qcov",
             "pocket_qcov",
-            "pocket_lddt",
             "protein_seqsim_weighted_sum",
             "protein_fident_weighted_sum",
             "protein_lddt_weighted_sum",

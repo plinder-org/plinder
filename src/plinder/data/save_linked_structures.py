@@ -128,7 +128,6 @@ class LinkedStructureConfig:
             "pocket_fident": 95,
             "protein_fident_weighted_sum": 95,
             "protein_fident_qcov_weighted_sum": 80,
-            "pocket_lddt": 20,
             "protein_lddt_weighted_sum": 20,
         }
     )  # Filter criteria for deciding whether to keep a linked structure (AND logic)
