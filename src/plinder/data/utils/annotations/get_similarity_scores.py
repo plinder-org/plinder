@@ -18,11 +18,10 @@ import pyarrow.parquet as pq
 from pyarrow import csv
 from tqdm import tqdm
 
+from plinder.core.scores.entries import EntryView, SystemView, load_entry_views
 from plinder.core.utils.log import setup_logger
 from plinder.data import databases
 from plinder.data.pipeline.config import FoldseekConfig, MMSeqsConfig
-from plinder.data.pipeline.utils import load_entries_from_zips
-from plinder.data.utils.annotations.aggregate_annotations import Entry, System
 
 LOG = setup_logger(__name__)
 
@@ -45,8 +44,6 @@ SCORE_NAMES = (
     "protein_fident_qcov",
     "protein_seqsim",
     "protein_seqsim_qcov",
-    "pocket_lddt",
-    "pocket_lddt_qcov",
     "pocket_qcov",
     "pocket_fident",
     "pocket_fident_qcov",
@@ -156,7 +153,7 @@ def run_alignment(
         "query,target,qlen,fident,alnlen,qstart,qend,tstart,tend,evalue,bits,qcov,tcov,qaln,taln",
     ]
     if aln_type == "foldseek":
-        convert_commands[-1] += ",lddt,lddtfull"
+        convert_commands[-1] += ",lddt"
     subprocess.check_call(search_commands, stdout=subprocess.DEVNULL)
     subprocess.check_call(convert_commands, stdout=subprocess.DEVNULL)
 
@@ -258,7 +255,7 @@ def combine_scores(
 
 @dataclass
 class Scorer:
-    entries: dict[str, Entry]
+    entries: dict[str, EntryView]
     source_to_full_db_file: dict[str, Path]
     db_dir: Path
     scores_dir: Path
@@ -270,7 +267,7 @@ class Scorer:
     )
     ligand_chain_mappers: list[str] = field(
         default_factory=lambda: [
-            "pocket_lddt_qcov_foldseek",
+            "pocket_fident_qcov_foldseek",
             "pocket_fident_qcov_mmseqs",
         ]
     )
@@ -404,15 +401,8 @@ class Scorer:
             LOG.info(
                 f"loading {len(entries_to_load)} (additional) entries for {pdb_id}"
             )
-            self.entries.update(
-                load_entries_from_zips(
-                    data_dir=data_dir,
-                    pdb_ids=entries_to_load,
-                    load_for_scoring=True,
-                    max_protein_chains=20,
-                    max_ligand_chains=20,
-                )
-            )
+            if entries_to_load:
+                self.entries.update(load_entry_views(pdb_ids=entries_to_load))
             pdb_file = (
                 self.db_dir
                 / f"{search_db}_{aln_type}"
@@ -486,10 +476,6 @@ class Scorer:
             aln_df["trnum"] = aln_df["trnum"].apply(
                 lambda x: dict([(int(i), int(r)) for i, r in x])
             )
-            if "lddtfull" in aln_df.columns:
-                aln_df["lddtfull"] = aln_df["lddtfull"].apply(
-                    lambda x: dict([(int(i), l) for i, l in x])
-                )
             data.append(aln_df)
         if len(data):
             df = pd.concat(data)
@@ -562,12 +548,9 @@ class Scorer:
         df["fident_qcov"] = df["fident"] * df["qcov"]
         if aln_type == "foldseek":
             df["lddt_qcov"] = df["lddt"] * df["qcov"]
-            df["lddtaln"] = df["lddtfull"].apply(lambda x: x.split(","))
         df = df.apply(
             lambda x: self.map_row(x, aln_type=aln_type, search_db=search_db), axis=1
         )
-        if aln_type == "foldseek":
-            df.drop(columns=["lddtaln"], inplace=True)
         df["source"] = aln_type
         df.set_index(
             [
@@ -582,46 +565,39 @@ class Scorer:
         return df
 
     def map_row(self, parts: pd.Series, aln_type: str, search_db: str) -> pd.Series:
+        # mmseqs operates on the SEQRES FASTA, so 1-based position
+        #     equals the residue NUMBER (label_seq_id = Chain.residues key);
+        # foldseek operates on the 3D structure, so position == 0-based
+        #     resolved-residue INDEX;
         parts["qrnum"] = []
         parts["trnum"] = []
-        parts["lddtfull"] = []
         q_i, t_i = int(parts["qstart"]) - 1, int(parts["tstart"]) - 1
-        aln_index = 0
+        q_i2n: dict[int, int] = {}
+        t_i2n: dict[int, int] = {}
+        if aln_type == "foldseek":
+            q_entry = self.entries[parts["query_entry"]]
+            q_i2n = q_entry.pocket_index_to_number_per_chain.get(
+                parts["query_chain_mapped"], {}
+            )
+            if search_db != "pred":
+                t_entry = self.entries[parts["target_entry"]]
+                t_i2n = t_entry.pocket_index_to_number_per_chain.get(
+                    parts["target_chain_mapped"], {}
+                )
         for x, (q_a, t_a) in enumerate(zip(parts["qaln"], parts["taln"])):
             if q_a != "-" and t_a != "-":
-                q_chain = self.entries[parts["query_entry"]].chains[
-                    parts["query_chain_mapped"]
-                ]
-                t_chain = (
-                    self.entries[parts["target_entry"]].chains[
-                        parts["target_chain_mapped"]
-                    ]
-                    if search_db != "pred"
-                    else None
-                )
-                if aln_type == "foldseek":
-                    # it's the residue_index, map to residue_number
-                    q_n = q_chain.residue_index_to_number.get(q_i, None)
-                    if t_chain is not None:
-                        t_n = t_chain.residue_index_to_number.get(t_i, None)
-                    else:
-                        t_n = None
+                if aln_type == "mmseqs":
+                    parts["qrnum"].append((x, q_i + 1))
+                    if search_db != "pred":
+                        parts["trnum"].append((x, t_i + 1))
+                else:
+                    q_n = q_i2n.get(q_i)
                     if q_n is not None:
                         parts["qrnum"].append((x, q_n))
-                        parts["lddtfull"].append(
-                            (
-                                x,
-                                float(parts["lddtaln"][aln_index]),
-                            )
-                        )
-                    if t_n is not None:
-                        parts["trnum"].append((x, t_n))
-                elif aln_type == "mmseqs":
-                    if q_i in q_chain.residues:
-                        parts["qrnum"].append((x, q_i))
-                    if t_chain is not None and t_i in t_chain.residues:
-                        parts["trnum"].append((x, t_i))
-                aln_index += 1
+                    if search_db != "pred":
+                        t_n = t_i2n.get(t_i)
+                        if t_n is not None:
+                            parts["trnum"].append((x, t_n))
             if q_a != "-":
                 q_i += 1
             if t_a != "-":
@@ -641,7 +617,7 @@ class Scorer:
     def get_protein_scores(
         self,
         query_target_entry_alignments: pd.DataFrame,
-        query_system: System,
+        query_system: SystemView,
         target_protein_chains: list[str],
         query_system_length: int,
     ) -> tuple[
@@ -738,8 +714,8 @@ class Scorer:
     def get_pocket_pli_scores(
         self,
         alns: dict[_ChainPairType, pd.DataFrame],
-        query_system: System,
-        target_system: System | None = None,
+        query_system: SystemView,
+        target_system: SystemView | None = None,
     ) -> tuple[
         _SimilarityScoreDictType,
         _SimilarityScoreDictType,
@@ -749,48 +725,44 @@ class Scorer:
         pocket_length = query_system.proper_num_pocket_residues
         pli_length = query_system.proper_num_interactions
         pli_unique_length = query_system.proper_num_unique_interactions
+        # qrnum/trnum entries from map_row are uniformly (aln_position,
+        # residue_number) pairs — see map_row's docstring. Source-agnostic.
         for q_instance_chain, t_instance_chain in alns:
             aln = alns[(q_instance_chain, t_instance_chain)]
-            q_pocket = query_system.pocket_residues.get(q_instance_chain, {})
+            q_pocket = query_system.pocket_residue_number_to_index.get(
+                q_instance_chain, {}
+            )
             q_interactions = query_system.interactions_counter.get(q_instance_chain, {})
             if target_system is not None:
-                t_pocket = target_system.pocket_residues.get(t_instance_chain, {})
+                t_pocket = target_system.pocket_residue_number_to_index.get(
+                    t_instance_chain, {}
+                )
                 t_interactions = target_system.interactions_counter.get(
                     t_instance_chain, {}
                 )
+            else:
+                t_pocket, t_interactions = {}, {}
             for source, aln_source in aln.iterrows():
-                for i in aln_source["qrnum"]:
-                    q_a, t_a, lddt, q_n, t_n = (
-                        aln_source["qaln"][i],
-                        aln_source["taln"][i],
-                        aln_source["lddtfull"].get(i, 0),
-                        aln_source["qrnum"][i],
-                        aln_source["trnum"].get(i, None),
-                    )
-                    assert q_a != "-" and t_a != "-"
-                    if q_n in q_pocket:
-                        pocket_scores[f"pocket_lddt_{source}"] += lddt
+                for i, q_n in aln_source["qrnum"].items():
+                    if q_n not in q_pocket:
+                        continue
+                    q_a = aln_source["qaln"][i]
+                    t_a = aln_source["taln"][i]
+                    t_n = aln_source["trnum"].get(i)
+                    if q_a == t_a:
+                        pocket_scores[f"pocket_fident_{source}"] += 1
+                    if target_system is not None and t_n is not None and t_n in t_pocket:
+                        pocket_scores[f"pocket_qcov_{source}"] += 1
                         if q_a == t_a:
-                            pocket_scores[f"pocket_fident_{source}"] += 1
-                        if (
-                            target_system is not None
-                            and t_n is not None
-                            and t_n in t_pocket
-                        ):
-                            pocket_scores[f"pocket_qcov_{source}"] += 1
-                            pocket_scores[f"pocket_lddt_qcov_{source}"] += lddt
-                            if q_a == t_a:
-                                pocket_scores[f"pocket_fident_qcov_{source}"] += 1
-                            if q_n in q_interactions and t_n in t_interactions:
-                                pli_scores[f"pli_qcov_{source}"] += sum(
-                                    (q_interactions[q_n] & t_interactions[t_n]).values()
-                                )
-                                pli_scores[f"pli_unique_qcov_{source}"] += len(
-                                    (
-                                        set(q_interactions[q_n].values())
-                                        & set(t_interactions[t_n].values())
-                                    )
-                                )
+                            pocket_scores[f"pocket_fident_qcov_{source}"] += 1
+                        if q_n in q_interactions and t_n in t_interactions:
+                            pli_scores[f"pli_qcov_{source}"] += sum(
+                                (q_interactions[q_n] & t_interactions[t_n]).values()
+                            )
+                            pli_scores[f"pli_unique_qcov_{source}"] += len(
+                                set(q_interactions[q_n].values())
+                                & set(t_interactions[t_n].values())
+                            )
         for score in pocket_scores:
             pocket_scores[score] /= pocket_length
         for score in pli_scores:
@@ -801,7 +773,7 @@ class Scorer:
         return pocket_scores, pli_scores
 
     def get_scores(
-        self, search_db: str, query_system: System, query_entry_alignments: pd.DataFrame
+        self, search_db: str, query_system: SystemView, query_entry_alignments: pd.DataFrame
     ) -> abc.Generator[dict[str, str | float], None, None]:
         if search_db == "holo":
             return self.get_scores_holo(query_system, query_entry_alignments)
@@ -811,7 +783,7 @@ class Scorer:
             raise ValueError(f"Invalid search_db: {search_db}")
 
     def get_scores_holo(
-        self, query_system: System, query_entry_alignments: pd.DataFrame
+        self, query_system: SystemView, query_entry_alignments: pd.DataFrame
     ) -> abc.Generator[dict[str, str | float], None, None]:
         query_system_length = sum(
             self.entries[query_system.pdb_id]
@@ -977,7 +949,7 @@ class Scorer:
         return df.sort_values(by=columns, ascending=ascending)
 
     def get_scores_apo_pred(
-        self, query_system: System, query_entry_alignments: pd.DataFrame
+        self, query_system: SystemView, query_entry_alignments: pd.DataFrame
     ) -> abc.Generator[dict[str, str | float], None, None]:
         q_chain = query_system.protein_chains_asym_id[0].split(".")[1]
         query_system_length = sum(

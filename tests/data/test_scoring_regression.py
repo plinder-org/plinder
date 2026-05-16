@@ -5,9 +5,7 @@ from __future__ import annotations
 import gzip
 import os
 import shutil
-from collections import defaultdict
 from pathlib import Path
-from zipfile import ZIP_DEFLATED, ZipFile
 
 import pandas as pd
 import pytest
@@ -39,15 +37,17 @@ def scoring_fixture(
         anno.annotate()
         entries[pdb_id] = anno.entry
 
-    entries_dir = data_dir / "entries"
-    entries_dir.mkdir()
-    by_code: dict[str, list[tuple[str, object]]] = defaultdict(list)
-    for pdb_id, entry in entries.items():
-        by_code[pdb_id[-3:-1]].append((pdb_id, entry))
-    for code, pairs in by_code.items():
-        with ZipFile(entries_dir / f"{code}.zip", "w", compression=ZIP_DEFLATED) as zf:
-            for pdb_id, entry in pairs:
-                zf.writestr(f"{pdb_id}.json", entry.model_dump_json())
+    # Write the published-format index parquet so core.scores.entries.load_entry_views
+    # (via core.scores.index.query_index) can read it back. Mirrors the layout
+    # the scoring pipeline expects: index/annotation_table.parquet + a splits
+    # parquet stub (load logic merges splits even though we don't filter on them).
+    rows = pd.concat([entry.to_df() for entry in entries.values()])
+    (data_dir / "index").mkdir()
+    rows.to_parquet(data_dir / "index" / "annotation_table.parquet", index=False)
+    (data_dir / "splits").mkdir()
+    pd.DataFrame({"system_id": rows["system_id"].unique(), "split": "train"}).to_parquet(
+        data_dir / "splits" / "split.parquet", index=False
+    )
 
     # Build a tiny seqres FASTA covering every chain in the two entries (not
     # just the ones chains_for_alignment returns) so that make_sub_db actually
@@ -91,16 +91,12 @@ def scoring_fixture(
 
 
 def test_scoring_regression(scoring_fixture, tmp_path):
-    from plinder.data.pipeline.utils import (
-        get_db_sources,
-        load_entries_from_zips,
-    )
+    from plinder.core.scores.entries import load_entry_views
+    from plinder.data.pipeline.utils import get_db_sources
     from plinder.data.utils.annotations.get_similarity_scores import Scorer
 
     data_dir = scoring_fixture
-    entries = load_entries_from_zips(
-        data_dir=data_dir, pdb_ids=PDB_IDS, load_for_scoring=True
-    )
+    entries = load_entry_views(pdb_ids=PDB_IDS)
 
     db_sources = get_db_sources(data_dir=data_dir, sub_databases=["holo"])
     scorer = Scorer(
