@@ -511,7 +511,7 @@ class Scorer:
                         "_xyz-enrich": "",
                         "pdb_0000": "",
                         ".cif.gz": "",
-                        ".cif": ""
+                        ".cif": "",
                     },
                     regex=True,
                 )
@@ -751,7 +751,11 @@ class Scorer:
                     t_n = aln_source["trnum"].get(i)
                     if q_a == t_a:
                         pocket_scores[f"pocket_fident_{source}"] += 1
-                    if target_system is not None and t_n is not None and t_n in t_pocket:
+                    if (
+                        target_system is not None
+                        and t_n is not None
+                        and t_n in t_pocket
+                    ):
                         pocket_scores[f"pocket_qcov_{source}"] += 1
                         if q_a == t_a:
                             pocket_scores[f"pocket_fident_qcov_{source}"] += 1
@@ -773,7 +777,10 @@ class Scorer:
         return pocket_scores, pli_scores
 
     def get_scores(
-        self, search_db: str, query_system: SystemView, query_entry_alignments: pd.DataFrame
+        self,
+        search_db: str,
+        query_system: SystemView,
+        query_entry_alignments: pd.DataFrame,
     ) -> abc.Generator[dict[str, str | float], None, None]:
         if search_db == "holo":
             return self.get_scores_holo(query_system, query_entry_alignments)

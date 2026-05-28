@@ -11,6 +11,8 @@ from dataclasses import dataclass, field
 from functools import cached_property
 from typing import Iterable
 
+import pandas as pd
+
 from plinder.core.scores.index import query_index
 from plinder.core.utils.log import setup_logger
 
@@ -34,9 +36,13 @@ class SystemView:
     proper_num_interactions: int
     proper_num_unique_interactions: int
     # instance_chain -> {residue_number: residue_index}
-    pocket_residue_number_to_index: dict[str, dict[int, int]] = field(default_factory=dict)
+    pocket_residue_number_to_index: dict[str, dict[int, int]] = field(
+        default_factory=dict
+    )
     # instance_chain -> {residue_number: Counter[interaction_type]}
-    interactions_counter: dict[str, dict[int, Counter[str]]] = field(default_factory=dict)
+    interactions_counter: dict[str, dict[int, Counter[str]]] = field(
+        default_factory=dict
+    )
 
     @cached_property
     def pocket_residue_index_to_number(self) -> dict[str, dict[int, int]]:
@@ -119,7 +125,7 @@ def _as_list(value: object) -> list:
         return []
 
 
-def entry_views_from_df(df: "pd.DataFrame") -> dict[str, EntryView]:
+def entry_views_from_df(df: pd.DataFrame) -> dict[str, EntryView]:
     """Build :class:`EntryView` objects from any DataFrame shaped like the
     published index parquet — i.e. one row per ``(entry, system, ligand)``
     triple with the same column names produced by ``Entry.to_df()``.
@@ -164,10 +170,10 @@ def entry_views_from_df(df: "pd.DataFrame") -> dict[str, EntryView]:
                 id=system_id,
                 pdb_id=str(pdb_id),
                 system_type=first["system_type"],
-                protein_chains_asym_id=_as_list(
-                    first["system_protein_chains_asym_id"]
+                protein_chains_asym_id=_as_list(first["system_protein_chains_asym_id"]),
+                proper_num_pocket_residues=int(
+                    first["system_proper_num_pocket_residues"]
                 ),
-                proper_num_pocket_residues=int(first["system_proper_num_pocket_residues"]),
                 proper_num_interactions=int(first["system_proper_num_interactions"]),
                 proper_num_unique_interactions=int(
                     first["system_proper_num_unique_interactions"]

@@ -45,9 +45,9 @@ def scoring_fixture(
     (data_dir / "index").mkdir()
     rows.to_parquet(data_dir / "index" / "annotation_table.parquet", index=False)
     (data_dir / "splits").mkdir()
-    pd.DataFrame({"system_id": rows["system_id"].unique(), "split": "train"}).to_parquet(
-        data_dir / "splits" / "split.parquet", index=False
-    )
+    pd.DataFrame(
+        {"system_id": rows["system_id"].unique(), "split": "train"}
+    ).to_parquet(data_dir / "splits" / "split.parquet", index=False)
 
     # Build a tiny seqres FASTA covering every chain in the two entries (not
     # just the ones chains_for_alignment returns) so that make_sub_db actually

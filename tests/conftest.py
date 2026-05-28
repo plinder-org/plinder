@@ -5,7 +5,6 @@ from io import StringIO
 from pathlib import Path
 
 import pandas as pd
-import pyarrow.dataset as ds
 import pytest
 
 test_asset_fp = Path(__file__).absolute().parent / "test_data"
