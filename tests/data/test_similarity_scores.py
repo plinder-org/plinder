@@ -7,7 +7,14 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
-from plinder.core.scores.entries import LigandView, entry_views_from_df
+from plinder.core.scores.entries import (
+    ChainView,
+    EntryView,
+    LigandView,
+    SystemView,
+    entry_views_from_df,
+)
+from plinder.core.utils.schemas import PROTEIN_SIMILARITY_SCHEMA
 from plinder.data.utils.annotations.get_similarity_scores import (
     Scorer,
     get_feature_map_score,
@@ -249,3 +256,314 @@ def test_feature_map_score_handles_molecules_without_features() -> None:
     helium.AddConformer(conformer)
 
     assert get_feature_map_score(helium, helium) == 0.0
+
+
+def _system(pdb_id: str, ligands: list[LigandView]) -> SystemView:
+    protein_chains = sorted(
+        {chain for ligand in ligands for chain in ligand.protein_chains_asym_id}
+    )
+    return SystemView(
+        id=f"{pdb_id}_system",
+        pdb_id=pdb_id,
+        system_type="holo",
+        protein_chains_asym_id=protein_chains,
+        proper_num_pocket_residues=0,
+        proper_num_interactions=0,
+        proper_num_unique_interactions=0,
+        ligands={ligand.instance_chain: ligand for ligand in ligands},
+    )
+
+
+def _entry(pdb_id: str, system: SystemView) -> EntryView:
+    asym_ids = [chain.split(".", 1)[1] for chain in system.protein_chains_asym_id]
+    return EntryView(
+        pdb_id=pdb_id,
+        chains={
+            asym_id: ChainView(asym_id=asym_id, auth_id=asym_id, length=100)
+            for asym_id in asym_ids
+        },
+        systems={system.id: system},
+        author_to_asym={asym_id: asym_id for asym_id in asym_ids},
+    )
+
+
+def test_holo_scores_are_emitted_per_ligand_pair(tmp_path, monkeypatch) -> None:
+    query_ligands = [
+        _ligand("1abc__1__1.C", "1.C", {"1.A": {10: 9}}, {}),
+        _ligand("1abc__1__1.D", "1.D", {"1.B": {20: 19}}, {}),
+    ]
+    target_ligands = [
+        _ligand("2def__1__1.Z", "1.Z", {"1.X": {110: 109}}, {}),
+        _ligand("2def__1__1.W", "1.W", {"1.Y": {120: 119}}, {}),
+    ]
+    query_system = _system("1abc", query_ligands)
+    target_system = _system("2def", target_ligands)
+    scorer = Scorer(
+        entries={
+            "1abc": _entry("1abc", query_system),
+            "2def": _entry("2def", target_system),
+        },
+        source_to_full_db_file={},
+        db_dir=tmp_path / "db",
+        scores_dir=tmp_path / "scores",
+    )
+    alignments = pd.DataFrame(
+        index=pd.MultiIndex.from_tuples(
+            [("2def", "A", "X"), ("2def", "B", "Y")],
+            names=["target_entry", "query_chain_mapped", "target_chain_mapped"],
+        )
+    )
+    protein_calls: list[tuple[tuple[str, ...], tuple[str, ...], int]] = []
+
+    def protein_scores(
+        _alignments: pd.DataFrame,
+        _query_system: SystemView,
+        target_protein_chains: list[str],
+        query_length: int,
+        query_protein_chains: list[str] | None = None,
+    ) -> tuple[dict, dict, dict, str]:
+        assert query_protein_chains is not None
+        pair = (query_protein_chains[0], target_protein_chains[0])
+        protein_calls.append(
+            (tuple(query_protein_chains), tuple(target_protein_chains), query_length)
+        )
+        return (
+            {"protein_qcov_foldseek_weighted_sum": [pair]},
+            {"protein_qcov_foldseek_weighted_sum": 0.75},
+            {pair: pd.DataFrame()},
+            "protein_qcov_foldseek",
+        )
+
+    def pocket_scores(
+        _alns: dict,
+        query_ligand: LigandView,
+        target_ligand: LigandView,
+    ) -> tuple[dict[str, float], dict[str, float]]:
+        qcov = float(
+            query_ligand.id == query_ligands[0].id
+            and target_ligand.id == target_ligands[0].id
+        )
+        return {"pocket_qcov_foldseek": qcov}, {}
+
+    shape_calls: list[tuple[str, str, float]] = []
+
+    def shape_scores(
+        _data_dir: Path,
+        query_ligand: LigandView,
+        target_ligand: LigandView,
+        pocket_qcov: float,
+    ) -> dict[str, float]:
+        shape_calls.append((query_ligand.id, target_ligand.id, pocket_qcov))
+        return {
+            "shape": 0.8,
+            "color": 0.7,
+            "sucos_shape": 0.6,
+            "sucos_shape_pocket_qcov": 0.6 * pocket_qcov,
+        }
+
+    monkeypatch.setattr(scorer, "get_protein_scores", protein_scores)
+    monkeypatch.setattr(scorer, "get_ligand_pair_pocket_pli_scores", pocket_scores)
+    monkeypatch.setattr(scorer, "get_ligand_pair_shape_scores", shape_scores)
+
+    scores = list(scorer.get_scores_holo(query_system, alignments, data_dir=tmp_path))
+
+    assert {
+        (score["query_ligand_id"], score["target_ligand_id"]) for score in scores
+    } == {(query.id, target.id) for query in query_ligands for target in target_ligands}
+    assert len(protein_calls) == 4
+    assert {
+        (query_chains, target_chains)
+        for query_chains, target_chains, _ in protein_calls
+    } == {
+        (("1.A",), ("1.X",)),
+        (("1.A",), ("1.Y",)),
+        (("1.B",), ("1.X",)),
+        (("1.B",), ("1.Y",)),
+    }
+    assert all(query_length == 100 for _, _, query_length in protein_calls)
+    assert shape_calls == [(query_ligands[0].id, target_ligands[0].id, 1.0)]
+    shape_row = next(score for score in scores if "shape" in score)
+    assert shape_row["sucos_shape_pocket_qcov"] == pytest.approx(0.6)
+
+
+def test_holo_weighted_sum_retains_unmatched_query_receptor_length(
+    tmp_path, monkeypatch
+) -> None:
+    query_ligand = _ligand(
+        "1abc__1__1.C",
+        "1.C",
+        {"1.A": {10: 9}, "1.B": {20: 19}},
+        {},
+    )
+    target_ligand = _ligand("2def__1__1.Z", "1.Z", {"1.X": {110: 109}}, {})
+    query_system = _system("1abc", [query_ligand])
+    target_system = _system("2def", [target_ligand])
+    scorer = Scorer(
+        entries={
+            "1abc": _entry("1abc", query_system),
+            "2def": _entry("2def", target_system),
+        },
+        source_to_full_db_file={},
+        db_dir=tmp_path / "db",
+        scores_dir=tmp_path / "scores",
+    )
+    # Only query chain A has a target hit. Chain B must nevertheless remain
+    # in the 200-residue directed query denominator.
+    alignments = pd.DataFrame(
+        [
+            {
+                "qcov": 0.5,
+                "fident": 0.5,
+                "seqsim": 0.5,
+                "fident_qcov": 0.25,
+                "seqsim_qcov": 0.25,
+                "lddt": 0.5,
+                "lddt_qcov": 0.5,
+            }
+        ],
+        index=pd.MultiIndex.from_tuples(
+            [("2def", "A", "X", "foldseek")],
+            names=[
+                "target_entry",
+                "query_chain_mapped",
+                "target_chain_mapped",
+                "source",
+            ],
+        ),
+    )
+    monkeypatch.setattr(
+        scorer,
+        "get_ligand_pair_pocket_pli_scores",
+        lambda *_args: ({}, {}),
+    )
+
+    scores = list(scorer.get_scores_holo(query_system, alignments))
+
+    assert len(scores) == 1
+    assert scores[0]["protein_lddt_qcov_weighted_max"] == pytest.approx(0.5)
+    assert scores[0]["protein_lddt_qcov_weighted_sum"] == pytest.approx(0.25)
+
+
+def test_apo_pred_scores_are_emitted_per_query_ligand(tmp_path, monkeypatch) -> None:
+    query_ligands = [
+        _ligand(
+            "1abc__1__1.C",
+            "1.C",
+            {"1.A": {10: 9}, "1.B": {20: 19}},
+            {},
+        ),
+        _ligand("1abc__1__1.D", "1.D", {"1.B": {20: 19}}, {}),
+    ]
+    query_system = _system("1abc", query_ligands)
+    scorer = Scorer(
+        entries={"1abc": _entry("1abc", query_system)},
+        source_to_full_db_file={},
+        db_dir=tmp_path / "db",
+        scores_dir=tmp_path / "scores",
+    )
+    alignments = pd.DataFrame(
+        index=pd.MultiIndex.from_tuples(
+            [("model_a", "A", "X"), ("model_b", "B", "Y")],
+            names=["target_entry", "query_chain_mapped", "target_chain_mapped"],
+        )
+    )
+    protein_calls: list[tuple[tuple[str, ...], int]] = []
+
+    def protein_scores(
+        _alignments: pd.DataFrame,
+        _query_system: SystemView,
+        target_protein_chains: list[str],
+        query_length: int,
+        query_protein_chains: list[str] | None = None,
+    ) -> tuple[dict, dict, dict, str]:
+        assert query_protein_chains is not None
+        protein_calls.append((tuple(query_protein_chains), query_length))
+        pair = (query_protein_chains[0], target_protein_chains[0])
+        return (
+            {"protein_qcov_foldseek_weighted_sum": [pair]},
+            {"protein_qcov_foldseek_weighted_sum": 0.75},
+            {pair: pd.DataFrame()},
+            "protein_qcov_foldseek",
+        )
+
+    monkeypatch.setattr(scorer, "get_protein_scores", protein_scores)
+    monkeypatch.setattr(
+        scorer,
+        "get_ligand_pocket_scores",
+        lambda _alns, _ligand: {"pocket_fident_foldseek": 0.5},
+    )
+
+    scores = list(scorer.get_scores_apo_pred(query_system, alignments))
+
+    assert {score["query_ligand_id"] for score in scores} == {
+        ligand.id for ligand in query_ligands
+    }
+    assert {score["target_ligand_id"] for score in scores} == {None}
+    assert {score["target_system"] for score in scores} == {
+        "model_a_X",
+        "model_b_Y",
+    }
+    assert (("1.A", "1.B"), 200) in protein_calls
+
+
+def test_aggregate_scores_keeps_ligand_ids_and_shape_metrics(
+    tmp_path, monkeypatch
+) -> None:
+    ligand = _ligand("1abc__1__1.C", "1.C", {"1.A": {10: 9}}, {})
+    system = _system("1abc", [ligand])
+    scorer = Scorer(
+        entries={"1abc": _entry("1abc", system)},
+        source_to_full_db_file={},
+        db_dir=tmp_path / "db",
+        scores_dir=tmp_path / "scores",
+    )
+    monkeypatch.setattr(
+        scorer,
+        "load_alignments",
+        lambda **_kwargs: pd.DataFrame(
+            {"present": [True]}, index=pd.Index(["1abc"], name="query_entry")
+        ),
+    )
+    monkeypatch.setattr(
+        scorer,
+        "get_scores",
+        lambda *_args, **_kwargs: iter(
+            [
+                {
+                    "query_system": system.id,
+                    "query_ligand_id": ligand.id,
+                    "target_system": "2def_system",
+                    "target_ligand_id": "2def__1__1.Z",
+                    "protein_mapping": "1.A:1.X",
+                    "protein_mapper": "foldseek",
+                    "protein_qcov_weighted_sum": 0.75,
+                    "protein_qcov_weighted_sum_source": "foldseek",
+                    "protein_qcov_weighted_sum_mapping": "1.A:1.X",
+                    "shape": 0.8,
+                    "color": 0.7,
+                    "sucos_shape": 0.6,
+                    "sucos_shape_pocket_qcov": 0.3,
+                }
+            ]
+        ),
+    )
+
+    scores = scorer.aggregate_scores("1abc", data_dir=tmp_path)
+
+    assert scores is not None
+    assert set(scores["metric"]) >= {
+        "shape",
+        "color",
+        "sucos_shape",
+        "sucos_shape_pocket_qcov",
+    }
+    assert set(scores["query_ligand_id"]) == {ligand.id}
+    assert set(scores["target_ligand_id"]) == {"2def__1__1.Z"}
+    assert scores.loc[scores["metric"] == "shape", "similarity"].item() == 80
+    assert {"query_ligand_id", "target_ligand_id"}.issubset(
+        PROTEIN_SIMILARITY_SCHEMA.names
+    )
+    output_file = tmp_path / "scores.parquet"
+    scores.to_parquet(output_file, index=False, schema=PROTEIN_SIMILARITY_SCHEMA)
+    written = pd.read_parquet(output_file)
+    assert set(written["query_ligand_id"]) == {ligand.id}

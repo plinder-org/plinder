@@ -18,7 +18,7 @@ import pyarrow
 import pyarrow.parquet as pq
 from pyarrow import csv
 from rdkit import Chem, RDConfig
-from rdkit.Chem import AllChem, rdShapeAlign, rdShapeHelpers
+from rdkit.Chem import ChemicalFeatures, rdMolAlign, rdShapeAlign, rdShapeHelpers
 from rdkit.Chem.FeatMaps import FeatMaps
 from tqdm import tqdm
 
@@ -37,11 +37,15 @@ LOG = setup_logger(__name__)
 SORT_ORDER = [
     ("similarity", "descending"),
     ("query_system", "ascending"),
+    ("query_ligand_id", "ascending"),
     ("target_system", "ascending"),
+    ("target_ligand_id", "ascending"),
 ]
 INFO_COLUMNS = (
     "query_system",
+    "query_ligand_id",
     "target_system",
+    "target_ligand_id",
     "protein_mapping",
     "protein_mapper",
 )
@@ -58,6 +62,10 @@ SCORE_NAMES = (
     "pocket_fident_qcov",
     "pli_qcov",
     "pli_unique_qcov",
+    "shape",
+    "color",
+    "sucos_shape",
+    "sucos_shape_pocket_qcov",
 )
 
 _ChainInstanceMapping = str
@@ -81,7 +89,7 @@ PHARMACOPHORE_FEATURES = frozenset(
 @cache
 def _get_feature_scoring_context() -> tuple[Any, dict[str, FeatMaps.FeatMapParams]]:
     """Load RDKit's pharmacophore definitions only when shape scoring is used."""
-    factory = AllChem.BuildFeatureFactory(
+    factory = ChemicalFeatures.BuildFeatureFactory(  # type: ignore[attr-defined]
         str(Path(RDConfig.RDDataDir) / "BaseFeatures.fdef")
     )
     parameters = {
@@ -97,9 +105,7 @@ def align_molecules(
     max_postiters: int = 100,
 ) -> tuple[float, float]:
     """Shape-align ``mobile`` onto ``reference`` and return shape/color scores."""
-    crippen_o3a = Chem.rdMolAlign.GetCrippenO3A(
-        mobile, reference, maxIters=max_preiters
-    )
+    crippen_o3a = rdMolAlign.GetCrippenO3A(mobile, reference, maxIters=max_preiters)
     crippen_o3a.Align()
     shape, color = rdShapeAlign.AlignMol(
         reference,
@@ -113,7 +119,7 @@ def align_molecules(
 def get_feature_map_score(
     mol_1: Chem.Mol,
     mol_2: Chem.Mol,
-    score_mode: FeatMaps.FeatMapScoreMode = FeatMaps.FeatMapScoreMode.All,
+    score_mode: int = FeatMaps.FeatMapScoreMode.All,
 ) -> float:
     """Calculate the normalized pharmacophore feature overlap."""
     factory, parameters = _get_feature_scoring_context()
@@ -129,19 +135,22 @@ def get_feature_map_score(
     denominator = min(len(features) for features in feature_lists)
     if denominator == 0:
         return 0.0
-    feature_map = FeatMaps.FeatMap(
+    feature_map = FeatMaps.FeatMap(  # type: ignore[no-untyped-call]
         feats=feature_lists[0],
         weights=[1] * len(feature_lists[0]),
         params=parameters,
     )
-    feature_map.scoreMode = score_mode
-    return float(feature_map.ScoreFeats(feature_lists[1]) / denominator)
+    feature_map.scoreMode = score_mode  # type: ignore[misc]
+    return float(
+        feature_map.ScoreFeats(feature_lists[1])  # type: ignore[no-untyped-call]
+        / denominator
+    )
 
 
 def get_sucos_score(
     mol_1: Chem.Mol,
     mol_2: Chem.Mol,
-    score_mode: FeatMaps.FeatMapScoreMode = FeatMaps.FeatMapScoreMode.All,
+    score_mode: int = FeatMaps.FeatMapScoreMode.All,
 ) -> float:
     """Calculate SuCOS from feature overlap and shape protrusion distance."""
     feature_map_score = float(
@@ -657,7 +666,7 @@ class Scorer:
         try:
             score_df_path.parent.mkdir(exist_ok=True, parents=True)
             LOG.info(f"aggregating scores for {pdb_id} to {search_db}")
-            df = self.aggregate_scores(pdb_id, search_db=search_db)
+            df = self.aggregate_scores(pdb_id, search_db=search_db, data_dir=data_dir)
             if df is not None and not df.empty:
                 df.to_parquet(score_df_path, index=False)
         except Exception as e:
@@ -838,6 +847,7 @@ class Scorer:
         query_system: SystemView,
         target_protein_chains: list[str],
         query_system_length: int,
+        query_protein_chains: list[str] | None = None,
     ) -> tuple[
         dict[str, list[_ChainPairType]],
         _SimilarityScoreDictType,
@@ -848,13 +858,15 @@ class Scorer:
         mappings: dict[str, list[_ChainPairType]] = defaultdict(list)
         max_chain_lengths: dict[str, float] = defaultdict(float)
         protein_chain_mapper = ""
+        if query_protein_chains is None:
+            query_protein_chains = query_system.protein_chains_asym_id
         s_matrix = np.zeros(
             (
-                len(query_system.protein_chains_asym_id),
+                len(query_protein_chains),
                 len(target_protein_chains),
             )
         )
-        for i, q_instance_chain in enumerate(query_system.protein_chains_asym_id):
+        for i, q_instance_chain in enumerate(query_protein_chains):
             q_chain = q_instance_chain.split(".")[1]
             q_chain_length = self.entries[query_system.pdb_id].chains[q_chain].length
             for j, t_instance_chain in enumerate(target_protein_chains):
@@ -895,12 +907,12 @@ class Scorer:
         alns = {}
         while np.any(s_matrix):
             # changed score -> score_tag conflicting variable name
-            score_val = np.amax(s_matrix)
+            score_val = float(np.amax(s_matrix))
             if score_val == 0:
                 break
             q_idx, t_idx = np.unravel_index(np.argmax(s_matrix), s_matrix.shape)
             q_instance_chain, t_instance_chain = (
-                query_system.protein_chains_asym_id[q_idx],
+                query_protein_chains[q_idx],
                 target_protein_chains[t_idx],
             )
             q_chain, t_chain = (
@@ -1043,30 +1055,61 @@ class Scorer:
             target_interactions=target_ligand.interactions_counter,
         )
 
+    def get_ligand_pocket_scores(
+        self,
+        alns: dict[_ChainPairType, pd.DataFrame],
+        query_ligand: LigandView,
+    ) -> _SimilarityScoreDictType:
+        """Calculate directed pocket identity for a ligand against apo/pred."""
+        return self._get_pocket_pli_scores(
+            alns=alns,
+            query_pocket=query_ligand.pocket_residue_number_to_index,
+            query_interactions=query_ligand.interactions_counter,
+            pocket_length=query_ligand.num_pocket_residues,
+            pli_length=query_ligand.num_interactions,
+            pli_unique_length=query_ligand.num_unique_interactions,
+            target_pocket=None,
+            target_interactions=None,
+        )[0]
+
+    def get_protein_chain_length(self, pdb_id: str, protein_chains: list[str]) -> int:
+        """Return the total SEQRES length for an instance-chain collection."""
+        return sum(
+            self.entries[pdb_id].chains[instance_chain.split(".", 1)[1]].length
+            for instance_chain in protein_chains
+        )
+
     def get_scores(
         self,
         search_db: str,
         query_system: SystemView,
         query_entry_alignments: pd.DataFrame,
-    ) -> abc.Generator[dict[str, str | float], None, None]:
+        data_dir: Path | None = None,
+    ) -> abc.Generator[dict[str, str | float | None], None, None]:
         if search_db == "holo":
-            return self.get_scores_holo(query_system, query_entry_alignments)
+            return self.get_scores_holo(
+                query_system, query_entry_alignments, data_dir=data_dir
+            )
         elif search_db == "apo" or search_db == "pred":
             return self.get_scores_apo_pred(query_system, query_entry_alignments)
         else:
             raise ValueError(f"Invalid search_db: {search_db}")
 
     def get_scores_holo(
-        self, query_system: SystemView, query_entry_alignments: pd.DataFrame
-    ) -> abc.Generator[dict[str, str | float], None, None]:
-        query_system_length = sum(
-            self.entries[query_system.pdb_id]
-            .chains[q_instance_chain.split(".")[1]]
-            .length
-            for q_instance_chain in query_system.protein_chains_asym_id
-        )
+        self,
+        query_system: SystemView,
+        query_entry_alignments: pd.DataFrame,
+        data_dir: Path | None = None,
+    ) -> abc.Generator[dict[str, str | float | None], None, None]:
+        query_ligands = [
+            ligand for ligand in query_system.ligands.values() if ligand.is_proper
+        ]
+        if not query_ligands:
+            return
         query_instance_chains = [
-            chain.split(".")[1] for chain in query_system.protein_chains_asym_id
+            chain.split(".", 1)[1]
+            for ligand in query_ligands
+            for chain in ligand.protein_chains_asym_id
         ]
         for target_entry in query_entry_alignments.index.get_level_values(
             "target_entry"
@@ -1104,37 +1147,80 @@ class Scorer:
                 ):
                     # Same as query system or No alignments for this target system
                     continue
-                q_t_scores: dict[str, float] = {}
+                target_ligands = [
+                    ligand
+                    for ligand in target_system.ligands.values()
+                    if ligand.is_proper
+                ]
+                for query_ligand in query_ligands:
+                    # Keep every receptor chain in the directed query
+                    # denominator. Chains without a hit remain zero-coverage
+                    # rows in get_protein_scores(); dropping them here would
+                    # inflate weighted similarities for partial alignments.
+                    query_protein_chains = query_ligand.protein_chains_asym_id
+                    query_protein_length = self.get_protein_chain_length(
+                        query_system.pdb_id, query_protein_chains
+                    )
+                    for target_ligand in target_ligands:
+                        target_protein_chains = target_ligand.protein_chains_asym_id
+                        q_t_scores: dict[str, float] = {}
 
-                # Protein score calculation
-                (
-                    q_t_mappings,
-                    protein_scores,
-                    alns,
-                    protein_chain_mapper,
-                ) = self.get_protein_scores(
-                    query_target_entry_alignments,
-                    query_system,
-                    target_system.protein_chains_asym_id,
-                    query_system_length,
-                )
-                if not len(protein_scores):
-                    continue
-                q_t_scores.update(protein_scores)
+                        # Protein scores and mappings are restricted to the
+                        # receptor chains belonging to this ligand pair.
+                        (
+                            q_t_mappings,
+                            protein_scores,
+                            alns,
+                            protein_chain_mapper,
+                        ) = self.get_protein_scores(
+                            query_target_entry_alignments,
+                            query_system,
+                            target_protein_chains,
+                            query_protein_length,
+                            query_protein_chains=query_protein_chains,
+                        )
+                        if not protein_scores:
+                            continue
+                        q_t_scores.update(protein_scores)
 
-                # Pocket and PLI score calculation
-                (
-                    pocket_scores,
-                    pli_scores,
-                ) = self.get_pocket_pli_scores(alns, query_system, target_system)
-                q_t_scores.update(pocket_scores)
-                q_t_scores.update(pli_scores)
-                q_t_scores_combined = combine_scores(
-                    q_t_scores, q_t_mappings, protein_chain_mapper
-                )
-                q_t_scores_combined["target_system"] = target_system.id
-                q_t_scores_combined["query_system"] = query_system.id
-                yield q_t_scores_combined
+                        (
+                            pocket_scores,
+                            pli_scores,
+                        ) = self.get_ligand_pair_pocket_pli_scores(
+                            alns, query_ligand, target_ligand
+                        )
+                        q_t_scores.update(pocket_scores)
+                        q_t_scores.update(pli_scores)
+                        combined: dict[str, str | float | None] = {
+                            **combine_scores(
+                                q_t_scores, q_t_mappings, protein_chain_mapper
+                            )
+                        }
+
+                        pocket_qcov_value = combined.get("pocket_qcov", 0.0)
+                        pocket_qcov = (
+                            float(pocket_qcov_value)
+                            if isinstance(pocket_qcov_value, (int, float))
+                            else 0.0
+                        )
+                        if data_dir is not None and pocket_qcov > 0:
+                            combined.update(
+                                self.get_ligand_pair_shape_scores(
+                                    data_dir,
+                                    query_ligand,
+                                    target_ligand,
+                                    pocket_qcov,
+                                )
+                            )
+                        combined.update(
+                            {
+                                "query_system": query_system.id,
+                                "query_ligand_id": query_ligand.id,
+                                "target_system": target_system.id,
+                                "target_ligand_id": target_ligand.id,
+                            }
+                        )
+                        yield combined
 
     def _get_suffixes(self, s: str) -> list[str]:
         suffixes = ["_weighted_sum", "_weighted_max", "_max"]
@@ -1158,6 +1244,7 @@ class Scorer:
         self,
         pdb_id: str,
         search_db: str = "holo",
+        data_dir: Path | None = None,
     ) -> Optional[pd.DataFrame]:
         alignments = self.load_alignments(
             search_db=search_db,
@@ -1177,9 +1264,11 @@ class Scorer:
             if system.system_type != "holo":
                 continue
             for score_dict in self.get_scores(
-                search_db, system, alignments.loc[pdb_id]
+                search_db, system, alignments.loc[pdb_id], data_dir=data_dir
             ):
-                info = {}
+                # Keep nullable identifiers (notably target_ligand_id for
+                # apo/pred) present so every search database shares a schema.
+                info = {column: score_dict.get(column) for column in INFO_COLUMNS}
                 grouped: dict[str, dict[str, str | float]] = {}
                 # iterate over groups of columns instead of raw list of columns
                 for metric, columns in column_mapr.items():
@@ -1188,7 +1277,7 @@ class Scorer:
                         if score is None:
                             continue
                         if metric == "info":
-                            info[column] = score
+                            continue
                         else:
                             grouped.setdefault(metric, {})
                             abbr_column = column.replace(metric, "", 1).lstrip("_")
@@ -1211,12 +1300,10 @@ class Scorer:
             [f"(metric=='{m}' and similarity>={t})" for (m, t) in all_thresholds]
         )
         df = df.query(query).copy()
-        for col in [
-            "protein_mapper",
-            "source",
-            "metric",
-        ]:
-            df[col] = df[col].astype("category")
+        df["protein_mapper"] = df["protein_mapper"].astype("category")
+        for col in ["source", "metric"]:
+            # PROTEIN_SIMILARITY_SCHEMA declares these dictionaries ordered.
+            df[col] = df[col].astype(pd.CategoricalDtype(ordered=True))
         df["similarity"] = (df["similarity"] * 100).apply(round).astype(np.int8)
         columns = [col for (col, _) in SORT_ORDER]
         ascending = [direction == "ascending" for (_, direction) in SORT_ORDER]
@@ -1224,29 +1311,43 @@ class Scorer:
 
     def get_scores_apo_pred(
         self, query_system: SystemView, query_entry_alignments: pd.DataFrame
-    ) -> abc.Generator[dict[str, str | float], None, None]:
-        q_chain = query_system.protein_chains_asym_id[0].split(".")[1]
-        query_system_length = sum(
-            self.entries[query_system.pdb_id]
-            .chains[q_instance_chain.split(".")[1]]
-            .length
-            for q_instance_chain in query_system.protein_chains_asym_id
-        )
+    ) -> abc.Generator[dict[str, str | float | None], None, None]:
+        query_ligands = [
+            ligand for ligand in query_system.ligands.values() if ligand.is_proper
+        ]
         for target_entry in query_entry_alignments.index.get_level_values(
             "target_entry"
         ).unique():
             query_target_entry_alignments = query_entry_alignments.loc[target_entry]
-            try:
-                q_chain_alignments = query_target_entry_alignments.loc[q_chain]
-            except KeyError:
-                q_chain_alignments = None
-            if q_chain_alignments is not None:
-                for t_chain in q_chain_alignments.index.get_level_values(
-                    "target_chain_mapped"
-                ).unique():
+            query_chain_mapped_values = set(
+                query_target_entry_alignments.index.get_level_values(
+                    "query_chain_mapped"
+                )
+            )
+            for query_ligand in query_ligands:
+                query_protein_chains = query_ligand.protein_chains_asym_id
+                mapped_query_protein_chains = [
+                    chain
+                    for chain in query_protein_chains
+                    if chain.split(".", 1)[1] in query_chain_mapped_values
+                ]
+                if not mapped_query_protein_chains:
+                    continue
+                query_protein_length = self.get_protein_chain_length(
+                    query_system.pdb_id, query_protein_chains
+                )
+                target_chains: set[str] = set()
+                for query_chain in mapped_query_protein_chains:
+                    q_chain = query_chain.split(".", 1)[1]
+                    target_chains.update(
+                        query_target_entry_alignments.loc[
+                            q_chain
+                        ].index.get_level_values("target_chain_mapped")
+                    )
+                for t_chain in target_chains:
                     if (
                         target_entry in self.entries
-                        and self.entries[target_entry].chains[t_chain].holo
+                        and t_chain in self.entries[target_entry].chains
                     ):
                         continue
                     q_t_scores: dict[str, float] = {}
@@ -1260,17 +1361,20 @@ class Scorer:
                         query_target_entry_alignments,
                         query_system,
                         [f"0.{t_chain}"],
-                        query_system_length,
+                        query_protein_length,
+                        query_protein_chains=query_protein_chains,
                     )
 
                     if len(alns) == 0 or not len(protein_scores):
                         continue
                     q_t_scores.update(protein_scores)
                     # Pocket score calculation
-                    q_t_scores.update(self.get_pocket_pli_scores(alns, query_system)[0])
-                    q_t_scores_combined = combine_scores(
-                        q_t_scores, q_t_mappings, protein_chain_mapper
-                    )
+                    q_t_scores.update(self.get_ligand_pocket_scores(alns, query_ligand))
+                    q_t_scores_combined: dict[str, str | float | None] = {
+                        **combine_scores(q_t_scores, q_t_mappings, protein_chain_mapper)
+                    }
                     q_t_scores_combined["target_system"] = f"{target_entry}_{t_chain}"
+                    q_t_scores_combined["target_ligand_id"] = None
                     q_t_scores_combined["query_system"] = query_system.id
+                    q_t_scores_combined["query_ligand_id"] = query_ligand.id
                     yield q_t_scores_combined

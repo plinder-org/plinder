@@ -5,7 +5,9 @@ import pyarrow as pa
 PROTEIN_SIMILARITY_SCHEMA = pa.schema(
     [
         ("query_system", pa.string()),
+        ("query_ligand_id", pa.string()),
         ("target_system", pa.string()),
+        ("target_ligand_id", pa.string()),
         ("protein_mapping", pa.string()),
         ("mapping", pa.string()),
         ("protein_mapper", pa.dictionary(pa.int8(), pa.string())),

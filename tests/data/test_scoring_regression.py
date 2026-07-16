@@ -17,7 +17,13 @@ GOLDEN_PATH = (
     / "golden_scores.parquet"
 )
 PDB_IDS = ["2gdo", "4qyf", "1atp"]
-SORT_KEYS = ["query_system", "target_system", "metric"]
+SORT_KEYS = [
+    "query_system",
+    "query_ligand_id",
+    "target_system",
+    "target_ligand_id",
+    "metric",
+]
 
 
 @pytest.fixture
@@ -87,16 +93,16 @@ def scoring_fixture(
         tmp_dir=tmp_path / "foldseek_full_tmp",
     )
 
-    return data_dir
+    return data_dir, rows
 
 
 def test_scoring_regression(scoring_fixture, tmp_path):
-    from plinder.core.scores.entries import load_entry_views
+    from plinder.core.scores.entries import entry_views_from_df
     from plinder.data.pipeline.utils import get_db_sources
     from plinder.data.utils.annotations.get_similarity_scores import Scorer
 
-    data_dir = scoring_fixture
-    entries = load_entry_views(pdb_ids=PDB_IDS)
+    data_dir, annotation_rows = scoring_fixture
+    entries = entry_views_from_df(annotation_rows)
 
     db_sources = get_db_sources(data_dir=data_dir, sub_databases=["holo"])
     scorer = Scorer(
@@ -124,6 +130,13 @@ def test_scoring_regression(scoring_fixture, tmp_path):
         .sort_values(SORT_KEYS)
         .reset_index(drop=True)
     )
+    assert not df[["query_ligand_id", "target_ligand_id"]].isna().any().any()
+    assert {
+        "shape",
+        "color",
+        "sucos_shape",
+        "sucos_shape_pocket_qcov",
+    }.issubset(set(df["metric"]))
 
     if os.environ.get("PLINDER_REGEN_SCORING") or not GOLDEN_PATH.exists():
         GOLDEN_PATH.parent.mkdir(parents=True, exist_ok=True)
