@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
-from collections import abc, defaultdict
+from collections import Counter, abc, defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -18,7 +18,12 @@ import pyarrow.parquet as pq
 from pyarrow import csv
 from tqdm import tqdm
 
-from plinder.core.scores.entries import EntryView, SystemView, load_entry_views
+from plinder.core.scores.entries import (
+    EntryView,
+    LigandView,
+    SystemView,
+    load_entry_views,
+)
 from plinder.core.utils.log import setup_logger
 from plinder.data import databases
 from plinder.data.pipeline.config import FoldseekConfig, MMSeqsConfig
@@ -720,61 +725,110 @@ class Scorer:
         _SimilarityScoreDictType,
         _SimilarityScoreDictType,
     ]:
+        return self._get_pocket_pli_scores(
+            alns=alns,
+            query_pocket=query_system.pocket_residue_number_to_index,
+            query_interactions=query_system.interactions_counter,
+            pocket_length=query_system.proper_num_pocket_residues,
+            pli_length=query_system.proper_num_interactions,
+            pli_unique_length=query_system.proper_num_unique_interactions,
+            target_pocket=(
+                target_system.pocket_residue_number_to_index
+                if target_system is not None
+                else None
+            ),
+            target_interactions=(
+                target_system.interactions_counter
+                if target_system is not None
+                else None
+            ),
+        )
+
+    def _get_pocket_pli_scores(
+        self,
+        *,
+        alns: dict[_ChainPairType, pd.DataFrame],
+        query_pocket: dict[str, dict[int, int]],
+        query_interactions: dict[str, dict[int, Counter[str]]],
+        pocket_length: int,
+        pli_length: int,
+        pli_unique_length: int,
+        target_pocket: dict[str, dict[int, int]] | None,
+        target_interactions: dict[str, dict[int, Counter[str]]] | None,
+    ) -> tuple[
+        _SimilarityScoreDictType,
+        _SimilarityScoreDictType,
+    ]:
         pocket_scores: _SimilarityScoreDictType = defaultdict(float)
         pli_scores: _SimilarityScoreDictType = defaultdict(float)
-        pocket_length = query_system.proper_num_pocket_residues
-        pli_length = query_system.proper_num_interactions
-        pli_unique_length = query_system.proper_num_unique_interactions
+        has_target = target_pocket is not None
+        target_pocket = target_pocket or {}
+        target_interactions = target_interactions or {}
         # qrnum/trnum entries from map_row are uniformly (aln_position,
         # residue_number) pairs — see map_row's docstring. Source-agnostic.
         for q_instance_chain, t_instance_chain in alns:
             aln = alns[(q_instance_chain, t_instance_chain)]
-            q_pocket = query_system.pocket_residue_number_to_index.get(
-                q_instance_chain, {}
-            )
-            q_interactions = query_system.interactions_counter.get(q_instance_chain, {})
-            if target_system is not None:
-                t_pocket = target_system.pocket_residue_number_to_index.get(
-                    t_instance_chain, {}
-                )
-                t_interactions = target_system.interactions_counter.get(
-                    t_instance_chain, {}
-                )
-            else:
-                t_pocket, t_interactions = {}, {}
+            q_chain_pocket = query_pocket.get(q_instance_chain, {})
+            q_chain_interactions = query_interactions.get(q_instance_chain, {})
+            t_chain_pocket = target_pocket.get(t_instance_chain, {})
+            t_chain_interactions = target_interactions.get(t_instance_chain, {})
             for source, aln_source in aln.iterrows():
                 for i, q_n in aln_source["qrnum"].items():
-                    if q_n not in q_pocket:
+                    if q_n not in q_chain_pocket:
                         continue
                     q_a = aln_source["qaln"][i]
                     t_a = aln_source["taln"][i]
                     t_n = aln_source["trnum"].get(i)
                     if q_a == t_a:
                         pocket_scores[f"pocket_fident_{source}"] += 1
-                    if (
-                        target_system is not None
-                        and t_n is not None
-                        and t_n in t_pocket
-                    ):
+                    if has_target and t_n is not None and t_n in t_chain_pocket:
                         pocket_scores[f"pocket_qcov_{source}"] += 1
                         if q_a == t_a:
                             pocket_scores[f"pocket_fident_qcov_{source}"] += 1
-                        if q_n in q_interactions and t_n in t_interactions:
+                        if q_n in q_chain_interactions and t_n in t_chain_interactions:
                             pli_scores[f"pli_qcov_{source}"] += sum(
-                                (q_interactions[q_n] & t_interactions[t_n]).values()
+                                (
+                                    q_chain_interactions[q_n]
+                                    & t_chain_interactions[t_n]
+                                ).values()
                             )
                             pli_scores[f"pli_unique_qcov_{source}"] += len(
-                                set(q_interactions[q_n].values())
-                                & set(t_interactions[t_n].values())
+                                set(q_chain_interactions[q_n].values())
+                                & set(t_chain_interactions[t_n].values())
                             )
-        for score in pocket_scores:
-            pocket_scores[score] /= pocket_length
-        for score in pli_scores:
-            if "unique" in score:
-                pli_scores[score] /= pli_unique_length
+        if pocket_length:
+            for score in pocket_scores:
+                pocket_scores[score] /= pocket_length
+        else:
+            pocket_scores.clear()
+        for score in list(pli_scores):
+            denominator = pli_unique_length if "unique" in score else pli_length
+            if denominator:
+                pli_scores[score] /= denominator
             else:
-                pli_scores[score] /= pli_length
+                del pli_scores[score]
         return pocket_scores, pli_scores
+
+    def get_ligand_pair_pocket_pli_scores(
+        self,
+        alns: dict[_ChainPairType, pd.DataFrame],
+        query_ligand: LigandView,
+        target_ligand: LigandView,
+    ) -> tuple[
+        _SimilarityScoreDictType,
+        _SimilarityScoreDictType,
+    ]:
+        """Calculate directed pocket and PLI coverage for one ligand pair."""
+        return self._get_pocket_pli_scores(
+            alns=alns,
+            query_pocket=query_ligand.pocket_residue_number_to_index,
+            query_interactions=query_ligand.interactions_counter,
+            pocket_length=query_ligand.num_pocket_residues,
+            pli_length=query_ligand.num_interactions,
+            pli_unique_length=query_ligand.num_unique_interactions,
+            target_pocket=target_ligand.pocket_residue_number_to_index,
+            target_interactions=target_ligand.interactions_counter,
+        )
 
     def get_scores(
         self,

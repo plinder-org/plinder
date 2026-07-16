@@ -27,6 +27,30 @@ class ChainView:
 
 
 @dataclass
+class LigandView:
+    """Ligand-level annotations needed by pairwise similarity scoring."""
+
+    id: str
+    pdb_id: str
+    system_id: str
+    instance_chain: str
+    asym_id: str
+    is_proper: bool
+    protein_chains_asym_id: list[str]
+    num_pocket_residues: int
+    num_interactions: int
+    num_unique_interactions: int
+    # receptor instance_chain -> {residue_number: residue_index}
+    pocket_residue_number_to_index: dict[str, dict[int, int]] = field(
+        default_factory=dict
+    )
+    # receptor instance_chain -> {residue_number: Counter[interaction_type]}
+    interactions_counter: dict[str, dict[int, Counter[str]]] = field(
+        default_factory=dict
+    )
+
+
+@dataclass
 class SystemView:
     id: str
     pdb_id: str
@@ -43,6 +67,7 @@ class SystemView:
     interactions_counter: dict[str, dict[int, Counter[str]]] = field(
         default_factory=dict
     )
+    ligands: dict[str, LigandView] = field(default_factory=dict)
 
     @cached_property
     def pocket_residue_index_to_number(self) -> dict[str, dict[int, int]]:
@@ -125,6 +150,39 @@ def _as_list(value: object) -> list:
         return []
 
 
+def _make_ligand_view(row: pd.Series, *, pdb_id: str, system_id: str) -> LigandView:
+    """Build a ligand view from one published-index row."""
+    instance_chain = str(row["ligand_instance_chain"])
+    asym_id = str(row["ligand_asym_id"])
+    ligand_id = str(row["ligand_id"])
+    pocket_n2i: dict[str, dict[int, int]] = defaultdict(dict)
+    interactions: dict[str, dict[int, Counter[str]]] = defaultdict(
+        lambda: defaultdict(Counter)
+    )
+    for value in _as_list(row["ligand_neighboring_residues"]):
+        inst, rnum, ridx = _parse_neighboring_residue(value)
+        pocket_n2i[inst][rnum] = ridx
+    for value in _as_list(row["ligand_interactions"]):
+        inst, rnum, itype = _parse_interaction(value)
+        interactions[inst][rnum][itype] += 1
+    return LigandView(
+        id=ligand_id,
+        pdb_id=pdb_id,
+        system_id=system_id,
+        instance_chain=instance_chain,
+        asym_id=asym_id,
+        is_proper=bool(row["ligand_is_proper"]),
+        protein_chains_asym_id=_as_list(row["ligand_protein_chains_asym_id"]),
+        num_pocket_residues=int(row["ligand_num_pocket_residues"]),
+        num_interactions=int(row["ligand_num_interactions"]),
+        num_unique_interactions=int(row["ligand_num_unique_interactions"]),
+        pocket_residue_number_to_index={k: dict(v) for k, v in pocket_n2i.items()},
+        interactions_counter={
+            k: {r: Counter(c) for r, c in v.items()} for k, v in interactions.items()
+        },
+    )
+
+
 def entry_views_from_df(df: pd.DataFrame) -> dict[str, EntryView]:
     """Build :class:`EntryView` objects from any DataFrame shaped like the
     published index parquet — i.e. one row per ``(entry, system, ligand)``
@@ -155,6 +213,12 @@ def entry_views_from_df(df: pd.DataFrame) -> dict[str, EntryView]:
         for system_id, sys_rows in entry_rows.groupby("system_id", sort=False):
             first = sys_rows.iloc[0]
             proper_rows = sys_rows[sys_rows["ligand_is_proper"].astype(bool)]
+            ligands: dict[str, LigandView] = {}
+            for _, row in sys_rows.iterrows():
+                ligand = _make_ligand_view(
+                    row, pdb_id=str(pdb_id), system_id=str(system_id)
+                )
+                ligands[ligand.instance_chain] = ligand
             pocket_n2i: dict[str, dict[int, int]] = defaultdict(dict)
             interactions: dict[str, dict[int, Counter[str]]] = defaultdict(
                 lambda: defaultdict(Counter)
@@ -185,6 +249,7 @@ def entry_views_from_df(df: pd.DataFrame) -> dict[str, EntryView]:
                     k: {r: Counter(c) for r, c in v.items()}
                     for k, v in interactions.items()
                 },
+                ligands=ligands,
             )
         views[str(pdb_id)] = EntryView(
             pdb_id=str(pdb_id),
