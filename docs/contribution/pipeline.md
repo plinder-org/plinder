@@ -62,34 +62,22 @@ is already heavily distributed and it would add complexity to the DAG.
     - `Cofactors`
     - `Components`
   - Side effects include writing the following files:
-    - `raw_entries/{two_char_code}/{pdb_id}.json`
-    - `raw_entries/{two_char_code}/{system_id}/**`
+    - `raw_entries/{two_char_code}/{pdb_id}.parquet`
+    - `raw_entries/{two_char_code}/{pdb_id}/entry_chains.parquet`
+    - `raw_entries/{two_char_code}/{pdb_id}/ligand_files/{asym_id}.sdf`
+  - The join step consolidates the per-entry parquets directly into
+    `index/annotation_table.parquet` and the normalized chain rows into
+    `index/entry_chains.parquet`; construction-time validation is authoritative.
 
-## Structure quality checks
+## Canonical ligand archives
 
-After raw annotation generation, we run a series of quality checks
-on the generated data and do some consolidation and organization
-of the generated data.
+Canonical asymmetric-unit ligand SDFs are consolidated separately.
 
-- `tasks.structure_qc`: runs the structure quality checks
+- `tasks.make_canonical_ligand_archives`: creates the ligand archives
   - This is a distributed task that is called in parallel for chunks of two character codes
-  - It reads in the JSON files in `raw_entries`
+  - It archives one SDF per PDB ligand asym ID and excludes transformed biological-assembly copies
   - Side effects include writing the following files:
-    - `qc/index/{two_char_code}.parquet` - consolidated annotations
-    - `qc/logs/{two_char_code}_qc_fails.csv` - list of entries that failed QC
-    - `entries/{two_char_code}.zip` - zipped JSON entries
-
-## Structure archives
-
-The amount of structural data generated in `make_entries` is large and consolidated
-separately in its own task.
-
-- `tasks.make_system_archives`: creates the structure archives
-  - This is a distributed task that is called in parallel for chunks of two character codes
-  - It consolidates the structure files into zip archives in the same layout as for `entries`
-  - The inner structure of each structure zip is grouped by system ID
-  - Side effects include writing the following files:
-    - `archives/{two_char_code}.zip` - zipped structure files
+    - `ligand_archives/{two_char_code}.zip`
 
 ## Ligand Similarity
 
@@ -99,7 +87,7 @@ the small molecule ligands in the dataset.
 - `tasks.make_ligands`: creates the `ligands` data
   - This is a distributed task that is called in parallel for chunks of PDB IDs
   - It filters out ligands that are acceptable for use in ligand similarity
-  - It uses the JSON files from `raw_entries`
+  - It uses the per-entry parquet files from `raw_entries`
   - Side effects include writing the following files:
     - `ligands/{chunk_hash}.parquet`
 - `tasks.compute_ligand_fingerprints`: computes the ligand fingerprints
@@ -124,6 +112,7 @@ to create the `pred` sub-database.
 - `tasks.make_sub_dbs`: creates the `holo` and `apo` sub-databases
   - This is a task that is called once
   - It uses the `foldseek` and `mmseqs` databases
+  - It uses `index/entry_chains.parquet` to select holo, apo, and predicted chain IDs without repeating entry-wide chain metadata on every ligand row
   - Side effects include writing the following files:
     - `dbs/subdbs/holo_foldseek/**`
     - `dbs/subdbs/apo_foldseek/**`
@@ -140,13 +129,13 @@ protein similarity scoring for all `plinder` systems.
 - `tasks.run_batch_searches`: runs the `foldseek` and `mmseqs` searches for large batches
 
   - This is a distributed task that is called in parallel for large chunks of PDB IDs
-  - It uses the JSON files from `raw_entries` and the `holo` and `apo` sub-databases
+  - It uses the annotation parquet and the `holo` and `apo` sub-databases
   - Side effects include writing the following files:
     - `foldseek` and `mmseqs` search results
 
 - `tasks.make_batch_scores`: creates the protein similarity scores
   - This is a distributed task that is called in parallel for smaller chunks of PDB IDs
-  - It uses the JSON files from `raw_entries` and the `foldseek` and `mmseqs` search results
+  - It uses the annotation parquet and the `foldseek` and `mmseqs` search results
   - Side effects include writing the following files:
     - `scores/search_db=holo/*`
     - `scores/search_db=apo/*`
@@ -156,7 +145,7 @@ protein similarity scoring for all `plinder` systems.
 
 - `tasks.make_mmp_index`: creates the `mmp` dataset
   - This is a task that is called once
-  - It additionally consolidates the `index` dataset created in `structure_qc` into a single parquet file
+  - It uses the consolidated annotation parquet created after `make_entries`
   - Side effects include writing the following files:
     - `mmp/plinder_mmp_series.parquet`
     - `mmp/plinder_mms.csv.gz`

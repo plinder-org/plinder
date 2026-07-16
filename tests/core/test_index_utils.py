@@ -44,11 +44,6 @@ def test_get_manifest(mock_cpl):
     assert len(df.index) == 57
 
 
-def test_load_entries(mock_cpl):
-    blob = utils.load_entries(two_char_codes=["9h"])
-    assert len(blob) == 1
-
-
 @pytest.mark.parametrize(
     "args",
     [

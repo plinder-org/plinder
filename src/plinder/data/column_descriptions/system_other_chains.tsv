@@ -1,0 +1,7 @@
+Name	Type	Description
+system_other_chains_asym_id	list[str]	Chain instance asymmetric ID
+system_other_chains_auth_id	list[str]	Chain author ID
+system_other_chains_entity_id	list[str]	Chain entity ID
+system_other_chains_length	list[int]	SEQRES length
+system_other_chains_num_unresolved_residues	list[int]	Number of unresolved residues (SEQRES length - len(residues))
+system_other_chains_chain_type	list[str]	Chain type from the source mmCIF entity definition

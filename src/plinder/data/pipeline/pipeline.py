@@ -120,33 +120,11 @@ class IngestPipeline:
         catted = []
         for rerun in reruns:
             catted.extend([item[-4:] for item in rerun])
-        return catted
-
-    @utils.ingest_flow_control
-    def scatter_structure_qc(self) -> list[list[str]]:
-        chunks: list[list[str]] = tasks.scatter_structure_qc(
-            data_dir=self.plinder_dir,
-            two_char_codes=self.cfg.context.two_char_codes,
-            batch_size=self.cfg.flow.download_rcsb_files_batch_size,
-        )
-        return chunks
-
-    @utils.ingest_flow_control
-    def structure_qc(self, two_char_codes: list[str]) -> None:
-        tasks.structure_qc(
-            data_dir=self.plinder_dir,
-            two_char_codes=two_char_codes,
-        )
-
-    @utils.ingest_flow_control
-    def join_structure_qc(self, qcs: list[None]) -> None:
-        force_update = (
-            self.cfg.data.force_update or self.cfg.flow.structure_qc_force_update
-        )
         utils.create_index(
             data_dir=self.plinder_dir,
-            force_update=force_update,
+            force_update=True,
         )
+        return catted
 
     @utils.ingest_flow_control
     def scatter_make_ligands(self) -> list[list[str]]:
@@ -193,8 +171,8 @@ class IngestPipeline:
         tasks.make_mmp_index(data_dir=self.plinder_dir)
 
     @utils.ingest_flow_control
-    def scatter_make_system_archives(self) -> list[list[str]]:
-        chunks: list[list[str]] = tasks.scatter_make_system_archives(
+    def scatter_make_canonical_ligand_archives(self) -> list[list[str]]:
+        chunks: list[list[str]] = tasks.scatter_make_canonical_ligand_archives(
             data_dir=self.plinder_dir,
             two_char_codes=self.cfg.context.two_char_codes,
             batch_size=self.cfg.flow.download_rcsb_files_batch_size,
@@ -202,8 +180,8 @@ class IngestPipeline:
         return chunks
 
     @utils.ingest_flow_control
-    def make_system_archives(self, two_char_codes: list[str]) -> None:
-        tasks.make_system_archives(
+    def make_canonical_ligand_archives(self, two_char_codes: list[str]) -> None:
+        tasks.make_canonical_ligand_archives(
             data_dir=self.plinder_dir,
             two_char_codes=two_char_codes,
         )

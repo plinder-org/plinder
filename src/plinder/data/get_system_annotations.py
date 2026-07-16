@@ -2,7 +2,6 @@
 # Distributed under the terms of the Apache License 2.0
 from __future__ import annotations
 
-import json
 import logging
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -52,10 +51,20 @@ class GetPlinderAnnotation:
             entry_cfg.update(self.entry_cfg)
         self.entry = Entry.from_cif_file(
             self.mmcif_file,
-            **entry_cfg,  # type: ignore
+            **entry_cfg,
         )
         LOG.info(f"created entry for {self.mmcif_file}")
         self.entry.set_validation(self.validation_xml, self.mmcif_file)
+        resolved_save_folder = entry_cfg.get("save_folder")
+        if resolved_save_folder is not None:
+            if not isinstance(resolved_save_folder, (str, Path)):
+                raise TypeError("entry save_folder must be a path")
+            entry_folder = Path(resolved_save_folder) / self.entry.pdb_id
+            entry_folder.mkdir(parents=True, exist_ok=True)
+            self.entry.chains_to_df().to_parquet(
+                entry_folder / "entry_chains.parquet",
+                index=False,
+            )
         if len(self.entry.systems):
             self.annotated_df = self.entry.to_df()
             if self.annotated_df.empty:
@@ -73,7 +82,6 @@ def hpc_save_batch(
     output_file: Path,
     save_folder: Path,
 ) -> None:
-    json_list = []
     df_list = []
     errors = []
     with open(ids_file) as f:
@@ -97,18 +105,13 @@ def hpc_save_batch(
                     validation_file,
                     save_folder=save_folder,
                 )
-                plinder_anno.annotate()
-                json_list.append(plinder_anno.entry)
-                if len(plinder_anno.entry.systems):
-                    df_list.append(plinder_anno.annotated_df)
+                annotated_df = plinder_anno.annotate()
+                if annotated_df is not None:
+                    df_list.append(annotated_df)
             except Exception as e:
                 errors.append(f"{pdb_id}: {e}\n")
-    if len(df_list):
-        pd.concat(df_list).to_csv(
-            output_file.with_suffix(".tsv"), index=False, sep="\t"
-        )
-    with open(output_file.with_suffix(".json"), "w") as f:
-        f.write(json.dumps([entry.dict() for entry in json_list], indent=4))
+    annotation = pd.concat(df_list, ignore_index=True) if df_list else pd.DataFrame()
+    annotation.to_parquet(output_file.with_suffix(".parquet"), index=False)
     if len(errors):
         with open(output_file.with_suffix(".errors"), "w") as f:
             for line in errors:
@@ -155,9 +158,11 @@ def cloud_save_annotation() -> None:
     try:
         df = gpa.annotate()
         if save_folder is not None:
-            pdb_id = val.stem.replace("_validation.xml", "")
-            with open(f"{save_folder}/{pdb_id}.json", "w") as f:
-                f.write(gpa.entry.model_dump_json(indent=4))
+            pdb_id = gpa.entry.pdb_id
+            (df if df is not None else pd.DataFrame()).to_parquet(
+                save_folder / f"{pdb_id}.parquet",
+                index=False,
+            )
     except Exception as e:
         if cfg["raise_exceptions"]:
             raise e

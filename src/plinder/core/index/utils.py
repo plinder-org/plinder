@@ -3,18 +3,14 @@
 from __future__ import annotations
 
 from argparse import ArgumentParser
-from json import load
 from pathlib import Path
 from shutil import rmtree
 from textwrap import dedent
 from time import time
-from typing import Any, Optional
-from zipfile import ZipFile
 
 import pandas as pd
-from omegaconf import DictConfig
 
-from plinder.core.utils import cpl, unpack
+from plinder.core.utils import cpl
 from plinder.core.utils.config import get_config
 from plinder.core.utils.dec import timeit
 from plinder.core.utils.log import setup_logger
@@ -75,93 +71,6 @@ def get_manifest() -> pd.DataFrame:
         return _MANIFEST
     _MANIFEST = query_index(columns=["system_id", "entry_pdb_id"], splits=["*"])
     return _MANIFEST
-
-
-def _prune_entry(entry: dict[str, Any]) -> dict[str, Any]:
-    """
-    Prune the entry as in Entry.prune
-
-    Parameters
-    ----------
-    entry : dict[str, Any]
-        the entry
-
-    Returns
-    -------
-    dict[str, Any]
-        the pruned entry
-    """
-    entry["systems"] = {
-        id_: s
-        for id_, s in entry["systems"].items()
-        if any(not l["is_ion"] and not l["is_artifact"] for l in s["ligands"])
-        and len(
-            set(
-                chain
-                for ligand in s["ligands"]
-                for chain in sorted(ligand["interacting_residues"].keys())
-            )
-        )
-        <= 5
-        and len(s["ligands"]) <= 5
-    }
-    return entry
-
-
-@timeit
-def load_entries(
-    *,
-    cfg: Optional[DictConfig] = None,
-    two_char_codes: list[str] | None = None,
-    pdb_ids: list[str] | None = None,
-    prune: bool = True,
-) -> dict[str, Any]:
-    """
-    Load the entries from a list of pdb IDs or two character codes.
-    If no filters are provided, all entries are loaded.
-
-    Parameters
-    ----------
-    cfg : DictConfig
-        the plinder-core config
-    two_char_codes : list[str] | None, default=None
-        only consider particular two character codes
-    pdb_ids : list[str] | None, default=None
-        only consider particular pdb IDs
-
-    Returns
-    -------
-    dict[str, Any]
-        the entries
-    """
-    cfg = cfg or get_config()
-    entry_dir = Path(cfg.data.plinder_dir) / cfg.data.entries
-    entry_dir.mkdir(exist_ok=True, parents=True)
-
-    zips = unpack.get_zips_to_unpack(
-        kind=cfg.data.entries,
-        cfg=cfg,
-        two_char_codes=two_char_codes,
-        pdb_ids=pdb_ids,
-    )
-    reduced: dict[str, Any] = {}
-    LOG.info(f"loading entries from {len(zips)} zips")
-    for zip_path, pdb_ids in zips.items():
-        with ZipFile(zip_path) as archive:
-            if len(pdb_ids):
-                names = [f"{pdb_id}.json" for pdb_id in pdb_ids]
-            else:
-                names = archive.namelist()
-            for name in names:
-                with archive.open(name) as obj:
-                    pdb_id = name.replace(".json", "")
-                    # TODO: port Entry to plinder.core for model validation
-                    if prune:
-                        reduced[pdb_id] = _prune_entry(load(obj))
-                    else:
-                        reduced[pdb_id] = load(obj)
-    LOG.info(f"loaded {len(reduced)} entries")
-    return reduced
 
 
 def _remove_old_linked_structures(data_dir: Path) -> None:

@@ -1,5 +1,6 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
+import pandas as pd
 import pytest
 from rdkit import Chem
 
@@ -61,6 +62,28 @@ def test_inchikey(smiles, inchikey, remove_stereo):
     from plinder.core.structure.smallmols_similarity import smiles2inchikey
 
     assert inchikey == smiles2inchikey(smiles, remove_stereo=remove_stereo)
+
+
+def test_load_ligands_from_index_uses_holo_ligand_rows():
+    from plinder.core.structure.smallmols_similarity import load_ligands_from_index
+
+    annotation = pd.DataFrame(
+        {
+            "entry_pdb_id": ["1abc", "1abc", "2def"],
+            "system_id": ["1abc__1__A", "1abc__1__A", "2def__1__B"],
+            "system_type": ["holo", "holo", "apo"],
+            "ligand_rdkit_canonical_smiles": ["CCO", "CCO", "CCN"],
+            "ligand_unique_ccd_code": ["LIG", "LIG", "OTH"],
+            "ligand_id": ["1abc__1__A__1.C", "1abc__1__A__1.C", "2def__1__B__1.D"],
+        }
+    )
+
+    ligands = load_ligands_from_index(annotation=annotation)
+
+    assert ligands["ligand_id"].tolist() == ["1abc__1__A__1.C"]
+    assert ligands["pdb_id"].tolist() == ["1abc"]
+    assert ligands["ligand_ccd_code"].tolist() == ["LIG"]
+    assert ligands["inchikeys"].notna().all()
 
 
 def test_compare_stereo_to_template():

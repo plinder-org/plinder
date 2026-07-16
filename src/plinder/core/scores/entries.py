@@ -7,9 +7,10 @@ Consumed by similarity scoring.
 from __future__ import annotations
 
 from collections import Counter, defaultdict
+from collections.abc import Iterable as IterableABC
 from dataclasses import dataclass, field
 from functools import cached_property
-from typing import Iterable
+from typing import Any, Iterable
 
 import pandas as pd
 
@@ -24,6 +25,14 @@ class ChainView:
     asym_id: str  # label_asym_id (e.g. "A")
     auth_id: str  # auth_asym_id (e.g. "A")
     length: int  # SEQRES length
+    entity_id: str = ""
+    chain_type: str = "polypeptide(L)"
+    holo: bool = True
+    uniprot_ids: tuple[str, ...] = ()
+
+    @property
+    def is_polypeptide(self) -> bool:
+        return "polypeptide" in self.chain_type.lower()
 
 
 @dataclass
@@ -100,27 +109,50 @@ class EntryView:
         return result
 
     def chains_for_alignment(self, chain_type: str, aln_type: str) -> list[str]:
-        if chain_type != "holo":
-            raise NotImplementedError(
-                f"chains_for_alignment chain_type={chain_type!r} not supported by "
-                "EntryView; apo/pred scoring needs additional columns"
+        if chain_type not in {"apo", "holo", "pred"}:
+            raise ValueError(f"unknown chain_type={chain_type!r}")
+        if aln_type not in {"foldseek", "mmseqs"}:
+            raise ValueError(f"unknown aln_type={aln_type!r}")
+
+        if chain_type == "holo":
+            receptor_asym_ids = {
+                instance_chain.split(".", 1)[1]
+                for system in self.systems.values()
+                if system.system_type == "holo"
+                for instance_chain in system.protein_chains_asym_id
+            }
+            chains = sorted(
+                self.chains[asym].auth_id
+                for asym in receptor_asym_ids
+                if asym in self.chains and self.chains[asym].is_polypeptide
             )
-        receptor_asym_ids = {
-            instance_chain.split(".")[1]
-            for system in self.systems.values()
-            if system.system_type == "holo"
-            for instance_chain in system.protein_chains_asym_id
-        }
-        chains = sorted(
-            self.chains[asym].auth_id
-            for asym in receptor_asym_ids
-            if asym in self.chains
-        )
+        elif chain_type == "apo":
+            holo_entities = {
+                chain.entity_id for chain in self.chains.values() if chain.holo
+            }
+            chains = sorted(
+                chain.auth_id
+                for chain in self.chains.values()
+                if not chain.holo
+                and chain.entity_id not in holo_entities
+                and chain.is_polypeptide
+            )
+        else:
+            uniprot_ids = sorted(
+                {
+                    uniprot_id
+                    for chain in self.chains.values()
+                    if chain.holo and chain.is_polypeptide
+                    for uniprot_id in chain.uniprot_ids
+                }
+            )
+            if aln_type == "foldseek":
+                return [f"AF-{uniprot_id}-F1-model_v4_A" for uniprot_id in uniprot_ids]
+            return uniprot_ids
+
         if aln_type == "foldseek":
             return [f"pdb_0000{self.pdb_id}_xyz-enrich_{c}" for c in chains]
-        if aln_type == "mmseqs":
-            return [f"{self.pdb_id}_{c}" for c in chains]
-        raise ValueError(f"unknown aln_type={aln_type!r}")
+        return [f"{self.pdb_id}_{c}" for c in chains]
 
 
 def _parse_neighboring_residue(s: str) -> tuple[str, int, int]:
@@ -140,14 +172,59 @@ def _parse_interaction(s: str) -> tuple[str, int, str]:
     return inst, int(rnum), itype
 
 
-def _as_list(value: object) -> list:
+def _as_list(value: Any) -> list[Any]:
     """Normalize an array-valued cell (numpy array / None / NaN) to a list."""
     if value is None:
         return []
-    try:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, IterableABC):
         return list(value)
-    except TypeError:
-        return []
+    return []
+
+
+def _entry_chains_from_rows(
+    entry_rows: pd.DataFrame,
+    chain_rows: pd.DataFrame | None = None,
+) -> tuple[dict[str, ChainView], dict[str, str]]:
+    """Build chain views from the normalized chain table or holo fallback."""
+    chains: dict[str, ChainView] = {}
+    author_to_asym: dict[str, str] = {}
+    if chain_rows is not None:
+        for row in chain_rows.itertuples(index=False):
+            chain = ChainView(
+                asym_id=str(row.chain_asym_id),
+                auth_id=str(row.chain_auth_id),
+                entity_id=str(row.chain_entity_id),
+                chain_type=str(row.chain_type),
+                length=int(row.chain_length),
+                holo=bool(row.chain_is_holo),
+                uniprot_ids=tuple(
+                    str(value) for value in _as_list(row.chain_uniprot_ids)
+                ),
+            )
+            chains[chain.asym_id] = chain
+            if chain.is_polypeptide:
+                author_to_asym[chain.auth_id] = chain.asym_id
+        return chains, author_to_asym
+
+    # Compatibility for in-memory test/custom dataframes that only contain
+    # system receptor columns. Such rows can reproduce holo selection but do
+    # not contain enough information to identify apo or predicted chains.
+    for _, row in entry_rows.iterrows():
+        asyms = _as_list(row["system_protein_chains_asym_id"])
+        auths = _as_list(row["system_protein_chains_auth_id"])
+        lengths = _as_list(row["system_protein_chains_length"])
+        for inst_chain, auth, length in zip(asyms, auths, lengths):
+            asym = str(inst_chain).split(".", 1)[1]
+            if asym not in chains:
+                chains[asym] = ChainView(
+                    asym_id=asym,
+                    auth_id=str(auth),
+                    length=int(length),
+                )
+                author_to_asym[str(auth)] = asym
+    return chains, author_to_asym
 
 
 def _make_ligand_view(row: pd.Series, *, pdb_id: str, system_id: str) -> LigandView:
@@ -183,10 +260,16 @@ def _make_ligand_view(row: pd.Series, *, pdb_id: str, system_id: str) -> LigandV
     )
 
 
-def entry_views_from_df(df: pd.DataFrame) -> dict[str, EntryView]:
+def entry_views_from_df(
+    df: pd.DataFrame,
+    *,
+    entry_chains: pd.DataFrame | None = None,
+) -> dict[str, EntryView]:
     """Build :class:`EntryView` objects from any DataFrame shaped like the
-    published index parquet — i.e. one row per ``(entry, system, ligand)``
-    triple with the same column names produced by ``Entry.to_df()``.
+    published annotation parquet — i.e. one row per
+    ``(entry, system, ligand)`` triple. Pass the normalized one-row-per-chain
+    table to retain apo and predicted alignment metadata. Without it, only
+    holo chains present on system rows can be reconstructed.
 
     Source-agnostic: works equally on the published parquet read via
     :func:`load_entry_views`, a locally-built parquet, or a freshly
@@ -195,19 +278,12 @@ def entry_views_from_df(df: pd.DataFrame) -> dict[str, EntryView]:
     """
     views: dict[str, EntryView] = {}
     for pdb_id, entry_rows in df.groupby("entry_pdb_id", sort=False):
-        chains: dict[str, ChainView] = {}
-        author_to_asym: dict[str, str] = {}
-        for _, row in entry_rows.iterrows():
-            asyms = _as_list(row["system_protein_chains_asym_id"])
-            auths = _as_list(row["system_protein_chains_auth_id"])
-            lengths = _as_list(row["system_protein_chains_length"])
-            for inst_chain, auth, length in zip(asyms, auths, lengths):
-                asym = inst_chain.split(".", 1)[1]
-                if asym not in chains:
-                    chains[asym] = ChainView(
-                        asym_id=asym, auth_id=auth, length=int(length)
-                    )
-                    author_to_asym[auth] = asym
+        chain_rows = None
+        if entry_chains is not None:
+            chain_rows = entry_chains[entry_chains["entry_pdb_id"] == pdb_id]
+            if chain_rows.empty:
+                raise ValueError(f"No entry chain metadata found for {pdb_id}")
+        chains, author_to_asym = _entry_chains_from_rows(entry_rows, chain_rows)
 
         systems: dict[str, SystemView] = {}
         for system_id, sys_rows in entry_rows.groupby("system_id", sort=False):
@@ -269,5 +345,16 @@ def load_entry_views(*, pdb_ids: Iterable[str]) -> dict[str, EntryView]:
     pdb_ids = list(pdb_ids)
     df = query_index(columns=["*"], splits=["*"])
     df = df[df["entry_pdb_id"].isin(pdb_ids)]
+    from plinder.core.utils import cpl
+    from plinder.core.utils.config import get_config
+
+    cfg = get_config()
+    chain_path = cpl.get_plinder_path(
+        rel=f"{cfg.data.index}/{cfg.data.entry_chain_file}"
+    )
+    entry_chains = pd.read_parquet(
+        chain_path,
+        filters=[("entry_pdb_id", "in", pdb_ids)],
+    )
     LOG.info(f"load_entry_views: {len(df)} rows for {len(pdb_ids)} pdb_ids")
-    return entry_views_from_df(df)
+    return entry_views_from_df(df, entry_chains=entry_chains)

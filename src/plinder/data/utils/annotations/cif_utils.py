@@ -63,6 +63,41 @@ def get_model_count(cif_file: pdbx.CIFFile) -> int:
     return int(len(set(atom_site["pdbx_PDB_model_num"].as_array())))
 
 
+def build_biounit(
+    cif_file: pdbx.CIFFile,
+    assembly_id: str,
+) -> struc.AtomArray:
+    """Build a biological assembly with stable ``instance.asym`` chain IDs.
+
+    Biotite's ``sym_id`` enumerates transformed copies independently for each
+    source asym chain.  Using it avoids assuming that an assembly consists of
+    complete, contiguous ASU-sized blocks, which is false when operators apply
+    to only a subset of chains.
+    """
+    biounit = pdbx.get_assembly(
+        cif_file,
+        assembly_id=assembly_id,
+        model=1,
+        use_author_fields=False,
+        include_bonds=True,
+        extra_fields=["label_asym_id"],
+    )
+    biounit = biounit[~is_hydrogen_isotope(biounit.element)]
+    if biounit.bonds is None:
+        raise ValueError(
+            f"assembly {assembly_id}: biotite returned no bonds despite "
+            "include_bonds=True"
+        )
+    biounit.chain_id = np.asarray(
+        [
+            f"{int(sym_id) + 1}.{asym_id}"
+            for sym_id, asym_id in zip(biounit.sym_id, biounit.label_asym_id)
+        ]
+    )
+    apply_struct_conn_bonds(biounit, list(cif_file.values())[0])
+    return biounit
+
+
 def _cif_scalar(block: pdbx.CIFBlock, category: str, column: str) -> str | None:
     """Read a single scalar value from a CIF category, or None."""
     if category not in block:
@@ -311,7 +346,11 @@ def apply_struct_conn_bonds(
     existing = set(
         (min(b[0], b[1]), max(b[0], b[1])) for b in atoms.bonds.as_array()[:, :2]
     )
-    label_ids = np.array([c.split(".")[-1] if "." in c else c for c in atoms.chain_id])
+    chain_parts = [str(chain_id).split(".", maxsplit=1) for chain_id in atoms.chain_id]
+    label_ids = np.asarray([parts[-1] for parts in chain_parts])
+    instance_ids = np.asarray(
+        [parts[0] if len(parts) == 2 else "" for parts in chain_parts]
+    )
 
     for c in connections:
         if c["conn_type"] != "covale":
@@ -322,23 +361,32 @@ def apply_struct_conn_bonds(
         except ValueError:
             continue
 
-        mask1 = (
+        partner1_mask = (
             (label_ids == c["chain1"])
             & (atoms.res_id == r1)
             & (atoms.atom_name == c["atom1"])
         )
-        mask2 = (
+        partner2_mask = (
             (label_ids == c["chain2"])
             & (atoms.res_id == r2)
             & (atoms.atom_name == c["atom2"])
         )
 
-        for i1 in np.where(mask1)[0]:
-            for i2 in np.where(mask2)[0]:
-                pair = (min(int(i1), int(i2)), max(int(i1), int(i2)))
-                if pair not in existing:
-                    atoms.bonds.add_bond(int(i1), int(i2), struc.BondType.SINGLE)
-                    existing.add(pair)
+        # In biological assemblies the same label asym can occur under
+        # multiple operators.  A source ``_struct_conn`` row applies within
+        # each transformed copy, not to the Cartesian product of all copies.
+        partner1_instances = set(instance_ids[partner1_mask])
+        partner2_instances = set(instance_ids[partner2_mask])
+        shared_instances = partner1_instances & partner2_instances
+        for instance_id in shared_instances:
+            mask1 = partner1_mask & (instance_ids == instance_id)
+            mask2 = partner2_mask & (instance_ids == instance_id)
+            for i1 in np.where(mask1)[0]:
+                for i2 in np.where(mask2)[0]:
+                    pair = (min(int(i1), int(i2)), max(int(i1), int(i2)))
+                    if pair not in existing:
+                        atoms.bonds.add_bond(int(i1), int(i2), struc.BondType.SINGLE)
+                        existing.add(pair)
 
 
 # ---------------------------------------------------------------------------

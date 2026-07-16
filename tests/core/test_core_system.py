@@ -8,11 +8,9 @@ from plinder.core import index
 @pytest.mark.parametrize(
     "system_id",
     [
-        "1avd__1__1.A_2.A__1.D",
-        "1avd__1__1.A_2.A__2.D",
         "1avd__1__1.A__1.C",
-        "1ngx__1__1.A_1.B__1.E",
-        "4v2y__1__1.A__1.E",
+        "19hc__1__1.A__1.I",
+        "19hc__1__1.B__1.T",
     ],
 )
 def test_plinder_system(system_id, read_plinder_mount):
@@ -20,19 +18,15 @@ def test_plinder_system(system_id, read_plinder_mount):
 
 
 def test_plinder_system_system_files(read_plinder_mount):
-    system_id = "1avd__1__1.A_2.A__1.D"
+    system_id = "1avd__1__1.A__1.C"
     s = index.PlinderSystem(system_id=system_id)
     assert len(s.ligand_sdfs) >= 1
     assert len(s.system_cif)
     assert len(s.receptor_cif)
-    assert len(s.receptor_pdb)
     assert len(s.sequences)
-    assert s.chain_mapping is not None and len(s.chain_mapping)
     assert Path(s.system_cif).is_file()
     assert Path(s.receptor_cif).is_file()
-    assert Path(s.receptor_pdb).is_file()
     assert Path(s.sequences_fasta).is_file()
-    assert isinstance(s.chain_mapping, dict)
 
 
 def test_plinder_structure(read_plinder_mount):

@@ -8,6 +8,8 @@ ligand_centroid	list[float]	Ligand center of geometry
 ligand_smiles	str	Ligand SMILES from CCD/PRD lookup, or derived from resolved 3D if not in dictionary
 ligand_resolved_smiles	str	SMILES from resolved 3D coordinates: bond orders from CCD template, stereochemistry from 3D geometry
 ligand_resolved_stereo_matches_template	bool | None	Whether resolved 3D stereo matches CCD template (True if achiral; None if no template)
+ligand_residue_numbers	list[int]	Resolved ligand residue numbers used to reconstruct this ligand chain from the source mmCIF
+ligand_water_residues	list[str]	Interacting water residues encoded as <instance>.<asym>_<residue_number>
 ligand_rdkit_canonical_smiles	str | None	RDKit canonical SMILES (same as smiles; kept for schema compatibility)
 ligand_molecular_weight	float | None	Molecular weight
 ligand_crippen_clogp	float | None	Ligand Crippen MlogP, see https://www.rdkit.org/docs/source/rdkit.Chem.Crippen.html

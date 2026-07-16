@@ -2,7 +2,6 @@
 # Distributed under the terms of the Apache License 2.0
 from __future__ import annotations
 
-import json
 from functools import cached_property
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -50,48 +49,45 @@ class PlinderSystem:
         self.system_id: str = system_id
         self.prune: bool = prune
         self.skip_3d_confgen: bool = skip_3d_confgen
-        self._entry: dict[str, Any] | None = None
-        self._system: dict[str, Any] | None = None
+        self._entry: pd.DataFrame | None = None
+        self._system: pd.DataFrame | None = None
         self._archive: Path | None = None
-        self._chain_mapping: dict[str, Any] | None = None
-        self._water_mapping: dict[str, Any] | None = None
         self._linked_structures: pd.DataFrame | None = None
         self._linked_archive: Path | None = None
 
     @property
-    def entry(self) -> dict[str, Any] | None:
+    def entry(self) -> pd.DataFrame:
         """
-        Store a reference to the entry JSON for this system
+        Store the annotation rows for this PDB entry.
 
         Returns
         -------
-        dict[str, Any] | None
-            entry JSON
+        pd.DataFrame
+            Ligand-level annotation rows for the entry.
         """
         if self._entry is None:
             entry_pdb_id = self.system_id.split("__")[0]
-            try:
-                entry = utils.load_entries(pdb_ids=[entry_pdb_id], prune=self.prune)
-                self._entry = entry[entry_pdb_id]
-            except KeyError:
-                raise ValueError(f"pdb_id={entry_pdb_id} not found in entries")
+            plindex = utils.get_plindex()
+            self._entry = plindex[plindex["entry_pdb_id"] == entry_pdb_id].copy()
+            if self._entry.empty:
+                raise ValueError(
+                    f"pdb_id={entry_pdb_id} not found in the annotation index"
+                )
         return self._entry
 
     @property
-    def system(self) -> dict[str, Any] | None:
+    def system(self) -> pd.DataFrame:
         """
-        Return the system metadata from the original entry JSON
+        Return ligand-level annotation rows for this system.
 
         Returns
         -------
-        dict[str, Any] | None
-            system metadata
+        pd.DataFrame
+            Annotation rows for the system.
         """
         if self._system is None:
-            try:
-                assert self.entry is not None
-                self._system = self.entry["systems"][self.system_id]
-            except KeyError:
+            self._system = self.entry[self.entry["system_id"] == self.system_id].copy()
+            if self._system.empty:
                 raise ValueError(f"system_id={self.system_id} not found in entry")
         return self._system
 
@@ -140,19 +136,6 @@ class PlinderSystem:
         return (self.archive / "receptor.cif").as_posix()
 
     @property
-    def receptor_pdb(self) -> str:
-        """
-        Path to the receptor.pdb file
-
-        Returns
-        -------
-        str
-            path
-        """
-        assert self.archive is not None
-        return (self.archive / "receptor.pdb").as_posix()
-
-    @property
     def sequences_fasta(self) -> str:
         """
         Path to the sequences.fasta file
@@ -177,41 +160,6 @@ class PlinderSystem:
         """
         assert self.archive is not None
         return {k: v for k, v in FastaFile.read_iter(self.sequences_fasta)}
-
-    @property
-    def chain_mapping(self) -> dict[str, Any] | None:
-        """
-        Chain mapping metadata
-
-        Returns
-        -------
-        dict[str, Any] | None
-            chain mapping
-        """
-        if self._chain_mapping is None:
-            assert self.archive is not None
-            with (self.archive / "chain_mapping.json").open() as f:
-                self._chain_mapping = json.load(f)
-        return self._chain_mapping
-
-    @property
-    def water_mapping(self) -> dict[str, Any] | None:
-        """
-        Water mapping metadata
-
-        Returns
-        -------
-        dict[str, Any] | None
-            water mapping
-        """
-        if self._water_mapping is None:
-            assert self.archive is not None
-            try:
-                with (self.archive / "water_mapping.json").open() as f:
-                    self._water_mapping = json.load(f)
-            except FileNotFoundError:
-                return None
-        return self._water_mapping
 
     @property
     def ligand_sdfs(self) -> dict[str, str]:
@@ -457,17 +405,21 @@ class PlinderSystem:
 
     @cached_property
     def smiles(self) -> dict[str, str] | None:
-        if self.system is None:
-            return None
         smiles_dict = {}
-        try_smiles = ["rdkit_canonical_smiles", "smiles", "resolved_smiles"]
-        for ligand in self.system["ligands"]:
+        try_smiles = [
+            "ligand_rdkit_canonical_smiles",
+            "ligand_smiles",
+            "ligand_resolved_smiles",
+        ]
+        for _, ligand in self.system.iterrows():
+            ligand_key = f"{ligand['ligand_instance']}.{ligand['ligand_asym_id']}"
             found = False
             for s in try_smiles:
-                if s in ligand and ligand[s] is not None and len(ligand[s]):
-                    smiles_dict[f"{ligand['instance']}.{ligand['asym_id']}"] = ligand[s]
+                value = ligand.get(s)
+                if value is not None and isinstance(value, str) and value:
+                    smiles_dict[ligand_key] = value
                     found = True
                     break
             if not found:
-                smiles_dict[f"{ligand['instance']}.{ligand['asym_id']}"] = ""
+                smiles_dict[ligand_key] = ""
         return smiles_dict

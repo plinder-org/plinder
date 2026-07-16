@@ -10,6 +10,11 @@ from plinder.data.utils.annotations.interaction_utils import get_covalent_connec
 from plinder.data.utils.annotations.interface_gap import annotate_interface_gaps
 from plinder.data.utils.annotations.ligand_utils import sort_ccd_codes
 from plinder.data.utils.annotations.mmpdb_utils import add_mmp_clusters_to_data
+from plinder.data.utils.annotations.save_utils import (
+    SystemReconstructionOptions,
+    SystemReconstructionOutputs,
+    save_reconstructed_system,
+)
 from rdkit import Chem
 
 
@@ -85,6 +90,10 @@ def test_short_noncov_peptide_detection(cif_6i41, mock_alternative_datasets):
     )
     plinder_anno.annotate()
     df = plinder_anno.annotated_df
+    chain_file = entry_dir / "6i41" / "entry_chains.parquet"
+    assert chain_file.is_file()
+    chain_df = pd.read_parquet(chain_file)
+    assert chain_df["chain_type"].str.lower().str.contains("polypeptide").all()
     assert len(df) == 1
     assert df["ligand_is_covalent"].sum() == 0
     assert set(df.ligand_ccd_code.to_list()) == {"LYS-ALA-ASP-THR-THR-THR-PRO"}
@@ -136,7 +145,7 @@ def test_synthetic_cov_peptide_detection(cif_6lu7, mock_alternative_datasets):
     assert lig.is_invalid == False
     assert lig.is_covalent == True
     assert lig.covalent_linkages == {"145:CYS:A:145:SG__5:PJE:B:5:C20"}
-    outsdffile = entry_dir / "6lu7__1__1.A_2.A__1.B/ligand_files/1.B.sdf"
+    outsdffile = entry_dir / "6lu7" / "ligand_files" / "B.sdf"
     assert outsdffile.is_file()
     rdmol = Chem.SDMolSupplier(str(outsdffile), removeHs=True)[0]
     assert Chem.SanitizeMol(rdmol) == Chem.rdmolops.SanitizeFlags.SANITIZE_NONE
@@ -265,26 +274,40 @@ def test_plip_entry_ternary(cif_2p1q, mock_alternative_datasets, lig_code="IAC")
 
 
 def test_water_saving(cif_2p1q, mock_alternative_datasets):
-    import biotite.structure.io.pdb as pdb_io
+    import biotite.structure as struc
+    from biotite.structure.io import pdbx
+    from plinder.data.utils.annotations.cif_utils import read_mmcif_file
 
     entry_dir = mock_alternative_datasets("2p1q")
     system_tag = "2p1q__2__2.B_2.C__2.E"
-    Entry.from_cif_file(cif_2p1q, save_folder=entry_dir)
-    for filename in [
-        "sequences.fasta",
-        "receptor.pdb",
-        "system.cif",
-        "receptor.cif",
-        "chain_mapping.json",
-        "water_mapping.json",
-    ]:
-        assert (entry_dir / system_tag / filename).exists()
-    assert (entry_dir / system_tag / "ligand_files" / "2.E.sdf").exists()
-    pdb_file = pdb_io.PDBFile.read(str(entry_dir / system_tag / "receptor.pdb"))
-    atoms = pdb_file.get_structure(model=1)
-    water_atoms = atoms[atoms.chain_id == "_"]
-    water_resnums = set(water_atoms.res_id)
-    assert len(water_resnums) == 2, f"Expected 2 waters, got {len(water_resnums)}"
+    entry = Entry.from_cif_file(cif_2p1q, save_folder=entry_dir)
+    row = entry.to_df().query("system_id == @system_tag").iloc[0]
+
+    output_dir = entry_dir / "reconstructed" / system_tag
+    receptor_cif = output_dir / "receptor.cif"
+    save_reconstructed_system(
+        cif_2p1q,
+        row,
+        outputs=SystemReconstructionOutputs(receptor_cif=receptor_cif),
+    )
+    assert receptor_cif.is_file()
+    assert not (output_dir / "system.cif").exists()
+    assert not list(output_dir.glob("*.pdb"))
+
+    atoms = pdbx.get_structure(read_mmcif_file(receptor_cif), model=1)
+    water_atoms = atoms[struc.filter_solvent(atoms)]
+    assert len(set(zip(water_atoms.chain_id, water_atoms.res_id))) == 2
+
+    all_waters_cif = output_dir / "receptor_all_waters.cif"
+    save_reconstructed_system(
+        cif_2p1q,
+        row,
+        outputs=SystemReconstructionOutputs(receptor_cif=all_waters_cif),
+        options=SystemReconstructionOptions(receptor_waters="all"),
+    )
+    all_atoms = pdbx.get_structure(read_mmcif_file(all_waters_cif), model=1)
+    all_water_atoms = all_atoms[struc.filter_solvent(all_atoms)]
+    assert len(set(zip(all_water_atoms.chain_id, all_water_atoms.res_id))) > 2
 
 
 def test_plip_same_hinge_binders(cif_2gdo, cif_4qyf, mock_alternative_datasets):
@@ -328,22 +351,56 @@ def test_get_single_ligand_system_annotations(cif_6fx1, mock_alternative_dataset
     assert single_ligand_system_result == single_ligand_system_target
 
 
-def test_system_saving(cif_2y4i, mock_alternative_datasets):
+def test_canonical_ligand_saving_and_system_reconstruction(
+    cif_2y4i, mock_alternative_datasets
+):
+    import biotite.structure as struc
+    from biotite.structure.io import pdbx
+    from plinder.data.utils.annotations.cif_utils import read_mmcif_file
+
     entry_dir = mock_alternative_datasets("2y4i")
     system_tag = "2y4i__1__1.B__1.E_1.F"
     entry = Entry.from_cif_file(cif_2y4i, save_folder=entry_dir)
     for chain in entry.chains.values():
         assert len(chain.mappings["ECOD"])
-    for filename in [
-        "sequences.fasta",
-        "receptor.pdb",
-        "system.cif",
-        "receptor.cif",
-        "chain_mapping.json",
-    ]:
-        assert (entry_dir / system_tag / filename).exists()
-    for chain in ["1.E", "1.F"]:
-        assert (entry_dir / system_tag / "ligand_files" / f"{chain}.sdf").exists()
+
+    canonical_ligand_dir = entry_dir / "2y4i" / "ligand_files"
+    assert {path.name for path in canonical_ligand_dir.glob("*.sdf")} >= {
+        "E.sdf",
+        "F.sdf",
+    }
+    assert not (entry_dir / system_tag).exists()
+
+    row = entry.to_df().query("system_id == @system_tag").iloc[0]
+    assert set(row["system_other_chains_asym_id"]).isdisjoint(
+        row["system_protein_chains_asym_id"] + row["system_ligand_chains"]
+    )
+    output_dir = entry_dir / "reconstructed" / system_tag
+    outputs = SystemReconstructionOutputs(
+        system_cif=output_dir / "system.cif",
+        receptor_cif=output_dir / "receptor.cif",
+        sequences_fasta=output_dir / "sequences.fasta",
+    )
+    written = save_reconstructed_system(
+        cif_2y4i,
+        row,
+        outputs=outputs,
+        options=SystemReconstructionOptions(
+            system_waters="none",
+            receptor_waters="none",
+            system_include_other_protein_chains=True,
+        ),
+    )
+    assert set(written) == {"system_cif", "receptor_cif", "sequences_fasta"}
+    assert all(path.is_file() for path in written.values())
+    assert not list(output_dir.glob("*.pdb"))
+
+    system_atoms = pdbx.get_structure(read_mmcif_file(outputs.system_cif), model=1)
+    assert not np.any(struc.filter_solvent(system_atoms))
+    expected_chains = set(row["system_protein_chains_asym_id"])
+    expected_chains.update(row["system_ligand_chains"])
+    expected_chains.update(row["system_other_protein_chains_asym_id"])
+    assert set(system_atoms.chain_id) == expected_chains
 
 
 def test_smiles_from_nextgen(rcsb_ccd_reference_csv):
@@ -787,7 +844,7 @@ def test_ligand_fix_to_valid_imatinib(cif_2hyy, mock_alternative_datasets):
     lig = entry.systems["2hyy__1__1.A__1.E"].ligands[0]
     #  before fix it is invalid
     assert lig.is_invalid == False
-    outsdffile = entry_dir / "2hyy__1__1.A__1.E/ligand_files/1.E.sdf"
+    outsdffile = entry_dir / "2hyy" / "ligand_files" / "E.sdf"
     assert outsdffile.is_file()
     rdmol_sdf = Chem.SDMolSupplier(str(outsdffile), removeHs=True)[0]
     rdmol_smi = Chem.MolFromSmiles(lig.smiles)
@@ -806,16 +863,14 @@ def test_ligand_fix_to_valid_thalidomide(cif_7bqu, mock_alternative_datasets):
     )
     # EF2 may group with nearby ZN via shared pocket residues
     lig = None
-    system_id = None
-    for sid, system in entry.systems.items():
+    for system in entry.systems.values():
         for l in system.ligands:
             if l.ccd_code == "EF2":
                 lig = l
-                system_id = sid
                 break
     assert lig is not None, "EF2 ligand not found in any system"
     assert lig.is_invalid == False
-    outsdffile = entry_dir / system_id / "ligand_files/1.C.sdf"
+    outsdffile = entry_dir / "7bqu" / "ligand_files" / "C.sdf"
     assert outsdffile.is_file()
     rdmol_sdf = Chem.SDMolSupplier(str(outsdffile), removeHs=True)[0]
     rdmol_smi = Chem.MolFromSmiles(lig.smiles)
@@ -835,7 +890,7 @@ def test_partially_resolved_substructure_JEF(cif_1ngx, mock_alternative_datasets
     lig = entry.systems["1ngx__1__1.A_1.B__1.E"].ligands[0]
     assert lig.is_invalid == False
     assert lig.num_unresolved_heavy_atoms == 13
-    outsdffile = entry_dir / "1ngx__1__1.A_1.B__1.E/ligand_files/1.E.sdf"
+    outsdffile = entry_dir / "1ngx" / "ligand_files" / "E.sdf"
     assert outsdffile.is_file()
     rdmol = Chem.SDMolSupplier(str(outsdffile), removeHs=True)[0]
     assert Chem.SanitizeMol(rdmol) == Chem.rdmolops.SanitizeFlags.SANITIZE_NONE
@@ -853,17 +908,15 @@ def test_distorted_molecule_template_fix(cif_3grt, mock_alternative_datasets):
     )
     # FAD(B) and TS2(C) may group via shared pocket residues
     lig = None
-    system_id = None
-    for sid, system in entry.systems.items():
+    for system in entry.systems.values():
         for l in system.ligands:
             if l.ccd_code == "FAD":
                 lig = l
-                system_id = sid
                 break
     assert lig is not None, "FAD ligand not found in any system"
     assert lig.is_invalid == False
     # Check SDF was saved and is valid
-    outsdffile = entry_dir / system_id / "ligand_files" / f"{lig.instance_chain}.sdf"
+    outsdffile = entry_dir / "3grt" / "ligand_files" / f"{lig.asym_id}.sdf"
     assert outsdffile.is_file(), f"SDF not found at {outsdffile}"
     rdmol = Chem.SDMolSupplier(str(outsdffile), removeHs=True)[0]
     assert Chem.SanitizeMol(rdmol) == Chem.rdmolops.SanitizeFlags.SANITIZE_NONE
@@ -875,8 +928,8 @@ def test_hydrogen_removed_save(cif_7az3, mock_alternative_datasets):
         cif_7az3,
         save_folder=entry_dir,
     )
-    pli_entry = list(entry.systems.keys())[0]
-    outsdffile = entry_dir / pli_entry / f"ligand_files/{pli_entry[-3:]}.sdf"
+    ligand = next(iter(entry.systems.values())).ligands[0]
+    outsdffile = entry_dir / "7az3" / "ligand_files" / f"{ligand.asym_id}.sdf"
     assert outsdffile.is_file()
     rdmol = Chem.SDMolSupplier(str(outsdffile), removeHs=False, sanitize=False)[0]
     assert sum([at.GetAtomicNum() == 1 for at in rdmol.GetAtoms()]) == 0
@@ -889,8 +942,8 @@ def test_too_many_hydrogens(cif_6ntj, mock_alternative_datasets):
         cif_6ntj,
         save_folder=entry_dir,
     )
-    pli_entry = list(entry.systems.keys())[0]
-    outsdffile = entry_dir / pli_entry / f"ligand_files/{pli_entry[-3:]}.sdf"
+    ligand = next(iter(entry.systems.values())).ligands[0]
+    outsdffile = entry_dir / "6ntj" / "ligand_files" / f"{ligand.asym_id}.sdf"
     assert outsdffile.is_file()
     rdmol = Chem.SDMolSupplier(str(outsdffile), removeHs=False, sanitize=False)[0]
     assert sum([at.GetAtomicNum() == 1 for at in rdmol.GetAtoms()]) == 0
@@ -907,7 +960,7 @@ def test_disconnected_ligand_fix(cif_4nhc, mock_alternative_datasets):
     entry = Entry.from_cif_file(cif_4nhc, save_folder=entry_dir, min_polymer_size=20)
     lig = entry.systems["4nhc__1__1.A_1.B__1.C"].ligands[0]
     assert lig.is_invalid == False
-    outsdffile = entry_dir / "4nhc__1__1.A_1.B__1.C/ligand_files/1.C.sdf"
+    outsdffile = entry_dir / "4nhc" / "ligand_files" / "C.sdf"
     assert outsdffile.is_file()
     rdmol = Chem.SDMolSupplier(str(outsdffile), removeHs=True)[0]
     assert Chem.SanitizeMol(rdmol) == Chem.rdmolops.SanitizeFlags.SANITIZE_NONE

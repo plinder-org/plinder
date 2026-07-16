@@ -14,11 +14,11 @@ from plinder.core.structure.smallmols_utils import generate_input_conformer
 from rdkit import Chem
 
 
-def test_pdb_loader(pdb_5a7w_hydrogen):
-    arr = atoms.atom_array_from_pdb_file(pdb_5a7w_hydrogen)
+def test_cif_loader(cif_1qz5_unzipped):
+    arr = atoms.atom_array_from_cif_file(cif_1qz5_unzipped)
 
     assert isinstance(arr, AtomArray)
-    assert arr.shape == (5623,)
+    assert arr.shape == (3256,)
 
 
 def test_atom_masks(cif_atom_array):
@@ -64,9 +64,9 @@ def test_resn2seq(cif_atom_array):
 
 
 def test_get_seq_alignments(read_plinder_mount):
-    pdb = PlinderSystem(system_id="1avd__1__1.A_2.A__1.D").receptor_pdb
-    a = atoms.atom_array_from_pdb_file(pdb)
-    b = atoms.atom_array_from_pdb_file(pdb)
+    cif = PlinderSystem(system_id="1avd__1__1.A_2.A__1.D").receptor_cif
+    a = atoms.atom_array_from_cif_file(cif)
+    b = atoms.atom_array_from_cif_file(cif)
     a_numbering, a_resn = struc.get_residues(a)
     b_numbering, b_resn = struc.get_residues(b)
     a_seq = atoms.resn2seq(a_resn).strip("X")
@@ -87,8 +87,8 @@ def test_get_seq_alignments(read_plinder_mount):
 
 
 def test_buried_sasa(read_plinder_mount):
-    pdb = PlinderSystem(system_id="1avd__1__1.A_2.A__1.D").receptor_pdb
-    arr = atoms.atom_array_from_pdb_file(pdb)
+    cif = PlinderSystem(system_id="1avd__1__1.A_2.A__1.D").receptor_cif
+    arr = atoms.atom_array_from_cif_file(cif)
     chains = sorted(set(arr.chain_id))
     assert len(chains) >= 2, f"Need multi-chain receptor, got {chains}"
     a = arr[arr.chain_id == chains[0]]

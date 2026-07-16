@@ -60,7 +60,7 @@ class FlowConfig:
     annotation_batch_size : int, default=220
         How many system annotations to generate in a given chunk
     skip_existing_entries : bool, default=True
-        if the entry JSON already exists, skip generation
+        if the per-entry annotation parquet already exists, skip generation
     make_entries_cpu : int, default=1
         misguided experiments in multiprocessing over C++ libs (bad idea)
     """
@@ -74,8 +74,6 @@ class FlowConfig:
     make_entries_batch_size: int = 220
     make_entries_force_update: bool = False
     make_entries_cpu: int = 4
-
-    structure_qc_force_update: bool = False
 
     make_sub_dbs_cpu: int = 4
     make_scorers_cpu: int = 4
@@ -190,15 +188,12 @@ class ScorerConfig:
 @dataclass
 class EntryConfig:
     # TODO-tjd: deduplicate with AnnotationConfig
-    max_protein_chains_to_save: int = 5
-    max_ligand_chains_to_save: int = 5
     neighboring_residue_threshold: float = 6.0
     neighboring_ligand_threshold: float = 4.0
     min_polymer_size: int = 12
     plip_complex_threshold: float = 10.0
     min_shared_pocket_members: int = 3
     save_folder: Optional[str] = None
-    skip_save_systems: bool = False
 
 
 @dataclass

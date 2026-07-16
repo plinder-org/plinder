@@ -414,41 +414,17 @@ class Scorer:
         self.scores_dir.mkdir(exist_ok=True, parents=True)
 
     def resolve_ligand_sdf(self, data_dir: Path, ligand: LigandView) -> Path | None:
-        """Resolve canonical ligand storage first, then the legacy system path."""
+        """Resolve the canonical ASU ligand SDF for a ligand annotation."""
         two_char_code = ligand.pdb_id[-3:-1]
-        candidates = (
-            # Canonical per-entry layout written by the annotation pipeline.
+        path = (
             data_dir
             / "raw_entries"
             / two_char_code
             / ligand.pdb_id
             / "ligand_files"
-            / f"{ligand.asym_id}.sdf",
-            # Canonical layout after a systems archive is downloaded/extracted.
-            data_dir
-            / "systems"
-            / ligand.pdb_id
-            / "ligand_files"
-            / f"{ligand.asym_id}.sdf",
-            data_dir / ligand.pdb_id / "ligand_files" / f"{ligand.asym_id}.sdf",
-            # Legacy instance-specific system layouts.
-            data_dir
-            / "raw_entries"
-            / two_char_code
-            / ligand.system_id
-            / "ligand_files"
-            / f"{ligand.instance_chain}.sdf",
-            data_dir
-            / "systems"
-            / ligand.system_id
-            / "ligand_files"
-            / f"{ligand.instance_chain}.sdf",
-            data_dir
-            / ligand.system_id
-            / "ligand_files"
-            / f"{ligand.instance_chain}.sdf",
+            / f"{ligand.asym_id}.sdf"
         )
-        return next((path for path in candidates if path.is_file()), None)
+        return path if path.is_file() else None
 
     def _get_ligand_mol(self, data_dir: Path, ligand: LigandView) -> Chem.Mol | None:
         cache_key = (ligand.pdb_id, ligand.asym_id)

@@ -2,19 +2,54 @@
 # Distributed under the terms of the Apache License 2.0
 from __future__ import annotations
 
-import json
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, Literal, Protocol
 
 import biotite.structure as struc
-import biotite.structure.io.pdb as pdb_io
 import biotite.structure.io.pdbx as pdbx
 import numpy as np
 from rdkit import Chem
 
-# Define available names for receptor (protein/NA) and ligand chains in PDB format
-PDB_RECEPTOR_CHAINS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-PDB_LIGAND_CHAINS = PDB_RECEPTOR_CHAINS.lower() + "0123456789"
-WATER_CHAIN_NAME = "_"
+WaterSelection = Literal["none", "interacting", "all"]
+
+
+class AnnotationRow(Protocol):
+    """Minimal interface shared by dicts and pandas Series."""
+
+    def get(self, key: str, default: Any = None) -> Any:
+        ...
+
+
+@dataclass(frozen=True)
+class SystemReconstructionOptions:
+    """Configure which atoms are present in reconstructed mmCIF views."""
+
+    system_waters: WaterSelection = "interacting"
+    receptor_waters: WaterSelection = "interacting"
+    system_include_ligands: bool = True
+    system_include_other_protein_chains: bool = False
+    system_include_other_ligand_chains: bool = False
+    receptor_include_other_protein_chains: bool = False
+    validate_biounit_chain_ids: bool = True
+
+
+@dataclass(frozen=True)
+class SystemReconstructionOutputs:
+    """Explicit output paths; ``None`` means that file is not written."""
+
+    system_cif: Path | None = None
+    receptor_cif: Path | None = None
+    sequences_fasta: Path | None = None
+
+
+@dataclass(frozen=True)
+class ReconstructedSystem:
+    """In-memory views rebuilt from a source PDB mmCIF."""
+
+    biounit: struc.AtomArray
+    system: struc.AtomArray
+    receptor: struc.AtomArray
 
 
 def save_ligands(
@@ -57,95 +92,6 @@ def save_ligands(
             w.write(rdkit_mol)
 
 
-def save_pdb_file(
-    full_system: struc.AtomArray,
-    receptor_chains: list[str],
-    ligand_chains: list[str],
-    output_pdb_file: str | Path,
-    output_mapping_file: str | Path,
-    waters: dict[str, list[int]],
-    water_mapping_file: str | Path,
-) -> None:
-    """Rename chains to PDB single-letter convention and save.
-
-    Parameters
-    ----------
-    full_system : AtomArray
-        System atoms (receptor + ligand, no waters yet).
-    receptor_chains : list[str]
-        Original receptor chain IDs (protein and/or nucleic acid).
-    ligand_chains : list[str]
-        Original ligand chain IDs.
-    output_pdb_file : str or Path
-        Path to output PDB file.
-    output_mapping_file : str or Path
-        Path to output chain mapping JSON.
-    waters : dict[str, list[int]]
-        Water chain IDs mapped to residue numbers.
-    water_mapping_file : str or Path
-        Path to output water mapping JSON.
-    """
-    # Remove waters from the main structure (added back separately)
-    atoms = full_system[~struc.filter_solvent(full_system)]
-
-    # Build chain renaming
-    receptor_chain_index = 0
-    ligand_chain_index = 0
-    name_mapping: dict[str, str] = {}
-
-    for original_name in np.unique(atoms.chain_id):
-        if original_name in receptor_chains:
-            final_name = PDB_RECEPTOR_CHAINS[receptor_chain_index]
-            receptor_chain_index += 1
-        elif original_name in ligand_chains:
-            final_name = PDB_LIGAND_CHAINS[ligand_chain_index]
-            ligand_chain_index += 1
-        else:
-            continue
-        name_mapping[original_name] = final_name
-
-    # Apply renaming
-    new_chain_ids = atoms.chain_id.copy()
-    for old, new in name_mapping.items():
-        new_chain_ids[atoms.chain_id == old] = new
-    atoms.chain_id = new_chain_ids
-
-    # Add water residues
-    water_mapping: dict[str, dict[int, int]] = {}
-    if waters:
-        water_atoms_list = []
-        index = 1
-        for chain_name, resnums in waters.items():
-            water_mapping[chain_name] = {}
-            chain_mask = full_system.chain_id == chain_name
-            for resnum in resnums:
-                res_mask = chain_mask & (full_system.res_id == resnum)
-                if not np.any(res_mask):
-                    continue
-                water_res = full_system[res_mask].copy()
-                water_res.chain_id[:] = WATER_CHAIN_NAME
-                water_res.res_id[:] = index
-                water_atoms_list.append(water_res)
-                water_mapping[chain_name][int(resnum)] = index
-                index += 1
-        if water_atoms_list:
-            water_arr = water_atoms_list[0]
-            for wa in water_atoms_list[1:]:
-                water_arr = water_arr + wa
-            atoms = atoms + water_arr
-
-    # Write PDB
-    pdb_file = pdb_io.PDBFile()
-    pdb_file.set_structure(atoms)
-    pdb_file.write(str(output_pdb_file))
-
-    with open(output_mapping_file, "w") as f:
-        json.dump(name_mapping, f)
-    if waters:
-        with open(water_mapping_file, "w") as f:
-            json.dump(water_mapping, f)
-
-
 def save_cif_file(
     atoms: struc.AtomArray,
     name: str,
@@ -165,3 +111,214 @@ def save_cif_file(
     cif_file = pdbx.CIFFile()
     pdbx.set_structure(cif_file, atoms, data_block=name, include_bonds=True)
     cif_file.write(str(output_cif_file))
+
+
+def _string_list(value: Any) -> list[str]:
+    """Normalize Arrow/Pandas/list values from an annotation row."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, np.ndarray):
+        value = value.tolist()
+    if isinstance(value, (list, tuple, set)):
+        return [str(item) for item in value]
+    try:
+        if bool(np.isnan(value)):
+            return []
+    except (TypeError, ValueError):
+        pass
+    raise TypeError(f"Expected a list-like annotation value, got {type(value)!r}")
+
+
+def _annotation_chains(annotation: AnnotationRow, column: str) -> list[str]:
+    return sorted(set(_string_list(annotation.get(column))))
+
+
+def _water_mask(
+    biounit: struc.AtomArray,
+    annotation: AnnotationRow,
+    selection: WaterSelection,
+) -> np.ndarray:
+    if selection == "none":
+        return np.zeros(biounit.array_length(), dtype=bool)
+    if selection == "all":
+        return struc.filter_solvent(biounit)
+    if selection != "interacting":
+        raise ValueError(f"Unknown water selection: {selection!r}")
+
+    mask = np.zeros(biounit.array_length(), dtype=bool)
+    for encoded_residue in _string_list(annotation.get("system_water_residues")):
+        try:
+            chain_id, residue_number = encoded_residue.rsplit("_", maxsplit=1)
+            residue_id = int(residue_number)
+        except ValueError as exc:
+            raise ValueError(
+                "system_water_residues values must have the form "
+                f"'<instance>.<asym>_<residue>', got {encoded_residue!r}"
+            ) from exc
+        mask |= (biounit.chain_id == chain_id) & (biounit.res_id == residue_id)
+    return mask
+
+
+def _require_chains(
+    biounit: struc.AtomArray,
+    chain_ids: set[str],
+    *,
+    view_name: str,
+) -> None:
+    available = set(str(chain_id) for chain_id in np.unique(biounit.chain_id))
+    missing = chain_ids - available
+    if missing:
+        raise ValueError(
+            f"Cannot reconstruct {view_name}: assembly is missing chains "
+            f"{sorted(missing)}"
+        )
+
+
+def reconstruct_system(
+    source_mmcif: Path | str,
+    annotation: AnnotationRow,
+    *,
+    options: SystemReconstructionOptions = SystemReconstructionOptions(),
+) -> ReconstructedSystem:
+    """Rebuild system and receptor views from a PDB mmCIF and parquet row.
+
+    The annotation row must be one ligand-level row from the system to
+    reconstruct.  System-level columns are repeated for every ligand row, so
+    no grouping or coordinate data from the parquet is required.
+
+    Parameters
+    ----------
+    source_mmcif : Path or str
+        Original PDB mmCIF used for annotation (plain or gzip-compressed).
+    annotation : mapping-like
+        A dictionary or pandas Series containing the system selection columns.
+    options : SystemReconstructionOptions
+        Atom-content choices for the two returned views.
+    """
+    from plinder.data.utils.annotations.cif_utils import (
+        build_biounit,
+        read_mmcif_file,
+    )
+
+    assembly_id = str(annotation.get("system_biounit_id", ""))
+    if not assembly_id:
+        raise ValueError("annotation is missing system_biounit_id")
+    biounit = build_biounit(read_mmcif_file(source_mmcif), assembly_id)
+
+    expected_biounit_chains = set(
+        _annotation_chains(annotation, "system_biounit_chains_asym_id")
+    )
+    actual_biounit_chains = set(
+        str(chain_id) for chain_id in np.unique(biounit.chain_id)
+    )
+    if (
+        options.validate_biounit_chain_ids
+        and expected_biounit_chains
+        and expected_biounit_chains != actual_biounit_chains
+    ):
+        raise ValueError(
+            "Source mmCIF assembly chains differ from the annotation: "
+            f"expected={sorted(expected_biounit_chains)}, "
+            f"actual={sorted(actual_biounit_chains)}"
+        )
+
+    protein_chains = set(
+        _annotation_chains(annotation, "system_protein_chains_asym_id")
+    )
+    ligand_chains = set(
+        _annotation_chains(annotation, "system_ligand_chains_asym_id")
+        or _annotation_chains(annotation, "system_ligand_chains")
+    )
+    other_protein_chains = set(
+        _annotation_chains(annotation, "system_other_protein_chains_asym_id")
+    )
+    other_ligand_chains = set(
+        _annotation_chains(annotation, "system_other_ligand_chains_asym_id")
+    )
+    if not protein_chains:
+        raise ValueError("annotation contains no system protein chains")
+
+    system_chains = set(protein_chains)
+    if options.system_include_ligands:
+        system_chains.update(ligand_chains)
+    if options.system_include_other_protein_chains:
+        system_chains.update(other_protein_chains)
+    if options.system_include_other_ligand_chains:
+        system_chains.update(other_ligand_chains)
+
+    receptor_chains = set(protein_chains)
+    if options.receptor_include_other_protein_chains:
+        receptor_chains.update(other_protein_chains)
+
+    _require_chains(biounit, system_chains, view_name="system")
+    _require_chains(biounit, receptor_chains, view_name="receptor")
+    system_mask = np.isin(biounit.chain_id, list(system_chains))
+    system_mask |= _water_mask(biounit, annotation, options.system_waters)
+    receptor_mask = np.isin(biounit.chain_id, list(receptor_chains))
+    receptor_mask |= _water_mask(biounit, annotation, options.receptor_waters)
+    return ReconstructedSystem(
+        biounit=biounit,
+        system=biounit[system_mask],
+        receptor=biounit[receptor_mask],
+    )
+
+
+def save_reconstructed_system(
+    source_mmcif: Path | str,
+    annotation: AnnotationRow,
+    *,
+    outputs: SystemReconstructionOutputs,
+    options: SystemReconstructionOptions = SystemReconstructionOptions(),
+    overwrite: bool = False,
+) -> dict[str, Path]:
+    """Reconstruct a system and write exactly the requested mmCIF/FASTA files.
+
+    No PDB files or assembly-rotated ligand SDFs are produced.  Output parents
+    are created automatically.  Existing files are rejected unless
+    ``overwrite=True``.
+    """
+    requested = {
+        "system_cif": outputs.system_cif,
+        "receptor_cif": outputs.receptor_cif,
+        "sequences_fasta": outputs.sequences_fasta,
+    }
+    requested = {name: Path(path) for name, path in requested.items() if path}
+    if not requested:
+        raise ValueError("At least one reconstruction output path is required")
+    if len(set(requested.values())) != len(requested):
+        raise ValueError("Reconstruction output paths must be unique")
+    existing = [path for path in requested.values() if path.exists()]
+    if existing and not overwrite:
+        raise FileExistsError(
+            "Refusing to overwrite reconstruction outputs: "
+            + ", ".join(str(path) for path in existing)
+        )
+
+    reconstructed = reconstruct_system(source_mmcif, annotation, options=options)
+    system_id = str(annotation.get("system_id", "plinder_system"))
+    for path in requested.values():
+        path.parent.mkdir(parents=True, exist_ok=True)
+    if "system_cif" in requested:
+        save_cif_file(reconstructed.system, system_id, requested["system_cif"])
+    if "receptor_cif" in requested:
+        save_cif_file(
+            reconstructed.receptor,
+            system_id,
+            requested["receptor_cif"],
+        )
+    if "sequences_fasta" in requested:
+        from plinder.data.utils.annotations.cif_utils import read_mmcif_container
+        from plinder.data.utils.annotations.protein_utils import get_seqres_from_cif
+
+        chain_to_seqres = get_seqres_from_cif(read_mmcif_container(Path(source_mmcif)))
+        receptor_chain_ids = sorted(
+            set(str(chain_id) for chain_id in reconstructed.receptor.chain_id)
+        )
+        with requested["sequences_fasta"].open("w") as fasta:
+            for chain_id in receptor_chain_ids:
+                asym_id = chain_id.split(".", maxsplit=1)[-1]
+                if asym_id in chain_to_seqres:
+                    fasta.write(f">{chain_id}\n{chain_to_seqres[asym_id]}\n")
+    return requested

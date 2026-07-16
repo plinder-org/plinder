@@ -760,10 +760,6 @@ class Ligand(DocBaseModel):
         default_factory=dict,
         description="__Dictionary of {instance}.{chain} to list of interacting water residue numbers",
     )
-    posebusters_result: dict[str, ty.Any] = Field(
-        default_factory=dict,
-        description="__Results from running posebusters with 're-dock'",
-    )
     """Ligand annotation dataclass.
 
     Holds structural, chemical, and interaction annotations for a single
@@ -1605,7 +1601,6 @@ class Ligand(DocBaseModel):
         data: dict[str, ty.Any] = defaultdict(str)
         ignore_fields = set(
             [
-                "posebusters_result",
                 "interactions",
                 "protein_chains",
                 "interacting_ligands",
@@ -1623,10 +1618,15 @@ class Ligand(DocBaseModel):
             name = f"ligand_{field}"
             data[name] = getattr(self, field, None)
 
-        # posebusters
-        if self.posebusters_result is not None:
-            for k in self.posebusters_result:
-                data[f"ligand_posebusters_{k}"] = self.posebusters_result[k]
+        # These internal selections are required to reconstruct a system
+        # deterministically from the source mmCIF and an annotation row.
+        data["ligand_residue_numbers"] = sorted(set(self.residue_numbers))
+        data["ligand_water_residues"] = sorted(
+            f"{chain_id}_{residue_number}"
+            for chain_id, residue_numbers in self.waters.items()
+            for residue_number in set(residue_numbers)
+        )
+
         # interactions
         data.update(self.format_interactions())
         # chains

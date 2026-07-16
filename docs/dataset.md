@@ -14,6 +14,7 @@ sd_hide_title: true
     |-- index # Consolidated tabular annotations
     |   |-- annotation_table.parquet
     |   |-- annotation_table_nonredundant.parquet
+    |   |-- entry_chains.parquet
     |-- systems  # Structure files for all systems (split by `two_char_code` and zipped)
     |   |-- {two_char_code}.zip
     |-- clusters # Pre-calculated cluster labels derived from the protein similarity dataset
@@ -71,6 +72,7 @@ Tables that lists all systems along with their annotations.
 
 - `annotation_table.parquet`: Lists all systems and their annotations.
 - `annotation_table_nonredundant.parquet`: Subset of systems without redundant systems.
+- `entry_chains.parquet`: One row per protein chain with the entry, entity, holo partition flag, and UniProt mappings needed to construct the Foldseek/MMseqs sub-databases.
 
 :::{include} table.html
 :::
@@ -78,22 +80,48 @@ Tables that lists all systems along with their annotations.
 `Mandatory`: The column has a non-empty, non-NaN value in for all PLINDER systems.
 `Example`: An example non-empty, non-NaN value for the given column in a PLINDER system.
 
-### Systems (`systems/`)
+### Canonical ligand structures
 
-This directory contains all the systems used in the dataset. The systems are grouped into zipped subdirectories by using two penultimate characters of PDB code (`two_char_code`). The purpose of this grouping is to make loading and querying speed palatable.
-
-Each unzipped subdirectory, contains folders named by `system_id` that contain the structure files.
+PLINDER stores one canonical asymmetric-unit SDF for each ligand chain. Biological-assembly copies are not stored because they contain the same conformation under different rigid-body transforms.
 
 ```bash
 |-- {two_char_code}
-    |-- {system_id}
-        |-- chain_mapping.json # Mapping between the chains in the receptor and the chains in the system
-        |-- ligand_files # Mapping between the ligand in the receptor and the ligands in the system
-        |-- receptor.cif  # Receptor mmcif file
-        |-- receptor.pdb # Receptor pdb file
-        |-- sequences.fasta # Receptor sequence fasta
-        |-- system.cif # System mmcif file
-        |-- water_mapping.json # Receptor binding site water map json file
+    |-- {pdb_id}
+        |-- ligand_files
+            |-- {asym_id}.sdf
+```
+
+System and receptor mmCIF files are reconstructed on demand from the original PDB mmCIF and the system selection metadata in the annotation parquet. Callers explicitly choose whether to include interacting or all waters, other biological-assembly chains, and which output files to write.
+
+```python
+from pathlib import Path
+
+import pandas as pd
+
+from plinder.data.utils.annotations.save_utils import (
+    SystemReconstructionOptions,
+    SystemReconstructionOutputs,
+    save_reconstructed_system,
+)
+
+annotation = pd.read_parquet("annotation_table.parquet")
+row = annotation.query("system_id == '2y4i__1__1.B__1.E_1.F'").iloc[0]
+save_reconstructed_system(
+    "pdb_00002y4i_xyz-enrich.cif.gz",
+    row,
+    outputs=SystemReconstructionOutputs(
+        system_cif=Path("system.cif"),
+        receptor_cif=Path("receptor.cif"),
+        # Leave an output as None when it should not be written.
+        sequences_fasta=None,
+    ),
+    options=SystemReconstructionOptions(
+        system_waters="interacting",  # "none", "interacting", or "all"
+        receptor_waters="none",
+        system_include_other_protein_chains=False,
+        system_include_other_ligand_chains=False,
+    ),
+)
 ```
 
 ### Clusters (`clusters/`)
@@ -355,63 +383,6 @@ This directory contains parquet files linking PLINDER systems to their apo and p
 - - lddt_lp_wave
   - float
   - Weighted average lDDT score for ligand poses
-- - posebusters_mol_pred_loaded
-  - bool
-  - PoseBusters metric: boolean indicator of whether the predicted ligand could be loaded
-- - posebusters_mol_cond_loaded
-  - bool
-  - PoseBusters metric: boolean indicator of whether the conditional ligand could be loaded
-- - posebusters_sanitization
-  - bool
-  - PoseBusters metric: boolean indicator of whether the ligand could be sanitized
-- - posebusters_all_atoms_connected
-  - bool
-  - PoseBusters metric: boolean indicator of whether all atoms in the ligand are connected
-- - posebusters_bond_lengths
-  - bool
-  - PoseBusters metric: boolean indicator of whether all bond lengths in the ligand are within 4 standard deviations of the mean
-- - posebusters_bond_angles
-  - bool
-  - PoseBusters metric: boolean indicator of whether all bond angles in the ligand are within 4 standard deviations of the mean
-- - posebusters_internal_steric_clash
-  - bool
-  - PoseBusters metric: boolean indicator of whether there are no internal steric clashes in the ligand
-- - posebusters_aromatic_ring_flatness
-  - bool
-  - PoseBusters metric: boolean indicator of whether all aromatic rings in the ligand are flat
-- - posebusters_double_bond_flatness
-  - bool
-  - PoseBusters metric: boolean indicator of whether all double bonds in the ligand are flat
-- - posebusters_internal_energy
-  - bool
-  - PoseBusters metric: boolean indicator of whether the internal energy of the ligand is below 0 kcal/mol
-- - posebusters_protein-ligand_maximum_distance
-  - bool
-  - PoseBusters metric: boolean indicator of whether the maximum distance between the ligand and the protein is less than 5 Angstrom
-- - posebusters_minimum_distance_to_protein
-  - bool
-  - PoseBusters metric: boolean indicator of whether the minimum distance between the ligand and the protein is greater than 1.5 Angstrom
-- - posebusters_minimum_distance_to_organic_cofactors
-  - float
-  - PoseBusters metric: Minimum distance between the ligand and any organic cofactor
-- - posebusters_minimum_distance_to_inorganic_cofactors
-  - bool
-  - PoseBusters metric: Minimum distance between the ligand and any inorganic cofactor
-- - posebusters_minimum_distance_to_waters
-  - float
-  - PoseBusters metric: Minimum distance between the ligand and any water molecule
-- - posebusters_volume_overlap_with_protein
-  - float
-  - PoseBusters metric: Fraction of ligand volume that overlaps with the protein
-- - posebusters_volume_overlap_with_organic_cofactors
-  - bool
-  - PoseBusters metric: boolean indicator of whether the share of ligand volume that intersects with the organic cofactor is less than 7.5%. The volumes are defined by the van der Waals radii around the heavy atoms scaled by 0.8.
-- - posebusters_volume_overlap_with_inorganic_cofactors
-  - bool
-  - PoseBusters metric: boolean indicator of whether the share of ligand volume that intersects with the inorganic cofactor is less than 7.5%. The volumes are defined by the van der Waals radii around the heavy atoms scaled by 0.8.
-- - posebusters_volume_overlap_with_waters
-  - bool
-  - PoseBusters metric: boolean indicator of whether the share of ligand volume that intersects with the linked system waters is less than 7.5%. The volumes are defined by the van der Waals radii around the heavy atoms scaled by 0.8.
 - - fraction_reference_proteins_mapped
   - float
   - Fraction of reference protein chains with corresponding model chains
@@ -453,10 +424,9 @@ It is used in splitting to make sure that only successfully computed systems are
 
 Each file is a CSV with a single column: `pdb_id`.
 
-#### Raw annotations (`entries/`)
+#### Raw annotation parts (`raw_entries/`)
 
-This directory contains intermediate raw annotation files prior to consolidation. The files are grouped into zipped subdirectories by using `two_char_code`.
-Each subdirectory, contains `{pdb_id}.json` files with raw annotations for every system found in given `pdb_id`.
+During ingest this directory contains one `{pdb_id}.parquet` annotation part and one per-entry directory containing `entry_chains.parquet` plus canonical ligand SDFs, grouped by `two_char_code`. The join step consolidates the ligand-level parts into `index/annotation_table.parquet` and the normalized chain rows into `index/entry_chains.parquet`; entry JSON archives are not produced.
 
 #### Small molecule fingerprints (`fingerprints/`)
 

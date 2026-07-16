@@ -29,7 +29,7 @@ from plinder.core.structure.vendored import (
     get_seq_aligned_structures,
     invert_chain_seq_map,
     resn2seq,
-    write_pdb,
+    write_cif,
 )
 from plinder.core.utils import constants as pc
 from plinder.core.utils.dataclass import stringify_dataclass
@@ -270,12 +270,12 @@ class Structure(BaseModel):
             return None
 
     def save_to_disk(self, filepath: Path | None = None) -> None:
-        """Write Structure Atomarray to a PDB file.
+        """Write the structure AtomArray to an mmCIF file.
 
         Parameters
         ----------
         filepath : Path | None
-            Filepath to output PDB.
+            Filepath to output mmCIF.
             If not provided, will write to self.protein_path,
             potentially overwriting if the file already exists!
 
@@ -286,7 +286,7 @@ class Structure(BaseModel):
         """
         if not filepath:
             filepath = self.protein_path
-        write_pdb(self.protein_atom_array, filepath)
+        write_cif(self.protein_atom_array, filepath)
 
     def filter(
         self,

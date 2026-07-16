@@ -22,6 +22,8 @@ from plinder.core.structure.atoms import is_hydrogen_isotope
 from plinder.core.utils.config import get_config
 from plinder.core.utils.log import setup_logger
 from plinder.data.utils.annotations.cif_utils import (
+    apply_struct_conn_bonds,
+    build_biounit,
     get_chain_external_mappings,
     get_entry_info,
     get_model_count,
@@ -44,11 +46,7 @@ from plinder.data.utils.annotations.protein_utils import (
     _is_polypeptide,
     detect_ligand_chains,
 )
-from plinder.data.utils.annotations.save_utils import (
-    save_cif_file,
-    save_ligands,
-    save_pdb_file,
-)
+from plinder.data.utils.annotations.save_utils import save_ligands
 from plinder.data.utils.annotations.utils import DocBaseModel
 
 LOG = setup_logger(__name__)
@@ -76,7 +74,7 @@ def remove_alphabets(x: str) -> int:
     int
     """
 
-    return int(re.sub("[^0-9]", "", x))
+    return int(re.sub("[^0-9]", "", str(x)))
 
 
 @dataclass
@@ -314,22 +312,27 @@ class System(DocBaseModel):
         self,
         chain_type: str,
         chains: dict[str, Chain],
+        sub_chains: list[str] | None = None,
     ) -> dict[str, ty.Any]:
-        if chain_type == "protein":
-            sub_chains = self.protein_chains_asym_id
-        elif chain_type == "ligand":
-            sub_chains = self.ligand_chains
-        else:
-            raise ValueError(f"chain_type={chain_type} not understood")
-        sub_chain_list = [ch.split(".") for ch in sub_chains]
+        if sub_chains is None:
+            if chain_type == "protein":
+                sub_chains = self.protein_chains_asym_id
+            elif chain_type == "ligand":
+                sub_chains = self.ligand_chains
+            else:
+                raise ValueError(f"chain_type={chain_type} requires sub_chains")
+        sub_chain_list = [ch.split(".", maxsplit=1) for ch in sub_chains]
 
         sub_chains_data = [
             chains[c].format(int(instance)) for instance, c in sub_chain_list
         ]
+        if chain_type == "other":
+            for sub_chain, (_, asym_id) in zip(sub_chains_data, sub_chain_list):
+                sub_chain["chain_type"] = chains[asym_id].chain_type_str
 
         if len(sub_chains_data) == 0:
             return {}
-        data: dict[str, list[str]] = defaultdict(list)
+        data: dict[str, list[ty.Any]] = defaultdict(list)
         for sub_chain in sub_chains_data:
             for key in sub_chain:
                 data[f"system_{chain_type}_chains_{key}"].append(sub_chain[key])
@@ -442,6 +445,9 @@ class System(DocBaseModel):
         self,
         chains: dict[str, Chain],
         entry_pass_criteria: bool | None,
+        biounit_chain_ids: list[str] | None = None,
+        water_chains: list[str] | None = None,
+        ligand_like_chains: set[str] | None = None,
         criteria: QualityCriteria = QualityCriteria(),
     ) -> dict[str, ty.Any]:
         data: dict[str, ty.Any] = defaultdict(str)
@@ -462,6 +468,54 @@ class System(DocBaseModel):
         data.update(self.format_validation(entry_pass_criteria, criteria))
         for chain_type in ["protein", "ligand"]:
             data.update(self.format_chains(chain_type, chains))
+
+        biounit_chain_ids = sorted(biounit_chain_ids or [])
+        water_chains = water_chains or []
+        ligand_like_chains = ligand_like_chains or set()
+        biounit_water_chains = [
+            chain_id
+            for chain_id in biounit_chain_ids
+            if chain_id.split(".", maxsplit=1)[-1] in water_chains
+        ]
+        biounit_non_water_chains = [
+            chain_id
+            for chain_id in biounit_chain_ids
+            if chain_id not in biounit_water_chains
+        ]
+        system_chains = set(self.protein_chains_asym_id + self.ligand_chains)
+        other_chains = [
+            chain_id
+            for chain_id in biounit_non_water_chains
+            if chain_id not in system_chains
+        ]
+        other_ligand_chains = [
+            chain_id
+            for chain_id in other_chains
+            if chain_id.split(".", maxsplit=1)[-1] in ligand_like_chains
+        ]
+        other_protein_chains = [
+            chain_id for chain_id in other_chains if chain_id not in other_ligand_chains
+        ]
+        data["system_biounit_chains_asym_id"] = biounit_chain_ids
+        data["system_biounit_non_water_chains_asym_id"] = biounit_non_water_chains
+        data["system_biounit_water_chains_asym_id"] = biounit_water_chains
+        data["system_other_chains_asym_id"] = other_chains
+        data["system_other_protein_chains_asym_id"] = other_protein_chains
+        data["system_other_ligand_chains_asym_id"] = other_ligand_chains
+        data["system_water_residues"] = sorted(
+            f"{chain_id}_{residue_number}"
+            for chain_id, residue_numbers in self.waters.items()
+            for residue_number in set(residue_numbers)
+        )
+        data.update(self.format_chains("other", chains, other_chains))
+        for field in [
+            "auth_id",
+            "entity_id",
+            "length",
+            "num_unresolved_residues",
+            "chain_type",
+        ]:
+            data.setdefault(f"system_other_chains_{field}", [])
         return data
 
     @cached_property
@@ -596,76 +650,6 @@ class System(DocBaseModel):
         if include_waters and len(self.waters):
             selection += f" or {self.select_waters()}"
         return selection
-
-    def save_system(
-        self,
-        chain_to_seqres: dict[str, str],
-        biounit: struc.AtomArray,
-        system_folder: Path,
-        include_waters: bool = True,
-    ) -> None:
-        import numpy as np
-
-        system_folder.mkdir(exist_ok=True)
-
-        # Save FASTA
-        with open(system_folder / "sequences.fasta", "w") as f:
-            for i_c in self.protein_chains_asym_id:
-                c = i_c.split(".")[1]
-                if c in chain_to_seqres:
-                    f.write(f">{i_c}\n")
-                    f.write(chain_to_seqres[c] + "\n")
-
-        # Select system atoms (protein + ligand chains)
-        all_chain_ids = set(self.protein_chains_asym_id + self.ligand_chains)
-        system_mask = np.isin(biounit.chain_id, list(all_chain_ids))
-        if include_waters and self.waters:
-            for w_chain, w_resnums in self.waters.items():
-                water_mask = (biounit.chain_id == w_chain) & np.isin(
-                    biounit.res_id, w_resnums
-                )
-                system_mask |= water_mask
-        system_atoms = biounit[system_mask]
-
-        # Save ligand SDFs
-        (system_folder / "ligand_files").mkdir(exist_ok=True)
-        save_ligands(
-            system_atoms,
-            self.ligand_chains,
-            system_folder / "ligand_files",
-        )
-
-        # Save system CIF
-        save_cif_file(system_atoms, self.id, system_folder / "system.cif")
-
-        # Select receptor atoms (protein + waters)
-        receptor_mask = np.isin(
-            system_atoms.chain_id, list(self.protein_chains_asym_id)
-        )
-        if include_waters and self.waters:
-            for w_chain, w_resnums in self.waters.items():
-                water_mask = (system_atoms.chain_id == w_chain) & np.isin(
-                    system_atoms.res_id, w_resnums
-                )
-                receptor_mask |= water_mask
-        receptor_atoms = system_atoms[receptor_mask]
-
-        # Save receptor CIF
-        save_cif_file(receptor_atoms, self.id, system_folder / "receptor.cif")
-
-        # Save receptor PDB with chain renaming
-        try:
-            save_pdb_file(
-                receptor_atoms,
-                self.protein_chains_asym_id,
-                [],
-                system_folder / "receptor.pdb",
-                system_folder / "chain_mapping.json",
-                self.waters if include_waters else {},
-                system_folder / "water_mapping.json",
-            )
-        except Exception as e:
-            LOG.error(f"save_system: Error saving system in PDB format {self.id}: {e}")
 
     def set_validation(
         self,
@@ -802,6 +786,10 @@ class Entry(DocBaseModel):
     water_chains: list[str] = Field(
         default_factory=list, description="__Water chains in the entry"
     )
+    biounit_chain_ids: dict[str, list[str]] = Field(
+        default_factory=dict,
+        description="__Resolved biological-assembly chain instances by assembly ID",
+    )
     symmetry_mate_contacts: SymmetryMateContacts = Field(
         default_factory=dict, description="__Symmetry mate contacts in the entry"
     )
@@ -846,28 +834,6 @@ class Entry(DocBaseModel):
             }
         return self
 
-    @classmethod
-    def from_json(
-        cls,
-        entry_json: Path,
-        clear_non_pocket_residues: bool = False,
-        load_for_scoring: bool = False,
-        max_protein_chains: int = 5,
-        max_ligand_chains: int = 5,
-    ) -> Entry:
-        """
-        Load an entry from a JSON file and prune it. See prune
-        for more details.
-        """
-        with entry_json.open("rb") as f:
-            entry = cls.model_validate_json(f.read())
-        return entry.prune(
-            clear_non_pocket_residues=clear_non_pocket_residues,
-            load_for_scoring=load_for_scoring,
-            max_protein_chains=max_protein_chains,
-            max_ligand_chains=max_ligand_chains,
-        )
-
     def _populate_chains(
         self,
         atoms: struc.AtomArray,
@@ -899,25 +865,14 @@ class Entry(DocBaseModel):
     def _finalize(
         self,
         ligands: dict[str, Ligand],
-        biounits: dict[str, struc.AtomArray],
-        save_folder: Path | None,
-        max_protein_chains_to_save: int,
-        max_ligand_chains_to_save: int,
         min_shared_pocket_members: int = 3,
     ) -> None:
-        """Label crystal contacts, set systems, and save."""
+        """Label crystal contacts and set systems."""
         if self.symmetry_mate_contacts:
             for ligand in ligands.values():
                 ligand.label_crystal_contacts(self.symmetry_mate_contacts)
         self.set_systems(ligands, min_shared_pocket_members=min_shared_pocket_members)
         self.label_chains()
-        if save_folder is not None:
-            self.save_systems(
-                biounits,
-                save_folder,
-                max_protein_chains_to_save,
-                max_ligand_chains_to_save,
-            )
 
     def _collect_ligands_from_biounit(
         self,
@@ -980,10 +935,7 @@ class Entry(DocBaseModel):
         min_polymer_size: int = 12,
         data_dir: Path | None = None,
         save_folder: Path | None = None,
-        max_protein_chains_to_save: int = 5,
-        max_ligand_chains_to_save: int = 5,
         plip_complex_threshold: float = 10.0,
-        skip_save_systems: bool = False,
         symmetry_mate_contact_threshold: float = 5.0,
         min_shared_pocket_members: int = 3,
     ) -> Entry:
@@ -1003,15 +955,10 @@ class Entry(DocBaseModel):
             Shorter polymers are classified as ligands.  Set to 12 as
             the minimum length for meaningful MMseqs2/Foldseek searches.
         save_folder : Path
-            Path to save files
-        max_protein_chains_to_save : int
-            Maximum number of receptor chains to save
-        max_ligand_chains_to_save : int
-            Maximum number of ligand chains to save
+            Root directory for one canonical ASU ligand SDF per chain.
+            Files are written to ``<save_folder>/<pdb_id>/ligand_files``.
         plip_complex_threshold : float
             Maximum distance (Å) from ligand for interaction analysis
-        skip_save_systems: bool = False
-            skips saving system files
         min_shared_pocket_members : int
             Minimum shared pocket residues to group non-artifact ligands.
 
@@ -1057,6 +1004,11 @@ class Entry(DocBaseModel):
             cif_file_obj, model=1, use_author_fields=False, include_bonds=True
         )
         atoms = atoms[~is_hydrogen_isotope(atoms.element)]
+        if atoms.bonds is None:
+            raise ValueError(
+                f"{pdb_id}: biotite returned no bonds despite include_bonds=True"
+            )
+        apply_struct_conn_bonds(atoms, cif_data)
         chain_to_seqres = get_seqres_from_cif(cif_data)
 
         entry = cls(
@@ -1090,6 +1042,14 @@ class Entry(DocBaseModel):
             entry.add_panther(data_dir / "dbs" / "panther")
             entry.add_kinase(data_dir / "dbs" / "kinase" / "kinase_uniprotac.parquet")
         entry.ligand_like_chains = detect_ligand_chains(entry, min_polymer_size)
+        if save_folder is not None:
+            canonical_ligand_dir = save_folder / entry.pdb_id / "ligand_files"
+            canonical_ligand_dir.mkdir(parents=True, exist_ok=True)
+            save_ligands(
+                atoms,
+                sorted(entry.ligand_like_chains),
+                canonical_ligand_dir,
+            )
         protein_chains = [c for c in entry.chains if c not in entry.ligand_like_chains]
         interface_proximal_gaps = annotate_interface_gaps(
             cif_file,
@@ -1097,76 +1057,17 @@ class Entry(DocBaseModel):
             ligand_chains=list(entry.ligand_like_chains.keys()),
         )
         ligands: dict[str, Ligand] = {}
-        biounits: dict[str, struc.AtomArray] = {}
-
-        # Get CIFFile for assembly generation
-        import gzip
-
-        if str(cif_file).endswith(".gz"):
-            with gzip.open(str(cif_file), "rt", encoding="utf-8") as f:
-                cif_file_obj = pdbx.CIFFile.read(f)
-        else:
-            cif_file_obj = pdbx.CIFFile.read(str(cif_file))
 
         assembly_ids = pdbx.list_assemblies(cif_file_obj)
         for assembly_id in assembly_ids:
             try:
-                biounit = pdbx.get_assembly(
-                    cif_file_obj,
-                    assembly_id=assembly_id,
-                    model=1,
-                    use_author_fields=False,
-                    include_bonds=True,
-                )
+                biounit = build_biounit(cif_file_obj, assembly_id)
             except Exception as e:
                 LOG.warning(f"Could not build assembly {assembly_id}: {e}")
                 continue
-            biounit = biounit[~is_hydrogen_isotope(biounit.element)]
-
-            if biounit.bonds is None:
-                # ``include_bonds=True`` returning ``None`` means biotite
-                # derived **no bonds at all** for the assembly — every
-                # residue lookup failed. This indicates a fundamentally
-                # broken CIF (no _chem_comp_bond, no _struct_conn, and
-                # no CCD coverage for any residue), not just missing
-                # bonds for some non-standard residues.
-                raise ValueError(
-                    f"{pdb_id} assembly {assembly_id}: biotite returned "
-                    "no bonds at all despite include_bonds=True. The CIF "
-                    "is corrupted or has no bond information of any kind."
-                )
-            from plinder.data.utils.annotations.cif_utils import apply_struct_conn_bonds
-
-            # ``include_bonds=True`` loads both intra-residue bonds
-            # (``_chem_comp_bond`` / CCD fallback) and inter-residue bonds
-            # (``_struct_conn``). ``apply_struct_conn_bonds`` then
-            # supplements with any ``covale`` rows biotite may have
-            # missed (idempotent — skips bonds already present).
-            apply_struct_conn_bonds(biounit, cif_data)
-
-            # Assign instance prefixes to chain IDs
-            # Biotite merges all symmetry copies under the same chain ID.
-            # Detect copies by comparing assembly size to ASU size and
-            # assign sequential instance numbers.
-            asu_atoms = pdbx.get_structure(
-                cif_file_obj, model=1, use_author_fields=False
+            entry.biounit_chain_ids[assembly_id] = sorted(
+                str(chain_id) for chain_id in np.unique(biounit.chain_id)
             )
-            asu_atoms = asu_atoms[~is_hydrogen_isotope(asu_atoms.element)]
-            n_asu = len(asu_atoms)
-            n_total = len(biounit)
-            n_copies = max(1, n_total // n_asu) if n_asu > 0 else 1
-
-            if n_copies > 1:
-                new_chain_ids = []
-                for copy_idx in range(n_copies):
-                    start = copy_idx * n_asu
-                    end = min(start + n_asu, n_total)
-                    instance = copy_idx + 1
-                    for i in range(start, end):
-                        new_chain_ids.append(f"{instance}.{biounit.chain_id[i]}")
-                biounit.chain_id = np.array(new_chain_ids)
-            else:
-                biounit.chain_id = np.array([f"1.{c}" for c in biounit.chain_id])
             new_ligands = entry._collect_ligands_from_biounit(
                 biounit,
                 assembly_id,
@@ -1177,13 +1078,8 @@ class Entry(DocBaseModel):
                 data_dir,
             )
             ligands.update(new_ligands)
-            biounits[assembly_id] = biounit
         entry._finalize(
             ligands,
-            biounits,
-            save_folder if not skip_save_systems else None,
-            max_protein_chains_to_save,
-            max_ligand_chains_to_save,
             min_shared_pocket_members=min_shared_pocket_members,
         )
         return entry
@@ -1199,8 +1095,6 @@ class Entry(DocBaseModel):
         min_polymer_size: int = 12,
         plip_complex_threshold: float = 10.0,
         save_folder: Path | None = None,
-        max_protein_chains_to_save: int = 5,
-        max_ligand_chains_to_save: int = 5,
         min_shared_pocket_members: int = 3,
         save_fixed_cif: Path | None = None,
     ) -> Entry:
@@ -1225,11 +1119,7 @@ class Entry(DocBaseModel):
         min_polymer_size : int, optional
             Minimum residue count for a chain to be polymer (not ligand), by default 10
         save_folder : Path | None, optional
-            Directory to save system files, by default None (no saving)
-        max_protein_chains_to_save : int, optional
-            Maximum number of receptor chains to save, by default 5
-        max_ligand_chains_to_save : int, optional
-            Maximum number of ligand chains to save, by default 5
+            Root directory for canonical ASU ligand SDFs, by default None.
         save_fixed_cif : Path | None, optional
             If provided and the CIF needed bond-order enrichment, write
             the enriched copy to this path. The input CIF at ``cif_file``
@@ -1329,8 +1219,6 @@ class Entry(DocBaseModel):
                 "bond information (_chem_comp_bond, _struct_conn, and CCD "
                 "coverage are all absent)."
             )
-        from plinder.data.utils.annotations.cif_utils import apply_struct_conn_bonds
-
         apply_struct_conn_bonds(atoms, cif_data)
         chain_to_seqres = get_seqres_from_cif(cif_data)
 
@@ -1340,6 +1228,14 @@ class Entry(DocBaseModel):
         )
         entry._populate_chains(atoms, cif_data)
         entry.ligand_like_chains = detect_ligand_chains(entry, min_polymer_size)
+        if save_folder is not None:
+            canonical_ligand_dir = save_folder / entry.pdb_id / "ligand_files"
+            canonical_ligand_dir.mkdir(parents=True, exist_ok=True)
+            save_ligands(
+                atoms,
+                sorted(entry.ligand_like_chains),
+                canonical_ligand_dir,
+            )
         protein_chains = [c for c in entry.chains if c not in entry.ligand_like_chains]
         interface_proximal_gaps = annotate_interface_gaps(
             cif_file,
@@ -1349,6 +1245,9 @@ class Entry(DocBaseModel):
         # Create single biounit with "1." prefix on chain IDs
         biounit = atoms.copy()
         biounit.chain_id = np.array([f"1.{c}" for c in biounit.chain_id])
+        entry.biounit_chain_ids["1"] = sorted(
+            str(chain_id) for chain_id in np.unique(biounit.chain_id)
+        )
         ligands = entry._collect_ligands_from_biounit(
             biounit,
             "1",  # single assembly; custom CIFs lack _pdbx_struct_assembly
@@ -1361,10 +1260,6 @@ class Entry(DocBaseModel):
         )
         entry._finalize(
             ligands,
-            {"1": biounit},
-            save_folder,
-            max_protein_chains_to_save,
-            max_ligand_chains_to_save,
             min_shared_pocket_members=min_shared_pocket_members,
         )
         return entry
@@ -1510,12 +1405,15 @@ class Entry(DocBaseModel):
                 self.chains[c].auth_id
                 for c in self.chains
                 if not self.chains[c].holo
-                and not self.chains[c].entity_id in holo_entities
+                and self.chains[c].entity_id not in holo_entities
+                and _is_polypeptide(self.chains[c].chain_type_str)
             )
         elif chain_type == "pred":
             chains = set()
             for c in self.chains:
-                if self.chains[c].holo:
+                if self.chains[c].holo and _is_polypeptide(
+                    self.chains[c].chain_type_str
+                ):
                     chains |= set(self.chains[c].mappings.get("UniProt", {}))
         if aln_type == "foldseek":
             if chain_type == "pred":
@@ -1615,6 +1513,28 @@ class Entry(DocBaseModel):
             data["entry_pass_validation_criteria"] = self.pass_criteria
         return data
 
+    def chains_to_df(self) -> pd.DataFrame:
+        """Return one normalized metadata row for each protein entry chain."""
+        rows = []
+        for chain_id in sorted(self.chains):
+            chain = self.chains[chain_id]
+            if not _is_polypeptide(chain.chain_type_str):
+                continue
+            rows.append(
+                {
+                    "entry_pdb_id": self.pdb_id,
+                    "chain_asym_id": chain.asym_id,
+                    "chain_auth_id": chain.auth_id,
+                    "chain_entity_id": chain.entity_id,
+                    "chain_type": chain.chain_type_str,
+                    "chain_length": chain.length,
+                    "chain_num_unresolved_residues": chain.num_unresolved_residues,
+                    "chain_is_holo": chain.holo,
+                    "chain_uniprot_ids": sorted(chain.mappings.get("UniProt", {})),
+                }
+            )
+        return pd.DataFrame(rows)
+
     def to_df(self) -> pd.DataFrame:
         """
         Convert entry data object to pd.DataFrame
@@ -1630,38 +1550,18 @@ class Entry(DocBaseModel):
         rows = []
         entry_data = self.format()
         for system in self.systems:
-            system_data = self.systems[system].format(self.chains, self.pass_criteria)
+            annotation = self.systems[system]
+            system_data = annotation.format(
+                self.chains,
+                self.pass_criteria,
+                biounit_chain_ids=self.biounit_chain_ids.get(annotation.biounit_id, []),
+                water_chains=self.water_chains,
+                ligand_like_chains=set(self.ligand_like_chains),
+            )
             for ligand in self.systems[system].ligands:
                 ligand_data = ligand.format(self.chains)
                 rows.append({**entry_data, **system_data, **ligand_data})
         return pd.DataFrame(rows)
-
-    def iter_systems(
-        self, max_protein_chains: int, max_ligand_chains: int
-    ) -> ty.Iterator[tuple[str, System]]:
-        for system_id, system in self.systems.items():
-            if (
-                system.system_type == "holo"
-                and len(system.protein_chains_asym_id) <= max_protein_chains
-                and len(system.ligand_chains) <= max_ligand_chains
-            ):
-                yield system_id, system
-
-    def save_systems(
-        self,
-        biounits: dict[str, struc.AtomArray],
-        save_folder: Path,
-        max_protein_chains: int = 5,
-        max_ligand_chains: int = 5,
-    ) -> None:
-        """Save system files."""
-        for _, system in self.iter_systems(max_protein_chains, max_ligand_chains):
-            save_folder_system = save_folder / system.id
-            system.save_system(
-                self.chain_to_seqres,
-                biounits[system.biounit_id],
-                save_folder_system,
-            )
 
     def clear_non_pocket_residues(self) -> None:
         """

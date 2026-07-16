@@ -31,16 +31,99 @@ SDF_FILE = (
 )
 
 
-def test_entry_views_accept_annotation_dataframe(cif_2gdo) -> None:
+def test_entry_views_accept_annotation_dataframe(cif_2gdo, tmp_path) -> None:
     from plinder.data.utils.annotations.aggregate_annotations import Entry
 
     entry = Entry.from_cif_file(cif_2gdo)
-    view = entry_views_from_df(entry.to_df())[entry.pdb_id]
+    annotation = entry.to_df()
+    assert not any(column.startswith("entry_chains_") for column in annotation)
+    entry_chains = entry.chains_to_df()
+    assert len(entry_chains) <= len(entry.chains)
+    assert entry_chains["chain_type"].str.lower().str.contains("polypeptide").all()
+
+    # Exercise the Arrow representation used by the ingest pipeline,
+    # including the normalized nested UniProt accession lists.
+    annotation_path = tmp_path / "annotation.parquet"
+    chain_path = tmp_path / "entry_chains.parquet"
+    annotation.to_parquet(annotation_path, index=False)
+    entry_chains.to_parquet(chain_path, index=False)
+    view = entry_views_from_df(
+        pd.read_parquet(annotation_path),
+        entry_chains=pd.read_parquet(chain_path),
+    )[entry.pdb_id]
 
     assert view.systems
     for system_id, system in entry.systems.items():
         expected = {ligand.instance_chain for ligand in system.ligands}
         assert set(view.systems[system_id].ligands) == expected
+    for chain_type in ["holo", "apo", "pred"]:
+        for aln_type in ["foldseek", "mmseqs"]:
+            assert sorted(view.chains_for_alignment(chain_type, aln_type)) == sorted(
+                entry.chains_for_alignment(chain_type, aln_type)
+            )
+
+
+def test_entry_view_builds_holo_apo_and_pred_alignment_ids() -> None:
+    system = SystemView(
+        id="1abc__1__1.A__1.L",
+        pdb_id="1abc",
+        system_type="holo",
+        protein_chains_asym_id=["1.A"],
+        proper_num_pocket_residues=1,
+        proper_num_interactions=1,
+        proper_num_unique_interactions=1,
+    )
+    view = EntryView(
+        pdb_id="1abc",
+        chains={
+            "A": ChainView(
+                asym_id="A",
+                auth_id="R",
+                entity_id="1",
+                chain_type="polypeptide(L)",
+                length=200,
+                holo=True,
+                uniprot_ids=("P12345",),
+            ),
+            "B": ChainView(
+                asym_id="B",
+                auth_id="B",
+                entity_id="2",
+                chain_type="polypeptide(L)",
+                length=150,
+                holo=False,
+            ),
+            # A non-holo copy of a holo entity must not enter the apo DB.
+            "C": ChainView(
+                asym_id="C",
+                auth_id="C",
+                entity_id="1",
+                chain_type="polypeptide(L)",
+                length=200,
+                holo=False,
+            ),
+            # Search DBs are protein-only.
+            "N": ChainView(
+                asym_id="N",
+                auth_id="N",
+                entity_id="3",
+                chain_type="polyribonucleotide",
+                length=80,
+                holo=False,
+            ),
+        },
+        systems={system.id: system},
+        author_to_asym={"R": "A", "B": "B", "C": "C"},
+    )
+
+    assert view.chains_for_alignment("holo", "foldseek") == [
+        "pdb_00001abc_xyz-enrich_R"
+    ]
+    assert view.chains_for_alignment("holo", "mmseqs") == ["1abc_R"]
+    assert view.chains_for_alignment("apo", "foldseek") == ["pdb_00001abc_xyz-enrich_B"]
+    assert view.chains_for_alignment("apo", "mmseqs") == ["1abc_B"]
+    assert view.chains_for_alignment("pred", "foldseek") == ["AF-P12345-F1-model_v4_A"]
+    assert view.chains_for_alignment("pred", "mmseqs") == ["P12345"]
 
 
 def test_entry_views_keep_ligand_pockets_separate() -> None:
@@ -228,7 +311,7 @@ def test_ligand_pair_shape_scores_gate_sdf_access_and_cache(
     assert resolved == [query.id, target.id]
 
 
-def test_ligand_sdf_resolver_prefers_canonical_entry_path(tmp_path) -> None:
+def test_ligand_sdf_resolver_uses_only_canonical_entry_path(tmp_path) -> None:
     scorer = Scorer(
         entries={},
         source_to_full_db_file={},
@@ -240,11 +323,12 @@ def test_ligand_sdf_resolver_prefers_canonical_entry_path(tmp_path) -> None:
     legacy = (
         tmp_path / "raw_entries" / "ab" / ligand.system_id / "ligand_files" / "1.B.sdf"
     )
-    canonical.parent.mkdir(parents=True)
     legacy.parent.mkdir(parents=True)
-    canonical.write_text("canonical")
     legacy.write_text("legacy")
 
+    assert scorer.resolve_ligand_sdf(tmp_path, ligand) is None
+    canonical.parent.mkdir(parents=True)
+    canonical.write_text("canonical")
     assert scorer.resolve_ligand_sdf(tmp_path, ligand) == canonical
 
 

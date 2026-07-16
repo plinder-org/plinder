@@ -11,7 +11,7 @@ from json import dumps, load
 from os import listdir
 from pathlib import Path
 from time import time
-from typing import TYPE_CHECKING, Any, Callable, Dict, Literal, Optional, TypeVar
+from typing import TYPE_CHECKING, Any, Callable, Literal, Optional, TypeVar
 from zipfile import ZIP_DEFLATED, ZipFile
 
 import pandas as pd
@@ -22,7 +22,6 @@ from plinder.core.structure import smallmols_similarity
 from plinder.core.utils import schemas
 from plinder.core.utils.log import setup_logger
 from plinder.core.utils.unpack import expand_config_context
-from plinder.data.utils.annotations.aggregate_annotations import Entry
 
 if TYPE_CHECKING:
     from plinder.data.utils.annotations.get_similarity_scores import Scorer
@@ -58,7 +57,7 @@ def timeit(func: Callable[..., T]) -> Callable[..., T]:
 
 def entry_exists(*, entry_dir: Path, pdb_id: str) -> bool:
     """
-    Check if the entry JSON file exists.
+    Check if the per-entry annotation parquet exists.
 
     Parameters
     ----------
@@ -68,98 +67,10 @@ def entry_exists(*, entry_dir: Path, pdb_id: str) -> bool:
         the PDB ID
     """
     two_char_code = pdb_id[-3:-1]
-    output = entry_dir / two_char_code / (pdb_id + ".json")
+    output = entry_dir / two_char_code / (pdb_id + ".parquet")
     output.parent.mkdir(exist_ok=True, parents=True)
-    return output.is_file()
-
-
-@timeit
-def load_entries(
-    *,
-    data_dir: Path,
-    pdb_ids: list[str],
-    clear_non_pocket_residues: bool = True,
-    load_for_scoring: bool = True,
-    max_protein_chains: int = 5,
-    max_ligand_chains: int = 5,
-) -> Dict[str, "Entry"]:
-    """
-    Load entries from the entries dir into a dict
-    """
-    from plinder.data.utils.annotations.aggregate_annotations import Entry
-
-    reduced = {}
-    entry_dir = data_dir / "raw_entries"
-    LOG.info(f"attempting to load {len(pdb_ids)} entries")
-    for pdb_id in pdb_ids:
-        try:
-            reduced[pdb_id] = Entry.from_json(
-                entry_dir / pdb_id[-3:-1] / (pdb_id + ".json"),
-                clear_non_pocket_residues=clear_non_pocket_residues,
-                load_for_scoring=load_for_scoring,
-                max_protein_chains=max_protein_chains,
-                max_ligand_chains=max_ligand_chains,
-            )
-        except Exception as e:
-            LOG.error(f"pdb_id={pdb_id} failed with {repr(e)}")
-    LOG.info(f"loaded {len(reduced)} entries from jsons")
-    return reduced
-
-
-@timeit
-def load_entries_from_zips(
-    *,
-    data_dir: Path,
-    two_char_codes: Optional[list[str]] = None,
-    pdb_ids: Optional[list[str]] = None,
-    load_for_scoring: bool = False,
-    max_protein_chains: int = 5,
-    max_ligand_chains: int = 5,
-) -> Dict[str, "Entry"]:
-    """
-    Load entries from the qc zips into a dict
-    """
-    from plinder.data.utils.annotations.aggregate_annotations import Entry
-
-    per_zip: dict[str, list[str]] | None = None
-    entry_msg = "all"
-    if pdb_ids is not None:
-        zip_paths_set = set()
-        per_zip = {}
-        for pdb_id in pdb_ids:
-            code = pdb_id[-3:-1]
-            zip_paths_set.add(data_dir / "entries" / f"{code}.zip")
-            per_zip.setdefault(code, [])
-            per_zip[code].append(f"{pdb_id}.json")
-        entry_msg = str(sum((len(pz) for pz in per_zip.values())))
-        zip_paths = list(zip_paths_set)
-    elif two_char_codes is not None:
-        zip_paths = [data_dir / "entries" / f"{code}.zip" for code in two_char_codes]
-    else:
-        zip_paths = list((data_dir / "entries").glob("*"))
-    reduced = {}
-    LOG.info(f"attempting to load {entry_msg} entries from {len(zip_paths)} zips")
-    for zip_path in zip_paths:
-        if not zip_path.is_file():
-            LOG.error(f"no archive {zip_path}, did you run structure_qc?")
-            continue
-        with ZipFile(zip_path) as archive:
-            names = archive.namelist()
-            if per_zip is not None:
-                names = per_zip[zip_path.stem]
-            for name in names:
-                try:
-                    with archive.open(name) as obj:
-                        pdb_id = name.replace(".json", "")
-                        reduced[pdb_id] = Entry.model_validate_json(obj.read()).prune(
-                            load_for_scoring=load_for_scoring,
-                            max_protein_chains=max_protein_chains,
-                            max_ligand_chains=max_ligand_chains,
-                        )
-                except Exception as e:
-                    LOG.error(f"failed to read name={name} failed with {repr(e)}")
-    LOG.info(f"loaded {len(reduced)} entries from zips")
-    return reduced
+    entry_chains = entry_dir / two_char_code / pdb_id / "entry_chains.parquet"
+    return output.is_file() and entry_chains.is_file()
 
 
 def get_db_sources(
@@ -197,14 +108,11 @@ def get_scorer(
     )
     hashed_contents = hash_contents(pdb_ids)
     if load_entries:
-        entries = load_entries_from_zips(
-            pdb_ids=None,  # explicitly set to None to load all entries
-            data_dir=data_dir,
-            load_for_scoring=True,
-        )
-        # TODO: bug where scatter_make_scorers uses raw ingest files
-        #       instead of available entries from zips but Scorer
-        #       assumes all entries are present
+        from plinder.core.scores.entries import entry_views_from_df
+
+        annotation = pd.read_parquet(data_dir / "index" / "annotation_table.parquet")
+        entry_chains = pd.read_parquet(data_dir / "index" / "entry_chains.parquet")
+        entries = entry_views_from_df(annotation, entry_chains=entry_chains)
         entry_ids = list(set(entries.keys()).intersection(pdb_ids))
     else:
         entries = {}
@@ -228,16 +136,11 @@ def get_scorer(
 
 def save_ligand_batch(
     *,
-    entries: dict[str, "Entry"],
+    annotation: pd.DataFrame,
     output_path: Path,
 ) -> None:
-    dfs = []
-    for entry in entries.values():
-        df = smallmols_similarity.load_ligands_from_entry(entry=entry)
-        if df is not None:
-            dfs.append(df)
-    LOG.info(f"save_ligand_batch: {len(dfs)} entries have usable ligands")
-    df = pd.concat(dfs).drop_duplicates().reset_index(drop=True)
+    df = smallmols_similarity.load_ligands_from_index(annotation=annotation)
+    LOG.info(f"save_ligand_batch: {df['pdb_id'].nunique()} entries have usable ligands")
     for col in df.columns:
         nunique = df[col].nunique()
         LOG.info(f"save_ligand_batch: unique {col}={nunique}")
@@ -567,23 +470,56 @@ def add_aggregated_columns(*, index: pd.DataFrame) -> pd.DataFrame:
     return index
 
 
+def create_entry_chain_index(
+    *, data_dir: Path, force_update: bool = False
+) -> pd.DataFrame:
+    """Collate normalized per-entry chain metadata into one parquet."""
+    output = data_dir / "index" / "entry_chains.parquet"
+    output.parent.mkdir(exist_ok=True, parents=True)
+    if output.exists() and not force_update:
+        return pd.read_parquet(output)
+
+    parts = sorted((data_dir / "raw_entries").glob("*/*/entry_chains.parquet"))
+    frames = [pd.read_parquet(path) for path in parts]
+    columns = [
+        "entry_pdb_id",
+        "chain_asym_id",
+        "chain_auth_id",
+        "chain_entity_id",
+        "chain_type",
+        "chain_length",
+        "chain_num_unresolved_residues",
+        "chain_is_holo",
+        "chain_uniprot_ids",
+    ]
+    chains = (
+        pd.concat(frames, ignore_index=True)
+        if frames
+        else pd.DataFrame(columns=columns)
+    )
+    chains.to_parquet(output, index=False)
+    return chains
+
+
 def create_index(*, data_dir: Path, force_update: bool = False) -> pd.DataFrame:
     """
     Create the index
     """
     index = data_dir / "index" / "annotation_table.parquet"
     index.parent.mkdir(exist_ok=True, parents=True)
+    create_entry_chain_index(data_dir=data_dir, force_update=force_update)
 
     if not index.exists() or force_update:
         dfs = []
-        for i, path in enumerate((data_dir / "qc" / "index").glob("*")):
+        annotation_parts = data_dir / "raw_entries"
+        for i, path in enumerate(annotation_parts.glob("*/*.parquet")):
             df = pd.read_parquet(path)
             LOG.info(f"{i} {path.name} shape={df.shape}")
             if not df.empty:
                 dfs.append(df)
         if not dfs:
             LOG.warning(
-                f"create_index: no parquet files in {data_dir / 'qc' / 'index'}, "
+                f"create_index: no parquet files in {annotation_parts}, "
                 "writing empty index"
             )
             pd.DataFrame().to_parquet(index, index=False)
@@ -619,7 +555,7 @@ def create_nonredundant_dataset(*, data_dir: Path) -> None:
     """
     This is called in make_mmp_index to ensure the existence of the index
     and simultaneously generates a non-redundant index for various use
-    cases. Ultimately this should run as the join step of structure_qc.
+    cases. The initial index is collated in ``join_make_entries``.
     """
     if not (data_dir / "index" / "annotation_table.parquet").exists():
         df = create_index(data_dir=data_dir)

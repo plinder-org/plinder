@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-from functools import lru_cache
+import gzip
 from pathlib import Path
 from typing import Union
 
 import biotite.sequence as seq
 import biotite.sequence.align as align
 import biotite.structure as struc
-import biotite.structure.io as strucio
 import numpy as np
 from biotite import TextFile
 from biotite.sequence.align import Alignment
@@ -32,27 +31,7 @@ def biotite_pdbxfile() -> TextFile:
     return CIFFile
 
 
-def biotite_pdbfile() -> TextFile:
-    from biotite.structure.io.pdb import PDBFile
-
-    return PDBFile
-
-
-@lru_cache(maxsize=None)
-def rust_pdbfile() -> TextFile:
-    # TODO: is this used anywhere?
-    try:
-        import fastpdb
-
-        return fastpdb.PDBFile
-    except ImportError:
-        log.warning(
-            "Requested fastpdb engine, but its not installed. Falling back to biotite"
-        )
-        return biotite_pdbfile()
-
-
-def atom_array_from_pdb_file(
+def atom_array_from_cif_file(
     structure: Path | AtomArray,
     extra_fields: list[str] | None = None,
 ) -> _AtomArrayOrStack:
@@ -61,8 +40,20 @@ def atom_array_from_pdb_file(
 
     if isinstance(structure, Path):
         try:
-            arr = strucio.load_structure(
-                structure.as_posix(), extra_fields=extra_fields
+            from biotite.structure.io import pdbx
+
+            reader = biotite_pdbxfile()
+            if structure.suffix == ".gz":
+                with gzip.open(structure, "rt", encoding="utf-8") as handle:
+                    cif_file = reader.read(handle)
+            else:
+                cif_file = reader.read(structure)
+            arr = pdbx.get_structure(
+                cif_file,
+                model=1,
+                use_author_fields=False,
+                include_bonds=True,
+                extra_fields=extra_fields,
             )
             assert isinstance(arr, (AtomArray, AtomArrayStack))
             return arr
@@ -457,7 +448,7 @@ def align_sequences(
 def _get_structure_and_res_info(
     structure: Path | _AtomArrayOrStack,
 ) -> tuple[_AtomArrayOrStack, list[int], list[str]]:
-    structure = atom_array_from_pdb_file(structure)
+    structure = atom_array_from_cif_file(structure)
     numbering, resn = struc.get_residues(structure)
     return structure, numbering, resn
 
@@ -553,8 +544,8 @@ def _get_paired_structures_and_chains(
     ref: Path | _AtomArrayOrStack,
     subject: Path | _AtomArrayOrStack,
 ) -> tuple[_AtomArrayOrStack, _AtomArrayOrStack, NDArray[np.str_], NDArray[np.str_]]:
-    ref_arr: _AtomArrayOrStack = atom_array_from_pdb_file(ref)
-    subject_arr: _AtomArrayOrStack = atom_array_from_pdb_file(subject)
+    ref_arr: _AtomArrayOrStack = atom_array_from_cif_file(ref)
+    subject_arr: _AtomArrayOrStack = atom_array_from_cif_file(subject)
     ref_chains = struc.get_chains(ref_arr)
     subject_chains = struc.get_chains(subject_arr)
 
@@ -800,18 +791,7 @@ def get_buried_sasa(
 
 
 def get_resolved_resi_from_atom_array(model: _AtomArrayOrStack) -> dict[str, list[int]]:
-    """Returns a list of resolved resi (only checking the CA atom) in the PDB file.
-
-    Parameters
-    ----------
-    model : _AtomArrayOrStack
-        AtomArray or Stack
-
-    Returns
-    -------
-    List[int]
-        A list of resolved resi in the PDB file.
-    """
+    """Return resolved residue IDs (checking only CA atoms)."""
     model_ch: set[str] = set(model.chain_id)
     per_chain_resolved: dict[str, list[int]] = {}
     for ch in model_ch:
@@ -824,78 +804,44 @@ def get_resolved_resi_from_atom_array(model: _AtomArrayOrStack) -> dict[str, lis
     return per_chain_resolved
 
 
-def get_resolved_resi(pdb_path: str) -> dict[str, list[int]]:
-    """Returns a list of resolved resi (only checking the CA atom) in the PDB file.
+def get_resolved_resi(cif_path: str) -> dict[str, list[int]]:
+    """Return resolved residue IDs (checking only CA atoms) from an mmCIF.
 
     Parameters
     ----------
-    pdb_path : str
-        The path to the PDB file.
+    cif_path : str
+        Path to the mmCIF file.
 
     Returns
     -------
-    List[int]
-        A list of resolved resi in the PDB file.
+    dict[str, list[int]]
+        Resolved residue IDs per chain.
     """
-    model: _AtomArrayOrStack = atom_array_from_pdb_file(Path(pdb_path))
+    model: _AtomArrayOrStack = atom_array_from_cif_file(Path(cif_path))
     resolved_resi = get_resolved_resi_from_atom_array(model)
     return resolved_resi
 
 
-def write_pdb(arr: AtomArray, filepath: Path) -> None:
-    """Write AtomArray to a PDB file.
+def write_cif(arr: AtomArray, filepath: Path) -> None:
+    """Write an AtomArray to an mmCIF file.
 
     Parameters
     ----------
     arr : AtomArray
-        AtomArray to save to PDB file.
+        AtomArray to save to mmCIF.
     filepath : Path
-        Path to outut PDB file.
+        Path to output mmCIF file.
 
     Returns
     -------
     None
 
     """
-    if not filepath.parent.is_dir():
-        filepath.parent.mkdir(exist_ok=True, parents=True)
-
-    strucio.save_structure(filepath, arr)
-
-
-def cif_to_pdb(
-    cif_path: str, pdb_path: str, chains: dict[str, str] | None = None
-) -> None:
-    """Convert CIF file to PDB file
-
-    Parameters
-    ----------
-    cif_path : str
-        The path to the CIF file to be converted.
-    pdb_path : str
-        The path where the converted PDB file will be saved.
-    chains : Optional[dict], default is None
-        If provided, only the chains specified in the dictionary will be kept
-        and they will be renamed according to the dictionary.
-        Note: The new chain names must be single characters to be PDB compatible.
-    """
-    # temp workaround for biotite API
+    if filepath.suffix != ".cif":
+        raise ValueError(f"mmCIF output must end in .cif, got {filepath}")
+    filepath.parent.mkdir(exist_ok=True, parents=True)
     from biotite.structure.io import pdbx
 
-    f = biotite_pdbxfile()
-    pdbx_file = f.read(cif_path)
-    model = pdbx.get_structure(
-        pdbx_file, model=1, use_author_fields=False, extra_fields=["b_factor", "charge"]
-    )
-    # print(f"DEBUG: {cif_path} has {sorted(np.unique(model.chain_id))} chains")
-    if chains is not None:
-        mask = np.isin(model.chain_id, list(chains.keys()))
-        if np.sum(mask) == 0:
-            print(f"WARNING: chains {list(chains.keys())} not found in {cif_path}")
-            return
-        model = model[mask]
-        model_orig = model.copy()
-        for old_chain_id, new_chain_id in chains.items():
-            mask = model_orig.chain_id == old_chain_id
-            model.chain_id[mask] = new_chain_id
-    write_pdb(model, Path(pdb_path))
+    cif_file = pdbx.CIFFile()
+    pdbx.set_structure(cif_file, arr, data_block=filepath.stem, include_bonds=True)
+    cif_file.write(str(filepath))

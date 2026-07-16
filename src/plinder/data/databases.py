@@ -10,7 +10,7 @@ import pandas as pd
 from plinder.core.utils.log import setup_logger
 
 if TYPE_CHECKING:
-    from plinder.data.utils.annotations.aggregate_annotations import Entry
+    from plinder.core.scores.entries import EntryView
 
 LOG = setup_logger(__name__)
 
@@ -155,7 +155,7 @@ def get_ids_in_db(data_dir: Path, search_db: str, aln_type: str) -> pd.DataFrame
 
 
 def get_db_ids(
-    entries: Dict[str, "Entry"],
+    entries: Dict[str, "EntryView"],
     search_db: str,
     aln_type: str,
     entry_ids: Optional[list[str]] = None,
@@ -166,7 +166,7 @@ def get_db_ids(
 
     Parameters
     ----------
-    entries : Dict[str, Entry]
+    entries : Dict[str, EntryView]
         the collection of entries
     search_db : str
         search_db in ["apo", "holo", "pred"]
@@ -190,7 +190,7 @@ def get_db_ids(
 def make_sub_dbs(
     db_dir: Path,
     db_sources: Dict[str, Path],
-    entries: Dict[str, "Entry"],
+    entries: Dict[str, "EntryView"],
 ) -> None:
     """
     Create the apo/holo subdbs for score
@@ -202,7 +202,7 @@ def make_sub_dbs(
         directory where subdbs get written
     db_sources : Dict[str, Path]
         map of database name to path to full database
-    entries : Dict[str, Entry]
+    entries : Dict[str, EntryView]
         map of all the entries
     """
 

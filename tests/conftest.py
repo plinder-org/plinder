@@ -68,11 +68,6 @@ def cif_assembly_5a7w():
 
 
 @pytest.fixture(scope="session")
-def pdb_5a7w_hydrogen():
-    return test_asset_fp / "xx/pdb_00005a7w/5a7w_A_hyd.pdb"
-
-
-@pytest.fixture(scope="session")
 def fingerprint_prop_5a7w():
     return test_asset_fp / "xx/pdb_00005a7w/5a7w_interactions.txt"
 
@@ -341,38 +336,6 @@ def mini_components_pqt():
 
 
 @pytest.fixture(scope="session")
-def protein_pdb_block():
-    prot = """
-ATOM    878  N   ASN A  46      13.513  -6.432  14.070  1.00  2.87           N
-ATOM    879  CA  ASN A  46      12.645  -5.347  13.627  1.00  2.87           C
-ATOM    880  C   ASN A  46      11.201  -5.794  13.380  1.00  3.19           C
-ATOM    881  O   ASN A  46      10.833  -6.925  13.791  1.00  3.41           O
-ATOM    882  CB  ASN A  46      13.268  -4.685  12.384  1.00  3.66           C
-ATOM    883  CG  ASN A  46      14.641  -4.132  12.661  1.00  4.78           C
-ATOM    884  OD1 ASN A  46      15.591  -4.547  12.028  1.00  7.55           O
-ATOM    885  ND2 ASN A  46      14.723  -3.168  13.614  1.00  6.97           N
-ATOM    886  OXT ASN A  46      10.480  -4.975  12.775  1.00  4.15           O
-ATOM    887  H   ASN A  46      13.774  -7.098  13.362  1.00  3.02           H
-ATOM    888  HA  ASN A  46      12.636  -4.574  14.444  1.00  3.14           H
-ATOM    889  HB2 ASN A  46      13.320  -5.415  11.571  1.00  4.02           H
-ATOM    890  HB3 ASN A  46      12.646  -3.851  12.072  1.00  4.02           H
-ATOM    891 HD21 ASN A  46      13.933  -2.916  14.039  1.00  7.87           H
-ATOM    892 HD22 ASN A  46      15.661  -2.840  13.786  1.00  7.87           H
-    """
-    return prot
-
-
-@pytest.fixture(scope="session")
-def ligand_pdb_block():
-    lig = """
-HETATM  894  C1  EOH A2001      18.245  -4.085  12.277  0.60 10.06           C
-HETATM  895  C2  EOH A2001      19.159  -2.255  13.149  0.60 24.97           C
-HETATM  896  O   EOH A2001      17.933  -5.505  12.774  0.60 13.14           O
-"""
-    return lig
-
-
-@pytest.fixture(scope="session")
 def mini_mmp_index():
     return test_asset_fp / "mmp/tiny_mmp_index.csv.gz"
 
@@ -401,26 +364,6 @@ def mmp_protein_fident_data():
         test_asset_fp
         / "mmp/mmp_test_protein_fident_weighted_sum__0.95__weak__component.csv"
     )
-
-
-@pytest.fixture(scope="session")
-def target_structure_validation_file():
-    return test_asset_fp / "mini_structure_checks_report.tsv"
-
-
-@pytest.fixture(scope="session")
-def mini_all_json():
-    return test_asset_fp / "mini_all_entries.json"
-
-
-@pytest.fixture(scope="session")
-def mini_system_dir():
-    return test_asset_fp / "mini_system_files_new"
-
-
-@pytest.fixture
-def entry_zip():
-    return test_asset_fp / "2g.zip"
 
 
 @pytest.fixture
@@ -662,16 +605,12 @@ def mock_alternative_datasets(
 
 
 @pytest.fixture
-def final_json_7nac():
-    return test_asset_fp / "7nac.json"
-
-
-@pytest.fixture
 def read_plinder_mount(monkeypatch):
     monkeypatch.setenv("PLINDER_MOUNT", test_asset_fp.as_posix())
     monkeypatch.setenv("PLINDER_RELEASE", "mount")
     monkeypatch.setenv("PLINDER_BUCKET", "plinder")
     monkeypatch.setenv("PLINDER_ITERATION", "")
+    monkeypatch.setenv("PLINDER_OFFLINE", "true")
     from plinder.core.utils import config
 
     config._config._clear()
@@ -793,13 +732,6 @@ def failfast(monkeypatch):
         return obj()
 
     monkeypatch.setattr("plinder.data.pipeline.io.requests.get", f)
-
-
-@pytest.fixture(scope="session")
-def pdb_atom_array(pdb_5a7w_hydrogen):
-    from plinder.core.structure import vendored
-
-    return vendored.atom_array_from_pdb_file(pdb_5a7w_hydrogen)
 
 
 @pytest.fixture(scope="session")

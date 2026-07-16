@@ -37,3 +37,41 @@ def test_save_linked_structures(write_plinder_mount):
         assert isinstance(df, pd.DataFrame)
     except Exception:
         pass
+
+
+def test_ingest_link_scoring_does_not_run_posebusters(tmp_path, monkeypatch):
+    from plinder.data import save_linked_structures
+
+    calls = {}
+
+    class Scores:
+        def summarize_scores(self):
+            return {"ligand": {"lddt": 1.0}}
+
+    def fake_from_model_files(*args, **kwargs):
+        calls.update(kwargs)
+        return Scores()
+
+    monkeypatch.setattr(save_linked_structures, "save_superposition", lambda **_: True)
+    monkeypatch.setattr(
+        save_linked_structures.utils.ModelScores,
+        "from_model_files",
+        fake_from_model_files,
+    )
+    link = pd.Series(
+        {
+            "reference_system_id": "1abc__1__1.A__1.B",
+            "id": "2def_A",
+            "ligand_files": [],
+        }
+    )
+
+    save_linked_structures.system_save_and_score_representative(
+        link=link,
+        reference_system=object(),
+        data_dir=tmp_path,
+        search_db="holo",
+        output_folder=tmp_path / "linked",
+    )
+
+    assert calls == {"score_protein": True}

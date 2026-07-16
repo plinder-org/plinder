@@ -28,8 +28,7 @@ STAGES = [
     "download_alternative_datasets",
     "make_dbs",
     "make_entries",
-    "structure_qc",
-    "make_system_archives",
+    "make_canonical_ligand_archives",
     "make_ligands",
     "compute_ligand_fingerprints",
     "make_ligand_scores",
@@ -282,8 +281,11 @@ def make_entries(
         for pdb_dir in pdb_dirs:
             two_char_code = pdb_dir[-3:-1]
             pdb_id = pdb_dir[-4:]
-            output = output_dir / two_char_code / (pdb_id + ".json")
-            if not force_update and output.is_file():
+            output = output_dir / two_char_code / (pdb_id + ".parquet")
+            if not force_update and utils.entry_exists(
+                entry_dir=output_dir,
+                pdb_id=pdb_id,
+            ):
                 LOG.info(f"skipping {pdb_id} since entry exists already")
                 continue
             output.parent.mkdir(exist_ok=True, parents=True)
@@ -342,14 +344,14 @@ def make_entries(
     return rerun
 
 
-def scatter_structure_qc(
+def scatter_make_canonical_ligand_archives(
     *,
     data_dir: Path,
     two_char_codes: list[str],
     batch_size: int,
 ) -> list[list[str]]:
     """
-    Scatter two character codes for system archive generation
+    Scatter two-character codes for canonical ligand archive generation.
 
     Parameters
     ----------
@@ -370,127 +372,33 @@ def scatter_structure_qc(
         codes = sorted(two_char_codes)
     else:
         codes = sorted(os.listdir(entry_dir.as_posix()))
-    LOG.info(f"scatter_structure_qc: found {len(codes)} two character codes")
-    return [codes[pos : pos + batch_size] for pos in range(0, len(codes), batch_size)]
-
-
-def structure_qc(
-    *,
-    data_dir: Path,
-    two_char_codes: list[str],
-) -> None:
-    from plinder.data.final_structure_qc import (
-        prepare_system_dict,
-        run_structure_checks,
+    LOG.info(
+        "scatter_make_canonical_ligand_archives: "
+        f"found {len(codes)} two character codes"
     )
-    from plinder.data.utils.annotations.aggregate_annotations import Entry
-
-    entry_dir = data_dir / "raw_entries"
-    err_dir = data_dir / "qc" / "logs"
-    zip_dir = data_dir / "entries"
-    pqt_dir = data_dir / "qc" / "index"
-    err_dir.mkdir(exist_ok=True, parents=True)
-    zip_dir.mkdir(exist_ok=True, parents=True)
-    pqt_dir.mkdir(exist_ok=True, parents=True)
-    for code in two_char_codes:
-        with ZipFile(zip_dir / f"{code}.zip", "w", compression=ZIP_DEFLATED) as archive:
-            with (err_dir / f"{code}_qc_fails.csv").open("w") as fails:
-                fails.write("entry_json,error\n")
-                LOG.info(f"structure_qc: two_char_code={code}")
-                entry_dfs = []
-                structure_qc = []
-                for i, entry_json in enumerate((entry_dir / code).glob("*json")):
-                    if not i % 25:
-                        LOG.info(f"on entry={i} {entry_json}")
-                    try:
-                        entry = Entry.from_json(
-                            entry_json, clear_non_pocket_residues=True
-                        )
-                    except Exception as e:
-                        LOG.warning(f"failed loading {entry_json}")
-                        clean = str(e).replace(",", "_").replace("\n", " ")[:50]
-                        fails.write(f"{entry_json},{clean}")
-                        continue
-                    if len(entry.systems):
-                        entry_dfs.append(entry.to_df())
-                    archive.writestr(entry_json.name, entry.model_dump_json())
-                    system_structure_path = entry_dir / code
-                    try:
-                        for system_dict in prepare_system_dict(
-                            system_structure_path,
-                            entry,
-                        ):
-                            structure_qc.extend(run_structure_checks(system_dict))
-                    except Exception as e:
-                        LOG.warning(f"failed structure checks for {entry_json}")
-                        fails.write(f"{entry_json},{str(e).replace(',', '_')}\n")
-                        continue
-                if len(entry_dfs) and len(structure_qc):
-                    entry_df = pd.concat(entry_dfs).reset_index(drop=True)
-                    structure_df = pd.DataFrame(structure_qc)
-                    pd.merge(
-                        entry_df,
-                        structure_df,
-                        on=["system_id", "ligand_instance", "ligand_asym_id"],
-                        how="left",
-                    ).to_parquet(pqt_dir / f"{code}.parquet", index=False)
-
-
-def scatter_make_system_archives(
-    *,
-    data_dir: Path,
-    two_char_codes: list[str],
-    batch_size: int,
-) -> list[list[str]]:
-    """
-    Scatter two character codes for system archive generation
-
-    Parameters
-    ----------
-    data_dir : Path
-        the root plinder dir
-    batch_size : int
-        how many codes to put in a chunk
-    two_char_codes : list[str], default=[]
-        only consider particular codes
-
-    Returns
-    -------
-    chunks : list[list[str]]
-        batches of two character codes
-    """
-    entry_dir = data_dir / "raw_entries"
-    if len(two_char_codes):
-        codes = sorted(two_char_codes)
-    else:
-        codes = sorted(os.listdir(entry_dir.as_posix()))
-    LOG.info(f"scatter_make_system_archives: found {len(codes)} two character codes")
     return [codes[pos : pos + batch_size] for pos in range(0, len(codes), batch_size)]
 
 
-def make_system_archives(
+def make_canonical_ligand_archives(
     *,
     data_dir: Path,
     two_char_codes: list[str],
 ) -> None:
     """
-    Create a zip file of all the system files in a given
-    two character code to reduce pressure on the network
-    for large-scale file IO.
+    Archive canonical ASU ligand SDFs for a two-character code.
     """
     for code in two_char_codes:
         entry_dir = data_dir / "raw_entries" / code
-        archive = data_dir / "archives" / f"{code}.zip"
+        archive = data_dir / "ligand_archives" / f"{code}.zip"
         archive.parent.mkdir(exist_ok=True, parents=True)
         with ZipFile(archive.as_posix(), "w", compression=ZIP_DEFLATED) as zip_archive:
-            for subdir in os.listdir(entry_dir):
-                if os.path.isdir(f"{entry_dir}/{subdir}"):
-                    for root, _, files in os.walk(f"{entry_dir}/{subdir}"):
-                        for file in files:
-                            full_path = os.path.join(root, file)
-                            parts = full_path.split(os.sep)
-                            arc_name = os.path.join(*parts[parts.index(code) + 1 :])
-                            zip_archive.write(full_path, arc_name)
+            for entry_parquet in sorted(entry_dir.glob("*.parquet")):
+                ligand_dir = entry_dir / entry_parquet.stem / "ligand_files"
+                for ligand_file in sorted(ligand_dir.glob("*.sdf")):
+                    zip_archive.write(
+                        ligand_file,
+                        ligand_file.relative_to(entry_dir),
+                    )
 
 
 def make_sub_dbs(
@@ -510,7 +418,12 @@ def make_sub_dbs(
     data_dir : Path
         the root plinder dir
     """
-    entries = utils.load_entries_from_zips(data_dir=data_dir)
+    from plinder.core.scores.entries import entry_views_from_df
+
+    entries = entry_views_from_df(
+        pd.read_parquet(data_dir / "index" / "annotation_table.parquet"),
+        entry_chains=pd.read_parquet(data_dir / "index" / "entry_chains.parquet"),
+    )
     db_dir = data_dir / "dbs" / "subdbs"
     db_dir.mkdir(exist_ok=True)
     LOG.info("making sub-databases for scoring")
@@ -553,14 +466,21 @@ def make_ligands(
     pdb_ids: list[str],
 ) -> None:
     """ """
-    entries = utils.load_entries_from_zips(data_dir=data_dir, pdb_ids=pdb_ids)
+    if not pdb_ids:
+        LOG.info("make_ligands: no entries to process")
+        return
+    annotations = [
+        pd.read_parquet(data_dir / "raw_entries" / pdb_id[-3:-1] / f"{pdb_id}.parquet")
+        for pdb_id in pdb_ids
+    ]
+    annotation = pd.concat(annotations, ignore_index=True)
     hashed_contents = utils.hash_contents(pdb_ids)
     output_dir = data_dir / "ligands"
     output_dir.mkdir(exist_ok=True, parents=True)
     output_path = output_dir / f"{hashed_contents}.parquet"
     LOG.info("make_ligands: running save_ligand_batch")
     utils.save_ligand_batch(
-        entries=entries,
+        annotation=annotation,
         output_path=output_path,
     )
 

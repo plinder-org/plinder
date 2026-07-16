@@ -184,8 +184,8 @@ def pairwise_chain_contacts(
 
     Examples
     --------
-    >>> from plinder.core.structure.atoms import atom_array_from_pdb_file
-    >>> atom_array = atom_array_from_pdb_file('1abc.pdb') # doctest: +SKIP
+    >>> from plinder.core.structure.atoms import atom_array_from_cif_file
+    >>> atom_array = atom_array_from_cif_file('1abc.cif') # doctest: +SKIP
     >>> pairwise_chain_contacts(atom_array) # doctest: +SKIP
     """
     if not cell_size:

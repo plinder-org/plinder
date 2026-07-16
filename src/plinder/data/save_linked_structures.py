@@ -8,7 +8,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import biotite.structure as struc
-import biotite.structure.io.pdb as pdb_io
 import biotite.structure.io.pdbx as pdbx
 import pandas as pd
 
@@ -56,7 +55,6 @@ def superpose_to_system(
     target_cif_file: Path,
     save_folder: Path,
     target_chain: str | None = None,
-    name_mapping: dict[str, str] | None = None,
 ) -> None:
     """
     Superpose a target asymmetric unit and chain to a system.
@@ -68,11 +66,9 @@ def superpose_to_system(
     target_cif_file : Path
         Path to the target asymmetric unit cif file.
     save_folder : Path
-        Folder to save the superposed target cif and pdb files.
+        Folder to save the superposed target mmCIF file.
     target_chain : str, optional
         Chain of the target to superpose.
-    name_mapping : dict, optional
-        Chain name mapping for PDB output.
     """
     # Load target
     cif_file_obj = read_mmcif_file(target_cif_file)
@@ -101,21 +97,8 @@ def superpose_to_system(
         rmsd = struc.rmsd(ref_ca, fitted)
         LOG.info(f"target_cif {target_cif_file} rmsd: {rmsd:.2f}")
 
-    # Rename chains for PDB output
-    target_pdb = target_atoms.copy()
-    if name_mapping is not None:
-        new_ids = target_pdb.chain_id.copy()
-        for old, new in name_mapping.items():
-            new_ids[target_pdb.chain_id == old] = new
-        target_pdb.chain_id = new_ids
-    elif target_chain is not None and target_chain != "A":
-        target_pdb.chain_id[target_pdb.chain_id == target_chain] = "A"
-
     # Save superposed target
     save_cif_file(target_atoms, "superposed", save_folder / "superposed.cif")
-    pdb_file = pdb_io.PDBFile()
-    pdb_file.set_structure(target_pdb)
-    pdb_file.write(str(save_folder / "superposed.pdb"))
 
 
 @dataclass
@@ -273,24 +256,14 @@ def save_superposition(
             f"get_transplanted_ligand_scores_system: {link.id} cif file doesn't exist"
         )
         return False
-    name_mapping, target_chain = None, None
-    if search_db == "holo":
-        name_mapping_file = target_cif_file.parent / "chain_mapping.json"
-        if not name_mapping_file.exists():
-            LOG.error(
-                f"get_transplanted_ligand_scores_system: {name_mapping_file} does not exist"
-            )
-            return False
-        with open(name_mapping_file) as f:
-            name_mapping = json.load(f)
-    else:
+    target_chain = None
+    if search_db != "holo":
         target_chain = link.id.split("_")[-1]
     try:
         superpose_to_system(
             system_atoms=reference_system.receptor_structure,
             target_cif_file=target_cif_file,
             save_folder=save_folder,
-            name_mapping=name_mapping,
             target_chain=target_chain,
         )
         return True
@@ -327,8 +300,6 @@ def system_save_and_score_representative(
             link.ligand_files,
             reference_system,
             score_protein=True,
-            score_posebusters=True,
-            score_posebusters_full_report=True,
         ).summarize_scores()
         with open(save_folder / "scores.json", "w") as f:
             json.dump(scores, f)

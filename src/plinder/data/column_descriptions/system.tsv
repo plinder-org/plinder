@@ -1,5 +1,12 @@
 Name	Type	Description
 system_biounit_id	str	Biounit ID
+system_biounit_chains_asym_id	list[str]	All chain instances in the biological assembly
+system_biounit_non_water_chains_asym_id	list[str]	All non-water chain instances in the biological assembly
+system_biounit_water_chains_asym_id	list[str]	All water chain instances in the biological assembly
+system_other_chains_asym_id	list[str]	Non-water biological assembly chain instances that are not members of this system
+system_other_protein_chains_asym_id	list[str]	Receptor-like biological assembly chain instances that are not members of this system
+system_other_ligand_chains_asym_id	list[str]	Ligand-like biological assembly chain instances that are not members of this system
+system_water_residues	list[str]	System-interacting water residues encoded as <instance>.<asym>_<residue_number>
 system_protein_chains_asym_id	list[str]	Interacting protein chains of the system
 system_id_no_biounit	str	ID of the system without the biounit
 system_ligand_chains	list[str]	Ligand chains of the system

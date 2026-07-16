@@ -12,12 +12,32 @@ from ost import io, mol
 from ost.mol.alg.ligand_scoring_lddtpli import LDDTPLIScorer
 from ost.mol.alg.ligand_scoring_scrmsd import SCRMSDScorer
 from ost.mol.alg.scoring import Scorer
-from posebusters import PoseBusters
 
 from plinder.core import PlinderSystem
 from plinder.core.utils.log import setup_logger
 
 LOG = setup_logger(__name__)
+
+
+def _cif_to_posebusters_mol(cif_file: Path) -> Any:
+    """Load an mmCIF receptor as an in-memory RDKit molecule.
+
+    PoseBusters does not read mmCIF paths directly, but it accepts an RDKit
+    molecule.  Keeping the conversion in memory avoids restoring the removed
+    temporary legacy file-format conversion.
+    """
+    import biotite.structure.io.pdbx as pdbx
+    from biotite.interface import rdkit as rdkit_interface
+
+    from plinder.data.utils.annotations.cif_utils import read_mmcif_file
+
+    atoms = pdbx.get_structure(
+        read_mmcif_file(cif_file),
+        model=1,
+        use_author_fields=False,
+        include_bonds=True,
+    )
+    return rdkit_interface.to_mol(atoms)
 
 
 @dataclass
@@ -63,9 +83,7 @@ class ComplexData:
             ligand_files.append(Path(system.ligand_sdfs[ligand]))
         return cls(
             name=system.system_id,
-            receptor_file=Path(
-                system.receptor_pdb
-            ),  # PoseBusters requires a PDB file, but entity is built from CIF
+            receptor_file=Path(system.receptor_cif),
             ligand_files=ligand_files,
             receptor_entity=system.receptor_entity,
             ligand_views=ligand_views,
@@ -77,14 +95,11 @@ class ComplexData:
     def from_files(
         cls, name: str, receptor_file: Path, ligand_files: list[Path]
     ) -> "ComplexData":
-        if receptor_file.suffix not in [".cif", ".pdb"]:
+        if receptor_file.suffix != ".cif":
             raise ValueError(
-                f"receptor_file must be a .cif or .pdb file, got {receptor_file}"
+                f"receptor_file must be an mmCIF file, got {receptor_file}"
             )
-        if receptor_file.suffix == ".cif":
-            entity = io.LoadMMCIF(receptor_file.as_posix(), fault_tolerant=True)
-        else:
-            entity = io.LoadPDB(receptor_file.as_posix(), fault_tolerant=True)
+        entity = io.LoadMMCIF(receptor_file.as_posix(), fault_tolerant=True)
 
         ligand_views = []
         for i, ligand_file in enumerate(ligand_files):
@@ -284,7 +299,11 @@ class ModelScores:
             }
 
     def calculate_ligand_scores(self) -> None:
-        pb = PoseBusters(config="dock")
+        pb = None
+        if self.score_posebusters:
+            from posebusters import PoseBusters
+
+            pb = PoseBusters(config="dock")
 
         scrmsd_scorer = SCRMSDScorer(
             model=self.model.receptor_entity,
@@ -347,22 +366,17 @@ class ModelScores:
                         )
                 if (
                     self.score_posebusters
+                    and pb is not None
                     and ligand_class.reference_ligand.get(self.posebusters_mapper, None)
                     is not None
                     # only score ligands that have been mapped with posebusters_mapper (bisy_rmsd)
                 ):
-                    if self.model.receptor_file.suffix != ".pdb":
-                        #  WARNING  posebusters.tools.loading:loading.py:46 Could not load molecule from receptor.cif with error: Unknown file type .cif
-                        # TODO: perform format conversion from .cif to .pdb ?
-                        LOG.warning(
-                            f"PoseBusters may not accept the receptor file ({self.model.receptor_file}) not in PDB format"
-                        )
                     result_dict = pb.bust(
                         mol_pred=ligand_class.sdf_file,
                         mol_true=ligand_class.reference_ligand[
                             self.posebusters_mapper
                         ].sdf_file,
-                        mol_cond=self.model.receptor_file,
+                        mol_cond=_cif_to_posebusters_mol(self.model.receptor_file),
                         full_report=self.score_posebusters_full_report,
                     ).to_dict()
                     # Extract the key directly from the result dict (format varies by posebusters version)
@@ -492,13 +506,13 @@ def run_posebusters_on_system(
 ) -> dict[str, dict[str, Any]]:
     """Run PoseBusters validation on a saved system.
 
-    Operates on system files produced during ingest (receptor.pdb +
+    Operates on reconstructed system files (receptor.cif +
     ligand SDF files).  Returns per-ligand validation results.
 
     Parameters
     ----------
     system_folder : Path
-        Folder containing ``receptor.pdb`` and ``ligand_files/*.sdf``.
+        Folder containing ``receptor.cif`` and ``ligand_files/*.sdf``.
     pose_index : int
         Pose index for PoseBusters keying (default 0 for crystal).
     config : str
@@ -509,10 +523,12 @@ def run_posebusters_on_system(
     dict[str, dict[str, Any]]
         Mapping of ligand chain ID to PoseBusters result dict.
     """
+    from posebusters import PoseBusters
+
     pb = PoseBusters(config=config)
-    receptor_file = system_folder / "receptor.pdb"
+    receptor_file = system_folder / "receptor.cif"
     if not receptor_file.exists():
-        LOG.warning(f"run_posebusters_on_system: no receptor.pdb in {system_folder}")
+        LOG.warning(f"run_posebusters_on_system: no receptor.cif in {system_folder}")
         return {}
     ligand_dir = system_folder / "ligand_files"
     if not ligand_dir.exists():
@@ -524,7 +540,7 @@ def run_posebusters_on_system(
             result_dict = pb.bust(
                 mol_pred=str(ligand_file),
                 mol_true=str(ligand_file),
-                mol_cond=str(receptor_file),
+                mol_cond=_cif_to_posebusters_mol(receptor_file),
                 full_report=True,
             ).to_dict()
         except Exception as e:

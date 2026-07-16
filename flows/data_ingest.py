@@ -6,8 +6,7 @@ The filestore instance name is: plinder-data-gen.
 """
 from __future__ import annotations
 
-from metaflow import FlowSpec, Parameter, kubernetes, environment, step, retry
-
+from metaflow import FlowSpec, Parameter, environment, kubernetes, retry, step
 
 MOUNT = "/plinder"
 K8S = dict(
@@ -39,7 +38,7 @@ LARGE_MEM = dict(
             key="machine_type",
             value="n1-custom-380",
         )
-    ]
+    ],
 )
 
 
@@ -59,11 +58,11 @@ class PlinderDataIngestFlow(FlowSpec):
         if not self.config_file.startswith("gs:"):
             raise ValueError("--config_file must be a gs:// path")
         print(f"started data ingest run with config: {self.config_file}")
-        contents = gcs.download_as_str(gcs_path=self.config_file, bucket_name="plinder-collab-bucket")
+        contents = gcs.download_as_str(
+            gcs_path=self.config_file, bucket_name="plinder-collab-bucket"
+        )
         self.pipeline = IngestPipeline(conf=get_config(config_contents=contents))
-        # self.next(self.scatter_download_rcsb_files)
-        # self.next(self.scatter_make_entries)
-        self.next(self.scatter_structure_qc)
+        self.next(self.scatter_make_entries)
         # self.next(self.scatter_collate_partitions)
         # self.next(self.scatter_make_components_and_communities)
         # self.next(self.scatter_make_links)
@@ -134,230 +133,176 @@ class PlinderDataIngestFlow(FlowSpec):
     #     self.pipeline.make_dbs()
     #     self.next(self.scatter_make_entries)
 
-    # @kubernetes(**K8S)
-    # @environment(**ENV)
-    # @retry
-    # @step
-    # def scatter_make_entries(self):
-    #     self.chunks = self.pipeline.scatter_make_entries()
-    #     self.next(self.make_entries, foreach="chunks")
-    #
-    # @kubernetes(**{**K8S, **WORKSTATION})
-    # @environment(**ENV)
-    # @retry
-    # @step
-    # def make_entries(self):
-    #     self.pipeline.cfg.flow.make_entries_cpu = WORKSTATION["cpu"]
-    #     self.reruns = self.pipeline.make_entries(self.input)
-    #     self.next(self.join_make_entries)
-    #
-    # @kubernetes(**K8S)
-    # @environment(**ENV)
-    # @retry
-    # @step
-    # def join_make_entries(self, inputs):
-    #     self.pipeline = inputs[0].pipeline
-    #     self.merge_artifacts(inputs, exclude=["chunks", "reruns"])
-    #     self.rerun = self.pipeline.join_make_entries([inp.reruns for inp in inputs])
-    #     self.next(self.scatter_make_entries_second_try)
-    #
-    # @kubernetes(**K8S)
-    # @environment(**ENV)
-    # @retry
-    # @step
-    # def scatter_make_entries_second_try(self):
-    #     self.original_pdb_ids = self.pipeline.cfg.context.pdb_ids
-    #     self.pipeline.cfg.context.pdb_ids = self.rerun
-    #     self.chunks = self.pipeline.scatter_make_entries()
-    #     self.next(self.make_entries_second_try, foreach="chunks")
-    #
-    # @kubernetes(**{**K8S, **WORKSTATION_MEM})
-    # @environment(**ENV)
-    # @retry
-    # @step
-    # def make_entries_second_try(self):
-    #     self.pipeline.cfg.flow.make_entries_cpu = WORKSTATION_MEM["cpu"]
-    #     self.pipeline.make_entries(self.input)
-    #     self.next(self.join_make_entries_second_try)
-    #
-    # @kubernetes(**K8S)
-    # @environment(**ENV)
-    # @retry
-    # @step
-    # def join_make_entries_second_try(self, inputs):
-    #     self.pipeline = inputs[0].pipeline
-    #     self.merge_artifacts(inputs, exclude=["chunks", "reruns"])
-    #     self.pipeline.cfg.context.pdb_ids = self.original_pdb_ids
-    #     self.next(self.scatter_structure_qc)
-    #
     @kubernetes(**K8S)
     @environment(**ENV)
     @retry
     @step
-    def scatter_structure_qc(self):
-        self.chunks = self.pipeline.scatter_structure_qc()
-        self.next(self.structure_qc, foreach="chunks")
+    def scatter_make_entries(self):
+        self.chunks = self.pipeline.scatter_make_entries()
+        self.next(self.make_entries, foreach="chunks")
+
+    @kubernetes(**{**K8S, **WORKSTATION})
+    @environment(**ENV)
+    @retry
+    @step
+    def make_entries(self):
+        self.pipeline.cfg.flow.make_entries_cpu = WORKSTATION["cpu"]
+        self.reruns = self.pipeline.make_entries(self.input)
+        self.next(self.join_make_entries)
+
+    @kubernetes(**K8S)
+    @environment(**ENV)
+    @retry
+    @step
+    def join_make_entries(self, inputs):
+        self.pipeline = inputs[0].pipeline
+        self.merge_artifacts(inputs, exclude=["chunks", "reruns"])
+        self.reruns = self.pipeline.join_make_entries(
+            [input_.reruns for input_ in inputs]
+        )
+        self.next(self.scatter_make_canonical_ligand_archives)
+
+    @kubernetes(**K8S)
+    @environment(**ENV)
+    @retry
+    @step
+    def scatter_make_canonical_ligand_archives(self):
+        self.chunks = self.pipeline.scatter_make_canonical_ligand_archives()
+        self.next(self.make_canonical_ligand_archives, foreach="chunks")
 
     @kubernetes(**{**K8S, **{"memory": 4000}})
     @environment(**ENV)
     @retry
     @step
-    def structure_qc(self):
-        self.pipeline.structure_qc(self.input)
-        self.next(self.join_structure_qc)
+    def make_canonical_ligand_archives(self):
+        self.pipeline.make_canonical_ligand_archives(self.input)
+        self.next(self.join_make_canonical_ligand_archives)
 
     @kubernetes(**K8S)
     @environment(**ENV)
     @retry
     @step
-    def join_structure_qc(self, inputs):
+    def join_make_canonical_ligand_archives(self, inputs):
         self.pipeline = inputs[0].pipeline
         self.merge_artifacts(inputs, exclude=["chunks"])
-        self.pipeline.join_structure_qc([])
-        self.next(self.scatter_score_linked_structures)
+        self.next(self.scatter_make_ligands)
 
-    # @kubernetes(**K8S)
-    # @environment(**ENV)
-    # @retry
-    # @step
-    # def scatter_make_system_archives(self):
-    #     self.chunks = self.pipeline.scatter_make_system_archives()
-    #     self.next(self.make_system_archives, foreach="chunks")
-    #
-    # @kubernetes(**K8S)
-    # @environment(**ENV)
-    # @retry
-    # @step
-    # def make_system_archives(self):
-    #     self.pipeline.make_system_archives(self.input)
-    #     self.next(self.join_make_system_archives)
-    #
-    # @kubernetes(**K8S)
-    # @environment(**ENV)
-    # @retry
-    # @step
-    # def join_make_system_archives(self, inputs):
-    #     self.pipeline = inputs[0].pipeline
-    #     self.merge_artifacts(inputs, exclude=["chunks"])
-    #     self.next(self.scatter_make_ligands)
-    #
-    # @kubernetes(**K8S)
-    # @environment(**ENV)
-    # @retry
-    # @step
-    # def scatter_make_ligands(self):
-    #     self.chunks = self.pipeline.scatter_make_ligands()
-    #     self.next(self.make_ligands, foreach="chunks")
-    #
-    # @kubernetes(**{**K8S, **WORKSTATION_MEM})
-    # @environment(**ENV)
-    # @retry
-    # @step
-    # def make_ligands(self):
-    #     self.pipeline.make_ligands(self.input)
-    #     self.next(self.join_make_ligands)
-    #
-    # @kubernetes(**K8S)
-    # @environment(**ENV)
-    # @retry
-    # @step
-    # def join_make_ligands(self, inputs):
-    #     self.pipeline = inputs[0].pipeline
-    #     self.merge_artifacts(inputs, exclude=["chunks"])
-    #     self.next(self.compute_ligand_fingerprints)
-    #
-    # @kubernetes(**{**K8S, **DATABASES})
-    # @environment(**ENV)
-    # @retry
-    # @step
-    # def compute_ligand_fingerprints(self):
-    #     self.pipeline.compute_ligand_fingerprints()
-    #     self.next(self.scatter_make_ligand_scores)
-    #
-    # @kubernetes(**K8S)
-    # @environment(**ENV)
-    # @retry
-    # @step
-    # def scatter_make_ligand_scores(self):
-    #     self.chunks = self.pipeline.scatter_make_ligand_scores()
-    #     self.next(self.make_ligand_scores, foreach="chunks")
-    #
-    # @kubernetes(**{**K8S, **WORKSTATION_MEM})
-    # @environment(**ENV)
-    # @retry
-    # @step
-    # def make_ligand_scores(self):
-    #     self.pipeline.make_ligand_scores(self.input)
-    #     self.reruns = self.pipeline.make_ligand_scores(self.input)
-    #     self.next(self.join_make_ligand_scores)
-    #
-    # @kubernetes(**K8S)
-    # @retry
-    # @step
-    # def join_make_ligand_scores(self, inputs):
-    #     self.pipeline = inputs[0].pipeline
-    #     self.merge_artifacts(inputs, exclude=["chunks"])
-    #     self.next(self.make_sub_dbs)
-    #
-    # @kubernetes(**{**K8S, **DATABASES})
-    # @environment(**ENV)
-    # @retry
-    # @step
-    # def make_sub_dbs(self):
-    #     self.pipeline.make_sub_dbs()
-    #     self.next(self.scatter_run_batch_searches)
-    #
-    # @kubernetes(**K8S)
-    # @environment(**ENV)
-    # @retry
-    # @step
-    # def scatter_run_batch_searches(self):
-    #     self.chunks = self.pipeline.scatter_run_batch_searches()
-    #     self.next(self.run_batch_searches, foreach="chunks")
-    #
-    # @kubernetes(**{**K8S, **DATABASES})
-    # @environment(**ENV)
-    # @retry
-    # @step
-    # def run_batch_searches(self):
-    #     self.pipeline.run_batch_searches(self.input)
-    #     self.next(self.join_run_batch_searches)
-    #
-    # @kubernetes(**K8S)
-    # @environment(**ENV)
-    # @retry
-    # @step
-    # def join_run_batch_searches(self, inputs):
-    #     self.pipeline = inputs[0].pipeline
-    #     self.merge_artifacts(inputs, exclude=["chunks"])
-    #     self.next(self.scatter_make_batch_scores)
-    #
-    # @kubernetes(**K8S)
-    # @environment(**ENV)
-    # @retry
-    # @step
-    # def scatter_make_batch_scores(self):
-    #     self.chunks = self.pipeline.scatter_make_batch_scores()
-    #     self.next(self.make_batch_scores, foreach="chunks")
-    #
-    # @kubernetes(**{**K8S, **{"memory": 10000}})
-    # @environment(**ENV)
-    # @retry
-    # @step
-    # def make_batch_scores(self):
-    #     self.chunks = self.pipeline.make_batch_scores(self.input)
-    #     self.next(self.join_make_batch_scores)
-    #
-    # @kubernetes(**K8S)
-    # @environment(**ENV)
-    # @retry
-    # @step
-    # def join_make_batch_scores(self, inputs):
-    #     self.pipeline = inputs[0].pipeline
-    #     self.merge_artifacts(inputs, exclude=["chunks"])
-    #     # self.next(self.scatter_make_components_and_communities)
-    #     self.next(self.make_mmp_index)  # scatter_make_components_and_communities)
-    #
+    @kubernetes(**K8S)
+    @environment(**ENV)
+    @retry
+    @step
+    def scatter_make_ligands(self):
+        self.chunks = self.pipeline.scatter_make_ligands()
+        self.next(self.make_ligands, foreach="chunks")
+
+    @kubernetes(**{**K8S, **WORKSTATION_MEM})
+    @environment(**ENV)
+    @retry
+    @step
+    def make_ligands(self):
+        self.pipeline.make_ligands(self.input)
+        self.next(self.join_make_ligands)
+
+    @kubernetes(**K8S)
+    @environment(**ENV)
+    @retry
+    @step
+    def join_make_ligands(self, inputs):
+        self.pipeline = inputs[0].pipeline
+        self.merge_artifacts(inputs, exclude=["chunks"])
+        self.next(self.compute_ligand_fingerprints)
+
+    @kubernetes(**{**K8S, **DATABASES})
+    @environment(**ENV)
+    @retry
+    @step
+    def compute_ligand_fingerprints(self):
+        self.pipeline.compute_ligand_fingerprints()
+        self.next(self.scatter_make_ligand_scores)
+
+    @kubernetes(**K8S)
+    @environment(**ENV)
+    @retry
+    @step
+    def scatter_make_ligand_scores(self):
+        self.chunks = self.pipeline.scatter_make_ligand_scores()
+        self.next(self.make_ligand_scores, foreach="chunks")
+
+    @kubernetes(**{**K8S, **WORKSTATION_MEM})
+    @environment(**ENV)
+    @retry
+    @step
+    def make_ligand_scores(self):
+        self.pipeline.make_ligand_scores(self.input)
+        self.next(self.join_make_ligand_scores)
+
+    @kubernetes(**K8S)
+    @environment(**ENV)
+    @retry
+    @step
+    def join_make_ligand_scores(self, inputs):
+        self.pipeline = inputs[0].pipeline
+        self.merge_artifacts(inputs, exclude=["chunks"])
+        self.next(self.make_sub_dbs)
+
+    @kubernetes(**{**K8S, **DATABASES})
+    @environment(**ENV)
+    @retry
+    @step
+    def make_sub_dbs(self):
+        self.pipeline.make_sub_dbs()
+        self.next(self.scatter_run_batch_searches)
+
+    @kubernetes(**K8S)
+    @environment(**ENV)
+    @retry
+    @step
+    def scatter_run_batch_searches(self):
+        self.chunks = self.pipeline.scatter_run_batch_searches()
+        self.next(self.run_batch_searches, foreach="chunks")
+
+    @kubernetes(**{**K8S, **DATABASES})
+    @environment(**ENV)
+    @retry
+    @step
+    def run_batch_searches(self):
+        self.pipeline.run_batch_searches(self.input)
+        self.next(self.join_run_batch_searches)
+
+    @kubernetes(**K8S)
+    @environment(**ENV)
+    @retry
+    @step
+    def join_run_batch_searches(self, inputs):
+        self.pipeline = inputs[0].pipeline
+        self.merge_artifacts(inputs, exclude=["chunks"])
+        self.next(self.scatter_make_batch_scores)
+
+    @kubernetes(**K8S)
+    @environment(**ENV)
+    @retry
+    @step
+    def scatter_make_batch_scores(self):
+        self.chunks = self.pipeline.scatter_make_batch_scores()
+        self.next(self.make_batch_scores, foreach="chunks")
+
+    @kubernetes(**{**K8S, **{"memory": 10000}})
+    @environment(**ENV)
+    @retry
+    @step
+    def make_batch_scores(self):
+        self.pipeline.make_batch_scores(self.input)
+        self.next(self.join_make_batch_scores)
+
+    @kubernetes(**K8S)
+    @environment(**ENV)
+    @retry
+    @step
+    def join_make_batch_scores(self, inputs):
+        self.pipeline = inputs[0].pipeline
+        self.merge_artifacts(inputs, exclude=["chunks"])
+        self.next(self.end)
+
     # @kubernetes(**K8S)
     # @environment(**ENV)
     # @retry
@@ -435,33 +380,6 @@ class PlinderDataIngestFlow(FlowSpec):
     #     self.pipeline.make_linked_structures()
     #     self.next(self.end)
     #
-    @kubernetes(**{**K8S, **{"memory": 6000}})
-    @environment(**ENV)
-    @retry
-    @step
-    def scatter_score_linked_structures(self):
-        self.chunks = self.pipeline.scatter_score_linked_structures()
-        self.next(self.score_linked_structures, foreach="chunks")
-
-    @kubernetes(**{**K8S, **WORKSTATION, **{"memory": 28000}})
-    @environment(**ENV)
-    @retry
-    @step
-    def score_linked_structures(self):
-        self.pipeline.cfg.flow.score_linked_structures_cpu = WORKSTATION["cpu"] - 1
-        self.pipeline.score_linked_structures(self.input)
-        self.next(self.join_score_linked_structures)
-
-    @kubernetes(**K8S)
-    @environment(**ENV)
-    @retry
-    @step
-    def join_score_linked_structures(self, inputs):
-        self.pipeline = inputs[0].pipeline
-        self.pipeline.join_score_linked_structures(inputs)
-        self.merge_artifacts(inputs, exclude=["chunks"])
-        self.next(self.end)
-
     @kubernetes(**K8S)
     @environment(**ENV)
     @retry

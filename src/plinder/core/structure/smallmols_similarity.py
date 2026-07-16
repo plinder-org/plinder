@@ -202,6 +202,33 @@ def load_ligands_from_entry(
     return df
 
 
+def load_ligands_from_index(*, annotation: pd.DataFrame) -> pd.DataFrame:
+    """Extract fingerprint inputs directly from annotation parquet rows."""
+    columns = {
+        "entry_pdb_id": "pdb_id",
+        "system_id": "system_id",
+        "ligand_rdkit_canonical_smiles": "ligand_rdkit_canonical_smiles",
+        "ligand_unique_ccd_code": "ligand_ccd_code",
+        "ligand_id": "ligand_id",
+    }
+    if annotation.empty:
+        return pd.DataFrame(columns=[*columns.values(), "inchikeys"])
+    ligands = annotation.loc[
+        annotation["system_type"].eq("holo"), list(columns)
+    ].rename(columns=columns)
+    ligands = (
+        ligands.dropna(subset=["ligand_id", "ligand_rdkit_canonical_smiles"])
+        .loc[lambda frame: frame["ligand_rdkit_canonical_smiles"].ne("")]
+        .drop_duplicates(subset=["ligand_id"])
+        .reset_index(drop=True)
+        .sort_values("ligand_id")
+    )
+    ligands["inchikeys"] = ligands["ligand_rdkit_canonical_smiles"].apply(
+        smiles2inchikey
+    )
+    return ligands
+
+
 def compute_ligand_fingerprints(
     *, data_dir: Path, split_char: str = "__", radius: int = 2, nbits: int = 1024
 ) -> None:

@@ -38,7 +38,7 @@ def evaluate(
     reference_system_id: str
         The PLINDER systemID of the reference system
     receptor_file: Path
-        The path to the receptor CIF/PDB file
+        The path to the receptor mmCIF file
     ligand_file: Path
         Path to the ligand sdf file OR directory with .sdf files
     predictions_dir: Path | None

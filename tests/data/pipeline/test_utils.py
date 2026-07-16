@@ -1,19 +1,8 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
+import pandas as pd
 import pytest
 from plinder.data.pipeline import utils
-
-_ENTRY = """
-{{
-    "pdb_id": "{pdb_id}",
-    "release_date": "2002-11-29",
-    "oligomeric_state": "monomeric",
-    "determination_method": "X-RAY DIFFRACTION",
-    "keywords": "MEMBRANE PROTEIN",
-    "pH": "8",
-    "resolution": 2.7
-}}
-""".format
 
 
 @pytest.mark.parametrize(
@@ -39,10 +28,13 @@ def test_should_run_stage(funcname, run, skip, expect):
     ],
 )
 def test_entry_exists(expect, tmp_path):
-    path = tmp_path / "aa" / "aaaa.json"
+    path = tmp_path / "aa" / "aaaa.parquet"
     path.parent.mkdir(parents=True)
     if expect:
         path.write_text("")
+        chain_path = tmp_path / "aa" / "aaaa" / "entry_chains.parquet"
+        chain_path.parent.mkdir()
+        chain_path.write_text("")
     assert (
         utils.entry_exists(
             entry_dir=tmp_path,
@@ -52,34 +44,12 @@ def test_entry_exists(expect, tmp_path):
     )
 
 
-def test_load_entries(tmp_path):
-    a = tmp_path / "raw_entries" / "aa" / "aaaa.json"
-    b = tmp_path / "raw_entries" / "bb" / "bbbb.json"
-    a.parent.mkdir(parents=True)
-    b.parent.mkdir(parents=True)
-    a.write_text(_ENTRY(pdb_id="aaaa"))
-    b.write_text(_ENTRY(pdb_id="bbbb"))
-    ret = utils.load_entries(
-        data_dir=tmp_path,
-        pdb_ids=["aaaa", "bbbb"],
-    )
-    assert len(ret) == 2
+def test_entry_exists_requires_chain_sidecar(tmp_path):
+    annotation = tmp_path / "aa" / "aaaa.parquet"
+    annotation.parent.mkdir(parents=True)
+    annotation.touch()
 
-
-@pytest.mark.parametrize(
-    "kwargs, expect",
-    [
-        ({}, 2),
-        ({"two_char_codes": ["2g"]}, 2),
-        ({"pdb_ids": ["22gs"]}, 1),
-    ],
-)
-def test_load_entries_from_zips(kwargs, expect, tmp_path, entry_zip):
-    zip_dir = tmp_path / "entries"
-    zip_dir.mkdir(parents=True)
-    (zip_dir / entry_zip.name).write_bytes(entry_zip.read_bytes())
-    entries = utils.load_entries_from_zips(data_dir=tmp_path, **kwargs)
-    assert len(entries) == expect
+    assert not utils.entry_exists(entry_dir=tmp_path, pdb_id="aaaa")
 
 
 @pytest.mark.parametrize(
@@ -103,12 +73,12 @@ def test_hash_contents(contents):
     ],
 )
 def test_get_local_contents(two_char_codes, expect, tmp_path):
-    a = tmp_path / "aa" / "aaaa" / "aaaa.json"
-    b = tmp_path / "bb" / "bbbb" / "bbbb.json"
+    a = tmp_path / "aa" / "aaaa" / "aaaa.cif"
+    b = tmp_path / "bb" / "bbbb" / "bbbb.cif"
     a.parent.mkdir(parents=True)
     b.parent.mkdir(parents=True)
-    a.write_text(_ENTRY(pdb_id="aaaa"))
-    b.write_text(_ENTRY(pdb_id="bbbb"))
+    a.touch()
+    b.touch()
     contents = utils.get_local_contents(
         data_dir=tmp_path,
         two_char_codes=two_char_codes,
@@ -117,11 +87,44 @@ def test_get_local_contents(two_char_codes, expect, tmp_path):
 
 
 def test_get_local_contents_pdb_ids(tmp_path):
-    a = tmp_path / "aa" / "pdb_0000aaaa" / "aaaa.json"
-    b = tmp_path / "bb" / "pdb_0000bbbb" / "bbbb.json"
+    a = tmp_path / "aa" / "pdb_0000aaaa" / "aaaa.cif"
+    b = tmp_path / "bb" / "pdb_0000bbbb" / "bbbb.cif"
     a.parent.mkdir(parents=True)
     b.parent.mkdir(parents=True)
-    a.write_text(_ENTRY(pdb_id="aaaa"))
-    b.write_text(_ENTRY(pdb_id="bbbb"))
+    a.touch()
+    b.touch()
     contents = utils.get_local_contents(data_dir=tmp_path, as_four_char_ids=True)
     assert contents == ["aaaa", "bbbb"]
+
+
+def test_create_index_collates_per_entry_parquets(tmp_path, monkeypatch):
+    first = tmp_path / "raw_entries" / "aa" / "1aaa.parquet"
+    second = tmp_path / "raw_entries" / "bb" / "2bbb.parquet"
+    first.parent.mkdir(parents=True)
+    second.parent.mkdir(parents=True)
+    pd.DataFrame({"system_id": ["1aaa__1__A"]}).to_parquet(first, index=False)
+    pd.DataFrame({"system_id": ["2bbb__1__B"]}).to_parquet(second, index=False)
+    chain_columns = {
+        "chain_asym_id": ["A"],
+        "chain_auth_id": ["A"],
+        "chain_entity_id": ["1"],
+        "chain_type": ["polypeptide(L)"],
+        "chain_length": [100],
+        "chain_num_unresolved_residues": [0],
+        "chain_is_holo": [True],
+        "chain_uniprot_ids": [["P12345"]],
+    }
+    for pdb_id, code in [("1aaa", "aa"), ("2bbb", "bb")]:
+        chain_path = tmp_path / "raw_entries" / code / pdb_id / "entry_chains.parquet"
+        chain_path.parent.mkdir(parents=True)
+        pd.DataFrame({"entry_pdb_id": [pdb_id], **chain_columns}).to_parquet(
+            chain_path, index=False
+        )
+    monkeypatch.setattr(utils, "add_aggregated_columns", lambda index: index)
+
+    index = utils.create_index(data_dir=tmp_path, force_update=True)
+
+    assert index["system_id"].tolist() == ["1aaa__1__A", "2bbb__1__B"]
+    assert (tmp_path / "index" / "annotation_table.parquet").is_file()
+    entry_chains = pd.read_parquet(tmp_path / "index" / "entry_chains.parquet")
+    assert entry_chains["entry_pdb_id"].tolist() == ["1aaa", "2bbb"]
