@@ -6,8 +6,9 @@ import shutil
 import subprocess
 from collections import Counter, abc, defaultdict
 from dataclasses import dataclass, field
+from functools import cache
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import biotite.sequence as seq
 import biotite.sequence.align as align
@@ -16,6 +17,9 @@ import pandas as pd
 import pyarrow
 import pyarrow.parquet as pq
 from pyarrow import csv
+from rdkit import Chem, RDConfig
+from rdkit.Chem import AllChem, rdShapeAlign, rdShapeHelpers
+from rdkit.Chem.FeatMaps import FeatMaps
 from tqdm import tqdm
 
 from plinder.core.scores.entries import (
@@ -59,6 +63,116 @@ SCORE_NAMES = (
 _ChainInstanceMapping = str
 _ChainPairType = tuple[_ChainInstanceMapping, _ChainInstanceMapping]
 _SimilarityScoreDictType = dict[str, float]
+
+PHARMACOPHORE_FEATURES = frozenset(
+    {
+        "Donor",
+        "Acceptor",
+        "NegIonizable",
+        "PosIonizable",
+        "ZnBinder",
+        "Aromatic",
+        "Hydrophobe",
+        "LumpedHydrophobe",
+    }
+)
+
+
+@cache
+def _get_feature_scoring_context() -> tuple[Any, dict[str, FeatMaps.FeatMapParams]]:
+    """Load RDKit's pharmacophore definitions only when shape scoring is used."""
+    factory = AllChem.BuildFeatureFactory(
+        str(Path(RDConfig.RDDataDir) / "BaseFeatures.fdef")
+    )
+    parameters = {
+        family: FeatMaps.FeatMapParams() for family in factory.GetFeatureFamilies()
+    }
+    return factory, parameters
+
+
+def align_molecules(
+    reference: Chem.Mol,
+    mobile: Chem.Mol,
+    max_preiters: int = 100,
+    max_postiters: int = 100,
+) -> tuple[float, float]:
+    """Shape-align ``mobile`` onto ``reference`` and return shape/color scores."""
+    crippen_o3a = Chem.rdMolAlign.GetCrippenO3A(
+        mobile, reference, maxIters=max_preiters
+    )
+    crippen_o3a.Align()
+    shape, color = rdShapeAlign.AlignMol(
+        reference,
+        mobile,
+        max_preiters=max_preiters,
+        max_postiters=max_postiters,
+    )
+    return float(shape), float(color)
+
+
+def get_feature_map_score(
+    mol_1: Chem.Mol,
+    mol_2: Chem.Mol,
+    score_mode: FeatMaps.FeatMapScoreMode = FeatMaps.FeatMapScoreMode.All,
+) -> float:
+    """Calculate the normalized pharmacophore feature overlap."""
+    factory, parameters = _get_feature_scoring_context()
+    feature_lists = []
+    for molecule in (mol_1, mol_2):
+        feature_lists.append(
+            [
+                feature
+                for feature in factory.GetFeaturesForMol(molecule)
+                if feature.GetFamily() in PHARMACOPHORE_FEATURES
+            ]
+        )
+    denominator = min(len(features) for features in feature_lists)
+    if denominator == 0:
+        return 0.0
+    feature_map = FeatMaps.FeatMap(
+        feats=feature_lists[0],
+        weights=[1] * len(feature_lists[0]),
+        params=parameters,
+    )
+    feature_map.scoreMode = score_mode
+    return float(feature_map.ScoreFeats(feature_lists[1]) / denominator)
+
+
+def get_sucos_score(
+    mol_1: Chem.Mol,
+    mol_2: Chem.Mol,
+    score_mode: FeatMaps.FeatMapScoreMode = FeatMaps.FeatMapScoreMode.All,
+) -> float:
+    """Calculate SuCOS from feature overlap and shape protrusion distance."""
+    feature_map_score = float(
+        np.clip(get_feature_map_score(mol_1, mol_2, score_mode), 0, 1)
+    )
+    protrude_distance = float(
+        np.clip(
+            rdShapeHelpers.ShapeProtrudeDist(mol_1, mol_2, allowReordering=False),
+            0,
+            1,
+        )
+    )
+    return 0.5 * feature_map_score + 0.5 * (1 - protrude_distance)
+
+
+def load_sdf_molecule(sdf_file: Path) -> Chem.Mol | None:
+    """Load and sanitize one SDF molecule, returning ``None`` on failure."""
+    try:
+        molecule = Chem.MolFromMolFile(str(sdf_file))
+        if molecule is None:
+            molecule = Chem.MolFromMolFile(
+                str(sdf_file), sanitize=False, strictParsing=False
+            )
+            if molecule is not None:
+                Chem.SanitizeMol(molecule)
+        if molecule is None or molecule.GetNumConformers() == 0:
+            return None
+        return molecule
+    except Exception as exc:
+        LOG.warning(f"failed loading ligand SDF {sdf_file}: {exc}")
+        return None
 
 
 def get_sequence_similarity(seq_str1: str, seq_str2: str) -> tuple[float, float]:
@@ -282,10 +396,109 @@ class Scorer:
     minimum_thresholds: dict[str, int] = field(
         default_factory=lambda: {"pli_qcov": 0, "pocket_qcov": 0, "pli_unique_qcov": 0}
     )
+    _ligand_mol_cache: dict[tuple[str, str], Chem.Mol | None] = field(
+        default_factory=dict, init=False, repr=False
+    )
 
     def __post_init__(self) -> None:
         self.db_dir.mkdir(exist_ok=True, parents=True)
         self.scores_dir.mkdir(exist_ok=True, parents=True)
+
+    def resolve_ligand_sdf(self, data_dir: Path, ligand: LigandView) -> Path | None:
+        """Resolve canonical ligand storage first, then the legacy system path."""
+        two_char_code = ligand.pdb_id[-3:-1]
+        candidates = (
+            # Canonical per-entry layout written by the annotation pipeline.
+            data_dir
+            / "raw_entries"
+            / two_char_code
+            / ligand.pdb_id
+            / "ligand_files"
+            / f"{ligand.asym_id}.sdf",
+            # Canonical layout after a systems archive is downloaded/extracted.
+            data_dir
+            / "systems"
+            / ligand.pdb_id
+            / "ligand_files"
+            / f"{ligand.asym_id}.sdf",
+            data_dir / ligand.pdb_id / "ligand_files" / f"{ligand.asym_id}.sdf",
+            # Legacy instance-specific system layouts.
+            data_dir
+            / "raw_entries"
+            / two_char_code
+            / ligand.system_id
+            / "ligand_files"
+            / f"{ligand.instance_chain}.sdf",
+            data_dir
+            / "systems"
+            / ligand.system_id
+            / "ligand_files"
+            / f"{ligand.instance_chain}.sdf",
+            data_dir
+            / ligand.system_id
+            / "ligand_files"
+            / f"{ligand.instance_chain}.sdf",
+        )
+        return next((path for path in candidates if path.is_file()), None)
+
+    def _get_ligand_mol(self, data_dir: Path, ligand: LigandView) -> Chem.Mol | None:
+        cache_key = (ligand.pdb_id, ligand.asym_id)
+        if cache_key not in self._ligand_mol_cache:
+            sdf_file = self.resolve_ligand_sdf(data_dir, ligand)
+            if sdf_file is None:
+                LOG.warning(
+                    "no ligand SDF found for "
+                    f"{ligand.id} (canonical key={cache_key})"
+                )
+                self._ligand_mol_cache[cache_key] = None
+            else:
+                self._ligand_mol_cache[cache_key] = load_sdf_molecule(sdf_file)
+        return self._ligand_mol_cache[cache_key]
+
+    def get_ligand_pair_shape_scores(
+        self,
+        data_dir: Path,
+        query_ligand: LigandView,
+        target_ligand: LigandView,
+        pocket_qcov: float,
+    ) -> _SimilarityScoreDictType:
+        """Shape-score one ligand pair after the pocket-coverage gate."""
+        if not np.isfinite(pocket_qcov) or pocket_qcov <= 0:
+            return {}
+
+        query_mol = self._get_ligand_mol(data_dir, query_ligand)
+        target_mol = self._get_ligand_mol(data_dir, target_ligand)
+        if query_mol is None or target_mol is None:
+            return {}
+
+        # Both Crippen O3A and AlignMol mutate the mobile conformer. Always
+        # clone cached molecules so one comparison cannot affect another.
+        query_aligned = Chem.Mol(query_mol)
+        target_aligned = Chem.Mol(target_mol)
+        try:
+            shape, color = align_molecules(query_aligned, target_aligned)
+        except Exception as exc:
+            LOG.warning(
+                "shape alignment failed for "
+                f"{query_ligand.id} to {target_ligand.id}: {exc}"
+            )
+            return {}
+
+        scores: _SimilarityScoreDictType = {
+            "shape": float(np.clip(shape, 0, 1)),
+            "color": float(np.clip(color, 0, 1)),
+        }
+        try:
+            sucos_shape = get_sucos_score(query_aligned, target_aligned)
+        except Exception as exc:
+            LOG.warning(
+                "SuCOS calculation failed for "
+                f"{query_ligand.id} to {target_ligand.id}: {exc}"
+            )
+            return scores
+        scores["sucos_shape"] = sucos_shape
+        scores["sucos_shape_pocket_qcov"] = sucos_shape * pocket_qcov
+        return scores
 
     def make_dbs(self) -> None:
         databases.make_sub_dbs(self.db_dir, self.source_to_full_db_file, self.entries)

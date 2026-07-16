@@ -3,11 +3,25 @@
 from __future__ import annotations
 
 from collections import Counter
+from pathlib import Path
 
 import pandas as pd
 import pytest
 from plinder.core.scores.entries import LigandView, entry_views_from_df
-from plinder.data.utils.annotations.get_similarity_scores import Scorer
+from plinder.data.utils.annotations.get_similarity_scores import (
+    Scorer,
+    get_feature_map_score,
+)
+from rdkit import Chem
+
+SDF_FILE = (
+    Path(__file__).resolve().parents[1]
+    / "test_data"
+    / "mini_system_files_new"
+    / "1fbz__1__1.A__1.C"
+    / "ligand_files"
+    / "1.C.sdf"
+)
 
 
 def test_entry_views_accept_annotation_dataframe(cif_2gdo) -> None:
@@ -162,3 +176,76 @@ def test_ligand_pair_pocket_scores_do_not_use_system_union(tmp_path) -> None:
     assert partial_pocket["pocket_qcov_foldseek"] == pytest.approx(0.5)
     assert full_pli["pli_qcov_foldseek"] == pytest.approx(1.0)
     assert partial_pli["pli_qcov_foldseek"] == pytest.approx(0.5)
+
+
+def test_ligand_pair_shape_scores_gate_sdf_access_and_cache(
+    tmp_path, monkeypatch
+) -> None:
+    scorer = Scorer(
+        entries={},
+        source_to_full_db_file={},
+        db_dir=tmp_path / "db",
+        scores_dir=tmp_path / "scores",
+    )
+    query = _ligand("1abc__1__1.B", "1.B", {"1.A": {10: 9}}, {})
+    target = _ligand("2def__1__1.Y", "1.Y", {"1.X": {110: 109}}, {})
+    resolved: list[str] = []
+
+    def resolve_sdf(_data_dir: Path, ligand: LigandView) -> Path:
+        resolved.append(ligand.id)
+        return SDF_FILE
+
+    monkeypatch.setattr(scorer, "resolve_ligand_sdf", resolve_sdf)
+
+    assert scorer.get_ligand_pair_shape_scores(tmp_path, query, target, 0.0) == {}
+    assert (
+        scorer.get_ligand_pair_shape_scores(tmp_path, query, target, float("nan")) == {}
+    )
+    assert resolved == []
+
+    scores = scorer.get_ligand_pair_shape_scores(tmp_path, query, target, 0.5)
+    assert set(scores) == {
+        "shape",
+        "color",
+        "sucos_shape",
+        "sucos_shape_pocket_qcov",
+    }
+    assert scores["sucos_shape_pocket_qcov"] == pytest.approx(
+        scores["sucos_shape"] * 0.5
+    )
+    assert all(0 <= value <= 1 for value in scores.values())
+    assert resolved == [query.id, target.id]
+
+    # Re-scoring uses pristine clones of the two cached base molecules.
+    assert scorer.get_ligand_pair_shape_scores(tmp_path, query, target, 0.5) == scores
+    assert resolved == [query.id, target.id]
+
+
+def test_ligand_sdf_resolver_prefers_canonical_entry_path(tmp_path) -> None:
+    scorer = Scorer(
+        entries={},
+        source_to_full_db_file={},
+        db_dir=tmp_path / "db",
+        scores_dir=tmp_path / "scores",
+    )
+    ligand = _ligand("1abc__1__1.B", "1.B", {"1.A": {10: 9}}, {})
+    canonical = tmp_path / "raw_entries" / "ab" / "1abc" / "ligand_files" / "B.sdf"
+    legacy = (
+        tmp_path / "raw_entries" / "ab" / ligand.system_id / "ligand_files" / "1.B.sdf"
+    )
+    canonical.parent.mkdir(parents=True)
+    legacy.parent.mkdir(parents=True)
+    canonical.write_text("canonical")
+    legacy.write_text("legacy")
+
+    assert scorer.resolve_ligand_sdf(tmp_path, ligand) == canonical
+
+
+def test_feature_map_score_handles_molecules_without_features() -> None:
+    helium = Chem.MolFromSmiles("[He]")
+    assert helium is not None
+    conformer = Chem.Conformer(helium.GetNumAtoms())
+    conformer.SetAtomPosition(0, (0.0, 0.0, 0.0))
+    helium.AddConformer(conformer)
+
+    assert get_feature_map_score(helium, helium) == 0.0
