@@ -15,7 +15,12 @@ from plinder.core.utils.config import get_config
 from plinder.core.utils.log import setup_logger
 
 LOG = setup_logger(__name__)
-ZIP_KINDS = Literal["entries", "linked_structures", "systems"]
+ZIP_KINDS = Literal[
+    "entries",
+    "ligand_archives",
+    "linked_structures",
+    "systems",
+]
 ID_KINDS = Literal["system_ids", "pdb_ids", "two_char_code"]
 
 
@@ -145,7 +150,7 @@ def get_zips_to_unpack(
         )
     )
 
-    if kind in ["systems", "linked_structures"]:
+    if kind in ["ligand_archives", "systems", "linked_structures"]:
         if len(paths) > 10:
             thread_map(_unpack_zip, paths)
         else:

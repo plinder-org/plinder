@@ -1,5 +1,7 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -352,9 +354,13 @@ def test_get_single_ligand_system_annotations(cif_6fx1, mock_alternative_dataset
 
 
 def test_canonical_ligand_saving_and_system_reconstruction(
-    cif_2y4i, mock_alternative_datasets
+    cif_2y4i, mock_alternative_datasets, monkeypatch
 ):
+    import builtins
+    import sys
+
     import biotite.structure as struc
+    from biotite.sequence.io.fasta import FastaFile
     from biotite.structure.io import pdbx
     from plinder.data.utils.annotations.cif_utils import read_mmcif_file
 
@@ -394,6 +400,9 @@ def test_canonical_ligand_saving_and_system_reconstruction(
     assert set(written) == {"system_cif", "receptor_cif", "sequences_fasta"}
     assert all(path.is_file() for path in written.values())
     assert not list(output_dir.glob("*.pdb"))
+    sequences = dict(FastaFile.read_iter(outputs.sequences_fasta))
+    assert set(sequences) == {"1.B"}
+    assert len(sequences["1.B"]) == 395
 
     system_atoms = pdbx.get_structure(read_mmcif_file(outputs.system_cif), model=1)
     assert not np.any(struc.filter_solvent(system_atoms))
@@ -401,6 +410,84 @@ def test_canonical_ligand_saving_and_system_reconstruction(
     expected_chains.update(row["system_ligand_chains"])
     expected_chains.update(row["system_other_protein_chains_asym_id"])
     assert set(system_atoms.chain_id) == expected_chains
+
+    # FASTA reconstruction is part of the base package and must not import
+    # pipeline validation or OpenStructure dependencies.
+    sys.modules.pop("plinder.data.utils.annotations.protein_utils", None)
+    original_import = builtins.__import__
+
+    def reject_optional_imports(name, *args, **kwargs):
+        if name == "ost" or name.startswith(("ost.", "PDBValidation")):
+            raise AssertionError(f"unexpected optional import: {name}")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", reject_optional_imports)
+    dependency_free_fasta = output_dir / "dependency_free.fasta"
+    save_reconstructed_system(
+        cif_2y4i,
+        row,
+        outputs=SystemReconstructionOutputs(
+            sequences_fasta=dependency_free_fasta,
+        ),
+        options=SystemReconstructionOptions(
+            system_waters="none",
+            receptor_waters="none",
+        ),
+    )
+    assert dict(FastaFile.read_iter(dependency_free_fasta)) == sequences
+
+    annotation = entry.to_df()
+    query_calls = []
+
+    def query_one_system(*, columns, splits, filters):
+        assert columns == ["*"]
+        assert splits == ["*"]
+        assert len(filters) == 1
+        column, operator, value = filters[0]
+        assert operator == "=="
+        query_calls.append((column, value))
+        return annotation[annotation[column] == value].copy()
+
+    monkeypatch.setattr("plinder.core.index.system.query_index", query_one_system)
+    from plinder.core import PlinderSystem
+
+    reconstructed_dir = output_dir / "from_plinder_system"
+    plinder_system = PlinderSystem(
+        system_id=system_tag,
+        source_mmcif=cif_2y4i,
+        reconstruction_dir=reconstructed_dir,
+        canonical_ligand_dir=canonical_ligand_dir,
+        reconstruction_options=SystemReconstructionOptions(
+            system_waters="none",
+            receptor_waters="none",
+        ),
+    )
+    assert len(plinder_system.entry) == len(
+        annotation[annotation["entry_pdb_id"] == "2y4i"]
+    )
+    assert len(plinder_system.system) == 2
+    assert query_calls == [
+        ("entry_pdb_id", "2y4i"),
+        ("system_id", system_tag),
+    ]
+
+    canonical_sdfs = plinder_system.canonical_ligand_sdfs
+    assert set(canonical_sdfs) == {"1.E", "1.F"}
+    assert {Path(path).name for path in canonical_sdfs.values()} == {
+        "E.sdf",
+        "F.sdf",
+    }
+    receptor_path = Path(plinder_system.receptor_cif)
+    assert receptor_path.is_file()
+    assert not (reconstructed_dir / "system.cif").exists()
+    assert not (reconstructed_dir / "sequences.fasta").exists()
+
+    system_aligned_sdfs = plinder_system.ligand_sdfs
+    assert set(system_aligned_sdfs) == {"1.E", "1.F"}
+    assert all(Path(path).is_file() for path in system_aligned_sdfs.values())
+    assert all(
+        reconstructed_dir in Path(path).parents for path in system_aligned_sdfs.values()
+    )
 
 
 def test_smiles_from_nextgen(rcsb_ccd_reference_csv):

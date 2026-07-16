@@ -38,14 +38,16 @@ $ pip install -e ".[dev]"
 
 `plinder.eval` requires [OpenStructure](https://openstructure.org/) for
 lDDT/RMSD scoring metrics. OpenStructure currently requires numpy<2, so it
-is kept as an optional dependency:
+is installed from Bioconda by the repository's `environment.yml`. It is not a
+PyPI dependency. Install the remaining optional evaluation dependencies with:
 
 ```console
 $ pip install -e ".[eval]"
 ```
 
 :::{note}
-The `eval` extra installs OpenStructure, posebusters and plotly.
+The `eval` extra installs PoseBusters and Plotly. OpenStructure is Conda-only and
+is installed by `mamba env create -f environment.yml` above.
 Data generation (`plinder.data`) does **not** require OpenStructure and
 works with numpy 2.
 

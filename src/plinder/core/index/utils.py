@@ -164,7 +164,7 @@ def download_plinder_cmd(args: list[str] | None = None) -> None:
         else:
             msg = f"Syncing {getattr(cfg.data, attr)}"
             do = True
-            if attr in ["linked_structures", "systems"]:
+            if attr in ["ligand_archives", "linked_structures", "systems"]:
                 if not autodo:
                     do = input(f"Download the {attr} dataset? [Y/n] ").lower() in [
                         "",
@@ -184,7 +184,11 @@ def download_plinder_cmd(args: list[str] | None = None) -> None:
                 LOG.info(
                     f"skipping {attr} download, plinder.core.PlinderSystem will download lazily as needed on request!"
                 )
-        if path is not None and attr in ["linked_structures", "systems"]:
+        if path is not None and attr in [
+            "ligand_archives",
+            "linked_structures",
+            "systems",
+        ]:
             LOG.info(
                 f"extracting {getattr(cfg.data, attr)} archives, you may want to stretch your legs."
             )

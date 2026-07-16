@@ -1,6 +1,7 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
 import json
+import shutil
 from io import StringIO
 from pathlib import Path
 
@@ -626,8 +627,11 @@ def read_plinder_mount(monkeypatch):
 
 
 @pytest.fixture
-def read_plinder_eval_mount(monkeypatch):
-    monkeypatch.setenv("PLINDER_MOUNT", test_asset_fp.as_posix())
+def read_plinder_eval_mount(monkeypatch, tmp_path):
+    plinder_mount = tmp_path / "plinder_mount"
+    adir = plinder_mount / "eval"
+    shutil.copytree(test_asset_fp / "eval", adir)
+    monkeypatch.setenv("PLINDER_MOUNT", plinder_mount.as_posix())
     monkeypatch.setenv("PLINDER_RELEASE", "")
     monkeypatch.setenv("PLINDER_BUCKET", "eval")
     monkeypatch.setenv("PLINDER_ITERATION", "")
@@ -635,9 +639,7 @@ def read_plinder_eval_mount(monkeypatch):
     from plinder.core.utils import config
 
     config._config._clear()
-    plinder_mount = test_asset_fp
     cfg = config.get_config()
-    adir = plinder_mount / "eval"
     assert Path(cfg.data.plinder_dir) == adir
 
     return adir

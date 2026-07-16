@@ -4,19 +4,54 @@ from __future__ import annotations
 
 import copy
 from dataclasses import dataclass, field
+from functools import cache
 from pathlib import Path
 from typing import Any
 
 import numpy as np
-from ost import io, mol
-from ost.mol.alg.ligand_scoring_lddtpli import LDDTPLIScorer
-from ost.mol.alg.ligand_scoring_scrmsd import SCRMSDScorer
-from ost.mol.alg.scoring import Scorer
 
 from plinder.core import PlinderSystem
 from plinder.core.utils.log import setup_logger
 
 LOG = setup_logger(__name__)
+
+
+@dataclass(frozen=True)
+class OpenStructureModules:
+    """OpenStructure objects used by the evaluation implementation."""
+
+    io: Any
+    mol: Any
+    scorer: Any
+    scrmsd_scorer: Any
+    lddt_pli_scorer: Any
+
+
+@cache
+def require_openstructure() -> OpenStructureModules:
+    """Load the Conda-only OpenStructure dependency for OST-backed metrics."""
+    try:
+        import ost
+        from ost import io, mol
+        from ost.mol.alg.ligand_scoring_lddtpli import LDDTPLIScorer
+        from ost.mol.alg.ligand_scoring_scrmsd import SCRMSDScorer
+        from ost.mol.alg.scoring import Scorer
+    except (ImportError, ModuleNotFoundError) as exc:
+        raise ImportError(
+            "OpenStructure is required for lDDT, RMSD, and ligand-scoring "
+            "evaluation. OpenStructure is distributed through Conda, not PyPI, "
+            "so `pip install plinder[eval]` does not install it. Create the "
+            "repository environment from environment.yml or install "
+            "`bioconda::openstructure` in a compatible Conda environment."
+        ) from exc
+    ost.PushVerbosityLevel(-1)
+    return OpenStructureModules(
+        io=io,
+        mol=mol,
+        scorer=Scorer,
+        scrmsd_scorer=SCRMSDScorer,
+        lddt_pli_scorer=LDDTPLIScorer,
+    )
 
 
 def _cif_to_posebusters_mol(cif_file: Path) -> Any:
@@ -69,41 +104,34 @@ class ComplexData:
     name: str
     receptor_file: Path
     ligand_files: list[Path]
-    receptor_entity: mol.EntityHandle
-    ligand_views: list[mol.EntityHandle]
+    receptor_entity: Any
+    ligand_views: list[Any]
     num_ligands: int
     num_proteins: int
 
     @classmethod
     def from_plinder_system(cls, system: PlinderSystem) -> "ComplexData":
-        ligand_views = []
-        ligand_files = []
-        for ligand in system.ligand_sdfs:
-            ligand_views.append(system.ligand_views[ligand])
-            ligand_files.append(Path(system.ligand_sdfs[ligand]))
-        return cls(
+        """Adapt core file assets to OST inside the evaluation boundary."""
+        return cls.from_files(
             name=system.system_id,
             receptor_file=Path(system.receptor_cif),
-            ligand_files=ligand_files,
-            receptor_entity=system.receptor_entity,
-            ligand_views=ligand_views,
-            num_ligands=system.num_ligands,
-            num_proteins=system.num_proteins,
+            ligand_files=[Path(path) for path in system.ligand_sdfs.values()],
         )
 
     @classmethod
     def from_files(
         cls, name: str, receptor_file: Path, ligand_files: list[Path]
     ) -> "ComplexData":
+        ost_modules = require_openstructure()
         if receptor_file.suffix != ".cif":
             raise ValueError(
                 f"receptor_file must be an mmCIF file, got {receptor_file}"
             )
-        entity = io.LoadMMCIF(receptor_file.as_posix(), fault_tolerant=True)
+        entity = ost_modules.io.LoadMMCIF(receptor_file.as_posix(), fault_tolerant=True)
 
         ligand_views = []
         for i, ligand_file in enumerate(ligand_files):
-            ligand_entity = io.LoadEntity(str(ligand_file), format="sdf")
+            ligand_entity = ost_modules.io.LoadEntity(str(ligand_file), format="sdf")
 
             # rename ligand chain to have different chain names for each ligand
             # this is necessary for ost to not complain about duplicate chain names
@@ -127,9 +155,9 @@ class ComplexData:
             num_proteins=sum(
                 1
                 for x in entity.chains
-                if x.type == mol.CHAINTYPE_POLY_PEPTIDE_L
+                if x.type == ost_modules.mol.CHAINTYPE_POLY_PEPTIDE_L
                 # Comment out to avoid counting water molecules as proteins!
-                or x.type == mol.CHAINTYPE_UNKNOWN
+                or x.type == ost_modules.mol.CHAINTYPE_UNKNOWN
             ),
         )
 
@@ -257,7 +285,7 @@ class ModelScores:
         return model_class
 
     def calculate_protein_scores(self, lddt_add_mdl_contacts: bool = False) -> None:
-        scorer = Scorer(
+        scorer = require_openstructure().scorer(
             model=self.model.receptor_entity,
             target=self.reference.receptor_entity,
             lddt_add_mdl_contacts=lddt_add_mdl_contacts,
@@ -299,13 +327,14 @@ class ModelScores:
             }
 
     def calculate_ligand_scores(self) -> None:
+        ost_modules = require_openstructure()
         pb = None
         if self.score_posebusters:
             from posebusters import PoseBusters
 
             pb = PoseBusters(config="dock")
 
-        scrmsd_scorer = SCRMSDScorer(
+        scrmsd_scorer = ost_modules.scrmsd_scorer(
             model=self.model.receptor_entity,
             target=self.reference.receptor_entity,
             model_ligands=self.model.ligand_views,
@@ -313,7 +342,7 @@ class ModelScores:
             substructure_match=True,
             resnum_alignments=False,
         )
-        lddt_pli_scorer = LDDTPLIScorer(
+        lddt_pli_scorer = ost_modules.lddt_pli_scorer(
             model=self.model.receptor_entity,
             target=self.reference.receptor_entity,
             model_ligands=self.model.ligand_views,
@@ -407,9 +436,9 @@ class ModelScores:
                 weights.append(s.atom_count)
         if not len(scores):
             return None, None
-        average_score = np.mean(scores)
-        weighted_average_score = sum(w * s for w, s in zip(weights, scores)) / sum(
-            weights
+        average_score = float(np.mean(scores))
+        weighted_average_score = float(
+            sum(w * s for w, s in zip(weights, scores)) / sum(weights)
         )
         return average_score, weighted_average_score
 

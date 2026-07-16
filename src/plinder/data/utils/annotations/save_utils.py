@@ -9,6 +9,7 @@ from typing import Any, Literal, Protocol
 import biotite.structure as struc
 import biotite.structure.io.pdbx as pdbx
 import numpy as np
+from numpy.typing import NDArray
 from rdkit import Chem
 
 WaterSelection = Literal["none", "interacting", "all"]
@@ -73,6 +74,8 @@ def save_ligands(
     from plinder.data.utils.annotations.cif_utils import atoms_to_rdkit_mol
 
     log = logging.getLogger(__name__)
+    output_folder = Path(output_folder)
+    output_folder.mkdir(parents=True, exist_ok=True)
 
     for chain_id in ligand_chain_ids:
         lig_mask = atoms.chain_id == chain_id
@@ -88,7 +91,7 @@ def save_ligands(
             )
             continue
         rdkit_mol.SetProp("_Name", chain_id)
-        with Chem.SDWriter(str(Path(output_folder) / f"{chain_id}.sdf")) as w:
+        with Chem.SDWriter(str(output_folder / f"{chain_id}.sdf")) as w:
             w.write(rdkit_mol)
 
 
@@ -139,15 +142,17 @@ def _water_mask(
     biounit: struc.AtomArray,
     annotation: AnnotationRow,
     selection: WaterSelection,
-) -> np.ndarray:
+) -> NDArray[np.bool_]:
     if selection == "none":
-        return np.zeros(biounit.array_length(), dtype=bool)
+        empty_mask: NDArray[np.bool_] = np.zeros(biounit.array_length(), dtype=np.bool_)
+        return empty_mask
     if selection == "all":
-        return struc.filter_solvent(biounit)
+        solvent_mask: NDArray[np.bool_] = struc.filter_solvent(biounit)
+        return solvent_mask
     if selection != "interacting":
         raise ValueError(f"Unknown water selection: {selection!r}")
 
-    mask = np.zeros(biounit.array_length(), dtype=bool)
+    mask: NDArray[np.bool_] = np.zeros(biounit.array_length(), dtype=np.bool_)
     for encoded_residue in _string_list(annotation.get("system_water_residues")):
         try:
             chain_id, residue_number = encoded_residue.rsplit("_", maxsplit=1)
@@ -272,19 +277,24 @@ def save_reconstructed_system(
     outputs: SystemReconstructionOutputs,
     options: SystemReconstructionOptions = SystemReconstructionOptions(),
     overwrite: bool = False,
+    reconstructed: ReconstructedSystem | None = None,
 ) -> dict[str, Path]:
     """Reconstruct a system and write exactly the requested mmCIF/FASTA files.
 
     No PDB files or assembly-rotated ligand SDFs are produced.  Output parents
     are created automatically.  Existing files are rejected unless
-    ``overwrite=True``.
+    ``overwrite=True``.  A previously reconstructed in-memory view may be
+    supplied to avoid parsing and expanding the source assembly again.
     """
-    requested = {
-        "system_cif": outputs.system_cif,
-        "receptor_cif": outputs.receptor_cif,
-        "sequences_fasta": outputs.sequences_fasta,
+    requested: dict[str, Path] = {
+        name: Path(path)
+        for name, path in {
+            "system_cif": outputs.system_cif,
+            "receptor_cif": outputs.receptor_cif,
+            "sequences_fasta": outputs.sequences_fasta,
+        }.items()
+        if path is not None
     }
-    requested = {name: Path(path) for name, path in requested.items() if path}
     if not requested:
         raise ValueError("At least one reconstruction output path is required")
     if len(set(requested.values())) != len(requested):
@@ -296,7 +306,8 @@ def save_reconstructed_system(
             + ", ".join(str(path) for path in existing)
         )
 
-    reconstructed = reconstruct_system(source_mmcif, annotation, options=options)
+    if reconstructed is None:
+        reconstructed = reconstruct_system(source_mmcif, annotation, options=options)
     system_id = str(annotation.get("system_id", "plinder_system"))
     for path in requested.values():
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -309,16 +320,36 @@ def save_reconstructed_system(
             requested["receptor_cif"],
         )
     if "sequences_fasta" in requested:
-        from plinder.data.utils.annotations.cif_utils import read_mmcif_container
-        from plinder.data.utils.annotations.protein_utils import get_seqres_from_cif
-
-        chain_to_seqres = get_seqres_from_cif(read_mmcif_container(Path(source_mmcif)))
-        receptor_chain_ids = sorted(
-            set(str(chain_id) for chain_id in reconstructed.receptor.chain_id)
+        from plinder.data.utils.annotations.cif_utils import (
+            get_label_asym_sequences,
+            read_mmcif_container,
         )
+
+        asym_to_sequence = get_label_asym_sequences(
+            read_mmcif_container(Path(source_mmcif))
+        )
+        receptor_chain_ids = set(
+            _annotation_chains(annotation, "system_protein_chains_asym_id")
+        )
+        if options.receptor_include_other_protein_chains:
+            receptor_chain_ids.update(
+                _annotation_chains(
+                    annotation,
+                    "system_other_protein_chains_asym_id",
+                )
+            )
+        missing_sequences = sorted(
+            chain_id
+            for chain_id in receptor_chain_ids
+            if chain_id.split(".", maxsplit=1)[-1] not in asym_to_sequence
+        )
+        if missing_sequences:
+            raise ValueError(
+                "Source mmCIF has no entity_poly sequence for reconstructed "
+                f"receptor chains {missing_sequences}"
+            )
         with requested["sequences_fasta"].open("w") as fasta:
-            for chain_id in receptor_chain_ids:
+            for chain_id in sorted(receptor_chain_ids):
                 asym_id = chain_id.split(".", maxsplit=1)[-1]
-                if asym_id in chain_to_seqres:
-                    fasta.write(f">{chain_id}\n{chain_to_seqres[asym_id]}\n")
+                fasta.write(f">{chain_id}\n{asym_to_sequence[asym_id]}\n")
     return requested

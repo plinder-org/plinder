@@ -124,13 +124,6 @@ def make_linked_structures_data_file(
     cfg: LinkedStructureConfig = LinkedStructureConfig(),
     num_processes: int = 8,
 ) -> None:
-    def get_system_ligand_files(system_id: str) -> list[str]:
-        system_folder = get_cif_file(data_dir, "holo", system_id).parent
-        return [
-            (system_folder / "ligand_files" / f"{c}.sdf").as_posix()
-            for c in system_id.split("__")[-1].split("_")
-        ]
-
     (superposed_folder / search_db).mkdir(exist_ok=True, parents=True)
     filters = []
     for metric, threshold in cfg.filter_criteria.items():
@@ -162,16 +155,19 @@ def make_linked_structures_data_file(
         ).reset_index()
         query = " and ".join([f"{m} >= {t}" for (m, t) in cfg.filter_criteria.items()])
         links = links.query(query)
-        links["target_id"] = links["target_system"].map(lambda x: x.split("_")[0])
+        if search_db == "holo":
+            links["target_id"] = links["target_system"]
+        else:
+            links["target_id"] = links["target_system"].map(lambda x: x.split("_")[0])
         links.to_parquet(
             output_file.parent / f"{output_file.stem}_intermediate.parquet", index=False
         )
 
     targets = set(links["target_id"])
-    score_dir = search_db
     if search_db == "holo":
-        score_dir = "apo"  # always get resolution from ingest
-    target_files = [get_cif_file(data_dir, score_dir, x) for x in targets]
+        target_files = [get_original_pdb_mmcif(data_dir, x) for x in targets]
+    else:
+        target_files = [get_cif_file(data_dir, search_db, x) for x in targets]
     del links
 
     sort_scores = {}
@@ -181,8 +177,11 @@ def make_linked_structures_data_file(
     else:
         func = get_resolution
         ascending = True
-    with multiprocessing.get_context("spawn").Pool(num_processes) as pool:
-        resolutions = pool.map(func, target_files)
+    if num_processes == 1:
+        resolutions = list(map(func, target_files))
+    else:
+        with multiprocessing.get_context("spawn").Pool(num_processes) as pool:
+            resolutions = pool.map(func, target_files)
     sort_scores = dict(zip(targets, resolutions))
 
     nonnull = sum((v for v in sort_scores.values() if v is not None))
@@ -212,19 +211,30 @@ def make_linked_structures_data_file(
         ).as_posix(),
         axis=1,
     )
-    links["ligand_files"] = links["reference_system_id"].apply(get_system_ligand_files)
     links.to_parquet(output_file, index=False)
+
+
+def get_original_pdb_mmcif(data_dir: Path, system_or_pdb_id: str) -> Path:
+    """Locate the original PDB mmCIF used by the ingest pipeline."""
+    pdb_id = system_or_pdb_id[:4]
+    return (
+        data_dir
+        / "ingest"
+        / pdb_id[1:3]
+        / f"pdb_0000{pdb_id}"
+        / f"pdb_0000{pdb_id}_xyz-enrich.cif.gz"
+    )
+
+
+def get_canonical_ligand_dir(data_dir: Path, system_or_pdb_id: str) -> Path:
+    """Locate the canonical, asymmetric-unit ligand SDF directory."""
+    pdb_id = system_or_pdb_id[:4]
+    return data_dir / "raw_entries" / pdb_id[1:3] / pdb_id / "ligand_files"
 
 
 def get_cif_file(data_dir: Path, search_db: str, system: str) -> Path:
     if search_db == "apo":
-        return (
-            data_dir
-            / "ingest"
-            / system[1:3]
-            / f"pdb_0000{system[:4]}"
-            / f"pdb_0000{system[:4]}_xyz-enrich.cif.gz"
-        )
+        return get_original_pdb_mmcif(data_dir, system)
     elif search_db == "pred":
         return (
             data_dir
@@ -233,7 +243,14 @@ def get_cif_file(data_dir: Path, search_db: str, system: str) -> Path:
             / f"AF-{system.split('_')[0]}-F1-model_v4.cif"
         )
     elif search_db == "holo":
-        return data_dir / "raw_entries" / system[1:3] / system / "receptor.cif"
+        return Path(
+            PlinderSystem(
+                system_id=system,
+                source_mmcif=get_original_pdb_mmcif(data_dir, system),
+                reconstruction_dir=data_dir / "reconstructed_systems" / system,
+                canonical_ligand_dir=get_canonical_ligand_dir(data_dir, system),
+            ).receptor_cif
+        )
     else:
         raise ValueError("search_db much be apo, holo or pred")
 
@@ -297,7 +314,7 @@ def system_save_and_score_representative(
         scores = utils.ModelScores.from_model_files(
             link.id,
             save_folder / "superposed.cif",
-            link.ligand_files,
+            list(reference_system.ligand_sdfs.values()),
             reference_system,
             score_protein=True,
         ).summarize_scores()
@@ -318,7 +335,12 @@ def system_save_and_score_representatives(
     overwrite: bool = False,
 ) -> None:
     try:
-        reference_system = PlinderSystem(system_id=system)
+        reference_system = PlinderSystem(
+            system_id=system,
+            source_mmcif=get_original_pdb_mmcif(data_dir, system),
+            reconstruction_dir=data_dir / "reconstructed_systems" / system,
+            canonical_ligand_dir=get_canonical_ligand_dir(data_dir, system),
+        )
     except Exception as e:
         LOG.error(
             f"system_save_and_score_representatives: Error in making reference system: {e}"

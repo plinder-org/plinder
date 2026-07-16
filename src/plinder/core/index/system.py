@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from functools import cached_property
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import pandas as pd
 
@@ -14,9 +14,12 @@ if TYPE_CHECKING:
 
 from biotite.sequence.io.fasta import FastaFile
 
-from plinder.core.index import utils
+from plinder.core.scores import query_index
 from plinder.core.scores.links import query_links
+from plinder.core.scores.query import FILTER
 from plinder.core.structure.structure import Structure
+from plinder.core.utils import cpl
+from plinder.core.utils.config import get_config
 from plinder.core.utils.cpl import get_plinder_path
 from plinder.core.utils.io import (
     download_alphafold_cif_file,
@@ -24,6 +27,14 @@ from plinder.core.utils.io import (
 )
 from plinder.core.utils.log import setup_logger
 from plinder.core.utils.unpack import get_zips_to_unpack
+from plinder.data.utils.annotations.save_utils import (
+    ReconstructedSystem,
+    SystemReconstructionOptions,
+    SystemReconstructionOutputs,
+    reconstruct_system,
+    save_ligands,
+    save_reconstructed_system,
+)
 
 LOG = setup_logger(__name__)
 
@@ -31,9 +42,12 @@ LOG = setup_logger(__name__)
 class PlinderSystem:
     """
     Core class for interacting with a single system and its assets.
-    Relies on the entry data to populate the system, system zips
-    to obtain structure files, and the linked_structures archive
-    for linked structures.
+    Annotation data is queried lazily for one entry or system.  V3 structure
+    views are reconstructed from an explicitly supplied original PDB mmCIF;
+    canonical ASU ligand SDFs are loaded from the ligand archive independently.
+
+    Existing local V2 system archives remain readable as a transitional
+    fallback, but are never downloaded by this class.
     """
 
     def __repr__(self) -> str:
@@ -45,13 +59,32 @@ class PlinderSystem:
         system_id: str,
         prune: bool = True,
         skip_3d_confgen: bool = False,
+        source_mmcif: Path | str | None = None,
+        reconstruction_dir: Path | str | None = None,
+        canonical_ligand_dir: Path | str | None = None,
+        reconstruction_options: SystemReconstructionOptions = (
+            SystemReconstructionOptions()
+        ),
     ) -> None:
         self.system_id: str = system_id
         self.prune: bool = prune
         self.skip_3d_confgen: bool = skip_3d_confgen
+        self.source_mmcif = Path(source_mmcif) if source_mmcif is not None else None
+        cfg = get_config()
+        self.reconstruction_dir = (
+            Path(reconstruction_dir)
+            if reconstruction_dir is not None
+            else Path(cfg.data.plinder_dir) / "reconstructed_systems" / system_id
+        )
+        self.canonical_ligand_dir = (
+            Path(canonical_ligand_dir) if canonical_ligand_dir is not None else None
+        )
+        self.reconstruction_options = reconstruction_options
         self._entry: pd.DataFrame | None = None
         self._system: pd.DataFrame | None = None
         self._archive: Path | None = None
+        self._reconstructed: ReconstructedSystem | None = None
+        self._canonical_ligand_folder: Path | None = None
         self._linked_structures: pd.DataFrame | None = None
         self._linked_archive: Path | None = None
 
@@ -67,8 +100,11 @@ class PlinderSystem:
         """
         if self._entry is None:
             entry_pdb_id = self.system_id.split("__")[0]
-            plindex = utils.get_plindex()
-            self._entry = plindex[plindex["entry_pdb_id"] == entry_pdb_id].copy()
+            self._entry = query_index(
+                columns=["*"],
+                splits=["*"],
+                filters=[FILTER(("entry_pdb_id", "==", entry_pdb_id))],
+            )
             if self._entry.empty:
                 raise ValueError(
                     f"pdb_id={entry_pdb_id} not found in the annotation index"
@@ -86,10 +122,82 @@ class PlinderSystem:
             Annotation rows for the system.
         """
         if self._system is None:
-            self._system = self.entry[self.entry["system_id"] == self.system_id].copy()
+            self._system = query_index(
+                columns=["*"],
+                splits=["*"],
+                filters=[FILTER(("system_id", "==", self.system_id))],
+            )
             if self._system.empty:
-                raise ValueError(f"system_id={self.system_id} not found in entry")
+                raise ValueError(f"system_id={self.system_id} not found in the index")
         return self._system
+
+    def _legacy_archive(self) -> Path | None:
+        """Return an already-local V2 archive without fetching one."""
+        cfg = get_config()
+        root = Path(cpl.get_plinder_path(rel=cfg.data.systems, download=False))
+        extracted = root / self.system_id
+        if (extracted / "receptor.cif").is_file():
+            return extracted
+        zip_path = root / f"{self.system_id[1:3]}.zip"
+        if not zip_path.is_file():
+            return None
+        get_zips_to_unpack(kind="systems", system_ids=[self.system_id])
+        return extracted if extracted.is_dir() else None
+
+    def _require_source_mmcif(self) -> Path:
+        if self.source_mmcif is None:
+            raise ValueError(
+                "source_mmcif is required to reconstruct V3 system assets; "
+                "pass the original PDB mmCIF to PlinderSystem"
+            )
+        if not self.source_mmcif.is_file():
+            raise FileNotFoundError(self.source_mmcif)
+        return self.source_mmcif
+
+    @property
+    def reconstructed(self) -> ReconstructedSystem:
+        """In-memory biological-assembly views reconstructed from source mmCIF."""
+        if self._reconstructed is None:
+            self._reconstructed = reconstruct_system(
+                self._require_source_mmcif(),
+                self.system.iloc[0],
+                options=self.reconstruction_options,
+            )
+        return self._reconstructed
+
+    def reconstruct(
+        self,
+        *,
+        outputs: SystemReconstructionOutputs,
+        options: SystemReconstructionOptions | None = None,
+        overwrite: bool = False,
+    ) -> dict[str, Path]:
+        """Write exactly the requested reconstructed assets."""
+        selected_options = options or self.reconstruction_options
+        cached = (
+            self.reconstructed
+            if selected_options == self.reconstruction_options
+            else None
+        )
+        return save_reconstructed_system(
+            self._require_source_mmcif(),
+            self.system.iloc[0],
+            outputs=outputs,
+            options=selected_options,
+            overwrite=overwrite,
+            reconstructed=cached,
+        )
+
+    def _ensure_standard_output(self, name: str) -> Path:
+        path = self.reconstruction_dir / name
+        if not path.is_file():
+            output_name = {
+                "system.cif": "system_cif",
+                "receptor.cif": "receptor_cif",
+                "sequences.fasta": "sequences_fasta",
+            }[name]
+            self.reconstruct(outputs=SystemReconstructionOutputs(**{output_name: path}))
+        return path
 
     @property
     def archive(self) -> Path | None:
@@ -102,11 +210,13 @@ class PlinderSystem:
             directory containing the plinder system
         """
         if self._archive is None:
-            zips = get_zips_to_unpack(kind="systems", system_ids=[self.system_id])
-            [archive] = list(zips.keys())
-            self._archive = archive.parent / self.system_id
-            if not self._archive.is_dir():
-                raise ValueError(f"system_id={self.system_id} not found in systems")
+            if self.source_mmcif is not None:
+                self.reconstruction_dir.mkdir(parents=True, exist_ok=True)
+                self._archive = self.reconstruction_dir
+            else:
+                self._archive = self._legacy_archive()
+            if self._archive is None:
+                self._require_source_mmcif()
         return self._archive
 
     @property
@@ -119,6 +229,8 @@ class PlinderSystem:
         str
             path
         """
+        if self.source_mmcif is not None:
+            return self._ensure_standard_output("system.cif").as_posix()
         assert self.archive is not None
         return (self.archive / "system.cif").as_posix()
 
@@ -132,6 +244,8 @@ class PlinderSystem:
         str
             path
         """
+        if self.source_mmcif is not None:
+            return self._ensure_standard_output("receptor.cif").as_posix()
         assert self.archive is not None
         return (self.archive / "receptor.cif").as_posix()
 
@@ -145,6 +259,8 @@ class PlinderSystem:
         str
             path
         """
+        if self.source_mmcif is not None:
+            return self._ensure_standard_output("sequences.fasta").as_posix()
         assert self.archive is not None
         return (self.archive / "sequences.fasta").as_posix()
 
@@ -158,8 +274,37 @@ class PlinderSystem:
         dict[str, str]
             Mapping from chain ID to sequence.
         """
-        assert self.archive is not None
         return {k: v for k, v in FastaFile.read_iter(self.sequences_fasta)}
+
+    @property
+    def canonical_ligand_sdfs(self) -> dict[str, str]:
+        """Map system ligand instances to the single canonical ASU SDF copy."""
+        if self._canonical_ligand_folder is None:
+            if self.canonical_ligand_dir is not None:
+                folder = self.canonical_ligand_dir
+            else:
+                pdb_id = self.system_id.split("__", maxsplit=1)[0]
+                zips = get_zips_to_unpack(kind="ligand_archives", pdb_ids=[pdb_id])
+                [archive] = zips
+                folder = archive.parent / pdb_id / "ligand_files"
+            if not folder.is_dir():
+                raise ValueError(f"canonical ligand directory does not exist: {folder}")
+            self._canonical_ligand_folder = folder
+
+        ligands = {}
+        for _, ligand in self.system.iterrows():
+            instance_chain = ligand.get("ligand_instance_chain")
+            if not isinstance(instance_chain, str) or not instance_chain:
+                instance_chain = (
+                    f"{ligand['ligand_instance']}.{ligand['ligand_asym_id']}"
+                )
+            ligand_file = self._canonical_ligand_folder / (
+                f"{ligand['ligand_asym_id']}.sdf"
+            )
+            if not ligand_file.is_file():
+                raise ValueError(f"canonical ligand SDF does not exist: {ligand_file}")
+            ligands[instance_chain] = ligand_file.as_posix()
+        return ligands
 
     @property
     def ligand_sdfs(self) -> dict[str, str]:
@@ -171,10 +316,28 @@ class PlinderSystem:
         dict[str, str]
             dictionary of ligand names to paths to ligand sdf files
         """
-        assert self.archive is not None
-        ligands = {}
-        for ligand in (self.archive / "ligand_files/").glob("*.sdf"):
-            ligands[ligand.stem] = ligand.as_posix()
+        if self.source_mmcif is None:
+            assert self.archive is not None
+            return {
+                ligand.stem: ligand.as_posix()
+                for ligand in (self.archive / "ligand_files/").glob("*.sdf")
+            }
+
+        ligand_dir = self.reconstruction_dir / "ligand_files"
+        instance_chains = list(self.canonical_ligand_sdfs)
+        missing = [
+            chain
+            for chain in instance_chains
+            if not (ligand_dir / f"{chain}.sdf").is_file()
+        ]
+        if missing:
+            save_ligands(self.reconstructed.biounit, missing, ligand_dir)
+        ligands = {
+            chain: (ligand_dir / f"{chain}.sdf").as_posix() for chain in instance_chains
+        }
+        absent = [path for path in ligands.values() if not Path(path).is_file()]
+        if absent:
+            raise ValueError(f"failed to reconstruct ligand SDFs: {absent}")
         return ligands
 
     @property
@@ -272,22 +435,6 @@ class PlinderSystem:
         return structure.as_posix()
 
     @cached_property
-    def receptor_entity(self) -> Any:
-        """
-        Return the receptor entity handle (OST, for eval scoring).
-
-        Requires ``pip install plinder[eval]``.
-        """
-        try:
-            from ost import io
-        except ImportError:
-            raise ImportError(
-                "OpenStructure is required for receptor_entity. "
-                "Install with: pip install plinder[eval]"
-            )
-        return io.LoadMMCIF(self.receptor_cif)
-
-    @cached_property
     def receptor_structure(self) -> "struc.AtomArray":
         """
         Return the receptor structure as biotite AtomArray.
@@ -304,26 +451,17 @@ class PlinderSystem:
         return atoms[~is_hydrogen_isotope(atoms.element)]
 
     @cached_property
-    def ligand_views(self) -> dict[str, Any]:
-        """
-        Return the ligand views (OST, for eval scoring).
+    def ligand_structures(self) -> dict[str, "struc.AtomArray"]:
+        """Return heavy-atom ligand structures as Biotite atom arrays."""
+        from biotite.structure.io.mol import SDFile
 
-        Requires ``pip install plinder[eval]``.
-        """
-        try:
-            from ost import io
-        except ImportError:
-            raise ImportError(
-                "OpenStructure is required for ligand_views. "
-                "Install with: pip install plinder[eval]"
-            )
+        from plinder.core.structure.atoms import is_hydrogen_isotope
 
-        ligand_views = {}
-        for chain in self.ligand_sdfs:
-            ligand_views[chain] = io.LoadEntity(
-                self.ligand_sdfs[chain], format="sdf"
-            ).Select("ele != H")
-        return ligand_views
+        structures = {}
+        for chain, ligand_sdf in self.ligand_sdfs.items():
+            atoms = SDFile.read(ligand_sdf).record.get_structure()
+            structures[chain] = atoms[~is_hydrogen_isotope(atoms.element)]
+        return structures
 
     @cached_property
     def ligand_mols(self) -> dict[str, "Chem.Mol"]:

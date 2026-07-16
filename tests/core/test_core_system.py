@@ -1,4 +1,5 @@
 from pathlib import Path
+from zipfile import ZIP_DEFLATED, ZipFile
 
 import numpy as np
 import pytest
@@ -27,6 +28,33 @@ def test_plinder_system_system_files(read_plinder_mount):
     assert Path(s.system_cif).is_file()
     assert Path(s.receptor_cif).is_file()
     assert Path(s.sequences_fasta).is_file()
+    assert s.receptor_structure.array_length() > 0
+    assert set(s.ligand_structures) == set(s.ligand_sdfs)
+    assert all(
+        structure.array_length() > 0 for structure in s.ligand_structures.values()
+    )
+
+
+def test_plinder_system_unpacks_canonical_ligand_archive(
+    write_plinder_mount, monkeypatch
+):
+    from plinder.core.utils import config, cpl
+
+    monkeypatch.setenv("PLINDER_OFFLINE", "true")
+    config._config._clear()
+    monkeypatch.setattr(cpl, "_CLIENTS", {})
+    archive = write_plinder_mount / "ligand_archives" / "av.zip"
+    archive.parent.mkdir(parents=True)
+    with ZipFile(archive, "w", compression=ZIP_DEFLATED) as zip_file:
+        zip_file.writestr("1avd/ligand_files/C.sdf", "canonical ASU ligand")
+
+    system = index.PlinderSystem(system_id="1avd__1__1.A__1.C")
+
+    assert system.canonical_ligand_sdfs == {
+        "1.C": (
+            write_plinder_mount / "ligand_archives" / "1avd/ligand_files/C.sdf"
+        ).as_posix()
+    }
 
 
 def test_plinder_structure(read_plinder_mount):

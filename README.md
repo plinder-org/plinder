@@ -71,8 +71,8 @@ All fixed in WIP — will take effect after dataset regeneration.
     - **Stereochemistry**: CCD ideal 3D coordinates used as stereo ground truth; new `resolved_stereo_matches_template` flag validates resolved structure chirality against CCD template (handles partial resolution via MCS trimming)
     - **Interactions**: water bridge and metal bridge detection via peppr; halogen bond sidechain flag now computed (was hardcoded)
     - **Binding affinity**: fixed BindingDB matching — target sequence now validated against PDB SEQRES with 100% core identity, terminal tags/truncations tolerated ([#94](https://github.com/plinder-org/plinder/issues/94)); updated to BindingDB 2026-04
-    - **Optional eval**: OpenStructure and posebusters moved to `pip install plinder[eval]`; base install is numpy 2 compatible; posebusters no longer runs during ingest
-    - **PlinderSystem API**: new `receptor_structure` (biotite AtomArray) and `ligand_mols` (RDKit Mol) properties; OST properties (`receptor_entity`, `ligand_views`) kept for eval but require `plinder[eval]`
+    - **Optional eval**: PoseBusters and plotting dependencies moved to `pip install plinder[eval]`; OpenStructure-backed metrics use the Conda-only `openstructure` package; posebusters no longer runs during ingest
+    - **PlinderSystem API**: new `receptor_structure` and `ligand_structures` (Biotite AtomArray) plus `ligand_mols` (RDKit Mol) properties; OpenStructure is confined to the evaluation implementation
     - **Chain type support**: `Chain.from_cif_data` now assigns proper one-letter codes and chem_types for nucleotides (`RNA Linking`, `DNA Linking`); new `Residue.is_modified` property covers both protein PTMs and modified nucleotide bases
     - **Save utils**: receptor/ligand chain naming generalized (`PDB_RECEPTOR_CHAINS`); system saving works for protein, NA, and mixed complexes
     - **System definition**: unified `min_polymer_size=12` replaces separate `min_polymer_size`/`max_non_small_mol_ligand_length` — polymers ≥ 12 residues are receptor, shorter are ligands (threshold matches minimum MMseqs2/Foldseek search length); molecules with BIRD annotation are ligands irrespective of size; ligand chains no longer appear in both receptor and ligand parts of system IDs.
@@ -140,11 +140,15 @@ For details on the sub-directories, see [Documentation](https://plinder-org.gith
 pip install plinder
 ```
 
-For evaluation scoring (lDDT, RMSD via OpenStructure):
+For pip-installable evaluation helpers such as PoseBusters and plotting:
 
 ```
 pip install plinder[eval]
 ```
+
+OpenStructure is not published on PyPI. Evaluation metrics backed by
+OpenStructure (including lDDT and RMSD) require a compatible Conda environment;
+the repository's `environment.yml` installs it from Bioconda.
 
 ## License
 Data curated by PLINDER are made available under the Apache License 2.0.

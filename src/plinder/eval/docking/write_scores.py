@@ -7,14 +7,12 @@ import multiprocessing
 from pathlib import Path
 from typing import Any
 
-import ost
 import pandas as pd
 
 from plinder.core import PlinderSystem
 from plinder.core.utils.log import setup_logger
 from plinder.eval.docking import utils
 
-ost.PushVerbosityLevel(-1)
 LOG = setup_logger(__name__)
 
 
@@ -50,6 +48,7 @@ def evaluate(
     posebusters_full: bool
         Run posebuster scoring and return full report
     """
+    utils.require_openstructure()
     reference_system = PlinderSystem(system_id=reference_system_id)
     receptor_file = Path(receptor_file)
 
@@ -201,6 +200,8 @@ def score_test_set(
     posebusters_full: bool
         Run posebuster scoring and return full report
     """
+    # Fail before starting workers: all ModelScores metrics currently use OST.
+    utils.require_openstructure()
     predictions = pd.read_csv(prediction_file)
     predictions["output_file"] = predictions.apply(
         lambda row: output_dir / row["id"] / f"{row['rank']}.json", axis=1

@@ -17,6 +17,7 @@ import biotite.structure as struc
 import biotite.structure.info as bt_info
 import biotite.structure.io.pdbx as pdbx
 import numpy as np
+from numpy.typing import NDArray
 from rdkit import Chem
 
 from plinder.core.structure.smallmols_utils import (
@@ -50,6 +51,40 @@ def read_mmcif_container(mmcif_filename: Path) -> pdbx.CIFBlock:
     """Parse mmcif file and return the first data block."""
     cif_file = read_mmcif_file(mmcif_filename)
     return list(cif_file.values())[0]
+
+
+def get_label_asym_sequences(block: pdbx.CIFBlock) -> dict[str, str]:
+    """Extract polymer sequences keyed by label asym ID.
+
+    ``entity_poly.pdbx_strand_id`` contains author chain IDs and therefore
+    cannot be used for reconstructed biological assemblies, whose chain IDs
+    are ``<instance>.<label_asym_id>``.  The stable mapping is
+    ``struct_asym.id -> struct_asym.entity_id -> entity_poly.entity_id``.
+    """
+    if "struct_asym" not in block or "entity_poly" not in block:
+        return {}
+    struct_asym = block["struct_asym"]
+    entity_poly = block["entity_poly"]
+    if not {"id", "entity_id"}.issubset(struct_asym):
+        return {}
+    if not {"entity_id", "pdbx_seq_one_letter_code_can"}.issubset(entity_poly):
+        return {}
+
+    entity_sequences = {
+        str(entity_id): "".join(str(sequence).replace(";", "").split())
+        for entity_id, sequence in zip(
+            entity_poly["entity_id"].as_array(),
+            entity_poly["pdbx_seq_one_letter_code_can"].as_array(),
+        )
+    }
+    return {
+        str(asym_id): entity_sequences[str(entity_id)]
+        for asym_id, entity_id in zip(
+            struct_asym["id"].as_array(),
+            struct_asym["entity_id"].as_array(),
+        )
+        if str(entity_id) in entity_sequences
+    }
 
 
 def get_model_count(cif_file: pdbx.CIFFile) -> int:
@@ -437,7 +472,7 @@ def _find_bridged_interactions(
     receptor_pattern: str,
     ligand_pattern: str,
     distance_scaling: tuple[float, float],
-) -> list[tuple[np.ndarray, np.ndarray, np.ndarray]]:
+) -> list[tuple[NDArray[np.int_], NDArray[np.int_], NDArray[np.int_]]]:
     """Find interactions bridged by intermediary atoms (water or metal).
 
     TODO: remove once peppr has ContactMeasurement.find_bridged_interactions.
@@ -470,7 +505,7 @@ def _find_bridged_interactions(
         [info.vdw_radius_single(e) for e in cm._ligand.element[ligand_matched]]
     )
 
-    bridges: list[tuple[np.ndarray, np.ndarray, np.ndarray]] = []
+    bridges: list[tuple[NDArray[np.int_], NDArray[np.int_], NDArray[np.int_]]] = []
     for bi in range(bridge_atoms.array_length()):
         b_coord = bridge_atoms.coord[bi]
         b_vdw = info.vdw_radius_single(bridge_atoms.element[bi])
@@ -509,7 +544,7 @@ def find_water_bridges(
     ligand: "struc.AtomArray",
     waters: "struc.AtomArray",
     distance_scaling: tuple[float, float] = _WATER_BRIDGE_DISTANCE_SCALING,
-) -> list[tuple[np.ndarray, np.ndarray, np.ndarray]]:
+) -> list[tuple[NDArray[np.int_], NDArray[np.int_], NDArray[np.int_]]]:
     """Find water-mediated hydrogen bonds between receptor and ligand."""
     from peppr.common import ACCEPTOR_PATTERN, DONOR_PATTERN
 
@@ -530,7 +565,7 @@ def find_metal_bridges(
     ligand: "struc.AtomArray",
     metals: "struc.AtomArray",
     cutoff: float = 3.0,
-) -> list[tuple[np.ndarray, np.ndarray, np.ndarray]]:
+) -> list[tuple[NDArray[np.int_], NDArray[np.int_], NDArray[np.int_]]]:
     """Find metal-mediated coordination between receptor and ligand."""
     from peppr.contacts import ContactMeasurement, find_atoms_by_pattern
 
@@ -552,7 +587,7 @@ def find_metal_bridges(
     if len(receptor_matched) == 0 or len(ligand_matched) == 0:
         return []
 
-    bridges: list[tuple[np.ndarray, np.ndarray, np.ndarray]] = []
+    bridges: list[tuple[NDArray[np.int_], NDArray[np.int_], NDArray[np.int_]]] = []
     for bi in range(coord_metals.array_length()):
         b_coord = coord_metals.coord[bi]
         r_dists = np.linalg.norm(

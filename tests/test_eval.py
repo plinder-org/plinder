@@ -1,6 +1,9 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
 import os
+import subprocess
+import sys
+import textwrap
 from pathlib import Path
 
 import numpy as np
@@ -11,6 +14,41 @@ from plinder.eval.docking import utils
 from plinder.eval.docking.make_plots import plot_cmd
 from plinder.eval.docking.stratify_test_set import stratify_cmd
 from plinder.eval.docking.write_scores import evaluate_cmd
+
+
+def test_pip_modules_import_without_openstructure():
+    """Importing pip-installed modules must not require the Conda-only OST."""
+    script = textwrap.dedent(
+        """
+        import builtins
+
+        original_import = builtins.__import__
+
+        def reject_openstructure(name, *args, **kwargs):
+            if name == "ost" or name.startswith("ost."):
+                raise ModuleNotFoundError("blocked OpenStructure import")
+            return original_import(name, *args, **kwargs)
+
+        builtins.__import__ = reject_openstructure
+
+        import plinder
+        import plinder.core
+        import plinder.data
+        import plinder.eval
+        from plinder.eval.docking import utils
+        import plinder.eval.docking.write_scores
+
+        try:
+            utils.require_openstructure()
+        except ImportError as exc:
+            message = str(exc)
+            assert "Conda" in message
+            assert "not PyPI" in message
+        else:
+            raise AssertionError("OpenStructure requirement unexpectedly succeeded")
+        """
+    )
+    subprocess.run([sys.executable, "-c", script], check=True)
 
 
 def mock_path_eval(

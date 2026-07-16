@@ -1,5 +1,7 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
+from zipfile import ZipFile
+
 import biotite.structure as struc
 import numpy as np
 import pytest
@@ -11,6 +13,7 @@ from plinder.core.structure.atoms import (
 )
 from plinder.core.structure.models import BackboneDefinition
 from plinder.core.structure.smallmols_utils import generate_input_conformer
+from plinder.core.structure.structure import Structure
 from rdkit import Chem
 
 
@@ -142,9 +145,33 @@ def test_generate_input_conformer_hard():
     assert sum(abs(mol.GetConformer().GetPositions()[:, 2])) != 0
 
 
-def test_structure_with_symmetry_in_ligand(read_plinder_mount):
+def structure_from_fixture_archive(
+    read_plinder_mount, tmp_path, archive_code, system_id, ligand_smiles
+):
+    with ZipFile(read_plinder_mount / "systems" / f"{archive_code}.zip") as archive:
+        receptor = archive.extract(f"{system_id}/receptor.cif", tmp_path)
+        ligand = archive.extract(
+            f"{system_id}/ligand_files/{system_id.split('__')[-1]}.sdf",
+            tmp_path,
+        )
+    ligand_id = system_id.split("__")[-1]
+    return Structure(
+        id=system_id,
+        protein_path=receptor,
+        ligand_sdfs={ligand_id: ligand},
+        ligand_smiles={ligand_id: ligand_smiles},
+    )
+
+
+def test_structure_with_symmetry_in_ligand(read_plinder_mount, tmp_path):
     # structure with symmetry in ligand
-    holo_struct = PlinderSystem(system_id="4v2y__1__1.A__1.E").holo_structure
+    holo_struct = structure_from_fixture_archive(
+        read_plinder_mount,
+        tmp_path,
+        "v2",
+        "4v2y__1__1.A__1.E",
+        "O=C1CC[C@H](N2C(=O)c3ccccc3C2=O)C(=O)N1",
+    )
     tag = holo_struct.ligand_chain_ordered[0]
     holo_struct.input_ligand_templates[tag]
     holo_struct.ligand_template2resolved_atom_order_stacks[tag]
@@ -156,9 +183,16 @@ def test_structure_with_symmetry_in_ligand(read_plinder_mount):
     )
 
 
-def test_structure_partially_resolved_ligand(read_plinder_mount):
+def test_structure_partially_resolved_ligand(read_plinder_mount, tmp_path):
     # structure with partially resolved ligand that can be matched piecewise
-    holo_struct = PlinderSystem(system_id="1ngx__1__1.A_1.B__1.E").holo_structure
+    holo_struct = structure_from_fixture_archive(
+        read_plinder_mount,
+        tmp_path,
+        "ng",
+        "1ngx__1__1.A_1.B__1.E",
+        "COCCO[C@@H](C)CO[C@H](C)CO[C@H](C)COC(C)CO[C@@H](C)CO[C@@H](C)"
+        "CO[C@H](C)CO[C@H](C)COC[C@H](C)N",
+    )
     tag = holo_struct.ligand_chain_ordered[0]
     holo_struct.input_ligand_templates[tag]
     holo_struct.ligand_template2resolved_atom_order_stacks[tag]
