@@ -55,3 +55,20 @@ def test_get_manifest(mock_cpl):
 )
 def test_download_cmd(args, mock_cpl):
     utils.download_plinder_cmd(args=args + ["-y"])
+
+
+def test_download_cmd_does_not_fetch_source_mmcif_cache(mock_cpl, monkeypatch):
+    from plinder.core.utils import cpl
+
+    requested = []
+
+    def track_path(**kwargs):
+        requested.append(kwargs.get("rel", ""))
+        return mock_path(**kwargs)
+
+    monkeypatch.setattr(cpl, "get_plinder_path", track_path)
+
+    utils.download_plinder_cmd(args=["-y"])
+
+    assert "index" in requested
+    assert "source_mmcifs" not in requested

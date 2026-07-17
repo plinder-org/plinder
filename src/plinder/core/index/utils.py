@@ -132,7 +132,7 @@ def download_plinder_cmd(args: list[str] | None = None) -> None:
         if (
             attr.startswith("plinder_")
             or attr.endswith("_file")
-            or attr in ["ingest", "validation", "force_update"]
+            or attr in ["ingest", "validation", "force_update", "source_mmcifs"]
         ):
             continue
         path = None

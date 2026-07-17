@@ -24,6 +24,7 @@ from plinder.core.utils.cpl import get_plinder_path
 from plinder.core.utils.io import (
     download_alphafold_cif_file,
     download_pdb_chain_cif_file,
+    get_pdb_mmcif,
 )
 from plinder.core.utils.log import setup_logger
 from plinder.core.utils.unpack import get_zips_to_unpack
@@ -42,9 +43,11 @@ LOG = setup_logger(__name__)
 class PlinderSystem:
     """
     Core class for interacting with a single system and its assets.
-    Annotation data is queried lazily for one entry or system.  V3 structure
-    views are reconstructed from an explicitly supplied original PDB mmCIF;
-    canonical ASU ligand SDFs are loaded from the ligand archive independently.
+    Annotation data is queried lazily for one entry or system. V3 structure
+    views are reconstructed from a deposited PDB mmCIF cached under the
+    configured PLINDER directory; canonical ASU ligand SDFs are loaded from the
+    ligand archive independently.  An explicit source mmCIF can override the
+    managed cache.
 
     Existing local V2 system archives remain readable as a transitional
     fallback, but are never downloaded by this class.
@@ -142,17 +145,27 @@ class PlinderSystem:
         if not zip_path.is_file():
             return None
         get_zips_to_unpack(kind="systems", system_ids=[self.system_id])
-        return extracted if extracted.is_dir() else None
+        return extracted if (extracted / "receptor.cif").is_file() else None
 
     def _require_source_mmcif(self) -> Path:
         if self.source_mmcif is None:
-            raise ValueError(
-                "source_mmcif is required to reconstruct V3 system assets; "
-                "pass the original PDB mmCIF to PlinderSystem"
-            )
+            self.source_mmcif = get_pdb_mmcif(self.system_id)
         if not self.source_mmcif.is_file():
             raise FileNotFoundError(self.source_mmcif)
         return self.source_mmcif
+
+    @property
+    def source_mmcif_path(self) -> Path:
+        """Return the explicit or release-cached deposited PDB mmCIF."""
+        return self._require_source_mmcif()
+
+    @property
+    def _uses_source_reconstruction(self) -> bool:
+        """Use source reconstruction for explicit inputs and V3 releases."""
+        return (
+            self.source_mmcif is not None
+            or str(get_config().data.plinder_iteration).lower() == "v3"
+        )
 
     @property
     def reconstructed(self) -> ReconstructedSystem:
@@ -210,13 +223,16 @@ class PlinderSystem:
             directory containing the plinder system
         """
         if self._archive is None:
-            if self.source_mmcif is not None:
+            if self._uses_source_reconstruction:
                 self.reconstruction_dir.mkdir(parents=True, exist_ok=True)
                 self._archive = self.reconstruction_dir
             else:
                 self._archive = self._legacy_archive()
             if self._archive is None:
-                self._require_source_mmcif()
+                raise FileNotFoundError(
+                    f"No local V2 system archive found for {self.system_id}. "
+                    "Source-mmCIF reconstruction is enabled for V3 releases."
+                )
         return self._archive
 
     @property
@@ -229,7 +245,7 @@ class PlinderSystem:
         str
             path
         """
-        if self.source_mmcif is not None:
+        if self._uses_source_reconstruction:
             return self._ensure_standard_output("system.cif").as_posix()
         assert self.archive is not None
         return (self.archive / "system.cif").as_posix()
@@ -244,7 +260,7 @@ class PlinderSystem:
         str
             path
         """
-        if self.source_mmcif is not None:
+        if self._uses_source_reconstruction:
             return self._ensure_standard_output("receptor.cif").as_posix()
         assert self.archive is not None
         return (self.archive / "receptor.cif").as_posix()
@@ -259,7 +275,7 @@ class PlinderSystem:
         str
             path
         """
-        if self.source_mmcif is not None:
+        if self._uses_source_reconstruction:
             return self._ensure_standard_output("sequences.fasta").as_posix()
         assert self.archive is not None
         return (self.archive / "sequences.fasta").as_posix()
@@ -316,7 +332,7 @@ class PlinderSystem:
         dict[str, str]
             dictionary of ligand names to paths to ligand sdf files
         """
-        if self.source_mmcif is None:
+        if not self._uses_source_reconstruction:
             assert self.archive is not None
             return {
                 ligand.stem: ligand.as_posix()

@@ -57,6 +57,11 @@ class GetPlinderAnnotation:
         self.entry.set_validation(self.validation_xml, self.mmcif_file)
         resolved_save_folder = entry_cfg.get("save_folder")
         if resolved_save_folder is not None:
+            from plinder.data.utils.annotations.cif_utils import (
+                get_mmcif_revision,
+                read_mmcif_container,
+            )
+
             if not isinstance(resolved_save_folder, (str, Path)):
                 raise TypeError("entry save_folder must be a path")
             entry_folder = Path(resolved_save_folder) / self.entry.pdb_id
@@ -65,6 +70,16 @@ class GetPlinderAnnotation:
                 entry_folder / "entry_chains.parquet",
                 index=False,
             )
+            major_revision, minor_revision = get_mmcif_revision(
+                read_mmcif_container(self.mmcif_file)
+            )
+            pd.DataFrame(
+                {
+                    "entry_pdb_id": [self.entry.pdb_id],
+                    "source_mmcif_major_revision": [major_revision],
+                    "source_mmcif_minor_revision": [minor_revision],
+                }
+            ).to_parquet(entry_folder / "entry_source.parquet", index=False)
         if len(self.entry.systems):
             self.annotated_df = self.entry.to_df()
             if self.annotated_df.empty:

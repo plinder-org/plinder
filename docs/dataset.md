@@ -15,6 +15,7 @@ sd_hide_title: true
     |   |-- annotation_table.parquet
     |   |-- annotation_table_nonredundant.parquet
     |   |-- entry_chains.parquet
+    |   |-- entry_sources.parquet
     |-- systems  # Structure files for all systems (split by `two_char_code` and zipped)
     |   |-- {two_char_code}.zip
     |-- clusters # Pre-calculated cluster labels derived from the protein similarity dataset
@@ -73,6 +74,7 @@ Tables that lists all systems along with their annotations.
 - `annotation_table.parquet`: Lists all systems and their annotations.
 - `annotation_table_nonredundant.parquet`: Subset of systems without redundant systems.
 - `entry_chains.parquet`: One row per protein chain with the entry, entity, holo partition flag, and UniProt mappings needed to construct the Foldseek/MMseqs sub-databases.
+- `entry_sources.parquet`: One row per PDB entry recording the exact source mmCIF major and minor revision used during ingest. This is normalized entry metadata and is not repeated on ligand rows.
 
 :::{include} table.html
 :::
@@ -91,7 +93,32 @@ PLINDER stores one canonical asymmetric-unit SDF for each ligand chain. Biologic
             |-- {asym_id}.sdf
 ```
 
-System and receptor mmCIF files are reconstructed on demand from the original PDB mmCIF and the system selection metadata in the annotation parquet. Callers explicitly choose whether to include interacting or all waters, other biological-assembly chains, and which output files to write.
+System and receptor mmCIF files are reconstructed on demand from the deposited PDB
+mmCIF and the system selection metadata in the annotation parquet. During V3 ingest,
+PLINDER records the exact source structure-model major/minor revision in
+`index/entry_sources.parquet`. `PlinderSystem` fetches that exact compressed revision
+from the [wwPDB versioned archive](https://www.wwpdb.org/ftp/pdb-versioned-ftp-site)
+and caches it under
+`<plinder_dir>/source_mmcifs/{two_char_code}/{pdb_id}_v{major}-{minor}.cif.gz`.
+The cache is therefore reproducible for a particular PLINDER release rather than a
+copy of whichever revision happens to be current when it is requested. An explicitly
+supplied `source_mmcif` still takes precedence.
+
+To prepare a subset on an online node before moving the cache to an offline node:
+
+```python
+from plinder.core import download_pdb_mmcifs
+
+download_pdb_mmcifs(["2y4i", "1a3b"])
+```
+
+Only the unique PDB IDs passed to this function are fetched; the full PDB is never
+downloaded. The small release revision manifest is resolved first. Afterward, set
+`PLINDER_OFFLINE=true` (or `PLINDER_OFFLINE_MODE=true`). The cached manifest and
+source files are reused without network access; requesting an uncached entry raises
+an error that includes its expected cache path. Callers explicitly choose whether
+reconstructed outputs include interacting or all waters, other biological-assembly
+chains, and which output files to write.
 
 ```python
 from pathlib import Path
@@ -426,7 +453,7 @@ Each file is a CSV with a single column: `pdb_id`.
 
 #### Raw annotation parts (`raw_entries/`)
 
-During ingest this directory contains one `{pdb_id}.parquet` annotation part and one per-entry directory containing `entry_chains.parquet` plus canonical ligand SDFs, grouped by `two_char_code`. The join step consolidates the ligand-level parts into `index/annotation_table.parquet` and the normalized chain rows into `index/entry_chains.parquet`; entry JSON archives are not produced.
+During ingest this directory contains one `{pdb_id}.parquet` annotation part and one per-entry directory containing `entry_chains.parquet`, `entry_source.parquet`, and canonical ligand SDFs, grouped by `two_char_code`. The join step consolidates the ligand-level parts into `index/annotation_table.parquet`, the normalized chain rows into `index/entry_chains.parquet`, and one pinned source revision per PDB into `index/entry_sources.parquet`; entry JSON archives are not produced.
 
 #### Small molecule fingerprints (`fingerprints/`)
 

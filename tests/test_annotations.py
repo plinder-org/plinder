@@ -96,6 +96,13 @@ def test_short_noncov_peptide_detection(cif_6i41, mock_alternative_datasets):
     assert chain_file.is_file()
     chain_df = pd.read_parquet(chain_file)
     assert chain_df["chain_type"].str.lower().str.contains("polypeptide").all()
+    source_df = pd.read_parquet(entry_dir / "6i41" / "entry_source.parquet")
+    assert source_df["entry_pdb_id"].tolist() == ["6i41"]
+    assert (
+        source_df[["source_mmcif_major_revision", "source_mmcif_minor_revision"]]
+        .notna()
+        .all(axis=None)
+    )
     assert len(df) == 1
     assert df["ligand_is_covalent"].sum() == 0
     assert set(df.ligand_ccd_code.to_list()) == {"LYS-ALA-ASP-THR-THR-THR-PRO"}

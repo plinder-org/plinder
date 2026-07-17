@@ -64,10 +64,13 @@ is already heavily distributed and it would add complexity to the DAG.
   - Side effects include writing the following files:
     - `raw_entries/{two_char_code}/{pdb_id}.parquet`
     - `raw_entries/{two_char_code}/{pdb_id}/entry_chains.parquet`
+    - `raw_entries/{two_char_code}/{pdb_id}/entry_source.parquet`
     - `raw_entries/{two_char_code}/{pdb_id}/ligand_files/{asym_id}.sdf`
   - The join step consolidates the per-entry parquets directly into
     `index/annotation_table.parquet` and the normalized chain rows into
-    `index/entry_chains.parquet`; construction-time validation is authoritative.
+    `index/entry_chains.parquet`. It also consolidates the exact source mmCIF
+    revision once per PDB into `index/entry_sources.parquet`; construction-time
+    validation is authoritative.
 
 ## Canonical ligand archives
 

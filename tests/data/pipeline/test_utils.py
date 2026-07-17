@@ -35,6 +35,7 @@ def test_entry_exists(expect, tmp_path):
         chain_path = tmp_path / "aa" / "aaaa" / "entry_chains.parquet"
         chain_path.parent.mkdir()
         chain_path.write_text("")
+        (chain_path.parent / "entry_source.parquet").write_text("")
     assert (
         utils.entry_exists(
             entry_dir=tmp_path,
@@ -48,6 +49,17 @@ def test_entry_exists_requires_chain_sidecar(tmp_path):
     annotation = tmp_path / "aa" / "aaaa.parquet"
     annotation.parent.mkdir(parents=True)
     annotation.touch()
+
+    assert not utils.entry_exists(entry_dir=tmp_path, pdb_id="aaaa")
+
+
+def test_entry_exists_requires_source_sidecar(tmp_path):
+    annotation = tmp_path / "aa" / "aaaa.parquet"
+    annotation.parent.mkdir(parents=True)
+    annotation.touch()
+    sidecar_dir = tmp_path / "aa" / "aaaa"
+    sidecar_dir.mkdir()
+    (sidecar_dir / "entry_chains.parquet").touch()
 
     assert not utils.entry_exists(entry_dir=tmp_path, pdb_id="aaaa")
 
@@ -120,6 +132,13 @@ def test_create_index_collates_per_entry_parquets(tmp_path, monkeypatch):
         pd.DataFrame({"entry_pdb_id": [pdb_id], **chain_columns}).to_parquet(
             chain_path, index=False
         )
+        pd.DataFrame(
+            {
+                "entry_pdb_id": [pdb_id],
+                "source_mmcif_major_revision": [1],
+                "source_mmcif_minor_revision": [0],
+            }
+        ).to_parquet(chain_path.parent / "entry_source.parquet", index=False)
     monkeypatch.setattr(utils, "add_aggregated_columns", lambda index: index)
 
     index = utils.create_index(data_dir=tmp_path, force_update=True)
@@ -128,3 +147,6 @@ def test_create_index_collates_per_entry_parquets(tmp_path, monkeypatch):
     assert (tmp_path / "index" / "annotation_table.parquet").is_file()
     entry_chains = pd.read_parquet(tmp_path / "index" / "entry_chains.parquet")
     assert entry_chains["entry_pdb_id"].tolist() == ["1aaa", "2bbb"]
+    entry_sources = pd.read_parquet(tmp_path / "index" / "entry_sources.parquet")
+    assert entry_sources["entry_pdb_id"].tolist() == ["1aaa", "2bbb"]
+    assert entry_sources["source_mmcif_major_revision"].tolist() == [1, 1]

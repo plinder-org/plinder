@@ -70,7 +70,8 @@ def entry_exists(*, entry_dir: Path, pdb_id: str) -> bool:
     output = entry_dir / two_char_code / (pdb_id + ".parquet")
     output.parent.mkdir(exist_ok=True, parents=True)
     entry_chains = entry_dir / two_char_code / pdb_id / "entry_chains.parquet"
-    return output.is_file() and entry_chains.is_file()
+    entry_source = entry_dir / two_char_code / pdb_id / "entry_source.parquet"
+    return output.is_file() and entry_chains.is_file() and entry_source.is_file()
 
 
 def get_db_sources(
@@ -501,6 +502,35 @@ def create_entry_chain_index(
     return chains
 
 
+def create_entry_source_index(
+    *, data_dir: Path, force_update: bool = False
+) -> pd.DataFrame:
+    """Collate one source-mmCIF revision row per PDB entry."""
+    output = data_dir / "index" / "entry_sources.parquet"
+    output.parent.mkdir(exist_ok=True, parents=True)
+    if output.exists() and not force_update:
+        return pd.read_parquet(output)
+
+    parts = sorted((data_dir / "raw_entries").glob("*/*/entry_source.parquet"))
+    columns = [
+        "entry_pdb_id",
+        "source_mmcif_major_revision",
+        "source_mmcif_minor_revision",
+    ]
+    sources = (
+        pd.concat([pd.read_parquet(path) for path in parts], ignore_index=True)
+        if parts
+        else pd.DataFrame(columns=columns)
+    )
+    if not sources.empty and sources["entry_pdb_id"].duplicated().any():
+        duplicates = sorted(
+            sources.loc[sources["entry_pdb_id"].duplicated(), "entry_pdb_id"].unique()
+        )
+        raise ValueError(f"duplicate entry source metadata: {duplicates}")
+    sources.to_parquet(output, index=False)
+    return sources
+
+
 def create_index(*, data_dir: Path, force_update: bool = False) -> pd.DataFrame:
     """
     Create the index
@@ -508,6 +538,7 @@ def create_index(*, data_dir: Path, force_update: bool = False) -> pd.DataFrame:
     index = data_dir / "index" / "annotation_table.parquet"
     index.parent.mkdir(exist_ok=True, parents=True)
     create_entry_chain_index(data_dir=data_dir, force_update=force_update)
+    create_entry_source_index(data_dir=data_dir, force_update=force_update)
 
     if not index.exists() or force_update:
         dfs = []

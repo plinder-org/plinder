@@ -18,11 +18,14 @@ from plinder.core.index.system import PlinderSystem
 from plinder.core.index.utils import get_manifest, get_plindex
 from plinder.core.split.utils import get_split
 from plinder.core.utils.config import get_config
+from plinder.core.utils.io import download_pdb_mmcifs, get_pdb_mmcif
 
 __all__ = [
     "get_config",
     "get_plindex",
     "get_manifest",
     "get_split",
+    "get_pdb_mmcif",
+    "download_pdb_mmcifs",
     "PlinderSystem",
 ]

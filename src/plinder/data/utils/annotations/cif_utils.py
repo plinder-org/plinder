@@ -87,6 +87,31 @@ def get_label_asym_sequences(block: pdbx.CIFBlock) -> dict[str, str]:
     }
 
 
+def get_mmcif_revision(block: pdbx.CIFBlock) -> tuple[int, int]:
+    """Return the latest structure-model major/minor revision in an mmCIF."""
+    category_name = "pdbx_audit_revision_history"
+    if category_name not in block:
+        raise ValueError(f"mmCIF has no {category_name} category")
+    category = block[category_name]
+    required = {"major_revision", "minor_revision"}
+    if not required.issubset(category):
+        raise ValueError(f"mmCIF {category_name} has no revision columns")
+
+    major = category["major_revision"].as_array()
+    minor = category["minor_revision"].as_array()
+    rows = list(range(len(major)))
+    if "data_content_type" in category:
+        content_type = category["data_content_type"].as_array()
+        rows = [
+            index
+            for index, value in enumerate(content_type)
+            if str(value).lower() == "structure model"
+        ]
+    if not rows:
+        raise ValueError(f"mmCIF {category_name} has no structure-model revisions")
+    return max((int(major[index]), int(minor[index])) for index in rows)
+
+
 def get_model_count(cif_file: pdbx.CIFFile) -> int:
     """Return the number of models in a CIF (1 if no model column present)."""
     block = list(cif_file.values())[0]
