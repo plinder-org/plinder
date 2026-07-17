@@ -10,11 +10,13 @@ from collections import Counter, defaultdict
 from collections.abc import Iterable as IterableABC
 from dataclasses import dataclass, field
 from functools import cached_property
+from pathlib import Path
 from typing import Any, Iterable
 
 import pandas as pd
 
 from plinder.core.scores.index import query_index
+from plinder.core.scores.query import FILTER
 from plinder.core.utils.log import setup_logger
 
 LOG = setup_logger(__name__)
@@ -431,22 +433,49 @@ def entry_views_from_df(
     return views
 
 
-def load_entry_views(*, pdb_ids: Iterable[str]) -> dict[str, EntryView]:
-    """Build :class:`EntryView` objects for the given pdb_ids from the
-    published plinder index parquet. Thin convenience wrapper around
-    :func:`entry_views_from_df` — for sources other than the published
-    index, call ``entry_views_from_df`` directly with your own DataFrame.
+def load_entry_views(
+    *, pdb_ids: Iterable[str], data_dir: Path | None = None
+) -> dict[str, EntryView]:
+    """Load annotation and normalized chain rows for the requested entries.
+
+    ``data_dir`` selects a local ingest/release root. If omitted, both tables
+    are resolved from the configured PLINDER release cache. Production callers
+    should use this loader so annotation rows and ``entry_chains`` always come
+    from the same release. Direct/custom DataFrames can use
+    :func:`entry_views_from_df` instead.
     """
-    pdb_ids = list(pdb_ids)
-    df = query_index(columns=["*"], splits=["*"])
-    df = df[df["entry_pdb_id"].isin(pdb_ids)]
+    pdb_ids = sorted(set(pdb_ids))
+    if not pdb_ids:
+        return {}
+
     from plinder.core.utils import cpl
     from plinder.core.utils.config import get_config
 
     cfg = get_config()
-    chain_path = cpl.get_plinder_path(
-        rel=f"{cfg.data.index}/{cfg.data.entry_chain_file}"
-    )
+    if data_dir is None:
+        df = query_index(
+            columns=["*"],
+            splits=["*"],
+            filters=[FILTER(("entry_pdb_id", "in", set(pdb_ids)))],
+        )
+        chain_path = cpl.get_plinder_path(
+            rel=f"{cfg.data.index}/{cfg.data.entry_chain_file}"
+        )
+    else:
+        index_dir = Path(data_dir) / cfg.data.index
+        annotation_path = index_dir / cfg.data.index_file
+        if not annotation_path.is_file():
+            raise FileNotFoundError(f"missing annotation index: {annotation_path}")
+        df = pd.read_parquet(
+            annotation_path,
+            filters=[("entry_pdb_id", "in", pdb_ids)],
+        )
+        chain_path = index_dir / cfg.data.entry_chain_file
+
+    if not chain_path.is_file():
+        raise FileNotFoundError(
+            f"missing normalized entry chain index: {chain_path}"
+        )
     entry_chains = pd.read_parquet(
         chain_path,
         filters=[("entry_pdb_id", "in", pdb_ids)],

@@ -595,7 +595,9 @@ class Scorer:
                 f"loading {len(entries_to_load)} (additional) entries for {pdb_id}"
             )
             if entries_to_load:
-                self.entries.update(load_entry_views(pdb_ids=entries_to_load))
+                self.entries.update(
+                    load_entry_views(pdb_ids=entries_to_load, data_dir=data_dir)
+                )
             pdb_file = (
                 self.db_dir
                 / f"{search_db}_{aln_type}"

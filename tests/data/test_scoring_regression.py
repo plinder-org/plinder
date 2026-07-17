@@ -50,6 +50,9 @@ def scoring_fixture(
     rows = pd.concat([entry.to_df() for entry in entries.values()])
     (data_dir / "index").mkdir()
     rows.to_parquet(data_dir / "index" / "annotation_table.parquet", index=False)
+    pd.concat([entry.chains_to_df() for entry in entries.values()]).to_parquet(
+        data_dir / "index" / "entry_chains.parquet", index=False
+    )
     (data_dir / "splits").mkdir()
     pd.DataFrame(
         {"system_id": rows["system_id"].unique(), "split": "train"}
@@ -104,7 +107,10 @@ def test_scoring_regression(scoring_fixture, tmp_path):
     from plinder.data.utils.annotations.get_similarity_scores import Scorer
 
     data_dir, annotation_rows = scoring_fixture
-    entries = entry_views_from_df(annotation_rows)
+    entries = entry_views_from_df(
+        annotation_rows,
+        entry_chains=pd.read_parquet(data_dir / "index" / "entry_chains.parquet"),
+    )
 
     db_sources = get_db_sources(data_dir=data_dir, sub_databases=["holo"])
     scorer = Scorer(

@@ -13,8 +13,10 @@ from plinder.core.scores.entries import (
     LigandView,
     SystemView,
     entry_views_from_df,
+    load_entry_views,
 )
 from plinder.core.utils.schemas import PROTEIN_SIMILARITY_SCHEMA
+from plinder.data.utils.annotations import get_similarity_scores as scoring_module
 from plinder.data.utils.annotations.get_similarity_scores import (
     Scorer,
     get_feature_map_score,
@@ -43,8 +45,10 @@ def test_entry_views_accept_annotation_dataframe(cif_2gdo, tmp_path) -> None:
 
     # Exercise the Arrow representation used by the ingest pipeline,
     # including the normalized nested UniProt accession lists.
-    annotation_path = tmp_path / "annotation.parquet"
-    chain_path = tmp_path / "entry_chains.parquet"
+    index_dir = tmp_path / "index"
+    index_dir.mkdir()
+    annotation_path = index_dir / "annotation_table.parquet"
+    chain_path = index_dir / "entry_chains.parquet"
     annotation.to_parquet(annotation_path, index=False)
     entry_chains.to_parquet(chain_path, index=False)
     view = entry_views_from_df(
@@ -61,6 +65,13 @@ def test_entry_views_accept_annotation_dataframe(cif_2gdo, tmp_path) -> None:
             assert sorted(view.chains_for_alignment(chain_type, aln_type)) == sorted(
                 entry.chains_for_alignment(chain_type, aln_type)
             )
+
+    loaded = load_entry_views(pdb_ids=[entry.pdb_id], data_dir=tmp_path)[entry.pdb_id]
+    assert loaded.chains == view.chains
+
+    chain_path.unlink()
+    with pytest.raises(FileNotFoundError, match="normalized entry chain index"):
+        load_entry_views(pdb_ids=[entry.pdb_id], data_dir=tmp_path)
 
 
 def test_entry_view_builds_holo_apo_and_pred_alignment_ids() -> None:
@@ -452,6 +463,43 @@ def test_ligand_sdf_resolver_uses_only_canonical_entry_path(tmp_path) -> None:
     canonical.parent.mkdir(parents=True)
     canonical.write_text("canonical")
     assert scorer.resolve_ligand_sdf(tmp_path, ligand) == canonical
+
+
+def test_get_score_df_loads_entries_from_ingest_data_dir(
+    tmp_path, monkeypatch
+) -> None:
+    scorer = Scorer(
+        entries={},
+        source_to_full_db_file={},
+        db_dir=tmp_path / "db",
+        scores_dir=tmp_path / "scores",
+    )
+    alignment_path = scorer.db_dir / "holo_foldseek" / "aln" / "1abc.parquet"
+    alignment_path.parent.mkdir(parents=True)
+    pd.DataFrame({"target_pdb_id": ["2def"]}).to_parquet(
+        alignment_path, index=False
+    )
+    calls: list[tuple[set[str], Path]] = []
+
+    def fake_load_entry_views(*, pdb_ids, data_dir):
+        calls.append((set(pdb_ids), data_dir))
+        return {}
+
+    monkeypatch.setattr(scoring_module, "load_entry_views", fake_load_entry_views)
+    monkeypatch.setattr(
+        scorer,
+        "map_alignment_df",
+        lambda *_args: pd.DataFrame({"mapped": [True]}),
+    )
+    monkeypatch.setattr(
+        scorer,
+        "aggregate_scores",
+        lambda *_args, **_kwargs: pd.DataFrame(),
+    )
+
+    scorer.get_score_df(tmp_path, "1abc", "holo")
+
+    assert calls == [({"1abc", "2def"}, tmp_path)]
 
 
 def test_feature_map_score_handles_molecules_without_features() -> None:

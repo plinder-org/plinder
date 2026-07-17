@@ -133,12 +133,10 @@ def get_scorer(
     )
     hashed_contents = hash_contents(pdb_ids)
     if load_entries:
-        from plinder.core.scores.entries import entry_views_from_df
+        from plinder.core.scores.entries import load_entry_views
 
-        annotation = pd.read_parquet(data_dir / "index" / "annotation_table.parquet")
-        entry_chains = pd.read_parquet(data_dir / "index" / "entry_chains.parquet")
-        entries = entry_views_from_df(annotation, entry_chains=entry_chains)
-        entry_ids = list(set(entries.keys()).intersection(pdb_ids))
+        entries = load_entry_views(pdb_ids=pdb_ids, data_dir=data_dir)
+        entry_ids = sorted(entries)
     else:
         entries = {}
         entry_ids = pdb_ids

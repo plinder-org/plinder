@@ -10,7 +10,7 @@ from zipfile import ZipFile
 
 import pandas as pd
 
-from plinder.core.scores.entries import EntryView, LigandView, entry_views_from_df
+from plinder.core.scores.entries import EntryView, LigandView, load_entry_views
 from plinder.core.utils import cpl
 from plinder.core.utils.config import get_config
 from plinder.core.utils.log import setup_logger
@@ -131,22 +131,9 @@ def _load_entry_subset(
         _release_file(relative=index_relative, data_dir=data_dir),
         description="annotation index",
     )
-    annotation = pd.read_parquet(
-        index_path,
-        filters=[("entry_pdb_id", "in", sorted(pdb_ids))],
-    )
-    if annotation.empty:
+    entries = load_entry_views(pdb_ids=pdb_ids, data_dir=data_dir)
+    if not entries:
         raise KeyError(f"no annotation rows found for PDB IDs {sorted(pdb_ids)}")
-
-    chain_relative = f"{cfg.data.index}/{cfg.data.entry_chain_file}"
-    chain_path = _release_file(relative=chain_relative, data_dir=data_dir)
-    entry_chains = None
-    if chain_path.is_file():
-        entry_chains = pd.read_parquet(
-            chain_path,
-            filters=[("entry_pdb_id", "in", sorted(pdb_ids))],
-        )
-    entries = entry_views_from_df(annotation, entry_chains=entry_chains)
     return entries, index_path.parent.parent
 
 
