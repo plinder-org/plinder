@@ -150,3 +150,41 @@ def test_create_index_collates_per_entry_parquets(tmp_path, monkeypatch):
     entry_sources = pd.read_parquet(tmp_path / "index" / "entry_sources.parquet")
     assert entry_sources["entry_pdb_id"].tolist() == ["1aaa", "2bbb"]
     assert entry_sources["source_mmcif_major_revision"].tolist() == [1, 1]
+
+
+def test_finalize_index_creates_nonredundant_data_from_local_clusters(tmp_path):
+    index_dir = tmp_path / "index"
+    cluster_file = (
+        tmp_path
+        / "clusters/cluster=components/directed=True/metric=pli_qcov"
+        / "threshold=100.parquet"
+    )
+    index_dir.mkdir(parents=True)
+    cluster_file.parent.mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "system_id": ["1aaa__1__1.A__1.X", "1aaa__2__1.A__1.X"],
+            "system_id_no_biounit": ["1aaa__1.A__1.X", "1aaa__1.A__1.X"],
+            "system_biounit_id": ["1", "2"],
+            "ligand_id": ["1aaa__1__1.X", "1aaa__2__1.X"],
+        }
+    ).to_parquet(index_dir / "annotation_table.parquet", index=False)
+    pd.DataFrame(
+        {
+            "system_id": ["1aaa__1__1.A__1.X", "1aaa__2__1.A__1.X"],
+            "label": ["c0", "c0"],
+            "metric": ["pli_qcov", "pli_qcov"],
+            "cluster": ["components", "components"],
+            "directed": [True, True],
+            "threshold": [100, 100],
+        }
+    ).to_parquet(cluster_file, index=False)
+
+    utils.finalize_index(data_dir=tmp_path)
+    utils.create_nonredundant_dataset(data_dir=tmp_path)
+
+    finalized = pd.read_parquet(index_dir / "annotation_table.parquet")
+    assert finalized["pli_qcov__100__strong__component"].tolist() == ["c0", "c0"]
+    assert finalized["uniqueness"].nunique() == 1
+    nonredundant = pd.read_parquet(index_dir / "annotation_table_nonredundant.parquet")
+    assert len(nonredundant) == 1

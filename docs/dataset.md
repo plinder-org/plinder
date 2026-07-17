@@ -76,6 +76,16 @@ Tables that lists all systems along with their annotations.
 - `entry_chains.parquet`: One row per protein chain with the entry, entity, holo partition flag, and UniProt mappings needed to construct the Foldseek/MMseqs sub-databases.
 - `entry_sources.parquet`: One row per PDB entry recording the exact source mmCIF major and minor revision used during ingest. This is normalized entry metadata and is not repeated on ligand rows.
 
+V3 cluster columns are merged only after local scoring and clustering finish.
+Receptor-only metrics have system-level labels. Clustered ligand-sensitive metrics,
+including pocket, PLI, and `sucos_shape_pocket_qcov`, have both a system projection
+used for split safety and a row-specific ligand label. Ligand columns include an
+explicit `__ligand__` marker, for example
+`sucos_shape_pocket_qcov__50__ligand__strong__component`; the corresponding
+projected system column is
+`sucos_shape_pocket_qcov__50__strong__component`. The gated `shape`, `color`, and
+raw `sucos_shape` values remain diagnostic scores and are not clustered directly.
+
 :::{include} table.html
 :::
 

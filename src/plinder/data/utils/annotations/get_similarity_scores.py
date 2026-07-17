@@ -28,6 +28,7 @@ from plinder.core.scores.entries import (
     SystemView,
     load_entry_views,
 )
+from plinder.core.scores.metrics import SCORE_NAMES
 from plinder.core.utils.log import setup_logger
 from plinder.data import databases
 from plinder.data.pipeline.config import FoldseekConfig, MMSeqsConfig
@@ -49,25 +50,6 @@ INFO_COLUMNS = (
     "protein_mapping",
     "protein_mapper",
 )
-SCORE_NAMES = (
-    "protein_lddt",
-    "protein_lddt_qcov",
-    "protein_qcov",
-    "protein_fident",
-    "protein_fident_qcov",
-    "protein_seqsim",
-    "protein_seqsim_qcov",
-    "pocket_qcov",
-    "pocket_fident",
-    "pocket_fident_qcov",
-    "pli_qcov",
-    "pli_unique_qcov",
-    "shape",
-    "color",
-    "sucos_shape",
-    "sucos_shape_pocket_qcov",
-)
-
 _ChainInstanceMapping = str
 _ChainPairType = tuple[_ChainInstanceMapping, _ChainInstanceMapping]
 _SimilarityScoreDictType = dict[str, float]

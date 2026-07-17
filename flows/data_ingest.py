@@ -301,6 +301,72 @@ class PlinderDataIngestFlow(FlowSpec):
     def join_make_batch_scores(self, inputs):
         self.pipeline = inputs[0].pipeline
         self.merge_artifacts(inputs, exclude=["chunks"])
+        self.next(self.scatter_collate_partitions)
+
+    @kubernetes(**K8S)
+    @environment(**ENV)
+    @retry
+    @step
+    def scatter_collate_partitions(self):
+        self.chunks = self.pipeline.scatter_collate_partitions()
+        self.next(self.collate_partitions, foreach="chunks")
+
+    @kubernetes(**{**K8S, **LARGE_MEM})
+    @environment(**ENV)
+    @retry
+    @step
+    def collate_partitions(self):
+        self.pipeline.collate_partitions(self.input)
+        self.next(self.join_collate_partitions)
+
+    @kubernetes(**K8S)
+    @environment(**ENV)
+    @retry
+    @step
+    def join_collate_partitions(self, inputs):
+        self.pipeline = inputs[0].pipeline
+        self.merge_artifacts(inputs, exclude=["chunks"])
+        self.next(self.scatter_make_components_and_communities)
+
+    @kubernetes(**K8S)
+    @environment(**ENV)
+    @retry
+    @step
+    def scatter_make_components_and_communities(self):
+        self.chunks = self.pipeline.scatter_make_components_and_communities()
+        self.next(self.make_components_and_communities, foreach="chunks")
+
+    @kubernetes(**{**K8S, **LARGE_MEM})
+    @environment(**ENV)
+    @retry
+    @step
+    def make_components_and_communities(self):
+        self.pipeline.make_components_and_communities(self.input)
+        self.next(self.join_make_components_and_communities)
+
+    @kubernetes(**K8S)
+    @environment(**ENV)
+    @retry
+    @step
+    def join_make_components_and_communities(self, inputs):
+        self.pipeline = inputs[0].pipeline
+        self.merge_artifacts(inputs, exclude=["chunks"])
+        self.next(self.finalize_index)
+
+    @kubernetes(**{**K8S, **LARGE_MEM})
+    @environment(**ENV)
+    @retry
+    @step
+    def finalize_index(self):
+        self.pipeline.finalize_index()
+        self.next(self.make_mmp_index)
+
+    @kubernetes(**{**K8S, **WORKSTATION})
+    @environment(**ENV)
+    @retry
+    @step
+    def make_mmp_index(self):
+        self.pipeline.make_mmp_index()
         self.next(self.end)
 
     # @kubernetes(**K8S)

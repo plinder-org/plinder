@@ -14,10 +14,14 @@ if sys.platform == "darwin":
 import networkit as nk
 import numpy as np
 import pandas as pd
+import pyarrow.parquet as pq
 
-from plinder.core import scores
+from plinder.core.scores.metrics import (
+    GATED_LIGAND_DIAGNOSTIC_METRICS,
+    is_ligand_level_metric,
+)
 from plinder.core.utils.log import setup_logger
-from plinder.core.utils.schemas import CLUSTER_SCHEMA
+from plinder.core.utils.schemas import CLUSTER_SCHEMA, LIGAND_CLUSTER_SCHEMA
 
 LOG = setup_logger(__name__)
 
@@ -120,6 +124,11 @@ def make_nk_graph(
     -------
     graph
     """
+    if df.empty:
+        return nk.Graph(
+            num_systems, weighted=weighted, directed=directed
+        ), system_ids_cat
+
     df[[query_col, target_col]] = df[[query_col, target_col]].astype(system_ids_cat)
     if weighted:
         graph = nk.GraphFromCoo(
@@ -152,6 +161,7 @@ def get_labels(
     system_ids_cat: pd.CategoricalDtype,
     clustering_fn: Callable[[nk.graph.Graph, bool], tuple[list[tuple[int, str]], int]],
     directed: bool,
+    node_column: str = "system_id",
 ) -> list[dict[str, str]]:
     """
     Get community clusters
@@ -175,10 +185,14 @@ def get_labels(
     -------
     list[dict[str, str]]
     """
-    node_labels, max_cluster = clustering_fn(graph, directed)
+    if graph.numberOfNodes() == 0:
+        node_labels: list[tuple[int, str]] = []
+        max_cluster = 0
+    else:
+        node_labels, max_cluster = clustering_fn(graph, directed)
     labels: list[dict[str, str]] = [
         {
-            "system_id": system_ids_cat.categories[sys_int_id],
+            node_column: system_ids_cat.categories[sys_int_id],
             "label": cluster_id,
         }
         for sys_int_id, cluster_id in node_labels
@@ -187,10 +201,10 @@ def get_labels(
     singletons = set(system_ids_and_singletons) - {
         system_ids_cat.categories[node] for node in graph.iterNodes()
     }
-    for i, system_id in enumerate(singletons):
+    for i, system_id in enumerate(sorted(singletons)):
         labels.append(
             {
-                "system_id": system_id,
+                node_column: system_id,
                 "label": f"c{max_cluster + i}",
             }
         )
@@ -253,10 +267,13 @@ def make_cluster_file(
     directed: bool,
     cluster: str,
     skip_existing_clusters: bool,
+    node_column: str = "system_id",
+    output_root: str = "clusters",
+    explode_fingerprint_ligands: bool = False,
 ) -> None:
     cluster_file = (
         data_dir
-        / "clusters"
+        / output_root
         / f"cluster={cluster}"
         / f"directed={directed}"
         / f"metric={metric}"
@@ -273,64 +290,145 @@ def make_cluster_file(
         system_ids_cat,
         func,
         directed,
+        node_column,
     )
     if len(labels):
         labeldf = pd.DataFrame(labels)
         labeldf["metric"] = metric
-        labeldf["directed"] = False
+        labeldf["directed"] = directed
         labeldf["threshold"] = threshold
         labeldf["cluster"] = cluster
-        if metric == "tanimoto_similarity_max":
+        if explode_fingerprint_ligands:
             labeldf = explode_ligand_clusters(data_dir=data_dir, labeldf=labeldf)
         LOG.info(f"saving {cluster_file}")
         t0 = time()
         cluster_file.parent.mkdir(exist_ok=True, parents=True)
-        labeldf.to_parquet(cluster_file, schema=CLUSTER_SCHEMA)
+        schema = CLUSTER_SCHEMA if node_column == "system_id" else LIGAND_CLUSTER_SCHEMA
+        labeldf.to_parquet(cluster_file, schema=schema, index=False)
         t1 = time()
         LOG.info(f"make_cluster_file: saving took {t1 - t0:.2f}s")
 
 
-def prepare_df_protein(
-    *,
-    data_dir: Path,
-    metric: str,
-    threshold: int,
+def _read_local_score_rows(
+    *, data_dir: Path, metric: str, threshold: int
 ) -> pd.DataFrame:
-    LOG.info(f"threshold={threshold} metric={metric} getting system_ids")
-    t0 = time()
-    system_ids_and_singletons = set(
-        pd.read_parquet(
-            data_dir / "index" / "annotation_table.parquet",
-            columns=["system_id"],
-            filters=[
-                ("system_type", "==", "holo"),
-                ("system_num_protein_chains", "<=", 5),
-                ("system_num_ligand_chains", "<=", 5),
-            ],
-        )["system_id"]
+    """Read one metric from score files generated in this ingest directory."""
+    score_paths = sorted((data_dir / "scores" / "search_db=holo").rglob("*.parquet"))
+    frames: list[pd.DataFrame] = []
+    wanted = [
+        "query_system",
+        "query_ligand_id",
+        "target_system",
+        "target_ligand_id",
+        "metric",
+        "similarity",
+    ]
+    for path in score_paths:
+        available = set(pq.read_schema(path).names)  # type: ignore[no-untyped-call]
+        if not {"query_system", "target_system", "metric", "similarity"}.issubset(
+            available
+        ):
+            continue
+        frame = pd.read_parquet(
+            path,
+            columns=[column for column in wanted if column in available],
+            filters=[("metric", "==", metric), ("similarity", ">=", threshold)],
+        )
+        if not frame.empty:
+            frames.append(frame)
+    if not frames:
+        return pd.DataFrame(columns=wanted)
+    return pd.concat(frames, ignore_index=True)
+
+
+def _eligible_annotation(data_dir: Path) -> pd.DataFrame:
+    columns = [
+        "system_id",
+        "ligand_id",
+        "system_type",
+        "system_num_protein_chains",
+        "system_num_ligand_chains",
+        "ligand_is_proper",
+    ]
+    annotation = pd.read_parquet(
+        data_dir / "index" / "annotation_table.parquet",
+        columns=columns,
     )
-    t1 = time()
-    LOG.info(f"getting {len(system_ids_and_singletons)} system_ids took {t1 - t0:.2f}s")
-    if not len(system_ids_and_singletons):
-        LOG.info("no system_ids found, returning")
-        return
-    df = scores.query_protein_similarity(
-        search_db="holo",
-        columns=[
-            "query_system",
-            "target_system",
-            "similarity",
-        ],
-        filters=[
-            ("similarity", ">=", threshold),
-            ("metric", "==", metric),
-        ],
+    return annotation[
+        (annotation["system_type"] == "holo")
+        & (annotation["system_num_protein_chains"] <= 5)
+        & (annotation["system_num_ligand_chains"] <= 5)
+    ]
+
+
+def _collapse_edges(
+    rows: pd.DataFrame, *, query_column: str, target_column: str
+) -> pd.DataFrame:
+    if rows.empty or not {query_column, target_column}.issubset(rows.columns):
+        return pd.DataFrame(columns=["query_node", "target_node", "similarity"])
+    edges = rows.dropna(subset=[query_column, target_column])[
+        [query_column, target_column, "similarity"]
+    ].copy()
+    if edges.empty:
+        return pd.DataFrame(columns=["query_node", "target_node", "similarity"])
+    edges[[query_column, target_column]] = edges[[query_column, target_column]].astype(
+        str
     )
-    if df is None or df.empty:
-        LOG.info("no protein similarity scores found, returning")
-        return
-    LOG.info(f"found {len(df.index)} similarity scores")
-    return df, system_ids_and_singletons
+    return (
+        edges.groupby([query_column, target_column], as_index=False)["similarity"]
+        .max()
+        .rename(columns={query_column: "query_node", target_column: "target_node"})
+    )
+
+
+def prepare_score_edges(
+    *, data_dir: Path, metric: str, threshold: int
+) -> tuple[pd.DataFrame, set[str], pd.DataFrame | None, set[str]]:
+    """Prepare system edges and, for ligand metrics, ligand edges locally."""
+    annotation = _eligible_annotation(data_dir)
+    system_nodes = set(annotation["system_id"].dropna().astype(str))
+    ligand_nodes = set(
+        annotation.loc[annotation["ligand_is_proper"], "ligand_id"].dropna().astype(str)
+    )
+    rows = _read_local_score_rows(
+        data_dir=data_dir,
+        metric=metric,
+        threshold=threshold,
+    )
+    rows = rows[
+        rows["query_system"].astype(str).isin(system_nodes)
+        & rows["target_system"].astype(str).isin(system_nodes)
+    ]
+    ligand_metric = is_ligand_level_metric(metric)
+    has_ligand_ids = {"query_ligand_id", "target_ligand_id"}.issubset(rows.columns)
+    if ligand_metric and has_ligand_ids:
+        rows = rows[
+            rows["query_ligand_id"].astype(str).isin(ligand_nodes)
+            & rows["target_ligand_id"].astype(str).isin(ligand_nodes)
+        ]
+    system_edges = _collapse_edges(
+        rows,
+        query_column="query_system",
+        target_column="target_system",
+    )
+    ligand_edges: pd.DataFrame | None = None
+    if ligand_metric:
+        if has_ligand_ids:
+            ligand_edges = _collapse_edges(
+                rows,
+                query_column="query_ligand_id",
+                target_column="target_ligand_id",
+            )
+        elif not rows.empty:
+            LOG.warning(
+                f"metric={metric} has no ligand identifiers; "
+                "creating only legacy system-level clusters"
+            )
+    LOG.info(
+        f"metric={metric} threshold={threshold}: {len(system_edges)} system edges, "
+        f"{0 if ligand_edges is None else len(ligand_edges)} ligand edges"
+    )
+    return system_edges, system_nodes, ligand_edges, ligand_nodes
 
 
 def prepare_df_ligand(
@@ -338,7 +436,7 @@ def prepare_df_ligand(
     data_dir: Path,
     metric: str,
     threshold: int,
-) -> pd.DataFrame:
+) -> tuple[pd.DataFrame, set[str]]:
     LOG.info(f"threshold={threshold} metric={metric} getting ligand_ids")
     t0 = time()
     system_ids_and_singletons = set(
@@ -350,33 +448,105 @@ def prepare_df_ligand(
     LOG.info(f"getting {len(system_ids_and_singletons)} ligand_ids took {t1 - t0:.2f}s")
     if not len(system_ids_and_singletons):
         LOG.info("no ligand_ids found, returning")
-        return
-    df = scores.query_ligand_similarity(
-        columns=[
-            "query_ligand_id",
-            "target_ligand_id",
-            "tanimoto_similarity_max",
-        ],
-        filters=[
-            ("tanimoto_similarity_max", ">=", threshold),
-        ],
-    )
-    if df is None or df.empty:
-        LOG.info("no ligand similarity scores found, returning")
-        return
+        return (
+            pd.DataFrame(columns=["query_node", "target_node", "similarity"]),
+            set(),
+        )
+    frames = []
+    for path in sorted((data_dir / "ligand_scores").glob("*.parquet")):
+        frame = pd.read_parquet(
+            path,
+            columns=[
+                "query_ligand_id",
+                "target_ligand_id",
+                "tanimoto_similarity_max",
+            ],
+            filters=[("tanimoto_similarity_max", ">=", threshold)],
+        )
+        if not frame.empty:
+            frames.append(frame)
+    if not frames:
+        return (
+            pd.DataFrame(columns=["query_node", "target_node", "similarity"]),
+            system_ids_and_singletons,
+        )
+    df = pd.concat(frames, ignore_index=True)
     df[["query_ligand_id", "target_ligand_id"]] = df[
         ["query_ligand_id", "target_ligand_id"]
     ].astype(str)
     LOG.info(f"found {len(df.index)} similarity scores")
     df.rename(
         columns={
-            "query_ligand_id": "query_system",
-            "target_ligand_id": "target_system",
+            "query_ligand_id": "query_node",
+            "target_ligand_id": "target_node",
             "tanimoto_similarity_max": "similarity",
         },
         inplace=True,
     )
     return df, system_ids_and_singletons
+
+
+def _make_clusters_for_edges(
+    *,
+    data_dir: Path,
+    edges: pd.DataFrame,
+    all_nodes: set[str],
+    metric: str,
+    threshold: int,
+    skip_existing_clusters: bool,
+    node_column: str,
+    output_root: str,
+    explode_fingerprint_ligands: bool = False,
+) -> None:
+    edge_nodes = sorted(set(edges["query_node"]).union(edges["target_node"]))
+    node_categories = pd.CategoricalDtype(categories=edge_nodes)
+    directed_graph, directed_categories = make_nk_graph(
+        edges.copy(),
+        len(edge_nodes),
+        node_categories,
+        directed=True,
+        weighted=False,
+        query_col="query_node",
+        target_col="target_node",
+    )
+    make_cluster_file(
+        graph=directed_graph,
+        system_ids_cat=directed_categories,
+        directed=True,
+        cluster="components",
+        system_ids_and_singletons=all_nodes,
+        data_dir=data_dir,
+        metric=metric,
+        threshold=threshold,
+        skip_existing_clusters=skip_existing_clusters,
+        node_column=node_column,
+        output_root=output_root,
+        explode_fingerprint_ligands=explode_fingerprint_ligands,
+    )
+    undirected_graph, undirected_categories = make_nk_graph(
+        edges.copy(),
+        len(edge_nodes),
+        node_categories,
+        directed=False,
+        weighted=True,
+        query_col="query_node",
+        target_col="target_node",
+    )
+    for cluster in ["components", "communities"]:
+        make_cluster_file(
+            graph=undirected_graph,
+            system_ids_cat=undirected_categories,
+            directed=False,
+            cluster=cluster,
+            system_ids_and_singletons=all_nodes,
+            data_dir=data_dir,
+            metric=metric,
+            threshold=threshold,
+            skip_existing_clusters=skip_existing_clusters,
+            node_column=node_column,
+            output_root=output_root,
+            explode_fingerprint_ligands=explode_fingerprint_ligands,
+        )
 
 
 def make_components_and_communities(
@@ -386,51 +556,54 @@ def make_components_and_communities(
     threshold: int,
     skip_existing_clusters: bool = False,
 ) -> None:
+    if metric in GATED_LIGAND_DIAGNOSTIC_METRICS:
+        raise ValueError(
+            f"{metric} is evaluated only for ligand pairs with positive pocket "
+            "coverage and cannot be clustered directly; use "
+            "sucos_shape_pocket_qcov"
+        )
     if metric == "tanimoto_similarity_max":
-        df, system_ids_and_singletons = prepare_df_ligand(
+        edges, nodes = prepare_df_ligand(
             data_dir=data_dir,
             metric=metric,
             threshold=threshold,
         )
-    else:
-        df, system_ids_and_singletons = prepare_df_protein(
+        _make_clusters_for_edges(
             data_dir=data_dir,
-            metric=metric,
-            threshold=threshold,
-        )
-    system_ids_df = set(df["query_system"]).union(set(df["target_system"]))
-    system_ids_cat = pd.CategoricalDtype(categories=list(system_ids_df))
-    df[["query_system", "target_system"]] = df[
-        ["query_system", "target_system"]
-    ].astype(system_ids_cat)
-    directed_graph, system_ids_directed_cat = make_nk_graph(
-        df, len(system_ids_df), system_ids_cat, directed=True, weighted=False
-    )
-    make_cluster_file(
-        graph=directed_graph,
-        system_ids_cat=system_ids_directed_cat,
-        directed=True,
-        cluster="components",
-        system_ids_and_singletons=system_ids_and_singletons,
-        data_dir=data_dir,
-        metric=metric,
-        threshold=threshold,
-        skip_existing_clusters=skip_existing_clusters,
-    )
-    del directed_graph
-    del system_ids_directed_cat
-    undirected_graph, system_ids_undirected_cat = make_nk_graph(
-        df, len(system_ids_df), system_ids_cat, directed=False, weighted=True
-    )
-    for cluster in ["components", "communities"]:
-        make_cluster_file(
-            graph=undirected_graph,
-            system_ids_cat=system_ids_undirected_cat,
-            directed=False,
-            cluster=cluster,
-            system_ids_and_singletons=system_ids_and_singletons,
-            data_dir=data_dir,
+            edges=edges,
+            all_nodes=nodes,
             metric=metric,
             threshold=threshold,
             skip_existing_clusters=skip_existing_clusters,
+            node_column="system_id",
+            output_root="clusters",
+            explode_fingerprint_ligands=True,
+        )
+        return
+
+    system_edges, system_nodes, ligand_edges, ligand_nodes = prepare_score_edges(
+        data_dir=data_dir,
+        metric=metric,
+        threshold=threshold,
+    )
+    _make_clusters_for_edges(
+        data_dir=data_dir,
+        edges=system_edges,
+        all_nodes=system_nodes,
+        metric=metric,
+        threshold=threshold,
+        skip_existing_clusters=skip_existing_clusters,
+        node_column="system_id",
+        output_root="clusters",
+    )
+    if ligand_edges is not None:
+        _make_clusters_for_edges(
+            data_dir=data_dir,
+            edges=ligand_edges,
+            all_nodes=ligand_nodes,
+            metric=metric,
+            threshold=threshold,
+            skip_existing_clusters=skip_existing_clusters,
+            node_column="ligand_id",
+            output_root="ligand_clusters",
         )

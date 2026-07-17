@@ -41,6 +41,90 @@ def test_final_structure_qc_is_not_a_pipeline_stage():
     assert "structure_qc" not in tasks.STAGES
 
 
+def test_scoring_finalization_stage_order_and_partitions():
+    assert tasks.STAGES.index("collate_partitions") < tasks.STAGES.index(
+        "make_components_and_communities"
+    )
+    assert tasks.STAGES.index("make_components_and_communities") < tasks.STAGES.index(
+        "finalize_index"
+    )
+    assert tasks.STAGES.index("finalize_index") < tasks.STAGES.index("make_mmp_index")
+    partitions = tasks.scatter_collate_partitions()
+    assert len(partitions) == 38
+    assert ["0"] in partitions
+    assert ["z"] in partitions
+    assert ["apo"] in partitions
+    assert ["pred"] in partitions
+
+
+def test_ligand_cluster_scatter_requires_both_node_levels(tmp_path):
+    metric = "sucos_shape_pocket_qcov"
+    expected = [[(metric, 50)]]
+    assert (
+        tasks.scatter_make_components_and_communities(
+            data_dir=tmp_path,
+            metrics=[metric],
+            thresholds=[50],
+            stop_on_cluster=0,
+            skip_existing_clusters=True,
+        )
+        == expected
+    )
+
+    for root in ["clusters", "ligand_clusters"]:
+        for cluster, directed in [
+            ("components", True),
+            ("components", False),
+            ("communities", False),
+        ]:
+            path = (
+                tmp_path
+                / root
+                / f"cluster={cluster}"
+                / f"directed={directed}"
+                / f"metric={metric}"
+                / "threshold=50.parquet"
+            )
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.touch()
+        if root == "clusters":
+            assert (
+                tasks.scatter_make_components_and_communities(
+                    data_dir=tmp_path,
+                    metrics=[metric],
+                    thresholds=[50],
+                    stop_on_cluster=0,
+                    skip_existing_clusters=True,
+                )
+                == expected
+            )
+
+    assert tasks.scatter_make_components_and_communities(
+        data_dir=tmp_path,
+        metrics=[metric],
+        thresholds=[50],
+        stop_on_cluster=0,
+        skip_existing_clusters=True,
+    ) == [[]]
+
+
+def test_empty_cached_cluster_chunk_is_a_noop(tmp_path, monkeypatch):
+    def fail_if_called(**kwargs):
+        pytest.fail(f"cluster computation should not run: {kwargs}")
+
+    monkeypatch.setattr(
+        tasks.clusters,
+        "make_components_and_communities",
+        fail_if_called,
+    )
+
+    tasks.make_components_and_communities(
+        data_dir=tmp_path,
+        metric_threshold=[],
+        skip_existing_clusters=True,
+    )
+
+
 def test_metaflow_graph_uses_canonical_ligand_archive_stage():
     repository = Path(__file__).resolve().parents[3]
     flow = (repository / "flows" / "data_ingest.py").read_text()
@@ -51,6 +135,10 @@ def test_metaflow_graph_uses_canonical_ligand_archive_stage():
     assert "def join_make_entries" in flow
     assert "self.next(self.scatter_make_canonical_ligand_archives)" in flow
     assert "def make_canonical_ligand_archives" in flow
+    assert "self.next(self.scatter_collate_partitions)" in flow
+    assert "self.next(self.scatter_make_components_and_communities)" in flow
+    assert "self.next(self.finalize_index)" in flow
+    assert "self.pipeline.finalize_index()" in flow
 
     tree = ast.parse(flow)
     flow_class = next(

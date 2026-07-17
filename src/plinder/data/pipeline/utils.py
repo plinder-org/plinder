@@ -17,7 +17,6 @@ from zipfile import ZIP_DEFLATED, ZipFile
 import pandas as pd
 from omegaconf import DictConfig
 
-from plinder.core.scores import query_clusters
 from plinder.core.structure import smallmols_similarity
 from plinder.core.utils import schemas
 from plinder.core.utils.log import setup_logger
@@ -369,60 +368,93 @@ def ingest_flow_control(func: Callable[..., T]) -> Callable[..., T]:
     return inner
 
 
-def add_cluster_columns(*, index: pd.DataFrame) -> pd.DataFrame:
-    """
-    Add cluster columns to the annotation table
-    """
-    try:
-        clusters = query_clusters(
-            columns=[
-                "system_id",
-                "label",
-                "threshold",
-                "metric",
-                "cluster",
-                "directed",
-            ],
-            filters=[("system_id", "in", set(index["system_id"]))],
-        )
-    except Exception as e:
-        LOG.error(f"Could not query clusters: {e}")
-        return index
-    if clusters is None:
-        LOG.error("No clusters found")
-        return index
-    clusters = clusters.pivot_table(
+def _cluster_column_name(
+    *, metric: str, cluster: str, directed: bool, threshold: int, ligand: bool
+) -> str:
+    if cluster == "components":
+        kind = "strong__component" if directed else "weak__component"
+    else:
+        kind = "community"
+    ligand_marker = "__ligand" if ligand else ""
+    return f"{metric}__{threshold}{ligand_marker}__{kind}"
+
+
+def _read_local_cluster_rows(*, root: Path, node_column: str) -> pd.DataFrame:
+    columns = [
+        node_column,
+        "label",
+        "threshold",
+        "metric",
+        "cluster",
+        "directed",
+    ]
+    frames = [
+        pd.read_parquet(path, columns=columns)
+        for path in sorted(root.rglob("*.parquet"))
+    ]
+    if not frames:
+        return pd.DataFrame(columns=columns)
+    return pd.concat(frames, ignore_index=True)
+
+
+def _pivot_cluster_rows(
+    clusters: pd.DataFrame, *, node_column: str, ligand: bool
+) -> pd.DataFrame:
+    if clusters.empty:
+        return pd.DataFrame(columns=[node_column])
+    clusters = clusters.copy()
+    clusters["directed"] = clusters["directed"].map(
+        lambda value: value if isinstance(value, bool) else str(value).lower() == "true"
+    )
+    wide = clusters.pivot_table(
         values="label",
-        index="system_id",
+        index=node_column,
         columns=["metric", "cluster", "directed", "threshold"],
         aggfunc="first",
     )
-    new_column_names = []
-    for metric, cluster, directed, threshold in clusters.columns:
-        if cluster == "components":
-            if directed == "True":
-                d = "strong__component"
-            else:
-                d = "weak__component"
-        else:
-            d = "community"
-        new_column_names.append(f"{metric}__{threshold}__{d}")
-    clusters.columns = new_column_names
-    clusters.reset_index(inplace=True)
-    return index.merge(clusters, on="system_id", how="left")
+    wide.columns = [
+        _cluster_column_name(
+            metric=str(metric),
+            cluster=str(cluster),
+            directed=bool(directed),
+            threshold=int(threshold),
+            ligand=ligand,
+        )
+        for metric, cluster, directed, threshold in wide.columns
+    ]
+    return wide.reset_index()
+
+
+def add_cluster_columns(*, index: pd.DataFrame, data_dir: Path) -> pd.DataFrame:
+    """Merge locally generated system and ligand clusters into the index."""
+    result = index
+    for root_name, node_column, ligand in [
+        ("clusters", "system_id", False),
+        ("ligand_clusters", "ligand_id", True),
+    ]:
+        clusters = _read_local_cluster_rows(
+            root=data_dir / root_name,
+            node_column=node_column,
+        )
+        if clusters.empty:
+            continue
+        clusters = clusters[clusters[node_column].isin(set(index[node_column]))]
+        wide = _pivot_cluster_rows(
+            clusters,
+            node_column=node_column,
+            ligand=ligand,
+        )
+        replacement_columns = set(wide.columns).difference({node_column})
+        result = result.drop(
+            columns=list(replacement_columns.intersection(result.columns))
+        ).merge(wide, on=node_column, how="left", validate="many_to_one")
+    return result
 
 
 def add_aggregated_columns(*, index: pd.DataFrame) -> pd.DataFrame:
     """
     Add aggregated columns to the annotation table
     """
-    index = add_cluster_columns(index=index)
-    if "pli_qcov__100__strong__component" in index.columns:
-        index["uniqueness"] = (
-            index["system_id_no_biounit"]
-            + "_"
-            + index["pli_qcov__100__strong__component"]
-        )
     index["biounit_num_ligands"] = index.groupby(["entry_pdb_id", "system_biounit_id"])[
         "system_id"
     ].transform("count")
@@ -468,6 +500,27 @@ def add_aggregated_columns(*, index: pd.DataFrame) -> pd.DataFrame:
         .to_dict()
     )
     index["system_proper_unique_ccd_codes"] = index["system_id"].map(ccd_proper_dict)
+    return index
+
+
+def finalize_index(*, data_dir: Path) -> pd.DataFrame:
+    """Merge local cluster labels into the V3 annotation parquet."""
+    index_path = data_dir / "index" / "annotation_table.parquet"
+    if not index_path.is_file():
+        raise FileNotFoundError(index_path)
+    index = pd.read_parquet(index_path)
+    index = add_cluster_columns(index=index, data_dir=data_dir)
+    uniqueness_cluster = "pli_qcov__100__strong__component"
+    if uniqueness_cluster in index.columns:
+        labels = (
+            index[uniqueness_cluster]
+            .astype("string")
+            .fillna(index["system_id"].astype("string"))
+        )
+        index["uniqueness"] = (
+            index["system_id_no_biounit"].astype("string") + "_" + labels
+        )
+    index.to_parquet(index_path, index=False)
     return index
 
 
@@ -592,6 +645,11 @@ def create_nonredundant_dataset(*, data_dir: Path) -> None:
         df = create_index(data_dir=data_dir)
     else:
         df = pd.read_parquet(data_dir / "index" / "annotation_table.parquet")
+    if "uniqueness" not in df.columns:
+        raise RuntimeError(
+            "annotation index has no uniqueness column; run clustering and "
+            "finalize_index() before creating the nonredundant dataset"
+        )
     df_nonredundant = df.sort_values("system_biounit_id").drop_duplicates("uniqueness")
     df_nonredundant.to_parquet(
         data_dir / "index" / "annotation_table_nonredundant.parquet", index=False

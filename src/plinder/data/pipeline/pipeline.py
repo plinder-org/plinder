@@ -270,6 +270,10 @@ class IngestPipeline:
         )
 
     @utils.ingest_flow_control
+    def finalize_index(self) -> None:
+        tasks.finalize_index(data_dir=self.plinder_dir)
+
+    @utils.ingest_flow_control
     def scatter_make_splits(self) -> list[list[tuple[DictConfig, str]]]:
         chunks: list[list[tuple[DictConfig, str]]] = tasks.scatter_make_splits(
             data_dir=self.plinder_dir,

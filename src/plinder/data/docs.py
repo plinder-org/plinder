@@ -57,22 +57,33 @@ def get_cluster_column_descriptions(
     rows: list[tuple[str, str | None, str | None]] = []
     component_columns = [c for c in plindex.columns if c.endswith("__component")]
     for column in component_columns:
-        metric, threshold, directed, cluster = column.split("__")
+        parts = column.split("__")
+        metric, threshold = parts[:2]
+        ligand_level = parts[2] == "ligand"
+        if ligand_level:
+            _, directed, cluster = parts[2:]
+        else:
+            directed, cluster = parts[2:]
+        level = "ligand-level " if ligand_level else ""
         rows.append(
             (
                 column,
                 "str",
-                f"Cluster ID for {directed} {cluster} built from {metric} metric with {threshold} threshold",
+                f"Cluster ID for {level}{directed} {cluster} built from {metric} metric with {threshold} threshold",
             )
         )
     community_columns = [c for c in plindex.columns if c.endswith("__community")]
     for column in community_columns:
-        metric, threshold, cluster = column.split("__")
+        parts = column.split("__")
+        metric, threshold = parts[:2]
+        ligand_level = parts[2] == "ligand"
+        cluster = parts[-1]
+        level = "ligand-level " if ligand_level else ""
         rows.append(
             (
                 column,
                 "str",
-                f"Cluster ID for {cluster} built from {metric} metric with {threshold} threshold",
+                f"Cluster ID for {level}{cluster} built from {metric} metric with {threshold} threshold",
             )
         )
     return rows

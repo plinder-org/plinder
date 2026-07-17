@@ -16,6 +16,7 @@ import pandas as pd
 from omegaconf import DictConfig
 from tqdm import tqdm
 
+from plinder.core.scores.metrics import is_ligand_level_metric
 from plinder.core.structure import smallmols_similarity
 from plinder.core.utils import gcs
 from plinder.core.utils.log import setup_logger
@@ -36,8 +37,9 @@ STAGES = [
     "run_batch_searches",
     "make_batch_scores",
     "collate_partitions",
-    "make_mmp_index",
     "make_components_and_communities",
+    "finalize_index",
+    "make_mmp_index",
     "make_splits",
     "compute_ligand_leakage",
     "compute_protein_leakage",
@@ -45,6 +47,10 @@ STAGES = [
     "make_linked_structures",
     "score_linked_structures",
 ]
+
+
+def _stringify_config_value(value: Any) -> str:
+    return value.decode() if isinstance(value, bytes) else str(value)
 
 
 def scatter_download_rcsb_files(
@@ -308,8 +314,17 @@ def make_entries(
                     f"mmcif_file={mmcif.as_posix()}",
                     f"validation_xml={report.as_posix()}",
                 ]
-                + [f"annotation.{k}={v}" for k, v in annotation_cfg.items()]
-                + [f"entry.{k}={v}" for k, v in entry_cfg.items() if k != "save_folder"]
+                + [
+                    f"annotation.{_stringify_config_value(k)}="
+                    f"{_stringify_config_value(v)}"
+                    for k, v in annotation_cfg.items()
+                ]
+                + [
+                    f"entry.{_stringify_config_value(k)}="
+                    f"{_stringify_config_value(v)}"
+                    for k, v in entry_cfg.items()
+                    if k != "save_folder"
+                ]
                 + [f"entry.save_folder={output.parent.as_posix()}"]
             )
             f.write(" ".join(cmd) + "\n")
@@ -655,7 +670,7 @@ def make_batch_scores(
 
 def scatter_collate_partitions() -> list[list[str]]:
     partitions = [[i] for i in digits + ascii_lowercase] + [["apo"], ["pred"]]
-    return partitions[:1]
+    return partitions
 
 
 def collate_partitions(*, data_dir: Path, partition: list[str]) -> None:
@@ -675,7 +690,9 @@ def collate_partitions(*, data_dir: Path, partition: list[str]) -> None:
     part: str
     [part] = partition
     con = duckdb.connect()
-    con.sql(f"set temp_directory='/plinder/tmp/{part}';")
+    temp_dir = data_dir / "scratch" / "duckdb" / part
+    temp_dir.mkdir(exist_ok=True, parents=True)
+    con.sql(f"set temp_directory='{temp_dir.as_posix()}';")
 
     search_db = "holo"
     src = f"*{part}.parquet"
@@ -688,7 +705,12 @@ def collate_partitions(*, data_dir: Path, partition: list[str]) -> None:
     source = f"{source_dir}/{src}"
     target = f"{score_dir}/{tgt}"
 
+    if not list(source_dir.glob(src)):
+        LOG.info(f"collate_partitions: no source files matching {source}")
+        return
     score_dir.mkdir(exist_ok=True, parents=True)
+    if Path(target).is_file():
+        Path(target).unlink()
     con.sql(
         dedent(
             f"""
@@ -711,25 +733,36 @@ def scatter_make_components_and_communities(
     skip_existing_clusters: bool,
 ) -> list[list[tuple[str, int]]]:
     values = [[(metric, threshold)] for metric in metrics for threshold in thresholds]
+    if stop_on_cluster:
+        values = values[:stop_on_cluster]
+    if not skip_existing_clusters:
+        return values
 
     rerun = []
     for tup in values:
         metric, threshold = tup[0]
-        do = False
-        for cluster in ["components", "communities"]:
-            for directed in [True, False]:
-                if do:
-                    continue
-                if not (
-                    data_dir
-                    / f"clusters/cluster={cluster}/directed={directed}/metric={metric}/threshold={threshold}.parquet"
-                ).is_file() and not skip_existing_clusters:
-                    do = True
-        if do:
+        roots = ["clusters"]
+        if is_ligand_level_metric(metric):
+            roots.append("ligand_clusters")
+        expected = [
+            data_dir
+            / root
+            / f"cluster={cluster}"
+            / f"directed={directed}"
+            / f"metric={metric}"
+            / f"threshold={threshold}.parquet"
+            for root in roots
+            for cluster, directed in [
+                ("components", True),
+                ("components", False),
+                ("communities", False),
+            ]
+        ]
+        if not all(path.is_file() for path in expected):
             rerun.append(tup)
-    if stop_on_cluster:
-        values = values[:stop_on_cluster]
-    return values
+    # Metaflow needs at least one foreach branch in order to reach the join.
+    # An empty chunk is consumed as a no-op when every cluster is cached.
+    return rerun or [[]]
 
 
 def make_components_and_communities(
@@ -738,6 +771,9 @@ def make_components_and_communities(
     metric_threshold: list[tuple[str, int]],
     skip_existing_clusters: bool,
 ) -> None:
+    if not metric_threshold:
+        LOG.info("make_components_and_communities: all clusters are cached")
+        return
     [(metric, threshold)] = metric_threshold
     clusters.make_components_and_communities(
         data_dir=data_dir,
@@ -746,6 +782,12 @@ def make_components_and_communities(
         # directed=True,
         skip_existing_clusters=skip_existing_clusters,
     )
+
+
+def finalize_index(*, data_dir: Path) -> None:
+    """Merge locally generated cluster IDs into the annotation indexes."""
+    utils.finalize_index(data_dir=data_dir)
+    utils.create_nonredundant_dataset(data_dir=data_dir)
 
 
 def make_mmp_index(

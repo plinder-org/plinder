@@ -4,40 +4,10 @@ from dataclasses import dataclass, field
 from functools import partial
 from typing import Any, Optional
 
+from plinder.core.scores.metrics import DEFAULT_CLUSTER_METRICS
 from plinder.core.utils import config as _config
 
-METRICS = [
-    # pli_qcov:
-    "pli_qcov",
-    "pli_unique_qcov",
-    # seq_sim:
-    "protein_seqsim_qcov_max",
-    "protein_seqsim_qcov_weighted_max",
-    "protein_seqsim_qcov_weighted_sum",
-    "protein_seqsim_max",
-    "protein_seqsim_weighted_max",
-    "protein_seqsim_weighted_sum",
-    # protein
-    "protein_fident_qcov_max",
-    "protein_fident_qcov_weighted_max",
-    "protein_fident_qcov_weighted_sum",
-    "protein_fident_max",
-    "protein_fident_weighted_max",
-    "protein_fident_weighted_sum",
-    "protein_lddt_max",
-    "protein_lddt_qcov_max",
-    "protein_lddt_qcov_weighted_max",
-    "protein_lddt_qcov_weighted_sum",
-    "protein_lddt_weighted_max",
-    "protein_lddt_weighted_sum",
-    "protein_qcov_max",
-    "protein_qcov_weighted_max",
-    "protein_qcov_weighted_sum",
-    # pocket
-    "pocket_fident_qcov",
-    "pocket_fident",
-    "pocket_qcov",
-]
+METRICS = list(DEFAULT_CLUSTER_METRICS)
 
 
 @dataclass

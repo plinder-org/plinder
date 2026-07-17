@@ -144,11 +144,14 @@ protein similarity scoring for all `plinder` systems.
     - `scores/search_db=apo/*`
     - `scores/search_db=pred/*`
 
+- `tasks.collate_partitions`: consolidates every alphanumeric holo partition plus
+  the apo and predicted partitions before clustering. Empty partitions are skipped.
+
 ## MMP and MMS
 
 - `tasks.make_mmp_index`: creates the `mmp` dataset
   - This is a task that is called once
-  - It uses the consolidated annotation parquet created after `make_entries`
+  - It uses the finalized annotation parquet after cluster IDs have been merged
   - Side effects include writing the following files:
     - `mmp/plinder_mmp_series.parquet`
     - `mmp/plinder_mms.csv.gz`
@@ -160,9 +163,18 @@ component and community clustering.
 
 - `tasks.make_components_and_communities`: creates the `components` and `communities` clusters for given metrics at given thresholds
   - This is a distributed task that is called in parallel for individual tuples of metric and threshold
-  - It uses the protein similarity scores and the annotation index
+  - It reads score partitions directly from the current ingest directory, not through the configured public release
+  - Receptor-only metrics use system graph nodes
+  - Pocket, PLI, and `sucos_shape_pocket_qcov` use ligand graph nodes and also produce a system projection in which any qualifying ligand pair connects the two systems
+  - `shape`, `color`, and raw `sucos_shape` remain per-ligand diagnostic scores, but are not clustered because they are evaluated only when pocket coverage is positive
   - Side effects include writing the following files:
     - `clusters/**`
+    - `ligand_clusters/**` (intermediate ligand-node labels)
+
+- `tasks.finalize_index`: merges both cluster levels into the annotation parquet
+  - System-projection columns retain names such as `sucos_shape_pocket_qcov__50__strong__component`
+  - Ligand-row columns are explicit, for example `sucos_shape_pocket_qcov__50__ligand__strong__component`
+  - It creates `annotation_table_nonredundant.parquet` only after the PLI uniqueness cluster exists
 
 ## Splits
 

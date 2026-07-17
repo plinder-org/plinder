@@ -24,11 +24,14 @@ from plinder.core.utils.io import download_alphafold_cif_file, retry
 from plinder.core.utils.log import setup_logger
 from plinder.data.pipeline import transform
 
-CIF_PATH = "rsync-nextgen.wwpdb.org::rsync/data/entries/divided"
+# RCSB retired its NextGen rsync service in June 2026; PDBj remains an
+# official wwPDB rsync mirror for this archive.
+CIF_PATH = "rsync-nextgen.pdbj.org::ftp_nextgen/data/entries/divided"
 CIF_GLOB = "*-enrich.cif.gz"
 VAL_PATH = "rsync.rcsb.org::ftp/validation_reports"
 VAL_GLOB = "*_validation.xml.gz"
-RCSB_PORT = "33444"
+CIF_PORT = "873"
+VAL_PORT = "33444"
 KINDS = ["cif", "val"]
 KIND_TYPES = Literal["cif", "val"]
 LOG = setup_logger(__name__)
@@ -415,7 +418,7 @@ def rsync_rcsb(
     pdb_id: Optional[str] = None,
 ) -> None:
     """
-    Run an RCSB rsync command.
+    Download PDB source files from the archive's supported rsync mirrors.
 
     Parameters
     ----------
@@ -432,11 +435,13 @@ def rsync_rcsb(
     if kind == "cif":
         server = CIF_PATH
         contents = CIF_GLOB
+        port = CIF_PORT
         if pdb_id is not None:
             suffix = f"pdb_0000{pdb_id}"
     else:
         server = VAL_PATH
         contents = VAL_GLOB
+        port = VAL_PORT
         if pdb_id is not None:
             suffix = pdb_id
 
@@ -447,7 +452,7 @@ def rsync_rcsb(
     Path(dest).mkdir(exist_ok=True, parents=True)
 
     cmd = (
-        f"rsync -rlpt -z --delete --port={RCSB_PORT} --no-perms "
+        f"rsync -rlpt -z --delete --port={port} --no-perms "
         f'--include "*/" --include "{contents}" --exclude="*" '
         f"{server} {dest}"
     )
@@ -464,14 +469,19 @@ def list_rcsb(
 ) -> list[str]:
     if kind not in KINDS:
         raise ValueError(f"kind={kind} not in {KINDS}")
-    server = CIF_PATH if kind == "cif" else VAL_PATH
+    if kind == "cif":
+        server = CIF_PATH
+        port = CIF_PORT
+    else:
+        server = VAL_PATH
+        port = VAL_PORT
     if two_char_code is not None:
         server = f"{server}/{two_char_code}/"
         if pdb_id is not None:
             server = f"{server}{pdb_id}"
     else:
         server = f"{server}/"
-    cmd = f"rsync --port={RCSB_PORT} --list-only {server}"
+    cmd = f"rsync --port={port} --list-only {server}"
     LOG.info(f"running: {cmd}")
     output = check_output(cmd, shell=True, text=True).splitlines()
     return [

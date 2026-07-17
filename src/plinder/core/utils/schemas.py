@@ -50,6 +50,18 @@ CLUSTER_SCHEMA = pa.schema(
 )
 
 
+LIGAND_CLUSTER_SCHEMA = pa.schema(
+    [
+        ("ligand_id", pa.string()),
+        ("label", pa.string()),
+        ("metric", pa.string()),
+        ("cluster", pa.string()),
+        ("directed", pa.bool_()),
+        ("threshold", pa.int8()),
+    ]
+)
+
+
 TANIMOTO_SCORE_SCHEMA = pa.schema(
     [
         pa.field("query_ligand_id", pa.int32()),

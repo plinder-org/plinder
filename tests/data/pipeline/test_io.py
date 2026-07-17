@@ -186,11 +186,15 @@ def test_kinase_ligand(test_env, all_kinase_paths):
 
 
 def test_rsync_rcsb(tmp_path, monkeypatch):
+    commands = []
     monkeypatch.setattr(
         "plinder.data.pipeline.io.check_output",
-        lambda *_, **__: None,
+        lambda command, **_: commands.append(command),
     )
     io.rsync_rcsb(kind="cif", two_char_code="aa", data_dir=tmp_path)
+    assert len(commands) == 1
+    assert "--port=873" in commands[0]
+    assert "rsync-nextgen.pdbj.org::ftp_nextgen/data/entries/divided/aa/" in commands[0]
 
 
 def test_list_rcsb(monkeypatch):
