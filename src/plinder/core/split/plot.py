@@ -133,7 +133,7 @@ class SplitPropertiesPlotter:
             "system_proper_unique_ccd_codes": "Ligand CCD codes",
             "pli_unique_qcov__50__community": "PLI community",
             "pocket_qcov__50__community": "Pocket community",
-            "tanimoto_similarity_max__50__community": "Ligand community",
+            "tanimoto_similarity_ecfp4_1024__50__community": "Ligand community",
         }
     )
 
@@ -185,7 +185,7 @@ class SplitPropertiesPlotter:
         bg_color_col: str = "system_has_mms",
         sort_col: str = "system_id",
     ) -> None:
-        color_col = f"tanimoto_similarity_max__train_vs_{split_name}"
+        color_col = f"tanimoto_similarity_ecfp4_1024__train_vs_{split_name}"
         df = self.plindex[
             (self.plindex["split"] == split_name)
             & (~self.plindex["ligand_is_ion"])
@@ -206,8 +206,8 @@ class SplitPropertiesPlotter:
             # rename columns for easier interpretation and formatting
             rename={
                 "pli_unique_qcov__50__community": "PLI community ID",
-                "tanimoto_similarity_max__50__community": "Ligand community ID",
-                "tanimoto_similarity_max__30__community": "Ligand community ID",
+                "tanimoto_similarity_ecfp4_1024__50__community": "Ligand community ID",
+                "tanimoto_similarity_ecfp4_1024__30__community": "Ligand community ID",
                 "system_num_protein_chains": "Receptor chain count",
                 "system_proper_num_ligand_chains": "Ligand count",
             },
@@ -300,10 +300,10 @@ class SplitPropertiesPlotter:
             ].reset_index(drop=True)
             if split in self.stratified_files:
                 stratified = pd.read_parquet(self.stratified_files[split])
-                stratified["novel_ligand"] = stratified["tanimoto_similarity_max"] < 30
+                stratified["novel_ligand"] = stratified["tanimoto_similarity_ecfp4_1024"] < 30
                 ligand_df = ligand_df.merge(
                     stratified[
-                        ["system_id", "tanimoto_similarity_max", "novel_ligand"]
+                        ["system_id", "tanimoto_similarity_ecfp4_1024", "novel_ligand"]
                     ],
                     on="system_id",
                     how="left",

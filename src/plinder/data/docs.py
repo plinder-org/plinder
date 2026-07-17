@@ -45,6 +45,43 @@ CHAIN_TYPES = [
     "ligand_neighboring_ligand_chains",
     "ligand_protein_chains",
 ]
+DERIVED_LIGAND_COLUMNS = [
+    (
+        "ligand_is_3d_score_able",
+        "bool | None",
+        "Whether the canonical ASU SDF loads and supports finite shape, color, and SuCOS self-scoring",
+    ),
+    (
+        "ligand_smiles_id",
+        "int | None",
+        "Integer node ID assigned to this exact canonical SMILES for ligand similarity scoring",
+    ),
+    (
+        "ligand_max_cofactor_similarity",
+        "float | None",
+        "Maximum ECFP4/1024 Tanimoto similarity (percent) to any CCD structure in the cofactor list",
+    ),
+    (
+        "ligand_most_similar_cofactor",
+        "str | None",
+        "CCD code of the cofactor with maximum ECFP4/1024 Tanimoto similarity",
+    ),
+    (
+        "ligand_is_cofactor_like",
+        "bool | None",
+        "Whether maximum similarity to a listed CCD cofactor is at least 90 percent",
+    ),
+    (
+        "ligand_tanimoto_ecfp4_1024_90_cluster",
+        "str | None",
+        "Connected-component ID among unique ligand SMILES using Tanimoto similarity of at least 90 percent",
+    ),
+    (
+        "ligand_tanimoto_ecfp4_1024_90_cluster_num_pdb_ids",
+        "int | None",
+        "Number of distinct PDB entries containing this ligand or another ligand in its 90-percent Tanimoto component",
+    ),
+]
 
 
 def get_cluster_column_descriptions(
@@ -132,6 +169,9 @@ def make_column_descriptions(*, plindex: pd.DataFrame) -> None:
     Ligand.document_properties_to_tsv(
         prefix="ligand", filename=output_dir / "ligands.tsv"
     )
+    with (output_dir / "ligands.tsv").open("a") as f:
+        for name, typ, description in DERIVED_LIGAND_COLUMNS:
+            f.write(f"{name}\t{typ}\t{description}\n")
     with open(output_dir / "similarity_clusters.tsv", "w") as f:
         f.write("Name\tType\tDescription\n")
         rows = get_cluster_column_descriptions(plindex)

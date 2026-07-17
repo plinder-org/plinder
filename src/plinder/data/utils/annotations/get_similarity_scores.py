@@ -15,9 +15,10 @@ import biotite.sequence.align as align
 import numpy as np
 import pandas as pd
 import pyarrow
+import pyarrow as pa
 import pyarrow.parquet as pq
 from pyarrow import csv
-from rdkit import Chem, RDConfig
+from rdkit import Chem, DataStructs, RDConfig
 from rdkit.Chem import ChemicalFeatures, rdMolAlign, rdShapeAlign, rdShapeHelpers
 from rdkit.Chem.FeatMaps import FeatMaps
 from tqdm import tqdm
@@ -29,11 +30,31 @@ from plinder.core.scores.entries import (
     load_entry_views,
 )
 from plinder.core.scores.metrics import SCORE_NAMES
+from plinder.core.structure.smallmols_similarity import mol2morgan_fp
+from plinder.core.utils import schemas
 from plinder.core.utils.log import setup_logger
 from plinder.data import databases
 from plinder.data.pipeline.config import FoldseekConfig, MMSeqsConfig
 
 LOG = setup_logger(__name__)
+
+ECFP4_RADIUS = 2
+ECFP4_NBITS = 1024
+ECFP4_PARQUET_METADATA = {
+    b"plinder.fingerprint": b"ECFP4",
+    b"plinder.fingerprint.generator": b"RDKit Morgan",
+    b"plinder.fingerprint.radius": b"2",
+    b"plinder.fingerprint.nbits": b"1024",
+    b"plinder.fingerprint.include_chirality": b"false",
+}
+
+
+def write_ecfp4_fingerprint_table(ligands: pd.DataFrame, output_path: Path) -> None:
+    """Write the fixed ECFP4/1024 fingerprint table with explicit metadata."""
+    table = pa.Table.from_pandas(ligands, preserve_index=False)
+    metadata = {**(table.schema.metadata or {}), **ECFP4_PARQUET_METADATA}
+    pq.write_table(table.replace_schema_metadata(metadata), output_path)
+
 
 SORT_ORDER = [
     ("similarity", "descending"),
@@ -53,6 +74,328 @@ INFO_COLUMNS = (
 _ChainInstanceMapping = str
 _ChainPairType = tuple[_ChainInstanceMapping, _ChainInstanceMapping]
 _SimilarityScoreDictType = dict[str, float]
+
+
+def load_ligands_from_index(*, annotation: pd.DataFrame) -> pd.DataFrame:
+    """Extract post-ingest ligand-similarity inputs from annotation rows."""
+    columns = {
+        "entry_pdb_id": "pdb_id",
+        "system_id": "system_id",
+        "ligand_rdkit_canonical_smiles": "ligand_rdkit_canonical_smiles",
+        "ligand_unique_ccd_code": "ligand_ccd_code",
+        "ligand_id": "ligand_id",
+        "ligand_asym_id": "ligand_asym_id",
+    }
+    if annotation.empty:
+        return pd.DataFrame(columns=list(columns.values()))
+    ligands = annotation.loc[
+        annotation["system_type"].eq("holo"), list(columns)
+    ].rename(columns=columns)
+    return (
+        ligands.dropna(subset=["ligand_id"])
+        .drop_duplicates(subset=["ligand_id"])
+        .reset_index(drop=True)
+        .sort_values("ligand_id")
+    )
+
+
+def annotate_cofactor_similarity(
+    ligands: pd.DataFrame,
+    *,
+    cofactor_smiles: dict[str, str],
+    threshold: float = 90.0,
+    radius: int = 2,
+    nbits: int = 1024,
+) -> pd.DataFrame:
+    """Annotate unique ligand SMILES against CCD cofactor structures."""
+    cofactor_fingerprints: list[DataStructs.ExplicitBitVect] = []
+    cofactor_codes: list[str] = []
+    for code, smiles in sorted(cofactor_smiles.items()):
+        try:
+            cofactor_fingerprints.append(
+                mol2morgan_fp(smiles, radius=radius, nbits=nbits)
+            )
+            cofactor_codes.append(code)
+        except (TypeError, ValueError):
+            LOG.warning(f"skipping invalid cofactor SMILES for {code}")
+    if not cofactor_fingerprints:
+        raise ValueError("no valid CCD cofactor structures are available")
+
+    result = ligands.copy()
+    maximum_similarities: list[float] = []
+    closest_cofactors: list[str] = []
+    for binary_fingerprint in result["fingerprint"]:
+        fingerprint = DataStructs.CreateFromBinaryText(binary_fingerprint)
+        similarities = DataStructs.BulkTanimotoSimilarity(
+            fingerprint, cofactor_fingerprints
+        )
+        best_index = int(np.argmax(similarities))
+        maximum_similarities.append(float(similarities[best_index] * 100.0))
+        closest_cofactors.append(cofactor_codes[best_index])
+    result["ligand_max_cofactor_similarity"] = np.asarray(
+        maximum_similarities, dtype=np.float32
+    )
+    result["ligand_most_similar_cofactor"] = closest_cofactors
+    result["ligand_is_cofactor_like"] = (
+        result["ligand_max_cofactor_similarity"] >= threshold
+    )
+    return result
+
+
+def compute_ligand_fingerprints(
+    *,
+    data_dir: Path,
+    cofactor_similarity_threshold: float = 90.0,
+) -> None:
+    """Fingerprint the unique canonical SMILES in a completed ligand ingest."""
+    ligands = (
+        pd.read_parquet(data_dir / "ligands").drop_duplicates().reset_index(drop=True)
+    )
+    for column in ligands.columns:
+        LOG.info(
+            f"compute_ligand_fingerprints: unique {column}="
+            f"{ligands[column].nunique()}"
+        )
+
+    smiles_column = "ligand_rdkit_canonical_smiles"
+    ligands = ligands.dropna(subset=[smiles_column])
+    ligands = ligands[ligands[smiles_column].ne("")].copy()
+    ligands_unique = (
+        ligands[[smiles_column]]
+        .drop_duplicates()
+        .sort_values(smiles_column)
+        .reset_index(drop=True)
+    )
+    ligands_unique.insert(
+        0,
+        "ligand_smiles_id",
+        np.arange(len(ligands_unique), dtype=np.int32),
+    )
+    fingerprints = [
+        mol2morgan_fp(smiles, radius=ECFP4_RADIUS, nbits=ECFP4_NBITS)
+        for smiles in ligands_unique[smiles_column]
+    ]
+    ligands_unique["fingerprint"] = [
+        DataStructs.BitVectToBinaryText(fingerprint) for fingerprint in fingerprints
+    ]
+
+    from plinder.data.utils.annotations.ligand_utils import parse_cofactors
+
+    component_path = data_dir / "dbs" / "components" / "components.parquet"
+    if not component_path.is_file():
+        raise FileNotFoundError(f"missing CCD component table: {component_path}")
+    components = pd.read_parquet(
+        component_path,
+        columns=["binder_id", "canonical_smiles"],
+    ).dropna(subset=["canonical_smiles"])
+    cofactor_codes = parse_cofactors(data_dir)
+    cofactor_smiles = dict(
+        components.loc[
+            components["binder_id"].isin(cofactor_codes),
+            ["binder_id", "canonical_smiles"],
+        ].itertuples(index=False, name=None)
+    )
+    missing_cofactors = cofactor_codes.difference(cofactor_smiles)
+    if missing_cofactors:
+        LOG.warning(
+            f"{len(missing_cofactors)} cofactor codes have no CCD SMILES structure"
+        )
+    ligands_unique = annotate_cofactor_similarity(
+        ligands_unique,
+        cofactor_smiles=cofactor_smiles,
+        threshold=cofactor_similarity_threshold,
+        radius=ECFP4_RADIUS,
+        nbits=ECFP4_NBITS,
+    )
+
+    output_dir = data_dir / "fingerprints"
+    output_dir.mkdir(exist_ok=True, parents=True)
+    write_ecfp4_fingerprint_table(
+        ligands_unique,
+        output_dir / "ligands_per_smiles.parquet",
+    )
+
+    # Fingerprints define the node universe, so any old score shards are stale.
+    for path in (data_dir / "ligand_scores").glob("*.parquet"):
+        path.unlink()
+
+
+def ligand_scores(
+    *,
+    ligand_ids: list[int],
+    data_dir: Path,
+    output_path: Path,
+    number_id_col: str = "ligand_smiles_id",
+    minimum_similarity: float = 30.0,
+) -> None:
+    """Write all BulkTanimoto edges above ``minimum_similarity``."""
+    fingerprint_path = data_dir / "fingerprints" / "ligands_per_smiles.parquet"
+    fingerprint_metadata = pq.read_schema(fingerprint_path).metadata or {}
+    if any(
+        fingerprint_metadata.get(key) != value
+        for key, value in ECFP4_PARQUET_METADATA.items()
+    ):
+        raise ValueError("ligand fingerprint metadata is not ECFP4/1024")
+    all_ligands = pd.read_parquet(fingerprint_path)
+    fingerprints = [
+        DataStructs.CreateFromBinaryText(value) for value in all_ligands["fingerprint"]
+    ]
+    if len(fingerprints) != len(all_ligands):
+        raise ValueError("ligands don't match fingerprints")
+    node_ids = all_ligands[number_id_col].astype(int).tolist()
+    if node_ids != list(range(len(all_ligands))):
+        raise ValueError("ligand IDs must match contiguous fingerprint row indices")
+
+    minimum_fraction = minimum_similarity / 100.0
+    rows: list[dict[str, int | float]] = []
+    for ligand_id in ligand_ids:
+        similarities = DataStructs.BulkTanimotoSimilarity(
+            fingerprints[ligand_id], fingerprints
+        )
+        rows.extend(
+            {
+                "query_ligand_id": ligand_id,
+                "target_ligand_id": target_id,
+                "tanimoto_similarity_ecfp4_1024": similarity * 100.0,
+            }
+            for target_id, similarity in enumerate(similarities)
+            if similarity >= minimum_fraction
+        )
+    table = pa.Table.from_pylist(
+        rows,
+        schema=schemas.TANIMOTO_SCORE_SCHEMA.with_metadata(ECFP4_PARQUET_METADATA),
+    )
+    pq.write_table(table, output_path)
+
+
+def build_ligand_similarity_annotations(
+    *,
+    unique_ligands: pd.DataFrame,
+    ligand_occurrences: pd.DataFrame,
+    edges: pd.DataFrame,
+    cluster_threshold: float = 90.0,
+) -> pd.DataFrame:
+    """Build deterministic Tanimoto components and PDB-frequency annotations."""
+    node_ids = unique_ligands["ligand_smiles_id"].astype(int).tolist()
+    parent = {node_id: node_id for node_id in node_ids}
+
+    def find(node_id: int) -> int:
+        while parent[node_id] != node_id:
+            parent[node_id] = parent[parent[node_id]]
+            node_id = parent[node_id]
+        return node_id
+
+    def union(left: int, right: int) -> None:
+        left_root = find(left)
+        right_root = find(right)
+        if left_root == right_root:
+            return
+        if left_root < right_root:
+            parent[right_root] = left_root
+        else:
+            parent[left_root] = right_root
+
+    selected_edges = edges[edges["tanimoto_similarity_ecfp4_1024"] >= cluster_threshold]
+    for left, right in selected_edges[
+        ["query_ligand_id", "target_ligand_id"]
+    ].itertuples(index=False, name=None):
+        left_id = int(left)
+        right_id = int(right)
+        if left_id not in parent or right_id not in parent:
+            raise ValueError(
+                f"ligand similarity edge references unknown node {left_id}, {right_id}"
+            )
+        union(left_id, right_id)
+
+    components: dict[int, list[int]] = {}
+    for node_id in node_ids:
+        components.setdefault(find(node_id), []).append(node_id)
+    ordered_components = sorted(
+        components.values(), key=lambda members: (-len(members), members)
+    )
+    cluster_by_node = {
+        node_id: f"c{cluster_index}"
+        for cluster_index, members in enumerate(ordered_components)
+        for node_id in members
+    }
+    pdb_ids_by_node = {
+        int(node_id): set(group["pdb_id"].astype(str))
+        for node_id, group in ligand_occurrences.groupby("ligand_smiles_id")
+    }
+    num_pdb_ids_by_node: dict[int, int] = {}
+    for members in ordered_components:
+        component_pdb_ids: set[str] = set()
+        for node_id in members:
+            component_pdb_ids.update(pdb_ids_by_node.get(node_id, set()))
+        for node_id in members:
+            num_pdb_ids_by_node[node_id] = len(component_pdb_ids)
+
+    threshold_label = f"{cluster_threshold:g}".replace(".", "p")
+    cluster_column = f"ligand_tanimoto_ecfp4_1024_{threshold_label}_cluster"
+    count_column = f"{cluster_column}_num_pdb_ids"
+    annotations = unique_ligands.drop(columns=["fingerprint"]).copy()
+    annotations[cluster_column] = annotations["ligand_smiles_id"].map(cluster_by_node)
+    annotations[count_column] = (
+        annotations["ligand_smiles_id"].map(num_pdb_ids_by_node).astype(np.int32)
+    )
+    return annotations
+
+
+def annotate_ligand_similarity(
+    *, data_dir: Path, cluster_threshold: float = 90.0
+) -> Path:
+    """Collate score shards into ligand-level annotations for the final index."""
+    fingerprint_dir = data_dir / "fingerprints"
+    unique_ligands = pd.read_parquet(fingerprint_dir / "ligands_per_smiles.parquet")
+    ligand_occurrences = pd.read_parquet(
+        data_dir / "ligands",
+        columns=["pdb_id", "ligand_rdkit_canonical_smiles"],
+    ).merge(
+        unique_ligands[["ligand_rdkit_canonical_smiles", "ligand_smiles_id"]],
+        on="ligand_rdkit_canonical_smiles",
+        how="inner",
+        validate="many_to_one",
+    )
+    score_paths = sorted((data_dir / "ligand_scores").glob("*.parquet"))
+    if len(unique_ligands) and not score_paths:
+        raise FileNotFoundError("no BulkTanimoto score shards were generated")
+    frames = [
+        pd.read_parquet(
+            path,
+            filters=[("tanimoto_similarity_ecfp4_1024", ">=", cluster_threshold)],
+        )
+        for path in score_paths
+    ]
+    edges = (
+        pd.concat(frames, ignore_index=True)
+        if frames
+        else pd.DataFrame(
+            columns=[
+                "query_ligand_id",
+                "target_ligand_id",
+                "tanimoto_similarity_ecfp4_1024",
+            ]
+        )
+    )
+    expected_query_ids = set(unique_ligands["ligand_smiles_id"].astype(int))
+    observed_query_ids = set(edges["query_ligand_id"].astype(int))
+    if observed_query_ids != expected_query_ids:
+        missing = sorted(expected_query_ids.difference(observed_query_ids))
+        extra = sorted(observed_query_ids.difference(expected_query_ids))
+        raise ValueError(
+            "BulkTanimoto score shards do not cover the fingerprint set: "
+            f"missing={missing[:10]}, extra={extra[:10]}"
+        )
+    annotations = build_ligand_similarity_annotations(
+        unique_ligands=unique_ligands,
+        ligand_occurrences=ligand_occurrences,
+        edges=edges,
+        cluster_threshold=cluster_threshold,
+    )
+    output_path = fingerprint_dir / "ligand_similarity_annotations.parquet"
+    annotations.to_parquet(output_path, index=False)
+    return output_path
+
 
 PHARMACOPHORE_FEATURES = frozenset(
     {
@@ -161,6 +504,60 @@ def load_sdf_molecule(sdf_file: Path) -> Chem.Mol | None:
     except Exception as exc:
         LOG.warning(f"failed loading ligand SDF {sdf_file}: {exc}")
         return None
+
+
+def canonical_ligand_sdf_path(data_dir: Path, *, pdb_id: str, asym_id: str) -> Path:
+    """Return the canonical ASU SDF path for one ligand occurrence."""
+    return (
+        data_dir
+        / "raw_entries"
+        / pdb_id[-3:-1]
+        / pdb_id
+        / "ligand_files"
+        / f"{asym_id}.sdf"
+    )
+
+
+def is_ligand_3d_score_able(sdf_file: Path) -> bool:
+    """Test whether one canonical SDF supports shape, color, and SuCOS scoring."""
+    molecule = load_sdf_molecule(sdf_file)
+    if molecule is None:
+        return False
+    reference = Chem.Mol(molecule)
+    mobile = Chem.Mol(molecule)
+    try:
+        shape, color = align_molecules(reference, mobile)
+        sucos = get_sucos_score(reference, mobile)
+    except Exception as exc:
+        LOG.warning(f"ligand SDF is not 3D-scoreable ({sdf_file}): {exc}")
+        return False
+    return all(np.isfinite(value) for value in (shape, color, sucos))
+
+
+def annotate_ligand_3d_score_ability(
+    ligands: pd.DataFrame, *, data_dir: Path
+) -> pd.DataFrame:
+    """Annotate each ligand occurrence using its canonical ASU conformation."""
+    required = {"pdb_id", "ligand_asym_id"}
+    missing = required.difference(ligands.columns)
+    if missing:
+        raise ValueError(f"missing ligand SDF identifiers: {sorted(missing)}")
+    result = ligands.copy()
+    scoreability_by_sdf: dict[Path, bool] = {}
+    abilities = []
+    for pdb_id, asym_id in result[["pdb_id", "ligand_asym_id"]].itertuples(
+        index=False, name=None
+    ):
+        sdf_file = canonical_ligand_sdf_path(
+            data_dir,
+            pdb_id=str(pdb_id),
+            asym_id=str(asym_id),
+        )
+        if sdf_file not in scoreability_by_sdf:
+            scoreability_by_sdf[sdf_file] = is_ligand_3d_score_able(sdf_file)
+        abilities.append(scoreability_by_sdf[sdf_file])
+    result["ligand_is_3d_score_able"] = pd.array(abilities, dtype="boolean")
+    return result
 
 
 def get_sequence_similarity(seq_str1: str, seq_str2: str) -> tuple[float, float]:
@@ -397,14 +794,12 @@ class Scorer:
 
     def resolve_ligand_sdf(self, data_dir: Path, ligand: LigandView) -> Path | None:
         """Resolve the canonical ASU ligand SDF for a ligand annotation."""
-        two_char_code = ligand.pdb_id[-3:-1]
         candidates = [
-            data_dir
-            / "raw_entries"
-            / two_char_code
-            / ligand.pdb_id
-            / "ligand_files"
-            / f"{ligand.asym_id}.sdf",
+            canonical_ligand_sdf_path(
+                data_dir,
+                pdb_id=ligand.pdb_id,
+                asym_id=ligand.asym_id,
+            ),
             data_dir
             / "ligand_archives"
             / ligand.pdb_id
@@ -440,6 +835,8 @@ class Scorer:
         """Shape-score one ligand pair after the pocket-coverage gate."""
         if not np.isfinite(pocket_qcov) or pocket_qcov <= 0:
             return {}
+        if not query_ligand.is_3d_score_able or not target_ligand.is_3d_score_able:
+            return {}
 
         query_mol = self._get_ligand_mol(data_dir, query_ligand)
         target_mol = self._get_ligand_mol(data_dir, target_ligand)
@@ -458,6 +855,12 @@ class Scorer:
                 f"{query_ligand.id} to {target_ligand.id}: {exc}"
             )
             return {}
+        if not all(np.isfinite(value) for value in (shape, color)):
+            LOG.warning(
+                "shape alignment returned non-finite scores for "
+                f"{query_ligand.id} to {target_ligand.id}"
+            )
+            return {}
 
         scores: _SimilarityScoreDictType = {
             "shape": float(np.clip(shape, 0, 1)),
@@ -469,6 +872,12 @@ class Scorer:
             LOG.warning(
                 "SuCOS calculation failed for "
                 f"{query_ligand.id} to {target_ligand.id}: {exc}"
+            )
+            return scores
+        if not np.isfinite(sucos_shape):
+            LOG.warning(
+                "SuCOS calculation returned a non-finite score for "
+                f"{query_ligand.id} to {target_ligand.id}"
             )
             return scores
         scores["sucos_shape"] = sucos_shape
@@ -951,24 +1360,32 @@ class Scorer:
         _SimilarityScoreDictType,
         _SimilarityScoreDictType,
     ]:
-        query_pocket, query_interactions, pocket_length, pli_length, unique_length = (
-            self._protein_only_pocket_data(
-                query_system.pdb_id,
-                query_system.protein_chains_asym_id,
-                query_system.pocket_residue_number_to_index,
-                query_system.interactions_counter,
-            )
+        (
+            query_pocket,
+            query_interactions,
+            pocket_length,
+            pli_length,
+            unique_length,
+        ) = self._protein_only_pocket_data(
+            query_system.pdb_id,
+            query_system.protein_chains_asym_id,
+            query_system.pocket_residue_number_to_index,
+            query_system.interactions_counter,
         )
         target_pocket = None
         target_interactions = None
         if target_system is not None:
-            target_pocket, target_interactions, _, _, _ = (
-                self._protein_only_pocket_data(
-                    target_system.pdb_id,
-                    target_system.protein_chains_asym_id,
-                    target_system.pocket_residue_number_to_index,
-                    target_system.interactions_counter,
-                )
+            (
+                target_pocket,
+                target_interactions,
+                _,
+                _,
+                _,
+            ) = self._protein_only_pocket_data(
+                target_system.pdb_id,
+                target_system.protein_chains_asym_id,
+                target_system.pocket_residue_number_to_index,
+                target_system.interactions_counter,
             )
         return self._get_pocket_pli_scores(
             alns=alns,
@@ -1098,21 +1515,23 @@ class Scorer:
         _SimilarityScoreDictType,
     ]:
         """Calculate directed pocket and PLI coverage for one ligand pair."""
-        query_pocket, query_interactions, pocket_length, pli_length, unique_length = (
-            self._protein_only_pocket_data(
-                query_ligand.pdb_id,
-                query_ligand.protein_chains_asym_id,
-                query_ligand.pocket_residue_number_to_index,
-                query_ligand.interactions_counter,
-            )
+        (
+            query_pocket,
+            query_interactions,
+            pocket_length,
+            pli_length,
+            unique_length,
+        ) = self._protein_only_pocket_data(
+            query_ligand.pdb_id,
+            query_ligand.protein_chains_asym_id,
+            query_ligand.pocket_residue_number_to_index,
+            query_ligand.interactions_counter,
         )
-        target_pocket, target_interactions, _, _, _ = (
-            self._protein_only_pocket_data(
-                target_ligand.pdb_id,
-                target_ligand.protein_chains_asym_id,
-                target_ligand.pocket_residue_number_to_index,
-                target_ligand.interactions_counter,
-            )
+        target_pocket, target_interactions, _, _, _ = self._protein_only_pocket_data(
+            target_ligand.pdb_id,
+            target_ligand.protein_chains_asym_id,
+            target_ligand.pocket_residue_number_to_index,
+            target_ligand.interactions_counter,
         )
         return self._get_pocket_pli_scores(
             alns=alns,
@@ -1131,13 +1550,17 @@ class Scorer:
         query_ligand: LigandView,
     ) -> _SimilarityScoreDictType:
         """Calculate directed pocket identity for a ligand against apo/pred."""
-        query_pocket, query_interactions, pocket_length, pli_length, unique_length = (
-            self._protein_only_pocket_data(
-                query_ligand.pdb_id,
-                query_ligand.protein_chains_asym_id,
-                query_ligand.pocket_residue_number_to_index,
-                query_ligand.interactions_counter,
-            )
+        (
+            query_pocket,
+            query_interactions,
+            pocket_length,
+            pli_length,
+            unique_length,
+        ) = self._protein_only_pocket_data(
+            query_ligand.pdb_id,
+            query_ligand.protein_chains_asym_id,
+            query_ligand.pocket_residue_number_to_index,
+            query_ligand.interactions_counter,
         )
         return self._get_pocket_pli_scores(
             alns=alns,

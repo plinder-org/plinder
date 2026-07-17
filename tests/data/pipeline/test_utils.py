@@ -232,8 +232,28 @@ def test_finalize_index_creates_nonredundant_data_from_local_clusters(tmp_path):
             "system_id_no_biounit": ["1aaa__1.A__1.X", "1aaa__1.A__1.X"],
             "system_biounit_id": ["1", "2"],
             "ligand_id": ["1aaa__1__1.X", "1aaa__2__1.X"],
+            "ligand_rdkit_canonical_smiles": ["CCO", "CCO"],
         }
     ).to_parquet(index_dir / "annotation_table.parquet", index=False)
+    fingerprint_dir = tmp_path / "fingerprints"
+    fingerprint_dir.mkdir()
+    pd.DataFrame(
+        {
+            "ligand_rdkit_canonical_smiles": ["CCO"],
+            "ligand_smiles_id": [0],
+            "ligand_is_cofactor_like": [False],
+            "ligand_tanimoto_ecfp4_1024_90_cluster": ["c0"],
+            "ligand_tanimoto_ecfp4_1024_90_cluster_num_pdb_ids": [1],
+        }
+    ).to_parquet(fingerprint_dir / "ligand_similarity_annotations.parquet", index=False)
+    ligand_dir = tmp_path / "ligands"
+    ligand_dir.mkdir()
+    pd.DataFrame(
+        {
+            "ligand_id": ["1aaa__1__1.X", "1aaa__2__1.X"],
+            "ligand_is_3d_score_able": [True, False],
+        }
+    ).to_parquet(ligand_dir / "part.parquet", index=False)
     pd.DataFrame(
         {
             "system_id": ["1aaa__1__1.A__1.X", "1aaa__2__1.A__1.X"],
@@ -250,6 +270,8 @@ def test_finalize_index_creates_nonredundant_data_from_local_clusters(tmp_path):
 
     finalized = pd.read_parquet(index_dir / "annotation_table.parquet")
     assert finalized["pli_qcov__100__strong__component"].tolist() == ["c0", "c0"]
+    assert finalized["ligand_smiles_id"].tolist() == [0, 0]
+    assert finalized["ligand_is_3d_score_able"].tolist() == [True, False]
     assert finalized["uniqueness"].nunique() == 1
     nonredundant = pd.read_parquet(index_dir / "annotation_table_nonredundant.parquet")
     assert len(nonredundant) == 1

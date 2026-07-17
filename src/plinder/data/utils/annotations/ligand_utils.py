@@ -335,7 +335,12 @@ def parse_cofactors(data_dir: Path) -> set[str]:
         Set of cofactors
 
     """
+    global LIST_OF_CCD_SYNONYMS, CCD_SYNONYMS_DICT
+
     from plinder.data.pipeline.io import download_cofactors
+
+    if LIST_OF_CCD_SYNONYMS is None or CCD_SYNONYMS_DICT is None:
+        LIST_OF_CCD_SYNONYMS, CCD_SYNONYMS_DICT = get_ccd_synonyms(data_dir)
 
     cofactors_json = download_cofactors(data_dir=data_dir)
     extra = {

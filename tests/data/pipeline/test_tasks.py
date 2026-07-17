@@ -7,6 +7,7 @@ from zipfile import ZipFile
 import pandas as pd
 import pytest
 from plinder.data.pipeline import io, tasks
+from plinder.data.pipeline.config import LigandConfig
 
 
 @pytest.mark.parametrize(
@@ -66,6 +67,12 @@ def test_final_structure_qc_is_not_a_pipeline_stage():
 
 
 def test_scoring_finalization_stage_order_and_partitions():
+    assert tasks.STAGES.index("make_ligand_scores") < tasks.STAGES.index(
+        "annotate_ligand_similarity"
+    )
+    assert tasks.STAGES.index("annotate_ligand_similarity") < tasks.STAGES.index(
+        "make_sub_dbs"
+    )
     assert tasks.STAGES.index("make_batch_scores") < tasks.STAGES.index(
         "collate_alignments"
     )
@@ -85,6 +92,21 @@ def test_scoring_finalization_stage_order_and_partitions():
     assert ["z"] in partitions
     assert ["apo"] in partitions
     assert ["pred"] in partitions
+
+
+def test_ligand_score_threshold_must_cover_frequency_clustering() -> None:
+    with pytest.raises(ValueError, match="must not exceed"):
+        LigandConfig(minimum_similarity=95)
+
+
+def test_ligand_score_threshold_must_cover_requested_chemical_clusters() -> None:
+    from plinder.data.pipeline.config import get_config
+
+    with pytest.raises(ValueError, match=r"clustering threshold \(50\)"):
+        get_config(
+            config={"ligand": {"minimum_similarity": 60}},
+            cached=False,
+        )
 
 
 def test_collate_alignments_writes_query_addressable_shards(tmp_path):
@@ -199,6 +221,8 @@ def test_metaflow_graph_uses_canonical_ligand_archive_stage():
     assert "def join_make_entries" in flow
     assert "self.next(self.scatter_make_canonical_ligand_archives)" in flow
     assert "def make_canonical_ligand_archives" in flow
+    assert "self.next(self.annotate_ligand_similarity)" in flow
+    assert "self.pipeline.annotate_ligand_similarity()" in flow
     assert "self.next(self.scatter_collate_partitions)" in flow
     assert "self.next(self.scatter_collate_alignments)" in flow
     assert "self.pipeline.collate_alignments(self.input)" in flow
@@ -266,6 +290,10 @@ def test_v3_ingest_configs_use_current_schema_and_stages():
         assert cfg.data.plinder_iteration == "v3"
         if path.name == "make_protein_scores.yaml":
             assert "collate_alignments" in cfg.flow.run_specific_stages
+        if path.name == "make_components.yaml":
+            assert "collate_partitions" in cfg.flow.run_specific_stages
+            assert "make_components_and_communities" in cfg.flow.run_specific_stages
+            assert "finalize_index" in cfg.flow.run_specific_stages
 
 
 def test_make_canonical_ligand_archives_only_archives_asu_sdfs(tmp_path):

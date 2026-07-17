@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 from functools import partial
 from typing import Any, Optional
 
+from omegaconf import DictConfig
+
 from plinder.core.scores.metrics import DEFAULT_CLUSTER_METRICS
 from plinder.core.utils import config as _config
 
@@ -70,7 +72,6 @@ class FlowConfig:
     sub_databases: Any = "apo,pred"
 
     split_config_dir: str = ""
-    test_leakage: bool = False
 
     def __post_init__(self) -> None:
         if isinstance(self.run_specific_stages, str):
@@ -196,13 +197,23 @@ Added updated artifacts list and curation, please, review the logic!
 
 @dataclass
 class LigandConfig:
-    radius: int = 2
-    nbits: int = 1024
-    ligand_id_split_char: str = "__"
-    save_top_k_similar_ligands: int = 5000
-    multiply_by: int = 100
-    number_id_col: str = "number_id_by_inchikeys"
-    score_name: str = "tanimoto_similarity_max"
+    minimum_similarity: float = 30.0
+    cofactor_similarity_threshold: float = 90.0
+    number_id_col: str = "ligand_smiles_id"
+
+    def __post_init__(self) -> None:
+        for name in [
+            "minimum_similarity",
+            "cofactor_similarity_threshold",
+        ]:
+            value = float(getattr(self, name))
+            if not 0 <= value <= 100:
+                raise ValueError(f"ligand.{name} must be between 0 and 100")
+        if self.minimum_similarity > 90:
+            raise ValueError(
+                "ligand.minimum_similarity must not exceed the fixed 90-percent "
+                "frequency cluster threshold"
+            )
 
 
 SCHEMA = {
@@ -218,4 +229,22 @@ SCHEMA = {
 
 SCHEMA.update(_config.SCHEMA)
 
-get_config = partial(_config._config, schema=SCHEMA, package_schema="data")
+_get_config = partial(_config._config, schema=SCHEMA, package_schema="data")
+
+
+def get_config(**kwargs: Any) -> DictConfig:
+    """Load and cross-validate the data-pipeline configuration."""
+    cfg = _get_config(**kwargs)
+    required_thresholds = [90.0]
+    if "tanimoto_similarity_ecfp4_1024" in cfg.flow.cluster_metrics:
+        required_thresholds.extend(
+            float(value) for value in cfg.flow.cluster_thresholds
+        )
+    lowest_required_threshold = min(required_thresholds)
+    if cfg.ligand.minimum_similarity > lowest_required_threshold:
+        raise ValueError(
+            "ligand.minimum_similarity must not exceed the lowest requested "
+            "Tanimoto clustering threshold "
+            f"({lowest_required_threshold:g})"
+        )
+    return cfg

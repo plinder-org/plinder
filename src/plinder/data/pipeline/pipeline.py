@@ -144,7 +144,7 @@ class IngestPipeline:
     def compute_ligand_fingerprints(self) -> None:
         tasks.compute_ligand_fingerprints(
             data_dir=self.plinder_dir,
-            split_char=self.cfg.ligand.ligand_id_split_char,
+            cofactor_similarity_threshold=self.cfg.ligand.cofactor_similarity_threshold,
         )
 
     @utils.ingest_flow_control
@@ -161,10 +161,13 @@ class IngestPipeline:
         tasks.make_ligand_scores(
             data_dir=self.plinder_dir,
             ligand_ids=ligand_ids,
-            save_top_k_similar_ligands=self.cfg.ligand.save_top_k_similar_ligands,
-            multiply_by=self.cfg.ligand.multiply_by,
+            minimum_similarity=self.cfg.ligand.minimum_similarity,
             number_id_col=self.cfg.ligand.number_id_col,
         )
+
+    @utils.ingest_flow_control
+    def annotate_ligand_similarity(self) -> None:
+        tasks.annotate_ligand_similarity(data_dir=self.plinder_dir)
 
     @utils.ingest_flow_control
     def make_mmp_index(self) -> None:
@@ -292,38 +295,6 @@ class IngestPipeline:
     @utils.ingest_flow_control
     def make_splits(self, cfg_and_path: list[tuple[DictConfig, str]]) -> None:
         tasks.make_splits(data_dir=self.plinder_dir, cfg_and_path=cfg_and_path)
-
-    @utils.ingest_flow_control
-    def scatter_compute_ligand_leakage(self) -> list[list[tuple[str, str, str]]]:
-        chunks: list[list[tuple[str, str, str]]] = tasks.scatter_compute_ligand_leakage(
-            data_dir=self.plinder_dir,
-            test_leakage=self.cfg.flow.test_leakage,
-        )
-        return chunks
-
-    @utils.ingest_flow_control
-    def compute_ligand_leakage(self, inputs: list[tuple[str, str, str]]) -> None:
-        tasks.compute_ligand_leakage(
-            data_dir=self.plinder_dir,
-            inputs=inputs,
-        )
-
-    @utils.ingest_flow_control
-    def scatter_compute_protein_leakage(self) -> list[list[tuple[str, str, str]]]:
-        chunks: list[
-            list[tuple[str, str, str]]
-        ] = tasks.scatter_compute_protein_leakage(
-            data_dir=self.plinder_dir,
-            test_leakage=self.cfg.flow.test_leakage,
-        )
-        return chunks
-
-    @utils.ingest_flow_control
-    def compute_protein_leakage(self, inputs: list[tuple[str, str, str]]) -> None:
-        tasks.compute_protein_leakage(
-            data_dir=self.plinder_dir,
-            inputs=inputs,
-        )
 
     @utils.ingest_flow_control
     def scatter_make_links(self) -> list[list[str]]:

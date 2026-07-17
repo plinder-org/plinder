@@ -87,18 +87,18 @@ the small molecule ligands in the dataset.
   - It uses the per-entry parquet files from `raw_entries`
   - Side effects include writing the following files:
     - `ligands/{chunk_hash}.parquet`
-- `tasks.compute_ligand_fingerprints`: computes the ligand fingerprints
+  - Each ligand occurrence is annotated with `ligand_is_3d_score_able` by validating its canonical ASU SDF once per entry/asym pair.
+- `tasks.compute_ligand_fingerprints`: computes fixed ECFP4 fingerprints (Morgan radius 2, 1024 bits, no chirality) and records that definition in Parquet metadata
   - This is a task that is called once
   - It uses the `ligands` data
   - Side effects include writing the following files:
-    - `fingerprints/ligands_per_inchikey.parquet`
-    - `fingerprints/ligands_per_inchikey_ecfp4.npy`
-    - `fingerprints/ligands_per_system.parquet`
+    - `fingerprints/ligands_per_smiles.parquet`
 - `tasks.make_ligand_scores`: creates the `ligand_scores` data
   - This is a distributed task that is called in parallel for chunks of ligand IDs
-  - It uses the `fingerprints` data
+  - It uses RDKit `BulkTanimotoSimilarity` on the unique canonical-SMILES fingerprints and retains every edge above the configured minimum
   - Side effects include writing the following files:
     - `ligand_scores/{fragment}.parquet`
+- `tasks.annotate_ligand_similarity`: collates the ligand-score shards into 90% Tanimoto components, counts distinct PDB entries per component, and writes `fingerprints/ligand_similarity_annotations.parquet`; cofactor-like annotations are calculated against CCD structures for the parsed cofactor list.
 
 ## Sub-databases
 
@@ -214,7 +214,7 @@ parquet files with the following schema:
     >>> TANIMOTO_SCORE_SCHEMA
     query_ligand_id: int32
     target_ligand_id: int32
-    tanimoto_similarity_max: int8
+    tanimoto_similarity_ecfp4_1024: float
 
 The `clusters` clustering dataset is a collection of
 parquet files with the following schema:

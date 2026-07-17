@@ -65,7 +65,9 @@ def test_inchikey(smiles, inchikey, remove_stereo):
 
 
 def test_load_ligands_from_index_uses_holo_ligand_rows():
-    from plinder.core.structure.smallmols_similarity import load_ligands_from_index
+    from plinder.data.utils.annotations.get_similarity_scores import (
+        load_ligands_from_index,
+    )
 
     annotation = pd.DataFrame(
         {
@@ -75,6 +77,7 @@ def test_load_ligands_from_index_uses_holo_ligand_rows():
             "ligand_rdkit_canonical_smiles": ["CCO", "CCO", "CCN"],
             "ligand_unique_ccd_code": ["LIG", "LIG", "OTH"],
             "ligand_id": ["1abc__1__A__1.C", "1abc__1__A__1.C", "2def__1__B__1.D"],
+            "ligand_asym_id": ["C", "C", "D"],
         }
     )
 
@@ -83,7 +86,7 @@ def test_load_ligands_from_index_uses_holo_ligand_rows():
     assert ligands["ligand_id"].tolist() == ["1abc__1__A__1.C"]
     assert ligands["pdb_id"].tolist() == ["1abc"]
     assert ligands["ligand_ccd_code"].tolist() == ["LIG"]
-    assert ligands["inchikeys"].notna().all()
+    assert "inchikeys" not in ligands.columns
 
 
 def test_compare_stereo_to_template():

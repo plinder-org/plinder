@@ -64,6 +64,7 @@ class LigandView:
     num_pocket_residues: int
     num_interactions: int
     num_unique_interactions: int
+    is_3d_score_able: bool = True
     # receptor instance_chain -> {residue_number: residue_index}
     pocket_residue_number_to_index: dict[str, dict[int, int]] = field(
         default_factory=dict
@@ -295,6 +296,12 @@ def _make_ligand_view(
         for residues in interactions.values()
         for counter in residues.values()
     )
+    if "ligand_is_3d_score_able" in row:
+        score_ability = row["ligand_is_3d_score_able"]
+        is_3d_score_able = False if pd.isna(score_ability) else bool(score_ability)
+    else:
+        # V2 indexes predate this annotation; retain their runtime behavior.
+        is_3d_score_able = True
     return LigandView(
         id=ligand_id,
         pdb_id=pdb_id,
@@ -306,6 +313,7 @@ def _make_ligand_view(
         num_pocket_residues=num_pocket_residues,
         num_interactions=num_interactions,
         num_unique_interactions=num_unique_interactions,
+        is_3d_score_able=is_3d_score_able,
         pocket_residue_number_to_index={k: dict(v) for k, v in pocket_n2i.items()},
         interactions_counter={
             k: {r: Counter(c) for r, c in v.items()} for k, v in interactions.items()
@@ -388,9 +396,10 @@ def entry_views_from_df(
             )
             proper_ligands = [ligand for ligand in ligands.values() if ligand.is_proper]
             for ligand in proper_ligands:
-                for instance_chain, pocket_residues in (
-                    ligand.pocket_residue_number_to_index.items()
-                ):
+                for (
+                    instance_chain,
+                    pocket_residues,
+                ) in ligand.pocket_residue_number_to_index.items():
                     pocket_n2i[instance_chain].update(pocket_residues)
                 for (
                     instance_chain,
@@ -473,9 +482,7 @@ def load_entry_views(
         chain_path = index_dir / cfg.data.entry_chain_file
 
     if not chain_path.is_file():
-        raise FileNotFoundError(
-            f"missing normalized entry chain index: {chain_path}"
-        )
+        raise FileNotFoundError(f"missing normalized entry chain index: {chain_path}")
     entry_chains = pd.read_parquet(
         chain_path,
         filters=[("entry_pdb_id", "in", pdb_ids)],

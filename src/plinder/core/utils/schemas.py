@@ -66,6 +66,14 @@ TANIMOTO_SCORE_SCHEMA = pa.schema(
     [
         pa.field("query_ligand_id", pa.int32()),
         pa.field("target_ligand_id", pa.int32()),
+        pa.field("tanimoto_similarity_ecfp4_1024", pa.float32()),
+    ]
+)
+
+LEGACY_TANIMOTO_SCORE_SCHEMA = pa.schema(
+    [
+        pa.field("query_ligand_id", pa.int32()),
+        pa.field("target_ligand_id", pa.int32()),
         pa.field("tanimoto_similarity_max", pa.int8()),
     ]
 )

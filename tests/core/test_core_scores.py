@@ -1,7 +1,10 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
+import pandas as pd
 import pytest
 from plinder.core import scores
+from plinder.core.scores import index as index_module
+from plinder.core.scores import ligand as ligand_module
 from plinder.core.scores.protein import multi_query_protein_similarity
 
 
@@ -100,6 +103,77 @@ def test_query_ligand_cross_similarity(read_plinder_mount):
         query_ligands=[29, 51], target_ligands=[49918, 36689]
     )
     assert len(df.index)
+
+
+def test_v3_ligand_cross_similarity_maps_nodes_through_index(monkeypatch):
+    class DataConfig:
+        plinder_iteration = "v3"
+
+    class Config:
+        data = DataConfig()
+
+    calls = []
+
+    def fake_query_index(*, columns, filters, splits):
+        calls.append((columns, filters, splits))
+        return pd.DataFrame(
+            {
+                "system_id": ["1aaa__1__1.A__1.X", "2bbb__1__1.B__1.Y"],
+                "ligand_smiles_id": [0, 0],
+            }
+        )
+
+    monkeypatch.setattr(ligand_module, "get_config", Config)
+    monkeypatch.setattr(index_module, "query_index", fake_query_index)
+    result = ligand_module.map_cross_similarity(
+        pd.DataFrame(
+            {
+                "query_ligand_id": [0],
+                "target_ligand_id": [1],
+                "tanimoto_similarity_ecfp4_1024": [95.0],
+            }
+        ),
+        target_ligands={1},
+        metric="tanimoto_similarity_ecfp4_1024",
+    )
+
+    assert set(result["system_id"]) == {
+        "1aaa__1__1.A__1.X",
+        "2bbb__1__1.B__1.Y",
+    }
+    assert calls and calls[0][0] == ["system_id", "ligand_smiles_id"]
+
+
+def test_v3_ligand_cross_similarity_returns_empty_without_querying_index(
+    monkeypatch,
+):
+    class DataConfig:
+        plinder_iteration = "v3"
+
+    class Config:
+        data = DataConfig()
+
+    monkeypatch.setattr(ligand_module, "get_config", Config)
+    monkeypatch.setattr(
+        index_module,
+        "query_index",
+        lambda **_kwargs: pytest.fail("empty similarities must not query the index"),
+    )
+
+    result = ligand_module.map_cross_similarity(
+        pd.DataFrame(
+            columns=[
+                "query_ligand_id",
+                "target_ligand_id",
+                "tanimoto_similarity_ecfp4_1024",
+            ]
+        ),
+        target_ligands={1},
+        metric="tanimoto_similarity_ecfp4_1024",
+    )
+
+    assert result.empty
+    assert result.columns.tolist() == ["system_id", "tanimoto_similarity_ecfp4_1024"]
 
 
 def test_query_links(read_plinder_mount):

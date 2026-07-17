@@ -17,11 +17,11 @@ from omegaconf import DictConfig
 from tqdm import tqdm
 
 from plinder.core.scores.metrics import is_ligand_level_metric
-from plinder.core.structure import smallmols_similarity
 from plinder.core.utils import gcs
 from plinder.core.utils.log import setup_logger
-from plinder.data import clusters, databases, leakage, splits
+from plinder.data import clusters, databases, splits
 from plinder.data.pipeline import io, utils
+from plinder.data.utils.annotations import get_similarity_scores
 
 LOG = setup_logger(__name__)
 STAGES = [
@@ -33,6 +33,7 @@ STAGES = [
     "make_ligands",
     "compute_ligand_fingerprints",
     "make_ligand_scores",
+    "annotate_ligand_similarity",
     "make_sub_dbs",
     "run_batch_searches",
     "make_batch_scores",
@@ -42,8 +43,6 @@ STAGES = [
     "finalize_index",
     "make_mmp_index",
     "make_splits",
-    "compute_ligand_leakage",
-    "compute_protein_leakage",
     "make_links",
     "make_linked_structures",
     "score_linked_structures",
@@ -493,6 +492,7 @@ def make_ligands(
     output_path = output_dir / f"{hashed_contents}.parquet"
     LOG.info("make_ligands: running save_ligand_batch")
     utils.save_ligand_batch(
+        data_dir=data_dir,
         annotation=annotation,
         output_path=output_path,
     )
@@ -501,58 +501,64 @@ def make_ligands(
 def compute_ligand_fingerprints(
     *,
     data_dir: Path,
-    split_char: str = "__",
-    radius: int = 2,
-    nbits: int = 1024,
+    cofactor_similarity_threshold: float = 90.0,
 ) -> None:
-    """ """
+    """Fingerprint unique ligand SMILES and annotate cofactor similarity."""
     LOG.info("compute_ligand_fingerprints: running")
-    #  data_dir / "fingerprints" / ligands_per_system.parquet
-    #  data_dir / "fingerprints"  / ligands_per_inchikey.parquet
-    #  data_dir / "fingerprints" /ligands_per_inchikey_ecfp4.npy
-    smallmols_similarity.compute_ligand_fingerprints(
+    get_similarity_scores.compute_ligand_fingerprints(
         data_dir=data_dir,
-        split_char=split_char,
-        radius=radius,
-        nbits=nbits,
+        cofactor_similarity_threshold=cofactor_similarity_threshold,
     )
+    utils.update_index_ligand_3d_score_ability(data_dir=data_dir)
 
 
 def scatter_make_ligand_scores(
     *,
     data_dir: Path,
     batch_size: int,
-    number_id_col: str = "number_id_by_inchikeys",
+    number_id_col: str = "ligand_smiles_id",
 ) -> list[list[int]]:
-    """ """
+    """Scatter the unique-SMILES fingerprint node IDs."""
     ligands = pd.read_parquet(
-        data_dir / "fingerprints" / "ligands_per_inchikey.parquet",
+        data_dir / "fingerprints" / "ligands_per_smiles.parquet",
         columns=[number_id_col],
     )[number_id_col].to_list()
     LOG.info(f"scatter_make_ligand_scores: found {len(ligands)} ligands")
-    return [
+    chunks = [
         ligands[pos : pos + batch_size] for pos in range(0, len(ligands), batch_size)
     ]
+    return chunks or [[]]
 
 
 def make_ligand_scores(
     *,
     data_dir: Path,
     ligand_ids: list[int],
-    save_top_k_similar_ligands: int = 5000,
-    multiply_by: int = 100,
-    number_id_col: str = "number_id_by_inchikeys",
+    minimum_similarity: float = 30.0,
+    number_id_col: str = "ligand_smiles_id",
 ) -> None:
+    if not ligand_ids:
+        LOG.info("make_ligand_scores: no ligand nodes to score")
+        return
     hashid = utils.hash_contents([str(i) for i in ligand_ids])
     output_path = data_dir / "ligand_scores" / f"{hashid}.parquet"
     output_path.parent.mkdir(exist_ok=True, parents=True)
-    smallmols_similarity.ligand_scores(
+    get_similarity_scores.ligand_scores(
         ligand_ids=ligand_ids,
         data_dir=data_dir,
         output_path=output_path,
         number_id_col=number_id_col,
-        save_top_k_similar_ligands=save_top_k_similar_ligands,
-        multiply_by=multiply_by,
+        minimum_similarity=minimum_similarity,
+    )
+
+
+def annotate_ligand_similarity(
+    *, data_dir: Path, cluster_threshold: float = 90.0
+) -> None:
+    """Add 90%-component frequencies after all BulkTanimoto shards finish."""
+    get_similarity_scores.annotate_ligand_similarity(
+        data_dir=data_dir,
+        cluster_threshold=cluster_threshold,
     )
 
 
@@ -946,87 +952,6 @@ def make_splits(
 ) -> None:
     [(cfg, path)] = cfg_and_path
     splits.split(data_dir=data_dir, cfg=cfg, relpath=path)
-
-
-def scatter_compute_ligand_leakage(
-    *,
-    data_dir: Path,
-    test_leakage: bool,
-) -> list[list[tuple[str, str, str]]]:
-    paths = [path.as_posix() for path in (data_dir / "splits").glob("*parquet")]
-    chunks = [
-        [(path, compare_pair, metric)]
-        for path in paths
-        for compare_pair in [
-            "train_test",
-            "train_val",
-            "val_test",
-            "train_posebusters",
-        ]
-        for metric in [
-            "tanimoto_similarity_max",
-        ]
-    ]
-    if test_leakage:
-        return chunks[:1]
-    return chunks
-
-
-def scatter_compute_protein_leakage(
-    *,
-    data_dir: Path,
-    test_leakage: bool,
-) -> list[list[tuple[str, str, str]]]:
-    paths = [path.as_posix() for path in (data_dir / "splits").glob("*parquet")]
-    chunks = [
-        [(path, compare_pair, metric)]
-        for path in paths
-        for compare_pair in [
-            "train_test",
-            "train_val",
-            "val_test",
-            "train_posebusters",
-        ]
-        for metric in [
-            "pli_qcov",
-            "pocket_qcov",
-            "protein_seqsim_weighted_sum",
-            "protein_fident_weighted_sum",
-            "protein_lddt_weighted_sum",
-            "protein_lddt_qcov_weighted_sum",
-        ]
-    ]
-    if test_leakage:
-        return chunks[:1]
-    return chunks
-
-
-def compute_ligand_leakage(
-    *,
-    data_dir: Path,
-    inputs: list[tuple[str, str, str]],
-) -> None:
-    [(split_file, compare_pair, metric)] = inputs
-    leakage.compute_ligand_leakage(
-        data_dir=data_dir,
-        split_file=split_file,
-        compare_pair=compare_pair,
-        metric=metric,
-    )
-
-
-def compute_protein_leakage(
-    *,
-    data_dir: Path,
-    inputs: list[tuple[str, str, str]],
-) -> None:
-    [(split_file, compare_pair, metric)] = inputs
-    leakage.compute_protein_leakage(
-        data_dir=data_dir,
-        split_file=split_file,
-        compare_pair=compare_pair,
-        metric=metric,
-    )
 
 
 def scatter_make_links(

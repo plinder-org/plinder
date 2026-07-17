@@ -18,7 +18,6 @@ import pandas as pd
 import pyarrow.parquet as pq
 from omegaconf import DictConfig
 
-from plinder.core.structure import smallmols_similarity
 from plinder.core.utils import schemas
 from plinder.core.utils.log import setup_logger
 from plinder.core.utils.unpack import expand_config_context
@@ -159,11 +158,20 @@ def get_scorer(
 
 def save_ligand_batch(
     *,
+    data_dir: Path,
     annotation: pd.DataFrame,
     output_path: Path,
 ) -> None:
-    df = smallmols_similarity.load_ligands_from_index(annotation=annotation)
-    LOG.info(f"save_ligand_batch: {df['pdb_id'].nunique()} entries have usable ligands")
+    from plinder.data.utils.annotations.get_similarity_scores import (
+        annotate_ligand_3d_score_ability,
+        load_ligands_from_index,
+    )
+
+    df = load_ligands_from_index(annotation=annotation)
+    df = annotate_ligand_3d_score_ability(df, data_dir=data_dir)
+    LOG.info(
+        f"save_ligand_batch: collected ligands from {df['pdb_id'].nunique()} entries"
+    )
     for col in df.columns:
         nunique = df[col].nunique()
         LOG.info(f"save_ligand_batch: unique {col}={nunique}")
@@ -474,6 +482,85 @@ def add_cluster_columns(*, index: pd.DataFrame, data_dir: Path) -> pd.DataFrame:
     return result
 
 
+def add_ligand_similarity_columns(
+    *, index: pd.DataFrame, data_dir: Path
+) -> pd.DataFrame:
+    """Merge unique-SMILES cofactor and frequency annotations into each ligand."""
+    annotation_path = (
+        data_dir / "fingerprints" / "ligand_similarity_annotations.parquet"
+    )
+    if not annotation_path.is_file():
+        raise FileNotFoundError(
+            f"missing ligand similarity annotations: {annotation_path}"
+        )
+    annotations = pd.read_parquet(annotation_path)
+    join_column = "ligand_rdkit_canonical_smiles"
+    if annotations[join_column].duplicated().any():
+        raise ValueError("ligand similarity annotations contain duplicate SMILES")
+    replacement_columns = set(annotations.columns).difference({join_column})
+    result = index.drop(
+        columns=list(replacement_columns.intersection(index.columns))
+    ).merge(
+        annotations,
+        on=join_column,
+        how="left",
+        validate="many_to_one",
+    )
+    has_smiles = result[join_column].notna() & result[join_column].ne("")
+    if result.loc[has_smiles, "ligand_smiles_id"].isna().any():
+        raise ValueError("some canonical ligand SMILES lack similarity annotations")
+    result["ligand_smiles_id"] = result["ligand_smiles_id"].astype("Int32")
+    for column in result.columns:
+        if column.endswith("_cluster_num_pdb_ids"):
+            result[column] = result[column].astype("Int32")
+    if "ligand_is_cofactor_like" in result:
+        result["ligand_is_cofactor_like"] = result["ligand_is_cofactor_like"].astype(
+            "boolean"
+        )
+    return result
+
+
+def add_ligand_3d_score_ability_column(
+    *, index: pd.DataFrame, data_dir: Path
+) -> pd.DataFrame:
+    """Merge occurrence-level canonical-SDF scoreability into the index."""
+    ligand_dataset = data_dir / "ligands"
+    if not ligand_dataset.is_dir():
+        raise FileNotFoundError(f"missing ligand annotation dataset: {ligand_dataset}")
+    abilities = pd.read_parquet(
+        ligand_dataset,
+        columns=["ligand_id", "ligand_is_3d_score_able"],
+    ).drop_duplicates()
+    conflicts = abilities.groupby("ligand_id")["ligand_is_3d_score_able"].nunique()
+    if (conflicts > 1).any():
+        raise ValueError("conflicting 3D-scoreability annotations for a ligand")
+    abilities = abilities.drop_duplicates(subset=["ligand_id"])
+    result = index.drop(columns=["ligand_is_3d_score_able"], errors="ignore").merge(
+        abilities,
+        on="ligand_id",
+        how="left",
+        validate="many_to_one",
+    )
+    expected = result["ligand_id"].notna()
+    if "system_type" in result:
+        expected &= result["system_type"].eq("holo")
+    if result.loc[expected, "ligand_is_3d_score_able"].isna().any():
+        raise ValueError("some holo ligands lack a 3D-scoreability annotation")
+    result["ligand_is_3d_score_able"] = result["ligand_is_3d_score_able"].astype(
+        "boolean"
+    )
+    return result
+
+
+def update_index_ligand_3d_score_ability(*, data_dir: Path) -> None:
+    """Publish distributed 3D-scoreability annotations before protein scoring."""
+    index_path = data_dir / "index" / "annotation_table.parquet"
+    index = pd.read_parquet(index_path)
+    add_ligand_3d_score_ability_column(index=index, data_dir=data_dir).to_parquet(
+        index_path, index=False
+    )
+
+
 def add_aggregated_columns(*, index: pd.DataFrame) -> pd.DataFrame:
     """
     Add aggregated columns to the annotation table
@@ -532,6 +619,8 @@ def finalize_index(*, data_dir: Path) -> pd.DataFrame:
     if not index_path.is_file():
         raise FileNotFoundError(index_path)
     index = pd.read_parquet(index_path)
+    index = add_ligand_3d_score_ability_column(index=index, data_dir=data_dir)
+    index = add_ligand_similarity_columns(index=index, data_dir=data_dir)
     index = add_cluster_columns(index=index, data_dir=data_dir)
     uniqueness_cluster = "pli_qcov__100__strong__component"
     if uniqueness_cluster in index.columns:

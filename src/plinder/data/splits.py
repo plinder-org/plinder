@@ -39,7 +39,7 @@ class SplitConfig:
     # how many unique congeneric IDs passing quality to consider as MMS
     mms_unique_quality_count: int = 3
     # which metric to use for ligand clusters (these are added to test from removed if they are different from train/val and corresponding leaked systems are removed from train/val)
-    ligand_cluster_metric: str = "tanimoto_similarity_max"
+    ligand_cluster_metric: str = "tanimoto_similarity_ecfp4_1024"
     # which threshold to use for ligand clusters
     ligand_cluster_threshold: int = 50
     # which cluster to use for ligand clusters

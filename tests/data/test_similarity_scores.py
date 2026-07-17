@@ -19,7 +19,14 @@ from plinder.core.utils.schemas import PROTEIN_SIMILARITY_SCHEMA
 from plinder.data.utils.annotations import get_similarity_scores as scoring_module
 from plinder.data.utils.annotations.get_similarity_scores import (
     Scorer,
+    annotate_cofactor_similarity,
+    annotate_ligand_3d_score_ability,
+    annotate_ligand_similarity,
+    build_ligand_similarity_annotations,
+    compute_ligand_fingerprints,
     get_feature_map_score,
+    ligand_scores,
+    write_ecfp4_fingerprint_table,
 )
 from rdkit import Chem
 
@@ -161,6 +168,7 @@ def test_entry_views_keep_ligand_pockets_separate() -> None:
                 "ligand_instance_chain": "1.B",
                 "ligand_asym_id": "B",
                 "ligand_num_pocket_residues": 2,
+                "ligand_is_3d_score_able": False,
                 "ligand_neighboring_residues": ["1.A_10_9_10", "1.A_20_19_20"],
                 "ligand_interactions": ["1.A_10_type:hydrogen_bonds"],
             },
@@ -170,6 +178,7 @@ def test_entry_views_keep_ligand_pockets_separate() -> None:
                 "ligand_instance_chain": "1.C",
                 "ligand_asym_id": "C",
                 "ligand_num_pocket_residues": 1,
+                "ligand_is_3d_score_able": True,
                 "ligand_neighboring_residues": ["1.A_30_29_30"],
                 "ligand_interactions": ["1.A_30_type:hydrophobic_contacts"],
             },
@@ -183,6 +192,8 @@ def test_entry_views_keep_ligand_pockets_separate() -> None:
         "1.A": {10: 9, 20: 19}
     }
     assert system.ligands["1.C"].pocket_residue_number_to_index == {"1.A": {30: 29}}
+    assert not system.ligands["1.B"].is_3d_score_able
+    assert system.ligands["1.C"].is_3d_score_able
     # The existing system view remains the union for backward compatibility.
     assert system.pocket_residue_number_to_index == {"1.A": {10: 9, 20: 19, 30: 29}}
 
@@ -426,6 +437,11 @@ def test_ligand_pair_shape_scores_gate_sdf_access_and_cache(
     )
     assert resolved == []
 
+    query.is_3d_score_able = False
+    assert scorer.get_ligand_pair_shape_scores(tmp_path, query, target, 0.5) == {}
+    assert resolved == []
+    query.is_3d_score_able = True
+
     scores = scorer.get_ligand_pair_shape_scores(tmp_path, query, target, 0.5)
     assert set(scores) == {
         "shape",
@@ -442,6 +458,30 @@ def test_ligand_pair_shape_scores_gate_sdf_access_and_cache(
     # Re-scoring uses pristine clones of the two cached base molecules.
     assert scorer.get_ligand_pair_shape_scores(tmp_path, query, target, 0.5) == scores
     assert resolved == [query.id, target.id]
+
+
+def test_ligand_pair_shape_scores_drop_nonfinite_results(tmp_path, monkeypatch) -> None:
+    scorer = Scorer(
+        entries={},
+        source_to_full_db_file={},
+        db_dir=tmp_path / "db",
+        scores_dir=tmp_path / "scores",
+        ligand_sdf_resolver=lambda _ligand: SDF_FILE,
+    )
+    query = _ligand("1abc__1__1.B", "1.B", {"1.A": {10: 9}}, {})
+    target = _ligand("2def__1__1.Y", "1.Y", {"1.X": {110: 109}}, {})
+
+    monkeypatch.setattr(
+        scoring_module, "align_molecules", lambda *_args: (1.0, float("nan"))
+    )
+    assert scorer.get_ligand_pair_shape_scores(tmp_path, query, target, 0.5) == {}
+
+    monkeypatch.setattr(scoring_module, "align_molecules", lambda *_args: (0.8, 0.6))
+    monkeypatch.setattr(scoring_module, "get_sucos_score", lambda *_args: float("nan"))
+    assert scorer.get_ligand_pair_shape_scores(tmp_path, query, target, 0.5) == {
+        "shape": 0.8,
+        "color": 0.6,
+    }
 
 
 def test_ligand_sdf_resolver_uses_only_canonical_entry_path(tmp_path) -> None:
@@ -465,9 +505,7 @@ def test_ligand_sdf_resolver_uses_only_canonical_entry_path(tmp_path) -> None:
     assert scorer.resolve_ligand_sdf(tmp_path, ligand) == canonical
 
 
-def test_get_score_df_loads_entries_from_ingest_data_dir(
-    tmp_path, monkeypatch
-) -> None:
+def test_get_score_df_loads_entries_from_ingest_data_dir(tmp_path, monkeypatch) -> None:
     scorer = Scorer(
         entries={},
         source_to_full_db_file={},
@@ -476,9 +514,7 @@ def test_get_score_df_loads_entries_from_ingest_data_dir(
     )
     alignment_path = scorer.db_dir / "holo_foldseek" / "aln" / "1abc.parquet"
     alignment_path.parent.mkdir(parents=True)
-    pd.DataFrame({"target_pdb_id": ["2def"]}).to_parquet(
-        alignment_path, index=False
-    )
+    pd.DataFrame({"target_pdb_id": ["2def"]}).to_parquet(alignment_path, index=False)
     calls: list[tuple[set[str], Path]] = []
 
     def fake_load_entry_views(*, pdb_ids, data_dir):
@@ -510,6 +546,222 @@ def test_feature_map_score_handles_molecules_without_features() -> None:
     helium.AddConformer(conformer)
 
     assert get_feature_map_score(helium, helium) == 0.0
+
+
+def test_ligand_3d_score_ability_uses_canonical_sdf_and_caches_by_path(
+    tmp_path, monkeypatch
+) -> None:
+    valid_sdf = tmp_path / "raw_entries" / "ab" / "1abc" / "ligand_files" / "B.sdf"
+    valid_sdf.parent.mkdir(parents=True)
+    valid_sdf.write_bytes(SDF_FILE.read_bytes())
+    calls: list[Path] = []
+    original = scoring_module.is_ligand_3d_score_able
+
+    def observed(sdf_file: Path) -> bool:
+        calls.append(sdf_file)
+        return original(sdf_file)
+
+    monkeypatch.setattr(scoring_module, "is_ligand_3d_score_able", observed)
+    ligands = pd.DataFrame(
+        {
+            "pdb_id": ["1abc", "1abc", "1abc"],
+            "ligand_asym_id": ["B", "B", "C"],
+            "ligand_id": ["first", "second", "missing"],
+        }
+    )
+
+    annotated = annotate_ligand_3d_score_ability(ligands, data_dir=tmp_path)
+
+    assert annotated["ligand_is_3d_score_able"].tolist() == [True, True, False]
+    assert calls == [valid_sdf, valid_sdf.with_name("C.sdf")]
+
+
+def test_cofactor_similarity_uses_ccd_reference_fingerprints() -> None:
+    from plinder.core.structure.smallmols_similarity import mol2morgan_fp
+    from rdkit import DataStructs
+
+    smiles = ["CCO", "c1ccccc1"]
+    unique_ligands = pd.DataFrame(
+        {
+            "ligand_smiles_id": [0, 1],
+            "ligand_rdkit_canonical_smiles": smiles,
+            "fingerprint": [
+                DataStructs.BitVectToBinaryText(mol2morgan_fp(value, nbits=1024))
+                for value in smiles
+            ],
+        }
+    )
+
+    annotated = annotate_cofactor_similarity(
+        unique_ligands,
+        cofactor_smiles={"COF": "CCO"},
+        threshold=90,
+    ).set_index("ligand_smiles_id")
+
+    assert annotated.loc[0, "ligand_max_cofactor_similarity"] == 100
+    assert annotated.loc[0, "ligand_most_similar_cofactor"] == "COF"
+    assert bool(annotated.loc[0, "ligand_is_cofactor_like"])
+    assert not bool(annotated.loc[1, "ligand_is_cofactor_like"])
+
+
+def test_ligand_scores_use_bulk_tanimoto_for_unique_smiles(
+    tmp_path, monkeypatch
+) -> None:
+    from plinder.core.structure.smallmols_similarity import mol2morgan_fp
+    from rdkit import DataStructs
+
+    fingerprint_dir = tmp_path / "fingerprints"
+    fingerprint_dir.mkdir()
+    smiles = ["CCO", "CCN", "c1ccccc1"]
+    fingerprint_table = pd.DataFrame(
+        {
+            "ligand_smiles_id": [0, 1, 2],
+            "ligand_rdkit_canonical_smiles": smiles,
+            "fingerprint": [
+                DataStructs.BitVectToBinaryText(mol2morgan_fp(value, nbits=1024))
+                for value in smiles
+            ],
+        }
+    )
+    write_ecfp4_fingerprint_table(
+        fingerprint_table,
+        fingerprint_dir / "ligands_per_smiles.parquet",
+    )
+    calls = 0
+    original_bulk = scoring_module.DataStructs.BulkTanimotoSimilarity
+
+    def observed_bulk(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original_bulk(*args, **kwargs)
+
+    monkeypatch.setattr(
+        scoring_module.DataStructs,
+        "BulkTanimotoSimilarity",
+        observed_bulk,
+    )
+    output_path = tmp_path / "scores.parquet"
+
+    ligand_scores(
+        ligand_ids=[0, 1, 2],
+        data_dir=tmp_path,
+        output_path=output_path,
+        minimum_similarity=30,
+    )
+    scores = pd.read_parquet(output_path)
+
+    assert calls == 3
+    assert set(
+        scores.loc[
+            scores["query_ligand_id"] == scores["target_ligand_id"],
+            "query_ligand_id",
+        ]
+    ) == {0, 1, 2}
+    assert not (
+        (scores["query_ligand_id"] == 0) & (scores["target_ligand_id"] == 2)
+    ).any()
+    assert scores.columns.tolist() == [
+        "query_ligand_id",
+        "target_ligand_id",
+        "tanimoto_similarity_ecfp4_1024",
+    ]
+    assert (
+        scoring_module.pq.read_schema(output_path).metadata
+        == scoring_module.ECFP4_PARQUET_METADATA
+    )
+
+
+def test_tanimoto_90_cluster_counts_distinct_pdb_ids() -> None:
+    unique_ligands = pd.DataFrame(
+        {
+            "ligand_smiles_id": [0, 1, 2],
+            "ligand_rdkit_canonical_smiles": ["CCO", "CCN", "c1ccccc1"],
+            "fingerprint": [b"", b"", b""],
+            "ligand_is_cofactor_like": [True, False, False],
+        }
+    )
+    occurrences = pd.DataFrame(
+        {
+            "ligand_smiles_id": [0, 0, 1, 2],
+            "pdb_id": ["1aaa", "1aaa", "2bbb", "3ccc"],
+        }
+    )
+    edges = pd.DataFrame(
+        {
+            "query_ligand_id": [0, 0, 1, 2],
+            "target_ligand_id": [0, 1, 1, 2],
+            "tanimoto_similarity_ecfp4_1024": [100.0, 91.0, 100.0, 100.0],
+        }
+    )
+
+    annotations = build_ligand_similarity_annotations(
+        unique_ligands=unique_ligands,
+        ligand_occurrences=occurrences,
+        edges=edges,
+        cluster_threshold=90,
+    ).set_index("ligand_smiles_id")
+
+    assert (
+        annotations.loc[0, "ligand_tanimoto_ecfp4_1024_90_cluster"]
+        == annotations.loc[1, "ligand_tanimoto_ecfp4_1024_90_cluster"]
+    )
+    assert (
+        annotations.loc[2, "ligand_tanimoto_ecfp4_1024_90_cluster"]
+        != annotations.loc[0, "ligand_tanimoto_ecfp4_1024_90_cluster"]
+    )
+    assert annotations.loc[0, "ligand_tanimoto_ecfp4_1024_90_cluster_num_pdb_ids"] == 2
+    assert annotations.loc[1, "ligand_tanimoto_ecfp4_1024_90_cluster_num_pdb_ids"] == 2
+    assert annotations.loc[2, "ligand_tanimoto_ecfp4_1024_90_cluster_num_pdb_ids"] == 1
+
+
+def test_ligand_similarity_pipeline_does_not_write_per_system_mapping(
+    tmp_path, monkeypatch
+) -> None:
+    ligand_dir = tmp_path / "ligands"
+    ligand_dir.mkdir()
+    pd.DataFrame(
+        {
+            "pdb_id": ["1aaa", "2bbb", "3ccc"],
+            "ligand_rdkit_canonical_smiles": ["CCO", "CCO", "c1ccccc1"],
+        }
+    ).to_parquet(ligand_dir / "part.parquet", index=False)
+    component_dir = tmp_path / "dbs" / "components"
+    component_dir.mkdir(parents=True)
+    pd.DataFrame({"binder_id": ["COF"], "canonical_smiles": ["CCO"]}).to_parquet(
+        component_dir / "components.parquet", index=False
+    )
+
+    from plinder.data.utils.annotations import ligand_utils
+
+    monkeypatch.setattr(ligand_utils, "parse_cofactors", lambda _data_dir: {"COF"})
+    compute_ligand_fingerprints(data_dir=tmp_path)
+
+    unique_ligands = pd.read_parquet(
+        tmp_path / "fingerprints" / "ligands_per_smiles.parquet"
+    )
+    assert len(unique_ligands) == 2
+    assert not (tmp_path / "fingerprints" / "ligands_per_system.parquet").exists()
+
+    score_dir = tmp_path / "ligand_scores"
+    score_dir.mkdir()
+    ligand_scores(
+        ligand_ids=unique_ligands["ligand_smiles_id"].tolist(),
+        data_dir=tmp_path,
+        output_path=score_dir / "part.parquet",
+    )
+    annotation_path = annotate_ligand_similarity(data_dir=tmp_path)
+    annotations = pd.read_parquet(annotation_path).set_index(
+        "ligand_rdkit_canonical_smiles"
+    )
+
+    assert bool(annotations.loc["CCO", "ligand_is_cofactor_like"])
+    assert (
+        annotations.loc["CCO", "ligand_tanimoto_ecfp4_1024_90_cluster_num_pdb_ids"] == 2
+    )
+    assert (
+        annotations.loc["c1ccccc1", "ligand_tanimoto_ecfp4_1024_90_cluster_num_pdb_ids"]
+        == 1
+    )
 
 
 def _system(pdb_id: str, ligands: list[LigandView]) -> SystemView:

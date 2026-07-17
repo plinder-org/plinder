@@ -216,8 +216,9 @@ def explode_ligand_clusters(
     data_dir: Path,
     labeldf: pd.DataFrame,
 ) -> pd.DataFrame:
-    ligands_per_system = pd.read_parquet(
-        data_dir / "fingerprints/ligands_per_system.parquet"
+    ligands_per_smiles = pd.read_parquet(
+        data_dir / "fingerprints/ligands_per_smiles.parquet",
+        columns=["ligand_rdkit_canonical_smiles", "ligand_smiles_id"],
     )
     annotation_df = pd.read_parquet(
         data_dir / "index" / "annotation_table.parquet",
@@ -227,29 +228,26 @@ def explode_ligand_clusters(
             "ligand_rdkit_canonical_smiles",
         ],
         filters=[
-            ("system_id", "in", set(ligands_per_system["system_id"])),
             ("ligand_is_ion", "==", False),
             ("ligand_is_artifact", "==", False),
         ],
     )
     mapr = dict(
         zip(
-            ligands_per_system["ligand_rdkit_canonical_smiles"],
-            ligands_per_system["number_id_by_inchikeys"],
+            ligands_per_smiles["ligand_rdkit_canonical_smiles"],
+            ligands_per_smiles["ligand_smiles_id"],
         )
     )
-    annotation_df["number_id_by_inchikeys"] = annotation_df[
+    annotation_df["ligand_smiles_id"] = annotation_df[
         "ligand_rdkit_canonical_smiles"
     ].map(mapr)
-    annotation_df.dropna(subset=["number_id_by_inchikeys"], inplace=True)
-    annotation_df["number_id_by_inchikeys"] = annotation_df[
-        "number_id_by_inchikeys"
-    ].astype(int)
+    annotation_df.dropna(subset=["ligand_smiles_id"], inplace=True)
+    annotation_df["ligand_smiles_id"] = annotation_df["ligand_smiles_id"].astype(int)
     annotation_df = annotation_df.sort_values(
         by=["system_id", "ligand_molecular_weight"], ascending=[True, False]
     ).drop_duplicates(subset=["system_id"], keep="first")
     ligand_to_system: dict[int, set[str]] = {}
-    for ligand_id, group in annotation_df.groupby("number_id_by_inchikeys"):
+    for ligand_id, group in annotation_df.groupby("ligand_smiles_id"):
         ligand_to_system[int(ligand_id)] = set(group["system_id"])
     labeldf["system_id"] = labeldf["system_id"].astype(int).map(ligand_to_system)
     labeldf = labeldf.dropna(subset=["system_id"]).explode("system_id")
@@ -441,9 +439,10 @@ def prepare_df_ligand(
     LOG.info(f"threshold={threshold} metric={metric} getting ligand_ids")
     t0 = time()
     system_ids_and_singletons = set(
-        pd.read_parquet(data_dir / "fingerprints/ligands_per_system.parquet")[
-            "number_id_by_inchikeys"
-        ].astype(str)
+        pd.read_parquet(
+            data_dir / "fingerprints/ligands_per_smiles.parquet",
+            columns=["ligand_smiles_id"],
+        )["ligand_smiles_id"].astype(str)
     )
     t1 = time()
     LOG.info(f"getting {len(system_ids_and_singletons)} ligand_ids took {t1 - t0:.2f}s")
@@ -460,9 +459,9 @@ def prepare_df_ligand(
             columns=[
                 "query_ligand_id",
                 "target_ligand_id",
-                "tanimoto_similarity_max",
+                "tanimoto_similarity_ecfp4_1024",
             ],
-            filters=[("tanimoto_similarity_max", ">=", threshold)],
+            filters=[("tanimoto_similarity_ecfp4_1024", ">=", threshold)],
         )
         if not frame.empty:
             frames.append(frame)
@@ -480,7 +479,7 @@ def prepare_df_ligand(
         columns={
             "query_ligand_id": "query_node",
             "target_ligand_id": "target_node",
-            "tanimoto_similarity_max": "similarity",
+            "tanimoto_similarity_ecfp4_1024": "similarity",
         },
         inplace=True,
     )
@@ -563,7 +562,7 @@ def make_components_and_communities(
             "coverage and cannot be clustered directly; use "
             "sucos_shape_pocket_qcov"
         )
-    if metric == "tanimoto_similarity_max":
+    if metric == "tanimoto_similarity_ecfp4_1024":
         edges, nodes = prepare_df_ligand(
             data_dir=data_dir,
             metric=metric,

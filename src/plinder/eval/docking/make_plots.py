@@ -21,7 +21,7 @@ METRICS_DICT = {
     "protein_lddt_weighted_sum": "PROTEIN LDDT",
     "protein_seqsim_weighted_sum": "PROTEIN SEQSIM",
     "pli_unique_qcov": "PLI SHARED",
-    "tanimoto_similarity_max": "LIGAND SIMILARITY",
+    "tanimoto_similarity_ecfp4_1024": "LIGAND SIMILARITY",
 }
 
 ANALYSES = {

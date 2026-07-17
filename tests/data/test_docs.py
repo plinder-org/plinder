@@ -48,3 +48,4 @@ def test_make_column_descriptions(read_plinder_mount, tmp_path, monkeypatch):
     schema = docs.get_all_column_descriptions(plindex=df)
     columns = schema["Name"].to_list()
     assert not len(df.columns.difference(columns))
+    assert {row[0] for row in docs.DERIVED_LIGAND_COLUMNS}.issubset(columns)

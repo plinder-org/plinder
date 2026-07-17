@@ -33,7 +33,7 @@ SIMILARITY_METRICS = (
     "pocket_lddt",
     "pocket_qcov",
     # ligand
-    "tanimoto_similarity_max",
+    "tanimoto_similarity_ecfp4_1024",
     "mmp_similarity_max",
 )
 
@@ -72,7 +72,7 @@ def compute_ligand_ecfp_max_similarities(
 ) -> None:
     if "fp" not in df.columns:
         smiles_fp_dict = {
-            smi: smallmols_similarity.mol2morgan_fp(smi)
+            smi: smallmols_similarity.mol2morgan_fp(smi, radius=2, nbits=1024)
             for smi in df["ligand_rdkit_canonical_smiles"].drop_duplicates().to_list()
         }
         df["fp"] = df["ligand_rdkit_canonical_smiles"].map(smiles_fp_dict)
@@ -82,7 +82,7 @@ def compute_ligand_ecfp_max_similarities(
     ].copy()
 
     (
-        df_test["tanimoto_similarity_max"],
+        df_test["tanimoto_similarity_ecfp4_1024"],
         argmax_array,
     ) = smallmols_similarity.tanimoto_maxsim_and_argmax(
         df.loc[df[split_label] == train_label, "fp"].to_list(),
@@ -183,7 +183,7 @@ class StratifiedTestSet:
             pocket_qcov=50,
             protein_seqsim_weighted_sum=30,
             protein_lddt_weighted_sum=50,
-            tanimoto_similarity_max=30,
+            tanimoto_similarity_ecfp4_1024=30,
             mmp_similarity_max=50,
         )
     )
@@ -195,7 +195,7 @@ class StratifiedTestSet:
                 "protein_lddt_weighted_sum",
             ],
             "novel_ligand": [
-                "tanimoto_similarity_max",
+                "tanimoto_similarity_ecfp4_1024",
                 "mmp_similarity_max",
             ],
             "novel_all": [
@@ -204,7 +204,7 @@ class StratifiedTestSet:
                 "pocket_lddt",
                 "protein_seqsim_weighted_sum",
                 "protein_lddt_weighted_sum",
-                "tanimoto_similarity_max",
+                "tanimoto_similarity_ecfp4_1024",
             ],
         }
     )
@@ -290,7 +290,7 @@ class StratifiedTestSet:
         )
         for metric in tqdm(SIMILARITY_METRICS):
             if overwrite or not (self.get_filename(metric)).exists():
-                if metric in ["tanimoto_similarity_max", "mmp_similarity_max"]:
+                if metric in ["tanimoto_similarity_ecfp4_1024", "mmp_similarity_max"]:
                     # avoid repetitive local assignment
                     if "df" not in locals():
                         df = query_index(
@@ -306,7 +306,7 @@ class StratifiedTestSet:
                             splits=["*"],
                         ).drop(columns=["split"])
                         df = df.merge(self.split_df, on="system_id", how="left")
-                    if metric == "tanimoto_similarity_max":
+                    if metric == "tanimoto_similarity_ecfp4_1024":
                         compute_ligand_ecfp_max_similarities(
                             df,
                             self.split_label,

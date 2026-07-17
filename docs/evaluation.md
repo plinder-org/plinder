@@ -135,7 +135,7 @@ pocket_fident                                   0.0                    0.0
 pocket_lddt_qcov                                0.0                    0.0
 pocket_lddt                                     0.0                    0.0
 pocket_qcov                                     0.0                    0.0
-tanimoto_similarity_max                         0.0                    0.0
+tanimoto_similarity_ecfp4_1024                         0.0                    0.0
 passes_quality                                False                  False
 novel_pocket_pli                               True                   True
 novel_ligand                                   True                   True

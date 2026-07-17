@@ -243,6 +243,14 @@ class PlinderDataIngestFlow(FlowSpec):
     def join_make_ligand_scores(self, inputs):
         self.pipeline = inputs[0].pipeline
         self.merge_artifacts(inputs, exclude=["chunks"])
+        self.next(self.annotate_ligand_similarity)
+
+    @kubernetes(**{**K8S, **DATABASES})
+    @environment(**ENV)
+    @retry
+    @step
+    def annotate_ligand_similarity(self):
+        self.pipeline.annotate_ligand_similarity()
         self.next(self.make_sub_dbs)
 
     @kubernetes(**{**K8S, **DATABASES})

@@ -11,6 +11,13 @@ ligand_resolved_stereo_matches_template	bool | None	Whether resolved 3D stereo m
 ligand_residue_numbers	list[int]	Resolved ligand residue numbers used to reconstruct this ligand chain from the source mmCIF
 ligand_water_residues	list[str]	Interacting water residues encoded as <instance>.<asym>_<residue_number>
 ligand_rdkit_canonical_smiles	str | None	RDKit canonical SMILES (same as smiles; kept for schema compatibility)
+ligand_is_3d_score_able	bool | None	Whether the canonical ASU SDF loads and supports finite shape, color, and SuCOS self-scoring
+ligand_smiles_id	int | None	Integer node ID assigned to this exact canonical SMILES for ligand similarity scoring
+ligand_max_cofactor_similarity	float | None	Maximum ECFP4/1024 Tanimoto similarity (percent) to any CCD structure in the cofactor list
+ligand_most_similar_cofactor	str | None	CCD code of the cofactor with maximum ECFP4/1024 Tanimoto similarity
+ligand_is_cofactor_like	bool | None	Whether maximum similarity to a listed CCD cofactor is at least 90 percent
+ligand_tanimoto_ecfp4_1024_90_cluster	str | None	Connected-component ID among unique ligand SMILES using Tanimoto similarity of at least 90 percent
+ligand_tanimoto_ecfp4_1024_90_cluster_num_pdb_ids	int | None	Number of distinct PDB entries containing this ligand or another ligand in its 90-percent Tanimoto component
 ligand_molecular_weight	float | None	Molecular weight
 ligand_crippen_clogp	float | None	Ligand Crippen MlogP, see https://www.rdkit.org/docs/source/rdkit.Chem.Crippen.html
 ligand_num_rot_bonds	int | None	Number of rotatable bonds

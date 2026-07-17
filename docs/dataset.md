@@ -44,9 +44,8 @@ sd_hide_title: true
     |-- entries # Raw annotations prior to consolidation (split by `two_char_code` and zipped)
     |   |-- {two_char_code}.zip
     |-- fingerprints # Index mapping files for the ligand similarity dataset
-    |   |-- ligands_per_inchikey.parquet
-    |   |-- ligands_per_inchikey_ecfp4.npy
-    |   |-- ligands_per_system.parquet
+    |   |-- ligands_per_smiles.parquet
+    |   |-- ligand_similarity_annotations.parquet
     |-- ligand_scores # Ligand similarity parquet dataset
     |   |-- {hashid}.parquet
     |-- alignments # V3 mapped Foldseek/MMseqs results for score reconstruction
@@ -505,35 +504,33 @@ During ingest this directory contains one `{pdb_id}.parquet` annotation part and
 
 #### Small molecule fingerprints (`fingerprints/`)
 
-Tables that contains all the ligand fingerprints used in calculating ligand similarity stored in `ligand_scores`.
+Tables used to calculate and annotate ligand similarity:
 
-- `ligands_per_inchikey_ecfp4.npy`: `numpy` array of all-vs-all ECFP4 similarity.
-- `ligands_per_system.parquet`: table linking PLINDER systems to their ligands, including ligand ID, SMILES, InChIKey, etc.
-- `ligands_per_inchikey.parquet`: subset of `ligands_per_system.parquet` with reduced number of columns.
+- `ligands_per_smiles.parquet`: one row per exact canonical SMILES, with its integer node ID, serialized ECFP4 fingerprint (Morgan radius 2, 1024 bits, no chirality), and similarity to the closest listed CCD cofactor. The fingerprint definition is also stored in Parquet metadata.
+- `ligand_similarity_annotations.parquet`: unique-SMILES annotations including the 90% Tanimoto component and the number of distinct PDB entries represented by that component. These columns are merged into the final annotation index per ligand.
+
+The finalized annotation index contains `ligand_smiles_id` on every ligand row, so
+V3 does not publish a redundant per-system fingerprint mapping.
 
 #### Small molecule data (`ligands/`)
 
-Ligand data expanded from entries for computing similarity, saved in distributed files `{hashid}.parquet`.
+Ligand data expanded from entries for computing similarity, saved in distributed files `{hashid}.parquet`. Each row also records `ligand_is_3d_score_able`, which is true only when the canonical ASU SDF loads and supports finite shape, color, and SuCOS self-scoring. Similarity scoring uses this annotation to avoid loading known-incompatible SDFs.
 
 Eg.
 
 ```
-  pdb_id              system_id                      ligand_rdkit_canonical_smiles ligand_ccd_code                   ligand_id                    inchikeys
-0   7o00  7o00__1__1.A_1.B__1.D  CC(=O)N[C@H]1CO[C@H](CO)[C@@H](OC2O[C@H](CO)[C...         HSR-HSR  7o00__1__1.A_1.B__1.D__1.D  JHPFQHGUNGJQIZ-BQBDUENHSA-N
-1   7o00  7o00__1__1.A_1.B__1.E  CC(=O)N[C@@H]1[C@@H](O)[C@H](O)[C@@H](CO)O[C@H]1O             HSR  7o00__1__1.A_1.B__1.E__1.E  OVRNDRQMDRJTHS-FMDGEEDCSA-N
-2   7o04      7o04__1__1.A__1.G                        CNCc1cc([N+](=O)[O-])ccc1Cl             4AV      7o04__1__1.A__1.G__1.G  YRTNCUPHKWUHMQ-UHFFFAOYSA-N
-3   7o08      7o08__1__1.A__1.C  CC1(C)CCN(Cc2ccc(NCC3(O)CCN(c4cc(NCc5ccccc5)nc...             UXE      7o08__1__1.A__1.C__1.C  GTLDMCHZRAFXCB-UHFFFAOYSA-N
-4   7o09      7o09__1__1.A__1.C  CC1(C)CCN(Cc2ccc(N3CCOC4(CCN(c5cc(NCc6ccccc6)n...             UXK      7o09__1__1.A__1.C__1.C  RJEWLHZZXYDBNT-UHFFFAOYSA-N
+  pdb_id              system_id ligand_rdkit_canonical_smiles ligand_ccd_code                   ligand_id
+0   7o04      7o04__1__1.A__1.G       CNCc1cc([N+](=O)[O-])ccc1Cl             4AV      7o04__1__1.A__1.G__1.G
 ```
 
 #### Small molecule similarity scores (`ligand_scores/`)
 
-Tables that contains all the ligand similarity scores used in calculating the similarity between two ligands, saved in distributed files `{hashid}.parquet`.
+Sharded BulkTanimoto edges between unique canonical-SMILES nodes. Every edge at or above the configured minimum similarity is retained; the old dense Jaccard/top-K approximation is no longer used.
 
 Eg.
 
 ```
-   query_ligand_id  target_ligand_id  tanimoto_similarity_max
+   query_ligand_id  target_ligand_id  tanimoto_similarity_ecfp4_1024
 0            35300              6943                      100
 1            35300             35300                      100
 2            35300             13911                       94
