@@ -301,6 +301,31 @@ class PlinderDataIngestFlow(FlowSpec):
     def join_make_batch_scores(self, inputs):
         self.pipeline = inputs[0].pipeline
         self.merge_artifacts(inputs, exclude=["chunks"])
+        self.next(self.scatter_collate_alignments)
+
+    @kubernetes(**K8S)
+    @environment(**ENV)
+    @retry
+    @step
+    def scatter_collate_alignments(self):
+        self.chunks = self.pipeline.scatter_collate_alignments()
+        self.next(self.collate_alignments, foreach="chunks")
+
+    @kubernetes(**{**K8S, **LARGE_MEM})
+    @environment(**ENV)
+    @retry
+    @step
+    def collate_alignments(self):
+        self.pipeline.collate_alignments(self.input)
+        self.next(self.join_collate_alignments)
+
+    @kubernetes(**K8S)
+    @environment(**ENV)
+    @retry
+    @step
+    def join_collate_alignments(self, inputs):
+        self.pipeline = inputs[0].pipeline
+        self.merge_artifacts(inputs, exclude=["chunks"])
         self.next(self.scatter_collate_partitions)
 
     @kubernetes(**K8S)

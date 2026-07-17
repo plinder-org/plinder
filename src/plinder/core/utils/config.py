@@ -236,6 +236,7 @@ class DataConfig:
     plinder_remote: str = field(init=False)
 
     ingest: str = "ingest"
+    alignments: str = "alignments"
     validation: str = "validation"
     clusters: str = "clusters"
     entries: str = "entries"

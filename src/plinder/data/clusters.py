@@ -4,7 +4,7 @@ import os
 import sys
 from pathlib import Path
 from time import time
-from typing import Callable, TypeVar
+from typing import Any, Callable, TypeVar, cast
 
 if sys.platform == "darwin":
     # For macOS only: allow multiple OpenMP runtimes to coexist
@@ -324,7 +324,8 @@ def _read_local_score_rows(
         "similarity",
     ]
     for path in score_paths:
-        available = set(pq.read_schema(path).names)  # type: ignore[no-untyped-call]
+        read_schema = cast(Any, pq.read_schema)
+        available = set(read_schema(path).names)
         if not {"query_system", "target_system", "metric", "similarity"}.issubset(
             available
         ):

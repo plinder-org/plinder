@@ -1,5 +1,5 @@
 flow:
-  run_specific_stages: make_sub_dbs,run_batch_searches,make_batch_scores
+  run_specific_stages: make_sub_dbs,run_batch_searches,make_batch_scores,collate_alignments
   run_batch_searches_batch_size: 10050
   make_batch_scores_batch_size: 111
 data:

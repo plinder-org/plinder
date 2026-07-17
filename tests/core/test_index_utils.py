@@ -31,6 +31,11 @@ def mock_cpl(read_plinder_mount, monkeypatch):
         "plinder.core.utils.cpl.download_paths",
         lambda **kws: None,
     )
+    yield
+
+    from plinder.core.utils import config
+
+    config._config._clear()
 
 
 def test_get_plindex(mock_cpl):
@@ -72,3 +77,22 @@ def test_download_cmd_does_not_fetch_source_mmcif_cache(mock_cpl, monkeypatch):
 
     assert "index" in requested
     assert "source_mmcifs" not in requested
+
+
+def test_v3_download_uses_alignments_instead_of_legacy_scores(mock_cpl, monkeypatch):
+    from plinder.core.utils import cpl
+
+    requested = []
+
+    def track_path(**kwargs):
+        requested.append(kwargs.get("rel", ""))
+        return mock_path(**kwargs)
+
+    monkeypatch.setattr(cpl, "get_plinder_path", track_path)
+
+    utils.download_plinder_cmd(args=["--iteration", "v3", "-y"])
+
+    assert "alignments" in requested
+    assert not any(path == "scores" or path.startswith("scores/") for path in requested)
+    assert "entries" not in requested
+    assert "systems" not in requested

@@ -144,8 +144,18 @@ protein similarity scoring for all `plinder` systems.
     - `scores/search_db=apo/*`
     - `scores/search_db=pred/*`
 
+- `tasks.collate_alignments`: creates the distributable mapped-search dataset
+  - This is a distributed task over deterministic PDB two-character shards
+  - It combines the per-query mapped Foldseek/MMseqs intermediates, orders rows by
+    query and target, and writes Zstandard-compressed Parquet with bounded row groups
+  - Side effects include writing:
+    - `alignments/search_db={holo,apo,pred}/alignment_type={foldseek,mmseqs}/shard={two_char_code}.parquet`
+  - These shards, rather than the materialized V3 `scores/` dataset, are published so
+    users can reconstruct ligand-level scores for bounded system subsets
+
 - `tasks.collate_partitions`: consolidates every alphanumeric holo partition plus
-  the apo and predicted partitions before clustering. Empty partitions are skipped.
+  the apo and predicted score partitions before clustering. These are local ingest
+  intermediates; empty partitions are skipped.
 
 ## MMP and MMS
 

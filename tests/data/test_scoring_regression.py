@@ -98,6 +98,8 @@ def scoring_fixture(
 
 def test_scoring_regression(scoring_fixture, tmp_path):
     from plinder.core.scores.entries import entry_views_from_df
+    from plinder.core.scores.reconstruct import reconstruct_similarity_scores
+    from plinder.data.pipeline import tasks
     from plinder.data.pipeline.utils import get_db_sources
     from plinder.data.utils.annotations.get_similarity_scores import Scorer
 
@@ -108,7 +110,7 @@ def test_scoring_regression(scoring_fixture, tmp_path):
     scorer = Scorer(
         entries=entries,
         source_to_full_db_file=db_sources,
-        db_dir=data_dir / "scores_db",
+        db_dir=data_dir / "dbs" / "subdbs",
         scores_dir=data_dir / "scores",
     )
     scorer.make_dbs()
@@ -145,3 +147,55 @@ def test_scoring_regression(scoring_fixture, tmp_path):
 
     expected = pd.read_parquet(GOLDEN_PATH)
     pd.testing.assert_frame_equal(df, expected, check_like=True)
+
+    for shard in tasks.scatter_collate_alignments(data_dir=data_dir):
+        tasks.collate_alignments(data_dir=data_dir, partition=shard)
+    system_ids = set(annotation_rows["system_id"])
+    reconstructed = (
+        reconstruct_similarity_scores(
+            system_ids,
+            system_ids,
+            data_dir=data_dir,
+        )
+        .sort_values(SORT_KEYS)
+        .reset_index(drop=True)
+    )
+
+    def normalize_nulls(frame: pd.DataFrame) -> pd.DataFrame:
+        return frame.astype(object).where(frame.notna(), None)
+
+    pd.testing.assert_frame_equal(
+        normalize_nulls(reconstructed[df.columns]),
+        normalize_nulls(df),
+        check_dtype=False,
+        check_like=True,
+    )
+
+    selected = df.iloc[0]
+    bounded = (
+        reconstruct_similarity_scores(
+            [selected["query_system"]],
+            [selected["target_system"]],
+            query_ligand_ids=[selected["query_ligand_id"]],
+            target_ligand_ids=[selected["target_ligand_id"]],
+            data_dir=data_dir,
+        )
+        .sort_values(SORT_KEYS)
+        .reset_index(drop=True)
+    )
+    expected_bounded = (
+        df[
+            (df["query_system"] == selected["query_system"])
+            & (df["target_system"] == selected["target_system"])
+            & (df["query_ligand_id"] == selected["query_ligand_id"])
+            & (df["target_ligand_id"] == selected["target_ligand_id"])
+        ]
+        .sort_values(SORT_KEYS)
+        .reset_index(drop=True)
+    )
+    pd.testing.assert_frame_equal(
+        normalize_nulls(bounded[df.columns]),
+        normalize_nulls(expected_bounded),
+        check_dtype=False,
+        check_like=True,
+    )

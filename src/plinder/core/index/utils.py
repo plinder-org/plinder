@@ -128,12 +128,22 @@ def download_plinder_cmd(args: list[str] | None = None) -> None:
     )
     LOG.debug("cleaning up old linked structures")
     _remove_old_linked_structures(Path(cfg.data.plinder_dir))
+    is_v3 = str(cfg.data.plinder_iteration).startswith("v3")
     for attr in cfg.data:
         if (
             attr.startswith("plinder_")
             or attr.endswith("_file")
             or attr in ["ingest", "validation", "force_update", "source_mmcifs"]
         ):
+            continue
+        if is_v3 and attr in {"entries", "scores", "systems"}:
+            LOG.info(
+                f"skipping legacy {attr} dataset for V3; systems and bounded "
+                "similarity scores are reconstructed on demand"
+            )
+            continue
+        if not is_v3 and attr == "alignments":
+            # V2 releases distribute materialized scores instead.
             continue
         path = None
         if attr == "scores":
@@ -164,7 +174,12 @@ def download_plinder_cmd(args: list[str] | None = None) -> None:
         else:
             msg = f"Syncing {getattr(cfg.data, attr)}"
             do = True
-            if attr in ["ligand_archives", "linked_structures", "systems"]:
+            if attr in [
+                "alignments",
+                "ligand_archives",
+                "linked_structures",
+                "systems",
+            ]:
                 if not autodo:
                     do = input(f"Download the {attr} dataset? [Y/n] ").lower() in [
                         "",
@@ -181,9 +196,12 @@ def download_plinder_cmd(args: list[str] | None = None) -> None:
                     force_progress=True,
                 )
             else:
-                LOG.info(
-                    f"skipping {attr} download, plinder.core.PlinderSystem will download lazily as needed on request!"
+                consumer = (
+                    "plinder.core.scores"
+                    if attr == "alignments"
+                    else "plinder.core.PlinderSystem"
                 )
+                LOG.info(f"skipping {attr} download; {consumer} fetches it lazily")
         if path is not None and attr in [
             "ligand_archives",
             "linked_structures",

@@ -39,7 +39,7 @@ class GetPlinderAnnotation:
         self.entry_cfg = entry_cfg
 
     def annotate(self) -> Optional[pd.DataFrame]:
-        entry_cfg = dict(
+        entry_cfg: dict[str, Any] = dict(
             neighboring_residue_threshold=self.neighboring_residue_threshold,
             neighboring_ligand_threshold=self.neighboring_ligand_threshold,
             min_polymer_size=self.min_polymer_size,

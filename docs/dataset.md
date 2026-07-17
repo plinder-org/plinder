@@ -49,6 +49,10 @@ sd_hide_title: true
     |   |-- ligands_per_system.parquet
     |-- ligand_scores # Ligand similarity parquet dataset
     |   |-- {hashid}.parquet
+    |-- alignments # V3 mapped Foldseek/MMseqs results for score reconstruction
+    |   |-- search_db={holo,apo,pred}
+    |       |-- alignment_type={foldseek,mmseqs}
+    |           |-- shard={two_char_code}.parquet
     |-- ligands # Ligand data expanded from entries for computing similarity
     |   |-- {hashid}.parquet
     |-- mmp # Ligand matched molecular pairs (MMP) and series (MMS) data
@@ -85,6 +89,13 @@ explicit `__ligand__` marker, for example
 projected system column is
 `sucos_shape_pocket_qcov__50__strong__component`. The gated `shape`, `color`, and
 raw `sucos_shape` values remain diagnostic scores and are not clustered directly.
+
+V3 does not distribute the materialized `scores/` dataset. Instead, it distributes
+mapped Foldseek and MMseqs results in `alignments/`, ordered by query and target and
+compressed as deterministic two-character Parquet shards. The shard for a PDB ID is
+`pdb_id[-3:-1]`, matching the PDB archive convention. This keeps the number of files
+manageable while allowing Parquet predicate pushdown to read only row groups relevant
+to requested query and target entries. V2 retains the materialized `scores/` layout.
 
 :::{include} table.html
 :::
@@ -129,6 +140,33 @@ source files are reused without network access; requesting an uncached entry rai
 an error that includes its expected cache path. Callers explicitly choose whether
 reconstructed outputs include interacting or all waters, other biological-assembly
 chains, and which output files to write.
+
+V3 similarity scores can likewise be prepared on an online node and reconstructed
+later in offline mode:
+
+```python
+from plinder.core.scores import (
+    prefetch_similarity_alignments,
+    reconstruct_similarity_scores,
+)
+
+systems = ["2y4i__1__1.B__1.E_1.F", "6cex__1__1.D__1.M"]
+prefetch_similarity_alignments(systems)
+scores = reconstruct_similarity_scores(systems[:1], systems[1:])
+```
+
+Prefetching derives the required two-character shards from the query systems and
+downloads each available Foldseek/MMseqs shard once; it never downloads the complete
+alignment dataset. If one search backend has no shard, reconstruction uses the other;
+it fails only when neither backend is available. Reconstruction then filters those
+Parquets by query and target PDB ID, loads only the requested annotation rows, and
+emits directed ligand-level scores.
+Canonical SDFs are resolved lazily only for ligand pairs whose `pocket_qcov` is
+positive. With `PLINDER_OFFLINE=true` or `PLINDER_OFFLINE_MODE=true`, the same calls
+use the normal PLINDER cache and report a missing shard instead of accessing the
+network. The prefetch function covers alignment shards only; run reconstruction once
+on the online node as well if the annotation files and any positive-pocket ligand
+archives have not already been cached.
 
 ```python
 from pathlib import Path
@@ -510,9 +548,32 @@ Files that contains all the ligand matched molecular pairs (MMP) and matched mol
 - `plinder_mmp_series.parquet`: matched molecular series (MMS) linked to PLINDER systems,
 - `plinder_mms.csv.gz`: compressed [mmpdb](https://github.com/rdkit/mmpdb) index file containing the matched molecular pairs (MMP) of all ligands in PLINDER annotation table.
 
-#### Protein similarity dataset (`scores/`)
+#### Mapped protein alignments (`alignments/`, V3)
 
-Tables that contains all the protein or pocket similarity scores used in calculating the similarity between two systems.
+V3 release artifacts contain mapped Foldseek and MMseqs hits rather than the much
+larger materialized pairwise score table:
+
+```bash
+|-- search_db=holo
+|   |-- alignment_type=foldseek
+|   |   |-- shard={two_char_code}.parquet
+|   |-- alignment_type=mmseqs
+|       |-- shard={two_char_code}.parquet
+|-- search_db=apo
+|-- search_db=pred
+```
+
+Rows are sorted by query entry, target entry, and mapped chain identifiers before
+being written with Zstandard compression and bounded row groups. The public
+`reconstruct_similarity_scores()` API uses Parquet filters to calculate a requested
+system cross-product without materializing or downloading the global score table.
+
+#### Protein similarity dataset (`scores/`, V2 and V3 ingest intermediate)
+
+These tables contain the protein or pocket similarity scores used for clustering.
+They remain the V2 release format and a local V3 ingest intermediate, but are not a
+V3 release artifact after cluster columns have been merged into the annotation
+parquet.
 
 ```bash
 |-- search_db=apo

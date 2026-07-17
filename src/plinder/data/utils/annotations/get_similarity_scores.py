@@ -8,7 +8,7 @@ from collections import Counter, abc, defaultdict
 from dataclasses import dataclass, field
 from functools import cache
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional, cast
 
 import biotite.sequence as seq
 import biotite.sequence.align as align
@@ -71,9 +71,8 @@ PHARMACOPHORE_FEATURES = frozenset(
 @cache
 def _get_feature_scoring_context() -> tuple[Any, dict[str, FeatMaps.FeatMapParams]]:
     """Load RDKit's pharmacophore definitions only when shape scoring is used."""
-    factory = ChemicalFeatures.BuildFeatureFactory(  # type: ignore[attr-defined]
-        str(Path(RDConfig.RDDataDir) / "BaseFeatures.fdef")
-    )
+    build_feature_factory = cast(Any, ChemicalFeatures).BuildFeatureFactory
+    factory = build_feature_factory(str(Path(RDConfig.RDDataDir) / "BaseFeatures.fdef"))
     parameters = {
         family: FeatMaps.FeatMapParams() for family in factory.GetFeatureFamilies()
     }
@@ -117,16 +116,14 @@ def get_feature_map_score(
     denominator = min(len(features) for features in feature_lists)
     if denominator == 0:
         return 0.0
-    feature_map = FeatMaps.FeatMap(  # type: ignore[no-untyped-call]
+    feature_map_type = cast(Any, FeatMaps.FeatMap)
+    feature_map = feature_map_type(
         feats=feature_lists[0],
         weights=[1] * len(feature_lists[0]),
         params=parameters,
     )
-    feature_map.scoreMode = score_mode  # type: ignore[misc]
-    return float(
-        feature_map.ScoreFeats(feature_lists[1])  # type: ignore[no-untyped-call]
-        / denominator
-    )
+    feature_map.scoreMode = score_mode
+    return float(feature_map.ScoreFeats(feature_lists[1]) / denominator)
 
 
 def get_sucos_score(
@@ -369,6 +366,9 @@ class Scorer:
     source_to_full_db_file: dict[str, Path]
     db_dir: Path
     scores_dir: Path
+    ligand_sdf_resolver: Callable[[LigandView], Path | None] | None = field(
+        default=None, repr=False
+    )
     protein_chain_mappers: list[str] = field(
         default_factory=lambda: [
             "protein_lddt_qcov_foldseek",
@@ -398,20 +398,28 @@ class Scorer:
     def resolve_ligand_sdf(self, data_dir: Path, ligand: LigandView) -> Path | None:
         """Resolve the canonical ASU ligand SDF for a ligand annotation."""
         two_char_code = ligand.pdb_id[-3:-1]
-        path = (
+        candidates = [
             data_dir
             / "raw_entries"
             / two_char_code
             / ligand.pdb_id
             / "ligand_files"
-            / f"{ligand.asym_id}.sdf"
-        )
-        return path if path.is_file() else None
+            / f"{ligand.asym_id}.sdf",
+            data_dir
+            / "ligand_archives"
+            / ligand.pdb_id
+            / "ligand_files"
+            / f"{ligand.asym_id}.sdf",
+        ]
+        return next((path for path in candidates if path.is_file()), None)
 
     def _get_ligand_mol(self, data_dir: Path, ligand: LigandView) -> Chem.Mol | None:
         cache_key = (ligand.pdb_id, ligand.asym_id)
         if cache_key not in self._ligand_mol_cache:
-            sdf_file = self.resolve_ligand_sdf(data_dir, ligand)
+            if self.ligand_sdf_resolver is None:
+                sdf_file = self.resolve_ligand_sdf(data_dir, ligand)
+            else:
+                sdf_file = self.ligand_sdf_resolver(ligand)
             if sdf_file is None:
                 LOG.warning(
                     "no ligand SDF found for "
@@ -645,16 +653,43 @@ class Scorer:
         self,
         source_to_aln_file: dict[str, Path],
         search_db: str = "holo",
+        query_entry_ids: set[str] | None = None,
+        target_entry_ids: set[str] | None = None,
     ) -> pd.DataFrame:
         data = []
+        index_columns = [
+            "query_entry",
+            "target_entry",
+            "query_chain_mapped",
+            "target_chain_mapped",
+            "source",
+        ]
         for source, aln_file in source_to_aln_file.items():
             sdb, aln_type = source.split("_")
             if sdb != search_db:
                 continue
             if not aln_file.exists():
                 continue
-            aln_df = pd.read_parquet(aln_file)
-            aln_df["source"] = aln_type
+            filters = []
+            if query_entry_ids is not None:
+                filters.append(("query_entry", "in", query_entry_ids))
+            if target_entry_ids is not None:
+                filters.append(("target_entry", "in", target_entry_ids))
+            aln_df = pd.read_parquet(aln_file, filters=filters or None)
+            if aln_df.empty:
+                continue
+            # Per-entry mapped files written by pandas restore these fields as
+            # a MultiIndex. Release shards written by DuckDB expose the same
+            # fields as regular columns. Normalize both layouts here so shard
+            # reads can still use Parquet predicate pushdown.
+            if set(index_columns).issubset(aln_df.columns):
+                aln_df["source"] = aln_type
+                aln_df = aln_df.set_index(index_columns)
+            elif list(aln_df.index.names) != index_columns:
+                raise ValueError(
+                    f"unexpected mapped alignment schema in {aln_file}: "
+                    f"index={aln_df.index.names}, columns={list(aln_df.columns)}"
+                )
             aln_df["qrnum"] = aln_df["qrnum"].apply(
                 lambda x: dict([(int(i), int(r)) for i, r in x])
             )
@@ -1043,13 +1078,26 @@ class Scorer:
         query_system: SystemView,
         query_entry_alignments: pd.DataFrame,
         data_dir: Path | None = None,
+        query_ligand_ids: set[str] | None = None,
+        target_system_ids: set[str] | None = None,
+        target_ligand_ids: set[str] | None = None,
     ) -> abc.Generator[dict[str, str | float | None], None, None]:
         if search_db == "holo":
             return self.get_scores_holo(
-                query_system, query_entry_alignments, data_dir=data_dir
+                query_system,
+                query_entry_alignments,
+                data_dir=data_dir,
+                query_ligand_ids=query_ligand_ids,
+                target_system_ids=target_system_ids,
+                target_ligand_ids=target_ligand_ids,
             )
         elif search_db == "apo" or search_db == "pred":
-            return self.get_scores_apo_pred(query_system, query_entry_alignments)
+            return self.get_scores_apo_pred(
+                query_system,
+                query_entry_alignments,
+                query_ligand_ids=query_ligand_ids,
+                target_system_ids=target_system_ids,
+            )
         else:
             raise ValueError(f"Invalid search_db: {search_db}")
 
@@ -1058,9 +1106,15 @@ class Scorer:
         query_system: SystemView,
         query_entry_alignments: pd.DataFrame,
         data_dir: Path | None = None,
+        query_ligand_ids: set[str] | None = None,
+        target_system_ids: set[str] | None = None,
+        target_ligand_ids: set[str] | None = None,
     ) -> abc.Generator[dict[str, str | float | None], None, None]:
         query_ligands = [
-            ligand for ligand in query_system.ligands.values() if ligand.is_proper
+            ligand
+            for ligand in query_system.ligands.values()
+            if ligand.is_proper
+            and (query_ligand_ids is None or ligand.id in query_ligand_ids)
         ]
         if not query_ligands:
             return
@@ -1097,7 +1151,10 @@ class Scorer:
                     )
             for target_system_id in self.entries[target_entry].systems:
                 target_system = self.entries[target_entry].systems[target_system_id]
-                if target_system.system_type != "holo":
+                if target_system.system_type != "holo" or (
+                    target_system_ids is not None
+                    and target_system_id not in target_system_ids
+                ):
                     continue
                 if target_system_id == query_system.id or all(
                     target_instance_chain.split(".")[1] not in all_target_chains
@@ -1109,6 +1166,7 @@ class Scorer:
                     ligand
                     for ligand in target_system.ligands.values()
                     if ligand.is_proper
+                    and (target_ligand_ids is None or ligand.id in target_ligand_ids)
                 ]
                 for query_ligand in query_ligands:
                     # Keep every receptor chain in the directed query
@@ -1203,26 +1261,48 @@ class Scorer:
         pdb_id: str,
         search_db: str = "holo",
         data_dir: Path | None = None,
+        source_to_aln_file: dict[str, Path] | None = None,
+        query_system_ids: set[str] | None = None,
+        query_ligand_ids: set[str] | None = None,
+        target_system_ids: set[str] | None = None,
+        target_ligand_ids: set[str] | None = None,
     ) -> Optional[pd.DataFrame]:
-        alignments = self.load_alignments(
-            search_db=search_db,
-            source_to_aln_file={
+        if source_to_aln_file is None:
+            source_to_aln_file = {
                 f"{search_db}_{aln_type}": self.db_dir
                 / f"{search_db}_{aln_type}"
                 / "mapped_aln"
                 / f"{pdb_id}.parquet"
                 for aln_type in ["foldseek", "mmseqs"]
-            },
+            }
+        target_entry_ids = None
+        if target_system_ids is not None:
+            target_entry_ids = {
+                system_id.split("__", maxsplit=1)[0] for system_id in target_system_ids
+            }
+        alignments = self.load_alignments(
+            search_db=search_db,
+            source_to_aln_file=source_to_aln_file,
+            query_entry_ids={pdb_id},
+            target_entry_ids=target_entry_ids,
         )
         if alignments.empty:
             return None
         column_mapr = self.get_column_mapr()
         pdb_vals = []
         for system in self.entries[pdb_id].systems.values():
-            if system.system_type != "holo":
+            if system.system_type != "holo" or (
+                query_system_ids is not None and system.id not in query_system_ids
+            ):
                 continue
             for score_dict in self.get_scores(
-                search_db, system, alignments.loc[pdb_id], data_dir=data_dir
+                search_db,
+                system,
+                alignments.loc[pdb_id],
+                data_dir=data_dir,
+                query_ligand_ids=query_ligand_ids,
+                target_system_ids=target_system_ids,
+                target_ligand_ids=target_ligand_ids,
             ):
                 # Keep nullable identifiers (notably target_ligand_id for
                 # apo/pred) present so every search database shares a schema.
@@ -1268,10 +1348,17 @@ class Scorer:
         return df.sort_values(by=columns, ascending=ascending)
 
     def get_scores_apo_pred(
-        self, query_system: SystemView, query_entry_alignments: pd.DataFrame
+        self,
+        query_system: SystemView,
+        query_entry_alignments: pd.DataFrame,
+        query_ligand_ids: set[str] | None = None,
+        target_system_ids: set[str] | None = None,
     ) -> abc.Generator[dict[str, str | float | None], None, None]:
         query_ligands = [
-            ligand for ligand in query_system.ligands.values() if ligand.is_proper
+            ligand
+            for ligand in query_system.ligands.values()
+            if ligand.is_proper
+            and (query_ligand_ids is None or ligand.id in query_ligand_ids)
         ]
         for target_entry in query_entry_alignments.index.get_level_values(
             "target_entry"
@@ -1303,6 +1390,12 @@ class Scorer:
                         ].index.get_level_values("target_chain_mapped")
                     )
                 for t_chain in target_chains:
+                    target_system_id = f"{target_entry}_{t_chain}"
+                    if (
+                        target_system_ids is not None
+                        and target_system_id not in target_system_ids
+                    ):
+                        continue
                     if (
                         target_entry in self.entries
                         and t_chain in self.entries[target_entry].chains
@@ -1331,7 +1424,7 @@ class Scorer:
                     q_t_scores_combined: dict[str, str | float | None] = {
                         **combine_scores(q_t_scores, q_t_mappings, protein_chain_mapper)
                     }
-                    q_t_scores_combined["target_system"] = f"{target_entry}_{t_chain}"
+                    q_t_scores_combined["target_system"] = target_system_id
                     q_t_scores_combined["target_ligand_id"] = None
                     q_t_scores_combined["query_system"] = query_system.id
                     q_t_scores_combined["query_ligand_id"] = query_ligand.id

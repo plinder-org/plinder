@@ -20,6 +20,10 @@ from .protein import (
 from .protein import (
     query_protein_similarity,
 )
+from .reconstruct import (
+    prefetch_similarity_alignments,
+    reconstruct_similarity_scores,
+)
 
 __all__ = [
     "query_ligand_similarity",
@@ -29,4 +33,6 @@ __all__ = [
     "query_clusters",
     "query_links",
     "query_index",
+    "prefetch_similarity_alignments",
+    "reconstruct_similarity_scores",
 ]

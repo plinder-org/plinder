@@ -232,6 +232,14 @@ class IngestPipeline:
         )
 
     @utils.ingest_flow_control
+    def scatter_collate_alignments(self) -> list[list[str]]:
+        return tasks.scatter_collate_alignments(data_dir=self.plinder_dir)
+
+    @utils.ingest_flow_control
+    def collate_alignments(self, partition: list[str]) -> None:
+        tasks.collate_alignments(data_dir=self.plinder_dir, partition=partition)
+
+    @utils.ingest_flow_control
     def scatter_collate_partitions(self) -> list[list[str]]:
         chunks: list[list[str]] = tasks.scatter_collate_partitions()
         return chunks

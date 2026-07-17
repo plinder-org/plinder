@@ -42,6 +42,12 @@ def test_final_structure_qc_is_not_a_pipeline_stage():
 
 
 def test_scoring_finalization_stage_order_and_partitions():
+    assert tasks.STAGES.index("make_batch_scores") < tasks.STAGES.index(
+        "collate_alignments"
+    )
+    assert tasks.STAGES.index("collate_alignments") < tasks.STAGES.index(
+        "collate_partitions"
+    )
     assert tasks.STAGES.index("collate_partitions") < tasks.STAGES.index(
         "make_components_and_communities"
     )
@@ -55,6 +61,37 @@ def test_scoring_finalization_stage_order_and_partitions():
     assert ["z"] in partitions
     assert ["apo"] in partitions
     assert ["pred"] in partitions
+
+
+def test_collate_alignments_writes_query_addressable_shards(tmp_path):
+    columns = {
+        "query_entry": ["1abc", "2abd", "3xyz"],
+        "target_entry": ["9zzz", "8yyy", "7xxx"],
+        "query_chain_mapped": ["A", "B", "C"],
+        "target_chain_mapped": ["D", "E", "F"],
+        "source": ["foldseek"] * 3,
+        "similarity": [0.8, 0.7, 0.6],
+    }
+    mapped_dir = tmp_path / "dbs/subdbs/holo_foldseek/mapped_aln"
+    mapped_dir.mkdir(parents=True)
+    for index, pdb_id in enumerate(columns["query_entry"]):
+        pd.DataFrame(
+            {column: [values[index]] for column, values in columns.items()}
+        ).to_parquet(mapped_dir / f"{pdb_id}.parquet", index=False)
+
+    assert tasks.scatter_collate_alignments(data_dir=tmp_path) == [["ab"], ["xy"]]
+    tasks.collate_alignments(data_dir=tmp_path, partition=["ab"])
+
+    shard = pd.read_parquet(
+        tmp_path / "alignments/search_db=holo/alignment_type=foldseek/shard=ab.parquet"
+    )
+    assert shard["query_entry"].tolist() == ["1abc", "2abd"]
+    assert "3xyz" not in set(shard["query_entry"])
+
+
+def test_empty_alignment_scatter_has_noop_branch(tmp_path):
+    assert tasks.scatter_collate_alignments(data_dir=tmp_path) == [[]]
+    tasks.collate_alignments(data_dir=tmp_path, partition=[])
 
 
 def test_ligand_cluster_scatter_requires_both_node_levels(tmp_path):
@@ -127,7 +164,10 @@ def test_empty_cached_cluster_chunk_is_a_noop(tmp_path, monkeypatch):
 
 def test_metaflow_graph_uses_canonical_ligand_archive_stage():
     repository = Path(__file__).resolve().parents[3]
-    flow = (repository / "flows" / "data_ingest.py").read_text()
+    flow_path = repository / "flows" / "data_ingest.py"
+    if not flow_path.is_file():
+        pytest.skip("Metaflow sources are not installed in wheel-only test layouts")
+    flow = flow_path.read_text()
 
     assert "def scatter_structure_qc" not in flow
     assert "self.pipeline.structure_qc" not in flow
@@ -136,6 +176,8 @@ def test_metaflow_graph_uses_canonical_ligand_archive_stage():
     assert "self.next(self.scatter_make_canonical_ligand_archives)" in flow
     assert "def make_canonical_ligand_archives" in flow
     assert "self.next(self.scatter_collate_partitions)" in flow
+    assert "self.next(self.scatter_collate_alignments)" in flow
+    assert "self.pipeline.collate_alignments(self.input)" in flow
     assert "self.next(self.scatter_make_components_and_communities)" in flow
     assert "self.next(self.finalize_index)" in flow
     assert "self.pipeline.finalize_index()" in flow
@@ -189,6 +231,8 @@ def test_v3_ingest_configs_use_current_schema_and_stages():
 
     repository = Path(__file__).resolve().parents[3]
     config_dir = repository / "flows" / "configs" / "v3"
+    if not config_dir.is_dir():
+        pytest.skip("ingest configs are not installed in wheel-only test layouts")
     ingest_configs = list(config_dir.glob("*.yaml"))
     assert ingest_configs
 
@@ -196,6 +240,8 @@ def test_v3_ingest_configs_use_current_schema_and_stages():
         cfg = get_config(config_file=path.as_posix(), cached=False)
         assert set(cfg.flow.run_specific_stages) <= set(tasks.STAGES)
         assert cfg.data.plinder_iteration == "v3"
+        if path.name == "make_protein_scores.yaml":
+            assert "collate_alignments" in cfg.flow.run_specific_stages
 
 
 def test_make_canonical_ligand_archives_only_archives_asu_sdfs(tmp_path):

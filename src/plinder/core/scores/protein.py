@@ -55,7 +55,11 @@ def query_protein_similarity(
         schema=PROTEIN_SIMILARITY_SCHEMA,
         dataset=dataset,
         filters=filters,
-        columns=columns,
+        # The V3 logical schema adds ligand identifiers, while released V2
+        # score Parquets do not contain them. With no explicit projection,
+        # select the physical dataset schema so ordinary V2 queries remain
+        # valid. Explicit columns are still checked against the logical schema.
+        columns=["*"] if not columns else columns,
     )
     if query is None:
         LOG.warning("try minimally passing filters=[('similarity', '>', 90)]")

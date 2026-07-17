@@ -36,6 +36,7 @@ STAGES = [
     "make_sub_dbs",
     "run_batch_searches",
     "make_batch_scores",
+    "collate_alignments",
     "collate_partitions",
     "make_components_and_communities",
     "finalize_index",
@@ -666,6 +667,71 @@ def make_batch_scores(
             scorer.get_score_df(
                 data_dir, pdb_id, search_db=search_db, overwrite=force_update
             )
+
+
+def scatter_collate_alignments(*, data_dir: Path) -> list[list[str]]:
+    """Return deterministic PDB two-character shards with mapped alignments."""
+    mapped_files = (data_dir / "dbs" / "subdbs").glob("*_*/mapped_aln/*.parquet")
+    shards = sorted({path.stem[-3:-1] for path in mapped_files})
+    # Preserve a join branch when there is no work, as required by Metaflow.
+    return [[shard] for shard in shards] or [[]]
+
+
+def collate_alignments(*, data_dir: Path, partition: list[str]) -> None:
+    """Collate mapped Foldseek/MMseqs hits into query-addressable shards."""
+    if not partition:
+        LOG.info("collate_alignments: no mapped alignments found")
+        return
+    [shard] = partition
+
+    import duckdb
+
+    con = duckdb.connect()
+    temp_dir = data_dir / "scratch" / "duckdb" / "alignments" / shard
+    temp_dir.mkdir(exist_ok=True, parents=True)
+    con.sql(f"set temp_directory='{temp_dir.as_posix()}';")
+    for search_db in ["holo", "apo", "pred"]:
+        for alignment_type in ["foldseek", "mmseqs"]:
+            source_dir = (
+                data_dir
+                / "dbs"
+                / "subdbs"
+                / f"{search_db}_{alignment_type}"
+                / "mapped_aln"
+            )
+            sources = sorted(
+                path
+                for path in source_dir.glob("*.parquet")
+                if path.stem[-3:-1] == shard
+            )
+            if not sources:
+                continue
+            target = (
+                data_dir
+                / "alignments"
+                / f"search_db={search_db}"
+                / f"alignment_type={alignment_type}"
+                / f"shard={shard}.parquet"
+            )
+            target.parent.mkdir(exist_ok=True, parents=True)
+            source_sql = ", ".join(f"'{path.as_posix()}'" for path in sources)
+            temporary = target.with_suffix(".tmp.parquet")
+            if temporary.is_file():
+                temporary.unlink()
+            con.sql(
+                dedent(
+                    f"""
+                    COPY (
+                        SELECT *
+                        FROM read_parquet([{source_sql}])
+                        ORDER BY query_entry, target_entry,
+                                 query_chain_mapped, target_chain_mapped, source
+                    ) TO '{temporary.as_posix()}'
+                    (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 100_000);
+                    """
+                )
+            )
+            temporary.replace(target)
 
 
 def scatter_collate_partitions() -> list[list[str]]:

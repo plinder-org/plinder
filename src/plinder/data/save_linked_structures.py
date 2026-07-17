@@ -314,7 +314,7 @@ def system_save_and_score_representative(
         scores = utils.ModelScores.from_model_files(
             link.id,
             save_folder / "superposed.cif",
-            list(reference_system.ligand_sdfs.values()),
+            [Path(path) for path in reference_system.ligand_sdfs.values()],
             reference_system,
             score_protein=True,
         ).summarize_scores()
