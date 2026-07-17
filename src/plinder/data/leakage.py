@@ -17,7 +17,6 @@ def get_workshop_splits() -> list[str]:
         f"{remote_dir}/v1/splits/v0/pdbbind_lp/pdbbind_lp.csv",
         f"{remote_dir}/v1/splits/v0/equibind/equibind.csv",
         f"{remote_dir}/v1/splits/v0/dockgen/dockgen.csv",
-        f"{remote_dir}/v1/workshop_split/ecod_split.csv",
         f"{remote_dir}/v1/workshop_split/plinder_v0_no_posbuster.csv",
         f"{remote_dir}/v1/workshop_split/time_split.csv",
     ]
@@ -77,7 +76,6 @@ def get_index_and_split_sets(
             missing
         )
     replace_keys = {
-        "ecod_split": "plinder-ECOD",
         "plinder_v0_no_posbuster": "plinder-v0",
         "time_split": "plinder-Time",
     }

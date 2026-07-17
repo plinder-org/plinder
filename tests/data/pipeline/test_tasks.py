@@ -37,6 +37,30 @@ def test_download_rcsb_files(tmp_path):
     io.rsync_rcsb = _orig_rsync_rcsb
 
 
+def test_alternative_downloads_use_only_approved_sources(tmp_path, monkeypatch):
+    calls = []
+    approved = {
+        "download_cofactors",
+        "download_seqres_data",
+        "download_components_cif",
+        "download_affinity_data",
+    }
+
+    for name in approved:
+        monkeypatch.setattr(io, name, lambda *, _name=name, **_: calls.append(_name))
+
+    tasks.download_alternative_datasets(
+        data_dir=tmp_path,
+        threads=1,
+        force_update=False,
+    )
+
+    assert set(calls) == approved
+    assert not hasattr(io, "download_ecod_data")
+    assert not hasattr(io, "download_panther_data")
+    assert not hasattr(io, "download_kinase_data")
+
+
 def test_final_structure_qc_is_not_a_pipeline_stage():
     assert "structure_qc" not in tasks.STAGES
 

@@ -114,8 +114,21 @@ def test_create_index_collates_per_entry_parquets(tmp_path, monkeypatch):
     second = tmp_path / "raw_entries" / "bb" / "2bbb.parquet"
     first.parent.mkdir(parents=True)
     second.parent.mkdir(parents=True)
-    pd.DataFrame({"system_id": ["1aaa__1__A"]}).to_parquet(first, index=False)
-    pd.DataFrame({"system_id": ["2bbb__1__B"]}).to_parquet(second, index=False)
+    pd.DataFrame(
+        {
+            "system_id": ["1aaa__1__A"],
+            "system_pocket_ECOD": ["e1aaaA1"],
+            "system_pocket_PANTHER": ["PTHR00001"],
+            "system_pocket_kinase_name": ["example kinase"],
+        }
+    ).to_parquet(first, index=False)
+    pd.DataFrame(
+        {
+            "system_id": ["2bbb__1__B"],
+            "ligand_is_kinase_inhibitor": [True],
+            "system_has_kinase_inhibitor": [True],
+        }
+    ).to_parquet(second, index=False)
     chain_columns = {
         "chain_asym_id": ["A"],
         "chain_auth_id": ["A"],
@@ -144,6 +157,11 @@ def test_create_index_collates_per_entry_parquets(tmp_path, monkeypatch):
     index = utils.create_index(data_dir=tmp_path, force_update=True)
 
     assert index["system_id"].tolist() == ["1aaa__1__A", "2bbb__1__B"]
+    assert not {
+        column
+        for column in index.columns
+        if any(marker in column.casefold() for marker in ("ecod", "panther", "kinase"))
+    }
     assert (tmp_path / "index" / "annotation_table.parquet").is_file()
     entry_chains = pd.read_parquet(tmp_path / "index" / "entry_chains.parquet")
     assert entry_chains["entry_pdb_id"].tolist() == ["1aaa", "2bbb"]

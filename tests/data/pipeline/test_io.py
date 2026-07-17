@@ -55,59 +55,6 @@ def test_download_cofactors_cached(tmp_path):
     assert "test" in obj
 
 
-def test_download_ecod_data_fetch(tmp_path, raw_ecod_data, monkeypatch):
-    monkeypatch.setattr(
-        "plinder.data.pipeline.io.requests.get", lambda _: _resp(text=raw_ecod_data)
-    )
-    ecod_path = io.download_ecod_data(data_dir=tmp_path)
-    assert len(pd.read_parquet(ecod_path).index)
-
-
-def test_download_ecod_data_cached(test_env, raw_ecod_path):
-    ecod_path = io.download_ecod_data(data_dir=test_env)
-    assert len(pd.read_parquet(ecod_path).index)
-
-
-def test_ecod(test_env, raw_ecod_path):
-    ecod_path = io.download_ecod_data(data_dir=test_env)
-    df = pd.read_parquet(ecod_path)
-    reference = "acid protease"
-    assert (
-        df.loc[df["domainid"] == "e1udzA1", "domain"].values[0].strip()
-        == reference.strip()
-    )
-    assert (
-        df.loc[(df["pdb"] == "1udz") & (df["chain"] == "A"), "domain"].values[0]
-        == reference.strip()
-    )
-
-
-def test_download_panther_data_fetch(tmp_path, monkeypatch, raw_panther_data):
-    monkeypatch.setattr(
-        "plinder.data.pipeline.io.requests.get",
-        lambda _: _resp(content=raw_panther_data),
-    )
-    panther_path = io.download_panther_data(data_dir=tmp_path)
-    assert panther_path.is_file()
-    assert len(pd.read_parquet(panther_path).index)
-
-
-def test_download_panther_data_cached(test_env, raw_panther_path):
-    panther_path = io.download_panther_data(data_dir=test_env)
-    assert len(pd.read_parquet(panther_path).index)
-
-
-def test_panther(test_env, raw_panther_path):
-    panther_path = io.download_panther_data(data_dir=test_env)
-    df = pd.read_parquet(panther_path)
-    reference = "E5R0L8"
-    assert df.loc[df["uniprotac"] == reference, "panther"].values[0] == "NOHIT"
-    assert (
-        df.loc[df["uniprotac"] == reference, "panther_class"].values[0]
-        == "Arthroderma_gypseum_ARTGP"
-    )
-
-
 def test_download_seqres_data_fetch(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "plinder.data.pipeline.io.requests.get", lambda _: _resp(content=b"foo")
@@ -123,66 +70,6 @@ def test_download_seqres_data_cached(tmp_path):
     raw_seqres_path.write_bytes(b"foo")
     raw_seqres_path = io.download_seqres_data(data_dir=tmp_path)
     assert raw_seqres_path.read_text() == "foo"
-
-
-def test_download_kinase_data_fetch(tmp_path, monkeypatch):
-    resp = _resp(
-        body=[
-            [
-                {
-                    "name": "foo",
-                    "HGNC": "foo",
-                    "family": "foo",
-                    "group": "foo",
-                    "kinase_class": "foo",
-                    "full_name": "foo",
-                    "uniprot": "foo",
-                    "kinase_ID": "2",
-                }
-            ],
-            [{"kinase_ID": "2"}],
-            [
-                {
-                    "pdb": "foob",
-                    "chain": "A",
-                    "structure_ID": "1",
-                    "kinase_ID": "2",
-                    "missing_atoms": "5",
-                    "missing_residues": "6",
-                    "rmsd1": "1.00",
-                    "rmsd2": "2.00",
-                    "resolution": "3.0",
-                    "quality_score": "9.2",
-                    "Grich_distance": "1.0",
-                    "Grich_rotation": "5.6",
-                    "Grich_angle": "23.4",
-                }
-            ],
-        ]
-    )
-    monkeypatch.setattr("plinder.data.pipeline.io.requests.get", lambda *_, **__: resp)
-    kinase_path = io.download_kinase_data(data_dir=tmp_path)
-    assert kinase_path.is_file()
-
-
-def test_kinase(test_env, all_kinase_paths):
-    kinase_path = io.download_kinase_data(data_dir=test_env)
-    df = pd.read_parquet(kinase_path)
-    assert df.loc[df["pdbid_chainid"] == "3mvh_A", "kinase"].values[0] == "AKT1"
-    assert df.loc[df["pdbid_chainid"] == "3mvh_A", "uniprot"].values[0] == "P31749"
-
-
-def test_kinase_ligand(test_env, all_kinase_paths):
-    kinase_path = io.download_kinase_data(data_dir=test_env)
-    df = pd.read_parquet(kinase_path.parent / "kinase_ligand_ccd_codes.parquet")
-    assert (
-        df.loc[df["PDB-code"] == "IHZ", "SMILES"].values[0]
-        == "FC(F)(F)c1cc(NC(=O)c2cc(Nc3cncc(c3)C(=O)N)c(cc2)C)ccc1"
-    )
-    assert (
-        df.loc[df["PDB-code"] == "IHZ", "InChIKey"].values[0]
-        == "SAAYRHKJHDIDPH-UHFFFAOYSA-N"
-    )
 
 
 def test_rsync_rcsb(tmp_path, monkeypatch):

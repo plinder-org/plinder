@@ -2,10 +2,8 @@
 # Distributed under the terms of the Apache License 2.0
 import json
 import shutil
-from io import StringIO
 from pathlib import Path
 
-import pandas as pd
 import pytest
 
 test_asset_fp = Path(__file__).absolute().parent / "test_data"
@@ -299,29 +297,6 @@ def cif_1atp():
 
 
 @pytest.fixture(scope="session")
-def ecod_mini():
-    ecod_str = """
-#ECOD version develop286
-#Domain list version 1.6
-#Grishin lab (http://prodata.swmed.edu/ecod)
-#uid	ecod_domain_id	manual_rep	f_id	pdb	chain	pdb_range	\
-seqid_range	unp_acc	arch_name	x_name	h_name	t_name	f_name	asm_status	ligand
-000000267	e1udzA1	MANUAL_REP	1.1.1.28	1udz	A	A:203-381	\
-A:4-182	P56690	beta barrels	"cradle loop barrel"	"RIFT-related"	\
-"acid protease"	tRNA-synt_1_2nd	NOT_DOMAIN_ASSEMBLY	NO_LIGANDS_4A
-000023407	e1udzB1	AUTO_NONREP	1.1.1.28	1udz	B	B:203-381	\
-B:4-182	P56690	beta barrels	"cradle loop barrel"	"RIFT-related"	\
-"acid protease"	tRNA-synt_1_2nd	NOT_DOMAIN_ASSEMBLY	NO_LIGANDS_4A
-"""
-    return StringIO(ecod_str)
-
-
-@pytest.fixture(scope="session")
-def mini_panther():
-    return test_asset_fp / "panther_classifications_mini.tar.gz"
-
-
-@pytest.fixture(scope="session")
 def mini_component_cif():
     return test_asset_fp / "components.cif"
 
@@ -368,24 +343,6 @@ def mmp_protein_fident_data():
 
 
 @pytest.fixture
-def raw_ecod_data():
-    # TODO: merge with ecod_mini
-    return """\
-#/data/ecod/database_versions/v291/ecod.develop291.domains.txt
-#ECOD version develop291
-#Domain list version 1.6
-#Grishin lab (http://prodata.swmed.edu/ecod)
-#uid	ecod_domain_id	manual_rep	t_id	pdb	chain	pdb_range	seqid_range	unp_acc	arch_name	x_name	h_name	t_name	f_name	asm_status	ligand
-000000267	e1udzA1	MANUAL_REP	1.1.1	1udz	A	A:203-381	A:4-182	P56690	beta barrels	"cradle loop barrel"	"RIFT-related"	"acid protease"	F_UNCLASSIFIED	NOT_DOMAIN_ASSEMBLY	NO_LIGANDS_4A
-000023408	e1ileA4	AUTO_NONREP	1.1.1	1ile	A	A:203-381	A:203-381	P56690	beta barrels	"cradle loop barrel"	"RIFT-related"	"acid protease"	F_UNCLASSIFIED	NOT_DOMAIN_ASSEMBLY	NO_LIGANDS_4A
-000023411	e1ue0B1	AUTO_NONREP	1.1.1	1ue0	B	B:203-381	B:4-182	P56690	beta barrels	"cradle loop barrel"	"RIFT-related"	"acid protease"	F_UNCLASSIFIED	NOT_DOMAIN_ASSEMBLY	NO_LIGANDS_4A
-000158260	e1wk8A1	AUTO_NONREP	1.1.1	1wk8	A	A:201-382	A:7-188	P56690	beta barrels	"cradle loop barrel"	"RIFT-related"	"acid protease"	F_UNCLASSIFIED	NOT_DOMAIN_ASSEMBLY	NO_LIGANDS_4A
-001842922	e5fofA1	AUTO_NONREP	1.1.1	5fof	A	A:258-340,A:363-567	A:29-103,A:126-330	B3L7I1	beta barrels	"cradle loop barrel"	"RIFT-related"	"acid protease"	F_UNCLASSIFIED	NOT_DOMAIN_ASSEMBLY	NO_LIGANDS_4A
-001842923	e5fofB1	AUTO_NONREP	1.1.1	5fof	B	B:258-340,B:363-567	B:29-103,B:126-330	B3L7I1	beta barrels	"cradle loop barrel"	"RIFT-related"	"acid protease"	F_UNCLASSIFIED	NOT_DOMAIN_ASSEMBLY	NO_LIGANDS_4A
-"""
-
-
-@pytest.fixture
 def test_env(tmp_path, monkeypatch):
     monkeypatch.setenv("PLINDER_MOUNT", tmp_path.as_posix())
     monkeypatch.setenv("PLINDER_BUCKET", "bucket")
@@ -395,52 +352,6 @@ def test_env(tmp_path, monkeypatch):
 
     config._config._clear()
     return tmp_path / "bucket" / "test" / "v0"
-
-
-@pytest.fixture
-def raw_ecod_path(test_env, raw_ecod_data):
-    raw_ecod_path = test_env / "dbs" / "ecod" / "ecod_raw.tsv"
-    raw_ecod_path.parent.mkdir(parents=True)
-    raw_ecod_path.write_text(raw_ecod_data)
-    return raw_ecod_path
-
-
-@pytest.fixture
-def raw_panther_data(mini_panther):
-    return mini_panther.read_bytes()
-
-
-@pytest.fixture
-def raw_panther_path(test_env, raw_panther_data):
-    raw_panther_path = test_env / "dbs" / "panther" / "panther_raw.tar.gz"
-    raw_panther_path.parent.mkdir(parents=True)
-    raw_panther_path.write_bytes(raw_panther_data)
-    return raw_panther_path
-
-
-@pytest.fixture
-def kinase_uniprotac():
-    df = pd.read_parquet(test_asset_fp / "kinase_uniprotac.parquet")
-    return df
-
-
-@pytest.fixture
-def kinase_ligand():
-    return pd.read_parquet(test_asset_fp / "kinase_ligand_ccd_codes.parquet")
-
-
-@pytest.fixture
-def all_kinase_paths(test_env, kinase_uniprotac, kinase_ligand):
-    kinase_info_path = test_env / "dbs" / "kinase" / "kinase_information.parquet"
-    kinase_ccd_path = test_env / "dbs" / "kinase" / "kinase_ligand_ccd_codes.parquet"
-    kinase_struc_path = test_env / "dbs" / "kinase" / "kinase_structures.parquet"
-    kinase_path = test_env / "dbs" / "kinase" / "kinase_uniprotac.parquet"
-    kinase_path.parent.mkdir(parents=True)
-    kinase_info_path.write_bytes(b"")
-    kinase_struc_path.write_bytes(b"")
-    kinase_uniprotac.to_parquet(kinase_path, index=False)
-    kinase_ligand.to_parquet(kinase_ccd_path, index=False)
-    return kinase_path
 
 
 @pytest.fixture
@@ -538,46 +449,6 @@ def affinity_path(test_env):
 
 
 @pytest.fixture
-def ecod_path(test_env, raw_ecod_path):
-    # TODO : combine with ecod_mini and raw_ecod_path for consistency of test data
-    ecod_path = test_env / "dbs" / "ecod" / "ecod.parquet"
-    ecod = pd.read_fwf(
-        StringIO(
-            """\
-         pdb chain domainid          domain pdb_from pdb_to
-786775  2y4i     C  e2y4iC1  Protein kinase       37    277
-786776  2y4i     C  e2y4iC1  Protein kinase      307    381
-795072  2y4i     B  e2y4iB1  Protein kinase      653    931"""
-        )
-    )
-    ecod.to_parquet(ecod_path, index=False)
-    return ecod_path
-
-
-@pytest.fixture
-def panther_path(test_env, raw_panther_path):
-    # TODO : combine with raw_panther_path for consistency of test data
-    panther_path = test_env / "dbs" / "panther" / "panther.parquet"
-    panther = pd.read_fwf(
-        StringIO(
-            """\
-           uniprotac          panther                  panther_class
-3399199       K9UFQ1  PTHR43464:SF101     Chamaesiphon_minutus_CHAP6
-2534477   A0A8I6S536    PTHR15954:SF4        Cimex_lectularius_CIMLE
-514536    A0A3Q1J8D7   PTHR24248:SF25       Anabas_testudineus_ANATE
-5222120       G8BJ17  PTHR23073:SF162     Candida_parapsilosis_CANPC
-16087460      L0FTL5   PTHR13355:SF24  Echinicola_vietnamensis_ECHVK"""
-        )
-    )
-    panther["shard"] = panther["uniprotac"].str[-1]
-    for i in range(10):
-        panther[panther["shard"] == str(i)].to_parquet(
-            panther_path.parent / f"panther_{i}.parquet"
-        )
-    return panther_path
-
-
-@pytest.fixture
 def seqres_path(test_env):
     seqres_path = test_env / "dbs" / "seqres" / "pdb_seqres.txt.gz"
     fixture_path = test_asset_fp / "pdb_seqres.txt.gz"
@@ -589,10 +460,7 @@ def seqres_path(test_env):
 @pytest.fixture
 def mock_alternative_datasets(
     test_env,
-    ecod_path,
-    panther_path,
     seqres_path,
-    all_kinase_paths,
     components_path,
     cofactors_path,
     affinity_path,
@@ -688,12 +556,6 @@ def mock_ccd_lookups(monkeypatch):
         "plinder.data.utils.annotations.ligand_utils.ARTIFACTS",
         set(data["artifacts"]),
     )
-    monkeypatch.setattr(
-        "plinder.data.utils.annotations.ligand_utils.KINASE_INHIBITORS",
-        set(data["kinase_inhibitors"]),
-    )
-
-
 @pytest.fixture(scope="session")
 def system_1a3b():
     return "1a3b__1__1.B__1.D"

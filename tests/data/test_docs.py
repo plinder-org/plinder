@@ -35,7 +35,15 @@ def test_make_column_descriptions(read_plinder_mount, tmp_path, monkeypatch):
     legacy_posebusters = [
         column for column in df.columns if column.startswith("ligand_posebusters_")
     ]
-    df = df.drop(columns=legacy_posebusters)
+    removed_enrichment_columns = [
+        "ligand_is_kinase_inhibitor",
+        "system_has_kinase_inhibitor",
+        "system_pocket_ECOD",
+        "system_pocket_ECOD_t_name",
+        "system_pocket_PANTHER",
+        "system_pocket_kinase_name",
+    ]
+    df = df.drop(columns=legacy_posebusters + removed_enrichment_columns)
 
     schema = docs.get_all_column_descriptions(plindex=df)
     columns = schema["Name"].to_list()

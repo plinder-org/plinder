@@ -20,7 +20,6 @@ system_num_covalent_ligands	int	Number of covalent ligands of the system
 system_proper_num_covalent_ligands	int	Number of covalent ligands of the system
 system_id	str	ID of the system
 system_type	str	Type of the system (one of: holo, ion, artifact)
-system_has_kinase_inhibitor	bool	Whether the system has a kinase inhibitor
 system_has_binding_affinity	bool	Whether any ligand in the system has a binding affinity from BindingDB
 system_num_protein_chains	int	Number of interacting protein chains of the system
 system_proper_num_protein_chains	int	Number of interacting protein chains of the system excluding ions and artifacts

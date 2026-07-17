@@ -281,7 +281,6 @@ LIST_OF_CCD_SYNONYMS = None
 CCD_SYNONYMS_DICT = None
 # instantiate artifact list once and reuse variable
 ARTIFACTS = None
-KINASE_INHIBITORS = None
 BINDING_AFFINITY = None
 
 
@@ -426,17 +425,6 @@ def parse_artifacts() -> set[str]:
     # add missed synonyms
     artifacts = add_missed_synonyms(artifacts)
     return artifacts
-
-
-@cache
-def parse_kinase_inhibitors(data_dir: Path) -> set[str]:
-    """Load set of CCD codes for known kinase inhibitors."""
-    from plinder.data.pipeline.io import download_kinase_data
-
-    kinase_ligand_path = download_kinase_data(data_dir=data_dir)
-    kinase_ligand_path = kinase_ligand_path.with_name("kinase_ligand_ccd_codes.parquet")
-    kinase_ligand_df = pd.read_parquet(kinase_ligand_path)
-    return set(kinase_ligand_df["PDB-code"])
 
 
 @cache
@@ -942,7 +930,6 @@ class Ligand(DocBaseModel):
                 ARTIFACTS, \
                 LIST_OF_CCD_SYNONYMS, \
                 CCD_SYNONYMS_DICT, \
-                KINASE_INHIBITORS, \
                 BINDING_AFFINITY
             if LIST_OF_CCD_SYNONYMS is None or CCD_SYNONYMS_DICT is None:
                 LIST_OF_CCD_SYNONYMS, CCD_SYNONYMS_DICT = get_ccd_synonyms(data_dir)
@@ -950,8 +937,6 @@ class Ligand(DocBaseModel):
                 COFACTORS = parse_cofactors(data_dir)
             if ARTIFACTS is None:
                 ARTIFACTS = parse_artifacts()
-            if KINASE_INHIBITORS is None:
-                KINASE_INHIBITORS = parse_kinase_inhibitors(data_dir)
             if BINDING_AFFINITY is None:
                 try:
                     BINDING_AFFINITY = get_binding_affinity(data_dir)
@@ -1408,17 +1393,6 @@ class Ligand(DocBaseModel):
                     self.interactions[chain][residue]
                 )
         return interactions_counter
-
-    @cached_property
-    def is_kinase_inhibitor(self) -> bool:
-        """
-        Check if ligand is a kinase inhibitor.
-        """
-        global KINASE_INHIBITORS
-        if KINASE_INHIBITORS is None:
-            data_dir = Path(get_config().data.plinder_dir)
-            KINASE_INHIBITORS = parse_kinase_inhibitors(data_dir)
-        return any(c in KINASE_INHIBITORS for c in self.ccd_code.split("-"))
 
     @cached_property
     def binding_affinity(self) -> float | None:

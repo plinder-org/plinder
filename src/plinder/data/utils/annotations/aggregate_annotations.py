@@ -19,7 +19,6 @@ from pydantic import BeforeValidator, Field
 from rdkit import RDLogger
 
 from plinder.core.structure.atoms import is_hydrogen_isotope
-from plinder.core.utils.config import get_config
 from plinder.core.utils.log import setup_logger
 from plinder.data.utils.annotations.cif_utils import (
     apply_struct_conn_bonds,
@@ -51,9 +50,6 @@ from plinder.data.utils.annotations.utils import DocBaseModel
 
 LOG = setup_logger(__name__)
 RDLogger.DisableLog("rdApp.*")
-ECOD_DATA = None
-
-
 SymmetryMateContacts = ty.Annotated[
     dict[tuple[str, int], dict[tuple[str, int], dict[int, set[int]]]],
     BeforeValidator(validate_chain_residue),
@@ -247,13 +243,6 @@ class System(DocBaseModel):
             return "ion"
         else:
             return "artifact"
-
-    @cached_property
-    def has_kinase_inhibitor(self) -> bool:
-        """
-        Whether the system has a kinase inhibitor
-        """
-        return any(l.is_kinase_inhibitor for l in self.ligands)
 
     @cached_property
     def has_binding_affinity(self) -> bool:
@@ -674,12 +663,6 @@ class System(DocBaseModel):
         )
 
     def get_pocket_domains(self, chains_dict: dict[str, Chain]) -> dict[str, str]:
-        global ECOD_DATA
-        if ECOD_DATA is None:
-            data_dir = Path(get_config().data.plinder_dir)
-            ECOD_DATA = pd.read_parquet(data_dir / "dbs" / "ecod" / "ecod.parquet")
-        ecod_df = ECOD_DATA[ECOD_DATA["pdb"] == self.pdb_id]
-        ecod_mapping = dict(zip(ecod_df["domainid"], ecod_df["domain"]))
         pocket_mapping: dict[str, dict[str, int]] = defaultdict(
             lambda: defaultdict(int)
         )
@@ -689,10 +672,6 @@ class System(DocBaseModel):
         ) in self.pocket_residues.items():
             neighboring_chain = neighboring_chain.split(".")[-1]
             neighboring_residues_set = {int(i) for i in neighboring_residues_list}
-            neighboring_residue_numbers_dict = {
-                int(chains_dict[neighboring_chain].residues[i].auth_number): i
-                for i in neighboring_residues_list
-            }
             for mapping_name in chains_dict[neighboring_chain].mappings:
                 if mapping_name == "BIRD":
                     continue
@@ -705,22 +684,9 @@ class System(DocBaseModel):
                         if i is not None
                     }
                     unrolled_v_2 = {j for i in unrolled_v for j in i}
-                    if mapping_name == "ECOD":
-                        intersection = set(
-                            neighboring_residue_numbers_dict[i]
-                            for i in neighboring_residue_numbers_dict
-                            if i in unrolled_v_2
-                        )
-                    else:
-                        intersection = neighboring_residues_set.intersection(
-                            unrolled_v_2
-                        )
+                    intersection = neighboring_residues_set.intersection(unrolled_v_2)
                     if len(intersection) > 0:
                         pocket_mapping[mapping_name][domain] += len(intersection)
-                        if mapping_name == "ECOD":
-                            pocket_mapping[f"{mapping_name}_t_name"][
-                                ecod_mapping[domain]
-                            ] += len(intersection)
         result = {}
         for k, values in pocket_mapping.items():
             result[k] = sorted(values.items(), key=lambda x: x[1], reverse=True)[0][0]
@@ -1037,10 +1003,6 @@ class Entry(DocBaseModel):
             data_dir = save_folder.parent.parent
         for chain in per_chain:
             entry.chains[chain].mappings = per_chain[chain]
-        if data_dir is not None:
-            entry.add_ecod()
-            entry.add_panther(data_dir / "dbs" / "panther")
-            entry.add_kinase(data_dir / "dbs" / "kinase" / "kinase_uniprotac.parquet")
         entry.ligand_like_chains = detect_ligand_chains(entry, min_polymer_size)
         if save_folder is not None:
             canonical_ligand_dir = save_folder / entry.pdb_id / "ligand_files"
@@ -1611,75 +1573,6 @@ class Entry(DocBaseModel):
             LOG.error(
                 f"set_validation: Error setting validation for {self.pdb_id}: {e}"
             )
-
-    def add_ecod(self) -> None:
-        """
-        Add ECOD annotations to chains
-        """
-        global ECOD_DATA
-        if ECOD_DATA is None:
-            data_dir = Path(get_config().data.plinder_dir)
-            ECOD_DATA = pd.read_parquet(data_dir / "dbs" / "ecod" / "ecod.parquet")
-        ecod_df = ECOD_DATA[ECOD_DATA["pdb"] == self.pdb_id]
-        if not len(ecod_df):
-            return
-        for chain_id, chain in self.chains.items():
-            ecod_df_chain = ecod_df[ecod_df["chain"] == chain.auth_id]
-            if not len(ecod_df_chain):
-                continue
-            mappings: dict[str, set[tuple[str, str]]] = defaultdict(set)
-            for row in ecod_df_chain.T.to_dict().values():
-                mappings[row["domainid"]].add((row["pdb_from"], row["pdb_to"]))
-            self.chains[chain_id].mappings["ECOD"] = {
-                k: list(v) for k, v in mappings.items()
-            }
-
-    def add_panther(self, panther_data_dir: Path) -> None:
-        """
-        Add panther annotations to chains
-        """
-        dfs = {}
-        for chain_id, chain in self.chains.items():
-            uniprots = chain.mappings.get("UniProt", {})
-            mappings: dict[str, set[tuple[str, str]]] = defaultdict(set)
-            for uniprot in uniprots:
-                shard = uniprot[-1]
-                if shard not in dfs:
-                    dfs[shard] = pd.read_parquet(
-                        panther_data_dir / f"panther_{shard}.parquet"
-                    ).set_index("uniprotac")
-                if uniprot in dfs[shard].index:
-                    mappings[dfs[shard].loc[uniprot]["panther"]] |= set(
-                        uniprots[uniprot]  # type: ignore
-                    )
-            if len(mappings):
-                self.chains[chain_id].mappings["PANTHER"] = {
-                    k: list(v) for k, v in mappings.items()
-                }
-
-    def add_kinase(self, kinase_data_path: Path) -> None:
-        """
-        Add kinase annotations to chains
-        """
-        kinase_df = pd.read_parquet(kinase_data_path)
-        kinase_df = kinase_df[kinase_df["pdb"] == self.pdb_id]
-        if not len(kinase_df):
-            return
-        for chain_id, chain in self.chains.items():
-            kinase_df_chain = kinase_df[kinase_df["chain"] == chain.auth_id]
-            if not len(kinase_df_chain):
-                continue
-            mappings: dict[str, set[tuple[str, str]]] = defaultdict(set)
-            uniprots = chain.mappings.get("UniProt", {})
-            for row in kinase_df_chain.T.to_dict().values():
-                uniprot = uniprots.get(row["uniprot"])
-                if uniprot is not None:
-                    mappings[row["kinase"]] |= set(uniprot)  # type: ignore
-            if len(mappings):
-                self.chains[chain_id].mappings["kinase_name"] = {
-                    k: list(v) for k, v in mappings.items()
-                }
-
 
 def document(output_dir: Path) -> None:
     """

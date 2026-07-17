@@ -374,8 +374,6 @@ def test_canonical_ligand_saving_and_system_reconstruction(
     entry_dir = mock_alternative_datasets("2y4i")
     system_tag = "2y4i__1__1.B__1.E_1.F"
     entry = Entry.from_cif_file(cif_2y4i, save_folder=entry_dir)
-    for chain in entry.chains.values():
-        assert len(chain.mappings["ECOD"])
 
     canonical_ligand_dir = entry_dir / "2y4i" / "ligand_files"
     assert {path.name for path in canonical_ligand_dir.glob("*.sdf")} >= {

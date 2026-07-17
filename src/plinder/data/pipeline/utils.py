@@ -28,6 +28,20 @@ if TYPE_CHECKING:
 
 LOG = setup_logger(__name__)
 T = TypeVar("T")
+RETIRED_ENRICHMENT_MARKERS = ("ecod", "panther", "kinase")
+
+
+def _drop_retired_enrichment_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Remove annotations sourced from retired third-party enrichments."""
+    retired = [
+        column
+        for column in df.columns
+        if any(marker in column.casefold() for marker in RETIRED_ENRICHMENT_MARKERS)
+    ]
+    if retired:
+        LOG.info(f"dropping retired enrichment columns: {sorted(retired)}")
+        return df.drop(columns=retired)
+    return df
 
 
 def timeit(func: Callable[..., T]) -> Callable[..., T]:
@@ -597,7 +611,7 @@ def create_index(*, data_dir: Path, force_update: bool = False) -> pd.DataFrame:
         dfs = []
         annotation_parts = data_dir / "raw_entries"
         for i, path in enumerate(annotation_parts.glob("*/*.parquet")):
-            df = pd.read_parquet(path)
+            df = _drop_retired_enrichment_columns(pd.read_parquet(path))
             LOG.info(f"{i} {path.name} shape={df.shape}")
             if not df.empty:
                 dfs.append(df)
@@ -609,25 +623,11 @@ def create_index(*, data_dir: Path, force_update: bool = False) -> pd.DataFrame:
             pd.DataFrame().to_parquet(index, index=False)
             return pd.read_parquet(index)
         df = pd.concat(dfs).reset_index(drop=True)
-        # TODO: remove this rename kludge after annotations are rerun
-        df.rename(
-            columns={
-                f"{key}_Kinase name": f"{key}_kinase_name"
-                for key in [
-                    "ligand_interacting_ligand_chains",
-                    "ligand_neighboring_ligand_chains",
-                    "ligand_protein_chains",
-                    "system_ligand_chains",
-                    "system_pocket",
-                    "system_protein_chains",
-                ]
-            },
-            inplace=True,
-        )
         df.to_parquet(index, index=False)
     else:
         df = pd.read_parquet(index)
     old_columns = set(df.columns)
+    df = _drop_retired_enrichment_columns(df)
     df = add_aggregated_columns(index=df)
     update = old_columns != set(df.columns)
     if update or force_update:

@@ -33,14 +33,10 @@ VALIDATION_OUTLIER_KEYS = [
 ]
 MAPPING_NAMES = [
     "CATH",
-    "ECOD",
-    "ECOD_t_name",
     "Pfam",
     "SCOP2",
     "SCOP2B",
-    "PANTHER",
     "UniProt",
-    "kinase_name",
 ]
 CHAIN_TYPES = [
     "system_protein_chains",

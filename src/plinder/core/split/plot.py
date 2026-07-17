@@ -106,7 +106,6 @@ class SplitPropertiesPlotter:
     )
     domain_columns: list[str] = field(
         default_factory=lambda: [
-            "system_pocket_ECOD_t_name",
             "system_pocket_CATH",
             "system_pocket_SCOP2B",
             "system_pocket_Pfam",

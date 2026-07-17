@@ -51,10 +51,6 @@ def generate_table(description_dir: Path, output_html_path: Path) -> None:
             column_descriptions_in_file = pd.read_csv(f, sep="\t")
         column_descriptions.append(column_descriptions_in_file)
     column_descriptions = pd.concat(column_descriptions, ignore_index=True)
-#     # TODO: Remove as soon as wrong column names are fixed
-#     column_descriptions = column_descriptions[
-#         ~column_descriptions["Name"].str.contains("Kinase")
-#     ]
 
     # TODO: update release/version after next dataset regeneration
     annotation_table = _get_annotation_table("2024-06", "v2", Path(CACHE_FILE))

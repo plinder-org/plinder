@@ -154,10 +154,7 @@ def download_alternative_datasets(
         futures: list[Future[Any]] = [
             executor.submit(io.download_cofactors, **kws),
             executor.submit(io.download_seqres_data, **kws),
-            executor.submit(io.download_kinase_data, **kws),
-            executor.submit(io.download_panther_data, **kws),
             executor.submit(io.download_components_cif, **kws),
-            executor.submit(io.download_ecod_data, **kws),
             executor.submit(io.download_affinity_data, **kws),
         ]
         wait(futures, return_when=ALL_COMPLETED)

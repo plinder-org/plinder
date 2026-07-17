@@ -1,109 +1,10 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
-import tarfile
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pandas as pd
-
-
-def parse_pdb_range(pdb_range: str) -> tuple[str, str, str]:
-    """
-    Parse the PDB ranges from the raw ECOD dataset.
-    Default to ".", "0", "0" if it's unparseable.
-
-    Parameters
-    ----------
-    pdb_range : str
-        "-"-delimited range values
-
-    Returns
-    -------
-    chain, start, end : tuple[str, str, str]
-    """
-    if ":" not in pdb_range:
-        return ".", "0", "0"
-    try:
-        chain, range_str = pdb_range.split(":")
-    except ValueError:
-        return ".", "0", "0"
-    ranges = range_str.split("-")
-    # single range value
-    if len(ranges) == 1:
-        fr = to = ranges[0]
-    # two positive range values
-    elif len(ranges) == 2:
-        fr, to = ranges
-    # one negative range value
-    elif len(ranges) == 3:
-        if not ranges[1]:
-            fr, to = ranges[0], f"-{ranges[-1]}"
-        else:
-            fr, to = f"-{ranges[1]}", ranges[-1]
-    # two negative range values
-    elif len(ranges) == 4:
-        fr, to = f"-{ranges[1]}", f"-{ranges[-1]}"
-    else:
-        raise Exception(f"Could not parse: {pdb_range}")
-    return chain, fr, to
-
-
-def transform_ecod_data(*, raw_ecod_path: Path) -> pd.DataFrame:
-    """
-    Convert the raw ECOD data to a dataset more
-    amenable to the plinder annotation data.
-
-    Parameters
-    ----------
-    df : pd.DataFrame
-        the raw ECOD dataset
-
-    Returns
-    -------
-    transformed : pd.DataFrame
-        the transformed ECOD dataset
-    """
-    df = pd.read_csv(raw_ecod_path, sep="\t", header=1, skiprows=3)
-    domains = []
-    for pdb, chain, pdb_ranges, ecod_domain_id, t_name in zip(
-        df["pdb"],
-        df["chain"],
-        df["pdb_range"],
-        df["ecod_domain_id"],
-        df["t_name"],
-    ):
-        for pdb_range in pdb_ranges.split(","):
-            chain, fr, to = parse_pdb_range(pdb_range)
-            domains.append((pdb, chain, ecod_domain_id, t_name, fr, to))
-    cols = ["pdb", "chain", "domainid", "domain", "pdb_from", "pdb_to"]
-    return pd.DataFrame(domains, columns=cols)
-
-
-def transform_panther_data(*, raw_panther_path: Path) -> pd.DataFrame:
-    """
-    Unpack the tarball archive and collect the
-    contained files to a single parquet file.
-
-    Parameters
-    ----------
-    raw_panther_path : Path
-        location of panther tarball
-
-    Returns
-    -------
-    transformed : pd.DataFrame
-        the collated panther dataset
-    """
-    panther_dir = raw_panther_path.parent
-    with tarfile.open(raw_panther_path) as arch:
-        arch.extractall(panther_dir)
-    dfs = []
-    names = ["uniprotac", "panther"]
-    for path in (panther_dir / "panther_classifications").rglob("*"):
-        dfs.append(pd.read_csv(path, delimiter="\t", header=None, names=names))
-        dfs[-1]["panther_class"] = path.name
-    return pd.concat(dfs).drop_duplicates()
 
 
 def transform_bindingdb_affinity_data(*, raw_affinity_path: Path) -> pd.DataFrame:

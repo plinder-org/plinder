@@ -16,7 +16,6 @@ from pathlib import Path
 from subprocess import check_output
 from typing import Any, Literal, Optional, TypeVar
 
-import pandas as pd
 import requests
 from tqdm import tqdm
 
@@ -194,90 +193,6 @@ def download_components_cif(
 
 
 @retry
-def download_ecod_data(
-    *,
-    data_dir: Path,
-    url: str = "http://prodata.swmed.edu/ecod/distributions/ecod.latest.domains.txt",
-    force_update: bool = False,
-) -> Path:
-    """
-    Download ECOD data.
-
-    Parameters
-    ----------
-    data_dir : Path
-        the root plinder dir
-    url : str
-        URL to fetch data from
-    force_update : bool, default=False
-        if True, re-download data
-
-    Returns
-    -------
-    ecod_path : Path
-        path to downloaded ECOD data
-    """
-    raw_ecod_path = data_dir / "dbs" / "ecod" / "ecod_raw.tsv"
-    raw_ecod_path.parent.mkdir(parents=True, exist_ok=True)
-    if not raw_ecod_path.is_file() or force_update:
-        LOG.info(f"download_ecod_data: {url}")
-        resp = requests.get(url)
-        resp.raise_for_status()
-        raw_ecod_path.write_text(resp.text)
-    ecod_path = data_dir / "dbs" / "ecod" / "ecod.parquet"
-    if not ecod_path.is_file() or force_update:
-        LOG.info(f"download_ecod_data: transforming {raw_ecod_path}")
-        ecod = transform.transform_ecod_data(raw_ecod_path=raw_ecod_path)
-        ecod.to_parquet(ecod_path, index=False)
-    return ecod_path
-
-
-@retry
-def download_panther_data(
-    *,
-    data_dir: Path,
-    url: str = "http://data.pantherdb.org/ftp/generic_mapping/panther_classifications.tar.gz",
-    force_update: bool = False,
-) -> Path:
-    """
-    Download panther data. Also
-    partitions panther by trailing character
-    in uniprot code.
-
-    Parameters
-    ----------
-    data_dir : Path
-        the root plinder dir
-    url : str
-        URL to fetch data from
-    force_update : bool, default=False
-        if True, re-download data
-
-    Returns
-    -------
-    panther_path : Path
-        path to downloaded panther data
-    """
-    raw_panther_path = data_dir / "dbs" / "panther" / "panther_raw.tar.gz"
-    raw_panther_path.parent.mkdir(parents=True, exist_ok=True)
-    if not raw_panther_path.is_file() or force_update:
-        LOG.info(f"download_panther_data: {url}")
-        resp = requests.get(url)
-        resp.raise_for_status()
-        raw_panther_path.write_bytes(resp.content)
-    panther_path = data_dir / "dbs" / "panther" / "panther.parquet"
-    if not panther_path.is_file() or force_update:
-        LOG.info(f"download_panther_data: transforming {raw_panther_path}")
-        panther = transform.transform_panther_data(raw_panther_path=raw_panther_path)
-        panther["shard"] = panther["uniprotac"].str[-1]
-        panther.to_parquet(raw_panther_path.parent / "panther.parquet", index=False)
-        for shard, grp in panther.groupby("shard"):
-            panther_shard = data_dir / "dbs" / "panther" / f"panther_{shard}.parquet"
-            grp.to_parquet(panther_shard, index=False)
-    return panther_path
-
-
-@retry
 def download_seqres_data(
     *,
     data_dir: Path,
@@ -310,103 +225,6 @@ def download_seqres_data(
         with seqres_path.open("wb") as f:
             f.write(resp.content)
     return seqres_path
-
-
-@retry
-def download_kinase_data(
-    *,
-    data_dir: Path,
-    url: str = "https://klifs.net/api/",
-    force_update: bool = False,
-) -> Path:
-    """
-    Download kinase data.
-
-    Parameters
-    ----------
-    data_dir : Path
-        the root plinder dir
-    url : str
-        URL to fetch data from
-    force_update : bool, default=False
-        if True, re-download data
-
-    Returns
-    -------
-    kinase_uniprotac_path : Path
-        location of downloaded kinase data
-    """
-    kinase_info_path = data_dir / "dbs" / "kinase" / "kinase_information.parquet"
-    if not kinase_info_path.parent.exists() or force_update:
-        LOG.info(f"download_kinase_data: data_dir={data_dir}")
-        kinase_info_path.parent.mkdir(exist_ok=True, parents=True)
-    if not kinase_info_path.is_file() or force_update:
-        LOG.info(f"download_kinase_data: {url}/kinase_information")
-        resp = requests.get(f"{url}/kinase_information")
-        resp.raise_for_status()
-        kinase_info = pd.DataFrame(resp.json(), dtype=str)
-        kinase_info.to_parquet(kinase_info_path, index=False)
-    kinase_ligand_path = data_dir / "dbs" / "kinase" / "kinase_ligand_ccd_codes.parquet"
-    if not kinase_ligand_path.is_file() or force_update:
-        LOG.info(f"download_kinase_data: {url}/ligands_list")
-        resp = requests.get(f"{url}/ligands_list")
-        resp.raise_for_status()
-        kinase_ligand = pd.DataFrame(resp.json(), dtype=str)
-        kinase_ligand.to_parquet(kinase_ligand_path, index=False)
-    kinase_struc_path = kinase_info_path.parent / "kinase_structures.parquet"
-    if not kinase_struc_path.is_file() or force_update:
-        kinase_info = pd.read_parquet(kinase_info_path)
-        outputs = []
-        LOG.info(f"download_kinase_data: {url}/structures_list iteratively...")
-        for kid in kinase_info["kinase_ID"].unique():
-            resp = requests.get(f"{url}/structures_list", params={"kinase_ID": kid})
-            if 200 <= resp.status_code < 400:
-                outputs.extend(resp.json())
-        kinase_struc = pd.DataFrame(outputs, dtype=str).drop_duplicates()
-        kinase_struc.to_parquet(kinase_struc_path, index=False)
-    kinase_uniprotac_path = kinase_info_path.parent / "kinase_uniprotac.parquet"
-    if not kinase_uniprotac_path.is_file() or force_update:
-        LOG.info("download_kinase_data: merging information and structure")
-        kinase_info = pd.read_parquet(kinase_info_path)
-        kinase_struc = pd.read_parquet(kinase_struc_path)
-        df = pd.merge(
-            kinase_struc,
-            kinase_info[
-                [
-                    "kinase_ID",
-                    "name",
-                    "HGNC",
-                    "family",
-                    "group",
-                    "kinase_class",
-                    "full_name",
-                    "uniprot",
-                ]
-            ],
-            on="kinase_ID",
-            how="left",
-        )
-        df["pdb"] = df["pdb"].astype(str).map(str.lower)
-        df["pdbid_chainid"] = df["pdb"].str.cat(df["chain"], sep="_")
-        for int_col in [
-            "structure_ID",
-            "kinase_ID",
-            "missing_atoms",
-            "missing_residues",
-        ]:
-            df[int_col] = df[int_col].astype(int)
-        for float_col in [
-            "rmsd1",
-            "rmsd2",
-            "resolution",
-            "quality_score",
-            "Grich_distance",
-            "Grich_rotation",
-            "Grich_angle",
-        ]:
-            df[float_col] = df[float_col].astype(float)
-        df.to_parquet(kinase_uniprotac_path, index=False)
-    return kinase_uniprotac_path
 
 
 @retry

@@ -21,19 +21,14 @@ end-to-end pipeline through task wrappers in `plinder.data.pipeline.tasks`.
     - `ingest/{two_char_code}/{full_pdb_id}/{full_pdb_id}-enrich.cif.gz`
     - `reports/{two_char_code}/{pdb_id}/{pdb_id}_validation.xml.gz`
 
-- `tasks.download_alternative_datasets`: download all the alternative datasets used to enrich `plinder`
+- `tasks.download_alternative_datasets`: download the approved datasets used to enrich `plinder`
   - This is a task that is called once but reaches out to numerous external REST APIs
   - This could be threaded and arguably the alphafold sync could be its own task
   - Side effects include writing the following files:
     - `dbs/alphafold/AF-{uniprod_id}-F1-model_v4.cif`
     - `dbs/cofactors/cofactors.json`
     - `dbs/components/components.parquet`
-    - `dbs/ecod/ecod.parquet`
-    - `dbs/kinase/kinase_information.parquet`
-    - `dbs/kinase/kinase_ligand_ccd_codes.parquet`
-    - `dbs/kinase/kinase_uniprotac.parquet`
-    - `dbs/kinase/kinase_structures.parquet`
-    - `dbs/panther/panther_{i}.parquet`
+    - `dbs/affinity/affinity.json`
     - `dbs/seqres/pdb_seqres.txt.gz`
 
 ## Database creation
@@ -55,12 +50,10 @@ is already heavily distributed and it would add complexity to the DAG.
 - `tasks.make_entries`: creates the `raw_entries` data
   - This is a distributed task that is called in parallel for chunks of PDB IDs
   - It uses the `cif.gz` and `xml.gz` data in `Entry.from_cif_file`
-  - It additionally uses the following alternative datasets:
-    - `ECOD`
-    - `Panther`
-    - `Kinase`
+  - It additionally uses the following approved annotation datasets:
     - `Cofactors`
     - `Components`
+    - `BindingDB`
   - Side effects include writing the following files:
     - `raw_entries/{two_char_code}/{pdb_id}.parquet`
     - `raw_entries/{two_char_code}/{pdb_id}/entry_chains.parquet`
