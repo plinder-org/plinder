@@ -2,6 +2,7 @@ from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
 import numpy as np
+import pandas as pd
 import pytest
 from plinder.core import index
 
@@ -16,6 +17,26 @@ from plinder.core import index
 )
 def test_plinder_system(system_id, read_plinder_mount):
     index.PlinderSystem(system_id=system_id).system
+
+
+def test_plinder_system_receptor_type():
+    system = index.PlinderSystem.__new__(index.PlinderSystem)
+    system.system_id = "1abc__1__1.A_1.N__1.L"
+    system._system = pd.DataFrame(
+        {
+            "system_receptor_type": ["protein+dna"],
+            "system_protein_chains_asym_id": [["1.A", "1.N"]],
+        }
+    )
+    system._entry_chains = pd.DataFrame(
+        {
+            "chain_asym_id": ["A", "N"],
+            "chain_receptor_type": ["protein", "dna"],
+        }
+    )
+
+    assert system.receptor_type == "protein+dna"
+    assert system.receptor_chain_types == {"1.A": "protein", "1.N": "dna"}
 
 
 def test_plinder_system_system_files(read_plinder_mount):

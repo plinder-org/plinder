@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import functools
+from collections.abc import Iterable
 from functools import cached_property
 from typing import Any
 
@@ -81,6 +82,30 @@ def _is_polynucleotide(chain_type_str: str) -> bool:
         "polyribonucleotide" in chain_type_str.lower()
         or "polydeoxyribonucleotide" in chain_type_str.lower()
     )
+
+
+def get_receptor_type(chain_types: Iterable[str]) -> str:
+    """Return a deterministic receptor-composition label for CIF chain types."""
+    components: set[str] = set()
+    for chain_type in chain_types:
+        normalized = chain_type.lower()
+        if "polypeptide" in normalized:
+            components.add("protein")
+        if "polydeoxyribonucleotide" in normalized:
+            components.add("dna")
+        if "polyribonucleotide" in normalized:
+            components.add("rna")
+        if not any(
+            marker in normalized
+            for marker in (
+                "polypeptide",
+                "polydeoxyribonucleotide",
+                "polyribonucleotide",
+            )
+        ):
+            components.add("other")
+    order = ("protein", "dna", "rna", "other")
+    return "+".join(component for component in order if component in components)
 
 
 def _is_polysaccharide(chain_type_str: str) -> bool:

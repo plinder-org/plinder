@@ -3,7 +3,8 @@ entry_pdb_id	str	PDB entry identifier
 chain_asym_id	str	Chain asymmetric ID
 chain_auth_id	str	Chain author ID
 chain_entity_id	str	Chain entity ID
-chain_type	str	CIF polypeptide type
+chain_type	str	Raw CIF receptor polymer type
+chain_receptor_type	str	Normalized receptor polymer type: protein, dna, rna, or dna+rna
 chain_length	int	SEQRES length
 chain_num_unresolved_residues	int	SEQRES length minus resolved residue count
 chain_is_holo	bool	Whether the chain participates in a holo receptor or is excluded from the apo partition

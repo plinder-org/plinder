@@ -176,6 +176,128 @@ def test_entry_views_keep_ligand_pockets_separate() -> None:
     assert system.pocket_residue_number_to_index == {"1.A": {10: 9, 20: 19, 30: 29}}
 
 
+def test_entry_views_exclude_na_receptors_from_scoring(tmp_path) -> None:
+    rows = pd.DataFrame(
+        [
+            {
+                "entry_pdb_id": "1abc",
+                "system_id": "1abc__1__1.A_1.N__1.L",
+                "system_type": "holo",
+                "system_receptor_type": "protein+dna",
+                "system_protein_chains_asym_id": ["1.A", "1.N"],
+                "system_protein_chains_auth_id": ["A", "N"],
+                "system_protein_chains_length": [100, 20],
+                "system_proper_num_pocket_residues": 2,
+                "system_proper_num_interactions": 2,
+                "system_proper_num_unique_interactions": 2,
+                "ligand_id": "1abc__1__1.L",
+                "ligand_instance_chain": "1.L",
+                "ligand_asym_id": "L",
+                "ligand_is_proper": True,
+                "ligand_protein_chains_asym_id": ["1.A", "1.N"],
+                "ligand_num_pocket_residues": 2,
+                "ligand_num_interactions": 2,
+                "ligand_num_unique_interactions": 2,
+                "ligand_neighboring_residues": ["1.A_10_9_10", "1.N_2_1_2"],
+                "ligand_interactions": [
+                    "1.A_10_type:hydrogen_bonds",
+                    "1.N_2_type:hydrogen_bonds",
+                ],
+            }
+        ]
+    )
+    entry_chains = pd.DataFrame(
+        {
+            "entry_pdb_id": ["1abc"],
+            "chain_asym_id": ["A"],
+            "chain_auth_id": ["A"],
+            "chain_entity_id": ["1"],
+            "chain_type": ["polypeptide(L)"],
+            "chain_receptor_type": ["protein"],
+            "chain_length": [100],
+            "chain_num_unresolved_residues": [0],
+            "chain_is_holo": [True],
+            "chain_uniprot_ids": [["P12345"]],
+        }
+    )
+
+    with pytest.raises(ValueError, match="entry_chains is required for 1abc"):
+        entry_views_from_df(rows)
+
+    entry = entry_views_from_df(rows, entry_chains=entry_chains)["1abc"]
+    system = next(iter(entry.systems.values()))
+    ligand = next(iter(system.ligands.values()))
+    scorer = Scorer(
+        entries={"1abc": entry},
+        source_to_full_db_file={},
+        db_dir=tmp_path / "db",
+        scores_dir=tmp_path / "scores",
+    )
+
+    assert system.receptor_type == "protein+dna"
+    assert system.protein_chains_asym_id == ["1.A"]
+    assert system.pocket_residue_number_to_index == {"1.A": {10: 9}}
+    assert system.proper_num_pocket_residues == 1
+    assert ligand.protein_chains_asym_id == ["1.A"]
+    assert ligand.pocket_residue_number_to_index == {"1.A": {10: 9}}
+    assert ligand.num_interactions == 1
+    assert scorer.get_protein_chain_length("1abc", ["1.A", "1.N"]) == 100
+    assert entry.chains_for_alignment("holo", "mmseqs") == ["1abc_A"]
+
+
+def test_na_only_entry_has_no_similarity_chains() -> None:
+    rows = pd.DataFrame(
+        [
+            {
+                "entry_pdb_id": "1dna",
+                "system_id": "1dna__1__1.N__1.L",
+                "system_type": "holo",
+                "system_receptor_type": "dna",
+                "system_protein_chains_asym_id": ["1.N"],
+                "system_protein_chains_auth_id": ["N"],
+                "system_protein_chains_length": [20],
+                "system_proper_num_pocket_residues": 1,
+                "system_proper_num_interactions": 1,
+                "system_proper_num_unique_interactions": 1,
+                "ligand_id": "1dna__1__1.L",
+                "ligand_instance_chain": "1.L",
+                "ligand_asym_id": "L",
+                "ligand_is_proper": True,
+                "ligand_protein_chains_asym_id": ["1.N"],
+                "ligand_num_pocket_residues": 1,
+                "ligand_num_interactions": 1,
+                "ligand_num_unique_interactions": 1,
+                "ligand_neighboring_residues": ["1.N_2_1_2"],
+                "ligand_interactions": ["1.N_2_type:hydrogen_bonds"],
+            }
+        ]
+    )
+    entry_chains = pd.DataFrame(
+        {
+            "entry_pdb_id": ["1dna"],
+            "chain_asym_id": ["N"],
+            "chain_auth_id": ["N"],
+            "chain_entity_id": ["1"],
+            "chain_type": ["polydeoxyribonucleotide"],
+            "chain_receptor_type": ["dna"],
+            "chain_length": [20],
+            "chain_num_unresolved_residues": [0],
+            "chain_is_holo": [True],
+            "chain_uniprot_ids": [[]],
+        }
+    )
+
+    entry = entry_views_from_df(rows, entry_chains=entry_chains)["1dna"]
+    system = next(iter(entry.systems.values()))
+
+    assert system.receptor_type == "dna"
+    assert system.protein_chains_asym_id == []
+    assert system.proper_num_pocket_residues == 0
+    assert entry.chains["N"].receptor_type == "dna"
+    assert entry.chains_for_alignment("holo", "foldseek") == []
+    assert entry.chains_for_alignment("holo", "mmseqs") == []
+
+
 def _ligand(
     ligand_id: str,
     instance_chain: str,

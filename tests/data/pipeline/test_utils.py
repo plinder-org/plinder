@@ -31,11 +31,17 @@ def test_entry_exists(expect, tmp_path):
     path = tmp_path / "aa" / "aaaa.parquet"
     path.parent.mkdir(parents=True)
     if expect:
-        path.write_text("")
+        pd.DataFrame({"system_receptor_type": ["protein"]}).to_parquet(
+            path, index=False
+        )
         chain_path = tmp_path / "aa" / "aaaa" / "entry_chains.parquet"
         chain_path.parent.mkdir()
-        chain_path.write_text("")
-        (chain_path.parent / "entry_source.parquet").write_text("")
+        pd.DataFrame({"chain_receptor_type": ["protein"]}).to_parquet(
+            chain_path, index=False
+        )
+        pd.DataFrame({"entry_pdb_id": ["aaaa"]}).to_parquet(
+            chain_path.parent / "entry_source.parquet", index=False
+        )
     assert (
         utils.entry_exists(
             entry_dir=tmp_path,
@@ -60,6 +66,24 @@ def test_entry_exists_requires_source_sidecar(tmp_path):
     sidecar_dir = tmp_path / "aa" / "aaaa"
     sidecar_dir.mkdir()
     (sidecar_dir / "entry_chains.parquet").touch()
+
+    assert not utils.entry_exists(entry_dir=tmp_path, pdb_id="aaaa")
+
+
+def test_entry_exists_invalidates_pre_receptor_type_cache(tmp_path):
+    annotation = tmp_path / "aa" / "aaaa.parquet"
+    annotation.parent.mkdir(parents=True)
+    pd.DataFrame({"system_id": ["aaaa__1__1.A__1.L"]}).to_parquet(
+        annotation, index=False
+    )
+    sidecar_dir = tmp_path / "aa" / "aaaa"
+    sidecar_dir.mkdir()
+    pd.DataFrame({"chain_type": ["polypeptide(L)"]}).to_parquet(
+        sidecar_dir / "entry_chains.parquet", index=False
+    )
+    pd.DataFrame({"entry_pdb_id": ["aaaa"]}).to_parquet(
+        sidecar_dir / "entry_source.parquet", index=False
+    )
 
     assert not utils.entry_exists(entry_dir=tmp_path, pdb_id="aaaa")
 
@@ -134,6 +158,7 @@ def test_create_index_collates_per_entry_parquets(tmp_path, monkeypatch):
         "chain_auth_id": ["A"],
         "chain_entity_id": ["1"],
         "chain_type": ["polypeptide(L)"],
+        "chain_receptor_type": ["protein"],
         "chain_length": [100],
         "chain_num_unresolved_residues": [0],
         "chain_is_holo": [True],
@@ -168,6 +193,28 @@ def test_create_index_collates_per_entry_parquets(tmp_path, monkeypatch):
     entry_sources = pd.read_parquet(tmp_path / "index" / "entry_sources.parquet")
     assert entry_sources["entry_pdb_id"].tolist() == ["1aaa", "2bbb"]
     assert entry_sources["source_mmcif_major_revision"].tolist() == [1, 1]
+
+
+def test_create_entry_chain_index_handles_empty_sidecars(tmp_path):
+    sidecar = tmp_path / "raw_entries" / "dn" / "1dna" / "entry_chains.parquet"
+    sidecar.parent.mkdir(parents=True)
+    pd.DataFrame().to_parquet(sidecar, index=False)
+
+    chains = utils.create_entry_chain_index(data_dir=tmp_path, force_update=True)
+
+    assert chains.empty
+    assert chains.columns.tolist() == [
+        "entry_pdb_id",
+        "chain_asym_id",
+        "chain_auth_id",
+        "chain_entity_id",
+        "chain_type",
+        "chain_receptor_type",
+        "chain_length",
+        "chain_num_unresolved_residues",
+        "chain_is_holo",
+        "chain_uniprot_ids",
+    ]
 
 
 def test_finalize_index_creates_nonredundant_data_from_local_clusters(tmp_path):

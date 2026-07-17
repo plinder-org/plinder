@@ -12,6 +12,7 @@ from plinder.data.utils.annotations.interaction_utils import get_covalent_connec
 from plinder.data.utils.annotations.interface_gap import annotate_interface_gaps
 from plinder.data.utils.annotations.ligand_utils import sort_ccd_codes
 from plinder.data.utils.annotations.mmpdb_utils import add_mmp_clusters_to_data
+from plinder.data.utils.annotations.protein_utils import get_receptor_type
 from plinder.data.utils.annotations.save_utils import (
     SystemReconstructionOptions,
     SystemReconstructionOutputs,
@@ -22,6 +23,23 @@ from rdkit import Chem
 
 def test_ccd_name_sorter():
     assert sort_ccd_codes({"G", "G25", "CPG", "5GP"}) == ["CPG", "G25", "G", "5GP"]
+
+
+@pytest.mark.parametrize(
+    "chain_types, expected",
+    [
+        (["polypeptide(L)"], "protein"),
+        (["polydeoxyribonucleotide"], "dna"),
+        (["polyribonucleotide"], "rna"),
+        (["polypeptide(L)", "polyribonucleotide"], "protein+rna"),
+        (
+            ["polydeoxyribonucleotide/polyribonucleotide hybrid"],
+            "dna+rna",
+        ),
+    ],
+)
+def test_receptor_type_classification(chain_types, expected):
+    assert get_receptor_type(chain_types) == expected
 
 
 def test_chain_from_cif_data_nucleotides(cif_8ufz):
@@ -925,6 +943,21 @@ def test_mmp(mini_mmp_index, mini_mmp_data_annotation, mini_mmp_cluster_folder):
 
     # Number of unique congeneric ids is equal to number of unique constants
     assert len(mmp_data.congeneric_id.unique()) == len(mmp_data.CONSTANT.unique())
+
+
+def test_mixed_receptor_type_is_written_to_annotation(cif_8ufz):
+    entry = Entry.from_cif_file(cif_8ufz)
+
+    assert entry.systems
+    assert {system.receptor_type for system in entry.systems.values()} == {
+        "protein+dna"
+    }
+    assert set(entry.to_df()["system_receptor_type"]) == {"protein+dna"}
+    chain_types = entry.chains_to_df().set_index("chain_asym_id")[
+        "chain_receptor_type"
+    ]
+    assert {chain_types[chain] for chain in ["A", "B", "C", "D"]} == {"dna"}
+    assert {chain_types[chain] for chain in ["E", "F"]} == {"protein"}
 
 
 def test_ligand_fix_to_valid_imatinib(cif_2hyy, mock_alternative_datasets):

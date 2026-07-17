@@ -34,6 +34,19 @@ class ChainView:
     def is_polypeptide(self) -> bool:
         return "polypeptide" in self.chain_type.lower()
 
+    @property
+    def receptor_type(self) -> str:
+        """Normalized receptor polymer type derived from the CIF chain type."""
+        normalized = self.chain_type.lower()
+        components = []
+        if "polypeptide" in normalized:
+            components.append("protein")
+        if "polydeoxyribonucleotide" in normalized:
+            components.append("dna")
+        if "polyribonucleotide" in normalized:
+            components.append("rna")
+        return "+".join(components) or "other"
+
 
 @dataclass
 class LigandView:
@@ -45,7 +58,7 @@ class LigandView:
     instance_chain: str
     asym_id: str
     is_proper: bool
-    protein_chains_asym_id: list[str]
+    protein_chains_asym_id: list[str]  # protein-only receptor instance chains
     num_pocket_residues: int
     num_interactions: int
     num_unique_interactions: int
@@ -64,10 +77,11 @@ class SystemView:
     id: str
     pdb_id: str
     system_type: str
-    protein_chains_asym_id: list[str]  # instance_chain strings, e.g. ["1.A", "1.B"]
+    protein_chains_asym_id: list[str]  # protein-only, e.g. ["1.A", "1.B"]
     proper_num_pocket_residues: int
     proper_num_interactions: int
     proper_num_unique_interactions: int
+    receptor_type: str = "protein"
     # instance_chain -> {residue_number: residue_index}
     pocket_residue_number_to_index: dict[str, dict[int, int]] = field(
         default_factory=dict
@@ -227,7 +241,27 @@ def _entry_chains_from_rows(
     return chains, author_to_asym
 
 
-def _make_ligand_view(row: pd.Series, *, pdb_id: str, system_id: str) -> LigandView:
+def _protein_instance_chains(
+    instance_chains: Iterable[str], chains: dict[str, ChainView]
+) -> list[str]:
+    """Filter receptor instance chains to polypeptides known by the chain index."""
+    result = []
+    for instance_chain in instance_chains:
+        value = str(instance_chain)
+        asym_id = value.split(".", maxsplit=1)[-1]
+        chain = chains.get(asym_id)
+        if chain is not None and chain.is_polypeptide:
+            result.append(value)
+    return sorted(set(result))
+
+
+def _make_ligand_view(
+    row: pd.Series,
+    *,
+    pdb_id: str,
+    system_id: str,
+    chains: dict[str, ChainView],
+) -> LigandView:
     """Build a ligand view from one published-index row."""
     instance_chain = str(row["ligand_instance_chain"])
     asym_id = str(row["ligand_asym_id"])
@@ -236,12 +270,29 @@ def _make_ligand_view(row: pd.Series, *, pdb_id: str, system_id: str) -> LigandV
     interactions: dict[str, dict[int, Counter[str]]] = defaultdict(
         lambda: defaultdict(Counter)
     )
+    protein_chains = _protein_instance_chains(
+        _as_list(row["ligand_protein_chains_asym_id"]), chains
+    )
+    protein_chain_set = set(protein_chains)
     for value in _as_list(row["ligand_neighboring_residues"]):
         inst, rnum, ridx = _parse_neighboring_residue(value)
-        pocket_n2i[inst][rnum] = ridx
+        if inst in protein_chain_set:
+            pocket_n2i[inst][rnum] = ridx
     for value in _as_list(row["ligand_interactions"]):
         inst, rnum, itype = _parse_interaction(value)
-        interactions[inst][rnum][itype] += 1
+        if inst in protein_chain_set:
+            interactions[inst][rnum][itype] += 1
+    num_pocket_residues = sum(len(residues) for residues in pocket_n2i.values())
+    num_interactions = sum(
+        sum(counter.values())
+        for residues in interactions.values()
+        for counter in residues.values()
+    )
+    num_unique_interactions = sum(
+        len(counter)
+        for residues in interactions.values()
+        for counter in residues.values()
+    )
     return LigandView(
         id=ligand_id,
         pdb_id=pdb_id,
@@ -249,10 +300,10 @@ def _make_ligand_view(row: pd.Series, *, pdb_id: str, system_id: str) -> LigandV
         instance_chain=instance_chain,
         asym_id=asym_id,
         is_proper=bool(row["ligand_is_proper"]),
-        protein_chains_asym_id=_as_list(row["ligand_protein_chains_asym_id"]),
-        num_pocket_residues=int(row["ligand_num_pocket_residues"]),
-        num_interactions=int(row["ligand_num_interactions"]),
-        num_unique_interactions=int(row["ligand_num_unique_interactions"]),
+        protein_chains_asym_id=protein_chains,
+        num_pocket_residues=num_pocket_residues,
+        num_interactions=num_interactions,
+        num_unique_interactions=num_unique_interactions,
         pocket_residue_number_to_index={k: dict(v) for k, v in pocket_n2i.items()},
         interactions_counter={
             k: {r: Counter(c) for r, c in v.items()} for k, v in interactions.items()
@@ -268,8 +319,11 @@ def entry_views_from_df(
     """Build :class:`EntryView` objects from any DataFrame shaped like the
     published annotation parquet — i.e. one row per
     ``(entry, system, ligand)`` triple. Pass the normalized one-row-per-chain
-    table to retain apo and predicted alignment metadata. Without it, only
-    holo chains present on system rows can be reconstructed.
+    table to retain receptor types and apo/predicted alignment metadata.
+    Without it, only protein-only holo chains present on system rows can be
+    reconstructed. Annotation-only mixed or nucleic-acid receptors cannot be
+    reconstructed because the system-level receptor type cannot be assigned
+    to individual chains unambiguously.
 
     Source-agnostic: works equally on the published parquet read via
     :func:`load_entry_views`, a locally-built parquet, or a freshly
@@ -282,42 +336,83 @@ def entry_views_from_df(
         if entry_chains is not None:
             chain_rows = entry_chains[entry_chains["entry_pdb_id"] == pdb_id]
             if chain_rows.empty:
-                raise ValueError(f"No entry chain metadata found for {pdb_id}")
+                receptor_types = {
+                    str(value)
+                    for value in entry_rows.get(
+                        "system_receptor_type", pd.Series(dtype=str)
+                    )
+                }
+                if not receptor_types or any(
+                    "protein" in receptor_type.split("+")
+                    for receptor_type in receptor_types
+                ):
+                    raise ValueError(f"No protein chain metadata found for {pdb_id}")
+        else:
+            receptor_types = {
+                str(value)
+                for value in entry_rows.get(
+                    "system_receptor_type", pd.Series(dtype=str)
+                )
+                if pd.notna(value)
+            }
+            unsupported_types = sorted(
+                receptor_type
+                for receptor_type in receptor_types
+                if receptor_type != "protein"
+            )
+            if unsupported_types:
+                raise ValueError(
+                    f"entry_chains is required for {pdb_id}: annotation-only "
+                    "annotations cannot assign receptor chain types for "
+                    f"{unsupported_types}"
+                )
         chains, author_to_asym = _entry_chains_from_rows(entry_rows, chain_rows)
 
         systems: dict[str, SystemView] = {}
         for system_id, sys_rows in entry_rows.groupby("system_id", sort=False):
             first = sys_rows.iloc[0]
-            proper_rows = sys_rows[sys_rows["ligand_is_proper"].astype(bool)]
             ligands: dict[str, LigandView] = {}
             for _, row in sys_rows.iterrows():
                 ligand = _make_ligand_view(
-                    row, pdb_id=str(pdb_id), system_id=str(system_id)
+                    row,
+                    pdb_id=str(pdb_id),
+                    system_id=str(system_id),
+                    chains=chains,
                 )
                 ligands[ligand.instance_chain] = ligand
             pocket_n2i: dict[str, dict[int, int]] = defaultdict(dict)
             interactions: dict[str, dict[int, Counter[str]]] = defaultdict(
                 lambda: defaultdict(Counter)
             )
-            for _, lig in proper_rows.iterrows():
-                for s in _as_list(lig["ligand_neighboring_residues"]):
-                    inst, rnum, ridx = _parse_neighboring_residue(s)
-                    pocket_n2i[inst][rnum] = ridx
-                for s in _as_list(lig["ligand_interactions"]):
-                    inst, rnum, itype = _parse_interaction(s)
-                    interactions[inst][rnum][itype] += 1
+            proper_ligands = [ligand for ligand in ligands.values() if ligand.is_proper]
+            for ligand in proper_ligands:
+                for instance_chain, pocket_residues in (
+                    ligand.pocket_residue_number_to_index.items()
+                ):
+                    pocket_n2i[instance_chain].update(pocket_residues)
+                for (
+                    instance_chain,
+                    interaction_residues,
+                ) in ligand.interactions_counter.items():
+                    for residue_number, counter in interaction_residues.items():
+                        interactions[instance_chain][residue_number].update(counter)
             systems[system_id] = SystemView(
                 id=system_id,
                 pdb_id=str(pdb_id),
                 system_type=first["system_type"],
-                protein_chains_asym_id=_as_list(first["system_protein_chains_asym_id"]),
-                proper_num_pocket_residues=int(
-                    first["system_proper_num_pocket_residues"]
+                protein_chains_asym_id=_protein_instance_chains(
+                    _as_list(first["system_protein_chains_asym_id"]), chains
                 ),
-                proper_num_interactions=int(first["system_proper_num_interactions"]),
-                proper_num_unique_interactions=int(
-                    first["system_proper_num_unique_interactions"]
+                proper_num_pocket_residues=sum(
+                    len(residues) for residues in pocket_n2i.values()
                 ),
+                proper_num_interactions=sum(
+                    ligand.num_interactions for ligand in proper_ligands
+                ),
+                proper_num_unique_interactions=sum(
+                    ligand.num_unique_interactions for ligand in proper_ligands
+                ),
+                receptor_type=str(first.get("system_receptor_type", "protein")),
                 pocket_residue_number_to_index={
                     k: dict(v) for k, v in pocket_n2i.items()
                 },

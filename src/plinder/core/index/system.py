@@ -85,6 +85,7 @@ class PlinderSystem:
         self.reconstruction_options = reconstruction_options
         self._entry: pd.DataFrame | None = None
         self._system: pd.DataFrame | None = None
+        self._entry_chains: pd.DataFrame | None = None
         self._archive: Path | None = None
         self._reconstructed: ReconstructedSystem | None = None
         self._canonical_ligand_folder: Path | None = None
@@ -133,6 +134,60 @@ class PlinderSystem:
             if self._system.empty:
                 raise ValueError(f"system_id={self.system_id} not found in the index")
         return self._system
+
+    @property
+    def receptor_type(self) -> str:
+        """Return the receptor polymer composition recorded during ingestion."""
+        column = "system_receptor_type"
+        if column not in self.system.columns:
+            raise ValueError(
+                f"{column} is unavailable for {self.system_id}; "
+                "this release predates receptor-type annotation"
+            )
+        values = self.system[column].dropna().astype(str).unique()
+        if len(values) != 1 or not values[0]:
+            raise ValueError(
+                f"Expected one receptor type for {self.system_id}, got {values.tolist()}"
+            )
+        return str(values[0])
+
+    @property
+    def receptor_chain_types(self) -> dict[str, str]:
+        """Map each system receptor instance chain to its polymer type."""
+        if self._entry_chains is None:
+            cfg = get_config()
+            path = cpl.get_plinder_path(
+                rel=f"{cfg.data.index}/{cfg.data.entry_chain_file}"
+            )
+            pdb_id = self.system_id.split("__", maxsplit=1)[0]
+            self._entry_chains = pd.read_parquet(
+                path,
+                filters=[("entry_pdb_id", "==", pdb_id)],
+            )
+        required = {"chain_asym_id", "chain_receptor_type"}
+        missing_columns = required.difference(self._entry_chains.columns)
+        if missing_columns:
+            raise ValueError(
+                "Entry-chain receptor types are unavailable; missing columns "
+                f"{sorted(missing_columns)}"
+            )
+        asym_to_type = dict(
+            zip(
+                self._entry_chains["chain_asym_id"].astype(str),
+                self._entry_chains["chain_receptor_type"].astype(str),
+            )
+        )
+        instance_chains = list(self.system.iloc[0]["system_protein_chains_asym_id"])
+        result = {}
+        for instance_chain in instance_chains:
+            asym_id = str(instance_chain).split(".", maxsplit=1)[-1]
+            if asym_id not in asym_to_type:
+                raise ValueError(
+                    f"No receptor-chain type found for {instance_chain} in "
+                    f"{self.system_id}"
+                )
+            result[str(instance_chain)] = asym_to_type[asym_id]
+        return result
 
     def _legacy_archive(self) -> Path | None:
         """Return an already-local V2 archive without fetching one."""

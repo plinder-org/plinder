@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any, Callable, Literal, Optional, TypeVar
 from zipfile import ZIP_DEFLATED, ZipFile
 
 import pandas as pd
+import pyarrow.parquet as pq
 from omegaconf import DictConfig
 
 from plinder.core.structure import smallmols_similarity
@@ -84,7 +85,17 @@ def entry_exists(*, entry_dir: Path, pdb_id: str) -> bool:
     output.parent.mkdir(exist_ok=True, parents=True)
     entry_chains = entry_dir / two_char_code / pdb_id / "entry_chains.parquet"
     entry_source = entry_dir / two_char_code / pdb_id / "entry_source.parquet"
-    return output.is_file() and entry_chains.is_file() and entry_source.is_file()
+    if not (output.is_file() and entry_chains.is_file() and entry_source.is_file()):
+        return False
+    try:
+        if "system_receptor_type" not in pq.read_schema(output).names:
+            return False
+        if "chain_receptor_type" not in pq.read_schema(entry_chains).names:
+            return False
+    except Exception:
+        LOG.info(f"invalidating stale entry annotation cache for {pdb_id}")
+        return False
+    return True
 
 
 def get_db_sources(
@@ -555,16 +566,14 @@ def create_entry_chain_index(
         "chain_auth_id",
         "chain_entity_id",
         "chain_type",
+        "chain_receptor_type",
         "chain_length",
         "chain_num_unresolved_residues",
         "chain_is_holo",
         "chain_uniprot_ids",
     ]
-    chains = (
-        pd.concat(frames, ignore_index=True)
-        if frames
-        else pd.DataFrame(columns=columns)
-    )
+    chains = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    chains = chains.reindex(columns=columns)
     chains.to_parquet(output, index=False)
     return chains
 

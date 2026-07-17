@@ -853,6 +853,12 @@ class Scorer:
         protein_chain_mapper = ""
         if query_protein_chains is None:
             query_protein_chains = query_system.protein_chains_asym_id
+        query_protein_chains = self.get_protein_receptor_chains(
+            query_system.pdb_id, query_protein_chains
+        )
+        query_system_length = self.get_protein_chain_length(
+            query_system.pdb_id, query_protein_chains
+        )
         s_matrix = np.zeros(
             (
                 len(query_protein_chains),
@@ -943,23 +949,76 @@ class Scorer:
         _SimilarityScoreDictType,
         _SimilarityScoreDictType,
     ]:
+        query_pocket, query_interactions, pocket_length, pli_length, unique_length = (
+            self._protein_only_pocket_data(
+                query_system.pdb_id,
+                query_system.protein_chains_asym_id,
+                query_system.pocket_residue_number_to_index,
+                query_system.interactions_counter,
+            )
+        )
+        target_pocket = None
+        target_interactions = None
+        if target_system is not None:
+            target_pocket, target_interactions, _, _, _ = (
+                self._protein_only_pocket_data(
+                    target_system.pdb_id,
+                    target_system.protein_chains_asym_id,
+                    target_system.pocket_residue_number_to_index,
+                    target_system.interactions_counter,
+                )
+            )
         return self._get_pocket_pli_scores(
             alns=alns,
-            query_pocket=query_system.pocket_residue_number_to_index,
-            query_interactions=query_system.interactions_counter,
-            pocket_length=query_system.proper_num_pocket_residues,
-            pli_length=query_system.proper_num_interactions,
-            pli_unique_length=query_system.proper_num_unique_interactions,
-            target_pocket=(
-                target_system.pocket_residue_number_to_index
-                if target_system is not None
-                else None
-            ),
-            target_interactions=(
-                target_system.interactions_counter
-                if target_system is not None
-                else None
-            ),
+            query_pocket=query_pocket,
+            query_interactions=query_interactions,
+            pocket_length=pocket_length,
+            pli_length=pli_length,
+            pli_unique_length=unique_length,
+            target_pocket=target_pocket,
+            target_interactions=target_interactions,
+        )
+
+    def _protein_only_pocket_data(
+        self,
+        pdb_id: str,
+        receptor_chains: list[str],
+        pocket: dict[str, dict[int, int]],
+        interactions: dict[str, dict[int, Counter[str]]],
+    ) -> tuple[
+        dict[str, dict[int, int]],
+        dict[str, dict[int, Counter[str]]],
+        int,
+        int,
+        int,
+    ]:
+        """Restrict pocket and interaction data to polypeptide receptors."""
+        allowed = set(self.get_protein_receptor_chains(pdb_id, receptor_chains))
+        protein_pocket = {
+            chain: residues for chain, residues in pocket.items() if chain in allowed
+        }
+        protein_interactions = {
+            chain: residues
+            for chain, residues in interactions.items()
+            if chain in allowed
+        }
+        pocket_length = sum(len(residues) for residues in protein_pocket.values())
+        interaction_length = sum(
+            sum(counter.values())
+            for residues in protein_interactions.values()
+            for counter in residues.values()
+        )
+        unique_interaction_length = sum(
+            len(counter)
+            for residues in protein_interactions.values()
+            for counter in residues.values()
+        )
+        return (
+            protein_pocket,
+            protein_interactions,
+            pocket_length,
+            interaction_length,
+            unique_interaction_length,
         )
 
     def _get_pocket_pli_scores(
@@ -1037,15 +1096,31 @@ class Scorer:
         _SimilarityScoreDictType,
     ]:
         """Calculate directed pocket and PLI coverage for one ligand pair."""
+        query_pocket, query_interactions, pocket_length, pli_length, unique_length = (
+            self._protein_only_pocket_data(
+                query_ligand.pdb_id,
+                query_ligand.protein_chains_asym_id,
+                query_ligand.pocket_residue_number_to_index,
+                query_ligand.interactions_counter,
+            )
+        )
+        target_pocket, target_interactions, _, _, _ = (
+            self._protein_only_pocket_data(
+                target_ligand.pdb_id,
+                target_ligand.protein_chains_asym_id,
+                target_ligand.pocket_residue_number_to_index,
+                target_ligand.interactions_counter,
+            )
+        )
         return self._get_pocket_pli_scores(
             alns=alns,
-            query_pocket=query_ligand.pocket_residue_number_to_index,
-            query_interactions=query_ligand.interactions_counter,
-            pocket_length=query_ligand.num_pocket_residues,
-            pli_length=query_ligand.num_interactions,
-            pli_unique_length=query_ligand.num_unique_interactions,
-            target_pocket=target_ligand.pocket_residue_number_to_index,
-            target_interactions=target_ligand.interactions_counter,
+            query_pocket=query_pocket,
+            query_interactions=query_interactions,
+            pocket_length=pocket_length,
+            pli_length=pli_length,
+            pli_unique_length=unique_length,
+            target_pocket=target_pocket,
+            target_interactions=target_interactions,
         )
 
     def get_ligand_pocket_scores(
@@ -1054,22 +1129,49 @@ class Scorer:
         query_ligand: LigandView,
     ) -> _SimilarityScoreDictType:
         """Calculate directed pocket identity for a ligand against apo/pred."""
+        query_pocket, query_interactions, pocket_length, pli_length, unique_length = (
+            self._protein_only_pocket_data(
+                query_ligand.pdb_id,
+                query_ligand.protein_chains_asym_id,
+                query_ligand.pocket_residue_number_to_index,
+                query_ligand.interactions_counter,
+            )
+        )
         return self._get_pocket_pli_scores(
             alns=alns,
-            query_pocket=query_ligand.pocket_residue_number_to_index,
-            query_interactions=query_ligand.interactions_counter,
-            pocket_length=query_ligand.num_pocket_residues,
-            pli_length=query_ligand.num_interactions,
-            pli_unique_length=query_ligand.num_unique_interactions,
+            query_pocket=query_pocket,
+            query_interactions=query_interactions,
+            pocket_length=pocket_length,
+            pli_length=pli_length,
+            pli_unique_length=unique_length,
             target_pocket=None,
             target_interactions=None,
         )[0]
+
+    def get_protein_receptor_chains(
+        self, pdb_id: str, receptor_chains: list[str]
+    ) -> list[str]:
+        """Return only polypeptide instance chains from a receptor collection."""
+        entry = self.entries.get(pdb_id)
+        if entry is None:
+            # LigandView instances constructed outside an EntryView are expected
+            # to already carry the protein-only scoring representation.
+            return sorted(set(receptor_chains))
+        result = []
+        for instance_chain in receptor_chains:
+            asym_id = instance_chain.split(".", maxsplit=1)[-1]
+            chain = entry.chains.get(asym_id)
+            if chain is not None and chain.is_polypeptide:
+                result.append(instance_chain)
+        return sorted(set(result))
 
     def get_protein_chain_length(self, pdb_id: str, protein_chains: list[str]) -> int:
         """Return the total SEQRES length for an instance-chain collection."""
         return sum(
             self.entries[pdb_id].chains[instance_chain.split(".", 1)[1]].length
-            for instance_chain in protein_chains
+            for instance_chain in self.get_protein_receptor_chains(
+                pdb_id, protein_chains
+            )
         )
 
     def get_scores(
@@ -1118,11 +1220,17 @@ class Scorer:
         ]
         if not query_ligands:
             return
-        query_instance_chains = [
-            chain.split(".", 1)[1]
-            for ligand in query_ligands
-            for chain in ligand.protein_chains_asym_id
-        ]
+        query_instance_chains = sorted(
+            {
+                chain.split(".", 1)[1]
+                for ligand in query_ligands
+                for chain in self.get_protein_receptor_chains(
+                    ligand.pdb_id, ligand.protein_chains_asym_id
+                )
+            }
+        )
+        if not query_instance_chains:
+            return
         for target_entry in query_entry_alignments.index.get_level_values(
             "target_entry"
         ).unique():
@@ -1156,9 +1264,16 @@ class Scorer:
                     and target_system_id not in target_system_ids
                 ):
                     continue
-                if target_system_id == query_system.id or all(
-                    target_instance_chain.split(".")[1] not in all_target_chains
-                    for target_instance_chain in target_system.protein_chains_asym_id
+                target_system_protein_chains = self.get_protein_receptor_chains(
+                    target_system.pdb_id, target_system.protein_chains_asym_id
+                )
+                if (
+                    target_system_id == query_system.id
+                    or not target_system_protein_chains
+                    or all(
+                        target_instance_chain.split(".")[1] not in all_target_chains
+                        for target_instance_chain in target_system_protein_chains
+                    )
                 ):
                     # Same as query system or No alignments for this target system
                     continue
@@ -1173,12 +1288,22 @@ class Scorer:
                     # denominator. Chains without a hit remain zero-coverage
                     # rows in get_protein_scores(); dropping them here would
                     # inflate weighted similarities for partial alignments.
-                    query_protein_chains = query_ligand.protein_chains_asym_id
+                    query_protein_chains = self.get_protein_receptor_chains(
+                        query_ligand.pdb_id,
+                        query_ligand.protein_chains_asym_id,
+                    )
+                    if not query_protein_chains:
+                        continue
                     query_protein_length = self.get_protein_chain_length(
                         query_system.pdb_id, query_protein_chains
                     )
                     for target_ligand in target_ligands:
-                        target_protein_chains = target_ligand.protein_chains_asym_id
+                        target_protein_chains = self.get_protein_receptor_chains(
+                            target_ligand.pdb_id,
+                            target_ligand.protein_chains_asym_id,
+                        )
+                        if not target_protein_chains:
+                            continue
                         q_t_scores: dict[str, float] = {}
 
                         # Protein scores and mappings are restricted to the
@@ -1370,7 +1495,12 @@ class Scorer:
                 )
             )
             for query_ligand in query_ligands:
-                query_protein_chains = query_ligand.protein_chains_asym_id
+                query_protein_chains = self.get_protein_receptor_chains(
+                    query_ligand.pdb_id,
+                    query_ligand.protein_chains_asym_id,
+                )
+                if not query_protein_chains:
+                    continue
                 mapped_query_protein_chains = [
                     chain
                     for chain in query_protein_chains

@@ -44,6 +44,7 @@ from plinder.data.utils.annotations.protein_utils import (
     _is_polynucleotide,
     _is_polypeptide,
     detect_ligand_chains,
+    get_receptor_type,
 )
 from plinder.data.utils.annotations.save_utils import save_ligands
 from plinder.data.utils.annotations.utils import DocBaseModel
@@ -98,6 +99,12 @@ class System(DocBaseModel):
     pdb_id: str = Field(description="__PDB ID")
     biounit_id: str = Field(description="Biounit ID")
     ligands: list[Ligand] = Field(description="__List of Ligands in a systems")
+    receptor_type: str = Field(
+        description=(
+            "Receptor polymer composition: protein, DNA, RNA, other, or a "
+            "+-joined combination"
+        )
+    )
     ligand_validation: ResidueListValidation | None = Field(
         default=None,
         description="__Validation object for the ligand residues in the system",
@@ -121,7 +128,9 @@ class System(DocBaseModel):
     @cached_property
     def protein_chains_asym_id(self) -> list[str]:
         """
-        Interacting protein chains of the system
+        Interacting receptor chains (protein or nucleic acid) of the system.
+
+        The historical property name is retained in the annotation schema.
         """
         return sorted(
             set(
@@ -330,14 +339,14 @@ class System(DocBaseModel):
     @cached_property
     def num_protein_chains(self) -> int:
         """
-        Number of interacting protein chains of the system
+        Number of interacting receptor chains of the system.
         """
         return len(self.protein_chains_asym_id)
 
     @cached_property
     def proper_num_protein_chains(self) -> int:
         """
-        Number of interacting protein chains of the system excluding ions and artifacts
+        Number of interacting receptor chains excluding ions and artifacts.
         """
         return len(
             set(
@@ -1296,10 +1305,21 @@ class Entry(DocBaseModel):
         for ligs in system_ligands.values():
             if not ligs:
                 continue
+            receptor_asym_ids = sorted(
+                {
+                    instance_chain.split(".", maxsplit=1)[1]
+                    for ligand in ligs
+                    for instance_chain in ligand.protein_chains_asym_id
+                }
+            )
             system = System(
                 pdb_id=self.pdb_id,
                 biounit_id=ligs[0].biounit_id,
                 ligands=sorted(ligs, key=lambda x: x.id),
+                receptor_type=get_receptor_type(
+                    self.chains[asym_id].chain_type_str
+                    for asym_id in receptor_asym_ids
+                ),
             )
             if len(system.protein_chains_asym_id):
                 self.systems[system.id] = system
@@ -1351,8 +1371,7 @@ class Entry(DocBaseModel):
                 LOG.warning(
                     f"PDB {self.pdb_id!r}: nucleic acid receptor chains "
                     f"{na_chains} are excluded from {aln_type} alignment "
-                    "(DBs are protein-only); similarity for NA-only/NA-mixed "
-                    "systems will be missing or zero."
+                    "because similarity databases and scores are protein-only."
                 )
             chains = {
                 self.chains[asym].auth_id
@@ -1476,11 +1495,28 @@ class Entry(DocBaseModel):
         return data
 
     def chains_to_df(self) -> pd.DataFrame:
-        """Return one normalized metadata row for each protein entry chain."""
+        """Return one normalized metadata row for each receptor polymer chain."""
+        columns = [
+            "entry_pdb_id",
+            "chain_asym_id",
+            "chain_auth_id",
+            "chain_entity_id",
+            "chain_type",
+            "chain_receptor_type",
+            "chain_length",
+            "chain_num_unresolved_residues",
+            "chain_is_holo",
+            "chain_uniprot_ids",
+        ]
         rows = []
         for chain_id in sorted(self.chains):
             chain = self.chains[chain_id]
-            if not _is_polypeptide(chain.chain_type_str):
+            if chain_id in self.ligand_like_chains:
+                continue
+            if not (
+                _is_polypeptide(chain.chain_type_str)
+                or _is_polynucleotide(chain.chain_type_str)
+            ):
                 continue
             rows.append(
                 {
@@ -1489,13 +1525,16 @@ class Entry(DocBaseModel):
                     "chain_auth_id": chain.auth_id,
                     "chain_entity_id": chain.entity_id,
                     "chain_type": chain.chain_type_str,
+                    "chain_receptor_type": get_receptor_type(
+                        [chain.chain_type_str]
+                    ),
                     "chain_length": chain.length,
                     "chain_num_unresolved_residues": chain.num_unresolved_residues,
                     "chain_is_holo": chain.holo,
                     "chain_uniprot_ids": sorted(chain.mappings.get("UniProt", {})),
                 }
             )
-        return pd.DataFrame(rows)
+        return pd.DataFrame(rows, columns=columns)
 
     def to_df(self) -> pd.DataFrame:
         """

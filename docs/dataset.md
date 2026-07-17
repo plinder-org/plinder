@@ -77,7 +77,7 @@ Tables that lists all systems along with their annotations.
 
 - `annotation_table.parquet`: Lists all systems and their annotations.
 - `annotation_table_nonredundant.parquet`: Subset of systems without redundant systems.
-- `entry_chains.parquet`: One row per protein chain with the entry, entity, holo partition flag, and UniProt mappings needed to construct the Foldseek/MMseqs sub-databases.
+- `entry_chains.parquet`: One row per protein or nucleic-acid receptor chain, including its normalized `chain_receptor_type`. Protein rows also carry the entity, holo partition flag, and UniProt mappings used to construct the Foldseek/MMseqs sub-databases; nucleic-acid rows are never submitted to similarity search.
 - `entry_sources.parquet`: One row per PDB entry recording the exact source mmCIF major and minor revision used during ingest. This is normalized entry metadata and is not repeated on ligand rows.
 
 V3 cluster columns are merged only after local scoring and clustering finish.

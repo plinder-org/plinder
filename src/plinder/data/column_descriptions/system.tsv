@@ -1,5 +1,6 @@
 Name	Type	Description
 system_biounit_id	str	Biounit ID
+system_receptor_type	str	Receptor polymer composition: protein, DNA, RNA, other, or a +-joined combination
 system_biounit_chains_asym_id	list[str]	All chain instances in the biological assembly
 system_biounit_non_water_chains_asym_id	list[str]	All non-water chain instances in the biological assembly
 system_biounit_water_chains_asym_id	list[str]	All water chain instances in the biological assembly
@@ -7,7 +8,7 @@ system_other_chains_asym_id	list[str]	Non-water biological assembly chain instan
 system_other_protein_chains_asym_id	list[str]	Receptor-like biological assembly chain instances that are not members of this system
 system_other_ligand_chains_asym_id	list[str]	Ligand-like biological assembly chain instances that are not members of this system
 system_water_residues	list[str]	System-interacting water residues encoded as <instance>.<asym>_<residue_number>
-system_protein_chains_asym_id	list[str]	Interacting protein chains of the system
+system_protein_chains_asym_id	list[str]	Interacting receptor chains (protein or nucleic acid); historical column name retained
 system_id_no_biounit	str	ID of the system without the biounit
 system_ligand_chains	list[str]	Ligand chains of the system
 system_num_pocket_residues	int	Number of pocket residues of the system
@@ -21,8 +22,8 @@ system_proper_num_covalent_ligands	int	Number of covalent ligands of the system
 system_id	str	ID of the system
 system_type	str	Type of the system (one of: holo, ion, artifact)
 system_has_binding_affinity	bool	Whether any ligand in the system has a binding affinity from BindingDB
-system_num_protein_chains	int	Number of interacting protein chains of the system
-system_proper_num_protein_chains	int	Number of interacting protein chains of the system excluding ions and artifacts
+system_num_protein_chains	int	Number of interacting receptor chains; historical column name retained
+system_proper_num_protein_chains	int	Number of interacting receptor chains excluding ions and artifacts; historical column name retained
 system_num_ligand_chains	int	Number of ligand chains of the system
 system_proper_num_ligand_chains	int	Number of ligand chains of the system excluding ions and artifacts
 system_num_crystal_contacted_residues	int	Number of residues from other symmetry mates which are in contact with any ligand in the system.

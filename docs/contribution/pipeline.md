@@ -61,7 +61,8 @@ is already heavily distributed and it would add complexity to the DAG.
     - `raw_entries/{two_char_code}/{pdb_id}/ligand_files/{asym_id}.sdf`
   - The join step consolidates the per-entry parquets directly into
     `index/annotation_table.parquet` and the normalized chain rows into
-    `index/entry_chains.parquet`. It also consolidates the exact source mmCIF
+    `index/entry_chains.parquet`, including one normalized receptor-type label
+    per protein or nucleic-acid chain. It also consolidates the exact source mmCIF
     revision once per PDB into `index/entry_sources.parquet`; construction-time
     validation is authoritative.
 
@@ -108,7 +109,7 @@ to create the `pred` sub-database.
 - `tasks.make_sub_dbs`: creates the `holo` and `apo` sub-databases
   - This is a task that is called once
   - It uses the `foldseek` and `mmseqs` databases
-  - It uses `index/entry_chains.parquet` to select holo, apo, and predicted chain IDs without repeating entry-wide chain metadata on every ligand row
+  - It uses the protein rows in `index/entry_chains.parquet` to select holo, apo, and predicted chain IDs without repeating entry-wide chain metadata on every ligand row; DNA/RNA rows remain annotation-only
   - Side effects include writing the following files:
     - `dbs/subdbs/holo_foldseek/**`
     - `dbs/subdbs/apo_foldseek/**`

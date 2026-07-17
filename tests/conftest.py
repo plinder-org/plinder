@@ -556,6 +556,10 @@ def mock_ccd_lookups(monkeypatch):
         "plinder.data.utils.annotations.ligand_utils.ARTIFACTS",
         set(data["artifacts"]),
     )
+    monkeypatch.setattr(
+        "plinder.data.utils.annotations.ligand_utils.BINDING_AFFINITY",
+        None,
+    )
 @pytest.fixture(scope="session")
 def system_1a3b():
     return "1a3b__1__1.B__1.D"
