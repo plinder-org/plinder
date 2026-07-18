@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import functools
+from collections import Counter
 from collections.abc import Iterable
 from functools import cached_property
 from typing import Any
 
 import biotite.structure as struc
 import biotite.structure.io.pdbx as pdbx
+import numpy as np
 from PDBValidation.Validation import PDBValidation
 from pydantic import ConfigDict, Field
 
@@ -206,6 +208,75 @@ def detect_ligand_chains(
     return ligand_chains
 
 
+def detect_ligand_chains_from_cif(
+    block: pdbx.CIFBlock,
+    min_polymer_size: int = 12,
+) -> dict[str, str] | None:
+    """Preflight ligand-chain detection without building a bonded AtomArray.
+
+    The residue count mirrors :func:`detect_ligand_chains`: consecutive
+    ``label_seq_id`` values in model 1 correspond to the residue starts used
+    by :class:`Chain`. ``None`` means the CIF lacks the columns needed for a
+    reliable decision and the caller must fall back to full structure loading.
+    """
+    if "struct_asym" not in block or "atom_site" not in block:
+        return None
+    struct_asym = block["struct_asym"]
+    atom_site = block["atom_site"]
+    if not {"id", "entity_id"}.issubset(struct_asym) or not {
+        "label_asym_id",
+        "label_seq_id",
+    }.issubset(atom_site):
+        return None
+
+    atom_asym_ids = np.asarray(atom_site["label_asym_id"].as_array(), dtype=str)
+    atom_seq_ids = np.asarray(atom_site["label_seq_id"].as_array(), dtype=str)
+    if "pdbx_PDB_model_num" in atom_site:
+        model_numbers = np.asarray(
+            atom_site["pdbx_PDB_model_num"].as_array(), dtype=str
+        )
+        model_mask = model_numbers == "1"
+        atom_asym_ids = atom_asym_ids[model_mask]
+        atom_seq_ids = atom_seq_ids[model_mask]
+
+    valid_residue = ~np.isin(atom_seq_ids, (".", "?", ""))
+    residue_asym_ids = atom_asym_ids[valid_residue]
+    residue_seq_ids = atom_seq_ids[valid_residue]
+    residue_counts: Counter[str] = Counter()
+    if len(residue_asym_ids):
+        residue_starts = np.ones(len(residue_asym_ids), dtype=bool)
+        residue_starts[1:] = (residue_asym_ids[1:] != residue_asym_ids[:-1]) | (
+            residue_seq_ids[1:] != residue_seq_ids[:-1]
+        )
+        residue_counts.update(residue_asym_ids[residue_starts])
+
+    bird_asym_ids: set[str] = set()
+    if "pdbx_molecule" in block and "asym_id" in block["pdbx_molecule"]:
+        bird_asym_ids.update(
+            str(value) for value in block["pdbx_molecule"]["asym_id"].as_array()
+        )
+
+    observed_asym_ids = set(atom_asym_ids)
+    ligand_chains: dict[str, str] = {}
+    for asym_id, entity_id in zip(
+        struct_asym["id"].as_array(),
+        struct_asym["entity_id"].as_array(),
+    ):
+        asym_id = str(asym_id)
+        if asym_id not in observed_asym_ids:
+            continue
+        chain_type = _get_chain_type_from_cif(block, str(entity_id))
+        if _is_water(chain_type):
+            continue
+        if asym_id in bird_asym_ids:
+            ligand_chains[asym_id] = chain_type
+        elif _is_polymer(chain_type) and residue_counts[asym_id] >= min_polymer_size:
+            continue
+        else:
+            ligand_chains[asym_id] = chain_type
+    return ligand_chains
+
+
 class Residue(DocBaseModel):
     chain: str
     index: int
@@ -215,6 +286,11 @@ class Residue(DocBaseModel):
     name: str
     chem_type: str
     validation: ResidueValidation | None = None
+    selected_altcode: str = Field(
+        default=".",
+        exclude=True,
+        description="__Deposited alternate conformer selected for this residue",
+    )
     """Single residue in a polymer chain.
 
     Parameters
@@ -297,6 +373,10 @@ class Chain(DocBaseModel):
         block: "pdbx.CIFBlock",
         atoms: "struc.AtomArray",
         seqres_length: int,
+        *,
+        entity_id: str | None = None,
+        auth_id: str | None = None,
+        chain_type_str: str | None = None,
     ) -> "Chain":
         """Create Chain from biotite CIF data.
 
@@ -310,25 +390,40 @@ class Chain(DocBaseModel):
             Atoms belonging to this chain.
         seqres_length : int
             SEQRES length.
+        entity_id, auth_id, chain_type_str : str, optional
+            Pre-indexed CIF metadata.  Supplying these avoids repeatedly
+            scanning large ``struct_asym`` and entity categories when an
+            entry contains thousands of chains.
         """
         import biotite.structure as struc
         import biotite.structure.info as info
 
         # Build residue dict
         residues = {}
-        res_starts = struc.get_residue_starts(atoms)
-        for idx, start in enumerate(res_starts):
+        res_starts = struc.get_residue_starts(atoms, add_exclusive_stop=True)
+        for idx, (start, stop) in enumerate(zip(res_starts[:-1], res_starts[1:])):
             resnum = int(atoms.res_id[start])
             resname = atoms.res_name[start]
             auth_resnum = str(atoms.res_id[start])
+            selected_altcode = "."
+            if hasattr(atoms, "selected_altloc_id"):
+                selected_altcode = next(
+                    (
+                        str(altcode)
+                        for altcode in atoms.selected_altloc_id[start:stop]
+                        if str(altcode) not in {".", "?", " ", ""}
+                    ),
+                    ".",
+                )
             # One-letter code: try amino acid first, then nucleotide
             olc = "X"
-            try:
-                olc_aa = info.one_letter_code(resname)
-                if olc_aa is not None:
-                    olc = olc_aa
-            except Exception:
-                pass
+            if chain_type_str is None or "non-polymer" not in chain_type_str.lower():
+                try:
+                    olc_aa = info.one_letter_code(resname)
+                    if olc_aa is not None:
+                        olc = olc_aa
+                except Exception:
+                    pass
             if olc == "X" and resname in _standard_na_names():
                 # Map standard nucleotides to their base letter
                 olc = resname[-1] if len(resname) <= 2 else resname[1]
@@ -349,35 +444,39 @@ class Chain(DocBaseModel):
                 one_letter_code=olc,
                 name=resname,
                 chem_type=chem_type,
+                selected_altcode=selected_altcode,
             )
 
         # Get entity_id from _struct_asym
-        entity_id = ""
-        if "struct_asym" in block:
+        if entity_id is None and "struct_asym" in block:
             sa = block["struct_asym"]
             sa_ids = sa["id"].as_array()
             sa_entities = sa["entity_id"].as_array()
             for i, sa_id in enumerate(sa_ids):
                 if sa_id == asym_id:
-                    entity_id = sa_entities[i]
+                    entity_id = str(sa_entities[i])
                     break
+        if entity_id is None:
+            entity_id = ""
 
         # Get auth chain ID
-        auth_id = ""
-        if hasattr(atoms, "auth_asym_id"):
-            auth_id = atoms.auth_asym_id[0]
-        elif "atom_site" in block:
+        if auth_id is None and hasattr(atoms, "auth_asym_id"):
+            auth_id = str(atoms.auth_asym_id[0])
+        elif auth_id is None and "atom_site" in block:
             atom_site = block["atom_site"]
             if "auth_asym_id" in atom_site:
                 asym_arr = atom_site["label_asym_id"].as_array()
                 auth_arr = atom_site["auth_asym_id"].as_array()
                 for i, a in enumerate(asym_arr):
                     if a == asym_id:
-                        auth_id = auth_arr[i]
+                        auth_id = str(auth_arr[i])
                         break
+        if auth_id is None:
+            auth_id = ""
 
         # Get chain type from _entity_poly.type or _entity.type
-        chain_type_str = _get_chain_type_from_cif(block, entity_id)
+        if chain_type_str is None:
+            chain_type_str = _get_chain_type_from_cif(block, entity_id)
 
         return cls(
             asym_id=asym_id,
@@ -417,7 +516,11 @@ class Chain(DocBaseModel):
     ) -> None:
         for residue in self.residues:
             self.residues[residue].validation = ResidueValidation.from_residue(
-                self.asym_id, residue, self.entity_id, doc
+                self.asym_id,
+                residue,
+                self.entity_id,
+                doc,
+                preferred_altcode=self.residues[residue].selected_altcode,
             )
         validations = []
         for r in self.residues.values():

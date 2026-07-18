@@ -54,6 +54,9 @@ class GetPlinderAnnotation:
             **entry_cfg,
         )
         LOG.info(f"created entry for {self.mmcif_file}")
+        if not self.entry.systems:
+            LOG.info(f"no entry systems for {self.mmcif_file}")
+            return None
         self.entry.set_validation(self.validation_xml, self.mmcif_file)
         resolved_save_folder = entry_cfg.get("save_folder")
         if resolved_save_folder is not None:
@@ -70,6 +73,10 @@ class GetPlinderAnnotation:
                 entry_folder / "entry_chains.parquet",
                 index=False,
             )
+            self.entry.biounit_chains_to_df().to_parquet(
+                entry_folder / "entry_biounit_chains.parquet",
+                index=False,
+            )
             major_revision, minor_revision = get_mmcif_revision(
                 read_mmcif_container(self.mmcif_file)
             )
@@ -80,14 +87,10 @@ class GetPlinderAnnotation:
                     "source_mmcif_minor_revision": [minor_revision],
                 }
             ).to_parquet(entry_folder / "entry_source.parquet", index=False)
-        if len(self.entry.systems):
-            self.annotated_df = self.entry.to_df()
-            if self.annotated_df.empty:
-                raise ValueError(f"No ligands detected in entry {self.mmcif_file}")
-            return self.annotated_df
-        else:
-            LOG.info(f"no entry systems for {self.mmcif_file}")
-        return None
+        self.annotated_df = self.entry.to_df()
+        if self.annotated_df.empty:
+            raise ValueError(f"No ligands detected in entry {self.mmcif_file}")
+        return self.annotated_df
 
 
 def hpc_save_batch(

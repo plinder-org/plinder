@@ -7,8 +7,10 @@ from pathlib import Path
 from typing import Any, Literal, Protocol
 
 import biotite.structure as struc
+import biotite.structure.io.mol as mol
 import biotite.structure.io.pdbx as pdbx
 import numpy as np
+import pandas as pd
 from numpy.typing import NDArray
 from rdkit import Chem
 
@@ -53,12 +55,25 @@ class ReconstructedSystem:
     receptor: struc.AtomArray
 
 
+@dataclass(frozen=True)
+class _ChainSelections:
+    """Chain instances selected for reconstruction views."""
+
+    expected_biounit: set[str]
+    system: set[str]
+    receptor: set[str]
+
+
 def save_ligands(
     atoms: struc.AtomArray,
     ligand_chain_ids: list[str],
     output_folder: str | Path,
 ) -> None:
-    """Save ligand SDF files from AtomArray.
+    """Save one canonical ASU SDF per retained ligand chain.
+
+    RDKit supplies chemically normalized bond/aromaticity information when it
+    can sanitize the ligand.  If it cannot, Biotite serializes the source bond
+    graph directly so the canonical coordinate archive remains complete.
 
     Parameters
     ----------
@@ -80,19 +95,25 @@ def save_ligands(
     for chain_id in ligand_chain_ids:
         lig_mask = atoms.chain_id == chain_id
         if not np.any(lig_mask):
-            log.warning(f"save_ligands: no atoms for chain {chain_id}, skipping")
-            continue
+            raise ValueError(f"No atoms found for ligand chain {chain_id!r}")
         lig_atoms = atoms[lig_mask]
+        output_file = output_folder / f"{chain_id}.sdf"
         try:
             rdkit_mol = atoms_to_rdkit_mol(lig_atoms)
-        except Exception as e:
+        except Exception as exc:
             log.warning(
-                f"save_ligands: failed to build RDKit mol for chain {chain_id}: {e}"
+                "save_ligands: RDKit conversion failed for chain %s; "
+                "writing the unsanitized Biotite structure: %s",
+                chain_id,
+                exc,
             )
-            continue
-        rdkit_mol.SetProp("_Name", chain_id)
-        with Chem.SDWriter(str(output_folder / f"{chain_id}.sdf")) as w:
-            w.write(rdkit_mol)
+            sdf_file = mol.SDFile()
+            mol.set_structure(sdf_file, lig_atoms, record_name=chain_id)
+            sdf_file.write(output_file)
+        else:
+            rdkit_mol.SetProp("_Name", chain_id)
+            with Chem.SDWriter(str(output_file)) as writer:
+                writer.write(rdkit_mol)
 
 
 def save_cif_file(
@@ -181,10 +202,153 @@ def _require_chains(
         )
 
 
+def _biounit_chain_roles(
+    annotation: AnnotationRow,
+    biounit_chains: pd.DataFrame | None,
+) -> dict[str, str]:
+    """Return chain-instance roles for the annotation's biological assembly."""
+    if biounit_chains is None:
+        # Existing V2 rows carry repeated assembly membership. New V3 ingest
+        # never writes these columns, but retaining a read-only fallback keeps
+        # source reconstruction usable for already-published V2 data.
+        all_chains = set(
+            _annotation_chains(annotation, "system_biounit_chains_asym_id")
+        )
+        if not all_chains:
+            return {}
+        waters = set(
+            _annotation_chains(annotation, "system_biounit_water_chains_asym_id")
+        )
+        ligands = set(_annotation_chains(annotation, "system_ligand_chains"))
+        ligands.update(
+            _annotation_chains(annotation, "system_other_ligand_chains_asym_id")
+        )
+        return {
+            chain: (
+                "water"
+                if chain in waters
+                else "ligand"
+                if chain in ligands
+                else "receptor"
+            )
+            for chain in all_chains
+        }
+    required = {
+        "entry_pdb_id",
+        "biounit_id",
+        "chain_instance",
+        "chain_asym_id",
+        "chain_role",
+    }
+    missing = required.difference(biounit_chains.columns)
+    if missing:
+        raise ValueError(
+            "biounit-chain metadata is missing columns " f"{sorted(missing)}"
+        )
+    pdb_id = str(annotation.get("entry_pdb_id", ""))
+    biounit_id = str(annotation.get("system_biounit_id", ""))
+    selected = biounit_chains[
+        biounit_chains["entry_pdb_id"].astype(str).eq(pdb_id)
+        & biounit_chains["biounit_id"].astype(str).eq(biounit_id)
+    ].copy()
+    if selected.empty:
+        raise ValueError(
+            "No biological-assembly chain metadata for "
+            f"entry={pdb_id!r}, biounit={biounit_id!r}"
+        )
+    if selected["chain_instance"].duplicated().any():
+        duplicates = sorted(
+            selected.loc[
+                selected["chain_instance"].duplicated(keep=False),
+                "chain_instance",
+            ]
+            .astype(str)
+            .unique()
+        )
+        raise ValueError(f"Duplicate biological-assembly chains: {duplicates}")
+    roles = dict(
+        zip(
+            selected["chain_instance"].astype(str),
+            selected["chain_role"].astype(str),
+        )
+    )
+    invalid_roles = sorted(set(roles.values()) - {"receptor", "ligand", "water"})
+    if invalid_roles:
+        raise ValueError(f"Unknown biological-assembly chain roles: {invalid_roles}")
+    mismatched_asym_ids = selected[
+        selected["chain_instance"]
+        .astype(str)
+        .str.split(".", n=1)
+        .str[-1]
+        .ne(selected["chain_asym_id"].astype(str))
+    ]
+    if not mismatched_asym_ids.empty:
+        raise ValueError(
+            "biounit-chain metadata has inconsistent chain instance/asym IDs"
+        )
+    return roles
+
+
+def _select_chains(
+    annotation: AnnotationRow,
+    biounit_chains: pd.DataFrame | None,
+    options: SystemReconstructionOptions,
+) -> _ChainSelections:
+    protein_chains = set(
+        _annotation_chains(annotation, "system_protein_chains_asym_id")
+    )
+    ligand_chains = set(
+        _annotation_chains(annotation, "system_ligand_chains_asym_id")
+        or _annotation_chains(annotation, "system_ligand_chains")
+    )
+    if not protein_chains:
+        raise ValueError("annotation contains no system protein chains")
+
+    roles = _biounit_chain_roles(annotation, biounit_chains)
+    include_other = (
+        options.system_include_other_protein_chains
+        or options.system_include_other_ligand_chains
+        or options.receptor_include_other_protein_chains
+    )
+    if include_other and not roles:
+        raise ValueError(
+            "biounit-chain metadata is required when including other chains"
+        )
+    system_members = protein_chains | ligand_chains
+    other_receptor_chains = {
+        chain
+        for chain, role in roles.items()
+        if role == "receptor" and chain not in system_members
+    }
+    other_ligand_chains = {
+        chain
+        for chain, role in roles.items()
+        if role == "ligand" and chain not in system_members
+    }
+
+    system_chains = set(protein_chains)
+    if options.system_include_ligands:
+        system_chains.update(ligand_chains)
+    if options.system_include_other_protein_chains:
+        system_chains.update(other_receptor_chains)
+    if options.system_include_other_ligand_chains:
+        system_chains.update(other_ligand_chains)
+
+    receptor_chains = set(protein_chains)
+    if options.receptor_include_other_protein_chains:
+        receptor_chains.update(other_receptor_chains)
+    return _ChainSelections(
+        expected_biounit=set(roles),
+        system=system_chains,
+        receptor=receptor_chains,
+    )
+
+
 def reconstruct_system(
     source_mmcif: Path | str,
     annotation: AnnotationRow,
     *,
+    biounit_chains: pd.DataFrame | None = None,
     options: SystemReconstructionOptions = SystemReconstructionOptions(),
 ) -> ReconstructedSystem:
     """Rebuild system and receptor views from a PDB mmCIF and parquet row.
@@ -199,6 +363,10 @@ def reconstruct_system(
         Original PDB mmCIF used for annotation (plain or gzip-compressed).
     annotation : mapping-like
         A dictionary or pandas Series containing the system selection columns.
+    biounit_chains : pandas.DataFrame, optional
+        Normalized biological-assembly membership rows. Required when any
+        ``include_other_*`` option is enabled and used for assembly validation
+        when supplied.
     options : SystemReconstructionOptions
         Atom-content choices for the two returned views.
     """
@@ -212,56 +380,26 @@ def reconstruct_system(
         raise ValueError("annotation is missing system_biounit_id")
     biounit = build_biounit(read_mmcif_file(source_mmcif), assembly_id)
 
-    expected_biounit_chains = set(
-        _annotation_chains(annotation, "system_biounit_chains_asym_id")
-    )
+    selections = _select_chains(annotation, biounit_chains, options)
     actual_biounit_chains = set(
         str(chain_id) for chain_id in np.unique(biounit.chain_id)
     )
     if (
         options.validate_biounit_chain_ids
-        and expected_biounit_chains
-        and expected_biounit_chains != actual_biounit_chains
+        and selections.expected_biounit
+        and selections.expected_biounit != actual_biounit_chains
     ):
         raise ValueError(
             "Source mmCIF assembly chains differ from the annotation: "
-            f"expected={sorted(expected_biounit_chains)}, "
+            f"expected={sorted(selections.expected_biounit)}, "
             f"actual={sorted(actual_biounit_chains)}"
         )
 
-    protein_chains = set(
-        _annotation_chains(annotation, "system_protein_chains_asym_id")
-    )
-    ligand_chains = set(
-        _annotation_chains(annotation, "system_ligand_chains_asym_id")
-        or _annotation_chains(annotation, "system_ligand_chains")
-    )
-    other_protein_chains = set(
-        _annotation_chains(annotation, "system_other_protein_chains_asym_id")
-    )
-    other_ligand_chains = set(
-        _annotation_chains(annotation, "system_other_ligand_chains_asym_id")
-    )
-    if not protein_chains:
-        raise ValueError("annotation contains no system protein chains")
-
-    system_chains = set(protein_chains)
-    if options.system_include_ligands:
-        system_chains.update(ligand_chains)
-    if options.system_include_other_protein_chains:
-        system_chains.update(other_protein_chains)
-    if options.system_include_other_ligand_chains:
-        system_chains.update(other_ligand_chains)
-
-    receptor_chains = set(protein_chains)
-    if options.receptor_include_other_protein_chains:
-        receptor_chains.update(other_protein_chains)
-
-    _require_chains(biounit, system_chains, view_name="system")
-    _require_chains(biounit, receptor_chains, view_name="receptor")
-    system_mask = np.isin(biounit.chain_id, list(system_chains))
+    _require_chains(biounit, selections.system, view_name="system")
+    _require_chains(biounit, selections.receptor, view_name="receptor")
+    system_mask = np.isin(biounit.chain_id, list(selections.system))
     system_mask |= _water_mask(biounit, annotation, options.system_waters)
-    receptor_mask = np.isin(biounit.chain_id, list(receptor_chains))
+    receptor_mask = np.isin(biounit.chain_id, list(selections.receptor))
     receptor_mask |= _water_mask(biounit, annotation, options.receptor_waters)
     return ReconstructedSystem(
         biounit=biounit,
@@ -275,6 +413,7 @@ def save_reconstructed_system(
     annotation: AnnotationRow,
     *,
     outputs: SystemReconstructionOutputs,
+    biounit_chains: pd.DataFrame | None = None,
     options: SystemReconstructionOptions = SystemReconstructionOptions(),
     overwrite: bool = False,
     reconstructed: ReconstructedSystem | None = None,
@@ -307,7 +446,12 @@ def save_reconstructed_system(
         )
 
     if reconstructed is None:
-        reconstructed = reconstruct_system(source_mmcif, annotation, options=options)
+        reconstructed = reconstruct_system(
+            source_mmcif,
+            annotation,
+            biounit_chains=biounit_chains,
+            options=options,
+        )
     system_id = str(annotation.get("system_id", "plinder_system"))
     for path in requested.values():
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -328,16 +472,11 @@ def save_reconstructed_system(
         asym_to_sequence = get_label_asym_sequences(
             read_mmcif_container(Path(source_mmcif))
         )
-        receptor_chain_ids = set(
-            _annotation_chains(annotation, "system_protein_chains_asym_id")
-        )
-        if options.receptor_include_other_protein_chains:
-            receptor_chain_ids.update(
-                _annotation_chains(
-                    annotation,
-                    "system_other_protein_chains_asym_id",
-                )
-            )
+        receptor_chain_ids = _select_chains(
+            annotation,
+            biounit_chains,
+            options,
+        ).receptor
         missing_sequences = sorted(
             chain_id
             for chain_id in receptor_chain_ids

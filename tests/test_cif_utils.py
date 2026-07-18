@@ -14,13 +14,18 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
+import biotite.structure as struc
 import biotite.structure.io.pdbx as pdbx
+import numpy as np
 import pytest
 import yaml
 from plinder.data.utils.annotations.cif_utils import (
     MissingBondOrderError,
+    apply_struct_conn_bonds,
     assign_bond_orders_from_smiles,
+    build_biounit,
     check_cif_bond_orders,
+    get_structure_with_altloc,
     get_unknown_ligand_ids,
 )
 
@@ -39,6 +44,137 @@ def _load_boltz_ligand_smiles() -> str:
 
 
 LIGAND_SMILES = _load_boltz_ligand_smiles()
+
+
+def test_deposited_first_altloc_accepts_numeric_ids():
+    atoms = struc.AtomArray(5)
+    atoms.coord = np.arange(15).reshape(5, 3)
+    atoms.chain_id = np.array(["A"] * 5)
+    atoms.res_id = np.array([1] * 5)
+    atoms.res_name = np.array(["LIG"] * 5)
+    atoms.atom_name = np.array(["C", "X", "X", "Y", "Y"])
+    atoms.element = np.array(["C"] * 5)
+    atoms.hetero = np.ones(5, dtype=bool)
+    atoms.set_annotation("occupancy", np.array([1.0, 0.486, 0.514, 0.486, 0.514]))
+    cif_file = pdbx.CIFFile()
+    pdbx.set_structure(cif_file, atoms)
+    block = cif_file.block
+    original_ids = [".", "1", "2", "1", "2"]
+    block["atom_site"]["label_alt_id"] = pdbx.CIFColumn(original_ids)
+
+    filtered = get_structure_with_altloc(
+        cif_file,
+        model=1,
+        use_author_fields=False,
+        extra_fields=["occupancy"],
+    )
+
+    assert filtered.atom_name.tolist() == ["C", "X", "Y"]
+    assert filtered.occupancy.tolist() == [1.0, 0.486, 0.486]
+    assert filtered.selected_altloc_id.tolist() == ["1", "1", "1"]
+    assert block["atom_site"]["label_alt_id"].as_array(str).tolist() == original_ids
+
+
+def test_selected_altloc_survives_hydrogen_removal():
+    atoms = struc.AtomArray(3)
+    atoms.coord = np.arange(9).reshape(3, 3)
+    atoms.chain_id = np.array(["A"] * 3)
+    atoms.res_id = np.array([1] * 3)
+    atoms.res_name = np.array(["LIG"] * 3)
+    atoms.atom_name = np.array(["C", "H1", "H1"])
+    atoms.element = np.array(["C", "H", "H"])
+    atoms.hetero = np.ones(3, dtype=bool)
+    cif_file = pdbx.CIFFile()
+    pdbx.set_structure(cif_file, atoms)
+    cif_file.block["atom_site"]["label_alt_id"] = pdbx.CIFColumn([".", "A", "B"])
+
+    filtered = get_structure_with_altloc(cif_file)
+    heavy_atoms = filtered[filtered.element != "H"]
+
+    assert filtered.selected_altloc_id.tolist() == ["A", "A"]
+    assert heavy_atoms.selected_altloc_id.tolist() == ["A"]
+
+
+def test_build_biounit_normalizes_altlocs_and_uses_deposited_first(monkeypatch):
+    atoms = struc.AtomArray(2)
+    atoms.coord = np.zeros((2, 3))
+    atoms.chain_id = np.array(["A", "A"])
+    atoms.res_id = np.array([1, 1])
+    atoms.res_name = np.array(["LIG", "LIG"])
+    atoms.atom_name = np.array(["C1", "C1"])
+    atoms.element = np.array(["C", "C"])
+    atoms.hetero = np.ones(2, dtype=bool)
+    cif_file = pdbx.CIFFile()
+    pdbx.set_structure(cif_file, atoms)
+    original_ids = ["1", "2"]
+    cif_file.block["atom_site"]["label_alt_id"] = pdbx.CIFColumn(original_ids)
+
+    def fake_get_assembly(cif, **kwargs):
+        assert kwargs["altloc"] == "first"
+        assert cif.block["atom_site"]["label_alt_id"].as_array(str).tolist() == [
+            "A",
+            "B",
+        ]
+        assembly = struc.AtomArray(1)
+        assembly.coord = np.zeros((1, 3))
+        assembly.chain_id = np.array(["A"])
+        assembly.res_id = np.array([1])
+        assembly.res_name = np.array(["LIG"])
+        assembly.atom_name = np.array(["C1"])
+        assembly.element = np.array(["C"])
+        assembly.set_annotation("sym_id", np.array([0]))
+        assembly.set_annotation("label_asym_id", np.array(["A"]))
+        assembly.bonds = struc.BondList(1)
+        return assembly
+
+    monkeypatch.setattr(pdbx, "get_assembly", fake_get_assembly)
+
+    assembly = build_biounit(cif_file, "1")
+
+    assert assembly.chain_id.tolist() == ["1.A"]
+    assert (
+        cif_file.block["atom_site"]["label_alt_id"].as_array(str).tolist()
+        == original_ids
+    )
+
+
+def test_apply_struct_conn_bonds_indexes_partners_per_assembly_instance():
+    atoms = struc.AtomArray(8)
+    atoms.chain_id = np.array(["1.A", "1.A", "1.B", "1.B", "2.A", "2.A", "2.B", "2.B"])
+    atoms.set_annotation(
+        "label_asym_id", np.array(["A", "A", "B", "B", "A", "A", "B", "B"])
+    )
+    atoms.set_annotation("sym_id", np.array([0, 0, 0, 0, 1, 1, 1, 1]))
+    atoms.res_id = np.array([1, 1, 2, 2, 1, 1, 2, 2])
+    atoms.atom_name = np.array(["C1", "X", "N1", "Y", "C1", "X", "N1", "Y"])
+    atoms.bonds = struc.BondList(len(atoms))
+    atoms.bonds.add_bond(0, 2, struc.BondType.DOUBLE)
+
+    block = pdbx.CIFBlock()
+    block["struct_conn"] = pdbx.CIFCategory(
+        {
+            "conn_type_id": ["covale"],
+            "ptnr1_label_asym_id": ["A"],
+            "ptnr1_label_seq_id": ["1"],
+            "ptnr1_label_atom_id": ["C1"],
+            "ptnr1_label_comp_id": ["L1"],
+            "ptnr2_label_asym_id": ["B"],
+            "ptnr2_label_seq_id": ["2"],
+            "ptnr2_label_atom_id": ["N1"],
+            "ptnr2_label_comp_id": ["L2"],
+            "ptnr1_auth_seq_id": ["1"],
+            "ptnr2_auth_seq_id": ["2"],
+        }
+    )
+
+    apply_struct_conn_bonds(atoms, block)
+
+    neighbors0, bond_types0 = atoms.bonds.get_bonds(0)
+    assert list(neighbors0) == [2]
+    assert list(bond_types0) == [struc.BondType.DOUBLE]
+    neighbors4, bond_types4 = atoms.bonds.get_bonds(4)
+    assert list(neighbors4) == [6]
+    assert list(bond_types4) == [struc.BondType.SINGLE]
 
 
 @pytest.fixture

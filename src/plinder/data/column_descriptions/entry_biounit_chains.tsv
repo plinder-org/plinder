@@ -1,0 +1,6 @@
+Name	Type	Description
+entry_pdb_id	str	PDB entry identifier
+biounit_id	str	Biological assembly identifier
+chain_instance	str	Assembly chain instance encoded as <operation>.<label_asym_id>
+chain_asym_id	str	Source asymmetric chain identifier
+chain_role	str	Assembly role: receptor, ligand, or water

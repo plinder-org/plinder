@@ -56,15 +56,18 @@ is already heavily distributed and it would add complexity to the DAG.
     - `BindingDB`
   - Side effects include writing the following files:
     - `raw_entries/{two_char_code}/{pdb_id}.parquet`
+    - `raw_entries/{two_char_code}/{pdb_id}/entry_biounit_chains.parquet`
     - `raw_entries/{two_char_code}/{pdb_id}/entry_chains.parquet`
     - `raw_entries/{two_char_code}/{pdb_id}/entry_source.parquet`
     - `raw_entries/{two_char_code}/{pdb_id}/ligand_files/{asym_id}.sdf`
   - The join step consolidates the per-entry parquets directly into
-    `index/annotation_table.parquet` and the normalized chain rows into
-    `index/entry_chains.parquet`, including one normalized receptor-type label
-    per protein or nucleic-acid chain. It also consolidates the exact source mmCIF
-    revision once per PDB into `index/entry_sources.parquet`; construction-time
-    validation is authoritative.
+    `index/annotation_table.parquet`, the normalized receptor-chain rows into
+    `index/entry_chains.parquet`, and biological-assembly membership into
+    `index/entry_biounit_chains.parquet`. The membership table records each chain
+    instance and its receptor/ligand/water role once, avoiding repeated biounit and
+    "other chain" arrays on every ligand row. The join also consolidates the exact
+    source mmCIF revision once per PDB into `index/entry_sources.parquet`;
+    construction-time validation is authoritative.
 
 ## Canonical ligand archives
 

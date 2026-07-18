@@ -84,6 +84,7 @@ class IngestPipeline:
         tasks.make_dbs(
             data_dir=self.plinder_dir,
             sub_databases=self.cfg.scorer.sub_databases,
+            cpu=self.cfg.flow.make_dbs_cpu,
         )
 
     @utils.ingest_flow_control
@@ -212,6 +213,7 @@ class IngestPipeline:
             data_dir=self.plinder_dir,
             pdb_ids=pdb_ids,
             scorer_cfg=self.cfg.scorer,
+            cpu=self.cfg.flow.make_scorers_cpu,
         )
 
     @utils.ingest_flow_control

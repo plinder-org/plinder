@@ -26,6 +26,8 @@ from plinder.data.utils.annotations.get_similarity_scores import (
     compute_ligand_fingerprints,
     get_feature_map_score,
     ligand_scores,
+    load_ligands_from_index,
+    prepare_ligand_for_3d_scoring,
     write_ecfp4_fingerprint_table,
 )
 from rdkit import Chem
@@ -38,6 +40,35 @@ SDF_FILE = (
     / "ligand_files"
     / "1.C.sdf"
 )
+HEM_SDF_FILE = (
+    Path(__file__).resolve().parents[1]
+    / "test_data"
+    / "plinder"
+    / "mount"
+    / "systems"
+    / "19hc__1__1.B__1.T"
+    / "ligand_files"
+    / "1.T.sdf"
+)
+
+
+def test_ligand_scoring_inputs_include_only_proper_holo_ligands() -> None:
+    annotation = pd.DataFrame(
+        {
+            "entry_pdb_id": ["1abc", "1abc", "1abc"],
+            "system_id": ["proper", "artifact", "ion-system"],
+            "system_type": ["holo", "holo", "ion"],
+            "ligand_is_proper": [True, False, True],
+            "ligand_rdkit_canonical_smiles": ["CCO", "O", "[Na+]"],
+            "ligand_unique_ccd_code": ["LIG", "HOH", "NA"],
+            "ligand_id": ["1abc__1__1.L", "1abc__1__1.W", "1abc__1__1.N"],
+            "ligand_asym_id": ["L", "W", "N"],
+        }
+    )
+
+    ligands = load_ligands_from_index(annotation=annotation)
+
+    assert ligands["ligand_id"].tolist() == ["1abc__1__1.L"]
 
 
 def test_entry_views_accept_annotation_dataframe(cif_2gdo, tmp_path) -> None:
@@ -548,6 +579,23 @@ def test_feature_map_score_handles_molecules_without_features() -> None:
     assert get_feature_map_score(helium, helium) == 0.0
 
 
+def test_shape_scoring_uses_custom_radius_and_preserves_hem_iron() -> None:
+    molecule = Chem.MolFromMolFile(str(HEM_SDF_FILE))
+    assert molecule is not None
+    assert any(atom.GetAtomicNum() == 26 for atom in molecule.GetAtoms())
+
+    prepared = prepare_ligand_for_3d_scoring(molecule)
+
+    assert prepared is not None
+    assert any(atom.GetAtomicNum() == 26 for atom in prepared.GetAtoms())
+    shape, color = scoring_module.align_molecules(
+        Chem.Mol(prepared), Chem.Mol(prepared)
+    )
+    assert shape == pytest.approx(1.0)
+    assert color == pytest.approx(1.0)
+    assert scoring_module.get_sucos_score(prepared, prepared) == pytest.approx(1.0)
+
+
 def test_ligand_3d_score_ability_uses_canonical_sdf_and_caches_by_path(
     tmp_path, monkeypatch
 ) -> None:
@@ -574,6 +622,42 @@ def test_ligand_3d_score_ability_uses_canonical_sdf_and_caches_by_path(
 
     assert annotated["ligand_is_3d_score_able"].tolist() == [True, True, False]
     assert calls == [valid_sdf, valid_sdf.with_name("C.sdf")]
+
+
+def test_ligand_3d_score_ability_reuses_success_for_same_molecular_graph(
+    tmp_path, monkeypatch
+) -> None:
+    first_sdf = tmp_path / "first.sdf"
+    second_sdf = tmp_path / "second.sdf"
+    first_sdf.write_bytes(SDF_FILE.read_bytes())
+    second_sdf.write_bytes(SDF_FILE.read_bytes())
+    scoring_module._LIGAND_3D_SCORE_ABILITY_CACHE.clear()
+    align_calls = 0
+    sucos_calls = 0
+    original_align = scoring_module.align_molecules
+    original_sucos = scoring_module.get_sucos_score
+
+    def observed_align(*args, **kwargs):
+        nonlocal align_calls
+        align_calls += 1
+        return original_align(*args, **kwargs)
+
+    def observed_sucos(*args, **kwargs):
+        nonlocal sucos_calls
+        sucos_calls += 1
+        return original_sucos(*args, **kwargs)
+
+    monkeypatch.setattr(scoring_module, "align_molecules", observed_align)
+    monkeypatch.setattr(scoring_module, "get_sucos_score", observed_sucos)
+
+    try:
+        assert scoring_module.is_ligand_3d_score_able(first_sdf)
+        assert scoring_module.is_ligand_3d_score_able(second_sdf)
+    finally:
+        scoring_module._LIGAND_3D_SCORE_ABILITY_CACHE.clear()
+
+    assert align_calls == 1
+    assert sucos_calls == 1
 
 
 def test_cofactor_similarity_uses_ccd_reference_fingerprints() -> None:

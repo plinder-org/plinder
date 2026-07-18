@@ -1,21 +1,29 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
 from pathlib import Path
+from types import SimpleNamespace
 
+import biotite.structure as struc
 import numpy as np
 import pandas as pd
 import pytest
 from plinder.data.get_system_annotations import GetPlinderAnnotation
 from plinder.data.utils.annotations.aggregate_annotations import Entry
 from plinder.data.utils.annotations.cif_utils import read_mmcif_container
+from plinder.data.utils.annotations.get_ligand_validation import EntryValidation
 from plinder.data.utils.annotations.interaction_utils import get_covalent_connections
-from plinder.data.utils.annotations.interface_gap import annotate_interface_gaps
-from plinder.data.utils.annotations.ligand_utils import sort_ccd_codes
+from plinder.data.utils.annotations.ligand_utils import (
+    BiounitSpatialIndex,
+    get_water_chain_ids,
+    is_known_artifact_ligand,
+    sort_ccd_codes,
+)
 from plinder.data.utils.annotations.mmpdb_utils import add_mmp_clusters_to_data
 from plinder.data.utils.annotations.protein_utils import get_receptor_type
 from plinder.data.utils.annotations.save_utils import (
     SystemReconstructionOptions,
     SystemReconstructionOutputs,
+    save_ligands,
     save_reconstructed_system,
 )
 from rdkit import Chem
@@ -23,6 +31,208 @@ from rdkit import Chem
 
 def test_ccd_name_sorter():
     assert sort_ccd_codes({"G", "G25", "CPG", "5GP"}) == ["CPG", "G25", "G", "5GP"]
+
+
+def test_get_water_chain_ids_requires_all_chain_atoms_to_be_solvent():
+    atoms = struc.AtomArray(6)
+    atoms.chain_id = np.array(["A", "A", "W", "W", "M", "M"])
+    atoms.res_name = np.array(["ALA", "ALA", "HOH", "HOH", "HOH", "ALA"])
+
+    assert get_water_chain_ids(atoms) == {"W"}
+
+
+def test_save_ligands_falls_back_to_biotite_without_rdkit_sanitization(
+    tmp_path, monkeypatch
+):
+    atoms = struc.AtomArray(4)
+    atoms.chain_id = np.array(["A", "A", "B", "B"])
+    atoms.res_id = np.array([1, 1, 2, 2])
+    atoms.res_name = np.array(["LIG", "LIG", "OTH", "OTH"])
+    atoms.atom_name = np.array(["C1", "N1", "O1", "C1"])
+    atoms.element = np.array(["C", "N", "O", "C"])
+    atoms.coord = np.array(
+        [[0.0, 0.0, 0.0], [1.3, 0.0, 0.0], [5.0, 0.0, 0.0], [6.2, 0.0, 0.0]]
+    )
+    atoms.bonds = struc.BondList(len(atoms))
+    atoms.bonds.add_bond(0, 1, struc.BondType.AROMATIC_SINGLE)
+    atoms.bonds.add_bond(2, 3, struc.BondType.DOUBLE)
+    monkeypatch.setattr(
+        "plinder.data.utils.annotations.cif_utils.atoms_to_rdkit_mol",
+        lambda _atoms: (_ for _ in ()).throw(ValueError("cannot sanitize")),
+    )
+
+    save_ligands(atoms, ["A"], tmp_path)
+
+    saved = struc.io.mol.get_structure(struc.io.mol.SDFile.read(tmp_path / "A.sdf"))
+    assert saved.array_length() == 2
+    assert np.allclose(saved.coord, atoms.coord[:2])
+    assert not (tmp_path / "B.sdf").exists()
+
+
+def test_entry_validation_accepts_missing_optional_wwpdb_metrics():
+    entry = {
+        "PDB-resolution": "2.5",
+        "PDB-Rfree": "0.25",
+        "PDB-R": "0.20",
+        "clashscore": None,
+    }
+    validation = SimpleNamespace(
+        getValidationXML=lambda: SimpleNamespace(getEntry=lambda: entry),
+        getReflectionsResolution=lambda: 2.4,
+        getMeanIOverSigIObs=lambda: ".",
+        countAtoms=lambda: 100,
+        calcMolProbityOverallScore=lambda: 1.5,
+        calcMeanStructureBFactor=lambda: 20.0,
+        calcMedianStructureBFactor=lambda: 18.0,
+        getResolution=lambda: 2.5,
+    )
+
+    result = EntryValidation.from_entry(validation)
+
+    assert result.clashscore is None
+    assert result.meanI_over_sigI_obs is None
+
+
+def test_crystal_contact_fraction_is_undefined_without_heavy_atoms():
+    from plinder.data.utils.annotations.aggregate_annotations import System
+    from plinder.data.utils.annotations.ligand_utils import Ligand
+
+    ligand = Ligand(num_heavy_atoms=0)
+    system = System(
+        pdb_id="1abc",
+        biounit_id="1",
+        receptor_type="protein",
+        ligands=[ligand],
+    )
+
+    assert ligand.fraction_atoms_with_crystal_contacts is None
+    assert system.fraction_atoms_with_crystal_contacts is None
+
+
+def test_known_artifact_preflight_is_conservative(monkeypatch):
+    monkeypatch.setattr(
+        "plinder.data.utils.annotations.ligand_utils._get_ccd_smiles",
+        lambda code: {"OHX": "[OH-]", "LIG": "CCNCC"}.get(code),
+    )
+
+    assert is_known_artifact_ligand(["GOL"], {"GOL"})
+    assert is_known_artifact_ligand(["DUM"], set())
+    assert is_known_artifact_ligand(["OHX"], set())
+    assert not is_known_artifact_ligand(["LIG"], set())
+    assert not is_known_artifact_ligand(["OHX", "OHX"], set())
+
+
+def test_biounit_spatial_index_expands_hits_to_complete_residues():
+    atoms = struc.AtomArray(6)
+    atoms.chain_id = np.array(["1.A", "1.A", "1.B", "1.B", "1.A", "1.A"])
+    atoms.res_id = np.array([1, 1, 1, 1, 2, 2])
+    atoms.coord = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+            [10.0, 0.0, 0.0],
+            [11.0, 0.0, 0.0],
+            [20.0, 0.0, 0.0],
+            [21.0, 0.0, 0.0],
+        ]
+    )
+    atoms.bonds = struc.BondList(len(atoms))
+    atoms.bonds.add_bond(0, 1, struc.BondType.SINGLE)
+    atoms.bonds.add_bond(1, 2, struc.BondType.DOUBLE)
+    atoms.bonds.add_bond(4, 5, struc.BondType.TRIPLE)
+    spatial_index = BiounitSpatialIndex.from_atoms(atoms, max_radius=3.0)
+
+    assert np.array_equal(
+        spatial_index.atom_indices_for_chain("1.A"),
+        np.array([0, 1, 4, 5]),
+    )
+    assert np.array_equal(
+        spatial_index.complete_residue_indices_near(atoms.coord[[0]], radius=0.5),
+        np.array([0, 1]),
+    )
+    selected_indices = np.array([0, 1, 4, 5])
+    expected = atoms[selected_indices]
+    actual = spatial_index.take_atoms(atoms, selected_indices, include_bonds=True)
+    assert np.array_equal(actual.coord, expected.coord)
+    for category in atoms.get_annotation_categories():
+        assert np.array_equal(
+            actual.get_annotation(category), expected.get_annotation(category)
+        )
+    assert actual.bonds is not None
+    assert expected.bonds is not None
+    assert np.array_equal(actual.bonds.as_array(), expected.bonds.as_array())
+    assert (
+        spatial_index.take_atoms(atoms, selected_indices, include_bonds=False).bonds
+        is None
+    )
+
+
+def test_deferred_ions_are_retained_only_when_they_can_join_a_primary_system():
+    from plinder.data.utils.annotations.ligand_utils import Ligand
+    from plinder.data.utils.annotations.protein_utils import Chain
+
+    def chain(asym_id: str, chain_type: str) -> Chain:
+        return Chain(
+            asym_id=asym_id,
+            auth_id=asym_id,
+            entity_id=asym_id,
+            chain_type_str=chain_type,
+            residues={},
+            length=100,
+            num_unresolved_residues=100,
+        )
+
+    entry = Entry(
+        pdb_id="1abc",
+        chains={
+            "A": chain("A", "polypeptide(L)"),
+            "B": chain("B", "non-polymer"),
+            "C": chain("C", "non-polymer"),
+            "D": chain("D", "non-polymer"),
+        },
+        ligand_like_chains={
+            "B": "non-polymer",
+            "C": "non-polymer",
+            "D": "non-polymer",
+        },
+    )
+    primary = Ligand(
+        pdb_id="1abc",
+        biounit_id="1",
+        asym_id="B",
+        instance=1,
+        ccd_code="LIG",
+        plip_type="SMALLMOLECULE",
+        bird_id="",
+        centroid=[0.0, 0.0, 1.0],
+        smiles="CCNCC",
+        residue_numbers=[1],
+        neighboring_residues={"1.A": [1, 2, 3]},
+    )
+    atoms = struc.AtomArray(6)
+    atoms.chain_id = np.array(["1.A", "1.A", "1.A", "1.B", "1.C", "1.D"])
+    atoms.res_id = np.array([1, 2, 3, 1, 1, 1])
+    atoms.coord = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 2.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, 2.0],
+            [50.0, 0.0, 0.0],
+        ]
+    )
+    spatial_index = BiounitSpatialIndex.from_atoms(atoms, max_radius=10.0)
+
+    assert entry._connected_deferred_ligand_chains(
+        atoms,
+        spatial_index,
+        [primary],
+        {"1.C", "1.D"},
+        min_shared_pocket_members=3,
+        neighboring_residue_threshold=6.0,
+        interaction_search_threshold=10.0,
+    ) == {"1.C"}
 
 
 @pytest.mark.parametrize(
@@ -90,19 +300,6 @@ def test_covalent_linkage(cif_1qz5):
     )
 
 
-def test_find_missing_residues(cif_2y4i_system):
-    actual = annotate_interface_gaps(
-        cif_2y4i_system, protein_chains=None, ligand_chains=None
-    )["ligand_interface_gap_annotation"][("C", "A")]
-    expected = {
-        "interface_atom_gaps_4A": 5,
-        "interface_atom_gaps_8A": 39,
-        "missing_interface_residues_4A": 0,
-        "missing_interface_residues_8A": 0,
-    }
-    assert actual == expected
-
-
 def test_short_noncov_peptide_detection(cif_6i41, mock_alternative_datasets):
     entry_dir = mock_alternative_datasets("6i41")
     plinder_anno = GetPlinderAnnotation(
@@ -114,6 +311,17 @@ def test_short_noncov_peptide_detection(cif_6i41, mock_alternative_datasets):
     assert chain_file.is_file()
     chain_df = pd.read_parquet(chain_file)
     assert chain_df["chain_type"].str.lower().str.contains("polypeptide").all()
+    biounit_chain_df = pd.read_parquet(
+        entry_dir / "6i41" / "entry_biounit_chains.parquet"
+    )
+    assert set(biounit_chain_df["chain_role"]) == {
+        "ligand",
+        "receptor",
+        "water",
+    }
+    assert not biounit_chain_df.duplicated(
+        ["entry_pdb_id", "biounit_id", "chain_instance"]
+    ).any()
     source_df = pd.read_parquet(entry_dir / "6i41" / "entry_source.parquet")
     assert source_df["entry_pdb_id"].tolist() == ["6i41"]
     assert (
@@ -128,13 +336,31 @@ def test_short_noncov_peptide_detection(cif_6i41, mock_alternative_datasets):
     assert df["ligand_protein_chains_auth_id"].drop_duplicates().to_list() == [["A"]]
 
 
+def test_entry_ignores_external_mappings_for_absent_chains(
+    cif_6i41, mock_alternative_datasets, monkeypatch
+):
+    entry_dir = mock_alternative_datasets("6i41")
+    monkeypatch.setattr(
+        "plinder.data.utils.annotations.aggregate_annotations.get_chain_external_mappings",
+        lambda _block: {"P": []},
+    )
+
+    entry = Entry.from_cif_file(cif_6i41, save_folder=entry_dir)
+
+    assert "P" not in entry.chains
+
+
 @pytest.mark.parametrize(
     "min_polymer_size,expect_ligand",
     [(12, False), (20, True)],
     ids=["threshold_12_peptide_is_receptor", "threshold_20_peptide_is_ligand"],
 )
 def test_peptide_ligand_threshold(
-    cif_6u6k, mock_alternative_datasets, min_polymer_size, expect_ligand
+    cif_6u6k,
+    mock_alternative_datasets,
+    min_polymer_size,
+    expect_ligand,
+    monkeypatch,
 ):
     """6u6k: 13-residue synthetic peptide (chain B).
 
@@ -142,17 +368,186 @@ def test_peptide_ligand_threshold(
     With min_polymer_size=20, the peptide is ligand (13 < 20) → system created.
     """
     entry_dir = mock_alternative_datasets("6u6k")
+    stale_ligand_dir = entry_dir / "6u6k" / "ligand_files"
+    stale_ligand_dir.mkdir(parents=True)
+    (stale_ligand_dir / "stale.sdf").touch()
+    if not expect_ligand:
+        monkeypatch.setattr(
+            "plinder.data.utils.annotations.aggregate_annotations.pdbx.get_structure",
+            lambda *_args, **_kwargs: pytest.fail(
+                "entries without ligand-like chains must skip bonded loading"
+            ),
+        )
+        monkeypatch.setattr(
+            "plinder.data.utils.annotations.aggregate_annotations.pdbx.list_assemblies",
+            lambda *_args, **_kwargs: pytest.fail(
+                "entries without ligand-like chains must skip assembly generation"
+            ),
+        )
     entry = Entry.from_cif_file(
         cif_6u6k, save_folder=entry_dir, min_polymer_size=min_polymer_size
     )
     if expect_ligand:
         assert len(entry.systems) == 1
+        assert not (stale_ligand_dir / "stale.sdf").exists()
         lig = entry.systems[list(entry.systems.keys())[0]].ligands[0]
         assert lig.ccd_code == "ACE-TRP-TRP-ILE-ILE-PRO-ALY-VAL-LYS-ALY-GLY-CYS-NH2"
     else:
         assert (
             len(entry.systems) == 0
         ), f"13-residue peptide should be receptor with min_polymer_size={min_polymer_size}"
+        assert not stale_ligand_dir.exists()
+
+
+def test_annotation_without_systems_skips_validation_and_normalized_tables(
+    monkeypatch, tmp_path
+):
+    class EmptyEntry:
+        pdb_id = "1abc"
+        systems: dict[str, object] = {}
+
+        def set_validation(self, *_args, **_kwargs):
+            pytest.fail("empty entries must skip validation")
+
+    monkeypatch.setattr(
+        Entry,
+        "from_cif_file",
+        lambda *_args, **_kwargs: EmptyEntry(),
+    )
+    annotation = GetPlinderAnnotation(
+        Path("1abc.cif"),
+        Path("1abc_validation.xml.gz"),
+        save_folder=tmp_path,
+    )
+
+    assert annotation.annotate() is None
+    assert not (tmp_path / "1abc").exists()
+
+
+def test_entry_drops_systems_without_a_proper_ligand() -> None:
+    from plinder.data.utils.annotations.ligand_utils import Ligand
+    from plinder.data.utils.annotations.protein_utils import Chain
+
+    receptor = Chain(
+        asym_id="A",
+        auth_id="A",
+        entity_id="1",
+        chain_type_str="polypeptide(L)",
+        residues={},
+        length=100,
+        num_unresolved_residues=100,
+    )
+
+    def ligand(asym_id: str, *, is_ion: bool = False, is_artifact: bool = False):
+        return Ligand(
+            pdb_id="1abc",
+            biounit_id="1",
+            asym_id=asym_id,
+            instance=1,
+            ccd_code="NA" if is_ion else "GOL" if is_artifact else "LIG",
+            plip_type="SMALLMOLECULE",
+            bird_id="",
+            centroid=[0.0, 0.0, 0.0],
+            smiles="[Na+]" if is_ion else "CCO",
+            residue_numbers=[1],
+            neighboring_residues={"1.A": [1, 2, 3]},
+            is_ion=is_ion,
+            is_artifact=is_artifact,
+        )
+
+    for nonproper in (
+        ligand("B", is_ion=True),
+        ligand("B", is_artifact=True),
+    ):
+        entry = Entry(pdb_id="1abc", chains={"A": receptor})
+        entry.set_systems({nonproper.id: nonproper})
+        assert entry.systems == {}
+
+    proper = ligand("B")
+    ion = ligand("C", is_ion=True)
+    entry = Entry(pdb_id="1abc", chains={"A": receptor})
+    entry.set_systems({item.id: item for item in (proper, ion)})
+
+    assert len(entry.systems) == 1
+    retained = next(iter(entry.systems.values()))
+    assert retained.system_type == "holo"
+    assert {item.ccd_code for item in retained.ligands} == {"LIG", "NA"}
+
+
+def test_entry_validation_skips_chains_outside_retained_systems(
+    monkeypatch, tmp_path
+) -> None:
+    from types import SimpleNamespace
+
+    from plinder.data.utils.annotations.aggregate_annotations import System
+    from plinder.data.utils.annotations.ligand_utils import Ligand
+    from plinder.data.utils.annotations.protein_utils import Chain
+
+    def chain(asym_id: str, chain_type: str) -> Chain:
+        return Chain(
+            asym_id=asym_id,
+            auth_id=asym_id,
+            entity_id=asym_id,
+            chain_type_str=chain_type,
+            residues={},
+            length=100,
+            num_unresolved_residues=100,
+        )
+
+    chains = {
+        "A": chain("A", "polypeptide(L)"),
+        "B": chain("B", "non-polymer"),
+        "R": chain("R", "polypeptide(L)"),
+        "U": chain("U", "non-polymer"),
+    }
+    ligand = Ligand(
+        pdb_id="1abc",
+        biounit_id="1",
+        asym_id="B",
+        instance=1,
+        ccd_code="LIG",
+        plip_type="SMALLMOLECULE",
+        bird_id="",
+        centroid=[0.0, 0.0, 0.0],
+        smiles="CCNCC",
+        residue_numbers=[1],
+        neighboring_residues={"1.A": [1, 2, 3]},
+    )
+    system = System(
+        pdb_id="1abc",
+        biounit_id="1",
+        ligands=[ligand],
+        receptor_type="protein",
+    )
+    entry = Entry(
+        pdb_id="1abc",
+        determination_method="X-RAY DIFFRACTION",
+        chains=chains,
+        ligand_like_chains={"B": "non-polymer", "U": "non-polymer"},
+        systems={system.id: system},
+    )
+    validation_path = tmp_path / "validation.xml.gz"
+    validation_path.touch()
+    validated: list[str] = []
+
+    monkeypatch.setattr(
+        "plinder.data.utils.annotations.aggregate_annotations.ValidationFactory",
+        lambda *_args, **_kwargs: SimpleNamespace(getValidation=lambda: object()),
+    )
+    monkeypatch.setattr(
+        "plinder.data.utils.annotations.aggregate_annotations.EntryValidation.from_entry",
+        lambda _doc: SimpleNamespace(r=0.2),
+    )
+    monkeypatch.setattr(
+        Chain,
+        "set_validation",
+        lambda self, _doc, _thresholds: validated.append(self.asym_id),
+    )
+    monkeypatch.setattr(System, "set_validation", lambda *_args, **_kwargs: None)
+
+    entry.set_validation(validation_path, Path("source.cif"))
+
+    assert set(validated) == {"A", "B"}
 
 
 def test_synthetic_cov_peptide_detection(cif_6lu7, mock_alternative_datasets):
@@ -401,8 +796,27 @@ def test_canonical_ligand_saving_and_system_reconstruction(
     assert not (entry_dir / system_tag).exists()
 
     row = entry.to_df().query("system_id == @system_tag").iloc[0]
-    assert set(row["system_other_chains_asym_id"]).isdisjoint(
+    repeated_membership_columns = {
+        column
+        for column in row.index
+        if column.startswith(("system_biounit_chains", "system_other_chains"))
+        or column.startswith(("system_biounit_non_water", "system_biounit_water"))
+        or column.startswith(
+            ("system_other_protein_chains", "system_other_ligand_chains")
+        )
+    }
+    assert not repeated_membership_columns
+    biounit_chains = entry.biounit_chains_to_df()
+    assembly_chains = biounit_chains.query("biounit_id == '1'")
+    system_members = set(
         row["system_protein_chains_asym_id"] + row["system_ligand_chains"]
+    )
+    other_receptor_chains = set(
+        assembly_chains.loc[
+            assembly_chains["chain_role"].eq("receptor")
+            & ~assembly_chains["chain_instance"].isin(system_members),
+            "chain_instance",
+        ]
     )
     output_dir = entry_dir / "reconstructed" / system_tag
     outputs = SystemReconstructionOutputs(
@@ -414,6 +828,7 @@ def test_canonical_ligand_saving_and_system_reconstruction(
         cif_2y4i,
         row,
         outputs=outputs,
+        biounit_chains=biounit_chains,
         options=SystemReconstructionOptions(
             system_waters="none",
             receptor_waters="none",
@@ -431,7 +846,7 @@ def test_canonical_ligand_saving_and_system_reconstruction(
     assert not np.any(struc.filter_solvent(system_atoms))
     expected_chains = set(row["system_protein_chains_asym_id"])
     expected_chains.update(row["system_ligand_chains"])
-    expected_chains.update(row["system_other_protein_chains_asym_id"])
+    expected_chains.update(other_receptor_chains)
     assert set(system_atoms.chain_id) == expected_chains
 
     # FASTA reconstruction is part of the base package and must not import
@@ -480,6 +895,7 @@ def test_canonical_ligand_saving_and_system_reconstruction(
         source_mmcif=cif_2y4i,
         reconstruction_dir=reconstructed_dir,
         canonical_ligand_dir=canonical_ligand_dir,
+        biounit_chains=biounit_chains,
         reconstruction_options=SystemReconstructionOptions(
             system_waters="none",
             receptor_waters="none",
@@ -953,9 +1369,7 @@ def test_mixed_receptor_type_is_written_to_annotation(cif_8ufz):
         "protein+dna"
     }
     assert set(entry.to_df()["system_receptor_type"]) == {"protein+dna"}
-    chain_types = entry.chains_to_df().set_index("chain_asym_id")[
-        "chain_receptor_type"
-    ]
+    chain_types = entry.chains_to_df().set_index("chain_asym_id")["chain_receptor_type"]
     assert {chain_types[chain] for chain in ["A", "B", "C", "D"]} == {"dna"}
     assert {chain_types[chain] for chain in ["E", "F"]} == {"protein"}
 

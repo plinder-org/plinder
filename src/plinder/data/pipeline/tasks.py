@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from concurrent.futures import ALL_COMPLETED, Future, ThreadPoolExecutor, wait
 from pathlib import Path
 from shutil import rmtree
@@ -149,7 +150,7 @@ def download_alternative_datasets(
 
     """
     kws = dict(data_dir=data_dir, force_update=force_update)
-    with ThreadPoolExecutor() as executor:
+    with ThreadPoolExecutor(max_workers=threads) as executor:
         futures: list[Future[Any]] = [
             executor.submit(io.download_cofactors, **kws),
             executor.submit(io.download_seqres_data, **kws),
@@ -163,7 +164,7 @@ def download_alternative_datasets(
                 raise exc
 
 
-def make_dbs(*, data_dir: Path, sub_databases: list[str]) -> None:
+def make_dbs(*, data_dir: Path, sub_databases: list[str], cpu: int) -> None:
     """
     Make the foldseek and mmseqs dbs
 
@@ -182,7 +183,7 @@ def make_dbs(*, data_dir: Path, sub_databases: list[str]) -> None:
     for db, source in input_dirs.items():
         output_dir = data_dir / "dbs" / db
         LOG.info(f"make_dbs: making {db} in {output_dir}")
-        databases.make_db(source, output_dir, db.split("_")[-1])
+        databases.make_db(source, output_dir, db.split("_")[-1], threads=cpu)
 
 
 def scatter_make_entries(
@@ -305,7 +306,7 @@ def make_entries(
                 )
             cmd = (
                 [
-                    "python",
+                    sys.executable,
                     "-m",
                     "plinder.data.get_system_annotations",
                     f"mmcif_file={mmcif.as_posix()}",
@@ -328,7 +329,7 @@ def make_entries(
     try:
         check_output(
             [
-                "python",
+                sys.executable,
                 "-m",
                 "plinder.data.pipeline.mpqueue",
                 f"{scratch_tasks.as_posix()}",
@@ -615,6 +616,7 @@ def run_batch_searches(
     # TODO: : use large batches for run_batch_searches
     pdb_ids: list[str],
     scorer_cfg: DictConfig,
+    cpu: int,
 ) -> None:
     scorer, entry_ids, batch_db_dir = utils.get_scorer(
         data_dir=data_dir,
@@ -631,6 +633,7 @@ def run_batch_searches(
             output_folder=batch_db_dir,
             overwrite=True,
             search_db=search_db,
+            threads=cpu,
         )
     rmtree(batch_db_dir)
 

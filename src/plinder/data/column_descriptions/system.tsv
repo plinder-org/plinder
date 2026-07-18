@@ -1,12 +1,6 @@
 Name	Type	Description
 system_biounit_id	str	Biounit ID
 system_receptor_type	str	Receptor polymer composition: protein, DNA, RNA, other, or a +-joined combination
-system_biounit_chains_asym_id	list[str]	All chain instances in the biological assembly
-system_biounit_non_water_chains_asym_id	list[str]	All non-water chain instances in the biological assembly
-system_biounit_water_chains_asym_id	list[str]	All water chain instances in the biological assembly
-system_other_chains_asym_id	list[str]	Non-water biological assembly chain instances that are not members of this system
-system_other_protein_chains_asym_id	list[str]	Receptor-like biological assembly chain instances that are not members of this system
-system_other_ligand_chains_asym_id	list[str]	Ligand-like biological assembly chain instances that are not members of this system
 system_water_residues	list[str]	System-interacting water residues encoded as <instance>.<asym>_<residue_number>
 system_protein_chains_asym_id	list[str]	Interacting receptor chains (protein or nucleic acid); historical column name retained
 system_id_no_biounit	str	ID of the system without the biounit

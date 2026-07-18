@@ -29,12 +29,6 @@ ligand_is_covalent	bool	Indicator of whether a ligand  is a covalent ligand
 ligand_covalent_linkages	set[str]	Ligand covalent linkages from _struct_conn (conn_type_id='covale'), format: {auth_seq}:{comp_id}:{chain}:{seq}:{atom}__{auth_seq}:{comp_id}:{chain}:{seq}:{atom}
 ligand_neighboring_residues	dict[str, list[int]]	Dictionary of neighboring residues, with {instance}.{chain} key and residue number value
 ligand_interacting_residues	dict[str, list[int]]	Dictionary of interacting residues, with {instance}.{chain} key and residue number value
-ligand_num_neighboring_ppi_atoms_within_4A_of_gap	int | None	Number of missing neighboring protein-protein interface atoms within 4 Å of ligand of interest
-ligand_num_neighboring_ppi_atoms_within_8A_of_gap	int | None	Number of missing neighboring protein-protein interface atoms within 8 Å of ligand of interest
-ligand_num_missing_ppi_interface_residues	int | None	Number of missing neighboring protein-protein interface residues within 4 Å of ligand of interest
-ligand_num_pli_atoms_within_4A_of_gap	int | None	Number of missing neighboring protein-ligand interface atoms within 4 Å of ligand of interest
-ligand_num_pli_atoms_within_8A_of_gap	int | None	Number of missing neighboring protein-ligand interface atoms within 8 Å of ligand of interest
-ligand_num_missing_pli_interface_residues	int | None	Number of missing neighboring protein-ligand interface residues within 4 Å of ligand of interest
 ligand_num_resolved_heavy_atoms	int | None	Number of resolved heavy atoms in a ligand
 ligand_num_unresolved_heavy_atoms	int | None	Number of unresolved heavy atoms in a ligand
 ligand_tpsa	float | None	Topological polar surface area

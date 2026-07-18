@@ -373,7 +373,8 @@ def cofactors_path(test_env):
     "Coenzyme A": [
         {
             "cofactors": [
-                "01A"
+                "01A",
+                "EKY"
             ],
             "EC": [
                 "1.1.1.34"
@@ -560,6 +561,8 @@ def mock_ccd_lookups(monkeypatch):
         "plinder.data.utils.annotations.ligand_utils.BINDING_AFFINITY",
         None,
     )
+
+
 @pytest.fixture(scope="session")
 def system_1a3b():
     return "1a3b__1__1.B__1.D"

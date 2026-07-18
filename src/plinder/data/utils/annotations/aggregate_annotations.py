@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import re
+import shutil
 import typing as ty
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from functools import cached_property
+from itertools import combinations
 from pathlib import Path
 
 import biotite.structure as struc
@@ -26,7 +28,7 @@ from plinder.data.utils.annotations.cif_utils import (
     get_chain_external_mappings,
     get_entry_info,
     get_model_count,
-    read_mmcif_container,
+    get_structure_with_altloc,
 )
 from plinder.data.utils.annotations.get_ligand_validation import (
     EntryValidation,
@@ -37,13 +39,20 @@ from plinder.data.utils.annotations.interaction_utils import (
     get_covalent_connections,
     get_symmetry_mate_contacts,
 )
-from plinder.data.utils.annotations.interface_gap import annotate_interface_gaps
-from plinder.data.utils.annotations.ligand_utils import Ligand, validate_chain_residue
+from plinder.data.utils.annotations.ligand_utils import (
+    BiounitSpatialIndex,
+    Ligand,
+    get_artifact_codes,
+    get_water_chain_ids,
+    is_known_artifact_ligand,
+    validate_chain_residue,
+)
 from plinder.data.utils.annotations.protein_utils import (
     Chain,
     _is_polynucleotide,
     _is_polypeptide,
     detect_ligand_chains,
+    detect_ligand_chains_from_cif,
     get_receptor_type,
 )
 from plinder.data.utils.annotations.save_utils import save_ligands
@@ -443,9 +452,6 @@ class System(DocBaseModel):
         self,
         chains: dict[str, Chain],
         entry_pass_criteria: bool | None,
-        biounit_chain_ids: list[str] | None = None,
-        water_chains: list[str] | None = None,
-        ligand_like_chains: set[str] | None = None,
         criteria: QualityCriteria = QualityCriteria(),
     ) -> dict[str, ty.Any]:
         data: dict[str, ty.Any] = defaultdict(str)
@@ -466,54 +472,11 @@ class System(DocBaseModel):
         data.update(self.format_validation(entry_pass_criteria, criteria))
         for chain_type in ["protein", "ligand"]:
             data.update(self.format_chains(chain_type, chains))
-
-        biounit_chain_ids = sorted(biounit_chain_ids or [])
-        water_chains = water_chains or []
-        ligand_like_chains = ligand_like_chains or set()
-        biounit_water_chains = [
-            chain_id
-            for chain_id in biounit_chain_ids
-            if chain_id.split(".", maxsplit=1)[-1] in water_chains
-        ]
-        biounit_non_water_chains = [
-            chain_id
-            for chain_id in biounit_chain_ids
-            if chain_id not in biounit_water_chains
-        ]
-        system_chains = set(self.protein_chains_asym_id + self.ligand_chains)
-        other_chains = [
-            chain_id
-            for chain_id in biounit_non_water_chains
-            if chain_id not in system_chains
-        ]
-        other_ligand_chains = [
-            chain_id
-            for chain_id in other_chains
-            if chain_id.split(".", maxsplit=1)[-1] in ligand_like_chains
-        ]
-        other_protein_chains = [
-            chain_id for chain_id in other_chains if chain_id not in other_ligand_chains
-        ]
-        data["system_biounit_chains_asym_id"] = biounit_chain_ids
-        data["system_biounit_non_water_chains_asym_id"] = biounit_non_water_chains
-        data["system_biounit_water_chains_asym_id"] = biounit_water_chains
-        data["system_other_chains_asym_id"] = other_chains
-        data["system_other_protein_chains_asym_id"] = other_protein_chains
-        data["system_other_ligand_chains_asym_id"] = other_ligand_chains
         data["system_water_residues"] = sorted(
             f"{chain_id}_{residue_number}"
             for chain_id, residue_numbers in self.waters.items()
             for residue_number in set(residue_numbers)
         )
-        data.update(self.format_chains("other", chains, other_chains))
-        for field in [
-            "auth_id",
-            "entity_id",
-            "length",
-            "num_unresolved_residues",
-            "chain_type",
-        ]:
-            data.setdefault(f"system_other_chains_{field}", [])
         return data
 
     @cached_property
@@ -633,7 +596,7 @@ class System(DocBaseModel):
         """
         Fraction of atoms in the system ligands which are in contact with residues from other symmetry mates.
         """
-        if self.num_heavy_atoms is None:
+        if not self.num_heavy_atoms:
             return None
         return self.num_atoms_with_crystal_contacts / self.num_heavy_atoms
 
@@ -815,27 +778,77 @@ class Entry(DocBaseModel):
         block: pdbx.CIFBlock,
     ) -> None:
         """Set entry.chains and entry.water_chains from biotite data."""
-        water_chains = set()
-        non_water_chains = set()
-
-        for chain_id in np.unique(atoms.chain_id):
-            chain_atoms = atoms[atoms.chain_id == chain_id]
-            if struc.filter_solvent(chain_atoms).all():
-                water_chains.add(chain_id)
-            else:
-                non_water_chains.add(chain_id)
-
-        self.chains = {}
-        for chain_id in non_water_chains:
-            chain_atoms = atoms[atoms.chain_id == chain_id]
-            self.chains[chain_id] = Chain.from_cif_data(
-                chain_id,
-                block,
-                chain_atoms,
-                len(self.chain_to_seqres.get(chain_id, "")),
+        chain_starts = struc.get_chain_starts(atoms, add_exclusive_stop=True)
+        chain_segments: dict[str, list[tuple[int, int]]] = defaultdict(list)
+        for start, stop in zip(chain_starts[:-1], chain_starts[1:]):
+            chain_segments[str(atoms.chain_id[start])].append((int(start), int(stop)))
+        solvent_mask = struc.filter_solvent(atoms)
+        water_chains = {
+            chain_id
+            for chain_id, segments in chain_segments.items()
+            if all(bool(solvent_mask[start:stop].all()) for start, stop in segments)
+        }
+        entity_by_asym: dict[str, str] = {}
+        if "struct_asym" in block:
+            struct_asym = block["struct_asym"]
+            entity_by_asym = {
+                str(asym_id): str(entity_id)
+                for asym_id, entity_id in zip(
+                    struct_asym["id"].as_array(),
+                    struct_asym["entity_id"].as_array(),
+                )
+            }
+        type_by_entity: dict[str, str] = {}
+        if "entity" in block:
+            entity = block["entity"]
+            type_by_entity.update(
+                {
+                    str(entity_id): str(entity_type)
+                    for entity_id, entity_type in zip(
+                        entity["id"].as_array(), entity["type"].as_array()
+                    )
+                }
             )
+        if "entity_poly" in block:
+            entity_poly = block["entity_poly"]
+            type_by_entity.update(
+                {
+                    str(entity_id): str(entity_type)
+                    for entity_id, entity_type in zip(
+                        entity_poly["entity_id"].as_array(),
+                        entity_poly["type"].as_array(),
+                    )
+                }
+            )
+        self.chains = {}
+        # Chain metadata does not use bonds.  Temporarily detaching the global
+        # BondList prevents every small chain slice from scanning and
+        # reindexing the full entry bond graph.
+        bonds = atoms.bonds
+        atoms.bonds = None
+        try:
+            for chain_id in sorted(set(chain_segments) - water_chains):
+                segments = chain_segments[chain_id]
+                if len(segments) == 1:
+                    start, stop = segments[0]
+                    chain_atoms = atoms[start:stop]
+                else:
+                    chain_atoms = struc.concatenate(
+                        [atoms[start:stop] for start, stop in segments]
+                    )
+                entity_id = entity_by_asym.get(chain_id, "")
+                self.chains[chain_id] = Chain.from_cif_data(
+                    chain_id,
+                    block,
+                    chain_atoms,
+                    len(self.chain_to_seqres.get(chain_id, "")),
+                    entity_id=entity_id,
+                    chain_type_str=type_by_entity.get(entity_id, "unknown"),
+                )
+        finally:
+            atoms.bonds = bonds
 
-        self.water_chains = list(water_chains)
+        self.water_chains = sorted(water_chains)
 
     def _finalize(
         self,
@@ -853,12 +866,15 @@ class Entry(DocBaseModel):
         self,
         biounit: struc.AtomArray,
         biounit_id: str,
-        interface_proximal_gaps: dict[str, ty.Any],
         plip_complex_threshold: float,
         neighboring_residue_threshold: float,
         neighboring_ligand_threshold: float,
         data_dir: Path | None,
         ligand_smiles_dict: dict[str, str] | None = None,
+        ligand_asym_ids: set[str] | None = None,
+        ligand_instance_chains: set[str] | None = None,
+        water_chains: set[str] | None = None,
+        spatial_index: BiounitSpatialIndex | None = None,
     ) -> dict[str, "Ligand"]:
         """Create Ligand objects for every ligand chain in a single biounit.
 
@@ -866,19 +882,66 @@ class Entry(DocBaseModel):
         and is only set by :meth:`Entry.from_custom_cif_file` — it lets
         user-supplied SMILES act as the CCD fallback for stereo
         validation and SMILES assignment on custom residues.
+
+        ``ligand_asym_ids`` optionally limits work to selected ligand chains.
+        PDB ingest uses this to probe non-ion ligands before calculating
+        contacts for potentially thousands of monoatomic ions.
+
+        ``ligand_instance_chains`` optionally selects exact biological-
+        assembly copies, rather than every copy of an asymmetric-unit chain.
+
+        ``water_chains`` may be precomputed once per biological assembly and
+        shared across calls that process different ligand subsets.
+
+        ``spatial_index`` shares the assembly CellList and atom hierarchy
+        across every ligand and across the non-ion/ion passes.
         """
         ligands: dict[str, Ligand] = {}
+        if spatial_index is None:
+            spatial_index = BiounitSpatialIndex.from_atoms(
+                biounit,
+                max(
+                    plip_complex_threshold,
+                    neighboring_residue_threshold,
+                    neighboring_ligand_threshold,
+                ),
+            )
         # Find ligand chains: chain_id format is "{instance}.{asym_id}"
-        all_chains = np.unique(biounit.chain_id)
         biounit_ligand_chains = [
             c
-            for c in all_chains
-            if "." in c and c.split(".")[1] in self.ligand_like_chains
+            for c in spatial_index.chain_ids
+            if "." in c
+            and c.split(".")[1] in self.ligand_like_chains
+            and (ligand_asym_ids is None or c.split(".")[1] in ligand_asym_ids)
+            and (ligand_instance_chains is None or c in ligand_instance_chains)
         ]
-        for ligand_chain in biounit_ligand_chains:
+        if not biounit_ligand_chains:
+            return ligands
+        if water_chains is None:
+            water_chains = get_water_chain_ids(biounit)
+        ligand_chain_count = len(biounit_ligand_chains)
+        if ligand_chain_count >= 100:
+            LOG.info(
+                "PDB %s assembly %s: processing %d ligand-chain instances",
+                self.pdb_id,
+                biounit_id,
+                ligand_chain_count,
+            )
+        for ligand_index, ligand_chain in enumerate(biounit_ligand_chains, start=1):
+            if ligand_chain_count >= 100 and ligand_index % 100 == 0:
+                LOG.info(
+                    "PDB %s assembly %s: processed %d/%d ligand-chain instances",
+                    self.pdb_id,
+                    biounit_id,
+                    ligand_index,
+                    ligand_chain_count,
+                )
             ligand_instance, ligand_asym_id = ligand_chain.split(".")
-            chain_mask = biounit.chain_id == ligand_chain
-            chain_atoms = biounit[chain_mask]
+            chain_atoms = spatial_index.take_atoms(
+                biounit,
+                spatial_index.atom_indices_for_chain(ligand_chain),
+                include_bonds=False,
+            )
             residue_numbers = list(dict.fromkeys(int(r) for r in chain_atoms.res_id))
             ligand = Ligand.from_pli(
                 pdb_id=self.pdb_id,
@@ -888,7 +951,6 @@ class Entry(DocBaseModel):
                 ligand_chain=self.chains[ligand_asym_id],
                 residue_numbers=residue_numbers,
                 ligand_like_chains=self.ligand_like_chains,
-                interface_proximal_gaps=interface_proximal_gaps,
                 all_covalent_dict=self.covalent_bonds,
                 plip_complex_threshold=plip_complex_threshold,
                 neighboring_residue_threshold=neighboring_residue_threshold,
@@ -896,10 +958,134 @@ class Entry(DocBaseModel):
                 data_dir=data_dir,
                 chain_to_seqres=self.chain_to_seqres,
                 ligand_smiles_dict=ligand_smiles_dict,
+                water_chains=water_chains,
+                spatial_index=spatial_index,
             )
             if ligand is not None:
                 ligands[ligand.id] = ligand
         return ligands
+
+    @staticmethod
+    def _ligand_pocket_members(ligand: Ligand) -> set[str]:
+        """Return the exact members used to connect a non-artifact ligand."""
+        members = {
+            f"res:{chain}:{residue}"
+            for chain, residues in ligand.neighboring_residues.items()
+            for residue in residues
+        }
+        members.update(
+            f"lig:{chain}"
+            for chain in ligand.neighboring_ligands + ligand.interacting_ligands
+        )
+        return members
+
+    def _upper_pocket_members(
+        self,
+        biounit: struc.AtomArray,
+        spatial_index: BiounitSpatialIndex,
+        instance_chain: str,
+        *,
+        neighboring_residue_threshold: float,
+        interaction_search_threshold: float,
+    ) -> set[str]:
+        """Cheap superset of the pocket members for one deferred ligand.
+
+        Every actual receptor neighbor is included at the normal pocket
+        radius.  Every ligand-like chain within the interaction search radius
+        is included as a possible ligand interaction.  The result may retain
+        extra deferred ligands, but cannot discard an edge later created by
+        :meth:`set_systems`.
+        """
+        chain_indices = spatial_index.atom_indices_for_chain(instance_chain)
+        if chain_indices.size == 0:
+            return set()
+        coordinates = biounit.coord[chain_indices]
+        receptor_asym_ids = {
+            asym_id
+            for asym_id, chain in self.chains.items()
+            if asym_id not in self.ligand_like_chains
+            and (
+                _is_polypeptide(chain.chain_type_str)
+                or _is_polynucleotide(chain.chain_type_str)
+            )
+        }
+        members: set[str] = set()
+        neighbor_indices = spatial_index.atom_indices_near(
+            coordinates, neighboring_residue_threshold
+        )
+        for index in neighbor_indices:
+            chain = str(biounit.chain_id[index])
+            asym_id = chain.split(".", maxsplit=1)[-1]
+            if asym_id in receptor_asym_ids:
+                members.add(f"res:{chain}:{int(biounit.res_id[index])}")
+
+        possible_interactions = spatial_index.atom_indices_near(
+            coordinates, interaction_search_threshold
+        )
+        for chain in np.unique(biounit.chain_id[possible_interactions]):
+            chain = str(chain)
+            if chain == instance_chain or "." not in chain:
+                continue
+            if chain.split(".", maxsplit=1)[1] in self.ligand_like_chains:
+                members.add(f"lig:{chain}")
+        return members
+
+    def _connected_deferred_ligand_chains(
+        self,
+        biounit: struc.AtomArray,
+        spatial_index: BiounitSpatialIndex,
+        primary_ligands: ty.Iterable[Ligand],
+        deferred_instance_chains: set[str],
+        *,
+        min_shared_pocket_members: int,
+        neighboring_residue_threshold: float,
+        interaction_search_threshold: float,
+    ) -> set[str]:
+        """Keep deferred non-artifacts that may connect to a primary ligand."""
+        if not deferred_instance_chains:
+            return set()
+        if min_shared_pocket_members <= 0:
+            return deferred_instance_chains
+
+        primary_members = {
+            ligand.instance_chain: self._ligand_pocket_members(ligand)
+            for ligand in primary_ligands
+            if not ligand.is_artifact
+        }
+        if not primary_members:
+            return set()
+        pocket_members = dict(primary_members)
+        for chain in deferred_instance_chains:
+            pocket_members[chain] = self._upper_pocket_members(
+                biounit,
+                spatial_index,
+                chain,
+                neighboring_residue_threshold=neighboring_residue_threshold,
+                interaction_search_threshold=interaction_search_threshold,
+            )
+
+        chain_ids = list(pocket_members)
+        graph = nk.Graph(len(chain_ids))
+        member_chains: dict[str, list[int]] = defaultdict(list)
+        for chain_index, members in enumerate(pocket_members.values()):
+            for member in members:
+                member_chains[member].append(chain_index)
+        shared_counts: dict[tuple[int, int], int] = defaultdict(int)
+        for member_indices in member_chains.values():
+            for left, right in combinations(member_indices, 2):
+                pair = (min(left, right), max(left, right))
+                shared_counts[pair] += 1
+                if shared_counts[pair] == min_shared_pocket_members:
+                    graph.addEdge(*pair)
+
+        primary_chains = set(primary_members)
+        retained: set[str] = set()
+        components = nk.components.ConnectedComponents(graph).run().getComponents()
+        for component in components:
+            component_chains = {chain_ids[index] for index in component}
+            if component_chains & primary_chains:
+                retained.update(component_chains & deferred_instance_chains)
+        return retained
 
     @classmethod
     def from_cif_file(
@@ -948,15 +1134,19 @@ class Entry(DocBaseModel):
         )
         from plinder.data.utils.annotations.protein_utils import get_seqres_from_cif
 
-        cif_data = read_mmcif_container(cif_file)
-        symmetry_mate_contacts = get_symmetry_mate_contacts(
-            cif_file, symmetry_mate_contact_threshold
-        )
+        cif_file_obj = read_mmcif_file(cif_file)
+        cif_data = list(cif_file_obj.values())[0]
         entry_info = get_entry_info(cif_data)
-        per_chain = get_chain_external_mappings(cif_data)
 
         # Extract metadata from CIF block
         pdb_id = (_cif_scalar(cif_data, "entry", "id") or "").lower()
+        if save_folder is not None:
+            # Re-ingest must never merge newly retained ligands with SDFs from
+            # a previous annotation of the same entry.  Clear this derived
+            # directory before any early no-system return as well.
+            ligand_dir = Path(save_folder) / pdb_id / "ligand_files"
+            if ligand_dir.exists():
+                shutil.rmtree(ligand_dir)
         release_date = _cif_scalar(
             cif_data, "pdbx_audit_revision_history", "revision_date"
         )
@@ -967,24 +1157,6 @@ class Entry(DocBaseModel):
                 r = float(resolution)
             except ValueError:
                 r = None
-
-        # Load structure with biotite
-        cif_file_obj = read_mmcif_file(cif_file)
-        # Multi-model PDBs (e.g. NMR ensembles) silently use model 1 here;
-        # warn so callers know other models are dropped.
-        n_models = get_model_count(cif_file_obj)
-        if n_models > 1:
-            LOG.warning(f"PDB {pdb_id!r} has {n_models} models — using model 1 only.")
-        atoms = pdbx.get_structure(
-            cif_file_obj, model=1, use_author_fields=False, include_bonds=True
-        )
-        atoms = atoms[~is_hydrogen_isotope(atoms.element)]
-        if atoms.bonds is None:
-            raise ValueError(
-                f"{pdb_id}: biotite returned no bonds despite include_bonds=True"
-            )
-        apply_struct_conn_bonds(atoms, cif_data)
-        chain_to_seqres = get_seqres_from_cif(cif_data)
 
         entry = cls(
             pdb_id=pdb_id,
@@ -1002,31 +1174,96 @@ class Entry(DocBaseModel):
             if entry_info.get("entry_pH") is not None
             else None,
             resolution=r,
-            covalent_bonds=get_covalent_connections(cif_data),
-            chain_to_seqres=chain_to_seqres,
-            symmetry_mate_contacts=symmetry_mate_contacts,
         )
+        ligand_preflight = detect_ligand_chains_from_cif(
+            cif_data,
+            min_polymer_size,
+        )
+        if ligand_preflight == {}:
+            LOG.info(
+                f"PDB {pdb_id!r} has no ligand-like chains; skipping bonded "
+                "structure loading"
+            )
+            return entry
+
+        # Load structure with biotite
+        # Multi-model PDBs (e.g. NMR ensembles) silently use model 1 here;
+        # warn so callers know other models are dropped.
+        n_models = get_model_count(cif_file_obj)
+        if n_models > 1:
+            LOG.warning(f"PDB {pdb_id!r} has {n_models} models — using model 1 only.")
+        atoms = get_structure_with_altloc(
+            cif_file_obj, model=1, use_author_fields=False, include_bonds=True
+        )
+        atoms = atoms[~is_hydrogen_isotope(atoms.element)]
+        if atoms.bonds is None:
+            raise ValueError(
+                f"{pdb_id}: biotite returned no bonds despite include_bonds=True"
+            )
+        apply_struct_conn_bonds(atoms, cif_data)
+        chain_to_seqres = get_seqres_from_cif(cif_data)
+
+        entry.covalent_bonds = get_covalent_connections(cif_data)
+        entry.chain_to_seqres = chain_to_seqres
         entry._populate_chains(atoms, cif_data)
 
         if save_folder is not None and data_dir is None:
             data_dir = save_folder.parent.parent
+        per_chain = get_chain_external_mappings(cif_data)
         for chain in per_chain:
-            entry.chains[chain].mappings = per_chain[chain]
+            # External databases may annotate an asym ID that is absent from
+            # the parsed model (for example, a chain omitted from model 1).
+            # Such mappings cannot be attached to an Entry chain.
+            if chain in entry.chains:
+                entry.chains[chain].mappings = per_chain[chain]
         entry.ligand_like_chains = detect_ligand_chains(entry, min_polymer_size)
-        if save_folder is not None:
-            canonical_ligand_dir = save_folder / entry.pdb_id / "ligand_files"
-            canonical_ligand_dir.mkdir(parents=True, exist_ok=True)
-            save_ligands(
-                atoms,
-                sorted(entry.ligand_like_chains),
-                canonical_ligand_dir,
-            )
-        protein_chains = [c for c in entry.chains if c not in entry.ligand_like_chains]
-        interface_proximal_gaps = annotate_interface_gaps(
-            cif_file,
-            protein_chains=protein_chains,
-            ligand_chains=list(entry.ligand_like_chains.keys()),
+        if not entry.ligand_like_chains:
+            # There can be no systems without ligand-like chains.  In
+            # particular, avoid building biological assemblies for large
+            # receptor-only entries that cannot contribute annotation rows.
+            return entry
+        monoatomic_ion_mask = struc.filter_monoatomic_ions(atoms)
+        ion_only_chains = set(
+            str(chain) for chain in atoms.chain_id[monoatomic_ion_mask]
         )
+        ion_only_chains.difference_update(
+            str(chain) for chain in atoms.chain_id[~monoatomic_ion_mask]
+        )
+        monoatomic_ion_asym_ids = set(entry.ligand_like_chains) & ion_only_chains
+        known_artifact_asym_ids: set[str] = set()
+        if data_dir is not None:
+            artifact_codes = get_artifact_codes(data_dir)
+            known_artifact_asym_ids = {
+                asym_id
+                for asym_id in entry.ligand_like_chains
+                if asym_id not in monoatomic_ion_asym_ids
+                and is_known_artifact_ligand(
+                    (
+                        residue.name
+                        for residue in entry.chains[asym_id].residues.values()
+                    ),
+                    artifact_codes,
+                )
+            }
+        primary_asym_ids = (
+            set(entry.ligand_like_chains)
+            - monoatomic_ion_asym_ids
+            - known_artifact_asym_ids
+        )
+        if not primary_asym_ids:
+            LOG.info(
+                f"PDB {entry.pdb_id!r} has only known artifact or "
+                "monoatomic-ion ligand chains; "
+                "skipping biological assemblies"
+            )
+            return entry
+        if monoatomic_ion_asym_ids or known_artifact_asym_ids:
+            LOG.info(
+                "PDB %s: deferring %d ion and %d known-artifact ASU ligand chains",
+                entry.pdb_id,
+                len(monoatomic_ion_asym_ids),
+                len(known_artifact_asym_ids),
+            )
         ligands: dict[str, Ligand] = {}
 
         assembly_ids = pdbx.list_assemblies(cif_file_obj)
@@ -1039,20 +1276,129 @@ class Entry(DocBaseModel):
             entry.biounit_chain_ids[assembly_id] = sorted(
                 str(chain_id) for chain_id in np.unique(biounit.chain_id)
             )
-            new_ligands = entry._collect_ligands_from_biounit(
+            spatial_index = BiounitSpatialIndex.from_atoms(
+                biounit,
+                max(
+                    plip_complex_threshold,
+                    neighboring_residue_threshold,
+                    neighboring_ligand_threshold,
+                ),
+            )
+            water_chains = get_water_chain_ids(biounit)
+            primary_ligands = entry._collect_ligands_from_biounit(
                 biounit,
                 assembly_id,
-                interface_proximal_gaps,
                 plip_complex_threshold,
                 neighboring_residue_threshold,
                 neighboring_ligand_threshold,
                 data_dir,
+                ligand_asym_ids=primary_asym_ids,
+                water_chains=water_chains,
+                spatial_index=spatial_index,
             )
-            ligands.update(new_ligands)
-        entry._finalize(
+            proper_primary_ligands = [
+                ligand for ligand in primary_ligands.values() if ligand.is_proper
+            ]
+            if not proper_primary_ligands:
+                ligands.update(primary_ligands)
+                continue
+
+            ion_instance_chains = {
+                chain
+                for chain in spatial_index.chain_ids
+                if "." in chain
+                and chain.split(".", maxsplit=1)[1] in monoatomic_ion_asym_ids
+            }
+            retained_ion_chains = entry._connected_deferred_ligand_chains(
+                biounit,
+                spatial_index,
+                proper_primary_ligands,
+                ion_instance_chains,
+                min_shared_pocket_members=min_shared_pocket_members,
+                neighboring_residue_threshold=neighboring_residue_threshold,
+                interaction_search_threshold=plip_complex_threshold,
+            )
+            ion_ligands = entry._collect_ligands_from_biounit(
+                biounit,
+                assembly_id,
+                plip_complex_threshold,
+                neighboring_residue_threshold,
+                neighboring_ligand_threshold,
+                data_dir,
+                ligand_instance_chains=retained_ion_chains,
+                water_chains=water_chains,
+                spatial_index=spatial_index,
+            )
+            non_artifact_ligands = [
+                ligand
+                for ligand in (*primary_ligands.values(), *ion_ligands.values())
+                if not ligand.is_artifact
+            ]
+            referenced_artifact_chains = {
+                chain
+                for ligand in non_artifact_ligands
+                for chain in (ligand.neighboring_ligands + ligand.interacting_ligands)
+                if "." in chain
+                and chain.split(".", maxsplit=1)[1] in known_artifact_asym_ids
+            }
+            # Ligand interaction detection is not guaranteed to be symmetric
+            # for short polymer ligands.  Include every known artifact inside
+            # the interaction search radius as a conservative superset; the
+            # exact set_systems() graph drops any false-positive candidates.
+            for ligand in non_artifact_ligands:
+                ligand_indices = spatial_index.atom_indices_for_chain(
+                    ligand.instance_chain
+                )
+                nearby_indices = spatial_index.atom_indices_near(
+                    biounit.coord[ligand_indices], plip_complex_threshold
+                )
+                referenced_artifact_chains.update(
+                    str(chain)
+                    for chain in np.unique(biounit.chain_id[nearby_indices])
+                    if "." in str(chain)
+                    and str(chain).split(".", maxsplit=1)[1] in known_artifact_asym_ids
+                )
+            artifact_ligands = entry._collect_ligands_from_biounit(
+                biounit,
+                assembly_id,
+                plip_complex_threshold,
+                neighboring_residue_threshold,
+                neighboring_ligand_threshold,
+                data_dir,
+                ligand_instance_chains=referenced_artifact_chains,
+                water_chains=water_chains,
+                spatial_index=spatial_index,
+            )
+            ligands.update(primary_ligands)
+            ligands.update(ion_ligands)
+            ligands.update(artifact_ligands)
+        entry.set_systems(
             ligands,
             min_shared_pocket_members=min_shared_pocket_members,
         )
+        if entry.systems:
+            entry.symmetry_mate_contacts = get_symmetry_mate_contacts(
+                cif_file_obj,
+                symmetry_mate_contact_threshold,
+            )
+            if entry.symmetry_mate_contacts:
+                for system in entry.systems.values():
+                    for ligand in system.ligands:
+                        ligand.label_crystal_contacts(entry.symmetry_mate_contacts)
+        entry.label_chains()
+        retained_ligand_asym_ids = sorted(
+            {
+                ligand.asym_id
+                for system in entry.systems.values()
+                for ligand in system.ligands
+            }
+        )
+        if save_folder is not None and retained_ligand_asym_ids:
+            save_ligands(
+                atoms,
+                retained_ligand_asym_ids,
+                save_folder / entry.pdb_id / "ligand_files",
+            )
         return entry
 
     @classmethod
@@ -1128,6 +1474,11 @@ class Entry(DocBaseModel):
         )
         from plinder.data.utils.annotations.protein_utils import get_seqres_from_cif
 
+        if save_folder is not None:
+            ligand_dir = Path(save_folder) / pdb_id / "ligand_files"
+            if ligand_dir.exists():
+                shutil.rmtree(ligand_dir)
+
         # Read CIF once into memory — we mutate this copy only, never the file on disk.
         cif_file_obj = read_mmcif_file(cif_file)
 
@@ -1174,7 +1525,7 @@ class Entry(DocBaseModel):
             cif_file_obj.write(str(save_fixed_cif))
 
         cif_data = list(cif_file_obj.values())[0]
-        atoms = pdbx.get_structure(
+        atoms = get_structure_with_altloc(
             cif_file_obj, model=1, use_author_fields=False, include_bonds=True
         )
         atoms = atoms[~is_hydrogen_isotope(atoms.element)]
@@ -1199,40 +1550,49 @@ class Entry(DocBaseModel):
         )
         entry._populate_chains(atoms, cif_data)
         entry.ligand_like_chains = detect_ligand_chains(entry, min_polymer_size)
-        if save_folder is not None:
-            canonical_ligand_dir = save_folder / entry.pdb_id / "ligand_files"
-            canonical_ligand_dir.mkdir(parents=True, exist_ok=True)
-            save_ligands(
-                atoms,
-                sorted(entry.ligand_like_chains),
-                canonical_ligand_dir,
-            )
-        protein_chains = [c for c in entry.chains if c not in entry.ligand_like_chains]
-        interface_proximal_gaps = annotate_interface_gaps(
-            cif_file,
-            protein_chains=protein_chains,
-            ligand_chains=list(entry.ligand_like_chains.keys()),
-        )
         # Create single biounit with "1." prefix on chain IDs
         biounit = atoms.copy()
         biounit.chain_id = np.array([f"1.{c}" for c in biounit.chain_id])
         entry.biounit_chain_ids["1"] = sorted(
             str(chain_id) for chain_id in np.unique(biounit.chain_id)
         )
+        spatial_index = BiounitSpatialIndex.from_atoms(
+            biounit,
+            max(
+                plip_complex_threshold,
+                neighboring_residue_threshold,
+                neighboring_ligand_threshold,
+            ),
+        )
+        water_chains = get_water_chain_ids(biounit)
         ligands = entry._collect_ligands_from_biounit(
             biounit,
             "1",  # single assembly; custom CIFs lack _pdbx_struct_assembly
-            interface_proximal_gaps,
             plip_complex_threshold,
             neighboring_residue_threshold,
             neighboring_ligand_threshold,
             data_dir=None,
             ligand_smiles_dict=ligand_smiles_dict,
+            water_chains=water_chains,
+            spatial_index=spatial_index,
         )
         entry._finalize(
             ligands,
             min_shared_pocket_members=min_shared_pocket_members,
         )
+        retained_ligand_asym_ids = sorted(
+            {
+                ligand.asym_id
+                for system in entry.systems.values()
+                for ligand in system.ligands
+            }
+        )
+        if save_folder is not None and retained_ligand_asym_ids:
+            save_ligands(
+                atoms,
+                retained_ligand_asym_ids,
+                save_folder / entry.pdb_id / "ligand_files",
+            )
         return entry
 
     def set_systems(
@@ -1276,21 +1636,32 @@ class Entry(DocBaseModel):
                 members.add(f"lig:{lc}")
             pocket_members[i] = members
 
-        groupable = list(pocket_members.keys())
-        for ii, i in enumerate(groupable):
-            for j in groupable[ii + 1 :]:
-                shared = pocket_members[i] & pocket_members[j]
-                if len(shared) >= min_shared_pocket_members:
-                    G.addEdge(i, j)
+        groupable = list(pocket_members)
+        if min_shared_pocket_members <= 0:
+            for i, j in combinations(groupable, 2):
+                G.addEdge(i, j)
+        else:
+            member_ligands: dict[str, list[int]] = defaultdict(list)
+            for ligand_index, members in pocket_members.items():
+                for member in members:
+                    member_ligands[member].append(ligand_index)
+            shared_member_counts: dict[tuple[int, int], int] = defaultdict(int)
+            for member_indices in member_ligands.values():
+                for i, j in combinations(member_indices, 2):
+                    pair = (min(i, j), max(i, j))
+                    shared_member_counts[pair] += 1
+                    if shared_member_counts[pair] == min_shared_pocket_members:
+                        G.addEdge(*pair)
 
         # Step 2: attach artifacts within 4A of a non-artifact ligand
+        ligand_id_to_index = {ligand_id: i for i, ligand_id in enumerate(ligand_ids)}
         for i, lid in enumerate(ligand_ids):
             lig = ligands[lid]
             if not lig.is_artifact:
                 continue
             for neighbor_chain in lig.neighboring_ligands + lig.interacting_ligands:
                 neighbor_id = "__".join([self.pdb_id, lig.biounit_id, neighbor_chain])
-                j_idx = {l: idx for idx, l in enumerate(ligand_ids)}.get(neighbor_id)
+                j_idx = ligand_id_to_index.get(neighbor_id)
                 if j_idx is not None and not ligands[ligand_ids[j_idx]].is_artifact:
                     G.addEdge(i, j_idx)
         cc = nk.components.ConnectedComponents(G)
@@ -1317,11 +1688,10 @@ class Entry(DocBaseModel):
                 biounit_id=ligs[0].biounit_id,
                 ligands=sorted(ligs, key=lambda x: x.id),
                 receptor_type=get_receptor_type(
-                    self.chains[asym_id].chain_type_str
-                    for asym_id in receptor_asym_ids
+                    self.chains[asym_id].chain_type_str for asym_id in receptor_asym_ids
                 ),
             )
-            if len(system.protein_chains_asym_id):
+            if system.proper_ligands() and len(system.protein_chains_asym_id):
                 self.systems[system.id] = system
 
     @cached_property
@@ -1525,15 +1895,45 @@ class Entry(DocBaseModel):
                     "chain_auth_id": chain.auth_id,
                     "chain_entity_id": chain.entity_id,
                     "chain_type": chain.chain_type_str,
-                    "chain_receptor_type": get_receptor_type(
-                        [chain.chain_type_str]
-                    ),
+                    "chain_receptor_type": get_receptor_type([chain.chain_type_str]),
                     "chain_length": chain.length,
                     "chain_num_unresolved_residues": chain.num_unresolved_residues,
                     "chain_is_holo": chain.holo,
                     "chain_uniprot_ids": sorted(chain.mappings.get("UniProt", {})),
                 }
             )
+        return pd.DataFrame(rows, columns=columns)
+
+    def biounit_chains_to_df(self) -> pd.DataFrame:
+        """Return biological-assembly membership once per chain instance."""
+        columns = [
+            "entry_pdb_id",
+            "biounit_id",
+            "chain_instance",
+            "chain_asym_id",
+            "chain_role",
+        ]
+        rows = []
+        water_chains = set(self.water_chains)
+        ligand_chains = set(self.ligand_like_chains)
+        for biounit_id, chain_instances in sorted(self.biounit_chain_ids.items()):
+            for chain_instance in sorted(set(chain_instances)):
+                asym_id = chain_instance.split(".", maxsplit=1)[-1]
+                if asym_id in water_chains:
+                    role = "water"
+                elif asym_id in ligand_chains:
+                    role = "ligand"
+                else:
+                    role = "receptor"
+                rows.append(
+                    {
+                        "entry_pdb_id": self.pdb_id,
+                        "biounit_id": str(biounit_id),
+                        "chain_instance": chain_instance,
+                        "chain_asym_id": asym_id,
+                        "chain_role": role,
+                    }
+                )
         return pd.DataFrame(rows, columns=columns)
 
     def to_df(self) -> pd.DataFrame:
@@ -1555,9 +1955,6 @@ class Entry(DocBaseModel):
             system_data = annotation.format(
                 self.chains,
                 self.pass_criteria,
-                biounit_chain_ids=self.biounit_chain_ids.get(annotation.biounit_id, []),
-                water_chains=self.water_chains,
-                ligand_like_chains=set(self.ligand_like_chains),
             )
             for ligand in self.systems[system].ligands:
                 ligand_data = ligand.format(self.chains)
@@ -1604,7 +2001,17 @@ class Entry(DocBaseModel):
             ).getValidation()
             self.validation = EntryValidation.from_entry(doc)
             if self.validation and self.validation.r is not None:
-                for chain in self.chains:
+                system_chain_ids = {
+                    instance_chain.split(".", maxsplit=1)[-1]
+                    for system in self.systems.values()
+                    for instance_chain in system.protein_chains_asym_id
+                }
+                system_chain_ids.update(
+                    ligand.asym_id
+                    for system in self.systems.values()
+                    for ligand in system.ligands
+                )
+                for chain in system_chain_ids:
                     self.chains[chain].set_validation(doc, thresholds)
                 for system in self.systems:
                     self.systems[system].set_validation(self.chains, thresholds)
@@ -1612,6 +2019,7 @@ class Entry(DocBaseModel):
             LOG.error(
                 f"set_validation: Error setting validation for {self.pdb_id}: {e}"
             )
+
 
 def document(output_dir: Path) -> None:
     """

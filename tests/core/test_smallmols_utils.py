@@ -64,7 +64,7 @@ def test_inchikey(smiles, inchikey, remove_stereo):
     assert inchikey == smiles2inchikey(smiles, remove_stereo=remove_stereo)
 
 
-def test_load_ligands_from_index_uses_holo_ligand_rows():
+def test_load_ligands_from_index_uses_proper_holo_ligand_rows():
     from plinder.data.utils.annotations.get_similarity_scores import (
         load_ligands_from_index,
     )
@@ -74,6 +74,7 @@ def test_load_ligands_from_index_uses_holo_ligand_rows():
             "entry_pdb_id": ["1abc", "1abc", "2def"],
             "system_id": ["1abc__1__A", "1abc__1__A", "2def__1__B"],
             "system_type": ["holo", "holo", "apo"],
+            "ligand_is_proper": [True, False, True],
             "ligand_rdkit_canonical_smiles": ["CCO", "CCO", "CCN"],
             "ligand_unique_ccd_code": ["LIG", "LIG", "OTH"],
             "ligand_id": ["1abc__1__A__1.C", "1abc__1__A__1.C", "2def__1__B__1.D"],

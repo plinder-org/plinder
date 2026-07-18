@@ -8,12 +8,14 @@ import re
 import sqlite3
 import typing as ty
 from collections import Counter, defaultdict
+from dataclasses import dataclass
 from functools import cache, cached_property
 from pathlib import Path
 
 import biotite.structure as struc
 import biotite.structure.info as bt_info
 import numpy as np
+import numpy.typing as npt
 import pandas as pd
 from pydantic import BeforeValidator, Field
 from rdkit import Chem, RDLogger
@@ -27,14 +29,182 @@ from plinder.data.utils.annotations.interaction_utils import (
     extract_ligand_links_to_neighbouring_chains,
     run_peppr_interactions,
 )
-from plinder.data.utils.annotations.interface_gap import (
-    annotate_interface_gaps_per_chain,
-)
 from plinder.data.utils.annotations.protein_utils import Chain, sequences_match_core
 from plinder.data.utils.annotations.utils import DocBaseModel
 
 _PRD_DB_PATH = str(BASE_DIR / "data/utils/annotations/static_files/prdcc.chemlib")
 LOG = logging.getLogger(__name__)
+
+
+@dataclass
+class BiounitSpatialIndex:
+    """Reusable spatial and hierarchy index for one biological assembly."""
+
+    cell_list: struc.CellList
+    residue_starts: npt.NDArray[np.int_]
+    chain_segments: dict[str, list[tuple[int, int]]]
+    max_radius: float
+    bond_neighbors: npt.NDArray[np.integer[ty.Any]] | None
+    bond_types: npt.NDArray[np.integer[ty.Any]] | None
+
+    @classmethod
+    def from_atoms(
+        cls,
+        atoms: struc.AtomArray,
+        max_radius: float,
+    ) -> "BiounitSpatialIndex":
+        """Build the expensive whole-assembly indexes exactly once."""
+        if max_radius <= 0:
+            raise ValueError("max_radius must be positive")
+        chain_starts = struc.get_chain_starts(atoms, add_exclusive_stop=True)
+        chain_segments: dict[str, list[tuple[int, int]]] = defaultdict(list)
+        for start, stop in zip(chain_starts[:-1], chain_starts[1:]):
+            chain_segments[str(atoms.chain_id[start])].append((int(start), int(stop)))
+        if atoms.bonds is None:
+            bond_neighbors = None
+            bond_types = None
+        else:
+            bond_neighbors, bond_types = atoms.bonds.get_all_bonds()
+        return cls(
+            cell_list=struc.CellList(atoms, max_radius),
+            residue_starts=ty.cast(
+                npt.NDArray[np.int_],
+                struc.get_residue_starts(atoms, add_exclusive_stop=True),
+            ),
+            chain_segments=dict(chain_segments),
+            max_radius=max_radius,
+            bond_neighbors=bond_neighbors,
+            bond_types=bond_types,
+        )
+
+    @property
+    def chain_ids(self) -> list[str]:
+        """Return chain IDs in their original assembly order."""
+        return list(self.chain_segments)
+
+    def atom_indices_for_chain(self, chain_id: str) -> npt.NDArray[np.int_]:
+        """Return sorted atom indices for a possibly segmented chain."""
+        segments = self.chain_segments.get(chain_id, [])
+        if not segments:
+            return np.array([], dtype=int)
+        return ty.cast(
+            npt.NDArray[np.int_],
+            np.concatenate(
+                [np.arange(start, stop, dtype=int) for start, stop in segments]
+            ),
+        )
+
+    def atom_indices_near(
+        self,
+        coordinates: npt.NDArray[np.floating[ty.Any]],
+        radius: float,
+    ) -> npt.NDArray[np.int_]:
+        """Return sorted unique atom indices within *radius* of coordinates."""
+        if radius > self.max_radius:
+            raise ValueError(
+                f"query radius {radius} exceeds indexed radius {self.max_radius}"
+            )
+        nearby: list[npt.NDArray[np.int_]] = []
+        for coordinate in coordinates:
+            indices = ty.cast(
+                npt.NDArray[np.int_],
+                self.cell_list.get_atoms(coordinate, radius=radius),
+            )
+            valid = indices[indices >= 0]
+            if valid.size:
+                nearby.append(valid)
+        if not nearby:
+            return np.array([], dtype=int)
+        return ty.cast(npt.NDArray[np.int_], np.unique(np.concatenate(nearby)))
+
+    def complete_residue_indices_near(
+        self,
+        coordinates: npt.NDArray[np.floating[ty.Any]],
+        radius: float,
+    ) -> npt.NDArray[np.int_]:
+        """Expand nearby atom hits to their complete residues."""
+        nearby = self.atom_indices_near(coordinates, radius)
+        if nearby.size == 0:
+            return nearby
+        residue_indices = np.unique(
+            np.searchsorted(self.residue_starts, nearby, side="right") - 1
+        )
+        return ty.cast(
+            npt.NDArray[np.int_],
+            np.concatenate(
+                [
+                    np.arange(
+                        self.residue_starts[index],
+                        self.residue_starts[index + 1],
+                        dtype=int,
+                    )
+                    for index in residue_indices
+                ]
+            ),
+        )
+
+    def take_atoms(
+        self,
+        atoms: struc.AtomArray,
+        indices: npt.NDArray[np.int_],
+        *,
+        include_bonds: bool,
+    ) -> struc.AtomArray:
+        """Take a subarray without globally reindexing every bond.
+
+        ``AtomArray.__getitem__`` delegates to ``BondList.__getitem__``, which
+        scans the full assembly bond graph even when only a few local atoms are
+        requested. Rebuilding the selected adjacency from ``get_bonds()`` is
+        equivalent and scales with the local slice instead.
+        """
+        subset = struc.AtomArray(len(indices))
+        subset.coord = atoms.coord[indices]
+        for category in atoms.get_annotation_categories():
+            subset.set_annotation(category, atoms.get_annotation(category)[indices])
+        if atoms.box is not None:
+            subset.box = atoms.box.copy()
+        if (
+            include_bonds
+            and self.bond_neighbors is not None
+            and self.bond_types is not None
+        ):
+            selected = {
+                int(global_index): local_index
+                for local_index, global_index in enumerate(indices)
+            }
+            bonds = struc.BondList(len(indices))
+            for local_index, global_index in enumerate(indices):
+                neighbors = self.bond_neighbors[global_index]
+                bond_types = self.bond_types[global_index]
+                for neighbor, bond_type in zip(neighbors, bond_types):
+                    if neighbor < 0:
+                        continue
+                    other_local_index = selected.get(int(neighbor))
+                    if (
+                        other_local_index is not None
+                        and local_index < other_local_index
+                    ):
+                        bonds.add_bond(
+                            local_index,
+                            other_local_index,
+                            int(bond_type),
+                        )
+            subset.bonds = bonds
+        return subset
+
+
+def get_water_chain_ids(atoms: struc.AtomArray) -> set[str]:
+    """Return chain IDs whose atoms are all classified as solvent.
+
+    Computing the solvent mask once avoids repeatedly slicing a potentially
+    large biological assembly for every ligand in that assembly.
+    """
+    solvent_mask = struc.filter_solvent(atoms)
+    solvent_chains = set(str(chain_id) for chain_id in atoms.chain_id[solvent_mask])
+    non_solvent_chains = set(
+        str(chain_id) for chain_id in atoms.chain_id[~solvent_mask]
+    )
+    return solvent_chains - non_solvent_chains
 
 
 def _template_from_user_smiles(
@@ -276,12 +446,25 @@ def get_ccd_synonyms(data_dir: Path) -> tuple[list[set[str]], dict[str, str]]:
 
 # lazy evaluate data fetches referenced as module globals
 # TODO : clean this up and deduplicate extras with pipeline.io
-COFACTORS = None
-LIST_OF_CCD_SYNONYMS = None
-CCD_SYNONYMS_DICT = None
+COFACTORS: set[str] | None = None
+LIST_OF_CCD_SYNONYMS: list[set[str]] | None = None
+CCD_SYNONYMS_DICT: dict[str, str] | None = None
 # instantiate artifact list once and reuse variable
-ARTIFACTS = None
-BINDING_AFFINITY = None
+ARTIFACTS: set[str] | None = None
+BINDING_AFFINITY: dict[str, ty.Any] | None = None
+
+
+def get_artifact_codes(data_dir: Path) -> set[str]:
+    """Load the artifact CCD set needed for cheap ingest preflight."""
+    global LIST_OF_CCD_SYNONYMS, CCD_SYNONYMS_DICT, ARTIFACTS
+
+    if LIST_OF_CCD_SYNONYMS is None or CCD_SYNONYMS_DICT is None:
+        LIST_OF_CCD_SYNONYMS, CCD_SYNONYMS_DICT = get_ccd_synonyms(data_dir)
+    artifacts = ARTIFACTS
+    if artifacts is None:
+        artifacts = parse_artifacts()
+        ARTIFACTS = artifacts
+    return artifacts
 
 
 def add_missed_synonyms(current_set: set[str]) -> set[str]:
@@ -537,6 +720,36 @@ def is_excluded_mol(
         return False
 
 
+def is_known_artifact_ligand(
+    residue_names: ty.Iterable[str],
+    artifact_codes: set[str],
+) -> bool:
+    """Return whether a ligand chain is provably an artifact before assembly.
+
+    Composite ligands are only rejected from CCD-code rules that are identical
+    to :meth:`Ligand.identify_artifacts_cofactors_and_other`.  The molecular
+    exclusion rules are evaluated only for a single-residue CCD ligand, where
+    the CCD template is the same canonical source used by ``Ligand.from_pli``.
+    Uncertain cases deliberately return ``False`` and follow the full path.
+    """
+    names = [str(name) for name in residue_names]
+    if not names:
+        return False
+    ccd_code = "-".join(names)
+    if ccd_code in artifact_codes or lig_has_dummies(ccd_code):
+        return True
+    if len(names) != 1:
+        return False
+    smiles = _get_ccd_smiles(names[0])
+    if smiles is None:
+        return False
+    try:
+        return is_excluded_mol(smiles)
+    except Exception as exc:
+        LOG.warning("Could not preclassify CCD %s: %s", names[0], exc)
+        return False
+
+
 def is_single_atom_or_ion(mol: Mol) -> bool:
     """True if the molecule is a single non-organic heavy atom (metal ion)."""
     numHA = mol.GetNumHeavyAtoms()
@@ -671,30 +884,6 @@ class Ligand(DocBaseModel):
     )
     neighboring_ligand_threshold: float = Field(
         default=4.0, description="__Maximum distance to consider ligands neighboring"
-    )
-    num_neighboring_ppi_atoms_within_4A_of_gap: int | None = Field(
-        default=None,
-        description="Number of missing neighboring protein-protein interface atoms within 4 Å of ligand of interest",
-    )
-    num_neighboring_ppi_atoms_within_8A_of_gap: int | None = Field(
-        default=None,
-        description="Number of missing neighboring protein-protein interface atoms within 8 Å of ligand of interest",
-    )
-    num_missing_ppi_interface_residues: int | None = Field(
-        default=None,
-        description="Number of missing neighboring protein-protein interface residues within 4 Å of ligand of interest",
-    )
-    num_pli_atoms_within_4A_of_gap: int | None = Field(
-        default=None,
-        description="Number of missing neighboring protein-ligand interface atoms within 4 Å of ligand of interest",
-    )
-    num_pli_atoms_within_8A_of_gap: int | None = Field(
-        default=None,
-        description="Number of missing neighboring protein-ligand interface atoms within 8 Å of ligand of interest",
-    )
-    num_missing_pli_interface_residues: int | None = Field(
-        default=None,
-        description="Number of missing neighboring protein-ligand interface residues within 4 Å of ligand of interest",
     )
     num_resolved_heavy_atoms: int | None = Field(
         default=None, description="Number of resolved heavy atoms in a ligand"
@@ -869,7 +1058,6 @@ class Ligand(DocBaseModel):
         ligand_chain: Chain,
         residue_numbers: list[int],
         ligand_like_chains: dict[str, str],
-        interface_proximal_gaps: dict[str, dict[tuple[str, str], dict[str, int]]],
         all_covalent_dict: dict[str, list[tuple[str, str]]],
         # TODO: rename plip_complex_threshold -> complex_threshold
         plip_complex_threshold: float = 10.0,
@@ -878,6 +1066,8 @@ class Ligand(DocBaseModel):
         data_dir: ty.Optional[Path] = None,
         chain_to_seqres: dict[str, str] | None = None,
         ligand_smiles_dict: dict[str, str] | None = None,
+        water_chains: set[str] | None = None,
+        spatial_index: BiounitSpatialIndex | None = None,
     ) -> Ligand | None:
         """Build a Ligand from a biounit AtomArray and chain metadata.
 
@@ -901,8 +1091,6 @@ class Ligand(DocBaseModel):
             Residue numbers belonging to this ligand.
         ligand_like_chains : dict[str, str]
             Other ligand-like chains in the entry ``{chain_id: chain_type}``.
-        interface_proximal_gaps : dict
-            Gap annotation from ``annotate_interface_gaps()``.
         all_covalent_dict : dict[str, list[tuple[str, str]]]
             Covalent linkages by type (``"covale"``, ``"metalc"``, ``"hydrogc"``).
         plip_complex_threshold : float
@@ -923,6 +1111,11 @@ class Ligand(DocBaseModel):
             field and the stereo template used by
             :func:`_check_stereo_vs_template` — the caller is assumed
             to know that the CCD entry is absent or a placeholder.
+        water_chains : set[str], optional
+            Chain IDs containing only solvent atoms. Pass a precomputed set
+            when processing multiple ligands from the same assembly.
+        spatial_index : BiounitSpatialIndex, optional
+            Reusable whole-assembly spatial and hierarchy index.
 
         Returns
         -------
@@ -951,27 +1144,35 @@ class Ligand(DocBaseModel):
 
         ligand_instance_chain = f"{ligand_instance}.{ligand_chain.asym_id}"
 
-        # Select ligand atoms from biounit (AtomArray)
-        lig_mask = (biounit.chain_id == ligand_instance_chain) & np.isin(
-            biounit.res_id, residue_numbers
-        )
-        if not np.any(lig_mask):
+        if spatial_index is None:
+            spatial_index = BiounitSpatialIndex.from_atoms(
+                biounit,
+                max(
+                    plip_complex_threshold,
+                    neighboring_residue_threshold,
+                    neighboring_ligand_threshold,
+                ),
+            )
+
+        # Select ligand atoms without scanning the full assembly.
+        chain_indices = spatial_index.atom_indices_for_chain(ligand_instance_chain)
+        lig_indices = chain_indices[
+            np.isin(biounit.res_id[chain_indices], residue_numbers)
+        ]
+        if lig_indices.size == 0:
             LOG.warning(f"from_pli: no ligand atoms for {ligand_instance_chain}")
             return None
+        lig_atoms = spatial_index.take_atoms(biounit, lig_indices, include_bonds=True)
+        lig_coords = lig_atoms.coord
 
-        # Find complete residues within threshold distance of ligand
-        lig_coords = biounit.coord[lig_mask]
-        cell_list = struc.CellList(biounit, plip_complex_threshold)
-        nearby_atom_mask = np.zeros(len(biounit), dtype=bool)
-        for coord in lig_coords:
-            indices = cell_list.get_atoms(coord, radius=plip_complex_threshold)
-            nearby_atom_mask[indices[indices >= 0]] = True
-        # Expand to complete residues to avoid broken aromatic rings
-        nearby_mask = np.any(
-            struc.get_residue_masks(biounit, np.where(nearby_atom_mask)[0]),
-            axis=0,
+        # Find complete residues within threshold distance of ligand. Residue
+        # starts and the whole-assembly CellList are shared by every ligand.
+        nearby_indices = spatial_index.complete_residue_indices_near(
+            lig_coords, plip_complex_threshold
         )
-        nearby_atoms = biounit[nearby_mask]
+        nearby_atoms = spatial_index.take_atoms(
+            biounit, nearby_indices, include_bonds=True
+        )
 
         # Bonds propagate from biounit through array slicing;
         # only re-derive if missing
@@ -1010,7 +1211,6 @@ class Ligand(DocBaseModel):
         )
 
         # Get CCD codes from ligand atoms (one per residue, preserving duplicates)
-        lig_atoms = biounit[lig_mask]
         ccd_code = "-".join(
             lig_atoms.res_name[lig_atoms.res_id == rn][0]
             for rn in residue_numbers
@@ -1099,35 +1299,18 @@ class Ligand(DocBaseModel):
             residue_numbers=residue_numbers,
         )
 
-        # Find neighboring polymer residues (protein + nucleic acid) within threshold
-        polymer_mask = struc.filter_amino_acids(biounit) | struc.filter_nucleotides(
-            biounit
+        # Find neighboring polymer residues (protein + nucleic acid) without
+        # rebuilding or scanning a whole-assembly polymer index.
+        neighbor_indices = spatial_index.atom_indices_near(
+            lig_coords, ligand.neighboring_residue_threshold
         )
-        polymer_atoms = biounit[polymer_mask]
-        if polymer_atoms.array_length() > 0:
-            neighbor_cell = struc.CellList(
-                polymer_atoms, ligand.neighboring_residue_threshold
-            )
-            near_poly_mask = np.zeros(len(polymer_atoms), dtype=bool)
-            for coord in lig_coords:
-                indices = neighbor_cell.get_atoms(
-                    coord, radius=ligand.neighboring_residue_threshold
-                )
-                near_poly_mask[indices[indices >= 0]] = True
-            near_prot = polymer_atoms[near_poly_mask]
-        else:
-            near_prot = polymer_atoms[:0]  # empty
-
-        (
-            ligand.num_neighboring_ppi_atoms_within_4A_of_gap,
-            ligand.num_neighboring_ppi_atoms_within_8A_of_gap,
-            ligand.num_missing_ppi_interface_residues,
-            ligand.num_pli_atoms_within_4A_of_gap,
-            ligand.num_pli_atoms_within_8A_of_gap,
-            ligand.num_missing_pli_interface_residues,
-        ) = annotate_interface_gaps_per_chain(
-            interface_proximal_gaps, ligand_chain.asym_id
+        neighboring_atoms = spatial_index.take_atoms(
+            biounit, neighbor_indices, include_bonds=False
         )
+        polymer_mask = struc.filter_amino_acids(
+            neighboring_atoms
+        ) | struc.filter_nucleotides(neighboring_atoms)
+        near_prot = neighboring_atoms[polymer_mask]
 
         for chain_id in np.unique(near_prot.chain_id):
             if chain_id == ligand.instance_chain:
@@ -1157,29 +1340,24 @@ class Ligand(DocBaseModel):
         ligand.is_covalent = len(ligand.covalent_linkages) > 0
 
         # Find neighboring ligand chains
-        near_lig_cell = struc.CellList(biounit, ligand.neighboring_ligand_threshold)
-        near_lig_mask = np.zeros(len(biounit), dtype=bool)
-        for coord in lig_coords:
-            indices = near_lig_cell.get_atoms(
-                coord, radius=ligand.neighboring_ligand_threshold
-            )
-            near_lig_mask[indices[indices >= 0]] = True
-        near_all = biounit[near_lig_mask]
+        near_lig_indices = spatial_index.atom_indices_near(
+            lig_coords, ligand.neighboring_ligand_threshold
+        )
+        near_all = spatial_index.take_atoms(
+            biounit, near_lig_indices, include_bonds=False
+        )
 
-        ligand.neighboring_ligands = list(
-            set(
+        ligand.neighboring_ligands = sorted(
+            {
                 c
                 for c in np.unique(near_all.chain_id)
                 if c != ligand.instance_chain
                 and "." in c
                 and c.split(".")[1] in ligand_like_chains
-            )
+            }
         )
-        water_chains = set(
-            c
-            for c in np.unique(biounit.chain_id)
-            if struc.filter_solvent(biounit[biounit.chain_id == c]).all()
-        )
+        if water_chains is None:
+            water_chains = get_water_chain_ids(biounit)
         # Populate interactions and waters from peppr results
         ligand.interactions = peppr_interactions
         ligand.waters = defaultdict(list)
@@ -1360,7 +1538,7 @@ class Ligand(DocBaseModel):
         """
         Fraction of atoms in this ligand which are in contact with residues from other symmetry mates.
         """
-        if self.num_heavy_atoms is None:
+        if not self.num_heavy_atoms:
             return None
         return self.num_atoms_with_crystal_contacts / self.num_heavy_atoms
 

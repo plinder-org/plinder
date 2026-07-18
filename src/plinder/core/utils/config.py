@@ -244,6 +244,7 @@ class DataConfig:
     fingerprint_file: str = "ligands_per_system.parquet"
     index: str = "index"
     entry_chain_file: str = "entry_chains.parquet"
+    entry_biounit_chain_file: str = "entry_biounit_chains.parquet"
     entry_source_file: str = "entry_sources.parquet"
     ligand_archives: str = "ligand_archives"
     ligand_scores: str = "ligand_scores"

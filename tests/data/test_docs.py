@@ -42,6 +42,12 @@ def test_make_column_descriptions(read_plinder_mount, tmp_path, monkeypatch):
         "system_pocket_ECOD_t_name",
         "system_pocket_PANTHER",
         "system_pocket_kinase_name",
+        "ligand_num_neighboring_ppi_atoms_within_4A_of_gap",
+        "ligand_num_neighboring_ppi_atoms_within_8A_of_gap",
+        "ligand_num_missing_ppi_interface_residues",
+        "ligand_num_pli_atoms_within_4A_of_gap",
+        "ligand_num_pli_atoms_within_8A_of_gap",
+        "ligand_num_missing_pli_interface_residues",
     ]
     df = df.drop(columns=legacy_posebusters + removed_enrichment_columns)
 

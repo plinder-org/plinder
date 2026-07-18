@@ -50,6 +50,7 @@ class FlowConfig:
     make_sub_dbs_cpu: int = 4
     make_scorers_cpu: int = 4
     download_alternative_datasets_threads: int = 10
+    make_dbs_cpu: int = 4
 
     make_ligands_batch_size: int = 100
     make_ligands_force_update: bool = False

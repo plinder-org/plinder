@@ -65,6 +65,7 @@ class PlinderSystem:
         source_mmcif: Path | str | None = None,
         reconstruction_dir: Path | str | None = None,
         canonical_ligand_dir: Path | str | None = None,
+        biounit_chains: pd.DataFrame | None = None,
         reconstruction_options: SystemReconstructionOptions = (
             SystemReconstructionOptions()
         ),
@@ -86,6 +87,9 @@ class PlinderSystem:
         self._entry: pd.DataFrame | None = None
         self._system: pd.DataFrame | None = None
         self._entry_chains: pd.DataFrame | None = None
+        self._biounit_chains = (
+            biounit_chains.copy() if biounit_chains is not None else None
+        )
         self._archive: Path | None = None
         self._reconstructed: ReconstructedSystem | None = None
         self._canonical_ligand_folder: Path | None = None
@@ -189,6 +193,36 @@ class PlinderSystem:
             result[str(instance_chain)] = asym_to_type[asym_id]
         return result
 
+    @property
+    def biounit_chains(self) -> pd.DataFrame:
+        """Return normalized chain membership for this biological assembly."""
+        if self._biounit_chains is None:
+            cfg = get_config()
+            path = cpl.get_plinder_path(
+                rel=f"{cfg.data.index}/{cfg.data.entry_biounit_chain_file}"
+            )
+            row = self.system.iloc[0]
+            self._biounit_chains = pd.read_parquet(
+                path,
+                filters=[
+                    ("entry_pdb_id", "==", str(row["entry_pdb_id"])),
+                    ("biounit_id", "==", str(row["system_biounit_id"])),
+                ],
+            )
+        if self._biounit_chains.empty:
+            raise ValueError(
+                f"No biological-assembly chain metadata for {self.system_id}"
+            )
+        return self._biounit_chains
+
+    def _reconstruction_biounit_chains(self) -> pd.DataFrame | None:
+        """Use normalized membership for V3 while leaving V2 assets unchanged."""
+        if self._biounit_chains is not None:
+            return self._biounit_chains
+        if str(get_config().data.plinder_iteration).lower() != "v3":
+            return None
+        return self.biounit_chains
+
     def _legacy_archive(self) -> Path | None:
         """Return an already-local V2 archive without fetching one."""
         cfg = get_config()
@@ -229,6 +263,7 @@ class PlinderSystem:
             self._reconstructed = reconstruct_system(
                 self._require_source_mmcif(),
                 self.system.iloc[0],
+                biounit_chains=self._reconstruction_biounit_chains(),
                 options=self.reconstruction_options,
             )
         return self._reconstructed
@@ -251,6 +286,7 @@ class PlinderSystem:
             self._require_source_mmcif(),
             self.system.iloc[0],
             outputs=outputs,
+            biounit_chains=self._reconstruction_biounit_chains(),
             options=selected_options,
             overwrite=overwrite,
             reconstructed=cached,

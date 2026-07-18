@@ -39,6 +39,15 @@ def test_entry_exists(expect, tmp_path):
         pd.DataFrame({"chain_receptor_type": ["protein"]}).to_parquet(
             chain_path, index=False
         )
+        pd.DataFrame(
+            {
+                "entry_pdb_id": ["aaaa"],
+                "biounit_id": ["1"],
+                "chain_instance": ["1.A"],
+                "chain_asym_id": ["A"],
+                "chain_role": ["receptor"],
+            }
+        ).to_parquet(chain_path.parent / "entry_biounit_chains.parquet", index=False)
         pd.DataFrame({"entry_pdb_id": ["aaaa"]}).to_parquet(
             chain_path.parent / "entry_source.parquet", index=False
         )
@@ -51,7 +60,7 @@ def test_entry_exists(expect, tmp_path):
     )
 
 
-def test_entry_exists_requires_chain_sidecar(tmp_path):
+def test_entry_exists_requires_entry_chain_table(tmp_path):
     annotation = tmp_path / "aa" / "aaaa.parquet"
     annotation.parent.mkdir(parents=True)
     annotation.touch()
@@ -59,13 +68,38 @@ def test_entry_exists_requires_chain_sidecar(tmp_path):
     assert not utils.entry_exists(entry_dir=tmp_path, pdb_id="aaaa")
 
 
-def test_entry_exists_requires_source_sidecar(tmp_path):
+def test_entry_exists_requires_entry_source_table(tmp_path):
     annotation = tmp_path / "aa" / "aaaa.parquet"
     annotation.parent.mkdir(parents=True)
     annotation.touch()
-    sidecar_dir = tmp_path / "aa" / "aaaa"
-    sidecar_dir.mkdir()
-    (sidecar_dir / "entry_chains.parquet").touch()
+    entry_dir = tmp_path / "aa" / "aaaa"
+    entry_dir.mkdir()
+    (entry_dir / "entry_chains.parquet").touch()
+
+    assert not utils.entry_exists(entry_dir=tmp_path, pdb_id="aaaa")
+
+
+def test_entry_exists_requires_current_biounit_chain_table(tmp_path):
+    annotation = tmp_path / "aa" / "aaaa.parquet"
+    annotation.parent.mkdir(parents=True)
+    pd.DataFrame({"system_receptor_type": ["protein"]}).to_parquet(
+        annotation,
+        index=False,
+    )
+    entry_dir = annotation.parent / "aaaa"
+    entry_dir.mkdir()
+    pd.DataFrame({"chain_receptor_type": ["protein"]}).to_parquet(
+        entry_dir / "entry_chains.parquet",
+        index=False,
+    )
+    pd.DataFrame({"chain_instance": ["1.A"]}).to_parquet(
+        entry_dir / "entry_biounit_chains.parquet",
+        index=False,
+    )
+    pd.DataFrame({"entry_pdb_id": ["aaaa"]}).to_parquet(
+        entry_dir / "entry_source.parquet",
+        index=False,
+    )
 
     assert not utils.entry_exists(entry_dir=tmp_path, pdb_id="aaaa")
 
@@ -76,13 +110,13 @@ def test_entry_exists_invalidates_pre_receptor_type_cache(tmp_path):
     pd.DataFrame({"system_id": ["aaaa__1__1.A__1.L"]}).to_parquet(
         annotation, index=False
     )
-    sidecar_dir = tmp_path / "aa" / "aaaa"
-    sidecar_dir.mkdir()
+    entry_dir = tmp_path / "aa" / "aaaa"
+    entry_dir.mkdir()
     pd.DataFrame({"chain_type": ["polypeptide(L)"]}).to_parquet(
-        sidecar_dir / "entry_chains.parquet", index=False
+        entry_dir / "entry_chains.parquet", index=False
     )
     pd.DataFrame({"entry_pdb_id": ["aaaa"]}).to_parquet(
-        sidecar_dir / "entry_source.parquet", index=False
+        entry_dir / "entry_source.parquet", index=False
     )
 
     assert not utils.entry_exists(entry_dir=tmp_path, pdb_id="aaaa")
@@ -177,6 +211,15 @@ def test_create_index_collates_per_entry_parquets(tmp_path, monkeypatch):
                 "source_mmcif_minor_revision": [0],
             }
         ).to_parquet(chain_path.parent / "entry_source.parquet", index=False)
+        pd.DataFrame(
+            {
+                "entry_pdb_id": [pdb_id],
+                "biounit_id": ["1"],
+                "chain_instance": ["1.A"],
+                "chain_asym_id": ["A"],
+                "chain_role": ["receptor"],
+            }
+        ).to_parquet(chain_path.parent / "entry_biounit_chains.parquet", index=False)
     monkeypatch.setattr(utils, "add_aggregated_columns", lambda index: index)
 
     index = utils.create_index(data_dir=tmp_path, force_update=True)
@@ -190,15 +233,19 @@ def test_create_index_collates_per_entry_parquets(tmp_path, monkeypatch):
     assert (tmp_path / "index" / "annotation_table.parquet").is_file()
     entry_chains = pd.read_parquet(tmp_path / "index" / "entry_chains.parquet")
     assert entry_chains["entry_pdb_id"].tolist() == ["1aaa", "2bbb"]
+    biounit_chains = pd.read_parquet(
+        tmp_path / "index" / "entry_biounit_chains.parquet"
+    )
+    assert biounit_chains["entry_pdb_id"].tolist() == ["1aaa", "2bbb"]
     entry_sources = pd.read_parquet(tmp_path / "index" / "entry_sources.parquet")
     assert entry_sources["entry_pdb_id"].tolist() == ["1aaa", "2bbb"]
     assert entry_sources["source_mmcif_major_revision"].tolist() == [1, 1]
 
 
-def test_create_entry_chain_index_handles_empty_sidecars(tmp_path):
-    sidecar = tmp_path / "raw_entries" / "dn" / "1dna" / "entry_chains.parquet"
-    sidecar.parent.mkdir(parents=True)
-    pd.DataFrame().to_parquet(sidecar, index=False)
+def test_create_entry_chain_index_handles_empty_entry_table(tmp_path):
+    entry_table = tmp_path / "raw_entries" / "dn" / "1dna" / "entry_chains.parquet"
+    entry_table.parent.mkdir(parents=True)
+    pd.DataFrame().to_parquet(entry_table, index=False)
 
     chains = utils.create_entry_chain_index(data_dir=tmp_path, force_update=True)
 
@@ -217,6 +264,22 @@ def test_create_entry_chain_index_handles_empty_sidecars(tmp_path):
     ]
 
 
+def test_create_entry_biounit_chain_index_handles_empty_input(tmp_path):
+    chains = utils.create_entry_biounit_chain_index(
+        data_dir=tmp_path,
+        force_update=True,
+    )
+
+    assert chains.empty
+    assert chains.columns.tolist() == [
+        "entry_pdb_id",
+        "biounit_id",
+        "chain_instance",
+        "chain_asym_id",
+        "chain_role",
+    ]
+
+
 def test_finalize_index_creates_nonredundant_data_from_local_clusters(tmp_path):
     index_dir = tmp_path / "index"
     cluster_file = (
@@ -231,7 +294,9 @@ def test_finalize_index_creates_nonredundant_data_from_local_clusters(tmp_path):
             "system_id": ["1aaa__1__1.A__1.X", "1aaa__2__1.A__1.X"],
             "system_id_no_biounit": ["1aaa__1.A__1.X", "1aaa__1.A__1.X"],
             "system_biounit_id": ["1", "2"],
+            "system_type": ["holo", "holo"],
             "ligand_id": ["1aaa__1__1.X", "1aaa__2__1.X"],
+            "ligand_is_proper": [True, False],
             "ligand_rdkit_canonical_smiles": ["CCO", "CCO"],
         }
     ).to_parquet(index_dir / "annotation_table.parquet", index=False)
@@ -250,8 +315,8 @@ def test_finalize_index_creates_nonredundant_data_from_local_clusters(tmp_path):
     ligand_dir.mkdir()
     pd.DataFrame(
         {
-            "ligand_id": ["1aaa__1__1.X", "1aaa__2__1.X"],
-            "ligand_is_3d_score_able": [True, False],
+            "ligand_id": ["1aaa__1__1.X"],
+            "ligand_is_3d_score_able": [True],
         }
     ).to_parquet(ligand_dir / "part.parquet", index=False)
     pd.DataFrame(
@@ -270,7 +335,8 @@ def test_finalize_index_creates_nonredundant_data_from_local_clusters(tmp_path):
 
     finalized = pd.read_parquet(index_dir / "annotation_table.parquet")
     assert finalized["pli_qcov__100__strong__component"].tolist() == ["c0", "c0"]
-    assert finalized["ligand_smiles_id"].tolist() == [0, 0]
+    assert finalized.loc[0, "ligand_smiles_id"] == 0
+    assert pd.isna(finalized.loc[1, "ligand_smiles_id"])
     assert finalized["ligand_is_3d_score_able"].tolist() == [True, False]
     assert finalized["uniqueness"].nunique() == 1
     nonredundant = pd.read_parquet(index_dir / "annotation_table_nonredundant.parquet")

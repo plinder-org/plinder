@@ -25,6 +25,7 @@ def make_db(
     output_dir: Path,
     db: str,
     tmp_dir: Path = Path("tmp"),
+    threads: int = 1,
 ) -> None:
     """
     Create full databases. input_dir is a misnomer
@@ -45,6 +46,8 @@ def make_db(
         name of db in ["foldseek", "mmseqs"]
     tmp_dir : Path, default=Path("tmp")
         scratch directory
+    threads : int, default=1
+        Maximum number of threads used by Foldseek or MMseqs.
     """
     full_db = str(output_dir / db)
     output_dir.mkdir(exist_ok=True, parents=True)
@@ -53,6 +56,8 @@ def make_db(
         "createdb",
         str(input_dir),
         full_db,
+        "--threads",
+        str(threads),
     ]
     if db == "foldseek":
         cmd.extend(["--chain-name-mode", "1"])
@@ -63,6 +68,8 @@ def make_db(
             "createindex",
             full_db,
             str(tmp_dir) + f"_{db}",
+            "--threads",
+            str(threads),
         ]
     )
 

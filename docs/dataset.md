@@ -14,6 +14,7 @@ sd_hide_title: true
     |-- index # Consolidated tabular annotations
     |   |-- annotation_table.parquet
     |   |-- annotation_table_nonredundant.parquet
+    |   |-- entry_biounit_chains.parquet
     |   |-- entry_chains.parquet
     |   |-- entry_sources.parquet
     |-- systems  # Structure files for all systems (split by `two_char_code` and zipped)
@@ -76,6 +77,7 @@ Tables that lists all systems along with their annotations.
 
 - `annotation_table.parquet`: Lists all systems and their annotations.
 - `annotation_table_nonredundant.parquet`: Subset of systems without redundant systems.
+- `entry_biounit_chains.parquet`: One row per biological-assembly chain instance, recording its source asymmetric ID and whether it is a receptor, ligand, or water chain. System membership is subtracted from these rows at reconstruction time to select optional "other" chains; full assembly membership is not repeated on every ligand row.
 - `entry_chains.parquet`: One row per protein or nucleic-acid receptor chain, including its normalized `chain_receptor_type`. Protein rows also carry the entity, holo partition flag, and UniProt mappings used to construct the Foldseek/MMseqs sub-databases; nucleic-acid rows are never submitted to similarity search.
 - `entry_sources.parquet`: One row per PDB entry recording the exact source mmCIF major and minor revision used during ingest. This is normalized entry metadata and is not repeated on ligand rows.
 
@@ -114,7 +116,8 @@ PLINDER stores one canonical asymmetric-unit SDF for each ligand chain. Biologic
 ```
 
 System and receptor mmCIF files are reconstructed on demand from the deposited PDB
-mmCIF and the system selection metadata in the annotation parquet. During V3 ingest,
+mmCIF, system selection metadata in the annotation parquet, and normalized assembly
+membership in `index/entry_biounit_chains.parquet`. During V3 ingest,
 PLINDER records the exact source structure-model major/minor revision in
 `index/entry_sources.parquet`. `PlinderSystem` fetches that exact compressed revision
 from the [wwPDB versioned archive](https://www.wwpdb.org/ftp/pdb-versioned-ftp-site)
@@ -500,7 +503,7 @@ Each file is a CSV with a single column: `pdb_id`.
 
 #### Raw annotation parts (`raw_entries/`)
 
-During ingest this directory contains one `{pdb_id}.parquet` annotation part and one per-entry directory containing `entry_chains.parquet`, `entry_source.parquet`, and canonical ligand SDFs, grouped by `two_char_code`. The join step consolidates the ligand-level parts into `index/annotation_table.parquet`, the normalized chain rows into `index/entry_chains.parquet`, and one pinned source revision per PDB into `index/entry_sources.parquet`; entry JSON archives are not produced.
+During ingest this directory contains one `{pdb_id}.parquet` annotation part and one per-entry directory containing `entry_chains.parquet`, `entry_biounit_chains.parquet`, `entry_source.parquet`, and canonical ligand SDFs, grouped by `two_char_code`. The join step consolidates the ligand-level parts into `index/annotation_table.parquet`, normalized receptor-chain rows into `index/entry_chains.parquet`, biological-assembly membership into `index/entry_biounit_chains.parquet`, and one pinned source revision per PDB into `index/entry_sources.parquet`; entry JSON archives are not produced.
 
 #### Small molecule fingerprints (`fingerprints/`)
 

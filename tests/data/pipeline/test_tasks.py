@@ -1,6 +1,7 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
 import ast
+import sys
 from pathlib import Path
 from zipfile import ZipFile
 
@@ -8,6 +9,33 @@ import pandas as pd
 import pytest
 from plinder.data.pipeline import io, tasks
 from plinder.data.pipeline.config import LigandConfig
+
+
+def test_make_entries_uses_current_python(tmp_path, monkeypatch):
+    pdb_dir = "pdb_00001abc"
+    cif_dir = tmp_path / "ingest" / "ab" / pdb_dir
+    cif_dir.mkdir(parents=True)
+    (cif_dir / "pdb_00001abc_xyz-enrich.cif.gz").touch()
+
+    calls = []
+
+    def capture(command, **_):
+        calls.append(command)
+        task_file = Path(command[3])
+        assert task_file.read_text().startswith(sys.executable)
+        return ""
+
+    monkeypatch.setattr(tasks, "check_output", capture)
+    tasks.make_entries(
+        data_dir=tmp_path,
+        pdb_dirs=[pdb_dir],
+        force_update=False,
+        annotation_cfg={},
+        entry_cfg={},
+        cpu=1,
+    )
+
+    assert calls[0][:3] == [sys.executable, "-m", "plinder.data.pipeline.mpqueue"]
 
 
 @pytest.mark.parametrize(

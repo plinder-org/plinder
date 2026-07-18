@@ -2,6 +2,7 @@
 # Distributed under the terms of the Apache License 2.0
 from __future__ import annotations
 
+from collections.abc import Collection
 from functools import cached_property
 
 import numpy as np
@@ -28,6 +29,22 @@ def nanmean_return_nan(arr: list[float]) -> float:
     if len(arr) == 0 or all(np.isnan(arr)):
         return float(np.nan)
     return float(np.nanmean(arr))
+
+
+def _select_altcode(
+    altcodes: Collection[str],
+    preferred_altcode: str | None = None,
+) -> str:
+    """Select the deposited conformer used by coordinate loading."""
+    if preferred_altcode in altcodes:
+        return str(preferred_altcode)
+    if "." in altcodes:
+        return "."
+    if not altcodes:
+        raise ValueError("residue has no alternative configurations")
+    # Validation exposes altcodes as a set, so retain a deterministic fallback
+    # for malformed/mismatched inputs where the selected source ID is absent.
+    return min(altcodes)
 
 
 class ResidueValidation(DocBaseModel):
@@ -57,7 +74,13 @@ class ResidueValidation(DocBaseModel):
 
     @classmethod
     def from_residue(
-        cls, chain: str, resnum: str | int, entity: str, doc: PDBValidation
+        cls,
+        chain: str,
+        resnum: str | int,
+        entity: str,
+        doc: PDBValidation,
+        *,
+        preferred_altcode: str | None = None,
     ) -> ResidueValidation | None:
         try:
             residue_with_alts = Residue.CreateFromMmCIFPosition(
@@ -69,12 +92,9 @@ class ResidueValidation(DocBaseModel):
             )
             return None
         alts = residue_with_alts.listAlt()
-        if "." in alts:
-            alt = "."
-        else:
-            alt = list(alts)[0]
 
         try:
+            alt = _select_altcode(alts, preferred_altcode)
             residue = residue_with_alts.getAlt(alt)
             heavy_atom_count = residue.countAtomsHeavyPDBX()
             heavy_atom_count_conop = residue.countAtomsHeavyConop()
@@ -258,7 +278,7 @@ class EntryValidation(DocBaseModel):
     r: float = Field(
         description="The similarity between the observed structure-factor amplitudes and those calculated from the model. See https://www.wwpdb.org/validation/XrayValidationReportHelp"
     )
-    clashscore: float = Field(
+    clashscore: float | None = Field(
         description="The Molprobity Clashscore is an approximation of the overall severity of the clashes in a structure, which is defined as the number of clashes per 1000 atoms (including hydrogens). See https://www.wwpdb.org/validation/XrayValidationReportHelp"
     )
     percent_rama_outliers: float | None = Field(
@@ -307,7 +327,7 @@ class EntryValidation(DocBaseModel):
         except KeyError:
             reflns = None
         meanI_over_sigI_obs = doc.getMeanIOverSigIObs()
-        if meanI_over_sigI_obs == "?":
+        if meanI_over_sigI_obs in {None, "?", ".", "NotAvailable"}:
             meanI_over_sigI_obs = None
         return cls(
             resolution=entry.get("PDB-resolution"),

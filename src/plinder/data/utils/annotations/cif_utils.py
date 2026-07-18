@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import biotite.structure as struc
@@ -51,6 +53,145 @@ def read_mmcif_container(mmcif_filename: Path) -> pdbx.CIFBlock:
     """Parse mmcif file and return the first data block."""
     cif_file = read_mmcif_file(mmcif_filename)
     return list(cif_file.values())[0]
+
+
+def _alphabetic_id(index: int) -> str:
+    """Return a deterministic spreadsheet-style alphabetic identifier."""
+    value = index + 1
+    result = ""
+    while value:
+        value, remainder = divmod(value - 1, 26)
+        result = chr(ord("A") + remainder) + result
+    return result
+
+
+@contextmanager
+def _alphabetic_altloc_ids(
+    cif_file: pdbx.CIFFile | pdbx.CIFBlock,
+) -> Iterator[dict[str, str]]:
+    """Temporarily map non-alphabetic altloc IDs for Biotite filtering."""
+    block = (
+        cif_file if isinstance(cif_file, pdbx.CIFBlock) else list(cif_file.values())[0]
+    )
+    specifications = [
+        ("atom_site", "label_alt_id"),
+        ("struct_conn", "pdbx_ptnr1_label_alt_id"),
+        ("struct_conn", "pdbx_ptnr2_label_alt_id"),
+    ]
+    columns: list[tuple[pdbx.CIFCategory, str, pdbx.CIFColumn]] = []
+    all_ids: set[str] = set()
+    for category_name, column_name in specifications:
+        if category_name not in block or column_name not in block[category_name]:
+            continue
+        category = block[category_name]
+        column = category[column_name]
+        columns.append((category, column_name, column))
+        all_ids.update(column.as_array(str))
+
+    no_altloc = {".", "?", " ", ""}
+    invalid_ids = sorted(
+        altloc_id
+        for altloc_id in all_ids
+        if altloc_id not in no_altloc and not altloc_id.isalpha()
+    )
+    if not invalid_ids:
+        yield {}
+        return
+
+    used_ids = {altloc_id for altloc_id in all_ids if altloc_id.isalpha()}
+    mapping: dict[str, str] = {}
+    candidate_index = 0
+    for invalid_id in invalid_ids:
+        while (candidate := _alphabetic_id(candidate_index)) in used_ids:
+            candidate_index += 1
+        mapping[invalid_id] = candidate
+        used_ids.add(candidate)
+        candidate_index += 1
+
+    try:
+        for category, column_name, original in columns:
+            values = original.as_array(str)
+            mapped = [mapping.get(value, value) for value in values]
+            category[column_name] = pdbx.CIFColumn(mapped, mask=original.mask)
+        yield mapping
+    finally:
+        for category, column_name, original in columns:
+            category[column_name] = original
+
+
+def get_structure_with_altloc(
+    cif_file: pdbx.CIFFile | pdbx.CIFBlock,
+    *,
+    model: int = 1,
+    use_author_fields: bool = False,
+    include_bonds: bool = False,
+    extra_fields: list[str] | None = None,
+) -> struc.AtomArray:
+    """Load one model using its deposited-first alternate conformers.
+
+    Biotite only recognizes alphabetic alternate-location IDs while filtering.
+    Non-alphabetic source IDs are therefore mapped temporarily, then restored
+    on the returned ``selected_altloc_id`` annotation so validation can select
+    the exact same deposited conformer.
+    """
+    requested_extra_fields = list(extra_fields or [])
+    include_label_alt_id = "label_alt_id" in requested_extra_fields
+    if not include_label_alt_id:
+        requested_extra_fields.append("label_alt_id")
+    with _alphabetic_altloc_ids(cif_file) as mapping:
+        atoms = pdbx.get_structure(
+            cif_file,
+            model=model,
+            altloc="first",
+            use_author_fields=use_author_fields,
+            include_bonds=include_bonds,
+            extra_fields=requested_extra_fields,
+        )
+    if not isinstance(atoms, struc.AtomArray):
+        raise TypeError("loading one mmCIF model must return an AtomArray")
+    inverse_mapping = {mapped: source for source, mapped in mapping.items()}
+    source_altloc_ids = np.asarray(
+        [inverse_mapping.get(value, value) for value in atoms.label_alt_id]
+    )
+    # ``label_alt_id`` is atom-level: atoms shared by all conformers retain
+    # ``.``.  Record the selected source conformer on every atom in the
+    # residue so the choice survives subsequent hydrogen removal and can be
+    # used to select the matching validation record.
+    selected_altloc_ids = np.full(len(atoms), ".", dtype=source_altloc_ids.dtype)
+    residue_starts = struc.get_residue_starts(atoms, add_exclusive_stop=True)
+    for start, stop in zip(residue_starts[:-1], residue_starts[1:]):
+        selected = next(
+            (
+                altloc_id
+                for altloc_id in source_altloc_ids[start:stop]
+                if altloc_id not in {".", "?", " ", ""}
+            ),
+            ".",
+        )
+        selected_altloc_ids[start:stop] = selected
+    atoms.set_annotation("selected_altloc_id", selected_altloc_ids)
+    if not include_label_alt_id:
+        atoms.del_annotation("label_alt_id")
+    return atoms
+
+
+def get_unit_cell_with_altloc(
+    cif_file: pdbx.CIFFile,
+    *,
+    model: int = 1,
+    use_author_fields: bool = False,
+) -> struc.AtomArray:
+    """Build a unit cell using normalized deposited-first altlocs."""
+    with _alphabetic_altloc_ids(cif_file):
+        atoms = pdbx.get_unit_cell(
+            cif_file,
+            model=model,
+            altloc="first",
+            use_author_fields=use_author_fields,
+        )
+    if not isinstance(atoms, struc.AtomArray):
+        raise TypeError("loading one mmCIF unit-cell model must return an AtomArray")
+    return atoms
 
 
 def get_label_asym_sequences(block: pdbx.CIFBlock) -> dict[str, str]:
@@ -134,27 +275,29 @@ def build_biounit(
     complete, contiguous ASU-sized blocks, which is false when operators apply
     to only a subset of chains.
     """
-    biounit = pdbx.get_assembly(
-        cif_file,
-        assembly_id=assembly_id,
-        model=1,
-        use_author_fields=False,
-        include_bonds=True,
-        extra_fields=["label_asym_id"],
-    )
-    biounit = biounit[~is_hydrogen_isotope(biounit.element)]
-    if biounit.bonds is None:
-        raise ValueError(
-            f"assembly {assembly_id}: biotite returned no bonds despite "
-            "include_bonds=True"
+    with _alphabetic_altloc_ids(cif_file):
+        biounit = pdbx.get_assembly(
+            cif_file,
+            assembly_id=assembly_id,
+            model=1,
+            altloc="first",
+            use_author_fields=False,
+            include_bonds=True,
+            extra_fields=["label_asym_id"],
         )
-    biounit.chain_id = np.asarray(
-        [
-            f"{int(sym_id) + 1}.{asym_id}"
-            for sym_id, asym_id in zip(biounit.sym_id, biounit.label_asym_id)
-        ]
-    )
-    apply_struct_conn_bonds(biounit, list(cif_file.values())[0])
+        biounit = biounit[~is_hydrogen_isotope(biounit.element)]
+        if biounit.bonds is None:
+            raise ValueError(
+                f"assembly {assembly_id}: biotite returned no bonds despite "
+                "include_bonds=True"
+            )
+        biounit.chain_id = np.asarray(
+            [
+                f"{int(sym_id) + 1}.{asym_id}"
+                for sym_id, asym_id in zip(biounit.sym_id, biounit.label_asym_id)
+            ]
+        )
+        apply_struct_conn_bonds(biounit, list(cif_file.values())[0])
     return biounit
 
 
@@ -397,56 +540,77 @@ def apply_struct_conn_bonds(
 ) -> None:
     """Add inter-residue covalent bonds from ``_struct_conn`` in-place."""
 
-    connections = parse_struct_conn(block)
+    parsed_connections = parse_struct_conn(block)
+    connections = []
+    partner_keys: set[tuple[str, int, str]] = set()
+    for connection in parsed_connections:
+        if connection["conn_type"] != "covale":
+            continue
+        try:
+            res_id1 = int(connection["seq1"]) if connection["seq1"] != "." else -1
+            res_id2 = int(connection["seq2"]) if connection["seq2"] != "." else -1
+        except ValueError:
+            continue
+        key1 = (connection["chain1"], res_id1, connection["atom1"])
+        key2 = (connection["chain2"], res_id2, connection["atom2"])
+        connections.append((key1, key2))
+        partner_keys.update((key1, key2))
     if not connections:
         return
     if atoms.bonds is None:
         atoms.bonds = struc.BondList(atoms.array_length())
 
-    existing = set(
-        (min(b[0], b[1]), max(b[0], b[1])) for b in atoms.bonds.as_array()[:, :2]
-    )
-    chain_parts = [str(chain_id).split(".", maxsplit=1) for chain_id in atoms.chain_id]
-    label_ids = np.asarray([parts[-1] for parts in chain_parts])
-    instance_ids = np.asarray(
-        [parts[0] if len(parts) == 2 else "" for parts in chain_parts]
-    )
-
-    for c in connections:
-        if c["conn_type"] != "covale":
-            continue
-        try:
-            r1 = int(c["seq1"]) if c["seq1"] != "." else -1
-            r2 = int(c["seq2"]) if c["seq2"] != "." else -1
-        except ValueError:
-            continue
-
-        partner1_mask = (
-            (label_ids == c["chain1"])
-            & (atoms.res_id == r1)
-            & (atoms.atom_name == c["atom1"])
+    categories = set(atoms.get_annotation_categories())
+    if "label_asym_id" in categories:
+        label_ids = atoms.get_annotation("label_asym_id")
+    else:
+        label_ids = np.asarray(
+            [str(chain_id).split(".", maxsplit=1)[-1] for chain_id in atoms.chain_id]
         )
-        partner2_mask = (
-            (label_ids == c["chain2"])
-            & (atoms.res_id == r2)
-            & (atoms.atom_name == c["atom2"])
+    if "sym_id" in categories:
+        instance_ids = atoms.get_annotation("sym_id")
+    else:
+        chain_parts = [
+            str(chain_id).split(".", maxsplit=1) for chain_id in atoms.chain_id
+        ]
+        instance_ids = np.asarray(
+            [parts[0] if len(parts) == 2 else "" for parts in chain_parts]
         )
 
-        # In biological assemblies the same label asym can occur under
-        # multiple operators.  A source ``_struct_conn`` row applies within
-        # each transformed copy, not to the Cartesian product of all copies.
-        partner1_instances = set(instance_ids[partner1_mask])
-        partner2_instances = set(instance_ids[partner2_mask])
-        shared_instances = partner1_instances & partner2_instances
-        for instance_id in shared_instances:
-            mask1 = partner1_mask & (instance_ids == instance_id)
-            mask2 = partner2_mask & (instance_ids == instance_id)
-            for i1 in np.where(mask1)[0]:
-                for i2 in np.where(mask2)[0]:
-                    pair = (min(int(i1), int(i2)), max(int(i1), int(i2)))
-                    if pair not in existing:
-                        atoms.bonds.add_bond(int(i1), int(i2), struc.BondType.SINGLE)
-                        existing.add(pair)
+    candidate_mask = (
+        np.isin(label_ids, [key[0] for key in partner_keys])
+        & np.isin(atoms.res_id, [key[1] for key in partner_keys])
+        & np.isin(atoms.atom_name, [key[2] for key in partner_keys])
+    )
+    partner_indices: dict[tuple[str, int, str], dict[str, list[int]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
+    for index in np.flatnonzero(candidate_mask):
+        key = (
+            str(label_ids[index]),
+            int(atoms.res_id[index]),
+            str(atoms.atom_name[index]),
+        )
+        if key in partner_keys:
+            partner_indices[key][str(instance_ids[index])].append(int(index))
+
+    for key1, key2 in connections:
+        partner1 = partner_indices.get(key1, {})
+        partner2 = partner_indices.get(key2, {})
+        # A source row applies within each transformed copy, not to the
+        # Cartesian product of all biological-assembly copies.
+        for instance_id in set(partner1) & set(partner2):
+            for index1 in partner1[instance_id]:
+                bonded_indices, _ = atoms.bonds.get_bonds(index1)
+                existing_neighbors = set(int(index) for index in bonded_indices)
+                for index2 in partner2[instance_id]:
+                    if index2 not in existing_neighbors:
+                        atoms.bonds.add_bond(
+                            index1,
+                            index2,
+                            struc.BondType.SINGLE,
+                        )
+                        existing_neighbors.add(index2)
 
 
 # ---------------------------------------------------------------------------

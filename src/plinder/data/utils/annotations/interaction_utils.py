@@ -2,22 +2,210 @@
 # Distributed under the terms of the Apache License 2.0
 from __future__ import annotations
 
-from collections import defaultdict
+import multiprocessing as mp
+from collections import OrderedDict, defaultdict
+from multiprocessing.connection import Connection
 from pathlib import Path
+from threading import RLock
+from typing import Any, cast
 
 import biotite.structure as struc
 import biotite.structure.io.pdbx as pdbx
 import numpy as np
-from peppr.contacts import ContactMeasurement
+import peppr.contacts as peppr_contacts
+from numpy.typing import NDArray
+from rdkit import Chem
 
 from plinder.core.structure.atoms import is_hydrogen_isotope
 from plinder.core.utils.log import setup_logger
 
 log = setup_logger(__name__)
 
+# PEPPR caches interchangeable tautomers by canonical SMILES inside one
+# ContactMeasurement. Plinder creates one measurement per ligand occurrence,
+# which otherwise repeats the same expensive protein-residue enumeration many
+# times in one ingest worker. Extend the identical cache key across measurements
+# while bounding memory across a multi-entry batch.
+_MAX_TAUTOMER_CACHE_SIZE = 4096
+_TautomerCacheKey = tuple[
+    str,
+    tuple[tuple[int, int, int, int, bool, int | None], ...],
+    tuple[tuple[int, int, float, bool, bool, int], ...],
+]
+_TAUTOMER_CACHE: OrderedDict[_TautomerCacheKey, tuple[Chem.Mol, ...]] = OrderedDict()
+_TAUTOMER_CACHE_LOCK = RLock()
+_ORIGINAL_GET_INTERCHANGEABLE_TAUTOMERS = peppr_contacts.get_interchangeable_tautomers
+_ORIGINAL_FIND_RESONANCE_CHARGES = peppr_contacts.find_resonance_charges
+
+# Normal PEPPR behavior remains unchanged.  Only chemically large, charged
+# residues run resonance enumeration in an interruptible child process.  This
+# avoids an unkillable RDKit combinatorial tail while preserving the exact
+# result whenever enumeration completes within the generous bound.
+_RESONANCE_GUARD_MIN_ATOMS = 64
+_RESONANCE_TIMEOUT_SECONDS = 10.0
+_MAX_RESONANCE_CACHE_SIZE = 4096
+_ResonanceResult = tuple[
+    NDArray[np.bool_],
+    NDArray[np.bool_],
+    NDArray[np.int_],
+]
+_RESONANCE_CACHE: OrderedDict[_TautomerCacheKey, _ResonanceResult] = OrderedDict()
+_RESONANCE_CACHE_LOCK = RLock()
+
+
+def _tautomer_cache_key(molecule: Chem.Mol) -> _TautomerCacheKey:
+    """Include atom order and PEPPR split-residue state in the cache key."""
+    heavy_neighbors_property = peppr_contacts._ORIG_NUM_HEAVY_NEIGHS
+    atom_signature = tuple(
+        (
+            atom.GetAtomicNum(),
+            atom.GetFormalCharge(),
+            int(atom.GetHybridization()),
+            atom.GetTotalNumHs(),
+            atom.GetIsAromatic(),
+            atom.GetIntProp(heavy_neighbors_property)
+            if atom.HasProp(heavy_neighbors_property)
+            else None,
+        )
+        for atom in molecule.GetAtoms()
+    )
+    bond_signature = tuple(
+        sorted(
+            (
+                min(bond.GetBeginAtomIdx(), bond.GetEndAtomIdx()),
+                max(bond.GetBeginAtomIdx(), bond.GetEndAtomIdx()),
+                bond.GetBondTypeAsDouble(),
+                bond.GetIsAromatic(),
+                bond.GetIsConjugated(),
+                int(bond.GetStereo()),
+            )
+            for bond in molecule.GetBonds()
+        )
+    )
+    return Chem.MolToSmiles(molecule), atom_signature, bond_signature
+
+
+def _cached_get_interchangeable_tautomers(molecule: Chem.Mol) -> list[Chem.Mol]:
+    """Reuse PEPPR tautomer enumeration across ligand contact measurements."""
+    key = _tautomer_cache_key(molecule)
+    with _TAUTOMER_CACHE_LOCK:
+        cached = _TAUTOMER_CACHE.get(key)
+        if cached is not None:
+            _TAUTOMER_CACHE.move_to_end(key)
+            return [Chem.Mol(tautomer) for tautomer in cached]
+
+    generated = tuple(
+        Chem.Mol(tautomer)
+        for tautomer in _ORIGINAL_GET_INTERCHANGEABLE_TAUTOMERS(molecule)
+    )
+    with _TAUTOMER_CACHE_LOCK:
+        _TAUTOMER_CACHE[key] = generated
+        _TAUTOMER_CACHE.move_to_end(key)
+        while len(_TAUTOMER_CACHE) > _MAX_TAUTOMER_CACHE_SIZE:
+            _TAUTOMER_CACHE.popitem(last=False)
+    return [Chem.Mol(tautomer) for tautomer in generated]
+
+
+def _copy_resonance_result(result: _ResonanceResult) -> _ResonanceResult:
+    return tuple(array.copy() for array in result)  # type: ignore[return-value]
+
+
+def _run_resonance_worker(molecule: Chem.Mol, connection: Connection) -> None:
+    """Run PEPPR's exact RDKit resonance enumeration out of process."""
+    try:
+        connection.send(("ok", _ORIGINAL_FIND_RESONANCE_CHARGES(molecule)))
+    except BaseException as exc:
+        connection.send(("error", f"{type(exc).__name__}: {exc}"))
+    finally:
+        connection.close()
+
+
+def _deposited_charge_fallback(molecule: Chem.Mol) -> _ResonanceResult:
+    """Use the estimated deposited formal-charge assignment without resonance."""
+    charges = np.fromiter(
+        (atom.GetFormalCharge() for atom in molecule.GetAtoms()),
+        dtype=int,
+        count=molecule.GetNumAtoms(),
+    )
+    return (
+        charges > 0,
+        charges < 0,
+        np.arange(molecule.GetNumAtoms(), dtype=int),
+    )
+
+
+def _bounded_find_resonance_charges(molecule: Chem.Mol) -> _ResonanceResult:
+    """Preserve exact PEPPR resonance behavior with a rare timeout fallback."""
+    is_large_and_charged = molecule.GetNumAtoms() >= _RESONANCE_GUARD_MIN_ATOMS and any(
+        atom.GetFormalCharge() != 0 for atom in molecule.GetAtoms()
+    )
+    if not is_large_and_charged:
+        return cast(_ResonanceResult, _ORIGINAL_FIND_RESONANCE_CHARGES(molecule))
+
+    key = _tautomer_cache_key(molecule)
+    with _RESONANCE_CACHE_LOCK:
+        cached = _RESONANCE_CACHE.get(key)
+        if cached is not None:
+            _RESONANCE_CACHE.move_to_end(key)
+            return _copy_resonance_result(cached)
+
+    # Data ingest is Linux-only and fork lets the child reuse the already
+    # constructed RDKit molecule without serializing the full contact model.
+    context = mp.get_context("fork")
+    receive, send = context.Pipe(duplex=False)
+    process = context.Process(
+        target=_run_resonance_worker,
+        args=(molecule, send),
+        daemon=True,
+    )
+    process.start()
+    send.close()
+    status = "timeout"
+    payload: Any = None
+    try:
+        if receive.poll(_RESONANCE_TIMEOUT_SECONDS):
+            status, payload = receive.recv()
+    finally:
+        receive.close()
+        if process.is_alive():
+            process.terminate()
+        process.join(timeout=1.0)
+        if process.is_alive():
+            process.kill()
+            process.join()
+
+    if status == "ok":
+        result = cast(_ResonanceResult, payload)
+    elif status == "error":
+        raise struc.BadStructureError(
+            f"PEPPR resonance enumeration failed in worker: {payload}"
+        )
+    else:
+        result = _deposited_charge_fallback(molecule)
+        log.warning(
+            "PEPPR resonance enumeration exceeded %.1fs for a charged "
+            "%d-atom residue; using its estimated deposited formal charges",
+            _RESONANCE_TIMEOUT_SECONDS,
+            molecule.GetNumAtoms(),
+        )
+
+    with _RESONANCE_CACHE_LOCK:
+        _RESONANCE_CACHE[key] = _copy_resonance_result(result)
+        _RESONANCE_CACHE.move_to_end(key)
+        while len(_RESONANCE_CACHE) > _MAX_RESONANCE_CACHE_SIZE:
+            _RESONANCE_CACHE.popitem(last=False)
+    return _copy_resonance_result(result)
+
+
+peppr_contacts.get_interchangeable_tautomers = cast(
+    Any, _cached_get_interchangeable_tautomers
+)
+peppr_contacts.find_resonance_charges = cast(Any, _bounded_find_resonance_charges)
+ContactMeasurement = peppr_contacts.ContactMeasurement
+
 
 def get_symmetry_mate_contacts(
-    mmcif_filename: Path, contact_threshold: float = 5.0
+    mmcif: Path | pdbx.CIFFile, contact_threshold: float = 5.0
 ) -> dict[tuple[str, int], dict[tuple[str, int], dict[int, set[int]]]]:
     """
     Find inter-residue contacts generated by crystallographic symmetry.
@@ -26,8 +214,9 @@ def get_symmetry_mate_contacts(
 
     Parameters
     ----------
-    mmcif_filename : Path
-        Path to mmCIF structure file (supports .gz).
+    mmcif : Path or CIFFile
+        Parsed mmCIF or a path to one (supports .gz). Passing a parsed file
+        avoids reading a large source entry again during ingest.
     contact_threshold : float, optional
         Distance cutoff in Angstrom, by default 5.0.
 
@@ -37,13 +226,19 @@ def get_symmetry_mate_contacts(
         Mapping of (chain_id, residue_id) to partner residues,
         with atom serials mapped to the symmetry image indices.
     """
-    from plinder.data.utils.annotations.cif_utils import read_mmcif_file
+    from plinder.data.utils.annotations.cif_utils import (
+        get_structure_with_altloc,
+        get_unit_cell_with_altloc,
+        read_mmcif_file,
+    )
 
-    cif_file = read_mmcif_file(mmcif_filename)
+    cif_file = mmcif if isinstance(mmcif, pdbx.CIFFile) else read_mmcif_file(mmcif)
 
     # Build the full unit cell (all symmetry copies)
     try:
-        unit_cell = pdbx.get_unit_cell(cif_file, model=1, use_author_fields=False)
+        unit_cell = get_unit_cell_with_altloc(
+            cif_file, model=1, use_author_fields=False
+        )
     except Exception:
         # No symmetry information (NMR, computational models)
         return {}
@@ -52,9 +247,22 @@ def get_symmetry_mate_contacts(
 
     if unit_cell.box is None:
         return {}
+    box_lengths = np.linalg.norm(unit_cell.box, axis=1)
+    if not np.all(np.isfinite(box_lengths)) or np.any(
+        box_lengths <= 2 * contact_threshold
+    ):
+        # Non-crystallographic entries can carry a placeholder 1 Å box plus
+        # assembly operators (e.g. EM entry 6hbg).  A periodic search radius
+        # spanning half a box or more is physically ambiguous and makes the
+        # CellList repeat a huge number of meaningless images.
+        log.warning(
+            "Skipping symmetry-mate contacts for invalid/too-small unit cell %s",
+            box_lengths.tolist(),
+        )
+        return {}
 
     # Get ASU to determine atoms per symmetry copy
-    asu = pdbx.get_structure(cif_file, model=1, use_author_fields=False)
+    asu = get_structure_with_altloc(cif_file, model=1, use_author_fields=False)
     asu = asu[~struc.filter_solvent(asu)]
     asu = asu[~is_hydrogen_isotope(asu.element)]
     n_asu = len(asu)
@@ -64,9 +272,7 @@ def get_symmetry_mate_contacts(
     n_copies = n_total // n_asu
 
     # Label each atom with its symmetry image index
-    image_idx = np.zeros(n_total, dtype=int)
-    for i in range(1, n_copies):
-        image_idx[i * n_asu : (i + 1) * n_asu] = i
+    image_idx = np.repeat(np.arange(n_copies), n_asu)
 
     # Use periodic CellList to find contacts across unit cell boundaries
     cell_list = struc.CellList(

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
-from collections import Counter, abc, defaultdict
+from collections import Counter, OrderedDict, abc, defaultdict
 from dataclasses import dataclass, field
 from functools import cache
 from pathlib import Path
@@ -88,9 +88,10 @@ def load_ligands_from_index(*, annotation: pd.DataFrame) -> pd.DataFrame:
     }
     if annotation.empty:
         return pd.DataFrame(columns=list(columns.values()))
-    ligands = annotation.loc[
-        annotation["system_type"].eq("holo"), list(columns)
-    ].rename(columns=columns)
+    eligible = annotation["system_type"].eq("holo") & annotation[
+        "ligand_is_proper"
+    ].fillna(False)
+    ligands = annotation.loc[eligible, list(columns)].rename(columns=columns)
     return (
         ligands.dropna(subset=["ligand_id"])
         .drop_duplicates(subset=["ligand_id"])
@@ -409,6 +410,12 @@ PHARMACOPHORE_FEATURES = frozenset(
         "LumpedHydrophobe",
     }
 )
+# RDKit ShapeAlign supplies default radii for the usual organic elements but
+# raises for coordination metals such as HEM iron. Other elements receive a
+# custom periodic-table radius without changing the molecule or canonical SDF.
+SHAPE_DEFAULT_ATOMIC_NUMBERS = frozenset({1, 6, 7, 8, 9, 15, 16, 17, 35, 53})
+LIGAND_3D_SCORE_ABILITY_CACHE_SIZE = 4096
+_LIGAND_3D_SCORE_ABILITY_CACHE: OrderedDict[str, bool] = OrderedDict()
 
 
 @cache
@@ -431,13 +438,33 @@ def align_molecules(
     """Shape-align ``mobile`` onto ``reference`` and return shape/color scores."""
     crippen_o3a = rdMolAlign.GetCrippenO3A(mobile, reference, maxIters=max_preiters)
     crippen_o3a.Align()
+    reference_options = _shape_input_options(reference)
+    mobile_options = _shape_input_options(mobile)
     shape, color = rdShapeAlign.AlignMol(
         reference,
         mobile,
-        max_preiters=max_preiters,
-        max_postiters=max_postiters,
+        reference_options,
+        mobile_options,
+        -1,
+        -1,
+        1.0,
+        max_preiters,
+        max_postiters,
     )
     return float(shape), float(color)
+
+
+def _shape_input_options(molecule: Chem.Mol) -> Any:
+    """Supply VdW radii for atoms outside ShapeAlign's default organic set."""
+    options = rdShapeAlign.ShapeInputOptions()
+    periodic_table = Chem.GetPeriodicTable()
+    options.atomRadii = [
+        (atom.GetIdx(), float(periodic_table.GetRvdw(atom.GetAtomicNum())))
+        for atom in molecule.GetAtoms()
+        if atom.GetAtomicNum() not in SHAPE_DEFAULT_ATOMIC_NUMBERS
+        and atom.GetAtomicNum() > 0
+    ]
+    return options
 
 
 def get_feature_map_score(
@@ -506,6 +533,13 @@ def load_sdf_molecule(sdf_file: Path) -> Chem.Mol | None:
         return None
 
 
+def prepare_ligand_for_3d_scoring(molecule: Chem.Mol) -> Chem.Mol | None:
+    """Clone a ligand after checking that it contains an explicit heavy atom."""
+    if not any(atom.GetAtomicNum() > 1 for atom in molecule.GetAtoms()):
+        return None
+    return Chem.Mol(molecule)
+
+
 def canonical_ligand_sdf_path(data_dir: Path, *, pdb_id: str, asym_id: str) -> Path:
     """Return the canonical ASU SDF path for one ligand occurrence."""
     return (
@@ -523,15 +557,45 @@ def is_ligand_3d_score_able(sdf_file: Path) -> bool:
     molecule = load_sdf_molecule(sdf_file)
     if molecule is None:
         return False
-    reference = Chem.Mol(molecule)
-    mobile = Chem.Mol(molecule)
+    prepared = prepare_ligand_for_3d_scoring(molecule)
+    if prepared is None:
+        return False
+    positions = prepared.GetConformer().GetPositions()
+    if not np.isfinite(positions).all():
+        LOG.warning(f"ligand SDF has non-finite coordinates ({sdf_file})")
+        return False
+
+    # Capability depends on the sanitized molecular graph, while each ASU copy
+    # differs only in its coordinates. Loading every SDF above still validates
+    # its conformer; reusing a successful graph-level probe avoids repeatedly
+    # self-aligning large repeated ligands (e.g. symmetry-related oligos).
+    try:
+        cache_key = Chem.MolToSmiles(
+            prepared,
+            canonical=True,
+            isomericSmiles=True,
+        )
+    except Exception:
+        cache_key = None
+    if cache_key is not None and cache_key in _LIGAND_3D_SCORE_ABILITY_CACHE:
+        _LIGAND_3D_SCORE_ABILITY_CACHE.move_to_end(cache_key)
+        return _LIGAND_3D_SCORE_ABILITY_CACHE[cache_key]
+
+    reference = Chem.Mol(prepared)
+    mobile = Chem.Mol(prepared)
     try:
         shape, color = align_molecules(reference, mobile)
         sucos = get_sucos_score(reference, mobile)
     except Exception as exc:
         LOG.warning(f"ligand SDF is not 3D-scoreable ({sdf_file}): {exc}")
         return False
-    return all(np.isfinite(value) for value in (shape, color, sucos))
+    score_able = all(np.isfinite(value) for value in (shape, color, sucos))
+    if score_able and cache_key is not None:
+        _LIGAND_3D_SCORE_ABILITY_CACHE[cache_key] = True
+        _LIGAND_3D_SCORE_ABILITY_CACHE.move_to_end(cache_key)
+        while len(_LIGAND_3D_SCORE_ABILITY_CACHE) > LIGAND_3D_SCORE_ABILITY_CACHE_SIZE:
+            _LIGAND_3D_SCORE_ABILITY_CACHE.popitem(last=False)
+    return score_able
 
 
 def annotate_ligand_3d_score_ability(
@@ -617,6 +681,7 @@ def run_alignment(
     alignment_config: FoldseekConfig | MMSeqsConfig,
     tmp_dir: Path = Path.cwd() / "tmp",
     remove_tmp: bool = True,
+    threads: int = 1,
 ) -> None:
     if search_db.with_suffix(".dbtype").exists():
         search_db.with_suffix(".dbtype").unlink()
@@ -641,9 +706,17 @@ def run_alignment(
         "2",
         "--min-seq-id",
         f"{alignment_config.min_seq_id}",
+        "--threads",
+        str(threads),
     ]
     if aln_type == "foldseek":
         search_commands += ["--sort-by-structure-bits", "0"]
+    format_output = (
+        "query,target,qlen,fident,alnlen,qstart,qend,tstart,tend,evalue,bits,"
+        "qcov,tcov,qaln,taln"
+    )
+    if aln_type == "foldseek":
+        format_output += ",lddt"
     convert_commands = [
         aln_type,
         "convertalis",
@@ -654,10 +727,10 @@ def run_alignment(
         "--format-mode",
         "4",
         "--format-output",
-        "query,target,qlen,fident,alnlen,qstart,qend,tstart,tend,evalue,bits,qcov,tcov,qaln,taln",
+        format_output,
+        "--threads",
+        str(threads),
     ]
-    if aln_type == "foldseek":
-        convert_commands[-1] += ",lddt"
     subprocess.check_call(search_commands, stdout=subprocess.DEVNULL)
     subprocess.check_call(convert_commands, stdout=subprocess.DEVNULL)
 
@@ -822,7 +895,12 @@ class Scorer:
                 )
                 self._ligand_mol_cache[cache_key] = None
             else:
-                self._ligand_mol_cache[cache_key] = load_sdf_molecule(sdf_file)
+                molecule = load_sdf_molecule(sdf_file)
+                self._ligand_mol_cache[cache_key] = (
+                    prepare_ligand_for_3d_scoring(molecule)
+                    if molecule is not None
+                    else None
+                )
         return self._ligand_mol_cache[cache_key]
 
     def get_ligand_pair_shape_scores(
@@ -905,6 +983,7 @@ class Scorer:
         search_db: str,
         output_folder: Path,
         overwrite: bool = False,
+        threads: int = 1,
     ) -> None:
         output_folder.mkdir(exist_ok=True)
         for aln_type in ["mmseqs", "foldseek"]:
@@ -937,6 +1016,7 @@ class Scorer:
                     aln_file=aln_file.with_suffix(".tsv"),
                     tmp_dir=tmp_dir / output_folder.stem,
                     alignment_config=self.get_config(search_db, aln_type),
+                    threads=threads,
                 )
             except Exception as e:
                 scratch = (

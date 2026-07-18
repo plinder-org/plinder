@@ -83,13 +83,32 @@ def entry_exists(*, entry_dir: Path, pdb_id: str) -> bool:
     output = entry_dir / two_char_code / (pdb_id + ".parquet")
     output.parent.mkdir(exist_ok=True, parents=True)
     entry_chains = entry_dir / two_char_code / pdb_id / "entry_chains.parquet"
+    entry_biounit_chains = (
+        entry_dir / two_char_code / pdb_id / "entry_biounit_chains.parquet"
+    )
     entry_source = entry_dir / two_char_code / pdb_id / "entry_source.parquet"
-    if not (output.is_file() and entry_chains.is_file() and entry_source.is_file()):
+    if not (
+        output.is_file()
+        and entry_chains.is_file()
+        and entry_biounit_chains.is_file()
+        and entry_source.is_file()
+    ):
         return False
     try:
         if "system_receptor_type" not in pq.read_schema(output).names:
             return False
         if "chain_receptor_type" not in pq.read_schema(entry_chains).names:
+            return False
+        required_biounit_columns = {
+            "entry_pdb_id",
+            "biounit_id",
+            "chain_instance",
+            "chain_asym_id",
+            "chain_role",
+        }
+        if not required_biounit_columns.issubset(
+            pq.read_schema(entry_biounit_chains).names
+        ):
             return False
     except Exception:
         LOG.info(f"invalidating stale entry annotation cache for {pdb_id}")
@@ -507,8 +526,19 @@ def add_ligand_similarity_columns(
         validate="many_to_one",
     )
     has_smiles = result[join_column].notna() & result[join_column].ne("")
-    if result.loc[has_smiles, "ligand_smiles_id"].isna().any():
-        raise ValueError("some canonical ligand SMILES lack similarity annotations")
+    eligible = has_smiles
+    if "ligand_is_proper" in result:
+        eligible &= result["ligand_is_proper"].fillna(False)
+    if "system_type" in result:
+        eligible &= result["system_type"].eq("holo")
+    if result.loc[eligible, "ligand_smiles_id"].isna().any():
+        raise ValueError(
+            "some proper canonical ligand SMILES lack similarity annotations"
+        )
+    for column in replacement_columns:
+        if pd.api.types.is_bool_dtype(result[column].dtype):
+            result[column] = result[column].astype("boolean")
+        result.loc[~eligible, column] = pd.NA
     result["ligand_smiles_id"] = result["ligand_smiles_id"].astype("Int32")
     for column in result.columns:
         if column.endswith("_cluster_num_pdb_ids"):
@@ -544,8 +574,11 @@ def add_ligand_3d_score_ability_column(
     expected = result["ligand_id"].notna()
     if "system_type" in result:
         expected &= result["system_type"].eq("holo")
+    if "ligand_is_proper" in result:
+        expected &= result["ligand_is_proper"].fillna(False)
     if result.loc[expected, "ligand_is_3d_score_able"].isna().any():
-        raise ValueError("some holo ligands lack a 3D-scoreability annotation")
+        raise ValueError("some proper holo ligands lack a 3D-scoreability annotation")
+    result.loc[~expected, "ligand_is_3d_score_able"] = False
     result["ligand_is_3d_score_able"] = result["ligand_is_3d_score_able"].astype(
         "boolean"
     )
@@ -694,6 +727,40 @@ def create_entry_source_index(
     return sources
 
 
+def create_entry_biounit_chain_index(
+    *, data_dir: Path, force_update: bool = False
+) -> pd.DataFrame:
+    """Collate biological-assembly chain membership into one parquet."""
+    output = data_dir / "index" / "entry_biounit_chains.parquet"
+    output.parent.mkdir(exist_ok=True, parents=True)
+    if output.exists() and not force_update:
+        return pd.read_parquet(output)
+
+    parts = sorted((data_dir / "raw_entries").glob("*/*/entry_biounit_chains.parquet"))
+    columns = [
+        "entry_pdb_id",
+        "biounit_id",
+        "chain_instance",
+        "chain_asym_id",
+        "chain_role",
+    ]
+    chains = (
+        pd.concat([pd.read_parquet(path) for path in parts], ignore_index=True)
+        if parts
+        else pd.DataFrame(columns=columns)
+    ).reindex(columns=columns)
+    key = ["entry_pdb_id", "biounit_id", "chain_instance"]
+    if not chains.empty and chains.duplicated(key).any():
+        duplicates = chains.loc[chains.duplicated(key, keep=False), key]
+        raise ValueError(
+            "duplicate biological-assembly chain membership: "
+            f"{duplicates.drop_duplicates().to_dict(orient='records')}"
+        )
+    chains = chains.sort_values(key, ignore_index=True)
+    chains.to_parquet(output, index=False, row_group_size=100_000)
+    return chains
+
+
 def create_index(*, data_dir: Path, force_update: bool = False) -> pd.DataFrame:
     """
     Create the index
@@ -701,6 +768,7 @@ def create_index(*, data_dir: Path, force_update: bool = False) -> pd.DataFrame:
     index = data_dir / "index" / "annotation_table.parquet"
     index.parent.mkdir(exist_ok=True, parents=True)
     create_entry_chain_index(data_dir=data_dir, force_update=force_update)
+    create_entry_biounit_chain_index(data_dir=data_dir, force_update=force_update)
     create_entry_source_index(data_dir=data_dir, force_update=force_update)
 
     if not index.exists() or force_update:
