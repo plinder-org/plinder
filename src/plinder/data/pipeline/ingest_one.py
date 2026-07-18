@@ -5,13 +5,14 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import resource
 import shutil
 import time
 import traceback
 from pathlib import Path
-from typing import Any, Callable, TypeVar
+from typing import Any, Callable, Mapping, TypeVar
 
 import pandas as pd
 
@@ -28,6 +29,36 @@ REQUIRED_REFERENCE_FILES = (
 )
 
 T = TypeVar("T")
+
+
+def resolve_source_roots(
+    *,
+    data_dir: Path,
+    cif_root: str | Path | None = None,
+    validation_root: str | Path | None = None,
+) -> tuple[Path, Path]:
+    """Resolve V3 source roots from config, environment, or local defaults.
+
+    Explicit arguments take precedence over environment variables. Relative
+    configured paths are interpreted relative to the Plinder data directory so
+    the same configuration works in local and Metaflow deployments.
+    """
+
+    def resolve(
+        configured: str | Path | None,
+        environment_variable: str,
+        fallback: str,
+    ) -> Path:
+        value = configured or os.environ.get(environment_variable)
+        path = Path(value) if value else Path(fallback)
+        if not path.is_absolute():
+            path = data_dir / path
+        return path.expanduser().resolve()
+
+    return (
+        resolve(cif_root, PDB_NEXTGEN_ROOT_ENV, "ingest"),
+        resolve(validation_root, VALIDATION_ROOT_ENV, "reports"),
+    )
 
 
 def normalize_pdb_id(value: str) -> str:
@@ -151,6 +182,33 @@ def _entry_outputs_complete(
     )
 
 
+def completed_entry_metrics(output_root: Path, pdb_id: str) -> Path | None:
+    """Return the metrics file when one V3 entry has a complete output set."""
+    for metrics_path in entry_metrics_paths(output_root, pdb_id):
+        if not metrics_path.is_file():
+            continue
+        try:
+            metrics = json.loads(metrics_path.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        if metrics.get("status") == "skipped_no_systems":
+            return metrics_path
+        outputs = metrics.get("outputs", {})
+        entry_parquet = outputs.get("entry_parquet")
+        entry_directory = outputs.get("entry_directory")
+        ligand_parquet = outputs.get("ligand_parquet")
+        if not all((entry_parquet, entry_directory, ligand_parquet)):
+            continue
+        if _entry_outputs_complete(
+            metrics_path=metrics_path,
+            entry_parquet=Path(entry_parquet),
+            entry_directory=Path(entry_directory),
+            ligand_parquet=Path(ligand_parquet),
+        ):
+            return metrics_path
+    return None
+
+
 def _clear_entry_outputs(
     *,
     entry_parquet: Path,
@@ -171,6 +229,8 @@ def ingest_one_pdb(
     validation_root: Path,
     force: bool = False,
     check_references: bool = True,
+    annotation_cfg: Mapping[str, Any] | None = None,
+    entry_cfg: Mapping[str, Any] | None = None,
 ) -> Path:
     """Generate all per-entry V3 Parquets and canonical ASU SDFs."""
     pdb_id = normalize_pdb_id(pdb_id)
@@ -232,16 +292,31 @@ def ingest_one_pdb(
         },
         "timings": timings,
     }
+    if annotation_cfg or entry_cfg:
+        summary["configuration"] = {
+            "annotation": dict(annotation_cfg or {}),
+            "entry": {
+                key: value
+                for key, value in dict(entry_cfg or {}).items()
+                if key != "save_folder"
+            },
+        }
     total_started = time.perf_counter()
     try:
         raw_entry_root.mkdir(parents=True, exist_ok=True)
         ligand_parquet.parent.mkdir(parents=True, exist_ok=True)
 
         def annotate() -> pd.DataFrame:
+            annotation_options = dict(annotation_cfg or {})
+            entry_options = dict(entry_cfg or {})
+            entry_options.pop("save_folder", None)
+            if entry_options:
+                annotation_options["entry_cfg"] = entry_options
             annotation = GetPlinderAnnotation(
                 cif_file,
                 validation_file,
                 save_folder=raw_entry_root,
+                **annotation_options,
             ).annotate()
             return annotation if annotation is not None else pd.DataFrame()
 

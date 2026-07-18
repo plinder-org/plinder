@@ -13,6 +13,7 @@ from plinder.data.pipeline.ingest_one import (
     ingest_one_pdb,
     normalize_pdb_id,
     resolve_entry_paths,
+    resolve_source_roots,
 )
 
 
@@ -28,6 +29,33 @@ def test_resolve_entry_paths_uses_managed_archive_layout(tmp_path: Path) -> None
     )
     assert validation_file == (
         tmp_path / "validation" / "gr" / "8grn" / "8grn_validation.xml.gz"
+    )
+
+
+def test_source_roots_prefer_config_then_environment_then_local_defaults(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PLINDER_PDB_NEXTGEN_ROOT", str(tmp_path / "env-cif"))
+    monkeypatch.setenv("PLINDER_VALIDATION_ROOT", str(tmp_path / "env-validation"))
+
+    assert resolve_source_roots(data_dir=tmp_path) == (
+        (tmp_path / "env-cif").resolve(),
+        (tmp_path / "env-validation").resolve(),
+    )
+    assert resolve_source_roots(
+        data_dir=tmp_path,
+        cif_root="configured-cif",
+        validation_root="configured-validation",
+    ) == (
+        (tmp_path / "configured-cif").resolve(),
+        (tmp_path / "configured-validation").resolve(),
+    )
+
+    monkeypatch.delenv("PLINDER_PDB_NEXTGEN_ROOT")
+    monkeypatch.delenv("PLINDER_VALIDATION_ROOT")
+    assert resolve_source_roots(data_dir=tmp_path) == (
+        (tmp_path / "ingest").resolve(),
+        (tmp_path / "reports").resolve(),
     )
 
 

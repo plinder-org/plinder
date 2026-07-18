@@ -7,6 +7,7 @@ from omegaconf import DictConfig
 
 from plinder.core.utils.log import setup_logger
 from plinder.data.pipeline import config, tasks, utils
+from plinder.data.pipeline.ingest_one import resolve_source_roots
 
 LOG = setup_logger(__name__)
 
@@ -47,6 +48,14 @@ class IngestPipeline:
         )
         self.plinder_dir = Path(self.cfg.data.plinder_dir)
         LOG.info(f"plinder_dir={self.plinder_dir}")
+
+    def _entry_source_roots(self) -> tuple[Path, Path]:
+        """Resolve configured V3 source archives for entry generation."""
+        return resolve_source_roots(
+            data_dir=self.plinder_dir,
+            cif_root=self.cfg.source.pdb_nextgen_root or None,
+            validation_root=self.cfg.source.validation_root or None,
+        )
 
     def __setstate__(self, state: dict[str, Any]) -> None:
         self.cfg = config.get_config(config=state.pop("cfg"))
@@ -92,23 +101,30 @@ class IngestPipeline:
         force_update = (
             self.cfg.data.force_update or self.cfg.flow.make_entries_force_update
         )
+        cif_root, validation_root = self._entry_source_roots()
         chunks: list[list[str]] = tasks.scatter_make_entries(
             data_dir=self.plinder_dir,
+            cif_root=cif_root,
+            validation_root=validation_root,
             batch_size=self.cfg.flow.make_entries_batch_size,
             two_char_codes=self.cfg.context.two_char_codes,
             pdb_ids=self.cfg.context.pdb_ids,
             force_update=force_update,
+            discovery_threads=self.cfg.source.discovery_threads,
         )
         return chunks
 
     @utils.ingest_flow_control
-    def make_entries(self, pdb_dirs: list[str]) -> list[str]:
+    def make_entries(self, pdb_ids: list[str]) -> list[str]:
         force_update = (
             self.cfg.data.force_update or self.cfg.flow.make_entries_force_update
         )
+        cif_root, validation_root = self._entry_source_roots()
         failed: list[str] = tasks.make_entries(
             data_dir=self.plinder_dir,
-            pdb_dirs=pdb_dirs,
+            pdb_ids=pdb_ids,
+            cif_root=cif_root,
+            validation_root=validation_root,
             force_update=force_update,
             cpu=self.cfg.flow.make_entries_cpu,
             annotation_cfg=self.cfg.annotation,

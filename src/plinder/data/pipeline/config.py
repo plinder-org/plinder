@@ -88,6 +88,24 @@ class FlowConfig:
 
 
 @dataclass
+class SourceConfig:
+    """Locations of the source archives consumed by V3 entry ingest.
+
+    Empty roots use ``PLINDER_PDB_NEXTGEN_ROOT`` and
+    ``PLINDER_VALIDATION_ROOT`` when set, then fall back to the Metaflow-local
+    ``ingest`` and ``reports`` directories.
+    """
+
+    pdb_nextgen_root: str = ""
+    validation_root: str = ""
+    discovery_threads: int = 8
+
+    def __post_init__(self) -> None:
+        if self.discovery_threads < 1:
+            raise ValueError("source.discovery_threads must be positive")
+
+
+@dataclass
 class FoldseekConfig:
     alignment_type: int = 2
     score_type: str = "lddt"
@@ -219,6 +237,7 @@ class LigandConfig:
 
 SCHEMA = {
     "flow": FlowConfig,
+    "source": SourceConfig,
     "foldseek": FoldseekConfig,
     "mmseqs": MMSeqsConfig,
     "graph": GraphConfig,

@@ -2,13 +2,12 @@
 # Distributed under the terms of the Apache License 2.0
 from __future__ import annotations
 
+import json
 import os
-import sys
 from concurrent.futures import ALL_COMPLETED, Future, ThreadPoolExecutor, wait
 from pathlib import Path
 from shutil import rmtree
 from string import ascii_lowercase, digits
-from subprocess import check_output
 from textwrap import dedent
 from typing import Any
 from zipfile import ZIP_DEFLATED, ZipFile
@@ -22,6 +21,12 @@ from plinder.core.utils import gcs
 from plinder.core.utils.log import setup_logger
 from plinder.data import clusters, databases, splits
 from plinder.data.pipeline import io, utils
+from plinder.data.pipeline.ingest_batch import ingest_pdb_batch
+from plinder.data.pipeline.ingest_manifest import balance_entries, discover_entries
+from plinder.data.pipeline.ingest_one import (
+    completed_entry_metrics,
+    normalize_pdb_id,
+)
 from plinder.data.utils.annotations import get_similarity_scores
 
 LOG = setup_logger(__name__)
@@ -48,10 +53,6 @@ STAGES = [
     "make_linked_structures",
     "score_linked_structures",
 ]
-
-
-def _stringify_config_value(value: Any) -> str:
-    return value.decode() if isinstance(value, bytes) else str(value)
 
 
 def scatter_download_rcsb_files(
@@ -189,172 +190,73 @@ def make_dbs(*, data_dir: Path, sub_databases: list[str], cpu: int) -> None:
 def scatter_make_entries(
     *,
     data_dir: Path,
+    cif_root: Path,
+    validation_root: Path,
     batch_size: int,
     two_char_codes: list[str],
     pdb_ids: list[str],
     force_update: bool,
+    discovery_threads: int = 8,
 ) -> list[list[str]]:
-    """
-    Distribute annotation generation by pdb id rather than
-    two character code for more symmetric distributed
-    processing.
-
-    Parameters
-    ----------
-    data_dir : Path
-        the root plinder dir
-    batch_size : int
-        how many codes to put in a chunk
-    force_update : bool
-    two_char_codes : list[str], default=[]
-        only consider particular codes
-    pdb_ids : list[str], default=[]
-        only consider particular pdb IDs
-    force_update : bool
-        if True, re-process existing entries
-    """
-    pdb_dirs = utils.get_local_contents(
-        data_dir=data_dir / "ingest",
-        two_char_codes=two_char_codes,
-        pdb_ids=pdb_ids,
+    """Discover and size-balance source entries for V3 annotation."""
+    selected_pdb_ids = [normalize_pdb_id(pdb_id) for pdb_id in pdb_ids]
+    selected_codes = [str(code).lower() for code in two_char_codes]
+    if selected_pdb_ids and not selected_codes:
+        selected_codes = sorted({pdb_id[1:3] for pdb_id in selected_pdb_ids})
+    entries = discover_entries(
+        cif_root,
+        validation_root,
+        check_validation=False,
+        threads=discovery_threads,
+        two_char_codes=selected_codes,
+        pdb_ids=selected_pdb_ids,
     )
     if not force_update:
-        pdb_dirs = [
-            pdb_dir
-            for pdb_dir in pdb_dirs
-            if not utils.entry_exists(
-                entry_dir=data_dir / "raw_entries",
-                pdb_id=pdb_dir[-4:],
-            )
+        entries = [
+            entry
+            for entry in entries
+            if completed_entry_metrics(data_dir, entry.pdb_id) is None
         ]
-    LOG.info(f"scatter_make_entries: found {len(pdb_dirs)} PDBs")
+    LOG.info(f"scatter_make_entries: found {len(entries)} PDBs in {cif_root}")
     return [
-        pdb_dirs[pos : pos + batch_size] for pos in range(0, len(pdb_dirs), batch_size)
+        [entry.pdb_id for entry in batch]
+        for batch in balance_entries(entries, batch_size=batch_size)
     ]
 
 
 def make_entries(
     *,
     data_dir: Path,
-    pdb_dirs: list[str],
+    pdb_ids: list[str],
+    cif_root: Path,
+    validation_root: Path,
     force_update: bool,
     annotation_cfg: DictConfig,
     entry_cfg: DictConfig,
     cpu: int = 1,
 ) -> list[str]:
-    """
-    Offload individual plinder annotation tasks to
-    a multiprocessing queue wrapped as a subprocess.
-    This is a simple way to gracefully handle seg-faults
-    from C-extensions without impacting later entries in
-    the list of pdb_dirs. Additionally keep a record of
-    entries which failed so that they can be re-processed
-    with larger resource requests.
-
-    Parameters
-    ----------
-    data_dir : Path
-        the root plinder dir
-    pdb_dirs : list[str]
-        list of pdb directories to process
-    force_update : bool
-        if True, force re-processing
-    annotation_cfg : DictConfig
-        from plinder.data.pipeline.config.AnnotationConfig
-    entry_cfg : DictConfig
-        from plinder.data.pipeline.config.EntryConfig
-    cpu : int, default=1
-        number of CPUs to use
-
-    Returns
-    -------
-    failed : list[str]
-        list of pdb directories to re-process
-    """
-    input_dir = data_dir / "ingest"
-    report_dir = data_dir / "reports"
-    output_dir = data_dir / "raw_entries"
-    scratch_dir = data_dir / "scratch" / "raw_entries"
-    LOG.info(f"making {len(pdb_dirs)} entries in {output_dir}")
-    output_dir.mkdir(exist_ok=True, parents=True)
-    scratch_dir.mkdir(exist_ok=True, parents=True)
-    hashed_contents = utils.hash_contents(pdb_dirs)
-    scratch_tasks = scratch_dir / f"tasks_{hashed_contents}.txt"
-    check_finished = []
-    with scratch_tasks.open("w") as f:
-        for pdb_dir in pdb_dirs:
-            two_char_code = pdb_dir[-3:-1]
-            pdb_id = pdb_dir[-4:]
-            output = output_dir / two_char_code / (pdb_id + ".parquet")
-            if not force_update and utils.entry_exists(
-                entry_dir=output_dir,
-                pdb_id=pdb_id,
-            ):
-                LOG.info(f"skipping {pdb_id} since entry exists already")
-                continue
-            output.parent.mkdir(exist_ok=True, parents=True)
-            check_finished.append((pdb_dir, output))
-            # cifs are in ingest/{two_char_code}/pdb_0000{pdb_id}/
-            # but vals are in reports/{two_char_code}/{pdb_id}/
-            # and not all cifs have vals so gracefully handle
-            [mmcif] = list((input_dir / two_char_code / pdb_dir).glob(io.CIF_GLOB))
-            try:
-                [report] = list((report_dir / two_char_code / pdb_id).glob(io.VAL_GLOB))
-            except Exception:
-                report = (
-                    report_dir / two_char_code / pdb_id / (pdb_id + io.VAL_GLOB[1:])
-                )
-            cmd = (
-                [
-                    sys.executable,
-                    "-m",
-                    "plinder.data.get_system_annotations",
-                    f"mmcif_file={mmcif.as_posix()}",
-                    f"validation_xml={report.as_posix()}",
-                ]
-                + [
-                    f"annotation.{_stringify_config_value(k)}="
-                    f"{_stringify_config_value(v)}"
-                    for k, v in annotation_cfg.items()
-                ]
-                + [
-                    f"entry.{_stringify_config_value(k)}="
-                    f"{_stringify_config_value(v)}"
-                    for k, v in entry_cfg.items()
-                    if k != "save_folder"
-                ]
-                + [f"entry.save_folder={output.parent.as_posix()}"]
-            )
-            f.write(" ".join(cmd) + "\n")
-    try:
-        check_output(
-            [
-                sys.executable,
-                "-m",
-                "plinder.data.pipeline.mpqueue",
-                f"{scratch_tasks.as_posix()}",
-                f"--cores={max(1, cpu - 1)}",
-            ],
-            text=True,
-            timeout=10800,
-        )
-        scratch_tasks.unlink()
-    except Exception:
-        LOG.error("beep boop mpqueue timed out")
-
-    rerun = []
-    for pdb_dir, output in check_finished:
-        if output.is_file():
-            continue
-        rerun.append(pdb_dir)
-
-    fail_dir = data_dir / "failed_entries"
-    fail_dir.mkdir(exist_ok=True, parents=True)
-    LOG.info(f"would rerun {len(rerun)} systems")
-    with (fail_dir / f"fails_{hashed_contents}.txt").open("w") as f:
-        for item in rerun:
-            f.write(f"{item}\n")
-    return rerun
+    """Run the same resumable V3 batch implementation used by Slurm."""
+    del cpu  # Entry annotation is intentionally sequential within each worker.
+    normalized_ids = [normalize_pdb_id(pdb_id) for pdb_id in pdb_ids]
+    hash_id = utils.hash_contents(normalized_ids)
+    metrics_path, _ = ingest_pdb_batch(
+        pdb_ids=normalized_ids,
+        output_root=data_dir,
+        cif_root=cif_root,
+        validation_root=validation_root,
+        force=force_update,
+        job_id=f"metaflow-{hash_id}",
+        annotation_cfg=annotation_cfg,
+        entry_cfg=entry_cfg,
+    )
+    payload = json.loads(metrics_path.read_text())
+    failed = [
+        str(entry["pdb_id"])
+        for entry in payload["entries"]
+        if entry["status"] == "failed"
+    ]
+    LOG.info(f"would rerun {len(failed)} entries")
+    return failed
 
 
 def scatter_make_canonical_ligand_archives(

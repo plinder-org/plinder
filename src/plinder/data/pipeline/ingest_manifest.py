@@ -14,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from statistics import median
-from typing import Any
+from typing import Any, Collection
 
 
 @dataclass(frozen=True)
@@ -30,11 +30,17 @@ def discover_entries(
     *,
     check_validation: bool = True,
     threads: int = 8,
+    two_char_codes: Collection[str] | None = None,
+    pdb_ids: Collection[str] | None = None,
 ) -> list[EntryInput]:
     """Discover unique NextGen CIFs and optionally check validation reports."""
     if threads < 1:
         raise ValueError("threads must be positive")
     directory_pattern = re.compile(r"pdb_0000([0-9a-z]{4})")
+    selected_codes = (
+        {str(code).lower() for code in two_char_codes} if two_char_codes else None
+    )
+    selected_pdb_ids = {str(pdb_id).lower() for pdb_id in pdb_ids} if pdb_ids else None
 
     def discover_code_directory(code_directory: Path) -> list[EntryInput]:
         discovered = []
@@ -44,6 +50,8 @@ def discover_entries(
                 if match is None or not directory_entry.is_dir(follow_symlinks=False):
                     continue
                 pdb_id = match.group(1)
+                if selected_pdb_ids is not None and pdb_id not in selected_pdb_ids:
+                    continue
                 cif_path = (
                     Path(directory_entry.path) / f"pdb_0000{pdb_id}_xyz-enrich.cif.gz"
                 )
@@ -69,7 +77,12 @@ def discover_entries(
                 )
         return discovered
 
-    code_directories = [path for path in cif_root.iterdir() if path.is_dir()]
+    code_directories = [
+        path
+        for path in cif_root.iterdir()
+        if path.is_dir()
+        and (selected_codes is None or path.name.lower() in selected_codes)
+    ]
     entries: dict[str, EntryInput] = {}
     with ThreadPoolExecutor(max_workers=threads) as executor:
         for discovered in executor.map(discover_code_directory, code_directories):

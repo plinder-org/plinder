@@ -1,7 +1,7 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
 import ast
-import sys
+import json
 from pathlib import Path
 from zipfile import ZipFile
 
@@ -11,31 +11,63 @@ from plinder.data.pipeline import io, tasks
 from plinder.data.pipeline.config import LigandConfig
 
 
-def test_make_entries_uses_current_python(tmp_path, monkeypatch):
-    pdb_dir = "pdb_00001abc"
-    cif_dir = tmp_path / "ingest" / "ab" / pdb_dir
-    cif_dir.mkdir(parents=True)
-    (cif_dir / "pdb_00001abc_xyz-enrich.cif.gz").touch()
-
+def test_make_entries_uses_shared_v3_batch(tmp_path, monkeypatch):
     calls = []
 
-    def capture(command, **_):
-        calls.append(command)
-        task_file = Path(command[3])
-        assert task_file.read_text().startswith(sys.executable)
-        return ""
+    def capture(**kwargs):
+        calls.append(kwargs)
+        metrics_path = tmp_path / "metrics" / "batch.json"
+        metrics_path.parent.mkdir(parents=True)
+        metrics_path.write_text(
+            json.dumps(
+                {
+                    "entries": [
+                        {"pdb_id": "1abc", "status": "complete"},
+                        {"pdb_id": "2def", "status": "failed"},
+                    ]
+                }
+            )
+        )
+        return metrics_path, True
 
-    monkeypatch.setattr(tasks, "check_output", capture)
-    tasks.make_entries(
+    monkeypatch.setattr(tasks, "ingest_pdb_batch", capture)
+    failed = tasks.make_entries(
         data_dir=tmp_path,
-        pdb_dirs=[pdb_dir],
+        pdb_ids=["1ABC", "2def"],
+        cif_root=tmp_path / "nextgen",
+        validation_root=tmp_path / "validation",
         force_update=False,
-        annotation_cfg={},
-        entry_cfg={},
+        annotation_cfg={"min_polymer_size": 10},
+        entry_cfg={"plip_complex_threshold": 8},
         cpu=1,
     )
 
-    assert calls[0][:3] == [sys.executable, "-m", "plinder.data.pipeline.mpqueue"]
+    assert failed == ["2def"]
+    assert calls[0]["pdb_ids"] == ["1abc", "2def"]
+    assert calls[0]["cif_root"] == tmp_path / "nextgen"
+    assert calls[0]["validation_root"] == tmp_path / "validation"
+    assert calls[0]["annotation_cfg"] == {"min_polymer_size": 10}
+    assert calls[0]["entry_cfg"] == {"plip_complex_threshold": 8}
+
+
+def test_scatter_make_entries_discovers_configured_source_root(tmp_path):
+    cif_root = tmp_path / "external-nextgen"
+    cif_path = cif_root / "ab" / "pdb_00001abc" / "pdb_00001abc_xyz-enrich.cif.gz"
+    cif_path.parent.mkdir(parents=True)
+    cif_path.write_bytes(b"1234")
+
+    chunks = tasks.scatter_make_entries(
+        data_dir=tmp_path / "release",
+        cif_root=cif_root,
+        validation_root=tmp_path / "external-validation",
+        batch_size=10,
+        two_char_codes=[],
+        pdb_ids=["1ABC"],
+        force_update=False,
+        discovery_threads=1,
+    )
+
+    assert chunks == [["1abc"]]
 
 
 @pytest.mark.parametrize(
@@ -125,6 +157,25 @@ def test_scoring_finalization_stage_order_and_partitions():
 def test_ligand_score_threshold_must_cover_frequency_clustering() -> None:
     with pytest.raises(ValueError, match="must not exceed"):
         LigandConfig(minimum_similarity=95)
+
+
+def test_v3_source_roots_are_configurable() -> None:
+    from plinder.data.pipeline.config import get_config
+
+    cfg = get_config(
+        config={
+            "source": {
+                "pdb_nextgen_root": "/archives/nextgen",
+                "validation_root": "/archives/validation",
+                "discovery_threads": 3,
+            }
+        },
+        cached=False,
+    )
+
+    assert cfg.source.pdb_nextgen_root == "/archives/nextgen"
+    assert cfg.source.validation_root == "/archives/validation"
+    assert cfg.source.discovery_threads == 3
 
 
 def test_ligand_score_threshold_must_cover_requested_chemical_clusters() -> None:

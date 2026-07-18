@@ -11,12 +11,12 @@ import time
 import traceback
 from collections import Counter
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from plinder.data.pipeline.ingest_one import (
     PDB_NEXTGEN_ROOT_ENV,
     VALIDATION_ROOT_ENV,
-    entry_metrics_paths,
+    completed_entry_metrics,
     ingest_one_pdb,
     normalize_pdb_id,
 )
@@ -49,30 +49,6 @@ def manifest_slice(
     return pdb_ids[start : start + batch_size]
 
 
-def _completed_metrics(output_root: Path, pdb_id: str) -> Path | None:
-    for metrics_path in entry_metrics_paths(output_root, pdb_id):
-        if not metrics_path.is_file():
-            continue
-        try:
-            metrics = json.loads(metrics_path.read_text())
-        except (OSError, json.JSONDecodeError):
-            continue
-        status = metrics.get("status")
-        if status == "skipped_no_systems":
-            return metrics_path
-        if status != "complete":
-            continue
-        outputs = metrics.get("outputs", {})
-        required_files = (outputs.get("entry_parquet"), outputs.get("ligand_parquet"))
-        entry_directory = outputs.get("entry_directory")
-        if not all(path and Path(path).is_file() for path in required_files):
-            continue
-        if not entry_directory or not Path(entry_directory).is_dir():
-            continue
-        return metrics_path
-    return None
-
-
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
@@ -88,6 +64,8 @@ def ingest_pdb_batch(
     force: bool = False,
     job_id: str = "local",
     batch_index: int = 0,
+    annotation_cfg: Mapping[str, Any] | None = None,
+    entry_cfg: Mapping[str, Any] | None = None,
 ) -> tuple[Path, bool]:
     """Ingest PDB IDs sequentially and continue after per-entry failures."""
     output_root = output_root.resolve()
@@ -107,7 +85,7 @@ def ingest_pdb_batch(
     try:
         for pdb_id in pdb_ids:
             entry_started = time.perf_counter()
-            completed = None if force else _completed_metrics(output_root, pdb_id)
+            completed = None if force else completed_entry_metrics(output_root, pdb_id)
             if completed is not None:
                 payload["entries"].append(
                     {
@@ -125,6 +103,8 @@ def ingest_pdb_batch(
                     cif_root=cif_root,
                     validation_root=validation_root,
                     force=True,
+                    annotation_cfg=annotation_cfg,
+                    entry_cfg=entry_cfg,
                 )
                 entry_status = json.loads(entry_metrics.read_text()).get("status")
                 payload["entries"].append(
