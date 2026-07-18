@@ -7,7 +7,9 @@ import numpy as np
 import pandas as pd
 
 
-def transform_bindingdb_affinity_data(*, raw_affinity_path: Path) -> pd.DataFrame:
+def transform_bindingdb_affinity_data(
+    *, raw_affinity_path: Path, chunksize: int = 100_000
+) -> pd.DataFrame:
     """Parse BindingDB TSV into a per-(PDB, ligand) affinity table.
 
     Each row maps a ``pdbid_ligid`` key (e.g. ``"1ABC_ATP"``) to a
@@ -26,6 +28,9 @@ def transform_bindingdb_affinity_data(*, raw_affinity_path: Path) -> pd.DataFram
     ----------
     raw_affinity_path : Path
         Path to the BindingDB TSV file.
+    chunksize : int, default=100000
+        Number of source rows processed at once. Rows without a PDB/ligand
+        mapping are discarded before chunks are combined.
 
     Returns
     -------
@@ -66,39 +71,59 @@ def transform_bindingdb_affinity_data(*, raw_affinity_path: Path) -> pd.DataFram
         "EC50 (nM)",
         seq_col,
     ]
-    df = pd.read_csv(raw_affinity_path, sep="\t", usecols=cols, low_memory=False)
+    parts = []
+    chunks = pd.read_csv(
+        raw_affinity_path,
+        sep="\t",
+        usecols=cols,
+        dtype={
+            "Ligand HET ID in PDB": "string",
+            "PDB ID(s) for Ligand-Target Complex": "string",
+        },
+        low_memory=False,
+        chunksize=chunksize,
+    )
+    for chunk in chunks:
+        chunk = chunk[
+            chunk["Ligand HET ID in PDB"].notna()
+            & chunk["PDB ID(s) for Ligand-Target Complex"].notna()
+        ].copy()
+        if chunk.empty:
+            continue
+        chunk["pchembl"] = (
+            chunk[["Ki (nM)", "Kd (nM)"]]
+            .apply(set, axis=1)
+            .apply(lambda x: [i for i in x if str(i) != "nan"])
+        )
+        chunk = chunk[chunk["pchembl"].apply(lambda x: x != [])].copy()
+        if chunk.empty:
+            continue
+        chunk["pchembl"] = chunk["pchembl"].apply(
+            lambda x: calc_pchembl(float(str(x[0]).replace(">", "").replace("<", "")))
+        )
+        chunk.rename(columns={seq_col: "target_sequence"}, inplace=True)
+        chunk = chunk[
+            [
+                "PDB ID(s) for Ligand-Target Complex",
+                "Ligand HET ID in PDB",
+                "target_sequence",
+                "pchembl",
+            ]
+        ].drop_duplicates()
+        chunk["pdb_id"] = chunk["PDB ID(s) for Ligand-Target Complex"].str.split(",")
+        chunk = chunk.explode("pdb_id").drop_duplicates()
+        chunk["pdbid_ligid"] = (
+            chunk["pdb_id"].str.strip().str.upper()
+            + "_"
+            + chunk["Ligand HET ID in PDB"].str.strip()
+        )
+        parts.append(
+            chunk[["pdbid_ligid", "pchembl", "target_sequence"]].drop_duplicates()
+        )
 
-    df["pchembl"] = (
-        df[["Ki (nM)", "Kd (nM)"]]
-        .apply(set, axis=1)
-        .apply(lambda x: [i for i in x if str(i) != "nan"])
-    )
-    df = df[df["pchembl"].apply(lambda x: x != [])]
-    df["pchembl"] = df["pchembl"].apply(
-        lambda x: calc_pchembl(float(str(x[0]).replace(">", "").replace("<", "")))
-    )
-
-    df.rename(columns={seq_col: "target_sequence"}, inplace=True)
-    df = df[
-        [
-            "PDB ID(s) for Ligand-Target Complex",
-            "Ligand HET ID in PDB",
-            "target_sequence",
-            "pchembl",
-        ]
-    ].drop_duplicates()
-    df = df[
-        (df["Ligand HET ID in PDB"].notna())
-        & (df["PDB ID(s) for Ligand-Target Complex"].notna())
-    ]
-    df["pdb_id"] = df["PDB ID(s) for Ligand-Target Complex"].apply(
-        lambda x: x.split(",")
-    )
-    df = df.explode(["pdb_id"]).drop_duplicates()
-    df["pdbid_ligid"] = (
-        df["pdb_id"].str.upper() + "_" + df["Ligand HET ID in PDB"].str.strip()
-    )
-    df = df[["pdbid_ligid", "pchembl", "target_sequence"]].drop_duplicates()
+    if not parts:
+        return pd.DataFrame(columns=["pdbid_ligid", "pchembl", "target_sequence"])
+    df = pd.concat(parts, ignore_index=True).drop_duplicates()
 
     # Per pdbid_ligid: take median pchembl, keep first non-null target sequence
     grouped = df.groupby("pdbid_ligid").agg(
