@@ -7,7 +7,7 @@ from omegaconf import DictConfig
 
 from plinder.core.utils.log import setup_logger
 from plinder.data.pipeline import config, tasks, utils
-from plinder.data.pipeline.ingest_one import resolve_source_roots
+from plinder.data.pipeline.ingest import resolve_source_roots
 
 LOG = setup_logger(__name__)
 

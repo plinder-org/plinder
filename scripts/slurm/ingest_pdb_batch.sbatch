@@ -46,4 +46,4 @@ fi
 
 /usr/bin/time -v \
     -o "${OUTPUT_ROOT}/metrics/ingest-batch-${JOB_ID}-${BATCH_INDEX}.time-v.txt" \
-    python -m plinder.data.pipeline.ingest_batch "${ARGS[@]}"
+    python -m plinder.data.pipeline.ingest batch "${ARGS[@]}"

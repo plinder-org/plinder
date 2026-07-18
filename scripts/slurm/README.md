@@ -32,7 +32,7 @@ For a full release, first create a size-balanced manifest. This scans only local
 metadata and does not download structure or validation files:
 
 ```bash
-python -m plinder.data.pipeline.ingest_manifest \
+python -m plinder.data.pipeline.ingest manifest \
   "${PLINDER_PDB_NEXTGEN_ROOT}" \
   "${PLINDER_VALIDATION_ROOT}" \
   "${OUTPUT_ROOT}/manifests/pdb-nextgen-all.txt" \
