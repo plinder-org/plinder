@@ -47,6 +47,12 @@ class FlowConfig:
     make_entries_force_update: bool = False
     make_entries_cpu: int = 4
 
+    collate_entries_batch_size: int = 4
+    collate_entries_cpu: int = 2
+    collate_entries_memory_limit: str = "7GB"
+    finalize_entries_cpu: int = 4
+    finalize_entries_memory_limit: str = "32GB"
+
     make_sub_dbs_cpu: int = 4
     make_scorers_cpu: int = 4
     download_alternative_datasets_threads: int = 10
@@ -75,6 +81,10 @@ class FlowConfig:
     split_config_dir: str = ""
 
     def __post_init__(self) -> None:
+        if self.collate_entries_batch_size < 1:
+            raise ValueError("flow.collate_entries_batch_size must be positive")
+        if self.collate_entries_cpu < 1 or self.finalize_entries_cpu < 1:
+            raise ValueError("entry collation CPU counts must be positive")
         if isinstance(self.run_specific_stages, str):
             self.run_specific_stages = [
                 stage for stage in self.run_specific_stages.split(",") if stage

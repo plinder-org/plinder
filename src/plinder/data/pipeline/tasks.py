@@ -20,7 +20,7 @@ from plinder.core.scores.metrics import is_ligand_level_metric
 from plinder.core.utils import gcs
 from plinder.core.utils.log import setup_logger
 from plinder.data import clusters, databases, splits
-from plinder.data.pipeline import io, utils
+from plinder.data.pipeline import collate, io, utils
 from plinder.data.pipeline.ingest import (
     balance_entries,
     completed_entry_metrics,
@@ -36,6 +36,7 @@ STAGES = [
     "download_alternative_datasets",
     "make_dbs",
     "make_entries",
+    "collate_entries",
     "make_canonical_ligand_archives",
     "make_ligands",
     "compute_ligand_fingerprints",
@@ -201,9 +202,7 @@ def scatter_make_entries(
 ) -> list[list[str]]:
     """Discover and size-balance source entries for V3 annotation."""
     selected_pdb_ids = [normalize_pdb_id(pdb_id) for pdb_id in pdb_ids]
-    selected_codes = [str(code).lower() for code in two_char_codes]
-    if selected_pdb_ids and not selected_codes:
-        selected_codes = sorted({pdb_id[1:3] for pdb_id in selected_pdb_ids})
+    selected_codes = _selected_context_codes(two_char_codes, selected_pdb_ids)
     entries = discover_entries(
         cif_root,
         validation_root,
@@ -260,10 +259,64 @@ def make_entries(
     return failed
 
 
+def _selected_context_codes(two_char_codes: list[str], pdb_ids: list[str]) -> list[str]:
+    """Apply context precedence consistently across entry-derived stages."""
+    if pdb_ids:
+        return sorted({normalize_pdb_id(pdb_id)[1:3] for pdb_id in pdb_ids})
+    return sorted(str(code).lower() for code in two_char_codes)
+
+
+def scatter_collate_entries(
+    *,
+    data_dir: Path,
+    batch_size: int,
+) -> list[list[str]]:
+    """Plan V3 collation and scatter deterministic two-character shards."""
+    if batch_size < 1:
+        raise ValueError("batch_size must be positive")
+    plan = collate.plan_collation(data_dir)
+    codes = [str(code) for code in plan["codes"]]
+    return [codes[pos : pos + batch_size] for pos in range(0, len(codes), batch_size)]
+
+
+def collate_entries(
+    *,
+    data_dir: Path,
+    two_char_codes: list[str],
+    cpu: int,
+    memory_limit: str,
+) -> None:
+    """Collate one batch of V3 entry shards through the shared implementation."""
+    for code in two_char_codes:
+        collate.collate_shard(
+            data_dir,
+            code,
+            threads=cpu,
+            memory_limit=memory_limit,
+            scratch_dir=data_dir / "scratch" / "collation",
+        )
+
+
+def finalize_entry_collation(
+    *,
+    data_dir: Path,
+    cpu: int,
+    memory_limit: str,
+) -> dict[str, Any]:
+    """Validate and fail-closed install the sharded V3 annotation index."""
+    return collate.finalize_collation(
+        data_dir,
+        threads=cpu,
+        memory_limit=memory_limit,
+        scratch_dir=data_dir / "scratch" / "collation-finalize",
+    )
+
+
 def scatter_make_canonical_ligand_archives(
     *,
     data_dir: Path,
     two_char_codes: list[str],
+    pdb_ids: list[str],
     batch_size: int,
 ) -> list[list[str]]:
     """
@@ -277,6 +330,8 @@ def scatter_make_canonical_ligand_archives(
         how many codes to put in a chunk
     two_char_codes : list[str], default=[]
         only consider particular codes
+    pdb_ids : list[str], default=[]
+        if set, derive codes from these IDs and ignore ``two_char_codes``
 
     Returns
     -------
@@ -284,8 +339,9 @@ def scatter_make_canonical_ligand_archives(
         batches of two character codes
     """
     entry_dir = data_dir / "raw_entries"
-    if len(two_char_codes):
-        codes = sorted(two_char_codes)
+    selected_codes = _selected_context_codes(two_char_codes, pdb_ids)
+    if selected_codes:
+        codes = selected_codes
     else:
         codes = sorted(os.listdir(entry_dir.as_posix()))
     LOG.info(

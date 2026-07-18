@@ -82,3 +82,43 @@ or required shared reference fails the affected entry without a network request.
 Per-entry timings are written to sharded `metrics/ingest-one-<pdb_id>.json` files;
 whole-process resource use is written once per array task to
 `metrics/ingest-batch-<job_id>-<batch_index>.time-v.txt`.
+
+## Collate the V3 annotation index
+
+After entry ingest is complete, inventory the exact per-entry outputs. The plan
+fails if any materialized entry is missing an annotation, chain, biological-
+assembly-chain, source, or ligand Parquet:
+
+```bash
+sbatch \
+  --output="${OUTPUT_ROOT}/logs/collate-plan-%j.out" \
+  --export=ALL,PLINDER_ENV_ROOT,PLINDER_REPO_ROOT \
+  scripts/slurm/collate_v3_shards.sbatch plan "${OUTPUT_ROOT}"
+```
+
+Read `index/.staging/v3_collation/plan.json` after that job succeeds. With a
+batch size of four, set `LAST_CODE_BATCH_INDEX` to
+`ceil(code_count / 4) - 1`, then submit the unthrottled shard array:
+
+```bash
+sbatch \
+  --array=0-LAST_CODE_BATCH_INDEX \
+  --output="${OUTPUT_ROOT}/logs/collate-%A-%a.out" \
+  --export=ALL,PLINDER_ENV_ROOT,PLINDER_REPO_ROOT \
+  scripts/slurm/collate_v3_shards.sbatch shard "${OUTPUT_ROOT}" 4
+```
+
+Each shard is atomic and resumable. Once the array succeeds, merge and validate
+the planned shards with a larger single task:
+
+```bash
+sbatch \
+  --cpus-per-task=4 --mem=48G \
+  --output="${OUTPUT_ROOT}/logs/collate-finalize-%j.out" \
+  --export=ALL,PLINDER_ENV_ROOT,PLINDER_REPO_ROOT,PLINDER_COLLATE_MEMORY_LIMIT=40GB \
+  scripts/slurm/collate_v3_shards.sbatch finalize "${OUTPUT_ROOT}"
+```
+
+Finalization writes the four local `index/*.parquet` files only after validating
+row counts, keys, cross-table references, and ligand scoreability. It performs
+no upload or external release operation.

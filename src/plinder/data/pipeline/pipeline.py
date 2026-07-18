@@ -137,14 +137,43 @@ class IngestPipeline:
         catted = []
         for rerun in reruns:
             catted.extend([item[-4:] for item in rerun])
-        utils.create_index(
-            data_dir=self.plinder_dir,
-            force_update=True,
-        )
+        if self.cfg.data.plinder_iteration != "v3":
+            utils.create_index(
+                data_dir=self.plinder_dir,
+                force_update=True,
+            )
         return catted
 
     @utils.ingest_flow_control
+    def scatter_collate_entries(self) -> list[list[str]]:
+        return tasks.scatter_collate_entries(
+            data_dir=self.plinder_dir,
+            batch_size=self.cfg.flow.collate_entries_batch_size,
+        )
+
+    @utils.ingest_flow_control
+    def collate_entries(self, two_char_codes: list[str]) -> None:
+        tasks.collate_entries(
+            data_dir=self.plinder_dir,
+            two_char_codes=two_char_codes,
+            cpu=self.cfg.flow.collate_entries_cpu,
+            memory_limit=self.cfg.flow.collate_entries_memory_limit,
+        )
+
+    @utils.ingest_flow_control
+    def join_collate_entries(self, outputs: list[None]) -> None:
+        del outputs
+        tasks.finalize_entry_collation(
+            data_dir=self.plinder_dir,
+            cpu=self.cfg.flow.finalize_entries_cpu,
+            memory_limit=self.cfg.flow.finalize_entries_memory_limit,
+        )
+
+    @utils.ingest_flow_control
     def scatter_make_ligands(self) -> list[list[str]]:
+        if self.cfg.data.plinder_iteration == "v3":
+            LOG.info("V3 entry ingest already wrote canonical ligand Parquets")
+            return [[]]
         chunks: list[list[str]] = tasks.scatter_make_ligands(
             data_dir=self.plinder_dir,
             batch_size=self.cfg.flow.make_ligands_batch_size,
@@ -155,6 +184,8 @@ class IngestPipeline:
 
     @utils.ingest_flow_control
     def make_ligands(self, pdb_ids: list[str]) -> None:
+        if self.cfg.data.plinder_iteration == "v3":
+            return
         tasks.make_ligands(data_dir=self.plinder_dir, pdb_ids=pdb_ids)
 
     @utils.ingest_flow_control
@@ -195,6 +226,7 @@ class IngestPipeline:
         chunks: list[list[str]] = tasks.scatter_make_canonical_ligand_archives(
             data_dir=self.plinder_dir,
             two_char_codes=self.cfg.context.two_char_codes,
+            pdb_ids=self.cfg.context.pdb_ids,
             batch_size=self.cfg.flow.download_rcsb_files_batch_size,
         )
         return chunks

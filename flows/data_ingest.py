@@ -3,6 +3,9 @@
 """
 The filestore instance name is: plinder-data-gen.
 
+TODO: The Metaflow pipeline still contains outdated V2 paths and has not been
+tested end-to-end for V3.
+
 """
 from __future__ import annotations
 
@@ -160,6 +163,32 @@ class PlinderDataIngestFlow(FlowSpec):
         self.reruns = self.pipeline.join_make_entries(
             [input_.reruns for input_ in inputs]
         )
+        self.next(self.scatter_collate_entries)
+
+    @kubernetes(**K8S)
+    @environment(**ENV)
+    @retry
+    @step
+    def scatter_collate_entries(self):
+        self.chunks = self.pipeline.scatter_collate_entries()
+        self.next(self.collate_entries, foreach="chunks")
+
+    @kubernetes(**{**K8S, **{"cpu": 2, "memory": 8000}})
+    @environment(**ENV)
+    @retry
+    @step
+    def collate_entries(self):
+        self.pipeline.collate_entries(self.input)
+        self.next(self.join_collate_entries)
+
+    @kubernetes(**{**K8S, **WORKSTATION_MEM})
+    @environment(**ENV)
+    @retry
+    @step
+    def join_collate_entries(self, inputs):
+        self.pipeline = inputs[0].pipeline
+        self.merge_artifacts(inputs, exclude=["chunks"])
+        self.pipeline.join_collate_entries([None for _ in inputs])
         self.next(self.scatter_make_canonical_ligand_archives)
 
     @kubernetes(**K8S)

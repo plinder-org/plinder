@@ -70,6 +70,85 @@ def test_scatter_make_entries_discovers_configured_source_root(tmp_path):
     assert chunks == [["1abc"]]
 
 
+def test_scatter_make_entries_pdb_ids_override_two_char_codes(tmp_path):
+    cif_root = tmp_path / "external-nextgen"
+    for pdb_id in ("1abc", "2def"):
+        cif_path = (
+            cif_root
+            / pdb_id[1:3]
+            / f"pdb_0000{pdb_id}"
+            / f"pdb_0000{pdb_id}_xyz-enrich.cif.gz"
+        )
+        cif_path.parent.mkdir(parents=True)
+        cif_path.touch()
+
+    chunks = tasks.scatter_make_entries(
+        data_dir=tmp_path / "release",
+        cif_root=cif_root,
+        validation_root=tmp_path / "external-validation",
+        batch_size=10,
+        two_char_codes=["ab"],
+        pdb_ids=["2def"],
+        force_update=False,
+        discovery_threads=1,
+    )
+
+    assert chunks == [["2def"]]
+
+
+def test_entry_collation_tasks_use_shared_core(tmp_path, monkeypatch):
+    shard_calls = []
+    finalize_calls = []
+    monkeypatch.setattr(
+        tasks.collate,
+        "plan_collation",
+        lambda data_dir: {"codes": ["aa", "ab", "ac"]},
+    )
+    monkeypatch.setattr(
+        tasks.collate,
+        "collate_shard",
+        lambda *args, **kwargs: shard_calls.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        tasks.collate,
+        "finalize_collation",
+        lambda *args, **kwargs: finalize_calls.append((args, kwargs)) or {"ok": True},
+    )
+
+    chunks = tasks.scatter_collate_entries(data_dir=tmp_path, batch_size=2)
+    tasks.collate_entries(
+        data_dir=tmp_path,
+        two_char_codes=chunks[0],
+        cpu=2,
+        memory_limit="7GB",
+    )
+    result = tasks.finalize_entry_collation(
+        data_dir=tmp_path,
+        cpu=4,
+        memory_limit="32GB",
+    )
+
+    assert chunks == [["aa", "ab"], ["ac"]]
+    assert [args[1] for args, _ in shard_calls] == ["aa", "ab"]
+    assert all(kwargs["threads"] == 2 for _, kwargs in shard_calls)
+    assert result == {"ok": True}
+    assert finalize_calls[0][1]["threads"] == 4
+
+
+def test_archive_scatter_pdb_ids_override_two_char_codes(tmp_path):
+    for code in ("ab", "de"):
+        (tmp_path / "raw_entries" / code).mkdir(parents=True)
+
+    chunks = tasks.scatter_make_canonical_ligand_archives(
+        data_dir=tmp_path,
+        batch_size=1,
+        two_char_codes=["ab"],
+        pdb_ids=["2DEF"],
+    )
+
+    assert chunks == [["de"]]
+
+
 @pytest.mark.parametrize(
     "inputs, expected",
     [
@@ -298,6 +377,10 @@ def test_metaflow_graph_uses_canonical_ligand_archive_stage():
     assert "self.pipeline.structure_qc" not in flow
     assert "self.next(self.scatter_make_entries)" in flow
     assert "def join_make_entries" in flow
+    assert "self.next(self.scatter_collate_entries)" in flow
+    assert "def collate_entries" in flow
+    assert "self.pipeline.collate_entries(self.input)" in flow
+    assert "self.pipeline.join_collate_entries" in flow
     assert "self.next(self.scatter_make_canonical_ligand_archives)" in flow
     assert "def make_canonical_ligand_archives" in flow
     assert "self.next(self.annotate_ligand_similarity)" in flow
@@ -373,6 +456,9 @@ def test_v3_ingest_configs_use_current_schema_and_stages():
             assert "collate_partitions" in cfg.flow.run_specific_stages
             assert "make_components_and_communities" in cfg.flow.run_specific_stages
             assert "finalize_index" in cfg.flow.run_specific_stages
+        if path.name == "make_entries_ligands.yaml":
+            assert "collate_entries" in cfg.flow.run_specific_stages
+            assert "make_ligands" not in cfg.flow.run_specific_stages
 
 
 def test_make_canonical_ligand_archives_only_archives_asu_sdfs(tmp_path):

@@ -13,6 +13,7 @@ from plinder.data.pipeline.ingest import (
     balance_entries,
     build_parser,
     check_reference_data,
+    completed_entry_metrics,
     discover_entries,
     ingest_one_pdb,
     ingest_pdb_batch,
@@ -23,6 +24,27 @@ from plinder.data.pipeline.ingest import (
     resolve_source_roots,
     write_manifest,
 )
+
+
+def _write_fake_sidecars(entry_dir: Path, pdb_id: str) -> None:
+    pd.DataFrame(
+        {
+            "entry_pdb_id": [pdb_id],
+            "chain_receptor_type": ["protein"],
+        }
+    ).to_parquet(entry_dir / "entry_chains.parquet", index=False)
+    pd.DataFrame(
+        {
+            "entry_pdb_id": [pdb_id],
+            "biounit_id": ["1"],
+            "chain_instance": ["1.A"],
+            "chain_asym_id": ["A"],
+            "chain_role": ["receptor"],
+        }
+    ).to_parquet(entry_dir / "entry_biounit_chains.parquet", index=False)
+    pd.DataFrame({"entry_pdb_id": [pdb_id]}).to_parquet(
+        entry_dir / "entry_source.parquet", index=False
+    )
 
 
 def test_resolve_entry_paths_uses_managed_archive_layout(tmp_path: Path) -> None:
@@ -64,6 +86,16 @@ def test_source_roots_prefer_config_then_environment_then_local_defaults(
     assert resolve_source_roots(data_dir=tmp_path) == (
         (tmp_path / "ingest").resolve(),
         (tmp_path / "reports").resolve(),
+    )
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    assert resolve_source_roots(
+        data_dir=tmp_path,
+        cif_root="~/nextgen",
+        validation_root="~/validation",
+    ) == (
+        (tmp_path / "home/nextgen").resolve(),
+        (tmp_path / "home/validation").resolve(),
     )
 
 
@@ -118,10 +150,12 @@ def test_ingest_one_pdb_writes_entry_outputs_and_metrics(
             ligand_dir = self.save_folder / "8grn" / "ligand_files"
             ligand_dir.mkdir(parents=True)
             (ligand_dir / "1.C.sdf").touch()
+            _write_fake_sidecars(ligand_dir.parent, "8grn")
             return pd.DataFrame(
                 {
                     "system_id": ["8grn__1__1.A__1.C"],
                     "ligand_id": ["8grn__1.C"],
+                    "system_receptor_type": ["protein"],
                 }
             )
 
@@ -130,10 +164,12 @@ def test_ingest_one_pdb_writes_entry_outputs_and_metrics(
     ) -> None:
         assert data_dir == output_root.resolve()
         assert len(annotation) == 1
-        annotation[["ligand_id"]].to_parquet(output_path, index=False)
+        annotation[["ligand_id"]].assign(ligand_is_3d_score_able=True).to_parquet(
+            output_path, index=False
+        )
 
-    monkeypatch.setattr(ingest, "GetPlinderAnnotation", FakeAnnotation)
-    monkeypatch.setattr(ingest, "save_ligand_batch", fake_save_ligand_batch)
+    monkeypatch.setattr(ingest, "_get_annotation_class", lambda: FakeAnnotation)
+    monkeypatch.setattr(ingest, "_save_ligand_batch", fake_save_ligand_batch)
 
     metrics_path = ingest_one_pdb(
         pdb_id="8GRN",
@@ -193,7 +229,7 @@ def test_ingest_one_pdb_does_not_materialize_entries_without_systems(
             (stale_dir / "A.sdf").touch()
             return None
 
-    monkeypatch.setattr(ingest, "GetPlinderAnnotation", EmptyAnnotation)
+    monkeypatch.setattr(ingest, "_get_annotation_class", lambda: EmptyAnnotation)
     entry_parquet = output_root / "raw_entries" / "gr" / "8grn.parquet"
     ligand_parquet = output_root / "ligands" / "8grn.parquet"
     for path in (entry_parquet, ligand_parquet):
@@ -265,20 +301,24 @@ def test_ingest_one_pdb_retries_partial_outputs_without_force(
             ligand_dir = self.save_folder / "8grn" / "ligand_files"
             ligand_dir.mkdir(parents=True)
             (ligand_dir / "C.sdf").touch()
+            _write_fake_sidecars(ligand_dir.parent, "8grn")
             return pd.DataFrame(
                 {
                     "system_id": ["8grn__1__1.A__1.C"],
                     "ligand_id": ["8grn__1.C"],
+                    "system_receptor_type": ["protein"],
                 }
             )
 
     def fake_save_ligand_batch(
         *, data_dir: Path, annotation: pd.DataFrame, output_path: Path
     ) -> None:
-        annotation[["ligand_id"]].to_parquet(output_path, index=False)
+        annotation[["ligand_id"]].assign(ligand_is_3d_score_able=True).to_parquet(
+            output_path, index=False
+        )
 
-    monkeypatch.setattr(ingest, "GetPlinderAnnotation", FakeAnnotation)
-    monkeypatch.setattr(ingest, "save_ligand_batch", fake_save_ligand_batch)
+    monkeypatch.setattr(ingest, "_get_annotation_class", lambda: FakeAnnotation)
+    monkeypatch.setattr(ingest, "_save_ligand_batch", fake_save_ligand_batch)
 
     result = ingest_one_pdb(
         pdb_id="8grn",
@@ -364,8 +404,13 @@ def test_batch_continues_after_failure_and_resumes_completed_entries(
         for path in (entry_path, ligand_path, metrics_path):
             path.parent.mkdir(parents=True, exist_ok=True)
         entry_directory.mkdir()
-        entry_path.touch()
-        ligand_path.touch()
+        pd.DataFrame({"system_receptor_type": ["protein"]}).to_parquet(
+            entry_path, index=False
+        )
+        _write_fake_sidecars(entry_directory, pdb_id)
+        pd.DataFrame(
+            {"ligand_id": [f"{pdb_id}__1.L"], "ligand_is_3d_score_able": [True]}
+        ).to_parquet(ligand_path, index=False)
         metrics_path.write_text(
             json.dumps(
                 {
@@ -413,6 +458,9 @@ def test_batch_continues_after_failure_and_resumes_completed_entries(
 
     assert had_failures
     assert calls == ["2def"]
+    assert completed_entry_metrics(output_root, "1abc") is not None
+    (output_root / "raw_entries/ab/1abc/entry_chains.parquet").unlink()
+    assert completed_entry_metrics(output_root, "1abc") is None
 
 
 def test_batch_resumes_entries_previously_skipped_without_systems(

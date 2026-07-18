@@ -22,9 +22,7 @@ from statistics import median
 from typing import Any, Callable, Collection, Mapping, TypeVar
 
 import pandas as pd
-
-from plinder.data.get_system_annotations import GetPlinderAnnotation
-from plinder.data.pipeline.utils import save_ligand_batch
+import pyarrow.parquet as pq
 
 PDB_NEXTGEN_ROOT_ENV = "PLINDER_PDB_NEXTGEN_ROOT"
 VALIDATION_ROOT_ENV = "PLINDER_VALIDATION_ROOT"
@@ -57,10 +55,10 @@ def resolve_source_roots(
         fallback: str,
     ) -> Path:
         value = configured or os.environ.get(environment_variable)
-        path = Path(value) if value else Path(fallback)
+        path = Path(value).expanduser() if value else Path(fallback)
         if not path.is_absolute():
             path = data_dir / path
-        return path.expanduser().resolve()
+        return path.resolve()
 
     return (
         resolve(cif_root, PDB_NEXTGEN_ROOT_ENV, "ingest"),
@@ -181,12 +179,51 @@ def _entry_outputs_complete(
         metrics = json.loads(metrics_path.read_text())
     except (OSError, json.JSONDecodeError):
         return False
-    return bool(
-        metrics.get("status") == "complete"
-        and entry_parquet.is_file()
-        and entry_directory.is_dir()
-        and ligand_parquet.is_file()
-    )
+    if metrics.get("status") != "complete" or not entry_parquet.is_file():
+        return False
+    sidecars = {
+        "entry_chains": entry_directory / "entry_chains.parquet",
+        "entry_biounit_chains": entry_directory / "entry_biounit_chains.parquet",
+        "entry_source": entry_directory / "entry_source.parquet",
+    }
+    if not ligand_parquet.is_file() or not all(
+        path.is_file() for path in sidecars.values()
+    ):
+        return False
+    required_columns = {
+        entry_parquet: {"system_receptor_type"},
+        sidecars["entry_chains"]: {"chain_receptor_type"},
+        sidecars["entry_biounit_chains"]: {
+            "entry_pdb_id",
+            "biounit_id",
+            "chain_instance",
+            "chain_asym_id",
+            "chain_role",
+        },
+        sidecars["entry_source"]: {"entry_pdb_id"},
+        ligand_parquet: {"ligand_id", "ligand_is_3d_score_able"},
+    }
+    try:
+        return all(
+            columns.issubset(pq.read_schema(path).names)  # type: ignore[no-untyped-call]
+            for path, columns in required_columns.items()
+        )
+    except Exception:
+        return False
+
+
+def _get_annotation_class() -> Any:
+    """Import the data-generation stack only for actual entry annotation."""
+    from plinder.data.get_system_annotations import GetPlinderAnnotation
+
+    return GetPlinderAnnotation
+
+
+def _save_ligand_batch(**kwargs: Any) -> None:
+    """Import ligand annotation code only for actual entry annotation."""
+    from plinder.data.pipeline.utils import save_ligand_batch
+
+    save_ligand_batch(**kwargs)
 
 
 def completed_entry_metrics(output_root: Path, pdb_id: str) -> Path | None:
@@ -319,7 +356,7 @@ def ingest_one_pdb(
             entry_options.pop("save_folder", None)
             if entry_options:
                 annotation_options["entry_cfg"] = entry_options
-            annotation = GetPlinderAnnotation(
+            annotation = _get_annotation_class()(
                 cif_file,
                 validation_file,
                 save_folder=raw_entry_root,
@@ -356,7 +393,7 @@ def ingest_one_pdb(
             )
 
             def write_ligand_parquet() -> None:
-                save_ligand_batch(
+                _save_ligand_batch(
                     data_dir=output_root,
                     annotation=annotation,
                     output_path=ligand_parquet,
