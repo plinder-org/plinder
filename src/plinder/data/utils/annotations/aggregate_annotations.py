@@ -27,6 +27,7 @@ from plinder.data.utils.annotations.cif_utils import (
     build_biounit,
     get_chain_external_mappings,
     get_entry_info,
+    get_label_asym_sequences,
     get_model_count,
     get_structure_with_altloc,
 )
@@ -59,7 +60,7 @@ from plinder.data.utils.annotations.save_utils import save_ligands
 from plinder.data.utils.annotations.utils import DocBaseModel
 
 LOG = setup_logger(__name__)
-RDLogger.DisableLog("rdApp.*")
+RDLogger.DisableLog("rdApp.*")  # type: ignore[attr-defined]
 SymmetryMateContacts = ty.Annotated[
     dict[tuple[str, int], dict[tuple[str, int], dict[int, set[int]]]],
     BeforeValidator(validate_chain_residue),
@@ -1132,8 +1133,6 @@ class Entry(DocBaseModel):
             _cif_scalar,
             read_mmcif_file,
         )
-        from plinder.data.utils.annotations.protein_utils import get_seqres_from_cif
-
         cif_file_obj = read_mmcif_file(cif_file)
         cif_data = list(cif_file_obj.values())[0]
         entry_info = get_entry_info(cif_data)
@@ -1201,7 +1200,7 @@ class Entry(DocBaseModel):
                 f"{pdb_id}: biotite returned no bonds despite include_bonds=True"
             )
         apply_struct_conn_bonds(atoms, cif_data)
-        chain_to_seqres = get_seqres_from_cif(cif_data)
+        chain_to_seqres = get_label_asym_sequences(cif_data)
 
         entry.covalent_bonds = get_covalent_connections(cif_data)
         entry.chain_to_seqres = chain_to_seqres
@@ -1472,8 +1471,6 @@ class Entry(DocBaseModel):
             get_unknown_ligand_ids,
             read_mmcif_file,
         )
-        from plinder.data.utils.annotations.protein_utils import get_seqres_from_cif
-
         if save_folder is not None:
             ligand_dir = Path(save_folder) / pdb_id / "ligand_files"
             if ligand_dir.exists():
@@ -1542,7 +1539,7 @@ class Entry(DocBaseModel):
                 "coverage are all absent)."
             )
         apply_struct_conn_bonds(atoms, cif_data)
-        chain_to_seqres = get_seqres_from_cif(cif_data)
+        chain_to_seqres = get_label_asym_sequences(cif_data)
 
         entry = cls(
             pdb_id=pdb_id,

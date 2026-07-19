@@ -256,6 +256,16 @@ def test_plan_rejects_empty_release(tmp_path: Path) -> None:
         plan_collation(tmp_path)
 
 
+def test_plan_supports_bounded_parallel_inventory(tmp_path: Path) -> None:
+    _write_release(tmp_path)
+
+    plan = plan_collation(tmp_path, threads=2)
+
+    assert plan["entry_count"] == 2
+    with pytest.raises(ValueError, match="planning threads must be positive"):
+        plan_collation(tmp_path, threads=0)
+
+
 def test_final_validation_rejects_all_ion_or_artifact_systems(
     tmp_path: Path,
 ) -> None:
@@ -274,4 +284,29 @@ def test_final_validation_rejects_all_ion_or_artifact_systems(
     )
 
     with pytest.raises(ValueError, match="all_ion_or_artifact_systems=1"):
+        run_collation(tmp_path, threads=1, memory_limit="1GB")
+
+
+@pytest.mark.parametrize(
+    ("length", "unresolved", "error_key"),
+    [
+        (0, 0, "nonpositive_lengths"),
+        (300, -1, "negative_unresolved"),
+        (300, 301, "unresolved_exceeds_length"),
+    ],
+)
+def test_final_validation_rejects_invalid_chain_sequence_metadata(
+    tmp_path: Path,
+    length: int,
+    unresolved: int,
+    error_key: str,
+) -> None:
+    _write_release(tmp_path)
+    chain_path = tmp_path / "raw_entries/ab/1abc/entry_chains.parquet"
+    chains = pd.read_parquet(chain_path)
+    chains.loc[0, "chain_length"] = length
+    chains.loc[0, "chain_num_unresolved_residues"] = unresolved
+    chains.to_parquet(chain_path, index=False)
+
+    with pytest.raises(ValueError, match=error_key):
         run_collation(tmp_path, threads=1, memory_limit="1GB")

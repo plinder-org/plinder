@@ -216,8 +216,10 @@ def _entry_manifest_row(data_dir: Path, annotation_path: Path) -> dict[str, Any]
     return row
 
 
-def plan_collation(data_dir: Path) -> dict[str, Any]:
+def plan_collation(data_dir: Path, *, threads: int = 1) -> dict[str, Any]:
     """Inventory every materialized V3 entry and atomically publish a plan."""
+    if threads < 1:
+        raise ValueError("planning threads must be positive")
     data_dir = data_dir.resolve()
     raw_entries = data_dir / "raw_entries"
     if not raw_entries.is_dir():
@@ -239,26 +241,34 @@ def plan_collation(data_dir: Path) -> dict[str, Any]:
             for path in raw_entries.iterdir()
             if path.is_dir() and re.fullmatch(r"[a-z0-9]{2}", path.name.lower())
         )
-        for code_dir in code_dirs:
-            rows = [
-                _entry_manifest_row(data_dir, path)
-                for path in sorted(code_dir.glob("*.parquet"))
-            ]
-            if not rows:
-                continue
-            duplicates = sorted(
-                str(row["pdb_id"]) for row in rows if str(row["pdb_id"]) in seen
-            )
-            if duplicates:
-                raise ValueError(f"duplicate raw-entry annotations: {duplicates}")
-            seen.update(str(row["pdb_id"]) for row in rows)
-            code = code_dir.name.lower()
-            code_signatures[code] = _row_signature(rows)
-            code_counts[code] = len(rows)
-            total_entries += len(rows)
-            writer.write_table(  # type: ignore[no-untyped-call]
-                pa.Table.from_pylist(rows, schema=MANIFEST_SCHEMA)
-            )
+        with ThreadPoolExecutor(max_workers=threads) as executor:
+            for code_dir in code_dirs:
+                annotation_paths = sorted(code_dir.glob("*.parquet"))
+                rows = list(
+                    executor.map(
+                        lambda path: _entry_manifest_row(data_dir, path),
+                        annotation_paths,
+                    )
+                )
+                if not rows:
+                    continue
+                duplicates = sorted(
+                    str(row["pdb_id"])
+                    for row in rows
+                    if str(row["pdb_id"]) in seen
+                )
+                if duplicates:
+                    raise ValueError(
+                        f"duplicate raw-entry annotations: {duplicates}"
+                    )
+                seen.update(str(row["pdb_id"]) for row in rows)
+                code = code_dir.name.lower()
+                code_signatures[code] = _row_signature(rows)
+                code_counts[code] = len(rows)
+                total_entries += len(rows)
+                writer.write_table(  # type: ignore[no-untyped-call]
+                    pa.Table.from_pylist(rows, schema=MANIFEST_SCHEMA)
+                )
         if total_entries == 0:
             raise ValueError(f"no materialized V3 entries found in {raw_entries}")
         writer.close()  # type: ignore[no-untyped-call]
@@ -808,6 +818,35 @@ def _validate_final_tables(
         }
         if any(duplicates.values()):
             raise ValueError(f"duplicate keys in final collation: {duplicates}")
+        invalid_chain_metadata = {
+            "nonpositive_lengths": int(
+                _fetch_scalar(
+                    connection,
+                    "SELECT count(*) FROM entry_chains "
+                    "WHERE chain_length IS NULL OR chain_length <= 0",
+                )
+            ),
+            "negative_unresolved": int(
+                _fetch_scalar(
+                    connection,
+                    "SELECT count(*) FROM entry_chains WHERE "
+                    "chain_num_unresolved_residues IS NULL OR "
+                    "chain_num_unresolved_residues < 0",
+                )
+            ),
+            "unresolved_exceeds_length": int(
+                _fetch_scalar(
+                    connection,
+                    "SELECT count(*) FROM entry_chains WHERE "
+                    "chain_num_unresolved_residues > chain_length",
+                )
+            ),
+        }
+        if any(invalid_chain_metadata.values()):
+            raise ValueError(
+                "invalid entry-chain sequence metadata: "
+                f"{invalid_chain_metadata}"
+            )
         annotation_columns = _relation_columns(connection, "annotation")
         retired = sorted(
             column
@@ -994,7 +1033,7 @@ def run_collation(
     force: bool = False,
 ) -> dict[str, Any]:
     """Run all collation phases locally; intended for tests and small releases."""
-    plan = plan_collation(data_dir)
+    plan = plan_collation(data_dir, threads=threads)
     for code in plan["codes"]:
         collate_shard(
             data_dir,
@@ -1037,8 +1076,9 @@ def build_parser() -> argparse.ArgumentParser:
             command.add_argument("codes", nargs="*")
             command.add_argument("--batch-index", type=int)
             command.add_argument("--batch-size", type=int)
-        if name in {"shard", "finalize", "run"}:
+        if name in {"plan", "shard", "finalize", "run"}:
             command.add_argument("--threads", type=int, default=1)
+        if name in {"shard", "finalize", "run"}:
             command.add_argument("--memory-limit", default="8GB")
             command.add_argument("--scratch-dir", type=Path)
             command.add_argument("--row-group-size", type=int, default=100_000)
@@ -1050,7 +1090,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = build_parser().parse_args()
     if args.command == "plan":
-        result = plan_collation(args.data_dir)
+        result = plan_collation(args.data_dir, threads=args.threads)
     elif args.command == "shard":
         codes = args.codes
         if args.batch_index is not None or args.batch_size is not None:

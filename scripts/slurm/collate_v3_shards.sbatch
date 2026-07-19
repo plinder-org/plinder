@@ -29,7 +29,7 @@ BATCH_INDEX=${SLURM_ARRAY_TASK_ID:-0}
 JOB_ID=${SLURM_ARRAY_JOB_ID:-${SLURM_JOB_ID:-local}}
 ENV_ROOT=${PLINDER_ENV_ROOT:?'set PLINDER_ENV_ROOT to the ingest Conda environment'}
 REPO_ROOT=${PLINDER_REPO_ROOT:-${SLURM_SUBMIT_DIR:-}}
-SCRATCH_ROOT=${PLINDER_COLLATE_SCRATCH:-${TMPDIR:-${DATA_DIR}/scratch/collation}}
+SCRATCH_ROOT=${PLINDER_COLLATE_SCRATCH:-${SLURM_TMPDIR:-/scratch/${USER}/plinder-collate-${SLURM_JOB_ID:-local}}}
 
 export PATH="${ENV_ROOT}/bin:${PATH}"
 export LD_LIBRARY_PATH="${ENV_ROOT}/lib:${LD_LIBRARY_PATH:-}"
@@ -50,7 +50,8 @@ TIME_OUTPUT="${DATA_DIR}/metrics/collate-${MODE}-${JOB_ID}-${BATCH_INDEX}.time-v
 MEMORY_LIMIT=${PLINDER_COLLATE_MEMORY_LIMIT:-7GB}
 if [[ "${MODE}" == "plan" ]]; then
     /usr/bin/time -v -o "${TIME_OUTPUT}" \
-        python -m plinder.data.pipeline.collate plan "${DATA_DIR}"
+        python -m plinder.data.pipeline.collate plan "${DATA_DIR}" \
+            --threads "${SLURM_CPUS_PER_TASK:-1}"
 elif [[ "${MODE}" == "finalize" ]]; then
     /usr/bin/time -v -o "${TIME_OUTPUT}" \
         python -m plinder.data.pipeline.collate finalize "${DATA_DIR}" \
