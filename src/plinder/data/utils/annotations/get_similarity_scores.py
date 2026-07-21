@@ -79,9 +79,7 @@ def write_ecfp4_fingerprint_table(ligands: pd.DataFrame, output_path: Path) -> N
     """Write the fixed ECFP4/1024 fingerprint table with explicit metadata."""
     table = pa.Table.from_pandas(ligands, preserve_index=False)
     metadata = {**(table.schema.metadata or {}), **ECFP4_PARQUET_METADATA}
-    pq.write_table(  # type: ignore[no-untyped-call]
-        table.replace_schema_metadata(metadata), output_path
-    )
+    pq.write_table(table.replace_schema_metadata(metadata), output_path)
 
 
 SORT_ORDER = [
@@ -312,10 +310,7 @@ def ligand_scores(
 ) -> None:
     """Write all BulkTanimoto edges above ``minimum_similarity``."""
     fingerprint_path = data_dir / "fingerprints" / "ligands_per_smiles.parquet"
-    fingerprint_metadata = (
-        pq.read_schema(fingerprint_path).metadata  # type: ignore[no-untyped-call]
-        or {}
-    )
+    fingerprint_metadata = pq.read_schema(fingerprint_path).metadata or {}
     if any(
         fingerprint_metadata.get(key) != value
         for key, value in ECFP4_PARQUET_METADATA.items()
@@ -350,7 +345,7 @@ def ligand_scores(
         rows,
         schema=schemas.TANIMOTO_SCORE_SCHEMA.with_metadata(ECFP4_PARQUET_METADATA),
     )
-    pq.write_table(table, output_path)  # type: ignore[no-untyped-call]
+    pq.write_table(table, output_path)
 
 
 def build_ligand_similarity_annotations(
@@ -1021,14 +1016,12 @@ def _pdb_id_from_alignment_identifier(identifier: Any) -> str:
 
 def _pdb_ids_from_alignment_identifiers(identifiers: Any) -> Any:
     """Extract four-character PDB IDs without a Python loop over Arrow rows."""
-    without_foldseek_prefix = pc.replace_substring(  # type: ignore[attr-defined]
+    without_foldseek_prefix = pc.replace_substring(
         identifiers,
         pattern="pdb_0000",
         replacement="",
     )
-    return pc.utf8_slice_codeunits(  # type: ignore[attr-defined]
-        without_foldseek_prefix, start=0, stop=4
-    )
+    return pc.utf8_slice_codeunits(without_foldseek_prefix, start=0, stop=4)
 
 
 def _raw_alignment_schema(aln_type: str) -> pa.Schema:
@@ -1066,12 +1059,10 @@ def _stream_alignment_tsv_to_dataset(
     """Convert an alignment TSV without materializing the full search batch."""
     if dataset_path.exists():
         shutil.rmtree(dataset_path)
-    reader = csv.open_csv(  # type: ignore[attr-defined]
+    reader = csv.open_csv(
         tsv_path,
-        parse_options=csv.ParseOptions(delimiter="\t"),  # type: ignore[attr-defined]
-        read_options=csv.ReadOptions(  # type: ignore[attr-defined]
-            block_size=16 * 1024 * 1024
-        ),
+        parse_options=csv.ParseOptions(delimiter="\t"),
+        read_options=csv.ReadOptions(block_size=16 * 1024 * 1024),
     )
     for batch_index, batch in enumerate(reader):
         table = pyarrow.Table.from_batches([batch])
@@ -1084,7 +1075,7 @@ def _stream_alignment_tsv_to_dataset(
                 "target_pdb_id",
                 _pdb_ids_from_alignment_identifiers(table["target"]),
             )
-        pq.write_to_dataset(  # type: ignore[no-untyped-call]
+        pq.write_to_dataset(
             table,
             dataset_path,
             partition_cols=["query_pdb_id"],
@@ -1289,7 +1280,7 @@ class Scorer:
             # A shard is deliberately small (roughly one hundred PDB entries)
             # and normally one Parquet row group. Reading it once avoids
             # repeating the same NFS page read for later queries in this job.
-            table = pq.read_table(  # type: ignore[no-untyped-call]
+            table = pq.read_table(
                 archive,
                 columns=["pdb_id", "ligand_asym_id", "sdf"],
                 filters=(
@@ -1591,7 +1582,7 @@ class Scorer:
                     # Short chains can legitimately have no hit after the
                     # E-value filter.  A typed empty file is their durable
                     # searched/no-hit completion marker.
-                    pq.write_table(  # type: ignore[no-untyped-call]
+                    pq.write_table(
                         pa.Table.from_pylist(
                             [], schema=_raw_alignment_schema(aln_type)
                         ),
@@ -1650,9 +1641,7 @@ class Scorer:
             mapped_file.parent.mkdir(exist_ok=True, parents=True)
             if not overwrite and mapped_file.exists():
                 try:
-                    mapped_columns = set(
-                        pq.read_schema(mapped_file).names  # type: ignore[no-untyped-call]
-                    )
+                    mapped_columns = set(pq.read_schema(mapped_file).names)
                 except (OSError, ValueError):
                     mapped_columns = set()
                 if mapped_columns and schemas.mapped_alignment_schema_is_current(
@@ -1723,11 +1712,9 @@ class Scorer:
         cached_score_is_current = False
         if not overwrite and score_df_path.is_file():
             try:
-                cached_schema = pq.read_schema(  # type: ignore[no-untyped-call]
-                    score_df_path
-                )
+                cached_schema = pq.read_schema(score_df_path)
                 cached_columns = set(cached_schema.names)
-                pq.read_metadata(score_df_path)  # type: ignore[no-untyped-call]
+                pq.read_metadata(score_df_path)
                 cached_score_is_current = (
                     set(schemas.PROTEIN_SIMILARITY_SCHEMA.names).issubset(
                         cached_columns
@@ -1736,10 +1723,8 @@ class Scorer:
                     == score_mode
                 )
                 if defer_ligand_3d:
-                    candidate_schema = pq.read_schema(  # type: ignore[no-untyped-call]
-                        candidate_path
-                    )
-                    pq.read_metadata(candidate_path)  # type: ignore[no-untyped-call]
+                    candidate_schema = pq.read_schema(candidate_path)
+                    pq.read_metadata(candidate_path)
                     cached_score_is_current = cached_score_is_current and set(
                         schemas.LIGAND_3D_CANDIDATE_SCHEMA.names
                     ).issubset(candidate_schema.names)
@@ -1833,7 +1818,7 @@ class Scorer:
                     ligand_3d_candidates,
                     schema=schemas.LIGAND_3D_CANDIDATE_SCHEMA,
                 )
-                pq.write_table(  # type: ignore[no-untyped-call]
+                pq.write_table(
                     candidate_table,
                     candidate_temporary,
                     compression="zstd",

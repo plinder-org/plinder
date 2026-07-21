@@ -205,7 +205,7 @@ def _entry_outputs_complete(
     }
     try:
         return all(
-            columns.issubset(pq.read_schema(path).names)  # type: ignore[no-untyped-call]
+            columns.issubset(pq.read_schema(path).names)
             for path, columns in required_columns.items()
         )
     except Exception:

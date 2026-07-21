@@ -127,7 +127,7 @@ def record_dropped_queries(
             / f"{pdb_id}.parquet"
         )
         try:
-            metadata = pq.read_schema(score_path).metadata or {}  # type: ignore[no-untyped-call]
+            metadata = pq.read_schema(score_path).metadata or {}
         except (OSError, ValueError):
             metadata = {}
         complete = (
@@ -569,7 +569,7 @@ def plan_ligand_3d_batches(
             raise ValueError(
                 f"invalid ligand 3D candidate shard manifest: {manifest_path}"
             ) from exc
-        schema = pq.read_schema(path)  # type: ignore[no-untyped-call]
+        schema = pq.read_schema(path)
         missing = sorted(
             set(schemas.LIGAND_3D_CANDIDATE_SCHEMA.names).difference(schema.names)
         )
@@ -580,7 +580,7 @@ def plan_ligand_3d_batches(
             "path": str(path.resolve()),
             "size": stat.st_size,
             "mtime_ns": stat.st_mtime_ns,
-            "rows": pq.ParquetFile(path).metadata.num_rows,  # type: ignore[no-untyped-call]
+            "rows": pq.ParquetFile(path).metadata.num_rows,
         }
         inputs = manifest.get("inputs")
         if (
@@ -598,7 +598,7 @@ def plan_ligand_3d_batches(
         )
         if not isinstance(pair_output, dict) or not pair_path.is_file():
             raise ValueError(f"missing compact ligand 3D candidate shard: {pair_path}")
-        pair_schema = pq.read_schema(pair_path)  # type: ignore[no-untyped-call]
+        pair_schema = pq.read_schema(pair_path)
         pair_missing = sorted(
             set(schemas.LIGAND_3D_PAIR_CANDIDATE_SCHEMA.names).difference(
                 pair_schema.names
@@ -613,7 +613,7 @@ def plan_ligand_3d_batches(
             "path": str(pair_path.resolve()),
             "size": pair_stat.st_size,
             "mtime_ns": pair_stat.st_mtime_ns,
-            "rows": pq.ParquetFile(pair_path).metadata.num_rows,  # type: ignore[no-untyped-call]
+            "rows": pq.ParquetFile(pair_path).metadata.num_rows,
         }
         if pair_output != pair_output_signature:
             raise ValueError(f"stale compact ligand 3D candidate shard: {pair_path}")
@@ -955,7 +955,7 @@ def finalize_ligand_3d_retries(
         retry_index = int(retry_index)
         path = retry_output_dir / f"{retry_index}.parquet"
         try:
-            schema = pq.read_schema(path)  # type: ignore[no-untyped-call]
+            schema = pq.read_schema(path)
             observed = pd.read_parquet(path)
             expected_pairs = pd.MultiIndex.from_frame(expected[pair_columns])
             observed_pairs = pd.MultiIndex.from_frame(observed[pair_columns])
@@ -1596,9 +1596,7 @@ def finalize_alignment_artifacts(data_dir: Path) -> dict[str, Any]:
             }:
                 invalid_manifests.append(shard)
                 continue
-            columns = set(
-                pq.read_schema(release).names  # type: ignore[no-untyped-call]
-            )
+            columns = set(pq.read_schema(release).names)
             if not schemas.mapped_alignment_schema_is_current(
                 columns, alignment_type=alignment_type
             ):
@@ -1743,7 +1741,7 @@ def finalize_ligand_3d_artifacts(data_dir: Path) -> dict[str, Any]:
     )
     phase_started = perf_counter()
     for index, path in enumerate(final_score_paths, start=1):
-        schema = pq.read_schema(path)  # type: ignore[no-untyped-call]
+        schema = pq.read_schema(path)
         missing = sorted(
             set(schemas.PROTEIN_SIMILARITY_SCHEMA.names).difference(schema.names)
         )
@@ -1793,7 +1791,7 @@ def finalize_ligand_3d_artifacts(data_dir: Path) -> dict[str, Any]:
         LOG.info(f"score finalization: validating {len(pair_paths)} pair-score schemas")
         phase_started = perf_counter()
         for index, path in enumerate(pair_paths, start=1):
-            schema = pq.read_schema(path)  # type: ignore[no-untyped-call]
+            schema = pq.read_schema(path)
             missing = sorted(
                 set(schemas.LIGAND_3D_SCORE_SCHEMA.names).difference(schema.names)
             )
@@ -1956,7 +1954,7 @@ def export_sucos_shape_pocket_qcov_batch(
                 if (
                     payload.get("inputs") == inputs
                     and payload.get("output") == _source_signature(output)
-                    and pq.read_schema(output).names == expected_columns  # type: ignore[no-untyped-call]
+                    and pq.read_schema(output).names == expected_columns
                 ):
                     reports.append(payload)
                     exported_rows += int(payload["rows"])
@@ -2002,7 +2000,7 @@ def export_sucos_shape_pocket_qcov_batch(
         copyfile(local_output, install)
         install.replace(output)
         local_output.unlink(missing_ok=True)
-        metadata = pq.ParquetFile(output).metadata  # type: ignore[no-untyped-call]
+        metadata = pq.ParquetFile(output).metadata
         payload = {
             "status": "complete",
             "shard": shard,
@@ -2132,7 +2130,7 @@ def finalize_sucos_shape_pocket_qcov_export(
         """
     )
     connection.close()
-    metadata = pq.ParquetFile(local_output).metadata  # type: ignore[no-untyped-call]
+    metadata = pq.ParquetFile(local_output).metadata
     expected_rows = sum(int(source["rows"]) for source in sources)
     if metadata.num_rows != expected_rows:
         local_output.unlink(missing_ok=True)

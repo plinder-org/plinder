@@ -60,7 +60,7 @@ from plinder.data.utils.annotations.save_utils import save_ligands
 from plinder.data.utils.annotations.utils import DocBaseModel
 
 LOG = setup_logger(__name__)
-RDLogger.DisableLog("rdApp.*")  # type: ignore[attr-defined]
+RDLogger.DisableLog("rdApp.*")
 SymmetryMateContacts = ty.Annotated[
     dict[tuple[str, int], dict[tuple[str, int], dict[int, set[int]]]],
     BeforeValidator(validate_chain_residue),

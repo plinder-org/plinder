@@ -95,19 +95,9 @@ def entry_exists(*, entry_dir: Path, pdb_id: str) -> bool:
     ):
         return False
     try:
-        if (
-            "system_receptor_type"
-            not in pq.read_schema(  # type: ignore[no-untyped-call]
-                output
-            ).names
-        ):
+        if "system_receptor_type" not in pq.read_schema(output).names:
             return False
-        if (
-            "chain_receptor_type"
-            not in pq.read_schema(  # type: ignore[no-untyped-call]
-                entry_chains
-            ).names
-        ):
+        if "chain_receptor_type" not in pq.read_schema(entry_chains).names:
             return False
         required_biounit_columns = {
             "entry_pdb_id",
@@ -117,9 +107,7 @@ def entry_exists(*, entry_dir: Path, pdb_id: str) -> bool:
             "chain_role",
         }
         if not required_biounit_columns.issubset(
-            pq.read_schema(  # type: ignore[no-untyped-call]
-                entry_biounit_chains
-            ).names
+            pq.read_schema(entry_biounit_chains).names
         ):
             return False
     except Exception:
@@ -388,7 +376,7 @@ def get_alns(
 def _mapped_alignment_file_is_current(path: Path, *, alignment_type: str) -> bool:
     """Treat corrupt and pre-compact mapped files as incomplete cache entries."""
     try:
-        columns = set(pq.read_schema(path).names)  # type: ignore[no-untyped-call]
+        columns = set(pq.read_schema(path).names)
     except (OSError, ValueError) as exc:
         LOG.warning(f"ignoring unreadable mapped alignment {path}: {exc}")
         return False

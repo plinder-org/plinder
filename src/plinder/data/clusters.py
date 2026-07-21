@@ -487,7 +487,7 @@ def _completed_component_reduction(
             path = output_dir / str(output["path"])
             if not path.is_file() or path.stat().st_size != int(output["size"]):
                 return None
-            schema = pq.read_schema(path)  # type: ignore[no-untyped-call]
+            schema = pq.read_schema(path)
             if not set(COMPONENT_EDGE_COLUMNS).issubset(schema.names):
                 return None
         return cast(dict[str, Any], manifest)
@@ -642,8 +642,8 @@ def merge_component_reduction_shards(
             for threshold in ordered_thresholds:
                 output = output_by_key[(directed, threshold)]
                 path = reduction_dir / str(output["path"])
-                parquet = pq.ParquetFile(path)  # type: ignore[no-untyped-call]
-                for batch in parquet.iter_batches(  # type: ignore[no-untyped-call]
+                parquet = pq.ParquetFile(path)
+                for batch in parquet.iter_batches(
                     batch_size=parquet_batch_size,
                     columns=COMPONENT_EDGE_COLUMNS,
                 ):
@@ -713,7 +713,7 @@ def iter_component_score_batches(
     """Read one score shard as bounded, normalized ligand-edge batches."""
     if batch_size < 1:
         raise ValueError("component score batch size must be positive")
-    parquet = pq.ParquetFile(source_path)  # type: ignore[no-untyped-call]
+    parquet = pq.ParquetFile(source_path)
     chemical = metric == "tanimoto_similarity_ecfp4_1024"
     if chemical:
         columns = ["query_ligand_id", "target_ligand_id", metric]
@@ -729,7 +729,7 @@ def iter_component_score_batches(
     missing = sorted(set(columns).difference(parquet.schema.names))
     if missing:
         raise ValueError(f"component score shard {source_path} is missing {missing}")
-    for batch in parquet.iter_batches(  # type: ignore[no-untyped-call]
+    for batch in parquet.iter_batches(
         batch_size=batch_size,
         columns=columns,
     ):
@@ -779,9 +779,7 @@ def _cached_component_node_universe(
             return None
         if cache_path.stat().st_size != int(manifest["cache_size"]):
             return None
-        if set(
-            pq.read_schema(cache_path).names  # type: ignore[no-untyped-call]
-        ) != {"kind", "id"}:
+        if set(pq.read_schema(cache_path).names) != {"kind", "id"}:
             return None
         frame = pd.read_parquet(cache_path, columns=["kind", "id"])
         nodes = frame.loc[frame["kind"].eq("ligand"), "id"].astype(str).tolist()

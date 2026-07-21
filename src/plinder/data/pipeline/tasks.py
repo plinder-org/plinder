@@ -459,7 +459,7 @@ def make_canonical_ligand_archives(
         temporary = temporary_root / f"{code}.parquet"
         if temporary == archive:
             temporary = archive.with_suffix(".tmp.parquet")
-        pq.write_table(  # type: ignore[no-untyped-call]
+        pq.write_table(
             table,
             temporary,
             compression="zstd",
@@ -555,7 +555,7 @@ def _completed_alignment_chain_lookup(
     manifest = data_dir / ALIGNMENT_CHAIN_LOOKUP_MANIFEST_RELATIVE
     try:
         stat = lookup.stat()
-        columns = set(pq.read_schema(lookup).names)  # type: ignore[no-untyped-call]
+        columns = set(pq.read_schema(lookup).names)
         input_signatures = _alignment_chain_lookup_input_signatures(data_dir)
     except (OSError, TypeError, ValueError):
         return None
@@ -1023,15 +1023,13 @@ def _alignment_target_entry_ids(sources: Sequence[Path]) -> set[str]:
     if not sources:
         return set()
     targets: set[str] = set()
-    scanner = ds.dataset(  # type: ignore[no-untyped-call]
-        sources, format="parquet"
-    ).scanner(
+    scanner = ds.dataset(sources, format="parquet").scanner(
         columns=["target_pdb_id"],
         batch_size=262_144,
         use_threads=False,
     )
     for batch in scanner.to_batches():
-        unique = pc.unique(batch.column(0))  # type: ignore[attr-defined]
+        unique = pc.unique(batch.column(0))
         targets.update(str(value) for value in unique.to_pylist() if value is not None)
     return targets
 
@@ -1116,7 +1114,7 @@ def map_batch_alignments(
                 source = source_root / str(signature["name"])
                 pdb_id = source.stem
                 rows_by_query[pdb_id][alignment_type] = int(
-                    pq.ParquetFile(source).metadata.num_rows  # type: ignore[no-untyped-call]
+                    pq.ParquetFile(source).metadata.num_rows
                 )
         skipped_queries = {
             pdb_id: {
@@ -1276,7 +1274,7 @@ def scatter_missing_scores(
                 / f"{pdb_id}.parquet"
             )
             try:
-                metadata = pq.read_schema(score_path).metadata or {}  # type: ignore[no-untyped-call]
+                metadata = pq.read_schema(score_path).metadata or {}
             except (OSError, ValueError):
                 continue
             if (
@@ -1388,7 +1386,7 @@ def _ligand_3d_candidate_input_signatures(
             / f"{pdb_id}.parquet"
         )
         stat = path.stat()
-        schema = pq.read_schema(path)  # type: ignore[no-untyped-call]
+        schema = pq.read_schema(path)
         missing = sorted(
             set(schemas.LIGAND_3D_CANDIDATE_SCHEMA.names).difference(schema.names)
         )
@@ -1400,7 +1398,7 @@ def _ligand_3d_candidate_input_signatures(
                 "path": str(path.resolve()),
                 "size": stat.st_size,
                 "mtime_ns": stat.st_mtime_ns,
-                "rows": pq.ParquetFile(path).metadata.num_rows,  # type: ignore[no-untyped-call]
+                "rows": pq.ParquetFile(path).metadata.num_rows,
             }
         )
     return signatures
@@ -1465,7 +1463,7 @@ def collate_ligand_3d_candidates(
                     "path": str(output.resolve()),
                     "size": stat.st_size,
                     "mtime_ns": stat.st_mtime_ns,
-                    "rows": pq.ParquetFile(output).metadata.num_rows,  # type: ignore[no-untyped-call]
+                    "rows": pq.ParquetFile(output).metadata.num_rows,
                 }
                 output_is_current = (
                     payload.get("shard") == shard
@@ -1478,9 +1476,9 @@ def collate_ligand_3d_candidates(
                         "path": str(pair_output.resolve()),
                         "size": pair_stat.st_size,
                         "mtime_ns": pair_stat.st_mtime_ns,
-                        "rows": pq.ParquetFile(pair_output).metadata.num_rows,  # type: ignore[no-untyped-call]
+                        "rows": pq.ParquetFile(pair_output).metadata.num_rows,
                     }
-                    pair_schema = pq.read_schema(pair_output)  # type: ignore[no-untyped-call]
+                    pair_schema = pq.read_schema(pair_output)
                     pair_output_is_current = (
                         set(schemas.LIGAND_3D_PAIR_CANDIDATE_SCHEMA.names).issubset(
                             pair_schema.names
@@ -1518,7 +1516,7 @@ def collate_ligand_3d_candidates(
                 ) TO '{temporary.as_posix()}' (FORMAT PARQUET, COMPRESSION ZSTD)
                 """
             )
-            observed_rows = pq.ParquetFile(temporary).metadata.num_rows  # type: ignore[no-untyped-call]
+            observed_rows = pq.ParquetFile(temporary).metadata.num_rows
             expected_rows = sum(int(item["rows"]) for item in inputs)
             if observed_rows != expected_rows:
                 connection.close()
@@ -1568,7 +1566,7 @@ def collate_ligand_3d_candidates(
         pair_temporary.unlink(missing_ok=True)
 
         output_stat = output.stat()
-        observed_rows = pq.ParquetFile(output).metadata.num_rows  # type: ignore[no-untyped-call]
+        observed_rows = pq.ParquetFile(output).metadata.num_rows
         pair_output_stat = pair_output.stat()
         payload = {
             "shard": shard,
@@ -1583,7 +1581,7 @@ def collate_ligand_3d_candidates(
                 "path": str(pair_output.resolve()),
                 "size": pair_output_stat.st_size,
                 "mtime_ns": pair_output_stat.st_mtime_ns,
-                "rows": pq.ParquetFile(pair_output).metadata.num_rows,  # type: ignore[no-untyped-call]
+                "rows": pq.ParquetFile(pair_output).metadata.num_rows,
             },
         }
         manifest.parent.mkdir(exist_ok=True, parents=True)
@@ -1629,7 +1627,7 @@ def make_ligand_3d_scores(
     )
     if output.is_file() and not force_update:
         try:
-            existing_schema = pq.read_schema(output)  # type: ignore[no-untyped-call]
+            existing_schema = pq.read_schema(output)
             existing_pairs = pd.MultiIndex.from_frame(
                 pd.read_parquet(output, columns=pair_columns)
             )
@@ -1656,7 +1654,7 @@ def make_ligand_3d_scores(
     )
     scratch_dir.mkdir(exist_ok=True, parents=True)
     temporary = scratch_dir / f"ligand-3d-{output.stem}.parquet"
-    pq.write_table(  # type: ignore[no-untyped-call]
+    pq.write_table(
         table,
         temporary,
         compression="zstd",
@@ -1896,7 +1894,7 @@ def merge_ligand_3d_scores(
             raise ValueError(f"invalid ligand 3D query shard: {shard!r}")
         output = output_dir / f"{shard}.parquet"
         if output.is_file() and not force_update:
-            schema = pq.read_schema(output)  # type: ignore[no-untyped-call]
+            schema = pq.read_schema(output)
             if set(schemas.PROTEIN_SIMILARITY_SCHEMA.names).issubset(schema.names):
                 outputs.append(output)
                 continue
@@ -2076,9 +2074,7 @@ def _write_alignment_release_shard(
     con.sql(f"set memory_limit='{memory_limit}';")
     target.parent.mkdir(exist_ok=True, parents=True)
     non_empty_sources = [
-        path
-        for path in sources
-        if pq.ParquetFile(path).metadata.num_rows > 0  # type: ignore[no-untyped-call]
+        path for path in sources if pq.ParquetFile(path).metadata.num_rows > 0
     ]
     temporary = temp_dir / target.name
     temporary.unlink(missing_ok=True)
@@ -2127,7 +2123,7 @@ def _write_alignment_release_shard(
             )
         )
     else:
-        pq.write_table(  # type: ignore[no-untyped-call]
+        pq.write_table(
             pa.Table.from_pylist(
                 [],
                 schema=schemas.mapped_alignment_schema(alignment_type=alignment_type),

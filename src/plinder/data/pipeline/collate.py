@@ -146,7 +146,7 @@ def _write_table_atomic(
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = _temporary_path(path)
     try:
-        pq.write_table(  # type: ignore[no-untyped-call]
+        pq.write_table(
             table,
             temporary,
             compression="zstd",
@@ -233,9 +233,7 @@ def plan_collation(data_dir: Path, *, threads: int = 1) -> dict[str, Any]:
     code_counts: dict[str, int] = {}
     total_entries = 0
     try:
-        writer = pq.ParquetWriter(  # type: ignore[no-untyped-call]
-            temporary, MANIFEST_SCHEMA, compression="zstd"
-        )
+        writer = pq.ParquetWriter(temporary, MANIFEST_SCHEMA, compression="zstd")
         code_dirs = sorted(
             path
             for path in raw_entries.iterdir()
@@ -262,12 +260,10 @@ def plan_collation(data_dir: Path, *, threads: int = 1) -> dict[str, Any]:
                 code_signatures[code] = _row_signature(rows)
                 code_counts[code] = len(rows)
                 total_entries += len(rows)
-                writer.write_table(  # type: ignore[no-untyped-call]
-                    pa.Table.from_pylist(rows, schema=MANIFEST_SCHEMA)
-                )
+                writer.write_table(pa.Table.from_pylist(rows, schema=MANIFEST_SCHEMA))
         if total_entries == 0:
             raise ValueError(f"no materialized V3 entries found in {raw_entries}")
-        writer.close()  # type: ignore[no-untyped-call]
+        writer.close()
         writer = None
         temporary.replace(output)
     finally:
@@ -309,7 +305,7 @@ def _load_manifest_rows(data_dir: Path, code: str) -> list[dict[str, Any]]:
     normalized = code.lower()
     if re.fullmatch(r"[a-z0-9]{2}", normalized) is None:
         raise ValueError(f"invalid two-character code: {code!r}")
-    table = pq.read_table(  # type: ignore[no-untyped-call]
+    table = pq.read_table(
         manifest_path(data_dir),
         filters=[("code", "=", normalized)],
     )
@@ -542,7 +538,7 @@ def _build_annotation_view(
 
 
 def _normalize_table(path: Path, schema: pa.Schema) -> pa.Table:
-    table = pq.read_table(path)  # type: ignore[no-untyped-call]
+    table = pq.read_table(path)
     if table.num_rows and not set(schema.names).issubset(table.column_names):
         missing = sorted(set(schema.names).difference(table.column_names))
         raise ValueError(f"{path} is missing sidecar columns: {missing}")
@@ -686,7 +682,7 @@ def collate_shard(
             row_group_size=row_group_size,
         )
         metrics["counts"] = {
-            name: pq.ParquetFile(path).metadata.num_rows  # type: ignore[no-untyped-call]
+            name: pq.ParquetFile(path).metadata.num_rows
             for name, path in paths.items()
             if name != "metrics"
         }
@@ -706,9 +702,7 @@ def _load_completed_shards(
 ) -> tuple[dict[str, list[Path]], dict[str, int]]:
     manifest_rows = cast(
         list[dict[str, Any]],
-        pq.read_table(  # type: ignore[no-untyped-call]
-            manifest_path(data_dir)
-        ).to_pylist(),
+        pq.read_table(manifest_path(data_dir)).to_pylist(),
     )
     rows_by_code: dict[str, list[dict[str, Any]]] = {}
     for row in manifest_rows:
