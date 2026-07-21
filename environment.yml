@@ -1,11 +1,11 @@
 #
 # Conda environment definition with dependencies
 #
-# For data generation only (no eval/scoring):
+# For data generation and OpenStructure-backed eval/scoring:
 #   conda env create -f environment.yml
 #   pip install -e .
 #
-# For eval/scoring (adds OpenStructure, requires numpy<2):
+# For the remaining optional eval dependencies (PoseBusters and plotting):
 #   pip install -e ".[eval]"
 #
 name: plinder
@@ -18,5 +18,6 @@ dependencies:
   - reduce
   - mmseqs2
   - foldseek
+  - bioconda::openstructure
   - pip:
     - keyrings.google-artifactregistry-auth==1.1.2

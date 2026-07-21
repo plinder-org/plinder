@@ -12,7 +12,7 @@ dependencies = [
     "google-cloud-storage",
     "gcsfs",
     "peppr>=0.13",
-    "rdkit>=2024.03.6",
+    "rdkit>=2025.09.1",
     "pyarrow",
     "omegaconf",
     "duckdb",
@@ -63,7 +63,6 @@ loader = [
     "torch",
 ]
 eval = [
-    "openstructure",
     "posebusters>=0.6.4",
     "plotly",
 ]
