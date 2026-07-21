@@ -489,3 +489,49 @@ def load_entry_views(
     )
     LOG.info(f"load_entry_views: {len(df)} rows for {len(pdb_ids)} pdb_ids")
     return entry_views_from_df(df, entry_chains=entry_chains)
+
+
+def load_alignment_entry_views(
+    *, lookup_path: Path, pdb_ids: Iterable[str]
+) -> dict[str, EntryView]:
+    """Load the compact chain and pocket mappings used during alignment mapping."""
+    selected = sorted(set(pdb_ids))
+    if not selected:
+        return {}
+    frame = pd.read_parquet(
+        lookup_path,
+        filters=[("entry_pdb_id", "in", selected)],
+    )
+    views: dict[str, EntryView] = {}
+    for pdb_id, rows in frame.groupby("entry_pdb_id", sort=False):
+        author_to_asym: dict[str, str] = {}
+        pocket_n2i: dict[str, dict[int, int]] = {}
+        for row in rows.itertuples(index=False):
+            asym_id = str(row.chain_asym_id)
+            author_to_asym[str(row.chain_auth_id)] = asym_id
+            numbers = [int(value) for value in _as_list(row.pocket_residue_numbers)]
+            indices = [int(value) for value in _as_list(row.pocket_residue_indices)]
+            if numbers:
+                pocket_n2i[f"1.{asym_id}"] = dict(zip(numbers, indices))
+        systems = {}
+        if pocket_n2i:
+            systems["alignment"] = SystemView(
+                id="alignment",
+                pdb_id=str(pdb_id),
+                system_type="holo",
+                protein_chains_asym_id=sorted(pocket_n2i),
+                proper_num_pocket_residues=sum(map(len, pocket_n2i.values())),
+                proper_num_interactions=0,
+                proper_num_unique_interactions=0,
+                pocket_residue_number_to_index=pocket_n2i,
+            )
+        views[str(pdb_id)] = EntryView(
+            pdb_id=str(pdb_id),
+            chains={},
+            systems=systems,
+            author_to_asym=author_to_asym,
+        )
+    LOG.info(
+        f"load_alignment_entry_views: {len(frame)} chains for {len(views)} pdb_ids"
+    )
+    return views

@@ -156,6 +156,23 @@ def test_scoring_regression(scoring_fixture, tmp_path):
 
     for shard in tasks.scatter_collate_alignments(data_dir=data_dir):
         tasks.collate_alignments(data_dir=data_dir, partition=shard)
+    for release_shard in (data_dir / "alignments").rglob("*.parquet"):
+        release_columns = set(pd.read_parquet(release_shard).columns)
+        assert {
+            "query_pocket_residue_numbers",
+            "target_pocket_residue_numbers",
+            "pocket_residue_identity",
+        }.issubset(release_columns)
+        assert {
+            "qrnum",
+            "trnum",
+            "qaa",
+            "taa",
+            "qaln",
+            "taln",
+            "query",
+            "target",
+        }.isdisjoint(release_columns)
     system_ids = set(annotation_rows["system_id"])
     reconstructed = (
         reconstruct_similarity_scores(
@@ -170,6 +187,14 @@ def test_scoring_regression(scoring_fixture, tmp_path):
     def normalize_nulls(frame: pd.DataFrame) -> pd.DataFrame:
         return frame.astype(object).where(frame.notna(), None)
 
+    similarity_mismatch = reconstructed["similarity"].ne(df["similarity"])
+    assert not similarity_mismatch.any(), pd.concat(
+        {
+            "reconstructed": reconstructed.loc[similarity_mismatch, df.columns],
+            "direct": df.loc[similarity_mismatch],
+        },
+        names=["score_path"],
+    ).to_string()
     pd.testing.assert_frame_equal(
         normalize_nulls(reconstructed[df.columns]),
         normalize_nulls(df),
