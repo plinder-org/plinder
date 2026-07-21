@@ -29,29 +29,39 @@ LIGAND_SCORE_NAMES = (
 SCORE_NAMES = PROTEIN_SCORE_NAMES + LIGAND_SCORE_NAMES
 
 GATED_LIGAND_DIAGNOSTIC_METRICS = frozenset({"shape", "color", "sucos_shape"})
+NON_CLUSTERING_LIGAND_METRICS = GATED_LIGAND_DIAGNOSTIC_METRICS | {
+    "pocket_fident",
+    "pocket_fident_qcov",
+}
+
+FOLDSEEK_ONLY_PROTEIN_SCORE_NAMES = frozenset({"protein_lddt", "protein_lddt_qcov"})
 
 PROTEIN_CLUSTER_METRICS = tuple(
     f"{score_name}{suffix}"
     for score_name in PROTEIN_SCORE_NAMES
+    if score_name not in FOLDSEEK_ONLY_PROTEIN_SCORE_NAMES
     for suffix in ("_max", "_weighted_max", "_weighted_sum")
 )
 
-# Shape, color, and raw SuCOS remain available as diagnostic scores. They are
-# evaluated only after the positive-pocket gate, so missing values do not mean
-# dissimilar ligands and must not be interpreted as absent clustering edges.
+# Shape, color, raw SuCOS, and pocket fident remain queryable scores but are not
+# release clustering metrics. The 3D diagnostics are evaluated only after the
+# positive-pocket gate.
 LIGAND_CLUSTER_METRICS = tuple(
     metric
     for metric in LIGAND_SCORE_NAMES
-    if metric not in GATED_LIGAND_DIAGNOSTIC_METRICS
+    if metric not in NON_CLUSTERING_LIGAND_METRICS
 )
 
 CHEMICAL_CLUSTER_METRICS = ("tanimoto_similarity_ecfp4_1024",)
 
-DEFAULT_CLUSTER_METRICS = (
-    PROTEIN_CLUSTER_METRICS + LIGAND_CLUSTER_METRICS + CHEMICAL_CLUSTER_METRICS
-)
+DEFAULT_CLUSTER_METRICS = LIGAND_CLUSTER_METRICS + CHEMICAL_CLUSTER_METRICS
 
 
 def is_ligand_level_metric(metric: str) -> bool:
     """Return whether graph nodes for this score are individual ligands."""
-    return metric in LIGAND_SCORE_NAMES or metric.startswith(("pocket_", "pli_"))
+    return (
+        metric in LIGAND_SCORE_NAMES
+        or metric in PROTEIN_CLUSTER_METRICS
+        or metric in CHEMICAL_CLUSTER_METRICS
+        or metric.startswith(("pocket_", "pli_"))
+    )

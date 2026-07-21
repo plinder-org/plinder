@@ -35,10 +35,14 @@ def _validate_cfg(*, cfg: DictConfig, schema: dict[str, Any]) -> DictConfig:
         the validated config with post-init validation logic
     """
     keys = set(cfg.keys()).union(set(schema.keys()))
-    cfg = OmegaConf.to_container(cfg)
-    cfg.get("data", {}).pop("plinder_dir", None)
-    cfg.get("data", {}).pop("plinder_remote", None)
-    return DictConfig({str(k): schema[str(k)](**cfg.get(k, {})) for k in keys})
+    container = OmegaConf.to_container(cfg)
+    if not isinstance(container, dict):
+        raise TypeError("configuration root must be a mapping")
+    data = container.get("data")
+    if isinstance(data, dict):
+        data.pop("plinder_dir", None)
+        data.pop("plinder_remote", None)
+    return DictConfig({str(k): schema[str(k)](**container.get(k, {})) for k in keys})
 
 
 def _clean_sort_config(*, cfg: Any) -> Any:

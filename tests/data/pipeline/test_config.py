@@ -24,6 +24,28 @@ def test_foldseek_config(value, raises):
         config.FoldseekConfig(alignment_type=value)
 
 
+def test_search_defaults_retain_ten_thousand_hits() -> None:
+    assert config.FoldseekConfig().max_seqs == 10_000
+    assert config.FoldseekConfig().min_seq_id == 0.2
+    assert config.MMSeqsConfig().max_seqs == 10_000
+    assert config.MMSeqsConfig().min_seq_id == 0.2
+
+
+@pytest.mark.parametrize("config_type", [config.FoldseekConfig, config.MMSeqsConfig])
+def test_search_hit_limit_must_be_positive(config_type) -> None:
+    with pytest.raises(ValueError, match="max_seqs must be positive"):
+        config_type(max_seqs=0)
+
+
+@pytest.mark.parametrize("config_type", [config.FoldseekConfig, config.MMSeqsConfig])
+@pytest.mark.parametrize("min_seq_id", [-0.1, 1.1])
+def test_search_minimum_sequence_identity_must_be_a_fraction(
+    config_type, min_seq_id
+) -> None:
+    with pytest.raises(ValueError, match="min_seq_id must be in"):
+        config_type(min_seq_id=min_seq_id)
+
+
 def test_flow_config():
     dc = config._config.DataConfig()
     cfg = OmegaConf.structured(config._config.DataConfig())
@@ -33,6 +55,31 @@ def test_flow_config():
 def test_default_config():
     cfg = config.get_config(cached=False)
     assert cfg.data.plinder_release is not None
+    assert cfg.scorer.minimum_threshold == 0.3
+    assert cfg.scorer.max_alignment_rows_per_query == 5_000_000
+    assert cfg.scorer.max_protein_chains == 5
+    assert cfg.scorer.max_ligand_chains == 5
+    assert list(cfg.flow.cluster_thresholds) == [30, 50, 70, 90, 100]
+    assert cfg.flow.component_reduction_metric_workers == 4
+
+
+def test_component_reduction_metric_workers_must_be_positive() -> None:
+    with pytest.raises(ValueError, match="component_reduction_metric_workers"):
+        config.FlowConfig(component_reduction_metric_workers=0)
+
+
+@pytest.mark.parametrize("metric", ["shape", "color", "sucos_shape"])
+def test_raw_3d_ligand_diagnostics_cannot_be_clustered(metric) -> None:
+    with pytest.raises(ValueError, match="sucos_shape_pocket_qcov"):
+        config.get_config(
+            cached=False,
+            config={"flow": {"cluster_metrics": [metric]}},
+        )
+
+
+def test_alignment_mapping_row_budget_must_be_positive() -> None:
+    with pytest.raises(ValueError, match="max_alignment_rows_per_query"):
+        config.ScorerConfig(max_alignment_rows_per_query=0)
 
 
 def test_get_config_metaflow(tmp_path):
