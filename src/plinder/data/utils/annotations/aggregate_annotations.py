@@ -1133,6 +1133,7 @@ class Entry(DocBaseModel):
             _cif_scalar,
             read_mmcif_file,
         )
+
         cif_file_obj = read_mmcif_file(cif_file)
         cif_data = list(cif_file_obj.values())[0]
         entry_info = get_entry_info(cif_data)
@@ -1471,6 +1472,7 @@ class Entry(DocBaseModel):
             get_unknown_ligand_ids,
             read_mmcif_file,
         )
+
         if save_folder is not None:
             ligand_dir = Path(save_folder) / pdb_id / "ligand_files"
             if ligand_dir.exists():

@@ -300,7 +300,9 @@ class SplitPropertiesPlotter:
             ].reset_index(drop=True)
             if split in self.stratified_files:
                 stratified = pd.read_parquet(self.stratified_files[split])
-                stratified["novel_ligand"] = stratified["tanimoto_similarity_ecfp4_1024"] < 30
+                stratified["novel_ligand"] = (
+                    stratified["tanimoto_similarity_ecfp4_1024"] < 30
+                )
                 ligand_df = ligand_df.merge(
                     stratified[
                         ["system_id", "tanimoto_similarity_ecfp4_1024", "novel_ligand"]

@@ -253,14 +253,10 @@ def plan_collation(data_dir: Path, *, threads: int = 1) -> dict[str, Any]:
                 if not rows:
                     continue
                 duplicates = sorted(
-                    str(row["pdb_id"])
-                    for row in rows
-                    if str(row["pdb_id"]) in seen
+                    str(row["pdb_id"]) for row in rows if str(row["pdb_id"]) in seen
                 )
                 if duplicates:
-                    raise ValueError(
-                        f"duplicate raw-entry annotations: {duplicates}"
-                    )
+                    raise ValueError(f"duplicate raw-entry annotations: {duplicates}")
                 seen.update(str(row["pdb_id"]) for row in rows)
                 code = code_dir.name.lower()
                 code_signatures[code] = _row_signature(rows)
@@ -844,8 +840,7 @@ def _validate_final_tables(
         }
         if any(invalid_chain_metadata.values()):
             raise ValueError(
-                "invalid entry-chain sequence metadata: "
-                f"{invalid_chain_metadata}"
+                "invalid entry-chain sequence metadata: " f"{invalid_chain_metadata}"
             )
         annotation_columns = _relation_columns(connection, "annotation")
         retired = sorted(
