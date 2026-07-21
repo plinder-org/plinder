@@ -421,7 +421,6 @@ class PlinderSystem:
                 pdb_id = self.system_id.split("__", maxsplit=1)[0]
                 asym_ids = set(self.system["ligand_asym_id"].astype(str))
                 cfg = get_config()
-                archive_root = Path(cfg.data.plinder_dir) / cfg.data.ligand_archives
                 code = pdb_id[1:3]
                 archive = cpl.get_plinder_path(
                     rel=f"{cfg.data.ligand_archives}/{code}.parquet"
