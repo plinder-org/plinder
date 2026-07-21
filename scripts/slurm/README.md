@@ -91,6 +91,8 @@ assembly-chain, source, or ligand Parquet:
 
 ```bash
 sbatch \
+  --qos=6hours \
+  --cpus-per-task=8 --mem=16G \
   --output="${OUTPUT_ROOT}/logs/collate-plan-%j.out" \
   --export=ALL,PLINDER_ENV_ROOT,PLINDER_REPO_ROOT \
   scripts/slurm/collate_v3_shards.sbatch plan "${OUTPUT_ROOT}"
@@ -113,6 +115,7 @@ the planned shards with a larger single task:
 
 ```bash
 sbatch \
+  --qos=6hours \
   --cpus-per-task=4 --mem=48G \
   --output="${OUTPUT_ROOT}/logs/collate-finalize-%j.out" \
   --export=ALL,PLINDER_ENV_ROOT,PLINDER_REPO_ROOT,PLINDER_COLLATE_MEMORY_LIMIT=40GB \
@@ -122,3 +125,369 @@ sbatch \
 Finalization writes the four local `index/*.parquet` files only after validating
 row counts, keys, cross-table references, and ligand scoreability. It performs
 no upload or external release operation.
+
+## Build publishable protein-search shards
+
+Protein scoring uses only holo receptor chains labeled `protein` in
+`index/entry_chains.parquet`; other protein chains retained for biological-unit
+context are not searched. Freeze that query universe before starting any arrays:
+
+```bash
+python -m plinder.data.pipeline.score plan "${OUTPUT_ROOT}" --max-seqs 10000
+```
+
+The resulting `manifests/protein_scoring_plan.json` gives `query_count` and
+`shard_count`. Both Foldseek and MMseqs searches are filtered by E-value and
+coverage, with the minimum sequence identity explicitly set to zero.
+
+Cache `pdb_seqres.txt.gz` on an online node and set `PLINDER_SEQRES_PATH` to it.
+Run `createdb` on a host with enough memory and fast access to the managed PDB
+tree; this reads the original NextGen divided mmCIF archive directly. The
+command derives a TSV of only the protein-containing PDB entries in the frozen
+plan, avoiding a recursive walk over the full archive:
+
+```bash
+python -m plinder.data.pipeline.score create-dbs "${OUTPUT_ROOT}" \
+  --cif-root "${PLINDER_PDB_NEXTGEN_ROOT}" \
+  --seqres-path "${PLINDER_SEQRES_PATH}" \
+  --threads 4
+```
+
+If the login host is memory-limited, run the same resumable operation on Slurm.
+Each backend is built and validated under node-local `/scratch`, then staged and
+swapped into shared storage. A retry reuses either backend whose installed
+`createdb` output already completed:
+
+```bash
+sbatch \
+  --qos=6hours --cpus-per-task=4 --mem=32G \
+  --output="${OUTPUT_ROOT}/logs/protein-create-dbs-%j.out" \
+  --export=ALL,PLINDER_ENV_ROOT,PLINDER_REPO_ROOT,PLINDER_PDB_NEXTGEN_ROOT,PLINDER_SEQRES_PATH \
+  scripts/slurm/score_v3.sbatch create-dbs "${OUTPUT_ROOT}"
+```
+
+On Slurm, select the V3 protein chains, cluster the Foldseek and MMseqs targets
+at exactly 100% identity and 100% bidirectional coverage, and index the
+representative targets. This job is offline and uses node-local `/scratch` for
+all clustering and index working files:
+
+```bash
+sbatch \
+  --qos=6hours --cpus-per-task=16 --mem=128G \
+  --output="${OUTPUT_ROOT}/logs/protein-make-sub-dbs-%j.out" \
+  --export=ALL,PLINDER_ENV_ROOT,PLINDER_REPO_ROOT \
+  scripts/slurm/score_v3.sbatch make-sub-dbs "${OUTPUT_ROOT}"
+```
+
+The 10,000-hit search cap therefore applies to unique representatives rather
+than being consumed by identical chains. Foldseek's cluster search and the
+MMseqs expansion workflow both realign expanded members before conversion, so
+the resulting Parquets still contain chain-level scores and identifiers.
+
+Foldseek and MMseqs use separate arrays so their query-batch sizes can be tuned
+independently. Pilot before submitting the complete arrays. For a Foldseek
+batch size of 5,000, `LAST_FOLDSEEK_INDEX` is
+`ceil(query_count / 5000) - 1`:
+
+```bash
+sbatch \
+  --qos=6hours --array=0-LAST_FOLDSEEK_INDEX \
+  --cpus-per-task=128 --mem=128G \
+  --output="${OUTPUT_ROOT}/logs/protein-foldseek-%A-%a.out" \
+  --export=ALL,PLINDER_ENV_ROOT,PLINDER_REPO_ROOT \
+  scripts/slurm/score_v3.sbatch search-foldseek "${OUTPUT_ROOT}" 5000
+
+sbatch \
+  --qos=30min --array=0-LAST_MMSEQS_INDEX \
+  --cpus-per-task=128 --mem=128G \
+  --output="${OUTPUT_ROOT}/logs/protein-mmseqs-%A-%a.out" \
+  --export=ALL,PLINDER_ENV_ROOT,PLINDER_REPO_ROOT \
+  scripts/slurm/score_v3.sbatch search-mmseqs "${OUTPUT_ROOT}" 5000
+```
+
+Foldseek uses the longer QoS up front because its expanded hit sets and raw
+checkpoints are larger. For MMseqs, resubmit only incomplete batches with
+`--qos=6hours`; per-query raw checkpoints make those retries skip outputs
+already installed by the first pass.
+
+The Foldseek release output stores one scalar LDDT value per hit, not
+per-residue `lddtfull`. Full aligned strings remain generation intermediates;
+release shards retain only scalar search fields and compact pocket-relevant
+residue-number/identity mappings needed to reconstruct system and ligand scores.
+
+Mapping is separate from derived scoring so completed searches remain usable
+when downstream score generation needs retries. Each task owns one PDB
+two-character query shard, writes temporary per-query mappings only on
+node-local scratch, and atomically publishes one Parquet per available backend.
+With one shard per task, `LAST_SHARD_INDEX` is `shard_count - 1`:
+
+```bash
+sbatch \
+  --qos=30min --array=0-LAST_SHARD_INDEX --cpus-per-task=2 --mem=32G \
+  --output="${OUTPUT_ROOT}/logs/protein-map-%A-%a.out" \
+  --export=ALL,PLINDER_ENV_ROOT,PLINDER_REPO_ROOT \
+  scripts/slurm/score_v3.sbatch map "${OUTPUT_ROOT}" 1
+
+# Pack each canonical ASU ligand once for bulk scoring and distribution.
+sbatch \
+  --qos=30min --array=0-LAST_LIGAND_PACK_INDEX --cpus-per-task=4 --mem=32G \
+  --output="${OUTPUT_ROOT}/logs/ligand-pack-%A-%a.out" \
+  --export=ALL,PLINDER_ENV_ROOT,PLINDER_REPO_ROOT \
+  scripts/slurm/score_v3.sbatch pack-ligands "${OUTPUT_ROOT}" 50
+
+sbatch \
+  --output="${OUTPUT_ROOT}/logs/ligand-finalize-%j.out" \
+  --export=ALL,PLINDER_ENV_ROOT,PLINDER_REPO_ROOT \
+  scripts/slurm/score_v3.sbatch finalize-ligands "${OUTPUT_ROOT}"
+
+sbatch \
+  --output="${OUTPUT_ROOT}/logs/protein-finalize-%j.out" \
+  --export=ALL,PLINDER_ENV_ROOT,PLINDER_REPO_ROOT \
+  scripts/slurm/score_v3.sbatch finalize-alignments "${OUTPUT_ROOT}"
+```
+
+Derived per-ligand system scores are generation intermediates used for graph
+clustering, not release artifacts. Before scattering them, estimate work from
+the compact alignment hits and greedily spread expensive queries across fixed
+50-query batches within each two-character alignment shard:
+
+```bash
+sbatch \
+  --qos=6hours --cpus-per-task=4 --mem=32G \
+  --output="${OUTPUT_ROOT}/logs/protein-score-plan-%j.out" \
+  --export=ALL,PLINDER_ENV_ROOT,PLINDER_REPO_ROOT \
+  scripts/slurm/score_v3.sbatch plan-score-batches "${OUTPUT_ROOT}" 50
+
+# Read score_batch_count from manifests/protein_scoring_plan.json, then:
+sbatch \
+  --qos=30min --array=0-LAST_SCORE_INDEX --cpus-per-task=4 --mem=32G \
+  --output="${OUTPUT_ROOT}/logs/protein-score-%A-%a.out" \
+  --export=ALL,PLINDER_ENV_ROOT,PLINDER_REPO_ROOT \
+  scripts/slurm/score_v3.sbatch score "${OUTPUT_ROOT}" 50
+```
+
+This first pass calculates only protein and pocket scores. For every proper,
+3D-scoreable ligand pair with positive pocket query coverage it also records a
+full-precision candidate row; it does not load an SDF or run shape alignment.
+Retry only any batches that exceed the 30-minute QoS with `--qos=6hours`.
+If a batch exceeds memory, freeze its still-missing PDB IDs into a Parquet with
+a unique `pdb_id` column and retry them independently:
+
+```bash
+export PLINDER_SCORE_PDB_MANIFEST="${OUTPUT_ROOT}/manifests/protein_scoring_retry.parquet"
+sbatch \
+  --qos=6hours --array=0-LAST_RETRY_INDEX --cpus-per-task=4 --mem=128G \
+  --output="${OUTPUT_ROOT}/logs/protein-score-pdb-%A-%a.out" \
+  --export=ALL,PLINDER_ENV_ROOT,PLINDER_REPO_ROOT,PLINDER_SCORE_PDB_MANIFEST \
+  scripts/slurm/score_v3.sbatch score-pdbs "${OUTPUT_ROOT}" 1
+```
+
+Each array task then owns one PDB and still reuses completed score checkpoints.
+
+After every protein-score batch has completed, first consolidate the per-PDB
+candidate checkpoints into two-character query shards. With a collation batch
+size of four, use `ceil(shard_count / 4) - 1` as
+`LAST_CANDIDATE_SHARD_INDEX`. This prevents the global planner from opening one
+small Parquet for every PDB entry:
+
+```bash
+sbatch \
+  --qos=30min --array=0-LAST_CANDIDATE_SHARD_INDEX --cpus-per-task=4 --mem=32G \
+  --output="${OUTPUT_ROOT}/logs/ligand-3d-candidates-%A-%a.out" \
+  --export=ALL,PLINDER_ENV_ROOT,PLINDER_REPO_ROOT \
+  scripts/slurm/score_v3.sbatch collate-ligand-3d-candidates "${OUTPUT_ROOT}" 4
+```
+
+Then deduplicate the sharded candidate rows into canonical ASU ligand pairs,
+retain every pair with positive pocket coverage, and stream deterministic
+query-local batches ordered by ligand size:
+
+```bash
+sbatch \
+  --qos=6hours --cpus-per-task=4 --mem=32G \
+  --output="${OUTPUT_ROOT}/logs/ligand-3d-plan-%j.out" \
+  --export=ALL,PLINDER_ENV_ROOT,PLINDER_REPO_ROOT \
+  scripts/slurm/score_v3.sbatch plan-ligand-3d "${OUTPUT_ROOT}" 30000
+
+# Read ligand_3d_batch_count from protein_scoring_plan.json, then:
+sbatch \
+  --qos=30min --array=0-LAST_LIGAND_3D_INDEX --cpus-per-task=1 --mem=16G \
+  --output="${OUTPUT_ROOT}/logs/ligand-3d-score-%A-%a.out" \
+  --export=ALL,PLINDER_ENV_ROOT,PLINDER_REPO_ROOT \
+  scripts/slurm/score_v3.sbatch score-ligand-3d "${OUTPUT_ROOT}" 30000
+```
+
+The pair scorer bulk-loads only the required canonical SDF records from the
+packed Parquets and calculates shape, color, and SuCOS once per unique directed
+ASU ligand pair. If any coarse batches fail, split only those batches into
+smaller, resumable retry units and require every retry before continuing:
+
+```bash
+sbatch \
+  --output="${OUTPUT_ROOT}/logs/ligand-3d-retry-plan-%j.out" \
+  --export=ALL,PLINDER_ENV_ROOT,PLINDER_REPO_ROOT \
+  scripts/slurm/score_v3.sbatch plan-ligand-3d-retries "${OUTPUT_ROOT}" 500
+
+# Read ligand_3d_retry_batch_count from protein_scoring_plan.json, then:
+sbatch \
+  --qos=6hours --array=0-LAST_LIGAND_3D_RETRY_INDEX \
+  --cpus-per-task=1 --mem=32G \
+  --output="${OUTPUT_ROOT}/logs/ligand-3d-retry-%A-%a.out" \
+  --export=ALL,PLINDER_ENV_ROOT,PLINDER_REPO_ROOT \
+  scripts/slurm/score_v3.sbatch score-ligand-3d-retry "${OUTPUT_ROOT}" 500
+
+sbatch \
+  --output="${OUTPUT_ROOT}/logs/ligand-3d-retry-finalize-%j.out" \
+  --export=ALL,PLINDER_ENV_ROOT,PLINDER_REPO_ROOT \
+  scripts/slurm/score_v3.sbatch finalize-ligand-3d-retries "${OUTPUT_ROOT}"
+```
+
+Repartition the complete balanced outputs by query PDB shard before
+expanding them back to system-level rows. With a collation batch size of four,
+`LAST_LIGAND_3D_SHARD_INDEX` is
+`ceil(ligand_3d_query_shard_count / 4) - 1`:
+
+```bash
+sbatch \
+  --qos=30min --array=0-LAST_LIGAND_3D_SHARD_INDEX --cpus-per-task=4 --mem=32G \
+  --output="${OUTPUT_ROOT}/logs/ligand-3d-collate-%A-%a.out" \
+  --export=ALL,PLINDER_ENV_ROOT,PLINDER_REPO_ROOT \
+  scripts/slurm/score_v3.sbatch collate-ligand-3d "${OUTPUT_ROOT}" 4
+
+sbatch \
+  --qos=30min --array=0-LAST_LIGAND_MERGE_INDEX --cpus-per-task=4 --mem=32G \
+  --output="${OUTPUT_ROOT}/logs/ligand-3d-merge-%A-%a.out" \
+  --export=ALL,PLINDER_ENV_ROOT,PLINDER_REPO_ROOT \
+  scripts/slurm/score_v3.sbatch merge-ligand-3d "${OUTPUT_ROOT}" 50
+
+sbatch \
+  --qos=6hours --cpus-per-task=4 --mem=32G \
+  --output="${OUTPUT_ROOT}/logs/protein-score-finalize-%j.out" \
+  --export=ALL,PLINDER_ENV_ROOT,PLINDER_REPO_ROOT \
+  scripts/slurm/score_v3.sbatch finalize-scores "${OUTPUT_ROOT}"
+```
+
+The merge computes `sucos_shape_pocket_qcov` from full-precision pocket
+coverage before converting retained similarities to the 0–100 integer schema.
+
+The complete `sucos_shape_pocket_qcov` edge table is a release artifact. Export
+it directly from the full-precision candidate and canonical-pair shards so that
+scores below the 30% clustering threshold are retained. Use the same query-shard
+array bound as ligand-3D collation, then validate and concatenate the shards:
+
+```bash
+sbatch \
+  --qos=30min --array=0-LAST_LIGAND_3D_SHARD_INDEX \
+  --cpus-per-task=4 --mem=32G \
+  --output="${OUTPUT_ROOT}/logs/sucos-export-%A-%a.out" \
+  --export=ALL,PLINDER_ENV_ROOT,PLINDER_REPO_ROOT \
+  scripts/slurm/score_v3.sbatch export-sucos-shards "${OUTPUT_ROOT}" 4
+
+sbatch \
+  --qos=6hours --cpus-per-task=8 --mem=64G \
+  --output="${OUTPUT_ROOT}/logs/sucos-export-finalize-%j.out" \
+  --export=ALL,PLINDER_ENV_ROOT,PLINDER_REPO_ROOT \
+  scripts/slurm/score_v3.sbatch finalize-sucos-export "${OUTPUT_ROOT}"
+```
+
+The default final path is
+`exports/all_sucos_shape_pocket_qcov.parquet`; set
+`PLINDER_SUCOS_EXPORT_DIR` and `PLINDER_SUCOS_EXPORT_OUTPUT` to override the
+temporary shard directory or final release location.
+
+Build ligand-level components and communities only after score finalization.
+The planning job reports exact array counts for the default metrics and the
+30, 50, 70, 90, and 100 thresholds:
+
+```bash
+sbatch \
+  --qos=30min --cpus-per-task=1 --mem=8G \
+  --output="${OUTPUT_ROOT}/logs/cluster-plan-%j.out" \
+  --export=ALL,PLINDER_ENV_ROOT,PLINDER_REPO_ROOT \
+  scripts/slurm/score_v3.sbatch plan-clusters "${OUTPUT_ROOT}" 1
+```
+
+Read `component_reduction_batch_count` from that log and run one source shard
+per task. Each task copies its physical score shard once to node-local scratch,
+then writes resumable threshold-band reductions for every metric found there:
+
+```bash
+sbatch \
+  --qos=6hours --array=0-LAST_COMPONENT_REDUCTION_INDEX \
+  --cpus-per-task=4 --mem=64G \
+  --output="${OUTPUT_ROOT}/logs/component-reduction-%A-%a.out" \
+  --export=ALL,PLINDER_ENV_ROOT,PLINDER_REPO_ROOT \
+  scripts/slurm/score_v3.sbatch component-reductions "${OUTPUT_ROOT}" 1
+
+sbatch \
+  --qos=6hours --cpus-per-task=8 --mem=128G \
+  --output="${OUTPUT_ROOT}/logs/component-merge-%j.out" \
+  --export=ALL,PLINDER_ENV_ROOT,PLINDER_REPO_ROOT \
+  scripts/slurm/score_v3.sbatch merge-components "${OUTPUT_ROOT}"
+```
+
+The merge produces exact weak and strong ligand components without retaining
+the full 30%-threshold graph. It carries reduced edges downward through the
+thresholds, so it is not a representative-only approximation. Finally, read
+`community_batch_count` from the plan log and scatter one metric/threshold per
+task:
+
+```bash
+sbatch \
+  --qos=6hours --array=0-LAST_COMMUNITY_INDEX \
+  --cpus-per-task=8 --mem=128G \
+  --output="${OUTPUT_ROOT}/logs/community-%A-%a.out" \
+  --export=ALL,PLINDER_ENV_ROOT,PLINDER_REPO_ROOT \
+  scripts/slurm/score_v3.sbatch communities "${OUTPUT_ROOT}" 1
+```
+
+Communities are constructed one weak component at a time. Directional ligand
+scores are symmetrized by their maximum similarity for community detection;
+weak and strong component outputs retain their original direction semantics.
+Set comma-delimited `PLINDER_CLUSTER_METRICS` or
+`PLINDER_CLUSTER_THRESHOLDS` consistently on every clustering command to run a
+subset. Because Slurm itself treats commas inside `--export` as separators,
+define comma-delimited values in the submitting shell and export their names:
+
+```bash
+export PLINDER_CLUSTER_METRICS='pocket_qcov,pli_qcov'
+export PLINDER_CLUSTER_THRESHOLDS='100,90,70,50,30'
+sbatch \
+  --export=ALL,PLINDER_ENV_ROOT,PLINDER_REPO_ROOT,PLINDER_CLUSTER_METRICS,PLINDER_CLUSTER_THRESHOLDS \
+  scripts/slurm/score_v3.sbatch plan-clusters "${OUTPUT_ROOT}" 1
+```
+
+After both component and community branches complete, validate every published
+artifact and write `ligand_clusters/stats.parquet` plus `stats.json`. This gate
+checks artifact coverage, duplicate and null labels, consistent ligand counts,
+monotonic component counts across thresholds, and the expected relationships
+between weak components, strong components, and communities. Community counts
+are reported but are not required to be monotonic:
+
+```bash
+STATS_JOB=$(sbatch --parsable \
+  --dependency=afterok:COMMUNITY_JOB_ID \
+  --qos=6hours --cpus-per-task=8 --mem=128G \
+  --output="${OUTPUT_ROOT}/logs/cluster-stats-%j.out" \
+  --export=ALL,PLINDER_ENV_ROOT,PLINDER_REPO_ROOT \
+  scripts/slurm/score_v3.sbatch cluster-stats "${OUTPUT_ROOT}")
+```
+
+Only after that audit succeeds, merge the ligand-level annotations and cluster
+IDs into the index. Cluster files are loaded incrementally and progress with an
+ETA is logged, avoiding a giant concatenated long-form table:
+
+```bash
+sbatch \
+  --dependency="afterok:${STATS_JOB}" \
+  --qos=6hours --cpus-per-task=8 --mem=128G \
+  --output="${OUTPUT_ROOT}/logs/finalize-index-%j.out" \
+  --export=ALL,PLINDER_ENV_ROOT,PLINDER_REPO_ROOT \
+  scripts/slurm/score_v3.sbatch finalize-index "${OUTPUT_ROOT}"
+```
+
+The release scoring artifacts are
+`alignments/search_db=holo/alignment_type=*/shard=*.parquet`, their validated
+manifest, and `exports/all_sucos_shape_pocket_qcov.parquet`. Per-PDB raw search
+files and the other derived score datasets are generation intermediates; mapped
+per-PDB files exist only transiently on node-local scratch.

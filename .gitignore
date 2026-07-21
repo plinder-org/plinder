@@ -194,3 +194,4 @@ tests/test_data/plinder/mount/systems/*/
 tmp_foldseek
 tmp_mmseqs
 artifacts
+logs/
