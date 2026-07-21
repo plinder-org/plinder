@@ -3,12 +3,126 @@
 import ast
 import json
 from pathlib import Path
-from zipfile import ZipFile
+from shutil import copyfile
+from types import SimpleNamespace
 
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
+from plinder.core.utils import schemas
 from plinder.data.pipeline import io, tasks
 from plinder.data.pipeline.config import LigandConfig
+
+
+def _write_alignment_chain_lookup(data_dir: Path) -> None:
+    index = data_dir / "index"
+    index.mkdir(exist_ok=True, parents=True)
+    for name in ["annotation_table.parquet", "entry_chains.parquet"]:
+        path = index / name
+        if not path.is_file():
+            pd.DataFrame({"entry_pdb_id": ["1abc"]}).to_parquet(path, index=False)
+    lookup = data_dir / tasks.ALIGNMENT_CHAIN_LOOKUP_RELATIVE
+    pd.DataFrame(
+        {
+            "entry_pdb_id": ["1abc"],
+            "chain_asym_id": ["A"],
+            "chain_auth_id": ["A"],
+            "pocket_residue_numbers": [[10]],
+            "pocket_residue_indices": [[9]],
+        }
+    ).to_parquet(lookup, index=False)
+    tasks._write_alignment_chain_lookup_manifest(data_dir)
+
+
+def _write_alignment_mapping_manifest(
+    data_dir: Path,
+    shard: str,
+    *,
+    skipped_queries: dict[str, dict[str, object]] | None = None,
+) -> None:
+    if tasks._completed_alignment_chain_lookup(data_dir) is None:
+        _write_alignment_chain_lookup(data_dir)
+    inputs = tasks._alignment_input_signatures(data_dir=data_dir, shard=shard)
+    outputs = {}
+    for alignment_type, signatures in inputs.items():
+        output = tasks._alignment_release_path(
+            data_dir=data_dir,
+            search_db="holo",
+            alignment_type=alignment_type,
+            shard=shard,
+        )
+        if not signatures:
+            outputs[alignment_type] = None
+            continue
+        stat = output.stat()
+        outputs[alignment_type] = {
+            "name": output.name,
+            "size": stat.st_size,
+            "mtime_ns": stat.st_mtime_ns,
+        }
+    manifest = tasks._alignment_mapping_manifest_path(data_dir=data_dir, shard=shard)
+    manifest.parent.mkdir(exist_ok=True, parents=True)
+    manifest.write_text(
+        json.dumps(
+            {
+                "shard": shard,
+                "alignment_chain_lookup": tasks._completed_alignment_chain_lookup(
+                    data_dir
+                ),
+                "inputs": inputs,
+                "outputs": outputs,
+                "skipped_queries": skipped_queries or {},
+            }
+        )
+    )
+
+
+def test_make_batch_scores_threads_node_scratch_to_score_writer(tmp_path, monkeypatch):
+    calls = []
+
+    class FakeScorer:
+        shape_score_threads = 1
+
+        def get_score_df(self, *args, **kwargs):
+            calls.append((args, kwargs))
+
+    fake_scorer = FakeScorer()
+    monkeypatch.setattr(
+        tasks.utils,
+        "get_scorer",
+        lambda **_kwargs: (fake_scorer, ["1abc"], tmp_path / "batch"),
+    )
+    scratch = tmp_path / "node-scratch"
+
+    tasks.make_batch_scores(
+        data_dir=tmp_path,
+        pdb_ids=["1abc"],
+        scorer_cfg=SimpleNamespace(sub_databases=["holo"]),
+        force_update=False,
+        scratch_dir=scratch,
+        threads=3,
+    )
+
+    assert fake_scorer.shape_score_threads == 3
+    assert calls == [
+        (
+            (tmp_path, "1abc"),
+            {
+                "search_db": "holo",
+                "overwrite": False,
+                "map_alignments": False,
+                "scratch_dir": scratch,
+                "source_to_aln_file": {
+                    "holo_foldseek": tmp_path
+                    / "alignments/search_db=holo/alignment_type=foldseek/shard=ab.parquet",
+                    "holo_mmseqs": tmp_path
+                    / "alignments/search_db=holo/alignment_type=mmseqs/shard=ab.parquet",
+                },
+                "defer_ligand_3d": True,
+            },
+        )
+    ]
 
 
 def test_make_entries_uses_shared_v3_batch(tmp_path, monkeypatch):
@@ -201,27 +315,69 @@ def test_alternative_downloads_use_only_approved_sources(tmp_path, monkeypatch):
     assert not hasattr(io, "download_kinase_data")
 
 
-def test_final_structure_qc_is_not_a_pipeline_stage():
-    assert "structure_qc" not in tasks.STAGES
-
-
 def test_scoring_finalization_stage_order_and_partitions():
+    assert tasks.STAGES.index("collate_entries") < tasks.STAGES.index("make_dbs")
+    assert tasks.STAGES.index("make_canonical_ligand_archives") < tasks.STAGES.index(
+        "finalize_ligand_archives"
+    )
+    assert tasks.STAGES.index("finalize_ligand_archives") < tasks.STAGES.index(
+        "compute_ligand_fingerprints"
+    )
     assert tasks.STAGES.index("make_ligand_scores") < tasks.STAGES.index(
         "annotate_ligand_similarity"
     )
     assert tasks.STAGES.index("annotate_ligand_similarity") < tasks.STAGES.index(
         "make_sub_dbs"
     )
-    assert tasks.STAGES.index("make_batch_scores") < tasks.STAGES.index(
+    assert tasks.STAGES.index("map_batch_alignments") < tasks.STAGES.index(
         "collate_alignments"
     )
     assert tasks.STAGES.index("collate_alignments") < tasks.STAGES.index(
+        "finalize_alignments"
+    )
+    assert tasks.STAGES.index("finalize_alignments") < tasks.STAGES.index(
+        "make_batch_scores"
+    )
+    assert tasks.STAGES.index("make_batch_scores") < tasks.STAGES.index(
+        "collate_ligand_3d_candidates"
+    )
+    assert tasks.STAGES.index("collate_ligand_3d_candidates") < tasks.STAGES.index(
+        "plan_ligand_3d_scores"
+    )
+    assert tasks.STAGES.index("plan_ligand_3d_scores") < tasks.STAGES.index(
+        "make_ligand_3d_scores"
+    )
+    assert tasks.STAGES.index("make_ligand_3d_scores") < tasks.STAGES.index(
+        "collate_ligand_3d_scores"
+    )
+    assert tasks.STAGES.index("collate_ligand_3d_scores") < tasks.STAGES.index(
+        "merge_ligand_3d_scores"
+    )
+    assert tasks.STAGES.index("merge_ligand_3d_scores") < tasks.STAGES.index(
+        "finalize_scores"
+    )
+    assert tasks.STAGES.index("finalize_scores") < tasks.STAGES.index(
+        "export_sucos_shape_pocket_qcov"
+    )
+    assert tasks.STAGES.index("export_sucos_shape_pocket_qcov") < tasks.STAGES.index(
+        "finalize_sucos_export"
+    )
+    assert tasks.STAGES.index("finalize_sucos_export") < tasks.STAGES.index(
         "collate_partitions"
     )
     assert tasks.STAGES.index("collate_partitions") < tasks.STAGES.index(
-        "make_components_and_communities"
+        "make_component_reductions"
     )
-    assert tasks.STAGES.index("make_components_and_communities") < tasks.STAGES.index(
+    assert tasks.STAGES.index("make_component_reductions") < tasks.STAGES.index(
+        "merge_component_reductions"
+    )
+    assert tasks.STAGES.index("merge_component_reductions") < tasks.STAGES.index(
+        "make_communities"
+    )
+    assert tasks.STAGES.index("make_communities") < tasks.STAGES.index(
+        "summarize_clusters"
+    )
+    assert tasks.STAGES.index("summarize_clusters") < tasks.STAGES.index(
         "finalize_index"
     )
     assert tasks.STAGES.index("finalize_index") < tasks.STAGES.index("make_mmp_index")
@@ -236,6 +392,949 @@ def test_scoring_finalization_stage_order_and_partitions():
 def test_ligand_score_threshold_must_cover_frequency_clustering() -> None:
     with pytest.raises(ValueError, match="must not exceed"):
         LigandConfig(minimum_similarity=95)
+
+
+def test_scatter_protein_scoring_uses_v3_chain_index(tmp_path) -> None:
+    index_dir = tmp_path / "index"
+    index_dir.mkdir()
+    pd.DataFrame(
+        {
+            "entry_pdb_id": ["1abc", "2def", "3ghi", "4jkl"],
+            "chain_receptor_type": [
+                "protein",
+                "dna",
+                "protein",
+                "protein",
+            ],
+            "chain_is_holo": [True, True, True, False],
+        }
+    ).to_parquet(index_dir / "entry_chains.parquet", index=False)
+
+    assert tasks.scatter_protein_scoring(
+        data_dir=tmp_path,
+        batch_size=1,
+        two_char_codes=[],
+        pdb_ids=[],
+    ) == [["1abc"], ["3ghi"]]
+    assert tasks.scatter_protein_scoring(
+        data_dir=tmp_path,
+        batch_size=10,
+        two_char_codes=["ab"],
+        pdb_ids=["3GHI"],
+    ) == [["3ghi"]]
+
+
+def test_protein_scoring_plan_and_alignment_finalization(tmp_path, monkeypatch) -> None:
+    from plinder.data.pipeline.score import (
+        finalize_alignment_artifacts,
+        make_foldseek_input_manifest,
+        plan_protein_scoring,
+    )
+
+    index_dir = tmp_path / "index"
+    index_dir.mkdir()
+    pd.DataFrame(
+        {
+            "entry_pdb_id": ["1abc", "1abc", "2def"],
+            "chain_receptor_type": [
+                "protein",
+                "protein",
+                "dna",
+            ],
+            "chain_is_holo": [True, False, True],
+        }
+    ).to_parquet(index_dir / "entry_chains.parquet", index=False)
+    plan = plan_protein_scoring(tmp_path)
+
+    assert plan["query_count"] == 1
+    assert plan["protein_chain_count"] == 1
+    assert plan["max_seqs"] == 10_000
+    foldseek_inputs = make_foldseek_input_manifest(tmp_path, Path("/nextgen"))
+    assert foldseek_inputs.read_text().splitlines() == [
+        "/nextgen/ab/pdb_00001abc/pdb_00001abc_xyz-enrich.cif.gz"
+    ]
+    for alignment_type in ["foldseek", "mmseqs"]:
+        backend = tmp_path / "dbs/subdbs" / f"holo_{alignment_type}"
+        backend.mkdir(parents=True)
+        source_index = backend / f"holo_{alignment_type}.index"
+        source_index.write_text("0\t0\t1\n")
+        source_identifier = (
+            "pdb_00001abc_xyz-enrich_A" if alignment_type == "foldseek" else "1abc_A"
+        )
+        (backend / f"holo_{alignment_type}.lookup").write_text(
+            f"0\t{source_identifier}\t0\n"
+        )
+        search_target = (
+            "clustered" if alignment_type == "foldseek" else "representatives"
+        )
+        conversion_target = (
+            "clustered" if alignment_type == "foldseek" else f"holo_{alignment_type}"
+        )
+        for database in {search_target, conversion_target}:
+            (backend / f"{database}.dbtype").touch()
+        (backend / "exact_cluster.json").write_text(
+            json.dumps(
+                {
+                    "alignment_type": alignment_type,
+                    "identity": 1.0,
+                    "coverage": 1.0,
+                    "coverage_mode": 0,
+                    "source_index": {
+                        "name": source_index.name,
+                        "size": source_index.stat().st_size,
+                        "mtime_ns": source_index.stat().st_mtime_ns,
+                    },
+                    "search_target": search_target,
+                    "conversion_target": conversion_target,
+                }
+            )
+        )
+        output = backend / "aln"
+        output.mkdir()
+        (output / "1abc.parquet").touch()
+        (output / "4qp3.tmp.parquet").touch()
+        release = (
+            tmp_path / "alignments/search_db=holo" / f"alignment_type={alignment_type}"
+        )
+        release.mkdir(parents=True)
+        columns = {
+            "query_entry": ["1abc"],
+            "target_entry": ["1abc"],
+            "query_chain_mapped": ["A"],
+            "target_chain_mapped": ["A"],
+            "source": [alignment_type],
+            "query_pocket_residue_numbers": [[1]],
+            "target_pocket_residue_numbers": [[1]],
+            "pocket_residue_identity": [bytes([1])],
+            "qcov": [1.0],
+            "fident": [1.0],
+            "seqsim": [1.0],
+        }
+        if alignment_type == "foldseek":
+            columns["lddt"] = [1.0]
+        pd.DataFrame(columns).to_parquet(release / "shard=ab.parquet", index=False)
+    _write_alignment_mapping_manifest(tmp_path, "ab")
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            tasks,
+            "_alignment_input_signatures",
+            lambda **_kwargs: pytest.fail("finalization rescanned raw alignments"),
+        )
+        patch.setattr(
+            tasks,
+            "alignment_mapping_shard_is_current",
+            lambda **_kwargs: pytest.fail("finalization used the per-shard validator"),
+        )
+        report = finalize_alignment_artifacts(tmp_path)
+    assert report["status"] == "complete"
+    assert report["artifact_counts"]["foldseek_release_shards"] == 1
+    assert report["target_clustering"]["expand_to_chain_level"] is True
+    assert report["skipped_queries"] == {}
+    assert (tmp_path / "alignments/manifest.json").is_file()
+
+    skipped = {
+        "1abc": {
+            "reason": "raw_alignment_row_budget_exceeded",
+            "maximum_rows": 1,
+            "total_rows": 2,
+            "rows_by_alignment_type": {"foldseek": 1, "mmseqs": 1},
+        }
+    }
+    for alignment_type in ["foldseek", "mmseqs"]:
+        release = tasks._alignment_release_path(
+            data_dir=tmp_path,
+            search_db="holo",
+            alignment_type=alignment_type,
+            shard="ab",
+        )
+        pq.write_table(
+            pa.Table.from_pylist(
+                [],
+                schema=schemas.mapped_alignment_schema(alignment_type=alignment_type),
+            ),
+            release,
+        )
+    _write_alignment_mapping_manifest(tmp_path, "ab", skipped_queries=skipped)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            tasks,
+            "_alignment_input_signatures",
+            lambda **_kwargs: pytest.fail("finalization rescanned raw alignments"),
+        )
+        skipped_report = finalize_alignment_artifacts(tmp_path)
+    assert skipped_report["skipped_queries"] == skipped
+    assert skipped_report["artifact_counts"]["foldseek_skipped_queries"] == 1
+    assert skipped_report["artifact_counts"]["mmseqs_skipped_queries"] == 1
+
+
+def test_protein_scoring_plan_groups_queries_by_two_character_shard(tmp_path):
+    from plinder.data.pipeline.score import (
+        MANIFEST_RELATIVE,
+        plan_protein_scoring,
+    )
+
+    index_dir = tmp_path / "index"
+    index_dir.mkdir()
+    pd.DataFrame(
+        {
+            "entry_pdb_id": ["1zzz", "2aaa", "3aab"],
+            "chain_receptor_type": ["protein"] * 3,
+            "chain_is_holo": [True] * 3,
+        }
+    ).to_parquet(index_dir / "entry_chains.parquet", index=False)
+
+    plan_protein_scoring(tmp_path)
+
+    manifest = pd.read_parquet(tmp_path / MANIFEST_RELATIVE)
+    assert manifest["pdb_id"].tolist() == ["2aaa", "3aab", "1zzz"]
+    assert manifest["shard"].tolist() == ["aa", "aa", "zz"]
+
+
+def test_score_work_plan_balances_expensive_queries_into_fixed_batches(tmp_path):
+    from plinder.data.pipeline.score import (
+        SCORE_WORK_RELATIVE,
+        _score_batch,
+        plan_protein_scoring,
+        plan_score_batches,
+    )
+
+    pdb_ids = ["1aaa", "2aab", "3aac", "4aad", "5aae"]
+    index = tmp_path / "index"
+    index.mkdir()
+    pd.DataFrame(
+        {
+            "entry_pdb_id": pdb_ids,
+            "chain_receptor_type": ["protein"] * len(pdb_ids),
+            "chain_is_holo": [True] * len(pdb_ids),
+        }
+    ).to_parquet(index / "entry_chains.parquet", index=False)
+    pd.DataFrame(
+        {
+            "entry_pdb_id": pdb_ids,
+            "ligand_asym_id": ["L", "M", "N", "O", "P"],
+            "ligand_is_proper": [True] * len(pdb_ids),
+            "ligand_is_3d_score_able": [True] * len(pdb_ids),
+            "system_type": ["holo"] * len(pdb_ids),
+            "system_num_protein_chains": [1] * len(pdb_ids),
+            "system_num_ligand_chains": [1, 1, 1, 1, 6],
+        }
+    ).to_parquet(index / "annotation_table.parquet", index=False)
+    plan_protein_scoring(tmp_path)
+    release = (
+        tmp_path / "alignments/search_db=holo/alignment_type=foldseek/shard=aa.parquet"
+    )
+    release.parent.mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "query_entry": ["1aaa"] * 10 + ["2aab"] * 8 + ["3aac"] + ["4aad"],
+            "target_entry": ["4aad"] * 20,
+        }
+    ).to_parquet(release, index=False)
+
+    report = plan_score_batches(
+        tmp_path,
+        batch_size=2,
+        threads=1,
+        scratch_dir=tmp_path / "scratch",
+    )
+
+    assert report["batch_count"] == 2
+    work = pd.read_parquet(tmp_path / SCORE_WORK_RELATIVE)
+    assert set(work["pdb_id"]) == set(pdb_ids[:4])
+    assert work.groupby("score_batch_index").size().tolist() == [2, 2]
+    assert work.groupby("score_batch_index")["shard"].nunique().max() == 1
+    batches = work.set_index("pdb_id")["score_batch_index"]
+    assert batches["1aaa"] != batches["2aab"]
+    assert sorted(
+        _score_batch(tmp_path, 0, 2) + _score_batch(tmp_path, 1, 2)
+    ) == sorted(pdb_ids[:4])
+
+
+def test_score_manifest_batch_supports_single_pdb_retries(tmp_path) -> None:
+    from plinder.data.pipeline.score import _score_manifest_batch
+
+    manifest = tmp_path / "retry.parquet"
+    pd.DataFrame({"pdb_id": ["1abc", "2def", "3ghi"]}).to_parquet(manifest, index=False)
+
+    assert _score_manifest_batch(tmp_path, manifest, 0, 1) == ["1abc"]
+    assert _score_manifest_batch(tmp_path, manifest, 1, 1) == ["2def"]
+    assert _score_manifest_batch(tmp_path, manifest, 1, 2) == ["3ghi"]
+
+    pd.DataFrame(
+        {
+            "pdb_id": ["1abc", "2def", "3ghi"],
+            "retry_batch_index": [1, 0, 1],
+        }
+    ).to_parquet(manifest, index=False)
+    assert _score_manifest_batch(tmp_path, manifest, 0, 2) == ["2def"]
+    assert _score_manifest_batch(tmp_path, manifest, 1, 2) == ["1abc", "3ghi"]
+
+
+def test_dropped_queries_combine_mapping_and_scoring_stages(tmp_path) -> None:
+    from plinder.data.pipeline.score import (
+        DROPPED_QUERY_RELATIVE,
+        MANIFEST_RELATIVE,
+        PLAN_RELATIVE,
+        SCORE_WORK_RELATIVE,
+        _score_batch,
+        _source_signature,
+        active_scoring_query_ids,
+        record_dropped_queries,
+    )
+
+    query_ids = ["1abc", "2def", "3ghi", "4jkl"]
+    query_manifest = tmp_path / MANIFEST_RELATIVE
+    query_manifest.parent.mkdir(parents=True)
+    pd.DataFrame({"pdb_id": query_ids}).to_parquet(query_manifest, index=False)
+    score_work = tmp_path / SCORE_WORK_RELATIVE
+    pd.DataFrame(
+        {
+            "pdb_id": query_ids,
+            "score_batch_index": [0, 0, 0, 0],
+            "estimated_work": [4.0, 3.0, 2.0, 1.0],
+        }
+    ).to_parquet(score_work, index=False)
+    (tmp_path / PLAN_RELATIVE).write_text(
+        json.dumps(
+            {
+                "manifest": _source_signature(query_manifest),
+                "score_work": _source_signature(score_work),
+                "score_batch_size": 4,
+            }
+        )
+    )
+    alignment_manifest = tmp_path / "alignments" / "manifest.json"
+    alignment_manifest.parent.mkdir()
+    alignment_manifest.write_text(
+        json.dumps(
+            {
+                "skipped_queries": {
+                    "1abc": {
+                        "reason": "raw_alignment_row_budget_exceeded",
+                        "total_rows": 6_000_000,
+                    }
+                }
+            }
+        )
+    )
+    score_drops = tmp_path / "score-drops.parquet"
+    pd.DataFrame({"pdb_id": ["2def", "3ghi"]}).to_parquet(score_drops, index=False)
+
+    report = record_dropped_queries(
+        tmp_path,
+        score_query_manifest=score_drops,
+    )
+
+    assert report["alignment_mapping"] == 1
+    assert report["derived_scoring"] == 2
+    assert report["total"] == 3
+    dropped = pd.read_parquet(tmp_path / DROPPED_QUERY_RELATIVE)
+    assert dropped[["pdb_id", "stage"]].to_dict("records") == [
+        {"pdb_id": "1abc", "stage": "alignment_mapping"},
+        {"pdb_id": "2def", "stage": "derived_scoring"},
+        {"pdb_id": "3ghi", "stage": "derived_scoring"},
+    ]
+    assert active_scoring_query_ids(tmp_path) == {"4jkl"}
+    assert _score_batch(tmp_path, 0, 4) == ["4jkl"]
+
+
+def test_ligand_3d_retries_require_and_reassemble_every_retry(tmp_path) -> None:
+    from plinder.data.pipeline.score import (
+        LIGAND_3D_RETRY_WORK_RELATIVE,
+        LIGAND_3D_WORK_RELATIVE,
+        MANIFEST_RELATIVE,
+        PLAN_RELATIVE,
+        _source_signature,
+        finalize_ligand_3d_retries,
+        plan_ligand_3d_retries,
+    )
+
+    query_manifest = tmp_path / MANIFEST_RELATIVE
+    query_manifest.parent.mkdir(parents=True)
+    pd.DataFrame({"pdb_id": ["1abc"]}).to_parquet(query_manifest, index=False)
+    pair_rows = pd.DataFrame(
+        {
+            "query_entry": ["1abc", "1abc", "1abc"],
+            "query_ligand_asym_id": ["A", "A", "A"],
+            "target_entry": ["2def", "3ghi", "4jkl"],
+            "target_ligand_asym_id": ["B", "C", "D"],
+            "estimated_work": [3, 2, 1],
+            "ligand_3d_batch_index": [0, 1, 1],
+        }
+    )
+    work_path = tmp_path / LIGAND_3D_WORK_RELATIVE
+    pair_rows.to_parquet(work_path, index=False)
+    (tmp_path / PLAN_RELATIVE).write_text(
+        json.dumps(
+            {
+                "manifest": _source_signature(query_manifest),
+                "ligand_3d_plan_complete": True,
+                "ligand_3d_batch_count": 2,
+                "ligand_3d_work": _source_signature(work_path),
+            }
+        )
+    )
+    canonical = tmp_path / "scores" / "ligand_3d_pairs"
+    canonical.mkdir(parents=True)
+    completed = pair_rows.iloc[[0]][
+        [
+            "query_entry",
+            "query_ligand_asym_id",
+            "target_entry",
+            "target_ligand_asym_id",
+        ]
+    ].copy()
+    completed["shape"] = 0.5
+    completed["color"] = 0.4
+    completed["sucos_shape"] = 0.3
+    completed.to_parquet(
+        canonical / "0.parquet",
+        schema=schemas.LIGAND_3D_SCORE_SCHEMA,
+        index=False,
+    )
+
+    report = plan_ligand_3d_retries(tmp_path, batch_size=1)
+    assert report["missing_original_batch_count"] == 1
+    assert report["retry_batch_count"] == 2
+    retry_work = pd.read_parquet(tmp_path / LIGAND_3D_RETRY_WORK_RELATIVE)
+    first_retry = retry_work[retry_work["retry_batch_index"].eq(0)]
+    scored = first_retry[
+        [
+            "query_entry",
+            "query_ligand_asym_id",
+            "target_entry",
+            "target_ligand_asym_id",
+        ]
+    ].copy()
+    scored["shape"] = 0.8
+    scored["color"] = 0.7
+    scored["sucos_shape"] = 0.6
+    retry_dir = tmp_path / "scores" / "ligand_3d_pair_retries"
+    retry_dir.mkdir()
+    scored.to_parquet(
+        retry_dir / "0.parquet",
+        schema=schemas.LIGAND_3D_SCORE_SCHEMA,
+        index=False,
+    )
+
+    with pytest.raises(ValueError, match="retries remain incomplete"):
+        finalize_ligand_3d_retries(tmp_path)
+
+    second_retry = retry_work[retry_work["retry_batch_index"].eq(1)]
+    second_scored = second_retry[
+        [
+            "query_entry",
+            "query_ligand_asym_id",
+            "target_entry",
+            "target_ligand_asym_id",
+        ]
+    ].copy()
+    second_scored["shape"] = 0.2
+    second_scored["color"] = 0.1
+    second_scored["sucos_shape"] = 0.1
+    second_scored.to_parquet(
+        retry_dir / "1.parquet",
+        schema=schemas.LIGAND_3D_SCORE_SCHEMA,
+        index=False,
+    )
+
+    finalized = finalize_ligand_3d_retries(tmp_path)
+    assert finalized["completed_retry_batch_count"] == 2
+    combined = pd.read_parquet(canonical / "1.parquet")
+    assert len(combined) == 2
+    assert combined["shape"].notna().sum() == 2
+
+
+def test_ligand_3d_plan_deduplicates_positive_pocket_candidates(tmp_path) -> None:
+    from plinder.data.pipeline.score import (
+        LIGAND_3D_WORK_RELATIVE,
+        SCORE_WORK_RELATIVE,
+        _ligand_3d_batch,
+        plan_ligand_3d_batches,
+        plan_protein_scoring,
+    )
+
+    index = tmp_path / "index"
+    index.mkdir()
+    pd.DataFrame(
+        {
+            "entry_pdb_id": ["1abc", "2def", "3ghi"],
+            "chain_receptor_type": ["protein"] * 3,
+            "chain_is_holo": [True, True, False],
+        }
+    ).to_parquet(index / "entry_chains.parquet", index=False)
+    pd.DataFrame(
+        {
+            "entry_pdb_id": ["1abc", "2def", "3ghi"],
+            "ligand_asym_id": ["B", "Y", "Z"],
+            "ligand_num_heavy_atoms": [10, 20, 30],
+            "ligand_is_proper": [True] * 3,
+            "ligand_is_3d_score_able": [True] * 3,
+            "system_type": ["holo"] * 3,
+        }
+    ).to_parquet(index / "annotation_table.parquet", index=False)
+    plan_protein_scoring(tmp_path)
+    pd.DataFrame(
+        {
+            "pdb_id": ["1abc", "2def"],
+            "score_batch_index": [0, 0],
+            "estimated_work": [1.0, 1.0],
+        }
+    ).to_parquet(tmp_path / SCORE_WORK_RELATIVE, index=False)
+
+    candidate_dir = tmp_path / "scores/ligand_3d_candidates/search_db=holo/shard=ab"
+    candidate_dir.mkdir(parents=True)
+    repeated = {
+        "query_system": "1abc_system",
+        "query_ligand_id": "1abc__1__1.B",
+        "query_entry": "1abc",
+        "query_ligand_asym_id": "B",
+        "target_system": "2def_system",
+        "target_ligand_id": "2def__1__1.Y",
+        "target_entry": "2def",
+        "target_ligand_asym_id": "Y",
+        "protein_mapping": "1.A:1.X",
+        "protein_mapper": "foldseek",
+        "pocket_qcov": 0.5,
+    }
+    pq.write_table(
+        pa.Table.from_pylist(
+            [
+                repeated,
+                {**repeated, "query_system": "1abc_other", "pocket_qcov": 0.75},
+                {
+                    **repeated,
+                    "target_system": "3ghi_system",
+                    "target_ligand_id": "3ghi__1__1.Z",
+                    "target_entry": "3ghi",
+                    "target_ligand_asym_id": "Z",
+                    "pocket_qcov": 0.29,
+                },
+            ],
+            schema=schemas.LIGAND_3D_CANDIDATE_SCHEMA,
+        ),
+        candidate_dir / "1abc.parquet",
+    )
+    target_candidate_dir = candidate_dir.parent / "shard=de"
+    target_candidate_dir.mkdir()
+    pq.write_table(
+        pa.Table.from_pylist([], schema=schemas.LIGAND_3D_CANDIDATE_SCHEMA),
+        target_candidate_dir / "2def.parquet",
+    )
+    tasks.collate_ligand_3d_candidates(
+        data_dir=tmp_path,
+        shards=["ab", "de"],
+        scratch_dir=tmp_path / "candidate-scratch",
+        threads=1,
+    )
+    compact = pd.read_parquet(
+        tmp_path / "scores/ligand_3d_pair_candidate_shards/shard=ab.parquet"
+    )
+    assert len(compact) == 2
+    assert compact.loc[
+        compact["target_entry"] == "2def", "pocket_qcov"
+    ].item() == pytest.approx(0.75)
+    # Packed candidate shards are self-contained planning inputs. The
+    # per-query score files may be archived or unavailable after collation.
+    (candidate_dir / "1abc.parquet").unlink()
+    (target_candidate_dir / "2def.parquet").unlink()
+
+    report = plan_ligand_3d_batches(
+        tmp_path,
+        batch_size=2,
+        threads=1,
+        scratch_dir=tmp_path / "scratch",
+    )
+
+    assert report["pair_count"] == 2
+    assert report["batch_count"] == 1
+    work = pd.read_parquet(tmp_path / LIGAND_3D_WORK_RELATIVE)
+    assert not work.duplicated(
+        [
+            "query_entry",
+            "query_ligand_asym_id",
+            "target_entry",
+            "target_ligand_asym_id",
+        ]
+    ).any()
+    assert set(work["estimated_work"]) == {200, 300}
+    assert set(work["target_entry"]) == {"2def", "3ghi"}
+    assert len(_ligand_3d_batch(tmp_path, 0, 2)) == 2
+
+
+def test_make_ligand_3d_scores_writes_and_reuses_complete_batch(
+    tmp_path, monkeypatch
+) -> None:
+    pairs = pd.DataFrame(
+        {
+            "query_entry": ["1abc"],
+            "query_ligand_asym_id": ["B"],
+            "target_entry": ["2def"],
+            "target_ligand_asym_id": ["Y"],
+        }
+    )
+    calls = 0
+
+    class FakeScorer:
+        shape_score_threads = 1
+
+        def score_canonical_ligand_pairs(self, _data_dir, observed_pairs):
+            nonlocal calls
+            calls += 1
+            result = observed_pairs.copy()
+            result["shape"] = 0.8
+            result["color"] = 0.6
+            result["sucos_shape"] = 0.7
+            return result
+
+    monkeypatch.setattr(
+        tasks.utils,
+        "get_scorer",
+        lambda **_kwargs: (FakeScorer(), [], tmp_path / "unused"),
+    )
+    kwargs = {
+        "data_dir": tmp_path,
+        "pairs": pairs,
+        "batch_index": 3,
+        "scorer_cfg": SimpleNamespace(),
+        "force_update": False,
+        "scratch_dir": tmp_path / "scratch",
+        "threads": 2,
+    }
+
+    output = tasks.make_ligand_3d_scores(**kwargs)
+    assert tasks.make_ligand_3d_scores(**kwargs) == output
+    assert calls == 1
+    assert pd.read_parquet(output)["sucos_shape"].item() == pytest.approx(0.7)
+
+
+def test_collate_ligand_3d_scores_repartitions_balanced_batches(tmp_path) -> None:
+    from plinder.data.pipeline.score import (
+        LIGAND_3D_WORK_RELATIVE,
+        SCORE_WORK_RELATIVE,
+    )
+
+    work = pd.DataFrame(
+        {
+            "query_entry": ["1abc", "2abc"],
+            "query_ligand_asym_id": ["B", "C"],
+            "target_entry": ["3def", "4ghi"],
+            "target_ligand_asym_id": ["Y", "Z"],
+            "estimated_work": [10, 20],
+            "ligand_3d_batch_index": [0, 1],
+        }
+    )
+    work_path = tmp_path / LIGAND_3D_WORK_RELATIVE
+    work_path.parent.mkdir(parents=True)
+    work.to_parquet(work_path, index=False)
+    pd.DataFrame({"pdb_id": ["1abc", "2abc"]}).to_parquet(
+        tmp_path / SCORE_WORK_RELATIVE, index=False
+    )
+    pair_dir = tmp_path / "scores/ligand_3d_pairs"
+    pair_dir.mkdir(parents=True)
+    for row in work.itertuples(index=False):
+        pq.write_table(
+            pa.Table.from_pylist(
+                [
+                    {
+                        "query_entry": row.query_entry,
+                        "query_ligand_asym_id": row.query_ligand_asym_id,
+                        "target_entry": row.target_entry,
+                        "target_ligand_asym_id": row.target_ligand_asym_id,
+                        "shape": 0.8,
+                        "color": 0.6,
+                        "sucos_shape": 0.7,
+                    }
+                ],
+                schema=schemas.LIGAND_3D_SCORE_SCHEMA,
+            ),
+            pair_dir / f"{row.ligand_3d_batch_index}.parquet",
+        )
+
+    outputs = tasks.collate_ligand_3d_scores(
+        data_dir=tmp_path,
+        shards=["ab"],
+        scratch_dir=tmp_path / "scratch",
+        threads=1,
+    )
+
+    assert outputs == [tmp_path / "scores/ligand_3d_by_query/ab.parquet"]
+    observed = pd.read_parquet(outputs[0])
+    assert observed["query_entry"].tolist() == ["1abc", "2abc"]
+    assert observed["shape"].tolist() == [0.8, 0.8]
+
+
+def test_finalize_ligand_3d_scores_validates_pair_and_packed_shards(
+    tmp_path, monkeypatch
+) -> None:
+    from plinder.data.pipeline.score import (
+        SCORE_WORK_RELATIVE,
+        finalize_ligand_3d_artifacts,
+        plan_ligand_3d_batches,
+        plan_protein_scoring,
+    )
+
+    index = tmp_path / "index"
+    index.mkdir()
+    pd.DataFrame(
+        {
+            "entry_pdb_id": ["1abc", "2def"],
+            "chain_receptor_type": ["protein", "protein"],
+            "chain_is_holo": [True, False],
+        }
+    ).to_parquet(index / "entry_chains.parquet", index=False)
+    pd.DataFrame(
+        {
+            "entry_pdb_id": ["1abc", "2def"],
+            "ligand_asym_id": ["B", "Y"],
+            "ligand_num_heavy_atoms": [10, 20],
+            "ligand_is_proper": [True, True],
+            "ligand_is_3d_score_able": [True, True],
+            "system_type": ["holo", "holo"],
+        }
+    ).to_parquet(index / "annotation_table.parquet", index=False)
+    plan_protein_scoring(tmp_path)
+    pd.DataFrame(
+        {
+            "pdb_id": ["1abc"],
+            "score_batch_index": [0],
+            "estimated_work": [1.0],
+        }
+    ).to_parquet(tmp_path / SCORE_WORK_RELATIVE, index=False)
+    candidate_dir = tmp_path / "scores/ligand_3d_candidates/search_db=holo/shard=ab"
+    candidate_dir.mkdir(parents=True)
+    candidate = {
+        "query_system": "1abc_system",
+        "query_ligand_id": "1abc__1__1.B",
+        "query_entry": "1abc",
+        "query_ligand_asym_id": "B",
+        "target_system": "2def_system",
+        "target_ligand_id": "2def__1__1.Y",
+        "target_entry": "2def",
+        "target_ligand_asym_id": "Y",
+        "protein_mapping": "1.A:1.X",
+        "protein_mapper": "foldseek",
+        "pocket_qcov": 0.5,
+    }
+    pq.write_table(
+        pa.Table.from_pylist([candidate], schema=schemas.LIGAND_3D_CANDIDATE_SCHEMA),
+        candidate_dir / "1abc.parquet",
+    )
+    tasks.collate_ligand_3d_candidates(
+        data_dir=tmp_path,
+        shards=["ab"],
+        scratch_dir=tmp_path / "candidate-scratch",
+        threads=1,
+    )
+    plan_ligand_3d_batches(
+        tmp_path,
+        batch_size=10,
+        threads=1,
+        scratch_dir=tmp_path / "plan-scratch",
+    )
+    pair_dir = tmp_path / "scores/ligand_3d_pairs"
+    pair_dir.mkdir(parents=True)
+    pair = {
+        key: candidate[key]
+        for key in [
+            "query_entry",
+            "query_ligand_asym_id",
+            "target_entry",
+            "target_ligand_asym_id",
+        ]
+    }
+    pair.update({"shape": 0.8, "color": 0.6, "sucos_shape": 0.7})
+    pq.write_table(
+        pa.Table.from_pylist([pair], schema=schemas.LIGAND_3D_SCORE_SCHEMA),
+        pair_dir / "0.parquet",
+    )
+    final_score = tmp_path / "scores/search_db=holo/ab.parquet"
+    final_score.parent.mkdir(parents=True)
+    pd.DataFrame(columns=schemas.PROTEIN_SIMILARITY_SCHEMA.names).to_parquet(
+        final_score,
+        index=False,
+        schema=schemas.PROTEIN_SIMILARITY_SCHEMA,
+    )
+
+    report = finalize_ligand_3d_artifacts(tmp_path)
+
+    assert report == {
+        "status": "complete",
+        "canonical_pair_count": 1,
+        "pair_batch_count": 1,
+        "query_shard_count": 1,
+        "query_count": 1,
+    }
+    assert (tmp_path / "scores/ligand_3d_pair_validation.json").is_file()
+
+    import duckdb
+
+    monkeypatch.setattr(
+        duckdb,
+        "connect",
+        lambda: pytest.fail("signature-matched pair validation was not reused"),
+    )
+    assert finalize_ligand_3d_artifacts(tmp_path) == report
+
+
+def test_merge_ligand_3d_scores_uses_full_precision_pocket_coverage(tmp_path) -> None:
+    from plinder.data.pipeline.score import (
+        LIGAND_3D_WORK_RELATIVE,
+        SCORE_WORK_RELATIVE,
+    )
+
+    score_path = tmp_path / "dbs/subdbs/search_db=holo/1abc.parquet"
+    score_path.parent.mkdir(parents=True)
+    base = pd.DataFrame(
+        [
+            {
+                "query_system": "1abc_system",
+                "query_ligand_id": "1abc__1__1.B",
+                "target_system": "2def_system",
+                "target_ligand_id": "2def__1__1.Y",
+                "protein_mapping": "1.A:1.X",
+                "mapping": "1.A:1.X",
+                "protein_mapper": "foldseek",
+                "source": "foldseek",
+                "metric": "pocket_qcov",
+                "similarity": 67,
+            }
+        ]
+    )
+    base.to_parquet(
+        score_path,
+        index=False,
+        schema=schemas.PROTEIN_SIMILARITY_SCHEMA.with_metadata(
+            {b"plinder.ligand_3d": b"deferred"}
+        ),
+    )
+    candidate_path = tmp_path / "scores/ligand_3d_candidate_shards/shard=ab.parquet"
+    candidate_path.parent.mkdir(parents=True)
+    candidate = {
+        "query_system": "1abc_system",
+        "query_ligand_id": "1abc__1__1.B",
+        "query_entry": "1abc",
+        "query_ligand_asym_id": "B",
+        "target_system": "2def_system",
+        "target_ligand_id": "2def__1__1.Y",
+        "target_entry": "2def",
+        "target_ligand_asym_id": "Y",
+        "protein_mapping": "1.A:1.X",
+        "protein_mapper": "foldseek",
+        "pocket_qcov": 2 / 3,
+    }
+    pq.write_table(
+        pa.Table.from_pylist([candidate], schema=schemas.LIGAND_3D_CANDIDATE_SCHEMA),
+        candidate_path,
+    )
+    pair_path = tmp_path / "scores/ligand_3d_by_query/ab.parquet"
+    pair_path.parent.mkdir(parents=True)
+    pq.write_table(
+        pa.Table.from_pylist(
+            [
+                {
+                    "query_entry": "1abc",
+                    "query_ligand_asym_id": "B",
+                    "target_entry": "2def",
+                    "target_ligand_asym_id": "Y",
+                    "shape": 0.8,
+                    "color": 0.6,
+                    "sucos_shape": 0.46,
+                }
+            ],
+            schema=schemas.LIGAND_3D_SCORE_SCHEMA,
+        ),
+        pair_path,
+    )
+    work = pd.DataFrame(
+        {
+            "query_entry": ["1abc"],
+            "query_ligand_asym_id": ["B"],
+            "target_entry": ["2def"],
+            "target_ligand_asym_id": ["Y"],
+            "estimated_work": [200],
+            "ligand_3d_batch_index": [0],
+        }
+    )
+    work_path = tmp_path / LIGAND_3D_WORK_RELATIVE
+    work_path.parent.mkdir(exist_ok=True, parents=True)
+    work.to_parquet(work_path, index=False)
+    pd.DataFrame({"pdb_id": ["1abc"]}).to_parquet(
+        tmp_path / SCORE_WORK_RELATIVE, index=False
+    )
+    pair_batch_dir = tmp_path / "scores/ligand_3d_pairs"
+    pair_batch_dir.mkdir(parents=True)
+    copyfile(pair_path, pair_batch_dir / "0.parquet")
+
+    tasks.merge_ligand_3d_scores(
+        data_dir=tmp_path,
+        shards=["ab"],
+        scorer_cfg=SimpleNamespace(minimum_threshold=0.3, minimum_thresholds={}),
+        force_update=False,
+        scratch_dir=tmp_path / "scratch",
+        threads=1,
+    )
+
+    merged_path = tmp_path / "scores/search_db=holo/ab.parquet"
+    merged = pd.read_parquet(merged_path).set_index("metric")
+    assert merged["similarity"].to_dict() == {
+        "shape": 80,
+        "pocket_qcov": 67,
+        "color": 60,
+        "sucos_shape": 46,
+        "sucos_shape_pocket_qcov": 31,
+    }
+    assert pd.read_parquet(score_path)["metric"].tolist() == ["pocket_qcov"]
+
+
+def test_merge_ligand_3d_scores_fails_when_query_shard_is_not_ready(
+    tmp_path, monkeypatch
+) -> None:
+    score_work = tmp_path / "manifests" / "protein_scoring_work.parquet"
+    score_work.parent.mkdir(parents=True)
+    pd.DataFrame({"pdb_id": ["1abc"]}).to_parquet(score_work, index=False)
+    monkeypatch.setattr(
+        tasks,
+        "_ligand_3d_query_shard_is_ready",
+        lambda **_kwargs: False,
+    )
+
+    with pytest.raises(RuntimeError, match="retry this merge task"):
+        tasks.merge_ligand_3d_scores(
+            data_dir=tmp_path,
+            shards=["ab"],
+            scorer_cfg=SimpleNamespace(
+                minimum_threshold=0.3,
+                minimum_thresholds={},
+            ),
+            force_update=False,
+            scratch_dir=tmp_path / "scratch",
+            threads=1,
+        )
+
+
+def test_protein_scoring_finalizer_rejects_changed_chain_index(tmp_path) -> None:
+    from plinder.data.pipeline.score import (
+        finalize_alignment_artifacts,
+        plan_protein_scoring,
+    )
+
+    index_dir = tmp_path / "index"
+    index_dir.mkdir()
+    chain_path = index_dir / "entry_chains.parquet"
+    pd.DataFrame(
+        {
+            "entry_pdb_id": ["1abc"],
+            "chain_receptor_type": ["protein"],
+            "chain_is_holo": [True],
+        }
+    ).to_parquet(chain_path, index=False)
+    plan_protein_scoring(tmp_path)
+    chain_path.write_bytes(chain_path.read_bytes() + b"changed")
+
+    with pytest.raises(ValueError, match="entry chain index changed"):
+        finalize_alignment_artifacts(tmp_path)
 
 
 def test_v3_source_roots_are_configurable() -> None:
@@ -257,12 +1356,288 @@ def test_v3_source_roots_are_configurable() -> None:
     assert cfg.source.discovery_threads == 3
 
 
+def test_make_dbs_uses_configured_source_files(tmp_path, monkeypatch) -> None:
+    cif_root = tmp_path / "nextgen"
+    cif_root.mkdir()
+    seqres_path = tmp_path / "pdb_seqres.txt.gz"
+    seqres_path.touch()
+    create_calls = []
+    index_calls = []
+    monkeypatch.setattr(
+        tasks.databases,
+        "create_db",
+        lambda source, output, kind, threads: create_calls.append(
+            (source, output, kind, threads)
+        ),
+    )
+    monkeypatch.setattr(
+        tasks.databases,
+        "create_db_index",
+        lambda output, kind, tmp_dir, threads: index_calls.append(
+            (output, kind, tmp_dir, threads)
+        ),
+    )
+
+    tasks.make_dbs(
+        data_dir=tmp_path,
+        sub_databases=["holo"],
+        cpu=3,
+        cif_root=cif_root,
+        seqres_path=seqres_path,
+    )
+
+    assert create_calls == [
+        (cif_root, tmp_path / "dbs/foldseek", "foldseek", 3),
+        (seqres_path, tmp_path / "dbs/mmseqs", "mmseqs", 3),
+    ]
+    assert index_calls == [
+        (
+            tmp_path / "dbs/foldseek",
+            "foldseek",
+            tmp_path / "scratch/databases/foldseek",
+            3,
+        ),
+        (
+            tmp_path / "dbs/mmseqs",
+            "mmseqs",
+            tmp_path / "scratch/databases/mmseqs",
+            3,
+        ),
+    ]
+
+
+def test_make_dbs_reuses_completed_createdb_output(tmp_path, monkeypatch) -> None:
+    cif_root = tmp_path / "nextgen"
+    cif_root.mkdir()
+    seqres_path = tmp_path / "pdb_seqres.txt.gz"
+    seqres_path.touch()
+    monkeypatch.setattr(
+        tasks.databases,
+        "created_database_is_complete",
+        lambda *_args: True,
+    )
+    monkeypatch.setattr(
+        tasks.databases,
+        "create_db",
+        lambda *_args, **_kwargs: pytest.fail("completed database was rebuilt"),
+    )
+
+    tasks.make_dbs(
+        data_dir=tmp_path,
+        sub_databases=["holo"],
+        cpu=2,
+        cif_root=cif_root,
+        seqres_path=seqres_path,
+        index=False,
+    )
+
+
+def test_get_scorer_uses_configured_search_limits(tmp_path) -> None:
+    from plinder.data.pipeline import utils
+    from plinder.data.pipeline.config import get_config
+
+    cfg = get_config(
+        config={
+            "foldseek": {"max_seqs": 12_345},
+            "mmseqs": {"max_seqs": 6_789},
+            "scorer": {"sub_databases": "holo"},
+        },
+        cached=False,
+    )
+    scorer, _, _ = utils.get_scorer(
+        data_dir=tmp_path,
+        pdb_ids=[],
+        scorer_cfg=cfg.scorer,
+        load_entries=False,
+        foldseek_cfg=cfg.foldseek,
+        mmseqs_cfg=cfg.mmseqs,
+        scratch_dir=tmp_path / "scratch",
+    )
+
+    assert scorer.get_config("holo", "foldseek").max_seqs == 12_345
+    assert scorer.get_config("holo", "mmseqs").max_seqs == 6_789
+    assert scorer.get_config("holo", "foldseek").min_seq_id == 0.2
+    assert scorer.get_config("holo", "mmseqs").min_seq_id == 0.2
+    assert scorer.get_config("apo", "foldseek").min_seq_id == 0.9
+    assert scorer.get_config("pred", "mmseqs").min_seq_id == 0.9
+    assert scorer.get_config("apo", "foldseek").coverage == 0.9
+    assert scorer.get_config("pred", "mmseqs").coverage == 0.9
+
+    from plinder.data.pipeline.score import _scoring_config
+
+    v3_scoring = _scoring_config(tmp_path, 10_000)
+    assert v3_scoring.foldseek.min_seq_id == 0.0
+    assert v3_scoring.mmseqs.min_seq_id == 0.0
+
+
+def test_run_batch_searches_skips_completed_backend_queries(
+    tmp_path, monkeypatch
+) -> None:
+    completed = tmp_path / "dbs/subdbs/holo_foldseek/aln/1abc.parquet"
+    completed.parent.mkdir(parents=True)
+    completed.touch()
+    calls = []
+
+    class FakeScorer:
+        def run_alignments(self, **kwargs):
+            calls.append(kwargs)
+            alignment_type = kwargs["alignment_types"][0]
+            output = tmp_path / f"dbs/subdbs/holo_{alignment_type}/aln"
+            output.mkdir(parents=True, exist_ok=True)
+            for pdb_id in kwargs["entry_ids"]:
+                (output / f"{pdb_id}.parquet").touch()
+
+    def fake_get_scorer(*, pdb_ids, **_kwargs):
+        scratch = tmp_path / "scratch" / "-".join(pdb_ids)
+        scratch.mkdir(parents=True)
+        return FakeScorer(), pdb_ids, scratch
+
+    monkeypatch.setattr(tasks.utils, "get_scorer", fake_get_scorer)
+    monkeypatch.setattr(
+        tasks.databases,
+        "database_identifiers",
+        lambda path: (
+            {"pdb_00002def_A"}
+            if path.name.endswith("foldseek")
+            else {"1abc_A", "2def_A"}
+        ),
+    )
+    cfg = SimpleNamespace(sub_databases=["holo"])
+
+    tasks.run_batch_searches(
+        data_dir=tmp_path,
+        pdb_ids=["1abc", "2def"],
+        scorer_cfg=cfg,
+        foldseek_cfg=SimpleNamespace(),
+        mmseqs_cfg=SimpleNamespace(),
+        cpu=4,
+        scratch_dir=tmp_path / "node-scratch",
+        alignment_types=["foldseek", "mmseqs"],
+    )
+
+    assert [call["entry_ids"] for call in calls] == [
+        ["2def"],
+        ["1abc", "2def"],
+    ]
+    assert [call["alignment_types"] for call in calls] == [
+        ["foldseek"],
+        ["mmseqs"],
+    ]
+
+
+def test_run_batch_searches_rejects_missing_eligible_output(tmp_path, monkeypatch):
+    class FakeScorer:
+        def run_alignments(self, **_kwargs):
+            return None
+
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    monkeypatch.setattr(
+        tasks.utils,
+        "get_scorer",
+        lambda **_kwargs: (FakeScorer(), ["1abc"], scratch),
+    )
+    monkeypatch.setattr(
+        tasks.databases,
+        "database_identifiers",
+        lambda _path: {"1abc_A"},
+    )
+
+    with pytest.raises(RuntimeError, match="no output.*1 eligible"):
+        tasks.run_batch_searches(
+            data_dir=tmp_path,
+            pdb_ids=["1abc"],
+            scorer_cfg=SimpleNamespace(sub_databases=["holo"]),
+            foldseek_cfg=SimpleNamespace(),
+            mmseqs_cfg=SimpleNamespace(),
+            cpu=1,
+            alignment_types=["mmseqs"],
+        )
+
+
+@pytest.mark.parametrize("alignment_type", ["foldseek", "mmseqs"])
+def test_alignment_release_shard_preserves_typed_schema_when_all_hits_are_empty(
+    tmp_path, alignment_type
+) -> None:
+    schema = schemas.mapped_alignment_schema(alignment_type=alignment_type)
+    source = tmp_path / "mapped" / "1abc.parquet"
+    source.parent.mkdir()
+    pq.write_table(pa.Table.from_pylist([], schema=schema), source)
+    target = tmp_path / f"shard-{alignment_type}.parquet"
+
+    tasks._write_alignment_release_shard(
+        sources=[source],
+        target=target,
+        alignment_type=alignment_type,
+        temp_dir=tmp_path / "scratch" / alignment_type,
+        threads=1,
+        memory_limit="1GB",
+    )
+
+    assert pq.ParquetFile(target).metadata.num_rows == 0
+    assert pq.read_schema(target).equals(schema)
+
+
+def test_alignment_release_shard_unifies_empty_and_populated_list_types(
+    tmp_path,
+) -> None:
+    columns = {
+        "query_entry": ["1abc"],
+        "target_entry": ["2def"],
+        "query_chain_mapped": ["A"],
+        "target_chain_mapped": ["B"],
+        "source": ["foldseek"],
+        "qcov": [1.0],
+        "fident": [1.0],
+        "seqsim": [1.0],
+        "query_pocket_residue_numbers": [[]],
+        "target_pocket_residue_numbers": [[]],
+        "pocket_residue_identity": [b""],
+        "lddt": [1.0],
+    }
+    empty_lists = tmp_path / "mapped" / "1abc.parquet"
+    populated_lists = tmp_path / "mapped" / "2abc.parquet"
+    empty_lists.parent.mkdir()
+    pd.DataFrame(columns).to_parquet(empty_lists, index=False)
+    populated = dict(columns)
+    populated["query_entry"] = ["2abc"]
+    populated["query_pocket_residue_numbers"] = [[1]]
+    populated["target_pocket_residue_numbers"] = [[2]]
+    populated["pocket_residue_identity"] = [bytes([1])]
+    pd.DataFrame(populated).to_parquet(populated_lists, index=False)
+    target = tmp_path / "foldseek.parquet"
+
+    tasks._write_alignment_release_shard(
+        sources=[empty_lists, populated_lists],
+        target=target,
+        alignment_type="foldseek",
+        temp_dir=tmp_path / "scratch",
+        threads=1,
+        memory_limit="1GB",
+    )
+
+    result = pd.read_parquet(target)
+    assert result["query_entry"].tolist() == ["1abc", "2abc"]
+    assert result.loc[0, "query_pocket_residue_numbers"].tolist() == []
+    assert result.loc[1, "query_pocket_residue_numbers"].tolist() == [1]
+
+
 def test_ligand_score_threshold_must_cover_requested_chemical_clusters() -> None:
     from plinder.data.pipeline.config import get_config
 
-    with pytest.raises(ValueError, match=r"clustering threshold \(50\)"):
+    with pytest.raises(ValueError, match=r"clustering threshold \(30\)"):
         get_config(
             config={"ligand": {"minimum_similarity": 60}},
+            cached=False,
+        )
+
+
+def test_derived_score_threshold_must_cover_requested_clusters() -> None:
+    from plinder.data.pipeline.config import get_config
+
+    with pytest.raises(ValueError, match=r"clustering threshold \(30\)"):
+        get_config(
+            config={"scorer": {"minimum_threshold": 0.31}},
             cached=False,
         )
 
@@ -274,7 +1649,13 @@ def test_collate_alignments_writes_query_addressable_shards(tmp_path):
         "query_chain_mapped": ["A", "B", "C"],
         "target_chain_mapped": ["D", "E", "F"],
         "source": ["foldseek"] * 3,
-        "similarity": [0.8, 0.7, 0.6],
+        "qcov": [1.0, 0.9, 0.8],
+        "fident": [1.0, 0.9, 0.8],
+        "seqsim": [1.0, 0.9, 0.8],
+        "query_pocket_residue_numbers": [[1], [2], [3]],
+        "target_pocket_residue_numbers": [[11], [12], [13]],
+        "pocket_residue_identity": [bytes([1])] * 3,
+        "lddt": [1.0, 0.9, 0.8],
     }
     mapped_dir = tmp_path / "dbs/subdbs/holo_foldseek/mapped_aln"
     mapped_dir.mkdir(parents=True)
@@ -282,6 +1663,10 @@ def test_collate_alignments_writes_query_addressable_shards(tmp_path):
         pd.DataFrame(
             {column: [values[index]] for column, values in columns.items()}
         ).to_parquet(mapped_dir / f"{pdb_id}.parquet", index=False)
+    # An interrupted atomic install must not become a query or shard.
+    pd.DataFrame(
+        {column: [values[0]] for column, values in columns.items()}
+    ).to_parquet(mapped_dir / "4qp3.tmp.parquet", index=False)
 
     assert tasks.scatter_collate_alignments(data_dir=tmp_path) == [["ab"], ["xy"]]
     tasks.collate_alignments(data_dir=tmp_path, partition=["ab"])
@@ -291,6 +1676,7 @@ def test_collate_alignments_writes_query_addressable_shards(tmp_path):
     )
     assert shard["query_entry"].tolist() == ["1abc", "2abd"]
     assert "3xyz" not in set(shard["query_entry"])
+    assert set(shard.columns) == set(columns)
 
 
 def test_empty_alignment_scatter_has_noop_branch(tmp_path):
@@ -298,72 +1684,597 @@ def test_empty_alignment_scatter_has_noop_branch(tmp_path):
     tasks.collate_alignments(data_dir=tmp_path, partition=[])
 
 
-def test_ligand_cluster_scatter_requires_both_node_levels(tmp_path):
-    metric = "sucos_shape_pocket_qcov"
-    expected = [[(metric, 50)]]
-    assert (
-        tasks.scatter_make_components_and_communities(
-            data_dir=tmp_path,
-            metrics=[metric],
-            thresholds=[50],
-            stop_on_cluster=0,
-            skip_existing_clusters=True,
-        )
-        == expected
+def test_mapping_scatter_requires_current_shard_manifest(tmp_path):
+    raw_dir = tmp_path / "dbs/subdbs/holo_foldseek/aln"
+    raw_dir.mkdir(parents=True)
+    pd.DataFrame({"query": ["1abc_A"]}).to_parquet(
+        raw_dir / "1abc.parquet", index=False
     )
 
-    for root in ["clusters", "ligand_clusters"]:
+    assert tasks.scatter_missing_alignment_mappings(
+        data_dir=tmp_path, batch_size=10
+    ) == [["ab"]]
+
+    current_columns = {
+        "query_entry": ["1abc"],
+        "target_entry": ["1abc"],
+        "query_chain_mapped": ["A"],
+        "target_chain_mapped": ["A"],
+        "source": ["foldseek"],
+        "qcov": [1.0],
+        "fident": [1.0],
+        "seqsim": [1.0],
+        "query_pocket_residue_numbers": [[1]],
+        "target_pocket_residue_numbers": [[1]],
+        "pocket_residue_identity": [bytes([1])],
+        "lddt": [1.0],
+    }
+    release = tasks._alignment_release_path(
+        data_dir=tmp_path,
+        search_db="holo",
+        alignment_type="foldseek",
+        shard="ab",
+    )
+    release.parent.mkdir(parents=True)
+    pd.DataFrame(current_columns).to_parquet(release, index=False)
+    _write_alignment_mapping_manifest(tmp_path, "ab")
+    assert tasks.scatter_missing_alignment_mappings(
+        data_dir=tmp_path, batch_size=10
+    ) == [[]]
+
+
+def test_map_batch_alignments_publishes_atomic_shard(tmp_path, monkeypatch):
+    raw_dir = tmp_path / "dbs/subdbs/holo_foldseek/aln"
+    raw_dir.mkdir(parents=True)
+    pd.DataFrame({"query": ["1abc_A"], "target_pdb_id": ["1abc"]}).to_parquet(
+        raw_dir / "1abc.parquet", index=False
+    )
+    _write_alignment_chain_lookup(tmp_path)
+    calls = []
+
+    class FakeScorer:
+        entries = {}
+
+        def map_alignment_files(self, *_args, **kwargs):
+            calls.append(kwargs)
+            output = kwargs["mapped_db_dir"] / "holo_foldseek/mapped_aln/1abc.parquet"
+            output.parent.mkdir(parents=True)
+            pd.DataFrame(
+                {
+                    "query_entry": ["1abc"],
+                    "target_entry": ["2def"],
+                    "query_chain_mapped": ["A"],
+                    "target_chain_mapped": ["B"],
+                    "source": ["foldseek"],
+                    "qcov": [1.0],
+                    "fident": [1.0],
+                    "seqsim": [1.0],
+                    "query_pocket_residue_numbers": [[1]],
+                    "target_pocket_residue_numbers": [[2]],
+                    "pocket_residue_identity": [bytes([1])],
+                    "lddt": [1.0],
+                }
+            ).to_parquet(output, index=False)
+            return [output]
+
+    monkeypatch.setattr(
+        tasks.utils,
+        "get_scorer",
+        lambda **_kwargs: (FakeScorer(), ["1abc"], tmp_path / "unused"),
+    )
+    scratch = tmp_path / "scratch"
+    tasks.map_batch_alignments(
+        data_dir=tmp_path,
+        shards=["ab"],
+        scorer_cfg=SimpleNamespace(sub_databases=["holo"]),
+        force_update=False,
+        scratch_dir=scratch,
+    )
+
+    release = tasks._alignment_release_path(
+        data_dir=tmp_path,
+        search_db="holo",
+        alignment_type="foldseek",
+        shard="ab",
+    )
+    assert pd.read_parquet(release)["query_entry"].tolist() == ["1abc"]
+    assert tasks.alignment_mapping_shard_is_current(data_dir=tmp_path, shard="ab")
+    assert not (tmp_path / "dbs/subdbs/holo_foldseek/mapped_aln").exists()
+    assert not any(scratch.iterdir())
+
+    tasks.map_batch_alignments(
+        data_dir=tmp_path,
+        shards=["ab"],
+        scorer_cfg=SimpleNamespace(sub_databases=["holo"]),
+        force_update=False,
+        scratch_dir=scratch,
+    )
+    assert len(calls) == 1
+
+
+def test_map_batch_alignments_records_and_skips_oversized_queries(
+    tmp_path, monkeypatch
+) -> None:
+    raw_dir = tmp_path / "dbs/subdbs/holo_foldseek/aln"
+    raw_dir.mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "query": ["1abc_A", "1abc_A"],
+            "target_pdb_id": ["1abc", "1abc"],
+        }
+    ).to_parquet(raw_dir / "1abc.parquet", index=False)
+    _write_alignment_chain_lookup(tmp_path)
+
+    class FakeScorer:
+        entries = {}
+
+        def map_alignment_files(self, *_args, **_kwargs):
+            raise AssertionError("oversized query must not be mapped")
+
+    monkeypatch.setattr(
+        tasks.utils,
+        "get_scorer",
+        lambda **_kwargs: (FakeScorer(), [], tmp_path / "unused"),
+    )
+
+    tasks.map_batch_alignments(
+        data_dir=tmp_path,
+        shards=["ab"],
+        scorer_cfg=SimpleNamespace(
+            sub_databases=["holo"], max_alignment_rows_per_query=1
+        ),
+        force_update=True,
+        scratch_dir=tmp_path / "scratch",
+    )
+
+    manifest = json.loads(
+        tasks._alignment_mapping_manifest_path(
+            data_dir=tmp_path, shard="ab"
+        ).read_text()
+    )
+    assert manifest["skipped_queries"] == {
+        "1abc": {
+            "reason": "raw_alignment_row_budget_exceeded",
+            "maximum_rows": 1,
+            "total_rows": 2,
+            "rows_by_alignment_type": {"foldseek": 2},
+        }
+    }
+    release = tasks._alignment_release_path(
+        data_dir=tmp_path,
+        search_db="holo",
+        alignment_type="foldseek",
+        shard="ab",
+    )
+    assert pd.read_parquet(release).empty
+    assert tasks.alignment_mapping_shard_is_current(data_dir=tmp_path, shard="ab")
+
+
+def test_alignment_chain_lookup_compacts_mapping_inputs(tmp_path) -> None:
+    from plinder.core.scores.entries import load_alignment_entry_views
+
+    index = tmp_path / "index"
+    index.mkdir()
+    pd.DataFrame(
+        {
+            "entry_pdb_id": ["1abc", "1abc"],
+            "ligand_is_proper": [True, False],
+            "ligand_neighboring_residues": [
+                ["1.A_10_9_10", "1.A_11_10_11"],
+                ["1.A_99_98_99"],
+            ],
+        }
+    ).to_parquet(index / "annotation_table.parquet", index=False)
+    pd.DataFrame(
+        {
+            "entry_pdb_id": ["1abc", "1abc"],
+            "chain_asym_id": ["A", "B"],
+            "chain_auth_id": ["X", "Y"],
+            "chain_receptor_type": ["protein", "dna"],
+        }
+    ).to_parquet(index / "entry_chains.parquet", index=False)
+
+    lookup = tasks.make_alignment_chain_lookup(
+        data_dir=tmp_path,
+        scratch_dir=tmp_path / "scratch",
+        threads=1,
+    )
+
+    frame = pd.read_parquet(lookup)
+    assert frame["chain_asym_id"].tolist() == ["A"]
+    assert frame.loc[0, "pocket_residue_numbers"].tolist() == [10, 11]
+    assert frame.loc[0, "pocket_residue_indices"].tolist() == [9, 10]
+    assert tasks._completed_alignment_chain_lookup(tmp_path) is not None
+    manifest = tmp_path / tasks.ALIGNMENT_CHAIN_LOOKUP_MANIFEST_RELATIVE
+    assert manifest.is_file()
+    views = load_alignment_entry_views(lookup_path=lookup, pdb_ids=["1abc"])
+    assert views["1abc"].author_to_asym == {"X": "A"}
+    assert views["1abc"].pocket_index_to_number_per_chain == {"A": {9: 10, 10: 11}}
+
+    annotation = index / "annotation_table.parquet"
+    annotation_frame = pd.read_parquet(annotation)
+    annotation_frame.loc[0, "ligand_is_proper"] = False
+    annotation_frame.to_parquet(annotation, index=False)
+    assert tasks._completed_alignment_chain_lookup(tmp_path) is None
+
+
+def test_finalize_index_preserves_current_alignment_lookup(
+    tmp_path, monkeypatch
+) -> None:
+    _write_alignment_chain_lookup(tmp_path)
+    annotation = tmp_path / "index" / "annotation_table.parquet"
+
+    def enrich_index(*, data_dir: Path) -> None:
+        frame = pd.read_parquet(data_dir / "index" / "annotation_table.parquet")
+        frame["example_cluster"] = "c0"
+        frame.to_parquet(data_dir / "index" / "annotation_table.parquet", index=False)
+
+    monkeypatch.setattr(tasks.utils, "finalize_index", enrich_index)
+    monkeypatch.setattr(
+        tasks.utils, "create_nonredundant_dataset", lambda *, data_dir: None
+    )
+    tasks.finalize_index(data_dir=tmp_path)
+
+    assert "example_cluster" in pd.read_parquet(annotation).columns
+    assert tasks._completed_alignment_chain_lookup(tmp_path) is not None
+
+
+def test_component_reduction_scatter_reads_each_physical_source_once(
+    tmp_path, monkeypatch
+):
+    score_a = tmp_path / "scores-a.parquet"
+    score_b = tmp_path / "scores-b.parquet"
+    ligand = tmp_path / "ligands.parquet"
+
+    def sources(*, data_dir, metric):
+        del data_dir
+        if metric == "tanimoto_similarity_ecfp4_1024":
+            return [ligand]
+        return [score_a, score_b]
+
+    monkeypatch.setattr(tasks.clusters, "component_score_sources", sources)
+
+    assert tasks.scatter_component_reduction_sources(
+        data_dir=tmp_path,
+        metrics=[
+            "protein_lddt_max",
+            "sucos_shape_pocket_qcov",
+            "tanimoto_similarity_ecfp4_1024",
+        ],
+        batch_size=2,
+    ) == [[str(ligand), str(score_a)], [str(score_b)]]
+
+
+def test_score_partition_collation_stages_atomically_from_scratch(tmp_path):
+    source = tmp_path / "dbs" / "subdbs" / "search_db=holo"
+    source.mkdir(parents=True)
+    pd.DataFrame({"query_system": ["a"], "similarity": [30]}).to_parquet(
+        source / "abc1.parquet", index=False
+    )
+    pd.DataFrame({"query_system": ["b"], "similarity": [50]}).to_parquet(
+        source / "def1.parquet", index=False
+    )
+
+    tasks.collate_partitions(
+        data_dir=tmp_path,
+        partition=["1"],
+        scratch_dir=tmp_path / "scratch",
+        threads=1,
+    )
+
+    output = pd.read_parquet(tmp_path / "scores" / "search_db=holo" / "1.parquet")
+    assert output.sort_values("query_system").to_dict("records") == [
+        {"query_system": "a", "similarity": 30, "search_db": "holo"},
+        {"query_system": "b", "similarity": 50, "search_db": "holo"},
+    ]
+    assert not (tmp_path / "scores" / "search_db=holo" / "1.parquet.tmp").exists()
+
+
+def test_component_reduction_task_copies_generic_source_once(tmp_path, monkeypatch):
+    source = tmp_path / "scores.parquet"
+    source.write_bytes(b"scores")
+    scratch = tmp_path / "scratch"
+    calls = []
+
+    monkeypatch.setattr(
+        tasks.clusters,
+        "component_score_sources",
+        lambda **kwargs: [],
+    )
+    monkeypatch.setattr(
+        tasks.clusters,
+        "component_node_universe",
+        lambda **kwargs: (["l1", "l2"], {"s1", "s2"}),
+    )
+    monkeypatch.setattr(
+        tasks.clusters,
+        "score_component_reduction_is_complete",
+        lambda **kwargs: False,
+    )
+
+    def record_reduction(**kwargs):
+        assert kwargs["read_path"].read_bytes() == b"scores"
+        calls.append(kwargs["metric"])
+        return {"outputs": []}
+
+    monkeypatch.setattr(
+        tasks.clusters,
+        "make_score_component_reduction",
+        record_reduction,
+    )
+
+    tasks.make_component_reductions(
+        data_dir=tmp_path,
+        source_paths=[str(source)],
+        metrics=["protein_lddt_max", "sucos_shape_pocket_qcov"],
+        thresholds=[30, 50, 70, 90, 100],
+        scratch_dir=scratch,
+        force_update=False,
+    )
+
+    assert calls == ["protein_lddt_max", "sucos_shape_pocket_qcov"]
+    assert list(scratch.iterdir()) == []
+
+
+def test_component_reduction_metric_workers_must_be_positive(tmp_path):
+    with pytest.raises(ValueError, match="metric workers must be positive"):
+        tasks.make_component_reductions(
+            data_dir=tmp_path,
+            source_paths=["unused.parquet"],
+            metrics=["pocket_qcov"],
+            thresholds=[30],
+            scratch_dir=tmp_path / "scratch",
+            force_update=False,
+            metric_workers=0,
+        )
+
+
+def test_clustering_plan_matches_slurm_array_bounds(tmp_path, monkeypatch):
+    from plinder.data.pipeline.score import _community_batch, plan_clustering
+
+    monkeypatch.setattr(
+        "plinder.data.pipeline.score.clusters.prepare_component_node_universe",
+        lambda data_dir: {"status": "complete"},
+    )
+    monkeypatch.setattr(
+        tasks,
+        "scatter_component_reduction_sources",
+        lambda **kwargs: [
+            ["scores-a.parquet", "scores-b.parquet"],
+            ["scores-c.parquet"],
+        ],
+    )
+
+    plan = plan_clustering(
+        tmp_path,
+        metrics=["pocket_qcov", "tanimoto_similarity_ecfp4_1024"],
+        thresholds=[30, 100],
+        source_batch_size=2,
+        community_batch_size=3,
+    )
+
+    assert plan["source_count"] == 3
+    assert plan["component_reduction_batch_count"] == 2
+    assert plan["community_task_count"] == 4
+    assert plan["community_batch_count"] == 2
+    assert _community_batch(
+        metrics=plan["metrics"],
+        thresholds=plan["thresholds"],
+        batch_index=1,
+        batch_size=3,
+    ) == [("tanimoto_similarity_ecfp4_1024", 30)]
+
+
+def test_sucos_release_export_retains_scores_below_cluster_cutoff(tmp_path):
+    from plinder.data.pipeline.score import (
+        MANIFEST_RELATIVE,
+        PLAN_RELATIVE,
+        SCORE_WORK_RELATIVE,
+        _source_signature,
+        export_sucos_shape_pocket_qcov_batch,
+        finalize_sucos_shape_pocket_qcov_export,
+    )
+
+    manifest = tmp_path / MANIFEST_RELATIVE
+    manifest.parent.mkdir(parents=True)
+    pd.DataFrame({"pdb_id": ["1abc", "2def"], "shard": ["ab", "de"]}).to_parquet(
+        manifest, index=False
+    )
+    score_work = tmp_path / SCORE_WORK_RELATIVE
+    pd.DataFrame({"pdb_id": ["1abc", "2def"]}).to_parquet(score_work, index=False)
+    (tmp_path / PLAN_RELATIVE).write_text(
+        json.dumps({"manifest": _source_signature(manifest)})
+    )
+
+    rows = [
+        ("ab", "1abc", "B", "2def", "Y", 0.2, 0.5),
+        ("de", "2def", "Y", "1abc", "B", 0.8, 0.5),
+    ]
+    for shard, query, query_asym, target, target_asym, qcov, sucos in rows:
+        candidate = {
+            "query_system": f"{query}_system",
+            "query_ligand_id": f"{query}__1__1.{query_asym}",
+            "query_entry": query,
+            "query_ligand_asym_id": query_asym,
+            "target_system": f"{target}_system",
+            "target_ligand_id": f"{target}__1__1.{target_asym}",
+            "target_entry": target,
+            "target_ligand_asym_id": target_asym,
+            "protein_mapping": "1.A:1.X",
+            "protein_mapper": "foldseek",
+            "pocket_qcov": qcov,
+        }
+        candidate_path = (
+            tmp_path
+            / "scores"
+            / "ligand_3d_candidate_shards"
+            / f"shard={shard}.parquet"
+        )
+        candidate_path.parent.mkdir(parents=True, exist_ok=True)
+        pq.write_table(
+            pa.Table.from_pylist(
+                [candidate], schema=schemas.LIGAND_3D_CANDIDATE_SCHEMA
+            ),
+            candidate_path,
+        )
+        pair_path = tmp_path / "scores" / "ligand_3d_by_query" / f"{shard}.parquet"
+        pair_path.parent.mkdir(parents=True, exist_ok=True)
+        pq.write_table(
+            pa.Table.from_pylist(
+                [
+                    {
+                        "query_entry": query,
+                        "query_ligand_asym_id": query_asym,
+                        "target_entry": target,
+                        "target_ligand_asym_id": target_asym,
+                        "shape": 0.5,
+                        "color": 0.5,
+                        "sucos_shape": sucos,
+                    }
+                ],
+                schema=schemas.LIGAND_3D_SCORE_SCHEMA,
+            ),
+            pair_path,
+        )
+
+    shard_dir = tmp_path / "release-shards"
+    for batch_index in range(2):
+        export_sucos_shape_pocket_qcov_batch(
+            tmp_path,
+            output_dir=shard_dir,
+            batch_index=batch_index,
+            batch_size=1,
+            scratch_dir=tmp_path / "scratch" / str(batch_index),
+            threads=1,
+            memory_limit="1GB",
+        )
+    output = tmp_path / "exports" / "all_sucos_shape_pocket_qcov.parquet"
+    report = finalize_sucos_shape_pocket_qcov_export(
+        tmp_path,
+        source_dir=shard_dir,
+        output=output,
+        scratch_dir=tmp_path / "finalize-scratch",
+        threads=1,
+        memory_limit="1GB",
+    )
+
+    exported = pd.read_parquet(output)
+    assert sorted(exported["similarity"].tolist()) == [10, 40]
+    assert report["row_count"] == 2
+    assert (
+        finalize_sucos_shape_pocket_qcov_export(
+            tmp_path,
+            source_dir=shard_dir,
+            output=output,
+            scratch_dir=tmp_path / "finalize-scratch",
+            threads=1,
+            memory_limit="1GB",
+        )
+        == report
+    )
+
+
+def test_clustering_statistics_validate_complete_monotonic_artifacts(tmp_path):
+    from plinder.data.pipeline.score import summarize_clustering_artifacts
+    from plinder.data.pipeline.utils import _read_local_cluster_rows
+
+    metric = "pocket_qcov"
+    for threshold, labels in [(100, ["c0", "c1"]), (50, ["c0", "c0"])]:
         for cluster, directed in [
-            ("components", True),
             ("components", False),
+            ("components", True),
             ("communities", False),
         ]:
             path = (
                 tmp_path
-                / root
+                / "ligand_clusters"
                 / f"cluster={cluster}"
                 / f"directed={directed}"
                 / f"metric={metric}"
-                / "threshold=50.parquet"
+                / f"threshold={threshold}.parquet"
             )
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.touch()
-        if root == "clusters":
-            assert (
-                tasks.scatter_make_components_and_communities(
-                    data_dir=tmp_path,
-                    metrics=[metric],
-                    thresholds=[50],
-                    stop_on_cluster=0,
-                    skip_existing_clusters=True,
-                )
-                == expected
-            )
+            pd.DataFrame(
+                {
+                    "ligand_id": ["l1", "l2"],
+                    "label": labels,
+                    "metric": [metric, metric],
+                    "threshold": [threshold, threshold],
+                    "cluster": [cluster, cluster],
+                    "directed": [directed, directed],
+                }
+            ).to_parquet(path, index=False)
 
-    assert tasks.scatter_make_components_and_communities(
-        data_dir=tmp_path,
+    report = summarize_clustering_artifacts(
+        tmp_path,
         metrics=[metric],
-        thresholds=[50],
-        stop_on_cluster=0,
-        skip_existing_clusters=True,
-    ) == [[]]
-
-
-def test_empty_cached_cluster_chunk_is_a_noop(tmp_path, monkeypatch):
-    def fail_if_called(**kwargs):
-        pytest.fail(f"cluster computation should not run: {kwargs}")
-
-    monkeypatch.setattr(
-        tasks.clusters,
-        "make_components_and_communities",
-        fail_if_called,
+        thresholds=[100, 50],
     )
 
-    tasks.make_components_and_communities(
-        data_dir=tmp_path,
-        metric_threshold=[],
-        skip_existing_clusters=True,
+    assert report["status"] == "complete"
+    assert report["artifact_count"] == 6
+    assert report["issues"] == []
+    assert (tmp_path / "ligand_clusters" / "stats.json").is_file()
+    stats = pd.read_parquet(tmp_path / "ligand_clusters" / "stats.parquet")
+    weak = stats[stats["cluster"].eq("components") & ~stats["directed"]].set_index(
+        "threshold"
     )
+    assert weak.loc[100, "cluster_count"] == 2
+    assert weak.loc[50, "cluster_count"] == 1
+    # The diagnostics live under the same root but are not cluster-label rows.
+    cluster_rows = _read_local_cluster_rows(
+        root=tmp_path / "ligand_clusters",
+        node_column="ligand_id",
+    )
+    assert len(cluster_rows) == 12
+
+    strong_100 = (
+        tmp_path
+        / "ligand_clusters"
+        / "cluster=components"
+        / "directed=True"
+        / f"metric={metric}"
+        / "threshold=100.parquet"
+    )
+    pd.DataFrame(
+        {
+            "ligand_id": ["l1", "l2"],
+            "label": ["c0", "c0"],
+            "metric": [metric, metric],
+            "threshold": [100, 100],
+            "cluster": ["components", "components"],
+            "directed": [True, True],
+        }
+    ).to_parquet(strong_100, index=False)
+    with pytest.raises(ValueError, match="invalid clustering artifacts"):
+        summarize_clustering_artifacts(
+            tmp_path,
+            metrics=[metric],
+            thresholds=[100, 50],
+        )
+    invalid_report = json.loads(
+        (tmp_path / "ligand_clusters" / "stats.json").read_text()
+    )
+    assert invalid_report["status"] == "invalid"
+    assert any("fewer strong than weak" in issue for issue in invalid_report["issues"])
+
+
+def test_v3_score_slurm_exposes_exact_clustering_stages():
+    repository = Path(__file__).resolve().parents[3]
+    script_path = repository / "scripts" / "slurm" / "score_v3.sbatch"
+    if not script_path.is_file():
+        pytest.skip("Slurm assets are not installed in wheel-only test layouts")
+    script = script_path.read_text()
+
+    assert "plan-clusters)" in script
+    assert "component-reductions|communities)" in script
+    assert (
+        "finalize-alignments|finalize-ligands|finalize-scores|"
+        "finalize-ligand-3d-retries|finalize-index|merge-components|cluster-stats)"
+        in script
+    )
+    assert "PLINDER_CLUSTER_METRICS" in script
+    assert "PLINDER_CLUSTER_THRESHOLDS" in script
 
 
 def test_metaflow_graph_uses_canonical_ligand_archive_stage():
@@ -383,12 +2294,32 @@ def test_metaflow_graph_uses_canonical_ligand_archive_stage():
     assert "self.pipeline.join_collate_entries" in flow
     assert "self.next(self.scatter_make_canonical_ligand_archives)" in flow
     assert "def make_canonical_ligand_archives" in flow
+    assert "self.next(self.finalize_ligand_archives)" in flow
+    assert "self.pipeline.finalize_ligand_archives()" in flow
     assert "self.next(self.annotate_ligand_similarity)" in flow
     assert "self.pipeline.annotate_ligand_similarity()" in flow
     assert "self.next(self.scatter_collate_partitions)" in flow
     assert "self.next(self.scatter_collate_alignments)" in flow
     assert "self.pipeline.collate_alignments(self.input)" in flow
-    assert "self.next(self.scatter_make_components_and_communities)" in flow
+    assert "self.next(self.finalize_alignments)" in flow
+    assert "self.pipeline.finalize_alignments()" in flow
+    assert "self.next(self.scatter_map_batch_alignments)" in flow
+    assert "self.pipeline.map_batch_alignments(self.input)" in flow
+    assert "self.pipeline.collate_ligand_3d_candidates(self.input)" in flow
+    assert "self.next(self.plan_ligand_3d_scores)" in flow
+    assert "self.pipeline.plan_ligand_3d_scores()" in flow
+    assert "self.pipeline.make_ligand_3d_scores(self.input)" in flow
+    assert "self.pipeline.collate_ligand_3d_scores(self.input)" in flow
+    assert "self.pipeline.merge_ligand_3d_scores(self.input)" in flow
+    assert "self.pipeline.finalize_scores()" in flow
+    assert "self.next(self.scatter_export_sucos_shape_pocket_qcov)" in flow
+    assert "self.pipeline.export_sucos_shape_pocket_qcov(self.input)" in flow
+    assert "self.pipeline.finalize_sucos_export()" in flow
+    assert "self.next(self.scatter_make_component_reductions)" in flow
+    assert "self.pipeline.merge_component_reductions()" in flow
+    assert "self.next(self.scatter_make_communities)" in flow
+    assert "self.next(self.summarize_clusters)" in flow
+    assert "self.pipeline.summarize_clusters()" in flow
     assert "self.next(self.finalize_index)" in flow
     assert "self.pipeline.finalize_index()" in flow
 
@@ -425,6 +2356,10 @@ def test_metaflow_graph_uses_canonical_ligand_archive_stage():
                 ):
                     edges[name].add(argument.attr)
 
+    assert edges["start"] == {"scatter_make_entries"}
+    assert edges["join_collate_entries"] == {"make_dbs"}
+    assert edges["make_dbs"] == {"scatter_make_canonical_ligand_archives"}
+
     reachable = {"start"}
     pending = ["start"]
     while pending:
@@ -434,6 +2369,27 @@ def test_metaflow_graph_uses_canonical_ligand_archive_stage():
                 reachable.add(target)
                 pending.append(target)
     assert reachable == set(steps)
+
+
+def test_v3_collation_slurm_uses_local_scratch_and_long_qos_for_global_steps():
+    repository = Path(__file__).resolve().parents[3]
+    script_path = repository / "scripts" / "slurm" / "collate_v3_shards.sbatch"
+    readme_path = repository / "scripts" / "slurm" / "README.md"
+    if not script_path.is_file() or not readme_path.is_file():
+        pytest.skip("Slurm assets are not installed in wheel-only test layouts")
+
+    script = script_path.read_text()
+    documentation = readme_path.read_text()
+
+    assert "${SLURM_TMPDIR:-/scratch/${USER}/plinder-collate-" in script
+    assert (
+        "sbatch \\\n  --qos=6hours \\\n  "
+        "--cpus-per-task=8 --mem=16G \\\n  "
+        '--output="${OUTPUT_ROOT}/logs/collate-plan-%j.out"'
+    ) in documentation
+    assert (
+        "sbatch \\\n  --qos=6hours \\\n  " "--cpus-per-task=4 --mem=48G"
+    ) in documentation
 
 
 def test_v3_ingest_configs_use_current_schema_and_stages():
@@ -452,16 +2408,32 @@ def test_v3_ingest_configs_use_current_schema_and_stages():
         assert cfg.data.plinder_iteration == "v3"
         if path.name == "make_protein_scores.yaml":
             assert "collate_alignments" in cfg.flow.run_specific_stages
+            assert "finalize_alignments" in cfg.flow.run_specific_stages
+            assert "export_sucos_shape_pocket_qcov" in cfg.flow.run_specific_stages
+            assert "finalize_sucos_export" in cfg.flow.run_specific_stages
+            assert "map_batch_alignments" in cfg.flow.run_specific_stages
+            assert cfg.flow.map_batch_alignments_batch_size == 1
+            assert cfg.foldseek.min_seq_id == 0.0
+            assert cfg.mmseqs.min_seq_id == 0.0
+            assert tasks.STAGES.index("map_batch_alignments") < tasks.STAGES.index(
+                "make_batch_scores"
+            )
         if path.name == "make_components.yaml":
             assert "collate_partitions" in cfg.flow.run_specific_stages
-            assert "make_components_and_communities" in cfg.flow.run_specific_stages
+            assert "make_component_reductions" in cfg.flow.run_specific_stages
+            assert "merge_component_reductions" in cfg.flow.run_specific_stages
+            assert "make_communities" in cfg.flow.run_specific_stages
+            assert "summarize_clusters" in cfg.flow.run_specific_stages
             assert "finalize_index" in cfg.flow.run_specific_stages
         if path.name == "make_entries_ligands.yaml":
             assert "collate_entries" in cfg.flow.run_specific_stages
+            assert "finalize_ligand_archives" in cfg.flow.run_specific_stages
             assert "make_ligands" not in cfg.flow.run_specific_stages
 
 
 def test_make_canonical_ligand_archives_only_archives_asu_sdfs(tmp_path):
+    from plinder.data.pipeline.score import finalize_ligand_archives
+
     canonical = tmp_path / "raw_entries" / "ab" / "1abc" / "ligand_files"
     canonical.mkdir(parents=True)
     (canonical / "A.sdf").write_text("canonical")
@@ -472,9 +2444,24 @@ def test_make_canonical_ligand_archives_only_archives_asu_sdfs(tmp_path):
 
     tasks.make_canonical_ligand_archives(data_dir=tmp_path, two_char_codes=["ab"])
 
-    archive = tmp_path / "ligand_archives" / "ab.zip"
-    with ZipFile(archive) as handle:
-        assert handle.namelist() == ["1abc/ligand_files/A.sdf"]
+    archive = tmp_path / "ligand_archives" / "ab.parquet"
+    packed = pd.read_parquet(archive)
+    assert packed[["pdb_id", "ligand_asym_id"]].to_dict("records") == [
+        {"pdb_id": "1abc", "ligand_asym_id": "A"}
+    ]
+    assert packed["sdf"].tolist() == [b"canonical"]
+    index = tmp_path / "index"
+    index.mkdir()
+    pd.DataFrame({"entry_pdb_id": ["1abc"], "ligand_asym_id": ["A"]}).to_parquet(
+        index / "annotation_table.parquet", index=False
+    )
+    report = finalize_ligand_archives(tmp_path)
+    assert report == {
+        "status": "complete",
+        "shard_count": 1,
+        "ligand_count": 1,
+        "compressed_bytes": archive.stat().st_size,
+    }
 
 
 def test_make_sub_dbs_loads_normalized_entry_chain_index(tmp_path, monkeypatch):
@@ -507,9 +2494,57 @@ def test_make_sub_dbs_loads_normalized_entry_chain_index(tmp_path, monkeypatch):
     monkeypatch.setattr(
         tasks.databases,
         "make_sub_dbs",
-        lambda db_dir, db_sources, entries: observed.update(entries=entries),
+        lambda db_dir, db_sources, entries, **kwargs: observed.update(
+            entries=entries,
+            kwargs=kwargs,
+        ),
     )
 
     tasks.make_sub_dbs(data_dir=tmp_path, sub_databases=["holo", "apo", "pred"])
 
     assert observed["entries"] is sentinel
+    assert observed["kwargs"] == {
+        "identifiers_by_database": None,
+        "tmp_dir": None,
+        "threads": 1,
+    }
+
+
+def test_make_holo_sub_dbs_selects_only_protein_receptor_chains(tmp_path, monkeypatch):
+    index_dir = tmp_path / "index"
+    index_dir.mkdir()
+    (tmp_path / "dbs").mkdir()
+    pd.DataFrame(
+        {
+            "entry_pdb_id": ["1abc", "1abc", "2def"],
+            "chain_auth_id": ["X", "Y", "Z"],
+            "chain_receptor_type": ["protein", "protein", "dna"],
+            "chain_is_holo": [True, False, True],
+        }
+    ).to_parquet(index_dir / "entry_chains.parquet", index=False)
+
+    observed = {}
+    lookup_calls = []
+    monkeypatch.setattr(tasks.utils, "get_db_sources", lambda **kwargs: {})
+    monkeypatch.setattr(
+        tasks.databases,
+        "make_sub_dbs",
+        lambda db_dir, db_sources, entries, **kwargs: observed.update(
+            entries=entries,
+            kwargs=kwargs,
+        ),
+    )
+    monkeypatch.setattr(
+        tasks,
+        "make_alignment_chain_lookup",
+        lambda **kwargs: lookup_calls.append(kwargs),
+    )
+
+    tasks.make_sub_dbs(data_dir=tmp_path, sub_databases=["holo"])
+
+    assert observed["entries"] is None
+    assert observed["kwargs"]["identifiers_by_database"] == {
+        "holo_foldseek": {"pdb_00001abc_xyz-enrich_X"},
+        "holo_mmseqs": {"1abc_X"},
+    }
+    assert lookup_calls == [{"data_dir": tmp_path, "scratch_dir": None, "threads": 1}]
