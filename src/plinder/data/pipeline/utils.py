@@ -16,7 +16,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 import pandas as pd
 import pyarrow.parquet as pq
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 
 from plinder.core.utils import schemas
 from plinder.core.utils.log import setup_logger
@@ -95,9 +95,19 @@ def entry_exists(*, entry_dir: Path, pdb_id: str) -> bool:
     ):
         return False
     try:
-        if "system_receptor_type" not in pq.read_schema(output).names:
+        if (
+            "system_receptor_type"
+            not in pq.read_schema(  # type: ignore[no-untyped-call]
+                output
+            ).names
+        ):
             return False
-        if "chain_receptor_type" not in pq.read_schema(entry_chains).names:
+        if (
+            "chain_receptor_type"
+            not in pq.read_schema(  # type: ignore[no-untyped-call]
+                entry_chains
+            ).names
+        ):
             return False
         required_biounit_columns = {
             "entry_pdb_id",
@@ -107,7 +117,9 @@ def entry_exists(*, entry_dir: Path, pdb_id: str) -> bool:
             "chain_role",
         }
         if not required_biounit_columns.issubset(
-            pq.read_schema(entry_biounit_chains).names
+            pq.read_schema(  # type: ignore[no-untyped-call]
+                entry_biounit_chains
+            ).names
         ):
             return False
     except Exception:
@@ -140,8 +152,25 @@ def get_scorer(
     pdb_ids: list[str],
     scorer_cfg: DictConfig,
     load_entries: bool,
+    foldseek_cfg: DictConfig | None = None,
+    mmseqs_cfg: DictConfig | None = None,
+    scratch_dir: Path | None = None,
 ) -> tuple["Scorer", list[str], Path]:
+    from plinder.data.pipeline.config import FoldseekConfig, MMSeqsConfig
     from plinder.data.utils.annotations.get_similarity_scores import Scorer
+
+    foldseek_config = (
+        OmegaConf.to_object(foldseek_cfg)
+        if foldseek_cfg is not None
+        else FoldseekConfig()
+    )
+    mmseqs_config = (
+        OmegaConf.to_object(mmseqs_cfg) if mmseqs_cfg is not None else MMSeqsConfig()
+    )
+    if not isinstance(foldseek_config, FoldseekConfig):
+        raise TypeError("foldseek configuration did not resolve to FoldseekConfig")
+    if not isinstance(mmseqs_config, MMSeqsConfig):
+        raise TypeError("mmseqs configuration did not resolve to MMSeqsConfig")
 
     # need holo to db to compare against independently of what to score
     sub_dbs = list(set(scorer_cfg.sub_databases).union(["holo"]))
@@ -160,7 +189,8 @@ def get_scorer(
         entry_ids = pdb_ids
     scores_dir = data_dir / "scores"
     sub_db_dir = data_dir / "dbs" / "subdbs"
-    batch_db_dir = data_dir / "dbs" / "subdbs" / "batch_dbs" / hashed_contents
+    batch_db_root = scratch_dir or data_dir / "dbs" / "subdbs" / "batch_dbs"
+    batch_db_dir = batch_db_root / hashed_contents
     batch_db_dir.mkdir(exist_ok=True, parents=True)
     return (
         Scorer(
@@ -169,6 +199,11 @@ def get_scorer(
             db_dir=sub_db_dir,
             scores_dir=scores_dir,
             minimum_threshold=scorer_cfg.minimum_threshold,
+            minimum_thresholds=dict(scorer_cfg.minimum_thresholds),
+            max_protein_chains=scorer_cfg.max_protein_chains,
+            max_ligand_chains=scorer_cfg.max_ligand_chains,
+            foldseek_config=foldseek_config,
+            mmseqs_config=mmseqs_config,
         ),
         entry_ids,
         batch_db_dir,
@@ -284,6 +319,8 @@ def partition_batch_scores(*, partition_dir: Path, scores_dir: Path) -> None:
     # collect the fragmented parquets
     dfs = []
     for pqt in scores_dir.glob("*.parquet"):
+        if pqt.name.endswith(".tmp.parquet"):
+            continue
         df = pd.read_parquet(pqt)
         if not df.empty:
             dfs.append(df)
@@ -311,7 +348,9 @@ def get_pdb_ids_in_scoring_dataset(*, data_dir: Path) -> dict[str, list[str]]:
     dbs = data_dir / "dbs" / "subdbs"
     for search_db in ["holo", "apo", "pred"]:
         found[search_db] = [
-            path.stem for path in (dbs / f"search_db={search_db}").glob("*parquet")
+            path.stem
+            for path in (dbs / f"search_db={search_db}").glob("*parquet")
+            if not path.name.endswith(".tmp.parquet")
         ]
     return found
 
@@ -337,8 +376,25 @@ def get_alns(
             found[search_db][aln_type] = [
                 path.stem
                 for path in (dbs / f"{search_db}_{aln_type}/{sub}/").glob("*parquet")
+                if not path.name.endswith(".tmp.parquet")
+                and (
+                    not mapped
+                    or _mapped_alignment_file_is_current(path, alignment_type=aln_type)
+                )
             ]
     return found
+
+
+def _mapped_alignment_file_is_current(path: Path, *, alignment_type: str) -> bool:
+    """Treat corrupt and pre-compact mapped files as incomplete cache entries."""
+    try:
+        columns = set(pq.read_schema(path).names)  # type: ignore[no-untyped-call]
+    except (OSError, ValueError) as exc:
+        LOG.warning(f"ignoring unreadable mapped alignment {path}: {exc}")
+        return False
+    return schemas.mapped_alignment_schema_is_current(
+        columns, alignment_type=alignment_type
+    )
 
 
 def should_run_stage(stage: str, run: list[str], skip: list[str]) -> bool:
@@ -413,6 +469,10 @@ def ingest_flow_control(func: Callable[..., T]) -> Callable[..., T]:
             return ret
         else:
             LOG.info(f"skipping {func.__name__}")
+            # Metaflow foreach joins need one no-op branch in order to remain
+            # reachable when a stage is excluded by run_specific_stages.
+            if is_scatter:
+                return [[]]
         return [[]]
 
     return inner
@@ -438,10 +498,8 @@ def _read_local_cluster_rows(*, root: Path, node_column: str) -> pd.DataFrame:
         "cluster",
         "directed",
     ]
-    frames = [
-        pd.read_parquet(path, columns=columns)
-        for path in sorted(root.rglob("*.parquet"))
-    ]
+    paths = sorted(root.glob("cluster=*/directed=*/metric=*/threshold=*.parquet"))
+    frames = [pd.read_parquet(path, columns=columns) for path in paths]
     if not frames:
         return pd.DataFrame(columns=columns)
     return pd.concat(frames, ignore_index=True)
@@ -476,28 +534,76 @@ def _pivot_cluster_rows(
 
 
 def add_cluster_columns(*, index: pd.DataFrame, data_dir: Path) -> pd.DataFrame:
-    """Merge locally generated system and ligand clusters into the index."""
-    result = index
-    for root_name, node_column, ligand in [
-        ("clusters", "system_id", False),
-        ("ligand_clusters", "ligand_id", True),
-    ]:
-        clusters = _read_local_cluster_rows(
-            root=data_dir / root_name,
-            node_column=node_column,
+    """Merge V3 ligand-level cluster labels into the index."""
+    node_column = "ligand_id"
+    cluster_root = data_dir / "ligand_clusters"
+    paths = sorted(
+        cluster_root.glob("cluster=*/directed=*/metric=*/threshold=*.parquet")
+    )
+    if not paths:
+        return index
+    node_ids = pd.Index(
+        index[node_column].dropna().astype(str).unique(),
+        name=node_column,
+    )
+    LOG.info(
+        "loading %d published ligand-cluster artifacts for %d ligand IDs",
+        len(paths),
+        len(node_ids),
+    )
+    cluster_columns: dict[str, Any] = {}
+    started = time()
+    for path_index, path in enumerate(paths, start=1):
+        relative_parts = path.relative_to(cluster_root).parts
+        partitions = {
+            key: value
+            for key, value in (
+                part.split("=", maxsplit=1) for part in relative_parts[:-1]
+            )
+        }
+        threshold = int(path.stem.split("=", maxsplit=1)[1])
+        directed = partitions["directed"].lower() == "true"
+        column = _cluster_column_name(
+            metric=partitions["metric"],
+            cluster=partitions["cluster"],
+            directed=directed,
+            threshold=threshold,
+            ligand=True,
         )
-        if clusters.empty:
-            continue
-        clusters = clusters[clusters[node_column].isin(set(index[node_column]))]
-        wide = _pivot_cluster_rows(
-            clusters,
-            node_column=node_column,
-            ligand=ligand,
-        )
-        replacement_columns = set(wide.columns).difference({node_column})
-        result = result.drop(
-            columns=list(replacement_columns.intersection(result.columns))
-        ).merge(wide, on=node_column, how="left", validate="many_to_one")
+        labels = pd.read_parquet(path, columns=[node_column, "label"])
+        if labels[node_column].duplicated().any():
+            raise ValueError(f"duplicate ligand IDs in cluster artifact: {path}")
+        labels[node_column] = labels[node_column].astype(str)
+        aligned = labels.set_index(node_column)["label"].reindex(node_ids)
+        cluster_columns[column] = aligned.astype("string[pyarrow]").array
+        if path_index % 10 == 0 or path_index == len(paths):
+            elapsed = time() - started
+            rate = path_index / elapsed
+            LOG.info(
+                "cluster index progress: loaded=%d/%d rate=%.2f/s " "eta_seconds=%.1f",
+                path_index,
+                len(paths),
+                rate,
+                (len(paths) - path_index) / rate,
+            )
+    wide = pd.DataFrame(
+        {node_column: node_ids.to_numpy(), **cluster_columns},
+        copy=False,
+    )
+    replacement_columns = set(wide.columns).difference({node_column})
+    LOG.info(
+        "merging %d ligand-level cluster columns into the annotation index",
+        len(replacement_columns),
+    )
+    result = index.drop(
+        columns=list(replacement_columns.intersection(index.columns))
+    ).merge(wide, on=node_column, how="left", validate="many_to_one")
+    LOG.info(
+        "cluster index merge complete: rows=%d columns=%d elapsed_seconds=%.1f",
+        len(result),
+        len(replacement_columns),
+        time() - started,
+    )
     return result
 
 
@@ -554,6 +660,27 @@ def add_ligand_3d_score_ability_column(
     *, index: pd.DataFrame, data_dir: Path
 ) -> pd.DataFrame:
     """Merge occurrence-level canonical-SDF scoreability into the index."""
+    expected = index["ligand_id"].notna()
+    if "system_type" in index:
+        expected &= index["system_type"].eq("holo")
+    if "ligand_is_proper" in index:
+        expected &= index["ligand_is_proper"].fillna(False)
+    scoreability_column = "ligand_is_3d_score_able"
+    if (
+        scoreability_column in index
+        and not index.loc[expected, scoreability_column].isna().any()
+    ):
+        abilities = index.loc[
+            index["ligand_id"].notna(), ["ligand_id", scoreability_column]
+        ].drop_duplicates()
+        conflicts = abilities.groupby("ligand_id")[scoreability_column].nunique()
+        if (conflicts > 1).any():
+            raise ValueError("conflicting 3D-scoreability annotations for a ligand")
+        result = index.copy()
+        result.loc[~expected, scoreability_column] = False
+        result[scoreability_column] = result[scoreability_column].astype("boolean")
+        return result
+
     ligand_dataset = data_dir / "ligands"
     if not ligand_dataset.is_dir():
         raise FileNotFoundError(f"missing ligand annotation dataset: {ligand_dataset}")
@@ -648,24 +775,37 @@ def add_aggregated_columns(*, index: pd.DataFrame) -> pd.DataFrame:
 
 def finalize_index(*, data_dir: Path) -> pd.DataFrame:
     """Merge local cluster labels into the V3 annotation parquet."""
+    started = time()
     index_path = data_dir / "index" / "annotation_table.parquet"
     if not index_path.is_file():
         raise FileNotFoundError(index_path)
+    LOG.info("loading annotation index for final enrichment: %s", index_path)
     index = pd.read_parquet(index_path)
+    LOG.info("loaded annotation index: rows=%d columns=%d", *index.shape)
     index = add_ligand_3d_score_ability_column(index=index, data_dir=data_dir)
+    LOG.info("merged ligand 3D-scoreability annotations")
     index = add_ligand_similarity_columns(index=index, data_dir=data_dir)
+    LOG.info("merged ligand similarity annotations")
     index = add_cluster_columns(index=index, data_dir=data_dir)
-    uniqueness_cluster = "pli_qcov__100__strong__component"
+    uniqueness_cluster = "pli_qcov__100__ligand__strong__component"
     if uniqueness_cluster in index.columns:
         labels = (
             index[uniqueness_cluster]
             .astype("string")
-            .fillna(index["system_id"].astype("string"))
+            .fillna(index["ligand_id"].astype("string"))
         )
         index["uniqueness"] = (
             index["system_id_no_biounit"].astype("string") + "_" + labels
         )
-    index.to_parquet(index_path, index=False)
+    temporary = index_path.with_suffix(".tmp.parquet")
+    LOG.info("writing enriched annotation index atomically: %s", index_path)
+    index.to_parquet(temporary, index=False)
+    temporary.replace(index_path)
+    LOG.info(
+        "final index enrichment complete: rows=%d columns=%d elapsed_seconds=%.1f",
+        *index.shape,
+        time() - started,
+    )
     return index
 
 
@@ -1012,7 +1152,7 @@ def rename_clusters(*, data_dir: Path) -> None:
     data_dir : Path
         plinder root dir
     """
-    cluster_dir = data_dir / "clusters"
+    cluster_dir = data_dir / "ligand_clusters"
     cluster_paths = [path for path in cluster_dir.rglob("*") if path.is_file()]
     for path in cluster_paths:
         if path.name == "data.parquet":

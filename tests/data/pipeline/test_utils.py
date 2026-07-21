@@ -1,5 +1,7 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
+from types import SimpleNamespace
+
 import pandas as pd
 import pytest
 from plinder.data.pipeline import utils
@@ -18,6 +20,19 @@ from plinder.data.pipeline import utils
 )
 def test_should_run_stage(funcname, run, skip, expect):
     assert utils.should_run_stage(funcname, run, skip) == expect
+
+
+def test_skipped_scatter_keeps_foreach_join_reachable() -> None:
+    class Pipeline:
+        cfg = SimpleNamespace(
+            flow=SimpleNamespace(run_specific_stages=["other"], skip_specific_stages=[])
+        )
+
+        @utils.ingest_flow_control
+        def scatter_example(self):
+            raise AssertionError("skipped scatter must not execute")
+
+    assert Pipeline().scatter_example() == [[]]
 
 
 @pytest.mark.parametrize(
@@ -280,11 +295,30 @@ def test_create_entry_biounit_chain_index_handles_empty_input(tmp_path):
     ]
 
 
+def test_scoreability_merge_reuses_complete_collated_column(tmp_path):
+    index = pd.DataFrame(
+        {
+            "ligand_id": ["1aaa__1__1.X", "1aaa__1__1.Y", None],
+            "system_type": ["holo", "holo", "apo"],
+            "ligand_is_proper": [True, False, False],
+            "ligand_is_3d_score_able": [True, True, None],
+        }
+    )
+
+    result = utils.add_ligand_3d_score_ability_column(
+        index=index,
+        data_dir=tmp_path,
+    )
+
+    assert result["ligand_is_3d_score_able"].tolist() == [True, False, False]
+    assert str(result["ligand_is_3d_score_able"].dtype) == "boolean"
+
+
 def test_finalize_index_creates_nonredundant_data_from_local_clusters(tmp_path):
     index_dir = tmp_path / "index"
     cluster_file = (
         tmp_path
-        / "clusters/cluster=components/directed=True/metric=pli_qcov"
+        / "ligand_clusters/cluster=components/directed=True/metric=pli_qcov"
         / "threshold=100.parquet"
     )
     index_dir.mkdir(parents=True)
@@ -321,7 +355,7 @@ def test_finalize_index_creates_nonredundant_data_from_local_clusters(tmp_path):
     ).to_parquet(ligand_dir / "part.parquet", index=False)
     pd.DataFrame(
         {
-            "system_id": ["1aaa__1__1.A__1.X", "1aaa__2__1.A__1.X"],
+            "ligand_id": ["1aaa__1__1.X", "1aaa__2__1.X"],
             "label": ["c0", "c0"],
             "metric": ["pli_qcov", "pli_qcov"],
             "cluster": ["components", "components"],
@@ -334,7 +368,11 @@ def test_finalize_index_creates_nonredundant_data_from_local_clusters(tmp_path):
     utils.create_nonredundant_dataset(data_dir=tmp_path)
 
     finalized = pd.read_parquet(index_dir / "annotation_table.parquet")
-    assert finalized["pli_qcov__100__strong__component"].tolist() == ["c0", "c0"]
+    assert finalized["pli_qcov__100__ligand__strong__component"].tolist() == [
+        "c0",
+        "c0",
+    ]
+    assert "pli_qcov__100__strong__component" not in finalized
     assert finalized.loc[0, "ligand_smiles_id"] == 0
     assert pd.isna(finalized.loc[1, "ligand_smiles_id"])
     assert finalized["ligand_is_3d_score_able"].tolist() == [True, False]
