@@ -40,6 +40,34 @@ from plinder.data.utils.annotations.save_utils import (
 LOG = setup_logger(__name__)
 
 
+def _materialize_packed_ligand_sdfs(
+    *, archive: Path, pdb_id: str, asym_ids: set[str]
+) -> Path:
+    """Materialize only one system's canonical SDFs from its shard Parquet."""
+    folder = archive.parent / pdb_id / "ligand_files"
+    missing = {
+        asym_id for asym_id in asym_ids if not (folder / f"{asym_id}.sdf").is_file()
+    }
+    if not missing:
+        return folder
+    packed = pd.read_parquet(
+        archive,
+        columns=["ligand_asym_id", "sdf"],
+        filters=[("pdb_id", "==", pdb_id), ("ligand_asym_id", "in", sorted(missing))],
+    )
+    observed = set(packed["ligand_asym_id"].astype(str))
+    absent = sorted(missing.difference(observed))
+    if absent:
+        raise ValueError(f"canonical ligand SDFs are missing for {pdb_id}: {absent}")
+    folder.mkdir(exist_ok=True, parents=True)
+    for row in packed.itertuples(index=False):
+        target = folder / f"{row.ligand_asym_id}.sdf"
+        temporary = target.with_suffix(".tmp.sdf")
+        temporary.write_bytes(row.sdf)
+        temporary.replace(target)
+    return folder
+
+
 class PlinderSystem:
     """
     Core class for interacting with a single system and its assets.
@@ -391,9 +419,18 @@ class PlinderSystem:
                 folder = self.canonical_ligand_dir
             else:
                 pdb_id = self.system_id.split("__", maxsplit=1)[0]
-                zips = get_zips_to_unpack(kind="ligand_archives", pdb_ids=[pdb_id])
-                [archive] = zips
-                folder = archive.parent / pdb_id / "ligand_files"
+                asym_ids = set(self.system["ligand_asym_id"].astype(str))
+                cfg = get_config()
+                archive_root = Path(cfg.data.plinder_dir) / cfg.data.ligand_archives
+                code = pdb_id[1:3]
+                archive = cpl.get_plinder_path(
+                    rel=f"{cfg.data.ligand_archives}/{code}.parquet"
+                )
+                folder = _materialize_packed_ligand_sdfs(
+                    archive=archive,
+                    pdb_id=pdb_id,
+                    asym_ids=asym_ids,
+                )
             if not folder.is_dir():
                 raise ValueError(f"canonical ligand directory does not exist: {folder}")
             self._canonical_ligand_folder = folder

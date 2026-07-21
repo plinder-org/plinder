@@ -1,8 +1,8 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
 from pathlib import Path
-from zipfile import ZipFile
 
+import pandas as pd
 import pytest
 from plinder.core.scores import reconstruct
 from plinder.core.scores.entries import LigandView
@@ -58,12 +58,16 @@ def test_prefetch_accepts_one_available_alignment_backend(tmp_path):
     assert paths == {"1abc": {"foldseek": foldseek}}
 
 
-def test_canonical_ligand_resolver_extracts_only_requested_member(tmp_path):
-    archive = tmp_path / "ligand_archives" / "ab.zip"
+def test_canonical_ligand_resolver_materializes_only_requested_member(tmp_path):
+    archive = tmp_path / "ligand_archives" / "ab.parquet"
     archive.parent.mkdir(parents=True)
-    with ZipFile(archive, "w") as handle:
-        handle.writestr("1abc/ligand_files/L.sdf", "requested")
-        handle.writestr("2abc/ligand_files/M.sdf", "other")
+    pd.DataFrame(
+        {
+            "pdb_id": ["1abc", "2abc"],
+            "ligand_asym_id": ["L", "M"],
+            "sdf": [b"requested", b"other"],
+        }
+    ).to_parquet(archive, index=False)
 
     ligand = LigandView(
         id="1abc__1__1.A__1.L__1.L",

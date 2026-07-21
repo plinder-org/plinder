@@ -202,11 +202,7 @@ def download_plinder_cmd(args: list[str] | None = None) -> None:
                     else "plinder.core.PlinderSystem"
                 )
                 LOG.info(f"skipping {attr} download; {consumer} fetches it lazily")
-        if path is not None and attr in [
-            "ligand_archives",
-            "linked_structures",
-            "systems",
-        ]:
+        if path is not None and attr in ["linked_structures", "systems"]:
             LOG.info(
                 f"extracting {getattr(cfg.data, attr)} archives, you may want to stretch your legs."
             )

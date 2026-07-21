@@ -6,7 +6,6 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 from pathlib import Path
-from zipfile import ZipFile
 
 import pandas as pd
 
@@ -199,17 +198,28 @@ def _canonical_ligand_resolver(
 
         cfg = get_config()
         code = ligand.pdb_id[-3:-1]
-        archive_relative = f"{cfg.data.ligand_archives}/{code}.zip"
+        archive_relative = f"{cfg.data.ligand_archives}/{code}.parquet"
         archive = _require_file(
             _release_file(relative=archive_relative, data_dir=data_dir),
             description=f"canonical ligand archive for {code}",
         )
-        member = f"{ligand.pdb_id}/ligand_files/{ligand.asym_id}.sdf"
-        with ZipFile(archive) as zip_file:
-            if member not in zip_file.namelist():
-                return None
-            zip_file.extract(member, path=archive.parent)
-        extracted = archive.parent / member
+        packed = pd.read_parquet(
+            archive,
+            columns=["sdf"],
+            filters=[
+                ("pdb_id", "==", ligand.pdb_id),
+                ("ligand_asym_id", "==", ligand.asym_id),
+            ],
+        )
+        if len(packed) != 1:
+            return None
+        extracted = (
+            archive.parent / ligand.pdb_id / "ligand_files" / f"{ligand.asym_id}.sdf"
+        )
+        extracted.parent.mkdir(exist_ok=True, parents=True)
+        temporary = extracted.with_suffix(".tmp.sdf")
+        temporary.write_bytes(packed.iloc[0]["sdf"])
+        temporary.replace(extracted)
         return extracted if extracted.is_file() else None
 
     return resolve

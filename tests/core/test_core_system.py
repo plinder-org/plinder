@@ -1,5 +1,4 @@
 from pathlib import Path
-from zipfile import ZIP_DEFLATED, ZipFile
 
 import numpy as np
 import pandas as pd
@@ -56,7 +55,7 @@ def test_plinder_system_system_files(read_plinder_mount):
     )
 
 
-def test_plinder_system_unpacks_canonical_ligand_archive(
+def test_plinder_system_materializes_canonical_ligand_archive(
     write_plinder_mount, monkeypatch
 ):
     from plinder.core.utils import config, cpl
@@ -64,10 +63,15 @@ def test_plinder_system_unpacks_canonical_ligand_archive(
     monkeypatch.setenv("PLINDER_OFFLINE", "true")
     config._config._clear()
     monkeypatch.setattr(cpl, "_CLIENTS", {})
-    archive = write_plinder_mount / "ligand_archives" / "av.zip"
+    archive = write_plinder_mount / "ligand_archives" / "av.parquet"
     archive.parent.mkdir(parents=True)
-    with ZipFile(archive, "w", compression=ZIP_DEFLATED) as zip_file:
-        zip_file.writestr("1avd/ligand_files/C.sdf", "canonical ASU ligand")
+    pd.DataFrame(
+        {
+            "pdb_id": ["1avd"],
+            "ligand_asym_id": ["C"],
+            "sdf": [b"canonical ASU ligand"],
+        }
+    ).to_parquet(archive, index=False)
 
     system = index.PlinderSystem(system_id="1avd__1__1.A__1.C")
 
