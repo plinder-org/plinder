@@ -1,5 +1,5 @@
 flow:
-  run_specific_stages: collate_partitions,make_components_and_communities,finalize_index
+  run_specific_stages: collate_partitions,make_component_reductions,merge_component_reductions,make_communities,summarize_clusters,finalize_index
   make_components_force_update: true
 data:
   plinder_mount: /plinder
