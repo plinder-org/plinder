@@ -168,18 +168,26 @@ protein similarity scoring for all `plinder` systems.
 Once the protein similarity scores are generated, we run
 component and community clustering.
 
-- `tasks.make_components_and_communities`: creates the `components` and `communities` clusters for given metrics at given thresholds
+- `tasks.make_component_reductions`: creates resumable, sharded weak/strong component reductions for all configured thresholds
+- `tasks.merge_component_reductions`: publishes exact ligand component labels from those reductions
+- `tasks.make_communities`: creates communities within the published weak components
   - This is a distributed task that is called in parallel for individual tuples of metric and threshold
   - It reads score partitions directly from the current ingest directory, not through the configured public release
-  - Receptor-only metrics use system graph nodes
-  - Pocket, PLI, and `sucos_shape_pocket_qcov` use ligand graph nodes and also produce a system projection in which any qualifying ligand pair connects the two systems
+  - V3 release clustering uses ligand graph nodes for pocket, interaction,
+    pocket-weighted ligand 3D, and chemical fingerprint similarities
+  - No ligand graph is projected or collapsed into a system-level graph
   - `shape`, `color`, and raw `sucos_shape` remain per-ligand diagnostic scores, but are not clustered because they are evaluated only when pocket coverage is positive
   - Side effects include writing the following files:
-    - `clusters/**`
-    - `ligand_clusters/**` (intermediate ligand-node labels)
+    - `ligand_clusters/**`
 
-- `tasks.finalize_index`: merges both cluster levels into the annotation parquet
-  - System-projection columns retain names such as `sucos_shape_pocket_qcov__50__strong__component`
+- `tasks.summarize_clusters`: validates the complete component/community matrix
+  before publication and writes compact cluster-size diagnostics
+  - It rejects missing artifacts, duplicate or null labels, inconsistent node
+    coverage, non-monotonic component results across thresholds, and invalid
+    relationships between weak components, strong components, and communities
+  - Side effects include writing `ligand_clusters/stats.{parquet,json}`
+
+- `tasks.finalize_index`: merges ligand cluster labels into the annotation parquet
   - Ligand-row columns are explicit, for example `sucos_shape_pocket_qcov__50__ligand__strong__component`
   - It creates `annotation_table_nonredundant.parquet` only after the PLI uniqueness cluster exists
 

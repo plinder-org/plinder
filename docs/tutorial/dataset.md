@@ -122,8 +122,8 @@ Index(['entry_pdb_id', 'entry_release_date', 'entry_oligomeric_state',
        'ligand_interacting_ligand_chains_CATH',
        'ligand_neighboring_ligand_chains_CATH',
        'system_ligand_chains_SCOP2', 'system_ligand_chains_SCOP2B',
-       'pli_qcov__100__strong__component',
-       'protein_lddt_qcov_weighted_sum__100__strong__component'],
+       'pli_qcov__100__ligand__strong__component',
+       'sucos_shape_pocket_qcov__100__ligand__strong__component'],
       dtype='object', length=500)
 ```
 
@@ -149,28 +149,32 @@ by the threshold for clustering.
 Show nested structure
 
 ```console
-$ tree clusters
+$ tree ligand_clusters
 
-clusters/
+ligand_clusters/
 ├── cluster=communities
 │   └── directed=False
 │       ├── metric=pli_qcov
 │       │   ├── threshold=100
 │       │   │   └── data.parquet
+│       │   ├── threshold=30
+│       │   │   └── data.parquet
 │       │   ├── threshold=50
 │       │   │   └── data.parquet
 │       │   ├── threshold=70
 │       │   │   └── data.parquet
-│       │   └── threshold=95
+│       │   └── threshold=90
 │       │       └── data.parquet
 │       ├── metric=pli_unique_qcov
 │       │   ├── threshold=100
 │       │   │   └── data.parquet
+│       │   ├── threshold=30
+│       │   │   └── data.parquet
 │       │   ├── threshold=50
 │       │   │   └── data.parquet
 │       │   ├── threshold=70
 │       │   │   └── data.parquet
-│       │   └── threshold=95
+│       │   └── threshold=90
 │       │       └── data.parquet
 ```
 
@@ -180,28 +184,19 @@ undirected graph at a similarity threshold of 70 %.
 ```python
 >>> import pandas as pd
 
->>> clus_file = "clusters/cluster=communities/directed=False/metric=pli_qcov/threshold=70/data.parquet"
+>>> clus_file = "ligand_clusters/cluster=communities/directed=False/metric=pli_qcov/threshold=70.parquet"
 >>> df = pd.read_parquet(clus_file)
 >>> df
-                            system_id   label    metric      cluster  directed  threshold
-0                   3mj2__1__1.A__1.B      c0  pli_qcov  communities     False         70
-1       4dh8__1__1.A_1.B__1.C_1.D_1.E      c0  pli_qcov  communities     False         70
-2                   7akb__1__1.A__1.C      c0  pli_qcov  communities     False         70
-3                   7mgj__2__1.B__1.F      c0  pli_qcov  communities     False         70
-4                   4fr4__6__1.F__1.S      c0  pli_qcov  communities     False         70
-...                               ...     ...       ...          ...       ...        ...
-479806          7xpv__1__2.A__2.C_2.D  c77190  pli_qcov  communities     False         70
-479807              4ret__1__1.A__1.I  c77191  pli_qcov  communities     False         70
-479808              7ks9__1__1.C__1.R  c77192  pli_qcov  communities     False         70
-479809              7s6n__1__1.A__1.H  c77193  pli_qcov  communities     False         70
-479810              7sc5__1__1.A__1.H  c77194  pli_qcov  communities     False         70
-
-[479811 rows x 6 columns]
+          ligand_id label    metric      cluster  directed  threshold
+0    3mj2__1__1.B     c0  pli_qcov  communities     False         70
+1    4dh8__1__1.C     c0  pli_qcov  communities     False         70
+2    7akb__1__1.C     c0  pli_qcov  communities     False         70
+...             ...    ...       ...          ...       ...        ...
 ```
 
-The table assigns a cluster to each system, depicted by the cluster ID in the
-`component` column.
-This means, all systems with the same cluster ID belong to the same cluster.
+The table assigns a cluster to each ligand instance. Ligands with the same
+cluster ID belong to the same cluster; these labels are not projected to whole
+systems.
 
 ## Accessing the splits
 

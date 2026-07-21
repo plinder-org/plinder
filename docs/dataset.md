@@ -82,21 +82,22 @@ Tables that lists all systems along with their annotations.
 - `entry_sources.parquet`: One row per PDB entry recording the exact source mmCIF major and minor revision used during ingest. This is normalized entry metadata and is not repeated on ligand rows.
 
 V3 cluster columns are merged only after local scoring and clustering finish.
-Receptor-only metrics have system-level labels. Clustered ligand-sensitive metrics,
-including pocket, PLI, and `sucos_shape_pocket_qcov`, have both a system projection
-used for split safety and a row-specific ligand label. Ligand columns include an
-explicit `__ligand__` marker, for example
-`sucos_shape_pocket_qcov__50__ligand__strong__component`; the corresponding
-projected system column is
-`sucos_shape_pocket_qcov__50__strong__component`. The gated `shape`, `color`, and
-raw `sucos_shape` values remain diagnostic scores and are not clustered directly.
+V3 similarity clusters use ligand-instance nodes throughout, including
+receptor-derived metrics because those scores are scoped to individual ligand
+pairs. Cluster columns therefore include an explicit `__ligand__` marker, for
+example `sucos_shape_pocket_qcov__50__ligand__strong__component`. They are not
+projected or collapsed into system-level clusters. The gated `shape`, `color`,
+and raw `sucos_shape` values remain diagnostic scores and are not clustered
+directly.
 
-V3 does not distribute the materialized `scores/` dataset. Instead, it distributes
-mapped Foldseek and MMseqs results in `alignments/`, ordered by query and target and
-compressed as deterministic two-character Parquet shards. The shard for a PDB ID is
-`pdb_id[-3:-1]`, matching the PDB archive convention. This keeps the number of files
-manageable while allowing Parquet predicate pushdown to read only row groups relevant
-to requested query and target entries. V2 retains the materialized `scores/` layout.
+V3 does not distribute the complete materialized `scores/` dataset. Instead, it
+distributes mapped Foldseek and MMseqs results in `alignments/`, ordered by query
+and target and compressed as deterministic two-character Parquet shards. The
+shard for a PDB ID is `pdb_id[-3:-1]`, matching the PDB archive convention. It
+also publishes the complete ligand-level
+`all_sucos_shape_pocket_qcov.parquet`, including similarities below the minimum
+clustering threshold. Other pairwise scores are reconstructed from the mapped
+alignments when needed.
 
 :::{include} table.html
 :::
@@ -201,9 +202,11 @@ save_reconstructed_system(
 )
 ```
 
-### Clusters (`clusters/`)
+### Ligand clusters (`ligand_clusters/`)
 
-This directory contains pre-calculated cluster labels derived from the protein and pocket similarity dataset.
+This directory contains pre-calculated ligand-instance cluster labels derived from
+pocket, protein-ligand interaction, pocket-weighted ligand-shape, and
+chemical-similarity datasets.
 The nested structure is as follows:
 
 ```bash
@@ -218,7 +221,13 @@ The nested structure is as follows:
     |-- directed=True
         |-- metric={metric}
             |-- threshold={threshold}.parquet
+|-- stats.parquet
+|-- stats.json
 ```
+
+The stats files summarize node count, cluster count, singleton count, and the
+largest, median, and 95th-percentile cluster sizes for every published artifact;
+`stats.json` also records the validation outcome.
 
 - `cluster`: the cluster algorithm used
   - `communities`: clusters derived from community detection algorithm
@@ -229,35 +238,14 @@ The nested structure is as follows:
 - `metric`: the similarity metrics used for generating the clusters
   - `pli_qcov`: Protein-ligand interaction similarity between aligned ligand-binding region (pocket) residues of two systems.
   - `pli_unique_qcov`: Protein-ligand interaction similarity between aligned pocket residues of two systems, taking only unique interaction type into consideration.
-  - `pocket_fident`: Pocket region sequence identity of the ligand-binding (pocket) region of a system to a (possibly non-pocket) region of another system.
-  - `pocket_fident_qcov`: Sequence identity between ligand binding region (pocket) of two systems.
-  - `pocket_lddt`: Structural similarity between ligand-binding region (pocket) of a system to any region (possibly non-pocket) of another system.
-  - `pocket_lddt_qcov`: Structural similarity between ligand-binding region (pocket) two systems.
   - `pocket_qcov`: Query coverage between ligand-binding region of two systems.
-  - `protein_fident_max`: Local sequence identity between components of two systems, aggregated by max score across all pairs of protein chains or ligand chains.
-  - `protein_fident_qcov_max`: Global protein sequence identity between components of two systems multiplied by query system coverage, aggregated by max score across all pairs of protein chains or ligand chains.
-  - `protein_fident_qcov_weighted_max`: Global protein sequence identity between components of two systems, aggregated by length-weighted sum of scores across mapped protein or ligand chains.
-  - `protein_fident_qcov_weighted_sum`: Global protein sequence identity between components of two systems, aggregated by length-weighted max score across all pairs of protein chains or ligand chains.
-  - `protein_fident_weighted_max`: Local sequence identity between components of two systems, aggregated by length-weighted max score across all pairs of protein chains or ligand chains.
-  - `protein_fident_weighted_sum`: Local sequence identity between components of two systems, aggregated by length-weighted sum of scores across mapped protein or ligand chains.
-  - `protein_lddt_max`: Local structural similarity between chains of two systems, aggregated by max score across all pairs of protein chains or ligand chains.
-  - `protein_lddt_qcov_max`: Global protein structural similarity multiplied by query system coverage, aggregated by max score across all pairs of protein chains or ligand chains.
-  - `protein_lddt_qcov_weighted_max`: Global protein structural similarity multiplied by query system coverage, aggregated by length-weighted max score across all pairs of protein chains or ligand chains.
-  - `protein_lddt_qcov_weighted_sum`: Global protein structural similarity multiplied by query system coverage, aggregated by length-weighted sum of scores across mapped protein or ligand chains.
-  - `protein_lddt_weighted_max`: Local structural similarity between chains of two systems, aggregated by length-weighted max score across all pairs of protein chains or ligand chains.
-  - `protein_lddt_weighted_sum`: Local structural similarity between chains of two systems, aggregated by length-weighted sum of scores across mapped protein or ligand chains.
-  - `protein_qcov_weighted_sum`: Global protein query coverage, aggregated by length-weighted sum of scores across mapped protein or ligand chains.
-  - `protein_seqsim_max`: Global protein sequence similarity between components of two systems, aggregated by max score across all pairs of protein chains or ligand chains.
-  - `protein_seqsim_qcov_max`: Global protein sequence similarity between components of two systems multiplied by query system coverage, aggregated by max score across all pairs of protein chains or ligand chains.
-  - `protein_seqsim_qcov_weighted_max`: Global protein sequence similarity between components of two systems multiplied by query system coverage, aggregated by length-weighted max score across all pairs of protein chains or ligand chains.
-  - `protein_seqsim_qcov_weighted_sum`: Global protein sequence similarity between components of two systems multiplied by query system coverage, aggregated by length-weighted sum of scores across mapped protein or ligand chains.
-  - `protein_seqsim_weighted_max`: Global protein sequence similarity between components of two systems, aggregated by length-weighted max score across all pairs of protein chains or ligand chains.
-  - `protein_seqsim_weighted_sum`: Global protein sequence similarity between components of two systems, aggregated by length-weighted sum of scores across mapped protein or ligand chains.
+  - `sucos_shape_pocket_qcov`: Directional ligand 3D shape/color similarity multiplied by pocket query coverage.
+  - `tanimoto_similarity_ecfp4_1024`: Tanimoto similarity over radius-2, 1024-bit Morgan fingerprints.
 - `threshold`: similarity threshold in percent.
-  - ...
+  - `30`
   - `50`
   - `70`
-  - `95`
+  - `90`
   - `100`
 
 ### Splits (`splits/`)
