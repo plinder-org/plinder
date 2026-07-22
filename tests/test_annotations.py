@@ -14,6 +14,7 @@ from plinder.data.utils.annotations.get_ligand_validation import EntryValidation
 from plinder.data.utils.annotations.interaction_utils import get_covalent_connections
 from plinder.data.utils.annotations.ligand_utils import (
     BiounitSpatialIndex,
+    classify_ligand_polymer_classes,
     get_water_chain_ids,
     is_known_artifact_ligand,
     sort_ccd_codes,
@@ -31,6 +32,49 @@ from rdkit import Chem
 
 def test_ccd_name_sorter():
     assert sort_ccd_codes({"G", "G25", "CPG", "5GP"}) == ["CPG", "G25", "G", "5GP"]
+
+
+@pytest.mark.parametrize(
+    ("smiles", "expected_true"),
+    [
+        ("OC1OC(O)C(O)C(O)C1O", "is_monosaccharide"),
+        (
+            "OC1OC(O)C(O)C(O)C1OC2OC(O)C(O)C(O)C2O",
+            "is_oligosaccharide",
+        ),
+        (
+            "Nc1ncnc2c1ncn2[C@@H]1O[C@H](COP(=O)(O)O)[C@@H](O)[C@H]1O",
+            "is_mononucleotide",
+        ),
+        (
+            "Nc1ncnc2c1ncn2[C@@H]1O[C@H](COP(=O)(O)O[C@@H]2[C@@H](O)"
+            "[C@@H](n3cnc4c(N)ncnc43)O[C@@H]2CO)[C@@H](O)[C@H]1O",
+            "is_oligonucleotide",
+        ),
+        ("NCC(=O)O", "is_monopeptide"),
+        ("NCC(=O)NCC(=O)O", "is_oligopeptide"),
+    ],
+)
+def test_classify_ligand_polymer_classes_from_structure(
+    smiles: str, expected_true: str
+) -> None:
+    classes = classify_ligand_polymer_classes(smiles)
+
+    assert classes[expected_true]
+    family = expected_true.removeprefix("is_mono").removeprefix("is_oligo")
+    opposite = (
+        f"is_oligo{family}"
+        if expected_true.startswith("is_mono")
+        else f"is_mono{family}"
+    )
+    assert not classes[opposite]
+
+
+def test_ligand_polymer_units_are_not_summed_across_disconnected_fragments() -> None:
+    classes = classify_ligand_polymer_classes("NCC(=O)O.NCC(=O)O")
+
+    assert classes["is_monopeptide"]
+    assert not classes["is_oligopeptide"]
 
 
 def test_get_water_chain_ids_requires_all_chain_atoms_to_be_solvent():

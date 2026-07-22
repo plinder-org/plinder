@@ -454,6 +454,143 @@ ARTIFACTS: set[str] | None = None
 BINDING_AFFINITY: dict[str, ty.Any] | None = None
 
 
+_OLIGO_SMARTS = {
+    "peptide": Chem.MolFromSmarts("C(=O)C[N;D2,D3]C(=[O;D1])CN"),
+    "saccharide": Chem.MolFromSmarts("O-[C;R0,R1]-[C;R0,R1]-[O,S;R0;D2]-[C;R1]-[O;R1]"),
+    "nucleotide": Chem.MolFromSmarts("P(=O)([O-,OH])(OC[C;r5])O[C;r5]"),
+}
+_POLYMER_CLASS_FIELDS = tuple(
+    f"is_{size}{family}"
+    for family in ("saccharide", "nucleotide", "peptide")
+    for size in ("mono", "oligo")
+)
+
+
+def _has_nucleobase_attachment(mol: Mol, ring: set[int]) -> bool:
+    """Return whether a sugar-ring carbon is bonded to a ring nitrogen."""
+    for atom_index in ring:
+        atom = mol.GetAtomWithIdx(atom_index)
+        if atom.GetAtomicNum() != 6:
+            continue
+        for neighbor in atom.GetNeighbors():
+            if (
+                neighbor.GetIdx() not in ring
+                and neighbor.GetAtomicNum() == 7
+                and neighbor.IsInRing()
+            ):
+                return True
+    return False
+
+
+def _sugar_and_nucleotide_unit_counts(mol: Mol) -> tuple[int, int]:
+    """Count conservative sugar and phosphorylated nucleoside ring motifs."""
+    saccharide_units = 0
+    nucleotide_units = 0
+    phosphorus = [atom.GetIdx() for atom in mol.GetAtoms() if atom.GetAtomicNum() == 15]
+    for atom_ring in mol.GetRingInfo().AtomRings():
+        if len(atom_ring) not in {5, 6}:
+            continue
+        ring = set(atom_ring)
+        atoms = [mol.GetAtomWithIdx(index) for index in atom_ring]
+        atomic_numbers = [atom.GetAtomicNum() for atom in atoms]
+        if any(atom.GetIsAromatic() for atom in atoms):
+            continue
+        if atomic_numbers.count(8) != 1 or atomic_numbers.count(6) != len(atoms) - 1:
+            continue
+
+        has_nucleobase = _has_nucleobase_attachment(mol, ring)
+        close_to_phosphate = any(
+            len(Chem.GetShortestPath(mol, ring_index, phosphorus_index)) - 1 <= 3
+            for ring_index in ring
+            for phosphorus_index in phosphorus
+        )
+        if has_nucleobase and close_to_phosphate:
+            nucleotide_units += 1
+            continue
+        if has_nucleobase:
+            # A nucleoside sugar is not a saccharide ligand class.
+            continue
+
+        external_oxygen_neighbors = {
+            neighbor.GetIdx()
+            for atom_index in ring
+            for neighbor in mol.GetAtomWithIdx(atom_index).GetNeighbors()
+            if neighbor.GetIdx() not in ring and neighbor.GetAtomicNum() == 8
+        }
+        if len(external_oxygen_neighbors) >= 2:
+            saccharide_units += 1
+    return saccharide_units, nucleotide_units
+
+
+def _peptide_unit_count(mol: Mol) -> int:
+    """Count alpha-amino-acid backbone centers in a molecule."""
+    units = 0
+    for atom in mol.GetAtoms():
+        if (
+            atom.GetAtomicNum() != 6
+            or atom.GetHybridization() != Chem.HybridizationType.SP3
+        ):
+            continue
+        neighbors = list(atom.GetNeighbors())
+        if not any(neighbor.GetAtomicNum() == 7 for neighbor in neighbors):
+            continue
+        has_carbonyl = False
+        for neighbor in neighbors:
+            if neighbor.GetAtomicNum() != 6:
+                continue
+            for bond in neighbor.GetBonds():
+                other = bond.GetOtherAtom(neighbor)
+                if (
+                    other.GetAtomicNum() == 8
+                    and bond.GetBondType() == Chem.BondType.DOUBLE
+                ):
+                    has_carbonyl = True
+                    break
+            if has_carbonyl:
+                break
+        units += int(has_carbonyl)
+    return units
+
+
+@cache
+def _classify_ligand_polymer_classes(smiles: str) -> tuple[bool, ...]:
+    """Return cached class flags for one canonical SMILES."""
+    mol = Chem.MolFromSmiles(smiles) if smiles else None
+    unit_counts = {"saccharide": 0, "nucleotide": 0, "peptide": 0}
+    oligo_matches = {family: False for family in unit_counts}
+    if mol is not None:
+        for fragment in Chem.GetMolFrags(mol, asMols=True):
+            saccharide_units, nucleotide_units = _sugar_and_nucleotide_unit_counts(
+                fragment
+            )
+            unit_counts["saccharide"] = max(unit_counts["saccharide"], saccharide_units)
+            unit_counts["nucleotide"] = max(unit_counts["nucleotide"], nucleotide_units)
+            unit_counts["peptide"] = max(
+                unit_counts["peptide"], _peptide_unit_count(fragment)
+            )
+        for family, pattern in _OLIGO_SMARTS.items():
+            if pattern is not None:
+                oligo_matches[family] = mol.HasSubstructMatch(pattern)
+
+    result: list[bool] = []
+    for family in ("saccharide", "nucleotide", "peptide"):
+        is_oligo = oligo_matches[family] or unit_counts[family] >= 2
+        result.extend((unit_counts[family] == 1 and not is_oligo, is_oligo))
+    return tuple(result)
+
+
+def classify_ligand_polymer_classes(smiles: str | None) -> dict[str, bool]:
+    """Classify mono/oligo saccharide, nucleotide, and peptide ligands.
+
+    Existing oligo SMARTS are retained. Conservative structural unit counts
+    distinguish one unit from multiple units using only molecular identity, so
+    every occurrence of one canonical SMILES receives the same classification.
+    """
+    return dict(
+        zip(_POLYMER_CLASS_FIELDS, _classify_ligand_polymer_classes(smiles or ""))
+    )
+
+
 def get_artifact_codes(data_dir: Path) -> set[str]:
     """Load the artifact CCD set needed for cheap ingest preflight."""
     global LIST_OF_CCD_SYNONYMS, CCD_SYNONYMS_DICT, ARTIFACTS
@@ -909,9 +1046,29 @@ class Ligand(DocBaseModel):
         default=False,
         description="Indicator of whether a ligand satisfies fragment Ro3",
     )
-    is_oligo: bool = Field(
+    is_monosaccharide: bool = Field(
         default=False,
-        description="Indicator of whether a ligand  is an oligopeptide, oligosaccharide or oligopeptide",
+        description="Indicator of whether a ligand contains one saccharide unit",
+    )
+    is_oligosaccharide: bool = Field(
+        default=False,
+        description="Indicator of whether a ligand contains multiple saccharide units",
+    )
+    is_mononucleotide: bool = Field(
+        default=False,
+        description="Indicator of whether a ligand contains one nucleotide unit",
+    )
+    is_oligonucleotide: bool = Field(
+        default=False,
+        description="Indicator of whether a ligand contains multiple nucleotide units",
+    )
+    is_monopeptide: bool = Field(
+        default=False,
+        description="Indicator of whether a ligand contains one peptide unit",
+    )
+    is_oligopeptide: bool = Field(
+        default=False,
+        description="Indicator of whether a ligand contains multiple peptide units",
     )
     is_cofactor: bool = Field(
         default=False, description="Indicator of whether a ligand is a cofactor"
@@ -926,7 +1083,7 @@ class Ligand(DocBaseModel):
     is_other: bool = Field(
         default=False,
         description="Indicator of whether a ligand type is not classified as any types of small molecule "
-        + "(Lipinski, Fragment or covalent), ion, cofactor, oligo (peptide, saccharide or nucleotide) or artifact",
+        + "(Lipinski, Fragment or covalent), ion, cofactor, mono/oligo (peptide, saccharide or nucleotide) or artifact",
     )
     is_invalid: bool = Field(
         default=False, description="Indicator of whether a ligand is invalid"
@@ -988,7 +1145,7 @@ class Ligand(DocBaseModel):
                 self.is_invalid = True
 
     def classify_ligand_type(self, mol: Mol) -> None:
-        """Classify ligand as ion, Lipinski, fragment, oligo, or artifact.
+        """Classify ligand as ion, Lipinski, fragment, or mono/oligo class.
 
         Uses SMARTS patterns and Lipinski rules to assign granular type
         beyond the chain-type classification.
@@ -1001,25 +1158,18 @@ class Ligand(DocBaseModel):
             mol (Mol): RDKit compatible molecule
         """
         RDLogger.DisableLog("rdApp.*")
-        oligo_smarts = {
-            "oligopeptide": Chem.MolFromSmarts("C(=O)C[N;D2,D3]C(=[O;D1])CN"),
-            "oligosaccharide": Chem.MolFromSmarts(
-                "O-[C;R0,R1]-[C;R0,R1]-[O,S;R0;D2]-[C;R1]-[O;R1]"
-            ),
-            "oligonucleotide": Chem.MolFromSmarts("P(=O)([O-,OH])(OC[C;r5])O[C;r5]"),
-        }
-
         if mol is not None:
             if is_single_atom_or_ion(mol):
                 self.is_ion = True
             else:
-                for sm in oligo_smarts:
-                    try:
-                        if mol.HasSubstructMatch(oligo_smarts[sm]):
-                            # TODO: review - reduced to one class
-                            self.is_oligo = True
-                    except RuntimeError:
-                        self.is_invalid = True
+                try:
+                    polymer_classes = classify_ligand_polymer_classes(
+                        self.rdkit_canonical_smiles,
+                    )
+                    for field, value in polymer_classes.items():
+                        setattr(self, field, value)
+                except RuntimeError:
+                    self.is_invalid = True
         else:
             self.is_invalid = True
 
@@ -1636,26 +1786,35 @@ class Ligand(DocBaseModel):
         # reset: artifacts should not count to other ligand class definitions
         if self.is_artifact:
             self.is_ion = False
-            self.is_oligo = False
+            self.is_monosaccharide = False
+            self.is_oligosaccharide = False
+            self.is_mononucleotide = False
+            self.is_oligonucleotide = False
+            self.is_monopeptide = False
+            self.is_oligopeptide = False
             self.is_cofactor = False
             self.is_lipinski = False
             self.is_fragment = False
             self.is_covalent = False
 
-        # Indicator of whether a ligand type is not any of small molecule (lipinski, frag, coval), ion, cofactor, oligopeptide, oligosaccharide or oligopeptide.
-        if not any(
+        # Indicator of whether a ligand type is not any recognized class.
+        self.is_other = not any(
             [
                 self.is_invalid,
                 self.is_ion,
-                self.is_oligo,
+                self.is_monosaccharide,
+                self.is_oligosaccharide,
+                self.is_mononucleotide,
+                self.is_oligonucleotide,
+                self.is_monopeptide,
+                self.is_oligopeptide,
                 self.is_artifact,
                 self.is_cofactor,
                 self.is_lipinski,
                 self.is_fragment,
                 self.is_covalent,
             ]
-        ):
-            self.is_other = True
+        )
 
     def format_chains(
         self,

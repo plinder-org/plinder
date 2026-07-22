@@ -36,11 +36,16 @@ ligand_qed	float | None	Ligand QED score, a measure of drug-likeness, see https:
 ligand_is_ion	bool	Indicator of whether a ligand  is an ion
 ligand_is_lipinski	bool	Indicator of whether a ligand satisfies Lipinski Ro5
 ligand_is_fragment	bool	Indicator of whether a ligand satisfies fragment Ro3
-ligand_is_oligo	bool	Indicator of whether a ligand  is an oligopeptide, oligosaccharide or oligopeptide
+ligand_is_monosaccharide	bool	Indicator of whether a ligand contains one saccharide unit
+ligand_is_oligosaccharide	bool	Indicator of whether a ligand contains multiple saccharide units
+ligand_is_mononucleotide	bool	Indicator of whether a ligand contains one nucleotide unit
+ligand_is_oligonucleotide	bool	Indicator of whether a ligand contains multiple nucleotide units
+ligand_is_monopeptide	bool	Indicator of whether a ligand contains one peptide unit
+ligand_is_oligopeptide	bool	Indicator of whether a ligand contains multiple peptide units
 ligand_is_cofactor	bool	Indicator of whether a ligand is a cofactor
 ligand_in_artifact_list	bool	Indicator of whether a ligand is in the artifact list
 ligand_is_artifact	bool	Indicator of whether a ligand is an artifact
-ligand_is_other	bool	Indicator of whether a ligand type is not classified as any types of small molecule (Lipinski, Fragment or covalent), ion, cofactor, oligo (peptide, saccharide or nucleotide) or artifact
+ligand_is_other	bool	Indicator of whether a ligand type is not classified as any type of small molecule (Lipinski, fragment or covalent), ion, cofactor, mono/oligo peptide, saccharide or nucleotide, or artifact
 ligand_is_invalid	bool	Indicator of whether a ligand is invalid
 ligand_unique_ccd_code	str | None	Ligand representative CCD code after de-duplicating
 ligand_protein_chains_asym_id	list[str]	Receptor chain IDs (protein/NA) within neighboring threshold of ligand.          Returns empty list if the ligand is an artifact.
