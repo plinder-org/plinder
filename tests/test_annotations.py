@@ -518,6 +518,50 @@ def test_entry_drops_systems_without_a_proper_ligand() -> None:
     assert {item.ccd_code for item in retained.ligands} == {"LIG", "NA"}
 
 
+def test_entry_never_groups_ligands_across_biological_assemblies() -> None:
+    from plinder.data.utils.annotations.ligand_utils import Ligand
+    from plinder.data.utils.annotations.protein_utils import Chain
+
+    receptor = Chain(
+        asym_id="A",
+        auth_id="A",
+        entity_id="1",
+        chain_type_str="polypeptide(L)",
+        residues={},
+        length=100,
+        num_unresolved_residues=100,
+    )
+
+    def ligand(biounit_id: str, asym_id: str) -> Ligand:
+        return Ligand(
+            pdb_id="1abc",
+            biounit_id=biounit_id,
+            asym_id=asym_id,
+            instance=1,
+            ccd_code="LIG",
+            plip_type="SMALLMOLECULE",
+            bird_id="",
+            centroid=[0.0, 0.0, 0.0],
+            smiles="CCO",
+            residue_numbers=[1],
+            neighboring_residues={"1.A": [1, 2, 3]},
+        )
+
+    ligands = [
+        ligand(biounit_id, asym_id)
+        for biounit_id in ("1", "2")
+        for asym_id in ("B", "C")
+    ]
+    entry = Entry(pdb_id="1abc", chains={"A": receptor})
+    entry.set_systems({item.id: item for item in ligands})
+
+    assert len(entry.systems) == 2
+    assert {system.biounit_id for system in entry.systems.values()} == {"1", "2"}
+    for system in entry.systems.values():
+        assert {item.biounit_id for item in system.ligands} == {system.biounit_id}
+        assert len(system.ligand_chains) == len(set(system.ligand_chains)) == 2
+
+
 def test_entry_validation_skips_chains_outside_retained_systems(
     monkeypatch, tmp_path
 ) -> None:

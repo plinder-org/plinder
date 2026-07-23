@@ -1606,7 +1606,9 @@ class Entry(DocBaseModel):
         members (receptor residues + neighboring ligand chains).
         Pocket members use chain instance IDs (e.g. ``1.A``) so
         ligands in different subunits only merge when they genuinely
-        share residues on the same chain copy.
+        share residues on the same chain copy. Biological assemblies
+        are always independent: their instance-chain labels share a
+        namespace but do not describe the same physical chains.
 
         Artifacts (GOL, PEG, etc.) are only attached to a system if
         they are within 4 Å of a non-artifact ligand.
@@ -1638,12 +1640,17 @@ class Entry(DocBaseModel):
         groupable = list(pocket_members)
         if min_shared_pocket_members <= 0:
             for i, j in combinations(groupable, 2):
-                G.addEdge(i, j)
+                if (
+                    ligands[ligand_ids[i]].biounit_id
+                    == ligands[ligand_ids[j]].biounit_id
+                ):
+                    G.addEdge(i, j)
         else:
             member_ligands: dict[str, list[int]] = defaultdict(list)
             for ligand_index, members in pocket_members.items():
+                biounit_id = ligands[ligand_ids[ligand_index]].biounit_id
                 for member in members:
-                    member_ligands[member].append(ligand_index)
+                    member_ligands[f"{biounit_id}:{member}"].append(ligand_index)
             shared_member_counts: dict[tuple[int, int], int] = defaultdict(int)
             for member_indices in member_ligands.values():
                 for i, j in combinations(member_indices, 2):
@@ -1675,6 +1682,17 @@ class Entry(DocBaseModel):
         for ligs in system_ligands.values():
             if not ligs:
                 continue
+            biounit_ids = {ligand.biounit_id for ligand in ligs}
+            if len(biounit_ids) != 1:
+                raise RuntimeError(
+                    f"system ligands span biological assemblies: {sorted(biounit_ids)}"
+                )
+            instance_chains = [ligand.instance_chain for ligand in ligs]
+            if len(instance_chains) != len(set(instance_chains)):
+                raise RuntimeError(
+                    "system contains repeated ligand instance chains: "
+                    f"{instance_chains}"
+                )
             receptor_asym_ids = sorted(
                 {
                     instance_chain.split(".", maxsplit=1)[1]
@@ -1684,7 +1702,7 @@ class Entry(DocBaseModel):
             )
             system = System(
                 pdb_id=self.pdb_id,
-                biounit_id=ligs[0].biounit_id,
+                biounit_id=next(iter(biounit_ids)),
                 ligands=sorted(ligs, key=lambda x: x.id),
                 receptor_type=get_receptor_type(
                     self.chains[asym_id].chain_type_str for asym_id in receptor_asym_ids
