@@ -2,7 +2,6 @@
 # Distributed under the terms of the Apache License 2.0
 from __future__ import annotations
 
-import itertools
 import logging
 import re
 import sqlite3
@@ -238,7 +237,10 @@ def _template_from_user_smiles(
             "skipping SMILES-based stereo check"
         )
         return None
-    Chem.AssignStereochemistry(mol, cleanIt=True, force=True)
+    # Stereo comes from the SMILES parity tags (@/@@), which MolFromSmiles
+    # records on the atoms and RemoveHs(sanitize=False) preserves. CIP codes
+    # are (re)computed with AssignCIPLabels inside compare_stereo_to_template
+    # so both template and resolved sides use the same labeller.
     for atom, atom_name in zip(mol.GetAtoms(), cif_atom_names):
         info = Chem.AtomPDBResidueInfo()
         info.SetName(atom_name)
@@ -334,8 +336,8 @@ def _get_ccd_mol(comp_id: str) -> "Chem.Mol | None":
 
     try:
         # biotite has no chiral tags, so atoms_to_rdkit_mol uses 3D to
-        # assign stereo via AssignStereochemistryFrom3D
-        return atoms_to_rdkit_mol(bt_info.residue(comp_id))
+        # assign stereo via AssignAtomChiralTagsFromStructure
+        return atoms_to_rdkit_mol(bt_info.residue(comp_id, allow_missing_coord=True))
     except Exception as e:
         LOG.warning(f"Failed to get CCD mol for {comp_id}: {e}")
         return None
@@ -343,6 +345,7 @@ def _get_ccd_mol(comp_id: str) -> "Chem.Mol | None":
 
 def _get_ccd_smiles(comp_id: str) -> str | None:
     """Get SMILES from CCD via biotite, with stereochemistry from ideal 3D."""
+    # TODO: conflicting path with download_components_cif used for CCD_SYNONYMS_DICT
     mol = _get_ccd_mol(comp_id)
     if mol is None:
         return None
@@ -392,12 +395,6 @@ def lig_has_dummies(
     return len(set(ligand_code.split("-")).intersection(dummy_lig_list)) > 0
 
 
-def get_ccd_smiles_dict(ciffile: Path) -> dict[str, str]:
-    """Load CCD component SMILES from a parquet file next to *ciffile*."""
-    df = pd.read_parquet(ciffile.parent / "components.parquet")
-    return dict(zip(df["binder_id"], df["canonical_smiles"]))
-
-
 def sort_ccd_codes(code_list: list[str]) -> list[str]:
     """Pick long first, then alphabetical letters followed by numbers
     Args:
@@ -414,10 +411,9 @@ def sort_ccd_codes(code_list: list[str]) -> list[str]:
 
 
 @cache
-def get_ccd_synonyms(data_dir: Path) -> tuple[list[set[str]], dict[str, str]]:
+def get_ccd_synonyms(data_dir: Path) -> dict[str, str]:
     """Get Synonym dictonary for CCD SMILES
     CCD smiles dict from download_components_cif
-    and get_ccd_smiles_dict
 
     Returns:
         Dict[str, str]: dictonary mapping synonymous CCD code to preferred one
@@ -425,29 +421,18 @@ def get_ccd_synonyms(data_dir: Path) -> tuple[list[set[str]], dict[str, str]]:
     from plinder.data.pipeline.io import download_components_cif
 
     ccd_lib_cifpath = download_components_cif(data_dir=data_dir)
-    smidict = get_ccd_smiles_dict(ccd_lib_cifpath)
-    ccd_df = pd.DataFrame.from_dict(smidict, orient="index").reset_index()
-    # note: SMILES assumed to be CANONICALIZED by OE read by get_ccd_smiles_dict()
-    ccd_df.columns = ["ccd_code", "SMILES"]
+    # Load CCD component SMILES from a parquet file next to *ciffile*
+    ccd_df = pd.read_parquet(ccd_lib_cifpath.parent / "components.parquet")
     # remove dummies
-    ccd_df = ccd_df[~ccd_df["ccd_code"].apply(lig_has_dummies)]
-    ccd_sets = ccd_df.groupby("SMILES").aggregate(list).reset_index()
-    # ccd_sets
-    ccd_sets["ccd_synonym_count"] = ccd_sets["ccd_code"].apply(lambda x: len(x))
-    ccd_dups = ccd_sets[ccd_sets.ccd_synonym_count > 1].copy()
-    list_of_synonym_sets = [set(x) for x in ccd_dups["ccd_code"].to_list()]
-    # keep unique_ccd as sorted first entry
-    ccd_dups["unique_ccd"] = ccd_dups["ccd_code"].apply(lambda x: sort_ccd_codes(x)[0])
-    ccd_dups_exp = ccd_dups.explode("ccd_code")
-    ccd_dups_exp.index = ccd_dups_exp["ccd_code"]
-    ccd_synonym_dict = ccd_dups_exp["unique_ccd"].to_dict()
-    return (list_of_synonym_sets, ccd_synonym_dict)
+    ccd_df = ccd_df[~ccd_df["binder_id"].apply(lig_has_dummies)]
+    # map all present and origianl codes to a canonical CCD code
+    ccd_synonym_dict = ccd_df.set_index("binder_id")["ccd_code"].to_dict()
+    return ccd_synonym_dict
 
 
 # lazy evaluate data fetches referenced as module globals
 # TODO : clean this up and deduplicate extras with pipeline.io
 COFACTORS: set[str] | None = None
-LIST_OF_CCD_SYNONYMS: list[set[str]] | None = None
 CCD_SYNONYMS_DICT: dict[str, str] | None = None
 # instantiate artifact list once and reuse variable
 ARTIFACTS: set[str] | None = None
@@ -593,10 +578,10 @@ def classify_ligand_polymer_classes(smiles: str | None) -> dict[str, bool]:
 
 def get_artifact_codes(data_dir: Path) -> set[str]:
     """Load the artifact CCD set needed for cheap ingest preflight."""
-    global LIST_OF_CCD_SYNONYMS, CCD_SYNONYMS_DICT, ARTIFACTS
+    global CCD_SYNONYMS_DICT, ARTIFACTS
 
-    if LIST_OF_CCD_SYNONYMS is None or CCD_SYNONYMS_DICT is None:
-        LIST_OF_CCD_SYNONYMS, CCD_SYNONYMS_DICT = get_ccd_synonyms(data_dir)
+    if CCD_SYNONYMS_DICT is None:
+        CCD_SYNONYMS_DICT = get_ccd_synonyms(data_dir)
     artifacts = ARTIFACTS
     if artifacts is None:
         artifacts = parse_artifacts()
@@ -606,13 +591,19 @@ def get_artifact_codes(data_dir: Path) -> set[str]:
 
 def add_missed_synonyms(current_set: set[str]) -> set[str]:
     """Expand a set of CCD codes with any known synonyms."""
-    assert LIST_OF_CCD_SYNONYMS is not None
-    missed_synonyms = [
-        x.difference(current_set)
-        for x in LIST_OF_CCD_SYNONYMS
-        if len(x.intersection(current_set)) > 0
-    ]
-    return set(itertools.chain(*missed_synonyms)).union(current_set)
+    assert CCD_SYNONYMS_DICT is not None
+    # invert once: canonical -> full group (every member maps to canonical,
+    # incl. the canonical itself, so groups are complete)
+    from collections import defaultdict
+
+    groups: dict[str, set[str]] = defaultdict(set)
+    for code, canon in CCD_SYNONYMS_DICT.items():
+        groups[canon].add(code)
+    # expand: for each code, pull in its whole group
+    expanded = set(current_set)
+    for c in current_set:
+        expanded |= groups.get(CCD_SYNONYMS_DICT.get(c, c), set())
+    return expanded
 
 
 def get_unique_ccd_longname(longname: str) -> str:
@@ -655,12 +646,12 @@ def parse_cofactors(data_dir: Path) -> set[str]:
         Set of cofactors
 
     """
-    global LIST_OF_CCD_SYNONYMS, CCD_SYNONYMS_DICT
+    global CCD_SYNONYMS_DICT
 
     from plinder.data.pipeline.io import download_cofactors
 
-    if LIST_OF_CCD_SYNONYMS is None or CCD_SYNONYMS_DICT is None:
-        LIST_OF_CCD_SYNONYMS, CCD_SYNONYMS_DICT = get_ccd_synonyms(data_dir)
+    if CCD_SYNONYMS_DICT is None:
+        CCD_SYNONYMS_DICT = get_ccd_synonyms(data_dir)
 
     cofactors_json = download_cofactors(data_dir=data_dir)
     extra = {
@@ -1273,14 +1264,9 @@ class Ligand(DocBaseModel):
             Populated Ligand object, or None if no atoms found.
         """
         if data_dir is not None:
-            global \
-                COFACTORS, \
-                ARTIFACTS, \
-                LIST_OF_CCD_SYNONYMS, \
-                CCD_SYNONYMS_DICT, \
-                BINDING_AFFINITY
-            if LIST_OF_CCD_SYNONYMS is None or CCD_SYNONYMS_DICT is None:
-                LIST_OF_CCD_SYNONYMS, CCD_SYNONYMS_DICT = get_ccd_synonyms(data_dir)
+            global COFACTORS, ARTIFACTS, CCD_SYNONYMS_DICT, BINDING_AFFINITY
+            if CCD_SYNONYMS_DICT is None:
+                CCD_SYNONYMS_DICT = get_ccd_synonyms(data_dir)
             if COFACTORS is None:
                 COFACTORS = parse_cofactors(data_dir)
             if ARTIFACTS is None:

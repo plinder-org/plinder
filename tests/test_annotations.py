@@ -1079,18 +1079,29 @@ def _build_resolved_mol(cif_path, chain_id):
 
 
 def _flip_first_chiral(mol):
-    """Helper: return a copy with one chiral center inverted."""
-    rw = Chem.RWMol(mol)
-    for atom in rw.GetAtoms():
-        if atom.GetPropsAsDict().get("_CIPCode", ""):
-            chiral = atom.GetChiralTag()
-            if chiral == Chem.ChiralType.CHI_TETRAHEDRAL_CW:
-                atom.SetChiralTag(Chem.ChiralType.CHI_TETRAHEDRAL_CCW)
-            elif chiral == Chem.ChiralType.CHI_TETRAHEDRAL_CCW:
-                atom.SetChiralTag(Chem.ChiralType.CHI_TETRAHEDRAL_CW)
-            Chem.AssignStereochemistry(rw, cleanIt=True, force=True)
-            return rw.GetMol()
-    return None
+    """Helper: return a copy whose 3D geometry is mirrored (the enantiomer).
+
+    ``compare_stereo_to_template`` judges stereo from coordinates, so we
+    invert the geometry (improper reflection through x=0) rather than a
+    chiral tag — flipping a tag without moving atoms would be a no-op.
+    Mirroring inverts every stereocenter at once. Returns None if the mol
+    has no tetrahedral stereocenter (achiral — nothing to detect).
+    """
+    from rdkit.Geometry import Point3D
+
+    tetrahedral = (
+        Chem.ChiralType.CHI_TETRAHEDRAL_CW,
+        Chem.ChiralType.CHI_TETRAHEDRAL_CCW,
+    )
+    if not any(a.GetChiralTag() in tetrahedral for a in mol.GetAtoms()):
+        return None
+    flipped = Chem.Mol(mol)
+    conf = flipped.GetConformer()
+    for i in range(flipped.GetNumAtoms()):
+        p = conf.GetAtomPosition(i)
+        # mirror on x=0 plane
+        conf.SetAtomPosition(i, Point3D(-p.x, p.y, p.z))
+    return flipped
 
 
 def test_stereo_check_single_residue(cif_7gj7):
@@ -1172,10 +1183,14 @@ def test_stereo_check_multi_residue(cif_6fx1):
         result is not None
     ), "Multi-residue glycan should have comparable stereocenters"
 
-    # Verify the mol actually has chiral centers
-    n_chiral = sum(
-        1 for a in glycan_mol.GetAtoms() if a.GetPropsAsDict().get("_CIPCode")
+    # Verify the mol actually has chiral centers. atoms_to_rdkit_mol assigns
+    # chiral *tags* from 3D (not _CIPCode, which needs a CIP-labelling pass),
+    # so count tetrahedral tags.
+    tetrahedral = (
+        Chem.ChiralType.CHI_TETRAHEDRAL_CW,
+        Chem.ChiralType.CHI_TETRAHEDRAL_CCW,
     )
+    n_chiral = sum(1 for a in glycan_mol.GetAtoms() if a.GetChiralTag() in tetrahedral)
     assert n_chiral > 10, f"Glycan should have many chiral centers, got {n_chiral}"
 
 

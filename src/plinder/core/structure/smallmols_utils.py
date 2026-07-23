@@ -175,63 +175,107 @@ def get_template_to_mol_matches(
 def compare_stereo_to_template(
     resolved_mol: Mol,
     template_mol: Mol,
-) -> bool:
-    """Compare per-atom CIP codes between a resolved mol and a template.
+) -> bool | None:
+    """Compare resolved 3D stereo against a template by CIP code.
 
-    If the resolved mol has fewer atoms than the template (partial
-    resolution), the template is trimmed via MCS and CIP codes are
-    re-assigned on the trimmed template before comparison.
+    The resolved mol's *own bonds are not trusted*: aromatic ring bonds can
+    arrive order-unspecified (which blocks CIP labelling entirely), and
+    even with the atom chiral tags in place there is no way to compute a
+    ``_CIPCode`` on such a mol. Instead we transplant the resolved 3D
+    coordinates onto the *template* graph — which carries correct bond
+    orders and matching PDB atom names — perceive tetrahedral chirality
+    there via :func:`Chem.AssignAtomChiralTagsFromStructure` (which keeps
+    quaternary centers that legacy perception drops), and CIP-label both the
+    transplanted probe and the template with the **same** algorithm
+    (:func:`Chem.AssignCIPLabels`) so the R/S codes are directly comparable.
 
-    Only stereocenters defined in *both* mols are compared.  Achiral
-    compounds (no stereocenters in either mol) return True — no conflict.
+    Only stereocenters that are (a) present in the template with a defined
+    CIP code and (b) fully resolved — the center *and* all its immediate
+    neighbors have coordinates — are compared. An unresolved neighbor makes
+    the perceived 3D chirality meaningless, so such centers are skipped.
 
     Parameters
     ----------
     resolved_mol : Mol
-        RDKit Mol with ``AssignStereochemistryFrom3D`` already called.
-        Must have PDB residue info on each atom.
+        RDKit Mol with a 3D conformer and PDB residue info on every atom.
+        Bond orders may be incomplete — only coordinates and atom names are
+        read from it.
     template_mol : Mol
-        CCD template Mol with stereo assigned from ideal 3D.
+        Template Mol (user SMILES or CCD) with correct bond orders, PDB atom
+        names, and reference stereo (from SMILES parity or ideal 3D).
 
     Returns
     -------
-    bool
-        True if stereo matches (or achiral), False if any center differs.
+    bool | None
+        True if all comparable centers match (or none are chiral), False if
+        any center differs, None if no atom could be resolved onto the
+        template.
     """
-    # Build atom name → CIP map from resolved mol
-    resolved_cip: dict[str, str] = {}
+    from rdkit.Geometry import Point3D
+
+    # Resolved 3D coordinates keyed by PDB atom name.
+    conf_r = resolved_mol.GetConformer()
+    coords: dict[str, Point3D] = {}
     for atom in resolved_mol.GetAtoms():
         info = atom.GetPDBResidueInfo()
         if info is None:
             raise ValueError(
                 f"Atom {atom.GetIdx()} in resolved mol has no PDB residue info"
             )
+        coords[info.GetName().strip()] = conf_r.GetAtomPosition(atom.GetIdx())
+
+    # Transplant those coordinates onto the template graph. Unresolved atoms
+    # are parked at the origin and excluded from comparison below.
+    probe = Chem.Mol(template_mol)
+    conf = Chem.Conformer(probe.GetNumAtoms())
+    resolved_names: set[str] = set()
+    for atom in probe.GetAtoms():
+        info = atom.GetPDBResidueInfo()
+        name = info.GetName().strip() if info is not None else None
+        if name is not None and name in coords:
+            conf.SetAtomPosition(atom.GetIdx(), coords[name])
+            resolved_names.add(name)
+        else:
+            conf.SetAtomPosition(atom.GetIdx(), Point3D(0.0, 0.0, 0.0))
+    if not resolved_names:
+        return None
+    conf.Set3D(True)
+    probe.RemoveAllConformers()
+    probe.AddConformer(conf, assignId=True)
+
+    # Perceive chirality from the transplanted geometry, then CIP-label the
+    # probe and the template with the same labeller for comparable R/S codes.
+    Chem.AssignAtomChiralTagsFromStructure(probe)
+    Chem.AssignCIPLabels(probe)
+    ref = Chem.Mol(template_mol)
+    Chem.AssignCIPLabels(ref)
+
+    # Resolved CIP by name, only for fully-resolved centers (an unresolved
+    # neighbor makes the perceived 3D tag meaningless).
+    resolved_cip: dict[str, str] = {}
+    for atom in probe.GetAtoms():
+        info = atom.GetPDBResidueInfo()
+        if info is None or info.GetName().strip() not in resolved_names:
+            continue
+        if any(
+            n.GetPDBResidueInfo() is None
+            or n.GetPDBResidueInfo().GetName().strip() not in resolved_names
+            for n in atom.GetNeighbors()
+        ):
+            continue
         cip = atom.GetPropsAsDict().get("_CIPCode", "")
         if cip:
             resolved_cip[info.GetName().strip()] = cip
 
-    # Trim template if partially resolved
-    if resolved_mol.GetNumAtoms() < template_mol.GetNumAtoms():
-        try:
-            trimmed = get_matched_template(template_mol, resolved_mol)
-            Chem.AssignStereochemistry(trimmed, cleanIt=True, force=True)
-        except Exception:
-            trimmed = template_mol
-    else:
-        trimmed = template_mol
-
-    # Compare CIP codes where both sides are defined
-    for atom in trimmed.GetAtoms():
+    # Compare where the template defines a center and the resolved side has one.
+    for atom in ref.GetAtoms():
         info = atom.GetPDBResidueInfo()
         if info is None:
-            raise ValueError(
-                f"Atom {atom.GetIdx()} in template lost PDB residue info after trimming"
-            )
+            continue
         template_cip = atom.GetPropsAsDict().get("_CIPCode", "")
         if not template_cip:
             continue
-        atom_name = info.GetName().strip()
-        resolved_cip_val = resolved_cip.get(atom_name, "")
+        resolved_cip_val = resolved_cip.get(info.GetName().strip(), "")
         if not resolved_cip_val:
             continue
         if resolved_cip_val != template_cip:

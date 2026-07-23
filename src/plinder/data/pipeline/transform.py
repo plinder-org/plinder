@@ -142,7 +142,16 @@ def transform_components_data(*, raw_components_path: Path) -> pd.DataFrame:
         if "chem_comp" not in block:
             continue
         chem_comp = block["chem_comp"]
+        if chem_comp["pdbx_release_status"].as_array()[0] != "REL":
+            # check component status "REL" for "released" - skip otherwise
+            # https://mmcif.wwpdb.org/dictionaries/mmcif_ma.dic/Items/_chem_comp.pdbx_release_status.html
+            continue
         binder_id = chem_comp["id"].as_array()[0]
+        # binder_id is the original ccd code used but may not be current
+        ccd_code = chem_comp["pdbx_replaced_by"].as_array()[0]
+        if ccd_code == "?":
+            # ccd name has not been replaced
+            ccd_code = binder_id
         chemical_name = chem_comp["name"].as_array()[0]
         molecular_weight = chem_comp["formula_weight"].as_array()[0]
 
@@ -166,6 +175,7 @@ def transform_components_data(*, raw_components_path: Path) -> pd.DataFrame:
         rows.append(
             (
                 binder_id,
+                ccd_code,
                 chemical_name,
                 molecular_weight,
                 canonical_smiles,
@@ -177,6 +187,7 @@ def transform_components_data(*, raw_components_path: Path) -> pd.DataFrame:
         rows,
         columns=[
             "binder_id",
+            "ccd_code",
             "chemical_name",
             "molecular_weight",
             "canonical_smiles",

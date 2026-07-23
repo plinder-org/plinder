@@ -438,7 +438,7 @@ def atoms_to_rdkit_mol(
         bonds — missing / empty bonds raise ``ValueError``. Single
         atoms (ions) are allowed to have no bonds.
     assign_stereo : bool
-        If True, call ``AssignStereochemistryFrom3D`` on the result.
+        If True, call ``AssignAtomChiralTagsFromStructure`` on the result.
 
     Returns
     -------
@@ -473,27 +473,39 @@ def atoms_to_rdkit_mol(
     structurally-wrong mol.
     """
     from biotite.interface import rdkit as rdkit_interface
+    from biotite.structure import BondList
     from peppr import sanitize as peppr_sanitize
 
     heavy = atoms[~is_hydrogen_isotope(atoms.element)]
+
     # Multi-atom inputs must carry bonds; single atoms (ions) don't need any.
-    if heavy.array_length() > 1 and (
-        heavy.bonds is None or heavy.bonds.as_array().shape[0] == 0
-    ):
-        raise ValueError(
-            "atoms_to_rdkit_mol requires bonds on multi-atom inputs. "
-            "Load the CIF with include_bonds=True (which parses "
-            "_chem_comp_bond + _struct_conn) or populate atoms.bonds "
-            "before calling. A connect_via_residue_names fallback was "
-            "removed because it silently drops inter-residue peptide "
-            "bonds for non-standard residues in multi-residue ligands."
-        )
-    mol = rdkit_interface.to_mol(heavy)
+    if heavy.bonds is None or heavy.bonds.as_array().shape[0] == 0:
+        if heavy.array_length() == 1:
+            # add empty bondlist for single atoms to convert to RDKit mol
+            heavy.bonds = BondList(1)
+        else:
+            raise ValueError(
+                "atoms_to_rdkit_mol requires bonds on multi-atom inputs. "
+                "Load the CIF with include_bonds=True (which parses "
+                "_chem_comp_bond + _struct_conn) or populate atoms.bonds "
+                "before calling. A connect_via_residue_names fallback was "
+                "removed because it silently drops inter-residue peptide "
+                "bonds for non-standard residues in multi-residue ligands."
+            )
+
+    mol = rdkit_interface.to_mol(heavy, kekulize=True, use_dative_bonds=True)
     if mol is None:
         raise ValueError("Failed to convert AtomArray to RDKit Mol")
+
+    # organic_elements = {"H", "C", "N", "O", "F", "P", "S", "Cl", "Br", "I"}
+    # if set(heavy.element).difference(organic_elements):
+    #     with rdBase.BlockLogs():
+    #         # disconnect organometallics before sanitize
+    #         mol = rdMolStandardize.DisconnectOrganometallics(mol)
+
     peppr_sanitize(mol)
     if assign_stereo:
-        Chem.AssignStereochemistryFrom3D(mol)
+        Chem.AssignAtomChiralTagsFromStructure(mol)
     # RDKit's RemoveAllHs keys on atomic number, so it strips any
     # hydrogen isotope atom that survived the element-string filter.
     # Safe after stereo assignment — chiral tags live on heavy atoms.

@@ -545,10 +545,6 @@ def mock_ccd_lookups(monkeypatch):
     data = json.loads((test_asset_fp / "ccd_lookups.json").read_text())
     synonyms = [set(s) for s in data["ccd_synonyms"]]
     monkeypatch.setattr(
-        "plinder.data.utils.annotations.ligand_utils.LIST_OF_CCD_SYNONYMS",
-        synonyms,
-    )
-    monkeypatch.setattr(
         "plinder.data.utils.annotations.ligand_utils.CCD_SYNONYMS_DICT",
         {code: sort_ccd_codes(list(s))[0] for s in synonyms for code in s},
     )

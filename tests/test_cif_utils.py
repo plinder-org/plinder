@@ -559,8 +559,9 @@ def test_from_custom_cif_user_smiles_takes_precedence(boltz_cif):
 
     assert "[C@@]" in LIGAND_SMILES, "YAML SMILES must have the stereo center"
     inverted = LIGAND_SMILES.replace("[C@@]", "[C@]")
+    assert LIGAND_SMILES != inverted
 
-    for expected_stereo, smi in [(True, LIGAND_SMILES), (False, inverted)]:
+    for expected_stereo, smi in [(False, inverted), (True, LIGAND_SMILES)]:
         copy = boltz_cif.parent / f"copy_{expected_stereo}.cif"
         shutil.copy(boltz_cif, copy)
         entry = Entry.from_custom_cif_file(

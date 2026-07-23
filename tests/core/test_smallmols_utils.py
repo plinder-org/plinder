@@ -105,26 +105,26 @@ def test_compare_stereo_to_template():
     ref_heavy.bonds = struc.connect_via_residue_names(ref_heavy)
     template = rdkit_interface.to_mol(ref_heavy)
     peppr_sanitize(template)
-    Chem.AssignStereochemistryFrom3D(template)
+    Chem.AssignAtomChiralTagsFromStructure(template)
 
     # Resolved mol = same as template (exact match)
     resolved = rdkit_interface.to_mol(ref_heavy)
     peppr_sanitize(resolved)
-    Chem.AssignStereochemistryFrom3D(resolved)
+    Chem.AssignAtomChiralTagsFromStructure(resolved)
     assert compare_stereo_to_template(resolved, template) is True
 
-    # Flip one chiral center → mismatch
-    flipped = Chem.RWMol(resolved)
-    for atom in flipped.GetAtoms():
-        if atom.GetPropsAsDict().get("_CIPCode", ""):
-            chiral = atom.GetChiralTag()
-            if chiral == Chem.ChiralType.CHI_TETRAHEDRAL_CW:
-                atom.SetChiralTag(Chem.ChiralType.CHI_TETRAHEDRAL_CCW)
-            elif chiral == Chem.ChiralType.CHI_TETRAHEDRAL_CCW:
-                atom.SetChiralTag(Chem.ChiralType.CHI_TETRAHEDRAL_CW)
-            Chem.AssignStereochemistry(flipped, cleanIt=True, force=True)
-            break
-    assert compare_stereo_to_template(flipped.GetMol(), template) is False
+    # Invert the 3D geometry (improper reflection through the x=0 plane) →
+    # enantiomer → mismatch. compare_stereo_to_template judges stereo from
+    # coordinates, so flipping a chiral *tag* without moving atoms would be a
+    # no-op; the geometry is the source of truth, so we must move atoms.
+    from rdkit.Geometry import Point3D
+
+    flipped = Chem.Mol(resolved)
+    conf = flipped.GetConformer()
+    for i in range(flipped.GetNumAtoms()):
+        p = conf.GetAtomPosition(i)
+        conf.SetAtomPosition(i, Point3D(-p.x, p.y, p.z))
+    assert compare_stereo_to_template(flipped, template) is False
 
     # Achiral mol (DMS — no stereocenters)
     ref_dms = bt_info.residue("DMS")
