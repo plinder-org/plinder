@@ -1155,8 +1155,8 @@ class Scorer:
     minimum_threshold: float = 0.0
     # optional custom minimum threshold for each metric BEFORE scaling to 100
     minimum_thresholds: dict[str, float] = field(default_factory=dict)
-    max_protein_chains: int = 5
-    max_ligand_chains: int = 5
+    max_query_protein_chains: int = 30
+    max_query_proper_ligand_chains: int = 30
     shape_score_threads: int = 1
     _ligand_mol_cache: dict[tuple[str, str], Chem.Mol | None] = field(
         default_factory=dict, init=False, repr=False
@@ -1183,18 +1183,33 @@ class Scorer:
     def __post_init__(self) -> None:
         if self.shape_score_threads < 1:
             raise ValueError("shape_score_threads must be positive")
-        if self.max_protein_chains < 1 or self.max_ligand_chains < 1:
+        if self.max_query_protein_chains < 1 or self.max_query_proper_ligand_chains < 1:
             raise ValueError("scoring system chain limits must be positive")
         self.db_dir.mkdir(exist_ok=True, parents=True)
         self.scores_dir.mkdir(exist_ok=True, parents=True)
 
-    def system_is_scoreable(self, system: SystemView) -> bool:
-        """Return whether a holo system is within the configured chain limits."""
+    def system_is_query_scoreable(self, system: SystemView) -> bool:
+        """Return whether a holo system is small enough to score as a query."""
+        proper_ligand_count = sum(
+            ligand.is_proper for ligand in system.ligands.values()
+        )
         return (
             system.system_type == "holo"
-            and len(system.protein_chains_asym_id) <= self.max_protein_chains
-            and len(system.ligands) <= self.max_ligand_chains
+            and 0 < len(system.protein_chains_asym_id) <= self.max_query_protein_chains
+            and 0 < proper_ligand_count <= self.max_query_proper_ligand_chains
         )
+
+    @staticmethod
+    def system_is_target_scoreable(system: SystemView) -> bool:
+        """Return whether a system may contribute scores as a target.
+
+        Query limits exist to bound the work initiated by an entry.  Applying
+        them to targets as well would remove large systems from the score graph
+        entirely, so every protein-containing holo system remains available as
+        a target. Only proper ligands are emitted later by
+        :meth:`get_scores_holo`.
+        """
+        return system.system_type == "holo" and bool(system.protein_chains_asym_id)
 
     def resolve_ligand_sdf(self, data_dir: Path, ligand: LigandView) -> Path | None:
         """Resolve the canonical ASU ligand SDF for a ligand annotation."""
@@ -1845,6 +1860,147 @@ class Scorer:
             )
             raise
         return score_df_path
+
+    def repair_score_df_targets(
+        self,
+        data_dir: Path,
+        pdb_id: str,
+        *,
+        affected_target_entries: set[str],
+        search_db: str = "holo",
+        scratch_dir: Path | None = None,
+    ) -> Path:
+        """Replace only score rows whose target entry was reannotated."""
+        if search_db != "holo":
+            raise ValueError(
+                "targeted score repair currently supports holo scores only"
+            )
+        if pdb_id in affected_target_entries:
+            raise ValueError("an affected query entry requires a complete rescore")
+        score_path = self.db_dir / f"search_db={search_db}" / f"{pdb_id}.parquet"
+        candidate_path = (
+            self.scores_dir
+            / "ligand_3d_candidates"
+            / f"search_db={search_db}"
+            / f"shard={pdb_id[1:3]}"
+            / f"{pdb_id}.parquet"
+        )
+        if not score_path.is_file() or not candidate_path.is_file():
+            raise FileNotFoundError(
+                f"targeted score repair requires existing score and candidate files: "
+                f"score={score_path.is_file()} candidates={candidate_path.is_file()}"
+            )
+
+        requested_entries = {pdb_id, *affected_target_entries}
+        requested_entries.difference_update(self.entries)
+        if requested_entries:
+            self.entries.update(
+                load_entry_views(pdb_ids=requested_entries, data_dir=data_dir)
+            )
+        if pdb_id not in self.entries:
+            raise KeyError(f"query entry is absent from the current index: {pdb_id}")
+        target_system_ids = {
+            system_id
+            for target_pdb_id in affected_target_entries
+            for system_id in (
+                self.entries[target_pdb_id].systems
+                if target_pdb_id in self.entries
+                else {}
+            )
+        }
+        source_to_aln_file = {
+            f"{search_db}_{alignment_type}": data_dir
+            / "alignments"
+            / f"search_db={search_db}"
+            / f"alignment_type={alignment_type}"
+            / f"shard={pdb_id[1:3]}.parquet"
+            for alignment_type in ["foldseek", "mmseqs"]
+        }
+        ligand_3d_candidates: list[_Ligand3DCandidateType] = []
+        repaired = (
+            self.aggregate_scores(
+                pdb_id,
+                search_db=search_db,
+                data_dir=None,
+                source_to_aln_file=source_to_aln_file,
+                target_system_ids=target_system_ids,
+                ligand_3d_candidates=ligand_3d_candidates,
+            )
+            if target_system_ids
+            else None
+        )
+
+        def unaffected_target(values: pd.Series) -> pd.Series:
+            return ~values.astype(str).str.split("__").str[0].isin(
+                affected_target_entries
+            )
+
+        scores = pd.read_parquet(score_path)
+        scores = scores[unaffected_target(scores["target_system"])]
+        if repaired is not None and not repaired.empty:
+            scores = pd.concat([scores, repaired], ignore_index=True)
+        score_keys = [
+            "query_system",
+            "query_ligand_id",
+            "target_system",
+            "target_ligand_id",
+            "metric",
+        ]
+        if scores.duplicated(score_keys).any():
+            raise ValueError(
+                f"targeted score repair produced duplicate rows for {pdb_id}"
+            )
+        scores = scores.sort_values(
+            [column for column, _ in SORT_ORDER],
+            ascending=[order == "ascending" for _, order in SORT_ORDER],
+            ignore_index=True,
+        )
+
+        candidates = pd.read_parquet(candidate_path)
+        candidates = candidates[
+            ~candidates["target_entry"].astype(str).isin(affected_target_entries)
+        ]
+        if ligand_3d_candidates:
+            candidates = pd.concat(
+                [candidates, pd.DataFrame(ligand_3d_candidates)], ignore_index=True
+            )
+        candidate_keys = [
+            "query_system",
+            "query_ligand_id",
+            "target_system",
+            "target_ligand_id",
+        ]
+        if candidates.duplicated(candidate_keys).any():
+            raise ValueError(
+                f"targeted score repair produced duplicate candidates for {pdb_id}"
+            )
+
+        temporary_root = scratch_dir or score_path.parent
+        temporary_root.mkdir(exist_ok=True, parents=True)
+        score_temporary = temporary_root / f"{pdb_id}.repair-scores.parquet"
+        candidate_temporary = temporary_root / f"{pdb_id}.repair-candidates.parquet"
+        score_schema = schemas.PROTEIN_SIMILARITY_SCHEMA.with_metadata(
+            {b"plinder.ligand_3d": b"deferred"}
+        )
+        scores.to_parquet(
+            score_temporary,
+            index=False,
+            schema=score_schema,
+        )
+        candidates.to_parquet(
+            candidate_temporary,
+            index=False,
+            schema=schemas.LIGAND_3D_CANDIDATE_SCHEMA,
+        )
+        score_install = score_path.with_suffix(score_path.suffix + ".tmp")
+        candidate_install = candidate_path.with_suffix(candidate_path.suffix + ".tmp")
+        shutil.copyfile(score_temporary, score_install)
+        shutil.copyfile(candidate_temporary, candidate_install)
+        candidate_install.replace(candidate_path)
+        score_install.replace(score_path)
+        score_temporary.unlink(missing_ok=True)
+        candidate_temporary.unlink(missing_ok=True)
+        return score_path
 
     def load_alignments(
         self,
@@ -2653,7 +2809,7 @@ class Scorer:
                     )
             for target_system_id in self.entries[target_entry].systems:
                 target_system = self.entries[target_entry].systems[target_system_id]
-                if not self.system_is_scoreable(target_system) or (
+                if not self.system_is_target_scoreable(target_system) or (
                     target_system_ids is not None
                     and target_system_id not in target_system_ids
                 ):
@@ -2937,7 +3093,7 @@ class Scorer:
         column_mapr = self.get_column_mapr()
         pdb_vals = []
         for system in self.entries[pdb_id].systems.values():
-            if not self.system_is_scoreable(system) or (
+            if not self.system_is_query_scoreable(system) or (
                 query_system_ids is not None and system.id not in query_system_ids
             ):
                 continue

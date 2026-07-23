@@ -907,12 +907,26 @@ def _validate_final_tables(
                 "OR coalesce(ligand_is_artifact, false)))",
             )
         )
-        if missing_abilities or invalid_nonproper_abilities or invalid_systems:
+        mismatched_biounits = int(
+            _fetch_scalar(
+                connection,
+                "SELECT count(*) FROM annotation WHERE "
+                "split_part(ligand_id, '__', 2) IS DISTINCT FROM system_biounit_id "
+                "OR split_part(system_id, '__', 2) IS DISTINCT FROM system_biounit_id",
+            )
+        )
+        if (
+            missing_abilities
+            or invalid_nonproper_abilities
+            or invalid_systems
+            or mismatched_biounits
+        ):
             raise ValueError(
                 "annotation validation failed: "
                 f"missing_scoreability={missing_abilities}, "
                 f"nonproper_scoreability={invalid_nonproper_abilities}, "
-                f"all_ion_or_artifact_systems={invalid_systems}"
+                f"all_ion_or_artifact_systems={invalid_systems}, "
+                f"mismatched_biounits={mismatched_biounits}"
             )
         return {
             "row_counts": actual_counts,
@@ -1017,6 +1031,173 @@ def finalize_collation(
     return report
 
 
+def repair_collation(
+    data_dir: Path,
+    pdb_ids: Sequence[str],
+    *,
+    threads: int = 4,
+    memory_limit: str = "16GB",
+    scratch_dir: Path | None = None,
+    row_group_size: int = 100_000,
+) -> dict[str, Any]:
+    """Atomically replace selected entries in an existing collated index.
+
+    This is intended for corrections that require re-annotating a bounded set of
+    entries.  Unselected rows are read from the installed index, so release-only
+    columns are preserved without rebuilding every raw entry.
+    """
+    data_dir = data_dir.resolve()
+    selected = sorted({str(pdb_id).lower() for pdb_id in pdb_ids})
+    invalid = [
+        pdb_id
+        for pdb_id in selected
+        if re.fullmatch(r"[0-9][a-z0-9]{3}", pdb_id) is None
+    ]
+    if invalid:
+        raise ValueError(f"invalid repair PDB IDs: {invalid[:10]}")
+    if not selected:
+        raise ValueError("no PDB IDs selected for index repair")
+
+    final_paths = {
+        "annotation": data_dir / "index" / "annotation_table.parquet",
+        "entry_chains": data_dir / "index" / "entry_chains.parquet",
+        "entry_biounit_chains": data_dir / "index" / "entry_biounit_chains.parquet",
+        "entry_sources": data_dir / "index" / "entry_sources.parquet",
+    }
+    missing_final = [path for path in final_paths.values() if not path.is_file()]
+    if missing_final:
+        raise FileNotFoundError(f"missing installed index tables: {missing_final}")
+
+    rows = [
+        _entry_manifest_row(
+            data_dir,
+            data_dir / "raw_entries" / pdb_id[1:3] / f"{pdb_id}.parquet",
+        )
+        for pdb_id in selected
+    ]
+    _verify_manifest_inputs(rows, threads=threads)
+    temporary_annotation = _temporary_path(final_paths["annotation"])
+    replacement_paths = {
+        name: _temporary_path(path.with_name(f"repair-{path.name}"))
+        for name, path in final_paths.items()
+        if name != "annotation"
+    }
+
+    try:
+        for name, schema in SIDECAR_SCHEMAS.items():
+            source_key = {
+                "entry_chains": "chain_path",
+                "entry_biounit_chains": "biounit_chain_path",
+                "entry_sources": "source_path",
+            }[name]
+            sort_columns = {
+                "entry_chains": ("entry_pdb_id", "chain_asym_id"),
+                "entry_biounit_chains": (
+                    "entry_pdb_id",
+                    "biounit_id",
+                    "chain_instance",
+                ),
+                "entry_sources": ("entry_pdb_id",),
+            }[name]
+            _collate_sidecars(
+                [Path(str(row[source_key])) for row in rows],
+                replacement_paths[name],
+                schema,
+                sort_columns=sort_columns,
+                row_group_size=row_group_size,
+            )
+
+        connection = duckdb.connect()
+        try:
+            _configure_duckdb(
+                connection,
+                threads=threads,
+                memory_limit=memory_limit,
+                scratch_dir=scratch_dir,
+            )
+            connection.register(
+                "repaired_entries", pa.table({"entry_pdb_id": selected})
+            )
+            _build_annotation_view(
+                connection,
+                [str(row["annotation_path"]) for row in rows],
+                [str(row["ligand_path"]) for row in rows],
+            )
+            connection.read_parquet(str(final_paths["annotation"])).create_view(
+                "installed_annotation", replace=True
+            )
+            _copy_query(
+                connection,
+                "SELECT * FROM (SELECT installed.* FROM installed_annotation "
+                "AS installed ANTI JOIN repaired_entries USING (entry_pdb_id) "
+                "UNION ALL BY NAME SELECT * FROM collated_annotation) "
+                "ORDER BY entry_pdb_id, system_id, ligand_id",
+                temporary_annotation,
+                row_group_size=row_group_size,
+            )
+            for name in SIDECAR_SCHEMAS:
+                connection.read_parquet(str(final_paths[name])).create_view(
+                    f"installed_{name}", replace=True
+                )
+                connection.read_parquet(str(replacement_paths[name])).create_view(
+                    f"replacement_{name}", replace=True
+                )
+                differences = int(
+                    _fetch_scalar(
+                        connection,
+                        "SELECT count(*) FROM ("
+                        f"(SELECT installed.* FROM installed_{name} AS installed "
+                        "INNER JOIN repaired_entries USING (entry_pdb_id) "
+                        f"EXCEPT ALL SELECT * FROM replacement_{name}) "
+                        "UNION ALL "
+                        f"(SELECT * FROM replacement_{name} EXCEPT ALL "
+                        f"SELECT installed.* FROM installed_{name} AS installed "
+                        "INNER JOIN repaired_entries USING (entry_pdb_id)))",
+                    )
+                )
+                if differences:
+                    raise ValueError(
+                        f"targeted repair changed {name}; rebuild the protein "
+                        "scoring inputs and mapped alignments instead"
+                    )
+        finally:
+            connection.close()
+
+        validation_paths = {**final_paths, "annotation": temporary_annotation}
+        expected_counts = {
+            name: pq.ParquetFile(path).metadata.num_rows
+            for name, path in validation_paths.items()
+        }
+        validation = _validate_final_tables(
+            validation_paths,
+            expected_counts=expected_counts,
+            threads=threads,
+            memory_limit=memory_limit,
+            scratch_dir=scratch_dir,
+        )
+        marker = data_dir / "index" / FINAL_MARKER_NAME
+        marker.unlink(missing_ok=True)
+        final_paths["annotation"].unlink(missing_ok=True)
+        temporary_annotation.replace(final_paths["annotation"])
+    finally:
+        for path in [temporary_annotation, *replacement_paths.values()]:
+            path.unlink(missing_ok=True)
+
+    report: dict[str, Any] = {
+        "version": COLLATION_VERSION,
+        "status": "complete",
+        "mode": "targeted_repair",
+        "repaired_entry_count": len(selected),
+        "repaired_entry_digest": hashlib.sha256(
+            ("\n".join(selected) + "\n").encode("utf-8")
+        ).hexdigest(),
+        "outputs": {name: str(path) for name, path in final_paths.items()},
+        **validation,
+    }
+    _write_json_atomic(data_dir / "index" / FINAL_MARKER_NAME, report)
+    return report
+
+
 def run_collation(
     data_dir: Path,
     *,
@@ -1063,16 +1244,19 @@ def planned_code_batch(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    for name in ("plan", "shard", "finalize", "run"):
+    for name in ("plan", "shard", "finalize", "repair", "run"):
         command = commands.add_parser(name)
         command.add_argument("data_dir", type=Path)
         if name == "shard":
             command.add_argument("codes", nargs="*")
             command.add_argument("--batch-index", type=int)
             command.add_argument("--batch-size", type=int)
-        if name in {"plan", "shard", "finalize", "run"}:
+            command.add_argument("--pdb-manifest", type=Path)
+        if name == "repair":
+            command.add_argument("--pdb-manifest", type=Path, required=True)
+        if name in {"plan", "shard", "finalize", "repair", "run"}:
             command.add_argument("--threads", type=int, default=1)
-        if name in {"shard", "finalize", "run"}:
+        if name in {"shard", "finalize", "repair", "run"}:
             command.add_argument("--memory-limit", default="8GB")
             command.add_argument("--scratch-dir", type=Path)
             command.add_argument("--row-group-size", type=int, default=100_000)
@@ -1087,6 +1271,21 @@ def main() -> None:
         result = plan_collation(args.data_dir, threads=args.threads)
     elif args.command == "shard":
         codes = args.codes
+        if args.pdb_manifest is not None:
+            if codes:
+                raise ValueError("pass a PDB manifest or explicit codes, not both")
+            from plinder.data.pipeline.ingest import load_manifest
+
+            codes = sorted({pdb_id[1:3] for pdb_id in load_manifest(args.pdb_manifest)})
+            if args.batch_index is not None or args.batch_size is not None:
+                if args.batch_index is None or args.batch_size is None:
+                    raise ValueError(
+                        "both --batch-index and --batch-size are required for a slice"
+                    )
+                start = args.batch_index * args.batch_size
+                codes = codes[start : start + args.batch_size]
+                args.batch_index = None
+                args.batch_size = None
         if args.batch_index is not None or args.batch_size is not None:
             if codes or args.batch_index is None or args.batch_size is None:
                 raise ValueError(
@@ -1116,6 +1315,17 @@ def main() -> None:
     elif args.command == "finalize":
         result = finalize_collation(
             args.data_dir,
+            threads=args.threads,
+            memory_limit=args.memory_limit,
+            scratch_dir=args.scratch_dir,
+            row_group_size=args.row_group_size,
+        )
+    elif args.command == "repair":
+        from plinder.data.pipeline.ingest import load_manifest
+
+        result = repair_collation(
+            args.data_dir,
+            load_manifest(args.pdb_manifest),
             threads=args.threads,
             memory_limit=args.memory_limit,
             scratch_dir=args.scratch_dir,

@@ -602,7 +602,9 @@ def test_default_cluster_metrics_use_only_pocket_weighted_shape():
     assert all(is_ligand_level_metric(metric) for metric in METRICS)
 
 
-def test_component_node_universe_uses_prepared_cache(tmp_path, monkeypatch):
+def test_component_node_universe_keeps_large_holo_targets_in_prepared_cache(
+    tmp_path, monkeypatch
+):
     from plinder.data import clusters
 
     index_dir = tmp_path / "index"
@@ -619,7 +621,7 @@ def test_component_node_universe_uses_prepared_cache(tmp_path, monkeypatch):
     ).to_parquet(index_dir / "annotation_table.parquet", index=False)
 
     report = clusters.prepare_component_node_universe(tmp_path)
-    assert report["ligand_count"] == 1
+    assert report["ligand_count"] == 2
     assert report["system_count"] == 2
     monkeypatch.setattr(
         clusters,
@@ -630,8 +632,8 @@ def test_component_node_universe_uses_prepared_cache(tmp_path, monkeypatch):
         data_dir=tmp_path,
         metric="pocket_qcov",
     )
-    assert nodes == ["l1"]
-    assert systems == {"s1", "s3"}
+    assert nodes == ["l1", "l2"]
+    assert systems == {"s1", "s2"}
 
 
 def test_tanimoto_clusters_expand_unique_smiles_to_ligands(tmp_path):

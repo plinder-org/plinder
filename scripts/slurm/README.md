@@ -266,6 +266,11 @@ sbatch \
   scripts/slurm/score_v3.sbatch score "${OUTPUT_ROOT}" 50
 ```
 
+Query-system safety caps default to 30 protein receptor chains and 30 proper
+ligand chains. Larger holo systems remain available as targets. Override the
+query caps with `PLINDER_MAX_QUERY_PROTEIN_CHAINS` and
+`PLINDER_MAX_QUERY_PROPER_LIGAND_CHAINS` when planning.
+
 This first pass calculates only protein and pocket scores. For every proper,
 3D-scoreable ligand pair with positive pocket query coverage it also records a
 full-precision candidate row; it does not load an SDF or run shape alignment.

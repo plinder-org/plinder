@@ -1310,6 +1310,116 @@ def test_get_score_df_defers_ligand_3d_and_writes_full_precision_candidates(
     assert calls == 1
 
 
+def test_repair_score_df_targets_replaces_only_affected_target_rows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from types import SimpleNamespace
+
+    scorer = Scorer(
+        entries={},
+        source_to_full_db_file={},
+        db_dir=tmp_path / "dbs" / "subdbs",
+        scores_dir=tmp_path / "scores",
+    )
+    score_path = scorer.db_dir / "search_db=holo" / "1abc.parquet"
+    score_path.parent.mkdir(parents=True)
+
+    def score_row(target_system: str, similarity: int) -> dict[str, object]:
+        return {
+            "query_system": "1abc__1__1.A__1.B",
+            "query_ligand_id": "1abc__1__1.B",
+            "target_system": target_system,
+            "target_ligand_id": f"{target_system.split('__', 1)[0]}__1__1.Y",
+            "protein_mapping": "1.A:1.X",
+            "mapping": None,
+            "protein_mapper": "foldseek",
+            "source": "foldseek",
+            "metric": "pocket_qcov",
+            "similarity": similarity,
+        }
+
+    pd.DataFrame(
+        [
+            score_row("2def__1__1.X__1.Y", 60),
+            score_row("3ghi__1__1.X__1.Y", 70),
+        ]
+    ).to_parquet(
+        score_path,
+        index=False,
+        schema=PROTEIN_SIMILARITY_SCHEMA.with_metadata(
+            {b"plinder.ligand_3d": b"deferred"}
+        ),
+    )
+    candidate_path = (
+        scorer.scores_dir / "ligand_3d_candidates/search_db=holo/shard=ab/1abc.parquet"
+    )
+    candidate_path.parent.mkdir(parents=True)
+
+    def candidate_row(target_entry: str, target_system: str) -> dict[str, object]:
+        return {
+            "query_system": "1abc__1__1.A__1.B",
+            "query_ligand_id": "1abc__1__1.B",
+            "query_entry": "1abc",
+            "query_ligand_asym_id": "B",
+            "target_system": target_system,
+            "target_ligand_id": f"{target_entry}__1__1.Y",
+            "target_entry": target_entry,
+            "target_ligand_asym_id": "Y",
+            "protein_mapping": "1.A:1.X",
+            "protein_mapper": "foldseek",
+            "pocket_qcov": 0.6,
+        }
+
+    pd.DataFrame(
+        [
+            candidate_row("2def", "2def__1__1.X__1.Y"),
+            candidate_row("3ghi", "3ghi__1__1.X__1.Y"),
+        ]
+    ).to_parquet(
+        candidate_path,
+        index=False,
+        schema=scoring_module.schemas.LIGAND_3D_CANDIDATE_SCHEMA,
+    )
+    entries = {
+        "1abc": SimpleNamespace(systems={"1abc__1__1.A__1.B": object()}),
+        "2def": SimpleNamespace(systems={"2def__2__1.X__1.Y": object()}),
+    }
+    monkeypatch.setattr(
+        scoring_module,
+        "load_entry_views",
+        lambda *, pdb_ids, data_dir: {
+            pdb_id: entries[pdb_id] for pdb_id in pdb_ids if pdb_id in entries
+        },
+    )
+
+    def repaired_scores(*_args, **kwargs):
+        assert kwargs["target_system_ids"] == {"2def__2__1.X__1.Y"}
+        kwargs["ligand_3d_candidates"].append(
+            candidate_row("2def", "2def__2__1.X__1.Y")
+        )
+        return pd.DataFrame([score_row("2def__2__1.X__1.Y", 80)])
+
+    monkeypatch.setattr(scorer, "aggregate_scores", repaired_scores)
+
+    scorer.repair_score_df_targets(
+        tmp_path,
+        "1abc",
+        affected_target_entries={"2def"},
+        scratch_dir=tmp_path / "scratch",
+    )
+
+    repaired = pd.read_parquet(score_path)
+    assert set(repaired["target_system"]) == {
+        "2def__2__1.X__1.Y",
+        "3ghi__1__1.X__1.Y",
+    }
+    candidates = pd.read_parquet(candidate_path)
+    assert set(candidates["target_system"]) == {
+        "2def__2__1.X__1.Y",
+        "3ghi__1__1.X__1.Y",
+    }
+
+
 def test_map_alignment_files_replaces_stale_schema_without_force(
     tmp_path, monkeypatch
 ) -> None:
@@ -1817,7 +1927,9 @@ def _entry(pdb_id: str, system: SystemView) -> EntryView:
     )
 
 
-def test_scorer_limits_systems_to_five_protein_and_ligand_chains(tmp_path) -> None:
+def test_scorer_limits_query_systems_by_protein_and_proper_ligand_chains(
+    tmp_path,
+) -> None:
     ligands = [
         _ligand(
             f"1abc__1__1.{chr(ord('C') + index)}",
@@ -1829,20 +1941,33 @@ def test_scorer_limits_systems_to_five_protein_and_ligand_chains(tmp_path) -> No
     ]
     five_ligands = _system("1abc", ligands[:5])
     six_ligands = _system("1abc", ligands)
+    six_ligands_one_improper = _system(
+        "1abc", [*ligands[:5], replace(ligands[5], is_proper=False)]
+    )
+    no_proper_ligands = _system("1abc", [replace(ligands[0], is_proper=False)])
     six_proteins = replace(
         five_ligands,
         protein_chains_asym_id=[f"1.{chain}" for chain in "ABCDEF"],
     )
+    no_proteins = replace(five_ligands, protein_chains_asym_id=[])
     scorer = Scorer(
         entries={},
         source_to_full_db_file={},
         db_dir=tmp_path / "db",
         scores_dir=tmp_path / "scores",
+        max_query_protein_chains=5,
+        max_query_proper_ligand_chains=5,
     )
 
-    assert scorer.system_is_scoreable(five_ligands)
-    assert not scorer.system_is_scoreable(six_ligands)
-    assert not scorer.system_is_scoreable(six_proteins)
+    assert scorer.system_is_query_scoreable(five_ligands)
+    assert not scorer.system_is_query_scoreable(six_ligands)
+    assert scorer.system_is_query_scoreable(six_ligands_one_improper)
+    assert not scorer.system_is_query_scoreable(no_proper_ligands)
+    assert not scorer.system_is_query_scoreable(six_proteins)
+    assert not scorer.system_is_query_scoreable(no_proteins)
+    assert scorer.system_is_target_scoreable(six_ligands)
+    assert scorer.system_is_target_scoreable(six_proteins)
+    assert not scorer.system_is_target_scoreable(no_proteins)
 
 
 def test_holo_scores_are_emitted_per_ligand_pair(tmp_path, monkeypatch) -> None:

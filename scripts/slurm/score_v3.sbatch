@@ -63,11 +63,19 @@ case "${MODE}" in
             --scratch-dir "${TASK_SCRATCH}"
         )
         ;;
+    refresh-alignment-lookup)
+        ARGS+=(
+            --threads "${SLURM_CPUS_PER_TASK:-1}"
+            --scratch-dir "${TASK_SCRATCH}"
+        )
+        ;;
     plan-score-batches)
         ARGS+=(
             --batch-size "${BATCH_SIZE}"
             --threads "${SLURM_CPUS_PER_TASK:-1}"
             --scratch-dir "${TASK_SCRATCH}"
+            --max-query-protein-chains "${PLINDER_MAX_QUERY_PROTEIN_CHAINS:-30}"
+            --max-query-proper-ligand-chains "${PLINDER_MAX_QUERY_PROPER_LIGAND_CHAINS:-30}"
         )
         ;;
     plan-ligand-3d)
@@ -80,6 +88,47 @@ case "${MODE}" in
         ;;
     plan-ligand-3d-retries)
         ARGS+=(--batch-size "${BATCH_SIZE}")
+        ;;
+    plan-score-repair)
+        : "${PLINDER_AFFECTED_PDB_MANIFEST:?set PLINDER_AFFECTED_PDB_MANIFEST}"
+        ARGS+=(
+            --affected-manifest "${PLINDER_AFFECTED_PDB_MANIFEST}"
+            --batch-size "${BATCH_SIZE}"
+            --target-batch-size "${PLINDER_TARGET_REPAIR_BATCH_SIZE:-100}"
+            --threads "${SLURM_CPUS_PER_TASK:-1}"
+            --scratch-dir "${TASK_SCRATCH}"
+            --memory-limit "${PLINDER_DUCKDB_MEMORY_LIMIT:-32GB}"
+        )
+        if [[ -n "${PLINDER_ADDITIONAL_FULL_QUERY_MANIFEST:-}" ]]; then
+            ARGS+=(
+                --additional-full-query-manifest
+                "${PLINDER_ADDITIONAL_FULL_QUERY_MANIFEST}"
+            )
+        fi
+        if [[ -n "${PLINDER_SCORE_REPAIR_MANIFEST:-}" ]]; then
+            ARGS+=(--output "${PLINDER_SCORE_REPAIR_MANIFEST}")
+        fi
+        ;;
+    plan-score-repair-ligand-3d)
+        : "${PLINDER_SCORE_REPAIR_MANIFEST:?set PLINDER_SCORE_REPAIR_MANIFEST}"
+        ARGS+=(
+            --repair-manifest "${PLINDER_SCORE_REPAIR_MANIFEST}"
+            --batch-size "${BATCH_SIZE}"
+            --threads "${SLURM_CPUS_PER_TASK:-1}"
+            --scratch-dir "${TASK_SCRATCH}"
+            --memory-limit "${PLINDER_DUCKDB_MEMORY_LIMIT:-8GB}"
+        )
+        ;;
+    finalize-score-repair-queries)
+        : "${PLINDER_SCORE_REPAIR_MANIFEST:?set PLINDER_SCORE_REPAIR_MANIFEST}"
+        ARGS+=(
+            --repair-manifest "${PLINDER_SCORE_REPAIR_MANIFEST}"
+            --max-new-drops "${PLINDER_MAX_NEW_REPAIR_DROPS:-2000}"
+        )
+        ;;
+    validate-score-repair)
+        : "${PLINDER_SCORE_REPAIR_MANIFEST:?set PLINDER_SCORE_REPAIR_MANIFEST}"
+        ARGS+=(--repair-manifest "${PLINDER_SCORE_REPAIR_MANIFEST}")
         ;;
     plan-clusters)
         ARGS+=(
@@ -102,7 +151,7 @@ case "${MODE}" in
         ;;
     finalize-alignments|finalize-ligands|finalize-scores|finalize-ligand-3d-retries|finalize-index|merge-components|cluster-stats)
         ;;
-    search-foldseek|search-mmseqs|map|pack-ligands|score|score-pdbs|collate-ligand-3d-candidates|score-ligand-3d|score-ligand-3d-retry|collate-ligand-3d|merge-ligand-3d|export-sucos-shards|collate-alignments|collate-score-partitions|component-reductions|communities)
+    search-foldseek|search-mmseqs|map|pack-ligands|score|score-pdbs|repair-score-pdbs|repair-score-target-remainders|repair-pack-ligands|repair-candidates|repair-ligand-3d|repair-merge-ligand-3d|repair-score-shards|repair-sucos-shards|collate-ligand-3d-candidates|score-ligand-3d|score-ligand-3d-retry|collate-ligand-3d|merge-ligand-3d|export-sucos-shards|collate-alignments|collate-score-partitions|component-reductions|communities)
         ARGS+=(
             --batch-index "${BATCH_INDEX}"
             --batch-size "${BATCH_SIZE}"
@@ -119,7 +168,11 @@ case "${MODE}" in
             : "${PLINDER_SCORE_PDB_MANIFEST:?set PLINDER_SCORE_PDB_MANIFEST}"
             ARGS+=(--pdb-manifest "${PLINDER_SCORE_PDB_MANIFEST}")
         fi
-        if [[ "${MODE}" == "export-sucos-shards" ]]; then
+        if [[ "${MODE}" == repair-* ]]; then
+            : "${PLINDER_SCORE_REPAIR_MANIFEST:?set PLINDER_SCORE_REPAIR_MANIFEST}"
+            ARGS+=(--repair-manifest "${PLINDER_SCORE_REPAIR_MANIFEST}")
+        fi
+        if [[ "${MODE}" == "export-sucos-shards" || "${MODE}" == "repair-sucos-shards" ]]; then
             ARGS+=(
                 --output-dir "${PLINDER_SUCOS_EXPORT_DIR:-${DATA_DIR}/exports/all_sucos_shape_pocket_qcov}"
                 --memory-limit "${PLINDER_DUCKDB_MEMORY_LIMIT:-16GB}"

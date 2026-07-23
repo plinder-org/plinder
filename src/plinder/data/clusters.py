@@ -1219,8 +1219,6 @@ def _eligible_annotation(data_dir: Path) -> pd.DataFrame:
         "system_id",
         "ligand_id",
         "system_type",
-        "system_num_protein_chains",
-        "system_num_ligand_chains",
         "ligand_is_proper",
     ]
     annotation = pd.read_parquet(
@@ -1229,8 +1227,7 @@ def _eligible_annotation(data_dir: Path) -> pd.DataFrame:
     )
     return annotation[
         (annotation["system_type"] == "holo")
-        & (annotation["system_num_protein_chains"] <= 5)
-        & (annotation["system_num_ligand_chains"] <= 5)
+        & annotation["ligand_is_proper"].fillna(False).astype(bool)
     ]
 
 

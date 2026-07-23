@@ -10,7 +10,7 @@ umask 002
 
 MODE=${1:-shard}
 case "${MODE}" in
-    plan|finalize)
+    plan|finalize|repair)
         DATA_DIR=${2:?'usage: sbatch collate_v3_shards.sbatch MODE DATA_DIR'}
         BATCH_SIZE=0
         ;;
@@ -58,12 +58,29 @@ elif [[ "${MODE}" == "finalize" ]]; then
             --threads "${SLURM_CPUS_PER_TASK:-1}" \
             --memory-limit "${MEMORY_LIMIT}" \
             --scratch-dir "${SCRATCH_ROOT}/${JOB_ID}-${BATCH_INDEX}"
-else
+elif [[ "${MODE}" == "repair" ]]; then
+    : "${PLINDER_COLLATE_PDB_MANIFEST:?set PLINDER_COLLATE_PDB_MANIFEST for repair}"
     /usr/bin/time -v -o "${TIME_OUTPUT}" \
-        python -m plinder.data.pipeline.collate shard "${DATA_DIR}" \
-            --batch-index "${BATCH_INDEX}" \
-            --batch-size "${BATCH_SIZE}" \
+        python -m plinder.data.pipeline.collate repair "${DATA_DIR}" \
+            --pdb-manifest "${PLINDER_COLLATE_PDB_MANIFEST}" \
             --threads "${SLURM_CPUS_PER_TASK:-1}" \
             --memory-limit "${MEMORY_LIMIT}" \
             --scratch-dir "${SCRATCH_ROOT}/${JOB_ID}-${BATCH_INDEX}"
+else
+    SHARD_ARGS=(
+        --threads "${SLURM_CPUS_PER_TASK:-1}"
+        --memory-limit "${MEMORY_LIMIT}"
+        --scratch-dir "${SCRATCH_ROOT}/${JOB_ID}-${BATCH_INDEX}"
+    )
+    if [[ -n "${PLINDER_COLLATE_PDB_MANIFEST:-}" ]]; then
+        SHARD_ARGS+=(
+            --pdb-manifest "${PLINDER_COLLATE_PDB_MANIFEST}"
+            --batch-index "${BATCH_INDEX}"
+            --batch-size "${BATCH_SIZE}"
+        )
+    else
+        SHARD_ARGS+=(--batch-index "${BATCH_INDEX}" --batch-size "${BATCH_SIZE}")
+    fi
+    /usr/bin/time -v -o "${TIME_OUTPUT}" \
+        python -m plinder.data.pipeline.collate shard "${DATA_DIR}" "${SHARD_ARGS[@]}"
 fi

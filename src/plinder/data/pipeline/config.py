@@ -201,8 +201,8 @@ class ScorerConfig:
     minimum_threshold: float = 0.3
     minimum_thresholds: dict[str, float] = field(default_factory=dict)
     max_alignment_rows_per_query: int = 5_000_000
-    max_protein_chains: int = 5
-    max_ligand_chains: int = 5
+    max_query_protein_chains: int = 30
+    max_query_proper_ligand_chains: int = 30
     sub_databases: Any = "holo,apo,pred"
 
     def __post_init__(self) -> None:
@@ -225,8 +225,8 @@ class ScorerConfig:
                 )
         if self.max_alignment_rows_per_query < 1:
             raise ValueError("scorer.max_alignment_rows_per_query must be positive")
-        if self.max_protein_chains < 1 or self.max_ligand_chains < 1:
-            raise ValueError("scorer system chain limits must be positive")
+        if self.max_query_protein_chains < 1 or self.max_query_proper_ligand_chains < 1:
+            raise ValueError("scorer query system chain limits must be positive")
 
 
 @dataclass

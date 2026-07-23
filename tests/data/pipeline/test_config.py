@@ -57,8 +57,8 @@ def test_default_config():
     assert cfg.data.plinder_release is not None
     assert cfg.scorer.minimum_threshold == 0.3
     assert cfg.scorer.max_alignment_rows_per_query == 5_000_000
-    assert cfg.scorer.max_protein_chains == 5
-    assert cfg.scorer.max_ligand_chains == 5
+    assert cfg.scorer.max_query_protein_chains == 30
+    assert cfg.scorer.max_query_proper_ligand_chains == 30
     assert list(cfg.flow.cluster_thresholds) == [30, 50, 70, 90, 100]
     assert cfg.flow.component_reduction_metric_workers == 4
 

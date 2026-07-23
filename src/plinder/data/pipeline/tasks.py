@@ -718,9 +718,38 @@ def make_alignment_chain_lookup(
             """
         )
     )
+    lookup_is_unchanged = False
+    if lookup.is_file():
+        lookup_schema = pq.read_schema(lookup)
+        temporary_schema = pq.read_schema(temporary)
+        if lookup_schema.equals(temporary_schema):
+            difference_count = con.sql(
+                dedent(
+                    f"""
+                    SELECT count(*) FROM (
+                        (SELECT * FROM read_parquet('{lookup.as_posix()}')
+                         EXCEPT ALL
+                         SELECT * FROM read_parquet('{temporary.as_posix()}'))
+                        UNION ALL
+                        (SELECT * FROM read_parquet('{temporary.as_posix()}')
+                         EXCEPT ALL
+                         SELECT * FROM read_parquet('{lookup.as_posix()}'))
+                    )
+                    """
+                )
+            ).fetchone()
+            lookup_is_unchanged = difference_count == (0,)
+    con.close()
     if _alignment_chain_lookup_input_signatures(data_dir) != input_signatures:
         temporary.unlink(missing_ok=True)
         raise RuntimeError("entry indexes changed while building chain lookup")
+    if lookup_is_unchanged:
+        temporary.unlink(missing_ok=True)
+        _write_alignment_chain_lookup_manifest(data_dir)
+        LOG.info(
+            "make_alignment_chain_lookup: refreshed unchanged lookup input signatures"
+        )
+        return lookup
     lookup.parent.mkdir(exist_ok=True, parents=True)
     install_path = lookup.with_suffix(lookup.suffix + ".tmp")
     copyfile(temporary, install_path)
@@ -1358,6 +1387,80 @@ def make_batch_scores(
             )
 
 
+def repair_batch_scores(
+    *,
+    data_dir: Path,
+    repairs: list[dict[str, Any]],
+    scorer_cfg: DictConfig,
+    scratch_dir: Path,
+    threads: int = 1,
+) -> None:
+    """Repair complete affected queries and target-only rows in place."""
+    if threads < 1:
+        raise ValueError("threads must be positive")
+    pdb_ids = [
+        str(repair["pdb_id"])
+        for repair in repairs
+        if str(repair["repair_mode"]) != "drop"
+    ]
+    scorer = None
+    if pdb_ids:
+        scorer, _, _ = utils.get_scorer(
+            data_dir=data_dir,
+            pdb_ids=pdb_ids,
+            scorer_cfg=scorer_cfg,
+            load_entries=False,
+        )
+        scorer.shape_score_threads = threads
+    for repair in repairs:
+        pdb_id = str(repair["pdb_id"])
+        mode = str(repair["repair_mode"])
+        if mode == "drop":
+            (
+                data_dir / "dbs" / "subdbs" / "search_db=holo" / f"{pdb_id}.parquet"
+            ).unlink(missing_ok=True)
+            (
+                data_dir
+                / "scores"
+                / "ligand_3d_candidates"
+                / "search_db=holo"
+                / f"shard={pdb_id[1:3]}"
+                / f"{pdb_id}.parquet"
+            ).unlink(missing_ok=True)
+        elif mode == "full":
+            if scorer is None:
+                raise RuntimeError("score repair unexpectedly lacks a scorer")
+            scorer.get_score_df(
+                data_dir,
+                pdb_id,
+                search_db="holo",
+                overwrite=True,
+                map_alignments=False,
+                scratch_dir=scratch_dir,
+                source_to_aln_file={
+                    f"holo_{alignment_type}": _alignment_release_path(
+                        data_dir=data_dir,
+                        search_db="holo",
+                        alignment_type=alignment_type,
+                        shard=pdb_id[1:3],
+                    )
+                    for alignment_type in ["foldseek", "mmseqs"]
+                },
+                defer_ligand_3d=True,
+            )
+        elif mode == "targets":
+            if scorer is None:
+                raise RuntimeError("score repair unexpectedly lacks a scorer")
+            scorer.repair_score_df_targets(
+                data_dir,
+                pdb_id,
+                affected_target_entries=set(map(str, repair["target_pdb_ids"])),
+                scratch_dir=scratch_dir,
+            )
+        else:
+            raise ValueError(f"unknown score repair mode: {mode!r}")
+
+
 def _ligand_3d_candidate_shard_paths(data_dir: Path, shard: str) -> tuple[Path, Path]:
     root = data_dir / "scores" / "ligand_3d_candidate_shards"
     return root / f"shard={shard}.parquet", root / f"shard={shard}.json"
@@ -1853,6 +1956,7 @@ def merge_ligand_3d_scores(
     force_update: bool,
     scratch_dir: Path,
     threads: int = 1,
+    reuse_cached_pairs: bool = False,
 ) -> list[Path]:
     """Publish complete V3 scores directly as immutable query shards."""
     from plinder.data.pipeline.score import active_scoring_query_ids
@@ -1898,19 +2002,24 @@ def merge_ligand_3d_scores(
             if set(schemas.PROTEIN_SIMILARITY_SCHEMA.names).issubset(schema.names):
                 outputs.append(output)
                 continue
-        if not _ligand_3d_query_shard_is_ready(data_dir=data_dir, shard=shard):
-            raise RuntimeError(
-                f"ligand 3D query shard {shard} is not ready; retry this merge "
-                "task after all canonical-pair batches are complete"
-            )
-
-        collate_ligand_3d_scores(
-            data_dir=data_dir,
-            shards=[shard],
-            scratch_dir=scratch_dir / "pairs" / shard,
-            threads=threads,
-        )
         pair_path = data_dir / "scores" / "ligand_3d_by_query" / f"{shard}.parquet"
+        if reuse_cached_pairs:
+            if not pair_path.is_file():
+                raise FileNotFoundError(
+                    f"missing cached canonical ligand-pair scores for shard {shard}"
+                )
+        else:
+            if not _ligand_3d_query_shard_is_ready(data_dir=data_dir, shard=shard):
+                raise RuntimeError(
+                    f"ligand 3D query shard {shard} is not ready; retry this merge "
+                    "task after all canonical-pair batches are complete"
+                )
+            collate_ligand_3d_scores(
+                data_dir=data_dir,
+                shards=[shard],
+                scratch_dir=scratch_dir / "pairs" / shard,
+                threads=threads,
+            )
         candidate_path = (
             data_dir
             / "scores"

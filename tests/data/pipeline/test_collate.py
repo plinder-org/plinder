@@ -14,6 +14,7 @@ from plinder.data.pipeline.collate import (
     finalize_collation,
     plan_collation,
     planned_code_batch,
+    repair_collation,
     run_collation,
 )
 
@@ -122,25 +123,25 @@ def _write_release(data_dir: Path) -> None:
         "1abc",
         ligand_rows=[
             {
-                "ligand_id": "1abc__1.L",
+                "ligand_id": "1abc__1__1.L",
                 "ccd": "ATP",
                 "proper": True,
                 "cofactor": True,
             },
             {
-                "ligand_id": "1abc__1.Z",
+                "ligand_id": "1abc__1__1.Z",
                 "ccd": "ZN",
                 "proper": False,
                 "ion": True,
             },
         ],
-        scoreability={"1abc__1.L": True},
+        scoreability={"1abc__1__1.L": True},
     )
     _write_entry(
         data_dir,
         "2def",
-        ligand_rows=[{"ligand_id": "2def__1.L", "ccd": "LIG", "proper": True}],
-        scoreability={"2def__1.L": False},
+        ligand_rows=[{"ligand_id": "2def__1__1.L", "ccd": "LIG", "proper": True}],
+        scoreability={"2def__1__1.L": False},
         ph=7.4,
     )
 
@@ -183,11 +184,70 @@ def test_plan_shards_and_finalize_real_v3_contract(tmp_path: Path) -> None:
     assert first_entry["system_ligand_has_cofactor"].all()
     assert first_entry["system_ligand_has_ion"].all()
     assert first_entry.set_index("ligand_id")["ligand_is_3d_score_able"].to_dict() == {
-        "1abc__1.L": True,
-        "1abc__1.Z": False,
+        "1abc__1__1.L": True,
+        "1abc__1__1.Z": False,
     }
     marker = json.loads((tmp_path / "index/collation.json").read_text())
     assert marker["status"] == "complete"
+
+
+def test_targeted_repair_preserves_unaffected_release_only_columns(
+    tmp_path: Path,
+) -> None:
+    _write_release(tmp_path)
+    run_collation(tmp_path, memory_limit="1GB")
+    installed = pd.read_parquet(tmp_path / "index/annotation_table.parquet")
+    installed["release_only"] = installed["entry_pdb_id"].map(
+        {"1abc": "old", "2def": "keep"}
+    )
+    installed.to_parquet(tmp_path / "index/annotation_table.parquet", index=False)
+    chain_path = tmp_path / "index/entry_chains.parquet"
+    before_chain_stat = chain_path.stat()
+
+    raw = pd.read_parquet(tmp_path / "raw_entries/ab/1abc.parquet")
+    raw["entry_pH"] = 6.5
+    raw.to_parquet(tmp_path / "raw_entries/ab/1abc.parquet", index=False)
+
+    report = repair_collation(tmp_path, ["1ABC", "1abc"], threads=2, memory_limit="1GB")
+
+    assert report["mode"] == "targeted_repair"
+    assert report["repaired_entry_count"] == 1
+    repaired = pd.read_parquet(tmp_path / "index/annotation_table.parquet")
+    assert repaired.loc[repaired["entry_pdb_id"].eq("1abc"), "entry_pH"].eq(6.5).all()
+    assert (
+        repaired.loc[repaired["entry_pdb_id"].eq("1abc"), "release_only"].isna().all()
+    )
+    assert (
+        repaired.loc[repaired["entry_pdb_id"].eq("2def"), "release_only"]
+        .eq("keep")
+        .all()
+    )
+    repaired_chains = pd.read_parquet(tmp_path / "index/entry_chains.parquet")
+    lengths = repaired_chains.set_index("entry_pdb_id")["chain_length"].to_dict()
+    assert lengths == {"1abc": 300, "2def": 300}
+    after_chain_stat = chain_path.stat()
+    assert (
+        after_chain_stat.st_ino,
+        after_chain_stat.st_size,
+        after_chain_stat.st_mtime_ns,
+    ) == (
+        before_chain_stat.st_ino,
+        before_chain_stat.st_size,
+        before_chain_stat.st_mtime_ns,
+    )
+
+
+def test_targeted_repair_rejects_chain_metadata_changes(tmp_path: Path) -> None:
+    _write_release(tmp_path)
+    run_collation(tmp_path, memory_limit="1GB")
+    chains = pd.read_parquet(tmp_path / "raw_entries/ab/1abc/entry_chains.parquet")
+    chains["chain_length"] = 301
+    chains.to_parquet(
+        tmp_path / "raw_entries/ab/1abc/entry_chains.parquet", index=False
+    )
+
+    with pytest.raises(ValueError, match="changed entry_chains"):
+        repair_collation(tmp_path, ["1abc"], memory_limit="1GB")
 
 
 def test_shard_rejects_inputs_changed_after_plan(tmp_path: Path) -> None:
@@ -271,6 +331,18 @@ def test_plan_supports_bounded_parallel_inventory(tmp_path: Path) -> None:
         plan_collation(tmp_path, threads=0)
 
 
+def test_shard_cli_selects_codes_from_pdb_manifest(tmp_path: Path) -> None:
+    from plinder.data.pipeline.collate import build_parser
+
+    manifest = tmp_path / "affected.txt"
+    manifest.write_text("1abc\n2abd\n3xyz\n")
+    args = build_parser().parse_args(
+        ["shard", str(tmp_path), "--pdb-manifest", str(manifest)]
+    )
+
+    assert args.pdb_manifest == manifest
+
+
 def test_final_validation_rejects_all_ion_or_artifact_systems(
     tmp_path: Path,
 ) -> None:
@@ -279,13 +351,13 @@ def test_final_validation_rejects_all_ion_or_artifact_systems(
         "1abc",
         ligand_rows=[
             {
-                "ligand_id": "1abc__1.I",
+                "ligand_id": "1abc__1__1.I",
                 "ccd": "ZN",
                 "proper": True,
                 "ion": True,
             }
         ],
-        scoreability={"1abc__1.I": False},
+        scoreability={"1abc__1__1.I": False},
     )
 
     with pytest.raises(ValueError, match="all_ion_or_artifact_systems=1"):
@@ -314,4 +386,21 @@ def test_final_validation_rejects_invalid_chain_sequence_metadata(
     chains.to_parquet(chain_path, index=False)
 
     with pytest.raises(ValueError, match=error_key):
+        run_collation(tmp_path, threads=1, memory_limit="1GB")
+
+
+def test_final_validation_rejects_ligands_from_another_biounit(
+    tmp_path: Path,
+) -> None:
+    _write_release(tmp_path)
+    annotation_path = tmp_path / "raw_entries/ab/1abc.parquet"
+    annotation = pd.read_parquet(annotation_path)
+    annotation.loc[0, "ligand_id"] = "1abc__2__1.L"
+    annotation.to_parquet(annotation_path, index=False)
+    ligand_path = tmp_path / "ligands/1abc.parquet"
+    ligands = pd.read_parquet(ligand_path)
+    ligands.loc[ligands["ligand_id"].eq("1abc__1__1.L"), "ligand_id"] = "1abc__2__1.L"
+    ligands.to_parquet(ligand_path, index=False)
+
+    with pytest.raises(ValueError, match="mismatched_biounits=1"):
         run_collation(tmp_path, threads=1, memory_limit="1GB")
