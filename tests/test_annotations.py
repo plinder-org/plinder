@@ -1028,7 +1028,7 @@ def test_smiles_from_nextgen(rcsb_ccd_reference_csv):
     1. InChIKey from CCD ideal 3D matches RCSB InChIKey
     2. Per-atom chirality matches via substructure match
     """
-    from plinder.data.utils.annotations.cif_utils import _COORDINATION_METALS
+    from plinder.data.utils.annotations.interaction_utils import _COORDINATION_METALS
     from plinder.data.utils.annotations.ligand_utils import _get_ccd_mol
     from rdkit.Chem.inchi import MolToInchiKey
 

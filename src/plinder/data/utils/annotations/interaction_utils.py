@@ -416,6 +416,194 @@ def extract_ligand_links_to_neighbouring_chains(
     return covalent_linkages
 
 
+# ---------------------------------------------------------------------------
+# Bridged interaction detection (synced with peppr-internal)
+# TODO: remove once peppr >= 0.14 is released with these methods.
+# ---------------------------------------------------------------------------
+
+# Water bridge lower bound: 0.75 * VdW_sum (~2.28 A for O-O)
+# avoids clashes but allows short water-mediated H-bonds.
+# Upper bound: 1.15 * VdW_sum (~3.50 A for O-O), standard H-bond max.
+_WATER_BRIDGE_DISTANCE_SCALING = (0.75, 1.15)
+
+# Metals that form coordination bonds (not spectator ions like Na/Cl/K)
+_COORDINATION_METALS = frozenset(
+    {
+        "MG",
+        "CA",
+        "ZN",
+        "FE",
+        "FE2",  # Fe(II)
+        "MN",
+        "CO",
+        "CU",
+        "CU1",  # Cu(I)
+        "NI",
+        "CD",
+        "MO",
+        "4MO",  # Mo(IV)
+        "6MO",  # Mo(VI)
+        "W",
+        "V",
+    }
+)
+_METAL_ACCEPTOR_PATTERN = (
+    "["
+    "$([O]),"
+    "$([#7;!$([nX3]);!$([NX3]-*=[!#6]);!$([NX3]-[a]);!$([NX4])]),"
+    "$([#16]),"
+    "$([*;-{1-};!+{1-}])"
+    "]"
+)
+
+
+def _find_bridged_interactions(
+    receptor: "struc.AtomArray",
+    ligand: "struc.AtomArray",
+    bridge_atoms: "struc.AtomArray",
+    receptor_pattern: str,
+    ligand_pattern: str,
+    distance_scaling: tuple[float, float],
+) -> list[tuple[NDArray[np.int_], NDArray[np.int_], NDArray[np.int_]]]:
+    """Find interactions bridged by intermediary atoms (water or metal).
+
+    TODO: remove once peppr has ContactMeasurement.find_bridged_interactions.
+    """
+    import biotite.structure.info as info
+    from peppr.contacts import ContactMeasurement, find_atoms_by_pattern
+
+    if bridge_atoms.array_length() == 0:
+        return []
+
+    try:
+        cm = ContactMeasurement(receptor, ligand)
+    except Exception as e:
+        log.warning(f"ContactMeasurement setup failed: {e}")
+        return []
+
+    receptor_matched = find_atoms_by_pattern(cm._binding_site_mol, receptor_pattern)
+    ligand_matched = find_atoms_by_pattern(cm._ligand_mol, ligand_pattern)
+    if len(receptor_matched) == 0 or len(ligand_matched) == 0:
+        return []
+
+    receptor_coords = cm._binding_site.coord[receptor_matched]
+    ligand_coords = cm._ligand.coord[ligand_matched]
+    lo, hi = sorted(distance_scaling)
+
+    r_vdw = np.array(
+        [info.vdw_radius_single(e) for e in cm._binding_site.element[receptor_matched]]
+    )
+    l_vdw = np.array(
+        [info.vdw_radius_single(e) for e in cm._ligand.element[ligand_matched]]
+    )
+
+    bridges: list[tuple[NDArray[np.int_], NDArray[np.int_], NDArray[np.int_]]] = []
+    for bi in range(bridge_atoms.array_length()):
+        b_coord = bridge_atoms.coord[bi]
+        b_vdw = info.vdw_radius_single(bridge_atoms.element[bi])
+
+        r_dists = np.linalg.norm(receptor_coords - b_coord, axis=1)
+        r_thresholds = r_vdw + b_vdw
+        r_contacts = receptor_matched[
+            (r_dists >= lo * r_thresholds) & (r_dists <= hi * r_thresholds)
+        ]
+        if len(r_contacts) == 0:
+            continue
+
+        l_dists = np.linalg.norm(ligand_coords - b_coord, axis=1)
+        l_thresholds = l_vdw + b_vdw
+        l_contacts = ligand_matched[
+            (l_dists >= lo * l_thresholds) & (l_dists <= hi * l_thresholds)
+        ]
+        if len(l_contacts) == 0:
+            continue
+
+        for ri in r_contacts:
+            for li in l_contacts:
+                bridges.append(
+                    (
+                        cm._binding_site_indices[ri : ri + 1],
+                        np.array([li], dtype=int),
+                        np.array([bi], dtype=int),
+                    )
+                )
+
+    return bridges
+
+
+def find_water_bridges(
+    receptor: "struc.AtomArray",
+    ligand: "struc.AtomArray",
+    waters: "struc.AtomArray",
+    distance_scaling: tuple[float, float] = _WATER_BRIDGE_DISTANCE_SCALING,
+) -> list[tuple[NDArray[np.int_], NDArray[np.int_], NDArray[np.int_]]]:
+    """Find water-mediated hydrogen bonds between receptor and ligand."""
+    from peppr.common import ACCEPTOR_PATTERN, DONOR_PATTERN
+
+    water_oxygens = waters[waters.element == "O"]
+    hbond_pattern = "[" + DONOR_PATTERN[1:-1] + "," + ACCEPTOR_PATTERN[1:-1] + "]"
+    return _find_bridged_interactions(
+        receptor,
+        ligand,
+        water_oxygens,
+        hbond_pattern,
+        hbond_pattern,
+        distance_scaling,
+    )
+
+
+def find_metal_bridges(
+    receptor: "struc.AtomArray",
+    ligand: "struc.AtomArray",
+    metals: "struc.AtomArray",
+    cutoff: float = 3.0,
+) -> list[tuple[NDArray[np.int_], NDArray[np.int_], NDArray[np.int_]]]:
+    """Find metal-mediated coordination between receptor and ligand."""
+    from peppr.contacts import ContactMeasurement, find_atoms_by_pattern
+
+    coord_mask = np.isin(metals.res_name, list(_COORDINATION_METALS))
+    if not np.any(coord_mask):
+        return []
+    coord_metals = metals[coord_mask]
+
+    try:
+        cm = ContactMeasurement(receptor, ligand)
+    except Exception as e:
+        log.warning(f"ContactMeasurement setup failed for metal bridges: {e}")
+        return []
+
+    receptor_matched = find_atoms_by_pattern(
+        cm._binding_site_mol, _METAL_ACCEPTOR_PATTERN
+    )
+    ligand_matched = find_atoms_by_pattern(cm._ligand_mol, _METAL_ACCEPTOR_PATTERN)
+    if len(receptor_matched) == 0 or len(ligand_matched) == 0:
+        return []
+
+    bridges: list[tuple[NDArray[np.int_], NDArray[np.int_], NDArray[np.int_]]] = []
+    for bi in range(coord_metals.array_length()):
+        b_coord = coord_metals.coord[bi]
+        r_dists = np.linalg.norm(
+            cm._binding_site.coord[receptor_matched] - b_coord, axis=1
+        )
+        r_contacts = receptor_matched[r_dists < cutoff]
+        if len(r_contacts) == 0:
+            continue
+        l_dists = np.linalg.norm(cm._ligand.coord[ligand_matched] - b_coord, axis=1)
+        l_contacts = ligand_matched[l_dists < cutoff]
+        if len(l_contacts) == 0:
+            continue
+        for ri in r_contacts:
+            for li in l_contacts:
+                bridges.append(
+                    (
+                        cm._binding_site_indices[ri : ri + 1],
+                        np.array([li], dtype=int),
+                        np.array([bi], dtype=int),
+                    )
+                )
+    return bridges
+
+
 def run_peppr_interactions(
     receptor: struc.AtomArray,
     ligand: struc.AtomArray,
@@ -576,8 +764,6 @@ def run_peppr_interactions(
             from peppr.common import DONOR_PATTERN
             from peppr.contacts import find_atoms_by_pattern
 
-            from plinder.data.utils.annotations.cif_utils import find_water_bridges
-
             receptor_donors = set(
                 find_atoms_by_pattern(cm._binding_site_mol, DONOR_PATTERN)
             )
@@ -606,8 +792,6 @@ def run_peppr_interactions(
     # Metal bridges (via plinder patch — peppr public doesn't have this yet)
     try:
         if metals.array_length() > 0:
-            from plinder.data.utils.annotations.cif_utils import find_metal_bridges
-
             m_bridges = find_metal_bridges(receptor, ligand, metals)
             for rec_idx, _lig_idx, metal_idx in m_bridges:
                 ri = rec_idx[0]
