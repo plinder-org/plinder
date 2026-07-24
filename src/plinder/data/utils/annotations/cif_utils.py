@@ -16,7 +16,6 @@ from contextlib import contextmanager
 from pathlib import Path
 
 import biotite.structure as struc
-import biotite.structure.info as bt_info
 import biotite.structure.io.pdbx as pdbx
 import numpy as np
 from rdkit import Chem
@@ -660,6 +659,14 @@ def _get_cif_bond_comp_ids(block: pdbx.CIFBlock) -> set[str]:
 def _is_known_compound(comp_id: str, atom_names: set[str] | None = None) -> bool:
     """Check if a component ID is known to the CCD compound library.
 
+    "Known" resolves via :func:`_get_ccd_atomarray`, so a code present only in
+    the downloaded ``components.cif`` (not biotite's bundled CCD) counts as
+    known — correct for reference SMILES/stereo. Note the biounit bond path
+    (biotite ``connect_via_residue_names``) is still bundled-CCD-based, so such
+    a code only gets its intra-residue bonds if the CIF carries
+    ``_chem_comp_bond`` (deposited entries always do) or via the components.cif
+    bond fallback in :func:`ligand_utils._fill_missing_ccd_bonds`.
+
     If *atom_names* is provided, also verify that the CIF atom names
     overlap with the CCD entry. Bond assignment via
     ``connect_via_residue_names`` relies on atom-name matching, so a
@@ -668,7 +675,9 @@ def _is_known_compound(comp_id: str, atom_names: set[str] | None = None) -> bool
     ``LIG``).
     """
     try:
-        ref = bt_info.residue(comp_id)
+        from plinder.data.utils.annotations.ligand_utils import _get_ccd_atomarray
+
+        ref = _get_ccd_atomarray(comp_id)
         if atom_names is not None:
             ref_heavy = ref[~is_hydrogen_isotope(ref.element)]
             ref_names = set(ref_heavy.atom_name)

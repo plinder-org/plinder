@@ -920,37 +920,49 @@ class Entry(DocBaseModel):
             return ligands
         if water_chains is None:
             water_chains = get_water_chain_ids(biounit)
-        ligand_chain_count = len(biounit_ligand_chains)
-        if ligand_chain_count >= 100:
+        # Covalently-linked ligand chains are one molecule (e.g. a macrocycle
+        # whose non-polymer parts are deposited as separate chains) and are
+        # built as a single ligand spanning all member chains.
+        ligand_groups = self._covalent_ligand_groups(biounit_ligand_chains)
+        group_count = len(ligand_groups)
+        if group_count >= 100:
             LOG.info(
-                "PDB %s assembly %s: processing %d ligand-chain instances",
+                "PDB %s assembly %s: processing %d ligand groups",
                 self.pdb_id,
                 biounit_id,
-                ligand_chain_count,
+                group_count,
             )
-        for ligand_index, ligand_chain in enumerate(biounit_ligand_chains, start=1):
-            if ligand_chain_count >= 100 and ligand_index % 100 == 0:
+        for ligand_index, group in enumerate(ligand_groups, start=1):
+            if group_count >= 100 and ligand_index % 100 == 0:
                 LOG.info(
-                    "PDB %s assembly %s: processed %d/%d ligand-chain instances",
+                    "PDB %s assembly %s: processed %d/%d ligand groups",
                     self.pdb_id,
                     biounit_id,
                     ligand_index,
-                    ligand_chain_count,
+                    group_count,
                 )
-            ligand_instance, ligand_asym_id = ligand_chain.split(".")
-            chain_atoms = spatial_index.take_atoms(
-                biounit,
-                spatial_index.atom_indices_for_chain(ligand_chain),
-                include_bonds=False,
-            )
-            residue_numbers = list(dict.fromkeys(int(r) for r in chain_atoms.res_id))
+            # Residue numbers per member instance-chain in the group.
+            member_residue_numbers: dict[str, list[int]] = {}
+            for member_chain in sorted(group):
+                member_atoms = spatial_index.take_atoms(
+                    biounit,
+                    spatial_index.atom_indices_for_chain(member_chain),
+                    include_bonds=False,
+                )
+                member_residue_numbers[member_chain] = list(
+                    dict.fromkeys(int(r) for r in member_atoms.res_id)
+                )
+            # Primary chain (deterministic): the first sorted member. The
+            # ligand is keyed on it, but its atoms span every member chain.
+            primary_chain = sorted(group)[0]
+            primary_instance, primary_asym_id = primary_chain.split(".")
             ligand = Ligand.from_pli(
                 pdb_id=self.pdb_id,
                 biounit_id=biounit_id,
                 biounit=biounit,
-                ligand_instance=int(ligand_instance),
-                ligand_chain=self.chains[ligand_asym_id],
-                residue_numbers=residue_numbers,
+                ligand_instance=int(primary_instance),
+                ligand_chain=self.chains[primary_asym_id],
+                residue_numbers=member_residue_numbers[primary_chain],
                 ligand_like_chains=self.ligand_like_chains,
                 all_covalent_dict=self.covalent_bonds,
                 plip_complex_threshold=plip_complex_threshold,
@@ -961,10 +973,57 @@ class Entry(DocBaseModel):
                 ligand_smiles_dict=ligand_smiles_dict,
                 water_chains=water_chains,
                 spatial_index=spatial_index,
+                member_residue_numbers=member_residue_numbers,
             )
             if ligand is not None:
                 ligands[ligand.id] = ligand
         return ligands
+
+    def _covalent_ligand_groups(
+        self, biounit_ligand_chains: list[str]
+    ) -> list[set[str]]:
+        """Group ligand instance-chains linked by covalent bonds.
+
+        Two ligand chains join the same group when a ``covale`` bond in
+        ``self.covalent_bonds`` connects their asym ids within the same
+        biounit instance. Covalently-linked ligand chains are the same
+        physical molecule and must be reported as one ligand rather than
+        several. Chains with no ligand-ligand covalent partner form
+        singleton groups (the previous one-ligand-per-chain behaviour).
+        """
+        covale_edges: set[frozenset[str]] = set()
+        for link1, link2 in self.covalent_bonds.get("covale", []):
+            asym1, asym2 = link1.split(":")[2], link2.split(":")[2]
+            if asym1 != asym2:
+                covale_edges.add(frozenset((asym1, asym2)))
+
+        parent = {chain: chain for chain in biounit_ligand_chains}
+
+        def find(node: str) -> str:
+            while parent[node] != node:
+                parent[node] = parent[parent[node]]
+                node = parent[node]
+            return node
+
+        def union(a: str, b: str) -> None:
+            parent[find(a)] = find(b)
+
+        # Only union chains that share an instance: biological-assembly
+        # copies reuse asym labels but are physically independent.
+        by_instance: dict[str, dict[str, str]] = defaultdict(dict)
+        for chain in biounit_ligand_chains:
+            instance, asym = chain.split(".")
+            by_instance[instance][asym] = chain
+        for asym_to_chain in by_instance.values():
+            for edge in covale_edges:
+                asym1, asym2 = tuple(edge)
+                if asym1 in asym_to_chain and asym2 in asym_to_chain:
+                    union(asym_to_chain[asym1], asym_to_chain[asym2])
+
+        groups: dict[str, set[str]] = defaultdict(set)
+        for chain in biounit_ligand_chains:
+            groups[find(chain)].add(chain)
+        return sorted(groups.values(), key=lambda g: sorted(g))
 
     @staticmethod
     def _ligand_pocket_members(ligand: Ligand) -> set[str]:
@@ -1386,17 +1445,17 @@ class Entry(DocBaseModel):
                     for ligand in system.ligands:
                         ligand.label_crystal_contacts(entry.symmetry_mate_contacts)
         entry.label_chains()
-        retained_ligand_asym_ids = sorted(
-            {
-                ligand.asym_id
-                for system in entry.systems.values()
-                for ligand in system.ligands
-            }
-        )
-        if save_folder is not None and retained_ligand_asym_ids:
+        # One SDF per ligand, keyed by primary asym, spanning every member
+        # chain so covalently-linked ligand chains are saved as one molecule.
+        retained_ligand_chain_groups = {
+            ligand.asym_id: ligand.member_asym_ids
+            for system in entry.systems.values()
+            for ligand in system.ligands
+        }
+        if save_folder is not None and retained_ligand_chain_groups:
             save_ligands(
                 atoms,
-                retained_ligand_asym_ids,
+                retained_ligand_chain_groups,
                 save_folder / entry.pdb_id / "ligand_files",
             )
         return entry
@@ -1579,17 +1638,17 @@ class Entry(DocBaseModel):
             ligands,
             min_shared_pocket_members=min_shared_pocket_members,
         )
-        retained_ligand_asym_ids = sorted(
-            {
-                ligand.asym_id
-                for system in entry.systems.values()
-                for ligand in system.ligands
-            }
-        )
-        if save_folder is not None and retained_ligand_asym_ids:
+        # One SDF per ligand, keyed by primary asym, spanning every member
+        # chain so covalently-linked ligand chains are saved as one molecule.
+        retained_ligand_chain_groups = {
+            ligand.asym_id: ligand.member_asym_ids
+            for system in entry.systems.values()
+            for ligand in system.ligands
+        }
+        if save_folder is not None and retained_ligand_chain_groups:
             save_ligands(
                 atoms,
-                retained_ligand_asym_ids,
+                retained_ligand_chain_groups,
                 save_folder / entry.pdb_id / "ligand_files",
             )
         return entry

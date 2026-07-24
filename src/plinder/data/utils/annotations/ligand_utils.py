@@ -330,26 +330,151 @@ def _check_stereo_vs_template(
 
 
 @cache
+def _component_atoms_from_components_cif(comp_id: str) -> "struc.AtomArray | None":
+    """Extract one CCD component from the downloaded ``components.cif``.
+
+    Streams the file to pull out just the ``data_<comp_id>`` block — the file
+    is a concatenation of per-component blocks — instead of parsing the whole
+    ~500 MB dictionary. Returns ``None`` when no components file is configured
+    (:data:`COMPONENTS_CCD_PATH`) or the component is absent.
+    """
+    import io
+
+    import biotite.structure.io.pdbx as pdbx
+
+    path = COMPONENTS_CCD_PATH
+    if path is None or not path.is_file():
+        return None
+    header = f"data_{comp_id}"
+    block_lines: list[str] = []
+    capturing = False
+    with open(path) as handle:
+        for line in handle:
+            if not capturing:
+                if line.strip() == header:
+                    capturing = True
+                    block_lines.append(line)
+            elif line.startswith("data_"):
+                break
+            else:
+                block_lines.append(line)
+    if not block_lines:
+        return None
+    cif = pdbx.CIFFile.read(io.StringIO("".join(block_lines)))
+    # Prefer ideal coordinates; fall back to model coordinates; tolerate gaps.
+    for coord_kwargs in ({}, {"use_ideal_coord": False}):
+        try:
+            return pdbx.get_component(
+                cif, data_block=comp_id, allow_missing_coord=True, **coord_kwargs
+            )
+        except Exception:
+            continue
+    return None
+
+
+@cache
+def _get_ccd_atomarray(comp_id: str) -> "struc.AtomArray | None":
+    """Return the CCD component atoms with ideal coordinates.
+
+    Single source of truth for CCD lookups: prefers biotite's bundled CCD,
+    and on a miss — e.g. a code newer than the bundled dictionary, such as the
+    5-char extended codes — falls back to the downloaded ``components.cif``
+    when available (:data:`COMPONENTS_CCD_PATH`). Returns ``None`` if the
+    component is in neither source.
+    """
+    try:
+        return bt_info.residue(comp_id, allow_missing_coord=True)
+    except Exception as bundled_error:
+        atoms = _component_atoms_from_components_cif(comp_id)
+        if atoms is None:
+            LOG.warning(
+                f"CCD lookup failed for {comp_id}: absent from biotite's "
+                f"bundled CCD ({bundled_error}) and from components.cif"
+            )
+        return atoms
+
+
+@cache
 def _get_ccd_mol(comp_id: str) -> "Chem.Mol | None":
-    """Return an RDKit Mol from CCD ideal coordinates with stereo assigned."""
+    """Return a sanitized RDKit Mol for a CCD component, or None if absent.
+
+    Thin, None-safe wrapper over :func:`_get_ccd_atomarray`. biotite has no
+    chiral tags, so ``atoms_to_rdkit_mol`` assigns stereo from the ideal 3D
+    coordinates via ``AssignAtomChiralTagsFromStructure``.
+    """
     from plinder.data.utils.annotations.cif_utils import atoms_to_rdkit_mol
 
+    atoms = _get_ccd_atomarray(comp_id)
+    if atoms is None:
+        return None
     try:
-        # biotite has no chiral tags, so atoms_to_rdkit_mol uses 3D to
-        # assign stereo via AssignAtomChiralTagsFromStructure
-        return atoms_to_rdkit_mol(bt_info.residue(comp_id, allow_missing_coord=True))
+        return atoms_to_rdkit_mol(atoms)
     except Exception as e:
-        LOG.warning(f"Failed to get CCD mol for {comp_id}: {e}")
+        LOG.warning(f"Failed to build RDKit mol for {comp_id}: {e}")
         return None
 
 
 def _get_ccd_smiles(comp_id: str) -> str | None:
-    """Get SMILES from CCD via biotite, with stereochemistry from ideal 3D."""
-    # TODO: conflicting path with download_components_cif used for CCD_SYNONYMS_DICT
+    """Get SMILES from a CCD component, with stereochemistry from ideal 3D."""
     mol = _get_ccd_mol(comp_id)
     if mol is None:
         return None
     return str(Chem.MolToSmiles(mol))
+
+
+def _fill_missing_ccd_bonds(atoms: "struc.AtomArray") -> "struc.AtomArray":
+    """Fill intra-residue bonds from the CCD for residues that arrived bond-less.
+
+    When biotite builds a structure with ``include_bonds=True``, a residue's
+    internal bonds come from the *structure's own* ``_chem_comp_bond`` category,
+    or — if that is absent — from biotite's *bundled* CCD via
+    ``connect_via_residue_names``. A residue arrives with no internal bonds only
+    when *both* miss: the component is newer than the bundled CCD **and** the
+    structure's CIF did not spell out its ``_chem_comp_bond``.
+
+    We then recover the bonds from the *downloaded full* CCD dictionary
+    (``components.cif``, reached via :func:`_get_ccd_atomarray`), which defines
+    every component's bonds, matching them onto the residue by atom name. In
+    other words: the structure lacked the bonds, so we look the component up in
+    the dictionary that does have them.
+
+    Existing bonds — including inter-residue ``struct_conn`` links — are left
+    untouched, and residues that already have internal bonds are skipped, so
+    this is a no-op for the overwhelming majority of ligands.
+    """
+    if atoms.array_length() < 2:
+        return atoms
+    if atoms.bonds is None:
+        atoms.bonds = struc.BondList(atoms.array_length())
+    existing = atoms.bonds.as_array()
+    residue_starts = struc.get_residue_starts(atoms, add_exclusive_stop=True)
+    for start, stop in zip(residue_starts[:-1], residue_starts[1:]):
+        if stop - start < 2:
+            continue
+        has_internal = bool(
+            np.any(
+                (existing[:, 0] >= start)
+                & (existing[:, 0] < stop)
+                & (existing[:, 1] >= start)
+                & (existing[:, 1] < stop)
+            )
+        )
+        if has_internal:
+            continue
+        ccd = _get_ccd_atomarray(str(atoms.res_name[start]))
+        if ccd is None or ccd.bonds is None:
+            continue
+        name_to_index = {
+            str(name): start + offset
+            for offset, name in enumerate(atoms.atom_name[start:stop])
+        }
+        ccd_names = ccd.atom_name
+        for ccd_i, ccd_j, order in ccd.bonds.as_array():
+            index_i = name_to_index.get(str(ccd_names[ccd_i]))
+            index_j = name_to_index.get(str(ccd_names[ccd_j]))
+            if index_i is not None and index_j is not None:
+                atoms.bonds.add_bond(index_i, index_j, int(order))
+    return atoms
 
 
 def _get_prd_smiles(comp_id: str) -> str | None:
@@ -437,6 +562,10 @@ CCD_SYNONYMS_DICT: dict[str, str] | None = None
 # instantiate artifact list once and reuse variable
 ARTIFACTS: set[str] | None = None
 BINDING_AFFINITY: dict[str, ty.Any] | None = None
+# Downloaded full CCD (``components.cif``). Used as a fallback source for
+# components that biotite's bundled CCD predates (e.g. newly-released 5-char
+# extended codes). ``None`` until a data_dir with the file is seen.
+COMPONENTS_CCD_PATH: Path | None = None
 
 
 _OLIGO_SMARTS = {
@@ -950,6 +1079,14 @@ class Ligand(DocBaseModel):
     residue_numbers: list[int] = Field(
         default_factory=list, description="__Ligand residue numbers"
     )
+    member_residue_numbers: dict[str, list[int]] = Field(
+        default_factory=dict,
+        description="__Residue numbers per member instance-chain. A ligand may "
+        "span several covalently-linked chains (e.g. a macrocycle whose parts "
+        "are deposited as separate chains); this maps each member "
+        "'{instance}.{asym_id}' to its residue numbers so every atom in the "
+        "ligand can be selected. Single-chain ligands map their one instance-chain.",
+    )
     rdkit_canonical_smiles: str | None = Field(
         default=None,
         description="RDKit canonical SMILES (same as smiles; kept for schema compatibility)",
@@ -1209,6 +1346,7 @@ class Ligand(DocBaseModel):
         ligand_smiles_dict: dict[str, str] | None = None,
         water_chains: set[str] | None = None,
         spatial_index: BiounitSpatialIndex | None = None,
+        member_residue_numbers: dict[str, list[int]] | None = None,
     ) -> Ligand | None:
         """Build a Ligand from a biounit AtomArray and chain metadata.
 
@@ -1265,6 +1403,9 @@ class Ligand(DocBaseModel):
         """
         if data_dir is not None:
             global COFACTORS, ARTIFACTS, CCD_SYNONYMS_DICT, BINDING_AFFINITY
+            global COMPONENTS_CCD_PATH
+            if COMPONENTS_CCD_PATH is None:
+                COMPONENTS_CCD_PATH = data_dir / "dbs" / "components" / "components.cif"
             if CCD_SYNONYMS_DICT is None:
                 CCD_SYNONYMS_DICT = get_ccd_synonyms(data_dir)
             if COFACTORS is None:
@@ -1279,6 +1420,12 @@ class Ligand(DocBaseModel):
                     BINDING_AFFINITY = {"pchembl": {}, "target_sequence": {}}
 
         ligand_instance_chain = f"{ligand_instance}.{ligand_chain.asym_id}"
+        # A ligand may span several covalently-linked chains. Default to the
+        # single primary chain when no members were supplied.
+        if member_residue_numbers is None:
+            member_residue_numbers = {ligand_instance_chain: residue_numbers}
+        member_instance_chains = set(member_residue_numbers)
+        member_asym_ids = {ic.split(".")[-1] for ic in member_instance_chains}
 
         if spatial_index is None:
             spatial_index = BiounitSpatialIndex.from_atoms(
@@ -1290,11 +1437,19 @@ class Ligand(DocBaseModel):
                 ),
             )
 
-        # Select ligand atoms without scanning the full assembly.
-        chain_indices = spatial_index.atom_indices_for_chain(ligand_instance_chain)
-        lig_indices = chain_indices[
-            np.isin(biounit.res_id[chain_indices], residue_numbers)
-        ]
+        # Select ligand atoms across all covalently-linked member chains
+        # without scanning the full assembly.
+        lig_index_parts = []
+        for member_chain, member_rns in member_residue_numbers.items():
+            member_indices = spatial_index.atom_indices_for_chain(member_chain)
+            lig_index_parts.append(
+                member_indices[np.isin(biounit.res_id[member_indices], member_rns)]
+            )
+        lig_indices = (
+            np.concatenate(lig_index_parts)
+            if lig_index_parts
+            else np.array([], dtype=int)
+        )
         if lig_indices.size == 0:
             LOG.warning(f"from_pli: no ligand atoms for {ligand_instance_chain}")
             return None
@@ -1319,7 +1474,7 @@ class Ligand(DocBaseModel):
         receptor_mask = struc.filter_amino_acids(
             nearby_atoms
         ) | struc.filter_nucleotides(nearby_atoms)
-        ligand_mask_local = nearby_atoms.chain_id == ligand_instance_chain
+        ligand_mask_local = np.isin(nearby_atoms.chain_id, list(member_instance_chains))
         water_mask = struc.filter_solvent(nearby_atoms)
         metal_mask = struc.filter_monoatomic_ions(nearby_atoms) & ~ligand_mask_local
 
@@ -1346,24 +1501,32 @@ class Ligand(DocBaseModel):
             inv_mapping,
         )
 
-        # Get CCD codes from ligand atoms (one per residue, preserving duplicates)
-        ccd_code = "-".join(
-            lig_atoms.res_name[lig_atoms.res_id == rn][0]
-            for rn in residue_numbers
-            if np.any(lig_atoms.res_id == rn)
-        )
+        # CCD codes, one per residue in atom order across all member chains.
+        # Keying on (chain, res_id) avoids collisions when merged chains reuse
+        # residue numbers.
+        def _residues_in_order(atoms: "struc.AtomArray") -> list[str]:
+            seen: set[tuple[str, int]] = set()
+            names: list[str] = []
+            for chain_id, res_id, res_name in zip(
+                atoms.chain_id, atoms.res_id, atoms.res_name
+            ):
+                key = (str(chain_id), int(res_id))
+                if key not in seen:
+                    seen.add(key)
+                    names.append(str(res_name))
+            return names
+
+        ccd_code = "-".join(_residues_in_order(lig_atoms))
         # Get SMILES from CCD template via biotite, fall back to structure
         from plinder.core.structure.atoms import is_hydrogen_isotope
 
         smiles = None
         lig_heavy = lig_atoms[~is_hydrogen_isotope(lig_atoms.element)]
-        res_names = list(
-            dict.fromkeys(
-                lig_heavy.res_name[lig_heavy.res_id == rn][0]
-                for rn in residue_numbers
-                if np.any(lig_heavy.res_id == rn)
-            )
-        )
+        # A components.cif-only code with no CIF _chem_comp_bond arrives without
+        # its intra-residue bonds; borrow them from the CCD so the resolved-3D
+        # mol below can still be built (no-op when bonds are already present).
+        lig_heavy = _fill_missing_ccd_bonds(lig_heavy)
+        res_names = _residues_in_order(lig_heavy)
         if len(res_names) == 1:
             resname = res_names[0]
             # User-supplied SMILES takes precedence — when the caller
@@ -1433,6 +1596,7 @@ class Ligand(DocBaseModel):
             resolved_smiles=resolved_smiles or "",
             resolved_stereo_matches_template=stereo_matches,
             residue_numbers=residue_numbers,
+            member_residue_numbers=member_residue_numbers,
         )
 
         # Find neighboring polymer residues (protein + nucleic acid) without
@@ -1449,7 +1613,7 @@ class Ligand(DocBaseModel):
         near_prot = neighboring_atoms[polymer_mask]
 
         for chain_id in np.unique(near_prot.chain_id):
-            if chain_id == ligand.instance_chain:
+            if chain_id in member_instance_chains:
                 continue
             # Skip chains classified as ligands — they belong in
             # neighboring_ligands/interacting_ligands, not neighboring_residues
@@ -1467,12 +1631,22 @@ class Ligand(DocBaseModel):
         neighboring_asym_ids = {
             c.split(".")[-1]
             for c in np.unique(near_prot.chain_id)
-            if c != ligand.instance_chain
+            if c not in member_instance_chains
         }
 
-        ligand.covalent_linkages = extract_ligand_links_to_neighbouring_chains(
-            all_covalent_dict, ligand.asym_id, neighboring_asym_ids, link_type="covale"
-        )
+        # A covalently-linked group is one molecule: bonds *between* member
+        # chains are internal, so only count covale bonds from any member to a
+        # non-member (receptor) chain.
+        neighboring_non_member = neighboring_asym_ids - member_asym_ids
+        covalent_linkages: set[str] = set()
+        for member_asym in member_asym_ids:
+            covalent_linkages |= extract_ligand_links_to_neighbouring_chains(
+                all_covalent_dict,
+                member_asym,
+                neighboring_non_member,
+                link_type="covale",
+            )
+        ligand.covalent_linkages = covalent_linkages
         ligand.is_covalent = len(ligand.covalent_linkages) > 0
 
         # Find neighboring ligand chains
@@ -1487,7 +1661,7 @@ class Ligand(DocBaseModel):
             {
                 c
                 for c in np.unique(near_all.chain_id)
-                if c != ligand.instance_chain
+                if c not in member_instance_chains
                 and "." in c
                 and c.split(".")[1] in ligand_like_chains
             }
@@ -1502,7 +1676,7 @@ class Ligand(DocBaseModel):
 
         # Derive interacting residues from peppr interaction hashes
         for instance_chain, residues in peppr_interactions.items():
-            if instance_chain == ligand.instance_chain:
+            if instance_chain in member_instance_chains:
                 continue
             if instance_chain in water_chains:
                 continue
@@ -1524,16 +1698,46 @@ class Ligand(DocBaseModel):
 
         return ligand
 
+    @property
+    def _members(self) -> dict[str, list[int]]:
+        """Residue numbers per member instance-chain (self, incl. covalent).
+
+        Falls back to the single primary chain for ligands built before
+        ``member_residue_numbers`` was populated.
+        """
+        return self.member_residue_numbers or {
+            self.instance_chain: self.residue_numbers
+        }
+
+    @property
+    def member_asym_ids(self) -> list[str]:
+        """Asym IDs of every chain this (possibly merged) ligand spans."""
+        return sorted({ic.split(".")[-1] for ic in self._members})
+
     @cached_property
     def selection(self) -> str:
         """
         __Selection string for ligand
+
+        Spans every member instance-chain so covalently-linked ligand chains
+        (a macrocycle deposited as several chains) select all of their atoms.
         """
-        residue_selection = " or ".join(f"rnum={rnum}" for rnum in self.residue_numbers)
-        ligand_selection = f"cname='{self.instance_chain}'"
-        if len(self.residue_numbers):
-            ligand_selection += f"and ({residue_selection})"
-        return ligand_selection
+
+        def _chain_selection(instance_chain: str, resnums: list[int]) -> str:
+            selection = f"cname='{instance_chain}'"
+            if len(resnums):
+                residue_selection = " or ".join(f"rnum={rnum}" for rnum in resnums)
+                selection += f"and ({residue_selection})"
+            return selection
+
+        members = self._members
+        if len(members) == 1:
+            ((instance_chain, resnums),) = members.items()
+            return _chain_selection(instance_chain, resnums)
+        return " or ".join(
+            f"({_chain_selection(instance_chain, resnums)})"
+            for instance_chain, resnums in members.items()
+        )
 
     @cached_property
     def protein_chains_asym_id(self) -> list[str]:

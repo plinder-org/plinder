@@ -66,10 +66,10 @@ class _ChainSelections:
 
 def save_ligands(
     atoms: struc.AtomArray,
-    ligand_chain_ids: list[str],
+    ligand_chain_ids: list[str] | dict[str, list[str]],
     output_folder: str | Path,
 ) -> None:
-    """Save one canonical ASU SDF per retained ligand chain.
+    """Save one canonical ASU SDF per retained ligand.
 
     RDKit supplies chemically normalized bond/aromaticity information when it
     can sanitize the ligand.  If it cannot, Biotite serializes the source bond
@@ -79,8 +79,11 @@ def save_ligands(
     ----------
     atoms : AtomArray
         Full system atoms with bonds.
-    ligand_chain_ids : list[str]
-        Chain IDs identifying each ligand.
+    ligand_chain_ids : list[str] or dict[str, list[str]]
+        Either a list of chain IDs (one SDF per chain), or a mapping of
+        output name -> member chain IDs. The mapping form writes a single
+        SDF spanning all member chains, so covalently-linked ligand chains
+        (a macrocycle deposited as several chains) are saved as one molecule.
     output_folder : str or Path
         Directory to write SDF files.
     """
@@ -92,10 +95,17 @@ def save_ligands(
     output_folder = Path(output_folder)
     output_folder.mkdir(parents=True, exist_ok=True)
 
-    for chain_id in ligand_chain_ids:
-        lig_mask = atoms.chain_id == chain_id
+    # Normalize to {output_name: [member_chain_ids]}.
+    groups = (
+        ligand_chain_ids
+        if isinstance(ligand_chain_ids, dict)
+        else {chain_id: [chain_id] for chain_id in ligand_chain_ids}
+    )
+
+    for chain_id, member_chain_ids in groups.items():
+        lig_mask = np.isin(atoms.chain_id, member_chain_ids)
         if not np.any(lig_mask):
-            raise ValueError(f"No atoms found for ligand chain {chain_id!r}")
+            raise ValueError(f"No atoms found for ligand chain(s) {member_chain_ids!r}")
         lig_atoms = atoms[lig_mask]
         output_file = output_folder / f"{chain_id}.sdf"
         try:

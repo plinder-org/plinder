@@ -662,6 +662,162 @@ def test_synthetic_cov_peptide_detection(cif_6lu7, mock_alternative_datasets):
     assert len(Chem.MolToSmiles(rdmol).split(".")) == 1
 
 
+# Non-standard/modified residues that make up the enlicitide (MK-0616)
+# macrocycle in 10sb. ALA/PRO/THR are standard and intentionally excluded.
+_ENLICITIDE_MODIFIED_RESIDUES = {"SIN", "2RA", "A1CHA", "FTR", "0A1", "3WX"}
+
+
+def test_10sb_modified_residues_preserved(cif_10sb, mock_alternative_datasets):
+    """Enlicitide's non-standard residues must survive as their own CCD codes.
+
+    The macrocyclic peptide (chain C of 10sb) is built from modified /
+    non-standard residues (SIN, 2RA, A1CHA, FTR, 0A1, 3WX). The pipeline
+    must NOT standardize them to parent amino acids — that information is
+    part of the ligand's chemical identity.
+    """
+    from plinder.data.utils.annotations.aggregate_annotations import Entry
+
+    entry_dir = mock_alternative_datasets("10sb")
+    entry = Entry.from_cif_file(cif_10sb, save_folder=entry_dir)
+
+    codes: set[str] = set()
+    for system in entry.systems.values():
+        for lig in system.ligands:
+            codes.update(lig.ccd_code.split("-"))
+
+    missing = _ENLICITIDE_MODIFIED_RESIDUES - codes
+    assert not missing, f"modified residues standardized away / missing: {missing}"
+
+
+def test_10sb_covalent_macrocycle_is_single_ligand(cif_10sb, mock_alternative_datasets):
+    """Enlicitide is one covalent macrocycle spanning chains C + E + F.
+
+    Chain C (cyclic peptide 21) is covalently bonded to E (A1C8P, 3 bonds)
+    and F (GOA, 2 bonds). Ligand chains linked covalently are the same
+    molecule, so the system must expose exactly ONE ligand covering all
+    three chains — not three separate ligands.
+    """
+    from plinder.data.utils.annotations.aggregate_annotations import Entry
+
+    entry_dir = mock_alternative_datasets("10sb")
+    entry = Entry.from_cif_file(cif_10sb, save_folder=entry_dir)
+
+    # The enlicitide macrocycle is the system whose ligand(s) include FTR.
+    macrocycle_systems = [
+        s
+        for s in entry.systems.values()
+        if any("FTR" in lig.ccd_code for lig in s.ligands)
+    ]
+    assert len(macrocycle_systems) == 1
+    ligands = macrocycle_systems[0].ligands
+
+    assert (
+        len(ligands) == 1
+    ), f"expected 1 merged ligand, got {[lig.ccd_code for lig in ligands]}"
+    lig = ligands[0]
+
+    components = set(lig.ccd_code.split("-"))
+    # merged ligand pulls in the covalently-bonded non-polymer partners...
+    assert {"A1C8P", "GOA"} <= components
+    # ...while still keeping the modified peptide residues.
+    assert _ENLICITIDE_MODIFIED_RESIDUES <= components
+    # All covale bonds are internal to the macrocycle (C<->E, C<->F); none
+    # reach PCSK9, so the merged ligand is NOT receptor-covalent. Its
+    # internal linkages are part of one molecule, not ligand->receptor links.
+    assert lig.is_covalent is False
+    # one connected molecule, not fragments
+    assert len(lig.smiles.split(".")) == 1
+
+    # The merged ligand must carry ALL of its atoms through the downstream
+    # atom-selection and SDF-export paths, not just the primary chain.
+    assert lig.member_asym_ids == ["C", "E", "F"]
+    # selection references every member instance-chain
+    for instance_chain in ("1.C", "1.E", "1.F"):
+        assert f"cname='{instance_chain}'" in lig.selection
+    # the written SDF is one connected molecule spanning all member chains
+    from rdkit import Chem
+
+    sdf = entry_dir / "10sb" / "ligand_files" / f"{lig.asym_id}.sdf"
+    assert sdf.is_file()
+    mol = Chem.SDMolSupplier(str(sdf), removeHs=True)[0]
+    assert mol is not None
+    assert len(Chem.MolToSmiles(mol).split(".")) == 1
+    assert mol.GetNumAtoms() == lig.num_heavy_atoms
+
+
+def test_get_ccd_mol_components_cif_fallback(monkeypatch):
+    """_get_ccd_mol falls back to components.cif for codes bt_info lacks.
+
+    A1C8P is a 5-char extended CCD code (from 10sb) that biotite's bundled
+    dictionary predates. When the downloaded components.cif is available, the
+    component must be read from there instead of failing.
+    """
+    from pathlib import Path
+
+    import biotite.structure.info as bt_info
+    import plinder.data.utils.annotations.ligand_utils as lu
+    from rdkit import Chem
+
+    # Precondition: the code is genuinely absent from the bundled CCD.
+    with pytest.raises(Exception):
+        bt_info.residue("A1C8P")
+
+    fixture = Path(__file__).parent / "test_data" / "mini_components.cif"
+    monkeypatch.setattr(lu, "COMPONENTS_CCD_PATH", fixture)
+    # Clear every layer of the (cached) CCD lookup so a stale miss from an
+    # earlier lookup doesn't shadow the components.cif fallback.
+    lu._component_atoms_from_components_cif.cache_clear()
+    lu._get_ccd_atomarray.cache_clear()
+    lu._get_ccd_mol.cache_clear()
+    try:
+        mol = lu._get_ccd_mol("A1C8P")
+        assert mol is not None, "expected components.cif fallback to resolve A1C8P"
+        assert Chem.MolToSmiles(mol) == "CCCCCCNCc1ccc(CCN)cc1"
+    finally:
+        # Don't leak the cached fallback mol into other tests.
+        lu._component_atoms_from_components_cif.cache_clear()
+        lu._get_ccd_atomarray.cache_clear()
+        lu._get_ccd_mol.cache_clear()
+
+
+def test_fill_missing_ccd_bonds_from_components(monkeypatch):
+    """A bond-less residue gets its intra-residue bonds back from components.cif.
+
+    Simulates the rare case where a components.cif-only code arrives without
+    _chem_comp_bond: strip A1C8P's bonds, then confirm _fill_missing_ccd_bonds
+    restores them from the components.cif fallback.
+    """
+    from pathlib import Path
+
+    import biotite.structure as struc
+    import plinder.data.utils.annotations.ligand_utils as lu
+
+    fixture = Path(__file__).parent / "test_data" / "mini_components.cif"
+    monkeypatch.setattr(lu, "COMPONENTS_CCD_PATH", fixture)
+    lu._component_atoms_from_components_cif.cache_clear()
+    lu._get_ccd_atomarray.cache_clear()
+    try:
+        atoms = lu._get_ccd_atomarray("A1C8P")
+        n_expected = atoms.bonds.as_array().shape[0]
+        assert n_expected > 0
+
+        # Simulate a residue that arrived with no internal bonds.
+        stripped = atoms.copy()
+        stripped.bonds = struc.BondList(stripped.array_length())
+        assert stripped.bonds.as_array().shape[0] == 0
+
+        filled = lu._fill_missing_ccd_bonds(stripped)
+        assert filled.bonds.as_array().shape[0] == n_expected
+
+        # Idempotent: a residue that already has bonds is untouched.
+        again = lu._fill_missing_ccd_bonds(filled)
+        assert again.bonds.as_array().shape[0] == n_expected
+    finally:
+        lu._component_atoms_from_components_cif.cache_clear()
+        lu._get_ccd_atomarray.cache_clear()
+        lu._get_ccd_mol.cache_clear()
+
+
 def test_crystal_contact_detection(cif_6lu7, mock_alternative_datasets):
     entry_dir = mock_alternative_datasets("6lu7")
     plinder_anno = GetPlinderAnnotation(cif_6lu7, "", save_folder=entry_dir)

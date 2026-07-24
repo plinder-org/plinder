@@ -131,6 +131,13 @@ def cif_7gl9():
     return test_asset_fp / "xx/pdb_00007gl9/pdb_00007gl9_xyz-enrich.cif.gz"
 
 
+# To test covalent linkages + 5-char CCD codes
+# (PCSK9 + enlicitide/MK-0616: ligand is presented as chain + covalent/modified residues)
+@pytest.fixture(scope="session")
+def cif_10sb():
+    return test_asset_fp / "xx/pdb_000010sb/pdb_000010sb_xyz-enrich.cif.gz"
+
+
 # To test peptide - 9 a.a. with UniProt (maybe ligand?)
 @pytest.fixture(scope="session")
 def cif_6i41():

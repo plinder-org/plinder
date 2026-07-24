@@ -644,7 +644,15 @@ def run_peppr_interactions(
     try:
         cm = ContactMeasurement(receptor, ligand)
     except Exception as e:
-        log.warning(f"run_peppr_interactions: ContactMeasurement failed: {e}")
+        components = sorted({str(name) for name in ligand.res_name})
+        log.warning(
+            "run_peppr_interactions: peppr could not build the ligand %s + "
+            "binding-site complex for contact analysis; skipping its "
+            "interactions. Components: %s. Underlying error: %s",
+            ligand_chain,
+            components,
+            e,
+        )
         return interaction_hashes, water_set
 
     def _add(chain: str, resnr: int, attr: str) -> None:
