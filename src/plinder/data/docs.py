@@ -7,13 +7,13 @@ from pathlib import Path
 import pandas as pd
 
 from plinder.data import column_descriptions
-from plinder.data.utils.annotations.aggregate_annotations import Entry, System
-from plinder.data.utils.annotations.get_ligand_validation import (
+from plinder.data.annotations.aggregate_annotations import Entry, System
+from plinder.data.annotations.get_ligand_validation import (
     EntryValidation,
     ResidueListValidation,
 )
-from plinder.data.utils.annotations.ligand_utils import Ligand
-from plinder.data.utils.annotations.protein_utils import Chain
+from plinder.data.annotations.ligand_utils import Ligand
+from plinder.data.annotations.protein_utils import Chain
 
 TSV_DIR = Path(column_descriptions.__file__).parent
 VALIDATION_TYPES = [

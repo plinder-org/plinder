@@ -62,8 +62,8 @@ def scoring_fixture(
     # just the ones chains_for_alignment returns) so that make_sub_db actually
     # has to filter the lookup — mirroring production's real pdb_seqres.txt.gz
     # which carries all chains across all PDB entries.
-    from plinder.data.utils.annotations.cif_utils import read_mmcif_file
-    from plinder.data.utils.annotations.protein_utils import get_seqres_from_cif
+    from plinder.data.annotations.cif_utils import read_mmcif_file
+    from plinder.data.annotations.protein_utils import get_seqres_from_cif
 
     seqres_lines: list[str] = []
     for pdb_id, cif in cifs.items():
@@ -102,9 +102,9 @@ def scoring_fixture(
 def test_scoring_regression(scoring_fixture, tmp_path):
     from plinder.core.scores.entries import entry_views_from_df
     from plinder.core.scores.reconstruct import reconstruct_similarity_scores
+    from plinder.data.annotations.get_similarity_scores import Scorer
     from plinder.data.pipeline import tasks
     from plinder.data.pipeline.utils import get_db_sources
-    from plinder.data.utils.annotations.get_similarity_scores import Scorer
 
     data_dir, annotation_rows = scoring_fixture
     entries = entry_views_from_df(

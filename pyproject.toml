@@ -110,7 +110,7 @@ namespaces = false
 plinder = [
     "**.yaml",
     "**.tsv",
-    "plinder/data/utils/annotations/static_files/artifacts_badlist.csv",
+    "plinder/data/annotations/static_files/artifacts_badlist.csv",
 ]
 
 [tool.ruff]

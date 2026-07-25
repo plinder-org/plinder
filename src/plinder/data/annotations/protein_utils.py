@@ -14,12 +14,12 @@ import numpy as np
 from PDBValidation.Validation import PDBValidation
 from pydantic import ConfigDict, Field
 
-from plinder.data.utils.annotations.get_ligand_validation import (
+from plinder.data.annotations.get_ligand_validation import (
     ResidueListValidation,
     ResidueValidation,
     ResidueValidationThresholds,
 )
-from plinder.data.utils.annotations.utils import DocBaseModel
+from plinder.data.annotations.utils import DocBaseModel
 
 
 @functools.cache

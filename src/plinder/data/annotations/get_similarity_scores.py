@@ -259,7 +259,7 @@ def compute_ligand_fingerprints(
             )
     ligands_unique["fingerprint"] = binary_fingerprints
 
-    from plinder.data.utils.annotations.ligand_utils import parse_cofactors
+    from plinder.data.annotations.ligand_utils import parse_cofactors
 
     component_path = data_dir / "dbs" / "components" / "components.parquet"
     if not component_path.is_file():

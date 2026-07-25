@@ -24,14 +24,14 @@ from rdkit.Chem.rdchem import Mol
 
 from plinder.core.utils.config import get_config
 from plinder.core.utils.constants import BASE_DIR
-from plinder.data.utils.annotations.interaction_utils import (
+from plinder.data.annotations.interaction_utils import (
     extract_ligand_links_to_neighbouring_chains,
     run_peppr_interactions,
 )
-from plinder.data.utils.annotations.protein_utils import Chain, sequences_match_core
-from plinder.data.utils.annotations.utils import DocBaseModel
+from plinder.data.annotations.protein_utils import Chain, sequences_match_core
+from plinder.data.annotations.utils import DocBaseModel
 
-_PRD_DB_PATH = str(BASE_DIR / "data/utils/annotations/static_files/prdcc.chemlib")
+_PRD_DB_PATH = str(BASE_DIR / "annotations/static_files/prdcc.chemlib")
 LOG = logging.getLogger(__name__)
 
 
@@ -402,7 +402,7 @@ def _get_ccd_mol(comp_id: str) -> "Chem.Mol | None":
     chiral tags, so ``atoms_to_rdkit_mol`` assigns stereo from the ideal 3D
     coordinates via ``AssignAtomChiralTagsFromStructure``.
     """
-    from plinder.data.utils.annotations.cif_utils import atoms_to_rdkit_mol
+    from plinder.data.annotations.cif_utils import atoms_to_rdkit_mol
 
     atoms = _get_ccd_atomarray(comp_id)
     if atoms is None:
@@ -863,7 +863,7 @@ def parse_artifacts() -> set[str]:
     Returns:
         set[str]: set[str]
     """
-    artifact_log = BASE_DIR / "utils/annotations/static_files/artifacts_badlist.csv"
+    artifact_log = BASE_DIR / "annotations/static_files/artifacts_badlist.csv"
     with open(artifact_log, "r") as f:
         lines = f.readlines()
     artifacts = {l.strip() for l in lines if not l.startswith("#")}
@@ -1395,6 +1395,11 @@ class Ligand(DocBaseModel):
             when processing multiple ligands from the same assembly.
         spatial_index : BiounitSpatialIndex, optional
             Reusable whole-assembly spatial and hierarchy index.
+        member_residue_numbers : dict[str, list[int]], optional
+            Residue numbers per member instance-chain for a ligand that spans
+            several covalently-linked chains (a macrocycle deposited as
+            separate chains). Defaults to the single primary chain
+            (``{ligand_instance_chain: residue_numbers}``) when omitted.
 
         Returns
         -------
@@ -1564,7 +1569,7 @@ class Ligand(DocBaseModel):
         resolved_smiles: str | None = None
         stereo_matches: bool | None = None
         try:
-            from plinder.data.utils.annotations.cif_utils import atoms_to_rdkit_mol
+            from plinder.data.annotations.cif_utils import atoms_to_rdkit_mol
 
             # biotite has no chiral tags → stereo assigned from 3D inside helper
             resolved_mol = atoms_to_rdkit_mol(lig_heavy)

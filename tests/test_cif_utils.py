@@ -19,7 +19,7 @@ import biotite.structure.io.pdbx as pdbx
 import numpy as np
 import pytest
 import yaml
-from plinder.data.utils.annotations.cif_utils import (
+from plinder.data.annotations.cif_utils import (
     MissingBondOrderError,
     apply_struct_conn_bonds,
     assign_bond_orders_from_smiles,
@@ -440,8 +440,8 @@ def test_assign_handles_multi_instance_comp_id(boltz_cif, tmp_path):
 
 def test_from_custom_cif_warns_on_multi_model(boltz_cif, tmp_path, monkeypatch):
     """Multi-model CIFs (NMR ensembles, multi-sample) warn and use model 1."""
-    from plinder.data.utils.annotations import aggregate_annotations as agg
-    from plinder.data.utils.annotations.aggregate_annotations import Entry
+    from plinder.data.annotations import aggregate_annotations as agg
+    from plinder.data.annotations.aggregate_annotations import Entry
 
     f = pdbx.CIFFile.read(str(boltz_cif))
     block = list(f.values())[0]
@@ -495,7 +495,7 @@ def test_from_custom_cif_warns_on_multi_model(boltz_cif, tmp_path, monkeypatch):
 
 def test_from_custom_cif_raises_without_smiles(boltz_cif):
     """from_custom_cif_file should raise when unknown ligands lack SMILES."""
-    from plinder.data.utils.annotations.aggregate_annotations import Entry
+    from plinder.data.annotations.aggregate_annotations import Entry
 
     with pytest.raises(MissingBondOrderError):
         Entry.from_custom_cif_file(
@@ -510,7 +510,7 @@ def test_from_custom_cif_with_smiles(boltz_cif):
     The input CIF must not be mutated on disk — bond-order enrichment
     happens on an in-memory copy.
     """
-    from plinder.data.utils.annotations.aggregate_annotations import Entry
+    from plinder.data.annotations.aggregate_annotations import Entry
 
     before_bytes = boltz_cif.read_bytes()
 
@@ -546,8 +546,8 @@ def test_from_custom_cif_user_smiles_takes_precedence(boltz_cif):
     """
     import shutil
 
-    from plinder.data.utils.annotations.aggregate_annotations import Entry
-    from plinder.data.utils.annotations.ligand_utils import _get_ccd_smiles
+    from plinder.data.annotations.aggregate_annotations import Entry
+    from plinder.data.annotations.ligand_utils import _get_ccd_smiles
     from rdkit import Chem
 
     # Sanity: the biotite CCD placeholder for "LIG" is a different molecule
@@ -601,7 +601,7 @@ def test_from_custom_cif_save_fixed_roundtrip(boltz_cif, tmp_path):
        - passes check_cif_bond_orders
        - produces an equivalent Entry without needing SMILES again
     """
-    from plinder.data.utils.annotations.aggregate_annotations import Entry
+    from plinder.data.annotations.aggregate_annotations import Entry
 
     # 1. Input is bad — confirm it fails validation
     with pytest.raises(MissingBondOrderError):
@@ -638,7 +638,7 @@ def test_from_custom_cif_save_fixed_roundtrip(boltz_cif, tmp_path):
 
 def test_save_fixed_cif_refuses_to_overwrite_input(boltz_cif):
     """save_fixed_cif pointing at the input path must raise, not overwrite."""
-    from plinder.data.utils.annotations.aggregate_annotations import Entry
+    from plinder.data.annotations.aggregate_annotations import Entry
 
     with pytest.raises(ValueError, match="must not point at the input"):
         Entry.from_custom_cif_file(
@@ -651,7 +651,7 @@ def test_save_fixed_cif_refuses_to_overwrite_input(boltz_cif):
 
 def test_save_fixed_cif_refuses_to_overwrite_existing(boltz_cif, tmp_path):
     """save_fixed_cif pointing at an existing file must raise, not overwrite."""
-    from plinder.data.utils.annotations.aggregate_annotations import Entry
+    from plinder.data.annotations.aggregate_annotations import Entry
 
     existing = tmp_path / "existing.cif"
     existing.write_text("DO NOT OVERWRITE ME")
@@ -674,7 +674,7 @@ def test_save_fixed_cif_refuses_to_overwrite_existing(boltz_cif, tmp_path):
 def test_atoms_to_rdkit_mol_error():
     """atoms_to_rdkit_mol raises ValueError on empty input."""
     import biotite.structure as struc
-    from plinder.data.utils.annotations.cif_utils import atoms_to_rdkit_mol
+    from plinder.data.annotations.cif_utils import atoms_to_rdkit_mol
 
     empty = struc.AtomArray(0)
     try:

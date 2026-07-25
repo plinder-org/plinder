@@ -18,9 +18,8 @@ from plinder.core.scores.entries import (
     load_entry_views,
 )
 from plinder.core.utils.schemas import PROTEIN_SIMILARITY_SCHEMA
-from plinder.data.pipeline.config import FoldseekConfig, MMSeqsConfig
-from plinder.data.utils.annotations import get_similarity_scores as scoring_module
-from plinder.data.utils.annotations.get_similarity_scores import (
+from plinder.data.annotations import get_similarity_scores as scoring_module
+from plinder.data.annotations.get_similarity_scores import (
     Scorer,
     _alignment_search_command,
     _stream_alignment_tsv_to_dataset,
@@ -36,6 +35,7 @@ from plinder.data.utils.annotations.get_similarity_scores import (
     run_alignment,
     write_ecfp4_fingerprint_table,
 )
+from plinder.data.pipeline.config import FoldseekConfig, MMSeqsConfig
 from rdkit import Chem
 
 SDF_FILE = (
@@ -531,7 +531,7 @@ def test_ligand_scoring_inputs_include_only_proper_holo_ligands() -> None:
 
 
 def test_entry_views_accept_annotation_dataframe(cif_2gdo, tmp_path) -> None:
-    from plinder.data.utils.annotations.aggregate_annotations import Entry
+    from plinder.data.annotations.aggregate_annotations import Entry
 
     entry = Entry.from_cif_file(cif_2gdo)
     annotation = entry.to_df()
@@ -1865,7 +1865,7 @@ def test_ligand_similarity_pipeline_does_not_write_per_system_mapping(
         component_dir / "components.parquet", index=False
     )
 
-    from plinder.data.utils.annotations import ligand_utils
+    from plinder.data.annotations import ligand_utils
 
     monkeypatch.setattr(ligand_utils, "parse_cofactors", lambda _data_dir: {"COF"})
     compute_ligand_fingerprints(data_dir=tmp_path)

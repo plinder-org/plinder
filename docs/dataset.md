@@ -176,7 +176,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from plinder.data.utils.annotations.save_utils import (
+from plinder.data.annotations.save_utils import (
     SystemReconstructionOptions,
     SystemReconstructionOutputs,
     save_reconstructed_system,

@@ -64,7 +64,7 @@ def _cif_to_posebusters_mol(cif_file: Path) -> Any:
     import biotite.structure.io.pdbx as pdbx
     from biotite.interface import rdkit as rdkit_interface
 
-    from plinder.data.utils.annotations.cif_utils import read_mmcif_file
+    from plinder.data.annotations.cif_utils import read_mmcif_file
 
     atoms = pdbx.get_structure(
         read_mmcif_file(cif_file),

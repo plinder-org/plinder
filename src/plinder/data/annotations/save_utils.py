@@ -89,7 +89,7 @@ def save_ligands(
     """
     import logging
 
-    from plinder.data.utils.annotations.cif_utils import atoms_to_rdkit_mol
+    from plinder.data.annotations.cif_utils import atoms_to_rdkit_mol
 
     log = logging.getLogger(__name__)
     output_folder = Path(output_folder)
@@ -380,7 +380,7 @@ def reconstruct_system(
     options : SystemReconstructionOptions
         Atom-content choices for the two returned views.
     """
-    from plinder.data.utils.annotations.cif_utils import (
+    from plinder.data.annotations.cif_utils import (
         build_biounit,
         read_mmcif_file,
     )
@@ -474,7 +474,7 @@ def save_reconstructed_system(
             requested["receptor_cif"],
         )
     if "sequences_fasta" in requested:
-        from plinder.data.utils.annotations.cif_utils import (
+        from plinder.data.annotations.cif_utils import (
             get_label_asym_sequences,
             read_mmcif_container,
         )

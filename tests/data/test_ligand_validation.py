@@ -1,7 +1,7 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
 
-from plinder.data.utils.annotations.get_ligand_validation import _select_altcode
+from plinder.data.annotations.get_ligand_validation import _select_altcode
 
 
 def test_select_altcode_uses_selected_source_conformer() -> None:

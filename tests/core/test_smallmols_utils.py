@@ -65,7 +65,7 @@ def test_inchikey(smiles, inchikey, remove_stereo):
 
 
 def test_load_ligands_from_index_uses_proper_holo_ligand_rows():
-    from plinder.data.utils.annotations.get_similarity_scores import (
+    from plinder.data.annotations.get_similarity_scores import (
         load_ligands_from_index,
     )
 
@@ -141,7 +141,7 @@ def test_compare_stereo_to_template():
 
 def test_sequences_match_core():
     """Test sequence matching for binding affinity validation."""
-    from plinder.data.utils.annotations.protein_utils import sequences_match_core
+    from plinder.data.annotations.protein_utils import sequences_match_core
 
     assert sequences_match_core("ABCDEFGH", "ABCDEFGH") is True
     assert sequences_match_core("MHHHHHABCDEFGH", "ABCDEFGH") is True

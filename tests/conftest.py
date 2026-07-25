@@ -547,24 +547,24 @@ def write_plinder_mount(monkeypatch, tmp_path):
 
 @pytest.fixture(autouse=True)
 def mock_ccd_lookups(monkeypatch):
-    from plinder.data.utils.annotations.ligand_utils import sort_ccd_codes
+    from plinder.data.annotations.ligand_utils import sort_ccd_codes
 
     data = json.loads((test_asset_fp / "ccd_lookups.json").read_text())
     synonyms = [set(s) for s in data["ccd_synonyms"]]
     monkeypatch.setattr(
-        "plinder.data.utils.annotations.ligand_utils.CCD_SYNONYMS_DICT",
+        "plinder.data.annotations.ligand_utils.CCD_SYNONYMS_DICT",
         {code: sort_ccd_codes(list(s))[0] for s in synonyms for code in s},
     )
     monkeypatch.setattr(
-        "plinder.data.utils.annotations.ligand_utils.COFACTORS",
+        "plinder.data.annotations.ligand_utils.COFACTORS",
         set(data["cofactors"]),
     )
     monkeypatch.setattr(
-        "plinder.data.utils.annotations.ligand_utils.ARTIFACTS",
+        "plinder.data.annotations.ligand_utils.ARTIFACTS",
         set(data["artifacts"]),
     )
     monkeypatch.setattr(
-        "plinder.data.utils.annotations.ligand_utils.BINDING_AFFINITY",
+        "plinder.data.annotations.ligand_utils.BINDING_AFFINITY",
         None,
     )
 

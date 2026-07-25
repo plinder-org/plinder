@@ -29,6 +29,7 @@ from tqdm import tqdm
 from plinder.core.utils import gcs, schemas
 from plinder.core.utils.log import setup_logger
 from plinder.data import clusters, databases, splits
+from plinder.data.annotations import get_similarity_scores
 from plinder.data.pipeline import collate, io, utils
 from plinder.data.pipeline.ingest import (
     balance_entries,
@@ -37,7 +38,6 @@ from plinder.data.pipeline.ingest import (
     ingest_pdb_batch,
     normalize_pdb_id,
 )
-from plinder.data.utils.annotations import get_similarity_scores
 
 LOG = setup_logger(__name__)
 ALIGNMENT_CHAIN_LOOKUP_RELATIVE = Path("index/alignment_chain_lookup.parquet")
@@ -2703,7 +2703,7 @@ def make_mmp_index(
         the root plinder dir
     """
 
-    from plinder.data.utils.annotations.mmpdb_utils import (
+    from plinder.data.annotations.mmpdb_utils import (
         add_mmp_clusters_to_data,
         make_mmp_index_from_annotation_table,
     )

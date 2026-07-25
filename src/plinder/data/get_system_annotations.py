@@ -10,7 +10,7 @@ import pandas as pd
 from tqdm import tqdm
 
 from plinder.core.utils.log import setup_logger
-from plinder.data.utils.annotations.aggregate_annotations import Entry
+from plinder.data.annotations.aggregate_annotations import Entry
 
 LOG = setup_logger(__name__, log_level=logging.DEBUG)
 
@@ -60,7 +60,7 @@ class GetPlinderAnnotation:
         self.entry.set_validation(self.validation_xml, self.mmcif_file)
         resolved_save_folder = entry_cfg.get("save_folder")
         if resolved_save_folder is not None:
-            from plinder.data.utils.annotations.cif_utils import (
+            from plinder.data.annotations.cif_utils import (
                 get_mmcif_revision,
                 read_mmcif_container,
             )

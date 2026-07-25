@@ -23,7 +23,7 @@ from plinder.core.utils.log import setup_logger
 from plinder.core.utils.unpack import expand_config_context
 
 if TYPE_CHECKING:
-    from plinder.data.utils.annotations.get_similarity_scores import Scorer
+    from plinder.data.annotations.get_similarity_scores import Scorer
 
 
 LOG = setup_logger(__name__)
@@ -144,8 +144,8 @@ def get_scorer(
     mmseqs_cfg: DictConfig | None = None,
     scratch_dir: Path | None = None,
 ) -> tuple["Scorer", list[str], Path]:
+    from plinder.data.annotations.get_similarity_scores import Scorer
     from plinder.data.pipeline.config import FoldseekConfig, MMSeqsConfig
-    from plinder.data.utils.annotations.get_similarity_scores import Scorer
 
     foldseek_config = (
         OmegaConf.to_object(foldseek_cfg)
@@ -204,7 +204,7 @@ def save_ligand_batch(
     annotation: pd.DataFrame,
     output_path: Path,
 ) -> None:
-    from plinder.data.utils.annotations.get_similarity_scores import (
+    from plinder.data.annotations.get_similarity_scores import (
         annotate_ligand_3d_score_ability,
         load_ligands_from_index,
     )
@@ -956,8 +956,8 @@ def apo_file_from_link_id(
 ) -> dict[str, str] | None:
     import biotite.structure.io.pdbx as pdbx
 
-    from plinder.data.utils.annotations.cif_utils import read_mmcif_file
-    from plinder.data.utils.annotations.save_utils import save_cif_file
+    from plinder.data.annotations.cif_utils import read_mmcif_file
+    from plinder.data.annotations.save_utils import save_cif_file
 
     if (output_dir / f"{link_id}.cif").exists() and not force_update:
         LOG.info(f"skipping {link_id}.cif as it already exists")
@@ -994,8 +994,8 @@ def pred_file_from_link_id(
 ) -> None:
     import biotite.structure.io.pdbx as pdbx
 
-    from plinder.data.utils.annotations.cif_utils import read_mmcif_file
-    from plinder.data.utils.annotations.save_utils import save_cif_file
+    from plinder.data.annotations.cif_utils import read_mmcif_file
+    from plinder.data.annotations.save_utils import save_cif_file
 
     if (output_dir / f"{link_id}.cif").exists() and not force_update:
         LOG.info(f"skipping {link_id}.cif as it already exists")

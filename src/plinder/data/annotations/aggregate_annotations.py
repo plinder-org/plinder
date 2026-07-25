@@ -22,7 +22,7 @@ from rdkit import RDLogger
 
 from plinder.core.structure.atoms import is_hydrogen_isotope
 from plinder.core.utils.log import setup_logger
-from plinder.data.utils.annotations.cif_utils import (
+from plinder.data.annotations.cif_utils import (
     apply_struct_conn_bonds,
     build_biounit,
     get_chain_external_mappings,
@@ -31,16 +31,16 @@ from plinder.data.utils.annotations.cif_utils import (
     get_model_count,
     get_structure_with_altloc,
 )
-from plinder.data.utils.annotations.get_ligand_validation import (
+from plinder.data.annotations.get_ligand_validation import (
     EntryValidation,
     ResidueListValidation,
     ResidueValidationThresholds,
 )
-from plinder.data.utils.annotations.interaction_utils import (
+from plinder.data.annotations.interaction_utils import (
     get_covalent_connections,
     get_symmetry_mate_contacts,
 )
-from plinder.data.utils.annotations.ligand_utils import (
+from plinder.data.annotations.ligand_utils import (
     BiounitSpatialIndex,
     Ligand,
     get_artifact_codes,
@@ -48,7 +48,7 @@ from plinder.data.utils.annotations.ligand_utils import (
     is_known_artifact_ligand,
     validate_chain_residue,
 )
-from plinder.data.utils.annotations.protein_utils import (
+from plinder.data.annotations.protein_utils import (
     Chain,
     _is_polynucleotide,
     _is_polypeptide,
@@ -56,8 +56,8 @@ from plinder.data.utils.annotations.protein_utils import (
     detect_ligand_chains_from_cif,
     get_receptor_type,
 )
-from plinder.data.utils.annotations.save_utils import save_ligands
-from plinder.data.utils.annotations.utils import DocBaseModel
+from plinder.data.annotations.save_utils import save_ligands
+from plinder.data.annotations.utils import DocBaseModel
 
 LOG = setup_logger(__name__)
 RDLogger.DisableLog("rdApp.*")
@@ -1188,7 +1188,7 @@ class Entry(DocBaseModel):
         Entry
             Entry object for the given pdbid
         """
-        from plinder.data.utils.annotations.cif_utils import (
+        from plinder.data.annotations.cif_utils import (
             _cif_scalar,
             read_mmcif_file,
         )
@@ -1519,13 +1519,13 @@ class Entry(DocBaseModel):
             If ``save_fixed_cif`` points at the input ``cif_file``;
             if biotite returns no bonds at all (corrupted / missing
             bond information CIF); or any error propagated from
-            :func:`~plinder.data.utils.annotations.cif_utils.enrich_cif_with_smiles_bonds`
+            :func:`~plinder.data.annotations.cif_utils.enrich_cif_with_smiles_bonds`
             (invalid SMILES, atom-count / element-order mismatch in the
             positional path, sanitize / template-match failure in the
             opt-in substructure path, or multi-instance comp_id
             divergence).
         """
-        from plinder.data.utils.annotations.cif_utils import (
+        from plinder.data.annotations.cif_utils import (
             MissingBondOrderError,
             enrich_cif_with_smiles_bonds,
             get_unknown_ligand_ids,

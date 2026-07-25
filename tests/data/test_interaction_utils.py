@@ -6,7 +6,7 @@ import time
 import biotite.structure as struc
 import biotite.structure.io.pdbx as pdbx
 import numpy as np
-from plinder.data.utils.annotations import cif_utils, interaction_utils
+from plinder.data.annotations import cif_utils, interaction_utils
 from rdkit import Chem
 
 

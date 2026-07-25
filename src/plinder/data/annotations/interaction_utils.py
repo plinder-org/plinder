@@ -1,5 +1,13 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
+"""Protein-ligand interaction detection.
+
+Computes interaction fingerprints (hydrogen bonds, salt bridges, pi-stacking,
+pi-cation, halogen bonds) via peppr's ``ContactMeasurement``, plus water- and
+metal-bridged interactions, covalent connections from ``_struct_conn``, and
+crystallographic symmetry-mate contacts.
+"""
+
 from __future__ import annotations
 
 import multiprocessing as mp
@@ -226,7 +234,7 @@ def get_symmetry_mate_contacts(
         Mapping of (chain_id, residue_id) to partner residues,
         with atom serials mapped to the symmetry image indices.
     """
-    from plinder.data.utils.annotations.cif_utils import (
+    from plinder.data.annotations.cif_utils import (
         get_structure_with_altloc,
         get_unit_cell_with_altloc,
         read_mmcif_file,
@@ -326,7 +334,7 @@ def get_covalent_connections(
     dict[str, list[tuple[str, str]]]
         All covalent links as defined by mmcif annotations
     """
-    from plinder.data.utils.annotations.cif_utils import parse_struct_conn
+    from plinder.data.annotations.cif_utils import parse_struct_conn
 
     nucleobase_list = {"A", "C", "U", "G", "DA", "DC", "DG", "DT", "PSU"}
     valid_types = {"covale", "metalc", "hydrog"}

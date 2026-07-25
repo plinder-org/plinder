@@ -270,7 +270,7 @@ def reconstruct_similarity_scores(
 
     # Imported lazily so ordinary score parquet queries do not import ingest
     # machinery or RDKit shape-alignment code.
-    from plinder.data.utils.annotations.get_similarity_scores import Scorer
+    from plinder.data.annotations.get_similarity_scores import Scorer
 
     scorer = Scorer(
         entries=entries,

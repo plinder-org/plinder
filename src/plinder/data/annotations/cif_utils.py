@@ -675,7 +675,7 @@ def _is_known_compound(comp_id: str, atom_names: set[str] | None = None) -> bool
     ``LIG``).
     """
     try:
-        from plinder.data.utils.annotations.ligand_utils import _get_ccd_atomarray
+        from plinder.data.annotations.ligand_utils import _get_ccd_atomarray
 
         ref = _get_ccd_atomarray(comp_id)
         if atom_names is not None:

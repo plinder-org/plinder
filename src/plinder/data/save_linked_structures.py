@@ -14,12 +14,12 @@ import pandas as pd
 from plinder.core import PlinderSystem, scores
 from plinder.core.structure.atoms import is_hydrogen_isotope
 from plinder.core.utils.log import setup_logger
-from plinder.data.utils.annotations.cif_utils import (
+from plinder.data.annotations.cif_utils import (
     _cif_scalar,
     read_mmcif_container,
     read_mmcif_file,
 )
-from plinder.data.utils.annotations.save_utils import save_cif_file
+from plinder.data.annotations.save_utils import save_cif_file
 from plinder.eval.docking import utils
 
 LOG = setup_logger(__name__)

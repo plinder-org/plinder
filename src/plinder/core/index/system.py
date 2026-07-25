@@ -28,7 +28,7 @@ from plinder.core.utils.io import (
 )
 from plinder.core.utils.log import setup_logger
 from plinder.core.utils.unpack import get_zips_to_unpack
-from plinder.data.utils.annotations.save_utils import (
+from plinder.data.annotations.save_utils import (
     ReconstructedSystem,
     SystemReconstructionOptions,
     SystemReconstructionOutputs,
@@ -585,7 +585,7 @@ class PlinderSystem:
         import biotite.structure.io.pdbx as pdbx
 
         from plinder.core.structure.atoms import is_hydrogen_isotope
-        from plinder.data.utils.annotations.cif_utils import read_mmcif_file
+        from plinder.data.annotations.cif_utils import read_mmcif_file
 
         cif_file = read_mmcif_file(self.receptor_cif)
         atoms = pdbx.get_structure(

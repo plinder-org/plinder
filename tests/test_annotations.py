@@ -7,26 +7,26 @@ import biotite.structure as struc
 import numpy as np
 import pandas as pd
 import pytest
-from plinder.data.get_system_annotations import GetPlinderAnnotation
-from plinder.data.utils.annotations.aggregate_annotations import Entry
-from plinder.data.utils.annotations.cif_utils import read_mmcif_container
-from plinder.data.utils.annotations.get_ligand_validation import EntryValidation
-from plinder.data.utils.annotations.interaction_utils import get_covalent_connections
-from plinder.data.utils.annotations.ligand_utils import (
+from plinder.data.annotations.aggregate_annotations import Entry
+from plinder.data.annotations.cif_utils import read_mmcif_container
+from plinder.data.annotations.get_ligand_validation import EntryValidation
+from plinder.data.annotations.interaction_utils import get_covalent_connections
+from plinder.data.annotations.ligand_utils import (
     BiounitSpatialIndex,
     classify_ligand_polymer_classes,
     get_water_chain_ids,
     is_known_artifact_ligand,
     sort_ccd_codes,
 )
-from plinder.data.utils.annotations.mmpdb_utils import add_mmp_clusters_to_data
-from plinder.data.utils.annotations.protein_utils import get_receptor_type
-from plinder.data.utils.annotations.save_utils import (
+from plinder.data.annotations.mmpdb_utils import add_mmp_clusters_to_data
+from plinder.data.annotations.protein_utils import get_receptor_type
+from plinder.data.annotations.save_utils import (
     SystemReconstructionOptions,
     SystemReconstructionOutputs,
     save_ligands,
     save_reconstructed_system,
 )
+from plinder.data.get_system_annotations import GetPlinderAnnotation
 from rdkit import Chem
 
 
@@ -101,7 +101,7 @@ def test_save_ligands_falls_back_to_biotite_without_rdkit_sanitization(
     atoms.bonds.add_bond(0, 1, struc.BondType.AROMATIC_SINGLE)
     atoms.bonds.add_bond(2, 3, struc.BondType.DOUBLE)
     monkeypatch.setattr(
-        "plinder.data.utils.annotations.cif_utils.atoms_to_rdkit_mol",
+        "plinder.data.annotations.cif_utils.atoms_to_rdkit_mol",
         lambda _atoms: (_ for _ in ()).throw(ValueError("cannot sanitize")),
     )
 
@@ -138,8 +138,8 @@ def test_entry_validation_accepts_missing_optional_wwpdb_metrics():
 
 
 def test_crystal_contact_fraction_is_undefined_without_heavy_atoms():
-    from plinder.data.utils.annotations.aggregate_annotations import System
-    from plinder.data.utils.annotations.ligand_utils import Ligand
+    from plinder.data.annotations.aggregate_annotations import System
+    from plinder.data.annotations.ligand_utils import Ligand
 
     ligand = Ligand(num_heavy_atoms=0)
     system = System(
@@ -155,7 +155,7 @@ def test_crystal_contact_fraction_is_undefined_without_heavy_atoms():
 
 def test_known_artifact_preflight_is_conservative(monkeypatch):
     monkeypatch.setattr(
-        "plinder.data.utils.annotations.ligand_utils._get_ccd_smiles",
+        "plinder.data.annotations.ligand_utils._get_ccd_smiles",
         lambda code: {"OHX": "[OH-]", "LIG": "CCNCC"}.get(code),
     )
 
@@ -212,8 +212,8 @@ def test_biounit_spatial_index_expands_hits_to_complete_residues():
 
 
 def test_deferred_ions_are_retained_only_when_they_can_join_a_primary_system():
-    from plinder.data.utils.annotations.ligand_utils import Ligand
-    from plinder.data.utils.annotations.protein_utils import Chain
+    from plinder.data.annotations.ligand_utils import Ligand
+    from plinder.data.annotations.protein_utils import Chain
 
     def chain(asym_id: str, chain_type: str) -> Chain:
         return Chain(
@@ -303,8 +303,8 @@ def test_chain_from_cif_data_nucleotides(cif_8ufz):
     """
     import biotite.structure.io.pdbx as pdbx
     from plinder.core.structure.atoms import is_hydrogen_isotope
-    from plinder.data.utils.annotations.cif_utils import read_mmcif_file
-    from plinder.data.utils.annotations.protein_utils import Chain, get_seqres_from_cif
+    from plinder.data.annotations.cif_utils import read_mmcif_file
+    from plinder.data.annotations.protein_utils import Chain, get_seqres_from_cif
 
     cif_obj = read_mmcif_file(cif_8ufz)
     block = list(cif_obj.values())[0]
@@ -385,7 +385,7 @@ def test_entry_ignores_external_mappings_for_absent_chains(
 ):
     entry_dir = mock_alternative_datasets("6i41")
     monkeypatch.setattr(
-        "plinder.data.utils.annotations.aggregate_annotations.get_chain_external_mappings",
+        "plinder.data.annotations.aggregate_annotations.get_chain_external_mappings",
         lambda _block: {"P": []},
     )
 
@@ -417,13 +417,13 @@ def test_peptide_ligand_threshold(
     (stale_ligand_dir / "stale.sdf").touch()
     if not expect_ligand:
         monkeypatch.setattr(
-            "plinder.data.utils.annotations.aggregate_annotations.pdbx.get_structure",
+            "plinder.data.annotations.aggregate_annotations.pdbx.get_structure",
             lambda *_args, **_kwargs: pytest.fail(
                 "entries without ligand-like chains must skip bonded loading"
             ),
         )
         monkeypatch.setattr(
-            "plinder.data.utils.annotations.aggregate_annotations.pdbx.list_assemblies",
+            "plinder.data.annotations.aggregate_annotations.pdbx.list_assemblies",
             lambda *_args, **_kwargs: pytest.fail(
                 "entries without ligand-like chains must skip assembly generation"
             ),
@@ -469,8 +469,8 @@ def test_annotation_without_systems_skips_validation_and_normalized_tables(
 
 
 def test_entry_drops_systems_without_a_proper_ligand() -> None:
-    from plinder.data.utils.annotations.ligand_utils import Ligand
-    from plinder.data.utils.annotations.protein_utils import Chain
+    from plinder.data.annotations.ligand_utils import Ligand
+    from plinder.data.annotations.protein_utils import Chain
 
     receptor = Chain(
         asym_id="A",
@@ -519,8 +519,8 @@ def test_entry_drops_systems_without_a_proper_ligand() -> None:
 
 
 def test_entry_never_groups_ligands_across_biological_assemblies() -> None:
-    from plinder.data.utils.annotations.ligand_utils import Ligand
-    from plinder.data.utils.annotations.protein_utils import Chain
+    from plinder.data.annotations.ligand_utils import Ligand
+    from plinder.data.annotations.protein_utils import Chain
 
     receptor = Chain(
         asym_id="A",
@@ -567,9 +567,9 @@ def test_entry_validation_skips_chains_outside_retained_systems(
 ) -> None:
     from types import SimpleNamespace
 
-    from plinder.data.utils.annotations.aggregate_annotations import System
-    from plinder.data.utils.annotations.ligand_utils import Ligand
-    from plinder.data.utils.annotations.protein_utils import Chain
+    from plinder.data.annotations.aggregate_annotations import System
+    from plinder.data.annotations.ligand_utils import Ligand
+    from plinder.data.annotations.protein_utils import Chain
 
     def chain(asym_id: str, chain_type: str) -> Chain:
         return Chain(
@@ -619,11 +619,11 @@ def test_entry_validation_skips_chains_outside_retained_systems(
     validated: list[str] = []
 
     monkeypatch.setattr(
-        "plinder.data.utils.annotations.aggregate_annotations.ValidationFactory",
+        "plinder.data.annotations.aggregate_annotations.ValidationFactory",
         lambda *_args, **_kwargs: SimpleNamespace(getValidation=lambda: object()),
     )
     monkeypatch.setattr(
-        "plinder.data.utils.annotations.aggregate_annotations.EntryValidation.from_entry",
+        "plinder.data.annotations.aggregate_annotations.EntryValidation.from_entry",
         lambda _doc: SimpleNamespace(r=0.2),
     )
     monkeypatch.setattr(
@@ -675,7 +675,7 @@ def test_10sb_modified_residues_preserved(cif_10sb, mock_alternative_datasets):
     must NOT standardize them to parent amino acids — that information is
     part of the ligand's chemical identity.
     """
-    from plinder.data.utils.annotations.aggregate_annotations import Entry
+    from plinder.data.annotations.aggregate_annotations import Entry
 
     entry_dir = mock_alternative_datasets("10sb")
     entry = Entry.from_cif_file(cif_10sb, save_folder=entry_dir)
@@ -697,7 +697,7 @@ def test_10sb_covalent_macrocycle_is_single_ligand(cif_10sb, mock_alternative_da
     molecule, so the system must expose exactly ONE ligand covering all
     three chains — not three separate ligands.
     """
-    from plinder.data.utils.annotations.aggregate_annotations import Entry
+    from plinder.data.annotations.aggregate_annotations import Entry
 
     entry_dir = mock_alternative_datasets("10sb")
     entry = Entry.from_cif_file(cif_10sb, save_folder=entry_dir)
@@ -755,7 +755,7 @@ def test_get_ccd_mol_components_cif_fallback(monkeypatch):
     from pathlib import Path
 
     import biotite.structure.info as bt_info
-    import plinder.data.utils.annotations.ligand_utils as lu
+    import plinder.data.annotations.ligand_utils as lu
     from rdkit import Chem
 
     # Precondition: the code is genuinely absent from the bundled CCD.
@@ -790,7 +790,7 @@ def test_fill_missing_ccd_bonds_from_components(monkeypatch):
     from pathlib import Path
 
     import biotite.structure as struc
-    import plinder.data.utils.annotations.ligand_utils as lu
+    import plinder.data.annotations.ligand_utils as lu
 
     fixture = Path(__file__).parent / "test_data" / "mini_components.cif"
     monkeypatch.setattr(lu, "COMPONENTS_CCD_PATH", fixture)
@@ -942,7 +942,7 @@ def test_plip_entry_ternary(cif_2p1q, mock_alternative_datasets, lig_code="IAC")
 def test_water_saving(cif_2p1q, mock_alternative_datasets):
     import biotite.structure as struc
     from biotite.structure.io import pdbx
-    from plinder.data.utils.annotations.cif_utils import read_mmcif_file
+    from plinder.data.annotations.cif_utils import read_mmcif_file
 
     entry_dir = mock_alternative_datasets("2p1q")
     system_tag = "2p1q__2__2.B_2.C__2.E"
@@ -1026,7 +1026,7 @@ def test_canonical_ligand_saving_and_system_reconstruction(
     import biotite.structure as struc
     from biotite.sequence.io.fasta import FastaFile
     from biotite.structure.io import pdbx
-    from plinder.data.utils.annotations.cif_utils import read_mmcif_file
+    from plinder.data.annotations.cif_utils import read_mmcif_file
 
     entry_dir = mock_alternative_datasets("2y4i")
     system_tag = "2y4i__1__1.B__1.E_1.F"
@@ -1099,7 +1099,7 @@ def test_canonical_ligand_saving_and_system_reconstruction(
 
     # FASTA reconstruction is part of the base package and must not import
     # pipeline validation or OpenStructure dependencies.
-    sys.modules.pop("plinder.data.utils.annotations.protein_utils", None)
+    sys.modules.pop("plinder.data.annotations.protein_utils", None)
     original_import = builtins.__import__
 
     def reject_optional_imports(name, *args, **kwargs):
@@ -1184,8 +1184,8 @@ def test_smiles_from_nextgen(rcsb_ccd_reference_csv):
     1. InChIKey from CCD ideal 3D matches RCSB InChIKey
     2. Per-atom chirality matches via substructure match
     """
-    from plinder.data.utils.annotations.interaction_utils import _COORDINATION_METALS
-    from plinder.data.utils.annotations.ligand_utils import _get_ccd_mol
+    from plinder.data.annotations.interaction_utils import _COORDINATION_METALS
+    from plinder.data.annotations.ligand_utils import _get_ccd_mol
     from rdkit.Chem.inchi import MolToInchiKey
 
     rcsb_df = pd.read_csv(rcsb_ccd_reference_csv)
@@ -1265,7 +1265,7 @@ def _build_resolved_mol(cif_path, chain_id):
     """Helper: build resolved mol from CIF chain using production code."""
     import biotite.structure.io.pdbx as pdbx
     from plinder.core.structure.atoms import is_hydrogen_isotope
-    from plinder.data.utils.annotations.cif_utils import (
+    from plinder.data.annotations.cif_utils import (
         atoms_to_rdkit_mol,
         read_mmcif_file,
     )
@@ -1310,7 +1310,7 @@ def test_stereo_check_single_residue(cif_7gj7):
     Q0I (chain E): chiral — should match CCD, flipped should fail.
     DMS (chain C): achiral — should return None (no comparable centers).
     """
-    from plinder.data.utils.annotations.ligand_utils import _check_stereo_vs_template
+    from plinder.data.annotations.ligand_utils import _check_stereo_vs_template
 
     # Chiral: Q0I
     q0i_mol = _build_resolved_mol(cif_7gj7, "E")
@@ -1326,13 +1326,14 @@ def test_stereo_check_single_residue(cif_7gj7):
 
 
 def test_stereo_check_partial_resolution(cif_1ngx):
-    """Test _check_stereo_vs_template with partially resolved ligand.
+    """Test _check_stereo_vs_template with a partially resolved ligand.
 
-    JEF in 1ngx chain E has 28/41 heavy atoms resolved. The CCD template
-    must be trimmed via MCS to match only the resolved atoms before CIP
-    comparison.
+    JEF in 1ngx chain E has 28/41 heavy atoms resolved. compare_stereo_to_template
+    transplants the resolved 3D coordinates onto the template graph and only
+    compares stereocenters whose atom *and* immediate neighbors are all
+    resolved, so the resolved portion still yields a definite match/mismatch.
     """
-    from plinder.data.utils.annotations.ligand_utils import _check_stereo_vs_template
+    from plinder.data.annotations.ligand_utils import _check_stereo_vs_template
 
     jef_mol = _build_resolved_mol(cif_1ngx, "E")
     assert jef_mol.GetNumAtoms() < 41, "JEF should be partially resolved"
@@ -1364,7 +1365,7 @@ def test_stereo_check_multi_residue(cif_6fx1):
     1. The function returns a definite result (not None)
     2. The mol has chiral centers that are being compared
     """
-    from plinder.data.utils.annotations.ligand_utils import _check_stereo_vs_template
+    from plinder.data.annotations.ligand_utils import _check_stereo_vs_template
 
     glycan_mol = _build_resolved_mol(cif_6fx1, "M")
 
@@ -1516,7 +1517,7 @@ def test_nucleic_acid_receptor_detection(cif_8ufz):
     import biotite.structure as struc
     import biotite.structure.io.pdbx as pdbx
     from plinder.core.structure.atoms import is_hydrogen_isotope
-    from plinder.data.utils.annotations.cif_utils import read_mmcif_file
+    from plinder.data.annotations.cif_utils import read_mmcif_file
 
     cif_obj = read_mmcif_file(cif_8ufz)
     atoms = pdbx.get_structure(

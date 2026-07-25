@@ -13,7 +13,7 @@ from PDBValidation.XML import ModelledSubgroupNotFound
 from pydantic import ConfigDict, Field, computed_field
 
 from plinder.core.utils.log import setup_logger
-from plinder.data.utils.annotations.utils import DocBaseModel
+from plinder.data.annotations.utils import DocBaseModel
 
 LOG = setup_logger(__name__)
 
