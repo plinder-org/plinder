@@ -24,7 +24,10 @@ from plinder.data.annotations.interface_utils import (
     INTERFACE_ANNOTATION_SCHEMA,
     min_interface_residues_from_schema,
 )
-from plinder.data.pipeline.ingest import completed_entry_metrics
+from plinder.data.pipeline.ingest import (
+    completed_entry_metrics,
+    completed_interface_metrics,
+)
 
 COLLATION_VERSION = 2
 STAGING_RELATIVE = Path("index/.staging/v3_collation")
@@ -245,7 +248,10 @@ def _entry_manifest_row(data_dir: Path, entry_dir: Path) -> dict[str, Any]:
             raise ValueError(
                 f"materialized V3 entry {pdb_id} has no ligand or interface rows"
             )
-        if completed_entry_metrics(data_dir, pdb_id) is None:
+        if (
+            completed_entry_metrics(data_dir, pdb_id) is None
+            and completed_interface_metrics(data_dir, pdb_id) is None
+        ):
             raise ValueError(
                 f"interface-only V3 entry {pdb_id} has no successful ingest marker"
             )

@@ -150,6 +150,8 @@ class IngestPipeline:
             force_update=force_update,
             discovery_threads=self.cfg.source.discovery_threads,
             interface_min_residues=self.cfg.interface.min_interface_residues,
+            interface_annotate_prodigy=self.cfg.interface.annotate_prodigy,
+            ingest_mode=self.cfg.flow.make_entries_mode,
         )
         return chunks
 
@@ -169,6 +171,7 @@ class IngestPipeline:
             annotation_cfg=self.cfg.annotation,
             entry_cfg=self.cfg.entry,
             interface_cfg=self.cfg.interface,
+            ingest_mode=self.cfg.flow.make_entries_mode,
         )
         return failed
 

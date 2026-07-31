@@ -32,6 +32,7 @@ REQUIRED_REFERENCE_FILES = (
     Path("dbs/cofactors/cofactors.json"),
     Path("dbs/affinity/affinity.json"),
 )
+INGEST_MODES = ("all", "ligands", "interfaces")
 
 T = TypeVar("T")
 
@@ -74,12 +75,26 @@ def normalize_pdb_id(value: str) -> str:
     return pdb_id
 
 
+def normalize_ingest_mode(value: str) -> str:
+    """Validate one explicit entry-ingest mode."""
+    mode = str(value).strip().lower()
+    if mode not in INGEST_MODES:
+        raise ValueError(f"ingest mode must be one of {INGEST_MODES}: {value!r}")
+    return mode
+
+
 def entry_metrics_paths(output_root: Path, pdb_id: str) -> tuple[Path, Path]:
     """Return the sharded metrics path followed by the legacy flat path."""
     pdb_id = normalize_pdb_id(pdb_id)
     filename = f"ingest-one-{pdb_id}.json"
     metrics_root = output_root / "metrics"
     return metrics_root / pdb_id[1:3] / filename, metrics_root / filename
+
+
+def interface_metrics_path(output_root: Path, pdb_id: str) -> Path:
+    """Return the independent completion marker for interface-only ingest."""
+    pdb_id = normalize_pdb_id(pdb_id)
+    return output_root / "metrics" / pdb_id[1:3] / f"ingest-interfaces-{pdb_id}.json"
 
 
 def resolve_entry_paths(
@@ -172,6 +187,8 @@ def _entry_outputs_complete(
     entry_directory: Path,
     ligand_parquet: Path,
     expected_interface_min_residues: int | None = None,
+    expected_annotate_prodigy: bool | None = None,
+    expected_ingest_mode: str | None = None,
 ) -> bool:
     """Return whether a prior per-entry run completed atomically."""
     if not metrics_path.is_file():
@@ -181,6 +198,15 @@ def _entry_outputs_complete(
     except (OSError, json.JSONDecodeError):
         return False
     if metrics.get("status") != "complete":
+        return False
+    if expected_ingest_mode is not None and (
+        metrics.get("mode", "all") != expected_ingest_mode
+    ):
+        return False
+    if (
+        expected_annotate_prodigy is not None
+        and bool(metrics.get("interface_annotate_prodigy")) != expected_annotate_prodigy
+    ):
         return False
     counts = metrics.get("counts", {})
     annotation_rows = int(counts.get("annotation_rows", 0))
@@ -198,6 +224,7 @@ def _entry_outputs_complete(
         return False
     try:
         from plinder.data.annotations.interface_utils import (
+            INTERFACE_ANNOTATION_SCHEMA,
             min_interface_residues_from_schema,
         )
 
@@ -224,17 +251,7 @@ def _entry_outputs_complete(
             "chain_role",
         },
         sidecars["entry_metadata"]: {"entry_pdb_id"},
-        sidecars["interfaces"]: {
-            "entry_pdb_id",
-            "system_id",
-            "system_biounit_id",
-            "interface_chain_1",
-            "interface_chain_2",
-            "interface_chain_1_residue_numbers",
-            "interface_chain_1_residue_indices",
-            "interface_chain_2_residue_numbers",
-            "interface_chain_2_residue_indices",
-        },
+        sidecars["interfaces"]: set(INTERFACE_ANNOTATION_SCHEMA.names),
         sidecars["entry_source"]: {"entry_pdb_id"},
     }
     if annotation_rows:
@@ -274,6 +291,8 @@ def completed_entry_metrics(
     pdb_id: str,
     *,
     expected_interface_min_residues: int | None = None,
+    expected_annotate_prodigy: bool | None = None,
+    expected_ingest_mode: str | None = None,
 ) -> Path | None:
     """Return the metrics file when one V3 entry has a complete output set."""
     for metrics_path in entry_metrics_paths(output_root, pdb_id):
@@ -282,6 +301,14 @@ def completed_entry_metrics(
         try:
             metrics = json.loads(metrics_path.read_text())
         except (OSError, json.JSONDecodeError):
+            continue
+        if expected_ingest_mode is not None and (
+            metrics.get("mode", "all") != expected_ingest_mode
+        ):
+            continue
+        if metrics.get("status") == "skipped_no_ligands":
+            if expected_ingest_mode == "ligands":
+                return metrics_path
             continue
         if metrics.get("status") == "skipped_no_systems":
             # A pre-interface-ingest skip may actually contain a protein-only
@@ -292,6 +319,11 @@ def completed_entry_metrics(
             try:
                 stored_interface_min_residues = int(metrics["interface_min_residues"])
             except (KeyError, TypeError, ValueError):
+                continue
+            if expected_annotate_prodigy is not None and (
+                bool(metrics.get("interface_annotate_prodigy"))
+                != expected_annotate_prodigy
+            ):
                 continue
             if (
                 expected_interface_min_residues is None
@@ -315,9 +347,185 @@ def completed_entry_metrics(
             entry_directory=Path(entry_directory),
             ligand_parquet=Path(ligand_parquet),
             expected_interface_min_residues=expected_interface_min_residues,
+            expected_annotate_prodigy=expected_annotate_prodigy,
+            expected_ingest_mode=expected_ingest_mode,
         ):
             return metrics_path
     return None
+
+
+def completed_interface_metrics(
+    output_root: Path,
+    pdb_id: str,
+    *,
+    expected_interface_min_residues: int | None = None,
+    expected_annotate_prodigy: bool | None = None,
+) -> Path | None:
+    """Return the marker when interface-only outputs are complete and current."""
+    pdb_id = normalize_pdb_id(pdb_id)
+    metrics_path = interface_metrics_path(output_root, pdb_id)
+    if not metrics_path.is_file():
+        return None
+    try:
+        metrics = json.loads(metrics_path.read_text())
+        stored_cutoff = int(metrics["interface_min_residues"])
+    except (KeyError, OSError, TypeError, ValueError, json.JSONDecodeError):
+        return None
+    if (
+        expected_interface_min_residues is not None
+        and stored_cutoff != expected_interface_min_residues
+    ):
+        return None
+    if (
+        expected_annotate_prodigy is not None
+        and bool(metrics.get("interface_annotate_prodigy")) != expected_annotate_prodigy
+    ):
+        return None
+    status = metrics.get("status")
+    if status == "skipped_no_interfaces":
+        return metrics_path
+    if status != "complete":
+        return None
+    interface_path = (
+        output_root / "raw_entries" / pdb_id[1:3] / pdb_id / "interfaces.parquet"
+    )
+    if not interface_path.is_file():
+        return None
+    try:
+        from plinder.data.annotations.interface_utils import (
+            INTERFACE_ANNOTATION_SCHEMA,
+            min_interface_residues_from_schema,
+        )
+
+        schema = pq.read_schema(interface_path)
+        if min_interface_residues_from_schema(schema) != stored_cutoff:
+            return None
+        if not set(INTERFACE_ANNOTATION_SCHEMA.names).issubset(schema.names):
+            return None
+        if pq.ParquetFile(interface_path).metadata.num_rows != int(
+            metrics.get("counts", {}).get("interface_rows", -1)
+        ):
+            return None
+    except (OSError, TypeError, ValueError):
+        return None
+    return metrics_path
+
+
+def _ingest_interfaces(
+    *,
+    pdb_id: str,
+    output_root: Path,
+    cif_file: Path,
+    validation_file: Path,
+    raw_entry_root: Path,
+    entry_parquet: Path,
+    entry_directory: Path,
+    ligand_parquet: Path,
+    force: bool,
+    annotation_cfg: Mapping[str, Any] | None,
+    entry_cfg: Mapping[str, Any] | None,
+    interface_cfg: Mapping[str, Any] | None,
+) -> Path:
+    """Replace only interface-derived outputs while preserving ligand assets."""
+    from plinder.data.annotations.interface_utils import (
+        DEFAULT_MIN_INTERFACE_RESIDUES,
+    )
+
+    interface_options = dict(interface_cfg or {})
+    expected_cutoff = int(
+        interface_options.get("min_interface_residues", DEFAULT_MIN_INTERFACE_RESIDUES)
+    )
+    annotate_prodigy = bool(interface_options.get("annotate_prodigy", True))
+    completed = completed_interface_metrics(
+        output_root,
+        pdb_id,
+        expected_interface_min_residues=expected_cutoff,
+        expected_annotate_prodigy=annotate_prodigy,
+    )
+    if completed is not None and not force:
+        raise FileExistsError(
+            f"interface output already exists for {pdb_id}; pass --force to replace it"
+        )
+    if entry_parquet.is_file() != ligand_parquet.is_file():
+        raise FileNotFoundError(
+            f"cannot preserve incomplete ligand outputs for {pdb_id}: "
+            f"annotation={entry_parquet.is_file()}, ligand={ligand_parquet.is_file()}"
+        )
+    has_ligands = entry_parquet.is_file()
+    if not has_ligands and entry_directory.exists():
+        # This directory is owned solely by an earlier interface-only attempt,
+        # so a partial write can be rebuilt without touching ligand assets.
+        shutil.rmtree(entry_directory)
+
+    metrics_path = interface_metrics_path(output_root, pdb_id)
+    timings: list[dict[str, float | str]] = []
+    summary: dict[str, Any] = {
+        "pdb_id": pdb_id,
+        "status": "running",
+        "mode": "interfaces",
+        "interface_min_residues": expected_cutoff,
+        "interface_annotate_prodigy": annotate_prodigy,
+        "inputs": {
+            "mmcif": str(cif_file),
+            "validation_xml": str(validation_file),
+            "validation_xml_exists": validation_file.is_file(),
+        },
+        "outputs": {
+            "entry_parquet": str(entry_parquet) if entry_parquet.is_file() else None,
+            "entry_directory": str(entry_directory),
+            "interface_parquet": str(entry_directory / "interfaces.parquet"),
+            "ligand_parquet": str(ligand_parquet) if ligand_parquet.is_file() else None,
+        },
+        "timings": timings,
+    }
+    total_started = time.perf_counter()
+    try:
+        raw_entry_root.mkdir(parents=True, exist_ok=True)
+
+        def annotate_interfaces() -> Any:
+            annotation_options = dict(annotation_cfg or {})
+            entry_options = dict(entry_cfg or {})
+            entry_options.pop("save_folder", None)
+            if entry_options:
+                annotation_options["entry_cfg"] = entry_options
+            annotation_options["interface_cfg"] = interface_options
+            return _get_annotation_class()(
+                cif_file,
+                validation_file,
+                save_folder=raw_entry_root,
+                **annotation_options,
+            ).annotate_interfaces()
+
+        interface_table = _run_timed(
+            "annotate_interfaces", annotate_interfaces, timings
+        )
+        interface_rows = int(interface_table.num_rows)
+        if not interface_rows and not has_ligands:
+            shutil.rmtree(entry_directory, ignore_errors=True)
+            summary["status"] = "skipped_no_interfaces"
+            summary["outputs"]["entry_directory"] = None
+            summary["outputs"]["interface_parquet"] = None
+        else:
+            summary["status"] = "complete"
+        summary["counts"] = {
+            "interface_rows": interface_rows,
+            "prodigy_annotated_rows": int(
+                interface_table.column("prodigy_is_annotated").to_numpy().sum()
+            ),
+            "preserved_ligand_annotation_rows": (
+                pq.ParquetFile(entry_parquet).metadata.num_rows if has_ligands else 0
+            ),
+        }
+    except BaseException as exc:
+        summary["status"] = "failed"
+        summary["error"] = repr(exc)
+        summary["traceback"] = traceback.format_exc()
+        raise
+    finally:
+        summary["total_wall_seconds"] = time.perf_counter() - total_started
+        summary["final_resource_usage"] = _usage()
+        _write_json(metrics_path, summary)
+    return metrics_path
 
 
 def _clear_entry_outputs(
@@ -332,6 +540,18 @@ def _clear_entry_outputs(
     shutil.rmtree(entry_directory, ignore_errors=True)
 
 
+def _clear_ligand_outputs(
+    *,
+    entry_parquet: Path,
+    entry_directory: Path,
+    ligand_parquet: Path,
+) -> None:
+    """Remove ligand-derived outputs without touching interface sidecars."""
+    entry_parquet.unlink(missing_ok=True)
+    ligand_parquet.unlink(missing_ok=True)
+    shutil.rmtree(entry_directory / "ligand_files", ignore_errors=True)
+
+
 def ingest_one_pdb(
     *,
     pdb_id: str,
@@ -343,9 +563,12 @@ def ingest_one_pdb(
     annotation_cfg: Mapping[str, Any] | None = None,
     entry_cfg: Mapping[str, Any] | None = None,
     interface_cfg: Mapping[str, Any] | None = None,
+    mode: str = "all",
 ) -> Path:
-    """Generate all per-entry V3 Parquets and canonical ASU SDFs."""
+    """Ingest ligands, protein interfaces, or both for one PDB entry."""
     pdb_id = normalize_pdb_id(pdb_id)
+    mode = normalize_ingest_mode(mode)
+    include_interfaces = mode == "all"
     output_root = output_root.resolve()
     cif_file, validation_file = resolve_entry_paths(
         pdb_id,
@@ -354,7 +577,7 @@ def ingest_one_pdb(
     )
     if not cif_file.is_file():
         raise FileNotFoundError(f"missing NextGen mmCIF: {cif_file}")
-    if check_references:
+    if check_references and mode != "interfaces":
         check_reference_data(output_root)
 
     code = pdb_id[1:3]
@@ -363,6 +586,21 @@ def ingest_one_pdb(
     entry_directory = raw_entry_root / pdb_id
     ligand_parquet = output_root / "ligands" / f"{pdb_id}.parquet"
     metrics_path, legacy_metrics_path = entry_metrics_paths(output_root, pdb_id)
+    if mode == "interfaces":
+        return _ingest_interfaces(
+            pdb_id=pdb_id,
+            output_root=output_root,
+            cif_file=cif_file,
+            validation_file=validation_file,
+            raw_entry_root=raw_entry_root,
+            entry_parquet=entry_parquet,
+            entry_directory=entry_directory,
+            ligand_parquet=ligand_parquet,
+            force=force,
+            annotation_cfg=annotation_cfg,
+            entry_cfg=entry_cfg,
+            interface_cfg=interface_cfg,
+        )
     from plinder.data.annotations.interface_utils import (
         DEFAULT_MIN_INTERFACE_RESIDUES,
     )
@@ -372,13 +610,22 @@ def ingest_one_pdb(
             "min_interface_residues", DEFAULT_MIN_INTERFACE_RESIDUES
         )
     )
+    expected_annotate_prodigy = include_interfaces and bool(
+        (interface_cfg or {}).get("annotate_prodigy", True)
+    )
     complete = any(
         _entry_outputs_complete(
             metrics_path=candidate,
             entry_parquet=entry_parquet,
             entry_directory=entry_directory,
             ligand_parquet=ligand_parquet,
-            expected_interface_min_residues=expected_interface_min_residues,
+            expected_interface_min_residues=(
+                expected_interface_min_residues if include_interfaces else None
+            ),
+            expected_annotate_prodigy=(
+                expected_annotate_prodigy if include_interfaces else None
+            ),
+            expected_ingest_mode=mode,
         )
         for candidate in (metrics_path, legacy_metrics_path)
     )
@@ -386,13 +633,18 @@ def ingest_one_pdb(
         raise FileExistsError(
             f"output already exists: {entry_parquet}; pass --force to replace it"
         )
-    has_partial_outputs = (
-        entry_parquet.exists() or entry_directory.exists() or ligand_parquet.exists()
-    )
+    has_partial_outputs = entry_parquet.exists() or ligand_parquet.exists()
+    if mode == "all":
+        has_partial_outputs = has_partial_outputs or entry_directory.exists()
+    else:
+        has_partial_outputs = (
+            has_partial_outputs or (entry_directory / "ligand_files").exists()
+        )
     if force or has_partial_outputs:
         if has_partial_outputs and not force:
             print(f"clearing incomplete outputs before retrying {pdb_id}")
-        _clear_entry_outputs(
+        clear = _clear_entry_outputs if mode == "all" else _clear_ligand_outputs
+        clear(
             entry_parquet=entry_parquet,
             entry_directory=entry_directory,
             ligand_parquet=ligand_parquet,
@@ -402,7 +654,9 @@ def ingest_one_pdb(
     summary: dict[str, Any] = {
         "pdb_id": pdb_id,
         "status": "running",
+        "mode": mode,
         "interface_min_residues": expected_interface_min_residues,
+        "interface_annotate_prodigy": expected_annotate_prodigy,
         "inputs": {
             "mmcif": str(cif_file),
             "validation_xml": str(validation_file),
@@ -438,12 +692,17 @@ def ingest_one_pdb(
                 annotation_options["entry_cfg"] = entry_options
             if interface_cfg:
                 annotation_options["interface_cfg"] = dict(interface_cfg)
-            annotation = _get_annotation_class()(
+            annotator = _get_annotation_class()(
                 cif_file,
                 validation_file,
                 save_folder=raw_entry_root,
                 **annotation_options,
-            ).annotate()
+            )
+            annotation = (
+                annotator.annotate()
+                if include_interfaces
+                else annotator.annotate(include_interfaces=False)
+            )
             return annotation if annotation is not None else pd.DataFrame()
 
         annotation = _run_timed("annotate_entry", annotate, timings)
@@ -453,7 +712,24 @@ def ingest_one_pdb(
             if interface_path.is_file()
             else 0
         )
-        if annotation.empty and interface_rows == 0:
+        if annotation.empty and mode == "ligands":
+            entry_parquet.unlink(missing_ok=True)
+            ligand_parquet.unlink(missing_ok=True)
+            shutil.rmtree(entry_directory / "ligand_files", ignore_errors=True)
+            summary["outputs"]["entry_parquet"] = None
+            summary["outputs"]["ligand_parquet"] = None
+            if not entry_directory.exists():
+                summary["outputs"]["entry_directory"] = None
+            summary["counts"] = {
+                "annotation_rows": 0,
+                "interface_rows": interface_rows,
+                "interface_rows_generated": 0,
+                "systems": 0,
+                "ligand_ids": 0,
+                "canonical_ligand_sdfs": 0,
+            }
+            summary["status"] = "skipped_no_ligands"
+        elif annotation.empty and interface_rows == 0:
             entry_parquet.unlink(missing_ok=True)
             ligand_parquet.unlink(missing_ok=True)
             shutil.rmtree(entry_directory, ignore_errors=True)
@@ -516,6 +792,8 @@ def ingest_one_pdb(
                 ),
                 "canonical_ligand_sdfs": len(ligand_sdfs),
             }
+            if mode == "ligands":
+                summary["counts"]["interface_rows_generated"] = 0
             summary["status"] = "complete"
     except BaseException as exc:
         summary["status"] = "failed"
@@ -780,11 +1058,18 @@ def ingest_pdb_batch(
     annotation_cfg: Mapping[str, Any] | None = None,
     entry_cfg: Mapping[str, Any] | None = None,
     interface_cfg: Mapping[str, Any] | None = None,
+    mode: str = "all",
 ) -> tuple[Path, bool]:
     """Ingest PDB IDs sequentially and continue after per-entry failures."""
+    mode = normalize_ingest_mode(mode)
     output_root = output_root.resolve()
+    batch_prefix = {
+        "all": "ingest-batch",
+        "ligands": "ligand-ingest-batch",
+        "interfaces": "interface-ingest-batch",
+    }[mode]
     metrics_path = (
-        output_root / "metrics" / f"ingest-batch-{job_id}-{batch_index:05d}.json"
+        output_root / "metrics" / (f"{batch_prefix}-{job_id}-{batch_index:05d}.json")
     )
     metrics_path.parent.mkdir(parents=True, exist_ok=True)
     payload: dict[str, Any] = {
@@ -792,6 +1077,7 @@ def ingest_pdb_batch(
         "batch_index": batch_index,
         "pdb_ids": pdb_ids,
         "status": "running",
+        "mode": mode,
         "entries": [],
     }
     started = time.perf_counter()
@@ -805,16 +1091,36 @@ def ingest_pdb_batch(
             "min_interface_residues", DEFAULT_MIN_INTERFACE_RESIDUES
         )
     )
+    expected_annotate_prodigy = bool(
+        (interface_cfg or {}).get("annotate_prodigy", True)
+    )
     try:
         for pdb_id in pdb_ids:
             entry_started = time.perf_counter()
             completed = (
                 None
                 if force
-                else completed_entry_metrics(
-                    output_root,
-                    pdb_id,
-                    expected_interface_min_residues=expected_interface_min_residues,
+                else (
+                    completed_interface_metrics(
+                        output_root,
+                        pdb_id,
+                        expected_interface_min_residues=(
+                            expected_interface_min_residues
+                        ),
+                        expected_annotate_prodigy=expected_annotate_prodigy,
+                    )
+                    if mode == "interfaces"
+                    else completed_entry_metrics(
+                        output_root,
+                        pdb_id,
+                        expected_interface_min_residues=(
+                            expected_interface_min_residues if mode == "all" else None
+                        ),
+                        expected_annotate_prodigy=(
+                            expected_annotate_prodigy if mode == "all" else None
+                        ),
+                        expected_ingest_mode=mode,
+                    )
                 )
             )
             if completed is not None:
@@ -837,6 +1143,7 @@ def ingest_pdb_batch(
                     annotation_cfg=annotation_cfg,
                     entry_cfg=entry_cfg,
                     interface_cfg=interface_cfg,
+                    mode=mode,
                 )
                 entry_status = json.loads(entry_metrics.read_text()).get("status")
                 payload["entries"].append(
@@ -927,6 +1234,15 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     batch_parser.add_argument("--force", action="store_true")
+    batch_parser.add_argument(
+        "--mode",
+        choices=INGEST_MODES,
+        default="all",
+        help=(
+            "ingest ligands and interfaces (all), only ligands, or only "
+            "interfaces while preserving ligand assets"
+        ),
+    )
     return parser
 
 
@@ -972,6 +1288,7 @@ def main() -> None:
             if args.interface_min_residues is not None
             else None
         ),
+        mode=args.mode,
     )
     print(metrics_path.read_text(), end="")
     if had_failures:

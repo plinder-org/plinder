@@ -5,6 +5,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import cache
+from pathlib import Path
 from typing import TYPE_CHECKING, Iterable, Mapping
 
 import biotite.structure as struc
@@ -18,6 +20,58 @@ if TYPE_CHECKING:
 PROTEIN_BACKBONE_ATOMS = frozenset({"N", "CA", "C", "O"})
 DEFAULT_MIN_INTERFACE_RESIDUES = 7
 MIN_INTERFACE_RESIDUES_METADATA_KEY = b"plinder.interface.min_interface_residues"
+PRODIGY_CONTACT_RADIUS = 5.0
+PRODIGY_FEATURE_NAMES = (
+    "CP",
+    "AC",
+    "AP",
+    "AA",
+    "ALA",
+    "CYS",
+    "GLU",
+    "ASP",
+    "GLY",
+    "PHE",
+    "ILE",
+    "HIS",
+    "MET",
+    "LEU",
+    "GLN",
+    "PRO",
+    "SER",
+    "ARG",
+    "THR",
+    "VAL",
+    "TYR",
+    "link_density",
+)
+PRODIGY_AMINO_ACID_CLASSES = {
+    "ALA": "A",
+    "CYS": "A",
+    "GLU": "C",
+    "ASP": "C",
+    "GLY": "A",
+    "PHE": "A",
+    "ILE": "A",
+    "HIS": "C",
+    "LYS": "C",
+    "MET": "A",
+    "LEU": "A",
+    "ASN": "P",
+    "GLN": "P",
+    "PRO": "A",
+    "SER": "P",
+    "ARG": "C",
+    "THR": "P",
+    "TRP": "A",
+    "VAL": "A",
+    "TYR": "A",
+}
+# The model and feature ordering are pinned to official PRODIGY-cryst:
+# https://github.com/haddocking/prodigy-cryst/tree/29d99d535cae3014608c9394b8809619a60fcfa2
+# Its legacy scikit-learn pickle is represented as numeric arrays so the same
+# trees can be evaluated on every Python version supported by Plinder.
+_PRODIGY_MODEL_PATH = Path(__file__).parent / "static_files" / "prodigy_classifier.npz"
 
 INTERFACE_ANNOTATION_SCHEMA = pa.schema(
     [
@@ -31,8 +85,35 @@ INTERFACE_ANNOTATION_SCHEMA = pa.schema(
         ("interface_chain_2_residue_numbers", pa.list_(pa.int32())),
         ("interface_chain_2_residue_indices", pa.list_(pa.int32())),
         ("interface_num_contact_residue_pairs", pa.int64()),
+        ("prodigy_is_annotated", pa.bool_()),
+        ("prodigy_label", pa.string()),
+        ("prodigy_probability_bio", pa.float32()),
+        ("prodigy_link_density", pa.float32()),
+        ("prodigy_intermolecular_contacts", pa.int32()),
+        ("prodigy_charged_charged_contacts", pa.int32()),
+        ("prodigy_charged_polar_contacts", pa.int32()),
+        ("prodigy_charged_apolar_contacts", pa.int32()),
+        ("prodigy_polar_polar_contacts", pa.int32()),
+        ("prodigy_apolar_polar_contacts", pa.int32()),
+        ("prodigy_apolar_apolar_contacts", pa.int32()),
     ]
 )
+
+
+@dataclass(frozen=True)
+class ProdigyCrystalAnnotation:
+    """PRODIGY-cryst contact features and BIO/XTAL prediction."""
+
+    label: str
+    probability_bio: float
+    link_density: float
+    intermolecular_contacts: int
+    charged_charged_contacts: int
+    charged_polar_contacts: int
+    charged_apolar_contacts: int
+    polar_polar_contacts: int
+    apolar_polar_contacts: int
+    apolar_apolar_contacts: int
 
 
 def interface_system_id(
@@ -61,6 +142,7 @@ class ProteinInterface:
     chain_2_residue_numbers: tuple[int, ...]
     chain_2_residue_indices: tuple[int, ...]
     num_contact_residue_pairs: int
+    prodigy: ProdigyCrystalAnnotation | None = None
 
     def __post_init__(self) -> None:
         if self.chain_1 >= self.chain_2:
@@ -83,7 +165,7 @@ class ProteinInterface:
 
     def to_row(self) -> dict[str, object]:
         """Return one Arrow-compatible annotation row."""
-        return {
+        row: dict[str, object] = {
             "entry_pdb_id": self.pdb_id,
             "system_id": self.system_id,
             "system_biounit_id": self.biounit_id,
@@ -94,7 +176,169 @@ class ProteinInterface:
             "interface_chain_2_residue_numbers": list(self.chain_2_residue_numbers),
             "interface_chain_2_residue_indices": list(self.chain_2_residue_indices),
             "interface_num_contact_residue_pairs": self.num_contact_residue_pairs,
+            "prodigy_is_annotated": self.prodigy is not None,
         }
+        prodigy_fields = {
+            "prodigy_label": "label",
+            "prodigy_probability_bio": "probability_bio",
+            "prodigy_link_density": "link_density",
+            "prodigy_intermolecular_contacts": "intermolecular_contacts",
+            "prodigy_charged_charged_contacts": "charged_charged_contacts",
+            "prodigy_charged_polar_contacts": "charged_polar_contacts",
+            "prodigy_charged_apolar_contacts": "charged_apolar_contacts",
+            "prodigy_polar_polar_contacts": "polar_polar_contacts",
+            "prodigy_apolar_polar_contacts": "apolar_polar_contacts",
+            "prodigy_apolar_apolar_contacts": "apolar_apolar_contacts",
+        }
+        row.update(
+            {
+                column: (
+                    getattr(self.prodigy, attribute)
+                    if self.prodigy is not None
+                    else None
+                )
+                for column, attribute in prodigy_fields.items()
+            }
+        )
+        return row
+
+
+@cache
+def _load_prodigy_classifier() -> dict[str, np.ndarray]:
+    """Load the official PRODIGY-cryst random forest once per process."""
+    if not _PRODIGY_MODEL_PATH.is_file():
+        raise FileNotFoundError(
+            f"missing packaged PRODIGY-cryst classifier: {_PRODIGY_MODEL_PATH}"
+        )
+    with np.load(_PRODIGY_MODEL_PATH, allow_pickle=False) as model:
+        arrays = {name: model[name] for name in model.files}
+    if tuple(str(value) for value in arrays["feature_names"]) != PRODIGY_FEATURE_NAMES:
+        raise ValueError("packaged PRODIGY-cryst classifier has incompatible features")
+    if tuple(str(value) for value in arrays["classes"]) != ("BIO", "XTAL"):
+        raise ValueError("packaged PRODIGY-cryst classifier has incompatible classes")
+    return arrays
+
+
+def _predict_prodigy_probability(features: np.ndarray) -> tuple[str, float]:
+    """Evaluate the exact trees from official PRODIGY-cryst."""
+    model = _load_prodigy_classifier()
+    offsets = model["tree_offsets"]
+    left = model["children_left"]
+    right = model["children_right"]
+    node_features = model["feature"]
+    thresholds = model["threshold"]
+    leaf_probabilities = model["probability"]
+    probabilities = np.zeros(2, dtype=np.float64)
+    for tree_index in range(len(offsets) - 1):
+        node = int(offsets[tree_index])
+        while left[node] >= 0:
+            if features[node_features[node]] <= thresholds[node]:
+                node = int(left[node])
+            else:
+                node = int(right[node])
+        probabilities += leaf_probabilities[node]
+    probabilities /= len(offsets) - 1
+    return ("BIO" if probabilities[0] >= probabilities[1] else "XTAL"), float(
+        probabilities[0]
+    )
+
+
+def annotate_prodigy_crystal_interface(
+    atoms: struc.AtomArray,
+    *,
+    chain_1: str,
+    chain_2: str,
+    spatial_index: BiounitSpatialIndex,
+) -> ProdigyCrystalAnnotation | None:
+    """Classify one chain interface using official PRODIGY-cryst.
+
+    Its contact definitions, feature ordering and fixed random forest are
+    preserved.  Biotite supplies the already reconstructed biological
+    assembly, and NumPy evaluates the legacy scikit-learn trees.
+    Interfaces containing unsupported modified residues remain in the dataset
+    with null PRODIGY fields.
+    """
+    chain_1_mask = atoms.chain_id == chain_1
+    chain_2_mask = atoms.chain_id == chain_2
+    if not np.any(chain_1_mask) or not np.any(chain_2_mask):
+        raise ValueError(
+            f"interface chains are absent from assembly: {chain_1}, {chain_2}"
+        )
+    chain_2_atom_mask = np.asarray(chain_2_mask, dtype=bool)
+    contact_pairs: set[tuple[tuple[int, str], tuple[int, str]]] = set()
+    chain_1_indices = np.flatnonzero(chain_1_mask)
+    for atom_index in chain_1_indices:
+        neighbors = np.asarray(
+            spatial_index.cell_list.get_atoms(
+                atoms.coord[atom_index], radius=PRODIGY_CONTACT_RADIUS
+            ),
+            dtype=int,
+        ).reshape(-1)
+        neighbors = neighbors[(neighbors >= 0) & (neighbors < len(atoms))]
+        neighbors = neighbors[chain_2_atom_mask[neighbors]]
+        residue_1 = (int(atoms.res_id[atom_index]), str(atoms.ins_code[atom_index]))
+        for target_index in neighbors:
+            residue_2 = (
+                int(atoms.res_id[target_index]),
+                str(atoms.ins_code[target_index]),
+            )
+            contact_pairs.add((residue_1, residue_2))
+    if not contact_pairs:
+        return None
+
+    residue_name_1 = {
+        (int(atoms.res_id[index]), str(atoms.ins_code[index])): str(
+            atoms.res_name[index]
+        )
+        for index in np.flatnonzero(chain_1_mask)
+    }
+    residue_name_2 = {
+        (int(atoms.res_id[index]), str(atoms.ins_code[index])): str(
+            atoms.res_name[index]
+        )
+        for index in np.flatnonzero(chain_2_mask)
+    }
+    contacted_residue_names = {
+        residue_name_1[residue_1] for residue_1, _ in contact_pairs
+    } | {residue_name_2[residue_2] for _, residue_2 in contact_pairs}
+    if not contacted_residue_names.issubset(PRODIGY_AMINO_ACID_CLASSES):
+        return None
+    bins = {name: 0 for name in ("AA", "PP", "CC", "AP", "CP", "AC")}
+    bins.update({name: 0 for name in PRODIGY_AMINO_ACID_CLASSES})
+    for residue_1, residue_2 in contact_pairs:
+        name_1 = residue_name_1[residue_1]
+        name_2 = residue_name_2[residue_2]
+        contact_type = "".join(
+            sorted(
+                (
+                    PRODIGY_AMINO_ACID_CLASSES[name_1],
+                    PRODIGY_AMINO_ACID_CLASSES[name_2],
+                )
+            )
+        )
+        bins[contact_type] += 1
+        bins[name_1] += 1
+        bins[name_2] += 1
+    contacted_1 = {pair[0] for pair in contact_pairs}
+    contacted_2 = {pair[1] for pair in contact_pairs}
+    link_density = len(contact_pairs) / (len(contacted_1) * len(contacted_2))
+    features = np.asarray(
+        [float(bins[name]) for name in PRODIGY_FEATURE_NAMES[:-1]] + [link_density],
+        dtype=np.float64,
+    )
+    label, probability_bio = _predict_prodigy_probability(features)
+    return ProdigyCrystalAnnotation(
+        label=label,
+        probability_bio=probability_bio,
+        link_density=link_density,
+        intermolecular_contacts=len(contact_pairs),
+        charged_charged_contacts=bins["CC"],
+        charged_polar_contacts=bins["CP"],
+        charged_apolar_contacts=bins["AC"],
+        polar_polar_contacts=bins["PP"],
+        apolar_polar_contacts=bins["AP"],
+        apolar_apolar_contacts=bins["AA"],
+    )
 
 
 def _asym_id(instance_chain: str) -> str:
@@ -137,6 +381,7 @@ def detect_protein_interfaces(
     contact_radius: float = 10.0,
     min_chain_length: int = 12,
     min_interface_residues: int = DEFAULT_MIN_INTERFACE_RESIDUES,
+    annotate_prodigy: bool = True,
     spatial_index: BiounitSpatialIndex | None = None,
 ) -> list[ProteinInterface]:
     """Detect protein-chain interfaces from backbone contacts.
@@ -240,6 +485,16 @@ def detect_protein_interfaces(
                 chain_2_residue_numbers=chain_2_numbers,
                 chain_2_residue_indices=chain_2_indices,
                 num_contact_residue_pairs=len(residue_pairs),
+                prodigy=(
+                    annotate_prodigy_crystal_interface(
+                        atoms,
+                        chain_1=chain_1,
+                        chain_2=chain_2,
+                        spatial_index=spatial_index,
+                    )
+                    if annotate_prodigy
+                    else None
+                ),
             )
         )
     return interfaces

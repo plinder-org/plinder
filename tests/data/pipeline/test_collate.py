@@ -7,9 +7,11 @@ import json
 from pathlib import Path
 
 import pandas as pd
+import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from plinder.data.annotations.interface_utils import (
+    INTERFACE_ANNOTATION_SCHEMA,
     MIN_INTERFACE_RESIDUES_METADATA_KEY,
 )
 from plinder.data.pipeline import collate as collate_module
@@ -106,20 +108,26 @@ def _write_entry(
     pd.DataFrame({"entry_pdb_id": [pdb_id], "entry_pH": [ph]}).to_parquet(
         entry_dir / "entry_metadata.parquet", index=False
     )
-    pd.DataFrame(
+    interface_row = dict.fromkeys(INTERFACE_ANNOTATION_SCHEMA.names)
+    interface_row.update(
         {
-            "entry_pdb_id": [pdb_id],
-            "system_id": [f"{pdb_id}__1__1.A--1.B"],
-            "system_biounit_id": ["1"],
-            "interface_chain_1": ["1.A"],
-            "interface_chain_2": ["1.B"],
-            "interface_chain_1_residue_numbers": [[1, 2, 3, 4, 5, 6, 7]],
-            "interface_chain_1_residue_indices": [[0, 1, 2, 3, 4, 5, 6]],
-            "interface_chain_2_residue_numbers": [[11, 12, 13, 14, 15, 16, 17]],
-            "interface_chain_2_residue_indices": [[0, 1, 2, 3, 4, 5, 6]],
-            "interface_num_contact_residue_pairs": [7],
+            "entry_pdb_id": pdb_id,
+            "system_id": f"{pdb_id}__1__1.A--1.B",
+            "system_biounit_id": "1",
+            "interface_chain_1": "1.A",
+            "interface_chain_2": "1.B",
+            "interface_chain_1_residue_numbers": [1, 2, 3, 4, 5, 6, 7],
+            "interface_chain_1_residue_indices": [0, 1, 2, 3, 4, 5, 6],
+            "interface_chain_2_residue_numbers": [11, 12, 13, 14, 15, 16, 17],
+            "interface_chain_2_residue_indices": [0, 1, 2, 3, 4, 5, 6],
+            "interface_num_contact_residue_pairs": 7,
+            "prodigy_is_annotated": False,
         }
-    ).to_parquet(entry_dir / "interfaces.parquet", index=False)
+    )
+    pq.write_table(
+        pa.Table.from_pylist([interface_row], schema=INTERFACE_ANNOTATION_SCHEMA),
+        entry_dir / "interfaces.parquet",
+    )
     _set_interface_threshold(entry_dir / "interfaces.parquet", 7)
 
     proper = [row for row in ligand_rows if row["proper"]]

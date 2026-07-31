@@ -35,6 +35,8 @@ class FlowConfig:
         if the per-entry annotation parquet already exists, skip generation
     make_entries_cpu : int, default=1
         misguided experiments in multiprocessing over C++ libs (bad idea)
+    make_entries_mode : str, default="all"
+        Generate ligands and interfaces, only ligands, or only interfaces.
     """
 
     run_specific_stages: Any = ""
@@ -46,6 +48,7 @@ class FlowConfig:
     make_entries_batch_size: int = 220
     make_entries_force_update: bool = False
     make_entries_cpu: int = 4
+    make_entries_mode: str = "all"
 
     collate_entries_batch_size: int = 4
     collate_entries_cpu: int = 2
@@ -98,6 +101,10 @@ class FlowConfig:
     split_config_dir: str = ""
 
     def __post_init__(self) -> None:
+        if self.make_entries_mode not in {"all", "ligands", "interfaces"}:
+            raise ValueError(
+                "flow.make_entries_mode must be all, ligands, or interfaces"
+            )
         if self.collate_entries_batch_size < 1:
             raise ValueError("flow.collate_entries_batch_size must be positive")
         if self.collate_entries_cpu < 1 or self.finalize_entries_cpu < 1:
@@ -275,6 +282,7 @@ class InterfaceConfig:
     contact_radius: float = 10.0
     min_chain_length: int = 12
     min_interface_residues: int = 7
+    annotate_prodigy: bool = True
 
     def __post_init__(self) -> None:
         if self.contact_radius <= 0:

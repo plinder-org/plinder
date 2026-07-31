@@ -43,7 +43,15 @@ ARGS=(
 if [[ "${FORCE:-0}" == "1" ]]; then
     ARGS+=(--force)
 fi
+INGEST_MODE=${INGEST_MODE:-all}
+ARGS+=(--mode "${INGEST_MODE}")
+case "${INGEST_MODE}" in
+    all) METRICS_PREFIX=ingest-batch ;;
+    ligands) METRICS_PREFIX=ligand-ingest-batch ;;
+    interfaces) METRICS_PREFIX=interface-ingest-batch ;;
+    *) echo "INGEST_MODE must be all, ligands, or interfaces" >&2; exit 2 ;;
+esac
 
 /usr/bin/time -v \
-    -o "${OUTPUT_ROOT}/metrics/ingest-batch-${JOB_ID}-${BATCH_INDEX}.time-v.txt" \
+    -o "${OUTPUT_ROOT}/metrics/${METRICS_PREFIX}-${JOB_ID}-${BATCH_INDEX}.time-v.txt" \
     python -m plinder.data.pipeline.ingest batch "${ARGS[@]}"

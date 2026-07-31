@@ -35,8 +35,10 @@ from plinder.data.pipeline import collate, io, utils
 from plinder.data.pipeline.ingest import (
     balance_entries,
     completed_entry_metrics,
+    completed_interface_metrics,
     discover_entries,
     ingest_pdb_batch,
+    normalize_ingest_mode,
     normalize_pdb_id,
 )
 
@@ -317,8 +319,11 @@ def scatter_make_entries(
     force_update: bool,
     discovery_threads: int = 8,
     interface_min_residues: int = 7,
+    interface_annotate_prodigy: bool = True,
+    ingest_mode: str = "all",
 ) -> list[list[str]]:
     """Discover and size-balance source entries for V3 annotation."""
+    ingest_mode = normalize_ingest_mode(ingest_mode)
     selected_pdb_ids = [normalize_pdb_id(pdb_id) for pdb_id in pdb_ids]
     selected_codes = _selected_context_codes(two_char_codes, selected_pdb_ids)
     entries = discover_entries(
@@ -333,10 +338,25 @@ def scatter_make_entries(
         entries = [
             entry
             for entry in entries
-            if completed_entry_metrics(
-                data_dir,
-                entry.pdb_id,
-                expected_interface_min_residues=interface_min_residues,
+            if (
+                completed_interface_metrics(
+                    data_dir,
+                    entry.pdb_id,
+                    expected_interface_min_residues=interface_min_residues,
+                    expected_annotate_prodigy=interface_annotate_prodigy,
+                )
+                if ingest_mode == "interfaces"
+                else completed_entry_metrics(
+                    data_dir,
+                    entry.pdb_id,
+                    expected_interface_min_residues=(
+                        interface_min_residues if ingest_mode == "all" else None
+                    ),
+                    expected_annotate_prodigy=(
+                        interface_annotate_prodigy if ingest_mode == "all" else None
+                    ),
+                    expected_ingest_mode=ingest_mode,
+                )
             )
             is None
         ]
@@ -358,6 +378,7 @@ def make_entries(
     entry_cfg: DictConfig,
     interface_cfg: DictConfig,
     cpu: int = 1,
+    ingest_mode: str = "all",
 ) -> list[str]:
     """Run the same resumable V3 batch implementation used by Slurm."""
     del cpu  # Entry annotation is intentionally sequential within each worker.
@@ -373,6 +394,7 @@ def make_entries(
         annotation_cfg=annotation_cfg,
         entry_cfg=entry_cfg,
         interface_cfg=interface_cfg,
+        mode=normalize_ingest_mode(ingest_mode),
     )
     payload = json.loads(metrics_path.read_text())
     failed = [

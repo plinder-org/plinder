@@ -5,9 +5,11 @@ import json
 from pathlib import Path
 
 import pandas as pd
+import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from plinder.data.annotations.interface_utils import (
+    INTERFACE_ANNOTATION_SCHEMA,
     MIN_INTERFACE_RESIDUES_METADATA_KEY,
 )
 from plinder.data.pipeline import ingest
@@ -18,6 +20,7 @@ from plinder.data.pipeline.ingest import (
     build_parser,
     check_reference_data,
     completed_entry_metrics,
+    completed_interface_metrics,
     discover_entries,
     ingest_one_pdb,
     ingest_pdb_batch,
@@ -59,21 +62,20 @@ def _write_fake_sidecars(
         entry_dir / "entry_metadata.parquet", index=False
     )
     interface_columns = [
-        "entry_pdb_id",
-        "system_id",
-        "system_biounit_id",
-        "interface_chain_1",
-        "interface_chain_2",
-        "interface_chain_1_residue_numbers",
-        "interface_chain_1_residue_indices",
-        "interface_chain_2_residue_numbers",
-        "interface_chain_2_residue_indices",
-        "interface_num_contact_residue_pairs",
+        *INTERFACE_ANNOTATION_SCHEMA.names,
     ]
+    normalized_interfaces = []
+    for interface in interfaces or []:
+        normalized = dict.fromkeys(interface_columns)
+        normalized.update(interface)
+        normalized["prodigy_is_annotated"] = bool(normalized["prodigy_is_annotated"])
+        normalized_interfaces.append(normalized)
     interface_path = entry_dir / "interfaces.parquet"
-    pd.DataFrame(interfaces or [], columns=interface_columns).to_parquet(
-        interface_path, index=False
+    table = pa.Table.from_pylist(
+        normalized_interfaces,
+        schema=INTERFACE_ANNOTATION_SCHEMA,
     )
+    pq.write_table(table, interface_path)
     table = pq.read_table(interface_path)
     metadata = dict(table.schema.metadata or {})
     metadata[MIN_INTERFACE_RESIDUES_METADATA_KEY] = b"7"
@@ -363,6 +365,257 @@ def test_ingest_one_pdb_materializes_interface_only_entries(
     assert completed_entry_metrics(output_root, "8grn") == metrics_path
 
 
+def test_interface_mode_preserves_every_ligand_asset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output_root = tmp_path / "output"
+    cif_root = tmp_path / "nextgen"
+    validation_root = tmp_path / "validation"
+    cif_file, _ = resolve_entry_paths(
+        "8grn", cif_root=cif_root, validation_root=validation_root
+    )
+    cif_file.parent.mkdir(parents=True)
+    cif_file.touch()
+
+    entry_parquet = output_root / "raw_entries/gr/8grn.parquet"
+    ligand_parquet = output_root / "ligands/8grn.parquet"
+    entry_dir = output_root / "raw_entries/gr/8grn"
+    entry_dir.mkdir(parents=True)
+    ligand_parquet.parent.mkdir(parents=True)
+    pd.DataFrame({"system_id": ["8grn__1__1.A__1.C"]}).to_parquet(
+        entry_parquet, index=False
+    )
+    pd.DataFrame({"ligand_id": ["8grn__1.C"]}).to_parquet(ligand_parquet, index=False)
+    _write_fake_sidecars(entry_dir, "8grn")
+    ligand_sdf = entry_dir / "ligand_files/1.C.sdf"
+    ligand_sdf.parent.mkdir()
+    ligand_sdf.write_text("canonical ligand")
+    full_metrics = output_root / "metrics/gr/ingest-one-8grn.json"
+    full_metrics.parent.mkdir(parents=True)
+    full_metrics.write_text('{"status":"original-full-ingest"}\n')
+    preserved_paths = [
+        entry_parquet,
+        ligand_parquet,
+        ligand_sdf,
+        full_metrics,
+        entry_dir / "entry_chains.parquet",
+        entry_dir / "entry_biounit_chains.parquet",
+        entry_dir / "entry_metadata.parquet",
+        entry_dir / "entry_source.parquet",
+    ]
+    before = {path: path.read_bytes() for path in preserved_paths}
+
+    class InterfaceAnnotation:
+        def __init__(self, *_args: object, save_folder: Path, **_kwargs: object):
+            self.save_folder = save_folder
+
+        def annotate_interfaces(self) -> pa.Table:
+            interface = dict.fromkeys(INTERFACE_ANNOTATION_SCHEMA.names)
+            interface.update(
+                {
+                    "entry_pdb_id": "8grn",
+                    "system_id": "8grn__1__1.A--1.B",
+                    "system_biounit_id": "1",
+                    "interface_chain_1": "1.A",
+                    "interface_chain_2": "1.B",
+                    "interface_chain_1_residue_numbers": list(range(1, 8)),
+                    "interface_chain_1_residue_indices": list(range(7)),
+                    "interface_chain_2_residue_numbers": list(range(11, 18)),
+                    "interface_chain_2_residue_indices": list(range(7)),
+                    "interface_num_contact_residue_pairs": 8,
+                    "prodigy_is_annotated": True,
+                    "prodigy_label": "BIO",
+                    "prodigy_probability_bio": 0.9,
+                    "prodigy_link_density": 0.2,
+                    "prodigy_intermolecular_contacts": 8,
+                    "prodigy_charged_charged_contacts": 1,
+                    "prodigy_charged_polar_contacts": 1,
+                    "prodigy_charged_apolar_contacts": 2,
+                    "prodigy_polar_polar_contacts": 0,
+                    "prodigy_apolar_polar_contacts": 1,
+                    "prodigy_apolar_apolar_contacts": 3,
+                }
+            )
+            schema = INTERFACE_ANNOTATION_SCHEMA.with_metadata(
+                {MIN_INTERFACE_RESIDUES_METADATA_KEY: b"7"}
+            )
+            table = pa.Table.from_pylist([interface], schema=schema)
+            pq.write_table(
+                table,
+                self.save_folder / "8grn/interfaces.parquet",
+            )
+            return table
+
+    monkeypatch.setattr(ingest, "_get_annotation_class", lambda: InterfaceAnnotation)
+    metrics_path = ingest_one_pdb(
+        pdb_id="8grn",
+        output_root=output_root,
+        cif_root=cif_root,
+        validation_root=validation_root,
+        mode="interfaces",
+    )
+
+    assert {path: path.read_bytes() for path in preserved_paths} == before
+    assert metrics_path.name == "ingest-interfaces-8grn.json"
+    metrics = json.loads(metrics_path.read_text())
+    assert metrics["status"] == "complete"
+    assert metrics["counts"] == {
+        "interface_rows": 1,
+        "prodigy_annotated_rows": 1,
+        "preserved_ligand_annotation_rows": 1,
+    }
+    assert completed_interface_metrics(output_root, "8grn") == metrics_path
+    assert pq.read_table(entry_dir / "interfaces.parquet").column(
+        "prodigy_label"
+    ).to_pylist() == ["BIO"]
+
+
+def test_ligand_mode_skips_interfaces_and_preserves_interface_assets(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output_root = tmp_path / "output"
+    cif_root = tmp_path / "nextgen"
+    validation_root = tmp_path / "validation"
+    cif_file, _ = resolve_entry_paths(
+        "8grn", cif_root=cif_root, validation_root=validation_root
+    )
+    cif_file.parent.mkdir(parents=True)
+    cif_file.touch()
+    entry_dir = output_root / "raw_entries/gr/8grn"
+    entry_dir.mkdir(parents=True)
+    _write_fake_sidecars(
+        entry_dir,
+        "8grn",
+        interfaces=[
+            {
+                "entry_pdb_id": "8grn",
+                "system_id": "8grn__1__1.A--1.B",
+                "system_biounit_id": "1",
+                "interface_chain_1": "1.A",
+                "interface_chain_2": "1.B",
+                "interface_chain_1_residue_numbers": list(range(1, 8)),
+                "interface_chain_1_residue_indices": list(range(7)),
+                "interface_chain_2_residue_numbers": list(range(11, 18)),
+                "interface_chain_2_residue_indices": list(range(7)),
+                "interface_num_contact_residue_pairs": 8,
+                "prodigy_is_annotated": True,
+                "prodigy_label": "BIO",
+                "prodigy_probability_bio": 0.9,
+                "prodigy_link_density": 0.2,
+                "prodigy_intermolecular_contacts": 8,
+                "prodigy_charged_charged_contacts": 1,
+                "prodigy_charged_polar_contacts": 1,
+                "prodigy_charged_apolar_contacts": 2,
+                "prodigy_polar_polar_contacts": 0,
+                "prodigy_apolar_polar_contacts": 1,
+                "prodigy_apolar_apolar_contacts": 3,
+            }
+        ],
+    )
+    preserved_paths = list(entry_dir.glob("*.parquet"))
+    before = {path: path.read_bytes() for path in preserved_paths}
+
+    class LigandAnnotation:
+        def __init__(self, *_args: object, save_folder: Path, **_kwargs: object):
+            self.save_folder = save_folder
+
+        def annotate(self, *, include_interfaces: bool) -> pd.DataFrame:
+            assert not include_interfaces
+            ligand_dir = self.save_folder / "8grn/ligand_files"
+            ligand_dir.mkdir()
+            (ligand_dir / "1.C.sdf").write_text("canonical ligand")
+            return pd.DataFrame(
+                {
+                    "system_id": ["8grn__1__1.A__1.C"],
+                    "ligand_id": ["8grn__1.C"],
+                    "system_receptor_type": ["protein"],
+                }
+            )
+
+    def save_ligands(
+        *, data_dir: Path, annotation: pd.DataFrame, output_path: Path
+    ) -> None:
+        del data_dir, annotation
+        pd.DataFrame(
+            {"ligand_id": ["8grn__1.C"], "ligand_is_3d_score_able": [True]}
+        ).to_parquet(output_path, index=False)
+
+    monkeypatch.setattr(ingest, "_get_annotation_class", lambda: LigandAnnotation)
+    monkeypatch.setattr(ingest, "_save_ligand_batch", save_ligands)
+    metrics_path = ingest_one_pdb(
+        pdb_id="8grn",
+        output_root=output_root,
+        cif_root=cif_root,
+        validation_root=validation_root,
+        check_references=False,
+        mode="ligands",
+    )
+
+    assert {path: path.read_bytes() for path in preserved_paths} == before
+    metrics = json.loads(metrics_path.read_text())
+    assert metrics["mode"] == "ligands"
+    assert metrics["counts"]["interface_rows"] == 1
+    assert metrics["counts"]["interface_rows_generated"] == 0
+    assert (
+        completed_entry_metrics(output_root, "8grn", expected_ingest_mode="ligands")
+        == metrics_path
+    )
+
+
+def test_interface_mode_resumes_zero_interface_entries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output_root = tmp_path / "output"
+    cif_root = tmp_path / "nextgen"
+    validation_root = tmp_path / "validation"
+    cif_file, _ = resolve_entry_paths(
+        "8grn", cif_root=cif_root, validation_root=validation_root
+    )
+    cif_file.parent.mkdir(parents=True)
+    cif_file.touch()
+    calls = 0
+
+    class EmptyInterfaceAnnotation:
+        def __init__(self, *_args: object, **_kwargs: object):
+            pass
+
+        def annotate_interfaces(self) -> pa.Table:
+            nonlocal calls
+            calls += 1
+            return pa.Table.from_pylist(
+                [],
+                schema=INTERFACE_ANNOTATION_SCHEMA.with_metadata(
+                    {MIN_INTERFACE_RESIDUES_METADATA_KEY: b"7"}
+                ),
+            )
+
+    monkeypatch.setattr(
+        ingest, "_get_annotation_class", lambda: EmptyInterfaceAnnotation
+    )
+    metrics_path = ingest_one_pdb(
+        pdb_id="8grn",
+        output_root=output_root,
+        cif_root=cif_root,
+        validation_root=validation_root,
+        mode="interfaces",
+    )
+    assert json.loads(metrics_path.read_text())["status"] == "skipped_no_interfaces"
+    assert not (output_root / "raw_entries/gr/8grn").exists()
+
+    batch_metrics, had_failures = ingest_pdb_batch(
+        pdb_ids=["8grn"],
+        output_root=output_root,
+        cif_root=cif_root,
+        validation_root=validation_root,
+        mode="interfaces",
+    )
+    assert not had_failures
+    assert json.loads(batch_metrics.read_text())["entries"][0]["status"] == (
+        "skipped_complete"
+    )
+    assert calls == 1
+
+
 def test_ingest_one_pdb_retries_partial_outputs_without_force(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -466,6 +719,23 @@ def test_shared_ingest_cli_has_manifest_and_batch_commands() -> None:
     assert batch_args.command == "batch"
     assert batch_args.batch_size == 10
     assert batch_args.interface_min_residues is None
+    assert batch_args.mode == "all"
+    ligand_only = parser.parse_args(
+        [
+            "batch",
+            "manifest.txt",
+            "output",
+            "--batch-size",
+            "10",
+            "--cif-root",
+            "cif",
+            "--validation-root",
+            "validation",
+            "--mode",
+            "ligands",
+        ]
+    )
+    assert ligand_only.mode == "ligands"
     configured = parser.parse_args(
         [
             "batch",
@@ -479,9 +749,12 @@ def test_shared_ingest_cli_has_manifest_and_batch_commands() -> None:
             "validation",
             "--interface-min-residues",
             "9",
+            "--mode",
+            "interfaces",
         ]
     )
     assert configured.interface_min_residues == 9
+    assert configured.mode == "interfaces"
 
 
 def test_load_manifest_and_select_slice(tmp_path: Path) -> None:
@@ -532,6 +805,7 @@ def test_batch_continues_after_failure_and_resumes_completed_entries(
             json.dumps(
                 {
                     "status": "complete",
+                    "interface_annotate_prodigy": True,
                     "counts": {"annotation_rows": 1, "interface_rows": 0},
                     "outputs": {
                         "entry_parquet": str(entry_path),
@@ -591,6 +865,7 @@ def test_batch_resumes_entries_previously_skipped_without_systems(
         json.dumps(
             {
                 "status": "skipped_no_systems",
+                "interface_annotate_prodigy": True,
                 "counts": {"annotation_rows": 0, "interface_rows": 0},
                 "interface_min_residues": 7,
             }
@@ -644,6 +919,7 @@ def test_completed_entry_metrics_invalidates_interface_cutoff_changes(
         json.dumps(
             {
                 "status": "complete",
+                "interface_annotate_prodigy": True,
                 "counts": {"annotation_rows": 1, "interface_rows": 0},
                 "outputs": {"entry_directory": str(entry_directory)},
             }

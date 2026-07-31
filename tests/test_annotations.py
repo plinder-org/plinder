@@ -185,7 +185,56 @@ def test_pinder_7cm8_homodimer_interface_regression(test_dir: Path) -> None:
     assert entry.interfaces[0].chain_1_residue_numbers == (
         entry.interfaces[0].chain_2_residue_numbers
     )
+    assert entry.interfaces[0].prodigy is not None
+    prodigy = entry.interfaces[0].prodigy
+    assert prodigy.intermolecular_contacts == 149
+    assert prodigy.charged_charged_contacts == 12
+    assert prodigy.charged_polar_contacts == 10
+    assert prodigy.charged_apolar_contacts == 46
+    assert prodigy.polar_polar_contacts == 0
+    assert prodigy.apolar_polar_contacts == 22
+    assert prodigy.apolar_apolar_contacts == 59
+    assert prodigy.link_density == pytest.approx(0.06, abs=0.005)
+    assert prodigy.label == "BIO"
+    assert prodigy.probability_bio == pytest.approx(1.0)
     _assert_interface_residue_mappings(entry)
+
+
+def test_interface_only_annotation_preserves_ligand_assets(
+    test_dir: Path, tmp_path: Path
+) -> None:
+    cif = test_dir / "interfaces/cm/pdb_00007cm8/" "pdb_00007cm8_xyz-enrich.cif.gz"
+    annotation = GetPlinderAnnotation(cif, "", save_folder=tmp_path)
+    first = annotation.annotate_interfaces()
+    assert first.num_rows == 1
+    assert first.column("prodigy_label").to_pylist() == ["BIO"]
+
+    entry_folder = tmp_path / "7cm8"
+    interface_path = entry_folder / "interfaces.parquet"
+    interface_bytes = interface_path.read_bytes()
+    assert annotation.annotate(include_interfaces=False) is None
+    assert annotation.entry.interfaces == []
+    assert interface_path.read_bytes() == interface_bytes
+
+    ligand_annotation = tmp_path / "7cm8.parquet"
+    ligand_annotation.write_bytes(b"preserved ligand annotation")
+    ligand_sdf = entry_folder / "ligand_files/1.C.sdf"
+    ligand_sdf.parent.mkdir()
+    ligand_sdf.write_bytes(b"preserved canonical ligand")
+    preserved = [
+        ligand_annotation,
+        ligand_sdf,
+        entry_folder / "entry_chains.parquet",
+        entry_folder / "entry_biounit_chains.parquet",
+        entry_folder / "entry_metadata.parquet",
+        entry_folder / "entry_source.parquet",
+    ]
+    before = {path: path.read_bytes() for path in preserved}
+
+    second = annotation.annotate_interfaces()
+
+    assert second.equals(first)
+    assert {path: path.read_bytes() for path in preserved} == before
 
 
 def test_pinder_7cma_label_asym_interface_regression(test_dir: Path) -> None:

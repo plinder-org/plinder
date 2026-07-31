@@ -167,6 +167,7 @@ def test_make_entries_uses_shared_v3_batch(tmp_path, monkeypatch):
         annotation_cfg={"min_polymer_size": 10},
         entry_cfg={"plip_complex_threshold": 8},
         interface_cfg={"contact_radius": 9},
+        ingest_mode="interfaces",
         cpu=1,
     )
 
@@ -177,6 +178,7 @@ def test_make_entries_uses_shared_v3_batch(tmp_path, monkeypatch):
     assert calls[0]["annotation_cfg"] == {"min_polymer_size": 10}
     assert calls[0]["entry_cfg"] == {"plip_complex_threshold": 8}
     assert calls[0]["interface_cfg"] == {"contact_radius": 9}
+    assert calls[0]["mode"] == "interfaces"
 
 
 def test_scatter_make_entries_discovers_configured_source_root(tmp_path):

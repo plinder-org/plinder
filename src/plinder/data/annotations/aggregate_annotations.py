@@ -1170,6 +1170,9 @@ class Entry(DocBaseModel):
         interface_contact_radius: float = 10.0,
         interface_min_chain_length: int = 12,
         interface_min_residues: int = DEFAULT_MIN_INTERFACE_RESIDUES,
+        interface_annotate_prodigy: bool = True,
+        include_ligands: bool = True,
+        include_interfaces: bool = True,
     ) -> Entry:
         """
         Load an entry object from mmCIF files in the pipeline
@@ -1199,12 +1202,21 @@ class Entry(DocBaseModel):
             Minimum SEQRES length for an interface chain.
         interface_min_residues : int
             Minimum number of contacting residues required on each side.
+        interface_annotate_prodigy : bool
+            Whether to add PRODIGY-cryst contact and BIO/XTAL annotations.
+        include_ligands : bool
+            Whether to derive ligand systems and canonical ligand SDFs.
+        include_interfaces : bool
+            Whether to derive protein-protein interfaces and PRODIGY annotations.
 
         Returns
         -------
         Entry
             Entry object for the given pdbid
         """
+        if not include_ligands and not include_interfaces:
+            raise ValueError("entry ingest must include ligands, interfaces, or both")
+
         from plinder.data.annotations.cif_utils import (
             _cif_scalar,
             read_mmcif_file,
@@ -1216,7 +1228,7 @@ class Entry(DocBaseModel):
 
         # Extract metadata from CIF block
         pdb_id = (_cif_scalar(cif_data, "entry", "id") or "").lower()
-        if save_folder is not None:
+        if save_folder is not None and include_ligands:
             # Re-ingest must never merge newly retained ligands with SDFs from
             # a previous annotation of the same entry.  Clear this derived
             # directory before any early no-system return as well.
@@ -1272,7 +1284,7 @@ class Entry(DocBaseModel):
         entry.chain_to_seqres = chain_to_seqres
         entry._populate_chains(atoms, cif_data)
 
-        if save_folder is not None and data_dir is None:
+        if save_folder is not None and data_dir is None and include_ligands:
             data_dir = save_folder.parent.parent
         per_chain = get_chain_external_mappings(cif_data)
         for chain in per_chain:
@@ -1282,40 +1294,47 @@ class Entry(DocBaseModel):
             if chain in entry.chains:
                 entry.chains[chain].mappings = per_chain[chain]
         entry.ligand_like_chains = detect_ligand_chains(entry, min_polymer_size)
-        monoatomic_ion_mask = struc.filter_monoatomic_ions(atoms)
-        ion_only_chains = set(
-            str(chain) for chain in atoms.chain_id[monoatomic_ion_mask]
-        )
-        ion_only_chains.difference_update(
-            str(chain) for chain in atoms.chain_id[~monoatomic_ion_mask]
-        )
-        monoatomic_ion_asym_ids = set(entry.ligand_like_chains) & ion_only_chains
-        known_artifact_asym_ids: set[str] = set()
-        if data_dir is not None:
-            artifact_codes = get_artifact_codes(data_dir)
-            known_artifact_asym_ids = {
-                asym_id
-                for asym_id in entry.ligand_like_chains
-                if asym_id not in monoatomic_ion_asym_ids
-                and is_known_artifact_ligand(
-                    (
-                        residue.name
-                        for residue in entry.chains[asym_id].residues.values()
-                    ),
-                    artifact_codes,
-                )
-            }
-        primary_asym_ids = (
-            set(entry.ligand_like_chains)
-            - monoatomic_ion_asym_ids
-            - known_artifact_asym_ids
-        )
-        if not primary_asym_ids:
+        if not include_ligands:
+            monoatomic_ion_asym_ids: set[str] = set()
+            known_artifact_asym_ids: set[str] = set()
+            primary_asym_ids: set[str] = set()
+        else:
+            monoatomic_ion_mask = struc.filter_monoatomic_ions(atoms)
+            ion_only_chains = set(
+                str(chain) for chain in atoms.chain_id[monoatomic_ion_mask]
+            )
+            ion_only_chains.difference_update(
+                str(chain) for chain in atoms.chain_id[~monoatomic_ion_mask]
+            )
+            monoatomic_ion_asym_ids = set(entry.ligand_like_chains) & ion_only_chains
+            known_artifact_asym_ids = set()
+            if data_dir is not None:
+                artifact_codes = get_artifact_codes(data_dir)
+                known_artifact_asym_ids = {
+                    asym_id
+                    for asym_id in entry.ligand_like_chains
+                    if asym_id not in monoatomic_ion_asym_ids
+                    and is_known_artifact_ligand(
+                        (
+                            residue.name
+                            for residue in entry.chains[asym_id].residues.values()
+                        ),
+                        artifact_codes,
+                    )
+                }
+            primary_asym_ids = (
+                set(entry.ligand_like_chains)
+                - monoatomic_ion_asym_ids
+                - known_artifact_asym_ids
+            )
+        if include_ligands and not primary_asym_ids and include_interfaces:
             LOG.info(
                 "PDB %r has no primary ligand chains; processing only "
                 "protein interfaces",
                 entry.pdb_id,
             )
+        elif include_ligands and not primary_asym_ids:
+            LOG.info("PDB %r has no primary ligand chains", entry.pdb_id)
         if monoatomic_ion_asym_ids or known_artifact_asym_ids:
             LOG.info(
                 "PDB %s: deferring %d ion and %d known-artifact ASU ligand chains",
@@ -1324,6 +1343,18 @@ class Entry(DocBaseModel):
                 len(known_artifact_asym_ids),
             )
         ligands: dict[str, Ligand] = {}
+        spatial_radii: list[float] = []
+        if include_ligands:
+            spatial_radii.extend(
+                [
+                    plip_complex_threshold,
+                    neighboring_residue_threshold,
+                    neighboring_ligand_threshold,
+                ]
+            )
+        if include_interfaces:
+            spatial_radii.append(interface_contact_radius)
+        max_spatial_radius = max(spatial_radii)
 
         assembly_ids = pdbx.list_assemblies(cif_file_obj)
         for assembly_id in assembly_ids:
@@ -1337,25 +1368,24 @@ class Entry(DocBaseModel):
             )
             spatial_index = BiounitSpatialIndex.from_atoms(
                 biounit,
-                max(
-                    plip_complex_threshold,
-                    neighboring_residue_threshold,
-                    neighboring_ligand_threshold,
-                    interface_contact_radius,
-                ),
+                max_spatial_radius,
             )
-            entry.interfaces.extend(
-                detect_protein_interfaces(
-                    biounit,
-                    pdb_id=entry.pdb_id,
-                    biounit_id=str(assembly_id),
-                    chains=entry.chains,
-                    contact_radius=interface_contact_radius,
-                    min_chain_length=interface_min_chain_length,
-                    min_interface_residues=interface_min_residues,
-                    spatial_index=spatial_index,
+            if include_interfaces:
+                entry.interfaces.extend(
+                    detect_protein_interfaces(
+                        biounit,
+                        pdb_id=entry.pdb_id,
+                        biounit_id=str(assembly_id),
+                        chains=entry.chains,
+                        contact_radius=interface_contact_radius,
+                        min_chain_length=interface_min_chain_length,
+                        min_interface_residues=interface_min_residues,
+                        annotate_prodigy=interface_annotate_prodigy,
+                        spatial_index=spatial_index,
+                    )
                 )
-            )
+            if not include_ligands:
+                continue
             if not primary_asym_ids:
                 continue
             water_chains = get_water_chain_ids(biounit)
@@ -1446,10 +1476,11 @@ class Entry(DocBaseModel):
             ligands.update(primary_ligands)
             ligands.update(ion_ligands)
             ligands.update(artifact_ligands)
-        entry.set_systems(
-            ligands,
-            min_shared_pocket_members=min_shared_pocket_members,
-        )
+        if include_ligands:
+            entry.set_systems(
+                ligands,
+                min_shared_pocket_members=min_shared_pocket_members,
+            )
         if entry.systems:
             entry.symmetry_mate_contacts = get_symmetry_mate_contacts(
                 cif_file_obj,
@@ -1467,7 +1498,7 @@ class Entry(DocBaseModel):
             for system in entry.systems.values()
             for ligand in system.ligands
         }
-        if save_folder is not None and retained_ligand_chain_groups:
+        if include_ligands and save_folder is not None and retained_ligand_chain_groups:
             save_ligands(
                 atoms,
                 retained_ligand_chain_groups,
