@@ -66,6 +66,7 @@ class PlinderDataIngestFlow(FlowSpec):
         )
         self.pipeline = IngestPipeline(conf=get_config(config_contents=contents))
         self.next(self.scatter_make_entries)
+
     @kubernetes(**{**K8S, **DATABASES})
     @environment(**ENV)
     @retry
@@ -292,6 +293,47 @@ class PlinderDataIngestFlow(FlowSpec):
     @step
     def finalize_alignments(self):
         self.pipeline.finalize_alignments()
+        self.next(self.plan_interface_scores)
+
+    @kubernetes(**{**K8S, **WORKSTATION_MEM})
+    @environment(**ENV)
+    @retry
+    @step
+    def plan_interface_scores(self):
+        self.pipeline.plan_interface_scores()
+        self.next(self.scatter_make_interface_scores)
+
+    @kubernetes(**K8S)
+    @environment(**ENV)
+    @retry
+    @step
+    def scatter_make_interface_scores(self):
+        self.chunks = self.pipeline.scatter_make_interface_scores()
+        self.next(self.make_interface_scores, foreach="chunks")
+
+    @kubernetes(**{**K8S, **{"cpu": 4, "memory": 32000}})
+    @environment(**ENV)
+    @retry
+    @step
+    def make_interface_scores(self):
+        self.pipeline.make_interface_scores(self.input)
+        self.next(self.join_make_interface_scores)
+
+    @kubernetes(**K8S)
+    @environment(**ENV)
+    @retry
+    @step
+    def join_make_interface_scores(self, inputs):
+        self.pipeline = inputs[0].pipeline
+        self.merge_artifacts(inputs, exclude=["chunks"])
+        self.next(self.finalize_interface_scores)
+
+    @kubernetes(**{**K8S, **WORKSTATION_MEM})
+    @environment(**ENV)
+    @retry
+    @step
+    def finalize_interface_scores(self):
+        self.pipeline.finalize_interface_scores()
         self.next(self.scatter_make_batch_scores)
 
     @kubernetes(**K8S)

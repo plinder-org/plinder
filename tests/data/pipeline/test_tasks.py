@@ -351,6 +351,15 @@ def test_scoring_finalization_stage_order_and_partitions():
         "finalize_alignments"
     )
     assert tasks.STAGES.index("finalize_alignments") < tasks.STAGES.index(
+        "plan_interface_scores"
+    )
+    assert tasks.STAGES.index("plan_interface_scores") < tasks.STAGES.index(
+        "make_interface_scores"
+    )
+    assert tasks.STAGES.index("make_interface_scores") < tasks.STAGES.index(
+        "finalize_interface_scores"
+    )
+    assert tasks.STAGES.index("finalize_interface_scores") < tasks.STAGES.index(
         "make_batch_scores"
     )
     assert tasks.STAGES.index("make_batch_scores") < tasks.STAGES.index(
@@ -453,29 +462,58 @@ def test_scatter_protein_scoring_uses_v3_chain_index(tmp_path) -> None:
     index_dir.mkdir()
     pd.DataFrame(
         {
-            "entry_pdb_id": ["1abc", "2def", "3ghi", "4jkl"],
+            "entry_pdb_id": ["1abc", "2def", "3ghi", "4jkl", "5mno", "5mno"],
+            "chain_asym_id": ["A", "N", "A", "A", "X", "Y"],
             "chain_receptor_type": [
                 "protein",
                 "dna",
                 "protein",
                 "protein",
+                "protein",
+                "protein",
             ],
-            "chain_is_holo": [True, True, True, False],
+            "chain_is_holo": [True, True, True, False, False, False],
         }
     ).to_parquet(index_dir / "entry_chains.parquet", index=False)
+    pq.write_table(
+        pa.Table.from_pylist(
+            [
+                {
+                    "entry_pdb_id": "5mno",
+                    "system_id": "5mno__1__1.X--1.Y",
+                    "system_biounit_id": "1",
+                    "interface_chain_1": "1.X",
+                    "interface_chain_2": "1.Y",
+                    "interface_chain_1_residue_numbers": [1, 2, 3],
+                    "interface_chain_1_residue_indices": [0, 1, 2],
+                    "interface_chain_2_residue_numbers": [4, 5, 6],
+                    "interface_chain_2_residue_indices": [3, 4, 5],
+                    "interface_num_contact_residue_pairs": 3,
+                }
+            ],
+            schema=INTERFACE_ANNOTATION_SCHEMA,
+        ),
+        index_dir / "interface_annotation_table.parquet",
+    )
 
     assert tasks.scatter_protein_scoring(
         data_dir=tmp_path,
         batch_size=1,
         two_char_codes=[],
         pdb_ids=[],
-    ) == [["1abc"], ["3ghi"]]
+    ) == [["1abc"], ["3ghi"], ["5mno"]]
     assert tasks.scatter_protein_scoring(
         data_dir=tmp_path,
         batch_size=10,
         two_char_codes=["ab"],
         pdb_ids=["3GHI"],
     ) == [["3ghi"]]
+    from plinder.data.pipeline.score import plan_protein_scoring
+
+    plan = plan_protein_scoring(tmp_path)
+    assert plan["query_count"] == 3
+    assert plan["protein_chain_count"] == 4
+    assert "interface_annotation" in plan
 
 
 def test_protein_scoring_plan_and_alignment_finalization(tmp_path, monkeypatch) -> None:
@@ -490,6 +528,7 @@ def test_protein_scoring_plan_and_alignment_finalization(tmp_path, monkeypatch) 
     pd.DataFrame(
         {
             "entry_pdb_id": ["1abc", "1abc", "2def"],
+            "chain_asym_id": ["A", "B", "N"],
             "chain_receptor_type": [
                 "protein",
                 "protein",
@@ -633,6 +672,7 @@ def test_protein_scoring_plan_groups_queries_by_two_character_shard(tmp_path):
     pd.DataFrame(
         {
             "entry_pdb_id": ["1zzz", "2aaa", "3aab"],
+            "chain_asym_id": ["A", "A", "A"],
             "chain_receptor_type": ["protein"] * 3,
             "chain_is_holo": [True] * 3,
         }
@@ -1520,6 +1560,7 @@ def test_ligand_3d_plan_deduplicates_positive_pocket_candidates(tmp_path) -> Non
     pd.DataFrame(
         {
             "entry_pdb_id": ["1abc", "2def", "3ghi"],
+            "chain_asym_id": ["A", "A", "A"],
             "chain_receptor_type": ["protein"] * 3,
             "chain_is_holo": [True, True, False],
         }
@@ -1740,6 +1781,7 @@ def test_finalize_ligand_3d_scores_validates_pair_and_packed_shards(
     pd.DataFrame(
         {
             "entry_pdb_id": ["1abc", "2def"],
+            "chain_asym_id": ["A", "A"],
             "chain_receptor_type": ["protein", "protein"],
             "chain_is_holo": [True, False],
         }
@@ -2103,6 +2145,7 @@ def test_protein_scoring_finalizer_rejects_changed_chain_index(tmp_path) -> None
     pd.DataFrame(
         {
             "entry_pdb_id": ["1abc"],
+            "chain_asym_id": ["A"],
             "chain_receptor_type": ["protein"],
             "chain_is_holo": [True],
         }
@@ -3105,6 +3148,253 @@ def test_sucos_release_export_retains_scores_below_cluster_cutoff(tmp_path):
     )
 
 
+def test_interface_score_shards_retain_side_coverages_and_compact_export(tmp_path):
+    from plinder.data.pipeline.score import (
+        INTERFACE_QCOV_EXPORT_RELATIVE,
+        _interface_score_shard_batch,
+        finalize_interface_qcov_scores,
+        plan_interface_scoring,
+        plan_protein_scoring,
+        score_interface_qcov_shards,
+    )
+
+    index = tmp_path / "index"
+    index.mkdir()
+    pd.DataFrame(
+        {
+            "entry_pdb_id": ["1abc", "1abc", "2def", "2def", "3ghi", "3ghi"],
+            "chain_asym_id": ["A", "B", "X", "Y", "C", "D"],
+            "chain_receptor_type": ["protein"] * 6,
+            "chain_is_holo": [True, True, True, True, False, False],
+        }
+    ).to_parquet(index / "entry_chains.parquet", index=False)
+    query_id = "1abc__1__1.A--1.B"
+    target_id = "2def__1__1.X--1.Y"
+    pq.write_table(
+        pa.Table.from_pylist(
+            [
+                {
+                    "entry_pdb_id": "1abc",
+                    "system_id": query_id,
+                    "system_biounit_id": "1",
+                    "interface_chain_1": "1.A",
+                    "interface_chain_2": "1.B",
+                    "interface_chain_1_residue_numbers": [1, 2, 3, 4],
+                    "interface_chain_1_residue_indices": [0, 1, 2, 3],
+                    "interface_chain_2_residue_numbers": [5, 6],
+                    "interface_chain_2_residue_indices": [4, 5],
+                    "interface_num_contact_residue_pairs": 4,
+                },
+                {
+                    "entry_pdb_id": "2def",
+                    "system_id": target_id,
+                    "system_biounit_id": "1",
+                    "interface_chain_1": "1.X",
+                    "interface_chain_2": "1.Y",
+                    "interface_chain_1_residue_numbers": [10, 20],
+                    "interface_chain_1_residue_indices": [9, 19],
+                    "interface_chain_2_residue_numbers": [30, 40, 50],
+                    "interface_chain_2_residue_indices": [29, 39, 49],
+                    "interface_num_contact_residue_pairs": 4,
+                },
+                {
+                    "entry_pdb_id": "3ghi",
+                    "system_id": "3ghi__1__1.C--1.D",
+                    "system_biounit_id": "1",
+                    "interface_chain_1": "1.C",
+                    "interface_chain_2": "1.D",
+                    "interface_chain_1_residue_numbers": [1, 2, 3],
+                    "interface_chain_1_residue_indices": [0, 1, 2],
+                    "interface_chain_2_residue_numbers": [4, 5, 6],
+                    "interface_chain_2_residue_indices": [3, 4, 5],
+                    "interface_num_contact_residue_pairs": 3,
+                },
+            ],
+            schema=INTERFACE_ANNOTATION_SCHEMA,
+        ),
+        index / "interface_annotation_table.parquet",
+    )
+    plan_protein_scoring(tmp_path)
+
+    mapped_rows = {
+        "ab": {
+            "foldseek": [
+                ("A", "Y", [1, 2, 3, 4], [30, 40, 50, -1]),
+                ("B", "X", [5, 6], [10, 20]),
+            ],
+            "mmseqs": [
+                ("A", "X", [1, 2, 3, 4], [10, 20, -1, -1]),
+                ("B", "Y", [5, 6], [30, 40]),
+            ],
+        },
+        "de": {
+            "foldseek": [
+                ("X", "A", [10, 20], [1, -1]),
+                ("Y", "B", [30, 40, 50], [5, -1, -1]),
+            ]
+        },
+        "gh": {"foldseek": []},
+    }
+    for shard, backends in mapped_rows.items():
+        for backend, values in backends.items():
+            query_entry, target_entry = (
+                ("1abc", "2def") if shard == "ab" else ("2def", "1abc")
+            )
+            rows = [
+                {
+                    "query_entry": query_entry,
+                    "target_entry": target_entry,
+                    "query_chain_mapped": query_chain,
+                    "target_chain_mapped": target_chain,
+                    "source": backend,
+                    "qcov": 1.0,
+                    "fident": 1.0,
+                    "seqsim": 1.0,
+                    "query_selected_residue_numbers": query_residues,
+                    "target_selected_residue_numbers": target_residues,
+                    "selected_residue_identity": bytes([1] * len(query_residues)),
+                    **({"lddt": 1.0} if backend == "foldseek" else {}),
+                }
+                for query_chain, target_chain, query_residues, target_residues in values
+            ]
+            path = tasks._alignment_release_path(
+                data_dir=tmp_path,
+                search_db="holo",
+                alignment_type=backend,
+                shard=shard,
+            )
+            path.parent.mkdir(parents=True, exist_ok=True)
+            pq.write_table(
+                pa.Table.from_pylist(
+                    rows,
+                    schema=schemas.mapped_alignment_schema(alignment_type=backend),
+                ),
+                path,
+            )
+        mapping_manifest = tasks._alignment_mapping_manifest_path(
+            data_dir=tmp_path,
+            shard=shard,
+        )
+        mapping_manifest.parent.mkdir(parents=True, exist_ok=True)
+        mapping_manifest.write_text("{}\n")
+    alignment_manifest = tmp_path / "alignments" / "manifest.json"
+    alignment_manifest.write_text(
+        json.dumps({"status": "complete", "skipped_queries": {}}) + "\n"
+    )
+
+    plan = plan_interface_scoring(tmp_path, batch_size=1)
+    assert plan["query_interface_count"] == 3
+    assert plan["target_interface_count"] == 3
+    assert _interface_score_shard_batch(tmp_path, batch_index=0, batch_size=1) == ["ab"]
+    assert _interface_score_shard_batch(tmp_path, batch_index=1, batch_size=1) == ["de"]
+    assert _interface_score_shard_batch(tmp_path, batch_index=2, batch_size=1) == ["gh"]
+
+    for batch_index in range(3):
+        score_interface_qcov_shards(
+            tmp_path,
+            shards=_interface_score_shard_batch(
+                tmp_path,
+                batch_index=batch_index,
+                batch_size=1,
+            ),
+            scratch_dir=tmp_path / "scratch" / str(batch_index),
+            threads=1,
+            memory_limit="1GB",
+        )
+
+    forward = pd.read_parquet(tmp_path / "interface_scores" / "shard=ab.parquet")
+    assert forward.to_dict("records") == [
+        {
+            "query_system": query_id,
+            "target_system": target_id,
+            "mapping": "1.A:1.Y;1.B:1.X",
+            "source": "foldseek",
+            "iface1_qcov": pytest.approx(0.75),
+            "iface2_qcov": pytest.approx(1.0),
+            "similarity": 75,
+        }
+    ]
+    reverse = pd.read_parquet(tmp_path / "interface_scores" / "shard=de.parquet")
+    assert reverse.loc[0, "iface1_qcov"] == pytest.approx(0.5)
+    assert reverse.loc[0, "iface2_qcov"] == pytest.approx(1 / 3)
+    assert reverse.loc[0, "similarity"] == 17
+    empty = tmp_path / "interface_scores" / "shard=gh.parquet"
+    assert pq.ParquetFile(empty).metadata.num_rows == 0
+    assert pq.read_schema(empty).equals(schemas.INTERFACE_SCORE_SHARD_SCHEMA)
+
+    report = finalize_interface_qcov_scores(
+        tmp_path,
+        scratch_dir=tmp_path / "finalize-scratch",
+        threads=1,
+        memory_limit="1GB",
+    )
+    release = pd.read_parquet(tmp_path / INTERFACE_QCOV_EXPORT_RELATIVE)
+    assert release.columns.tolist() == [
+        "query_system",
+        "target_system",
+        "iface1_qcov",
+        "iface2_qcov",
+        "similarity",
+    ]
+    assert sorted(release["similarity"].tolist()) == [17, 75]
+    assert report["row_count"] == 2
+
+    alignment_manifest.write_text(
+        json.dumps(
+            {
+                "status": "complete",
+                "skipped_queries": {"2def": {"reason": "mapping row budget"}},
+            }
+        )
+        + "\n"
+    )
+    dropped_plan = plan_interface_scoring(tmp_path, batch_size=1)
+    assert dropped_plan["query_interface_count"] == 2
+    assert dropped_plan["target_interface_count"] == 3
+    assert pd.read_parquet(tmp_path / "manifests/interface_scoring_work.parquet")[
+        "shard"
+    ].tolist() == ["ab", "gh"]
+    assert not (tmp_path / "interface_scores" / "shard=de.parquet").exists()
+    assert not (tmp_path / "interface_scores" / "shard=de.json").exists()
+    assert (tmp_path / "interface_scores" / "shard=ab.parquet").is_file()
+
+
+def test_interface_score_cli_exposes_plan_array_and_finalizer(tmp_path):
+    from plinder.data.pipeline.score import _parser
+
+    planned = _parser().parse_args(
+        ["plan-interface-scores", str(tmp_path), "--batch-size", "3"]
+    )
+    assert planned.batch_size == 3
+    shard = _parser().parse_args(
+        [
+            "score-interface-shards",
+            str(tmp_path),
+            "--batch-index",
+            "2",
+            "--batch-size",
+            "3",
+            "--scratch-dir",
+            str(tmp_path / "scratch"),
+            "--memory-limit",
+            "12GB",
+        ]
+    )
+    assert shard.batch_index == 2
+    assert shard.memory_limit == "12GB"
+    finalized = _parser().parse_args(
+        [
+            "finalize-interface-scores",
+            str(tmp_path),
+            "--scratch-dir",
+            str(tmp_path / "scratch"),
+            "--output",
+            str(tmp_path / "release.parquet"),
+        ]
+    )
+    assert finalized.output == tmp_path / "release.parquet"
+
+
 def test_clustering_statistics_validate_complete_monotonic_artifacts(tmp_path):
     from plinder.data.pipeline.score import summarize_clustering_artifacts
     from plinder.data.pipeline.utils import _read_local_cluster_rows
@@ -3224,6 +3514,10 @@ def test_v3_score_slurm_exposes_exact_clustering_stages():
         pytest.skip("Slurm assets are not installed in wheel-only test layouts")
     script = script_path.read_text()
 
+    assert "plan-interface-scores)" in script
+    assert "score-interface-shards" in script
+    assert "finalize-interface-scores)" in script
+    assert "PLINDER_INTERFACE_SCORE_OUTPUT" in script
     assert "plan-clusters)" in script
     assert "symmetric-edge-fragments|symmetric-edge-shards" in script
     assert "component-reductions|communities|directed-covers)" in script
@@ -3262,6 +3556,12 @@ def test_metaflow_graph_uses_canonical_ligand_archive_stage():
     assert "self.pipeline.collate_alignments(self.input)" in flow
     assert "self.next(self.finalize_alignments)" in flow
     assert "self.pipeline.finalize_alignments()" in flow
+    assert "self.next(self.plan_interface_scores)" in flow
+    assert "self.pipeline.plan_interface_scores()" in flow
+    assert "self.next(self.scatter_make_interface_scores)" in flow
+    assert "self.pipeline.make_interface_scores(self.input)" in flow
+    assert "self.pipeline.finalize_interface_scores()" in flow
+    assert "self.next(self.scatter_make_batch_scores)" in flow
     assert "self.next(self.scatter_map_batch_alignments)" in flow
     assert "self.pipeline.map_batch_alignments(self.input)" in flow
     assert "self.pipeline.collate_ligand_3d_candidates(self.input)" in flow
@@ -3370,10 +3670,14 @@ def test_v3_ingest_configs_use_current_schema_and_stages():
         if path.name == "make_protein_scores.yaml":
             assert "collate_alignments" in cfg.flow.run_specific_stages
             assert "finalize_alignments" in cfg.flow.run_specific_stages
+            assert "plan_interface_scores" in cfg.flow.run_specific_stages
+            assert "make_interface_scores" in cfg.flow.run_specific_stages
+            assert "finalize_interface_scores" in cfg.flow.run_specific_stages
             assert "export_sucos_shape_pocket_qcov" in cfg.flow.run_specific_stages
             assert "finalize_sucos_export" in cfg.flow.run_specific_stages
             assert "map_batch_alignments" in cfg.flow.run_specific_stages
             assert cfg.flow.map_batch_alignments_batch_size == 1
+            assert cfg.flow.make_interface_scores_batch_size == 1
             assert cfg.foldseek.min_seq_id == 0.0
             assert cfg.mmseqs.min_seq_id == 0.0
             assert tasks.STAGES.index("map_batch_alignments") < tasks.STAGES.index(

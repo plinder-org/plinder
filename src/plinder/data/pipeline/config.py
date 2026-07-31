@@ -71,6 +71,9 @@ class FlowConfig:
 
     run_batch_searches_batch_size: int = 5_000
     map_batch_alignments_batch_size: int = 25
+    make_interface_scores_batch_size: int = 1
+    make_interface_scores_cpu: int = 4
+    make_interface_scores_memory_limit: str = "32GB"
     make_batch_scores_batch_size: int = 90
     make_batch_scores_cpu: int = 4
     make_batch_scores_force_update: bool = False
@@ -99,6 +102,8 @@ class FlowConfig:
             raise ValueError("entry collation CPU counts must be positive")
         for name in [
             "component_reduction_metric_workers",
+            "make_interface_scores_batch_size",
+            "make_interface_scores_cpu",
             "make_ligand_3d_scores_batch_size",
             "make_ligand_3d_scores_cpu",
             "collate_ligand_3d_candidates_batch_size",

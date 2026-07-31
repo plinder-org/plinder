@@ -75,6 +75,30 @@ INTERFACE_SIMILARITY_SCHEMA = pa.schema(
         ("mapping", pa.string()),
         ("source", pa.dictionary(pa.int8(), pa.string(), ordered=True)),
         ("metric", pa.dictionary(pa.int8(), pa.string(), ordered=True)),
+        ("iface1_qcov", pa.float32()),
+        ("iface2_qcov", pa.float32()),
+        ("similarity", pa.int8()),
+    ]
+)
+
+INTERFACE_SCORE_SHARD_SCHEMA = pa.schema(
+    [
+        ("query_system", pa.string()),
+        ("target_system", pa.string()),
+        ("mapping", pa.string()),
+        ("source", pa.string()),
+        ("iface1_qcov", pa.float32()),
+        ("iface2_qcov", pa.float32()),
+        ("similarity", pa.int8()),
+    ]
+)
+
+INTERFACE_QCOV_EXPORT_SCHEMA = pa.schema(
+    [
+        ("query_system", pa.string()),
+        ("target_system", pa.string()),
+        ("iface1_qcov", pa.float32()),
+        ("iface2_qcov", pa.float32()),
         ("similarity", pa.int8()),
     ]
 )

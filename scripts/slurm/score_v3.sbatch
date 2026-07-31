@@ -89,6 +89,9 @@ case "${MODE}" in
     plan-ligand-3d-retries)
         ARGS+=(--batch-size "${BATCH_SIZE}")
         ;;
+    plan-interface-scores)
+        ARGS+=(--batch-size "${BATCH_SIZE}")
+        ;;
     plan-score-repair)
         : "${PLINDER_AFFECTED_PDB_MANIFEST:?set PLINDER_AFFECTED_PDB_MANIFEST}"
         ARGS+=(
@@ -150,9 +153,19 @@ case "${MODE}" in
             --memory-limit "${PLINDER_DUCKDB_MEMORY_LIMIT:-32GB}"
         )
         ;;
+    finalize-interface-scores)
+        ARGS+=(
+            --threads "${SLURM_CPUS_PER_TASK:-1}"
+            --scratch-dir "${TASK_SCRATCH}"
+            --memory-limit "${PLINDER_DUCKDB_MEMORY_LIMIT:-32GB}"
+        )
+        if [[ -n "${PLINDER_INTERFACE_SCORE_OUTPUT:-}" ]]; then
+            ARGS+=(--output "${PLINDER_INTERFACE_SCORE_OUTPUT}")
+        fi
+        ;;
     finalize-alignments|finalize-ligands|finalize-scores|finalize-ligand-3d-retries|finalize-index|merge-components|cluster-stats)
         ;;
-    search-foldseek|search-mmseqs|map|pack-ligands|score|score-pdbs|repair-score-pdbs|repair-score-target-remainders|repair-pack-ligands|repair-candidates|repair-ligand-3d|repair-merge-ligand-3d|repair-score-shards|repair-sucos-shards|collate-ligand-3d-candidates|score-ligand-3d|score-ligand-3d-retry|collate-ligand-3d|merge-ligand-3d|export-sucos-shards|collate-alignments|collate-score-partitions|symmetric-edge-fragments|symmetric-edge-shards|component-reductions|communities|directed-covers)
+    search-foldseek|search-mmseqs|map|pack-ligands|score|score-pdbs|repair-score-pdbs|repair-score-target-remainders|repair-pack-ligands|repair-candidates|repair-ligand-3d|repair-merge-ligand-3d|repair-score-shards|repair-sucos-shards|collate-ligand-3d-candidates|score-ligand-3d|score-ligand-3d-retry|collate-ligand-3d|merge-ligand-3d|export-sucos-shards|score-interface-shards|collate-alignments|collate-score-partitions|symmetric-edge-fragments|symmetric-edge-shards|component-reductions|communities|directed-covers)
         ARGS+=(
             --batch-index "${BATCH_INDEX}"
             --batch-size "${BATCH_SIZE}"
@@ -178,6 +191,9 @@ case "${MODE}" in
                 --output-dir "${PLINDER_SUCOS_EXPORT_DIR:-${DATA_DIR}/exports/all_sucos_shape_pocket_qcov}"
                 --memory-limit "${PLINDER_DUCKDB_MEMORY_LIMIT:-16GB}"
             )
+        fi
+        if [[ "${MODE}" == "score-interface-shards" ]]; then
+            ARGS+=(--memory-limit "${PLINDER_DUCKDB_MEMORY_LIMIT:-32GB}")
         fi
         ;;
     *)

@@ -288,7 +288,7 @@ def calculate_interface_similarity_scores(
         target: InterfaceView,
         *,
         swapped: bool,
-    ) -> tuple[float, str] | None:
+    ) -> tuple[float, float, float, str] | None:
         target_sides_order = (2, 1) if swapped else (1, 2)
         values = [
             coverage.get((source, query.id, target.id, query_side, target_side))
@@ -302,14 +302,14 @@ def calculate_interface_similarity_scores(
             f"{query_chain}:{target_chain}"
             for query_chain, target_chain in zip(query.chains, target_chains)
         )
-        return first * second, mapping
+        return first * second, first, second, mapping
 
     records: list[dict[str, object]] = []
     for query in query_interfaces.values():
         for target in target_interfaces.values():
             if query.id == target.id:
                 continue
-            backend_scores: dict[str, tuple[float, str]] = {}
+            backend_scores: dict[str, tuple[float, float, float, str]] = {}
             for source in ALIGNMENT_TYPES:
                 candidates = [
                     result
@@ -340,9 +340,11 @@ def calculate_interface_similarity_scores(
                 {
                     "query_system": query.id,
                     "target_system": target.id,
-                    "mapping": backend_scores[mapping_source][1],
+                    "mapping": backend_scores[mapping_source][3],
                     "source": source,
                     "metric": "interface_qcov",
+                    "iface1_qcov": backend_scores[mapping_source][1],
+                    "iface2_qcov": backend_scores[mapping_source][2],
                     "similarity": max(0, min(100, round(best_score * 100))),
                 }
             )

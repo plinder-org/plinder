@@ -746,6 +746,8 @@ def test_interface_scores_choose_swapped_assignment_and_best_backend() -> None:
             "mapping": "1.A:1.Y;1.B:1.X",
             "source": "foldseek",
             "metric": "interface_qcov",
+            "iface1_qcov": 1.0,
+            "iface2_qcov": 1.0,
             "similarity": 100,
         }
     ]
@@ -756,6 +758,8 @@ def test_interface_scores_choose_swapped_assignment_and_best_backend() -> None:
         target_interfaces={query.id: query},
     )
     assert reverse.loc[0, "similarity"] == 25
+    assert reverse.loc[0, "iface1_qcov"] == 0.5
+    assert reverse.loc[0, "iface2_qcov"] == 0.5
     assert reverse.loc[0, "mapping"] == "1.X:1.A;1.Y:1.B"
 
     incomplete = calculate_interface_similarity_scores(
@@ -925,6 +929,8 @@ def test_reconstruct_interface_scores_from_release_shard(tmp_path: Path) -> None
             "mapping": "1.A:1.X;1.B:1.Y",
             "source": "foldseek",
             "metric": "interface_qcov",
+            "iface1_qcov": 1.0,
+            "iface2_qcov": 1.0,
             "similarity": 100,
         }
     ]

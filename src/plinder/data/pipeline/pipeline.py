@@ -4,6 +4,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, Optional
 
+import pandas as pd
 from omegaconf import DictConfig
 
 from plinder.core.utils.log import setup_logger
@@ -502,6 +503,69 @@ class IngestPipeline:
         from plinder.data.pipeline.score import finalize_alignment_artifacts
 
         finalize_alignment_artifacts(self.plinder_dir)
+
+    @utils.ingest_flow_control
+    def plan_interface_scores(self) -> None:
+        if self.cfg.data.plinder_iteration != "v3":
+            return
+        from plinder.data.pipeline.score import plan_interface_scoring
+
+        plan_interface_scoring(
+            self.plinder_dir,
+            batch_size=self.cfg.flow.make_interface_scores_batch_size,
+        )
+
+    @utils.ingest_flow_control
+    def scatter_make_interface_scores(self) -> list[list[str]]:
+        if self.cfg.data.plinder_iteration != "v3":
+            return [[]]
+        from plinder.data.pipeline.score import (
+            INTERFACE_SCORE_WORK_RELATIVE,
+            _load_interface_score_plan,
+        )
+
+        plan = _load_interface_score_plan(self.plinder_dir)
+        work = (
+            pd.read_parquet(
+                self.plinder_dir / INTERFACE_SCORE_WORK_RELATIVE,
+                columns=["shard"],
+            )["shard"]
+            .astype(str)
+            .tolist()
+        )
+        batch_size = int(plan["batch_size"])
+        return [
+            work[start : start + batch_size]
+            for start in range(0, len(work), batch_size)
+        ] or [[]]
+
+    @utils.ingest_flow_control
+    def make_interface_scores(self, shards: list[str]) -> None:
+        if self.cfg.data.plinder_iteration != "v3" or not shards:
+            return
+        from plinder.data.pipeline.score import score_interface_qcov_shards
+
+        score_interface_qcov_shards(
+            self.plinder_dir,
+            shards=shards,
+            scratch_dir=Path(tempfile.gettempdir()) / "plinder-interface-scores",
+            threads=self.cfg.flow.make_interface_scores_cpu,
+            memory_limit=self.cfg.flow.make_interface_scores_memory_limit,
+            force_update=self.cfg.data.force_update,
+        )
+
+    @utils.ingest_flow_control
+    def finalize_interface_scores(self) -> None:
+        if self.cfg.data.plinder_iteration != "v3":
+            return
+        from plinder.data.pipeline.score import finalize_interface_qcov_scores
+
+        finalize_interface_qcov_scores(
+            self.plinder_dir,
+            scratch_dir=Path(tempfile.gettempdir()) / "plinder-interface-finalize",
+            threads=self.cfg.flow.make_interface_scores_cpu,
+            memory_limit=self.cfg.flow.make_interface_scores_memory_limit,
+        )
 
     @utils.ingest_flow_control
     def scatter_collate_partitions(self) -> list[list[str]]:

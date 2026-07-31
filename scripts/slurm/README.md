@@ -128,9 +128,10 @@ no upload or external release operation.
 
 ## Build publishable protein-search shards
 
-Protein scoring uses only holo receptor chains labeled `protein` in
-`index/entry_chains.parquet`; other protein chains retained for biological-unit
-context are not searched. Freeze that query universe before starting any arrays:
+Protein scoring uses the union of protein chains that are holo ligand receptors
+or members of `index/interface_annotation_table.parquet`; unrelated chains
+retained only for biological-unit context are not searched. Freeze that query
+universe before starting any arrays:
 
 ```bash
 python -m plinder.data.pipeline.score plan "${OUTPUT_ROOT}" --max-seqs 10000
@@ -245,6 +246,39 @@ sbatch \
   --export=ALL,PLINDER_ENV_ROOT,PLINDER_REPO_ROOT \
   scripts/slurm/score_v3.sbatch finalize-alignments "${OUTPUT_ROOT}"
 ```
+
+The same mapped protein alignments also drive protein-interface scoring. Plan
+one two-character query shard per array task, run the shards independently,
+and then publish the compact all-vs-all table:
+
+```bash
+sbatch \
+  --qos=30min --cpus-per-task=1 --mem=8G \
+  --output="${OUTPUT_ROOT}/logs/interface-score-plan-%j.out" \
+  --export=ALL,PLINDER_ENV_ROOT,PLINDER_REPO_ROOT \
+  scripts/slurm/score_v3.sbatch plan-interface-scores "${OUTPUT_ROOT}" 1
+
+# Read batch_count from manifests/interface_scoring_plan.json, then:
+sbatch \
+  --qos=30min --array=0-LAST_INTERFACE_INDEX --cpus-per-task=4 --mem=32G \
+  --output="${OUTPUT_ROOT}/logs/interface-score-%A-%a.out" \
+  --export=ALL,PLINDER_ENV_ROOT,PLINDER_REPO_ROOT \
+  scripts/slurm/score_v3.sbatch score-interface-shards "${OUTPUT_ROOT}" 1
+
+sbatch \
+  --qos=6hours --cpus-per-task=8 --mem=64G \
+  --output="${OUTPUT_ROOT}/logs/interface-finalize-%j.out" \
+  --export=ALL,PLINDER_ENV_ROOT,PLINDER_REPO_ROOT,PLINDER_DUCKDB_MEMORY_LIMIT=56GB \
+  scripts/slurm/score_v3.sbatch finalize-interface-scores "${OUTPUT_ROOT}"
+```
+
+Each winning direct or swapped chain assignment retains `iface1_qcov` and
+`iface2_qcov` before multiplication. They are the coverages of the query
+interface's canonical first and second chain, respectively, under that winning
+assignment. The compact release file
+`exports/all_interface_qcov.parquet` contains the query and target interface
+IDs, both side coverages, and the final directional 0--100 similarity. Positive
+scores below the lowest clustering threshold are retained.
 
 Derived per-ligand system scores are generation intermediates used for graph
 clustering, not release artifacts. Before scattering them, estimate work from

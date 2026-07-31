@@ -60,6 +60,9 @@ STAGES = [
     "map_batch_alignments",
     "collate_alignments",
     "finalize_alignments",
+    "plan_interface_scores",
+    "make_interface_scores",
+    "finalize_interface_scores",
     "make_batch_scores",
     "collate_ligand_3d_candidates",
     "plan_ligand_3d_scores",
@@ -854,6 +857,59 @@ def annotate_ligand_similarity(
     )
 
 
+def _protein_scoring_chains(data_dir: Path) -> pd.DataFrame:
+    """Return protein chains used by a ligand receptor or protein interface."""
+    chain_path = data_dir / "index" / "entry_chains.parquet"
+    chains = pd.read_parquet(
+        chain_path,
+        columns=[
+            "entry_pdb_id",
+            "chain_asym_id",
+            "chain_receptor_type",
+            "chain_is_holo",
+        ],
+    )
+    interface_path = data_dir / "index" / "interface_annotation_table.parquet"
+    interface_keys = pd.DataFrame(
+        columns=["entry_pdb_id", "chain_asym_id", "chain_is_interface"]
+    )
+    if interface_path.is_file():
+        interfaces = pd.read_parquet(
+            interface_path,
+            columns=[
+                "entry_pdb_id",
+                "interface_chain_1",
+                "interface_chain_2",
+            ],
+        )
+        interface_keys = pd.concat(
+            [
+                interfaces[["entry_pdb_id", column]].rename(
+                    columns={column: "instance_chain"}
+                )
+                for column in ["interface_chain_1", "interface_chain_2"]
+            ],
+            ignore_index=True,
+        )
+        interface_keys["chain_asym_id"] = (
+            interface_keys.pop("instance_chain").astype(str).str.split(".", n=1).str[-1]
+        )
+        interface_keys = interface_keys.drop_duplicates()
+        interface_keys["chain_is_interface"] = True
+    chains = chains.merge(
+        interface_keys,
+        on=["entry_pdb_id", "chain_asym_id"],
+        how="left",
+    )
+    return chains.loc[
+        chains["chain_receptor_type"].fillna("").astype(str).eq("protein")
+        & (
+            chains["chain_is_holo"].fillna(False).astype(bool)
+            | chains["chain_is_interface"].eq(True)
+        )
+    ].copy()
+
+
 def scatter_protein_scoring(
     *,
     data_dir: Path,
@@ -881,18 +937,8 @@ def scatter_protein_scoring(
     """
     if batch_size < 1:
         raise ValueError("batch_size must be positive")
-    chain_path = data_dir / "index" / "entry_chains.parquet"
-    chains = pd.read_parquet(
-        chain_path,
-        columns=["entry_pdb_id", "chain_receptor_type", "chain_is_holo"],
-    )
-    protein_entries = set(
-        chains.loc[
-            chains["chain_receptor_type"].fillna("").astype(str).eq("protein")
-            & chains["chain_is_holo"].fillna(False).astype(bool),
-            "entry_pdb_id",
-        ].astype(str)
-    )
+    chains = _protein_scoring_chains(data_dir)
+    protein_entries = set(chains["entry_pdb_id"].astype(str))
     selected_pdb_ids = [normalize_pdb_id(pdb_id) for pdb_id in pdb_ids]
     if selected_pdb_ids:
         selected = sorted(protein_entries.intersection(selected_pdb_ids))
