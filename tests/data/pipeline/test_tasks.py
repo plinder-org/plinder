@@ -376,6 +376,9 @@ def test_scoring_finalization_stage_order_and_partitions():
         "make_communities"
     )
     assert tasks.STAGES.index("make_communities") < tasks.STAGES.index(
+        "make_directed_set_covers"
+    )
+    assert tasks.STAGES.index("make_directed_set_covers") < tasks.STAGES.index(
         "summarize_clusters"
     )
     assert tasks.STAGES.index("summarize_clusters") < tasks.STAGES.index(
@@ -388,6 +391,42 @@ def test_scoring_finalization_stage_order_and_partitions():
     assert ["z"] in partitions
     assert ["apo"] in partitions
     assert ["pred"] in partitions
+
+
+def test_directed_set_cover_scatter_skips_only_complete_outputs(tmp_path):
+    work = tasks.scatter_make_directed_set_covers(
+        data_dir=tmp_path,
+        metrics=["pocket_qcov"],
+        thresholds=[100, 50],
+        stop_on_cluster=0,
+        skip_existing=True,
+    )
+    assert work == [[("pocket_qcov", 100)], [("pocket_qcov", 50)]]
+
+    output = (
+        tmp_path
+        / "ligand_sampling/directed_set_cover/metric=pocket_qcov"
+        / "threshold=100.parquet"
+    )
+    output.parent.mkdir(parents=True)
+    output.touch()
+    work = tasks.scatter_make_directed_set_covers(
+        data_dir=tmp_path,
+        metrics=["pocket_qcov"],
+        thresholds=[100, 50],
+        stop_on_cluster=0,
+        skip_existing=True,
+    )
+    assert work == [[("pocket_qcov", 50)]]
+
+    output.with_name("threshold=50.parquet").touch()
+    assert tasks.scatter_make_directed_set_covers(
+        data_dir=tmp_path,
+        metrics=["pocket_qcov"],
+        thresholds=[100, 50],
+        stop_on_cluster=0,
+        skip_existing=True,
+    ) == [[]]
 
 
 def test_ligand_score_threshold_must_cover_frequency_clustering() -> None:
@@ -1053,6 +1092,7 @@ def test_repair_target_remainders_drops_stalled_query_and_resumes_followers(
     marker_dir = score_pipeline._score_repair_marker_dir(tmp_path, repair_manifest)
     marker = json.loads((marker_dir / "2def.json").read_text())
     assert marker["pdb_id"] == "2def"
+    (marker_dir / "concurrent.tmp.json").write_text("{")
 
     second_report = score_pipeline.repair_target_score_remainders(
         tmp_path,
@@ -1066,7 +1106,61 @@ def test_repair_target_remainders_drops_stalled_query_and_resumes_followers(
 
     assert second_report["dropped_query"] == "3ghi"
     assert second_report["resumed_query_count"] == 0
-    assert {path.stem for path in marker_dir.glob("*.json")} == {"2def", "3ghi"}
+    assert score_pipeline._score_repair_marked_targets(tmp_path, repair_manifest) == {
+        "2def",
+        "3ghi",
+    }
+
+
+def test_repair_target_remainders_removes_planned_drops_without_marking_them(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from plinder.data.pipeline import score as score_pipeline
+
+    repair_manifest = tmp_path / "repair.parquet"
+    pd.DataFrame(
+        {
+            "pdb_id": ["1abc", "2def"],
+            "repair_mode": ["drop", "targets"],
+            "target_pdb_ids": [[], ["9xyz"]],
+            "repair_batch_index": [0, 0],
+        }
+    ).to_parquet(repair_manifest, index=False)
+    for pdb_id in ["1abc", "2def"]:
+        score, candidate = score_pipeline._score_repair_query_paths(tmp_path, pdb_id)
+        score.parent.mkdir(parents=True, exist_ok=True)
+        candidate.parent.mkdir(parents=True, exist_ok=True)
+        score.touch()
+        candidate.touch()
+    completed_ns = repair_manifest.stat().st_mtime_ns + 1_000_000_000
+    for path in score_pipeline._score_repair_query_paths(tmp_path, "2def"):
+        os.utime(path, ns=(completed_ns, completed_ns))
+
+    monkeypatch.setattr(
+        tasks,
+        "repair_batch_scores",
+        lambda **_kwargs: pytest.fail("no target repair should be needed"),
+    )
+
+    report = score_pipeline.repair_target_score_remainders(
+        tmp_path,
+        repair_manifest=repair_manifest,
+        batch_index=0,
+        batch_size=2,
+        scorer_cfg=SimpleNamespace(),
+        scratch_dir=tmp_path / "scratch",
+        threads=1,
+    )
+
+    assert report["dropped_query"] is None
+    assert report["resumed_query_count"] == 0
+    assert not any(
+        path.exists()
+        for path in score_pipeline._score_repair_query_paths(tmp_path, "1abc")
+    )
+    assert not score_pipeline._score_repair_marker_dir(
+        tmp_path, repair_manifest
+    ).exists()
 
 
 def test_finalize_score_repair_records_marked_targets_and_incomplete_full_queries(
@@ -2731,16 +2825,17 @@ def test_score_partition_collation_stages_atomically_from_scratch(tmp_path):
 
 
 def test_component_reduction_task_copies_generic_source_once(tmp_path, monkeypatch):
-    source = tmp_path / "scores.parquet"
+    source = (
+        tmp_path
+        / "ligand_clusters/symmetric_edges"
+        / "metric=sucos_shape_pocket_qcov"
+        / "bucket=000.parquet"
+    )
+    source.parent.mkdir(parents=True)
     source.write_bytes(b"scores")
     scratch = tmp_path / "scratch"
     calls = []
 
-    monkeypatch.setattr(
-        tasks.clusters,
-        "component_score_sources",
-        lambda **kwargs: [],
-    )
     monkeypatch.setattr(
         tasks.clusters,
         "component_node_universe",
@@ -2751,16 +2846,32 @@ def test_component_reduction_task_copies_generic_source_once(tmp_path, monkeypat
         "score_component_reduction_is_complete",
         lambda **kwargs: False,
     )
+    monkeypatch.setattr(
+        tasks.clusters,
+        "directed_cover_component_reduction_is_complete",
+        lambda **kwargs: False,
+    )
 
-    def record_reduction(**kwargs):
+    def record_reciprocal_reduction(**kwargs):
         assert kwargs["read_path"].read_bytes() == b"scores"
-        calls.append(kwargs["metric"])
+        calls.append(("reciprocal", kwargs["metric"]))
         return {"outputs": []}
 
     monkeypatch.setattr(
         tasks.clusters,
         "make_score_component_reduction",
-        record_reduction,
+        record_reciprocal_reduction,
+    )
+
+    def record_cover_reduction(**kwargs):
+        assert kwargs["read_path"].read_bytes() == b"scores"
+        calls.append(("directed_cover", kwargs["metric"]))
+        return {"outputs": []}
+
+    monkeypatch.setattr(
+        tasks.clusters,
+        "make_directed_cover_component_reduction",
+        record_cover_reduction,
     )
 
     tasks.make_component_reductions(
@@ -2772,7 +2883,10 @@ def test_component_reduction_task_copies_generic_source_once(tmp_path, monkeypat
         force_update=False,
     )
 
-    assert calls == ["protein_lddt_max", "sucos_shape_pocket_qcov"]
+    assert calls == [
+        ("reciprocal", "sucos_shape_pocket_qcov"),
+        ("directed_cover", "sucos_shape_pocket_qcov"),
+    ]
     assert list(scratch.iterdir()) == []
 
 
@@ -2797,12 +2911,8 @@ def test_clustering_plan_matches_slurm_array_bounds(tmp_path, monkeypatch):
         lambda data_dir: {"status": "complete"},
     )
     monkeypatch.setattr(
-        tasks,
-        "scatter_component_reduction_sources",
-        lambda **kwargs: [
-            ["scores-a.parquet", "scores-b.parquet"],
-            ["scores-c.parquet"],
-        ],
+        "plinder.data.pipeline.score.clusters.prepare_symmetric_edge_plan",
+        lambda **kwargs: {"batches": [{}, {}, {}], "plan_hash": "test-plan"},
     )
 
     plan = plan_clustering(
@@ -2811,12 +2921,15 @@ def test_clustering_plan_matches_slurm_array_bounds(tmp_path, monkeypatch):
         thresholds=[30, 100],
         source_batch_size=2,
         community_batch_size=3,
+        symmetric_bucket_count=4,
     )
 
-    assert plan["source_count"] == 3
-    assert plan["component_reduction_batch_count"] == 2
+    assert plan["symmetric_fragment_batch_count"] == 3
+    assert plan["symmetric_edge_shard_count"] == 8
+    assert plan["component_reduction_batch_count"] == 8
     assert plan["community_task_count"] == 4
     assert plan["community_batch_count"] == 2
+    assert plan["directed_cover_batch_count"] == 2
     assert _community_batch(
         metrics=plan["metrics"],
         thresholds=plan["thresholds"],
@@ -2942,7 +3055,6 @@ def test_clustering_statistics_validate_complete_monotonic_artifacts(tmp_path):
     for threshold, labels in [(100, ["c0", "c1"]), (50, ["c0", "c0"])]:
         for cluster, directed in [
             ("components", False),
-            ("components", True),
             ("communities", False),
         ]:
             path = (
@@ -2964,6 +3076,25 @@ def test_clustering_statistics_validate_complete_monotonic_artifacts(tmp_path):
                     "directed": [directed, directed],
                 }
             ).to_parquet(path, index=False)
+        directed_cover = (
+            tmp_path
+            / "ligand_sampling"
+            / "directed_set_cover"
+            / f"metric={metric}"
+            / f"threshold={threshold}.parquet"
+        )
+        directed_cover.parent.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(
+            {
+                "ligand_id": ["l1", "l2"],
+                "centroid_ligand_id": ["l1", "l2"],
+                "similarity_to_centroid": [100.0, 100.0],
+                "label": labels,
+                "metric": [metric, metric],
+                "threshold": [threshold, threshold],
+                "directed": [True, True],
+            }
+        ).to_parquet(directed_cover, index=False)
 
     report = summarize_clustering_artifacts(
         tmp_path,
@@ -2976,26 +3107,35 @@ def test_clustering_statistics_validate_complete_monotonic_artifacts(tmp_path):
     assert report["issues"] == []
     assert (tmp_path / "ligand_clusters" / "stats.json").is_file()
     stats = pd.read_parquet(tmp_path / "ligand_clusters" / "stats.parquet")
-    weak = stats[stats["cluster"].eq("components") & ~stats["directed"]].set_index(
-        "threshold"
-    )
-    assert weak.loc[100, "cluster_count"] == 2
-    assert weak.loc[50, "cluster_count"] == 1
+    components = stats[stats["cluster"].eq("components")].set_index("threshold")
+    assert components.loc[100, "cluster_count"] == 2
+    assert components.loc[50, "cluster_count"] == 1
     # The diagnostics live under the same root but are not cluster-label rows.
     cluster_rows = _read_local_cluster_rows(
         root=tmp_path / "ligand_clusters",
         node_column="ligand_id",
     )
-    assert len(cluster_rows) == 12
+    assert len(cluster_rows) == 8
 
-    strong_100 = (
+    component_50 = (
         tmp_path
         / "ligand_clusters"
         / "cluster=components"
-        / "directed=True"
+        / "directed=False"
         / f"metric={metric}"
-        / "threshold=100.parquet"
+        / "threshold=50.parquet"
     )
+    pd.DataFrame(
+        {
+            "ligand_id": ["l1", "l2"],
+            "label": ["c0", "c1"],
+            "metric": [metric, metric],
+            "threshold": [50, 50],
+            "cluster": ["components", "components"],
+            "directed": [False, False],
+        }
+    ).to_parquet(component_50, index=False)
+    component_100 = component_50.with_name("threshold=100.parquet")
     pd.DataFrame(
         {
             "ligand_id": ["l1", "l2"],
@@ -3003,9 +3143,9 @@ def test_clustering_statistics_validate_complete_monotonic_artifacts(tmp_path):
             "metric": [metric, metric],
             "threshold": [100, 100],
             "cluster": ["components", "components"],
-            "directed": [True, True],
+            "directed": [False, False],
         }
-    ).to_parquet(strong_100, index=False)
+    ).to_parquet(component_100, index=False)
     with pytest.raises(ValueError, match="invalid clustering artifacts"):
         summarize_clustering_artifacts(
             tmp_path,
@@ -3016,7 +3156,7 @@ def test_clustering_statistics_validate_complete_monotonic_artifacts(tmp_path):
         (tmp_path / "ligand_clusters" / "stats.json").read_text()
     )
     assert invalid_report["status"] == "invalid"
-    assert any("fewer strong than weak" in issue for issue in invalid_report["issues"])
+    assert any("gains clusters" in issue for issue in invalid_report["issues"])
 
 
 def test_v3_score_slurm_exposes_exact_clustering_stages():
@@ -3027,7 +3167,8 @@ def test_v3_score_slurm_exposes_exact_clustering_stages():
     script = script_path.read_text()
 
     assert "plan-clusters)" in script
-    assert "component-reductions|communities)" in script
+    assert "symmetric-edge-fragments|symmetric-edge-shards" in script
+    assert "component-reductions|communities|directed-covers)" in script
     assert (
         "finalize-alignments|finalize-ligands|finalize-scores|"
         "finalize-ligand-3d-retries|finalize-index|merge-components|cluster-stats)"
@@ -3078,6 +3219,8 @@ def test_metaflow_graph_uses_canonical_ligand_archive_stage():
     assert "self.next(self.scatter_make_component_reductions)" in flow
     assert "self.pipeline.merge_component_reductions()" in flow
     assert "self.next(self.scatter_make_communities)" in flow
+    assert "self.next(self.scatter_make_directed_set_covers)" in flow
+    assert "self.pipeline.make_directed_set_covers(self.input)" in flow
     assert "self.next(self.summarize_clusters)" in flow
     assert "self.pipeline.summarize_clusters()" in flow
     assert "self.next(self.finalize_index)" in flow
@@ -3183,6 +3326,7 @@ def test_v3_ingest_configs_use_current_schema_and_stages():
             assert "make_component_reductions" in cfg.flow.run_specific_stages
             assert "merge_component_reductions" in cfg.flow.run_specific_stages
             assert "make_communities" in cfg.flow.run_specific_stages
+            assert "make_directed_set_covers" in cfg.flow.run_specific_stages
             assert "summarize_clusters" in cfg.flow.run_specific_stages
             assert "finalize_index" in cfg.flow.run_specific_stages
         if path.name == "make_entries_ligands.yaml":

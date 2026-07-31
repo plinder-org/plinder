@@ -93,16 +93,21 @@ def get_cluster_column_descriptions(
         parts = column.split("__")
         metric, threshold = parts[:2]
         ligand_level = parts[2] == "ligand"
-        if ligand_level:
-            _, directed, cluster = parts[2:]
-        else:
-            directed, cluster = parts[2:]
+        direction = (
+            "reciprocal-minimum"
+            if ligand_level
+            else parts[-2]
+            if parts[-2] in {"weak", "strong"}
+            else "directed"
+        )
+        cluster = parts[-1]
         level = "ligand-level " if ligand_level else ""
         rows.append(
             (
                 column,
                 "str",
-                f"Cluster ID for {level}{directed} {cluster} built from {metric} metric with {threshold} threshold",
+                f"Cluster ID for {level}{direction} {cluster} built from "
+                f"{metric} metric with {threshold} threshold",
             )
         )
     community_columns = [c for c in plindex.columns if c.endswith("__community")]
@@ -116,7 +121,23 @@ def get_cluster_column_descriptions(
             (
                 column,
                 "str",
-                f"Cluster ID for {level}{cluster} built from {metric} metric with {threshold} threshold",
+                f"Cluster ID for {level}greedy centroid {cluster} built from "
+                f"reciprocal-minimum {metric} with {threshold} threshold; each "
+                "member meets the threshold in both directions to its centroid",
+            )
+        )
+    directed_cover_columns = [
+        c for c in plindex.columns if c.endswith("__directed_set_cover")
+    ]
+    for column in directed_cover_columns:
+        metric, threshold = column.split("__")[:2]
+        rows.append(
+            (
+                column,
+                "str",
+                "Cluster ID for ligand-level directed set cover built from "
+                f"{metric} with {threshold} threshold; each member's "
+                "query-to-centroid score meets the threshold",
             )
         )
     return rows

@@ -11,7 +11,7 @@ import json
 import math
 from collections.abc import Iterable
 from pathlib import Path
-from shutil import copyfile
+from shutil import copyfile, rmtree
 from textwrap import dedent
 from time import perf_counter
 from typing import Any, cast
@@ -522,6 +522,8 @@ def _score_repair_marked_targets(
     if not marker_dir.is_dir():
         return marked_targets
     for path in sorted(marker_dir.glob("*.json")):
+        if path.name.endswith(".tmp.json"):
+            continue
         payload = json.loads(path.read_text())
         pdb_id = str(payload.get("pdb_id", ""))
         if (
@@ -551,10 +553,15 @@ def repair_target_score_remainders(
     )
     repair_started_ns = repair_manifest.stat().st_mtime_ns
     marked_targets = _score_repair_marked_targets(data_dir, repair_manifest)
+    for repair in repairs:
+        if str(repair["repair_mode"]) == "drop":
+            for path in _score_repair_query_paths(data_dir, str(repair["pdb_id"])):
+                path.unlink(missing_ok=True)
     incomplete = [
         repair
         for repair in repairs
-        if str(repair["pdb_id"]) not in marked_targets
+        if str(repair["repair_mode"]) != "drop"
+        and str(repair["pdb_id"]) not in marked_targets
         and not _score_repair_query_is_current(
             data_dir,
             str(repair["pdb_id"]),
@@ -2209,10 +2216,11 @@ def plan_clustering(
     *,
     metrics: list[str] | None = None,
     thresholds: list[int] | None = None,
-    source_batch_size: int = 1,
+    source_batch_size: int = 20,
     community_batch_size: int = 1,
+    symmetric_bucket_count: int = clusters.SYMMETRIC_EDGE_BUCKET_COUNT,
 ) -> dict[str, Any]:
-    """Report exact array bounds for component reduction and communities."""
+    """Plan reciprocal-minimum components and centroid clusters."""
     if source_batch_size < 1 or community_batch_size < 1:
         raise ValueError("clustering batch sizes must be positive")
     selected_metrics, selected_thresholds = _cluster_parameters(
@@ -2221,23 +2229,67 @@ def plan_clustering(
     )
     if any(metric != "tanimoto_similarity_ecfp4_1024" for metric in selected_metrics):
         clusters.prepare_component_node_universe(data_dir)
-    source_batches = tasks.scatter_component_reduction_sources(
+    symmetric_plan = clusters.prepare_symmetric_edge_plan(
         data_dir=data_dir,
         metrics=selected_metrics,
-        batch_size=source_batch_size,
+        source_batch_size=source_batch_size,
+        bucket_count=symmetric_bucket_count,
     )
-    source_count = sum(len(batch) for batch in source_batches)
+    cluster_plan_path = data_dir / "ligand_clusters" / "clustering_plan.json"
+    cluster_selection = {
+        "version": 1,
+        "metrics": selected_metrics,
+        "thresholds": selected_thresholds,
+        "symmetric_plan_hash": symmetric_plan["plan_hash"],
+    }
+    prior_selection: dict[str, Any] | None = None
+    if cluster_plan_path.is_file():
+        try:
+            prior_selection = json.loads(cluster_plan_path.read_text())
+        except (OSError, ValueError, json.JSONDecodeError):
+            pass
+    if prior_selection != cluster_selection:
+        for obsolete in [
+            data_dir / "ligand_clusters/cluster=components",
+            data_dir / "ligand_clusters/cluster=communities",
+        ]:
+            if obsolete.exists():
+                rmtree(obsolete)
+        sampling_root = data_dir / "ligand_sampling" / "directed_set_cover"
+        for output_dir in sampling_root.glob("metric=*"):
+            rmtree(output_dir)
+        for diagnostics in [
+            data_dir / "ligand_clusters/stats.parquet",
+            data_dir / "ligand_clusters/stats.json",
+        ]:
+            diagnostics.unlink(missing_ok=True)
+        _atomic_json(cluster_selection, cluster_plan_path)
+    else:
+        # Old directed artifacts are never valid under the current selection.
+        for obsolete in [
+            data_dir / "ligand_clusters/cluster=components/directed=True",
+            data_dir / "ligand_clusters/cluster=communities/directed=True",
+        ]:
+            if obsolete.exists():
+                rmtree(obsolete)
+    symmetric_shard_count = len(selected_metrics) * symmetric_bucket_count
     community_task_count = len(selected_metrics) * len(selected_thresholds)
     return {
         "status": "planned",
         "metrics": selected_metrics,
         "thresholds": selected_thresholds,
-        "source_count": source_count,
         "source_batch_size": source_batch_size,
-        "component_reduction_batch_count": math.ceil(source_count / source_batch_size),
+        "symmetric_bucket_count": symmetric_bucket_count,
+        "symmetric_fragment_batch_count": len(symmetric_plan["batches"]),
+        "symmetric_edge_shard_count": symmetric_shard_count,
+        "component_reduction_batch_count": symmetric_shard_count,
         "community_task_count": community_task_count,
         "community_batch_size": community_batch_size,
         "community_batch_count": math.ceil(community_task_count / community_batch_size),
+        "directed_cover_task_count": community_task_count,
+        "directed_cover_batch_count": math.ceil(
+            community_task_count / community_batch_size
+        ),
     }
 
 
@@ -2252,38 +2304,43 @@ def summarize_clustering_artifacts(
         metrics=metrics,
         thresholds=thresholds,
     )
-    combinations = [
-        (metric, threshold, cluster, directed)
-        for metric in selected_metrics
-        for threshold in selected_thresholds
-        for cluster, directed in [
-            ("components", False),
-            ("components", True),
-            ("communities", False),
-        ]
-    ]
     output_dir = data_dir / "ligand_clusters"
-    expected_paths = {
-        output_dir
-        / f"cluster={cluster}"
-        / f"directed={directed}"
-        / f"metric={metric}"
-        / f"threshold={threshold}.parquet"
-        for metric, threshold, cluster, directed in combinations
-    }
+    sampling_dir = data_dir / "ligand_sampling" / "directed_set_cover"
+    artifacts: list[tuple[str, int, str, bool, Path]] = []
+    for metric in selected_metrics:
+        for threshold in selected_thresholds:
+            for cluster in ["components", "communities"]:
+                artifacts.append(
+                    (
+                        metric,
+                        threshold,
+                        cluster,
+                        False,
+                        output_dir
+                        / f"cluster={cluster}"
+                        / "directed=False"
+                        / f"metric={metric}"
+                        / f"threshold={threshold}.parquet",
+                    )
+                )
+            artifacts.append(
+                (
+                    metric,
+                    threshold,
+                    "directed_set_cover",
+                    True,
+                    sampling_dir
+                    / f"metric={metric}"
+                    / f"threshold={threshold}.parquet",
+                )
+            )
+    expected_paths = {path for *_, path in artifacts}
     rows: list[dict[str, Any]] = []
     issues: list[str] = []
     started = perf_counter()
-    for index, (metric, threshold, cluster, directed) in enumerate(
-        combinations, start=1
+    for index, (metric, threshold, cluster, directed, path) in enumerate(
+        artifacts, start=1
     ):
-        path = (
-            output_dir
-            / f"cluster={cluster}"
-            / f"directed={directed}"
-            / f"metric={metric}"
-            / f"threshold={threshold}.parquet"
-        )
         if not path.is_file():
             issues.append(f"missing cluster artifact: {path}")
             continue
@@ -2314,22 +2371,21 @@ def summarize_clustering_artifacts(
             issues.append(f"{path} contains {duplicate_nodes} duplicate ligand IDs")
         if null_labels:
             issues.append(f"{path} contains {null_labels} null labels")
-        if index % 10 == 0 or index == len(combinations):
+        if index % 10 == 0 or index == len(artifacts):
             elapsed = perf_counter() - started
             rate = index / elapsed
             LOG.info(
                 "cluster statistics progress: "
-                f"validated={index}/{len(combinations)} rate={rate:.2f}/s "
-                f"eta_seconds={(len(combinations) - index) / rate:.1f}"
+                f"validated={index}/{len(artifacts)} rate={rate:.2f}/s "
+                f"eta_seconds={(len(artifacts) - index) / rate:.1f}"
             )
 
     stats = pd.DataFrame(rows)
-    if len(stats) == len(combinations):
+    if len(stats) == len(artifacts):
         for metric in selected_metrics:
             metric_stats = stats[stats["metric"].eq(metric)]
             for cluster, directed in [
                 ("components", False),
-                ("components", True),
                 ("communities", False),
             ]:
                 subset = metric_stats[
@@ -2362,29 +2418,17 @@ def summarize_clustering_artifacts(
                         f"{metric} threshold={threshold} has inconsistent node "
                         f"counts across cluster types: {sorted(threshold_node_counts)}"
                     )
-                counts = {
-                    (str(row.cluster), bool(row.directed)): int(row.cluster_count)
-                    for row in at_threshold.itertuples(index=False)
-                }
-                weak = counts[("components", False)]
-                strong = counts[("components", True)]
-                communities = counts[("communities", False)]
-                if strong < weak:
+                counts = at_threshold.set_index("cluster")["cluster_count"]
+                if int(counts["communities"]) < int(counts["components"]):
                     issues.append(
-                        f"{metric} threshold={threshold} has fewer strong than weak "
-                        f"components: {strong} < {weak}"
+                        f"{metric} threshold={threshold} has fewer centroid "
+                        "clusters than connected components"
                     )
-                if communities < weak:
-                    issues.append(
-                        f"{metric} threshold={threshold} has fewer communities than "
-                        f"weak components: {communities} < {weak}"
-                    )
-
     published_paths = set(
         output_dir.glob("cluster=*/directed=*/metric=*/threshold=*.parquet")
-    )
+    ) | set(sampling_dir.glob("metric=*/threshold=*.parquet"))
     unexpected_artifacts = sorted(
-        path.relative_to(output_dir).as_posix()
+        path.relative_to(data_dir).as_posix()
         for path in published_paths.difference(expected_paths)
     )
     if unexpected_artifacts:
@@ -2407,7 +2451,7 @@ def summarize_clustering_artifacts(
         "metric_count": len(selected_metrics),
         "thresholds": selected_thresholds,
         "artifact_count": len(stats),
-        "expected_artifact_count": len(combinations),
+        "expected_artifact_count": len(artifacts),
         "unexpected_artifacts": unexpected_artifacts,
         "unexpected_metrics": unexpected_metrics,
         "issues": issues,
@@ -2435,6 +2479,37 @@ def _component_source_batch(
         batch_size=batch_size,
     )
     return batches[batch_index] if batch_index < len(batches) else []
+
+
+def _symmetric_fragment_batch(
+    data_dir: Path,
+    *,
+    batch_index: int,
+    batch_size: int,
+) -> list[dict[str, Any]]:
+    if batch_index < 0 or batch_size < 1:
+        raise ValueError("batch_index must be non-negative and batch_size positive")
+    plan = clusters.load_symmetric_edge_plan(data_dir)
+    start = batch_index * batch_size
+    return cast(list[dict[str, Any]], plan["batches"][start : start + batch_size])
+
+
+def _symmetric_edge_shard_batch(
+    data_dir: Path,
+    *,
+    batch_index: int,
+    batch_size: int,
+) -> list[tuple[str, int]]:
+    if batch_index < 0 or batch_size < 1:
+        raise ValueError("batch_index must be non-negative and batch_size positive")
+    plan = clusters.load_symmetric_edge_plan(data_dir)
+    work = [
+        (str(metric), bucket)
+        for metric in plan["metrics"]
+        for bucket in range(int(plan["bucket_count"]))
+    ]
+    start = batch_index * batch_size
+    return work[start : start + batch_size]
 
 
 def _community_batch(
@@ -3400,8 +3475,13 @@ def _parser() -> argparse.ArgumentParser:
     repair_finalizer.add_argument("--max-new-drops", type=int, required=True)
     cluster_plan = subparsers.add_parser("plan-clusters")
     cluster_plan.add_argument("data_dir", type=Path)
-    cluster_plan.add_argument("--source-batch-size", type=int, default=1)
+    cluster_plan.add_argument("--source-batch-size", type=int, default=20)
     cluster_plan.add_argument("--community-batch-size", type=int, default=1)
+    cluster_plan.add_argument(
+        "--symmetric-bucket-count",
+        type=int,
+        default=clusters.SYMMETRIC_EDGE_BUCKET_COUNT,
+    )
     _add_cluster_arguments(cluster_plan)
 
     cluster_stats = subparsers.add_parser("cluster-stats")
@@ -3435,8 +3515,11 @@ def _parser() -> argparse.ArgumentParser:
         "export-sucos-shards",
         "collate-alignments",
         "collate-score-partitions",
+        "symmetric-edge-fragments",
+        "symmetric-edge-shards",
         "component-reductions",
         "communities",
+        "directed-covers",
     ]:
         command = subparsers.add_parser(name)
         command.add_argument("data_dir", type=Path)
@@ -3456,7 +3539,7 @@ def _parser() -> argparse.ArgumentParser:
                 choices=["foldseek", "mmseqs"],
                 required=True,
             )
-        if name in {"component-reductions", "communities"}:
+        if name in {"component-reductions", "communities", "directed-covers"}:
             _add_cluster_arguments(command)
         if name in {"export-sucos-shards", "repair-sucos-shards"}:
             command.add_argument("--output-dir", type=Path, required=True)
@@ -3598,6 +3681,7 @@ def main() -> None:
             thresholds=args.thresholds,
             source_batch_size=args.source_batch_size,
             community_batch_size=args.community_batch_size,
+            symmetric_bucket_count=args.symmetric_bucket_count,
         )
     elif args.command == "cluster-stats":
         result = summarize_clustering_artifacts(
@@ -3657,6 +3741,40 @@ def main() -> None:
             threads=args.threads,
             memory_limit=args.memory_limit,
         )
+    elif args.command == "symmetric-edge-fragments":
+        batches = _symmetric_fragment_batch(
+            data_dir,
+            batch_index=args.batch_index,
+            batch_size=args.batch_size,
+        )
+        tasks.make_symmetric_edge_fragments(
+            data_dir=data_dir,
+            batches=batches,
+            scratch_dir=args.scratch_dir.resolve(),
+            threads=args.threads,
+            force_update=args.force,
+        )
+        result = {
+            "status": "complete",
+            "batch_keys": [batch["key"] for batch in batches],
+        }
+    elif args.command == "symmetric-edge-shards":
+        metric_buckets = _symmetric_edge_shard_batch(
+            data_dir,
+            batch_index=args.batch_index,
+            batch_size=args.batch_size,
+        )
+        tasks.make_symmetric_edge_shards(
+            data_dir=data_dir,
+            metric_buckets=metric_buckets,
+            scratch_dir=args.scratch_dir.resolve(),
+            threads=args.threads,
+            force_update=args.force,
+        )
+        result = {
+            "status": "complete",
+            "metric_buckets": metric_buckets,
+        }
     elif args.command == "component-reductions":
         metrics, thresholds = _cluster_parameters(
             metrics=args.metrics,
@@ -3689,7 +3807,7 @@ def main() -> None:
             thresholds=thresholds,
         )
         result = {"status": "complete", "metrics": metrics}
-    elif args.command == "communities":
+    elif args.command in {"communities", "directed-covers"}:
         metrics, thresholds = _cluster_parameters(
             metrics=args.metrics,
             thresholds=args.thresholds,
@@ -3701,13 +3819,22 @@ def main() -> None:
             batch_size=args.batch_size,
         )
         for metric_threshold in work:
-            tasks.make_communities(
-                data_dir=data_dir,
-                metric_threshold=[metric_threshold],
-                skip_existing_clusters=not args.force,
-                scratch_dir=args.scratch_dir.resolve(),
-                threads=args.threads,
-            )
+            if args.command == "communities":
+                tasks.make_communities(
+                    data_dir=data_dir,
+                    metric_threshold=[metric_threshold],
+                    skip_existing_clusters=not args.force,
+                    scratch_dir=args.scratch_dir.resolve(),
+                    threads=args.threads,
+                )
+            else:
+                tasks.make_directed_set_covers(
+                    data_dir=data_dir,
+                    metric_threshold=[metric_threshold],
+                    skip_existing=not args.force,
+                    scratch_dir=args.scratch_dir.resolve(),
+                    threads=args.threads,
+                )
         result = {"status": "complete", "metric_thresholds": work}
     elif args.command == "pack-ligands":
         shards = _entry_shard_batch(data_dir, args.batch_index, args.batch_size)

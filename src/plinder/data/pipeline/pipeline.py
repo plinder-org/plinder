@@ -584,6 +584,34 @@ class IngestPipeline:
         )
 
     @utils.ingest_flow_control
+    def scatter_make_directed_set_covers(self) -> list[list[tuple[str, int]]]:
+        force_update = (
+            self.cfg.data.force_update or self.cfg.flow.make_components_force_update
+        )
+        return tasks.scatter_make_directed_set_covers(
+            data_dir=self.plinder_dir,
+            metrics=self.cfg.flow.cluster_metrics,
+            thresholds=self.cfg.flow.cluster_thresholds,
+            stop_on_cluster=self.cfg.flow.make_components_stop_on_cluster,
+            skip_existing=not force_update,
+        )
+
+    @utils.ingest_flow_control
+    def make_directed_set_covers(
+        self, metric_thresholds: list[tuple[str, int]]
+    ) -> None:
+        force_update = (
+            self.cfg.data.force_update or self.cfg.flow.make_components_force_update
+        )
+        tasks.make_directed_set_covers(
+            data_dir=self.plinder_dir,
+            metric_threshold=metric_thresholds,
+            skip_existing=not force_update,
+            scratch_dir=Path(tempfile.gettempdir()) / "plinder-directed-set-covers",
+            threads=self.cfg.flow.make_communities_cpu,
+        )
+
+    @utils.ingest_flow_control
     def summarize_clusters(self) -> None:
         tasks.summarize_clusters(
             data_dir=self.plinder_dir,

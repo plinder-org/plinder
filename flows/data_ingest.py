@@ -542,6 +542,31 @@ class PlinderDataIngestFlow(FlowSpec):
     def join_make_communities(self, inputs):
         self.pipeline = inputs[0].pipeline
         self.merge_artifacts(inputs, exclude=["chunks"])
+        self.next(self.scatter_make_directed_set_covers)
+
+    @kubernetes(**K8S)
+    @environment(**ENV)
+    @retry
+    @step
+    def scatter_make_directed_set_covers(self):
+        self.chunks = self.pipeline.scatter_make_directed_set_covers()
+        self.next(self.make_directed_set_covers, foreach="chunks")
+
+    @kubernetes(**{**K8S, **LARGE_MEM})
+    @environment(**ENV)
+    @retry
+    @step
+    def make_directed_set_covers(self):
+        self.pipeline.make_directed_set_covers(self.input)
+        self.next(self.join_make_directed_set_covers)
+
+    @kubernetes(**K8S)
+    @environment(**ENV)
+    @retry
+    @step
+    def join_make_directed_set_covers(self, inputs):
+        self.pipeline = inputs[0].pipeline
+        self.merge_artifacts(inputs, exclude=["chunks"])
         self.next(self.summarize_clusters)
 
     @kubernetes(**{**K8S, **LARGE_MEM})

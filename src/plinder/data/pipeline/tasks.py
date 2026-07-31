@@ -73,6 +73,7 @@ STAGES = [
     "make_component_reductions",
     "merge_component_reductions",
     "make_communities",
+    "make_directed_set_covers",
     "summarize_clusters",
     "finalize_index",
     "make_mmp_index",
@@ -2401,6 +2402,84 @@ def scatter_component_reduction_sources(
     ] or [[]]
 
 
+def make_symmetric_edge_fragments(
+    *,
+    data_dir: Path,
+    batches: list[dict[str, Any]],
+    scratch_dir: Path,
+    threads: int,
+    force_update: bool,
+) -> None:
+    """Map raw score batches into hash-partitioned canonical-pair fragments."""
+    scratch_dir.mkdir(exist_ok=True, parents=True)
+    for batch_index, batch in enumerate(batches):
+        if not force_update and clusters.symmetric_edge_fragment_batch_is_complete(
+            data_dir=data_dir,
+            batch=batch,
+        ):
+            LOG.info(
+                "symmetric fragment batch already complete: progress=%d/%d key=%s",
+                batch_index + 1,
+                len(batches),
+                batch["key"],
+            )
+            continue
+        sources = [Path(str(value["path"])) for value in batch["sources"]]
+        local_sources: list[Path] = []
+        batch_scratch = scratch_dir / f"batch-{batch['key']}"
+        batch_scratch.mkdir(exist_ok=True, parents=True)
+        try:
+            for source_index, source in enumerate(sources):
+                local_source = batch_scratch / f"{source_index:04d}-{source.name}"
+                copyfile(source, local_source)
+                local_sources.append(local_source)
+            LOG.info(
+                "symmetric fragment batch copied: progress=%d/%d key=%s " "sources=%d",
+                batch_index + 1,
+                len(batches),
+                batch["key"],
+                len(sources),
+            )
+            clusters.write_symmetric_edge_fragment_batch(
+                data_dir=data_dir,
+                batch=batch,
+                scratch_dir=batch_scratch,
+                threads=threads,
+                force_update=force_update,
+                read_paths=local_sources,
+            )
+        finally:
+            for local_source in local_sources:
+                local_source.unlink(missing_ok=True)
+
+
+def make_symmetric_edge_shards(
+    *,
+    data_dir: Path,
+    metric_buckets: list[tuple[str, int]],
+    scratch_dir: Path,
+    threads: int,
+    force_update: bool,
+) -> None:
+    """Merge reciprocal fragment values into compact minimum edge shards."""
+    for index, (metric, bucket) in enumerate(metric_buckets, start=1):
+        LOG.info(
+            "symmetric edge shard start: progress=%d/%d metric=%s bucket=%d",
+            index,
+            len(metric_buckets),
+            metric,
+            bucket,
+        )
+        clusters.write_symmetric_edge_shard(
+            data_dir=data_dir,
+            metric=metric,
+            bucket=bucket,
+            scratch_dir=scratch_dir / f"{metric}-{bucket:03d}",
+            threads=threads,
+            force_update=force_update,
+        )
+
+
 def scatter_make_communities(
     *,
     data_dir: Path,
@@ -2409,7 +2488,7 @@ def scatter_make_communities(
     stop_on_cluster: int,
     skip_existing_clusters: bool,
 ) -> list[list[tuple[str, int]]]:
-    """Scatter PLM work after exact weak component labels are available."""
+    """Scatter centroid-clustering work after component reductions are available."""
     values = [[(metric, threshold)] for metric in metrics for threshold in thresholds]
     if stop_on_cluster:
         values = values[:stop_on_cluster]
@@ -2431,6 +2510,35 @@ def scatter_make_communities(
     return pending or [[]]
 
 
+def scatter_make_directed_set_covers(
+    *,
+    data_dir: Path,
+    metrics: list[str],
+    thresholds: list[int],
+    stop_on_cluster: int,
+    skip_existing: bool,
+) -> list[list[tuple[str, int]]]:
+    """Scatter directed centroid-cover work after connectivity publication."""
+    values = [[(metric, threshold)] for metric in metrics for threshold in thresholds]
+    if stop_on_cluster:
+        values = values[:stop_on_cluster]
+    if not skip_existing:
+        return values
+    pending = []
+    for item in values:
+        metric, threshold = item[0]
+        output = (
+            data_dir
+            / "ligand_sampling"
+            / "directed_set_cover"
+            / f"metric={metric}"
+            / f"threshold={threshold}.parquet"
+        )
+        if not output.is_file():
+            pending.append(item)
+    return pending or [[]]
+
+
 _COMPONENT_REDUCTION_CONTEXT: dict[str, Any] | None = None
 
 
@@ -2441,7 +2549,7 @@ def _initialize_component_reduction_worker(context: dict[str, Any]) -> None:
 
 
 def _reduce_component_metric(metric_index: int, metric: str) -> dict[str, Any]:
-    """Reduce one metric using state shared at process initialization."""
+    """Reduce reciprocal and any-direction connectivity from one metric shard."""
     context = _COMPONENT_REDUCTION_CONTEXT
     if context is None:
         raise RuntimeError("component reduction worker context is not initialized")
@@ -2456,10 +2564,23 @@ def _reduce_component_metric(metric_index: int, metric: str) -> dict[str, Any]:
         eligible_systems=context["eligible_systems"],
         force_update=context["force_update"],
     )
+    cover_manifest = clusters.make_directed_cover_component_reduction(
+        data_dir=context["data_dir"],
+        metric=metric,
+        thresholds=context["thresholds"],
+        source_path=context["source"],
+        read_path=context["local_source"],
+        all_nodes=context["nodes"],
+        eligible_systems=context["eligible_systems"],
+        force_update=context["force_update"],
+    )
     return {
         "metric_index": metric_index,
         "metric": metric,
-        "output_rows": sum(int(output["rows"]) for output in manifest["outputs"]),
+        "output_rows": sum(
+            int(output["rows"])
+            for output in manifest["outputs"] + cover_manifest["outputs"]
+        ),
         "elapsed_seconds": time.time() - metric_started,
     }
 
@@ -2474,17 +2595,12 @@ def make_component_reductions(
     force_update: bool,
     metric_workers: int = 1,
 ) -> None:
-    """Map score sources to exact weak/strong reductions using local scratch."""
+    """Map reciprocal-minimum edge sources to exact component reductions."""
     if not source_paths:
         return
     if metric_workers < 1:
         raise ValueError("component reduction metric workers must be positive")
     chemical_metric = "tanimoto_similarity_ecfp4_1024"
-    chemical_sources = set(
-        clusters.component_score_sources(data_dir=data_dir, metric=chemical_metric)
-        if chemical_metric in metrics
-        else []
-    )
     nonchemical_metrics = [metric for metric in metrics if metric != chemical_metric]
     generic_nodes: list[str] = []
     generic_systems: set[str] | None = None
@@ -2503,21 +2619,36 @@ def make_component_reductions(
 
     for source_index, source_value in enumerate(source_paths):
         source = Path(source_value)
-        is_chemical = source in chemical_sources
-        source_metrics = [chemical_metric] if is_chemical else nonchemical_metrics
+        source_metric = source.parent.name.removeprefix("metric=")
+        if source_metric not in metrics:
+            raise ValueError(
+                f"component source metric is not selected: {source_metric}"
+            )
+        is_chemical = source_metric == chemical_metric
+        source_metrics = [source_metric]
         nodes = chemical_nodes if is_chemical else generic_nodes
         eligible_systems = None if is_chemical else generic_systems
         pending_metrics = [
             metric
             for metric in source_metrics
             if force_update
-            or not clusters.score_component_reduction_is_complete(
-                data_dir=data_dir,
-                metric=metric,
-                thresholds=thresholds,
-                source_path=source,
-                all_nodes=nodes,
-                eligible_systems=eligible_systems,
+            or not (
+                clusters.score_component_reduction_is_complete(
+                    data_dir=data_dir,
+                    metric=metric,
+                    thresholds=thresholds,
+                    source_path=source,
+                    all_nodes=nodes,
+                    eligible_systems=eligible_systems,
+                )
+                and clusters.directed_cover_component_reduction_is_complete(
+                    data_dir=data_dir,
+                    metric=metric,
+                    thresholds=thresholds,
+                    source_path=source,
+                    all_nodes=nodes,
+                    eligible_systems=eligible_systems,
+                )
             )
         ]
         if not pending_metrics:
@@ -2630,6 +2761,11 @@ def merge_component_reductions(
             metric=metric,
             thresholds=thresholds,
         )
+        clusters.merge_directed_cover_component_reductions(
+            data_dir=data_dir,
+            metric=metric,
+            thresholds=thresholds,
+        )
         elapsed = time.time() - started
         rate = index / elapsed
         LOG.info(
@@ -2649,7 +2785,7 @@ def make_communities(
     scratch_dir: Path | None = None,
     threads: int = 1,
 ) -> None:
-    """Compute one community result after component publication."""
+    """Compute one greedy centroid partition after component publication."""
     if not metric_threshold:
         LOG.info("make_communities: all communities are cached")
         return
@@ -2659,6 +2795,29 @@ def make_communities(
         metric=metric,
         threshold=threshold,
         skip_existing_clusters=skip_existing_clusters,
+        scratch_dir=scratch_dir,
+        threads=threads,
+    )
+
+
+def make_directed_set_covers(
+    *,
+    data_dir: Path,
+    metric_threshold: list[tuple[str, int]],
+    skip_existing: bool,
+    scratch_dir: Path | None = None,
+    threads: int = 1,
+) -> None:
+    """Compute one directed cover for annotation and training-set sampling."""
+    if not metric_threshold:
+        LOG.info("make_directed_set_covers: all covers are cached")
+        return
+    [(metric, threshold)] = metric_threshold
+    clusters.make_directed_set_cover(
+        data_dir=data_dir,
+        metric=metric,
+        threshold=threshold,
+        skip_existing=skip_existing,
         scratch_dir=scratch_dir,
         threads=threads,
     )
@@ -2688,6 +2847,7 @@ def finalize_index(*, data_dir: Path) -> None:
     if lookup_was_current:
         _write_alignment_chain_lookup_manifest(data_dir)
     utils.create_nonredundant_dataset(data_dir=data_dir)
+    collate.finalize_repair_marker(data_dir)
 
 
 def make_mmp_index(

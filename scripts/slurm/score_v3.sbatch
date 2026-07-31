@@ -134,6 +134,7 @@ case "${MODE}" in
         ARGS+=(
             --source-batch-size "${BATCH_SIZE}"
             --community-batch-size "${PLINDER_COMMUNITY_BATCH_SIZE:-1}"
+            --symmetric-bucket-count "${PLINDER_SYMMETRIC_EDGE_BUCKET_COUNT:-64}"
         )
         ;;
     drop-score-queries)
@@ -151,7 +152,7 @@ case "${MODE}" in
         ;;
     finalize-alignments|finalize-ligands|finalize-scores|finalize-ligand-3d-retries|finalize-index|merge-components|cluster-stats)
         ;;
-    search-foldseek|search-mmseqs|map|pack-ligands|score|score-pdbs|repair-score-pdbs|repair-score-target-remainders|repair-pack-ligands|repair-candidates|repair-ligand-3d|repair-merge-ligand-3d|repair-score-shards|repair-sucos-shards|collate-ligand-3d-candidates|score-ligand-3d|score-ligand-3d-retry|collate-ligand-3d|merge-ligand-3d|export-sucos-shards|collate-alignments|collate-score-partitions|component-reductions|communities)
+    search-foldseek|search-mmseqs|map|pack-ligands|score|score-pdbs|repair-score-pdbs|repair-score-target-remainders|repair-pack-ligands|repair-candidates|repair-ligand-3d|repair-merge-ligand-3d|repair-score-shards|repair-sucos-shards|collate-ligand-3d-candidates|score-ligand-3d|score-ligand-3d-retry|collate-ligand-3d|merge-ligand-3d|export-sucos-shards|collate-alignments|collate-score-partitions|symmetric-edge-fragments|symmetric-edge-shards|component-reductions|communities|directed-covers)
         ARGS+=(
             --batch-index "${BATCH_INDEX}"
             --batch-size "${BATCH_SIZE}"
@@ -185,7 +186,7 @@ case "${MODE}" in
         ;;
 esac
 
-if [[ "${MODE}" == "plan-clusters" || "${MODE}" == "component-reductions" || "${MODE}" == "merge-components" || "${MODE}" == "communities" || "${MODE}" == "cluster-stats" ]]; then
+if [[ "${MODE}" == "plan-clusters" || "${MODE}" == "symmetric-edge-fragments" || "${MODE}" == "symmetric-edge-shards" || "${MODE}" == "component-reductions" || "${MODE}" == "merge-components" || "${MODE}" == "communities" || "${MODE}" == "directed-covers" || "${MODE}" == "cluster-stats" ]]; then
     if [[ -n "${PLINDER_CLUSTER_METRICS:-}" ]]; then
         IFS=',' read -r -a CLUSTER_METRICS <<< "${PLINDER_CLUSTER_METRICS}"
         for METRIC in "${CLUSTER_METRICS[@]}"; do

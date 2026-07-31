@@ -11,17 +11,20 @@ def test_ligand_cluster_column_descriptions():
 
     columns = [
         "shape__50__strong__component",
-        "shape__50__ligand__strong__component",
+        "shape__50__ligand__component",
         "color__70__community",
         "color__70__ligand__community",
+        "pocket_qcov__50__ligand__directed_set_cover",
     ]
 
     rows = docs.get_cluster_column_descriptions(pd.DataFrame(columns=columns))
 
     assert [row[0] for row in rows] == columns
     descriptions = {name: description for name, _, description in rows}
-    assert "ligand-level strong component" in descriptions[columns[1]]
-    assert "ligand-level community" in descriptions[columns[3]]
+    assert "ligand-level reciprocal-minimum component" in descriptions[columns[1]]
+    assert "ligand-level greedy centroid community" in descriptions[columns[3]]
+    assert "ligand-level directed set cover" in descriptions[columns[4]]
+    assert "query-to-centroid score" in descriptions[columns[4]]
 
 
 def test_make_column_descriptions(read_plinder_mount, tmp_path, monkeypatch):
@@ -48,10 +51,13 @@ def test_make_column_descriptions(read_plinder_mount, tmp_path, monkeypatch):
         "ligand_num_pli_atoms_within_4A_of_gap",
         "ligand_num_pli_atoms_within_8A_of_gap",
         "ligand_num_missing_pli_interface_residues",
+        "ligand_is_oligo",
+        "system_ligand_has_oligo",
     ]
     df = df.drop(columns=legacy_posebusters + removed_enrichment_columns)
 
     schema = docs.get_all_column_descriptions(plindex=df)
     columns = schema["Name"].to_list()
-    assert not len(df.columns.difference(columns))
+    undocumented = df.columns.difference(columns).tolist()
+    assert not undocumented, undocumented
     assert {row[0] for row in docs.DERIVED_LIGAND_COLUMNS}.issubset(columns)

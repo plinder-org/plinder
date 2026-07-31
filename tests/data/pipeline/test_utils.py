@@ -318,11 +318,17 @@ def test_finalize_index_creates_nonredundant_data_from_local_clusters(tmp_path):
     index_dir = tmp_path / "index"
     cluster_file = (
         tmp_path
-        / "ligand_clusters/cluster=components/directed=True/metric=pli_qcov"
+        / "ligand_clusters/cluster=components/directed=False/metric=pli_qcov"
+        / "threshold=100.parquet"
+    )
+    directed_cover_file = (
+        tmp_path
+        / "ligand_sampling/directed_set_cover/metric=pli_qcov"
         / "threshold=100.parquet"
     )
     index_dir.mkdir(parents=True)
     cluster_file.parent.mkdir(parents=True)
+    directed_cover_file.parent.mkdir(parents=True)
     pd.DataFrame(
         {
             "system_id": ["1aaa__1__1.A__1.X", "1aaa__2__1.A__1.X"],
@@ -355,27 +361,121 @@ def test_finalize_index_creates_nonredundant_data_from_local_clusters(tmp_path):
     ).to_parquet(ligand_dir / "part.parquet", index=False)
     pd.DataFrame(
         {
-            "ligand_id": ["1aaa__1__1.X", "1aaa__2__1.X"],
-            "label": ["c0", "c0"],
-            "metric": ["pli_qcov", "pli_qcov"],
-            "cluster": ["components", "components"],
-            "directed": [True, True],
-            "threshold": [100, 100],
+            "ligand_id": ["1aaa__1__1.X"],
+            "label": ["c0"],
+            "metric": ["pli_qcov"],
+            "cluster": ["components"],
+            "directed": [False],
+            "threshold": [100],
         }
     ).to_parquet(cluster_file, index=False)
+    pd.DataFrame(
+        {
+            "ligand_id": ["1aaa__1__1.X"],
+            "centroid_ligand_id": ["1aaa__1__1.X"],
+            "similarity_to_centroid": [100.0],
+            "label": ["d0"],
+            "metric": ["pli_qcov"],
+            "threshold": [100],
+            "directed": [True],
+        }
+    ).to_parquet(directed_cover_file, index=False)
 
     utils.finalize_index(data_dir=tmp_path)
     utils.create_nonredundant_dataset(data_dir=tmp_path)
 
     finalized = pd.read_parquet(index_dir / "annotation_table.parquet")
-    assert finalized["pli_qcov__100__ligand__strong__component"].tolist() == [
-        "c0",
-        "c0",
-    ]
-    assert "pli_qcov__100__strong__component" not in finalized
+    labels = finalized["pli_qcov__100__ligand__component"]
+    assert labels.iloc[0] == "c0"
+    assert pd.isna(labels.iloc[1])
+    directed_labels = finalized["pli_qcov__100__ligand__directed_set_cover"]
+    assert directed_labels.iloc[0] == "d0"
+    assert pd.isna(directed_labels.iloc[1])
+    assert "pli_qcov__100__component" not in finalized
     assert finalized.loc[0, "ligand_smiles_id"] == 0
     assert pd.isna(finalized.loc[1, "ligand_smiles_id"])
     assert finalized["ligand_is_3d_score_able"].tolist() == [True, False]
-    assert finalized["uniqueness"].nunique() == 1
+    assert finalized["uniqueness"].nunique() == 2
     nonredundant = pd.read_parquet(index_dir / "annotation_table_nonredundant.parquet")
-    assert len(nonredundant) == 1
+    assert len(nonredundant) == 2
+
+
+def test_cluster_index_requires_matching_directed_cover_matrix(tmp_path):
+    cluster_file = (
+        tmp_path
+        / "ligand_clusters/cluster=components/directed=False/metric=pli_qcov"
+        / "threshold=100.parquet"
+    )
+    cluster_file.parent.mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "ligand_id": ["1aaa__1__1.X"],
+            "label": ["c0"],
+        }
+    ).to_parquet(cluster_file, index=False)
+    index = pd.DataFrame(
+        {
+            "ligand_id": ["1aaa__1__1.X"],
+            "system_type": ["holo"],
+            "ligand_is_proper": [True],
+            "ligand_smiles_id": [0],
+        }
+    )
+
+    with pytest.raises(FileNotFoundError, match="directed set-cover matrix"):
+        utils.add_cluster_columns(index=index, data_dir=tmp_path)
+
+
+def test_ligand_similarity_rejects_stale_proper_smiles_universe(tmp_path):
+    fingerprint_dir = tmp_path / "fingerprints"
+    fingerprint_dir.mkdir()
+    pd.DataFrame(
+        {
+            "ligand_rdkit_canonical_smiles": ["CC"],
+            "ligand_smiles_id": [0],
+        }
+    ).to_parquet(
+        fingerprint_dir / "ligand_similarity_annotations.parquet",
+        index=False,
+    )
+    index = pd.DataFrame(
+        {
+            "system_type": ["holo", "holo"],
+            "ligand_is_proper": [True, True],
+            "ligand_rdkit_canonical_smiles": ["CC", "CCC"],
+        }
+    )
+
+    with pytest.raises(ValueError, match="proper holo SMILES universe"):
+        utils.add_ligand_similarity_columns(index=index, data_dir=tmp_path)
+
+
+def test_ligand_similarity_rejects_artifact_from_before_targeted_repair(
+    tmp_path,
+):
+    fingerprint_dir = tmp_path / "fingerprints"
+    index_dir = tmp_path / "index"
+    fingerprint_dir.mkdir()
+    index_dir.mkdir()
+    pd.DataFrame(
+        {
+            "ligand_rdkit_canonical_smiles": ["CC"],
+            "ligand_smiles_id": [0],
+        }
+    ).to_parquet(
+        fingerprint_dir / "ligand_similarity_annotations.parquet",
+        index=False,
+    )
+    (index_dir / "collation.json").write_text(
+        '{"status": "requires_downstream_repair"}'
+    )
+    index = pd.DataFrame(
+        {
+            "system_type": ["holo"],
+            "ligand_is_proper": [True],
+            "ligand_rdkit_canonical_smiles": ["CC"],
+        }
+    )
+
+    with pytest.raises(ValueError, match="predate"):
+        utils.add_ligand_similarity_columns(index=index, data_dir=tmp_path)

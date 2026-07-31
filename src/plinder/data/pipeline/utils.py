@@ -469,10 +469,9 @@ def ingest_flow_control(func: Callable[..., T]) -> Callable[..., T]:
 def _cluster_column_name(
     *, metric: str, cluster: str, directed: bool, threshold: int, ligand: bool
 ) -> str:
-    if cluster == "components":
-        kind = "strong__component" if directed else "weak__component"
-    else:
-        kind = "community"
+    if directed:
+        raise ValueError("ligand clusters must use reciprocal-minimum edges")
+    kind = "component" if cluster == "components" else "community"
     ligand_marker = "__ligand" if ligand else ""
     return f"{metric}__{threshold}{ligand_marker}__{kind}"
 
@@ -522,26 +521,73 @@ def _pivot_cluster_rows(
 
 
 def add_cluster_columns(*, index: pd.DataFrame, data_dir: Path) -> pd.DataFrame:
-    """Merge V3 ligand-level cluster labels into the index."""
+    """Merge reciprocal and directed ligand-level cluster labels into the index."""
     node_column = "ligand_id"
     cluster_root = data_dir / "ligand_clusters"
-    paths = sorted(
+    directed_cover_root = data_dir / "ligand_sampling" / "directed_set_cover"
+    marker_path = data_dir / "index" / "collation.json"
+    repair_started_ns: int | None = None
+    if marker_path.is_file():
+        with marker_path.open() as handle:
+            marker = load(handle)
+        if marker.get("status") == "requires_downstream_repair":
+            repair_started_ns = marker_path.stat().st_mtime_ns
+    reciprocal_paths = sorted(
         cluster_root.glob("cluster=*/directed=*/metric=*/threshold=*.parquet")
     )
-    if not paths:
+    directed_cover_paths = sorted(
+        directed_cover_root.glob("metric=*/threshold=*.parquet")
+    )
+    if not reciprocal_paths and not directed_cover_paths:
+        if repair_started_ns is not None:
+            raise FileNotFoundError(
+                "targeted collation repair has no rebuilt ligand clusters"
+            )
         return index
+    reciprocal_keys = {
+        (
+            next(
+                part.split("=", maxsplit=1)[1]
+                for part in path.relative_to(cluster_root).parts
+                if part.startswith("metric=")
+            ),
+            int(path.stem.split("=", maxsplit=1)[1]),
+        )
+        for path in reciprocal_paths
+    }
+    directed_cover_keys = {
+        (
+            path.parent.name.split("=", maxsplit=1)[1],
+            int(path.stem.split("=", maxsplit=1)[1]),
+        )
+        for path in directed_cover_paths
+    }
+    if directed_cover_keys != reciprocal_keys:
+        missing = sorted(reciprocal_keys.difference(directed_cover_keys))
+        extra = sorted(directed_cover_keys.difference(reciprocal_keys))
+        raise FileNotFoundError(
+            "directed set-cover matrix does not match reciprocal ligand "
+            f"clusters: missing={missing[:10]}, extra={extra[:10]}"
+        )
     node_ids = pd.Index(
         index[node_column].dropna().astype(str).unique(),
         name=node_column,
     )
-    LOG.info(
-        "loading %d published ligand-cluster artifacts for %d ligand IDs",
-        len(paths),
-        len(node_ids),
+    proper = index["ligand_is_proper"].fillna(False).astype(bool)
+    holo = index["system_type"].eq("holo")
+    expected_score_nodes = set(
+        index.loc[proper & holo, node_column].dropna().astype(str)
     )
-    cluster_columns: dict[str, Any] = {}
-    started = time()
-    for path_index, path in enumerate(paths, start=1):
+    expected_fingerprint_nodes = set(
+        index.loc[
+            proper & index["ligand_smiles_id"].notna(),
+            node_column,
+        ]
+        .dropna()
+        .astype(str)
+    )
+    artifacts: list[tuple[Path, str, str]] = []
+    for path in reciprocal_paths:
         relative_parts = path.relative_to(cluster_root).parts
         partitions = {
             key: value
@@ -550,41 +596,96 @@ def add_cluster_columns(*, index: pd.DataFrame, data_dir: Path) -> pd.DataFrame:
             )
         }
         threshold = int(path.stem.split("=", maxsplit=1)[1])
-        directed = partitions["directed"].lower() == "true"
-        column = _cluster_column_name(
-            metric=partitions["metric"],
-            cluster=partitions["cluster"],
-            directed=directed,
-            threshold=threshold,
-            ligand=True,
+        metric = partitions["metric"]
+        artifacts.append(
+            (
+                path,
+                metric,
+                _cluster_column_name(
+                    metric=metric,
+                    cluster=partitions["cluster"],
+                    directed=partitions["directed"].lower() == "true",
+                    threshold=threshold,
+                    ligand=True,
+                ),
+            )
         )
+    for path in directed_cover_paths:
+        metric = path.parent.name.split("=", maxsplit=1)[1]
+        threshold = int(path.stem.split("=", maxsplit=1)[1])
+        artifacts.append(
+            (
+                path,
+                metric,
+                f"{metric}__{threshold}__ligand__directed_set_cover",
+            )
+        )
+    LOG.info(
+        "loading %d published ligand-cluster artifacts for %d ligand IDs",
+        len(artifacts),
+        len(node_ids),
+    )
+    cluster_columns: dict[str, Any] = {}
+    started = time()
+    for path_index, (path, metric, column) in enumerate(artifacts, start=1):
+        if (
+            repair_started_ns is not None
+            and path.stat().st_mtime_ns <= repair_started_ns
+        ):
+            raise ValueError(
+                "ligand cluster artifact predates the targeted collation "
+                f"repair: {path}"
+            )
         labels = pd.read_parquet(path, columns=[node_column, "label"])
         if labels[node_column].duplicated().any():
             raise ValueError(f"duplicate ligand IDs in cluster artifact: {path}")
         labels[node_column] = labels[node_column].astype(str)
+        observed_nodes = set(labels[node_column])
+        expected_nodes = (
+            expected_fingerprint_nodes
+            if metric == "tanimoto_similarity_ecfp4_1024"
+            else expected_score_nodes
+        )
+        if observed_nodes != expected_nodes:
+            missing = sorted(expected_nodes.difference(observed_nodes))
+            extra = sorted(observed_nodes.difference(expected_nodes))
+            raise ValueError(
+                "ligand cluster artifact does not cover the current eligible "
+                f"ligand universe: {path}; missing={missing[:10]}, "
+                f"extra={extra[:10]}"
+            )
         aligned = labels.set_index(node_column)["label"].reindex(node_ids)
         cluster_columns[column] = aligned.astype("string[pyarrow]").array
-        if path_index % 10 == 0 or path_index == len(paths):
+        if path_index % 10 == 0 or path_index == len(artifacts):
             elapsed = time() - started
             rate = path_index / elapsed
             LOG.info(
                 "cluster index progress: loaded=%d/%d rate=%.2f/s " "eta_seconds=%.1f",
                 path_index,
-                len(paths),
+                len(artifacts),
                 rate,
-                (len(paths) - path_index) / rate,
+                (len(artifacts) - path_index) / rate,
             )
     wide = pd.DataFrame(
         {node_column: node_ids.to_numpy(), **cluster_columns},
         copy=False,
     )
     replacement_columns = set(wide.columns).difference({node_column})
+    stale_ligand_cluster_columns = {
+        column
+        for column in index.columns
+        if "__ligand__" in column
+        and column.endswith(("__component", "__community", "__directed_set_cover"))
+    }
     LOG.info(
         "merging %d ligand-level cluster columns into the annotation index",
         len(replacement_columns),
     )
     result = index.drop(
-        columns=list(replacement_columns.intersection(index.columns))
+        columns=list(
+            replacement_columns.intersection(index.columns)
+            | stale_ligand_cluster_columns
+        )
     ).merge(wide, on=node_column, how="left", validate="many_to_one")
     LOG.info(
         "cluster index merge complete: rows=%d columns=%d elapsed_seconds=%.1f",
@@ -606,10 +707,38 @@ def add_ligand_similarity_columns(
         raise FileNotFoundError(
             f"missing ligand similarity annotations: {annotation_path}"
         )
+    marker_path = data_dir / "index" / "collation.json"
+    if marker_path.is_file():
+        with marker_path.open() as handle:
+            marker = load(handle)
+        if (
+            marker.get("status") == "requires_downstream_repair"
+            and annotation_path.stat().st_mtime_ns <= marker_path.stat().st_mtime_ns
+        ):
+            raise ValueError(
+                "ligand similarity annotations predate the targeted " "collation repair"
+            )
     annotations = pd.read_parquet(annotation_path)
     join_column = "ligand_rdkit_canonical_smiles"
     if annotations[join_column].duplicated().any():
         raise ValueError("ligand similarity annotations contain duplicate SMILES")
+    proper_holo = index["ligand_is_proper"].fillna(False).astype(bool) & index[
+        "system_type"
+    ].eq("holo")
+    expected_smiles = set(
+        index.loc[proper_holo, join_column]
+        .dropna()
+        .astype(str)
+        .loc[lambda values: values.ne("")]
+    )
+    observed_smiles = set(annotations[join_column].dropna().astype(str))
+    if observed_smiles != expected_smiles:
+        missing = sorted(expected_smiles.difference(observed_smiles))
+        extra = sorted(observed_smiles.difference(expected_smiles))
+        raise ValueError(
+            "ligand similarity annotations do not cover the current proper "
+            f"holo SMILES universe: missing={missing[:10]}, extra={extra[:10]}"
+        )
     replacement_columns = set(annotations.columns).difference({join_column})
     result = index.drop(
         columns=list(replacement_columns.intersection(index.columns))
@@ -775,7 +904,7 @@ def finalize_index(*, data_dir: Path) -> pd.DataFrame:
     index = add_ligand_similarity_columns(index=index, data_dir=data_dir)
     LOG.info("merged ligand similarity annotations")
     index = add_cluster_columns(index=index, data_dir=data_dir)
-    uniqueness_cluster = "pli_qcov__100__ligand__strong__component"
+    uniqueness_cluster = "pli_qcov__100__ligand__component"
     if uniqueness_cluster in index.columns:
         labels = (
             index[uniqueness_cluster]
