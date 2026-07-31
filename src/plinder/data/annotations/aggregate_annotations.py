@@ -41,6 +41,7 @@ from plinder.data.annotations.interaction_utils import (
     get_symmetry_mate_contacts,
 )
 from plinder.data.annotations.interface_utils import (
+    DEFAULT_MIN_INTERFACE_RESIDUES,
     ProteinInterface,
     detect_protein_interfaces,
 )
@@ -1168,7 +1169,7 @@ class Entry(DocBaseModel):
         min_shared_pocket_members: int = 3,
         interface_contact_radius: float = 10.0,
         interface_min_chain_length: int = 12,
-        interface_min_residues: int = 3,
+        interface_min_residues: int = DEFAULT_MIN_INTERFACE_RESIDUES,
     ) -> Entry:
         """
         Load an entry object from mmCIF files in the pipeline

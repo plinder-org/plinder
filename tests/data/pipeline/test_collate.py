@@ -7,7 +7,11 @@ import json
 from pathlib import Path
 
 import pandas as pd
+import pyarrow.parquet as pq
 import pytest
+from plinder.data.annotations.interface_utils import (
+    MIN_INTERFACE_RESIDUES_METADATA_KEY,
+)
 from plinder.data.pipeline import collate as collate_module
 from plinder.data.pipeline.collate import (
     collate_shard,
@@ -109,13 +113,14 @@ def _write_entry(
             "system_biounit_id": ["1"],
             "interface_chain_1": ["1.A"],
             "interface_chain_2": ["1.B"],
-            "interface_chain_1_residue_numbers": [[1, 2, 3]],
-            "interface_chain_1_residue_indices": [[0, 1, 2]],
-            "interface_chain_2_residue_numbers": [[4, 5, 6]],
-            "interface_chain_2_residue_indices": [[0, 1, 2]],
-            "interface_num_contact_residue_pairs": [3],
+            "interface_chain_1_residue_numbers": [[1, 2, 3, 4, 5, 6, 7]],
+            "interface_chain_1_residue_indices": [[0, 1, 2, 3, 4, 5, 6]],
+            "interface_chain_2_residue_numbers": [[11, 12, 13, 14, 15, 16, 17]],
+            "interface_chain_2_residue_indices": [[0, 1, 2, 3, 4, 5, 6]],
+            "interface_num_contact_residue_pairs": [7],
         }
     ).to_parquet(entry_dir / "interfaces.parquet", index=False)
+    _set_interface_threshold(entry_dir / "interfaces.parquet", 7)
 
     proper = [row for row in ligand_rows if row["proper"]]
     ligand_table = pd.DataFrame(
@@ -176,6 +181,13 @@ def _write_interface_only_entry(data_dir: Path, pdb_id: str = "3ghi") -> None:
     (data_dir / "ligands" / f"{pdb_id}.parquet").unlink()
 
 
+def _set_interface_threshold(path: Path, threshold: int) -> None:
+    table = pq.read_table(path)
+    metadata = dict(table.schema.metadata or {})
+    metadata[MIN_INTERFACE_RESIDUES_METADATA_KEY] = str(threshold).encode()
+    pq.write_table(table.replace_schema_metadata(metadata), path)
+
+
 def test_plan_shards_and_finalize_real_v3_contract(tmp_path: Path) -> None:
     _write_release(tmp_path)
 
@@ -222,6 +234,7 @@ def test_plan_shards_and_finalize_real_v3_contract(tmp_path: Path) -> None:
     }
     marker = json.loads((tmp_path / "index/collation.json").read_text())
     assert marker["status"] == "complete"
+    assert marker["interface_min_residues"] == 7
 
 
 def test_collation_retains_entries_with_only_protein_interfaces(
@@ -240,6 +253,27 @@ def test_collation_retains_entries_with_only_protein_interfaces(
     assert set(metadata["entry_pdb_id"]) == {"1abc", "2def", "3ghi"}
     interfaces = pd.read_parquet(tmp_path / "index/interface_annotation_table.parquet")
     assert "3ghi__1__1.A--1.B" in set(interfaces["system_id"])
+
+
+def test_collation_rejects_mixed_interface_thresholds(tmp_path: Path) -> None:
+    _write_release(tmp_path)
+    _set_interface_threshold(
+        tmp_path / "raw_entries/de/2def/interfaces.parquet",
+        9,
+    )
+
+    with pytest.raises(ValueError, match="mixed interface.min_interface_residues"):
+        plan_collation(tmp_path)
+
+
+def test_collation_rejects_interface_table_without_threshold(tmp_path: Path) -> None:
+    _write_release(tmp_path)
+    path = tmp_path / "raw_entries/de/2def/interfaces.parquet"
+    table = pq.read_table(path)
+    pq.write_table(table.replace_schema_metadata(None), path)
+
+    with pytest.raises(ValueError, match="does not record its minimum residue count"):
+        plan_collation(tmp_path)
 
 
 def test_targeted_repair_preserves_unaffected_release_only_columns(

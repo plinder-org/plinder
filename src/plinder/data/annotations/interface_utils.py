@@ -16,6 +16,8 @@ if TYPE_CHECKING:
     from plinder.data.annotations.protein_utils import Chain
 
 PROTEIN_BACKBONE_ATOMS = frozenset({"N", "CA", "C", "O"})
+DEFAULT_MIN_INTERFACE_RESIDUES = 7
+MIN_INTERFACE_RESIDUES_METADATA_KEY = b"plinder.interface.min_interface_residues"
 
 INTERFACE_ANNOTATION_SCHEMA = pa.schema(
     [
@@ -134,7 +136,7 @@ def detect_protein_interfaces(
     chains: Mapping[str, Chain],
     contact_radius: float = 10.0,
     min_chain_length: int = 12,
-    min_interface_residues: int = 3,
+    min_interface_residues: int = DEFAULT_MIN_INTERFACE_RESIDUES,
     spatial_index: BiounitSpatialIndex | None = None,
 ) -> list[ProteinInterface]:
     """Detect protein-chain interfaces from backbone contacts.
@@ -245,9 +247,31 @@ def detect_protein_interfaces(
 
 def protein_interfaces_to_table(
     interfaces: Iterable[ProteinInterface],
+    *,
+    min_interface_residues: int = DEFAULT_MIN_INTERFACE_RESIDUES,
 ) -> pa.Table:
-    """Return a typed table, including for entries with no interfaces."""
+    """Return a typed table with the ingest threshold in schema metadata."""
+    if min_interface_residues < 1:
+        raise ValueError("minimum interface residues must be positive")
+    schema = INTERFACE_ANNOTATION_SCHEMA.with_metadata(
+        {MIN_INTERFACE_RESIDUES_METADATA_KEY: str(min_interface_residues).encode()}
+    )
     return pa.Table.from_pylist(
         [interface.to_row() for interface in interfaces],
-        schema=INTERFACE_ANNOTATION_SCHEMA,
+        schema=schema,
     )
+
+
+def min_interface_residues_from_schema(schema: pa.Schema) -> int:
+    """Read the frozen interface threshold from one V3 interface table."""
+    metadata = schema.metadata or {}
+    value = metadata.get(MIN_INTERFACE_RESIDUES_METADATA_KEY)
+    if value is None:
+        raise ValueError("interface table does not record its minimum residue count")
+    try:
+        threshold = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("invalid minimum interface residue metadata") from exc
+    if threshold < 1:
+        raise ValueError("minimum interface residues must be positive")
+    return threshold

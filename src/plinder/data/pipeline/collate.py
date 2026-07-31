@@ -20,7 +20,10 @@ import duckdb
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from plinder.data.annotations.interface_utils import INTERFACE_ANNOTATION_SCHEMA
+from plinder.data.annotations.interface_utils import (
+    INTERFACE_ANNOTATION_SCHEMA,
+    min_interface_residues_from_schema,
+)
 
 COLLATION_VERSION = 1
 STAGING_RELATIVE = Path("index/.staging/v3_collation")
@@ -81,6 +84,7 @@ MANIFEST_SCHEMA = pa.schema(
         ("source_mtime_ns", pa.int64()),
         ("ligand_size", pa.int64()),
         ("ligand_mtime_ns", pa.int64()),
+        ("interface_min_residues", pa.int64()),
     ]
 )
 
@@ -242,6 +246,9 @@ def _entry_manifest_row(data_dir: Path, entry_dir: Path) -> dict[str, Any]:
     row: dict[str, Any] = {
         "pdb_id": pdb_id,
         "code": code,
+        "interface_min_residues": min_interface_residues_from_schema(
+            pq.read_schema(paths["interface"])
+        ),
         **{f"{name}_path": str(path.resolve()) for name, path in paths.items()},
     }
     for name in paths:
@@ -268,6 +275,7 @@ def plan_collation(data_dir: Path, *, threads: int = 1) -> dict[str, Any]:
     seen: set[str] = set()
     code_signatures: dict[str, str] = {}
     code_counts: dict[str, int] = {}
+    interface_min_residues: set[int] = set()
     total_entries = 0
     try:
         writer = pq.ParquetWriter(temporary, MANIFEST_SCHEMA, compression="zstd")
@@ -301,10 +309,18 @@ def plan_collation(data_dir: Path, *, threads: int = 1) -> dict[str, Any]:
                 code = code_dir.name.lower()
                 code_signatures[code] = _row_signature(rows)
                 code_counts[code] = len(rows)
+                interface_min_residues.update(
+                    int(row["interface_min_residues"]) for row in rows
+                )
                 total_entries += len(rows)
                 writer.write_table(pa.Table.from_pylist(rows, schema=MANIFEST_SCHEMA))
         if total_entries == 0:
             raise ValueError(f"no materialized V3 entries found in {raw_entries}")
+        if len(interface_min_residues) != 1:
+            raise ValueError(
+                "mixed interface.min_interface_residues values in ingest outputs: "
+                f"{sorted(interface_min_residues)}"
+            )
         writer.close()
         writer = None
         temporary.replace(output)
@@ -323,6 +339,7 @@ def plan_collation(data_dir: Path, *, threads: int = 1) -> dict[str, Any]:
         "codes": sorted(code_signatures),
         "code_entry_counts": code_counts,
         "code_signatures": code_signatures,
+        "interface_min_residues": interface_min_residues.pop(),
     }
     _write_json_atomic(plan_path(data_dir), summary)
     return summary
@@ -336,6 +353,8 @@ def load_plan(data_dir: Path) -> dict[str, Any]:
     plan = cast(dict[str, Any], json.loads(path.read_text()))
     if plan.get("status") != "complete" or plan.get("version") != COLLATION_VERSION:
         raise ValueError(f"invalid collation plan: {path}")
+    if int(plan.get("interface_min_residues", 0)) < 1:
+        raise ValueError(f"invalid interface threshold in collation plan: {path}")
     if not manifest_path(data_dir).is_file():
         raise FileNotFoundError(
             f"missing collation manifest: {manifest_path(data_dir)}"
@@ -1235,6 +1254,7 @@ def finalize_collation(
         "plan": str(plan_path(data_dir)),
         "manifest": str(manifest_path(data_dir)),
         "code_count": len(plan["codes"]),
+        "interface_min_residues": int(plan["interface_min_residues"]),
         "outputs": {name: str(path) for name, path in final_paths.items()},
         **validation,
     }
@@ -1281,6 +1301,17 @@ def repair_collation(
     if missing_final:
         raise FileNotFoundError(f"missing installed index tables: {missing_final}")
 
+    marker_path = data_dir / "index" / FINAL_MARKER_NAME
+    try:
+        installed_marker = cast(dict[str, Any], json.loads(marker_path.read_text()))
+        installed_interface_min_residues = int(
+            installed_marker["interface_min_residues"]
+        )
+    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise ValueError(
+            "targeted repair requires a collated interface threshold"
+        ) from exc
+
     rows = [
         _entry_manifest_row(
             data_dir,
@@ -1288,6 +1319,15 @@ def repair_collation(
         )
         for pdb_id in selected
     ]
+    replacement_interface_thresholds = {
+        int(row["interface_min_residues"]) for row in rows
+    }
+    if replacement_interface_thresholds != {installed_interface_min_residues}:
+        raise ValueError(
+            "targeted repair interface.min_interface_residues differs from the "
+            f"installed release: replacement={sorted(replacement_interface_thresholds)}, "
+            f"installed={installed_interface_min_residues}"
+        )
     _verify_manifest_inputs(rows, threads=threads)
     temporary_paths = {
         name: _temporary_path(final_paths[name])
@@ -1450,6 +1490,7 @@ def repair_collation(
         "status": REPAIR_REQUIRED_STATUS,
         "mode": "targeted_repair",
         "repaired_entry_count": len(selected),
+        "interface_min_residues": installed_interface_min_residues,
         "repaired_entry_digest": hashlib.sha256(
             ("\n".join(selected) + "\n").encode("utf-8")
         ).hexdigest(),

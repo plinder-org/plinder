@@ -12,7 +12,10 @@ from tqdm import tqdm
 
 from plinder.core.utils.log import setup_logger
 from plinder.data.annotations.aggregate_annotations import Entry
-from plinder.data.annotations.interface_utils import protein_interfaces_to_table
+from plinder.data.annotations.interface_utils import (
+    DEFAULT_MIN_INTERFACE_RESIDUES,
+    protein_interfaces_to_table,
+)
 
 LOG = setup_logger(__name__, log_level=logging.DEBUG)
 
@@ -53,8 +56,8 @@ class GetPlinderAnnotation:
         )
         if self.entry_cfg is not None:
             entry_cfg.update(self.entry_cfg)
-        if self.interface_cfg is not None:
-            interface_cfg = dict(self.interface_cfg)
+        interface_cfg = dict(self.interface_cfg or {})
+        if interface_cfg:
             entry_cfg.update(
                 {
                     "interface_contact_radius": interface_cfg.get(
@@ -64,7 +67,7 @@ class GetPlinderAnnotation:
                         "min_chain_length", 12
                     ),
                     "interface_min_residues": interface_cfg.get(
-                        "min_interface_residues", 3
+                        "min_interface_residues", DEFAULT_MIN_INTERFACE_RESIDUES
                     ),
                 }
             )
@@ -77,7 +80,12 @@ class GetPlinderAnnotation:
             LOG.info(f"no ligand or interface systems for {self.mmcif_file}")
             return None
         self.entry.set_validation(self.validation_xml, self.mmcif_file)
-        interface_table = protein_interfaces_to_table(self.entry.interfaces)
+        interface_table = protein_interfaces_to_table(
+            self.entry.interfaces,
+            min_interface_residues=int(
+                entry_cfg.get("interface_min_residues", DEFAULT_MIN_INTERFACE_RESIDUES)
+            ),
+        )
         self.interface_df = interface_table.to_pandas()
         self.entry_metadata_df = self.entry.metadata_to_df()
         resolved_save_folder = entry_cfg.get("save_folder")

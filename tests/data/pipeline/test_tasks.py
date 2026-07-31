@@ -527,6 +527,7 @@ def test_scatter_protein_scoring_uses_v3_chain_index(tmp_path) -> None:
 
 def test_protein_scoring_plan_and_alignment_finalization(tmp_path, monkeypatch) -> None:
     from plinder.data.pipeline.score import (
+        _scoring_config_from_plan,
         finalize_alignment_artifacts,
         make_foldseek_input_manifest,
         plan_protein_scoring,
@@ -551,6 +552,9 @@ def test_protein_scoring_plan_and_alignment_finalization(tmp_path, monkeypatch) 
     assert plan["query_count"] == 1
     assert plan["protein_chain_count"] == 1
     assert plan["max_seqs"] == 10_000
+    pre_score_config = _scoring_config_from_plan(tmp_path, plan)
+    assert pre_score_config.scorer.max_query_protein_chains == 30
+    assert pre_score_config.scorer.max_query_proper_ligand_chains == 30
     foldseek_inputs = make_foldseek_input_manifest(tmp_path, Path("/nextgen"))
     assert foldseek_inputs.read_text().splitlines() == [
         "/nextgen/ab/pdb_00001abc/pdb_00001abc_xyz-enrich.cif.gz"
@@ -3167,6 +3171,26 @@ def test_clustering_plan_matches_slurm_array_bounds(tmp_path, monkeypatch):
         thresholds=None,
         entity_type="interface",
     ) == (["interface_qcov"], [100, 90, 70, 50, 30])
+
+
+def test_interface_cluster_plan_enforces_collated_ingest_threshold(tmp_path):
+    from plinder.data.pipeline.score import plan_clustering
+
+    index = tmp_path / "index"
+    index.mkdir()
+    pd.DataFrame(
+        {
+            "system_id": ["1abc__1__1.A--1.B"],
+            "interface_chain_1_residue_numbers": [[1, 2, 3, 4, 5, 6]],
+            "interface_chain_2_residue_numbers": [[1, 2, 3, 4, 5, 6, 7]],
+        }
+    ).to_parquet(index / "interface_annotation_table.parquet", index=False)
+    (index / "collation.json").write_text(
+        json.dumps({"status": "complete", "interface_min_residues": 7})
+    )
+
+    with pytest.raises(ValueError, match="below the frozen minimum of 7"):
+        plan_clustering(tmp_path, entity_type="interface")
 
 
 def test_sucos_release_export_retains_scores_below_cluster_cutoff(tmp_path):

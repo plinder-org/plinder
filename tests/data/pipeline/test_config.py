@@ -63,7 +63,7 @@ def test_default_config():
     assert cfg.flow.component_reduction_metric_workers == 4
     assert cfg.interface.contact_radius == 10.0
     assert cfg.interface.min_chain_length == 12
-    assert cfg.interface.min_interface_residues == 3
+    assert cfg.interface.min_interface_residues == 7
 
 
 @pytest.mark.parametrize(

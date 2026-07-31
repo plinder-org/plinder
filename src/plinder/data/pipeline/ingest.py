@@ -858,6 +858,15 @@ def build_parser() -> argparse.ArgumentParser:
         default=os.environ.get(VALIDATION_ROOT_ENV),
         required=VALIDATION_ROOT_ENV not in os.environ,
     )
+    batch_parser.add_argument(
+        "--interface-min-residues",
+        type=int,
+        default=os.environ.get("PLINDER_INTERFACE_MIN_RESIDUES"),
+        help=(
+            "minimum resolved contact residues required on each interface side; "
+            "defaults to interface.min_interface_residues"
+        ),
+    )
     batch_parser.add_argument("--force", action="store_true")
     return parser
 
@@ -889,6 +898,8 @@ def main() -> None:
         batch_index=args.batch_index,
         batch_size=args.batch_size,
     )
+    if args.interface_min_residues is not None and args.interface_min_residues < 1:
+        raise ValueError("interface minimum residues must be positive")
     metrics_path, had_failures = ingest_pdb_batch(
         pdb_ids=pdb_ids,
         output_root=args.output_root,
@@ -897,6 +908,11 @@ def main() -> None:
         force=args.force,
         job_id=_default_job_id(),
         batch_index=args.batch_index,
+        interface_cfg=(
+            {"min_interface_residues": args.interface_min_residues}
+            if args.interface_min_residues is not None
+            else None
+        ),
     )
     print(metrics_path.read_text(), end="")
     if had_failures:

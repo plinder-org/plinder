@@ -456,6 +456,23 @@ def test_shared_ingest_cli_has_manifest_and_batch_commands() -> None:
     assert manifest_args.output_path == Path("manifest.txt")
     assert batch_args.command == "batch"
     assert batch_args.batch_size == 10
+    assert batch_args.interface_min_residues is None
+    configured = parser.parse_args(
+        [
+            "batch",
+            "manifest.txt",
+            "output",
+            "--batch-size",
+            "10",
+            "--cif-root",
+            "cif",
+            "--validation-root",
+            "validation",
+            "--interface-min-residues",
+            "9",
+        ]
+    )
+    assert configured.interface_min_residues == 9
 
 
 def test_load_manifest_and_select_slice(tmp_path: Path) -> None:

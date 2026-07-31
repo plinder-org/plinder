@@ -9,7 +9,7 @@ import hashlib
 import heapq
 import json
 import math
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 from shutil import copyfile, rmtree
 from textwrap import dedent
@@ -24,6 +24,7 @@ from plinder.core.scores.metrics import DEFAULT_CLUSTER_METRICS
 from plinder.core.utils import schemas
 from plinder.core.utils.log import setup_logger
 from plinder.data import clusters, databases
+from plinder.data.annotations.interface_utils import DEFAULT_MIN_INTERFACE_RESIDUES
 from plinder.data.pipeline import config, tasks
 
 LOG = setup_logger(__name__)
@@ -2233,6 +2234,49 @@ def _cluster_parameters(
     return selected_metrics, selected_thresholds
 
 
+def _interface_clustering_min_residues(data_dir: Path) -> tuple[int, bool]:
+    """Return the ingest-frozen interface threshold and whether it is authoritative."""
+    marker_path = data_dir / "index" / "collation.json"
+    if not marker_path.is_file():
+        return DEFAULT_MIN_INTERFACE_RESIDUES, False
+    try:
+        marker = cast(dict[str, Any], json.loads(marker_path.read_text()))
+        threshold = int(marker["interface_min_residues"])
+    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise ValueError(
+            "collated interface annotations do not record "
+            "interface.min_interface_residues"
+        ) from exc
+    if threshold < 1:
+        raise ValueError("collated interface minimum must be positive")
+    return threshold, True
+
+
+def _validate_interface_clustering_universe(
+    data_dir: Path, *, min_interface_residues: int
+) -> None:
+    """Ensure clustering sees the same residue-filtered universe as ingest."""
+    import duckdb
+
+    annotation_path = data_dir / "index" / "interface_annotation_table.parquet"
+    row = duckdb.sql(
+        dedent(
+            f"""
+            SELECT count(*)
+            FROM read_parquet('{annotation_path.as_posix()}')
+            WHERE len(interface_chain_1_residue_numbers) < {min_interface_residues}
+               OR len(interface_chain_2_residue_numbers) < {min_interface_residues}
+            """
+        )
+    ).fetchone()
+    invalid_count = int(row[0]) if row is not None else 0
+    if invalid_count:
+        raise ValueError(
+            f"interface annotation contains {invalid_count} rows below the frozen "
+            f"minimum of {min_interface_residues} residues per side"
+        )
+
+
 def plan_clustering(
     data_dir: Path,
     *,
@@ -2251,6 +2295,17 @@ def plan_clustering(
         thresholds=thresholds,
         entity_type=entity_type,
     )
+    interface_min_residues: int | None = None
+    if entity_type == "interface":
+        (
+            interface_min_residues,
+            threshold_is_frozen,
+        ) = _interface_clustering_min_residues(data_dir)
+        if threshold_is_frozen:
+            _validate_interface_clustering_universe(
+                data_dir,
+                min_interface_residues=interface_min_residues,
+            )
     if entity_type == "interface" or any(
         metric != "tanimoto_similarity_ecfp4_1024" for metric in selected_metrics
     ):
@@ -2275,6 +2330,8 @@ def plan_clustering(
         "thresholds": selected_thresholds,
         "symmetric_plan_hash": symmetric_plan["plan_hash"],
     }
+    if interface_min_residues is not None:
+        cluster_selection["min_interface_residues"] = interface_min_residues
     prior_selection: dict[str, Any] | None = None
     if cluster_plan_path.is_file():
         try:
@@ -2312,6 +2369,7 @@ def plan_clustering(
         "entity_type": entity_type,
         "metrics": selected_metrics,
         "thresholds": selected_thresholds,
+        "min_interface_residues": interface_min_residues,
         "source_batch_size": source_batch_size,
         "symmetric_bucket_count": symmetric_bucket_count,
         "symmetric_fragment_batch_count": len(symmetric_plan["batches"]),
@@ -2586,6 +2644,23 @@ def _scoring_config(
             "mmseqs": {"max_seqs": max_seqs, "min_seq_id": 0.0},
         },
         cached=False,
+    )
+
+
+def _scoring_config_from_plan(data_dir: Path, plan: Mapping[str, Any]) -> Any:
+    """Build config before or after derived-score batch limits are planned."""
+    protein_limit = plan.get("score_max_query_protein_chains")
+    ligand_limit = plan.get("score_max_query_proper_ligand_chains")
+    if (protein_limit is None) != (ligand_limit is None):
+        raise ValueError("protein scoring plan contains incomplete score limits")
+    if protein_limit is None:
+        return _scoring_config(data_dir, int(plan["max_seqs"]))
+    assert ligand_limit is not None
+    return _scoring_config(
+        data_dir,
+        int(plan["max_seqs"]),
+        max_query_protein_chains=int(protein_limit),
+        max_query_proper_ligand_chains=int(ligand_limit),
     )
 
 
@@ -4663,14 +4738,7 @@ def main() -> None:
         result = {"status": "complete", "shards": shards}
     else:
         plan = _load_plan(data_dir)
-        cfg = _scoring_config(
-            data_dir,
-            int(plan["max_seqs"]),
-            max_query_protein_chains=int(plan["score_max_query_protein_chains"]),
-            max_query_proper_ligand_chains=int(
-                plan["score_max_query_proper_ligand_chains"]
-            ),
-        )
+        cfg = _scoring_config_from_plan(data_dir, plan)
         scratch_dir = args.scratch_dir.resolve()
         scratch_dir.mkdir(exist_ok=True, parents=True)
         if args.command == "collate-alignments":

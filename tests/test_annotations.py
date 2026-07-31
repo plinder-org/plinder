@@ -12,7 +12,9 @@ from plinder.data.annotations.cif_utils import read_mmcif_container
 from plinder.data.annotations.get_ligand_validation import EntryValidation
 from plinder.data.annotations.interaction_utils import get_covalent_connections
 from plinder.data.annotations.interface_utils import (
+    DEFAULT_MIN_INTERFACE_RESIDUES,
     INTERFACE_ANNOTATION_SCHEMA,
+    MIN_INTERFACE_RESIDUES_METADATA_KEY,
     detect_protein_interfaces,
     interface_system_id,
     protein_interfaces_to_table,
@@ -82,6 +84,7 @@ def test_detect_protein_interfaces_uses_canonical_chain_order_and_residue_maps()
             "B": _interface_test_chain([10, 11, 12]),
         },
         contact_radius=1.5,
+        min_interface_residues=3,
     )
 
     assert len(interfaces) == 1
@@ -137,7 +140,18 @@ def test_empty_protein_interface_table_retains_release_schema():
     table = protein_interfaces_to_table([])
 
     assert table.num_rows == 0
-    assert table.schema == INTERFACE_ANNOTATION_SCHEMA
+    assert table.schema.equals(INTERFACE_ANNOTATION_SCHEMA, check_metadata=False)
+    assert table.schema.metadata == {
+        MIN_INTERFACE_RESIDUES_METADATA_KEY: str(
+            DEFAULT_MIN_INTERFACE_RESIDUES
+        ).encode()
+    }
+
+
+def test_protein_interface_table_freezes_custom_ingest_threshold():
+    table = protein_interfaces_to_table([], min_interface_residues=11)
+
+    assert table.schema.metadata == {MIN_INTERFACE_RESIDUES_METADATA_KEY: b"11"}
 
 
 def test_ccd_name_sorter():

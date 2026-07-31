@@ -274,7 +274,7 @@ class InterfaceConfig:
 
     contact_radius: float = 10.0
     min_chain_length: int = 12
-    min_interface_residues: int = 3
+    min_interface_residues: int = 7
 
     def __post_init__(self) -> None:
         if self.contact_radius <= 0:
