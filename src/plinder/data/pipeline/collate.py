@@ -24,8 +24,9 @@ from plinder.data.annotations.interface_utils import (
     INTERFACE_ANNOTATION_SCHEMA,
     min_interface_residues_from_schema,
 )
+from plinder.data.pipeline.ingest import completed_entry_metrics
 
-COLLATION_VERSION = 1
+COLLATION_VERSION = 2
 STAGING_RELATIVE = Path("index/.staging/v3_collation")
 MANIFEST_NAME = "entries.parquet"
 PLAN_NAME = "plan.json"
@@ -239,10 +240,15 @@ def _entry_manifest_row(data_dir: Path, entry_dir: Path) -> dict[str, Any]:
     if annotation_path.is_file():
         if pq.ParquetFile(annotation_path).metadata.num_rows < 1:
             raise ValueError(f"ligand annotation is empty for V3 entry {pdb_id}")
-    elif pq.ParquetFile(paths["interface"]).metadata.num_rows < 1:
-        raise ValueError(
-            f"materialized V3 entry {pdb_id} has no ligand or interface rows"
-        )
+    else:
+        if pq.ParquetFile(paths["interface"]).metadata.num_rows < 1:
+            raise ValueError(
+                f"materialized V3 entry {pdb_id} has no ligand or interface rows"
+            )
+        if completed_entry_metrics(data_dir, pdb_id) is None:
+            raise ValueError(
+                f"interface-only V3 entry {pdb_id} has no successful ingest marker"
+            )
     row: dict[str, Any] = {
         "pdb_id": pdb_id,
         "code": code,
@@ -898,10 +904,13 @@ def _validate_final_tables(
     paths: dict[str, Path],
     *,
     expected_counts: dict[str, int],
+    min_interface_residues: int,
     threads: int,
     memory_limit: str,
     scratch_dir: Path | None,
 ) -> dict[str, Any]:
+    if min_interface_residues < 1:
+        raise ValueError("minimum interface residues must be positive")
     connection = duckdb.connect()
     try:
         _configure_duckdb(
@@ -1002,8 +1011,10 @@ def _validate_final_tables(
                 _fetch_scalar(
                     connection,
                     "SELECT count(*) FROM interfaces WHERE "
-                    "len(interface_chain_1_residue_numbers) < 3 OR "
-                    "len(interface_chain_2_residue_numbers) < 3",
+                    "len(interface_chain_1_residue_numbers) < "
+                    f"{min_interface_residues} OR "
+                    "len(interface_chain_2_residue_numbers) < "
+                    f"{min_interface_residues}",
                 )
             ),
             "mapping_length": int(
@@ -1236,6 +1247,7 @@ def finalize_collation(
         validation = _validate_final_tables(
             temporary_paths,
             expected_counts=expected_counts,
+            min_interface_residues=int(plan["interface_min_residues"]),
             threads=threads,
             memory_limit=memory_limit,
             scratch_dir=scratch_dir,
@@ -1464,6 +1476,7 @@ def repair_collation(
         validation = _validate_final_tables(
             validation_paths,
             expected_counts=expected_counts,
+            min_interface_residues=installed_interface_min_residues,
             threads=threads,
             memory_limit=memory_limit,
             scratch_dir=scratch_dir,

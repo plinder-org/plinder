@@ -2,6 +2,7 @@
 # Distributed under the terms of the Apache License 2.0
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import time
@@ -88,6 +89,30 @@ STAGES = [
     "make_linked_structures",
     "score_linked_structures",
 ]
+
+
+def _file_content_signature(path: Path) -> dict[str, int | str]:
+    """Return a stable signature for a createdb file manifest."""
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            digest.update(chunk)
+    return {"size": path.stat().st_size, "sha256": digest.hexdigest()}
+
+
+def _read_json(path: Path) -> dict[str, Any] | None:
+    try:
+        payload = json.loads(path.read_text())
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    temporary.replace(path)
 
 
 def scatter_download_rcsb_files(
@@ -241,26 +266,38 @@ def make_dbs(
         tmp_dir.mkdir(exist_ok=True, parents=True)
         database_path = output_dir / database_type
         complete = databases.created_database_is_complete(database_path, database_type)
-        if create and (force_update or not complete):
+        source_signature = (
+            _file_content_signature(source)
+            if database_type == "foldseek" and source.is_file()
+            else None
+        )
+        input_marker = output_dir / f"{database_type}.createdb-input.json"
+        source_is_current = (
+            source_signature is None or _read_json(input_marker) == source_signature
+        )
+        rebuild = force_update or not complete or not source_is_current
+        if create and rebuild:
+            working_marker = working_output_dir / f"{database_type}.createdb-input.json"
+            working_marker.unlink(missing_ok=True)
             databases.create_db(
                 source,
                 working_output_dir,
                 database_type,
                 threads=cpu,
             )
+            if source_signature is not None:
+                _write_json_atomic(working_marker, source_signature)
         elif create:
             LOG.info(f"make_dbs: reusing completed {database_path}")
         if index:
-            index_output_dir = (
-                working_output_dir if force_update or not complete else output_dir
-            )
+            index_output_dir = working_output_dir if rebuild else output_dir
             databases.create_db_index(
                 index_output_dir,
                 database_type,
                 tmp_dir=tmp_dir,
                 threads=cpu,
             )
-        if build_dir is not None and create and (force_update or not complete):
+        if build_dir is not None and create and rebuild:
             working_database = working_output_dir / database_type
             if not databases.created_database_is_complete(
                 working_database, database_type
@@ -279,6 +316,7 @@ def scatter_make_entries(
     pdb_ids: list[str],
     force_update: bool,
     discovery_threads: int = 8,
+    interface_min_residues: int = 7,
 ) -> list[list[str]]:
     """Discover and size-balance source entries for V3 annotation."""
     selected_pdb_ids = [normalize_pdb_id(pdb_id) for pdb_id in pdb_ids]
@@ -295,7 +333,12 @@ def scatter_make_entries(
         entries = [
             entry
             for entry in entries
-            if completed_entry_metrics(data_dir, entry.pdb_id) is None
+            if completed_entry_metrics(
+                data_dir,
+                entry.pdb_id,
+                expected_interface_min_residues=interface_min_residues,
+            )
+            is None
         ]
     LOG.info(f"scatter_make_entries: found {len(entries)} PDBs in {cif_root}")
     return [
@@ -506,20 +549,18 @@ def make_sub_dbs(
     entries = None
     identifiers_by_database = None
     if set(sub_databases) == {"holo"}:
-        chains = pd.read_parquet(
+        chains = _protein_scoring_chains(data_dir)
+        chain_auth_ids = pd.read_parquet(
             data_dir / "index" / "entry_chains.parquet",
-            columns=[
-                "entry_pdb_id",
-                "chain_auth_id",
-                "chain_receptor_type",
-                "chain_is_holo",
-            ],
+            columns=["entry_pdb_id", "chain_asym_id", "chain_auth_id"],
         )
-        chains = chains[
-            chains["chain_receptor_type"].fillna("").astype(str).eq("protein")
-            & chains["chain_is_holo"].fillna(False).astype(bool)
-            & chains["chain_auth_id"].notna()
-        ]
+        chains = chains.merge(
+            chain_auth_ids,
+            on=["entry_pdb_id", "chain_asym_id"],
+            how="left",
+            validate="one_to_one",
+        )
+        chains = chains[chains["chain_auth_id"].notna()]
         identifiers_by_database = {
             "holo_foldseek": {
                 f"pdb_0000{row.entry_pdb_id}_xyz-enrich_{row.chain_auth_id}"

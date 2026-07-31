@@ -5,7 +5,11 @@ import json
 from pathlib import Path
 
 import pandas as pd
+import pyarrow.parquet as pq
 import pytest
+from plinder.data.annotations.interface_utils import (
+    MIN_INTERFACE_RESIDUES_METADATA_KEY,
+)
 from plinder.data.pipeline import ingest
 from plinder.data.pipeline.ingest import (
     REQUIRED_REFERENCE_FILES,
@@ -66,9 +70,14 @@ def _write_fake_sidecars(
         "interface_chain_2_residue_indices",
         "interface_num_contact_residue_pairs",
     ]
+    interface_path = entry_dir / "interfaces.parquet"
     pd.DataFrame(interfaces or [], columns=interface_columns).to_parquet(
-        entry_dir / "interfaces.parquet", index=False
+        interface_path, index=False
     )
+    table = pq.read_table(interface_path)
+    metadata = dict(table.schema.metadata or {})
+    metadata[MIN_INTERFACE_RESIDUES_METADATA_KEY] = b"7"
+    pq.write_table(table.replace_schema_metadata(metadata), interface_path)
 
 
 def test_resolve_entry_paths_uses_managed_archive_layout(tmp_path: Path) -> None:
@@ -583,6 +592,7 @@ def test_batch_resumes_entries_previously_skipped_without_systems(
             {
                 "status": "skipped_no_systems",
                 "counts": {"annotation_rows": 0, "interface_rows": 0},
+                "interface_min_residues": 7,
             }
         )
     )
@@ -602,6 +612,65 @@ def test_batch_resumes_entries_previously_skipped_without_systems(
     assert not had_failures
     metrics = json.loads(metrics_path.read_text())
     assert metrics["entries"][0]["status"] == "skipped_complete"
+    assert (
+        completed_entry_metrics(
+            output_root,
+            "1abc",
+            expected_interface_min_residues=9,
+        )
+        is None
+    )
+
+
+def test_completed_entry_metrics_invalidates_interface_cutoff_changes(
+    tmp_path: Path,
+) -> None:
+    output_root = tmp_path / "output"
+    entry_path = output_root / "raw_entries/ab/1abc.parquet"
+    entry_directory = entry_path.with_suffix("")
+    ligand_path = output_root / "ligands/1abc.parquet"
+    metrics_path = output_root / "metrics/ab/ingest-one-1abc.json"
+    entry_directory.mkdir(parents=True)
+    ligand_path.parent.mkdir(parents=True)
+    metrics_path.parent.mkdir(parents=True)
+    pd.DataFrame({"system_receptor_type": ["protein"]}).to_parquet(
+        entry_path, index=False
+    )
+    _write_fake_sidecars(entry_directory, "1abc")
+    pd.DataFrame(
+        {"ligand_id": ["1abc__1.L"], "ligand_is_3d_score_able": [True]}
+    ).to_parquet(ligand_path, index=False)
+    metrics_path.write_text(
+        json.dumps(
+            {
+                "status": "complete",
+                "counts": {"annotation_rows": 1, "interface_rows": 0},
+                "outputs": {"entry_directory": str(entry_directory)},
+            }
+        )
+    )
+
+    assert (
+        completed_entry_metrics(
+            output_root,
+            "1abc",
+            expected_interface_min_residues=7,
+        )
+        == metrics_path
+    )
+    assert (
+        completed_entry_metrics(
+            output_root,
+            "1abc",
+            expected_interface_min_residues=9,
+        )
+        is None
+    )
+
+    interface_path = entry_directory / "interfaces.parquet"
+    interface_table = pq.read_table(interface_path)
+    pq.write_table(interface_table.replace_schema_metadata(None), interface_path)
+    assert completed_entry_metrics(output_root, "1abc") is None
 
 
 def test_pre_interface_skip_is_not_considered_complete(tmp_path: Path) -> None:

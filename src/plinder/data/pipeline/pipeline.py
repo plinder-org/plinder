@@ -149,6 +149,7 @@ class IngestPipeline:
             pdb_ids=self.cfg.context.pdb_ids,
             force_update=force_update,
             discovery_threads=self.cfg.source.discovery_threads,
+            interface_min_residues=self.cfg.interface.min_interface_residues,
         )
         return chunks
 

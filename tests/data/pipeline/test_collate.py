@@ -179,6 +179,23 @@ def _write_interface_only_entry(data_dir: Path, pdb_id: str = "3ghi") -> None:
     )
     (data_dir / "raw_entries" / pdb_id[1:3] / f"{pdb_id}.parquet").unlink()
     (data_dir / "ligands" / f"{pdb_id}.parquet").unlink()
+    metrics = data_dir / "metrics" / pdb_id[1:3] / f"ingest-one-{pdb_id}.json"
+    metrics.parent.mkdir(parents=True, exist_ok=True)
+    metrics.write_text(
+        json.dumps(
+            {
+                "status": "complete",
+                "counts": {"annotation_rows": 0, "interface_rows": 1},
+                "outputs": {
+                    "entry_directory": str(
+                        data_dir / "raw_entries" / pdb_id[1:3] / pdb_id
+                    ),
+                    "entry_parquet": None,
+                    "ligand_parquet": None,
+                },
+            }
+        )
+    )
 
 
 def _set_interface_threshold(path: Path, threshold: int) -> None:
@@ -253,6 +270,57 @@ def test_collation_retains_entries_with_only_protein_interfaces(
     assert set(metadata["entry_pdb_id"]) == {"1abc", "2def", "3ghi"}
     interfaces = pd.read_parquet(tmp_path / "index/interface_annotation_table.parquet")
     assert "3ghi__1__1.A--1.B" in set(interfaces["system_id"])
+
+
+def test_collation_rejects_interface_sidecars_from_failed_ingest(
+    tmp_path: Path,
+) -> None:
+    _write_release(tmp_path)
+    _write_interface_only_entry(tmp_path)
+    metrics = tmp_path / "metrics/gh/ingest-one-3ghi.json"
+    metrics.write_text(json.dumps({"status": "failed"}))
+
+    with pytest.raises(ValueError, match="no successful ingest marker"):
+        plan_collation(tmp_path)
+
+
+def test_collation_validates_custom_interface_residue_minimum(
+    tmp_path: Path,
+) -> None:
+    _write_release(tmp_path)
+    for pdb_id in ("1abc", "2def"):
+        path = tmp_path / "raw_entries" / pdb_id[1:3] / pdb_id / "interfaces.parquet"
+        frame = pd.read_parquet(path)
+        frame["interface_chain_1_residue_numbers"] = [[1]]
+        frame["interface_chain_1_residue_indices"] = [[0]]
+        frame["interface_chain_2_residue_numbers"] = [[11]]
+        frame["interface_chain_2_residue_indices"] = [[0]]
+        frame.to_parquet(path, index=False)
+        _set_interface_threshold(path, 1)
+
+    report = run_collation(tmp_path, memory_limit="1GB")
+
+    assert report["interface_min_residues"] == 1
+
+
+def test_collation_rejects_interface_below_frozen_residue_minimum(
+    tmp_path: Path,
+) -> None:
+    _write_release(tmp_path)
+    path = tmp_path / "raw_entries/ab/1abc/interfaces.parquet"
+    frame = pd.read_parquet(path)
+    for column in (
+        "interface_chain_1_residue_numbers",
+        "interface_chain_1_residue_indices",
+        "interface_chain_2_residue_numbers",
+        "interface_chain_2_residue_indices",
+    ):
+        frame[column] = frame[column].map(lambda values: values[:6])
+    frame.to_parquet(path, index=False)
+    _set_interface_threshold(path, 7)
+
+    with pytest.raises(ValueError, match="invalid protein interfaces"):
+        run_collation(tmp_path, memory_limit="1GB")
 
 
 def test_collation_rejects_mixed_interface_thresholds(tmp_path: Path) -> None:

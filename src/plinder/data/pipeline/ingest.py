@@ -171,6 +171,7 @@ def _entry_outputs_complete(
     entry_parquet: Path,
     entry_directory: Path,
     ligand_parquet: Path,
+    expected_interface_min_residues: int | None = None,
 ) -> bool:
     """Return whether a prior per-entry run completed atomically."""
     if not metrics_path.is_file():
@@ -194,6 +195,21 @@ def _entry_outputs_complete(
         "entry_source": entry_directory / "entry_source.parquet",
     }
     if not all(path.is_file() for path in sidecars.values()):
+        return False
+    try:
+        from plinder.data.annotations.interface_utils import (
+            min_interface_residues_from_schema,
+        )
+
+        interface_min_residues = min_interface_residues_from_schema(
+            pq.read_schema(sidecars["interfaces"])
+        )
+    except (OSError, TypeError, ValueError):
+        return False
+    if (
+        expected_interface_min_residues is not None
+        and interface_min_residues != expected_interface_min_residues
+    ):
         return False
     required_columns = {
         sidecars["entry_chains"]: {
@@ -253,7 +269,12 @@ def _save_ligand_batch(**kwargs: Any) -> None:
     save_ligand_batch(**kwargs)
 
 
-def completed_entry_metrics(output_root: Path, pdb_id: str) -> Path | None:
+def completed_entry_metrics(
+    output_root: Path,
+    pdb_id: str,
+    *,
+    expected_interface_min_residues: int | None = None,
+) -> Path | None:
     """Return the metrics file when one V3 entry has a complete output set."""
     for metrics_path in entry_metrics_paths(output_root, pdb_id):
         if not metrics_path.is_file():
@@ -266,7 +287,16 @@ def completed_entry_metrics(output_root: Path, pdb_id: str) -> Path | None:
             # A pre-interface-ingest skip may actually contain a protein-only
             # interface and must be reconsidered. New skips explicitly record
             # the zero interface count.
-            if "interface_rows" in metrics.get("counts", {}):
+            if "interface_rows" not in metrics.get("counts", {}):
+                continue
+            try:
+                stored_interface_min_residues = int(metrics["interface_min_residues"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if (
+                expected_interface_min_residues is None
+                or stored_interface_min_residues == expected_interface_min_residues
+            ):
                 return metrics_path
             continue
         outputs = metrics.get("outputs", {})
@@ -284,6 +314,7 @@ def completed_entry_metrics(output_root: Path, pdb_id: str) -> Path | None:
             entry_parquet=Path(entry_parquet),
             entry_directory=Path(entry_directory),
             ligand_parquet=Path(ligand_parquet),
+            expected_interface_min_residues=expected_interface_min_residues,
         ):
             return metrics_path
     return None
@@ -332,12 +363,22 @@ def ingest_one_pdb(
     entry_directory = raw_entry_root / pdb_id
     ligand_parquet = output_root / "ligands" / f"{pdb_id}.parquet"
     metrics_path, legacy_metrics_path = entry_metrics_paths(output_root, pdb_id)
+    from plinder.data.annotations.interface_utils import (
+        DEFAULT_MIN_INTERFACE_RESIDUES,
+    )
+
+    expected_interface_min_residues = int(
+        (interface_cfg or {}).get(
+            "min_interface_residues", DEFAULT_MIN_INTERFACE_RESIDUES
+        )
+    )
     complete = any(
         _entry_outputs_complete(
             metrics_path=candidate,
             entry_parquet=entry_parquet,
             entry_directory=entry_directory,
             ligand_parquet=ligand_parquet,
+            expected_interface_min_residues=expected_interface_min_residues,
         )
         for candidate in (metrics_path, legacy_metrics_path)
     )
@@ -361,6 +402,7 @@ def ingest_one_pdb(
     summary: dict[str, Any] = {
         "pdb_id": pdb_id,
         "status": "running",
+        "interface_min_residues": expected_interface_min_residues,
         "inputs": {
             "mmcif": str(cif_file),
             "validation_xml": str(validation_file),
@@ -754,10 +796,27 @@ def ingest_pdb_batch(
     }
     started = time.perf_counter()
     had_failures = False
+    from plinder.data.annotations.interface_utils import (
+        DEFAULT_MIN_INTERFACE_RESIDUES,
+    )
+
+    expected_interface_min_residues = int(
+        (interface_cfg or {}).get(
+            "min_interface_residues", DEFAULT_MIN_INTERFACE_RESIDUES
+        )
+    )
     try:
         for pdb_id in pdb_ids:
             entry_started = time.perf_counter()
-            completed = None if force else completed_entry_metrics(output_root, pdb_id)
+            completed = (
+                None
+                if force
+                else completed_entry_metrics(
+                    output_root,
+                    pdb_id,
+                    expected_interface_min_residues=expected_interface_min_residues,
+                )
+            )
             if completed is not None:
                 payload["entries"].append(
                     {

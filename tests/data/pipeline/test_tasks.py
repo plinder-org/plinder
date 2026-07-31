@@ -2265,6 +2265,46 @@ def test_make_dbs_reuses_completed_createdb_output(tmp_path, monkeypatch) -> Non
     )
 
 
+def test_make_dbs_rebuilds_foldseek_when_input_manifest_changes(
+    tmp_path, monkeypatch
+) -> None:
+    cif_manifest = tmp_path / "foldseek-inputs.tsv"
+    cif_manifest.write_text("/nextgen/ab/1abc.cif.gz\n")
+    seqres_path = tmp_path / "pdb_seqres.txt.gz"
+    seqres_path.touch()
+    create_calls = []
+    monkeypatch.setattr(
+        tasks.databases,
+        "created_database_is_complete",
+        lambda *_args: True,
+    )
+    monkeypatch.setattr(
+        tasks.databases,
+        "create_db",
+        lambda source, output, kind, threads: create_calls.append(
+            (source, output, kind, threads)
+        ),
+    )
+
+    kwargs = {
+        "data_dir": tmp_path,
+        "sub_databases": ["holo"],
+        "cpu": 2,
+        "cif_root": cif_manifest,
+        "seqres_path": seqres_path,
+        "index": False,
+    }
+    tasks.make_dbs(**kwargs)
+    tasks.make_dbs(**kwargs)
+    cif_manifest.write_text("/nextgen/ab/1abc.cif.gz\n/nextgen/de/2def.cif.gz\n")
+    tasks.make_dbs(**kwargs)
+
+    assert create_calls == [
+        (cif_manifest, tmp_path / "dbs/foldseek", "foldseek", 2),
+        (cif_manifest, tmp_path / "dbs/foldseek", "foldseek", 2),
+    ]
+
+
 def test_get_scorer_uses_configured_search_limits(tmp_path) -> None:
     from plinder.data.pipeline import utils
     from plinder.data.pipeline.config import get_config
@@ -3949,18 +3989,41 @@ def test_make_sub_dbs_loads_normalized_entry_chain_index(tmp_path, monkeypatch):
     }
 
 
-def test_make_holo_sub_dbs_selects_only_protein_receptor_chains(tmp_path, monkeypatch):
+def test_make_holo_sub_dbs_selects_protein_receptor_and_interface_chains(
+    tmp_path, monkeypatch
+):
     index_dir = tmp_path / "index"
     index_dir.mkdir()
     (tmp_path / "dbs").mkdir()
     pd.DataFrame(
         {
             "entry_pdb_id": ["1abc", "1abc", "2def"],
+            "chain_asym_id": ["A", "B", "N"],
             "chain_auth_id": ["X", "Y", "Z"],
             "chain_receptor_type": ["protein", "protein", "dna"],
             "chain_is_holo": [True, False, True],
         }
     ).to_parquet(index_dir / "entry_chains.parquet", index=False)
+    pq.write_table(
+        pa.Table.from_pylist(
+            [
+                {
+                    "entry_pdb_id": "1abc",
+                    "system_id": "1abc__1__1.A--1.B",
+                    "system_biounit_id": "1",
+                    "interface_chain_1": "1.A",
+                    "interface_chain_2": "1.B",
+                    "interface_chain_1_residue_numbers": [1, 2, 3],
+                    "interface_chain_1_residue_indices": [0, 1, 2],
+                    "interface_chain_2_residue_numbers": [4, 5, 6],
+                    "interface_chain_2_residue_indices": [3, 4, 5],
+                    "interface_num_contact_residue_pairs": 3,
+                }
+            ],
+            schema=INTERFACE_ANNOTATION_SCHEMA,
+        ),
+        index_dir / "interface_annotation_table.parquet",
+    )
 
     observed = {}
     lookup_calls = []
@@ -3983,7 +4046,10 @@ def test_make_holo_sub_dbs_selects_only_protein_receptor_chains(tmp_path, monkey
 
     assert observed["entries"] is None
     assert observed["kwargs"]["identifiers_by_database"] == {
-        "holo_foldseek": {"pdb_00001abc_xyz-enrich_X"},
-        "holo_mmseqs": {"1abc_X"},
+        "holo_foldseek": {
+            "pdb_00001abc_xyz-enrich_X",
+            "pdb_00001abc_xyz-enrich_Y",
+        },
+        "holo_mmseqs": {"1abc_X", "1abc_Y"},
     }
     assert lookup_calls == [{"data_dir": tmp_path, "scratch_dir": None, "threads": 1}]

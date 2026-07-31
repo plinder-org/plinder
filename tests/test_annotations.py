@@ -8,7 +8,11 @@ import numpy as np
 import pandas as pd
 import pytest
 from plinder.data.annotations.aggregate_annotations import Entry
-from plinder.data.annotations.cif_utils import read_mmcif_container
+from plinder.data.annotations.cif_utils import (
+    build_biounit,
+    read_mmcif_container,
+    read_mmcif_file,
+)
 from plinder.data.annotations.get_ligand_validation import EntryValidation
 from plinder.data.annotations.interaction_utils import get_covalent_connections
 from plinder.data.annotations.interface_utils import (
@@ -134,6 +138,153 @@ def test_interface_system_id_is_unordered_and_rejects_self_interfaces():
     )
     with pytest.raises(ValueError, match="two distinct"):
         interface_system_id("1abc", "2", "1.A", "1.A")
+
+
+def _pinder_interface_entry(test_dir: Path, relative_path: str) -> Entry:
+    """Load one compact NextGen regression structure ported from Pinder."""
+    return Entry.from_cif_file(
+        test_dir / "interfaces" / relative_path,
+        min_polymer_size=12,
+        interface_min_chain_length=12,
+        interface_min_residues=DEFAULT_MIN_INTERFACE_RESIDUES,
+    )
+
+
+def _assert_interface_residue_mappings(entry: Entry) -> None:
+    for interface in entry.interfaces:
+        assert interface.chain_1 < interface.chain_2
+        for instance_chain, residue_numbers, residue_indices in (
+            (
+                interface.chain_1,
+                interface.chain_1_residue_numbers,
+                interface.chain_1_residue_indices,
+            ),
+            (
+                interface.chain_2,
+                interface.chain_2_residue_numbers,
+                interface.chain_2_residue_indices,
+            ),
+        ):
+            asym_id = instance_chain.split(".", maxsplit=1)[1]
+            assert len(residue_numbers) >= DEFAULT_MIN_INTERFACE_RESIDUES
+            assert residue_indices == tuple(
+                entry.chains[asym_id].residues[number].index
+                for number in residue_numbers
+            )
+
+
+def test_pinder_7cm8_homodimer_interface_regression(test_dir: Path) -> None:
+    entry = _pinder_interface_entry(
+        test_dir,
+        "cm/pdb_00007cm8/pdb_00007cm8_xyz-enrich.cif.gz",
+    )
+
+    assert [interface.system_id for interface in entry.interfaces] == [
+        "7cm8__1__1.A--2.A"
+    ]
+    assert entry.interfaces[0].chain_1_residue_numbers == (
+        entry.interfaces[0].chain_2_residue_numbers
+    )
+    _assert_interface_residue_mappings(entry)
+
+
+def test_pinder_7cma_label_asym_interface_regression(test_dir: Path) -> None:
+    entry = _pinder_interface_entry(
+        test_dir,
+        "cm/pdb_00007cma/pdb_00007cma_xyz-enrich.cif.gz",
+    )
+
+    assert entry.chains["A"].auth_id == "A"
+    assert entry.chains["B"].auth_id == "C"
+    assert [interface.system_id for interface in entry.interfaces] == [
+        "7cma__1__1.A--1.B"
+    ]
+    _assert_interface_residue_mappings(entry)
+
+
+def test_pinder_6wwe_enumerates_all_three_interfaces(test_dir: Path) -> None:
+    entry = _pinder_interface_entry(
+        test_dir,
+        "ww/pdb_00006wwe/pdb_00006wwe_xyz-enrich.cif.gz",
+    )
+
+    assert [interface.system_id for interface in entry.interfaces] == [
+        "6wwe__1__1.A--1.B",
+        "6wwe__1__1.A--1.C",
+        "6wwe__1__1.B--1.C",
+    ]
+    _assert_interface_residue_mappings(entry)
+
+
+def test_pinder_4wwi_heterodimer_interface_regression(test_dir: Path) -> None:
+    entry = _pinder_interface_entry(
+        test_dir,
+        "ww/pdb_00004wwi/pdb_00004wwi_xyz-enrich.cif.gz",
+    )
+
+    assert [interface.system_id for interface in entry.interfaces] == [
+        "4wwi__1__1.A--1.D",
+        "4wwi__2__1.B--1.E",
+        "4wwi__3__1.C--1.F",
+    ]
+    _assert_interface_residue_mappings(entry)
+
+
+def test_pinder_7nsg_threefold_interface_regression(test_dir: Path) -> None:
+    entry = _pinder_interface_entry(
+        test_dir,
+        "ns/pdb_00007nsg/pdb_00007nsg_xyz-enrich.cif.gz",
+    )
+
+    assert [interface.system_id for interface in entry.interfaces] == [
+        "7nsg__1__1.A--1.B",
+        "7nsg__1__1.A--1.C",
+        "7nsg__1__1.B--1.C",
+    ]
+    _assert_interface_residue_mappings(entry)
+
+
+def test_pinder_1bo0_monomer_has_no_protein_interface(test_dir: Path) -> None:
+    entry = _pinder_interface_entry(
+        test_dir,
+        "bo/pdb_00001bo0/pdb_00001bo0_xyz-enrich.cif.gz",
+    )
+
+    assert entry.interfaces == []
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "expected_instances", "expected_asym_ids"),
+    [
+        ("bd/pdb_00007bdu/pdb_00007bdu_xyz-enrich.cif.gz", 7, 7),
+        ("km/pdb_00007kmx/pdb_00007kmx_xyz-enrich.cif.gz", 840, 14),
+        # Pinder's Gemmi path yielded 34 chains here. The deposited assembly
+        # applies four operators to all 13 listed asym IDs, so Plinder's
+        # Biotite path intentionally retains all 52 instances.
+        ("a7/pdb_00002a79/pdb_00002a79_xyz-enrich.cif.gz", 52, 13),
+        ("rw/pdb_00006rw4/pdb_00006rw4_xyz-enrich.cif.gz", 125, 125),
+        ("y2/pdb_00002y26/pdb_00002y26_xyz-enrich.cif.gz", 120, 40),
+    ],
+)
+def test_pinder_biological_assembly_expansion_regression(
+    test_dir: Path,
+    relative_path: str,
+    expected_instances: int,
+    expected_asym_ids: int,
+) -> None:
+    cif_file = read_mmcif_file(test_dir / "interfaces" / relative_path)
+    biounit = build_biounit(cif_file, "1")
+    instance_chains = set(str(value) for value in biounit.chain_id)
+    asym_ids = {
+        instance_chain.split(".", maxsplit=1)[1] for instance_chain in instance_chains
+    }
+
+    assert len(instance_chains) == expected_instances
+    assert len(asym_ids) == expected_asym_ids
+    assert all(
+        instance_chain.split(".", maxsplit=1)[0].isdigit()
+        for instance_chain in instance_chains
+    )
 
 
 def test_empty_protein_interface_table_retains_release_schema():

@@ -278,6 +278,8 @@ def calculate_interface_similarity_scores(
                     if query_number in query_residues
                     and target_number in target_residues
                 }
+                if not matched_query_residues:
+                    continue
                 value = len(matched_query_residues) / len(query_residues)
                 key = (source, query_id, target_id, query_side, target_side)
                 coverage[key] = max(coverage.get(key, 0.0), value)

@@ -769,6 +769,26 @@ def test_interface_scores_choose_swapped_assignment_and_best_backend() -> None:
     )
     assert incomplete.empty
 
+    unrelated = pd.DataFrame(
+        [
+            {
+                "query_entry": "1abc",
+                "target_entry": "2def",
+                "query_chain_mapped": query_chain,
+                "target_chain_mapped": target_chain,
+                "source": "foldseek",
+                "query_selected_residue_numbers": [999],
+                "target_selected_residue_numbers": [999],
+            }
+            for query_chain, target_chain in (("A", "X"), ("B", "Y"))
+        ]
+    )
+    assert calculate_interface_similarity_scores(
+        unrelated,
+        query_interfaces={query.id: query},
+        target_interfaces={target.id: target},
+    ).empty
+
 
 def test_entry_views_support_interface_only_entries() -> None:
     interface_id = "1abc__1__1.A--2.B"
