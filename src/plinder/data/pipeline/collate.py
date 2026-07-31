@@ -25,6 +25,7 @@ STAGING_RELATIVE = Path("index/.staging/v3_collation")
 MANIFEST_NAME = "entries.parquet"
 PLAN_NAME = "plan.json"
 FINAL_MARKER_NAME = "collation.json"
+REPAIR_REQUIRED_STATUS = "requires_downstream_repair"
 RETIRED_ENRICHMENT_MARKERS = ("ecod", "panther", "kinase")
 SYSTEM_LIGAND_FLAGS = (
     "lipinski",
@@ -1179,22 +1180,58 @@ def repair_collation(
         marker.unlink(missing_ok=True)
         final_paths["annotation"].unlink(missing_ok=True)
         temporary_annotation.replace(final_paths["annotation"])
+        # The nonredundant index and every release-only ligand enrichment were
+        # derived from the pre-repair annotation.  Do not leave a stale
+        # nonredundant table looking publishable while scores, fingerprints,
+        # clusters, and final index enrichment are being repaired.
+        (data_dir / "index" / "annotation_table_nonredundant.parquet").unlink(
+            missing_ok=True
+        )
     finally:
         for path in [temporary_annotation, *replacement_paths.values()]:
             path.unlink(missing_ok=True)
 
     report: dict[str, Any] = {
         "version": COLLATION_VERSION,
-        "status": "complete",
+        "status": REPAIR_REQUIRED_STATUS,
         "mode": "targeted_repair",
         "repaired_entry_count": len(selected),
         "repaired_entry_digest": hashlib.sha256(
             ("\n".join(selected) + "\n").encode("utf-8")
         ).hexdigest(),
         "outputs": {name: str(path) for name, path in final_paths.items()},
+        "required_downstream_artifacts": [
+            "ligand_similarity",
+            "scores",
+            "ligand_clusters",
+            "annotation_table_nonredundant",
+        ],
         **validation,
     }
     _write_json_atomic(data_dir / "index" / FINAL_MARKER_NAME, report)
+    return report
+
+
+def finalize_repair_marker(data_dir: Path) -> dict[str, Any] | None:
+    """Mark a targeted collation repair complete after final index enrichment."""
+    marker_path = data_dir / "index" / FINAL_MARKER_NAME
+    if not marker_path.is_file():
+        return None
+    report = cast(dict[str, Any], json.loads(marker_path.read_text()))
+    if (
+        report.get("mode") != "targeted_repair"
+        or report.get("status") != REPAIR_REQUIRED_STATUS
+    ):
+        return None
+    nonredundant = data_dir / "index" / "annotation_table_nonredundant.parquet"
+    if not nonredundant.is_file():
+        raise FileNotFoundError(
+            "targeted repair cannot be finalized before rebuilding "
+            "annotation_table_nonredundant.parquet"
+        )
+    report["status"] = "complete"
+    report["downstream_repair_complete"] = True
+    _write_json_atomic(marker_path, report)
     return report
 
 

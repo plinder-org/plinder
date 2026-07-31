@@ -290,14 +290,43 @@ def compute_ligand_fingerprints(
 
     output_dir = data_dir / "fingerprints"
     output_dir.mkdir(exist_ok=True, parents=True)
+    fingerprint_path = output_dir / "ligands_per_smiles.parquet"
+    score_basis_columns = [
+        "ligand_smiles_id",
+        smiles_column,
+        "fingerprint",
+    ]
+    score_basis_is_unchanged = False
+    if fingerprint_path.is_file():
+        try:
+            existing_metadata = pq.read_schema(fingerprint_path).metadata or {}
+            existing_basis = pd.read_parquet(
+                fingerprint_path,
+                columns=score_basis_columns,
+            )
+            score_basis_is_unchanged = all(
+                existing_metadata.get(key) == value
+                for key, value in ECFP4_PARQUET_METADATA.items()
+            ) and existing_basis.equals(ligands_unique[score_basis_columns])
+        except (OSError, ValueError):
+            score_basis_is_unchanged = False
+    temporary_path = fingerprint_path.with_suffix(".parquet.tmp")
     write_ecfp4_fingerprint_table(
         ligands_unique,
-        output_dir / "ligands_per_smiles.parquet",
+        temporary_path,
     )
+    temporary_path.replace(fingerprint_path)
 
-    # Fingerprints define the node universe, so any old score shards are stale.
-    for path in (data_dir / "ligand_scores").glob("*.parquet"):
-        path.unlink()
+    # Occurrence counts and cofactor annotations are always derived anew.
+    (output_dir / "ligand_similarity_annotations.parquet").unlink(missing_ok=True)
+    if score_basis_is_unchanged:
+        LOG.info("ligand fingerprint score basis is unchanged; retaining score shards")
+    else:
+        # Fingerprints define both IDs and the node universe, so old scores are
+        # usable only when the complete ordered score basis is identical.
+        LOG.info("ligand fingerprint score basis changed; removing score shards")
+        for path in (data_dir / "ligand_scores").glob("*.parquet"):
+            path.unlink()
 
 
 def ligand_scores(

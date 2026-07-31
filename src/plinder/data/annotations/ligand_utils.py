@@ -552,7 +552,7 @@ def get_ccd_synonyms(data_dir: Path) -> dict[str, str]:
     ccd_df = ccd_df[~ccd_df["binder_id"].apply(lig_has_dummies)]
     # map all present and origianl codes to a canonical CCD code
     ccd_synonym_dict = ccd_df.set_index("binder_id")["ccd_code"].to_dict()
-    return ccd_synonym_dict
+    return ty.cast(dict[str, str], ccd_synonym_dict)
 
 
 # lazy evaluate data fetches referenced as module globals

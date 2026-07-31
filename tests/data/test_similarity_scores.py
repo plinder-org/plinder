@@ -530,9 +530,13 @@ def test_ligand_scoring_inputs_include_only_proper_holo_ligands() -> None:
     assert ligands["ligand_id"].tolist() == ["1abc__1__1.L"]
 
 
-def test_entry_views_accept_annotation_dataframe(cif_2gdo, tmp_path) -> None:
+def test_entry_views_accept_annotation_dataframe(
+    cif_2gdo, tmp_path, monkeypatch
+) -> None:
+    from plinder.data.annotations import ligand_utils
     from plinder.data.annotations.aggregate_annotations import Entry
 
+    monkeypatch.setattr(ligand_utils, "BINDING_AFFINITY", {})
     entry = Entry.from_cif_file(cif_2gdo)
     annotation = entry.to_df()
     assert not any(column.startswith("entry_chains_") for column in annotation)
@@ -1878,6 +1882,17 @@ def test_ligand_similarity_pipeline_does_not_write_per_system_mapping(
 
     score_dir = tmp_path / "ligand_scores"
     score_dir.mkdir()
+    retained_score = score_dir / "retained.parquet"
+    retained_score.write_bytes(b"unchanged fingerprint score basis")
+    stale_annotations = (
+        tmp_path / "fingerprints" / "ligand_similarity_annotations.parquet"
+    )
+    stale_annotations.write_bytes(b"stale")
+    compute_ligand_fingerprints(data_dir=tmp_path)
+    assert retained_score.is_file()
+    assert not stale_annotations.exists()
+    retained_score.unlink()
+
     ligand_scores(
         ligand_ids=unique_ligands["ligand_smiles_id"].tolist(),
         data_dir=tmp_path,
@@ -1896,6 +1911,13 @@ def test_ligand_similarity_pipeline_does_not_write_per_system_mapping(
         annotations.loc["c1ccccc1", "ligand_tanimoto_ecfp4_1024_90_cluster_num_pdb_ids"]
         == 1
     )
+
+    retained_score.write_bytes(b"changed fingerprint score basis")
+    index = pd.read_parquet(index_dir / "annotation_table.parquet")
+    index.loc[index.index[-1], "ligand_rdkit_canonical_smiles"] = "CCN"
+    index.to_parquet(index_dir / "annotation_table.parquet", index=False)
+    compute_ligand_fingerprints(data_dir=tmp_path)
+    assert not list(score_dir.glob("*.parquet"))
 
 
 def _system(pdb_id: str, ligands: list[LigandView]) -> SystemView:

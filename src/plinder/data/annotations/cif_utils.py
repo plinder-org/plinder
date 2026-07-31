@@ -678,6 +678,8 @@ def _is_known_compound(comp_id: str, atom_names: set[str] | None = None) -> bool
         from plinder.data.annotations.ligand_utils import _get_ccd_atomarray
 
         ref = _get_ccd_atomarray(comp_id)
+        if ref is None:
+            return False
         if atom_names is not None:
             ref_heavy = ref[~is_hydrogen_isotope(ref.element)]
             ref_names = set(ref_heavy.atom_name)

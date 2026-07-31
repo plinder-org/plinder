@@ -12,6 +12,7 @@ from plinder.data.pipeline import collate as collate_module
 from plinder.data.pipeline.collate import (
     collate_shard,
     finalize_collation,
+    finalize_repair_marker,
     plan_collation,
     planned_code_batch,
     repair_collation,
@@ -201,6 +202,10 @@ def test_targeted_repair_preserves_unaffected_release_only_columns(
         {"1abc": "old", "2def": "keep"}
     )
     installed.to_parquet(tmp_path / "index/annotation_table.parquet", index=False)
+    installed.iloc[[0]].to_parquet(
+        tmp_path / "index/annotation_table_nonredundant.parquet",
+        index=False,
+    )
     chain_path = tmp_path / "index/entry_chains.parquet"
     before_chain_stat = chain_path.stat()
 
@@ -211,7 +216,9 @@ def test_targeted_repair_preserves_unaffected_release_only_columns(
     report = repair_collation(tmp_path, ["1ABC", "1abc"], threads=2, memory_limit="1GB")
 
     assert report["mode"] == "targeted_repair"
+    assert report["status"] == "requires_downstream_repair"
     assert report["repaired_entry_count"] == 1
+    assert not (tmp_path / "index/annotation_table_nonredundant.parquet").exists()
     repaired = pd.read_parquet(tmp_path / "index/annotation_table.parquet")
     assert repaired.loc[repaired["entry_pdb_id"].eq("1abc"), "entry_pH"].eq(6.5).all()
     assert (
@@ -235,6 +242,17 @@ def test_targeted_repair_preserves_unaffected_release_only_columns(
         before_chain_stat.st_size,
         before_chain_stat.st_mtime_ns,
     )
+
+    with pytest.raises(FileNotFoundError, match="nonredundant"):
+        finalize_repair_marker(tmp_path)
+    repaired.iloc[[0]].to_parquet(
+        tmp_path / "index/annotation_table_nonredundant.parquet",
+        index=False,
+    )
+    finalized_report = finalize_repair_marker(tmp_path)
+    assert finalized_report is not None
+    assert finalized_report["status"] == "complete"
+    assert finalized_report["downstream_repair_complete"] is True
 
 
 def test_targeted_repair_rejects_chain_metadata_changes(tmp_path: Path) -> None:
