@@ -168,27 +168,41 @@ protein similarity scoring for all `plinder` systems.
 Once the protein similarity scores are generated, we run
 component and community clustering.
 
-- `tasks.make_component_reductions`: creates resumable, sharded weak/strong component reductions for all configured thresholds
-- `tasks.merge_component_reductions`: publishes exact ligand component labels from those reductions
-- `tasks.make_communities`: creates communities within the published weak components
+- `tasks.make_component_reductions`: creates resumable, sharded connectivity
+  reductions for all configured thresholds after taking the minimum of both
+  directional ligand scores
+- `tasks.merge_component_reductions`: publishes exact undirected connected
+  components and retains any-direction connectivity for optional sampling covers
+- `tasks.make_communities`: creates deterministic greedy centroid communities
   - This is a distributed task that is called in parallel for individual tuples of metric and threshold
   - It reads score partitions directly from the current ingest directory, not through the configured public release
   - V3 release clustering uses ligand graph nodes for pocket, interaction,
     pocket-weighted ligand 3D, and chemical fingerprint similarities
   - No ligand graph is projected or collapsed into a system-level graph
+  - Every community member meets the threshold in both directions to its
+    centroid; members are not required to meet it directly with one another
   - `shape`, `color`, and raw `sucos_shape` remain per-ligand diagnostic scores, but are not clustered because they are evaluated only when pocket coverage is positive
   - Side effects include writing the following files:
     - `ligand_clusters/**`
 
-- `tasks.summarize_clusters`: validates the complete component/community matrix
+- `tasks.summarize_clusters`: validates the complete component, community, and
+  directed-cover matrix
   before publication and writes compact cluster-size diagnostics
   - It rejects missing artifacts, duplicate or null labels, inconsistent node
-    coverage, non-monotonic component results across thresholds, and invalid
-    relationships between weak components, strong components, and communities
-  - Side effects include writing `ligand_clusters/stats.{parquet,json}`
+    coverage, and non-monotonic component results across thresholds
+
+The directed set-cover output under `ligand_sampling/` is intended for
+training-set sampling. A centroid covers query ligand `Q` when the original
+directional score `Q -> centroid` meets the threshold; members are reassigned to
+their highest-scoring selected centroid. Finalization merges each directed-cover
+label into the annotation parquet while keeping centroid IDs and assignment
+scores in the normalized sampling files.
+
+- `tasks.summarize_clusters` writes `ligand_clusters/stats.{parquet,json}`
 
 - `tasks.finalize_index`: merges ligand cluster labels into the annotation parquet
-  - Ligand-row columns are explicit, for example `sucos_shape_pocket_qcov__50__ligand__strong__component`
+  - Ligand-row columns are explicit, for example `sucos_shape_pocket_qcov__50__ligand__component`
+  - Directed-cover labels use names such as `sucos_shape_pocket_qcov__50__ligand__directed_set_cover`
   - It creates `annotation_table_nonredundant.parquet` only after the PLI uniqueness cluster exists
 
 ## Splits

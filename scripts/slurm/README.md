@@ -400,7 +400,15 @@ The default final path is
 `PLINDER_SUCOS_EXPORT_DIR` and `PLINDER_SUCOS_EXPORT_OUTPUT` to override the
 temporary shard directory or final release location.
 
-Build ligand-level components and communities only after score finalization.
+Targeted collation repairs deliberately leave `index/collation.json` in
+`requires_downstream_repair` state and remove the stale nonredundant index.
+After repairing fingerprints and affected score shards, rerun the clustering
+and final-index sequence below. Finalization now rejects cluster artifacts that
+do not exactly cover the current eligible ligand universe and marks the repair
+complete only after recreating `annotation_table_nonredundant.parquet`.
+
+Build ligand-level reciprocal-minimum components and greedy centroid
+communities only after score finalization.
 The planning job reports exact array counts for the default metrics and the
 30, 50, 70, 90, and 100 thresholds:
 
@@ -409,12 +417,35 @@ sbatch \
   --qos=30min --cpus-per-task=1 --mem=8G \
   --output="${OUTPUT_ROOT}/logs/cluster-plan-%j.out" \
   --export=ALL,PLINDER_ENV_ROOT,PLINDER_REPO_ROOT \
-  scripts/slurm/score_v3.sbatch plan-clusters "${OUTPUT_ROOT}" 1
+  scripts/slurm/score_v3.sbatch plan-clusters "${OUTPUT_ROOT}" 20
 ```
 
-Read `component_reduction_batch_count` from that log and run one source shard
-per task. Each task copies its physical score shard once to node-local scratch,
-then writes resumable threshold-band reductions for every metric found there:
+First read `symmetric_fragment_batch_count` from that log. Each task copies 20
+regular score shards to node-local scratch and hash-partitions canonical ligand
+pairs while retaining both directional maxima:
+
+```bash
+sbatch \
+  --qos=6hours --array=0-LAST_SYMMETRIC_FRAGMENT_INDEX \
+  --cpus-per-task=4 --mem=64G \
+  --output="${OUTPUT_ROOT}/logs/symmetric-fragment-%A-%a.out" \
+  --export=ALL,PLINDER_ENV_ROOT,PLINDER_REPO_ROOT \
+  scripts/slurm/score_v3.sbatch symmetric-edge-fragments "${OUTPUT_ROOT}" 1
+
+sbatch \
+  --qos=6hours --array=0-LAST_SYMMETRIC_EDGE_INDEX \
+  --cpus-per-task=4 --mem=64G \
+  --output="${OUTPUT_ROOT}/logs/symmetric-edge-%A-%a.out" \
+  --export=ALL,PLINDER_ENV_ROOT,PLINDER_REPO_ROOT \
+  scripts/slurm/score_v3.sbatch symmetric-edge-shards "${OUTPUT_ROOT}" 1
+```
+
+The second array takes the minimum of the two directional maxima. Pairs with
+only one stored direction retain that direction but have a null reciprocal
+score: public reciprocal-minimum clustering ignores them, while the optional
+directed cover can still use them. Then read
+`component_reduction_batch_count` from the plan and reduce one compact edge
+shard per task:
 
 ```bash
 sbatch \
@@ -431,24 +462,40 @@ sbatch \
   scripts/slurm/score_v3.sbatch merge-components "${OUTPUT_ROOT}"
 ```
 
-The merge produces exact weak and strong ligand components without retaining
-the full 30%-threshold graph. It carries reduced edges downward through the
-thresholds, so it is not a representative-only approximation. Finally, read
-`community_batch_count` from the plan log and scatter one metric/threshold per
-task:
+The merge publishes exact connected components of the reciprocal-minimum graph
+without retaining a full in-memory 30%-threshold graph. It also creates
+any-direction connectivity partitions used by the optional directed sampling
+cover. Finally, read `community_batch_count` from the plan log and scatter one
+metric/threshold per task:
 
 ```bash
-sbatch \
+COMMUNITY_JOB=$(sbatch --parsable \
   --qos=6hours --array=0-LAST_COMMUNITY_INDEX \
   --cpus-per-task=8 --mem=128G \
   --output="${OUTPUT_ROOT}/logs/community-%A-%a.out" \
   --export=ALL,PLINDER_ENV_ROOT,PLINDER_REPO_ROOT \
-  scripts/slurm/score_v3.sbatch communities "${OUTPUT_ROOT}" 1
+  scripts/slurm/score_v3.sbatch communities "${OUTPUT_ROOT}" 1)
 ```
 
-Communities are constructed one weak component at a time. Directional ligand
-scores are symmetrized by their maximum similarity for community detection;
-weak and strong component outputs retain their original direction semantics.
+Communities use deterministic greedy centroid cover followed by reassignment
+to the highest-scoring selected centroid. Every member meets the threshold in
+both directions to its centroid; two non-centroid members need not meet it
+directly. For Tanimoto, the symmetric score is used directly.
+
+Run `directed-covers` with the
+`directed_cover_batch_count` from the plan. A centroid covers query ligand `Q`
+when `score(Q -> centroid)` meets the threshold. These labels are required by
+final index enrichment and the detailed assignments also support training-set
+sampling:
+
+```bash
+DIRECTED_COVER_JOB=$(sbatch --parsable \
+  --qos=6hours --array=0-LAST_DIRECTED_COVER_INDEX \
+  --cpus-per-task=8 --mem=128G \
+  --output="${OUTPUT_ROOT}/logs/directed-cover-%A-%a.out" \
+  --export=ALL,PLINDER_ENV_ROOT,PLINDER_REPO_ROOT \
+  scripts/slurm/score_v3.sbatch directed-covers "${OUTPUT_ROOT}" 1)
+```
 Set comma-delimited `PLINDER_CLUSTER_METRICS` or
 `PLINDER_CLUSTER_THRESHOLDS` consistently on every clustering command to run a
 subset. Because Slurm itself treats commas inside `--export` as separators,
@@ -462,16 +509,15 @@ sbatch \
   scripts/slurm/score_v3.sbatch plan-clusters "${OUTPUT_ROOT}" 1
 ```
 
-After both component and community branches complete, validate every published
-artifact and write `ligand_clusters/stats.parquet` plus `stats.json`. This gate
-checks artifact coverage, duplicate and null labels, consistent ligand counts,
-monotonic component counts across thresholds, and the expected relationships
-between weak components, strong components, and communities. Community counts
-are reported but are not required to be monotonic:
+After component, community, and directed-cover branches complete, validate every
+published artifact and write `ligand_clusters/stats.parquet` plus `stats.json`.
+This gate checks artifact coverage, duplicate and null labels, consistent ligand
+counts, and monotonic component counts across thresholds. Community and cover
+counts are reported but are not required to be monotonic:
 
 ```bash
 STATS_JOB=$(sbatch --parsable \
-  --dependency=afterok:COMMUNITY_JOB_ID \
+  --dependency="afterok:${COMMUNITY_JOB}:${DIRECTED_COVER_JOB}" \
   --qos=6hours --cpus-per-task=8 --mem=128G \
   --output="${OUTPUT_ROOT}/logs/cluster-stats-%j.out" \
   --export=ALL,PLINDER_ENV_ROOT,PLINDER_REPO_ROOT \

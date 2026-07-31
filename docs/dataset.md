@@ -85,7 +85,7 @@ V3 cluster columns are merged only after local scoring and clustering finish.
 V3 similarity clusters use ligand-instance nodes throughout, including
 receptor-derived metrics because those scores are scoped to individual ligand
 pairs. Cluster columns therefore include an explicit `__ligand__` marker, for
-example `sucos_shape_pocket_qcov__50__ligand__strong__component`. They are not
+example `sucos_shape_pocket_qcov__50__ligand__component`. They are not
 projected or collapsed into system-level clusters. The gated `shape`, `color`,
 and raw `sucos_shape` values remain diagnostic scores and are not clustered
 directly.
@@ -218,9 +218,6 @@ The nested structure is as follows:
     |-- directed=False
         |-- metric={metric}
             |-- threshold={threshold}.parquet
-    |-- directed=True
-        |-- metric={metric}
-            |-- threshold={threshold}.parquet
 |-- stats.parquet
 |-- stats.json
 ```
@@ -229,12 +226,16 @@ The stats files summarize node count, cluster count, singleton count, and the
 largest, median, and 95th-percentile cluster sizes for every published artifact;
 `stats.json` also records the validation outcome.
 
+Repeated system-pair evidence is first collapsed to the maximum score for each
+ordered ligand pair. Public graph edges then use the minimum of the two
+directional ligand-level maxima.
+
 - `cluster`: the cluster algorithm used
-  - `communities`: clusters derived from community detection algorithm
-  - `components`: clusters derived from disconnected component of similarity graph
+  - `communities`: deterministic greedy centroid partitions in which every
+    member meets the threshold in both directions to its centroid
+  - `components`: connected components of the reciprocal-minimum graph
 - `directed`: type of graph used for cluster input
-  - `False`: undirected
-  - `True`: directed
+  - `False`: both directional scores are required and their minimum is used
 - `metric`: the similarity metrics used for generating the clusters
   - `pli_qcov`: Protein-ligand interaction similarity between aligned ligand-binding region (pocket) residues of two systems.
   - `pli_unique_qcov`: Protein-ligand interaction similarity between aligned pocket residues of two systems, taking only unique interaction type into consideration.
@@ -247,6 +248,15 @@ largest, median, and 95th-percentile cluster sizes for every published artifact;
   - `70`
   - `90`
   - `100`
+
+Directed set-cover assignments for training sampling are stored under
+`ligand_sampling/directed_set_cover/`. A centroid covers query ligand `Q` when
+the directional ligand-level score `Q -> centroid` meets the threshold. Their
+labels are merged into the annotation index as columns such as
+`pocket_qcov__50__ligand__directed_set_cover`. The detailed assignment files
+retain the centroid and score without repeating them in the annotation table.
+Each assignment row records `ligand_id`, `centroid_ligand_id`,
+`similarity_to_centroid`, `label`, `metric`, `threshold`, and `directed`.
 
 ### Splits (`splits/`)
 

@@ -122,8 +122,8 @@ Index(['entry_pdb_id', 'entry_release_date', 'entry_oligomeric_state',
        'ligand_interacting_ligand_chains_CATH',
        'ligand_neighboring_ligand_chains_CATH',
        'system_ligand_chains_SCOP2', 'system_ligand_chains_SCOP2B',
-       'pli_qcov__100__ligand__strong__component',
-       'sucos_shape_pocket_qcov__100__ligand__strong__component'],
+       'pli_qcov__100__ligand__component',
+       'sucos_shape_pocket_qcov__100__ligand__component'],
       dtype='object', length=500)
 ```
 
@@ -178,8 +178,8 @@ ligand_clusters/
 │       │       └── data.parquet
 ```
 
-As example, we will load the clusters based on pocket sequence similarity from an
-undirected graph at a similarity threshold of 70 %.
+As an example, we will load greedy centroid communities based on reciprocal
+pocket similarity at a threshold of 70%.
 
 ```python
 >>> import pandas as pd
