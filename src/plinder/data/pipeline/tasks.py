@@ -307,6 +307,7 @@ def make_entries(
     force_update: bool,
     annotation_cfg: DictConfig,
     entry_cfg: DictConfig,
+    interface_cfg: DictConfig,
     cpu: int = 1,
 ) -> list[str]:
     """Run the same resumable V3 batch implementation used by Slurm."""
@@ -322,6 +323,7 @@ def make_entries(
         job_id=f"metaflow-{hash_id}",
         annotation_cfg=annotation_cfg,
         entry_cfg=entry_cfg,
+        interface_cfg=interface_cfg,
     )
     payload = json.loads(metrics_path.read_text())
     failed = [

@@ -11,6 +11,12 @@ from plinder.data.annotations.aggregate_annotations import Entry
 from plinder.data.annotations.cif_utils import read_mmcif_container
 from plinder.data.annotations.get_ligand_validation import EntryValidation
 from plinder.data.annotations.interaction_utils import get_covalent_connections
+from plinder.data.annotations.interface_utils import (
+    INTERFACE_ANNOTATION_SCHEMA,
+    detect_protein_interfaces,
+    interface_system_id,
+    protein_interfaces_to_table,
+)
 from plinder.data.annotations.ligand_utils import (
     BiounitSpatialIndex,
     classify_ligand_polymer_classes,
@@ -28,6 +34,110 @@ from plinder.data.annotations.save_utils import (
 )
 from plinder.data.get_system_annotations import GetPlinderAnnotation
 from rdkit import Chem
+
+
+def _interface_test_chain(
+    residue_numbers: list[int],
+    *,
+    length: int = 12,
+    chain_type: str = "polypeptide(L)",
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        chain_type_str=chain_type,
+        length=length,
+        residues={
+            number: SimpleNamespace(index=index)
+            for index, number in enumerate(residue_numbers)
+        },
+    )
+
+
+def _interface_test_atoms() -> struc.AtomArray:
+    atoms = struc.AtomArray(6)
+    atoms.chain_id = np.array(["2.B"] * 3 + ["1.A"] * 3)
+    atoms.res_id = np.array([10, 11, 12, 1, 2, 3])
+    atoms.res_name = np.array(["ALA"] * 6)
+    atoms.atom_name = np.array(["CA"] * 6)
+    atoms.element = np.array(["C"] * 6)
+    atoms.coord = np.array(
+        [
+            [0.0, 1.0, 0.0],
+            [3.0, 1.0, 0.0],
+            [6.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0],
+            [3.0, 0.0, 0.0],
+            [6.0, 0.0, 0.0],
+        ]
+    )
+    return atoms
+
+
+def test_detect_protein_interfaces_uses_canonical_chain_order_and_residue_maps():
+    interfaces = detect_protein_interfaces(
+        _interface_test_atoms(),
+        pdb_id="1ABC",
+        biounit_id="1",
+        chains={
+            "A": _interface_test_chain([1, 2, 3]),
+            "B": _interface_test_chain([10, 11, 12]),
+        },
+        contact_radius=1.5,
+    )
+
+    assert len(interfaces) == 1
+    interface = interfaces[0]
+    assert interface.system_id == "1abc__1__1.A--2.B"
+    assert interface.chain_1_residue_numbers == (1, 2, 3)
+    assert interface.chain_1_residue_indices == (0, 1, 2)
+    assert interface.chain_2_residue_numbers == (10, 11, 12)
+    assert interface.chain_2_residue_indices == (0, 1, 2)
+    assert interface.num_contact_residue_pairs == 3
+
+
+@pytest.mark.parametrize(
+    ("chain_length", "chain_type", "min_interface_residues"),
+    [
+        (11, "polypeptide(L)", 3),
+        (12, "polyribonucleotide", 3),
+        (12, "polypeptide(L)", 4),
+    ],
+    ids=["short_chain", "non_protein_chain", "short_interface"],
+)
+def test_detect_protein_interfaces_applies_eligibility_filters(
+    chain_length: int,
+    chain_type: str,
+    min_interface_residues: int,
+):
+    interfaces = detect_protein_interfaces(
+        _interface_test_atoms(),
+        pdb_id="1abc",
+        biounit_id="1",
+        chains={
+            "A": _interface_test_chain([1, 2, 3]),
+            "B": _interface_test_chain(
+                [10, 11, 12], length=chain_length, chain_type=chain_type
+            ),
+        },
+        contact_radius=1.5,
+        min_interface_residues=min_interface_residues,
+    )
+
+    assert interfaces == []
+
+
+def test_interface_system_id_is_unordered_and_rejects_self_interfaces():
+    assert interface_system_id("1ABC", "2", "2.B", "1.A") == interface_system_id(
+        "1abc", "2", "1.A", "2.B"
+    )
+    with pytest.raises(ValueError, match="two distinct"):
+        interface_system_id("1abc", "2", "1.A", "1.A")
+
+
+def test_empty_protein_interface_table_retains_release_schema():
+    table = protein_interfaces_to_table([])
+
+    assert table.num_rows == 0
+    assert table.schema == INTERFACE_ANNOTATION_SCHEMA
 
 
 def test_ccd_name_sorter():
@@ -404,7 +514,6 @@ def test_peptide_ligand_threshold(
     mock_alternative_datasets,
     min_polymer_size,
     expect_ligand,
-    monkeypatch,
 ):
     """6u6k: 13-residue synthetic peptide (chain B).
 
@@ -415,19 +524,6 @@ def test_peptide_ligand_threshold(
     stale_ligand_dir = entry_dir / "6u6k" / "ligand_files"
     stale_ligand_dir.mkdir(parents=True)
     (stale_ligand_dir / "stale.sdf").touch()
-    if not expect_ligand:
-        monkeypatch.setattr(
-            "plinder.data.annotations.aggregate_annotations.pdbx.get_structure",
-            lambda *_args, **_kwargs: pytest.fail(
-                "entries without ligand-like chains must skip bonded loading"
-            ),
-        )
-        monkeypatch.setattr(
-            "plinder.data.annotations.aggregate_annotations.pdbx.list_assemblies",
-            lambda *_args, **_kwargs: pytest.fail(
-                "entries without ligand-like chains must skip assembly generation"
-            ),
-        )
     entry = Entry.from_cif_file(
         cif_6u6k, save_folder=entry_dir, min_polymer_size=min_polymer_size
     )
@@ -436,10 +532,16 @@ def test_peptide_ligand_threshold(
         assert not (stale_ligand_dir / "stale.sdf").exists()
         lig = entry.systems[list(entry.systems.keys())[0]].ligands[0]
         assert lig.ccd_code == "ACE-TRP-TRP-ILE-ILE-PRO-ALY-VAL-LYS-ALY-GLY-CYS-NH2"
+        # Ligand-like and protein-interface membership are independent: this
+        # 13-residue peptide is still a valid interface chain at the fixed
+        # 12-residue protein-interface threshold.
+        assert entry.chains["B"].holo
+        assert "B" in entry.ligand_like_chains
     else:
         assert (
             len(entry.systems) == 0
         ), f"13-residue peptide should be receptor with min_polymer_size={min_polymer_size}"
+        assert entry.interfaces
         assert not stale_ligand_dir.exists()
 
 
@@ -449,6 +551,7 @@ def test_annotation_without_systems_skips_validation_and_normalized_tables(
     class EmptyEntry:
         pdb_id = "1abc"
         systems: dict[str, object] = {}
+        interfaces: list[object] = []
 
         def set_validation(self, *_args, **_kwargs):
             pytest.fail("empty entries must skip validation")
@@ -466,6 +569,33 @@ def test_annotation_without_systems_skips_validation_and_normalized_tables(
 
     assert annotation.annotate() is None
     assert not (tmp_path / "1abc").exists()
+
+
+def test_interface_only_annotation_materializes_normalized_tables(
+    cif_6u6k,
+    mock_alternative_datasets,
+) -> None:
+    save_root = mock_alternative_datasets("6u6k")
+    annotation = GetPlinderAnnotation(
+        cif_6u6k,
+        "",
+        save_folder=save_root,
+        min_polymer_size=12,
+    )
+
+    ligand_rows = annotation.annotate()
+
+    assert ligand_rows is not None and ligand_rows.empty
+    entry_dir = save_root / "6u6k"
+    interfaces = pd.read_parquet(entry_dir / "interfaces.parquet")
+    assert interfaces["system_id"].str.startswith("6u6k__").all()
+    assert interfaces["interface_chain_1_residue_numbers"].map(len).min() >= 3
+    assert interfaces["interface_chain_2_residue_numbers"].map(len).min() >= 3
+    metadata = pd.read_parquet(entry_dir / "entry_metadata.parquet")
+    assert metadata["entry_pdb_id"].tolist() == ["6u6k"]
+    chains = pd.read_parquet(entry_dir / "entry_chains.parquet")
+    assert set(chains["chain_asym_id"]) == {"A", "B"}
+    assert not chains["chain_is_ligand_like"].any()
 
 
 def test_entry_drops_systems_without_a_proper_ligand() -> None:

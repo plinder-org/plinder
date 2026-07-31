@@ -26,11 +26,17 @@ from plinder.data.pipeline.ingest import (
 )
 
 
-def _write_fake_sidecars(entry_dir: Path, pdb_id: str) -> None:
+def _write_fake_sidecars(
+    entry_dir: Path,
+    pdb_id: str,
+    *,
+    interfaces: list[dict[str, object]] | None = None,
+) -> None:
     pd.DataFrame(
         {
             "entry_pdb_id": [pdb_id],
             "chain_receptor_type": ["protein"],
+            "chain_is_ligand_like": [False],
         }
     ).to_parquet(entry_dir / "entry_chains.parquet", index=False)
     pd.DataFrame(
@@ -44,6 +50,24 @@ def _write_fake_sidecars(entry_dir: Path, pdb_id: str) -> None:
     ).to_parquet(entry_dir / "entry_biounit_chains.parquet", index=False)
     pd.DataFrame({"entry_pdb_id": [pdb_id]}).to_parquet(
         entry_dir / "entry_source.parquet", index=False
+    )
+    pd.DataFrame({"entry_pdb_id": [pdb_id]}).to_parquet(
+        entry_dir / "entry_metadata.parquet", index=False
+    )
+    interface_columns = [
+        "entry_pdb_id",
+        "system_id",
+        "system_biounit_id",
+        "interface_chain_1",
+        "interface_chain_2",
+        "interface_chain_1_residue_numbers",
+        "interface_chain_1_residue_indices",
+        "interface_chain_2_residue_numbers",
+        "interface_chain_2_residue_indices",
+        "interface_num_contact_residue_pairs",
+    ]
+    pd.DataFrame(interfaces or [], columns=interface_columns).to_parquet(
+        entry_dir / "interfaces.parquet", index=False
     )
 
 
@@ -186,6 +210,7 @@ def test_ingest_one_pdb_writes_entry_outputs_and_metrics(
     assert metrics["status"] == "complete"
     assert metrics["counts"] == {
         "annotation_rows": 1,
+        "interface_rows": 0,
         "systems": 1,
         "ligand_ids": 1,
         "canonical_ligand_sdfs": 1,
@@ -248,6 +273,7 @@ def test_ingest_one_pdb_does_not_materialize_entries_without_systems(
     assert metrics["status"] == "skipped_no_systems"
     assert metrics["counts"] == {
         "annotation_rows": 0,
+        "interface_rows": 0,
         "systems": 0,
         "ligand_ids": 0,
         "canonical_ligand_sdfs": 0,
@@ -261,6 +287,71 @@ def test_ingest_one_pdb_does_not_materialize_entries_without_systems(
     assert not entry_parquet.exists()
     assert not ligand_parquet.exists()
     assert not (output_root / "raw_entries" / "gr" / "8grn").exists()
+
+
+def test_ingest_one_pdb_materializes_interface_only_entries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output_root = tmp_path / "output"
+    cif_root = tmp_path / "nextgen"
+    validation_root = tmp_path / "validation"
+    cif_file, _ = resolve_entry_paths(
+        "8grn", cif_root=cif_root, validation_root=validation_root
+    )
+    cif_file.parent.mkdir(parents=True)
+    cif_file.touch()
+
+    class InterfaceOnlyAnnotation:
+        def __init__(self, *_args, save_folder: Path, **_kwargs) -> None:
+            self.save_folder = save_folder
+
+        def annotate(self) -> pd.DataFrame:
+            entry_dir = self.save_folder / "8grn"
+            entry_dir.mkdir(parents=True)
+            _write_fake_sidecars(
+                entry_dir,
+                "8grn",
+                interfaces=[
+                    {
+                        "entry_pdb_id": "8grn",
+                        "system_id": "8grn__1__1.A--1.B",
+                        "system_biounit_id": "1",
+                        "interface_chain_1": "1.A",
+                        "interface_chain_2": "1.B",
+                        "interface_chain_1_residue_numbers": [1, 2, 3],
+                        "interface_chain_1_residue_indices": [0, 1, 2],
+                        "interface_chain_2_residue_numbers": [4, 5, 6],
+                        "interface_chain_2_residue_indices": [0, 1, 2],
+                        "interface_num_contact_residue_pairs": 3,
+                    }
+                ],
+            )
+            return pd.DataFrame()
+
+    monkeypatch.setattr(
+        ingest, "_get_annotation_class", lambda: InterfaceOnlyAnnotation
+    )
+    metrics_path = ingest_one_pdb(
+        pdb_id="8grn",
+        output_root=output_root,
+        cif_root=cif_root,
+        validation_root=validation_root,
+        check_references=False,
+    )
+
+    metrics = json.loads(metrics_path.read_text())
+    assert metrics["status"] == "complete"
+    assert metrics["counts"] == {
+        "annotation_rows": 0,
+        "interface_rows": 1,
+        "systems": 0,
+        "ligand_ids": 0,
+        "canonical_ligand_sdfs": 0,
+    }
+    assert metrics["outputs"]["entry_parquet"] is None
+    assert metrics["outputs"]["ligand_parquet"] is None
+    assert (output_root / "raw_entries/gr/8grn/interfaces.parquet").is_file()
+    assert completed_entry_metrics(output_root, "8grn") == metrics_path
 
 
 def test_ingest_one_pdb_retries_partial_outputs_without_force(
@@ -415,6 +506,7 @@ def test_batch_continues_after_failure_and_resumes_completed_entries(
             json.dumps(
                 {
                     "status": "complete",
+                    "counts": {"annotation_rows": 1, "interface_rows": 0},
                     "outputs": {
                         "entry_parquet": str(entry_path),
                         "entry_directory": str(entry_directory),
@@ -469,7 +561,14 @@ def test_batch_resumes_entries_previously_skipped_without_systems(
     output_root = tmp_path / "output"
     entry_metrics = output_root / "metrics" / "ingest-one-1abc.json"
     entry_metrics.parent.mkdir(parents=True)
-    entry_metrics.write_text(json.dumps({"status": "skipped_no_systems"}))
+    entry_metrics.write_text(
+        json.dumps(
+            {
+                "status": "skipped_no_systems",
+                "counts": {"annotation_rows": 0, "interface_rows": 0},
+            }
+        )
+    )
 
     def unexpected_ingest(**_kwargs: object) -> Path:
         pytest.fail("a completed no-system entry must not be ingested again")
@@ -486,6 +585,15 @@ def test_batch_resumes_entries_previously_skipped_without_systems(
     assert not had_failures
     metrics = json.loads(metrics_path.read_text())
     assert metrics["entries"][0]["status"] == "skipped_complete"
+
+
+def test_pre_interface_skip_is_not_considered_complete(tmp_path: Path) -> None:
+    output_root = tmp_path / "output"
+    entry_metrics = output_root / "metrics" / "ingest-one-1abc.json"
+    entry_metrics.parent.mkdir(parents=True)
+    entry_metrics.write_text(json.dumps({"status": "skipped_no_systems"}))
+
+    assert completed_entry_metrics(output_root, "1abc") is None
 
 
 def test_discover_entries_tracks_optional_validation(tmp_path: Path) -> None:

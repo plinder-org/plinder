@@ -61,6 +61,22 @@ def test_default_config():
     assert cfg.scorer.max_query_proper_ligand_chains == 30
     assert list(cfg.flow.cluster_thresholds) == [30, 50, 70, 90, 100]
     assert cfg.flow.component_reduction_metric_workers == 4
+    assert cfg.interface.contact_radius == 10.0
+    assert cfg.interface.min_chain_length == 12
+    assert cfg.interface.min_interface_residues == 3
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"contact_radius": 0},
+        {"min_chain_length": 0},
+        {"min_interface_residues": 0},
+    ],
+)
+def test_interface_config_limits_must_be_positive(kwargs) -> None:
+    with pytest.raises(ValueError, match="interface"):
+        config.InterfaceConfig(**kwargs)
 
 
 def test_component_reduction_metric_workers_must_be_positive() -> None:

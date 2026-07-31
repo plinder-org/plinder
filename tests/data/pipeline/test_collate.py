@@ -70,25 +70,26 @@ def _write_entry(
     entry_dir.mkdir()
     pd.DataFrame(
         {
-            "entry_pdb_id": [pdb_id],
-            "chain_asym_id": ["A"],
-            "chain_auth_id": ["A"],
-            "chain_entity_id": ["1"],
-            "chain_type": ["polypeptide(L)"],
-            "chain_receptor_type": ["protein"],
-            "chain_length": [300],
-            "chain_num_unresolved_residues": [0],
-            "chain_is_holo": [True],
-            "chain_uniprot_ids": [["P12345"]],
+            "entry_pdb_id": [pdb_id, pdb_id],
+            "chain_asym_id": ["A", "B"],
+            "chain_auth_id": ["A", "B"],
+            "chain_entity_id": ["1", "2"],
+            "chain_type": ["polypeptide(L)", "polypeptide(L)"],
+            "chain_receptor_type": ["protein", "protein"],
+            "chain_length": [300, 200],
+            "chain_num_unresolved_residues": [0, 0],
+            "chain_is_holo": [True, True],
+            "chain_is_ligand_like": [False, False],
+            "chain_uniprot_ids": [["P12345"], ["Q12345"]],
         }
     ).to_parquet(entry_dir / "entry_chains.parquet", index=False)
     pd.DataFrame(
         {
-            "entry_pdb_id": [pdb_id],
-            "biounit_id": ["1"],
-            "chain_instance": ["1.A"],
-            "chain_asym_id": ["A"],
-            "chain_role": ["receptor"],
+            "entry_pdb_id": [pdb_id, pdb_id],
+            "biounit_id": ["1", "1"],
+            "chain_instance": ["1.A", "1.B"],
+            "chain_asym_id": ["A", "B"],
+            "chain_role": ["receptor", "receptor"],
         }
     ).to_parquet(entry_dir / "entry_biounit_chains.parquet", index=False)
     pd.DataFrame(
@@ -98,6 +99,23 @@ def _write_entry(
             "source_mmcif_minor_revision": [0],
         }
     ).to_parquet(entry_dir / "entry_source.parquet", index=False)
+    pd.DataFrame({"entry_pdb_id": [pdb_id], "entry_pH": [ph]}).to_parquet(
+        entry_dir / "entry_metadata.parquet", index=False
+    )
+    pd.DataFrame(
+        {
+            "entry_pdb_id": [pdb_id],
+            "system_id": [f"{pdb_id}__1__1.A--1.B"],
+            "system_biounit_id": ["1"],
+            "interface_chain_1": ["1.A"],
+            "interface_chain_2": ["1.B"],
+            "interface_chain_1_residue_numbers": [[1, 2, 3]],
+            "interface_chain_1_residue_indices": [[0, 1, 2]],
+            "interface_chain_2_residue_numbers": [[4, 5, 6]],
+            "interface_chain_2_residue_indices": [[0, 1, 2]],
+            "interface_num_contact_residue_pairs": [3],
+        }
+    ).to_parquet(entry_dir / "interfaces.parquet", index=False)
 
     proper = [row for row in ligand_rows if row["proper"]]
     ligand_table = pd.DataFrame(
@@ -147,6 +165,17 @@ def _write_release(data_dir: Path) -> None:
     )
 
 
+def _write_interface_only_entry(data_dir: Path, pdb_id: str = "3ghi") -> None:
+    _write_entry(
+        data_dir,
+        pdb_id,
+        ligand_rows=[],
+        scoreability={},
+    )
+    (data_dir / "raw_entries" / pdb_id[1:3] / f"{pdb_id}.parquet").unlink()
+    (data_dir / "ligands" / f"{pdb_id}.parquet").unlink()
+
+
 def test_plan_shards_and_finalize_real_v3_contract(tmp_path: Path) -> None:
     _write_release(tmp_path)
 
@@ -165,10 +194,13 @@ def test_plan_shards_and_finalize_real_v3_contract(tmp_path: Path) -> None:
     assert first == cached
     assert report["row_counts"] == {
         "annotation": 3,
-        "entry_chains": 2,
-        "entry_biounit_chains": 2,
+        "entry_chains": 4,
+        "entry_biounit_chains": 4,
+        "entry_metadata": 2,
+        "interfaces": 2,
         "entry_sources": 2,
     }
+    assert report["interface_count"] == 2
     annotation = pd.read_parquet(tmp_path / "index/annotation_table.parquet")
     assert not {
         column
@@ -190,6 +222,24 @@ def test_plan_shards_and_finalize_real_v3_contract(tmp_path: Path) -> None:
     }
     marker = json.loads((tmp_path / "index/collation.json").read_text())
     assert marker["status"] == "complete"
+
+
+def test_collation_retains_entries_with_only_protein_interfaces(
+    tmp_path: Path,
+) -> None:
+    _write_release(tmp_path)
+    _write_interface_only_entry(tmp_path)
+
+    report = run_collation(tmp_path, memory_limit="1GB")
+
+    assert report["entry_count"] == 3
+    assert report["interface_count"] == 3
+    annotation = pd.read_parquet(tmp_path / "index/annotation_table.parquet")
+    assert "3ghi" not in set(annotation["entry_pdb_id"])
+    metadata = pd.read_parquet(tmp_path / "index/entry_metadata.parquet")
+    assert set(metadata["entry_pdb_id"]) == {"1abc", "2def", "3ghi"}
+    interfaces = pd.read_parquet(tmp_path / "index/interface_annotation_table.parquet")
+    assert "3ghi__1__1.A--1.B" in set(interfaces["system_id"])
 
 
 def test_targeted_repair_preserves_unaffected_release_only_columns(
@@ -230,7 +280,11 @@ def test_targeted_repair_preserves_unaffected_release_only_columns(
         .all()
     )
     repaired_chains = pd.read_parquet(tmp_path / "index/entry_chains.parquet")
-    lengths = repaired_chains.set_index("entry_pdb_id")["chain_length"].to_dict()
+    lengths = (
+        repaired_chains[repaired_chains["chain_asym_id"].eq("A")]
+        .set_index("entry_pdb_id")["chain_length"]
+        .to_dict()
+    )
     assert lengths == {"1abc": 300, "2def": 300}
     after_chain_stat = chain_path.stat()
     assert (
@@ -280,6 +334,23 @@ def test_shard_rejects_inputs_changed_after_plan(tmp_path: Path) -> None:
         collate_shard(tmp_path, "ab", memory_limit="1GB")
 
 
+def test_shard_rejects_optional_ligand_outputs_appearing_after_plan(
+    tmp_path: Path,
+) -> None:
+    _write_release(tmp_path)
+    _write_interface_only_entry(tmp_path)
+    plan_collation(tmp_path)
+    pd.DataFrame({"entry_pdb_id": ["3ghi"]}).to_parquet(
+        tmp_path / "raw_entries/gh/3ghi.parquet", index=False
+    )
+    pd.DataFrame({"ligand_id": ["3ghi__1__1.L"]}).to_parquet(
+        tmp_path / "ligands/3ghi.parquet", index=False
+    )
+
+    with pytest.raises(RuntimeError, match="appeared after planning"):
+        collate_shard(tmp_path, "gh", memory_limit="1GB")
+
+
 def test_finalize_rechecks_inputs_changed_after_sharding(tmp_path: Path) -> None:
     _write_release(tmp_path)
     plan_collation(tmp_path)
@@ -297,7 +368,14 @@ def test_finalize_rechecks_inputs_changed_after_sharding(tmp_path: Path) -> None
 def test_final_install_fails_closed_on_partial_replacement(
     tmp_path: Path, monkeypatch
 ) -> None:
-    names = ("annotation", "entry_chains", "entry_biounit_chains", "entry_sources")
+    names = (
+        "annotation",
+        "entry_chains",
+        "entry_biounit_chains",
+        "entry_metadata",
+        "interfaces",
+        "entry_sources",
+    )
     temporary_paths = {name: tmp_path / f"new-{name}" for name in names}
     final_paths = {name: tmp_path / f"final-{name}" for name in names}
     marker = tmp_path / "collation.json"

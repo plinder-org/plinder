@@ -20,6 +20,8 @@ import duckdb
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from plinder.data.annotations.interface_utils import INTERFACE_ANNOTATION_SCHEMA
+
 COLLATION_VERSION = 1
 STAGING_RELATIVE = Path("index/.staging/v3_collation")
 MANIFEST_NAME = "entries.parquet"
@@ -61,6 +63,8 @@ MANIFEST_SCHEMA = pa.schema(
         ("annotation_path", pa.string()),
         ("chain_path", pa.string()),
         ("biounit_chain_path", pa.string()),
+        ("metadata_path", pa.string()),
+        ("interface_path", pa.string()),
         ("source_path", pa.string()),
         ("ligand_path", pa.string()),
         ("annotation_size", pa.int64()),
@@ -69,6 +73,10 @@ MANIFEST_SCHEMA = pa.schema(
         ("chain_mtime_ns", pa.int64()),
         ("biounit_chain_size", pa.int64()),
         ("biounit_chain_mtime_ns", pa.int64()),
+        ("metadata_size", pa.int64()),
+        ("metadata_mtime_ns", pa.int64()),
+        ("interface_size", pa.int64()),
+        ("interface_mtime_ns", pa.int64()),
         ("source_size", pa.int64()),
         ("source_mtime_ns", pa.int64()),
         ("ligand_size", pa.int64()),
@@ -87,6 +95,7 @@ ENTRY_CHAIN_SCHEMA = pa.schema(
         ("chain_length", pa.int64()),
         ("chain_num_unresolved_residues", pa.int64()),
         ("chain_is_holo", pa.bool_()),
+        ("chain_is_ligand_like", pa.bool_()),
         ("chain_uniprot_ids", pa.list_(pa.string())),
     ]
 )
@@ -112,6 +121,7 @@ ENTRY_SOURCE_SCHEMA = pa.schema(
 SIDECAR_SCHEMAS = {
     "entry_chains": ENTRY_CHAIN_SCHEMA,
     "entry_biounit_chains": BIOUNIT_CHAIN_SCHEMA,
+    "interfaces": INTERFACE_ANNOTATION_SCHEMA,
     "entry_sources": ENTRY_SOURCE_SCHEMA,
 }
 
@@ -181,41 +191,62 @@ def _row_signature(rows: Sequence[dict[str, Any]]) -> str:
     return digest.hexdigest()
 
 
-def _entry_manifest_row(data_dir: Path, annotation_path: Path) -> dict[str, Any]:
-    pdb_id = annotation_path.stem.lower()
+def _entry_manifest_row(data_dir: Path, entry_dir: Path) -> dict[str, Any]:
+    pdb_id = entry_dir.name.lower()
     if re.fullmatch(r"[0-9][a-z0-9]{3}", pdb_id) is None:
-        raise ValueError(f"invalid raw-entry annotation filename: {annotation_path}")
+        raise ValueError(f"invalid raw-entry directory: {entry_dir}")
     code = pdb_id[1:3]
-    if annotation_path.parent.name.lower() != code:
-        raise ValueError(f"raw-entry shard does not match PDB ID: {annotation_path}")
-    entry_dir = annotation_path.parent / pdb_id
+    if entry_dir.parent.name.lower() != code:
+        raise ValueError(f"raw-entry shard does not match PDB ID: {entry_dir}")
+    annotation_path = entry_dir.parent / f"{pdb_id}.parquet"
+    ligand_path = data_dir / "ligands" / f"{pdb_id}.parquet"
     paths = {
         "annotation": annotation_path,
         "chain": entry_dir / "entry_chains.parquet",
         "biounit_chain": entry_dir / "entry_biounit_chains.parquet",
+        "metadata": entry_dir / "entry_metadata.parquet",
+        "interface": entry_dir / "interfaces.parquet",
         "source": entry_dir / "entry_source.parquet",
-        "ligand": data_dir / "ligands" / f"{pdb_id}.parquet",
+        "ligand": ligand_path,
     }
+    optional = {"annotation", "ligand"}
+    if annotation_path.is_file() != ligand_path.is_file():
+        raise FileNotFoundError(
+            f"incomplete V3 entry {pdb_id}; ligand outputs disagree: "
+            f"annotation={annotation_path.is_file()}, ligand={ligand_path.is_file()}"
+        )
     path_stats: dict[str, os.stat_result] = {}
     missing: list[Path] = []
     for name, path in paths.items():
         try:
             path_stat = path.stat()
         except FileNotFoundError:
-            missing.append(path)
+            if name not in optional:
+                missing.append(path)
             continue
         if not stat.S_ISREG(path_stat.st_mode):
-            missing.append(path)
+            if name not in optional:
+                missing.append(path)
             continue
         path_stats[name] = path_stat
     if missing:
         formatted = ", ".join(str(path) for path in missing)
         raise FileNotFoundError(f"incomplete V3 entry {pdb_id}; missing: {formatted}")
+    if annotation_path.is_file():
+        if pq.ParquetFile(annotation_path).metadata.num_rows < 1:
+            raise ValueError(f"ligand annotation is empty for V3 entry {pdb_id}")
+    elif pq.ParquetFile(paths["interface"]).metadata.num_rows < 1:
+        raise ValueError(
+            f"materialized V3 entry {pdb_id} has no ligand or interface rows"
+        )
     row: dict[str, Any] = {
         "pdb_id": pdb_id,
         "code": code,
         **{f"{name}_path": str(path.resolve()) for name, path in paths.items()},
     }
+    for name in paths:
+        row[f"{name}_size"] = None
+        row[f"{name}_mtime_ns"] = None
     for name, path_stat in path_stats.items():
         row[f"{name}_size"] = path_stat.st_size
         row[f"{name}_mtime_ns"] = path_stat.st_mtime_ns
@@ -247,11 +278,16 @@ def plan_collation(data_dir: Path, *, threads: int = 1) -> dict[str, Any]:
         )
         with ThreadPoolExecutor(max_workers=threads) as executor:
             for code_dir in code_dirs:
-                annotation_paths = sorted(code_dir.glob("*.parquet"))
+                entry_dirs = sorted(
+                    path
+                    for path in code_dir.iterdir()
+                    if path.is_dir()
+                    and re.fullmatch(r"[0-9][a-z0-9]{3}", path.name.lower())
+                )
                 rows = list(
                     executor.map(
                         lambda path: _entry_manifest_row(data_dir, path),
-                        annotation_paths,
+                        entry_dirs,
                     )
                 )
                 if not rows:
@@ -319,8 +355,23 @@ def _load_manifest_rows(data_dir: Path, code: str) -> list[dict[str, Any]]:
 
 
 def _verify_manifest_row(row: dict[str, Any]) -> None:
-    for prefix in ("annotation", "chain", "biounit_chain", "source", "ligand"):
+    for prefix in (
+        "annotation",
+        "chain",
+        "biounit_chain",
+        "metadata",
+        "interface",
+        "source",
+        "ligand",
+    ):
         path = Path(str(row[f"{prefix}_path"]))
+        if row[f"{prefix}_size"] is None:
+            if path.exists():
+                raise RuntimeError(
+                    "collation input appeared after planning; rerun the plan "
+                    f"stage: {path}"
+                )
+            continue
         try:
             values = _stat_values(path, prefix)
         except FileNotFoundError as exc:
@@ -432,13 +483,16 @@ def _build_annotation_view(
     connection: duckdb.DuckDBPyConnection,
     annotation_paths: Sequence[str],
     ligand_paths: Sequence[str],
+    *,
+    empty: bool = False,
 ) -> None:
-    connection.read_parquet(list(annotation_paths), union_by_name=True).create_view(
-        "raw_annotation", replace=True
-    )
-    connection.read_parquet(list(ligand_paths), union_by_name=True).create_view(
-        "raw_ligand_ability", replace=True
-    )
+    annotation = connection.read_parquet(list(annotation_paths), union_by_name=True)
+    ligand = connection.read_parquet(list(ligand_paths), union_by_name=True)
+    if empty:
+        annotation = annotation.filter("false")
+        ligand = ligand.filter("false")
+    annotation.create_view("raw_annotation", replace=True)
+    ligand.create_view("raw_ligand_ability", replace=True)
     raw_columns = _relation_columns(connection, "raw_annotation")
     required = {
         "entry_pdb_id",
@@ -575,12 +629,31 @@ def _collate_sidecars(
     _write_table_atomic(table, output, row_group_size=row_group_size)
 
 
+def _collate_entry_metadata(
+    paths: Sequence[Path],
+    output: Path,
+    *,
+    row_group_size: int,
+) -> None:
+    """Collate the evolving entry schema by column name."""
+    tables = [pq.read_table(path) for path in paths]
+    if not tables:
+        raise ValueError("cannot collate an empty entry-metadata shard")
+    table = pa.concat_tables(tables, promote_options="default")
+    if "entry_pdb_id" not in table.column_names:
+        raise ValueError("entry metadata is missing entry_pdb_id")
+    table = table.sort_by([("entry_pdb_id", "ascending")])
+    _write_table_atomic(table, output, row_group_size=row_group_size)
+
+
 def _shard_paths(data_dir: Path, code: str) -> dict[str, Path]:
     root = staging_dir(data_dir)
     return {
         "annotation": root / "annotations" / f"{code}.parquet",
         "entry_chains": root / "entry_chains" / f"{code}.parquet",
         "entry_biounit_chains": root / "entry_biounit_chains" / f"{code}.parquet",
+        "entry_metadata": root / "entry_metadata" / f"{code}.parquet",
+        "interfaces": root / "interfaces" / f"{code}.parquet",
         "entry_sources": root / "entry_sources" / f"{code}.parquet",
         "metrics": root / "shards" / f"{code}.json",
     }
@@ -652,10 +725,30 @@ def collate_shard(
                 memory_limit=memory_limit,
                 scratch_dir=shard_scratch,
             )
+            ligand_rows = [row for row in rows if row["annotation_size"] is not None]
+            if ligand_rows:
+                schema_rows = ligand_rows
+                empty_annotation = False
+            else:
+                schema_rows = [
+                    row
+                    for row in cast(
+                        list[dict[str, Any]],
+                        pq.read_table(manifest_path(data_dir)).to_pylist(),
+                    )
+                    if row["annotation_size"] is not None
+                ][:1]
+                if not schema_rows:
+                    raise ValueError(
+                        "interface collation requires at least one ligand-bearing "
+                        "entry to define the ligand annotation schema"
+                    )
+                empty_annotation = True
             _build_annotation_view(
                 connection,
-                [str(row["annotation_path"]) for row in rows],
-                [str(row["ligand_path"]) for row in rows],
+                [str(row["annotation_path"]) for row in schema_rows],
+                [str(row["ligand_path"]) for row in schema_rows],
+                empty=empty_annotation,
             )
             _copy_query_atomic(
                 connection,
@@ -671,6 +764,18 @@ def collate_shard(
             paths["entry_chains"],
             ENTRY_CHAIN_SCHEMA,
             sort_columns=("entry_pdb_id", "chain_asym_id"),
+            row_group_size=row_group_size,
+        )
+        _collate_entry_metadata(
+            [Path(str(row["metadata_path"])) for row in rows],
+            paths["entry_metadata"],
+            row_group_size=row_group_size,
+        )
+        _collate_sidecars(
+            [Path(str(row["interface_path"])) for row in rows],
+            paths["interfaces"],
+            INTERFACE_ANNOTATION_SCHEMA,
+            sort_columns=("entry_pdb_id", "system_id"),
             row_group_size=row_group_size,
         )
         _collate_sidecars(
@@ -729,6 +834,8 @@ def _load_completed_shards(
         "annotation": [],
         "entry_chains": [],
         "entry_biounit_chains": [],
+        "entry_metadata": [],
+        "interfaces": [],
         "entry_sources": [],
     }
     expected_counts = {name: 0 for name in files}
@@ -754,7 +861,13 @@ def _install_final_tables_fail_closed(
     marker_path.unlink(missing_ok=True)
     final_paths["annotation"].unlink(missing_ok=True)
     try:
-        for name in ("entry_chains", "entry_biounit_chains", "entry_sources"):
+        for name in (
+            "entry_chains",
+            "entry_biounit_chains",
+            "entry_metadata",
+            "interfaces",
+            "entry_sources",
+        ):
             temporary_paths[name].replace(final_paths[name])
         temporary_paths["annotation"].replace(final_paths["annotation"])
     except BaseException:
@@ -803,6 +916,14 @@ def _validate_final_tables(
                 "chain_instance FROM entry_biounit_chains GROUP BY entry_pdb_id, "
                 "biounit_id, chain_instance HAVING count(*) > 1)"
             ),
+            "entry_metadata": (
+                "SELECT count(*) FROM (SELECT entry_pdb_id FROM entry_metadata "
+                "GROUP BY entry_pdb_id HAVING count(*) > 1)"
+            ),
+            "interfaces": (
+                "SELECT count(*) FROM (SELECT system_id FROM interfaces "
+                "GROUP BY system_id HAVING count(*) > 1)"
+            ),
             "entry_sources": (
                 "SELECT count(*) FROM (SELECT entry_pdb_id FROM entry_sources "
                 "GROUP BY entry_pdb_id HAVING count(*) > 1)"
@@ -842,6 +963,43 @@ def _validate_final_tables(
             raise ValueError(
                 "invalid entry-chain sequence metadata: " f"{invalid_chain_metadata}"
             )
+        invalid_interfaces = {
+            "system_id": int(
+                _fetch_scalar(
+                    connection,
+                    "SELECT count(*) FROM interfaces WHERE system_id != "
+                    "entry_pdb_id || '__' || system_biounit_id || '__' || "
+                    "interface_chain_1 || '--' || interface_chain_2",
+                )
+            ),
+            "same_chain": int(
+                _fetch_scalar(
+                    connection,
+                    "SELECT count(*) FROM interfaces WHERE "
+                    "interface_chain_1 >= interface_chain_2",
+                )
+            ),
+            "short_side": int(
+                _fetch_scalar(
+                    connection,
+                    "SELECT count(*) FROM interfaces WHERE "
+                    "len(interface_chain_1_residue_numbers) < 3 OR "
+                    "len(interface_chain_2_residue_numbers) < 3",
+                )
+            ),
+            "mapping_length": int(
+                _fetch_scalar(
+                    connection,
+                    "SELECT count(*) FROM interfaces WHERE "
+                    "len(interface_chain_1_residue_numbers) != "
+                    "len(interface_chain_1_residue_indices) OR "
+                    "len(interface_chain_2_residue_numbers) != "
+                    "len(interface_chain_2_residue_indices)",
+                )
+            ),
+        }
+        if any(invalid_interfaces.values()):
+            raise ValueError(f"invalid protein interfaces: {invalid_interfaces}")
         annotation_columns = _relation_columns(connection, "annotation")
         retired = sorted(
             column
@@ -878,11 +1036,55 @@ def _validate_final_tables(
                 "USING (entry_pdb_id, biounit_id)",
             )
         )
-        if orphan_sources or orphan_chains or orphan_biounits:
+        orphan_metadata = int(
+            _fetch_scalar(
+                connection,
+                "SELECT count(*) FROM (SELECT entry_pdb_id FROM entry_sources "
+                "ANTI JOIN entry_metadata USING (entry_pdb_id))",
+            )
+        )
+        orphan_interface_instances = int(
+            _fetch_scalar(
+                connection,
+                "SELECT count(*) FROM ("
+                "SELECT i.system_id FROM interfaces i LEFT JOIN "
+                "entry_biounit_chains b1 ON b1.entry_pdb_id = i.entry_pdb_id "
+                "AND b1.biounit_id = i.system_biounit_id "
+                "AND b1.chain_instance = i.interface_chain_1 LEFT JOIN "
+                "entry_biounit_chains b2 ON b2.entry_pdb_id = i.entry_pdb_id "
+                "AND b2.biounit_id = i.system_biounit_id "
+                "AND b2.chain_instance = i.interface_chain_2 "
+                "WHERE b1.chain_instance IS NULL OR b2.chain_instance IS NULL)",
+            )
+        )
+        orphan_interface_chains = int(
+            _fetch_scalar(
+                connection,
+                "SELECT count(*) FROM ("
+                "SELECT i.system_id FROM interfaces i LEFT JOIN entry_chains c1 "
+                "ON c1.entry_pdb_id = i.entry_pdb_id AND c1.chain_asym_id = "
+                "split_part(i.interface_chain_1, '.', 2) LEFT JOIN entry_chains c2 "
+                "ON c2.entry_pdb_id = i.entry_pdb_id AND c2.chain_asym_id = "
+                "split_part(i.interface_chain_2, '.', 2) WHERE "
+                "c1.chain_asym_id IS NULL OR c2.chain_asym_id IS NULL OR "
+                "c1.chain_receptor_type != 'protein' OR "
+                "c2.chain_receptor_type != 'protein')",
+            )
+        )
+        if (
+            orphan_sources
+            or orphan_chains
+            or orphan_biounits
+            or orphan_metadata
+            or orphan_interface_instances
+            or orphan_interface_chains
+        ):
             raise ValueError(
                 "referential-integrity failures: "
                 f"sources={orphan_sources}, chains={orphan_chains}, "
-                f"biounits={orphan_biounits}"
+                f"biounits={orphan_biounits}, metadata={orphan_metadata}, "
+                f"interface_instances={orphan_interface_instances}, "
+                f"interface_chains={orphan_interface_chains}"
             )
         missing_abilities = int(
             _fetch_scalar(
@@ -934,7 +1136,8 @@ def _validate_final_tables(
             "duplicate_key_counts": duplicates,
             "entry_count": int(
                 _fetch_scalar(
-                    connection, "SELECT count(DISTINCT entry_pdb_id) FROM annotation"
+                    connection,
+                    "SELECT count(DISTINCT entry_pdb_id) FROM entry_metadata",
                 )
             ),
             "system_count": int(
@@ -946,6 +1149,9 @@ def _validate_final_tables(
                 _fetch_scalar(
                     connection, "SELECT count(DISTINCT ligand_id) FROM annotation"
                 )
+            ),
+            "interface_count": int(
+                _fetch_scalar(connection, "SELECT count(*) FROM interfaces")
             ),
         }
     finally:
@@ -970,6 +1176,8 @@ def finalize_collation(
         "annotation": data_dir / "index" / "annotation_table.parquet",
         "entry_chains": data_dir / "index" / "entry_chains.parquet",
         "entry_biounit_chains": data_dir / "index" / "entry_biounit_chains.parquet",
+        "entry_metadata": data_dir / "index" / "entry_metadata.parquet",
+        "interfaces": data_dir / "index" / "interface_annotation_table.parquet",
         "entry_sources": data_dir / "index" / "entry_sources.parquet",
     }
     temporary_paths = {
@@ -989,6 +1197,8 @@ def finalize_collation(
             "annotation": "entry_pdb_id, system_id, ligand_id",
             "entry_chains": "entry_pdb_id, chain_asym_id",
             "entry_biounit_chains": "entry_pdb_id, biounit_id, chain_instance",
+            "entry_metadata": "entry_pdb_id",
+            "interfaces": "entry_pdb_id, system_id",
             "entry_sources": "entry_pdb_id",
         }
         for name, paths in shard_files.items():
@@ -1063,6 +1273,8 @@ def repair_collation(
         "annotation": data_dir / "index" / "annotation_table.parquet",
         "entry_chains": data_dir / "index" / "entry_chains.parquet",
         "entry_biounit_chains": data_dir / "index" / "entry_biounit_chains.parquet",
+        "entry_metadata": data_dir / "index" / "entry_metadata.parquet",
+        "interfaces": data_dir / "index" / "interface_annotation_table.parquet",
         "entry_sources": data_dir / "index" / "entry_sources.parquet",
     }
     missing_final = [path for path in final_paths.values() if not path.is_file()]
@@ -1072,12 +1284,15 @@ def repair_collation(
     rows = [
         _entry_manifest_row(
             data_dir,
-            data_dir / "raw_entries" / pdb_id[1:3] / f"{pdb_id}.parquet",
+            data_dir / "raw_entries" / pdb_id[1:3] / pdb_id,
         )
         for pdb_id in selected
     ]
     _verify_manifest_inputs(rows, threads=threads)
-    temporary_annotation = _temporary_path(final_paths["annotation"])
+    temporary_paths = {
+        name: _temporary_path(final_paths[name])
+        for name in ("annotation", "entry_metadata", "interfaces")
+    }
     replacement_paths = {
         name: _temporary_path(path.with_name(f"repair-{path.name}"))
         for name, path in final_paths.items()
@@ -1089,6 +1304,7 @@ def repair_collation(
             source_key = {
                 "entry_chains": "chain_path",
                 "entry_biounit_chains": "biounit_chain_path",
+                "interfaces": "interface_path",
                 "entry_sources": "source_path",
             }[name]
             sort_columns = {
@@ -1098,6 +1314,7 @@ def repair_collation(
                     "biounit_id",
                     "chain_instance",
                 ),
+                "interfaces": ("entry_pdb_id", "system_id"),
                 "entry_sources": ("entry_pdb_id",),
             }[name]
             _collate_sidecars(
@@ -1107,6 +1324,11 @@ def repair_collation(
                 sort_columns=sort_columns,
                 row_group_size=row_group_size,
             )
+        _collate_entry_metadata(
+            [Path(str(row["metadata_path"])) for row in rows],
+            replacement_paths["entry_metadata"],
+            row_group_size=row_group_size,
+        )
 
         connection = duckdb.connect()
         try:
@@ -1119,24 +1341,35 @@ def repair_collation(
             connection.register(
                 "repaired_entries", pa.table({"entry_pdb_id": selected})
             )
-            _build_annotation_view(
-                connection,
-                [str(row["annotation_path"]) for row in rows],
-                [str(row["ligand_path"]) for row in rows],
-            )
+            ligand_rows = [row for row in rows if row["annotation_size"] is not None]
+            if ligand_rows:
+                _build_annotation_view(
+                    connection,
+                    [str(row["annotation_path"]) for row in ligand_rows],
+                    [str(row["ligand_path"]) for row in ligand_rows],
+                )
             connection.read_parquet(str(final_paths["annotation"])).create_view(
                 "installed_annotation", replace=True
+            )
+            repaired_annotation = (
+                "UNION ALL BY NAME SELECT * FROM collated_annotation"
+                if ligand_rows
+                else ""
             )
             _copy_query(
                 connection,
                 "SELECT * FROM (SELECT installed.* FROM installed_annotation "
                 "AS installed ANTI JOIN repaired_entries USING (entry_pdb_id) "
-                "UNION ALL BY NAME SELECT * FROM collated_annotation) "
+                f"{repaired_annotation}) "
                 "ORDER BY entry_pdb_id, system_id, ligand_id",
-                temporary_annotation,
+                temporary_paths["annotation"],
                 row_group_size=row_group_size,
             )
-            for name in SIDECAR_SCHEMAS:
+            for name in (
+                "entry_chains",
+                "entry_biounit_chains",
+                "entry_sources",
+            ):
                 connection.read_parquet(str(final_paths[name])).create_view(
                     f"installed_{name}", replace=True
                 )
@@ -1161,10 +1394,29 @@ def repair_collation(
                         f"targeted repair changed {name}; rebuild the protein "
                         "scoring inputs and mapped alignments instead"
                     )
+            for name, order_by in (
+                ("entry_metadata", "entry_pdb_id"),
+                ("interfaces", "entry_pdb_id, system_id"),
+            ):
+                connection.read_parquet(str(final_paths[name])).create_view(
+                    f"installed_{name}", replace=True
+                )
+                connection.read_parquet(str(replacement_paths[name])).create_view(
+                    f"replacement_{name}", replace=True
+                )
+                _copy_query(
+                    connection,
+                    f"SELECT * FROM (SELECT installed.* FROM installed_{name} "
+                    "AS installed ANTI JOIN repaired_entries USING (entry_pdb_id) "
+                    f"UNION ALL BY NAME SELECT * FROM replacement_{name}) "
+                    f"ORDER BY {order_by}",
+                    temporary_paths[name],
+                    row_group_size=row_group_size,
+                )
         finally:
             connection.close()
 
-        validation_paths = {**final_paths, "annotation": temporary_annotation}
+        validation_paths = {**final_paths, **temporary_paths}
         expected_counts = {
             name: pq.ParquetFile(path).metadata.num_rows
             for name, path in validation_paths.items()
@@ -1179,7 +1431,9 @@ def repair_collation(
         marker = data_dir / "index" / FINAL_MARKER_NAME
         marker.unlink(missing_ok=True)
         final_paths["annotation"].unlink(missing_ok=True)
-        temporary_annotation.replace(final_paths["annotation"])
+        temporary_paths["entry_metadata"].replace(final_paths["entry_metadata"])
+        temporary_paths["interfaces"].replace(final_paths["interfaces"])
+        temporary_paths["annotation"].replace(final_paths["annotation"])
         # The nonredundant index and every release-only ligand enrichment were
         # derived from the pre-repair annotation.  Do not leave a stale
         # nonredundant table looking publishable while scores, fingerprints,
@@ -1188,7 +1442,7 @@ def repair_collation(
             missing_ok=True
         )
     finally:
-        for path in [temporary_annotation, *replacement_paths.values()]:
+        for path in [*temporary_paths.values(), *replacement_paths.values()]:
             path.unlink(missing_ok=True)
 
     report: dict[str, Any] = {
@@ -1204,6 +1458,8 @@ def repair_collation(
             "ligand_similarity",
             "scores",
             "ligand_clusters",
+            "interface_scores",
+            "interface_clusters",
             "annotation_table_nonredundant",
         ],
         **validation,

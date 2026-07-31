@@ -166,6 +166,7 @@ class IngestPipeline:
             cpu=self.cfg.flow.make_entries_cpu,
             annotation_cfg=self.cfg.annotation,
             entry_cfg=self.cfg.entry,
+            interface_cfg=self.cfg.interface,
         )
         return failed
 

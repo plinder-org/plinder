@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, cast
 
 import pandas as pd
+import pyarrow.parquet as pq
 from tqdm import tqdm
 
 from plinder.core.utils.log import setup_logger
 from plinder.data.annotations.aggregate_annotations import Entry
+from plinder.data.annotations.interface_utils import protein_interfaces_to_table
 
 LOG = setup_logger(__name__, log_level=logging.DEBUG)
 
@@ -27,6 +29,7 @@ class GetPlinderAnnotation:
         min_shared_pocket_members: int = 3,
         symmetry_mate_contact_threshold: float = 5.0,
         entry_cfg: Optional[Dict[Any, Any]] = None,
+        interface_cfg: Optional[Dict[Any, Any]] = None,
     ) -> None:
         self.mmcif_file = mmcif_file
         self.validation_xml = Path(validation_xml)
@@ -37,6 +40,7 @@ class GetPlinderAnnotation:
         self.min_shared_pocket_members = min_shared_pocket_members
         self.symmetry_mate_contact_threshold = symmetry_mate_contact_threshold
         self.entry_cfg = entry_cfg
+        self.interface_cfg = interface_cfg
 
     def annotate(self) -> Optional[pd.DataFrame]:
         entry_cfg: dict[str, Any] = dict(
@@ -49,15 +53,33 @@ class GetPlinderAnnotation:
         )
         if self.entry_cfg is not None:
             entry_cfg.update(self.entry_cfg)
+        if self.interface_cfg is not None:
+            interface_cfg = dict(self.interface_cfg)
+            entry_cfg.update(
+                {
+                    "interface_contact_radius": interface_cfg.get(
+                        "contact_radius", 10.0
+                    ),
+                    "interface_min_chain_length": interface_cfg.get(
+                        "min_chain_length", 12
+                    ),
+                    "interface_min_residues": interface_cfg.get(
+                        "min_interface_residues", 3
+                    ),
+                }
+            )
         self.entry = Entry.from_cif_file(
             self.mmcif_file,
             **entry_cfg,
         )
         LOG.info(f"created entry for {self.mmcif_file}")
-        if not self.entry.systems:
-            LOG.info(f"no entry systems for {self.mmcif_file}")
+        if not self.entry.systems and not self.entry.interfaces:
+            LOG.info(f"no ligand or interface systems for {self.mmcif_file}")
             return None
         self.entry.set_validation(self.validation_xml, self.mmcif_file)
+        interface_table = protein_interfaces_to_table(self.entry.interfaces)
+        self.interface_df = interface_table.to_pandas()
+        self.entry_metadata_df = self.entry.metadata_to_df()
         resolved_save_folder = entry_cfg.get("save_folder")
         if resolved_save_folder is not None:
             from plinder.data.annotations.cif_utils import (
@@ -72,6 +94,14 @@ class GetPlinderAnnotation:
             self.entry.chains_to_df().to_parquet(
                 entry_folder / "entry_chains.parquet",
                 index=False,
+            )
+            self.entry_metadata_df.to_parquet(
+                entry_folder / "entry_metadata.parquet",
+                index=False,
+            )
+            pq.write_table(
+                interface_table,
+                entry_folder / "interfaces.parquet",
             )
             self.entry.biounit_chains_to_df().to_parquet(
                 entry_folder / "entry_biounit_chains.parquet",
@@ -88,8 +118,6 @@ class GetPlinderAnnotation:
                 }
             ).to_parquet(entry_folder / "entry_source.parquet", index=False)
         self.annotated_df = self.entry.to_df()
-        if self.annotated_df.empty:
-            raise ValueError(f"No ligands detected in entry {self.mmcif_file}")
         return self.annotated_df
 
 
@@ -139,28 +167,37 @@ def hpc_save_batch(
 def cloud_save_annotation() -> None:
     from omegaconf import OmegaConf
 
-    from plinder.data.pipeline.config import AnnotationConfig, EntryConfig
+    from plinder.data.pipeline.config import (
+        AnnotationConfig,
+        EntryConfig,
+        InterfaceConfig,
+    )
 
-    cfg = OmegaConf.to_container(
-        OmegaConf.merge(
-            {
-                "mmcif_file": None,
-                "validation_xml": None,
-                "raise_exceptions": False,
-            },
-            {
-                "annotation": AnnotationConfig(),
-                "entry": EntryConfig(),
-            },
-            OmegaConf.from_cli(),
-        )
+    cfg = cast(
+        Dict[str, Any],
+        OmegaConf.to_container(
+            OmegaConf.merge(
+                {
+                    "mmcif_file": None,
+                    "validation_xml": None,
+                    "raise_exceptions": False,
+                },
+                {
+                    "annotation": AnnotationConfig(),
+                    "entry": EntryConfig(),
+                    "interface": InterfaceConfig(),
+                },
+                OmegaConf.from_cli(),
+            )
+        ),
     )
     assert cfg["mmcif_file"] is not None, "please pass mmcif_file=path/to/cif"
     assert cfg["validation_xml"] is not None, "please pass validation_xml=path/to/xml"
     cif = Path(cfg.pop("mmcif_file"))
     val = Path(cfg.pop("validation_xml"))
-    entry_cfg = cfg.pop("entry")
-    annotation_cfg = cfg.pop("annotation")
+    entry_cfg = cast(Dict[str, Any], cfg.pop("entry"))
+    annotation_cfg = cast(Dict[str, Any], cfg.pop("annotation"))
+    interface_cfg = cast(Dict[str, Any], cfg.pop("interface"))
     save_folder = entry_cfg.get("save_folder")
     if save_folder is not None:
         save_folder = Path(save_folder)
@@ -171,16 +208,18 @@ def cloud_save_annotation() -> None:
         cif,
         val,
         entry_cfg=entry_cfg,
+        interface_cfg=interface_cfg,
         **annotation_cfg,
     )
     try:
         df = gpa.annotate()
         if save_folder is not None:
             pdb_id = gpa.entry.pdb_id
-            (df if df is not None else pd.DataFrame()).to_parquet(
-                save_folder / f"{pdb_id}.parquet",
-                index=False,
-            )
+            annotation_path = save_folder / f"{pdb_id}.parquet"
+            if df is not None and not df.empty:
+                df.to_parquet(annotation_path, index=False)
+            else:
+                annotation_path.unlink(missing_ok=True)
     except Exception as e:
         if cfg["raise_exceptions"]:
             raise e

@@ -259,6 +259,23 @@ class AnnotationConfig:
     min_shared_pocket_members: int = 3
 
 
+@dataclass
+class InterfaceConfig:
+    """Protein-interface definitions used during entry ingest."""
+
+    contact_radius: float = 10.0
+    min_chain_length: int = 12
+    min_interface_residues: int = 3
+
+    def __post_init__(self) -> None:
+        if self.contact_radius <= 0:
+            raise ValueError("interface.contact_radius must be positive")
+        if self.min_chain_length < 1:
+            raise ValueError("interface.min_chain_length must be positive")
+        if self.min_interface_residues < 1:
+            raise ValueError("interface.min_interface_residues must be positive")
+
+
 """ From
 OleinikovasV
 OleinikovasV commented Apr 22, 2024
@@ -296,6 +313,7 @@ SCHEMA = {
     "mmseqs": MMSeqsConfig,
     "graph": GraphConfig,
     "annotation": AnnotationConfig,
+    "interface": InterfaceConfig,
     "entry": EntryConfig,
     "scorer": ScorerConfig,
     "ligand": LigandConfig,

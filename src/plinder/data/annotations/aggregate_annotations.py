@@ -40,6 +40,10 @@ from plinder.data.annotations.interaction_utils import (
     get_covalent_connections,
     get_symmetry_mate_contacts,
 )
+from plinder.data.annotations.interface_utils import (
+    ProteinInterface,
+    detect_protein_interfaces,
+)
 from plinder.data.annotations.ligand_utils import (
     BiounitSpatialIndex,
     Ligand,
@@ -53,7 +57,6 @@ from plinder.data.annotations.protein_utils import (
     _is_polynucleotide,
     _is_polypeptide,
     detect_ligand_chains,
-    detect_ligand_chains_from_cif,
     get_receptor_type,
 )
 from plinder.data.annotations.save_utils import save_ligands
@@ -707,6 +710,10 @@ class Entry(DocBaseModel):
         default_factory=dict,
         description="__System dictionary with system id mapped to system object",
     )
+    interfaces: list[ProteinInterface] = Field(
+        default_factory=list,
+        description="__Protein-chain interfaces across deposited assemblies",
+    )
     covalent_bonds: dict[str, list[tuple[str, str]]] = Field(
         default_factory=dict,
         description="__All covalent interactions in the entry as defined by mmcif annotations. They types are separated by dictionary key and they include: "
@@ -1159,6 +1166,9 @@ class Entry(DocBaseModel):
         plip_complex_threshold: float = 10.0,
         symmetry_mate_contact_threshold: float = 5.0,
         min_shared_pocket_members: int = 3,
+        interface_contact_radius: float = 10.0,
+        interface_min_chain_length: int = 12,
+        interface_min_residues: int = 3,
     ) -> Entry:
         """
         Load an entry object from mmCIF files in the pipeline
@@ -1182,6 +1192,12 @@ class Entry(DocBaseModel):
             Maximum distance (Å) from ligand for interaction analysis
         min_shared_pocket_members : int
             Minimum shared pocket residues to group non-artifact ligands.
+        interface_contact_radius : float
+            Maximum backbone-atom distance defining a protein interface.
+        interface_min_chain_length : int
+            Minimum SEQRES length for an interface chain.
+        interface_min_residues : int
+            Minimum number of contacting residues required on each side.
 
         Returns
         -------
@@ -1234,17 +1250,6 @@ class Entry(DocBaseModel):
             else None,
             resolution=r,
         )
-        ligand_preflight = detect_ligand_chains_from_cif(
-            cif_data,
-            min_polymer_size,
-        )
-        if ligand_preflight == {}:
-            LOG.info(
-                f"PDB {pdb_id!r} has no ligand-like chains; skipping bonded "
-                "structure loading"
-            )
-            return entry
-
         # Load structure with biotite
         # Multi-model PDBs (e.g. NMR ensembles) silently use model 1 here;
         # warn so callers know other models are dropped.
@@ -1276,11 +1281,6 @@ class Entry(DocBaseModel):
             if chain in entry.chains:
                 entry.chains[chain].mappings = per_chain[chain]
         entry.ligand_like_chains = detect_ligand_chains(entry, min_polymer_size)
-        if not entry.ligand_like_chains:
-            # There can be no systems without ligand-like chains.  In
-            # particular, avoid building biological assemblies for large
-            # receptor-only entries that cannot contribute annotation rows.
-            return entry
         monoatomic_ion_mask = struc.filter_monoatomic_ions(atoms)
         ion_only_chains = set(
             str(chain) for chain in atoms.chain_id[monoatomic_ion_mask]
@@ -1311,11 +1311,10 @@ class Entry(DocBaseModel):
         )
         if not primary_asym_ids:
             LOG.info(
-                f"PDB {entry.pdb_id!r} has only known artifact or "
-                "monoatomic-ion ligand chains; "
-                "skipping biological assemblies"
+                "PDB %r has no primary ligand chains; processing only "
+                "protein interfaces",
+                entry.pdb_id,
             )
-            return entry
         if monoatomic_ion_asym_ids or known_artifact_asym_ids:
             LOG.info(
                 "PDB %s: deferring %d ion and %d known-artifact ASU ligand chains",
@@ -1341,8 +1340,23 @@ class Entry(DocBaseModel):
                     plip_complex_threshold,
                     neighboring_residue_threshold,
                     neighboring_ligand_threshold,
+                    interface_contact_radius,
                 ),
             )
+            entry.interfaces.extend(
+                detect_protein_interfaces(
+                    biounit,
+                    pdb_id=entry.pdb_id,
+                    biounit_id=str(assembly_id),
+                    chains=entry.chains,
+                    contact_radius=interface_contact_radius,
+                    min_chain_length=interface_min_chain_length,
+                    min_interface_residues=interface_min_residues,
+                    spatial_index=spatial_index,
+                )
+            )
+            if not primary_asym_ids:
+                continue
             water_chains = get_water_chain_ids(biounit)
             primary_ligands = entry._collect_ligands_from_biounit(
                 biounit,
@@ -1867,18 +1881,20 @@ class Entry(DocBaseModel):
         None
         """
         holo_chains = set()
-        ligand_chains = set()
         for system in self.systems.values():
             if system.system_type == "holo":
                 holo_chains.update(
                     [c.split(".")[1] for c in system.protein_chains_asym_id]
                 )
-            ligand_chains.update([l.asym_id for l in system.ligands])
+        for interface in self.interfaces:
+            holo_chains.update(
+                {
+                    interface.chain_1.split(".", maxsplit=1)[-1],
+                    interface.chain_2.split(".", maxsplit=1)[-1],
+                }
+            )
         for chain in self.chains:
-            if chain not in ligand_chains and chain not in holo_chains:
-                self.chains[chain].holo = False
-            elif chain in holo_chains:
-                self.chains[chain].holo = True
+            self.chains[chain].holo = chain in holo_chains
 
     def format_validation(
         self, criteria: QualityCriteria = QualityCriteria()
@@ -1952,13 +1968,12 @@ class Entry(DocBaseModel):
             "chain_length",
             "chain_num_unresolved_residues",
             "chain_is_holo",
+            "chain_is_ligand_like",
             "chain_uniprot_ids",
         ]
         rows = []
         for chain_id in sorted(self.chains):
             chain = self.chains[chain_id]
-            if chain_id in self.ligand_like_chains:
-                continue
             if not (
                 _is_polypeptide(chain.chain_type_str)
                 or _is_polynucleotide(chain.chain_type_str)
@@ -1975,10 +1990,15 @@ class Entry(DocBaseModel):
                     "chain_length": chain.length,
                     "chain_num_unresolved_residues": chain.num_unresolved_residues,
                     "chain_is_holo": chain.holo,
+                    "chain_is_ligand_like": chain_id in self.ligand_like_chains,
                     "chain_uniprot_ids": sorted(chain.mappings.get("UniProt", {})),
                 }
             )
         return pd.DataFrame(rows, columns=columns)
+
+    def metadata_to_df(self) -> pd.DataFrame:
+        """Return one normalized row of entry-level annotations."""
+        return pd.DataFrame([self.format()])
 
     def biounit_chains_to_df(self) -> pd.DataFrame:
         """Return biological-assembly membership once per chain instance."""

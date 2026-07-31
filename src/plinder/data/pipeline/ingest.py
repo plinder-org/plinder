@@ -179,20 +179,27 @@ def _entry_outputs_complete(
         metrics = json.loads(metrics_path.read_text())
     except (OSError, json.JSONDecodeError):
         return False
-    if metrics.get("status") != "complete" or not entry_parquet.is_file():
+    if metrics.get("status") != "complete":
+        return False
+    counts = metrics.get("counts", {})
+    annotation_rows = int(counts.get("annotation_rows", 0))
+    interface_rows = int(counts.get("interface_rows", 0))
+    if annotation_rows < 1 and interface_rows < 1:
         return False
     sidecars = {
         "entry_chains": entry_directory / "entry_chains.parquet",
         "entry_biounit_chains": entry_directory / "entry_biounit_chains.parquet",
+        "entry_metadata": entry_directory / "entry_metadata.parquet",
+        "interfaces": entry_directory / "interfaces.parquet",
         "entry_source": entry_directory / "entry_source.parquet",
     }
-    if not ligand_parquet.is_file() or not all(
-        path.is_file() for path in sidecars.values()
-    ):
+    if not all(path.is_file() for path in sidecars.values()):
         return False
     required_columns = {
-        entry_parquet: {"system_receptor_type"},
-        sidecars["entry_chains"]: {"chain_receptor_type"},
+        sidecars["entry_chains"]: {
+            "chain_receptor_type",
+            "chain_is_ligand_like",
+        },
         sidecars["entry_biounit_chains"]: {
             "entry_pdb_id",
             "biounit_id",
@@ -200,9 +207,29 @@ def _entry_outputs_complete(
             "chain_asym_id",
             "chain_role",
         },
+        sidecars["entry_metadata"]: {"entry_pdb_id"},
+        sidecars["interfaces"]: {
+            "entry_pdb_id",
+            "system_id",
+            "system_biounit_id",
+            "interface_chain_1",
+            "interface_chain_2",
+            "interface_chain_1_residue_numbers",
+            "interface_chain_1_residue_indices",
+            "interface_chain_2_residue_numbers",
+            "interface_chain_2_residue_indices",
+        },
         sidecars["entry_source"]: {"entry_pdb_id"},
-        ligand_parquet: {"ligand_id", "ligand_is_3d_score_able"},
     }
+    if annotation_rows:
+        if not entry_parquet.is_file() or not ligand_parquet.is_file():
+            return False
+        required_columns.update(
+            {
+                entry_parquet: {"system_receptor_type"},
+                ligand_parquet: {"ligand_id", "ligand_is_3d_score_able"},
+            }
+        )
     try:
         return all(
             columns.issubset(pq.read_schema(path).names)
@@ -236,13 +263,22 @@ def completed_entry_metrics(output_root: Path, pdb_id: str) -> Path | None:
         except (OSError, json.JSONDecodeError):
             continue
         if metrics.get("status") == "skipped_no_systems":
-            return metrics_path
-        outputs = metrics.get("outputs", {})
-        entry_parquet = outputs.get("entry_parquet")
-        entry_directory = outputs.get("entry_directory")
-        ligand_parquet = outputs.get("ligand_parquet")
-        if not all((entry_parquet, entry_directory, ligand_parquet)):
+            # A pre-interface-ingest skip may actually contain a protein-only
+            # interface and must be reconsidered. New skips explicitly record
+            # the zero interface count.
+            if "interface_rows" in metrics.get("counts", {}):
+                return metrics_path
             continue
+        outputs = metrics.get("outputs", {})
+        entry_directory = outputs.get("entry_directory")
+        if not entry_directory:
+            continue
+        entry_parquet = outputs.get("entry_parquet") or (
+            output_root / "raw_entries" / pdb_id[1:3] / f"{pdb_id}.parquet"
+        )
+        ligand_parquet = outputs.get("ligand_parquet") or (
+            output_root / "ligands" / f"{pdb_id}.parquet"
+        )
         if _entry_outputs_complete(
             metrics_path=metrics_path,
             entry_parquet=Path(entry_parquet),
@@ -275,6 +311,7 @@ def ingest_one_pdb(
     check_references: bool = True,
     annotation_cfg: Mapping[str, Any] | None = None,
     entry_cfg: Mapping[str, Any] | None = None,
+    interface_cfg: Mapping[str, Any] | None = None,
 ) -> Path:
     """Generate all per-entry V3 Parquets and canonical ASU SDFs."""
     pdb_id = normalize_pdb_id(pdb_id)
@@ -336,7 +373,7 @@ def ingest_one_pdb(
         },
         "timings": timings,
     }
-    if annotation_cfg or entry_cfg:
+    if annotation_cfg or entry_cfg or interface_cfg:
         summary["configuration"] = {
             "annotation": dict(annotation_cfg or {}),
             "entry": {
@@ -344,6 +381,7 @@ def ingest_one_pdb(
                 for key, value in dict(entry_cfg or {}).items()
                 if key != "save_folder"
             },
+            "interface": dict(interface_cfg or {}),
         }
     total_started = time.perf_counter()
     try:
@@ -356,6 +394,8 @@ def ingest_one_pdb(
             entry_options.pop("save_folder", None)
             if entry_options:
                 annotation_options["entry_cfg"] = entry_options
+            if interface_cfg:
+                annotation_options["interface_cfg"] = dict(interface_cfg)
             annotation = _get_annotation_class()(
                 cif_file,
                 validation_file,
@@ -365,7 +405,13 @@ def ingest_one_pdb(
             return annotation if annotation is not None else pd.DataFrame()
 
         annotation = _run_timed("annotate_entry", annotate, timings)
-        if annotation.empty:
+        interface_path = entry_directory / "interfaces.parquet"
+        interface_rows = (
+            pq.ParquetFile(interface_path).metadata.num_rows
+            if interface_path.is_file()
+            else 0
+        )
+        if annotation.empty and interface_rows == 0:
             entry_parquet.unlink(missing_ok=True)
             ligand_parquet.unlink(missing_ok=True)
             shutil.rmtree(entry_directory, ignore_errors=True)
@@ -376,40 +422,56 @@ def ingest_one_pdb(
             }
             summary["counts"] = {
                 "annotation_rows": 0,
+                "interface_rows": 0,
                 "systems": 0,
                 "ligand_ids": 0,
                 "canonical_ligand_sdfs": 0,
             }
             summary["status"] = "skipped_no_systems"
         else:
+            if not annotation.empty:
 
-            def write_entry_parquet() -> None:
-                annotation.to_parquet(entry_parquet, index=False)
+                def write_entry_parquet() -> None:
+                    annotation.to_parquet(entry_parquet, index=False)
 
-            _run_timed(
-                "write_entry_parquet",
-                write_entry_parquet,
-                timings,
-            )
-
-            def write_ligand_parquet() -> None:
-                _save_ligand_batch(
-                    data_dir=output_root,
-                    annotation=annotation,
-                    output_path=ligand_parquet,
+                _run_timed(
+                    "write_entry_parquet",
+                    write_entry_parquet,
+                    timings,
                 )
 
-            _run_timed(
-                "write_ligand_parquet",
-                write_ligand_parquet,
-                timings,
-            )
+                def write_ligand_parquet() -> None:
+                    _save_ligand_batch(
+                        data_dir=output_root,
+                        annotation=annotation,
+                        output_path=ligand_parquet,
+                    )
+
+                _run_timed(
+                    "write_ligand_parquet",
+                    write_ligand_parquet,
+                    timings,
+                )
+            else:
+                entry_parquet.unlink(missing_ok=True)
+                ligand_parquet.unlink(missing_ok=True)
+                summary["outputs"]["entry_parquet"] = None
+                summary["outputs"]["ligand_parquet"] = None
 
             ligand_sdfs = sorted((entry_directory / "ligand_files").glob("*.sdf"))
             summary["counts"] = {
                 "annotation_rows": len(annotation),
-                "systems": int(annotation["system_id"].nunique()),
-                "ligand_ids": int(annotation["ligand_id"].nunique()),
+                "interface_rows": interface_rows,
+                "systems": (
+                    int(annotation["system_id"].nunique())
+                    if not annotation.empty
+                    else 0
+                ),
+                "ligand_ids": (
+                    int(annotation["ligand_id"].nunique())
+                    if not annotation.empty
+                    else 0
+                ),
                 "canonical_ligand_sdfs": len(ligand_sdfs),
             }
             summary["status"] = "complete"
@@ -675,6 +737,7 @@ def ingest_pdb_batch(
     batch_index: int = 0,
     annotation_cfg: Mapping[str, Any] | None = None,
     entry_cfg: Mapping[str, Any] | None = None,
+    interface_cfg: Mapping[str, Any] | None = None,
 ) -> tuple[Path, bool]:
     """Ingest PDB IDs sequentially and continue after per-entry failures."""
     output_root = output_root.resolve()
@@ -714,6 +777,7 @@ def ingest_pdb_batch(
                     force=True,
                     annotation_cfg=annotation_cfg,
                     entry_cfg=entry_cfg,
+                    interface_cfg=interface_cfg,
                 )
                 entry_status = json.loads(entry_metrics.read_text()).get("status")
                 payload["entries"].append(
