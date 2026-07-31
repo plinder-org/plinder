@@ -203,6 +203,10 @@ case "${MODE}" in
 esac
 
 if [[ "${MODE}" == "plan-clusters" || "${MODE}" == "symmetric-edge-fragments" || "${MODE}" == "symmetric-edge-shards" || "${MODE}" == "component-reductions" || "${MODE}" == "merge-components" || "${MODE}" == "communities" || "${MODE}" == "directed-covers" || "${MODE}" == "cluster-stats" ]]; then
+    ARGS+=(--entity-type "${PLINDER_CLUSTER_ENTITY_TYPE:-ligand}")
+fi
+
+if [[ "${MODE}" == "plan-clusters" || "${MODE}" == "component-reductions" || "${MODE}" == "merge-components" || "${MODE}" == "communities" || "${MODE}" == "directed-covers" || "${MODE}" == "cluster-stats" ]]; then
     if [[ -n "${PLINDER_CLUSTER_METRICS:-}" ]]; then
         IFS=',' read -r -a CLUSTER_METRICS <<< "${PLINDER_CLUSTER_METRICS}"
         for METRIC in "${CLUSTER_METRICS[@]}"; do

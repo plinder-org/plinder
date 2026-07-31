@@ -390,6 +390,15 @@ def test_scoring_finalization_stage_order_and_partitions():
         "collate_partitions"
     )
     assert tasks.STAGES.index("collate_partitions") < tasks.STAGES.index(
+        "plan_clusters"
+    )
+    assert tasks.STAGES.index("plan_clusters") < tasks.STAGES.index(
+        "make_symmetric_edge_fragments"
+    )
+    assert tasks.STAGES.index("make_symmetric_edge_fragments") < tasks.STAGES.index(
+        "make_symmetric_edge_shards"
+    )
+    assert tasks.STAGES.index("make_symmetric_edge_shards") < tasks.STAGES.index(
         "make_component_reductions"
     )
     assert tasks.STAGES.index("make_component_reductions") < tasks.STAGES.index(
@@ -2874,6 +2883,117 @@ def test_finalize_index_preserves_current_alignment_lookup(
     assert tasks._completed_alignment_chain_lookup(tmp_path) is not None
 
 
+def test_interface_cluster_columns_merge_into_interface_annotation(
+    tmp_path, monkeypatch
+):
+    from plinder.data.pipeline import utils
+
+    interfaces = pd.DataFrame(
+        {
+            "system_id": ["1abc__1__1.A--1.B", "2def__1__1.X--1.Y"],
+            "entry_pdb_id": ["1abc", "2def"],
+        }
+    )
+    artifact_rows = pd.DataFrame(
+        {
+            "system_id": interfaces["system_id"],
+            "label": ["c0", "c0"],
+            "metric": ["interface_qcov"] * 2,
+            "directed": [False] * 2,
+            "threshold": [50] * 2,
+        }
+    )
+    for cluster in ["components", "communities"]:
+        path = (
+            tmp_path
+            / "interface_clusters"
+            / f"cluster={cluster}"
+            / "directed=False"
+            / "metric=interface_qcov"
+            / "threshold=50.parquet"
+        )
+        path.parent.mkdir(parents=True, exist_ok=True)
+        artifact_rows.assign(cluster=cluster).to_parquet(path, index=False)
+    cover = (
+        tmp_path
+        / "interface_sampling/directed_set_cover"
+        / "metric=interface_qcov/threshold=50.parquet"
+    )
+    cover.parent.mkdir(parents=True)
+    artifact_rows.assign(
+        directed=True,
+        centroid_system_id=interfaces["system_id"],
+        similarity_to_centroid=100.0,
+    ).to_parquet(cover, index=False)
+
+    result = utils.add_interface_cluster_columns(index=interfaces, data_dir=tmp_path)
+
+    assert result["interface_qcov__50__component"].tolist() == ["c0", "c0"]
+    assert result["interface_qcov__50__community"].tolist() == ["c0", "c0"]
+    assert result["interface_qcov__50__directed_set_cover"].tolist() == [
+        "c0",
+        "c0",
+    ]
+
+    index_dir = tmp_path / "index"
+    index_dir.mkdir()
+    pd.DataFrame({"system_id": ["ligand-system"]}).to_parquet(
+        index_dir / "annotation_table.parquet",
+        index=False,
+    )
+    interfaces.to_parquet(
+        index_dir / "interface_annotation_table.parquet",
+        index=False,
+    )
+    monkeypatch.setattr(
+        utils,
+        "add_ligand_3d_score_ability_column",
+        lambda *, index, data_dir: index,
+    )
+    monkeypatch.setattr(
+        utils,
+        "add_ligand_similarity_columns",
+        lambda *, index, data_dir: index,
+    )
+    monkeypatch.setattr(
+        utils,
+        "add_cluster_columns",
+        lambda *, index, data_dir: index,
+    )
+
+    utils.finalize_index(data_dir=tmp_path)
+
+    finalized_interfaces = pd.read_parquet(
+        index_dir / "interface_annotation_table.parquet"
+    )
+    assert finalized_interfaces["interface_qcov__50__component"].tolist() == [
+        "c0",
+        "c0",
+    ]
+
+    original_replace = Path.replace
+
+    def fail_interface_install(source: Path, target: Path) -> Path:
+        if source.name == "interface_annotation_table.tmp.parquet":
+            raise OSError("simulated interface-index install failure")
+        return original_replace(source, target)
+
+    monkeypatch.setattr(Path, "replace", fail_interface_install)
+    with pytest.raises(OSError, match="simulated interface-index install failure"):
+        utils.finalize_index(data_dir=tmp_path)
+    assert not (index_dir / "annotation_table.parquet").exists()
+
+
+def test_nonempty_interface_annotation_requires_cluster_artifacts(tmp_path):
+    from plinder.data.pipeline.utils import add_interface_cluster_columns
+
+    with pytest.raises(FileNotFoundError, match="no published interface clusters"):
+        add_interface_cluster_columns(
+            index=pd.DataFrame({"system_id": ["1abc__1__1.A--1.B"]}),
+            data_dir=tmp_path,
+        )
+
+
 def test_component_reduction_scatter_reads_each_physical_source_once(
     tmp_path, monkeypatch
 ):
@@ -2881,8 +3001,9 @@ def test_component_reduction_scatter_reads_each_physical_source_once(
     score_b = tmp_path / "scores-b.parquet"
     ligand = tmp_path / "ligands.parquet"
 
-    def sources(*, data_dir, metric):
+    def sources(*, data_dir, metric, entity_type="ligand"):
         del data_dir
+        assert entity_type == "ligand"
         if metric == "tanimoto_similarity_ecfp4_1024":
             return [ligand]
         return [score_a, score_b]
@@ -3005,11 +3126,15 @@ def test_component_reduction_metric_workers_must_be_positive(tmp_path):
 
 
 def test_clustering_plan_matches_slurm_array_bounds(tmp_path, monkeypatch):
-    from plinder.data.pipeline.score import _community_batch, plan_clustering
+    from plinder.data.pipeline.score import (
+        _cluster_parameters,
+        _community_batch,
+        plan_clustering,
+    )
 
     monkeypatch.setattr(
         "plinder.data.pipeline.score.clusters.prepare_component_node_universe",
-        lambda data_dir: {"status": "complete"},
+        lambda data_dir, **kwargs: {"status": "complete"},
     )
     monkeypatch.setattr(
         "plinder.data.pipeline.score.clusters.prepare_symmetric_edge_plan",
@@ -3037,6 +3162,11 @@ def test_clustering_plan_matches_slurm_array_bounds(tmp_path, monkeypatch):
         batch_index=1,
         batch_size=3,
     ) == [("tanimoto_similarity_ecfp4_1024", 30)]
+    assert _cluster_parameters(
+        metrics=None,
+        thresholds=None,
+        entity_type="interface",
+    ) == (["interface_qcov"], [100, 90, 70, 50, 30])
 
 
 def test_sucos_release_export_retains_scores_below_cluster_cutoff(tmp_path):
@@ -3393,6 +3523,15 @@ def test_interface_score_cli_exposes_plan_array_and_finalizer(tmp_path):
         ]
     )
     assert finalized.output == tmp_path / "release.parquet"
+    interface_clusters = _parser().parse_args(
+        [
+            "plan-clusters",
+            str(tmp_path),
+            "--entity-type",
+            "interface",
+        ]
+    )
+    assert interface_clusters.entity_type == "interface"
 
 
 def test_clustering_statistics_validate_complete_monotonic_artifacts(tmp_path):
@@ -3528,6 +3667,7 @@ def test_v3_score_slurm_exposes_exact_clustering_stages():
     )
     assert "PLINDER_CLUSTER_METRICS" in script
     assert "PLINDER_CLUSTER_THRESHOLDS" in script
+    assert "PLINDER_CLUSTER_ENTITY_TYPE" in script
 
 
 def test_metaflow_graph_uses_canonical_ligand_archive_stage():
@@ -3574,6 +3714,12 @@ def test_metaflow_graph_uses_canonical_ligand_archive_stage():
     assert "self.next(self.scatter_export_sucos_shape_pocket_qcov)" in flow
     assert "self.pipeline.export_sucos_shape_pocket_qcov(self.input)" in flow
     assert "self.pipeline.finalize_sucos_export()" in flow
+    assert "self.next(self.plan_clusters)" in flow
+    assert "self.pipeline.plan_clusters()" in flow
+    assert "self.next(self.scatter_make_symmetric_edge_fragments)" in flow
+    assert "self.pipeline.make_symmetric_edge_fragments(self.input)" in flow
+    assert "self.next(self.scatter_make_symmetric_edge_shards)" in flow
+    assert "self.pipeline.make_symmetric_edge_shards(self.input)" in flow
     assert "self.next(self.scatter_make_component_reductions)" in flow
     assert "self.pipeline.merge_component_reductions()" in flow
     assert "self.next(self.scatter_make_communities)" in flow
@@ -3685,6 +3831,9 @@ def test_v3_ingest_configs_use_current_schema_and_stages():
             )
         if path.name == "make_components.yaml":
             assert "collate_partitions" in cfg.flow.run_specific_stages
+            assert "plan_clusters" in cfg.flow.run_specific_stages
+            assert "make_symmetric_edge_fragments" in cfg.flow.run_specific_stages
+            assert "make_symmetric_edge_shards" in cfg.flow.run_specific_stages
             assert "make_component_reductions" in cfg.flow.run_specific_stages
             assert "merge_component_reductions" in cfg.flow.run_specific_stages
             assert "make_communities" in cfg.flow.run_specific_stages

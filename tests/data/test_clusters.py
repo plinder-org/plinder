@@ -1,5 +1,6 @@
 import json
 from os import utime
+from pathlib import Path
 
 import networkit as nk
 import numpy as np
@@ -420,6 +421,278 @@ def test_symmetric_edge_shards_take_minimum_of_directional_maxima(tmp_path):
     assert cover.loc["l3", "centroid_ligand_id"] == "l3"
     assert cover.loc["l4", "centroid_ligand_id"] == "l3"
     assert cover.loc["l4", "similarity_to_centroid"] == pytest.approx(85.0)
+
+
+def test_interface_clusters_reuse_reciprocal_and_directed_cover_pipeline(tmp_path):
+    from plinder.data.clusters import (
+        make_communities,
+        make_directed_cover_component_reduction,
+        make_directed_set_cover,
+        make_score_component_reduction,
+        merge_directed_cover_component_reductions,
+        merge_score_component_reductions,
+        prepare_component_node_universe,
+        prepare_symmetric_edge_plan,
+        write_symmetric_edge_fragment_batch,
+        write_symmetric_edge_shard,
+    )
+
+    metric = "interface_qcov"
+    interfaces = ["i1", "i2", "i3", "i4"]
+    index_dir = tmp_path / "index"
+    score_dir = tmp_path / "interface_scores"
+    index_dir.mkdir()
+    score_dir.mkdir()
+    pd.DataFrame({"system_id": interfaces}).to_parquet(
+        index_dir / "interface_annotation_table.parquet",
+        index=False,
+    )
+    pd.DataFrame(
+        {
+            "query_system": ["i1", "i2", "i1", "i4"],
+            "target_system": ["i2", "i1", "i3", "i3"],
+            "similarity": [80, 60, 90, 85],
+        }
+    ).to_parquet(score_dir / "shard=ab.parquet", index=False)
+
+    prepare_component_node_universe(tmp_path, entity_type="interface")
+    plan = prepare_symmetric_edge_plan(
+        data_dir=tmp_path,
+        metrics=[metric],
+        source_batch_size=1,
+        bucket_count=1,
+        entity_type="interface",
+    )
+    write_symmetric_edge_fragment_batch(
+        data_dir=tmp_path,
+        batch=plan["batches"][0],
+        scratch_dir=tmp_path / "scratch-fragments",
+        threads=1,
+        entity_type="interface",
+    )
+    write_symmetric_edge_shard(
+        data_dir=tmp_path,
+        metric=metric,
+        bucket=0,
+        scratch_dir=tmp_path / "scratch-shard",
+        threads=1,
+        entity_type="interface",
+    )
+    edge_path = (
+        tmp_path
+        / "interface_clusters/symmetric_edges"
+        / f"metric={metric}/bucket=000.parquet"
+    )
+    edges = pd.read_parquet(edge_path).set_index(["query_node", "target_node"])
+    assert edges.loc[("i1", "i2"), "similarity"] == pytest.approx(60.0)
+    assert pd.isna(edges.loc[("i1", "i3"), "similarity"])
+    assert edges.loc[("i1", "i3"), "maximum_similarity"] == pytest.approx(90.0)
+
+    make_score_component_reduction(
+        data_dir=tmp_path,
+        metric=metric,
+        thresholds=[50],
+        source_path=edge_path,
+        entity_type="interface",
+    )
+    make_directed_cover_component_reduction(
+        data_dir=tmp_path,
+        metric=metric,
+        thresholds=[50],
+        source_path=edge_path,
+        entity_type="interface",
+    )
+    merge_score_component_reductions(
+        data_dir=tmp_path,
+        metric=metric,
+        thresholds=[50],
+        entity_type="interface",
+    )
+    merge_directed_cover_component_reductions(
+        data_dir=tmp_path,
+        metric=metric,
+        thresholds=[50],
+        entity_type="interface",
+    )
+    make_communities(
+        data_dir=tmp_path,
+        metric=metric,
+        threshold=50,
+        scratch_dir=tmp_path / "scratch-communities",
+        threads=1,
+        entity_type="interface",
+    )
+    cover_path = make_directed_set_cover(
+        data_dir=tmp_path,
+        metric=metric,
+        threshold=50,
+        scratch_dir=tmp_path / "scratch-cover",
+        threads=1,
+        entity_type="interface",
+    )
+
+    components = pd.read_parquet(
+        tmp_path
+        / "interface_clusters/cluster=components/directed=False"
+        / f"metric={metric}/threshold=50.parquet"
+    )
+    communities = pd.read_parquet(
+        tmp_path
+        / "interface_clusters/cluster=communities/directed=False"
+        / f"metric={metric}/threshold=50.parquet"
+    )
+    assert set(components["system_id"]) == set(interfaces)
+    assert set(communities["system_id"]) == set(interfaces)
+    assert _component_partition(
+        components.rename(columns={"system_id": "ligand_id"})
+    ) == {
+        frozenset({"i1", "i2"}),
+        frozenset({"i3"}),
+        frozenset({"i4"}),
+    }
+    cover = pd.read_parquet(cover_path).set_index("system_id")
+    assert cover.loc["i1", "centroid_system_id"] == "i3"
+    assert cover.loc["i1", "similarity_to_centroid"] == pytest.approx(90.0)
+    assert cover.loc["i4", "centroid_system_id"] == "i3"
+
+    from plinder.data.pipeline.score import summarize_clustering_artifacts
+
+    summary = summarize_clustering_artifacts(
+        tmp_path,
+        metrics=[metric],
+        thresholds=[50],
+        entity_type="interface",
+    )
+    assert summary["entity_type"] == "interface"
+    assert summary["artifact_count"] == 3
+
+
+def test_empty_interface_universe_publishes_typed_empty_clusters(tmp_path):
+    from plinder.data.clusters import (
+        make_communities,
+        make_directed_cover_component_reduction,
+        make_directed_set_cover,
+        make_score_component_reduction,
+        merge_directed_cover_component_reductions,
+        merge_score_component_reductions,
+        prepare_component_node_universe,
+        prepare_symmetric_edge_plan,
+        write_symmetric_edge_shard,
+    )
+
+    index_dir = tmp_path / "index"
+    index_dir.mkdir()
+    pd.DataFrame({"system_id": pd.Series(dtype="string")}).to_parquet(
+        index_dir / "interface_annotation_table.parquet",
+        index=False,
+    )
+    prepare_component_node_universe(tmp_path, entity_type="interface")
+    plan = prepare_symmetric_edge_plan(
+        data_dir=tmp_path,
+        metrics=["interface_qcov"],
+        bucket_count=1,
+        entity_type="interface",
+    )
+    assert plan["batches"] == []
+    write_symmetric_edge_shard(
+        data_dir=tmp_path,
+        metric="interface_qcov",
+        bucket=0,
+        scratch_dir=tmp_path / "scratch-shard",
+        entity_type="interface",
+    )
+    edge_path = (
+        tmp_path
+        / "interface_clusters/symmetric_edges/metric=interface_qcov"
+        / "bucket=000.parquet"
+    )
+    make_score_component_reduction(
+        data_dir=tmp_path,
+        metric="interface_qcov",
+        thresholds=[50],
+        source_path=edge_path,
+        entity_type="interface",
+    )
+    make_directed_cover_component_reduction(
+        data_dir=tmp_path,
+        metric="interface_qcov",
+        thresholds=[50],
+        source_path=edge_path,
+        entity_type="interface",
+    )
+    merge_score_component_reductions(
+        data_dir=tmp_path,
+        metric="interface_qcov",
+        thresholds=[50],
+        entity_type="interface",
+    )
+    merge_directed_cover_component_reductions(
+        data_dir=tmp_path,
+        metric="interface_qcov",
+        thresholds=[50],
+        entity_type="interface",
+    )
+    make_communities(
+        data_dir=tmp_path,
+        metric="interface_qcov",
+        threshold=50,
+        entity_type="interface",
+    )
+    cover = make_directed_set_cover(
+        data_dir=tmp_path,
+        metric="interface_qcov",
+        threshold=50,
+        entity_type="interface",
+    )
+
+    component = (
+        tmp_path
+        / "interface_clusters/cluster=components/directed=False"
+        / "metric=interface_qcov/threshold=50.parquet"
+    )
+    community = component.as_posix().replace(
+        "cluster=components", "cluster=communities"
+    )
+    for path in [component, Path(community), cover]:
+        frame = pd.read_parquet(path)
+        assert frame.empty
+        assert "system_id" in frame.columns
+
+    from plinder.data.pipeline.score import summarize_clustering_artifacts
+
+    summary = summarize_clustering_artifacts(
+        tmp_path,
+        metrics=["interface_qcov"],
+        thresholds=[50],
+        entity_type="interface",
+    )
+    assert summary["status"] == "complete"
+    assert summary["artifact_count"] == 3
+
+
+def test_interface_cluster_plan_requires_scores_for_nonempty_universe(tmp_path):
+    from plinder.data.clusters import (
+        prepare_component_node_universe,
+        prepare_symmetric_edge_plan,
+    )
+
+    index_dir = tmp_path / "index"
+    index_dir.mkdir()
+    pd.DataFrame({"system_id": ["i1"]}).to_parquet(
+        index_dir / "interface_annotation_table.parquet",
+        index=False,
+    )
+    prepare_component_node_universe(tmp_path, entity_type="interface")
+
+    with pytest.raises(
+        FileNotFoundError,
+        match="no raw interface score sources found",
+    ):
+        prepare_symmetric_edge_plan(
+            data_dir=tmp_path,
+            metrics=["interface_qcov"],
+            entity_type="interface",
+        )
 
 
 def test_symmetric_edge_fragment_validation_can_be_scoped_to_one_bucket(tmp_path):

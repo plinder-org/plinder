@@ -533,6 +533,64 @@ class PlinderDataIngestFlow(FlowSpec):
     def join_collate_partitions(self, inputs):
         self.pipeline = inputs[0].pipeline
         self.merge_artifacts(inputs, exclude=["chunks"])
+        self.next(self.plan_clusters)
+
+    @kubernetes(**K8S)
+    @environment(**ENV)
+    @retry
+    @step
+    def plan_clusters(self):
+        self.pipeline.plan_clusters()
+        self.next(self.scatter_make_symmetric_edge_fragments)
+
+    @kubernetes(**K8S)
+    @environment(**ENV)
+    @retry
+    @step
+    def scatter_make_symmetric_edge_fragments(self):
+        self.chunks = self.pipeline.scatter_make_symmetric_edge_fragments()
+        self.next(self.make_symmetric_edge_fragments, foreach="chunks")
+
+    @kubernetes(**{**K8S, **LARGE_MEM})
+    @environment(**ENV)
+    @retry
+    @step
+    def make_symmetric_edge_fragments(self):
+        self.pipeline.make_symmetric_edge_fragments(self.input)
+        self.next(self.join_make_symmetric_edge_fragments)
+
+    @kubernetes(**K8S)
+    @environment(**ENV)
+    @retry
+    @step
+    def join_make_symmetric_edge_fragments(self, inputs):
+        self.pipeline = inputs[0].pipeline
+        self.merge_artifacts(inputs, exclude=["chunks"])
+        self.next(self.scatter_make_symmetric_edge_shards)
+
+    @kubernetes(**K8S)
+    @environment(**ENV)
+    @retry
+    @step
+    def scatter_make_symmetric_edge_shards(self):
+        self.chunks = self.pipeline.scatter_make_symmetric_edge_shards()
+        self.next(self.make_symmetric_edge_shards, foreach="chunks")
+
+    @kubernetes(**{**K8S, **LARGE_MEM})
+    @environment(**ENV)
+    @retry
+    @step
+    def make_symmetric_edge_shards(self):
+        self.pipeline.make_symmetric_edge_shards(self.input)
+        self.next(self.join_make_symmetric_edge_shards)
+
+    @kubernetes(**K8S)
+    @environment(**ENV)
+    @retry
+    @step
+    def join_make_symmetric_edge_shards(self, inputs):
+        self.pipeline = inputs[0].pipeline
+        self.merge_artifacts(inputs, exclude=["chunks"])
         self.next(self.scatter_make_component_reductions)
 
     @kubernetes(**K8S)

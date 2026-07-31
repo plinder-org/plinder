@@ -696,6 +696,174 @@ def add_cluster_columns(*, index: pd.DataFrame, data_dir: Path) -> pd.DataFrame:
     return result
 
 
+def add_interface_cluster_columns(
+    *, index: pd.DataFrame, data_dir: Path
+) -> pd.DataFrame:
+    """Merge reciprocal and directed interface-cluster labels into the index."""
+    node_column = "system_id"
+    cluster_root = data_dir / "interface_clusters"
+    directed_cover_root = data_dir / "interface_sampling" / "directed_set_cover"
+    marker_path = data_dir / "index" / "collation.json"
+    repair_started_ns: int | None = None
+    if marker_path.is_file():
+        with marker_path.open() as handle:
+            marker = load(handle)
+        if marker.get("status") == "requires_downstream_repair":
+            repair_started_ns = marker_path.stat().st_mtime_ns
+    reciprocal_paths = sorted(
+        cluster_root.glob("cluster=*/directed=*/metric=*/threshold=*.parquet")
+    )
+    directed_cover_paths = sorted(
+        directed_cover_root.glob("metric=*/threshold=*.parquet")
+    )
+    if not reciprocal_paths and not directed_cover_paths:
+        if repair_started_ns is not None:
+            raise FileNotFoundError(
+                "targeted collation repair has no rebuilt interface clusters"
+            )
+        if index[node_column].notna().any():
+            raise FileNotFoundError(
+                "non-empty interface annotation has no published interface clusters"
+            )
+        return index
+
+    reciprocal_artifact_keys = {
+        (
+            next(
+                part.split("=", maxsplit=1)[1]
+                for part in path.relative_to(cluster_root).parts
+                if part.startswith("metric=")
+            ),
+            int(path.stem.split("=", maxsplit=1)[1]),
+            next(
+                part.split("=", maxsplit=1)[1]
+                for part in path.relative_to(cluster_root).parts
+                if part.startswith("cluster=")
+            ),
+        )
+        for path in reciprocal_paths
+    }
+    reciprocal_keys = {
+        (metric, threshold) for metric, threshold, _ in reciprocal_artifact_keys
+    }
+    expected_reciprocal_artifacts = {
+        (metric, threshold, cluster)
+        for metric, threshold in reciprocal_keys
+        for cluster in ["components", "communities"]
+    }
+    if reciprocal_artifact_keys != expected_reciprocal_artifacts:
+        missing_reciprocal_artifacts = sorted(
+            expected_reciprocal_artifacts.difference(reciprocal_artifact_keys)
+        )
+        extra_reciprocal_artifacts = sorted(
+            reciprocal_artifact_keys.difference(expected_reciprocal_artifacts)
+        )
+        raise FileNotFoundError(
+            "interface reciprocal cluster matrix is incomplete: "
+            f"missing={missing_reciprocal_artifacts[:10]}, "
+            f"extra={extra_reciprocal_artifacts[:10]}"
+        )
+    directed_cover_keys = {
+        (
+            path.parent.name.split("=", maxsplit=1)[1],
+            int(path.stem.split("=", maxsplit=1)[1]),
+        )
+        for path in directed_cover_paths
+    }
+    if directed_cover_keys != reciprocal_keys:
+        missing = sorted(reciprocal_keys.difference(directed_cover_keys))
+        extra = sorted(directed_cover_keys.difference(reciprocal_keys))
+        raise FileNotFoundError(
+            "directed set-cover matrix does not match reciprocal interface "
+            f"clusters: missing={missing[:10]}, extra={extra[:10]}"
+        )
+
+    node_ids = pd.Index(
+        index[node_column].dropna().astype(str).unique(),
+        name=node_column,
+    )
+    expected_nodes = set(node_ids)
+    artifacts: list[tuple[Path, str]] = []
+    for path in reciprocal_paths:
+        partitions = {
+            key: value
+            for key, value in (
+                part.split("=", maxsplit=1)
+                for part in path.relative_to(cluster_root).parts[:-1]
+            )
+        }
+        if partitions["directed"].lower() != "false":
+            raise ValueError(f"interface reciprocal cluster must be undirected: {path}")
+        metric = partitions["metric"]
+        threshold = int(path.stem.split("=", maxsplit=1)[1])
+        kind = "component" if partitions["cluster"] == "components" else "community"
+        artifacts.append((path, f"{metric}__{threshold}__{kind}"))
+    for path in directed_cover_paths:
+        metric = path.parent.name.split("=", maxsplit=1)[1]
+        threshold = int(path.stem.split("=", maxsplit=1)[1])
+        artifacts.append((path, f"{metric}__{threshold}__directed_set_cover"))
+
+    cluster_columns: dict[str, Any] = {}
+    started = time()
+    for path_index, (path, column) in enumerate(artifacts, start=1):
+        if (
+            repair_started_ns is not None
+            and path.stat().st_mtime_ns <= repair_started_ns
+        ):
+            raise ValueError(
+                "interface cluster artifact predates the targeted collation "
+                f"repair: {path}"
+            )
+        labels = pd.read_parquet(path, columns=[node_column, "label"])
+        if labels[node_column].duplicated().any():
+            raise ValueError(f"duplicate interface IDs in cluster artifact: {path}")
+        labels[node_column] = labels[node_column].astype(str)
+        observed_nodes = set(labels[node_column])
+        if observed_nodes != expected_nodes:
+            missing = sorted(expected_nodes.difference(observed_nodes))
+            extra = sorted(observed_nodes.difference(expected_nodes))
+            raise ValueError(
+                "interface cluster artifact does not cover the current interface "
+                f"universe: {path}; missing={missing[:10]}, extra={extra[:10]}"
+            )
+        aligned = labels.set_index(node_column)["label"].reindex(node_ids)
+        cluster_columns[column] = aligned.astype("string[pyarrow]").array
+        if path_index % 10 == 0 or path_index == len(artifacts):
+            elapsed = time() - started
+            rate = path_index / elapsed
+            LOG.info(
+                "interface cluster index progress: loaded=%d/%d rate=%.2f/s "
+                "eta_seconds=%.1f",
+                path_index,
+                len(artifacts),
+                rate,
+                (len(artifacts) - path_index) / rate,
+            )
+
+    wide = pd.DataFrame(
+        {node_column: node_ids.to_numpy(), **cluster_columns},
+        copy=False,
+    )
+    replacement_columns = set(wide.columns).difference({node_column})
+    stale_columns = {
+        column
+        for column in index.columns
+        if column.startswith("interface_qcov__")
+        and column.endswith(("__component", "__community", "__directed_set_cover"))
+    }
+    result = index.drop(
+        columns=list(replacement_columns.intersection(index.columns) | stale_columns)
+    ).merge(wide, on=node_column, how="left", validate="one_to_one")
+    LOG.info(
+        "interface cluster index merge complete: rows=%d columns=%d "
+        "elapsed_seconds=%.1f",
+        len(result),
+        len(replacement_columns),
+        time() - started,
+    )
+    return result
+
+
 def add_ligand_similarity_columns(
     *, index: pd.DataFrame, data_dir: Path
 ) -> pd.DataFrame:
@@ -914,10 +1082,42 @@ def finalize_index(*, data_dir: Path) -> pd.DataFrame:
         index["uniqueness"] = (
             index["system_id_no_biounit"].astype("string") + "_" + labels
         )
+    interface_path = data_dir / "index" / "interface_annotation_table.parquet"
+    interface_index: pd.DataFrame | None = None
+    if interface_path.is_file():
+        interface_index = add_interface_cluster_columns(
+            index=pd.read_parquet(interface_path),
+            data_dir=data_dir,
+        )
+
     temporary = index_path.with_suffix(".tmp.parquet")
-    LOG.info("writing enriched annotation index atomically: %s", index_path)
-    index.to_parquet(temporary, index=False)
-    temporary.replace(index_path)
+    temporary_interface = interface_path.with_suffix(".tmp.parquet")
+    try:
+        LOG.info("staging enriched annotation indexes")
+        index.to_parquet(temporary, index=False)
+        if interface_index is not None:
+            interface_index.to_parquet(temporary_interface, index=False)
+        if interface_index is None:
+            temporary.replace(index_path)
+        else:
+            # The primary annotation table is the readability marker for this
+            # generation. Install it last so an interrupted two-table update
+            # fails closed instead of exposing mixed ligand/interface tables.
+            index_path.unlink()
+            temporary_interface.replace(interface_path)
+            temporary.replace(index_path)
+    except BaseException:
+        if interface_index is not None:
+            index_path.unlink(missing_ok=True)
+        raise
+    finally:
+        temporary.unlink(missing_ok=True)
+        temporary_interface.unlink(missing_ok=True)
+    if interface_index is not None:
+        LOG.info(
+            "wrote enriched interface index: rows=%d columns=%d",
+            *interface_index.shape,
+        )
     LOG.info(
         "final index enrichment complete: rows=%d columns=%d elapsed_seconds=%.1f",
         *index.shape,

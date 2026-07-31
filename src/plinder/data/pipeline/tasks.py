@@ -73,6 +73,9 @@ STAGES = [
     "export_sucos_shape_pocket_qcov",
     "finalize_sucos_export",
     "collate_partitions",
+    "plan_clusters",
+    "make_symmetric_edge_fragments",
+    "make_symmetric_edge_shards",
     "make_component_reductions",
     "merge_component_reductions",
     "make_communities",
@@ -2463,6 +2466,7 @@ def scatter_component_reduction_sources(
     data_dir: Path,
     metrics: list[str],
     batch_size: int,
+    entity_type: clusters.ClusterEntity = "ligand",
 ) -> list[list[str]]:
     """Scatter each physical score shard once, independent of threshold count."""
     if batch_size < 1:
@@ -2470,7 +2474,11 @@ def scatter_component_reduction_sources(
     sources: set[Path] = set()
     for metric in metrics:
         sources.update(
-            clusters.component_score_sources(data_dir=data_dir, metric=metric)
+            clusters.component_score_sources(
+                data_dir=data_dir,
+                metric=metric,
+                entity_type=entity_type,
+            )
         )
     ordered = [str(path) for path in sorted(sources)]
     return [
@@ -2486,6 +2494,7 @@ def make_symmetric_edge_fragments(
     scratch_dir: Path,
     threads: int,
     force_update: bool,
+    entity_type: clusters.ClusterEntity = "ligand",
 ) -> None:
     """Map raw score batches into hash-partitioned canonical-pair fragments."""
     scratch_dir.mkdir(exist_ok=True, parents=True)
@@ -2493,6 +2502,7 @@ def make_symmetric_edge_fragments(
         if not force_update and clusters.symmetric_edge_fragment_batch_is_complete(
             data_dir=data_dir,
             batch=batch,
+            entity_type=entity_type,
         ):
             LOG.info(
                 "symmetric fragment batch already complete: progress=%d/%d key=%s",
@@ -2524,6 +2534,7 @@ def make_symmetric_edge_fragments(
                 threads=threads,
                 force_update=force_update,
                 read_paths=local_sources,
+                entity_type=entity_type,
             )
         finally:
             for local_source in local_sources:
@@ -2537,6 +2548,7 @@ def make_symmetric_edge_shards(
     scratch_dir: Path,
     threads: int,
     force_update: bool,
+    entity_type: clusters.ClusterEntity = "ligand",
 ) -> None:
     """Merge reciprocal fragment values into compact minimum edge shards."""
     for index, (metric, bucket) in enumerate(metric_buckets, start=1):
@@ -2554,6 +2566,7 @@ def make_symmetric_edge_shards(
             scratch_dir=scratch_dir / f"{metric}-{bucket:03d}",
             threads=threads,
             force_update=force_update,
+            entity_type=entity_type,
         )
 
 
@@ -2564,6 +2577,7 @@ def scatter_make_communities(
     thresholds: list[int],
     stop_on_cluster: int,
     skip_existing_clusters: bool,
+    entity_type: clusters.ClusterEntity = "ligand",
 ) -> list[list[tuple[str, int]]]:
     """Scatter centroid-clustering work after component reductions are available."""
     values = [[(metric, threshold)] for metric in metrics for threshold in thresholds]
@@ -2575,8 +2589,7 @@ def scatter_make_communities(
     for item in values:
         metric, threshold = item[0]
         output = (
-            data_dir
-            / "ligand_clusters"
+            clusters._cluster_root(data_dir, entity_type)
             / "cluster=communities"
             / "directed=False"
             / f"metric={metric}"
@@ -2594,6 +2607,7 @@ def scatter_make_directed_set_covers(
     thresholds: list[int],
     stop_on_cluster: int,
     skip_existing: bool,
+    entity_type: clusters.ClusterEntity = "ligand",
 ) -> list[list[tuple[str, int]]]:
     """Scatter directed centroid-cover work after connectivity publication."""
     values = [[(metric, threshold)] for metric in metrics for threshold in thresholds]
@@ -2605,8 +2619,7 @@ def scatter_make_directed_set_covers(
     for item in values:
         metric, threshold = item[0]
         output = (
-            data_dir
-            / "ligand_sampling"
+            clusters._sampling_root(data_dir, entity_type)
             / "directed_set_cover"
             / f"metric={metric}"
             / f"threshold={threshold}.parquet"
@@ -2640,6 +2653,7 @@ def _reduce_component_metric(metric_index: int, metric: str) -> dict[str, Any]:
         all_nodes=context["nodes"],
         eligible_systems=context["eligible_systems"],
         force_update=context["force_update"],
+        entity_type=context["entity_type"],
     )
     cover_manifest = clusters.make_directed_cover_component_reduction(
         data_dir=context["data_dir"],
@@ -2650,6 +2664,7 @@ def _reduce_component_metric(metric_index: int, metric: str) -> dict[str, Any]:
         all_nodes=context["nodes"],
         eligible_systems=context["eligible_systems"],
         force_update=context["force_update"],
+        entity_type=context["entity_type"],
     )
     return {
         "metric_index": metric_index,
@@ -2671,6 +2686,7 @@ def make_component_reductions(
     scratch_dir: Path,
     force_update: bool,
     metric_workers: int = 1,
+    entity_type: clusters.ClusterEntity = "ligand",
 ) -> None:
     """Map reciprocal-minimum edge sources to exact component reductions."""
     if not source_paths:
@@ -2685,12 +2701,14 @@ def make_component_reductions(
         generic_nodes, generic_systems = clusters.component_node_universe(
             data_dir=data_dir,
             metric=nonchemical_metrics[0],
+            entity_type=entity_type,
         )
     chemical_nodes: list[str] = []
     if chemical_metric in metrics:
         chemical_nodes, _ = clusters.component_node_universe(
             data_dir=data_dir,
             metric=chemical_metric,
+            entity_type=entity_type,
         )
     scratch_dir.mkdir(exist_ok=True, parents=True)
 
@@ -2717,6 +2735,7 @@ def make_component_reductions(
                     source_path=source,
                     all_nodes=nodes,
                     eligible_systems=eligible_systems,
+                    entity_type=entity_type,
                 )
                 and clusters.directed_cover_component_reduction_is_complete(
                     data_dir=data_dir,
@@ -2725,6 +2744,7 @@ def make_component_reductions(
                     source_path=source,
                     all_nodes=nodes,
                     eligible_systems=eligible_systems,
+                    entity_type=entity_type,
                 )
             )
         ]
@@ -2762,6 +2782,7 @@ def make_component_reductions(
                 "nodes": nodes,
                 "eligible_systems": eligible_systems,
                 "force_update": force_update,
+                "entity_type": entity_type,
             }
 
             def log_metric_start(metric_index: int, metric: str) -> None:
@@ -2822,6 +2843,7 @@ def merge_component_reductions(
     data_dir: Path,
     metrics: list[str],
     thresholds: list[int],
+    entity_type: clusters.ClusterEntity = "ligand",
 ) -> None:
     """Merge every expected source reduction and publish ligand components."""
     started = time.time()
@@ -2837,11 +2859,13 @@ def merge_component_reductions(
             data_dir=data_dir,
             metric=metric,
             thresholds=thresholds,
+            entity_type=entity_type,
         )
         clusters.merge_directed_cover_component_reductions(
             data_dir=data_dir,
             metric=metric,
             thresholds=thresholds,
+            entity_type=entity_type,
         )
         elapsed = time.time() - started
         rate = index / elapsed
@@ -2861,6 +2885,7 @@ def make_communities(
     skip_existing_clusters: bool,
     scratch_dir: Path | None = None,
     threads: int = 1,
+    entity_type: clusters.ClusterEntity = "ligand",
 ) -> None:
     """Compute one greedy centroid partition after component publication."""
     if not metric_threshold:
@@ -2874,6 +2899,7 @@ def make_communities(
         skip_existing_clusters=skip_existing_clusters,
         scratch_dir=scratch_dir,
         threads=threads,
+        entity_type=entity_type,
     )
 
 
@@ -2884,6 +2910,7 @@ def make_directed_set_covers(
     skip_existing: bool,
     scratch_dir: Path | None = None,
     threads: int = 1,
+    entity_type: clusters.ClusterEntity = "ligand",
 ) -> None:
     """Compute one directed cover for annotation and training-set sampling."""
     if not metric_threshold:
@@ -2897,11 +2924,16 @@ def make_directed_set_covers(
         skip_existing=skip_existing,
         scratch_dir=scratch_dir,
         threads=threads,
+        entity_type=entity_type,
     )
 
 
 def summarize_clusters(
-    *, data_dir: Path, metrics: list[str], thresholds: list[int]
+    *,
+    data_dir: Path,
+    metrics: list[str],
+    thresholds: list[int],
+    entity_type: clusters.ClusterEntity = "ligand",
 ) -> None:
     """Validate and summarize every cluster artifact before index publication."""
     from plinder.data.pipeline.score import summarize_clustering_artifacts
@@ -2910,6 +2942,7 @@ def summarize_clusters(
         data_dir,
         metrics=metrics,
         thresholds=thresholds,
+        entity_type=entity_type,
     )
 
 

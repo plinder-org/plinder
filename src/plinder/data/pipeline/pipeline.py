@@ -2,7 +2,7 @@
 # Distributed under the terms of the Apache License 2.0
 import tempfile
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 import pandas as pd
 from omegaconf import DictConfig
@@ -594,95 +594,267 @@ class IngestPipeline:
             memory_limit=self.cfg.flow.collate_partitions_memory_limit,
         )
 
+    def _cluster_entities(
+        self,
+    ) -> list[tuple[Literal["ligand", "interface"], list[str]]]:
+        entities: list[tuple[Literal["ligand", "interface"], list[str]]] = [
+            ("ligand", list(self.cfg.flow.cluster_metrics))
+        ]
+        if self.cfg.data.plinder_iteration == "v3":
+            entities.append(("interface", ["interface_qcov"]))
+        return entities
+
     @utils.ingest_flow_control
-    def scatter_make_component_reductions(self) -> list[list[str]]:
-        return tasks.scatter_component_reduction_sources(
+    def plan_clusters(self) -> None:
+        if self.cfg.data.plinder_iteration != "v3":
+            return
+        from plinder.data.pipeline.score import plan_clustering
+
+        for entity_type, metrics in self._cluster_entities():
+            plan_clustering(
+                self.plinder_dir,
+                metrics=metrics,
+                thresholds=list(self.cfg.flow.cluster_thresholds),
+                source_batch_size=self.cfg.flow.symmetric_edge_source_batch_size,
+                symmetric_bucket_count=self.cfg.flow.symmetric_edge_bucket_count,
+                entity_type=entity_type,
+            )
+
+    @utils.ingest_flow_control
+    def scatter_make_symmetric_edge_fragments(self) -> list[dict[str, Any]]:
+        if self.cfg.data.plinder_iteration != "v3":
+            return [{}]
+        from plinder.data import clusters
+
+        work: list[dict[str, Any]] = []
+        for entity_type, _ in self._cluster_entities():
+            plan = clusters.load_symmetric_edge_plan(
+                self.plinder_dir,
+                entity_type=entity_type,
+            )
+            work.extend(
+                {"entity_type": entity_type, "batches": [batch]}
+                for batch in plan["batches"]
+            )
+        return work or [{}]
+
+    @utils.ingest_flow_control
+    def make_symmetric_edge_fragments(self, work: dict[str, Any]) -> None:
+        if self.cfg.data.plinder_iteration != "v3" or not work:
+            return
+        tasks.make_symmetric_edge_fragments(
             data_dir=self.plinder_dir,
-            metrics=self.cfg.flow.cluster_metrics,
-            batch_size=self.cfg.flow.component_reduction_source_batch_size,
+            batches=work["batches"],
+            scratch_dir=Path(tempfile.gettempdir()) / "plinder-symmetric-fragments",
+            threads=self.cfg.flow.make_communities_cpu,
+            force_update=self.cfg.data.force_update,
+            entity_type=work["entity_type"],
         )
 
     @utils.ingest_flow_control
-    def make_component_reductions(self, source_paths: list[str]) -> None:
+    def scatter_make_symmetric_edge_shards(self) -> list[dict[str, Any]]:
+        if self.cfg.data.plinder_iteration != "v3":
+            return [{}]
+        from plinder.data import clusters
+
+        work: list[dict[str, Any]] = []
+        for entity_type, _ in self._cluster_entities():
+            plan = clusters.load_symmetric_edge_plan(
+                self.plinder_dir,
+                entity_type=entity_type,
+            )
+            for metric in plan["metrics"]:
+                for bucket in range(int(plan["bucket_count"])):
+                    work.append(
+                        {
+                            "entity_type": entity_type,
+                            "metric_buckets": [(str(metric), bucket)],
+                        }
+                    )
+        return work or [{}]
+
+    @utils.ingest_flow_control
+    def make_symmetric_edge_shards(self, work: dict[str, Any]) -> None:
+        if self.cfg.data.plinder_iteration != "v3" or not work:
+            return
+        tasks.make_symmetric_edge_shards(
+            data_dir=self.plinder_dir,
+            metric_buckets=work["metric_buckets"],
+            scratch_dir=Path(tempfile.gettempdir()) / "plinder-symmetric-edges",
+            threads=self.cfg.flow.make_communities_cpu,
+            force_update=self.cfg.data.force_update,
+            entity_type=work["entity_type"],
+        )
+
+    @utils.ingest_flow_control
+    def scatter_make_component_reductions(self) -> list[Any]:
+        if self.cfg.data.plinder_iteration != "v3":
+            return tasks.scatter_component_reduction_sources(
+                data_dir=self.plinder_dir,
+                metrics=self.cfg.flow.cluster_metrics,
+                batch_size=self.cfg.flow.component_reduction_source_batch_size,
+            )
+        work: list[dict[str, Any]] = []
+        for entity_type, metrics in self._cluster_entities():
+            batches = tasks.scatter_component_reduction_sources(
+                data_dir=self.plinder_dir,
+                metrics=metrics,
+                batch_size=self.cfg.flow.component_reduction_source_batch_size,
+                entity_type=entity_type,
+            )
+            work.extend(
+                {"entity_type": entity_type, "metrics": metrics, "sources": batch}
+                for batch in batches
+                if batch
+            )
+        return work or [{}]
+
+    @utils.ingest_flow_control
+    def make_component_reductions(self, work: Any) -> None:
+        if self.cfg.data.plinder_iteration == "v3":
+            if not work:
+                return
+            entity_type = work["entity_type"]
+            metrics = work["metrics"]
+            source_paths = work["sources"]
+        else:
+            entity_type = "ligand"
+            metrics = self.cfg.flow.cluster_metrics
+            source_paths = work
         tasks.make_component_reductions(
             data_dir=self.plinder_dir,
             source_paths=source_paths,
-            metrics=self.cfg.flow.cluster_metrics,
+            metrics=metrics,
             thresholds=self.cfg.flow.cluster_thresholds,
             scratch_dir=Path(tempfile.gettempdir()) / "plinder-component-reductions",
             force_update=self.cfg.data.force_update,
             metric_workers=self.cfg.flow.component_reduction_metric_workers,
+            entity_type=entity_type,
         )
 
     @utils.ingest_flow_control
     def merge_component_reductions(self) -> None:
-        tasks.merge_component_reductions(
-            data_dir=self.plinder_dir,
-            metrics=self.cfg.flow.cluster_metrics,
-            thresholds=self.cfg.flow.cluster_thresholds,
-        )
+        for entity_type, metrics in self._cluster_entities():
+            tasks.merge_component_reductions(
+                data_dir=self.plinder_dir,
+                metrics=metrics,
+                thresholds=self.cfg.flow.cluster_thresholds,
+                entity_type=entity_type,
+            )
 
     @utils.ingest_flow_control
-    def scatter_make_communities(self) -> list[list[tuple[str, int]]]:
+    def scatter_make_communities(self) -> list[Any]:
         force_update = (
             self.cfg.data.force_update or self.cfg.flow.make_components_force_update
         )
-        return tasks.scatter_make_communities(
-            data_dir=self.plinder_dir,
-            metrics=self.cfg.flow.cluster_metrics,
-            thresholds=self.cfg.flow.cluster_thresholds,
-            stop_on_cluster=self.cfg.flow.make_components_stop_on_cluster,
-            skip_existing_clusters=not force_update,
-        )
+        if self.cfg.data.plinder_iteration != "v3":
+            return tasks.scatter_make_communities(
+                data_dir=self.plinder_dir,
+                metrics=self.cfg.flow.cluster_metrics,
+                thresholds=self.cfg.flow.cluster_thresholds,
+                stop_on_cluster=self.cfg.flow.make_components_stop_on_cluster,
+                skip_existing_clusters=not force_update,
+            )
+        work: list[dict[str, Any]] = []
+        for entity_type, metrics in self._cluster_entities():
+            batches = tasks.scatter_make_communities(
+                data_dir=self.plinder_dir,
+                metrics=metrics,
+                thresholds=self.cfg.flow.cluster_thresholds,
+                stop_on_cluster=self.cfg.flow.make_components_stop_on_cluster,
+                skip_existing_clusters=not force_update,
+                entity_type=entity_type,
+            )
+            work.extend(
+                {"entity_type": entity_type, "metric_threshold": batch}
+                for batch in batches
+                if batch
+            )
+        return work or [{}]
 
     @utils.ingest_flow_control
-    def make_communities(self, metric_thresholds: list[tuple[str, int]]) -> None:
+    def make_communities(self, work: Any) -> None:
         force_update = (
             self.cfg.data.force_update or self.cfg.flow.make_components_force_update
         )
+        if self.cfg.data.plinder_iteration == "v3":
+            if not work:
+                return
+            entity_type = work["entity_type"]
+            metric_thresholds = work["metric_threshold"]
+        else:
+            entity_type = "ligand"
+            metric_thresholds = work
         tasks.make_communities(
             data_dir=self.plinder_dir,
             metric_threshold=metric_thresholds,
             skip_existing_clusters=not force_update,
             scratch_dir=Path(tempfile.gettempdir()) / "plinder-communities",
             threads=self.cfg.flow.make_communities_cpu,
+            entity_type=entity_type,
         )
 
     @utils.ingest_flow_control
-    def scatter_make_directed_set_covers(self) -> list[list[tuple[str, int]]]:
+    def scatter_make_directed_set_covers(self) -> list[Any]:
         force_update = (
             self.cfg.data.force_update or self.cfg.flow.make_components_force_update
         )
-        return tasks.scatter_make_directed_set_covers(
-            data_dir=self.plinder_dir,
-            metrics=self.cfg.flow.cluster_metrics,
-            thresholds=self.cfg.flow.cluster_thresholds,
-            stop_on_cluster=self.cfg.flow.make_components_stop_on_cluster,
-            skip_existing=not force_update,
-        )
+        if self.cfg.data.plinder_iteration != "v3":
+            return tasks.scatter_make_directed_set_covers(
+                data_dir=self.plinder_dir,
+                metrics=self.cfg.flow.cluster_metrics,
+                thresholds=self.cfg.flow.cluster_thresholds,
+                stop_on_cluster=self.cfg.flow.make_components_stop_on_cluster,
+                skip_existing=not force_update,
+            )
+        work: list[dict[str, Any]] = []
+        for entity_type, metrics in self._cluster_entities():
+            batches = tasks.scatter_make_directed_set_covers(
+                data_dir=self.plinder_dir,
+                metrics=metrics,
+                thresholds=self.cfg.flow.cluster_thresholds,
+                stop_on_cluster=self.cfg.flow.make_components_stop_on_cluster,
+                skip_existing=not force_update,
+                entity_type=entity_type,
+            )
+            work.extend(
+                {"entity_type": entity_type, "metric_threshold": batch}
+                for batch in batches
+                if batch
+            )
+        return work or [{}]
 
     @utils.ingest_flow_control
-    def make_directed_set_covers(
-        self, metric_thresholds: list[tuple[str, int]]
-    ) -> None:
+    def make_directed_set_covers(self, work: Any) -> None:
         force_update = (
             self.cfg.data.force_update or self.cfg.flow.make_components_force_update
         )
+        if self.cfg.data.plinder_iteration == "v3":
+            if not work:
+                return
+            entity_type = work["entity_type"]
+            metric_thresholds = work["metric_threshold"]
+        else:
+            entity_type = "ligand"
+            metric_thresholds = work
         tasks.make_directed_set_covers(
             data_dir=self.plinder_dir,
             metric_threshold=metric_thresholds,
             skip_existing=not force_update,
             scratch_dir=Path(tempfile.gettempdir()) / "plinder-directed-set-covers",
             threads=self.cfg.flow.make_communities_cpu,
+            entity_type=entity_type,
         )
 
     @utils.ingest_flow_control
     def summarize_clusters(self) -> None:
-        tasks.summarize_clusters(
-            data_dir=self.plinder_dir,
-            metrics=self.cfg.flow.cluster_metrics,
-            thresholds=self.cfg.flow.cluster_thresholds,
-        )
+        for entity_type, metrics in self._cluster_entities():
+            tasks.summarize_clusters(
+                data_dir=self.plinder_dir,
+                metrics=metrics,
+                thresholds=self.cfg.flow.cluster_thresholds,
+                entity_type=entity_type,
+            )
 
     @utils.ingest_flow_control
     def finalize_index(self) -> None:

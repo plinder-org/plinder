@@ -63,6 +63,8 @@ class FlowConfig:
 
     cluster_metrics: list[str] = field(default_factory=lambda: METRICS.copy())
     cluster_thresholds: list[int] = field(default_factory=lambda: [30, 50, 70, 90, 100])
+    symmetric_edge_source_batch_size: int = 20
+    symmetric_edge_bucket_count: int = 64
     component_reduction_source_batch_size: int = 1
     component_reduction_metric_workers: int = 4
     make_communities_cpu: int = 4
@@ -102,6 +104,8 @@ class FlowConfig:
             raise ValueError("entry collation CPU counts must be positive")
         for name in [
             "component_reduction_metric_workers",
+            "symmetric_edge_source_batch_size",
+            "symmetric_edge_bucket_count",
             "make_interface_scores_batch_size",
             "make_interface_scores_cpu",
             "make_ligand_3d_scores_batch_size",

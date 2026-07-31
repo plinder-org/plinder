@@ -543,8 +543,27 @@ sbatch \
   scripts/slurm/score_v3.sbatch plan-clusters "${OUTPUT_ROOT}" 1
 ```
 
+Protein-interface clustering uses the same commands and thresholds in a
+separate namespace. Set these variables for every command in the sequence:
+
+```bash
+export PLINDER_CLUSTER_ENTITY_TYPE=interface
+export PLINDER_CLUSTER_METRICS=interface_qcov
+export PLINDER_CLUSTER_THRESHOLDS='100,90,70,50,30'
+```
+
+The interface plan reads `interface_scores/shard=*.parquet`. Reciprocal
+components and communities are written below `interface_clusters/`; the
+directional centroid cover is written below `interface_sampling/`. Final index
+enrichment adds `interface_qcov__THRESHOLD__component`, `__community`, and
+`__directed_set_cover` columns to `index/interface_annotation_table.parquet`.
+The ligand and interface plans and artifacts never share cache paths.
+Run both entity sequences before `finalize-index`; finalization rejects a
+non-empty interface annotation table when its interface clusters are absent.
+
 After component, community, and directed-cover branches complete, validate every
-published artifact and write `ligand_clusters/stats.parquet` plus `stats.json`.
+published artifact and write `ligand_clusters/stats.parquet` (or
+`interface_clusters/stats.parquet`) plus `stats.json`.
 This gate checks artifact coverage, duplicate and null labels, consistent ligand
 counts, and monotonic component counts across thresholds. Community and cover
 counts are reported but are not required to be monotonic:

@@ -9,7 +9,7 @@ from pathlib import Path
 from shutil import copyfile, copytree, rmtree
 from textwrap import dedent
 from time import time
-from typing import Any, Callable, Iterable, Mapping, Sequence, TypeVar, cast
+from typing import Any, Callable, Iterable, Literal, Mapping, Sequence, TypeVar, cast
 
 if sys.platform == "darwin":
     # For macOS only: allow multiple OpenMP runtimes to coexist
@@ -19,16 +19,18 @@ if sys.platform == "darwin":
 import networkit as nk
 import numpy as np
 import pandas as pd
+import pyarrow as pa
 import pyarrow.parquet as pq
 from numpy.typing import NDArray
 
 from plinder.core.scores.metrics import GATED_LIGAND_DIAGNOSTIC_METRICS
 from plinder.core.utils.log import setup_logger
-from plinder.core.utils.schemas import LIGAND_CLUSTER_SCHEMA
+from plinder.core.utils.schemas import CLUSTER_SCHEMA, LIGAND_CLUSTER_SCHEMA
 
 LOG = setup_logger(__name__)
 
 T = TypeVar("T")
+ClusterEntity = Literal["ligand", "interface"]
 
 COMPONENT_EDGE_COLUMNS = ["query_node", "target_node"]
 COMPONENT_REDUCTION_VERSION = 3
@@ -36,13 +38,41 @@ COMPONENT_REDUCTION_DIRECTIONS = (False,)
 RELEASE_COMPONENT_DIRECTIONS = (False,)
 SYMMETRIC_EDGE_BUCKET_COUNT = 64
 SYMMETRIC_EDGE_COLUMNS = ["query_node", "target_node", "similarity"]
-SYMMETRIC_EDGE_PLAN_RELATIVE = Path("ligand_clusters/symmetric_edges/plan.json")
-COMPONENT_NODE_UNIVERSE_RELATIVE = Path(
-    "ligand_clusters/reductions/node_universe.parquet"
-)
-COMPONENT_NODE_UNIVERSE_MANIFEST_RELATIVE = Path(
-    "ligand_clusters/reductions/node_universe.json"
-)
+
+
+def _cluster_root(data_dir: Path, entity_type: ClusterEntity) -> Path:
+    if entity_type == "ligand":
+        return data_dir / "ligand_clusters"
+    if entity_type == "interface":
+        return data_dir / "interface_clusters"
+    raise ValueError(f"unsupported cluster entity type: {entity_type}")
+
+
+def _sampling_root(data_dir: Path, entity_type: ClusterEntity) -> Path:
+    if entity_type == "ligand":
+        return data_dir / "ligand_sampling"
+    if entity_type == "interface":
+        return data_dir / "interface_sampling"
+    raise ValueError(f"unsupported cluster entity type: {entity_type}")
+
+
+def _cluster_node_column(entity_type: ClusterEntity) -> str:
+    return "ligand_id" if entity_type == "ligand" else "system_id"
+
+
+def _cluster_schema(entity_type: ClusterEntity) -> pa.Schema:
+    return LIGAND_CLUSTER_SCHEMA if entity_type == "ligand" else CLUSTER_SCHEMA
+
+
+def _symmetric_edge_plan_path(data_dir: Path, entity_type: ClusterEntity) -> Path:
+    return _cluster_root(data_dir, entity_type) / "symmetric_edges" / "plan.json"
+
+
+def _component_node_universe_paths(
+    data_dir: Path, entity_type: ClusterEntity
+) -> tuple[Path, Path]:
+    root = _cluster_root(data_dir, entity_type) / "reductions"
+    return root / "node_universe.parquet", root / "node_universe.json"
 
 
 def _empty_component_edges() -> pd.DataFrame:
@@ -469,8 +499,17 @@ def _component_source_signature(path: Path) -> dict[str, str | int]:
     }
 
 
-def _raw_component_score_sources(*, data_dir: Path, chemical: bool) -> list[Path]:
-    """Return raw score sources before reciprocal ligand-edge aggregation."""
+def _raw_component_score_sources(
+    *,
+    data_dir: Path,
+    chemical: bool,
+    entity_type: ClusterEntity = "ligand",
+) -> list[Path]:
+    """Return raw score sources before reciprocal edge aggregation."""
+    if entity_type == "interface":
+        if chemical:
+            raise ValueError("interface clustering does not use chemical scores")
+        return sorted((data_dir / "interface_scores").glob("shard=*.parquet"))
     if chemical:
         return sorted((data_dir / "ligand_scores").glob("*.parquet"))
     return sorted((data_dir / "scores" / "search_db=holo").rglob("*.parquet"))
@@ -488,6 +527,7 @@ def prepare_symmetric_edge_plan(
     metrics: Sequence[str],
     source_batch_size: int = 20,
     bucket_count: int = SYMMETRIC_EDGE_BUCKET_COUNT,
+    entity_type: ClusterEntity = "ligand",
 ) -> dict[str, Any]:
     """Plan sharded reciprocal-minimum edges without scanning score contents."""
     if source_batch_size < 1:
@@ -496,25 +536,46 @@ def prepare_symmetric_edge_plan(
         raise ValueError("symmetric-edge bucket count must be positive")
     selected_metrics = list(dict.fromkeys(metrics))
     chemical_metric = "tanimoto_similarity_ecfp4_1024"
+    if entity_type == "interface" and selected_metrics != ["interface_qcov"]:
+        raise ValueError(
+            "interface clustering supports exactly the interface_qcov metric"
+        )
     batches: list[dict[str, Any]] = []
-    for kind, source_metrics in [
-        (
-            "score",
-            [metric for metric in selected_metrics if metric != chemical_metric],
-        ),
-        (
-            "chemical",
-            [metric for metric in selected_metrics if metric == chemical_metric],
-        ),
-    ]:
+    source_groups = (
+        [("interface", selected_metrics)]
+        if entity_type == "interface"
+        else [
+            (
+                "score",
+                [metric for metric in selected_metrics if metric != chemical_metric],
+            ),
+            (
+                "chemical",
+                [metric for metric in selected_metrics if metric == chemical_metric],
+            ),
+        ]
+    )
+    for kind, source_metrics in source_groups:
         if not source_metrics:
             continue
         sources = _raw_component_score_sources(
             data_dir=data_dir,
             chemical=kind == "chemical",
+            entity_type=entity_type,
         )
         if not sources:
-            raise FileNotFoundError(f"no raw {kind} score sources found")
+            if entity_type != "interface":
+                raise FileNotFoundError(f"no raw {kind} score sources found")
+            nodes, _ = component_node_universe(
+                data_dir=data_dir,
+                metric=source_metrics[0],
+                entity_type=entity_type,
+            )
+            if nodes:
+                raise FileNotFoundError(
+                    "no raw interface score sources found for a non-empty "
+                    "interface universe"
+                )
         for start in range(0, len(sources), source_batch_size):
             selected_sources = sources[start : start + source_batch_size]
             relative_sources = [
@@ -540,13 +601,14 @@ def prepare_symmetric_edge_plan(
             )
     payload: dict[str, Any] = {
         "version": 1,
+        "entity_type": entity_type,
         "metrics": selected_metrics,
         "source_batch_size": source_batch_size,
         "bucket_count": bucket_count,
         "batches": batches,
     }
     payload["plan_hash"] = _symmetric_edge_plan_hash(payload)
-    plan_path = data_dir / SYMMETRIC_EDGE_PLAN_RELATIVE
+    plan_path = _symmetric_edge_plan_path(data_dir, entity_type)
     if plan_path.is_file():
         try:
             if json.loads(plan_path.read_text()) == payload:
@@ -560,17 +622,21 @@ def prepare_symmetric_edge_plan(
     return payload
 
 
-def load_symmetric_edge_plan(data_dir: Path) -> dict[str, Any]:
+def load_symmetric_edge_plan(
+    data_dir: Path, *, entity_type: ClusterEntity = "ligand"
+) -> dict[str, Any]:
     """Load and validate the exact raw-score inputs for symmetrization."""
-    plan_path = data_dir / SYMMETRIC_EDGE_PLAN_RELATIVE
+    plan_path = _symmetric_edge_plan_path(data_dir, entity_type)
     if not plan_path.is_file():
         raise FileNotFoundError(
             f"symmetric-edge planning must run before clustering: {plan_path}"
         )
     plan = cast(dict[str, Any], json.loads(plan_path.read_text()))
     payload = {key: value for key, value in plan.items() if key != "plan_hash"}
-    if plan.get("version") != 1 or plan.get("plan_hash") != (
-        _symmetric_edge_plan_hash(payload)
+    if (
+        plan.get("version") != 1
+        or plan.get("entity_type", "ligand") != entity_type
+        or plan.get("plan_hash") != (_symmetric_edge_plan_hash(payload))
     ):
         raise ValueError(f"invalid symmetric-edge plan: {plan_path}")
     for batch in plan["batches"]:
@@ -583,10 +649,14 @@ def load_symmetric_edge_plan(data_dir: Path) -> dict[str, Any]:
     return plan
 
 
-def _symmetric_fragment_dir(*, data_dir: Path, batch_key: str) -> Path:
+def _symmetric_fragment_dir(
+    *,
+    data_dir: Path,
+    batch_key: str,
+    entity_type: ClusterEntity = "ligand",
+) -> Path:
     return (
-        data_dir
-        / "ligand_clusters"
+        _cluster_root(data_dir, entity_type)
         / "symmetric_edges"
         / "fragments"
         / f"batch={batch_key}"
@@ -599,10 +669,12 @@ def _completed_symmetric_fragment_batch(
     plan: Mapping[str, Any],
     batch: Mapping[str, Any],
     output_prefix: str | None = None,
+    entity_type: ClusterEntity = "ligand",
 ) -> dict[str, Any] | None:
     output_dir = _symmetric_fragment_dir(
         data_dir=data_dir,
         batch_key=str(batch["key"]),
+        entity_type=entity_type,
     )
     manifest_path = output_dir / "manifest.json"
     if not manifest_path.is_file():
@@ -610,6 +682,8 @@ def _completed_symmetric_fragment_batch(
     try:
         manifest = json.loads(manifest_path.read_text())
         if manifest.get("version") != 1:
+            return None
+        if manifest.get("entity_type", "ligand") != entity_type:
             return None
         if manifest.get("plan_hash") != plan["plan_hash"]:
             return None
@@ -632,10 +706,13 @@ def _completed_symmetric_fragment_batch(
 
 
 def symmetric_edge_fragment_batch_is_complete(
-    *, data_dir: Path, batch: Mapping[str, Any]
+    *,
+    data_dir: Path,
+    batch: Mapping[str, Any],
+    entity_type: ClusterEntity = "ligand",
 ) -> bool:
     """Return whether a planned fragment batch is complete and current."""
-    plan = load_symmetric_edge_plan(data_dir)
+    plan = load_symmetric_edge_plan(data_dir, entity_type=entity_type)
     planned_batch = next(
         (value for value in plan["batches"] if str(value["key"]) == str(batch["key"])),
         None,
@@ -646,6 +723,7 @@ def symmetric_edge_fragment_batch_is_complete(
             data_dir=data_dir,
             plan=plan,
             batch=batch,
+            entity_type=entity_type,
         )
         is not None
     )
@@ -659,11 +737,12 @@ def write_symmetric_edge_fragment_batch(
     threads: int = 1,
     force_update: bool = False,
     read_paths: Sequence[Path] | None = None,
+    entity_type: ClusterEntity = "ligand",
 ) -> dict[str, Any]:
     """Aggregate one raw-source batch into canonical-pair hash fragments."""
     if threads < 1:
         raise ValueError("symmetric-edge threads must be positive")
-    plan = load_symmetric_edge_plan(data_dir)
+    plan = load_symmetric_edge_plan(data_dir, entity_type=entity_type)
     planned_batch = next(
         (value for value in plan["batches"] if str(value["key"]) == str(batch["key"])),
         None,
@@ -677,6 +756,7 @@ def write_symmetric_edge_fragment_batch(
             data_dir=data_dir,
             plan=plan,
             batch=batch,
+            entity_type=entity_type,
         )
         if completed is not None:
             return completed
@@ -713,10 +793,22 @@ def write_symmetric_edge_fragment_batch(
             FROM read_parquet([{paths_sql}], union_by_name=true)
             """
         )
+    elif batch["kind"] == "interface":
+        selected_sql = dedent(
+            f"""
+            SELECT
+                'interface_qcov'::VARCHAR AS metric,
+                cast(query_system AS VARCHAR) AS query_node,
+                cast(target_system AS VARCHAR) AS target_node,
+                cast(similarity AS DOUBLE) AS similarity
+            FROM read_parquet([{paths_sql}], union_by_name=true)
+            """
+        )
     else:
         nodes, eligible_systems = component_node_universe(
             data_dir=data_dir,
             metric=metrics[0],
+            entity_type=entity_type,
         )
         connection.register(
             "eligible_systems",
@@ -815,6 +907,7 @@ def write_symmetric_edge_fragment_batch(
     output_files = sorted(scratch_output.rglob("*.parquet"))
     manifest: dict[str, Any] = {
         "version": 1,
+        "entity_type": entity_type,
         "status": "complete",
         "plan_hash": plan["plan_hash"],
         "batch": dict(batch),
@@ -830,6 +923,7 @@ def write_symmetric_edge_fragment_batch(
     output_dir = _symmetric_fragment_dir(
         data_dir=data_dir,
         batch_key=str(batch["key"]),
+        entity_type=entity_type,
     )
     temporary_output = output_dir.with_name(f"{output_dir.name}.tmp")
     rmtree(temporary_output, ignore_errors=True)
@@ -848,10 +942,15 @@ def write_symmetric_edge_fragment_batch(
     return manifest
 
 
-def _symmetric_edge_path(*, data_dir: Path, metric: str, bucket: int) -> Path:
+def _symmetric_edge_path(
+    *,
+    data_dir: Path,
+    metric: str,
+    bucket: int,
+    entity_type: ClusterEntity = "ligand",
+) -> Path:
     return (
-        data_dir
-        / "ligand_clusters"
+        _cluster_root(data_dir, entity_type)
         / "symmetric_edges"
         / f"metric={metric}"
         / f"bucket={bucket:03d}.parquet"
@@ -866,11 +965,12 @@ def write_symmetric_edge_shard(
     scratch_dir: Path,
     threads: int = 1,
     force_update: bool = False,
+    entity_type: ClusterEntity = "ligand",
 ) -> dict[str, Any]:
     """Merge directional maxima into one reciprocal-minimum edge shard."""
     if threads < 1:
         raise ValueError("symmetric-edge threads must be positive")
-    plan = load_symmetric_edge_plan(data_dir)
+    plan = load_symmetric_edge_plan(data_dir, entity_type=entity_type)
     if metric not in plan["metrics"]:
         raise ValueError(f"metric is not in the symmetric-edge plan: {metric}")
     if bucket < 0 or bucket >= int(plan["bucket_count"]):
@@ -884,6 +984,7 @@ def write_symmetric_edge_shard(
             plan=plan,
             batch=batch,
             output_prefix=f"metric={metric}/bucket={bucket}/",
+            entity_type=entity_type,
         )
         if completed is None:
             raise ValueError(
@@ -892,6 +993,7 @@ def write_symmetric_edge_shard(
         output_dir = _symmetric_fragment_dir(
             data_dir=data_dir,
             batch_key=str(batch["key"]),
+            entity_type=entity_type,
         )
         fragments.extend(output_dir.glob(f"metric={metric}/bucket={bucket}/*.parquet"))
     fragments = sorted(fragments)
@@ -899,6 +1001,7 @@ def write_symmetric_edge_shard(
         data_dir=data_dir,
         metric=metric,
         bucket=bucket,
+        entity_type=entity_type,
     )
     manifest_path = output.with_suffix(".json")
     source_signatures = [_component_source_signature(path) for path in fragments]
@@ -1269,13 +1372,23 @@ def merge_component_reduction_shards(
     return result
 
 
-def component_score_sources(*, data_dir: Path, metric: str) -> list[Path]:
+def component_score_sources(
+    *,
+    data_dir: Path,
+    metric: str,
+    entity_type: ClusterEntity = "ligand",
+) -> list[Path]:
     """Return compact reciprocal-minimum shards for one clustering metric."""
-    plan = load_symmetric_edge_plan(data_dir)
+    plan = load_symmetric_edge_plan(data_dir, entity_type=entity_type)
     if metric not in plan["metrics"]:
         raise ValueError(f"metric is not in the symmetric-edge plan: {metric}")
     sources = [
-        _symmetric_edge_path(data_dir=data_dir, metric=metric, bucket=bucket)
+        _symmetric_edge_path(
+            data_dir=data_dir,
+            metric=metric,
+            bucket=bucket,
+            entity_type=entity_type,
+        )
         for bucket in range(int(plan["bucket_count"]))
     ]
     incomplete: list[Path] = []
@@ -1339,10 +1452,19 @@ def iter_component_score_batches(
 
 def _cached_component_node_universe(
     data_dir: Path,
-) -> tuple[list[str], set[str]] | None:
-    annotation_path = data_dir / "index" / "annotation_table.parquet"
-    cache_path = data_dir / COMPONENT_NODE_UNIVERSE_RELATIVE
-    manifest_path = data_dir / COMPONENT_NODE_UNIVERSE_MANIFEST_RELATIVE
+    *,
+    entity_type: ClusterEntity = "ligand",
+) -> tuple[list[str], set[str] | None] | None:
+    annotation_path = (
+        data_dir
+        / "index"
+        / (
+            "annotation_table.parquet"
+            if entity_type == "ligand"
+            else "interface_annotation_table.parquet"
+        )
+    )
+    cache_path, manifest_path = _component_node_universe_paths(data_dir, entity_type)
     if (
         not annotation_path.is_file()
         or not cache_path.is_file()
@@ -1353,6 +1475,8 @@ def _cached_component_node_universe(
         manifest = json.loads(manifest_path.read_text())
         if manifest.get("version") != 1:
             return None
+        if manifest.get("entity_type", "ligand") != entity_type:
+            return None
         if manifest.get("annotation") != _component_source_signature(annotation_path):
             return None
         if cache_path.stat().st_size != int(manifest["cache_size"]):
@@ -1360,57 +1484,86 @@ def _cached_component_node_universe(
         if set(pq.read_schema(cache_path).names) != {"kind", "id"}:
             return None
         frame = pd.read_parquet(cache_path, columns=["kind", "id"])
-        nodes = frame.loc[frame["kind"].eq("ligand"), "id"].astype(str).tolist()
-        systems = set(frame.loc[frame["kind"].eq("system"), "id"].astype(str).tolist())
-        if len(nodes) != int(manifest["ligand_count"]):
-            return None
-        if len(systems) != int(manifest["system_count"]):
-            return None
+        if entity_type == "ligand":
+            nodes = frame.loc[frame["kind"].eq("ligand"), "id"].astype(str).tolist()
+            ligand_systems = set(
+                frame.loc[frame["kind"].eq("system"), "id"].astype(str).tolist()
+            )
+            if len(nodes) != int(manifest["ligand_count"]):
+                return None
+            if len(ligand_systems) != int(manifest["system_count"]):
+                return None
+            systems: set[str] | None = ligand_systems
+        else:
+            nodes = frame.loc[frame["kind"].eq("interface"), "id"].astype(str).tolist()
+            systems = None
+            if len(nodes) != int(manifest["interface_count"]):
+                return None
         return nodes, systems
     except (OSError, ValueError, KeyError, json.JSONDecodeError):
         return None
 
 
-def prepare_component_node_universe(data_dir: Path) -> dict[str, Any]:
-    """Materialize the shared ligand/system universe once before scattering."""
-    cached = _cached_component_node_universe(data_dir)
+def prepare_component_node_universe(
+    data_dir: Path, *, entity_type: ClusterEntity = "ligand"
+) -> dict[str, Any]:
+    """Materialize the shared clustering-node universe before scattering."""
+    cached = _cached_component_node_universe(data_dir, entity_type=entity_type)
     if cached is not None:
         nodes, systems = cached
+        if entity_type == "interface":
+            return {"status": "cached", "interface_count": len(nodes)}
         return {
             "status": "cached",
             "ligand_count": len(nodes),
-            "system_count": len(systems),
+            "system_count": len(systems or set()),
         }
 
-    annotation_path = data_dir / "index" / "annotation_table.parquet"
-    annotation = _eligible_annotation(data_dir)
-    nodes = sorted(
-        set(
-            annotation.loc[annotation["ligand_is_proper"], "ligand_id"]
-            .dropna()
-            .astype(str)
+    if entity_type == "interface":
+        annotation_path = data_dir / "index" / "interface_annotation_table.parquet"
+        nodes = sorted(
+            set(
+                pd.read_parquet(annotation_path, columns=["system_id"])["system_id"]
+                .dropna()
+                .astype(str)
+            )
         )
-    )
-    system_ids = sorted(set(annotation["system_id"].dropna().astype(str)))
-    frame = pd.concat(
-        [
-            pd.DataFrame({"kind": "ligand", "id": nodes}),
-            pd.DataFrame({"kind": "system", "id": system_ids}),
-        ],
-        ignore_index=True,
-    )
-    cache_path = data_dir / COMPONENT_NODE_UNIVERSE_RELATIVE
-    manifest_path = data_dir / COMPONENT_NODE_UNIVERSE_MANIFEST_RELATIVE
+        system_ids: list[str] = []
+        frame = pd.DataFrame({"kind": "interface", "id": nodes})
+        counts = {"interface_count": len(nodes)}
+    else:
+        annotation_path = data_dir / "index" / "annotation_table.parquet"
+        annotation = _eligible_annotation(data_dir)
+        nodes = sorted(
+            set(
+                annotation.loc[annotation["ligand_is_proper"], "ligand_id"]
+                .dropna()
+                .astype(str)
+            )
+        )
+        system_ids = sorted(set(annotation["system_id"].dropna().astype(str)))
+        frame = pd.concat(
+            [
+                pd.DataFrame({"kind": "ligand", "id": nodes}),
+                pd.DataFrame({"kind": "system", "id": system_ids}),
+            ],
+            ignore_index=True,
+        )
+        counts = {
+            "ligand_count": len(nodes),
+            "system_count": len(system_ids),
+        }
+    cache_path, manifest_path = _component_node_universe_paths(data_dir, entity_type)
     cache_path.parent.mkdir(exist_ok=True, parents=True)
     temporary_cache = cache_path.with_suffix(".tmp.parquet")
     frame.to_parquet(temporary_cache, index=False, compression="zstd")
     temporary_cache.replace(cache_path)
     manifest = {
         "version": 1,
+        "entity_type": entity_type,
         "annotation": _component_source_signature(annotation_path),
         "cache_size": cache_path.stat().st_size,
-        "ligand_count": len(nodes),
-        "system_count": len(system_ids),
+        **counts,
     }
     temporary_manifest = manifest_path.with_suffix(".tmp.json")
     temporary_manifest.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
@@ -1419,8 +1572,22 @@ def prepare_component_node_universe(data_dir: Path) -> dict[str, Any]:
 
 
 def component_node_universe(
-    *, data_dir: Path, metric: str
+    *,
+    data_dir: Path,
+    metric: str,
+    entity_type: ClusterEntity = "ligand",
 ) -> tuple[list[str], set[str] | None]:
+    if entity_type == "interface":
+        if metric != "interface_qcov":
+            raise ValueError(f"unsupported interface clustering metric: {metric}")
+        cached = _cached_component_node_universe(data_dir, entity_type=entity_type)
+        if cached is not None:
+            return cached
+        annotation = pd.read_parquet(
+            data_dir / "index" / "interface_annotation_table.parquet",
+            columns=["system_id"],
+        )
+        return sorted(set(annotation["system_id"].dropna().astype(str))), None
     if metric == "tanimoto_similarity_ecfp4_1024":
         nodes = (
             pd.read_parquet(
@@ -1431,7 +1598,7 @@ def component_node_universe(
             .tolist()
         )
         return sorted(set(nodes)), None
-    cached = _cached_component_node_universe(data_dir)
+    cached = _cached_component_node_universe(data_dir, entity_type=entity_type)
     if cached is not None:
         return cached
     annotation = _eligible_annotation(data_dir)
@@ -1442,7 +1609,13 @@ def component_node_universe(
     return sorted(nodes), systems
 
 
-def component_reduction_dir(*, data_dir: Path, metric: str, source_path: Path) -> Path:
+def component_reduction_dir(
+    *,
+    data_dir: Path,
+    metric: str,
+    source_path: Path,
+    entity_type: ClusterEntity = "ligand",
+) -> Path:
     """Return a stable local reduction path without embedding an absolute root."""
     try:
         source_name = source_path.resolve().relative_to(data_dir.resolve()).as_posix()
@@ -1450,8 +1623,7 @@ def component_reduction_dir(*, data_dir: Path, metric: str, source_path: Path) -
         source_name = source_path.name
     source_key = hashlib.sha256(source_name.encode()).hexdigest()[:16]
     return (
-        data_dir
-        / "ligand_clusters"
+        _cluster_root(data_dir, entity_type)
         / "reductions"
         / f"metric={metric}"
         / f"source={source_key}"
@@ -1459,7 +1631,11 @@ def component_reduction_dir(*, data_dir: Path, metric: str, source_path: Path) -
 
 
 def directed_cover_reduction_dir(
-    *, data_dir: Path, metric: str, source_path: Path
+    *,
+    data_dir: Path,
+    metric: str,
+    source_path: Path,
+    entity_type: ClusterEntity = "ligand",
 ) -> Path:
     """Return the reduction path for any-direction cover connectivity."""
     try:
@@ -1468,8 +1644,7 @@ def directed_cover_reduction_dir(
         source_name = source_path.name
     source_key = hashlib.sha256(source_name.encode()).hexdigest()[:16]
     return (
-        data_dir
-        / "ligand_sampling"
+        _sampling_root(data_dir, entity_type)
         / "directed_set_cover"
         / "reductions"
         / f"metric={metric}"
@@ -1506,12 +1681,14 @@ def make_directed_cover_component_reduction(
     read_path: Path | None = None,
     all_nodes: Sequence[str] | None = None,
     eligible_systems: set[str] | None = None,
+    entity_type: ClusterEntity = "ligand",
 ) -> dict[str, Any]:
     """Reduce one shard by edges present in either score direction."""
     if all_nodes is None:
         nodes, eligible_systems = component_node_universe(
             data_dir=data_dir,
             metric=metric,
+            entity_type=entity_type,
         )
     else:
         nodes = sorted(set(map(str, all_nodes)))
@@ -1531,6 +1708,7 @@ def make_directed_cover_component_reduction(
             data_dir=data_dir,
             metric=metric,
             source_path=source_path,
+            entity_type=entity_type,
         ),
         forest_fan_in=forest_fan_in,
         force_update=force_update,
@@ -1545,12 +1723,18 @@ def merge_directed_cover_component_reductions(
     thresholds: Sequence[int],
     forest_fan_in: int = 8,
     parquet_batch_size: int = 250_000,
+    entity_type: ClusterEntity = "ligand",
 ) -> dict[int, pd.DataFrame]:
     """Merge exact weak components used to bound directed set cover."""
-    sources = component_score_sources(data_dir=data_dir, metric=metric)
+    sources = component_score_sources(
+        data_dir=data_dir,
+        metric=metric,
+        entity_type=entity_type,
+    )
     nodes, eligible_systems = component_node_universe(
         data_dir=data_dir,
         metric=metric,
+        entity_type=entity_type,
     )
     selection_hash = _component_selection_hash(
         nodes=nodes,
@@ -1562,6 +1746,7 @@ def merge_directed_cover_component_reductions(
                 data_dir=data_dir,
                 metric=metric,
                 source_path=source,
+                entity_type=entity_type,
             )
             for source in sources
         ],
@@ -1573,8 +1758,7 @@ def merge_directed_cover_component_reductions(
     )[False]
     for threshold, label_frame in labels.items():
         output = (
-            data_dir
-            / "ligand_sampling"
+            _sampling_root(data_dir, entity_type)
             / "directed_set_cover"
             / "reductions"
             / f"metric={metric}"
@@ -1583,7 +1767,9 @@ def merge_directed_cover_component_reductions(
         )
         output.parent.mkdir(exist_ok=True, parents=True)
         temporary = output.with_suffix(".tmp.parquet")
-        label_frame.to_parquet(temporary, index=False, compression="zstd")
+        label_frame.rename(
+            columns={"ligand_id": _cluster_node_column(entity_type)}
+        ).to_parquet(temporary, index=False, compression="zstd")
         temporary.replace(output)
     return labels
 
@@ -1596,12 +1782,14 @@ def score_component_reduction_is_complete(
     source_path: Path,
     all_nodes: Sequence[str] | None = None,
     eligible_systems: set[str] | None = None,
+    entity_type: ClusterEntity = "ligand",
 ) -> bool:
     """Return whether one source/metric reduction matches all current inputs."""
     if all_nodes is None:
         nodes, eligible_systems = component_node_universe(
             data_dir=data_dir,
             metric=metric,
+            entity_type=entity_type,
         )
     else:
         nodes = sorted(set(map(str, all_nodes)))
@@ -1616,6 +1804,7 @@ def score_component_reduction_is_complete(
                 data_dir=data_dir,
                 metric=metric,
                 source_path=source_path,
+                entity_type=entity_type,
             ),
             source_signature=_component_source_signature(source_path),
             node_hash=node_hash,
@@ -1634,12 +1823,14 @@ def directed_cover_component_reduction_is_complete(
     source_path: Path,
     all_nodes: Sequence[str] | None = None,
     eligible_systems: set[str] | None = None,
+    entity_type: ClusterEntity = "ligand",
 ) -> bool:
     """Return whether one any-direction connectivity reduction is current."""
     if all_nodes is None:
         nodes, eligible_systems = component_node_universe(
             data_dir=data_dir,
             metric=metric,
+            entity_type=entity_type,
         )
     else:
         nodes = sorted(set(map(str, all_nodes)))
@@ -1654,6 +1845,7 @@ def directed_cover_component_reduction_is_complete(
                 data_dir=data_dir,
                 metric=metric,
                 source_path=source_path,
+                entity_type=entity_type,
             ),
             source_signature=_component_source_signature(source_path),
             node_hash=node_hash,
@@ -1676,12 +1868,14 @@ def make_score_component_reduction(
     read_path: Path | None = None,
     all_nodes: Sequence[str] | None = None,
     eligible_systems: set[str] | None = None,
+    entity_type: ClusterEntity = "ligand",
 ) -> dict[str, Any]:
     """Map one final score shard into resumable component reductions."""
     if all_nodes is None:
         nodes, eligible_systems = component_node_universe(
             data_dir=data_dir,
             metric=metric,
+            entity_type=entity_type,
         )
     else:
         nodes = sorted(set(map(str, all_nodes)))
@@ -1703,6 +1897,7 @@ def make_score_component_reduction(
             data_dir=data_dir,
             metric=metric,
             source_path=source_path,
+            entity_type=entity_type,
         ),
         forest_fan_in=forest_fan_in,
         force_update=force_update,
@@ -1717,15 +1912,21 @@ def merge_score_component_reductions(
     thresholds: Sequence[int],
     forest_fan_in: int = 8,
     parquet_batch_size: int = 250_000,
+    entity_type: ClusterEntity = "ligand",
 ) -> dict[bool, dict[int, pd.DataFrame]]:
     """Reduce all reciprocal-minimum shards and publish undirected components."""
     started = time()
-    sources = component_score_sources(data_dir=data_dir, metric=metric)
+    sources = component_score_sources(
+        data_dir=data_dir,
+        metric=metric,
+        entity_type=entity_type,
+    )
     if not sources:
         raise FileNotFoundError(f"no component score sources found for {metric}")
     nodes, eligible_systems = component_node_universe(
         data_dir=data_dir,
         metric=metric,
+        entity_type=entity_type,
     )
     selection_hash = _component_selection_hash(
         nodes=nodes,
@@ -1744,6 +1945,7 @@ def merge_score_component_reductions(
                 data_dir=data_dir,
                 metric=metric,
                 source_path=source,
+                entity_type=entity_type,
             )
             for source in sources
         ],
@@ -1756,9 +1958,10 @@ def merge_score_component_reductions(
     for directed in COMPONENT_REDUCTION_DIRECTIONS:
         for threshold, label_frame in labels[directed].items():
             phase_started = time()
+            node_column = _cluster_node_column(entity_type)
+            internal_frame = label_frame.rename(columns={"ligand_id": node_column})
             internal = (
-                data_dir
-                / "ligand_clusters"
+                _cluster_root(data_dir, entity_type)
                 / "reductions"
                 / f"metric={metric}"
                 / "labels"
@@ -1767,7 +1970,7 @@ def merge_score_component_reductions(
             )
             internal.parent.mkdir(exist_ok=True, parents=True)
             temporary_internal = internal.with_suffix(".tmp.parquet")
-            label_frame.to_parquet(
+            internal_frame.to_parquet(
                 temporary_internal,
                 index=False,
                 compression="zstd",
@@ -1776,14 +1979,13 @@ def merge_score_component_reductions(
             if directed not in RELEASE_COMPONENT_DIRECTIONS:
                 continue
             output = (
-                data_dir
-                / "ligand_clusters"
+                _cluster_root(data_dir, entity_type)
                 / "cluster=components"
                 / f"directed={directed}"
                 / f"metric={metric}"
                 / f"threshold={threshold}.parquet"
             )
-            published = label_frame.copy()
+            published = internal_frame.copy()
             if metric == "tanimoto_similarity_ecfp4_1024":
                 published = expand_fingerprint_clusters_to_ligands(
                     data_dir=data_dir,
@@ -1797,13 +1999,13 @@ def merge_score_component_reductions(
             temporary = output.with_suffix(".tmp.parquet")
             published.to_parquet(
                 temporary,
-                schema=LIGAND_CLUSTER_SCHEMA,
+                schema=_cluster_schema(entity_type),
                 index=False,
             )
             temporary.replace(output)
             LOG.info(
                 "component merge published: metric=%s directed=%s threshold=%d "
-                "ligands=%d elapsed_seconds=%.1f",
+                "nodes=%d elapsed_seconds=%.1f",
                 metric,
                 directed,
                 threshold,
@@ -2183,18 +2385,19 @@ def make_directed_set_cover(
     skip_existing: bool = False,
     scratch_dir: Path | None = None,
     threads: int = 1,
+    entity_type: ClusterEntity = "ligand",
 ) -> Path:
     """Build a directed training-sampling cover from compact score shards."""
     started = time()
-    if metric in GATED_LIGAND_DIAGNOSTIC_METRICS:
+    if entity_type == "ligand" and metric in GATED_LIGAND_DIAGNOSTIC_METRICS:
         raise ValueError(
             f"{metric} cannot be clustered directly; use " "sucos_shape_pocket_qcov"
         )
     if threads < 1:
         raise ValueError("directed-cover threads must be positive")
+    node_column = _cluster_node_column(entity_type)
     output = (
-        data_dir
-        / "ligand_sampling"
+        _sampling_root(data_dir, entity_type)
         / "directed_set_cover"
         / f"metric={metric}"
         / f"threshold={threshold}.parquet"
@@ -2202,8 +2405,7 @@ def make_directed_set_cover(
     if skip_existing and output.is_file():
         return output
     component_path = (
-        data_dir
-        / "ligand_sampling"
+        _sampling_root(data_dir, entity_type)
         / "directed_set_cover"
         / "reductions"
         / f"metric={metric}"
@@ -2216,23 +2418,27 @@ def make_directed_set_cover(
             f"{component_path}"
         )
     component_labels = pd.read_parquet(component_path)
-    component_labels["ligand_id"] = component_labels["ligand_id"].astype(str)
+    component_labels[node_column] = component_labels[node_column].astype(str)
     component_labels["label"] = component_labels["label"].astype(str)
     component_labels["component"] = pd.factorize(component_labels["label"], sort=False)[
         0
     ].astype(np.uint32)
     component_labels = component_labels.sort_values(
-        ["component", "ligand_id"], kind="stable"
+        ["component", node_column], kind="stable"
     ).reset_index(drop=True)
     component_labels["component_node"] = (
         component_labels.groupby("component", sort=False).cumcount().astype(np.uint32)
     )
     nodes_by_component = {
-        int(component): group["ligand_id"].tolist()
+        int(component): group[node_column].tolist()
         for component, group in component_labels.groupby("component", sort=False)
     }
-    component_lookup = component_labels[["ligand_id", "component", "component_node"]]
-    sources = component_score_sources(data_dir=data_dir, metric=metric)
+    component_lookup = component_labels[[node_column, "component", "component_node"]]
+    sources = component_score_sources(
+        data_dir=data_dir,
+        metric=metric,
+        entity_type=entity_type,
+    )
 
     import duckdb
 
@@ -2271,9 +2477,9 @@ def make_directed_set_cover(
                 query_labels.component != target_labels.component AS crossing_edge
             FROM directed_edges
             INNER JOIN component_labels AS query_labels
-              ON directed_edges.query_node = query_labels.ligand_id
+              ON directed_edges.query_node = query_labels.{node_column}
             INNER JOIN component_labels AS target_labels
-              ON directed_edges.target_node = target_labels.ligand_id
+              ON directed_edges.target_node = target_labels.{node_column}
         )
         SELECT
             query_component AS component,
@@ -2373,7 +2579,7 @@ def make_directed_set_cover(
 
     published = pd.DataFrame(
         assignments,
-        columns=["ligand_id", "centroid_node", "similarity_to_centroid"],
+        columns=[node_column, "centroid_node", "similarity_to_centroid"],
     )
     if metric == "tanimoto_similarity_ecfp4_1024":
         published = _expand_fingerprint_directed_cover(
@@ -2381,7 +2587,9 @@ def make_directed_set_cover(
             assignments=published,
         )
     else:
-        published["centroid_ligand_id"] = published["centroid_node"]
+        published[
+            "centroid_ligand_id" if entity_type == "ligand" else "centroid_system_id"
+        ] = published["centroid_node"]
     group_sizes = published.groupby("centroid_node", sort=False).size()
     ordered_centroids = sorted(
         group_sizes.index.astype(str),
@@ -2394,7 +2602,7 @@ def make_directed_set_cover(
     published["threshold"] = threshold
     published["directed"] = True
     published.drop(columns=["centroid_node"], inplace=True)
-    published.sort_values("ligand_id", inplace=True, kind="stable")
+    published.sort_values(node_column, inplace=True, kind="stable")
     output.parent.mkdir(exist_ok=True, parents=True)
     temporary = output.with_suffix(".tmp.parquet")
     published.to_parquet(temporary, index=False, compression="zstd")
@@ -2405,7 +2613,9 @@ def make_directed_set_cover(
         metric,
         threshold,
         len(published),
-        published["centroid_ligand_id"].nunique(),
+        published[
+            "centroid_ligand_id" if entity_type == "ligand" else "centroid_system_id"
+        ].nunique(),
         time() - started,
     )
     return output
@@ -2419,10 +2629,11 @@ def make_communities(
     skip_existing_clusters: bool = False,
     scratch_dir: Path | None = None,
     threads: int = 1,
+    entity_type: ClusterEntity = "ligand",
 ) -> None:
     """Build greedy threshold-centroid clusters on reciprocal-minimum edges."""
     started = time()
-    if metric in GATED_LIGAND_DIAGNOSTIC_METRICS:
+    if entity_type == "ligand" and metric in GATED_LIGAND_DIAGNOSTIC_METRICS:
         raise ValueError(
             f"{metric} is evaluated only for ligand pairs with positive pocket "
             "coverage and cannot be clustered directly; use "
@@ -2430,9 +2641,9 @@ def make_communities(
         )
     if threads < 1:
         raise ValueError("community threads must be positive")
+    node_column = _cluster_node_column(entity_type)
     output = (
-        data_dir
-        / "ligand_clusters"
+        _cluster_root(data_dir, entity_type)
         / "cluster=communities"
         / "directed=False"
         / f"metric={metric}"
@@ -2441,8 +2652,7 @@ def make_communities(
     if skip_existing_clusters and output.is_file():
         return
     component_path = (
-        data_dir
-        / "ligand_clusters"
+        _cluster_root(data_dir, entity_type)
         / "reductions"
         / f"metric={metric}"
         / "labels"
@@ -2455,25 +2665,29 @@ def make_communities(
             f"{component_path}"
         )
     component_labels = pd.read_parquet(component_path)
-    component_labels["ligand_id"] = component_labels["ligand_id"].astype(str)
-    if component_labels["ligand_id"].duplicated().any():
-        raise ValueError(f"duplicate ligand IDs in component labels: {component_path}")
+    component_labels[node_column] = component_labels[node_column].astype(str)
+    if component_labels[node_column].duplicated().any():
+        raise ValueError(f"duplicate node IDs in component labels: {component_path}")
     component_labels["label"] = component_labels["label"].astype(str)
     component_labels["component"] = pd.factorize(component_labels["label"], sort=False)[
         0
     ].astype(np.uint32)
     component_labels = component_labels.sort_values(
-        ["component", "ligand_id"], kind="stable"
+        ["component", node_column], kind="stable"
     ).reset_index(drop=True)
     component_labels["component_node"] = (
         component_labels.groupby("component", sort=False).cumcount().astype(np.uint32)
     )
     nodes_by_component = {
-        int(component): group["ligand_id"].tolist()
+        int(component): group[node_column].tolist()
         for component, group in component_labels.groupby("component", sort=False)
     }
-    component_lookup = component_labels[["ligand_id", "component", "component_node"]]
-    sources = component_score_sources(data_dir=data_dir, metric=metric)
+    component_lookup = component_labels[[node_column, "component", "component_node"]]
+    sources = component_score_sources(
+        data_dir=data_dir,
+        metric=metric,
+        entity_type=entity_type,
+    )
     if not sources:
         raise FileNotFoundError(f"no community score sources found for {metric}")
 
@@ -2508,9 +2722,9 @@ def make_communities(
                 query_labels.component != target_labels.component AS crossing_edge
             FROM selected
             INNER JOIN component_labels AS query_labels
-                ON selected.query_node = query_labels.ligand_id
+                ON selected.query_node = query_labels.{node_column}
             INNER JOIN component_labels AS target_labels
-                ON selected.target_node = target_labels.ligand_id
+                ON selected.target_node = target_labels.{node_column}
         )
         SELECT
             query_component AS component,
@@ -2614,7 +2828,7 @@ def make_communities(
         time() - stream_started,
     )
 
-    unprocessed = set(component_labels["ligand_id"]) - processed_nodes
+    unprocessed = set(component_labels[node_column]) - processed_nodes
     for component, nodes in nodes_by_component.items():
         missing = [node for node in nodes if node in unprocessed]
         if len(missing) > 1:
@@ -2626,12 +2840,13 @@ def make_communities(
         community_groups,
         key=lambda group: (-len(group), min(group)),
     )
-    published = pd.DataFrame(
+    published = pd.DataFrame.from_records(
         [
-            {"ligand_id": node, "label": f"c{community_index}"}
+            {node_column: node, "label": f"c{community_index}"}
             for community_index, group in enumerate(ordered_groups)
             for node in sorted(group)
-        ]
+        ],
+        columns=[node_column, "label"],
     )
     if chemical:
         published = expand_fingerprint_clusters_to_ligands(
@@ -2646,7 +2861,7 @@ def make_communities(
     temporary = output.with_suffix(".tmp.parquet")
     published.to_parquet(
         temporary,
-        schema=LIGAND_CLUSTER_SCHEMA,
+        schema=_cluster_schema(entity_type),
         index=False,
     )
     temporary.replace(output)
