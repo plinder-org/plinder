@@ -103,12 +103,38 @@ class SystemView:
         }
 
 
+@dataclass(frozen=True)
+class InterfaceView:
+    """One unordered protein-chain interface in a biological assembly."""
+
+    id: str
+    pdb_id: str
+    biounit_id: str
+    chain_1: str
+    chain_2: str
+    chain_1_residue_number_to_index: dict[int, int]
+    chain_2_residue_number_to_index: dict[int, int]
+    num_contact_residue_pairs: int
+
+    @property
+    def chains(self) -> tuple[str, str]:
+        return self.chain_1, self.chain_2
+
+    @property
+    def residue_number_to_index(self) -> dict[str, dict[int, int]]:
+        return {
+            self.chain_1: self.chain_1_residue_number_to_index,
+            self.chain_2: self.chain_2_residue_number_to_index,
+        }
+
+
 @dataclass
 class EntryView:
     pdb_id: str
     chains: dict[str, ChainView]  # by asym_id
     systems: dict[str, SystemView]  # by system_id
     author_to_asym: dict[str, str]
+    interfaces: dict[str, InterfaceView] = field(default_factory=dict)
 
     @cached_property
     def pocket_index_to_number_per_chain(self) -> dict[str, dict[int, int]]:
@@ -125,6 +151,34 @@ class EntryView:
                     bucket[idx] = num
         return result
 
+    @cached_property
+    def selected_index_to_number_per_chain(self) -> dict[str, dict[int, int]]:
+        """Union of ligand-pocket and protein-interface residue mappings.
+
+        Compact mapped alignments retain only these selected query positions.
+        This union supports exact ligand pocket and interface reconstruction
+        from one release artifact without storing full residue alignments.
+        """
+        result = {
+            asym_id: dict(index_to_number)
+            for asym_id, index_to_number in self.pocket_index_to_number_per_chain.items()
+        }
+        for interface in self.interfaces.values():
+            for (
+                instance_chain,
+                number_to_index,
+            ) in interface.residue_number_to_index.items():
+                asym_id = instance_chain.split(".", maxsplit=1)[-1]
+                bucket = result.setdefault(asym_id, {})
+                for number, index in number_to_index.items():
+                    previous = bucket.setdefault(index, number)
+                    if previous != number:
+                        raise ValueError(
+                            f"conflicting residue number for {self.pdb_id} "
+                            f"chain {asym_id} index {index}: {previous} != {number}"
+                        )
+        return result
+
     def chains_for_alignment(self, chain_type: str, aln_type: str) -> list[str]:
         if chain_type not in {"apo", "holo", "pred"}:
             raise ValueError(f"unknown chain_type={chain_type!r}")
@@ -138,6 +192,11 @@ class EntryView:
                 if system.system_type == "holo"
                 for instance_chain in system.protein_chains_asym_id
             }
+            receptor_asym_ids.update(
+                instance_chain.split(".", maxsplit=1)[-1]
+                for interface in self.interfaces.values()
+                for instance_chain in interface.chains
+            )
             chains = sorted(
                 self.chains[asym].auth_id
                 for asym in receptor_asym_ids
@@ -321,15 +380,50 @@ def _make_ligand_view(
     )
 
 
+def _make_interface_view(row: pd.Series, *, pdb_id: str) -> InterfaceView:
+    """Build a protein-interface view from one normalized annotation row."""
+    chain_1_numbers = [
+        int(value) for value in _as_list(row["interface_chain_1_residue_numbers"])
+    ]
+    chain_1_indices = [
+        int(value) for value in _as_list(row["interface_chain_1_residue_indices"])
+    ]
+    chain_2_numbers = [
+        int(value) for value in _as_list(row["interface_chain_2_residue_numbers"])
+    ]
+    chain_2_indices = [
+        int(value) for value in _as_list(row["interface_chain_2_residue_indices"])
+    ]
+    if len(chain_1_numbers) != len(chain_1_indices) or len(chain_2_numbers) != len(
+        chain_2_indices
+    ):
+        raise ValueError(
+            f"interface residue mapping lengths differ for {row['system_id']}"
+        )
+    return InterfaceView(
+        id=str(row["system_id"]),
+        pdb_id=pdb_id,
+        biounit_id=str(row["system_biounit_id"]),
+        chain_1=str(row["interface_chain_1"]),
+        chain_2=str(row["interface_chain_2"]),
+        chain_1_residue_number_to_index=dict(zip(chain_1_numbers, chain_1_indices)),
+        chain_2_residue_number_to_index=dict(zip(chain_2_numbers, chain_2_indices)),
+        num_contact_residue_pairs=int(row["interface_num_contact_residue_pairs"]),
+    )
+
+
 def entry_views_from_df(
     df: pd.DataFrame,
     *,
     entry_chains: pd.DataFrame | None = None,
+    interface_annotations: pd.DataFrame | None = None,
 ) -> dict[str, EntryView]:
     """Build :class:`EntryView` objects from any DataFrame shaped like the
     published annotation parquet — i.e. one row per
-    ``(entry, system, ligand)`` triple. Pass the normalized one-row-per-chain
-    table to retain receptor types and apo/predicted alignment metadata.
+    ``(entry, system, ligand)`` triple. ``interface_annotations`` supplies the
+    parallel one-row-per-protein-interface table and permits interface-only
+    entries. Pass the normalized one-row-per-chain table to retain receptor
+    types and apo/predicted alignment metadata.
     Without it, only protein-only holo chains present on system rows can be
     reconstructed. Annotation-only mixed or nucleic-acid receptors cannot be
     reconstructed because the system-level receptor type cannot be assigned
@@ -340,8 +434,23 @@ def entry_views_from_df(
     constructed DataFrame from in-memory ``Entry`` objects
     (``pd.concat([e.to_df() for e in entries.values()])``).
     """
+    interface_annotations = (
+        interface_annotations
+        if interface_annotations is not None
+        else pd.DataFrame(columns=["entry_pdb_id"])
+    )
+    pdb_ids = list(
+        dict.fromkeys(
+            [str(value) for value in df.get("entry_pdb_id", [])]
+            + [str(value) for value in interface_annotations.get("entry_pdb_id", [])]
+        )
+    )
     views: dict[str, EntryView] = {}
-    for pdb_id, entry_rows in df.groupby("entry_pdb_id", sort=False):
+    for pdb_id in pdb_ids:
+        entry_rows = df[df["entry_pdb_id"].astype(str) == pdb_id]
+        interface_rows = interface_annotations[
+            interface_annotations["entry_pdb_id"].astype(str) == pdb_id
+        ]
         chain_rows = None
         if entry_chains is not None:
             chain_rows = entry_chains[entry_chains["entry_pdb_id"] == pdb_id]
@@ -352,9 +461,13 @@ def entry_views_from_df(
                         "system_receptor_type", pd.Series(dtype=str)
                     )
                 }
-                if not receptor_types or any(
-                    "protein" in receptor_type.split("+")
-                    for receptor_type in receptor_types
+                if (
+                    not interface_rows.empty
+                    or not receptor_types
+                    or any(
+                        "protein" in receptor_type.split("+")
+                        for receptor_type in receptor_types
+                    )
                 ):
                     raise ValueError(f"No protein chain metadata found for {pdb_id}")
         else:
@@ -376,6 +489,8 @@ def entry_views_from_df(
                     "annotations cannot assign receptor chain types for "
                     f"{unsupported_types}"
                 )
+        if "system_id" not in entry_rows.columns:
+            entry_rows = entry_rows.assign(system_id=pd.Series(dtype="string"))
         chains, author_to_asym = _entry_chains_from_rows(entry_rows, chain_rows)
 
         systems: dict[str, SystemView] = {}
@@ -433,11 +548,27 @@ def entry_views_from_df(
                 },
                 ligands=ligands,
             )
-        views[str(pdb_id)] = EntryView(
-            pdb_id=str(pdb_id),
+        interfaces: dict[str, InterfaceView] = {}
+        for _, row in interface_rows.iterrows():
+            interface = _make_interface_view(row, pdb_id=pdb_id)
+            interfaces[interface.id] = interface
+        for interface in interfaces.values():
+            missing_chains = {
+                chain.split(".", maxsplit=1)[-1]
+                for chain in interface.chains
+                if chain.split(".", maxsplit=1)[-1] not in chains
+            }
+            if missing_chains:
+                raise ValueError(
+                    f"interface {interface.id} references missing chains: "
+                    f"{sorted(missing_chains)}"
+                )
+        views[pdb_id] = EntryView(
+            pdb_id=pdb_id,
             chains=chains,
             systems=systems,
             author_to_asym=author_to_asym,
+            interfaces=interfaces,
         )
     return views
 
@@ -447,10 +578,10 @@ def load_entry_views(
 ) -> dict[str, EntryView]:
     """Load annotation and normalized chain rows for the requested entries.
 
-    ``data_dir`` selects a local ingest/release root. If omitted, both tables
-    are resolved from the configured PLINDER release cache. Production callers
-    should use this loader so annotation rows and ``entry_chains`` always come
-    from the same release. Direct/custom DataFrames can use
+    ``data_dir`` selects a local ingest/release root. If omitted, the ligand,
+    interface, and chain tables are resolved from the configured PLINDER
+    release cache. Production callers should use this loader so all normalized
+    rows come from the same release. Direct/custom DataFrames can use
     :func:`entry_views_from_df` instead.
     """
     pdb_ids = sorted(set(pdb_ids))
@@ -470,6 +601,9 @@ def load_entry_views(
         chain_path = cpl.get_plinder_path(
             rel=f"{cfg.data.index}/{cfg.data.entry_chain_file}"
         )
+        interface_path = cpl.get_plinder_path(
+            rel=f"{cfg.data.index}/{cfg.data.interface_file}"
+        )
     else:
         index_dir = Path(data_dir) / cfg.data.index
         annotation_path = index_dir / cfg.data.index_file
@@ -480,21 +614,39 @@ def load_entry_views(
             filters=[("entry_pdb_id", "in", pdb_ids)],
         )
         chain_path = index_dir / cfg.data.entry_chain_file
+        interface_path = index_dir / cfg.data.interface_file
 
     if not chain_path.is_file():
         raise FileNotFoundError(f"missing normalized entry chain index: {chain_path}")
+    if not interface_path.is_file():
+        raise FileNotFoundError(
+            f"missing normalized interface annotation index: {interface_path}"
+        )
     entry_chains = pd.read_parquet(
         chain_path,
         filters=[("entry_pdb_id", "in", pdb_ids)],
     )
-    LOG.info(f"load_entry_views: {len(df)} rows for {len(pdb_ids)} pdb_ids")
-    return entry_views_from_df(df, entry_chains=entry_chains)
+    interfaces = pd.read_parquet(
+        interface_path,
+        filters=[("entry_pdb_id", "in", pdb_ids)],
+    )
+    LOG.info(
+        "load_entry_views: %s ligand rows and %s interface rows for %s pdb_ids",
+        len(df),
+        len(interfaces),
+        len(pdb_ids),
+    )
+    return entry_views_from_df(
+        df,
+        entry_chains=entry_chains,
+        interface_annotations=interfaces,
+    )
 
 
 def load_alignment_entry_views(
     *, lookup_path: Path, pdb_ids: Iterable[str]
 ) -> dict[str, EntryView]:
-    """Load the compact chain and pocket mappings used during alignment mapping."""
+    """Load compact chain and selected-residue maps for alignment mapping."""
     selected = sorted(set(pdb_ids))
     if not selected:
         return {}
@@ -509,8 +661,8 @@ def load_alignment_entry_views(
         for row in rows.itertuples(index=False):
             asym_id = str(row.chain_asym_id)
             author_to_asym[str(row.chain_auth_id)] = asym_id
-            numbers = [int(value) for value in _as_list(row.pocket_residue_numbers)]
-            indices = [int(value) for value in _as_list(row.pocket_residue_indices)]
+            numbers = [int(value) for value in _as_list(row.selected_residue_numbers)]
+            indices = [int(value) for value in _as_list(row.selected_residue_indices)]
             if numbers:
                 pocket_n2i[f"1.{asym_id}"] = dict(zip(numbers, indices))
         systems = {}

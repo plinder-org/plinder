@@ -4,16 +4,25 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections import defaultdict
+from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 
 import pandas as pd
 
-from plinder.core.scores.entries import EntryView, LigandView, load_entry_views
+from plinder.core.scores.entries import (
+    EntryView,
+    InterfaceView,
+    LigandView,
+    load_entry_views,
+)
 from plinder.core.utils import cpl
 from plinder.core.utils.config import get_config
 from plinder.core.utils.log import setup_logger
-from plinder.core.utils.schemas import PROTEIN_SIMILARITY_SCHEMA
+from plinder.core.utils.schemas import (
+    INTERFACE_SIMILARITY_SCHEMA,
+    PROTEIN_SIMILARITY_SCHEMA,
+)
 
 ALIGNMENT_TYPES = ("foldseek", "mmseqs")
 LOG = setup_logger(__name__)
@@ -145,6 +154,208 @@ def _selected_ligand_ids(
             if system_id in system_ids:
                 ligand_ids.update(ligand.id for ligand in system.ligands.values())
     return ligand_ids
+
+
+def _selected_interfaces(
+    entries: Mapping[str, EntryView], interface_ids: set[str]
+) -> dict[str, InterfaceView]:
+    available = {
+        interface_id: interface
+        for entry in entries.values()
+        for interface_id, interface in entry.interfaces.items()
+    }
+    missing = interface_ids - available.keys()
+    if missing:
+        raise KeyError(f"unknown interface system IDs: {sorted(missing)}")
+    return {interface_id: available[interface_id] for interface_id in interface_ids}
+
+
+def _load_interface_alignments(
+    alignment_paths: Mapping[str, Mapping[str, Path]],
+    *,
+    target_pdb_ids: set[str],
+) -> pd.DataFrame:
+    """Load only compact residue maps needed by an interface subset."""
+    columns = [
+        "query_entry",
+        "target_entry",
+        "query_chain_mapped",
+        "target_chain_mapped",
+        "source",
+        "query_selected_residue_numbers",
+        "target_selected_residue_numbers",
+    ]
+    frames: list[pd.DataFrame] = []
+    targets = sorted(target_pdb_ids)
+    for query_pdb_id, paths in alignment_paths.items():
+        for alignment_type, path in paths.items():
+            frame = pd.read_parquet(
+                path,
+                columns=columns,
+                filters=[
+                    ("query_entry", "==", query_pdb_id),
+                    ("target_entry", "in", targets),
+                ],
+            )
+            if frame.empty:
+                continue
+            frame["source"] = alignment_type
+            frames.append(frame)
+    if not frames:
+        return pd.DataFrame(columns=columns)
+    return pd.concat(frames, ignore_index=True)
+
+
+def _interface_side_index(
+    interfaces: Mapping[str, InterfaceView],
+) -> dict[tuple[str, str], list[tuple[str, int, frozenset[int]]]]:
+    sides: dict[tuple[str, str], list[tuple[str, int, frozenset[int]]]] = defaultdict(
+        list
+    )
+    for interface in interfaces.values():
+        for side, (chain, residues) in enumerate(
+            (
+                (interface.chain_1, interface.chain_1_residue_number_to_index),
+                (interface.chain_2, interface.chain_2_residue_number_to_index),
+            ),
+            start=1,
+        ):
+            asym_id = chain.split(".", maxsplit=1)[-1]
+            sides[(interface.pdb_id, asym_id)].append(
+                (interface.id, side, frozenset(residues))
+            )
+    return sides
+
+
+def _as_int_list(value: object) -> list[int]:
+    if (
+        value is None
+        or isinstance(value, (str, bytes))
+        or not isinstance(value, Iterable)
+    ):
+        return []
+    return [int(item) for item in value]
+
+
+def calculate_interface_similarity_scores(
+    alignments: pd.DataFrame,
+    *,
+    query_interfaces: Mapping[str, InterfaceView],
+    target_interfaces: Mapping[str, InterfaceView],
+) -> pd.DataFrame:
+    """Calculate directional two-chain interface coverage from compact maps.
+
+    For each backend, the direct and swapped chain assignments are evaluated
+    as the product of the two directed residue coverages. The better complete
+    assignment is retained, followed by the better Foldseek/MMseqs backend.
+    """
+    query_sides = _interface_side_index(query_interfaces)
+    target_sides = _interface_side_index(target_interfaces)
+    coverage: dict[tuple[str, str, str, int, int], float] = {}
+    for row in alignments.itertuples(index=False):
+        source = str(row.source)
+        query_key = (str(row.query_entry), str(row.query_chain_mapped))
+        target_key = (str(row.target_entry), str(row.target_chain_mapped))
+        matching_query_sides = query_sides.get(query_key, [])
+        matching_target_sides = target_sides.get(target_key, [])
+        if not matching_query_sides or not matching_target_sides:
+            continue
+        residue_pairs = list(
+            zip(
+                _as_int_list(row.query_selected_residue_numbers),
+                _as_int_list(row.target_selected_residue_numbers),
+            )
+        )
+        if not residue_pairs:
+            continue
+        for query_id, query_side, query_residues in matching_query_sides:
+            if not query_residues:
+                continue
+            for target_id, target_side, target_residues in matching_target_sides:
+                matched_query_residues = {
+                    query_number
+                    for query_number, target_number in residue_pairs
+                    if query_number in query_residues
+                    and target_number in target_residues
+                }
+                value = len(matched_query_residues) / len(query_residues)
+                key = (source, query_id, target_id, query_side, target_side)
+                coverage[key] = max(coverage.get(key, 0.0), value)
+
+    def assignment(
+        source: str,
+        query: InterfaceView,
+        target: InterfaceView,
+        *,
+        swapped: bool,
+    ) -> tuple[float, str] | None:
+        target_sides_order = (2, 1) if swapped else (1, 2)
+        values = [
+            coverage.get((source, query.id, target.id, query_side, target_side))
+            for query_side, target_side in zip((1, 2), target_sides_order)
+        ]
+        first, second = values
+        if first is None or second is None:
+            return None
+        target_chains = (target.chain_2, target.chain_1) if swapped else target.chains
+        mapping = ";".join(
+            f"{query_chain}:{target_chain}"
+            for query_chain, target_chain in zip(query.chains, target_chains)
+        )
+        return first * second, mapping
+
+    records: list[dict[str, object]] = []
+    for query in query_interfaces.values():
+        for target in target_interfaces.values():
+            if query.id == target.id:
+                continue
+            backend_scores: dict[str, tuple[float, str]] = {}
+            for source in ALIGNMENT_TYPES:
+                candidates = [
+                    result
+                    for swapped in (False, True)
+                    if (result := assignment(source, query, target, swapped=swapped))
+                    is not None
+                ]
+                if candidates:
+                    backend_scores[source] = max(
+                        candidates,
+                        key=lambda result: result[0],
+                    )
+            if not backend_scores:
+                continue
+            best_score = max(value[0] for value in backend_scores.values())
+            best_sources = [
+                source
+                for source, value in backend_scores.items()
+                if abs(value[0] - best_score) < 1e-12
+            ]
+            source = (
+                "both" if len(best_sources) == len(ALIGNMENT_TYPES) else best_sources[0]
+            )
+            mapping_source = (
+                "foldseek" if "foldseek" in best_sources else best_sources[0]
+            )
+            records.append(
+                {
+                    "query_system": query.id,
+                    "target_system": target.id,
+                    "mapping": backend_scores[mapping_source][1],
+                    "source": source,
+                    "metric": "interface_qcov",
+                    "similarity": max(0, min(100, round(best_score * 100))),
+                }
+            )
+    if not records:
+        return pd.DataFrame(columns=INTERFACE_SIMILARITY_SCHEMA.names)
+    return (
+        pd.DataFrame.from_records(records, columns=INTERFACE_SIMILARITY_SCHEMA.names)
+        .sort_values(
+            ["similarity", "query_system", "target_system"],
+            ascending=[False, True, True],
+        )
+        .reset_index(drop=True)
+    )
 
 
 def _validate_selection(
@@ -318,4 +529,47 @@ def reconstruct_similarity_scores(
             ascending=[False, True, True, True, True],
         )
         .reset_index(drop=True)
+    )
+
+
+def reconstruct_interface_similarity_scores(
+    query_interface_ids: Iterable[str],
+    target_interface_ids: Iterable[str],
+    *,
+    search_db: str = "holo",
+    data_dir: Path | None = None,
+) -> pd.DataFrame:
+    """Reconstruct directed interface coverage for a bounded interface subset.
+
+    Only the mapped alignment shards for the requested query PDB entries and
+    normalized chain/interface rows are loaded. The result is therefore
+    reconstructable from the compact public artifacts without the private
+    all-vs-all score table used for release clustering.
+    """
+    query_ids = set(query_interface_ids)
+    target_ids = set(target_interface_ids)
+    if not query_ids or not target_ids:
+        raise ValueError(
+            "query_interface_ids and target_interface_ids must not be empty"
+        )
+    alignment_paths = prefetch_similarity_alignments(
+        query_ids,
+        search_db=search_db,
+        data_dir=data_dir,
+    )
+    selected_pdb_ids = {_pdb_id(value) for value in query_ids | target_ids}
+    entries, _ = _load_entry_subset(
+        pdb_ids=selected_pdb_ids,
+        data_dir=data_dir,
+    )
+    query_interfaces = _selected_interfaces(entries, query_ids)
+    target_interfaces = _selected_interfaces(entries, target_ids)
+    alignments = _load_interface_alignments(
+        alignment_paths,
+        target_pdb_ids={interface.pdb_id for interface in target_interfaces.values()},
+    )
+    return calculate_interface_similarity_scores(
+        alignments,
+        query_interfaces=query_interfaces,
+        target_interfaces=target_interfaces,
     )

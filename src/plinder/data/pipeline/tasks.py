@@ -566,8 +566,8 @@ def _completed_alignment_chain_lookup(
         "entry_pdb_id",
         "chain_asym_id",
         "chain_auth_id",
-        "pocket_residue_numbers",
-        "pocket_residue_indices",
+        "selected_residue_numbers",
+        "selected_residue_indices",
     }
     output: dict[str, int | str] = {
         "name": lookup.name,
@@ -597,7 +597,11 @@ def _alignment_chain_lookup_input_signatures(
     data_dir: Path,
 ) -> dict[str, dict[str, int | str]]:
     signatures: dict[str, dict[str, int | str]] = {}
-    for name in ["annotation_table.parquet", "entry_chains.parquet"]:
+    for name in [
+        "annotation_table.parquet",
+        "interface_annotation_table.parquet",
+        "entry_chains.parquet",
+    ]:
         path = data_dir / "index" / name
         stat = path.stat()
         signatures[name] = {
@@ -638,7 +642,7 @@ def make_alignment_chain_lookup(
     threads: int,
     force_update: bool = False,
 ) -> Path:
-    """Build the compact author-chain and pocket map used by every map shard."""
+    """Build the compact chain and selected-residue map used by every shard."""
     lookup = data_dir / ALIGNMENT_CHAIN_LOOKUP_RELATIVE
     if not force_update and _completed_alignment_chain_lookup(data_dir) is not None:
         manifest = data_dir / ALIGNMENT_CHAIN_LOOKUP_MANIFEST_RELATIVE
@@ -655,6 +659,7 @@ def make_alignment_chain_lookup(
     temporary = working_root / lookup.name
     temporary.unlink(missing_ok=True)
     annotation = (data_dir / "index" / "annotation_table.parquet").as_posix()
+    interfaces = (data_dir / "index" / "interface_annotation_table.parquet").as_posix()
     chains = (data_dir / "index" / "entry_chains.parquet").as_posix()
     con = duckdb.connect()
     con.sql(f"set threads={max(1, threads)};")
@@ -671,7 +676,7 @@ def make_alignment_chain_lookup(
                     WHERE chain_receptor_type = 'protein'
                       AND chain_auth_id IS NOT NULL
                 ),
-                pocket_residues AS (
+                ligand_pocket_residues AS (
                     SELECT
                         a.entry_pdb_id,
                         split_part(split_part(neighbor, '_', 1), '.', 2)
@@ -684,36 +689,60 @@ def make_alignment_chain_lookup(
                     UNNEST(a.ligand_neighboring_residues) AS residues(neighbor)
                     WHERE a.ligand_is_proper
                 ),
-                canonical_pocket_residues AS (
+                interface_residues AS (
+                    SELECT
+                        entry_pdb_id,
+                        split_part(interface_chain_1, '.', 2) AS chain_asym_id,
+                        unnest(interface_chain_1_residue_numbers)
+                            AS residue_number,
+                        unnest(interface_chain_1_residue_indices)
+                            AS residue_index
+                    FROM read_parquet('{interfaces}')
+                    UNION ALL
+                    SELECT
+                        entry_pdb_id,
+                        split_part(interface_chain_2, '.', 2) AS chain_asym_id,
+                        unnest(interface_chain_2_residue_numbers)
+                            AS residue_number,
+                        unnest(interface_chain_2_residue_indices)
+                            AS residue_index
+                    FROM read_parquet('{interfaces}')
+                ),
+                selected_residues AS (
+                    SELECT * FROM ligand_pocket_residues
+                    UNION ALL
+                    SELECT * FROM interface_residues
+                ),
+                canonical_selected_residues AS (
                     SELECT
                         entry_pdb_id,
                         chain_asym_id,
                         residue_index,
                         min(residue_number) AS residue_number
-                    FROM pocket_residues
+                    FROM selected_residues
                     GROUP BY entry_pdb_id, chain_asym_id, residue_index
                 ),
-                pocket_mapping AS (
+                selected_mapping AS (
                     SELECT
                         entry_pdb_id,
                         chain_asym_id,
                         list(residue_number ORDER BY residue_index)
-                            AS pocket_residue_numbers,
+                            AS selected_residue_numbers,
                         list(residue_index ORDER BY residue_index)
-                            AS pocket_residue_indices
-                    FROM canonical_pocket_residues
+                            AS selected_residue_indices
+                    FROM canonical_selected_residues
                     GROUP BY entry_pdb_id, chain_asym_id
                 )
                 SELECT
                     c.entry_pdb_id,
                     c.chain_asym_id,
                     c.chain_auth_id,
-                    coalesce(p.pocket_residue_numbers, []::INTEGER[])
-                        AS pocket_residue_numbers,
-                    coalesce(p.pocket_residue_indices, []::INTEGER[])
-                        AS pocket_residue_indices
+                    coalesce(p.selected_residue_numbers, []::INTEGER[])
+                        AS selected_residue_numbers,
+                    coalesce(p.selected_residue_indices, []::INTEGER[])
+                        AS selected_residue_indices
                 FROM protein_chains c
-                LEFT JOIN pocket_mapping p
+                LEFT JOIN selected_mapping p
                     USING (entry_pdb_id, chain_asym_id)
                 ORDER BY c.entry_pdb_id, c.chain_asym_id
             ) TO '{temporary.as_posix()}'
@@ -2199,9 +2228,9 @@ def _write_alignment_release_shard(
         "qcov",
         "fident",
         "seqsim",
-        "query_pocket_residue_numbers",
-        "target_pocket_residue_numbers",
-        "pocket_residue_identity",
+        "query_selected_residue_numbers",
+        "target_selected_residue_numbers",
+        "selected_residue_identity",
     ]
     if alignment_type == "foldseek":
         release_columns.append("lddt")
@@ -2212,11 +2241,11 @@ def _write_alignment_release_shard(
                 f"CAST({column} AS INTEGER[]) AS {column}"
                 if column
                 in {
-                    "query_pocket_residue_numbers",
-                    "target_pocket_residue_numbers",
+                    "query_selected_residue_numbers",
+                    "target_selected_residue_numbers",
                 }
                 else f"CAST({column} AS BLOB) AS {column}"
-                if column == "pocket_residue_identity"
+                if column == "selected_residue_identity"
                 else column
             )
             for column in release_columns

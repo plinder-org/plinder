@@ -2116,9 +2116,9 @@ class Scorer:
             if aln_type == "foldseek":
                 df["lddt_qcov"] = pd.Series(dtype="float64")
             for column in [
-                "query_pocket_residue_numbers",
-                "target_pocket_residue_numbers",
-                "pocket_residue_identity",
+                "query_selected_residue_numbers",
+                "target_selected_residue_numbers",
+                "selected_residue_identity",
             ]:
                 df[column] = pd.Series(dtype="object")
             df.drop(
@@ -2191,8 +2191,8 @@ class Scorer:
         df["fident_qcov"] = df["fident"] * df["qcov"]
         if aln_type == "foldseek":
             df["lddt_qcov"] = df["lddt"] * df["qcov"]
-        pocket_mappings = [
-            self._map_alignment_pocket_positions(
+        selected_mappings = [
+            self._map_alignment_selected_positions(
                 query_entry=row.query_entry,
                 target_entry=row.target_entry,
                 query_chain=str(row.query_chain_mapped),
@@ -2208,16 +2208,16 @@ class Scorer:
         ]
         for index, column in enumerate(
             (
-                "query_pocket_residue_numbers",
-                "target_pocket_residue_numbers",
-                "pocket_residue_identity",
+                "query_selected_residue_numbers",
+                "target_selected_residue_numbers",
+                "selected_residue_identity",
             )
         ):
-            df[column] = [mapping[index] for mapping in pocket_mappings]
-        # Only ligand-level pocket score reconstruction is required downstream:
-        # retain aligned residue numbers and equality flags, not alignment
-        # positions or amino-acid letters. Raw search statistics remain in the
-        # private search output and are omitted from the release representation.
+            df[column] = [mapping[index] for mapping in selected_mappings]
+        # Retain only selected ligand-pocket/interface residue numbers and
+        # equality flags, not complete alignment positions or amino-acid
+        # letters. Raw search statistics remain private and are omitted from
+        # the compact release representation.
         df.drop(
             columns=["qaln", "taln", "evalue", "bits", "tcov"],
             inplace=True,
@@ -2236,7 +2236,7 @@ class Scorer:
         )
         return df
 
-    def _map_alignment_pocket_positions(
+    def _map_alignment_selected_positions(
         self,
         *,
         query_entry: str,
@@ -2250,7 +2250,7 @@ class Scorer:
         aln_type: str,
         search_db: str,
     ) -> tuple[list[int], list[int], bytes]:
-        """Map sparse query-pocket positions through one pairwise alignment."""
+        """Map sparse selected query positions through one pairwise alignment."""
         # mmseqs operates on the SEQRES FASTA, so 1-based position
         #     equals the residue NUMBER (label_seq_id = Chain.residues key);
         # foldseek operates on the 3D structure, so position == 0-based
@@ -2260,11 +2260,11 @@ class Scorer:
         residue_identity = bytearray()
         q_i, t_i = qstart - 1, tstart - 1
         q_entry = self.entries[query_entry]
-        q_i2n = q_entry.pocket_index_to_number_per_chain.get(query_chain, {})
+        q_i2n = q_entry.selected_index_to_number_per_chain.get(query_chain, {})
         t_i2n: dict[int, int] = {}
         if search_db != "pred":
             t_entry = self.entries[target_entry]
-            t_i2n = t_entry.pocket_index_to_number_per_chain.get(target_chain, {})
+            t_i2n = t_entry.selected_index_to_number_per_chain.get(target_chain, {})
         alignment_length = min(len(qaln), len(taln))
         if not q_i2n or alignment_length == 0:
             return query_numbers, target_numbers, bytes(residue_identity)
@@ -2278,19 +2278,19 @@ class Scorer:
             position for position, residue in enumerate(taln) if residue != "-"
         ]
 
-        # Locate only sparse query-pocket positions in the alignment instead of
+        # Locate only sparse selected query positions in the alignment instead of
         # walking every aligned character in Python.  Offsets are relative to
         # the first aligned residue reported by the search backend.
         if aln_type == "mmseqs":
             query_candidates = [
                 (number - (q_i + 1), number) for number in set(q_i2n.values())
             ]
-            target_pocket_numbers = set(t_i2n.values())
+            target_selected_numbers = set(t_i2n.values())
         else:
             query_candidates = [
                 (index - q_i, number) for index, number in q_i2n.items()
             ]
-            target_pocket_numbers = set()
+            target_selected_numbers = set()
 
         for query_offset, query_number in sorted(query_candidates):
             if not 0 <= query_offset < len(query_residue_positions):
@@ -2304,7 +2304,7 @@ class Scorer:
             if aln_type == "mmseqs":
                 target_number = (
                     target_index + 1
-                    if target_index + 1 in target_pocket_numbers
+                    if target_index + 1 in target_selected_numbers
                     else None
                 )
             else:
@@ -2317,8 +2317,8 @@ class Scorer:
         return query_numbers, target_numbers, bytes(residue_identity)
 
     def map_row(self, parts: pd.Series, aln_type: str, search_db: str) -> pd.Series:
-        """Map pocket positions for callers operating on one pandas row."""
-        mapped = self._map_alignment_pocket_positions(
+        """Map selected positions for callers operating on one pandas row."""
+        mapped = self._map_alignment_selected_positions(
             query_entry=str(parts["query_entry"]),
             target_entry=str(parts["target_entry"]),
             query_chain=str(parts["query_chain_mapped"]),
@@ -2332,9 +2332,9 @@ class Scorer:
         )
         for column, values in zip(
             (
-                "query_pocket_residue_numbers",
-                "target_pocket_residue_numbers",
-                "pocket_residue_identity",
+                "query_selected_residue_numbers",
+                "target_selected_residue_numbers",
+                "selected_residue_identity",
             ),
             mapped,
         ):
@@ -2576,9 +2576,10 @@ class Scorer:
         has_target = target_pocket is not None
         target_pocket = target_pocket or {}
         target_interactions = target_interactions or {}
-        # Compact maps contain only aligned query-pocket residue numbers,
-        # target-pocket residue numbers (or -1), and amino-acid identity flags.
-        # This is sufficient for exact reconstruction of every pocket metric.
+        # Compact maps contain only aligned selected query residue numbers,
+        # selected target residue numbers (or -1), and amino-acid identity
+        # flags. The scorer then filters that shared representation to this
+        # ligand pair's pocket residues.
         for q_instance_chain, t_instance_chain in alns:
             aln = alns[(q_instance_chain, t_instance_chain)]
             q_chain_pocket = query_pocket.get(q_instance_chain, {})
@@ -2587,11 +2588,11 @@ class Scorer:
             t_chain_interactions = target_interactions.get(t_instance_chain, {})
             for source, aln_source in aln.iterrows():
                 pocket_positions: abc.Iterable[tuple[int, int, bool]]
-                if "query_pocket_residue_numbers" in aln_source.index:
+                if "query_selected_residue_numbers" in aln_source.index:
                     compact_values = (
-                        aln_source["query_pocket_residue_numbers"],
-                        aln_source["target_pocket_residue_numbers"],
-                        aln_source["pocket_residue_identity"],
+                        aln_source["query_selected_residue_numbers"],
+                        aln_source["target_selected_residue_numbers"],
+                        aln_source["selected_residue_identity"],
                     )
                     # Pandas represents null list/binary Parquet cells as
                     # scalar NaN values. Such an alignment has no mapped

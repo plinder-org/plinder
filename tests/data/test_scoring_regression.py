@@ -8,6 +8,8 @@ import shutil
 from pathlib import Path
 
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 
 GOLDEN_PATH = (
@@ -52,6 +54,17 @@ def scoring_fixture(
     rows.to_parquet(data_dir / "index" / "annotation_table.parquet", index=False)
     pd.concat([entry.chains_to_df() for entry in entries.values()]).to_parquet(
         data_dir / "index" / "entry_chains.parquet", index=False
+    )
+    from plinder.data.annotations.interface_utils import protein_interfaces_to_table
+
+    pq.write_table(
+        pa.concat_tables(
+            [
+                protein_interfaces_to_table(entry.interfaces)
+                for entry in entries.values()
+            ]
+        ),
+        data_dir / "index" / "interface_annotation_table.parquet",
     )
     (data_dir / "splits").mkdir()
     pd.DataFrame(
@@ -110,6 +123,9 @@ def test_scoring_regression(scoring_fixture, tmp_path):
     entries = entry_views_from_df(
         annotation_rows,
         entry_chains=pd.read_parquet(data_dir / "index" / "entry_chains.parquet"),
+        interface_annotations=pd.read_parquet(
+            data_dir / "index" / "interface_annotation_table.parquet"
+        ),
     )
 
     db_sources = get_db_sources(data_dir=data_dir, sub_databases=["holo"])
@@ -159,9 +175,9 @@ def test_scoring_regression(scoring_fixture, tmp_path):
     for release_shard in (data_dir / "alignments").rglob("*.parquet"):
         release_columns = set(pd.read_parquet(release_shard).columns)
         assert {
-            "query_pocket_residue_numbers",
-            "target_pocket_residue_numbers",
-            "pocket_residue_identity",
+            "query_selected_residue_numbers",
+            "target_selected_residue_numbers",
+            "selected_residue_identity",
         }.issubset(release_columns)
         assert {
             "qrnum",

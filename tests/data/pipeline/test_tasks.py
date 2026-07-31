@@ -12,6 +12,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from plinder.core.utils import schemas
+from plinder.data.annotations.interface_utils import INTERFACE_ANNOTATION_SCHEMA
 from plinder.data.pipeline import io, tasks
 from plinder.data.pipeline.config import LigandConfig
 
@@ -19,7 +20,11 @@ from plinder.data.pipeline.config import LigandConfig
 def _write_alignment_chain_lookup(data_dir: Path) -> None:
     index = data_dir / "index"
     index.mkdir(exist_ok=True, parents=True)
-    for name in ["annotation_table.parquet", "entry_chains.parquet"]:
+    for name in [
+        "annotation_table.parquet",
+        "interface_annotation_table.parquet",
+        "entry_chains.parquet",
+    ]:
         path = index / name
         if not path.is_file():
             pd.DataFrame({"entry_pdb_id": ["1abc"]}).to_parquet(path, index=False)
@@ -29,11 +34,18 @@ def _write_alignment_chain_lookup(data_dir: Path) -> None:
             "entry_pdb_id": ["1abc"],
             "chain_asym_id": ["A"],
             "chain_auth_id": ["A"],
-            "pocket_residue_numbers": [[10]],
-            "pocket_residue_indices": [[9]],
+            "selected_residue_numbers": [[10]],
+            "selected_residue_indices": [[9]],
         }
     ).to_parquet(lookup, index=False)
     tasks._write_alignment_chain_lookup_manifest(data_dir)
+
+
+def _write_empty_interface_index(index: Path) -> None:
+    pq.write_table(
+        pa.Table.from_pylist([], schema=INTERFACE_ANNOTATION_SCHEMA),
+        index / "interface_annotation_table.parquet",
+    )
 
 
 def _write_alignment_mapping_manifest(
@@ -545,9 +557,9 @@ def test_protein_scoring_plan_and_alignment_finalization(tmp_path, monkeypatch) 
             "query_chain_mapped": ["A"],
             "target_chain_mapped": ["A"],
             "source": [alignment_type],
-            "query_pocket_residue_numbers": [[1]],
-            "target_pocket_residue_numbers": [[1]],
-            "pocket_residue_identity": [bytes([1])],
+            "query_selected_residue_numbers": [[1]],
+            "target_selected_residue_numbers": [[1]],
+            "selected_residue_identity": [bytes([1])],
             "qcov": [1.0],
             "fident": [1.0],
             "seqsim": [1.0],
@@ -2355,9 +2367,9 @@ def test_alignment_release_shard_unifies_empty_and_populated_list_types(
         "qcov": [1.0],
         "fident": [1.0],
         "seqsim": [1.0],
-        "query_pocket_residue_numbers": [[]],
-        "target_pocket_residue_numbers": [[]],
-        "pocket_residue_identity": [b""],
+        "query_selected_residue_numbers": [[]],
+        "target_selected_residue_numbers": [[]],
+        "selected_residue_identity": [b""],
         "lddt": [1.0],
     }
     empty_lists = tmp_path / "mapped" / "1abc.parquet"
@@ -2366,9 +2378,9 @@ def test_alignment_release_shard_unifies_empty_and_populated_list_types(
     pd.DataFrame(columns).to_parquet(empty_lists, index=False)
     populated = dict(columns)
     populated["query_entry"] = ["2abc"]
-    populated["query_pocket_residue_numbers"] = [[1]]
-    populated["target_pocket_residue_numbers"] = [[2]]
-    populated["pocket_residue_identity"] = [bytes([1])]
+    populated["query_selected_residue_numbers"] = [[1]]
+    populated["target_selected_residue_numbers"] = [[2]]
+    populated["selected_residue_identity"] = [bytes([1])]
     pd.DataFrame(populated).to_parquet(populated_lists, index=False)
     target = tmp_path / "foldseek.parquet"
 
@@ -2383,8 +2395,8 @@ def test_alignment_release_shard_unifies_empty_and_populated_list_types(
 
     result = pd.read_parquet(target)
     assert result["query_entry"].tolist() == ["1abc", "2abc"]
-    assert result.loc[0, "query_pocket_residue_numbers"].tolist() == []
-    assert result.loc[1, "query_pocket_residue_numbers"].tolist() == [1]
+    assert result.loc[0, "query_selected_residue_numbers"].tolist() == []
+    assert result.loc[1, "query_selected_residue_numbers"].tolist() == [1]
 
 
 def test_ligand_score_threshold_must_cover_requested_chemical_clusters() -> None:
@@ -2417,9 +2429,9 @@ def test_collate_alignments_writes_query_addressable_shards(tmp_path):
         "qcov": [1.0, 0.9, 0.8],
         "fident": [1.0, 0.9, 0.8],
         "seqsim": [1.0, 0.9, 0.8],
-        "query_pocket_residue_numbers": [[1], [2], [3]],
-        "target_pocket_residue_numbers": [[11], [12], [13]],
-        "pocket_residue_identity": [bytes([1])] * 3,
+        "query_selected_residue_numbers": [[1], [2], [3]],
+        "target_selected_residue_numbers": [[11], [12], [13]],
+        "selected_residue_identity": [bytes([1])] * 3,
         "lddt": [1.0, 0.9, 0.8],
     }
     mapped_dir = tmp_path / "dbs/subdbs/holo_foldseek/mapped_aln"
@@ -2469,9 +2481,9 @@ def test_mapping_scatter_requires_current_shard_manifest(tmp_path):
         "qcov": [1.0],
         "fident": [1.0],
         "seqsim": [1.0],
-        "query_pocket_residue_numbers": [[1]],
-        "target_pocket_residue_numbers": [[1]],
-        "pocket_residue_identity": [bytes([1])],
+        "query_selected_residue_numbers": [[1]],
+        "target_selected_residue_numbers": [[1]],
+        "selected_residue_identity": [bytes([1])],
         "lddt": [1.0],
     }
     release = tasks._alignment_release_path(
@@ -2514,9 +2526,9 @@ def test_map_batch_alignments_publishes_atomic_shard(tmp_path, monkeypatch):
                     "qcov": [1.0],
                     "fident": [1.0],
                     "seqsim": [1.0],
-                    "query_pocket_residue_numbers": [[1]],
-                    "target_pocket_residue_numbers": [[2]],
-                    "pocket_residue_identity": [bytes([1])],
+                    "query_selected_residue_numbers": [[1]],
+                    "target_selected_residue_numbers": [[2]],
+                    "selected_residue_identity": [bytes([1])],
                     "lddt": [1.0],
                 }
             ).to_parquet(output, index=False)
@@ -2632,12 +2644,32 @@ def test_alignment_chain_lookup_compacts_mapping_inputs(tmp_path) -> None:
     ).to_parquet(index / "annotation_table.parquet", index=False)
     pd.DataFrame(
         {
-            "entry_pdb_id": ["1abc", "1abc"],
-            "chain_asym_id": ["A", "B"],
-            "chain_auth_id": ["X", "Y"],
-            "chain_receptor_type": ["protein", "dna"],
+            "entry_pdb_id": ["1abc", "1abc", "1abc"],
+            "chain_asym_id": ["A", "B", "C"],
+            "chain_auth_id": ["X", "Y", "Z"],
+            "chain_receptor_type": ["protein", "dna", "protein"],
         }
     ).to_parquet(index / "entry_chains.parquet", index=False)
+    pq.write_table(
+        pa.Table.from_pylist(
+            [
+                {
+                    "entry_pdb_id": "1abc",
+                    "system_id": "1abc__1__1.A--1.C",
+                    "system_biounit_id": "1",
+                    "interface_chain_1": "1.A",
+                    "interface_chain_2": "1.C",
+                    "interface_chain_1_residue_numbers": [11, 12],
+                    "interface_chain_1_residue_indices": [10, 11],
+                    "interface_chain_2_residue_numbers": [20, 21],
+                    "interface_chain_2_residue_indices": [19, 20],
+                    "interface_num_contact_residue_pairs": 3,
+                }
+            ],
+            schema=INTERFACE_ANNOTATION_SCHEMA,
+        ),
+        index / "interface_annotation_table.parquet",
+    )
 
     lookup = tasks.make_alignment_chain_lookup(
         data_dir=tmp_path,
@@ -2646,15 +2678,37 @@ def test_alignment_chain_lookup_compacts_mapping_inputs(tmp_path) -> None:
     )
 
     frame = pd.read_parquet(lookup)
-    assert frame["chain_asym_id"].tolist() == ["A"]
-    assert frame.loc[0, "pocket_residue_numbers"].tolist() == [10, 11]
-    assert frame.loc[0, "pocket_residue_indices"].tolist() == [9, 10]
+    assert frame["chain_asym_id"].tolist() == ["A", "C"]
+    assert frame.loc[0, "selected_residue_numbers"].tolist() == [10, 11, 12]
+    assert frame.loc[0, "selected_residue_indices"].tolist() == [9, 10, 11]
+    assert frame.loc[1, "selected_residue_numbers"].tolist() == [20, 21]
+    assert frame.loc[1, "selected_residue_indices"].tolist() == [19, 20]
     assert tasks._completed_alignment_chain_lookup(tmp_path) is not None
     manifest = tmp_path / tasks.ALIGNMENT_CHAIN_LOOKUP_MANIFEST_RELATIVE
     assert manifest.is_file()
     views = load_alignment_entry_views(lookup_path=lookup, pdb_ids=["1abc"])
-    assert views["1abc"].author_to_asym == {"X": "A"}
-    assert views["1abc"].pocket_index_to_number_per_chain == {"A": {9: 10, 10: 11}}
+    assert views["1abc"].author_to_asym == {"X": "A", "Z": "C"}
+    assert views["1abc"].selected_index_to_number_per_chain == {
+        "A": {9: 10, 10: 11, 11: 12},
+        "C": {19: 20, 20: 21},
+    }
+
+    interface_path = index / "interface_annotation_table.parquet"
+    interface_frame = pd.read_parquet(interface_path)
+    interface_frame.loc[0, "interface_num_contact_residue_pairs"] = 4
+    pq.write_table(
+        pa.Table.from_pylist(
+            interface_frame.to_dict("records"), schema=INTERFACE_ANNOTATION_SCHEMA
+        ),
+        interface_path,
+    )
+    assert tasks._completed_alignment_chain_lookup(tmp_path) is None
+    tasks.make_alignment_chain_lookup(
+        data_dir=tmp_path,
+        scratch_dir=tmp_path / "scratch-refresh",
+        threads=1,
+        force_update=True,
+    )
 
     annotation = index / "annotation_table.parquet"
     annotation_frame = pd.read_parquet(annotation)
@@ -2685,6 +2739,7 @@ def test_alignment_chain_lookup_keeps_identity_when_only_system_rows_change(
             "chain_receptor_type": ["protein"],
         }
     ).to_parquet(index / "entry_chains.parquet", index=False)
+    _write_empty_interface_index(index)
     lookup = tasks.make_alignment_chain_lookup(
         data_dir=tmp_path,
         scratch_dir=tmp_path / "scratch-1",
@@ -2728,6 +2783,7 @@ def test_alignment_chain_lookup_replaces_a_legacy_schema(tmp_path: Path) -> None
             "chain_receptor_type": ["protein"],
         }
     ).to_parquet(index / "entry_chains.parquet", index=False)
+    _write_empty_interface_index(index)
     lookup = tasks.make_alignment_chain_lookup(
         data_dir=tmp_path,
         scratch_dir=tmp_path / "scratch-1",
@@ -2748,8 +2804,8 @@ def test_alignment_chain_lookup_replaces_a_legacy_schema(tmp_path: Path) -> None
         "entry_pdb_id",
         "chain_asym_id",
         "chain_auth_id",
-        "pocket_residue_numbers",
-        "pocket_residue_indices",
+        "selected_residue_numbers",
+        "selected_residue_indices",
     ]
     assert tasks._completed_alignment_chain_lookup(tmp_path) is not None
 

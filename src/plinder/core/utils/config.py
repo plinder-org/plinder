@@ -250,6 +250,7 @@ class DataConfig:
     entry_chain_file: str = "entry_chains.parquet"
     entry_biounit_chain_file: str = "entry_biounit_chains.parquet"
     entry_source_file: str = "entry_sources.parquet"
+    interface_file: str = "interface_annotation_table.parquet"
     ligand_archives: str = "ligand_archives"
     ligand_scores: str = "ligand_scores"
     ligands: str = "ligands"

@@ -8,14 +8,21 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 from plinder.core.scores.entries import (
     ChainView,
     EntryView,
+    InterfaceView,
     LigandView,
     SystemView,
     entry_views_from_df,
     load_entry_views,
+)
+from plinder.core.scores.reconstruct import (
+    calculate_interface_similarity_scores,
+    reconstruct_interface_similarity_scores,
 )
 from plinder.core.utils.schemas import PROTEIN_SIMILARITY_SCHEMA
 from plinder.data.annotations import get_similarity_scores as scoring_module
@@ -194,9 +201,9 @@ def test_map_row_vectorizes_sparse_pocket_positions(
 
     mapped = scorer.map_row(row, aln_type=alignment_type, search_db="holo")
 
-    assert mapped["query_pocket_residue_numbers"] == query_numbers
-    assert mapped["target_pocket_residue_numbers"] == target_numbers
-    assert mapped["pocket_residue_identity"] == identity
+    assert mapped["query_selected_residue_numbers"] == query_numbers
+    assert mapped["target_selected_residue_numbers"] == target_numbers
+    assert mapped["selected_residue_identity"] == identity
 
 
 def test_search_uses_configured_zero_minimum_sequence_identity(tmp_path) -> None:
@@ -335,9 +342,9 @@ def test_no_hit_search_writes_typed_empty_raw_and_mapped_checkpoints(
     ]
     assert {
         "seqsim",
-        "query_pocket_residue_numbers",
-        "target_pocket_residue_numbers",
-        "pocket_residue_identity",
+        "query_selected_residue_numbers",
+        "target_selected_residue_numbers",
+        "selected_residue_identity",
     } <= set(mapped.columns)
     assert {"evalue", "bits", "tcov"}.isdisjoint(mapped.columns)
 
@@ -550,11 +557,16 @@ def test_entry_views_accept_annotation_dataframe(
     index_dir.mkdir()
     annotation_path = index_dir / "annotation_table.parquet"
     chain_path = index_dir / "entry_chains.parquet"
+    interface_path = index_dir / "interface_annotation_table.parquet"
     annotation.to_parquet(annotation_path, index=False)
     entry_chains.to_parquet(chain_path, index=False)
+    from plinder.data.annotations.interface_utils import protein_interfaces_to_table
+
+    pq.write_table(protein_interfaces_to_table(entry.interfaces), interface_path)
     view = entry_views_from_df(
         pd.read_parquet(annotation_path),
         entry_chains=pd.read_parquet(chain_path),
+        interface_annotations=pd.read_parquet(interface_path),
     )[entry.pdb_id]
 
     assert view.systems
@@ -569,6 +581,7 @@ def test_entry_views_accept_annotation_dataframe(
 
     loaded = load_entry_views(pdb_ids=[entry.pdb_id], data_dir=tmp_path)[entry.pdb_id]
     assert loaded.chains == view.chains
+    assert loaded.interfaces == view.interfaces
 
     chain_path.unlink()
     with pytest.raises(FileNotFoundError, match="normalized entry chain index"):
@@ -636,6 +649,285 @@ def test_entry_view_builds_holo_apo_and_pred_alignment_ids() -> None:
     assert view.chains_for_alignment("apo", "mmseqs") == ["1abc_B"]
     assert view.chains_for_alignment("pred", "foldseek") == ["AF-P12345-F1-model_v4_A"]
     assert view.chains_for_alignment("pred", "mmseqs") == ["P12345"]
+
+
+def test_interface_scores_choose_swapped_assignment_and_best_backend() -> None:
+    query = InterfaceView(
+        id="1abc__1__1.A--1.B",
+        pdb_id="1abc",
+        biounit_id="1",
+        chain_1="1.A",
+        chain_2="1.B",
+        chain_1_residue_number_to_index={1: 0, 2: 1},
+        chain_2_residue_number_to_index={3: 2, 4: 3},
+        num_contact_residue_pairs=4,
+    )
+    target = InterfaceView(
+        id="2def__1__1.X--1.Y",
+        pdb_id="2def",
+        biounit_id="1",
+        chain_1="1.X",
+        chain_2="1.Y",
+        chain_1_residue_number_to_index={10: 9, 20: 19},
+        chain_2_residue_number_to_index={30: 29, 40: 39},
+        num_contact_residue_pairs=4,
+    )
+    alignments = pd.DataFrame(
+        [
+            # Foldseek's swapped assignment covers both interface sides.
+            {
+                "query_entry": "1abc",
+                "target_entry": "2def",
+                "query_chain_mapped": "A",
+                "target_chain_mapped": "Y",
+                "source": "foldseek",
+                "query_selected_residue_numbers": [1, 2],
+                "target_selected_residue_numbers": [30, 40],
+            },
+            {
+                "query_entry": "1abc",
+                "target_entry": "2def",
+                "query_chain_mapped": "B",
+                "target_chain_mapped": "X",
+                "source": "foldseek",
+                "query_selected_residue_numbers": [3, 4],
+                "target_selected_residue_numbers": [10, 20],
+            },
+            # MMseqs has a complete direct assignment but only 50% product.
+            {
+                "query_entry": "1abc",
+                "target_entry": "2def",
+                "query_chain_mapped": "A",
+                "target_chain_mapped": "X",
+                "source": "mmseqs",
+                "query_selected_residue_numbers": [1, 2],
+                "target_selected_residue_numbers": [10, -1],
+            },
+            {
+                "query_entry": "1abc",
+                "target_entry": "2def",
+                "query_chain_mapped": "B",
+                "target_chain_mapped": "Y",
+                "source": "mmseqs",
+                "query_selected_residue_numbers": [3, 4],
+                "target_selected_residue_numbers": [30, 40],
+            },
+            # Reverse coverage is directional and only 25%.
+            {
+                "query_entry": "2def",
+                "target_entry": "1abc",
+                "query_chain_mapped": "X",
+                "target_chain_mapped": "A",
+                "source": "foldseek",
+                "query_selected_residue_numbers": [10, 20],
+                "target_selected_residue_numbers": [1, -1],
+            },
+            {
+                "query_entry": "2def",
+                "target_entry": "1abc",
+                "query_chain_mapped": "Y",
+                "target_chain_mapped": "B",
+                "source": "foldseek",
+                "query_selected_residue_numbers": [30, 40],
+                "target_selected_residue_numbers": [3, -1],
+            },
+        ]
+    )
+
+    forward = calculate_interface_similarity_scores(
+        alignments,
+        query_interfaces={query.id: query},
+        target_interfaces={target.id: target},
+    )
+    assert forward.to_dict("records") == [
+        {
+            "query_system": query.id,
+            "target_system": target.id,
+            "mapping": "1.A:1.Y;1.B:1.X",
+            "source": "foldseek",
+            "metric": "interface_qcov",
+            "similarity": 100,
+        }
+    ]
+
+    reverse = calculate_interface_similarity_scores(
+        alignments,
+        query_interfaces={target.id: target},
+        target_interfaces={query.id: query},
+    )
+    assert reverse.loc[0, "similarity"] == 25
+    assert reverse.loc[0, "mapping"] == "1.X:1.A;1.Y:1.B"
+
+    incomplete = calculate_interface_similarity_scores(
+        alignments.iloc[[0]],
+        query_interfaces={query.id: query},
+        target_interfaces={target.id: target},
+    )
+    assert incomplete.empty
+
+
+def test_entry_views_support_interface_only_entries() -> None:
+    interface_id = "1abc__1__1.A--2.B"
+    interfaces = pd.DataFrame(
+        [
+            {
+                "entry_pdb_id": "1abc",
+                "system_id": interface_id,
+                "system_biounit_id": "1",
+                "interface_chain_1": "1.A",
+                "interface_chain_2": "2.B",
+                "interface_chain_1_residue_numbers": [10, 11, 12],
+                "interface_chain_1_residue_indices": [9, 10, 11],
+                "interface_chain_2_residue_numbers": [20, 21, 22],
+                "interface_chain_2_residue_indices": [19, 20, 21],
+                "interface_num_contact_residue_pairs": 5,
+            }
+        ]
+    )
+    chains = pd.DataFrame(
+        {
+            "entry_pdb_id": ["1abc", "1abc"],
+            "chain_asym_id": ["A", "B"],
+            "chain_auth_id": ["X", "Y"],
+            "chain_entity_id": ["1", "2"],
+            "chain_type": ["polypeptide(L)", "polypeptide(L)"],
+            "chain_length": [100, 80],
+            "chain_is_holo": [True, True],
+            "chain_uniprot_ids": [[], []],
+        }
+    )
+
+    entry = entry_views_from_df(
+        pd.DataFrame(columns=["entry_pdb_id"]),
+        entry_chains=chains,
+        interface_annotations=interfaces,
+    )["1abc"]
+
+    assert not entry.systems
+    assert set(entry.interfaces) == {interface_id}
+    assert entry.chains_for_alignment("holo", "mmseqs") == ["1abc_X", "1abc_Y"]
+    assert entry.selected_index_to_number_per_chain == {
+        "A": {9: 10, 10: 11, 11: 12},
+        "B": {19: 20, 20: 21, 21: 22},
+    }
+
+
+def test_reconstruct_interface_scores_from_release_shard(tmp_path: Path) -> None:
+    index = tmp_path / "index"
+    index.mkdir()
+    pd.DataFrame({"entry_pdb_id": pd.Series(dtype="string")}).to_parquet(
+        index / "annotation_table.parquet", index=False
+    )
+    pd.DataFrame(
+        {
+            "entry_pdb_id": ["1abc", "1abc", "2def", "2def"],
+            "chain_asym_id": ["A", "B", "X", "Y"],
+            "chain_auth_id": ["A", "B", "X", "Y"],
+            "chain_entity_id": ["1", "2", "1", "2"],
+            "chain_type": ["polypeptide(L)"] * 4,
+            "chain_length": [100] * 4,
+            "chain_is_holo": [True] * 4,
+            "chain_uniprot_ids": [[] for _ in range(4)],
+        }
+    ).to_parquet(index / "entry_chains.parquet", index=False)
+    query_id = "1abc__1__1.A--1.B"
+    target_id = "2def__1__1.X--1.Y"
+    interface_rows = [
+        {
+            "entry_pdb_id": "1abc",
+            "system_id": query_id,
+            "system_biounit_id": "1",
+            "interface_chain_1": "1.A",
+            "interface_chain_2": "1.B",
+            "interface_chain_1_residue_numbers": [1, 2, 3],
+            "interface_chain_1_residue_indices": [0, 1, 2],
+            "interface_chain_2_residue_numbers": [4, 5, 6],
+            "interface_chain_2_residue_indices": [3, 4, 5],
+            "interface_num_contact_residue_pairs": 3,
+        },
+        {
+            "entry_pdb_id": "2def",
+            "system_id": target_id,
+            "system_biounit_id": "1",
+            "interface_chain_1": "1.X",
+            "interface_chain_2": "1.Y",
+            "interface_chain_1_residue_numbers": [10, 20, 30],
+            "interface_chain_1_residue_indices": [9, 19, 29],
+            "interface_chain_2_residue_numbers": [40, 50, 60],
+            "interface_chain_2_residue_indices": [39, 49, 59],
+            "interface_num_contact_residue_pairs": 3,
+        },
+    ]
+    from plinder.data.annotations.interface_utils import INTERFACE_ANNOTATION_SCHEMA
+
+    pq.write_table(
+        pa.Table.from_pylist(interface_rows, schema=INTERFACE_ANNOTATION_SCHEMA),
+        index / "interface_annotation_table.parquet",
+    )
+    alignment = (
+        tmp_path
+        / "alignments"
+        / "search_db=holo"
+        / "alignment_type=foldseek"
+        / "shard=ab.parquet"
+    )
+    alignment.parent.mkdir(parents=True)
+    alignment_rows = [
+        {
+            "query_entry": "1abc",
+            "target_entry": "2def",
+            "query_chain_mapped": "A",
+            "target_chain_mapped": "X",
+            "source": "foldseek",
+            "qcov": 1.0,
+            "fident": 1.0,
+            "seqsim": 1.0,
+            "query_selected_residue_numbers": [1, 2, 3],
+            "target_selected_residue_numbers": [10, 20, 30],
+            "selected_residue_identity": bytes([1, 1, 1]),
+            "lddt": 1.0,
+        },
+        {
+            "query_entry": "1abc",
+            "target_entry": "2def",
+            "query_chain_mapped": "B",
+            "target_chain_mapped": "Y",
+            "source": "foldseek",
+            "qcov": 1.0,
+            "fident": 1.0,
+            "seqsim": 1.0,
+            "query_selected_residue_numbers": [4, 5, 6],
+            "target_selected_residue_numbers": [40, 50, 60],
+            "selected_residue_identity": bytes([1, 1, 1]),
+            "lddt": 1.0,
+        },
+    ]
+    from plinder.core.utils.schemas import mapped_alignment_schema
+
+    pq.write_table(
+        pa.Table.from_pylist(
+            alignment_rows,
+            schema=mapped_alignment_schema(alignment_type="foldseek"),
+        ),
+        alignment,
+    )
+
+    scores = reconstruct_interface_similarity_scores(
+        [query_id],
+        [target_id],
+        data_dir=tmp_path,
+    )
+
+    assert scores.to_dict("records") == [
+        {
+            "query_system": query_id,
+            "target_system": target_id,
+            "mapping": "1.A:1.X;1.B:1.Y",
+            "source": "foldseek",
+            "metric": "interface_qcov",
+            "similarity": 100,
+        }
+    ]
 
 
 def test_entry_views_keep_ligand_pockets_separate() -> None:
@@ -855,9 +1147,9 @@ def test_ligand_pair_pocket_scores_do_not_use_system_union(tmp_path) -> None:
         ("1.A", "1.X"): pd.DataFrame(
             [
                 {
-                    "query_pocket_residue_numbers": [10, 20],
-                    "target_pocket_residue_numbers": [110, 120],
-                    "pocket_residue_identity": bytes([1, 1]),
+                    "query_selected_residue_numbers": [10, 20],
+                    "target_selected_residue_numbers": [110, 120],
+                    "selected_residue_identity": bytes([1, 1]),
                 }
             ],
             index=["foldseek"],
@@ -916,9 +1208,9 @@ def test_ligand_pair_pocket_scores_ignore_null_compact_maps(tmp_path) -> None:
         ("1.A", "1.X"): pd.DataFrame(
             [
                 {
-                    "query_pocket_residue_numbers": np.nan,
-                    "target_pocket_residue_numbers": np.nan,
-                    "pocket_residue_identity": np.nan,
+                    "query_selected_residue_numbers": np.nan,
+                    "target_selected_residue_numbers": np.nan,
+                    "selected_residue_identity": np.nan,
                 }
             ],
             index=["foldseek"],

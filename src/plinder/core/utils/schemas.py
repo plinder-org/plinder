@@ -12,9 +12,9 @@ MAPPED_ALIGNMENT_REQUIRED_COLUMNS = frozenset(
         "qcov",
         "fident",
         "seqsim",
-        "query_pocket_residue_numbers",
-        "target_pocket_residue_numbers",
-        "pocket_residue_identity",
+        "query_selected_residue_numbers",
+        "target_selected_residue_numbers",
+        "selected_residue_identity",
     }
 )
 
@@ -30,9 +30,9 @@ def mapped_alignment_schema(*, alignment_type: str) -> pa.Schema:
         pa.field("qcov", pa.float64()),
         pa.field("fident", pa.float64()),
         pa.field("seqsim", pa.float64()),
-        pa.field("query_pocket_residue_numbers", pa.list_(pa.int32())),
-        pa.field("target_pocket_residue_numbers", pa.list_(pa.int32())),
-        pa.field("pocket_residue_identity", pa.binary()),
+        pa.field("query_selected_residue_numbers", pa.list_(pa.int32())),
+        pa.field("target_selected_residue_numbers", pa.list_(pa.int32())),
+        pa.field("selected_residue_identity", pa.binary()),
     ]
     if alignment_type == "foldseek":
         fields.append(pa.field("lddt", pa.float64()))
@@ -62,6 +62,17 @@ PROTEIN_SIMILARITY_SCHEMA = pa.schema(
         ("protein_mapping", pa.string()),
         ("mapping", pa.string()),
         ("protein_mapper", pa.dictionary(pa.int8(), pa.string())),
+        ("source", pa.dictionary(pa.int8(), pa.string(), ordered=True)),
+        ("metric", pa.dictionary(pa.int8(), pa.string(), ordered=True)),
+        ("similarity", pa.int8()),
+    ]
+)
+
+INTERFACE_SIMILARITY_SCHEMA = pa.schema(
+    [
+        ("query_system", pa.string()),
+        ("target_system", pa.string()),
+        ("mapping", pa.string()),
         ("source", pa.dictionary(pa.int8(), pa.string(), ordered=True)),
         ("metric", pa.dictionary(pa.int8(), pa.string(), ordered=True)),
         ("similarity", pa.int8()),
