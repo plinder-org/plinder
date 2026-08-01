@@ -18,11 +18,15 @@ from plinder.data.pipeline import collate as collate_module
 from plinder.data.pipeline.collate import (
     collate_shard,
     finalize_collation,
+    finalize_collation_plan,
     finalize_repair_marker,
+    inventory_collation_codes,
     plan_collation,
     planned_code_batch,
+    planned_inventory_code_batch,
     repair_collation,
     run_collation,
+    start_collation_plan,
 )
 
 
@@ -262,6 +266,74 @@ def test_plan_shards_and_finalize_real_v3_contract(tmp_path: Path) -> None:
     assert marker["interface_min_residues"] == 7
 
 
+def test_distributed_plan_requires_and_merges_every_code_inventory(
+    tmp_path: Path,
+) -> None:
+    _write_release(tmp_path)
+
+    build = start_collation_plan(tmp_path)
+    assert build["code_count"] == 2
+    assert planned_inventory_code_batch(
+        tmp_path, batch_index=0, batch_size=1
+    ) == ["ab"]
+    assert planned_inventory_code_batch(
+        tmp_path, batch_index=1, batch_size=1
+    ) == ["de"]
+
+    inventory_collation_codes(tmp_path, ["ab"], threads=2)
+    with pytest.raises(FileNotFoundError, match="incomplete for code de"):
+        finalize_collation_plan(tmp_path)
+
+    inventory_collation_codes(tmp_path, ["de"], threads=2)
+    plan = finalize_collation_plan(tmp_path)
+
+    assert plan["entry_count"] == 2
+    assert plan["code_entry_counts"] == {"ab": 1, "de": 1}
+    assert pq.read_table(plan["manifest"]).column("pdb_id").to_pylist() == [
+        "1abc",
+        "2def",
+    ]
+
+
+def test_interface_only_collation_preserves_installed_ligand_annotation(
+    tmp_path: Path,
+) -> None:
+    _write_release(tmp_path)
+    run_collation(tmp_path, memory_limit="1GB")
+    annotation_path = tmp_path / "index/annotation_table.parquet"
+    annotation = pd.read_parquet(annotation_path)
+    annotation["release_only"] = "preserve"
+    annotation.to_parquet(annotation_path, index=False)
+    annotation_bytes = annotation_path.read_bytes()
+    legacy_chain_path = tmp_path / "raw_entries/ab/1abc/entry_chains.parquet"
+    legacy_chains = pd.read_parquet(legacy_chain_path).drop(
+        columns="chain_is_ligand_like"
+    )
+    legacy_chains.to_parquet(legacy_chain_path, index=False)
+    biounit_path = tmp_path / "raw_entries/ab/1abc/entry_biounit_chains.parquet"
+    biounits = pd.read_parquet(biounit_path)
+    biounits.loc[biounits["chain_asym_id"] == "B", "chain_role"] = "ligand"
+    biounits.to_parquet(biounit_path, index=False)
+
+    build = start_collation_plan(
+        tmp_path,
+        include_ligand_annotations=False,
+    )
+    inventory_collation_codes(tmp_path, build["codes"], threads=2)
+    plan = finalize_collation_plan(tmp_path)
+    for code in plan["codes"]:
+        collate_shard(tmp_path, code, memory_limit="1GB")
+    report = finalize_collation(tmp_path, memory_limit="1GB")
+
+    assert report["include_ligand_annotations"] is False
+    assert annotation_path.read_bytes() == annotation_bytes
+    assert report["interface_count"] == 2
+    chains = pd.read_parquet(tmp_path / "index/entry_chains.parquet")
+    assert chains.set_index(["entry_pdb_id", "chain_asym_id"]).loc[
+        ("1abc", "B"), "chain_is_ligand_like"
+    ]
+
+
 def test_collation_retains_entries_with_only_protein_interfaces(
     tmp_path: Path,
 ) -> None:
@@ -461,7 +533,7 @@ def test_shard_rejects_optional_ligand_outputs_appearing_after_plan(
         collate_shard(tmp_path, "gh", memory_limit="1GB")
 
 
-def test_finalize_rechecks_inputs_changed_after_sharding(tmp_path: Path) -> None:
+def test_finalize_uses_frozen_shards_after_raw_inputs_change(tmp_path: Path) -> None:
     _write_release(tmp_path)
     plan_collation(tmp_path)
     collate_shard(tmp_path, "ab", memory_limit="1GB")
@@ -471,8 +543,13 @@ def test_finalize_rechecks_inputs_changed_after_sharding(tmp_path: Path) -> None
     frame["entry_pH"] = 6.0
     frame.to_parquet(annotation, index=False)
 
-    with pytest.raises(RuntimeError, match="changed after planning"):
-        finalize_collation(tmp_path, threads=2, memory_limit="1GB")
+    report = finalize_collation(tmp_path, threads=2, memory_limit="1GB")
+
+    assert report["status"] == "complete"
+    installed = pd.read_parquet(tmp_path / "index/annotation_table.parquet")
+    assert set(installed.loc[installed["entry_pdb_id"] == "1abc", "entry_pH"]) != {
+        6.0
+    }
 
 
 def test_final_install_fails_closed_on_partial_replacement(

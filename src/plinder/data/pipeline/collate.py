@@ -34,6 +34,8 @@ STAGING_RELATIVE = Path("index/.staging/v3_collation")
 MANIFEST_NAME = "entries.parquet"
 PLAN_NAME = "plan.json"
 FINAL_MARKER_NAME = "collation.json"
+PLAN_BUILD_NAME = "plan-build.json"
+PLAN_INVENTORY_DIRECTORY = "plan-inventory"
 REPAIR_REQUIRED_STATUS = "requires_downstream_repair"
 RETIRED_ENRICHMENT_MARKERS = ("ecod", "panther", "kinase")
 SYSTEM_LIGAND_FLAGS = (
@@ -145,6 +147,16 @@ def manifest_path(data_dir: Path) -> Path:
 
 def plan_path(data_dir: Path) -> Path:
     return staging_dir(data_dir) / PLAN_NAME
+
+
+def plan_build_path(data_dir: Path) -> Path:
+    """Return the generation marker for distributed plan inventory."""
+    return staging_dir(data_dir) / PLAN_BUILD_NAME
+
+
+def plan_inventory_dir(data_dir: Path, generation: str) -> Path:
+    """Return the private per-code inventory directory for one generation."""
+    return staging_dir(data_dir) / PLAN_INVENTORY_DIRECTORY / generation
 
 
 def _temporary_path(path: Path) -> Path:
@@ -272,17 +284,169 @@ def _entry_manifest_row(data_dir: Path, entry_dir: Path) -> dict[str, Any]:
     return row
 
 
-def plan_collation(data_dir: Path, *, threads: int = 1) -> dict[str, Any]:
-    """Inventory every materialized V3 entry and atomically publish a plan."""
-    if threads < 1:
-        raise ValueError("planning threads must be positive")
-    data_dir = data_dir.resolve()
+def _raw_entry_codes(data_dir: Path) -> list[str]:
     raw_entries = data_dir / "raw_entries"
     if not raw_entries.is_dir():
         raise FileNotFoundError(f"missing raw-entry dataset: {raw_entries}")
+    return sorted(
+        path.name.lower()
+        for path in raw_entries.iterdir()
+        if path.is_dir() and re.fullmatch(r"[a-z0-9]{2}", path.name.lower())
+    )
+
+
+def _raw_entry_code_signatures(
+    data_dir: Path, codes: Sequence[str]
+) -> dict[str, dict[str, int]]:
+    """Fingerprint code directories without walking their entry children."""
+    signatures: dict[str, dict[str, int]] = {}
+    for code in codes:
+        stat_result = (data_dir / "raw_entries" / code).stat()
+        signatures[code] = {
+            "size": stat_result.st_size,
+            "mtime_ns": stat_result.st_mtime_ns,
+        }
+    return signatures
+
+
+def _entry_dirs_for_code(data_dir: Path, code: str) -> list[Path]:
+    code_dir = data_dir / "raw_entries" / code
+    if not code_dir.is_dir():
+        return []
+    return sorted(
+        path
+        for path in code_dir.iterdir()
+        if path.is_dir()
+        and re.fullmatch(r"[0-9][a-z0-9]{3}", path.name.lower())
+    )
+
+
+def start_collation_plan(
+    data_dir: Path, *, include_ligand_annotations: bool = True
+) -> dict[str, Any]:
+    """Freeze the code directories for a distributed inventory generation."""
+    data_dir = data_dir.resolve()
+    codes = _raw_entry_codes(data_dir)
+    if not codes:
+        raise ValueError(
+            f"no materialized V3 entries found in {data_dir / 'raw_entries'}"
+        )
+    build: dict[str, Any] = {
+        "version": COLLATION_VERSION,
+        "status": "inventorying",
+        "generation": uuid4().hex,
+        "data_dir": str(data_dir),
+        "codes": codes,
+        "code_count": len(codes),
+        "code_directory_signatures": _raw_entry_code_signatures(data_dir, codes),
+        "include_ligand_annotations": include_ligand_annotations,
+    }
+    plan_inventory_dir(data_dir, str(build["generation"])).mkdir(
+        parents=True, exist_ok=False
+    )
+    _write_json_atomic(plan_build_path(data_dir), build)
+    return build
+
+
+def _load_plan_build(data_dir: Path) -> dict[str, Any]:
+    path = plan_build_path(data_dir)
+    try:
+        build = cast(dict[str, Any], json.loads(path.read_text()))
+    except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise FileNotFoundError(f"missing or invalid collation plan build: {path}") from exc
+    if (
+        build.get("version") != COLLATION_VERSION
+        or build.get("status") != "inventorying"
+        or not isinstance(build.get("generation"), str)
+        or not isinstance(build.get("codes"), list)
+        or not isinstance(build.get("code_directory_signatures"), dict)
+        or not isinstance(build.get("include_ligand_annotations"), bool)
+    ):
+        raise ValueError(f"invalid collation plan build: {path}")
+    return build
+
+
+def inventory_collation_codes(
+    data_dir: Path,
+    codes: Sequence[str],
+    *,
+    threads: int = 1,
+) -> dict[str, Any]:
+    """Inventory selected two-character shards for one plan generation."""
+    if threads < 1:
+        raise ValueError("planning threads must be positive")
+    data_dir = data_dir.resolve()
+    build = _load_plan_build(data_dir)
+    planned_codes = {str(code) for code in build["codes"]}
+    normalized_codes = sorted({str(code).lower() for code in codes})
+    invalid = [
+        code
+        for code in normalized_codes
+        if re.fullmatch(r"[a-z0-9]{2}", code) is None or code not in planned_codes
+    ]
+    if invalid:
+        raise ValueError(f"codes are not in the collation plan build: {invalid}")
+    if not normalized_codes:
+        raise ValueError("no collation inventory codes selected")
+
+    output_root = plan_inventory_dir(data_dir, str(build["generation"]))
+    counts: dict[str, int] = {}
+    signatures: dict[str, str] = {}
+    with ThreadPoolExecutor(max_workers=threads) as executor:
+        for code in normalized_codes:
+            entry_dirs = _entry_dirs_for_code(data_dir, code)
+            rows = list(
+                executor.map(
+                    lambda path: _entry_manifest_row(data_dir, path),
+                    entry_dirs,
+                )
+            )
+            if len({str(row["pdb_id"]) for row in rows}) != len(rows):
+                raise ValueError(f"duplicate raw-entry annotations in shard {code}")
+            _write_table_atomic(
+                pa.Table.from_pylist(rows, schema=MANIFEST_SCHEMA),
+                output_root / f"{code}.parquet",
+            )
+            counts[code] = len(rows)
+            signatures[code] = _row_signature(rows)
+    return {
+        "status": "complete",
+        "generation": build["generation"],
+        "codes": normalized_codes,
+        "code_entry_counts": counts,
+        "code_signatures": signatures,
+    }
+
+
+def planned_inventory_code_batch(
+    data_dir: Path, *, batch_index: int, batch_size: int
+) -> list[str]:
+    """Return one fixed-size slice of codes from the active plan build."""
+    if batch_index < 0:
+        raise ValueError("batch_index must be non-negative")
+    if batch_size < 1:
+        raise ValueError("batch_size must be positive")
+    codes = [str(code) for code in _load_plan_build(data_dir)["codes"]]
+    start = batch_index * batch_size
+    return codes[start : start + batch_size]
+
+
+def finalize_collation_plan(data_dir: Path) -> dict[str, Any]:
+    """Merge a complete distributed inventory and publish the frozen plan."""
+    data_dir = data_dir.resolve()
+    build = _load_plan_build(data_dir)
+    build_codes = [str(code) for code in build["codes"]]
+    if (
+        _raw_entry_codes(data_dir) != build_codes
+        or _raw_entry_code_signatures(data_dir, build_codes)
+        != build["code_directory_signatures"]
+    ):
+        raise RuntimeError("raw-entry shard directories changed during planning")
+
     output = manifest_path(data_dir)
     output.parent.mkdir(parents=True, exist_ok=True)
     temporary = _temporary_path(output)
+    inventory_root = plan_inventory_dir(data_dir, str(build["generation"]))
     writer: Any | None = None
     seen: set[str] = set()
     code_signatures: dict[str, str] = {}
@@ -291,43 +455,41 @@ def plan_collation(data_dir: Path, *, threads: int = 1) -> dict[str, Any]:
     total_entries = 0
     try:
         writer = pq.ParquetWriter(temporary, MANIFEST_SCHEMA, compression="zstd")
-        code_dirs = sorted(
-            path
-            for path in raw_entries.iterdir()
-            if path.is_dir() and re.fullmatch(r"[a-z0-9]{2}", path.name.lower())
-        )
-        with ThreadPoolExecutor(max_workers=threads) as executor:
-            for code_dir in code_dirs:
-                entry_dirs = sorted(
-                    path
-                    for path in code_dir.iterdir()
-                    if path.is_dir()
-                    and re.fullmatch(r"[0-9][a-z0-9]{3}", path.name.lower())
+        for code in build_codes:
+            inventory = inventory_root / f"{code}.parquet"
+            if not inventory.is_file():
+                raise FileNotFoundError(
+                    f"collation plan inventory is incomplete for code {code}: "
+                    f"{inventory}"
                 )
-                rows = list(
-                    executor.map(
-                        lambda path: _entry_manifest_row(data_dir, path),
-                        entry_dirs,
-                    )
+            table = pq.read_table(inventory)
+            if not table.schema.equals(MANIFEST_SCHEMA):
+                raise ValueError(f"invalid collation inventory schema: {inventory}")
+            rows = cast(list[dict[str, Any]], table.to_pylist())
+            actual_ids = {str(row["pdb_id"]) for row in rows}
+            if len(actual_ids) != len(rows) or any(
+                pdb_id[1:3] != code for pdb_id in actual_ids
+            ):
+                raise ValueError(
+                    f"invalid raw-entry membership in inventory shard {code}"
                 )
-                if not rows:
-                    continue
-                duplicates = sorted(
-                    str(row["pdb_id"]) for row in rows if str(row["pdb_id"]) in seen
-                )
-                if duplicates:
-                    raise ValueError(f"duplicate raw-entry annotations: {duplicates}")
-                seen.update(str(row["pdb_id"]) for row in rows)
-                code = code_dir.name.lower()
-                code_signatures[code] = _row_signature(rows)
-                code_counts[code] = len(rows)
-                interface_min_residues.update(
-                    int(row["interface_min_residues"]) for row in rows
-                )
-                total_entries += len(rows)
-                writer.write_table(pa.Table.from_pylist(rows, schema=MANIFEST_SCHEMA))
+            duplicates = sorted(actual_ids.intersection(seen))
+            if duplicates:
+                raise ValueError(f"duplicate raw-entry annotations: {duplicates}")
+            seen.update(actual_ids)
+            if not rows:
+                continue
+            code_signatures[code] = _row_signature(rows)
+            code_counts[code] = len(rows)
+            interface_min_residues.update(
+                int(row["interface_min_residues"]) for row in rows
+            )
+            total_entries += len(rows)
+            writer.write_table(table)
         if total_entries == 0:
-            raise ValueError(f"no materialized V3 entries found in {raw_entries}")
+            raise ValueError(
+                f"no materialized V3 entries found in {data_dir / 'raw_entries'}"
+            )
         if len(interface_min_residues) != 1:
             raise ValueError(
                 "mixed interface.min_interface_residues values in ingest outputs: "
@@ -352,9 +514,33 @@ def plan_collation(data_dir: Path, *, threads: int = 1) -> dict[str, Any]:
         "code_entry_counts": code_counts,
         "code_signatures": code_signatures,
         "interface_min_residues": interface_min_residues.pop(),
+        "include_ligand_annotations": bool(build["include_ligand_annotations"]),
     }
     _write_json_atomic(plan_path(data_dir), summary)
+    _write_json_atomic(
+        plan_build_path(data_dir),
+        {**build, "status": "complete", "plan": str(plan_path(data_dir))},
+    )
     return summary
+
+
+def plan_collation(
+    data_dir: Path,
+    *,
+    threads: int = 1,
+    include_ligand_annotations: bool = True,
+) -> dict[str, Any]:
+    """Inventory every materialized V3 entry and atomically publish a plan."""
+    build = start_collation_plan(
+        data_dir,
+        include_ligand_annotations=include_ligand_annotations,
+    )
+    inventory_collation_codes(
+        data_dir,
+        [str(code) for code in build["codes"]],
+        threads=threads,
+    )
+    return finalize_collation_plan(data_dir)
 
 
 def load_plan(data_dir: Path) -> dict[str, Any]:
@@ -628,8 +814,9 @@ def _build_annotation_view(
     )
 
 
-def _normalize_table(path: Path, schema: pa.Schema) -> pa.Table:
-    table = pq.read_table(path)
+def _normalize_arrow_table(
+    table: pa.Table, path: Path, schema: pa.Schema
+) -> pa.Table:
     if table.num_rows and not set(schema.names).issubset(table.column_names):
         missing = sorted(set(schema.names).difference(table.column_names))
         raise ValueError(f"{path} is missing sidecar columns: {missing}")
@@ -641,6 +828,10 @@ def _normalize_table(path: Path, schema: pa.Schema) -> pa.Table:
             column = pa.nulls(table.num_rows, type=field.type)
         arrays.append(column)
     return pa.Table.from_arrays(arrays, schema=schema)
+
+
+def _normalize_table(path: Path, schema: pa.Schema) -> pa.Table:
+    return _normalize_arrow_table(pq.read_table(path), path, schema)
 
 
 def _collate_sidecars(
@@ -658,6 +849,59 @@ def _collate_sidecars(
     if table.num_rows:
         table = table.sort_by([(column, "ascending") for column in sort_columns])
     _write_table_atomic(table, output, row_group_size=row_group_size)
+
+
+def _collate_entry_chains(
+    chain_paths: Sequence[Path],
+    biounit_paths: Sequence[Path],
+    output: Path,
+    *,
+    row_group_size: int,
+) -> None:
+    """Collate chain metadata, deriving a legacy ligand-like flag exactly."""
+    if len(chain_paths) != len(biounit_paths):
+        raise ValueError("entry-chain and biological-unit sidecars are unpaired")
+    tables: list[pa.Table] = []
+    for chain_path, biounit_path in zip(chain_paths, biounit_paths):
+        table = pq.read_table(chain_path)
+        if "chain_is_ligand_like" not in table.column_names:
+            required = {"entry_pdb_id", "chain_asym_id"}
+            missing = sorted(required.difference(table.column_names))
+            if missing:
+                raise ValueError(
+                    f"{chain_path} cannot derive chain_is_ligand_like; "
+                    f"missing: {missing}"
+                )
+            biounits = _normalize_table(biounit_path, BIOUNIT_CHAIN_SCHEMA)
+            ligand_like = {
+                (str(row["entry_pdb_id"]), str(row["chain_asym_id"]))
+                for row in biounits.select(
+                    ["entry_pdb_id", "chain_asym_id", "chain_role"]
+                ).to_pylist()
+                if row["chain_role"] == "ligand"
+            }
+            values = [
+                (str(entry_id), str(asym_id)) in ligand_like
+                for entry_id, asym_id in zip(
+                    table["entry_pdb_id"].to_pylist(),
+                    table["chain_asym_id"].to_pylist(),
+                )
+            ]
+            table = table.append_column(
+                "chain_is_ligand_like",
+                pa.array(values, type=pa.bool_()),
+            )
+        tables.append(_normalize_arrow_table(table, chain_path, ENTRY_CHAIN_SCHEMA))
+    collated = (
+        pa.concat_tables(tables)
+        if tables
+        else pa.Table.from_batches([], schema=ENTRY_CHAIN_SCHEMA)
+    )
+    if collated.num_rows:
+        collated = collated.sort_by(
+            [("entry_pdb_id", "ascending"), ("chain_asym_id", "ascending")]
+        )
+    _write_table_atomic(collated, output, row_group_size=row_group_size)
 
 
 def _collate_entry_metadata(
@@ -690,8 +934,25 @@ def _shard_paths(data_dir: Path, code: str) -> dict[str, Path]:
     }
 
 
+def _shard_output_names(plan: dict[str, Any]) -> tuple[str, ...]:
+    names = (
+        "entry_chains",
+        "entry_biounit_chains",
+        "entry_metadata",
+        "interfaces",
+        "entry_sources",
+    )
+    if bool(plan.get("include_ligand_annotations", True)):
+        return ("annotation", *names)
+    return names
+
+
 def _completed_shard(
-    paths: dict[str, Path], *, signature: str
+    paths: dict[str, Path],
+    *,
+    signature: str,
+    output_names: Sequence[str],
+    include_ligand_annotations: bool,
 ) -> dict[str, Any] | None:
     metrics_path = paths["metrics"]
     if not metrics_path.is_file():
@@ -700,10 +961,12 @@ def _completed_shard(
         metrics = cast(dict[str, Any], json.loads(metrics_path.read_text()))
     except (OSError, json.JSONDecodeError):
         return None
-    outputs = [path for name, path in paths.items() if name != "metrics"]
+    outputs = [paths[name] for name in output_names]
     if (
         metrics.get("status") == "complete"
         and metrics.get("signature") == signature
+        and bool(metrics.get("include_ligand_annotations", True))
+        == include_ligand_annotations
         and all(path.is_file() for path in outputs)
     ):
         return metrics
@@ -732,7 +995,18 @@ def collate_shard(
         raise RuntimeError(f"manifest signature mismatch for shard {normalized}")
     _verify_manifest_inputs(rows, threads=threads)
     paths = _shard_paths(data_dir, normalized)
-    if not force and (completed := _completed_shard(paths, signature=signature)):
+    include_ligand_annotations = bool(
+        plan.get("include_ligand_annotations", True)
+    )
+    output_names = _shard_output_names(plan)
+    if not force and (
+        completed := _completed_shard(
+            paths,
+            signature=signature,
+            output_names=output_names,
+            include_ligand_annotations=include_ligand_annotations,
+        )
+    ):
         return completed
     metrics: dict[str, Any] = {
         "version": COLLATION_VERSION,
@@ -740,61 +1014,63 @@ def collate_shard(
         "code": normalized,
         "signature": signature,
         "entry_count": len(rows),
-        "outputs": {
-            name: str(path) for name, path in paths.items() if name != "metrics"
-        },
+        "include_ligand_annotations": include_ligand_annotations,
+        "outputs": {name: str(paths[name]) for name in output_names},
     }
     try:
-        connection = duckdb.connect()
-        try:
-            shard_scratch = (
-                scratch_dir / normalized if scratch_dir is not None else None
-            )
-            _configure_duckdb(
-                connection,
-                threads=threads,
-                memory_limit=memory_limit,
-                scratch_dir=shard_scratch,
-            )
-            ligand_rows = [row for row in rows if row["annotation_size"] is not None]
-            if ligand_rows:
-                schema_rows = ligand_rows
-                empty_annotation = False
-            else:
-                schema_rows = [
-                    row
-                    for row in cast(
-                        list[dict[str, Any]],
-                        pq.read_table(manifest_path(data_dir)).to_pylist(),
-                    )
-                    if row["annotation_size"] is not None
-                ][:1]
-                if not schema_rows:
-                    raise ValueError(
-                        "interface collation requires at least one ligand-bearing "
-                        "entry to define the ligand annotation schema"
-                    )
-                empty_annotation = True
-            _build_annotation_view(
-                connection,
-                [str(row["annotation_path"]) for row in schema_rows],
-                [str(row["ligand_path"]) for row in schema_rows],
-                empty=empty_annotation,
-            )
-            _copy_query_atomic(
-                connection,
-                "SELECT * FROM collated_annotation "
-                "ORDER BY entry_pdb_id, system_id, ligand_id",
-                paths["annotation"],
-                row_group_size=row_group_size,
-            )
-        finally:
-            connection.close()
-        _collate_sidecars(
+        if include_ligand_annotations:
+            connection = duckdb.connect()
+            try:
+                shard_scratch = (
+                    scratch_dir / normalized if scratch_dir is not None else None
+                )
+                _configure_duckdb(
+                    connection,
+                    threads=threads,
+                    memory_limit=memory_limit,
+                    scratch_dir=shard_scratch,
+                )
+                ligand_rows = [
+                    row for row in rows if row["annotation_size"] is not None
+                ]
+                if ligand_rows:
+                    schema_rows = ligand_rows
+                    empty_annotation = False
+                else:
+                    schema_rows = [
+                        row
+                        for row in cast(
+                            list[dict[str, Any]],
+                            pq.read_table(manifest_path(data_dir)).to_pylist(),
+                        )
+                        if row["annotation_size"] is not None
+                    ][:1]
+                    if not schema_rows:
+                        raise ValueError(
+                            "interface collation requires at least one "
+                            "ligand-bearing entry to define the ligand "
+                            "annotation schema"
+                        )
+                    empty_annotation = True
+                _build_annotation_view(
+                    connection,
+                    [str(row["annotation_path"]) for row in schema_rows],
+                    [str(row["ligand_path"]) for row in schema_rows],
+                    empty=empty_annotation,
+                )
+                _copy_query_atomic(
+                    connection,
+                    "SELECT * FROM collated_annotation "
+                    "ORDER BY entry_pdb_id, system_id, ligand_id",
+                    paths["annotation"],
+                    row_group_size=row_group_size,
+                )
+            finally:
+                connection.close()
+        _collate_entry_chains(
             [Path(str(row["chain_path"])) for row in rows],
+            [Path(str(row["biounit_chain_path"])) for row in rows],
             paths["entry_chains"],
-            ENTRY_CHAIN_SCHEMA,
-            sort_columns=("entry_pdb_id", "chain_asym_id"),
             row_group_size=row_group_size,
         )
         _collate_entry_metadata(
@@ -824,9 +1100,8 @@ def collate_shard(
             row_group_size=row_group_size,
         )
         metrics["counts"] = {
-            name: pq.ParquetFile(path).metadata.num_rows
-            for name, path in paths.items()
-            if name != "metrics"
+            name: pq.ParquetFile(paths[name]).metadata.num_rows
+            for name in output_names
         }
         metrics["status"] = "complete"
     except BaseException as exc:
@@ -840,7 +1115,7 @@ def collate_shard(
 
 
 def _load_completed_shards(
-    data_dir: Path, plan: dict[str, Any], *, verify_threads: int
+    data_dir: Path, plan: dict[str, Any]
 ) -> tuple[dict[str, list[Path]], dict[str, int]]:
     manifest_rows = cast(
         list[dict[str, Any]],
@@ -859,22 +1134,29 @@ def _load_completed_shards(
         signature = _row_signature(rows)
         if signature != str(plan["code_signatures"][code]):
             raise RuntimeError(f"collation manifest signature changed for shard {code}")
-    _verify_manifest_inputs(manifest_rows, threads=verify_threads)
 
-    files: dict[str, list[Path]] = {
-        "annotation": [],
-        "entry_chains": [],
-        "entry_biounit_chains": [],
-        "entry_metadata": [],
-        "interfaces": [],
-        "entry_sources": [],
-    }
+    # Each shard verifies its raw inputs against the frozen manifest before it
+    # writes its outputs.  Those completed shard outputs are the immutable
+    # snapshot consumed below; rescanning every raw sidecar here would repeat
+    # the expensive NFS work that distributed collation is intended to avoid.
+    # Changes to raw entries after a shard completes belong to a new plan.
+
+    output_names = _shard_output_names(plan)
+    include_ligand_annotations = bool(
+        plan.get("include_ligand_annotations", True)
+    )
+    files: dict[str, list[Path]] = {name: [] for name in output_names}
     expected_counts = {name: 0 for name in files}
     for code in planned_codes:
         rows = rows_by_code[code]
         signature = _row_signature(rows)
         paths = _shard_paths(data_dir, code)
-        metrics = _completed_shard(paths, signature=signature)
+        metrics = _completed_shard(
+            paths,
+            signature=signature,
+            output_names=output_names,
+            include_ligand_annotations=include_ligand_annotations,
+        )
         if metrics is None:
             raise RuntimeError(f"collation shard is incomplete or stale: {code}")
         for name in files:
@@ -887,10 +1169,13 @@ def _install_final_tables_fail_closed(
     temporary_paths: dict[str, Path],
     final_paths: dict[str, Path],
     marker_path: Path,
+    *,
+    preserve_annotation: bool = False,
 ) -> None:
     """Install validated tables while making partial generations unreadable."""
     marker_path.unlink(missing_ok=True)
-    final_paths["annotation"].unlink(missing_ok=True)
+    if not preserve_annotation:
+        final_paths["annotation"].unlink(missing_ok=True)
     try:
         for name in (
             "entry_chains",
@@ -900,9 +1185,11 @@ def _install_final_tables_fail_closed(
             "entry_sources",
         ):
             temporary_paths[name].replace(final_paths[name])
-        temporary_paths["annotation"].replace(final_paths["annotation"])
+        if not preserve_annotation:
+            temporary_paths["annotation"].replace(final_paths["annotation"])
     except BaseException:
-        final_paths["annotation"].unlink(missing_ok=True)
+        if not preserve_annotation:
+            final_paths["annotation"].unlink(missing_ok=True)
         raise
 
 
@@ -1205,9 +1492,10 @@ def finalize_collation(
     """Merge completed shards, validate them, and install final index files."""
     data_dir = data_dir.resolve()
     plan = load_plan(data_dir)
-    shard_files, expected_counts = _load_completed_shards(
-        data_dir, plan, verify_threads=threads
+    include_ligand_annotations = bool(
+        plan.get("include_ligand_annotations", True)
     )
+    shard_files, expected_counts = _load_completed_shards(data_dir, plan)
     final_paths = {
         "annotation": data_dir / "index" / "annotation_table.parquet",
         "entry_chains": data_dir / "index" / "entry_chains.parquet",
@@ -1216,8 +1504,13 @@ def finalize_collation(
         "interfaces": data_dir / "index" / "interface_annotation_table.parquet",
         "entry_sources": data_dir / "index" / "entry_sources.parquet",
     }
+    if not include_ligand_annotations and not final_paths["annotation"].is_file():
+        raise FileNotFoundError(
+            "interface-only collation requires an installed annotation table: "
+            f"{final_paths['annotation']}"
+        )
     temporary_paths = {
-        name: _temporary_path(path) for name, path in final_paths.items()
+        name: _temporary_path(final_paths[name]) for name in shard_files
     }
     for path in final_paths.values():
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -1250,8 +1543,14 @@ def finalize_collation(
     finally:
         connection.close()
     try:
+        validation_paths = dict(temporary_paths)
+        if not include_ligand_annotations:
+            validation_paths["annotation"] = final_paths["annotation"]
+            expected_counts["annotation"] = pq.ParquetFile(
+                final_paths["annotation"]
+            ).metadata.num_rows
         validation = _validate_final_tables(
-            temporary_paths,
+            validation_paths,
             expected_counts=expected_counts,
             min_interface_residues=int(plan["interface_min_residues"]),
             threads=threads,
@@ -1262,6 +1561,7 @@ def finalize_collation(
             temporary_paths,
             final_paths,
             data_dir / "index" / FINAL_MARKER_NAME,
+            preserve_annotation=not include_ligand_annotations,
         )
     finally:
         for path in temporary_paths.values():
@@ -1273,6 +1573,7 @@ def finalize_collation(
         "manifest": str(manifest_path(data_dir)),
         "code_count": len(plan["codes"]),
         "interface_min_residues": int(plan["interface_min_residues"]),
+        "include_ligand_annotations": include_ligand_annotations,
         "outputs": {name: str(path) for name, path in final_paths.items()},
         **validation,
     }
@@ -1599,17 +1900,29 @@ def planned_code_batch(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    for name in ("plan", "shard", "finalize", "repair", "run"):
+    for name in (
+        "plan",
+        "plan-start",
+        "plan-shard",
+        "plan-finish",
+        "shard",
+        "finalize",
+        "repair",
+        "run",
+    ):
         command = commands.add_parser(name)
         command.add_argument("data_dir", type=Path)
-        if name == "shard":
+        if name in {"plan", "plan-start"}:
+            command.add_argument("--interfaces-only", action="store_true")
+        if name in {"plan-shard", "shard"}:
             command.add_argument("codes", nargs="*")
             command.add_argument("--batch-index", type=int)
             command.add_argument("--batch-size", type=int)
-            command.add_argument("--pdb-manifest", type=Path)
+            if name == "shard":
+                command.add_argument("--pdb-manifest", type=Path)
         if name == "repair":
             command.add_argument("--pdb-manifest", type=Path, required=True)
-        if name in {"plan", "shard", "finalize", "repair", "run"}:
+        if name in {"plan", "plan-shard", "shard", "finalize", "repair", "run"}:
             command.add_argument("--threads", type=int, default=1)
         if name in {"shard", "finalize", "repair", "run"}:
             command.add_argument("--memory-limit", default="8GB")
@@ -1623,7 +1936,37 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = build_parser().parse_args()
     if args.command == "plan":
-        result = plan_collation(args.data_dir, threads=args.threads)
+        result = plan_collation(
+            args.data_dir,
+            threads=args.threads,
+            include_ligand_annotations=not args.interfaces_only,
+        )
+    elif args.command == "plan-start":
+        result = start_collation_plan(
+            args.data_dir,
+            include_ligand_annotations=not args.interfaces_only,
+        )
+    elif args.command == "plan-shard":
+        codes = args.codes
+        if args.batch_index is not None or args.batch_size is not None:
+            if codes or args.batch_index is None or args.batch_size is None:
+                raise ValueError(
+                    "pass either explicit codes or both --batch-index and --batch-size"
+                )
+            codes = planned_inventory_code_batch(
+                args.data_dir,
+                batch_index=args.batch_index,
+                batch_size=args.batch_size,
+            )
+        if not codes:
+            raise ValueError("no collation inventory codes selected")
+        result = inventory_collation_codes(
+            args.data_dir,
+            codes,
+            threads=args.threads,
+        )
+    elif args.command == "plan-finish":
+        result = finalize_collation_plan(args.data_dir)
     elif args.command == "shard":
         codes = args.codes
         if args.pdb_manifest is not None:
@@ -1696,11 +2039,17 @@ def main() -> None:
             force=args.force,
         )
     printable = result
-    if args.command == "plan":
+    if args.command in {"plan", "plan-start", "plan-finish"}:
         printable = {
             key: value
             for key, value in result.items()
-            if key not in {"code_entry_counts", "code_signatures", "codes"}
+            if key
+            not in {
+                "code_directory_signatures",
+                "code_entry_counts",
+                "code_signatures",
+                "codes",
+            }
         }
     print(json.dumps(printable, indent=2, sort_keys=True))
 

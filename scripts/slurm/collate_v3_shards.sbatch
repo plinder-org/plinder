@@ -10,12 +10,12 @@ umask 002
 
 MODE=${1:-shard}
 case "${MODE}" in
-    plan|finalize|repair)
+    plan|plan-start|plan-finish|finalize|repair)
         DATA_DIR=${2:?'usage: sbatch collate_v3_shards.sbatch MODE DATA_DIR'}
         BATCH_SIZE=0
         ;;
-    shard)
-        DATA_DIR=${2:?'usage: sbatch collate_v3_shards.sbatch shard DATA_DIR BATCH_SIZE'}
+    plan-shard|shard)
+        DATA_DIR=${2:?'usage: sbatch collate_v3_shards.sbatch MODE DATA_DIR BATCH_SIZE'}
         BATCH_SIZE=${3:?'usage: sbatch collate_v3_shards.sbatch shard DATA_DIR BATCH_SIZE'}
         ;;
     *)
@@ -52,6 +52,23 @@ if [[ "${MODE}" == "plan" ]]; then
     /usr/bin/time -v -o "${TIME_OUTPUT}" \
         python -m plinder.data.pipeline.collate plan "${DATA_DIR}" \
             --threads "${SLURM_CPUS_PER_TASK:-1}"
+elif [[ "${MODE}" == "plan-start" ]]; then
+    PLAN_ARGS=()
+    if [[ "${PLINDER_COLLATE_INTERFACES_ONLY:-false}" == "true" ]]; then
+        PLAN_ARGS+=(--interfaces-only)
+    fi
+    /usr/bin/time -v -o "${TIME_OUTPUT}" \
+        python -m plinder.data.pipeline.collate plan-start "${DATA_DIR}" \
+            "${PLAN_ARGS[@]}"
+elif [[ "${MODE}" == "plan-shard" ]]; then
+    /usr/bin/time -v -o "${TIME_OUTPUT}" \
+        python -m plinder.data.pipeline.collate plan-shard "${DATA_DIR}" \
+            --batch-index "${BATCH_INDEX}" \
+            --batch-size "${BATCH_SIZE}" \
+            --threads "${SLURM_CPUS_PER_TASK:-1}"
+elif [[ "${MODE}" == "plan-finish" ]]; then
+    /usr/bin/time -v -o "${TIME_OUTPUT}" \
+        python -m plinder.data.pipeline.collate plan-finish "${DATA_DIR}"
 elif [[ "${MODE}" == "finalize" ]]; then
     /usr/bin/time -v -o "${TIME_OUTPUT}" \
         python -m plinder.data.pipeline.collate finalize "${DATA_DIR}" \

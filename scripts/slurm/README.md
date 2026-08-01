@@ -85,18 +85,37 @@ whole-process resource use is written once per array task to
 
 ## Collate the V3 annotation index
 
-After entry ingest is complete, inventory the exact per-entry outputs. The plan
-fails if any materialized entry is missing an annotation, chain, biological-
-assembly-chain, source, or ligand Parquet:
+After entry ingest is complete, freeze the two-character code list, inventory
+the exact per-entry outputs in parallel, and atomically merge the inventories.
+The plan fails if any materialized entry is missing an annotation, chain,
+biological-assembly-chain, source, or ligand Parquet:
 
 ```bash
 sbatch \
-  --qos=6hours \
-  --cpus-per-task=8 --mem=16G \
-  --output="${OUTPUT_ROOT}/logs/collate-plan-%j.out" \
+  --output="${OUTPUT_ROOT}/logs/collate-plan-start-%j.out" \
   --export=ALL,PLINDER_ENV_ROOT,PLINDER_REPO_ROOT \
-  scripts/slurm/collate_v3_shards.sbatch plan "${OUTPUT_ROOT}"
+  scripts/slurm/collate_v3_shards.sbatch plan-start "${OUTPUT_ROOT}"
+
+# Read code_count from index/.staging/v3_collation/plan-build.json. With a
+# batch size of four, LAST_PLAN_BATCH_INDEX is ceil(code_count / 4) - 1.
+sbatch \
+  --array=0-LAST_PLAN_BATCH_INDEX --cpus-per-task=4 --mem=8G \
+  --output="${OUTPUT_ROOT}/logs/collate-plan-%A-%a.out" \
+  --export=ALL,PLINDER_ENV_ROOT,PLINDER_REPO_ROOT \
+  scripts/slurm/collate_v3_shards.sbatch plan-shard "${OUTPUT_ROOT}" 4
+
+sbatch \
+  --dependency=afterok:PLAN_ARRAY_JOB_ID \
+  --output="${OUTPUT_ROOT}/logs/collate-plan-finish-%j.out" \
+  --export=ALL,PLINDER_ENV_ROOT,PLINDER_REPO_ROOT \
+  scripts/slurm/collate_v3_shards.sbatch plan-finish "${OUTPUT_ROOT}"
 ```
+
+When augmenting an existing ligand release with interface-only ingest, set
+`PLINDER_COLLATE_INTERFACES_ONLY=true` on `plan-start`. This preserves the
+installed `index/annotation_table.parquet` byte-for-byte and collates only the
+shared chain, entry, source, and interface tables. The setting is frozen in the
+plan, so later stages do not need the environment variable.
 
 Read `index/.staging/v3_collation/plan.json` after that job succeeds. With a
 batch size of four, set `LAST_CODE_BATCH_INDEX` to
@@ -122,9 +141,11 @@ sbatch \
   scripts/slurm/collate_v3_shards.sbatch finalize "${OUTPUT_ROOT}"
 ```
 
-Finalization writes the four local `index/*.parquet` files only after validating
-row counts, keys, cross-table references, and ligand scoreability. It performs
-no upload or external release operation.
+Finalization writes the local `index/*.parquet` files only after validating row
+counts, keys, cross-table references, and ligand scoreability. Each shard
+verifies its raw inputs before producing a frozen output; finalization validates
+and merges those outputs without rescanning every per-entry source file. It
+performs no upload or external release operation.
 
 ## Build publishable protein-search shards
 
