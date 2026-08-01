@@ -451,6 +451,7 @@ def test_interface_clusters_reuse_reciprocal_and_directed_cover_pipeline(tmp_pat
         {
             "query_system": ["i1", "i2", "i1", "i4"],
             "target_system": ["i2", "i1", "i3", "i3"],
+            "metric": [metric] * 4,
             "similarity": [80, 60, 90, 85],
         }
     ).to_parquet(score_dir / "shard=ab.parquet", index=False)
@@ -565,6 +566,74 @@ def test_interface_clusters_reuse_reciprocal_and_directed_cover_pipeline(tmp_pat
     )
     assert summary["entity_type"] == "interface"
     assert summary["artifact_count"] == 3
+
+
+def test_interface_side_clusters_use_independent_side_nodes(tmp_path):
+    from plinder.data.clusters import (
+        component_node_universe,
+        prepare_component_node_universe,
+        prepare_symmetric_edge_plan,
+        write_symmetric_edge_fragment_batch,
+        write_symmetric_edge_shard,
+    )
+
+    index_dir = tmp_path / "index"
+    score_dir = tmp_path / "interface_scores"
+    index_dir.mkdir()
+    score_dir.mkdir()
+    pd.DataFrame({"system_id": ["i1", "i2"]}).to_parquet(
+        index_dir / "interface_annotation_table.parquet",
+        index=False,
+    )
+    pd.DataFrame(
+        {
+            "query_system": ["i1::side=1", "i2::side=2"],
+            "target_system": ["i2::side=2", "i1::side=1"],
+            "metric": ["interface_side_qcov"] * 2,
+            "similarity": [80, 60],
+        }
+    ).to_parquet(score_dir / "shard=ab.parquet", index=False)
+
+    prepare_component_node_universe(tmp_path, entity_type="interface")
+    nodes, _ = component_node_universe(
+        data_dir=tmp_path,
+        metric="interface_side_qcov",
+        entity_type="interface",
+    )
+    assert nodes == [
+        "i1::side=1",
+        "i1::side=2",
+        "i2::side=1",
+        "i2::side=2",
+    ]
+    plan = prepare_symmetric_edge_plan(
+        data_dir=tmp_path,
+        metrics=["interface_side_qcov"],
+        source_batch_size=1,
+        bucket_count=1,
+        entity_type="interface",
+    )
+    write_symmetric_edge_fragment_batch(
+        data_dir=tmp_path,
+        batch=plan["batches"][0],
+        scratch_dir=tmp_path / "scratch-fragments",
+        threads=1,
+        entity_type="interface",
+    )
+    write_symmetric_edge_shard(
+        data_dir=tmp_path,
+        metric="interface_side_qcov",
+        bucket=0,
+        scratch_dir=tmp_path / "scratch-shard",
+        threads=1,
+        entity_type="interface",
+    )
+    edges = pd.read_parquet(
+        tmp_path
+        / "interface_clusters/symmetric_edges/metric=interface_side_qcov"
+        / "bucket=000.parquet"
+    ).set_index(["query_node", "target_node"])
+    assert edges.loc[("i1::side=1", "i2::side=2"), "similarity"] == pytest.approx(60.0)
 
 
 def test_empty_interface_universe_publishes_typed_empty_clusters(tmp_path):

@@ -2760,12 +2760,20 @@ def make_component_reductions(
     nonchemical_metrics = [metric for metric in metrics if metric != chemical_metric]
     generic_nodes: list[str] = []
     generic_systems: set[str] | None = None
-    if nonchemical_metrics:
+    if nonchemical_metrics and entity_type != "interface":
         generic_nodes, generic_systems = clusters.component_node_universe(
             data_dir=data_dir,
             metric=nonchemical_metrics[0],
             entity_type=entity_type,
         )
+    interface_nodes: dict[str, list[str]] = {}
+    if entity_type == "interface":
+        for metric in nonchemical_metrics:
+            interface_nodes[metric], _ = clusters.component_node_universe(
+                data_dir=data_dir,
+                metric=metric,
+                entity_type=entity_type,
+            )
     chemical_nodes: list[str] = []
     if chemical_metric in metrics:
         chemical_nodes, _ = clusters.component_node_universe(
@@ -2784,7 +2792,11 @@ def make_component_reductions(
             )
         is_chemical = source_metric == chemical_metric
         source_metrics = [source_metric]
-        nodes = chemical_nodes if is_chemical else generic_nodes
+        nodes = (
+            chemical_nodes
+            if is_chemical
+            else interface_nodes.get(source_metric, generic_nodes)
+        )
         eligible_systems = None if is_chemical else generic_systems
         pending_metrics = [
             metric

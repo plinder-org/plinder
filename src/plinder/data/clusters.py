@@ -38,6 +38,7 @@ COMPONENT_REDUCTION_DIRECTIONS = (False,)
 RELEASE_COMPONENT_DIRECTIONS = (False,)
 SYMMETRIC_EDGE_BUCKET_COUNT = 64
 SYMMETRIC_EDGE_COLUMNS = ["query_node", "target_node", "similarity"]
+INTERFACE_CLUSTER_METRICS = frozenset({"interface_qcov", "interface_side_qcov"})
 
 
 def _cluster_root(data_dir: Path, entity_type: ClusterEntity) -> Path:
@@ -536,9 +537,12 @@ def prepare_symmetric_edge_plan(
         raise ValueError("symmetric-edge bucket count must be positive")
     selected_metrics = list(dict.fromkeys(metrics))
     chemical_metric = "tanimoto_similarity_ecfp4_1024"
-    if entity_type == "interface" and selected_metrics != ["interface_qcov"]:
+    if entity_type == "interface" and (
+        not selected_metrics
+        or not set(selected_metrics).issubset(INTERFACE_CLUSTER_METRICS)
+    ):
         raise ValueError(
-            "interface clustering supports exactly the interface_qcov metric"
+            "interface clustering supports interface_qcov and " "interface_side_qcov"
         )
     batches: list[dict[str, Any]] = []
     source_groups = (
@@ -794,14 +798,18 @@ def write_symmetric_edge_fragment_batch(
             """
         )
     elif batch["kind"] == "interface":
+        metrics_sql = ", ".join(
+            f"'{metric.replace(chr(39), chr(39) * 2)}'" for metric in metrics
+        )
         selected_sql = dedent(
             f"""
             SELECT
-                'interface_qcov'::VARCHAR AS metric,
+                cast(metric AS VARCHAR) AS metric,
                 cast(query_system AS VARCHAR) AS query_node,
                 cast(target_system AS VARCHAR) AS target_node,
                 cast(similarity AS DOUBLE) AS similarity
             FROM read_parquet([{paths_sql}], union_by_name=true)
+            WHERE cast(metric AS VARCHAR) IN ({metrics_sql})
             """
         )
     else:
@@ -1496,9 +1504,15 @@ def _cached_component_node_universe(
             systems: set[str] | None = ligand_systems
         else:
             nodes = frame.loc[frame["kind"].eq("interface"), "id"].astype(str).tolist()
+            side_nodes = (
+                frame.loc[frame["kind"].eq("interface_side"), "id"].astype(str).tolist()
+            )
             systems = None
             if len(nodes) != int(manifest["interface_count"]):
                 return None
+            if len(side_nodes) != int(manifest["interface_side_count"]):
+                return None
+            nodes.extend(side_nodes)
         return nodes, systems
     except (OSError, ValueError, KeyError, json.JSONDecodeError):
         return None
@@ -1512,7 +1526,12 @@ def prepare_component_node_universe(
     if cached is not None:
         nodes, systems = cached
         if entity_type == "interface":
-            return {"status": "cached", "interface_count": len(nodes)}
+            interface_side_count = sum("::side=" in node for node in nodes)
+            return {
+                "status": "cached",
+                "interface_count": len(nodes) - interface_side_count,
+                "interface_side_count": interface_side_count,
+            }
         return {
             "status": "cached",
             "ligand_count": len(nodes),
@@ -1528,9 +1547,19 @@ def prepare_component_node_universe(
                 .astype(str)
             )
         )
+        side_nodes = [f"{node}::side={side}" for node in nodes for side in (1, 2)]
         system_ids: list[str] = []
-        frame = pd.DataFrame({"kind": "interface", "id": nodes})
-        counts = {"interface_count": len(nodes)}
+        frame = pd.concat(
+            [
+                pd.DataFrame({"kind": "interface", "id": nodes}),
+                pd.DataFrame({"kind": "interface_side", "id": side_nodes}),
+            ],
+            ignore_index=True,
+        )
+        counts = {
+            "interface_count": len(nodes),
+            "interface_side_count": len(side_nodes),
+        }
     else:
         annotation_path = data_dir / "index" / "annotation_table.parquet"
         annotation = _eligible_annotation(data_dir)
@@ -1578,16 +1607,27 @@ def component_node_universe(
     entity_type: ClusterEntity = "ligand",
 ) -> tuple[list[str], set[str] | None]:
     if entity_type == "interface":
-        if metric != "interface_qcov":
+        if metric not in INTERFACE_CLUSTER_METRICS:
             raise ValueError(f"unsupported interface clustering metric: {metric}")
         cached = _cached_component_node_universe(data_dir, entity_type=entity_type)
         if cached is not None:
-            return cached
+            cached_nodes, systems = cached
+            is_side = metric == "interface_side_qcov"
+            side_nodes = [node for node in cached_nodes if "::side=" in node]
+            return (
+                side_nodes
+                if is_side
+                else [node for node in cached_nodes if "::side=" not in node],
+                systems,
+            )
         annotation = pd.read_parquet(
             data_dir / "index" / "interface_annotation_table.parquet",
             columns=["system_id"],
         )
-        return sorted(set(annotation["system_id"].dropna().astype(str))), None
+        nodes = sorted(set(annotation["system_id"].dropna().astype(str)))
+        if metric == "interface_side_qcov":
+            nodes = [f"{node}::side={side}" for node in nodes for side in (1, 2)]
+        return nodes, None
     if metric == "tanimoto_similarity_ecfp4_1024":
         nodes = (
             pd.read_parquet(
@@ -1603,10 +1643,10 @@ def component_node_universe(
         return cached
     annotation = _eligible_annotation(data_dir)
     systems = set(annotation["system_id"].dropna().astype(str))
-    nodes = set(
+    node_set = set(
         annotation.loc[annotation["ligand_is_proper"], "ligand_id"].dropna().astype(str)
     )
-    return sorted(nodes), systems
+    return sorted(node_set), systems
 
 
 def component_reduction_dir(

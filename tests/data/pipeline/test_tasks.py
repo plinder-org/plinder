@@ -2792,12 +2792,17 @@ def test_alignment_chain_lookup_compacts_mapping_inputs(tmp_path) -> None:
     }
 
     interface_path = index / "interface_annotation_table.parquet"
-    interface_frame = pd.read_parquet(interface_path)
-    interface_frame.loc[0, "interface_num_contact_residue_pairs"] = 4
+    interface_table = pq.read_table(interface_path)
+    contact_count_index = interface_table.schema.get_field_index(
+        "interface_num_contact_residue_pairs"
+    )
+    interface_table = interface_table.set_column(
+        contact_count_index,
+        "interface_num_contact_residue_pairs",
+        pa.array([4], type=pa.int64()),
+    )
     pq.write_table(
-        pa.Table.from_pylist(
-            interface_frame.to_dict("records"), schema=INTERFACE_ANNOTATION_SCHEMA
-        ),
+        interface_table,
         interface_path,
     )
     assert tasks._completed_alignment_chain_lookup(tmp_path) is None
@@ -2960,6 +2965,30 @@ def test_interface_cluster_columns_merge_into_interface_annotation(
         )
         path.parent.mkdir(parents=True, exist_ok=True)
         artifact_rows.assign(cluster=cluster).to_parquet(path, index=False)
+        side_path = (
+            tmp_path
+            / "interface_clusters"
+            / f"cluster={cluster}"
+            / "directed=False"
+            / "metric=interface_side_qcov"
+            / "threshold=50.parquet"
+        )
+        side_path.parent.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(
+            {
+                "system_id": [
+                    f"{interfaces.loc[0, 'system_id']}::side=1",
+                    f"{interfaces.loc[0, 'system_id']}::side=2",
+                    f"{interfaces.loc[1, 'system_id']}::side=1",
+                    f"{interfaces.loc[1, 'system_id']}::side=2",
+                ],
+                "label": ["c0", "c2", "c1", "c2"],
+                "metric": ["interface_side_qcov"] * 4,
+                "cluster": [cluster] * 4,
+                "directed": [False] * 4,
+                "threshold": [50] * 4,
+            }
+        ).to_parquet(side_path, index=False)
     cover = (
         tmp_path
         / "interface_sampling/directed_set_cover"
@@ -2971,6 +3000,28 @@ def test_interface_cluster_columns_merge_into_interface_annotation(
         centroid_system_id=interfaces["system_id"],
         similarity_to_centroid=100.0,
     ).to_parquet(cover, index=False)
+    side_cover = (
+        tmp_path
+        / "interface_sampling/directed_set_cover"
+        / "metric=interface_side_qcov/threshold=50.parquet"
+    )
+    side_cover.parent.mkdir(parents=True)
+    side_nodes = [
+        f"{system_id}::side={side}"
+        for system_id in interfaces["system_id"]
+        for side in (1, 2)
+    ]
+    pd.DataFrame(
+        {
+            "system_id": side_nodes,
+            "label": ["c0", "c2", "c1", "c2"],
+            "metric": ["interface_side_qcov"] * 4,
+            "directed": [True] * 4,
+            "threshold": [50] * 4,
+            "centroid_system_id": side_nodes,
+            "similarity_to_centroid": [100.0] * 4,
+        }
+    ).to_parquet(side_cover, index=False)
 
     result = utils.add_interface_cluster_columns(index=interfaces, data_dir=tmp_path)
 
@@ -2980,6 +3031,15 @@ def test_interface_cluster_columns_merge_into_interface_annotation(
         "c0",
         "c0",
     ]
+    for kind in ["component", "community", "directed_set_cover"]:
+        assert result[f"interface_side_qcov__50__chain_1_{kind}"].tolist() == [
+            "c0",
+            "c1",
+        ]
+        assert result[f"interface_side_qcov__50__chain_2_{kind}"].tolist() == [
+            "c2",
+            "c2",
+        ]
 
     index_dir = tmp_path / "index"
     index_dir.mkdir()
@@ -3212,7 +3272,10 @@ def test_clustering_plan_matches_slurm_array_bounds(tmp_path, monkeypatch):
         metrics=None,
         thresholds=None,
         entity_type="interface",
-    ) == (["interface_qcov"], [100, 90, 70, 50, 30])
+    ) == (
+        ["interface_qcov", "interface_side_qcov"],
+        [100, 90, 70, 50, 30],
+    )
 
 
 def test_interface_cluster_plan_enforces_collated_ingest_threshold(tmp_path):
@@ -3498,19 +3561,55 @@ def test_interface_score_shards_retain_side_coverages_and_compact_export(tmp_pat
             memory_limit="1GB",
         )
 
-    forward = pd.read_parquet(tmp_path / "interface_scores" / "shard=ab.parquet")
+    forward_all = pd.read_parquet(tmp_path / "interface_scores" / "shard=ab.parquet")
+    forward = forward_all[forward_all["metric"].eq("interface_qcov")].reset_index(
+        drop=True
+    )
     assert forward.to_dict("records") == [
         {
             "query_system": query_id,
             "target_system": target_id,
             "mapping": "1.A:1.Y;1.B:1.X",
             "source": "foldseek",
+            "metric": "interface_qcov",
             "iface1_qcov": pytest.approx(0.75),
             "iface2_qcov": pytest.approx(1.0),
             "similarity": 75,
         }
     ]
-    reverse = pd.read_parquet(tmp_path / "interface_scores" / "shard=de.parquet")
+    side_scores = forward_all[
+        forward_all["metric"].eq("interface_side_qcov")
+    ].sort_values(["query_system", "target_system"])
+    assert side_scores[["query_system", "target_system", "similarity"]].to_dict(
+        "records"
+    ) == [
+        {
+            "query_system": f"{query_id}::side=1",
+            "target_system": f"{target_id}::side=1",
+            "similarity": 50,
+        },
+        {
+            "query_system": f"{query_id}::side=1",
+            "target_system": f"{target_id}::side=2",
+            "similarity": 75,
+        },
+        {
+            "query_system": f"{query_id}::side=2",
+            "target_system": f"{target_id}::side=1",
+            "similarity": 100,
+        },
+        {
+            "query_system": f"{query_id}::side=2",
+            "target_system": f"{target_id}::side=2",
+            "similarity": 100,
+        },
+    ]
+    assert side_scores["iface1_qcov"].isna().all()
+    assert side_scores["iface2_qcov"].isna().all()
+    reverse_all = pd.read_parquet(tmp_path / "interface_scores" / "shard=de.parquet")
+    reverse = reverse_all[reverse_all["metric"].eq("interface_qcov")].reset_index(
+        drop=True
+    )
     assert reverse.loc[0, "iface1_qcov"] == pytest.approx(0.5)
     assert reverse.loc[0, "iface2_qcov"] == pytest.approx(1 / 3)
     assert reverse.loc[0, "similarity"] == 17
@@ -3856,9 +3955,12 @@ def test_v3_collation_slurm_uses_local_scratch_and_long_qos_for_global_steps():
 
     assert "${SLURM_TMPDIR:-/scratch/${USER}/plinder-collate-" in script
     assert (
-        "sbatch \\\n  --qos=6hours \\\n  "
-        "--cpus-per-task=8 --mem=16G \\\n  "
-        '--output="${OUTPUT_ROOT}/logs/collate-plan-%j.out"'
+        "sbatch \\\n  " '--output="${OUTPUT_ROOT}/logs/collate-plan-start-%j.out"'
+    ) in documentation
+    assert (
+        "sbatch \\\n  --array=0-LAST_PLAN_BATCH_INDEX "
+        "--cpus-per-task=4 --mem=8G \\\n  "
+        '--output="${OUTPUT_ROOT}/logs/collate-plan-%A-%a.out"'
     ) in documentation
     assert (
         "sbatch \\\n  --qos=6hours \\\n  " "--cpus-per-task=4 --mem=48G"

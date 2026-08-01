@@ -15,6 +15,9 @@ def test_ligand_cluster_column_descriptions():
         "color__70__community",
         "color__70__ligand__community",
         "pocket_qcov__50__ligand__directed_set_cover",
+        "interface_side_qcov__70__chain_1_component",
+        "interface_side_qcov__70__chain_2_community",
+        "interface_side_qcov__70__chain_1_directed_set_cover",
     ]
 
     rows = docs.get_cluster_column_descriptions(pd.DataFrame(columns=columns))
@@ -25,6 +28,9 @@ def test_ligand_cluster_column_descriptions():
     assert "ligand-level greedy centroid community" in descriptions[columns[3]]
     assert "ligand-level directed set cover" in descriptions[columns[4]]
     assert "query-to-centroid score" in descriptions[columns[4]]
+    assert "chain 1 reciprocal-minimum component" in descriptions[columns[5]]
+    assert "chain 2 greedy centroid community" in descriptions[columns[6]]
+    assert "chain 1 directed set cover" in descriptions[columns[7]]
 
 
 def test_make_column_descriptions(read_plinder_mount, tmp_path, monkeypatch):

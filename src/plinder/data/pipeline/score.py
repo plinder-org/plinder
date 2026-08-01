@@ -48,7 +48,7 @@ INTERFACE_SCORE_PLAN_RELATIVE = Path("manifests/interface_scoring_plan.json")
 INTERFACE_SCORE_ROOT_RELATIVE = Path("interface_scores")
 INTERFACE_QCOV_EXPORT_RELATIVE = Path("exports/all_interface_qcov.parquet")
 DEFAULT_CLUSTER_THRESHOLDS = (30, 50, 70, 90, 100)
-INTERFACE_CLUSTER_METRICS = ("interface_qcov",)
+INTERFACE_CLUSTER_METRICS = ("interface_qcov", "interface_side_qcov")
 
 
 def _atomic_json(payload: dict[str, Any], path: Path) -> None:
@@ -3715,37 +3715,89 @@ def score_interface_qcov_shards(
                         WHERE abs(
                             backend_best.final_score - pair_best.final_score
                         ) < 1e-12
+                    ), whole_scores AS (
+                        SELECT
+                            iface1::VARCHAR AS query_system,
+                            iface2::VARCHAR AS target_system,
+                            first(
+                                mapping ORDER BY
+                                CASE WHEN backend = 'foldseek' THEN 0 ELSE 1 END,
+                                mapping
+                            )::VARCHAR AS mapping,
+                            CASE
+                                WHEN count(DISTINCT backend) = 2 THEN 'both'
+                                ELSE min(backend)
+                            END::VARCHAR AS source,
+                            'interface_qcov'::VARCHAR AS metric,
+                            first(
+                                iface1_qcov ORDER BY
+                                CASE WHEN backend = 'foldseek' THEN 0 ELSE 1 END,
+                                mapping
+                            )::FLOAT AS iface1_qcov,
+                            first(
+                                iface2_qcov ORDER BY
+                                CASE WHEN backend = 'foldseek' THEN 0 ELSE 1 END,
+                                mapping
+                            )::FLOAT AS iface2_qcov,
+                            CAST(
+                                least(
+                                    100,
+                                    greatest(0, round(max(final_score) * 100))
+                                ) AS TINYINT
+                            ) AS similarity
+                        FROM winning_backends
+                        GROUP BY iface1, iface2
+                        HAVING max(final_score) > 0
+                    ), side_pair_best AS (
+                        SELECT
+                            iface1,
+                            iface2,
+                            query_side,
+                            target_side,
+                            max(qcov) AS qcov
+                        FROM side_coverage
+                        GROUP BY iface1, iface2, query_side, target_side
+                    ), winning_side_backends AS (
+                        SELECT side_coverage.*
+                        FROM side_coverage
+                        INNER JOIN side_pair_best
+                          ON side_coverage.iface1 = side_pair_best.iface1
+                         AND side_coverage.iface2 = side_pair_best.iface2
+                         AND side_coverage.query_side = side_pair_best.query_side
+                         AND side_coverage.target_side = side_pair_best.target_side
+                        WHERE abs(side_coverage.qcov - side_pair_best.qcov) < 1e-12
+                    ), side_scores AS (
+                        SELECT
+                            iface1 || '::side=' || query_side::VARCHAR
+                                AS query_system,
+                            iface2 || '::side=' || target_side::VARCHAR
+                                AS target_system,
+                            first(
+                                query_instance_chain || ':' || target_instance_chain
+                                ORDER BY
+                                CASE WHEN backend = 'foldseek' THEN 0 ELSE 1 END,
+                                query_instance_chain,
+                                target_instance_chain
+                            )::VARCHAR AS mapping,
+                            CASE
+                                WHEN count(DISTINCT backend) = 2 THEN 'both'
+                                ELSE min(backend)
+                            END::VARCHAR AS source,
+                            'interface_side_qcov'::VARCHAR AS metric,
+                            NULL::FLOAT AS iface1_qcov,
+                            NULL::FLOAT AS iface2_qcov,
+                            CAST(
+                                least(100, greatest(0, round(max(qcov) * 100)))
+                                AS TINYINT
+                            ) AS similarity
+                        FROM winning_side_backends
+                        GROUP BY iface1, iface2, query_side, target_side
+                        HAVING max(qcov) > 0
                     )
-                    SELECT
-                        iface1::VARCHAR AS query_system,
-                        iface2::VARCHAR AS target_system,
-                        first(
-                            mapping ORDER BY
-                            CASE WHEN backend = 'foldseek' THEN 0 ELSE 1 END,
-                            mapping
-                        )::VARCHAR AS mapping,
-                        CASE
-                            WHEN count(DISTINCT backend) = 2 THEN 'both'
-                            ELSE min(backend)
-                        END::VARCHAR AS source,
-                        first(
-                            iface1_qcov ORDER BY
-                            CASE WHEN backend = 'foldseek' THEN 0 ELSE 1 END,
-                            mapping
-                        )::FLOAT AS iface1_qcov,
-                        first(
-                            iface2_qcov ORDER BY
-                            CASE WHEN backend = 'foldseek' THEN 0 ELSE 1 END,
-                            mapping
-                        )::FLOAT AS iface2_qcov,
-                        CAST(
-                            least(100, greatest(0, round(max(final_score) * 100)))
-                            AS TINYINT
-                        ) AS similarity
-                    FROM winning_backends
-                    GROUP BY iface1, iface2
-                    HAVING max(final_score) > 0
-                    ORDER BY query_system, target_system
+                    SELECT * FROM whole_scores
+                    UNION ALL
+                    SELECT * FROM side_scores
+                    ORDER BY metric, query_system, target_system
                 ) TO '{local_output.as_posix()}' (
                     FORMAT PARQUET,
                     COMPRESSION ZSTD,
@@ -3881,7 +3933,10 @@ def finalize_interface_qcov_scores(
             dedent(
                 f"""
                 SELECT
-                    count(*)::BIGINT AS rows,
+                    count(*)::BIGINT AS total_rows,
+                    count(*) FILTER (
+                        WHERE metric = 'interface_qcov'
+                    )::BIGINT AS interface_rows,
                     count(*) FILTER (
                         WHERE query_system = target_system
                     )::BIGINT AS self_rows
@@ -3892,13 +3947,13 @@ def finalize_interface_qcov_scores(
         if result is None:
             connection.close()
             raise RuntimeError("failed to validate interface score shards")
-        rows, self_rows = (int(value) for value in result)
+        total_rows, rows, self_rows = (int(value) for value in result)
         expected_rows = sum(int(source["rows"]) for source in sources)
-        if rows != expected_rows or self_rows:
+        if total_rows != expected_rows or self_rows:
             connection.close()
             raise ValueError(
                 "invalid interface score rows: "
-                f"rows={rows}/{expected_rows}, self_rows={self_rows}"
+                f"rows={total_rows}/{expected_rows}, self_rows={self_rows}"
             )
         connection.sql(
             dedent(
@@ -3911,6 +3966,7 @@ def finalize_interface_qcov_scores(
                         iface2_qcov,
                         similarity
                     FROM read_parquet([{paths_sql}])
+                    WHERE metric = 'interface_qcov'
                 ) TO '{local_output.as_posix()}' (
                     FORMAT PARQUET,
                     COMPRESSION ZSTD,

@@ -87,6 +87,7 @@ INTERFACE_SCORE_SHARD_SCHEMA = pa.schema(
         ("target_system", pa.string()),
         ("mapping", pa.string()),
         ("source", pa.string()),
+        ("metric", pa.string()),
         ("iface1_qcov", pa.float32()),
         ("iface2_qcov", pa.float32()),
         ("similarity", pa.int8()),

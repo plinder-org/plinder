@@ -299,7 +299,10 @@ interface's canonical first and second chain, respectively, under that winning
 assignment. The compact release file
 `exports/all_interface_qcov.parquet` contains the query and target interface
 IDs, both side coverages, and the final directional 0--100 similarity. Positive
-scores below the lowest clustering threshold are retained.
+scores below the lowest clustering threshold are retained. The same shard pass
+also records each interface side's independently best side-to-side coverage as
+`interface_side_qcov`; those intermediate edges drive half-interface clustering
+without constraining a side to the chain assignment that maximized the product.
 
 Derived per-ligand system scores are generation intermediates used for graph
 clustering, not release artifacts. Before scattering them, estimate work from
@@ -569,7 +572,7 @@ separate namespace. Set these variables for every command in the sequence:
 
 ```bash
 export PLINDER_CLUSTER_ENTITY_TYPE=interface
-export PLINDER_CLUSTER_METRICS=interface_qcov
+export PLINDER_CLUSTER_METRICS='interface_qcov,interface_side_qcov'
 export PLINDER_CLUSTER_THRESHOLDS='100,90,70,50,30'
 ```
 
@@ -577,7 +580,10 @@ The interface plan reads `interface_scores/shard=*.parquet`. Reciprocal
 components and communities are written below `interface_clusters/`; the
 directional centroid cover is written below `interface_sampling/`. Final index
 enrichment adds `interface_qcov__THRESHOLD__component`, `__community`, and
-`__directed_set_cover` columns to `index/interface_annotation_table.parquet`.
+`__directed_set_cover` columns for whole-interface product scores. Independent
+side-to-side coverage additionally produces
+`interface_side_qcov__THRESHOLD__chain_1_*` and `__chain_2_*` half-interface
+cluster columns in `index/interface_annotation_table.parquet`.
 The ligand and interface plans and artifacts never share cache paths.
 Run both entity sequences before `finalize-index`; finalization rejects a
 non-empty interface annotation table when its interface clusters are absent.

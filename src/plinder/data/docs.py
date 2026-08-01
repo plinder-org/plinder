@@ -88,20 +88,27 @@ def get_cluster_column_descriptions(
     plindex: pd.DataFrame,
 ) -> list[tuple[str, str | None, str | None]]:
     rows: list[tuple[str, str | None, str | None]] = []
-    component_columns = [c for c in plindex.columns if c.endswith("__component")]
+    component_columns = [c for c in plindex.columns if c.endswith("component")]
     for column in component_columns:
         parts = column.split("__")
         metric, threshold = parts[:2]
         ligand_level = parts[2] == "ligand"
+        half_interface = parts[-1].startswith("chain_")
         direction = (
             "reciprocal-minimum"
-            if ligand_level
+            if ligand_level or metric.startswith("interface_")
             else parts[-2]
             if parts[-2] in {"weak", "strong"}
             else "directed"
         )
-        cluster = parts[-1]
-        level = "ligand-level " if ligand_level else ""
+        cluster = "component"
+        level = (
+            "ligand-level "
+            if ligand_level
+            else f"{parts[-1].removesuffix('_component').replace('_', ' ')} "
+            if half_interface
+            else ""
+        )
         rows.append(
             (
                 column,
@@ -110,13 +117,20 @@ def get_cluster_column_descriptions(
                 f"{metric} metric with {threshold} threshold",
             )
         )
-    community_columns = [c for c in plindex.columns if c.endswith("__community")]
+    community_columns = [c for c in plindex.columns if c.endswith("community")]
     for column in community_columns:
         parts = column.split("__")
         metric, threshold = parts[:2]
         ligand_level = parts[2] == "ligand"
-        cluster = parts[-1]
-        level = "ligand-level " if ligand_level else ""
+        half_interface = parts[-1].startswith("chain_")
+        cluster = "community"
+        level = (
+            "ligand-level "
+            if ligand_level
+            else f"{parts[-1].removesuffix('_community').replace('_', ' ')} "
+            if half_interface
+            else ""
+        )
         rows.append(
             (
                 column,
@@ -127,20 +141,31 @@ def get_cluster_column_descriptions(
             )
         )
     directed_cover_columns = [
-        c for c in plindex.columns if c.endswith("__directed_set_cover")
+        c for c in plindex.columns if c.endswith("directed_set_cover")
     ]
     for column in directed_cover_columns:
-        metric, threshold = column.split("__")[:2]
+        parts = column.split("__")
+        metric, threshold = parts[:2]
+        ligand_level = parts[2] == "ligand"
+        half_interface = parts[-1].startswith("chain_")
+        level = (
+            "ligand-level "
+            if ligand_level
+            else f"{parts[-1].removesuffix('_directed_set_cover').replace('_', ' ')} "
+            if half_interface
+            else ""
+        )
         rows.append(
             (
                 column,
                 "str",
-                "Cluster ID for ligand-level directed set cover built from "
+                f"Cluster ID for {level}directed set cover built from "
                 f"{metric} with {threshold} threshold; each member's "
                 "query-to-centroid score meets the threshold",
             )
         )
-    return rows
+    column_order = {column: index for index, column in enumerate(plindex.columns)}
+    return sorted(rows, key=lambda row: column_order[row[0]])
 
 
 def get_all_column_descriptions(

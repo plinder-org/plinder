@@ -783,7 +783,7 @@ def add_interface_cluster_columns(
         name=node_column,
     )
     expected_nodes = set(node_ids)
-    artifacts: list[tuple[Path, str]] = []
+    artifacts: list[tuple[Path, str, int, str]] = []
     for path in reciprocal_paths:
         partitions = {
             key: value
@@ -797,15 +797,15 @@ def add_interface_cluster_columns(
         metric = partitions["metric"]
         threshold = int(path.stem.split("=", maxsplit=1)[1])
         kind = "component" if partitions["cluster"] == "components" else "community"
-        artifacts.append((path, f"{metric}__{threshold}__{kind}"))
+        artifacts.append((path, metric, threshold, kind))
     for path in directed_cover_paths:
         metric = path.parent.name.split("=", maxsplit=1)[1]
         threshold = int(path.stem.split("=", maxsplit=1)[1])
-        artifacts.append((path, f"{metric}__{threshold}__directed_set_cover"))
+        artifacts.append((path, metric, threshold, "directed_set_cover"))
 
     cluster_columns: dict[str, Any] = {}
     started = time()
-    for path_index, (path, column) in enumerate(artifacts, start=1):
+    for path_index, (path, metric, threshold, kind) in enumerate(artifacts, start=1):
         if (
             repair_started_ns is not None
             and path.stat().st_mtime_ns <= repair_started_ns
@@ -819,15 +819,35 @@ def add_interface_cluster_columns(
             raise ValueError(f"duplicate interface IDs in cluster artifact: {path}")
         labels[node_column] = labels[node_column].astype(str)
         observed_nodes = set(labels[node_column])
-        if observed_nodes != expected_nodes:
-            missing = sorted(expected_nodes.difference(observed_nodes))
-            extra = sorted(observed_nodes.difference(expected_nodes))
+        expected_artifact_nodes = (
+            {
+                f"{system_id}::side={side}"
+                for system_id in expected_nodes
+                for side in (1, 2)
+            }
+            if metric == "interface_side_qcov"
+            else expected_nodes
+        )
+        if observed_nodes != expected_artifact_nodes:
+            missing = sorted(expected_artifact_nodes.difference(observed_nodes))
+            extra = sorted(observed_nodes.difference(expected_artifact_nodes))
             raise ValueError(
                 "interface cluster artifact does not cover the current interface "
                 f"universe: {path}; missing={missing[:10]}, extra={extra[:10]}"
             )
-        aligned = labels.set_index(node_column)["label"].reindex(node_ids)
-        cluster_columns[column] = aligned.astype("string[pyarrow]").array
+        label_lookup = labels.set_index(node_column)["label"]
+        if metric == "interface_side_qcov":
+            for side in (1, 2):
+                side_nodes = pd.Index(
+                    [f"{system_id}::side={side}" for system_id in node_ids]
+                )
+                aligned = label_lookup.reindex(side_nodes)
+                column = f"{metric}__{threshold}__chain_{side}_{kind}"
+                cluster_columns[column] = aligned.astype("string[pyarrow]").array
+        else:
+            column = f"{metric}__{threshold}__{kind}"
+            aligned = label_lookup.reindex(node_ids)
+            cluster_columns[column] = aligned.astype("string[pyarrow]").array
         if path_index % 10 == 0 or path_index == len(artifacts):
             elapsed = time() - started
             rate = path_index / elapsed
@@ -848,8 +868,8 @@ def add_interface_cluster_columns(
     stale_columns = {
         column
         for column in index.columns
-        if column.startswith("interface_qcov__")
-        and column.endswith(("__component", "__community", "__directed_set_cover"))
+        if column.startswith(("interface_qcov__", "interface_side_qcov__"))
+        and column.endswith(("component", "community", "directed_set_cover"))
     }
     result = index.drop(
         columns=list(replacement_columns.intersection(index.columns) | stale_columns)
