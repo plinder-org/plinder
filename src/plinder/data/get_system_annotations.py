@@ -109,9 +109,34 @@ class GetPlinderAnnotation:
 
         entry_folder.mkdir(parents=True, exist_ok=True)
 
-        def write_dataframe(path: Path, frame: pd.DataFrame) -> None:
+        def write_dataframe(
+            path: Path,
+            frame: pd.DataFrame,
+            *,
+            merge_keys: tuple[str, ...] | None = None,
+        ) -> None:
             if preserve_existing_shared and path.is_file():
-                return
+                if merge_keys is None:
+                    return
+                existing = pd.read_parquet(path)
+                if not set(merge_keys).issubset(existing.columns):
+                    missing = sorted(set(merge_keys).difference(existing.columns))
+                    raise ValueError(f"{path} is missing merge keys: {missing}")
+                # Preserve ligand-derived values for existing rows while
+                # adding protein chains discovered by interface-only ingest.
+                # Retaining the existing column set also keeps legacy schema
+                # normalization in the collation layer well-defined.
+                incoming = frame.reindex(columns=existing.columns)
+                existing_keys = pd.MultiIndex.from_frame(
+                    existing.loc[:, list(merge_keys)]
+                )
+                incoming_keys = pd.MultiIndex.from_frame(
+                    incoming.loc[:, list(merge_keys)]
+                )
+                missing_rows = incoming.loc[~incoming_keys.isin(existing_keys)]
+                if missing_rows.empty:
+                    return
+                frame = pd.concat([existing, missing_rows], ignore_index=True)
             temporary = path.with_suffix(".parquet.tmp")
             frame.to_parquet(temporary, index=False)
             temporary.replace(path)
@@ -119,6 +144,7 @@ class GetPlinderAnnotation:
         write_dataframe(
             entry_folder / "entry_chains.parquet",
             self.entry.chains_to_df(),
+            merge_keys=("entry_pdb_id", "chain_asym_id"),
         )
         write_dataframe(
             entry_folder / "entry_metadata.parquet",
@@ -132,6 +158,7 @@ class GetPlinderAnnotation:
         write_dataframe(
             entry_folder / "entry_biounit_chains.parquet",
             self.entry.biounit_chains_to_df(),
+            merge_keys=("entry_pdb_id", "biounit_id", "chain_instance"),
         )
         source_path = entry_folder / "entry_source.parquet"
         if not preserve_existing_shared or not source_path.is_file():

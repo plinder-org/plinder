@@ -253,6 +253,43 @@ def test_pinder_7cma_label_asym_interface_regression(test_dir: Path) -> None:
     _assert_interface_residue_mappings(entry)
 
 
+def test_interface_only_annotation_adds_missing_shared_chain_rows(
+    test_dir: Path, tmp_path: Path
+) -> None:
+    cif = test_dir / "interfaces/cm/pdb_00007cma/pdb_00007cma_xyz-enrich.cif.gz"
+    annotation = GetPlinderAnnotation(cif, "", save_folder=tmp_path)
+    annotation.annotate_interfaces()
+
+    entry_folder = tmp_path / "7cma"
+    chain_path = entry_folder / "entry_chains.parquet"
+    chains = pd.read_parquet(chain_path)
+    expected_chain_ids = set(chains["chain_asym_id"])
+    chains.loc[chains["chain_asym_id"] == "A", "chain_auth_id"] = "preserved"
+    chains.loc[chains["chain_asym_id"] != "B"].to_parquet(chain_path, index=False)
+    biounit_path = entry_folder / "entry_biounit_chains.parquet"
+    biounits = pd.read_parquet(biounit_path)
+    expected_biounit_ids = set(biounits["chain_asym_id"])
+    biounits.loc[biounits["chain_asym_id"] == "A", "chain_role"] = "ligand"
+    biounits.loc[biounits["chain_asym_id"] != "B"].to_parquet(
+        biounit_path, index=False
+    )
+
+    annotation.annotate_interfaces()
+
+    repaired_chains = pd.read_parquet(chain_path)
+    repaired_biounits = pd.read_parquet(biounit_path)
+    assert set(repaired_chains["chain_asym_id"]) == expected_chain_ids
+    assert set(repaired_biounits["chain_asym_id"]) == expected_biounit_ids
+    assert repaired_chains.set_index("chain_asym_id").loc["A", "chain_auth_id"] == (
+        "preserved"
+    )
+    assert set(
+        repaired_biounits.loc[
+            repaired_biounits["chain_asym_id"] == "A", "chain_role"
+        ]
+    ) == {"ligand"}
+
+
 def test_pinder_6wwe_enumerates_all_three_interfaces(test_dir: Path) -> None:
     entry = _pinder_interface_entry(
         test_dir,
