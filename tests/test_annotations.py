@@ -221,12 +221,13 @@ def test_interface_only_annotation_preserves_ligand_assets(
     ligand_sdf = entry_folder / "ligand_files/1.C.sdf"
     ligand_sdf.parent.mkdir()
     ligand_sdf.write_bytes(b"preserved canonical ligand")
+    metadata_path = entry_folder / "entry_metadata.parquet"
+    metadata_path.unlink()
     preserved = [
         ligand_annotation,
         ligand_sdf,
         entry_folder / "entry_chains.parquet",
         entry_folder / "entry_biounit_chains.parquet",
-        entry_folder / "entry_metadata.parquet",
         entry_folder / "entry_source.parquet",
     ]
     before = {path: path.read_bytes() for path in preserved}
@@ -235,6 +236,7 @@ def test_interface_only_annotation_preserves_ligand_assets(
 
     assert second.equals(first)
     assert {path: path.read_bytes() for path in preserved} == before
+    assert pd.read_parquet(metadata_path)["entry_pdb_id"].tolist() == ["7cm8"]
 
 
 def test_pinder_7cma_label_asym_interface_regression(test_dir: Path) -> None:

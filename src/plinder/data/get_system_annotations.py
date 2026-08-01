@@ -99,6 +99,7 @@ class GetPlinderAnnotation:
         interface_table: pa.Table,
         *,
         replace_interfaces: bool = True,
+        preserve_existing_shared: bool = False,
     ) -> None:
         """Write sidecars for a newly materialized entry directory."""
         from plinder.data.annotations.cif_utils import (
@@ -107,31 +108,46 @@ class GetPlinderAnnotation:
         )
 
         entry_folder.mkdir(parents=True, exist_ok=True)
-        self.entry.chains_to_df().to_parquet(
+
+        def write_dataframe(path: Path, frame: pd.DataFrame) -> None:
+            if preserve_existing_shared and path.is_file():
+                return
+            temporary = path.with_suffix(".parquet.tmp")
+            frame.to_parquet(temporary, index=False)
+            temporary.replace(path)
+
+        write_dataframe(
             entry_folder / "entry_chains.parquet",
-            index=False,
+            self.entry.chains_to_df(),
         )
-        self.entry.metadata_to_df().to_parquet(
+        write_dataframe(
             entry_folder / "entry_metadata.parquet",
-            index=False,
+            self.entry.metadata_to_df(),
         )
         interface_path = entry_folder / "interfaces.parquet"
         if replace_interfaces or not interface_path.is_file():
-            pq.write_table(interface_table, interface_path)
-        self.entry.biounit_chains_to_df().to_parquet(
+            temporary = interface_path.with_suffix(".parquet.tmp")
+            pq.write_table(interface_table, temporary)
+            temporary.replace(interface_path)
+        write_dataframe(
             entry_folder / "entry_biounit_chains.parquet",
-            index=False,
+            self.entry.biounit_chains_to_df(),
         )
-        major_revision, minor_revision = get_mmcif_revision(
-            read_mmcif_container(self.mmcif_file)
-        )
-        pd.DataFrame(
-            {
-                "entry_pdb_id": [self.entry.pdb_id],
-                "source_mmcif_major_revision": [major_revision],
-                "source_mmcif_minor_revision": [minor_revision],
-            }
-        ).to_parquet(entry_folder / "entry_source.parquet", index=False)
+        source_path = entry_folder / "entry_source.parquet"
+        if not preserve_existing_shared or not source_path.is_file():
+            major_revision, minor_revision = get_mmcif_revision(
+                read_mmcif_container(self.mmcif_file)
+            )
+            write_dataframe(
+                source_path,
+                pd.DataFrame(
+                    {
+                        "entry_pdb_id": [self.entry.pdb_id],
+                        "source_mmcif_major_revision": [major_revision],
+                        "source_mmcif_minor_revision": [minor_revision],
+                    }
+                ),
+            )
 
     def annotate(self, *, include_interfaces: bool = True) -> Optional[pd.DataFrame]:
         """Annotate ligand systems, optionally including protein interfaces."""
@@ -180,21 +196,11 @@ class GetPlinderAnnotation:
         entry_folder = Path(self.save_folder) / self.entry.pdb_id
         ligand_annotation = Path(self.save_folder) / f"{self.entry.pdb_id}.parquet"
         if entry_folder.exists():
-            required_sidecars = {
-                entry_folder / "entry_chains.parquet",
-                entry_folder / "entry_biounit_chains.parquet",
-                entry_folder / "entry_metadata.parquet",
-                entry_folder / "entry_source.parquet",
-            }
-            missing = sorted(path for path in required_sidecars if not path.is_file())
-            if missing:
-                raise FileNotFoundError(
-                    f"cannot preserve incomplete entry sidecars: {missing}"
-                )
-            interface_path = entry_folder / "interfaces.parquet"
-            temporary = interface_path.with_suffix(".parquet.tmp")
-            pq.write_table(interface_table, temporary)
-            temporary.replace(interface_path)
+            self._write_shared_sidecars(
+                entry_folder,
+                interface_table,
+                preserve_existing_shared=True,
+            )
         elif ligand_annotation.is_file():
             raise FileNotFoundError(
                 f"ligand annotation exists without its entry sidecars: {ligand_annotation}"
