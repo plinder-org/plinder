@@ -33,7 +33,10 @@ from plinder.core.scores.entries import (
     SystemView,
     load_entry_views,
 )
-from plinder.core.scores.metrics import SCORE_NAMES
+from plinder.core.scores.metrics import (
+    SCORE_NAMES,
+    maximum_weight_bipartite_assignment,
+)
 from plinder.core.structure.smallmols_similarity import mol2morgan_fp
 from plinder.core.utils import schemas
 from plinder.core.utils.log import setup_logger
@@ -53,6 +56,15 @@ ECFP4_PARQUET_METADATA = {
 }
 
 _NON_CANONICAL_AA = str.maketrans({"J": "L", "U": "C", "O": "K"})
+
+
+def _finite_float_or_zero(value: Any) -> float:
+    """Return a finite alignment value, treating missing values as zero."""
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return numeric if np.isfinite(numeric) else 0.0
 
 
 def _protein_similarity_lookups() -> tuple[NDArray[np.bool_], NDArray[np.bool_]]:
@@ -1117,9 +1129,6 @@ def combine_scores(
     q_t_mappings: dict[str, list[_ChainPairType]],
     protein_chain_mapper: str = "",
 ) -> dict[str, str | float]:
-    def make_mapping(mapping: list[_ChainPairType]) -> str:
-        return ";".join(f"{a}:{b}" if len(b) else a for a, b in mapping)
-
     q_t_scores_combined: dict[str, str | float] = {}
     for s in SCORE_NAMES:
         for suffix in ["_max", "_weighted_max", "_weighted_sum", ""]:
@@ -1144,17 +1153,23 @@ def combine_scores(
             source_name = "mmseqs" if source == "mmseqs" else "foldseek"
             n = f"{s}_{source_name}{suffix}"
             if n in q_t_mappings:
-                q_t_scores_combined[f"{s}{suffix}_mapping"] = make_mapping(
+                q_t_scores_combined[f"{s}{suffix}_mapping"] = _format_chain_mapping(
                     q_t_mappings[n]
                 )
     if protein_chain_mapper != "":
-        q_t_scores_combined["protein_mapping"] = make_mapping(
+        q_t_scores_combined["protein_mapping"] = _format_chain_mapping(
             q_t_mappings.get(f"{protein_chain_mapper}_weighted_sum", [])
         )
         q_t_scores_combined["protein_mapper"] = (
             "foldseek" if "lddt" in protein_chain_mapper else "mmseqs"
         )
     return q_t_scores_combined
+
+
+def _format_chain_mapping(mapping: list[_ChainPairType]) -> str:
+    return ";".join(
+        f"{query}:{target}" if target else query for query, target in mapping
+    )
 
 
 @dataclass
@@ -1172,12 +1187,6 @@ class Scorer:
         default_factory=lambda: [
             "protein_lddt_qcov_foldseek",
             "protein_fident_qcov_mmseqs",
-        ]
-    )
-    ligand_chain_mappers: list[str] = field(
-        default_factory=lambda: [
-            "pocket_fident_qcov_foldseek",
-            "pocket_fident_qcov_mmseqs",
         ]
     )
     # default minimum threshold for every metric BEFORE scaling to 100
@@ -1898,8 +1907,13 @@ class Scorer:
         affected_target_entries: set[str],
         search_db: str = "holo",
         scratch_dir: Path | None = None,
+        allow_missing: bool = False,
+        query_system_ids: set[str] | None = None,
+        query_ligand_ids: set[str] | None = None,
+        target_system_ids: set[str] | None = None,
+        target_ligand_ids: set[str] | None = None,
     ) -> Path:
-        """Replace only score rows whose target entry was reannotated."""
+        """Replace target-entry rows, optionally creating a bounded query."""
         if search_db != "holo":
             raise ValueError(
                 "targeted score repair currently supports holo scores only"
@@ -1914,7 +1928,10 @@ class Scorer:
             / f"shard={pdb_id[1:3]}"
             / f"{pdb_id}.parquet"
         )
-        if not score_path.is_file() or not candidate_path.is_file():
+        if (
+            not allow_missing
+            and (not score_path.is_file() or not candidate_path.is_file())
+        ):
             raise FileNotFoundError(
                 f"targeted score repair requires existing score and candidate files: "
                 f"score={score_path.is_file()} candidates={candidate_path.is_file()}"
@@ -1928,15 +1945,20 @@ class Scorer:
             )
         if pdb_id not in self.entries:
             raise KeyError(f"query entry is absent from the current index: {pdb_id}")
-        target_system_ids = {
-            system_id
-            for target_pdb_id in affected_target_entries
-            for system_id in (
-                self.entries[target_pdb_id].systems
-                if target_pdb_id in self.entries
-                else {}
-            )
-        }
+        if target_system_ids is None:
+            target_system_ids = {
+                system_id
+                for target_pdb_id in affected_target_entries
+                for system_id in (
+                    self.entries[target_pdb_id].systems
+                    if target_pdb_id in self.entries
+                    else {}
+                )
+            }
+        elif {
+            system_id.split("__", maxsplit=1)[0] for system_id in target_system_ids
+        }.difference(affected_target_entries):
+            raise ValueError("bounded target systems fall outside target entries")
         source_to_aln_file = {
             f"{search_db}_{alignment_type}": data_dir
             / "alignments"
@@ -1952,7 +1974,10 @@ class Scorer:
                 search_db=search_db,
                 data_dir=None,
                 source_to_aln_file=source_to_aln_file,
+                query_system_ids=query_system_ids,
+                query_ligand_ids=query_ligand_ids,
                 target_system_ids=target_system_ids,
+                target_ligand_ids=target_ligand_ids,
                 ligand_3d_candidates=ligand_3d_candidates,
             )
             if target_system_ids
@@ -1964,10 +1989,18 @@ class Scorer:
                 affected_target_entries
             )
 
-        scores = pd.read_parquet(score_path)
+        scores = (
+            pd.read_parquet(score_path)
+            if score_path.is_file()
+            else pd.DataFrame(columns=schemas.PROTEIN_SIMILARITY_SCHEMA.names)
+        )
         scores = scores[unaffected_target(scores["target_system"])]
         if repaired is not None and not repaired.empty:
-            scores = pd.concat([scores, repaired], ignore_index=True)
+            scores = (
+                repaired.reset_index(drop=True)
+                if scores.empty
+                else pd.concat([scores, repaired], ignore_index=True)
+            )
         score_keys = [
             "query_system",
             "query_ligand_id",
@@ -1985,13 +2018,22 @@ class Scorer:
             ignore_index=True,
         )
 
-        candidates = pd.read_parquet(candidate_path)
+        candidates = (
+            pd.read_parquet(candidate_path)
+            if candidate_path.is_file()
+            else pd.DataFrame(columns=schemas.LIGAND_3D_CANDIDATE_SCHEMA.names)
+        )
         candidates = candidates[
             ~candidates["target_entry"].astype(str).isin(affected_target_entries)
         ]
         if ligand_3d_candidates:
-            candidates = pd.concat(
-                [candidates, pd.DataFrame(ligand_3d_candidates)], ignore_index=True
+            repaired_candidates = pd.DataFrame(ligand_3d_candidates)
+            candidates = (
+                repaired_candidates.reset_index(drop=True)
+                if candidates.empty
+                else pd.concat(
+                    [candidates, repaired_candidates], ignore_index=True
+                )
             )
         candidate_keys = [
             "query_system",
@@ -2023,6 +2065,8 @@ class Scorer:
         )
         score_install = score_path.with_suffix(score_path.suffix + ".tmp")
         candidate_install = candidate_path.with_suffix(candidate_path.suffix + ".tmp")
+        score_path.parent.mkdir(exist_ok=True, parents=True)
+        candidate_path.parent.mkdir(exist_ok=True, parents=True)
         shutil.copyfile(score_temporary, score_install)
         shutil.copyfile(candidate_temporary, candidate_install)
         candidate_install.replace(candidate_path)
@@ -2646,7 +2690,7 @@ class Scorer:
                 del pli_scores[score]
         return pocket_scores, pli_scores
 
-    def get_ligand_pair_pocket_pli_scores(
+    def _get_ligand_pair_pocket_pli_scores_for_mapping(
         self,
         alns: dict[_ChainPairType, pd.DataFrame],
         query_ligand: LigandView,
@@ -2680,6 +2724,142 @@ class Scorer:
             target_pocket=target_pocket,
             target_interactions=target_interactions,
         )
+
+    @staticmethod
+    def _pocket_coverage_for_alignment_row(
+        alignment: pd.Series,
+        query_pocket: dict[int, int],
+        target_pocket: dict[int, int],
+    ) -> int:
+        """Count query-pocket residues aligned into one target-chain pocket."""
+        if "query_selected_residue_numbers" in alignment.index:
+            query_numbers = alignment["query_selected_residue_numbers"]
+            target_numbers = alignment["target_selected_residue_numbers"]
+            if not isinstance(query_numbers, abc.Iterable) or not isinstance(
+                target_numbers, abc.Iterable
+            ):
+                return 0
+            return sum(
+                query_number in query_pocket
+                and target_number >= 0
+                and target_number in target_pocket
+                for query_number, target_number in zip(
+                    query_numbers, target_numbers, strict=True
+                )
+            )
+        return sum(
+            query_number in query_pocket
+            and alignment["trnum"].get(position, -1) in target_pocket
+            for position, query_number in alignment["qrnum"].items()
+        )
+
+    def get_ligand_pair_pocket_pli_scores(
+        self,
+        query_target_entry_alignments: pd.DataFrame,
+        query_ligand: LigandView,
+        target_ligand: LigandView,
+    ) -> tuple[
+        _SimilarityScoreDictType,
+        _SimilarityScoreDictType,
+        dict[str, list[_ChainPairType]],
+    ]:
+        """Score a ligand pair after maximizing its pocket coverage per backend."""
+        (
+            query_pocket,
+            query_interactions,
+            pocket_length,
+            pli_length,
+            unique_length,
+        ) = self._ligand_protein_only_pocket_data(query_ligand)
+        (
+            target_pocket,
+            target_interactions,
+            _,
+            _,
+            _,
+        ) = self._ligand_protein_only_pocket_data(target_ligand)
+        pocket_scores: _SimilarityScoreDictType = defaultdict(float)
+        pli_scores: _SimilarityScoreDictType = defaultdict(float)
+        mappings: dict[str, list[_ChainPairType]] = {}
+
+        for source, mapper_column in (
+            ("foldseek", "lddt_qcov"),
+            ("mmseqs", "fident_qcov"),
+        ):
+            primary_weights: dict[_ChainPairType, float] = {}
+            secondary_weights: dict[_ChainPairType, float] = {}
+            selected_alignments: dict[_ChainPairType, pd.DataFrame] = {}
+            for query_chain in sorted(query_pocket):
+                query_asym_id = query_chain.split(".", 1)[-1]
+                for target_chain in sorted(target_pocket):
+                    target_asym_id = target_chain.split(".", 1)[-1]
+                    try:
+                        pair_alignments = query_target_entry_alignments.loc[
+                            (query_asym_id, target_asym_id)
+                        ]
+                        source_alignments = pair_alignments.loc[[source]]
+                    except KeyError:
+                        continue
+                    best_rank: tuple[float, float, float, float] | None = None
+                    best_alignment: pd.Series | None = None
+                    for _, alignment in source_alignments.iterrows():
+                        coverage = self._pocket_coverage_for_alignment_row(
+                            alignment,
+                            query_pocket[query_chain],
+                            target_pocket[target_chain],
+                        )
+                        mapper_score = _finite_float_or_zero(
+                            alignment.get(mapper_column, 0.0)
+                        )
+                        qcov = _finite_float_or_zero(alignment.get("qcov", 0.0))
+                        fident = _finite_float_or_zero(alignment.get("fident", 0.0))
+                        rank = (
+                            float(coverage),
+                            mapper_score,
+                            qcov,
+                            fident,
+                        )
+                        if best_rank is None or rank > best_rank:
+                            best_rank = rank
+                            best_alignment = alignment
+                    if best_rank is None or best_alignment is None:
+                        continue
+                    chain_pair = (query_chain, target_chain)
+                    primary_weights[chain_pair] = best_rank[0]
+                    secondary_weights[chain_pair] = best_rank[1]
+                    selected_alignments[chain_pair] = pd.DataFrame(
+                        [best_alignment],
+                        index=pd.Index([source], name=pair_alignments.index.name),
+                    )
+
+            assignment = maximum_weight_bipartite_assignment(
+                query_pocket,
+                target_pocket,
+                primary_weights,
+                secondary_weights=secondary_weights,
+            )
+            backend_alignments = {
+                pair: selected_alignments[pair]
+                for pair in assignment
+                if pair in selected_alignments
+            }
+            if not backend_alignments:
+                continue
+            backend_pocket, backend_pli = self._get_pocket_pli_scores(
+                alns=backend_alignments,
+                query_pocket=query_pocket,
+                query_interactions=query_interactions,
+                pocket_length=pocket_length,
+                pli_length=pli_length,
+                pli_unique_length=unique_length,
+                target_pocket=target_pocket,
+                target_interactions=target_interactions,
+            )
+            pocket_scores.update(backend_pocket)
+            pli_scores.update(backend_pli)
+            for metric in (*backend_pocket, *backend_pli):
+                mappings[metric] = assignment
+        return pocket_scores, pli_scores, mappings
 
     def get_ligand_pocket_scores(
         self,
@@ -2909,7 +3089,7 @@ class Scorer:
                         (
                             q_t_mappings,
                             protein_scores,
-                            alns,
+                            _protein_alns,
                             protein_chain_mapper,
                         ) = self._protein_score_cache[protein_cache_key]
                         if not protein_scores:
@@ -2919,16 +3099,37 @@ class Scorer:
                         (
                             pocket_scores,
                             pli_scores,
+                            pocket_mappings,
                         ) = self.get_ligand_pair_pocket_pli_scores(
-                            alns, query_ligand, target_ligand
+                            query_target_entry_alignments,
+                            query_ligand,
+                            target_ligand,
                         )
                         q_t_scores.update(pocket_scores)
                         q_t_scores.update(pli_scores)
+                        ligand_mappings = {**q_t_mappings, **pocket_mappings}
                         combined: dict[str, str | float | None] = {
                             **combine_scores(
-                                q_t_scores, q_t_mappings, protein_chain_mapper
+                                q_t_scores, ligand_mappings, protein_chain_mapper
                             )
                         }
+
+                        if "pocket_qcov_foldseek" in pocket_scores or (
+                            "pocket_qcov_mmseqs" in pocket_scores
+                        ):
+                            pocket_mapper = "foldseek"
+                            if (
+                                pocket_scores.get("pocket_qcov_mmseqs", 0.0)
+                                > pocket_scores.get("pocket_qcov_foldseek", 0.0) + 1e-12
+                            ):
+                                pocket_mapper = "mmseqs"
+                            pocket_mapping = pocket_mappings.get(
+                                f"pocket_qcov_{pocket_mapper}", []
+                            )
+                            combined["protein_mapping"] = _format_chain_mapping(
+                                pocket_mapping
+                            )
+                            combined["protein_mapper"] = pocket_mapper
 
                         pocket_qcov_value = combined.get("pocket_qcov", 0.0)
                         pocket_qcov = (

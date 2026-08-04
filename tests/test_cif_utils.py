@@ -25,6 +25,7 @@ from plinder.data.annotations.cif_utils import (
     assign_bond_orders_from_smiles,
     build_biounit,
     check_cif_bond_orders,
+    get_legacy_chain_instance_mapping,
     get_structure_with_altloc,
     get_unknown_ligand_ids,
 )
@@ -132,10 +133,35 @@ def test_build_biounit_normalizes_altlocs_and_uses_deposited_first(monkeypatch):
     assembly = build_biounit(cif_file, "1")
 
     assert assembly.chain_id.tolist() == ["1.A"]
+    assert assembly.legacy_chain_id.tolist() == ["1.A"]
     assert (
         cif_file.block["atom_site"]["label_alt_id"].as_array(str).tolist()
         == original_ids
     )
+
+
+def test_legacy_chain_instance_mapping_uses_global_operation_order():
+    block = pdbx.CIFBlock()
+    block["pdbx_struct_assembly_gen"] = pdbx.CIFCategory(
+        {
+            "assembly_id": ["1", "1", "1", "2"],
+            "oper_expression": ["1", "(2-3)", "(4,5)(6-7)", "1"],
+            "asym_id_list": ["A,C", "B,C", "A", "A"],
+        }
+    )
+
+    assert get_legacy_chain_instance_mapping(block, "1") == {
+        "1.A": "1.A",
+        "2.A": "4.A",
+        "3.A": "5.A",
+        "4.A": "6.A",
+        "5.A": "7.A",
+        "1.B": "2.B",
+        "2.B": "3.B",
+        "1.C": "1.C",
+        "2.C": "2.C",
+        "3.C": "3.C",
+    }
 
 
 def test_apply_struct_conn_bonds_indexes_partners_per_assembly_instance():

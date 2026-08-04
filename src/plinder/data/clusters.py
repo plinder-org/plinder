@@ -1,5 +1,6 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
+import gc
 import hashlib
 import heapq
 import json
@@ -39,6 +40,11 @@ RELEASE_COMPONENT_DIRECTIONS = (False,)
 SYMMETRIC_EDGE_BUCKET_COUNT = 64
 SYMMETRIC_EDGE_COLUMNS = ["query_node", "target_node", "similarity"]
 INTERFACE_CLUSTER_METRICS = frozenset({"interface_qcov", "interface_side_qcov"})
+INTERFACE_REPRESENTATIVES = Path("index/interface_representatives.parquet")
+INTERFACE_HALF_REPRESENTATIVES = Path(
+    "index/interface_half_representatives.parquet"
+)
+INTERFACE_MEMBERSHIP = Path("index/interface_membership.parquet")
 
 
 def _cluster_root(data_dir: Path, entity_type: ClusterEntity) -> Path:
@@ -74,6 +80,22 @@ def _component_node_universe_paths(
 ) -> tuple[Path, Path]:
     root = _cluster_root(data_dir, entity_type) / "reductions"
     return root / "node_universe.parquet", root / "node_universe.json"
+
+
+def _component_node_universe_sources(
+    data_dir: Path, entity_type: ClusterEntity
+) -> dict[str, dict[str, str | int]]:
+    """Return every source that defines one cached clustering universe."""
+    if entity_type == "ligand":
+        paths = {"annotation": data_dir / "index/annotation_table.parquet"}
+    else:
+        paths = {
+            "annotation": data_dir / "index/interface_annotation_table.parquet",
+            "representatives": data_dir / INTERFACE_REPRESENTATIVES,
+            "half_representatives": data_dir / INTERFACE_HALF_REPRESENTATIVES,
+            "membership": data_dir / INTERFACE_MEMBERSHIP,
+        }
+    return {name: _component_source_signature(path) for name, path in paths.items()}
 
 
 def _empty_component_edges() -> pd.DataFrame:
@@ -1463,29 +1485,18 @@ def _cached_component_node_universe(
     *,
     entity_type: ClusterEntity = "ligand",
 ) -> tuple[list[str], set[str] | None] | None:
-    annotation_path = (
-        data_dir
-        / "index"
-        / (
-            "annotation_table.parquet"
-            if entity_type == "ligand"
-            else "interface_annotation_table.parquet"
-        )
-    )
     cache_path, manifest_path = _component_node_universe_paths(data_dir, entity_type)
-    if (
-        not annotation_path.is_file()
-        or not cache_path.is_file()
-        or not manifest_path.is_file()
-    ):
+    if not cache_path.is_file() or not manifest_path.is_file():
         return None
     try:
         manifest = json.loads(manifest_path.read_text())
-        if manifest.get("version") != 1:
+        if manifest.get("version") != 3 or not manifest.get("universe_hash"):
             return None
         if manifest.get("entity_type", "ligand") != entity_type:
             return None
-        if manifest.get("annotation") != _component_source_signature(annotation_path):
+        if manifest.get("sources") != _component_node_universe_sources(
+            data_dir, entity_type
+        ):
             return None
         if cache_path.stat().st_size != int(manifest["cache_size"]):
             return None
@@ -1539,15 +1550,28 @@ def prepare_component_node_universe(
         }
 
     if entity_type == "interface":
-        annotation_path = data_dir / "index" / "interface_annotation_table.parquet"
+        representative_path = data_dir / INTERFACE_REPRESENTATIVES
+        half_representative_path = data_dir / INTERFACE_HALF_REPRESENTATIVES
         nodes = sorted(
             set(
-                pd.read_parquet(annotation_path, columns=["system_id"])["system_id"]
+                pd.read_parquet(
+                    representative_path,
+                    columns=["representative_system_id"],
+                )["representative_system_id"]
                 .dropna()
                 .astype(str)
             )
         )
-        side_nodes = [f"{node}::side={side}" for node in nodes for side in (1, 2)]
+        side_nodes = sorted(
+            set(
+                pd.read_parquet(
+                    half_representative_path,
+                    columns=["half_interface_id"],
+                )["half_interface_id"]
+                .dropna()
+                .astype(str)
+            )
+        )
         system_ids: list[str] = []
         frame = pd.concat(
             [
@@ -1561,7 +1585,6 @@ def prepare_component_node_universe(
             "interface_side_count": len(side_nodes),
         }
     else:
-        annotation_path = data_dir / "index" / "annotation_table.parquet"
         annotation = _eligible_annotation(data_dir)
         nodes = sorted(
             set(
@@ -1587,11 +1610,18 @@ def prepare_component_node_universe(
     temporary_cache = cache_path.with_suffix(".tmp.parquet")
     frame.to_parquet(temporary_cache, index=False, compression="zstd")
     temporary_cache.replace(cache_path)
+    universe_digest = hashlib.sha256()
+    for kind, node_id in frame[["kind", "id"]].itertuples(index=False, name=None):
+        universe_digest.update(str(kind).encode())
+        universe_digest.update(b"\0")
+        universe_digest.update(str(node_id).encode())
+        universe_digest.update(b"\n")
     manifest = {
-        "version": 1,
+        "version": 3,
         "entity_type": entity_type,
-        "annotation": _component_source_signature(annotation_path),
+        "sources": _component_node_universe_sources(data_dir, entity_type),
         "cache_size": cache_path.stat().st_size,
+        "universe_hash": universe_digest.hexdigest(),
         **counts,
     }
     temporary_manifest = manifest_path.with_suffix(".tmp.json")
@@ -1620,13 +1650,15 @@ def component_node_universe(
                 else [node for node in cached_nodes if "::side=" not in node],
                 systems,
             )
-        annotation = pd.read_parquet(
-            data_dir / "index" / "interface_annotation_table.parquet",
-            columns=["system_id"],
-        )
-        nodes = sorted(set(annotation["system_id"].dropna().astype(str)))
         if metric == "interface_side_qcov":
-            nodes = [f"{node}::side={side}" for node in nodes for side in (1, 2)]
+            source = data_dir / INTERFACE_HALF_REPRESENTATIVES
+            column = "half_interface_id"
+        else:
+            source = data_dir / INTERFACE_REPRESENTATIVES
+            column = "representative_system_id"
+        nodes = sorted(
+            set(pd.read_parquet(source, columns=[column])[column].dropna().astype(str))
+        )
         return nodes, None
     if metric == "tanimoto_similarity_ecfp4_1024":
         nodes = (
@@ -2241,37 +2273,44 @@ def _greedy_centroid_cover(
         raise ValueError("graph node count does not match ligand IDs")
     uncovered = set(range(len(nodes)))
     centroids: list[int] = []
-    coverage_counts = [graph.degree(node) + 1 for node in range(len(nodes))]
     heap = [
-        (-coverage_counts[node], str(nodes[node]), node) for node in range(len(nodes))
+        (-(graph.degree(node) + 1), str(nodes[node]), node)
+        for node in range(len(nodes))
     ]
     heapq.heapify(heap)
     while uncovered:
         while True:
             negative_count, _, centroid = heapq.heappop(heap)
-            if centroid in uncovered and -negative_count == coverage_counts[centroid]:
+            if centroid not in uncovered:
+                continue
+            covered = {centroid}
+            covered.update(
+                int(neighbor)
+                for neighbor in graph.iterNeighbors(centroid)
+                if int(neighbor) in uncovered
+            )
+            actual_count = len(covered)
+            if -negative_count == actual_count:
                 break
+            # Counts only decrease, so the stored value is an upper bound.  A
+            # candidate is globally optimal as soon as its refreshed count is
+            # still at the heap top.  This exact lazy update avoids one heap
+            # allocation for every edge incident to newly covered nodes.
+            heapq.heappush(
+                heap,
+                (-actual_count, str(nodes[centroid]), centroid),
+            )
         centroids.append(centroid)
-        covered = {centroid}
-        covered.update(
-            int(neighbor)
-            for neighbor in graph.iterNeighbors(centroid)
-            if int(neighbor) in uncovered
-        )
         uncovered.difference_update(covered)
-        for removed in covered:
-            affected = {removed}
-            affected.update(int(neighbor) for neighbor in graph.iterNeighbors(removed))
-            for candidate in affected.intersection(uncovered):
-                coverage_counts[candidate] -= 1
-                heapq.heappush(
-                    heap,
-                    (
-                        -coverage_counts[candidate],
-                        str(nodes[candidate]),
-                        candidate,
-                    ),
-                )
+        if len(centroids) % 100_000 == 0:
+            LOG.info(
+                "centroid cover progress: nodes=%d centroids=%d covered=%d "
+                "uncovered=%d",
+                len(nodes),
+                len(centroids),
+                len(nodes) - len(uncovered),
+                len(uncovered),
+            )
 
     centroid_set = set(centroids)
     groups: dict[int, list[str]] = {centroid: [] for centroid in centroids}
@@ -2310,39 +2349,40 @@ def _greedy_directed_centroid_cover(
         raise ValueError("graph node count does not match ligand IDs")
     uncovered = set(range(len(nodes)))
     centroids: list[int] = []
-    coverage_counts = [graph.degreeIn(node) + 1 for node in range(len(nodes))]
     heap = [
-        (-coverage_counts[node], str(nodes[node]), node) for node in range(len(nodes))
+        (-(graph.degreeIn(node) + 1), str(nodes[node]), node)
+        for node in range(len(nodes))
     ]
     heapq.heapify(heap)
     while uncovered:
         while True:
             negative_count, _, centroid = heapq.heappop(heap)
-            if centroid in uncovered and -negative_count == coverage_counts[centroid]:
-                break
-        centroids.append(centroid)
-        covered = {centroid}
-        covered.update(
-            int(query)
-            for query in graph.iterInNeighbors(centroid)
-            if int(query) in uncovered
-        )
-        uncovered.difference_update(covered)
-        for removed in covered:
-            affected = {removed}
-            affected.update(
-                int(candidate) for candidate in graph.iterNeighbors(removed)
+            if centroid not in uncovered:
+                continue
+            covered = {centroid}
+            covered.update(
+                int(query)
+                for query in graph.iterInNeighbors(centroid)
+                if int(query) in uncovered
             )
-            for candidate in affected.intersection(uncovered):
-                coverage_counts[candidate] -= 1
-                heapq.heappush(
-                    heap,
-                    (
-                        -coverage_counts[candidate],
-                        str(nodes[candidate]),
-                        candidate,
-                    ),
-                )
+            actual_count = len(covered)
+            if -negative_count == actual_count:
+                break
+            heapq.heappush(
+                heap,
+                (-actual_count, str(nodes[centroid]), centroid),
+            )
+        centroids.append(centroid)
+        uncovered.difference_update(covered)
+        if len(centroids) % 100_000 == 0:
+            LOG.info(
+                "directed centroid cover progress: nodes=%d centroids=%d "
+                "covered=%d uncovered=%d",
+                len(nodes),
+                len(centroids),
+                len(nodes) - len(uncovered),
+                len(uncovered),
+            )
 
     centroid_set = set(centroids)
     assignments: list[tuple[str, str, float]] = []
@@ -2513,7 +2553,7 @@ def make_directed_set_cover(
                 target_labels.component AS target_component,
                 query_labels.component_node::UINTEGER AS query_node,
                 target_labels.component_node::UINTEGER AS target_node,
-                directed_edges.similarity,
+                CAST(round(directed_edges.similarity) AS UTINYINT) AS similarity,
                 query_labels.component != target_labels.component AS crossing_edge
             FROM directed_edges
             INNER JOIN component_labels AS query_labels
@@ -2540,7 +2580,77 @@ def make_directed_set_cover(
         len(component_labels),
         len(nodes_by_component),
     )
-    reader = connection.execute(query).fetch_record_batch(rows_per_batch=250_000)
+    staged_edges = temporary_root / f"{metric}-{threshold}-directed-edges.parquet"
+    staged_edges.unlink(missing_ok=True)
+    staged_schema = pa.schema(
+        [
+            ("component", pa.uint32()),
+            ("query_node", pa.uint32()),
+            ("target_node", pa.uint32()),
+            ("similarity", pa.uint8()),
+        ]
+    )
+    staged_rows = 0
+    stage_started = time()
+    writer = pq.ParquetWriter(
+        staged_edges,
+        staged_schema,
+        compression="zstd",
+        use_dictionary=False,
+        write_statistics=False,
+    )
+    try:
+        reader = connection.execute(query).fetch_record_batch(rows_per_batch=250_000)
+        for batch_index, record_batch in enumerate(reader, start=1):
+            crossing_index = record_batch.schema.get_field_index("crossing_edge")
+            crossing_edges = int(
+                np.asarray(
+                    record_batch.column(crossing_index).to_numpy(zero_copy_only=False),
+                    dtype=bool,
+                ).sum()
+            )
+            if crossing_edges:
+                raise ValueError(
+                    f"directed-cover component validation failed for {metric} at "
+                    f"{threshold}: {crossing_edges} crossing edges"
+                )
+            compact = pa.Table.from_batches([record_batch]).select(
+                staged_schema.names
+            ).cast(staged_schema, safe=False)
+            writer.write_table(compact, row_group_size=1_000_000)
+            staged_rows += len(record_batch)
+            if batch_index % 20 == 0:
+                elapsed = time() - stage_started
+                LOG.info(
+                    "directed cover edge staging progress: metric=%s threshold=%d "
+                    "batches=%d rows=%d rate=%.1f_rows/s elapsed_seconds=%.1f",
+                    metric,
+                    threshold,
+                    batch_index,
+                    staged_rows,
+                    staged_rows / elapsed,
+                    elapsed,
+                )
+    except BaseException:
+        writer.close()
+        connection.close()
+        staged_edges.unlink(missing_ok=True)
+        raise
+    else:
+        writer.close()
+        connection.close()
+    LOG.info(
+        "directed cover edge staging complete: metric=%s threshold=%d rows=%d "
+        "size_gb=%.2f elapsed_seconds=%.1f",
+        metric,
+        threshold,
+        staged_rows,
+        staged_edges.stat().st_size / (1024**3),
+        time() - stage_started,
+    )
+    del reader
+    gc.collect()
+
     assignments: list[tuple[str, str, float]] = []
     processed_nodes: set[str] = set()
     current_component: int | None = None
@@ -2563,51 +2673,56 @@ def make_directed_set_cover(
 
     streamed_rows = 0
     stream_started = time()
-    for batch_index, record_batch in enumerate(reader, start=1):
-        frame = record_batch.to_pandas()
-        streamed_rows += len(frame)
-        if batch_index % 20 == 0:
-            elapsed = time() - stream_started
-            LOG.info(
-                "directed cover edge progress: metric=%s threshold=%d "
-                "batches=%d rows=%d rate=%.1f_rows/s elapsed_seconds=%.1f",
-                metric,
-                threshold,
-                batch_index,
-                streamed_rows,
-                streamed_rows / elapsed,
-                elapsed,
-            )
-        crossing_edges = int(frame["crossing_edge"].fillna(False).sum())
-        if crossing_edges:
-            raise ValueError(
-                f"directed-cover component validation failed for {metric} at "
-                f"{threshold}: {crossing_edges} crossing edges"
-            )
-        for component, group in frame.groupby("component", sort=False):
-            component = int(component)
-            if component != current_component:
-                finish_component()
-                current_component = component
-                current_nodes = nodes_by_component[component]
-                current_graph = nk.Graph(
-                    len(current_nodes),
-                    weighted=True,
-                    directed=True,
+    try:
+        staged_parquet = pq.ParquetFile(staged_edges)
+        for batch_index, record_batch in enumerate(
+            staged_parquet.iter_batches(batch_size=250_000), start=1
+        ):
+            frame = record_batch.to_pandas()
+            streamed_rows += len(frame)
+            if batch_index % 20 == 0:
+                elapsed = time() - stream_started
+                LOG.info(
+                    "directed cover graph progress: metric=%s threshold=%d "
+                    "batches=%d rows=%d rate=%.1f_rows/s elapsed_seconds=%.1f",
+                    metric,
+                    threshold,
+                    batch_index,
+                    streamed_rows,
+                    streamed_rows / elapsed,
+                    elapsed,
                 )
-            assert current_graph is not None
-            similarities = group["similarity"].to_numpy(dtype=float, copy=False)
-            current_graph.addEdges(
-                (
-                    similarities / 100.0,
+            for component, group in frame.groupby("component", sort=False):
+                component = int(component)
+                if component != current_component:
+                    finish_component()
+                    current_component = component
+                    current_nodes = nodes_by_component[component]
+                    current_graph = nk.Graph(
+                        len(current_nodes),
+                        weighted=True,
+                        directed=True,
+                    )
+                assert current_graph is not None
+                similarities = group["similarity"].to_numpy(
+                    dtype=float, copy=False
+                )
+                current_graph.addEdges(
                     (
-                        group["query_node"].to_numpy(dtype=np.uint, copy=False),
-                        group["target_node"].to_numpy(dtype=np.uint, copy=False),
-                    ),
+                        similarities / 100.0,
+                        (
+                            group["query_node"].to_numpy(
+                                dtype=np.uint, copy=False
+                            ),
+                            group["target_node"].to_numpy(
+                                dtype=np.uint, copy=False
+                            ),
+                        ),
+                    )
                 )
-            )
-    finish_component()
-    connection.close()
+        finish_component()
+    finally:
+        staged_edges.unlink(missing_ok=True)
     for component, nodes in nodes_by_component.items():
         missing = [node for node in nodes if node not in processed_nodes]
         if len(missing) > 1:

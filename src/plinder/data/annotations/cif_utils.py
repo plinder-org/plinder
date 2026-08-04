@@ -10,9 +10,11 @@ SMILES templates.
 from __future__ import annotations
 
 import logging
+import re
 from collections import defaultdict
 from collections.abc import Iterator
 from contextlib import contextmanager
+from math import prod
 from pathlib import Path
 
 import biotite.structure as struc
@@ -262,6 +264,76 @@ def get_model_count(cif_file: pdbx.CIFFile) -> int:
     return int(len(set(atom_site["pdbx_PDB_model_num"].as_array())))
 
 
+def _operation_expression_count(expression: str) -> int:
+    """Count transformations encoded by an assembly operation expression."""
+    groups = re.findall(r"\(([^()]*)\)", expression)
+    if not groups:
+        groups = [expression]
+    group_sizes = []
+    for group in groups:
+        size = 0
+        for token in group.split(","):
+            token = token.strip()
+            if not token:
+                continue
+            if "-" in token:
+                first, last = token.split("-", maxsplit=1)
+                size += int(last) - int(first) + 1
+            else:
+                size += 1
+        if size == 0:
+            raise ValueError(f"empty assembly operation group in {expression!r}")
+        group_sizes.append(size)
+    return prod(group_sizes)
+
+
+def get_legacy_chain_instance_mapping(
+    cif_file: pdbx.CIFFile | pdbx.CIFBlock,
+    assembly_id: str,
+) -> dict[str, str]:
+    """Map canonical per-asym instance IDs to historical global-copy IDs.
+
+    The canonical Biotite representation numbers transformed copies separately
+    for each label asym ID.  Earlier Plinder releases used OpenStructure, which
+    numbered every generated transformation globally across assembly rows.
+    This mapping preserves those historical identifiers as lookup aliases.
+    """
+    block = (
+        cif_file if isinstance(cif_file, pdbx.CIFBlock) else list(cif_file.values())[0]
+    )
+    category_name = "pdbx_struct_assembly_gen"
+    if category_name not in block:
+        return {}
+    category = block[category_name]
+    required = {"assembly_id", "oper_expression", "asym_id_list"}
+    if not required.issubset(category):
+        return {}
+
+    mapping: dict[str, str] = {}
+    per_asym_offset: defaultdict[str, int] = defaultdict(int)
+    global_offset = 0
+    for row_assembly_id, expression, asym_id_list in zip(
+        category["assembly_id"].as_array(str),
+        category["oper_expression"].as_array(str),
+        category["asym_id_list"].as_array(str),
+    ):
+        if str(row_assembly_id) != str(assembly_id):
+            continue
+        operation_count = _operation_expression_count(str(expression))
+        asym_ids = [value.strip() for value in str(asym_id_list).split(",")]
+        for asym_id in asym_ids:
+            if not asym_id:
+                continue
+            local_offset = per_asym_offset[asym_id]
+            for operation_index in range(operation_count):
+                canonical = f"{local_offset + operation_index + 1}.{asym_id}"
+                legacy = f"{global_offset + operation_index + 1}.{asym_id}"
+                mapping[canonical] = legacy
+            per_asym_offset[asym_id] += operation_count
+        global_offset += operation_count
+    return mapping
+
+
 def build_biounit(
     cif_file: pdbx.CIFFile,
     assembly_id: str,
@@ -294,6 +366,13 @@ def build_biounit(
                 f"{int(sym_id) + 1}.{asym_id}"
                 for sym_id, asym_id in zip(biounit.sym_id, biounit.label_asym_id)
             ]
+        )
+        legacy_mapping = get_legacy_chain_instance_mapping(cif_file, assembly_id)
+        biounit.set_annotation(
+            "legacy_chain_id",
+            np.asarray(
+                [legacy_mapping.get(chain_id, chain_id) for chain_id in biounit.chain_id]
+            ),
         )
         apply_struct_conn_bonds(biounit, list(cif_file.values())[0])
     return biounit

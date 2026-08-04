@@ -1049,6 +1049,10 @@ class Ligand(DocBaseModel):
         description="__RCSB PDB ID, see https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_entry.id.html",
     )
     biounit_id: str = Field(default_factory=str, description="__Biounit id")
+    id_legacy: str = Field(
+        default="",
+        description="Historical ligand ID using global assembly-operation chain instances",
+    )
     asym_id: str = Field(default_factory=str, description="Ligand chain asymmetric id")
     instance: int = Field(default_factory=int, description="Biounit instance ID")
     ccd_code: str = Field(

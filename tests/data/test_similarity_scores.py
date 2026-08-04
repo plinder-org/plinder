@@ -1210,10 +1210,10 @@ def test_ligand_pair_pocket_scores_do_not_use_system_union(tmp_path) -> None:
         {"1.X": {110: Counter({"hydrogen_bond": 1})}},
     )
 
-    full_pocket, full_pli = scorer.get_ligand_pair_pocket_pli_scores(
+    full_pocket, full_pli = scorer._get_ligand_pair_pocket_pli_scores_for_mapping(
         alignments, query, target_full
     )
-    partial_pocket, partial_pli = scorer.get_ligand_pair_pocket_pli_scores(
+    partial_pocket, partial_pli = scorer._get_ligand_pair_pocket_pli_scores_for_mapping(
         alignments, query, target_partial
     )
 
@@ -1245,12 +1245,85 @@ def test_ligand_pair_pocket_scores_ignore_null_compact_maps(tmp_path) -> None:
     query = _ligand("1abc__1__1.B", "1.B", {"1.A": {10: 9}}, {})
     target = _ligand("2def__1__1.Y", "1.Y", {"1.X": {110: 109}}, {})
 
-    pocket_scores, pli_scores = scorer.get_ligand_pair_pocket_pli_scores(
+    pocket_scores, pli_scores = scorer._get_ligand_pair_pocket_pli_scores_for_mapping(
         alignments, query, target
     )
 
     assert pocket_scores == {}
     assert pli_scores == {}
+
+
+def test_ligand_pair_pocket_mapping_maximizes_coverage_before_similarity(
+    tmp_path,
+) -> None:
+    scorer = Scorer(
+        entries={},
+        source_to_full_db_file={},
+        db_dir=tmp_path / "db",
+        scores_dir=tmp_path / "scores",
+    )
+    query = _ligand(
+        "1abc__1__1.L",
+        "1.L",
+        {"1.A": {1: 0}, "1.B": {2: 1}},
+        {},
+    )
+    target = _ligand(
+        "2def__1__1.M",
+        "1.M",
+        {"1.X": {10: 9}, "1.Y": {20: 19}},
+        {},
+    )
+    rows = [
+        # Whole-protein similarity favors this direct Foldseek assignment,
+        # but neither alignment maps into the corresponding target pocket.
+        ("A", "X", "foldseek", 1, 99, 1.0),
+        ("B", "Y", "foldseek", 2, 99, 0.9),
+        # The lower-scoring swapped assignment covers both pocket residues.
+        ("A", "Y", "foldseek", 1, 20, 0.2),
+        ("B", "X", "foldseek", 2, 10, 0.1),
+        # MMseqs covers only one residue with its preferred assignment.
+        ("A", "X", "mmseqs", 1, 10, 0.95),
+        ("B", "Y", "mmseqs", 2, 99, 0.9),
+    ]
+    alignments = pd.DataFrame(
+        [
+            {
+                "query_chain_mapped": query_chain,
+                "target_chain_mapped": target_chain,
+                "source": source,
+                "query_selected_residue_numbers": [query_number],
+                "target_selected_residue_numbers": [target_number],
+                "selected_residue_identity": bytes([1]),
+                "qcov": 1.0,
+                "fident": similarity,
+                "fident_qcov": similarity,
+                "lddt_qcov": similarity,
+            }
+            for (
+                query_chain,
+                target_chain,
+                source,
+                query_number,
+                target_number,
+                similarity,
+            ) in rows
+        ]
+    ).set_index(["query_chain_mapped", "target_chain_mapped", "source"])
+    alignments.sort_index(inplace=True)
+
+    pocket_scores, _, mappings = scorer.get_ligand_pair_pocket_pli_scores(
+        alignments,
+        query,
+        target,
+    )
+
+    assert pocket_scores["pocket_qcov_foldseek"] == pytest.approx(1.0)
+    assert pocket_scores["pocket_qcov_mmseqs"] == pytest.approx(0.5)
+    assert mappings["pocket_qcov_foldseek"] == [
+        ("1.A", "1.Y"),
+        ("1.B", "1.X"),
+    ]
 
 
 def test_ligand_pair_shape_scores_gate_sdf_access_and_cache(
@@ -1740,6 +1813,83 @@ def test_repair_score_df_targets_replaces_only_affected_target_rows(
         "2def__2__1.X__1.Y",
         "3ghi__1__1.X__1.Y",
     }
+
+
+def test_repair_score_df_targets_can_create_bounded_query_outputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from types import SimpleNamespace
+
+    scorer = Scorer(
+        entries={},
+        source_to_full_db_file={},
+        db_dir=tmp_path / "dbs" / "subdbs",
+        scores_dir=tmp_path / "scores",
+    )
+    entries = {
+        "1abc": SimpleNamespace(systems={"1abc__1__1.A__1.B": object()}),
+        "2def": SimpleNamespace(systems={"2def__1__1.X__1.Y": object()}),
+    }
+    monkeypatch.setattr(
+        scoring_module,
+        "load_entry_views",
+        lambda *, pdb_ids, data_dir: {
+            pdb_id: entries[pdb_id] for pdb_id in pdb_ids if pdb_id in entries
+        },
+    )
+    score_row = {
+        "query_system": "1abc__1__1.A__1.B",
+        "query_ligand_id": "1abc__1__1.B",
+        "target_system": "2def__1__1.X__1.Y",
+        "target_ligand_id": "2def__1__1.Y",
+        "protein_mapping": "1.A:1.X",
+        "mapping": None,
+        "protein_mapper": "foldseek",
+        "source": "foldseek",
+        "metric": "pocket_qcov",
+        "similarity": 75,
+    }
+    candidate_row = {
+        "query_system": "1abc__1__1.A__1.B",
+        "query_ligand_id": "1abc__1__1.B",
+        "query_entry": "1abc",
+        "query_ligand_asym_id": "B",
+        "target_system": "2def__1__1.X__1.Y",
+        "target_ligand_id": "2def__1__1.Y",
+        "target_entry": "2def",
+        "target_ligand_asym_id": "Y",
+        "protein_mapping": "1.A:1.X",
+        "protein_mapper": "foldseek",
+        "pocket_qcov": 0.75,
+    }
+
+    def repaired_scores(*_args, **kwargs):
+        assert kwargs["query_system_ids"] == {"1abc__1__1.A__1.B"}
+        assert kwargs["query_ligand_ids"] == {"1abc__1__1.B"}
+        assert kwargs["target_system_ids"] == {"2def__1__1.X__1.Y"}
+        assert kwargs["target_ligand_ids"] == {"2def__1__1.Y"}
+        kwargs["ligand_3d_candidates"].append(candidate_row)
+        return pd.DataFrame([score_row])
+
+    monkeypatch.setattr(scorer, "aggregate_scores", repaired_scores)
+    output = scorer.repair_score_df_targets(
+        tmp_path,
+        "1abc",
+        affected_target_entries={"2def"},
+        scratch_dir=tmp_path / "scratch",
+        allow_missing=True,
+        query_system_ids={"1abc__1__1.A__1.B"},
+        query_ligand_ids={"1abc__1__1.B"},
+        target_system_ids={"2def__1__1.X__1.Y"},
+        target_ligand_ids={"2def__1__1.Y"},
+    )
+
+    assert pd.read_parquet(output)["similarity"].tolist() == [75]
+    candidate_path = (
+        tmp_path
+        / "scores/ligand_3d_candidates/search_db=holo/shard=ab/1abc.parquet"
+    )
+    assert pd.read_parquet(candidate_path)["pocket_qcov"].tolist() == [0.75]
 
 
 def test_map_alignment_files_replaces_stale_schema_without_force(
@@ -2361,12 +2511,22 @@ def test_holo_scores_are_emitted_per_ligand_pair(tmp_path, monkeypatch) -> None:
         _alns: dict,
         query_ligand: LigandView,
         target_ligand: LigandView,
-    ) -> tuple[dict[str, float], dict[str, float]]:
+    ) -> tuple[dict[str, float], dict[str, float], dict]:
         qcov = float(
             query_ligand.id == query_ligands[0].id
             and target_ligand.id == target_ligands[0].id
         )
-        return {"pocket_qcov_foldseek": qcov}, {}
+        mapping = [
+            (
+                query_ligand.protein_chains_asym_id[0],
+                target_ligand.protein_chains_asym_id[0],
+            )
+        ]
+        return (
+            {"pocket_qcov_foldseek": qcov},
+            {},
+            {"pocket_qcov_foldseek": mapping},
+        )
 
     shape_calls: list[tuple[str, str, float]] = []
 
@@ -2430,7 +2590,7 @@ def test_holo_scores_are_emitted_per_ligand_pair(tmp_path, monkeypatch) -> None:
             "target_entry": "2def",
             "target_ligand_asym_id": "Z",
             "protein_mapping": "1.A:1.X",
-            "protein_mapper": "mmseqs",
+            "protein_mapper": "foldseek",
             "pocket_qcov": 1.0,
         }
     ]
@@ -2485,9 +2645,10 @@ def test_holo_threaded_scoring_reuses_canonical_and_receptor_pairs(
 
     def pocket_scores(
         _alns: dict, _query: LigandView, target: LigandView
-    ) -> tuple[dict[str, float], dict[str, float]]:
+    ) -> tuple[dict[str, float], dict[str, float], dict]:
         return (
             {"pocket_qcov_foldseek": (0.5 if target.id == target_ligand.id else 0.25)},
+            {},
             {},
         )
 
@@ -2559,7 +2720,7 @@ def test_holo_weighted_sum_retains_unmatched_query_receptor_length(
     monkeypatch.setattr(
         scorer,
         "get_ligand_pair_pocket_pli_scores",
-        lambda *_args: ({}, {}),
+        lambda *_args: ({}, {}, {}),
     )
 
     scores = list(scorer.get_scores_holo(query_system, alignments))

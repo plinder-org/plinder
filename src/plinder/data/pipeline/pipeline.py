@@ -605,7 +605,7 @@ class IngestPipeline:
             ("ligand", list(self.cfg.flow.cluster_metrics))
         ]
         if self.cfg.data.plinder_iteration == "v3":
-            entities.append(("interface", ["interface_qcov", "interface_side_qcov"]))
+            entities.append(("interface", ["interface_qcov"]))
         return entities
 
     @utils.ingest_flow_control

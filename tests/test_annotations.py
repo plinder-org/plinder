@@ -1418,6 +1418,9 @@ def test_canonical_ligand_saving_and_system_reconstruction(
     assert entry.chains["B"].length == 395
     assert entry.chains["A"].num_unresolved_residues >= 0
     assert entry.chains["B"].num_unresolved_residues >= 0
+    entry.biounit_legacy_chain_ids["1"].update(
+        {"1.B": "2.B", "1.E": "2.E", "1.F": "2.F"}
+    )
 
     canonical_ligand_dir = entry_dir / "2y4i" / "ligand_files"
     assert {path.name for path in canonical_ligand_dir.glob("*.sdf")} >= {
@@ -1427,6 +1430,8 @@ def test_canonical_ligand_saving_and_system_reconstruction(
     assert not (entry_dir / system_tag).exists()
 
     row = entry.to_df().query("system_id == @system_tag").iloc[0]
+    assert row["system_id_legacy"] == "2y4i__1__2.B__2.E_2.F"
+    assert row["ligand_id_legacy"] == row["ligand_id"].replace("__1.", "__2.")
     repeated_membership_columns = {
         column
         for column in row.index

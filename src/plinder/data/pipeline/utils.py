@@ -699,7 +699,7 @@ def add_cluster_columns(*, index: pd.DataFrame, data_dir: Path) -> pd.DataFrame:
 def add_interface_cluster_columns(
     *, index: pd.DataFrame, data_dir: Path
 ) -> pd.DataFrame:
-    """Merge reciprocal and directed interface-cluster labels into the index."""
+    """Expand representative interface-cluster labels into the full index."""
     node_column = "system_id"
     cluster_root = data_dir / "interface_clusters"
     directed_cover_root = data_dir / "interface_sampling" / "directed_set_cover"
@@ -782,7 +782,55 @@ def add_interface_cluster_columns(
         index[node_column].dropna().astype(str).unique(),
         name=node_column,
     )
-    expected_nodes = set(node_ids)
+    membership_path = data_dir / "index/interface_membership.parquet"
+    if not membership_path.is_file():
+        if len(node_ids):
+            raise FileNotFoundError(
+                "interface cluster expansion requires representative membership: "
+                f"{membership_path}"
+            )
+        membership = pd.DataFrame(
+            columns=[
+                node_column,
+                "representative_system_id",
+                "side_1_half_interface_id",
+                "side_2_half_interface_id",
+            ]
+        )
+    else:
+        membership = pd.read_parquet(
+            membership_path,
+            columns=[
+                node_column,
+                "representative_system_id",
+                "side_1_half_interface_id",
+                "side_2_half_interface_id",
+            ],
+        )
+    membership[node_column] = membership[node_column].astype(str)
+    if membership[node_column].duplicated().any():
+        duplicate = membership.loc[
+            membership[node_column].duplicated(), node_column
+        ].iloc[0]
+        raise ValueError(f"duplicate interface membership for {duplicate}")
+    membership_ids = set(membership[node_column])
+    expected_ids = set(node_ids)
+    if membership_ids != expected_ids:
+        missing = sorted(expected_ids.difference(membership_ids))
+        extra = sorted(membership_ids.difference(expected_ids))
+        raise ValueError(
+            "interface representative membership does not cover the current "
+            f"interface universe: missing={missing[:10]}, extra={extra[:10]}"
+        )
+    membership = membership.set_index(node_column).reindex(node_ids)
+    expected_representatives = set(
+        membership["representative_system_id"].dropna().astype(str)
+    )
+    expected_half_representatives = set(
+        membership[
+            ["side_1_half_interface_id", "side_2_half_interface_id"]
+        ].stack()
+    )
     artifacts: list[tuple[Path, str, int, str]] = []
     for path in reciprocal_paths:
         partitions = {
@@ -820,13 +868,9 @@ def add_interface_cluster_columns(
         labels[node_column] = labels[node_column].astype(str)
         observed_nodes = set(labels[node_column])
         expected_artifact_nodes = (
-            {
-                f"{system_id}::side={side}"
-                for system_id in expected_nodes
-                for side in (1, 2)
-            }
+            expected_half_representatives
             if metric == "interface_side_qcov"
-            else expected_nodes
+            else expected_representatives
         )
         if observed_nodes != expected_artifact_nodes:
             missing = sorted(expected_artifact_nodes.difference(observed_nodes))
@@ -838,15 +882,17 @@ def add_interface_cluster_columns(
         label_lookup = labels.set_index(node_column)["label"]
         if metric == "interface_side_qcov":
             for side in (1, 2):
-                side_nodes = pd.Index(
-                    [f"{system_id}::side={side}" for system_id in node_ids]
-                )
-                aligned = label_lookup.reindex(side_nodes)
+                representative_nodes = membership[
+                    f"side_{side}_half_interface_id"
+                ].astype(str)
+                aligned = representative_nodes.map(label_lookup)
                 column = f"{metric}__{threshold}__chain_{side}_{kind}"
                 cluster_columns[column] = aligned.astype("string[pyarrow]").array
         else:
             column = f"{metric}__{threshold}__{kind}"
-            aligned = label_lookup.reindex(node_ids)
+            aligned = membership["representative_system_id"].astype(str).map(
+                label_lookup
+            )
             cluster_columns[column] = aligned.astype("string[pyarrow]").array
         if path_index % 10 == 0 or path_index == len(artifacts):
             elapsed = time() - started

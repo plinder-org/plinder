@@ -47,6 +47,21 @@ ALIGNMENT_CHAIN_LOOKUP_RELATIVE = Path("index/alignment_chain_lookup.parquet")
 ALIGNMENT_CHAIN_LOOKUP_MANIFEST_RELATIVE = Path(
     "index/alignment_chain_lookup.manifest.json"
 )
+INTERFACE_HALF_REPRESENTATIVES_RELATIVE = Path(
+    "index/interface_half_representatives.parquet"
+)
+INTERFACE_REPRESENTATIVES_RELATIVE = Path("index/interface_representatives.parquet")
+INTERFACE_MEMBERSHIP_RELATIVE = Path("index/interface_membership.parquet")
+INTERFACE_REPRESENTATIVES_MANIFEST_RELATIVE = Path(
+    "index/interface_representatives.manifest.json"
+)
+LIGAND_POCKET_REPRESENTATIVES_RELATIVE = Path(
+    "index/ligand_pocket_representatives.parquet"
+)
+LIGAND_POCKET_MEMBERSHIP_RELATIVE = Path("index/ligand_pocket_membership.parquet")
+LIGAND_POCKET_REPRESENTATIVES_MANIFEST_RELATIVE = Path(
+    "index/ligand_pocket_representatives.manifest.json"
+)
 STAGES = [
     "download_rcsb_files",
     "download_alternative_datasets",
@@ -620,12 +635,605 @@ def make_sub_dbs(
         )
 
 
+def _interface_representative_source_signature(
+    data_dir: Path,
+) -> dict[str, int | str]:
+    source = data_dir / "index" / "interface_annotation_table.parquet"
+    stat = source.stat()
+    return {
+        "name": source.name,
+        "size": stat.st_size,
+        "mtime_ns": stat.st_mtime_ns,
+    }
+
+
+def _interface_representative_output_signature(path: Path) -> dict[str, int | str]:
+    stat = path.stat()
+    return {"name": path.name, "size": stat.st_size, "mtime_ns": stat.st_mtime_ns}
+
+
+def _completed_interface_representatives(
+    data_dir: Path,
+) -> dict[str, Any] | None:
+    manifest = _read_json(data_dir / INTERFACE_REPRESENTATIVES_MANIFEST_RELATIVE)
+    expected = {
+        "half_interfaces": (
+            INTERFACE_HALF_REPRESENTATIVES_RELATIVE,
+            schemas.INTERFACE_HALF_REPRESENTATIVE_SCHEMA,
+        ),
+        "interfaces": (
+            INTERFACE_REPRESENTATIVES_RELATIVE,
+            schemas.INTERFACE_REPRESENTATIVE_SCHEMA,
+        ),
+        "membership": (
+            INTERFACE_MEMBERSHIP_RELATIVE,
+            schemas.INTERFACE_MEMBERSHIP_SCHEMA,
+        ),
+    }
+    try:
+        if (
+            manifest is None
+            or manifest.get("source")
+            != _interface_representative_source_signature(data_dir)
+        ):
+            return None
+        for key, (relative, schema) in expected.items():
+            path = data_dir / relative
+            if (
+                not pq.read_schema(path).equals(schema)
+                or manifest.get("outputs", {}).get(key)
+                != _interface_representative_output_signature(path)
+            ):
+                return None
+    except (OSError, TypeError, ValueError):
+        return None
+    return manifest
+
+
+def make_interface_representatives(
+    *,
+    data_dir: Path,
+    scratch_dir: Path | None,
+    threads: int,
+    force_update: bool = False,
+) -> dict[str, Any]:
+    """Normalize exact assembly-copy interfaces before mapping and scoring."""
+    current = _completed_interface_representatives(data_dir)
+    if not force_update and current is not None:
+        LOG.info(
+            "make_interface_representatives: reusing %d representatives for "
+            "%d interfaces",
+            current["representative_interface_count"],
+            current["interface_count"],
+        )
+        return current
+
+    import duckdb
+
+    source_signature = _interface_representative_source_signature(data_dir)
+    started = time.monotonic()
+    LOG.info("make_interface_representatives: normalizing interface masks")
+    source = data_dir / "index" / "interface_annotation_table.parquet"
+    working_root = (scratch_dir or data_dir / "scratch") / "interface-representatives"
+    if working_root.exists():
+        rmtree(working_root)
+    working_root.mkdir(parents=True)
+    temporary_paths = {
+        "half_interfaces": working_root / INTERFACE_HALF_REPRESENTATIVES_RELATIVE.name,
+        "interfaces": working_root / INTERFACE_REPRESENTATIVES_RELATIVE.name,
+        "membership": working_root / INTERFACE_MEMBERSHIP_RELATIVE.name,
+    }
+    connection = duckdb.connect()
+    connection.sql(f"SET threads={max(1, threads)}")
+    connection.sql("SET memory_limit='64GB'")
+    connection.sql(f"SET temp_directory='{working_root.as_posix()}'")
+    connection.sql("SET preserve_insertion_order=false")
+    connection.sql(
+        dedent(
+            f"""
+            CREATE TEMP TABLE interface_sides AS
+            SELECT
+                entry_pdb_id,
+                system_id,
+                1::TINYINT AS side,
+                interface_chain_1 AS instance_chain_id,
+                split_part(interface_chain_1, '.', 2) AS chain_asym_id,
+                interface_chain_1_residue_numbers AS residue_numbers,
+                interface_chain_1_residue_indices AS residue_indices
+            FROM read_parquet('{source.as_posix()}')
+            UNION ALL
+            SELECT
+                entry_pdb_id,
+                system_id,
+                2::TINYINT AS side,
+                interface_chain_2 AS instance_chain_id,
+                split_part(interface_chain_2, '.', 2) AS chain_asym_id,
+                interface_chain_2_residue_numbers AS residue_numbers,
+                interface_chain_2_residue_indices AS residue_indices
+            FROM read_parquet('{source.as_posix()}');
+
+            CREATE TEMP TABLE half_representatives AS
+            SELECT
+                min(system_id || '::side=' || side::VARCHAR)::VARCHAR
+                    AS half_interface_id,
+                entry_pdb_id,
+                arg_min(
+                    instance_chain_id,
+                    system_id || '::side=' || side::VARCHAR
+                )::VARCHAR AS instance_chain_id,
+                chain_asym_id,
+                residue_numbers,
+                residue_indices
+            FROM interface_sides
+            GROUP BY
+                entry_pdb_id,
+                chain_asym_id,
+                residue_numbers,
+                residue_indices;
+
+            CREATE TEMP TABLE side_membership AS
+            SELECT
+                sides.entry_pdb_id,
+                sides.system_id,
+                sides.side,
+                representatives.half_interface_id
+            FROM interface_sides AS sides
+            INNER JOIN half_representatives AS representatives
+              ON sides.entry_pdb_id = representatives.entry_pdb_id
+             AND sides.chain_asym_id = representatives.chain_asym_id
+             AND sides.residue_numbers = representatives.residue_numbers
+             AND sides.residue_indices = representatives.residue_indices;
+
+            CREATE TEMP TABLE interface_members AS
+            SELECT
+                entry_pdb_id,
+                system_id,
+                max(half_interface_id) FILTER (WHERE side = 1)
+                    AS side_1_half_interface_id,
+                max(half_interface_id) FILTER (WHERE side = 2)
+                    AS side_2_half_interface_id
+            FROM side_membership
+            GROUP BY entry_pdb_id, system_id;
+
+            CREATE TEMP TABLE representative_groups AS
+            SELECT
+                entry_pdb_id,
+                least(side_1_half_interface_id, side_2_half_interface_id)
+                    AS half_interface_1_id,
+                greatest(side_1_half_interface_id, side_2_half_interface_id)
+                    AS half_interface_2_id,
+                min(system_id)::VARCHAR AS representative_system_id
+            FROM interface_members
+            GROUP BY entry_pdb_id, half_interface_1_id, half_interface_2_id;
+
+            COPY (
+                SELECT * FROM half_representatives
+                ORDER BY half_interface_id
+            ) TO '{temporary_paths["half_interfaces"].as_posix()}' (
+                FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 100000
+            );
+
+            COPY (
+                SELECT
+                    representative_system_id,
+                    entry_pdb_id,
+                    half_interface_1_id,
+                    half_interface_2_id
+                FROM representative_groups
+                ORDER BY representative_system_id
+            ) TO '{temporary_paths["interfaces"].as_posix()}' (
+                FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 100000
+            );
+
+            COPY (
+                SELECT
+                    members.system_id,
+                    groups.representative_system_id,
+                    members.side_1_half_interface_id,
+                    members.side_2_half_interface_id
+                FROM interface_members AS members
+                INNER JOIN representative_groups AS groups
+                  ON members.entry_pdb_id = groups.entry_pdb_id
+                 AND least(
+                        members.side_1_half_interface_id,
+                        members.side_2_half_interface_id
+                     ) = groups.half_interface_1_id
+                 AND greatest(
+                        members.side_1_half_interface_id,
+                        members.side_2_half_interface_id
+                     ) = groups.half_interface_2_id
+                ORDER BY members.system_id
+            ) TO '{temporary_paths["membership"].as_posix()}' (
+                FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 100000
+            );
+            """
+        )
+    )
+    connection.close()
+    LOG.info(
+        "make_interface_representatives: DuckDB normalization complete "
+        "elapsed_seconds=%.1f",
+        time.monotonic() - started,
+    )
+
+    expected = {
+        "half_interfaces": (
+            INTERFACE_HALF_REPRESENTATIVES_RELATIVE,
+            schemas.INTERFACE_HALF_REPRESENTATIVE_SCHEMA,
+        ),
+        "interfaces": (
+            INTERFACE_REPRESENTATIVES_RELATIVE,
+            schemas.INTERFACE_REPRESENTATIVE_SCHEMA,
+        ),
+        "membership": (
+            INTERFACE_MEMBERSHIP_RELATIVE,
+            schemas.INTERFACE_MEMBERSHIP_SCHEMA,
+        ),
+    }
+    for key, (_, schema) in expected.items():
+        observed = pq.read_schema(temporary_paths[key])
+        if not observed.equals(schema):
+            rmtree(working_root)
+            raise ValueError(
+                f"interface representative {key} has unexpected schema: {observed}"
+            )
+    membership_rows = pq.ParquetFile(temporary_paths["membership"]).metadata.num_rows
+    source_rows = pq.ParquetFile(source).metadata.num_rows
+    if membership_rows != source_rows:
+        rmtree(working_root)
+        raise ValueError(
+            "interface membership is incomplete: "
+            f"rows={membership_rows}/{source_rows}"
+        )
+    if _interface_representative_source_signature(data_dir) != source_signature:
+        rmtree(working_root)
+        raise RuntimeError("interface annotation changed while making representatives")
+
+    outputs: dict[str, dict[str, int | str]] = {}
+    for key, (relative, _) in expected.items():
+        target = data_dir / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        install = target.with_suffix(target.suffix + ".tmp")
+        copyfile(temporary_paths[key], install)
+        install.replace(target)
+        outputs[key] = _interface_representative_output_signature(target)
+    rmtree(working_root)
+    payload = {
+        "status": "complete",
+        "source": source_signature,
+        "outputs": outputs,
+        "interface_count": source_rows,
+        "representative_interface_count": pq.ParquetFile(
+            data_dir / INTERFACE_REPRESENTATIVES_RELATIVE
+        ).metadata.num_rows,
+        "representative_half_interface_count": pq.ParquetFile(
+            data_dir / INTERFACE_HALF_REPRESENTATIVES_RELATIVE
+        ).metadata.num_rows,
+    }
+    _write_json_atomic(data_dir / INTERFACE_REPRESENTATIVES_MANIFEST_RELATIVE, payload)
+    LOG.info(
+        "make_interface_representatives: complete interfaces=%d "
+        "representatives=%d half_representatives=%d reduction=%.2fx "
+        "elapsed_seconds=%.1f",
+        payload["interface_count"],
+        payload["representative_interface_count"],
+        payload["representative_half_interface_count"],
+        (
+            payload["interface_count"] / payload["representative_interface_count"]
+            if payload["representative_interface_count"]
+            else 1.0
+        ),
+        time.monotonic() - started,
+    )
+    return payload
+
+
+def _ligand_pocket_representative_source_signatures(
+    data_dir: Path,
+) -> dict[str, dict[str, int | str]]:
+    signatures: dict[str, dict[str, int | str]] = {}
+    for name in ["annotation_table.parquet", "entry_chains.parquet"]:
+        path = data_dir / "index" / name
+        stat = path.stat()
+        signatures[name] = {
+            "name": name,
+            "size": stat.st_size,
+            "mtime_ns": stat.st_mtime_ns,
+        }
+    return signatures
+
+
+def _completed_ligand_pocket_representatives(
+    data_dir: Path,
+) -> dict[str, Any] | None:
+    manifest = _read_json(data_dir / LIGAND_POCKET_REPRESENTATIVES_MANIFEST_RELATIVE)
+    expected = {
+        "representatives": (
+            LIGAND_POCKET_REPRESENTATIVES_RELATIVE,
+            schemas.LIGAND_POCKET_REPRESENTATIVE_SCHEMA,
+        ),
+        "membership": (
+            LIGAND_POCKET_MEMBERSHIP_RELATIVE,
+            schemas.LIGAND_POCKET_MEMBERSHIP_SCHEMA,
+        ),
+    }
+    try:
+        if (
+            manifest is None
+            or manifest.get("sources")
+            != _ligand_pocket_representative_source_signatures(data_dir)
+        ):
+            return None
+        for key, (relative, schema) in expected.items():
+            path = data_dir / relative
+            if (
+                not pq.read_schema(path).equals(schema)
+                or manifest.get("outputs", {}).get(key)
+                != _interface_representative_output_signature(path)
+            ):
+                return None
+    except (OSError, TypeError, ValueError):
+        return None
+    return manifest
+
+
+def make_ligand_pocket_representatives(
+    *,
+    data_dir: Path,
+    scratch_dir: Path | None,
+    threads: int,
+    force_update: bool = False,
+) -> dict[str, Any]:
+    """Normalize exact protein-pocket copies while retaining ligand membership."""
+    current = _completed_ligand_pocket_representatives(data_dir)
+    if not force_update and current is not None:
+        LOG.info(
+            "make_ligand_pocket_representatives: reusing %d representatives "
+            "for %d scoreable ligands",
+            current["representative_ligand_count"],
+            current["ligand_count"],
+        )
+        return current
+
+    import duckdb
+
+    sources = _ligand_pocket_representative_source_signatures(data_dir)
+    annotation = data_dir / "index" / "annotation_table.parquet"
+    chains = data_dir / "index" / "entry_chains.parquet"
+    working_root = (scratch_dir or data_dir / "scratch") / "ligand-representatives"
+    if working_root.exists():
+        rmtree(working_root)
+    working_root.mkdir(parents=True)
+    temporary_paths = {
+        "representatives": working_root / LIGAND_POCKET_REPRESENTATIVES_RELATIVE.name,
+        "membership": working_root / LIGAND_POCKET_MEMBERSHIP_RELATIVE.name,
+    }
+    started = time.monotonic()
+    LOG.info("make_ligand_pocket_representatives: normalizing ligand pockets")
+    connection = duckdb.connect()
+    connection.sql(f"SET threads={max(1, threads)}")
+    connection.sql("SET memory_limit='64GB'")
+    connection.sql(f"SET temp_directory='{working_root.as_posix()}'")
+    connection.sql("SET preserve_insertion_order=false")
+    connection.sql(
+        dedent(
+            f"""
+            CREATE TEMP TABLE protein_receptors AS
+            SELECT entry_pdb_id, chain_asym_id
+            FROM read_parquet('{chains.as_posix()}')
+            WHERE chain_receptor_type = 'protein';
+
+            CREATE TEMP TABLE eligible_ligands AS
+            SELECT
+                entry_pdb_id,
+                system_id,
+                ligand_id,
+                ligand_asym_id,
+                coalesce(ligand_is_3d_score_able, false)
+                    AS ligand_is_3d_score_able,
+                ligand_protein_chains_asym_id,
+                ligand_neighboring_residues,
+                ligand_interactions
+            FROM read_parquet('{annotation.as_posix()}')
+            WHERE system_type = 'holo' AND ligand_is_proper;
+
+            CREATE TEMP TABLE receptor_sets AS
+            SELECT
+                ligands.entry_pdb_id,
+                ligands.ligand_id,
+                list_sort(list_distinct(list(receptors.chain_asym_id)))
+                    AS receptor_chain_asym_ids
+            FROM eligible_ligands AS ligands,
+                 unnest(ligands.ligand_protein_chains_asym_id)
+                    AS instances(instance_chain)
+            INNER JOIN protein_receptors AS receptors
+              ON ligands.entry_pdb_id = receptors.entry_pdb_id
+             AND split_part(instance_chain, '.', 2) = receptors.chain_asym_id
+            GROUP BY ligands.entry_pdb_id, ligands.ligand_id;
+
+            CREATE TEMP TABLE canonical_receptor_sets AS
+            SELECT
+                *,
+                min(ligand_id) OVER (
+                    PARTITION BY entry_pdb_id, receptor_chain_asym_ids
+                )::VARCHAR AS receptor_set_id
+            FROM receptor_sets;
+
+            CREATE TEMP TABLE normalized_pockets AS
+            SELECT
+                ligands.ligand_id,
+                list_sort(list_distinct(list(
+                    split_part(neighbor, '.', 2)
+                ))) AS pocket_residues
+            FROM eligible_ligands AS ligands
+            INNER JOIN canonical_receptor_sets AS receptor_sets USING (ligand_id),
+                 unnest(ligands.ligand_neighboring_residues)
+                    AS residues(neighbor)
+            WHERE list_contains(
+                receptor_sets.receptor_chain_asym_ids,
+                split_part(split_part(neighbor, '.', 2), '_', 1)
+            )
+            GROUP BY ligands.ligand_id;
+
+            CREATE TEMP TABLE normalized_interactions AS
+            SELECT
+                ligands.ligand_id,
+                list_sort(list(split_part(interaction, '.', 2))) AS interactions
+            FROM eligible_ligands AS ligands
+            INNER JOIN canonical_receptor_sets AS receptor_sets USING (ligand_id),
+                 unnest(ligands.ligand_interactions)
+                    AS interaction_rows(interaction)
+            WHERE list_contains(
+                receptor_sets.receptor_chain_asym_ids,
+                split_part(split_part(interaction, '.', 2), '_', 1)
+            )
+            GROUP BY ligands.ligand_id;
+
+            CREATE TEMP TABLE normalized_ligands AS
+            SELECT
+                ligands.entry_pdb_id,
+                ligands.system_id,
+                ligands.ligand_id,
+                ligands.ligand_asym_id,
+                ligands.ligand_is_3d_score_able,
+                receptors.receptor_set_id,
+                receptors.receptor_chain_asym_ids,
+                coalesce(pockets.pocket_residues, []::VARCHAR[])
+                    AS pocket_residues,
+                coalesce(interactions.interactions, []::VARCHAR[])
+                    AS interactions
+            FROM eligible_ligands AS ligands
+            INNER JOIN canonical_receptor_sets AS receptors USING (ligand_id)
+            LEFT JOIN normalized_pockets AS pockets USING (ligand_id)
+            LEFT JOIN normalized_interactions AS interactions USING (ligand_id);
+
+            CREATE TEMP TABLE representative_groups AS
+            SELECT
+                min(ligand_id)::VARCHAR AS representative_ligand_id,
+                arg_min(system_id, ligand_id)::VARCHAR AS representative_system_id,
+                entry_pdb_id,
+                ligand_asym_id,
+                ligand_is_3d_score_able,
+                receptor_set_id,
+                receptor_chain_asym_ids,
+                pocket_residues,
+                interactions
+            FROM normalized_ligands
+            GROUP BY
+                entry_pdb_id,
+                ligand_asym_id,
+                ligand_is_3d_score_able,
+                receptor_set_id,
+                receptor_chain_asym_ids,
+                pocket_residues,
+                interactions;
+
+            COPY (
+                SELECT * FROM representative_groups
+                ORDER BY representative_ligand_id
+            ) TO '{temporary_paths["representatives"].as_posix()}' (
+                FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 100000
+            );
+
+            COPY (
+                SELECT
+                    ligands.system_id,
+                    ligands.ligand_id,
+                    representatives.representative_system_id,
+                    representatives.representative_ligand_id
+                FROM normalized_ligands AS ligands
+                INNER JOIN representative_groups AS representatives
+                  ON ligands.entry_pdb_id = representatives.entry_pdb_id
+                 AND ligands.ligand_asym_id = representatives.ligand_asym_id
+                 AND ligands.ligand_is_3d_score_able
+                        = representatives.ligand_is_3d_score_able
+                 AND ligands.receptor_set_id = representatives.receptor_set_id
+                 AND ligands.receptor_chain_asym_ids
+                        = representatives.receptor_chain_asym_ids
+                 AND ligands.pocket_residues = representatives.pocket_residues
+                 AND ligands.interactions = representatives.interactions
+                ORDER BY ligands.ligand_id
+            ) TO '{temporary_paths["membership"].as_posix()}' (
+                FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 100000
+            );
+            """
+        )
+    )
+    connection.close()
+    LOG.info(
+        "make_ligand_pocket_representatives: DuckDB normalization complete "
+        "elapsed_seconds=%.1f",
+        time.monotonic() - started,
+    )
+
+    expected = {
+        "representatives": (
+            LIGAND_POCKET_REPRESENTATIVES_RELATIVE,
+            schemas.LIGAND_POCKET_REPRESENTATIVE_SCHEMA,
+        ),
+        "membership": (
+            LIGAND_POCKET_MEMBERSHIP_RELATIVE,
+            schemas.LIGAND_POCKET_MEMBERSHIP_SCHEMA,
+        ),
+    }
+    for key, (_, schema) in expected.items():
+        observed = pq.read_schema(temporary_paths[key])
+        if not observed.equals(schema):
+            rmtree(working_root)
+            raise ValueError(
+                f"ligand pocket representative {key} has unexpected schema: "
+                f"{observed}"
+            )
+    ligand_count = pq.ParquetFile(temporary_paths["membership"]).metadata.num_rows
+    representative_count = pq.ParquetFile(
+        temporary_paths["representatives"]
+    ).metadata.num_rows
+    if _ligand_pocket_representative_source_signatures(data_dir) != sources:
+        rmtree(working_root)
+        raise RuntimeError("entry indexes changed while making ligand representatives")
+
+    outputs: dict[str, dict[str, int | str]] = {}
+    for key, (relative, _) in expected.items():
+        target = data_dir / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        install = target.with_suffix(target.suffix + ".tmp")
+        copyfile(temporary_paths[key], install)
+        install.replace(target)
+        outputs[key] = _interface_representative_output_signature(target)
+    rmtree(working_root)
+    payload = {
+        "status": "complete",
+        "sources": sources,
+        "outputs": outputs,
+        "ligand_count": ligand_count,
+        "representative_ligand_count": representative_count,
+    }
+    _write_json_atomic(
+        data_dir / LIGAND_POCKET_REPRESENTATIVES_MANIFEST_RELATIVE,
+        payload,
+    )
+    LOG.info(
+        "make_ligand_pocket_representatives: complete ligands=%d "
+        "representatives=%d reduction=%.2fx elapsed_seconds=%.1f",
+        ligand_count,
+        representative_count,
+        ligand_count / representative_count if representative_count else 1.0,
+        time.monotonic() - started,
+    )
+    return payload
+
+
 def _completed_alignment_chain_lookup(
     data_dir: Path,
 ) -> dict[str, int | str] | None:
     lookup = data_dir / ALIGNMENT_CHAIN_LOOKUP_RELATIVE
     manifest = data_dir / ALIGNMENT_CHAIN_LOOKUP_MANIFEST_RELATIVE
     try:
+        if (
+            _completed_ligand_pocket_representatives(data_dir) is None
+            or _completed_interface_representatives(data_dir) is None
+        ):
+            return None
         stat = lookup.stat()
         columns = set(pq.read_schema(lookup).names)
         input_signatures = _alignment_chain_lookup_input_signatures(data_dir)
@@ -667,8 +1275,8 @@ def _alignment_chain_lookup_input_signatures(
 ) -> dict[str, dict[str, int | str]]:
     signatures: dict[str, dict[str, int | str]] = {}
     for name in [
-        "annotation_table.parquet",
-        "interface_annotation_table.parquet",
+        LIGAND_POCKET_REPRESENTATIVES_RELATIVE.name,
+        INTERFACE_HALF_REPRESENTATIVES_RELATIVE.name,
         "entry_chains.parquet",
     ]:
         path = data_dir / "index" / name
@@ -704,6 +1312,22 @@ def _write_alignment_chain_lookup_manifest(data_dir: Path) -> None:
     temporary.replace(manifest)
 
 
+def _refresh_representative_source_manifests(data_dir: Path) -> None:
+    """Record index-only enrichments without rebuilding unchanged representatives."""
+    ligand_manifest_path = data_dir / LIGAND_POCKET_REPRESENTATIVES_MANIFEST_RELATIVE
+    ligand_manifest = _read_json(ligand_manifest_path)
+    interface_manifest_path = data_dir / INTERFACE_REPRESENTATIVES_MANIFEST_RELATIVE
+    interface_manifest = _read_json(interface_manifest_path)
+    if ligand_manifest is None or interface_manifest is None:
+        raise RuntimeError("representative source manifests disappeared during finalization")
+    ligand_manifest["sources"] = _ligand_pocket_representative_source_signatures(
+        data_dir
+    )
+    interface_manifest["source"] = _interface_representative_source_signature(data_dir)
+    _write_json_atomic(ligand_manifest_path, ligand_manifest)
+    _write_json_atomic(interface_manifest_path, interface_manifest)
+
+
 def make_alignment_chain_lookup(
     *,
     data_dir: Path,
@@ -712,6 +1336,18 @@ def make_alignment_chain_lookup(
     force_update: bool = False,
 ) -> Path:
     """Build the compact chain and selected-residue map used by every shard."""
+    make_ligand_pocket_representatives(
+        data_dir=data_dir,
+        scratch_dir=scratch_dir,
+        threads=threads,
+        force_update=force_update,
+    )
+    make_interface_representatives(
+        data_dir=data_dir,
+        scratch_dir=scratch_dir,
+        threads=threads,
+        force_update=force_update,
+    )
     lookup = data_dir / ALIGNMENT_CHAIN_LOOKUP_RELATIVE
     if not force_update and _completed_alignment_chain_lookup(data_dir) is not None:
         manifest = data_dir / ALIGNMENT_CHAIN_LOOKUP_MANIFEST_RELATIVE
@@ -727,8 +1363,10 @@ def make_alignment_chain_lookup(
     working_root.mkdir(exist_ok=True, parents=True)
     temporary = working_root / lookup.name
     temporary.unlink(missing_ok=True)
-    annotation = (data_dir / "index" / "annotation_table.parquet").as_posix()
-    interfaces = (data_dir / "index" / "interface_annotation_table.parquet").as_posix()
+    ligand_representatives = (
+        data_dir / LIGAND_POCKET_REPRESENTATIVES_RELATIVE
+    ).as_posix()
+    interfaces = (data_dir / INTERFACE_HALF_REPRESENTATIVES_RELATIVE).as_posix()
     chains = (data_dir / "index" / "entry_chains.parquet").as_posix()
     con = duckdb.connect()
     con.sql(f"set threads={max(1, threads)};")
@@ -747,33 +1385,24 @@ def make_alignment_chain_lookup(
                 ),
                 ligand_pocket_residues AS (
                     SELECT
-                        a.entry_pdb_id,
-                        split_part(split_part(neighbor, '_', 1), '.', 2)
-                            AS chain_asym_id,
+                        representatives.entry_pdb_id,
+                        split_part(neighbor, '_', 1) AS chain_asym_id,
                         CAST(split_part(neighbor, '_', 2) AS INTEGER)
                             AS residue_number,
                         CAST(split_part(neighbor, '_', 3) AS INTEGER)
                             AS residue_index
-                    FROM read_parquet('{annotation}') AS a,
-                    UNNEST(a.ligand_neighboring_residues) AS residues(neighbor)
-                    WHERE a.ligand_is_proper
+                    FROM read_parquet('{ligand_representatives}')
+                        AS representatives,
+                    UNNEST(representatives.pocket_residues)
+                        AS residues(neighbor)
                 ),
                 interface_residues AS (
                     SELECT
                         entry_pdb_id,
-                        split_part(interface_chain_1, '.', 2) AS chain_asym_id,
-                        unnest(interface_chain_1_residue_numbers)
+                        chain_asym_id,
+                        unnest(residue_numbers)
                             AS residue_number,
-                        unnest(interface_chain_1_residue_indices)
-                            AS residue_index
-                    FROM read_parquet('{interfaces}')
-                    UNION ALL
-                    SELECT
-                        entry_pdb_id,
-                        split_part(interface_chain_2, '.', 2) AS chain_asym_id,
-                        unnest(interface_chain_2_residue_numbers)
-                            AS residue_number,
-                        unnest(interface_chain_2_residue_indices)
+                        unnest(residue_indices)
                             AS residue_index
                     FROM read_parquet('{interfaces}')
                 ),
@@ -1556,9 +2185,19 @@ def repair_batch_scores(
             load_entries=False,
         )
         scorer.shape_score_threads = threads
-    for repair in repairs:
+    started = time.perf_counter()
+    for index, repair in enumerate(repairs, start=1):
         pdb_id = str(repair["pdb_id"])
         mode = str(repair["repair_mode"])
+        query_started = time.perf_counter()
+        LOG.info(
+            "score repair progress: query=%d/%d pdb_id=%s mode=%s targets=%d",
+            index,
+            len(repairs),
+            pdb_id,
+            mode,
+            len(repair.get("target_pdb_ids", [])),
+        )
         if mode == "drop":
             (
                 data_dir / "dbs" / "subdbs" / "search_db=holo" / f"{pdb_id}.parquet"
@@ -1592,7 +2231,7 @@ def repair_batch_scores(
                 },
                 defer_ligand_3d=True,
             )
-        elif mode == "targets":
+        elif mode in {"targets", "bounded"}:
             if scorer is None:
                 raise RuntimeError("score repair unexpectedly lacks a scorer")
             scorer.repair_score_df_targets(
@@ -1600,9 +2239,39 @@ def repair_batch_scores(
                 pdb_id,
                 affected_target_entries=set(map(str, repair["target_pdb_ids"])),
                 scratch_dir=scratch_dir,
+                allow_missing=mode == "bounded",
+                query_system_ids=(
+                    set(map(str, repair["query_system_ids"]))
+                    if mode == "bounded"
+                    else None
+                ),
+                query_ligand_ids=(
+                    set(map(str, repair["query_ligand_ids"]))
+                    if mode == "bounded"
+                    else None
+                ),
+                target_system_ids=(
+                    set(map(str, repair["target_system_ids"]))
+                    if mode == "bounded"
+                    else None
+                ),
+                target_ligand_ids=(
+                    set(map(str, repair["target_ligand_ids"]))
+                    if mode == "bounded"
+                    else None
+                ),
             )
         else:
             raise ValueError(f"unknown score repair mode: {mode!r}")
+        LOG.info(
+            "score repair complete: query=%d/%d pdb_id=%s "
+            "query_seconds=%.1f elapsed_seconds=%.1f",
+            index,
+            len(repairs),
+            pdb_id,
+            time.perf_counter() - query_started,
+            time.perf_counter() - started,
+        )
 
 
 def _ligand_3d_candidate_shard_paths(data_dir: Path, shard: str) -> tuple[Path, Path]:
@@ -1655,11 +2324,13 @@ def scatter_ligand_3d_candidate_shards(
     *, data_dir: Path, batch_size: int
 ) -> list[list[str]]:
     """Group protein-score query shards for candidate-file consolidation."""
-    from plinder.data.pipeline.score import active_scoring_query_ids
+    from plinder.data.pipeline.score import published_scoring_query_ids
 
     if batch_size < 1:
         raise ValueError("batch size must be positive")
-    shards = sorted({pdb_id[1:3] for pdb_id in active_scoring_query_ids(data_dir)})
+    shards = sorted(
+        {pdb_id[1:3] for pdb_id in published_scoring_query_ids(data_dir)}
+    )
     return [
         shards[start : start + batch_size]
         for start in range(0, len(shards), batch_size)
@@ -1674,13 +2345,13 @@ def collate_ligand_3d_candidates(
     threads: int,
 ) -> list[Path]:
     """Consolidate per-PDB positive-pocket candidates into query shards."""
-    from plinder.data.pipeline.score import active_scoring_query_ids
+    from plinder.data.pipeline.score import published_scoring_query_ids
 
     if threads < 1:
         raise ValueError("threads must be positive")
     import duckdb
 
-    active_queries = active_scoring_query_ids(data_dir)
+    active_queries = published_scoring_query_ids(data_dir)
     scratch_dir.mkdir(exist_ok=True, parents=True)
     outputs: list[Path] = []
     for shard in shards:
@@ -1928,11 +2599,13 @@ def scatter_ligand_3d_query_shards(
     *, data_dir: Path, batch_size: int
 ) -> list[list[str]]:
     """Group query shards that contain planned canonical ligand pairs."""
-    from plinder.data.pipeline.score import active_scoring_query_ids
+    from plinder.data.pipeline.score import published_scoring_query_ids
 
     if batch_size < 1:
         raise ValueError("batch size must be positive")
-    shards = sorted({pdb_id[1:3] for pdb_id in active_scoring_query_ids(data_dir)})
+    shards = sorted(
+        {pdb_id[1:3] for pdb_id in published_scoring_query_ids(data_dir)}
+    )
     return [
         shards[start : start + batch_size]
         for start in range(0, len(shards), batch_size)
@@ -2103,7 +2776,7 @@ def merge_ligand_3d_scores(
     reuse_cached_pairs: bool = False,
 ) -> list[Path]:
     """Publish complete V3 scores directly as immutable query shards."""
-    from plinder.data.pipeline.score import active_scoring_query_ids
+    from plinder.data.pipeline.score import published_scoring_query_ids
 
     if threads < 1:
         raise ValueError("threads must be positive")
@@ -2127,7 +2800,7 @@ def merge_ligand_3d_scores(
     scratch_dir.mkdir(exist_ok=True, parents=True)
     output_dir = data_dir / "scores" / "search_db=holo"
     output_dir.mkdir(exist_ok=True, parents=True)
-    active_queries = active_scoring_query_ids(data_dir)
+    active_queries = published_scoring_query_ids(data_dir)
     thresholds = {
         metric: float(
             scorer_cfg.minimum_thresholds.get(metric, scorer_cfg.minimum_threshold)
@@ -3026,10 +3699,11 @@ def finalize_index(*, data_dir: Path) -> None:
     lookup_was_current = _completed_alignment_chain_lookup(data_dir) is not None
     utils.finalize_index(data_dir=data_dir)
     # finalize_index only adds ligand and cluster annotations; it preserves the
-    # entry, chain, and pocket fields from which the lookup was built. Refresh
-    # that one input signature so an otherwise valid mapped release does not
-    # become stale merely because cluster columns were published.
+    # entry, chain, pocket, and interface fields from which the normalized
+    # inputs were built. Refresh those source signatures so an otherwise valid
+    # mapped release does not become stale merely because clusters were published.
     if lookup_was_current:
+        _refresh_representative_source_manifests(data_dir)
         _write_alignment_chain_lookup_manifest(data_dir)
     utils.create_nonredundant_dataset(data_dir=data_dir)
     collate.finalize_repair_marker(data_dir)

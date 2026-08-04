@@ -15,6 +15,33 @@ def _component_partition(labels: pd.DataFrame) -> set[frozenset[str]]:
     }
 
 
+def _write_interface_cluster_universe(
+    index_dir: Path, interface_ids: list[str]
+) -> None:
+    """Write identity representative metadata for focused cluster tests."""
+    pd.DataFrame(
+        {"representative_system_id": interface_ids}
+    ).to_parquet(index_dir / "interface_representatives.parquet", index=False)
+    half_ids = [
+        f"{system_id}::side={side}" for system_id in interface_ids for side in (1, 2)
+    ]
+    pd.DataFrame({"half_interface_id": half_ids}).to_parquet(
+        index_dir / "interface_half_representatives.parquet", index=False
+    )
+    pd.DataFrame(
+        {
+            "system_id": interface_ids,
+            "representative_system_id": interface_ids,
+            "side_1_half_interface_id": [
+                f"{system_id}::side=1" for system_id in interface_ids
+            ],
+            "side_2_half_interface_id": [
+                f"{system_id}::side=2" for system_id in interface_ids
+            ],
+        }
+    ).to_parquet(index_dir / "interface_membership.parquet", index=False)
+
+
 def test_exact_threshold_components_preserve_bridge_edges_across_shards():
     from plinder.data.clusters import (
         count_crossing_component_edges,
@@ -447,6 +474,7 @@ def test_interface_clusters_reuse_reciprocal_and_directed_cover_pipeline(tmp_pat
         index_dir / "interface_annotation_table.parquet",
         index=False,
     )
+    _write_interface_cluster_universe(index_dir, interfaces)
     pd.DataFrame(
         {
             "query_system": ["i1", "i2", "i1", "i4"],
@@ -568,6 +596,49 @@ def test_interface_clusters_reuse_reciprocal_and_directed_cover_pipeline(tmp_pat
     assert summary["artifact_count"] == 3
 
 
+def test_interface_node_universe_contains_only_scoring_representatives(tmp_path):
+    from plinder.data.clusters import (
+        component_node_universe,
+        prepare_component_node_universe,
+    )
+
+    index_dir = tmp_path / "index"
+    index_dir.mkdir()
+    pd.DataFrame({"system_id": ["i1", "i2"]}).to_parquet(
+        index_dir / "interface_annotation_table.parquet", index=False
+    )
+    pd.DataFrame({"representative_system_id": ["i1"]}).to_parquet(
+        index_dir / "interface_representatives.parquet", index=False
+    )
+    half_ids = ["i1::side=1", "i1::side=2"]
+    pd.DataFrame({"half_interface_id": half_ids}).to_parquet(
+        index_dir / "interface_half_representatives.parquet", index=False
+    )
+    pd.DataFrame(
+        {
+            "system_id": ["i1", "i2"],
+            "representative_system_id": ["i1", "i1"],
+            "side_1_half_interface_id": [half_ids[0], half_ids[0]],
+            "side_2_half_interface_id": [half_ids[1], half_ids[1]],
+        }
+    ).to_parquet(index_dir / "interface_membership.parquet", index=False)
+
+    report = prepare_component_node_universe(tmp_path, entity_type="interface")
+
+    assert report["interface_count"] == 1
+    assert report["interface_side_count"] == 2
+    assert component_node_universe(
+        data_dir=tmp_path,
+        metric="interface_qcov",
+        entity_type="interface",
+    )[0] == ["i1"]
+    assert component_node_universe(
+        data_dir=tmp_path,
+        metric="interface_side_qcov",
+        entity_type="interface",
+    )[0] == half_ids
+
+
 def test_interface_side_clusters_use_independent_side_nodes(tmp_path):
     from plinder.data.clusters import (
         component_node_universe,
@@ -585,6 +656,7 @@ def test_interface_side_clusters_use_independent_side_nodes(tmp_path):
         index_dir / "interface_annotation_table.parquet",
         index=False,
     )
+    _write_interface_cluster_universe(index_dir, ["i1", "i2"])
     pd.DataFrame(
         {
             "query_system": ["i1::side=1", "i2::side=2"],
@@ -655,6 +727,7 @@ def test_empty_interface_universe_publishes_typed_empty_clusters(tmp_path):
         index_dir / "interface_annotation_table.parquet",
         index=False,
     )
+    _write_interface_cluster_universe(index_dir, [])
     prepare_component_node_universe(tmp_path, entity_type="interface")
     plan = prepare_symmetric_edge_plan(
         data_dir=tmp_path,
@@ -751,6 +824,7 @@ def test_interface_cluster_plan_requires_scores_for_nonempty_universe(tmp_path):
         index_dir / "interface_annotation_table.parquet",
         index=False,
     )
+    _write_interface_cluster_universe(index_dir, ["i1"])
     prepare_component_node_universe(tmp_path, entity_type="interface")
 
     with pytest.raises(

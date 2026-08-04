@@ -104,6 +104,82 @@ INTERFACE_QCOV_EXPORT_SCHEMA = pa.schema(
     ]
 )
 
+INTERFACE_HALF_REPRESENTATIVE_SCHEMA = pa.schema(
+    [
+        ("half_interface_id", pa.string()),
+        ("entry_pdb_id", pa.string()),
+        ("instance_chain_id", pa.string()),
+        ("chain_asym_id", pa.string()),
+        ("residue_numbers", pa.list_(pa.int32())),
+        ("residue_indices", pa.list_(pa.int32())),
+    ]
+)
+
+INTERFACE_REPRESENTATIVE_SCHEMA = pa.schema(
+    [
+        ("representative_system_id", pa.string()),
+        ("entry_pdb_id", pa.string()),
+        ("half_interface_1_id", pa.string()),
+        ("half_interface_2_id", pa.string()),
+    ]
+)
+
+INTERFACE_MEMBERSHIP_SCHEMA = pa.schema(
+    [
+        ("system_id", pa.string()),
+        ("representative_system_id", pa.string()),
+        ("side_1_half_interface_id", pa.string()),
+        ("side_2_half_interface_id", pa.string()),
+    ]
+)
+
+LIGAND_POCKET_REPRESENTATIVE_SCHEMA = pa.schema(
+    [
+        ("representative_ligand_id", pa.string()),
+        ("representative_system_id", pa.string()),
+        ("entry_pdb_id", pa.string()),
+        ("ligand_asym_id", pa.string()),
+        ("ligand_is_3d_score_able", pa.bool_()),
+        ("receptor_set_id", pa.string()),
+        ("receptor_chain_asym_ids", pa.list_(pa.string())),
+        ("pocket_residues", pa.list_(pa.string())),
+        ("interactions", pa.list_(pa.string())),
+    ]
+)
+
+LIGAND_POCKET_MEMBERSHIP_SCHEMA = pa.schema(
+    [
+        ("system_id", pa.string()),
+        ("ligand_id", pa.string()),
+        ("representative_system_id", pa.string()),
+        ("representative_ligand_id", pa.string()),
+    ]
+)
+
+LIGAND_POCKET_SCORE_QUERY_SCHEMA = pa.schema(
+    [
+        ("entry_pdb_id", pa.string()),
+        ("system_id", pa.string()),
+        ("ligand_id", pa.string()),
+        ("representative_system_id", pa.string()),
+        ("representative_ligand_id", pa.string()),
+        ("shard", pa.string()),
+    ]
+)
+
+LIGAND_POCKET_QCOV_REPRESENTATIVE_SCHEMA = pa.schema(
+    [
+        ("query_system", pa.string()),
+        ("query_ligand_id", pa.string()),
+        ("target_system", pa.string()),
+        ("target_ligand_id", pa.string()),
+        ("protein_mapping", pa.string()),
+        ("protein_mapper", pa.string()),
+        ("source", pa.string()),
+        ("pocket_qcov", pa.float64()),
+    ]
+)
+
 LIGAND_3D_CANDIDATE_SCHEMA = pa.schema(
     [
         ("query_system", pa.string()),

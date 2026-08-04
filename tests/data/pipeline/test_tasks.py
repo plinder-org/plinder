@@ -20,14 +20,49 @@ from plinder.data.pipeline.config import LigandConfig
 def _write_alignment_chain_lookup(data_dir: Path) -> None:
     index = data_dir / "index"
     index.mkdir(exist_ok=True, parents=True)
-    for name in [
-        "annotation_table.parquet",
-        "interface_annotation_table.parquet",
-        "entry_chains.parquet",
-    ]:
-        path = index / name
-        if not path.is_file():
-            pd.DataFrame({"entry_pdb_id": ["1abc"]}).to_parquet(path, index=False)
+    annotation = index / "annotation_table.parquet"
+    if not annotation.is_file():
+        schema = pa.schema(
+            [
+                ("entry_pdb_id", pa.string()),
+                ("system_id", pa.string()),
+                ("system_type", pa.string()),
+                ("ligand_id", pa.string()),
+                ("ligand_asym_id", pa.string()),
+                ("ligand_is_proper", pa.bool_()),
+                ("ligand_is_3d_score_able", pa.bool_()),
+                ("ligand_protein_chains_asym_id", pa.list_(pa.string())),
+                ("ligand_neighboring_residues", pa.list_(pa.string())),
+                ("ligand_interactions", pa.list_(pa.string())),
+            ]
+        )
+        pq.write_table(pa.Table.from_pylist([], schema=schema), annotation)
+    interface = index / "interface_annotation_table.parquet"
+    if not interface.is_file():
+        _write_empty_interface_index(index)
+    chains = index / "entry_chains.parquet"
+    if not chains.is_file():
+        pd.DataFrame(
+            {
+                "entry_pdb_id": ["1abc"],
+                "chain_asym_id": ["A"],
+                "chain_auth_id": ["A"],
+                "chain_receptor_type": ["protein"],
+            }
+        ).to_parquet(chains, index=False)
+    scratch = data_dir / "normalized-input-scratch"
+    tasks.make_ligand_pocket_representatives(
+        data_dir=data_dir,
+        scratch_dir=scratch,
+        threads=1,
+        force_update=True,
+    )
+    tasks.make_interface_representatives(
+        data_dir=data_dir,
+        scratch_dir=scratch,
+        threads=1,
+        force_update=True,
+    )
     lookup = data_dir / tasks.ALIGNMENT_CHAIN_LOOKUP_RELATIVE
     pd.DataFrame(
         {
@@ -46,6 +81,413 @@ def _write_empty_interface_index(index: Path) -> None:
         pa.Table.from_pylist([], schema=INTERFACE_ANNOTATION_SCHEMA),
         index / "interface_annotation_table.parquet",
     )
+
+
+def test_make_ligand_pocket_representatives_collapses_assembly_copies(
+    tmp_path,
+):
+    from plinder.data.pipeline.score import (
+        LIGAND_POCKET_SCORE_WORK_RELATIVE,
+        SCORE_WORK_RELATIVE,
+        plan_ligand_pocket_scoring,
+    )
+
+    index = tmp_path / "index"
+    index.mkdir()
+    pd.DataFrame(
+        {
+            "entry_pdb_id": ["1abc", "1abc"],
+            "chain_asym_id": ["A", "N"],
+            "chain_receptor_type": ["protein", "dna"],
+        }
+    ).to_parquet(index / "entry_chains.parquet", index=False)
+    pd.DataFrame(
+        {
+            "entry_pdb_id": ["1abc"] * 3,
+            "system_id": ["system-1", "system-2", "system-3"],
+            "system_type": ["holo"] * 3,
+            "ligand_id": ["ligand-1", "ligand-2", "ligand-3"],
+            "ligand_asym_id": ["L"] * 3,
+            "ligand_is_proper": [True] * 3,
+            "ligand_is_3d_score_able": [True] * 3,
+            "ligand_protein_chains_asym_id": [
+                ["1.A", "1.N"],
+                ["2.A", "2.N"],
+                ["1.A"],
+            ],
+            "system_protein_chains_asym_id": [
+                ["1.A", "1.N"],
+                ["2.A", "2.N"],
+                ["1.A"],
+            ],
+            "ligand_neighboring_residues": [
+                ["1.A_10_0_10", "1.N_20_0_20"],
+                ["2.A_10_0_10", "2.N_20_0_20"],
+                ["1.A_11_1_11"],
+            ],
+            "ligand_interactions": [
+                ["1.A_10_hbond", "1.N_20_hbond"],
+                ["2.A_10_hbond", "2.N_20_hbond"],
+                ["1.A_11_hydrophobic"],
+            ],
+        }
+    ).to_parquet(index / "annotation_table.parquet", index=False)
+
+    report = tasks.make_ligand_pocket_representatives(
+        data_dir=tmp_path,
+        scratch_dir=tmp_path / "scratch",
+        threads=1,
+    )
+    assert report["ligand_count"] == 3
+    assert report["representative_ligand_count"] == 2
+    representatives = pd.read_parquet(
+        tmp_path / tasks.LIGAND_POCKET_REPRESENTATIVES_RELATIVE
+    ).set_index("representative_ligand_id")
+    assert representatives.loc["ligand-1", "receptor_chain_asym_ids"] == ["A"]
+    assert representatives.loc["ligand-1", "receptor_set_id"] == "ligand-1"
+    assert representatives.loc["ligand-1", "pocket_residues"] == ["A_10_0_10"]
+    assert representatives.loc["ligand-1", "interactions"] == ["A_10_hbond"]
+    membership = pd.read_parquet(
+        tmp_path / tasks.LIGAND_POCKET_MEMBERSHIP_RELATIVE
+    ).set_index("ligand_id")
+    assert membership.loc["ligand-2", "representative_ligand_id"] == "ligand-1"
+    assert membership.loc["ligand-3", "representative_ligand_id"] == "ligand-3"
+    assert (
+        tasks.make_ligand_pocket_representatives(
+            data_dir=tmp_path,
+            scratch_dir=tmp_path / "scratch",
+            threads=1,
+        )
+        == report
+    )
+    active_work = tmp_path / SCORE_WORK_RELATIVE
+    active_work.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame({"pdb_id": ["1abc"]}).to_parquet(active_work, index=False)
+    score_plan = plan_ligand_pocket_scoring(
+        tmp_path,
+        scratch_dir=tmp_path / "score-plan-scratch",
+        threads=1,
+        memory_limit="1GB",
+        max_query_protein_chains=1,
+        max_query_proper_ligand_chains=1,
+    )
+    assert score_plan["query_ligand_count"] == 3
+    assert score_plan["query_representative_ligand_count"] == 2
+    query_work = pd.read_parquet(tmp_path / LIGAND_POCKET_SCORE_WORK_RELATIVE)
+    assert set(query_work["ligand_id"]) == {"ligand-1", "ligand-2", "ligand-3"}
+
+
+def test_pocket_chain_assignment_is_lexicographically_optimal():
+    from plinder.core.scores.metrics import maximum_weight_bipartite_assignment
+
+    pocket_coverage = {
+        ("A", "X"): 0,
+        ("A", "Y"): 1,
+        ("B", "X"): 1,
+        ("B", "Y"): 0,
+    }
+    protein_similarity = {
+        ("A", "X"): 1.0,
+        ("A", "Y"): 0.1,
+        ("B", "X"): 0.1,
+        ("B", "Y"): 1.0,
+    }
+    assert maximum_weight_bipartite_assignment(
+        ["A", "B"],
+        ["X", "Y"],
+        pocket_coverage,
+        secondary_weights=protein_similarity,
+    ) == [("A", "Y"), ("B", "X")]
+    assert maximum_weight_bipartite_assignment(
+        ["A", "B"],
+        ["X", "Y"],
+        {pair: 1 for pair in pocket_coverage},
+        secondary_weights=protein_similarity,
+    ) == [("A", "X"), ("B", "Y")]
+
+
+def test_ligand_pocket_qcov_uses_pocket_optimal_receptor_mapping(tmp_path):
+    from plinder.data.pipeline.score import (
+        SCORE_WORK_RELATIVE,
+        materialize_ligand_3d_pair_candidates,
+        score_ligand_pocket_qcov_representatives,
+        score_ligand_pocket_qcov_shards,
+    )
+
+    representatives = pa.Table.from_pylist(
+        [
+            {
+                "representative_ligand_id": "query-ligand",
+                "representative_system_id": "query-system",
+                "entry_pdb_id": "1abc",
+                "ligand_asym_id": "L",
+                "ligand_is_3d_score_able": True,
+                "receptor_set_id": "query-receptors",
+                "receptor_chain_asym_ids": ["A", "B"],
+                "pocket_residues": ["A_1_0_1", "B_2_1_2"],
+                "interactions": [],
+            },
+            {
+                "representative_ligand_id": "target-ligand",
+                "representative_system_id": "target-system",
+                "entry_pdb_id": "2def",
+                "ligand_asym_id": "M",
+                "ligand_is_3d_score_able": True,
+                "receptor_set_id": "target-receptors",
+                "receptor_chain_asym_ids": ["X", "Y"],
+                "pocket_residues": ["X_10_0_10", "Y_20_1_20"],
+                "interactions": [],
+            },
+        ],
+        schema=schemas.LIGAND_POCKET_REPRESENTATIVE_SCHEMA,
+    )
+    representative_path = tmp_path / tasks.LIGAND_POCKET_REPRESENTATIVES_RELATIVE
+    representative_path.parent.mkdir(parents=True)
+    pq.write_table(representatives, representative_path)
+    work_path = tmp_path / SCORE_WORK_RELATIVE
+    work_path.parent.mkdir(parents=True)
+    pd.DataFrame({"pdb_id": ["1abc"]}).to_parquet(work_path, index=False)
+
+    alignment_path = tasks._alignment_release_path(
+        data_dir=tmp_path,
+        search_db="holo",
+        alignment_type="foldseek",
+        shard="ab",
+    )
+    alignment_path.parent.mkdir(parents=True)
+    rows = [
+        {
+            "query_entry": "1abc",
+            "target_entry": "2def",
+            "query_chain_mapped": "A",
+            "target_chain_mapped": "X",
+            "source": "foldseek",
+            "qcov": 1.0,
+            "fident": 1.0,
+            "seqsim": 1.0,
+            "query_selected_residue_numbers": [1],
+            "target_selected_residue_numbers": [99],
+            "selected_residue_identity": bytes([1]),
+            # A missing whole-chain tie-break must not discard valid pocket
+            # coverage or abort a production shard.
+            "lddt": None,
+        },
+        {
+            "query_entry": "1abc",
+            "target_entry": "2def",
+            "query_chain_mapped": "B",
+            "target_chain_mapped": "Y",
+            "source": "foldseek",
+            "qcov": 1.0,
+            "fident": 1.0,
+            "seqsim": 1.0,
+            "query_selected_residue_numbers": [2],
+            "target_selected_residue_numbers": [99],
+            "selected_residue_identity": bytes([1]),
+            "lddt": 0.9,
+        },
+        {
+            "query_entry": "1abc",
+            "target_entry": "2def",
+            "query_chain_mapped": "A",
+            "target_chain_mapped": "Y",
+            "source": "foldseek",
+            "qcov": 1.0,
+            "fident": 1.0,
+            "seqsim": 1.0,
+            "query_selected_residue_numbers": [1],
+            "target_selected_residue_numbers": [20],
+            "selected_residue_identity": bytes([1]),
+            "lddt": 0.2,
+        },
+        {
+            "query_entry": "1abc",
+            "target_entry": "2def",
+            "query_chain_mapped": "B",
+            "target_chain_mapped": "X",
+            "source": "foldseek",
+            "qcov": 1.0,
+            "fident": 1.0,
+            "seqsim": 1.0,
+            "query_selected_residue_numbers": [2],
+            "target_selected_residue_numbers": [10],
+            "selected_residue_identity": bytes([1]),
+            "lddt": 0.1,
+        },
+    ]
+    pq.write_table(
+        pa.Table.from_pylist(
+            rows,
+            schema=schemas.mapped_alignment_schema(alignment_type="foldseek"),
+        ),
+        alignment_path,
+    )
+    mmseqs_alignment_path = tasks._alignment_release_path(
+        data_dir=tmp_path,
+        search_db="holo",
+        alignment_type="mmseqs",
+        shard="ab",
+    )
+    mmseqs_alignment_path.parent.mkdir(parents=True)
+    mmseqs_rows = [
+        {
+            "query_entry": "1abc",
+            "target_entry": "2def",
+            "query_chain_mapped": "A",
+            "target_chain_mapped": "X",
+            "source": "mmseqs",
+            "qcov": 1.0,
+            "fident": 0.95,
+            "seqsim": 0.95,
+            "query_selected_residue_numbers": [1],
+            "target_selected_residue_numbers": [10],
+            "selected_residue_identity": bytes([1]),
+        },
+        {
+            "query_entry": "1abc",
+            "target_entry": "2def",
+            "query_chain_mapped": "B",
+            "target_chain_mapped": "Y",
+            "source": "mmseqs",
+            "qcov": 1.0,
+            "fident": 0.9,
+            "seqsim": 0.9,
+            "query_selected_residue_numbers": [2],
+            "target_selected_residue_numbers": [99],
+            "selected_residue_identity": bytes([1]),
+        },
+    ]
+    pq.write_table(
+        pa.Table.from_pylist(
+            mmseqs_rows,
+            schema=schemas.mapped_alignment_schema(alignment_type="mmseqs"),
+        ),
+        mmseqs_alignment_path,
+    )
+
+    output = tmp_path / "pocket-qcov.parquet"
+    report = score_ligand_pocket_qcov_representatives(
+        tmp_path,
+        shard="ab",
+        output=output,
+        scratch_dir=tmp_path / "score-scratch",
+        query_representative_ligand_ids={"query-ligand"},
+        threads=1,
+        memory_limit="1GB",
+    )
+    assert report["row_count"] == 1
+    scores = pd.read_parquet(output)
+    assert scores.loc[0, "query_ligand_id"] == "query-ligand"
+    assert scores.loc[0, "target_ligand_id"] == "target-ligand"
+    assert scores.loc[0, "protein_mapping"] == "A:Y;B:X"
+    assert scores.loc[0, "protein_mapper"] == "foldseek"
+    assert scores.loc[0, "source"] == "foldseek"
+    assert scores.loc[0, "pocket_qcov"] == pytest.approx(1.0)
+
+    representative_manifest = (
+        tmp_path / tasks.LIGAND_POCKET_REPRESENTATIVES_MANIFEST_RELATIVE
+    )
+    representative_manifest.parent.mkdir(parents=True, exist_ok=True)
+    representative_manifest.write_text('{"status": "complete"}\n')
+    from plinder.data.pipeline.score import (
+        LIGAND_POCKET_SCORE_PLAN_RELATIVE,
+        LIGAND_POCKET_SCORE_WORK_RELATIVE,
+    )
+
+    query_work = pa.Table.from_pylist(
+        [
+            {
+                "entry_pdb_id": "1abc",
+                "system_id": "query-system",
+                "ligand_id": "query-ligand",
+                "representative_system_id": "query-system",
+                "representative_ligand_id": "query-ligand",
+                "shard": "ab",
+            }
+        ],
+        schema=schemas.LIGAND_POCKET_SCORE_QUERY_SCHEMA,
+    )
+    pq.write_table(query_work, tmp_path / LIGAND_POCKET_SCORE_WORK_RELATIVE)
+    (tmp_path / LIGAND_POCKET_SCORE_PLAN_RELATIVE).write_text(
+        '{"status": "complete"}\n'
+    )
+    result = score_ligand_pocket_qcov_shards(
+        tmp_path,
+        shards=["ab"],
+        scratch_dir=tmp_path / "shard-scratch",
+        threads=1,
+        memory_limit="1GB",
+    )
+    assert result["shard_count"] == 1
+    assert result["shards"][0]["status"] == "complete"
+    full_candidate = {
+        "query_system": "query-system",
+        "query_ligand_id": "query-ligand",
+        "query_entry": "1abc",
+        "query_ligand_asym_id": "L",
+        "target_system": "target-system",
+        "target_ligand_id": "target-ligand",
+        "target_entry": "2def",
+        "target_ligand_asym_id": "M",
+        "protein_mapping": "A:Y;B:X",
+        "protein_mapper": "foldseek",
+        "pocket_qcov": 1.0,
+    }
+    full_candidate_path = (
+        tmp_path / "scores/ligand_3d_candidate_shards/shard=ab.parquet"
+    )
+    full_candidate_path.parent.mkdir(parents=True, exist_ok=True)
+    pq.write_table(
+        pa.Table.from_pylist(
+            [full_candidate], schema=schemas.LIGAND_3D_CANDIDATE_SCHEMA
+        ),
+        full_candidate_path,
+    )
+    full_candidate_stat = full_candidate_path.stat()
+    full_candidate_path.with_suffix(".json").write_text(
+        json.dumps(
+            {
+                "shard": "ab",
+                "inputs": [],
+                "output": {
+                    "path": str(full_candidate_path.resolve()),
+                    "size": full_candidate_stat.st_size,
+                    "mtime_ns": full_candidate_stat.st_mtime_ns,
+                    "rows": 1,
+                },
+                "pair_output": {},
+            }
+        )
+    )
+    candidate_report = materialize_ligand_3d_pair_candidates(
+        tmp_path,
+        shards=["ab"],
+        scratch_dir=tmp_path / "candidate-scratch",
+        threads=1,
+        memory_limit="1GB",
+        force_update=True,
+    )
+    assert candidate_report["row_count"] == 1
+    candidates = pq.read_table(
+        tmp_path / "scores/ligand_3d_pair_candidate_shards/shard=ab.parquet"
+    ).to_pylist()
+    assert candidates == [
+        {
+            "query_entry": "1abc",
+            "query_ligand_asym_id": "L",
+            "target_entry": "2def",
+            "target_ligand_asym_id": "M",
+            "pocket_qcov": pytest.approx(1.0),
+        }
+    ]
+    cached = score_ligand_pocket_qcov_shards(
+        tmp_path,
+        shards=["ab"],
+        scratch_dir=tmp_path / "shard-scratch",
+        threads=1,
+        memory_limit="1GB",
+    )
+    assert cached["shards"][0]["status"] == "cached"
 
 
 def _write_alignment_mapping_manifest(
@@ -506,6 +948,11 @@ def test_scatter_protein_scoring_uses_v3_chain_index(tmp_path) -> None:
         ),
         index_dir / "interface_annotation_table.parquet",
     )
+    tasks.make_interface_representatives(
+        data_dir=tmp_path,
+        scratch_dir=tmp_path / "scratch",
+        threads=1,
+    )
 
     assert tasks.scatter_protein_scoring(
         data_dir=tmp_path,
@@ -525,6 +972,7 @@ def test_scatter_protein_scoring_uses_v3_chain_index(tmp_path) -> None:
     assert plan["query_count"] == 3
     assert plan["protein_chain_count"] == 4
     assert "interface_annotation" in plan
+    assert "interface_half_annotation" in plan
 
 
 def test_protein_scoring_plan_and_alignment_finalization(tmp_path, monkeypatch) -> None:
@@ -1044,6 +1492,75 @@ def test_score_repair_plans_full_and_target_only_queries(
     assert list(repair_by_query["1abc"]["target_pdb_ids"]) == ["2def", "4jkl"]
 
 
+def test_bounded_score_repair_reverses_only_existing_target_candidates(
+    tmp_path: Path,
+) -> None:
+    from plinder.data.pipeline.score import (
+        BOUNDED_SCORE_REPAIR_RELATIVE,
+        DROPPED_QUERY_RELATIVE,
+        plan_bounded_score_repair,
+        published_scoring_query_ids,
+    )
+
+    dropped = tmp_path / DROPPED_QUERY_RELATIVE
+    dropped.parent.mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "pdb_id": ["2def", "3ghi", "4jkl"],
+            "stage": ["derived_scoring", "mapping", "derived_scoring"],
+        }
+    ).to_parquet(dropped, index=False)
+    work = tmp_path / "manifests/protein_scoring_work.parquet"
+    pd.DataFrame({"pdb_id": ["1abc", "2def", "5mno"]}).to_parquet(work, index=False)
+    candidate_dir = tmp_path / "scores/ligand_3d_candidate_shards"
+    candidate_dir.mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "query_entry": ["1abc", "5mno", "1abc", "5mno"],
+            "target_entry": ["2def", "2def", "4jkl", "3ghi"],
+            "query_system": ["1abc_s1", "5mno_s1", "1abc_s2", "5mno_s2"],
+            "query_ligand_id": ["1abc_l1", "5mno_l1", "1abc_l2", "5mno_l2"],
+            "target_system": ["2def_s1", "2def_s2", "4jkl_s1", "3ghi_s1"],
+            "target_ligand_id": ["2def_l1", "2def_l2", "4jkl_l1", "3ghi_l1"],
+            "pocket_qcov": [0.5, 0.8, 0.0, 0.7],
+        }
+    ).to_parquet(candidate_dir / "shard=ab.parquet", index=False)
+
+    requested = tmp_path / "bounded.txt"
+    requested.write_text("2def\n4jkl\n")
+    report = plan_bounded_score_repair(
+        tmp_path, pdb_manifest=requested, batch_size=1, threads=1
+    )
+
+    assert report["requested_query_count"] == 2
+    assert report["planned_query_count"] == 1
+    assert report["queries_without_incoming_candidates"] == ["4jkl"]
+    plan = pd.read_parquet(tmp_path / BOUNDED_SCORE_REPAIR_RELATIVE)
+    assert plan.loc[0, "pdb_id"] == "2def"
+    assert plan.loc[0, "repair_mode"] == "bounded"
+    assert list(plan.loc[0, "target_pdb_ids"]) == ["1abc", "5mno"]
+    assert list(plan.loc[0, "query_system_ids"]) == ["2def_s1", "2def_s2"]
+    assert list(plan.loc[0, "query_ligand_ids"]) == ["2def_l1", "2def_l2"]
+    assert list(plan.loc[0, "target_system_ids"]) == ["1abc_s1", "5mno_s1"]
+    assert list(plan.loc[0, "target_ligand_ids"]) == ["1abc_l1", "5mno_l1"]
+    assert published_scoring_query_ids(tmp_path) == {"1abc", "5mno"}
+    score = tmp_path / "dbs/subdbs/search_db=holo/2def.parquet"
+    candidate = (
+        tmp_path / "scores/ligand_3d_candidates/search_db=holo/shard=de/2def.parquet"
+    )
+    score.parent.mkdir(parents=True)
+    candidate.parent.mkdir(parents=True)
+    score.touch()
+    candidate.touch()
+    assert published_scoring_query_ids(tmp_path) == {"1abc", "2def", "5mno"}
+    invalid = tmp_path / "invalid-bounded.txt"
+    invalid.write_text("3ghi\n")
+    with pytest.raises(ValueError, match="derived-scoring query drops"):
+        plan_bounded_score_repair(
+            tmp_path, pdb_manifest=invalid, batch_size=1, threads=1
+        )
+
+
 def test_repair_batch_scores_uses_full_and_target_only_paths(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1056,9 +1573,21 @@ def test_repair_batch_scores_uses_full_and_target_only_paths(
             calls.append(("full", pdb_id, kwargs["defer_ligand_3d"]))
 
         def repair_score_df_targets(
-            self, _data_dir, pdb_id, *, affected_target_entries, **_kwargs
+            self,
+            _data_dir,
+            pdb_id,
+            *,
+            affected_target_entries,
+            allow_missing=False,
+            **_kwargs,
         ):
-            calls.append(("targets", pdb_id, affected_target_entries))
+            calls.append(
+                (
+                    "bounded" if allow_missing else "targets",
+                    pdb_id,
+                    affected_target_entries,
+                )
+            )
 
     monkeypatch.setattr(
         tasks.utils,
@@ -1074,6 +1603,15 @@ def test_repair_batch_scores_uses_full_and_target_only_paths(
                 "repair_mode": "targets",
                 "target_pdb_ids": ["2def"],
             },
+            {
+                "pdb_id": "3ghi",
+                "repair_mode": "bounded",
+                "target_pdb_ids": ["1abc"],
+                "query_system_ids": ["3ghi_s1"],
+                "query_ligand_ids": ["3ghi_l1"],
+                "target_system_ids": ["1abc_s1"],
+                "target_ligand_ids": ["1abc_l1"],
+            },
             {"pdb_id": "2def", "repair_mode": "full", "target_pdb_ids": []},
         ],
         scorer_cfg=SimpleNamespace(sub_databases=["holo"]),
@@ -1083,6 +1621,7 @@ def test_repair_batch_scores_uses_full_and_target_only_paths(
 
     assert calls == [
         ("targets", "1abc", {"2def"}),
+        ("bounded", "3ghi", {"1abc"}),
         ("full", "2def", True),
     ]
 
@@ -1564,8 +2103,10 @@ def test_ligand_3d_retries_require_and_reassemble_every_retry(tmp_path) -> None:
 def test_ligand_3d_plan_deduplicates_positive_pocket_candidates(tmp_path) -> None:
     from plinder.data.pipeline.score import (
         LIGAND_3D_WORK_RELATIVE,
+        LIGAND_POCKET_QCOV_REPRESENTATIVE_ROOT_RELATIVE,
         SCORE_WORK_RELATIVE,
         _ligand_3d_batch,
+        materialize_ligand_3d_pair_candidates,
         plan_ligand_3d_batches,
         plan_protein_scoring,
     )
@@ -1651,6 +2192,82 @@ def test_ligand_3d_plan_deduplicates_positive_pocket_candidates(tmp_path) -> Non
     assert compact.loc[
         compact["target_entry"] == "2def", "pocket_qcov"
     ].item() == pytest.approx(0.75)
+    representatives = [
+        {
+            "representative_ligand_id": ligand_id,
+            "representative_system_id": system_id,
+            "entry_pdb_id": entry_id,
+            "ligand_asym_id": asym_id,
+            "ligand_is_3d_score_able": True,
+            "receptor_set_id": f"{entry_id}-receptor",
+            "receptor_chain_asym_ids": ["A"],
+            "pocket_residues": ["A_1_0_1"],
+            "interactions": [],
+        }
+        for ligand_id, system_id, entry_id, asym_id in [
+            ("1abc__1__1.B", "1abc_system", "1abc", "B"),
+            ("2def__1__1.Y", "2def_system", "2def", "Y"),
+            ("3ghi__1__1.Z", "3ghi_system", "3ghi", "Z"),
+        ]
+    ]
+    representative_path = tmp_path / tasks.LIGAND_POCKET_REPRESENTATIVES_RELATIVE
+    representative_path.parent.mkdir(parents=True, exist_ok=True)
+    pq.write_table(
+        pa.Table.from_pylist(
+            representatives,
+            schema=schemas.LIGAND_POCKET_REPRESENTATIVE_SCHEMA,
+        ),
+        representative_path,
+    )
+    normalized_score = (
+        tmp_path / LIGAND_POCKET_QCOV_REPRESENTATIVE_ROOT_RELATIVE / "shard=ab.parquet"
+    )
+    normalized_score.parent.mkdir(parents=True, exist_ok=True)
+    pq.write_table(
+        pa.Table.from_pylist(
+            [
+                {
+                    "query_system": "1abc_system",
+                    "query_ligand_id": "1abc__1__1.B",
+                    "target_system": target_system,
+                    "target_ligand_id": target_ligand,
+                    "protein_mapping": "A:A",
+                    "protein_mapper": "foldseek",
+                    "source": "foldseek",
+                    "pocket_qcov": pocket_qcov,
+                }
+                for target_system, target_ligand, pocket_qcov in [
+                    ("2def_system", "2def__1__1.Y", 0.8),
+                    ("3ghi_system", "3ghi__1__1.Z", 0.4),
+                ]
+            ],
+            schema=schemas.LIGAND_POCKET_QCOV_REPRESENTATIVE_SCHEMA,
+        ),
+        normalized_score,
+    )
+    materialize_ligand_3d_pair_candidates(
+        tmp_path,
+        shards=["ab"],
+        scratch_dir=tmp_path / "normalized-candidate-scratch",
+        threads=1,
+        memory_limit="1GB",
+        force_update=True,
+    )
+    pair_candidate = (
+        tmp_path / "scores/ligand_3d_pair_candidate_shards/shard=ab.parquet"
+    )
+    pair_stat = pair_candidate.stat()
+    candidate_manifest = json.loads(
+        pair_candidate.parent.parent.joinpath(
+            "ligand_3d_candidate_shards/shard=ab.json"
+        ).read_text()
+    )
+    assert candidate_manifest["pair_output"] == {
+        "path": str(pair_candidate.resolve()),
+        "size": pair_stat.st_size,
+        "mtime_ns": pair_stat.st_mtime_ns,
+        "rows": 2,
+    }
     # Packed candidate shards are self-contained planning inputs. The
     # per-query score files may be archived or unavailable after collation.
     (candidate_dir / "1abc.parquet").unlink()
@@ -2733,11 +3350,21 @@ def test_alignment_chain_lookup_compacts_mapping_inputs(tmp_path) -> None:
     pd.DataFrame(
         {
             "entry_pdb_id": ["1abc", "1abc"],
+            "system_id": [
+                "1abc__1__1.A__1.L",
+                "1abc__1__1.A__1.M",
+            ],
+            "system_type": ["holo", "holo"],
+            "ligand_id": ["1abc__1__1.L", "1abc__1__1.M"],
+            "ligand_asym_id": ["L", "M"],
             "ligand_is_proper": [True, False],
+            "ligand_is_3d_score_able": [True, False],
+            "ligand_protein_chains_asym_id": [["1.A"], ["1.A"]],
             "ligand_neighboring_residues": [
                 ["1.A_10_9_10", "1.A_11_10_11"],
                 ["1.A_99_98_99"],
             ],
+            "ligand_interactions": [["1.A_contact"], []],
         }
     ).to_parquet(index / "annotation_table.parquet", index=False)
     pd.DataFrame(
@@ -2830,8 +3457,14 @@ def test_alignment_chain_lookup_keeps_identity_when_only_system_rows_change(
         {
             "entry_pdb_id": ["1abc"],
             "system_id": ["1abc__1__1.A__1.B"],
+            "system_type": ["holo"],
+            "ligand_id": ["1abc__1__1.B"],
+            "ligand_asym_id": ["B"],
             "ligand_is_proper": [True],
+            "ligand_is_3d_score_able": [True],
+            "ligand_protein_chains_asym_id": [["1.A"]],
             "ligand_neighboring_residues": [["1.A_10_9_10"]],
+            "ligand_interactions": [["1.A_contact"]],
         }
     ).to_parquet(annotation, index=False)
     pd.DataFrame(
@@ -2874,8 +3507,15 @@ def test_alignment_chain_lookup_replaces_a_legacy_schema(tmp_path: Path) -> None
     pd.DataFrame(
         {
             "entry_pdb_id": ["1abc"],
+            "system_id": ["1abc__1__1.A__1.B"],
+            "system_type": ["holo"],
+            "ligand_id": ["1abc__1__1.B"],
+            "ligand_asym_id": ["B"],
             "ligand_is_proper": [True],
+            "ligand_is_3d_score_able": [True],
+            "ligand_protein_chains_asym_id": [["1.A"]],
             "ligand_neighboring_residues": [["1.A_10_9_10"]],
+            "ligand_interactions": [["1.A_contact"]],
         }
     ).to_parquet(index / "annotation_table.parquet", index=False)
     pd.DataFrame(
@@ -2918,11 +3558,19 @@ def test_finalize_index_preserves_current_alignment_lookup(
 ) -> None:
     _write_alignment_chain_lookup(tmp_path)
     annotation = tmp_path / "index" / "annotation_table.parquet"
+    interface = tmp_path / "index" / "interface_annotation_table.parquet"
 
     def enrich_index(*, data_dir: Path) -> None:
         frame = pd.read_parquet(data_dir / "index" / "annotation_table.parquet")
         frame["example_cluster"] = "c0"
         frame.to_parquet(data_dir / "index" / "annotation_table.parquet", index=False)
+        interface_frame = pd.read_parquet(
+            data_dir / "index" / "interface_annotation_table.parquet"
+        )
+        interface_frame["example_interface_cluster"] = "c0"
+        interface_frame.to_parquet(
+            data_dir / "index" / "interface_annotation_table.parquet", index=False
+        )
 
     monkeypatch.setattr(tasks.utils, "finalize_index", enrich_index)
     monkeypatch.setattr(
@@ -2931,6 +3579,7 @@ def test_finalize_index_preserves_current_alignment_lookup(
     tasks.finalize_index(data_dir=tmp_path)
 
     assert "example_cluster" in pd.read_parquet(annotation).columns
+    assert "example_interface_cluster" in pd.read_parquet(interface).columns
     assert tasks._completed_alignment_chain_lookup(tmp_path) is not None
 
 
@@ -2945,13 +3594,31 @@ def test_interface_cluster_columns_merge_into_interface_annotation(
             "entry_pdb_id": ["1abc", "2def"],
         }
     )
-    artifact_rows = pd.DataFrame(
+    index_dir = tmp_path / "index"
+    index_dir.mkdir()
+    representative = interfaces.loc[0, "system_id"]
+    side_nodes = [f"{representative}::side={side}" for side in (1, 2)]
+    pd.DataFrame({"representative_system_id": [representative]}).to_parquet(
+        index_dir / "interface_representatives.parquet", index=False
+    )
+    pd.DataFrame({"half_interface_id": side_nodes}).to_parquet(
+        index_dir / "interface_half_representatives.parquet", index=False
+    )
+    pd.DataFrame(
         {
             "system_id": interfaces["system_id"],
-            "label": ["c0", "c0"],
-            "metric": ["interface_qcov"] * 2,
-            "directed": [False] * 2,
-            "threshold": [50] * 2,
+            "representative_system_id": [representative, representative],
+            "side_1_half_interface_id": [side_nodes[0], side_nodes[0]],
+            "side_2_half_interface_id": [side_nodes[1], side_nodes[1]],
+        }
+    ).to_parquet(index_dir / "interface_membership.parquet", index=False)
+    artifact_rows = pd.DataFrame(
+        {
+            "system_id": [representative],
+            "label": ["c0"],
+            "metric": ["interface_qcov"],
+            "directed": [False],
+            "threshold": [50],
         }
     )
     for cluster in ["components", "communities"]:
@@ -2976,17 +3643,12 @@ def test_interface_cluster_columns_merge_into_interface_annotation(
         side_path.parent.mkdir(parents=True, exist_ok=True)
         pd.DataFrame(
             {
-                "system_id": [
-                    f"{interfaces.loc[0, 'system_id']}::side=1",
-                    f"{interfaces.loc[0, 'system_id']}::side=2",
-                    f"{interfaces.loc[1, 'system_id']}::side=1",
-                    f"{interfaces.loc[1, 'system_id']}::side=2",
-                ],
-                "label": ["c0", "c2", "c1", "c2"],
-                "metric": ["interface_side_qcov"] * 4,
-                "cluster": [cluster] * 4,
-                "directed": [False] * 4,
-                "threshold": [50] * 4,
+                "system_id": side_nodes,
+                "label": ["c0", "c2"],
+                "metric": ["interface_side_qcov"] * 2,
+                "cluster": [cluster] * 2,
+                "directed": [False] * 2,
+                "threshold": [50] * 2,
             }
         ).to_parquet(side_path, index=False)
     cover = (
@@ -2997,7 +3659,7 @@ def test_interface_cluster_columns_merge_into_interface_annotation(
     cover.parent.mkdir(parents=True)
     artifact_rows.assign(
         directed=True,
-        centroid_system_id=interfaces["system_id"],
+        centroid_system_id=[representative],
         similarity_to_centroid=100.0,
     ).to_parquet(cover, index=False)
     side_cover = (
@@ -3006,20 +3668,15 @@ def test_interface_cluster_columns_merge_into_interface_annotation(
         / "metric=interface_side_qcov/threshold=50.parquet"
     )
     side_cover.parent.mkdir(parents=True)
-    side_nodes = [
-        f"{system_id}::side={side}"
-        for system_id in interfaces["system_id"]
-        for side in (1, 2)
-    ]
     pd.DataFrame(
         {
             "system_id": side_nodes,
-            "label": ["c0", "c2", "c1", "c2"],
-            "metric": ["interface_side_qcov"] * 4,
-            "directed": [True] * 4,
-            "threshold": [50] * 4,
+            "label": ["c0", "c2"],
+            "metric": ["interface_side_qcov"] * 2,
+            "directed": [True] * 2,
+            "threshold": [50] * 2,
             "centroid_system_id": side_nodes,
-            "similarity_to_centroid": [100.0] * 4,
+            "similarity_to_centroid": [100.0] * 2,
         }
     ).to_parquet(side_cover, index=False)
 
@@ -3034,15 +3691,13 @@ def test_interface_cluster_columns_merge_into_interface_annotation(
     for kind in ["component", "community", "directed_set_cover"]:
         assert result[f"interface_side_qcov__50__chain_1_{kind}"].tolist() == [
             "c0",
-            "c1",
+            "c0",
         ]
         assert result[f"interface_side_qcov__50__chain_2_{kind}"].tolist() == [
             "c2",
             "c2",
         ]
 
-    index_dir = tmp_path / "index"
-    index_dir.mkdir()
     pd.DataFrame({"system_id": ["ligand-system"]}).to_parquet(
         index_dir / "annotation_table.parquet",
         index=False,
@@ -3246,6 +3901,11 @@ def test_clustering_plan_matches_slurm_array_bounds(tmp_path, monkeypatch):
         "plinder.data.pipeline.score.clusters.prepare_symmetric_edge_plan",
         lambda **kwargs: {"batches": [{}, {}, {}], "plan_hash": "test-plan"},
     )
+    universe_manifest = (
+        tmp_path / "ligand_clusters" / "reductions" / "node_universe.json"
+    )
+    universe_manifest.parent.mkdir(parents=True)
+    universe_manifest.write_text(json.dumps({"universe_hash": "test-universe"}))
 
     plan = plan_clustering(
         tmp_path,
@@ -3273,7 +3933,7 @@ def test_clustering_plan_matches_slurm_array_bounds(tmp_path, monkeypatch):
         thresholds=None,
         entity_type="interface",
     ) == (
-        ["interface_qcov", "interface_side_qcov"],
+        ["interface_qcov"],
         [100, 90, 70, 50, 30],
     )
 
@@ -3318,6 +3978,28 @@ def test_sucos_release_export_retains_scores_below_cluster_cutoff(tmp_path):
     (tmp_path / PLAN_RELATIVE).write_text(
         json.dumps({"manifest": _source_signature(manifest)})
     )
+    index = tmp_path / "index"
+    index.mkdir()
+    pd.DataFrame(
+        {
+            "entry_pdb_id": ["1abc", "2def", "3ghi", "4jkl"],
+            "system_id": [
+                "1abc_system",
+                "2def_system",
+                "3ghi_system",
+                "4jkl_system",
+            ],
+            "ligand_id": [
+                "1abc__1__1.B",
+                "2def__1__1.Y",
+                "3ghi__1__1.Z",
+                "4jkl__1__1.W",
+            ],
+            "system_type": ["holo"] * 4,
+            "ligand_is_proper": [True, True, True, False],
+            "ligand_is_3d_score_able": [True, True, False, True],
+        }
+    ).to_parquet(index / "annotation_table.parquet", index=False)
 
     rows = [
         ("ab", "1abc", "B", "2def", "Y", 0.2, 0.5),
@@ -3392,8 +4074,16 @@ def test_sucos_release_export_retains_scores_below_cluster_cutoff(tmp_path):
     )
 
     exported = pd.read_parquet(output)
-    assert sorted(exported["similarity"].tolist()) == [10, 40]
-    assert report["row_count"] == 2
+    assert sorted(exported["similarity"].tolist()) == [10, 40, 100, 100]
+    self_rows = exported[
+        exported["query_system"].eq(exported["target_system"])
+        & exported["query_ligand_id"].eq(exported["target_ligand_id"])
+    ]
+    assert sorted(self_rows["query_ligand_id"].tolist()) == [
+        "1abc__1__1.B",
+        "2def__1__1.Y",
+    ]
+    assert report["row_count"] == 4
     assert (
         finalize_sucos_shape_pocket_qcov_export(
             tmp_path,
@@ -3410,10 +4100,15 @@ def test_sucos_release_export_retains_scores_below_cluster_cutoff(tmp_path):
 def test_interface_score_shards_retain_side_coverages_and_compact_export(tmp_path):
     from plinder.data.pipeline.score import (
         INTERFACE_QCOV_EXPORT_RELATIVE,
+        _interface_score_repair_task_batches,
         _interface_score_shard_batch,
+        _source_signature,
         finalize_interface_qcov_scores,
+        finalize_interface_score_repair,
+        plan_interface_score_repair,
         plan_interface_scoring,
         plan_protein_scoring,
+        score_interface_qcov_repair_batch,
         score_interface_qcov_shards,
     )
 
@@ -3421,13 +4116,22 @@ def test_interface_score_shards_retain_side_coverages_and_compact_export(tmp_pat
     index.mkdir()
     pd.DataFrame(
         {
-            "entry_pdb_id": ["1abc", "1abc", "2def", "2def", "3ghi", "3ghi"],
-            "chain_asym_id": ["A", "B", "X", "Y", "C", "D"],
-            "chain_receptor_type": ["protein"] * 6,
-            "chain_is_holo": [True, True, True, True, False, False],
+            "entry_pdb_id": [
+                "1abc",
+                "1abc",
+                "1abc",
+                "2def",
+                "2def",
+                "3ghi",
+                "3ghi",
+            ],
+            "chain_asym_id": ["A", "B", "C", "X", "Y", "C", "D"],
+            "chain_receptor_type": ["protein"] * 7,
+            "chain_is_holo": [True, True, True, True, True, False, False],
         }
     ).to_parquet(index / "entry_chains.parquet", index=False)
     query_id = "1abc__1__1.A--1.B"
+    shared_half_id = "1abc__1__1.A--1.C"
     target_id = "2def__1__1.X--1.Y"
     pq.write_table(
         pa.Table.from_pylist(
@@ -3457,6 +4161,18 @@ def test_interface_score_shards_retain_side_coverages_and_compact_export(tmp_pat
                     "interface_num_contact_residue_pairs": 4,
                 },
                 {
+                    "entry_pdb_id": "1abc",
+                    "system_id": shared_half_id,
+                    "system_biounit_id": "1",
+                    "interface_chain_1": "1.A",
+                    "interface_chain_2": "1.C",
+                    "interface_chain_1_residue_numbers": [1, 2, 3, 4],
+                    "interface_chain_1_residue_indices": [0, 1, 2, 3],
+                    "interface_chain_2_residue_numbers": [7, 8],
+                    "interface_chain_2_residue_indices": [6, 7],
+                    "interface_num_contact_residue_pairs": 4,
+                },
+                {
                     "entry_pdb_id": "3ghi",
                     "system_id": "3ghi__1__1.C--1.D",
                     "system_biounit_id": "1",
@@ -3468,6 +4184,18 @@ def test_interface_score_shards_retain_side_coverages_and_compact_export(tmp_pat
                     "interface_chain_2_residue_indices": [3, 4, 5],
                     "interface_num_contact_residue_pairs": 3,
                 },
+                {
+                    "entry_pdb_id": "1abc",
+                    "system_id": "1abc__2__1.A--2.B",
+                    "system_biounit_id": "2",
+                    "interface_chain_1": "1.A",
+                    "interface_chain_2": "2.B",
+                    "interface_chain_1_residue_numbers": [1, 2, 3, 4],
+                    "interface_chain_1_residue_indices": [0, 1, 2, 3],
+                    "interface_chain_2_residue_numbers": [5, 6],
+                    "interface_chain_2_residue_indices": [4, 5],
+                    "interface_num_contact_residue_pairs": 4,
+                },
             ],
             schema=INTERFACE_ANNOTATION_SCHEMA,
         ),
@@ -3478,27 +4206,28 @@ def test_interface_score_shards_retain_side_coverages_and_compact_export(tmp_pat
     mapped_rows = {
         "ab": {
             "foldseek": [
-                ("A", "Y", [1, 2, 3, 4], [30, 40, 50, -1]),
-                ("B", "X", [5, 6], [10, 20]),
+                ("2def", "A", "Y", [1, 2, 3, 4], [30, 40, 50, -1]),
+                ("2def", "B", "X", [5, 6], [10, 20]),
+                ("1abc", "A", "A", [1, 2, 3, 4], [1, 2, 3, 4]),
+                ("1abc", "B", "C", [5, 6], [7, 8]),
+                ("1abc", "C", "B", [7, 8], [5, 6]),
             ],
             "mmseqs": [
-                ("A", "X", [1, 2, 3, 4], [10, 20, -1, -1]),
-                ("B", "Y", [5, 6], [30, 40]),
+                ("2def", "A", "X", [1, 2, 3, 4], [10, -1, -1, -1]),
+                ("2def", "B", "Y", [5, 6], [30, 40]),
             ],
         },
         "de": {
             "foldseek": [
-                ("X", "A", [10, 20], [1, -1]),
-                ("Y", "B", [30, 40, 50], [5, -1, -1]),
+                ("1abc", "X", "A", [10, 20], [1, -1]),
+                ("1abc", "Y", "B", [30, 40, 50], [5, -1, -1]),
             ]
         },
         "gh": {"foldseek": []},
     }
     for shard, backends in mapped_rows.items():
         for backend, values in backends.items():
-            query_entry, target_entry = (
-                ("1abc", "2def") if shard == "ab" else ("2def", "1abc")
-            )
+            query_entry = {"ab": "1abc", "de": "2def", "gh": "3ghi"}[shard]
             rows = [
                 {
                     "query_entry": query_entry,
@@ -3514,7 +4243,13 @@ def test_interface_score_shards_retain_side_coverages_and_compact_export(tmp_pat
                     "selected_residue_identity": bytes([1] * len(query_residues)),
                     **({"lddt": 1.0} if backend == "foldseek" else {}),
                 }
-                for query_chain, target_chain, query_residues, target_residues in values
+                for (
+                    target_entry,
+                    query_chain,
+                    target_chain,
+                    query_residues,
+                    target_residues,
+                ) in values
             ]
             path = tasks._alignment_release_path(
                 data_dir=tmp_path,
@@ -3542,8 +4277,14 @@ def test_interface_score_shards_retain_side_coverages_and_compact_export(tmp_pat
     )
 
     plan = plan_interface_scoring(tmp_path, batch_size=1)
-    assert plan["query_interface_count"] == 3
-    assert plan["target_interface_count"] == 3
+    assert plan["query_interface_count"] == 5
+    assert plan["query_representative_interface_count"] == 4
+    assert plan["target_interface_count"] == 5
+    assert plan["target_representative_interface_count"] == 4
+    membership = pd.read_parquet(
+        tmp_path / "index" / "interface_membership.parquet"
+    ).set_index("system_id")
+    assert membership.loc["1abc__2__1.A--2.B", "representative_system_id"] == query_id
     assert _interface_score_shard_batch(tmp_path, batch_index=0, batch_size=1) == ["ab"]
     assert _interface_score_shard_batch(tmp_path, batch_index=1, batch_size=1) == ["de"]
     assert _interface_score_shard_batch(tmp_path, batch_index=2, batch_size=1) == ["gh"]
@@ -3565,31 +4306,38 @@ def test_interface_score_shards_retain_side_coverages_and_compact_export(tmp_pat
     forward = forward_all[forward_all["metric"].eq("interface_qcov")].reset_index(
         drop=True
     )
-    assert forward.to_dict("records") == [
-        {
-            "query_system": query_id,
-            "target_system": target_id,
-            "mapping": "1.A:1.Y;1.B:1.X",
-            "source": "foldseek",
-            "metric": "interface_qcov",
-            "iface1_qcov": pytest.approx(0.75),
-            "iface2_qcov": pytest.approx(1.0),
-            "similarity": 75,
-        }
+    assert len(forward) == 3
+    cross_entry = forward[
+        forward["query_system"].eq(query_id) & forward["target_system"].eq(target_id)
+    ].iloc[0]
+    assert cross_entry["mapping"] == "1.A:1.Y;1.B:1.X"
+    assert cross_entry["source"] == "foldseek"
+    assert cross_entry["iface1_qcov"] == pytest.approx(0.75)
+    assert cross_entry["iface2_qcov"] == pytest.approx(1.0)
+    assert cross_entry["similarity"] == 75
+    shared_half_pairs = forward[
+        forward["query_system"].isin([query_id, shared_half_id])
+        & forward["target_system"].isin([query_id, shared_half_id])
     ]
+    assert set(
+        shared_half_pairs[
+            ["query_system", "target_system", "iface1_qcov", "iface2_qcov"]
+        ].itertuples(index=False, name=None)
+    ) == {
+        (query_id, shared_half_id, 1.0, 1.0),
+        (shared_half_id, query_id, 1.0, 1.0),
+    }
     side_scores = forward_all[
         forward_all["metric"].eq("interface_side_qcov")
     ].sort_values(["query_system", "target_system"])
-    assert side_scores[["query_system", "target_system", "similarity"]].to_dict(
+    target_side_scores = side_scores[
+        side_scores["target_system"].str.startswith(target_id)
+    ]
+    assert target_side_scores[["query_system", "target_system", "similarity"]].to_dict(
         "records"
     ) == [
         {
             "query_system": f"{query_id}::side=1",
-            "target_system": f"{target_id}::side=1",
-            "similarity": 50,
-        },
-        {
-            "query_system": f"{query_id}::side=1",
             "target_system": f"{target_id}::side=2",
             "similarity": 75,
         },
@@ -3604,6 +4352,7 @@ def test_interface_score_shards_retain_side_coverages_and_compact_export(tmp_pat
             "similarity": 100,
         },
     ]
+    assert side_scores["similarity"].min() >= 30
     assert side_scores["iface1_qcov"].isna().all()
     assert side_scores["iface2_qcov"].isna().all()
     reverse_all = pd.read_parquet(tmp_path / "interface_scores" / "shard=de.parquet")
@@ -3631,8 +4380,90 @@ def test_interface_score_shards_retain_side_coverages_and_compact_export(tmp_pat
         "iface2_qcov",
         "similarity",
     ]
-    assert sorted(release["similarity"].tolist()) == [17, 75]
-    assert report["row_count"] == 2
+    assert sorted(release["similarity"].tolist()) == [17, 75, 100, 100]
+    assert report["row_count"] == 4
+
+    expected_repaired = pd.read_parquet(
+        tmp_path / "interface_scores" / "shard=ab.parquet"
+    ).sort_values(["metric", "query_system", "target_system"], ignore_index=True)
+    (tmp_path / "interface_scores" / "shard=ab.parquet").unlink()
+    (tmp_path / "interface_scores" / "shard=ab.json").unlink()
+    repair_plan = plan_interface_score_repair(tmp_path, batch_size=1)
+    assert repair_plan["shard_count"] == 1
+    assert repair_plan["entry_count"] == 1
+    assert repair_plan["batch_count"] == 1
+    assert _interface_score_repair_task_batches(
+        tmp_path, task_index=0, batches_per_task=5
+    ) == [0]
+    assert (
+        _interface_score_repair_task_batches(tmp_path, task_index=1, batches_per_task=5)
+        == []
+    )
+    score_interface_qcov_repair_batch(
+        tmp_path,
+        batch_index=0,
+        batch_size=1,
+        scratch_dir=tmp_path / "repair-score-scratch",
+        threads=1,
+        memory_limit="1GB",
+    )
+    repair_report = finalize_interface_score_repair(
+        tmp_path,
+        scratch_dir=tmp_path / "repair-finalize-scratch",
+        threads=1,
+        memory_limit="1GB",
+    )
+    observed_repaired = pd.read_parquet(
+        tmp_path / "interface_scores" / "shard=ab.parquet"
+    ).sort_values(["metric", "query_system", "target_system"], ignore_index=True)
+    pd.testing.assert_frame_equal(observed_repaired, expected_repaired)
+    assert repair_report["row_count"] == len(expected_repaired)
+
+    # A selected-query repair updates only that query and retains unrelated
+    # rows already stored in the same physical shard.
+    score_path = tmp_path / "interface_scores" / "shard=ab.parquet"
+    stored = pq.read_table(score_path)
+    sentinel = stored.slice(0, 1)
+    query_index = sentinel.schema.get_field_index("query_system")
+    sentinel = sentinel.set_column(
+        query_index,
+        "query_system",
+        pa.array(["4abc__1__1.Q--1.R"]),
+    )
+    pq.write_table(pa.concat_tables([stored, sentinel]), score_path)
+    score_manifest_path = score_path.with_suffix(".json")
+    score_manifest = json.loads(score_manifest_path.read_text())
+    score_manifest["output"] = _source_signature(score_path)
+    score_manifest["rows"] = len(expected_repaired) + 1
+    score_manifest_path.write_text(json.dumps(score_manifest) + "\n")
+
+    query_manifest = tmp_path / "repair-queries.txt"
+    query_manifest.write_text("1abc\n")
+    targeted_plan = plan_interface_score_repair(
+        tmp_path,
+        batch_size=1,
+        query_manifest=query_manifest,
+    )
+    assert targeted_plan["repair_mode"] == "selected_queries"
+    assert targeted_plan["entry_count"] == 1
+    assert targeted_plan["query_manifest"] == _source_signature(query_manifest)
+    score_interface_qcov_repair_batch(
+        tmp_path,
+        batch_index=0,
+        batch_size=1,
+        scratch_dir=tmp_path / "targeted-repair-score-scratch",
+        threads=1,
+        memory_limit="1GB",
+    )
+    targeted_report = finalize_interface_score_repair(
+        tmp_path,
+        scratch_dir=tmp_path / "targeted-repair-finalize-scratch",
+        threads=1,
+        memory_limit="1GB",
+    )
+    targeted = pd.read_parquet(score_path)
+    assert targeted["query_system"].eq("4abc__1__1.Q--1.R").sum() == 1
+    assert targeted_report["row_count"] == len(expected_repaired) + 1
 
     alignment_manifest.write_text(
         json.dumps(
@@ -3644,8 +4475,10 @@ def test_interface_score_shards_retain_side_coverages_and_compact_export(tmp_pat
         + "\n"
     )
     dropped_plan = plan_interface_scoring(tmp_path, batch_size=1)
-    assert dropped_plan["query_interface_count"] == 2
-    assert dropped_plan["target_interface_count"] == 3
+    assert dropped_plan["query_interface_count"] == 4
+    assert dropped_plan["query_representative_interface_count"] == 3
+    assert dropped_plan["target_interface_count"] == 5
+    assert dropped_plan["target_representative_interface_count"] == 4
     assert pd.read_parquet(tmp_path / "manifests/interface_scoring_work.parquet")[
         "shard"
     ].tolist() == ["ab", "gh"]
@@ -3677,6 +4510,43 @@ def test_interface_score_cli_exposes_plan_array_and_finalizer(tmp_path):
     )
     assert shard.batch_index == 2
     assert shard.memory_limit == "12GB"
+    repair_plan = _parser().parse_args(
+        [
+            "plan-interface-score-repair",
+            str(tmp_path),
+            "--batch-size",
+            "25",
+            "--query-manifest",
+            str(tmp_path / "queries.txt"),
+        ]
+    )
+    assert repair_plan.batch_size == 25
+    assert repair_plan.query_manifest == tmp_path / "queries.txt"
+    repair_batch = _parser().parse_args(
+        [
+            "score-interface-repair-batches",
+            str(tmp_path),
+            "--batch-index",
+            "4",
+            "--batch-size",
+            "25",
+            "--scratch-dir",
+            str(tmp_path / "scratch"),
+            "--repair-batches-per-task",
+            "5",
+        ]
+    )
+    assert repair_batch.batch_index == 4
+    assert repair_batch.repair_batches_per_task == 5
+    repair_finalizer = _parser().parse_args(
+        [
+            "finalize-interface-score-repair",
+            str(tmp_path),
+            "--scratch-dir",
+            str(tmp_path / "scratch"),
+        ]
+    )
+    assert repair_finalizer.threads == 8
     finalized = _parser().parse_args(
         [
             "finalize-interface-scores",
@@ -3688,6 +4558,39 @@ def test_interface_score_cli_exposes_plan_array_and_finalizer(tmp_path):
         ]
     )
     assert finalized.output == tmp_path / "release.parquet"
+    ligand_plan = _parser().parse_args(
+        [
+            "plan-ligand-pocket-scores",
+            str(tmp_path),
+            "--scratch-dir",
+            str(tmp_path / "scratch"),
+            "--max-query-protein-chains",
+            "5",
+            "--max-query-proper-ligand-chains",
+            "7",
+        ]
+    )
+    assert ligand_plan.max_query_protein_chains == 5
+    assert ligand_plan.max_query_proper_ligand_chains == 7
+    ligand_shard = _parser().parse_args(
+        [
+            "score-ligand-pocket-shards",
+            str(tmp_path),
+            "--batch-index",
+            "2",
+            "--batch-size",
+            "3",
+            "--scratch-dir",
+            str(tmp_path / "scratch"),
+            "--memory-limit",
+            "12GB",
+            "--shard",
+            "qv",
+        ]
+    )
+    assert ligand_shard.batch_index == 2
+    assert ligand_shard.memory_limit == "12GB"
+    assert ligand_shard.shards == ["qv"]
     interface_clusters = _parser().parse_args(
         [
             "plan-clusters",
@@ -3822,6 +4725,9 @@ def test_v3_score_slurm_exposes_exact_clustering_stages():
     assert "score-interface-shards" in script
     assert "finalize-interface-scores)" in script
     assert "PLINDER_INTERFACE_SCORE_OUTPUT" in script
+    assert "plan-ligand-pocket-scores)" in script
+    assert "score-ligand-pocket-shards" in script
+    assert "plan-bounded-score-repair)" in script
     assert "plan-clusters)" in script
     assert "symmetric-edge-fragments|symmetric-edge-shards" in script
     assert "component-reductions|communities|directed-covers)" in script

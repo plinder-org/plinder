@@ -1,7 +1,7 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
 
-from plinder.data.pipeline import pipeline
+from plinder.data.pipeline import config, pipeline
 
 
 def test_pipeline_noop(tmp_path):
@@ -17,3 +17,12 @@ flow:
         config_file=conf.as_posix(), config_args=[], cached=False
     )
     pipe.run()
+
+
+def test_v3_pipeline_clusters_whole_interfaces_only():
+    cfg = config.get_config(
+        config={"data": {"plinder_iteration": "v3"}}, cached=False
+    )
+    pipe = pipeline.IngestPipeline(conf=cfg)
+
+    assert ("interface", ["interface_qcov"]) in pipe._cluster_entities()

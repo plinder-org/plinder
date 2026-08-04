@@ -112,6 +112,10 @@ class QualityCriteria:
 class System(DocBaseModel):
     pdb_id: str = Field(description="__PDB ID")
     biounit_id: str = Field(description="Biounit ID")
+    id_legacy: str = Field(
+        default="",
+        description="Historical system ID using global assembly-operation chain instances",
+    )
     ligands: list[Ligand] = Field(description="__List of Ligands in a systems")
     receptor_type: str = Field(
         description=(
@@ -736,6 +740,10 @@ class Entry(DocBaseModel):
     biounit_chain_ids: dict[str, list[str]] = Field(
         default_factory=dict,
         description="__Resolved biological-assembly chain instances by assembly ID",
+    )
+    biounit_legacy_chain_ids: dict[str, dict[str, str]] = Field(
+        default_factory=dict,
+        description="__Canonical-to-historical chain instance IDs by assembly ID",
     )
     symmetry_mate_contacts: SymmetryMateContacts = Field(
         default_factory=dict, description="__Symmetry mate contacts in the entry"
@@ -1366,6 +1374,12 @@ class Entry(DocBaseModel):
             entry.biounit_chain_ids[assembly_id] = sorted(
                 str(chain_id) for chain_id in np.unique(biounit.chain_id)
             )
+            entry.biounit_legacy_chain_ids[assembly_id] = {
+                str(chain_id): str(legacy_chain_id)
+                for chain_id, legacy_chain_id in zip(
+                    biounit.chain_id, biounit.legacy_chain_id
+                )
+            }
             spatial_index = BiounitSpatialIndex.from_atoms(
                 biounit,
                 max_spatial_radius,
@@ -1660,6 +1674,9 @@ class Entry(DocBaseModel):
         entry.biounit_chain_ids["1"] = sorted(
             str(chain_id) for chain_id in np.unique(biounit.chain_id)
         )
+        entry.biounit_legacy_chain_ids["1"] = {
+            chain_id: chain_id for chain_id in entry.biounit_chain_ids["1"]
+        }
         spatial_index = BiounitSpatialIndex.from_atoms(
             biounit,
             max(
@@ -2080,11 +2097,36 @@ class Entry(DocBaseModel):
         entry_data = self.format()
         for system in self.systems:
             annotation = self.systems[system]
+            legacy_mapping = self.biounit_legacy_chain_ids.get(
+                annotation.biounit_id, {}
+            )
+            legacy_protein_chains = sorted(
+                legacy_mapping.get(chain_id, chain_id)
+                for chain_id in annotation.protein_chains_asym_id
+            )
+            legacy_ligand_chains = sorted(
+                legacy_mapping.get(chain_id, chain_id)
+                for chain_id in annotation.ligand_chains
+            )
+            annotation.id_legacy = "__".join(
+                [
+                    annotation.pdb_id,
+                    annotation.biounit_id,
+                    "_".join(legacy_protein_chains),
+                    "_".join(legacy_ligand_chains),
+                ]
+            )
             system_data = annotation.format(
                 self.chains,
                 self.pass_criteria,
             )
             for ligand in self.systems[system].ligands:
+                legacy_instance_chain = legacy_mapping.get(
+                    ligand.instance_chain, ligand.instance_chain
+                )
+                ligand.id_legacy = "__".join(
+                    [ligand.pdb_id, ligand.biounit_id, legacy_instance_chain]
+                )
                 ligand_data = ligand.format(self.chains)
                 rows.append({**entry_data, **system_data, **ligand_data})
         return pd.DataFrame(rows)
