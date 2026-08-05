@@ -176,9 +176,11 @@ def test_ingest_one_pdb_writes_entry_outputs_and_metrics(
             validation_path: Path,
             *,
             save_folder: Path,
+            data_dir: Path,
         ) -> None:
             assert cif_path == cif_file
             assert validation_path == validation_file
+            assert data_dir == output_root.resolve()
             self.save_folder = save_folder
 
         def annotate(self) -> pd.DataFrame:

@@ -688,6 +688,7 @@ def ingest_one_pdb(
             annotation_options = dict(annotation_cfg or {})
             entry_options = dict(entry_cfg or {})
             entry_options.pop("save_folder", None)
+            entry_options.pop("data_dir", None)
             if entry_options:
                 annotation_options["entry_cfg"] = entry_options
             if interface_cfg:
@@ -696,6 +697,7 @@ def ingest_one_pdb(
                 cif_file,
                 validation_file,
                 save_folder=raw_entry_root,
+                data_dir=output_root,
                 **annotation_options,
             )
             annotation = (

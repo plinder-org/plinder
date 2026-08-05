@@ -27,6 +27,7 @@ class GetPlinderAnnotation:
         mmcif_file: Path,
         validation_xml: Path,
         save_folder: Optional[Path] = None,
+        data_dir: Optional[Path] = None,
         neighboring_residue_threshold: float = 6.0,
         neighboring_ligand_threshold: float = 4.0,
         min_polymer_size: int = 12,
@@ -37,7 +38,8 @@ class GetPlinderAnnotation:
     ) -> None:
         self.mmcif_file = mmcif_file
         self.validation_xml = Path(validation_xml)
-        self.save_folder = save_folder
+        self.save_folder = Path(save_folder) if save_folder is not None else None
+        self.data_dir = Path(data_dir) if data_dir is not None else None
         self.neighboring_residue_threshold = neighboring_residue_threshold
         self.neighboring_ligand_threshold = neighboring_ligand_threshold
         self.min_polymer_size = min_polymer_size
@@ -56,6 +58,7 @@ class GetPlinderAnnotation:
             min_polymer_size=self.min_polymer_size,
             min_shared_pocket_members=self.min_shared_pocket_members,
             save_folder=self.save_folder if include_ligands else None,
+            data_dir=self.data_dir if include_ligands else None,
             symmetry_mate_contact_threshold=self.symmetry_mate_contact_threshold,
             include_ligands=include_ligands,
             include_interfaces=include_interfaces,
@@ -65,6 +68,7 @@ class GetPlinderAnnotation:
         entry_cfg["include_ligands"] = include_ligands
         entry_cfg["include_interfaces"] = include_interfaces
         entry_cfg["save_folder"] = self.save_folder if include_ligands else None
+        entry_cfg["data_dir"] = self.data_dir if include_ligands else None
         interface_cfg = dict(self.interface_cfg or {})
         if interface_cfg:
             entry_cfg.update(
@@ -314,15 +318,19 @@ def cloud_save_annotation() -> None:
     entry_cfg = cast(Dict[str, Any], cfg.pop("entry"))
     annotation_cfg = cast(Dict[str, Any], cfg.pop("annotation"))
     interface_cfg = cast(Dict[str, Any], cfg.pop("interface"))
-    save_folder = entry_cfg.get("save_folder")
+    save_folder = entry_cfg.pop("save_folder", None)
+    data_dir = entry_cfg.pop("data_dir", None)
     if save_folder is not None:
         save_folder = Path(save_folder)
         save_folder.mkdir(exist_ok=True, parents=True)
-        entry_cfg["save_folder"] = save_folder
+    if data_dir is not None:
+        data_dir = Path(data_dir)
     LOG.info(f"annotating {cif}")
     gpa = GetPlinderAnnotation(
         cif,
         val,
+        save_folder=save_folder,
+        data_dir=data_dir,
         entry_cfg=entry_cfg,
         interface_cfg=interface_cfg,
         **annotation_cfg,

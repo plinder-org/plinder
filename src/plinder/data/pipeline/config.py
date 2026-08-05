@@ -253,6 +253,7 @@ class EntryConfig:
     min_polymer_size: int = 12
     plip_complex_threshold: float = 10.0
     min_shared_pocket_members: int = 3
+    data_dir: Optional[str] = None
     save_folder: Optional[str] = None
 
 

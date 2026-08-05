@@ -2160,7 +2160,11 @@ def test_disconnected_ligand_fix(cif_4nhc, mock_alternative_datasets):
 
 def test_binding_affinity(cif_4jvn, mock_alternative_datasets):
     entry_dir = mock_alternative_datasets("4jvn")
-    entry = Entry.from_cif_file(cif_4jvn, save_folder=entry_dir)
+    entry = Entry.from_cif_file(
+        cif_4jvn,
+        save_folder=entry_dir,
+        data_dir=entry_dir.parent.parent,
+    )
     target_value = 7.638272164
     affinity = 0.0
     for sys in entry.systems.values():

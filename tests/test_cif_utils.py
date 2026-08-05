@@ -464,6 +464,144 @@ def test_assign_handles_multi_instance_comp_id(boltz_cif, tmp_path):
 # ---------------------------------------------------------------------------
 
 
+def test_custom_cif_modes_distinguish_assembled_from_deposited_pdb(test_dir):
+    from plinder.data.annotations.aggregate_annotations import Entry
+
+    cif = test_dir / "interfaces/cm/pdb_00007cm8/pdb_00007cm8_xyz-enrich.cif.gz"
+    assembled = Entry.from_custom_cif_file(
+        pdb_id="custom_7cm8",
+        cif_file=cif,
+        structure_mode="as_is",
+        include_ligands=False,
+        include_interfaces=True,
+        interface_annotate_prodigy=False,
+    )
+    deposited = Entry.from_custom_cif_file(
+        pdb_id=None,
+        cif_file=cif,
+        structure_mode="pdb",
+        assembly_ids=["1"],
+        include_ligands=False,
+        include_interfaces=True,
+        interface_annotate_prodigy=False,
+    )
+
+    assert assembled.pdb_id == "custom_7cm8"
+    assert assembled.interfaces == []
+    assert deposited.pdb_id == "7cm8"
+    assert [interface.system_id for interface in deposited.interfaces] == [
+        "7cm8__1__1.A--2.A"
+    ]
+    assert set(deposited.biounit_chain_ids) == {"1"}
+
+
+def test_custom_as_is_mode_detects_interface_in_supplied_coordinates(test_dir):
+    from plinder.data.annotations.aggregate_annotations import Entry
+
+    cif = test_dir / "interfaces/cm/pdb_00007cma/pdb_00007cma_xyz-enrich.cif.gz"
+    entry = Entry.from_custom_cif_file(
+        pdb_id="custom_7cma",
+        cif_file=cif,
+        structure_mode="as_is",
+        include_ligands=False,
+        include_interfaces=True,
+        interface_annotate_prodigy=False,
+    )
+
+    assert [interface.system_id for interface in entry.interfaces] == [
+        "custom_7cma__1__1.A--1.B"
+    ]
+
+
+def test_custom_interface_only_mode_preserves_saved_ligands(test_dir, tmp_path):
+    from plinder.data.annotations.aggregate_annotations import Entry
+
+    ligand_file = tmp_path / "custom_7cma/ligand_files/A.sdf"
+    ligand_file.parent.mkdir(parents=True)
+    ligand_file.write_text("existing canonical ligand")
+    cif = test_dir / "interfaces/cm/pdb_00007cma/pdb_00007cma_xyz-enrich.cif.gz"
+
+    Entry.from_custom_cif_file(
+        pdb_id="custom_7cma",
+        cif_file=cif,
+        structure_mode="as_is",
+        save_folder=tmp_path,
+        include_ligands=False,
+        include_interfaces=True,
+        interface_annotate_prodigy=False,
+    )
+
+    assert ligand_file.read_text() == "existing canonical ligand"
+
+
+def test_custom_pdb_output_does_not_infer_data_dir(
+    cif_6i41, tmp_path, monkeypatch
+):
+    from plinder.data.annotations import aggregate_annotations as agg
+    from plinder.data.annotations.aggregate_annotations import Entry
+
+    def unexpected_reference_lookup(_data_dir):
+        pytest.fail("save_folder must not be interpreted as data_dir")
+
+    monkeypatch.setattr(agg, "get_artifact_codes", unexpected_reference_lookup)
+    Entry.from_custom_cif_file(
+        pdb_id=None,
+        cif_file=cif_6i41,
+        structure_mode="pdb",
+        assembly_ids=["1"],
+        save_folder=tmp_path / "standalone-output",
+        include_ligands=True,
+        include_interfaces=False,
+    )
+
+    assert list((tmp_path / "standalone-output/6i41/ligand_files").glob("*.sdf"))
+
+
+def test_custom_cif_rejects_legacy_pdb_path():
+    from plinder.data.annotations.aggregate_annotations import Entry
+
+    with pytest.raises(ValueError, match="must be mmCIF"):
+        Entry.from_custom_cif_file(
+            pdb_id="custom",
+            cif_file=Path("model.pdb"),
+            include_ligands=False,
+            include_interfaces=True,
+        )
+
+
+def test_custom_cif_rejects_assembly_selection_in_as_is_mode(boltz_cif):
+    from plinder.data.annotations.aggregate_annotations import Entry
+
+    with pytest.raises(ValueError, match="only valid in pdb mode"):
+        Entry.from_custom_cif_file(
+            pdb_id="custom",
+            cif_file=boltz_cif,
+            assembly_ids=["1"],
+        )
+
+
+def test_custom_pdb_mode_uses_deposited_entry_id(boltz_cif):
+    from plinder.data.annotations.aggregate_annotations import Entry
+
+    with pytest.raises(ValueError, match="pdb_id must be None"):
+        Entry.from_custom_cif_file(
+            pdb_id="alias",
+            cif_file=boltz_cif,
+            structure_mode="pdb",
+        )
+
+
+def test_selected_assembly_ids_validates_requested_subset():
+    from plinder.data.annotations.aggregate_annotations import _selected_assembly_ids
+
+    assert _selected_assembly_ids(["1", "2"], ["2", "2", "1"]) == ["2", "1"]
+    assert _selected_assembly_ids(["1", "2"], "2") == ["2"]
+    with pytest.raises(ValueError, match="absent from the mmCIF"):
+        _selected_assembly_ids(["1"], ["2"])
+    with pytest.raises(ValueError, match="must not be empty"):
+        _selected_assembly_ids(["1"], [])
+
+
 def test_from_custom_cif_warns_on_multi_model(boltz_cif, tmp_path, monkeypatch):
     """Multi-model CIFs (NMR ensembles, multi-sample) warn and use model 1."""
     from plinder.data.annotations import aggregate_annotations as agg

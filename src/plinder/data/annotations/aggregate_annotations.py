@@ -70,6 +70,40 @@ SymmetryMateContacts = ty.Annotated[
     BeforeValidator(validate_chain_residue),
     Field(default_factory=dict),
 ]
+CUSTOM_STRUCTURE_MODES = ("as_is", "pdb")
+
+
+def _require_mmcif_path(path: Path) -> Path:
+    """Reject legacy PDB files and unrelated structure formats."""
+    path = Path(path)
+    name = path.name.lower()
+    if not name.endswith((".cif", ".cif.gz", ".mmcif", ".mmcif.gz")):
+        raise ValueError(
+            f"custom structures must be mmCIF files (.cif/.mmcif, optionally "
+            f"gzip-compressed), not {path.name!r}"
+        )
+    return path
+
+
+def _selected_assembly_ids(
+    available: ty.Iterable[str],
+    selected: ty.Iterable[str] | None,
+) -> list[str]:
+    """Return a validated assembly subset in caller-provided order."""
+    available_ids = list(dict.fromkeys(str(value) for value in available))
+    if selected is None:
+        return available_ids
+    selected_values = [selected] if isinstance(selected, str) else selected
+    selected_ids = list(dict.fromkeys(str(value) for value in selected_values))
+    if not selected_ids:
+        raise ValueError("assembly_ids must not be empty when provided")
+    missing = sorted(set(selected_ids).difference(available_ids))
+    if missing:
+        raise ValueError(
+            f"requested assembly IDs are absent from the mmCIF: {missing}; "
+            f"available={available_ids}"
+        )
+    return selected_ids
 
 
 def remove_alphabets(x: str) -> int:
@@ -1181,6 +1215,7 @@ class Entry(DocBaseModel):
         interface_annotate_prodigy: bool = True,
         include_ligands: bool = True,
         include_interfaces: bool = True,
+        assembly_ids: ty.Iterable[str] | None = None,
     ) -> Entry:
         """
         Load an entry object from mmCIF files in the pipeline
@@ -1197,6 +1232,10 @@ class Entry(DocBaseModel):
             Minimum residue count for a polymer chain to be receptor.
             Shorter polymers are classified as ligands.  Set to 12 as
             the minimum length for meaningful MMseqs2/Foldseek searches.
+        data_dir : Path | None
+            Optional PLINDER data root used only for reference datasets such
+            as CCD synonyms, cofactors, artifacts, and binding affinities.
+            This is independent of ``save_folder``.
         save_folder : Path
             Root directory for one canonical ASU ligand SDF per chain.
             Files are written to ``<save_folder>/<pdb_id>/ligand_files``.
@@ -1216,6 +1255,9 @@ class Entry(DocBaseModel):
             Whether to derive ligand systems and canonical ligand SDFs.
         include_interfaces : bool
             Whether to derive protein-protein interfaces and PRODIGY annotations.
+        assembly_ids : Iterable[str] | None
+            Optional subset of deposited biological assemblies. By default all
+            assemblies listed by the mmCIF are processed.
 
         Returns
         -------
@@ -1224,6 +1266,10 @@ class Entry(DocBaseModel):
         """
         if not include_ligands and not include_interfaces:
             raise ValueError("entry ingest must include ligands, interfaces, or both")
+
+        cif_file = Path(cif_file)
+        data_dir = Path(data_dir) if data_dir is not None else None
+        save_folder = Path(save_folder) if save_folder is not None else None
 
         from plinder.data.annotations.cif_utils import (
             _cif_scalar,
@@ -1292,8 +1338,6 @@ class Entry(DocBaseModel):
         entry.chain_to_seqres = chain_to_seqres
         entry._populate_chains(atoms, cif_data)
 
-        if save_folder is not None and data_dir is None and include_ligands:
-            data_dir = save_folder.parent.parent
         per_chain = get_chain_external_mappings(cif_data)
         for chain in per_chain:
             # External databases may annotate an asym ID that is absent from
@@ -1364,8 +1408,10 @@ class Entry(DocBaseModel):
             spatial_radii.append(interface_contact_radius)
         max_spatial_radius = max(spatial_radii)
 
-        assembly_ids = pdbx.list_assemblies(cif_file_obj)
-        for assembly_id in assembly_ids:
+        selected_assemblies = _selected_assembly_ids(
+            pdbx.list_assemblies(cif_file_obj), assembly_ids
+        )
+        for assembly_id in selected_assemblies:
             try:
                 biounit = build_biounit(cif_file_obj, assembly_id)
             except Exception as e:
@@ -1523,7 +1569,7 @@ class Entry(DocBaseModel):
     @classmethod
     def from_custom_cif_file(
         cls,
-        pdb_id: str,
+        pdb_id: str | None,
         cif_file: Path,
         ligand_smiles_dict: dict[str, str] | None = None,
         neighboring_residue_threshold: float = 6.0,
@@ -1533,14 +1579,25 @@ class Entry(DocBaseModel):
         save_folder: Path | None = None,
         min_shared_pocket_members: int = 3,
         save_fixed_cif: Path | None = None,
+        structure_mode: ty.Literal["as_is", "pdb"] = "as_is",
+        assembly_ids: ty.Iterable[str] | None = None,
+        symmetry_mate_contact_threshold: float = 5.0,
+        interface_contact_radius: float = 10.0,
+        interface_min_chain_length: int = 12,
+        interface_min_residues: int = DEFAULT_MIN_INTERFACE_RESIDUES,
+        interface_annotate_prodigy: bool = True,
+        include_ligands: bool = True,
+        include_interfaces: bool = True,
+        data_dir: Path | None = None,
     ) -> Entry:
         """
-        Creates entry from an extrernal (non-PDB) mmCIF file
+        Create an entry from an already assembled or deposited PDB mmCIF.
 
         Parameters
         ----------
-        pdb_id : str
-            annotation be used in PDB ID column
+        pdb_id : str | None
+            Identifier used for an ``as_is`` structure. Must be ``None`` in
+            ``pdb`` mode, where the deposited ``_entry.id`` is authoritative.
         cif_file : Path
             mmcif files of interest
         ligand_smiles_dict : dict[str, str] | None, optional
@@ -1556,12 +1613,27 @@ class Entry(DocBaseModel):
             Minimum residue count for a chain to be polymer (not ligand), by default 10
         save_folder : Path | None, optional
             Root directory for canonical ASU ligand SDFs, by default None.
+            This path is never interpreted as a PLINDER data root.
+        data_dir : Path | None, optional
+            Optional PLINDER data root used for reference annotations. This is
+            independent of ``save_folder`` and is not inferred from it.
         save_fixed_cif : Path | None, optional
             If provided and the CIF needed bond-order enrichment, write
             the enriched copy to this path. The input CIF at ``cif_file``
             is never mutated. Raises ``FileExistsError`` if the target
             already exists and ``ValueError`` if it resolves to the same
             path as ``cif_file``. By default (``None``) no file is written.
+        structure_mode : {"as_is", "pdb"}
+            ``as_is`` treats model 1 as one already assembled structure without
+            symmetry expansion. ``pdb`` uses deposited biological-assembly
+            operators through the production PDB ingest path.
+        assembly_ids : Iterable[str] | None
+            Biological assemblies selected in ``pdb`` mode. By default all are
+            processed. Assembly selection is invalid in ``as_is`` mode.
+        include_ligands : bool
+            Whether to derive ligand systems and canonical ligand SDFs.
+        include_interfaces : bool
+            Whether to derive protein-protein interfaces.
 
         Returns
         -------
@@ -1592,8 +1664,74 @@ class Entry(DocBaseModel):
             read_mmcif_file,
         )
 
-        if save_folder is not None:
-            ligand_dir = Path(save_folder) / pdb_id / "ligand_files"
+        cif_file = _require_mmcif_path(cif_file)
+        data_dir = Path(data_dir) if data_dir is not None else None
+        save_folder = Path(save_folder) if save_folder is not None else None
+        if structure_mode not in CUSTOM_STRUCTURE_MODES:
+            raise ValueError(
+                f"invalid structure_mode {structure_mode!r}; "
+                f"expected one of {CUSTOM_STRUCTURE_MODES}"
+            )
+        if not include_ligands and not include_interfaces:
+            raise ValueError("custom ingest must include ligands, interfaces, or both")
+        if structure_mode == "pdb":
+            if pdb_id is not None:
+                raise ValueError(
+                    "pdb_id must be None in pdb mode; the deposited _entry.id "
+                    "is authoritative"
+                )
+            if ligand_smiles_dict is not None or save_fixed_cif is not None:
+                raise ValueError(
+                    "pdb mode uses deposited PDB chemistry and does not accept "
+                    "ligand_smiles_dict or save_fixed_cif"
+                )
+            requested_assemblies = (
+                tuple(str(value) for value in assembly_ids)
+                if assembly_ids is not None and not isinstance(assembly_ids, str)
+                else assembly_ids
+            )
+            entry = cls.from_cif_file(
+                cif_file,
+                neighboring_residue_threshold=neighboring_residue_threshold,
+                neighboring_ligand_threshold=neighboring_ligand_threshold,
+                min_polymer_size=min_polymer_size,
+                data_dir=data_dir,
+                save_folder=save_folder,
+                plip_complex_threshold=plip_complex_threshold,
+                symmetry_mate_contact_threshold=symmetry_mate_contact_threshold,
+                min_shared_pocket_members=min_shared_pocket_members,
+                interface_contact_radius=interface_contact_radius,
+                interface_min_chain_length=interface_min_chain_length,
+                interface_min_residues=interface_min_residues,
+                interface_annotate_prodigy=interface_annotate_prodigy,
+                include_ligands=include_ligands,
+                include_interfaces=include_interfaces,
+                assembly_ids=requested_assemblies,
+            )
+            if not entry.biounit_chain_ids:
+                raise ValueError(
+                    f"pdb mode requires deposited biological assemblies: {cif_file}"
+                )
+            if requested_assemblies is not None:
+                requested = (
+                    {requested_assemblies}
+                    if isinstance(requested_assemblies, str)
+                    else set(requested_assemblies)
+                )
+                missing = sorted(requested.difference(entry.biounit_chain_ids))
+                if missing:
+                    raise ValueError(
+                        f"failed to construct requested biological assemblies: {missing}"
+                    )
+            return entry
+        if pdb_id is None or not str(pdb_id).strip():
+            raise ValueError("pdb_id is required in as_is mode")
+        if assembly_ids is not None:
+            raise ValueError("assembly_ids are only valid in pdb mode")
+        pdb_id = str(pdb_id).strip().lower()
+
+        if include_ligands and save_folder is not None:
+            ligand_dir = save_folder / pdb_id / "ligand_files"
             if ligand_dir.exists():
                 shutil.rmtree(ligand_dir)
 
@@ -1612,7 +1750,7 @@ class Entry(DocBaseModel):
             )
 
         # Check for missing bond orders and enrich CIF in-memory if needed
-        unknown_ids = get_unknown_ligand_ids(cif_file_obj)
+        unknown_ids = get_unknown_ligand_ids(cif_file_obj) if include_ligands else []
         enrichment_applied = False
         if unknown_ids:
             if ligand_smiles_dict is None:
@@ -1668,7 +1806,7 @@ class Entry(DocBaseModel):
         )
         entry._populate_chains(atoms, cif_data)
         entry.ligand_like_chains = detect_ligand_chains(entry, min_polymer_size)
-        # Create single biounit with "1." prefix on chain IDs
+        # Create one assembly without applying crystallographic transforms.
         biounit = atoms.copy()
         biounit.chain_id = np.array([f"1.{c}" for c in biounit.chain_id])
         entry.biounit_chain_ids["1"] = sorted(
@@ -1677,25 +1815,49 @@ class Entry(DocBaseModel):
         entry.biounit_legacy_chain_ids["1"] = {
             chain_id: chain_id for chain_id in entry.biounit_chain_ids["1"]
         }
+        spatial_radii: list[float] = []
+        if include_ligands:
+            spatial_radii.extend(
+                [
+                    plip_complex_threshold,
+                    neighboring_residue_threshold,
+                    neighboring_ligand_threshold,
+                ]
+            )
+        if include_interfaces:
+            spatial_radii.append(interface_contact_radius)
         spatial_index = BiounitSpatialIndex.from_atoms(
-            biounit,
-            max(
+            biounit, max(spatial_radii)
+        )
+        if include_interfaces:
+            entry.interfaces.extend(
+                detect_protein_interfaces(
+                    biounit,
+                    pdb_id=entry.pdb_id,
+                    biounit_id="1",
+                    chains=entry.chains,
+                    contact_radius=interface_contact_radius,
+                    min_chain_length=interface_min_chain_length,
+                    min_interface_residues=interface_min_residues,
+                    annotate_prodigy=interface_annotate_prodigy,
+                    spatial_index=spatial_index,
+                )
+            )
+        water_chains = get_water_chain_ids(biounit)
+        ligands = (
+            entry._collect_ligands_from_biounit(
+                biounit,
+                "1",
                 plip_complex_threshold,
                 neighboring_residue_threshold,
                 neighboring_ligand_threshold,
-            ),
-        )
-        water_chains = get_water_chain_ids(biounit)
-        ligands = entry._collect_ligands_from_biounit(
-            biounit,
-            "1",  # single assembly; custom CIFs lack _pdbx_struct_assembly
-            plip_complex_threshold,
-            neighboring_residue_threshold,
-            neighboring_ligand_threshold,
-            data_dir=None,
-            ligand_smiles_dict=ligand_smiles_dict,
-            water_chains=water_chains,
-            spatial_index=spatial_index,
+                data_dir=data_dir,
+                ligand_smiles_dict=ligand_smiles_dict,
+                water_chains=water_chains,
+                spatial_index=spatial_index,
+            )
+            if include_ligands
+            else {}
         )
         entry._finalize(
             ligands,
@@ -1708,7 +1870,7 @@ class Entry(DocBaseModel):
             for system in entry.systems.values()
             for ligand in system.ligands
         }
-        if save_folder is not None and retained_ligand_chain_groups:
+        if include_ligands and save_folder is not None and retained_ligand_chain_groups:
             save_ligands(
                 atoms,
                 retained_ligand_chain_groups,
