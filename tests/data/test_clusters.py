@@ -444,8 +444,12 @@ def test_symmetric_edge_shards_take_minimum_of_directional_maxima(tmp_path):
     cover = pd.read_parquet(cover_path).set_index("ligand_id")
     assert cover.loc["l1", "centroid_ligand_id"] == "l3"
     assert cover.loc["l1", "similarity_to_centroid"] == pytest.approx(90.0)
+    assert cover.loc["l1", "coverage_count"] == 2
+    assert cover.loc["l1", "coverage_fraction"] == pytest.approx(0.5)
     assert cover.loc["l2", "centroid_ligand_id"] == "l2"
     assert cover.loc["l3", "centroid_ligand_id"] == "l3"
+    assert cover.loc["l3", "coverage_count"] == 3
+    assert cover.loc["l3", "coverage_fraction"] == pytest.approx(0.75)
     assert cover.loc["l4", "centroid_ligand_id"] == "l3"
     assert cover.loc["l4", "similarity_to_centroid"] == pytest.approx(85.0)
 
@@ -1029,10 +1033,10 @@ def test_directed_cover_uses_query_to_centroid_scores_and_reassigns():
     assignments = _greedy_directed_centroid_cover(graph, nodes)
 
     assert assignments == [
-        ("a", "b", pytest.approx(80.0)),
-        ("b", "b", 100.0),
-        ("c", "d", pytest.approx(90.0)),
-        ("d", "d", 100.0),
+        ("a", "b", pytest.approx(80.0), 1, pytest.approx(0.25)),
+        ("b", "b", 100.0, 3, pytest.approx(0.75)),
+        ("c", "d", pytest.approx(90.0), 1, pytest.approx(0.25)),
+        ("d", "d", 100.0, 2, pytest.approx(0.5)),
     ]
 
 

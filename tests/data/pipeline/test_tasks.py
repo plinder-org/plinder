@@ -885,7 +885,17 @@ def test_directed_set_cover_scatter_skips_only_complete_outputs(tmp_path):
         / "threshold=100.parquet"
     )
     output.parent.mkdir(parents=True)
-    output.touch()
+    pd.DataFrame(
+        {
+            "ligand_id": ["l1"],
+            "centroid_ligand_id": ["l1"],
+            "similarity_to_centroid": [100.0],
+            "label": ["c0"],
+            "metric": ["pocket_qcov"],
+            "threshold": [100],
+            "directed": [True],
+        }
+    ).to_parquet(output, index=False)
     work = tasks.scatter_make_directed_set_covers(
         data_dir=tmp_path,
         metrics=["pocket_qcov"],
@@ -893,9 +903,26 @@ def test_directed_set_cover_scatter_skips_only_complete_outputs(tmp_path):
         stop_on_cluster=0,
         skip_existing=True,
     )
-    assert work == [[("pocket_qcov", 50)]]
+    assert work == [[("pocket_qcov", 100)], [("pocket_qcov", 50)]]
 
-    output.with_name("threshold=50.parquet").touch()
+    complete = pd.DataFrame(
+        {
+            "ligand_id": ["l1"],
+            "centroid_ligand_id": ["l1"],
+            "similarity_to_centroid": [100.0],
+            "coverage_count": pd.Series([1], dtype="Int32"),
+            "coverage_fraction": pd.Series([1.0], dtype="Float32"),
+            "label": ["c0"],
+            "metric": ["pocket_qcov"],
+            "threshold": [100],
+            "directed": [True],
+        }
+    )
+    complete.to_parquet(output, index=False)
+    complete.assign(threshold=50).to_parquet(
+        output.with_name("threshold=50.parquet"),
+        index=False,
+    )
     assert tasks.scatter_make_directed_set_covers(
         data_dir=tmp_path,
         metrics=["pocket_qcov"],

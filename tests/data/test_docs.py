@@ -15,6 +15,9 @@ def test_ligand_cluster_column_descriptions():
         "color__70__community",
         "color__70__ligand__community",
         "pocket_qcov__50__ligand__directed_set_cover",
+        "pocket_qcov__50__ligand__directed_set_cover__is_centroid",
+        "pocket_qcov__50__ligand__directed_set_cover__coverage_count",
+        "pocket_qcov__50__ligand__directed_set_cover__coverage_fraction",
         "interface_side_qcov__70__chain_1_component",
         "interface_side_qcov__70__chain_2_community",
         "interface_side_qcov__70__chain_1_directed_set_cover",
@@ -28,9 +31,12 @@ def test_ligand_cluster_column_descriptions():
     assert "ligand-level greedy centroid community" in descriptions[columns[3]]
     assert "ligand-level directed set cover" in descriptions[columns[4]]
     assert "query-to-centroid score" in descriptions[columns[4]]
-    assert "chain 1 reciprocal-minimum component" in descriptions[columns[5]]
-    assert "chain 2 greedy centroid community" in descriptions[columns[6]]
-    assert "chain 1 directed set cover" in descriptions[columns[7]]
+    assert "published centroid" in descriptions[columns[5]]
+    assert "Number of directed-cover query nodes" in descriptions[columns[6]]
+    assert "Fraction of its directed weak component" in descriptions[columns[7]]
+    assert "chain 1 reciprocal-minimum component" in descriptions[columns[8]]
+    assert "chain 2 greedy centroid community" in descriptions[columns[9]]
+    assert "chain 1 directed set cover" in descriptions[columns[10]]
 
 
 def test_make_column_descriptions(read_plinder_mount, tmp_path, monkeypatch):

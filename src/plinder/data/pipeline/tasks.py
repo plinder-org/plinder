@@ -3360,7 +3360,10 @@ def scatter_make_directed_set_covers(
             / f"metric={metric}"
             / f"threshold={threshold}.parquet"
         )
-        if not output.is_file():
+        if not clusters.directed_set_cover_is_complete(
+            output,
+            entity_type=entity_type,
+        ):
             pending.append(item)
     return pending or [[]]
 

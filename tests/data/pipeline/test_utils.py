@@ -374,6 +374,8 @@ def test_finalize_index_creates_nonredundant_data_from_local_clusters(tmp_path):
             "ligand_id": ["1aaa__1__1.X"],
             "centroid_ligand_id": ["1aaa__1__1.X"],
             "similarity_to_centroid": [100.0],
+            "coverage_count": [1],
+            "coverage_fraction": [1.0],
             "label": ["d0"],
             "metric": ["pli_qcov"],
             "threshold": [100],
@@ -391,6 +393,21 @@ def test_finalize_index_creates_nonredundant_data_from_local_clusters(tmp_path):
     directed_labels = finalized["pli_qcov__100__ligand__directed_set_cover"]
     assert directed_labels.iloc[0] == "d0"
     assert pd.isna(directed_labels.iloc[1])
+    centroid_flags = finalized[
+        "pli_qcov__100__ligand__directed_set_cover__is_centroid"
+    ]
+    assert bool(centroid_flags.iloc[0])
+    assert pd.isna(centroid_flags.iloc[1])
+    coverage_counts = finalized[
+        "pli_qcov__100__ligand__directed_set_cover__coverage_count"
+    ]
+    coverage_fractions = finalized[
+        "pli_qcov__100__ligand__directed_set_cover__coverage_fraction"
+    ]
+    assert coverage_counts.iloc[0] == 1
+    assert coverage_fractions.iloc[0] == pytest.approx(1.0)
+    assert pd.isna(coverage_counts.iloc[1])
+    assert pd.isna(coverage_fractions.iloc[1])
     assert "pli_qcov__100__component" not in finalized
     assert finalized.loc[0, "ligand_smiles_id"] == 0
     assert pd.isna(finalized.loc[1, "ligand_smiles_id"])
@@ -424,6 +441,101 @@ def test_cluster_index_requires_matching_directed_cover_matrix(tmp_path):
 
     with pytest.raises(FileNotFoundError, match="directed set-cover matrix"):
         utils.add_cluster_columns(index=index, data_dir=tmp_path)
+
+
+def test_cluster_index_marks_only_directed_cover_centroids(tmp_path):
+    cluster_file = (
+        tmp_path
+        / "ligand_clusters/cluster=components/directed=False/metric=pli_qcov"
+        / "threshold=50.parquet"
+    )
+    cover_file = (
+        tmp_path
+        / "ligand_sampling/directed_set_cover/metric=pli_qcov"
+        / "threshold=50.parquet"
+    )
+    cluster_file.parent.mkdir(parents=True)
+    cover_file.parent.mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "ligand_id": ["l1", "l2"],
+            "label": ["r0", "r0"],
+        }
+    ).to_parquet(cluster_file, index=False)
+    pd.DataFrame(
+        {
+            "ligand_id": ["l1", "l2"],
+            "label": ["d0", "d0"],
+            "centroid_ligand_id": ["l2", "l2"],
+            "coverage_count": [1, 2],
+            "coverage_fraction": [0.5, 1.0],
+        }
+    ).to_parquet(cover_file, index=False)
+    index = pd.DataFrame(
+        {
+            "ligand_id": ["l1", "l2", "not-eligible"],
+            "system_type": ["holo", "holo", "apo"],
+            "ligand_is_proper": [True, True, False],
+            "ligand_smiles_id": [0, 1, pd.NA],
+        }
+    )
+
+    result = utils.add_cluster_columns(index=index, data_dir=tmp_path)
+
+    label_column = "pli_qcov__50__ligand__directed_set_cover"
+    centroid_column = f"{label_column}__is_centroid"
+    assert result[label_column].tolist()[:2] == ["d0", "d0"]
+    assert result[centroid_column].tolist()[:2] == [False, True]
+    assert pd.isna(result.loc[2, centroid_column])
+    assert str(result[centroid_column].dtype) == "boolean"
+    count_column = f"{label_column}__coverage_count"
+    fraction_column = f"{label_column}__coverage_fraction"
+    assert result[count_column].tolist()[:2] == [1, 2]
+    assert result[fraction_column].tolist()[:2] == [0.5, 1.0]
+    assert pd.isna(result.loc[2, count_column])
+    assert pd.isna(result.loc[2, fraction_column])
+    assert str(result[count_column].dtype) == "Int32"
+    assert str(result[fraction_column].dtype) == "Float32"
+
+
+def test_cluster_index_reads_legacy_cover_during_centrality_migration(tmp_path):
+    cluster_file = (
+        tmp_path
+        / "ligand_clusters/cluster=components/directed=False/metric=pli_qcov"
+        / "threshold=50.parquet"
+    )
+    cover_file = (
+        tmp_path
+        / "ligand_sampling/directed_set_cover/metric=pli_qcov"
+        / "threshold=50.parquet"
+    )
+    cluster_file.parent.mkdir(parents=True)
+    cover_file.parent.mkdir(parents=True)
+    pd.DataFrame(
+        {"ligand_id": ["l1", "l2"], "label": ["r0", "r0"]}
+    ).to_parquet(cluster_file, index=False)
+    pd.DataFrame(
+        {
+            "ligand_id": ["l1", "l2"],
+            "label": ["d0", "d0"],
+            "centroid_ligand_id": ["l2", "l2"],
+        }
+    ).to_parquet(cover_file, index=False)
+    index = pd.DataFrame(
+        {
+            "ligand_id": ["l1", "l2"],
+            "system_type": ["holo", "holo"],
+            "ligand_is_proper": [True, True],
+            "ligand_smiles_id": [0, 1],
+        }
+    )
+
+    result = utils.add_cluster_columns(index=index, data_dir=tmp_path)
+
+    label_column = "pli_qcov__50__ligand__directed_set_cover"
+    assert result[f"{label_column}__is_centroid"].tolist() == [False, True]
+    assert f"{label_column}__coverage_count" not in result
+    assert f"{label_column}__coverage_fraction" not in result
 
 
 def test_ligand_similarity_rejects_stale_proper_smiles_universe(tmp_path):

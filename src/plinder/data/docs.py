@@ -164,6 +164,55 @@ def get_cluster_column_descriptions(
                 "query-to-centroid score meets the threshold",
             )
         )
+    directed_centroid_columns = [
+        c
+        for c in plindex.columns
+        if c.endswith("__directed_set_cover__is_centroid")
+    ]
+    for column in directed_centroid_columns:
+        parts = column.split("__")
+        metric, threshold = parts[:2]
+        ligand_level = parts[2] == "ligand"
+        level = "ligand-level " if ligand_level else ""
+        rows.append(
+            (
+                column,
+                "bool | None",
+                f"Whether this row is the published centroid for its {level}"
+                f"directed set-cover cluster built from {metric} with "
+                f"{threshold} threshold; missing means the row is outside the "
+                "clustering universe",
+            )
+        )
+    directed_coverage_columns = [
+        c
+        for c in plindex.columns
+        if c.endswith(
+            (
+                "__directed_set_cover__coverage_count",
+                "__directed_set_cover__coverage_fraction",
+            )
+        )
+    ]
+    for column in directed_coverage_columns:
+        parts = column.split("__")
+        metric, threshold = parts[:2]
+        is_count = column.endswith("__coverage_count")
+        quantity = (
+            "Number of directed-cover query nodes this ligand could initially cover"
+            if is_count
+            else "Fraction of its directed weak component this ligand could "
+            "initially cover"
+        )
+        rows.append(
+            (
+                column,
+                "int | None" if is_count else "float | None",
+                f"{quantity} at {metric} {threshold} threshold, including "
+                "itself; missing means the row is outside the clustering "
+                "universe",
+            )
+        )
     column_order = {column: index for index, column in enumerate(plindex.columns)}
     return sorted(rows, key=lambda row: column_order[row[0]])
 

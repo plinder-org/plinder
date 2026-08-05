@@ -586,7 +586,7 @@ def add_cluster_columns(*, index: pd.DataFrame, data_dir: Path) -> pd.DataFrame:
         .dropna()
         .astype(str)
     )
-    artifacts: list[tuple[Path, str, str]] = []
+    artifacts: list[tuple[Path, str, str, bool]] = []
     for path in reciprocal_paths:
         relative_parts = path.relative_to(cluster_root).parts
         partitions = {
@@ -608,6 +608,7 @@ def add_cluster_columns(*, index: pd.DataFrame, data_dir: Path) -> pd.DataFrame:
                     threshold=threshold,
                     ligand=True,
                 ),
+                False,
             )
         )
     for path in directed_cover_paths:
@@ -618,6 +619,7 @@ def add_cluster_columns(*, index: pd.DataFrame, data_dir: Path) -> pd.DataFrame:
                 path,
                 metric,
                 f"{metric}__{threshold}__ligand__directed_set_cover",
+                True,
             )
         )
     LOG.info(
@@ -627,7 +629,9 @@ def add_cluster_columns(*, index: pd.DataFrame, data_dir: Path) -> pd.DataFrame:
     )
     cluster_columns: dict[str, Any] = {}
     started = time()
-    for path_index, (path, metric, column) in enumerate(artifacts, start=1):
+    for path_index, (path, metric, column, is_directed_cover) in enumerate(
+        artifacts, start=1
+    ):
         if (
             repair_started_ns is not None
             and path.stat().st_mtime_ns <= repair_started_ns
@@ -636,7 +640,29 @@ def add_cluster_columns(*, index: pd.DataFrame, data_dir: Path) -> pd.DataFrame:
                 "ligand cluster artifact predates the targeted collation "
                 f"repair: {path}"
             )
-        labels = pd.read_parquet(path, columns=[node_column, "label"])
+        columns = [node_column, "label"]
+        has_coverage_centrality = False
+        if is_directed_cover:
+            columns.append("centroid_ligand_id")
+            coverage_columns = {"coverage_count", "coverage_fraction"}
+            available_columns = set(pq.read_schema(path).names)
+            available_coverage_columns = coverage_columns.intersection(
+                available_columns
+            )
+            if available_coverage_columns and (
+                available_coverage_columns != coverage_columns
+            ):
+                missing = sorted(coverage_columns.difference(available_columns))
+                raise ValueError(
+                    "directed ligand cover has a partial coverage-centrality "
+                    f"schema: {path}; missing={missing}"
+                )
+            has_coverage_centrality = (
+                available_coverage_columns == coverage_columns
+            )
+            if has_coverage_centrality:
+                columns.extend(sorted(coverage_columns))
+        labels = pd.read_parquet(path, columns=columns)
         if labels[node_column].duplicated().any():
             raise ValueError(f"duplicate ligand IDs in cluster artifact: {path}")
         labels[node_column] = labels[node_column].astype(str)
@@ -656,6 +682,60 @@ def add_cluster_columns(*, index: pd.DataFrame, data_dir: Path) -> pd.DataFrame:
             )
         aligned = labels.set_index(node_column)["label"].reindex(node_ids)
         cluster_columns[column] = aligned.astype("string[pyarrow]").array
+        if is_directed_cover:
+            labels["centroid_ligand_id"] = labels["centroid_ligand_id"].astype(str)
+            labels["is_centroid"] = labels[node_column].eq(
+                labels["centroid_ligand_id"]
+            )
+            centroid_counts = labels.groupby("label", observed=True)[
+                "is_centroid"
+            ].sum()
+            invalid_labels = centroid_counts[centroid_counts.ne(1)].index.tolist()
+            if invalid_labels:
+                raise ValueError(
+                    "directed ligand cover must have exactly one centroid row "
+                    f"per label: {path}; invalid={invalid_labels[:10]}"
+                )
+            centroid_column = f"{column}__is_centroid"
+            aligned_centroids = labels.set_index(node_column)["is_centroid"].reindex(
+                node_ids
+            )
+            cluster_columns[centroid_column] = aligned_centroids.astype(
+                "boolean"
+            ).array
+            if has_coverage_centrality:
+                if (
+                    labels[["coverage_count", "coverage_fraction"]]
+                    .isna()
+                    .any()
+                    .any()
+                ):
+                    raise ValueError(
+                        "directed ligand cover has missing coverage centrality: "
+                        f"{path}"
+                    )
+                if labels["coverage_count"].lt(1).any() or (
+                    labels["coverage_fraction"].le(0)
+                    | labels["coverage_fraction"].gt(1)
+                ).any():
+                    raise ValueError(
+                        "directed ligand cover has invalid coverage centrality: "
+                        f"{path}"
+                    )
+                coverage_count_column = f"{column}__coverage_count"
+                coverage_fraction_column = f"{column}__coverage_fraction"
+                cluster_columns[coverage_count_column] = (
+                    labels.set_index(node_column)["coverage_count"]
+                    .reindex(node_ids)
+                    .astype("Int32")
+                    .array
+                )
+                cluster_columns[coverage_fraction_column] = (
+                    labels.set_index(node_column)["coverage_fraction"]
+                    .reindex(node_ids)
+                    .astype("Float32")
+                    .array
+                )
         if path_index % 10 == 0 or path_index == len(artifacts):
             elapsed = time() - started
             rate = path_index / elapsed
@@ -675,7 +755,16 @@ def add_cluster_columns(*, index: pd.DataFrame, data_dir: Path) -> pd.DataFrame:
         column
         for column in index.columns
         if "__ligand__" in column
-        and column.endswith(("__component", "__community", "__directed_set_cover"))
+        and column.endswith(
+            (
+                "__component",
+                "__community",
+                "__directed_set_cover",
+                "__directed_set_cover__is_centroid",
+                "__directed_set_cover__coverage_count",
+                "__directed_set_cover__coverage_fraction",
+            )
+        )
     }
     LOG.info(
         "merging %d ligand-level cluster columns into the annotation index",

@@ -2341,16 +2341,24 @@ def _greedy_centroid_cover(
 def _greedy_directed_centroid_cover(
     graph: nk.graph.Graph,
     nodes: Sequence[str],
-) -> list[tuple[str, str, float]]:
+) -> list[tuple[str, str, float, int, float]]:
     """Cover query nodes by centroids they score against above threshold."""
     if not graph.isDirected() or not graph.isWeighted():
         raise ValueError("directed centroid covering requires a weighted digraph")
     if graph.numberOfNodes() != len(nodes):
         raise ValueError("graph node count does not match ligand IDs")
+    initial_coverage_counts = [
+        1
+        + sum(
+            int(query) != node
+            for query in graph.iterInNeighbors(node)
+        )
+        for node in range(len(nodes))
+    ]
     uncovered = set(range(len(nodes)))
     centroids: list[int] = []
     heap = [
-        (-(graph.degreeIn(node) + 1), str(nodes[node]), node)
+        (-initial_coverage_counts[node], str(nodes[node]), node)
         for node in range(len(nodes))
     ]
     heapq.heapify(heap)
@@ -2385,7 +2393,7 @@ def _greedy_directed_centroid_cover(
             )
 
     centroid_set = set(centroids)
-    assignments: list[tuple[str, str, float]] = []
+    assignments: list[tuple[str, str, float, int, float]] = []
     for query, ligand_id in enumerate(nodes):
         if query in centroid_set:
             centroid = query
@@ -2408,7 +2416,16 @@ def _greedy_directed_centroid_cover(
                 ),
             )
             score = 100.0 * float(graph.weight(query, centroid))
-        assignments.append((str(ligand_id), str(nodes[centroid]), score))
+        coverage_count = initial_coverage_counts[query]
+        assignments.append(
+            (
+                str(ligand_id),
+                str(nodes[centroid]),
+                score,
+                coverage_count,
+                coverage_count / len(nodes),
+            )
+        )
     return assignments
 
 
@@ -2457,6 +2474,36 @@ def _expand_fingerprint_directed_cover(
     )
 
 
+def directed_set_cover_is_complete(
+    path: Path,
+    *,
+    entity_type: ClusterEntity = "ligand",
+) -> bool:
+    """Return whether a cached directed-cover artifact has the current schema."""
+    centroid_column = (
+        "centroid_ligand_id"
+        if entity_type == "ligand"
+        else "centroid_system_id"
+    )
+    required_columns = {
+        _cluster_node_column(entity_type),
+        centroid_column,
+        "similarity_to_centroid",
+        "coverage_count",
+        "coverage_fraction",
+        "label",
+        "metric",
+        "threshold",
+        "directed",
+    }
+    try:
+        return path.is_file() and required_columns.issubset(
+            pq.read_schema(path).names
+        )
+    except (OSError, ValueError):
+        return False
+
+
 def make_directed_set_cover(
     *,
     data_dir: Path,
@@ -2482,7 +2529,10 @@ def make_directed_set_cover(
         / f"metric={metric}"
         / f"threshold={threshold}.parquet"
     )
-    if skip_existing and output.is_file():
+    if skip_existing and directed_set_cover_is_complete(
+        output,
+        entity_type=entity_type,
+    ):
         return output
     component_path = (
         _sampling_root(data_dir, entity_type)
@@ -2651,7 +2701,7 @@ def make_directed_set_cover(
     del reader
     gc.collect()
 
-    assignments: list[tuple[str, str, float]] = []
+    assignments: list[tuple[str, str, float, int, float]] = []
     processed_nodes: set[str] = set()
     current_component: int | None = None
     current_nodes: list[str] = []
@@ -2730,11 +2780,21 @@ def make_directed_set_cover(
                 f"non-singleton directed-cover component {component} was "
                 "absent from edges"
             )
-        assignments.extend((node, node, 100.0) for node in missing)
+        assignments.extend((node, node, 100.0, 1, 1.0) for node in missing)
 
     published = pd.DataFrame(
         assignments,
-        columns=[node_column, "centroid_node", "similarity_to_centroid"],
+        columns=[
+            node_column,
+            "centroid_node",
+            "similarity_to_centroid",
+            "coverage_count",
+            "coverage_fraction",
+        ],
+    )
+    published["coverage_count"] = published["coverage_count"].astype("Int32")
+    published["coverage_fraction"] = published["coverage_fraction"].astype(
+        "Float32"
     )
     if metric == "tanimoto_similarity_ecfp4_1024":
         published = _expand_fingerprint_directed_cover(
