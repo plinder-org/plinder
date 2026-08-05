@@ -85,6 +85,43 @@ def _require_mmcif_path(path: Path) -> Path:
     return path
 
 
+def _chain_type_from_coordinates(atoms: struc.AtomArray) -> str:
+    """Identify standard polymer chains when entity metadata is absent."""
+    if np.all(struc.filter_solvent(atoms)):
+        return "water"
+    residue_starts = struc.get_residue_starts(atoms, add_exclusive_stop=True)
+    if len(residue_starts) < 2:
+        return "non-polymer"
+    protein_residues = 0
+    nucleotide_residues = 0
+    for start, stop in zip(residue_starts[:-1], residue_starts[1:]):
+        residue = atoms[start:stop]
+        atom_names = set(residue.atom_name.astype(str))
+        if np.any(struc.filter_amino_acids(residue)) or {
+            "N",
+            "CA",
+            "C",
+        }.issubset(atom_names):
+            protein_residues += 1
+        if np.any(struc.filter_nucleotides(residue)):
+            nucleotide_residues += 1
+    residue_count = len(residue_starts) - 1
+    if protein_residues == residue_count:
+        return "polypeptide(L)"
+    if nucleotide_residues == residue_count:
+        return "polyribonucleotide"
+    return "non-polymer"
+
+
+def _sequence_from_coordinates(atoms: struc.AtomArray) -> str:
+    """Return the resolved polymer sequence, or an empty string on ambiguity."""
+    try:
+        sequences, _ = struc.to_sequence(atoms, allow_hetero=True)
+    except (IndexError, TypeError, ValueError, struc.BadStructureError):
+        return ""
+    return str(sequences[0]) if len(sequences) == 1 else ""
+
+
 def _selected_assembly_ids(
     available: ty.Iterable[str],
     selected: ty.Iterable[str] | None,
@@ -888,13 +925,26 @@ class Entry(DocBaseModel):
                         [atoms[start:stop] for start, stop in segments]
                     )
                 entity_id = entity_by_asym.get(chain_id, "")
+                chain_type = type_by_entity.get(entity_id, "unknown")
+                if chain_type == "unknown":
+                    chain_type = _chain_type_from_coordinates(chain_atoms)
+                if (
+                    chain_id not in self.chain_to_seqres
+                    and (
+                        _is_polypeptide(chain_type)
+                        or _is_polynucleotide(chain_type)
+                    )
+                ):
+                    sequence = _sequence_from_coordinates(chain_atoms)
+                    if sequence:
+                        self.chain_to_seqres[chain_id] = sequence
                 self.chains[chain_id] = Chain.from_cif_data(
                     chain_id,
                     block,
                     chain_atoms,
                     len(self.chain_to_seqres.get(chain_id, "")),
                     entity_id=entity_id,
-                    chain_type_str=type_by_entity.get(entity_id, "unknown"),
+                    chain_type_str=chain_type,
                 )
         finally:
             atoms.bonds = bonds
@@ -922,6 +972,7 @@ class Entry(DocBaseModel):
         neighboring_ligand_threshold: float,
         data_dir: Path | None,
         ligand_smiles_dict: dict[str, str] | None = None,
+        ligand_ccd_code_dict: dict[str, str] | None = None,
         ligand_asym_ids: set[str] | None = None,
         ligand_instance_chains: set[str] | None = None,
         water_chains: set[str] | None = None,
@@ -933,6 +984,9 @@ class Entry(DocBaseModel):
         and is only set by :meth:`Entry.from_custom_cif_file` — it lets
         user-supplied SMILES act as the CCD fallback for stereo
         validation and SMILES assignment on custom residues.
+
+        ``ligand_ccd_code_dict`` records explicit custom-component to CCD
+        references so the output ligand annotation reports the supplied code.
 
         ``ligand_asym_ids`` optionally limits work to selected ligand chains.
         PDB ingest uses this to probe non-ion ligands before calculating
@@ -1021,6 +1075,7 @@ class Entry(DocBaseModel):
                 data_dir=data_dir,
                 chain_to_seqres=self.chain_to_seqres,
                 ligand_smiles_dict=ligand_smiles_dict,
+                ligand_ccd_code_dict=ligand_ccd_code_dict,
                 water_chains=water_chains,
                 spatial_index=spatial_index,
                 member_residue_numbers=member_residue_numbers,
@@ -1270,6 +1325,8 @@ class Entry(DocBaseModel):
         cif_file = Path(cif_file)
         data_dir = Path(data_dir) if data_dir is not None else None
         save_folder = Path(save_folder) if save_folder is not None else None
+
+        from biotite.file import DeserializationError, InvalidFileError
 
         from plinder.data.annotations.cif_utils import (
             _cif_scalar,
@@ -1589,6 +1646,7 @@ class Entry(DocBaseModel):
         include_ligands: bool = True,
         include_interfaces: bool = True,
         data_dir: Path | None = None,
+        ligand_ccd_code_dict: dict[str, str] | None = None,
     ) -> Entry:
         """
         Create an entry from an already assembled or deposited PDB mmCIF.
@@ -1605,6 +1663,11 @@ class Entry(DocBaseModel):
             Required for unknown ligands without ``_chem_comp_bond``
             (typical of cofolding outputs). Known CCD compounds
             are handled automatically.
+        ligand_ccd_code_dict : dict[str, str] | None, optional
+            Mapping of a custom component ID to the CCD component whose atom
+            names, bonds, and canonical SMILES should be used, for example
+            ``{"LIG": "ATP"}``. A component may be present in either this
+            mapping or ``ligand_smiles_dict``, but not both.
         neighboring_residue_threshold : float, optional
             Max distance (Å) for neighboring receptor residues, by default 6.0
         neighboring_ligand_threshold : float, optional
@@ -1643,8 +1706,8 @@ class Entry(DocBaseModel):
         Raises
         ------
         MissingBondOrderError
-            If the CIF contains unknown ligands and no ``ligand_smiles_dict``
-            is provided.
+            If the CIF contains unknown ligands and neither a SMILES nor CCD
+            code is provided for them.
         FileExistsError
             If ``save_fixed_cif`` already exists.
         ValueError
@@ -1659,6 +1722,8 @@ class Entry(DocBaseModel):
         """
         from plinder.data.annotations.cif_utils import (
             MissingBondOrderError,
+            check_custom_mmcif_fields,
+            enrich_cif_with_ccd_bonds,
             enrich_cif_with_smiles_bonds,
             get_unknown_ligand_ids,
             read_mmcif_file,
@@ -1667,6 +1732,14 @@ class Entry(DocBaseModel):
         cif_file = _require_mmcif_path(cif_file)
         data_dir = Path(data_dir) if data_dir is not None else None
         save_folder = Path(save_folder) if save_folder is not None else None
+        ligand_ccd_code_dict = (
+            {
+                str(component_id).strip(): str(ccd_code).strip().upper()
+                for component_id, ccd_code in ligand_ccd_code_dict.items()
+            }
+            if ligand_ccd_code_dict is not None
+            else None
+        )
         if structure_mode not in CUSTOM_STRUCTURE_MODES:
             raise ValueError(
                 f"invalid structure_mode {structure_mode!r}; "
@@ -1674,16 +1747,53 @@ class Entry(DocBaseModel):
             )
         if not include_ligands and not include_interfaces:
             raise ValueError("custom ingest must include ligands, interfaces, or both")
+        if not include_ligands and (
+            ligand_smiles_dict is not None or ligand_ccd_code_dict is not None
+        ):
+            raise ValueError(
+                "ligand chemistry overrides require include_ligands=True"
+            )
+        overlapping_chemistry = set(ligand_smiles_dict or {}).intersection(
+            ligand_ccd_code_dict or {}
+        )
+        if overlapping_chemistry:
+            raise ValueError(
+                "provide either SMILES or a CCD code for each ligand component, "
+                f"not both: {sorted(overlapping_chemistry)}"
+            )
+        try:
+            cif_file_obj = read_mmcif_file(cif_file)
+            cif_data = list(cif_file_obj.values())[0]
+        except (DeserializationError, IndexError, InvalidFileError, OSError) as exc:
+            raise ValueError(f"cannot parse custom mmCIF {cif_file}: {exc}") from exc
+        check_custom_mmcif_fields(
+            cif_data,
+            source=cif_file,
+            structure_mode=structure_mode,
+            require_label_ids=True,
+        )
         if structure_mode == "pdb":
+            if (
+                "entry" not in cif_data
+                or "id" not in cif_data["entry"]
+                or cif_data["entry"].row_count == 0
+            ):
+                raise ValueError(
+                    f"custom mmCIF {cif_file} needs _entry.id in pdb mode"
+                )
             if pdb_id is not None:
                 raise ValueError(
                     "pdb_id must be None in pdb mode; the deposited _entry.id "
                     "is authoritative"
                 )
-            if ligand_smiles_dict is not None or save_fixed_cif is not None:
+            if (
+                ligand_smiles_dict is not None
+                or ligand_ccd_code_dict is not None
+                or save_fixed_cif is not None
+            ):
                 raise ValueError(
                     "pdb mode uses deposited PDB chemistry and does not accept "
-                    "ligand_smiles_dict or save_fixed_cif"
+                    "ligand chemistry overrides or save_fixed_cif"
                 )
             requested_assemblies = (
                 tuple(str(value) for value in assembly_ids)
@@ -1735,9 +1845,6 @@ class Entry(DocBaseModel):
             if ligand_dir.exists():
                 shutil.rmtree(ligand_dir)
 
-        # Read CIF once into memory — we mutate this copy only, never the file on disk.
-        cif_file_obj = read_mmcif_file(cif_file)
-
         # Multi-model CIFs (NMR ensembles, Boltz multi-sample, PyMOL
         # states) are processed using model 1 only — surface a warning
         # so users know other models were dropped and can call this
@@ -1749,21 +1856,38 @@ class Entry(DocBaseModel):
                 "Call from_custom_cif_file once per model for ensemble analysis."
             )
 
-        # Check for missing bond orders and enrich CIF in-memory if needed
-        unknown_ids = get_unknown_ligand_ids(cif_file_obj) if include_ligands else []
+        # Resolve explicit CCD references before checking which components still
+        # need a user-provided SMILES. Both paths write _chem_comp_bond into the
+        # in-memory copy without touching the caller's file.
+        effective_smiles = dict(ligand_smiles_dict or {})
         enrichment_applied = False
+        if include_ligands and ligand_ccd_code_dict:
+            effective_smiles.update(
+                enrich_cif_with_ccd_bonds(
+                    cif_file_obj,
+                    ligand_ccd_codes=ligand_ccd_code_dict,
+                )
+            )
+            enrichment_applied = True
+
+        unknown_ids = get_unknown_ligand_ids(cif_file_obj) if include_ligands else []
         if unknown_ids:
-            if ligand_smiles_dict is None:
+            missing_chemistry = set(unknown_ids).difference(effective_smiles)
+            if missing_chemistry:
                 raise MissingBondOrderError(
-                    f"CIF contains unknown ligands {unknown_ids} with no "
+                    f"CIF contains unknown ligands {sorted(missing_chemistry)} with no "
                     "_chem_comp_bond and no CCD match. "
-                    "Provide ligand_smiles_dict to assign bond orders."
+                    "Provide a SMILES in ligand_smiles_dict or a CCD code in "
+                    "ligand_ccd_code_dict to assign bond orders."
                 )
             enrich_cif_with_smiles_bonds(
                 cif_file_obj,
-                ligand_smiles=ligand_smiles_dict,
+                ligand_smiles={
+                    comp_id: effective_smiles[comp_id] for comp_id in unknown_ids
+                },
             )
             enrichment_applied = True
+        ligand_smiles_dict = effective_smiles or None
 
         # Optionally persist the enriched CIF. Guard against overwriting
         # the caller's input or an existing file.
@@ -1780,7 +1904,6 @@ class Entry(DocBaseModel):
                 )
             cif_file_obj.write(str(save_fixed_cif))
 
-        cif_data = list(cif_file_obj.values())[0]
         atoms = get_structure_with_altloc(
             cif_file_obj, model=1, use_author_fields=False, include_bonds=True
         )
@@ -1853,6 +1976,7 @@ class Entry(DocBaseModel):
                 neighboring_ligand_threshold,
                 data_dir=data_dir,
                 ligand_smiles_dict=ligand_smiles_dict,
+                ligand_ccd_code_dict=ligand_ccd_code_dict,
                 water_chains=water_chains,
                 spatial_index=spatial_index,
             )

@@ -361,96 +361,6 @@ def _protein_asym_sequences(block: Any) -> dict[str, str]:
     }
 
 
-def _check_custom_mmcif_fields(
-    block: Any,
-    *,
-    source: Path,
-    structure_mode: str,
-) -> None:
-    """Check only the mmCIF fields required by the selected ingest mode."""
-    if "atom_site" not in block:
-        raise ValueError(f"custom mmCIF {source} has no _atom_site category")
-    atom_site = block["atom_site"]
-    required_columns = {
-        "group_PDB",
-        "type_symbol",
-        "Cartn_x",
-        "Cartn_y",
-        "Cartn_z",
-    }
-    missing = sorted(required_columns.difference(atom_site))
-    identifier_pairs = {
-        "atom name": ("label_atom_id", "auth_atom_id"),
-        "residue name": ("label_comp_id", "auth_comp_id"),
-        "chain ID": ("label_asym_id", "auth_asym_id"),
-        "residue number": ("label_seq_id", "auth_seq_id"),
-    }
-    missing_identifiers = [
-        f"{description} ({first} or {second})"
-        for description, (first, second) in identifier_pairs.items()
-        if first not in atom_site and second not in atom_site
-    ]
-    if missing or missing_identifiers:
-        details = [f"_atom_site.{column}" for column in missing]
-        details.extend(missing_identifiers)
-        raise ValueError(
-            f"custom mmCIF {source} is missing required coordinate fields: "
-            + ", ".join(details)
-        )
-
-    # These fields have unambiguous defaults for single-model custom input.
-    atom_count = atom_site.row_count
-    if "pdbx_PDB_model_num" not in atom_site:
-        atom_site["pdbx_PDB_model_num"] = np.ones(atom_count, dtype=np.int32)
-    if "pdbx_PDB_ins_code" not in atom_site:
-        atom_site["pdbx_PDB_ins_code"] = ["."] * atom_count
-
-    if structure_mode != "pdb":
-        return
-    if "label_asym_id" not in atom_site:
-        raise ValueError(
-            f"custom mmCIF {source} needs _atom_site.label_asym_id in pdb mode "
-            "because assembly definitions reference label asym IDs"
-        )
-    assembly_fields = {
-        "pdbx_struct_assembly_gen": {
-            "assembly_id",
-            "oper_expression",
-            "asym_id_list",
-        },
-        "pdbx_struct_oper_list": {
-            "id",
-            "matrix[1][1]",
-            "matrix[1][2]",
-            "matrix[1][3]",
-            "matrix[2][1]",
-            "matrix[2][2]",
-            "matrix[2][3]",
-            "matrix[3][1]",
-            "matrix[3][2]",
-            "matrix[3][3]",
-            "vector[1]",
-            "vector[2]",
-            "vector[3]",
-        },
-    }
-    missing_assembly_fields: list[str] = []
-    for category_name, columns in assembly_fields.items():
-        if category_name not in block:
-            missing_assembly_fields.append(f"_{category_name}")
-            continue
-        missing_assembly_fields.extend(
-            f"_{category_name}.{column}"
-            for column in sorted(columns.difference(block[category_name]))
-        )
-    if missing_assembly_fields:
-        raise ValueError(
-            f"custom mmCIF {source} is missing fields required by pdb mode: "
-            + ", ".join(missing_assembly_fields)
-            + "; use structure_mode='as_is' for an already assembled model"
-        )
-
-
 def _select_assembly_ids(
     available: Iterable[str], selected: Iterable[str] | None
 ) -> list[str]:
@@ -566,7 +476,10 @@ def write_custom_query_files(
     import biotite.structure as struc
     from biotite.file import DeserializationError, InvalidFileError
 
-    from plinder.data.annotations.cif_utils import read_mmcif_file
+    from plinder.data.annotations.cif_utils import (
+        check_custom_mmcif_fields,
+        read_mmcif_file,
+    )
     from plinder.data.annotations.save_utils import save_cif_file
 
     if min_chain_length < 1:
@@ -608,7 +521,7 @@ def write_custom_query_files(
             block = list(cif_file.values())[0]
         except (DeserializationError, IndexError, InvalidFileError, OSError) as exc:
             raise ValueError(f"cannot parse custom mmCIF {source}: {exc}") from exc
-        _check_custom_mmcif_fields(
+        check_custom_mmcif_fields(
             block,
             source=source,
             structure_mode=structure_mode,

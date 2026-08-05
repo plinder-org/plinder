@@ -49,6 +49,114 @@ def read_mmcif_file(mmcif_filename: Path | str) -> pdbx.CIFFile:
     return pdbx.CIFFile.read(path)
 
 
+def check_custom_mmcif_fields(
+    block: pdbx.CIFBlock,
+    *,
+    source: Path,
+    structure_mode: str,
+    require_label_ids: bool = False,
+) -> None:
+    """Check fields required to read custom coordinates and assemblies.
+
+    Model number and insertion code are optional for a single-model custom
+    structure and receive unambiguous defaults. Deposited-PDB mode additionally
+    requires the assembly operation tables. Other deposition metadata (authors,
+    citations, experimental details, and validation categories) is not required.
+    """
+    if "atom_site" not in block:
+        raise ValueError(f"custom mmCIF {source} has no _atom_site category")
+    atom_site = block["atom_site"]
+    required_columns = {
+        "group_PDB",
+        "type_symbol",
+        "Cartn_x",
+        "Cartn_y",
+        "Cartn_z",
+    }
+    missing = sorted(required_columns.difference(atom_site))
+    if require_label_ids:
+        label_columns = {
+            "label_atom_id",
+            "label_comp_id",
+            "label_asym_id",
+            "label_seq_id",
+        }
+        missing.extend(sorted(label_columns.difference(atom_site)))
+        missing_identifiers: list[str] = []
+    else:
+        identifier_pairs = {
+            "atom name": ("label_atom_id", "auth_atom_id"),
+            "residue name": ("label_comp_id", "auth_comp_id"),
+            "chain ID": ("label_asym_id", "auth_asym_id"),
+            "residue number": ("label_seq_id", "auth_seq_id"),
+        }
+        missing_identifiers = [
+            f"{description} ({first} or {second})"
+            for description, (first, second) in identifier_pairs.items()
+            if first not in atom_site and second not in atom_site
+        ]
+    if missing or missing_identifiers:
+        details = [f"_atom_site.{column}" for column in missing]
+        details.extend(missing_identifiers)
+        raise ValueError(
+            f"custom mmCIF {source} is missing required coordinate fields: "
+            + ", ".join(details)
+        )
+
+    atom_count = atom_site.row_count
+    if "pdbx_PDB_model_num" not in atom_site:
+        atom_site["pdbx_PDB_model_num"] = np.ones(atom_count, dtype=np.int32)
+    if "pdbx_PDB_ins_code" not in atom_site:
+        atom_site["pdbx_PDB_ins_code"] = ["."] * atom_count
+
+    if structure_mode != "pdb":
+        if structure_mode != "as_is":
+            raise ValueError("structure_mode must be 'as_is' or 'pdb'")
+        return
+    if "label_asym_id" not in atom_site:
+        raise ValueError(
+            f"custom mmCIF {source} needs _atom_site.label_asym_id in pdb mode "
+            "because assembly definitions reference label asym IDs"
+        )
+    assembly_fields = {
+        "pdbx_struct_assembly_gen": {
+            "assembly_id",
+            "oper_expression",
+            "asym_id_list",
+        },
+        "pdbx_struct_oper_list": {
+            "id",
+            "matrix[1][1]",
+            "matrix[1][2]",
+            "matrix[1][3]",
+            "matrix[2][1]",
+            "matrix[2][2]",
+            "matrix[2][3]",
+            "matrix[3][1]",
+            "matrix[3][2]",
+            "matrix[3][3]",
+            "vector[1]",
+            "vector[2]",
+            "vector[3]",
+        },
+    }
+    missing_assembly_fields: list[str] = []
+    for category_name, columns in assembly_fields.items():
+        if category_name not in block:
+            missing_assembly_fields.append(f"_{category_name}")
+            continue
+        missing_assembly_fields.extend(
+            f"_{category_name}.{column}"
+            for column in sorted(columns.difference(block[category_name]))
+        )
+    if missing_assembly_fields:
+        raise ValueError(
+            f"custom mmCIF {source} is missing fields required by pdb mode: "
+            + ", ".join(missing_assembly_fields)
+            + "; use structure_mode='as_is' for an already assembled model"
+        )
+
+
 def read_mmcif_container(mmcif_filename: Path) -> pdbx.CIFBlock:
     """Parse mmcif file and return the first data block."""
     cif_file = read_mmcif_file(mmcif_filename)
@@ -838,12 +946,12 @@ def _rdkit_bond_to_cif(bond: Chem.rdchem.Bond) -> tuple[str, str]:
     """
     aromatic_flag = "Y" if bond.GetIsAromatic() else "N"
     order_map = {
-        Chem.rdchem.BondType.SINGLE: "SING",
-        Chem.rdchem.BondType.DOUBLE: "DOUB",
-        Chem.rdchem.BondType.TRIPLE: "TRIP",
-        Chem.rdchem.BondType.AROMATIC: "AROM",
+        Chem.rdchem.BondType.SINGLE: "sing",
+        Chem.rdchem.BondType.DOUBLE: "doub",
+        Chem.rdchem.BondType.TRIPLE: "trip",
+        Chem.rdchem.BondType.AROMATIC: "arom",
     }
-    order = order_map.get(bond.GetBondType(), "SING")
+    order = order_map.get(bond.GetBondType(), "sing")
     return order, aromatic_flag
 
 
@@ -990,6 +1098,264 @@ def _bonds_by_substructure_match(
     return out
 
 
+def _component_reference_instance(
+    atoms: struc.AtomArray,
+    comp_id: str,
+) -> struc.AtomArray:
+    """Return one component instance after checking all copies agree."""
+    component_atoms = atoms[atoms.res_name == comp_id]
+    if component_atoms.array_length() == 0:
+        raise ValueError(f"No atoms found for component {comp_id} in CIF")
+
+    instance_keys = list(
+        dict.fromkeys(
+            (str(chain), int(res_id))
+            for chain, res_id in zip(component_atoms.chain_id, component_atoms.res_id)
+        )
+    )
+    instances = [
+        (
+            key,
+            component_atoms[
+                (component_atoms.chain_id == key[0])
+                & (component_atoms.res_id == key[1])
+            ],
+        )
+        for key in instance_keys
+    ]
+    ref_key, ref_atoms = instances[0]
+    ref_names = tuple(ref_atoms.atom_name)
+    ref_elements = tuple(ref_atoms.element)
+    for key, instance_atoms in instances[1:]:
+        names = tuple(instance_atoms.atom_name)
+        elements = tuple(instance_atoms.element)
+        if names != ref_names or elements != ref_elements:
+            raise ValueError(
+                f"{comp_id}: instances disagree on heavy-atom naming/order. "
+                f"Instance {ref_key} has {len(ref_names)} atoms starting with "
+                f"{ref_names[:5]}; instance {key} has {len(names)} atoms "
+                f"starting with {names[:5]}. mmCIF _chem_comp_bond is keyed "
+                "by component ID, so every copy must use the same chemistry "
+                "and atom names. Use distinct component IDs when copies differ."
+            )
+    if len(instances) > 1:
+        LOG.info(
+            "%s: %d instances share one atom naming scheme; writing one "
+            "_chem_comp_bond definition",
+            comp_id,
+            len(instances),
+        )
+    return ref_atoms
+
+
+def _existing_chem_comp_bonds(
+    block: pdbx.CIFBlock,
+    *,
+    replace_components: set[str] | None = None,
+) -> list[tuple[str, str, str, str, str]]:
+    """Read existing component bonds except explicitly replaced components."""
+    if "chem_comp_bond" not in block:
+        return []
+    replace_components = replace_components or set()
+    category = block["chem_comp_bond"]
+    required = {"comp_id", "atom_id_1", "atom_id_2", "value_order"}
+    missing = sorted(required.difference(category))
+    if missing:
+        raise ValueError(
+            "existing _chem_comp_bond is missing required fields: "
+            + ", ".join(f"_chem_comp_bond.{name}" for name in missing)
+        )
+    comp_ids = category["comp_id"].as_array(str)
+    atom_ids_1 = category["atom_id_1"].as_array(str)
+    atom_ids_2 = category["atom_id_2"].as_array(str)
+    orders = category["value_order"].as_array(str)
+    aromatic_flags = (
+        category["pdbx_aromatic_flag"].as_array(str)
+        if "pdbx_aromatic_flag" in category
+        else np.full(category.row_count, "N")
+    )
+    return [
+        (comp_id, atom_id_1, atom_id_2, order.lower(), aromatic_flag)
+        for comp_id, atom_id_1, atom_id_2, order, aromatic_flag in zip(
+            comp_ids,
+            atom_ids_1,
+            atom_ids_2,
+            orders,
+            aromatic_flags,
+        )
+        if comp_id not in replace_components
+    ]
+
+
+def _set_chem_comp_bonds(
+    block: pdbx.CIFBlock,
+    bonds: list[tuple[str, str, str, str, str]],
+) -> None:
+    """Write dictionary-valid component bond rows."""
+    block["chem_comp_bond"] = pdbx.CIFCategory(
+        {
+            "comp_id": [bond[0] for bond in bonds],
+            "atom_id_1": [bond[1] for bond in bonds],
+            "atom_id_2": [bond[2] for bond in bonds],
+            "value_order": [bond[3].lower() for bond in bonds],
+            "pdbx_aromatic_flag": [bond[4] for bond in bonds],
+        }
+    )
+
+
+def enrich_cif_with_ccd_bonds(
+    cif_file: pdbx.CIFFile,
+    ligand_ccd_codes: dict[str, str],
+) -> dict[str, str]:
+    """Assign custom component bonds from Chemical Component Dictionary entries.
+
+    The input mapping uses the custom component ID in ``_atom_site`` as its
+    key and a reference CCD code as its value, for example ``{"LIG": "ATP"}``.
+    Atom names are matched first. If they differ, provisional connectivity is
+    inferred from the supplied coordinates and graph-matched to the CCD
+    template. The function refuses partial or ambiguous mappings instead of
+    assigning bonds from element order alone.
+
+    Returns
+    -------
+    dict[str, str]
+        Canonical CCD SMILES keyed by the custom component ID.
+    """
+    from plinder.data.annotations.ligand_utils import (
+        _get_ccd_atomarray,
+        _get_ccd_mol,
+        _get_ccd_smiles,
+    )
+
+    if not ligand_ccd_codes:
+        return {}
+    block = list(cif_file.values())[0]
+    atoms = pdbx.get_structure(
+        cif_file, model=1, use_author_fields=False, include_bonds=False
+    )
+    atoms = atoms[~is_hydrogen_isotope(atoms.element)]
+    bonds = _existing_chem_comp_bonds(
+        block,
+        replace_components=set(ligand_ccd_codes),
+    )
+    smiles_by_component: dict[str, str] = {}
+    bond_type_to_cif = {
+        struc.BondType.SINGLE: ("sing", "N"),
+        struc.BondType.DOUBLE: ("doub", "N"),
+        struc.BondType.TRIPLE: ("trip", "N"),
+        struc.BondType.QUADRUPLE: ("quad", "N"),
+        struc.BondType.AROMATIC_SINGLE: ("sing", "Y"),
+        struc.BondType.AROMATIC_DOUBLE: ("doub", "Y"),
+        struc.BondType.AROMATIC_TRIPLE: ("trip", "Y"),
+        struc.BondType.AROMATIC: ("arom", "Y"),
+    }
+    for custom_comp_id, reference_code in ligand_ccd_codes.items():
+        custom_comp_id = str(custom_comp_id).strip()
+        reference_code = str(reference_code).strip().upper()
+        if not custom_comp_id or not reference_code:
+            raise ValueError("ligand component IDs and CCD codes must not be empty")
+        custom_atoms = _component_reference_instance(atoms, custom_comp_id)
+        ccd_atoms = _get_ccd_atomarray(reference_code)
+        if ccd_atoms is None:
+            raise ValueError(
+                f"CCD code {reference_code!r} supplied for component "
+                f"{custom_comp_id!r} was not found in the Chemical Component "
+                "Dictionary"
+            )
+        ccd_atoms = ccd_atoms[~is_hydrogen_isotope(ccd_atoms.element)]
+        if ccd_atoms.bonds is None or len(ccd_atoms.bonds.as_array()) == 0:
+            raise ValueError(
+                f"CCD code {reference_code!r} has no heavy-atom bonds to assign "
+                f"to component {custom_comp_id!r}"
+            )
+        if custom_atoms.array_length() != ccd_atoms.array_length():
+            raise ValueError(
+                f"cannot map component {custom_comp_id!r} to CCD code "
+                f"{reference_code!r}: custom CIF has "
+                f"{custom_atoms.array_length()} heavy atoms but CCD has "
+                f"{ccd_atoms.array_length()}"
+            )
+
+        custom_names = [str(name) for name in custom_atoms.atom_name]
+        ccd_names = [str(name) for name in ccd_atoms.atom_name]
+        if len(set(custom_names)) != len(custom_names):
+            raise ValueError(
+                f"component {custom_comp_id!r} has duplicate heavy-atom names; "
+                "CCD bond assignment requires unique atom names"
+            )
+        bonds_to_emit: list[tuple[str, str, str, str]] | None = None
+        if set(custom_names) == set(ccd_names):
+            ccd_element_by_name = dict(zip(ccd_names, ccd_atoms.element))
+            element_mismatches = [
+                name
+                for name, element in zip(custom_names, custom_atoms.element)
+                if element != ccd_element_by_name[name]
+            ]
+            if element_mismatches:
+                raise ValueError(
+                    f"cannot map component {custom_comp_id!r} to CCD code "
+                    f"{reference_code!r}: atom names match but elements differ "
+                    f"for {element_mismatches[:5]}"
+                )
+            ccd_index_to_custom_name = {
+                index: ccd_name for index, ccd_name in enumerate(ccd_names)
+            }
+        else:
+            ccd_template = _get_ccd_mol(reference_code)
+            if ccd_template is None:
+                raise ValueError(
+                    f"CCD code {reference_code!r} could not provide an RDKit "
+                    f"template for component {custom_comp_id!r}"
+                )
+            try:
+                bonds_to_emit = _bonds_by_substructure_match(
+                    custom_comp_id,
+                    ccd_template,
+                    custom_atoms,
+                )
+            except ValueError as exc:
+                raise ValueError(
+                    f"cannot safely map component {custom_comp_id!r} to CCD "
+                    f"code {reference_code!r} from atom names or inferred "
+                    f"connectivity: {exc}. Provide a SMILES whose parse order "
+                    "matches the custom CIF if its geometry does not support "
+                    "distance-based bond inference."
+                ) from exc
+
+        if bonds_to_emit is None:
+            bonds_to_emit = []
+            for atom_index_1, atom_index_2, bond_type in ccd_atoms.bonds.as_array():
+                bond_type = struc.BondType(bond_type)
+                if bond_type not in bond_type_to_cif:
+                    raise ValueError(
+                        f"CCD code {reference_code!r} contains unsupported bond "
+                        f"type {bond_type.name} for component {custom_comp_id!r}"
+                    )
+                order, aromatic_flag = bond_type_to_cif[bond_type]
+                bonds_to_emit.append(
+                    (
+                        ccd_index_to_custom_name[int(atom_index_1)],
+                        ccd_index_to_custom_name[int(atom_index_2)],
+                        order,
+                        aromatic_flag,
+                    )
+                )
+        bonds.extend(
+            (custom_comp_id, atom_1, atom_2, order, aromatic_flag)
+            for atom_1, atom_2, order, aromatic_flag in bonds_to_emit
+        )
+        smiles = _get_ccd_smiles(reference_code)
+        if smiles is None:
+            raise ValueError(
+                f"CCD code {reference_code!r} could not be converted to RDKit "
+                f"chemistry for component {custom_comp_id!r}"
+            )
+        smiles_by_component[custom_comp_id] = smiles
+
+    _set_chem_comp_bonds(block, bonds)
+    return smiles_by_component
+
+
 def enrich_cif_with_smiles_bonds(
     cif_file: pdbx.CIFFile,
     ligand_smiles: dict[str, str],
@@ -1051,31 +1417,7 @@ def enrich_cif_with_smiles_bonds(
         cif_file, model=1, use_author_fields=False, include_bonds=True
     )
     atoms = atoms[~is_hydrogen_isotope(atoms.element)]
-
-    # Preserve existing _chem_comp_bond rows. biotite's parser requires
-    # pdbx_aromatic_flag to consume the category — default to "N" when
-    # absent so pre-existing rows remain parseable.
-    comp_id_list: list[str] = []
-    atom_id_1_list: list[str] = []
-    atom_id_2_list: list[str] = []
-    value_order_list: list[str] = []
-    aromatic_flag_list: list[str] = []
-
-    if "chem_comp_bond" in block:
-        existing = block["chem_comp_bond"]
-        existing_flag = (
-            existing["pdbx_aromatic_flag"].as_array()
-            if "pdbx_aromatic_flag" in existing
-            else None
-        )
-        for i in range(existing.row_count):
-            comp_id_list.append(existing["comp_id"].as_array()[i])
-            atom_id_1_list.append(existing["atom_id_1"].as_array()[i])
-            atom_id_2_list.append(existing["atom_id_2"].as_array()[i])
-            value_order_list.append(existing["value_order"].as_array()[i])
-            aromatic_flag_list.append(
-                existing_flag[i] if existing_flag is not None else "N"
-            )
+    bonds = _existing_chem_comp_bonds(block)
 
     for comp_id, smiles in to_process.items():
         template = Chem.MolFromSmiles(smiles)
@@ -1083,54 +1425,7 @@ def enrich_cif_with_smiles_bonds(
             raise ValueError(f"Invalid SMILES for {comp_id}: {smiles}")
         template_heavy = Chem.RemoveHs(template, sanitize=False)
 
-        lig_mask = atoms.res_name == comp_id
-        if not np.any(lig_mask):
-            raise ValueError(f"No atoms found for component {comp_id} in CIF")
-
-        # mmCIF schema keys ``_chem_comp_bond`` by ``comp_id``, not by
-        # instance — biotite applies a single bond definition to every
-        # copy via atom-name lookup. So multi-instance custom residues
-        # (docking ensembles, multi-copy systems) require that all
-        # instances share the same heavy-atom naming, otherwise the
-        # bonds we emit from instance 1 won't be findable in the others.
-        # We validate that explicitly and emit bonds once from the
-        # reference instance — refuse to silently produce wrong bonds.
-        all_lig_atoms = atoms[lig_mask]
-        instances: list[tuple[tuple[str, int], struc.AtomArray]] = []
-        seen_keys: dict[tuple[str, int], None] = {}
-        for chain, res_id in zip(all_lig_atoms.chain_id, all_lig_atoms.res_id):
-            seen_keys.setdefault((str(chain), int(res_id)), None)
-        for chain, res_id in seen_keys:
-            inst_mask = (all_lig_atoms.chain_id == chain) & (
-                all_lig_atoms.res_id == res_id
-            )
-            inst = all_lig_atoms[inst_mask]
-            inst_heavy = inst[~is_hydrogen_isotope(inst.element)]
-            instances.append(((chain, res_id), inst_heavy))
-
-        ref_key, ref_heavy = instances[0]
-        ref_names = tuple(ref_heavy.atom_name)
-        for key, inst_heavy in instances[1:]:
-            inst_names = tuple(inst_heavy.atom_name)
-            if inst_names != ref_names:
-                raise ValueError(
-                    f"{comp_id}: instances disagree on heavy-atom naming/order. "
-                    f"Instance {ref_key} has {len(ref_names)} atoms "
-                    f"starting with {ref_names[:5]}; instance {key} "
-                    f"has {len(inst_names)} atoms starting with "
-                    f"{inst_names[:5]}. mmCIF ``_chem_comp_bond`` is "
-                    "keyed by comp_id and biotite applies bonds to all "
-                    "copies via atom-name match — every instance must "
-                    "share identical heavy-atom naming. Use distinct "
-                    "comp_ids if instances differ chemically."
-                )
-        if len(instances) > 1:
-            LOG.info(
-                f"{comp_id}: {len(instances)} instances with consistent "
-                "atom naming, defining _chem_comp_bond once "
-                "(biotite applies to all copies via atom-name match)."
-            )
-        lig_heavy = ref_heavy
+        lig_heavy = _component_reference_instance(atoms, comp_id)
 
         if force_substructure_match:
             bonds_to_emit = _bonds_by_substructure_match(comp_id, template, lig_heavy)
@@ -1138,21 +1433,17 @@ def enrich_cif_with_smiles_bonds(
             bonds_to_emit = _bonds_by_position(comp_id, template_heavy, lig_heavy)
 
         for atom_name_1, atom_name_2, value_order, aromatic_flag in bonds_to_emit:
-            comp_id_list.append(comp_id)
-            atom_id_1_list.append(atom_name_1)
-            atom_id_2_list.append(atom_name_2)
-            value_order_list.append(value_order)
-            aromatic_flag_list.append(aromatic_flag)
+            bonds.append(
+                (
+                    comp_id,
+                    atom_name_1,
+                    atom_name_2,
+                    value_order,
+                    aromatic_flag,
+                )
+            )
 
-    block["chem_comp_bond"] = pdbx.CIFCategory(
-        {
-            "comp_id": comp_id_list,
-            "atom_id_1": atom_id_1_list,
-            "atom_id_2": atom_id_2_list,
-            "value_order": value_order_list,
-            "pdbx_aromatic_flag": aromatic_flag_list,
-        }
-    )
+    _set_chem_comp_bonds(block, bonds)
 
 
 def assign_bond_orders_from_smiles(

@@ -25,6 +25,7 @@ from plinder.data.annotations.interface_utils import (
 )
 from plinder.data.annotations.ligand_utils import (
     BiounitSpatialIndex,
+    Ligand,
     classify_ligand_polymer_classes,
     get_water_chain_ids,
     is_known_artifact_ligand,
@@ -439,6 +440,60 @@ def test_ligand_polymer_units_are_not_summed_across_disconnected_fragments() -> 
 
     assert classes["is_monopeptide"]
     assert not classes["is_oligopeptide"]
+
+
+def test_multi_residue_ligand_sums_disconnected_resolved_saccharides() -> None:
+    nag = "CC(=O)N[C@@H]1[C@@H](O)[C@H](O)[C@@H](CO)O[C@H]1O"
+    classes = classify_ligand_polymer_classes(
+        nag,
+        resolved_smiles=f"{nag}.{nag}",
+        is_multi_residue=True,
+    )
+
+    assert not classes["is_monosaccharide"]
+    assert classes["is_oligosaccharide"]
+
+
+def test_multi_residue_ligand_uses_richer_identity_for_rdkit() -> None:
+    nag = "CC(=O)N[C@@H]1[C@@H](O)[C@H](O)[C@@H](CO)O[C@H]1O"
+    ligand = Ligand(
+        ccd_code="NAG-NAG",
+        plip_type="SACCHARIDE",
+        smiles=nag,
+        resolved_smiles=f"{nag}.{nag}",
+        residue_numbers=[1, 2],
+    )
+
+    ligand.set_rdkit()
+
+    assert ligand.smiles == ligand.resolved_smiles
+    assert ligand.rdkit_canonical_smiles == ligand.resolved_smiles
+    assert ligand.num_heavy_atoms == 2 * Chem.MolFromSmiles(nag).GetNumHeavyAtoms()
+    assert ligand.is_oligosaccharide
+    assert not ligand.is_monosaccharide
+
+    partially_resolved = Ligand(
+        ccd_code="NAG-NAG",
+        plip_type="SACCHARIDE",
+        smiles=nag,
+        resolved_smiles="CCO",
+        residue_numbers=[1, 2],
+    )
+    partially_resolved.set_rdkit()
+
+    assert partially_resolved.smiles == nag
+    assert partially_resolved.is_oligosaccharide
+    assert not partially_resolved.is_monosaccharide
+
+    equal_size = Ligand(
+        ccd_code="LIG-LIG",
+        smiles="CC.O",
+        resolved_smiles="CCO",
+        residue_numbers=[1, 2],
+    )
+    equal_size.set_rdkit()
+
+    assert equal_size.smiles == "CCO"
 
 
 def test_get_water_chain_ids_requires_all_chain_atoms_to_be_solvent():
@@ -1399,6 +1454,16 @@ def test_get_single_ligand_system_annotations(cif_6fx1, mock_alternative_dataset
         "MLI",
     }
     assert single_ligand_system_result == single_ligand_system_target
+    multi_residue_saccharides = [
+        ligand
+        for ligand in ligands
+        if ligand.plip_type == "SACCHARIDE" and "-" in ligand.ccd_code
+    ]
+    assert multi_residue_saccharides
+    for ligand in multi_residue_saccharides:
+        assert ligand.num_heavy_atoms >= ligand.num_resolved_heavy_atoms
+        assert ligand.is_oligosaccharide
+        assert not ligand.is_monosaccharide
 
 
 def test_canonical_ligand_saving_and_system_reconstruction(

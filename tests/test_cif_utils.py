@@ -286,8 +286,8 @@ def test_assign_bond_orders_from_smiles(boltz_cif):
 
     assert all(c == "LIG" for c in comp_ids)
     assert len(comp_ids) > 0
-    assert "SING" in orders or "AROM" in orders
-    assert "DOUB" in orders or "AROM" in orders
+    assert "sing" in orders or "arom" in orders
+    assert "doub" in orders or "arom" in orders
 
 
 def test_check_passes_after_enrichment(boltz_cif):
@@ -694,6 +694,79 @@ def test_from_custom_cif_with_smiles(boltz_cif):
     f = pdbx.CIFFile.read(str(boltz_cif))
     block = list(f.values())[0]
     assert "chem_comp_bond" not in block
+
+
+def test_from_custom_cif_with_ccd_code(boltz_cif, tmp_path):
+    """A generic LIG can borrow bonds and RDKit chemistry from a CCD entry."""
+    from plinder.data.annotations.aggregate_annotations import Entry
+    from plinder.data.annotations.ligand_utils import _get_ccd_smiles
+
+    fixed_cif = tmp_path / "ccd_bonds.cif"
+    entry = Entry.from_custom_cif_file(
+        pdb_id="8c3u",
+        cif_file=boltz_cif,
+        ligand_ccd_code_dict={"LIG": "T9C"},
+        save_fixed_cif=fixed_cif,
+    )
+    ligands = [
+        ligand
+        for system in entry.systems.values()
+        for ligand in system.ligands
+        if ligand.ccd_code == "T9C"
+    ]
+
+    assert ligands
+    assert _get_ccd_smiles("T9C") is not None
+    assert {ligand.smiles for ligand in ligands} == {_get_ccd_smiles("T9C")}
+    assert all(ligand.rdkit_canonical_smiles for ligand in ligands)
+    assert all(ligand.num_heavy_atoms for ligand in ligands)
+    fixed = pdbx.CIFFile.read(str(fixed_cif))
+    fixed_block = list(fixed.values())[0]
+    bond_category = fixed_block["chem_comp_bond"]
+    ligand_bond_mask = bond_category["comp_id"].as_array(str) == "LIG"
+    assert np.count_nonzero(ligand_bond_mask) > 0
+    assert all(
+        order == order.lower()
+        for order in bond_category["value_order"].as_array(str)[ligand_bond_mask]
+    )
+    fixed_atoms = pdbx.get_structure(fixed, model=1, include_bonds=True)
+    ligand_atoms = fixed_atoms[fixed_atoms.res_name == "LIG"]
+    assert ligand_atoms.bonds is not None
+    assert len(ligand_atoms.bonds.as_array()) > 0
+
+
+def test_from_custom_cif_rejects_two_chemistry_sources(boltz_cif):
+    from plinder.data.annotations.aggregate_annotations import Entry
+
+    with pytest.raises(ValueError, match="either SMILES or a CCD code"):
+        Entry.from_custom_cif_file(
+            pdb_id="8c3u",
+            cif_file=boltz_cif,
+            ligand_smiles_dict={"LIG": LIGAND_SMILES},
+            ligand_ccd_code_dict={"LIG": "T9C"},
+        )
+
+
+def test_from_custom_cif_reports_missing_ccd_code(boltz_cif):
+    from plinder.data.annotations.aggregate_annotations import Entry
+
+    with pytest.raises(ValueError, match="NOT_A_CCD.*was not found"):
+        Entry.from_custom_cif_file(
+            pdb_id="8c3u",
+            cif_file=boltz_cif,
+            ligand_ccd_code_dict={"LIG": "not_a_ccd"},
+        )
+
+
+def test_from_custom_cif_rejects_wrong_ccd_template(boltz_cif):
+    from plinder.data.annotations.aggregate_annotations import Entry
+
+    with pytest.raises(ValueError, match="cannot map component 'LIG' to CCD code"):
+        Entry.from_custom_cif_file(
+            pdb_id="8c3u",
+            cif_file=boltz_cif,
+            ligand_ccd_code_dict={"LIG": "ATP"},
+        )
 
 
 def test_from_custom_cif_user_smiles_takes_precedence(boltz_cif):

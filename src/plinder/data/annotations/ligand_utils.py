@@ -667,8 +667,17 @@ def _peptide_unit_count(mol: Mol) -> int:
 
 
 @cache
-def _classify_ligand_polymer_classes(smiles: str) -> tuple[bool, ...]:
-    """Return cached class flags for one canonical SMILES."""
+def _classify_ligand_polymer_classes(
+    smiles: str,
+    sum_disconnected_units: bool = False,
+) -> tuple[bool, ...]:
+    """Return cached class flags for one SMILES representation.
+
+    Disconnected fragments are normally treated as a mixture, so two copies
+    of a monomer do not become an oligomer.  The caller may sum their units
+    when separate residue records are known to belong to one multi-residue
+    ligand whose inter-residue bonds were absent from the deposited CIF.
+    """
     mol = Chem.MolFromSmiles(smiles) if smiles else None
     unit_counts = {"saccharide": 0, "nucleotide": 0, "peptide": 0}
     oligo_matches = {family: False for family in unit_counts}
@@ -677,11 +686,21 @@ def _classify_ligand_polymer_classes(smiles: str) -> tuple[bool, ...]:
             saccharide_units, nucleotide_units = _sugar_and_nucleotide_unit_counts(
                 fragment
             )
-            unit_counts["saccharide"] = max(unit_counts["saccharide"], saccharide_units)
-            unit_counts["nucleotide"] = max(unit_counts["nucleotide"], nucleotide_units)
-            unit_counts["peptide"] = max(
-                unit_counts["peptide"], _peptide_unit_count(fragment)
-            )
+            peptide_units = _peptide_unit_count(fragment)
+            if sum_disconnected_units:
+                unit_counts["saccharide"] += saccharide_units
+                unit_counts["nucleotide"] += nucleotide_units
+                unit_counts["peptide"] += peptide_units
+            else:
+                unit_counts["saccharide"] = max(
+                    unit_counts["saccharide"], saccharide_units
+                )
+                unit_counts["nucleotide"] = max(
+                    unit_counts["nucleotide"], nucleotide_units
+                )
+                unit_counts["peptide"] = max(
+                    unit_counts["peptide"], peptide_units
+                )
         for family, pattern in _OLIGO_SMARTS.items():
             if pattern is not None:
                 oligo_matches[family] = mol.HasSubstructMatch(pattern)
@@ -693,16 +712,72 @@ def _classify_ligand_polymer_classes(smiles: str) -> tuple[bool, ...]:
     return tuple(result)
 
 
-def classify_ligand_polymer_classes(smiles: str | None) -> dict[str, bool]:
+def classify_ligand_polymer_classes(
+    smiles: str | None,
+    *,
+    resolved_smiles: str | None = None,
+    is_multi_residue: bool = False,
+) -> dict[str, bool]:
     """Classify mono/oligo saccharide, nucleotide, and peptide ligands.
 
     Existing oligo SMARTS are retained. Conservative structural unit counts
-    distinguish one unit from multiple units using only molecular identity, so
-    every occurrence of one canonical SMILES receives the same classification.
+    distinguish one unit from multiple units.  Resolved coordinates may add
+    evidence that the canonical identity omitted; disconnected resolved units
+    are summed only for a ligand already known to span multiple residues.
     """
-    return dict(
-        zip(_POLYMER_CLASS_FIELDS, _classify_ligand_polymer_classes(smiles or ""))
+    flags = dict(
+        zip(
+            _POLYMER_CLASS_FIELDS,
+            _classify_ligand_polymer_classes(smiles or ""),
+        )
     )
+    if not resolved_smiles:
+        return flags
+
+    resolved_flags = dict(
+        zip(
+            _POLYMER_CLASS_FIELDS,
+            _classify_ligand_polymer_classes(
+                resolved_smiles,
+                sum_disconnected_units=is_multi_residue,
+            ),
+        )
+    )
+    for family in ("saccharide", "nucleotide", "peptide"):
+        mono_field = f"is_mono{family}"
+        oligo_field = f"is_oligo{family}"
+        is_oligo = flags[oligo_field] or resolved_flags[oligo_field]
+        flags[oligo_field] = is_oligo
+        flags[mono_field] = not is_oligo and (
+            flags[mono_field] or resolved_flags[mono_field]
+        )
+    return flags
+
+
+def _choose_ligand_smiles_by_heavy_atom_count(
+    reference_smiles: str | None,
+    resolved_smiles: str | None,
+) -> str:
+    """Choose the valid identity containing more represented heavy atoms.
+
+    Prefer the resolved representation on a tie because it retains observed
+    inter-residue connectivity.  The reference wins only when it contributes
+    atoms absent from the coordinate-derived molecule.
+    """
+
+    def valid_candidate(smiles: str | None) -> tuple[str, int] | None:
+        mol = Chem.MolFromSmiles(smiles) if smiles else None
+        if mol is None:
+            return None
+        return smiles, mol.GetNumHeavyAtoms()
+
+    reference = valid_candidate(reference_smiles)
+    resolved = valid_candidate(resolved_smiles)
+    if reference is None:
+        return resolved[0] if resolved is not None else (reference_smiles or "")
+    if resolved is None:
+        return reference[0]
+    return reference[0] if reference[1] > resolved[1] else resolved[0]
 
 
 def get_artifact_codes(data_dir: Path) -> set[str]:
@@ -1070,7 +1145,7 @@ class Ligand(DocBaseModel):
     )
     smiles: str = Field(
         default_factory=str,
-        description="Ligand SMILES from CCD/PRD lookup, or derived from resolved 3D if not in dictionary",
+        description="Ligand SMILES from CCD/PRD lookup or resolved 3D; for composite ligands, the valid representation with more heavy atoms is used and resolved connectivity wins ties",
     )
     resolved_smiles: str = Field(
         default_factory=str,
@@ -1240,6 +1315,12 @@ class Ligand(DocBaseModel):
     def set_rdkit(self) -> None:
         """Compute RDKit molecular descriptors from ``self.smiles``."""
         try:
+            is_multi_residue = self._is_multi_residue
+            if is_multi_residue:
+                self.smiles = _choose_ligand_smiles_by_heavy_atom_count(
+                    self.smiles,
+                    self.resolved_smiles,
+                )
             rdkit_compatible_mol = Chem.MolFromSmiles(self.smiles)
             # smiles is already canonical (from MolToSmiles); kept for schema compat
             self.rdkit_canonical_smiles = self.smiles
@@ -1297,9 +1378,14 @@ class Ligand(DocBaseModel):
                 try:
                     polymer_classes = classify_ligand_polymer_classes(
                         self.rdkit_canonical_smiles,
+                        resolved_smiles=self.resolved_smiles,
+                        is_multi_residue=self._is_multi_residue,
                     )
                     for field, value in polymer_classes.items():
                         setattr(self, field, value)
+                    if self.plip_type == "SACCHARIDE" and self._is_multi_residue:
+                        self.is_monosaccharide = False
+                        self.is_oligosaccharide = True
                 except RuntimeError:
                     self.is_invalid = True
         else:
@@ -1348,6 +1434,7 @@ class Ligand(DocBaseModel):
         data_dir: ty.Optional[Path] = None,
         chain_to_seqres: dict[str, str] | None = None,
         ligand_smiles_dict: dict[str, str] | None = None,
+        ligand_ccd_code_dict: dict[str, str] | None = None,
         water_chains: set[str] | None = None,
         spatial_index: BiounitSpatialIndex | None = None,
         member_residue_numbers: dict[str, list[int]] | None = None,
@@ -1394,6 +1481,10 @@ class Ligand(DocBaseModel):
             field and the stereo template used by
             :func:`_check_stereo_vs_template` — the caller is assumed
             to know that the CCD entry is absent or a placeholder.
+        ligand_ccd_code_dict : dict[str, str], optional
+            Custom component ID to reference CCD code. This changes the
+            reported ``ccd_code`` while ``ligand_smiles_dict`` carries the
+            resolved reference SMILES used for RDKit and stereo checks.
         water_chains : set[str], optional
             Chain IDs containing only solvent atoms. Pass a precomputed set
             when processing multiple ligands from the same assembly.
@@ -1525,7 +1616,11 @@ class Ligand(DocBaseModel):
                     names.append(str(res_name))
             return names
 
-        ccd_code = "-".join(_residues_in_order(lig_atoms))
+        residue_component_ids = _residues_in_order(lig_atoms)
+        ccd_code = "-".join(
+            (ligand_ccd_code_dict or {}).get(component_id, component_id)
+            for component_id in residue_component_ids
+        )
         # Get SMILES from CCD template via biotite, fall back to structure
         from plinder.core.structure.atoms import is_hydrogen_isotope
 
@@ -1536,20 +1631,28 @@ class Ligand(DocBaseModel):
         # mol below can still be built (no-op when bonds are already present).
         lig_heavy = _fill_missing_ccd_bonds(lig_heavy)
         res_names = _residues_in_order(lig_heavy)
-        if len(res_names) == 1:
-            resname = res_names[0]
+        reference_fragments: list[str] = []
+        for resname in res_names:
             # User-supplied SMILES takes precedence — when the caller
             # explicitly provided one, CCD is assumed to be wrong or a
             # generic placeholder (biotite returns one for some codes
             # like "LIG"). Fall through to CCD then PRD otherwise.
             if ligand_smiles_dict and resname in ligand_smiles_dict:
-                smiles = ligand_smiles_dict[resname]
+                component_smiles = ligand_smiles_dict[resname]
             else:
-                ccd_smiles = _get_ccd_smiles(resname)
-                if ccd_smiles is None and resname.startswith("PRD_"):
-                    ccd_smiles = _get_prd_smiles(resname)
-                if ccd_smiles is not None:
-                    smiles = ccd_smiles
+                reference_code = (ligand_ccd_code_dict or {}).get(
+                    resname,
+                    resname,
+                )
+                component_smiles = _get_ccd_smiles(reference_code)
+                if component_smiles is None and reference_code.startswith("PRD_"):
+                    component_smiles = _get_prd_smiles(reference_code)
+            if component_smiles is None:
+                reference_fragments = []
+                break
+            reference_fragments.append(component_smiles)
+        if reference_fragments:
+            smiles = ".".join(reference_fragments)
         # Build per-residue custom stereo templates from user SMILES (only
         # populated for custom CIFs via from_custom_cif_file). The CIF atom
         # names for each residue are taken in file order, matching the
@@ -1585,8 +1688,17 @@ class Ligand(DocBaseModel):
             )
         except Exception as e:
             LOG.warning(f"Failed to compute resolved SMILES for {ccd_code}: {e}")
-        # Fall back to resolved SMILES if no upstream source yielded one
-        if smiles is None:
+        # Prefer the candidate representing more atoms. Resolved coordinates
+        # can join a composite ligand correctly, but may omit unobserved atoms;
+        # the complete set of per-component references can be fuller despite
+        # not encoding the observed inter-component links. Equal-sized resolved
+        # molecules win because they do preserve those links.
+        if len(residue_component_ids) > 1:
+            smiles = _choose_ligand_smiles_by_heavy_atom_count(
+                smiles,
+                resolved_smiles,
+            )
+        elif smiles is None:
             smiles = resolved_smiles
         # Centroid
         centroid = list(lig_atoms.coord.mean(axis=0))
@@ -1717,6 +1829,15 @@ class Ligand(DocBaseModel):
         return self.member_residue_numbers or {
             self.instance_chain: self.residue_numbers
         }
+
+    @property
+    def _is_multi_residue(self) -> bool:
+        """Whether deposited residue membership proves a composite ligand."""
+        residue_count = sum(
+            len(set(residue_numbers))
+            for residue_numbers in self._members.values()
+        )
+        return residue_count > 1 or len(self.ccd_code.split("-")) > 1
 
     @property
     def member_asym_ids(self) -> list[str]:
