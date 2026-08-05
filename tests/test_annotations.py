@@ -35,6 +35,7 @@ from plinder.data.annotations.protein_utils import get_receptor_type
 from plinder.data.annotations.save_utils import (
     SystemReconstructionOptions,
     SystemReconstructionOutputs,
+    _output_asym_ids,
     save_ligands,
     save_reconstructed_system,
 )
@@ -1478,12 +1479,51 @@ def test_canonical_ligand_saving_and_system_reconstruction(
     assert set(sequences) == {"1.B"}
     assert len(sequences["1.B"]) == 395
 
-    system_atoms = pdbx.get_structure(read_mmcif_file(outputs.system_cif), model=1)
+    system_file = read_mmcif_file(outputs.system_cif)
+    system_block = list(system_file.values())[0]
+    assert {
+        "entry",
+        "entity",
+        "entity_poly",
+        "entity_poly_seq",
+        "chem_comp",
+        "struct_asym",
+        "atom_site",
+    }.issubset(system_block)
+    assert set(system_block["atom_site"]["label_asym_id"].as_array(str)).issubset(
+        system_block["struct_asym"]["id"].as_array(str)
+    )
+    assert set(system_block["atom_site"]["label_entity_id"].as_array(str)).issubset(
+        system_block["entity"]["id"].as_array(str)
+    )
+    assert set(system_block["entity_poly_seq"]["mon_id"].as_array(str)).issubset(
+        system_block["chem_comp"]["id"].as_array(str)
+    )
+    assert system_block["cell"]["entry_id"].as_item() == row["system_id"]
+    assert all(
+        asym_id.isalnum()
+        for asym_id in system_block["atom_site"]["label_asym_id"].as_array(str)
+    )
+    assert "struct_conn_type" in system_block
+    assert set(
+        system_block["struct_conn"]["conn_type_id"].as_array(str)
+    ).issubset(system_block["struct_conn_type"]["id"].as_array(str))
+    assert all(
+        value == value.lower()
+        for value in system_block["chem_comp_bond"]["value_order"].as_array(str)
+    )
+    hetero_mask = system_block["atom_site"]["group_PDB"].as_array(str) == "HETATM"
+    assert set(
+        system_block["atom_site"]["label_seq_id"].as_array(str)[hetero_mask]
+    ) == {"."}
+    system_atoms = pdbx.get_structure(system_file, model=1)
     assert not np.any(struc.filter_solvent(system_atoms))
     expected_chains = set(row["system_protein_chains_asym_id"])
     expected_chains.update(row["system_ligand_chains"])
     expected_chains.update(other_receptor_chains)
-    assert set(system_atoms.chain_id) == expected_chains
+    assert set(system_atoms.chain_id) == set(
+        _output_asym_ids(sorted(expected_chains)).values()
+    )
 
     # FASTA reconstruction is part of the base package and must not import
     # pipeline validation or OpenStructure dependencies.

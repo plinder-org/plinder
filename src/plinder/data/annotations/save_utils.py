@@ -2,6 +2,7 @@
 # Distributed under the terms of the Apache License 2.0
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Protocol
@@ -15,6 +16,31 @@ from numpy.typing import NDArray
 from rdkit import Chem
 
 WaterSelection = Literal["none", "interacting", "all"]
+
+
+def _output_asym_ids(chain_ids: list[str]) -> dict[str, str]:
+    """Return unique alphanumeric mmCIF asym IDs for internal chain IDs."""
+    output: dict[str, str] = {}
+    used: set[str] = set()
+    for chain_id in chain_ids:
+        candidate = chain_id
+        instance_asym = chain_id.split(".", maxsplit=1)
+        if (
+            re.fullmatch(r"[A-Za-z0-9]+", candidate) is None
+            and len(instance_asym) == 2
+            and all(re.fullmatch(r"[A-Za-z0-9]+", part) for part in instance_asym)
+        ):
+            candidate = f"{instance_asym[1]}{instance_asym[0]}"
+        if re.fullmatch(r"[A-Za-z0-9]+", candidate) is None or candidate in used:
+            candidate = "C" + chain_id.encode("utf-8").hex()
+        suffix = 2
+        base = candidate
+        while candidate in used:
+            candidate = f"{base}X{suffix}"
+            suffix += 1
+        output[chain_id] = candidate
+        used.add(candidate)
+    return output
 
 
 class AnnotationRow(Protocol):
@@ -130,8 +156,12 @@ def save_cif_file(
     atoms: struc.AtomArray,
     name: str,
     output_cif_file: str | Path,
+    *,
+    source_block: pdbx.CIFBlock | None = None,
+    source_asym_ids: dict[str, str] | None = None,
+    protein_sequences: dict[str, str] | None = None,
 ) -> None:
-    """Save structure as mmCIF.
+    """Save a self-contained structure as PDBx/mmCIF.
 
     Parameters
     ----------
@@ -141,9 +171,395 @@ def save_cif_file(
         Data block name.
     output_cif_file : str or Path
         Output path.
+    source_block : CIFBlock, optional
+        Source metadata. Relevant entity, polymer, and chemical-component
+        rows are retained for the atoms in the output view.
+    source_asym_ids : dict, optional
+        Map output chain IDs to label asym IDs in ``source_block``. Assembly
+        instance IDs default to their suffix after the first ``.``.
+    protein_sequences : dict, optional
+        Canonical protein sequences keyed by output chain ID. These are used
+        when the source has no polymer metadata.
     """
+    if atoms.array_length() == 0:
+        raise ValueError("cannot write an empty mmCIF structure")
+    atoms = atoms.copy()
+    input_chain_ids = list(dict.fromkeys(atoms.chain_id.astype(str)))
+    chain_id_map = _output_asym_ids(input_chain_ids)
+    source_asym_ids = source_asym_ids or {}
+    output_to_source_asym = {
+        chain_id_map[chain_id]: source_asym_ids.get(
+            chain_id, chain_id.split(".", maxsplit=1)[-1]
+        )
+        for chain_id in input_chain_ids
+    }
+    protein_sequences = {
+        chain_id_map.get(chain_id, chain_id): sequence
+        for chain_id, sequence in (protein_sequences or {}).items()
+    }
+    atoms.chain_id = np.asarray(
+        [chain_id_map[str(chain_id)] for chain_id in atoms.chain_id]
+    )
+    chain_ids = list(dict.fromkeys(atoms.chain_id.astype(str)))
+
+    source_asym_to_entity: dict[str, str] = {}
+    if source_block is not None and "struct_asym" in source_block:
+        struct_asym = source_block["struct_asym"]
+        if {"id", "entity_id"}.issubset(struct_asym):
+            source_asym_to_entity = dict(
+                zip(
+                    struct_asym["id"].as_array(str),
+                    struct_asym["entity_id"].as_array(str),
+                )
+            )
+
+    chain_to_entity: dict[str, str] = {}
+    used_entity_ids: set[str] = set()
+    for chain_id in chain_ids:
+        source_asym_id = output_to_source_asym[chain_id]
+        entity_id = source_asym_to_entity.get(source_asym_id)
+        if entity_id is not None:
+            chain_to_entity[chain_id] = entity_id
+            used_entity_ids.add(entity_id)
+    next_entity_id = 1
+    for chain_id in chain_ids:
+        if chain_id in chain_to_entity:
+            continue
+        while str(next_entity_id) in used_entity_ids:
+            next_entity_id += 1
+        entity_id = str(next_entity_id)
+        chain_to_entity[chain_id] = entity_id
+        used_entity_ids.add(entity_id)
+        next_entity_id += 1
+    atoms.set_annotation(
+        "label_entity_id",
+        np.asarray([chain_to_entity[str(chain_id)] for chain_id in atoms.chain_id]),
+    )
+
+    source_polymer_metadata_ids: set[str] = set()
+    if (
+        source_block is not None
+        and "entity_poly" in source_block
+        and "entity_poly_seq" in source_block
+        and "entity_id" in source_block["entity_poly"]
+        and "entity_id" in source_block["entity_poly_seq"]
+    ):
+        source_polymer_metadata_ids = set(
+            source_block["entity_poly"]["entity_id"].as_array(str)
+        ).intersection(
+            source_block["entity_poly_seq"]["entity_id"].as_array(str)
+        )
+    for chain_id, sequence in protein_sequences.items():
+        if chain_id not in chain_to_entity:
+            raise ValueError(f"protein sequence refers to absent chain {chain_id!r}")
+        if chain_to_entity[chain_id] in source_polymer_metadata_ids:
+            continue
+        chain_mask = atoms.chain_id == chain_id
+        chain = atoms[chain_mask]
+        residue_starts = struc.get_residue_starts(chain, add_exclusive_stop=True)
+        residue_count = len(residue_starts) - 1
+        if residue_count > len(sequence):
+            raise ValueError(
+                f"chain {chain_id!r} has {residue_count} resolved residues but "
+                f"its supplied sequence has length {len(sequence)}"
+            )
+        new_residue_ids = np.empty(chain.array_length(), dtype=int)
+        for index, (start, stop) in enumerate(
+            zip(residue_starts[:-1], residue_starts[1:]), start=1
+        ):
+            new_residue_ids[start:stop] = index
+        atoms.res_id[chain_mask] = new_residue_ids
+        atoms.ins_code[chain_mask] = ""
+
+    annotation_categories = set(atoms.get_annotation_categories())
+    if "atom_id" not in annotation_categories:
+        atoms.set_annotation("atom_id", np.arange(1, atoms.array_length() + 1))
+    if "occupancy" not in annotation_categories:
+        atoms.set_annotation("occupancy", np.ones(atoms.array_length()))
+    if "b_factor" not in annotation_categories:
+        atoms.set_annotation("b_factor", np.zeros(atoms.array_length()))
+    if "charge" not in annotation_categories:
+        atoms.set_annotation("charge", np.zeros(atoms.array_length(), dtype=int))
+
     cif_file = pdbx.CIFFile()
     pdbx.set_structure(cif_file, atoms, data_block=name, include_bonds=True)
+    block = cif_file[name]
+    atom_site = block["atom_site"]
+    # Keep biological-assembly copies distinct for readers that default to
+    # author fields (including Biotite itself).
+    atom_site["auth_asym_id"] = atom_site["label_asym_id"].as_array(str)
+    if "cell" in block:
+        block["cell"]["entry_id"] = [name]
+    block["entry"] = pdbx.CIFCategory({"id": [name]})
+    block["struct_asym"] = pdbx.CIFCategory(
+        {
+            "id": chain_ids,
+            "entity_id": [chain_to_entity[chain_id] for chain_id in chain_ids],
+        }
+    )
+
+    source_entity_types: dict[str, str] = {}
+    if source_block is not None and "entity" in source_block:
+        source_entity = source_block["entity"]
+        if {"id", "type"}.issubset(source_entity):
+            source_entity_types = dict(
+                zip(
+                    source_entity["id"].as_array(str),
+                    source_entity["type"].as_array(str),
+                )
+            )
+    entity_types: dict[str, str] = {}
+    for chain_id in chain_ids:
+        entity_id = chain_to_entity[chain_id]
+        chain = atoms[atoms.chain_id == chain_id]
+        entity_types.setdefault(
+            entity_id,
+            source_entity_types.get(
+                entity_id,
+                "polymer"
+                if chain_id in protein_sequences
+                or np.any(struc.filter_amino_acids(chain))
+                or np.any(struc.filter_nucleotides(chain))
+                else "water"
+                if np.all(struc.filter_solvent(chain))
+                else "non-polymer",
+            ),
+        )
+    entity_ids = list(dict.fromkeys(chain_to_entity.values()))
+    block["entity"] = pdbx.CIFCategory(
+        {
+            "id": entity_ids,
+            "type": [entity_types[entity_id] for entity_id in entity_ids],
+        }
+    )
+
+    def copy_source_rows(
+        category_name: str,
+        key_name: str,
+        selected_values: set[str],
+    ) -> pdbx.CIFCategory | None:
+        if source_block is None or category_name not in source_block:
+            return None
+        source_category = source_block[category_name]
+        if key_name not in source_category:
+            return None
+        row_mask = np.isin(
+            source_category[key_name].as_array(str), list(selected_values)
+        )
+        if not np.any(row_mask):
+            return None
+        columns: dict[str, pdbx.CIFColumn] = {}
+        for column_name, column in source_category.items():
+            mask = column.mask.array[row_mask] if column.mask is not None else None
+            columns[column_name] = pdbx.CIFColumn(
+                column.data.array[row_mask], mask=mask
+            )
+        return pdbx.CIFCategory(columns)
+
+    polymer_entity_ids = {
+        entity_id
+        for entity_id, entity_type in entity_types.items()
+        if entity_type == "polymer"
+    }
+    nonpoly_entity_ids = set(entity_ids).difference(polymer_entity_ids)
+    if nonpoly_entity_ids:
+        label_seq_id = atom_site["label_seq_id"]
+        nonpoly_atom_mask = np.isin(
+            atom_site["label_entity_id"].as_array(str),
+            list(nonpoly_entity_ids),
+        )
+        label_seq_mask = (
+            label_seq_id.mask.array.copy()
+            if label_seq_id.mask is not None
+            else np.full(atom_site.row_count, pdbx.MaskValue.PRESENT)
+        )
+        label_seq_mask[nonpoly_atom_mask] = pdbx.MaskValue.INAPPLICABLE
+        atom_site["label_seq_id"] = pdbx.CIFColumn(
+            label_seq_id.data.array, mask=label_seq_mask
+        )
+        if "struct_conn" in block:
+            struct_conn = block["struct_conn"]
+            nonpoly_chain_ids = {
+                chain_id
+                for chain_id in chain_ids
+                if chain_to_entity[chain_id] in nonpoly_entity_ids
+            }
+            for partner in (1, 2):
+                asym_column = f"ptnr{partner}_label_asym_id"
+                seq_column = f"ptnr{partner}_label_seq_id"
+                if asym_column not in struct_conn or seq_column not in struct_conn:
+                    continue
+                seq_id = struct_conn[seq_column]
+                seq_mask = (
+                    seq_id.mask.array.copy()
+                    if seq_id.mask is not None
+                    else np.full(struct_conn.row_count, pdbx.MaskValue.PRESENT)
+                )
+                seq_mask[
+                    np.isin(
+                        struct_conn[asym_column].as_array(str),
+                        list(nonpoly_chain_ids),
+                    )
+                ] = pdbx.MaskValue.INAPPLICABLE
+                struct_conn[seq_column] = pdbx.CIFColumn(
+                    seq_id.data.array, mask=seq_mask
+                )
+    entity_poly = copy_source_rows(
+        "entity_poly", "entity_id", polymer_entity_ids
+    )
+    entity_poly_seq = copy_source_rows(
+        "entity_poly_seq", "entity_id", polymer_entity_ids
+    )
+    if entity_poly is not None and entity_poly_seq is not None:
+        if "pdbx_strand_id" in entity_poly:
+            entity_poly["pdbx_strand_id"] = [
+                ",".join(
+                    chain_id
+                    for chain_id in chain_ids
+                    if chain_to_entity[chain_id] == entity_id
+                )
+                for entity_id in entity_poly["entity_id"].as_array(str)
+            ]
+        block["entity_poly"] = entity_poly
+        block["entity_poly_seq"] = entity_poly_seq
+    elif polymer_entity_ids:
+        from plinder.core.utils.constants import ONE_TO_THREE
+
+        poly_rows: list[tuple[str, str, str]] = []
+        sequence_rows: list[tuple[str, str, int, str]] = []
+        for entity_id in sorted(polymer_entity_ids):
+            entity_chains = [
+                chain_id
+                for chain_id in chain_ids
+                if chain_to_entity[chain_id] == entity_id
+            ]
+            chain_id = entity_chains[0]
+            chain = atoms[atoms.chain_id == chain_id]
+            protein_sequence = protein_sequences.get(chain_id)
+            residue_starts = struc.get_residue_starts(
+                chain, add_exclusive_stop=False
+            )
+            residue_names = chain.res_name[residue_starts].astype(str).tolist()
+            if protein_sequence is None:
+                if not np.any(struc.filter_amino_acids(chain)):
+                    raise ValueError(
+                        "source mmCIF metadata is required to write a "
+                        f"non-protein polymer chain {chain_id!r}"
+                    )
+                from plinder.core.utils.constants import THREE_TO_ONE
+
+                protein_sequence = "".join(
+                    THREE_TO_ONE.get(residue_name, "X")
+                    for residue_name in residue_names
+                )
+            monomers = [
+                ONE_TO_THREE.get(symbol, "UNK") for symbol in protein_sequence
+            ]
+            for residue_id, residue_name in zip(
+                chain.res_id[residue_starts], residue_names
+            ):
+                if 1 <= residue_id <= len(monomers):
+                    monomers[int(residue_id) - 1] = residue_name
+            poly_rows.append(
+                (entity_id, protein_sequence, ",".join(entity_chains))
+            )
+            sequence_rows.extend(
+                (entity_id, monomer, index, "n")
+                for index, monomer in enumerate(monomers, start=1)
+            )
+        block["entity_poly"] = pdbx.CIFCategory(
+            {
+                "entity_id": [row[0] for row in poly_rows],
+                "type": ["polypeptide(L)"] * len(poly_rows),
+                "nstd_linkage": ["no"] * len(poly_rows),
+                "nstd_monomer": [
+                    "yes" if "X" in row[1] else "no" for row in poly_rows
+                ],
+                "pdbx_seq_one_letter_code": [row[1] for row in poly_rows],
+                "pdbx_seq_one_letter_code_can": [row[1] for row in poly_rows],
+                "pdbx_strand_id": [row[2] for row in poly_rows],
+            }
+        )
+        block["entity_poly_seq"] = pdbx.CIFCategory(
+            {
+                "entity_id": [row[0] for row in sequence_rows],
+                "mon_id": [row[1] for row in sequence_rows],
+                "num": [row[2] for row in sequence_rows],
+                "hetero": [row[3] for row in sequence_rows],
+            }
+        )
+
+    pdbx_entity_nonpoly = copy_source_rows(
+        "pdbx_entity_nonpoly", "entity_id", nonpoly_entity_ids
+    )
+    if pdbx_entity_nonpoly is not None:
+        block["pdbx_entity_nonpoly"] = pdbx_entity_nonpoly
+    elif nonpoly_entity_ids:
+        nonpoly_rows: list[tuple[str, str]] = []
+        for entity_id in sorted(nonpoly_entity_ids):
+            chain_id = next(
+                chain_id
+                for chain_id in chain_ids
+                if chain_to_entity[chain_id] == entity_id
+            )
+            chain = atoms[atoms.chain_id == chain_id]
+            nonpoly_rows.append((entity_id, str(chain.res_name[0])))
+        block["pdbx_entity_nonpoly"] = pdbx.CIFCategory(
+            {
+                "entity_id": [row[0] for row in nonpoly_rows],
+                "name": [row[1] for row in nonpoly_rows],
+                "comp_id": [row[1] for row in nonpoly_rows],
+            }
+        )
+
+    component_ids = set(atoms.res_name.astype(str))
+    polymer_component_ids: set[str] = set()
+    if "entity_poly_seq" in block:
+        polymer_component_ids.update(
+            block["entity_poly_seq"]["mon_id"].as_array(str)
+        )
+        component_ids.update(polymer_component_ids)
+    source_component_types: dict[str, str] = {}
+    if source_block is not None and "chem_comp" in source_block:
+        source_chem_comp = source_block["chem_comp"]
+        if {"id", "type"}.issubset(source_chem_comp):
+            source_component_types = dict(
+                zip(
+                    source_chem_comp["id"].as_array(str),
+                    source_chem_comp["type"].as_array(str),
+                )
+            )
+    sorted_component_ids = sorted(component_ids)
+    block["chem_comp"] = pdbx.CIFCategory(
+        {
+            "id": sorted_component_ids,
+            "type": [
+                source_component_types.get(
+                    component_id,
+                    "PEPTIDE LINKING"
+                    if component_id == "GLY"
+                    else "L-PEPTIDE LINKING"
+                    if component_id in polymer_component_ids
+                    else "NON-POLYMER",
+                )
+                for component_id in sorted_component_ids
+            ],
+        }
+    )
+    block["atom_type"] = pdbx.CIFCategory(
+        {"symbol": sorted(set(atoms.element.astype(str)))}
+    )
+    if "chem_comp_bond" in block:
+        bond_order = block["chem_comp_bond"]["value_order"]
+        block["chem_comp_bond"]["value_order"] = pdbx.CIFColumn(
+            np.char.lower(bond_order.data.array.astype(str)),
+            mask=bond_order.mask,
+        )
+    if "struct_conn" in block:
+        connection_types = sorted(
+            set(block["struct_conn"]["conn_type_id"].as_array(str))
+        )
+        block["struct_conn_type"] = pdbx.CIFCategory({"id": connection_types})
     cif_file.write(str(output_cif_file))
 
 
@@ -465,23 +881,40 @@ def save_reconstructed_system(
     system_id = str(annotation.get("system_id", "plinder_system"))
     for path in requested.values():
         path.parent.mkdir(parents=True, exist_ok=True)
+    from plinder.data.annotations.cif_utils import (
+        get_label_asym_sequences,
+        read_mmcif_container,
+    )
+
+    source_block = read_mmcif_container(Path(source_mmcif))
+    source_sequences = get_label_asym_sequences(source_block)
+
+    def output_protein_sequences(atoms: struc.AtomArray) -> dict[str, str]:
+        return {
+            str(chain_id): source_sequences[source_asym_id]
+            for chain_id in np.unique(atoms.chain_id)
+            for source_asym_id in [str(chain_id).split(".", maxsplit=1)[-1]]
+            if source_asym_id in source_sequences
+        }
+
     if "system_cif" in requested:
-        save_cif_file(reconstructed.system, system_id, requested["system_cif"])
+        save_cif_file(
+            reconstructed.system,
+            system_id,
+            requested["system_cif"],
+            source_block=source_block,
+            protein_sequences=output_protein_sequences(reconstructed.system),
+        )
     if "receptor_cif" in requested:
         save_cif_file(
             reconstructed.receptor,
             system_id,
             requested["receptor_cif"],
+            source_block=source_block,
+            protein_sequences=output_protein_sequences(reconstructed.receptor),
         )
     if "sequences_fasta" in requested:
-        from plinder.data.annotations.cif_utils import (
-            get_label_asym_sequences,
-            read_mmcif_container,
-        )
-
-        asym_to_sequence = get_label_asym_sequences(
-            read_mmcif_container(Path(source_mmcif))
-        )
+        asym_to_sequence = source_sequences
         receptor_chain_ids = _select_chains(
             annotation,
             biounit_chains,
