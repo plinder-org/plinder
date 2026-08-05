@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import subprocess as sp
+from errno import EACCES, EPERM, EXDEV
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
@@ -217,6 +218,8 @@ def _has_external_database_links(root: Path) -> bool:
     for path in root.rglob("*"):
         if not path.is_symlink():
             continue
+        if path.readlink().is_absolute():
+            return True
         try:
             target = path.resolve(strict=True)
         except FileNotFoundError:
@@ -224,6 +227,89 @@ def _has_external_database_links(root: Path) -> bool:
         if not target.is_relative_to(root_resolved):
             return True
     return False
+
+
+def _link_or_copy_database_file(source: Path, destination: Path) -> None:
+    """Install one database file without duplicating it on the ingest volume."""
+    if source.is_symlink():
+        destination.symlink_to(source.readlink())
+        return
+    try:
+        os.link(source, destination)
+    except OSError as exc:
+        if exc.errno not in {EACCES, EPERM, EXDEV}:
+            raise
+        shutil.copy2(source, destination)
+
+
+def publish_search_database_bundle(
+    *,
+    source_root: Path,
+    target_root: Path,
+    aln_type: str,
+) -> dict[str, int | str]:
+    """Atomically publish the portable files needed for custom searches.
+
+    The full Foldseek source database and exact-clustering build artifacts are
+    not needed after ``createclusearchdb``. MMseqs retains its full target and
+    representative-to-member alignments because ``expandaln`` followed by
+    member-level ``align`` requires both.
+    """
+    if aln_type not in {"foldseek", "mmseqs"}:
+        raise ValueError(f"unsupported alignment type: {aln_type}")
+    full_db = source_root / source_root.name
+    manifest = _completed_exact_search_manifest(full_db, aln_type)
+    if manifest is None:
+        raise ValueError(f"incomplete exact-cluster database: {source_root}")
+
+    prefixes = {
+        str(manifest["search_target"]),
+        str(manifest["conversion_target"]),
+    }
+    if aln_type == "mmseqs":
+        prefixes.add(str(manifest["cluster_alignments"]))
+    sources = {source_root / "exact_cluster.json"}
+    for prefix in prefixes:
+        sources.update(
+            path
+            for path in source_root.glob(f"{prefix}*")
+            if path.is_file() or path.is_symlink()
+        )
+    if _has_external_database_links(source_root):
+        raise ValueError(f"non-portable database links in {source_root}")
+
+    staging = target_root.parent / f".{target_root.name}.installing"
+    backup = target_root.parent / f".{target_root.name}.previous"
+    target_root.parent.mkdir(exist_ok=True, parents=True)
+    for path in (staging, backup):
+        if path.exists():
+            shutil.rmtree(path)
+    staging.mkdir()
+    try:
+        for source in sorted(sources):
+            _link_or_copy_database_file(source, staging / source.name)
+        if _has_external_database_links(staging):
+            raise ValueError(f"published database bundle is not portable: {staging}")
+        if target_root.exists():
+            target_root.rename(backup)
+        staging.rename(target_root)
+    except BaseException:
+        if staging.exists():
+            shutil.rmtree(staging)
+        if backup.exists() and not target_root.exists():
+            backup.rename(target_root)
+        raise
+    if backup.exists():
+        shutil.rmtree(backup)
+
+    regular_files = [path for path in target_root.iterdir() if path.is_file()]
+    return {
+        "alignment_type": aln_type,
+        "file_count": len(regular_files),
+        "apparent_size": sum(path.stat().st_size for path in regular_files),
+        "search_target": str(manifest["search_target"]),
+        "conversion_target": str(manifest["conversion_target"]),
+    }
 
 
 def _path_signature(path: Path, *, portable: bool = False) -> dict[str, int | str]:

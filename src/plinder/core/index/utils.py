@@ -142,6 +142,10 @@ def download_plinder_cmd(args: list[str] | None = None) -> None:
                 "similarity scores are reconstructed on demand"
             )
             continue
+        if not is_v3 and attr == "search_databases":
+            # Portable exact-clustered search targets are a V3 custom-scoring
+            # artifact. V2 releases expose only materialized score datasets.
+            continue
         if not is_v3 and attr == "alignments":
             # V2 releases distribute materialized scores instead.
             continue
@@ -178,6 +182,7 @@ def download_plinder_cmd(args: list[str] | None = None) -> None:
                 "alignments",
                 "ligand_archives",
                 "linked_structures",
+                "search_databases",
                 "systems",
             ]:
                 if not autodo:

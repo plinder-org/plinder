@@ -241,6 +241,7 @@ class DataConfig:
 
     ingest: str = "ingest"
     alignments: str = "alignments"
+    search_databases: str = "search_databases"
     validation: str = "validation"
     clusters: str = "clusters"
     entries: str = "entries"
@@ -250,6 +251,7 @@ class DataConfig:
     entry_chain_file: str = "entry_chains.parquet"
     entry_biounit_chain_file: str = "entry_biounit_chains.parquet"
     entry_source_file: str = "entry_sources.parquet"
+    alignment_chain_lookup_file: str = "alignment_chain_lookup.parquet"
     interface_file: str = "interface_annotation_table.parquet"
     ligand_archives: str = "ligand_archives"
     ligand_scores: str = "ligand_scores"

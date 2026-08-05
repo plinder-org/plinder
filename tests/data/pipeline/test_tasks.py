@@ -976,6 +976,7 @@ def test_scatter_protein_scoring_uses_v3_chain_index(tmp_path) -> None:
 
 
 def test_protein_scoring_plan_and_alignment_finalization(tmp_path, monkeypatch) -> None:
+    from plinder.core.scores.custom import resolve_search_database
     from plinder.data.pipeline.score import (
         _scoring_config_from_plan,
         finalize_alignment_artifacts,
@@ -1028,6 +1029,9 @@ def test_protein_scoring_plan_and_alignment_finalization(tmp_path, monkeypatch) 
         )
         for database in {search_target, conversion_target}:
             (backend / f"{database}.dbtype").touch()
+        (backend / f"{search_target}.idx.dbtype").touch()
+        if alignment_type == "mmseqs":
+            (backend / "cluster_alignments.dbtype").touch()
         (backend / "exact_cluster.json").write_text(
             json.dumps(
                 {
@@ -1035,6 +1039,8 @@ def test_protein_scoring_plan_and_alignment_finalization(tmp_path, monkeypatch) 
                     "identity": 1.0,
                     "coverage": 1.0,
                     "coverage_mode": 0,
+                    "portable": True,
+                    "compressed_search_target": False,
                     "source_index": {
                         "name": source_index.name,
                         "size": source_index.stat().st_size,
@@ -1042,6 +1048,11 @@ def test_protein_scoring_plan_and_alignment_finalization(tmp_path, monkeypatch) 
                     },
                     "search_target": search_target,
                     "conversion_target": conversion_target,
+                    **(
+                        {"cluster_alignments": "cluster_alignments"}
+                        if alignment_type == "mmseqs"
+                        else {}
+                    ),
                 }
             )
         )
@@ -1087,6 +1098,19 @@ def test_protein_scoring_plan_and_alignment_finalization(tmp_path, monkeypatch) 
     assert report["target_clustering"]["expand_to_chain_level"] is True
     assert report["skipped_queries"] == {}
     assert (tmp_path / "alignments/manifest.json").is_file()
+    assert (tmp_path / "search_databases/manifest.json").is_file()
+    assert (
+        tmp_path / "search_databases/holo_foldseek/clustered.dbtype"
+    ).is_file()
+    assert (
+        tmp_path / "search_databases/holo_mmseqs/cluster_alignments.dbtype"
+    ).is_file()
+    assert not (tmp_path / "search_databases/holo_foldseek/aln").exists()
+    for alignment_type in ["foldseek", "mmseqs"]:
+        bundle = resolve_search_database(alignment_type, data_dir=tmp_path)
+        assert bundle.root == (
+            tmp_path / "search_databases" / f"holo_{alignment_type}"
+        )
 
     skipped = {
         "1abc": {

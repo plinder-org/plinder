@@ -93,6 +93,23 @@ def test_v3_download_uses_alignments_instead_of_legacy_scores(mock_cpl, monkeypa
     utils.download_plinder_cmd(args=["--iteration", "v3", "-y"])
 
     assert "alignments" in requested
+    assert "search_databases" in requested
     assert not any(path == "scores" or path.startswith("scores/") for path in requested)
     assert "entries" not in requested
     assert "systems" not in requested
+
+
+def test_v2_download_does_not_request_search_databases(mock_cpl, monkeypatch):
+    from plinder.core.utils import cpl
+
+    requested = []
+
+    def track_path(**kwargs):
+        requested.append(kwargs.get("rel", ""))
+        return mock_path(**kwargs)
+
+    monkeypatch.setattr(cpl, "get_plinder_path", track_path)
+
+    utils.download_plinder_cmd(args=["--iteration", "v2", "-y"])
+
+    assert "search_databases" not in requested

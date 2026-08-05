@@ -2955,6 +2955,49 @@ def _database_query_ids(database: Path, alignment_type: str) -> set[str]:
     return {identifier.split("_", maxsplit=1)[0] for identifier in identifiers}
 
 
+def publish_search_database_bundles(
+    data_dir: Path,
+    *,
+    alignment_types: Iterable[str],
+) -> dict[str, dict[str, int | str]]:
+    """Publish the minimal portable search targets as one atomic generation."""
+    output = data_dir / "search_databases"
+    staging = data_dir / ".search_databases.installing"
+    backup = data_dir / ".search_databases.previous"
+    if backup.exists() and not output.exists():
+        backup.rename(output)
+    for path in (staging, backup):
+        if path.exists():
+            rmtree(path)
+    staging.mkdir(parents=True)
+    reports: dict[str, dict[str, int | str]] = {}
+    try:
+        for alignment_type in alignment_types:
+            reports[alignment_type] = databases.publish_search_database_bundle(
+                source_root=(
+                    data_dir / "dbs" / "subdbs" / f"holo_{alignment_type}"
+                ),
+                target_root=staging / f"holo_{alignment_type}",
+                aln_type=alignment_type,
+            )
+        _atomic_json(
+            {"status": "complete", "bundles": reports},
+            staging / "manifest.json",
+        )
+        if output.exists():
+            output.rename(backup)
+        staging.rename(output)
+    except BaseException:
+        if staging.exists():
+            rmtree(staging)
+        if backup.exists() and not output.exists():
+            backup.rename(output)
+        raise
+    if backup.exists():
+        rmtree(backup)
+    return reports
+
+
 def finalize_alignment_artifacts(data_dir: Path) -> dict[str, Any]:
     """Validate compact release shards from their atomic mapping manifests."""
     plan = _load_plan(data_dir, recheck_source=True)
@@ -3140,6 +3183,10 @@ def finalize_alignment_artifacts(data_dir: Path) -> dict[str, Any]:
         missing["all_backends_mapped_aln"] = absent_mapped_all[:100]
     if missing:
         raise ValueError(f"protein alignment artifacts are incomplete: {missing}")
+    search_database_bundles = publish_search_database_bundles(
+        data_dir,
+        alignment_types=plan["alignment_types"],
+    )
     report = {
         **{
             key: plan[key]
@@ -3156,6 +3203,7 @@ def finalize_alignment_artifacts(data_dir: Path) -> dict[str, Any]:
         "status": "complete",
         "artifact_counts": counts,
         "exact_cluster_manifests": cluster_manifests,
+        "search_database_bundles": search_database_bundles,
         "skipped_queries": skipped_query_details,
     }
     _atomic_json(report, data_dir / "alignments" / "manifest.json")
