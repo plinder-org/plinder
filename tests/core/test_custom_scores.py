@@ -9,6 +9,13 @@ import pandas as pd
 import pytest
 from biotite.structure.io import pdbx
 from plinder.core.scores import custom
+from plinder.core.scores.entries import (
+    ChainView,
+    EntryView,
+    InterfaceView,
+    LigandView,
+    SystemView,
+)
 
 
 def _write_database_prefix(prefix: Path, *, indexed: bool = False) -> None:
@@ -211,6 +218,7 @@ def test_write_custom_query_files_uses_protein_label_asym_ids(
         "pdb_00007cma_xyz-enrich__B",
     ]
     assert chains["sequence_length"].min() >= 12
+    assert set(chains["sequence_source"]) == {"polymer"}
     assert len(list(inputs.chain_cif_dir.glob("*.cif"))) == 2
     assert inputs.sequence_fasta.read_text().count(">cq") == 2
     block = list(
@@ -258,6 +266,7 @@ def test_write_custom_query_files_accepts_coordinate_only_mmcif(
     chains = pd.read_parquet(inputs.chain_manifest)
 
     assert chains["chain_asym_id"].tolist() == ["A", "B"]
+    assert set(chains["sequence_source"]) == {"coordinates"}
     output = pdbx.CIFFile.read(str(inputs.chain_cif_dir / "cq00000000.cif"))
     output_block = list(output.values())[0]
     assert set(output_block["entity_poly_seq"]["num"].as_array(int)) == set(
@@ -327,6 +336,67 @@ def test_write_custom_query_files_derives_coordinate_only_sequences(
 
     assert chains["chain_asym_id"].tolist() == ["A", "B"]
     assert chains["sequence_length"].min() >= 12
+    assert set(chains["sequence_source"]) == {"coordinates"}
+
+
+def test_annotate_custom_cif_files_writes_bonded_ligands(test_dir, tmp_path):
+    import yaml
+    from rdkit import Chem
+
+    cif = test_dir / "custom_cif/boltz_8c3u_input_model_0.cif"
+    config = yaml.safe_load(
+        (test_dir / "custom_cif/boltz_8c3u_input.yaml").read_text()
+    )
+    smiles = next(
+        sequence["ligand"]["smiles"]
+        for sequence in config["sequences"]
+        if "ligand" in sequence
+    )
+
+    annotations = custom.annotate_custom_cif_files(
+        [cif],
+        work_dir=tmp_path,
+        ligand_smiles_dict={"LIG": smiles},
+        include_interfaces=False,
+    )
+
+    assert set(annotations.entries_by_structure) == {"boltz_8c3u_input_model_0"}
+    assert not pd.read_parquet(annotations.annotation_table).empty
+    assert not pd.read_parquet(annotations.entry_chains).empty
+    ligand_files = sorted(annotations.ligand_sdf_root.rglob("*.sdf"))
+    assert ligand_files
+    molecules = [
+        Chem.MolFromMolFile(str(path), sanitize=False, removeHs=False)
+        for path in ligand_files
+    ]
+    assert all(molecule is not None for molecule in molecules)
+    assert any(
+        bond.GetBondType() != Chem.BondType.SINGLE
+        for molecule in molecules
+        if molecule is not None
+        for bond in molecule.GetBonds()
+    )
+
+
+def test_annotate_custom_cif_files_keeps_interface_only_entries(
+    test_dir, tmp_path
+):
+    cif = test_dir / "interfaces/cm/pdb_00007cma/pdb_00007cma_xyz-enrich.cif.gz"
+
+    annotations = custom.annotate_custom_cif_files(
+        [cif],
+        work_dir=tmp_path,
+        include_ligands=False,
+        include_interfaces=True,
+        interface_annotate_prodigy=False,
+    )
+    entry = annotations.entries_by_structure["pdb_00007cma_xyz-enrich"]
+
+    assert not entry.systems
+    assert set(entry.interfaces) == {
+        "pdb_00007cma_xyz-enrich__1__1.A--1.B"
+    }
+    assert not pd.read_parquet(annotations.interface_annotations).empty
 
 
 def test_create_custom_query_databases_records_backend_identifiers(
@@ -371,6 +441,39 @@ def test_create_custom_query_databases_records_backend_identifiers(
     assert set(identifier_map["query_id"]) == {"cq00000000", "cq00000001"}
 
 
+def test_create_custom_query_databases_only_requires_selected_backend(
+    test_dir, tmp_path, monkeypatch
+):
+    cif = test_dir / "interfaces/cm/pdb_00007cma/pdb_00007cma_xyz-enrich.cif.gz"
+    inputs = custom.write_custom_query_files([cif], work_dir=tmp_path)
+    executable_checks: list[str] = []
+    commands: list[list[str]] = []
+
+    def which(backend: str) -> str:
+        executable_checks.append(backend)
+        return f"/bin/{backend}"
+
+    def fake_run(command: list[str]) -> None:
+        commands.append(command)
+        database = Path(command[3])
+        database.with_suffix(".lookup").write_text(
+            "0\tcq00000000\t0\n1\tcq00000001\t0\n"
+        )
+
+    monkeypatch.setattr(custom.shutil, "which", which)
+    monkeypatch.setattr(custom, "_run_command", fake_run)
+
+    databases = custom.create_custom_query_databases(
+        inputs,
+        work_dir=tmp_path,
+        backends=["mmseqs"],
+    )
+
+    assert executable_checks == ["mmseqs"]
+    assert [command[0] for command in commands] == ["mmseqs"]
+    assert set(databases.databases) == {"mmseqs"}
+
+
 def test_map_custom_alignment_hits_maps_query_and_target_chains(tmp_path):
     input_root = tmp_path / "query_inputs"
     input_root.mkdir()
@@ -381,6 +484,8 @@ def test_map_custom_alignment_hits_maps_query_and_target_chains(tmp_path):
             "query_chain_id": ["model__A"],
             "structure_id": ["model"],
             "chain_asym_id": ["A"],
+            "sequence_source": ["polymer"],
+            "resolved_residue_numbers": [[1, 2]],
         }
     ).to_parquet(chain_manifest, index=False)
     inputs = custom.CustomQueryInputs(
@@ -444,6 +549,8 @@ def test_map_custom_alignment_hits_maps_query_and_target_chains(tmp_path):
     assert result.loc[0, "target_entry"] == "1abc"
     assert result.loc[0, "target_chain_asym_id"] == "B"
     assert result.loc[0, "source"] == "foldseek"
+    assert result.loc[0, "query_sequence_source"] == "polymer"
+    assert result.loc[0, "query_resolved_residue_numbers"].tolist() == [1, 2]
     assert result.loc[0, "target_selected_residue_numbers"].tolist() == [2, 4]
 
 
@@ -506,3 +613,356 @@ def test_custom_protein_searches_against_local_release(test_dir, tmp_path):
         hits = pd.read_parquet(output)
         assert set(hits["query_chain_asym_id"]) == {"A", "B"}
         assert "7cma" in set(hits["target_entry"])
+
+
+@pytest.mark.parametrize(
+    ("backend", "query_number", "target_numbers", "target_indices"),
+    [
+        ("foldseek", 10, [20], [1]),
+        ("mmseqs", 2, [2], [1]),
+    ],
+)
+def test_prepare_custom_score_alignments_maps_selected_residues(
+    tmp_path,
+    backend,
+    query_number,
+    target_numbers,
+    target_indices,
+):
+    query_ligand = LigandView(
+        id="model__1__1.L",
+        pdb_id="model",
+        system_id="model__1__1.A__1.L",
+        instance_chain="1.L",
+        asym_id="L",
+        is_proper=True,
+        protein_chains_asym_id=["1.A"],
+        num_pocket_residues=1,
+        num_interactions=0,
+        num_unique_interactions=0,
+        pocket_residue_number_to_index={"1.A": {query_number: 1}},
+    )
+    query_system = SystemView(
+        id=query_ligand.system_id,
+        pdb_id="model",
+        system_type="holo",
+        protein_chains_asym_id=["1.A"],
+        proper_num_pocket_residues=1,
+        proper_num_interactions=0,
+        proper_num_unique_interactions=0,
+        pocket_residue_number_to_index={"1.A": {query_number: 1}},
+        ligands={"1.L": query_ligand},
+    )
+    query_entry = EntryView(
+        pdb_id="model",
+        chains={"A": ChainView(asym_id="A", auth_id="A", length=2)},
+        systems={query_system.id: query_system},
+        author_to_asym={"A": "A"},
+    )
+    hit_path = tmp_path / f"{backend}_hits.parquet"
+    row = {
+        "structure_id": "model",
+        "query_chain_asym_id": "A",
+        "target_entry": "1abc",
+        "target_chain_asym_id": "B",
+        "target_selected_residue_numbers": target_numbers,
+        "target_selected_residue_indices": target_indices,
+        "qstart": 1,
+        "tstart": 1,
+        "qcov": 1.0,
+        "fident": 1.0,
+        "qaln": "AC",
+        "taln": "AC",
+    }
+    if backend == "foldseek":
+        row["lddt"] = 0.9
+    else:
+        row["query_sequence_source"] = "polymer"
+        row["query_resolved_residue_numbers"] = [1, 2]
+    pd.DataFrame([row]).to_parquet(hit_path, index=False)
+
+    outputs = custom.prepare_custom_score_alignments(
+        {backend: hit_path},
+        entries_by_structure={"model": query_entry},
+        output_dir=tmp_path / "score_alignments",
+    )
+    result = pd.read_parquet(outputs[backend])
+
+    assert result.loc[0, "query_entry"] == "model"
+    assert result.loc[0, "query_chain_mapped"] == "A"
+    assert result.loc[0, "target_chain_mapped"] == "B"
+    assert result.loc[0, "query_selected_residue_numbers"].tolist() == [query_number]
+    assert result.loc[0, "target_selected_residue_numbers"].tolist() == [
+        target_numbers[0]
+    ]
+    assert result.loc[0, "selected_residue_identity"] == b"\x01"
+    assert result.loc[0, "seqsim"] == pytest.approx(1.0)
+
+
+def test_prepare_custom_score_alignments_maps_coordinate_fasta_positions(tmp_path):
+    query_ligand = LigandView(
+        id="model__1__1.L",
+        pdb_id="model",
+        system_id="model__1__1.A__1.L",
+        instance_chain="1.L",
+        asym_id="L",
+        is_proper=True,
+        protein_chains_asym_id=["1.A"],
+        num_pocket_residues=1,
+        num_interactions=0,
+        num_unique_interactions=0,
+        pocket_residue_number_to_index={"1.A": {40: 2}},
+    )
+    query_system = SystemView(
+        id=query_ligand.system_id,
+        pdb_id="model",
+        system_type="holo",
+        protein_chains_asym_id=["1.A"],
+        proper_num_pocket_residues=1,
+        proper_num_interactions=0,
+        proper_num_unique_interactions=0,
+        pocket_residue_number_to_index={"1.A": {40: 2}},
+        ligands={"1.L": query_ligand},
+    )
+    query_entry = EntryView(
+        pdb_id="model",
+        chains={"A": ChainView(asym_id="A", auth_id="A", length=3)},
+        systems={query_system.id: query_system},
+        author_to_asym={"A": "A"},
+    )
+    hit_path = tmp_path / "mmseqs_hits.parquet"
+    pd.DataFrame(
+        [
+            {
+                "structure_id": "model",
+                "query_chain_asym_id": "A",
+                "query_sequence_source": "coordinates",
+                "query_resolved_residue_numbers": [10, 20, 40],
+                "target_entry": "1abc",
+                "target_chain_asym_id": "B",
+                "target_selected_residue_numbers": [3],
+                "target_selected_residue_indices": [2],
+                "qstart": 1,
+                "tstart": 1,
+                "qcov": 1.0,
+                "fident": 1.0,
+                "qaln": "ACD",
+                "taln": "ACD",
+            }
+        ]
+    ).to_parquet(hit_path, index=False)
+
+    outputs = custom.prepare_custom_score_alignments(
+        {"mmseqs": hit_path},
+        entries_by_structure={"model": query_entry},
+        output_dir=tmp_path / "score_alignments",
+    )
+    result = pd.read_parquet(outputs["mmseqs"])
+
+    assert result.loc[0, "query_selected_residue_numbers"].tolist() == [40]
+    assert result.loc[0, "target_selected_residue_numbers"].tolist() == [3]
+    assert result.loc[0, "selected_residue_identity"] == b"\x01"
+
+
+def _scoring_entry(
+    *,
+    pdb_id: str,
+    chain_id: str,
+    ligand_id: str,
+    ligand_chain: str,
+    pocket_number: int,
+) -> EntryView:
+    system_id = f"{pdb_id}__1__1.{chain_id}__1.{ligand_chain}"
+    ligand = LigandView(
+        id=ligand_id,
+        pdb_id=pdb_id,
+        system_id=system_id,
+        instance_chain=f"1.{ligand_chain}",
+        asym_id=ligand_chain,
+        is_proper=True,
+        protein_chains_asym_id=[f"1.{chain_id}"],
+        num_pocket_residues=1,
+        num_interactions=0,
+        num_unique_interactions=0,
+        pocket_residue_number_to_index={f"1.{chain_id}": {pocket_number: 1}},
+    )
+    system = SystemView(
+        id=system_id,
+        pdb_id=pdb_id,
+        system_type="holo",
+        protein_chains_asym_id=[f"1.{chain_id}"],
+        proper_num_pocket_residues=1,
+        proper_num_interactions=0,
+        proper_num_unique_interactions=0,
+        pocket_residue_number_to_index={f"1.{chain_id}": {pocket_number: 1}},
+        ligands={ligand.instance_chain: ligand},
+    )
+    return EntryView(
+        pdb_id=pdb_id,
+        chains={
+            chain_id: ChainView(asym_id=chain_id, auth_id=chain_id, length=2)
+        },
+        systems={system_id: system},
+        author_to_asym={chain_id: chain_id},
+    )
+
+
+def _custom_annotations(tmp_path, entry):
+    root = tmp_path / "custom_annotations"
+    ligand_root = root / "ligands"
+    ligand_root.mkdir(parents=True)
+    return custom.CustomStructureAnnotations(
+        root=root,
+        ligand_sdf_root=ligand_root,
+        annotation_table=root / "annotation.parquet",
+        entry_chains=root / "chains.parquet",
+        interface_annotations=root / "interfaces.parquet",
+        entries_by_structure={"model": entry},
+    )
+
+
+def _custom_assets(tmp_path):
+    return custom.CustomScoringAssets(
+        annotation_table=tmp_path / "release_annotation.parquet",
+        entry_chains=tmp_path / "release_chains.parquet",
+        interface_annotations=tmp_path / "release_interfaces.parquet",
+        alignment_chain_lookup=tmp_path / "release_lookup.parquet",
+        search_databases={},
+        ligand_archives={},
+    )
+
+
+def test_calculate_custom_similarity_scores_reuses_release_metrics(
+    tmp_path, monkeypatch
+):
+    query = _scoring_entry(
+        pdb_id="model",
+        chain_id="A",
+        ligand_id="model__1__1.L",
+        ligand_chain="L",
+        pocket_number=2,
+    )
+    target = _scoring_entry(
+        pdb_id="1abc",
+        chain_id="B",
+        ligand_id="1abc__1__1.Z",
+        ligand_chain="Z",
+        pocket_number=20,
+    )
+    monkeypatch.setattr(
+        custom,
+        "_load_release_entry_views",
+        lambda _assets, *, pdb_ids: {"1abc": target},
+    )
+    alignment = tmp_path / "foldseek.parquet"
+    pd.DataFrame(
+        [
+            {
+                "query_entry": "model",
+                "target_entry": "1abc",
+                "query_chain_mapped": "A",
+                "target_chain_mapped": "B",
+                "source": "foldseek",
+                "qcov": 1.0,
+                "fident": 1.0,
+                "seqsim": 1.0,
+                "lddt": 0.9,
+                "query_selected_residue_numbers": [2],
+                "target_selected_residue_numbers": [20],
+                "selected_residue_identity": b"\x01",
+            }
+        ]
+    ).to_parquet(alignment, index=False)
+
+    scores = custom.calculate_custom_similarity_scores(
+        {"foldseek": alignment},
+        annotations=_custom_annotations(tmp_path, query),
+        assets=_custom_assets(tmp_path),
+        work_dir=tmp_path / "score_work",
+        include_shape=False,
+    )
+
+    pocket = scores.loc[scores["metric"] == "pocket_qcov"]
+    assert len(pocket) == 1
+    assert pocket.iloc[0]["similarity"] == 100
+    assert pocket.iloc[0]["query_ligand_id"] == "model__1__1.L"
+    assert pocket.iloc[0]["target_ligand_id"] == "1abc__1__1.Z"
+
+
+def test_calculate_custom_interface_scores_uses_compact_maps(
+    tmp_path, monkeypatch
+):
+    query_interface = InterfaceView(
+        id="model__1__1.A_1.C",
+        pdb_id="model",
+        biounit_id="1",
+        chain_1="1.A",
+        chain_2="1.C",
+        chain_1_residue_number_to_index={2: 1},
+        chain_2_residue_number_to_index={3: 2},
+        num_contact_residue_pairs=1,
+    )
+    target_interface = InterfaceView(
+        id="1abc__1__1.B_1.D",
+        pdb_id="1abc",
+        biounit_id="1",
+        chain_1="1.B",
+        chain_2="1.D",
+        chain_1_residue_number_to_index={20: 1},
+        chain_2_residue_number_to_index={30: 2},
+        num_contact_residue_pairs=1,
+    )
+    query = EntryView(
+        pdb_id="model",
+        chains={
+            chain: ChainView(asym_id=chain, auth_id=chain, length=3)
+            for chain in ["A", "C"]
+        },
+        systems={},
+        author_to_asym={"A": "A", "C": "C"},
+        interfaces={query_interface.id: query_interface},
+    )
+    target = EntryView(
+        pdb_id="1abc",
+        chains={
+            chain: ChainView(asym_id=chain, auth_id=chain, length=3)
+            for chain in ["B", "D"]
+        },
+        systems={},
+        author_to_asym={"B": "B", "D": "D"},
+        interfaces={target_interface.id: target_interface},
+    )
+    monkeypatch.setattr(
+        custom,
+        "_load_release_entry_views",
+        lambda _assets, *, pdb_ids: {"1abc": target},
+    )
+    alignment = tmp_path / "interface_foldseek.parquet"
+    pd.DataFrame(
+        [
+            {
+                "query_entry": "model",
+                "target_entry": "1abc",
+                "query_chain_mapped": query_chain,
+                "target_chain_mapped": target_chain,
+                "source": "foldseek",
+                "query_selected_residue_numbers": [query_number],
+                "target_selected_residue_numbers": [target_number],
+            }
+            for query_chain, target_chain, query_number, target_number in [
+                ("A", "B", 2, 20),
+                ("C", "D", 3, 30),
+            ]
+        ]
+    ).to_parquet(alignment, index=False)
+
+    scores = custom.calculate_custom_interface_similarity_scores(
+        {"foldseek": alignment},
+        annotations=_custom_annotations(tmp_path, query),
+        assets=_custom_assets(tmp_path),
+    )
+
+    assert len(scores) == 1
+    assert scores.loc[0, "similarity"] == 100
+    assert scores.loc[0, "query_system"] == query_interface.id
+    assert scores.loc[0, "target_system"] == target_interface.id
