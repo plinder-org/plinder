@@ -253,6 +253,7 @@ def _template_from_user_smiles(
 def _check_stereo_vs_template(
     resolved_mol: "Chem.Mol",
     custom_templates: dict[str, "Chem.Mol"] | None = None,
+    ccd_code_dict: dict[str, str] | None = None,
 ) -> bool | None:
     """Compare resolved 3D stereo against a stereo template per residue.
 
@@ -262,8 +263,10 @@ def _check_stereo_vs_template(
          is wrong or missing (biotite ships a generic placeholder for
          some codes like ``LIG`` that would otherwise silently hide
          stereo mismatches).
-      2. :func:`_get_ccd_mol(resname)` — CCD ideal coordinates.
-      3. Return ``None`` for this residue if neither source yields a
+      2. A mapped CCD template from ``ccd_code_dict``, with its CCD atoms
+         graph-matched and renamed to the custom CIF atom names.
+      3. :func:`_get_ccd_mol(resname)` — CCD ideal coordinates.
+      4. Return ``None`` for this residue if neither source yields a
          template.
 
     Delegates to :func:`compare_stereo_to_template` for the actual CIP
@@ -289,20 +292,6 @@ def _check_stereo_vs_template(
 
     results: list[bool | None] = []
     for (resname, res_id), atom_indices in residue_atoms.items():
-        # User-supplied custom templates take precedence over CCD: if
-        # the caller provided a SMILES template for this residue, they
-        # explicitly know CCD is wrong or missing (biotite ships a
-        # generic placeholder for some codes like "LIG" that would
-        # otherwise hide stereo mismatches).
-        template_mol = None
-        if custom_templates is not None:
-            template_mol = custom_templates.get(resname)
-        if template_mol is None:
-            template_mol = _get_ccd_mol(resname)
-        if template_mol is None:
-            results.append(None)
-            continue
-
         frag = Chem.RWMol(resolved_mol)
         remove = [
             a.GetIdx()
@@ -313,9 +302,32 @@ def _check_stereo_vs_template(
         for idx in sorted(remove, reverse=True):
             frag.RemoveAtom(idx)
         frag.CommitBatchEdit()
+        fragment_mol = frag.GetMol()
+
+        # User-supplied custom templates take precedence over CCD: if
+        # the caller provided a SMILES template for this residue, they
+        # explicitly know CCD is wrong or missing (biotite ships a
+        # generic placeholder for some codes like "LIG" that would
+        # otherwise hide stereo mismatches).
+        template_mol = None
+        if custom_templates is not None:
+            template_mol = custom_templates.get(resname)
+        if template_mol is None:
+            reference_code = (ccd_code_dict or {}).get(resname, resname)
+            template_mol = _get_ccd_mol(reference_code)
+            if template_mol is not None and reference_code != resname:
+                template_mol = _template_with_fragment_atom_names(
+                    template_mol,
+                    fragment_mol,
+                    custom_comp_id=resname,
+                    reference_code=reference_code,
+                )
+        if template_mol is None:
+            results.append(None)
+            continue
 
         try:
-            results.append(compare_stereo_to_template(frag.GetMol(), template_mol))
+            results.append(compare_stereo_to_template(fragment_mol, template_mol))
         except Exception as e:
             LOG.warning(f"Stereo comparison failed for {resname}:{res_id}: {e}")
             results.append(None)
@@ -327,6 +339,42 @@ def _check_stereo_vs_template(
     if any(r is True for r in results):
         return True
     return None
+
+
+def _template_with_fragment_atom_names(
+    template_mol: "Chem.Mol",
+    fragment_mol: "Chem.Mol",
+    *,
+    custom_comp_id: str,
+    reference_code: str,
+) -> "Chem.Mol | None":
+    """Rename a mapped CCD template using its graph match to a CIF residue."""
+    if template_mol.GetNumAtoms() != fragment_mol.GetNumAtoms():
+        LOG.warning(
+            "Mapped CCD stereo template atom count differs for %s -> %s",
+            custom_comp_id,
+            reference_code,
+        )
+        return None
+    match = fragment_mol.GetSubstructMatch(template_mol, useChirality=False)
+    if len(match) != template_mol.GetNumAtoms():
+        LOG.warning(
+            "Mapped CCD stereo template cannot be graph-matched for %s -> %s",
+            custom_comp_id,
+            reference_code,
+        )
+        return None
+    mapped = Chem.Mol(template_mol)
+    for template_atom, fragment_index in zip(mapped.GetAtoms(), match):
+        fragment_info = fragment_mol.GetAtomWithIdx(fragment_index).GetPDBResidueInfo()
+        if fragment_info is None:
+            return None
+        info = Chem.AtomPDBResidueInfo()
+        info.SetName(fragment_info.GetName())
+        info.SetResidueName(custom_comp_id)
+        info.SetResidueNumber(1)
+        template_atom.SetMonomerInfo(info)
+    return mapped
 
 
 @cache
@@ -698,9 +746,7 @@ def _classify_ligand_polymer_classes(
                 unit_counts["nucleotide"] = max(
                     unit_counts["nucleotide"], nucleotide_units
                 )
-                unit_counts["peptide"] = max(
-                    unit_counts["peptide"], peptide_units
-                )
+                unit_counts["peptide"] = max(unit_counts["peptide"], peptide_units)
         for family, pattern in _OLIGO_SMARTS.items():
             if pattern is not None:
                 oligo_matches[family] = mol.HasSubstructMatch(pattern)
@@ -1684,7 +1730,9 @@ class Ligand(DocBaseModel):
             # Compare resolved 3D stereo with CCD template stereo
             # (works for both single- and multi-residue ligands)
             stereo_matches = _check_stereo_vs_template(
-                resolved_mol, custom_templates=custom_templates
+                resolved_mol,
+                custom_templates=custom_templates,
+                ccd_code_dict=ligand_ccd_code_dict,
             )
         except Exception as e:
             LOG.warning(f"Failed to compute resolved SMILES for {ccd_code}: {e}")
@@ -1834,8 +1882,7 @@ class Ligand(DocBaseModel):
     def _is_multi_residue(self) -> bool:
         """Whether deposited residue membership proves a composite ligand."""
         residue_count = sum(
-            len(set(residue_numbers))
-            for residue_numbers in self._members.values()
+            len(set(residue_numbers)) for residue_numbers in self._members.values()
         )
         return residue_count > 1 or len(self.ccd_code.split("-")) > 1
 

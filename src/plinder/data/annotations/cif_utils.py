@@ -39,14 +39,25 @@ from plinder.core.structure.atoms import is_hydrogen_isotope  # noqa: E402
 
 
 def read_mmcif_file(mmcif_filename: Path | str) -> pdbx.CIFFile:
-    """Read an mmCIF file, handling .gz transparently."""
+    """Read an mmCIF file and add unambiguous optional atom-site defaults."""
     import gzip
 
     path = str(mmcif_filename)
     if path.endswith(".gz"):
         with gzip.open(path, "rt", encoding="utf-8") as f:
-            return pdbx.CIFFile.read(f)
-    return pdbx.CIFFile.read(path)
+            cif_file = pdbx.CIFFile.read(f)
+    else:
+        cif_file = pdbx.CIFFile.read(path)
+    for block in cif_file.values():
+        if "atom_site" not in block:
+            continue
+        atom_site = block["atom_site"]
+        atom_count = atom_site.row_count
+        if "pdbx_PDB_model_num" not in atom_site:
+            atom_site["pdbx_PDB_model_num"] = np.ones(atom_count, dtype=np.int32)
+        if "pdbx_PDB_ins_code" not in atom_site:
+            atom_site["pdbx_PDB_ins_code"] = ["."] * atom_count
+    return cif_file
 
 
 def check_custom_mmcif_fields(
@@ -479,7 +490,10 @@ def build_biounit(
         biounit.set_annotation(
             "legacy_chain_id",
             np.asarray(
-                [legacy_mapping.get(chain_id, chain_id) for chain_id in biounit.chain_id]
+                [
+                    legacy_mapping.get(chain_id, chain_id)
+                    for chain_id in biounit.chain_id
+                ]
             ),
         )
         apply_struct_conn_bonds(biounit, list(cif_file.values())[0])

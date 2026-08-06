@@ -47,6 +47,47 @@ def _load_boltz_ligand_smiles() -> str:
 LIGAND_SMILES = _load_boltz_ligand_smiles()
 
 
+def _nucleotide_chain(residue_names: list[str]) -> struc.AtomArray:
+    atom_names: list[str] = []
+    res_ids: list[int] = []
+    expanded_residue_names: list[str] = []
+    for res_id, residue_name in enumerate(residue_names, start=1):
+        names = ["P", "C4'", "C3'", "O3'"]
+        if residue_name in {"A", "C", "G", "U", "I"}:
+            names.append("O2'")
+        atom_names.extend(names)
+        res_ids.extend([res_id] * len(names))
+        expanded_residue_names.extend([residue_name] * len(names))
+    atoms = struc.AtomArray(len(atom_names))
+    atoms.coord = np.arange(len(atom_names) * 3).reshape(-1, 3)
+    atoms.chain_id = np.array(["A"] * len(atom_names))
+    atoms.res_id = np.array(res_ids)
+    atoms.res_name = np.array(expanded_residue_names)
+    atoms.atom_name = np.array(atom_names)
+    atoms.element = np.array(["P" if name == "P" else name[0] for name in atom_names])
+    atoms.hetero = np.zeros(len(atom_names), dtype=bool)
+    return atoms
+
+
+@pytest.mark.parametrize(
+    ("residue_names", "expected"),
+    [
+        (["DA", "DC"], "polydeoxyribonucleotide"),
+        (["A", "C"], "polyribonucleotide"),
+        (
+            ["DA", "C"],
+            "polydeoxyribonucleotide/polyribonucleotide hybrid",
+        ),
+    ],
+)
+def test_coordinate_chain_type_distinguishes_dna_and_rna(residue_names, expected):
+    from plinder.data.annotations.aggregate_annotations import (
+        _chain_type_from_coordinates,
+    )
+
+    assert _chain_type_from_coordinates(_nucleotide_chain(residue_names)) == expected
+
+
 def test_deposited_first_altloc_accepts_numeric_ids():
     atoms = struc.AtomArray(5)
     atoms.coord = np.arange(15).reshape(5, 3)
@@ -495,6 +536,32 @@ def test_custom_cif_modes_distinguish_assembled_from_deposited_pdb(test_dir):
     assert set(deposited.biounit_chain_ids) == {"1"}
 
 
+def test_custom_pdb_mode_reuses_optional_atom_site_defaults(test_dir, tmp_path):
+    from plinder.data.annotations.aggregate_annotations import Entry
+    from plinder.data.annotations.cif_utils import read_mmcif_file
+
+    source = test_dir / "interfaces/cm/pdb_00007cm8/pdb_00007cm8_xyz-enrich.cif.gz"
+    cif_file = read_mmcif_file(source)
+    atom_site = list(cif_file.values())[0]["atom_site"]
+    del atom_site["pdbx_PDB_model_num"]
+    del atom_site["pdbx_PDB_ins_code"]
+    minimal = tmp_path / "7cm8_without_optional_atom_site.cif"
+    cif_file.write(str(minimal))
+
+    entry = Entry.from_custom_cif_file(
+        pdb_id=None,
+        cif_file=minimal,
+        structure_mode="pdb",
+        assembly_ids=["1"],
+        include_ligands=False,
+        include_interfaces=True,
+        interface_annotate_prodigy=False,
+    )
+
+    assert entry.pdb_id == "7cm8"
+    assert set(entry.biounit_chain_ids) == {"1"}
+
+
 def test_custom_as_is_mode_detects_interface_in_supplied_coordinates(test_dir):
     from plinder.data.annotations.aggregate_annotations import Entry
 
@@ -534,9 +601,7 @@ def test_custom_interface_only_mode_preserves_saved_ligands(test_dir, tmp_path):
     assert ligand_file.read_text() == "existing canonical ligand"
 
 
-def test_custom_pdb_output_does_not_infer_data_dir(
-    cif_6i41, tmp_path, monkeypatch
-):
+def test_custom_pdb_output_does_not_infer_data_dir(cif_6i41, tmp_path, monkeypatch):
     from plinder.data.annotations import aggregate_annotations as agg
     from plinder.data.annotations.aggregate_annotations import Entry
 
@@ -564,6 +629,20 @@ def test_custom_cif_rejects_legacy_pdb_path():
         Entry.from_custom_cif_file(
             pdb_id="custom",
             cif_file=Path("model.pdb"),
+            include_ligands=False,
+            include_interfaces=True,
+        )
+
+
+def test_custom_cif_reports_malformed_input(tmp_path):
+    from plinder.data.annotations.aggregate_annotations import Entry
+
+    malformed = tmp_path / "malformed.cif"
+    malformed.write_text("this is not an mmCIF")
+    with pytest.raises(ValueError, match="cannot parse custom mmCIF"):
+        Entry.from_custom_cif_file(
+            pdb_id="custom",
+            cif_file=malformed,
             include_ligands=False,
             include_interfaces=True,
         )
@@ -720,6 +799,7 @@ def test_from_custom_cif_with_ccd_code(boltz_cif, tmp_path):
     assert {ligand.smiles for ligand in ligands} == {_get_ccd_smiles("T9C")}
     assert all(ligand.rdkit_canonical_smiles for ligand in ligands)
     assert all(ligand.num_heavy_atoms for ligand in ligands)
+    assert all(ligand.resolved_stereo_matches_template is True for ligand in ligands)
     fixed = pdbx.CIFFile.read(str(fixed_cif))
     fixed_block = list(fixed.values())[0]
     bond_category = fixed_block["chem_comp_bond"]

@@ -16,6 +16,7 @@ import biotite.structure.io.pdbx as pdbx
 import networkit as nk
 import numpy as np
 import pandas as pd
+from biotite.file import DeserializationError, InvalidFileError
 from PDBValidation.ValidationFactory import ValidationFactory
 from pydantic import BeforeValidator, Field
 from rdkit import RDLogger
@@ -94,6 +95,9 @@ def _chain_type_from_coordinates(atoms: struc.AtomArray) -> str:
         return "non-polymer"
     protein_residues = 0
     nucleotide_residues = 0
+    dna_residues = 0
+    rna_residues = 0
+    ambiguous_nucleotide_residues = 0
     for start, stop in zip(residue_starts[:-1], residue_starts[1:]):
         residue = atoms[start:stop]
         atom_names = set(residue.atom_name.astype(str))
@@ -105,11 +109,27 @@ def _chain_type_from_coordinates(atoms: struc.AtomArray) -> str:
             protein_residues += 1
         if np.any(struc.filter_nucleotides(residue)):
             nucleotide_residues += 1
+            residue_name = str(residue.res_name[0]).upper()
+            if residue_name in {"DA", "DC", "DG", "DT", "DU", "DI"}:
+                dna_residues += 1
+            elif residue_name in {"A", "C", "G", "U", "I"} or atom_names.intersection(
+                {"O2'", "O2*"}
+            ):
+                rna_residues += 1
+            else:
+                ambiguous_nucleotide_residues += 1
     residue_count = len(residue_starts) - 1
     if protein_residues == residue_count:
         return "polypeptide(L)"
     if nucleotide_residues == residue_count:
-        return "polyribonucleotide"
+        if dna_residues and not rna_residues and not ambiguous_nucleotide_residues:
+            return "polydeoxyribonucleotide"
+        if rna_residues and not dna_residues and not ambiguous_nucleotide_residues:
+            return "polyribonucleotide"
+        # Mixed or modified nucleotides without a decisive sugar marker must
+        # not be mislabeled as pure RNA. The hybrid type keeps both receptor
+        # classes visible downstream.
+        return "polydeoxyribonucleotide/polyribonucleotide hybrid"
     return "non-polymer"
 
 
@@ -928,12 +948,8 @@ class Entry(DocBaseModel):
                 chain_type = type_by_entity.get(entity_id, "unknown")
                 if chain_type == "unknown":
                     chain_type = _chain_type_from_coordinates(chain_atoms)
-                if (
-                    chain_id not in self.chain_to_seqres
-                    and (
-                        _is_polypeptide(chain_type)
-                        or _is_polynucleotide(chain_type)
-                    )
+                if chain_id not in self.chain_to_seqres and (
+                    _is_polypeptide(chain_type) or _is_polynucleotide(chain_type)
                 ):
                     sequence = _sequence_from_coordinates(chain_atoms)
                     if sequence:
@@ -1325,8 +1341,6 @@ class Entry(DocBaseModel):
         cif_file = Path(cif_file)
         data_dir = Path(data_dir) if data_dir is not None else None
         save_folder = Path(save_folder) if save_folder is not None else None
-
-        from biotite.file import DeserializationError, InvalidFileError
 
         from plinder.data.annotations.cif_utils import (
             _cif_scalar,
@@ -1750,9 +1764,7 @@ class Entry(DocBaseModel):
         if not include_ligands and (
             ligand_smiles_dict is not None or ligand_ccd_code_dict is not None
         ):
-            raise ValueError(
-                "ligand chemistry overrides require include_ligands=True"
-            )
+            raise ValueError("ligand chemistry overrides require include_ligands=True")
         overlapping_chemistry = set(ligand_smiles_dict or {}).intersection(
             ligand_ccd_code_dict or {}
         )
@@ -1766,6 +1778,11 @@ class Entry(DocBaseModel):
             cif_data = list(cif_file_obj.values())[0]
         except (DeserializationError, IndexError, InvalidFileError, OSError) as exc:
             raise ValueError(f"cannot parse custom mmCIF {cif_file}: {exc}") from exc
+        if structure_mode == "pdb" and pdb_id is not None:
+            raise ValueError(
+                "pdb_id must be None in pdb mode; the deposited _entry.id "
+                "is authoritative"
+            )
         check_custom_mmcif_fields(
             cif_data,
             source=cif_file,
@@ -1778,14 +1795,7 @@ class Entry(DocBaseModel):
                 or "id" not in cif_data["entry"]
                 or cif_data["entry"].row_count == 0
             ):
-                raise ValueError(
-                    f"custom mmCIF {cif_file} needs _entry.id in pdb mode"
-                )
-            if pdb_id is not None:
-                raise ValueError(
-                    "pdb_id must be None in pdb mode; the deposited _entry.id "
-                    "is authoritative"
-                )
+                raise ValueError(f"custom mmCIF {cif_file} needs _entry.id in pdb mode")
             if (
                 ligand_smiles_dict is not None
                 or ligand_ccd_code_dict is not None
@@ -1862,11 +1872,9 @@ class Entry(DocBaseModel):
         effective_smiles = dict(ligand_smiles_dict or {})
         enrichment_applied = False
         if include_ligands and ligand_ccd_code_dict:
-            effective_smiles.update(
-                enrich_cif_with_ccd_bonds(
-                    cif_file_obj,
-                    ligand_ccd_codes=ligand_ccd_code_dict,
-                )
+            enrich_cif_with_ccd_bonds(
+                cif_file_obj,
+                ligand_ccd_codes=ligand_ccd_code_dict,
             )
             enrichment_applied = True
 
@@ -1949,9 +1957,7 @@ class Entry(DocBaseModel):
             )
         if include_interfaces:
             spatial_radii.append(interface_contact_radius)
-        spatial_index = BiounitSpatialIndex.from_atoms(
-            biounit, max(spatial_radii)
-        )
+        spatial_index = BiounitSpatialIndex.from_atoms(biounit, max(spatial_radii))
         if include_interfaces:
             entry.interfaces.extend(
                 detect_protein_interfaces(
