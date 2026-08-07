@@ -545,6 +545,33 @@ def write_plinder_mount(monkeypatch, tmp_path):
     return write_plinder_mount
 
 
+@pytest.fixture
+def cached_plinder_system(read_plinder_mount, tmp_path):
+    """Build a system using explicit current-release cache locations."""
+    from plinder.core import PlinderSystem
+
+    def build(system_id: str) -> PlinderSystem:
+        source = read_plinder_mount / "systems" / system_id
+        reconstruction_dir = tmp_path / "reconstructed_systems" / system_id
+        shutil.copytree(source, reconstruction_dir)
+
+        canonical_ligand_dir = tmp_path / "canonical_ligands" / system_id
+        canonical_ligand_dir.mkdir(parents=True)
+        for ligand_file in (source / "ligand_files").glob("*.sdf"):
+            asym_id = ligand_file.stem.rsplit(".", maxsplit=1)[-1]
+            target = canonical_ligand_dir / f"{asym_id}.sdf"
+            if not target.exists():
+                shutil.copyfile(ligand_file, target)
+
+        return PlinderSystem(
+            system_id=system_id,
+            reconstruction_dir=reconstruction_dir,
+            canonical_ligand_dir=canonical_ligand_dir,
+        )
+
+    return build
+
+
 @pytest.fixture(autouse=True)
 def mock_ccd_lookups(monkeypatch):
     from plinder.data.annotations.ligand_utils import sort_ccd_codes

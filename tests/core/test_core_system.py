@@ -6,6 +6,7 @@ import pytest
 from plinder.core import index
 
 
+@pytest.mark.usefixtures("read_plinder_mount")
 @pytest.mark.parametrize(
     "system_id",
     [
@@ -14,7 +15,7 @@ from plinder.core import index
         "19hc__1__1.B__1.T",
     ],
 )
-def test_plinder_system(system_id, read_plinder_mount):
+def test_plinder_system(system_id):
     index.PlinderSystem(system_id=system_id).system
 
 
@@ -38,9 +39,9 @@ def test_plinder_system_receptor_type():
     assert system.receptor_chain_types == {"1.A": "protein", "1.N": "dna"}
 
 
-def test_plinder_system_system_files(read_plinder_mount):
+def test_plinder_system_system_files(cached_plinder_system):
     system_id = "1avd__1__1.A__1.C"
-    s = index.PlinderSystem(system_id=system_id)
+    s = cached_plinder_system(system_id)
     assert len(s.ligand_sdfs) >= 1
     assert len(s.system_cif)
     assert len(s.receptor_cif)
@@ -55,7 +56,7 @@ def test_plinder_system_system_files(read_plinder_mount):
     )
 
 
-def test_plinder_system_materializes_canonical_ligand_archive(
+def test_plinder_system_extracts_canonical_ligand_archive(
     write_plinder_mount, monkeypatch
 ):
     from plinder.core.utils import config, cpl
@@ -82,9 +83,9 @@ def test_plinder_system_materializes_canonical_ligand_archive(
     }
 
 
-def test_plinder_structure(read_plinder_mount):
+def test_plinder_structure(cached_plinder_system):
     system_id = "1avd__1__1.A__1.C"
-    s = index.PlinderSystem(system_id=system_id)
+    s = cached_plinder_system(system_id)
     holo_struc = s.holo_structure
     ligand_mols = holo_struc.ligand_mols
     # test the mask order for smiles

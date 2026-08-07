@@ -6,7 +6,6 @@ import biotite.structure as struc
 import numpy as np
 import pytest
 from biotite.structure.atoms import AtomArray
-from plinder.core.index.system import PlinderSystem
 from plinder.core.structure import vendored as atoms
 from plinder.core.structure.atoms import (
     atom_array_from_cif_file,
@@ -66,8 +65,8 @@ def test_resn2seq(cif_atom_array):
     assert atoms.resn2seq(resn[0:2]) == "TT"
 
 
-def test_get_seq_alignments(read_plinder_mount):
-    cif = PlinderSystem(system_id="1avd__1__1.A_2.A__1.D").receptor_cif
+def test_get_seq_alignments(cached_plinder_system):
+    cif = cached_plinder_system("1avd__1__1.A_2.A__1.D").receptor_cif
     a = atoms.atom_array_from_cif_file(cif)
     b = atoms.atom_array_from_cif_file(cif)
     a_numbering, a_resn = struc.get_residues(a)
@@ -89,8 +88,8 @@ def test_get_seq_alignments(read_plinder_mount):
     assert b_numbering == list(range(1, len(b_seq) + 1))
 
 
-def test_buried_sasa(read_plinder_mount):
-    cif = PlinderSystem(system_id="1avd__1__1.A_2.A__1.D").receptor_cif
+def test_buried_sasa(cached_plinder_system):
+    cif = cached_plinder_system("1avd__1__1.A_2.A__1.D").receptor_cif
     arr = atoms.atom_array_from_cif_file(cif)
     chains = sorted(set(arr.chain_id))
     assert len(chains) >= 2, f"Need multi-chain receptor, got {chains}"

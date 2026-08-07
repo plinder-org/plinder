@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 
 from biotite.sequence.io.fasta import FastaFile
 
+from plinder.core.release import PlinderRelease
 from plinder.core.scores import query_index
 from plinder.core.scores.links import query_links
 from plinder.core.scores.query import FILTER
@@ -40,10 +41,10 @@ from plinder.data.annotations.save_utils import (
 LOG = setup_logger(__name__)
 
 
-def _materialize_packed_ligand_sdfs(
+def _extract_packed_ligand_sdfs(
     *, archive: Path, pdb_id: str, asym_ids: set[str]
 ) -> Path:
-    """Materialize only one system's canonical SDFs from its shard Parquet."""
+    """Extract only one system's canonical SDFs from its shard parquet."""
     folder = archive.parent / pdb_id / "ligand_files"
     missing = {
         asym_id for asym_id in asym_ids if not (folder / f"{asym_id}.sdf").is_file()
@@ -71,14 +72,12 @@ def _materialize_packed_ligand_sdfs(
 class PlinderSystem:
     """
     Core class for interacting with a single system and its assets.
-    Annotation data is queried lazily for one entry or system. V3 structure
+    Annotation data is queried lazily for one entry or system. Release structure
     views are reconstructed from a deposited PDB mmCIF cached under the
     configured PLINDER directory; canonical ASU ligand SDFs are loaded from the
     ligand archive independently.  An explicit source mmCIF can override the
     managed cache.
 
-    Existing local V2 system archives remain readable as a transitional
-    fallback, but are never downloaded by this class.
     """
 
     def __repr__(self) -> str:
@@ -118,7 +117,6 @@ class PlinderSystem:
         self._biounit_chains = (
             biounit_chains.copy() if biounit_chains is not None else None
         )
-        self._archive: Path | None = None
         self._reconstructed: ReconstructedSystem | None = None
         self._canonical_ligand_folder: Path | None = None
         self._linked_structures: pd.DataFrame | None = None
@@ -223,7 +221,7 @@ class PlinderSystem:
 
     @property
     def biounit_chains(self) -> pd.DataFrame:
-        """Return normalized chain membership for this biological assembly."""
+        """Return ingested chain membership for this biological assembly."""
         if self._biounit_chains is None:
             cfg = get_config()
             path = cpl.get_plinder_path(
@@ -243,28 +241,9 @@ class PlinderSystem:
             )
         return self._biounit_chains
 
-    def _reconstruction_biounit_chains(self) -> pd.DataFrame | None:
-        """Use normalized membership for V3 while leaving V2 assets unchanged."""
-        if self._biounit_chains is not None:
-            return self._biounit_chains
-        if str(get_config().data.plinder_iteration).lower() != "v3":
-            return None
-        return self.biounit_chains
-
-    def _legacy_archive(self) -> Path | None:
-        """Return an already-local V2 archive without fetching one."""
-        cfg = get_config()
-        root = Path(cpl.get_plinder_path(rel=cfg.data.systems, download=False))
-        extracted = root / self.system_id
-        if (extracted / "receptor.cif").is_file():
-            return extracted
-        zip_path = root / f"{self.system_id[1:3]}.zip"
-        if not zip_path.is_file():
-            return None
-        get_zips_to_unpack(kind="systems", system_ids=[self.system_id])
-        return extracted if (extracted / "receptor.cif").is_file() else None
-
-    def _require_source_mmcif(self) -> Path:
+    @property
+    def source_mmcif_path(self) -> Path:
+        """Return the explicit or release-cached deposited PDB mmCIF."""
         if self.source_mmcif is None:
             self.source_mmcif = get_pdb_mmcif(self.system_id)
         if not self.source_mmcif.is_file():
@@ -272,26 +251,13 @@ class PlinderSystem:
         return self.source_mmcif
 
     @property
-    def source_mmcif_path(self) -> Path:
-        """Return the explicit or release-cached deposited PDB mmCIF."""
-        return self._require_source_mmcif()
-
-    @property
-    def _uses_source_reconstruction(self) -> bool:
-        """Use source reconstruction for explicit inputs and V3 releases."""
-        return (
-            self.source_mmcif is not None
-            or str(get_config().data.plinder_iteration).lower() == "v3"
-        )
-
-    @property
     def reconstructed(self) -> ReconstructedSystem:
         """In-memory biological-assembly views reconstructed from source mmCIF."""
         if self._reconstructed is None:
             self._reconstructed = reconstruct_system(
-                self._require_source_mmcif(),
+                self.source_mmcif_path,
                 self.system.iloc[0],
-                biounit_chains=self._reconstruction_biounit_chains(),
+                biounit_chains=self.biounit_chains,
                 options=self.reconstruction_options,
             )
         return self._reconstructed
@@ -311,10 +277,10 @@ class PlinderSystem:
             else None
         )
         return save_reconstructed_system(
-            self._require_source_mmcif(),
+            self.source_mmcif_path,
             self.system.iloc[0],
             outputs=outputs,
-            biounit_chains=self._reconstruction_biounit_chains(),
+            biounit_chains=self.biounit_chains,
             options=selected_options,
             overwrite=overwrite,
             reconstructed=cached,
@@ -332,27 +298,17 @@ class PlinderSystem:
         return path
 
     @property
-    def archive(self) -> Path | None:
+    def archive(self) -> Path:
         """
         Return the path to the directory containing the plinder system
 
         Returns
         -------
-        Path | None
+        Path
             directory containing the plinder system
         """
-        if self._archive is None:
-            if self._uses_source_reconstruction:
-                self.reconstruction_dir.mkdir(parents=True, exist_ok=True)
-                self._archive = self.reconstruction_dir
-            else:
-                self._archive = self._legacy_archive()
-            if self._archive is None:
-                raise FileNotFoundError(
-                    f"No local V2 system archive found for {self.system_id}. "
-                    "Source-mmCIF reconstruction is enabled for V3 releases."
-                )
-        return self._archive
+        self.reconstruction_dir.mkdir(parents=True, exist_ok=True)
+        return self.reconstruction_dir
 
     @property
     def system_cif(self) -> str:
@@ -364,10 +320,7 @@ class PlinderSystem:
         str
             path
         """
-        if self._uses_source_reconstruction:
-            return self._ensure_standard_output("system.cif").as_posix()
-        assert self.archive is not None
-        return (self.archive / "system.cif").as_posix()
+        return self._ensure_standard_output("system.cif").as_posix()
 
     @property
     def receptor_cif(self) -> str:
@@ -379,10 +332,7 @@ class PlinderSystem:
         str
             path
         """
-        if self._uses_source_reconstruction:
-            return self._ensure_standard_output("receptor.cif").as_posix()
-        assert self.archive is not None
-        return (self.archive / "receptor.cif").as_posix()
+        return self._ensure_standard_output("receptor.cif").as_posix()
 
     @property
     def sequences_fasta(self) -> str:
@@ -394,10 +344,7 @@ class PlinderSystem:
         str
             path
         """
-        if self._uses_source_reconstruction:
-            return self._ensure_standard_output("sequences.fasta").as_posix()
-        assert self.archive is not None
-        return (self.archive / "sequences.fasta").as_posix()
+        return self._ensure_standard_output("sequences.fasta").as_posix()
 
     @cached_property
     def sequences(self) -> dict[str, str]:
@@ -420,12 +367,12 @@ class PlinderSystem:
             else:
                 pdb_id = self.system_id.split("__", maxsplit=1)[0]
                 asym_ids = set(self.system["ligand_asym_id"].astype(str))
-                cfg = get_config()
                 code = pdb_id[1:3]
-                archive = cpl.get_plinder_path(
-                    rel=f"{cfg.data.ligand_archives}/{code}.parquet"
+                archive = PlinderRelease().fetch(
+                    "ligand_archive",
+                    shard=code,
                 )
-                folder = _materialize_packed_ligand_sdfs(
+                folder = _extract_packed_ligand_sdfs(
                     archive=archive,
                     pdb_id=pdb_id,
                     asym_ids=asym_ids,
@@ -459,13 +406,6 @@ class PlinderSystem:
         dict[str, str]
             dictionary of ligand names to paths to ligand sdf files
         """
-        if not self._uses_source_reconstruction:
-            assert self.archive is not None
-            return {
-                ligand.stem: ligand.as_posix()
-                for ligand in (self.archive / "ligand_files/").glob("*.sdf")
-            }
-
         ligand_dir = self.reconstruction_dir / "ligand_files"
         instance_chains = list(self.canonical_ligand_sdfs)
         missing = [
@@ -493,7 +433,6 @@ class PlinderSystem:
         list[str]
             list of paths to structures
         """
-        assert self.archive is not None
         return [path.as_posix() for path in self.archive.rglob("*") if path.is_file()]
 
     @property

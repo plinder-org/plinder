@@ -8,11 +8,35 @@ from plinder.core.scores import ligand as ligand_module
 from plinder.core.scores.protein import multi_query_protein_similarity
 
 
-def test_query_index(read_plinder_mount):
+@pytest.fixture
+def current_ligand_scores(read_plinder_mount, tmp_path, monkeypatch):
+    source = read_plinder_mount / "ligand_scores" / "ligand_scores.parquet"
+    scores_dir = tmp_path / "ligand_scores"
+    scores_dir.mkdir()
+    pd.read_parquet(source).rename(
+        columns={
+            "tanimoto_similarity_max": "tanimoto_similarity_ecfp4_1024",
+        }
+    ).to_parquet(scores_dir / "ligand_scores.parquet", index=False)
+
+    original_fetch = ligand_module.PlinderRelease.fetch
+
+    def fetch(release, name, **parameters):
+        if name == "ligand_scores":
+            return scores_dir
+        return original_fetch(release, name, **parameters)
+
+    monkeypatch.setattr(ligand_module.PlinderRelease, "fetch", fetch)
+    return scores_dir
+
+
+@pytest.mark.usefixtures("read_plinder_mount")
+def test_query_index():
     df = scores.query_index(columns=["system_id"], splits=["*"])
     assert len(df.index) == 57
 
 
+@pytest.mark.usefixtures("read_plinder_mount")
 @pytest.mark.parametrize(
     "system_id, correct_release_date",
     [
@@ -29,7 +53,8 @@ def test_entry_release_date(system_id, correct_release_date):
     assert df.iloc[0].entry_release_date == correct_release_date
 
 
-def test_query_protein_similarity(read_plinder_mount):
+@pytest.mark.usefixtures("read_plinder_mount")
+def test_query_protein_similarity():
     df = scores.query_protein_similarity(
         search_db="holo",
         filters=[
@@ -41,7 +66,8 @@ def test_query_protein_similarity(read_plinder_mount):
     assert len(df.index)
 
 
-def test_query_protein_similarity_empty(read_plinder_mount):
+@pytest.mark.usefixtures("read_plinder_mount")
+def test_query_protein_similarity_empty():
     with pytest.raises(ValueError):
         scores.query_protein_similarity(
             search_db="holo",
@@ -49,7 +75,8 @@ def test_query_protein_similarity_empty(read_plinder_mount):
         )
 
 
-def test_query_protein_similarity_removes_search_db(read_plinder_mount):
+@pytest.mark.usefixtures("read_plinder_mount")
+def test_query_protein_similarity_removes_search_db():
     df = scores.query_protein_similarity(
         search_db="holo",
         filters=[
@@ -62,7 +89,8 @@ def test_query_protein_similarity_removes_search_db(read_plinder_mount):
     assert len(df.index)
 
 
-def test_query_protein_similarity_raises(read_plinder_mount):
+@pytest.mark.usefixtures("read_plinder_mount")
+def test_query_protein_similarity_raises():
     with pytest.raises(ValueError):
         scores.query_protein_similarity(
             search_db="test",
@@ -74,7 +102,8 @@ def test_query_protein_similarity_raises(read_plinder_mount):
         )
 
 
-def test_query_protein_cross_similarity(read_plinder_mount):
+@pytest.mark.usefixtures("read_plinder_mount")
+def test_query_protein_cross_similarity():
     df = scores.cross_protein_similarity(
         query_systems=["8t49__1__1.G__1.AB", "6cex__1__1.D__1.M"],
         target_systems=["4r2g__3__1.P__1.AB", "4ln4__1__1.F__1.U"],
@@ -83,7 +112,7 @@ def test_query_protein_cross_similarity(read_plinder_mount):
     assert len(df.index)
 
 
-def test_query_ligand_similarity(read_plinder_mount):
+def test_query_ligand_similarity(current_ligand_scores):
     df = scores.query_ligand_similarity(
         filters=[
             ("query_ligand_id", "<", "100"),
@@ -93,25 +122,25 @@ def test_query_ligand_similarity(read_plinder_mount):
     assert len(df.index)
 
 
-def test_query_ligand_similarity_empty(read_plinder_mount):
+@pytest.mark.usefixtures("read_plinder_mount")
+def test_query_ligand_similarity_empty():
     with pytest.raises(ValueError):
         scores.query_ligand_similarity(filters=[])
 
 
-def test_query_ligand_cross_similarity(read_plinder_mount):
+def test_query_ligand_cross_similarity(current_ligand_scores, monkeypatch):
+    monkeypatch.setattr(
+        ligand_module,
+        "map_cross_similarity",
+        lambda frame, _target_ligands, _metric: frame,
+    )
     df = scores.cross_ligand_similarity(
         query_ligands=[29, 51], target_ligands=[49918, 36689]
     )
     assert len(df.index)
 
 
-def test_v3_ligand_cross_similarity_maps_nodes_through_index(monkeypatch):
-    class DataConfig:
-        plinder_iteration = "v3"
-
-    class Config:
-        data = DataConfig()
-
+def test_ligand_cross_similarity_maps_nodes_through_index(monkeypatch):
     calls = []
 
     def fake_query_index(*, columns, filters, splits):
@@ -123,7 +152,6 @@ def test_v3_ligand_cross_similarity_maps_nodes_through_index(monkeypatch):
             }
         )
 
-    monkeypatch.setattr(ligand_module, "get_config", Config)
     monkeypatch.setattr(index_module, "query_index", fake_query_index)
     result = ligand_module.map_cross_similarity(
         pd.DataFrame(
@@ -144,16 +172,9 @@ def test_v3_ligand_cross_similarity_maps_nodes_through_index(monkeypatch):
     assert calls and calls[0][0] == ["system_id", "ligand_smiles_id"]
 
 
-def test_v3_ligand_cross_similarity_returns_empty_without_querying_index(
+def test_ligand_cross_similarity_returns_empty_without_querying_index(
     monkeypatch,
 ):
-    class DataConfig:
-        plinder_iteration = "v3"
-
-    class Config:
-        data = DataConfig()
-
-    monkeypatch.setattr(ligand_module, "get_config", Config)
     monkeypatch.setattr(
         index_module,
         "query_index",
@@ -176,13 +197,15 @@ def test_v3_ligand_cross_similarity_returns_empty_without_querying_index(
     assert result.columns.tolist() == ["system_id", "tanimoto_similarity_ecfp4_1024"]
 
 
-def test_query_links(read_plinder_mount):
+@pytest.mark.usefixtures("read_plinder_mount")
+def test_query_links():
     system_id = "4dd7__1__1.A__1.B"
     df = scores.query_links(filters=[("reference_system_id", "==", system_id)])
     assert len(df.index)
 
 
-def test_query_links_columns(read_plinder_mount):
+@pytest.mark.usefixtures("read_plinder_mount")
+def test_query_links_columns():
     system_id = "4dd7__1__1.A__1.B"
     df = scores.query_links(
         columns=["reference_system_id"],
@@ -193,7 +216,8 @@ def test_query_links_columns(read_plinder_mount):
     assert "kind" in df.columns
 
 
-def test_multi_query_protein_similarity(read_plinder_mount):
+@pytest.mark.usefixtures("read_plinder_mount")
+def test_multi_query_protein_similarity():
     system_id = "8t49__1__1.G__1.AB"
     filter_criteria: dict[str, int] = {
         "protein_fident_qcov_weighted_sum": 0,
