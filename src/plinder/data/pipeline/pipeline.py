@@ -52,7 +52,7 @@ class IngestPipeline:
         LOG.info(f"plinder_dir={self.plinder_dir}")
 
     def _entry_source_roots(self) -> tuple[Path, Path]:
-        """Resolve configured V3 source archives for entry generation."""
+        """Resolve configured source archives for entry generation."""
         return resolve_source_roots(
             data_dir=self.plinder_dir,
             cif_root=self.cfg.source.pdb_nextgen_root or None,
@@ -103,25 +103,23 @@ class IngestPipeline:
     @utils.ingest_flow_control
     def make_dbs(self) -> None:
         cif_root, _ = self._entry_source_roots()
-        scratch_root = None
-        if self.cfg.data.plinder_iteration == "v3":
-            from plinder.data.pipeline.score import (
-                make_foldseek_input_manifest,
-                plan_protein_scoring,
-            )
+        from plinder.data.pipeline.score import (
+            make_foldseek_input_manifest,
+            plan_protein_scoring,
+        )
 
-            if self.cfg.foldseek.max_seqs != self.cfg.mmseqs.max_seqs:
-                raise ValueError(
-                    "V3 Foldseek and MMseqs max_seqs must match in one scoring plan"
-                )
-            plan_protein_scoring(
-                self.plinder_dir,
-                pdb_ids=list(self.cfg.context.pdb_ids),
-                two_char_codes=list(self.cfg.context.two_char_codes),
-                max_seqs=self.cfg.foldseek.max_seqs,
+        if self.cfg.foldseek.max_seqs != self.cfg.mmseqs.max_seqs:
+            raise ValueError(
+                "Foldseek and MMseqs max_seqs must match in one scoring plan"
             )
-            cif_root = make_foldseek_input_manifest(self.plinder_dir, cif_root)
-            scratch_root = Path(tempfile.gettempdir()) / "plinder-full-search-dbs"
+        plan_protein_scoring(
+            self.plinder_dir,
+            pdb_ids=list(self.cfg.context.pdb_ids),
+            two_char_codes=list(self.cfg.context.two_char_codes),
+            max_seqs=self.cfg.foldseek.max_seqs,
+        )
+        cif_root = make_foldseek_input_manifest(self.plinder_dir, cif_root)
+        scratch_root = Path(tempfile.gettempdir()) / "plinder-full-search-dbs"
         tasks.make_dbs(
             data_dir=self.plinder_dir,
             sub_databases=self.cfg.scorer.sub_databases,
@@ -180,11 +178,6 @@ class IngestPipeline:
         catted = []
         for rerun in reruns:
             catted.extend([item[-4:] for item in rerun])
-        if self.cfg.data.plinder_iteration != "v3":
-            utils.create_index(
-                data_dir=self.plinder_dir,
-                force_update=True,
-            )
         return catted
 
     @utils.ingest_flow_control
@@ -335,13 +328,11 @@ class IngestPipeline:
             scorer_cfg=self.cfg.scorer,
             force_update=force_update,
             threads=self.cfg.flow.make_batch_scores_cpu,
-            defer_ligand_3d=self.cfg.data.plinder_iteration == "v3",
+            defer_ligand_3d=True,
         )
 
     @utils.ingest_flow_control
     def scatter_collate_ligand_3d_candidates(self) -> list[list[str]]:
-        if self.cfg.data.plinder_iteration != "v3":
-            return [[]]
         return tasks.scatter_ligand_3d_candidate_shards(
             data_dir=self.plinder_dir,
             batch_size=self.cfg.flow.collate_ligand_3d_candidates_batch_size,
@@ -349,8 +340,6 @@ class IngestPipeline:
 
     @utils.ingest_flow_control
     def collate_ligand_3d_candidates(self, shards: list[str]) -> None:
-        if self.cfg.data.plinder_iteration != "v3":
-            return
         tasks.collate_ligand_3d_candidates(
             data_dir=self.plinder_dir,
             shards=shards,
@@ -360,8 +349,6 @@ class IngestPipeline:
 
     @utils.ingest_flow_control
     def plan_ligand_3d_scores(self) -> None:
-        if self.cfg.data.plinder_iteration != "v3":
-            return
         from plinder.data.pipeline.score import plan_ligand_3d_batches
 
         plan_ligand_3d_batches(
@@ -373,14 +360,10 @@ class IngestPipeline:
 
     @utils.ingest_flow_control
     def scatter_make_ligand_3d_scores(self) -> list[list[int]]:
-        if self.cfg.data.plinder_iteration != "v3":
-            return [[]]
         return tasks.scatter_ligand_3d_score_batches(data_dir=self.plinder_dir)
 
     @utils.ingest_flow_control
     def make_ligand_3d_scores(self, batch_indices: list[int]) -> None:
-        if self.cfg.data.plinder_iteration != "v3":
-            return
         from plinder.data.pipeline.score import _ligand_3d_batch
 
         force_update = (
@@ -408,8 +391,6 @@ class IngestPipeline:
 
     @utils.ingest_flow_control
     def scatter_collate_ligand_3d_scores(self) -> list[list[str]]:
-        if self.cfg.data.plinder_iteration != "v3":
-            return [[]]
         return tasks.scatter_ligand_3d_query_shards(
             data_dir=self.plinder_dir,
             batch_size=self.cfg.flow.collate_ligand_3d_scores_batch_size,
@@ -417,8 +398,6 @@ class IngestPipeline:
 
     @utils.ingest_flow_control
     def collate_ligand_3d_scores(self, shards: list[str]) -> None:
-        if self.cfg.data.plinder_iteration != "v3":
-            return
         tasks.collate_ligand_3d_scores(
             data_dir=self.plinder_dir,
             shards=shards,
@@ -428,8 +407,6 @@ class IngestPipeline:
 
     @utils.ingest_flow_control
     def scatter_merge_ligand_3d_scores(self) -> list[list[str]]:
-        if self.cfg.data.plinder_iteration != "v3":
-            return [[]]
         return tasks.scatter_ligand_3d_merge(
             data_dir=self.plinder_dir,
             batch_size=self.cfg.flow.merge_ligand_3d_scores_batch_size,
@@ -437,8 +414,6 @@ class IngestPipeline:
 
     @utils.ingest_flow_control
     def merge_ligand_3d_scores(self, shards: list[str]) -> None:
-        if self.cfg.data.plinder_iteration != "v3":
-            return
         force_update = (
             self.cfg.data.force_update or self.cfg.flow.make_batch_scores_force_update
         )
@@ -453,8 +428,6 @@ class IngestPipeline:
 
     @utils.ingest_flow_control
     def finalize_scores(self) -> None:
-        if self.cfg.data.plinder_iteration != "v3":
-            return
         from plinder.data.pipeline.score import finalize_ligand_3d_artifacts
 
         finalize_ligand_3d_artifacts(self.plinder_dir)
@@ -510,8 +483,6 @@ class IngestPipeline:
 
     @utils.ingest_flow_control
     def plan_interface_scores(self) -> None:
-        if self.cfg.data.plinder_iteration != "v3":
-            return
         from plinder.data.pipeline.score import plan_interface_scoring
 
         plan_interface_scoring(
@@ -521,8 +492,6 @@ class IngestPipeline:
 
     @utils.ingest_flow_control
     def scatter_make_interface_scores(self) -> list[list[str]]:
-        if self.cfg.data.plinder_iteration != "v3":
-            return [[]]
         from plinder.data.pipeline.score import (
             INTERFACE_SCORE_WORK_RELATIVE,
             _load_interface_score_plan,
@@ -545,7 +514,7 @@ class IngestPipeline:
 
     @utils.ingest_flow_control
     def make_interface_scores(self, shards: list[str]) -> None:
-        if self.cfg.data.plinder_iteration != "v3" or not shards:
+        if not shards:
             return
         from plinder.data.pipeline.score import score_interface_qcov_shards
 
@@ -560,8 +529,6 @@ class IngestPipeline:
 
     @utils.ingest_flow_control
     def finalize_interface_scores(self) -> None:
-        if self.cfg.data.plinder_iteration != "v3":
-            return
         from plinder.data.pipeline.score import finalize_interface_qcov_scores
 
         finalize_interface_qcov_scores(
@@ -574,19 +541,17 @@ class IngestPipeline:
     @utils.ingest_flow_control
     def scatter_collate_partitions(self) -> list[list[str]]:
         chunks: list[list[str]] = tasks.scatter_collate_partitions()
-        if self.cfg.data.plinder_iteration == "v3":
-            # Holo scores are already published as two-character query shards
-            # by merge_ligand_3d_scores. Only linked apo/pred scores still use
-            # the legacy partition collation path.
-            chunks = [
-                chunk
-                for chunk in chunks
-                if chunk
-                and chunk[0] in self.cfg.scorer.sub_databases
-                and chunk[0] in {"apo", "pred"}
-            ]
-            return chunks or [[]]
-        return chunks
+        # Holo scores are already published as two-character query shards by
+        # merge_ligand_3d_scores. Only linked apo/pred scores still use this
+        # partition collation path.
+        chunks = [
+            chunk
+            for chunk in chunks
+            if chunk
+            and chunk[0] in self.cfg.scorer.sub_databases
+            and chunk[0] in {"apo", "pred"}
+        ]
+        return chunks or [[]]
 
     @utils.ingest_flow_control
     def collate_partitions(self, partition: list[str]) -> None:
@@ -604,14 +569,11 @@ class IngestPipeline:
         entities: list[tuple[Literal["ligand", "interface"], list[str]]] = [
             ("ligand", list(self.cfg.flow.cluster_metrics))
         ]
-        if self.cfg.data.plinder_iteration == "v3":
-            entities.append(("interface", ["interface_qcov"]))
+        entities.append(("interface", ["interface_qcov"]))
         return entities
 
     @utils.ingest_flow_control
     def plan_clusters(self) -> None:
-        if self.cfg.data.plinder_iteration != "v3":
-            return
         from plinder.data.pipeline.score import plan_clustering
 
         for entity_type, metrics in self._cluster_entities():
@@ -626,8 +588,6 @@ class IngestPipeline:
 
     @utils.ingest_flow_control
     def scatter_make_symmetric_edge_fragments(self) -> list[dict[str, Any]]:
-        if self.cfg.data.plinder_iteration != "v3":
-            return [{}]
         from plinder.data import clusters
 
         work: list[dict[str, Any]] = []
@@ -644,7 +604,7 @@ class IngestPipeline:
 
     @utils.ingest_flow_control
     def make_symmetric_edge_fragments(self, work: dict[str, Any]) -> None:
-        if self.cfg.data.plinder_iteration != "v3" or not work:
+        if not work:
             return
         tasks.make_symmetric_edge_fragments(
             data_dir=self.plinder_dir,
@@ -657,8 +617,6 @@ class IngestPipeline:
 
     @utils.ingest_flow_control
     def scatter_make_symmetric_edge_shards(self) -> list[dict[str, Any]]:
-        if self.cfg.data.plinder_iteration != "v3":
-            return [{}]
         from plinder.data import clusters
 
         work: list[dict[str, Any]] = []
@@ -679,7 +637,7 @@ class IngestPipeline:
 
     @utils.ingest_flow_control
     def make_symmetric_edge_shards(self, work: dict[str, Any]) -> None:
-        if self.cfg.data.plinder_iteration != "v3" or not work:
+        if not work:
             return
         tasks.make_symmetric_edge_shards(
             data_dir=self.plinder_dir,
@@ -692,12 +650,6 @@ class IngestPipeline:
 
     @utils.ingest_flow_control
     def scatter_make_component_reductions(self) -> list[Any]:
-        if self.cfg.data.plinder_iteration != "v3":
-            return tasks.scatter_component_reduction_sources(
-                data_dir=self.plinder_dir,
-                metrics=self.cfg.flow.cluster_metrics,
-                batch_size=self.cfg.flow.component_reduction_source_batch_size,
-            )
         work: list[dict[str, Any]] = []
         for entity_type, metrics in self._cluster_entities():
             batches = tasks.scatter_component_reduction_sources(
@@ -715,16 +667,11 @@ class IngestPipeline:
 
     @utils.ingest_flow_control
     def make_component_reductions(self, work: Any) -> None:
-        if self.cfg.data.plinder_iteration == "v3":
-            if not work:
-                return
-            entity_type = work["entity_type"]
-            metrics = work["metrics"]
-            source_paths = work["sources"]
-        else:
-            entity_type = "ligand"
-            metrics = self.cfg.flow.cluster_metrics
-            source_paths = work
+        if not work:
+            return
+        entity_type = work["entity_type"]
+        metrics = work["metrics"]
+        source_paths = work["sources"]
         tasks.make_component_reductions(
             data_dir=self.plinder_dir,
             source_paths=source_paths,
@@ -751,14 +698,6 @@ class IngestPipeline:
         force_update = (
             self.cfg.data.force_update or self.cfg.flow.make_components_force_update
         )
-        if self.cfg.data.plinder_iteration != "v3":
-            return tasks.scatter_make_communities(
-                data_dir=self.plinder_dir,
-                metrics=self.cfg.flow.cluster_metrics,
-                thresholds=self.cfg.flow.cluster_thresholds,
-                stop_on_cluster=self.cfg.flow.make_components_stop_on_cluster,
-                skip_existing_clusters=not force_update,
-            )
         work: list[dict[str, Any]] = []
         for entity_type, metrics in self._cluster_entities():
             batches = tasks.scatter_make_communities(
@@ -781,14 +720,10 @@ class IngestPipeline:
         force_update = (
             self.cfg.data.force_update or self.cfg.flow.make_components_force_update
         )
-        if self.cfg.data.plinder_iteration == "v3":
-            if not work:
-                return
-            entity_type = work["entity_type"]
-            metric_thresholds = work["metric_threshold"]
-        else:
-            entity_type = "ligand"
-            metric_thresholds = work
+        if not work:
+            return
+        entity_type = work["entity_type"]
+        metric_thresholds = work["metric_threshold"]
         tasks.make_communities(
             data_dir=self.plinder_dir,
             metric_threshold=metric_thresholds,
@@ -803,14 +738,6 @@ class IngestPipeline:
         force_update = (
             self.cfg.data.force_update or self.cfg.flow.make_components_force_update
         )
-        if self.cfg.data.plinder_iteration != "v3":
-            return tasks.scatter_make_directed_set_covers(
-                data_dir=self.plinder_dir,
-                metrics=self.cfg.flow.cluster_metrics,
-                thresholds=self.cfg.flow.cluster_thresholds,
-                stop_on_cluster=self.cfg.flow.make_components_stop_on_cluster,
-                skip_existing=not force_update,
-            )
         work: list[dict[str, Any]] = []
         for entity_type, metrics in self._cluster_entities():
             batches = tasks.scatter_make_directed_set_covers(
@@ -833,14 +760,10 @@ class IngestPipeline:
         force_update = (
             self.cfg.data.force_update or self.cfg.flow.make_components_force_update
         )
-        if self.cfg.data.plinder_iteration == "v3":
-            if not work:
-                return
-            entity_type = work["entity_type"]
-            metric_thresholds = work["metric_threshold"]
-        else:
-            entity_type = "ligand"
-            metric_thresholds = work
+        if not work:
+            return
+        entity_type = work["entity_type"]
+        metric_thresholds = work["metric_threshold"]
         tasks.make_directed_set_covers(
             data_dir=self.plinder_dir,
             metric_threshold=metric_thresholds,

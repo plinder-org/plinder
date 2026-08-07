@@ -19,10 +19,8 @@ flow:
     pipe.run()
 
 
-def test_v3_pipeline_clusters_whole_interfaces_only():
-    cfg = config.get_config(
-        config={"data": {"plinder_iteration": "v3"}}, cached=False
-    )
+def test_pipeline_clusters_whole_interfaces_only():
+    cfg = config.get_config(cached=False)
     pipe = pipeline.IngestPipeline(conf=cfg)
 
     assert ("interface", ["interface_qcov"]) in pipe._cluster_entities()
