@@ -3708,7 +3708,6 @@ def finalize_index(*, data_dir: Path) -> None:
     if lookup_was_current:
         _refresh_representative_source_manifests(data_dir)
         _write_alignment_chain_lookup_manifest(data_dir)
-    utils.create_nonredundant_dataset(data_dir=data_dir)
     collate.finalize_repair_marker(data_dir)
 
 
@@ -3729,9 +3728,6 @@ def make_mmp_index(
         add_mmp_clusters_to_data,
         make_mmp_index_from_annotation_table,
     )
-
-    LOG.info("making annotation table (and non-redundant) indexes")
-    utils.create_nonredundant_dataset(data_dir=data_dir)
 
     LOG.info("making mmp index for all entries")
     annotation_index = data_dir / "index" / "annotation_table.parquet"

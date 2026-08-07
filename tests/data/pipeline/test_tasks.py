@@ -3624,9 +3624,6 @@ def test_finalize_index_preserves_current_alignment_lookup(
         )
 
     monkeypatch.setattr(tasks.utils, "finalize_index", enrich_index)
-    monkeypatch.setattr(
-        tasks.utils, "create_nonredundant_dataset", lambda *, data_dir: None
-    )
     tasks.finalize_index(data_dir=tmp_path)
 
     assert "example_cluster" in pd.read_parquet(annotation).columns

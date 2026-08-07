@@ -1411,27 +1411,6 @@ def create_index(*, data_dir: Path, force_update: bool = False) -> pd.DataFrame:
     return df
 
 
-def create_nonredundant_dataset(*, data_dir: Path) -> None:
-    """
-    This is called in make_mmp_index to ensure the existence of the index
-    and simultaneously generates a non-redundant index for various use
-    cases. The initial index is collated in ``join_make_entries``.
-    """
-    if not (data_dir / "index" / "annotation_table.parquet").exists():
-        df = create_index(data_dir=data_dir)
-    else:
-        df = pd.read_parquet(data_dir / "index" / "annotation_table.parquet")
-    if "uniqueness" not in df.columns:
-        raise RuntimeError(
-            "annotation index has no uniqueness column; run clustering and "
-            "finalize_index() before creating the nonredundant dataset"
-        )
-    df_nonredundant = df.sort_values("system_biounit_id").drop_duplicates("uniqueness")
-    df_nonredundant.to_parquet(
-        data_dir / "index" / "annotation_table_nonredundant.parquet", index=False
-    )
-
-
 def apo_file_from_link_id(
     data_dir: Path,
     output_dir: Path,

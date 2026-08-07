@@ -1794,13 +1794,6 @@ def repair_collation(
         temporary_paths["entry_metadata"].replace(final_paths["entry_metadata"])
         temporary_paths["interfaces"].replace(final_paths["interfaces"])
         temporary_paths["annotation"].replace(final_paths["annotation"])
-        # The nonredundant index and every release-only ligand enrichment were
-        # derived from the pre-repair annotation.  Do not leave a stale
-        # nonredundant table looking publishable while scores, fingerprints,
-        # clusters, and final index enrichment are being repaired.
-        (data_dir / "index" / "annotation_table_nonredundant.parquet").unlink(
-            missing_ok=True
-        )
     finally:
         for path in [*temporary_paths.values(), *replacement_paths.values()]:
             path.unlink(missing_ok=True)
@@ -1823,7 +1816,6 @@ def repair_collation(
             "interface_scores",
             "interface_clusters",
             "interface_sampling",
-            "annotation_table_nonredundant",
         ],
         **validation,
     }
@@ -1842,12 +1834,6 @@ def finalize_repair_marker(data_dir: Path) -> dict[str, Any] | None:
         or report.get("status") != REPAIR_REQUIRED_STATUS
     ):
         return None
-    nonredundant = data_dir / "index" / "annotation_table_nonredundant.parquet"
-    if not nonredundant.is_file():
-        raise FileNotFoundError(
-            "targeted repair cannot be finalized before rebuilding "
-            "annotation_table_nonredundant.parquet"
-        )
     report["status"] = "complete"
     report["downstream_repair_complete"] = True
     _write_json_atomic(marker_path, report)

@@ -434,10 +434,6 @@ def test_targeted_repair_preserves_unaffected_release_only_columns(
         {"1abc": "old", "2def": "keep"}
     )
     installed.to_parquet(tmp_path / "index/annotation_table.parquet", index=False)
-    installed.iloc[[0]].to_parquet(
-        tmp_path / "index/annotation_table_nonredundant.parquet",
-        index=False,
-    )
     chain_path = tmp_path / "index/entry_chains.parquet"
     before_chain_stat = chain_path.stat()
 
@@ -450,7 +446,6 @@ def test_targeted_repair_preserves_unaffected_release_only_columns(
     assert report["mode"] == "targeted_repair"
     assert report["status"] == "requires_downstream_repair"
     assert report["repaired_entry_count"] == 1
-    assert not (tmp_path / "index/annotation_table_nonredundant.parquet").exists()
     repaired = pd.read_parquet(tmp_path / "index/annotation_table.parquet")
     assert repaired.loc[repaired["entry_pdb_id"].eq("1abc"), "entry_pH"].eq(6.5).all()
     assert (
@@ -479,12 +474,6 @@ def test_targeted_repair_preserves_unaffected_release_only_columns(
         before_chain_stat.st_mtime_ns,
     )
 
-    with pytest.raises(FileNotFoundError, match="nonredundant"):
-        finalize_repair_marker(tmp_path)
-    repaired.iloc[[0]].to_parquet(
-        tmp_path / "index/annotation_table_nonredundant.parquet",
-        index=False,
-    )
     finalized_report = finalize_repair_marker(tmp_path)
     assert finalized_report is not None
     assert finalized_report["status"] == "complete"

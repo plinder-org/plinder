@@ -314,7 +314,7 @@ def test_scoreability_merge_reuses_complete_collated_column(tmp_path):
     assert str(result["ligand_is_3d_score_able"].dtype) == "boolean"
 
 
-def test_finalize_index_creates_nonredundant_data_from_local_clusters(tmp_path):
+def test_finalize_index_adds_local_clusters(tmp_path):
     index_dir = tmp_path / "index"
     cluster_file = (
         tmp_path
@@ -384,8 +384,6 @@ def test_finalize_index_creates_nonredundant_data_from_local_clusters(tmp_path):
     ).to_parquet(directed_cover_file, index=False)
 
     utils.finalize_index(data_dir=tmp_path)
-    utils.create_nonredundant_dataset(data_dir=tmp_path)
-
     finalized = pd.read_parquet(index_dir / "annotation_table.parquet")
     labels = finalized["pli_qcov__100__ligand__component"]
     assert labels.iloc[0] == "c0"
@@ -413,10 +411,6 @@ def test_finalize_index_creates_nonredundant_data_from_local_clusters(tmp_path):
     assert pd.isna(finalized.loc[1, "ligand_smiles_id"])
     assert finalized["ligand_is_3d_score_able"].tolist() == [True, False]
     assert finalized["uniqueness"].nunique() == 2
-    nonredundant = pd.read_parquet(index_dir / "annotation_table_nonredundant.parquet")
-    assert len(nonredundant) == 2
-
-
 def test_cluster_index_requires_matching_directed_cover_matrix(tmp_path):
     cluster_file = (
         tmp_path
