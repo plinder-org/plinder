@@ -31,6 +31,8 @@ class PlinderDataset(Dataset):  # type: ignore
         Index filter to select specific system ids
     use_alternate_structures: bool, default=True
         Whether to load alternate structures
+    system_factory: Callable[[str], PlinderSystem] | None, default=None
+        Optional function that creates a system from its system ID
     featurizer: Callable[
             [Structure, int], dict[str, torch.Tensor]
     ] = structure_featurizer,
@@ -45,7 +47,7 @@ class PlinderDataset(Dataset):  # type: ignore
         featurizer: Callable[
             [Structure], torch.Tensor | dict[str, torch.Tensor]
         ] = structure_featurizer,
-        **kwargs: Any,
+        system_factory: Callable[[str], PlinderSystem] | None = None,
     ):
         index = query_index(splits=[split], filters=filters)
         LOG.info(f"Loading {index.system_id.nunique()} systems")
@@ -54,6 +56,7 @@ class PlinderDataset(Dataset):  # type: ignore
 
         self._featurizer = featurizer
         self._use_alternate_structures = use_alternate_structures
+        self._system_factory = system_factory
 
     def __len__(self) -> int:
         return self._num_examples
@@ -63,7 +66,12 @@ class PlinderDataset(Dataset):  # type: ignore
     ) -> dict[str, int | str | pd.DataFrame | dict[str, str | pd.DataFrame]]:
         if not 0 <= index < self._num_examples:
             raise IndexError(index)
-        s = PlinderSystem(system_id=self._system_ids[index])
+        system_id = self._system_ids[index]
+        s = (
+            PlinderSystem(system_id=system_id)
+            if self._system_factory is None
+            else self._system_factory(system_id)
+        )
 
         holo_structure = s.holo_structure
         features_and_coords = None
