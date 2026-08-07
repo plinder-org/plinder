@@ -16,6 +16,11 @@ by setting the environment variable `PLINDER_OFFLINE=true`.
 
 from plinder.core.index.system import PlinderSystem
 from plinder.core.index.utils import get_manifest, get_plindex
+from plinder.core.release import (
+    RELEASE_PATHS,
+    RELEASE_TABLES,
+    PlinderRelease,
+)
 from plinder.core.split.utils import get_split
 from plinder.core.utils.config import get_config
 from plinder.core.utils.io import download_pdb_mmcifs, get_pdb_mmcif
@@ -28,4 +33,7 @@ __all__ = [
     "get_pdb_mmcif",
     "download_pdb_mmcifs",
     "PlinderSystem",
+    "PlinderRelease",
+    "RELEASE_PATHS",
+    "RELEASE_TABLES",
 ]
