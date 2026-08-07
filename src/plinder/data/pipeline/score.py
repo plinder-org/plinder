@@ -3050,7 +3050,12 @@ def finalize_alignment_artifacts(data_dir: Path) -> dict[str, Any]:
                 raise FileNotFoundError(
                     f"missing {alignment_type} {artifact_key}: {artifact}"
                 )
-        if databases._has_external_database_links(root):
+        bundle_sources = databases._search_database_bundle_sources(
+            root,
+            cluster_manifest,
+            alignment_type,
+        )
+        if databases._has_external_database_links(root, paths=bundle_sources):
             raise ValueError(
                 f"{alignment_type} target database contains external or broken links"
             )

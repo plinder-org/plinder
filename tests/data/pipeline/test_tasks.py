@@ -1087,6 +1087,11 @@ def test_protein_scoring_plan_and_alignment_finalization(tmp_path, monkeypatch) 
         output.mkdir()
         (output / "1abc.parquet").touch()
         (output / "4qp3.tmp.parquet").touch()
+        # Raw search output is not part of the published database bundle and
+        # must not be traversed by its portability check.
+        external = tmp_path / f"{alignment_type}_raw_alignment"
+        external.touch()
+        (output / "external-link").symlink_to(external)
         release = (
             tmp_path / "alignments/search_db=holo" / f"alignment_type={alignment_type}"
         )
