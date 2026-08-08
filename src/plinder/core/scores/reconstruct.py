@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from plinder.core.release import PlinderRelease
 from plinder.core.scores.entries import (
     EntryView,
     InterfaceView,
@@ -17,7 +18,6 @@ from plinder.core.scores.entries import (
     load_entry_views,
 )
 from plinder.core.utils import cpl
-from plinder.core.utils.config import get_config
 from plinder.core.utils.log import setup_logger
 from plinder.core.utils.schemas import (
     INTERFACE_SIMILARITY_SCHEMA,
@@ -43,21 +43,26 @@ def _require_file(path: Path, *, description: str) -> Path:
     raise FileNotFoundError(f"missing {description} in {mode}: {path}")
 
 
-def _release_file(*, relative: str, data_dir: Path | None) -> Path:
+def _release_file(
+    name: str,
+    *,
+    data_dir: Path | None,
+    description: str,
+    **parameters: str,
+) -> Path:
+    release = PlinderRelease(data_dir)
     if data_dir is not None:
-        return Path(data_dir) / relative
-    return cpl.get_plinder_path(rel=relative)
-
-
-def _alignment_relative_path(
-    *, search_db: str, alignment_type: str, pdb_id: str
-) -> str:
-    cfg = get_config()
-    shard = _pdb_shard(pdb_id)
-    return (
-        f"{cfg.data.alignments}/search_db={search_db}/"
-        f"alignment_type={alignment_type}/shard={shard}.parquet"
-    )
+        return _require_file(
+            release.path(name, **parameters),
+            description=description,
+        )
+    try:
+        return release.fetch(name, **parameters)
+    except FileNotFoundError as exc:
+        mode = "offline cache" if cpl.is_offline() else "release cache"
+        raise FileNotFoundError(
+            f"missing {description} in {mode}: {release.path(name, **parameters)}"
+        ) from exc
 
 
 def prefetch_similarity_alignments(
@@ -80,43 +85,39 @@ def prefetch_similarity_alignments(
         raise ValueError("query_system_ids must not be empty")
 
     paths: dict[str, dict[str, Path]] = {}
-    resolved: dict[str, Path | None] = {}
-    resolution_errors: dict[str, FileNotFoundError] = {}
+    resolved: dict[tuple[str, str], Path | None] = {}
+    resolution_errors: dict[tuple[str, str], FileNotFoundError] = {}
     for pdb_id in query_pdb_ids:
         paths[pdb_id] = {}
+        shard = _pdb_shard(pdb_id)
         for alignment_type in ALIGNMENT_TYPES:
-            relative = _alignment_relative_path(
-                search_db=search_db,
-                alignment_type=alignment_type,
-                pdb_id=pdb_id,
-            )
-            if relative not in resolved:
+            key = (alignment_type, shard)
+            if key not in resolved:
                 try:
-                    path = _release_file(relative=relative, data_dir=data_dir)
-                    resolved[relative] = _require_file(
-                        path,
+                    resolved[key] = _release_file(
+                        "alignment_shard",
+                        data_dir=data_dir,
                         description=(
                             f"{search_db} {alignment_type} mapped alignment "
-                            f"shard {_pdb_shard(pdb_id)}"
+                            f"shard {shard}"
                         ),
+                        search_db=search_db,
+                        alignment_type=alignment_type,
+                        shard=shard,
                     )
                 except FileNotFoundError as exc:
-                    resolved[relative] = None
-                    resolution_errors[relative] = exc
-            resolved_path = resolved[relative]
+                    resolved[key] = None
+                    resolution_errors[key] = exc
+            resolved_path = resolved[key]
             if resolved_path is not None:
                 paths[pdb_id][alignment_type] = resolved_path
 
         if not paths[pdb_id]:
             failures = []
             for alignment_type in ALIGNMENT_TYPES:
-                relative = _alignment_relative_path(
-                    search_db=search_db,
-                    alignment_type=alignment_type,
-                    pdb_id=pdb_id,
-                )
-                if relative in resolution_errors:
-                    failures.append(str(resolution_errors[relative]))
+                key = (alignment_type, shard)
+                if key in resolution_errors:
+                    failures.append(str(resolution_errors[key]))
             raise FileNotFoundError(
                 f"no mapped alignment backend is available for {pdb_id}: "
                 + "; ".join(failures)
@@ -133,10 +134,9 @@ def prefetch_similarity_alignments(
 def _load_entry_subset(
     *, pdb_ids: set[str], data_dir: Path | None
 ) -> tuple[dict[str, EntryView], Path]:
-    cfg = get_config()
-    index_relative = f"{cfg.data.index}/{cfg.data.index_file}"
-    index_path = _require_file(
-        _release_file(relative=index_relative, data_dir=data_dir),
+    index_path = _release_file(
+        "annotation_table",
+        data_dir=data_dir,
         description="annotation index",
     )
     entries = load_entry_views(pdb_ids=pdb_ids, data_dir=data_dir)
@@ -411,12 +411,12 @@ def _canonical_ligand_resolver(
         if existing is not None:
             return existing
 
-        cfg = get_config()
         code = ligand.pdb_id[-3:-1]
-        archive_relative = f"{cfg.data.ligand_archives}/{code}.parquet"
-        archive = _require_file(
-            _release_file(relative=archive_relative, data_dir=data_dir),
+        archive = _release_file(
+            "ligand_archive",
+            data_dir=data_dir,
             description=f"canonical ligand archive for {code}",
+            shard=code,
         )
         packed = pd.read_parquet(
             archive,
@@ -546,7 +546,7 @@ def reconstruct_interface_similarity_scores(
     """Reconstruct directed interface coverage for a bounded interface subset.
 
     Only the mapped alignment shards for the requested query PDB entries and
-    normalized chain/interface rows are loaded. The result is therefore
+    chain and interface rows are loaded. The result is therefore
     reconstructable from the compact public artifacts without the private
     all-vs-all score table used for release clustering.
     """
