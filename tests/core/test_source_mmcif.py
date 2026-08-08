@@ -88,14 +88,22 @@ def test_source_mmcif_download_cache_and_system_resolution(
         == expected
     )
     assert len(calls) == 1
+
+    manifest_requests = []
+
+    def fetch_release_artifact(_release, name, **parameters):
+        manifest_requests.append((name, parameters))
+        return source_manifest
+
     monkeypatch.setattr(
-        core_io,
-        "get_plinder_path",
-        lambda **kwargs: source_manifest,
+        core_io.PlinderRelease,
+        "fetch",
+        fetch_release_artifact,
     )
     assert (
         PlinderSystem(system_id="2y4i__1__1.B__1.E_1.F").source_mmcif_path == expected
     )
+    assert manifest_requests == [("entry_sources", {})]
     assert len(calls) == 1
 
 

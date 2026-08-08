@@ -588,32 +588,26 @@ def load_entry_views(
     if not pdb_ids:
         return {}
 
-    from plinder.core.utils import cpl
-    from plinder.core.utils.config import get_config
+    from plinder.core.release import PlinderRelease
 
-    cfg = get_config()
+    release = PlinderRelease(data_dir)
     if data_dir is None:
         df = query_index(
             columns=["*"],
             filters=[FILTER(("entry_pdb_id", "in", set(pdb_ids)))],
         )
-        chain_path = cpl.get_plinder_path(
-            rel=f"{cfg.data.index}/{cfg.data.entry_chain_file}"
-        )
-        interface_path = cpl.get_plinder_path(
-            rel=f"{cfg.data.index}/{cfg.data.interface_file}"
-        )
+        chain_path = release.fetch("entry_chains")
+        interface_path = release.fetch("interface_annotations")
     else:
-        index_dir = Path(data_dir) / cfg.data.index
-        annotation_path = index_dir / cfg.data.index_file
+        annotation_path = release.path("annotation_table")
         if not annotation_path.is_file():
             raise FileNotFoundError(f"missing annotation index: {annotation_path}")
         df = pd.read_parquet(
             annotation_path,
             filters=[("entry_pdb_id", "in", pdb_ids)],
         )
-        chain_path = index_dir / cfg.data.entry_chain_file
-        interface_path = index_dir / cfg.data.interface_file
+        chain_path = release.path("entry_chains")
+        interface_path = release.path("interface_annotations")
 
     if not chain_path.is_file():
         raise FileNotFoundError(f"missing entry chain index: {chain_path}")

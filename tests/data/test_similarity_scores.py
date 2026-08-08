@@ -552,7 +552,7 @@ def test_entry_views_accept_annotation_dataframe(
     assert entry_chains["chain_type"].str.lower().str.contains("polypeptide").all()
 
     # Exercise the Arrow representation used by the ingest pipeline,
-    # including the normalized nested UniProt accession lists.
+    # including the nested UniProt accession lists.
     index_dir = tmp_path / "index"
     index_dir.mkdir()
     annotation_path = index_dir / "annotation_table.parquet"
@@ -584,7 +584,7 @@ def test_entry_views_accept_annotation_dataframe(
     assert loaded.interfaces == view.interfaces
 
     chain_path.unlink()
-    with pytest.raises(FileNotFoundError, match="normalized entry chain index"):
+    with pytest.raises(FileNotFoundError, match="missing entry chain index"):
         load_entry_views(pdb_ids=[entry.pdb_id], data_dir=tmp_path)
 
 

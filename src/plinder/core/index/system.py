@@ -19,7 +19,6 @@ from plinder.core.scores import query_index
 from plinder.core.scores.links import query_links
 from plinder.core.scores.query import FILTER
 from plinder.core.structure.structure import Structure
-from plinder.core.utils import cpl
 from plinder.core.utils.config import get_config
 from plinder.core.utils.cpl import get_plinder_path
 from plinder.core.utils.io import (
@@ -183,10 +182,7 @@ class PlinderSystem:
     def receptor_chain_types(self) -> dict[str, str]:
         """Map each system receptor instance chain to its polymer type."""
         if self._entry_chains is None:
-            cfg = get_config()
-            path = cpl.get_plinder_path(
-                rel=f"{cfg.data.index}/{cfg.data.entry_chain_file}"
-            )
+            path = PlinderRelease().fetch("entry_chains")
             pdb_id = self.system_id.split("__", maxsplit=1)[0]
             self._entry_chains = pd.read_parquet(
                 path,
@@ -221,10 +217,7 @@ class PlinderSystem:
     def biounit_chains(self) -> pd.DataFrame:
         """Return ingested chain membership for this biological assembly."""
         if self._biounit_chains is None:
-            cfg = get_config()
-            path = cpl.get_plinder_path(
-                rel=f"{cfg.data.index}/{cfg.data.entry_biounit_chain_file}"
-            )
+            path = PlinderRelease().fetch("entry_biounit_chains")
             row = self.system.iloc[0]
             self._biounit_chains = pd.read_parquet(
                 path,
