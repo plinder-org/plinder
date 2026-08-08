@@ -354,11 +354,11 @@ def test_env(tmp_path, monkeypatch):
     monkeypatch.setenv("PLINDER_MOUNT", tmp_path.as_posix())
     monkeypatch.setenv("PLINDER_BUCKET", "bucket")
     monkeypatch.setenv("PLINDER_RELEASE", "test")
-    monkeypatch.setenv("PLINDER_ITERATION", "v0")
+    monkeypatch.setenv("PLINDER_RELEASE_NUMBER", "")
     from plinder.core.utils import config
 
     config._config._clear()
-    return tmp_path / "bucket" / "test" / "v0"
+    return tmp_path / "bucket" / "test"
 
 
 @pytest.fixture
@@ -485,8 +485,8 @@ def mock_alternative_datasets(
 def read_plinder_mount(monkeypatch):
     monkeypatch.setenv("PLINDER_MOUNT", test_asset_fp.as_posix())
     monkeypatch.setenv("PLINDER_RELEASE", "mount")
+    monkeypatch.setenv("PLINDER_RELEASE_NUMBER", "")
     monkeypatch.setenv("PLINDER_BUCKET", "plinder")
-    monkeypatch.setenv("PLINDER_ITERATION", "")
     monkeypatch.setenv("PLINDER_OFFLINE", "true")
     from plinder.core.utils import config, cpl
 
@@ -510,8 +510,8 @@ def read_plinder_eval_mount(monkeypatch, tmp_path):
     shutil.copytree(test_asset_fp / "eval", adir)
     monkeypatch.setenv("PLINDER_MOUNT", plinder_mount.as_posix())
     monkeypatch.setenv("PLINDER_RELEASE", "")
+    monkeypatch.setenv("PLINDER_RELEASE_NUMBER", "")
     monkeypatch.setenv("PLINDER_BUCKET", "eval")
-    monkeypatch.setenv("PLINDER_ITERATION", "")
     monkeypatch.setenv("PLINDER_OFFLINE", True)
     from plinder.core.utils import config, cpl
 
@@ -530,8 +530,8 @@ def write_plinder_mount(monkeypatch, tmp_path):
     write_plinder_mount.mkdir(parents=True)
     monkeypatch.setenv("PLINDER_MOUNT", tmp_path.as_posix())
     monkeypatch.setenv("PLINDER_RELEASE", "mount")
+    monkeypatch.setenv("PLINDER_RELEASE_NUMBER", "")
     monkeypatch.setenv("PLINDER_BUCKET", "plinder")
-    monkeypatch.setenv("PLINDER_ITERATION", "")
     from plinder.core.utils import config, cpl
 
     config._config._clear()

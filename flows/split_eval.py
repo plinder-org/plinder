@@ -19,8 +19,8 @@ K8S = dict(
 ENV = dict(
     vars=dict(
         PLINDER_MOUNT=MOUNT,
-        PLINDER_RELEASE="2024-06",
-        PLINDER_ITERATION="",
+        PLINDER_RELEASE="2026-07",
+        PLINDER_RELEASE_NUMBER="1",
     )
 )
 LARGE_MEM = dict(

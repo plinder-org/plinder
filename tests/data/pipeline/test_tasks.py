@@ -4921,11 +4921,11 @@ def test_v3_collation_slurm_uses_local_scratch_and_long_qos_for_global_steps():
     ) in documentation
 
 
-def test_v3_ingest_configs_use_current_schema_and_stages():
+def test_ingest_configs_use_current_schema_and_stages():
     from plinder.data.pipeline.config import get_config
 
     repository = Path(__file__).resolve().parents[3]
-    config_dir = repository / "flows" / "configs" / "v3"
+    config_dir = repository / "flows" / "configs" / "ingest"
     if not config_dir.is_dir():
         pytest.skip("ingest configs are not installed in wheel-only test layouts")
     ingest_configs = list(config_dir.glob("*.yaml"))
@@ -4934,7 +4934,8 @@ def test_v3_ingest_configs_use_current_schema_and_stages():
     for path in ingest_configs:
         cfg = get_config(config_file=path.as_posix(), cached=False)
         assert set(cfg.flow.run_specific_stages) <= set(tasks.STAGES)
-        assert cfg.data.plinder_iteration == "v3"
+        assert cfg.data.plinder_release == "2026-07"
+        assert cfg.data.plinder_release_number == "1"
         if path.name == "make_protein_scores.yaml":
             assert "collate_alignments" in cfg.flow.run_specific_stages
             assert "finalize_alignments" in cfg.flow.run_specific_stages
