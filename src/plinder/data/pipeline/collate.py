@@ -102,6 +102,7 @@ ENTRY_CHAIN_SCHEMA = pa.schema(
         ("chain_entity_id", pa.string()),
         ("chain_type", pa.string()),
         ("chain_receptor_type", pa.string()),
+        ("chain_sequence", pa.string()),
         ("chain_length", pa.int64()),
         ("chain_num_unresolved_residues", pa.int64()),
         ("chain_is_holo", pa.bool_()),
@@ -1257,6 +1258,20 @@ def _validate_final_tables(
         if any(duplicates.values()):
             raise ValueError(f"duplicate keys in final collation: {duplicates}")
         invalid_chain_metadata = {
+            "missing_sequences": int(
+                _fetch_scalar(
+                    connection,
+                    "SELECT count(*) FROM entry_chains "
+                    "WHERE chain_sequence IS NULL OR length(trim(chain_sequence)) = 0",
+                )
+            ),
+            "sequence_length_mismatch": int(
+                _fetch_scalar(
+                    connection,
+                    "SELECT count(*) FROM entry_chains "
+                    "WHERE length(chain_sequence) != chain_length",
+                )
+            ),
             "nonpositive_lengths": int(
                 _fetch_scalar(
                     connection,

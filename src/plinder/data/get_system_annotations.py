@@ -105,7 +105,7 @@ class GetPlinderAnnotation:
         replace_interfaces: bool = True,
         preserve_existing_shared: bool = False,
     ) -> None:
-        """Write sidecars for a newly materialized entry directory."""
+        """Write a new entry's sidecars or extend the preserved shared tables."""
         from plinder.data.annotations.cif_utils import (
             get_mmcif_revision,
             read_mmcif_container,
@@ -126,10 +126,25 @@ class GetPlinderAnnotation:
                 if not set(merge_keys).issubset(existing.columns):
                     missing = sorted(set(merge_keys).difference(existing.columns))
                     raise ValueError(f"{path} is missing merge keys: {missing}")
+                if not set(merge_keys).issubset(frame.columns):
+                    missing = sorted(set(merge_keys).difference(frame.columns))
+                    raise ValueError(
+                        f"incoming {path} is missing merge keys: {missing}"
+                    )
+                new_columns = [
+                    column for column in frame.columns if column not in existing.columns
+                ]
+                if new_columns:
+                    additions = frame.loc[:, [*merge_keys, *new_columns]]
+                    existing = existing.merge(
+                        additions,
+                        on=list(merge_keys),
+                        how="left",
+                        validate="one_to_one",
+                    )
                 # Preserve ligand-derived values for existing rows while
-                # adding protein chains discovered by interface-only ingest.
-                # Retaining the existing column set also keeps legacy schema
-                # normalization in the collation layer well-defined.
+                # adding newly available columns and protein chains discovered
+                # by interface-only ingest.
                 incoming = frame.reindex(columns=existing.columns)
                 existing_keys = pd.MultiIndex.from_frame(
                     existing.loc[:, list(merge_keys)]
@@ -138,7 +153,7 @@ class GetPlinderAnnotation:
                     incoming.loc[:, list(merge_keys)]
                 )
                 missing_rows = incoming.loc[~incoming_keys.isin(existing_keys)]
-                if missing_rows.empty:
+                if missing_rows.empty and not new_columns:
                     return
                 frame = pd.concat([existing, missing_rows], ignore_index=True)
             temporary = path.with_suffix(".parquet.tmp")
@@ -153,6 +168,7 @@ class GetPlinderAnnotation:
         write_dataframe(
             entry_folder / "entry_metadata.parquet",
             self.entry.metadata_to_df(),
+            merge_keys=("entry_pdb_id",),
         )
         interface_path = entry_folder / "interfaces.parquet"
         if replace_interfaces or not interface_path.is_file():

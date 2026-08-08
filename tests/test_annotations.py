@@ -275,11 +275,23 @@ def test_interface_only_annotation_adds_missing_shared_chain_rows(
     biounits.loc[biounits["chain_asym_id"] != "B"].to_parquet(
         biounit_path, index=False
     )
+    metadata_path = entry_folder / "entry_metadata.parquet"
+    metadata = pd.read_parquet(metadata_path).drop(
+        columns=[
+            "entry_source_taxonomy_ids",
+            "entry_source_organism_names",
+            "entry_host_taxonomy_ids",
+            "entry_host_organism_names",
+        ]
+    )
+    metadata["ligand_only_metadata"] = "preserved"
+    metadata.to_parquet(metadata_path, index=False)
 
     annotation.annotate_interfaces()
 
     repaired_chains = pd.read_parquet(chain_path)
     repaired_biounits = pd.read_parquet(biounit_path)
+    repaired_metadata = pd.read_parquet(metadata_path)
     assert set(repaired_chains["chain_asym_id"]) == expected_chain_ids
     assert set(repaired_biounits["chain_asym_id"]) == expected_biounit_ids
     assert repaired_chains.set_index("chain_asym_id").loc["A", "chain_auth_id"] == (
@@ -290,6 +302,15 @@ def test_interface_only_annotation_adds_missing_shared_chain_rows(
             repaired_biounits["chain_asym_id"] == "A", "chain_role"
         ]
     ) == {"ligand"}
+    assert repaired_metadata["ligand_only_metadata"].tolist() == ["preserved"]
+    assert set(repaired_metadata).issuperset(
+        {
+            "entry_source_taxonomy_ids",
+            "entry_source_organism_names",
+            "entry_host_taxonomy_ids",
+            "entry_host_organism_names",
+        }
+    )
 
 
 def test_pinder_6wwe_enumerates_all_three_interfaces(test_dir: Path) -> None:
@@ -2129,6 +2150,14 @@ def test_mixed_receptor_type_is_written_to_annotation(cif_8ufz):
     chain_types = entry.chains_to_df().set_index("chain_asym_id")["chain_receptor_type"]
     assert {chain_types[chain] for chain in ["A", "B", "C", "D"]} == {"dna"}
     assert {chain_types[chain] for chain in ["E", "F"]} == {"protein"}
+
+
+def test_entry_chain_table_includes_full_sequences(cif_8ufz):
+    entry = Entry.from_cif_file(cif_8ufz, include_ligands=False)
+    chain_rows = entry.chains_to_df().set_index("chain_asym_id")
+
+    assert chain_rows.loc["E", "chain_sequence"] == entry.chain_to_seqres["E"]
+    assert chain_rows.loc["E", "chain_sequence"]
 
 
 def test_ligand_fix_to_valid_imatinib(cif_2hyy, mock_alternative_datasets):

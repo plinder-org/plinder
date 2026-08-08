@@ -28,6 +28,7 @@ from plinder.data.annotations.cif_utils import (
     build_biounit,
     get_chain_external_mappings,
     get_entry_info,
+    get_entry_taxonomy,
     get_label_asym_sequences,
     get_model_count,
     get_structure_with_altloc,
@@ -794,6 +795,22 @@ class Entry(DocBaseModel):
         default_factory=float,
         description="RCSB structure resolution. See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_refine.ls_d_res_high.html",
     )
+    source_taxonomy_ids: list[int] = Field(
+        default_factory=list,
+        description="Distinct NCBI taxonomy IDs of the deposited entities' source organisms",
+    )
+    source_organism_names: list[str] = Field(
+        default_factory=list,
+        description="Distinct scientific names of the deposited entities' source organisms",
+    )
+    host_taxonomy_ids: list[int] = Field(
+        default_factory=list,
+        description="Distinct NCBI taxonomy IDs of recombinant expression hosts",
+    )
+    host_organism_names: list[str] = Field(
+        default_factory=list,
+        description="Distinct scientific names of recombinant expression hosts",
+    )
     chains: dict[str, Chain] = Field(
         default_factory=dict,
         description="__Chains dictionary with chain name mapped to chain object",
@@ -1350,6 +1367,7 @@ class Entry(DocBaseModel):
         cif_file_obj = read_mmcif_file(cif_file)
         cif_data = list(cif_file_obj.values())[0]
         entry_info = get_entry_info(cif_data)
+        entry_taxonomy = get_entry_taxonomy(cif_data)
 
         # Extract metadata from CIF block
         pdb_id = (_cif_scalar(cif_data, "entry", "id") or "").lower()
@@ -1387,6 +1405,7 @@ class Entry(DocBaseModel):
             if entry_info.get("entry_pH") is not None
             else None,
             resolution=r,
+            **entry_taxonomy,
         )
         # Load structure with biotite
         # Multi-model PDBs (e.g. NMR ensembles) silently use model 1 here;
@@ -2287,6 +2306,10 @@ class Entry(DocBaseModel):
             "keywords",
             "pH",
             "resolution",
+            "source_taxonomy_ids",
+            "source_organism_names",
+            "host_taxonomy_ids",
+            "host_organism_names",
         ]
         for field in columns:
             name = f"entry_{field}"
@@ -2298,7 +2321,7 @@ class Entry(DocBaseModel):
         return data
 
     def chains_to_df(self) -> pd.DataFrame:
-        """Return one normalized metadata row for each receptor polymer chain."""
+        """Return one metadata row for each receptor polymer chain."""
         columns = [
             "entry_pdb_id",
             "chain_asym_id",
@@ -2306,6 +2329,7 @@ class Entry(DocBaseModel):
             "chain_entity_id",
             "chain_type",
             "chain_receptor_type",
+            "chain_sequence",
             "chain_length",
             "chain_num_unresolved_residues",
             "chain_is_holo",
@@ -2328,6 +2352,7 @@ class Entry(DocBaseModel):
                     "chain_entity_id": chain.entity_id,
                     "chain_type": chain.chain_type_str,
                     "chain_receptor_type": get_receptor_type([chain.chain_type_str]),
+                    "chain_sequence": self.chain_to_seqres.get(chain.asym_id, ""),
                     "chain_length": chain.length,
                     "chain_num_unresolved_residues": chain.num_unresolved_residues,
                     "chain_is_holo": chain.holo,
@@ -2338,7 +2363,7 @@ class Entry(DocBaseModel):
         return pd.DataFrame(rows, columns=columns)
 
     def metadata_to_df(self) -> pd.DataFrame:
-        """Return one normalized row of entry-level annotations."""
+        """Return one row of entry-level annotations."""
         return pd.DataFrame([self.format()])
 
     def biounit_chains_to_df(self) -> pd.DataFrame:

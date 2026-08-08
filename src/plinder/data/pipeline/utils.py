@@ -1299,6 +1299,7 @@ def create_entry_chain_index(
         "chain_entity_id",
         "chain_type",
         "chain_receptor_type",
+        "chain_sequence",
         "chain_length",
         "chain_num_unresolved_residues",
         "chain_is_holo",

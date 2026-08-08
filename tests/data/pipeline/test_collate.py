@@ -86,6 +86,7 @@ def _write_entry(
             "chain_entity_id": ["1", "2"],
             "chain_type": ["polypeptide(L)", "polypeptide(L)"],
             "chain_receptor_type": ["protein", "protein"],
+            "chain_sequence": ["A" * 300, "A" * 200],
             "chain_length": [300, 200],
             "chain_num_unresolved_residues": [0, 0],
             "chain_is_holo": [True, True],
@@ -658,6 +659,17 @@ def test_final_validation_rejects_invalid_chain_sequence_metadata(
     chains.to_parquet(chain_path, index=False)
 
     with pytest.raises(ValueError, match=error_key):
+        run_collation(tmp_path, threads=1, memory_limit="1GB")
+
+
+def test_final_validation_rejects_missing_chain_sequence(tmp_path: Path) -> None:
+    _write_release(tmp_path)
+    chain_path = tmp_path / "raw_entries/ab/1abc/entry_chains.parquet"
+    chains = pd.read_parquet(chain_path)
+    chains.loc[0, "chain_sequence"] = ""
+    chains.to_parquet(chain_path, index=False)
+
+    with pytest.raises(ValueError, match="missing_sequences"):
         run_collation(tmp_path, threads=1, memory_limit="1GB")
 
 
