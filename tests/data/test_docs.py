@@ -1,8 +1,6 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
 
-from shutil import copytree
-
 from plinder.data import docs
 
 
@@ -39,37 +37,111 @@ def test_ligand_cluster_column_descriptions():
     assert "chain 1 directed set cover" in descriptions[columns[10]]
 
 
-def test_make_column_descriptions(read_plinder_mount, tmp_path, monkeypatch):
-    from plinder.core.scores import query_index
+def test_annotation_descriptions_follow_arrow_schema_order():
+    import pyarrow as pa
+    from plinder.data.annotations.aggregate_annotations import System
+    from plinder.data.annotations.ligand_utils import Ligand
 
-    generated_tsv_dir = tmp_path / "column_descriptions"
-    copytree(docs.TSV_DIR, generated_tsv_dir)
-    monkeypatch.setattr(docs, "TSV_DIR", generated_tsv_dir)
+    schema = pa.schema(
+        [
+            ("ligand_id_legacy", pa.string()),
+            ("ligand__members", pa.struct([("1.A", pa.list_(pa.int64()))])),
+            ("ligand_member_asym_ids", pa.list_(pa.string())),
+            ("system_id_legacy", pa.string()),
+            ("pli_qcov__50__ligand__component", pa.string()),
+            (
+                "pli_qcov__50__ligand__directed_set_cover__is_centroid",
+                pa.bool_(),
+            ),
+        ]
+    )
 
-    df = query_index(columns=["*"], splits=["*"]).drop(columns=["split"])
-    legacy_posebusters = [
-        column for column in df.columns if column.startswith("ligand_posebusters_")
+    descriptions = docs.get_table_column_descriptions(
+        table_name="annotation", schema=schema
+    )
+
+    assert descriptions["Name"].tolist() == schema.names
+    assert descriptions["Type"].tolist() == [str(field.type) for field in schema]
+    assert descriptions["Description"].str.len().gt(0).all()
+    by_name = descriptions.set_index("Name")["Description"].to_dict()
+    ligand_descriptions = {
+        name: description
+        for name, _, description in Ligand.document_properties("ligand")
+    }
+    system_descriptions = {
+        name: description
+        for name, _, description in System.document_properties("system")
+    }
+    assert by_name["ligand_id_legacy"] == ligand_descriptions["ligand_id_legacy"]
+    assert by_name["ligand__members"] == ligand_descriptions["ligand__members"]
+    assert (
+        by_name["ligand_member_asym_ids"]
+        == ligand_descriptions["ligand_member_asym_ids"]
+    )
+    assert by_name["system_id_legacy"] == system_descriptions["system_id_legacy"]
+
+
+def test_table_descriptions_reject_missing_column_prose():
+    import pyarrow as pa
+    import pytest
+
+    with pytest.raises(ValueError, match="undocumented_column"):
+        docs.get_table_column_descriptions(
+            table_name="annotation",
+            schema=pa.schema([("undocumented_column", pa.string())]),
+        )
+
+
+def test_checked_in_descriptions_cover_every_table():
+    from plinder.core.release import RELEASE_TABLES
+
+    assert {path.stem for path in docs.TABLE_TSV_DIR.glob("*.tsv")} == set(
+        RELEASE_TABLES
+    )
+    for table_name in RELEASE_TABLES:
+        descriptions = docs.get_column_descriptions(table_name)
+        assert not descriptions.empty
+        assert list(descriptions.columns) == ["Name", "Type", "Description"]
+        assert descriptions["Description"].notna().all()
+
+
+def test_write_column_descriptions_uses_release_table_schemas(tmp_path, monkeypatch):
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    release_dir = tmp_path / "release"
+    table_path = release_dir / "index" / "entry_metadata.parquet"
+    table_path.parent.mkdir(parents=True)
+    pq.write_table(
+        pa.table(
+            {
+                "entry_pdb_id": ["1abc"],
+                "entry_source_taxonomy_ids": [[9606]],
+            }
+        ),
+        table_path,
+    )
+    monkeypatch.setattr(
+        docs,
+        "RELEASE_TABLES",
+        {
+            "entry_metadata": {
+                "artifact": "entry_metadata",
+                "row_grain": "PDB entry",
+                "primary_key": ("entry_pdb_id",),
+            }
+        },
+    )
+    output_dir = tmp_path / "descriptions"
+    output_dir.mkdir()
+    stale_path = output_dir / "stale.tsv"
+    stale_path.write_text("Name\tType\tDescription\n")
+
+    docs.write_column_descriptions(data_dir=release_dir, output_dir=output_dir)
+
+    written = docs.get_column_descriptions("entry_metadata", description_dir=output_dir)
+    assert written["Name"].tolist() == [
+        "entry_pdb_id",
+        "entry_source_taxonomy_ids",
     ]
-    removed_enrichment_columns = [
-        "ligand_is_kinase_inhibitor",
-        "system_has_kinase_inhibitor",
-        "system_pocket_ECOD",
-        "system_pocket_ECOD_t_name",
-        "system_pocket_PANTHER",
-        "system_pocket_kinase_name",
-        "ligand_num_neighboring_ppi_atoms_within_4A_of_gap",
-        "ligand_num_neighboring_ppi_atoms_within_8A_of_gap",
-        "ligand_num_missing_ppi_interface_residues",
-        "ligand_num_pli_atoms_within_4A_of_gap",
-        "ligand_num_pli_atoms_within_8A_of_gap",
-        "ligand_num_missing_pli_interface_residues",
-        "ligand_is_oligo",
-        "system_ligand_has_oligo",
-    ]
-    df = df.drop(columns=legacy_posebusters + removed_enrichment_columns)
-
-    schema = docs.get_all_column_descriptions(plindex=df)
-    columns = schema["Name"].to_list()
-    undocumented = df.columns.difference(columns).tolist()
-    assert not undocumented, undocumented
-    assert {row[0] for row in docs.DERIVED_LIGAND_COLUMNS}.issubset(columns)
+    assert not stale_path.exists()

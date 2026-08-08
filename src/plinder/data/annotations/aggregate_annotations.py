@@ -223,7 +223,7 @@ class System(DocBaseModel):
         default=None, description="__Validation object for the system's pocket residues"
     )
     pass_criteria: bool | None = Field(
-        default=None, description="__Passes quality criteria"
+        default=None, description="Whether the system passes validation criteria"
     )  # TODO: remove as attribute and have as function
 
     """
@@ -231,6 +231,25 @@ class System(DocBaseModel):
     and its neighboring ligands and receptor residues
 
     """
+
+    @classmethod
+    def document_properties(
+        cls, prefix: str
+    ) -> ty.Generator[tuple[str, str | None, str], ty.Any, ty.Any]:
+        """Describe model fields plus the flat columns emitted by ``format()``."""
+        yield from super().document_properties(prefix)
+        yield (
+            f"{prefix}_water_residues",
+            "list[str]",
+            "Interacting water residues encoded as "
+            "<instance>.<asym>_<residue_number>",
+        )
+        for mapping_name in ("CATH", "Pfam", "SCOP2", "SCOP2B", "UniProt"):
+            yield (
+                f"{prefix}_pocket_{mapping_name}",
+                "str",
+                f"Most frequent {mapping_name} mapping among pocket residues",
+            )
 
     def proper_ligands(self) -> list[Ligand]:
         return [ligand for ligand in self.ligands if ligand.is_proper]
@@ -840,7 +859,7 @@ class Entry(DocBaseModel):
         default=None, description="__Entry validation"
     )
     pass_criteria: bool | None = Field(
-        default=None, description="__Entry pass validation criteria"
+        default=None, description="Whether the entry passes validation criteria"
     )
     water_chains: list[str] = Field(
         default_factory=list, description="__Water chains in the entry"

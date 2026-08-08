@@ -1,0 +1,6 @@
+Name	Type	Description
+entry_pdb_id	string	RCSB PDB ID. See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_entry.id.html
+biounit_id	string	Biological assembly identifier
+chain_instance	string	Assembly chain instance encoded as <operation>.<label_asym_id>
+chain_asym_id	string	Chain asymmetric id
+chain_role	string	Assembly role: receptor, ligand, or water

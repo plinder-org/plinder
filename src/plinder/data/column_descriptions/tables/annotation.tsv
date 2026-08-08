@@ -1,0 +1,431 @@
+Name	Type	Description
+entry_pdb_id	string	RCSB PDB ID. See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_entry.id.html
+entry_release_date	string	RCSB structure release date. See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_database_PDB_rev.date_original.html
+entry_oligomeric_state	string	Author's provided description of quaternary structure in RCSB. See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_pdbx_struct_assembly.oligomeric_details.html
+entry_determination_method	string	RCSB method of structure determination. See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_exptl.method.html
+entry_keywords	string	RCSB keywords describing the structure. See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_struct_keywords.pdbx_keywords.html
+entry_pH	string	pH at which structure is solved. See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_exptl_crystal_grow.pH.html
+entry_resolution	double	RCSB structure resolution. See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_refine.ls_d_res_high.html
+entry_validation_resolution	double	Resolution of the PDB entry
+entry_validation_rfree	double	The similarity between the observed structure-factor amplitudes and those calculated from the model. Rfree should be higher than R because it is calculated using reflections not used in the refinement. See https://www.wwpdb.org/validation/XrayValidationReportHelp
+entry_validation_r	double	The similarity between the observed structure-factor amplitudes and those calculated from the model. See https://www.wwpdb.org/validation/XrayValidationReportHelp
+entry_validation_clashscore	double	The Molprobity Clashscore is an approximation of the overall severity of the clashes in a structure, which is defined as the number of clashes per 1000 atoms (including hydrogens). See https://www.wwpdb.org/validation/XrayValidationReportHelp
+entry_validation_percent_rama_outliers	double	The percentage of Ramachandran outliers with respect to the total number of residues in the entry for which the outlier assessment is available. See https://www.wwpdb.org/validation/XrayValidationReportHelp
+entry_validation_percent_rota_outliers	double	The percentage of residues with an unusual sidechain conformation with respect to the total number of residues for which the assessment is available. See https://www.wwpdb.org/validation/XrayValidationReportHelp
+entry_validation_data_completeness	double	The number of expected diffraction spots is a function of data resolution and the space group. This metric describes the number of recorded reflections as a percentage of the number expected. See https://www.wwpdb.org/validation/XrayValidationReportHelp
+entry_validation_percent_RSRZ_outliers	double	The percentage Real-Space R-value Z-score outliers with respect to the total number of residues for which RSRZ was computed. See https://www.wwpdb.org/validation/XrayValidationReportHelp
+entry_validation_atom_count	double	Number of atoms in the asymmetric unit of the PDB entry
+entry_validation_molprobity	double	"Overall Molprobity ""effective resolution"", a single-score validation number based on the correlation of multiple criteria with crystallographic resolution. as described here: https://github.com/rlabduke/MolProbity/blob/6e7512e85bdea23f7ffb16e606d1f9a0abf6e5d4/cmdline/molparser.py#L662"
+entry_validation_mean_b_factor	double	Mean B-value calculated over all modelled atoms
+entry_validation_median_b_factor	double	Median B-value calculated over all modelled atoms
+entry_validation_pdbx_resolution	double	See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_refine.ls_d_res_high.html
+entry_validation_pdbx_reflns_resolution	double	See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_reflns.d_resolution_high.html
+entry_validation_meanI_over_sigI_obs	double	Each reflection has an intensity (I) and an uncertainty in measurement (σ(I)), thus this metric describes the signal-to-noise ratio
+entry_validation_r_minus_rfree	double	The difference between r and rfree
+entry_pass_validation_criteria	bool	Whether the entry passes validation criteria
+system_biounit_id	string	Biounit ID
+system_receptor_type	string	Receptor polymer composition: protein, DNA, RNA, other, or a +-joined combination
+system_protein_chains_asym_id	list<element: string>	Chain asymmetric id
+system_id_no_biounit	string	ID of the system without the biounit
+system_ligand_chains	list<element: string>	Ligand chains of the system
+system_num_pocket_residues	int64	Number of pocket residues of the system
+system_proper_num_pocket_residues	int64	Number of pocket residues of the system excluding ions and artifacts
+system_num_interactions	int64	Number of interactions of the system
+system_proper_num_interactions	int64	Number of interactions of the system
+system_num_unique_interactions	int64	Number of unique interactions of the system
+system_proper_num_unique_interactions	int64	Number of unique interactions of the system
+system_num_covalent_ligands	int64	Number of covalent ligands of the system
+system_proper_num_covalent_ligands	int64	Number of covalent ligands of the system
+system_id	string	ID of the system
+system_type	string	Type of the system (one of: holo, ion, artifact)
+system_has_binding_affinity	bool	Whether any ligand in the system has a binding affinity from BindingDB
+system_num_protein_chains	int64	Number of interacting receptor chains of the system.
+system_proper_num_protein_chains	int64	Number of interacting receptor chains excluding ions and artifacts.
+system_num_ligand_chains	int64	Number of ligand chains of the system
+system_proper_num_ligand_chains	int64	Number of ligand chains of the system excluding ions and artifacts
+system_num_crystal_contacted_residues	int64	Number of residues from other symmetry mates which are in contact with any ligand in the system.
+system_num_atoms_with_crystal_contacts	int64	Number of atoms in the system ligands which are in contact with residues from other symmetry mates.
+system_num_heavy_atoms	int64	Number of heavy atoms in the system ligands
+system_num_resolved_heavy_atoms	int64	Number of resolved heavy atoms in the system ligands
+system_ligand_max_qed	double	Maximum QED of the system ligands
+system_ligand_max_molecular_weight	double	Maximum molecular weight of the system ligands
+system_proper_ligand_max_molecular_weight	double	Maximum molecular weight of the system ligands excluding ions and artifacts
+system_num_unresolved_heavy_atoms	double	Number of unresolved heavy atoms in the system ligands
+system_fraction_atoms_with_crystal_contacts	double	Fraction of atoms in the system ligands which are in contact with residues from other symmetry mates.
+system_ligand_validation_num_residues	double	Number of residues in the list
+system_ligand_validation_num_processed_residues	double	Number of processed residues in the list
+system_ligand_validation_percent_processed_residues	double	Percentage of processed residues in the list
+system_ligand_validation_average_rsr	double	Average Real-Space R-value across all residues in the list
+system_ligand_validation_average_rsrz	double	Average Real-Space R-value Z-score across all residues in the list
+system_ligand_validation_average_rscc	double	Average Real-Space Correlation Coefficient across all residues in the list
+system_ligand_validation_average_occupancy	double	Average occupancy across all residues in the list
+system_ligand_validation_percent_rsr_under_threshold	double	Percentage of residues with RSR under the threshold
+system_ligand_validation_percent_rscc_over_threshold	double	Percentage of residues with RSCC over the threshold
+system_ligand_validation_percent_occupancy_over_threshold	double	Percentage of residues with occupancy over the threshold
+system_ligand_validation_average_b_factor	double	Average B factor across all residues in the list
+system_ligand_validation_unknown_residue_count	double	Number of unknown residues in the list
+system_ligand_validation_atom_count	double	Number of atoms across all residues in the list
+system_ligand_validation_heavy_atom_count	double	Number of heavy atoms across all residues in the list
+system_ligand_validation_num_unresolved_heavy_atoms	double	Number of unresolved heavy atoms across all residues in the list
+system_ligand_validation_max_alt_count	double	The highest number of configurations in a single residue in the list
+system_ligand_validation_percent_outliers_geometry	double	Percentage of residues with geometry outliers
+system_ligand_validation_percent_outliers_density	double	Percentage of residues with density outliers
+system_ligand_validation_percent_outliers_chirality	double	Percentage of residues with chirality outliers
+system_ligand_validation_percent_outliers_clashes	double	Percentage of residues with clashes outliers
+system_pocket_validation_num_residues	double	Number of residues in the list
+system_pocket_validation_num_processed_residues	double	Number of processed residues in the list
+system_pocket_validation_percent_processed_residues	double	Percentage of processed residues in the list
+system_pocket_validation_average_rsr	double	Average Real-Space R-value across all residues in the list
+system_pocket_validation_average_rsrz	double	Average Real-Space R-value Z-score across all residues in the list
+system_pocket_validation_average_rscc	double	Average Real-Space Correlation Coefficient across all residues in the list
+system_pocket_validation_average_occupancy	double	Average occupancy across all residues in the list
+system_pocket_validation_percent_rsr_under_threshold	double	Percentage of residues with RSR under the threshold
+system_pocket_validation_percent_rscc_over_threshold	double	Percentage of residues with RSCC over the threshold
+system_pocket_validation_percent_occupancy_over_threshold	double	Percentage of residues with occupancy over the threshold
+system_pocket_validation_average_b_factor	double	Average B factor across all residues in the list
+system_pocket_validation_unknown_residue_count	double	Number of unknown residues in the list
+system_pocket_validation_atom_count	double	Number of atoms across all residues in the list
+system_pocket_validation_heavy_atom_count	double	Number of heavy atoms across all residues in the list
+system_pocket_validation_num_unresolved_heavy_atoms	double	Number of unresolved heavy atoms across all residues in the list
+system_pocket_validation_max_alt_count	double	The highest number of configurations in a single residue in the list
+system_pocket_validation_percent_outliers_geometry	double	Percentage of residues with geometry outliers
+system_pocket_validation_percent_outliers_density	double	Percentage of residues with density outliers
+system_pocket_validation_percent_outliers_chirality	double	Percentage of residues with chirality outliers
+system_pocket_validation_percent_outliers_clashes	double	Percentage of residues with clashes outliers
+system_pass_validation_criteria	bool	Whether the system passes validation criteria
+system_protein_chains_auth_id	list<element: string>	Chain author id
+system_protein_chains_entity_id	list<element: string>	Chain entity id
+system_protein_chains_length	list<element: int64>	SEQRES length
+system_protein_chains_num_unresolved_residues	list<element: int64>	Number of unresolved residues (SEQRES length - len(residues))
+system_protein_chains_validation_num_residues	list<element: int64>	Number of residues in the list
+system_protein_chains_validation_num_processed_residues	list<element: int64>	Number of processed residues in the list
+system_protein_chains_validation_percent_processed_residues	list<element: double>	Percentage of processed residues in the list
+system_protein_chains_validation_average_rsr	list<element: double>	Average Real-Space R-value across all residues in the list
+system_protein_chains_validation_average_rsrz	list<element: double>	Average Real-Space R-value Z-score across all residues in the list
+system_protein_chains_validation_average_rscc	list<element: double>	Average Real-Space Correlation Coefficient across all residues in the list
+system_protein_chains_validation_average_occupancy	list<element: double>	Average occupancy across all residues in the list
+system_protein_chains_validation_percent_rsr_under_threshold	list<element: double>	Percentage of residues with RSR under the threshold
+system_protein_chains_validation_percent_rscc_over_threshold	list<element: double>	Percentage of residues with RSCC over the threshold
+system_protein_chains_validation_percent_occupancy_over_threshold	list<element: double>	Percentage of residues with occupancy over the threshold
+system_protein_chains_validation_average_b_factor	list<element: double>	Average B factor across all residues in the list
+system_protein_chains_validation_unknown_residue_count	list<element: int64>	Number of unknown residues in the list
+system_protein_chains_validation_atom_count	list<element: int64>	Number of atoms across all residues in the list
+system_protein_chains_validation_heavy_atom_count	list<element: int64>	Number of heavy atoms across all residues in the list
+system_protein_chains_validation_num_unresolved_heavy_atoms	list<element: int64>	Number of unresolved heavy atoms across all residues in the list
+system_protein_chains_validation_max_alt_count	list<element: int64>	The highest number of configurations in a single residue in the list
+system_protein_chains_validation_percent_outliers_geometry	list<element: double>	Percentage of residues with geometry outliers
+system_protein_chains_validation_percent_outliers_density	list<element: double>	Percentage of residues with density outliers
+system_protein_chains_validation_percent_outliers_chirality	list<element: double>	Percentage of residues with chirality outliers
+system_protein_chains_validation_percent_outliers_clashes	list<element: double>	Percentage of residues with clashes outliers
+system_ligand_chains_asym_id	list<element: string>	Chain asymmetric id
+system_ligand_chains_auth_id	list<element: string>	Chain author id
+system_ligand_chains_entity_id	list<element: string>	Chain entity id
+system_ligand_chains_length	list<element: int64>	SEQRES length
+system_ligand_chains_num_unresolved_residues	list<element: int64>	Number of unresolved residues (SEQRES length - len(residues))
+system_ligand_chains_validation_num_residues	list<element: int64>	Number of residues in the list
+system_ligand_chains_validation_num_processed_residues	list<element: int64>	Number of processed residues in the list
+system_ligand_chains_validation_percent_processed_residues	list<element: double>	Percentage of processed residues in the list
+system_ligand_chains_validation_average_rsr	list<element: double>	Average Real-Space R-value across all residues in the list
+system_ligand_chains_validation_average_rsrz	list<element: double>	Average Real-Space R-value Z-score across all residues in the list
+system_ligand_chains_validation_average_rscc	list<element: double>	Average Real-Space Correlation Coefficient across all residues in the list
+system_ligand_chains_validation_average_occupancy	list<element: double>	Average occupancy across all residues in the list
+system_ligand_chains_validation_percent_rsr_under_threshold	list<element: double>	Percentage of residues with RSR under the threshold
+system_ligand_chains_validation_percent_rscc_over_threshold	list<element: double>	Percentage of residues with RSCC over the threshold
+system_ligand_chains_validation_percent_occupancy_over_threshold	list<element: double>	Percentage of residues with occupancy over the threshold
+system_ligand_chains_validation_average_b_factor	list<element: double>	Average B factor across all residues in the list
+system_ligand_chains_validation_unknown_residue_count	list<element: int64>	Number of unknown residues in the list
+system_ligand_chains_validation_atom_count	list<element: int64>	Number of atoms across all residues in the list
+system_ligand_chains_validation_heavy_atom_count	list<element: int64>	Number of heavy atoms across all residues in the list
+system_ligand_chains_validation_num_unresolved_heavy_atoms	list<element: int64>	Number of unresolved heavy atoms across all residues in the list
+system_ligand_chains_validation_max_alt_count	list<element: int64>	The highest number of configurations in a single residue in the list
+system_ligand_chains_validation_percent_outliers_geometry	list<element: double>	Percentage of residues with geometry outliers
+system_ligand_chains_validation_percent_outliers_density	list<element: double>	Percentage of residues with density outliers
+system_ligand_chains_validation_percent_outliers_chirality	list<element: double>	Percentage of residues with chirality outliers
+system_ligand_chains_validation_percent_outliers_clashes	list<element: double>	Percentage of residues with clashes outliers
+system_water_residues	list<element: string>	Interacting water residues encoded as <instance>.<asym>_<residue_number>
+ligand_asym_id	string	Ligand chain asymmetric id
+ligand_instance	int64	Biounit instance ID
+ligand_ccd_code	string	Ligand Chemical Component Dictionary (CCD) code
+ligand_plip_type	string	Ligand chain type classification
+ligand_bird_id	string	Ligand BIRD id
+ligand_centroid	list<element: double>	Ligand center of geometry
+ligand_smiles	string	Ligand SMILES from CCD/PRD lookup or resolved 3D; for composite ligands, the valid representation with more heavy atoms is used and resolved connectivity wins ties
+ligand_resolved_smiles	string	SMILES from resolved 3D coordinates: bond orders from CCD template, stereochemistry from 3D geometry
+ligand_resolved_stereo_matches_template	bool	Whether resolved 3D stereo matches CCD template (True if achiral; None if no template)
+ligand_rdkit_canonical_smiles	string	RDKit canonical SMILES (same as smiles; kept for schema compatibility)
+ligand_molecular_weight	double	Molecular weight
+ligand_crippen_clogp	double	Ligand Crippen MlogP, see https://www.rdkit.org/docs/source/rdkit.Chem.Crippen.html
+ligand_num_rot_bonds	int64	Number of rotatable bonds
+ligand_num_hbd	int64	Number of hydrogen bond donors
+ligand_num_hba	int64	Number of hydrogen bond acceptors
+ligand_num_rings	int64	Number of rings
+ligand_num_heavy_atoms	int64	Number of heavy atoms
+ligand_is_covalent	bool	Indicator of whether a ligand  is a covalent ligand
+ligand_covalent_linkages	list<element: string>	Ligand covalent linkages from _struct_conn (conn_type_id='covale'), format: {auth_seq}:{comp_id}:{chain}:{seq}:{atom}__{auth_seq}:{comp_id}:{chain}:{seq}:{atom}
+ligand_num_resolved_heavy_atoms	int64	Number of resolved heavy atoms in a ligand
+ligand_num_unresolved_heavy_atoms	double	Number of unresolved heavy atoms in a ligand
+ligand_tpsa	double	Topological polar surface area
+ligand_qed	double	Ligand QED score, a measure of drug-likeness, see https://www.rdkit.org/new_docs/source/rdkit.Chem.QED.html
+ligand_is_ion	bool	Indicator of whether a ligand  is an ion
+ligand_is_lipinski	bool	Indicator of whether a ligand satisfies Lipinski Ro5
+ligand_is_fragment	bool	Indicator of whether a ligand satisfies fragment Ro3
+ligand_is_monosaccharide	bool	Indicator of whether a ligand contains one saccharide unit
+ligand_is_oligosaccharide	bool	Indicator of whether a ligand contains multiple saccharide units
+ligand_is_mononucleotide	bool	Indicator of whether a ligand contains one nucleotide unit
+ligand_is_oligonucleotide	bool	Indicator of whether a ligand contains multiple nucleotide units
+ligand_is_monopeptide	bool	Indicator of whether a ligand contains one peptide unit
+ligand_is_oligopeptide	bool	Indicator of whether a ligand contains multiple peptide units
+ligand_is_cofactor	bool	Indicator of whether a ligand is a cofactor
+ligand_in_artifact_list	bool	Indicator of whether a ligand is in the artifact list
+ligand_is_artifact	bool	Indicator of whether a ligand is an artifact
+ligand_is_other	bool	Indicator of whether a ligand type is not classified as any types of small molecule (Lipinski, Fragment or covalent), ion, cofactor, mono/oligo (peptide, saccharide or nucleotide) or artifact
+ligand_is_invalid	bool	Indicator of whether a ligand is invalid
+ligand_unique_ccd_code	string	Ligand representative CCD code after de-duplicating
+ligand_protein_chains_asym_id	list<element: string>	Chain asymmetric id
+ligand_num_interacting_residues	int64	Number of residues interacting with a given ligand.
+ligand_num_neighboring_residues	int64	Total count of receptor residues (protein/NA) within neighboring threshold.
+ligand_is_proper	bool	Check if ligand is a proper ligand (not an ion or artifact)
+ligand_num_interactions	int64	Number of interactions for a given ligand.
+ligand_num_unique_interactions	int64	Number of unique interactions
+ligand_num_crystal_contacted_residues	int64	Number of residues from other symmetry mates which are in contact with this ligand.
+ligand_num_atoms_with_crystal_contacts	int64	Number of atoms in this ligand which are in contact with residues from other symmetry mates.
+ligand_fraction_atoms_with_crystal_contacts	double	Fraction of atoms in this ligand which are in contact with residues from other symmetry mates.
+ligand_num_pocket_residues	int64	Number of residues in the ligand's binding pocket.
+ligand_id	string	Unique identifier for a given ligand.
+ligand_instance_chain	string	Instance chain for a given ligand.
+ligand_binding_affinity	double	Binding affinity (pKd or pKi) from BindingDB when available.          The affinity is only returned if the BindingDB target sequence         matches at least one receptor chain SEQRES with 100% identity         in the aligned core (terminal overhangs from tags/truncations         are tolerated).  This guards against BindingDB's 85% sequence         identity matching which can assign values to wrong complexes         (see `#94 <https://github.com/plinder-org/plinder/issues/94>`_).
+ligand_residue_numbers	list<element: int64>	Resolved ligand residue numbers used to reconstruct this ligand from the source mmCIF
+ligand_water_residues	list<element: string>	Interacting water residues encoded as <instance>.<asym>_<residue_number>
+ligand_interactions	list<element: string>	Protein-ligand interactions encoded by receptor chain, residue number, and interaction type
+ligand_auth_id	string	Author chain ID of the ligand
+ligand_protein_chains_auth_id	list<element: string>	Chain author id
+ligand_protein_chains_entity_id	list<element: string>	Chain entity id
+ligand_protein_chains_length	list<element: int64>	SEQRES length
+ligand_protein_chains_num_unresolved_residues	list<element: int64>	Number of unresolved residues (SEQRES length - len(residues))
+ligand_protein_chains_validation_num_residues	list<element: int64>	Number of residues in the list
+ligand_protein_chains_validation_num_processed_residues	list<element: int64>	Number of processed residues in the list
+ligand_protein_chains_validation_percent_processed_residues	list<element: double>	Percentage of processed residues in the list
+ligand_protein_chains_validation_average_rsr	list<element: double>	Average Real-Space R-value across all residues in the list
+ligand_protein_chains_validation_average_rsrz	list<element: double>	Average Real-Space R-value Z-score across all residues in the list
+ligand_protein_chains_validation_average_rscc	list<element: double>	Average Real-Space Correlation Coefficient across all residues in the list
+ligand_protein_chains_validation_average_occupancy	list<element: double>	Average occupancy across all residues in the list
+ligand_protein_chains_validation_percent_rsr_under_threshold	list<element: double>	Percentage of residues with RSR under the threshold
+ligand_protein_chains_validation_percent_rscc_over_threshold	list<element: double>	Percentage of residues with RSCC over the threshold
+ligand_protein_chains_validation_percent_occupancy_over_threshold	list<element: double>	Percentage of residues with occupancy over the threshold
+ligand_protein_chains_validation_average_b_factor	list<element: double>	Average B factor across all residues in the list
+ligand_protein_chains_validation_unknown_residue_count	list<element: int64>	Number of unknown residues in the list
+ligand_protein_chains_validation_atom_count	list<element: int64>	Number of atoms across all residues in the list
+ligand_protein_chains_validation_heavy_atom_count	list<element: int64>	Number of heavy atoms across all residues in the list
+ligand_protein_chains_validation_num_unresolved_heavy_atoms	list<element: int64>	Number of unresolved heavy atoms across all residues in the list
+ligand_protein_chains_validation_max_alt_count	list<element: int64>	The highest number of configurations in a single residue in the list
+ligand_protein_chains_validation_percent_outliers_geometry	list<element: double>	Percentage of residues with geometry outliers
+ligand_protein_chains_validation_percent_outliers_density	list<element: double>	Percentage of residues with density outliers
+ligand_protein_chains_validation_percent_outliers_chirality	list<element: double>	Percentage of residues with chirality outliers
+ligand_protein_chains_validation_percent_outliers_clashes	list<element: double>	Percentage of residues with clashes outliers
+ligand_interacting_residues	list<element: string>	Dictionary of interacting residues, with {instance}.{chain} key and residue number value
+ligand_neighboring_residues	list<element: string>	Dictionary of neighboring residues, with {instance}.{chain} key and residue number value
+system_pocket_CATH	string	Most frequent CATH mapping among pocket residues
+system_pocket_SCOP2B	string	Most frequent SCOP2B mapping among pocket residues
+system_pocket_Pfam	string	Most frequent Pfam mapping among pocket residues
+system_pocket_UniProt	string	Most frequent UniProt mapping among pocket residues
+ligand_neighboring_ligand_chains_asym_id	list<element: string>	Chain asymmetric id
+ligand_neighboring_ligand_chains_auth_id	list<element: string>	Chain author id
+ligand_neighboring_ligand_chains_entity_id	list<element: string>	Chain entity id
+ligand_neighboring_ligand_chains_length	list<element: int64>	SEQRES length
+ligand_neighboring_ligand_chains_num_unresolved_residues	list<element: int64>	Number of unresolved residues (SEQRES length - len(residues))
+ligand_neighboring_ligand_chains_validation_num_residues	list<element: int64>	Number of residues in the list
+ligand_neighboring_ligand_chains_validation_num_processed_residues	list<element: int64>	Number of processed residues in the list
+ligand_neighboring_ligand_chains_validation_percent_processed_residues	list<element: double>	Percentage of processed residues in the list
+ligand_neighboring_ligand_chains_validation_average_rsr	list<element: double>	Average Real-Space R-value across all residues in the list
+ligand_neighboring_ligand_chains_validation_average_rsrz	list<element: double>	Average Real-Space R-value Z-score across all residues in the list
+ligand_neighboring_ligand_chains_validation_average_rscc	list<element: double>	Average Real-Space Correlation Coefficient across all residues in the list
+ligand_neighboring_ligand_chains_validation_average_occupancy	list<element: double>	Average occupancy across all residues in the list
+ligand_neighboring_ligand_chains_validation_percent_rsr_under_threshold	list<element: double>	Percentage of residues with RSR under the threshold
+ligand_neighboring_ligand_chains_validation_percent_rscc_over_threshold	list<element: double>	Percentage of residues with RSCC over the threshold
+ligand_neighboring_ligand_chains_validation_percent_occupancy_over_threshold	list<element: double>	Percentage of residues with occupancy over the threshold
+ligand_neighboring_ligand_chains_validation_average_b_factor	list<element: double>	Average B factor across all residues in the list
+ligand_neighboring_ligand_chains_validation_unknown_residue_count	list<element: int64>	Number of unknown residues in the list
+ligand_neighboring_ligand_chains_validation_atom_count	list<element: int64>	Number of atoms across all residues in the list
+ligand_neighboring_ligand_chains_validation_heavy_atom_count	list<element: int64>	Number of heavy atoms across all residues in the list
+ligand_neighboring_ligand_chains_validation_num_unresolved_heavy_atoms	list<element: int64>	Number of unresolved heavy atoms across all residues in the list
+ligand_neighboring_ligand_chains_validation_max_alt_count	list<element: int64>	The highest number of configurations in a single residue in the list
+ligand_neighboring_ligand_chains_validation_percent_outliers_geometry	list<element: double>	Percentage of residues with geometry outliers
+ligand_neighboring_ligand_chains_validation_percent_outliers_density	list<element: double>	Percentage of residues with density outliers
+ligand_neighboring_ligand_chains_validation_percent_outliers_chirality	list<element: double>	Percentage of residues with chirality outliers
+ligand_neighboring_ligand_chains_validation_percent_outliers_clashes	list<element: double>	Percentage of residues with clashes outliers
+biounit_num_ligands	int64	Number of ligands in the biological assembly
+biounit_num_unique_ccd_codes	int64	Number of distinct ligand CCD codes in the biological assembly
+biounit_num_proper_ligands	int64	Number of proper ligands in the biological assembly
+system_ligand_has_lipinski	bool	Whether the system has a Lipinski ligand
+system_ligand_has_cofactor	bool	Whether the system has a cofactor ligand
+system_ligand_has_fragment	bool	Whether the system has a fragment ligand
+system_ligand_has_monosaccharide	bool	Whether the system has a ligand containing one saccharide unit
+system_ligand_has_oligosaccharide	bool	Whether the system has a ligand containing multiple saccharide units
+system_ligand_has_mononucleotide	bool	Whether the system has a ligand containing one nucleotide unit
+system_ligand_has_oligonucleotide	bool	Whether the system has a ligand containing multiple nucleotide units
+system_ligand_has_monopeptide	bool	Whether the system has a ligand containing one peptide unit
+system_ligand_has_oligopeptide	bool	Whether the system has a ligand containing multiple peptide units
+system_ligand_has_artifact	bool	Whether the system has an artifact ligand
+system_ligand_has_other	bool	Whether the system has a ligand classified as other
+system_ligand_has_covalent	bool	Whether the system has a covalent ligand
+system_ligand_has_invalid	bool	Whether the system has an invalid ligand
+system_ligand_has_ion	bool	Whether the system has an ion
+system_protein_chains_total_length	int64	Total length of all receptor polymer chains in the system
+system_unique_ccd_codes	string	Distinct ligand CCD codes in the system
+system_proper_unique_ccd_codes	string	Distinct CCD codes of proper ligands in the system
+ligand_is_3d_score_able	bool	Whether the canonical ligand SDF supports finite shape, color, and SuCOS self-scoring
+ligand_interacting_ligand_chains_asym_id	list<element: string>	Chain asymmetric id
+ligand_interacting_ligand_chains_auth_id	list<element: string>	Chain author id
+ligand_interacting_ligand_chains_entity_id	list<element: string>	Chain entity id
+ligand_interacting_ligand_chains_length	list<element: int64>	SEQRES length
+ligand_interacting_ligand_chains_num_unresolved_residues	list<element: int64>	Number of unresolved residues (SEQRES length - len(residues))
+ligand_interacting_ligand_chains_validation_num_residues	list<element: int64>	Number of residues in the list
+ligand_interacting_ligand_chains_validation_num_processed_residues	list<element: int64>	Number of processed residues in the list
+ligand_interacting_ligand_chains_validation_percent_processed_residues	list<element: double>	Percentage of processed residues in the list
+ligand_interacting_ligand_chains_validation_average_rsr	list<element: double>	Average Real-Space R-value across all residues in the list
+ligand_interacting_ligand_chains_validation_average_rsrz	list<element: double>	Average Real-Space R-value Z-score across all residues in the list
+ligand_interacting_ligand_chains_validation_average_rscc	list<element: double>	Average Real-Space Correlation Coefficient across all residues in the list
+ligand_interacting_ligand_chains_validation_average_occupancy	list<element: double>	Average occupancy across all residues in the list
+ligand_interacting_ligand_chains_validation_percent_rsr_under_threshold	list<element: double>	Percentage of residues with RSR under the threshold
+ligand_interacting_ligand_chains_validation_percent_rscc_over_threshold	list<element: double>	Percentage of residues with RSCC over the threshold
+ligand_interacting_ligand_chains_validation_percent_occupancy_over_threshold	list<element: double>	Percentage of residues with occupancy over the threshold
+ligand_interacting_ligand_chains_validation_average_b_factor	list<element: double>	Average B factor across all residues in the list
+ligand_interacting_ligand_chains_validation_unknown_residue_count	list<element: int64>	Number of unknown residues in the list
+ligand_interacting_ligand_chains_validation_atom_count	list<element: int64>	Number of atoms across all residues in the list
+ligand_interacting_ligand_chains_validation_heavy_atom_count	list<element: int64>	Number of heavy atoms across all residues in the list
+ligand_interacting_ligand_chains_validation_num_unresolved_heavy_atoms	list<element: int64>	Number of unresolved heavy atoms across all residues in the list
+ligand_interacting_ligand_chains_validation_max_alt_count	list<element: int64>	The highest number of configurations in a single residue in the list
+ligand_interacting_ligand_chains_validation_percent_outliers_geometry	list<element: double>	Percentage of residues with geometry outliers
+ligand_interacting_ligand_chains_validation_percent_outliers_density	list<element: double>	Percentage of residues with density outliers
+ligand_interacting_ligand_chains_validation_percent_outliers_chirality	list<element: double>	Percentage of residues with chirality outliers
+ligand_interacting_ligand_chains_validation_percent_outliers_clashes	list<element: double>	Percentage of residues with clashes outliers
+system_pocket_SCOP2	string	Most frequent SCOP2 mapping among pocket residues
+uniqueness	string	Identifier differentiating systems that are simple crystal symmetries within a biological assembly
+ligand__members	struct<1.C: list<element: int64>, 1.D: list<element: int64>, 1.E: list<element: int64>, 1.F: list<element: int64>, 1.H: list<element: int64>, 1.I: list<element: int64>, 1.J: list<element: int64>, 1.K: list<element: int64>>	Residue numbers per member instance-chain (self, incl. covalent).          Falls back to the single primary chain for ligands built before         ``member_residue_numbers`` was populated.
+ligand_member_asym_ids	list<element: string>	Asym IDs of every chain this (possibly merged) ligand spans.
+system_id_legacy	string	Historical system ID using global assembly-operation chain instances
+ligand_id_legacy	string	Historical ligand ID using global assembly-operation chain instances
+ligand_smiles_id	int32	Integer node ID assigned to this exact canonical SMILES for ligand similarity scoring
+ligand_max_cofactor_similarity	float	Maximum ECFP4/1024 Tanimoto similarity, as a percentage, to any CCD structure in the cofactor list
+ligand_most_similar_cofactor	string	CCD code of the cofactor with maximum ECFP4/1024 Tanimoto similarity
+ligand_is_cofactor_like	bool	Whether maximum similarity to a listed CCD cofactor is at least 90 percent
+ligand_tanimoto_ecfp4_1024_90_cluster	string	Connected-component ID among unique ligand SMILES at 90-percent ECFP4/1024 Tanimoto similarity
+ligand_tanimoto_ecfp4_1024_90_cluster_num_pdb_ids	int32	Number of distinct PDB entries represented in the ligand's 90-percent Tanimoto component
+pli_qcov__100__ligand__community	large_string	Cluster ID for ligand-level greedy centroid community built from reciprocal-minimum pli_qcov with 100 threshold; each member meets the threshold in both directions to its centroid
+pli_qcov__30__ligand__community	large_string	Cluster ID for ligand-level greedy centroid community built from reciprocal-minimum pli_qcov with 30 threshold; each member meets the threshold in both directions to its centroid
+pli_qcov__50__ligand__community	large_string	Cluster ID for ligand-level greedy centroid community built from reciprocal-minimum pli_qcov with 50 threshold; each member meets the threshold in both directions to its centroid
+pli_qcov__70__ligand__community	large_string	Cluster ID for ligand-level greedy centroid community built from reciprocal-minimum pli_qcov with 70 threshold; each member meets the threshold in both directions to its centroid
+pli_qcov__90__ligand__community	large_string	Cluster ID for ligand-level greedy centroid community built from reciprocal-minimum pli_qcov with 90 threshold; each member meets the threshold in both directions to its centroid
+pli_unique_qcov__100__ligand__community	large_string	Cluster ID for ligand-level greedy centroid community built from reciprocal-minimum pli_unique_qcov with 100 threshold; each member meets the threshold in both directions to its centroid
+pli_unique_qcov__30__ligand__community	large_string	Cluster ID for ligand-level greedy centroid community built from reciprocal-minimum pli_unique_qcov with 30 threshold; each member meets the threshold in both directions to its centroid
+pli_unique_qcov__50__ligand__community	large_string	Cluster ID for ligand-level greedy centroid community built from reciprocal-minimum pli_unique_qcov with 50 threshold; each member meets the threshold in both directions to its centroid
+pli_unique_qcov__70__ligand__community	large_string	Cluster ID for ligand-level greedy centroid community built from reciprocal-minimum pli_unique_qcov with 70 threshold; each member meets the threshold in both directions to its centroid
+pli_unique_qcov__90__ligand__community	large_string	Cluster ID for ligand-level greedy centroid community built from reciprocal-minimum pli_unique_qcov with 90 threshold; each member meets the threshold in both directions to its centroid
+pocket_qcov__100__ligand__community	large_string	Cluster ID for ligand-level greedy centroid community built from reciprocal-minimum pocket_qcov with 100 threshold; each member meets the threshold in both directions to its centroid
+pocket_qcov__30__ligand__community	large_string	Cluster ID for ligand-level greedy centroid community built from reciprocal-minimum pocket_qcov with 30 threshold; each member meets the threshold in both directions to its centroid
+pocket_qcov__50__ligand__community	large_string	Cluster ID for ligand-level greedy centroid community built from reciprocal-minimum pocket_qcov with 50 threshold; each member meets the threshold in both directions to its centroid
+pocket_qcov__70__ligand__community	large_string	Cluster ID for ligand-level greedy centroid community built from reciprocal-minimum pocket_qcov with 70 threshold; each member meets the threshold in both directions to its centroid
+pocket_qcov__90__ligand__community	large_string	Cluster ID for ligand-level greedy centroid community built from reciprocal-minimum pocket_qcov with 90 threshold; each member meets the threshold in both directions to its centroid
+sucos_shape_pocket_qcov__100__ligand__community	large_string	Cluster ID for ligand-level greedy centroid community built from reciprocal-minimum sucos_shape_pocket_qcov with 100 threshold; each member meets the threshold in both directions to its centroid
+sucos_shape_pocket_qcov__30__ligand__community	large_string	Cluster ID for ligand-level greedy centroid community built from reciprocal-minimum sucos_shape_pocket_qcov with 30 threshold; each member meets the threshold in both directions to its centroid
+sucos_shape_pocket_qcov__50__ligand__community	large_string	Cluster ID for ligand-level greedy centroid community built from reciprocal-minimum sucos_shape_pocket_qcov with 50 threshold; each member meets the threshold in both directions to its centroid
+sucos_shape_pocket_qcov__70__ligand__community	large_string	Cluster ID for ligand-level greedy centroid community built from reciprocal-minimum sucos_shape_pocket_qcov with 70 threshold; each member meets the threshold in both directions to its centroid
+sucos_shape_pocket_qcov__90__ligand__community	large_string	Cluster ID for ligand-level greedy centroid community built from reciprocal-minimum sucos_shape_pocket_qcov with 90 threshold; each member meets the threshold in both directions to its centroid
+tanimoto_similarity_ecfp4_1024__100__ligand__community	large_string	Cluster ID for ligand-level greedy centroid community built from reciprocal-minimum tanimoto_similarity_ecfp4_1024 with 100 threshold; each member meets the threshold in both directions to its centroid
+tanimoto_similarity_ecfp4_1024__30__ligand__community	large_string	Cluster ID for ligand-level greedy centroid community built from reciprocal-minimum tanimoto_similarity_ecfp4_1024 with 30 threshold; each member meets the threshold in both directions to its centroid
+tanimoto_similarity_ecfp4_1024__50__ligand__community	large_string	Cluster ID for ligand-level greedy centroid community built from reciprocal-minimum tanimoto_similarity_ecfp4_1024 with 50 threshold; each member meets the threshold in both directions to its centroid
+tanimoto_similarity_ecfp4_1024__70__ligand__community	large_string	Cluster ID for ligand-level greedy centroid community built from reciprocal-minimum tanimoto_similarity_ecfp4_1024 with 70 threshold; each member meets the threshold in both directions to its centroid
+tanimoto_similarity_ecfp4_1024__90__ligand__community	large_string	Cluster ID for ligand-level greedy centroid community built from reciprocal-minimum tanimoto_similarity_ecfp4_1024 with 90 threshold; each member meets the threshold in both directions to its centroid
+pli_qcov__100__ligand__component	large_string	Cluster ID for ligand-level reciprocal-minimum component built from pli_qcov metric with 100 threshold
+pli_qcov__30__ligand__component	large_string	Cluster ID for ligand-level reciprocal-minimum component built from pli_qcov metric with 30 threshold
+pli_qcov__50__ligand__component	large_string	Cluster ID for ligand-level reciprocal-minimum component built from pli_qcov metric with 50 threshold
+pli_qcov__70__ligand__component	large_string	Cluster ID for ligand-level reciprocal-minimum component built from pli_qcov metric with 70 threshold
+pli_qcov__90__ligand__component	large_string	Cluster ID for ligand-level reciprocal-minimum component built from pli_qcov metric with 90 threshold
+pli_unique_qcov__100__ligand__component	large_string	Cluster ID for ligand-level reciprocal-minimum component built from pli_unique_qcov metric with 100 threshold
+pli_unique_qcov__30__ligand__component	large_string	Cluster ID for ligand-level reciprocal-minimum component built from pli_unique_qcov metric with 30 threshold
+pli_unique_qcov__50__ligand__component	large_string	Cluster ID for ligand-level reciprocal-minimum component built from pli_unique_qcov metric with 50 threshold
+pli_unique_qcov__70__ligand__component	large_string	Cluster ID for ligand-level reciprocal-minimum component built from pli_unique_qcov metric with 70 threshold
+pli_unique_qcov__90__ligand__component	large_string	Cluster ID for ligand-level reciprocal-minimum component built from pli_unique_qcov metric with 90 threshold
+pocket_qcov__100__ligand__component	large_string	Cluster ID for ligand-level reciprocal-minimum component built from pocket_qcov metric with 100 threshold
+pocket_qcov__30__ligand__component	large_string	Cluster ID for ligand-level reciprocal-minimum component built from pocket_qcov metric with 30 threshold
+pocket_qcov__50__ligand__component	large_string	Cluster ID for ligand-level reciprocal-minimum component built from pocket_qcov metric with 50 threshold
+pocket_qcov__70__ligand__component	large_string	Cluster ID for ligand-level reciprocal-minimum component built from pocket_qcov metric with 70 threshold
+pocket_qcov__90__ligand__component	large_string	Cluster ID for ligand-level reciprocal-minimum component built from pocket_qcov metric with 90 threshold
+sucos_shape_pocket_qcov__100__ligand__component	large_string	Cluster ID for ligand-level reciprocal-minimum component built from sucos_shape_pocket_qcov metric with 100 threshold
+sucos_shape_pocket_qcov__30__ligand__component	large_string	Cluster ID for ligand-level reciprocal-minimum component built from sucos_shape_pocket_qcov metric with 30 threshold
+sucos_shape_pocket_qcov__50__ligand__component	large_string	Cluster ID for ligand-level reciprocal-minimum component built from sucos_shape_pocket_qcov metric with 50 threshold
+sucos_shape_pocket_qcov__70__ligand__component	large_string	Cluster ID for ligand-level reciprocal-minimum component built from sucos_shape_pocket_qcov metric with 70 threshold
+sucos_shape_pocket_qcov__90__ligand__component	large_string	Cluster ID for ligand-level reciprocal-minimum component built from sucos_shape_pocket_qcov metric with 90 threshold
+tanimoto_similarity_ecfp4_1024__100__ligand__component	large_string	Cluster ID for ligand-level reciprocal-minimum component built from tanimoto_similarity_ecfp4_1024 metric with 100 threshold
+tanimoto_similarity_ecfp4_1024__30__ligand__component	large_string	Cluster ID for ligand-level reciprocal-minimum component built from tanimoto_similarity_ecfp4_1024 metric with 30 threshold
+tanimoto_similarity_ecfp4_1024__50__ligand__component	large_string	Cluster ID for ligand-level reciprocal-minimum component built from tanimoto_similarity_ecfp4_1024 metric with 50 threshold
+tanimoto_similarity_ecfp4_1024__70__ligand__component	large_string	Cluster ID for ligand-level reciprocal-minimum component built from tanimoto_similarity_ecfp4_1024 metric with 70 threshold
+tanimoto_similarity_ecfp4_1024__90__ligand__component	large_string	Cluster ID for ligand-level reciprocal-minimum component built from tanimoto_similarity_ecfp4_1024 metric with 90 threshold
+pli_qcov__100__ligand__directed_set_cover	large_string	Cluster ID for ligand-level directed set cover built from pli_qcov with 100 threshold; each member's query-to-centroid score meets the threshold
+pli_qcov__100__ligand__directed_set_cover__is_centroid	bool	Whether this row is the published centroid for its ligand-level directed set-cover cluster built from pli_qcov with 100 threshold; missing means the row is outside the clustering universe
+pli_qcov__30__ligand__directed_set_cover	large_string	Cluster ID for ligand-level directed set cover built from pli_qcov with 30 threshold; each member's query-to-centroid score meets the threshold
+pli_qcov__30__ligand__directed_set_cover__is_centroid	bool	Whether this row is the published centroid for its ligand-level directed set-cover cluster built from pli_qcov with 30 threshold; missing means the row is outside the clustering universe
+pli_qcov__50__ligand__directed_set_cover	large_string	Cluster ID for ligand-level directed set cover built from pli_qcov with 50 threshold; each member's query-to-centroid score meets the threshold
+pli_qcov__50__ligand__directed_set_cover__is_centroid	bool	Whether this row is the published centroid for its ligand-level directed set-cover cluster built from pli_qcov with 50 threshold; missing means the row is outside the clustering universe
+pli_qcov__50__ligand__directed_set_cover__coverage_count	int32	Number of directed-cover query nodes this ligand could initially cover at pli_qcov 50 threshold, including itself; missing means the row is outside the clustering universe
+pli_qcov__50__ligand__directed_set_cover__coverage_fraction	float	Fraction of its directed weak component this ligand could initially cover at pli_qcov 50 threshold, including itself; missing means the row is outside the clustering universe
+pli_qcov__70__ligand__directed_set_cover	large_string	Cluster ID for ligand-level directed set cover built from pli_qcov with 70 threshold; each member's query-to-centroid score meets the threshold
+pli_qcov__70__ligand__directed_set_cover__is_centroid	bool	Whether this row is the published centroid for its ligand-level directed set-cover cluster built from pli_qcov with 70 threshold; missing means the row is outside the clustering universe
+pli_qcov__90__ligand__directed_set_cover	large_string	Cluster ID for ligand-level directed set cover built from pli_qcov with 90 threshold; each member's query-to-centroid score meets the threshold
+pli_qcov__90__ligand__directed_set_cover__is_centroid	bool	Whether this row is the published centroid for its ligand-level directed set-cover cluster built from pli_qcov with 90 threshold; missing means the row is outside the clustering universe
+pli_unique_qcov__100__ligand__directed_set_cover	large_string	Cluster ID for ligand-level directed set cover built from pli_unique_qcov with 100 threshold; each member's query-to-centroid score meets the threshold
+pli_unique_qcov__100__ligand__directed_set_cover__is_centroid	bool	Whether this row is the published centroid for its ligand-level directed set-cover cluster built from pli_unique_qcov with 100 threshold; missing means the row is outside the clustering universe
+pli_unique_qcov__30__ligand__directed_set_cover	large_string	Cluster ID for ligand-level directed set cover built from pli_unique_qcov with 30 threshold; each member's query-to-centroid score meets the threshold
+pli_unique_qcov__30__ligand__directed_set_cover__is_centroid	bool	Whether this row is the published centroid for its ligand-level directed set-cover cluster built from pli_unique_qcov with 30 threshold; missing means the row is outside the clustering universe
+pli_unique_qcov__50__ligand__directed_set_cover	large_string	Cluster ID for ligand-level directed set cover built from pli_unique_qcov with 50 threshold; each member's query-to-centroid score meets the threshold
+pli_unique_qcov__50__ligand__directed_set_cover__is_centroid	bool	Whether this row is the published centroid for its ligand-level directed set-cover cluster built from pli_unique_qcov with 50 threshold; missing means the row is outside the clustering universe
+pli_unique_qcov__50__ligand__directed_set_cover__coverage_count	int32	Number of directed-cover query nodes this ligand could initially cover at pli_unique_qcov 50 threshold, including itself; missing means the row is outside the clustering universe
+pli_unique_qcov__50__ligand__directed_set_cover__coverage_fraction	float	Fraction of its directed weak component this ligand could initially cover at pli_unique_qcov 50 threshold, including itself; missing means the row is outside the clustering universe
+pli_unique_qcov__70__ligand__directed_set_cover	large_string	Cluster ID for ligand-level directed set cover built from pli_unique_qcov with 70 threshold; each member's query-to-centroid score meets the threshold
+pli_unique_qcov__70__ligand__directed_set_cover__is_centroid	bool	Whether this row is the published centroid for its ligand-level directed set-cover cluster built from pli_unique_qcov with 70 threshold; missing means the row is outside the clustering universe
+pli_unique_qcov__90__ligand__directed_set_cover	large_string	Cluster ID for ligand-level directed set cover built from pli_unique_qcov with 90 threshold; each member's query-to-centroid score meets the threshold
+pli_unique_qcov__90__ligand__directed_set_cover__is_centroid	bool	Whether this row is the published centroid for its ligand-level directed set-cover cluster built from pli_unique_qcov with 90 threshold; missing means the row is outside the clustering universe
+pocket_qcov__100__ligand__directed_set_cover	large_string	Cluster ID for ligand-level directed set cover built from pocket_qcov with 100 threshold; each member's query-to-centroid score meets the threshold
+pocket_qcov__100__ligand__directed_set_cover__is_centroid	bool	Whether this row is the published centroid for its ligand-level directed set-cover cluster built from pocket_qcov with 100 threshold; missing means the row is outside the clustering universe
+pocket_qcov__30__ligand__directed_set_cover	large_string	Cluster ID for ligand-level directed set cover built from pocket_qcov with 30 threshold; each member's query-to-centroid score meets the threshold
+pocket_qcov__30__ligand__directed_set_cover__is_centroid	bool	Whether this row is the published centroid for its ligand-level directed set-cover cluster built from pocket_qcov with 30 threshold; missing means the row is outside the clustering universe
+pocket_qcov__50__ligand__directed_set_cover	large_string	Cluster ID for ligand-level directed set cover built from pocket_qcov with 50 threshold; each member's query-to-centroid score meets the threshold
+pocket_qcov__50__ligand__directed_set_cover__is_centroid	bool	Whether this row is the published centroid for its ligand-level directed set-cover cluster built from pocket_qcov with 50 threshold; missing means the row is outside the clustering universe
+pocket_qcov__50__ligand__directed_set_cover__coverage_count	int32	Number of directed-cover query nodes this ligand could initially cover at pocket_qcov 50 threshold, including itself; missing means the row is outside the clustering universe
+pocket_qcov__50__ligand__directed_set_cover__coverage_fraction	float	Fraction of its directed weak component this ligand could initially cover at pocket_qcov 50 threshold, including itself; missing means the row is outside the clustering universe
+pocket_qcov__70__ligand__directed_set_cover	large_string	Cluster ID for ligand-level directed set cover built from pocket_qcov with 70 threshold; each member's query-to-centroid score meets the threshold
+pocket_qcov__70__ligand__directed_set_cover__is_centroid	bool	Whether this row is the published centroid for its ligand-level directed set-cover cluster built from pocket_qcov with 70 threshold; missing means the row is outside the clustering universe
+pocket_qcov__90__ligand__directed_set_cover	large_string	Cluster ID for ligand-level directed set cover built from pocket_qcov with 90 threshold; each member's query-to-centroid score meets the threshold
+pocket_qcov__90__ligand__directed_set_cover__is_centroid	bool	Whether this row is the published centroid for its ligand-level directed set-cover cluster built from pocket_qcov with 90 threshold; missing means the row is outside the clustering universe
+sucos_shape_pocket_qcov__100__ligand__directed_set_cover	large_string	Cluster ID for ligand-level directed set cover built from sucos_shape_pocket_qcov with 100 threshold; each member's query-to-centroid score meets the threshold
+sucos_shape_pocket_qcov__100__ligand__directed_set_cover__is_centroid	bool	Whether this row is the published centroid for its ligand-level directed set-cover cluster built from sucos_shape_pocket_qcov with 100 threshold; missing means the row is outside the clustering universe
+sucos_shape_pocket_qcov__30__ligand__directed_set_cover	large_string	Cluster ID for ligand-level directed set cover built from sucos_shape_pocket_qcov with 30 threshold; each member's query-to-centroid score meets the threshold
+sucos_shape_pocket_qcov__30__ligand__directed_set_cover__is_centroid	bool	Whether this row is the published centroid for its ligand-level directed set-cover cluster built from sucos_shape_pocket_qcov with 30 threshold; missing means the row is outside the clustering universe
+sucos_shape_pocket_qcov__50__ligand__directed_set_cover	large_string	Cluster ID for ligand-level directed set cover built from sucos_shape_pocket_qcov with 50 threshold; each member's query-to-centroid score meets the threshold
+sucos_shape_pocket_qcov__50__ligand__directed_set_cover__is_centroid	bool	Whether this row is the published centroid for its ligand-level directed set-cover cluster built from sucos_shape_pocket_qcov with 50 threshold; missing means the row is outside the clustering universe
+sucos_shape_pocket_qcov__50__ligand__directed_set_cover__coverage_count	int32	Number of directed-cover query nodes this ligand could initially cover at sucos_shape_pocket_qcov 50 threshold, including itself; missing means the row is outside the clustering universe
+sucos_shape_pocket_qcov__50__ligand__directed_set_cover__coverage_fraction	float	Fraction of its directed weak component this ligand could initially cover at sucos_shape_pocket_qcov 50 threshold, including itself; missing means the row is outside the clustering universe
+sucos_shape_pocket_qcov__70__ligand__directed_set_cover	large_string	Cluster ID for ligand-level directed set cover built from sucos_shape_pocket_qcov with 70 threshold; each member's query-to-centroid score meets the threshold
+sucos_shape_pocket_qcov__70__ligand__directed_set_cover__is_centroid	bool	Whether this row is the published centroid for its ligand-level directed set-cover cluster built from sucos_shape_pocket_qcov with 70 threshold; missing means the row is outside the clustering universe
+sucos_shape_pocket_qcov__90__ligand__directed_set_cover	large_string	Cluster ID for ligand-level directed set cover built from sucos_shape_pocket_qcov with 90 threshold; each member's query-to-centroid score meets the threshold
+sucos_shape_pocket_qcov__90__ligand__directed_set_cover__is_centroid	bool	Whether this row is the published centroid for its ligand-level directed set-cover cluster built from sucos_shape_pocket_qcov with 90 threshold; missing means the row is outside the clustering universe
+tanimoto_similarity_ecfp4_1024__100__ligand__directed_set_cover	large_string	Cluster ID for ligand-level directed set cover built from tanimoto_similarity_ecfp4_1024 with 100 threshold; each member's query-to-centroid score meets the threshold
+tanimoto_similarity_ecfp4_1024__100__ligand__directed_set_cover__is_centroid	bool	Whether this row is the published centroid for its ligand-level directed set-cover cluster built from tanimoto_similarity_ecfp4_1024 with 100 threshold; missing means the row is outside the clustering universe
+tanimoto_similarity_ecfp4_1024__100__ligand__directed_set_cover__coverage_count	int32	Number of directed-cover query nodes this ligand could initially cover at tanimoto_similarity_ecfp4_1024 100 threshold, including itself; missing means the row is outside the clustering universe
+tanimoto_similarity_ecfp4_1024__100__ligand__directed_set_cover__coverage_fraction	float	Fraction of its directed weak component this ligand could initially cover at tanimoto_similarity_ecfp4_1024 100 threshold, including itself; missing means the row is outside the clustering universe
+tanimoto_similarity_ecfp4_1024__30__ligand__directed_set_cover	large_string	Cluster ID for ligand-level directed set cover built from tanimoto_similarity_ecfp4_1024 with 30 threshold; each member's query-to-centroid score meets the threshold
+tanimoto_similarity_ecfp4_1024__30__ligand__directed_set_cover__is_centroid	bool	Whether this row is the published centroid for its ligand-level directed set-cover cluster built from tanimoto_similarity_ecfp4_1024 with 30 threshold; missing means the row is outside the clustering universe
+tanimoto_similarity_ecfp4_1024__30__ligand__directed_set_cover__coverage_count	int32	Number of directed-cover query nodes this ligand could initially cover at tanimoto_similarity_ecfp4_1024 30 threshold, including itself; missing means the row is outside the clustering universe
+tanimoto_similarity_ecfp4_1024__30__ligand__directed_set_cover__coverage_fraction	float	Fraction of its directed weak component this ligand could initially cover at tanimoto_similarity_ecfp4_1024 30 threshold, including itself; missing means the row is outside the clustering universe
+tanimoto_similarity_ecfp4_1024__50__ligand__directed_set_cover	large_string	Cluster ID for ligand-level directed set cover built from tanimoto_similarity_ecfp4_1024 with 50 threshold; each member's query-to-centroid score meets the threshold
+tanimoto_similarity_ecfp4_1024__50__ligand__directed_set_cover__is_centroid	bool	Whether this row is the published centroid for its ligand-level directed set-cover cluster built from tanimoto_similarity_ecfp4_1024 with 50 threshold; missing means the row is outside the clustering universe
+tanimoto_similarity_ecfp4_1024__50__ligand__directed_set_cover__coverage_count	int32	Number of directed-cover query nodes this ligand could initially cover at tanimoto_similarity_ecfp4_1024 50 threshold, including itself; missing means the row is outside the clustering universe
+tanimoto_similarity_ecfp4_1024__50__ligand__directed_set_cover__coverage_fraction	float	Fraction of its directed weak component this ligand could initially cover at tanimoto_similarity_ecfp4_1024 50 threshold, including itself; missing means the row is outside the clustering universe
+tanimoto_similarity_ecfp4_1024__70__ligand__directed_set_cover	large_string	Cluster ID for ligand-level directed set cover built from tanimoto_similarity_ecfp4_1024 with 70 threshold; each member's query-to-centroid score meets the threshold
+tanimoto_similarity_ecfp4_1024__70__ligand__directed_set_cover__is_centroid	bool	Whether this row is the published centroid for its ligand-level directed set-cover cluster built from tanimoto_similarity_ecfp4_1024 with 70 threshold; missing means the row is outside the clustering universe
+tanimoto_similarity_ecfp4_1024__70__ligand__directed_set_cover__coverage_count	int32	Number of directed-cover query nodes this ligand could initially cover at tanimoto_similarity_ecfp4_1024 70 threshold, including itself; missing means the row is outside the clustering universe
+tanimoto_similarity_ecfp4_1024__70__ligand__directed_set_cover__coverage_fraction	float	Fraction of its directed weak component this ligand could initially cover at tanimoto_similarity_ecfp4_1024 70 threshold, including itself; missing means the row is outside the clustering universe
+tanimoto_similarity_ecfp4_1024__90__ligand__directed_set_cover	large_string	Cluster ID for ligand-level directed set cover built from tanimoto_similarity_ecfp4_1024 with 90 threshold; each member's query-to-centroid score meets the threshold
+tanimoto_similarity_ecfp4_1024__90__ligand__directed_set_cover__is_centroid	bool	Whether this row is the published centroid for its ligand-level directed set-cover cluster built from tanimoto_similarity_ecfp4_1024 with 90 threshold; missing means the row is outside the clustering universe
+tanimoto_similarity_ecfp4_1024__90__ligand__directed_set_cover__coverage_count	int32	Number of directed-cover query nodes this ligand could initially cover at tanimoto_similarity_ecfp4_1024 90 threshold, including itself; missing means the row is outside the clustering universe
+tanimoto_similarity_ecfp4_1024__90__ligand__directed_set_cover__coverage_fraction	float	Fraction of its directed weak component this ligand could initially cover at tanimoto_similarity_ecfp4_1024 90 threshold, including itself; missing means the row is outside the clustering universe

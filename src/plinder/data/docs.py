@@ -2,86 +2,207 @@
 # Distributed under the terms of the Apache License 2.0
 from __future__ import annotations
 
+from functools import cache
 from pathlib import Path
 
 import pandas as pd
+import pyarrow.parquet as pq
 
+from plinder.core.release import RELEASE_TABLES, PlinderRelease
 from plinder.data import column_descriptions
-from plinder.data.annotations.aggregate_annotations import Entry, System
-from plinder.data.annotations.get_ligand_validation import (
-    EntryValidation,
-    ResidueListValidation,
-)
-from plinder.data.annotations.ligand_utils import Ligand
-from plinder.data.annotations.protein_utils import Chain
 
 TSV_DIR = Path(column_descriptions.__file__).parent
-VALIDATION_TYPES = [
-    "system_pocket",
-    "system_ligand",
-    "ligand_interacting_ligand_chains",
-    "ligand_neighboring_ligand_chains",
-    "ligand_protein_chains",
-    "system_ligand_chains",
-    "system_protein_chains",
-]
-VALIDATION_OUTLIER_KEYS = [
-    "chirality",
-    "clashes",
-    "density",
-    "geometry",
-]
-MAPPING_NAMES = [
-    "CATH",
-    "Pfam",
-    "SCOP2",
-    "SCOP2B",
-    "UniProt",
-]
-CHAIN_TYPES = [
-    "system_protein_chains",
-    "system_ligand_chains",
-    "ligand_interacting_ligand_chains",
-    "ligand_neighboring_ligand_chains",
-    "ligand_protein_chains",
-]
-DERIVED_LIGAND_COLUMNS = [
-    (
-        "ligand_is_3d_score_able",
-        "bool | None",
-        "Whether the canonical ASU SDF loads and supports finite shape, color, and SuCOS self-scoring",
+TABLE_TSV_DIR = TSV_DIR / "tables"
+
+DERIVED_COLUMN_DESCRIPTIONS = {
+    "chain_is_ligand_like": (
+        "Whether this chain is ligand-like rather than an eligible receptor chain"
     ),
-    (
-        "ligand_smiles_id",
-        "int | None",
-        "Integer node ID assigned to this exact canonical SMILES for ligand similarity scoring",
+    "chain_type": "Raw CIF receptor polymer type",
+    "chain_receptor_type": ("Receptor polymer category: protein, dna, rna, or dna+rna"),
+    "chain_is_holo": (
+        "Whether the chain participates in a holo receptor or is excluded from "
+        "the apo partition"
     ),
-    (
-        "ligand_max_cofactor_similarity",
-        "float | None",
-        "Maximum ECFP4/1024 Tanimoto similarity (percent) to any CCD structure in the cofactor list",
+    "chain_uniprot_ids": "UniProt accessions mapped to the chain",
+    "chain_sequence": (
+        "Full polymer sequence in one-letter code, keyed by the source "
+        "asymmetric-chain ID"
     ),
-    (
-        "ligand_most_similar_cofactor",
-        "str | None",
-        "CCD code of the cofactor with maximum ECFP4/1024 Tanimoto similarity",
+    "biounit_id": "Biological assembly identifier",
+    "chain_instance": (
+        "Assembly chain instance encoded as <operation>.<label_asym_id>"
     ),
-    (
-        "ligand_is_cofactor_like",
-        "bool | None",
-        "Whether maximum similarity to a listed CCD cofactor is at least 90 percent",
+    "chain_role": "Assembly role: receptor, ligand, or water",
+    "source_mmcif_major_revision": (
+        "Major revision number of the source PDB mmCIF used during ingest"
     ),
-    (
-        "ligand_tanimoto_ecfp4_1024_90_cluster",
-        "str | None",
-        "Connected-component ID among unique ligand SMILES using Tanimoto similarity of at least 90 percent",
+    "source_mmcif_minor_revision": (
+        "Minor revision number of the source PDB mmCIF used during ingest"
     ),
-    (
-        "ligand_tanimoto_ecfp4_1024_90_cluster_num_pdb_ids",
-        "int | None",
-        "Number of distinct PDB entries containing this ligand or another ligand in its 90-percent Tanimoto component",
+    "selected_residue_numbers": (
+        "Source-mmCIF residue numbers selected by any ligand pocket or protein "
+        "interface, ordered by selected_residue_indices"
     ),
-]
+    "selected_residue_indices": (
+        "Zero-based resolved-chain indices corresponding positionally to "
+        "selected_residue_numbers"
+    ),
+    "interface_chain_1": "First canonical assembly-chain instance",
+    "interface_chain_2": "Second canonical assembly-chain instance",
+    "interface_chain_1_residue_numbers": (
+        "Source-mmCIF residue numbers at the interface on chain 1"
+    ),
+    "interface_chain_1_residue_indices": (
+        "Zero-based resolved-chain indices corresponding positionally to chain "
+        "1 residue numbers"
+    ),
+    "interface_chain_2_residue_numbers": (
+        "Source-mmCIF residue numbers at the interface on chain 2"
+    ),
+    "interface_chain_2_residue_indices": (
+        "Zero-based resolved-chain indices corresponding positionally to chain "
+        "2 residue numbers"
+    ),
+    "interface_num_contact_residue_pairs": (
+        "Number of residue pairs in contact across the protein interface"
+    ),
+    "prodigy_is_annotated": (
+        "Whether PRODIGY-cryst features and a biological/crystal label are available"
+    ),
+    "prodigy_label": "PRODIGY-cryst BIO or XTAL interface label",
+    "prodigy_probability_bio": (
+        "PRODIGY-cryst probability that the interface is biological"
+    ),
+    "prodigy_link_density": "PRODIGY-cryst interface link-density feature",
+    "prodigy_intermolecular_contacts": (
+        "PRODIGY-cryst count of intermolecular atomic contacts"
+    ),
+    "prodigy_charged_charged_contacts": (
+        "PRODIGY-cryst count of charged-charged contacts"
+    ),
+    "prodigy_charged_polar_contacts": ("PRODIGY-cryst count of charged-polar contacts"),
+    "prodigy_charged_apolar_contacts": (
+        "PRODIGY-cryst count of charged-apolar contacts"
+    ),
+    "prodigy_polar_polar_contacts": ("PRODIGY-cryst count of polar-polar contacts"),
+    "prodigy_apolar_polar_contacts": ("PRODIGY-cryst count of apolar-polar contacts"),
+    "prodigy_apolar_apolar_contacts": ("PRODIGY-cryst count of apolar-apolar contacts"),
+    "representative_ligand_id": (
+        "Ligand ID selected as the representative for a ligand-pocket group"
+    ),
+    "representative_system_id": (
+        "System ID selected as the representative for a ligand pocket or "
+        "protein interface"
+    ),
+    "receptor_chain_asym_ids": (
+        "Asymmetric-chain IDs in the representative receptor-chain set"
+    ),
+    "receptor_set_id": (
+        "Stable identifier for the representative set of receptor chains"
+    ),
+    "pocket_residues": (
+        "Representative pocket residues encoded as asym ID, residue number, "
+        "and zero-based resolved-chain index"
+    ),
+    "interactions": (
+        "Representative protein-ligand interactions encoded with their receptor "
+        "residue mapping and interaction type"
+    ),
+    "half_interface_id": "Stable identifier for one representative interface side",
+    "instance_chain_id": "Assembly-chain instance forming this half-interface",
+    "residue_numbers": "Source-mmCIF residue numbers in this half-interface",
+    "residue_indices": (
+        "Zero-based resolved-chain indices corresponding positionally to "
+        "residue_numbers"
+    ),
+    "half_interface_1_id": "First half-interface of this representative",
+    "half_interface_2_id": "Second half-interface of this representative",
+    "side_1_half_interface_id": (
+        "Representative half-interface assigned to the first query side"
+    ),
+    "side_2_half_interface_id": (
+        "Representative half-interface assigned to the second query side"
+    ),
+    "uniqueness": (
+        "Identifier differentiating systems that are simple crystal symmetries "
+        "within a biological assembly"
+    ),
+    "biounit_num_ligands": "Number of ligands in the biological assembly",
+    "biounit_num_unique_ccd_codes": (
+        "Number of distinct ligand CCD codes in the biological assembly"
+    ),
+    "biounit_num_proper_ligands": (
+        "Number of proper ligands in the biological assembly"
+    ),
+    "system_protein_chains_total_length": (
+        "Total length of all receptor polymer chains in the system"
+    ),
+    "system_unique_ccd_codes": "Distinct ligand CCD codes in the system",
+    "system_proper_unique_ccd_codes": (
+        "Distinct CCD codes of proper ligands in the system"
+    ),
+    "ligand_is_3d_score_able": (
+        "Whether the canonical ligand SDF supports finite shape, color, and "
+        "SuCOS self-scoring"
+    ),
+    "ligand_smiles_id": (
+        "Integer node ID assigned to this exact canonical SMILES for ligand "
+        "similarity scoring"
+    ),
+    "ligand_max_cofactor_similarity": (
+        "Maximum ECFP4/1024 Tanimoto similarity, as a percentage, to any CCD "
+        "structure in the cofactor list"
+    ),
+    "ligand_most_similar_cofactor": (
+        "CCD code of the cofactor with maximum ECFP4/1024 Tanimoto similarity"
+    ),
+    "ligand_is_cofactor_like": (
+        "Whether maximum similarity to a listed CCD cofactor is at least 90 percent"
+    ),
+    "ligand_tanimoto_ecfp4_1024_90_cluster": (
+        "Connected-component ID among unique ligand SMILES at 90-percent "
+        "ECFP4/1024 Tanimoto similarity"
+    ),
+    "ligand_tanimoto_ecfp4_1024_90_cluster_num_pdb_ids": (
+        "Number of distinct PDB entries represented in the ligand's 90-percent "
+        "Tanimoto component"
+    ),
+}
+
+DERIVED_COLUMN_DESCRIPTIONS.update(
+    {
+        f"system_ligand_has_{name}": description
+        for name, description in {
+            "lipinski": "Whether the system has a Lipinski ligand",
+            "cofactor": "Whether the system has a cofactor ligand",
+            "fragment": "Whether the system has a fragment ligand",
+            "monosaccharide": (
+                "Whether the system has a ligand containing one saccharide unit"
+            ),
+            "oligosaccharide": (
+                "Whether the system has a ligand containing multiple saccharide units"
+            ),
+            "mononucleotide": (
+                "Whether the system has a ligand containing one nucleotide unit"
+            ),
+            "oligonucleotide": (
+                "Whether the system has a ligand containing multiple nucleotide units"
+            ),
+            "monopeptide": (
+                "Whether the system has a ligand containing one peptide unit"
+            ),
+            "oligopeptide": (
+                "Whether the system has a ligand containing multiple peptide units"
+            ),
+            "artifact": "Whether the system has an artifact ligand",
+            "other": "Whether the system has a ligand classified as other",
+            "covalent": "Whether the system has a covalent ligand",
+            "invalid": "Whether the system has an invalid ligand",
+            "ion": "Whether the system has an ion",
+        }.items()
+    }
+)
 
 
 def get_cluster_column_descriptions(
@@ -165,9 +286,7 @@ def get_cluster_column_descriptions(
             )
         )
     directed_centroid_columns = [
-        c
-        for c in plindex.columns
-        if c.endswith("__directed_set_cover__is_centroid")
+        c for c in plindex.columns if c.endswith("__directed_set_cover__is_centroid")
     ]
     for column in directed_centroid_columns:
         parts = column.split("__")
@@ -217,58 +336,128 @@ def get_cluster_column_descriptions(
     return sorted(rows, key=lambda row: column_order[row[0]])
 
 
-def get_all_column_descriptions(
+@cache
+def _model_description_lookup() -> dict[str, str]:
+    """Generate descriptions from the annotation models that emit the columns."""
+    from plinder.data.annotations.aggregate_annotations import Entry, System
+    from plinder.data.annotations.get_ligand_validation import (
+        EntryValidation,
+        ResidueListValidation,
+    )
+    from plinder.data.annotations.ligand_utils import Ligand
+    from plinder.data.annotations.protein_utils import Chain
+
+    descriptions: dict[str, str] = {}
+    model_prefixes = [
+        (Entry, "entry"),
+        (EntryValidation, "entry_validation"),
+        (System, "system"),
+        (Ligand, "ligand"),
+        (Chain, "chain"),
+    ]
+    model_prefixes.extend(
+        (Chain, prefix)
+        for prefix in [
+            "system_protein_chains",
+            "system_ligand_chains",
+            "ligand_interacting_ligand_chains",
+            "ligand_neighboring_ligand_chains",
+            "ligand_protein_chains",
+        ]
+    )
+    model_prefixes.extend(
+        (ResidueListValidation, f"{prefix}_validation")
+        for prefix in [
+            "system_pocket",
+            "system_ligand",
+            "ligand_interacting_ligand_chains",
+            "ligand_neighboring_ligand_chains",
+            "ligand_protein_chains",
+            "system_ligand_chains",
+            "system_protein_chains",
+        ]
+    )
+    for model, prefix in model_prefixes:
+        for name, _, description in model.document_properties(prefix):
+            descriptions[name] = description
+    return descriptions
+
+
+def _base_description_lookup() -> dict[str, str]:
+    """Combine model-generated and explicitly derived column descriptions."""
+    descriptions: dict[str, str] = {}
+    descriptions.update(_model_description_lookup())
+    descriptions.update(DERIVED_COLUMN_DESCRIPTIONS)
+    return descriptions
+
+
+def get_table_column_descriptions(*, table_name: str, schema) -> pd.DataFrame:
+    """Build ordered descriptions for exactly the columns in one release table.
+
+    The Arrow schema supplies the published names, order, and data types.  A
+    missing prose description is an error so documentation cannot silently lag
+    behind a release table.
+    """
+    if table_name not in RELEASE_TABLES:
+        choices = ", ".join(sorted(RELEASE_TABLES))
+        raise KeyError(f"unknown release table {table_name!r}; choose from: {choices}")
+
+    fields = list(schema)
+    names = [field.name for field in fields]
+    descriptions = _base_description_lookup()
+    cluster_rows = get_cluster_column_descriptions(pd.DataFrame(columns=names))
+    descriptions.update({name: description for name, _, description in cluster_rows})
+    missing = [name for name in names if name not in descriptions]
+    if missing:
+        raise ValueError(
+            f"release table {table_name!r} has undocumented columns: {missing}"
+        )
+    return pd.DataFrame(
+        {
+            "Name": names,
+            "Type": [str(field.type) for field in fields],
+            "Description": [descriptions[name] for name in names],
+        }
+    )
+
+
+def get_column_descriptions(
+    table_name: str,
     *,
-    plindex: pd.DataFrame | None = None,
+    description_dir: Path = TABLE_TSV_DIR,
 ) -> pd.DataFrame:
-    if plindex is not None:
-        make_column_descriptions(plindex=plindex)
-    dfs = []
-    for tsv in TSV_DIR.glob("*.tsv"):
-        dfs.append(pd.read_csv(tsv, sep="\t"))
-    return pd.concat(dfs).reset_index(drop=True)
+    """Read the checked-in descriptions for one release parquet table."""
+    if table_name not in RELEASE_TABLES:
+        choices = ", ".join(sorted(RELEASE_TABLES))
+        raise KeyError(f"unknown release table {table_name!r}; choose from: {choices}")
+    path = description_dir / f"{table_name}.tsv"
+    if not path.is_file():
+        raise FileNotFoundError(f"missing release column descriptions: {path}")
+    frame = pd.read_csv(path, sep="\t")
+    if frame["Name"].duplicated().any():
+        duplicates = frame.loc[frame["Name"].duplicated(), "Name"].tolist()
+        raise ValueError(f"duplicate descriptions in {path}: {duplicates}")
+    return frame
 
 
-def make_column_descriptions(*, plindex: pd.DataFrame) -> None:
-    output_dir = TSV_DIR
+def write_column_descriptions(
+    *,
+    data_dir: Path,
+    output_dir: Path = TABLE_TSV_DIR,
+) -> None:
+    """Write one complete description TSV per published parquet table."""
+    release = PlinderRelease(data_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    Entry.document_properties_to_tsv(prefix="entry", filename=output_dir / "entry.tsv")
-    EntryValidation.document_properties_to_tsv(
-        prefix="entry_validation", filename=output_dir / "entry_validation.tsv"
-    )
-    System.document_properties_to_tsv(
-        prefix="system", filename=output_dir / "system.tsv"
-    )
-    for validation_type in VALIDATION_TYPES:
-        ResidueListValidation.document_properties_to_tsv(
-            prefix=f"{validation_type}_validation",
-            filename=output_dir / f"{validation_type}_validation.tsv",
-            nested=validation_type.endswith("_chains"),
+    expected: set[Path] = set()
+    for table_name, table in RELEASE_TABLES.items():
+        table_path = release.fetch(str(table["artifact"]))
+        descriptions = get_table_column_descriptions(
+            table_name=table_name,
+            schema=pq.read_schema(table_path),
         )
-        with open(output_dir / f"{validation_type}_validation.tsv", "a") as f:
-            typ = "list[float]" if validation_type.endswith("_chains") else "float"
-            for key in VALIDATION_OUTLIER_KEYS:
-                name = f"{validation_type}_validation_percent_outliers_{key}"
-                f.write(f"{name}\t{typ}\tPercent outliers for {key}\n")
-    for chain_type in CHAIN_TYPES:
-        Chain.document_properties_to_tsv(
-            prefix=chain_type,
-            filename=output_dir / f"{chain_type}.tsv",
-            nested=True,
-        )
-    with open(output_dir / "system_pocket.tsv", "w") as f:
-        f.write("Name\tType\tDescription\n")
-        for key in MAPPING_NAMES:
-            name = f"system_pocket_{key}"
-            f.write(f"{name}\tstr\t{key} domain for the pocket\n")
-    Ligand.document_properties_to_tsv(
-        prefix="ligand", filename=output_dir / "ligands.tsv"
-    )
-    with (output_dir / "ligands.tsv").open("a") as f:
-        for name, typ, description in DERIVED_LIGAND_COLUMNS:
-            f.write(f"{name}\t{typ}\t{description}\n")
-    with open(output_dir / "similarity_clusters.tsv", "w") as f:
-        f.write("Name\tType\tDescription\n")
-        rows = get_cluster_column_descriptions(plindex)
-        for row in rows:
-            f.write(f"{row[0]}\t{row[1]}\t{row[2]}\n")
+        output_path = output_dir / f"{table_name}.tsv"
+        descriptions.to_csv(output_path, sep="\t", index=False)
+        expected.add(output_path)
+    for stale in output_dir.glob("*.tsv"):
+        if stale not in expected:
+            stale.unlink()

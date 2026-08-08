@@ -1,0 +1,37 @@
+Name	Type	Description
+entry_pdb_id	string	RCSB PDB ID. See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_entry.id.html
+system_id	string	ID of the system
+system_biounit_id	string	Biounit ID
+interface_chain_1	string	First canonical assembly-chain instance
+interface_chain_2	string	Second canonical assembly-chain instance
+interface_chain_1_residue_numbers	list<element: int32>	Source-mmCIF residue numbers at the interface on chain 1
+interface_chain_1_residue_indices	list<element: int32>	Zero-based resolved-chain indices corresponding positionally to chain 1 residue numbers
+interface_chain_2_residue_numbers	list<element: int32>	Source-mmCIF residue numbers at the interface on chain 2
+interface_chain_2_residue_indices	list<element: int32>	Zero-based resolved-chain indices corresponding positionally to chain 2 residue numbers
+interface_num_contact_residue_pairs	int64	Number of residue pairs in contact across the protein interface
+prodigy_is_annotated	bool	Whether PRODIGY-cryst features and a biological/crystal label are available
+prodigy_label	string	PRODIGY-cryst BIO or XTAL interface label
+prodigy_probability_bio	float	PRODIGY-cryst probability that the interface is biological
+prodigy_link_density	float	PRODIGY-cryst interface link-density feature
+prodigy_intermolecular_contacts	double	PRODIGY-cryst count of intermolecular atomic contacts
+prodigy_charged_charged_contacts	double	PRODIGY-cryst count of charged-charged contacts
+prodigy_charged_polar_contacts	double	PRODIGY-cryst count of charged-polar contacts
+prodigy_charged_apolar_contacts	double	PRODIGY-cryst count of charged-apolar contacts
+prodigy_polar_polar_contacts	double	PRODIGY-cryst count of polar-polar contacts
+prodigy_apolar_polar_contacts	double	PRODIGY-cryst count of apolar-polar contacts
+prodigy_apolar_apolar_contacts	double	PRODIGY-cryst count of apolar-apolar contacts
+interface_qcov__100__community	large_string	Cluster ID for greedy centroid community built from reciprocal-minimum interface_qcov with 100 threshold; each member meets the threshold in both directions to its centroid
+interface_qcov__30__community	large_string	Cluster ID for greedy centroid community built from reciprocal-minimum interface_qcov with 30 threshold; each member meets the threshold in both directions to its centroid
+interface_qcov__50__community	large_string	Cluster ID for greedy centroid community built from reciprocal-minimum interface_qcov with 50 threshold; each member meets the threshold in both directions to its centroid
+interface_qcov__70__community	large_string	Cluster ID for greedy centroid community built from reciprocal-minimum interface_qcov with 70 threshold; each member meets the threshold in both directions to its centroid
+interface_qcov__90__community	large_string	Cluster ID for greedy centroid community built from reciprocal-minimum interface_qcov with 90 threshold; each member meets the threshold in both directions to its centroid
+interface_qcov__100__component	large_string	Cluster ID for reciprocal-minimum component built from interface_qcov metric with 100 threshold
+interface_qcov__30__component	large_string	Cluster ID for reciprocal-minimum component built from interface_qcov metric with 30 threshold
+interface_qcov__50__component	large_string	Cluster ID for reciprocal-minimum component built from interface_qcov metric with 50 threshold
+interface_qcov__70__component	large_string	Cluster ID for reciprocal-minimum component built from interface_qcov metric with 70 threshold
+interface_qcov__90__component	large_string	Cluster ID for reciprocal-minimum component built from interface_qcov metric with 90 threshold
+interface_qcov__100__directed_set_cover	large_string	Cluster ID for directed set cover built from interface_qcov with 100 threshold; each member's query-to-centroid score meets the threshold
+interface_qcov__30__directed_set_cover	large_string	Cluster ID for directed set cover built from interface_qcov with 30 threshold; each member's query-to-centroid score meets the threshold
+interface_qcov__50__directed_set_cover	large_string	Cluster ID for directed set cover built from interface_qcov with 50 threshold; each member's query-to-centroid score meets the threshold
+interface_qcov__70__directed_set_cover	large_string	Cluster ID for directed set cover built from interface_qcov with 70 threshold; each member's query-to-centroid score meets the threshold
+interface_qcov__90__directed_set_cover	large_string	Cluster ID for directed set cover built from interface_qcov with 90 threshold; each member's query-to-centroid score meets the threshold

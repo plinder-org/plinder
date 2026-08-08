@@ -1268,6 +1268,37 @@ class Ligand(DocBaseModel):
         default_factory=dict,
         description="__Dictionary of {instance}.{chain} to residue number to list of interaction hashes",
     )
+
+    @classmethod
+    def document_properties(
+        cls, prefix: str
+    ) -> ty.Generator[tuple[str, str | None, str], ty.Any, ty.Any]:
+        """Describe model fields plus the flat columns emitted by ``format()``."""
+        yield from super().document_properties(prefix)
+        custom_columns = (
+            (
+                "residue_numbers",
+                "list[int]",
+                "Resolved ligand residue numbers used to reconstruct this ligand "
+                "from the source mmCIF",
+            ),
+            (
+                "water_residues",
+                "list[str]",
+                "Interacting water residues encoded as "
+                "<instance>.<asym>_<residue_number>",
+            ),
+            (
+                "interactions",
+                "list[str]",
+                "Protein-ligand interactions encoded by receptor chain, residue "
+                "number, and interaction type",
+            ),
+            ("auth_id", "str", "Author chain ID of the ligand"),
+        )
+        for suffix, dtype, description in custom_columns:
+            yield f"{prefix}_{suffix}", dtype, description
+
     neighboring_residue_threshold: float = Field(
         default=6.0,
         description="__Maximum distance to consider receptor residues (protein/NA) neighboring",

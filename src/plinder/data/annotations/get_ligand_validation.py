@@ -2,6 +2,7 @@
 # Distributed under the terms of the Apache License 2.0
 from __future__ import annotations
 
+import typing as ty
 from collections.abc import Collection
 from functools import cached_property
 
@@ -202,6 +203,19 @@ class ResidueListValidation(DocBaseModel):
     # thresholds: ResidueValidationThresholds = Field(
     #     description="Thresholds used to determine if a residue is valid"
     # )
+
+    @classmethod
+    def document_properties(
+        cls, prefix: str
+    ) -> ty.Generator[tuple[str, str | None, str], ty.Any, ty.Any]:
+        """Describe the flat validation columns emitted by ``format()``."""
+        yield from super().document_properties(prefix)
+        for outlier_type in ("chirality", "clashes", "density", "geometry"):
+            yield (
+                f"{prefix}_percent_outliers_{outlier_type}",
+                "float",
+                f"Percentage of residues with {outlier_type} outliers",
+            )
 
     @classmethod
     def from_residues(
