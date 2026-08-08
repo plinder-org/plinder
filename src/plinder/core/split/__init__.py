@@ -1,3 +1,1 @@
-from .utils import get_split
-
-__all__ = ["get_split"]
+"""Tools for analyzing split files supplied by the caller."""

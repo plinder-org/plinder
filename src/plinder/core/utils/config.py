@@ -261,8 +261,6 @@ class DataConfig:
     mmp: str = "mmp"
     scores: str = "scores"
     source_mmcifs: str = "source_mmcifs"
-    splits: str = "splits"
-    split_file: str = "split.parquet"
     systems: str = "systems"
     index_file: str = "annotation_table.parquet"
     force_update: bool = False

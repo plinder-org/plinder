@@ -84,6 +84,8 @@ def test_unknown_artifact_and_table_fail_clearly(tmp_path):
     release = PlinderRelease(tmp_path)
     with pytest.raises(KeyError, match="unknown release artifact"):
         release.path("systems")
+    with pytest.raises(KeyError, match="unknown release artifact"):
+        release.path("splits")
     with pytest.raises(KeyError, match="unknown release table"):
         release.table("systems")
 

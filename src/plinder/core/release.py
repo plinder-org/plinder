@@ -40,7 +40,6 @@ RELEASE_PATHS = {
     "interface_sampling": "interface_sampling",
     "search_databases": "search_databases",
     "search_database": "search_databases/holo_{backend}",
-    "splits": "splits/split.parquet",
     "sucos_export": "exports/all_sucos_shape_pocket_qcov.parquet",
     "exports": "exports",
 }
