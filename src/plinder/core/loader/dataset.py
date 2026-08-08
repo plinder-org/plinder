@@ -25,8 +25,6 @@ class PlinderDataset(Dataset):  # type: ignore
 
     Parameters
     ----------
-    split : str
-        the split to sample from
     filters: FILTERS, default=None
         Index filter to select specific system ids
     use_alternate_structures: bool, default=True
@@ -41,7 +39,6 @@ class PlinderDataset(Dataset):  # type: ignore
 
     def __init__(
         self,
-        split: str,
         filters: FILTERS = None,
         use_alternate_structures: bool = True,
         featurizer: Callable[
@@ -49,9 +46,9 @@ class PlinderDataset(Dataset):  # type: ignore
         ] = structure_featurizer,
         system_factory: Callable[[str], PlinderSystem] | None = None,
     ):
-        index = query_index(splits=[split], filters=filters)
+        index = query_index(filters=filters)
         LOG.info(f"Loading {index.system_id.nunique()} systems")
-        self._system_ids = list(set(index["system_id"]))
+        self._system_ids = index["system_id"].drop_duplicates().tolist()
         self._num_examples = len(self._system_ids)
 
         self._featurizer = featurizer

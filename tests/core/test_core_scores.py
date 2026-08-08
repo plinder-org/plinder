@@ -32,8 +32,9 @@ def current_ligand_scores(read_plinder_mount, tmp_path, monkeypatch):
 
 @pytest.mark.usefixtures("read_plinder_mount")
 def test_query_index():
-    df = scores.query_index(columns=["system_id"], splits=["*"])
+    df = scores.query_index(columns=["system_id"])
     assert len(df.index) == 57
+    assert "split" not in df.columns
 
 
 @pytest.mark.usefixtures("read_plinder_mount")
@@ -46,7 +47,6 @@ def test_query_index():
 )
 def test_entry_release_date(system_id, correct_release_date):
     df = scores.query_index(
-        splits=["*"],
         columns=["entry_release_date"],
         filters=[("system_id", "==", system_id)],
     )
@@ -143,8 +143,8 @@ def test_query_ligand_cross_similarity(current_ligand_scores, monkeypatch):
 def test_ligand_cross_similarity_maps_nodes_through_index(monkeypatch):
     calls = []
 
-    def fake_query_index(*, columns, filters, splits):
-        calls.append((columns, filters, splits))
+    def fake_query_index(*, columns, filters):
+        calls.append((columns, filters))
         return pd.DataFrame(
             {
                 "system_id": ["1aaa__1__1.A__1.X", "2bbb__1__1.B__1.Y"],
@@ -227,7 +227,6 @@ def test_multi_query_protein_similarity():
         system_id=system_id,
         search_db="holo",
         filter_criteria=filter_criteria,
-        splits=["*"],
     )
     assert len(df.index)
     assert all(k in df.columns for k in filter_criteria)

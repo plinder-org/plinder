@@ -136,7 +136,6 @@ class PlinderSystem:
             entry_pdb_id = self.system_id.split("__")[0]
             self._entry = query_index(
                 columns=["*"],
-                splits=["*"],
                 filters=[FILTER(("entry_pdb_id", "==", entry_pdb_id))],
             )
             if self._entry.empty:
@@ -158,7 +157,6 @@ class PlinderSystem:
         if self._system is None:
             self._system = query_index(
                 columns=["*"],
-                splits=["*"],
                 filters=[FILTER(("system_id", "==", self.system_id))],
             )
             if self._system.empty:

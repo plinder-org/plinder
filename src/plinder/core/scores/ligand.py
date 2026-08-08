@@ -89,7 +89,6 @@ def map_cross_similarity(
                 )
             )
         ],
-        splits=["*"],
     )
     id_column = "ligand_smiles_id"
     ligand_to_system: dict[int, set[str]] = {}

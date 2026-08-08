@@ -132,7 +132,6 @@ def multi_query_protein_similarity(
     system_id: str,
     search_db: str,
     filter_criteria: dict[str, int],
-    splits: list[str] | None = None,
 ) -> pd.DataFrame:
     """
     Searches the protein similarity database for systems satisfying ALL filter criteria
@@ -152,23 +151,17 @@ def multi_query_protein_similarity(
             "pocket_lddt": 20,
             "protein_lddt_weighted_sum": 20,
         }
-    splits : list[str] | None, default=None
-        the splits to search in (only used if search_db="holo")
-
     Returns
     -------
     df : pd.DataFrame
         the protein similarity results across all metrics in filter_criteria
     """
-    if splits is None:
-        splits = ["train"]
     empty_df = pd.DataFrame(
         columns=["query_system", "target_system"] + list(filter_criteria.keys())
     )
     if search_db == "holo":
         target_systems_df = query_index(
             columns=["system_id"],
-            splits=splits,
         )
         if target_systems_df is None:
             return empty_df

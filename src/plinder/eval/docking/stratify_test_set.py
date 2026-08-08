@@ -303,8 +303,7 @@ class StratifiedTestSet:
                                 ("ligand_is_ion", "==", False),
                                 ("ligand_is_artifact", "==", False),
                             ],
-                            splits=["*"],
-                        ).drop(columns=["split"])
+                        )
                         df = df.merge(self.split_df, on="system_id", how="left")
                     if metric == "tanimoto_similarity_ecfp4_1024":
                         compute_ligand_ecfp_max_similarities(
@@ -381,8 +380,7 @@ class StratifiedTestSet:
                 "system_id",
                 "system_pass_validation_criteria",
             ],
-            splits=["*"],
-        ).drop(columns=["split"])
+        )
         quality = dict(
             zip(df["system_id"], df["system_pass_validation_criteria"].fillna(False))
         )

@@ -16,7 +16,6 @@ LOG = setup_logger(__name__)
 def query_index(
     *,
     columns: list[str] | None = None,
-    splits: list[str] | None = None,
     filters: FILTERS = None,
 ) -> pd.DataFrame:
     """
@@ -75,12 +74,4 @@ def query_index(
             df_fixed_time, on="entry_pdb_id"
         )
     # END patch-2
-    if splits is None:
-        splits = ["train", "val"]
-    split = cpl.get_plinder_path(rel=f"{cfg.data.splits}/{cfg.data.split_file}")
-    split_df = pd.read_parquet(split)
-    split_dict = dict(zip(split_df["system_id"], split_df["split"]))
-    df["split"] = df["system_id"].map(lambda x: split_dict.get(x, "unassigned"))
-    if "*" not in splits:
-        df = df[df["split"].isin(splits)].reset_index(drop=True)
     return df
