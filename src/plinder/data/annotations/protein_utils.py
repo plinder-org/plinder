@@ -289,7 +289,7 @@ class Residue(DocBaseModel):
     selected_altcode: str = Field(
         default=".",
         exclude=True,
-        description="__Deposited alternate conformer selected for this residue",
+        description="[EXCLUDE] Deposited alternate conformer selected for this residue",
     )
     """Single residue in a polymer chain.
 
@@ -340,10 +340,10 @@ class Chain(DocBaseModel):
     auth_id: str = Field(description="Chain author id")
     entity_id: str = Field(description="Chain entity id")
     chain_type_str: str = Field(
-        description="__Chain type string from CIF entity_poly.type"
+        description="[EXCLUDE] Chain type string from CIF entity_poly.type"
     )
     residues: dict[int, Residue] = Field(
-        description="__Dictionary of residues in chain with keys as residue number"
+        description="[EXCLUDE] Dictionary of residues in chain with keys as residue number"
     )
     length: int = Field(description="SEQRES length")
     num_unresolved_residues: int = Field(
@@ -351,14 +351,14 @@ class Chain(DocBaseModel):
     )
     mappings: dict[str, dict[str, list[tuple[str, str] | None]]] = Field(
         default_factory=dict,
-        description="__Mapping of metadata associated with chain with keys as chain asym id",
+        description="[EXCLUDE] Mapping of metadata associated with chain with keys as chain asym id",
     )
     holo: bool = Field(
-        default=True, description="__Is the chain part of a holo system or not"
+        default=True, description="[EXCLUDE] Is the chain part of a holo system or not"
     )
     validation: ResidueListValidation | None = Field(
         default=None,
-        description="__Crystal validation information for the residues in the chain",
+        description="[EXCLUDE] Crystal validation information for the residues in the chain",
     )
 
     # Allow arbitrary types for cached properties
@@ -490,9 +490,7 @@ class Chain(DocBaseModel):
 
     @cached_property
     def residue_index_to_number(self) -> dict[int, int]:
-        """
-        __Dictionary of residue index to residue number
-        """
+        """[EXCLUDE] Dictionary of residue index to residue number"""
         return {self.residues[r].index: r for r in self.residues}
 
     def format(self, instance: int) -> dict[str, Any]:

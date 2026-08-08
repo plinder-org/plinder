@@ -29,7 +29,10 @@ from plinder.data.annotations.interaction_utils import (
     run_peppr_interactions,
 )
 from plinder.data.annotations.protein_utils import Chain, sequences_match_core
-from plinder.data.annotations.utils import DocBaseModel
+from plinder.data.annotations.utils import (
+    DocBaseModel,
+    description_excluded_from_flat_export,
+)
 
 _PRD_DB_PATH = str(BASE_DIR / "annotations/static_files/prdcc.chemlib")
 LOG = logging.getLogger(__name__)
@@ -1167,9 +1170,12 @@ CrystalContacts = ty.Annotated[
 class Ligand(DocBaseModel):
     pdb_id: str = Field(
         default_factory=str,
-        description="__RCSB PDB ID, see https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_entry.id.html",
+        description="[EXCLUDE] RCSB PDB ID, see https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_entry.id.html",
     )
-    biounit_id: str = Field(default_factory=str, description="__Biounit id")
+    biounit_id: str = Field(
+        default_factory=str,
+        description="[EXCLUDE] Biounit id",
+    )
     id_legacy: str = Field(
         default="",
         description="Historical ligand ID using global assembly-operation chain instances",
@@ -1202,11 +1208,12 @@ class Ligand(DocBaseModel):
         description="Whether resolved 3D stereo matches CCD template (True if achiral; None if no template)",
     )
     residue_numbers: list[int] = Field(
-        default_factory=list, description="__Ligand residue numbers"
+        default_factory=list,
+        description="[EXCLUDE] Ligand residue numbers",
     )
     member_residue_numbers: dict[str, list[int]] = Field(
         default_factory=dict,
-        description="__Residue numbers per member instance-chain. A ligand may "
+        description="[EXCLUDE] Residue numbers per member instance-chain. A ligand may "
         "span several covalently-linked chains (e.g. a macrocycle whose parts "
         "are deposited as separate chains); this maps each member "
         "'{instance}.{asym_id}' to its residue numbers so every atom in the "
@@ -1244,29 +1251,29 @@ class Ligand(DocBaseModel):
     )
     neighboring_residues: dict[str, list[int]] = Field(
         default_factory=dict,
-        description="Dictionary of neighboring residues, with {instance}.{chain} key and residue number value",
+        description="[CUSTOM_EXPORT] Dictionary of neighboring residues, with {instance}.{chain} key and residue number value",
     )
     neighboring_ligands: list[str] = Field(
         default_factory=list,
-        description="__List of neighboring ligands {instance}.{chain}",
+        description="[EXCLUDE] List of neighboring ligands {instance}.{chain}",
     )
     receptor_seqres: dict[str, str] = Field(
         default_factory=dict,
-        description="__SEQRES sequences of neighboring receptor chains for affinity validation",
+        description="[EXCLUDE] SEQRES sequences of neighboring receptor chains for affinity validation",
     )
     interacting_residues: dict[str, list[int]] = Field(
         default_factory=dict,
-        description="Dictionary of interacting residues, with {instance}.{chain} key and residue number value",
+        description="[CUSTOM_EXPORT] Dictionary of interacting residues, with {instance}.{chain} key and residue number value",
     )
     interacting_ligands: list[str] = Field(
         default_factory=list,
-        description="__List of interacting ligands {instance}.{chain}",
+        description="[EXCLUDE] List of interacting ligands {instance}.{chain}",
     )
     # TODO: rename interactions description; hash format kept for backward compatibility
     # (now computed by peppr, not PLIP)
     interactions: dict[str, dict[int, list[str]]] = Field(
         default_factory=dict,
-        description="__Dictionary of {instance}.{chain} to residue number to list of interaction hashes",
+        description="[EXCLUDE] Dictionary of {instance}.{chain} to residue number to list of interaction hashes",
     )
 
     @classmethod
@@ -1301,10 +1308,11 @@ class Ligand(DocBaseModel):
 
     neighboring_residue_threshold: float = Field(
         default=6.0,
-        description="__Maximum distance to consider receptor residues (protein/NA) neighboring",
+        description="[EXCLUDE] Maximum distance to consider receptor residues (protein/NA) neighboring",
     )
     neighboring_ligand_threshold: float = Field(
-        default=4.0, description="__Maximum distance to consider ligands neighboring"
+        default=4.0,
+        description="[EXCLUDE] Maximum distance to consider ligands neighboring",
     )
     num_resolved_heavy_atoms: int | None = Field(
         default=None, description="Number of resolved heavy atoms in a ligand"
@@ -1377,11 +1385,11 @@ class Ligand(DocBaseModel):
     )
     crystal_contacts: CrystalContacts = Field(
         default_factory=dict,
-        description="__Dictionary of {chain} to residue number to set of interacting crystal contacts",
+        description="[EXCLUDE] Dictionary of {chain} to residue number to set of interacting crystal contacts",
     )
     waters: dict[str, list[int]] = Field(
         default_factory=dict,
-        description="__Dictionary of {instance}.{chain} to list of interacting water residue numbers",
+        description="[EXCLUDE] Dictionary of {instance}.{chain} to list of interacting water residue numbers",
     )
     """Ligand annotation dataclass.
 
@@ -1924,8 +1932,7 @@ class Ligand(DocBaseModel):
 
     @cached_property
     def selection(self) -> str:
-        """
-        __Selection string for ligand
+        """[EXCLUDE] Selection string for ligand
 
         Spans every member instance-chain so covalently-linked ligand chains
         (a macrocycle deposited as several chains) select all of their atoms.
@@ -2003,9 +2010,7 @@ class Ligand(DocBaseModel):
 
     @cached_property
     def pocket_residues(self) -> dict[str, dict[int, str]]:
-        """
-        __Residues in the ligand's binding pocket which includes neighboring and interacting residues.
-        """
+        """[EXCLUDE] Residues in the ligand's binding pocket which includes neighboring and interacting residues."""
         residues: dict[str, dict[int, str]] = {}
         for chain in self.neighboring_residues:
             if chain not in residues:
@@ -2113,9 +2118,7 @@ class Ligand(DocBaseModel):
 
     @cached_property
     def interactions_counter(self) -> dict[str, dict[int, ty.Counter[str]]]:
-        """
-        __Counter of interactions for a given ligand.
-        """
+        """[EXCLUDE] Counter of interactions for a given ligand."""
         interactions_counter: dict[str, dict[int, ty.Counter[str]]] = {}
         for chain in self.interactions:
             interactions_counter[chain] = {}
@@ -2313,21 +2316,8 @@ class Ligand(DocBaseModel):
     def format(self, chains: dict[str, Chain]) -> dict[str, ty.Any]:
         """Serialize ligand annotations to a flat dict for DataFrame export."""
         data: dict[str, ty.Any] = defaultdict(str)
-        ignore_fields = set(
-            [
-                "interactions",
-                "protein_chains",
-                "interacting_ligands",
-                "neighboring_ligands",
-                "interacting_residues",
-                "neighboring_residues",
-                "pocket_residues",
-            ]
-        )
-        for field, desc_type in self.get_descriptions_and_types().items():
-            # blacklist fields that will be added with custom formatters below or that we don't want to add to the plindex
-            descr = str(desc_type[0]).lstrip().replace("\n", " ")
-            if descr.startswith("__") or field in ignore_fields:
+        for field, (description, _) in self.get_descriptions_and_types().items():
+            if description_excluded_from_flat_export(description):
                 continue
             name = f"ligand_{field}"
             data[name] = getattr(self, field, None)

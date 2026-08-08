@@ -37,6 +37,66 @@ def test_ligand_cluster_column_descriptions():
     assert "chain 1 directed set cover" in descriptions[columns[10]]
 
 
+def test_description_markers_are_explicit_and_independent():
+    from plinder.data.annotations.utils import (
+        DocBaseModel,
+        description_excluded_from_column_docs,
+        description_excluded_from_flat_export,
+    )
+    from pydantic import Field
+
+    class Example(DocBaseModel):
+        visible: int = Field(description="Visible in both places")
+        excluded: int = Field(description="[EXCLUDE] Internal implementation detail")
+        custom_export: int = Field(
+            description="[CUSTOM_EXPORT] Emitted by a custom formatter"
+        )
+
+    documented = {
+        name: description
+        for name, _, description in Example.document_properties(prefix="example")
+    }
+    assert documented == {
+        "example_visible": "Visible in both places",
+        "example_custom_export": "Emitted by a custom formatter",
+    }
+    assert description_excluded_from_column_docs(
+        Example.model_fields["excluded"].description
+    )
+    assert description_excluded_from_flat_export(
+        Example.model_fields["excluded"].description
+    )
+    assert description_excluded_from_flat_export(
+        Example.model_fields["custom_export"].description
+    )
+    assert not description_excluded_from_column_docs(
+        Example.model_fields["custom_export"].description
+    )
+
+
+def test_annotation_models_use_only_readable_description_markers():
+    from plinder.data.annotations.aggregate_annotations import Entry, System
+    from plinder.data.annotations.get_ligand_validation import ResidueListValidation
+    from plinder.data.annotations.ligand_utils import Ligand
+    from plinder.data.annotations.protein_utils import Chain, Residue
+
+    for model in (Entry, System, Ligand, Chain, Residue, ResidueListValidation):
+        descriptions = model.get_descriptions_and_types()
+        assert not any(
+            str(description).lstrip().startswith("__")
+            for description, _ in descriptions.values()
+        )
+        assert all(
+            not str(description).lstrip().startswith("[")
+            or str(description).lstrip().startswith(("[EXCLUDE]", "[CUSTOM_EXPORT]"))
+            for description, _ in descriptions.values()
+        )
+        assert all(
+            not description.startswith(("[EXCLUDE]", "[CUSTOM_EXPORT]"))
+            for _, _, description in model.document_properties(prefix="test")
+        )
+
+
 def test_annotation_descriptions_follow_arrow_schema_order():
     import pyarrow as pa
     from plinder.data.annotations.aggregate_annotations import System

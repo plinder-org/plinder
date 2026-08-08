@@ -63,7 +63,10 @@ from plinder.data.annotations.protein_utils import (
     get_receptor_type,
 )
 from plinder.data.annotations.save_utils import save_ligands
-from plinder.data.annotations.utils import DocBaseModel
+from plinder.data.annotations.utils import (
+    DocBaseModel,
+    description_excluded_from_flat_export,
+)
 
 LOG = setup_logger(__name__)
 RDLogger.DisableLog("rdApp.*")
@@ -202,13 +205,13 @@ class QualityCriteria:
 
 
 class System(DocBaseModel):
-    pdb_id: str = Field(description="__PDB ID")
+    pdb_id: str = Field(description="[EXCLUDE] PDB ID")
     biounit_id: str = Field(description="Biounit ID")
     id_legacy: str = Field(
         default="",
         description="Historical system ID using global assembly-operation chain instances",
     )
-    ligands: list[Ligand] = Field(description="__List of Ligands in a systems")
+    ligands: list[Ligand] = Field(description="[EXCLUDE] List of Ligands in a systems")
     receptor_type: str = Field(
         description=(
             "Receptor polymer composition: protein, DNA, RNA, other, or a "
@@ -217,10 +220,11 @@ class System(DocBaseModel):
     )
     ligand_validation: ResidueListValidation | None = Field(
         default=None,
-        description="__Validation object for the ligand residues in the system",
+        description="[EXCLUDE] Validation object for the ligand residues in the system",
     )
     pocket_validation: ResidueListValidation | None = Field(
-        default=None, description="__Validation object for the system's pocket residues"
+        default=None,
+        description="[EXCLUDE] Validation object for the system's pocket residues",
     )
     pass_criteria: bool | None = Field(
         default=None, description="Whether the system passes validation criteria"
@@ -391,9 +395,7 @@ class System(DocBaseModel):
 
     @cached_property
     def pocket_residues(self) -> dict[str, dict[int, str]]:
-        """
-        __Pockets residues of the system
-        """
+        """[EXCLUDE] Pockets residues of the system"""
         all_residues: dict[str, dict[int, str]] = defaultdict(dict)
         for ligand in self.ligands:
             if not ligand.is_proper:
@@ -405,9 +407,7 @@ class System(DocBaseModel):
 
     @cached_property
     def interactions(self) -> dict[str, dict[int, list[str]]]:
-        """
-        __Interactions of the system
-        """
+        """[EXCLUDE] Interactions of the system"""
         all_interactions: dict[str, dict[int, list[str]]] = defaultdict(
             lambda: defaultdict(list)
         )
@@ -423,9 +423,7 @@ class System(DocBaseModel):
 
     @cached_property
     def interactions_counter(self) -> dict[str, dict[int, ty.Counter[str]]]:
-        """
-        __Counter of interactions of the system
-        """
+        """[EXCLUDE] Counter of interactions of the system"""
         interactions_counter: dict[str, dict[int, ty.Counter[str]]] = {}
         for chain in self.interactions:
             interactions_counter[chain] = {}
@@ -575,10 +573,8 @@ class System(DocBaseModel):
         criteria: QualityCriteria = QualityCriteria(),
     ) -> dict[str, ty.Any]:
         data: dict[str, ty.Any] = defaultdict(str)
-        for field, desc_type in self.get_descriptions_and_types().items():
-            # blacklist fields that will be added with custom formatters below or that we don't want to add to the plindex
-            descr = str(desc_type[0]).lstrip().replace("\n", " ")
-            if descr.startswith("__"):
+        for field, (description, _) in self.get_descriptions_and_types().items():
+            if description_excluded_from_flat_export(description):
                 continue
             if not field.startswith("system_"):
                 name = f"system_{field}"
@@ -601,9 +597,7 @@ class System(DocBaseModel):
 
     @cached_property
     def waters(self) -> dict[str, list[int]]:
-        """
-        __Waters interacting with any of the ligands in the system
-        """
+        """[EXCLUDE] Waters interacting with any of the ligands in the system"""
         waters: dict[str, list[int]] = defaultdict(list)
         for ligand in self.ligands:
             for chain in ligand.waters:
@@ -832,48 +826,50 @@ class Entry(DocBaseModel):
     )
     chains: dict[str, Chain] = Field(
         default_factory=dict,
-        description="__Chains dictionary with chain name mapped to chain object",
+        description="[EXCLUDE] Chains dictionary with chain name mapped to chain object",
     )
     ligand_like_chains: dict[str, str] = Field(
         default_factory=dict,
-        description="__Chain: chain type for other ligand-like chains in the entry",
+        description="[EXCLUDE] Chain: chain type for other ligand-like chains in the entry",
     )
     systems: dict[str, System] = Field(
         default_factory=dict,
-        description="__System dictionary with system id mapped to system object",
+        description="[EXCLUDE] System dictionary with system id mapped to system object",
     )
     interfaces: list[ProteinInterface] = Field(
         default_factory=list,
-        description="__Protein-chain interfaces across deposited assemblies",
+        description="[EXCLUDE] Protein-chain interfaces across deposited assemblies",
     )
     covalent_bonds: dict[str, list[tuple[str, str]]] = Field(
         default_factory=dict,
-        description="__All covalent interactions in the entry as defined by mmcif annotations. They types are separated by dictionary key and they include: "
+        description="[EXCLUDE] All covalent interactions in the entry as defined by mmcif annotations. They types are separated by dictionary key and they include: "
         + "covale: actual covalent linkage, metalc: other dative bond interactions like metal-ligand dative bond, "
         + "hydrogc: strong hydorogen bonding of nucleic acid. For the purpose of covalent annotations, we use only covale for downstream processing.",
     )
     chain_to_seqres: dict[str, str] = Field(
-        default_factory=dict, description="__Chain to sequence mapping"
+        default_factory=dict,
+        description="[EXCLUDE] Chain to sequence mapping",
     )
     validation: EntryValidation | None = Field(
-        default=None, description="__Entry validation"
+        default=None, description="[EXCLUDE] Entry validation"
     )
     pass_criteria: bool | None = Field(
         default=None, description="Whether the entry passes validation criteria"
     )
     water_chains: list[str] = Field(
-        default_factory=list, description="__Water chains in the entry"
+        default_factory=list, description="[EXCLUDE] Water chains in the entry"
     )
     biounit_chain_ids: dict[str, list[str]] = Field(
         default_factory=dict,
-        description="__Resolved biological-assembly chain instances by assembly ID",
+        description="[EXCLUDE] Resolved biological-assembly chain instances by assembly ID",
     )
     biounit_legacy_chain_ids: dict[str, dict[str, str]] = Field(
         default_factory=dict,
-        description="__Canonical-to-historical chain instance IDs by assembly ID",
+        description="[EXCLUDE] Canonical-to-historical chain instance IDs by assembly ID",
     )
     symmetry_mate_contacts: SymmetryMateContacts = Field(
-        default_factory=dict, description="__Symmetry mate contacts in the entry"
+        default_factory=dict,
+        description="[EXCLUDE] Symmetry mate contacts in the entry",
     )
 
     def prune(
@@ -2165,9 +2161,7 @@ class Entry(DocBaseModel):
 
     @cached_property
     def author_to_asym(self) -> dict[str, str]:
-        """
-        __Map author chain id to asym id
-        """
+        """[EXCLUDE] Map author chain id to asym id"""
         return {
             c.auth_id: c.asym_id
             for c in self.chains.values()

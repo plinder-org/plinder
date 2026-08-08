@@ -272,9 +272,7 @@ def test_interface_only_annotation_adds_missing_shared_chain_rows(
     biounits = pd.read_parquet(biounit_path)
     expected_biounit_ids = set(biounits["chain_asym_id"])
     biounits.loc[biounits["chain_asym_id"] == "A", "chain_role"] = "ligand"
-    biounits.loc[biounits["chain_asym_id"] != "B"].to_parquet(
-        biounit_path, index=False
-    )
+    biounits.loc[biounits["chain_asym_id"] != "B"].to_parquet(biounit_path, index=False)
     metadata_path = entry_folder / "entry_metadata.parquet"
     metadata = pd.read_parquet(metadata_path).drop(
         columns=[
@@ -298,9 +296,7 @@ def test_interface_only_annotation_adds_missing_shared_chain_rows(
         "preserved"
     )
     assert set(
-        repaired_biounits.loc[
-            repaired_biounits["chain_asym_id"] == "A", "chain_role"
-        ]
+        repaired_biounits.loc[repaired_biounits["chain_asym_id"] == "A", "chain_role"]
     ) == {"ligand"}
     assert repaired_metadata["ligand_only_metadata"].tolist() == ["preserved"]
     assert set(repaired_metadata).issuperset(
@@ -1591,9 +1587,9 @@ def test_canonical_ligand_saving_and_system_reconstruction(
         for asym_id in system_block["atom_site"]["label_asym_id"].as_array(str)
     )
     assert "struct_conn_type" in system_block
-    assert set(
-        system_block["struct_conn"]["conn_type_id"].as_array(str)
-    ).issubset(system_block["struct_conn_type"]["id"].as_array(str))
+    assert set(system_block["struct_conn"]["conn_type_id"].as_array(str)).issubset(
+        system_block["struct_conn_type"]["id"].as_array(str)
+    )
     assert all(
         value == value.lower()
         for value in system_block["chem_comp_bond"]["value_order"].as_array(str)
@@ -2139,14 +2135,49 @@ def test_mmp(mini_mmp_index, mini_mmp_data_annotation, mini_mmp_cluster_folder):
     assert len(mmp_data.congeneric_id.unique()) == len(mmp_data.CONSTANT.unique())
 
 
-def test_mixed_receptor_type_is_written_to_annotation(cif_8ufz):
+def test_mixed_receptor_type_is_written_to_annotation(cif_8ufz, monkeypatch):
+    from plinder.data.annotations import ligand_utils
+
+    monkeypatch.setattr(
+        ligand_utils,
+        "BINDING_AFFINITY",
+        {"pchembl": {}, "target_sequence": {}},
+    )
     entry = Entry.from_cif_file(cif_8ufz)
+    annotation = entry.to_df()
 
     assert entry.systems
     assert {system.receptor_type for system in entry.systems.values()} == {
         "protein+dna"
     }
-    assert set(entry.to_df()["system_receptor_type"]) == {"protein+dna"}
+    assert set(annotation["system_receptor_type"]) == {"protein+dna"}
+    assert {
+        "system_water_residues",
+        "ligand_residue_numbers",
+        "ligand_interactions",
+        "ligand__members",
+    }.issubset(annotation.columns)
+    assert {
+        "system_pdb_id",
+        "system_ligands",
+        "system_ligand_validation",
+        "system_pocket_validation",
+        "system_pocket_residues",
+        "system_interactions",
+        "system_interactions_counter",
+        "system_waters",
+        "ligand_pdb_id",
+        "ligand_biounit_id",
+        "ligand_member_residue_numbers",
+        "ligand_receptor_seqres",
+        "ligand_neighboring_residue_threshold",
+        "ligand_neighboring_ligand_threshold",
+        "ligand_crystal_contacts",
+        "ligand_waters",
+        "ligand_selection",
+        "ligand_pocket_residues",
+        "ligand_interactions_counter",
+    }.isdisjoint(annotation.columns)
     chain_types = entry.chains_to_df().set_index("chain_asym_id")["chain_receptor_type"]
     assert {chain_types[chain] for chain in ["A", "B", "C", "D"]} == {"dna"}
     assert {chain_types[chain] for chain in ["E", "F"]} == {"protein"}
