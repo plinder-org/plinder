@@ -239,30 +239,10 @@ class DataConfig:
     plinder_dir: str = field(init=False)
     plinder_remote: str = field(init=False)
 
-    ingest: str = "ingest"
-    alignments: str = "alignments"
-    search_databases: str = "search_databases"
-    validation: str = "validation"
     clusters: str = "clusters"
-    entries: str = "entries"
-    fingerprints: str = "fingerprints"
-    fingerprint_file: str = "ligands_per_system.parquet"
-    index: str = "index"
-    entry_chain_file: str = "entry_chains.parquet"
-    entry_biounit_chain_file: str = "entry_biounit_chains.parquet"
-    entry_source_file: str = "entry_sources.parquet"
-    alignment_chain_lookup_file: str = "alignment_chain_lookup.parquet"
-    interface_file: str = "interface_annotation_table.parquet"
-    ligand_archives: str = "ligand_archives"
-    ligand_scores: str = "ligand_scores"
-    ligands: str = "ligands"
     links: str = "links"
-    linked_structures: str = "linked_structures"
-    mmp: str = "mmp"
     scores: str = "scores"
     source_mmcifs: str = "source_mmcifs"
-    systems: str = "systems"
-    index_file: str = "annotation_table.parquet"
     force_update: bool = False
 
     def __post_init__(self) -> None:
