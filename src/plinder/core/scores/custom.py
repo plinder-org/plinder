@@ -19,8 +19,8 @@ from typing import Any, Iterable, Literal, Mapping
 import numpy as np
 import pandas as pd
 
+from plinder.core.release import PlinderRelease
 from plinder.core.utils import cpl
-from plinder.core.utils.config import get_config
 
 LOG = logging.getLogger(__name__)
 SEARCH_BACKENDS = ("foldseek", "mmseqs")
@@ -127,10 +127,26 @@ def _require_file(path: Path, *, description: str) -> Path:
     raise FileNotFoundError(f"missing {description} in {mode}: {path}")
 
 
-def _release_path(*, relative: str, data_dir: Path | None) -> Path:
+def _release_file(
+    name: str,
+    *,
+    data_dir: Path | None,
+    description: str,
+    **parameters: str,
+) -> Path:
+    release = PlinderRelease(data_dir)
     if data_dir is not None:
-        return Path(data_dir) / relative
-    return cpl.get_plinder_path(rel=relative)
+        return _require_file(
+            release.path(name, **parameters),
+            description=description,
+        )
+    try:
+        return release.fetch(name, **parameters)
+    except FileNotFoundError as exc:
+        mode = "offline cache" if cpl.is_offline() else "release cache"
+        raise FileNotFoundError(
+            f"missing {description} in {mode}: {release.path(name, **parameters)}"
+        ) from exc
 
 
 def _manifest_member(root: Path, value: object, *, field: str) -> Path:
@@ -170,8 +186,7 @@ def _validate_portable_links(root: Path) -> None:
 
 def _local_search_database_root(data_dir: Path, backend: str) -> Path:
     """Resolve either a published bundle or an unmodified ingest output."""
-    cfg = get_config()
-    published = data_dir / str(cfg.data.search_databases) / f"holo_{backend}"
+    published = PlinderRelease(data_dir).path("search_database", backend=backend)
     if published.is_dir():
         return published
     ingest = data_dir / "dbs" / "subdbs" / f"holo_{backend}"
@@ -188,10 +203,12 @@ def resolve_search_database(
         raise ValueError(
             f"unsupported search backend {backend!r}; expected one of {SEARCH_BACKENDS}"
         )
-    cfg = get_config()
     if data_dir is None:
-        root = cpl.get_plinder_path(
-            rel=f"{cfg.data.search_databases}/holo_{backend}"
+        root = _release_file(
+            "search_database",
+            data_dir=None,
+            description=f"{backend} search database",
+            backend=backend,
         )
     else:
         root = _local_search_database_root(Path(data_dir), backend)
@@ -276,14 +293,14 @@ def resolve_ligand_archives(
     data_dir: Path | None = None,
 ) -> dict[str, Path]:
     """Download or validate only ligand-coordinate shards needed by targets."""
-    cfg = get_config()
     codes = sorted({_pdb_shard(value) for value in pdb_or_system_ids})
     archives: dict[str, Path] = {}
     for code in codes:
-        relative = f"{cfg.data.ligand_archives}/{code}.parquet"
-        archives[code] = _require_file(
-            _release_path(relative=relative, data_dir=data_dir),
+        archives[code] = _release_file(
+            "ligand_archive",
+            data_dir=data_dir,
             description=f"canonical ligand archive for shard {code}",
+            shard=code,
         )
     return archives
 
@@ -301,18 +318,17 @@ def resolve_custom_scoring_assets(
     the coordinate shards containing target ligands with positive pocket
     coverage.
     """
-    cfg = get_config()
-    index_files = {
-        "annotation_table": cfg.data.index_file,
-        "entry_chains": cfg.data.entry_chain_file,
-        "interface_annotations": cfg.data.interface_file,
-        "alignment_chain_lookup": cfg.data.alignment_chain_lookup_file,
-    }
+    index_files = (
+        "annotation_table",
+        "entry_chains",
+        "interface_annotations",
+        "alignment_chain_lookup",
+    )
     resolved_index: dict[str, Path] = {}
-    for name, filename in index_files.items():
-        relative = f"{cfg.data.index}/{filename}"
-        resolved_index[name] = _require_file(
-            _release_path(relative=relative, data_dir=data_dir),
+    for name in index_files:
+        resolved_index[name] = _release_file(
+            name,
+            data_dir=data_dir,
             description=name.replace("_", " "),
         )
 
@@ -1550,11 +1566,11 @@ def _custom_ligand_sdf_resolver(
             if shard not in packed_sdf_cache:
                 archive = archive_cache.get(shard)
                 if archive is None:
-                    cfg = get_config()
-                    relative = f"{cfg.data.ligand_archives}/{shard}.parquet"
-                    archive = _require_file(
-                        _release_path(relative=relative, data_dir=data_dir),
+                    archive = _release_file(
+                        "ligand_archive",
+                        data_dir=data_dir,
                         description=f"canonical ligand archive for shard {shard}",
+                        shard=shard,
                     )
                     archive_cache[shard] = archive
                 packed = pd.read_parquet(

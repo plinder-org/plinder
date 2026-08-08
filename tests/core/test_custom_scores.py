@@ -339,9 +339,14 @@ def test_write_custom_query_files_derives_coordinate_only_sequences(
     assert set(chains["sequence_source"]) == {"coordinates"}
 
 
-def test_annotate_custom_cif_files_writes_bonded_ligands(test_dir, tmp_path):
+def test_annotate_custom_cif_files_writes_bonded_ligands(
+    test_dir, tmp_path, monkeypatch
+):
     import yaml
+    from plinder.data.annotations import ligand_utils
     from rdkit import Chem
+
+    monkeypatch.setattr(ligand_utils, "BINDING_AFFINITY", {})
 
     cif = test_dir / "custom_cif/boltz_8c3u_input_model_0.cif"
     config = yaml.safe_load(
