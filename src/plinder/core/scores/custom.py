@@ -116,6 +116,8 @@ class CustomScoringResult:
     query_databases: CustomQueryDatabases
     protein_hits: Mapping[str, Path]
     score_alignments: Mapping[str, Path]
+    protein_score_alignments: Mapping[str, Path]
+    protein_scores: Path
     ligand_scores: Path | None
     interface_scores: Path | None
 
@@ -747,10 +749,14 @@ def annotate_custom_cif_files(
                 "score them in separate calls"
             )
         entry_ids.add(entry_id)
-        if not entry.systems and not entry.interfaces:
+        protein_chains = [
+            chain
+            for chain in entry.chains.values()
+            if "polypeptide" in str(chain.chain_type_str).lower()
+        ]
+        if not protein_chains:
             raise ValueError(
-                f"custom mmCIF {source} produced no ligand systems or "
-                "protein interfaces to score"
+                f"custom mmCIF {source} produced no protein chains to score"
             )
         annotated[structure_id] = entry
 
@@ -1402,6 +1408,200 @@ def prepare_custom_score_alignments(
     return outputs
 
 
+def _release_positions_for_custom_hit(
+    row: Any,
+    *,
+    backend: str,
+) -> tuple[list[int], list[int], bytes]:
+    """Project PLINDER selected residues through a custom-chain alignment."""
+    qaln = str(row.qaln).upper()
+    taln = str(row.taln).upper()
+    alignment_length = min(len(qaln), len(taln))
+    qaln = qaln[:alignment_length]
+    taln = taln[:alignment_length]
+    if alignment_length == 0:
+        return [], [], b""
+
+    selected_numbers = _int_values(
+        row.target_selected_residue_numbers,
+        column="target_selected_residue_numbers",
+    )
+    selected_indices = _int_values(
+        row.target_selected_residue_indices,
+        column="target_selected_residue_indices",
+    )
+    if len(selected_numbers) != len(selected_indices):
+        raise ValueError(
+            "target selected-residue numbers and indices have different lengths "
+            f"for {row.target_entry} chain {row.target_chain_asym_id}"
+        )
+    if not selected_numbers:
+        return [], [], b""
+
+    target_start = int(row.tstart) - 1
+    target_alignment_positions = [
+        position for position, residue in enumerate(taln) if residue != "-"
+    ]
+    if backend == "mmseqs":
+        selected = [
+            (number - (target_start + 1), number) for number in selected_numbers
+        ]
+    else:
+        selected = [
+            (index - target_start, number)
+            for index, number in zip(
+                selected_indices,
+                selected_numbers,
+                strict=True,
+            )
+        ]
+
+    query_numbers: list[int] = []
+    custom_numbers: list[int] = []
+    residue_identity = bytearray()
+    for target_offset, target_number in sorted(selected):
+        if not 0 <= target_offset < len(target_alignment_positions):
+            continue
+        alignment_position = target_alignment_positions[target_offset]
+        if qaln[alignment_position] == "-":
+            continue
+        query_numbers.append(int(target_number))
+        custom_numbers.append(-1)
+        residue_identity.append(qaln[alignment_position] == taln[alignment_position])
+    return query_numbers, custom_numbers, bytes(residue_identity)
+
+
+def prepare_custom_protein_score_alignments(
+    protein_hits: Mapping[str, Path],
+    *,
+    entries_by_structure: Mapping[str, Any],
+    output_dir: Path,
+) -> dict[str, Path]:
+    """Write reverse compact alignments for PLINDER-to-custom protein scores."""
+    from plinder.data.annotations.get_similarity_scores import (
+        get_sequence_similarity_helper,
+    )
+
+    unsupported = sorted(set(protein_hits).difference(SEARCH_BACKENDS))
+    if unsupported:
+        raise ValueError(f"unsupported search backends: {unsupported}")
+    entry_id_by_structure = {
+        str(structure_id): str(entry.pdb_id)
+        for structure_id, entry in entries_by_structure.items()
+    }
+    if len(entry_id_by_structure) != len(set(entry_id_by_structure.values())):
+        raise ValueError("custom scoring entries must have distinct entry IDs")
+    output_dir = Path(output_dir)
+    output_dir.mkdir(exist_ok=True, parents=True)
+    outputs: dict[str, Path] = {}
+    required = {
+        "structure_id",
+        "query_chain_asym_id",
+        "target_entry",
+        "target_chain_asym_id",
+        "target_selected_residue_numbers",
+        "target_selected_residue_indices",
+        "tstart",
+        "qcov",
+        "tcov",
+        "fident",
+        "qaln",
+        "taln",
+    }
+    empty_columns = (
+        "query_entry",
+        "target_entry",
+        "query_chain_mapped",
+        "target_chain_mapped",
+        "source",
+    )
+    for backend, hit_path in protein_hits.items():
+        hits = pd.read_parquet(hit_path)
+        output = output_dir / f"{backend}.parquet"
+        if hits.empty:
+            pd.DataFrame(
+                {column: pd.Series(dtype="string") for column in empty_columns}
+            ).to_parquet(output, index=False)
+            outputs[backend] = output
+            continue
+        missing = sorted(required.difference(hits.columns))
+        if missing:
+            raise ValueError(f"{backend} custom hit table is missing columns {missing}")
+        unknown_structures = sorted(
+            set(hits["structure_id"].astype(str)).difference(entry_id_by_structure)
+        )
+        if unknown_structures:
+            raise ValueError(
+                f"{backend} hits reference unknown custom structures: "
+                f"{unknown_structures}"
+            )
+        custom_entry_ids = hits["structure_id"].astype(str).map(
+            entry_id_by_structure
+        )
+        hits = hits.loc[
+            hits["target_entry"].astype(str).to_numpy()
+            != custom_entry_ids.to_numpy()
+        ].copy()
+        if hits.empty:
+            pd.DataFrame(
+                {column: pd.Series(dtype="string") for column in empty_columns}
+            ).to_parquet(output, index=False)
+            outputs[backend] = output
+            continue
+
+        selected = [
+            _release_positions_for_custom_hit(row, backend=backend)
+            for row in hits.itertuples(index=False)
+        ]
+        custom_entries = hits["structure_id"].astype(str).map(entry_id_by_structure)
+        release_entries = hits["target_entry"].astype(str).copy()
+        custom_chains = hits["query_chain_asym_id"].astype(str).copy()
+        release_chains = hits["target_chain_asym_id"].astype(str).copy()
+        custom_coverage = hits["qcov"].copy()
+        hits["query_entry"] = release_entries
+        hits["target_entry"] = custom_entries
+        hits["query_chain_mapped"] = release_chains
+        hits["target_chain_mapped"] = custom_chains
+        hits["source"] = backend
+        hits["qcov"] = hits["tcov"]
+        hits["tcov"] = custom_coverage
+        hits["query_selected_residue_numbers"] = [value[0] for value in selected]
+        hits["target_selected_residue_numbers"] = [value[1] for value in selected]
+        hits["selected_residue_identity"] = [value[2] for value in selected]
+        hits["seqsim"] = [
+            get_sequence_similarity_helper(str(qaln).upper(), str(taln).upper())
+            for qaln, taln in zip(hits["qaln"], hits["taln"], strict=True)
+        ]
+        hits["fident_qcov"] = hits["fident"] * hits["qcov"]
+        hits["seqsim_qcov"] = hits["seqsim"] * hits["qcov"]
+        if backend == "foldseek":
+            if "lddt" not in hits:
+                raise ValueError("foldseek custom hit table is missing column lddt")
+            hits["lddt_qcov"] = hits["lddt"] * hits["qcov"]
+        hits = hits.drop(
+            columns=[
+                "qaln",
+                "taln",
+                "target_selected_residue_indices",
+            ],
+            errors="ignore",
+        )
+        leading = list(empty_columns)
+        hits = hits[leading + [column for column in hits if column not in leading]]
+        hits = hits.sort_values(
+            [
+                "query_entry",
+                "target_entry",
+                "query_chain_mapped",
+                "target_chain_mapped",
+            ],
+            ignore_index=True,
+        )
+        hits.to_parquet(output, index=False, compression="zstd")
+        outputs[backend] = output
+    return outputs
+
+
 def run_custom_protein_searches(
     *,
     query_databases: CustomQueryDatabases,
@@ -1483,6 +1683,14 @@ def _target_entry_ids(score_alignments: Mapping[str, Path]) -> set[str]:
         frame = pd.read_parquet(path, columns=["target_entry"])
         target_ids.update(frame["target_entry"].dropna().astype(str))
     return target_ids
+
+
+def _query_entry_ids(score_alignments: Mapping[str, Path]) -> set[str]:
+    query_ids: set[str] = set()
+    for path in score_alignments.values():
+        frame = pd.read_parquet(path, columns=["query_entry"])
+        query_ids.update(frame["query_entry"].dropna().astype(str))
+    return query_ids
 
 
 def _load_release_entry_views(
@@ -1596,6 +1804,75 @@ def _custom_ligand_sdf_resolver(
         return extracted
 
     return resolve
+
+
+def calculate_custom_protein_similarity_scores(
+    protein_score_alignments: Mapping[str, Path],
+    *,
+    assets: CustomScoringAssets,
+    work_dir: Path,
+    plinder_system_ids: Iterable[str] | None = None,
+    custom_chain_ids: Iterable[str] | None = None,
+    output_path: Path | None = None,
+) -> pd.DataFrame:
+    """Score PLINDER receptors and ligand pockets against custom protein chains."""
+    from plinder.core.utils.schemas import PROTEIN_SIMILARITY_SCHEMA
+    from plinder.data.annotations.get_similarity_scores import Scorer
+
+    entries = _load_release_entry_views(
+        assets,
+        pdb_ids=_query_entry_ids(protein_score_alignments),
+    )
+    work_dir = Path(work_dir)
+    work_dir.mkdir(exist_ok=True, parents=True)
+    scorer = Scorer(
+        entries=entries,
+        source_to_full_db_file={},
+        db_dir=work_dir,
+        scores_dir=work_dir,
+    )
+    selected_plinder_systems = (
+        set(map(str, plinder_system_ids)) if plinder_system_ids is not None else None
+    )
+    selected_custom_chains = (
+        set(map(str, custom_chain_ids)) if custom_chain_ids is not None else None
+    )
+    source_to_alignment = {
+        f"apo_{backend}": path
+        for backend, path in protein_score_alignments.items()
+    }
+    frames: list[pd.DataFrame] = []
+    for entry_id in sorted(entries):
+        frame = scorer.aggregate_scores(
+            entry_id,
+            search_db="apo",
+            source_to_aln_file=source_to_alignment,
+            query_system_ids=selected_plinder_systems,
+            target_system_ids=selected_custom_chains,
+        )
+        if frame is not None and not frame.empty:
+            frames.append(frame)
+    result = (
+        pd.concat(frames, ignore_index=True)
+        if frames
+        else pd.DataFrame(columns=PROTEIN_SIMILARITY_SCHEMA.names)
+    )
+    if not result.empty:
+        result = result.sort_values(
+            [
+                "similarity",
+                "query_system",
+                "query_ligand_id",
+                "target_system",
+            ],
+            ascending=[False, True, True, True],
+            ignore_index=True,
+        )
+    if output_path is not None:
+        output_path = Path(output_path)
+        output_path.parent.mkdir(exist_ok=True, parents=True)
+        result.to_parquet(output_path, index=False, compression="zstd")
+    return result
 
 
 def calculate_custom_similarity_scores(
@@ -1773,8 +2050,11 @@ def score_custom_cif_files(
     pocket match, and each required archive shard is read at most once.
 
     The returned object points to the written custom annotation tables,
-    backend hit tables, compact score alignments, and the final ligand and/or
-    interface score parquet files under ``work_dir``.
+    backend hit tables, compact score alignments, and the final protein,
+    ligand, and/or interface score parquet files under ``work_dir``. Protein
+    scores use each PLINDER ligand pocket as the directed query and each
+    custom protein chain as a ligand-free target, so ``include_ligands=False``
+    still yields protein metrics and ``pocket_fident``.
     """
     sources = tuple(Path(path) for path in cif_files)
     if not sources:
@@ -1833,6 +2113,18 @@ def score_custom_cif_files(
         entries_by_structure=annotations.entries_by_structure,
         output_dir=work_dir / "score_alignments",
     )
+    protein_score_alignments = prepare_custom_protein_score_alignments(
+        protein_hits,
+        entries_by_structure=annotations.entries_by_structure,
+        output_dir=work_dir / "protein_score_alignments",
+    )
+    protein_score_path = work_dir / "protein_scores.parquet"
+    calculate_custom_protein_similarity_scores(
+        protein_score_alignments,
+        assets=assets,
+        work_dir=work_dir / "protein_score_work",
+        output_path=protein_score_path,
+    )
     ligand_score_path = work_dir / "ligand_scores.parquet" if include_ligands else None
     if ligand_score_path is not None:
         calculate_custom_similarity_scores(
@@ -1861,6 +2153,8 @@ def score_custom_cif_files(
         query_databases=query_databases,
         protein_hits=protein_hits,
         score_alignments=score_alignments,
+        protein_score_alignments=protein_score_alignments,
+        protein_scores=protein_score_path,
         ligand_scores=ligand_score_path,
         interface_scores=interface_score_path,
     )

@@ -2191,6 +2191,30 @@ def test_entry_chain_table_includes_full_sequences(cif_8ufz):
     assert chain_rows.loc["E", "chain_sequence"]
 
 
+def test_entry_protein_only_mode_retains_chains_and_assemblies(cif_8ufz):
+    with pytest.raises(
+        ValueError,
+        match="entry ingest must include ligands, interfaces, or both",
+    ):
+        Entry.from_cif_file(
+            cif_8ufz,
+            include_ligands=False,
+            include_interfaces=False,
+        )
+
+    entry = Entry.from_cif_file(
+        cif_8ufz,
+        include_ligands=False,
+        include_interfaces=False,
+        protein_only=True,
+    )
+
+    assert entry.chains
+    assert entry.biounit_chain_ids
+    assert not entry.systems
+    assert not entry.interfaces
+
+
 def test_ligand_fix_to_valid_imatinib(cif_2hyy, mock_alternative_datasets):
     entry_dir = mock_alternative_datasets("2hyy")
     entry = Entry.from_cif_file(

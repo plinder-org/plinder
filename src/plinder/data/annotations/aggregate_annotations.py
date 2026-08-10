@@ -1319,6 +1319,7 @@ class Entry(DocBaseModel):
         include_ligands: bool = True,
         include_interfaces: bool = True,
         assembly_ids: ty.Iterable[str] | None = None,
+        protein_only: bool = False,
     ) -> Entry:
         """
         Load an entry object from mmCIF files in the pipeline
@@ -1361,13 +1362,16 @@ class Entry(DocBaseModel):
         assembly_ids : Iterable[str] | None
             Optional subset of deposited biological assemblies. By default all
             assemblies listed by the mmCIF are processed.
+        protein_only : bool
+            Permit chain and assembly extraction without ligand or interface
+            annotation. Used by receptor-only custom scoring.
 
         Returns
         -------
         Entry
             Entry object for the given pdbid
         """
-        if not include_ligands and not include_interfaces:
+        if not include_ligands and not include_interfaces and not protein_only:
             raise ValueError("entry ingest must include ligands, interfaces, or both")
 
         cif_file = Path(cif_file)
@@ -1511,7 +1515,7 @@ class Entry(DocBaseModel):
             )
         if include_interfaces:
             spatial_radii.append(interface_contact_radius)
-        max_spatial_radius = max(spatial_radii)
+        max_spatial_radius = max(spatial_radii) if spatial_radii else None
 
         selected_assemblies = _selected_assembly_ids(
             pdbx.list_assemblies(cif_file_obj), assembly_ids
@@ -1531,9 +1535,10 @@ class Entry(DocBaseModel):
                     biounit.chain_id, biounit.legacy_chain_id
                 )
             }
-            spatial_index = BiounitSpatialIndex.from_atoms(
-                biounit,
-                max_spatial_radius,
+            spatial_index = (
+                BiounitSpatialIndex.from_atoms(biounit, max_spatial_radius)
+                if max_spatial_radius is not None
+                else None
             )
             if include_interfaces:
                 entry.interfaces.extend(
@@ -1793,8 +1798,6 @@ class Entry(DocBaseModel):
                 f"invalid structure_mode {structure_mode!r}; "
                 f"expected one of {CUSTOM_STRUCTURE_MODES}"
             )
-        if not include_ligands and not include_interfaces:
-            raise ValueError("custom ingest must include ligands, interfaces, or both")
         if not include_ligands and (
             ligand_smiles_dict is not None or ligand_ccd_code_dict is not None
         ):
@@ -1861,6 +1864,7 @@ class Entry(DocBaseModel):
                 include_ligands=include_ligands,
                 include_interfaces=include_interfaces,
                 assembly_ids=requested_assemblies,
+                protein_only=not include_ligands and not include_interfaces,
             )
             if not entry.biounit_chain_ids:
                 raise ValueError(
@@ -1950,7 +1954,7 @@ class Entry(DocBaseModel):
             cif_file_obj, model=1, use_author_fields=False, include_bonds=True
         )
         atoms = atoms[~is_hydrogen_isotope(atoms.element)]
-        if atoms.bonds is None:
+        if atoms.bonds is None and include_ligands:
             # ``include_bonds=True`` returning ``None`` means biotite
             # derived **no bonds at all** for the structure — every
             # residue lookup failed. This is a fundamentally broken or
@@ -1991,7 +1995,11 @@ class Entry(DocBaseModel):
             )
         if include_interfaces:
             spatial_radii.append(interface_contact_radius)
-        spatial_index = BiounitSpatialIndex.from_atoms(biounit, max(spatial_radii))
+        spatial_index = (
+            BiounitSpatialIndex.from_atoms(biounit, max(spatial_radii))
+            if spatial_radii
+            else None
+        )
         if include_interfaces:
             entry.interfaces.extend(
                 detect_protein_interfaces(

@@ -39,13 +39,13 @@ class ChainView:
     @property
     def receptor_type(self) -> str:
         """Receptor polymer category derived from the CIF chain type."""
-        normalized = self.chain_type.lower()
+        chain_type = self.chain_type.lower()
         components = []
-        if "polypeptide" in normalized:
+        if "polypeptide" in chain_type:
             components.append("protein")
-        if "polydeoxyribonucleotide" in normalized:
+        if "polydeoxyribonucleotide" in chain_type:
             components.append("dna")
-        if "polyribonucleotide" in normalized:
+        if "polyribonucleotide" in chain_type:
             components.append("rna")
         return "+".join(components) or "other"
 
@@ -443,6 +443,11 @@ def entry_views_from_df(
         dict.fromkeys(
             [str(value) for value in df.get("entry_pdb_id", [])]
             + [str(value) for value in interface_annotations.get("entry_pdb_id", [])]
+            + (
+                [str(value) for value in entry_chains.get("entry_pdb_id", [])]
+                if entry_chains is not None
+                else []
+            )
         )
     )
     views: dict[str, EntryView] = {}

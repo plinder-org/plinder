@@ -836,6 +836,31 @@ def test_entry_views_support_interface_only_entries() -> None:
     }
 
 
+def test_entry_views_support_protein_chain_only_entries() -> None:
+    chains = pd.DataFrame(
+        {
+            "entry_pdb_id": ["model"],
+            "chain_asym_id": ["A"],
+            "chain_auth_id": ["X"],
+            "chain_entity_id": ["1"],
+            "chain_type": ["polypeptide(L)"],
+            "chain_length": [100],
+            "chain_is_holo": [True],
+            "chain_uniprot_ids": [[]],
+        }
+    )
+
+    entry = entry_views_from_df(
+        pd.DataFrame(columns=["entry_pdb_id"]),
+        entry_chains=chains,
+    )["model"]
+
+    assert not entry.systems
+    assert not entry.interfaces
+    assert set(entry.chains) == {"A"}
+    assert entry.chains["A"].length == 100
+
+
 def test_reconstruct_interface_scores_from_release_shard(tmp_path: Path) -> None:
     index = tmp_path / "index"
     index.mkdir()
