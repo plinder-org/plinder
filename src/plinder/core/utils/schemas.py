@@ -44,7 +44,7 @@ def mapped_alignment_schema(*, alignment_type: str) -> pa.Schema:
 def mapped_alignment_schema_is_current(
     columns: set[str], *, alignment_type: str
 ) -> bool:
-    """Return whether a mapped alignment has the compact V3 schema."""
+    """Return whether a mapped alignment has the current compact schema."""
     required = MAPPED_ALIGNMENT_REQUIRED_COLUMNS
     if alignment_type == "foldseek":
         required = required | {"lddt"}
@@ -301,17 +301,23 @@ SPLIT_DATASET_SCHEMA = pa.schema(
 )
 
 
-# subject to criteria used in save_linked_structures.py
-# TODO: this schema is now out of date since addition of
-#       scores.json contents but it now contains >50 columns
 STRUCTURE_LINK_SCHEMA = pa.schema(
     [
-        ("query_system", pa.string()),
-        ("target_system", pa.string()),
-        ("protein_qcov_weighted_sum", pa.float32()),
-        ("protein_fident_weighted_sum", pa.float32()),
-        ("pocket_fident", pa.float32()),
-        ("target_id", pa.string()),
-        ("sort_score", pa.float32()),
+        ("reference_system_id", pa.string()),
+        ("linked_structure_id", pa.string()),
+        ("source_entry_id", pa.string()),
+        ("source_chain_asym_id", pa.string()),
+        ("source_chain_auth_id", pa.string()),
+        ("source_biounit_id", pa.string()),
+        ("source_chain_instance", pa.string()),
+        ("source_num_ligand_chains", pa.int16()),
+        ("source_resolution", pa.float32()),
+        ("rank", pa.int16()),
+        ("num_ligand_pockets", pa.int16()),
+        ("min_pocket_fident", pa.int8()),
+        ("mean_pocket_fident", pa.float32()),
+        ("min_protein_fident_weighted_sum", pa.int8()),
+        ("min_protein_fident_qcov_weighted_sum", pa.int8()),
+        ("min_protein_lddt_weighted_sum", pa.int8()),
     ]
 )
