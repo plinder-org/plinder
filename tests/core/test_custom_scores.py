@@ -1009,6 +1009,7 @@ def test_calculate_custom_protein_scores_uses_plinder_pocket(
         {"foldseek": alignment},
         assets=_custom_assets(tmp_path),
         work_dir=tmp_path / "protein_score_work",
+        custom_chain_ids={"model_A"},
     )
 
     pocket = scores.loc[scores["metric"].astype(str) == "pocket_fident"]
@@ -1018,6 +1019,76 @@ def test_calculate_custom_protein_scores_uses_plinder_pocket(
     assert pocket.iloc[0]["query_ligand_id"] == "1abc__1__1.Z"
     assert pocket.iloc[0]["target_system"] == "model_A"
     assert pd.isna(pocket.iloc[0]["target_ligand_id"])
+
+
+def test_calculate_custom_protein_scores_reads_alignments_once(
+    tmp_path, monkeypatch
+):
+    from plinder.data.annotations import get_similarity_scores
+
+    release_entries = {
+        pdb_id: _scoring_entry(
+            pdb_id=pdb_id,
+            chain_id="B",
+            ligand_id=f"{pdb_id}__1__1.Z",
+            ligand_chain="Z",
+            pocket_number=20,
+        )
+        for pdb_id in ["1abc", "2def"]
+    }
+    monkeypatch.setattr(
+        custom,
+        "_load_release_entry_views",
+        lambda _assets, *, pdb_ids: {
+            pdb_id: release_entries[pdb_id] for pdb_id in pdb_ids
+        },
+    )
+    alignment = tmp_path / "reverse_foldseek.parquet"
+    pd.DataFrame(
+        [
+            {
+                "query_entry": pdb_id,
+                "target_entry": "model_with_underscore",
+                "query_chain_mapped": "B",
+                "target_chain_mapped": "A",
+                "source": "foldseek",
+                "qcov": 1.0,
+                "fident": 1.0,
+                "seqsim": 1.0,
+                "lddt": 0.9,
+                "query_selected_residue_numbers": [20],
+                "target_selected_residue_numbers": [-1],
+                "selected_residue_identity": b"\x01",
+            }
+            for pdb_id in release_entries
+        ]
+    ).to_parquet(alignment, index=False)
+    original_load = get_similarity_scores.Scorer.load_alignments
+    load_calls = []
+
+    def counted_load(self, *args, **kwargs):
+        load_calls.append((args, kwargs))
+        return original_load(self, *args, **kwargs)
+
+    monkeypatch.setattr(
+        get_similarity_scores.Scorer,
+        "load_alignments",
+        counted_load,
+    )
+
+    scores = custom.calculate_custom_protein_similarity_scores(
+        {"foldseek": alignment},
+        assets=_custom_assets(tmp_path),
+        work_dir=tmp_path / "protein_score_work",
+        custom_chain_ids={"model_with_underscore_A"},
+    )
+
+    assert len(load_calls) == 1
+    assert set(scores["query_system"]) == {
+        "1abc__1__1.B__1.Z",
+        "2def__1__1.B__1.Z",
+    }
+    assert set(scores["target_system"]) == {"model_with_underscore_A"}
 
 
 def test_calculate_custom_interface_scores_uses_compact_maps(

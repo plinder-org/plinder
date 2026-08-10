@@ -1841,12 +1841,28 @@ def calculate_custom_protein_similarity_scores(
         f"apo_{backend}": path
         for backend, path in protein_score_alignments.items()
     }
+    alignments = scorer.load_alignments(
+        source_to_aln_file=source_to_alignment,
+        search_db="apo",
+    )
+    alignments_by_query_entry = (
+        {
+            str(entry_id): group.droplevel("query_entry")
+            for entry_id, group in alignments.groupby(level="query_entry", sort=False)
+        }
+        if not alignments.empty
+        else {}
+    )
     frames: list[pd.DataFrame] = []
     for entry_id in sorted(entries):
+        query_entry_alignments = alignments_by_query_entry.get(entry_id)
+        if query_entry_alignments is None:
+            continue
         frame = scorer.aggregate_scores(
             entry_id,
             search_db="apo",
             source_to_aln_file=source_to_alignment,
+            query_entry_alignments=query_entry_alignments,
             query_system_ids=selected_plinder_systems,
             target_system_ids=selected_custom_chains,
         )

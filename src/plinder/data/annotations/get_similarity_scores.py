@@ -3293,6 +3293,7 @@ class Scorer:
         search_db: str = "holo",
         data_dir: Path | None = None,
         source_to_aln_file: dict[str, Path] | None = None,
+        query_entry_alignments: pd.DataFrame | None = None,
         query_system_ids: set[str] | None = None,
         query_ligand_ids: set[str] | None = None,
         target_system_ids: set[str] | None = None,
@@ -3307,20 +3308,29 @@ class Scorer:
                 / f"{pdb_id}.parquet"
                 for aln_type in ["foldseek", "mmseqs"]
             }
-        target_entry_ids = None
-        if target_system_ids is not None:
-            target_entry_ids = {
-                system_id.split("__", maxsplit=1)[0] for system_id in target_system_ids
-            }
-        alignments = self.load_alignments(
-            search_db=search_db,
-            source_to_aln_file=source_to_aln_file,
-            query_entry_ids={pdb_id},
-            target_entry_ids=target_entry_ids,
-        )
-        if alignments.empty:
-            return None
-        query_entry_alignments = alignments.loc[pdb_id]
+        if query_entry_alignments is None:
+            target_entry_ids = None
+            if target_system_ids is not None:
+                target_entry_ids = {
+                    (
+                        system_id.rsplit("_", maxsplit=1)[0]
+                        if search_db in {"apo", "pred"}
+                        else system_id.split("__", maxsplit=1)[0]
+                    )
+                    for system_id in target_system_ids
+                }
+            alignments = self.load_alignments(
+                search_db=search_db,
+                source_to_aln_file=source_to_aln_file,
+                query_entry_ids={pdb_id},
+                target_entry_ids=target_entry_ids,
+            )
+            if alignments.empty:
+                return None
+            try:
+                query_entry_alignments = alignments.loc[pdb_id]
+            except KeyError:
+                return None
         column_mapr = self.get_column_mapr()
         pdb_vals = []
         for system in self.entries[pdb_id].systems.values():
