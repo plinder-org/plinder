@@ -12,6 +12,7 @@ from functools import cache
 from pathlib import Path
 from time import perf_counter
 from typing import Any, Callable, Optional, Sequence, cast
+from uuid import uuid4
 
 import biotite.sequence.align as align
 import numpy as np
@@ -56,6 +57,28 @@ ECFP4_PARQUET_METADATA = {
 }
 
 _NON_CANONICAL_AA = str.maketrans({"J": "L", "U": "C", "O": "K"})
+
+
+def _atomic_copy_file(source: Path, target: Path) -> None:
+    """Install a file atomically without sharing a writer staging path."""
+    target.parent.mkdir(exist_ok=True, parents=True)
+    staging = target.with_name(f".{target.name}.{uuid4().hex}.tmp")
+    try:
+        shutil.copyfile(source, staging)
+        staging.replace(target)
+    finally:
+        staging.unlink(missing_ok=True)
+
+
+def _atomic_write_parquet(table: pa.Table, target: Path) -> None:
+    """Write a Parquet table atomically with a writer-private staging path."""
+    target.parent.mkdir(exist_ok=True, parents=True)
+    staging = target.with_name(f".{target.name}.{uuid4().hex}.tmp")
+    try:
+        pq.write_table(table, staging)
+        staging.replace(target)
+    finally:
+        staging.unlink(missing_ok=True)
 
 
 def _finite_float_or_zero(value: Any) -> float:
@@ -1584,11 +1607,17 @@ class Scorer:
                 sub_db,
                 aln_type,
             )
+            aln_dir = self.db_dir / f"{search_db}_{aln_type}" / "aln"
+            aln_dir.mkdir(exist_ok=True, parents=True)
             if not db_ids or len(missing_query_ids) == len(db_ids):
                 LOG.warning(
                     f"no {aln_type} query chains are available for "
-                    f"{len(entry_ids)} entries"
+                    f"{len(entry_ids)} entries; writing empty search results"
                 )
+                empty = pa.Table.from_pylist([], schema=_raw_alignment_schema(aln_type))
+                for pdb_id in entry_ids:
+                    target = aln_dir / f"{pdb_id}.parquet"
+                    _atomic_write_parquet(empty, target)
                 continue
             tmp_dir = sub_db / f"tmp_{search_db}_{aln_type}"
             tmp_dir.mkdir(exist_ok=True, parents=True)
@@ -1628,8 +1657,6 @@ class Scorer:
                 LOG.error(f"scoring: Error for {search_db}_{aln_type}: {e}")
                 failures.append(f"{search_db}_{aln_type}: {e}")
                 continue
-            aln_dir = self.db_dir / f"{search_db}_{aln_type}" / "aln"
-            aln_dir.mkdir(exist_ok=True, parents=True)
             for pdb_id in tqdm(entry_ids):
                 pdb_id_file = (
                     aln_file.with_suffix(".parquet") / f"query_pdb_id={pdb_id}"
@@ -1656,9 +1683,7 @@ class Scorer:
                         ),
                         local_output,
                     )
-                install_path = target.with_suffix(target.suffix + ".tmp")
-                shutil.copyfile(local_output, install_path)
-                install_path.replace(target)
+                _atomic_copy_file(local_output, target)
                 local_output.unlink(missing_ok=True)
         if failures:
             raise RuntimeError("alignment searches failed: " + "; ".join(failures))
@@ -1737,9 +1762,7 @@ class Scorer:
                     f"{search_db}-{aln_type}-{pdb_id}.mapped.parquet"
                 )
                 mapped.to_parquet(temporary, index=True)
-                install_path = mapped_file.with_suffix(mapped_file.suffix + ".tmp")
-                shutil.copyfile(temporary, install_path)
-                install_path.replace(mapped_file)
+                _atomic_copy_file(temporary, mapped_file)
                 temporary.unlink(missing_ok=True)
                 mapped_files.append(mapped_file)
                 failure_file.unlink(missing_ok=True)
@@ -1761,6 +1784,7 @@ class Scorer:
         scratch_dir: Path | None = None,
         source_to_aln_file: dict[str, Path] | None = None,
         defer_ligand_3d: bool = False,
+        query_entry_alignments: pd.DataFrame | None = None,
     ) -> Path:
         """
         Convert aligmnent results to mapped alignment results. Then
@@ -1812,26 +1836,31 @@ class Scorer:
             )
         else:
             entries_to_load = {pdb_id}
-            for aln_type in ["foldseek", "mmseqs"]:
-                source = f"{search_db}_{aln_type}"
-                mapped_file = (
-                    source_to_aln_file[source]
-                    if source_to_aln_file is not None and source in source_to_aln_file
-                    else self.db_dir / source / "mapped_aln" / f"{pdb_id}.parquet"
-                )
-                if mapped_file.is_file():
-                    target_entries = pd.read_parquet(
-                        mapped_file,
-                        columns=["target_entry"],
-                        filters=[("query_entry", "==", pdb_id)],
+            if search_db == "holo":
+                for aln_type in ["foldseek", "mmseqs"]:
+                    source = f"{search_db}_{aln_type}"
+                    mapped_file = (
+                        source_to_aln_file[source]
+                        if source_to_aln_file is not None
+                        and source in source_to_aln_file
+                        else self.db_dir
+                        / source
+                        / "mapped_aln"
+                        / f"{pdb_id}.parquet"
                     )
-                    if "target_entry" in target_entries.columns:
-                        target_values = target_entries["target_entry"]
-                    else:
-                        target_values = pd.Series(
-                            target_entries.index.get_level_values("target_entry")
+                    if mapped_file.is_file():
+                        target_entries = pd.read_parquet(
+                            mapped_file,
+                            columns=["target_entry"],
+                            filters=[("query_entry", "==", pdb_id)],
                         )
-                    entries_to_load.update(target_values.dropna().astype(str))
+                        if "target_entry" in target_entries.columns:
+                            target_values = target_entries["target_entry"]
+                        else:
+                            target_values = pd.Series(
+                                target_entries.index.get_level_values("target_entry")
+                            )
+                        entries_to_load.update(target_values.dropna().astype(str))
             entries_to_load.difference_update(self.entries)
             if entries_to_load:
                 LOG.info(
@@ -1858,6 +1887,7 @@ class Scorer:
                 search_db=search_db,
                 data_dir=None if defer_ligand_3d else data_dir,
                 source_to_aln_file=source_to_aln_file,
+                query_entry_alignments=query_entry_alignments,
                 ligand_3d_candidates=ligand_3d_candidates,
             )
             if df is None or df.empty:
@@ -1892,14 +1922,8 @@ class Scorer:
                     compression="zstd",
                 )
                 candidate_path.parent.mkdir(exist_ok=True, parents=True)
-                candidate_install = candidate_path.with_suffix(
-                    candidate_path.suffix + ".tmp"
-                )
-                shutil.copyfile(candidate_temporary, candidate_install)
-                candidate_install.replace(candidate_path)
-            install_path = score_df_path.with_suffix(score_df_path.suffix + ".tmp")
-            shutil.copyfile(temporary, install_path)
-            install_path.replace(score_df_path)
+                _atomic_copy_file(candidate_temporary, candidate_path)
+            _atomic_copy_file(temporary, score_df_path)
             temporary.unlink(missing_ok=True)
             candidate_temporary.unlink(missing_ok=True)
             if ligand_3d_candidates is None:
@@ -2078,14 +2102,8 @@ class Scorer:
             index=False,
             schema=schemas.LIGAND_3D_CANDIDATE_SCHEMA,
         )
-        score_install = score_path.with_suffix(score_path.suffix + ".tmp")
-        candidate_install = candidate_path.with_suffix(candidate_path.suffix + ".tmp")
-        score_path.parent.mkdir(exist_ok=True, parents=True)
-        candidate_path.parent.mkdir(exist_ok=True, parents=True)
-        shutil.copyfile(score_temporary, score_install)
-        shutil.copyfile(candidate_temporary, candidate_install)
-        candidate_install.replace(candidate_path)
-        score_install.replace(score_path)
+        _atomic_copy_file(candidate_temporary, candidate_path)
+        _atomic_copy_file(score_temporary, score_path)
         score_temporary.unlink(missing_ok=True)
         candidate_temporary.unlink(missing_ok=True)
         return score_path
@@ -3346,6 +3364,8 @@ class Scorer:
                 query_entry_alignments = alignments.loc[pdb_id]
             except KeyError:
                 return None
+        if query_entry_alignments.empty:
+            return None
         column_mapr = self.get_column_mapr()
         pdb_vals = []
         for system in self.entries[pdb_id].systems.values():
@@ -3458,11 +3478,6 @@ class Scorer:
                     if (
                         target_system_ids is not None
                         and target_system_id not in target_system_ids
-                    ):
-                        continue
-                    if (
-                        target_entry in self.entries
-                        and t_chain in self.entries[target_entry].chains
                     ):
                         continue
                     q_t_scores: dict[str, float] = {}

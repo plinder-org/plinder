@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 
@@ -88,6 +89,27 @@ def test_sequence_similarity_uses_cached_blosum_lookup(
 
 def test_sequence_similarity_helper_returns_zero_for_incompatible_alignment() -> None:
     assert scoring_module.get_sequence_similarity_helper("ACD", "AC") == 0
+
+
+def test_atomic_copy_file_allows_concurrent_writers(tmp_path: Path) -> None:
+    sources = [tmp_path / "first", tmp_path / "second"]
+    sources[0].write_bytes(b"first")
+    sources[1].write_bytes(b"second")
+    target = tmp_path / "score.parquet"
+    old_shared_staging = tmp_path / "score.parquet.tmp"
+    old_shared_staging.write_bytes(b"unrelated")
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [
+            executor.submit(scoring_module._atomic_copy_file, source, target)
+            for source in sources
+        ]
+        for future in futures:
+            future.result()
+
+    assert target.read_bytes() in {b"first", b"second"}
+    assert old_shared_staging.read_bytes() == b"unrelated"
+    assert not list(tmp_path.glob(".score.parquet.*.tmp"))
 
 
 def test_protein_pair_scores_choose_best_duplicate_backend_hit(tmp_path: Path) -> None:
@@ -347,6 +369,46 @@ def test_no_hit_search_writes_typed_empty_raw_and_mapped_checkpoints(
         "selected_residue_identity",
     } <= set(mapped.columns)
     assert {"evalue", "bits", "tcov"}.isdisjoint(mapped.columns)
+
+
+def test_unavailable_query_backend_writes_typed_empty_checkpoint(
+    tmp_path, monkeypatch
+) -> None:
+    scorer = Scorer(
+        entries={"1abc": object()},
+        source_to_full_db_file={"holo_foldseek": tmp_path / "full"},
+        db_dir=tmp_path / "dbs" / "subdbs",
+        scores_dir=tmp_path / "scores",
+    )
+    monkeypatch.setattr(
+        scoring_module.databases,
+        "get_db_ids",
+        lambda *_args, **_kwargs: {"pdb_00001abc_xyz-enrich_A"},
+    )
+    monkeypatch.setattr(
+        scoring_module.databases,
+        "make_sub_db",
+        lambda db_ids, *_args, **_kwargs: db_ids,
+    )
+    monkeypatch.setattr(
+        scoring_module,
+        "run_alignment",
+        lambda **_kwargs: pytest.fail("an unavailable backend must not be searched"),
+    )
+
+    scorer.run_alignments(
+        entry_ids=["1abc"],
+        search_db="apo",
+        output_folder=tmp_path / "work",
+        alignment_types=["foldseek"],
+    )
+
+    raw = scorer.db_dir / "apo_foldseek" / "aln" / "1abc.parquet"
+    assert raw.is_file()
+    assert pd.read_parquet(raw).empty
+    assert pq.read_schema(raw).equals(
+        scoring_module._raw_alignment_schema("foldseek")
+    )
 
 
 def test_alignment_mapping_preserves_author_chain_ids_with_underscores(
@@ -2795,6 +2857,14 @@ def test_apo_pred_scores_are_emitted_per_query_ligand(tmp_path, monkeypatch) -> 
         db_dir=tmp_path / "db",
         scores_dir=tmp_path / "scores",
     )
+    target_system = replace(
+        query_system,
+        id="model_a_system",
+        pdb_id="model_a",
+        protein_chains_asym_id=["0.X"],
+        ligands={},
+    )
+    scorer.entries["model_a"] = _entry("model_a", target_system)
     alignments = pd.DataFrame(
         index=pd.MultiIndex.from_tuples(
             [("model_a", "A", "X"), ("model_b", "B", "Y")],
