@@ -721,10 +721,10 @@ def test_prepare_custom_score_alignments_maps_selected_residues(
 
 
 @pytest.mark.parametrize(
-    ("backend", "target_numbers", "target_indices"),
+    ("backend", "target_numbers", "target_indices", "custom_number"),
     [
-        ("foldseek", [20], [1]),
-        ("mmseqs", [2], [1]),
+        ("foldseek", [20], [1], 200),
+        ("mmseqs", [2], [1], 2),
     ],
 )
 def test_prepare_custom_protein_score_alignments_reverses_direction(
@@ -732,6 +732,7 @@ def test_prepare_custom_protein_score_alignments_reverses_direction(
     backend,
     target_numbers,
     target_indices,
+    custom_number,
 ):
     query_entry = EntryView(
         pdb_id="model",
@@ -743,6 +744,8 @@ def test_prepare_custom_protein_score_alignments_reverses_direction(
     row = {
         "structure_id": "model",
         "query_chain_asym_id": "A",
+        "query_sequence_source": "polymer",
+        "query_resolved_residue_numbers": [100, 200],
         "target_entry": "1abc",
         "target_chain_asym_id": "B",
         "target_selected_residue_numbers": target_numbers,
@@ -775,7 +778,9 @@ def test_prepare_custom_protein_score_alignments_reverses_direction(
     assert result.loc[0, "query_selected_residue_numbers"].tolist() == [
         target_numbers[0]
     ]
-    assert result.loc[0, "target_selected_residue_numbers"].tolist() == [-1]
+    assert result.loc[0, "target_selected_residue_numbers"].tolist() == [
+        custom_number
+    ]
     assert result.loc[0, "selected_residue_identity"] == b"\x01"
     assert result.loc[0, "fident_qcov"] == pytest.approx(0.75)
 
@@ -1089,6 +1094,71 @@ def test_calculate_custom_protein_scores_reads_alignments_once(
         "2def__1__1.B__1.Z",
     }
     assert set(scores["target_system"]) == {"model_with_underscore_A"}
+
+
+def test_write_custom_aligned_pocket_residues(tmp_path, monkeypatch):
+    plinder_entry = _scoring_entry(
+        pdb_id="1abc",
+        chain_id="B",
+        ligand_id="1abc__1__1.Z",
+        ligand_chain="Z",
+        pocket_number=20,
+    )
+    monkeypatch.setattr(
+        custom,
+        "_load_release_entry_views",
+        lambda _assets, *, pdb_ids: {"1abc": plinder_entry},
+    )
+    alignment = tmp_path / "reverse_foldseek.parquet"
+    pd.DataFrame(
+        [
+            {
+                "query_entry": "1abc",
+                "target_entry": "model_with_underscore",
+                "query_chain_mapped": "B",
+                "target_chain_mapped": "A",
+                "source": "foldseek",
+                "query_selected_residue_numbers": [20],
+                "target_selected_residue_numbers": [42],
+                "selected_residue_identity": b"\x01",
+            }
+        ]
+    ).to_parquet(alignment, index=False)
+    protein_scores = tmp_path / "protein_scores.parquet"
+    pd.DataFrame(
+        [
+            {
+                "query_system": "1abc__1__1.B__1.Z",
+                "query_ligand_id": "1abc__1__1.Z",
+                "target_system": "model_with_underscore_A",
+                "metric": "pocket_fident",
+            }
+        ]
+    ).to_parquet(protein_scores, index=False)
+
+    output = custom.write_custom_aligned_pocket_residues(
+        {"foldseek": alignment},
+        protein_scores=protein_scores,
+        assets=_custom_assets(tmp_path),
+        output_path=tmp_path / "aligned_pocket_residues.parquet",
+    )
+    result = pd.read_parquet(output)
+
+    assert result.to_dict("records") == [
+        {
+            "plinder_system_id": "1abc__1__1.B__1.Z",
+            "plinder_ligand_id": "1abc__1__1.Z",
+            "plinder_entry_id": "1abc",
+            "plinder_chain_instance": "1.B",
+            "plinder_chain_asym_id": "B",
+            "plinder_residue_number": 20,
+            "custom_structure_id": "model_with_underscore",
+            "custom_chain_asym_id": "A",
+            "custom_residue_number": 42,
+            "residue_identical": True,
+            "source": "foldseek",
+        }
+    ]
 
 
 def test_calculate_custom_interface_scores_uses_compact_maps(

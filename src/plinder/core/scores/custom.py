@@ -118,6 +118,7 @@ class CustomScoringResult:
     score_alignments: Mapping[str, Path]
     protein_score_alignments: Mapping[str, Path]
     protein_scores: Path
+    aligned_pocket_residues: Path | None
     ligand_scores: Path | None
     interface_scores: Path | None
 
@@ -1439,6 +1440,14 @@ def _release_positions_for_custom_hit(
         return [], [], b""
 
     target_start = int(row.tstart) - 1
+    query_start = int(row.qstart) - 1
+    query_alignment_positions = [
+        position for position, residue in enumerate(qaln) if residue != "-"
+    ]
+    resolved_numbers = _int_values(
+        row.query_resolved_residue_numbers,
+        column="query_resolved_residue_numbers",
+    )
     target_alignment_positions = [
         position for position, residue in enumerate(taln) if residue != "-"
     ]
@@ -1465,8 +1474,25 @@ def _release_positions_for_custom_hit(
         alignment_position = target_alignment_positions[target_offset]
         if qaln[alignment_position] == "-":
             continue
+        query_index = query_start + bisect_left(
+            query_alignment_positions, alignment_position
+        )
+        if backend == "foldseek" or str(row.query_sequence_source) == "coordinates":
+            custom_number = (
+                resolved_numbers[query_index]
+                if 0 <= query_index < len(resolved_numbers)
+                else None
+            )
+        elif str(row.query_sequence_source) == "polymer":
+            custom_number = query_index + 1
+        else:
+            raise ValueError(
+                "unknown query sequence source for "
+                f"{row.structure_id} chain {row.query_chain_asym_id}: "
+                f"{row.query_sequence_source!r}"
+            )
         query_numbers.append(int(target_number))
-        custom_numbers.append(-1)
+        custom_numbers.append(int(custom_number) if custom_number is not None else -1)
         residue_identity.append(qaln[alignment_position] == taln[alignment_position])
     return query_numbers, custom_numbers, bytes(residue_identity)
 
@@ -1497,10 +1523,13 @@ def prepare_custom_protein_score_alignments(
     required = {
         "structure_id",
         "query_chain_asym_id",
+        "query_sequence_source",
+        "query_resolved_residue_numbers",
         "target_entry",
         "target_chain_asym_id",
         "target_selected_residue_numbers",
         "target_selected_residue_indices",
+        "qstart",
         "tstart",
         "qcov",
         "tcov",
@@ -1891,6 +1920,145 @@ def calculate_custom_protein_similarity_scores(
     return result
 
 
+def write_custom_aligned_pocket_residues(
+    protein_score_alignments: Mapping[str, Path],
+    *,
+    protein_scores: Path,
+    assets: CustomScoringAssets,
+    output_path: Path,
+) -> Path:
+    """Write residue pairs supporting custom-chain pocket identity scores."""
+    columns = [
+        "plinder_system_id",
+        "plinder_ligand_id",
+        "plinder_entry_id",
+        "plinder_chain_instance",
+        "plinder_chain_asym_id",
+        "plinder_residue_number",
+        "custom_structure_id",
+        "custom_chain_asym_id",
+        "custom_residue_number",
+        "residue_identical",
+        "source",
+    ]
+    scores = pd.read_parquet(
+        protein_scores,
+        columns=[
+            "query_system",
+            "query_ligand_id",
+            "target_system",
+            "metric",
+        ],
+    )
+    pocket_scores = scores.loc[
+        scores["metric"].astype(str).eq("pocket_fident"),
+        ["query_system", "query_ligand_id", "target_system"],
+    ].drop_duplicates()
+    accepted = set(pocket_scores.itertuples(index=False, name=None))
+    if not accepted:
+        result = pd.DataFrame(columns=columns)
+    else:
+        entries = _load_release_entry_views(
+            assets,
+            pdb_ids=_query_entry_ids(protein_score_alignments),
+        )
+        pocket_membership: dict[
+            tuple[str, str, int], list[tuple[str, str, str]]
+        ] = {}
+        for entry_id, entry in entries.items():
+            for system in entry.systems.values():
+                for ligand in system.ligands.values():
+                    if not ligand.is_proper:
+                        continue
+                    for instance_chain, number_to_index in (
+                        ligand.pocket_residue_number_to_index.items()
+                    ):
+                        asym_id = instance_chain.split(".", maxsplit=1)[-1]
+                        for residue_number in number_to_index:
+                            pocket_membership.setdefault(
+                                (str(entry_id), asym_id, int(residue_number)), []
+                            ).append(
+                                (str(system.id), str(ligand.id), str(instance_chain))
+                            )
+
+        rows: list[dict[str, Any]] = []
+        for backend, alignment_path in protein_score_alignments.items():
+            alignments = pd.read_parquet(alignment_path)
+            for row in alignments.itertuples(index=False):
+                release_entry = str(row.query_entry)
+                release_chain = str(row.query_chain_mapped)
+                custom_entry = str(row.target_entry)
+                custom_chain = str(row.target_chain_mapped)
+                target_system = f"{custom_entry}_{custom_chain}"
+                release_numbers = _int_values(
+                    row.query_selected_residue_numbers,
+                    column="query_selected_residue_numbers",
+                )
+                custom_numbers = _int_values(
+                    row.target_selected_residue_numbers,
+                    column="target_selected_residue_numbers",
+                )
+                identities = bytes(row.selected_residue_identity)
+                if not (
+                    len(release_numbers) == len(custom_numbers) == len(identities)
+                ):
+                    raise ValueError(
+                        "custom pocket residue alignment columns have different "
+                        f"lengths for {release_entry} chain {release_chain}"
+                    )
+                for release_number, custom_number, identical in zip(
+                    release_numbers,
+                    custom_numbers,
+                    identities,
+                    strict=True,
+                ):
+                    for system_id, ligand_id, instance_chain in pocket_membership.get(
+                        (release_entry, release_chain, release_number), []
+                    ):
+                        if (system_id, ligand_id, target_system) not in accepted:
+                            continue
+                        rows.append(
+                            {
+                                "plinder_system_id": system_id,
+                                "plinder_ligand_id": ligand_id,
+                                "plinder_entry_id": release_entry,
+                                "plinder_chain_instance": instance_chain,
+                                "plinder_chain_asym_id": release_chain,
+                                "plinder_residue_number": release_number,
+                                "custom_structure_id": custom_entry,
+                                "custom_chain_asym_id": custom_chain,
+                                "custom_residue_number": (
+                                    custom_number if custom_number >= 0 else pd.NA
+                                ),
+                                "residue_identical": bool(identical),
+                                "source": backend,
+                            }
+                        )
+        result = pd.DataFrame.from_records(rows, columns=columns)
+        if not result.empty:
+            result = result.drop_duplicates().sort_values(
+                [
+                    "custom_structure_id",
+                    "custom_chain_asym_id",
+                    "plinder_system_id",
+                    "plinder_ligand_id",
+                    "source",
+                    "plinder_chain_instance",
+                    "plinder_residue_number",
+                ],
+                ignore_index=True,
+            )
+    result["plinder_residue_number"] = result["plinder_residue_number"].astype(
+        "Int64"
+    )
+    result["custom_residue_number"] = result["custom_residue_number"].astype("Int64")
+    result["residue_identical"] = result["residue_identical"].astype("boolean")
+    output_path = Path(output_path)
+    output_path.parent.mkdir(exist_ok=True, parents=True)
+    result.to_parquet(output_path, index=False, compression="zstd")
+    return output_path
+
+
 def calculate_custom_similarity_scores(
     score_alignments: Mapping[str, Path],
     *,
@@ -2048,14 +2216,15 @@ def score_custom_cif_files(
     assembly_ids: Iterable[str] | None = None,
     ligand_smiles_dict: Mapping[str, str] | None = None,
     ligand_ccd_code_dict: Mapping[str, str] | None = None,
-    include_ligands: bool = True,
-    include_interfaces: bool = True,
+    include_ligands: bool | None = True,
+    include_interfaces: bool | None = True,
     include_shape: bool = True,
     interface_annotate_prodigy: bool = True,
     search_config: CustomProteinSearchConfig | None = None,
     backends: Iterable[str] = SEARCH_BACKENDS,
     threads: int = 1,
     shape_score_threads: int = 1,
+    store_aligned_pocket_residues: bool = False,
 ) -> CustomScoringResult:
     """Run custom-CIF annotation, protein search, and PLINDER scoring.
 
@@ -2070,7 +2239,10 @@ def score_custom_cif_files(
     ligand, and/or interface score parquet files under ``work_dir``. Protein
     scores use each PLINDER ligand pocket as the directed query and each
     custom protein chain as a ligand-free target, so ``include_ligands=False``
-    still yields protein metrics and ``pocket_fident``.
+    still yields protein metrics and ``pocket_fident``. Passing ``None`` for
+    ligand or interface inclusion annotates that feature and emits its score
+    table only when the custom structures contain a proper ligand or protein
+    interface, respectively.
     """
     sources = tuple(Path(path) for path in cif_files)
     if not sources:
@@ -2085,6 +2257,8 @@ def score_custom_cif_files(
         if assembly_ids is not None and not isinstance(assembly_ids, str)
         else assembly_ids
     )
+    annotate_ligands = include_ligands is not False
+    annotate_interfaces = include_interfaces is not False
     annotations = annotate_custom_cif_files(
         sources,
         work_dir=work_dir,
@@ -2092,8 +2266,8 @@ def score_custom_cif_files(
         assembly_ids=requested_assemblies,
         ligand_smiles_dict=ligand_smiles_dict,
         ligand_ccd_code_dict=ligand_ccd_code_dict,
-        include_ligands=include_ligands,
-        include_interfaces=include_interfaces,
+        include_ligands=annotate_ligands,
+        include_interfaces=annotate_interfaces,
         interface_annotate_prodigy=interface_annotate_prodigy,
         data_dir=data_dir,
     )
@@ -2141,7 +2315,28 @@ def score_custom_cif_files(
         work_dir=work_dir / "protein_score_work",
         output_path=protein_score_path,
     )
-    ligand_score_path = work_dir / "ligand_scores.parquet" if include_ligands else None
+    aligned_pocket_residue_path = (
+        work_dir / "aligned_pocket_residues.parquet"
+        if store_aligned_pocket_residues
+        else None
+    )
+    if aligned_pocket_residue_path is not None:
+        write_custom_aligned_pocket_residues(
+            protein_score_alignments,
+            protein_scores=protein_score_path,
+            assets=assets,
+            output_path=aligned_pocket_residue_path,
+        )
+    has_proper_ligands = any(
+        ligand.is_proper
+        for entry in annotations.entries_by_structure.values()
+        for system in entry.systems.values()
+        for ligand in system.ligands.values()
+    )
+    score_ligands = include_ligands is True or (
+        include_ligands is None and has_proper_ligands
+    )
+    ligand_score_path = work_dir / "ligand_scores.parquet" if score_ligands else None
     if ligand_score_path is not None:
         calculate_custom_similarity_scores(
             score_alignments,
@@ -2153,8 +2348,14 @@ def score_custom_cif_files(
             data_dir=data_dir,
             output_path=ligand_score_path,
         )
+    has_interfaces = any(
+        entry.interfaces for entry in annotations.entries_by_structure.values()
+    )
+    score_interfaces = include_interfaces is True or (
+        include_interfaces is None and has_interfaces
+    )
     interface_score_path = (
-        work_dir / "interface_scores.parquet" if include_interfaces else None
+        work_dir / "interface_scores.parquet" if score_interfaces else None
     )
     if interface_score_path is not None:
         calculate_custom_interface_similarity_scores(
@@ -2171,6 +2372,7 @@ def score_custom_cif_files(
         score_alignments=score_alignments,
         protein_score_alignments=protein_score_alignments,
         protein_scores=protein_score_path,
+        aligned_pocket_residues=aligned_pocket_residue_path,
         ligand_scores=ligand_score_path,
         interface_scores=interface_score_path,
     )

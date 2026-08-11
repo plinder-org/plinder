@@ -1033,6 +1033,7 @@ def run_alignment(
     _stream_alignment_tsv_to_dataset(
         aln_file.with_suffix(".tsv"),
         aln_file.with_suffix(".parquet"),
+        aln_type=aln_type,
         include_target_pdb_id=search_db != "pred",
     )
 
@@ -1095,9 +1096,10 @@ def _stream_alignment_tsv_to_dataset(
     tsv_path: Path,
     dataset_path: Path,
     *,
+    aln_type: str,
     include_target_pdb_id: bool,
 ) -> None:
-    """Convert an alignment TSV without materializing the full search batch."""
+    """Convert an alignment TSV without holding the full search batch in memory."""
     if dataset_path.exists():
         shutil.rmtree(dataset_path)
     reader = csv.open_csv(
@@ -1105,7 +1107,9 @@ def _stream_alignment_tsv_to_dataset(
         parse_options=csv.ParseOptions(delimiter="\t"),
         read_options=csv.ReadOptions(block_size=16 * 1024 * 1024),
     )
+    wrote_batch = False
     for batch_index, batch in enumerate(reader):
+        wrote_batch = True
         table = pyarrow.Table.from_batches([batch])
         table = table.append_column(
             "query_pdb_id",
@@ -1121,6 +1125,17 @@ def _stream_alignment_tsv_to_dataset(
             dataset_path,
             partition_cols=["query_pdb_id"],
             basename_template=f"batch-{batch_index}-{{i}}.parquet",
+        )
+    if not wrote_batch:
+        schema = _raw_alignment_schema(aln_type)
+        if not include_target_pdb_id:
+            schema = pa.schema(
+                field for field in schema if field.name != "target_pdb_id"
+            )
+        dataset_path.mkdir(parents=True)
+        pq.write_table(
+            pa.Table.from_pylist([], schema=schema),
+            dataset_path / "empty.parquet",
         )
 
 

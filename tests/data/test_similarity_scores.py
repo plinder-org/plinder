@@ -510,12 +510,35 @@ def test_alignment_tsv_is_streamed_to_query_partitions(tmp_path) -> None:
     _stream_alignment_tsv_to_dataset(
         tsv_path,
         dataset_path,
+        aln_type="foldseek",
         include_target_pdb_id=True,
     )
 
     first = pd.read_parquet(dataset_path / "query_pdb_id=1abc")
     assert first["target_pdb_id"].tolist() == ["2def"]
     assert (dataset_path / "query_pdb_id=3ghi").is_dir()
+
+
+@pytest.mark.parametrize("aln_type", ["foldseek", "mmseqs"])
+def test_empty_alignment_tsv_writes_readable_dataset(tmp_path, aln_type) -> None:
+    columns = [field.name for field in scoring_module._raw_alignment_schema(aln_type)]
+    columns.remove("target_pdb_id")
+    tsv_path = tmp_path / "alignment.tsv"
+    tsv_path.write_text("\t".join(columns) + "\n")
+    dataset_path = tmp_path / "alignment.parquet"
+
+    _stream_alignment_tsv_to_dataset(
+        tsv_path,
+        dataset_path,
+        aln_type=aln_type,
+        include_target_pdb_id=True,
+    )
+
+    result = pd.read_parquet(dataset_path)
+    assert result.empty
+    assert result.columns.tolist() == [
+        field.name for field in scoring_module._raw_alignment_schema(aln_type)
+    ]
 
 
 def test_ligand_scoring_inputs_include_only_proper_holo_ligands() -> None:

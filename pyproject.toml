@@ -35,6 +35,7 @@ Issues = "https://github.com/plinder-org/plinder/issues"
 [project.scripts]
 plinder_download = "plinder.core.index.utils:download_plinder_cmd"
 plinder_eval = "plinder.eval.docking.write_scores:evaluate_cmd"
+plinder_link = "plinder.cli:main"
 plinder_stratify = "plinder.eval.docking.stratify_test_set:stratify_cmd"
 plinder_plot = "plinder.eval.docking.make_plots:plot_cmd"
 
