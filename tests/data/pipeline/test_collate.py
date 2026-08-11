@@ -211,6 +211,21 @@ def _write_interface_only_entry(data_dir: Path, pdb_id: str = "3ghi") -> None:
     )
 
 
+def _write_sidecar_only_entry(data_dir: Path, pdb_id: str = "4jkl") -> None:
+    _write_interface_only_entry(data_dir, pdb_id)
+    interface_path = (
+        data_dir / "raw_entries" / pdb_id[1:3] / pdb_id / "interfaces.parquet"
+    )
+    pq.write_table(
+        pa.Table.from_pylist([], schema=INTERFACE_ANNOTATION_SCHEMA), interface_path
+    )
+    _set_interface_threshold(interface_path, 7)
+    metrics = data_dir / "metrics" / pdb_id[1:3] / f"ingest-one-{pdb_id}.json"
+    payload = json.loads(metrics.read_text())
+    payload["counts"]["interface_rows"] = 0
+    metrics.write_text(json.dumps(payload))
+
+
 def _set_interface_threshold(path: Path, threshold: int) -> None:
     table = pq.read_table(path)
     metadata = dict(table.schema.metadata or {})
@@ -351,6 +366,22 @@ def test_collation_retains_entries_with_only_protein_interfaces(
     assert set(metadata["entry_pdb_id"]) == {"1abc", "2def", "3ghi"}
     interfaces = pd.read_parquet(tmp_path / "index/interface_annotation_table.parquet")
     assert "3ghi__1__1.A--1.B" in set(interfaces["system_id"])
+
+
+def test_collation_retains_entries_with_only_chain_sidecars(tmp_path: Path) -> None:
+    _write_release(tmp_path)
+    _write_sidecar_only_entry(tmp_path)
+
+    report = run_collation(tmp_path, memory_limit="1GB")
+
+    assert report["entry_count"] == 3
+    assert report["interface_count"] == 2
+    annotation = pd.read_parquet(tmp_path / "index/annotation_table.parquet")
+    assert "4jkl" not in set(annotation["entry_pdb_id"])
+    metadata = pd.read_parquet(tmp_path / "index/entry_metadata.parquet")
+    assert set(metadata["entry_pdb_id"]) == {"1abc", "2def", "4jkl"}
+    chains = pd.read_parquet(tmp_path / "index/entry_chains.parquet")
+    assert "4jkl" in set(chains["entry_pdb_id"])
 
 
 def test_collation_rejects_interface_sidecars_from_failed_ingest(

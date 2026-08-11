@@ -207,9 +207,6 @@ class GetPlinderAnnotation:
             **entry_cfg,
         )
         LOG.info(f"created entry for {self.mmcif_file}")
-        if not self.entry.systems and not self.entry.interfaces:
-            LOG.info(f"no ligand or interface systems for {self.mmcif_file}")
-            return None
         self.entry.set_validation(self.validation_xml, self.mmcif_file)
         interface_table = self._interface_table(entry_cfg)
         self.interface_df = interface_table.to_pandas()
@@ -224,6 +221,9 @@ class GetPlinderAnnotation:
                 interface_table,
                 replace_interfaces=include_interfaces,
             )
+        if not self.entry.systems and not self.entry.interfaces:
+            LOG.info(f"no ligand or interface systems for {self.mmcif_file}")
+            return None
         self.annotated_df = self.entry.to_df()
         return self.annotated_df
 

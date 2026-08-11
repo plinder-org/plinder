@@ -257,16 +257,12 @@ def _entry_manifest_row(data_dir: Path, entry_dir: Path) -> dict[str, Any]:
         if pq.ParquetFile(annotation_path).metadata.num_rows < 1:
             raise ValueError(f"ligand annotation is empty for V3 entry {pdb_id}")
     else:
-        if pq.ParquetFile(paths["interface"]).metadata.num_rows < 1:
-            raise ValueError(
-                f"materialized V3 entry {pdb_id} has no ligand or interface rows"
-            )
         if (
             completed_entry_metrics(data_dir, pdb_id) is None
             and completed_interface_metrics(data_dir, pdb_id) is None
         ):
             raise ValueError(
-                f"interface-only V3 entry {pdb_id} has no successful ingest marker"
+                f"sidecar-only V3 entry {pdb_id} has no successful ingest marker"
             )
     row: dict[str, Any] = {
         "pdb_id": pdb_id,

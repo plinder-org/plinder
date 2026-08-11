@@ -210,9 +210,6 @@ def _entry_outputs_complete(
         return False
     counts = metrics.get("counts", {})
     annotation_rows = int(counts.get("annotation_rows", 0))
-    interface_rows = int(counts.get("interface_rows", 0))
-    if annotation_rows < 1 and interface_rows < 1:
-        return False
     sidecars = {
         "entry_chains": entry_directory / "entry_chains.parquet",
         "entry_biounit_chains": entry_directory / "entry_biounit_chains.parquet",
@@ -734,12 +731,9 @@ def ingest_one_pdb(
         elif annotation.empty and interface_rows == 0:
             entry_parquet.unlink(missing_ok=True)
             ligand_parquet.unlink(missing_ok=True)
-            shutil.rmtree(entry_directory, ignore_errors=True)
-            summary["outputs"] = {
-                "entry_parquet": None,
-                "entry_directory": None,
-                "ligand_parquet": None,
-            }
+            shutil.rmtree(entry_directory / "ligand_files", ignore_errors=True)
+            summary["outputs"]["entry_parquet"] = None
+            summary["outputs"]["ligand_parquet"] = None
             summary["counts"] = {
                 "annotation_rows": 0,
                 "interface_rows": 0,
@@ -747,7 +741,7 @@ def ingest_one_pdb(
                 "ligand_ids": 0,
                 "canonical_ligand_sdfs": 0,
             }
-            summary["status"] = "skipped_no_systems"
+            summary["status"] = "complete"
         else:
             if not annotation.empty:
 
