@@ -1104,12 +1104,20 @@ def test_write_custom_aligned_pocket_residues(tmp_path, monkeypatch):
         ligand_chain="Z",
         pocket_number=20,
     )
+    system = next(iter(plinder_entry.systems.values()))
+    ligand = next(iter(system.ligands.values()))
+    plinder_entry.chains["C"] = ChainView(asym_id="C", auth_id="C", length=2)
+    plinder_entry.author_to_asym["C"] = "C"
+    system.protein_chains_asym_id.append("1.C")
+    system.pocket_residue_number_to_index["1.C"] = {30: 1}
+    ligand.protein_chains_asym_id.append("1.C")
+    ligand.pocket_residue_number_to_index["1.C"] = {30: 1}
     monkeypatch.setattr(
         custom,
         "_load_release_entry_views",
         lambda _assets, *, pdb_ids: {"1abc": plinder_entry},
     )
-    alignment = tmp_path / "reverse_foldseek.parquet"
+    foldseek_alignment = tmp_path / "reverse_foldseek.parquet"
     pd.DataFrame(
         [
             {
@@ -1121,9 +1129,34 @@ def test_write_custom_aligned_pocket_residues(tmp_path, monkeypatch):
                 "query_selected_residue_numbers": [20],
                 "target_selected_residue_numbers": [42],
                 "selected_residue_identity": b"\x01",
+            },
+            {
+                "query_entry": "1abc",
+                "target_entry": "model_with_underscore",
+                "query_chain_mapped": "C",
+                "target_chain_mapped": "A",
+                "source": "foldseek",
+                "query_selected_residue_numbers": [30],
+                "target_selected_residue_numbers": [43],
+                "selected_residue_identity": b"\x00",
+            },
+        ]
+    ).to_parquet(foldseek_alignment, index=False)
+    mmseqs_alignment = tmp_path / "reverse_mmseqs.parquet"
+    pd.DataFrame(
+        [
+            {
+                "query_entry": "1abc",
+                "target_entry": "model_with_underscore",
+                "query_chain_mapped": "B",
+                "target_chain_mapped": "A",
+                "source": "mmseqs",
+                "query_selected_residue_numbers": [20],
+                "target_selected_residue_numbers": [142],
+                "selected_residue_identity": b"\x00",
             }
         ]
-    ).to_parquet(alignment, index=False)
+    ).to_parquet(mmseqs_alignment, index=False)
     protein_scores = tmp_path / "protein_scores.parquet"
     pd.DataFrame(
         [
@@ -1131,13 +1164,15 @@ def test_write_custom_aligned_pocket_residues(tmp_path, monkeypatch):
                 "query_system": "1abc__1__1.B__1.Z",
                 "query_ligand_id": "1abc__1__1.Z",
                 "target_system": "model_with_underscore_A",
+                "protein_mapping": "1.B:0.A",
+                "source": "foldseek",
                 "metric": "pocket_fident",
             }
         ]
     ).to_parquet(protein_scores, index=False)
 
     output = custom.write_custom_aligned_pocket_residues(
-        {"foldseek": alignment},
+        {"foldseek": foldseek_alignment, "mmseqs": mmseqs_alignment},
         protein_scores=protein_scores,
         assets=_custom_assets(tmp_path),
         output_path=tmp_path / "aligned_pocket_residues.parquet",

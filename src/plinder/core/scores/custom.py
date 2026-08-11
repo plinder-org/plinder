@@ -1947,14 +1947,45 @@ def write_custom_aligned_pocket_residues(
             "query_system",
             "query_ligand_id",
             "target_system",
+            "protein_mapping",
+            "source",
             "metric",
         ],
     )
     pocket_scores = scores.loc[
         scores["metric"].astype(str).eq("pocket_fident"),
-        ["query_system", "query_ligand_id", "target_system"],
+        [
+            "query_system",
+            "query_ligand_id",
+            "target_system",
+            "protein_mapping",
+            "source",
+        ],
     ].drop_duplicates()
-    accepted = set(pocket_scores.itertuples(index=False, name=None))
+    accepted: set[tuple[str, str, str, str, str, str]] = set()
+    for score in pocket_scores.itertuples(index=False):
+        if not isinstance(score.protein_mapping, str):
+            continue
+        score_sources = (
+            SEARCH_BACKENDS if str(score.source) == "both" else (str(score.source),)
+        )
+        for pair in score.protein_mapping.split(";"):
+            if ":" not in pair:
+                continue
+            release_instance, custom_instance = pair.split(":", maxsplit=1)
+            release_chain = release_instance.split(".", maxsplit=1)[-1]
+            custom_chain = custom_instance.split(".", maxsplit=1)[-1]
+            for source in score_sources:
+                accepted.add(
+                    (
+                        str(score.query_system),
+                        str(score.query_ligand_id),
+                        str(score.target_system),
+                        source,
+                        release_chain,
+                        custom_chain,
+                    )
+                )
     if not accepted:
         result = pd.DataFrame(columns=columns)
     else:
@@ -2015,7 +2046,14 @@ def write_custom_aligned_pocket_residues(
                     for system_id, ligand_id, instance_chain in pocket_membership.get(
                         (release_entry, release_chain, release_number), []
                     ):
-                        if (system_id, ligand_id, target_system) not in accepted:
+                        if (
+                            system_id,
+                            ligand_id,
+                            target_system,
+                            backend,
+                            release_chain,
+                            custom_chain,
+                        ) not in accepted:
                             continue
                         rows.append(
                             {
