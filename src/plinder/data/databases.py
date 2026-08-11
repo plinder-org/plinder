@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import subprocess as sp
+from collections.abc import Iterator
 from errno import EACCES, EPERM, EXDEV
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Optional
@@ -20,6 +21,7 @@ LOG = setup_logger(__name__)
 
 EXACT_CLUSTER_IDENTITY = 1.0
 EXACT_CLUSTER_COVERAGE = 1.0
+DATABASE_RUNTIME_DIRECTORIES = {"aln", "mapped_aln"}
 
 
 def run(cmd: list[str], *, cwd: Path | None = None) -> None:
@@ -188,12 +190,26 @@ def _remove_database_prefix(database: Path) -> None:
             path.unlink(missing_ok=True)
 
 
+def _database_bundle_paths(root: Path) -> Iterator[Path]:
+    """Iterate database assets without walking large runtime result trees."""
+    for current, directories, filenames in os.walk(root, topdown=True):
+        current_path = Path(current)
+        if current_path == root:
+            directories[:] = [
+                name
+                for name in directories
+                if name not in DATABASE_RUNTIME_DIRECTORIES
+            ]
+        yield from (current_path / name for name in directories)
+        yield from (current_path / name for name in filenames)
+
+
 def _make_database_directory_portable(root: Path) -> dict[str, int]:
     """Replace external DB links with copies and internal links with relatives."""
     root_resolved = root.resolve()
     copied = 0
     relativized = 0
-    for path in sorted(root.rglob("*")):
+    for path in sorted(_database_bundle_paths(root)):
         if not path.is_symlink():
             continue
         target = path.resolve(strict=True)
@@ -215,7 +231,7 @@ def _make_database_directory_portable(root: Path) -> dict[str, int]:
 
 def _has_external_database_links(root: Path) -> bool:
     root_resolved = root.resolve()
-    for path in root.rglob("*"):
+    for path in _database_bundle_paths(root):
         if not path.is_symlink():
             continue
         if path.readlink().is_absolute():
