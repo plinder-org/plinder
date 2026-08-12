@@ -6,6 +6,7 @@ import heapq
 import json
 import os
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from shutil import copyfile, copytree, rmtree
 from textwrap import dedent
@@ -45,6 +46,14 @@ INTERFACE_HALF_REPRESENTATIVES = Path(
     "index/interface_half_representatives.parquet"
 )
 INTERFACE_MEMBERSHIP = Path("index/interface_membership.parquet")
+REPRESENTATIVE_STATISTICS_COLUMNS = (
+    "system_proper_num_pocket_residues",
+    "system_proper_num_interactions",
+    "system_proper_ligand_max_molecular_weight",
+)
+REPRESENTATIVE_POCKET_RESIDUE_RANGE = (5, 100)
+REPRESENTATIVE_INTERACTION_RANGE = (3, 50)
+REPRESENTATIVE_LIGAND_MOLECULAR_WEIGHT_RANGE = (200.0, 800.0)
 
 
 def _cluster_root(data_dir: Path, entity_type: ClusterEntity) -> Path:
@@ -649,7 +658,10 @@ def prepare_symmetric_edge_plan(
 
 
 def load_symmetric_edge_plan(
-    data_dir: Path, *, entity_type: ClusterEntity = "ligand"
+    data_dir: Path,
+    *,
+    entity_type: ClusterEntity = "ligand",
+    metrics: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     """Load and validate the exact raw-score inputs for symmetrization."""
     plan_path = _symmetric_edge_plan_path(data_dir, entity_type)
@@ -665,7 +677,15 @@ def load_symmetric_edge_plan(
         or plan.get("plan_hash") != (_symmetric_edge_plan_hash(payload))
     ):
         raise ValueError(f"invalid symmetric-edge plan: {plan_path}")
+    selected_metrics = set(metrics or plan["metrics"])
+    unknown_metrics = selected_metrics.difference(plan["metrics"])
+    if unknown_metrics:
+        raise ValueError(
+            f"metrics are not in the symmetric-edge plan: {sorted(unknown_metrics)}"
+        )
     for batch in plan["batches"]:
+        if selected_metrics.isdisjoint(batch["metrics"]):
+            continue
         for signature in batch["sources"]:
             source = Path(str(signature["path"]))
             if not source.is_file() or _component_source_signature(source) != signature:
@@ -1409,7 +1429,11 @@ def component_score_sources(
     entity_type: ClusterEntity = "ligand",
 ) -> list[Path]:
     """Return compact reciprocal-minimum shards for one clustering metric."""
-    plan = load_symmetric_edge_plan(data_dir, entity_type=entity_type)
+    plan = load_symmetric_edge_plan(
+        data_dir,
+        entity_type=entity_type,
+        metrics=[metric],
+    )
     if metric not in plan["metrics"]:
         raise ValueError(f"metric is not in the symmetric-edge plan: {metric}")
     sources = [
@@ -1724,6 +1748,16 @@ def directed_cover_reduction_dir(
     )
 
 
+def _directed_cover_connectivity_thresholds(
+    thresholds: Sequence[int],
+) -> list[int]:
+    """Include the threshold-50 graph needed by stricter cover passes."""
+    result = set(thresholds)
+    if any(threshold > 50 for threshold in result):
+        result.add(50)
+    return sorted(result, reverse=True)
+
+
 def _iter_directed_cover_edge_batches(
     *, source_path: Path, batch_size: int = 250_000
 ) -> Iterable[pd.DataFrame]:
@@ -1774,7 +1808,7 @@ def make_directed_cover_component_reduction(
             batch_size=batch_size,
         ),
         all_nodes=nodes,
-        thresholds=thresholds,
+        thresholds=_directed_cover_connectivity_thresholds(thresholds),
         source_path=source_path,
         output_dir=directed_cover_reduction_dir(
             data_dir=data_dir,
@@ -1798,6 +1832,7 @@ def merge_directed_cover_component_reductions(
     entity_type: ClusterEntity = "ligand",
 ) -> dict[int, pd.DataFrame]:
     """Merge exact weak components used to bound directed set cover."""
+    thresholds = _directed_cover_connectivity_thresholds(thresholds)
     sources = component_score_sources(
         data_dir=data_dir,
         metric=metric,
@@ -1922,7 +1957,7 @@ def directed_cover_component_reduction_is_complete(
             source_signature=_component_source_signature(source_path),
             node_hash=node_hash,
             selection_hash=selection_hash,
-            thresholds=sorted(set(thresholds), reverse=True),
+            thresholds=_directed_cover_connectivity_thresholds(thresholds),
         )
         is not None
     )
@@ -2338,95 +2373,512 @@ def _greedy_centroid_cover(
     return [groups[centroid] for centroid in centroids]
 
 
+@dataclass(frozen=True)
+class _RepresentativeSelection:
+    representative: int
+    order: int
+    threshold: int | None
+    marginal_gain: int
+
+
+@dataclass(frozen=True)
+class _RepresentativeAssignment:
+    query: int
+    representative: int
+    similarity: float
+    threshold: int | None
+
+
+@dataclass(frozen=True)
+class _RepresentativeQuality:
+    passes_statistics: NDArray[np.bool_]
+    passes_validation: NDArray[np.bool_]
+
+
+def _selection_mask(
+    values: NDArray[np.bool_] | None,
+    *,
+    size: int,
+    name: str,
+) -> NDArray[np.bool_]:
+    if values is None:
+        return np.ones(size, dtype=bool)
+    result = np.asarray(values, dtype=bool)
+    if result.shape != (size,):
+        raise ValueError(f"{name} must have shape ({size},), got {result.shape}")
+    return result.copy()
+
+
+def _passes_representative_statistics(annotation: pd.DataFrame) -> pd.Series:
+    pocket_min, pocket_max = REPRESENTATIVE_POCKET_RESIDUE_RANGE
+    interaction_min, interaction_max = REPRESENTATIVE_INTERACTION_RANGE
+    ligand_min, ligand_max = REPRESENTATIVE_LIGAND_MOLECULAR_WEIGHT_RANGE
+    return (
+        annotation["system_proper_num_pocket_residues"].between(
+            pocket_min, pocket_max, inclusive="both"
+        )
+        & annotation["system_proper_num_interactions"].between(
+            interaction_min, interaction_max, inclusive="both"
+        )
+        & annotation["system_proper_ligand_max_molecular_weight"].between(
+            ligand_min, ligand_max, inclusive="both"
+        )
+    ).fillna(False)
+
+
+def _representative_quality(
+    *,
+    data_dir: Path,
+    metric: str,
+    entity_type: ClusterEntity,
+    nodes: Sequence[str],
+) -> _RepresentativeQuality:
+    """Return representative preferences without excluding cover candidates."""
+    annotation_path = data_dir / "index/annotation_table.parquet"
+    if not annotation_path.is_file():
+        return _RepresentativeQuality(
+            passes_statistics=np.ones(len(nodes), dtype=bool),
+            passes_validation=np.zeros(len(nodes), dtype=bool),
+        )
+    annotation_columns = set(pq.read_schema(annotation_path).names)
+    validation_column = "system_pass_validation_criteria"
+    statistics_available = set(REPRESENTATIVE_STATISTICS_COLUMNS).issubset(
+        annotation_columns
+    )
+
+    columns = ["system_id", "ligand_id"]
+    if statistics_available:
+        columns.extend(REPRESENTATIVE_STATISTICS_COLUMNS)
+    if validation_column in annotation_columns:
+        columns.append(validation_column)
+    if metric == "tanimoto_similarity_ecfp4_1024":
+        smiles_column = "ligand_rdkit_canonical_smiles"
+        if smiles_column not in annotation_columns:
+            return _RepresentativeQuality(
+                passes_statistics=np.ones(len(nodes), dtype=bool),
+                passes_validation=np.zeros(len(nodes), dtype=bool),
+            )
+        columns.append(smiles_column)
+    annotation = pd.read_parquet(annotation_path, columns=columns)
+    annotation["_passes_statistics"] = (
+        _passes_representative_statistics(annotation)
+        if statistics_available
+        else True
+    )
+    annotation["_passes_validation"] = (
+        annotation[validation_column].fillna(False).astype(bool)
+        if validation_column in annotation
+        else False
+    )
+
+    if entity_type == "interface":
+        annotation["system_id"] = annotation["system_id"].astype(str)
+        quality_by_system = annotation.groupby("system_id", sort=False)[
+            ["_passes_statistics", "_passes_validation"]
+        ].any()
+        base_nodes = [str(node).split("::side=")[0] for node in nodes]
+        return _RepresentativeQuality(
+            passes_statistics=np.asarray(
+                [
+                    bool(
+                        quality_by_system["_passes_statistics"].get(node, True)
+                    )
+                    for node in base_nodes
+                ],
+                dtype=bool,
+            ),
+            passes_validation=np.asarray(
+                [
+                    bool(
+                        quality_by_system["_passes_validation"].get(node, False)
+                    )
+                    for node in base_nodes
+                ],
+                dtype=bool,
+            ),
+        )
+
+    if metric == "tanimoto_similarity_ecfp4_1024":
+        smiles_nodes = pd.read_parquet(
+            data_dir / "fingerprints/ligands_per_smiles.parquet",
+            columns=["ligand_rdkit_canonical_smiles", "ligand_smiles_id"],
+        )
+        smiles_to_node = dict(
+            zip(
+                smiles_nodes["ligand_rdkit_canonical_smiles"],
+                smiles_nodes["ligand_smiles_id"].astype(str),
+            )
+        )
+        annotation["_node"] = annotation[smiles_column].map(smiles_to_node)
+    else:
+        annotation["_node"] = annotation["ligand_id"].astype(str)
+    quality_by_node = annotation.dropna(subset=["_node"]).groupby(
+        "_node", sort=False
+    )[["_passes_statistics", "_passes_validation"]].any()
+    return _RepresentativeQuality(
+        passes_statistics=np.asarray(
+            [
+                bool(quality_by_node["_passes_statistics"].get(str(node), True))
+                for node in nodes
+            ],
+            dtype=bool,
+        ),
+        passes_validation=np.asarray(
+            [
+                bool(quality_by_node["_passes_validation"].get(str(node), False))
+                for node in nodes
+            ],
+            dtype=bool,
+        ),
+    )
+
+
+def _incoming_cover(
+    graph: nk.graph.Graph,
+    representative: int,
+    *,
+    minimum_weight: float,
+    uncovered: NDArray[np.bool_],
+) -> NDArray[np.int64]:
+    covered = [representative] if uncovered[representative] else []
+    covered.extend(
+        int(query)
+        for query in graph.iterInNeighbors(representative)
+        if int(query) != representative
+        and uncovered[int(query)]
+        and float(graph.weight(int(query), representative)) >= minimum_weight
+    )
+    return np.asarray(covered, dtype=np.int64)
+
+
+def _greedy_tiered_directed_cover(
+    graph: nk.graph.Graph,
+    nodes: Sequence[str],
+    *,
+    primary_threshold: int,
+    fallback_threshold: int = 50,
+    fallback_graph: nk.graph.Graph | None = None,
+    candidate_mask: NDArray[np.bool_] | None = None,
+    preferred_mask: NDArray[np.bool_] | None = None,
+    target_mask: NDArray[np.bool_] | None = None,
+    candidate_priority: Sequence[float] | None = None,
+) -> tuple[list[_RepresentativeSelection], list[_RepresentativeAssignment]]:
+    """Select node representatives using strict edges, then fallback edges.
+
+    An edge ``query -> representative`` means that selecting the target covers
+    the query. Preferred candidates with positive relational gain are selected
+    before other candidates; gain, optional quality priority, and stable node
+    ID determine order within each tier. Existing representatives are expanded
+    when the threshold drops. Any target still uncovered after the fallback
+    pass represents itself, so every requested node receives an assignment.
+    """
+    if not graph.isDirected() or not graph.isWeighted():
+        raise ValueError("directed representative covering requires a weighted graph")
+    if graph.numberOfNodes() != len(nodes):
+        raise ValueError("graph node count does not match ligand IDs")
+    if fallback_graph is None:
+        fallback_graph = graph
+    if not fallback_graph.isDirected() or not fallback_graph.isWeighted():
+        raise ValueError("fallback covering requires a weighted directed graph")
+    if fallback_graph.numberOfNodes() != len(nodes):
+        raise ValueError("fallback graph node count does not match ligand IDs")
+    if not 0 <= fallback_threshold <= primary_threshold <= 100:
+        raise ValueError(
+            "representative thresholds must satisfy "
+            "0 <= fallback_threshold <= primary_threshold <= 100"
+        )
+    size = len(nodes)
+    candidates = _selection_mask(
+        candidate_mask,
+        size=size,
+        name="candidate_mask",
+    )
+    preferred = _selection_mask(
+        preferred_mask,
+        size=size,
+        name="preferred_mask",
+    ) & candidates
+    targets = _selection_mask(target_mask, size=size, name="target_mask")
+    priorities = (
+        np.zeros(size, dtype=float)
+        if candidate_priority is None
+        else np.asarray(candidate_priority, dtype=float)
+    )
+    if priorities.shape != (size,):
+        raise ValueError(
+            f"candidate_priority must have shape ({size},), got {priorities.shape}"
+        )
+    if not np.isfinite(priorities).all():
+        raise ValueError("candidate_priority must contain only finite values")
+
+    primary_weight = primary_threshold / 100.0
+    fallback_weight = fallback_threshold / 100.0
+    uncovered = targets.copy()
+    selected = np.zeros(size, dtype=bool)
+
+    def make_heap(
+        active_graph: nk.graph.Graph,
+        minimum_weight: float,
+        heap_candidates: NDArray[np.bool_],
+    ) -> list[tuple[int, float, str, int]]:
+        heap = [
+            (
+                -len(
+                    _incoming_cover(
+                        active_graph,
+                        node,
+                        minimum_weight=minimum_weight,
+                        uncovered=uncovered,
+                    )
+                ),
+                -float(priorities[node]),
+                str(nodes[node]),
+                node,
+            )
+            for node in np.flatnonzero(heap_candidates)
+        ]
+        heapq.heapify(heap)
+        return heap
+
+    def best_candidate(
+        heap: list[tuple[int, float, str, int]],
+        active_graph: nk.graph.Graph,
+        minimum_weight: float,
+    ) -> tuple[int | None, NDArray[np.int64]]:
+        while heap:
+            negative_gain, negative_priority, node_id, candidate = heapq.heappop(
+                heap
+            )
+            if selected[candidate]:
+                continue
+            covered = _incoming_cover(
+                active_graph,
+                candidate,
+                minimum_weight=minimum_weight,
+                uncovered=uncovered,
+            )
+            gain = len(covered)
+            if gain == -negative_gain:
+                # A candidate that covers only itself does not use a graph
+                # relationship. Defer it until the fallback threshold has
+                # been tried, then let the final self-assignment pass handle
+                # it without disguising that choice as graph-derived cover.
+                if np.any(covered != candidate):
+                    return candidate, covered
+                continue
+            heapq.heappush(
+                heap,
+                (-gain, negative_priority, node_id, candidate),
+            )
+        return None, np.asarray([], dtype=np.int64)
+
+    selections: list[_RepresentativeSelection] = []
+
+    def select_from_heap(
+        heap: list[tuple[int, float, str, int]],
+        *,
+        active_graph: nk.graph.Graph,
+        minimum_weight: float,
+        selection_threshold: int,
+    ) -> None:
+        while uncovered.any():
+            representative, newly_covered = best_candidate(
+                heap,
+                active_graph,
+                minimum_weight,
+            )
+            if representative is None:
+                return
+            selected[representative] = True
+            uncovered[newly_covered] = False
+            selections.append(
+                _RepresentativeSelection(
+                    representative=representative,
+                    order=len(selections),
+                    threshold=selection_threshold,
+                    marginal_gain=len(newly_covered),
+                )
+            )
+            if len(selections) % 100_000 == 0:
+                LOG.info(
+                    "directed representative cover progress: nodes=%d "
+                    "selected=%d covered=%d uncovered=%d",
+                    size,
+                    len(selections),
+                    int(targets.sum() - uncovered.sum()),
+                    int(uncovered.sum()),
+                )
+
+    select_from_heap(
+        make_heap(graph, primary_weight, preferred),
+        active_graph=graph,
+        minimum_weight=primary_weight,
+        selection_threshold=primary_threshold,
+    )
+    select_from_heap(
+        make_heap(
+            graph,
+            primary_weight,
+            candidates & ~preferred & ~selected,
+        ),
+        active_graph=graph,
+        minimum_weight=primary_weight,
+        selection_threshold=primary_threshold,
+    )
+
+    if fallback_threshold < primary_threshold and uncovered.any():
+        # Representatives selected from stricter edges remain valid choices.
+        # Before adding any new representative, let them cover all remaining
+        # queries that reach them at the fallback threshold.
+        for representative in np.flatnonzero(selected):
+            newly_covered = _incoming_cover(
+                fallback_graph,
+                int(representative),
+                minimum_weight=fallback_weight,
+                uncovered=uncovered,
+            )
+            uncovered[newly_covered] = False
+        select_from_heap(
+            make_heap(
+                fallback_graph,
+                fallback_weight,
+                preferred & ~selected,
+            ),
+            active_graph=fallback_graph,
+            minimum_weight=fallback_weight,
+            selection_threshold=fallback_threshold,
+        )
+        select_from_heap(
+            make_heap(
+                fallback_graph,
+                fallback_weight,
+                candidates & ~preferred & ~selected,
+            ),
+            active_graph=fallback_graph,
+            minimum_weight=fallback_weight,
+            selection_threshold=fallback_threshold,
+        )
+
+    while uncovered.any():
+        remaining = np.flatnonzero(uncovered)
+        representative = min(
+            map(int, remaining),
+            key=lambda node: (-float(priorities[node]), str(nodes[node])),
+        )
+        selected[representative] = True
+        uncovered[representative] = False
+        selections.append(
+            _RepresentativeSelection(
+                representative=representative,
+                order=len(selections),
+                threshold=None,
+                marginal_gain=1,
+            )
+        )
+
+    selection_by_node = {
+        selection.representative: selection for selection in selections
+    }
+    assignments: list[_RepresentativeAssignment] = []
+    for query in np.flatnonzero(targets):
+        query = int(query)
+        if query in selection_by_node:
+            representative = query
+            similarity = 100.0
+            assignment_threshold = primary_threshold
+        else:
+            strict: list[int] = []
+            for target in graph.iterNeighbors(query):
+                representative = int(target)
+                if (
+                    representative in selection_by_node
+                    and float(graph.weight(query, representative)) >= primary_weight
+                ):
+                    strict.append(representative)
+            options = strict
+            assignment_threshold = primary_threshold
+            if not options and fallback_threshold < primary_threshold:
+                options = []
+                for target in fallback_graph.iterNeighbors(query):
+                    representative = int(target)
+                    if (
+                        representative in selection_by_node
+                        and float(fallback_graph.weight(query, representative))
+                        >= fallback_weight
+                    ):
+                        options.append(representative)
+                assignment_threshold = fallback_threshold
+            if not options:
+                raise RuntimeError(
+                    f"directed cover left {nodes[query]} without a representative"
+                )
+            representative = min(
+                options,
+                key=lambda candidate: (
+                    -float(
+                        (
+                            graph
+                            if assignment_threshold == primary_threshold
+                            else fallback_graph
+                        ).weight(query, candidate)
+                    ),
+                    -float(priorities[candidate]),
+                    str(nodes[candidate]),
+                ),
+            )
+            assignment_graph = (
+                graph
+                if assignment_threshold == primary_threshold
+                else fallback_graph
+            )
+            similarity = 100.0 * float(
+                assignment_graph.weight(query, representative)
+            )
+        assignments.append(
+            _RepresentativeAssignment(
+                query=query,
+                representative=representative,
+                similarity=similarity,
+                threshold=assignment_threshold,
+            )
+        )
+    return selections, assignments
+
+
 def _greedy_directed_centroid_cover(
     graph: nk.graph.Graph,
     nodes: Sequence[str],
 ) -> list[tuple[str, str, float, int, float]]:
-    """Cover query nodes by centroids they score against above threshold."""
-    if not graph.isDirected() or not graph.isWeighted():
-        raise ValueError("directed centroid covering requires a weighted digraph")
-    if graph.numberOfNodes() != len(nodes):
-        raise ValueError("graph node count does not match ligand IDs")
-    initial_coverage_counts = [
-        1
-        + sum(
-            int(query) != node
-            for query in graph.iterInNeighbors(node)
+    """Compatibility wrapper for a full node-level directed cover."""
+    selections, assignments = _greedy_tiered_directed_cover(
+        graph,
+        nodes,
+        primary_threshold=0,
+        fallback_threshold=0,
+    )
+    del selections
+    target_mask = np.ones(len(nodes), dtype=bool)
+    coverage_counts = [
+        len(
+            _incoming_cover(
+                graph,
+                node,
+                minimum_weight=0.0,
+                uncovered=target_mask,
+            )
         )
         for node in range(len(nodes))
     ]
-    uncovered = set(range(len(nodes)))
-    centroids: list[int] = []
-    heap = [
-        (-initial_coverage_counts[node], str(nodes[node]), node)
-        for node in range(len(nodes))
-    ]
-    heapq.heapify(heap)
-    while uncovered:
-        while True:
-            negative_count, _, centroid = heapq.heappop(heap)
-            if centroid not in uncovered:
-                continue
-            covered = {centroid}
-            covered.update(
-                int(query)
-                for query in graph.iterInNeighbors(centroid)
-                if int(query) in uncovered
-            )
-            actual_count = len(covered)
-            if -negative_count == actual_count:
-                break
-            heapq.heappush(
-                heap,
-                (-actual_count, str(nodes[centroid]), centroid),
-            )
-        centroids.append(centroid)
-        uncovered.difference_update(covered)
-        if len(centroids) % 100_000 == 0:
-            LOG.info(
-                "directed centroid cover progress: nodes=%d centroids=%d "
-                "covered=%d uncovered=%d",
-                len(nodes),
-                len(centroids),
-                len(nodes) - len(uncovered),
-                len(uncovered),
-            )
-
-    centroid_set = set(centroids)
-    assignments: list[tuple[str, str, float, int, float]] = []
-    for query, ligand_id in enumerate(nodes):
-        if query in centroid_set:
-            centroid = query
-            score = 100.0
-        else:
-            candidates = [
-                int(target)
-                for target in graph.iterNeighbors(query)
-                if int(target) in centroid_set
-            ]
-            if not candidates:
-                raise RuntimeError(
-                    f"directed cover left {ligand_id} without a scored centroid"
-                )
-            centroid = min(
-                candidates,
-                key=lambda candidate: (
-                    -float(graph.weight(query, candidate)),
-                    str(nodes[candidate]),
-                ),
-            )
-            score = 100.0 * float(graph.weight(query, centroid))
-        coverage_count = initial_coverage_counts[query]
-        assignments.append(
-            (
-                str(ligand_id),
-                str(nodes[centroid]),
-                score,
-                coverage_count,
-                coverage_count / len(nodes),
-            )
+    return [
+        (
+            str(nodes[assignment.query]),
+            str(nodes[assignment.representative]),
+            assignment.similarity,
+            coverage_counts[assignment.query],
+            coverage_counts[assignment.query] / len(nodes),
         )
-    return assignments
+        for assignment in assignments
+    ]
 
 
 def _expand_fingerprint_directed_cover(
@@ -2437,14 +2889,35 @@ def _expand_fingerprint_directed_cover(
         data_dir / "fingerprints/ligands_per_smiles.parquet",
         columns=["ligand_rdkit_canonical_smiles", "ligand_smiles_id"],
     )
+    annotation_path = data_dir / "index/annotation_table.parquet"
+    annotation_columns = set(pq.read_schema(annotation_path).names)
+    columns = [
+        "ligand_id",
+        "ligand_rdkit_canonical_smiles",
+        "ligand_is_proper",
+    ]
+    validation_column = "system_pass_validation_criteria"
+    statistics_available = set(REPRESENTATIVE_STATISTICS_COLUMNS).issubset(
+        annotation_columns
+    )
+    if statistics_available:
+        columns.extend(REPRESENTATIVE_STATISTICS_COLUMNS)
+    if validation_column in annotation_columns:
+        columns.append(validation_column)
     annotation = pd.read_parquet(
-        data_dir / "index/annotation_table.parquet",
-        columns=[
-            "ligand_id",
-            "ligand_rdkit_canonical_smiles",
-            "ligand_is_proper",
-        ],
+        annotation_path,
+        columns=columns,
         filters=[("ligand_is_proper", "==", True)],
+    )
+    annotation["_passes_statistics"] = (
+        _passes_representative_statistics(annotation)
+        if statistics_available
+        else True
+    )
+    annotation["_passes_validation"] = (
+        annotation[validation_column].fillna(False).astype(bool)
+        if validation_column in annotation
+        else False
     )
     smiles_to_id = dict(
         zip(
@@ -2458,14 +2931,29 @@ def _expand_fingerprint_directed_cover(
         str(node): tuple(sorted(set(group["ligand_id"].astype(str))))
         for node, group in annotation.groupby("node", sort=False)
     }
+    representative_by_node = {
+        str(node): str(
+            min(
+                group[
+                    [
+                        "ligand_id",
+                        "_passes_statistics",
+                        "_passes_validation",
+                    ]
+                ].itertuples(index=False, name=None),
+                key=lambda item: (
+                    not bool(item[1]),
+                    not bool(item[2]),
+                    str(item[0]),
+                ),
+            )[0]
+        )
+        for node, group in annotation.groupby("node", sort=False)
+    }
     expanded = assignments.copy()
     expanded["ligand_id"] = expanded["ligand_id"].map(ligands_by_node)
     expanded["centroid_ligand_id"] = expanded["centroid_node"].map(
-        {
-            node: ligand_ids[0]
-            for node, ligand_ids in ligands_by_node.items()
-            if ligand_ids
-        }
+        representative_by_node
     )
     return (
         expanded.dropna(subset=["ligand_id", "centroid_ligand_id"])
@@ -2491,6 +2979,12 @@ def directed_set_cover_is_complete(
         "similarity_to_centroid",
         "coverage_count",
         "coverage_fraction",
+        "representative_selection_order",
+        "representative_selection_threshold",
+        "representative_marginal_gain",
+        "assignment_threshold",
+        "representative_passes_statistics_criteria",
+        "representative_passes_validation_criteria",
         "label",
         "metric",
         "threshold",
@@ -2514,7 +3008,7 @@ def make_directed_set_cover(
     threads: int = 1,
     entity_type: ClusterEntity = "ligand",
 ) -> Path:
-    """Build a directed training-sampling cover from compact score shards."""
+    """Build a statistics-first directed representative cover from score shards."""
     started = time()
     if entity_type == "ligand" and metric in GATED_LIGAND_DIAGNOSTIC_METRICS:
         raise ValueError(
@@ -2522,6 +3016,8 @@ def make_directed_set_cover(
         )
     if threads < 1:
         raise ValueError("directed-cover threads must be positive")
+    if not 0 <= threshold <= 100:
+        raise ValueError("directed-cover threshold must be in [0, 100]")
     node_column = _cluster_node_column(entity_type)
     output = (
         _sampling_root(data_dir, entity_type)
@@ -2534,13 +3030,14 @@ def make_directed_set_cover(
         entity_type=entity_type,
     ):
         return output
+    fallback_threshold = min(threshold, 50)
     component_path = (
         _sampling_root(data_dir, entity_type)
         / "directed_set_cover"
         / "reductions"
         / f"metric={metric}"
         / "labels"
-        / f"threshold={threshold}.parquet"
+        / f"threshold={fallback_threshold}.parquet"
     )
     if not component_path.is_file():
         raise FileNotFoundError(
@@ -2564,6 +3061,18 @@ def make_directed_set_cover(
         for component, group in component_labels.groupby("component", sort=False)
     }
     component_lookup = component_labels[[node_column, "component", "component_node"]]
+    quality = _representative_quality(
+        data_dir=data_dir,
+        metric=metric,
+        entity_type=entity_type,
+        nodes=component_labels[node_column].tolist(),
+    )
+    statistics_by_node = dict(
+        zip(component_labels[node_column], quality.passes_statistics)
+    )
+    validation_by_node = dict(
+        zip(component_labels[node_column], quality.passes_validation)
+    )
     sources = component_score_sources(
         data_dir=data_dir,
         metric=metric,
@@ -2589,14 +3098,14 @@ def make_directed_set_cover(
                 cast(target_node AS VARCHAR) AS target_node,
                 forward_similarity::DOUBLE AS similarity
             FROM read_parquet([{paths_sql}])
-            WHERE forward_similarity >= {threshold}
+            WHERE forward_similarity >= {fallback_threshold}
             UNION ALL
             SELECT
                 cast(target_node AS VARCHAR) AS query_node,
                 cast(query_node AS VARCHAR) AS target_node,
                 reverse_similarity::DOUBLE AS similarity
             FROM read_parquet([{paths_sql}])
-            WHERE reverse_similarity >= {threshold}
+            WHERE reverse_similarity >= {fallback_threshold}
         ), labeled AS (
             SELECT
                 query_labels.component AS query_component,
@@ -2622,15 +3131,18 @@ def make_directed_set_cover(
         """
     )
     LOG.info(
-        "directed cover edge query start: metric=%s threshold=%d sources=%d "
-        "nodes=%d components=%d",
+        "directed cover edge query start: metric=%s threshold=%d "
+        "fallback_threshold=%d sources=%d nodes=%d components=%d",
         metric,
         threshold,
+        fallback_threshold,
         len(sources),
         len(component_labels),
         len(nodes_by_component),
     )
-    staged_edges = temporary_root / f"{metric}-{threshold}-directed-edges.parquet"
+    staged_edges = temporary_root / (
+        f"{metric}-{threshold}-{fallback_threshold}-directed-edges.parquet"
+    )
     staged_edges.unlink(missing_ok=True)
     staged_schema = pa.schema(
         [
@@ -2701,24 +3213,86 @@ def make_directed_set_cover(
     del reader
     gc.collect()
 
-    assignments: list[tuple[str, str, float, int, float]] = []
+    assignments: list[dict[str, Any]] = []
     processed_nodes: set[str] = set()
+    representative_count = 0
     current_component: int | None = None
     current_nodes: list[str] = []
     current_graph: nk.graph.Graph | None = None
+    current_primary_graph: nk.graph.Graph | None = None
 
     def finish_component() -> None:
-        nonlocal current_component, current_graph
-        if current_component is None or current_graph is None:
+        nonlocal current_component, current_graph, current_primary_graph
+        nonlocal representative_count
+        if (
+            current_component is None
+            or current_graph is None
+            or current_primary_graph is None
+        ):
             return
         if len(current_nodes) > 1 and current_graph.numberOfEdges() == 0:
             raise ValueError(
                 f"non-singleton directed-cover component {current_component} "
                 "has no edges"
             )
-        assignments.extend(
-            _greedy_directed_centroid_cover(current_graph, current_nodes)
+        statistics_mask = np.asarray(
+            [statistics_by_node[node] for node in current_nodes],
+            dtype=bool,
         )
+        validation_mask = np.asarray(
+            [validation_by_node[node] for node in current_nodes],
+            dtype=bool,
+        )
+        selections, component_assignments = _greedy_tiered_directed_cover(
+            current_primary_graph,
+            current_nodes,
+            primary_threshold=threshold,
+            fallback_threshold=fallback_threshold,
+            fallback_graph=current_graph,
+            preferred_mask=statistics_mask,
+            candidate_priority=validation_mask.astype(float),
+        )
+        selection_by_node = {
+            selection.representative: selection for selection in selections
+        }
+        all_targets = np.ones(len(current_nodes), dtype=bool)
+        coverage_counts = [
+            len(
+                _incoming_cover(
+                    current_primary_graph,
+                    node,
+                    minimum_weight=threshold / 100.0,
+                    uncovered=all_targets,
+                )
+            )
+            for node in range(len(current_nodes))
+        ]
+        for assignment in component_assignments:
+            selection = selection_by_node[assignment.representative]
+            assignments.append(
+                {
+                    node_column: str(current_nodes[assignment.query]),
+                    "centroid_node": str(
+                        current_nodes[assignment.representative]
+                    ),
+                    "similarity_to_centroid": assignment.similarity,
+                    "coverage_count": coverage_counts[assignment.query],
+                    "coverage_fraction": coverage_counts[assignment.query]
+                    / len(current_nodes),
+                    "representative_selection_order": representative_count
+                    + selection.order,
+                    "representative_selection_threshold": selection.threshold,
+                    "representative_marginal_gain": selection.marginal_gain,
+                    "assignment_threshold": assignment.threshold,
+                    "representative_passes_statistics_criteria": bool(
+                        statistics_mask[assignment.representative]
+                    ),
+                    "representative_passes_validation_criteria": bool(
+                        validation_mask[assignment.representative]
+                    ),
+                }
+            )
+        representative_count += len(selections)
         processed_nodes.update(current_nodes)
 
     streamed_rows = 0
@@ -2753,23 +3327,43 @@ def make_directed_set_cover(
                         weighted=True,
                         directed=True,
                     )
+                    current_primary_graph = (
+                        current_graph
+                        if threshold == fallback_threshold
+                        else nk.Graph(
+                            len(current_nodes),
+                            weighted=True,
+                            directed=True,
+                        )
+                    )
                 assert current_graph is not None
+                assert current_primary_graph is not None
                 similarities = group["similarity"].to_numpy(
                     dtype=float, copy=False
                 )
-                current_graph.addEdges(
-                    (
-                        similarities / 100.0,
-                        (
-                            group["query_node"].to_numpy(
-                                dtype=np.uint, copy=False
-                            ),
-                            group["target_node"].to_numpy(
-                                dtype=np.uint, copy=False
-                            ),
-                        ),
-                    )
+                query_nodes = group["query_node"].to_numpy(
+                    dtype=np.uint, copy=False
                 )
+                target_nodes = group["target_node"].to_numpy(
+                    dtype=np.uint, copy=False
+                )
+                weighted_edges = (
+                    similarities / 100.0,
+                    (query_nodes, target_nodes),
+                )
+                current_graph.addEdges(weighted_edges)
+                if current_primary_graph is not current_graph:
+                    primary_edges = similarities >= threshold
+                    if primary_edges.any():
+                        current_primary_graph.addEdges(
+                            (
+                                similarities[primary_edges] / 100.0,
+                                (
+                                    query_nodes[primary_edges],
+                                    target_nodes[primary_edges],
+                                ),
+                            )
+                        )
         finish_component()
     finally:
         staged_edges.unlink(missing_ok=True)
@@ -2780,9 +3374,29 @@ def make_directed_set_cover(
                 f"non-singleton directed-cover component {component} was "
                 "absent from edges"
             )
-        assignments.extend((node, node, 100.0, 1, 1.0) for node in missing)
+        for node in missing:
+            assignments.append(
+                {
+                    node_column: node,
+                    "centroid_node": node,
+                    "similarity_to_centroid": 100.0,
+                    "coverage_count": 1,
+                    "coverage_fraction": 1.0,
+                    "representative_selection_order": representative_count,
+                    "representative_selection_threshold": None,
+                    "representative_marginal_gain": 1,
+                    "assignment_threshold": threshold,
+                    "representative_passes_statistics_criteria": bool(
+                        statistics_by_node[node]
+                    ),
+                    "representative_passes_validation_criteria": bool(
+                        validation_by_node[node]
+                    ),
+                }
+            )
+            representative_count += 1
 
-    published = pd.DataFrame(
+    published = pd.DataFrame.from_records(
         assignments,
         columns=[
             node_column,
@@ -2790,12 +3404,35 @@ def make_directed_set_cover(
             "similarity_to_centroid",
             "coverage_count",
             "coverage_fraction",
+            "representative_selection_order",
+            "representative_selection_threshold",
+            "representative_marginal_gain",
+            "assignment_threshold",
+            "representative_passes_statistics_criteria",
+            "representative_passes_validation_criteria",
         ],
     )
     published["coverage_count"] = published["coverage_count"].astype("Int32")
     published["coverage_fraction"] = published["coverage_fraction"].astype(
         "Float32"
     )
+    published["representative_selection_order"] = published[
+        "representative_selection_order"
+    ].astype("Int32")
+    published["representative_selection_threshold"] = published[
+        "representative_selection_threshold"
+    ].astype("Int16")
+    published["representative_marginal_gain"] = published[
+        "representative_marginal_gain"
+    ].astype("Int32")
+    published["assignment_threshold"] = published["assignment_threshold"].astype(
+        "Int16"
+    )
+    for column in [
+        "representative_passes_statistics_criteria",
+        "representative_passes_validation_criteria",
+    ]:
+        published[column] = published[column].astype(bool)
     if metric == "tanimoto_similarity_ecfp4_1024":
         published = _expand_fingerprint_directed_cover(
             data_dir=data_dir,

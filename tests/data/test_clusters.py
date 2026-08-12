@@ -368,6 +368,10 @@ def test_symmetric_edge_shards_take_minimum_of_directional_maxima(tmp_path):
             "ligand_id": ["l1", "l2", "l3", "l4"],
             "system_type": ["holo"] * 4,
             "ligand_is_proper": [True] * 4,
+            "system_proper_num_pocket_residues": [200, 20, 200, 20],
+            "system_proper_num_interactions": [1, 10, 1, 10],
+            "system_proper_ligand_max_molecular_weight": [100, 300, 100, 300],
+            "system_pass_validation_criteria": [True, False, True, False],
         }
     ).to_parquet(index_dir / "annotation_table.parquet", index=False)
     pd.DataFrame(
@@ -426,13 +430,13 @@ def test_symmetric_edge_shards_take_minimum_of_directional_maxima(tmp_path):
     make_directed_cover_component_reduction(
         data_dir=tmp_path,
         metric=metric,
-        thresholds=[50],
+        thresholds=[90],
         source_path=edge_path,
     )
     merge_directed_cover_component_reductions(
         data_dir=tmp_path,
         metric=metric,
-        thresholds=[50],
+        thresholds=[90],
     )
     cover_path = make_directed_set_cover(
         data_dir=tmp_path,
@@ -452,6 +456,32 @@ def test_symmetric_edge_shards_take_minimum_of_directional_maxima(tmp_path):
     assert cover.loc["l3", "coverage_fraction"] == pytest.approx(0.75)
     assert cover.loc["l4", "centroid_ligand_id"] == "l3"
     assert cover.loc["l4", "similarity_to_centroid"] == pytest.approx(85.0)
+    assert bool(cover.loc["l2", "representative_passes_statistics_criteria"])
+    assert not bool(
+        cover.loc["l2", "representative_passes_validation_criteria"]
+    )
+    assert not bool(
+        cover.loc["l3", "representative_passes_statistics_criteria"]
+    )
+    assert bool(cover.loc["l3", "representative_passes_validation_criteria"])
+    assert (
+        cover.loc["l2", "representative_selection_order"]
+        < cover.loc["l3", "representative_selection_order"]
+    )
+
+    relaxed_cover_path = make_directed_set_cover(
+        data_dir=tmp_path,
+        metric=metric,
+        threshold=90,
+        scratch_dir=tmp_path / "scratch-relaxed-cover",
+        threads=1,
+    )
+    relaxed_cover = pd.read_parquet(relaxed_cover_path).set_index("ligand_id")
+    assert relaxed_cover.loc["l4", "centroid_ligand_id"] == "l3"
+    assert relaxed_cover.loc["l4", "similarity_to_centroid"] == pytest.approx(85.0)
+    assert relaxed_cover.loc["l4", "assignment_threshold"] == 50
+    assert relaxed_cover.loc["l3", "representative_selection_threshold"] == 90
+    assert relaxed_cover.loc["l1", "representative_selection_threshold"] == 50
 
 
 def test_interface_clusters_reuse_reciprocal_and_directed_cover_pipeline(tmp_path):
@@ -584,8 +614,9 @@ def test_interface_clusters_reuse_reciprocal_and_directed_cover_pipeline(tmp_pat
         frozenset({"i4"}),
     }
     cover = pd.read_parquet(cover_path).set_index("system_id")
-    assert cover.loc["i1", "centroid_system_id"] == "i3"
-    assert cover.loc["i1", "similarity_to_centroid"] == pytest.approx(90.0)
+    assert cover.loc["i1", "centroid_system_id"] == "i1"
+    assert cover.loc["i2", "centroid_system_id"] == "i1"
+    assert cover.loc["i2", "similarity_to_centroid"] == pytest.approx(60.0)
     assert cover.loc["i4", "centroid_system_id"] == "i3"
 
     from plinder.data.pipeline.score import summarize_clustering_artifacts
@@ -1040,6 +1071,155 @@ def test_directed_cover_uses_query_to_centroid_scores_and_reassigns():
     ]
 
 
+def test_directed_cover_falls_back_to_relaxed_edges_when_strict_gain_ends():
+    from plinder.data.clusters import _greedy_tiered_directed_cover
+
+    nodes = ["q1", "q2", "r1", "r2"]
+    graph = nk.Graph(len(nodes), weighted=True, directed=True)
+    graph.addEdges(
+        (
+            np.asarray([0.9, 0.55]),
+            (
+                np.asarray([0, 1], dtype=np.uint),
+                np.asarray([2, 3], dtype=np.uint),
+            ),
+        )
+    )
+    candidate_mask = np.asarray([False, False, True, True])
+    target_mask = np.asarray([True, True, False, False])
+
+    selections, assignments = _greedy_tiered_directed_cover(
+        graph,
+        nodes,
+        primary_threshold=90,
+        fallback_threshold=50,
+        candidate_mask=candidate_mask,
+        target_mask=target_mask,
+    )
+
+    assert [
+        (nodes[item.representative], item.threshold, item.marginal_gain)
+        for item in selections
+    ] == [("r1", 90, 1), ("r2", 50, 1)]
+    assert [
+        (
+            nodes[item.query],
+            nodes[item.representative],
+            item.similarity,
+            item.threshold,
+        )
+        for item in assignments
+    ] == [
+        ("q1", "r1", pytest.approx(90.0), 90),
+        ("q2", "r2", pytest.approx(55.0), 50),
+    ]
+
+
+def test_directed_cover_uses_quality_to_break_gain_ties_and_self_for_isolates():
+    from plinder.data.clusters import _greedy_tiered_directed_cover
+
+    nodes = ["query", "lower-quality", "higher-quality", "isolated"]
+    graph = nk.Graph(len(nodes), weighted=True, directed=True)
+    graph.addEdges(
+        (
+            np.asarray([0.8, 0.8]),
+            (
+                np.asarray([0, 0], dtype=np.uint),
+                np.asarray([1, 2], dtype=np.uint),
+            ),
+        )
+    )
+
+    selections, assignments = _greedy_tiered_directed_cover(
+        graph,
+        nodes,
+        primary_threshold=70,
+        fallback_threshold=50,
+        candidate_mask=np.asarray([False, True, True, False]),
+        target_mask=np.asarray([True, False, False, True]),
+        candidate_priority=[0.0, 1.0, 2.0, 0.0],
+    )
+
+    assert [
+        (nodes[item.representative], item.threshold) for item in selections
+    ] == [("higher-quality", 70), ("isolated", None)]
+    assert [
+        (nodes[item.query], nodes[item.representative]) for item in assignments
+    ] == [("query", "higher-quality"), ("isolated", "isolated")]
+
+
+def test_directed_cover_prefers_quality_representatives_without_dropping_nodes():
+    from plinder.data.clusters import _greedy_tiered_directed_cover
+
+    nodes = ["q1", "q2", "q3", "preferred", "broad-other"]
+    graph = nk.Graph(len(nodes), weighted=True, directed=True)
+    graph.addEdges(
+        (
+            np.asarray([0.9, 0.9, 0.9, 0.9]),
+            (
+                np.asarray([0, 0, 1, 2], dtype=np.uint),
+                np.asarray([3, 4, 4, 4], dtype=np.uint),
+            ),
+        )
+    )
+
+    selections, assignments = _greedy_tiered_directed_cover(
+        graph,
+        nodes,
+        primary_threshold=90,
+        fallback_threshold=50,
+        candidate_mask=np.asarray([False, False, False, True, True]),
+        preferred_mask=np.asarray([False, False, False, True, False]),
+        target_mask=np.asarray([True, True, True, False, False]),
+    )
+
+    assert [nodes[item.representative] for item in selections] == [
+        "preferred",
+        "broad-other",
+    ]
+    assert {nodes[item.query] for item in assignments} == {"q1", "q2", "q3"}
+
+
+def test_symmetric_plan_checks_only_sources_for_the_requested_metric(tmp_path):
+    from plinder.data.clusters import (
+        load_symmetric_edge_plan,
+        prepare_symmetric_edge_plan,
+    )
+
+    score_dir = tmp_path / "scores/search_db=holo"
+    chemical_dir = tmp_path / "ligand_scores"
+    score_dir.mkdir(parents=True)
+    chemical_dir.mkdir()
+    score_source = score_dir / "scores.parquet"
+    chemical_source = chemical_dir / "chemical.parquet"
+    score_source.write_text("score")
+    chemical_source.write_text("chemical")
+    prepare_symmetric_edge_plan(
+        data_dir=tmp_path,
+        metrics=[
+            "sucos_shape_pocket_qcov",
+            "tanimoto_similarity_ecfp4_1024",
+        ],
+        source_batch_size=1,
+        bucket_count=1,
+    )
+    chemical_source.unlink()
+
+    plan = load_symmetric_edge_plan(
+        tmp_path,
+        metrics=["sucos_shape_pocket_qcov"],
+    )
+    assert plan["metrics"] == [
+        "sucos_shape_pocket_qcov",
+        "tanimoto_similarity_ecfp4_1024",
+    ]
+    with pytest.raises(ValueError, match="raw score source changed"):
+        load_symmetric_edge_plan(
+            tmp_path,
+            metrics=["tanimoto_similarity_ecfp4_1024"],
+        )
+
+
 def test_community_stream_rejects_edges_crossing_components(tmp_path):
     from plinder.data.clusters import (
         make_communities,
@@ -1221,6 +1401,12 @@ def test_ligand_clusters_are_merged_without_system_projection(tmp_path):
         {
             "ligand_id": [ligand_a1, ligand_a2, ligand_b, ligand_c],
             "label": ["d0", "d1", "d0", "d2"],
+            "centroid_ligand_id": [
+                ligand_a1,
+                ligand_a2,
+                ligand_a1,
+                ligand_c,
+            ],
         }
     ).to_parquet(directed_cover, index=False)
 
