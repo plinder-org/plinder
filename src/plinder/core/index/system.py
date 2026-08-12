@@ -611,8 +611,13 @@ class PlinderSystem:
         """
         Return the ligand molecules as RDKit Mol objects.
         """
-        from peppr import sanitize as peppr_sanitize
+        # TODO(peppr): temporary local sanitize carrying boron/main-group
+        # over-valence fixes not yet in a released peppr. Revert to
+        # `from peppr import sanitize as peppr_sanitize` once upstream.
+        # See plinder.core.utils.sanitize.
         from rdkit import Chem
+
+        from plinder.core.utils.sanitize import sanitize as peppr_sanitize
 
         mols = {}
         for chain in self.ligand_sdfs:
@@ -620,7 +625,7 @@ class PlinderSystem:
             mol = next(supplier, None)
             if mol is not None:
                 peppr_sanitize(mol)
-                mol = Chem.RemoveAllHs(mol)
+                mol = Chem.RemoveAllHs(mol, sanitize=False)
                 mols[chain] = mol
         return mols
 

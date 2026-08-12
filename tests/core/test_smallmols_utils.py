@@ -13,7 +13,10 @@ from rdkit import Chem
     ],
 )
 def test_valence_issue_handling(smiles, num_problems):
-    from peppr import sanitize as peppr_sanitize
+    # TODO(peppr): use the vendored sanitize the pipeline uses (boron/main-group
+    # over-valence fixes not yet in a released peppr). Revert to
+    # `from peppr import sanitize as peppr_sanitize` once upstream.
+    from plinder.core.utils.sanitize import sanitize as peppr_sanitize
 
     mol = Chem.MolFromSmiles(smiles, sanitize=False)
     peppr_sanitize(mol)
@@ -95,9 +98,13 @@ def test_compare_stereo_to_template():
     import biotite.structure as struc
     import biotite.structure.info as bt_info
     from biotite.interface import rdkit as rdkit_interface
-    from peppr import sanitize as peppr_sanitize
     from plinder.core.structure.atoms import is_hydrogen_isotope
     from plinder.core.structure.smallmols_utils import compare_stereo_to_template
+
+    # TODO(peppr): use the vendored sanitize the pipeline uses (boron/main-group
+    # over-valence fixes not yet in a released peppr). Revert to
+    # `from peppr import sanitize as peppr_sanitize` once upstream.
+    from plinder.core.utils.sanitize import sanitize as peppr_sanitize
 
     # Build a CCD mol with stereo (NAG — chiral sugar)
     ref = bt_info.residue("NAG")

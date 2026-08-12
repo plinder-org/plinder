@@ -472,7 +472,12 @@ def atoms_to_rdkit_mol(
     """
     from biotite.interface import rdkit as rdkit_interface
     from biotite.structure import BondList
-    from peppr import sanitize as peppr_sanitize
+
+    # TODO(peppr): temporary local sanitize carrying boron/main-group
+    # over-valence fixes not yet in a released peppr. Revert to
+    # `from peppr import sanitize as peppr_sanitize` once upstream.
+    # See plinder.core.utils.sanitize.
+    from plinder.core.utils.sanitize import sanitize as peppr_sanitize
 
     heavy = atoms[~is_hydrogen_isotope(atoms.element)]
 
@@ -495,19 +500,19 @@ def atoms_to_rdkit_mol(
     if mol is None:
         raise ValueError("Failed to convert AtomArray to RDKit Mol")
 
-    # organic_elements = {"H", "C", "N", "O", "F", "P", "S", "Cl", "Br", "I"}
-    # if set(heavy.element).difference(organic_elements):
-    #     with rdBase.BlockLogs():
-    #         # disconnect organometallics before sanitize
-    #         mol = rdMolStandardize.DisconnectOrganometallics(mol)
-
     peppr_sanitize(mol)
     if assign_stereo:
         Chem.AssignAtomChiralTagsFromStructure(mol)
     # RDKit's RemoveAllHs keys on atomic number, so it strips any
     # hydrogen isotope atom that survived the element-string filter.
     # Safe after stereo assignment — chiral tags live on heavy atoms.
-    return Chem.RemoveAllHs(mol)
+    #
+    # sanitize=False: peppr.sanitize already sanitized the mol and deliberately
+    # tolerates over-valent main-group centres (boron cages, Be, …) that RDKit's
+    # valence check rejects. RemoveAllHs re-sanitizes by default, which would
+    # re-raise AtomValenceException for those molecules and undo peppr's
+    # tolerance — so strip Hs without re-validating valence.
+    return Chem.RemoveAllHs(mol, sanitize=False)
 
 
 # ---------------------------------------------------------------------------
@@ -871,7 +876,12 @@ def _bonds_by_substructure_match(
         wrong bond orders.
     """
     from biotite.interface import rdkit as rdkit_interface
-    from peppr import sanitize as peppr_sanitize
+
+    # TODO(peppr): temporary local sanitize carrying boron/main-group
+    # over-valence fixes not yet in a released peppr. Revert to
+    # `from peppr import sanitize as peppr_sanitize` once upstream.
+    # See plinder.core.utils.sanitize.
+    from plinder.core.utils.sanitize import sanitize as peppr_sanitize
 
     if lig_heavy.bonds is None or lig_heavy.bonds.as_array().shape[0] == 0:
         # Unknown residue — infer bonds from distances

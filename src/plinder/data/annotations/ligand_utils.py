@@ -383,7 +383,7 @@ def _get_ccd_atomarray(comp_id: str) -> "struc.AtomArray | None":
     component is in neither source.
     """
     try:
-        return bt_info.residue(comp_id, allow_missing_coord=True)
+        atoms = bt_info.residue(comp_id, allow_missing_coord=True)
     except Exception as bundled_error:
         atoms = _component_atoms_from_components_cif(comp_id)
         if atoms is None:
@@ -391,7 +391,7 @@ def _get_ccd_atomarray(comp_id: str) -> "struc.AtomArray | None":
                 f"CCD lookup failed for {comp_id}: absent from biotite's "
                 f"bundled CCD ({bundled_error}) and from components.cif"
             )
-        return atoms
+    return atoms
 
 
 @cache

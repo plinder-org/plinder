@@ -1235,13 +1235,24 @@ def test_smiles_from_nextgen(rcsb_ccd_reference_csv):
         # Check chirality via substructure match between CCD and RCSB mols
         rcsb_mol = Chem.MolFromSmiles(row["rcsb_smiles"])
         if rcsb_mol is not None:
-            Chem.AssignStereochemistry(rcsb_mol, force=True)
-            Chem.AssignStereochemistry(ccd_mol, force=True)
-            match = ccd_mol.GetSubstructMatch(rcsb_mol)
+            # Modern stereo API, matching production code: perceive the CCD
+            # mol's tetrahedral tags from 3D with AssignAtomChiralTagsFromStructure
+            # (which keeps all-carbon quaternary centers that legacy
+            # AssignStereochemistryFrom3D silently drops), then CIP-label both
+            # sides with AssignCIPLabels so R/S codes are directly comparable.
+            # Work on a copy so the @cache'd CCD mol is not mutated.
+            ccd_probe = Chem.Mol(ccd_mol)
+            try:
+                Chem.AssignAtomChiralTagsFromStructure(ccd_probe)
+                Chem.AssignCIPLabels(ccd_probe)
+                Chem.AssignCIPLabels(rcsb_mol)
+            except Exception:
+                continue  # unusual bonds prevent CIP labelling — skip stereo check
+            match = ccd_probe.GetSubstructMatch(rcsb_mol)
             if match:
                 for rcsb_idx, ccd_idx in enumerate(match):
                     rcsb_atom = rcsb_mol.GetAtomWithIdx(rcsb_idx)
-                    ccd_atom = ccd_mol.GetAtomWithIdx(ccd_idx)
+                    ccd_atom = ccd_probe.GetAtomWithIdx(ccd_idx)
                     rcsb_cip = rcsb_atom.GetPropsAsDict().get("_CIPCode", "")
                     ccd_cip = ccd_atom.GetPropsAsDict().get("_CIPCode", "")
                     if rcsb_cip and ccd_cip and rcsb_cip != ccd_cip:
