@@ -34,11 +34,50 @@ DERIVED_COLUMN_DESCRIPTIONS = {
         "Assembly chain instance encoded as <operation>.<label_asym_id>"
     ),
     "chain_role": "Assembly role: receptor, ligand, or water",
+    "chain_num_contacting_ions": (
+        "Number of ion chains contacting this assembly-chain instance"
+    ),
+    "chain_num_contacting_artifacts": (
+        "Number of crystallization-artifact chains contacting this "
+        "assembly-chain instance"
+    ),
+    "chain_num_contacting_other_ligands": (
+        "Number of other ligand chains contacting this assembly-chain instance"
+    ),
     "source_mmcif_major_revision": (
         "Major revision number of the source PDB mmCIF used during ingest"
     ),
     "source_mmcif_minor_revision": (
         "Minor revision number of the source PDB mmCIF used during ingest"
+    ),
+    "reference_system_id": "Holo PLINDER system linked to this apo chain",
+    "linked_structure_id": "Stable identifier for the linked apo chain",
+    "source_entry_id": "PDB entry containing the linked apo chain",
+    "source_chain_asym_id": "Source asymmetric-chain ID of the linked apo chain",
+    "source_chain_auth_id": "Author chain ID of the linked apo chain",
+    "source_biounit_id": "Source biological assembly containing the apo chain",
+    "source_chain_instance": "Exact biological-assembly chain instance that was scored",
+    "source_num_contacting_ions": "Number of ion chains contacting the apo chain",
+    "source_num_contacting_artifacts": (
+        "Number of crystallization-artifact chains contacting the apo chain"
+    ),
+    "source_num_contacting_other_ligands": (
+        "Number of other ligand chains contacting the apo chain"
+    ),
+    "source_resolution": "Experimental resolution of the apo source entry",
+    "rank": "Apo candidate rank within the reference holo system",
+    "num_ligand_pockets": "Number of holo ligand pockets matched by this apo chain",
+    "min_pocket_fident": "Minimum pocket sequence identity across matched ligands",
+    "mean_pocket_fident": "Mean pocket sequence identity across matched ligands",
+    "min_protein_fident_weighted_sum": (
+        "Minimum chain-length-weighted protein sequence identity across matched ligands"
+    ),
+    "min_protein_fident_qcov_weighted_sum": (
+        "Minimum chain-length-weighted protein identity times query coverage "
+        "across matched ligands"
+    ),
+    "min_protein_lddt_weighted_sum": (
+        "Minimum chain-length-weighted protein LDDT across matched ligands"
     ),
     "selected_residue_numbers": (
         "Source-mmCIF residue numbers selected by any ligand pocket or protein "
