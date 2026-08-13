@@ -100,6 +100,7 @@ def test_download_cmd_does_not_fetch_source_mmcif_cache(mock_cpl, monkeypatch):
     utils.download_plinder_cmd(args=["-y"])
 
     assert "index/annotation_table.parquet" in requested
+    assert "index/linked_apo_structures.parquet" in requested
     assert not any(path.startswith("source_mmcifs") for path in requested)
 
 

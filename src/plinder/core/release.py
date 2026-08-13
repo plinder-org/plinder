@@ -72,6 +72,11 @@ RELEASE_TABLES: dict[str, dict[str, Any]] = {
         "row_grain": "PDB entry",
         "primary_key": ("entry_pdb_id",),
     },
+    "linked_apo_structures": {
+        "artifact": "linked_apo_structures",
+        "row_grain": "ranked apo chain linked to a holo system",
+        "primary_key": ("reference_system_id", "rank"),
+    },
     "interface_annotations": {
         "artifact": "interface_annotations",
         "row_grain": "protein-chain interface in a biological assembly",
