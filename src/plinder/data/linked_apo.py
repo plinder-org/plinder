@@ -9,6 +9,7 @@ from typing import TypeAlias
 import numpy as np
 import pandas as pd
 import pyarrow as pa
+import pyarrow.dataset as ds
 import pyarrow.parquet as pq
 
 from plinder.core.utils.schemas import STRUCTURE_LINK_SCHEMA
@@ -29,13 +30,26 @@ SCORE_COLUMNS = (
     "similarity",
 )
 ANNOTATION_COLUMNS = ("system_id", "ligand_id", "ligand_is_proper")
+ANNOTATION_CONTACT_COLUMNS = (
+    "entry_pdb_id",
+    "system_biounit_id",
+    "ligand_id",
+    "ligand_is_ion",
+    "ligand_is_artifact",
+    "ligand_neighboring_residues",
+)
+HOLO_CHAIN_ANNOTATION_COLUMNS = (
+    "entry_pdb_id",
+    "ligand_is_proper",
+    "ligand_protein_chains_asym_id",
+)
 ENTRY_CHAIN_COLUMNS = (
     "entry_pdb_id",
     "chain_asym_id",
     "chain_auth_id",
     "chain_entity_id",
     "chain_receptor_type",
-    "chain_is_holo",
+    "chain_is_ligand_like",
 )
 BIOUNIT_CHAIN_COLUMNS = (
     "entry_pdb_id",
@@ -52,9 +66,43 @@ APO_CANDIDATE_COLUMNS = (
     "source_chain_auth_id",
     "source_biounit_id",
     "source_chain_instance",
-    "source_num_ligand_chains",
+    "source_num_contacting_ions",
+    "source_num_contacting_artifacts",
+    "source_num_contacting_other_ligands",
     "source_resolution",
 )
+
+
+def _sql_path(path: str | Path) -> str:
+    return Path(path).resolve().as_posix().replace("'", "''")
+
+
+def _parquet_dataset(path: str | Path) -> ds.Dataset:
+    source = Path(path)
+    if source.is_dir():
+        return ds.dataset(
+            source,
+            format="parquet",
+            partitioning="hive",
+            exclude_invalid_files=True,
+        )
+    return ds.dataset(source, format="parquet", exclude_invalid_files=True)
+
+
+def _sql_parquet_source(path: str | Path) -> str:
+    source = Path(path).resolve()
+    if source.is_dir():
+        source = source / "**/*.parquet"
+    return source.as_posix().replace("'", "''")
+
+
+def _check_parquet_columns(
+    table: str | Path, columns: tuple[str, ...], name: str
+) -> None:
+    available = set(_parquet_dataset(table).schema.names)
+    missing = sorted(set(columns).difference(available))
+    if missing:
+        raise ValueError(f"{name} is missing columns {missing}")
 
 
 @dataclass(frozen=True)
@@ -72,9 +120,7 @@ class LinkedApoSelectionConfig:
             raise ValueError("max_per_system must be positive")
         thresholds = {
             "min_pocket_fident": self.min_pocket_fident,
-            "min_protein_fident_weighted_sum": (
-                self.min_protein_fident_weighted_sum
-            ),
+            "min_protein_fident_weighted_sum": (self.min_protein_fident_weighted_sum),
             "min_protein_fident_qcov_weighted_sum": (
                 self.min_protein_fident_qcov_weighted_sum
             ),
@@ -87,14 +133,16 @@ class LinkedApoSelectionConfig:
             raise ValueError(f"linked-apo thresholds must be in [0, 100]: {invalid}")
 
 
-def _read_columns(table: TableInput, columns: tuple[str, ...], name: str) -> pd.DataFrame:
+def _read_columns(
+    table: TableInput, columns: tuple[str, ...], name: str
+) -> pd.DataFrame:
     if isinstance(table, pd.DataFrame):
         missing = sorted(set(columns).difference(table.columns))
         if missing:
             raise ValueError(f"{name} is missing columns {missing}")
         return table.loc[:, columns].copy()
     path = Path(table)
-    available = set(pq.read_schema(path).names)
+    available = set(_parquet_dataset(path).schema.names)
     missing = sorted(set(columns).difference(available))
     if missing:
         raise ValueError(f"{name} is missing columns {missing}")
@@ -105,7 +153,7 @@ def _read_score_columns(table: TableInput) -> pd.DataFrame:
     if isinstance(table, pd.DataFrame):
         return _read_columns(table, SCORE_COLUMNS, "protein score table")
     path = Path(table)
-    available = set(pq.read_schema(path).names)
+    available = set(_parquet_dataset(path).schema.names)
     missing = sorted(set(SCORE_COLUMNS).difference(available))
     if missing:
         raise ValueError(f"protein score table is missing columns {missing}")
@@ -124,18 +172,174 @@ def _as_required_strings(frame: pd.DataFrame, columns: list[str], name: str) -> 
             raise ValueError(f"{name} has empty {column} values")
 
 
+def _ligand_contact_counts(annotation: pd.DataFrame) -> pd.DataFrame:
+    """Count annotated ligand contacts for each receptor chain instance."""
+    contacts = annotation.explode("ligand_neighboring_residues", ignore_index=True)
+    encoded = contacts["ligand_neighboring_residues"].astype("string")
+    contacts = contacts.loc[encoded.notna() & encoded.str.strip().ne("")].copy()
+    if contacts.empty:
+        return pd.DataFrame(
+            columns=[
+                "entry_pdb_id",
+                "biounit_id",
+                "chain_instance",
+                "source_num_contacting_ions",
+                "source_num_contacting_artifacts",
+                "source_num_contacting_other_ligands",
+            ]
+        )
+    _as_required_strings(
+        contacts,
+        ["entry_pdb_id", "system_biounit_id", "ligand_id"],
+        "annotation table ligand contacts",
+    )
+    encoded = contacts["ligand_neighboring_residues"].astype("string")
+    fields = encoded.str.rsplit("_", n=3, expand=True)
+    if fields.shape[1] != 4:
+        raise ValueError("annotation has malformed neighboring residues")
+    malformed = fields[0].isna() | fields[0].str.strip().eq("")
+    if malformed.any():
+        examples = encoded.loc[malformed].head(10).tolist()
+        raise ValueError(f"annotation has malformed neighboring residues: {examples}")
+    contacts["chain_instance"] = fields[0].astype("string")
+    artifact = contacts["ligand_is_artifact"].fillna(False).astype(bool)
+    ion = contacts["ligand_is_ion"].fillna(False).astype(bool)
+    contacts["contact_type"] = np.select(
+        [artifact, ion],
+        ["artifacts", "ions"],
+        default="other_ligands",
+    )
+    counts = (
+        contacts.drop_duplicates(
+            [
+                "entry_pdb_id",
+                "system_biounit_id",
+                "chain_instance",
+                "ligand_id",
+                "contact_type",
+            ]
+        )
+        .groupby(
+            [
+                "entry_pdb_id",
+                "system_biounit_id",
+                "chain_instance",
+                "contact_type",
+            ],
+            observed=True,
+        )["ligand_id"]
+        .nunique()
+        .unstack(fill_value=0)
+        .reset_index()
+        .rename(columns={"system_biounit_id": "biounit_id"})
+    )
+    for contact_type in ["ions", "artifacts", "other_ligands"]:
+        source_column = f"source_num_contacting_{contact_type}"
+        counts[source_column] = (
+            counts.pop(contact_type) if contact_type in counts else 0
+        )
+    return counts
+
+
+def _read_ligand_contact_counts(annotation: TableInput) -> pd.DataFrame:
+    """Read chain-local ligand counts without loading the release annotation."""
+    if isinstance(annotation, pd.DataFrame):
+        return _ligand_contact_counts(
+            _read_columns(
+                annotation,
+                ANNOTATION_CONTACT_COLUMNS,
+                "annotation table",
+            )
+        )
+    _check_parquet_columns(
+        annotation,
+        ANNOTATION_CONTACT_COLUMNS,
+        "annotation table",
+    )
+    import duckdb
+
+    connection = duckdb.connect()
+    try:
+        return connection.sql(
+            f"""
+            SELECT
+                CAST(entry_pdb_id AS VARCHAR) AS entry_pdb_id,
+                CAST(system_biounit_id AS VARCHAR) AS biounit_id,
+                regexp_extract(
+                    CAST(encoded_residue AS VARCHAR),
+                    '^(.*)_[^_]+_[^_]+_[^_]+$',
+                    1
+                ) AS chain_instance,
+                COUNT(DISTINCT CAST(ligand_id AS VARCHAR)) FILTER (
+                    WHERE NOT COALESCE(
+                        TRY_CAST(ligand_is_artifact AS BOOLEAN), FALSE
+                    ) AND COALESCE(TRY_CAST(ligand_is_ion AS BOOLEAN), FALSE)
+                ) AS source_num_contacting_ions,
+                COUNT(DISTINCT CAST(ligand_id AS VARCHAR)) FILTER (
+                    WHERE COALESCE(
+                        TRY_CAST(ligand_is_artifact AS BOOLEAN), FALSE
+                    )
+                ) AS source_num_contacting_artifacts,
+                COUNT(DISTINCT CAST(ligand_id AS VARCHAR)) FILTER (
+                    WHERE NOT COALESCE(
+                        TRY_CAST(ligand_is_artifact AS BOOLEAN), FALSE
+                    ) AND NOT COALESCE(
+                        TRY_CAST(ligand_is_ion AS BOOLEAN), FALSE
+                    )
+                ) AS source_num_contacting_other_ligands
+            FROM read_parquet(
+                '{_sql_parquet_source(annotation)}'
+            ) AS annotation,
+            UNNEST(annotation.ligand_neighboring_residues)
+                AS neighboring(encoded_residue)
+            WHERE encoded_residue IS NOT NULL
+                AND CAST(encoded_residue AS VARCHAR) != ''
+            GROUP BY entry_pdb_id, system_biounit_id, chain_instance
+            """
+        ).df()
+    finally:
+        connection.close()
+
+
+def ligand_holo_chain_keys(annotation: TableInput) -> pd.DataFrame:
+    """Return receptor-chain keys bound to proper ligands."""
+    frame = _read_columns(
+        annotation,
+        HOLO_CHAIN_ANNOTATION_COLUMNS,
+        "annotation table",
+    )
+    proper = frame["ligand_is_proper"].fillna(False).astype(bool)
+    keys = frame.loc[proper].explode("ligand_protein_chains_asym_id", ignore_index=True)
+    keys = keys.rename(columns={"ligand_protein_chains_asym_id": "chain_instance"})
+    keys = keys[["entry_pdb_id", "chain_instance"]]
+    encoded = keys["chain_instance"].astype("string")
+    keys = keys.loc[encoded.notna() & encoded.str.strip().ne("")].copy()
+    if keys.empty:
+        return pd.DataFrame(columns=["entry_pdb_id", "chain_asym_id"])
+    _as_required_strings(
+        keys,
+        ["entry_pdb_id", "chain_instance"],
+        "annotation table proper-ligand chains",
+    )
+    keys["chain_asym_id"] = keys.pop("chain_instance").str.split(".", n=1).str[-1]
+    return keys.drop_duplicates(ignore_index=True)
+
+
 def build_apo_candidate_manifest(
     entry_chains: TableInput,
     *,
     biounit_chains: TableInput,
     entry_metadata: TableInput,
+    annotation: TableInput,
 ) -> pd.DataFrame:
     """Build one scored target row per apo protein chain.
 
-    The apo definition matches the alignment database: a protein chain must
-    not be holo and must not share an entity with a holo chain in its entry.
-    If the chain occurs in several biological assemblies, the assembly with
-    the fewest non-water ligand chains is retained.
+    A protein chain is apo when it is not ligand-like, is not bound to a
+    proper ligand, and does not share an entity with a proper-ligand receptor
+    chain in its entry. Protein-interface membership is independent of this
+    ligand-relative definition. If a chain occurs in several biological
+    assemblies, the assembly with the cleanest chain-local ligand environment
+    is retained.
     """
     chains = _read_columns(entry_chains, ENTRY_CHAIN_COLUMNS, "entry chain table")
     membership = _read_columns(
@@ -148,6 +352,14 @@ def build_apo_candidate_manifest(
         ENTRY_METADATA_COLUMNS,
         "entry metadata table",
     )
+    holo_keys = ligand_holo_chain_keys(annotation)
+    ligand_contacts = _read_ligand_contact_counts(annotation)
+    if not ligand_contacts.empty:
+        _as_required_strings(
+            ligand_contacts,
+            ["entry_pdb_id", "biounit_id", "chain_instance"],
+            "annotation table ligand contacts",
+        )
     _as_required_strings(
         chains,
         [
@@ -159,9 +371,7 @@ def build_apo_candidate_manifest(
         "entry chain table",
     )
     chains["chain_entity_id"] = chains["chain_entity_id"].astype("string")
-    duplicate_chains = chains.duplicated(
-        ["entry_pdb_id", "chain_asym_id"], keep=False
-    )
+    duplicate_chains = chains.duplicated(["entry_pdb_id", "chain_asym_id"], keep=False)
     if duplicate_chains.any():
         examples = (
             chains.loc[duplicate_chains, ["entry_pdb_id", "chain_asym_id"]]
@@ -171,7 +381,14 @@ def build_apo_candidate_manifest(
         )
         raise ValueError(f"entry chain table has duplicate chains: {examples}")
 
-    holo = chains["chain_is_holo"].fillna(False).astype(bool)
+    holo_keys["chain_is_holo"] = True
+    chains = chains.merge(
+        holo_keys,
+        on=["entry_pdb_id", "chain_asym_id"],
+        how="left",
+        validate="one_to_one",
+    )
+    holo = chains["chain_is_holo"].eq(True)
     usable_entity = chains["chain_entity_id"].notna() & chains[
         "chain_entity_id"
     ].str.strip().ne("")
@@ -179,8 +396,9 @@ def build_apo_candidate_manifest(
         holo & usable_entity, ["entry_pdb_id", "chain_entity_id"]
     ].drop_duplicates()
     holo_entities["entity_is_holo"] = True
+    ligand_like = chains["chain_is_ligand_like"].fillna(False).astype(bool)
     candidates = chains.loc[
-        chains["chain_receptor_type"].str.lower().eq("protein") & ~holo
+        chains["chain_receptor_type"].str.lower().eq("protein") & ~holo & ~ligand_like
     ].merge(
         holo_entities,
         on=["entry_pdb_id", "chain_entity_id"],
@@ -202,17 +420,15 @@ def build_apo_candidate_manifest(
         ],
         "biological-assembly membership table",
     )
-    ligand_counts = (
-        membership.loc[membership["chain_role"].str.lower().eq("ligand")]
-        .groupby(["entry_pdb_id", "biounit_id"], observed=True)["chain_instance"]
-        .nunique()
-        .rename("source_num_ligand_chains")
-        .reset_index()
-    )
     receptor_membership = (
         membership.loc[
             membership["chain_role"].str.lower().eq("receptor"),
-            ["entry_pdb_id", "biounit_id", "chain_asym_id", "chain_instance"],
+            [
+                "entry_pdb_id",
+                "biounit_id",
+                "chain_asym_id",
+                "chain_instance",
+            ],
         ]
         .sort_values("chain_instance")
         .drop_duplicates(["entry_pdb_id", "biounit_id", "chain_asym_id"])
@@ -220,30 +436,42 @@ def build_apo_candidate_manifest(
     candidates = candidates.merge(
         receptor_membership,
         on=["entry_pdb_id", "chain_asym_id"],
-        how="left",
+        how="inner",
         validate="one_to_many",
     )
-    missing_membership = candidates["biounit_id"].isna()
-    if missing_membership.any():
-        missing = candidates.loc[
-            missing_membership, ["entry_pdb_id", "chain_asym_id"]
-        ].to_dict("records")
-        raise ValueError(f"apo chains have no biological-assembly membership: {missing[:10]}")
     candidates = candidates.merge(
-        ligand_counts,
-        on=["entry_pdb_id", "biounit_id"],
+        ligand_contacts,
+        on=["entry_pdb_id", "biounit_id", "chain_instance"],
         how="left",
         validate="many_to_one",
     )
-    candidates["source_num_ligand_chains"] = (
-        candidates["source_num_ligand_chains"].fillna(0).astype("int64")
-    )
+    contact_columns = [
+        "source_num_contacting_ions",
+        "source_num_contacting_artifacts",
+        "source_num_contacting_other_ligands",
+    ]
+    for column in contact_columns:
+        candidates[column] = pd.to_numeric(candidates[column], errors="coerce").fillna(
+            0
+        )
+        invalid = ~(
+            np.isfinite(candidates[column])
+            & candidates[column].ge(0)
+            & candidates[column].mod(1).eq(0)
+        )
+        if invalid.any():
+            raise ValueError(f"biological-assembly membership has invalid {column}")
+        candidates[column] = candidates[column].astype("int64")
 
     _as_required_strings(metadata, ["entry_pdb_id"], "entry metadata table")
     duplicate_metadata = metadata["entry_pdb_id"].duplicated(keep=False)
     if duplicate_metadata.any():
-        duplicate_ids = sorted(metadata.loc[duplicate_metadata, "entry_pdb_id"].unique())
-        raise ValueError(f"entry metadata table has duplicate entries: {duplicate_ids[:10]}")
+        duplicate_ids = sorted(
+            metadata.loc[duplicate_metadata, "entry_pdb_id"].unique()
+        )
+        raise ValueError(
+            f"entry metadata table has duplicate entries: {duplicate_ids[:10]}"
+        )
     metadata["entry_resolution"] = pd.to_numeric(
         metadata["entry_resolution"], errors="coerce"
     )
@@ -262,11 +490,22 @@ def build_apo_candidate_manifest(
         validate="many_to_one",
     )
     candidates["resolution_missing"] = candidates["entry_resolution"].isna()
+    candidates["ligand_contact_class"] = np.select(
+        [
+            candidates["source_num_contacting_other_ligands"].gt(0),
+            candidates["source_num_contacting_artifacts"].gt(0),
+            candidates["source_num_contacting_ions"].gt(0),
+        ],
+        [3, 2, 1],
+        default=0,
+    )
+    candidates["num_contacting_ligands"] = candidates[contact_columns].sum(axis=1)
     candidates = candidates.sort_values(
         [
             "entry_pdb_id",
             "chain_asym_id",
-            "source_num_ligand_chains",
+            "ligand_contact_class",
+            "num_contacting_ligands",
             "resolution_missing",
             "entry_resolution",
             "biounit_id",
@@ -314,19 +553,22 @@ def _validate_apo_candidates(candidates: pd.DataFrame) -> pd.DataFrame:
             "apo candidate manifest has duplicate target_system values: "
             f"{duplicate_ids[:10]}"
         )
-    candidates["source_num_ligand_chains"] = pd.to_numeric(
-        candidates["source_num_ligand_chains"], errors="coerce"
-    )
-    invalid_counts = ~(
-        np.isfinite(candidates["source_num_ligand_chains"])
-        & candidates["source_num_ligand_chains"].ge(0)
-        & candidates["source_num_ligand_chains"].mod(1).eq(0)
-    )
-    if invalid_counts.any():
-        raise ValueError("apo candidate ligand-chain counts must be non-negative integers")
-    candidates["source_num_ligand_chains"] = candidates[
-        "source_num_ligand_chains"
-    ].astype("int64")
+    for column in [
+        "source_num_contacting_ions",
+        "source_num_contacting_artifacts",
+        "source_num_contacting_other_ligands",
+    ]:
+        candidates[column] = pd.to_numeric(candidates[column], errors="coerce")
+        invalid_counts = ~(
+            np.isfinite(candidates[column])
+            & candidates[column].ge(0)
+            & candidates[column].mod(1).eq(0)
+        )
+        if invalid_counts.any():
+            raise ValueError(
+                "apo candidate contact counts must be non-negative integers"
+            )
+        candidates[column] = candidates[column].astype("int64")
     candidates["source_resolution"] = pd.to_numeric(
         candidates["source_resolution"], errors="coerce"
     )
@@ -362,12 +604,18 @@ def _prepare_scores(scores: pd.DataFrame) -> pd.DataFrame:
         & scores["similarity"].between(0, 100, inclusive="both")
     )
     if invalid_similarity.any():
-        raise ValueError("required protein similarities must be finite values in [0, 100]")
+        raise ValueError(
+            "required protein similarities must be finite values in [0, 100]"
+        )
     key = ["query_system", "query_ligand_id", "target_system", "metric"]
     duplicate = scores.duplicated(key, keep=False)
     if duplicate.any():
-        examples = scores.loc[duplicate, key].drop_duplicates().head(10).to_dict("records")
-        raise ValueError(f"protein score table has duplicate required metrics: {examples}")
+        examples = (
+            scores.loc[duplicate, key].drop_duplicates().head(10).to_dict("records")
+        )
+        raise ValueError(
+            f"protein score table has duplicate required metrics: {examples}"
+        )
     return scores
 
 
@@ -382,8 +630,9 @@ def select_linked_apo_structures(
 
     A candidate must satisfy every required metric for every proper ligand
     pocket in the holo system. Candidates from the holo entry itself are
-    excluded. Passing candidates are ranked by assembly ligand count first,
-    then by experimental resolution and similarity.
+    excluded. Passing candidates prefer no chain-local ligand contacts, then
+    ion-only contacts, artifact contacts, and other ligand contacts before
+    experimental resolution and similarity.
     """
     config = config or LinkedApoSelectionConfig()
     score_frame = _prepare_scores(_read_score_columns(protein_scores))
@@ -418,8 +667,7 @@ def select_linked_apo_structures(
         validate="many_to_one",
     )
     scored = scored.loc[
-        scored["query_system"].str.split("__", n=1).str[0]
-        != scored["source_entry_id"]
+        scored["query_system"].str.split("__", n=1).str[0] != scored["source_entry_id"]
     ]
     if scored.empty:
         return pd.DataFrame(columns=STRUCTURE_LINK_SCHEMA.names)
@@ -499,10 +747,27 @@ def select_linked_apo_structures(
         }
     )
     links["resolution_missing"] = links["source_resolution"].isna()
+    links["ligand_contact_class"] = np.select(
+        [
+            links["source_num_contacting_other_ligands"].gt(0),
+            links["source_num_contacting_artifacts"].gt(0),
+            links["source_num_contacting_ions"].gt(0),
+        ],
+        [3, 2, 1],
+        default=0,
+    )
+    links["num_contacting_ligands"] = links[
+        [
+            "source_num_contacting_ions",
+            "source_num_contacting_artifacts",
+            "source_num_contacting_other_ligands",
+        ]
+    ].sum(axis=1)
     links = links.sort_values(
         [
             "reference_system_id",
-            "source_num_ligand_chains",
+            "ligand_contact_class",
+            "num_contacting_ligands",
             "resolution_missing",
             "source_resolution",
             "min_pocket_fident",
@@ -511,7 +776,18 @@ def select_linked_apo_structures(
             "source_entry_id",
             "source_chain_asym_id",
         ],
-        ascending=[True, True, True, True, False, False, False, True, True],
+        ascending=[
+            True,
+            True,
+            True,
+            True,
+            True,
+            False,
+            False,
+            False,
+            True,
+            True,
+        ],
         ignore_index=True,
     )
     links["rank"] = links.groupby("reference_system_id", observed=True).cumcount() + 1
@@ -528,15 +804,32 @@ def write_linked_apo_structure_table(
     candidates: TableInput,
     output_path: str | Path,
     config: LinkedApoSelectionConfig | None = None,
+    scratch_dir: str | Path | None = None,
+    threads: int = 1,
+    memory_limit: str = "7GB",
 ) -> Path:
     """Select linked apo structures and write the compact release table."""
+    output_path = Path(output_path)
+    if all(
+        not isinstance(table, pd.DataFrame)
+        for table in (protein_scores, annotation, candidates)
+    ):
+        return _write_linked_apo_structure_table_from_parquet(
+            protein_scores=protein_scores,
+            annotation=annotation,
+            candidates=candidates,
+            output_path=output_path,
+            config=config or LinkedApoSelectionConfig(),
+            scratch_dir=scratch_dir,
+            threads=threads,
+            memory_limit=memory_limit,
+        )
     links = select_linked_apo_structures(
         protein_scores,
         annotation=annotation,
         candidates=candidates,
         config=config,
     )
-    output_path = Path(output_path)
     output_path.parent.mkdir(exist_ok=True, parents=True)
     table = pa.Table.from_pandas(
         links,
@@ -545,4 +838,223 @@ def write_linked_apo_structure_table(
         safe=True,
     )
     pq.write_table(table, output_path, compression="zstd")
+    return output_path
+
+
+def _write_linked_apo_structure_table_from_parquet(
+    *,
+    protein_scores: str | Path,
+    annotation: str | Path,
+    candidates: str | Path,
+    output_path: Path,
+    config: LinkedApoSelectionConfig,
+    scratch_dir: str | Path | None,
+    threads: int,
+    memory_limit: str,
+) -> Path:
+    """Aggregate a release-scale score table without loading it into Pandas."""
+    import duckdb
+
+    if threads < 1:
+        raise ValueError("threads must be positive")
+    for table, columns, name in (
+        (protein_scores, SCORE_COLUMNS, "protein score table"),
+        (annotation, ANNOTATION_COLUMNS, "annotation table"),
+        (candidates, APO_CANDIDATE_COLUMNS, "apo candidate manifest"),
+    ):
+        _check_parquet_columns(table, columns, name)
+
+    scratch = Path(scratch_dir or output_path.parent / ".linked-apo-scratch")
+    scratch.mkdir(exist_ok=True, parents=True)
+    output_path.parent.mkdir(exist_ok=True, parents=True)
+    temporary = output_path.with_suffix(output_path.suffix + ".tmp")
+    temporary.unlink(missing_ok=True)
+    if _parquet_dataset(candidates).count_rows() == 0:
+        pq.write_table(
+            pa.Table.from_pylist([], schema=STRUCTURE_LINK_SCHEMA),
+            temporary,
+            compression="zstd",
+        )
+        temporary.replace(output_path)
+        return output_path
+    metrics_sql = ", ".join(f"'{metric}'" for metric in REQUIRED_SCORE_METRICS)
+
+    connection = duckdb.connect()
+    try:
+        connection.sql(f"SET threads={threads}")
+        connection.sql(f"SET temp_directory='{_sql_path(scratch)}'")
+        connection.sql(f"SET memory_limit='{memory_limit}'")
+        connection.sql("SET preserve_insertion_order=false")
+        connection.sql(
+            f"""
+            COPY (
+                WITH proper AS (
+                    SELECT DISTINCT
+                        CAST(system_id AS VARCHAR) AS system_id,
+                        CAST(ligand_id AS VARCHAR) AS ligand_id
+                    FROM read_parquet('{_sql_parquet_source(annotation)}')
+                    WHERE COALESCE(
+                        TRY_CAST(ligand_is_proper AS BOOLEAN), FALSE
+                    )
+                ),
+                expected AS (
+                    SELECT
+                        system_id,
+                        COUNT(DISTINCT ligand_id) AS expected_ligand_pockets
+                    FROM proper
+                    GROUP BY system_id
+                ),
+                score_base AS (
+                    SELECT
+                        CAST(query_system AS VARCHAR) AS query_system,
+                        CAST(query_ligand_id AS VARCHAR) AS query_ligand_id,
+                        CAST(target_system AS VARCHAR) AS target_system,
+                        CAST(metric AS VARCHAR) AS metric,
+                        TRY_CAST(similarity AS DOUBLE) AS similarity
+                    FROM read_parquet('{_sql_parquet_source(protein_scores)}')
+                    WHERE metric IN ({metrics_sql})
+                ),
+                scored AS (
+                    SELECT
+                        scores.query_system,
+                        scores.query_ligand_id,
+                        scores.target_system,
+                        scores.metric,
+                        scores.similarity
+                    FROM score_base AS scores
+                    INNER JOIN read_parquet(
+                        '{_sql_parquet_source(candidates)}'
+                    ) AS candidate USING (target_system)
+                    INNER JOIN proper
+                        ON scores.query_system = proper.system_id
+                        AND scores.query_ligand_id = proper.ligand_id
+                    WHERE split_part(scores.query_system, '__', 1)
+                        != candidate.source_entry_id
+                        AND scores.similarity BETWEEN 0 AND 100
+                ),
+                per_ligand AS (
+                    SELECT
+                        query_system,
+                        query_ligand_id,
+                        target_system,
+                        MAX(similarity) FILTER (
+                            WHERE metric = 'pocket_fident'
+                        ) AS pocket_fident,
+                        MAX(similarity) FILTER (
+                            WHERE metric = 'protein_fident_weighted_sum'
+                        ) AS protein_fident_weighted_sum,
+                        MAX(similarity) FILTER (
+                            WHERE metric = 'protein_fident_qcov_weighted_sum'
+                        ) AS protein_fident_qcov_weighted_sum,
+                        MAX(similarity) FILTER (
+                            WHERE metric = 'protein_lddt_weighted_sum'
+                        ) AS protein_lddt_weighted_sum
+                    FROM scored
+                    GROUP BY query_system, query_ligand_id, target_system
+                    HAVING COUNT(*) = 4 AND COUNT(DISTINCT metric) = 4
+                ),
+                summaries AS (
+                    SELECT
+                        query_system,
+                        target_system,
+                        COUNT(DISTINCT query_ligand_id) AS num_ligand_pockets,
+                        MIN(pocket_fident) AS min_pocket_fident,
+                        AVG(pocket_fident) AS mean_pocket_fident,
+                        MIN(protein_fident_weighted_sum)
+                            AS min_protein_fident_weighted_sum,
+                        MIN(protein_fident_qcov_weighted_sum)
+                            AS min_protein_fident_qcov_weighted_sum,
+                        MIN(protein_lddt_weighted_sum)
+                            AS min_protein_lddt_weighted_sum
+                    FROM per_ligand
+                    GROUP BY query_system, target_system
+                ),
+                eligible AS (
+                    SELECT summaries.*, candidate.* EXCLUDE (target_system)
+                    FROM summaries
+                    INNER JOIN expected
+                        ON summaries.query_system = expected.system_id
+                    INNER JOIN read_parquet(
+                        '{_sql_parquet_source(candidates)}'
+                    ) AS candidate USING (target_system)
+                    WHERE summaries.num_ligand_pockets
+                            = expected.expected_ligand_pockets
+                        AND summaries.min_pocket_fident
+                            >= {config.min_pocket_fident}
+                        AND summaries.min_protein_fident_weighted_sum
+                            >= {config.min_protein_fident_weighted_sum}
+                        AND summaries.min_protein_fident_qcov_weighted_sum
+                            >= {config.min_protein_fident_qcov_weighted_sum}
+                        AND summaries.min_protein_lddt_weighted_sum
+                            >= {config.min_protein_lddt_weighted_sum}
+                ),
+                ranked AS (
+                    SELECT
+                        *,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY query_system
+                            ORDER BY
+                                CASE
+                                    WHEN source_num_contacting_other_ligands > 0
+                                        THEN 3
+                                    WHEN source_num_contacting_artifacts > 0
+                                        THEN 2
+                                    WHEN source_num_contacting_ions > 0 THEN 1
+                                    ELSE 0
+                                END,
+                                source_num_contacting_ions
+                                    + source_num_contacting_artifacts
+                                    + source_num_contacting_other_ligands,
+                                source_resolution IS NULL,
+                                source_resolution,
+                                min_pocket_fident DESC,
+                                mean_pocket_fident DESC,
+                                min_protein_fident_qcov_weighted_sum DESC,
+                                source_entry_id,
+                                source_chain_asym_id
+                        ) AS link_rank
+                    FROM eligible
+                )
+                SELECT
+                    CAST(query_system AS VARCHAR) AS reference_system_id,
+                    CAST(target_system AS VARCHAR) AS linked_structure_id,
+                    CAST(source_entry_id AS VARCHAR) AS source_entry_id,
+                    CAST(source_chain_asym_id AS VARCHAR)
+                        AS source_chain_asym_id,
+                    CAST(source_chain_auth_id AS VARCHAR)
+                        AS source_chain_auth_id,
+                    CAST(source_biounit_id AS VARCHAR) AS source_biounit_id,
+                    CAST(source_chain_instance AS VARCHAR)
+                        AS source_chain_instance,
+                    CAST(source_num_contacting_ions AS SMALLINT)
+                        AS source_num_contacting_ions,
+                    CAST(source_num_contacting_artifacts AS SMALLINT)
+                        AS source_num_contacting_artifacts,
+                    CAST(source_num_contacting_other_ligands AS SMALLINT)
+                        AS source_num_contacting_other_ligands,
+                    CAST(source_resolution AS FLOAT) AS source_resolution,
+                    CAST(link_rank AS SMALLINT) AS rank,
+                    CAST(num_ligand_pockets AS SMALLINT) AS num_ligand_pockets,
+                    CAST(min_pocket_fident AS TINYINT) AS min_pocket_fident,
+                    CAST(mean_pocket_fident AS FLOAT) AS mean_pocket_fident,
+                    CAST(min_protein_fident_weighted_sum AS TINYINT)
+                        AS min_protein_fident_weighted_sum,
+                    CAST(min_protein_fident_qcov_weighted_sum AS TINYINT)
+                        AS min_protein_fident_qcov_weighted_sum,
+                    CAST(min_protein_lddt_weighted_sum AS TINYINT)
+                        AS min_protein_lddt_weighted_sum
+                FROM ranked
+                WHERE link_rank <= {config.max_per_system}
+                ORDER BY reference_system_id, rank
+            ) TO '{_sql_path(temporary)}' (
+                FORMAT PARQUET,
+                COMPRESSION ZSTD,
+                ROW_GROUP_SIZE 500000
+            )
+            """
+        )
+        temporary.replace(output_path)
+    finally:
+        connection.close()
+        temporary.unlink(missing_ok=True)
     return output_path

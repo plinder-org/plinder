@@ -21,6 +21,29 @@ def _annotation(*ligand_ids: str) -> pd.DataFrame:
             "system_id": [SYSTEM] * len(ligand_ids),
             "ligand_id": list(ligand_ids),
             "ligand_is_proper": [True] * len(ligand_ids),
+            "entry_pdb_id": ["1abc"] * len(ligand_ids),
+            "system_biounit_id": ["1"] * len(ligand_ids),
+            "ligand_is_ion": [False] * len(ligand_ids),
+            "ligand_is_artifact": [False] * len(ligand_ids),
+            "ligand_neighboring_residues": [[] for _ in ligand_ids],
+            "ligand_protein_chains_asym_id": [[] for _ in ligand_ids],
+        }
+    )
+
+
+def _holo_annotation(*chain_ids: str) -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "entry_pdb_id": ["2def"] * len(chain_ids),
+            "system_biounit_id": ["1"] * len(chain_ids),
+            "ligand_id": [f"ligand-{chain_id}" for chain_id in chain_ids],
+            "ligand_is_proper": [True] * len(chain_ids),
+            "ligand_is_ion": [False] * len(chain_ids),
+            "ligand_is_artifact": [False] * len(chain_ids),
+            "ligand_neighboring_residues": [[] for _ in chain_ids],
+            "ligand_protein_chains_asym_id": [
+                [f"1.{chain_id}"] for chain_id in chain_ids
+            ],
         }
     )
 
@@ -28,7 +51,9 @@ def _annotation(*ligand_ids: str) -> pd.DataFrame:
 def _candidate(
     target_system: str,
     *,
-    ligand_chains: int = 0,
+    ions: int = 0,
+    artifacts: int = 0,
+    other_ligands: int = 0,
     resolution: float | None = 2.0,
 ) -> dict[str, object]:
     entry_id, chain_id = target_system.rsplit("_", maxsplit=1)
@@ -39,7 +64,9 @@ def _candidate(
         "source_chain_auth_id": chain_id,
         "source_biounit_id": "1",
         "source_chain_instance": f"1.{chain_id}",
-        "source_num_ligand_chains": ligand_chains,
+        "source_num_contacting_ions": ions,
+        "source_num_contacting_artifacts": artifacts,
+        "source_num_contacting_other_ligands": other_ligands,
         "source_resolution": resolution,
     }
 
@@ -72,34 +99,43 @@ def _scores(
 def test_candidate_manifest_matches_apo_database_definition() -> None:
     chains = pd.DataFrame(
         {
-            "entry_pdb_id": ["2def"] * 5,
-            "chain_asym_id": list("ABCDE"),
-            "chain_auth_id": list("RSTUV"),
-            "chain_entity_id": ["1", "2", "1", "3", "4"],
-            "chain_receptor_type": ["protein", "protein", "protein", "dna", "protein"],
-            "chain_is_holo": [True, False, False, False, True],
+            "entry_pdb_id": ["2def"] * 7,
+            "chain_asym_id": list("ABCDEFG"),
+            "chain_auth_id": list("RSTUVWX"),
+            "chain_entity_id": ["1", "2", "1", "3", "4", "5", "6"],
+            "chain_receptor_type": [
+                "protein",
+                "protein",
+                "protein",
+                "dna",
+                "protein",
+                "protein",
+                "protein",
+            ],
+            "chain_is_holo": [True, False, False, False, True, False, False],
+            "chain_is_ligand_like": [False, False, False, False, False, True, False],
         }
     )
     membership = pd.DataFrame(
         {
-            "entry_pdb_id": ["2def"] * 5,
-            "biounit_id": ["1"] * 5,
-            "chain_instance": ["1.A", "1.B", "1.C", "1.D", "1.E"],
-            "chain_asym_id": list("ABCDE"),
-            "chain_role": ["receptor"] * 5,
+            "entry_pdb_id": ["2def"] * 6,
+            "biounit_id": ["1"] * 6,
+            "chain_instance": ["1.A", "1.B", "1.C", "1.D", "1.E", "1.F"],
+            "chain_asym_id": list("ABCDEF"),
+            "chain_role": ["receptor"] * 5 + ["ligand"],
         }
     )
-    metadata = pd.DataFrame(
-        {"entry_pdb_id": ["2def"], "entry_resolution": [1.8]}
-    )
+    metadata = pd.DataFrame({"entry_pdb_id": ["2def"], "entry_resolution": [1.8]})
 
     candidates = build_apo_candidate_manifest(
         chains,
         biounit_chains=membership,
         entry_metadata=metadata,
+        annotation=_holo_annotation("A", "E"),
     )
 
-    # B is apo. C is rejected because it copies holo entity 1; D is DNA.
+    # B is apo. C copies holo entity 1; D is DNA; F is a peptide ligand; G is
+    # absent from the deposited biological assemblies.
     assert candidates["target_system"].tolist() == ["2def_B"]
     assert candidates.loc[0, "source_chain_auth_id"] == "S"
 
@@ -113,6 +149,7 @@ def test_candidate_manifest_prefers_ligand_free_assembly() -> None:
             "chain_entity_id": ["1"],
             "chain_receptor_type": ["protein"],
             "chain_is_holo": [False],
+            "chain_is_ligand_like": [False],
         }
     )
     membership = pd.DataFrame(
@@ -124,18 +161,114 @@ def test_candidate_manifest_prefers_ligand_free_assembly() -> None:
             "chain_role": ["receptor", "ligand", "receptor"],
         }
     )
-    metadata = pd.DataFrame(
-        {"entry_pdb_id": ["2def"], "entry_resolution": [2.0]}
-    )
+    metadata = pd.DataFrame({"entry_pdb_id": ["2def"], "entry_resolution": [2.0]})
 
     candidates = build_apo_candidate_manifest(
         chains,
         biounit_chains=membership,
         entry_metadata=metadata,
+        annotation=pd.DataFrame(
+            {
+                "entry_pdb_id": ["2def"],
+                "system_biounit_id": ["1"],
+                "ligand_id": ["2def__1__1.I"],
+                "ligand_is_ion": [False],
+                "ligand_is_artifact": [False],
+                "ligand_neighboring_residues": [["1.A_10_0_10"]],
+                "ligand_is_proper": [False],
+                "ligand_protein_chains_asym_id": [[]],
+            }
+        ),
     )
 
     assert candidates.loc[0, "source_biounit_id"] == "2"
-    assert candidates.loc[0, "source_num_ligand_chains"] == 0
+    assert candidates.loc[0, "source_num_contacting_other_ligands"] == 0
+
+
+def test_candidate_manifest_counts_annotated_contacts_by_ligand_type() -> None:
+    chains = pd.DataFrame(
+        {
+            "entry_pdb_id": ["2def"],
+            "chain_asym_id": ["A"],
+            "chain_auth_id": ["R"],
+            "chain_entity_id": ["1"],
+            "chain_receptor_type": ["protein"],
+            "chain_is_holo": [False],
+            "chain_is_ligand_like": [False],
+        }
+    )
+    membership = pd.DataFrame(
+        {
+            "entry_pdb_id": ["2def"],
+            "biounit_id": ["1"],
+            "chain_instance": ["1.A"],
+            "chain_asym_id": ["A"],
+            "chain_role": ["receptor"],
+        }
+    )
+    annotation = pd.DataFrame(
+        {
+            "entry_pdb_id": ["2def"] * 3,
+            "system_biounit_id": ["1"] * 3,
+            "ligand_id": ["ion", "artifact", "other"],
+            "ligand_is_ion": [True, False, False],
+            "ligand_is_artifact": [False, True, False],
+            "ligand_is_proper": [False, False, False],
+            "ligand_protein_chains_asym_id": [[], [], []],
+            "ligand_neighboring_residues": [
+                ["1.A_10_0_10", "1.A_11_1_11"],
+                ["1.A_10_0_10"],
+                ["1.A_10_0_10"],
+            ],
+        }
+    )
+
+    candidates = build_apo_candidate_manifest(
+        chains,
+        biounit_chains=membership,
+        entry_metadata=pd.DataFrame(
+            {"entry_pdb_id": ["2def"], "entry_resolution": [1.8]}
+        ),
+        annotation=annotation,
+    )
+
+    assert candidates.loc[0, "source_num_contacting_ions"] == 1
+    assert candidates.loc[0, "source_num_contacting_artifacts"] == 1
+    assert candidates.loc[0, "source_num_contacting_other_ligands"] == 1
+
+
+def test_candidate_manifest_uses_ligand_holo_rows_not_chain_flag() -> None:
+    chains = pd.DataFrame(
+        {
+            "entry_pdb_id": ["2def"] * 3,
+            "chain_asym_id": ["A", "B", "C"],
+            "chain_auth_id": ["A", "B", "C"],
+            "chain_entity_id": ["1", "1", "2"],
+            "chain_receptor_type": ["protein"] * 3,
+            "chain_is_holo": [True] * 3,
+            "chain_is_ligand_like": [False] * 3,
+        }
+    )
+    membership = pd.DataFrame(
+        {
+            "entry_pdb_id": ["2def"] * 3,
+            "biounit_id": ["1"] * 3,
+            "chain_instance": ["1.A", "1.B", "1.C"],
+            "chain_asym_id": ["A", "B", "C"],
+            "chain_role": ["receptor"] * 3,
+        }
+    )
+
+    candidates = build_apo_candidate_manifest(
+        chains,
+        biounit_chains=membership,
+        entry_metadata=pd.DataFrame(
+            {"entry_pdb_id": ["2def"], "entry_resolution": [1.8]}
+        ),
+        annotation=_holo_annotation("A"),
+    )
+
+    assert candidates["target_system"].tolist() == ["2def_C"]
 
 
 def test_requires_every_proper_ligand_pocket() -> None:
@@ -205,12 +338,13 @@ def test_applies_every_protein_threshold() -> None:
     assert links.empty
 
 
-def test_prefers_empty_apo_assembly_before_resolution() -> None:
+def test_prefers_chain_local_ligand_class_before_resolution() -> None:
     candidates = pd.DataFrame(
         [
-            _candidate("2def_A", ligand_chains=1, resolution=1.0),
-            _candidate("3ghi_B", ligand_chains=0, resolution=3.0),
-            _candidate("4jkl_C", ligand_chains=0, resolution=2.0),
+            _candidate("2def_A", other_ligands=1, resolution=1.0),
+            _candidate("3ghi_B", artifacts=1, resolution=1.0),
+            _candidate("4jkl_C", ions=1, resolution=1.0),
+            _candidate("5mno_D", resolution=3.0),
         ]
     )
     scores = pd.concat(
@@ -224,8 +358,13 @@ def test_prefers_empty_apo_assembly_before_resolution() -> None:
         candidates=candidates,
     )
 
-    assert links["linked_structure_id"].tolist() == ["4jkl_C", "3ghi_B", "2def_A"]
-    assert links["rank"].tolist() == [1, 2, 3]
+    assert links["linked_structure_id"].tolist() == [
+        "5mno_D",
+        "4jkl_C",
+        "3ghi_B",
+        "2def_A",
+    ]
+    assert links["rank"].tolist() == [1, 2, 3, 4]
 
 
 def test_resolutionless_apo_is_a_fallback() -> None:
@@ -310,9 +449,23 @@ def test_score_path_reads_only_required_metrics(tmp_path, monkeypatch) -> None:
     )
 
     assert links["linked_structure_id"].tolist() == ["2def_A"]
-    assert score_filters == [
-        [("metric", "in", list(REQUIRED_SCORE_METRICS))]
-    ]
+    assert score_filters == [[("metric", "in", list(REQUIRED_SCORE_METRICS))]]
+
+
+def test_score_dataset_directory_is_supported(tmp_path) -> None:
+    score_dir = tmp_path / "scores" / "shard=de"
+    score_dir.mkdir(parents=True)
+    _scores("2def_A", {"ligand-1": {}}).to_parquet(
+        score_dir / "part.parquet", index=False
+    )
+
+    links = select_linked_apo_structures(
+        score_dir.parent,
+        annotation=_annotation("ligand-1"),
+        candidates=pd.DataFrame([_candidate("2def_A")]),
+    )
+
+    assert links["linked_structure_id"].tolist() == ["2def_A"]
 
 
 def test_writes_declared_release_schema(tmp_path) -> None:
@@ -330,3 +483,68 @@ def test_writes_declared_release_schema(tmp_path) -> None:
     links = pd.read_parquet(output)
     assert links.loc[0, "reference_system_id"] == SYSTEM
     assert links.loc[0, "min_pocket_fident"] == 100
+
+
+def test_parquet_writer_matches_in_memory_selection(tmp_path) -> None:
+    annotation = _annotation("ligand-1", "ligand-2")
+    candidates = pd.DataFrame(
+        [
+            _candidate("2def_A", other_ligands=1, resolution=1.0),
+            _candidate("3ghi_B", resolution=3.0),
+        ]
+    )
+    scores = pd.concat(
+        [
+            _scores(target, {"ligand-1": {}, "ligand-2": {}})
+            for target in candidates["target_system"]
+        ],
+        ignore_index=True,
+    )
+    score_path = tmp_path / "scores" / "shard=de"
+    annotation_path = tmp_path / "annotation.parquet"
+    candidate_path = tmp_path / "candidates.parquet"
+    output = tmp_path / "linked_apo_structures.parquet"
+    score_path.mkdir(parents=True)
+    scores.to_parquet(score_path / "part.parquet", index=False)
+    annotation.to_parquet(annotation_path, index=False)
+    candidates.to_parquet(candidate_path, index=False)
+
+    write_linked_apo_structure_table(
+        score_path.parent,
+        annotation=annotation_path,
+        candidates=candidate_path,
+        output_path=output,
+        scratch_dir=tmp_path / "scratch",
+        threads=2,
+        memory_limit="1GB",
+    )
+
+    assert pq.read_schema(output) == STRUCTURE_LINK_SCHEMA
+    links = pd.read_parquet(output)
+    assert links["linked_structure_id"].tolist() == ["3ghi_B", "2def_A"]
+    assert links["rank"].tolist() == [1, 2]
+    assert links["num_ligand_pockets"].tolist() == [2, 2]
+
+
+def test_parquet_writer_preserves_schema_without_apo_candidates(tmp_path) -> None:
+    score_path = tmp_path / "scores.parquet"
+    annotation_path = tmp_path / "annotation.parquet"
+    candidate_path = tmp_path / "candidates.parquet"
+    output = tmp_path / "linked_apo_structures.parquet"
+    _scores("2def_A", {"ligand-1": {}}).to_parquet(score_path, index=False)
+    _annotation("ligand-1").to_parquet(annotation_path, index=False)
+    pd.DataFrame([_candidate("2def_A")]).iloc[:0].to_parquet(
+        candidate_path, index=False
+    )
+
+    write_linked_apo_structure_table(
+        score_path,
+        annotation=annotation_path,
+        candidates=candidate_path,
+        output_path=output,
+        scratch_dir=tmp_path / "scratch",
+        memory_limit="1GB",
+    )
+
+    assert pq.read_schema(output) == STRUCTURE_LINK_SCHEMA
+    assert pd.read_parquet(output).empty
