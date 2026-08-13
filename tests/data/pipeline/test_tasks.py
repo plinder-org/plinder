@@ -924,9 +924,9 @@ def test_scoring_finalization_stage_order_and_partitions():
         "merge_component_reductions"
     )
     assert tasks.STAGES.index("merge_component_reductions") < tasks.STAGES.index(
-        "make_communities"
+        "make_set_covers"
     )
-    assert tasks.STAGES.index("make_communities") < tasks.STAGES.index(
+    assert tasks.STAGES.index("make_set_covers") < tasks.STAGES.index(
         "make_directed_set_covers"
     )
     assert tasks.STAGES.index("make_directed_set_covers") < tasks.STAGES.index(
@@ -1066,6 +1066,12 @@ def test_directed_set_cover_scatter_skips_only_complete_outputs(tmp_path):
             "similarity_to_centroid": [100.0],
             "coverage_count": pd.Series([1], dtype="Int32"),
             "coverage_fraction": pd.Series([1.0], dtype="Float32"),
+            "representative_selection_order": pd.Series([0], dtype="Int32"),
+            "representative_selection_threshold": pd.Series(
+                [100], dtype="Int16"
+            ),
+            "representative_marginal_gain": pd.Series([1], dtype="Int32"),
+            "assignment_threshold": pd.Series([100], dtype="Int16"),
             "label": ["c0"],
             "metric": ["pocket_qcov"],
             "threshold": [100],
@@ -1659,9 +1665,13 @@ def test_score_repair_plans_full_and_target_only_queries(
     )
     target_candidates.parent.mkdir(parents=True)
     target_candidates.touch()
-    packed_score = tmp_path / "scores/search_db=holo/jk.parquet"
-    packed_score.parent.mkdir(parents=True)
-    pd.DataFrame({"query_system": ["4jkl__1"]}).to_parquet(packed_score, index=False)
+    packed_candidates = (
+        tmp_path / "scores/ligand_3d_candidate_shards/shard=jk.parquet"
+    )
+    packed_candidates.parent.mkdir(parents=True)
+    pd.DataFrame({"query_entry": ["4jkl"]}).to_parquet(
+        packed_candidates, index=False
+    )
     affected = tmp_path / "affected.txt"
     affected.write_text("2def\n4jkl\n")
     additional_full = tmp_path / "additional_full.txt"
@@ -3148,6 +3158,7 @@ def test_score_repair_patches_packed_shard_without_other_query_caches(
             score("1abc", "shape", 12),
             score("9abc", "pocket_qcov", 55),
             score("9abc", "color", 42),
+            score("9abc", "protein_fident_weighted_sum", 91),
         ]
     ).to_parquet(packed, index=False, schema=schemas.PROTEIN_SIMILARITY_SCHEMA)
     work = tmp_path / "manifests/protein_scoring_work.parquet"
@@ -4143,40 +4154,10 @@ def test_interface_cluster_columns_merge_into_interface_annotation(
             "system_id": [representative],
             "label": ["c0"],
             "metric": ["interface_qcov"],
-            "directed": [False],
+            "directed": [True],
             "threshold": [50],
         }
     )
-    for cluster in ["components", "communities"]:
-        path = (
-            tmp_path
-            / "interface_clusters"
-            / f"cluster={cluster}"
-            / "directed=False"
-            / "metric=interface_qcov"
-            / "threshold=50.parquet"
-        )
-        path.parent.mkdir(parents=True, exist_ok=True)
-        artifact_rows.assign(cluster=cluster).to_parquet(path, index=False)
-        side_path = (
-            tmp_path
-            / "interface_clusters"
-            / f"cluster={cluster}"
-            / "directed=False"
-            / "metric=interface_side_qcov"
-            / "threshold=50.parquet"
-        )
-        side_path.parent.mkdir(parents=True, exist_ok=True)
-        pd.DataFrame(
-            {
-                "system_id": side_nodes,
-                "label": ["c0", "c2"],
-                "metric": ["interface_side_qcov"] * 2,
-                "cluster": [cluster] * 2,
-                "directed": [False] * 2,
-                "threshold": [50] * 2,
-            }
-        ).to_parquet(side_path, index=False)
     cover = (
         tmp_path
         / "interface_sampling/directed_set_cover"
@@ -4184,7 +4165,6 @@ def test_interface_cluster_columns_merge_into_interface_annotation(
     )
     cover.parent.mkdir(parents=True)
     artifact_rows.assign(
-        directed=True,
         centroid_system_id=[representative],
         similarity_to_centroid=100.0,
     ).to_parquet(cover, index=False)
@@ -4208,21 +4188,16 @@ def test_interface_cluster_columns_merge_into_interface_annotation(
 
     result = utils.add_interface_cluster_columns(index=interfaces, data_dir=tmp_path)
 
-    assert result["interface_qcov__50__component"].tolist() == ["c0", "c0"]
-    assert result["interface_qcov__50__community"].tolist() == ["c0", "c0"]
     assert result["interface_qcov__50__directed_set_cover"].tolist() == [
         "c0",
         "c0",
     ]
-    for kind in ["component", "community", "directed_set_cover"]:
-        assert result[f"interface_side_qcov__50__chain_1_{kind}"].tolist() == [
-            "c0",
-            "c0",
-        ]
-        assert result[f"interface_side_qcov__50__chain_2_{kind}"].tolist() == [
-            "c2",
-            "c2",
-        ]
+    assert result[
+        "interface_side_qcov__50__chain_1_directed_set_cover"
+    ].tolist() == ["c0", "c0"]
+    assert result[
+        "interface_side_qcov__50__chain_2_directed_set_cover"
+    ].tolist() == ["c2", "c2"]
 
     pd.DataFrame({"system_id": ["ligand-system"]}).to_parquet(
         index_dir / "annotation_table.parquet",
@@ -4253,10 +4228,9 @@ def test_interface_cluster_columns_merge_into_interface_annotation(
     finalized_interfaces = pd.read_parquet(
         index_dir / "interface_annotation_table.parquet"
     )
-    assert finalized_interfaces["interface_qcov__50__component"].tolist() == [
-        "c0",
-        "c0",
-    ]
+    assert finalized_interfaces[
+        "interface_qcov__50__directed_set_cover"
+    ].tolist() == ["c0", "c0"]
 
     original_replace = Path.replace
 
@@ -4393,7 +4367,6 @@ def test_component_reduction_task_copies_generic_source_once(tmp_path, monkeypat
     )
 
     assert calls == [
-        ("reciprocal", "sucos_shape_pocket_qcov"),
         ("directed_cover", "sucos_shape_pocket_qcov"),
     ]
     assert list(scratch.iterdir()) == []
@@ -4415,7 +4388,7 @@ def test_component_reduction_metric_workers_must_be_positive(tmp_path):
 def test_clustering_plan_matches_slurm_array_bounds(tmp_path, monkeypatch):
     from plinder.data.pipeline.score import (
         _cluster_parameters,
-        _community_batch,
+        _cover_batch,
         plan_clustering,
     )
 
@@ -4438,22 +4411,25 @@ def test_clustering_plan_matches_slurm_array_bounds(tmp_path, monkeypatch):
         metrics=["pocket_qcov", "tanimoto_similarity_ecfp4_1024"],
         thresholds=[30, 100],
         source_batch_size=2,
-        community_batch_size=3,
+        cover_batch_size=3,
         symmetric_bucket_count=4,
     )
 
     assert plan["symmetric_fragment_batch_count"] == 3
     assert plan["symmetric_edge_shard_count"] == 8
     assert plan["component_reduction_batch_count"] == 8
-    assert plan["community_task_count"] == 4
-    assert plan["community_batch_count"] == 2
-    assert plan["directed_cover_batch_count"] == 2
-    assert _community_batch(
-        metrics=plan["metrics"],
+    assert plan["set_cover_task_count"] == 2
+    assert plan["set_cover_batch_count"] == 1
+    assert plan["directed_cover_batch_count"] == 1
+    assert _cover_batch(
+        metrics=["tanimoto_similarity_ecfp4_1024"],
         thresholds=plan["thresholds"],
-        batch_index=1,
+        batch_index=0,
         batch_size=3,
-    ) == [("tanimoto_similarity_ecfp4_1024", 30)]
+    ) == [
+        ("tanimoto_similarity_ecfp4_1024", 100),
+        ("tanimoto_similarity_ecfp4_1024", 30),
+    ]
     assert _cluster_parameters(
         metrics=None,
         thresholds=None,
@@ -5128,35 +5104,11 @@ def test_interface_score_cli_exposes_plan_array_and_finalizer(tmp_path):
     assert interface_clusters.entity_type == "interface"
 
 
-def test_clustering_statistics_validate_complete_monotonic_artifacts(tmp_path):
+def test_clustering_statistics_validate_published_cover_artifacts(tmp_path):
     from plinder.data.pipeline.score import summarize_clustering_artifacts
-    from plinder.data.pipeline.utils import _read_local_cluster_rows
 
     metric = "pocket_qcov"
     for threshold, labels in [(100, ["c0", "c1"]), (50, ["c0", "c0"])]:
-        for cluster, directed in [
-            ("components", False),
-            ("communities", False),
-        ]:
-            path = (
-                tmp_path
-                / "ligand_clusters"
-                / f"cluster={cluster}"
-                / f"directed={directed}"
-                / f"metric={metric}"
-                / f"threshold={threshold}.parquet"
-            )
-            path.parent.mkdir(parents=True, exist_ok=True)
-            pd.DataFrame(
-                {
-                    "ligand_id": ["l1", "l2"],
-                    "label": labels,
-                    "metric": [metric, metric],
-                    "threshold": [threshold, threshold],
-                    "cluster": [cluster, cluster],
-                    "directed": [directed, directed],
-                }
-            ).to_parquet(path, index=False)
         directed_cover = (
             tmp_path
             / "ligand_sampling"
@@ -5184,49 +5136,32 @@ def test_clustering_statistics_validate_complete_monotonic_artifacts(tmp_path):
     )
 
     assert report["status"] == "complete"
-    assert report["artifact_count"] == 6
+    assert report["artifact_count"] == 2
     assert report["issues"] == []
     assert (tmp_path / "ligand_clusters" / "stats.json").is_file()
     stats = pd.read_parquet(tmp_path / "ligand_clusters" / "stats.parquet")
-    components = stats[stats["cluster"].eq("components")].set_index("threshold")
-    assert components.loc[100, "cluster_count"] == 2
-    assert components.loc[50, "cluster_count"] == 1
-    # The diagnostics live under the same root but are not cluster-label rows.
-    cluster_rows = _read_local_cluster_rows(
-        root=tmp_path / "ligand_clusters",
-        node_column="ligand_id",
+    directed = stats[stats["cluster"].eq("directed_set_cover")].set_index(
+        "threshold"
     )
-    assert len(cluster_rows) == 8
+    assert directed.loc[100, "cluster_count"] == 2
+    assert directed.loc[50, "cluster_count"] == 1
 
-    component_50 = (
+    cover_50 = (
         tmp_path
-        / "ligand_clusters"
-        / "cluster=components"
-        / "directed=False"
+        / "ligand_sampling"
+        / "directed_set_cover"
         / f"metric={metric}"
         / "threshold=50.parquet"
     )
     pd.DataFrame(
         {
-            "ligand_id": ["l1", "l2"],
-            "label": ["c0", "c1"],
-            "metric": [metric, metric],
-            "threshold": [50, 50],
-            "cluster": ["components", "components"],
-            "directed": [False, False],
-        }
-    ).to_parquet(component_50, index=False)
-    component_100 = component_50.with_name("threshold=100.parquet")
-    pd.DataFrame(
-        {
-            "ligand_id": ["l1", "l2"],
+            "ligand_id": ["l1", "l1"],
             "label": ["c0", "c0"],
             "metric": [metric, metric],
-            "threshold": [100, 100],
-            "cluster": ["components", "components"],
-            "directed": [False, False],
+            "threshold": [50, 50],
+            "directed": [True, True],
         }
-    ).to_parquet(component_100, index=False)
+    ).to_parquet(cover_50, index=False)
     with pytest.raises(ValueError, match="invalid clustering artifacts"):
         summarize_clustering_artifacts(
             tmp_path,
@@ -5237,7 +5172,7 @@ def test_clustering_statistics_validate_complete_monotonic_artifacts(tmp_path):
         (tmp_path / "ligand_clusters" / "stats.json").read_text()
     )
     assert invalid_report["status"] == "invalid"
-    assert any("gains clusters" in issue for issue in invalid_report["issues"])
+    assert any("duplicate node IDs" in issue for issue in invalid_report["issues"])
 
 
 def test_v3_score_slurm_exposes_exact_clustering_stages():
@@ -5256,7 +5191,7 @@ def test_v3_score_slurm_exposes_exact_clustering_stages():
     assert "plan-bounded-score-repair)" in script
     assert "plan-clusters)" in script
     assert "symmetric-edge-fragments|symmetric-edge-shards" in script
-    assert "component-reductions|communities|directed-covers)" in script
+    assert "component-reductions|set-covers|directed-covers)" in script
     assert (
         "finalize-alignments|finalize-ligands|finalize-scores|"
         "finalize-ligand-3d-retries|finalize-index|merge-components|cluster-stats)"
@@ -5361,7 +5296,8 @@ def test_metaflow_graph_uses_canonical_ligand_archive_stage():
     assert "self.pipeline.make_symmetric_edge_shards(self.input)" in flow
     assert "self.next(self.scatter_make_component_reductions)" in flow
     assert "self.pipeline.merge_component_reductions()" in flow
-    assert "self.next(self.scatter_make_communities)" in flow
+    assert "self.next(self.scatter_make_set_covers)" in flow
+    assert "self.pipeline.make_set_covers(self.input)" in flow
     assert "self.next(self.scatter_make_directed_set_covers)" in flow
     assert "self.pipeline.make_directed_set_covers(self.input)" in flow
     assert "self.next(self.summarize_clusters)" in flow
@@ -5484,7 +5420,7 @@ def test_ingest_configs_use_current_schema_and_stages():
             assert "make_symmetric_edge_shards" in cfg.flow.run_specific_stages
             assert "make_component_reductions" in cfg.flow.run_specific_stages
             assert "merge_component_reductions" in cfg.flow.run_specific_stages
-            assert "make_communities" in cfg.flow.run_specific_stages
+            assert "make_set_covers" in cfg.flow.run_specific_stages
             assert "make_directed_set_covers" in cfg.flow.run_specific_stages
             assert "summarize_clusters" in cfg.flow.run_specific_stages
             assert "finalize_index" in cfg.flow.run_specific_stages

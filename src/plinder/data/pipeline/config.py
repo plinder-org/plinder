@@ -70,7 +70,7 @@ class FlowConfig:
     symmetric_edge_bucket_count: int = 64
     component_reduction_source_batch_size: int = 1
     component_reduction_metric_workers: int = 4
-    make_communities_cpu: int = 4
+    clustering_cpu: int = 4
     make_components_force_update: bool = True
     make_components_stop_on_cluster: int = 0
 

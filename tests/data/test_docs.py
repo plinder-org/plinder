@@ -8,16 +8,12 @@ def test_ligand_cluster_column_descriptions():
     import pandas as pd
 
     columns = [
-        "shape__50__strong__component",
-        "shape__50__ligand__component",
-        "color__70__community",
-        "color__70__ligand__community",
+        "tanimoto_similarity_ecfp4_1024__70__ligand__set_cover",
+        "tanimoto_similarity_ecfp4_1024__70__ligand__set_cover__is_centroid",
         "pocket_qcov__50__ligand__directed_set_cover",
         "pocket_qcov__50__ligand__directed_set_cover__is_centroid",
         "pocket_qcov__50__ligand__directed_set_cover__coverage_count",
         "pocket_qcov__50__ligand__directed_set_cover__coverage_fraction",
-        "interface_side_qcov__70__chain_1_component",
-        "interface_side_qcov__70__chain_2_community",
         "interface_side_qcov__70__chain_1_directed_set_cover",
     ]
 
@@ -25,16 +21,15 @@ def test_ligand_cluster_column_descriptions():
 
     assert [row[0] for row in rows] == columns
     descriptions = {name: description for name, _, description in rows}
-    assert "ligand-level reciprocal-minimum component" in descriptions[columns[1]]
-    assert "ligand-level greedy centroid community" in descriptions[columns[3]]
-    assert "ligand-level directed set cover" in descriptions[columns[4]]
-    assert "query-to-centroid score" in descriptions[columns[4]]
-    assert "published centroid" in descriptions[columns[5]]
-    assert "Number of directed-cover query nodes" in descriptions[columns[6]]
-    assert "Fraction of its directed weak component" in descriptions[columns[7]]
-    assert "chain 1 reciprocal-minimum component" in descriptions[columns[8]]
-    assert "chain 2 greedy centroid community" in descriptions[columns[9]]
-    assert "chain 1 directed set cover" in descriptions[columns[10]]
+    assert "ligand-level set cover" in descriptions[columns[0]]
+    assert "direct threshold-qualified edge" in descriptions[columns[0]]
+    assert "published centroid" in descriptions[columns[1]]
+    assert "ligand-level directed set cover" in descriptions[columns[2]]
+    assert "query-to-centroid score" in descriptions[columns[2]]
+    assert "published centroid" in descriptions[columns[3]]
+    assert "Number of directed-cover query nodes" in descriptions[columns[4]]
+    assert "Fraction of its directed weak component" in descriptions[columns[5]]
+    assert "chain 1 directed set cover" in descriptions[columns[6]]
 
 
 def test_description_markers_are_explicit_and_independent():
@@ -108,7 +103,10 @@ def test_annotation_descriptions_follow_arrow_schema_order():
             ("ligand__members", pa.struct([("1.A", pa.list_(pa.int64()))])),
             ("ligand_member_asym_ids", pa.list_(pa.string())),
             ("system_id_legacy", pa.string()),
-            ("pli_qcov__50__ligand__component", pa.string()),
+            (
+                "tanimoto_similarity_ecfp4_1024__50__ligand__set_cover",
+                pa.string(),
+            ),
             (
                 "pli_qcov__50__ligand__directed_set_cover__is_centroid",
                 pa.bool_(),

@@ -97,7 +97,7 @@ STAGES = [
     "make_symmetric_edge_shards",
     "make_component_reductions",
     "merge_component_reductions",
-    "make_communities",
+    "make_set_covers",
     "make_directed_set_covers",
     "summarize_clusters",
     "finalize_index",
@@ -1539,14 +1539,9 @@ def make_ligand_scores(
     )
 
 
-def annotate_ligand_similarity(
-    *, data_dir: Path, cluster_threshold: float = 90.0
-) -> None:
-    """Add 90%-component frequencies after all BulkTanimoto shards finish."""
-    get_similarity_scores.annotate_ligand_similarity(
-        data_dir=data_dir,
-        cluster_threshold=cluster_threshold,
-    )
+def annotate_ligand_similarity(*, data_dir: Path) -> None:
+    """Write ligand identifiers and cofactor annotations."""
+    get_similarity_scores.annotate_ligand_similarity(data_dir=data_dir)
 
 
 def _interface_scoring_chain_keys(data_dir: Path) -> pd.DataFrame:
@@ -3167,6 +3162,7 @@ def merge_ligand_3d_scores(
                     hive_partitioning = false
                 )
                 WHERE metric NOT IN ({excluded_metrics})
+                  AND NOT starts_with(cast(metric AS VARCHAR), 'protein_')
                 """
                 if base_paths
                 else f"""
@@ -3185,6 +3181,9 @@ def merge_ligand_3d_scores(
                 ANTI JOIN replacement_queries
                   ON split_part(existing.query_system, '__', 1)
                    = replacement_queries.query_entry
+                WHERE NOT starts_with(
+                    cast(existing.metric AS VARCHAR), 'protein_'
+                )
                 UNION ALL BY NAME
                 {replacement_base_sql}
             """
@@ -3196,6 +3195,7 @@ def merge_ligand_3d_scores(
                     hive_partitioning = false
                 )
                 WHERE metric NOT IN ({excluded_metrics})
+                  AND NOT starts_with(cast(metric AS VARCHAR), 'protein_')
             """
         local_output = shard_scratch / f"{shard}.parquet"
         local_output.unlink(missing_ok=True)
@@ -3625,7 +3625,7 @@ def make_symmetric_edge_shards(
         )
 
 
-def scatter_make_communities(
+def scatter_make_set_covers(
     *,
     data_dir: Path,
     metrics: list[str],
@@ -3634,8 +3634,13 @@ def scatter_make_communities(
     skip_existing_clusters: bool,
     entity_type: clusters.ClusterEntity = "ligand",
 ) -> list[list[tuple[str, int]]]:
-    """Scatter centroid-clustering work after component reductions are available."""
-    values = [[(metric, threshold)] for metric in metrics for threshold in thresholds]
+    """Scatter ligand-Tanimoto set-cover work after component reduction."""
+    values = [
+        [(metric, threshold)]
+        for metric in metrics
+        if entity_type == "ligand" and metric == "tanimoto_similarity_ecfp4_1024"
+        for threshold in thresholds
+    ]
     if stop_on_cluster:
         values = values[:stop_on_cluster]
     if not skip_existing_clusters:
@@ -3644,13 +3649,12 @@ def scatter_make_communities(
     for item in values:
         metric, threshold = item[0]
         output = (
-            clusters._cluster_root(data_dir, entity_type)
-            / "cluster=communities"
-            / "directed=False"
+            clusters._sampling_root(data_dir, entity_type)
+            / "set_cover"
             / f"metric={metric}"
             / f"threshold={threshold}.parquet"
         )
-        if not output.is_file():
+        if not clusters.set_cover_is_complete(output):
             pending.append(item)
     return pending or [[]]
 
@@ -3665,7 +3669,12 @@ def scatter_make_directed_set_covers(
     entity_type: clusters.ClusterEntity = "ligand",
 ) -> list[list[tuple[str, int]]]:
     """Scatter directed centroid-cover work after connectivity publication."""
-    values = [[(metric, threshold)] for metric in metrics for threshold in thresholds]
+    values = [
+        [(metric, threshold)]
+        for metric in metrics
+        if metric != "tanimoto_similarity_ecfp4_1024"
+        for threshold in thresholds
+    ]
     if stop_on_cluster:
         values = values[:stop_on_cluster]
     if not skip_existing:
@@ -3702,34 +3711,42 @@ def _reduce_component_metric(metric_index: int, metric: str) -> dict[str, Any]:
     if context is None:
         raise RuntimeError("component reduction worker context is not initialized")
     metric_started = time.time()
-    manifest = clusters.make_score_component_reduction(
-        data_dir=context["data_dir"],
-        metric=metric,
-        thresholds=context["thresholds"],
-        source_path=context["source"],
-        read_path=context["local_source"],
-        all_nodes=context["nodes"],
-        eligible_systems=context["eligible_systems"],
-        force_update=context["force_update"],
-        entity_type=context["entity_type"],
-    )
-    cover_manifest = clusters.make_directed_cover_component_reduction(
-        data_dir=context["data_dir"],
-        metric=metric,
-        thresholds=context["thresholds"],
-        source_path=context["source"],
-        read_path=context["local_source"],
-        all_nodes=context["nodes"],
-        eligible_systems=context["eligible_systems"],
-        force_update=context["force_update"],
-        entity_type=context["entity_type"],
-    )
+    chemical = metric == "tanimoto_similarity_ecfp4_1024"
+    if chemical:
+        manifests = [
+            clusters.make_score_component_reduction(
+                data_dir=context["data_dir"],
+                metric=metric,
+                thresholds=context["thresholds"],
+                source_path=context["source"],
+                read_path=context["local_source"],
+                all_nodes=context["nodes"],
+                eligible_systems=context["eligible_systems"],
+                force_update=context["force_update"],
+                entity_type=context["entity_type"],
+            )
+        ]
+    else:
+        manifests = [
+            clusters.make_directed_cover_component_reduction(
+                data_dir=context["data_dir"],
+                metric=metric,
+                thresholds=context["thresholds"],
+                source_path=context["source"],
+                read_path=context["local_source"],
+                all_nodes=context["nodes"],
+                eligible_systems=context["eligible_systems"],
+                force_update=context["force_update"],
+                entity_type=context["entity_type"],
+            )
+        ]
     return {
         "metric_index": metric_index,
         "metric": metric,
         "output_rows": sum(
             int(output["rows"])
-            for output in manifest["outputs"] + cover_manifest["outputs"]
+            for manifest in manifests
+            for output in manifest["outputs"]
         ),
         "elapsed_seconds": time.time() - metric_started,
     }
@@ -3807,7 +3824,8 @@ def make_component_reductions(
                     eligible_systems=eligible_systems,
                     entity_type=entity_type,
                 )
-                and clusters.directed_cover_component_reduction_is_complete(
+                if is_chemical
+                else clusters.directed_cover_component_reduction_is_complete(
                     data_dir=data_dir,
                     metric=metric,
                     thresholds=thresholds,
@@ -3915,7 +3933,7 @@ def merge_component_reductions(
     thresholds: list[int],
     entity_type: clusters.ClusterEntity = "ligand",
 ) -> None:
-    """Merge every expected source reduction and publish ligand components."""
+    """Merge source reductions into internal connectivity labels."""
     started = time.time()
     for index, metric in enumerate(metrics, start=1):
         metric_started = time.time()
@@ -3925,18 +3943,20 @@ def merge_component_reductions(
             index,
             len(metrics),
         )
-        clusters.merge_score_component_reductions(
-            data_dir=data_dir,
-            metric=metric,
-            thresholds=thresholds,
-            entity_type=entity_type,
-        )
-        clusters.merge_directed_cover_component_reductions(
-            data_dir=data_dir,
-            metric=metric,
-            thresholds=thresholds,
-            entity_type=entity_type,
-        )
+        if metric == "tanimoto_similarity_ecfp4_1024":
+            clusters.merge_score_component_reductions(
+                data_dir=data_dir,
+                metric=metric,
+                thresholds=thresholds,
+                entity_type=entity_type,
+            )
+        else:
+            clusters.merge_directed_cover_component_reductions(
+                data_dir=data_dir,
+                metric=metric,
+                thresholds=thresholds,
+                entity_type=entity_type,
+            )
         elapsed = time.time() - started
         rate = index / elapsed
         LOG.info(
@@ -3948,7 +3968,7 @@ def merge_component_reductions(
         )
 
 
-def make_communities(
+def make_set_covers(
     *,
     data_dir: Path,
     metric_threshold: list[tuple[str, int]],
@@ -3957,12 +3977,12 @@ def make_communities(
     threads: int = 1,
     entity_type: clusters.ClusterEntity = "ligand",
 ) -> None:
-    """Compute one greedy centroid partition after component publication."""
+    """Compute one ligand-Tanimoto set cover after component reduction."""
     if not metric_threshold:
-        LOG.info("make_communities: all communities are cached")
+        LOG.info("make_set_covers: all set covers are cached")
         return
     [(metric, threshold)] = metric_threshold
-    clusters.make_communities(
+    clusters.make_set_cover(
         data_dir=data_dir,
         metric=metric,
         threshold=threshold,

@@ -324,21 +324,22 @@ def test_scoreability_merge_reuses_complete_collated_column(tmp_path):
 
 def test_finalize_index_adds_local_clusters(tmp_path):
     index_dir = tmp_path / "index"
-    cluster_file = (
-        tmp_path
-        / "ligand_clusters/cluster=components/directed=False/metric=pli_qcov"
-        / "threshold=100.parquet"
-    )
     directed_cover_file = (
         tmp_path
         / "ligand_sampling/directed_set_cover/metric=pli_qcov"
         / "threshold=100.parquet"
     )
+    tanimoto_cover_file = (
+        tmp_path
+        / "ligand_sampling/set_cover/metric=tanimoto_similarity_ecfp4_1024"
+        / "threshold=90.parquet"
+    )
     index_dir.mkdir(parents=True)
-    cluster_file.parent.mkdir(parents=True)
     directed_cover_file.parent.mkdir(parents=True)
+    tanimoto_cover_file.parent.mkdir(parents=True)
     pd.DataFrame(
         {
+            "entry_pdb_id": ["1aaa", "1aaa"],
             "system_id": ["1aaa__1__1.A__1.X", "1aaa__2__1.A__1.X"],
             "system_id_no_biounit": ["1aaa__1.A__1.X", "1aaa__1.A__1.X"],
             "system_biounit_id": ["1", "2"],
@@ -346,6 +347,8 @@ def test_finalize_index_adds_local_clusters(tmp_path):
             "ligand_id": ["1aaa__1__1.X", "1aaa__2__1.X"],
             "ligand_is_proper": [True, False],
             "ligand_rdkit_canonical_smiles": ["CCO", "CCO"],
+            "ligand_tanimoto_ecfp4_1024_90_cluster": ["legacy", "legacy"],
+            "ligand_tanimoto_ecfp4_1024_90_cluster_num_pdb_ids": [1, 1],
         }
     ).to_parquet(index_dir / "annotation_table.parquet", index=False)
     fingerprint_dir = tmp_path / "fingerprints"
@@ -355,8 +358,6 @@ def test_finalize_index_adds_local_clusters(tmp_path):
             "ligand_rdkit_canonical_smiles": ["CCO"],
             "ligand_smiles_id": [0],
             "ligand_is_cofactor_like": [False],
-            "ligand_tanimoto_ecfp4_1024_90_cluster": ["c0"],
-            "ligand_tanimoto_ecfp4_1024_90_cluster_num_pdb_ids": [1],
         }
     ).to_parquet(fingerprint_dir / "ligand_similarity_annotations.parquet", index=False)
     ligand_dir = tmp_path / "ligands"
@@ -370,16 +371,6 @@ def test_finalize_index_adds_local_clusters(tmp_path):
     pd.DataFrame(
         {
             "ligand_id": ["1aaa__1__1.X"],
-            "label": ["c0"],
-            "metric": ["pli_qcov"],
-            "cluster": ["components"],
-            "directed": [False],
-            "threshold": [100],
-        }
-    ).to_parquet(cluster_file, index=False)
-    pd.DataFrame(
-        {
-            "ligand_id": ["1aaa__1__1.X"],
             "centroid_ligand_id": ["1aaa__1__1.X"],
             "similarity_to_centroid": [100.0],
             "coverage_count": [1],
@@ -390,12 +381,20 @@ def test_finalize_index_adds_local_clusters(tmp_path):
             "directed": [True],
         }
     ).to_parquet(directed_cover_file, index=False)
+    pd.DataFrame(
+        {
+            "ligand_id": ["1aaa__1__1.X"],
+            "centroid_ligand_id": ["1aaa__1__1.X"],
+            "label": ["t0"],
+            "metric": ["tanimoto_similarity_ecfp4_1024"],
+            "cluster": ["set_cover"],
+            "threshold": [90],
+            "directed": [False],
+        }
+    ).to_parquet(tanimoto_cover_file, index=False)
 
     utils.finalize_index(data_dir=tmp_path)
     finalized = pd.read_parquet(index_dir / "annotation_table.parquet")
-    labels = finalized["pli_qcov__100__ligand__component"]
-    assert labels.iloc[0] == "c0"
-    assert pd.isna(labels.iloc[1])
     directed_labels = finalized["pli_qcov__100__ligand__directed_set_cover"]
     assert directed_labels.iloc[0] == "d0"
     assert pd.isna(directed_labels.iloc[1])
@@ -412,26 +411,38 @@ def test_finalize_index_adds_local_clusters(tmp_path):
     assert coverage_fractions.iloc[0] == pytest.approx(1.0)
     assert pd.isna(coverage_counts.iloc[1])
     assert pd.isna(coverage_fractions.iloc[1])
-    assert "pli_qcov__100__component" not in finalized
+    tanimoto_column = (
+        "tanimoto_similarity_ecfp4_1024__90__ligand__set_cover"
+    )
+    assert finalized[tanimoto_column].tolist()[0] == "t0"
+    assert pd.isna(finalized[tanimoto_column].iloc[1])
+    assert bool(finalized[f"{tanimoto_column}__is_centroid"].iloc[0])
+    assert finalized["ligand_tanimoto_ecfp4_1024_90_cluster"].iloc[0] == "t0"
+    assert pd.isna(finalized["ligand_tanimoto_ecfp4_1024_90_cluster"].iloc[1])
+    assert (
+        finalized["ligand_tanimoto_ecfp4_1024_90_cluster_num_pdb_ids"].iloc[0]
+        == 1
+    )
     assert finalized.loc[0, "ligand_smiles_id"] == 0
     assert pd.isna(finalized.loc[1, "ligand_smiles_id"])
     assert finalized["ligand_is_3d_score_able"].tolist() == [True, False]
     assert finalized["uniqueness"].nunique() == 2
 
 
-def test_cluster_index_requires_matching_directed_cover_matrix(tmp_path):
-    cluster_file = (
+def test_cluster_index_rejects_non_tanimoto_set_cover(tmp_path):
+    cover_file = (
         tmp_path
-        / "ligand_clusters/cluster=components/directed=False/metric=pli_qcov"
+        / "ligand_sampling/set_cover/metric=pli_qcov"
         / "threshold=100.parquet"
     )
-    cluster_file.parent.mkdir(parents=True)
+    cover_file.parent.mkdir(parents=True)
     pd.DataFrame(
         {
             "ligand_id": ["1aaa__1__1.X"],
+            "centroid_ligand_id": ["1aaa__1__1.X"],
             "label": ["c0"],
         }
-    ).to_parquet(cluster_file, index=False)
+    ).to_parquet(cover_file, index=False)
     index = pd.DataFrame(
         {
             "ligand_id": ["1aaa__1__1.X"],
@@ -441,29 +452,53 @@ def test_cluster_index_requires_matching_directed_cover_matrix(tmp_path):
         }
     )
 
-    with pytest.raises(FileNotFoundError, match="directed set-cover matrix"):
+    with pytest.raises(ValueError, match="invalid ligand set-cover modes"):
         utils.add_cluster_columns(index=index, data_dir=tmp_path)
 
 
-def test_cluster_index_marks_only_directed_cover_centroids(tmp_path):
-    cluster_file = (
+def test_tanimoto_90_set_cover_counts_distinct_pdb_ids(tmp_path):
+    cover_file = (
         tmp_path
-        / "ligand_clusters/cluster=components/directed=False/metric=pli_qcov"
-        / "threshold=50.parquet"
+        / "ligand_sampling/set_cover/metric=tanimoto_similarity_ecfp4_1024"
+        / "threshold=90.parquet"
     )
+    cover_file.parent.mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "ligand_id": ["l1", "l2", "l3"],
+            "centroid_ligand_id": ["l1", "l1", "l3"],
+            "label": ["c0", "c0", "c1"],
+        }
+    ).to_parquet(cover_file, index=False)
+    index = pd.DataFrame(
+        {
+            "entry_pdb_id": ["1aaa", "2bbb", "1aaa"],
+            "ligand_id": ["l1", "l2", "l3"],
+            "system_type": ["holo", "holo", "holo"],
+            "ligand_is_proper": [True, True, True],
+            "ligand_smiles_id": [0, 1, 2],
+        }
+    )
+
+    result = utils.add_cluster_columns(index=index, data_dir=tmp_path)
+
+    assert result["ligand_tanimoto_ecfp4_1024_90_cluster"].tolist() == [
+        "c0",
+        "c0",
+        "c1",
+    ]
+    assert result[
+        "ligand_tanimoto_ecfp4_1024_90_cluster_num_pdb_ids"
+    ].tolist() == [2, 2, 1]
+
+
+def test_cluster_index_marks_only_directed_cover_centroids(tmp_path):
     cover_file = (
         tmp_path
         / "ligand_sampling/directed_set_cover/metric=pli_qcov"
         / "threshold=50.parquet"
     )
-    cluster_file.parent.mkdir(parents=True)
     cover_file.parent.mkdir(parents=True)
-    pd.DataFrame(
-        {
-            "ligand_id": ["l1", "l2"],
-            "label": ["r0", "r0"],
-        }
-    ).to_parquet(cluster_file, index=False)
     pd.DataFrame(
         {
             "ligand_id": ["l1", "l2"],
@@ -501,21 +536,12 @@ def test_cluster_index_marks_only_directed_cover_centroids(tmp_path):
 
 
 def test_cluster_index_reads_legacy_cover_during_centrality_migration(tmp_path):
-    cluster_file = (
-        tmp_path
-        / "ligand_clusters/cluster=components/directed=False/metric=pli_qcov"
-        / "threshold=50.parquet"
-    )
     cover_file = (
         tmp_path
         / "ligand_sampling/directed_set_cover/metric=pli_qcov"
         / "threshold=50.parquet"
     )
-    cluster_file.parent.mkdir(parents=True)
     cover_file.parent.mkdir(parents=True)
-    pd.DataFrame({"ligand_id": ["l1", "l2"], "label": ["r0", "r0"]}).to_parquet(
-        cluster_file, index=False
-    )
     pd.DataFrame(
         {
             "ligand_id": ["l1", "l2"],

@@ -465,123 +465,17 @@ def ligand_scores(
 def build_ligand_similarity_annotations(
     *,
     unique_ligands: pd.DataFrame,
-    ligand_occurrences: pd.DataFrame,
-    edges: pd.DataFrame,
-    cluster_threshold: float = 90.0,
 ) -> pd.DataFrame:
-    """Build deterministic Tanimoto components and PDB-frequency annotations."""
-    node_ids = unique_ligands["ligand_smiles_id"].astype(int).tolist()
-    parent = {node_id: node_id for node_id in node_ids}
-
-    def find(node_id: int) -> int:
-        while parent[node_id] != node_id:
-            parent[node_id] = parent[parent[node_id]]
-            node_id = parent[node_id]
-        return node_id
-
-    def union(left: int, right: int) -> None:
-        left_root = find(left)
-        right_root = find(right)
-        if left_root == right_root:
-            return
-        if left_root < right_root:
-            parent[right_root] = left_root
-        else:
-            parent[left_root] = right_root
-
-    selected_edges = edges[edges["tanimoto_similarity_ecfp4_1024"] >= cluster_threshold]
-    for left, right in selected_edges[
-        ["query_ligand_id", "target_ligand_id"]
-    ].itertuples(index=False, name=None):
-        left_id = int(left)
-        right_id = int(right)
-        if left_id not in parent or right_id not in parent:
-            raise ValueError(
-                f"ligand similarity edge references unknown node {left_id}, {right_id}"
-            )
-        union(left_id, right_id)
-
-    components: dict[int, list[int]] = {}
-    for node_id in node_ids:
-        components.setdefault(find(node_id), []).append(node_id)
-    ordered_components = sorted(
-        components.values(), key=lambda members: (-len(members), members)
-    )
-    cluster_by_node = {
-        node_id: f"c{cluster_index}"
-        for cluster_index, members in enumerate(ordered_components)
-        for node_id in members
-    }
-    pdb_ids_by_node = {
-        int(node_id): set(group["pdb_id"].astype(str))
-        for node_id, group in ligand_occurrences.groupby("ligand_smiles_id")
-    }
-    num_pdb_ids_by_node: dict[int, int] = {}
-    for members in ordered_components:
-        component_pdb_ids: set[str] = set()
-        for node_id in members:
-            component_pdb_ids.update(pdb_ids_by_node.get(node_id, set()))
-        for node_id in members:
-            num_pdb_ids_by_node[node_id] = len(component_pdb_ids)
-
-    threshold_label = f"{cluster_threshold:g}".replace(".", "p")
-    cluster_column = f"ligand_tanimoto_ecfp4_1024_{threshold_label}_cluster"
-    count_column = f"{cluster_column}_num_pdb_ids"
-    annotations = unique_ligands.drop(columns=["fingerprint"]).copy()
-    annotations[cluster_column] = annotations["ligand_smiles_id"].map(cluster_by_node)
-    annotations[count_column] = (
-        annotations["ligand_smiles_id"].map(num_pdb_ids_by_node).astype(np.int32)
-    )
-    return annotations
+    """Return public unique-SMILES annotations without fingerprint bytes."""
+    return unique_ligands.drop(columns=["fingerprint"]).copy()
 
 
-def annotate_ligand_similarity(
-    *, data_dir: Path, cluster_threshold: float = 90.0
-) -> Path:
-    """Collate score shards into ligand-level annotations for the final index."""
+def annotate_ligand_similarity(*, data_dir: Path) -> Path:
+    """Write unique-SMILES identifiers and cofactor annotations for the index."""
     fingerprint_dir = data_dir / "fingerprints"
     unique_ligands = pd.read_parquet(fingerprint_dir / "ligands_per_smiles.parquet")
-    ligand_occurrences = load_ligands_from_annotation_table(data_dir=data_dir).merge(
-        unique_ligands[["ligand_rdkit_canonical_smiles", "ligand_smiles_id"]],
-        on="ligand_rdkit_canonical_smiles",
-        how="inner",
-        validate="many_to_one",
-    )
-    score_paths = sorted((data_dir / "ligand_scores").glob("*.parquet"))
-    if len(unique_ligands) and not score_paths:
-        raise FileNotFoundError("no BulkTanimoto score shards were generated")
-    frames = [
-        pd.read_parquet(
-            path,
-            filters=[("tanimoto_similarity_ecfp4_1024", ">=", cluster_threshold)],
-        )
-        for path in score_paths
-    ]
-    edges = (
-        pd.concat(frames, ignore_index=True)
-        if frames
-        else pd.DataFrame(
-            columns=[
-                "query_ligand_id",
-                "target_ligand_id",
-                "tanimoto_similarity_ecfp4_1024",
-            ]
-        )
-    )
-    expected_query_ids = set(unique_ligands["ligand_smiles_id"].astype(int))
-    observed_query_ids = set(edges["query_ligand_id"].astype(int))
-    if observed_query_ids != expected_query_ids:
-        missing = sorted(expected_query_ids.difference(observed_query_ids))
-        extra = sorted(observed_query_ids.difference(expected_query_ids))
-        raise ValueError(
-            "BulkTanimoto score shards do not cover the fingerprint set: "
-            f"missing={missing[:10]}, extra={extra[:10]}"
-        )
     annotations = build_ligand_similarity_annotations(
         unique_ligands=unique_ligands,
-        ligand_occurrences=ligand_occurrences,
-        edges=edges,
-        cluster_threshold=cluster_threshold,
     )
     output_path = fingerprint_dir / "ligand_similarity_annotations.parquet"
     annotations.to_parquet(output_path, index=False)

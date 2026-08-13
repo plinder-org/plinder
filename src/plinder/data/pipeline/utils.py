@@ -469,61 +469,16 @@ def ingest_flow_control(func: Callable[..., T]) -> Callable[..., T]:
 def _cluster_column_name(
     *, metric: str, cluster: str, directed: bool, threshold: int, ligand: bool
 ) -> str:
-    if directed:
-        raise ValueError("ligand clusters must use reciprocal-minimum edges")
-    kind = "component" if cluster == "components" else "community"
+    if directed or cluster != "set_cover":
+        raise ValueError("published undirected clusters must be set covers")
+    kind = "set_cover"
     ligand_marker = "__ligand" if ligand else ""
     return f"{metric}__{threshold}{ligand_marker}__{kind}"
 
 
-def _read_local_cluster_rows(*, root: Path, node_column: str) -> pd.DataFrame:
-    columns = [
-        node_column,
-        "label",
-        "threshold",
-        "metric",
-        "cluster",
-        "directed",
-    ]
-    paths = sorted(root.glob("cluster=*/directed=*/metric=*/threshold=*.parquet"))
-    frames = [pd.read_parquet(path, columns=columns) for path in paths]
-    if not frames:
-        return pd.DataFrame(columns=columns)
-    return pd.concat(frames, ignore_index=True)
-
-
-def _pivot_cluster_rows(
-    clusters: pd.DataFrame, *, node_column: str, ligand: bool
-) -> pd.DataFrame:
-    if clusters.empty:
-        return pd.DataFrame(columns=[node_column])
-    clusters = clusters.copy()
-    clusters["directed"] = clusters["directed"].map(
-        lambda value: value if isinstance(value, bool) else str(value).lower() == "true"
-    )
-    wide = clusters.pivot_table(
-        values="label",
-        index=node_column,
-        columns=["metric", "cluster", "directed", "threshold"],
-        aggfunc="first",
-    )
-    wide.columns = [
-        _cluster_column_name(
-            metric=str(metric),
-            cluster=str(cluster),
-            directed=bool(directed),
-            threshold=int(threshold),
-            ligand=ligand,
-        )
-        for metric, cluster, directed, threshold in wide.columns
-    ]
-    return wide.reset_index()
-
-
 def add_cluster_columns(*, index: pd.DataFrame, data_dir: Path) -> pd.DataFrame:
-    """Merge reciprocal and directed ligand-level cluster labels into the index."""
+    """Merge ligand Tanimoto and directed set-cover labels into the index."""
     node_column = "ligand_id"
-    cluster_root = data_dir / "ligand_clusters"
     directed_cover_root = data_dir / "ligand_sampling" / "directed_set_cover"
     marker_path = data_dir / "index" / "collation.json"
     repair_started_ns: int | None = None
@@ -532,8 +487,9 @@ def add_cluster_columns(*, index: pd.DataFrame, data_dir: Path) -> pd.DataFrame:
             marker = load(handle)
         if marker.get("status") == "requires_downstream_repair":
             repair_started_ns = marker_path.stat().st_mtime_ns
+    set_cover_root = data_dir / "ligand_sampling" / "set_cover"
     reciprocal_paths = sorted(
-        cluster_root.glob("cluster=*/directed=*/metric=*/threshold=*.parquet")
+        set_cover_root.glob("metric=*/threshold=*.parquet")
     )
     directed_cover_paths = sorted(
         directed_cover_root.glob("metric=*/threshold=*.parquet")
@@ -544,11 +500,11 @@ def add_cluster_columns(*, index: pd.DataFrame, data_dir: Path) -> pd.DataFrame:
                 "targeted collation repair has no rebuilt ligand clusters"
             )
         return index
-    reciprocal_keys = {
+    set_cover_keys = {
         (
             next(
                 part.split("=", maxsplit=1)[1]
-                for part in path.relative_to(cluster_root).parts
+                for part in path.relative_to(set_cover_root).parts
                 if part.startswith("metric=")
             ),
             int(path.stem.split("=", maxsplit=1)[1]),
@@ -562,12 +518,21 @@ def add_cluster_columns(*, index: pd.DataFrame, data_dir: Path) -> pd.DataFrame:
         )
         for path in directed_cover_paths
     }
-    if directed_cover_keys != reciprocal_keys:
-        missing = sorted(reciprocal_keys.difference(directed_cover_keys))
-        extra = sorted(directed_cover_keys.difference(reciprocal_keys))
-        raise FileNotFoundError(
-            "directed set-cover matrix does not match reciprocal ligand "
-            f"clusters: missing={missing[:10]}, extra={extra[:10]}"
+    invalid_set_cover_metrics = sorted(
+        metric
+        for metric, _ in set_cover_keys
+        if metric != "tanimoto_similarity_ecfp4_1024"
+    )
+    invalid_directed_metrics = sorted(
+        metric
+        for metric, _ in directed_cover_keys
+        if metric == "tanimoto_similarity_ecfp4_1024"
+    )
+    if invalid_set_cover_metrics or invalid_directed_metrics:
+        raise ValueError(
+            "invalid ligand set-cover modes: "
+            f"undirected={invalid_set_cover_metrics}, "
+            f"directed={invalid_directed_metrics}"
         )
     node_ids = pd.Index(
         index[node_column].dropna().astype(str).unique(),
@@ -588,7 +553,7 @@ def add_cluster_columns(*, index: pd.DataFrame, data_dir: Path) -> pd.DataFrame:
     )
     artifacts: list[tuple[Path, str, str, bool]] = []
     for path in reciprocal_paths:
-        relative_parts = path.relative_to(cluster_root).parts
+        relative_parts = path.relative_to(set_cover_root).parts
         partitions = {
             key: value
             for key, value in (
@@ -603,8 +568,8 @@ def add_cluster_columns(*, index: pd.DataFrame, data_dir: Path) -> pd.DataFrame:
                 metric,
                 _cluster_column_name(
                     metric=metric,
-                    cluster=partitions["cluster"],
-                    directed=partitions["directed"].lower() == "true",
+                    cluster="set_cover",
+                    directed=False,
                     threshold=threshold,
                     ligand=True,
                 ),
@@ -632,6 +597,7 @@ def add_cluster_columns(*, index: pd.DataFrame, data_dir: Path) -> pd.DataFrame:
     for path_index, (path, metric, column, is_directed_cover) in enumerate(
         artifacts, start=1
     ):
+        artifact_threshold = int(path.stem.split("=", maxsplit=1)[1])
         if (
             repair_started_ns is not None
             and path.stat().st_mtime_ns <= repair_started_ns
@@ -640,10 +606,9 @@ def add_cluster_columns(*, index: pd.DataFrame, data_dir: Path) -> pd.DataFrame:
                 "ligand cluster artifact predates the targeted collation "
                 f"repair: {path}"
             )
-        columns = [node_column, "label"]
+        columns = [node_column, "label", "centroid_ligand_id"]
         has_coverage_centrality = False
         if is_directed_cover:
-            columns.append("centroid_ligand_id")
             coverage_columns = {"coverage_count", "coverage_fraction"}
             available_columns = set(pq.read_schema(path).names)
             available_coverage_columns = coverage_columns.intersection(
@@ -680,23 +645,51 @@ def add_cluster_columns(*, index: pd.DataFrame, data_dir: Path) -> pd.DataFrame:
             )
         aligned = labels.set_index(node_column)["label"].reindex(node_ids)
         cluster_columns[column] = aligned.astype("string[pyarrow]").array
-        if is_directed_cover:
-            labels["centroid_ligand_id"] = labels["centroid_ligand_id"].astype(str)
-            labels["is_centroid"] = labels[node_column].eq(labels["centroid_ligand_id"])
-            centroid_counts = labels.groupby("label", observed=True)[
-                "is_centroid"
-            ].sum()
-            invalid_labels = centroid_counts[centroid_counts.ne(1)].index.tolist()
-            if invalid_labels:
+        if (
+            metric == "tanimoto_similarity_ecfp4_1024"
+            and artifact_threshold == 90
+        ):
+            if "entry_pdb_id" not in index.columns:
                 raise ValueError(
-                    "directed ligand cover must have exactly one centroid row "
-                    f"per label: {path}; invalid={invalid_labels[:10]}"
+                    "the 90-percent Tanimoto set cover requires entry_pdb_id"
                 )
-            centroid_column = f"{column}__is_centroid"
-            aligned_centroids = labels.set_index(node_column)["is_centroid"].reindex(
-                node_ids
+            cluster_column = "ligand_tanimoto_ecfp4_1024_90_cluster"
+            count_column = f"{cluster_column}_num_pdb_ids"
+            label_by_node = labels.set_index(node_column)["label"]
+            occurrences = pd.DataFrame(
+                {
+                    "label": index.loc[proper & holo, node_column]
+                    .astype(str)
+                    .map(label_by_node),
+                    "entry_pdb_id": index.loc[
+                        proper & holo, "entry_pdb_id"
+                    ].astype(str),
+                }
+            ).dropna(subset=["label"])
+            pdb_counts = occurrences.groupby("label", observed=True)[
+                "entry_pdb_id"
+            ].nunique()
+            cluster_columns[cluster_column] = aligned.astype(
+                "string[pyarrow]"
+            ).array
+            cluster_columns[count_column] = aligned.map(pdb_counts).astype(
+                "Int32"
+            ).array
+        labels["centroid_ligand_id"] = labels["centroid_ligand_id"].astype(str)
+        labels["is_centroid"] = labels[node_column].eq(labels["centroid_ligand_id"])
+        centroid_counts = labels.groupby("label", observed=True)["is_centroid"].sum()
+        invalid_labels = centroid_counts[centroid_counts.ne(1)].index.tolist()
+        if invalid_labels:
+            raise ValueError(
+                "ligand set cover must have exactly one representative row "
+                f"per label: {path}; invalid={invalid_labels[:10]}"
             )
-            cluster_columns[centroid_column] = aligned_centroids.astype("boolean").array
+        centroid_column = f"{column}__is_centroid"
+        aligned_centroids = labels.set_index(node_column)["is_centroid"].reindex(
+            node_ids
+        )
+        cluster_columns[centroid_column] = aligned_centroids.astype("boolean").array
+        if is_directed_cover:
             if has_coverage_centrality:
                 if labels[["coverage_count", "coverage_fraction"]].isna().any().any():
                     raise ValueError(
@@ -751,6 +744,8 @@ def add_cluster_columns(*, index: pd.DataFrame, data_dir: Path) -> pd.DataFrame:
             (
                 "__component",
                 "__community",
+                "__set_cover",
+                "__set_cover__is_centroid",
                 "__directed_set_cover",
                 "__directed_set_cover__is_centroid",
                 "__directed_set_cover__coverage_count",
@@ -782,7 +777,6 @@ def add_interface_cluster_columns(
 ) -> pd.DataFrame:
     """Expand representative interface-cluster labels into the full index."""
     node_column = "system_id"
-    cluster_root = data_dir / "interface_clusters"
     directed_cover_root = data_dir / "interface_sampling" / "directed_set_cover"
     marker_path = data_dir / "index" / "collation.json"
     repair_started_ns: int | None = None
@@ -791,13 +785,10 @@ def add_interface_cluster_columns(
             marker = load(handle)
         if marker.get("status") == "requires_downstream_repair":
             repair_started_ns = marker_path.stat().st_mtime_ns
-    reciprocal_paths = sorted(
-        cluster_root.glob("cluster=*/directed=*/metric=*/threshold=*.parquet")
-    )
     directed_cover_paths = sorted(
         directed_cover_root.glob("metric=*/threshold=*.parquet")
     )
-    if not reciprocal_paths and not directed_cover_paths:
+    if not directed_cover_paths:
         if repair_started_ns is not None:
             raise FileNotFoundError(
                 "targeted collation repair has no rebuilt interface clusters"
@@ -807,57 +798,6 @@ def add_interface_cluster_columns(
                 "non-empty interface annotation has no published interface clusters"
             )
         return index
-
-    reciprocal_artifact_keys = {
-        (
-            next(
-                part.split("=", maxsplit=1)[1]
-                for part in path.relative_to(cluster_root).parts
-                if part.startswith("metric=")
-            ),
-            int(path.stem.split("=", maxsplit=1)[1]),
-            next(
-                part.split("=", maxsplit=1)[1]
-                for part in path.relative_to(cluster_root).parts
-                if part.startswith("cluster=")
-            ),
-        )
-        for path in reciprocal_paths
-    }
-    reciprocal_keys = {
-        (metric, threshold) for metric, threshold, _ in reciprocal_artifact_keys
-    }
-    expected_reciprocal_artifacts = {
-        (metric, threshold, cluster)
-        for metric, threshold in reciprocal_keys
-        for cluster in ["components", "communities"]
-    }
-    if reciprocal_artifact_keys != expected_reciprocal_artifacts:
-        missing_reciprocal_artifacts = sorted(
-            expected_reciprocal_artifacts.difference(reciprocal_artifact_keys)
-        )
-        extra_reciprocal_artifacts = sorted(
-            reciprocal_artifact_keys.difference(expected_reciprocal_artifacts)
-        )
-        raise FileNotFoundError(
-            "interface reciprocal cluster matrix is incomplete: "
-            f"missing={missing_reciprocal_artifacts[:10]}, "
-            f"extra={extra_reciprocal_artifacts[:10]}"
-        )
-    directed_cover_keys = {
-        (
-            path.parent.name.split("=", maxsplit=1)[1],
-            int(path.stem.split("=", maxsplit=1)[1]),
-        )
-        for path in directed_cover_paths
-    }
-    if directed_cover_keys != reciprocal_keys:
-        missing = sorted(reciprocal_keys.difference(directed_cover_keys))
-        extra = sorted(directed_cover_keys.difference(reciprocal_keys))
-        raise FileNotFoundError(
-            "directed set-cover matrix does not match reciprocal interface "
-            f"clusters: missing={missing[:10]}, extra={extra[:10]}"
-        )
 
     node_ids = pd.Index(
         index[node_column].dropna().astype(str).unique(),
@@ -911,20 +851,6 @@ def add_interface_cluster_columns(
         membership[["side_1_half_interface_id", "side_2_half_interface_id"]].stack()
     )
     artifacts: list[tuple[Path, str, int, str]] = []
-    for path in reciprocal_paths:
-        partitions = {
-            key: value
-            for key, value in (
-                part.split("=", maxsplit=1)
-                for part in path.relative_to(cluster_root).parts[:-1]
-            )
-        }
-        if partitions["directed"].lower() != "false":
-            raise ValueError(f"interface reciprocal cluster must be undirected: {path}")
-        metric = partitions["metric"]
-        threshold = int(path.stem.split("=", maxsplit=1)[1])
-        kind = "component" if partitions["cluster"] == "components" else "community"
-        artifacts.append((path, metric, threshold, kind))
     for path in directed_cover_paths:
         metric = path.parent.name.split("=", maxsplit=1)[1]
         threshold = int(path.stem.split("=", maxsplit=1)[1])
@@ -994,7 +920,9 @@ def add_interface_cluster_columns(
         column
         for column in index.columns
         if column.startswith(("interface_qcov__", "interface_side_qcov__"))
-        and column.endswith(("component", "community", "directed_set_cover"))
+        and column.endswith(
+            ("component", "community", "set_cover", "directed_set_cover")
+        )
     }
     result = index.drop(
         columns=list(replacement_columns.intersection(index.columns) | stale_columns)
@@ -1012,7 +940,7 @@ def add_interface_cluster_columns(
 def add_ligand_similarity_columns(
     *, index: pd.DataFrame, data_dir: Path
 ) -> pd.DataFrame:
-    """Merge unique-SMILES cofactor and frequency annotations into each ligand."""
+    """Merge unique-SMILES and cofactor annotations into each ligand."""
     annotation_path = (
         data_dir / "fingerprints" / "ligand_similarity_annotations.parquet"
     )
@@ -1053,8 +981,15 @@ def add_ligand_similarity_columns(
             f"holo SMILES universe: missing={missing[:10]}, extra={extra[:10]}"
         )
     replacement_columns = set(annotations.columns).difference({join_column})
+    obsolete_columns = {
+        "ligand_tanimoto_ecfp4_1024_90_cluster",
+        "ligand_tanimoto_ecfp4_1024_90_cluster_num_pdb_ids",
+    }
     result = index.drop(
-        columns=list(replacement_columns.intersection(index.columns))
+        columns=list(
+            replacement_columns.intersection(index.columns)
+            | obsolete_columns.intersection(index.columns)
+        )
     ).merge(
         annotations,
         on=join_column,
@@ -1076,9 +1011,6 @@ def add_ligand_similarity_columns(
             result[column] = result[column].astype("boolean")
         result.loc[~eligible, column] = pd.NA
     result["ligand_smiles_id"] = result["ligand_smiles_id"].astype("Int32")
-    for column in result.columns:
-        if column.endswith("_cluster_num_pdb_ids"):
-            result[column] = result[column].astype("Int32")
     if "ligand_is_cofactor_like" in result:
         result["ligand_is_cofactor_like"] = result["ligand_is_cofactor_like"].astype(
             "boolean"
@@ -1217,7 +1149,7 @@ def finalize_index(*, data_dir: Path) -> pd.DataFrame:
     index = add_ligand_similarity_columns(index=index, data_dir=data_dir)
     LOG.info("merged ligand similarity annotations")
     index = add_cluster_columns(index=index, data_dir=data_dir)
-    uniqueness_cluster = "pli_qcov__100__ligand__component"
+    uniqueness_cluster = "pli_qcov__100__ligand__directed_set_cover"
     if uniqueness_cluster in index.columns:
         labels = (
             index[uniqueness_cluster]

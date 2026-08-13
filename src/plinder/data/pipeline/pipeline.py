@@ -603,6 +603,7 @@ class IngestPipeline:
                 metrics=metrics,
                 thresholds=list(self.cfg.flow.cluster_thresholds),
                 source_batch_size=self.cfg.flow.symmetric_edge_source_batch_size,
+                cover_batch_size=1,
                 symmetric_bucket_count=self.cfg.flow.symmetric_edge_bucket_count,
                 entity_type=entity_type,
             )
@@ -631,7 +632,7 @@ class IngestPipeline:
             data_dir=self.plinder_dir,
             batches=work["batches"],
             scratch_dir=Path(tempfile.gettempdir()) / "plinder-symmetric-fragments",
-            threads=self.cfg.flow.make_communities_cpu,
+            threads=self.cfg.flow.clustering_cpu,
             force_update=self.cfg.data.force_update,
             entity_type=work["entity_type"],
         )
@@ -664,7 +665,7 @@ class IngestPipeline:
             data_dir=self.plinder_dir,
             metric_buckets=work["metric_buckets"],
             scratch_dir=Path(tempfile.gettempdir()) / "plinder-symmetric-edges",
-            threads=self.cfg.flow.make_communities_cpu,
+            threads=self.cfg.flow.clustering_cpu,
             force_update=self.cfg.data.force_update,
             entity_type=work["entity_type"],
         )
@@ -715,13 +716,13 @@ class IngestPipeline:
             )
 
     @utils.ingest_flow_control
-    def scatter_make_communities(self) -> list[Any]:
+    def scatter_make_set_covers(self) -> list[Any]:
         force_update = (
             self.cfg.data.force_update or self.cfg.flow.make_components_force_update
         )
         work: list[dict[str, Any]] = []
         for entity_type, metrics in self._cluster_entities():
-            batches = tasks.scatter_make_communities(
+            batches = tasks.scatter_make_set_covers(
                 data_dir=self.plinder_dir,
                 metrics=metrics,
                 thresholds=self.cfg.flow.cluster_thresholds,
@@ -737,7 +738,7 @@ class IngestPipeline:
         return work or [{}]
 
     @utils.ingest_flow_control
-    def make_communities(self, work: Any) -> None:
+    def make_set_covers(self, work: Any) -> None:
         force_update = (
             self.cfg.data.force_update or self.cfg.flow.make_components_force_update
         )
@@ -745,12 +746,12 @@ class IngestPipeline:
             return
         entity_type = work["entity_type"]
         metric_thresholds = work["metric_threshold"]
-        tasks.make_communities(
+        tasks.make_set_covers(
             data_dir=self.plinder_dir,
             metric_threshold=metric_thresholds,
             skip_existing_clusters=not force_update,
-            scratch_dir=Path(tempfile.gettempdir()) / "plinder-communities",
-            threads=self.cfg.flow.make_communities_cpu,
+            scratch_dir=Path(tempfile.gettempdir()) / "plinder-set-covers",
+            threads=self.cfg.flow.clustering_cpu,
             entity_type=entity_type,
         )
 
@@ -790,7 +791,7 @@ class IngestPipeline:
             metric_threshold=metric_thresholds,
             skip_existing=not force_update,
             scratch_dir=Path(tempfile.gettempdir()) / "plinder-directed-set-covers",
-            threads=self.cfg.flow.make_communities_cpu,
+            threads=self.cfg.flow.clustering_cpu,
             entity_type=entity_type,
         )
 

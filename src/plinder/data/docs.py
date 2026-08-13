@@ -200,12 +200,12 @@ DERIVED_COLUMN_DESCRIPTIONS = {
         "Whether maximum similarity to a listed CCD cofactor is at least 90 percent"
     ),
     "ligand_tanimoto_ecfp4_1024_90_cluster": (
-        "Connected-component ID among unique ligand SMILES at 90-percent "
-        "ECFP4/1024 Tanimoto similarity"
+        "Cluster ID from the 90-percent ECFP4/1024 Tanimoto set cover; every "
+        "member has a direct threshold-qualified edge to its representative"
     ),
     "ligand_tanimoto_ecfp4_1024_90_cluster_num_pdb_ids": (
         "Number of distinct PDB entries represented in the ligand's 90-percent "
-        "Tanimoto component"
+        "Tanimoto set-cover cluster"
     ),
 }
 
@@ -248,56 +248,23 @@ def get_cluster_column_descriptions(
     plindex: pd.DataFrame,
 ) -> list[tuple[str, str | None, str | None]]:
     rows: list[tuple[str, str | None, str | None]] = []
-    component_columns = [c for c in plindex.columns if c.endswith("component")]
-    for column in component_columns:
+    set_cover_columns = [
+        c
+        for c in plindex.columns
+        if c.endswith("__set_cover") and not c.endswith("__directed_set_cover")
+    ]
+    for column in set_cover_columns:
         parts = column.split("__")
         metric, threshold = parts[:2]
         ligand_level = parts[2] == "ligand"
-        half_interface = parts[-1].startswith("chain_")
-        direction = (
-            "reciprocal-minimum"
-            if ligand_level or metric.startswith("interface_")
-            else parts[-2]
-            if parts[-2] in {"weak", "strong"}
-            else "directed"
-        )
-        cluster = "component"
-        level = (
-            "ligand-level "
-            if ligand_level
-            else f"{parts[-1].removesuffix('_component').replace('_', ' ')} "
-            if half_interface
-            else ""
-        )
+        level = "ligand-level " if ligand_level else ""
         rows.append(
             (
                 column,
                 "str",
-                f"Cluster ID for {level}{direction} {cluster} built from "
-                f"{metric} metric with {threshold} threshold",
-            )
-        )
-    community_columns = [c for c in plindex.columns if c.endswith("community")]
-    for column in community_columns:
-        parts = column.split("__")
-        metric, threshold = parts[:2]
-        ligand_level = parts[2] == "ligand"
-        half_interface = parts[-1].startswith("chain_")
-        cluster = "community"
-        level = (
-            "ligand-level "
-            if ligand_level
-            else f"{parts[-1].removesuffix('_community').replace('_', ' ')} "
-            if half_interface
-            else ""
-        )
-        rows.append(
-            (
-                column,
-                "str",
-                f"Cluster ID for {level}greedy centroid {cluster} built from "
-                f"reciprocal-minimum {metric} with {threshold} threshold; each "
-                "member meets the threshold in both directions to its centroid",
+                f"Cluster ID for {level}set cover built from reciprocal-minimum "
+                f"{metric} with {threshold} threshold; each member has a direct "
+                "threshold-qualified edge to its representative",
             )
         )
     directed_cover_columns = [
@@ -324,20 +291,32 @@ def get_cluster_column_descriptions(
                 "query-to-centroid score meets the threshold",
             )
         )
-    directed_centroid_columns = [
-        c for c in plindex.columns if c.endswith("__directed_set_cover__is_centroid")
+    centroid_columns = [
+        c
+        for c in plindex.columns
+        if c.endswith(
+            (
+                "__set_cover__is_centroid",
+                "__directed_set_cover__is_centroid",
+            )
+        )
     ]
-    for column in directed_centroid_columns:
+    for column in centroid_columns:
         parts = column.split("__")
         metric, threshold = parts[:2]
         ligand_level = parts[2] == "ligand"
         level = "ligand-level " if ligand_level else ""
+        cover_kind = (
+            "directed set-cover"
+            if "__directed_set_cover__" in column
+            else "set-cover"
+        )
         rows.append(
             (
                 column,
                 "bool | None",
                 f"Whether this row is the published centroid for its {level}"
-                f"directed set-cover cluster built from {metric} with "
+                f"{cover_kind} cluster built from {metric} with "
                 f"{threshold} threshold; missing means the row is outside the "
                 "clustering universe",
             )

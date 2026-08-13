@@ -2401,7 +2401,7 @@ def test_ligand_scores_use_bulk_tanimoto_for_unique_smiles(
     )
 
 
-def test_tanimoto_90_cluster_counts_distinct_pdb_ids() -> None:
+def test_ligand_similarity_annotations_exclude_fingerprint_bytes() -> None:
     unique_ligands = pd.DataFrame(
         {
             "ligand_smiles_id": [0, 1, 2],
@@ -2410,38 +2410,17 @@ def test_tanimoto_90_cluster_counts_distinct_pdb_ids() -> None:
             "ligand_is_cofactor_like": [True, False, False],
         }
     )
-    occurrences = pd.DataFrame(
-        {
-            "ligand_smiles_id": [0, 0, 1, 2],
-            "pdb_id": ["1aaa", "1aaa", "2bbb", "3ccc"],
-        }
-    )
-    edges = pd.DataFrame(
-        {
-            "query_ligand_id": [0, 0, 1, 2],
-            "target_ligand_id": [0, 1, 1, 2],
-            "tanimoto_similarity_ecfp4_1024": [100.0, 91.0, 100.0, 100.0],
-        }
-    )
 
     annotations = build_ligand_similarity_annotations(
         unique_ligands=unique_ligands,
-        ligand_occurrences=occurrences,
-        edges=edges,
-        cluster_threshold=90,
-    ).set_index("ligand_smiles_id")
+    )
 
-    assert (
-        annotations.loc[0, "ligand_tanimoto_ecfp4_1024_90_cluster"]
-        == annotations.loc[1, "ligand_tanimoto_ecfp4_1024_90_cluster"]
-    )
-    assert (
-        annotations.loc[2, "ligand_tanimoto_ecfp4_1024_90_cluster"]
-        != annotations.loc[0, "ligand_tanimoto_ecfp4_1024_90_cluster"]
-    )
-    assert annotations.loc[0, "ligand_tanimoto_ecfp4_1024_90_cluster_num_pdb_ids"] == 2
-    assert annotations.loc[1, "ligand_tanimoto_ecfp4_1024_90_cluster_num_pdb_ids"] == 2
-    assert annotations.loc[2, "ligand_tanimoto_ecfp4_1024_90_cluster_num_pdb_ids"] == 1
+    assert annotations.columns.tolist() == [
+        "ligand_smiles_id",
+        "ligand_rdkit_canonical_smiles",
+        "ligand_is_cofactor_like",
+    ]
+    assert annotations["ligand_smiles_id"].tolist() == [0, 1, 2]
 
 
 def test_ligand_similarity_pipeline_does_not_write_per_system_mapping(
@@ -2502,13 +2481,9 @@ def test_ligand_similarity_pipeline_does_not_write_per_system_mapping(
     )
 
     assert bool(annotations.loc["CCO", "ligand_is_cofactor_like"])
-    assert (
-        annotations.loc["CCO", "ligand_tanimoto_ecfp4_1024_90_cluster_num_pdb_ids"] == 2
-    )
-    assert (
-        annotations.loc["c1ccccc1", "ligand_tanimoto_ecfp4_1024_90_cluster_num_pdb_ids"]
-        == 1
-    )
+    assert annotations.loc["CCO", "ligand_smiles_id"] == 0
+    assert annotations.loc["c1ccccc1", "ligand_smiles_id"] == 1
+    assert not any("cluster" in column for column in annotations.columns)
 
     retained_score.write_bytes(b"changed fingerprint score basis")
     index = pd.read_parquet(index_dir / "annotation_table.parquet")
