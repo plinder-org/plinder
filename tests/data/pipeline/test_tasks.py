@@ -3163,6 +3163,9 @@ def test_get_scorer_uses_configured_search_limits(tmp_path) -> None:
         sub_databases=["apo"],
     )
     assert apo_scoring.scorer.sub_databases == ["apo"]
+    assert apo_scoring.scorer.minimum_thresholds == {
+        "protein_lddt_weighted_sum": pytest.approx(0.2)
+    }
 
 
 def test_run_batch_searches_skips_completed_backend_queries(
@@ -5451,3 +5454,27 @@ def test_make_holo_apo_sub_dbs_selects_apo_chains_from_chain_index(
         },
         "apo_mmseqs": {"1abc_Q", "1abc_Y"},
     }
+
+
+def test_make_apo_sub_db_builds_alignment_chain_lookup(tmp_path, monkeypatch):
+    (tmp_path / "dbs").mkdir()
+    apo_chains = pd.DataFrame(
+        {
+            "entry_pdb_id": ["1abc"],
+            "chain_asym_id": ["A"],
+            "chain_auth_id": ["X"],
+        }
+    )
+    lookup_calls = []
+    monkeypatch.setattr(tasks, "_apo_scoring_chains", lambda _data_dir: apo_chains)
+    monkeypatch.setattr(tasks.utils, "get_db_sources", lambda **kwargs: {})
+    monkeypatch.setattr(tasks.databases, "make_sub_dbs", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        tasks,
+        "make_alignment_chain_lookup",
+        lambda **kwargs: lookup_calls.append(kwargs),
+    )
+
+    tasks.make_sub_dbs(data_dir=tmp_path, sub_databases=["apo"])
+
+    assert lookup_calls == [{"data_dir": tmp_path, "scratch_dir": None, "threads": 1}]

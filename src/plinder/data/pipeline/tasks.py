@@ -630,7 +630,7 @@ def make_sub_dbs(
         tmp_dir=scratch_dir,
         threads=cpu,
     )
-    if "holo" in sub_databases:
+    if set(sub_databases).intersection({"holo", "apo"}):
         make_alignment_chain_lookup(
             data_dir=data_dir,
             scratch_dir=scratch_dir,

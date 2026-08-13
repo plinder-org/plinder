@@ -2919,12 +2919,16 @@ def _scoring_config(
     max_query_proper_ligand_chains: int = 30,
 ) -> Any:
     selected_databases = list(dict.fromkeys(sub_databases))
+    minimum_thresholds = {}
+    if "apo" in selected_databases:
+        minimum_thresholds["protein_lddt_weighted_sum"] = 0.2
     return config.get_config(
         config={
             "scorer": {
                 "sub_databases": ",".join(selected_databases),
                 "max_query_protein_chains": max_query_protein_chains,
                 "max_query_proper_ligand_chains": (max_query_proper_ligand_chains),
+                "minimum_thresholds": minimum_thresholds,
             },
             "foldseek": {"max_seqs": max_seqs, "min_seq_id": 0.0},
             "mmseqs": {"max_seqs": max_seqs, "min_seq_id": 0.0},
