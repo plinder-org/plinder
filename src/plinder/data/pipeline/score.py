@@ -151,6 +151,51 @@ def _load_pdb_id_manifest(path: Path) -> list[str]:
     return cast(list[str], values)
 
 
+def _packed_score_query_ids(
+    data_dir: Path,
+    query_ids: set[str],
+    *,
+    threads: int,
+    memory_limit: str,
+) -> set[str]:
+    """Return requested queries that have rows in the packed holo score store."""
+    if not query_ids:
+        return set()
+    paths = sorted(
+        {
+            data_dir / "scores/search_db=holo" / f"{pdb_id[1:3]}.parquet"
+            for pdb_id in query_ids
+        }
+    )
+    paths = [path for path in paths if path.is_file()]
+    if not paths:
+        return set()
+
+    import duckdb
+
+    connection = duckdb.connect()
+    connection.sql(f"SET threads={threads}")
+    connection.sql(f"SET memory_limit='{memory_limit}'")
+    connection.register(
+        "requested_queries",
+        pd.DataFrame({"query_entry": sorted(query_ids)}),
+    )
+    paths_sql = ", ".join(f"'{path.as_posix()}'" for path in paths)
+    observed = connection.sql(
+        f"""
+        SELECT DISTINCT split_part(scores.query_system, '__', 1) AS query_entry
+        FROM read_parquet(
+            [{paths_sql}], union_by_name=true, hive_partitioning=false
+        ) AS scores
+        INNER JOIN requested_queries
+          ON split_part(scores.query_system, '__', 1)
+           = requested_queries.query_entry
+        """
+    ).df()
+    connection.close()
+    return set(observed["query_entry"].astype(str))
+
+
 def _query_eligible_entry_ids(
     annotation: pd.DataFrame,
     entry_chains: pd.DataFrame,
@@ -336,6 +381,14 @@ def plan_score_repair(
             data_dir / "dbs" / "subdbs" / "search_db=holo" / f"{pdb_id}.parquet"
         ).is_file()
     }
+    existing_affected_queries.update(
+        _packed_score_query_ids(
+            data_dir,
+            affected.difference(active),
+            threads=threads,
+            memory_limit=memory_limit,
+        )
+    )
     inactive_queries = existing_affected_queries.difference(active)
     alignment_paths = sorted(
         (data_dir / "alignments" / "search_db=holo").glob(
@@ -404,6 +457,15 @@ def plan_score_repair(
                 if query_id in full_queries
                 else int(row.target_alignment_rows)
             )
+
+    missing_cache_queries = {
+        pdb_id
+        for pdb_id in set(targets_by_query).difference(full_queries)
+        if not all(
+            path.is_file() for path in _score_repair_query_paths(data_dir, pdb_id)
+        )
+    }
+    full_queries.update(missing_cache_queries)
 
     all_queries = sorted(
         set(targets_by_query).union(full_queries).union(inactive_queries)
@@ -490,6 +552,7 @@ def plan_score_repair(
             requested_additional_full.difference(active)
         ),
         "full_query_count": len(full_queries),
+        "cache_missing_full_query_count": len(missing_cache_queries),
         "dropped_query_count": len(inactive_queries),
         "target_only_query_count": (
             len(all_queries) - len(full_queries) - len(inactive_queries)
@@ -7018,6 +7081,10 @@ def main() -> None:
                 )
             result = {"status": "complete", "shards": shards}
         elif args.command == "repair-candidates":
+            repair_frame = pd.read_parquet(
+                args.repair_manifest.resolve(), columns=["pdb_id"]
+            )
+            replacement_query_ids = set(repair_frame["pdb_id"].dropna().astype(str))
             shards = _score_repair_shard_batch(
                 args.repair_manifest.resolve(),
                 batch_index=args.batch_index,
@@ -7028,6 +7095,10 @@ def main() -> None:
                 shards=shards,
                 scratch_dir=scratch_dir,
                 threads=args.threads,
+                replacement_query_ids=replacement_query_ids,
+                source_query_ids=replacement_query_ids.intersection(
+                    published_scoring_query_ids(data_dir)
+                ),
             )
             result = {
                 "status": "complete",
@@ -7047,6 +7118,13 @@ def main() -> None:
             )
             result = {"status": "complete", "shards": shards}
         elif args.command == "repair-score-shards":
+            replacement_query_ids = set(
+                pd.read_parquet(args.repair_manifest.resolve(), columns=["pdb_id"])[
+                    "pdb_id"
+                ]
+                .dropna()
+                .astype(str)
+            )
             shards = _score_repair_shard_batch(
                 args.repair_manifest.resolve(),
                 batch_index=args.batch_index,
@@ -7060,6 +7138,7 @@ def main() -> None:
                 scratch_dir=scratch_dir,
                 threads=args.threads,
                 reuse_cached_pairs=True,
+                replacement_query_ids=replacement_query_ids,
             )
             result = {
                 "status": "complete",

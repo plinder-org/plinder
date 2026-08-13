@@ -2512,7 +2512,9 @@ class Entry(DocBaseModel):
             "chain_num_contacting_artifacts",
             "chain_num_contacting_other_ligands",
         ]
-        contacts_computed = self._ligand_contacts_requested
+        contacts_computed = self._ligand_contacts_requested or bool(
+            self.biounit_ligand_contact_counts
+        )
         if contacts_computed:
             columns.extend(contact_columns)
         rows = []

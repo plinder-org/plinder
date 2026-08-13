@@ -57,6 +57,7 @@ ECFP4_PARQUET_METADATA = {
     b"plinder.fingerprint.include_chirality": b"false",
 }
 SCORE_THRESHOLDS_METADATA_KEY = b"plinder.scoring_thresholds"
+HOLO_PROTEIN_SCORES_METADATA_KEY = b"plinder.holo_protein_scores"
 
 _NON_CANONICAL_AA = str.maketrans({"J": "L", "U": "C", "O": "K"})
 
@@ -85,6 +86,7 @@ def score_cache_is_current(
     ligand_3d_mode: bytes,
     minimum_threshold: float,
     minimum_thresholds: dict[str, float],
+    holo_protein_scores_mode: bytes | None = None,
 ) -> bool:
     """Return whether a per-query score file matches the active filters."""
     try:
@@ -93,12 +95,18 @@ def score_cache_is_current(
     except (OSError, ValueError):
         return False
     metadata = schema.metadata or {}
-    return (
+    current = (
         set(schemas.PROTEIN_SIMILARITY_SCHEMA.names).issubset(schema.names)
         and metadata.get(b"plinder.ligand_3d") == ligand_3d_mode
         and metadata.get(SCORE_THRESHOLDS_METADATA_KEY)
         == score_thresholds_metadata(minimum_threshold, minimum_thresholds)
     )
+    if holo_protein_scores_mode is not None:
+        current = current and (
+            metadata.get(HOLO_PROTEIN_SCORES_METADATA_KEY)
+            == holo_protein_scores_mode
+        )
+    return current
 
 
 def _atomic_copy_file(source: Path, target: Path) -> None:
@@ -1843,6 +1851,7 @@ class Scorer:
             / f"{pdb_id}.parquet"
         )
         score_mode = b"deferred" if defer_ligand_3d else b"complete"
+        holo_protein_scores_mode = b"excluded" if search_db == "holo" else None
         cached_score_is_current = False
         if not overwrite and score_df_path.is_file():
             try:
@@ -1851,6 +1860,7 @@ class Scorer:
                     ligand_3d_mode=score_mode,
                     minimum_threshold=self.minimum_threshold,
                     minimum_thresholds=self.minimum_thresholds,
+                    holo_protein_scores_mode=holo_protein_scores_mode,
                 )
                 if defer_ligand_3d:
                     candidate_schema = pq.read_schema(candidate_path)
@@ -1924,6 +1934,7 @@ class Scorer:
                 source_to_aln_file=source_to_aln_file,
                 query_entry_alignments=query_entry_alignments,
                 ligand_3d_candidates=ligand_3d_candidates,
+                include_holo_protein_scores=search_db != "holo",
             )
             if df is None or df.empty:
                 df = pd.DataFrame(
@@ -1935,14 +1946,19 @@ class Scorer:
             temporary_root = scratch_dir or score_df_path.parent
             temporary_root.mkdir(exist_ok=True, parents=True)
             temporary = temporary_root / f"{search_db}-{pdb_id}.scores.parquet"
+            score_metadata = {
+                b"plinder.ligand_3d": score_mode,
+                SCORE_THRESHOLDS_METADATA_KEY: score_thresholds_metadata(
+                    self.minimum_threshold,
+                    self.minimum_thresholds,
+                ),
+            }
+            if holo_protein_scores_mode is not None:
+                score_metadata[HOLO_PROTEIN_SCORES_METADATA_KEY] = (
+                    holo_protein_scores_mode
+                )
             score_schema = schemas.PROTEIN_SIMILARITY_SCHEMA.with_metadata(
-                {
-                    b"plinder.ligand_3d": score_mode,
-                    SCORE_THRESHOLDS_METADATA_KEY: score_thresholds_metadata(
-                        self.minimum_threshold,
-                        self.minimum_thresholds,
-                    ),
-                }
+                score_metadata
             )
             df.to_parquet(
                 temporary,
@@ -2063,6 +2079,7 @@ class Scorer:
                 target_system_ids=target_system_ids,
                 target_ligand_ids=target_ligand_ids,
                 ligand_3d_candidates=ligand_3d_candidates,
+                include_holo_protein_scores=False,
             )
             if target_system_ids
             else None
@@ -2078,6 +2095,7 @@ class Scorer:
             if score_path.is_file()
             else pd.DataFrame(columns=schemas.PROTEIN_SIMILARITY_SCHEMA.names)
         )
+        scores = scores[~scores["metric"].astype(str).str.startswith("protein_")]
         scores = scores[unaffected_target(scores["target_system"])]
         if repaired is not None and not repaired.empty:
             scores = (
@@ -2132,7 +2150,10 @@ class Scorer:
         temporary_root.mkdir(exist_ok=True, parents=True)
         score_temporary = temporary_root / f"{pdb_id}.repair-scores.parquet"
         candidate_temporary = temporary_root / f"{pdb_id}.repair-candidates.parquet"
-        score_metadata = {b"plinder.ligand_3d": b"deferred"}
+        score_metadata = {
+            b"plinder.ligand_3d": b"deferred",
+            HOLO_PROTEIN_SCORES_METADATA_KEY: b"excluded",
+        }
         current_threshold_metadata = score_thresholds_metadata(
             self.minimum_threshold,
             self.minimum_thresholds,
@@ -3013,6 +3034,7 @@ class Scorer:
         query_ligand_ids: set[str] | None = None,
         target_system_ids: set[str] | None = None,
         target_ligand_ids: set[str] | None = None,
+        include_holo_protein_scores: bool = False,
     ) -> abc.Generator[dict[str, str | float | None], None, None]:
         if search_db == "holo":
             return self.get_scores_holo(
@@ -3023,6 +3045,7 @@ class Scorer:
                 query_ligand_ids=query_ligand_ids,
                 target_system_ids=target_system_ids,
                 target_ligand_ids=target_ligand_ids,
+                include_protein_scores=include_holo_protein_scores,
             )
         elif search_db == "apo" or search_db == "pred":
             return self.get_scores_apo_pred(
@@ -3043,6 +3066,7 @@ class Scorer:
         query_ligand_ids: set[str] | None = None,
         target_system_ids: set[str] | None = None,
         target_ligand_ids: set[str] | None = None,
+        include_protein_scores: bool = False,
     ) -> abc.Generator[dict[str, str | float | None], None, None]:
         score_started = perf_counter()
         deferred_rows: list[
@@ -3125,19 +3149,15 @@ class Scorer:
                     and (target_ligand_ids is None or ligand.id in target_ligand_ids)
                 ]
                 for query_ligand in query_ligands:
-                    # Keep every receptor chain in the directed query
-                    # denominator. Chains without a hit remain zero-coverage
-                    # rows in get_protein_scores(); dropping them here would
-                    # inflate weighted similarities for partial alignments.
+                    # Restrict both workflows to polypeptide receptors. When
+                    # protein metrics are requested, this complete chain set
+                    # also supplies their directed query denominator.
                     query_protein_chains = self.get_protein_receptor_chains(
                         query_ligand.pdb_id,
                         query_ligand.protein_chains_asym_id,
                     )
                     if not query_protein_chains:
                         continue
-                    query_protein_length = self.get_protein_chain_length(
-                        query_system.pdb_id, query_protein_chains
-                    )
                     for target_ligand in target_ligands:
                         target_protein_chains = self.get_protein_receptor_chains(
                             target_ligand.pdb_id,
@@ -3146,36 +3166,41 @@ class Scorer:
                         if not target_protein_chains:
                             continue
                         q_t_scores: dict[str, float] = {}
+                        q_t_mappings: dict[str, list[_ChainPairType]] = {}
+                        protein_chain_mapper = ""
 
-                        # Protein scores and mappings are restricted to the
-                        # receptor chains belonging to this ligand pair. Many
-                        # systems reuse the same receptor-chain sets, so avoid
-                        # recomputing their assignment and aggregate scores.
-                        protein_cache_key = (
-                            query_system.pdb_id,
-                            str(target_entry),
-                            tuple(query_protein_chains),
-                            tuple(target_protein_chains),
-                        )
-                        if protein_cache_key not in self._protein_score_cache:
-                            self._protein_score_cache[
-                                protein_cache_key
-                            ] = self.get_protein_scores(
-                                query_target_entry_alignments,
-                                query_system,
-                                target_protein_chains,
-                                query_protein_length,
-                                query_protein_chains=query_protein_chains,
+                        if include_protein_scores:
+                            # Custom workflows may request receptor-level
+                            # metrics. Cache their chain assignment across
+                            # ligand pairs sharing the same receptors.
+                            query_protein_length = self.get_protein_chain_length(
+                                query_system.pdb_id, query_protein_chains
                             )
-                        (
-                            q_t_mappings,
-                            protein_scores,
-                            _protein_alns,
-                            protein_chain_mapper,
-                        ) = self._protein_score_cache[protein_cache_key]
-                        if not protein_scores:
-                            continue
-                        q_t_scores.update(protein_scores)
+                            protein_cache_key = (
+                                query_system.pdb_id,
+                                str(target_entry),
+                                tuple(query_protein_chains),
+                                tuple(target_protein_chains),
+                            )
+                            if protein_cache_key not in self._protein_score_cache:
+                                self._protein_score_cache[
+                                    protein_cache_key
+                                ] = self.get_protein_scores(
+                                    query_target_entry_alignments,
+                                    query_system,
+                                    target_protein_chains,
+                                    query_protein_length,
+                                    query_protein_chains=query_protein_chains,
+                                )
+                            (
+                                q_t_mappings,
+                                protein_scores,
+                                _protein_alns,
+                                protein_chain_mapper,
+                            ) = self._protein_score_cache[protein_cache_key]
+                            if not protein_scores:
+                                continue
+                            q_t_scores.update(protein_scores)
 
                         (
                             pocket_scores,
@@ -3380,6 +3405,7 @@ class Scorer:
         target_system_ids: set[str] | None = None,
         target_ligand_ids: set[str] | None = None,
         ligand_3d_candidates: list[_Ligand3DCandidateType] | None = None,
+        include_holo_protein_scores: bool = False,
     ) -> Optional[pd.DataFrame]:
         if source_to_aln_file is None:
             source_to_aln_file = {
@@ -3430,6 +3456,7 @@ class Scorer:
                 query_ligand_ids=query_ligand_ids,
                 target_system_ids=target_system_ids,
                 target_ligand_ids=target_ligand_ids,
+                include_holo_protein_scores=include_holo_protein_scores,
             ):
                 # Keep nullable identifiers (notably target_ligand_id for
                 # apo/pred) present so every search database shares a schema.

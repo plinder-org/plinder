@@ -2186,6 +2186,7 @@ def scatter_missing_scores(
                 ligand_3d_mode=score_mode,
                 minimum_threshold=float(scorer_cfg.minimum_threshold),
                 minimum_thresholds=dict(scorer_cfg.minimum_thresholds),
+                holo_protein_scores_mode=(b"excluded" if search_db == "holo" else None),
             )
         ]
         manifest_root = data_dir / "alignments" / "manifests"
@@ -2495,15 +2496,26 @@ def collate_ligand_3d_candidates(
     shards: list[str],
     scratch_dir: Path,
     threads: int,
+    replacement_query_ids: set[str] | None = None,
+    source_query_ids: set[str] | None = None,
 ) -> list[Path]:
-    """Consolidate per-PDB positive-pocket candidates into query shards."""
+    """Consolidate or patch per-PDB positive-pocket candidate shards."""
     from plinder.data.pipeline.score import published_scoring_query_ids
 
     if threads < 1:
         raise ValueError("threads must be positive")
     import duckdb
 
-    active_queries = published_scoring_query_ids(data_dir)
+    patch_existing = replacement_query_ids is not None
+    if patch_existing:
+        replacement_query_ids = set(map(str, replacement_query_ids or set()))
+        active_queries = set(map(str, source_query_ids or set()))
+        if active_queries.difference(replacement_query_ids):
+            raise ValueError("candidate patch sources must be replacement queries")
+    elif source_query_ids is not None:
+        raise ValueError("source_query_ids requires replacement_query_ids")
+    else:
+        active_queries = published_scoring_query_ids(data_dir)
     scratch_dir.mkdir(exist_ok=True, parents=True)
     outputs: list[Path] = []
     for shard in shards:
@@ -2512,7 +2524,12 @@ def collate_ligand_3d_candidates(
         ):
             raise ValueError(f"invalid ligand 3D candidate shard: {shard!r}")
         pdb_ids = sorted(pdb_id for pdb_id in active_queries if pdb_id[1:3] == shard)
-        if not pdb_ids:
+        replaced_pdb_ids = sorted(
+            pdb_id for pdb_id in replacement_query_ids or set() if pdb_id[1:3] == shard
+        )
+        if patch_existing and not replaced_pdb_ids:
+            continue
+        if not patch_existing and not pdb_ids:
             continue
         try:
             inputs = _ligand_3d_candidate_input_signatures(data_dir, pdb_ids)
@@ -2522,10 +2539,14 @@ def collate_ligand_3d_candidates(
             ) from exc
         output, manifest = _ligand_3d_candidate_shard_paths(data_dir, shard)
         pair_output = _ligand_3d_pair_candidate_shard_path(data_dir, shard)
+        if patch_existing and not output.is_file():
+            raise FileNotFoundError(
+                f"candidate patch requires existing shard: {output}"
+            )
         output_is_current = False
         pair_output_is_current = False
         payload: dict[str, Any] = {}
-        if output.is_file() and manifest.is_file():
+        if not patch_existing and output.is_file() and manifest.is_file():
             try:
                 payload = json.loads(manifest.read_text())
                 stat = output.stat()
@@ -2571,11 +2592,30 @@ def collate_ligand_3d_candidates(
             source_paths = [Path(str(item["path"])) for item in inputs]
             paths_sql = ", ".join(f"'{path.as_posix()}'" for path in source_paths)
             temporary.unlink(missing_ok=True)
+            if patch_existing:
+                connection.register(
+                    "replacement_queries",
+                    pd.DataFrame({"query_entry": replaced_pdb_ids}),
+                )
+                replacement_sql = (
+                    f"SELECT * FROM read_parquet([{paths_sql}])"
+                    if source_paths
+                    else f"SELECT * FROM read_parquet('{output.as_posix()}') "
+                    "WHERE false"
+                )
+                source_sql = f"""
+                    SELECT existing.*
+                    FROM read_parquet('{output.as_posix()}') AS existing
+                    ANTI JOIN replacement_queries USING (query_entry)
+                    UNION ALL BY NAME
+                    {replacement_sql}
+                """
+            else:
+                source_sql = f"SELECT * FROM read_parquet([{paths_sql}])"
             connection.sql(
                 f"""
                 COPY (
-                    SELECT *
-                    FROM read_parquet([{paths_sql}])
+                    SELECT * FROM ({source_sql})
                     ORDER BY
                         query_entry,
                         query_ligand_asym_id,
@@ -2587,7 +2627,9 @@ def collate_ligand_3d_candidates(
                 """
             )
             observed_rows = pq.ParquetFile(temporary).metadata.num_rows
-            expected_rows = sum(int(item["rows"]) for item in inputs)
+            expected_rows = connection.sql(
+                f"SELECT count(*) FROM ({source_sql})"
+            ).fetchone()[0]
             if observed_rows != expected_rows:
                 connection.close()
                 raise ValueError(
@@ -2640,7 +2682,15 @@ def collate_ligand_3d_candidates(
         pair_output_stat = pair_output.stat()
         payload = {
             "shard": shard,
-            "inputs": inputs,
+            "inputs": (
+                {
+                    "base": "existing packed candidate shard",
+                    "replaced_query_ids": replaced_pdb_ids,
+                    "replacements": inputs,
+                }
+                if patch_existing
+                else inputs
+            ),
             "output": {
                 "path": str(output.resolve()),
                 "size": output_stat.st_size,
@@ -2924,8 +2974,9 @@ def merge_ligand_3d_scores(
     scratch_dir: Path,
     threads: int = 1,
     reuse_cached_pairs: bool = False,
+    replacement_query_ids: set[str] | None = None,
 ) -> list[Path]:
-    """Publish complete V3 scores directly as immutable query shards."""
+    """Publish complete score shards or patch selected query entries."""
     from plinder.data.pipeline.score import published_scoring_query_ids
 
     if threads < 1:
@@ -2950,7 +3001,16 @@ def merge_ligand_3d_scores(
     scratch_dir.mkdir(exist_ok=True, parents=True)
     output_dir = data_dir / "scores" / "search_db=holo"
     output_dir.mkdir(exist_ok=True, parents=True)
-    active_queries = published_scoring_query_ids(data_dir)
+    published_queries = published_scoring_query_ids(data_dir)
+    patch_existing = replacement_query_ids is not None
+    replacement_query_ids = set(map(str, replacement_query_ids or set()))
+    if patch_existing and not reuse_cached_pairs:
+        raise ValueError("query replacement requires cached ligand-pair scores")
+    active_queries = (
+        published_queries.intersection(replacement_query_ids)
+        if patch_existing
+        else published_queries
+    )
     thresholds = {
         metric: float(
             scorer_cfg.minimum_thresholds.get(metric, scorer_cfg.minimum_threshold)
@@ -2964,7 +3024,16 @@ def merge_ligand_3d_scores(
         ):
             raise ValueError(f"invalid ligand 3D query shard: {shard!r}")
         output = output_dir / f"{shard}.parquet"
-        if output.is_file() and not force_update:
+        replaced_pdb_ids = sorted(
+            pdb_id for pdb_id in replacement_query_ids if pdb_id[1:3] == shard
+        )
+        if patch_existing and not replaced_pdb_ids:
+            continue
+        if patch_existing and not output.is_file():
+            raise FileNotFoundError(
+                f"score patch requires existing published shard: {output}"
+            )
+        if output.is_file() and not force_update and not patch_existing:
             schema = pq.read_schema(output)
             if set(schemas.PROTEIN_SIMILARITY_SCHEMA.names).issubset(schema.names):
                 outputs.append(output)
@@ -3015,12 +3084,23 @@ def merge_ligand_3d_scores(
         connection = duckdb.connect()
         connection.sql(f"SET threads={threads}")
         connection.sql(f"SET temp_directory='{shard_scratch.as_posix()}'")
+        if patch_existing:
+            connection.register(
+                "replacement_queries",
+                pd.DataFrame({"query_entry": replaced_pdb_ids}),
+            )
+            candidate_sql = f"""
+                SELECT candidates.*
+                FROM read_parquet('{candidate_path.as_posix()}') AS candidates
+                INNER JOIN replacement_queries USING (query_entry)
+            """
+        else:
+            candidate_sql = f"SELECT * FROM read_parquet('{candidate_path.as_posix()}')"
 
         validation = connection.sql(
             f"""
             WITH candidates AS (
-                SELECT *
-                FROM read_parquet('{candidate_path.as_posix()}')
+                {candidate_sql}
             ), pairs AS (
                 SELECT *
                 FROM read_parquet('{pair_path.as_posix()}')
@@ -3078,6 +3158,45 @@ def merge_ligand_3d_scores(
             )
         metric_union = "\nUNION ALL\n".join(metric_selects)
         excluded_metrics = ", ".join(f"'{metric}'" for metric in all_ligand_metrics)
+        if patch_existing:
+            replacement_base_sql = (
+                f"""
+                SELECT *
+                FROM read_parquet(
+                    [{base_paths_sql}],
+                    hive_partitioning = false
+                )
+                WHERE metric NOT IN ({excluded_metrics})
+                """
+                if base_paths
+                else f"""
+                SELECT *
+                FROM read_parquet(
+                    '{output.as_posix()}', hive_partitioning = false
+                )
+                WHERE false
+                """
+            )
+            base_scores_sql = f"""
+                SELECT existing.*
+                FROM read_parquet(
+                    '{output.as_posix()}', hive_partitioning = false
+                ) AS existing
+                ANTI JOIN replacement_queries
+                  ON split_part(existing.query_system, '__', 1)
+                   = replacement_queries.query_entry
+                UNION ALL BY NAME
+                {replacement_base_sql}
+            """
+        else:
+            base_scores_sql = f"""
+                SELECT *
+                FROM read_parquet(
+                    [{base_paths_sql}],
+                    hive_partitioning = false
+                )
+                WHERE metric NOT IN ({excluded_metrics})
+            """
         local_output = shard_scratch / f"{shard}.parquet"
         local_output.unlink(missing_ok=True)
         connection.sql(
@@ -3085,8 +3204,7 @@ def merge_ligand_3d_scores(
                 f"""
                 COPY (
                     WITH candidates AS (
-                        SELECT *
-                        FROM read_parquet('{candidate_path.as_posix()}')
+                        {candidate_sql}
                     ), pairs AS (
                         SELECT *
                         FROM read_parquet('{pair_path.as_posix()}')
@@ -3098,12 +3216,7 @@ def merge_ligand_3d_scores(
                     ), ligand_scores AS (
                         {metric_union}
                     ), base_scores AS (
-                        SELECT *
-                        FROM read_parquet(
-                            [{base_paths_sql}],
-                            hive_partitioning = false
-                        )
-                        WHERE metric NOT IN ({excluded_metrics})
+                        {base_scores_sql}
                     )
                     SELECT * FROM base_scores
                     UNION ALL

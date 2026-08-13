@@ -973,6 +973,7 @@ def test_calculate_custom_similarity_scores_reuses_release_metrics(
     assert pocket.iloc[0]["similarity"] == 100
     assert pocket.iloc[0]["query_ligand_id"] == "model__1__1.L"
     assert pocket.iloc[0]["target_ligand_id"] == "1abc__1__1.Z"
+    assert scores["metric"].str.startswith("protein_").any()
 
 
 def test_calculate_custom_protein_scores_uses_plinder_pocket(

@@ -1651,9 +1651,17 @@ def test_score_repair_plans_full_and_target_only_queries(
             "target_entry": ["2def", "2def", "4jkl", "8nop", "2def"],
         }
     ).to_parquet(alignment, index=False)
-    inactive_score = tmp_path / "dbs/subdbs/search_db=holo/4jkl.parquet"
-    inactive_score.parent.mkdir(parents=True)
-    inactive_score.touch()
+    target_score = tmp_path / "dbs/subdbs/search_db=holo/1abc.parquet"
+    target_score.parent.mkdir(parents=True)
+    target_score.touch()
+    target_candidates = (
+        tmp_path / "scores/ligand_3d_candidates/search_db=holo/shard=ab/1abc.parquet"
+    )
+    target_candidates.parent.mkdir(parents=True)
+    target_candidates.touch()
+    packed_score = tmp_path / "scores/search_db=holo/jk.parquet"
+    packed_score.parent.mkdir(parents=True)
+    pd.DataFrame({"query_system": ["4jkl__1"]}).to_parquet(packed_score, index=False)
     affected = tmp_path / "affected.txt"
     affected.write_text("2def\n4jkl\n")
     additional_full = tmp_path / "additional_full.txt"
@@ -1667,6 +1675,7 @@ def test_score_repair_plans_full_and_target_only_queries(
     )
 
     assert report["full_query_count"] == 2
+    assert report["cache_missing_full_query_count"] == 0
     assert report["additional_full_query_count"] == 1
     assert report["ignored_additional_full_query_count"] == 1
     assert report["dropped_query_count"] == 1
@@ -1691,6 +1700,70 @@ def test_score_repair_plans_full_and_target_only_queries(
     assert repair_by_query["3ghi"]["repair_mode"] == "full"
     assert repair_by_query["4jkl"]["repair_mode"] == "drop"
     assert list(repair_by_query["1abc"]["target_pdb_ids"]) == ["2def", "4jkl"]
+
+
+def test_score_repair_promotes_target_query_when_cache_is_missing(
+    tmp_path: Path,
+) -> None:
+    from plinder.data.pipeline.score import (
+        MANIFEST_RELATIVE,
+        PLAN_RELATIVE,
+        _source_signature,
+        plan_score_repair,
+    )
+
+    query_manifest = tmp_path / MANIFEST_RELATIVE
+    query_manifest.parent.mkdir(parents=True)
+    pd.DataFrame({"pdb_id": ["1abc", "2def"]}).to_parquet(query_manifest, index=False)
+    pd.DataFrame({"pdb_id": ["1abc", "2def"], "estimated_work": [1, 1]}).to_parquet(
+        tmp_path / "manifests/protein_scoring_work.parquet", index=False
+    )
+    (tmp_path / PLAN_RELATIVE).write_text(
+        json.dumps(
+            {
+                "manifest": _source_signature(query_manifest),
+                "score_max_query_protein_chains": 5,
+                "score_max_query_proper_ligand_chains": 5,
+            }
+        )
+    )
+    index = tmp_path / "index"
+    index.mkdir()
+    pd.DataFrame(
+        {
+            "entry_pdb_id": ["1abc", "2def"],
+            "system_id": ["1abc__1", "2def__1"],
+            "ligand_id": ["1abc__1__1.L", "2def__1__1.L"],
+            "system_type": ["holo", "holo"],
+            "system_protein_chains_asym_id": [["1.A"], ["1.A"]],
+            "ligand_is_proper": [True, True],
+        }
+    ).to_parquet(index / "annotation_table.parquet", index=False)
+    pd.DataFrame(
+        {
+            "entry_pdb_id": ["1abc", "2def"],
+            "chain_asym_id": ["A", "A"],
+            "chain_receptor_type": ["protein", "protein"],
+        }
+    ).to_parquet(index / "entry_chains.parquet", index=False)
+    alignment = (
+        tmp_path / "alignments/search_db=holo/alignment_type=foldseek/shard=ab.parquet"
+    )
+    alignment.parent.mkdir(parents=True)
+    pd.DataFrame({"query_entry": ["1abc"], "target_entry": ["2def"]}).to_parquet(
+        alignment, index=False
+    )
+    affected = tmp_path / "affected.txt"
+    affected.write_text("2def\n")
+
+    report = plan_score_repair(tmp_path, affected_manifest=affected)
+
+    assert report["full_query_count"] == 2
+    assert report["cache_missing_full_query_count"] == 1
+    assert report["target_only_query_count"] == 0
+    plan = pd.read_parquet(tmp_path / "manifests/score_repair.parquet")
+    assert set(plan["pdb_id"]) == {"1abc", "2def"}
+    assert set(plan["repair_mode"]) == {"full"}
 
 
 def test_bounded_score_repair_reverses_only_existing_target_candidates(
@@ -2497,6 +2570,68 @@ def test_ligand_3d_plan_deduplicates_positive_pocket_candidates(tmp_path) -> Non
     assert len(_ligand_3d_batch(tmp_path, 0, 2)) == 2
 
 
+def test_candidate_repair_patches_packed_shard_without_other_query_caches(
+    tmp_path: Path,
+) -> None:
+    def candidate(query_entry: str, target_entry: str, pocket_qcov: float) -> dict:
+        return {
+            "query_system": f"{query_entry}__1",
+            "query_ligand_id": f"{query_entry}__1__1.L",
+            "query_entry": query_entry,
+            "query_ligand_asym_id": "L",
+            "target_system": f"{target_entry}__1",
+            "target_ligand_id": f"{target_entry}__1__1.X",
+            "target_entry": target_entry,
+            "target_ligand_asym_id": "X",
+            "protein_mapping": "1.A:1.B",
+            "protein_mapper": "foldseek",
+            "pocket_qcov": pocket_qcov,
+        }
+
+    packed = tmp_path / "scores/ligand_3d_candidate_shards/shard=ab.parquet"
+    packed.parent.mkdir(parents=True)
+    pq.write_table(
+        pa.Table.from_pylist(
+            [candidate("1abc", "2old", 0.4), candidate("9abc", "8keep", 0.6)],
+            schema=schemas.LIGAND_3D_CANDIDATE_SCHEMA,
+        ),
+        packed,
+    )
+    replacement = (
+        tmp_path / "scores/ligand_3d_candidates/search_db=holo/shard=ab/1abc.parquet"
+    )
+    replacement.parent.mkdir(parents=True)
+    pq.write_table(
+        pa.Table.from_pylist(
+            [candidate("1abc", "2new", 0.8)],
+            schema=schemas.LIGAND_3D_CANDIDATE_SCHEMA,
+        ),
+        replacement,
+    )
+
+    tasks.collate_ligand_3d_candidates(
+        data_dir=tmp_path,
+        shards=["ab"],
+        scratch_dir=tmp_path / "scratch",
+        threads=1,
+        replacement_query_ids={"1abc"},
+        source_query_ids={"1abc"},
+    )
+
+    repaired = pd.read_parquet(packed)
+    assert set(zip(repaired["query_entry"], repaired["target_entry"])) == {
+        ("1abc", "2new"),
+        ("9abc", "8keep"),
+    }
+    pairs = pd.read_parquet(
+        tmp_path / "scores/ligand_3d_pair_candidate_shards/shard=ab.parquet"
+    )
+    assert set(zip(pairs["query_entry"], pairs["target_entry"])) == {
+        ("1abc", "2new"),
+        ("9abc", "8keep"),
+    }
+
+
 def test_make_ligand_3d_scores_writes_and_reuses_complete_batch(
     tmp_path, monkeypatch
 ) -> None:
@@ -2938,6 +3073,111 @@ def test_merge_ligand_3d_scores_uses_full_precision_pocket_coverage(tmp_path) ->
         "sucos_shape_pocket_qcov": 31,
     }
     assert pd.read_parquet(score_path)["metric"].tolist() == ["pocket_qcov"]
+
+
+def test_score_repair_patches_packed_shard_without_other_query_caches(
+    tmp_path: Path,
+) -> None:
+    def candidate(query_entry: str, target_entry: str, pocket_qcov: float) -> dict:
+        return {
+            "query_system": f"{query_entry}__1",
+            "query_ligand_id": f"{query_entry}__1__1.L",
+            "query_entry": query_entry,
+            "query_ligand_asym_id": "L",
+            "target_system": f"{target_entry}__1",
+            "target_ligand_id": f"{target_entry}__1__1.X",
+            "target_entry": target_entry,
+            "target_ligand_asym_id": "X",
+            "protein_mapping": "1.A:1.B",
+            "protein_mapper": "foldseek",
+            "pocket_qcov": pocket_qcov,
+        }
+
+    candidate_path = tmp_path / "scores/ligand_3d_candidate_shards/shard=ab.parquet"
+    candidate_path.parent.mkdir(parents=True)
+    candidates = [candidate("1abc", "2new", 0.75), candidate("9abc", "8keep", 0.6)]
+    pq.write_table(
+        pa.Table.from_pylist(candidates, schema=schemas.LIGAND_3D_CANDIDATE_SCHEMA),
+        candidate_path,
+    )
+    pair_path = tmp_path / "scores/ligand_3d_by_query/ab.parquet"
+    pair_path.parent.mkdir(parents=True)
+    pq.write_table(
+        pa.Table.from_pylist(
+            [
+                {
+                    "query_entry": row["query_entry"],
+                    "query_ligand_asym_id": "L",
+                    "target_entry": row["target_entry"],
+                    "target_ligand_asym_id": "X",
+                    "shape": 0.8,
+                    "color": 0.6,
+                    "sucos_shape": 0.5,
+                }
+                for row in candidates
+            ],
+            schema=schemas.LIGAND_3D_SCORE_SCHEMA,
+        ),
+        pair_path,
+    )
+
+    def score(query_entry: str, metric: str, similarity: int) -> dict:
+        return {
+            "query_system": f"{query_entry}__1",
+            "query_ligand_id": f"{query_entry}__1__1.L",
+            "target_system": "2new__1",
+            "target_ligand_id": "2new__1__1.X",
+            "protein_mapping": "1.A:1.B",
+            "mapping": "1.A:1.B",
+            "protein_mapper": "foldseek",
+            "source": "foldseek",
+            "metric": metric,
+            "similarity": similarity,
+        }
+
+    replacement = tmp_path / "dbs/subdbs/search_db=holo/1abc.parquet"
+    replacement.parent.mkdir(parents=True)
+    pd.DataFrame([score("1abc", "pocket_qcov", 88)]).to_parquet(
+        replacement, index=False, schema=schemas.PROTEIN_SIMILARITY_SCHEMA
+    )
+    packed = tmp_path / "scores/search_db=holo/ab.parquet"
+    packed.parent.mkdir(parents=True)
+    pd.DataFrame(
+        [
+            score("1abc", "pocket_qcov", 11),
+            score("1abc", "shape", 12),
+            score("9abc", "pocket_qcov", 55),
+            score("9abc", "color", 42),
+        ]
+    ).to_parquet(packed, index=False, schema=schemas.PROTEIN_SIMILARITY_SCHEMA)
+    work = tmp_path / "manifests/protein_scoring_work.parquet"
+    work.parent.mkdir(parents=True)
+    pd.DataFrame({"pdb_id": ["1abc", "9abc"]}).to_parquet(work, index=False)
+
+    tasks.merge_ligand_3d_scores(
+        data_dir=tmp_path,
+        shards=["ab"],
+        scorer_cfg=SimpleNamespace(minimum_threshold=0.3, minimum_thresholds={}),
+        force_update=True,
+        scratch_dir=tmp_path / "scratch",
+        threads=1,
+        reuse_cached_pairs=True,
+        replacement_query_ids={"1abc"},
+    )
+
+    repaired = pd.read_parquet(packed)
+    preserved = repaired[repaired["query_system"].eq("9abc__1")]
+    assert dict(zip(preserved["metric"], preserved["similarity"])) == {
+        "pocket_qcov": 55,
+        "color": 42,
+    }
+    replacement_rows = repaired[repaired["query_system"].eq("1abc__1")]
+    replacement_scores = dict(
+        zip(replacement_rows["metric"], replacement_rows["similarity"])
+    )
+    assert replacement_scores["pocket_qcov"] == 88
+    assert replacement_scores["shape"] == 80
+    assert 11 not in replacement_rows["similarity"].tolist()
 
 
 def test_merge_ligand_3d_scores_fails_when_query_shard_is_not_ready(

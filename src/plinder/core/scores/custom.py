@@ -2158,6 +2158,7 @@ def calculate_custom_similarity_scores(
             source_to_aln_file=source_to_alignment,
             target_system_ids=selected_systems,
             target_ligand_ids=selected_ligands,
+            include_holo_protein_scores=True,
         )
         if frame is not None and not frame.empty:
             frames.append(frame)

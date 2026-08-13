@@ -1762,6 +1762,7 @@ def test_get_score_df_defers_ligand_3d_and_writes_full_precision_candidates(
         nonlocal calls
         calls += 1
         assert kwargs["data_dir"] is None
+        assert kwargs["include_holo_protein_scores"] is False
         kwargs["ligand_3d_candidates"].append(
             {
                 "query_system": "1abc_system",
@@ -1802,6 +1803,9 @@ def test_get_score_df_defers_ligand_3d_and_writes_full_precision_candidates(
     assert (scoring_module.pq.read_schema(output).metadata or {}).get(
         b"plinder.ligand_3d"
     ) == b"deferred"
+    assert (scoring_module.pq.read_schema(output).metadata or {}).get(
+        scoring_module.HOLO_PROTEIN_SCORES_METADATA_KEY
+    ) == b"excluded"
     scorer.get_score_df(
         tmp_path,
         "1abc",
@@ -1856,6 +1860,10 @@ def test_repair_score_df_targets_replaces_only_affected_target_rows(
         [
             score_row("2def__1__1.X__1.Y", 60),
             score_row("3ghi__1__1.X__1.Y", 70),
+            {
+                **score_row("3ghi__1__1.X__1.Y", 90),
+                "metric": "protein_fident_weighted_sum",
+            },
         ]
     ).to_parquet(
         score_path,
@@ -1927,6 +1935,7 @@ def test_repair_score_df_targets_replaces_only_affected_target_rows(
         "2def__2__1.X__1.Y",
         "3ghi__1__1.X__1.Y",
     }
+    assert not repaired["metric"].str.startswith("protein_").any()
     candidates = pd.read_parquet(candidate_path)
     assert set(candidates["target_system"]) == {
         "2def__2__1.X__1.Y",
@@ -2669,7 +2678,14 @@ def test_holo_scores_are_emitted_per_ligand_pair(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(scorer, "get_ligand_pair_pocket_pli_scores", pocket_scores)
     monkeypatch.setattr(scorer, "get_ligand_pair_shape_scores", shape_scores)
 
-    scores = list(scorer.get_scores_holo(query_system, alignments, data_dir=tmp_path))
+    scores = list(
+        scorer.get_scores_holo(
+            query_system,
+            alignments,
+            data_dir=tmp_path,
+            include_protein_scores=True,
+        )
+    )
 
     assert {
         (score["query_ligand_id"], score["target_ligand_id"]) for score in scores
@@ -2688,6 +2704,17 @@ def test_holo_scores_are_emitted_per_ligand_pair(tmp_path, monkeypatch) -> None:
     assert shape_calls == [(query_ligands[0].id, target_ligands[0].id, 1.0)]
     shape_row = next(score for score in scores if "shape" in score)
     assert shape_row["sucos_shape_pocket_qcov"] == pytest.approx(0.6)
+
+    ligand_scores = list(
+        scorer.get_scores_holo(
+            query_system,
+            alignments,
+            include_protein_scores=False,
+        )
+    )
+    assert all("protein_qcov_weighted_sum" not in score for score in ligand_scores)
+    assert any("pocket_qcov" in score for score in ligand_scores)
+    assert len(protein_calls) == 4
 
     candidates = []
     protein_only_scores = list(
@@ -2783,7 +2810,14 @@ def test_holo_threaded_scoring_reuses_canonical_and_receptor_pairs(
     monkeypatch.setattr(scoring_module, "align_molecules", align_once)
     monkeypatch.setattr(scoring_module, "get_sucos_score", lambda *_args: 0.7)
 
-    scores = list(scorer.get_scores_holo(query_system, alignments, data_dir=tmp_path))
+    scores = list(
+        scorer.get_scores_holo(
+            query_system,
+            alignments,
+            data_dir=tmp_path,
+            include_protein_scores=True,
+        )
+    )
 
     assert len(scores) == 2
     assert protein_calls == 1
@@ -2844,7 +2878,13 @@ def test_holo_weighted_sum_retains_unmatched_query_receptor_length(
         lambda *_args: ({}, {}, {}),
     )
 
-    scores = list(scorer.get_scores_holo(query_system, alignments))
+    scores = list(
+        scorer.get_scores_holo(
+            query_system,
+            alignments,
+            include_protein_scores=True,
+        )
+    )
 
     assert len(scores) == 1
     assert scores[0]["protein_lddt_qcov_weighted_max"] == pytest.approx(0.5)
