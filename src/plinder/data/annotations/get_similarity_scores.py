@@ -2,6 +2,7 @@
 # Distributed under the terms of the Apache License 2.0
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 from bisect import bisect_left
@@ -55,8 +56,49 @@ ECFP4_PARQUET_METADATA = {
     b"plinder.fingerprint.nbits": b"1024",
     b"plinder.fingerprint.include_chirality": b"false",
 }
+SCORE_THRESHOLDS_METADATA_KEY = b"plinder.scoring_thresholds"
 
 _NON_CANONICAL_AA = str.maketrans({"J": "L", "U": "C", "O": "K"})
+
+
+def score_thresholds_metadata(
+    minimum_threshold: float,
+    minimum_thresholds: dict[str, float],
+) -> bytes:
+    """Encode score-filter thresholds for Parquet completion metadata."""
+    return json.dumps(
+        {
+            "default": float(minimum_threshold),
+            "metrics": {
+                str(metric): float(threshold)
+                for metric, threshold in sorted(minimum_thresholds.items())
+            },
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+
+
+def score_cache_is_current(
+    path: Path,
+    *,
+    ligand_3d_mode: bytes,
+    minimum_threshold: float,
+    minimum_thresholds: dict[str, float],
+) -> bool:
+    """Return whether a per-query score file matches the active filters."""
+    try:
+        schema = pq.read_schema(path)
+        pq.read_metadata(path)
+    except (OSError, ValueError):
+        return False
+    metadata = schema.metadata or {}
+    return (
+        set(schemas.PROTEIN_SIMILARITY_SCHEMA.names).issubset(schema.names)
+        and metadata.get(b"plinder.ligand_3d") == ligand_3d_mode
+        and metadata.get(SCORE_THRESHOLDS_METADATA_KEY)
+        == score_thresholds_metadata(minimum_threshold, minimum_thresholds)
+    )
 
 
 def _atomic_copy_file(source: Path, target: Path) -> None:
@@ -1804,15 +1846,11 @@ class Scorer:
         cached_score_is_current = False
         if not overwrite and score_df_path.is_file():
             try:
-                cached_schema = pq.read_schema(score_df_path)
-                cached_columns = set(cached_schema.names)
-                pq.read_metadata(score_df_path)
-                cached_score_is_current = (
-                    set(schemas.PROTEIN_SIMILARITY_SCHEMA.names).issubset(
-                        cached_columns
-                    )
-                    and (cached_schema.metadata or {}).get(b"plinder.ligand_3d")
-                    == score_mode
+                cached_score_is_current = score_cache_is_current(
+                    score_df_path,
+                    ligand_3d_mode=score_mode,
+                    minimum_threshold=self.minimum_threshold,
+                    minimum_thresholds=self.minimum_thresholds,
                 )
                 if defer_ligand_3d:
                     candidate_schema = pq.read_schema(candidate_path)
@@ -1843,10 +1881,7 @@ class Scorer:
                         source_to_aln_file[source]
                         if source_to_aln_file is not None
                         and source in source_to_aln_file
-                        else self.db_dir
-                        / source
-                        / "mapped_aln"
-                        / f"{pdb_id}.parquet"
+                        else self.db_dir / source / "mapped_aln" / f"{pdb_id}.parquet"
                     )
                     if mapped_file.is_file():
                         target_entries = pd.read_parquet(
@@ -1901,7 +1936,13 @@ class Scorer:
             temporary_root.mkdir(exist_ok=True, parents=True)
             temporary = temporary_root / f"{search_db}-{pdb_id}.scores.parquet"
             score_schema = schemas.PROTEIN_SIMILARITY_SCHEMA.with_metadata(
-                {b"plinder.ligand_3d": score_mode}
+                {
+                    b"plinder.ligand_3d": score_mode,
+                    SCORE_THRESHOLDS_METADATA_KEY: score_thresholds_metadata(
+                        self.minimum_threshold,
+                        self.minimum_thresholds,
+                    ),
+                }
             )
             df.to_parquet(
                 temporary,
@@ -1967,14 +2008,18 @@ class Scorer:
             / f"shard={pdb_id[1:3]}"
             / f"{pdb_id}.parquet"
         )
-        if (
-            not allow_missing
-            and (not score_path.is_file() or not candidate_path.is_file())
+        if not allow_missing and (
+            not score_path.is_file() or not candidate_path.is_file()
         ):
             raise FileNotFoundError(
                 f"targeted score repair requires existing score and candidate files: "
                 f"score={score_path.is_file()} candidates={candidate_path.is_file()}"
             )
+        existing_threshold_metadata = None
+        if score_path.is_file():
+            existing_threshold_metadata = (
+                pq.read_schema(score_path).metadata or {}
+            ).get(SCORE_THRESHOLDS_METADATA_KEY)
 
         requested_entries = {pdb_id, *affected_target_entries}
         requested_entries.difference_update(self.entries)
@@ -2070,9 +2115,7 @@ class Scorer:
             candidates = (
                 repaired_candidates.reset_index(drop=True)
                 if candidates.empty
-                else pd.concat(
-                    [candidates, repaired_candidates], ignore_index=True
-                )
+                else pd.concat([candidates, repaired_candidates], ignore_index=True)
             )
         candidate_keys = [
             "query_system",
@@ -2089,9 +2132,14 @@ class Scorer:
         temporary_root.mkdir(exist_ok=True, parents=True)
         score_temporary = temporary_root / f"{pdb_id}.repair-scores.parquet"
         candidate_temporary = temporary_root / f"{pdb_id}.repair-candidates.parquet"
-        score_schema = schemas.PROTEIN_SIMILARITY_SCHEMA.with_metadata(
-            {b"plinder.ligand_3d": b"deferred"}
+        score_metadata = {b"plinder.ligand_3d": b"deferred"}
+        current_threshold_metadata = score_thresholds_metadata(
+            self.minimum_threshold,
+            self.minimum_thresholds,
         )
+        if existing_threshold_metadata == current_threshold_metadata:
+            score_metadata[SCORE_THRESHOLDS_METADATA_KEY] = current_threshold_metadata
+        score_schema = schemas.PROTEIN_SIMILARITY_SCHEMA.with_metadata(score_metadata)
         scores.to_parquet(
             score_temporary,
             index=False,

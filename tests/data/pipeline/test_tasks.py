@@ -12,6 +12,10 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from plinder.core.utils import schemas
+from plinder.data.annotations.get_similarity_scores import (
+    SCORE_THRESHOLDS_METADATA_KEY,
+    score_thresholds_metadata,
+)
 from plinder.data.annotations.interface_utils import INTERFACE_ANNOTATION_SCHEMA
 from plinder.data.pipeline import io, tasks
 from plinder.data.pipeline.config import LigandConfig
@@ -3418,6 +3422,10 @@ def test_mapping_scatter_requires_current_shard_manifest(tmp_path):
 
 
 def test_missing_score_scatter_includes_mapped_apo_queries(tmp_path) -> None:
+    scorer_cfg = SimpleNamespace(
+        minimum_threshold=0.3,
+        minimum_thresholds={"protein_lddt_weighted_sum": 0.2},
+    )
     raw = tmp_path / "dbs/subdbs/apo_foldseek/aln/1abc.parquet"
     raw.parent.mkdir(parents=True)
     pd.DataFrame({"query": ["1abc_A"]}).to_parquet(raw, index=False)
@@ -3443,6 +3451,7 @@ def test_missing_score_scatter_includes_mapped_apo_queries(tmp_path) -> None:
     assert tasks.scatter_missing_scores(
         data_dir=tmp_path,
         batch_size=10,
+        scorer_cfg=scorer_cfg,
         search_dbs=["apo"],
     ) == [["1abc"]]
 
@@ -3452,6 +3461,35 @@ def test_missing_score_scatter_includes_mapped_apo_queries(tmp_path) -> None:
     assert tasks.scatter_missing_scores(
         data_dir=tmp_path,
         batch_size=10,
+        scorer_cfg=scorer_cfg,
+        search_dbs=["apo"],
+    ) == [["1abc"]]
+
+    pq.write_table(
+        pa.Table.from_batches([], schema=schemas.PROTEIN_SIMILARITY_SCHEMA),
+        score,
+    )
+    assert tasks.scatter_missing_scores(
+        data_dir=tmp_path,
+        batch_size=10,
+        scorer_cfg=scorer_cfg,
+        search_dbs=["apo"],
+    ) == [["1abc"]]
+
+    current_schema = schemas.PROTEIN_SIMILARITY_SCHEMA.with_metadata(
+        {
+            b"plinder.ligand_3d": b"complete",
+            SCORE_THRESHOLDS_METADATA_KEY: score_thresholds_metadata(
+                scorer_cfg.minimum_threshold,
+                scorer_cfg.minimum_thresholds,
+            ),
+        }
+    )
+    pq.write_table(pa.Table.from_batches([], schema=current_schema), score)
+    assert tasks.scatter_missing_scores(
+        data_dir=tmp_path,
+        batch_size=10,
+        scorer_cfg=scorer_cfg,
         search_dbs=["apo"],
     ) == [[]]
 

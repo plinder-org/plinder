@@ -321,6 +321,7 @@ class IngestPipeline:
         chunks: list[list[str]] = tasks.scatter_missing_scores(
             data_dir=self.plinder_dir,
             batch_size=self.cfg.flow.make_batch_scores_batch_size,
+            scorer_cfg=self.cfg.scorer,
             search_dbs=self.cfg.scorer.sub_databases,
         )
         return chunks

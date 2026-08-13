@@ -406,9 +406,7 @@ def test_unavailable_query_backend_writes_typed_empty_checkpoint(
     raw = scorer.db_dir / "apo_foldseek" / "aln" / "1abc.parquet"
     assert raw.is_file()
     assert pd.read_parquet(raw).empty
-    assert pq.read_schema(raw).equals(
-        scoring_module._raw_alignment_schema("foldseek")
-    )
+    assert pq.read_schema(raw).equals(scoring_module._raw_alignment_schema("foldseek"))
 
 
 def test_alignment_mapping_preserves_author_chain_ids_with_underscores(
@@ -1814,6 +1812,17 @@ def test_get_score_df_defers_ligand_3d_and_writes_full_precision_candidates(
     )
     assert calls == 1
 
+    scorer.minimum_thresholds["protein_lddt_weighted_sum"] = 0.2
+    scorer.get_score_df(
+        tmp_path,
+        "1abc",
+        "holo",
+        overwrite=False,
+        map_alignments=False,
+        defer_ligand_3d=True,
+    )
+    assert calls == 2
+
 
 def test_repair_score_df_targets_replaces_only_affected_target_rows(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1923,6 +1932,9 @@ def test_repair_score_df_targets_replaces_only_affected_target_rows(
         "2def__2__1.X__1.Y",
         "3ghi__1__1.X__1.Y",
     }
+    assert scoring_module.SCORE_THRESHOLDS_METADATA_KEY not in (
+        scoring_module.pq.read_schema(score_path).metadata or {}
+    )
 
 
 def test_repair_score_df_targets_can_create_bounded_query_outputs(
@@ -1996,8 +2008,7 @@ def test_repair_score_df_targets_can_create_bounded_query_outputs(
 
     assert pd.read_parquet(output)["similarity"].tolist() == [75]
     candidate_path = (
-        tmp_path
-        / "scores/ligand_3d_candidates/search_db=holo/shard=ab/1abc.parquet"
+        tmp_path / "scores/ligand_3d_candidates/search_db=holo/shard=ab/1abc.parquet"
     )
     assert pd.read_parquet(candidate_path)["pocket_qcov"].tolist() == [0.75]
 

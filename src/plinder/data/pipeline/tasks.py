@@ -2139,6 +2139,7 @@ def scatter_missing_scores(
     *,
     data_dir: Path,
     batch_size: int,
+    scorer_cfg: DictConfig,
     search_dbs: Sequence[str] = ("holo",),
 ) -> list[list[str]]:
     from plinder.data.pipeline.score import dropped_query_ids
@@ -2172,6 +2173,21 @@ def scatter_missing_scores(
     rerun: set[str] = set()
     dropped = dropped_query_ids(data_dir)
     for search_db in search_dbs:
+        score_mode = b"deferred" if search_db == "holo" else b"complete"
+        present[search_db] = [
+            pdb_id
+            for pdb_id in present.get(search_db, [])
+            if get_similarity_scores.score_cache_is_current(
+                data_dir
+                / "dbs"
+                / "subdbs"
+                / f"search_db={search_db}"
+                / f"{pdb_id}.parquet",
+                ligand_3d_mode=score_mode,
+                minimum_threshold=float(scorer_cfg.minimum_threshold),
+                minimum_thresholds=dict(scorer_cfg.minimum_thresholds),
+            )
+        ]
         manifest_root = data_dir / "alignments" / "manifests"
         if search_db != "holo":
             manifest_root = manifest_root / f"search_db={search_db}"
