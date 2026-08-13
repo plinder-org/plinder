@@ -275,6 +275,17 @@ DERIVED_COLUMN_DESCRIPTIONS.update(
 )
 
 
+# Human-readable labels for the fingerprint (chemical) clustering metrics.
+# MHFP6: Probst, D. & Reymond, J-L. "A probabilistic molecular fingerprint for
+# big data settings." J. Cheminform. 10, 8 (2018). doi:10.1186/s13321-018-0321-8
+_METRIC_LABELS = {
+    "tanimoto_similarity_ecfp4_1024": "ECFP4/1024 Tanimoto similarity",
+    "jaccard_similarity_mhfp6_2048": (
+        "MHFP6/2048 MinHash-estimated Jaccard similarity (Probst & Reymond 2018)"
+    ),
+}
+
+
 def get_cluster_column_descriptions(
     plindex: pd.DataFrame,
 ) -> list[tuple[str, str | None, str | None]]:
@@ -294,8 +305,9 @@ def get_cluster_column_descriptions(
                 column,
                 "str",
                 f"Cluster ID for {level}set cover built from reciprocal-minimum "
-                f"{metric} with {threshold} threshold; each member has a direct "
-                "threshold-qualified edge to its representative",
+                f"{_METRIC_LABELS.get(metric, metric)} with {threshold} threshold; "
+                "each member has a direct threshold-qualified edge to its "
+                "representative",
             )
         )
     directed_cover_columns = [
@@ -318,8 +330,8 @@ def get_cluster_column_descriptions(
                 column,
                 "str",
                 f"Cluster ID for {level}directed set cover built from "
-                f"{metric} with {threshold} threshold; each member's "
-                "query-to-centroid score meets the threshold",
+                f"{_METRIC_LABELS.get(metric, metric)} with {threshold} threshold; "
+                "each member's query-to-centroid score meets the threshold",
             )
         )
     centroid_columns = [

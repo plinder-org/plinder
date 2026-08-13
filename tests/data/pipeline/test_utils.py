@@ -151,38 +151,43 @@ def test_hash_contents(contents):
     utils.hash_contents(contents)
 
 
-@pytest.mark.parametrize(
-    "two_char_codes, expect",
-    [
-        (["aa", "bb"], 2),
-        (["aa"], 1),
-        ([], 2),
-        (None, 2),
-    ],
-)
-def test_get_local_contents(two_char_codes, expect, tmp_path):
-    a = tmp_path / "aa" / "aaaa" / "aaaa.cif"
-    b = tmp_path / "bb" / "bbbb" / "bbbb.cif"
-    a.parent.mkdir(parents=True)
-    b.parent.mkdir(parents=True)
-    a.touch()
-    b.touch()
-    contents = utils.get_local_contents(
-        data_dir=tmp_path,
-        two_char_codes=two_char_codes,
-    )
-    assert len(contents) == expect
-
-
-def test_get_local_contents_pdb_ids(tmp_path):
-    a = tmp_path / "aa" / "pdb_0000aaaa" / "aaaa.cif"
-    b = tmp_path / "bb" / "pdb_0000bbbb" / "bbbb.cif"
-    a.parent.mkdir(parents=True)
-    b.parent.mkdir(parents=True)
-    a.touch()
-    b.touch()
-    contents = utils.get_local_contents(data_dir=tmp_path, as_four_char_ids=True)
-    assert contents == ["aaaa", "bbbb"]
+# TODO(get_local_contents): commented out together with utils.get_local_contents,
+# which is quarantined pending confirmation that it is stale (no in-repo callers)
+# vs. used by an external metaflow flow. The None-context cases here are also
+# order-flaky (they read the process-global cached config). Restore both — with an
+# autouse config-cache reset — if the function turns out to be live.
+# @pytest.mark.parametrize(
+#     "two_char_codes, expect",
+#     [
+#         (["aa", "bb"], 2),
+#         (["aa"], 1),
+#         ([], 2),
+#         (None, 2),
+#     ],
+# )
+# def test_get_local_contents(two_char_codes, expect, tmp_path):
+#     a = tmp_path / "aa" / "aaaa" / "aaaa.cif"
+#     b = tmp_path / "bb" / "bbbb" / "bbbb.cif"
+#     a.parent.mkdir(parents=True)
+#     b.parent.mkdir(parents=True)
+#     a.touch()
+#     b.touch()
+#     contents = utils.get_local_contents(
+#         data_dir=tmp_path,
+#         two_char_codes=two_char_codes,
+#     )
+#     assert len(contents) == expect
+#
+#
+# def test_get_local_contents_pdb_ids(tmp_path):
+#     a = tmp_path / "aa" / "pdb_0000aaaa" / "aaaa.cif"
+#     b = tmp_path / "bb" / "pdb_0000bbbb" / "bbbb.cif"
+#     a.parent.mkdir(parents=True)
+#     b.parent.mkdir(parents=True)
+#     a.touch()
+#     b.touch()
+#     contents = utils.get_local_contents(data_dir=tmp_path, as_four_char_ids=True)
+#     assert contents == ["aaaa", "bbbb"]
 
 
 def test_create_index_collates_per_entry_parquets(tmp_path, monkeypatch):

@@ -25,7 +25,10 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from numpy.typing import NDArray
 
-from plinder.core.scores.metrics import GATED_LIGAND_DIAGNOSTIC_METRICS
+from plinder.core.scores.metrics import (
+    GATED_LIGAND_DIAGNOSTIC_METRICS,
+    is_chemical_cluster_metric,
+)
 from plinder.core.utils.log import setup_logger
 
 LOG = setup_logger(__name__)
@@ -515,19 +518,28 @@ def _component_source_signature(path: Path) -> dict[str, str | int]:
     }
 
 
+# Each chemical (fingerprint) metric aggregates its own raw directed-edge shards;
+# every protein/pocket score metric shares the holo search-score dataset.
+_CHEMICAL_METRIC_SCORES_DIR = {
+    "tanimoto_similarity_ecfp4_1024": "ligand_scores",
+    "jaccard_similarity_mhfp6_2048": "mhfp6_scores",
+}
+
+
 def _raw_component_score_sources(
     *,
     data_dir: Path,
-    chemical: bool,
+    metric: str,
     entity_type: ClusterEntity = "ligand",
 ) -> list[Path]:
     """Return raw score sources before reciprocal edge aggregation."""
+    scores_dir = _CHEMICAL_METRIC_SCORES_DIR.get(metric)
     if entity_type == "interface":
-        if chemical:
+        if scores_dir is not None:
             raise ValueError("interface clustering does not use chemical scores")
         return sorted((data_dir / "interface_scores").glob("shard=*.parquet"))
-    if chemical:
-        return sorted((data_dir / "ligand_scores").glob("*.parquet"))
+    if scores_dir is not None:
+        return sorted((data_dir / scores_dir).glob("*.parquet"))
     return sorted((data_dir / "scores" / "search_db=holo").rglob("*.parquet"))
 
 
@@ -551,40 +563,44 @@ def prepare_symmetric_edge_plan(
     if bucket_count < 1:
         raise ValueError("symmetric-edge bucket count must be positive")
     selected_metrics = list(dict.fromkeys(metrics))
-    chemical_metric = "tanimoto_similarity_ecfp4_1024"
     if entity_type == "interface" and (
         not selected_metrics
         or not set(selected_metrics).issubset(INTERFACE_CLUSTER_METRICS)
     ):
         raise ValueError(
-            "interface clustering supports interface_qcov and " "interface_side_qcov"
+            "interface clustering supports interface_qcov and interface_side_qcov"
         )
+    chemical_metrics = [
+        metric for metric in selected_metrics if is_chemical_cluster_metric(metric)
+    ]
+    score_metrics = [
+        metric for metric in selected_metrics if not is_chemical_cluster_metric(metric)
+    ]
+    # One aggregation group per distinct raw-source set: interface metrics share
+    # the interface score shards, all protein/pocket metrics share the holo
+    # search scores, and each chemical metric has its own directed-edge shards
+    # (e.g. ligand_scores / mhfp6_scores).
+    source_groups: list[tuple[str, list[str]]] = []
+    if entity_type == "interface":
+        source_groups.append(("interface", selected_metrics))
+    else:
+        if score_metrics:
+            source_groups.append(("score", score_metrics))
+        source_groups.extend(("chemical", [metric]) for metric in chemical_metrics)
     batches: list[dict[str, Any]] = []
-    source_groups = (
-        [("interface", selected_metrics)]
-        if entity_type == "interface"
-        else [
-            (
-                "score",
-                [metric for metric in selected_metrics if metric != chemical_metric],
-            ),
-            (
-                "chemical",
-                [metric for metric in selected_metrics if metric == chemical_metric],
-            ),
-        ]
-    )
     for kind, source_metrics in source_groups:
         if not source_metrics:
             continue
         sources = _raw_component_score_sources(
             data_dir=data_dir,
-            chemical=kind == "chemical",
+            metric=source_metrics[0],
             entity_type=entity_type,
         )
         if not sources:
             if entity_type != "interface":
-                raise FileNotFoundError(f"no raw {kind} score sources found")
+                raise FileNotFoundError(
+                    f"no raw {kind} score sources found for {source_metrics}"
+                )
             nodes, _ = component_node_universe(
                 data_dir=data_dir,
                 metric=source_metrics[0],
@@ -1668,7 +1684,8 @@ def component_node_universe(
             set(pd.read_parquet(source, columns=[column])[column].dropna().astype(str))
         )
         return nodes, None
-    if metric == "tanimoto_similarity_ecfp4_1024":
+    if is_chemical_cluster_metric(metric):
+        # Chemical metrics share the ECFP4 file's ligand_smiles_id node universe.
         nodes = (
             pd.read_parquet(
                 data_dir / "fingerprints" / "ligands_per_smiles.parquet",
@@ -3085,7 +3102,7 @@ def make_directed_set_cover(
     published["assignment_threshold"] = published["assignment_threshold"].astype(
         "Int16"
     )
-    if metric == "tanimoto_similarity_ecfp4_1024":
+    if is_chemical_cluster_metric(metric):
         published = _expand_fingerprint_cover(
             data_dir=data_dir,
             assignments=published,

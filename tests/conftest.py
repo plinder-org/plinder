@@ -324,21 +324,6 @@ def cif_1atp():
     return test_asset_fp / "xx/pdb_00001atp/pdb_00001atp_xyz-enrich.cif.gz"
 
 
-@pytest.fixture(scope="session")
-def mini_component_cif():
-    return test_asset_fp / "components.cif"
-
-
-@pytest.fixture(scope="session")
-def mini_component_cif_gz():
-    return test_asset_fp / "components.cif.gz"
-
-
-@pytest.fixture(scope="session")
-def mini_components_pqt():
-    return test_asset_fp / "components.parquet"
-
-
 @pytest.fixture
 def test_env(tmp_path, monkeypatch):
     monkeypatch.setenv("PLINDER_MOUNT", tmp_path.as_posix())
@@ -349,16 +334,6 @@ def test_env(tmp_path, monkeypatch):
 
     config._config._clear()
     return tmp_path / "bucket" / "test"
-
-
-@pytest.fixture
-def components_path(test_env, mini_component_cif, mini_components_pqt):
-    components_path = test_env / "dbs" / "components" / "components.cif"
-    components_pqt = test_env / "dbs" / "components" / "components.parquet"
-    components_path.parent.mkdir(parents=True)
-    components_path.write_text(mini_component_cif.read_text())
-    components_pqt.write_bytes(mini_components_pqt.read_bytes())
-    return components_path
 
 
 @pytest.fixture
@@ -459,7 +434,6 @@ def seqres_path(test_env):
 def mock_alternative_datasets(
     test_env,
     seqres_path,
-    components_path,
     cofactors_path,
     affinity_path,
 ):
@@ -598,14 +572,10 @@ def cached_plinder_system(read_plinder_mount, tmp_path):
 
 @pytest.fixture(autouse=True)
 def mock_ccd_lookups(monkeypatch):
-    from plinder.data.annotations.ligand_utils import sort_ccd_codes
-
+    # Only the code sets are patched; COFACTOR_SMILES / ARTIFACT_SMILES stay None
+    # so classification falls back to code-only matching in tests (the synonym
+    # code->code map was retired — obsolete codes are never ingested).
     data = json.loads((test_asset_fp / "ccd_lookups.json").read_text())
-    synonyms = [set(s) for s in data["ccd_synonyms"]]
-    monkeypatch.setattr(
-        "plinder.data.annotations.ligand_utils.CCD_SYNONYMS_DICT",
-        {code: sort_ccd_codes(list(s))[0] for s in synonyms for code in s},
-    )
     monkeypatch.setattr(
         "plinder.data.annotations.ligand_utils.COFACTORS",
         set(data["cofactors"]),

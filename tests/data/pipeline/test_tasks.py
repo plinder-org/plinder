@@ -1008,7 +1008,7 @@ def test_alternative_downloads_use_only_approved_sources(tmp_path, monkeypatch):
     approved = {
         "download_cofactors",
         "download_seqres_data",
-        "download_components_cif",
+        "refresh_bundled_ccd",
         "download_affinity_data",
     }
 

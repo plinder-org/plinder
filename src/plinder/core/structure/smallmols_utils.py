@@ -16,21 +16,15 @@ from rdkit.Chem import (
     rdMolDescriptors,
     rdRascalMCES,
 )
-from rdkit.Chem.MolStandardize import rdMolStandardize
 
 from plinder.core.utils.log import setup_logger
 
+# TODO(peppr): peppr_sanitize is the vendored local copy of peppr.sanitize
+# (see plinder.core.utils.sanitize); revert to `from peppr import sanitize`
+# once the over-valence fixes land in a released peppr.
+from plinder.core.utils.sanitize import sanitize as peppr_sanitize
+
 log = setup_logger(__name__)
-
-
-def uncharge_mol(mol: Mol) -> Mol:
-    """Neutralize formal charges where possible."""
-    if sum([at.GetFormalCharge() != 0 for at in mol.GetAtoms()]):
-        uncharger = rdMolStandardize.Uncharger(canonicalOrder=True, force=False)
-        res = uncharger.uncharge(mol)
-        res.UpdatePropertyCache(strict=False)
-        return res
-    return mol
 
 
 def generate_input_conformer(
@@ -39,11 +33,6 @@ def generate_input_conformer(
     minimize_maxIters: int = -1,
     skip_3d_confgen: bool = False,
 ) -> Chem.Mol:
-    # TODO(peppr): peppr_sanitize is the vendored local copy of peppr.sanitize
-    # (see plinder.core.utils.sanitize); revert to `from peppr import sanitize`
-    # once the over-valence fixes land in a released peppr.
-    from plinder.core.utils.sanitize import sanitize as peppr_sanitize
-
     _mol = copy.deepcopy(template_mol)
     # need to add Hs to generate sensible conformers
     _mol = Chem.AddHs(_mol)
@@ -121,8 +110,16 @@ def match_ligands(
     input_smiles: str,
     resolved_sdf: str | Path,
 ) -> tuple[Chem.Mol, Chem.Mol, tuple[NDArray, NDArray]]:
-    template_mol = Chem.MolFromSmiles(input_smiles)
-    resolved_mol = Chem.MolFromMolFile(resolved_sdf.__str__())
+    template_mol = Chem.MolFromSmiles(input_smiles, sanitize=False)
+    try:
+        peppr_sanitize(template_mol)
+    except Exception as exc:  # embed anyway; RDKit may still cope
+        log.warning(f"template_mol: peppr_sanitize failed ({exc})")
+    resolved_mol = Chem.MolFromMolFile(resolved_sdf.__str__(), sanitize=False)
+    try:
+        peppr_sanitize(resolved_mol)
+    except Exception as exc:  # embed anyway; RDKit may still cope
+        log.warning(f"resolved_mol: peppr_sanitize failed ({exc})")
     atom_order_stacks = get_template_to_mol_matches(template_mol, resolved_mol)
     return template_mol, resolved_mol, atom_order_stacks
 

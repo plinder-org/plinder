@@ -231,6 +231,34 @@ class IngestPipeline:
         )
 
     @utils.ingest_flow_control
+    def scatter_make_mhfp6_scores(self) -> list[list[int]]:
+        # MHFP6 clustering is opt-in: only score when the metric is configured,
+        # so dropping it from cluster_metrics also skips its all-pairs scoring.
+        if (
+            tasks.get_similarity_scores.MHFP6_METRIC
+            not in self.cfg.flow.cluster_metrics
+        ):
+            LOG.info(
+                "scatter_make_mhfp6_scores: MHFP6 not in cluster_metrics; skipping"
+            )
+            return [[]]
+        ligand_ids: list[list[int]] = tasks.scatter_make_mhfp6_scores(
+            data_dir=self.plinder_dir,
+            batch_size=self.cfg.flow.make_ligands_batch_size,
+            number_id_col=self.cfg.ligand.number_id_col,
+        )
+        return ligand_ids
+
+    @utils.ingest_flow_control
+    def make_mhfp6_scores(self, ligand_ids: list[int]) -> None:
+        tasks.make_mhfp6_scores(
+            data_dir=self.plinder_dir,
+            ligand_ids=ligand_ids,
+            minimum_similarity=self.cfg.ligand.minimum_similarity,
+            number_id_col=self.cfg.ligand.number_id_col,
+        )
+
+    @utils.ingest_flow_control
     def annotate_ligand_similarity(self) -> None:
         tasks.annotate_ligand_similarity(data_dir=self.plinder_dir)
 

@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 from plinder.core.structure.smallmols_similarity import (
     get_mmp_similarity_dict,
-    smiles2inchikey,
+    smiles2nonstereo,
 )
 from plinder.core.utils import schemas
 from plinder.data.annotations import mmpdb_utils
@@ -63,8 +63,8 @@ def test_mmp_pair_conversion_uses_smiles_ids_and_compact_schema(tmp_path: Path):
     assert pair["ligand_2_shared_core_fraction"] == pytest.approx(1 / 3)
 
     similarities = get_mmp_similarity_dict(output, min_constant_size=1)
-    ethanol = smiles2inchikey("CCO", remove_stereo=True)
-    ethylamine = smiles2inchikey("CCN", remove_stereo=True)
+    ethanol = smiles2nonstereo("CCO")
+    ethylamine = smiles2nonstereo("CCN")
     assert similarities[ethanol][ethylamine] == pytest.approx(100 / 3)
     assert similarities[ethylamine][ethanol] == pytest.approx(100 / 3)
 

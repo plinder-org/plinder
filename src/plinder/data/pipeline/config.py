@@ -6,7 +6,10 @@ from typing import Any, Optional
 
 from omegaconf import DictConfig
 
-from plinder.core.scores.metrics import DEFAULT_CLUSTER_METRICS
+from plinder.core.scores.metrics import (
+    CHEMICAL_CLUSTER_METRICS,
+    DEFAULT_CLUSTER_METRICS,
+)
 from plinder.core.utils import config as _config
 
 METRICS = list(DEFAULT_CLUSTER_METRICS)
@@ -343,7 +346,7 @@ def get_config(**kwargs: Any) -> DictConfig:
             "raw shape, color, or SuCOS"
         )
     required_thresholds = [90.0]
-    if "tanimoto_similarity_ecfp4_1024" in cfg.flow.cluster_metrics:
+    if set(cfg.flow.cluster_metrics).intersection(CHEMICAL_CLUSTER_METRICS):
         required_thresholds.extend(
             float(value) for value in cfg.flow.cluster_thresholds
         )
@@ -351,12 +354,10 @@ def get_config(**kwargs: Any) -> DictConfig:
     if cfg.ligand.minimum_similarity > lowest_required_threshold:
         raise ValueError(
             "ligand.minimum_similarity must not exceed the lowest requested "
-            "Tanimoto clustering threshold "
+            "fingerprint (ECFP4/MHFP6) clustering threshold "
             f"({lowest_required_threshold:g})"
         )
-    derived_metrics = set(cfg.flow.cluster_metrics).difference(
-        {"tanimoto_similarity_ecfp4_1024"}
-    )
+    derived_metrics = set(cfg.flow.cluster_metrics).difference(CHEMICAL_CLUSTER_METRICS)
     lowest_cluster_threshold = min(
         float(value) for value in cfg.flow.cluster_thresholds
     )

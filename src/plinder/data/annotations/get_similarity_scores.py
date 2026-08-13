@@ -39,7 +39,12 @@ from plinder.core.scores.metrics import (
     SCORE_NAMES,
     maximum_weight_bipartite_assignment,
 )
-from plinder.core.structure.smallmols_similarity import mol2morgan_fp
+from plinder.core.structure.smallmols_similarity import (
+    MHFP6_N_PERMUTATIONS,
+    mhfp6_bulk_jaccard,
+    mol2mhfp6,
+    mol2morgan_fp,
+)
 from plinder.core.utils import schemas
 from plinder.core.utils.log import setup_logger
 from plinder.data import databases
@@ -59,6 +64,23 @@ ECFP4_PARQUET_METADATA = {
 SCORE_THRESHOLDS_METADATA_KEY = b"plinder.scoring_thresholds"
 HOLO_PROTEIN_SCORES_METADATA_KEY = b"plinder.holo_protein_scores"
 SCORE_METRICS_METADATA_KEY = b"plinder.score_metrics"
+
+# MHFP6 MinHash fingerprints live in a sibling file with the same
+# ``ligand_smiles_id`` node universe as the ECFP4 table, so the two chemical
+# clustering metrics share every downstream node/expansion path and differ only
+# in their stored fingerprint and similarity measure. See
+# ``plinder.core.structure.smallmols_similarity`` for the citation.
+MHFP6_METRIC = "jaccard_similarity_mhfp6_2048"
+MHFP6_FINGERPRINT_FILE = "ligands_per_smiles_mhfp6.parquet"
+MHFP6_SCORES_DIR = "mhfp6_scores"
+MHFP6_PARQUET_METADATA = {
+    b"plinder.fingerprint": b"MHFP6",
+    b"plinder.fingerprint.generator": b"RDKit rdMHFPFingerprint",
+    b"plinder.fingerprint.radius": b"3",
+    b"plinder.fingerprint.n_permutations": str(MHFP6_N_PERMUTATIONS).encode(),
+    b"plinder.fingerprint.seed": b"42",
+    b"plinder.fingerprint.similarity": b"minhash_jaccard",
+}
 
 _NON_CANONICAL_AA = str.maketrans({"J": "L", "U": "C", "O": "K"})
 
@@ -175,6 +197,42 @@ def write_ecfp4_fingerprint_table(ligands: pd.DataFrame, output_path: Path) -> N
     table = pa.Table.from_pandas(ligands, preserve_index=False)
     metadata = {**(table.schema.metadata or {}), **ECFP4_PARQUET_METADATA}
     pq.write_table(table.replace_schema_metadata(metadata), output_path)
+
+
+def write_mhfp6_fingerprints(unique_ligands: pd.DataFrame, output_dir: Path) -> None:
+    """Write the MHFP6/2048 MinHash table over the shared ligand_smiles_id set.
+
+    ``unique_ligands`` is the already-deduplicated, ``ligand_smiles_id``-indexed
+    frame produced for ECFP4, so the two chemical metrics stay node-aligned. Each
+    MinHash vector is stored as a compact uint32 byte blob, mirroring the ECFP4
+    binary-text column.
+    """
+    smiles_column = "ligand_rdkit_canonical_smiles"
+    minhash_blobs: list[bytes] = []
+    total = len(unique_ligands)
+    started = perf_counter()
+    for index, smiles in enumerate(unique_ligands[smiles_column], start=1):
+        minhash_blobs.append(mol2mhfp6(smiles).tobytes())
+        if index % 5_000 == 0 or index == total:
+            elapsed = perf_counter() - started
+            rate = index / elapsed
+            LOG.info(
+                "MHFP6 fingerprint progress: "
+                f"processed={index}/{total} rate={rate:.1f}/s "
+                f"eta_seconds={(total - index) / rate:.1f}"
+            )
+    mhfp6_table = pd.DataFrame(
+        {
+            "ligand_smiles_id": unique_ligands["ligand_smiles_id"].to_numpy(),
+            smiles_column: unique_ligands[smiles_column].to_numpy(),
+            "mhfp6": minhash_blobs,
+        }
+    )
+    table = pa.Table.from_pandas(mhfp6_table, preserve_index=False)
+    metadata = {**(table.schema.metadata or {}), **MHFP6_PARQUET_METADATA}
+    temporary_path = (output_dir / MHFP6_FINGERPRINT_FILE).with_suffix(".parquet.tmp")
+    pq.write_table(table.replace_schema_metadata(metadata), temporary_path)
+    temporary_path.replace(output_dir / MHFP6_FINGERPRINT_FILE)
 
 
 SORT_ORDER = [
@@ -355,22 +413,17 @@ def compute_ligand_fingerprints(
             )
     ligands_unique["fingerprint"] = binary_fingerprints
 
-    from plinder.data.annotations.ligand_utils import parse_cofactors
+    from plinder.data.annotations.ligand_utils import _get_ccd_smiles, parse_cofactors
 
-    component_path = data_dir / "dbs" / "components" / "components.parquet"
-    if not component_path.is_file():
-        raise FileNotFoundError(f"missing CCD component table: {component_path}")
-    components = pd.read_parquet(
-        component_path,
-        columns=["binder_id", "canonical_smiles"],
-    ).dropna(subset=["canonical_smiles"])
     cofactor_codes = parse_cofactors(data_dir)
-    cofactor_smiles = dict(
-        components.loc[
-            components["binder_id"].isin(cofactor_codes),
-            ["binder_id", "canonical_smiles"],
-        ].itertuples(index=False, name=None)
-    )
+    # RDKit SMILES from the CCD atoms (bt_info / components.cif), not the CCD
+    # ``pdbx_chem_comp_descriptor`` column: same canonicalization as the ligands'
+    # own ``rdkit_canonical_smiles``, and no ``components.parquet`` dependency.
+    cofactor_smiles = {}
+    for code in cofactor_codes:
+        smi = _get_ccd_smiles(code)
+        if smi:
+            cofactor_smiles[code] = smi
     missing_cofactors = cofactor_codes.difference(cofactor_smiles)
     if missing_cofactors:
         LOG.warning(
@@ -424,6 +477,28 @@ def compute_ligand_fingerprints(
         for path in (data_dir / "ligand_scores").glob("*.parquet"):
             path.unlink()
 
+    # MHFP6 shares ECFP4's ligand_smiles_id node universe, so its scores survive
+    # exactly when that universe is unchanged AND the MinHash parameters (radius,
+    # permutations, seed) recorded in the sibling table's metadata still match.
+    mhfp6_path = output_dir / MHFP6_FINGERPRINT_FILE
+    mhfp6_metadata_unchanged = False
+    if mhfp6_path.is_file():
+        try:
+            existing_mhfp6_metadata = pq.read_schema(mhfp6_path).metadata or {}
+            mhfp6_metadata_unchanged = all(
+                existing_mhfp6_metadata.get(key) == value
+                for key, value in MHFP6_PARQUET_METADATA.items()
+            )
+        except (OSError, ValueError):
+            mhfp6_metadata_unchanged = False
+    write_mhfp6_fingerprints(ligands_unique, output_dir)
+    if score_basis_is_unchanged and mhfp6_metadata_unchanged:
+        LOG.info("MHFP6 fingerprint score basis is unchanged; retaining score shards")
+    else:
+        LOG.info("MHFP6 fingerprint score basis changed; removing score shards")
+        for path in (data_dir / MHFP6_SCORES_DIR).glob("*.parquet"):
+            path.unlink()
+
 
 def ligand_scores(
     *,
@@ -469,6 +544,55 @@ def ligand_scores(
     table = pa.Table.from_pylist(
         rows,
         schema=schemas.TANIMOTO_SCORE_SCHEMA.with_metadata(ECFP4_PARQUET_METADATA),
+    )
+    pq.write_table(table, output_path)
+
+
+def _load_mhfp6_matrix(data_dir: Path, *, number_id_col: str) -> NDArray[np.uint32]:
+    """Load the MHFP6 MinHash table as a contiguous, ID-ordered uint32 matrix."""
+    fingerprint_path = data_dir / "fingerprints" / MHFP6_FINGERPRINT_FILE
+    fingerprint_metadata = pq.read_schema(fingerprint_path).metadata or {}
+    if any(
+        fingerprint_metadata.get(key) != value
+        for key, value in MHFP6_PARQUET_METADATA.items()
+    ):
+        raise ValueError("ligand fingerprint metadata is not MHFP6/2048")
+    all_ligands = pd.read_parquet(fingerprint_path)
+    node_ids = all_ligands[number_id_col].astype(int).tolist()
+    if node_ids != list(range(len(all_ligands))):
+        raise ValueError("ligand IDs must match contiguous fingerprint row indices")
+    matrix = np.frombuffer(b"".join(all_ligands["mhfp6"]), dtype=np.uint32).reshape(
+        len(all_ligands), MHFP6_N_PERMUTATIONS
+    )
+    return matrix
+
+
+def mhfp6_ligand_scores(
+    *,
+    ligand_ids: list[int],
+    data_dir: Path,
+    output_path: Path,
+    number_id_col: str = "ligand_smiles_id",
+    minimum_similarity: float = 30.0,
+) -> None:
+    """Write all MHFP6 MinHash-Jaccard edges above ``minimum_similarity``."""
+    matrix = _load_mhfp6_matrix(data_dir, number_id_col=number_id_col)
+    minimum_fraction = minimum_similarity / 100.0
+    rows: list[dict[str, int | float]] = []
+    for ligand_id in ligand_ids:
+        similarities = mhfp6_bulk_jaccard(matrix[ligand_id], matrix)
+        for target_id, similarity in enumerate(similarities):
+            if similarity >= minimum_fraction:
+                rows.append(
+                    {
+                        "query_ligand_id": ligand_id,
+                        "target_ligand_id": target_id,
+                        MHFP6_METRIC: float(similarity) * 100.0,
+                    }
+                )
+    table = pa.Table.from_pylist(
+        rows,
+        schema=schemas.MHFP6_SCORE_SCHEMA.with_metadata(MHFP6_PARQUET_METADATA),
     )
     pq.write_table(table, output_path)
 

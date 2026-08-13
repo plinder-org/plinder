@@ -116,7 +116,7 @@ def compute_ligand_mmp_max_similarities(
 
     if "inchikey" not in df.columns:
         smi_inchikey_map = {
-            smi: smallmols_similarity.smiles2inchikey(smi, remove_stereo=True)
+            smi: smallmols_similarity.smiles2nonstereo(smi)
             for smi in df.ligand_smiles.unique()
         }
         df["inchikey"] = df.ligand_smiles.map(smi_inchikey_map)

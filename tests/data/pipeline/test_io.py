@@ -1,6 +1,5 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
-import pandas as pd
 import pytest
 from plinder.core.utils import io as core_io
 from plinder.data.pipeline import io
@@ -93,38 +92,15 @@ def test_list_rcsb(monkeypatch):
     assert pdbs == ["aaaa", "baan"]
 
 
-def test_downloads_components_cif_fetch(tmp_path, monkeypatch, mini_component_cif_gz):
-    monkeypatch.setattr(
-        "plinder.data.pipeline.io.requests.get",
-        lambda _: _resp(content=mini_component_cif_gz.read_bytes()),
-    )
-    components_path = io.download_components_cif(data_dir=tmp_path)
-    assert components_path.is_file()
-    assert (components_path.parent / "components.parquet").is_file()
-    assert len(pd.read_parquet(components_path.parent / "components.parquet").index)
+def test_refresh_bundled_ccd_fails_loudly(monkeypatch):
+    # bt_info is the sole CCD source; a failed sync must NOT be swallowed (else the
+    # pipeline would silently ship a stale bundle), so setup_ccd errors propagate.
+    def boom() -> None:
+        raise RuntimeError("read-only site-packages")
 
-
-def test_download_components_cif_cached(
-    tmp_path, mini_component_cif, mini_components_pqt
-):
-    components_path = tmp_path / "dbs" / "components" / "components.cif"
-    components_pqt = tmp_path / "dbs" / "components" / "components.parquet"
-    components_path.parent.mkdir(parents=True)
-    components_path.write_bytes(mini_component_cif.read_bytes())
-    components_pqt.write_bytes(mini_components_pqt.read_bytes())
-    components_path = io.download_components_cif(data_dir=tmp_path)
-    assert components_path.is_file()
-    assert components_pqt.is_file()
-    assert len(pd.read_parquet(components_path.parent / "components.parquet").index)
-
-
-def test_ccd(test_env, mock_alternative_datasets):
-    mock_alternative_datasets("test")
-    reference = "C[C@H]1[C@H]([C@H]([C@@H]([C@@H](O1)OC)O)O)O"
-    path = io.download_components_cif(data_dir=test_env)
-    df = pd.read_parquet(path.parent / "components.parquet")
-    canonical_smile = df[df["binder_id"] == "MFU"].squeeze()["canonical_smiles"]
-    assert canonical_smile == reference
+    monkeypatch.setattr("biotite.setup_ccd.main", boom)
+    with pytest.raises(RuntimeError):
+        io.refresh_bundled_ccd(data_dir=None)
 
 
 def test_download_uniprot_fasta_data_fetch(tmp_path, monkeypatch):

@@ -6,7 +6,6 @@ import shutil
 from functools import wraps
 from hashlib import md5
 from json import dumps, load
-from os import listdir
 from pathlib import Path
 from time import time
 from typing import TYPE_CHECKING, Any, Callable, Optional, TypeVar
@@ -15,9 +14,13 @@ import pandas as pd
 import pyarrow.parquet as pq
 from omegaconf import DictConfig, OmegaConf
 
+from plinder.core.scores.metrics import is_chemical_cluster_metric
 from plinder.core.utils import schemas
 from plinder.core.utils.log import setup_logger
-from plinder.core.utils.unpack import expand_config_context
+
+# TODO(get_local_contents): only used by the quarantined get_local_contents below;
+# restore this import if that function is confirmed live.
+# from plinder.core.utils.unpack import expand_config_context
 
 if TYPE_CHECKING:
     from plinder.data.annotations.get_similarity_scores import Scorer
@@ -238,56 +241,63 @@ def hash_contents(contents: list[str]) -> str:
     return md5(dumps(sorted(contents)).encode("utf8")).hexdigest()
 
 
-def get_local_contents(
-    *,
-    data_dir: Path,
-    two_char_codes: Optional[list[str]] = None,
-    pdb_ids: Optional[list[str]] = None,
-    as_four_char_ids: bool = False,
-) -> list[str]:
-    """
-    Starting from a root directory, assume subdirectories
-    of two character codes each containing subdirectories
-    of individual files. The as_ids kludge is intended to
-    support both fully qualified PDB (pdb_0000{pdb_id})
-    and short PDB ({pdb_id})
-
-    Parameters
-    ----------
-    data_dir : Path
-        directory containing two character code directories
-    two_char_codes : list[str], default=None
-        subset of two character codes
-    pdb_ids : list[str], default=None
-        subset of pdb IDs (overrides two_char_codes)
-    as_four_char_ids : bool, default=False
-        if True, return 4 character codes instead of nested
-        subdirectories
-
-    Returns
-    -------
-    contents : list[str]
-        list of directory-derived metadata contents
-    """
-    kind, values = expand_config_context(
-        pdb_ids=pdb_ids,
-        two_char_codes=two_char_codes,
-    )
-    if kind == "pdb_ids":
-        return (
-            values if as_four_char_ids else [f"pdb_0000{pdb_id}" for pdb_id in values]
-        )
-    codes = (
-        values
-        if kind == "two_char_codes" and len(values)
-        else listdir(data_dir.as_posix())
-    )
-    contents = []
-    for code in codes:
-        contents.extend(listdir((data_dir / code).as_posix()))
-    if as_four_char_ids:
-        return sorted([c[-4:] for c in contents])
-    return sorted(contents)
+# TODO(get_local_contents): appears unused in-repo — zero callers on HEAD, and the
+# last consumer (make_sub_dbs) documents deliberately NOT routing through it. Its
+# only exercise is its own tests, which are order-flaky because the None-context
+# path reads the process-global cached config (leaks across the suite). Commented
+# out (with its tests) to unblock the pipeline suite. Confirm whether an external
+# metaflow flow references it: if stale -> delete; if used -> restore + add an
+# autouse config-cache reset so the None-context path is deterministic.
+# def get_local_contents(
+#     *,
+#     data_dir: Path,
+#     two_char_codes: Optional[list[str]] = None,
+#     pdb_ids: Optional[list[str]] = None,
+#     as_four_char_ids: bool = False,
+# ) -> list[str]:
+#     """
+#     Starting from a root directory, assume subdirectories
+#     of two character codes each containing subdirectories
+#     of individual files. The as_ids kludge is intended to
+#     support both fully qualified PDB (pdb_0000{pdb_id})
+#     and short PDB ({pdb_id})
+#
+#     Parameters
+#     ----------
+#     data_dir : Path
+#         directory containing two character code directories
+#     two_char_codes : list[str], default=None
+#         subset of two character codes
+#     pdb_ids : list[str], default=None
+#         subset of pdb IDs (overrides two_char_codes)
+#     as_four_char_ids : bool, default=False
+#         if True, return 4 character codes instead of nested
+#         subdirectories
+#
+#     Returns
+#     -------
+#     contents : list[str]
+#         list of directory-derived metadata contents
+#     """
+#     kind, values = expand_config_context(
+#         pdb_ids=pdb_ids,
+#         two_char_codes=two_char_codes,
+#     )
+#     if kind == "pdb_ids":
+#         return (
+#             values if as_four_char_ids else [f"pdb_0000{pdb_id}" for pdb_id in values]
+#         )
+#     codes = (
+#         values
+#         if kind == "two_char_codes" and len(values)
+#         else listdir(data_dir.as_posix())
+#     )
+#     contents = []
+#     for code in codes:
+#         contents.extend(listdir((data_dir / code).as_posix()))
+#     if as_four_char_ids:
+#         return sorted([c[-4:] for c in contents])
+#     return sorted(contents)
 
 
 def partition_batch_scores(*, partition_dir: Path, scores_dir: Path) -> None:
@@ -634,7 +644,7 @@ def build_ligand_cluster_table(*, index: pd.DataFrame, data_dir: Path) -> pd.Dat
         observed_nodes = set(labels[node_column])
         expected_nodes = (
             expected_fingerprint_nodes
-            if metric == "tanimoto_similarity_ecfp4_1024"
+            if is_chemical_cluster_metric(metric)
             else expected_score_nodes
         )
         if observed_nodes != expected_nodes:
@@ -1066,7 +1076,15 @@ def add_aggregated_columns(*, index: pd.DataFrame) -> pd.DataFrame:
         "lipinski",
         "cofactor",
         "fragment",
-        "oligo",
+        # the single "oligo" flag was split into per-family mono/oligo columns;
+        # aggregate each to match the ligand_is_* annotation and the documented
+        # system_ligand_has_* schema (see column_descriptions/extra.tsv)
+        "monosaccharide",
+        "oligosaccharide",
+        "mononucleotide",
+        "oligonucleotide",
+        "monopeptide",
+        "oligopeptide",
         "artifact",
         "other",
         "covalent",
@@ -1317,6 +1335,7 @@ def create_index(*, data_dir: Path, force_update: bool = False) -> pd.DataFrame:
     if not index.exists() or force_update:
         dfs = []
         annotation_parts = data_dir / "raw_entries"
+        # sort for deterministic collation order; glob yields filesystem order
         for i, path in enumerate(sorted(annotation_parts.glob("*/*.parquet"))):
             df = _drop_retired_enrichment_columns(pd.read_parquet(path))
             LOG.info(f"{i} {path.name} shape={df.shape}")

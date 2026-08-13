@@ -23,6 +23,7 @@ import pyarrow.parquet as pq
 
 from plinder.core.scores.metrics import (
     DEFAULT_CLUSTER_METRICS,
+    is_chemical_cluster_metric,
     maximum_weight_bipartite_assignment,
 )
 from plinder.core.utils import schemas
@@ -2855,8 +2856,11 @@ def plan_clustering(
                 data_dir,
                 min_interface_residues=interface_min_residues,
             )
+    # The system-based component node universe is needed for interface metrics
+    # and for score (protein/pocket) metrics; every chemical metric uses the
+    # shared ligand_smiles_id universe read directly from the fingerprint table.
     has_component_universe = entity_type == "interface" or any(
-        metric != "tanimoto_similarity_ecfp4_1024" for metric in selected_metrics
+        not is_chemical_cluster_metric(metric) for metric in selected_metrics
     )
     if has_component_universe:
         clusters.prepare_component_node_universe(
