@@ -494,16 +494,21 @@ def _write_alignment_mapping_manifest(
     data_dir: Path,
     shard: str,
     *,
+    search_db: str = "holo",
     skipped_queries: dict[str, dict[str, object]] | None = None,
 ) -> None:
     if tasks._completed_alignment_chain_lookup(data_dir) is None:
         _write_alignment_chain_lookup(data_dir)
-    inputs = tasks._alignment_input_signatures(data_dir=data_dir, shard=shard)
+    inputs = tasks._alignment_input_signatures(
+        data_dir=data_dir,
+        search_db=search_db,
+        shard=shard,
+    )
     outputs = {}
     for alignment_type, signatures in inputs.items():
         output = tasks._alignment_release_path(
             data_dir=data_dir,
-            search_db="holo",
+            search_db=search_db,
             alignment_type=alignment_type,
             shard=shard,
         )
@@ -516,11 +521,16 @@ def _write_alignment_mapping_manifest(
             "size": stat.st_size,
             "mtime_ns": stat.st_mtime_ns,
         }
-    manifest = tasks._alignment_mapping_manifest_path(data_dir=data_dir, shard=shard)
+    manifest = tasks._alignment_mapping_manifest_path(
+        data_dir=data_dir,
+        search_db=search_db,
+        shard=shard,
+    )
     manifest.parent.mkdir(exist_ok=True, parents=True)
     manifest.write_text(
         json.dumps(
             {
+                "search_db": search_db,
                 "shard": shard,
                 "alignment_chain_lookup": tasks._completed_alignment_chain_lookup(
                     data_dir
@@ -578,6 +588,64 @@ def test_make_batch_scores_threads_node_scratch_to_score_writer(tmp_path, monkey
             },
         )
     ]
+
+
+def test_make_batch_scores_reads_each_apo_alignment_shard_once(
+    tmp_path, monkeypatch
+) -> None:
+    load_calls = []
+    score_calls = []
+
+    class FakeScorer:
+        shape_score_threads = 1
+        entries = {}
+
+        def load_alignments(self, **kwargs):
+            load_calls.append(kwargs)
+            return pd.DataFrame(
+                {"qcov": [1.0, 1.0]},
+                index=pd.MultiIndex.from_tuples(
+                    [
+                        ("1abc", "3xyz", "A", "X", "foldseek"),
+                        ("2abc", "4xyz", "A", "Y", "foldseek"),
+                    ],
+                    names=[
+                        "query_entry",
+                        "target_entry",
+                        "query_chain_mapped",
+                        "target_chain_mapped",
+                        "source",
+                    ],
+                ),
+            )
+
+        def get_score_df(self, *args, **kwargs):
+            score_calls.append((args, kwargs))
+
+    fake_scorer = FakeScorer()
+    monkeypatch.setattr(
+        tasks.utils,
+        "get_scorer",
+        lambda **_kwargs: (fake_scorer, ["1abc", "2abc"], tmp_path / "batch"),
+    )
+    monkeypatch.setattr(
+        "plinder.core.scores.entries.load_entry_views",
+        lambda *, pdb_ids, data_dir: {pdb_id: object() for pdb_id in pdb_ids},
+    )
+
+    tasks.make_batch_scores(
+        data_dir=tmp_path,
+        pdb_ids=["1abc", "2abc"],
+        scorer_cfg=SimpleNamespace(sub_databases=["apo"]),
+        force_update=False,
+        scratch_dir=tmp_path / "scratch",
+        threads=2,
+    )
+
+    assert len(load_calls) == 1
+    assert load_calls[0]["query_entry_ids"] == {"1abc", "2abc"}
+    assert [call[0][1] for call in score_calls] == ["1abc", "2abc"]
+    assert all(len(call[1]["query_entry_alignments"]) == 1 for call in score_calls)
 
 
 def test_make_entries_uses_shared_v3_batch(tmp_path, monkeypatch):
@@ -834,6 +902,9 @@ def test_scoring_finalization_stage_order_and_partitions():
         "collate_partitions"
     )
     assert tasks.STAGES.index("collate_partitions") < tasks.STAGES.index(
+        "make_linked_apo_structures"
+    )
+    assert tasks.STAGES.index("make_linked_apo_structures") < tasks.STAGES.index(
         "plan_clusters"
     )
     assert tasks.STAGES.index("plan_clusters") < tasks.STAGES.index(
@@ -867,6 +938,82 @@ def test_scoring_finalization_stage_order_and_partitions():
     assert ["z"] in partitions
     assert ["apo"] in partitions
     assert ["pred"] in partitions
+
+
+def test_make_linked_apo_structures_publishes_compact_index(tmp_path):
+    index = tmp_path / "index"
+    score_dir = tmp_path / "scores/search_db=apo"
+    index.mkdir()
+    score_dir.mkdir(parents=True)
+    system_id = "1abc__1__1.A__1.L"
+    pd.DataFrame(
+        {
+            "system_id": [system_id, "2def__1__1.A__1.I"],
+            "ligand_id": ["1.L", "2def__1__1.I"],
+            "ligand_is_proper": [True, False],
+            "entry_pdb_id": ["1abc", "2def"],
+            "system_biounit_id": ["1", "1"],
+            "ligand_is_ion": [False, False],
+            "ligand_is_artifact": [False, False],
+            "ligand_neighboring_residues": [[], ["1.A_10_0_10"]],
+            "ligand_protein_chains_asym_id": [["1.A"], []],
+        }
+    ).to_parquet(index / "annotation_table.parquet", index=False)
+    pd.DataFrame(
+        {
+            "entry_pdb_id": ["2def"],
+            "chain_asym_id": ["A"],
+            "chain_auth_id": ["R"],
+            "chain_entity_id": ["1"],
+            "chain_receptor_type": ["protein"],
+            "chain_is_holo": [False],
+            "chain_is_ligand_like": [False],
+        }
+    ).to_parquet(index / "entry_chains.parquet", index=False)
+    pd.DataFrame(
+        {
+            "entry_pdb_id": ["2def", "2def", "2def"],
+            "biounit_id": ["1", "1", "2"],
+            "chain_instance": ["1.A", "1.I", "1.A"],
+            "chain_asym_id": ["A", "I", "A"],
+            "chain_role": ["receptor", "ligand", "receptor"],
+        }
+    ).to_parquet(index / "entry_biounit_chains.parquet", index=False)
+    pd.DataFrame({"entry_pdb_id": ["2def"], "entry_resolution": [1.8]}).to_parquet(
+        index / "entry_metadata.parquet", index=False
+    )
+    _write_empty_interface_index(index)
+    score_rows = [
+        {
+            "query_system": system_id,
+            "query_ligand_id": "1.L",
+            "target_system": "2def_A",
+            "metric": metric,
+            "similarity": 100,
+        }
+        for metric in [
+            "pocket_fident",
+            "protein_fident_weighted_sum",
+            "protein_fident_qcov_weighted_sum",
+            "protein_lddt_weighted_sum",
+        ]
+    ]
+    pd.DataFrame(score_rows).to_parquet(score_dir / "apo.parquet", index=False)
+
+    output = tasks.make_linked_apo_structures(
+        data_dir=tmp_path,
+        scratch_dir=tmp_path / "scratch",
+        threads=1,
+        memory_limit="1GB",
+    )
+
+    assert output == index / "linked_apo_structures.parquet"
+    links = pd.read_parquet(output)
+    assert links["reference_system_id"].tolist() == [system_id]
+    assert links["linked_structure_id"].tolist() == ["2def_A"]
+    assert links["source_biounit_id"].tolist() == ["2"]
+    candidates = pd.read_parquet(tmp_path / "manifests/apo_candidates.parquet")
+    assert candidates["source_num_contacting_other_ligands"].tolist() == [0]
 
 
 def test_directed_set_cover_scatter_skips_only_complete_outputs(tmp_path):
@@ -1126,18 +1273,14 @@ def test_protein_scoring_plan_and_alignment_finalization(tmp_path, monkeypatch) 
     assert report["skipped_queries"] == {}
     assert (tmp_path / "alignments/manifest.json").is_file()
     assert (tmp_path / "search_databases/manifest.json").is_file()
-    assert (
-        tmp_path / "search_databases/holo_foldseek/clustered.dbtype"
-    ).is_file()
+    assert (tmp_path / "search_databases/holo_foldseek/clustered.dbtype").is_file()
     assert (
         tmp_path / "search_databases/holo_mmseqs/cluster_alignments.dbtype"
     ).is_file()
     assert not (tmp_path / "search_databases/holo_foldseek/aln").exists()
     for alignment_type in ["foldseek", "mmseqs"]:
         bundle = resolve_search_database(alignment_type, data_dir=tmp_path)
-        assert bundle.root == (
-            tmp_path / "search_databases" / f"holo_{alignment_type}"
-        )
+        assert bundle.root == (tmp_path / "search_databases" / f"holo_{alignment_type}")
 
     skipped = {
         "1abc": {
@@ -3011,6 +3154,12 @@ def test_get_scorer_uses_configured_search_limits(tmp_path) -> None:
     v3_scoring = _scoring_config(tmp_path, 10_000)
     assert v3_scoring.foldseek.min_seq_id == 0.0
     assert v3_scoring.mmseqs.min_seq_id == 0.0
+    apo_scoring = _scoring_config(
+        tmp_path,
+        10_000,
+        sub_databases=["apo"],
+    )
+    assert apo_scoring.scorer.sub_databases == ["apo"]
 
 
 def test_run_batch_searches_skips_completed_backend_queries(
@@ -3039,11 +3188,7 @@ def test_run_batch_searches_skips_completed_backend_queries(
     monkeypatch.setattr(
         tasks.databases,
         "database_identifiers",
-        lambda path: (
-            {"pdb_00002def_A"}
-            if path.name.endswith("foldseek")
-            else {"1abc_A", "2def_A"}
-        ),
+        lambda _path: pytest.fail("query eligibility must not use target IDs"),
     )
     cfg = SimpleNamespace(sub_databases=["holo"])
 
@@ -3086,7 +3231,7 @@ def test_run_batch_searches_rejects_missing_eligible_output(tmp_path, monkeypatc
         lambda _path: {"1abc_A"},
     )
 
-    with pytest.raises(RuntimeError, match="no output.*1 eligible"):
+    with pytest.raises(RuntimeError, match="no output.*1 query"):
         tasks.run_batch_searches(
             data_dir=tmp_path,
             pdb_ids=["1abc"],
@@ -3266,8 +3411,48 @@ def test_mapping_scatter_requires_current_shard_manifest(tmp_path):
     ) == [[]]
 
 
-def test_map_batch_alignments_publishes_atomic_shard(tmp_path, monkeypatch):
-    raw_dir = tmp_path / "dbs/subdbs/holo_foldseek/aln"
+def test_missing_score_scatter_includes_mapped_apo_queries(tmp_path) -> None:
+    raw = tmp_path / "dbs/subdbs/apo_foldseek/aln/1abc.parquet"
+    raw.parent.mkdir(parents=True)
+    pd.DataFrame({"query": ["1abc_A"]}).to_parquet(raw, index=False)
+    release = tasks._alignment_release_path(
+        data_dir=tmp_path,
+        search_db="apo",
+        alignment_type="foldseek",
+        shard="ab",
+    )
+    release.parent.mkdir(parents=True)
+    pq.write_table(
+        pa.Table.from_pylist(
+            [], schema=schemas.mapped_alignment_schema(alignment_type="foldseek")
+        ),
+        release,
+    )
+    _write_alignment_mapping_manifest(
+        tmp_path,
+        "ab",
+        search_db="apo",
+    )
+
+    assert tasks.scatter_missing_scores(
+        data_dir=tmp_path,
+        batch_size=10,
+        search_dbs=["apo"],
+    ) == [["1abc"]]
+
+    score = tmp_path / "dbs/subdbs/search_db=apo/1abc.parquet"
+    score.parent.mkdir(parents=True)
+    score.touch()
+    assert tasks.scatter_missing_scores(
+        data_dir=tmp_path,
+        batch_size=10,
+        search_dbs=["apo"],
+    ) == [[]]
+
+
+@pytest.mark.parametrize("search_db", ["holo", "apo"])
+def test_map_batch_alignments_publishes_atomic_shard(tmp_path, monkeypatch, search_db):
+    raw_dir = tmp_path / f"dbs/subdbs/{search_db}_foldseek/aln"
     raw_dir.mkdir(parents=True)
     pd.DataFrame({"query": ["1abc_A"], "target_pdb_id": ["1abc"]}).to_parquet(
         raw_dir / "1abc.parquet", index=False
@@ -3280,7 +3465,10 @@ def test_map_batch_alignments_publishes_atomic_shard(tmp_path, monkeypatch):
 
         def map_alignment_files(self, *_args, **kwargs):
             calls.append(kwargs)
-            output = kwargs["mapped_db_dir"] / "holo_foldseek/mapped_aln/1abc.parquet"
+            output = (
+                kwargs["mapped_db_dir"]
+                / f"{search_db}_foldseek/mapped_aln/1abc.parquet"
+            )
             output.parent.mkdir(parents=True)
             pd.DataFrame(
                 {
@@ -3309,28 +3497,34 @@ def test_map_batch_alignments_publishes_atomic_shard(tmp_path, monkeypatch):
     tasks.map_batch_alignments(
         data_dir=tmp_path,
         shards=["ab"],
-        scorer_cfg=SimpleNamespace(sub_databases=["holo"]),
+        scorer_cfg=SimpleNamespace(sub_databases=[search_db]),
         force_update=False,
         scratch_dir=scratch,
+        search_db=search_db,
     )
 
     release = tasks._alignment_release_path(
         data_dir=tmp_path,
-        search_db="holo",
+        search_db=search_db,
         alignment_type="foldseek",
         shard="ab",
     )
     assert pd.read_parquet(release)["query_entry"].tolist() == ["1abc"]
-    assert tasks.alignment_mapping_shard_is_current(data_dir=tmp_path, shard="ab")
-    assert not (tmp_path / "dbs/subdbs/holo_foldseek/mapped_aln").exists()
+    assert tasks.alignment_mapping_shard_is_current(
+        data_dir=tmp_path,
+        search_db=search_db,
+        shard="ab",
+    )
+    assert not (tmp_path / f"dbs/subdbs/{search_db}_foldseek/mapped_aln").exists()
     assert not any(scratch.iterdir())
 
     tasks.map_batch_alignments(
         data_dir=tmp_path,
         shards=["ab"],
-        scorer_cfg=SimpleNamespace(sub_databases=["holo"]),
+        scorer_cfg=SimpleNamespace(sub_databases=[search_db]),
         force_update=False,
         scratch_dir=scratch,
+        search_db=search_db,
     )
     assert len(calls) == 1
 
@@ -4787,6 +4981,46 @@ def test_v3_score_slurm_exposes_exact_clustering_stages():
     assert "PLINDER_CLUSTER_METRICS" in script
     assert "PLINDER_CLUSTER_THRESHOLDS" in script
     assert "PLINDER_CLUSTER_ENTITY_TYPE" in script
+    assert "SEARCH_DB=${PLINDER_SEARCH_DB:-holo}" in script
+    assert 'ARGS+=(--search-db "${SEARCH_DB}")' in script
+
+
+def test_v3_score_cli_accepts_apo_search_database(tmp_path):
+    from plinder.data.pipeline.score import _parser
+
+    build = _parser().parse_args(
+        [
+            "make-sub-dbs",
+            str(tmp_path),
+            "--scratch-dir",
+            str(tmp_path / "scratch"),
+            "--search-db",
+            "holo",
+            "--search-db",
+            "apo",
+        ]
+    )
+    assert build.search_dbs == ["holo", "apo"]
+
+    for command in ["search", "map", "score", "score-pdbs"]:
+        arguments = [
+            command,
+            str(tmp_path),
+            "--batch-index",
+            "0",
+            "--batch-size",
+            "1",
+            "--scratch-dir",
+            str(tmp_path / "scratch"),
+            "--search-db",
+            "apo",
+        ]
+        if command == "search":
+            arguments.extend(["--alignment-type", "mmseqs"])
+        if command == "score-pdbs":
+            arguments.extend(["--pdb-manifest", str(tmp_path / "queries.parquet")])
+        parsed = _parser().parse_args(arguments)
+        assert parsed.search_db == "apo"
 
 
 def test_metaflow_graph_uses_canonical_ligand_archive_stage():
@@ -4833,6 +5067,8 @@ def test_metaflow_graph_uses_canonical_ligand_archive_stage():
     assert "self.next(self.scatter_export_sucos_shape_pocket_qcov)" in flow
     assert "self.pipeline.export_sucos_shape_pocket_qcov(self.input)" in flow
     assert "self.pipeline.finalize_sucos_export()" in flow
+    assert "self.next(self.make_linked_apo_structures)" in flow
+    assert "self.pipeline.make_linked_apo_structures()" in flow
     assert "self.next(self.plan_clusters)" in flow
     assert "self.pipeline.plan_clusters()" in flow
     assert "self.next(self.scatter_make_symmetric_edge_fragments)" in flow
@@ -4937,6 +5173,10 @@ def test_ingest_configs_use_current_schema_and_stages():
         assert cfg.data.plinder_release == "2026-07"
         assert cfg.data.plinder_release_number == "1"
         if path.name == "make_protein_scores.yaml":
+            assert cfg.scorer.sub_databases == ["holo", "apo"]
+            assert cfg.scorer.minimum_thresholds[
+                "protein_lddt_weighted_sum"
+            ] == pytest.approx(0.2)
             assert "collate_alignments" in cfg.flow.run_specific_stages
             assert "finalize_alignments" in cfg.flow.run_specific_stages
             assert "plan_interface_scores" in cfg.flow.run_specific_stages
@@ -4954,6 +5194,7 @@ def test_ingest_configs_use_current_schema_and_stages():
             )
         if path.name == "make_components.yaml":
             assert "collate_partitions" in cfg.flow.run_specific_stages
+            assert "make_linked_apo_structures" in cfg.flow.run_specific_stages
             assert "plan_clusters" in cfg.flow.run_specific_stages
             assert "make_symmetric_edge_fragments" in cfg.flow.run_specific_stages
             assert "make_symmetric_edge_shards" in cfg.flow.run_specific_stages
@@ -5002,7 +5243,7 @@ def test_make_canonical_ligand_archives_only_archives_asu_sdfs(tmp_path):
     }
 
 
-def test_make_sub_dbs_loads_normalized_entry_chain_index(tmp_path, monkeypatch):
+def test_make_sub_dbs_loads_entry_chain_index(tmp_path, monkeypatch):
     from plinder.core.scores import entries as entry_views
 
     index_dir = tmp_path / "index"
@@ -5027,6 +5268,7 @@ def test_make_sub_dbs_loads_normalized_entry_chain_index(tmp_path, monkeypatch):
         return sentinel
 
     observed = {}
+    lookup_calls = []
     monkeypatch.setattr(entry_views, "entry_views_from_df", fake_entry_views)
     monkeypatch.setattr(tasks.utils, "get_db_sources", lambda **kwargs: {})
     monkeypatch.setattr(
@@ -5037,6 +5279,11 @@ def test_make_sub_dbs_loads_normalized_entry_chain_index(tmp_path, monkeypatch):
             kwargs=kwargs,
         ),
     )
+    monkeypatch.setattr(
+        tasks,
+        "make_alignment_chain_lookup",
+        lambda **kwargs: lookup_calls.append(kwargs),
+    )
 
     tasks.make_sub_dbs(data_dir=tmp_path, sub_databases=["holo", "apo", "pred"])
 
@@ -5046,6 +5293,7 @@ def test_make_sub_dbs_loads_normalized_entry_chain_index(tmp_path, monkeypatch):
         "tmp_dir": None,
         "threads": 1,
     }
+    assert lookup_calls == [{"data_dir": tmp_path, "scratch_dir": None, "threads": 1}]
 
 
 def test_make_holo_sub_dbs_selects_protein_receptor_and_interface_chains(
@@ -5112,3 +5360,91 @@ def test_make_holo_sub_dbs_selects_protein_receptor_and_interface_chains(
         "holo_mmseqs": {"1abc_X", "1abc_Y"},
     }
     assert lookup_calls == [{"data_dir": tmp_path, "scratch_dir": None, "threads": 1}]
+
+
+def test_make_holo_apo_sub_dbs_selects_apo_chains_from_chain_index(
+    tmp_path, monkeypatch
+):
+    index_dir = tmp_path / "index"
+    index_dir.mkdir()
+    (tmp_path / "dbs").mkdir()
+    pd.DataFrame(
+        {
+            "entry_pdb_id": ["1abc"] * 6,
+            "chain_asym_id": ["A", "B", "C", "N", "P", "Q"],
+            "chain_auth_id": ["X", "Y", "Z", "N", "P", "Q"],
+            "chain_entity_id": ["1", "2", "1", "3", "5", "6"],
+            "chain_receptor_type": [
+                "protein",
+                "protein",
+                "protein",
+                "dna",
+                "protein",
+                "protein",
+            ],
+            "chain_is_holo": [True, False, False, False, False, False],
+            "chain_is_ligand_like": [False, False, False, False, True, False],
+        }
+    ).to_parquet(index_dir / "entry_chains.parquet", index=False)
+    pd.DataFrame(
+        {
+            "entry_pdb_id": ["1abc", "1abc", "1abc"],
+            "chain_asym_id": ["B", "P", "Q"],
+            "chain_role": ["receptor", "ligand", "receptor"],
+        }
+    ).to_parquet(index_dir / "entry_biounit_chains.parquet", index=False)
+    pd.DataFrame(
+        {
+            "entry_pdb_id": ["1abc"],
+            "ligand_is_proper": [True],
+            "ligand_protein_chains_asym_id": [["1.A"]],
+        }
+    ).to_parquet(index_dir / "annotation_table.parquet", index=False)
+    pq.write_table(
+        pa.Table.from_pylist(
+            [
+                {
+                    "entry_pdb_id": "1abc",
+                    "system_id": "1abc__1__1.A--1.Q",
+                    "system_biounit_id": "1",
+                    "interface_chain_1": "1.A",
+                    "interface_chain_2": "1.Q",
+                    "interface_chain_1_residue_numbers": [1, 2, 3],
+                    "interface_chain_1_residue_indices": [0, 1, 2],
+                    "interface_chain_2_residue_numbers": [4, 5, 6],
+                    "interface_chain_2_residue_indices": [3, 4, 5],
+                    "interface_num_contact_residue_pairs": 3,
+                }
+            ],
+            schema=INTERFACE_ANNOTATION_SCHEMA,
+        ),
+        index_dir / "interface_annotation_table.parquet",
+    )
+
+    observed = {}
+    monkeypatch.setattr(tasks.utils, "get_db_sources", lambda **kwargs: {})
+    monkeypatch.setattr(
+        tasks.databases,
+        "make_sub_dbs",
+        lambda db_dir, db_sources, entries, **kwargs: observed.update(
+            entries=entries,
+            kwargs=kwargs,
+        ),
+    )
+    monkeypatch.setattr(tasks, "make_alignment_chain_lookup", lambda **kwargs: None)
+
+    tasks.make_sub_dbs(data_dir=tmp_path, sub_databases=["holo", "apo"])
+
+    assert observed["entries"] is None
+    assert observed["kwargs"]["identifiers_by_database"] == {
+        "holo_foldseek": {
+            "pdb_00001abc_xyz-enrich_Q",
+            "pdb_00001abc_xyz-enrich_X",
+        },
+        "holo_mmseqs": {"1abc_Q", "1abc_X"},
+        "apo_foldseek": {
+            "pdb_00001abc_xyz-enrich_Q",
+            "pdb_00001abc_xyz-enrich_Y",
+        },
+        "apo_mmseqs": {"1abc_Q", "1abc_Y"},
+    }

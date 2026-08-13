@@ -533,6 +533,14 @@ class PlinderDataIngestFlow(FlowSpec):
     def join_collate_partitions(self, inputs):
         self.pipeline = inputs[0].pipeline
         self.merge_artifacts(inputs, exclude=["chunks"])
+        self.next(self.make_linked_apo_structures)
+
+    @kubernetes(**{**K8S, **LARGE_MEM})
+    @environment(**ENV)
+    @retry
+    @step
+    def make_linked_apo_structures(self):
+        self.pipeline.make_linked_apo_structures()
         self.next(self.plan_clusters)
 
     @kubernetes(**K8S)

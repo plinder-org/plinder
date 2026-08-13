@@ -91,6 +91,7 @@ STAGES = [
     "export_sucos_shape_pocket_qcov",
     "finalize_sucos_export",
     "collate_partitions",
+    "make_linked_apo_structures",
     "plan_clusters",
     "make_symmetric_edge_fragments",
     "make_symmetric_edge_shards",
@@ -102,9 +103,6 @@ STAGES = [
     "finalize_index",
     "make_mmp_index",
     "make_splits",
-    "make_links",
-    "make_linked_structures",
-    "score_linked_structures",
 ]
 
 
@@ -585,29 +583,34 @@ def make_sub_dbs(
     """
     entries = None
     identifiers_by_database = None
-    if set(sub_databases) == {"holo"}:
-        chains = _protein_scoring_chains(data_dir)
-        chain_auth_ids = pd.read_parquet(
-            data_dir / "index" / "entry_chains.parquet",
-            columns=["entry_pdb_id", "chain_asym_id", "chain_auth_id"],
-        )
-        chains = chains.merge(
-            chain_auth_ids,
-            on=["entry_pdb_id", "chain_asym_id"],
-            how="left",
-            validate="one_to_one",
-        )
-        chains = chains[chains["chain_auth_id"].notna()]
-        identifiers_by_database = {
-            "holo_foldseek": {
+    if set(sub_databases) <= {"holo", "apo"}:
+        identifiers_by_database = {}
+        for search_db in sub_databases:
+            chains = (
+                _protein_scoring_chains(data_dir)
+                if search_db == "holo"
+                else _apo_scoring_chains(data_dir)
+            )
+            if search_db == "holo":
+                chain_auth_ids = pd.read_parquet(
+                    data_dir / "index" / "entry_chains.parquet",
+                    columns=["entry_pdb_id", "chain_asym_id", "chain_auth_id"],
+                )
+                chains = chains.merge(
+                    chain_auth_ids,
+                    on=["entry_pdb_id", "chain_asym_id"],
+                    how="left",
+                    validate="one_to_one",
+                )
+            chains = chains[chains["chain_auth_id"].notna()]
+            identifiers_by_database[f"{search_db}_foldseek"] = {
                 f"pdb_0000{row.entry_pdb_id}_xyz-enrich_{row.chain_auth_id}"
                 for row in chains.itertuples(index=False)
-            },
-            "holo_mmseqs": {
+            }
+            identifiers_by_database[f"{search_db}_mmseqs"] = {
                 f"{row.entry_pdb_id}_{row.chain_auth_id}"
                 for row in chains.itertuples(index=False)
-            },
-        }
+            }
     else:
         from plinder.core.scores.entries import entry_views_from_df
 
@@ -627,7 +630,7 @@ def make_sub_dbs(
         tmp_dir=scratch_dir,
         threads=cpu,
     )
-    if set(sub_databases) == {"holo"}:
+    if "holo" in sub_databases:
         make_alignment_chain_lookup(
             data_dir=data_dir,
             scratch_dir=scratch_dir,
@@ -671,19 +674,15 @@ def _completed_interface_representatives(
         ),
     }
     try:
-        if (
-            manifest is None
-            or manifest.get("source")
-            != _interface_representative_source_signature(data_dir)
-        ):
+        if manifest is None or manifest.get(
+            "source"
+        ) != _interface_representative_source_signature(data_dir):
             return None
         for key, (relative, schema) in expected.items():
             path = data_dir / relative
-            if (
-                not pq.read_schema(path).equals(schema)
-                or manifest.get("outputs", {}).get(key)
-                != _interface_representative_output_signature(path)
-            ):
+            if not pq.read_schema(path).equals(schema) or manifest.get(
+                "outputs", {}
+            ).get(key) != _interface_representative_output_signature(path):
                 return None
     except (OSError, TypeError, ValueError):
         return None
@@ -958,19 +957,15 @@ def _completed_ligand_pocket_representatives(
         ),
     }
     try:
-        if (
-            manifest is None
-            or manifest.get("sources")
-            != _ligand_pocket_representative_source_signatures(data_dir)
-        ):
+        if manifest is None or manifest.get(
+            "sources"
+        ) != _ligand_pocket_representative_source_signatures(data_dir):
             return None
         for key, (relative, schema) in expected.items():
             path = data_dir / relative
-            if (
-                not pq.read_schema(path).equals(schema)
-                or manifest.get("outputs", {}).get(key)
-                != _interface_representative_output_signature(path)
-            ):
+            if not pq.read_schema(path).equals(schema) or manifest.get(
+                "outputs", {}
+            ).get(key) != _interface_representative_output_signature(path):
                 return None
     except (OSError, TypeError, ValueError):
         return None
@@ -1319,7 +1314,9 @@ def _refresh_representative_source_manifests(data_dir: Path) -> None:
     interface_manifest_path = data_dir / INTERFACE_REPRESENTATIVES_MANIFEST_RELATIVE
     interface_manifest = _read_json(interface_manifest_path)
     if ligand_manifest is None or interface_manifest is None:
-        raise RuntimeError("representative source manifests disappeared during finalization")
+        raise RuntimeError(
+            "representative source manifests disappeared during finalization"
+        )
     ligand_manifest["sources"] = _ligand_pocket_representative_source_signatures(
         data_dir
     )
@@ -1552,6 +1549,34 @@ def annotate_ligand_similarity(
     )
 
 
+def _interface_scoring_chain_keys(data_dir: Path) -> pd.DataFrame:
+    """Return entry/asym keys used by a published protein interface."""
+    interface_path = data_dir / "index" / "interface_annotation_table.parquet"
+    if not interface_path.is_file():
+        return pd.DataFrame(
+            columns=["entry_pdb_id", "chain_asym_id", "chain_is_interface"]
+        )
+    interfaces = pd.read_parquet(
+        interface_path,
+        columns=["entry_pdb_id", "interface_chain_1", "interface_chain_2"],
+    )
+    interface_keys = pd.concat(
+        [
+            interfaces[["entry_pdb_id", column]].rename(
+                columns={column: "instance_chain"}
+            )
+            for column in ["interface_chain_1", "interface_chain_2"]
+        ],
+        ignore_index=True,
+    )
+    interface_keys["chain_asym_id"] = (
+        interface_keys.pop("instance_chain").astype(str).str.split(".", n=1).str[-1]
+    )
+    interface_keys = interface_keys.drop_duplicates()
+    interface_keys["chain_is_interface"] = True
+    return interface_keys
+
+
 def _protein_scoring_chains(data_dir: Path) -> pd.DataFrame:
     """Return protein chains used by a ligand receptor or protein interface."""
     chain_path = data_dir / "index" / "entry_chains.parquet"
@@ -1564,35 +1589,8 @@ def _protein_scoring_chains(data_dir: Path) -> pd.DataFrame:
             "chain_is_holo",
         ],
     )
-    interface_path = data_dir / "index" / "interface_annotation_table.parquet"
-    interface_keys = pd.DataFrame(
-        columns=["entry_pdb_id", "chain_asym_id", "chain_is_interface"]
-    )
-    if interface_path.is_file():
-        interfaces = pd.read_parquet(
-            interface_path,
-            columns=[
-                "entry_pdb_id",
-                "interface_chain_1",
-                "interface_chain_2",
-            ],
-        )
-        interface_keys = pd.concat(
-            [
-                interfaces[["entry_pdb_id", column]].rename(
-                    columns={column: "instance_chain"}
-                )
-                for column in ["interface_chain_1", "interface_chain_2"]
-            ],
-            ignore_index=True,
-        )
-        interface_keys["chain_asym_id"] = (
-            interface_keys.pop("instance_chain").astype(str).str.split(".", n=1).str[-1]
-        )
-        interface_keys = interface_keys.drop_duplicates()
-        interface_keys["chain_is_interface"] = True
     chains = chains.merge(
-        interface_keys,
+        _interface_scoring_chain_keys(data_dir),
         on=["entry_pdb_id", "chain_asym_id"],
         how="left",
     )
@@ -1603,6 +1601,65 @@ def _protein_scoring_chains(data_dir: Path) -> pd.DataFrame:
             | chains["chain_is_interface"].eq(True)
         )
     ].copy()
+
+
+def _apo_scoring_chains(data_dir: Path) -> pd.DataFrame:
+    """Return reconstructable chains without a proper ligand receptor."""
+    from plinder.data.linked_apo import ligand_holo_chain_keys
+
+    chains = pd.read_parquet(
+        data_dir / "index" / "entry_chains.parquet",
+        columns=[
+            "entry_pdb_id",
+            "chain_asym_id",
+            "chain_auth_id",
+            "chain_entity_id",
+            "chain_receptor_type",
+            "chain_is_ligand_like",
+        ],
+    )
+    holo_keys = ligand_holo_chain_keys(data_dir / "index" / "annotation_table.parquet")
+    holo_keys["chain_is_holo"] = True
+    chains = chains.merge(
+        holo_keys,
+        on=["entry_pdb_id", "chain_asym_id"],
+        how="left",
+        validate="one_to_one",
+    )
+    holo = chains["chain_is_holo"].eq(True)
+    entity_ids = chains["chain_entity_id"].astype("string")
+    usable_entity = entity_ids.notna() & entity_ids.str.strip().ne("")
+    holo_entities = chains.loc[
+        holo & usable_entity, ["entry_pdb_id", "chain_entity_id"]
+    ].drop_duplicates()
+    holo_entities["entity_is_holo"] = True
+    chains = chains.merge(
+        holo_entities,
+        on=["entry_pdb_id", "chain_entity_id"],
+        how="left",
+        validate="many_to_one",
+    )
+    chains = chains.loc[
+        chains["chain_receptor_type"].fillna("").astype(str).eq("protein")
+        & ~holo
+        & ~chains["chain_is_ligand_like"].fillna(False).astype(bool)
+        & chains["entity_is_holo"].ne(True)
+        & chains["chain_auth_id"].notna()
+    ].copy()
+    receptor_chains = pd.read_parquet(
+        data_dir / "index" / "entry_biounit_chains.parquet",
+        columns=["entry_pdb_id", "chain_asym_id", "chain_role"],
+    )
+    receptor_chains = receptor_chains.loc[
+        receptor_chains["chain_role"].fillna("").astype(str).str.lower().eq("receptor"),
+        ["entry_pdb_id", "chain_asym_id"],
+    ].drop_duplicates()
+    return chains.merge(
+        receptor_chains,
+        on=["entry_pdb_id", "chain_asym_id"],
+        how="inner",
+        validate="one_to_one",
+    )
 
 
 def scatter_protein_scoring(
@@ -1666,31 +1723,13 @@ def run_batch_searches(
     selected_alignment_types = list(alignment_types or ["foldseek", "mmseqs"])
     for search_db in scorer_cfg.sub_databases:
         for alignment_type in selected_alignment_types:
-            target_database = (
-                data_dir
-                / "dbs"
-                / "subdbs"
-                / f"{search_db}_{alignment_type}"
-                / f"{search_db}_{alignment_type}"
-            )
-            identifiers = databases.database_identifiers(target_database)
-            if alignment_type == "foldseek":
-                eligible_queries = {
-                    identifier.replace("pdb_0000", "", 1)[:4]
-                    for identifier in identifiers
-                }
-            else:
-                eligible_queries = {
-                    identifier.split("_", maxsplit=1)[0] for identifier in identifiers
-                }
             output_dir = (
                 data_dir / "dbs" / "subdbs" / f"{search_db}_{alignment_type}" / "aln"
             )
             pending = [
                 pdb_id
                 for pdb_id in pdb_ids
-                if pdb_id in eligible_queries
-                and (force_update or not (output_dir / f"{pdb_id}.parquet").is_file())
+                if force_update or not (output_dir / f"{pdb_id}.parquet").is_file()
             ]
             if not pending:
                 LOG.info(
@@ -1730,7 +1769,7 @@ def run_batch_searches(
             if missing_outputs:
                 raise RuntimeError(
                     f"{search_db} {alignment_type} search produced no output for "
-                    f"{len(missing_outputs)} eligible query entries: "
+                    f"{len(missing_outputs)} query entries: "
                     f"{missing_outputs[:10]}"
                 )
         if search_db == "holo" and alignment_types is None:
@@ -1757,7 +1796,7 @@ def run_batch_searches(
 
 
 def scatter_missing_alignment_mappings(
-    *, data_dir: Path, batch_size: int
+    *, data_dir: Path, batch_size: int, search_db: str = "holo"
 ) -> list[list[str]]:
     """Scatter query shards whose raw alignments are not mapped and published."""
     if batch_size < 1:
@@ -1767,14 +1806,20 @@ def scatter_missing_alignment_mappings(
         {
             path.stem[1:3]
             for alignment_type in ["foldseek", "mmseqs"]
-            for path in (raw_root / f"holo_{alignment_type}" / "aln").glob("*.parquet")
+            for path in (raw_root / f"{search_db}_{alignment_type}" / "aln").glob(
+                "*.parquet"
+            )
             if not path.name.endswith(".tmp.parquet")
         }
     )
     missing = [
         shard
         for shard in shards
-        if not alignment_mapping_shard_is_current(data_dir=data_dir, shard=shard)
+        if not alignment_mapping_shard_is_current(
+            data_dir=data_dir,
+            search_db=search_db,
+            shard=shard,
+        )
     ]
     chunks = [
         missing[pos : pos + batch_size] for pos in range(0, len(missing), batch_size)
@@ -1783,11 +1828,13 @@ def scatter_missing_alignment_mappings(
 
 
 def _alignment_input_signatures(
-    *, data_dir: Path, shard: str
+    *, data_dir: Path, shard: str, search_db: str = "holo"
 ) -> dict[str, list[dict[str, int | str]]]:
     signatures: dict[str, list[dict[str, int | str]]] = {}
     for alignment_type in ["foldseek", "mmseqs"]:
-        source_dir = data_dir / "dbs" / "subdbs" / f"holo_{alignment_type}" / "aln"
+        source_dir = (
+            data_dir / "dbs" / "subdbs" / f"{search_db}_{alignment_type}" / "aln"
+        )
         sources = sorted(
             path
             for path in source_dir.glob("*.parquet")
@@ -1816,8 +1863,13 @@ def _alignment_release_path(
     )
 
 
-def _alignment_mapping_manifest_path(*, data_dir: Path, shard: str) -> Path:
-    return data_dir / "alignments" / "manifests" / f"shard={shard}.json"
+def _alignment_mapping_manifest_path(
+    *, data_dir: Path, shard: str, search_db: str = "holo"
+) -> Path:
+    root = data_dir / "alignments" / "manifests"
+    if search_db != "holo":
+        root = root / f"search_db={search_db}"
+    return root / f"shard={shard}.json"
 
 
 def _alignment_target_entry_ids(sources: Sequence[Path]) -> set[str]:
@@ -1836,19 +1888,30 @@ def _alignment_target_entry_ids(sources: Sequence[Path]) -> set[str]:
     return targets
 
 
-def alignment_mapping_shard_is_current(*, data_dir: Path, shard: str) -> bool:
+def alignment_mapping_shard_is_current(
+    *, data_dir: Path, shard: str, search_db: str = "holo"
+) -> bool:
     """Validate a shard manifest against raw inputs and published outputs."""
-    manifest_path = _alignment_mapping_manifest_path(data_dir=data_dir, shard=shard)
+    manifest_path = _alignment_mapping_manifest_path(
+        data_dir=data_dir,
+        search_db=search_db,
+        shard=shard,
+    )
     try:
         payload = json.loads(manifest_path.read_text())
     except (OSError, TypeError, ValueError):
         return False
-    inputs = _alignment_input_signatures(data_dir=data_dir, shard=shard)
+    inputs = _alignment_input_signatures(
+        data_dir=data_dir,
+        search_db=search_db,
+        shard=shard,
+    )
     lookup_signature = _completed_alignment_chain_lookup(data_dir)
     if lookup_signature is None:
         return False
     if (
         payload.get("shard") != shard
+        or (search_db != "holo" and payload.get("search_db") != search_db)
         or payload.get("inputs") != inputs
         or payload.get("alignment_chain_lookup") != lookup_signature
     ):
@@ -1859,7 +1922,7 @@ def alignment_mapping_shard_is_current(*, data_dir: Path, shard: str) -> bool:
     for alignment_type, source_signatures in inputs.items():
         output = _alignment_release_path(
             data_dir=data_dir,
-            search_db="holo",
+            search_db=search_db,
             alignment_type=alignment_type,
             shard=shard,
         )
@@ -1888,18 +1951,29 @@ def map_batch_alignments(
     scorer_cfg: DictConfig,
     force_update: bool,
     scratch_dir: Path | None = None,
+    search_db: str = "holo",
 ) -> None:
     """Map raw backend hits directly into atomic query-shard release files."""
-    if list(scorer_cfg.sub_databases) != ["holo"]:
-        raise ValueError("V3 sharded alignment mapping currently supports holo only")
+    if search_db not in scorer_cfg.sub_databases:
+        raise ValueError(f"alignment database is not enabled: {search_db}")
     maximum_rows = int(getattr(scorer_cfg, "max_alignment_rows_per_query", 5_000_000))
     for shard in shards:
         if not force_update and alignment_mapping_shard_is_current(
-            data_dir=data_dir, shard=shard
+            data_dir=data_dir,
+            search_db=search_db,
+            shard=shard,
         ):
-            LOG.info(f"map_batch_alignments: shard {shard} is complete")
+            LOG.info(
+                "map_batch_alignments: %s shard %s is complete",
+                search_db,
+                shard,
+            )
             continue
-        inputs = _alignment_input_signatures(data_dir=data_dir, shard=shard)
+        inputs = _alignment_input_signatures(
+            data_dir=data_dir,
+            search_db=search_db,
+            shard=shard,
+        )
         pdb_ids = sorted(
             {
                 Path(str(signature["name"])).stem
@@ -1911,7 +1985,9 @@ def map_batch_alignments(
             continue
         rows_by_query: dict[str, dict[str, int]] = {pdb_id: {} for pdb_id in pdb_ids}
         for alignment_type, signatures in inputs.items():
-            source_root = data_dir / "dbs" / "subdbs" / f"holo_{alignment_type}" / "aln"
+            source_root = (
+                data_dir / "dbs" / "subdbs" / f"{search_db}_{alignment_type}" / "aln"
+            )
             for signature in signatures:
                 source = source_root / str(signature["name"])
                 pdb_id = source.stem
@@ -1943,15 +2019,17 @@ def map_batch_alignments(
             )
         raw_root = data_dir / "dbs" / "subdbs"
         raw_sources = [
-            raw_root / f"holo_{alignment_type}" / "aln" / str(signature["name"])
+            raw_root / f"{search_db}_{alignment_type}" / "aln" / str(signature["name"])
             for alignment_type, signatures in inputs.items()
             for signature in signatures
             if Path(str(signature["name"])).stem not in skipped_queries
         ]
-        mapping_entry_ids = set(mapped_pdb_ids) | _alignment_target_entry_ids(
-            raw_sources
+        mapping_entry_ids = set(mapped_pdb_ids)
+        if search_db != "pred":
+            mapping_entry_ids.update(_alignment_target_entry_ids(raw_sources))
+        working_root = (scratch_dir or data_dir / "scratch" / "mapping") / (
+            f"{search_db}-{shard}"
         )
-        working_root = (scratch_dir or data_dir / "scratch" / "mapping") / shard
         if working_root.exists():
             rmtree(working_root)
         mapped_db_dir = working_root / "mapped"
@@ -1988,21 +2066,21 @@ def map_batch_alignments(
                 mapped = scorer.map_alignment_files(
                     data_dir,
                     pdb_id,
-                    "holo",
+                    search_db,
                     overwrite=True,
                     scratch_dir=working_root / "temporary",
                     mapped_db_dir=mapped_db_dir,
                 )
                 if len(mapped) != expected:
                     raise RuntimeError(
-                        f"holo alignment mapping for {pdb_id} produced "
+                        f"{search_db} alignment mapping for {pdb_id} produced "
                         f"{len(mapped)} of {expected} available backends"
                     )
             outputs: dict[str, dict[str, int | str] | None] = {}
             for alignment_type, source_signatures in inputs.items():
                 target = _alignment_release_path(
                     data_dir=data_dir,
-                    search_db="holo",
+                    search_db=search_db,
                     alignment_type=alignment_type,
                     shard=shard,
                 )
@@ -2011,9 +2089,9 @@ def map_batch_alignments(
                     outputs[alignment_type] = None
                     continue
                 local_sources = sorted(
-                    (mapped_db_dir / f"holo_{alignment_type}" / "mapped_aln").glob(
-                        "*.parquet"
-                    )
+                    (
+                        mapped_db_dir / f"{search_db}_{alignment_type}" / "mapped_aln"
+                    ).glob("*.parquet")
                 )
                 _write_alignment_release_shard(
                     sources=local_sources,
@@ -2029,12 +2107,17 @@ def map_batch_alignments(
                     "size": stat.st_size,
                     "mtime_ns": stat.st_mtime_ns,
                 }
-            manifest = _alignment_mapping_manifest_path(data_dir=data_dir, shard=shard)
+            manifest = _alignment_mapping_manifest_path(
+                data_dir=data_dir,
+                search_db=search_db,
+                shard=shard,
+            )
             manifest.parent.mkdir(exist_ok=True, parents=True)
             temporary_manifest = manifest.with_suffix(".tmp.json")
             temporary_manifest.write_text(
                 json.dumps(
                     {
+                        "search_db": search_db,
                         "shard": shard,
                         "alignment_chain_lookup": lookup_signature,
                         "inputs": inputs,
@@ -2056,6 +2139,7 @@ def scatter_missing_scores(
     *,
     data_dir: Path,
     batch_size: int,
+    search_dbs: Sequence[str] = ("holo",),
 ) -> list[list[str]]:
     from plinder.data.pipeline.score import dropped_query_ids
 
@@ -2085,22 +2169,30 @@ def scatter_missing_scores(
             ):
                 complete_holo.append(pdb_id)
         present["holo"] = complete_holo
-    mapped_queries: set[str] = set()
-    for manifest_path in sorted(
-        (data_dir / "alignments" / "manifests").glob("shard=*.json")
-    ):
-        shard = manifest_path.stem.removeprefix("shard=")
-        if not alignment_mapping_shard_is_current(data_dir=data_dir, shard=shard):
-            continue
-        payload = json.loads(manifest_path.read_text())
-        mapped_queries.update(
-            Path(str(signature["name"])).stem
-            for alignment_type in ["foldseek", "mmseqs"]
-            for signature in payload["inputs"][alignment_type]
+    rerun: set[str] = set()
+    dropped = dropped_query_ids(data_dir)
+    for search_db in search_dbs:
+        manifest_root = data_dir / "alignments" / "manifests"
+        if search_db != "holo":
+            manifest_root = manifest_root / f"search_db={search_db}"
+        mapped_queries: set[str] = set()
+        for manifest_path in sorted(manifest_root.glob("shard=*.json")):
+            shard = manifest_path.stem.removeprefix("shard=")
+            if not alignment_mapping_shard_is_current(
+                data_dir=data_dir,
+                search_db=search_db,
+                shard=shard,
+            ):
+                continue
+            payload = json.loads(manifest_path.read_text())
+            mapped_queries.update(
+                Path(str(signature["name"])).stem
+                for alignment_type in ["foldseek", "mmseqs"]
+                for signature in payload["inputs"][alignment_type]
+            )
+        rerun.update(
+            mapped_queries.difference(present.get(search_db, [])).difference(dropped)
         )
-    rerun = mapped_queries.difference(present["holo"]).difference(
-        dropped_query_ids(data_dir)
-    )
     run = sorted(rerun)
     if score_work.is_file():
         planned = pd.read_parquet(
@@ -2138,6 +2230,52 @@ def make_batch_scores(
         raise ValueError("threads must be positive")
     scorer.shape_score_threads = threads
     for search_db in scorer_cfg.sub_databases:
+        if search_db != "holo":
+            from plinder.core.scores.entries import load_entry_views
+
+            missing_entries = set(entry_ids).difference(scorer.entries)
+            if missing_entries:
+                scorer.entries.update(
+                    load_entry_views(pdb_ids=missing_entries, data_dir=data_dir)
+                )
+            entries_by_shard: dict[str, list[str]] = {}
+            for pdb_id in entry_ids:
+                entries_by_shard.setdefault(pdb_id[1:3], []).append(pdb_id)
+            for shard, shard_entry_ids in entries_by_shard.items():
+                source_to_aln_file = {
+                    f"{search_db}_{alignment_type}": _alignment_release_path(
+                        data_dir=data_dir,
+                        search_db=search_db,
+                        alignment_type=alignment_type,
+                        shard=shard,
+                    )
+                    for alignment_type in ["foldseek", "mmseqs"]
+                }
+                alignments = scorer.load_alignments(
+                    source_to_aln_file=source_to_aln_file,
+                    search_db=search_db,
+                    query_entry_ids=set(shard_entry_ids),
+                )
+                for pdb_id in tqdm(shard_entry_ids):
+                    if alignments.empty:
+                        query_alignments = alignments
+                    else:
+                        try:
+                            query_alignments = alignments.loc[pdb_id]
+                        except KeyError:
+                            query_alignments = pd.DataFrame()
+                    scorer.get_score_df(
+                        data_dir,
+                        pdb_id,
+                        search_db=search_db,
+                        overwrite=force_update,
+                        map_alignments=False,
+                        scratch_dir=scratch_dir,
+                        source_to_aln_file=source_to_aln_file,
+                        defer_ligand_3d=False,
+                        query_entry_alignments=query_alignments,
+                    )
+            continue
         for pdb_id in tqdm(entry_ids):
             source_to_aln_file = {
                 f"{search_db}_{alignment_type}": _alignment_release_path(
@@ -2328,9 +2466,7 @@ def scatter_ligand_3d_candidate_shards(
 
     if batch_size < 1:
         raise ValueError("batch size must be positive")
-    shards = sorted(
-        {pdb_id[1:3] for pdb_id in published_scoring_query_ids(data_dir)}
-    )
+    shards = sorted({pdb_id[1:3] for pdb_id in published_scoring_query_ids(data_dir)})
     return [
         shards[start : start + batch_size]
         for start in range(0, len(shards), batch_size)
@@ -2603,9 +2739,7 @@ def scatter_ligand_3d_query_shards(
 
     if batch_size < 1:
         raise ValueError("batch size must be positive")
-    shards = sorted(
-        {pdb_id[1:3] for pdb_id in published_scoring_query_ids(data_dir)}
-    )
+    shards = sorted({pdb_id[1:3] for pdb_id in published_scoring_query_ids(data_dir)})
     return [
         shards[start : start + batch_size]
         for start in range(0, len(shards), batch_size)
@@ -3195,6 +3329,62 @@ def collate_partitions(
     copyfile(local_target, install)
     install.replace(target)
     local_target.unlink(missing_ok=True)
+
+
+def make_linked_apo_structures(
+    *,
+    data_dir: Path,
+    scratch_dir: Path | None = None,
+    threads: int = 1,
+    memory_limit: str = "7GB",
+) -> Path:
+    """Publish ranked deposited apo-chain links for each holo system."""
+    from plinder.data.linked_apo import (
+        build_apo_candidate_manifest,
+        write_linked_apo_structure_table,
+    )
+
+    index_dir = data_dir / "index"
+    inputs = {
+        "protein_scores": data_dir / "scores/search_db=apo/apo.parquet",
+        "annotation": index_dir / "annotation_table.parquet",
+        "entry_chains": index_dir / "entry_chains.parquet",
+        "biounit_chains": index_dir / "entry_biounit_chains.parquet",
+        "entry_metadata": index_dir / "entry_metadata.parquet",
+    }
+    for path in inputs.values():
+        if not path.is_file():
+            raise FileNotFoundError(path)
+
+    candidates = build_apo_candidate_manifest(
+        inputs["entry_chains"],
+        biounit_chains=inputs["biounit_chains"],
+        entry_metadata=inputs["entry_metadata"],
+        annotation=inputs["annotation"],
+    )
+    manifest = data_dir / "manifests/apo_candidates.parquet"
+    manifest.parent.mkdir(exist_ok=True, parents=True)
+    temporary_manifest = manifest.with_suffix(manifest.suffix + ".tmp")
+    candidates.to_parquet(temporary_manifest, index=False)
+    temporary_manifest.replace(manifest)
+
+    output = index_dir / "linked_apo_structures.parquet"
+    write_linked_apo_structure_table(
+        inputs["protein_scores"],
+        annotation=inputs["annotation"],
+        candidates=manifest,
+        output_path=output,
+        scratch_dir=scratch_dir,
+        threads=threads,
+        memory_limit=memory_limit,
+    )
+    linked_rows = pq.ParquetFile(output).metadata.num_rows
+    LOG.info(
+        "make_linked_apo_structures: selected %d links from " "%d apo-chain candidates",
+        linked_rows,
+        len(candidates),
+    )
+    return output
 
 
 def scatter_component_reduction_sources(
@@ -3801,134 +3991,3 @@ def make_splits(
 ) -> None:
     [(cfg, path)] = cfg_and_path
     splits.split(data_dir=data_dir, cfg=cfg, relpath=path)
-
-
-def scatter_make_links(
-    *,
-    data_dir: Path,
-    search_dbs: list[str],
-) -> list[list[str]]:
-    return [[obj] for obj in search_dbs]
-
-
-def make_links(
-    *,
-    data_dir: Path,
-    search_dbs: list[str],
-    cpu: int = 8,
-) -> None:
-    from plinder.data.save_linked_structures import make_linked_structures_data_file
-
-    save_dir = data_dir / "assignments"
-    linked_structures = data_dir / "linked_staging"
-    for search_db in search_dbs:
-        output_file = linked_structures / f"{search_db}_links.parquet"
-        make_linked_structures_data_file(
-            data_dir=data_dir,
-            search_db=search_db,
-            superposed_folder=save_dir,
-            output_file=output_file,
-            num_processes=cpu,
-        )
-
-
-def make_linked_structures(
-    *,
-    data_dir: Path,
-    search_dbs: list[str],
-    cpu: int = 8,
-    force_update: bool = False,
-) -> None:
-    import multiprocessing
-
-    linked_structures = data_dir / "linked_staging"
-    for search_db in search_dbs:
-        if search_db == "holo":
-            continue
-        source_structures = linked_structures / "source" / search_db
-        source_structures.mkdir(exist_ok=True, parents=True)
-        df = pd.read_parquet(
-            linked_structures / f"{search_db}_links.parquet", columns=["id"]
-        )
-        LOG.info(
-            f"make_linked_structures: collecting {df['id'].nunique()} {search_db} linked structures"
-        )
-        func = None
-        if search_db == "apo":
-            func = utils.apo_file_from_link_id
-        elif search_db == "pred":
-            func = utils.pred_file_from_link_id
-        if func is not None:
-            args = [
-                (data_dir, source_structures, link_id, force_update)
-                for link_id in df["id"].unique()
-            ]
-            with multiprocessing.get_context("spawn").Pool(cpu) as p:
-                p.starmap(func, args)
-        utils.pack_source_structures(data_dir, search_db)
-
-
-def scatter_score_linked_structures(
-    *,
-    data_dir: Path,
-    search_dbs: list[str],
-    batch_size: int,
-) -> list[list[tuple[str, str]]]:
-    items = []
-    for search_db in search_dbs:
-        links = pd.read_parquet(
-            data_dir / "linked_staging" / f"{search_db}_links.parquet"
-        )
-        items.extend(
-            [
-                (search_db, system_id)
-                for system_id in sorted(links["reference_system_id"])
-            ]
-        )
-    return [items[pos : pos + batch_size] for pos in range(0, len(items), batch_size)]
-
-
-def score_linked_structures(
-    *,
-    data_dir: Path,
-    search_dbs: list[str],
-    system_ids: list[tuple[str, str]],
-    cpu: int = 8,
-    force_update: bool = False,
-) -> None:
-    import multiprocessing
-
-    from plinder.data.save_linked_structures import (
-        system_save_and_score_representatives,
-    )
-
-    linked_structures = data_dir / "linked_staging"
-    grouped = {
-        search_db: [tup[1] for tup in system_ids if tup[0] == search_db]
-        for search_db in search_dbs
-    }
-    dfs = []
-    for search_db in search_dbs:
-        df = pd.read_parquet(linked_structures / f"{search_db}_links.parquet")
-        slc = df[df["reference_system_id"].isin(grouped[search_db])]
-        if not slc.empty:
-            dfs.append(slc.copy())
-            dfs[-1]["kind"] = search_db
-    if not len(dfs):
-        LOG.info("no linked structures to make")
-        return
-    links = pd.concat(dfs).reset_index(drop=True)
-
-    with multiprocessing.get_context("spawn").Pool(cpu) as p:
-        p.starmap(
-            system_save_and_score_representatives,
-            [
-                (system, group, data_dir, search_db, linked_structures, force_update)
-                for (search_db, system), group in links.groupby(
-                    [
-                        "kind",
-                        "reference_system_id",
-                    ]
-                )
-            ],
-        )

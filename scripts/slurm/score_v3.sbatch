@@ -13,6 +13,7 @@ DATA_DIR=${2:?"usage: sbatch score_v3.sbatch MODE DATA_DIR [BATCH_SIZE]"}
 BATCH_SIZE=${3:-1}
 BATCH_INDEX=${SLURM_ARRAY_TASK_ID:-0}
 JOB_ID=${SLURM_ARRAY_JOB_ID:-${SLURM_JOB_ID:-local}}
+SEARCH_DB=${PLINDER_SEARCH_DB:-holo}
 ENV_ROOT=${PLINDER_ENV_ROOT:?"set PLINDER_ENV_ROOT to the ingest Conda environment"}
 REPO_ROOT=${PLINDER_REPO_ROOT:-${SLURM_SUBMIT_DIR:-}}
 LOCAL_SCRATCH=${PLINDER_SCORE_SCRATCH:-${SLURM_TMPDIR:-${TMPDIR:-/scratch/${USER}/plinder-score-${SLURM_JOB_ID:-local}}}}
@@ -44,7 +45,7 @@ export OPENBLAS_NUM_THREADS=${SLURM_CPUS_PER_TASK:-1}
 export NUMEXPR_NUM_THREADS=${SLURM_CPUS_PER_TASK:-1}
 
 mkdir -p "${DATA_DIR}/metrics" "${TASK_SCRATCH}"
-echo "host=$(hostname) job_id=${JOB_ID} mode=${MODE} batch_index=${BATCH_INDEX} batch_size=${BATCH_SIZE} scratch=${TASK_SCRATCH}"
+echo "host=$(hostname) job_id=${JOB_ID} mode=${MODE} search_db=${SEARCH_DB} batch_index=${BATCH_INDEX} batch_size=${BATCH_SIZE} scratch=${TASK_SCRATCH}"
 echo "PLINDER offline mode is enabled; all sources and reference data must exist"
 
 monitor_scratch_usage() {
@@ -88,6 +89,7 @@ case "${MODE}" in
         ;;
     make-sub-dbs)
         ARGS+=(
+            --search-db "${SEARCH_DB}"
             --threads "${SLURM_CPUS_PER_TASK:-1}"
             --scratch-dir "${TASK_SCRATCH}"
         )
@@ -241,6 +243,9 @@ case "${MODE}" in
         fi
         if [[ "${MODE}" == "search-foldseek" || "${MODE}" == "search-mmseqs" ]]; then
             ARGS+=(--alignment-type "${MODE#search-}")
+        fi
+        if [[ "${MODE}" == "search-foldseek" || "${MODE}" == "search-mmseqs" || "${MODE}" == "map" || "${MODE}" == "score" || "${MODE}" == "score-pdbs" ]]; then
+            ARGS+=(--search-db "${SEARCH_DB}")
         fi
         if [[ "${MODE}" == "score-pdbs" ]]; then
             : "${PLINDER_SCORE_PDB_MANIFEST:?set PLINDER_SCORE_PDB_MANIFEST}"

@@ -90,14 +90,6 @@ class FlowConfig:
     collate_partitions_cpu: int = 4
     collate_partitions_memory_limit: str = "7GB"
 
-    make_links_cpu: int = 8
-    make_linked_structures_cpu: int = 8
-    make_linked_structures_force_update: bool = False
-    score_linked_structures_cpu: int = 8
-    score_linked_structures_batch_size: int = 100
-    score_linked_structures_force_update: bool = False
-    sub_databases: Any = "apo,pred"
-
     split_config_dir: str = ""
 
     def __post_init__(self) -> None:
@@ -131,13 +123,11 @@ class FlowConfig:
             self.skip_specific_stages = [
                 stage for stage in self.skip_specific_stages.split(",") if stage
             ]
-        if isinstance(self.sub_databases, str):
-            self.sub_databases = [db for db in self.sub_databases.split(",") if db]
 
 
 @dataclass
 class SourceConfig:
-    """Locations of the source archives consumed by V3 entry ingest.
+    """Locations of the source archives consumed by entry ingest.
 
     Empty roots use ``PLINDER_PDB_NEXTGEN_ROOT`` and
     ``PLINDER_VALIDATION_ROOT`` when set, then fall back to the Metaflow-local
@@ -219,7 +209,7 @@ class ScorerConfig:
     max_alignment_rows_per_query: int = 5_000_000
     max_query_protein_chains: int = 30
     max_query_proper_ligand_chains: int = 30
-    sub_databases: Any = "holo,apo,pred"
+    sub_databases: Any = "holo,apo"
 
     def __post_init__(self) -> None:
         if isinstance(self.sub_databases, str):

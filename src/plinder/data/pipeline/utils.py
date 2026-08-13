@@ -2,17 +2,14 @@
 # Distributed under the terms of the Apache License 2.0
 from __future__ import annotations
 
-import multiprocessing
 import shutil
 from functools import wraps
 from hashlib import md5
-from itertools import repeat
 from json import dumps, load
 from os import listdir
 from pathlib import Path
 from time import time
-from typing import TYPE_CHECKING, Any, Callable, Literal, Optional, TypeVar
-from zipfile import ZIP_DEFLATED, ZipFile
+from typing import TYPE_CHECKING, Any, Callable, Optional, TypeVar
 
 import pandas as pd
 import pyarrow.parquet as pq
@@ -657,9 +654,7 @@ def add_cluster_columns(*, index: pd.DataFrame, data_dir: Path) -> pd.DataFrame:
                     "directed ligand cover has a partial coverage-centrality "
                     f"schema: {path}; missing={missing}"
                 )
-            has_coverage_centrality = (
-                available_coverage_columns == coverage_columns
-            )
+            has_coverage_centrality = available_coverage_columns == coverage_columns
             if has_coverage_centrality:
                 columns.extend(sorted(coverage_columns))
         labels = pd.read_parquet(path, columns=columns)
@@ -684,9 +679,7 @@ def add_cluster_columns(*, index: pd.DataFrame, data_dir: Path) -> pd.DataFrame:
         cluster_columns[column] = aligned.astype("string[pyarrow]").array
         if is_directed_cover:
             labels["centroid_ligand_id"] = labels["centroid_ligand_id"].astype(str)
-            labels["is_centroid"] = labels[node_column].eq(
-                labels["centroid_ligand_id"]
-            )
+            labels["is_centroid"] = labels[node_column].eq(labels["centroid_ligand_id"])
             centroid_counts = labels.groupby("label", observed=True)[
                 "is_centroid"
             ].sum()
@@ -700,24 +693,20 @@ def add_cluster_columns(*, index: pd.DataFrame, data_dir: Path) -> pd.DataFrame:
             aligned_centroids = labels.set_index(node_column)["is_centroid"].reindex(
                 node_ids
             )
-            cluster_columns[centroid_column] = aligned_centroids.astype(
-                "boolean"
-            ).array
+            cluster_columns[centroid_column] = aligned_centroids.astype("boolean").array
             if has_coverage_centrality:
-                if (
-                    labels[["coverage_count", "coverage_fraction"]]
-                    .isna()
-                    .any()
-                    .any()
-                ):
+                if labels[["coverage_count", "coverage_fraction"]].isna().any().any():
                     raise ValueError(
                         "directed ligand cover has missing coverage centrality: "
                         f"{path}"
                     )
-                if labels["coverage_count"].lt(1).any() or (
-                    labels["coverage_fraction"].le(0)
-                    | labels["coverage_fraction"].gt(1)
-                ).any():
+                if (
+                    labels["coverage_count"].lt(1).any()
+                    or (
+                        labels["coverage_fraction"].le(0)
+                        | labels["coverage_fraction"].gt(1)
+                    ).any()
+                ):
                     raise ValueError(
                         "directed ligand cover has invalid coverage centrality: "
                         f"{path}"
@@ -916,9 +905,7 @@ def add_interface_cluster_columns(
         membership["representative_system_id"].dropna().astype(str)
     )
     expected_half_representatives = set(
-        membership[
-            ["side_1_half_interface_id", "side_2_half_interface_id"]
-        ].stack()
+        membership[["side_1_half_interface_id", "side_2_half_interface_id"]].stack()
     )
     artifacts: list[tuple[Path, str, int, str]] = []
     for path in reciprocal_paths:
@@ -979,8 +966,8 @@ def add_interface_cluster_columns(
                 cluster_columns[column] = aligned.astype("string[pyarrow]").array
         else:
             column = f"{metric}__{threshold}__{kind}"
-            aligned = membership["representative_system_id"].astype(str).map(
-                label_lookup
+            aligned = (
+                membership["representative_system_id"].astype(str).map(label_lookup)
             )
             cluster_columns[column] = aligned.astype("string[pyarrow]").array
         if path_index % 10 == 0 or path_index == len(artifacts):
@@ -1410,189 +1397,6 @@ def create_index(*, data_dir: Path, force_update: bool = False) -> pd.DataFrame:
     if update or force_update:
         df.to_parquet(index, index=False)
     return df
-
-
-def apo_file_from_link_id(
-    data_dir: Path,
-    output_dir: Path,
-    link_id: str,
-    force_update: bool = False,
-) -> dict[str, str] | None:
-    import biotite.structure.io.pdbx as pdbx
-
-    from plinder.data.annotations.cif_utils import read_mmcif_file
-    from plinder.data.annotations.save_utils import save_cif_file
-
-    if (output_dir / f"{link_id}.cif").exists() and not force_update:
-        LOG.info(f"skipping {link_id}.cif as it already exists")
-        return None
-
-    pdb_id, chain = link_id.split("_")
-    target_cif = (
-        data_dir
-        / "ingest"
-        / pdb_id[1:3]
-        / f"pdb_0000{pdb_id}"
-        / f"pdb_0000{pdb_id}_xyz-enrich.cif.gz"
-    )
-    if not target_cif.exists():
-        LOG.info(f"skipping {link_id} as {target_cif} does not exist")
-        return None
-
-    cif_file_obj = read_mmcif_file(target_cif)
-    atoms = pdbx.get_structure(
-        cif_file_obj, model=1, use_author_fields=False, include_bonds=True
-    )
-    atoms = atoms[atoms.chain_id == chain]
-    out_cif = output_dir / f"{pdb_id}_{chain}.cif"
-    LOG.info(f"saving {link_id} to {out_cif}")
-    save_cif_file(atoms, out_cif.stem, out_cif)
-    return None
-
-
-def pred_file_from_link_id(
-    data_dir: Path,
-    output_dir: Path,
-    link_id: str,
-    force_update: bool = False,
-) -> None:
-    import biotite.structure.io.pdbx as pdbx
-
-    from plinder.data.annotations.cif_utils import read_mmcif_file
-    from plinder.data.annotations.save_utils import save_cif_file
-
-    if (output_dir / f"{link_id}.cif").exists() and not force_update:
-        LOG.info(f"skipping {link_id}.cif as it already exists")
-        return None
-
-    uniprot_id, chain = link_id.split("_")
-    target_cif = data_dir / "dbs" / "alphafold" / f"AF-{uniprot_id}-F1-model_v4.cif"
-    if not target_cif.exists():
-        LOG.info(f"skipping {link_id} as {target_cif} does not exist")
-        return None
-
-    cif_file_obj = read_mmcif_file(target_cif)
-    atoms = pdbx.get_structure(
-        cif_file_obj, model=1, use_author_fields=False, include_bonds=True
-    )
-    atoms = atoms[atoms.chain_id == chain]
-    out_cif = output_dir / f"{uniprot_id}_{chain}.cif"
-    LOG.info(f"saving {link_id} to {out_cif}")
-    save_cif_file(atoms, out_cif.stem, out_cif)
-    return None
-    # chain_to_seqres = {c.name: c.string for c in seqres}
-    # return chain_to_seqres[chain]
-
-
-def pack_linked_structures(data_dir: Path, code: str, structures: bool = True) -> None:
-    """
-    Pack generated linked structures into a zip file for a particular
-    two character code.
-
-    Parameters
-    ----------
-    data_dir : Path
-        plinder root dir
-    code : str
-        two character code
-    structures : bool, default=True
-        if True, make structure archives
-    """
-    (data_dir / "links").mkdir(exist_ok=True, parents=True)
-    mode: Literal["r", "w"] = "w" if structures else "r"
-    with ZipFile(
-        data_dir / "links" / f"{code}.zip", mode, compression=ZIP_DEFLATED
-    ) as archive:
-        for search_db in ["apo", "pred"]:
-            jsons = []
-            root = data_dir / "linked_staging" / search_db
-            system_ids = [
-                system_id for system_id in listdir(root) if system_id[1:3] == code
-            ]
-            for system_id in system_ids:
-                link_ids = listdir(f"{root}/{system_id}")
-                for link_id in link_ids:
-                    link = f"{root}/{system_id}/{link_id}"
-                    try:
-                        with open(f"{link}/scores.json") as f:
-                            jsons.append(load(f))
-                    except Exception:
-                        pass
-                    if structures:
-                        try:
-                            archive.write(
-                                f"{link}/superposed.cif",
-                                f"{search_db}/{system_id}/{link_id}/superposed.cif",
-                            )
-                        except Exception:
-                            pass
-            df = pd.DataFrame(jsons).rename(
-                columns={"reference": "reference_system_id", "model": "id"}
-            )
-            df.to_parquet(
-                data_dir / "links" / f"{search_db}_{code}.parquet", index=False
-            )
-
-
-def mp_pack_linked_structures(*, data_dir: Path, structures: bool = True) -> None:
-    """
-    Use a process pool to pack linked structures into two character code archives.
-
-    Parameters
-    ----------
-    data_dir : Path
-        plinder root dir
-    """
-
-    with multiprocessing.get_context("spawn").Pool() as pool:
-        pool.starmap(
-            pack_linked_structures,
-            zip(repeat(data_dir), listdir(data_dir / "ingest"), repeat(structures)),
-        )
-
-
-def pack_source_structures(data_dir: Path, search_db: str) -> None:
-    (data_dir / "linked_structures").mkdir(exist_ok=True, parents=True)
-    with ZipFile(
-        data_dir / "linked_structures" / f"{search_db}.zip",
-        "w",
-        compression=ZIP_DEFLATED,
-    ) as archive:
-        source_structures = data_dir / "linked_staging" / "source" / search_db
-        for path in source_structures.rglob("*.cif"):
-            archive.write(path, path.name)
-
-
-def consolidate_linked_scores(*, data_dir: Path) -> None:
-    """
-    Consolidate linked scores into a single parquet file. Assumes
-    that pack_linked_structures has been run.
-
-    Parameters
-    ----------
-    data_dir : Path
-        plinder root dir
-    """
-    for search_db in ["apo", "pred"]:
-        paths = list((data_dir / "links").glob(f"{search_db}_*.parquet"))
-        dfs = []
-        for path in paths:
-            df = pd.read_parquet(path)
-            if not df.empty:
-                dfs.append(df)
-        ndf = pd.concat(dfs)
-        odf = pd.read_parquet(
-            data_dir / "linked_staging" / f"{search_db}_links.parquet"
-        )
-        drop = list(
-            set(odf.columns.intersection(ndf.columns))
-            - set(["reference_system_id", "id"])
-        )
-        df = pd.merge(odf.drop(columns=drop), ndf, on=["reference_system_id", "id"])
-        (data_dir / "links" / f"kind={search_db}").mkdir(exist_ok=True, parents=True)
-        df.to_parquet(
-            data_dir / "links" / f"kind={search_db}" / "links.parquet", index=False
-        )
 
 
 def rename_clusters(*, data_dir: Path) -> None:

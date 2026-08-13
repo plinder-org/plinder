@@ -18,7 +18,9 @@ data:
   plinder_release: 2026-07
   plinder_release_number: "1"
 scorer:
-  sub_databases: holo
+  sub_databases: holo,apo
+  minimum_thresholds:
+    protein_lddt_weighted_sum: 0.2
 foldseek:
   min_seq_id: 0.0
 mmseqs:

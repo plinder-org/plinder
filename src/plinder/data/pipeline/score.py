@@ -2914,13 +2914,15 @@ def _scoring_config(
     data_dir: Path,
     max_seqs: int,
     *,
+    sub_databases: Iterable[str] = ("holo",),
     max_query_protein_chains: int = 30,
     max_query_proper_ligand_chains: int = 30,
 ) -> Any:
+    selected_databases = list(dict.fromkeys(sub_databases))
     return config.get_config(
         config={
             "scorer": {
-                "sub_databases": "holo",
+                "sub_databases": ",".join(selected_databases),
                 "max_query_protein_chains": max_query_protein_chains,
                 "max_query_proper_ligand_chains": (max_query_proper_ligand_chains),
             },
@@ -2931,18 +2933,28 @@ def _scoring_config(
     )
 
 
-def _scoring_config_from_plan(data_dir: Path, plan: Mapping[str, Any]) -> Any:
+def _scoring_config_from_plan(
+    data_dir: Path,
+    plan: Mapping[str, Any],
+    *,
+    sub_databases: Iterable[str] = ("holo",),
+) -> Any:
     """Build config before or after derived-score batch limits are planned."""
     protein_limit = plan.get("score_max_query_protein_chains")
     ligand_limit = plan.get("score_max_query_proper_ligand_chains")
     if (protein_limit is None) != (ligand_limit is None):
         raise ValueError("protein scoring plan contains incomplete score limits")
     if protein_limit is None:
-        return _scoring_config(data_dir, int(plan["max_seqs"]))
+        return _scoring_config(
+            data_dir,
+            int(plan["max_seqs"]),
+            sub_databases=sub_databases,
+        )
     assert ligand_limit is not None
     return _scoring_config(
         data_dir,
         int(plan["max_seqs"]),
+        sub_databases=sub_databases,
         max_query_protein_chains=int(protein_limit),
         max_query_proper_ligand_chains=int(ligand_limit),
     )
@@ -2974,9 +2986,7 @@ def publish_search_database_bundles(
     try:
         for alignment_type in alignment_types:
             reports[alignment_type] = databases.publish_search_database_bundle(
-                source_root=(
-                    data_dir / "dbs" / "subdbs" / f"holo_{alignment_type}"
-                ),
+                source_root=(data_dir / "dbs" / "subdbs" / f"holo_{alignment_type}"),
                 target_root=staging / f"holo_{alignment_type}",
                 aln_type=alignment_type,
             )
@@ -6356,6 +6366,13 @@ def _parser() -> argparse.ArgumentParser:
     sub_dbs.add_argument("data_dir", type=Path)
     sub_dbs.add_argument("--threads", type=int, default=1)
     sub_dbs.add_argument("--scratch-dir", type=Path, required=True)
+    sub_dbs.add_argument(
+        "--search-db",
+        action="append",
+        dest="search_dbs",
+        choices=["holo", "apo", "pred"],
+        help="database subset to build; repeat to build more than one",
+    )
     lookup_refresh = subparsers.add_parser("refresh-alignment-lookup")
     lookup_refresh.add_argument("data_dir", type=Path)
     lookup_refresh.add_argument("--threads", type=int, default=1)
@@ -6493,6 +6510,12 @@ def _parser() -> argparse.ArgumentParser:
                 choices=["foldseek", "mmseqs"],
                 required=True,
             )
+        if name in {"search", "map", "score", "score-pdbs"}:
+            command.add_argument(
+                "--search-db",
+                choices=["holo", "apo", "pred"],
+                default="holo",
+            )
         if name in {"component-reductions", "communities", "directed-covers"}:
             _add_cluster_arguments(command)
         elif name in {"symmetric-edge-fragments", "symmetric-edge-shards"}:
@@ -6589,7 +6612,7 @@ def main() -> None:
     elif args.command == "make-sub-dbs":
         tasks.make_sub_dbs(
             data_dir=data_dir,
-            sub_databases=["holo"],
+            sub_databases=args.search_dbs or ["holo"],
             cpu=args.threads,
             scratch_dir=args.scratch_dir.resolve(),
         )
@@ -6972,7 +6995,12 @@ def main() -> None:
         result = {"status": "complete", "shards": shards}
     else:
         plan = _load_plan(data_dir)
-        cfg = _scoring_config_from_plan(data_dir, plan)
+        search_db = str(getattr(args, "search_db", "holo"))
+        cfg = _scoring_config_from_plan(
+            data_dir,
+            plan,
+            sub_databases=[search_db],
+        )
         scratch_dir = args.scratch_dir.resolve()
         scratch_dir.mkdir(exist_ok=True, parents=True)
         if args.command == "collate-alignments":
@@ -7104,8 +7132,13 @@ def main() -> None:
                 scorer_cfg=cfg.scorer,
                 force_update=args.force,
                 scratch_dir=scratch_dir,
+                search_db=search_db,
             )
-            result = {"status": "complete", "shards": shards}
+            result = {
+                "status": "complete",
+                "search_db": search_db,
+                "shards": shards,
+            }
         elif args.command == "score-ligand-3d":
             pairs = _ligand_3d_batch(data_dir, args.batch_index, args.batch_size)
             output = tasks.make_ligand_3d_scores(
@@ -7237,7 +7270,11 @@ def main() -> None:
                     threads=args.threads,
                     defer_ligand_3d=True,
                 )
-            result = {"status": "complete", "pdb_ids": pdb_ids}
+            result = {
+                "status": "complete",
+                "search_db": search_db,
+                "pdb_ids": pdb_ids,
+            }
     print(json.dumps(result, indent=2, sort_keys=True))
 
 

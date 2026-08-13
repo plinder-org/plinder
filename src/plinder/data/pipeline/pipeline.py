@@ -293,20 +293,27 @@ class IngestPipeline:
         )
 
     @utils.ingest_flow_control
-    def scatter_map_batch_alignments(self) -> list[list[str]]:
-        return tasks.scatter_missing_alignment_mappings(
-            data_dir=self.plinder_dir,
-            batch_size=self.cfg.flow.map_batch_alignments_batch_size,
-        )
+    def scatter_map_batch_alignments(self) -> list[tuple[str, list[str]]]:
+        work: list[tuple[str, list[str]]] = []
+        for search_db in self.cfg.scorer.sub_databases:
+            chunks = tasks.scatter_missing_alignment_mappings(
+                data_dir=self.plinder_dir,
+                batch_size=self.cfg.flow.map_batch_alignments_batch_size,
+                search_db=search_db,
+            )
+            work.extend((search_db, shards) for shards in chunks if shards)
+        return work or [(str(self.cfg.scorer.sub_databases[0]), [])]
 
     @utils.ingest_flow_control
-    def map_batch_alignments(self, shards: list[str]) -> None:
+    def map_batch_alignments(self, work: tuple[str, list[str]]) -> None:
+        search_db, shards = work
         force_update = self.cfg.data.force_update
         tasks.map_batch_alignments(
             data_dir=self.plinder_dir,
             shards=shards,
             scorer_cfg=self.cfg.scorer,
             force_update=force_update,
+            search_db=search_db,
         )
 
     @utils.ingest_flow_control
@@ -314,6 +321,7 @@ class IngestPipeline:
         chunks: list[list[str]] = tasks.scatter_missing_scores(
             data_dir=self.plinder_dir,
             batch_size=self.cfg.flow.make_batch_scores_batch_size,
+            search_dbs=self.cfg.scorer.sub_databases,
         )
         return chunks
 
@@ -563,6 +571,18 @@ class IngestPipeline:
             memory_limit=self.cfg.flow.collate_partitions_memory_limit,
         )
 
+    @utils.ingest_flow_control
+    def make_linked_apo_structures(self) -> None:
+        if "apo" not in self.cfg.scorer.sub_databases:
+            LOG.info("make_linked_apo_structures: apo scoring is disabled")
+            return
+        tasks.make_linked_apo_structures(
+            data_dir=self.plinder_dir,
+            scratch_dir=Path(tempfile.gettempdir()) / "plinder-linked-apo",
+            threads=self.cfg.flow.collate_partitions_cpu,
+            memory_limit=self.cfg.flow.collate_partitions_memory_limit,
+        )
+
     def _cluster_entities(
         self,
     ) -> list[tuple[Literal["ligand", "interface"], list[str]]]:
@@ -798,63 +818,6 @@ class IngestPipeline:
     @utils.ingest_flow_control
     def make_splits(self, cfg_and_path: list[tuple[DictConfig, str]]) -> None:
         tasks.make_splits(data_dir=self.plinder_dir, cfg_and_path=cfg_and_path)
-
-    @utils.ingest_flow_control
-    def scatter_make_links(self) -> list[list[str]]:
-        chunks: list[list[str]] = tasks.scatter_make_links(
-            data_dir=self.plinder_dir,
-            search_dbs=self.cfg.scorer.sub_databases,
-        )
-        return chunks
-
-    @utils.ingest_flow_control
-    def make_links(self, search_dbs: list[str]) -> None:
-        tasks.make_links(
-            data_dir=self.plinder_dir,
-            search_dbs=search_dbs,
-        )
-
-    @utils.ingest_flow_control
-    def make_linked_structures(self) -> None:
-        force_update = (
-            self.cfg.data.force_update
-            or self.cfg.flow.make_linked_structures_force_update
-        )
-        tasks.make_linked_structures(
-            data_dir=self.plinder_dir,
-            search_dbs=self.cfg.flow.sub_databases,
-            cpu=self.cfg.flow.make_linked_structures_cpu,
-            force_update=force_update,
-        )
-
-    @utils.ingest_flow_control
-    def scatter_score_linked_structures(self) -> list[list[tuple[str, str]]]:
-        chunks: list[list[tuple[str, str]]] = tasks.scatter_score_linked_structures(
-            data_dir=self.plinder_dir,
-            search_dbs=self.cfg.flow.sub_databases,
-            batch_size=self.cfg.flow.score_linked_structures_batch_size,
-        )
-        return chunks
-
-    @utils.ingest_flow_control
-    def score_linked_structures(self, system_ids: list[tuple[str, str]]) -> None:
-        force_update = (
-            self.cfg.data.force_update
-            or self.cfg.flow.score_linked_structures_force_update
-        )
-        tasks.score_linked_structures(
-            data_dir=self.plinder_dir,
-            search_dbs=self.cfg.flow.sub_databases,
-            system_ids=system_ids,
-            cpu=self.cfg.flow.score_linked_structures_cpu,
-            force_update=force_update,
-        )
-        return
-
-    @utils.ingest_flow_control
-    def join_score_linked_structures(self, outputs: list[None]) -> None:
-        utils.mp_pack_linked_structures(data_dir=self.plinder_dir, structures=False)
-        utils.consolidate_linked_scores(data_dir=self.plinder_dir)
 
     def run_stage(self, stage: str) -> None:
         """
