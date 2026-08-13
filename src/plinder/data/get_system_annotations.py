@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, cast
 
 import pandas as pd
 from tqdm import tqdm
@@ -141,19 +141,22 @@ def cloud_save_annotation() -> None:
 
     from plinder.data.pipeline.config import AnnotationConfig, EntryConfig
 
-    cfg = OmegaConf.to_container(
-        OmegaConf.merge(
-            {
-                "mmcif_file": None,
-                "validation_xml": None,
-                "raise_exceptions": False,
-            },
-            {
-                "annotation": AnnotationConfig(),
-                "entry": EntryConfig(),
-            },
-            OmegaConf.from_cli(),
-        )
+    cfg = cast(
+        Dict[str, Any],
+        OmegaConf.to_container(
+            OmegaConf.merge(
+                {
+                    "mmcif_file": None,
+                    "validation_xml": None,
+                    "raise_exceptions": False,
+                },
+                {
+                    "annotation": AnnotationConfig(),
+                    "entry": EntryConfig(),
+                },
+                OmegaConf.from_cli(),
+            )
+        ),
     )
     assert cfg["mmcif_file"] is not None, "please pass mmcif_file=path/to/cif"
     assert cfg["validation_xml"] is not None, "please pass validation_xml=path/to/xml"

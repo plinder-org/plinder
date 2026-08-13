@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+import numpy.typing as npt
 import pandas as pd
 import plotly.express as px
 
@@ -167,7 +168,7 @@ def perf_vs_traindist(
 
 
 def perf_vs_traindist_all(
-    df: pd.DataFrame, xbins: np.ndarray = np.linspace(0, 100, 11)
+    df: pd.DataFrame, xbins: npt.NDArray[np.float64] = np.linspace(0, 100, 11)
 ) -> pd.DataFrame:
     data = []
     for metric in METRICS_DICT:

@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, cast
 
 import torch
 
@@ -36,7 +36,10 @@ def structure_featurizer(structure: Structure, pad_value: int = -100) -> dict[st
 
     # Featurize and sort in input structure order
     input_sequence_full_atom_feat_stack = _one_hot_encode_stack(
-        [input_sequence_full_atom_feat[ch] for ch in protein_chain_order],
+        # _one_hot_encode_stack accepts per-chain element-name lists at runtime;
+        # its stack param is annotated narrower (list[NDArray]); cast keeps both
+        # the full-dep and the minimal-dep CI type env happy.
+        cast(Any, [input_sequence_full_atom_feat[ch] for ch in protein_chain_order]),
         pc.ELE2NUM,
         "other",
     )
@@ -76,7 +79,7 @@ def structure_featurizer(structure: Structure, pad_value: int = -100) -> dict[st
         coord
         for coord in _stack_ligand_feat(resolved_ligand_mols_coords, ligand_chain_order)
     ]
-    features = {
+    features: dict[str, Any] = {
         "sequence_atom_mask_feature": sequence_atom_mask_stacked,
         "input_sequence_residue_mask_feature": input_sequence_residue_mask_stacked,
         "protein_coordinates": protein_coordinates_stacked,

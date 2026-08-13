@@ -127,7 +127,7 @@ def _is_over_valent(atom: Chem.Atom) -> bool:
     charged_valence = (
         max(periodic_table.GetValenceList(isoelectronic)) if isoelectronic >= 1 else 0
     )
-    return atom.GetExplicitValence() > max(neutral_valence, charged_valence)
+    return bool(atom.GetExplicitValence() > max(neutral_valence, charged_valence))
 
 
 def _is_borane_cage_atom(atom: Chem.Atom) -> bool:
@@ -139,7 +139,9 @@ def _is_borane_cage_atom(atom: Chem.Atom) -> bool:
     neighbours) is not a cage vertex and is charged to ``[B-]`` instead. Boron-specific:
     the only element forming such cages in the PDB CCD.
     """
-    return sum(neighbour.GetSymbol() == "B" for neighbour in atom.GetNeighbors()) >= 3
+    return bool(
+        sum(neighbour.GetSymbol() == "B" for neighbour in atom.GetNeighbors()) >= 3
+    )
 
 
 def _is_tolerated_over_valence(atom: Chem.Atom) -> bool:
@@ -396,7 +398,7 @@ def _fix_valence_by_zero_order(mol: Chem.Mol, atom: Chem.Atom) -> bool:
         mol.UpdatePropertyCache(strict=False)
 
     mol.UpdatePropertyCache(strict=False)
-    return atom.GetTotalValence() <= max_valence
+    return bool(atom.GetTotalValence() <= max_valence)
 
 
 def _fix_valence_by_ligand_charge(mol: Chem.Mol, atom: Chem.Atom) -> bool:
@@ -440,7 +442,7 @@ def _fix_valence_by_ligand_charge(mol: Chem.Mol, atom: Chem.Atom) -> bool:
         terminal.SetFormalCharge(-1)
 
     mol.UpdatePropertyCache(strict=False)
-    return atom.GetTotalValence() <= max_valence
+    return bool(atom.GetTotalValence() <= max_valence)
 
 
 def _balance_dipole_terminal(center: Chem.Atom) -> None:
