@@ -118,6 +118,9 @@ BIOUNIT_CHAIN_SCHEMA = pa.schema(
         ("chain_instance", pa.string()),
         ("chain_asym_id", pa.string()),
         ("chain_role", pa.string()),
+        ("chain_num_contacting_ions", pa.int64()),
+        ("chain_num_contacting_artifacts", pa.int64()),
+        ("chain_num_contacting_other_ligands", pa.int64()),
     ]
 )
 
@@ -313,8 +316,7 @@ def _entry_dirs_for_code(data_dir: Path, code: str) -> list[Path]:
     return sorted(
         path
         for path in code_dir.iterdir()
-        if path.is_dir()
-        and re.fullmatch(r"[0-9][a-z0-9]{3}", path.name.lower())
+        if path.is_dir() and re.fullmatch(r"[0-9][a-z0-9]{3}", path.name.lower())
     )
 
 
@@ -350,7 +352,9 @@ def _load_plan_build(data_dir: Path) -> dict[str, Any]:
     try:
         build = cast(dict[str, Any], json.loads(path.read_text()))
     except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
-        raise FileNotFoundError(f"missing or invalid collation plan build: {path}") from exc
+        raise FileNotFoundError(
+            f"missing or invalid collation plan build: {path}"
+        ) from exc
     if (
         build.get("version") != COLLATION_VERSION
         or build.get("status") != "inventorying"
@@ -811,9 +815,7 @@ def _build_annotation_view(
     )
 
 
-def _normalize_arrow_table(
-    table: pa.Table, path: Path, schema: pa.Schema
-) -> pa.Table:
+def _normalize_arrow_table(table: pa.Table, path: Path, schema: pa.Schema) -> pa.Table:
     if table.num_rows and not set(schema.names).issubset(table.column_names):
         missing = sorted(set(schema.names).difference(table.column_names))
         raise ValueError(f"{path} is missing sidecar columns: {missing}")
@@ -992,9 +994,7 @@ def collate_shard(
         raise RuntimeError(f"manifest signature mismatch for shard {normalized}")
     _verify_manifest_inputs(rows, threads=threads)
     paths = _shard_paths(data_dir, normalized)
-    include_ligand_annotations = bool(
-        plan.get("include_ligand_annotations", True)
-    )
+    include_ligand_annotations = bool(plan.get("include_ligand_annotations", True))
     output_names = _shard_output_names(plan)
     if not force and (
         completed := _completed_shard(
@@ -1097,8 +1097,7 @@ def collate_shard(
             row_group_size=row_group_size,
         )
         metrics["counts"] = {
-            name: pq.ParquetFile(paths[name]).metadata.num_rows
-            for name in output_names
+            name: pq.ParquetFile(paths[name]).metadata.num_rows for name in output_names
         }
         metrics["status"] = "complete"
     except BaseException as exc:
@@ -1139,9 +1138,7 @@ def _load_completed_shards(
     # Changes to raw entries after a shard completes belong to a new plan.
 
     output_names = _shard_output_names(plan)
-    include_ligand_annotations = bool(
-        plan.get("include_ligand_annotations", True)
-    )
+    include_ligand_annotations = bool(plan.get("include_ligand_annotations", True))
     files: dict[str, list[Path]] = {name: [] for name in output_names}
     expected_counts = {name: 0 for name in files}
     for code in planned_codes:
@@ -1503,9 +1500,7 @@ def finalize_collation(
     """Merge completed shards, validate them, and install final index files."""
     data_dir = data_dir.resolve()
     plan = load_plan(data_dir)
-    include_ligand_annotations = bool(
-        plan.get("include_ligand_annotations", True)
-    )
+    include_ligand_annotations = bool(plan.get("include_ligand_annotations", True))
     shard_files, expected_counts = _load_completed_shards(data_dir, plan)
     final_paths = {
         "annotation": data_dir / "index" / "annotation_table.parquet",
@@ -1520,9 +1515,7 @@ def finalize_collation(
             "interface-only collation requires an installed annotation table: "
             f"{final_paths['annotation']}"
         )
-    temporary_paths = {
-        name: _temporary_path(final_paths[name]) for name in shard_files
-    }
+    temporary_paths = {name: _temporary_path(final_paths[name]) for name in shard_files}
     for path in final_paths.values():
         path.parent.mkdir(parents=True, exist_ok=True)
     connection = duckdb.connect()

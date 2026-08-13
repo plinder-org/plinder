@@ -102,6 +102,9 @@ def entry_exists(*, entry_dir: Path, pdb_id: str) -> bool:
             "chain_instance",
             "chain_asym_id",
             "chain_role",
+            "chain_num_contacting_ions",
+            "chain_num_contacting_artifacts",
+            "chain_num_contacting_other_ligands",
         }
         if not required_biounit_columns.issubset(
             pq.read_schema(entry_biounit_chains).names

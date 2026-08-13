@@ -101,6 +101,9 @@ def _write_entry(
             "chain_instance": ["1.A", "1.B"],
             "chain_asym_id": ["A", "B"],
             "chain_role": ["receptor", "receptor"],
+            "chain_num_contacting_ions": [0, 0],
+            "chain_num_contacting_artifacts": [0, 0],
+            "chain_num_contacting_other_ligands": [0, 0],
         }
     ).to_parquet(entry_dir / "entry_biounit_chains.parquet", index=False)
     pd.DataFrame(
@@ -289,12 +292,8 @@ def test_distributed_plan_requires_and_merges_every_code_inventory(
 
     build = start_collation_plan(tmp_path)
     assert build["code_count"] == 2
-    assert planned_inventory_code_batch(
-        tmp_path, batch_index=0, batch_size=1
-    ) == ["ab"]
-    assert planned_inventory_code_batch(
-        tmp_path, batch_index=1, batch_size=1
-    ) == ["de"]
+    assert planned_inventory_code_batch(tmp_path, batch_index=0, batch_size=1) == ["ab"]
+    assert planned_inventory_code_batch(tmp_path, batch_index=1, batch_size=1) == ["de"]
 
     inventory_collation_codes(tmp_path, ["ab"], threads=2)
     with pytest.raises(FileNotFoundError, match="incomplete for code de"):
@@ -568,9 +567,7 @@ def test_finalize_uses_frozen_shards_after_raw_inputs_change(tmp_path: Path) -> 
 
     assert report["status"] == "complete"
     installed = pd.read_parquet(tmp_path / "index/annotation_table.parquet")
-    assert set(installed.loc[installed["entry_pdb_id"] == "1abc", "entry_pH"]) != {
-        6.0
-    }
+    assert set(installed.loc[installed["entry_pdb_id"] == "1abc", "entry_pH"]) != {6.0}
 
 
 def test_final_install_fails_closed_on_partial_replacement(

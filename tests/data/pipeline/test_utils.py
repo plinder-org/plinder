@@ -61,6 +61,9 @@ def test_entry_exists(expect, tmp_path):
                 "chain_instance": ["1.A"],
                 "chain_asym_id": ["A"],
                 "chain_role": ["receptor"],
+                "chain_num_contacting_ions": [0],
+                "chain_num_contacting_artifacts": [0],
+                "chain_num_contacting_other_ligands": [0],
             }
         ).to_parquet(chain_path.parent / "entry_biounit_chains.parquet", index=False)
         pd.DataFrame({"entry_pdb_id": ["aaaa"]}).to_parquet(
@@ -234,6 +237,9 @@ def test_create_index_collates_per_entry_parquets(tmp_path, monkeypatch):
                 "chain_instance": ["1.A"],
                 "chain_asym_id": ["A"],
                 "chain_role": ["receptor"],
+                "chain_num_contacting_ions": [0],
+                "chain_num_contacting_artifacts": [0],
+                "chain_num_contacting_other_ligands": [0],
             }
         ).to_parquet(chain_path.parent / "entry_biounit_chains.parquet", index=False)
     monkeypatch.setattr(utils, "add_aggregated_columns", lambda index: index)
@@ -393,9 +399,7 @@ def test_finalize_index_adds_local_clusters(tmp_path):
     directed_labels = finalized["pli_qcov__100__ligand__directed_set_cover"]
     assert directed_labels.iloc[0] == "d0"
     assert pd.isna(directed_labels.iloc[1])
-    centroid_flags = finalized[
-        "pli_qcov__100__ligand__directed_set_cover__is_centroid"
-    ]
+    centroid_flags = finalized["pli_qcov__100__ligand__directed_set_cover__is_centroid"]
     assert bool(centroid_flags.iloc[0])
     assert pd.isna(centroid_flags.iloc[1])
     coverage_counts = finalized[
@@ -413,6 +417,8 @@ def test_finalize_index_adds_local_clusters(tmp_path):
     assert pd.isna(finalized.loc[1, "ligand_smiles_id"])
     assert finalized["ligand_is_3d_score_able"].tolist() == [True, False]
     assert finalized["uniqueness"].nunique() == 2
+
+
 def test_cluster_index_requires_matching_directed_cover_matrix(tmp_path):
     cluster_file = (
         tmp_path
@@ -507,9 +513,9 @@ def test_cluster_index_reads_legacy_cover_during_centrality_migration(tmp_path):
     )
     cluster_file.parent.mkdir(parents=True)
     cover_file.parent.mkdir(parents=True)
-    pd.DataFrame(
-        {"ligand_id": ["l1", "l2"], "label": ["r0", "r0"]}
-    ).to_parquet(cluster_file, index=False)
+    pd.DataFrame({"ligand_id": ["l1", "l2"], "label": ["r0", "r0"]}).to_parquet(
+        cluster_file, index=False
+    )
     pd.DataFrame(
         {
             "ligand_id": ["l1", "l2"],

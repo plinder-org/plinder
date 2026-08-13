@@ -30,14 +30,6 @@ SCORE_COLUMNS = (
     "similarity",
 )
 ANNOTATION_COLUMNS = ("system_id", "ligand_id", "ligand_is_proper")
-ANNOTATION_CONTACT_COLUMNS = (
-    "entry_pdb_id",
-    "system_biounit_id",
-    "ligand_id",
-    "ligand_is_ion",
-    "ligand_is_artifact",
-    "ligand_neighboring_residues",
-)
 HOLO_CHAIN_ANNOTATION_COLUMNS = (
     "entry_pdb_id",
     "ligand_is_proper",
@@ -57,6 +49,9 @@ BIOUNIT_CHAIN_COLUMNS = (
     "chain_instance",
     "chain_asym_id",
     "chain_role",
+    "chain_num_contacting_ions",
+    "chain_num_contacting_artifacts",
+    "chain_num_contacting_other_ligands",
 )
 ENTRY_METADATA_COLUMNS = ("entry_pdb_id", "entry_resolution")
 APO_CANDIDATE_COLUMNS = (
@@ -172,135 +167,6 @@ def _as_required_strings(frame: pd.DataFrame, columns: list[str], name: str) -> 
             raise ValueError(f"{name} has empty {column} values")
 
 
-def _ligand_contact_counts(annotation: pd.DataFrame) -> pd.DataFrame:
-    """Count annotated ligand contacts for each receptor chain instance."""
-    contacts = annotation.explode("ligand_neighboring_residues", ignore_index=True)
-    encoded = contacts["ligand_neighboring_residues"].astype("string")
-    contacts = contacts.loc[encoded.notna() & encoded.str.strip().ne("")].copy()
-    if contacts.empty:
-        return pd.DataFrame(
-            columns=[
-                "entry_pdb_id",
-                "biounit_id",
-                "chain_instance",
-                "source_num_contacting_ions",
-                "source_num_contacting_artifacts",
-                "source_num_contacting_other_ligands",
-            ]
-        )
-    _as_required_strings(
-        contacts,
-        ["entry_pdb_id", "system_biounit_id", "ligand_id"],
-        "annotation table ligand contacts",
-    )
-    encoded = contacts["ligand_neighboring_residues"].astype("string")
-    fields = encoded.str.rsplit("_", n=3, expand=True)
-    if fields.shape[1] != 4:
-        raise ValueError("annotation has malformed neighboring residues")
-    malformed = fields[0].isna() | fields[0].str.strip().eq("")
-    if malformed.any():
-        examples = encoded.loc[malformed].head(10).tolist()
-        raise ValueError(f"annotation has malformed neighboring residues: {examples}")
-    contacts["chain_instance"] = fields[0].astype("string")
-    artifact = contacts["ligand_is_artifact"].fillna(False).astype(bool)
-    ion = contacts["ligand_is_ion"].fillna(False).astype(bool)
-    contacts["contact_type"] = np.select(
-        [artifact, ion],
-        ["artifacts", "ions"],
-        default="other_ligands",
-    )
-    counts = (
-        contacts.drop_duplicates(
-            [
-                "entry_pdb_id",
-                "system_biounit_id",
-                "chain_instance",
-                "ligand_id",
-                "contact_type",
-            ]
-        )
-        .groupby(
-            [
-                "entry_pdb_id",
-                "system_biounit_id",
-                "chain_instance",
-                "contact_type",
-            ],
-            observed=True,
-        )["ligand_id"]
-        .nunique()
-        .unstack(fill_value=0)
-        .reset_index()
-        .rename(columns={"system_biounit_id": "biounit_id"})
-    )
-    for contact_type in ["ions", "artifacts", "other_ligands"]:
-        source_column = f"source_num_contacting_{contact_type}"
-        counts[source_column] = (
-            counts.pop(contact_type) if contact_type in counts else 0
-        )
-    return counts
-
-
-def _read_ligand_contact_counts(annotation: TableInput) -> pd.DataFrame:
-    """Read chain-local ligand counts without loading the release annotation."""
-    if isinstance(annotation, pd.DataFrame):
-        return _ligand_contact_counts(
-            _read_columns(
-                annotation,
-                ANNOTATION_CONTACT_COLUMNS,
-                "annotation table",
-            )
-        )
-    _check_parquet_columns(
-        annotation,
-        ANNOTATION_CONTACT_COLUMNS,
-        "annotation table",
-    )
-    import duckdb
-
-    connection = duckdb.connect()
-    try:
-        return connection.sql(
-            f"""
-            SELECT
-                CAST(entry_pdb_id AS VARCHAR) AS entry_pdb_id,
-                CAST(system_biounit_id AS VARCHAR) AS biounit_id,
-                regexp_extract(
-                    CAST(encoded_residue AS VARCHAR),
-                    '^(.*)_[^_]+_[^_]+_[^_]+$',
-                    1
-                ) AS chain_instance,
-                COUNT(DISTINCT CAST(ligand_id AS VARCHAR)) FILTER (
-                    WHERE NOT COALESCE(
-                        TRY_CAST(ligand_is_artifact AS BOOLEAN), FALSE
-                    ) AND COALESCE(TRY_CAST(ligand_is_ion AS BOOLEAN), FALSE)
-                ) AS source_num_contacting_ions,
-                COUNT(DISTINCT CAST(ligand_id AS VARCHAR)) FILTER (
-                    WHERE COALESCE(
-                        TRY_CAST(ligand_is_artifact AS BOOLEAN), FALSE
-                    )
-                ) AS source_num_contacting_artifacts,
-                COUNT(DISTINCT CAST(ligand_id AS VARCHAR)) FILTER (
-                    WHERE NOT COALESCE(
-                        TRY_CAST(ligand_is_artifact AS BOOLEAN), FALSE
-                    ) AND NOT COALESCE(
-                        TRY_CAST(ligand_is_ion AS BOOLEAN), FALSE
-                    )
-                ) AS source_num_contacting_other_ligands
-            FROM read_parquet(
-                '{_sql_parquet_source(annotation)}'
-            ) AS annotation,
-            UNNEST(annotation.ligand_neighboring_residues)
-                AS neighboring(encoded_residue)
-            WHERE encoded_residue IS NOT NULL
-                AND CAST(encoded_residue AS VARCHAR) != ''
-            GROUP BY entry_pdb_id, system_biounit_id, chain_instance
-            """
-        ).df()
-    finally:
-        connection.close()
-
-
 def ligand_holo_chain_keys(annotation: TableInput) -> pd.DataFrame:
     """Return receptor-chain keys bound to proper ligands."""
     frame = _read_columns(
@@ -353,13 +219,6 @@ def build_apo_candidate_manifest(
         "entry metadata table",
     )
     holo_keys = ligand_holo_chain_keys(annotation)
-    ligand_contacts = _read_ligand_contact_counts(annotation)
-    if not ligand_contacts.empty:
-        _as_required_strings(
-            ligand_contacts,
-            ["entry_pdb_id", "biounit_id", "chain_instance"],
-            "annotation table ligand contacts",
-        )
     _as_required_strings(
         chains,
         [
@@ -420,6 +279,19 @@ def build_apo_candidate_manifest(
         ],
         "biological-assembly membership table",
     )
+    membership_key = ["entry_pdb_id", "biounit_id", "chain_instance"]
+    duplicate_membership = membership.duplicated(membership_key, keep=False)
+    if duplicate_membership.any():
+        examples = (
+            membership.loc[duplicate_membership, membership_key]
+            .drop_duplicates()
+            .head(10)
+            .to_dict("records")
+        )
+        raise ValueError(
+            "biological-assembly membership has duplicate chain instances: "
+            f"{examples}"
+        )
     receptor_membership = (
         membership.loc[
             membership["chain_role"].str.lower().eq("receptor"),
@@ -428,10 +300,21 @@ def build_apo_candidate_manifest(
                 "biounit_id",
                 "chain_asym_id",
                 "chain_instance",
+                "chain_num_contacting_ions",
+                "chain_num_contacting_artifacts",
+                "chain_num_contacting_other_ligands",
             ],
         ]
         .sort_values("chain_instance")
-        .drop_duplicates(["entry_pdb_id", "biounit_id", "chain_asym_id"])
+        .rename(
+            columns={
+                "chain_num_contacting_ions": "source_num_contacting_ions",
+                "chain_num_contacting_artifacts": ("source_num_contacting_artifacts"),
+                "chain_num_contacting_other_ligands": (
+                    "source_num_contacting_other_ligands"
+                ),
+            }
+        )
     )
     candidates = candidates.merge(
         receptor_membership,
@@ -439,21 +322,13 @@ def build_apo_candidate_manifest(
         how="inner",
         validate="one_to_many",
     )
-    candidates = candidates.merge(
-        ligand_contacts,
-        on=["entry_pdb_id", "biounit_id", "chain_instance"],
-        how="left",
-        validate="many_to_one",
-    )
     contact_columns = [
         "source_num_contacting_ions",
         "source_num_contacting_artifacts",
         "source_num_contacting_other_ligands",
     ]
     for column in contact_columns:
-        candidates[column] = pd.to_numeric(candidates[column], errors="coerce").fillna(
-            0
-        )
+        candidates[column] = pd.to_numeric(candidates[column], errors="coerce")
         invalid = ~(
             np.isfinite(candidates[column])
             & candidates[column].ge(0)
@@ -869,14 +744,6 @@ def _write_linked_apo_structure_table_from_parquet(
     output_path.parent.mkdir(exist_ok=True, parents=True)
     temporary = output_path.with_suffix(output_path.suffix + ".tmp")
     temporary.unlink(missing_ok=True)
-    if _parquet_dataset(candidates).count_rows() == 0:
-        pq.write_table(
-            pa.Table.from_pylist([], schema=STRUCTURE_LINK_SCHEMA),
-            temporary,
-            compression="zstd",
-        )
-        temporary.replace(output_path)
-        return output_path
     metrics_sql = ", ".join(f"'{metric}'" for metric in REQUIRED_SCORE_METRICS)
 
     connection = duckdb.connect()
@@ -885,6 +752,33 @@ def _write_linked_apo_structure_table_from_parquet(
         connection.sql(f"SET temp_directory='{_sql_path(scratch)}'")
         connection.sql(f"SET memory_limit='{memory_limit}'")
         connection.sql("SET preserve_insertion_order=false")
+        duplicate_scores = connection.sql(
+            f"""
+            SELECT
+                CAST(query_system AS VARCHAR) AS query_system,
+                CAST(query_ligand_id AS VARCHAR) AS query_ligand_id,
+                CAST(target_system AS VARCHAR) AS target_system,
+                CAST(metric AS VARCHAR) AS metric
+            FROM read_parquet('{_sql_parquet_source(protein_scores)}')
+            WHERE metric IN ({metrics_sql})
+            GROUP BY query_system, query_ligand_id, target_system, metric
+            HAVING COUNT(*) > 1
+            LIMIT 10
+            """
+        ).df()
+        if not duplicate_scores.empty:
+            raise ValueError(
+                "protein score table has duplicate required metrics: "
+                f"{duplicate_scores.to_dict('records')}"
+            )
+        if _parquet_dataset(candidates).count_rows() == 0:
+            pq.write_table(
+                pa.Table.from_pylist([], schema=STRUCTURE_LINK_SCHEMA),
+                temporary,
+                compression="zstd",
+            )
+            temporary.replace(output_path)
+            return output_path
         connection.sql(
             f"""
             COPY (

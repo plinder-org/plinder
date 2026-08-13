@@ -867,6 +867,13 @@ class Entry(DocBaseModel):
         default_factory=dict,
         description="[EXCLUDE] Canonical-to-historical chain instance IDs by assembly ID",
     )
+    biounit_ligand_contact_counts: dict[str, dict[str, dict[str, int]]] = Field(
+        default_factory=dict,
+        description=(
+            "[EXCLUDE] Counts of ion, artifact, and other ligand chains near "
+            "each biological-assembly receptor chain instance"
+        ),
+    )
     symmetry_mate_contacts: SymmetryMateContacts = Field(
         default_factory=dict,
         description="[EXCLUDE] Symmetry mate contacts in the entry",
@@ -1300,6 +1307,62 @@ class Entry(DocBaseModel):
                 retained.update(component_chains & deferred_instance_chains)
         return retained
 
+    def _record_biounit_ligand_contact_counts(
+        self,
+        biounit: struc.AtomArray,
+        biounit_id: str,
+        spatial_index: BiounitSpatialIndex,
+        *,
+        monoatomic_ion_asym_ids: set[str],
+        known_artifact_asym_ids: set[str],
+        contact_threshold: float,
+    ) -> None:
+        """Count every ligand-like chain contacting each receptor instance."""
+        receptor_asym_ids = {
+            asym_id
+            for asym_id, chain in self.chains.items()
+            if asym_id not in self.ligand_like_chains
+            and (
+                _is_polypeptide(chain.chain_type_str)
+                or _is_polynucleotide(chain.chain_type_str)
+            )
+        }
+        counts: dict[str, Counter[str]] = defaultdict(Counter)
+        for ligand_instance in spatial_index.chain_ids:
+            if "." not in ligand_instance:
+                continue
+            ligand_asym_id = ligand_instance.split(".", maxsplit=1)[1]
+            if ligand_asym_id not in self.ligand_like_chains:
+                continue
+            ligand_indices = spatial_index.atom_indices_for_chain(ligand_instance)
+            if ligand_indices.size == 0:
+                continue
+            nearby = spatial_index.atom_indices_near(
+                biounit.coord[ligand_indices], contact_threshold
+            )
+            receptor_instances = {
+                str(chain_instance)
+                for chain_instance in np.unique(biounit.chain_id[nearby])
+                if "." in str(chain_instance)
+                and str(chain_instance).split(".", maxsplit=1)[1] in receptor_asym_ids
+            }
+            if ligand_asym_id in monoatomic_ion_asym_ids:
+                contact_type = "ions"
+            elif ligand_asym_id in known_artifact_asym_ids:
+                contact_type = "artifacts"
+            else:
+                contact_type = "other_ligands"
+            for receptor_instance in receptor_instances:
+                counts[receptor_instance][contact_type] += 1
+        self.biounit_ligand_contact_counts[str(biounit_id)] = {
+            chain_instance: {
+                "ions": int(chain_counts["ions"]),
+                "artifacts": int(chain_counts["artifacts"]),
+                "other_ligands": int(chain_counts["other_ligands"]),
+            }
+            for chain_instance, chain_counts in counts.items()
+        }
+
     @classmethod
     def from_cif_file(
         cls,
@@ -1540,6 +1603,16 @@ class Entry(DocBaseModel):
                 if max_spatial_radius is not None
                 else None
             )
+            if include_ligands:
+                assert spatial_index is not None
+                entry._record_biounit_ligand_contact_counts(
+                    biounit,
+                    str(assembly_id),
+                    spatial_index,
+                    monoatomic_ion_asym_ids=monoatomic_ion_asym_ids,
+                    known_artifact_asym_ids=known_artifact_asym_ids,
+                    contact_threshold=neighboring_residue_threshold,
+                )
             if include_interfaces:
                 entry.interfaces.extend(
                     detect_protein_interfaces(
@@ -1975,6 +2048,29 @@ class Entry(DocBaseModel):
         )
         entry._populate_chains(atoms, cif_data)
         entry.ligand_like_chains = detect_ligand_chains(entry, min_polymer_size)
+        monoatomic_ion_mask = struc.filter_monoatomic_ions(atoms)
+        ion_only_chains = set(
+            str(chain) for chain in atoms.chain_id[monoatomic_ion_mask]
+        )
+        ion_only_chains.difference_update(
+            str(chain) for chain in atoms.chain_id[~monoatomic_ion_mask]
+        )
+        monoatomic_ion_asym_ids = set(entry.ligand_like_chains) & ion_only_chains
+        known_artifact_asym_ids: set[str] = set()
+        if data_dir is not None:
+            artifact_codes = get_artifact_codes(data_dir)
+            known_artifact_asym_ids = {
+                asym_id
+                for asym_id in entry.ligand_like_chains
+                if asym_id not in monoatomic_ion_asym_ids
+                and is_known_artifact_ligand(
+                    (
+                        residue.name
+                        for residue in entry.chains[asym_id].residues.values()
+                    ),
+                    artifact_codes,
+                )
+            }
         # Create one assembly without applying crystallographic transforms.
         biounit = atoms.copy()
         biounit.chain_id = np.array([f"1.{c}" for c in biounit.chain_id])
@@ -2000,6 +2096,16 @@ class Entry(DocBaseModel):
             if spatial_radii
             else None
         )
+        if include_ligands:
+            assert spatial_index is not None
+            entry._record_biounit_ligand_contact_counts(
+                biounit,
+                "1",
+                spatial_index,
+                monoatomic_ion_asym_ids=monoatomic_ion_asym_ids,
+                known_artifact_asym_ids=known_artifact_asym_ids,
+                contact_threshold=neighboring_residue_threshold,
+            )
         if include_interfaces:
             entry.interfaces.extend(
                 detect_protein_interfaces(
@@ -2395,11 +2501,15 @@ class Entry(DocBaseModel):
             "chain_instance",
             "chain_asym_id",
             "chain_role",
+            "chain_num_contacting_ions",
+            "chain_num_contacting_artifacts",
+            "chain_num_contacting_other_ligands",
         ]
         rows = []
         water_chains = set(self.water_chains)
         ligand_chains = set(self.ligand_like_chains)
         for biounit_id, chain_instances in sorted(self.biounit_chain_ids.items()):
+            contact_counts = self.biounit_ligand_contact_counts.get(str(biounit_id), {})
             for chain_instance in sorted(set(chain_instances)):
                 asym_id = chain_instance.split(".", maxsplit=1)[-1]
                 if asym_id in water_chains:
@@ -2408,6 +2518,7 @@ class Entry(DocBaseModel):
                     role = "ligand"
                 else:
                     role = "receptor"
+                chain_counts = contact_counts.get(chain_instance, {})
                 rows.append(
                     {
                         "entry_pdb_id": self.pdb_id,
@@ -2415,6 +2526,13 @@ class Entry(DocBaseModel):
                         "chain_instance": chain_instance,
                         "chain_asym_id": asym_id,
                         "chain_role": role,
+                        "chain_num_contacting_ions": int(chain_counts.get("ions", 0)),
+                        "chain_num_contacting_artifacts": int(
+                            chain_counts.get("artifacts", 0)
+                        ),
+                        "chain_num_contacting_other_ligands": int(
+                            chain_counts.get("other_ligands", 0)
+                        ),
                     }
                 )
         return pd.DataFrame(rows, columns=columns)

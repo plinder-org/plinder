@@ -32,7 +32,7 @@ from plinder.data.annotations.ligand_utils import (
     sort_ccd_codes,
 )
 from plinder.data.annotations.mmpdb_utils import add_mmp_clusters_to_data
-from plinder.data.annotations.protein_utils import get_receptor_type
+from plinder.data.annotations.protein_utils import Chain, get_receptor_type
 from plinder.data.annotations.save_utils import (
     SystemReconstructionOptions,
     SystemReconstructionOutputs,
@@ -972,6 +972,51 @@ def test_entry_drops_systems_without_a_proper_ligand() -> None:
     retained = next(iter(entry.systems.values()))
     assert retained.system_type == "holo"
     assert {item.ccd_code for item in retained.ligands} == {"LIG", "NA"}
+
+
+def test_biounit_membership_counts_standalone_ligand_contacts() -> None:
+    atoms = struc.AtomArray(3)
+    atoms.coord = np.array([[0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [3.0, 0.0, 0.0]])
+    atoms.chain_id = np.array(["1.A", "1.I", "1.G"])
+    atoms.res_id = np.array([1, 1, 1])
+    atoms.res_name = np.array(["ALA", "ZN", "GOL"])
+    atoms.atom_name = np.array(["CA", "ZN", "C1"])
+    atoms.element = np.array(["C", "ZN", "C"])
+    chains = {
+        asym_id: Chain(
+            asym_id=asym_id,
+            auth_id=asym_id,
+            entity_id=asym_id,
+            chain_type_str=chain_type,
+            residues={},
+            length=1,
+            num_unresolved_residues=0,
+        )
+        for asym_id, chain_type in {
+            "A": "polypeptide(L)",
+            "I": "non-polymer",
+            "G": "non-polymer",
+        }.items()
+    }
+    entry = Entry(
+        pdb_id="1abc",
+        chains=chains,
+        ligand_like_chains={"I": "non-polymer", "G": "non-polymer"},
+        biounit_chain_ids={"1": ["1.A", "1.I", "1.G"]},
+    )
+    entry._record_biounit_ligand_contact_counts(
+        atoms,
+        "1",
+        BiounitSpatialIndex.from_atoms(atoms, 6.0),
+        monoatomic_ion_asym_ids={"I"},
+        known_artifact_asym_ids={"G"},
+        contact_threshold=6.0,
+    )
+
+    membership = entry.biounit_chains_to_df().set_index("chain_instance")
+    assert membership.loc["1.A", "chain_num_contacting_ions"] == 1
+    assert membership.loc["1.A", "chain_num_contacting_artifacts"] == 1
+    assert membership.loc["1.A", "chain_num_contacting_other_ligands"] == 0
 
 
 def test_entry_never_groups_ligands_across_biological_assemblies() -> None:

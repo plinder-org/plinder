@@ -977,6 +977,9 @@ def test_make_linked_apo_structures_publishes_compact_index(tmp_path):
             "chain_instance": ["1.A", "1.I", "1.A"],
             "chain_asym_id": ["A", "I", "A"],
             "chain_role": ["receptor", "ligand", "receptor"],
+            "chain_num_contacting_ions": [0, 0, 0],
+            "chain_num_contacting_artifacts": [0, 0, 0],
+            "chain_num_contacting_other_ligands": [1, 0, 0],
         }
     ).to_parquet(index / "entry_biounit_chains.parquet", index=False)
     pd.DataFrame({"entry_pdb_id": ["2def"], "entry_resolution": [1.8]}).to_parquet(

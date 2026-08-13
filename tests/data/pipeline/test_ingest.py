@@ -54,6 +54,9 @@ def _write_fake_sidecars(
             "chain_instance": ["1.A"],
             "chain_asym_id": ["A"],
             "chain_role": ["receptor"],
+            "chain_num_contacting_ions": [0],
+            "chain_num_contacting_artifacts": [0],
+            "chain_num_contacting_other_ligands": [0],
         }
     ).to_parquet(entry_dir / "entry_biounit_chains.parquet", index=False)
     pd.DataFrame({"entry_pdb_id": [pdb_id]}).to_parquet(
