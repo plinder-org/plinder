@@ -7,6 +7,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 from plinder.core import PlinderRelease, query_table
+from plinder.core.index.query import DISABLED_ANNOTATION_COLUMNS
 
 
 def _write_table(
@@ -34,6 +35,9 @@ def local_release(tmp_path: Path) -> PlinderRelease:
             ],
             "entry_pdb_id": ["1abc", "2def", "3ghi"],
             "entry_resolution": [99.0, 99.0, 99.0],
+            "entry_release_date": ["1900-01-01"] * 3,
+            "system_has_binding_affinity": [False, True, False],
+            "ligand_binding_affinity": [None, "Kd=10nM", None],
         },
     )
     _write_table(
@@ -49,8 +53,9 @@ def local_release(tmp_path: Path) -> PlinderRelease:
         release,
         "ligand_pocket_membership",
         {
-            "ligand_id": ["1abc__1__1.L", "2def__1__1.M", "3ghi__1__1.N"],
-            "pocket_cluster": ["cluster_a", "cluster_b", "cluster_a"],
+            "ligand_id": ["1abc__1__1.L", "2def__1__1.M"],
+            "system_id": ["1abc__1__1.A__1.L", "2def__1__1.B__1.M"],
+            "pocket_cluster": ["cluster_a", "cluster_b"],
         },
     )
     _write_table(
@@ -98,7 +103,7 @@ def test_query_table_filters_joined_fields_without_changing_ligand_grain(
     ]
 
 
-def test_joined_sidecar_replaces_a_retired_repeated_column(
+def test_joined_sidecar_overrides_with_non_null_values(
     local_release: PlinderRelease,
 ) -> None:
     result = query_table(
@@ -109,7 +114,74 @@ def test_joined_sidecar_replaces_a_retired_repeated_column(
     )
 
     assert result["entry_resolution"].tolist()[:2] == [1.5, 2.5]
-    assert pd.isna(result["entry_resolution"].iloc[2])
+    assert result["entry_resolution"].iloc[2] == 99.0
+
+
+def test_sparse_sidecar_does_not_erase_base_identifiers(
+    local_release: PlinderRelease,
+) -> None:
+    result = query_table(
+        "annotation",
+        columns=["ligand_id", "system_id", "pocket_cluster"],
+        joins=["ligand_pocket_membership"],
+        filters=[("system_id", "==", "3ghi__1__1.C__1.N")],
+        release=local_release,
+    )
+
+    assert result.to_dict("records") == [
+        {
+            "ligand_id": "3ghi__1__1.N",
+            "system_id": "3ghi__1__1.C__1.N",
+            "pocket_cluster": None,
+        }
+    ]
+
+
+def test_annotation_release_dates_come_from_entry_metadata(
+    local_release: PlinderRelease,
+) -> None:
+    result = query_table(
+        "annotation",
+        columns=["ligand_id", "entry_release_date"],
+        filters=[("entry_release_date", ">=", "2022-01-01")],
+        release=local_release,
+    )
+
+    assert result.to_dict("records") == [
+        {
+            "ligand_id": "3ghi__1__1.N",
+            "entry_release_date": "2022-01-01",
+        }
+    ]
+
+
+def test_annotation_binding_affinity_columns_are_disabled(
+    local_release: PlinderRelease,
+) -> None:
+    default = query_table("annotation", release=local_release)
+    assert DISABLED_ANNOTATION_COLUMNS.isdisjoint(default.columns)
+
+    with pytest.raises(ValueError, match="binding_affinity columns are disabled"):
+        query_table(
+            "annotation",
+            columns=["ligand_binding_affinity"],
+            release=local_release,
+        )
+
+    joined = query_table(
+        "ligand_pocket_membership",
+        joins=["annotation"],
+        release=local_release,
+    )
+    assert DISABLED_ANNOTATION_COLUMNS.isdisjoint(joined.columns)
+
+    with pytest.raises(ValueError, match="binding_affinity columns are disabled"):
+        query_table(
+            "ligand_pocket_membership",
+            columns=["ligand_binding_affinity"],
+            joins=["annotation"],
+            release=local_release,
+        )
 
 
 def test_query_table_uses_bound_filter_parameters(

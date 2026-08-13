@@ -18,6 +18,10 @@ Filter: TypeAlias = tuple[str, str, Any]
 Filters: TypeAlias = list[Filter | list[Filter]] | None
 JoinKeys: TypeAlias = tuple[tuple[str, str], ...]
 
+DISABLED_ANNOTATION_COLUMNS = frozenset(
+    {"system_has_binding_affinity", "ligand_binding_affinity"}
+)
+
 # Every relationship points from a base table to a table whose join columns are
 # unique.  These joins therefore preserve the base table's documented row grain.
 TABLE_JOINS: dict[str, dict[str, JoinKeys]] = {
@@ -97,7 +101,7 @@ def _schema_names(path: Path) -> list[str]:
 def _condition_sql(
     condition: Filter,
     *,
-    columns: dict[str, tuple[str, str]],
+    columns: dict[str, str],
     parameters: list[Any],
 ) -> str:
     if len(condition) != 3:
@@ -110,8 +114,7 @@ def _condition_sql(
             f"filter column {column!r} is unavailable; choose from: "
             f"{', '.join(columns)}"
         )
-    alias, source_column = columns[column]
-    field = f"{_quote_identifier(alias)}.{_quote_identifier(source_column)}"
+    field = columns[column]
     operator = operator.casefold().strip()
     operator = {"==": "=", "not in": "not in"}.get(operator, operator)
     if value is None:
@@ -142,7 +145,7 @@ def _condition_sql(
 def _filters_sql(
     filters: Filters,
     *,
-    columns: dict[str, tuple[str, str]],
+    columns: dict[str, str],
 ) -> tuple[str, list[Any]]:
     parameters: list[Any] = []
     clauses: list[str] = []
@@ -166,6 +169,20 @@ def _filters_sql(
     return f"\nWHERE {' AND '.join(clauses)}", parameters
 
 
+def _filter_columns(filters: Filters) -> set[str]:
+    """Return every column referenced by a filter expression."""
+    return {
+        condition[0]
+        for item in filters or []
+        for condition in (item if isinstance(item, list) else [item])
+        if len(condition) == 3
+    }
+
+
+def _column_sql(alias: str, column: str) -> str:
+    return f"{_quote_identifier(alias)}.{_quote_identifier(column)}"
+
+
 def query_table(
     table_name: str = "annotation",
     *,
@@ -177,8 +194,9 @@ def query_table(
     """Query one release table with optional grain-preserving sidecar joins.
 
     Joined tables must be listed explicitly.  Their registered join columns are
-    unique, so joining never creates extra base rows.  If a sidecar repeats a
-    non-key column from the base table, the sidecar value is returned.
+    unique, so joining never creates extra base rows. If a sidecar repeats a
+    non-key column from the base table, its non-null values take precedence and
+    unmatched base values are retained.
 
     Parameters
     ----------
@@ -207,7 +225,33 @@ def query_table(
             f"grain-preserving joins: {choices}"
         )
 
-    table_names = [table_name, *selected_joins]
+    requested_filter_columns = _filter_columns(filters)
+    requested_columns = set(columns or [])
+    requested_columns.discard("*")
+    disabled_requested = DISABLED_ANNOTATION_COLUMNS.intersection(
+        requested_columns | requested_filter_columns
+    )
+    annotation_is_available = (
+        table_name == "annotation" or "annotation" in selected_joins
+    )
+    if annotation_is_available and disabled_requested:
+        raise ValueError(
+            "binding_affinity columns are disabled in the current dataset: "
+            f"{sorted(disabled_requested)}"
+        )
+
+    hidden_joins: list[str] = []
+    needs_release_date = table_name == "annotation" and (
+        columns is None
+        or columns == ["*"]
+        or "entry_release_date" in requested_columns
+        or "entry_release_date" in requested_filter_columns
+    )
+    if needs_release_date and "entry_metadata" not in selected_joins:
+        hidden_joins.append("entry_metadata")
+    effective_joins = [*selected_joins, *hidden_joins]
+
+    table_names = [table_name, *effective_joins]
     aliases = {name: f"t{index}" for index, name in enumerate(table_names)}
     paths = {
         name: release.fetch(str(RELEASE_TABLES[name]["artifact"]))
@@ -215,11 +259,18 @@ def query_table(
     }
     schemas = {name: _schema_names(path) for name, path in paths.items()}
 
-    output_order = list(schemas[table_name])
-    output_columns = {name: (aliases[table_name], name) for name in schemas[table_name]}
+    output_order = [
+        name
+        for name in schemas[table_name]
+        if table_name != "annotation" or name not in DISABLED_ANNOTATION_COLUMNS
+    ]
+    output_columns = {
+        name: _column_sql(aliases[table_name], name)
+        for name in schemas[table_name]
+    }
     joined_column_owner: dict[str, str] = {}
     join_sql: list[str] = []
-    for join_name in selected_joins:
+    for join_name in effective_joins:
         keys = allowed_joins[join_name]
         base_missing = [
             column for column, _ in keys if column not in schemas[table_name]
@@ -233,7 +284,18 @@ def query_table(
                 f"missing base columns {base_missing}, sidecar columns {join_missing}"
             )
         side_key_columns = {side_column for _, side_column in keys}
-        for name in schemas[join_name]:
+        visible_columns = list(
+            schemas[join_name]
+            if join_name in selected_joins
+            else ["entry_release_date"]
+        )
+        if join_name == "annotation":
+            visible_columns = [
+                name
+                for name in visible_columns
+                if name not in DISABLED_ANNOTATION_COLUMNS
+            ]
+        for name in visible_columns:
             if name in side_key_columns:
                 continue
             if name in joined_column_owner:
@@ -245,7 +307,12 @@ def query_table(
             joined_column_owner[name] = join_name
             if name not in output_columns:
                 output_order.append(name)
-            output_columns[name] = (aliases[join_name], name)
+                output_columns[name] = _column_sql(aliases[join_name], name)
+            else:
+                output_columns[name] = (
+                    f"COALESCE({_column_sql(aliases[join_name], name)}, "
+                    f"{output_columns[name]})"
+                )
         conditions = " AND ".join(
             f"{_quote_identifier(aliases[table_name])}.{_quote_identifier(base)} = "
             f"{_quote_identifier(aliases[join_name])}.{_quote_identifier(side)}"
@@ -269,9 +336,7 @@ def query_table(
             f"{', '.join(output_order)}"
         )
     select_sql = ", ".join(
-        f"{_quote_identifier(output_columns[name][0])}."
-        f"{_quote_identifier(output_columns[name][1])} AS {_quote_identifier(name)}"
-        for name in requested
+        f"{output_columns[name]} AS {_quote_identifier(name)}" for name in requested
     )
     where_sql, parameters = _filters_sql(filters, columns=output_columns)
     query = (
