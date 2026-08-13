@@ -8,7 +8,14 @@ from pathlib import Path
 import numpy as np
 from numpy.typing import NDArray
 from rdkit import Chem
-from rdkit.Chem import AllChem, Mol, rdDepictor, rdMolDescriptors, rdRascalMCES
+from rdkit.Chem import (
+    AllChem,
+    Mol,
+    rdDepictor,
+    rdDistGeom,
+    rdMolDescriptors,
+    rdRascalMCES,
+)
 from rdkit.Chem.MolStandardize import rdMolStandardize
 
 from plinder.core.utils.log import setup_logger
@@ -32,22 +39,41 @@ def generate_input_conformer(
     minimize_maxIters: int = -1,
     skip_3d_confgen: bool = False,
 ) -> Chem.Mol:
+    # TODO(peppr): peppr_sanitize is the vendored local copy of peppr.sanitize
+    # (see plinder.core.utils.sanitize); revert to `from peppr import sanitize`
+    # once the over-valence fixes land in a released peppr.
+    from plinder.core.utils.sanitize import sanitize as peppr_sanitize
+
     _mol = copy.deepcopy(template_mol)
     # need to add Hs to generate sensible conformers
     _mol = Chem.AddHs(_mol)
+    # peppr_sanitize resolves valences, rings and hybridization — including
+    # over-valent centres (boron cages, metals) via dative bonds — so the
+    # embedder has the chemistry it needs. Paired with
+    # ``embedFragmentsSeparately=False`` below, this is the rdkit#8653 work-around
+    # that lets EmbedMolecule skip its internal strict-valence sanitize, which
+    # would otherwise reject those molecules with an AtomValenceException.
+    try:
+        peppr_sanitize(_mol)
+    except Exception as exc:  # embed anyway; RDKit may still cope
+        log.warning(f"generate_input_conformer: peppr_sanitize failed ({exc})")
+
+    def _embed(use_basic_knowledge: bool) -> int:
+        params = rdDistGeom.ETKDGv3()
+        params.useRandomCoords = True
+        params.useBasicKnowledge = use_basic_knowledge
+        params.randomSeed = 42
+        params.maxIterations = 100
+        # skip RDKit's internal (strict) sanitize during embedding; the
+        # chemistry it needs was supplied by peppr_sanitize above (rdkit#8653).
+        params.embedFragmentsSeparately = False
+        return rdDistGeom.EmbedMolecule(_mol, params)
 
     if skip_3d_confgen:
         confid = -1
     else:
-        # try embedding molecule using ETKDGv2 (default)
-        confid = AllChem.EmbedMolecule(
-            _mol,
-            # ps,
-            useRandomCoords=True,
-            useBasicKnowledge=True,
-            maxAttempts=100,
-            randomSeed=42,
-        )
+        # try embedding molecule using ETKDGv3
+        confid = _embed(use_basic_knowledge=True)
         if confid != -1:
             if minimize_maxIters > 0:
                 # molecule successfully embedded - minimize
@@ -71,13 +97,7 @@ def generate_input_conformer(
                 "generate_conformer: default EmbedMolecule - failed, trying using useBasicKnowledge=False"
             )
             # try less optimal approach
-            confid = AllChem.EmbedMolecule(
-                _mol,
-                useRandomCoords=True,
-                useBasicKnowledge=False,
-                maxAttempts=100,
-                randomSeed=42,
-            )
+            confid = _embed(use_basic_knowledge=False)
 
     if confid == -1:
         # if 3D confgen fails or skipped
