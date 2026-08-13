@@ -203,8 +203,9 @@ def test_pinder_7cm8_homodimer_interface_regression(test_dir: Path) -> None:
 
 
 def test_interface_only_annotation_preserves_ligand_assets(
-    test_dir: Path, tmp_path: Path
+    test_dir: Path, tmp_path: Path, mock_alternative_datasets
 ) -> None:
+    mock_alternative_datasets("7cm8")
     cif = test_dir / "interfaces/cm/pdb_00007cm8/" "pdb_00007cm8_xyz-enrich.cif.gz"
     annotation = GetPlinderAnnotation(cif, "", save_folder=tmp_path)
     first = annotation.annotate_interfaces()
@@ -212,19 +213,33 @@ def test_interface_only_annotation_preserves_ligand_assets(
     assert first.column("prodigy_label").to_pylist() == ["BIO"]
 
     entry_folder = tmp_path / "7cm8"
+    biounit_path = entry_folder / "entry_biounit_chains.parquet"
+    contact_columns = {
+        "chain_num_contacting_ions",
+        "chain_num_contacting_artifacts",
+        "chain_num_contacting_other_ligands",
+    }
+    assert contact_columns.isdisjoint(pd.read_parquet(biounit_path).columns)
     interface_path = entry_folder / "interfaces.parquet"
     interface_bytes = interface_path.read_bytes()
-    assert annotation.annotate(include_interfaces=False) is None
+    ligand_table = annotation.annotate(include_interfaces=False)
+    assert ligand_table is not None
+    assert not ligand_table.empty
     assert annotation.entry.interfaces == []
     assert interface_path.read_bytes() == interface_bytes
 
     ligand_annotation = tmp_path / "7cm8.parquet"
     ligand_annotation.write_bytes(b"preserved ligand annotation")
     ligand_sdf = entry_folder / "ligand_files/1.C.sdf"
-    ligand_sdf.parent.mkdir()
+    ligand_sdf.parent.mkdir(exist_ok=True)
     ligand_sdf.write_bytes(b"preserved canonical ligand")
     metadata_path = entry_folder / "entry_metadata.parquet"
     metadata_path.unlink()
+    ligand_biounits = pd.read_parquet(biounit_path)
+    assert contact_columns.issubset(ligand_biounits.columns)
+    ligand_biounits.drop(columns=list(contact_columns)).to_parquet(
+        biounit_path, index=False
+    )
     preserved = [
         ligand_annotation,
         ligand_sdf,
@@ -238,6 +253,7 @@ def test_interface_only_annotation_preserves_ligand_assets(
 
     assert second.equals(first)
     assert {path: path.read_bytes() for path in preserved} == before
+    assert contact_columns.isdisjoint(pd.read_parquet(biounit_path).columns)
     assert pd.read_parquet(metadata_path)["entry_pdb_id"].tolist() == ["7cm8"]
 
 

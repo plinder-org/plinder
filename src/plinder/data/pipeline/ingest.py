@@ -240,15 +240,13 @@ def _entry_outputs_complete(
             "chain_receptor_type",
             "chain_is_ligand_like",
         },
-        sidecars["entry_biounit_chains"]: {
+        sidecars["entry_biounit_chains"]: BIOUNIT_CONTACT_COLUMNS
+        | {
             "entry_pdb_id",
             "biounit_id",
             "chain_instance",
             "chain_asym_id",
             "chain_role",
-            "chain_num_contacting_ions",
-            "chain_num_contacting_artifacts",
-            "chain_num_contacting_other_ligands",
         },
         sidecars["entry_metadata"]: {"entry_pdb_id"},
         sidecars["interfaces"]: set(INTERFACE_ANNOTATION_SCHEMA.names),
@@ -269,6 +267,23 @@ def _entry_outputs_complete(
             for path, columns in required_columns.items()
         )
     except Exception:
+        return False
+
+
+BIOUNIT_CONTACT_COLUMNS = {
+    "chain_num_contacting_ions",
+    "chain_num_contacting_artifacts",
+    "chain_num_contacting_other_ligands",
+}
+
+
+def _biounit_contacts_are_recorded(entry_directory: Path) -> bool:
+    path = entry_directory / "entry_biounit_chains.parquet"
+    if not path.is_file():
+        return False
+    try:
+        return BIOUNIT_CONTACT_COLUMNS.issubset(pq.read_schema(path).names)
+    except (OSError, TypeError, ValueError):
         return False
 
 
@@ -307,7 +322,12 @@ def completed_entry_metrics(
         ):
             continue
         if metrics.get("status") == "skipped_no_ligands":
-            if expected_ingest_mode == "ligands":
+            entry_directory = metrics.get("outputs", {}).get("entry_directory")
+            if (
+                expected_ingest_mode == "ligands"
+                and entry_directory
+                and _biounit_contacts_are_recorded(Path(entry_directory))
+            ):
                 return metrics_path
             continue
         if metrics.get("status") == "skipped_no_systems":

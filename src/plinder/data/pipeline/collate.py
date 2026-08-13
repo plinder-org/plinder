@@ -29,7 +29,7 @@ from plinder.data.pipeline.ingest import (
     completed_interface_metrics,
 )
 
-COLLATION_VERSION = 2
+COLLATION_VERSION = 3
 STAGING_RELATIVE = Path("index/.staging/v3_collation")
 MANIFEST_NAME = "entries.parquet"
 PLAN_NAME = "plan.json"
@@ -963,6 +963,7 @@ def _completed_shard(
     outputs = [paths[name] for name in output_names]
     if (
         metrics.get("status") == "complete"
+        and metrics.get("version") == COLLATION_VERSION
         and metrics.get("signature") == signature
         and bool(metrics.get("include_ligand_annotations", True))
         == include_ligand_annotations
@@ -1291,6 +1292,23 @@ def _validate_final_tables(
         if any(invalid_chain_metadata.values()):
             raise ValueError(
                 "invalid entry-chain sequence metadata: " f"{invalid_chain_metadata}"
+            )
+        invalid_biounit_contacts = int(
+            _fetch_scalar(
+                connection,
+                "SELECT count(*) FROM entry_biounit_chains WHERE "
+                "chain_num_contacting_ions IS NULL OR "
+                "chain_num_contacting_artifacts IS NULL OR "
+                "chain_num_contacting_other_ligands IS NULL OR "
+                "chain_num_contacting_ions < 0 OR "
+                "chain_num_contacting_artifacts < 0 OR "
+                "chain_num_contacting_other_ligands < 0",
+            )
+        )
+        if invalid_biounit_contacts:
+            raise ValueError(
+                "invalid biological-assembly ligand contact counts: "
+                f"{invalid_biounit_contacts} rows"
             )
         invalid_interfaces = {
             "system_id": int(

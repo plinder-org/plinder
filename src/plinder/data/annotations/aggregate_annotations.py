@@ -2501,10 +2501,17 @@ class Entry(DocBaseModel):
             "chain_instance",
             "chain_asym_id",
             "chain_role",
+        ]
+        contact_columns = [
             "chain_num_contacting_ions",
             "chain_num_contacting_artifacts",
             "chain_num_contacting_other_ligands",
         ]
+        contacts_computed = bool(self.biounit_ligand_contact_counts) and set(
+            self.biounit_chain_ids
+        ).issubset(self.biounit_ligand_contact_counts)
+        if contacts_computed:
+            columns.extend(contact_columns)
         rows = []
         water_chains = set(self.water_chains)
         ligand_chains = set(self.ligand_like_chains)
@@ -2519,22 +2526,28 @@ class Entry(DocBaseModel):
                 else:
                     role = "receptor"
                 chain_counts = contact_counts.get(chain_instance, {})
-                rows.append(
-                    {
-                        "entry_pdb_id": self.pdb_id,
-                        "biounit_id": str(biounit_id),
-                        "chain_instance": chain_instance,
-                        "chain_asym_id": asym_id,
-                        "chain_role": role,
-                        "chain_num_contacting_ions": int(chain_counts.get("ions", 0)),
-                        "chain_num_contacting_artifacts": int(
-                            chain_counts.get("artifacts", 0)
-                        ),
-                        "chain_num_contacting_other_ligands": int(
-                            chain_counts.get("other_ligands", 0)
-                        ),
-                    }
-                )
+                row = {
+                    "entry_pdb_id": self.pdb_id,
+                    "biounit_id": str(biounit_id),
+                    "chain_instance": chain_instance,
+                    "chain_asym_id": asym_id,
+                    "chain_role": role,
+                }
+                if contacts_computed:
+                    row.update(
+                        {
+                            "chain_num_contacting_ions": int(
+                                chain_counts.get("ions", 0)
+                            ),
+                            "chain_num_contacting_artifacts": int(
+                                chain_counts.get("artifacts", 0)
+                            ),
+                            "chain_num_contacting_other_ligands": int(
+                                chain_counts.get("other_ligands", 0)
+                            ),
+                        }
+                    )
+                rows.append(row)
         return pd.DataFrame(rows, columns=columns)
 
     def to_df(self) -> pd.DataFrame:

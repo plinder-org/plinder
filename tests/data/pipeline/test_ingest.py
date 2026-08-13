@@ -1012,6 +1012,52 @@ def test_pre_interface_skip_is_not_considered_complete(tmp_path: Path) -> None:
     assert completed_entry_metrics(output_root, "1abc") is None
 
 
+def test_ligand_skip_requires_recorded_biounit_contacts(tmp_path: Path) -> None:
+    output_root = tmp_path / "output"
+    entry_directory = output_root / "raw_entries/ab/1abc"
+    entry_directory.mkdir(parents=True)
+    _write_fake_sidecars(entry_directory, "1abc")
+    biounit_path = entry_directory / "entry_biounit_chains.parquet"
+    contact_columns = [
+        "chain_num_contacting_ions",
+        "chain_num_contacting_artifacts",
+        "chain_num_contacting_other_ligands",
+    ]
+    pd.read_parquet(biounit_path).drop(columns=contact_columns).to_parquet(
+        biounit_path, index=False
+    )
+    metrics_path = output_root / "metrics/ab/ingest-one-1abc.json"
+    metrics_path.parent.mkdir(parents=True)
+    metrics_path.write_text(
+        json.dumps(
+            {
+                "status": "skipped_no_ligands",
+                "mode": "ligands",
+                "outputs": {"entry_directory": str(entry_directory)},
+            }
+        )
+    )
+
+    assert (
+        completed_entry_metrics(
+            output_root,
+            "1abc",
+            expected_ingest_mode="ligands",
+        )
+        is None
+    )
+
+    _write_fake_sidecars(entry_directory, "1abc")
+    assert (
+        completed_entry_metrics(
+            output_root,
+            "1abc",
+            expected_ingest_mode="ligands",
+        )
+        == metrics_path
+    )
+
+
 def test_discover_entries_tracks_optional_validation(tmp_path: Path) -> None:
     cif_root = tmp_path / "cif"
     validation_root = tmp_path / "validation"

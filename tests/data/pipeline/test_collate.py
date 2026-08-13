@@ -16,6 +16,7 @@ from plinder.data.annotations.interface_utils import (
 )
 from plinder.data.pipeline import collate as collate_module
 from plinder.data.pipeline.collate import (
+    COLLATION_VERSION,
     collate_shard,
     finalize_collation,
     finalize_collation_plan,
@@ -283,6 +284,47 @@ def test_plan_shards_and_finalize_real_v3_contract(tmp_path: Path) -> None:
     marker = json.loads((tmp_path / "index/collation.json").read_text())
     assert marker["status"] == "complete"
     assert marker["interface_min_residues"] == 7
+
+
+def test_collate_shard_does_not_reuse_older_format(tmp_path: Path) -> None:
+    _write_release(tmp_path)
+    plan_collation(tmp_path)
+    collate_shard(tmp_path, "ab", memory_limit="1GB")
+    paths = collate_module._shard_paths(tmp_path, "ab")
+    stale = pd.read_parquet(paths["entry_biounit_chains"]).drop(
+        columns=[
+            "chain_num_contacting_ions",
+            "chain_num_contacting_artifacts",
+            "chain_num_contacting_other_ligands",
+        ]
+    )
+    stale.to_parquet(paths["entry_biounit_chains"], index=False)
+    metrics = json.loads(paths["metrics"].read_text())
+    metrics["version"] = COLLATION_VERSION - 1
+    paths["metrics"].write_text(json.dumps(metrics))
+
+    refreshed = collate_shard(tmp_path, "ab", memory_limit="1GB")
+
+    assert refreshed["version"] == COLLATION_VERSION
+    assert {
+        "chain_num_contacting_ions",
+        "chain_num_contacting_artifacts",
+        "chain_num_contacting_other_ligands",
+    }.issubset(pq.read_schema(paths["entry_biounit_chains"]).names)
+
+
+def test_collation_rejects_unknown_biounit_contact_counts(tmp_path: Path) -> None:
+    _write_release(tmp_path)
+    path = tmp_path / "raw_entries/ab/1abc/entry_biounit_chains.parquet"
+    frame = pd.read_parquet(path)
+    frame.loc[0, "chain_num_contacting_ions"] = None
+    frame.to_parquet(path, index=False)
+
+    with pytest.raises(
+        ValueError,
+        match="invalid biological-assembly ligand contact counts",
+    ):
+        run_collation(tmp_path, memory_limit="1GB")
 
 
 def test_distributed_plan_requires_and_merges_every_code_inventory(
