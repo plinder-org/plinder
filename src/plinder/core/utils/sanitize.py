@@ -375,11 +375,15 @@ def _fix_valence_by_zero_order(mol: Chem.Mol, atom: Chem.Atom) -> bool:
             continue  # already zero-order, dative, or otherwise not reducible
         # only reduce into a clean sink - one that absorbs the reduction without a phantom
         # H: a valence-unlimited metal (no default valence to fill) or an over-valent
-        # partner (the shared bond's reduction relieves it too). Anything else would
-        # under-fill the partner into a phantom H, so it is left alone.
+        # partner in a borane cage (the shared bond's reduction relieves it too). The cage
+        # gate is deliberate: an ordinary over-valent adjacency (e.g. a pentavalent C next
+        # to an over-valent O) is broken input and is left to raise, not silently
+        # zero-ordered the way a cluster is. Anything else would under-fill the partner
+        # into a phantom H, so it is left alone.
         partner = bond.GetOtherAtom(atom)
-        clean_sink = _has_no_valence_limit(partner.GetAtomicNum()) or _is_over_valent(
-            partner
+        clean_sink = _has_no_valence_limit(partner.GetAtomicNum()) or (
+            _is_over_valent(partner)
+            and (_is_borane_cage_atom(atom) or _is_borane_cage_atom(partner))
         )
         if not clean_sink:
             continue

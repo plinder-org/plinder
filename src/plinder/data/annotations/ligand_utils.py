@@ -381,12 +381,42 @@ def _template_with_fragment_atom_names(
 
 
 @cache
+def _components_cif_offsets() -> "dict[str, int] | None":
+    """Index every ``data_<comp_id>`` block's byte offset in ``components.cif``.
+
+    Built once (a single pass over the file) and cached, so individual component
+    lookups seek straight to their block instead of re-streaming the ~500 MB
+    dictionary from the top. Returns ``None`` when no components file is
+    configured/available (:data:`COMPONENTS_CCD_PATH`).
+
+    Note: keyed on :data:`COMPONENTS_CCD_PATH` at first call; if a test rebinds
+    that path it must also call ``_components_cif_offsets.cache_clear()``.
+    """
+    path = COMPONENTS_CCD_PATH
+    if path is None or not path.is_file():
+        return None
+    offsets: dict[str, int] = {}
+    with open(path, "rb") as handle:
+        offset = 0
+        for line in handle:
+            if line.startswith(b"data_"):
+                comp_id = (
+                    line[len(b"data_") :].strip().decode("ascii", errors="replace")
+                )
+                # first occurrence wins (one block per comp_id)
+                offsets.setdefault(comp_id, offset)
+            offset += len(line)
+    return offsets
+
+
+@cache
 def _component_atoms_from_components_cif(comp_id: str) -> "struc.AtomArray | None":
     """Extract one CCD component from the downloaded ``components.cif``.
 
-    Streams the file to pull out just the ``data_<comp_id>`` block — the file
-    is a concatenation of per-component blocks — instead of parsing the whole
-    ~500 MB dictionary. Returns ``None`` when no components file is configured
+    Seeks directly to the component's ``data_<comp_id>`` block via the
+    :func:`_components_cif_offsets` index and reads only that block (the file is
+    a concatenation of per-component blocks) instead of parsing the whole ~500 MB
+    dictionary. Returns ``None`` when no components file is configured
     (:data:`COMPONENTS_CCD_PATH`) or the component is absent.
     """
     import io
@@ -394,23 +424,21 @@ def _component_atoms_from_components_cif(comp_id: str) -> "struc.AtomArray | Non
     import biotite.structure.io.pdbx as pdbx
 
     path = COMPONENTS_CCD_PATH
-    if path is None or not path.is_file():
+    offsets = _components_cif_offsets()
+    if path is None or offsets is None:
         return None
-    header = f"data_{comp_id}"
+    start = offsets.get(comp_id)
+    if start is None:
+        return None
     block_lines: list[str] = []
-    capturing = False
-    with open(path) as handle:
-        for line in handle:
-            if not capturing:
-                if line.strip() == header:
-                    capturing = True
-                    block_lines.append(line)
-            elif line.startswith("data_"):
+    with open(path, "rb") as handle:
+        handle.seek(start)
+        # the seeked line is the ``data_<comp_id>`` header itself
+        block_lines.append(handle.readline().decode("utf-8", errors="replace"))
+        for raw in handle:
+            if raw.startswith(b"data_"):
                 break
-            else:
-                block_lines.append(line)
-    if not block_lines:
-        return None
+            block_lines.append(raw.decode("utf-8", errors="replace"))
     cif = pdbx.CIFFile.read(io.StringIO("".join(block_lines)))
     # Prefer ideal coordinates; fall back to model coordinates; tolerate gaps.
     for coord_kwargs in ({}, {"use_ideal_coord": False}):
@@ -427,22 +455,27 @@ def _component_atoms_from_components_cif(comp_id: str) -> "struc.AtomArray | Non
 def _get_ccd_atomarray(comp_id: str) -> "struc.AtomArray | None":
     """Return the CCD component atoms with ideal coordinates.
 
-    Single source of truth for CCD lookups: prefers biotite's bundled CCD,
-    and on a miss — e.g. a code newer than the bundled dictionary, such as the
-    5-char extended codes — falls back to the downloaded ``components.cif``
-    when available (:data:`COMPONENTS_CCD_PATH`). Returns ``None`` if the
-    component is in neither source.
+    Prefers the downloaded official ``components.cif`` (the authoritative,
+    *current* CCD) when it is configured and available (:data:`COMPONENTS_CCD_PATH`),
+    then falls back to biotite's *bundled* CCD (``bt_info``). The bundled CCD is a
+    frozen snapshot that can be stale: it both fails on and *silently*
+    mis-represents some components (e.g. nitro groups stored as an over-valent
+    ``N(=O)=O`` rather than the charge-separated ``[N+](=O)[O-]``), so the current
+    dictionary is trusted first and the bundle is used only when the components
+    file is absent or lacks the component. Returns ``None`` if the component is in
+    neither source.
     """
+    atoms = _component_atoms_from_components_cif(comp_id)
+    if atoms is not None:
+        return atoms
     try:
-        atoms = bt_info.residue(comp_id, allow_missing_coord=True)
+        return bt_info.residue(comp_id, allow_missing_coord=True)
     except Exception as bundled_error:
-        atoms = _component_atoms_from_components_cif(comp_id)
-        if atoms is None:
-            LOG.warning(
-                f"CCD lookup failed for {comp_id}: absent from biotite's "
-                f"bundled CCD ({bundled_error}) and from components.cif"
-            )
-    return atoms
+        LOG.warning(
+            f"CCD lookup failed for {comp_id}: absent from components.cif and "
+            f"from biotite's bundled CCD ({bundled_error})"
+        )
+        return None
 
 
 @cache

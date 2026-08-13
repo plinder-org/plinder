@@ -1485,7 +1485,8 @@ def test_get_ccd_mol_components_cif_fallback(monkeypatch):
     fixture = Path(__file__).parent / "test_data" / "mini_components.cif"
     monkeypatch.setattr(lu, "COMPONENTS_CCD_PATH", fixture)
     # Clear every layer of the (cached) CCD lookup so a stale miss from an
-    # earlier lookup doesn't shadow the components.cif fallback.
+    # earlier lookup doesn't shadow the components.cif source.
+    lu._components_cif_offsets.cache_clear()
     lu._component_atoms_from_components_cif.cache_clear()
     lu._get_ccd_atomarray.cache_clear()
     lu._get_ccd_mol.cache_clear()
@@ -1495,6 +1496,7 @@ def test_get_ccd_mol_components_cif_fallback(monkeypatch):
         assert Chem.MolToSmiles(mol) == "CCCCCCNCc1ccc(CCN)cc1"
     finally:
         # Don't leak the cached fallback mol into other tests.
+        lu._components_cif_offsets.cache_clear()
         lu._component_atoms_from_components_cif.cache_clear()
         lu._get_ccd_atomarray.cache_clear()
         lu._get_ccd_mol.cache_clear()
@@ -1514,6 +1516,7 @@ def test_fill_missing_ccd_bonds_from_components(monkeypatch):
 
     fixture = Path(__file__).parent / "test_data" / "mini_components.cif"
     monkeypatch.setattr(lu, "COMPONENTS_CCD_PATH", fixture)
+    lu._components_cif_offsets.cache_clear()
     lu._component_atoms_from_components_cif.cache_clear()
     lu._get_ccd_atomarray.cache_clear()
     try:
@@ -1533,6 +1536,7 @@ def test_fill_missing_ccd_bonds_from_components(monkeypatch):
         again = lu._fill_missing_ccd_bonds(filled)
         assert again.bonds.as_array().shape[0] == n_expected
     finally:
+        lu._components_cif_offsets.cache_clear()
         lu._component_atoms_from_components_cif.cache_clear()
         lu._get_ccd_atomarray.cache_clear()
         lu._get_ccd_mol.cache_clear()
