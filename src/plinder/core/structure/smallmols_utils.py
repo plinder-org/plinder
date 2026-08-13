@@ -56,7 +56,7 @@ def generate_input_conformer(
         # skip RDKit's internal (strict) sanitize during embedding; the
         # chemistry it needs was supplied by peppr_sanitize above (rdkit#8653).
         params.embedFragmentsSeparately = False
-        return rdDistGeom.EmbedMolecule(_mol, params)
+        return int(rdDistGeom.EmbedMolecule(_mol, params))
 
     if skip_3d_confgen:
         confid = -1

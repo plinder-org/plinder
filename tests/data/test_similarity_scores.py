@@ -6,6 +6,7 @@ from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
+from zipfile import ZipFile
 
 import numpy as np
 import pandas as pd
@@ -54,7 +55,12 @@ SDF_FILE = (
     / "ligand_files"
     / "1.C.sdf"
 )
-HEM_SDF_FILE = (
+# The HEM ligand SDF lives inside the committed system archive; the extracted
+# mount/systems/<id>/ path is produced only by on-demand unzip via the plinder
+# API (guarded by a *_done marker), which this test never triggers. Reading from
+# the archive keeps the test independent of any prior extraction (a fresh CI
+# checkout would otherwise raise "Bad input file").
+HEM_SYSTEM_ZIP = (
     Path(__file__).resolve().parents[1]
     / "test_data"
     / "reconstructed_systems"
@@ -62,6 +68,7 @@ HEM_SDF_FILE = (
     / "ligand_files"
     / "1.T.sdf"
 )
+HEM_SDF_MEMBER = "19hc__1__1.B__1.T/ligand_files/1.T.sdf"
 
 
 @pytest.mark.parametrize(
@@ -2461,7 +2468,9 @@ def test_canonical_ligand_pair_scoring_deduplicates_pairs(
 
 
 def test_shape_scoring_uses_custom_radius_and_preserves_hem_iron() -> None:
-    molecule = Chem.MolFromMolFile(str(HEM_SDF_FILE))
+    with ZipFile(HEM_SYSTEM_ZIP) as archive:
+        molblock = archive.read(HEM_SDF_MEMBER).decode()
+    molecule = Chem.MolFromMolBlock(molblock)
     assert molecule is not None
     assert any(atom.GetAtomicNum() == 26 for atom in molecule.GetAtoms())
 

@@ -228,7 +228,7 @@ def download_alternative_datasets(
         if True, force re-download
 
     """
-    kws = dict(data_dir=data_dir, force_update=force_update)
+    kws: dict[str, Any] = dict(data_dir=data_dir, force_update=force_update)
     with ThreadPoolExecutor(max_workers=threads) as executor:
         futures: list[Future[Any]] = [
             executor.submit(io.download_cofactors, **kws),

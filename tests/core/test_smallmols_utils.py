@@ -168,26 +168,29 @@ def test_mhfp6_fingerprint_is_deterministic_and_sized():
         mol2mhfp6("not a molecule")
 
 
-def test_mhfp6_bulk_jaccard_matches_rdkit_distance():
+def test_mhfp6_bulk_jaccard_counts_matching_minima():
     import numpy as np
     from plinder.core.structure.smallmols_similarity import (
-        _mhfp6_encoder,
+        MHFP6_N_PERMUTATIONS,
         mhfp6_bulk_jaccard,
         mol2mhfp6,
     )
 
+    # self-similarity is exact; a distinct molecule scores strictly below 1
     query = mol2mhfp6("c1ccccc1O")
     other = mol2mhfp6("c1ccccc1N")
-    matrix = np.stack([query, other])
-    similarities = mhfp6_bulk_jaccard(query, matrix)
+    similarities = mhfp6_bulk_jaccard(query, np.stack([query, other]))
+    assert similarities[0] == 1.0
+    assert 0.0 <= similarities[1] < 1.0
 
-    assert similarities[0] == 1.0  # self-similarity is exact
-    encoder = _mhfp6_encoder()
-    expected = 1.0 - encoder.Distance(
-        _mhfp6_encoder().EncodeMol(Chem.MolFromSmiles("c1ccccc1O")),
-        _mhfp6_encoder().EncodeMol(Chem.MolFromSmiles("c1ccccc1N")),
-    )
-    assert similarities[1] == pytest.approx(expected)
+    # the estimate is by definition the fraction of permutations whose minima
+    # agree: break a controlled 1/4 of the positions and expect exactly 0.75.
+    # (RDKit's MHFPEncoder.Distance is not used here — the C++ argument type it
+    # accepts is registered differently across RDKit versions.)
+    base = np.arange(MHFP6_N_PERMUTATIONS, dtype=np.uint32)
+    changed = base.copy()
+    changed[: MHFP6_N_PERMUTATIONS // 4] = np.uint32(2**32 - 1)
+    assert mhfp6_bulk_jaccard(base, np.stack([changed]))[0] == 0.75
 
 
 def test_is_chemical_cluster_metric_covers_ecfp4_and_mhfp6():

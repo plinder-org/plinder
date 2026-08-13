@@ -234,10 +234,9 @@ class IngestPipeline:
     def scatter_make_mhfp6_scores(self) -> list[list[int]]:
         # MHFP6 clustering is opt-in: only score when the metric is configured,
         # so dropping it from cluster_metrics also skips its all-pairs scoring.
-        if (
-            tasks.get_similarity_scores.MHFP6_METRIC
-            not in self.cfg.flow.cluster_metrics
-        ):
+        from plinder.data.annotations.get_similarity_scores import MHFP6_METRIC
+
+        if MHFP6_METRIC not in self.cfg.flow.cluster_metrics:
             LOG.info(
                 "scatter_make_mhfp6_scores: MHFP6 not in cluster_metrics; skipping"
             )
