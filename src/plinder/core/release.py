@@ -17,6 +17,7 @@ RELEASE_PATHS = {
     "entry_biounit_chains": "index/entry_biounit_chains.parquet",
     "entry_metadata": "index/entry_metadata.parquet",
     "entry_sources": "index/entry_sources.parquet",
+    "linked_apo_structures": "index/linked_apo_structures.parquet",
     "interface_annotations": "index/interface_annotation_table.parquet",
     "alignment_chain_lookup": "index/alignment_chain_lookup.parquet",
     "ligand_pocket_membership": "index/ligand_pocket_membership.parquet",

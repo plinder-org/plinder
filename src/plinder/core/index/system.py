@@ -16,28 +16,19 @@ from biotite.sequence.io.fasta import FastaFile
 
 from plinder.core.release import PlinderRelease
 from plinder.core.scores import query_index
-from plinder.core.scores.links import query_links
 from plinder.core.scores.query import FILTER
 from plinder.core.structure.structure import Structure
 from plinder.core.utils.config import get_config
-from plinder.core.utils.cpl import get_plinder_path
-from plinder.core.utils.io import (
-    download_alphafold_cif_file,
-    download_pdb_chain_cif_file,
-    get_pdb_mmcif,
-)
-from plinder.core.utils.log import setup_logger
-from plinder.core.utils.unpack import get_zips_to_unpack
+from plinder.core.utils.io import get_pdb_mmcif
 from plinder.data.annotations.save_utils import (
     ReconstructedSystem,
     SystemReconstructionOptions,
     SystemReconstructionOutputs,
     reconstruct_system,
     save_ligands,
+    save_reconstructed_chain,
     save_reconstructed_system,
 )
-
-LOG = setup_logger(__name__)
 
 
 def _extract_packed_ligand_sdfs(
@@ -113,13 +104,12 @@ class PlinderSystem:
         self._entry: pd.DataFrame | None = None
         self._system: pd.DataFrame | None = None
         self._entry_chains: pd.DataFrame | None = None
+        self._linked_apo_structures: pd.DataFrame | None = None
         self._biounit_chains = (
             biounit_chains.copy() if biounit_chains is not None else None
         )
         self._reconstructed: ReconstructedSystem | None = None
         self._canonical_ligand_folder: Path | None = None
-        self._linked_structures: pd.DataFrame | None = None
-        self._linked_archive: Path | None = None
 
     @property
     def entry(self) -> pd.DataFrame:
@@ -174,7 +164,8 @@ class PlinderSystem:
         values = self.system[column].dropna().astype(str).unique()
         if len(values) != 1 or not values[0]:
             raise ValueError(
-                f"Expected one receptor type for {self.system_id}, got {values.tolist()}"
+                f"Expected one receptor type for {self.system_id}, "
+                f"got {values.tolist()}"
             )
         return str(values[0])
 
@@ -427,85 +418,126 @@ class PlinderSystem:
         return [path.as_posix() for path in self.archive.rglob("*") if path.is_file()]
 
     @property
-    def linked_structures(self) -> pd.DataFrame | None:
+    def linked_apo_structures(self) -> pd.DataFrame:
+        """Return ranked deposited apo chains linked to this holo system."""
+        if self._linked_apo_structures is None:
+            path = PlinderRelease().fetch("linked_apo_structures")
+            self._linked_apo_structures = pd.read_parquet(
+                path,
+                filters=[("reference_system_id", "==", self.system_id)],
+            ).sort_values("rank", ignore_index=True)
+        return self._linked_apo_structures
+
+    def _linked_apo_row(self, linked_structure_id: str | None = None) -> pd.Series:
+        links = self.linked_apo_structures
+        if linked_structure_id is None:
+            selected = links.head(1)
+        else:
+            selected = links.loc[
+                links["linked_structure_id"].astype(str).eq(linked_structure_id)
+            ]
+        if selected.empty:
+            requested = linked_structure_id or "rank 1"
+            raise ValueError(
+                f"No linked apo structure {requested!r} for {self.system_id}"
+            )
+        if len(selected) != 1:
+            raise ValueError(
+                f"Linked apo ID {linked_structure_id!r} is not unique for "
+                f"{self.system_id}"
+            )
+        return selected.iloc[0]
+
+    @staticmethod
+    def _linked_apo_source_mmcif(
+        row: pd.Series, source_mmcif: Path | str | None
+    ) -> Path | str:
+        if source_mmcif is not None:
+            return source_mmcif
+        return get_pdb_mmcif(str(row["source_entry_id"]))
+
+    def reconstruct_linked_apo(
+        self,
+        linked_structure_id: str | None = None,
+        *,
+        output_cif: Path | str | None = None,
+        source_mmcif: Path | str | None = None,
+        overwrite: bool = False,
+    ) -> Path:
+        """Reconstruct one linked apo chain from its deposited source mmCIF.
+
+        When ``linked_structure_id`` is omitted, the highest-ranked link is
+        selected. The result contains the exact biological-assembly chain that
+        was scored, with source sequence and chemical-component metadata.
         """
-        Return a dataframe of linked structures for this system. Note
-        that the dataframe will include all of the scores for the linked
-        structures as well, so that particular alternatives can be chosen
-        accordingly.
+        row = self._linked_apo_row(linked_structure_id)
+        link_id = str(row["linked_structure_id"])
+        if output_cif is None:
+            output_cif = self.reconstruction_dir / "linked_apo" / f"{link_id}.cif"
+        return save_reconstructed_chain(
+            self._linked_apo_source_mmcif(row, source_mmcif),
+            assembly_id=str(row["source_biounit_id"]),
+            chain_instance=str(row["source_chain_instance"]),
+            source_asym_id=str(row["source_chain_asym_id"]),
+            output_cif=output_cif,
+            structure_id=link_id,
+            overwrite=overwrite,
+        )
 
-        Returns
-        -------
-        pd.DataFrame | None
-            dataframe of linked structures if present in plinder
+    def superpose_linked_apo(
+        self,
+        linked_structure_id: str | None = None,
+        *,
+        reference_chain: str | None = None,
+        output_cif: Path | str | None = None,
+        source_mmcif: Path | str | None = None,
+        overwrite: bool = False,
+    ) -> Path:
+        """Reconstruct and fit one linked apo chain to a holo receptor chain.
+
+        The reference chain is inferred when the holo receptor contains one
+        protein chain. Multichain receptors require ``reference_chain`` so the
+        fit is never chosen arbitrarily.
         """
-        if self._linked_structures is None:
-            links = query_links(filters=[("reference_system_id", "==", self.system_id)])
-            self._linked_structures = links
-        return self._linked_structures
+        import biotite.structure as struc
 
-    @property
-    def linked_archive(self) -> Path | None:
-        """
-        Path to linked structures archive if it exists
-
-        Returns
-        -------
-        Path | None
-            path to linked structures archive
-        """
-        if self._linked_archive is None:
-            zips = get_zips_to_unpack(kind="linked_structures")
-            if not len(zips):
-                LOG.info("no linked_structures found, downloading now, stand by")
-                get_plinder_path(rel="linked_structures")
-                zips = get_zips_to_unpack(kind="linked_structures")
-            archive = list(zips.keys())[0]
-            self._linked_archive = archive.parent
-
-        return self._linked_archive
-
-    def get_linked_structure(self, link_kind: str, link_id: str) -> str:
-        """
-        Get the path to the requested linked structure
-
-        Parameters
-        ----------
-        link_kind : str
-            kind of linked structure ('apo', 'pred', 'holo')
-        link_id : str
-            id of linked structure
-
-        Returns
-        -------
-        str
-            path to linked structure
-        """
-        if self.linked_archive is None:
-            raise ValueError("linked_archive is None!")
-        allowed = ["apo", "pred", "holo"]
-        assert link_kind in allowed, f"link_kind={link_kind} not in {allowed}"
-        structure = self.linked_archive / f"{link_id}.cif"
-        if not structure.is_file():
-            if link_kind == "apo":
-                pdb_id, chain_id = link_id.split("_")
-                try:
-                    download_pdb_chain_cif_file(pdb_id, chain_id, structure)
-                except Exception as e:
-                    raise ValueError(f"Unable to download {link_id}! {str(e)}")
-            elif link_kind == "pred":
-                uniprot_id = link_id.split("_")[0]
-                cif_file_path = download_alphafold_cif_file(
-                    uniprot_id, self.linked_archive
+        receptor = self.receptor_structure
+        ca_mask = struc.filter_amino_acids(receptor) & (
+            receptor.atom_name.astype(str) == "CA"
+        )
+        protein_chains = sorted(set(receptor.chain_id[ca_mask].astype(str)))
+        if reference_chain is None:
+            if len(protein_chains) != 1:
+                raise ValueError(
+                    "reference_chain is required when the holo receptor has "
+                    f"{len(protein_chains)} protein chains: {protein_chains}"
                 )
-                if cif_file_path is None:
-                    raise ValueError(f"Unable to download {link_id}")
-                cif_file_path.rename(structure)
-            elif link_kind == "holo":
-                structure = Path(PlinderSystem(system_id=link_id).receptor_cif)
-            if structure is None or not structure.is_file():
-                raise ValueError(f"structure={structure} does not exist!")
-        return structure.as_posix()
+            reference_chain = protein_chains[0]
+        if reference_chain not in protein_chains:
+            raise ValueError(
+                f"Reference chain {reference_chain!r} is not a protein chain in "
+                f"{self.system_id}; available chains are {protein_chains}"
+            )
+        reference_atoms = receptor[
+            receptor.chain_id.astype(str) == str(reference_chain)
+        ]
+
+        row = self._linked_apo_row(linked_structure_id)
+        link_id = str(row["linked_structure_id"])
+        if output_cif is None:
+            output_cif = (
+                self.reconstruction_dir / "linked_apo" / f"{link_id}_superposed.cif"
+            )
+        return save_reconstructed_chain(
+            self._linked_apo_source_mmcif(row, source_mmcif),
+            assembly_id=str(row["source_biounit_id"]),
+            chain_instance=str(row["source_chain_instance"]),
+            source_asym_id=str(row["source_chain_asym_id"]),
+            output_cif=output_cif,
+            structure_id=link_id,
+            superpose_to=reference_atoms,
+            overwrite=overwrite,
+        )
 
     @cached_property
     def receptor_structure(self) -> "struc.AtomArray":
@@ -575,29 +607,6 @@ class PlinderSystem:
         int
         """
         return len(self.system_id.split("__")[2].split("_"))
-
-    @property
-    def alternate_structures(self) -> dict[str, Structure]:
-        """
-        load all alternate structures
-        """
-        # TODO: do we want to keep this as assertion?
-        # better if then raise?
-        assert self.linked_structures is not None
-
-        structures = {}
-        for id, kind in self.linked_structures[["id", "kind"]].values:
-            protein_path = self.get_linked_structure(
-                kind,
-                id,
-            )
-            structures[id] = Structure(
-                id=id,
-                protein_path=Path(protein_path),
-                protein_sequence=self.sequences,
-                structure_type=kind,
-            )
-        return structures
 
     @property
     def holo_structure(self) -> Structure:

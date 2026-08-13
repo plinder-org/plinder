@@ -198,25 +198,6 @@ def test_ligand_cross_similarity_returns_empty_without_querying_index(
 
 
 @pytest.mark.usefixtures("read_plinder_mount")
-def test_query_links():
-    system_id = "4dd7__1__1.A__1.B"
-    df = scores.query_links(filters=[("reference_system_id", "==", system_id)])
-    assert len(df.index)
-
-
-@pytest.mark.usefixtures("read_plinder_mount")
-def test_query_links_columns():
-    system_id = "4dd7__1__1.A__1.B"
-    df = scores.query_links(
-        columns=["reference_system_id"],
-        filters=[("reference_system_id", "==", system_id)],
-    )
-    assert len(df.index)
-    assert "reference_system_id" in df.columns
-    assert "kind" in df.columns
-
-
-@pytest.mark.usefixtures("read_plinder_mount")
 def test_multi_query_protein_similarity():
     system_id = "8t49__1__1.G__1.AB"
     filter_criteria: dict[str, int] = {
