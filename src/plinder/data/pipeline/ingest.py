@@ -27,8 +27,6 @@ import pyarrow.parquet as pq
 PDB_NEXTGEN_ROOT_ENV = "PLINDER_PDB_NEXTGEN_ROOT"
 VALIDATION_ROOT_ENV = "PLINDER_VALIDATION_ROOT"
 REQUIRED_REFERENCE_FILES = (
-    Path("dbs/components/components.cif"),
-    Path("dbs/components/components.parquet"),
     Path("dbs/cofactors/cofactors.json"),
     Path("dbs/affinity/affinity.json"),
 )

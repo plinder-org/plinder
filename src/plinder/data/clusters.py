@@ -22,7 +22,10 @@ import pandas as pd
 import pyarrow.parquet as pq
 from numpy.typing import NDArray
 
-from plinder.core.scores.metrics import GATED_LIGAND_DIAGNOSTIC_METRICS
+from plinder.core.scores.metrics import (
+    GATED_LIGAND_DIAGNOSTIC_METRICS,
+    is_chemical_cluster_metric,
+)
 from plinder.core.utils.log import setup_logger
 from plinder.core.utils.schemas import LIGAND_CLUSTER_SCHEMA
 
@@ -469,10 +472,19 @@ def _component_source_signature(path: Path) -> dict[str, str | int]:
     }
 
 
-def _raw_component_score_sources(*, data_dir: Path, chemical: bool) -> list[Path]:
+# Each chemical (fingerprint) metric aggregates its own raw directed-edge shards;
+# every protein/pocket score metric shares the holo search-score dataset.
+_CHEMICAL_METRIC_SCORES_DIR = {
+    "tanimoto_similarity_ecfp4_1024": "ligand_scores",
+    "jaccard_similarity_mhfp6_2048": "mhfp6_scores",
+}
+
+
+def _raw_component_score_sources(*, data_dir: Path, metric: str) -> list[Path]:
     """Return raw score sources before reciprocal ligand-edge aggregation."""
-    if chemical:
-        return sorted((data_dir / "ligand_scores").glob("*.parquet"))
+    scores_dir = _CHEMICAL_METRIC_SCORES_DIR.get(metric)
+    if scores_dir is not None:
+        return sorted((data_dir / scores_dir).glob("*.parquet"))
     return sorted((data_dir / "scores" / "search_db=holo").rglob("*.parquet"))
 
 
@@ -495,26 +507,29 @@ def prepare_symmetric_edge_plan(
     if bucket_count < 1:
         raise ValueError("symmetric-edge bucket count must be positive")
     selected_metrics = list(dict.fromkeys(metrics))
-    chemical_metric = "tanimoto_similarity_ecfp4_1024"
+    chemical_metrics = [
+        metric for metric in selected_metrics if is_chemical_cluster_metric(metric)
+    ]
+    score_metrics = [
+        metric for metric in selected_metrics if not is_chemical_cluster_metric(metric)
+    ]
+    # One aggregation group per distinct raw-source set: all protein/pocket
+    # metrics share the holo search scores, while each chemical metric has its
+    # own directed-edge shards (e.g. ligand_scores / mhfp6_scores).
+    source_groups: list[tuple[str, list[str]]] = []
+    if score_metrics:
+        source_groups.append(("score", score_metrics))
+    source_groups.extend(("chemical", [metric]) for metric in chemical_metrics)
     batches: list[dict[str, Any]] = []
-    for kind, source_metrics in [
-        (
-            "score",
-            [metric for metric in selected_metrics if metric != chemical_metric],
-        ),
-        (
-            "chemical",
-            [metric for metric in selected_metrics if metric == chemical_metric],
-        ),
-    ]:
-        if not source_metrics:
-            continue
+    for kind, source_metrics in source_groups:
         sources = _raw_component_score_sources(
             data_dir=data_dir,
-            chemical=kind == "chemical",
+            metric=source_metrics[0],
         )
         if not sources:
-            raise FileNotFoundError(f"no raw {kind} score sources found")
+            raise FileNotFoundError(
+                f"no raw {kind} score sources found for {source_metrics}"
+            )
         for start in range(0, len(sources), source_batch_size):
             selected_sources = sources[start : start + source_batch_size]
             relative_sources = [
@@ -1421,7 +1436,8 @@ def prepare_component_node_universe(data_dir: Path) -> dict[str, Any]:
 def component_node_universe(
     *, data_dir: Path, metric: str
 ) -> tuple[list[str], set[str] | None]:
-    if metric == "tanimoto_similarity_ecfp4_1024":
+    if is_chemical_cluster_metric(metric):
+        # Chemical metrics share the ECFP4 file's ligand_smiles_id node universe.
         nodes = (
             pd.read_parquet(
                 data_dir / "fingerprints" / "ligands_per_smiles.parquet",
@@ -1784,7 +1800,7 @@ def merge_score_component_reductions(
                 / f"threshold={threshold}.parquet"
             )
             published = label_frame.copy()
-            if metric == "tanimoto_similarity_ecfp4_1024":
+            if is_chemical_cluster_metric(metric):
                 published = expand_fingerprint_clusters_to_ligands(
                     data_dir=data_dir,
                     labeldf=published,
@@ -2375,7 +2391,7 @@ def make_directed_set_cover(
         assignments,
         columns=["ligand_id", "centroid_node", "similarity_to_centroid"],
     )
-    if metric == "tanimoto_similarity_ecfp4_1024":
+    if is_chemical_cluster_metric(metric):
         published = _expand_fingerprint_directed_cover(
             data_dir=data_dir,
             assignments=published,
@@ -2488,7 +2504,7 @@ def make_communities(
     paths_sql = ", ".join(
         f"'{path.as_posix().replace(chr(39), chr(39) * 2)}'" for path in sources
     )
-    chemical = metric == "tanimoto_similarity_ecfp4_1024"
+    chemical = is_chemical_cluster_metric(metric)
     query = dedent(
         f"""
         WITH selected AS (

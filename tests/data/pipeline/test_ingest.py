@@ -110,7 +110,6 @@ def test_reference_data_check_reports_every_missing_file(tmp_path: Path) -> None
         check_reference_data(tmp_path)
 
     message = str(exc_info.value)
-    assert "components.parquet" in message
     assert "cofactors.json" in message
     assert "affinity.json" in message
 

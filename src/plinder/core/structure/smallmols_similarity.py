@@ -1,40 +1,48 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
+from functools import cache
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 import pandas as pd
+from numpy.typing import NDArray
 from rdkit import Chem, DataStructs
-from rdkit.Chem import AllChem, rdFingerprintGenerator, rdRascalMCES
+from rdkit.Chem import (
+    rdFingerprintGenerator,
+    rdMHFPFingerprint,
+    rdRascalMCES,
+)
 from rdkit.Chem.rdchem import Mol
 from rdkit.rdBase import BlockLogs
 
-from plinder.core.structure.smallmols_utils import uncharge_mol
+# MHFP6 = MinHashed FingerPrint at radius 3 (ECFP diameter 6 equivalent).
+# Probst, D. & Reymond, J-L. "A probabilistic molecular fingerprint for big
+# data settings." J. Cheminform. 10, 8 (2018).
+# https://doi.org/10.1186/s13321-018-0321-8
+MHFP6_RADIUS = 3
+MHFP6_N_PERMUTATIONS = 2048
+# A fixed permutation seed makes the MinHash vectors reproducible across runs
+# and machines; changing it invalidates every stored MHFP6 fingerprint.
+MHFP6_SEED = 42
 
 
-def smiles2inchikey(smiles: str, remove_stereo: bool = False) -> str:
-    """Return an InChIKey, falling back to standardized canonical SMILES."""
+def smiles2nonstereo(smiles: str) -> str:
+    """Return a stereo-stripped RDKit canonical SMILES — the ligand identity key.
+
+    RDKit always yields a canonical SMILES from a parsed molecule, whereas InChIKey
+    generation fails for many CCD molecules (organometallics, exotic valences), so
+    canonical SMILES is the robust, uniform identifier. Stereochemistry is removed
+    (identity is stereo-insensitive — used for split stratification and MMP
+    grouping) and no charge normalization is applied: the CCD representation is
+    taken as-is, consistent with the exact-SMILES cofactor/artifact matching.
+    """
     mol = Chem.MolFromSmiles(smiles)
+    if mol is None:
+        return smiles
     with BlockLogs():
-        mol = uncharge_mol(mol)
-        if remove_stereo:
-            Chem.RemoveStereochemistry(mol)
-        inchikey = Chem.MolToInchiKey(mol)
-    if not inchikey:
-        inchikey = Chem.CanonSmiles(Chem.MolToSmiles(mol), useChiral=not remove_stereo)
-    return str(inchikey)
-
-
-def get_ecfp_fingerprint(
-    smiles: str, radius: int, nbits: int
-) -> Optional[np.ndarray[int, Any]]:
-    try:
-        mol = Chem.MolFromSmiles(smiles)
-        fp = AllChem.GetMorganFingerprintAsBitVect(mol, radius, nBits=nbits)
-        return np.array(fp)
-    except Exception:
-        return None
+        Chem.RemoveStereochemistry(mol)
+        return str(Chem.MolToSmiles(mol))
 
 
 def mol2morgan_fp(
@@ -59,6 +67,57 @@ def tanimoto_maxsim_and_argmax(
     return np.max(similarity_matrix, axis=1) * 100, np.argmax(similarity_matrix, axis=1)
 
 
+@cache
+def _mhfp6_encoder() -> rdMHFPFingerprint.MHFPEncoder:
+    """Return the shared, seeded MHFP6 encoder (permutations are seed-derived)."""
+    return rdMHFPFingerprint.MHFPEncoder(MHFP6_N_PERMUTATIONS, MHFP6_SEED)
+
+
+def mol2mhfp6(mol: Mol | str) -> NDArray[np.uint32]:
+    """Return the MHFP6 MinHash fingerprint of a molecule or SMILES string.
+
+    MHFP6 hashes the set of circular SMILES shingles (radii 1..3) and keeps the
+    per-permutation minima, so the fraction of matching positions between two
+    fingerprints estimates the Jaccard similarity of their shingle sets
+    (Probst & Reymond, J. Cheminform. 2018). Unlike a folded Morgan bit-vector,
+    the result is a dense vector of ``MHFP6_N_PERMUTATIONS`` uint32 hashes.
+    """
+    if isinstance(mol, str):
+        mol = Chem.MolFromSmiles(mol)
+    if mol is None:
+        raise ValueError("cannot fingerprint an invalid molecule")
+    encoded = _mhfp6_encoder().EncodeMol(mol, radius=MHFP6_RADIUS)
+    return np.asarray(encoded, dtype=np.uint32)
+
+
+def mhfp6_bulk_jaccard(
+    query: NDArray[np.uint32], reference_matrix: NDArray[np.uint32]
+) -> NDArray[np.float64]:
+    """Estimate one MHFP6 vector's Jaccard similarity to every reference row.
+
+    Each reference row is a MinHash vector; the estimated Jaccard similarity is
+    the fraction of permutations at which the two vectors share the same minimum
+    hash -- the MinHash counterpart of ``BulkTanimotoSimilarity`` for bit-vectors.
+    """
+    if reference_matrix.ndim != 2 or reference_matrix.shape[1] != query.shape[0]:
+        raise ValueError("query and reference MinHash widths do not match")
+    matches = np.count_nonzero(reference_matrix == query, axis=1)
+    return matches / reference_matrix.shape[1]
+
+
+def mhfp6_maxsim_and_argmax(
+    long_matrix: NDArray[np.uint32], test_matrix: NDArray[np.uint32]
+) -> tuple[NDArray[np.float64], NDArray[np.intp]]:
+    """Calculate each test MHFP6 vector's max estimated Jaccard to a reference set."""
+    similarity_matrix = np.stack(
+        [mhfp6_bulk_jaccard(row, long_matrix) for row in test_matrix]
+    )
+    return (
+        np.max(similarity_matrix, axis=1) * 100,
+        np.argmax(similarity_matrix, axis=1),
+    )
+
+
 def get_mmp_similarity_dict(
     mmp_path: Path, min_constant_size: int = 5
 ) -> dict[str, dict[str, float]]:
@@ -75,7 +134,7 @@ def get_mmp_similarity_dict(
     mmp_df["const_size"] = mmp_df.CONSTANT.map(const_size_map)
     mmp_df = mmp_df[mmp_df["const_size"] >= min_constant_size]
     smiles_inchikey_map = {
-        smiles: smiles2inchikey(smiles, remove_stereo=True)
+        smiles: smiles2nonstereo(smiles)
         for smiles in set(mmp_df.SMILES1.to_list() + mmp_df.SMILES2.to_list())
     }
     mmp_df["inchikey1"] = mmp_df.SMILES1.map(smiles_inchikey_map)

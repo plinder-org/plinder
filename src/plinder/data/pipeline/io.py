@@ -7,10 +7,8 @@ pre-determined location before fetching it from
 the network.
 """
 
-import gzip
 import json
 import os
-import shutil
 from concurrent.futures import ALL_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 from subprocess import check_output
@@ -148,48 +146,30 @@ def download_affinity_data(
     return obj
 
 
-@retry
-def download_components_cif(
-    *,
-    data_dir: Path,
-    url: str = "https://files.wwpdb.org/pub/pdb/data/monomers/components.cif.gz",
-    force_update: bool = False,
-) -> Path:
-    """
-    Download components cif. Additionally aggregate
-    the cif to a dataframe and store as parquet.
+def refresh_bundled_ccd(
+    *, data_dir: Path | None = None, force_update: bool = False
+) -> None:
+    """Sync biotite's bundled CCD (``bt_info``) to the current wwPDB release.
 
-    Parameters
-    ----------
-    data_dir : Path
-        the root plinder dir
-    url : str
-        URL to fetch data from
-    force_update : bool, default=False
-        if True, re-download data
+    ``bt_info`` is plinder's single CCD source — atoms and bonds for
+    ``_get_ccd_atomarray``, and (via RDKit) the reference SMILES used for
+    cofactor/artifact matching. biotite ships a *frozen* snapshot that can be
+    stale (e.g. nitro groups stored over-valent, missing 5-char extended codes),
+    so the pipeline syncs it here with ``biotite.setup_ccd``, which pulls the same
+    wwPDB dictionary.
 
-    Returns
-    -------
-    components_path : Path
-        path to downloaded components data
+    Fails loudly: this rewrites biotite's install directory, so a read-only
+    ``site-packages`` (or a download failure) raises — deliberately, because a
+    silent failure would leave CCD lookups on a stale bundle with no fallback.
+    ``data_dir`` / ``force_update`` are accepted for task-signature compatibility
+    and ignored (``setup_ccd`` always pulls the latest).
     """
-    components_path = data_dir / "dbs" / "components" / "components.cif"
-    components_path.parent.mkdir(parents=True, exist_ok=True)
-    if not components_path.is_file() or force_update:
-        LOG.info(f"download_components_cif: {url}")
-        resp = requests.get(url)
-        resp.raise_for_status()
-        gz = components_path.parent / "components.cif.gz"
-        gz.write_bytes(resp.content)
-        with gzip.open(gz, "rb") as arch:
-            with components_path.open("wb") as file:
-                shutil.copyfileobj(arch, file)
-    components_pqt = data_dir / "dbs" / "components" / "components.parquet"
-    if not components_pqt.is_file() or force_update:
-        LOG.info(f"download_components_cif: transforming {components_path}")
-        df = transform.transform_components_data(raw_components_path=components_path)
-        df.to_parquet(components_pqt, index=False)
-    return components_path
+    from biotite import setup_ccd
+
+    setup_ccd.main()
+    LOG.info(
+        "refresh_bundled_ccd: synced biotite bundled CCD (bt_info) to current wwPDB"
+    )
 
 
 @retry

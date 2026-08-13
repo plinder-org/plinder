@@ -1803,6 +1803,86 @@ def test_ligand_scores_use_bulk_tanimoto_for_unique_smiles(
     )
 
 
+def test_mhfp6_scores_use_minhash_jaccard_on_shared_node_universe(tmp_path) -> None:
+    fingerprint_dir = tmp_path / "fingerprints"
+    fingerprint_dir.mkdir()
+    # SMILES 0 and 3 are identical, so their MinHash Jaccard must be exactly 1.0;
+    # the alkane/benzene pair must fall below the 30% threshold and be dropped.
+    smiles = ["CCO", "CCN", "c1ccccc1", "CCO"]
+    unique_ligands = pd.DataFrame(
+        {
+            "ligand_smiles_id": np.arange(len(smiles), dtype=np.int32),
+            "ligand_rdkit_canonical_smiles": smiles,
+        }
+    )
+    scoring_module.write_mhfp6_fingerprints(unique_ligands, fingerprint_dir)
+
+    mhfp6_path = fingerprint_dir / scoring_module.MHFP6_FINGERPRINT_FILE
+    assert mhfp6_path.is_file()
+    # the fingerprint table carries the MHFP6 provenance keys (alongside pandas
+    # metadata), matching how the scorer validates it
+    fingerprint_metadata = scoring_module.pq.read_schema(mhfp6_path).metadata
+    assert all(
+        fingerprint_metadata.get(key) == value
+        for key, value in scoring_module.MHFP6_PARQUET_METADATA.items()
+    )
+
+    output_path = tmp_path / "mhfp6_scores.parquet"
+    scoring_module.mhfp6_ligand_scores(
+        ligand_ids=[0, 1, 2, 3],
+        data_dir=tmp_path,
+        output_path=output_path,
+        minimum_similarity=30,
+    )
+    scores = pd.read_parquet(output_path)
+
+    assert scores.columns.tolist() == [
+        "query_ligand_id",
+        "target_ligand_id",
+        scoring_module.MHFP6_METRIC,
+    ]
+    # every node is self-identical, and the two identical SMILES match at 100%
+    self_edges = scores[scores["query_ligand_id"] == scores["target_ligand_id"]]
+    assert set(self_edges["query_ligand_id"]) == {0, 1, 2, 3}
+    assert (self_edges[scoring_module.MHFP6_METRIC] == 100.0).all()
+    identical = scores[
+        (scores["query_ligand_id"] == 0) & (scores["target_ligand_id"] == 3)
+    ][scoring_module.MHFP6_METRIC]
+    assert identical.tolist() == [100.0]
+    # dissimilar ethanol/benzene pair is filtered by the minimum-similarity gate
+    assert not (
+        (scores["query_ligand_id"] == 0) & (scores["target_ligand_id"] == 2)
+    ).any()
+    assert (
+        scoring_module.pq.read_schema(output_path).metadata
+        == scoring_module.MHFP6_PARQUET_METADATA
+    )
+
+
+def test_mhfp6_scores_reject_non_mhfp6_fingerprint_metadata(tmp_path) -> None:
+    # A stale/mislabelled fingerprint table must fail loudly rather than silently
+    # score the wrong fingerprint.
+    fingerprint_dir = tmp_path / "fingerprints"
+    fingerprint_dir.mkdir()
+    table = pd.DataFrame(
+        {
+            "ligand_smiles_id": np.array([0], dtype=np.int32),
+            "ligand_rdkit_canonical_smiles": ["CCO"],
+            "mhfp6": [b"\x00" * 4],
+        }
+    )
+    scoring_module.pq.write_table(
+        scoring_module.pa.Table.from_pandas(table, preserve_index=False),
+        fingerprint_dir / scoring_module.MHFP6_FINGERPRINT_FILE,
+    )
+    with pytest.raises(ValueError, match="MHFP6"):
+        scoring_module.mhfp6_ligand_scores(
+            ligand_ids=[0],
+            data_dir=tmp_path,
+            output_path=tmp_path / "out.parquet",
+        )
+
+
 def test_tanimoto_90_cluster_counts_distinct_pdb_ids() -> None:
     unique_ligands = pd.DataFrame(
         {
@@ -1863,15 +1943,18 @@ def test_ligand_similarity_pipeline_does_not_write_per_system_mapping(
             "ligand_asym_id": ["L", "L", "L"],
         }
     ).to_parquet(index_dir / "annotation_table.parquet", index=False)
-    component_dir = tmp_path / "dbs" / "components"
-    component_dir.mkdir(parents=True)
-    pd.DataFrame({"binder_id": ["COF"], "canonical_smiles": ["CCO"]}).to_parquet(
-        component_dir / "components.parquet", index=False
-    )
-
     from plinder.data.annotations import ligand_utils
 
+    # A cofactor's reference SMILES now comes from the CCD via _get_ccd_smiles
+    # (the components.parquet lookup was retired); parse_cofactors only supplies
+    # the code set. Stub both so COF resolves to ethanol, matching the "CCO"
+    # ligand and exercising the exact-structure cofactor-like flag.
     monkeypatch.setattr(ligand_utils, "parse_cofactors", lambda _data_dir: {"COF"})
+    monkeypatch.setattr(
+        ligand_utils,
+        "_get_ccd_smiles",
+        lambda code: "CCO" if code == "COF" else None,
+    )
     compute_ligand_fingerprints(data_dir=tmp_path)
 
     unique_ligands = pd.read_parquet(

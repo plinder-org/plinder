@@ -1,5 +1,6 @@
 import json
 from os import utime
+from pathlib import Path
 
 import networkit as nk
 import numpy as np
@@ -1104,3 +1105,84 @@ def test_v3_rejects_scores_without_ligand_identifiers(tmp_path):
                 eligible_systems={"1aaa__1__1.A__1.X"},
             )
         )
+
+
+def test_two_chemical_metrics_get_separate_per_metric_source_groups(tmp_path):
+    from plinder.data.clusters import (
+        _raw_component_score_sources,
+        prepare_symmetric_edge_plan,
+        write_symmetric_edge_fragment_batch,
+        write_symmetric_edge_shard,
+    )
+
+    ecfp4 = "tanimoto_similarity_ecfp4_1024"
+    mhfp6 = "jaccard_similarity_mhfp6_2048"
+    # each chemical metric aggregates its own directed-edge shards
+    (tmp_path / "fingerprints").mkdir()
+    pd.DataFrame({"ligand_smiles_id": [0, 1, 2]}).to_parquet(
+        tmp_path / "fingerprints" / "ligands_per_smiles.parquet", index=False
+    )
+    (tmp_path / "ligand_scores").mkdir()
+    pd.DataFrame(
+        {
+            "query_ligand_id": [0, 1],
+            "target_ligand_id": [1, 2],
+            ecfp4: [90.0, 40.0],
+        }
+    ).to_parquet(tmp_path / "ligand_scores" / "part.parquet", index=False)
+    (tmp_path / "mhfp6_scores").mkdir()
+    pd.DataFrame(
+        {
+            "query_ligand_id": [0, 0, 1],
+            "target_ligand_id": [1, 2, 2],
+            mhfp6: [80.0, 40.0, 35.0],
+        }
+    ).to_parquet(tmp_path / "mhfp6_scores" / "part.parquet", index=False)
+
+    # the source dirs are resolved per metric, not shared
+    assert _raw_component_score_sources(data_dir=tmp_path, metric=ecfp4) == [
+        tmp_path / "ligand_scores" / "part.parquet"
+    ]
+    assert _raw_component_score_sources(data_dir=tmp_path, metric=mhfp6) == [
+        tmp_path / "mhfp6_scores" / "part.parquet"
+    ]
+
+    plan = prepare_symmetric_edge_plan(
+        data_dir=tmp_path,
+        metrics=[ecfp4, mhfp6],
+        source_batch_size=10,
+        bucket_count=1,
+    )
+    chemical_batches = [b for b in plan["batches"] if b["kind"] == "chemical"]
+    # one single-metric group per chemical metric, each with its own source
+    assert {tuple(b["metrics"]) for b in chemical_batches} == {(ecfp4,), (mhfp6,)}
+    sources_by_metric = {
+        b["metrics"][0]: {Path(s["path"]).parent.name for s in b["sources"]}
+        for b in chemical_batches
+    }
+    assert sources_by_metric == {ecfp4: {"ligand_scores"}, mhfp6: {"mhfp6_scores"}}
+
+    # the MHFP6 chemical branch symmetrizes into per-metric shards end to end
+    mhfp6_batch = next(b for b in chemical_batches if b["metrics"][0] == mhfp6)
+    write_symmetric_edge_fragment_batch(
+        data_dir=tmp_path,
+        batch=mhfp6_batch,
+        scratch_dir=tmp_path / "scratch-fragments",
+        threads=1,
+    )
+    write_symmetric_edge_shard(
+        data_dir=tmp_path,
+        metric=mhfp6,
+        bucket=0,
+        scratch_dir=tmp_path / "scratch-shard",
+        threads=1,
+    )
+    edges = pd.read_parquet(
+        tmp_path
+        / "ligand_clusters/symmetric_edges"
+        / f"metric={mhfp6}/bucket=000.parquet"
+    ).set_index(["query_node", "target_node"])
+    # chemical similarity is symmetric: forward == reverse == the stored value
+    assert edges.loc[("0", "1"), "similarity"] == pytest.approx(80.0)
+    assert edges.loc[("0", "2"), "similarity"] == pytest.approx(40.0)
+    assert edges.loc[("1", "2"), "similarity"] == pytest.approx(35.0)

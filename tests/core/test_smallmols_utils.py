@@ -25,46 +25,24 @@ def test_valence_issue_handling(smiles, num_problems):
 
 
 @pytest.mark.parametrize(
-    ["smiles", "num_charged_atoms"],
+    ["s1", "s2"],
     [
-        ["CC(=O)OCCN(C)(C)C", 0],
-        ["[O-]C(=[O])CC[NH+](C)(C)", 0],
-        ["[O-]C(=[OH+])CC[NH+](C)(C)", 0],
-        ["OC(=[O])CC[N+](C)(C)(C)", 1],
-        ["[O-]C(=[O])CC[N+](C)(C)(C)", 2],
-        ["[O-]C(=[O])C.C[N+](C)(C)(C)", 2],
+        # E/Z isomers
+        ["CC/C=C/Cl", "CC/C=C\\Cl"],
+        # R/S enantiomers
+        ["C[C@](F)(Cl)CBr", "C[C@@](F)(Cl)CBr"],
     ],
 )
-def test_uncharge_mol(smiles, num_charged_atoms):
-    from plinder.core.structure.smallmols_utils import uncharge_mol
+def test_smiles2nonstereo(s1, s2):
+    # uncharge / InChIKey were retired: ligand identity is now a stereo-stripped
+    # RDKit canonical SMILES (robust where InChIKey fails on organometallics).
+    from plinder.core.structure.smallmols_similarity import smiles2nonstereo
 
-    mol = Chem.MolFromSmiles(smiles, sanitize=False)
-    mol = uncharge_mol(mol)
-    assert (
-        sum([at.GetFormalCharge() != 0 for at in mol.GetAtoms()]) == num_charged_atoms
-    )
-
-
-@pytest.mark.parametrize(
-    ["smiles", "inchikey", "remove_stereo"],
-    [
-        ["CC/C=C/Cl", "DUDKKPVINWLFBI-ONEGZZNKSA-N", False],
-        ["CC/C=C\\Cl", "DUDKKPVINWLFBI-ARJAWSKDSA-N", False],
-        ["CC/C=C/Cl", "DUDKKPVINWLFBI-UHFFFAOYSA-N", True],
-        ["CC/C=C\\Cl", "DUDKKPVINWLFBI-UHFFFAOYSA-N", True],
-        ["CCC=CCl", "DUDKKPVINWLFBI-UHFFFAOYSA-N", False],
-        ["CCC=CCl", "DUDKKPVINWLFBI-UHFFFAOYSA-N", True],
-        ["C[C@@](F)(Cl)CBr", "REKDFINPOZVXJS-VKHMYHEASA-N", False],
-        ["C[C@](F)(Cl)CBr", "REKDFINPOZVXJS-GSVOUGTGSA-N", False],
-        ["C[C@](F)(Cl)CBr", "REKDFINPOZVXJS-UHFFFAOYSA-N", True],
-        ["C[C@@](F)(Cl)CBr", "REKDFINPOZVXJS-UHFFFAOYSA-N", True],
-        ["CC(F)(Cl)CBr", "REKDFINPOZVXJS-UHFFFAOYSA-N", True],
-    ],
-)
-def test_inchikey(smiles, inchikey, remove_stereo):
-    from plinder.core.structure.smallmols_similarity import smiles2inchikey
-
-    assert inchikey == smiles2inchikey(smiles, remove_stereo=remove_stereo)
+    out = smiles2nonstereo(s1)
+    # a valid canonical SMILES with no stereo markers
+    assert out and "@" not in out and "/" not in out and "\\" not in out
+    # stereoisomers collapse to one identity
+    assert smiles2nonstereo(s1) == smiles2nonstereo(s2)
 
 
 def test_load_ligands_from_index_uses_proper_holo_ligand_rows():
@@ -172,3 +150,117 @@ def test_matched_templates():
     fixed_mol_SMILES = Chem.CanonSmiles(Chem.MolToSmiles(fixed_mol))
     assert fixed_mol_SMILES.count("=") >= 2
     assert fixed_mol_SMILES == "C=CC(=O)OC.CC(F)(Cl)Br.CNCc1ccccc1"
+
+
+def test_mhfp6_fingerprint_is_deterministic_and_sized():
+    from plinder.core.structure.smallmols_similarity import (
+        MHFP6_N_PERMUTATIONS,
+        mol2mhfp6,
+    )
+
+    fp_a = mol2mhfp6("c1ccccc1O")
+    fp_b = mol2mhfp6("c1ccccc1O")
+    assert fp_a.shape == (MHFP6_N_PERMUTATIONS,)
+    assert str(fp_a.dtype) == "uint32"
+    # a fixed permutation seed makes the MinHash vector reproducible
+    assert (fp_a == fp_b).all()
+    with pytest.raises(ValueError):
+        mol2mhfp6("not a molecule")
+
+
+def test_mhfp6_bulk_jaccard_matches_rdkit_distance():
+    import numpy as np
+    from plinder.core.structure.smallmols_similarity import (
+        _mhfp6_encoder,
+        mhfp6_bulk_jaccard,
+        mol2mhfp6,
+    )
+
+    query = mol2mhfp6("c1ccccc1O")
+    other = mol2mhfp6("c1ccccc1N")
+    matrix = np.stack([query, other])
+    similarities = mhfp6_bulk_jaccard(query, matrix)
+
+    assert similarities[0] == 1.0  # self-similarity is exact
+    encoder = _mhfp6_encoder()
+    expected = 1.0 - encoder.Distance(
+        _mhfp6_encoder().EncodeMol(Chem.MolFromSmiles("c1ccccc1O")),
+        _mhfp6_encoder().EncodeMol(Chem.MolFromSmiles("c1ccccc1N")),
+    )
+    assert similarities[1] == pytest.approx(expected)
+
+
+def test_is_chemical_cluster_metric_covers_ecfp4_and_mhfp6():
+    from plinder.core.scores.metrics import (
+        CHEMICAL_CLUSTER_METRICS,
+        is_chemical_cluster_metric,
+    )
+
+    assert set(CHEMICAL_CLUSTER_METRICS) == {
+        "tanimoto_similarity_ecfp4_1024",
+        "jaccard_similarity_mhfp6_2048",
+    }
+    assert is_chemical_cluster_metric("jaccard_similarity_mhfp6_2048")
+    assert is_chemical_cluster_metric("tanimoto_similarity_ecfp4_1024")
+    assert not is_chemical_cluster_metric("pocket_qcov")
+
+
+def test_ecfp4_vs_mhfp6_on_sequence_isomer_edge_cases():
+    """ECFP4 and MHFP6 both handle monomer-order isomers the same way.
+
+    Peptides and nucleic acids are built with RDKit's sequence->mol conversion.
+    Two edge cases are probed: a genuine single-monomer change (should stay
+    similar) versus a sequence permutation of the *same* monomers (a distinct
+    molecule that a local-substructure fingerprint struggles to tell apart).
+    """
+    import numpy as np
+    from plinder.core.structure.smallmols_similarity import (
+        mhfp6_bulk_jaccard,
+        mol2mhfp6,
+        mol2morgan_fp,
+    )
+    from rdkit import DataStructs
+
+    def ecfp4(m1, m2):
+        return DataStructs.TanimotoSimilarity(
+            mol2morgan_fp(m1, radius=2, nbits=1024),
+            mol2morgan_fp(m2, radius=2, nbits=1024),
+        )
+
+    def mhfp6(m1, m2):
+        return float(mhfp6_bulk_jaccard(mol2mhfp6(m1), np.stack([mol2mhfp6(m2)]))[0])
+
+    # ---- peptides (flavor=0: L-amino-acid chain) ----
+    gya = Chem.MolFromSequence("GYA", flavor=0)  # Gly-Tyr-Ala
+    gfa = Chem.MolFromSequence("GFA", flavor=0)  # Gly-Phe-Ala (Tyr->Phe: one -OH)
+    agf = Chem.MolFromSequence("AGF", flavor=0)  # same residues, permuted order
+    assert all(m is not None for m in (gya, gfa, agf))
+    # GFA and AGF are genuinely different molecules, not the same input twice
+    assert Chem.MolToSmiles(gfa) != Chem.MolToSmiles(agf)
+
+    # the single-residue change (GYA/GFA) is more similar than the permutation
+    # (GFA/AGF) under BOTH fingerprints, by a clear margin
+    ecfp_margin = ecfp4(gya, gfa) - ecfp4(gfa, agf)
+    mhfp_margin = mhfp6(gya, gfa) - mhfp6(gfa, agf)
+    assert ecfp4(gya, gfa) > ecfp4(gfa, agf)
+    assert mhfp6(gya, gfa) > mhfp6(gfa, agf)
+    assert ecfp_margin > 0.1 and mhfp_margin > 0.1
+    # MHFP6 does not separate this edge case better: the margins are comparable
+    assert abs(mhfp_margin - ecfp_margin) < 0.05
+
+    # ---- nucleic acids (flavor=6: DNA) ----
+    gac = Chem.MolFromSequence("GAC", flavor=6)
+    ggc = Chem.MolFromSequence("GGC", flavor=6)  # A->G: single-base change
+    acg = Chem.MolFromSequence("ACG", flavor=6)  # same bases, permuted order
+    assert all(m is not None for m in (gac, ggc, acg))
+    # distinct molecules with identical base composition
+    assert Chem.MolToSmiles(gac) != Chem.MolToSmiles(acg)
+
+    # bases sit ~10+ bonds apart along the backbone, far beyond ECFP4 radius 2
+    # and MHFP6 radius 3, so neither fingerprint can see base ORDER: a pure
+    # permutation collides at ~1.0 for BOTH, and even scores at least as high as
+    # a real single-base substitution. MHFP6 does not fix this blind spot.
+    assert ecfp4(gac, acg) > 0.99
+    assert mhfp6(gac, acg) > 0.99
+    assert ecfp4(gac, acg) >= ecfp4(gac, ggc)
+    assert mhfp6(gac, acg) >= mhfp6(gac, ggc)

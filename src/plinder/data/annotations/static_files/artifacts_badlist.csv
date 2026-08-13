@@ -27,12 +27,12 @@
 3PG
 3SY
 3V3
-543
-6JZ
+# 543  # OBS, no REL successor
+# 6JZ  # OBS, no REL successor
 6PE
 7E8
 7E9
-7I7
+# 7I7  # OBS, no REL successor
 7N5
 7PE
 7PG
@@ -51,9 +51,9 @@ B3H
 B3P
 B4T
 B4X
-BAM
+# BAM  # OBS -> BEN (already listed)
 BCN
-BDN
+# BDN  # OBS -> BEN (already listed)
 BE7
 BEN
 BET
@@ -98,8 +98,8 @@ DIO
 DKA
 DMF
 DMI
-DMR
-DOX
+# DMR  # OBS -> MLT (already listed)
+# DOX  # OBS -> DIO (already listed)
 DPG
 DR6
 DRE
@@ -107,7 +107,7 @@ DTD
 DTT
 DTU
 DTV
-E4N
+# E4N  # OBS -> NET (already listed)
 EAP
 EEE
 EPE
@@ -184,13 +184,13 @@ OCT
 OES
 OGA
 OP2
-OTE
+# OTE  # OBS -> C8E (already listed)
 P03
 P15
 P1O
 P22
 P25
-P2K
+# P2K  # OBS -> P6G (already listed)
 P33
 P3G
 P4C

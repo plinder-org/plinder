@@ -19,7 +19,10 @@ from typing import Any, cast
 import pandas as pd
 import pyarrow.parquet as pq
 
-from plinder.core.scores.metrics import DEFAULT_CLUSTER_METRICS
+from plinder.core.scores.metrics import (
+    DEFAULT_CLUSTER_METRICS,
+    is_chemical_cluster_metric,
+)
 from plinder.core.utils import schemas
 from plinder.core.utils.log import setup_logger
 from plinder.data import clusters, databases
@@ -2227,7 +2230,10 @@ def plan_clustering(
         metrics=metrics,
         thresholds=thresholds,
     )
-    if any(metric != "tanimoto_similarity_ecfp4_1024" for metric in selected_metrics):
+    # The system-based component node universe is needed only for score
+    # (protein/pocket) metrics; every chemical metric uses the shared
+    # ligand_smiles_id universe read directly from the fingerprint table.
+    if any(not is_chemical_cluster_metric(metric) for metric in selected_metrics):
         clusters.prepare_component_node_universe(data_dir)
     symmetric_plan = clusters.prepare_symmetric_edge_plan(
         data_dir=data_dir,

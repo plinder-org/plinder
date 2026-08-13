@@ -84,6 +84,17 @@ DERIVED_LIGAND_COLUMNS = [
 ]
 
 
+# Human-readable labels for the fingerprint (chemical) clustering metrics.
+# MHFP6: Probst, D. & Reymond, J-L. "A probabilistic molecular fingerprint for
+# big data settings." J. Cheminform. 10, 8 (2018). doi:10.1186/s13321-018-0321-8
+_METRIC_LABELS = {
+    "tanimoto_similarity_ecfp4_1024": "ECFP4/1024 Tanimoto similarity",
+    "jaccard_similarity_mhfp6_2048": (
+        "MHFP6/2048 MinHash-estimated Jaccard similarity (Probst & Reymond 2018)"
+    ),
+}
+
+
 def get_cluster_column_descriptions(
     plindex: pd.DataFrame,
 ) -> list[tuple[str, str | None, str | None]]:
@@ -107,7 +118,8 @@ def get_cluster_column_descriptions(
                 column,
                 "str",
                 f"Cluster ID for {level}{direction} {cluster} built from "
-                f"{metric} metric with {threshold} threshold",
+                f"{_METRIC_LABELS.get(metric, metric)} metric with "
+                f"{threshold} threshold",
             )
         )
     community_columns = [c for c in plindex.columns if c.endswith("__community")]
@@ -122,8 +134,9 @@ def get_cluster_column_descriptions(
                 column,
                 "str",
                 f"Cluster ID for {level}greedy centroid {cluster} built from "
-                f"reciprocal-minimum {metric} with {threshold} threshold; each "
-                "member meets the threshold in both directions to its centroid",
+                f"reciprocal-minimum {_METRIC_LABELS.get(metric, metric)} with "
+                f"{threshold} threshold; each member meets the threshold in both "
+                "directions to its centroid",
             )
         )
     directed_cover_columns = [
@@ -136,8 +149,8 @@ def get_cluster_column_descriptions(
                 column,
                 "str",
                 "Cluster ID for ligand-level directed set cover built from "
-                f"{metric} with {threshold} threshold; each member's "
-                "query-to-centroid score meets the threshold",
+                f"{_METRIC_LABELS.get(metric, metric)} with {threshold} threshold; "
+                "each member's query-to-centroid score meets the threshold",
             )
         )
     return rows

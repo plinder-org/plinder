@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import re
 import sqlite3
 import typing as ty
 from collections import Counter, defaultdict
@@ -15,7 +14,6 @@ import biotite.structure as struc
 import biotite.structure.info as bt_info
 import numpy as np
 import numpy.typing as npt
-import pandas as pd
 from pydantic import BeforeValidator, Field
 from rdkit import Chem, RDLogger
 from rdkit.Chem import QED, Crippen, rdMolDescriptors
@@ -330,100 +328,21 @@ def _check_stereo_vs_template(
 
 
 @cache
-def _components_cif_offsets() -> "dict[str, int] | None":
-    """Index every ``data_<comp_id>`` block's byte offset in ``components.cif``.
-
-    Built once (a single pass over the file) and cached, so individual component
-    lookups seek straight to their block instead of re-streaming the ~500 MB
-    dictionary from the top. Returns ``None`` when no components file is
-    configured/available (:data:`COMPONENTS_CCD_PATH`).
-
-    Note: keyed on :data:`COMPONENTS_CCD_PATH` at first call; if a test rebinds
-    that path it must also call ``_components_cif_offsets.cache_clear()``.
-    """
-    path = COMPONENTS_CCD_PATH
-    if path is None or not path.is_file():
-        return None
-    offsets: dict[str, int] = {}
-    with open(path, "rb") as handle:
-        offset = 0
-        for line in handle:
-            if line.startswith(b"data_"):
-                comp_id = (
-                    line[len(b"data_") :].strip().decode("ascii", errors="replace")
-                )
-                # first occurrence wins (one block per comp_id)
-                offsets.setdefault(comp_id, offset)
-            offset += len(line)
-    return offsets
-
-
-@cache
-def _component_atoms_from_components_cif(comp_id: str) -> "struc.AtomArray | None":
-    """Extract one CCD component from the downloaded ``components.cif``.
-
-    Seeks directly to the component's ``data_<comp_id>`` block via the
-    :func:`_components_cif_offsets` index and reads only that block (the file is
-    a concatenation of per-component blocks) instead of parsing the whole ~500 MB
-    dictionary. Returns ``None`` when no components file is configured
-    (:data:`COMPONENTS_CCD_PATH`) or the component is absent.
-    """
-    import io
-
-    import biotite.structure.io.pdbx as pdbx
-
-    path = COMPONENTS_CCD_PATH
-    offsets = _components_cif_offsets()
-    if path is None or offsets is None:
-        return None
-    start = offsets.get(comp_id)
-    if start is None:
-        return None
-    block_lines: list[str] = []
-    with open(path, "rb") as handle:
-        handle.seek(start)
-        # the seeked line is the ``data_<comp_id>`` header itself
-        block_lines.append(handle.readline().decode("utf-8", errors="replace"))
-        for raw in handle:
-            if raw.startswith(b"data_"):
-                break
-            block_lines.append(raw.decode("utf-8", errors="replace"))
-    cif = pdbx.CIFFile.read(io.StringIO("".join(block_lines)))
-    # Prefer ideal coordinates; fall back to model coordinates; tolerate gaps.
-    for coord_kwargs in ({}, {"use_ideal_coord": False}):
-        try:
-            return pdbx.get_component(
-                cif, data_block=comp_id, allow_missing_coord=True, **coord_kwargs
-            )
-        except Exception:
-            continue
-    return None
-
-
-@cache
 def _get_ccd_atomarray(comp_id: str) -> "struc.AtomArray | None":
-    """Return the CCD component atoms with ideal coordinates.
+    """Return the CCD component atoms from biotite's bundled CCD (``bt_info``).
 
-    Prefers the downloaded official ``components.cif`` (the authoritative,
-    *current* CCD) when it is configured and available (:data:`COMPONENTS_CCD_PATH`),
-    then falls back to biotite's *bundled* CCD (``bt_info``). The bundled CCD is a
-    frozen snapshot that can be stale: it both fails on and *silently*
-    mis-represents some components (e.g. nitro groups stored as an over-valent
-    ``N(=O)=O`` rather than the charge-separated ``[N+](=O)[O-]``), so the current
-    dictionary is trusted first and the bundle is used only when the components
-    file is absent or lacks the component. Returns ``None`` if the component is in
-    neither source.
+    ``bt_info`` is the single CCD atom source. The pipeline keeps it current by
+    running biotite ``setup_ccd`` (see
+    :func:`plinder.data.pipeline.io.refresh_bundled_ccd`) during provisioning — it
+    pulls the same wwPDB dictionary, so the bundle carries up-to-date
+    representations (correct nitro charges, the 5-char extended codes, …). If that
+    sync has not run, the bundle is whatever biotite shipped, which may be stale.
+    Returns ``None`` if the component is absent.
     """
-    atoms = _component_atoms_from_components_cif(comp_id)
-    if atoms is not None:
-        return atoms
     try:
         return bt_info.residue(comp_id, allow_missing_coord=True)
     except Exception as bundled_error:
-        LOG.warning(
-            f"CCD lookup failed for {comp_id}: absent from components.cif and "
-            f"from biotite's bundled CCD ({bundled_error})"
-        )
+        LOG.warning(f"CCD lookup failed for {comp_id}: {bundled_error}")
         return None
 
 
@@ -528,7 +447,7 @@ def _get_prd_smiles(comp_id: str) -> str | None:
 def lig_has_dummies(
     ligand_code: str,
     dummy_lig_list: list[str] = [
-        "DUM",
+        # "DUM",  # OBS -> UNX (already listed below)
         "UNX",
         "ASX",
         "GLX",
@@ -544,7 +463,7 @@ def lig_has_dummies(
     Args:
         ligand_code str: ligand CCD code
         dummy_lig_list (list, optional): list of ccd codes for unknown or dummy entries.
-        Defaults to ['DUM', 'UNX', 'UNL', 'UNK', 'UPL', 'DN', 'N'].
+        Defaults to ['UNX', 'UNL', 'UNK', 'UPL', 'DN', 'N'].
 
     Returns:
         bool: if ligand considered as dummy and treated as artifact
@@ -553,52 +472,16 @@ def lig_has_dummies(
     return len(set(ligand_code.split("-")).intersection(dummy_lig_list)) > 0
 
 
-def sort_ccd_codes(code_list: list[str]) -> list[str]:
-    """Pick long first, then alphabetical letters followed by numbers
-    Args:
-        code_list (Set[str]): set of CCD strings
-
-    Returns:
-        List[str]: list of sorted CCD string set
-    """
-    code_list = sorted(sorted(code_list), key=len, reverse=True)
-    final_list = [code for code in code_list if not re.findall("([0-9])", code[0])] + [
-        code for code in code_list if re.findall("([0-9])", code[0])
-    ]
-    return final_list
-
-
-@cache
-def get_ccd_synonyms(data_dir: Path) -> dict[str, str]:
-    """Get Synonym dictonary for CCD SMILES
-    CCD smiles dict from download_components_cif
-
-    Returns:
-        Dict[str, str]: dictonary mapping synonymous CCD code to preferred one
-    """
-    from plinder.data.pipeline.io import download_components_cif
-
-    ccd_lib_cifpath = download_components_cif(data_dir=data_dir)
-    # Load CCD component SMILES from a parquet file next to *ciffile*
-    ccd_df = pd.read_parquet(ccd_lib_cifpath.parent / "components.parquet")
-    # remove dummies
-    ccd_df = ccd_df[~ccd_df["binder_id"].apply(lig_has_dummies)]
-    # map all present and origianl codes to a canonical CCD code
-    ccd_synonym_dict = ccd_df.set_index("binder_id")["ccd_code"].to_dict()
-    return ty.cast(dict[str, str], ccd_synonym_dict)
-
-
 # lazy evaluate data fetches referenced as module globals
-# TODO : clean this up and deduplicate extras with pipeline.io
 COFACTORS: set[str] | None = None
-CCD_SYNONYMS_DICT: dict[str, str] | None = None
+# RDKit canonical SMILES of the cofactor / artifact reference molecules. Matching
+# on structure (not CCD code) classifies a ligand that is the same molecule under
+# a *different current* code — the real "synonym" case. No "obsolete" codes.
+COFACTOR_SMILES: set[str] | None = None
+ARTIFACT_SMILES: set[str] | None = None
 # instantiate artifact list once and reuse variable
 ARTIFACTS: set[str] | None = None
 BINDING_AFFINITY: dict[str, ty.Any] | None = None
-# Downloaded full CCD (``components.cif``). Used as a fallback source for
-# components that biotite's bundled CCD predates (e.g. newly-released 5-char
-# extended codes). ``None`` until a data_dir with the file is seen.
-COMPONENTS_CCD_PATH: Path | None = None
 
 
 _OLIGO_SMARTS = {
@@ -740,42 +623,31 @@ def classify_ligand_polymer_classes(smiles: str | None) -> dict[str, bool]:
 
 def get_artifact_codes(data_dir: Path) -> set[str]:
     """Load the artifact CCD set needed for cheap ingest preflight."""
-    global CCD_SYNONYMS_DICT, ARTIFACTS
+    global ARTIFACTS, ARTIFACT_SMILES
 
-    if CCD_SYNONYMS_DICT is None:
-        CCD_SYNONYMS_DICT = get_ccd_synonyms(data_dir)
     artifacts = ARTIFACTS
     if artifacts is None:
         artifacts = parse_artifacts()
         ARTIFACTS = artifacts
+        ARTIFACT_SMILES = _reference_smiles(artifacts)
     return artifacts
 
 
-def add_missed_synonyms(current_set: set[str]) -> set[str]:
-    """Expand a set of CCD codes with any known synonyms."""
-    assert CCD_SYNONYMS_DICT is not None
-    # invert once: canonical -> full group (every member maps to canonical,
-    # incl. the canonical itself, so groups are complete)
-    from collections import defaultdict
+def _reference_smiles(codes: set[str]) -> set[str]:
+    """RDKit canonical SMILES for a set of CCD codes (skipping unresolved ones).
 
-    groups: dict[str, set[str]] = defaultdict(set)
-    for code, canon in CCD_SYNONYMS_DICT.items():
-        groups[canon].add(code)
-    # expand: for each code, pull in its whole group
-    expanded = set(current_set)
-    for c in current_set:
-        expanded |= groups.get(CCD_SYNONYMS_DICT.get(c, c), set())
-    return expanded
-
-
-def get_unique_ccd_longname(longname: str) -> str:
-    """Map a composite CCD code to its canonical synonym form."""
-    assert CCD_SYNONYMS_DICT is not None
-
-    if longname.startswith("PRD_"):
-        return longname
-    else:
-        return "-".join([CCD_SYNONYMS_DICT.get(s, s) for s in longname.split("-")])
+    Classifying cofactors / artifacts by this SMILES set (in addition to the CCD
+    code) catches a ligand that is the *same molecule* under a different current
+    CCD code — the real "synonym" case. Uses :func:`_get_ccd_smiles` (derived from
+    the CCD atoms), so it needs no ``components.cif`` descriptor column, and the
+    strings are directly comparable to a ligand's own ``self.smiles``.
+    """
+    smiles: set[str] = set()
+    for code in codes:
+        smi = _get_ccd_smiles(code)
+        if smi:
+            smiles.add(smi)
+    return smiles
 
 
 def get_chain_type(chain_type_str: str) -> str:
@@ -808,12 +680,7 @@ def parse_cofactors(data_dir: Path) -> set[str]:
         Set of cofactors
 
     """
-    global CCD_SYNONYMS_DICT
-
     from plinder.data.pipeline.io import download_cofactors
-
-    if CCD_SYNONYMS_DICT is None:
-        CCD_SYNONYMS_DICT = get_ccd_synonyms(data_dir)
 
     cofactors_json = download_cofactors(data_dir=data_dir)
     extra = {
@@ -834,20 +701,38 @@ def parse_cofactors(data_dir: Path) -> set[str]:
             "GTP",
             "GDP",
             "GMP",
-            "CPG",
-            "G25",
+            # "CPG",  # OBS -> 5GP (already listed)
+            # "G25",  # OBS, no REL successor
             "5GP",
         ],  # + ["GNP", "GTN"],  # GNP/GTN is inhibitor
-        "Cytidine nucleotides": ["C", "C5P", "C25", "CDP", "CTP"],
-        "Thymidine nucleotides": ["T", "TMP", "DT", "TTP", "THM", "TYD"],
-        "Uridine nucleotides": ["U", "DU", "U5P", "U25", "UMP", "UDP", "UTP"],
-        "MIO": ["CRW"],
-        "NAD": ["NAH"],
-        "Glutathione": ["CYP"],
-        "Biopterin": ["HBL", "BH4", "THB"],
+        "Cytidine nucleotides": [
+            "C",
+            "C5P",
+            "CDP",
+            "CTP",
+        ],  # C25 (OBS) -> C5P, already listed
+        "Thymidine nucleotides": [
+            "TMP",
+            "DT",
+            "TTP",
+            "THM",
+            "TYD",
+        ],  # T (OBS) -> DT, already listed
+        "Uridine nucleotides": [
+            "U",
+            "DU",
+            "U5P",
+            "UMP",
+            "UDP",
+            "UTP",
+        ],  # U25 (OBS) -> U5P, already listed
+        # "MIO": ["CRW"],  # CRW is OBS with no REL successor (kept; verify)
+        "NAD": ["NAD"],  # was NAH (OBS -> NAD)
+        "Glutathione": ["GPR"],  # was CYP (OBS -> GPR)
+        "Biopterin": ["HBI", "H4B"],  # was HBL->HBI, BH4->H4B, THB->H4B (dup)
         "Tetrahydrofolic acid": ["MEF"],
         "Lumazine": ["DLZ"],
-        "Menaquinone": ["MQ8", "MQ9", "MQE", "7MQ"],
+        "Menaquinone": ["MQ8", "MQ9", "MQE", "MQ7"],  # 7MQ (OBS) -> MQ7
         "Heme": ["1CP", "CP3", "MMP", "UP2", "UP3"],
         "Methanopterin": ["H4M", "H4Z"],
         "Lipoamide": ["LPM"],
@@ -855,14 +740,14 @@ def parse_cofactors(data_dir: Path) -> set[str]:
         "Pyridoxal": ["PXL", "UEG"],
         "Siderophores": ["488", "EB4", "SE8"],
         "Methanofuran": ["MFN"],
-        "Vitamin A": ["BCR", "ECH", "EQ3", "RAW"],
+        "Vitamin A": ["BCR", "ECH", "EQ3"],  # RAW (OBS) -> ECH, already listed
         "Vitamin K1": ["PQN"],
         "CHLOROPHYLL and similar": [
             "CLA",
             "CHL",
             "CL0",
-            "CL1",
-            "CL2",
+            # "CL1",  # OBS, no REL successor
+            # "CL2",  # OBS, no REL successor
             "CL7",
             "BCB",
             "BCL",
@@ -884,9 +769,6 @@ def parse_cofactors(data_dir: Path) -> set[str]:
     for c in extra:
         cofactors |= set(extra[c])
 
-    # add missed synonyms
-    cofactors = add_missed_synonyms(cofactors)
-
     return cofactors
 
 
@@ -900,8 +782,6 @@ def parse_artifacts() -> set[str]:
     with open(artifact_log, "r") as f:
         lines = f.readlines()
     artifacts = {l.strip() for l in lines if not l.startswith("#")}
-    # add missed synonyms
-    artifacts = add_missed_synonyms(artifacts)
     return artifacts
 
 
@@ -963,14 +843,14 @@ def is_excluded_mol(
     smiles: str,
     min_C_threshold: int = 2,
     min_HA_threshold: int = 5,
-    max_charge: int = 2,
+    max_charge: int = 6,
     max_linear_hydrocarbon_linker: int = 12,
 ) -> bool:
     """Exclude some molecules by default as useless for druglikeness
     Uses OR logic for violating rules:
         - less than 2 carbon atoms
         - less than 5 non-hydrogen atoms
-        - charge larger than +/- 2
+        - charge larger than +/- 6
         - unbranched hydrocarbon linker no longer than 12
 
     Args:
@@ -1440,16 +1320,14 @@ class Ligand(DocBaseModel):
             Populated Ligand object, or None if no atoms found.
         """
         if data_dir is not None:
-            global COFACTORS, ARTIFACTS, CCD_SYNONYMS_DICT, BINDING_AFFINITY
-            global COMPONENTS_CCD_PATH
-            if COMPONENTS_CCD_PATH is None:
-                COMPONENTS_CCD_PATH = data_dir / "dbs" / "components" / "components.cif"
-            if CCD_SYNONYMS_DICT is None:
-                CCD_SYNONYMS_DICT = get_ccd_synonyms(data_dir)
+            global COFACTORS, ARTIFACTS, COFACTOR_SMILES, ARTIFACT_SMILES
+            global BINDING_AFFINITY
             if COFACTORS is None:
                 COFACTORS = parse_cofactors(data_dir)
+                COFACTOR_SMILES = _reference_smiles(COFACTORS)
             if ARTIFACTS is None:
                 ARTIFACTS = parse_artifacts()
+                ARTIFACT_SMILES = _reference_smiles(ARTIFACTS)
             if BINDING_AFFINITY is None:
                 try:
                     BINDING_AFFINITY = get_binding_affinity(data_dir)
@@ -1732,7 +1610,9 @@ class Ligand(DocBaseModel):
             # set is_artifact and is_cofactor and is_other
             ligand.identify_artifacts_cofactors_and_other()
             # unique code parsing!
-            ligand.unique_ccd_code = get_unique_ccd_longname(ligand.ccd_code)
+            # obsolete codes are never ingested (PDB remediates), so the old
+            # code->canonical synonym map was an identity no-op: use the code as-is.
+            ligand.unique_ccd_code = ligand.ccd_code
 
         return ligand
 
@@ -1994,9 +1874,18 @@ class Ligand(DocBaseModel):
         """Set ``is_artifact``, ``is_cofactor``, and ``is_other`` flags in-place."""
         assert COFACTORS is not None
         assert ARTIFACTS is not None
-        if self.ccd_code in COFACTORS:
+        # Match by CCD code OR by structure (RDKit SMILES), so a ligand that is
+        # the same molecule under a different current code is still classified.
+        # COFACTOR_SMILES / ARTIFACT_SMILES are None if only the code sets were
+        # populated (e.g. a test that patches COFACTORS/ARTIFACTS directly) —
+        # fall back to code-only matching then.
+        if self.ccd_code in COFACTORS or (
+            COFACTOR_SMILES is not None and self.smiles in COFACTOR_SMILES
+        ):
             self.is_cofactor = True
-        if self.ccd_code in ARTIFACTS:
+        if self.ccd_code in ARTIFACTS or (
+            ARTIFACT_SMILES is not None and self.smiles in ARTIFACT_SMILES
+        ):
             self.in_artifact_list = True
 
         if self.is_ion:

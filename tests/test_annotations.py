@@ -16,7 +16,6 @@ from plinder.data.annotations.ligand_utils import (
     classify_ligand_polymer_classes,
     get_water_chain_ids,
     is_known_artifact_ligand,
-    sort_ccd_codes,
 )
 from plinder.data.annotations.mmpdb_utils import add_mmp_clusters_to_data
 from plinder.data.annotations.protein_utils import get_receptor_type
@@ -28,10 +27,6 @@ from plinder.data.annotations.save_utils import (
 )
 from plinder.data.get_system_annotations import GetPlinderAnnotation
 from rdkit import Chem
-
-
-def test_ccd_name_sorter():
-    assert sort_ccd_codes({"G", "G25", "CPG", "5GP"}) == ["CPG", "G25", "G", "5GP"]
 
 
 @pytest.mark.parametrize(
@@ -160,7 +155,8 @@ def test_known_artifact_preflight_is_conservative(monkeypatch):
     )
 
     assert is_known_artifact_ligand(["GOL"], {"GOL"})
-    assert is_known_artifact_ligand(["DUM"], set())
+    # UNX is a dummy placeholder (DUM was retired -> UNX; obsolete, never ingested)
+    assert is_known_artifact_ligand(["UNX"], set())
     assert is_known_artifact_ligand(["OHX"], set())
     assert not is_known_artifact_ligand(["LIG"], set())
     assert not is_known_artifact_ligand(["OHX", "OHX"], set())
@@ -745,81 +741,31 @@ def test_10sb_covalent_macrocycle_is_single_ligand(cif_10sb, mock_alternative_da
     assert mol.GetNumAtoms() == lig.num_heavy_atoms
 
 
-def test_get_ccd_mol_components_cif_fallback(monkeypatch):
-    """_get_ccd_mol falls back to components.cif for codes bt_info lacks.
+def test_fill_missing_ccd_bonds():
+    """A bond-less residue gets its intra-residue bonds back from the CCD (bt_info).
 
-    A1C8P is a 5-char extended CCD code (from 10sb) that biotite's bundled
-    dictionary predates. When the downloaded components.cif is available, the
-    component must be read from there instead of failing.
+    Strip a standard component's bonds, then confirm _fill_missing_ccd_bonds
+    restores them by matching atom names against the CCD dictionary.
     """
-    from pathlib import Path
-
-    import biotite.structure.info as bt_info
-    import plinder.data.annotations.ligand_utils as lu
-    from rdkit import Chem
-
-    # Precondition: the code is genuinely absent from the bundled CCD.
-    with pytest.raises(Exception):
-        bt_info.residue("A1C8P")
-
-    fixture = Path(__file__).parent / "test_data" / "mini_components.cif"
-    monkeypatch.setattr(lu, "COMPONENTS_CCD_PATH", fixture)
-    # Clear every layer of the (cached) CCD lookup so a stale miss from an
-    # earlier lookup doesn't shadow the components.cif source.
-    lu._components_cif_offsets.cache_clear()
-    lu._component_atoms_from_components_cif.cache_clear()
-    lu._get_ccd_atomarray.cache_clear()
-    lu._get_ccd_mol.cache_clear()
-    try:
-        mol = lu._get_ccd_mol("A1C8P")
-        assert mol is not None, "expected components.cif fallback to resolve A1C8P"
-        assert Chem.MolToSmiles(mol) == "CCCCCCNCc1ccc(CCN)cc1"
-    finally:
-        # Don't leak the cached fallback mol into other tests.
-        lu._components_cif_offsets.cache_clear()
-        lu._component_atoms_from_components_cif.cache_clear()
-        lu._get_ccd_atomarray.cache_clear()
-        lu._get_ccd_mol.cache_clear()
-
-
-def test_fill_missing_ccd_bonds_from_components(monkeypatch):
-    """A bond-less residue gets its intra-residue bonds back from components.cif.
-
-    Simulates the rare case where a components.cif-only code arrives without
-    _chem_comp_bond: strip A1C8P's bonds, then confirm _fill_missing_ccd_bonds
-    restores them from the components.cif fallback.
-    """
-    from pathlib import Path
-
     import biotite.structure as struc
     import plinder.data.annotations.ligand_utils as lu
 
-    fixture = Path(__file__).parent / "test_data" / "mini_components.cif"
-    monkeypatch.setattr(lu, "COMPONENTS_CCD_PATH", fixture)
-    lu._components_cif_offsets.cache_clear()
-    lu._component_atoms_from_components_cif.cache_clear()
     lu._get_ccd_atomarray.cache_clear()
-    try:
-        atoms = lu._get_ccd_atomarray("A1C8P")
-        n_expected = atoms.bonds.as_array().shape[0]
-        assert n_expected > 0
+    atoms = lu._get_ccd_atomarray("ATP")
+    n_expected = atoms.bonds.as_array().shape[0]
+    assert n_expected > 0
 
-        # Simulate a residue that arrived with no internal bonds.
-        stripped = atoms.copy()
-        stripped.bonds = struc.BondList(stripped.array_length())
-        assert stripped.bonds.as_array().shape[0] == 0
+    # Simulate a residue that arrived with no internal bonds.
+    stripped = atoms.copy()
+    stripped.bonds = struc.BondList(stripped.array_length())
+    assert stripped.bonds.as_array().shape[0] == 0
 
-        filled = lu._fill_missing_ccd_bonds(stripped)
-        assert filled.bonds.as_array().shape[0] == n_expected
+    filled = lu._fill_missing_ccd_bonds(stripped)
+    assert filled.bonds.as_array().shape[0] == n_expected
 
-        # Idempotent: a residue that already has bonds is untouched.
-        again = lu._fill_missing_ccd_bonds(filled)
-        assert again.bonds.as_array().shape[0] == n_expected
-    finally:
-        lu._components_cif_offsets.cache_clear()
-        lu._component_atoms_from_components_cif.cache_clear()
-        lu._get_ccd_atomarray.cache_clear()
-        lu._get_ccd_mol.cache_clear()
+    # Idempotent: a residue that already has bonds is untouched.
+    again = lu._fill_missing_ccd_bonds(filled)
+    assert again.bonds.as_array().shape[0] == n_expected
 
 
 def test_crystal_contact_detection(cif_6lu7, mock_alternative_datasets):

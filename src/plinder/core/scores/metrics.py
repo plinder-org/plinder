@@ -52,9 +52,25 @@ LIGAND_CLUSTER_METRICS = tuple(
     if metric not in NON_CLUSTERING_LIGAND_METRICS
 )
 
-CHEMICAL_CLUSTER_METRICS = ("tanimoto_similarity_ecfp4_1024",)
+# Fingerprint-derived ligand-similarity metrics. Each is computed on the shared
+# unique-SMILES node universe (``ligand_smiles_id``) but from its own fingerprint
+# and similarity measure: ECFP4/1024 Tanimoto and MHFP6/2048 estimated Jaccard.
+CHEMICAL_CLUSTER_METRICS = (
+    "tanimoto_similarity_ecfp4_1024",
+    "jaccard_similarity_mhfp6_2048",
+)
 
 DEFAULT_CLUSTER_METRICS = LIGAND_CLUSTER_METRICS + CHEMICAL_CLUSTER_METRICS
+
+
+def is_chemical_cluster_metric(metric: str) -> bool:
+    """Return whether a metric is a fingerprint-derived ligand-similarity metric.
+
+    Chemical metrics cluster the unique-SMILES node universe and are symmetric,
+    which sets them apart from the pocket/protein score metrics throughout the
+    clustering pipeline.
+    """
+    return metric in CHEMICAL_CLUSTER_METRICS
 
 
 def is_ligand_level_metric(metric: str) -> bool:

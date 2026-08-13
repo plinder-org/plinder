@@ -198,8 +198,14 @@ def _make_database_directory_portable(root: Path) -> dict[str, int]:
         target = path.resolve(strict=True)
         path.unlink()
         if target.is_relative_to(root_resolved):
+            # Compute the relative link against the *resolved* parent: target is
+            # already canonicalized by resolve(), and on macOS the raw parent may
+            # still carry the /var -> /private/var symlink. Mixing the two makes
+            # relpath walk up to '/' and back down (../../private/var/...), an
+            # absolute-in-disguise link that breaks once copytree moves it.
+            # os.path.relpath (not Path.relative_to(walk_up=)) for ../ links: walk_up is 3.12+, project is 3.10+.
             path.symlink_to(
-                os.path.relpath(target, start=path.parent),
+                os.path.relpath(target, start=path.parent.resolve()),
                 target_is_directory=target.is_dir(),
             )
             relativized += 1

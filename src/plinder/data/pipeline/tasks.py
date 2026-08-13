@@ -26,6 +26,7 @@ import pyarrow.parquet as pq
 from omegaconf import DictConfig
 from tqdm import tqdm
 
+from plinder.core.scores.metrics import is_chemical_cluster_metric
 from plinder.core.utils import gcs, schemas
 from plinder.core.utils.log import setup_logger
 from plinder.data import clusters, databases, splits
@@ -54,6 +55,7 @@ STAGES = [
     "finalize_ligand_archives",
     "compute_ligand_fingerprints",
     "make_ligand_scores",
+    "make_mhfp6_scores",
     "annotate_ligand_similarity",
     "make_sub_dbs",
     "run_batch_searches",
@@ -184,7 +186,7 @@ def download_alternative_datasets(
         futures: list[Future[Any]] = [
             executor.submit(io.download_cofactors, **kws),
             executor.submit(io.download_seqres_data, **kws),
-            executor.submit(io.download_components_cif, **kws),
+            executor.submit(io.refresh_bundled_ccd, **kws),
             executor.submit(io.download_affinity_data, **kws),
         ]
         wait(futures, return_when=ALL_COMPLETED)
@@ -805,6 +807,48 @@ def make_ligand_scores(
     output_path = data_dir / "ligand_scores" / f"{hashid}.parquet"
     output_path.parent.mkdir(exist_ok=True, parents=True)
     get_similarity_scores.ligand_scores(
+        ligand_ids=ligand_ids,
+        data_dir=data_dir,
+        output_path=output_path,
+        number_id_col=number_id_col,
+        minimum_similarity=minimum_similarity,
+    )
+
+
+def scatter_make_mhfp6_scores(
+    *,
+    data_dir: Path,
+    batch_size: int,
+    number_id_col: str = "ligand_smiles_id",
+) -> list[list[int]]:
+    """Scatter the unique-SMILES MHFP6 fingerprint node IDs."""
+    ligands = pd.read_parquet(
+        data_dir / "fingerprints" / get_similarity_scores.MHFP6_FINGERPRINT_FILE,
+        columns=[number_id_col],
+    )[number_id_col].to_list()
+    LOG.info(f"scatter_make_mhfp6_scores: found {len(ligands)} ligands")
+    chunks = [
+        ligands[pos : pos + batch_size] for pos in range(0, len(ligands), batch_size)
+    ]
+    return chunks or [[]]
+
+
+def make_mhfp6_scores(
+    *,
+    data_dir: Path,
+    ligand_ids: list[int],
+    minimum_similarity: float = 30.0,
+    number_id_col: str = "ligand_smiles_id",
+) -> None:
+    if not ligand_ids:
+        LOG.info("make_mhfp6_scores: no ligand nodes to score")
+        return
+    hashid = utils.hash_contents([str(i) for i in ligand_ids])
+    output_path = (
+        data_dir / get_similarity_scores.MHFP6_SCORES_DIR / f"{hashid}.parquet"
+    )
+    output_path.parent.mkdir(exist_ok=True, parents=True)
+    get_similarity_scores.mhfp6_ligand_scores(
         ligand_ids=ligand_ids,
         data_dir=data_dir,
         output_path=output_path,
@@ -2600,8 +2644,12 @@ def make_component_reductions(
         return
     if metric_workers < 1:
         raise ValueError("component reduction metric workers must be positive")
-    chemical_metric = "tanimoto_similarity_ecfp4_1024"
-    nonchemical_metrics = [metric for metric in metrics if metric != chemical_metric]
+    nonchemical_metrics = [
+        metric for metric in metrics if not is_chemical_cluster_metric(metric)
+    ]
+    chemical_metrics = [
+        metric for metric in metrics if is_chemical_cluster_metric(metric)
+    ]
     generic_nodes: list[str] = []
     generic_systems: set[str] | None = None
     if nonchemical_metrics:
@@ -2610,10 +2658,12 @@ def make_component_reductions(
             metric=nonchemical_metrics[0],
         )
     chemical_nodes: list[str] = []
-    if chemical_metric in metrics:
+    if chemical_metrics:
+        # every chemical metric shares the ligand_smiles_id node universe, so it
+        # is resolved once and reused for every chemical source below.
         chemical_nodes, _ = clusters.component_node_universe(
             data_dir=data_dir,
-            metric=chemical_metric,
+            metric=chemical_metrics[0],
         )
     scratch_dir.mkdir(exist_ok=True, parents=True)
 
@@ -2624,7 +2674,7 @@ def make_component_reductions(
             raise ValueError(
                 f"component source metric is not selected: {source_metric}"
             )
-        is_chemical = source_metric == chemical_metric
+        is_chemical = is_chemical_cluster_metric(source_metric)
         source_metrics = [source_metric]
         nodes = chemical_nodes if is_chemical else generic_nodes
         eligible_systems = None if is_chemical else generic_systems

@@ -159,6 +159,16 @@ TANIMOTO_SCORE_SCHEMA = pa.schema(
     ]
 )
 
+# MHFP6 MinHash edges: the third field carries the estimated Jaccard similarity
+# (percent) of the two ligands' circular-SMILES shingle sets.
+MHFP6_SCORE_SCHEMA = pa.schema(
+    [
+        pa.field("query_ligand_id", pa.int32()),
+        pa.field("target_ligand_id", pa.int32()),
+        pa.field("jaccard_similarity_mhfp6_2048", pa.float32()),
+    ]
+)
+
 LEGACY_TANIMOTO_SCORE_SCHEMA = pa.schema(
     [
         pa.field("query_ligand_id", pa.int32()),
