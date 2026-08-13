@@ -262,9 +262,12 @@ def _entry_outputs_complete(
             }
         )
     try:
-        return all(
+        schemas_are_complete = all(
             columns.issubset(pq.read_schema(path).names)
             for path, columns in required_columns.items()
+        )
+        return schemas_are_complete and _biounit_contacts_are_valid(
+            sidecars["entry_biounit_chains"]
         )
     except Exception:
         return False
@@ -277,12 +280,18 @@ BIOUNIT_CONTACT_COLUMNS = {
 }
 
 
-def _biounit_contacts_are_recorded(entry_directory: Path) -> bool:
-    path = entry_directory / "entry_biounit_chains.parquet"
+def _biounit_contacts_are_valid(path: Path) -> bool:
     if not path.is_file():
         return False
     try:
-        return BIOUNIT_CONTACT_COLUMNS.issubset(pq.read_schema(path).names)
+        if not BIOUNIT_CONTACT_COLUMNS.issubset(pq.read_schema(path).names):
+            return False
+        table = pq.read_table(path, columns=sorted(BIOUNIT_CONTACT_COLUMNS))
+        return all(
+            value is not None and value >= 0
+            for column in table.column_names
+            for value in table[column].to_pylist()
+        )
     except (OSError, TypeError, ValueError):
         return False
 
@@ -326,7 +335,9 @@ def completed_entry_metrics(
             if (
                 expected_ingest_mode == "ligands"
                 and entry_directory
-                and _biounit_contacts_are_recorded(Path(entry_directory))
+                and _biounit_contacts_are_valid(
+                    Path(entry_directory) / "entry_biounit_chains.parquet"
+                )
             ):
                 return metrics_path
             continue

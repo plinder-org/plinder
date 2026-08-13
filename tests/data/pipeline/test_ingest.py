@@ -988,6 +988,14 @@ def test_completed_entry_metrics_invalidates_interface_cutoff_changes(
         )
         == metrics_path
     )
+
+    biounit_path = entry_directory / "entry_biounit_chains.parquet"
+    biounits = pd.read_parquet(biounit_path)
+    biounits.loc[0, "chain_num_contacting_ions"] = None
+    biounits.to_parquet(biounit_path, index=False)
+    assert completed_entry_metrics(output_root, "1abc") is None
+    _write_fake_sidecars(entry_directory, "1abc")
+
     assert (
         completed_entry_metrics(
             output_root,
@@ -1048,6 +1056,38 @@ def test_ligand_skip_requires_recorded_biounit_contacts(tmp_path: Path) -> None:
     )
 
     _write_fake_sidecars(entry_directory, "1abc")
+    biounits = pd.read_parquet(biounit_path)
+    biounits.loc[0, "chain_num_contacting_other_ligands"] = None
+    biounits.to_parquet(biounit_path, index=False)
+    assert (
+        completed_entry_metrics(
+            output_root,
+            "1abc",
+            expected_ingest_mode="ligands",
+        )
+        is None
+    )
+
+    _write_fake_sidecars(entry_directory, "1abc")
+    assert (
+        completed_entry_metrics(
+            output_root,
+            "1abc",
+            expected_ingest_mode="ligands",
+        )
+        == metrics_path
+    )
+
+    pd.DataFrame(
+        columns=[
+            "entry_pdb_id",
+            "biounit_id",
+            "chain_instance",
+            "chain_asym_id",
+            "chain_role",
+            *contact_columns,
+        ]
+    ).to_parquet(biounit_path, index=False)
     assert (
         completed_entry_metrics(
             output_root,

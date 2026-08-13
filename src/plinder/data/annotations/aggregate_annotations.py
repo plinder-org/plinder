@@ -18,7 +18,7 @@ import numpy as np
 import pandas as pd
 from biotite.file import DeserializationError, InvalidFileError
 from PDBValidation.ValidationFactory import ValidationFactory
-from pydantic import BeforeValidator, Field
+from pydantic import BeforeValidator, Field, PrivateAttr
 from rdkit import RDLogger
 
 from plinder.core.structure.atoms import is_hydrogen_isotope
@@ -780,6 +780,8 @@ class System(DocBaseModel):
 
 
 class Entry(DocBaseModel):
+    _ligand_contacts_requested: bool = PrivateAttr(default=False)
+
     pdb_id: str = Field(
         default_factory=str,
         description="RCSB PDB ID. See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_entry.id.html",
@@ -1318,6 +1320,7 @@ class Entry(DocBaseModel):
         contact_threshold: float,
     ) -> None:
         """Count every ligand-like chain contacting each receptor instance."""
+        self._ligand_contacts_requested = True
         receptor_asym_ids = {
             asym_id
             for asym_id, chain in self.chains.items()
@@ -1489,6 +1492,7 @@ class Entry(DocBaseModel):
             resolution=r,
             **entry_taxonomy,
         )
+        entry._ligand_contacts_requested = include_ligands
         # Load structure with biotite
         # Multi-model PDBs (e.g. NMR ensembles) silently use model 1 here;
         # warn so callers know other models are dropped.
@@ -2046,6 +2050,7 @@ class Entry(DocBaseModel):
             pdb_id=pdb_id,
             chain_to_seqres=chain_to_seqres,
         )
+        entry._ligand_contacts_requested = include_ligands
         entry._populate_chains(atoms, cif_data)
         entry.ligand_like_chains = detect_ligand_chains(entry, min_polymer_size)
         monoatomic_ion_mask = struc.filter_monoatomic_ions(atoms)
@@ -2507,9 +2512,7 @@ class Entry(DocBaseModel):
             "chain_num_contacting_artifacts",
             "chain_num_contacting_other_ligands",
         ]
-        contacts_computed = bool(self.biounit_ligand_contact_counts) and set(
-            self.biounit_chain_ids
-        ).issubset(self.biounit_ligand_contact_counts)
+        contacts_computed = self._ligand_contacts_requested
         if contacts_computed:
             columns.extend(contact_columns)
         rows = []

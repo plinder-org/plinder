@@ -1035,6 +1035,20 @@ def test_biounit_membership_counts_standalone_ligand_contacts() -> None:
     assert membership.loc["1.A", "chain_num_contacting_other_ligands"] == 0
 
 
+def test_empty_ligand_biounit_table_keeps_contact_schema() -> None:
+    entry = Entry(pdb_id="1abc")
+    entry._ligand_contacts_requested = True
+
+    membership = entry.biounit_chains_to_df()
+
+    assert membership.empty
+    assert {
+        "chain_num_contacting_ions",
+        "chain_num_contacting_artifacts",
+        "chain_num_contacting_other_ligands",
+    }.issubset(membership.columns)
+
+
 def test_entry_never_groups_ligands_across_biological_assemblies() -> None:
     from plinder.data.annotations.ligand_utils import Ligand
     from plinder.data.annotations.protein_utils import Chain
