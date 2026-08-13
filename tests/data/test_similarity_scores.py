@@ -2471,6 +2471,18 @@ def test_ligand_similarity_pipeline_does_not_write_per_system_mapping(
     retained_score.unlink()
 
     ligand_scores(
+        ligand_ids=[int(unique_ligands["ligand_smiles_id"].iloc[0])],
+        data_dir=tmp_path,
+        output_path=score_dir / "part.parquet",
+    )
+    with pytest.raises(
+        ValueError,
+        match="BulkTanimoto score shards do not cover the fingerprint set",
+    ):
+        annotate_ligand_similarity(data_dir=tmp_path)
+
+    (score_dir / "part.parquet").unlink()
+    ligand_scores(
         ligand_ids=unique_ligands["ligand_smiles_id"].tolist(),
         data_dir=tmp_path,
         output_path=score_dir / "part.parquet",

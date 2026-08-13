@@ -300,7 +300,6 @@ ligand_interacting_ligand_chains_validation_percent_outliers_density	list<elemen
 ligand_interacting_ligand_chains_validation_percent_outliers_chirality	list<element: double>	Percentage of residues with chirality outliers
 ligand_interacting_ligand_chains_validation_percent_outliers_clashes	list<element: double>	Percentage of residues with clashes outliers
 system_pocket_SCOP2	string	Most frequent SCOP2 mapping among pocket residues
-uniqueness	string	Identifier differentiating systems that are simple crystal symmetries within a biological assembly
 ligand__members	struct<1.C: list<element: int64>, 1.D: list<element: int64>, 1.E: list<element: int64>, 1.F: list<element: int64>, 1.H: list<element: int64>, 1.I: list<element: int64>, 1.J: list<element: int64>, 1.K: list<element: int64>>	Residue numbers per member instance-chain (self, incl. covalent).          Falls back to the single primary chain for ligands built before         ``member_residue_numbers`` was populated.
 ligand_member_asym_ids	list<element: string>	Asym IDs of every chain this (possibly merged) ligand spans.
 system_id_legacy	string	Historical system ID using global assembly-operation chain instances

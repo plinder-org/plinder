@@ -1136,29 +1136,20 @@ def add_aggregated_columns(*, index: pd.DataFrame) -> pd.DataFrame:
 
 
 def finalize_index(*, data_dir: Path) -> pd.DataFrame:
-    """Merge local cluster labels into the V3 annotation parquet."""
+    """Merge local cluster labels into the release annotation parquet."""
     started = time()
     index_path = data_dir / "index" / "annotation_table.parquet"
     if not index_path.is_file():
         raise FileNotFoundError(index_path)
     LOG.info("loading annotation index for final enrichment: %s", index_path)
     index = pd.read_parquet(index_path)
+    index.drop(columns=["uniqueness"], errors="ignore", inplace=True)
     LOG.info("loaded annotation index: rows=%d columns=%d", *index.shape)
     index = add_ligand_3d_score_ability_column(index=index, data_dir=data_dir)
     LOG.info("merged ligand 3D-scoreability annotations")
     index = add_ligand_similarity_columns(index=index, data_dir=data_dir)
     LOG.info("merged ligand similarity annotations")
     index = add_cluster_columns(index=index, data_dir=data_dir)
-    uniqueness_cluster = "pli_qcov__100__ligand__directed_set_cover"
-    if uniqueness_cluster in index.columns:
-        labels = (
-            index[uniqueness_cluster]
-            .astype("string")
-            .fillna(index["ligand_id"].astype("string"))
-        )
-        index["uniqueness"] = (
-            index["system_id_no_biounit"].astype("string") + "_" + labels
-        )
     interface_path = data_dir / "index" / "interface_annotation_table.parquet"
     interface_index: pd.DataFrame | None = None
     if interface_path.is_file():

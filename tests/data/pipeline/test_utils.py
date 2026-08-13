@@ -392,7 +392,6 @@ def test_finalize_index_adds_local_clusters(tmp_path):
             "directed": [False],
         }
     ).to_parquet(tanimoto_cover_file, index=False)
-
     utils.finalize_index(data_dir=tmp_path)
     finalized = pd.read_parquet(index_dir / "annotation_table.parquet")
     directed_labels = finalized["pli_qcov__100__ligand__directed_set_cover"]
@@ -426,7 +425,7 @@ def test_finalize_index_adds_local_clusters(tmp_path):
     assert finalized.loc[0, "ligand_smiles_id"] == 0
     assert pd.isna(finalized.loc[1, "ligand_smiles_id"])
     assert finalized["ligand_is_3d_score_able"].tolist() == [True, False]
-    assert finalized["uniqueness"].nunique() == 2
+    assert "uniqueness" not in finalized.columns
 
 
 def test_cluster_index_rejects_non_tanimoto_set_cover(tmp_path):

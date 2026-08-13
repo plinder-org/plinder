@@ -163,10 +163,6 @@ DERIVED_COLUMN_DESCRIPTIONS = {
     "side_2_half_interface_id": (
         "Representative half-interface assigned to the second query side"
     ),
-    "uniqueness": (
-        "Identifier differentiating systems that are simple crystal symmetries "
-        "within a biological assembly"
-    ),
     "biounit_num_ligands": "Number of ligands in the biological assembly",
     "biounit_num_unique_ccd_codes": (
         "Number of distinct ligand CCD codes in the biological assembly"

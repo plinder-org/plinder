@@ -474,6 +474,25 @@ def annotate_ligand_similarity(*, data_dir: Path) -> Path:
     """Write unique-SMILES identifiers and cofactor annotations for the index."""
     fingerprint_dir = data_dir / "fingerprints"
     unique_ligands = pd.read_parquet(fingerprint_dir / "ligands_per_smiles.parquet")
+    score_paths = sorted((data_dir / "ligand_scores").glob("*.parquet"))
+    if len(unique_ligands) and not score_paths:
+        raise FileNotFoundError("no BulkTanimoto score shards were generated")
+    expected_query_ids = set(unique_ligands["ligand_smiles_id"].astype(int))
+    observed_query_ids: set[int] = set()
+    for path in score_paths:
+        self_scores = pd.read_parquet(
+            path,
+            columns=["query_ligand_id"],
+            filters=[("tanimoto_similarity_ecfp4_1024", "==", 100.0)],
+        )
+        observed_query_ids.update(self_scores["query_ligand_id"].astype(int))
+    if observed_query_ids != expected_query_ids:
+        missing = sorted(expected_query_ids.difference(observed_query_ids))
+        extra = sorted(observed_query_ids.difference(expected_query_ids))
+        raise ValueError(
+            "BulkTanimoto score shards do not cover the fingerprint set: "
+            f"missing={missing[:10]}, extra={extra[:10]}"
+        )
     annotations = build_ligand_similarity_annotations(
         unique_ligands=unique_ligands,
     )
