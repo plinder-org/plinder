@@ -14,6 +14,7 @@ You can disable the MD5 checksum comparison between local files and remote files
 by setting the environment variable `PLINDER_OFFLINE=true`.
 """
 
+from plinder.core.index.query import query_table
 from plinder.core.index.system import PlinderSystem
 from plinder.core.index.utils import get_manifest, get_plindex
 from plinder.core.release import (
@@ -31,6 +32,7 @@ __all__ = [
     "get_pdb_mmcif",
     "download_pdb_mmcifs",
     "PlinderSystem",
+    "query_table",
     "PlinderRelease",
     "RELEASE_PATHS",
     "RELEASE_TABLES",
