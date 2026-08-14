@@ -114,7 +114,7 @@ def test_query_table_filters_joined_fields_without_changing_ligand_grain(
     ]
 
 
-def test_joined_sidecar_overrides_with_non_null_values(
+def test_joined_entry_metadata_supplies_entry_values(
     local_release: PlinderRelease,
 ) -> None:
     result = query_table(
@@ -125,7 +125,7 @@ def test_joined_sidecar_overrides_with_non_null_values(
     )
 
     assert result["entry_resolution"].tolist()[:2] == [1.5, 2.5]
-    assert result["entry_resolution"].iloc[2] == 99.0
+    assert pd.isna(result["entry_resolution"].iloc[2])
 
 
 def test_sparse_sidecar_does_not_erase_base_identifiers(
@@ -154,6 +154,7 @@ def test_annotation_release_dates_come_from_entry_metadata(
     result = query_table(
         "annotation",
         columns=["ligand_id", "entry_release_date"],
+        joins=["entry_metadata"],
         filters=[("entry_release_date", ">=", "2022-01-01")],
         release=local_release,
     )
@@ -164,6 +165,21 @@ def test_annotation_release_dates_come_from_entry_metadata(
             "entry_release_date": "2022-01-01",
         }
     ]
+
+
+def test_annotation_does_not_expose_entry_metadata_without_join(
+    local_release: PlinderRelease,
+) -> None:
+    result = query_table("annotation", release=local_release)
+
+    assert "entry_release_date" not in result.columns
+    assert "entry_resolution" not in result.columns
+    with pytest.raises(ValueError, match="columns .* are unavailable"):
+        query_table(
+            "annotation",
+            columns=["entry_resolution"],
+            release=local_release,
+        )
 
 
 def test_annotation_binding_affinity_columns_are_disabled(

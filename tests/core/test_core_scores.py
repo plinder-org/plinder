@@ -37,6 +37,48 @@ def test_query_index():
     assert "split" not in df.columns
 
 
+def test_query_index_joins_entry_metadata(monkeypatch):
+    calls = []
+
+    def fake_query_table(table_name, **kwargs):
+        calls.append((table_name, kwargs))
+        return pd.DataFrame(
+            {
+                "system_id": ["1abc__1__1.A__1.L"],
+                "entry_resolution": [1.5],
+            }
+        )
+
+    monkeypatch.setattr(index_module, "query_table", fake_query_table)
+
+    result = index_module.query_index(
+        columns=["entry_resolution"],
+        filters=[("entry_resolution", "<=", 2.0)],
+    )
+
+    assert result["entry_resolution"].tolist() == [1.5]
+    assert calls == [
+        (
+            "annotation",
+            {
+                "columns": ["system_id", "entry_resolution"],
+                "filters": [("entry_resolution", "<=", 2.0)],
+                "joins": ["entry_metadata"],
+            },
+        )
+    ]
+
+    index_module.query_index(columns=["system_id"])
+    assert calls[-1] == (
+        "annotation",
+        {
+            "columns": ["system_id"],
+            "filters": None,
+            "joins": None,
+        },
+    )
+
+
 @pytest.mark.usefixtures("read_plinder_mount")
 @pytest.mark.parametrize(
     "system_id, correct_release_date",

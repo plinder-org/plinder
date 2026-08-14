@@ -22,6 +22,11 @@ DISABLED_ANNOTATION_COLUMNS = frozenset(
     {"system_has_binding_affinity", "ligand_binding_affinity"}
 )
 
+
+def _is_repeated_entry_column(column: str) -> bool:
+    return column.startswith("entry_") and column != "entry_pdb_id"
+
+
 # Every relationship points from a base table to a table whose join columns are
 # unique.  These joins therefore preserve the base table's documented row grain.
 TABLE_JOINS: dict[str, dict[str, JoinKeys]] = {
@@ -95,7 +100,7 @@ def _schema_names(path: Path) -> list[str]:
         )
     else:
         dataset = ds.dataset(path, format="parquet", exclude_invalid_files=True)
-    return dataset.schema.names
+    return list(dataset.schema.names)
 
 
 def _condition_sql(
@@ -240,18 +245,7 @@ def query_table(
             f"{sorted(disabled_requested)}"
         )
 
-    hidden_joins: list[str] = []
-    needs_release_date = table_name == "annotation" and (
-        columns is None
-        or columns == ["*"]
-        or "entry_release_date" in requested_columns
-        or "entry_release_date" in requested_filter_columns
-    )
-    if needs_release_date and "entry_metadata" not in selected_joins:
-        hidden_joins.append("entry_metadata")
-    effective_joins = [*selected_joins, *hidden_joins]
-
-    table_names = [table_name, *effective_joins]
+    table_names = [table_name, *selected_joins]
     aliases = {name: f"t{index}" for index, name in enumerate(table_names)}
     paths = {
         name: release.fetch(str(RELEASE_TABLES[name]["artifact"]))
@@ -262,15 +256,18 @@ def query_table(
     output_order = [
         name
         for name in schemas[table_name]
-        if table_name != "annotation" or name not in DISABLED_ANNOTATION_COLUMNS
+        if table_name != "annotation"
+        or (
+            name not in DISABLED_ANNOTATION_COLUMNS
+            and not _is_repeated_entry_column(name)
+        )
     ]
     output_columns = {
-        name: _column_sql(aliases[table_name], name)
-        for name in schemas[table_name]
+        name: _column_sql(aliases[table_name], name) for name in output_order
     }
     joined_column_owner: dict[str, str] = {}
     join_sql: list[str] = []
-    for join_name in effective_joins:
+    for join_name in selected_joins:
         keys = allowed_joins[join_name]
         base_missing = [
             column for column, _ in keys if column not in schemas[table_name]
@@ -284,16 +281,13 @@ def query_table(
                 f"missing base columns {base_missing}, sidecar columns {join_missing}"
             )
         side_key_columns = {side_column for _, side_column in keys}
-        visible_columns = list(
-            schemas[join_name]
-            if join_name in selected_joins
-            else ["entry_release_date"]
-        )
+        visible_columns = list(schemas[join_name])
         if join_name == "annotation":
             visible_columns = [
                 name
                 for name in visible_columns
                 if name not in DISABLED_ANNOTATION_COLUMNS
+                and not _is_repeated_entry_column(name)
             ]
         for name in visible_columns:
             if name in side_key_columns:

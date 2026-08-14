@@ -237,7 +237,7 @@ def _set_interface_threshold(path: Path, threshold: int) -> None:
     pq.write_table(table.replace_schema_metadata(metadata), path)
 
 
-def test_plan_shards_and_finalize_real_v3_contract(tmp_path: Path) -> None:
+def test_plan_shards_and_finalize_release_contract(tmp_path: Path) -> None:
     _write_release(tmp_path)
 
     plan = plan_collation(tmp_path)
@@ -263,6 +263,9 @@ def test_plan_shards_and_finalize_real_v3_contract(tmp_path: Path) -> None:
     }
     assert report["interface_count"] == 2
     annotation = pd.read_parquet(tmp_path / "index/annotation_table.parquet")
+    assert [column for column in annotation.columns if column.startswith("entry_")] == [
+        "entry_pdb_id"
+    ]
     assert not {
         column
         for column in annotation.columns
@@ -281,6 +284,8 @@ def test_plan_shards_and_finalize_real_v3_contract(tmp_path: Path) -> None:
         "1abc__1__1.L": True,
         "1abc__1__1.Z": False,
     }
+    metadata = pd.read_parquet(tmp_path / "index/entry_metadata.parquet")
+    assert metadata.set_index("entry_pdb_id").loc["2def", "entry_pH"] == 7.4
     marker = json.loads((tmp_path / "index/collation.json").read_text())
     assert marker["status"] == "complete"
     assert marker["interface_min_residues"] == 7
@@ -510,9 +515,10 @@ def test_targeted_repair_preserves_unaffected_release_only_columns(
     chain_path = tmp_path / "index/entry_chains.parquet"
     before_chain_stat = chain_path.stat()
 
-    raw = pd.read_parquet(tmp_path / "raw_entries/ab/1abc.parquet")
-    raw["entry_pH"] = 6.5
-    raw.to_parquet(tmp_path / "raw_entries/ab/1abc.parquet", index=False)
+    metadata_path = tmp_path / "raw_entries/ab/1abc/entry_metadata.parquet"
+    metadata = pd.read_parquet(metadata_path)
+    metadata["entry_pH"] = 6.5
+    metadata.to_parquet(metadata_path, index=False)
 
     report = repair_collation(tmp_path, ["1ABC", "1abc"], threads=2, memory_limit="1GB")
 
@@ -520,7 +526,7 @@ def test_targeted_repair_preserves_unaffected_release_only_columns(
     assert report["status"] == "requires_downstream_repair"
     assert report["repaired_entry_count"] == 1
     repaired = pd.read_parquet(tmp_path / "index/annotation_table.parquet")
-    assert repaired.loc[repaired["entry_pdb_id"].eq("1abc"), "entry_pH"].eq(6.5).all()
+    assert "entry_pH" not in repaired.columns
     assert (
         repaired.loc[repaired["entry_pdb_id"].eq("1abc"), "release_only"].isna().all()
     )
@@ -529,6 +535,8 @@ def test_targeted_repair_preserves_unaffected_release_only_columns(
         .eq("keep")
         .all()
     )
+    repaired_metadata = pd.read_parquet(tmp_path / "index/entry_metadata.parquet")
+    assert repaired_metadata.set_index("entry_pdb_id").loc["1abc", "entry_pH"] == 6.5
     repaired_chains = pd.read_parquet(tmp_path / "index/entry_chains.parquet")
     lengths = (
         repaired_chains[repaired_chains["chain_asym_id"].eq("A")]
@@ -571,7 +579,7 @@ def test_shard_rejects_inputs_changed_after_plan(tmp_path: Path) -> None:
     plan_collation(tmp_path)
     annotation = tmp_path / "raw_entries/ab/1abc.parquet"
     frame = pd.read_parquet(annotation)
-    frame["entry_pH"] = 6.0
+    frame["ligand_unique_ccd_code"] = "CHANGED"
     frame.to_parquet(annotation, index=False)
 
     with pytest.raises(RuntimeError, match="changed after planning"):
@@ -602,14 +610,14 @@ def test_finalize_uses_frozen_shards_after_raw_inputs_change(tmp_path: Path) -> 
     collate_shard(tmp_path, "de", memory_limit="1GB")
     annotation = tmp_path / "raw_entries/ab/1abc.parquet"
     frame = pd.read_parquet(annotation)
-    frame["entry_pH"] = 6.0
+    frame["ligand_unique_ccd_code"] = "CHANGED"
     frame.to_parquet(annotation, index=False)
 
     report = finalize_collation(tmp_path, threads=2, memory_limit="1GB")
 
     assert report["status"] == "complete"
     installed = pd.read_parquet(tmp_path / "index/annotation_table.parquet")
-    assert set(installed.loc[installed["entry_pdb_id"] == "1abc", "entry_pH"]) != {6.0}
+    assert "CHANGED" not in set(installed["ligand_unique_ccd_code"])
 
 
 def test_final_install_fails_closed_on_partial_replacement(

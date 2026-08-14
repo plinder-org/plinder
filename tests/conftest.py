@@ -1,13 +1,34 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
 import json
+import os
 import shutil
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
 test_asset_fp = Path(__file__).absolute().parent / "test_data"
 test_output_fp = Path(__file__).absolute().parent / "xx/output"
+
+
+def _write_test_entry_metadata(release_dir: Path) -> None:
+    annotation = pd.read_parquet(release_dir / "index" / "annotation_table.parquet")
+    entry_columns = [column for column in annotation if column.startswith("entry_")]
+    metadata = annotation.loc[:, entry_columns].drop_duplicates()
+    if metadata["entry_pdb_id"].duplicated().any():
+        raise ValueError("test annotation has inconsistent entry metadata")
+    dates = pd.read_csv(
+        Path(__file__).resolve().parents[1]
+        / "src/plinder/data/annotations/static_files/dates.csv"
+    ).loc[:, ["entry_pdb_id", "entry_release_date"]]
+    metadata = metadata.drop(columns="entry_release_date", errors="ignore").merge(
+        dates,
+        on="entry_pdb_id",
+        how="left",
+        validate="one_to_one",
+    )
+    metadata.to_parquet(release_dir / "index" / "entry_metadata.parquet", index=False)
 
 
 @pytest.fixture(scope="session")
@@ -451,8 +472,13 @@ def mock_alternative_datasets(
 
 
 @pytest.fixture
-def read_plinder_mount(monkeypatch):
-    monkeypatch.setenv("PLINDER_MOUNT", test_asset_fp.as_posix())
+def read_plinder_mount(monkeypatch, tmp_path):
+    source = test_asset_fp / "plinder" / "mount"
+    adir = tmp_path / "plinder" / "mount"
+    shutil.copytree(source, adir, copy_function=os.symlink)
+    _write_test_entry_metadata(adir)
+
+    monkeypatch.setenv("PLINDER_MOUNT", tmp_path.as_posix())
     monkeypatch.setenv("PLINDER_RELEASE", "mount")
     monkeypatch.setenv("PLINDER_RELEASE_NUMBER", "")
     monkeypatch.setenv("PLINDER_BUCKET", "plinder")
@@ -461,9 +487,7 @@ def read_plinder_mount(monkeypatch):
 
     config._config._clear()
     monkeypatch.setattr(cpl, "_CLIENTS", {})
-    plinder_mount = test_asset_fp
     cfg = config.get_config()
-    adir = plinder_mount / "plinder" / "mount"
     assert Path(cfg.data.plinder_dir) == adir
 
     for path in adir.rglob("*_done"):
@@ -477,6 +501,33 @@ def read_plinder_eval_mount(monkeypatch, tmp_path):
     plinder_mount = tmp_path / "plinder_mount"
     adir = plinder_mount / "eval"
     shutil.copytree(test_asset_fp / "eval", adir)
+    annotation_path = adir / "index" / "annotation_table.parquet"
+    annotation = pd.read_parquet(annotation_path)
+    instance_chains = annotation["ligand_id"].str.rsplit("__", n=1).str[-1]
+    annotation["ligand_instance_chain"] = instance_chains
+    annotation["ligand_instance"] = instance_chains.str.split(".").str[0].astype(int)
+    annotation["ligand_asym_id"] = instance_chains.str.rsplit(".", n=1).str[-1]
+    annotation.to_parquet(annotation_path, index=False)
+    for archive in ("a3.zip", "ai.zip"):
+        shutil.unpack_archive(
+            adir / "systems" / archive,
+            adir / "reconstructed_systems",
+        )
+    _write_test_entry_metadata(adir)
+    ligand_archive_dir = adir / "ligand_archives"
+    ligand_archive_dir.mkdir()
+    for system_id in ("1a3b__1__1.B__1.D", "1ai5__1__1.A_1.B__1.D"):
+        pdb_id = system_id[:4]
+        ligand_file = (
+            adir / "reconstructed_systems" / system_id / "ligand_files" / "1.D.sdf"
+        )
+        pd.DataFrame(
+            {
+                "pdb_id": [pdb_id],
+                "ligand_asym_id": ["D"],
+                "sdf": [ligand_file.read_bytes()],
+            }
+        ).to_parquet(ligand_archive_dir / f"{pdb_id[1:3]}.parquet", index=False)
     monkeypatch.setenv("PLINDER_MOUNT", plinder_mount.as_posix())
     monkeypatch.setenv("PLINDER_RELEASE", "")
     monkeypatch.setenv("PLINDER_RELEASE_NUMBER", "")
@@ -511,6 +562,7 @@ def write_plinder_mount(monkeypatch, tmp_path):
         write_path = write_plinder_mount / path.relative_to(read_plinder_mount)
         write_path.parent.mkdir(exist_ok=True, parents=True)
         write_path.write_bytes(path.read_bytes())
+    _write_test_entry_metadata(write_plinder_mount)
     return write_plinder_mount
 
 

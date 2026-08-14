@@ -1,6 +1,6 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
-"""Plan, shard, validate, and install the local V3 annotation index."""
+"""Plan, shard, validate, and install the local annotation index."""
 
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ from plinder.data.pipeline.ingest import (
     completed_interface_metrics,
 )
 
-COLLATION_VERSION = 3
+COLLATION_VERSION = 4
 STAGING_RELATIVE = Path("index/.staging/v3_collation")
 MANIFEST_NAME = "entries.parquet"
 PLAN_NAME = "plan.json"
@@ -64,6 +64,33 @@ AGGREGATED_COLUMNS = (
     "system_proper_unique_ccd_codes",
     "ligand_is_3d_score_able",
 )
+
+
+def _is_repeated_entry_column(column: str) -> bool:
+    """Return whether a ligand row repeats data owned by entry metadata."""
+    return column.startswith("entry_") and column != "entry_pdb_id"
+
+
+def _annotation_columns_to_publish(columns: Iterable[str]) -> list[str]:
+    """Drop fields that do not belong in the published ligand table."""
+    return [
+        column
+        for column in columns
+        if not _is_repeated_entry_column(column)
+        and not any(
+            marker in column.casefold() for marker in RETIRED_ENRICHMENT_MARKERS
+        )
+    ]
+
+
+def _raw_annotation_columns_to_keep(columns: Iterable[str]) -> list[str]:
+    """Return raw ligand fields, excluding aggregates that will be recomputed."""
+    return [
+        column
+        for column in _annotation_columns_to_publish(columns)
+        if column not in AGGREGATED_COLUMNS
+    ]
+
 
 MANIFEST_SCHEMA = pa.schema(
     [
@@ -724,14 +751,7 @@ def _build_annotation_view(
         *(f"ligand_is_{name}" for name in SYSTEM_LIGAND_FLAGS),
     }
     _require_columns(raw_columns, required, "raw annotation")
-    retained = [
-        column
-        for column in raw_columns
-        if column not in AGGREGATED_COLUMNS
-        and not any(
-            marker in column.casefold() for marker in RETIRED_ENRICHMENT_MARKERS
-        )
-    ]
+    retained = _raw_annotation_columns_to_keep(raw_columns)
     selected = ", ".join(_quote_identifier(column) for column in retained)
     connection.execute(
         f"CREATE OR REPLACE TEMP VIEW base_annotation AS SELECT {selected} "
@@ -1350,6 +1370,14 @@ def _validate_final_tables(
         if any(invalid_interfaces.values()):
             raise ValueError(f"invalid protein interfaces: {invalid_interfaces}")
         annotation_columns = _relation_columns(connection, "annotation")
+        repeated_entry_columns = sorted(
+            column for column in annotation_columns if _is_repeated_entry_column(column)
+        )
+        if repeated_entry_columns:
+            raise ValueError(
+                "entry metadata columns remain in ligand annotation: "
+                f"{repeated_entry_columns}"
+            )
         retired = sorted(
             column
             for column in annotation_columns
@@ -1732,6 +1760,13 @@ def repair_collation(
             connection.read_parquet(str(final_paths["annotation"])).create_view(
                 "installed_annotation", replace=True
             )
+            installed_annotation_columns = _annotation_columns_to_publish(
+                _relation_columns(connection, "installed_annotation")
+            )
+            installed_annotation_select = ", ".join(
+                f"installed.{_quote_identifier(column)}"
+                for column in installed_annotation_columns
+            )
             repaired_annotation = (
                 "UNION ALL BY NAME SELECT * FROM collated_annotation"
                 if ligand_rows
@@ -1739,7 +1774,8 @@ def repair_collation(
             )
             _copy_query(
                 connection,
-                "SELECT * FROM (SELECT installed.* FROM installed_annotation "
+                f"SELECT * FROM (SELECT {installed_annotation_select} "
+                "FROM installed_annotation "
                 "AS installed ANTI JOIN repaired_entries USING (entry_pdb_id) "
                 f"{repaired_annotation}) "
                 "ORDER BY entry_pdb_id, system_id, ligand_id",
