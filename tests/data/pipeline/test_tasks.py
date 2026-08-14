@@ -1070,9 +1070,7 @@ def test_directed_set_cover_scatter_skips_only_complete_outputs(tmp_path):
             "coverage_count": pd.Series([1], dtype="Int32"),
             "coverage_fraction": pd.Series([1.0], dtype="Float32"),
             "representative_selection_order": pd.Series([0], dtype="Int32"),
-            "representative_selection_threshold": pd.Series(
-                [100], dtype="Int16"
-            ),
+            "representative_selection_threshold": pd.Series([100], dtype="Int16"),
             "representative_marginal_gain": pd.Series([1], dtype="Int32"),
             "assignment_threshold": pd.Series([100], dtype="Int16"),
             "label": ["c0"],
@@ -1668,13 +1666,9 @@ def test_score_repair_plans_full_and_target_only_queries(
     )
     target_candidates.parent.mkdir(parents=True)
     target_candidates.touch()
-    packed_candidates = (
-        tmp_path / "scores/ligand_3d_candidate_shards/shard=jk.parquet"
-    )
+    packed_candidates = tmp_path / "scores/ligand_3d_candidate_shards/shard=jk.parquet"
     packed_candidates.parent.mkdir(parents=True)
-    pd.DataFrame({"query_entry": ["4jkl"]}).to_parquet(
-        packed_candidates, index=False
-    )
+    pd.DataFrame({"query_entry": ["4jkl"]}).to_parquet(packed_candidates, index=False)
     affected = tmp_path / "affected.txt"
     affected.write_text("2def\n4jkl\n")
     additional_full = tmp_path / "additional_full.txt"
@@ -4195,12 +4189,14 @@ def test_interface_cluster_columns_merge_into_interface_annotation(
         "c0",
         "c0",
     ]
-    assert result[
-        "interface_side_qcov__50__chain_1_directed_set_cover"
-    ].tolist() == ["c0", "c0"]
-    assert result[
-        "interface_side_qcov__50__chain_2_directed_set_cover"
-    ].tolist() == ["c2", "c2"]
+    assert result["interface_side_qcov__50__chain_1_directed_set_cover"].tolist() == [
+        "c0",
+        "c0",
+    ]
+    assert result["interface_side_qcov__50__chain_2_directed_set_cover"].tolist() == [
+        "c2",
+        "c2",
+    ]
 
     pd.DataFrame({"system_id": ["ligand-system"]}).to_parquet(
         index_dir / "annotation_table.parquet",
@@ -4231,9 +4227,10 @@ def test_interface_cluster_columns_merge_into_interface_annotation(
     finalized_interfaces = pd.read_parquet(
         index_dir / "interface_annotation_table.parquet"
     )
-    assert finalized_interfaces[
-        "interface_qcov__50__directed_set_cover"
-    ].tolist() == ["c0", "c0"]
+    assert finalized_interfaces["interface_qcov__50__directed_set_cover"].tolist() == [
+        "c0",
+        "c0",
+    ]
 
     original_replace = Path.replace
 
@@ -5143,9 +5140,7 @@ def test_clustering_statistics_validate_published_cover_artifacts(tmp_path):
     assert report["issues"] == []
     assert (tmp_path / "ligand_clusters" / "stats.json").is_file()
     stats = pd.read_parquet(tmp_path / "ligand_clusters" / "stats.parquet")
-    directed = stats[stats["cluster"].eq("directed_set_cover")].set_index(
-        "threshold"
-    )
+    directed = stats[stats["cluster"].eq("directed_set_cover")].set_index("threshold")
     assert directed.loc[100, "cluster_count"] == 2
     assert directed.loc[50, "cluster_count"] == 1
 
@@ -5433,6 +5428,7 @@ def test_ingest_configs_use_current_schema_and_stages():
         if path.name == "make_entries_ligands.yaml":
             assert "collate_entries" in cfg.flow.run_specific_stages
             assert "finalize_ligand_archives" in cfg.flow.run_specific_stages
+            assert "make_ligand_mmp_pairs" in cfg.flow.run_specific_stages
             assert "make_ligands" not in cfg.flow.run_specific_stages
 
 

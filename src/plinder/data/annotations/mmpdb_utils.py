@@ -26,6 +26,7 @@ from plinder.core.utils.log import setup_logger
 
 LOG = setup_logger(__name__)
 
+
 def _mmpdb_version() -> str:
     try:
         return version("mmpdb")
@@ -55,7 +56,9 @@ def _ligand_table(fingerprint_path: Path) -> pd.DataFrame:
     if ligands["ligand_rdkit_canonical_smiles"].isna().any():
         raise ValueError("unique ligand SMILES contain missing structures")
     if ligands["ligand_smiles_id"].duplicated().any():
-        raise ValueError("unique ligand SMILES contain duplicate ligand_smiles_id values")
+        raise ValueError(
+            "unique ligand SMILES contain duplicate ligand_smiles_id values"
+        )
     if ligands["ligand_rdkit_canonical_smiles"].duplicated().any():
         raise ValueError("unique ligand SMILES contain duplicate structures")
 
@@ -150,9 +153,9 @@ def _generate_pair_files(
     *, ligands: pd.DataFrame, work_dir: Path, threads: int, executable: str
 ) -> list[Path]:
     smiles_path = work_dir / "ligands.smi"
-    ligands[
-        ["ligand_rdkit_canonical_smiles", "ligand_smiles_id"]
-    ].to_csv(smiles_path, sep="\t", header=False, index=False)
+    ligands[["ligand_rdkit_canonical_smiles", "ligand_smiles_id"]].to_csv(
+        smiles_path, sep="\t", header=False, index=False
+    )
     if ligands.empty:
         return []
 
@@ -165,10 +168,7 @@ def _generate_pair_files(
     if not smiles_shards:
         raise RuntimeError("mmpdb did not create any SMILES shards")
     _run_commands(
-        [
-            [executable, "fragment", "-j", "1", shard.name]
-            for shard in smiles_shards
-        ],
+        [[executable, "fragment", "-j", "1", shard.name] for shard in smiles_shards],
         cwd=work_dir,
         workers=threads,
     )
@@ -226,9 +226,7 @@ def _core_table(shared_cores: Sequence[str]) -> pd.DataFrame:
                 raise ValueError(
                     f"mmpdb emitted an unreadable shared core: {shared_core}"
                 )
-            rows.append(
-                (shared_core, shared_core.count("*"), mol.GetNumHeavyAtoms())
-            )
+            rows.append((shared_core, shared_core.count("*"), mol.GetNumHeavyAtoms()))
     return pd.DataFrame(
         rows,
         columns=[
@@ -299,22 +297,24 @@ def _write_pair_parquet(
         connection.close()
         raise ValueError(f"mmpdb emitted {invalid_ids} non-integer ligand IDs")
 
-    shared_cores = connection.execute(
-        f"""
+    shared_cores = (
+        connection.execute(
+            f"""
         SELECT DISTINCT shared_core_smiles
         FROM read_parquet('{raw_path_sql}')
         ORDER BY shared_core_smiles
         """
-    ).fetch_df()["shared_core_smiles"].tolist()
+        )
+        .fetch_df()["shared_core_smiles"]
+        .tolist()
+    )
     core_table = _core_table(shared_cores)
     ligand_lookup = ligands.rename(
         columns={
             "ligand_rdkit_canonical_smiles": "ligand_smiles",
             "num_heavy_atoms": "ligand_num_heavy_atoms",
         }
-    )[
-        ["ligand_smiles_id", "ligand_smiles", "ligand_num_heavy_atoms"]
-    ]
+    )[["ligand_smiles_id", "ligand_smiles", "ligand_num_heavy_atoms"]]
     connection.register("ligand_lookup", ligand_lookup)
     connection.register("core_lookup", core_table)
     missing_ids = connection.execute(

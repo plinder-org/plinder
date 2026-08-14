@@ -1,5 +1,5 @@
 flow:
-  run_specific_stages: make_entries,collate_entries,make_canonical_ligand_archives,finalize_ligand_archives,compute_ligand_fingerprints,make_ligand_scores,annotate_ligand_similarity
+  run_specific_stages: make_entries,collate_entries,make_canonical_ligand_archives,finalize_ligand_archives,compute_ligand_fingerprints,make_ligand_scores,annotate_ligand_similarity,make_ligand_mmp_pairs
   download_rcsb_files_batch_size: 1
   make_entries_batch_size: 120
   make_ligands_batch_size: 220
