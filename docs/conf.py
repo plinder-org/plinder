@@ -45,6 +45,7 @@ extensions = [
 ]
 
 nb_custom_formats = {".ipynb": ["jupytext.reads", {"fmt": "ipynb"}]}
+nb_execution_mode = "off"
 nb_execution_timeout = 720
 nb_kernel_rgx_aliases = {"plinder.*": "python3"}
 myst_enable_extensions = [

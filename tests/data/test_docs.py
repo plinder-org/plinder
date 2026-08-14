@@ -4,6 +4,68 @@
 from plinder.data import docs
 
 
+def _import_tablegen(monkeypatch):
+    import importlib
+    import sys
+    from pathlib import Path
+    from types import ModuleType
+
+    itables = ModuleType("itables")
+    itables.to_html_datatable = lambda frame, **_: frame.to_html(
+        index=False, escape=False
+    )
+    monkeypatch.setitem(sys.modules, "itables", itables)
+    monkeypatch.delitem(sys.modules, "tablegen", raising=False)
+    repository = Path(__file__).resolve().parents[2]
+    monkeypatch.syspath_prepend(str(repository / "docs"))
+    return importlib.import_module("tablegen")
+
+
+def test_tablegen_renders_checked_in_table_descriptions(tmp_path, monkeypatch):
+    tablegen = _import_tablegen(monkeypatch)
+
+    description_dir = tmp_path / "column_descriptions"
+    table_dir = description_dir / "tables"
+    table_dir.mkdir(parents=True)
+    (table_dir / "alpha.tsv").write_text(
+        "Name\tType\tDescription\n" "entry_id\tstring\tStable entry identifier\n",
+        encoding="utf-8",
+    )
+    (table_dir / "beta.tsv").write_text(
+        "Name\tType\tDescription\n" "score\tdouble\tSimilarity score\n",
+        encoding="utf-8",
+    )
+    output_path = tmp_path / "table.html"
+
+    tablegen.generate_table(description_dir, output_path)
+
+    html = output_path.read_text(encoding="utf-8")
+    assert "<code>alpha</code>" in html
+    assert "<code>entry_id</code>" in html
+    assert "Stable entry identifier" in html
+    assert "<code>beta</code>" in html
+    assert "<code>score</code>" in html
+    assert "Similarity score" in html
+    assert all(line.strip() for line in html.splitlines())
+
+
+def test_tablegen_rejects_invalid_description_columns(tmp_path, monkeypatch):
+    import pytest
+
+    tablegen = _import_tablegen(monkeypatch)
+
+    description_dir = tmp_path / "column_descriptions"
+    table_dir = description_dir / "tables"
+    table_dir.mkdir(parents=True)
+    (table_dir / "broken.tsv").write_text(
+        "Name\tDescription\nentry_id\tStable entry identifier\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="must contain columns"):
+        tablegen.generate_table(description_dir, tmp_path / "table.html")
+
+
 def test_ligand_cluster_column_descriptions():
     import pandas as pd
 
