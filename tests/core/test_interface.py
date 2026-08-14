@@ -21,9 +21,9 @@ def interface_release(tmp_path) -> PlinderRelease:
             "system_biounit_id": ["1"],
             "interface_chain_1": ["1.A"],
             "interface_chain_2": ["1.B"],
-            "interface_chain_1_residue_numbers": [[1, 2]],
+            "interface_chain_1_residue_numbers": [[22, 23]],
             "interface_chain_1_residue_indices": [[0, 1]],
-            "interface_chain_2_residue_numbers": [[1]],
+            "interface_chain_2_residue_numbers": [[39]],
             "interface_chain_2_residue_indices": [[0]],
             "interface_num_contact_residue_pairs": [2],
         }
@@ -87,6 +87,37 @@ def test_interface_loads_annotation_sequences_and_residue_views(
     assert interface.interface_cif == output
     with pytest.raises(FileExistsError, match="Refusing to overwrite"):
         interface.reconstruct()
+
+
+def test_interface_uses_explicit_release_for_default_reconstruction_dir(
+    interface_release, cif_2y4i
+):
+    interface = PlinderInterface(
+        system_id="2y4i__1__1.A--1.B",
+        release=interface_release,
+        source_mmcif=cif_2y4i,
+    )
+
+    assert interface.reconstruction_dir == (
+        interface_release.data_dir / "reconstructed_interfaces" / "2y4i__1__1.A--1.B"
+    )
+
+
+def test_interface_rejects_source_with_different_residue_numbering(
+    interface_release, cif_2y4i, tmp_path
+):
+    interface = PlinderInterface(
+        system_id="2y4i__1__1.A--1.B",
+        release=interface_release,
+        source_mmcif=cif_2y4i,
+        reconstruction_dir=tmp_path / "reconstructed",
+    )
+    annotation = interface.annotation.copy()
+    annotation["interface_chain_1_residue_numbers"] = [999, 23]
+    interface._annotation = annotation
+
+    with pytest.raises(ValueError, match="do not match the release annotation"):
+        _ = interface.interface_residue_masks
 
 
 def test_interface_reports_an_unknown_id(interface_release):

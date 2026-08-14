@@ -39,12 +39,15 @@ class PlinderInterface:
         self.system_id = system_id
         self.release = release or PlinderRelease()
         self.source_mmcif = Path(source_mmcif) if source_mmcif is not None else None
+        default_reconstruction_root = (
+            Path(self.release.data_dir)
+            if self.release.data_dir is not None
+            else Path(get_config().data.plinder_dir)
+        )
         self.reconstruction_dir = (
             Path(reconstruction_dir)
             if reconstruction_dir is not None
-            else Path(get_config().data.plinder_dir)
-            / "reconstructed_interfaces"
-            / system_id
+            else default_reconstruction_root / "reconstructed_interfaces" / system_id
         )
         self._annotation: pd.Series | None = None
 
@@ -154,6 +157,16 @@ class PlinderInterface:
                 self.annotation[f"interface_chain_{side}_residue_indices"],
                 dtype=int,
             )
+            residue_numbers = np.asarray(
+                self.annotation[f"interface_chain_{side}_residue_numbers"],
+                dtype=int,
+            )
+            if len(residue_indices) != len(residue_numbers):
+                raise ValueError(
+                    f"interface residue indices and numbers for {chain_id} have "
+                    f"different lengths: {len(residue_indices)} and "
+                    f"{len(residue_numbers)}"
+                )
             chain_atom_indices = np.flatnonzero(
                 self.atom_array.chain_id.astype(str) == chain_id
             )
@@ -164,6 +177,21 @@ class PlinderInterface:
                 raise ValueError(
                     f"interface residue indices for {chain_id} fall outside its "
                     f"{residue_count} resolved residues"
+                )
+            observed_numbers = chain.res_id[starts[:-1]][residue_indices].astype(int)
+            if not np.array_equal(observed_numbers, residue_numbers):
+                mismatches = [
+                    f"index {residue_index}: expected {expected}, found {observed}"
+                    for residue_index, expected, observed in zip(
+                        residue_indices,
+                        residue_numbers,
+                        observed_numbers,
+                    )
+                    if expected != observed
+                ]
+                raise ValueError(
+                    f"source mmCIF residues do not match the release annotation "
+                    f"for {chain_id}: {'; '.join(mismatches)}"
                 )
             mask = np.zeros(self.atom_array.array_length(), dtype=bool)
             for residue_index in residue_indices:
