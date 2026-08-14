@@ -870,6 +870,9 @@ def test_scoring_finalization_stage_order_and_partitions():
         "finalize_alignments"
     )
     assert tasks.STAGES.index("finalize_alignments") < tasks.STAGES.index(
+        "plan_score_batches"
+    )
+    assert tasks.STAGES.index("plan_score_batches") < tasks.STAGES.index(
         "plan_interface_scores"
     )
     assert tasks.STAGES.index("plan_interface_scores") < tasks.STAGES.index(
@@ -5268,6 +5271,8 @@ def test_metaflow_graph_uses_canonical_ligand_archive_stage():
     assert "self.pipeline.collate_alignments(self.input)" in flow
     assert "self.next(self.finalize_alignments)" in flow
     assert "self.pipeline.finalize_alignments()" in flow
+    assert "self.next(self.plan_score_batches)" in flow
+    assert "self.pipeline.plan_score_batches()" in flow
     assert "self.next(self.plan_interface_scores)" in flow
     assert "self.pipeline.plan_interface_scores()" in flow
     assert "self.next(self.scatter_make_interface_scores)" in flow
@@ -5400,6 +5405,7 @@ def test_ingest_configs_use_current_schema_and_stages():
             ] == pytest.approx(0.2)
             assert "collate_alignments" in cfg.flow.run_specific_stages
             assert "finalize_alignments" in cfg.flow.run_specific_stages
+            assert "plan_score_batches" in cfg.flow.run_specific_stages
             assert "plan_interface_scores" in cfg.flow.run_specific_stages
             assert "make_interface_scores" in cfg.flow.run_specific_stages
             assert "finalize_interface_scores" in cfg.flow.run_specific_stages
@@ -5435,6 +5441,7 @@ def test_ingest_configs_use_current_schema_and_stages():
 def test_make_canonical_ligand_archives_only_archives_asu_sdfs(tmp_path):
     from plinder.data.pipeline.score import finalize_ligand_archives
 
+    (tmp_path / "raw_entries" / "cd").mkdir(parents=True)
     canonical = tmp_path / "raw_entries" / "ab" / "1abc" / "ligand_files"
     canonical.mkdir(parents=True)
     (canonical / "A.sdf").write_text("canonical")
@@ -5443,6 +5450,12 @@ def test_make_canonical_ligand_archives_only_archives_asu_sdfs(tmp_path):
     rotated.mkdir(parents=True)
     (rotated / "1.A.sdf").write_text("rotated")
 
+    assert tasks.scatter_make_canonical_ligand_archives(
+        data_dir=tmp_path,
+        two_char_codes=[],
+        pdb_ids=[],
+        batch_size=4,
+    ) == [["ab"]]
     tasks.make_canonical_ligand_archives(data_dir=tmp_path, two_char_codes=["ab"])
 
     archive = tmp_path / "ligand_archives" / "ab.parquet"

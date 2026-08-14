@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import time
 from concurrent.futures import (
     ALL_COMPLETED,
@@ -79,6 +78,7 @@ STAGES = [
     "map_batch_alignments",
     "collate_alignments",
     "finalize_alignments",
+    "plan_score_batches",
     "plan_interface_scores",
     "make_interface_scores",
     "finalize_interface_scores",
@@ -502,7 +502,11 @@ def scatter_make_canonical_ligand_archives(
     if selected_codes:
         codes = selected_codes
     else:
-        codes = sorted(os.listdir(entry_dir.as_posix()))
+        codes = sorted(
+            path.name
+            for path in entry_dir.iterdir()
+            if path.is_dir() and any(path.glob("*.parquet"))
+        )
     LOG.info(
         "scatter_make_canonical_ligand_archives: "
         f"found {len(codes)} two character codes"

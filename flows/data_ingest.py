@@ -301,6 +301,14 @@ class PlinderDataIngestFlow(FlowSpec):
     @step
     def finalize_alignments(self):
         self.pipeline.finalize_alignments()
+        self.next(self.plan_score_batches)
+
+    @kubernetes(**{**K8S, **WORKSTATION_MEM})
+    @environment(**ENV)
+    @retry
+    @step
+    def plan_score_batches(self):
+        self.pipeline.plan_score_batches()
         self.next(self.plan_interface_scores)
 
     @kubernetes(**{**K8S, **WORKSTATION_MEM})

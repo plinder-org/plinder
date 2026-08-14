@@ -2460,7 +2460,9 @@ def finalize_ligand_archives(data_dir: Path) -> dict[str, Any]:
     """Validate packed canonical SDF coverage against the collated index."""
     archives = sorted((data_dir / "ligand_archives").glob("*.parquet"))
     expected_shards = sorted(
-        path.name for path in (data_dir / "raw_entries").iterdir() if path.is_dir()
+        path.name
+        for path in (data_dir / "raw_entries").iterdir()
+        if path.is_dir() and any(path.glob("*.parquet"))
     )
     observed_shards = [path.stem for path in archives]
     if observed_shards != expected_shards:
@@ -2823,10 +2825,7 @@ def summarize_clustering_artifacts(
     artifacts: list[tuple[str, int, str, bool, Path]] = []
     for metric in selected_metrics:
         for threshold in selected_thresholds:
-            if (
-                entity_type == "ligand"
-                and metric == "tanimoto_similarity_ecfp4_1024"
-            ):
+            if entity_type == "ligand" and metric == "tanimoto_similarity_ecfp4_1024":
                 artifacts.append(
                     (
                         metric,

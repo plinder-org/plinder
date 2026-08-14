@@ -496,6 +496,21 @@ class IngestPipeline:
         finalize_alignment_artifacts(self.plinder_dir)
 
     @utils.ingest_flow_control
+    def plan_score_batches(self) -> None:
+        from plinder.data.pipeline.score import plan_score_batches
+
+        plan_score_batches(
+            self.plinder_dir,
+            batch_size=self.cfg.flow.make_batch_scores_batch_size,
+            threads=self.cfg.flow.make_batch_scores_cpu,
+            scratch_dir=Path(tempfile.gettempdir()) / "plinder-score-plan",
+            max_query_protein_chains=self.cfg.scorer.max_query_protein_chains,
+            max_query_proper_ligand_chains=(
+                self.cfg.scorer.max_query_proper_ligand_chains
+            ),
+        )
+
+    @utils.ingest_flow_control
     def plan_interface_scores(self) -> None:
         from plinder.data.pipeline.score import plan_interface_scoring
 
