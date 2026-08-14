@@ -615,6 +615,80 @@ def save_reconstructed_chain(
     return output_cif
 
 
+def reconstruct_interface(
+    source_mmcif: Path | str,
+    annotation: AnnotationRow,
+) -> struc.AtomArray:
+    """Rebuild one annotated protein-interface chain pair from a source mmCIF."""
+    from plinder.data.annotations.cif_utils import build_biounit, read_mmcif_file
+
+    assembly_id = str(annotation.get("system_biounit_id", ""))
+    chain_1 = str(annotation.get("interface_chain_1", ""))
+    chain_2 = str(annotation.get("interface_chain_2", ""))
+    if not assembly_id:
+        raise ValueError("interface annotation is missing system_biounit_id")
+    if not chain_1 or not chain_2:
+        raise ValueError("interface annotation is missing one or both chains")
+    if chain_1 == chain_2:
+        raise ValueError("an interface requires two distinct chain instances")
+
+    biounit = build_biounit(read_mmcif_file(source_mmcif), assembly_id)
+    selected_chains = {chain_1, chain_2}
+    _require_chains(biounit, selected_chains, view_name="interface")
+    return biounit[np.isin(biounit.chain_id, list(selected_chains))]
+
+
+def save_reconstructed_interface(
+    source_mmcif: Path | str,
+    annotation: AnnotationRow,
+    *,
+    output_cif: Path | str,
+    overwrite: bool = False,
+    reconstructed: struc.AtomArray | None = None,
+) -> Path:
+    """Write one annotated biological-assembly interface as a valid mmCIF."""
+    from plinder.data.annotations.cif_utils import (
+        get_label_asym_sequences,
+        read_mmcif_container,
+    )
+
+    output_cif = Path(output_cif)
+    if output_cif.exists() and not overwrite:
+        raise FileExistsError(
+            f"Refusing to overwrite reconstruction output: {output_cif}"
+        )
+    atoms = (
+        reconstruct_interface(source_mmcif, annotation)
+        if reconstructed is None
+        else reconstructed
+    )
+    chain_ids = [
+        str(annotation.get("interface_chain_1", "")),
+        str(annotation.get("interface_chain_2", "")),
+    ]
+    source_asym_ids = {
+        chain_id: chain_id.split(".", maxsplit=1)[-1] for chain_id in chain_ids
+    }
+    source_block = read_mmcif_container(Path(source_mmcif))
+    source_sequences = get_label_asym_sequences(source_block)
+    protein_sequences = {
+        chain_id: source_sequences[source_asym_id]
+        for chain_id, source_asym_id in source_asym_ids.items()
+        if source_asym_id in source_sequences
+    }
+    structure_id = str(annotation.get("system_id", "interface"))
+    output_cif.parent.mkdir(parents=True, exist_ok=True)
+    save_cif_file(
+        atoms,
+        structure_id,
+        output_cif,
+        source_block=source_block,
+        source_asym_ids=source_asym_ids,
+        protein_sequences=protein_sequences,
+    )
+    return output_cif
+
+
 def _string_list(value: Any) -> list[str]:
     """Normalize Arrow/Pandas/list values from an annotation row."""
     if value is None:
