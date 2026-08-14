@@ -235,8 +235,13 @@ class IngestPipeline:
         tasks.annotate_ligand_similarity(data_dir=self.plinder_dir)
 
     @utils.ingest_flow_control
-    def make_mmp_index(self) -> None:
-        tasks.make_mmp_index(data_dir=self.plinder_dir)
+    def make_ligand_mmp_pairs(self, *, threads: int | None = None) -> None:
+        tasks.make_ligand_mmp_pairs(
+            data_dir=self.plinder_dir,
+            scratch_dir=Path(tempfile.gettempdir()) / "plinder-mmp",
+            threads=threads or self.cfg.flow.clustering_cpu,
+            force_update=self.cfg.data.force_update,
+        )
 
     @utils.ingest_flow_control
     def scatter_make_canonical_ligand_archives(self) -> list[list[str]]:
@@ -808,18 +813,6 @@ class IngestPipeline:
     @utils.ingest_flow_control
     def finalize_index(self) -> None:
         tasks.finalize_index(data_dir=self.plinder_dir)
-
-    @utils.ingest_flow_control
-    def scatter_make_splits(self) -> list[list[tuple[DictConfig, str]]]:
-        chunks: list[list[tuple[DictConfig, str]]] = tasks.scatter_make_splits(
-            data_dir=self.plinder_dir,
-            split_config_dir=self.cfg.flow.split_config_dir,
-        )
-        return chunks
-
-    @utils.ingest_flow_control
-    def make_splits(self, cfg_and_path: list[tuple[DictConfig, str]]) -> None:
-        tasks.make_splits(data_dir=self.plinder_dir, cfg_and_path=cfg_and_path)
 
     def run_stage(self, stage: str) -> None:
         """

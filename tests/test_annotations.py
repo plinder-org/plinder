@@ -31,7 +31,6 @@ from plinder.data.annotations.ligand_utils import (
     is_known_artifact_ligand,
     sort_ccd_codes,
 )
-from plinder.data.annotations.mmpdb_utils import add_mmp_clusters_to_data
 from plinder.data.annotations.protein_utils import Chain, get_receptor_type
 from plinder.data.annotations.save_utils import (
     SystemReconstructionOptions,
@@ -1047,6 +1046,29 @@ def test_empty_ligand_biounit_table_keeps_contact_schema() -> None:
         "chain_num_contacting_artifacts",
         "chain_num_contacting_other_ligands",
     }.issubset(membership.columns)
+
+
+def test_biounit_membership_preserves_serialized_contact_counts() -> None:
+    entry = Entry(
+        pdb_id="1abc",
+        biounit_chain_ids={"1": ["1.A"]},
+        biounit_ligand_contact_counts={
+            "1": {
+                "1.A": {
+                    "ions": 1,
+                    "artifacts": 2,
+                    "other_ligands": 3,
+                }
+            }
+        },
+    )
+    restored = Entry.model_validate_json(entry.model_dump_json())
+
+    membership = restored.biounit_chains_to_df().set_index("chain_instance")
+
+    assert membership.loc["1.A", "chain_num_contacting_ions"] == 1
+    assert membership.loc["1.A", "chain_num_contacting_artifacts"] == 2
+    assert membership.loc["1.A", "chain_num_contacting_other_ligands"] == 3
 
 
 def test_entry_never_groups_ligands_across_biological_assemblies() -> None:
@@ -2182,32 +2204,6 @@ def test_get_validation(
     ].reset_index(drop=True)
 
     pd.testing.assert_frame_equal(reference_df, validation_df)
-
-
-def test_mmp(mini_mmp_index, mini_mmp_data_annotation, mini_mmp_cluster_folder):
-    system_df = pd.read_csv(mini_mmp_data_annotation, sep="\t")
-    load_mmp_df = pd.read_csv(mini_mmp_index, compression="gzip", sep="\t", header=None)
-    load_mmp_df.columns = ["SMILES1", "SMILES2", "id1", "id2", "V1>>V2", "CONSTANT"]
-    mmp_data = add_mmp_clusters_to_data(
-        load_mmp_df,
-        system_df,
-        cluster_folder=mini_mmp_cluster_folder,
-        protein_metric="protein_fident_weighted_sum",
-        protein_threshold=95,
-        protein_directed=False,
-        pocket_metric="pocket_fident",
-        pocket_threshold=100,
-        pocket_directed=True,
-        min_constant_size=10,
-    )
-    # All have same pocket-protein id
-    assert list(mmp_data.prot_pocket_set_shared.unique()) == ["c1931_c55468"]
-
-    # Minimum constant size is greater than 10
-    assert mmp_data.const_size.min() == 18.0
-
-    # Number of unique congeneric ids is equal to number of unique constants
-    assert len(mmp_data.congeneric_id.unique()) == len(mmp_data.CONSTANT.unique())
 
 
 def test_mixed_receptor_type_is_written_to_annotation(cif_8ufz, monkeypatch):

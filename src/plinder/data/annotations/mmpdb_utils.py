@@ -1,416 +1,454 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
+"""Build a compact matched-molecular-pair table for unique ligand SMILES."""
+
 from __future__ import annotations
 
-import logging
+import gzip
+import hashlib
+import json
 import shutil
 import subprocess
-from itertools import zip_longest
+from concurrent.futures import ThreadPoolExecutor
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
-from typing import Any, Generator
+from tempfile import TemporaryDirectory
+from typing import Sequence
 
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 from rdkit import Chem
+from rdkit.rdBase import BlockLogs
 
+from plinder.core.utils import schemas
 from plinder.core.utils.log import setup_logger
 
 LOG = setup_logger(__name__)
 
-
-def pad_integer_lig_ids_with_zeros(lig_id: str) -> str:
-    """
-    Fixes cases where integer ligand ids are striped\
-    of their leading "0s". E.g  1 -> 001; 59 ->059
-
-    Parameters
-    ----------
-    lig_id : str
-        ligand ccd codes
-    Returns
-    -------
-    str
-    """
+def _mmpdb_version() -> str:
     try:
-        lig_id = str(int(lig_id))
-        return f"00{lig_id}"[-3:]
-    except:
-        return str(lig_id)
+        return version("mmpdb")
+    except PackageNotFoundError:
+        return "unknown"
 
 
-def make_mmp_index_from_smiles_df(
-    smiles_df: pd.DataFrame,
-    output_path: Path,
-    database_name: str,
-    scratch_dir: Path,
-    nthreads: int = 20,
-) -> Path:
-    output_path.mkdir(parents=True, exist_ok=True)
-    smiles_df = (
-        smiles_df.groupby("ligand_ccd_code")
-        .first()
-        .reset_index()[["ligand_smiles", "ligand_ccd_code"]]
+def _empty_pair_table() -> pa.Table:
+    return pa.Table.from_arrays(
+        [pa.array([], type=field.type) for field in schemas.LIGAND_MMP_PAIR_SCHEMA],
+        schema=schemas.LIGAND_MMP_PAIR_SCHEMA,
     )
-    # remove rows with no smiles
-    smiles_df = smiles_df[smiles_df.ligand_smiles.apply(lambda x: str(x) != "")]
-    # Remove compounds containing metal-dative bond
-    smiles_df = smiles_df[
-        ~(
-            smiles_df.ligand_smiles.str.contains(">")
-            | smiles_df.ligand_smiles.str.contains("<")
+
+
+def _ligand_table(fingerprint_path: Path) -> pd.DataFrame:
+    if not fingerprint_path.is_file():
+        raise FileNotFoundError(
+            "matched molecular pairs require the unique ligand fingerprint table: "
+            f"{fingerprint_path}"
         )
-    ]
-    smiles_df.dropna().to_csv(
-        f"{output_path}/{database_name}_input.smi", sep=" ", index=False
+    ligands = pd.read_parquet(
+        fingerprint_path,
+        columns=["ligand_smiles_id", "ligand_rdkit_canonical_smiles"],
     )
+    if ligands["ligand_smiles_id"].isna().any():
+        raise ValueError("unique ligand SMILES contain missing ligand_smiles_id values")
+    if ligands["ligand_rdkit_canonical_smiles"].isna().any():
+        raise ValueError("unique ligand SMILES contain missing structures")
+    if ligands["ligand_smiles_id"].duplicated().any():
+        raise ValueError("unique ligand SMILES contain duplicate ligand_smiles_id values")
+    if ligands["ligand_rdkit_canonical_smiles"].duplicated().any():
+        raise ValueError("unique ligand SMILES contain duplicate structures")
 
-    # Split smiles file
-    split_smile_cmd = (
-        f"mmpdb smi_split {database_name}_input.smi --has-header -n {nthreads}"
-    )
-
-    try:
-        subprocess.check_output(
-            split_smile_cmd, shell=True, stderr=subprocess.STDOUT, cwd=output_path
+    ligands = ligands.sort_values("ligand_smiles_id").reset_index(drop=True)
+    ligands["ligand_smiles_id"] = ligands["ligand_smiles_id"].astype("int32")
+    ligands["ligand_rdkit_canonical_smiles"] = ligands[
+        "ligand_rdkit_canonical_smiles"
+    ].astype(str)
+    heavy_atom_counts: list[int] = []
+    contains_dative_bond: list[bool] = []
+    with BlockLogs():
+        for ligand_id, smiles in ligands[
+            ["ligand_smiles_id", "ligand_rdkit_canonical_smiles"]
+        ].itertuples(index=False, name=None):
+            mol = Chem.MolFromSmiles(smiles)
+            if mol is None:
+                raise ValueError(
+                    f"ligand_smiles_id {ligand_id} has invalid canonical SMILES"
+                )
+            heavy_atom_counts.append(mol.GetNumHeavyAtoms())
+            contains_dative_bond.append(
+                any(
+                    str(bond.GetBondType()).startswith("DATIVE")
+                    for bond in mol.GetBonds()
+                )
+            )
+    ligands["num_heavy_atoms"] = pd.Series(heavy_atom_counts, dtype="int16")
+    if any(contains_dative_bond):
+        LOG.info(
+            "excluding %d ligand SMILES with metal-dative bonds from MMP generation",
+            sum(contains_dative_bond),
         )
-    except subprocess.CalledProcessError as e:
-        logging.error(f"Smiles database split failed {e.output} ...")
-        raise
+        ligands = ligands.loc[
+            ~pd.Series(contains_dative_bond, index=ligands.index)
+        ].reset_index(drop=True)
+    return ligands
 
-    fragment_tasks = [
-        f"mmpdb fragment -j 1 {smi.name}" for smi in output_path.glob("*.*.smi")
-    ]
-    with (scratch_dir / "fragment_tasks.txt").open("w") as f:
-        f.write("\n".join(fragment_tasks))
 
+def _ligand_signature(ligands: pd.DataFrame) -> str:
+    digest = hashlib.sha256()
+    for ligand_id, smiles in ligands[
+        ["ligand_smiles_id", "ligand_rdkit_canonical_smiles"]
+    ].itertuples(index=False, name=None):
+        digest.update(str(int(ligand_id)).encode())
+        digest.update(b"\0")
+        digest.update(smiles.encode())
+        digest.update(b"\n")
+    return digest.hexdigest()
+
+
+def _run_command(arguments: Sequence[str], *, cwd: Path) -> None:
+    LOG.info("running %s", " ".join(arguments))
     try:
-        subprocess.check_output(
-            [
-                "python",
-                "-m",
-                "plinder.data.pipeline.mpqueue",
-                f"{scratch_dir / 'fragment_tasks.txt'}",
-                "--cwd",
-                str(output_path),
-                "--cores",
-                str(nthreads),
-            ],
+        completed = subprocess.run(
+            list(arguments),
+            cwd=cwd,
+            check=True,
+            stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
+            text=True,
         )
-    except subprocess.CalledProcessError as e:
-        logging.error(f"Database fragmentation failed {e.output} ...")
-        raise
-    (scratch_dir / "fragment_tasks.txt").unlink()
-
-    # Partition fragment database
-    fragdbs = list(output_path.glob("*.*.fragdb"))
-    partition_tasks = [
-        f"mmpdb fragdb_partition *.*.fragdb --task-id {i + 1} --num-tasks {nthreads + 1}"
-        for i in range(len(fragdbs))
-    ]
-    with (scratch_dir / "partition_tasks.txt").open("w") as f:
-        f.write("\n".join(partition_tasks))
-    try:
-        subprocess.check_output(
-            [
-                "python",
-                "-m",
-                "plinder.data.pipeline.mpqueue",
-                f"{scratch_dir / 'partition_tasks.txt'}",
-                "--cwd",
-                str(output_path),
-                "--cores",
-                str(nthreads),
-            ],
-            stderr=subprocess.STDOUT,
-            cwd=output_path,
-        )
-    except subprocess.CalledProcessError as e:
-        logging.error(f"Fragment database partitioning failed {e.output} ...")
-        raise
-    (scratch_dir / "partition_tasks.txt").unlink()
-
-    index_tasks = [
-        f"mmpdb index {partition.name} -o {partition.name}.csv.gz"
-        for partition in output_path.glob("*partition.*.fragdb")
-    ]
-    with (scratch_dir / "index_tasks.txt").open("w") as f:
-        f.write("\n".join(index_tasks))
-
-    try:
-        subprocess.check_output(
-            [
-                "python",
-                "-m",
-                "plinder.data.pipeline.mpqueue",
-                f"{scratch_dir / 'index_tasks.txt'}",
-                "--cwd",
-                str(output_path),
-                "--cores",
-                str(nthreads),
-            ],
-            stderr=subprocess.STDOUT,
-        )
-    except subprocess.CalledProcessError as e:
-        logging.error(f"Partition indexing  failed {e.output} ...")
-        raise
-    (scratch_dir / "index_tasks.txt").unlink()
-
-    # Merge
-    with (output_path / f"{database_name}.csv.gz").open("wb") as db:
-        for partition in output_path.glob("partition.*.csv.gz"):
-            LOG.info(f"catting {partition} into {database_name}")
-            with partition.open("rb") as piece:
-                shutil.copyfileobj(piece, db)
-
-    return output_path / f"{database_name}.csv.gz"
+    except subprocess.CalledProcessError as exc:
+        output = (exc.stdout or "").strip()
+        if len(output) > 8_000:
+            output = output[-8_000:]
+        raise RuntimeError(
+            f"mmpdb command failed ({' '.join(arguments)}):\n{output}"
+        ) from exc
+    if completed.stdout:
+        LOG.info("mmpdb: %s", completed.stdout.rstrip())
 
 
-def make_mmp_index_from_annotation_table(
-    data_dir: Path,
-    annotation_df: pd.DataFrame,
-    database_name: str = "plinder_mms",
-) -> Path:
-    output_path = data_dir / "mmp"
-    scratch_dir = data_dir / "scratch" / "mmp"
-    output_path.mkdir(exist_ok=True, parents=True)
-    scratch_dir.mkdir(exist_ok=True, parents=True)
-    rename = {}
-    if "ligand_smiles" not in annotation_df.columns:
-        rename["ligand_rdkit_canonical_smiles"] = "ligand_smiles"
-    if "ligand_ccd_code" not in annotation_df.columns:
-        rename["ligand_unique_ccd_code"] = "ligand_ccd_code"
-    smiles_df = annotation_df.rename(columns=rename)
-    smiles_df = smiles_df[~smiles_df.ligand_smiles.isna()]
-    logging.info(f"smiles Dataframe output {smiles_df}")
-    return make_mmp_index_from_smiles_df(
-        smiles_df, output_path, database_name, scratch_dir
-    )
-
-
-def add_mmp_clusters_to_data(
-    load_mmp_df: pd.DataFrame,
-    system_df: pd.DataFrame,
-    cluster_folder: Path,
-    protein_metric: str = "protein_fident_weighted_sum",
-    protein_threshold: int = 95,
-    protein_directed: bool = False,
-    pocket_metric: str = "pocket_fident_qcov",
-    pocket_threshold: int = 100,
-    pocket_directed: bool = False,
-    min_constant_size: int = 10,
-) -> pd.DataFrame:
-    """Add mmpdb data to pocket and protein similarity dataset.
-
-    Parameters
-    ----------
-    load_mmp_df : Path
-        mmpdb index dataframe with columns \
-        ["SMILES1",  "SMILES2",  "id1",  "id2", "V1>>V2", "CONSTANT"]
-    system_df : pd.DataFram
-        Systems dataframe
-    protein_similarity_path : Path
-        protein sequence identity cluster file path
-    pocket_similarity_path : Path
-        pocket sequence identity cluster file path
-    protein_similarity_tag : str
-        protein similarity tag (e.g protein_fident_weighted_sum__0.95__weak__component)
-    pocket_similarity_tag : str
-        pocket similarity tag (e.g pocket_fident_weighted_sum__1.0__strong__component)
-    min_constant_size : int
-        minimum constant size
-
-    Returns
-    -------
-    pd.DataFrame
-    """
-    protein_component_type = "strong" if protein_directed else "weak"
-    protein_similarity_tag = (
-        f"{protein_metric}__{protein_threshold}__{protein_component_type}__component"
-    )
-    pocket_component_type = "strong" if pocket_directed else "weak"
-    pocket_similarity_tag = (
-        f"{pocket_metric}__{pocket_threshold}__{pocket_component_type}__component"
-    )
-
-    # Load protein and pocket similarity data
-    protein_similarity_df = pd.read_parquet(
-        cluster_folder
-        / "cluster=components"
-        / f"directed={protein_directed}"
-        / f"metric={protein_metric}"
-        / f"threshold={protein_threshold}.parquet"
-    )
-    protein_similarity_dict = dict(
-        zip(protein_similarity_df["system_id"], protein_similarity_df["label"])
-    )
-    pocket_similarity_df = pd.read_parquet(
-        cluster_folder
-        / "cluster=components"
-        / f"directed={pocket_directed}"
-        / f"metric={pocket_metric}"
-        / f"threshold={pocket_threshold}.parquet"
-    )
-    pocket_similarity_dict = dict(
-        zip(pocket_similarity_df["system_id"], pocket_similarity_df["label"])
-    )
-
-    # Merge protein similarity with system df
-    system_df[protein_similarity_tag] = system_df["system_id"].map(
-        protein_similarity_dict
-    )
-
-    # Merge pocket similarity with system df
-    system_df[pocket_similarity_tag] = system_df["system_id"].map(
-        pocket_similarity_dict
-    )
-
-    # Load mmp index
-    # load_mmp_df = pd.read_csv(mmp_index, compression="gzip", sep="\t", header=None)
-    # load_mmp_df.columns = ["SMILES1", "SMILES2", "id1", "id2", "V1>>V2", "CONSTANT"]
-
-    # Pad interger lig ids with zeros
-    load_mmp_df["id1"] = load_mmp_df.id1.apply(pad_integer_lig_ids_with_zeros)
-    load_mmp_df["id2"] = load_mmp_df.id2.apply(pad_integer_lig_ids_with_zeros)
-
-    # Consider only single position changes to the constant!
-    load_mmp_df = load_mmp_df[
-        load_mmp_df.CONSTANT.apply(lambda x: x.count("*")) == 1
-    ].copy()
-
-    # Select relevant columns from system df
-    pocket_df = system_df[
-        ["ligand_unique_ccd_code", protein_similarity_tag, pocket_similarity_tag]
-    ].copy()
-
-    pocket_df.loc[:, "prot_pocket_id"] = (
-        pocket_df.loc[:, protein_similarity_tag]
-        + "_"
-        + pocket_df.loc[:, pocket_similarity_tag]
-    )
-
-    # Map ligand ccd code to prot_pocket_id sets
-    ligand_code_pocket_mapping = (
-        pocket_df.groupby("ligand_unique_ccd_code").agg(set)["prot_pocket_id"].to_dict()
-    )
-
-    load_mmp_df["prot_pocket_set_id1"] = load_mmp_df["id1"].map(
-        ligand_code_pocket_mapping
-    )
-    load_mmp_df["prot_pocket_set_id2"] = load_mmp_df["id2"].map(
-        ligand_code_pocket_mapping
-    )
-
-    load_mmp_df.dropna(inplace=True)
-
-    # Get MMPs that share prot_pocket_id
-    load_mmp_df["prot_pocket_set_shared"] = load_mmp_df[
-        ["prot_pocket_set_id1", "prot_pocket_set_id2"]
-    ].apply(lambda x: x.iloc[0].intersection(x.iloc[1]), axis=1)
-    # remove pairs that do not share a prot_pocket id
-    mmps_pocket_df = load_mmp_df[
-        load_mmp_df["prot_pocket_set_shared"].apply(lambda x: len(x) > 0)
-    ]
-
-    # Group pocket across different mmps
-    mmps_pocket_df1 = mmps_pocket_df.explode("prot_pocket_set_shared")
-
-    # Identity congeneric series - MMS - group that shares
-    # identical constant (with a single vector) and prot_pockets !
-    grp_congeneric_df = mmps_pocket_df1.groupby(
-        [
-            "CONSTANT",
-            "prot_pocket_set_shared",
+def _run_commands(
+    commands: Sequence[Sequence[str]], *, cwd: Path, workers: int
+) -> None:
+    if not commands:
+        return
+    with ThreadPoolExecutor(max_workers=min(workers, len(commands))) as executor:
+        futures = [
+            executor.submit(_run_command, command, cwd=cwd) for command in commands
         ]
-    ).agg(tuple)[["id1", "id2"]]
-    # set to tuple for being hashable
-    grp_congeneric_df["congeneric_series"] = grp_congeneric_df[["id1", "id2"]].apply(
-        lambda x: tuple(sorted(set(list(x.iloc[0]) + list(x.iloc[1])))), axis=1
+        for future in futures:
+            future.result()
+
+
+def _gzip_has_rows(path: Path) -> bool:
+    with gzip.open(path, "rb") as handle:
+        return bool(handle.read(1))
+
+
+def _generate_pair_files(
+    *, ligands: pd.DataFrame, work_dir: Path, threads: int, executable: str
+) -> list[Path]:
+    smiles_path = work_dir / "ligands.smi"
+    ligands[
+        ["ligand_rdkit_canonical_smiles", "ligand_smiles_id"]
+    ].to_csv(smiles_path, sep="\t", header=False, index=False)
+    if ligands.empty:
+        return []
+
+    shard_count = min(threads, len(ligands))
+    _run_command(
+        [executable, "smi_split", "-n", str(shard_count), smiles_path.name],
+        cwd=work_dir,
+    )
+    smiles_shards = sorted(work_dir.glob("ligands.[0-9][0-9][0-9][0-9].smi"))
+    if not smiles_shards:
+        raise RuntimeError("mmpdb did not create any SMILES shards")
+    _run_commands(
+        [
+            [executable, "fragment", "-j", "1", shard.name]
+            for shard in smiles_shards
+        ],
+        cwd=work_dir,
+        workers=threads,
+    )
+    fragment_files = sorted(work_dir.glob("ligands.[0-9][0-9][0-9][0-9].fragdb"))
+    if len(fragment_files) != len(smiles_shards):
+        raise RuntimeError(
+            "mmpdb fragmentation did not produce one database per SMILES shard"
+        )
+
+    _run_command(
+        [
+            executable,
+            "fragdb_partition",
+            "-n",
+            str(shard_count),
+            "--template",
+            "partition.{i:04}.fragdb",
+            *[path.name for path in fragment_files],
+        ],
+        cwd=work_dir,
+    )
+    partition_files = sorted(work_dir.glob("partition.[0-9][0-9][0-9][0-9].fragdb"))
+    if not partition_files:
+        return []
+    _run_commands(
+        [
+            [
+                executable,
+                "index",
+                "--out",
+                "csv.gz",
+                "-o",
+                partition.with_suffix(".csv.gz").name,
+                partition.name,
+            ]
+            for partition in partition_files
+        ],
+        cwd=work_dir,
+        workers=threads,
+    )
+    pair_files = sorted(work_dir.glob("partition.[0-9][0-9][0-9][0-9].csv.gz"))
+    if len(pair_files) != len(partition_files):
+        raise RuntimeError("mmpdb indexing did not produce one pair file per partition")
+    return [path for path in pair_files if _gzip_has_rows(path)]
+
+
+def _core_table(shared_cores: Sequence[str]) -> pd.DataFrame:
+    rows: list[tuple[str, int, int]] = []
+    with BlockLogs():
+        for shared_core in shared_cores:
+            mol = Chem.MolFromSmiles(shared_core)
+            if mol is None:
+                mol = Chem.MolFromSmarts(shared_core)
+            if mol is None:
+                raise ValueError(
+                    f"mmpdb emitted an unreadable shared core: {shared_core}"
+                )
+            rows.append(
+                (shared_core, shared_core.count("*"), mol.GetNumHeavyAtoms())
+            )
+    return pd.DataFrame(
+        rows,
+        columns=[
+            "shared_core_smiles",
+            "num_cuts",
+            "shared_core_num_heavy_atoms",
+        ],
+    ).astype(
+        {
+            "num_cuts": "int8",
+            "shared_core_num_heavy_atoms": "int16",
+        }
     )
 
-    # NOTE: some ligands will appear in multiple instances!
-    # TODO: be careful when dropping during BO to see if there were multiple and if a ligand is to be removed!
-    grp_congeneric_df["mms_unique_count"] = grp_congeneric_df[
-        "congeneric_series"
-    ].apply(lambda x: len({i for i in x}))
 
-    # Reset index to include "CONSTANT" as a column
-    grp_congeneric_df = grp_congeneric_df.reset_index()
+def _sql_paths(paths: Sequence[Path]) -> str:
+    return ", ".join(
+        f"'{path.as_posix().replace(chr(39), chr(39) * 2)}'" for path in paths
+    )
 
-    # Get constant size
-    const_size_map = {
-        smarts: Chem.MolFromSmarts(smarts).GetNumHeavyAtoms()
-        for smarts in grp_congeneric_df.CONSTANT.drop_duplicates()
+
+def _write_pair_parquet(
+    *, pair_files: Sequence[Path], ligands: pd.DataFrame, output_path: Path
+) -> None:
+    if not pair_files:
+        pq.write_table(_empty_pair_table(), output_path, compression="zstd")
+        return
+
+    import duckdb
+
+    connection = duckdb.connect()
+    raw_path = pair_files[0].parent / "raw_pairs.parquet"
+    raw_path_sql = raw_path.as_posix().replace("'", "''")
+    pair_paths_sql = _sql_paths(pair_files)
+    connection.execute(
+        f"""
+        COPY (
+            SELECT
+                try_cast(ligand_smiles_id_1 AS INTEGER) AS ligand_smiles_id_1,
+                try_cast(ligand_smiles_id_2 AS INTEGER) AS ligand_smiles_id_2,
+                transformation,
+                shared_core_smiles
+            FROM read_csv(
+                [{pair_paths_sql}],
+                delim='\t',
+                header=false,
+                columns={{
+                    'raw_smiles_1': 'VARCHAR',
+                    'raw_smiles_2': 'VARCHAR',
+                    'ligand_smiles_id_1': 'VARCHAR',
+                    'ligand_smiles_id_2': 'VARCHAR',
+                    'transformation': 'VARCHAR',
+                    'shared_core_smiles': 'VARCHAR'
+                }}
+            )
+        ) TO '{raw_path_sql}'
+        (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 1_000_000)
+        """
+    )
+    invalid_ids = connection.execute(
+        f"""
+        SELECT count(*)
+        FROM read_parquet('{raw_path_sql}')
+        WHERE ligand_smiles_id_1 IS NULL OR ligand_smiles_id_2 IS NULL
+        """
+    ).fetchone()[0]
+    if invalid_ids:
+        connection.close()
+        raise ValueError(f"mmpdb emitted {invalid_ids} non-integer ligand IDs")
+
+    shared_cores = connection.execute(
+        f"""
+        SELECT DISTINCT shared_core_smiles
+        FROM read_parquet('{raw_path_sql}')
+        ORDER BY shared_core_smiles
+        """
+    ).fetch_df()["shared_core_smiles"].tolist()
+    core_table = _core_table(shared_cores)
+    ligand_lookup = ligands.rename(
+        columns={
+            "ligand_rdkit_canonical_smiles": "ligand_smiles",
+            "num_heavy_atoms": "ligand_num_heavy_atoms",
+        }
+    )[
+        ["ligand_smiles_id", "ligand_smiles", "ligand_num_heavy_atoms"]
+    ]
+    connection.register("ligand_lookup", ligand_lookup)
+    connection.register("core_lookup", core_table)
+    missing_ids = connection.execute(
+        f"""
+        SELECT count(*)
+        FROM read_parquet('{raw_path_sql}') raw
+        LEFT JOIN ligand_lookup ligand_1
+          ON raw.ligand_smiles_id_1 = ligand_1.ligand_smiles_id
+        LEFT JOIN ligand_lookup ligand_2
+          ON raw.ligand_smiles_id_2 = ligand_2.ligand_smiles_id
+        WHERE ligand_1.ligand_smiles_id IS NULL
+           OR ligand_2.ligand_smiles_id IS NULL
+        """
+    ).fetchone()[0]
+    if missing_ids:
+        connection.close()
+        raise ValueError(
+            f"mmpdb emitted {missing_ids} pairs with unknown ligand_smiles_id values"
+        )
+
+    output_sql = output_path.as_posix().replace("'", "''")
+    connection.execute(
+        f"""
+        COPY (
+            SELECT DISTINCT
+                raw.ligand_smiles_id_1::INTEGER AS ligand_smiles_id_1,
+                raw.ligand_smiles_id_2::INTEGER AS ligand_smiles_id_2,
+                ligand_1.ligand_smiles::VARCHAR AS ligand_smiles_1,
+                ligand_2.ligand_smiles::VARCHAR AS ligand_smiles_2,
+                raw.transformation::VARCHAR AS transformation,
+                raw.shared_core_smiles::VARCHAR AS shared_core_smiles,
+                core.num_cuts::TINYINT AS num_cuts,
+                core.shared_core_num_heavy_atoms::SMALLINT
+                    AS shared_core_num_heavy_atoms,
+                ligand_1.ligand_num_heavy_atoms::SMALLINT
+                    AS ligand_1_num_heavy_atoms,
+                ligand_2.ligand_num_heavy_atoms::SMALLINT
+                    AS ligand_2_num_heavy_atoms,
+                cast(
+                    core.shared_core_num_heavy_atoms::FLOAT
+                    / nullif(ligand_1.ligand_num_heavy_atoms, 0)
+                    AS FLOAT
+                ) AS ligand_1_shared_core_fraction,
+                cast(
+                    core.shared_core_num_heavy_atoms::FLOAT
+                    / nullif(ligand_2.ligand_num_heavy_atoms, 0)
+                    AS FLOAT
+                ) AS ligand_2_shared_core_fraction
+            FROM read_parquet('{raw_path_sql}') raw
+            INNER JOIN ligand_lookup ligand_1
+              ON raw.ligand_smiles_id_1 = ligand_1.ligand_smiles_id
+            INNER JOIN ligand_lookup ligand_2
+              ON raw.ligand_smiles_id_2 = ligand_2.ligand_smiles_id
+            INNER JOIN core_lookup core USING (shared_core_smiles)
+            ORDER BY
+                ligand_smiles_id_1,
+                ligand_smiles_id_2,
+                shared_core_smiles,
+                transformation
+        ) TO '{output_sql}'
+        (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 1_000_000)
+        """
+    )
+    connection.close()
+
+    actual_schema = pq.read_schema(output_path)
+    if not actual_schema.equals(schemas.LIGAND_MMP_PAIR_SCHEMA):
+        raise ValueError(
+            "ligand MMP output schema differs from the release schema: "
+            f"{actual_schema}"
+        )
+
+
+def make_ligand_mmp_pairs(
+    *,
+    data_dir: Path,
+    scratch_dir: Path,
+    threads: int = 4,
+    force_update: bool = False,
+) -> Path:
+    """Generate matched molecular pairs for every unique proper-ligand SMILES."""
+    if threads < 1:
+        raise ValueError("MMP generation threads must be positive")
+    fingerprint_path = data_dir / "fingerprints" / "ligands_per_smiles.parquet"
+    output_path = data_dir / "index" / "ligand_mmp_pairs.parquet"
+    manifest_path = data_dir / "index" / "ligand_mmp_pairs.manifest.json"
+    ligands = _ligand_table(fingerprint_path)
+    manifest = {
+        "mmpdb_version": _mmpdb_version(),
+        "ligand_signature": _ligand_signature(ligands),
     }
-    grp_congeneric_df["const_size"] = grp_congeneric_df.CONSTANT.map(const_size_map)
+    if not force_update and output_path.is_file() and manifest_path.is_file():
+        try:
+            cached_manifest = json.loads(manifest_path.read_text())
+            schema_is_current = pq.read_schema(output_path).equals(
+                schemas.LIGAND_MMP_PAIR_SCHEMA
+            )
+        except (OSError, ValueError, json.JSONDecodeError):
+            schema_is_current = False
+            cached_manifest = None
+        if cached_manifest == manifest and schema_is_current:
+            LOG.info("ligand MMP pairs already match the unique ligand SMILES")
+            return output_path
 
-    # Extract data with min_constant_size threshold
-    grp_congeneric_df_thres = grp_congeneric_df[
-        grp_congeneric_df.const_size >= min_constant_size
-    ].copy()
+    executable = shutil.which("mmpdb")
+    if executable is None:
+        raise RuntimeError(
+            "mmpdb is required to generate ligand MMP pairs; install the PLINDER "
+            "data dependencies"
+        )
+    output_path.parent.mkdir(exist_ok=True, parents=True)
+    scratch_dir.mkdir(exist_ok=True, parents=True)
+    temporary_output = output_path.with_suffix(".tmp.parquet")
+    temporary_output.unlink(missing_ok=True)
+    try:
+        with TemporaryDirectory(prefix="plinder-mmp-", dir=scratch_dir) as work:
+            pair_files = _generate_pair_files(
+                ligands=ligands,
+                work_dir=Path(work),
+                threads=threads,
+                executable=executable,
+            )
+            _write_pair_parquet(
+                pair_files=pair_files,
+                ligands=ligands,
+                output_path=temporary_output,
+            )
+        temporary_output.replace(output_path)
+    except BaseException:
+        temporary_output.unlink(missing_ok=True)
+        raise
 
-    # Set congeneric id that is unique to mms
-    grp_congeneric_df_thres = grp_congeneric_df_thres.reset_index().rename(
-        columns={"index": "congeneric_id"}
-    )
-    grp_congeneric_df_thres["congeneric_id"] = grp_congeneric_df_thres[
-        "congeneric_id"
-    ].apply(lambda x: f"c{x:.0f}")
-
-    # get table for each member in congeneric_series
-    grp_congeneric_df_thres["congeneric_ligand_ccd_code"] = grp_congeneric_df_thres[
-        "congeneric_series"
-    ].copy()
-    grp_congeneric_df_thres = grp_congeneric_df_thres.explode(
-        "congeneric_ligand_ccd_code"
-    )
-
-    # Merge mms data with system-level data
-    grp_congeneric_df_thres["prot_pocket_lig_tag"] = (
-        grp_congeneric_df_thres["prot_pocket_set_shared"]
-        + "_"
-        + grp_congeneric_df_thres["congeneric_ligand_ccd_code"]
-    )
-    system_df["prot_pocket_lig_tag"] = system_df[
-        [protein_similarity_tag, pocket_similarity_tag, "ligand_unique_ccd_code"]
-    ].apply(lambda x: f"{x.iloc[0]}_{x.iloc[1]}_{x.iloc[2]}", axis=1)
-
-    final_df = (
-        system_df[["prot_pocket_lig_tag", "system_id"]]
-        .drop_duplicates()
-        .merge(grp_congeneric_df_thres, on="prot_pocket_lig_tag", how="left")
-        .drop_duplicates()
-        .drop(columns=["id1", "id2", "prot_pocket_lig_tag"])
-    )
-    # remove those that are not mapped!
-    final_df = final_df[~final_df["congeneric_id"].isna()]
-
-    return final_df
-
-
-def split_list_into_batches(
-    lst: list[list[Any]], batch_size: int | None = None, num_batches: int | None = None
-) -> Generator[Any, Any, Any]:
-    """Split list of items into list of lists.
-
-    Parameters
-    ----------
-    lst : list[list[Any]],
-        list to be split
-    batch_size : int | None = None,
-        size of each batch
-    num_batches : int | None = None,
-        number of batches to return
-    Returns
-    -------
-    Generator[Any, Any, Any]
-    """
-    if batch_size is None and num_batches is None:
-        raise ValueError("Either batch_size or num_batches must be provided.")
-
-    if num_batches is not None:
-        # Ceiling division to ensure all items are included
-        batch_size = -(-len(lst) // num_batches)
-
-    args = [iter(lst)] * batch_size  # type: ignore
-    for batch in zip_longest(*args, fillvalue=None):
-        yield [item for item in batch if item is not None]
+    temporary_manifest = manifest_path.with_suffix(".tmp.json")
+    temporary_manifest.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+    temporary_manifest.replace(manifest_path)
+    LOG.info("wrote ligand MMP pairs to %s", output_path)
+    return output_path

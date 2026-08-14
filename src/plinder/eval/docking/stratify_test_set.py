@@ -111,7 +111,7 @@ def compute_ligand_mmp_max_similarities(
     test_label: str,
     output_file: Path,
 ) -> None:
-    mmp_path = AnyPath(f"{cfg.data.plinder_remote}/mmp/plinder_mms.csv.gz")
+    mmp_path = AnyPath(f"{cfg.data.plinder_remote}/index/ligand_mmp_pairs.parquet")
     mmp_sim_dict: dict[
         str, dict[str, float]
     ] = smallmols_similarity.get_mmp_similarity_dict(mmp_path=mmp_path)

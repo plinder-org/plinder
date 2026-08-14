@@ -185,6 +185,22 @@ DERIVED_COLUMN_DESCRIPTIONS = {
         "Integer node ID assigned to this exact canonical SMILES for ligand "
         "similarity scoring"
     ),
+    "ligand_smiles_id_1": "Unique-SMILES node ID for the first MMP ligand",
+    "ligand_smiles_id_2": "Unique-SMILES node ID for the second MMP ligand",
+    "ligand_smiles_1": "Canonical SMILES for the first MMP ligand",
+    "ligand_smiles_2": "Canonical SMILES for the second MMP ligand",
+    "transformation": "MMP transformation directed from ligand 1 to ligand 2",
+    "shared_core_smiles": "Shared MMP core with attachment points marked by *",
+    "num_cuts": "Number of attachment points in the shared MMP core",
+    "shared_core_num_heavy_atoms": "Number of heavy atoms in the shared MMP core",
+    "ligand_1_num_heavy_atoms": "Number of heavy atoms in the first MMP ligand",
+    "ligand_2_num_heavy_atoms": "Number of heavy atoms in the second MMP ligand",
+    "ligand_1_shared_core_fraction": (
+        "Fraction of the first ligand's heavy atoms contained in the shared core"
+    ),
+    "ligand_2_shared_core_fraction": (
+        "Fraction of the second ligand's heavy atoms contained in the shared core"
+    ),
     "ligand_max_cofactor_similarity": (
         "Maximum ECFP4/1024 Tanimoto similarity, as a percentage, to any CCD "
         "structure in the cofactor list"

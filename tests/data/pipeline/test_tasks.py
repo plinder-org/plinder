@@ -858,6 +858,9 @@ def test_scoring_finalization_stage_order_and_partitions():
         "annotate_ligand_similarity"
     )
     assert tasks.STAGES.index("annotate_ligand_similarity") < tasks.STAGES.index(
+        "make_ligand_mmp_pairs"
+    )
+    assert tasks.STAGES.index("make_ligand_mmp_pairs") < tasks.STAGES.index(
         "make_sub_dbs"
     )
     assert tasks.STAGES.index("map_batch_alignments") < tasks.STAGES.index(
@@ -935,7 +938,7 @@ def test_scoring_finalization_stage_order_and_partitions():
     assert tasks.STAGES.index("summarize_clusters") < tasks.STAGES.index(
         "finalize_index"
     )
-    assert tasks.STAGES.index("finalize_index") < tasks.STAGES.index("make_mmp_index")
+    assert tasks.STAGES[-1] == "finalize_index"
     partitions = tasks.scatter_collate_partitions()
     assert len(partitions) == 38
     assert ["0"] in partitions
@@ -5263,6 +5266,8 @@ def test_metaflow_graph_uses_canonical_ligand_archive_stage():
     assert "self.pipeline.finalize_ligand_archives()" in flow
     assert "self.next(self.annotate_ligand_similarity)" in flow
     assert "self.pipeline.annotate_ligand_similarity()" in flow
+    assert "self.next(self.make_ligand_mmp_pairs)" in flow
+    assert "self.pipeline.make_ligand_mmp_pairs" in flow
     assert "self.next(self.scatter_collate_partitions)" in flow
     assert "self.next(self.scatter_collate_alignments)" in flow
     assert "self.pipeline.collate_alignments(self.input)" in flow
@@ -5304,6 +5309,7 @@ def test_metaflow_graph_uses_canonical_ligand_archive_stage():
     assert "self.pipeline.summarize_clusters()" in flow
     assert "self.next(self.finalize_index)" in flow
     assert "self.pipeline.finalize_index()" in flow
+    assert "make_mmp_index" not in flow
 
     tree = ast.parse(flow)
     flow_class = next(

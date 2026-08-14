@@ -318,37 +318,6 @@ def mini_components_pqt():
     return test_asset_fp / "components.parquet"
 
 
-@pytest.fixture(scope="session")
-def mini_mmp_index():
-    return test_asset_fp / "mmp/tiny_mmp_index.csv.gz"
-
-
-@pytest.fixture(scope="session")
-def mini_mmp_data_annotation():
-    return test_asset_fp / "mmp/mmp_mini_data.tsv"
-
-
-@pytest.fixture(scope="session")
-def mmp_pocket_fident_data():
-    return (
-        test_asset_fp
-        / "mmp/mmp_test_pocket_fident_weighted_sum__1.0__strong__component.csv"
-    )
-
-
-@pytest.fixture(scope="session")
-def mini_mmp_cluster_folder():
-    return test_asset_fp / "mmp/mini_clusters"
-
-
-@pytest.fixture(scope="session")
-def mmp_protein_fident_data():
-    return (
-        test_asset_fp
-        / "mmp/mmp_test_protein_fident_weighted_sum__0.95__weak__component.csv"
-    )
-
-
 @pytest.fixture
 def test_env(tmp_path, monkeypatch):
     monkeypatch.setenv("PLINDER_MOUNT", tmp_path.as_posix())
@@ -648,8 +617,3 @@ def cif_atom_array(cif_1qz5_unzipped):
     )
     print(atom_array)
     return atom_array
-
-
-@pytest.fixture(scope="session")
-def split_plot_split_file():
-    return test_asset_fp / "split_plot_split.parquet"

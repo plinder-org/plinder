@@ -22,6 +22,7 @@ RELEASE_PATHS = {
     "alignment_chain_lookup": "index/alignment_chain_lookup.parquet",
     "ligand_pocket_membership": "index/ligand_pocket_membership.parquet",
     "ligand_pocket_representatives": ("index/ligand_pocket_representatives.parquet"),
+    "ligand_mmp_pairs": "index/ligand_mmp_pairs.parquet",
     "interface_half_representatives": ("index/interface_half_representatives.parquet"),
     "interface_membership": "index/interface_membership.parquet",
     "interface_representatives": "index/interface_representatives.parquet",
@@ -96,6 +97,16 @@ RELEASE_TABLES: dict[str, dict[str, Any]] = {
         "artifact": "ligand_pocket_representatives",
         "row_grain": "ligand-pocket representative",
         "primary_key": ("representative_ligand_id",),
+    },
+    "ligand_mmp_pairs": {
+        "artifact": "ligand_mmp_pairs",
+        "row_grain": "matched molecular pair and shared core",
+        "primary_key": (
+            "ligand_smiles_id_1",
+            "ligand_smiles_id_2",
+            "transformation",
+            "shared_core_smiles",
+        ),
     },
     "interface_half_representatives": {
         "artifact": "interface_half_representatives",

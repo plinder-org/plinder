@@ -202,6 +202,14 @@ class PlinderDataIngestFlow(FlowSpec):
     @step
     def annotate_ligand_similarity(self):
         self.pipeline.annotate_ligand_similarity()
+        self.next(self.make_ligand_mmp_pairs)
+
+    @kubernetes(**{**K8S, **WORKSTATION})
+    @environment(**ENV)
+    @retry
+    @step
+    def make_ligand_mmp_pairs(self):
+        self.pipeline.make_ligand_mmp_pairs(threads=WORKSTATION["cpu"])
         self.next(self.make_sub_dbs)
 
     @kubernetes(**{**K8S, **DATABASES})
@@ -691,14 +699,6 @@ class PlinderDataIngestFlow(FlowSpec):
     @step
     def finalize_index(self):
         self.pipeline.finalize_index()
-        self.next(self.make_mmp_index)
-
-    @kubernetes(**{**K8S, **WORKSTATION})
-    @environment(**ENV)
-    @retry
-    @step
-    def make_mmp_index(self):
-        self.pipeline.make_mmp_index()
         self.next(self.end)
 
     @kubernetes(**K8S)

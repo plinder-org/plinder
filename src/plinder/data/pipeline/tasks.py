@@ -27,10 +27,10 @@ import pyarrow.parquet as pq
 from omegaconf import DictConfig
 from tqdm import tqdm
 
-from plinder.core.utils import gcs, schemas
+from plinder.core.utils import schemas
 from plinder.core.utils.log import setup_logger
-from plinder.data import clusters, databases, splits
-from plinder.data.annotations import get_similarity_scores
+from plinder.data import clusters, databases
+from plinder.data.annotations import get_similarity_scores, mmpdb_utils
 from plinder.data.pipeline import collate, io, utils
 from plinder.data.pipeline.ingest import (
     balance_entries,
@@ -73,6 +73,7 @@ STAGES = [
     "compute_ligand_fingerprints",
     "make_ligand_scores",
     "annotate_ligand_similarity",
+    "make_ligand_mmp_pairs",
     "make_sub_dbs",
     "run_batch_searches",
     "map_batch_alignments",
@@ -101,8 +102,6 @@ STAGES = [
     "make_directed_set_covers",
     "summarize_clusters",
     "finalize_index",
-    "make_mmp_index",
-    "make_splits",
 ]
 
 
@@ -1542,6 +1541,22 @@ def make_ligand_scores(
 def annotate_ligand_similarity(*, data_dir: Path) -> None:
     """Write ligand identifiers and cofactor annotations."""
     get_similarity_scores.annotate_ligand_similarity(data_dir=data_dir)
+
+
+def make_ligand_mmp_pairs(
+    *,
+    data_dir: Path,
+    scratch_dir: Path,
+    threads: int,
+    force_update: bool = False,
+) -> Path:
+    """Write the unique-SMILES matched-molecular-pair release table."""
+    return mmpdb_utils.make_ligand_mmp_pairs(
+        data_dir=data_dir,
+        scratch_dir=scratch_dir,
+        threads=threads,
+        force_update=force_update,
+    )
 
 
 def _interface_scoring_chain_keys(data_dir: Path) -> pd.DataFrame:
@@ -4048,95 +4063,3 @@ def finalize_index(*, data_dir: Path) -> None:
         _refresh_representative_source_manifests(data_dir)
         _write_alignment_chain_lookup_manifest(data_dir)
     collate.finalize_repair_marker(data_dir)
-
-
-def make_mmp_index(
-    *,
-    data_dir: Path,
-) -> None:
-    """
-    Get the list of all pdb IDs to load all the entries
-    for mmp indexing.
-    Parameters
-    ----------
-    data_dir : Path
-        the root plinder dir
-    """
-
-    from plinder.data.annotations.mmpdb_utils import (
-        add_mmp_clusters_to_data,
-        make_mmp_index_from_annotation_table,
-    )
-
-    LOG.info("making mmp index for all entries")
-    annotation_index = data_dir / "index" / "annotation_table.parquet"
-    columns = ["system_id", "ligand_rdkit_canonical_smiles", "ligand_unique_ccd_code"]
-    annotation_df = pd.read_parquet(annotation_index, columns=columns)
-    mmp_df_path = make_mmp_index_from_annotation_table(data_dir, annotation_df)
-    load_mmp_df = pd.read_csv(mmp_df_path, compression="gzip", header=None, sep="\t")
-    load_mmp_df.columns = ["SMILES1", "SMILES2", "id1", "id2", "V1>>V2", "CONSTANT"]
-    mmp_data = add_mmp_clusters_to_data(
-        load_mmp_df,
-        annotation_df,
-        cluster_folder=data_dir / "clusters",
-    )
-    mmp_data.to_parquet(data_dir / "mmp" / "plinder_mmp_series.parquet", index=False)
-
-
-def scatter_make_splits(
-    *,
-    data_dir: Path,
-    split_config_dir: str,
-) -> list[list[tuple[DictConfig, str]]]:
-    # defaults to empty string so skip it
-    configs: list[list[tuple[DictConfig, str]]]
-    if not len(split_config_dir):
-        configs = [[]]
-    # allow configs living in cloud buckets configured by PLINDER_BUCKET
-    elif split_config_dir.startswith("gs:"):
-        bucket_name = Path(split_config_dir).parts[1]
-        configs = [
-            [
-                (
-                    splits.get_config(
-                        gcs.download_as_str(
-                            gcs_path=cloud_path,
-                            bucket_name=bucket_name,
-                        )
-                    ),
-                    cloud_path,
-                )
-            ]
-            for cloud_path in gcs.list_dir(
-                gcs_path=str(split_config_dir),
-                bucket_name=bucket_name,
-            )
-        ]
-    else:
-        # support relative local split_config_dir from data_dir
-        # and absolute split_config_dir
-        split_dir = Path(split_config_dir or "splits")
-        if not split_dir.is_absolute():
-            split_dir = data_dir / split_config_dir
-        configs = [
-            [
-                (
-                    splits.get_config(path.read_text()),
-                    path.as_posix(),
-                )
-            ]
-            for path in split_dir.rglob("*.yaml")
-        ]
-    for tup in configs:
-        if len(tup[0]):
-            LOG.info(f"scatter_make_splits: config={tup[0][1]}")
-    return configs
-
-
-def make_splits(
-    *,
-    data_dir: Path,
-    cfg_and_path: list[tuple[DictConfig, str]],
-) -> None:
-    [(cfg, path)] = cfg_and_path
-    splits.split(data_dir=data_dir, cfg=cfg, relpath=path)

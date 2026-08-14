@@ -23,6 +23,16 @@ def test_release_tables_have_artifact_grain_and_key():
         assert table["primary_key"]
 
 
+def test_ligand_mmp_pairs_are_a_release_table():
+    assert RELEASE_PATHS["ligand_mmp_pairs"] == "index/ligand_mmp_pairs.parquet"
+    assert RELEASE_TABLES["ligand_mmp_pairs"]["primary_key"] == (
+        "ligand_smiles_id_1",
+        "ligand_smiles_id_2",
+        "transformation",
+        "shared_core_smiles",
+    )
+
+
 def test_path_does_not_require_artifact_to_exist(tmp_path):
     release = PlinderRelease(tmp_path)
     assert release.path("annotation_table") == (

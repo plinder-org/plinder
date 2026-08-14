@@ -68,6 +68,17 @@ def local_release(tmp_path: Path) -> PlinderRelease:
             "rank": [1],
         },
     )
+    _write_table(
+        release,
+        "ligand_mmp_pairs",
+        {
+            "ligand_smiles_id_1": [0],
+            "ligand_smiles_id_2": [1],
+            "transformation": ["*O>>*N"],
+            "shared_core_smiles": ["*C"],
+            "ligand_1_shared_core_fraction": [1 / 3],
+        },
+    )
     return release
 
 
@@ -209,6 +220,27 @@ def test_query_linked_apo_with_source_entry_metadata(
 
     assert result.to_dict("records") == [
         {"linked_structure_id": "2def_B", "entry_resolution": 2.5}
+    ]
+
+
+def test_query_ligand_mmp_pairs(local_release: PlinderRelease) -> None:
+    result = query_table(
+        "ligand_mmp_pairs",
+        columns=[
+            "ligand_smiles_id_1",
+            "ligand_smiles_id_2",
+            "ligand_1_shared_core_fraction",
+        ],
+        filters=[("ligand_1_shared_core_fraction", ">=", 0.3)],
+        release=local_release,
+    )
+
+    assert result.to_dict("records") == [
+        {
+            "ligand_smiles_id_1": 0,
+            "ligand_smiles_id_2": 1,
+            "ligand_1_shared_core_fraction": pytest.approx(1 / 3),
+        }
     ]
 
 

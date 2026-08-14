@@ -90,8 +90,6 @@ class FlowConfig:
     collate_partitions_cpu: int = 4
     collate_partitions_memory_limit: str = "7GB"
 
-    split_config_dir: str = ""
-
     def __post_init__(self) -> None:
         if self.make_entries_mode not in {"all", "ligands", "interfaces"}:
             raise ValueError(

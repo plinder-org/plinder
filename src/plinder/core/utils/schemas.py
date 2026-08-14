@@ -271,6 +271,24 @@ TANIMOTO_SCORE_SCHEMA = pa.schema(
     ]
 )
 
+
+LIGAND_MMP_PAIR_SCHEMA = pa.schema(
+    [
+        ("ligand_smiles_id_1", pa.int32()),
+        ("ligand_smiles_id_2", pa.int32()),
+        ("ligand_smiles_1", pa.string()),
+        ("ligand_smiles_2", pa.string()),
+        ("transformation", pa.string()),
+        ("shared_core_smiles", pa.string()),
+        ("num_cuts", pa.int8()),
+        ("shared_core_num_heavy_atoms", pa.int16()),
+        ("ligand_1_num_heavy_atoms", pa.int16()),
+        ("ligand_2_num_heavy_atoms", pa.int16()),
+        ("ligand_1_shared_core_fraction", pa.float32()),
+        ("ligand_2_shared_core_fraction", pa.float32()),
+    ]
+)
+
 LEGACY_TANIMOTO_SCORE_SCHEMA = pa.schema(
     [
         pa.field("query_ligand_id", pa.int32()),
