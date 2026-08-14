@@ -8,17 +8,16 @@ html_theme.sidebar_secondary.remove: true
 
 ![plinder](/static/assets/general/plinder_logo.png){w=40em align=center}
 
-**PLINDER**, short for **p**rotein **l**igand **in**teractions **d**ataset and
-**e**valuation **r**esource, is a comprehensive, annotated, high quality dataset and
-resource for training and evaluation of protein-ligand docking algorithms:
+**PLINDER** is the **Protein & Ligand INteraction Dataset and Evaluation
+Resource**: a comprehensive, annotated, high-quality resource for training and
+evaluating protein-ligand and protein-protein structure models.
 
 - \> 400k PLI systems across > 11k SCOP domains and > 50k unique small molecules
-- 500+ annotations for each system, including protein and ligand properties, quality,
-  matched molecular series and more
+- Ligand-level annotations plus compact entry, chain, interface, and representative tables
 - Automated curation pipeline to keep up with the PDB
-- 14 PLI metrics and over 20 billion similarity scores
-- Unbound \(_apo_\) and _predicted_ Alphafold2 structures linked to _holo_ systems
-- _train-val-test_ splits and ability to tune splitting based on the learning task
+- Reusable ligand, pocket, and protein-interface similarities and cluster assignments
+- Deposited apo protein chains linked to compatible _holo_ systems
+- Directed-cover assignments for choosing diverse training representatives
 - Robust evaluation harness to simplify and standard performance comparison between models.
 
 
@@ -40,7 +39,7 @@ resource for training and evaluation of protein-ligand docking algorithms:
 :columns: 9
 **Dataset access**
 
-Access the PLI systems and their annotations directly via the files
+Access ligand systems, protein interfaces, and their annotations directly
 :::
 ::::
 :::::

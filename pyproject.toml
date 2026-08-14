@@ -19,7 +19,7 @@ dependencies = [
     "cloudpathlib",
     "six",
 ]
-description = "PLINDER: The Protein-Ligand INteraction Dataset and Evaluation Resource"
+description = "PLINDER: Protein & Ligand INteraction Dataset and Evaluation Resource"
 readme = "README.md"
 requires-python = ">=3.10"
 classifiers = [
