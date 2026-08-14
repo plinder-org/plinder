@@ -1,236 +1,281 @@
 # Dataset tutorial
 
-## Getting the data
+## Downloading a release
 
-The PLINDER data is accessible from a _Google Cloud Platform_
-[bucket](https://cloud.google.com/storage/docs/buckets), a container for cloud storage
-of data.
-The bucket URL of PLINDER is `gs://plinder`.
+PLINDER data is published in `gs://plinder`. A release is identified by:
 
-The PLINDER dataset is versioned via two parameters:
+- `PLINDER_RELEASE`: the ingest month in `YYYY-MM` form;
+- `PLINDER_RELEASE_NUMBER`: the numbered release within that month.
 
-- `PLINDER_RELEASE`: the time stamp of the last RCSB sync
-- `PLINDER_ITERATION`: iterative development within a release
+Install the package and download the compact index, clustering diagnostics, and
+representative tables:
 
-There are two ways to obtain the data:
-
-1. Use the `plinder` python package and corresponding API
-    - `pip install plinder`
-2. Use the `gsutil` command line tool directly
-   - [installing `gsutil`](https://cloud.google.com/storage/docs/gsutil_install)
-
-For the purpose of this tutorial we set `PLINDER_ITERATION` to `tutorial`, to download
-only a small manageable excerpt of the entries.
-
-Using the `plinder` package:
 ```bash
-# adding --yes will skip all confirmation prompts
-plinder_download --release 2024-06 --iteration tutorial --yes
+plinder_download --release 2026-07 --release-number 1
 ```
 
-Using `gsutil`:
+The command asks before downloading larger groups such as ligand archives,
+alignments, scores, exports, and custom-scoring search databases. Pass `--yes`
+to download all groups without prompts. If a group is skipped, an online API
+call fetches the specific artifact it needs later.
+
+Files can also be copied directly:
+
 ```console
-$ export PLINDER_RELEASE=2024-06
-$ export PLINDER_ITERATION=tutorial
-$ mkdir -p ~/.local/share/plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/
-$ gsutil -m cp -r "gs://plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/*" ~/.local/share/plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/
+$ export PLINDER_RELEASE=2026-07
+$ export PLINDER_RELEASE_NUMBER=1
+$ mkdir -p ~/.local/share/plinder/${PLINDER_RELEASE}/${PLINDER_RELEASE_NUMBER}/
+$ gsutil -m cp -r \
+    "gs://plinder/${PLINDER_RELEASE}/${PLINDER_RELEASE_NUMBER}/index" \
+    ~/.local/share/plinder/${PLINDER_RELEASE}/${PLINDER_RELEASE_NUMBER}/
 ```
-
-The full dataset (`PLINDER_ITERATION=v2`) has a size of hundreds of GB, so you are
-advised to have sufficient space for usage of the production dataset.
 
 :::{note}
-The versions used for the preprint are `gs://plinder/2024-04/v1` (full dataset) and `gs://plinder/2024-04/v0` (non-redundant set used to train DffDock). However, the current version with updated annotations to be used for the
-[MLSB challenge](https://www.mlsb.io/) is `gs://plinder/2024-06/v2`.
+The preprint releases remain available under `gs://plinder/2024-04/v1` and
+`gs://plinder/2024-04/v0`. Their layout and APIs differ from the current
+release described here.
 :::
 
-## Understanding the directory structure
+## Querying ligand and entry data
 
-The directory downloaded from the bucket has the following structure:
-
-```bash
-2024-06/                     # The PLINDER release
-|-- tutorial                 # The PLINDER iteration
-|   |-- clusters             # Pre-calculated cluster labels derived from the protein similarity dataset
-|   |-- dbs                  # TSVs containing the raw files and IDs in the foldseek and mmseqs sub-databases
-|   |-- entries              # Raw annotations prior to consolidation (split by `two_char_code` and zipped)
-|   |-- fingerprints         # Index mapping files for the ligand similarity dataset
-|   |-- index                # Consolidated tabular annotations
-|   |-- ligand_scores        # Ligand similarity parquet dataset
-|   |-- ligands              # Ligand data expanded from entries for computing similarity
-|   |-- linked_structures    # Apo and predicted structures linked to their holo systems
-|   |-- links                # Apo and predicted structures similarity to their holo structures
-|   |-- mmp                  # Ligand matched molecular pairs (MMP) and series (MMS) data
-|   |-- scores               # Protein similarity parquet dataset
-|   |-- splits               # Split files and the configs used to generate them (if available)
-|   |-- systems              # Structure files for all systems (split by `two_char_code` and zipped)
-```
-
-The `systems`, `index`, `clusters` and `splits` directories are most the
-important ones for PLINDER utilization and will be covered in the tutorial, while the
-rest are for more curious users.
-
-To download specific directories of interest, for example `splits`, run:
-
-```bash
-$ gsutil -m cp -r gs://plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/splits ~/.local/share/plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/
-```
-
-## Unpacking the structure files
-
-If you used the `plinder_download` command, you can skip this section.
-
-Similar to the
-[PDB NextGen Archive](https://www.wwpdb.org/ftp/pdb-nextgen-archive-site), we split the
-structures into subdirectories of chunks (using two penultimate characters of PDB code) to make loading and querying speed palatable.
-
-The structure files can be found in the subfolder
-`~/.local/share/plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/systems`.
-To unpack the structures run
-
-```bash
-cd ~/.local/share/plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/systems; for i in `ls *zip`; do unzip $i; touch ${i//.zip/}_done; done
-```
-
-This will yield directories such as `7eek__1__1.A__1.I`, which is what we call a PLINDER
-system ID in the form
-`<PDB ID>__<biological assembly>__<receptor chain ID>__<ligand chain ID>`.
-Each system represent a complex between one or multiple proteins and a small molecules,
-derived from a biological assembly in the PDB.
-The directory contains _mmCIF_, _PDB_ and _SDF_ file formats as well as some additional
-metadata files, for e.g. chain mapping and sequences.
-
-## Exploring the annotation table
-
-All systems are listed and annotated in the table contained in the
-`index/annotation_table.parquet` file.
-The [_Parquet_ format](https://parquet.apache.org/) is an efficient binary data format
-for storing table data.
-There is a multitude of tools that support reading `.parquet` files.
-Here we will use the Python package [`pandas`](https://pandas.pydata.org) to inspect `annotation_table.parquet`.
+`annotation_table.parquet` has one row per ligand. Start with `query_table()` so
+only the selected columns and rows are read:
 
 ```python
->>> df = pd.read_parquet("index/annotation_table.parquet")
->>> df.columns
-Index(['entry_pdb_id', 'entry_release_date', 'entry_oligomeric_state',
-       'entry_determination_method', 'entry_keywords', 'entry_pH',
-       'entry_resolution', 'entry_rfree', 'entry_r', 'entry_clashscore',
-       ...
-       'ligand_interacting_ligand_chains_UniProt',
-       'system_ligand_chains_Pfam', 'ligand_interacting_ligand_chains_Pfam',
-       'ligand_neighboring_ligand_chains_Pfam',
-       'ligand_interacting_ligand_chains_CATH',
-       'ligand_neighboring_ligand_chains_CATH',
-       'system_ligand_chains_SCOP2', 'system_ligand_chains_SCOP2B',
-       'pli_qcov__100__ligand__component',
-       'sucos_shape_pocket_qcov__100__ligand__component'],
-      dtype='object', length=500)
+from plinder.core import query_table
+
+ligands = query_table(
+    "annotation",
+    columns=[
+        "entry_pdb_id",
+        "system_id",
+        "ligand_id",
+        "ligand_ccd_code",
+        "ligand_smiles",
+        "entry_resolution",
+    ],
+    joins=["entry_metadata"],
+    filters=[("entry_resolution", "<=", 2.5)],
+)
+
+print(ligands.head())
 ```
 
-We see that the table contains hundreds of columns.
-Each one is described in more detail in the
-[Dataset Reference](#annotation-table-target).
-The most important column is the `system_id`, which references the PLINDER systems
-in the `systems` directory, we have already seen, but also in the other directories, we
-are going to explore.
+Entry metadata is stored once in `entry_metadata.parquet`; the explicit join
+adds it without changing the ligand row count. Other useful starting tables are
+`entry_chains`, `entry_biounit_chains`, `interface_annotations`,
+`linked_apo_structures`, and `ligand_mmp_pairs`.
 
-While `index/annotation_table.parquet` contains annotation for all PLINDER systems,
-`index/annotation_table_nonredundant.parquet` contains a smaller set after
-ligand-protein redundancy removal.
+For a fully local release, pass an explicit `PlinderRelease`:
+
+```python
+from pathlib import Path
+
+from plinder.core import PlinderRelease, query_table
+
+release = PlinderRelease(data_dir=Path("/data/plinder-release"))
+chains = query_table(
+    "entry_chains",
+    columns=["entry_pdb_id", "chain_asym_id", "chain_receptor_type"],
+    filters=[("chain_receptor_type", "==", "protein")],
+    release=release,
+)
+```
+
+## Selecting and loading protein interfaces
+
+Protein interfaces have their own one-row-per-chain-pair table. Query it
+directly instead of starting from ligand annotations:
+
+```python
+from plinder.core import query_table
+
+interfaces = query_table(
+    "interface_annotations",
+    columns=[
+        "system_id",
+        "interface_chain_1",
+        "interface_chain_2",
+        "interface_chain_1_residue_indices",
+        "interface_chain_2_residue_indices",
+        "interface_num_contact_residue_pairs",
+        "prodigy_label",
+        "entry_resolution",
+        "entry_source_taxonomy_ids",
+        "representative_system_id",
+    ],
+    joins=["entry_metadata", "interface_membership"],
+    filters=[
+        ("interface_num_contact_residue_pairs", ">=", 10),
+        ("entry_resolution", "<=", 3.0),
+    ],
+)
+
+print(interfaces.head())
+```
+
+The chain pair is unordered. `interface_chain_1` and `interface_chain_2` are
+stable assembly-instance IDs, not receptor and ligand roles. Entry-level source
+organisms come from `entry_metadata`; full sequences come from `entry_chains`.
+
+Load one row as a reconstructed two-chain complex:
+
+```python
+from plinder.core import PlinderInterface
+
+interface = PlinderInterface(system_id=interfaces.iloc[0]["system_id"])
+
+print(interface.chains)
+print(interface.sequences)
+
+complex_atoms = interface.atom_array
+side_1 = interface.chain_structures[interface.chains[0]]
+side_2 = interface.chain_structures[interface.chains[1]]
+interface_atoms = interface.interface_structure
+interface_cif = interface.interface_cif
+```
+
+These objects are Biotite `AtomArray` instances. The two masks in
+`interface.interface_residue_masks` select the annotated contact surface from
+`complex_atoms`, which is useful for residue-level featurization:
+
+```python
+side_1_mask = interface.interface_residue_masks[interface.chains[0]]
+side_2_mask = interface.interface_residue_masks[interface.chains[1]]
+
+side_1_interface_atoms = complex_atoms[side_1_mask]
+side_2_interface_atoms = complex_atoms[side_2_mask]
+```
+
+To use a fixed list in a training pipeline, store the selected `system_id`
+values and create `PlinderInterface` objects in the dataset's `__getitem__`.
+This leaves atom selection, tensor conversion, and batching under the model's
+control rather than imposing one protein-interface representation.
+
+## Reconstructing a system
+
+Choose a `system_id` from the ligand query and create a `PlinderSystem`:
+
+```python
+from pathlib import Path
+
+from plinder.core import PlinderSystem
+
+system = PlinderSystem(system_id="2y4i__1__1.B__1.E_1.F")
+
+system_cif = Path(system.system_cif)
+receptor_cif = Path(system.receptor_cif)
+canonical_sdfs = system.canonical_ligand_sdfs
+assembly_sdfs = system.ligand_sdfs
+```
+
+The first coordinate request fetches the source PDB mmCIF revision recorded by
+the release. It then writes a self-contained system or receptor mmCIF locally.
+Canonical SDFs are extracted from the ligand archive; assembly SDFs use the
+coordinates of the selected biological-assembly instances.
+
+`plinder_download` does not download the complete source PDB archive. To prepare
+specific systems for an offline machine, fetch their unique PDB entries first:
+
+```python
+from plinder.core import download_pdb_mmcifs
+
+download_pdb_mmcifs(["2y4i", "6cex"])
+```
+
+After the required release tables, source mmCIFs, and ligand archives are
+cached, set `PLINDER_OFFLINE=true`.
+
+## Reconstructing a linked apo chain
+
+Some holo systems have ranked deposited apo-chain links:
+
+```python
+links = system.linked_apo_structures
+
+if not links.empty:
+    apo_cif = system.reconstruct_linked_apo()
+    print(links[["linked_structure_id", "rank"]])
+```
+
+The output stays in the deposited apo coordinates. Fit it to a holo receptor
+chain only when your application needs that frame:
+
+```python
+fitted_apo_cif = system.superpose_linked_apo(reference_chain="1.B")
+```
+
+If the holo receptor has exactly one protein chain, the reference chain can be
+inferred. Multichain receptors require an explicit `reference_chain`.
 
 (cluster-target)=
 
-## Inspecting the clusters
+## Inspecting representative covers
 
-This directory is organized by the similarity metrics used for generating the clusters
-and further nested by whether clustering is done with directed or undirected graph and
-by the threshold for clustering.
-
-Show nested structure
-
-```console
-$ tree ligand_clusters
-
-ligand_clusters/
-├── cluster=communities
-│   └── directed=False
-│       ├── metric=pli_qcov
-│       │   ├── threshold=100
-│       │   │   └── data.parquet
-│       │   ├── threshold=30
-│       │   │   └── data.parquet
-│       │   ├── threshold=50
-│       │   │   └── data.parquet
-│       │   ├── threshold=70
-│       │   │   └── data.parquet
-│       │   └── threshold=90
-│       │       └── data.parquet
-│       ├── metric=pli_unique_qcov
-│       │   ├── threshold=100
-│       │   │   └── data.parquet
-│       │   ├── threshold=30
-│       │   │   └── data.parquet
-│       │   ├── threshold=50
-│       │   │   └── data.parquet
-│       │   ├── threshold=70
-│       │   │   └── data.parquet
-│       │   └── threshold=90
-│       │       └── data.parquet
-```
-
-As an example, we will load greedy centroid communities based on reciprocal
-pocket similarity at a threshold of 70%.
+Representative files live below `ligand_sampling/` and
+`interface_sampling/`. For example, inspect the directional pocket cover at a
+70-percent requested threshold:
 
 ```python
->>> import pandas as pd
+import pandas as pd
 
->>> clus_file = "ligand_clusters/cluster=communities/directed=False/metric=pli_qcov/threshold=70.parquet"
->>> df = pd.read_parquet(clus_file)
->>> df
-          ligand_id label    metric      cluster  directed  threshold
-0    3mj2__1__1.B     c0  pli_qcov  communities     False         70
-1    4dh8__1__1.C     c0  pli_qcov  communities     False         70
-2    7akb__1__1.C     c0  pli_qcov  communities     False         70
-...             ...    ...       ...          ...       ...        ...
+from plinder.core import PlinderRelease
+
+release = PlinderRelease()
+sampling_dir = release.fetch("ligand_sampling")
+cover = pd.read_parquet(
+    sampling_dir
+    / "directed_set_cover"
+    / "metric=pocket_qcov"
+    / "threshold=70.parquet"
+)
+
+print(
+    cover[
+        [
+            "ligand_id",
+            "centroid_ligand_id",
+            "similarity_to_centroid",
+            "assignment_threshold",
+            "label",
+        ]
+    ].head()
+)
 ```
 
-The table assigns a cluster to each ligand instance. Ligands with the same
-cluster ID belong to the same cluster; these labels are not projected to whole
-systems.
+The detailed assignment table tells you whether a ligand was assigned at the
+requested threshold or during the 50-percent fallback pass. The annotation
+table also contains the compact label and centroid indicator columns for direct
+filtering.
 
-## Accessing the splits
-
-The `splits` directory contains an index for _training-validation-test_ splits contained
-in a single parquet file.
-The _PL50_ split described in the [article](https://doi.org/10.1101/2024.07.17.603955)
-can be found in `gs://plinder/2024-04/v1/splits/plinder-pl50.parquet`.
+Tanimoto uses the undirected path instead:
 
 ```python
->>> import pandas as pd
->>> df = pd.read_parquet("splits/split.parquet")
->>> df.head()
-               system_id            uniqueness  split cluster  ... system_proper_num_interactions  system_proper_ligand_max_molecular_weight  system_has_binding_affinity  system_has_apo_or_pred
-0  101m__1__1.A__1.C_1.D  101m__A__C_D_c188899  train     c14  ...                             20                                 616.177293                        False                   False
-1      102m__1__1.A__1.C    102m__A__C_c237197  train     c14  ...                             20                                 616.177293                        False                    True
-2  103m__1__1.A__1.C_1.D  103m__A__C_D_c252759  train     c14  ...                             16                                 616.177293                        False                   False
-3  104m__1__1.A__1.C_1.D  104m__A__C_D_c274687  train     c14  ...                             21                                 616.177293                        False                   False
-4  105m__1__1.A__1.C_1.D  105m__A__C_D_c221688  train     c14  ...                             20                                 616.177293                        False                   False
-
-[5 rows x 13 columns]
+tanimoto_cover = pd.read_parquet(
+    sampling_dir
+    / "set_cover"
+    / "metric=tanimoto_similarity_ecfp4_1024"
+    / "threshold=70.parquet"
+)
 ```
 
-The columns are:
+## Querying matched molecular pairs
 
-- `system_id`: The PLINDER system ID
-- `uniqueness`: An id tag that captures system redundancy based on ligand and pocket similarity
-- `split`: Split category, either `train` (training set), `test` (test set)
-- `cluster`: Cluster metric used in sampling test dataset.
-- `cluster_for_val_split`: Cluster metric used in sampling validation set from training set.
-- `system_pass_validation_criteria`: Boolean indicating whether a system pass all the quality criteria
-- `system_pass_statistics_criteria`: Boolean indicating whether a system pass the desired statistics criteria
-- `system_proper_num_ligand_chains`: Number of chains ligands that are not ions or artifacts
-- `system_proper_pocket_num_residues`: Number of pocket residues around ligands that are not ions or artifacts
-- `system_proper_num_interactions`: Number of interactions based on ligands that are not ions or artifacts
-- `system_proper_ligand_max_molecular_weight`: Maximum molecular weight of ligands that are not ions or artifacts
-- `system_has_binding_affinity`: Boolean indicator of whether a system has binding affinity or not
-- `system_has_apo_or_pred`: Boolean indicator of whether a system apo or predicted structures linked
+The matched-molecular-pair table is another release index table:
+
+```python
+from plinder.core import query_table
+
+pairs = query_table(
+    "ligand_mmp_pairs",
+    columns=[
+        "ligand_smiles_id_1",
+        "ligand_smiles_id_2",
+        "transformation",
+        "shared_core_smiles",
+    ],
+    filters=[("shared_core_num_heavy_atoms", ">=", 10)],
+)
+
+print(pairs.head())
+```

@@ -4,131 +4,239 @@ sd_hide_title: true
 
 # Dataset
 
-## Dataset reference
+PLINDER, the **Protein & Ligand INteraction Dataset and Evaluation Resource**,
+publishes ligand systems and protein-protein interfaces from the same PDB ingest
+while keeping their distinct row grains and coordinate APIs.
 
-### Directory structure
+## Release layout
 
-```bash
-2024-06/
-|-- v2
-    |-- index # Consolidated tabular annotations
-    |   |-- annotation_table.parquet
-    |   |-- annotation_table_nonredundant.parquet
-    |   |-- entry_biounit_chains.parquet
-    |   |-- entry_chains.parquet
-    |   |-- entry_sources.parquet
-    |-- systems  # Structure files for all systems (split by `two_char_code` and zipped)
-    |   |-- {two_char_code}.zip
-    |-- clusters # Pre-calculated cluster labels derived from the protein similarity dataset
-    |   |-- cluster=communities
-    |       |-- ...
-    |   |-- cluster=components
-    |       |-- ...
-    |-- splits # Split files and the configs used to generate them (if available)
-    |   |-- split.parquet
-    |   |-- split.yaml
-    |-- linked_structures # Apo and predicted structures linked to their holo systems
-    |   |-- {two_char_code}.zip
-    |-- links # Apo and predicted structures similarity to their holo structures
-    |   |-- apo_links.parquet
-    |   |-- pred_links.parquet
-    |
---------------------------------------------------------------------------------
-                            miscellaneous data below
---------------------------------------------------------------------------------
-    |
-    |-- dbs # TSVs containing the raw files and IDs in the foldseek and mmseqs sub-databases
-    |   |-- subdbs
-    |       |-- apo.csv
-    |       |-- holo.csv
-    |       |-- pred.csv
-    |-- entries # Raw annotations prior to consolidation (split by `two_char_code` and zipped)
-    |   |-- {two_char_code}.zip
-    |-- fingerprints # Index mapping files for the ligand similarity dataset
-    |   |-- ligands_per_smiles.parquet
-    |   |-- ligand_similarity_annotations.parquet
-    |-- ligand_scores # Ligand similarity parquet dataset
-    |   |-- {hashid}.parquet
-    |-- alignments # V3 mapped Foldseek/MMseqs results for score reconstruction
-    |   |-- search_db={holo,apo,pred}
-    |       |-- alignment_type={foldseek,mmseqs}
-    |           |-- shard={two_char_code}.parquet
-    |-- ligands # Ligand data expanded from entries for computing similarity
-    |   |-- {hashid}.parquet
-    |-- mmp # Ligand matched molecular pairs (MMP) and series (MMS) data
-    |   |-- plinder_mmp_series.parquet
-    |   |-- plinder_mms.csv.gz
-    |-- scores # Protein similarity parquet dataset
-    |   |-- search_db=apo
-    |       |-- apo.parquet
-    |   |-- search_db=holo
-    |       |-- {chunck_id}.parquet
-    |   |-- search_db=pred
-    |       |-- pred.parquet
+PLINDER releases are addressed by an ingest month and a release number within
+that month. The public layout is:
+
+```text
+<ingest-month>/
+└── <release-number>/
+    ├── index/
+    │   ├── annotation_table.parquet
+    │   ├── entry_chains.parquet
+    │   ├── entry_biounit_chains.parquet
+    │   ├── entry_metadata.parquet
+    │   ├── entry_sources.parquet
+    │   ├── interface_annotation_table.parquet
+    │   ├── alignment_chain_lookup.parquet
+    │   ├── linked_apo_structures.parquet
+    │   ├── ligand_pocket_membership.parquet
+    │   ├── ligand_pocket_representatives.parquet
+    │   ├── ligand_mmp_pairs.parquet
+    │   ├── interface_half_representatives.parquet
+    │   ├── interface_membership.parquet
+    │   └── interface_representatives.parquet
+    ├── ligand_archives/
+    │   ├── {two_char_code}.parquet
+    │   └── manifest.json
+    ├── alignments/
+    │   └── search_db=holo/
+    │       └── alignment_type={foldseek,mmseqs}/
+    │           └── shard={two_char_code}.parquet
+    ├── ligand_scores/
+    ├── interface_scores/
+    ├── ligand_clusters/
+    ├── ligand_sampling/
+    ├── interface_clusters/
+    ├── interface_sampling/
+    ├── search_databases/
+    └── exports/
 ```
 
-We will describe the content of the `index`, `systems`, `clusters`, `splits`, `links` and `linked_structures` directories in detail below, the rest are described in the [miscellaneous section](#miscellaneous-target).
+`plinder_download` downloads the index tables, clustering diagnostics, and
+sampling tables by default. It asks before downloading the larger ligand,
+alignment, score, export, and search-database groups; `--yes` downloads every
+group. APIs fetch missing optional artifacts when they need them unless offline
+mode is enabled. Source PDB mmCIFs are separate: they are fetched per PDB entry
+during reconstruction and are not part of the bulk download.
 
 (annotation-table-target)=
 
-### Annotation tables (`index/`)
+## Release tables
 
-Tables that lists all systems along with their annotations.
+The annotation table has one row per ligand, not one row per system. Values
+whose natural grain is an entry, chain, interface, or representative are stored
+once in narrower tables:
 
-- `annotation_table.parquet`: Lists all systems and their annotations.
-- `annotation_table_nonredundant.parquet`: Subset of systems without redundant systems.
-- `entry_biounit_chains.parquet`: One row per biological-assembly chain instance, recording its source asymmetric ID and whether it is a receptor, ligand, or water chain. System membership is subtracted from these rows at reconstruction time to select optional "other" chains; full assembly membership is not repeated on every ligand row.
-- `entry_chains.parquet`: One row per protein or nucleic-acid receptor chain, including its normalized `chain_receptor_type`. Protein rows also carry the entity, holo partition flag, and UniProt mappings used to construct the Foldseek/MMseqs sub-databases; nucleic-acid rows are never submitted to similarity search.
-- `entry_sources.parquet`: One row per PDB entry recording the exact source mmCIF major and minor revision used during ingest. This is normalized entry metadata and is not repeated on ligand rows.
+- `annotation_table.parquet`: ligand annotations and reconstructable system IDs;
+- `entry_chains.parquet`: one polymer chain in a PDB entry;
+- `entry_biounit_chains.parquet`: one chain instance in a biological assembly;
+- `entry_metadata.parquet`: experimental and entry-validation metadata;
+- `entry_sources.parquet`: the source mmCIF revision used during ingest;
+- `interface_annotation_table.parquet`: one protein-chain interface;
+- `alignment_chain_lookup.parquet`: protein-chain search identifiers and residue mappings;
+- `linked_apo_structures.parquet`: ranked deposited apo chains linked to holo systems;
+- `ligand_pocket_membership.parquet`: ligand-to-pocket-representative assignments;
+- `ligand_pocket_representatives.parquet`: receptor, pocket, and interaction payloads for ligand-pocket representatives;
+- `ligand_mmp_pairs.parquet`: matched molecular pairs over unique ligand SMILES;
+- `interface_membership.parquet`: interface-to-representative assignments;
+- `interface_representatives.parquet`: representative full interfaces;
+- `interface_half_representatives.parquet`: representative interface sides.
 
-V3 cluster columns are merged only after local scoring and clustering finish.
-V3 similarity clusters use ligand-instance nodes throughout, including
-receptor-derived metrics because those scores are scoped to individual ligand
-pairs. Cluster columns therefore include an explicit `__ligand__` marker, for
-example `sucos_shape_pocket_qcov__50__ligand__component`. They are not
-projected or collapsed into system-level clusters. The gated `shape`, `color`,
-and raw `sucos_shape` values remain diagnostic scores and are not clustered
-directly.
-
-V3 does not distribute the complete materialized `scores/` dataset. Instead, it
-distributes mapped Foldseek and MMseqs results in `alignments/`, ordered by query
-and target and compressed as deterministic two-character Parquet shards. The
-shard for a PDB ID is `pdb_id[-3:-1]`, matching the PDB archive convention. It
-also publishes the complete ligand-level
-`all_sucos_shape_pocket_qcov.parquet`, including similarities below the minimum
-clustering threshold. Other pairwise scores are reconstructed from the mapped
-alignments when needed.
+The checked-in column reference below is generated from these release tables.
 
 :::{include} table.html
 :::
 
-`Mandatory`: The column has a non-empty, non-NaN value in for all PLINDER systems.
-`Example`: An example non-empty, non-NaN value for the given column in a PLINDER system.
+### Querying tables
 
-### Canonical ligand structures
+`query_table()` reads only the requested columns and rows. Optional joins are
+explicit and are limited to relationships that preserve the base table's row
+grain. This makes entry metadata or pocket membership available to a ligand
+query without duplicating or dropping ligand rows.
 
-PLINDER stores one canonical asymmetric-unit SDF for each ligand chain. Biological-assembly copies are not stored because they contain the same conformation under different rigid-body transforms.
+```python
+from plinder.core import query_table
 
-```bash
-|-- {two_char_code}
-    |-- {pdb_id}
-        |-- ligand_files
-            |-- {asym_id}.sdf
+ligands = query_table(
+    "annotation",
+    columns=[
+        "system_id",
+        "ligand_id",
+        "ligand_ccd_code",
+        "entry_resolution",
+        "representative_ligand_id",
+    ],
+    joins=["entry_metadata", "ligand_pocket_membership"],
+    filters=[
+        ("entry_resolution", "<=", 2.5),
+        ("system_pass_validation_criteria", "==", True),
+    ],
+)
 ```
 
-System and receptor mmCIF files are reconstructed on demand from the deposited PDB
-mmCIF, system selection metadata in the annotation parquet, and normalized assembly
-membership in `index/entry_biounit_chains.parquet`. During V3 ingest,
-PLINDER records the exact source structure-model major/minor revision in
-`index/entry_sources.parquet`. `PlinderSystem` fetches that exact compressed revision
-from the [wwPDB versioned archive](https://www.wwpdb.org/ftp/pdb-versioned-ftp-site)
-and caches it under
-`<plinder_dir>/source_mmcifs/{two_char_code}/{pdb_id}_v{major}-{minor}.cif.gz`.
-The cache is therefore reproducible for a particular PLINDER release rather than a
-copy of whichever revision happens to be current when it is requested. An explicitly
-supplied `source_mmcif` still takes precedence.
+Registered table names, row grains, and keys are available through
+`plinder.core.RELEASE_TABLES`. `PlinderRelease` resolves the corresponding local
+paths and can point at either the configured release or an explicit local copy.
 
-To prepare a subset on an online node before moving the cache to an offline node:
+```python
+from pathlib import Path
+
+from plinder.core import PlinderRelease, query_table
+
+release = PlinderRelease(data_dir=Path("/data/plinder-release"))
+entries = query_table(
+    "entry_metadata",
+    columns=["entry_pdb_id", "entry_release_date", "entry_resolution"],
+    release=release,
+)
+```
+
+## Protein interfaces
+
+PLINDER publishes protein-protein interfaces in a dedicated table because their
+natural row is a chain pair, not a ligand. `interface_annotation_table.parquet`
+has one row for an unordered pair of protein-chain instances in a biological
+assembly. Its `system_id` has the form
+`<pdb>__<assembly>__<chain-instance-1>--<chain-instance-2>`.
+
+The annotation records both chains, the resolved residues on each side, the
+number of contacting residue pairs, and PRODIGY-cryst features. Join entry
+metadata and representative membership when selecting a working set:
+
+```python
+from plinder.core import query_table
+
+interfaces = query_table(
+    "interface_annotations",
+    columns=[
+        "system_id",
+        "entry_pdb_id",
+        "interface_chain_1",
+        "interface_chain_2",
+        "interface_num_contact_residue_pairs",
+        "prodigy_label",
+        "prodigy_probability_bio",
+        "entry_release_date",
+        "entry_resolution",
+        "entry_source_taxonomy_ids",
+        "representative_system_id",
+    ],
+    joins=["entry_metadata", "interface_membership"],
+    filters=[
+        ("interface_num_contact_residue_pairs", ">=", 10),
+        ("entry_resolution", "<=", 3.0),
+        ("prodigy_label", "==", "BIO"),
+    ],
+)
+```
+
+`PlinderInterface` is the coordinate-level interface API. It expands the
+deposited assembly and retains exactly the annotated two-chain pair. In-memory
+chain keys use the assembly-instance IDs from the table, so repeated copies of
+one asymmetric-unit chain remain distinct.
+
+```python
+from plinder.core import PlinderInterface
+
+interface = PlinderInterface(system_id=interfaces.iloc[0]["system_id"])
+
+annotation = interface.annotation
+sequences = interface.sequences
+complex_atoms = interface.atom_array
+chain_atoms = interface.chain_structures
+interface_atoms = interface.interface_structure
+interface_masks = interface.interface_residue_masks
+interface_cif = interface.interface_cif
+```
+
+`sequences` contains the full deposited polymer sequence for each side;
+`atom_array` contains resolved coordinates. Each value in
+`interface_residue_masks` is an atom mask over `atom_array`, derived from the
+stored resolved-residue indices. The written mmCIF is self-contained and
+contains only the two protein chains. The API does not assign a receptor and a
+ligand orientation because the annotated interface is unordered.
+
+An explicit `release=PlinderRelease(data_dir=...)` keeps reconstructed files
+under that release root. A caller may also supply `source_mmcif`, but its
+resolved residue numbering must match the release annotation; otherwise the
+interface-residue properties raise a descriptive error instead of selecting
+different residues.
+
+`interface_representatives.parquet` stores the full-interface representatives,
+while `interface_half_representatives.parquet` stores individual interface
+sides. The latter is useful when one wants diverse protein surfaces without
+requiring both sides of the same complex. Detailed set-cover assignments live
+under `interface_sampling/`.
+
+## Structure assets and reconstruction
+
+PLINDER stores one canonical asymmetric-unit SDF for each ligand chain in
+`ligand_archives/{two_char_code}.parquet`. Assembly copies are not stored because
+they have the same conformation under a rigid-body transform. `PlinderSystem`
+extracts only the SDFs required for the requested system.
+
+System and receptor mmCIFs are rebuilt from the deposited PDB mmCIF, the ligand
+rows, and `entry_biounit_chains.parquet`. The source revision recorded in
+`entry_sources.parquet` is fetched from the
+[wwPDB versioned archive](https://www.wwpdb.org/ftp/pdb-versioned-ftp-site) and
+cached under the configured PLINDER directory. An explicit `source_mmcif`
+supplied to `PlinderSystem` takes precedence.
+
+```python
+from pathlib import Path
+
+from plinder.core import PlinderSystem
+
+system = PlinderSystem(system_id="2y4i__1__1.B__1.E_1.F")
+system_cif = Path(system.system_cif)
+receptor_cif = Path(system.receptor_cif)
+canonical_sdfs = system.canonical_ligand_sdfs
+assembly_sdfs = system.ligand_sdfs
+```
+
+The reconstructed mmCIFs contain the atom, sequence, component, assembly, and
+bond information needed to read them as self-contained PDBx/mmCIF files.
+Canonical ligand SDFs preserve the curated bond orders; `ligand_sdfs` writes the
+corresponding assembly coordinates.
+
+For an offline workflow, fetch the required source files on an online node
+before enabling `PLINDER_OFFLINE=true`:
 
 ```python
 from plinder.core import download_pdb_mmcifs
@@ -136,16 +244,57 @@ from plinder.core import download_pdb_mmcifs
 download_pdb_mmcifs(["2y4i", "1a3b"])
 ```
 
-Only the unique PDB IDs passed to this function are fetched; the full PDB is never
-downloaded. The small release revision manifest is resolved first. Afterward, set
-`PLINDER_OFFLINE=true` (or `PLINDER_OFFLINE_MODE=true`). The cached manifest and
-source files are reused without network access; requesting an uncached entry raises
-an error that includes its expected cache path. Callers explicitly choose whether
-reconstructed outputs include interacting or all waters, other biological-assembly
-chains, and which output files to write.
+Only the requested PDB entries are fetched. An offline request for an absent
+source file or release artifact raises an error with its expected cache path.
 
-V3 similarity scores can likewise be prepared on an online node and reconstructed
-later in offline mode:
+### Linked apo chains
+
+`linked_apo_structures.parquet` associates a holo system with ranked deposited
+apo protein chains. A candidate must pass the configured pocket and whole-chain
+similarity requirements for every proper ligand pocket in the holo system.
+Candidates from the same PDB entry are excluded.
+
+Ranking prefers chains with no nearby ligand-like components, then ion-only,
+artifact, and other-ligand contacts. Resolution and similarity break later
+ties. The release stores the exact assembly chain instance that was scored; it
+does not store a copied or pre-fitted coordinate file.
+
+```python
+from plinder.core import PlinderSystem
+
+system = PlinderSystem(system_id="2y4i__1__1.B__1.E_1.F")
+links = system.linked_apo_structures
+
+# The highest-ranked link is used when no ID is supplied.
+apo_cif = system.reconstruct_linked_apo()
+
+# Fit the selected apo chain to a holo receptor chain when desired.
+fitted_apo_cif = system.superpose_linked_apo(reference_chain="1.B")
+```
+
+For a multichain receptor, `reference_chain` is required for fitting so that a
+chain is never selected arbitrarily.
+
+## Similarity artifacts
+
+### Ligand similarities
+
+`ligand_scores/` stores sharded BulkTanimoto edges over unique canonical-SMILES
+nodes. Every edge at or above the configured minimum is retained.
+
+`exports/all_sucos_shape_pocket_qcov.parquet` stores the complete published
+ligand-level SuCOS/pocket-coverage export, including values below the clustering
+threshold.
+
+### Protein alignments
+
+The release publishes mapped Foldseek and MMseqs hits rather than the complete
+pairwise protein-score table. Alignment rows are ordered by query and target and
+stored in deterministic PDB two-character shards.
+
+`reconstruct_similarity_scores()` filters those shards to a requested system
+cross-product and calculates directed ligand-level scores. Positive-pocket pairs
+load their canonical ligand SDFs for the gated 3D metrics.
 
 ```python
 from plinder.core.scores import (
@@ -153,485 +302,77 @@ from plinder.core.scores import (
     reconstruct_similarity_scores,
 )
 
-systems = ["2y4i__1__1.B__1.E_1.F", "6cex__1__1.D__1.M"]
-prefetch_similarity_alignments(systems)
-scores = reconstruct_similarity_scores(systems[:1], systems[1:])
+queries = ["2y4i__1__1.B__1.E_1.F"]
+targets = ["6cex__1__1.D__1.M"]
+prefetch_similarity_alignments(queries)
+scores = reconstruct_similarity_scores(queries, targets)
 ```
 
-Prefetching derives the required two-character shards from the query systems and
-downloads each available Foldseek/MMseqs shard once; it never downloads the complete
-alignment dataset. If one search backend has no shard, reconstruction uses the other;
-it fails only when neither backend is available. Reconstruction then filters those
-Parquets by query and target PDB ID, loads only the requested annotation rows, and
-emits directed ligand-level scores.
-Canonical SDFs are resolved lazily only for ligand pairs whose `pocket_qcov` is
-positive. With `PLINDER_OFFLINE=true` or `PLINDER_OFFLINE_MODE=true`, the same calls
-use the normal PLINDER cache and report a missing shard instead of accessing the
-network. The prefetch function covers alignment shards only; run reconstruction once
-on the online node as well if the annotation files and any positive-pocket ligand
-archives have not already been cached.
+Prefetching downloads only the Foldseek/MMseqs shards required by the query PDB
+entries. Run reconstruction once while online as well if the annotation rows or
+positive-pocket ligand archives are not already cached.
+
+Protein-interface coverage can be rebuilt for a bounded interface cross-product
+from the same mapped alignments:
 
 ```python
-from pathlib import Path
+from plinder.core.scores import reconstruct_interface_similarity_scores
 
-import pandas as pd
-
-from plinder.data.annotations.save_utils import (
-    SystemReconstructionOptions,
-    SystemReconstructionOutputs,
-    save_reconstructed_system,
-)
-
-annotation = pd.read_parquet("annotation_table.parquet")
-row = annotation.query("system_id == '2y4i__1__1.B__1.E_1.F'").iloc[0]
-save_reconstructed_system(
-    "pdb_00002y4i_xyz-enrich.cif.gz",
-    row,
-    outputs=SystemReconstructionOutputs(
-        system_cif=Path("system.cif"),
-        receptor_cif=Path("receptor.cif"),
-        # Leave an output as None when it should not be written.
-        sequences_fasta=None,
-    ),
-    options=SystemReconstructionOptions(
-        system_waters="interacting",  # "none", "interacting", or "all"
-        receptor_waters="none",
-        system_include_other_protein_chains=False,
-        system_include_other_ligand_chains=False,
-    ),
+interface_scores = reconstruct_interface_similarity_scores(
+    query_interface_ids=["7cm8__1__1.A--2.A"],
+    target_interface_ids=["7cma__1__1.A--1.B"],
 )
 ```
 
-### Ligand clusters (`ligand_clusters/`)
+The result is directional: swapping query and target can change interface
+coverage.
 
-This directory contains pre-calculated ligand-instance cluster labels derived from
-pocket, protein-ligand interaction, pocket-weighted ligand-shape, and
-chemical-similarity datasets.
-The nested structure is as follows:
+## Representative covers
 
-```bash
-|-- cluster=communities
-    |-- directed=False
-        |-- metric={metric}
-            |-- threshold={threshold}.parquet
-|-- cluster=components
-    |-- directed=False
-        |-- metric={metric}
-            |-- threshold={threshold}.parquet
-|-- stats.parquet
-|-- stats.json
+Connectivity components are build-time helpers and are not public cluster
+labels. The release publishes greedy representative covers:
+
+- `ligand_sampling/set_cover/` contains an undirected set cover for reciprocal
+  Tanimoto similarity;
+- `ligand_sampling/directed_set_cover/` contains directed covers for pocket,
+  interaction, and pocket-weighted ligand 3D metrics;
+- `interface_sampling/directed_set_cover/` contains directed covers for protein
+  interfaces.
+
+Each metric has files named `metric={metric}/threshold={threshold}.parquet`.
+Ligand cover labels are also merged into the annotation table. Tanimoto columns
+end in `__ligand__set_cover`; directional columns end in
+`__ligand__directed_set_cover`.
+
+The Tanimoto cover uses only reciprocal edges meeting the requested threshold.
+For a directional cover, representative selection first maximizes residual gain
+at the requested threshold. If uncovered nodes remain above a threshold of 50,
+the algorithm uses 50-percent edges before assigning remaining singletons. The
+detailed file records `representative_selection_threshold` and
+`assignment_threshold`, so downstream selection can distinguish strict and
+fallback assignments. It also records selection order, marginal gain, and each
+node's potential coverage count and fraction.
+
+## Matched molecular pairs
+
+`index/ligand_mmp_pairs.parquet` contains compact mmpdb transformations over
+unique canonical ligand SMILES. Rows identify the two `ligand_smiles_id` values,
+both SMILES, the transformation and shared core, cut count, heavy-atom counts,
+and the fraction of each ligand contained in the shared core.
+
+```python
+from plinder.core import query_table
+
+pairs = query_table(
+    "ligand_mmp_pairs",
+    columns=[
+        "ligand_smiles_id_1",
+        "ligand_smiles_id_2",
+        "transformation",
+        "shared_core_smiles",
+        "ligand_1_shared_core_fraction",
+        "ligand_2_shared_core_fraction",
+    ],
+    filters=[("ligand_1_shared_core_fraction", ">=", 0.5)],
+)
 ```
-
-The stats files summarize node count, cluster count, singleton count, and the
-largest, median, and 95th-percentile cluster sizes for every published artifact;
-`stats.json` also records the validation outcome.
-
-Repeated system-pair evidence is first collapsed to the maximum score for each
-ordered ligand pair. Public graph edges then use the minimum of the two
-directional ligand-level maxima.
-
-- `cluster`: the cluster algorithm used
-  - `communities`: deterministic greedy centroid partitions in which every
-    member meets the threshold in both directions to its centroid
-  - `components`: connected components of the reciprocal-minimum graph
-- `directed`: type of graph used for cluster input
-  - `False`: both directional scores are required and their minimum is used
-- `metric`: the similarity metrics used for generating the clusters
-  - `pli_qcov`: Protein-ligand interaction similarity between aligned ligand-binding region (pocket) residues of two systems.
-  - `pli_unique_qcov`: Protein-ligand interaction similarity between aligned pocket residues of two systems, taking only unique interaction type into consideration.
-  - `pocket_qcov`: Query coverage between ligand-binding region of two systems.
-  - `sucos_shape_pocket_qcov`: Directional ligand 3D shape/color similarity multiplied by pocket query coverage.
-  - `tanimoto_similarity_ecfp4_1024`: Tanimoto similarity over radius-2, 1024-bit Morgan fingerprints.
-- `threshold`: similarity threshold in percent.
-  - `30`
-  - `50`
-  - `70`
-  - `90`
-  - `100`
-
-Directed set-cover assignments for training sampling are stored under
-`ligand_sampling/directed_set_cover/`. A centroid covers query ligand `Q` when
-the directional ligand-level score `Q -> centroid` meets the threshold. Their
-labels are merged into the annotation index as columns such as
-`pocket_qcov__50__ligand__directed_set_cover`. The detailed assignment files
-retain the centroid and score without repeating them in the annotation table.
-Each assignment row records `ligand_id`, `centroid_ligand_id`,
-`similarity_to_centroid`, `label`, `metric`, `threshold`, and `directed`.
-
-### Splits (`splits/`)
-
-This directory contains split files and the configs used to generate them.
-
-- `split.parquet`: listing the split category for each system
-- `split.yaml`: the config used to generate the split
-
-:::{list-table} `split.parquet`
-:widths: 10 5 30
-:header-rows: 1
-
-- - Name
-  - Type
-  - Description
-- - system_id
-  - str
-  - The PLINDER system ID
-- - split
-  - str
-  - Split category: either `train` (training set), `test` (test set),`val` (training set) or `removed` (removed for de-leaking purposes)
-- - cluster
-  - str
-  - Cluster label used in sampling test set
-- - cluster_for_val_split
-  - str
-  - Cluster label used in sampling validation set.
-- - uniqueness
-  - str
-  - system label used to remove redundant systems from the split
-- - system_pass_validation_criteria
-  - bool
-  - does as system pass the crystal quality for test?
-- - system_pass_statistics_criteria
-  - bool
-  - does a system fit the statistics criteria for test?
-- - system_proper_num_ligand_chains
-  - int
-  - number of ligand entries in a system that are not classified as ion or artifact (i.e "proper" ligands)
-- - system_proper_pocket_num_residues
-  - int
-  - total number of pocket residues that are within 6 Å distance to a "proper" ligand(s) in a system
-- - system_proper_num_interactions
-  - int
-  - total number of PLI interactions to a "proper" ligand(s) in a system
-- - system_proper_ligand_max_molecular_weight
-  - float
-  - maximum molecular weight of the "proper" ligand(s) in a system
-- - system_has_binding_affinity
-  - bool
-  - does the system have a ligand with an annotated binding affinity?
-- - system_has_apo_or_pred
-  - bool
-  - does the system have either `apo` or `pred` structure linked?
-:::
-
-The content of `split.yaml` is described below:
-
-```bash
-split:
-  graph_configs: # Similarity graph configuration
-  - metric: pli_unique_qcov # Metric used to generate the base graph from which all partitioning is done.
-    threshold: 30 # Threshold used to generate the base graph from which all partitioning is done.
-    depth: 1 # Depth at which the neighbors are defined.
-  - metric: protein_seqsim_weighted_sum # Same as above
-    threshold: 30 # Same as above
-    depth: 1 # Same as above
-  mms_unique_quality_count: 3 # How many unique congeneric IDs passing quality to consider as MMS
-  ligand_cluster_metric: Tanimoto_similarity_max # which metric to use for ligand clusters (these are added to test from removed if they are different from train/val and corresponding leaked systems are removed from train/val)
-  ligand_cluster_threshold: 50 # Which threshold to use for ligand clusters
-
-  ligand_cluster_cluster: components # Which cluster to use for ligand clusters
-  test_cluster_cluster: communities # What kind of cluster to use for sampling test
-  test_cluster_metric: pli_unique_qcov # Metric to use for sampling representatives from each test cluster
-  test_cluster_threshold: 50  # Threshold to use for sampling representatives from each test cluster
-  test_cluster_directed: false # Directed to use for sampling representatives from each test cluster
-  num_test_representatives: 2 # Max number of representatives from each test cluster
-  num_per_entry_pdb_id_and_unique_ccd_codes: 1 # Max number of systems to choose per entry pdb id and unique ccd codes
-  min_test_cluster_size: 5 # Test should not be singletons
-  min_test_leakage_count: 30  # Test should not be too unique
-  max_test_leakage_count: 1000 # Test should not be in too big communities or cause too many train cases to be removed
-  max_removed_fraction: 0.2 # Maximum fraction of systems that can be removed due to test set selection
-  num_test: 1000 # test set size
-  val_cluster_cluster: components # What kind of cluster to use for sampling val
-  val_cluster_metric: pocket_qcov # Metric to use for splitting train and val
-  val_cluster_threshold: 50  # Threshold to use for splitting train and val
-  val_cluster_directed: false # Directed to use for splitting train and val
-  num_val_representatives: 3 # Max number of representatives from each val cluster
-  min_val_cluster_size: 30  # Val should not be singletons
-  num_val: 1000  # Val set size
-  min_max_pli: # Test/val should not have too few or too many interactions
-  - 3
-  - 50
-  min_max_pocket: # Test/val should not have too few or too many pocket residues
-  - 5
-  - 100
-  min_max_ligand: # Test/val should not have too small or too large ligands
-  - 200
-  - 800
-  test_additional_criteria: # Priority columns to use for scoring systems with a weight attached to each column
-  - - system_pass_validation_criteria # Indicator of whether a system is passing validation criteria
-    - ==
-    - 'True'
-  - - system_pass_statistics_criteria # Indicator of whether a system is passing statistic criteria
-    - ==
-    - 'True'
-  - - biounit_num_ligands # Number of ligands in the biounit.
-    - <=
-    - 20
-  priority_columns:
-    system_ligand_has_cofactor: -40.0
-    leakage_count: -1.0
-```
-
-### Linked structures (`linked_structures/`)
-
-This directory contains the linked apo and predicted structures for PLINDER systems. These structures are intended to be used for augmenting the PLINDER dataset, eg. for flexible docking or pocket prediction purposes.
-The files are grouped into zipped subdirectories by using `two_char_code` of the system.
-Each unzipped subdirectory contains `pred` and `apo` subfolders that in turn contain folders named by `system_id`.
-Inside each `apo/{system_id}` and `pred/{system_id}` folder is another directory containing a superposed system: `{source_id}_{chain_id}/superposed.cif`, where `{source_id}` and `{chain_id}` for apo systems is `pdb_id` with a source chain identifier, and for predicted structures, `{source_id}` is `uniprot_id` used in AF2DB with a chain identifier set to `A`.
-
-### Linked systems (`links/`)
-
-This directory contains parquet files linking PLINDER systems to their apo and predicted structures in `linked_structures/`.
-
-:::{list-table} `{apo|pred}_links.parquet`
-:widths: 10 5 30
-:header-rows: 1
-
-- - Name
-  - Type
-  - Description
-- - reference_system_id
-  - str
-  - The PLINDER system ID
-- - id
-  - str
-  - The PDB or AF2DB (for `apo` and `pred`, respectively) `{source_id}_{chain_id}` tag
-- - pocket_fident
-  - float
-  - sequence identity for pocket residues
-- - pocket_lddt
-  - float
-  - Local Distance Difference Test (lDDT) score for the pocket residue alpha carbons as returned by Foldseek.
-- - protein_fident_qcov_weighted_sum
-  - float
-  - Sum of fident \* qcov for all templates, weighted by the number of residues in the template
-- - protein_fident_weighted_sum
-  - float
-  - Sum of fident for all templates, weighted by the number of residues in the template
-- - protein_lddt_weighted_sum
-  - float
-  - Sum of lDDT for all residues, weighted by the number of residues in the template
-- - target_id
-  - str
-  - apo or pred stucture `{source_id}` tag
-- - sort_score
-  - float
-  - Score used to sort linked structures. This is resolution for apos and plddt for preds.
-- - receptor_file
-  - str
-  - intermediate aligned linked receptor file path
-- - ligand_files
-  - str
-  - intermediate file path for ligands used in calculations
-- - num_reference_ligands
-  - int
-  - number of ligands in reference structure
-- - num_model_ligands
-  - int
-  - number of ligands in model structure
-- - num_reference_proteins
-  - int
-  - number of protein chains in reference structure
-- - num_model_proteins
-  - int
-  - number of protein chains in model structure
-- - fraction_reference_ligands_mapped
-  - float
-  - Fraction of reference ligands that were successfully mapped to model ligands
-- - fraction_model_ligands_mapped
-  - float
-  - Fraction of model ligands that were successfully mapped to reference ligands
-- - lddt_pli_ave
-  - float
-  - Average lDDT score for protein-ligand interactions
-- - lddt_pli_wave
-  - float
-  - Weighted average lDDT score for protein-ligand interactions
-- - bisy_rmsd_ave
-  - float
-  - Average binding-site superposed symmetry-corrected RMSD between reference and model ligands
-- - bisy_rmsd_wave
-  - float
-  - Weighted average binding-site superposed symmetry-corrected RMSD between reference and model ligands
-- - lddt_lp_ave
-  - float
-  - Average lDDT score for ligand poses
-- - lddt_lp_wave
-  - float
-  - Weighted average lDDT score for ligand poses
-- - fraction_reference_proteins_mapped
-  - float
-  - Fraction of reference protein chains with corresponding model chains
-- - fraction_model_proteins_mapped
-  - float
-  - Fraction of model protein chains mapped to corresponding reference chains
-- - lddt
-  - float
-  - Global lDDT score calculated over all atoms in the structure
-- - bb_lddt
-  - float
-  - Global lDDT score calculated over backbone atoms (N, CA, C, O) in the structure
-- - per_chain_lddt_ave
-  - float
-  - Average per-chain lDDT score calculated over all atoms
-- - per_chain_bb_lddt_ave
-  - float
-  - Average per-chain lDDT score calculated over backbone atoms (N, CA, C, O)
-:::
-
-(miscellaneous-target)=
-
-### Miscellaneous
-
-Here we briefly describe subdirectories and their files that are not part of the main dataset but are used in the dataset processing pipeline.
-These files should be considered intermediate products and are not intended to be used directly, only for development purposes.
-
-#### Database processed files (`dbs/`)
-
-This directory contains the intermediate files of PDB structures that were successfully processed and scored by Foldseek and MMseqs2 pipeline.
-It is used in splitting to make sure that only successfully computed systems are used for splitting.
-
-```bash
-|-- subdbs
-|   |-- apo.csv
-|   |-- holo.csv
-|   |-- pred.csv
-```
-
-Each file is a CSV with a single column: `pdb_id`.
-
-#### Raw annotation parts (`raw_entries/`)
-
-During ingest this directory contains one `{pdb_id}.parquet` annotation part and one per-entry directory containing `entry_chains.parquet`, `entry_biounit_chains.parquet`, `entry_source.parquet`, and canonical ligand SDFs, grouped by `two_char_code`. The join step consolidates the ligand-level parts into `index/annotation_table.parquet`, normalized receptor-chain rows into `index/entry_chains.parquet`, biological-assembly membership into `index/entry_biounit_chains.parquet`, and one pinned source revision per PDB into `index/entry_sources.parquet`; entry JSON archives are not produced.
-
-#### Small molecule fingerprints (`fingerprints/`)
-
-Tables used to calculate and annotate ligand similarity:
-
-- `ligands_per_smiles.parquet`: one row per exact canonical SMILES, with its integer node ID, serialized ECFP4 fingerprint (Morgan radius 2, 1024 bits, no chirality), and similarity to the closest listed CCD cofactor. The fingerprint definition is also stored in Parquet metadata.
-- `ligand_similarity_annotations.parquet`: unique-SMILES annotations including the 90% Tanimoto component and the number of distinct PDB entries represented by that component. These columns are merged into the final annotation index per ligand.
-
-The finalized annotation index contains `ligand_smiles_id` on every ligand row, so
-V3 does not publish a redundant per-system fingerprint mapping.
-
-#### Small molecule data (`ligands/`)
-
-Ligand data expanded from entries for computing similarity, saved in distributed files `{hashid}.parquet`. Each row also records `ligand_is_3d_score_able`, which is true only when the canonical ASU SDF loads and supports finite shape, color, and SuCOS self-scoring. Similarity scoring uses this annotation to avoid loading known-incompatible SDFs.
-
-Eg.
-
-```
-  pdb_id              system_id ligand_rdkit_canonical_smiles ligand_ccd_code                   ligand_id
-0   7o04      7o04__1__1.A__1.G       CNCc1cc([N+](=O)[O-])ccc1Cl             4AV      7o04__1__1.A__1.G__1.G
-```
-
-#### Small molecule similarity scores (`ligand_scores/`)
-
-Sharded BulkTanimoto edges between unique canonical-SMILES nodes. Every edge at or above the configured minimum similarity is retained; the old dense Jaccard/top-K approximation is no longer used.
-
-Eg.
-
-```
-   query_ligand_id  target_ligand_id  tanimoto_similarity_ecfp4_1024
-0            35300              6943                      100
-1            35300             35300                      100
-2            35300             13911                       94
-3            35300             44243                       90
-4            35300             24003                       90
-```
-
-#### Small molecule matched molecular pairs (`mmp/`)
-
-Files that contains all the ligand matched molecular pairs (MMP) and matched molecular series (MMS).
-
-- `plinder_mmp_series.parquet`: matched molecular series (MMS) linked to PLINDER systems,
-- `plinder_mms.csv.gz`: compressed [mmpdb](https://github.com/rdkit/mmpdb) index file containing the matched molecular pairs (MMP) of all ligands in PLINDER annotation table.
-
-#### Mapped protein alignments (`alignments/`, V3)
-
-V3 release artifacts contain mapped Foldseek and MMseqs hits rather than the much
-larger materialized pairwise score table:
-
-```bash
-|-- search_db=holo
-|   |-- alignment_type=foldseek
-|   |   |-- shard={two_char_code}.parquet
-|   |-- alignment_type=mmseqs
-|       |-- shard={two_char_code}.parquet
-|-- search_db=apo
-|-- search_db=pred
-```
-
-Rows are sorted by query entry, target entry, and mapped chain identifiers before
-being written with Zstandard compression and bounded row groups. The public
-`reconstruct_similarity_scores()` API uses Parquet filters to calculate a requested
-system cross-product without materializing or downloading the global score table.
-
-#### Protein similarity dataset (`scores/`, V2 and V3 ingest intermediate)
-
-These tables contain the protein or pocket similarity scores used for clustering.
-They remain the V2 release format and a local V3 ingest intermediate, but are not a
-V3 release artifact after cluster columns have been merged into the annotation
-parquet.
-
-```bash
-|-- search_db=apo
-|   |-- apo.parquet
-|-- search_db=holo
-|   |-- {chunck_id}.parquet
-|-- search_db=pred
-|   |-- pred.parquet
-```
-
-All the parquet files have the save columns in the header.
-E.g
-
-```
-                    query_system target_system protein_mapping protein_mapper  ...    source                            metric  mapping search_db
-1070886    1b5d__1__1.A_1.B__1.D        1b49_A         1.A:0.A       foldseek  ...    mmseqs         protein_qcov_weighted_max  1.A:0.A       apo
-1070887    1b5d__1__1.A_1.B__1.D        1b49_A         1.A:0.A       foldseek  ...    mmseqs                  protein_qcov_max  1.A:0.A       apo
-1070888    1b5d__1__1.A_1.B__1.D        1b49_A         1.A:0.A       foldseek  ...      both       protein_fident_weighted_max  1.A:0.A       apo
-1070889    1b5d__1__1.A_1.B__1.D        1b49_A         1.A:0.A       foldseek  ...      both                protein_fident_max  1.A:0.A       apo
-1070890    1b5d__1__1.A_1.B__1.D        1b49_A         1.A:0.A       foldseek  ...    mmseqs  protein_fident_qcov_weighted_max  1.A:0.A       apo
-...                          ...           ...             ...            ...  ...       ...                               ...      ...       ...
-213471528      7eek__1__1.A__1.I        1uor_A         1.A:0.A       foldseek  ...  foldseek    protein_lddt_qcov_weighted_max  1.A:0.A       apo
-213471529      7eek__1__1.A__1.I        1uor_A         1.A:0.A       foldseek  ...  foldseek             protein_lddt_qcov_max  1.A:0.A       apo
-213471536      7eek__1__1.A__1.I        1uor_A         1.A:0.A       foldseek  ...  foldseek                       pocket_lddt     None       apo
-213471540      7eek__1__1.A__1.I        6zl1_A         1.A:0.A       foldseek  ...  foldseek                       pocket_lddt     None       apo
-213471541      7eek__1__1.A__1.I        6zl1_B         1.A:0.B       foldseek  ...  foldseek                       pocket_lddt     None       apo
-```
-
-:::{list-table} `apo.parquet` columns
-:widths: 10 5 30
-:header-rows: 1
-
-- - Name
-  - Type
-  - Description
-- - query_system
-  - str
-  - The PLINDER system ID of query system
-- - target_system
-  - str
-  - The PLINDER system ID of target system
-- - protein_mapping
-  - str
-  - Chain mapping between query system and target system
-- - protein_mapper
-  - str
-  - Alignment method used for mapping.
-- - similarity
-  - int
-  - Similarity metric of interest
-- - source
-  - str
-  - Source of similarity metric. It could either be `foldseek`, `mmseqs` or `both`
-- - metric
-  - str
-  - Similarity metric of interest
-- - mapping
-  - str
-  - Local region mapping between query system and target system
-- - search_db
-  - str
-  - Search database type. Could be `apo`, `holo` or `pred`
-:::
