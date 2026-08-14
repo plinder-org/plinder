@@ -783,6 +783,7 @@ def test_entry_collation_tasks_use_shared_core(tmp_path, monkeypatch):
 def test_archive_scatter_pdb_ids_override_two_char_codes(tmp_path):
     for code in ("ab", "de"):
         (tmp_path / "raw_entries" / code).mkdir(parents=True)
+    (tmp_path / "raw_entries" / "de" / "2def.parquet").touch()
 
     chunks = tasks.scatter_make_canonical_ligand_archives(
         data_dir=tmp_path,
@@ -792,6 +793,19 @@ def test_archive_scatter_pdb_ids_override_two_char_codes(tmp_path):
     )
 
     assert chunks == [["de"]]
+
+
+def test_archive_scatter_drops_explicit_empty_raw_shards(tmp_path):
+    (tmp_path / "raw_entries" / "de").mkdir(parents=True)
+
+    chunks = tasks.scatter_make_canonical_ligand_archives(
+        data_dir=tmp_path,
+        batch_size=1,
+        two_char_codes=["de"],
+        pdb_ids=[],
+    )
+
+    assert chunks == []
 
 
 @pytest.mark.parametrize(
@@ -5476,6 +5490,50 @@ def test_make_canonical_ligand_archives_only_archives_asu_sdfs(tmp_path):
         "ligand_count": 1,
         "compressed_bytes": archive.stat().st_size,
     }
+
+
+def test_finalize_ligand_archives_removes_stale_empty_archives(tmp_path):
+    from plinder.data.pipeline.score import finalize_ligand_archives
+
+    (tmp_path / "raw_entries" / "ab").mkdir(parents=True)
+    archive_dir = tmp_path / "ligand_archives"
+    archive_dir.mkdir()
+    stale = archive_dir / "ab.parquet"
+    pd.DataFrame(
+        {
+            "pdb_id": pd.Series(dtype="string"),
+            "ligand_asym_id": pd.Series(dtype="string"),
+            "sdf": pd.Series(dtype="object"),
+        }
+    ).to_parquet(stale, index=False)
+
+    report = finalize_ligand_archives(tmp_path)
+
+    assert report == {
+        "status": "complete",
+        "shard_count": 0,
+        "ligand_count": 0,
+        "compressed_bytes": 0,
+    }
+    assert not stale.exists()
+
+
+def test_finalize_ligand_archives_rejects_nonempty_extra_archives(tmp_path):
+    from plinder.data.pipeline.score import finalize_ligand_archives
+
+    (tmp_path / "raw_entries" / "ab").mkdir(parents=True)
+    archive_dir = tmp_path / "ligand_archives"
+    archive_dir.mkdir()
+    pd.DataFrame(
+        {
+            "pdb_id": ["1abc"],
+            "ligand_asym_id": ["A"],
+            "sdf": [b"ligand"],
+        }
+    ).to_parquet(archive_dir / "ab.parquet", index=False)
+
+    with pytest.raises(ValueError, match=r"extra=\['ab'\]"):
+        finalize_ligand_archives(tmp_path)
 
 
 def test_make_sub_dbs_loads_entry_chain_index(tmp_path, monkeypatch):

@@ -2458,12 +2458,19 @@ def _ligand_3d_shard_batch(
 
 def finalize_ligand_archives(data_dir: Path) -> dict[str, Any]:
     """Validate packed canonical SDF coverage against the collated index."""
-    archives = sorted((data_dir / "ligand_archives").glob("*.parquet"))
     expected_shards = sorted(
         path.name
         for path in (data_dir / "raw_entries").iterdir()
         if path.is_dir() and any(path.glob("*.parquet"))
     )
+    expected_shard_set = set(expected_shards)
+    archives = []
+    for path in sorted((data_dir / "ligand_archives").glob("*.parquet")):
+        if path.stem not in expected_shard_set and pq.read_metadata(path).num_rows == 0:
+            LOG.info(f"removing stale empty canonical ligand archive {path}")
+            path.unlink()
+            continue
+        archives.append(path)
     observed_shards = [path.stem for path in archives]
     if observed_shards != expected_shards:
         raise ValueError(
@@ -2471,6 +2478,16 @@ def finalize_ligand_archives(data_dir: Path) -> dict[str, Any]:
             f"missing={sorted(set(expected_shards) - set(observed_shards))[:10]}, "
             f"extra={sorted(set(observed_shards) - set(expected_shards))[:10]}"
         )
+
+    if not archives:
+        report = {
+            "status": "complete",
+            "shard_count": 0,
+            "ligand_count": 0,
+            "compressed_bytes": 0,
+        }
+        _atomic_json(report, data_dir / LIGAND_ARCHIVE_MANIFEST_RELATIVE)
+        return report
 
     import duckdb
 

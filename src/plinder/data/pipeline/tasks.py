@@ -425,6 +425,11 @@ def _selected_context_codes(two_char_codes: list[str], pdb_ids: list[str]) -> li
     return sorted(str(code).lower() for code in two_char_codes)
 
 
+def _has_completed_raw_entries(entry_dir: Path) -> bool:
+    """Return whether a raw-entry shard contains completed entry parquet files."""
+    return entry_dir.is_dir() and any(entry_dir.glob("*.parquet"))
+
+
 def scatter_collate_entries(
     *,
     data_dir: Path,
@@ -500,12 +505,16 @@ def scatter_make_canonical_ligand_archives(
     entry_dir = data_dir / "raw_entries"
     selected_codes = _selected_context_codes(two_char_codes, pdb_ids)
     if selected_codes:
-        codes = selected_codes
+        codes = [
+            code
+            for code in selected_codes
+            if _has_completed_raw_entries(entry_dir / code)
+        ]
     else:
         codes = sorted(
             path.name
             for path in entry_dir.iterdir()
-            if path.is_dir() and any(path.glob("*.parquet"))
+            if _has_completed_raw_entries(path)
         )
     LOG.info(
         "scatter_make_canonical_ligand_archives: "
@@ -532,8 +541,12 @@ def make_canonical_ligand_archives(
         entry_dir = data_dir / "raw_entries" / code
         archive = data_dir / "ligand_archives" / f"{code}.parquet"
         archive.parent.mkdir(exist_ok=True, parents=True)
+        entry_parquets = sorted(entry_dir.glob("*.parquet"))
+        if not entry_parquets:
+            archive.unlink(missing_ok=True)
+            continue
         records = []
-        for entry_parquet in sorted(entry_dir.glob("*.parquet")):
+        for entry_parquet in entry_parquets:
             ligand_dir = entry_dir / entry_parquet.stem / "ligand_files"
             for ligand_file in sorted(ligand_dir.glob("*.sdf")):
                 records.append(
