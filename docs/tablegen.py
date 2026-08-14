@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from html import escape
 from pathlib import Path
 
 import pandas as pd
@@ -20,7 +21,10 @@ def generate_table(description_dir: Path, output_html_path: Path) -> None:
             )
         if frame["Name"].duplicated().any():
             raise ValueError(f"{description_file} contains duplicate column names")
-        frame.insert(0, "Table", description_file.stem)
+        frame = frame.apply(
+            lambda column: column.map(lambda value: escape(str(value), quote=True))
+        )
+        frame.insert(0, "Table", escape(description_file.stem, quote=True))
         frames.append(frame)
     if not frames:
         raise FileNotFoundError(

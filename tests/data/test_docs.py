@@ -28,7 +28,8 @@ def test_tablegen_renders_checked_in_table_descriptions(tmp_path, monkeypatch):
     table_dir = description_dir / "tables"
     table_dir.mkdir(parents=True)
     (table_dir / "alpha.tsv").write_text(
-        "Name\tType\tDescription\n" "entry_id\tstring\tStable entry identifier\n",
+        "Name\tType\tDescription\n"
+        "entry<id>\tlist<element: string>\tApply <operation> & keep metadata\n",
         encoding="utf-8",
     )
     (table_dir / "beta.tsv").write_text(
@@ -41,8 +42,9 @@ def test_tablegen_renders_checked_in_table_descriptions(tmp_path, monkeypatch):
 
     html = output_path.read_text(encoding="utf-8")
     assert "<code>alpha</code>" in html
-    assert "<code>entry_id</code>" in html
-    assert "Stable entry identifier" in html
+    assert "<code>entry&lt;id&gt;</code>" in html
+    assert "<code>list&lt;element: string&gt;</code>" in html
+    assert "Apply &lt;operation&gt; &amp; keep metadata" in html
     assert "<code>beta</code>" in html
     assert "<code>score</code>" in html
     assert "Similarity score" in html
