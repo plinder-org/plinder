@@ -579,7 +579,10 @@ def entry_views_from_df(
 
 
 def load_entry_views(
-    *, pdb_ids: Iterable[str], data_dir: Path | None = None
+    *,
+    pdb_ids: Iterable[str],
+    data_dir: Path | None = None,
+    include_interfaces: bool = True,
 ) -> dict[str, EntryView]:
     """Load annotation and chain rows for the requested entries.
 
@@ -602,7 +605,9 @@ def load_entry_views(
             filters=[FILTER(("entry_pdb_id", "in", set(pdb_ids)))],
         )
         chain_path = release.fetch("entry_chains")
-        interface_path = release.fetch("interface_annotations")
+        interface_path = (
+            release.fetch("interface_annotations") if include_interfaces else None
+        )
     else:
         annotation_path = release.path("annotation_table")
         if not annotation_path.is_file():
@@ -612,19 +617,25 @@ def load_entry_views(
             filters=[("entry_pdb_id", "in", pdb_ids)],
         )
         chain_path = release.path("entry_chains")
-        interface_path = release.path("interface_annotations")
+        interface_path = (
+            release.path("interface_annotations") if include_interfaces else None
+        )
 
     if not chain_path.is_file():
         raise FileNotFoundError(f"missing entry chain index: {chain_path}")
-    if not interface_path.is_file():
+    if interface_path is not None and not interface_path.is_file():
         raise FileNotFoundError(f"missing interface annotation index: {interface_path}")
     entry_chains = pd.read_parquet(
         chain_path,
         filters=[("entry_pdb_id", "in", pdb_ids)],
     )
-    interfaces = pd.read_parquet(
-        interface_path,
-        filters=[("entry_pdb_id", "in", pdb_ids)],
+    interfaces = (
+        pd.read_parquet(
+            interface_path,
+            filters=[("entry_pdb_id", "in", pdb_ids)],
+        )
+        if interface_path is not None
+        else pd.DataFrame(columns=["entry_pdb_id"])
     )
     LOG.info(
         "load_entry_views: %s ligand rows and %s interface rows for %s pdb_ids",

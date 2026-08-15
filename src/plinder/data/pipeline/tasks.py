@@ -1630,6 +1630,63 @@ def _protein_scoring_chains(data_dir: Path) -> pd.DataFrame:
     ].copy()
 
 
+def _linked_apo_query_chains(data_dir: Path) -> pd.DataFrame:
+    """Return proper-ligand protein receptor chains used as apo queries."""
+    from plinder.data.linked_apo import ligand_holo_chain_keys
+
+    holo_keys = ligand_holo_chain_keys(data_dir / "index" / "annotation_table.parquet")
+    chains = pd.read_parquet(
+        data_dir / "index" / "entry_chains.parquet",
+        columns=[
+            "entry_pdb_id",
+            "chain_asym_id",
+            "chain_auth_id",
+            "chain_receptor_type",
+        ],
+    )
+    chains = chains.merge(
+        holo_keys,
+        on=["entry_pdb_id", "chain_asym_id"],
+        how="inner",
+        validate="one_to_one",
+    )
+    return (
+        chains.loc[
+            chains["chain_receptor_type"]
+            .fillna("")
+            .astype(str)
+            .str.lower()
+            .eq("protein")
+            & chains["chain_auth_id"].notna(),
+            ["entry_pdb_id", "chain_asym_id", "chain_auth_id"],
+        ]
+        .drop_duplicates(ignore_index=True)
+        .sort_values(["entry_pdb_id", "chain_asym_id"], ignore_index=True)
+    )
+
+
+def _linked_apo_query_auth_ids(
+    data_dir: Path, pdb_ids: Sequence[str]
+) -> dict[str, set[str]]:
+    """Load planned linked-apo query chain IDs, with a direct-index fallback."""
+    from plinder.data.pipeline.score import LINKED_APO_QUERY_MANIFEST_RELATIVE
+
+    manifest = data_dir / LINKED_APO_QUERY_MANIFEST_RELATIVE
+    if manifest.is_file():
+        chains = pd.read_parquet(
+            manifest,
+            columns=["pdb_id", "chain_auth_id"],
+            filters=[("pdb_id", "in", list(pdb_ids))],
+        ).rename(columns={"pdb_id": "entry_pdb_id"})
+    else:
+        chains = _linked_apo_query_chains(data_dir)
+        chains = chains[chains["entry_pdb_id"].isin(pdb_ids)]
+    return {
+        str(pdb_id): set(rows["chain_auth_id"].astype(str))
+        for pdb_id, rows in chains.groupby("entry_pdb_id", sort=False)
+    }
+
+
 def _apo_scoring_chains(data_dir: Path) -> pd.DataFrame:
     """Return reconstructable chains without a proper ligand receptor."""
     from plinder.data.linked_apo import ligand_holo_chain_keys
@@ -1695,8 +1752,9 @@ def scatter_protein_scoring(
     batch_size: int,
     two_char_codes: list[str],
     pdb_ids: list[str],
+    search_dbs: Sequence[str] = ("holo",),
 ) -> list[list[str]]:
-    """Split protein-containing V3 entries into score-generation batches.
+    """Split protein-containing release entries into search batches.
 
     Parameters
     ----------
@@ -1716,7 +1774,11 @@ def scatter_protein_scoring(
     """
     if batch_size < 1:
         raise ValueError("batch_size must be positive")
-    chains = _protein_scoring_chains(data_dir)
+    chains = (
+        _linked_apo_query_chains(data_dir)
+        if set(search_dbs) == {"apo"}
+        else _protein_scoring_chains(data_dir)
+    )
     protein_entries = set(chains["entry_pdb_id"].astype(str))
     selected_pdb_ids = [normalize_pdb_id(pdb_id) for pdb_id in pdb_ids]
     if selected_pdb_ids:
@@ -1748,19 +1810,27 @@ def run_batch_searches(
     force_update: bool = False,
 ) -> None:
     selected_alignment_types = list(alignment_types or ["foldseek", "mmseqs"])
+    apo_query_chains: dict[str, set[str]] = {}
+    if "apo" in scorer_cfg.sub_databases:
+        apo_query_chains = _linked_apo_query_auth_ids(data_dir, pdb_ids)
     for search_db in scorer_cfg.sub_databases:
+        eligible_pdb_ids = (
+            [pdb_id for pdb_id in pdb_ids if pdb_id in apo_query_chains]
+            if search_db == "apo"
+            else pdb_ids
+        )
         for alignment_type in selected_alignment_types:
             output_dir = (
                 data_dir / "dbs" / "subdbs" / f"{search_db}_{alignment_type}" / "aln"
             )
             pending = [
                 pdb_id
-                for pdb_id in pdb_ids
+                for pdb_id in eligible_pdb_ids
                 if force_update or not (output_dir / f"{pdb_id}.parquet").is_file()
             ]
             if not pending:
                 LOG.info(
-                    f"run_batch_searches: all {len(pdb_ids)} {search_db} "
+                    f"run_batch_searches: all {len(eligible_pdb_ids)} {search_db} "
                     f"{alignment_type} queries are complete"
                 )
                 continue
@@ -1772,7 +1842,7 @@ def run_batch_searches(
                 data_dir=data_dir,
                 pdb_ids=pending,
                 scorer_cfg=scorer_cfg,
-                load_entries=True,
+                load_entries=search_db != "apo",
                 foldseek_cfg=foldseek_cfg,
                 mmseqs_cfg=mmseqs_cfg,
                 scratch_dir=scratch_dir,
@@ -1785,6 +1855,9 @@ def run_batch_searches(
                     search_db=search_db,
                     threads=cpu,
                     alignment_types=[alignment_type],
+                    query_chain_auth_ids=(
+                        apo_query_chains if search_db == "apo" else None
+                    ),
                 )
             finally:
                 rmtree(batch_db_dir)
@@ -2201,6 +2274,11 @@ def scatter_missing_scores(
     dropped = dropped_query_ids(data_dir)
     for search_db in search_dbs:
         score_mode = b"deferred" if search_db == "holo" else b"complete"
+        score_metrics = None
+        if search_db == "apo":
+            from plinder.data.linked_apo import REQUIRED_SCORE_METRICS
+
+            score_metrics = REQUIRED_SCORE_METRICS
         present[search_db] = [
             pdb_id
             for pdb_id in present.get(search_db, [])
@@ -2214,6 +2292,7 @@ def scatter_missing_scores(
                 minimum_threshold=float(scorer_cfg.minimum_threshold),
                 minimum_thresholds=dict(scorer_cfg.minimum_thresholds),
                 holo_protein_scores_mode=(b"excluded" if search_db == "holo" else None),
+                score_metrics=score_metrics,
             )
         ]
         manifest_root = data_dir / "alignments" / "manifests"
@@ -2276,11 +2355,16 @@ def make_batch_scores(
     for search_db in scorer_cfg.sub_databases:
         if search_db != "holo":
             from plinder.core.scores.entries import load_entry_views
+            from plinder.data.linked_apo import REQUIRED_SCORE_METRICS
 
             missing_entries = set(entry_ids).difference(scorer.entries)
             if missing_entries:
                 scorer.entries.update(
-                    load_entry_views(pdb_ids=missing_entries, data_dir=data_dir)
+                    load_entry_views(
+                        pdb_ids=missing_entries,
+                        data_dir=data_dir,
+                        include_interfaces=False,
+                    )
                 )
             entries_by_shard: dict[str, list[str]] = {}
             for pdb_id in entry_ids:
@@ -2318,6 +2402,7 @@ def make_batch_scores(
                         source_to_aln_file=source_to_aln_file,
                         defer_ligand_3d=False,
                         query_entry_alignments=query_alignments,
+                        score_metrics=REQUIRED_SCORE_METRICS,
                     )
             continue
         for pdb_id in tqdm(entry_ids):

@@ -409,6 +409,49 @@ def test_unavailable_query_backend_writes_typed_empty_checkpoint(
     assert pq.read_schema(raw).equals(scoring_module._raw_alignment_schema("foldseek"))
 
 
+@pytest.mark.parametrize(
+    ("alignment_type", "expected_ids"),
+    [
+        ("foldseek", {"pdb_00001abc_xyz-enrich_R", "pdb_00001abc_xyz-enrich_S"}),
+        ("mmseqs", {"1abc_R", "1abc_S"}),
+    ],
+)
+def test_run_alignments_accepts_explicit_query_chains_without_entry_views(
+    tmp_path, monkeypatch, alignment_type, expected_ids
+) -> None:
+    scorer = Scorer(
+        entries={},
+        source_to_full_db_file={f"holo_{alignment_type}": tmp_path / "full"},
+        db_dir=tmp_path / "dbs" / "subdbs",
+        scores_dir=tmp_path / "scores",
+    )
+    observed = []
+    monkeypatch.setattr(
+        scoring_module.databases,
+        "get_db_ids",
+        lambda *_args, **_kwargs: pytest.fail("explicit chains must avoid EntryView"),
+    )
+
+    def unavailable(ids, *_args, **_kwargs):
+        observed.append(ids)
+        return ids
+
+    monkeypatch.setattr(scoring_module.databases, "make_sub_db", unavailable)
+
+    scorer.run_alignments(
+        entry_ids=["1abc"],
+        search_db="apo",
+        output_folder=tmp_path / "work",
+        alignment_types=[alignment_type],
+        query_chain_auth_ids={"1abc": {"R", "S"}},
+    )
+
+    assert observed == [expected_ids]
+    assert pd.read_parquet(
+        scorer.db_dir / f"apo_{alignment_type}/aln/1abc.parquet"
+    ).empty
+
+
 def test_alignment_mapping_preserves_author_chain_ids_with_underscores(
     tmp_path,
 ) -> None:
@@ -1749,6 +1792,76 @@ def test_get_score_df_atomically_replaces_stale_cache_and_marks_empty_completion
         scratch_dir=scratch,
     )
     assert calls == 1
+
+
+def test_get_score_df_retains_and_tracks_requested_metrics(
+    tmp_path, monkeypatch
+) -> None:
+    scorer = Scorer(
+        entries={"1abc": object()},
+        source_to_full_db_file={},
+        db_dir=tmp_path / "db",
+        scores_dir=tmp_path / "scores",
+    )
+    calls = 0
+
+    def scores(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        rows = []
+        for metric in ["pocket_fident", "protein_qcov_weighted_sum"]:
+            rows.append(
+                {
+                    "query_system": "1abc__1__1.A__1.L",
+                    "query_ligand_id": "1abc__1__1.L",
+                    "target_system": "2def_A",
+                    "target_ligand_id": None,
+                    "protein_mapping": "1.A:0.A",
+                    "mapping": "1.A:0.A",
+                    "protein_mapper": "foldseek",
+                    "source": "foldseek",
+                    "metric": metric,
+                    "similarity": 95,
+                }
+            )
+        return pd.DataFrame(rows)
+
+    monkeypatch.setattr(scorer, "aggregate_scores", scores)
+    output = scorer.get_score_df(
+        tmp_path,
+        "1abc",
+        "apo",
+        overwrite=False,
+        map_alignments=False,
+        score_metrics={"pocket_fident"},
+    )
+    assert pd.read_parquet(output)["metric"].astype(str).tolist() == ["pocket_fident"]
+    assert (pq.read_schema(output).metadata or {})[
+        scoring_module.SCORE_METRICS_METADATA_KEY
+    ] == scoring_module.score_metrics_metadata({"pocket_fident"})
+
+    scorer.get_score_df(
+        tmp_path,
+        "1abc",
+        "apo",
+        overwrite=False,
+        map_alignments=False,
+        score_metrics={"pocket_fident"},
+    )
+    assert calls == 1
+
+    scorer.get_score_df(
+        tmp_path,
+        "1abc",
+        "apo",
+        overwrite=False,
+        map_alignments=False,
+        score_metrics={"protein_qcov_weighted_sum"},
+    )
+    assert calls == 2
+    assert pd.read_parquet(output)["metric"].astype(str).tolist() == [
+        "protein_qcov_weighted_sum"
+    ]
 
 
 def test_get_score_df_defers_ligand_3d_and_writes_full_precision_candidates(

@@ -13,7 +13,9 @@ import pyarrow.parquet as pq
 import pytest
 from plinder.core.utils import schemas
 from plinder.data.annotations.get_similarity_scores import (
+    SCORE_METRICS_METADATA_KEY,
     SCORE_THRESHOLDS_METADATA_KEY,
+    score_metrics_metadata,
     score_thresholds_metadata,
 )
 from plinder.data.annotations.interface_utils import INTERFACE_ANNOTATION_SCHEMA
@@ -634,7 +636,11 @@ def test_make_batch_scores_reads_each_apo_alignment_shard_once(
     )
     monkeypatch.setattr(
         "plinder.core.scores.entries.load_entry_views",
-        lambda *, pdb_ids, data_dir: {pdb_id: object() for pdb_id in pdb_ids},
+        lambda *, pdb_ids, data_dir, include_interfaces: (
+            {pdb_id: object() for pdb_id in pdb_ids}
+            if include_interfaces is False
+            else pytest.fail("linked-apo scoring must not load interface annotations")
+        ),
     )
 
     tasks.make_batch_scores(
@@ -650,6 +656,16 @@ def test_make_batch_scores_reads_each_apo_alignment_shard_once(
     assert load_calls[0]["query_entry_ids"] == {"1abc", "2abc"}
     assert [call[0][1] for call in score_calls] == ["1abc", "2abc"]
     assert all(len(call[1]["query_entry_alignments"]) == 1 for call in score_calls)
+    assert all(
+        set(call[1]["score_metrics"])
+        == {
+            "pocket_fident",
+            "protein_fident_weighted_sum",
+            "protein_fident_qcov_weighted_sum",
+            "protein_lddt_weighted_sum",
+        }
+        for call in score_calls
+    )
 
 
 def test_make_entries_uses_shared_v3_batch(tmp_path, monkeypatch):
@@ -1178,6 +1194,65 @@ def test_scatter_protein_scoring_uses_v3_chain_index(tmp_path) -> None:
     assert plan["protein_chain_count"] == 4
     assert "interface_annotation" in plan
     assert "interface_half_annotation" in plan
+
+
+def test_linked_apo_queries_use_only_proper_ligand_protein_receptors(
+    tmp_path,
+) -> None:
+    from plinder.data.pipeline.score import (
+        LINKED_APO_QUERY_MANIFEST_RELATIVE,
+        _query_batch,
+        plan_linked_apo_scoring,
+    )
+
+    index = tmp_path / "index"
+    index.mkdir()
+    pd.DataFrame(
+        {
+            "entry_pdb_id": ["1abc", "2def", "3ghi"],
+            "ligand_is_proper": [True, False, True],
+            "ligand_protein_chains_asym_id": [["1.A"], ["1.A"], ["1.N"]],
+        }
+    ).to_parquet(index / "annotation_table.parquet", index=False)
+    pd.DataFrame(
+        {
+            "entry_pdb_id": ["1abc", "1abc", "2def", "3ghi"],
+            "chain_asym_id": ["A", "B", "A", "N"],
+            "chain_auth_id": ["R", "I", "A", "N"],
+            "chain_receptor_type": ["protein", "protein", "protein", "dna"],
+        }
+    ).to_parquet(index / "entry_chains.parquet", index=False)
+
+    queries = tasks._linked_apo_query_chains(tmp_path)
+    assert queries.to_dict("records") == [
+        {
+            "entry_pdb_id": "1abc",
+            "chain_asym_id": "A",
+            "chain_auth_id": "R",
+        }
+    ]
+    assert tasks.scatter_protein_scoring(
+        data_dir=tmp_path,
+        batch_size=10,
+        two_char_codes=[],
+        pdb_ids=[],
+        search_dbs=["apo"],
+    ) == [["1abc"]]
+
+    report = plan_linked_apo_scoring(tmp_path, max_seqs=123)
+    assert report["query_count"] == 1
+    assert report["protein_chain_count"] == 1
+    assert report["max_seqs"] == 123
+    manifest = pd.read_parquet(tmp_path / LINKED_APO_QUERY_MANIFEST_RELATIVE)
+    assert manifest.to_dict("records") == [
+        {
+            "pdb_id": "1abc",
+            "shard": "ab",
+            "chain_asym_id": "A",
+            "chain_auth_id": "R",
+        }
+    ]
+    assert _query_batch(tmp_path, 0, 10, search_db="apo") == ["1abc"]
 
 
 def test_protein_scoring_plan_and_alignment_finalization(tmp_path, monkeypatch) -> None:
@@ -3418,7 +3493,7 @@ def test_get_scorer_uses_configured_search_limits(tmp_path) -> None:
     assert scorer.get_config("holo", "mmseqs").min_seq_id == 0.2
     assert scorer.get_config("apo", "foldseek").min_seq_id == 0.9
     assert scorer.get_config("pred", "mmseqs").min_seq_id == 0.9
-    assert scorer.get_config("apo", "foldseek").coverage == 0.9
+    assert scorer.get_config("apo", "foldseek").coverage == 0.8
     assert scorer.get_config("pred", "mmseqs").coverage == 0.9
 
     from plinder.data.pipeline.score import _scoring_config
@@ -3486,6 +3561,50 @@ def test_run_batch_searches_skips_completed_backend_queries(
         ["foldseek"],
         ["mmseqs"],
     ]
+
+
+def test_run_batch_searches_uses_compact_linked_apo_query_chains(
+    tmp_path, monkeypatch
+) -> None:
+    calls = []
+    scorer_calls = []
+
+    class FakeScorer:
+        def run_alignments(self, **kwargs):
+            calls.append(kwargs)
+            output = tmp_path / "dbs/subdbs/apo_mmseqs/aln"
+            output.mkdir(parents=True, exist_ok=True)
+            for pdb_id in kwargs["entry_ids"]:
+                (output / f"{pdb_id}.parquet").touch()
+
+    def fake_get_scorer(**kwargs):
+        scorer_calls.append(kwargs)
+        scratch = tmp_path / "scratch" / "batch"
+        scratch.mkdir(parents=True)
+        return FakeScorer(), kwargs["pdb_ids"], scratch
+
+    monkeypatch.setattr(
+        tasks,
+        "_linked_apo_query_auth_ids",
+        lambda _data_dir, _pdb_ids: {"1abc": {"R", "S"}},
+    )
+    monkeypatch.setattr(tasks.utils, "get_scorer", fake_get_scorer)
+
+    tasks.run_batch_searches(
+        data_dir=tmp_path,
+        pdb_ids=["1abc", "2def"],
+        scorer_cfg=SimpleNamespace(sub_databases=["apo"]),
+        foldseek_cfg=SimpleNamespace(),
+        mmseqs_cfg=SimpleNamespace(),
+        cpu=4,
+        scratch_dir=tmp_path / "node-scratch",
+        alignment_types=["mmseqs"],
+    )
+
+    assert scorer_calls[0]["load_entries"] is False
+    assert scorer_calls[0]["pdb_ids"] == ["1abc"]
+    assert calls[0]["entry_ids"] == ["1abc"]
+    assert calls[0]["query_chain_auth_ids"] == {"1abc": {"R", "S"}}
 
 
 def test_run_batch_searches_rejects_missing_eligible_output(tmp_path, monkeypatch):
@@ -3747,6 +3866,14 @@ def test_missing_score_scatter_includes_mapped_apo_queries(tmp_path) -> None:
             SCORE_THRESHOLDS_METADATA_KEY: score_thresholds_metadata(
                 scorer_cfg.minimum_threshold,
                 scorer_cfg.minimum_thresholds,
+            ),
+            SCORE_METRICS_METADATA_KEY: score_metrics_metadata(
+                {
+                    "pocket_fident",
+                    "protein_fident_weighted_sum",
+                    "protein_fident_qcov_weighted_sum",
+                    "protein_lddt_weighted_sum",
+                }
             ),
         }
     )

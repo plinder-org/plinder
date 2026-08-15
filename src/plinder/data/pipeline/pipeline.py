@@ -282,6 +282,7 @@ class IngestPipeline:
             batch_size=self.cfg.flow.run_batch_searches_batch_size,
             two_char_codes=self.cfg.context.two_char_codes,
             pdb_ids=self.cfg.context.pdb_ids,
+            search_dbs=self.cfg.scorer.sub_databases,
         )
         return chunks
 

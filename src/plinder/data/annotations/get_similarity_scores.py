@@ -58,6 +58,7 @@ ECFP4_PARQUET_METADATA = {
 }
 SCORE_THRESHOLDS_METADATA_KEY = b"plinder.scoring_thresholds"
 HOLO_PROTEIN_SCORES_METADATA_KEY = b"plinder.holo_protein_scores"
+SCORE_METRICS_METADATA_KEY = b"plinder.score_metrics"
 
 _NON_CANONICAL_AA = str.maketrans({"J": "L", "U": "C", "O": "K"})
 
@@ -80,6 +81,13 @@ def score_thresholds_metadata(
     ).encode()
 
 
+def score_metrics_metadata(metrics: abc.Collection[str] | None) -> bytes | None:
+    """Encode an optional retained-metric set for cache validation."""
+    if metrics is None:
+        return None
+    return json.dumps(sorted(set(metrics)), separators=(",", ":")).encode()
+
+
 def score_cache_is_current(
     path: Path,
     *,
@@ -87,6 +95,7 @@ def score_cache_is_current(
     minimum_threshold: float,
     minimum_thresholds: dict[str, float],
     holo_protein_scores_mode: bytes | None = None,
+    score_metrics: abc.Collection[str] | None = None,
 ) -> bool:
     """Return whether a per-query score file matches the active filters."""
     try:
@@ -100,6 +109,8 @@ def score_cache_is_current(
         and metadata.get(b"plinder.ligand_3d") == ligand_3d_mode
         and metadata.get(SCORE_THRESHOLDS_METADATA_KEY)
         == score_thresholds_metadata(minimum_threshold, minimum_thresholds)
+        and metadata.get(SCORE_METRICS_METADATA_KEY)
+        == score_metrics_metadata(score_metrics)
     )
     if holo_protein_scores_mode is not None:
         current = current and (
@@ -1537,7 +1548,10 @@ class Scorer:
             config = replace(self.foldseek_config)
         else:
             config = replace(self.mmseqs_config)
-        if search_db in ["apo", "pred"]:
+        if search_db == "apo":
+            config.coverage = 0.8
+            config.min_seq_id = 0.9
+        elif search_db == "pred":
             config.coverage = 0.9
             config.min_seq_id = 0.9
         return config
@@ -1550,6 +1564,7 @@ class Scorer:
         overwrite: bool = False,
         threads: int = 1,
         alignment_types: Sequence[str] | None = None,
+        query_chain_auth_ids: abc.Mapping[str, abc.Collection[str]] | None = None,
     ) -> None:
         output_folder.mkdir(exist_ok=True)
         failures: list[str] = []
@@ -1560,9 +1575,22 @@ class Scorer:
         for aln_type in selected_alignment_types:
             sub_db = output_folder / search_db / aln_type
             sub_db.mkdir(exist_ok=True, parents=True)
-            db_ids = databases.get_db_ids(
-                self.entries, "holo", aln_type, entry_ids=entry_ids
-            )
+            if query_chain_auth_ids is None:
+                db_ids = databases.get_db_ids(
+                    self.entries, "holo", aln_type, entry_ids=entry_ids
+                )
+            elif aln_type == "foldseek":
+                db_ids = {
+                    f"pdb_0000{entry_id}_xyz-enrich_{auth_id}"
+                    for entry_id in entry_ids
+                    for auth_id in query_chain_auth_ids.get(entry_id, ())
+                }
+            else:
+                db_ids = {
+                    f"{entry_id}_{auth_id}"
+                    for entry_id in entry_ids
+                    for auth_id in query_chain_auth_ids.get(entry_id, ())
+                }
             missing_query_ids = databases.make_sub_db(
                 db_ids,
                 self.source_to_full_db_file[f"holo_{aln_type}"],
@@ -1747,6 +1775,7 @@ class Scorer:
         source_to_aln_file: dict[str, Path] | None = None,
         defer_ligand_3d: bool = False,
         query_entry_alignments: pd.DataFrame | None = None,
+        score_metrics: abc.Collection[str] | None = None,
     ) -> Path:
         """
         Convert aligmnent results to mapped alignment results. Then
@@ -1773,6 +1802,7 @@ class Scorer:
                     minimum_threshold=self.minimum_threshold,
                     minimum_thresholds=self.minimum_thresholds,
                     holo_protein_scores_mode=holo_protein_scores_mode,
+                    score_metrics=score_metrics,
                 )
                 if defer_ligand_3d:
                     candidate_schema = pq.read_schema(candidate_path)
@@ -1848,6 +1878,8 @@ class Scorer:
                 ligand_3d_candidates=ligand_3d_candidates,
                 include_holo_protein_scores=search_db != "holo",
             )
+            if df is not None and score_metrics is not None:
+                df = df[df["metric"].astype(str).isin(set(score_metrics))].copy()
             if df is None or df.empty:
                 df = pd.DataFrame(
                     {
@@ -1869,6 +1901,9 @@ class Scorer:
                 score_metadata[
                     HOLO_PROTEIN_SCORES_METADATA_KEY
                 ] = holo_protein_scores_mode
+            retained_metrics = score_metrics_metadata(score_metrics)
+            if retained_metrics is not None:
+                score_metadata[SCORE_METRICS_METADATA_KEY] = retained_metrics
             score_schema = schemas.PROTEIN_SIMILARITY_SCHEMA.with_metadata(
                 score_metadata
             )

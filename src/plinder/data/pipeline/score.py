@@ -35,6 +35,8 @@ LOG = setup_logger(__name__)
 
 MANIFEST_RELATIVE = Path("manifests/protein_scoring_queries.parquet")
 PLAN_RELATIVE = Path("manifests/protein_scoring_plan.json")
+LINKED_APO_QUERY_MANIFEST_RELATIVE = Path("manifests/linked_apo_queries.parquet")
+LINKED_APO_PLAN_RELATIVE = Path("manifests/linked_apo_plan.json")
 FOLDSEEK_INPUT_RELATIVE = Path("manifests/foldseek_createdb_inputs.tsv")
 SCORE_WORK_RELATIVE = Path("manifests/protein_scoring_work.parquet")
 LIGAND_3D_CANDIDATE_MANIFEST_RELATIVE = Path("manifests/ligand_3d_candidates.parquet")
@@ -1586,6 +1588,52 @@ def plan_protein_scoring(
     return payload
 
 
+def plan_linked_apo_scoring(
+    data_dir: Path,
+    *,
+    pdb_ids: list[str] | None = None,
+    two_char_codes: list[str] | None = None,
+    max_seqs: int = 10_000,
+) -> dict[str, Any]:
+    """Freeze the proper-ligand receptor chains used as linked-apo queries."""
+    if max_seqs < 1:
+        raise ValueError("max_seqs must be positive")
+    chunks = tasks.scatter_protein_scoring(
+        data_dir=data_dir,
+        batch_size=1_000_000,
+        two_char_codes=two_char_codes or [],
+        pdb_ids=pdb_ids or [],
+        search_dbs=["apo"],
+    )
+    query_ids = [pdb_id for chunk in chunks for pdb_id in chunk]
+    if not query_ids:
+        raise ValueError("no proper-ligand protein receptor chains were selected")
+    chains = tasks._linked_apo_query_chains(data_dir)
+    chains = chains[chains["entry_pdb_id"].isin(query_ids)].copy()
+    chains = chains.rename(columns={"entry_pdb_id": "pdb_id"})
+    chains["shard"] = chains["pdb_id"].str.slice(1, 3)
+    manifest = chains[
+        ["pdb_id", "shard", "chain_asym_id", "chain_auth_id"]
+    ].sort_values(["shard", "pdb_id", "chain_asym_id"], ignore_index=True)
+    manifest_path = data_dir / LINKED_APO_QUERY_MANIFEST_RELATIVE
+    _atomic_parquet(manifest, manifest_path)
+    payload = {
+        "query_count": int(manifest["pdb_id"].nunique()),
+        "protein_chain_count": len(manifest),
+        "shard_count": int(manifest["shard"].nunique()),
+        "max_seqs": max_seqs,
+        "search_database": "apo",
+        "alignment_types": ["foldseek", "mmseqs"],
+        "annotation": _source_signature(
+            data_dir / "index" / "annotation_table.parquet"
+        ),
+        "entry_chains": _source_signature(data_dir / "index" / "entry_chains.parquet"),
+        "manifest": _source_signature(manifest_path),
+    }
+    _atomic_json(payload, data_dir / LINKED_APO_PLAN_RELATIVE)
+    return payload
+
+
 def _load_plan(
     data_dir: Path,
     *,
@@ -1630,11 +1678,43 @@ def _load_plan(
     return plan
 
 
-def _query_batch(data_dir: Path, batch_index: int, batch_size: int) -> list[str]:
+def _load_linked_apo_plan(data_dir: Path) -> dict[str, Any]:
+    """Load and validate the compact linked-apo query plan."""
+    plan_path = data_dir / LINKED_APO_PLAN_RELATIVE
+    if not plan_path.is_file():
+        raise FileNotFoundError(f"missing linked-apo scoring plan: {plan_path}")
+    plan: dict[str, Any] = json.loads(plan_path.read_text())
+    sources = {
+        "manifest": data_dir / LINKED_APO_QUERY_MANIFEST_RELATIVE,
+        "annotation": data_dir / "index" / "annotation_table.parquet",
+        "entry_chains": data_dir / "index" / "entry_chains.parquet",
+    }
+    for key, path in sources.items():
+        if not path.is_file() or _source_signature(path) != plan.get(key):
+            raise ValueError(f"linked-apo {key} changed after planning")
+    return plan
+
+
+def _query_batch(
+    data_dir: Path,
+    batch_index: int,
+    batch_size: int,
+    *,
+    search_db: str = "holo",
+) -> list[str]:
     if batch_index < 0 or batch_size < 1:
         raise ValueError("batch_index must be non-negative and batch_size positive")
-    _load_plan(data_dir)
-    queries = pd.read_parquet(data_dir / MANIFEST_RELATIVE, columns=["pdb_id"])
+    if search_db == "apo":
+        _load_linked_apo_plan(data_dir)
+    else:
+        _load_plan(data_dir)
+    manifest_path = (
+        data_dir / LINKED_APO_QUERY_MANIFEST_RELATIVE
+        if search_db == "apo"
+        else data_dir / MANIFEST_RELATIVE
+    )
+    queries = pd.read_parquet(manifest_path, columns=["pdb_id"])
+    queries = queries.drop_duplicates("pdb_id", ignore_index=True)
     start = batch_index * batch_size
     values = queries["pdb_id"].iloc[start : start + batch_size].tolist()
     return [str(value) for value in values]
@@ -2575,15 +2655,25 @@ def make_foldseek_input_manifest(data_dir: Path, cif_root: Path) -> Path:
     return output
 
 
-def _shard_batch(data_dir: Path, batch_index: int, batch_size: int) -> list[str]:
+def _shard_batch(
+    data_dir: Path,
+    batch_index: int,
+    batch_size: int,
+    *,
+    search_db: str = "holo",
+) -> list[str]:
     if batch_index < 0 or batch_size < 1:
         raise ValueError("batch_index must be non-negative and batch_size positive")
-    _load_plan(data_dir)
-    shards = sorted(
-        pd.read_parquet(data_dir / MANIFEST_RELATIVE, columns=["shard"])[
-            "shard"
-        ].unique()
+    if search_db == "apo":
+        _load_linked_apo_plan(data_dir)
+    else:
+        _load_plan(data_dir)
+    manifest_path = (
+        data_dir / LINKED_APO_QUERY_MANIFEST_RELATIVE
+        if search_db == "apo"
+        else data_dir / MANIFEST_RELATIVE
     )
+    shards = sorted(pd.read_parquet(manifest_path, columns=["shard"])["shard"].unique())
     start = batch_index * batch_size
     return [str(value) for value in shards[start : start + batch_size]]
 
@@ -6475,6 +6565,11 @@ def _parser() -> argparse.ArgumentParser:
     plan.add_argument("--max-seqs", type=int, default=10_000)
     plan.add_argument("--pdb-id", action="append", default=[])
     plan.add_argument("--two-char-code", action="append", default=[])
+    apo_plan = subparsers.add_parser("plan-linked-apo")
+    apo_plan.add_argument("data_dir", type=Path)
+    apo_plan.add_argument("--max-seqs", type=int, default=10_000)
+    apo_plan.add_argument("--pdb-id", action="append", default=[])
+    apo_plan.add_argument("--two-char-code", action="append", default=[])
 
     databases = subparsers.add_parser("create-dbs")
     databases.add_argument("data_dir", type=Path)
@@ -6707,6 +6802,13 @@ def main() -> None:
     data_dir = args.data_dir.resolve()
     if args.command == "plan":
         result = plan_protein_scoring(
+            data_dir,
+            pdb_ids=args.pdb_id,
+            two_char_codes=args.two_char_code,
+            max_seqs=args.max_seqs,
+        )
+    elif args.command == "plan-linked-apo":
+        result = plan_linked_apo_scoring(
             data_dir,
             pdb_ids=args.pdb_id,
             two_char_codes=args.two_char_code,
@@ -7129,8 +7231,12 @@ def main() -> None:
         )
         result = {"status": "complete", "shards": shards}
     else:
-        plan = _load_plan(data_dir)
         search_db = str(getattr(args, "search_db", "holo"))
+        plan = (
+            _load_linked_apo_plan(data_dir)
+            if search_db == "apo"
+            else _load_plan(data_dir)
+        )
         cfg = _scoring_config_from_plan(
             data_dir,
             plan,
@@ -7276,7 +7382,12 @@ def main() -> None:
                 "output_count": len(outputs),
             }
         elif args.command == "map":
-            shards = _shard_batch(data_dir, args.batch_index, args.batch_size)
+            shards = _shard_batch(
+                data_dir,
+                args.batch_index,
+                args.batch_size,
+                search_db=search_db,
+            )
             tasks.map_batch_alignments(
                 data_dir=data_dir,
                 shards=shards,
@@ -7389,7 +7500,16 @@ def main() -> None:
                 print(json.dumps(result, indent=2, sort_keys=True))
                 return
             if args.command == "score":
-                pdb_ids = _score_batch(data_dir, args.batch_index, args.batch_size)
+                pdb_ids = (
+                    _query_batch(
+                        data_dir,
+                        args.batch_index,
+                        args.batch_size,
+                        search_db="apo",
+                    )
+                    if search_db == "apo"
+                    else _score_batch(data_dir, args.batch_index, args.batch_size)
+                )
             elif args.command == "score-pdbs":
                 pdb_ids = _score_manifest_batch(
                     data_dir,
@@ -7398,7 +7518,12 @@ def main() -> None:
                     args.batch_size,
                 )
             else:
-                pdb_ids = _query_batch(data_dir, args.batch_index, args.batch_size)
+                pdb_ids = _query_batch(
+                    data_dir,
+                    args.batch_index,
+                    args.batch_size,
+                    search_db=search_db,
+                )
             if args.command == "search":
                 tasks.run_batch_searches(
                     data_dir=data_dir,
