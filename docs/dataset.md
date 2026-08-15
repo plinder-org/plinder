@@ -330,8 +330,6 @@ interface_scores = reconstruct_interface_similarity_scores(
 The result is directional: swapping query and target can change interface
 coverage.
 
-(splits-splits)=
-
 ## Representative covers
 
 Connectivity components are build-time helpers and are not public cluster

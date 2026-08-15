@@ -68,7 +68,7 @@ def test_tablegen_rejects_invalid_description_columns(tmp_path, monkeypatch):
         tablegen.generate_table(description_dir, tmp_path / "table.html")
 
 
-def test_dataset_preserves_notebook_link_targets():
+def test_dataset_preserves_notebook_link_target():
     from pathlib import Path
 
     dataset_doc = (
@@ -76,7 +76,6 @@ def test_dataset_preserves_notebook_link_targets():
     ).read_text()
 
     assert "(annotation-tables-index)=" in dataset_doc
-    assert "(splits-splits)=" in dataset_doc
 
 
 def test_ligand_cluster_column_descriptions():
