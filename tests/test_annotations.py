@@ -1205,6 +1205,95 @@ def test_entry_validation_skips_chains_outside_retained_systems(
     assert set(validated) == {"A", "B"}
 
 
+def test_entry_to_df_computes_validation_before_formatting_systems(
+    monkeypatch, tmp_path
+) -> None:
+    from plinder.data.annotations.aggregate_annotations import System
+
+    ligand = Ligand(
+        pdb_id="1abc",
+        biounit_id="1",
+        asym_id="L",
+        instance=1,
+    )
+    system = System(
+        pdb_id="1abc",
+        biounit_id="1",
+        ligands=[ligand],
+        receptor_type="protein",
+    )
+    entry = Entry(
+        pdb_id="1abc",
+        determination_method="X-RAY DIFFRACTION",
+        chains={
+            "L": Chain(
+                asym_id="L",
+                auth_id="L",
+                entity_id="1",
+                chain_type_str="non-polymer",
+                residues={},
+                length=1,
+                num_unresolved_residues=0,
+            )
+        },
+        systems={system.id: system},
+    )
+    validation_path = tmp_path / "validation.xml.gz"
+    validation_path.touch()
+    validation = EntryValidation(
+        resolution=2.0,
+        rfree=0.24,
+        r=0.20,
+        clashscore=0.0,
+        percent_rama_outliers=0.0,
+        percent_rota_outliers=0.0,
+        data_completeness=100.0,
+        percent_RSRZ_outliers=0.0,
+        atom_count=1,
+        molprobity=1.0,
+        mean_b_factor=20.0,
+        median_b_factor=20.0,
+        pdbx_resolution=2.0,
+        pdbx_reflns_resolution=2.0,
+        meanI_over_sigI_obs=10.0,
+    )
+    observed_entry_criteria = []
+
+    monkeypatch.setattr(
+        "plinder.data.annotations.aggregate_annotations.ValidationFactory",
+        lambda *_args, **_kwargs: SimpleNamespace(getValidation=lambda: object()),
+    )
+    monkeypatch.setattr(
+        "plinder.data.annotations.aggregate_annotations.EntryValidation.from_entry",
+        lambda _doc: validation,
+    )
+    monkeypatch.setattr(Chain, "set_validation", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(System, "set_validation", lambda *_args, **_kwargs: None)
+
+    def format_system(_self, _chains, entry_pass_criteria, _criteria=None):
+        observed_entry_criteria.append(entry_pass_criteria)
+        return {"system_pass_validation_criteria": entry_pass_criteria}
+
+    monkeypatch.setattr(System, "format", format_system)
+    monkeypatch.setattr(
+        Ligand,
+        "format",
+        lambda self, _chains: {"ligand_id": self.id},
+    )
+
+    entry.set_validation(validation_path, Path("source.cif"))
+    assert entry.pass_criteria is None
+
+    annotation = entry.to_df()
+
+    assert entry.pass_criteria is True
+    assert observed_entry_criteria == [True]
+    assert annotation["system_pass_validation_criteria"].tolist() == [True]
+    assert [column for column in annotation if column.startswith("entry_")] == [
+        "entry_pdb_id"
+    ]
+
+
 def test_synthetic_cov_peptide_detection(cif_6lu7, mock_alternative_datasets):
     entry_dir = mock_alternative_datasets("6lu7")
     plinder_anno = GetPlinderAnnotation(cif_6lu7, "", save_folder=entry_dir)

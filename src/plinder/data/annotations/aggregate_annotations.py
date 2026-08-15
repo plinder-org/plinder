@@ -2568,6 +2568,8 @@ class Entry(DocBaseModel):
         -------
         pd.DataFrame
         """
+        if self.validation is not None:
+            self.format_validation()
         rows = []
         entry_data = {"entry_pdb_id": self.pdb_id}
         for system in self.systems:
