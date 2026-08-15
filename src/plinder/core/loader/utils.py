@@ -162,6 +162,6 @@ def collate_batch(batch: list[dict[str, Any]]) -> dict[str, Any]:
         "system_ids": system_ids,
         "holo_structures": holo_structures,
         "paths": paths,
-        "features_and_coords": collate_complex(feature_and_coords),  # type: ignore
+        "features_and_coords": collate_complex(feature_and_coords),
     }
     return collated_batch

@@ -196,9 +196,7 @@ def _database_bundle_paths(root: Path) -> Iterator[Path]:
         current_path = Path(current)
         if current_path == root:
             directories[:] = [
-                name
-                for name in directories
-                if name not in DATABASE_RUNTIME_DIRECTORIES
+                name for name in directories if name not in DATABASE_RUNTIME_DIRECTORIES
             ]
         yield from (current_path / name for name in directories)
         yield from (current_path / name for name in filenames)

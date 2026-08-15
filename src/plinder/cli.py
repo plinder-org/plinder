@@ -90,8 +90,7 @@ def _run_link(args: argparse.Namespace) -> dict[str, Any]:
     overlap = sorted(set(ligand_smiles).intersection(ligand_ccd))
     if overlap:
         raise ValueError(
-            "a component cannot have both SMILES and CCD overrides: "
-            f"{overlap}"
+            "a component cannot have both SMILES and CCD overrides: " f"{overlap}"
         )
     include_ligands: bool | None
     if args.mode == "auto":

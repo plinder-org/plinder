@@ -617,9 +617,7 @@ def load_entry_views(
     if not chain_path.is_file():
         raise FileNotFoundError(f"missing entry chain index: {chain_path}")
     if not interface_path.is_file():
-        raise FileNotFoundError(
-            f"missing interface annotation index: {interface_path}"
-        )
+        raise FileNotFoundError(f"missing interface annotation index: {interface_path}")
     entry_chains = pd.read_parquet(
         chain_path,
         filters=[("entry_pdb_id", "in", pdb_ids)],

@@ -169,7 +169,9 @@ def _require_database_prefix(
 ) -> None:
     _require_file(prefix.with_suffix(".dbtype"), description=description)
     if indexed:
-        _require_file(Path(f"{prefix}.idx.dbtype"), description=f"indexed {description}")
+        _require_file(
+            Path(f"{prefix}.idx.dbtype"), description=f"indexed {description}"
+        )
 
 
 def _validate_portable_links(root: Path) -> None:
@@ -460,9 +462,9 @@ def _query_chain_atoms(
         raise ValueError("structure_mode must be 'as_is' or 'pdb'")
 
     block = list(cif_file.values())[0]
-    available_assemblies = block["pdbx_struct_assembly_gen"][
-        "assembly_id"
-    ].as_array(str)
+    available_assemblies = block["pdbx_struct_assembly_gen"]["assembly_id"].as_array(
+        str
+    )
     selected = _select_assembly_ids(available_assemblies, assembly_ids)
     if not selected:
         raise ValueError("pdb mode requires at least one deposited assembly")
@@ -546,7 +548,9 @@ def write_custom_query_files(
         if not source.is_file():
             raise FileNotFoundError(f"missing custom mmCIF: {source}")
         if source.resolve().is_relative_to(resolved_root):
-            raise ValueError("custom input files must be outside the generated work tree")
+            raise ValueError(
+                "custom input files must be outside the generated work tree"
+            )
     if root.exists():
         shutil.rmtree(root)
     chain_cif_dir = root / "chains"
@@ -601,19 +605,17 @@ def write_custom_query_files(
                 )
                 sequence_source = "coordinates"
             if sequence is None:
-                skipped_chains[f"{structure_id}__{asym_id}"] = (
-                    "not identifiable as a protein"
-                )
+                skipped_chains[
+                    f"{structure_id}__{asym_id}"
+                ] = "not identifiable as a protein"
                 continue
             if len(sequence) < min_chain_length:
-                skipped_chains[f"{structure_id}__{asym_id}"] = (
-                    f"protein length {len(sequence)} is below {min_chain_length}"
-                )
+                skipped_chains[
+                    f"{structure_id}__{asym_id}"
+                ] = f"protein length {len(sequence)} is below {min_chain_length}"
                 continue
             atoms = atoms_by_asym[asym_id].copy()
-            residue_starts = struc.get_residue_starts(
-                atoms, add_exclusive_stop=False
-            )
+            residue_starts = struc.get_residue_starts(atoms, add_exclusive_stop=False)
             if len(residue_starts) < 1:
                 continue
             query_id = f"cq{len(rows):08d}"
@@ -627,9 +629,7 @@ def write_custom_query_files(
                         "resolved residue count does not match the emitted FASTA "
                         f"sequence for {structure_id} chain {asym_id}"
                     )
-                if len(set(resolved_residue_numbers)) != len(
-                    resolved_residue_numbers
-                ):
+                if len(set(resolved_residue_numbers)) != len(resolved_residue_numbers):
                     raise ValueError(
                         f"resolved residue numbers are ambiguous for {structure_id} "
                         f"chain {asym_id}; coordinate-derived FASTA positions cannot "
@@ -731,9 +731,7 @@ def annotate_custom_cif_files(
                 dict(ligand_smiles_dict) if ligand_smiles_dict is not None else None
             ),
             ligand_ccd_code_dict=(
-                dict(ligand_ccd_code_dict)
-                if ligand_ccd_code_dict is not None
-                else None
+                dict(ligand_ccd_code_dict) if ligand_ccd_code_dict is not None else None
             ),
             save_folder=ligand_sdf_root if include_ligands else None,
             structure_mode=structure_mode,
@@ -852,9 +850,7 @@ def _map_backend_query_identifiers(
         output[identifier] = query_id
         matched[query_id].append(identifier)
     invalid = {
-        query_id: values
-        for query_id, values in matched.items()
-        if len(values) != 1
+        query_id: values for query_id, values in matched.items() if len(values) != 1
     }
     if invalid:
         raise ValueError(
@@ -933,9 +929,9 @@ def create_custom_query_databases(
             for identifier, query_id in mapping.items()
         )
     identifier_map = root / "query_identifier_map.parquet"
-    pd.DataFrame(mapping_rows).sort_values(
-        ["backend", "query_id"]
-    ).to_parquet(identifier_map, index=False)
+    pd.DataFrame(mapping_rows).sort_values(["backend", "query_id"]).to_parquet(
+        identifier_map, index=False
+    )
     return CustomQueryDatabases(
         root=root,
         inputs=inputs,
@@ -1025,8 +1021,7 @@ def _load_target_chain_mapping(
     ].tolist()
     if missing:
         raise ValueError(
-            "PLINDER alignment lookup cannot map target chains: "
-            f"{missing[:10]}"
+            "PLINDER alignment lookup cannot map target chains: " f"{missing[:10]}"
         )
     return mapped
 
@@ -1065,9 +1060,9 @@ def map_custom_alignment_hits(
             "target_chain_asym_id",
             "source",
         ]
-        pd.DataFrame({column: pd.Series(dtype="string") for column in columns}).to_parquet(
-            output_path, index=False
-        )
+        pd.DataFrame(
+            {column: pd.Series(dtype="string") for column in columns}
+        ).to_parquet(output_path, index=False)
         return output_path
     query_columns = query_mapping[
         [
@@ -1115,9 +1110,7 @@ def map_custom_alignment_hits(
         validate="many_to_one",
     )
     mapped["source"] = backend
-    mapped = mapped.drop(
-        columns=["query_pdb_id", "target_pdb_id"], errors="ignore"
-    )
+    mapped = mapped.drop(columns=["query_pdb_id", "target_pdb_id"], errors="ignore")
     leading = [
         "query_id",
         "query_chain_id",
@@ -1333,9 +1326,7 @@ def prepare_custom_score_alignments(
                 f"{backend} hits reference unknown custom structures: "
                 f"{unknown_structures}"
             )
-        hits = hits.loc[
-            ~hits["target_entry"].astype(str).isin(query_entry_ids)
-        ].copy()
+        hits = hits.loc[~hits["target_entry"].astype(str).isin(query_entry_ids)].copy()
         if hits.empty:
             pd.DataFrame(
                 {
@@ -1564,12 +1555,9 @@ def prepare_custom_protein_score_alignments(
                 f"{backend} hits reference unknown custom structures: "
                 f"{unknown_structures}"
             )
-        custom_entry_ids = hits["structure_id"].astype(str).map(
-            entry_id_by_structure
-        )
+        custom_entry_ids = hits["structure_id"].astype(str).map(entry_id_by_structure)
         hits = hits.loc[
-            hits["target_entry"].astype(str).to_numpy()
-            != custom_entry_ids.to_numpy()
+            hits["target_entry"].astype(str).to_numpy() != custom_entry_ids.to_numpy()
         ].copy()
         if hits.empty:
             pd.DataFrame(
@@ -1768,12 +1756,7 @@ def _custom_ligand_sdf_resolver(
         pdb_id = str(ligand.pdb_id)
         asym_id = str(ligand.asym_id)
         if pdb_id in query_entry_ids:
-            custom_path = (
-                query_ligand_root
-                / pdb_id
-                / "ligand_files"
-                / f"{asym_id}.sdf"
-            )
+            custom_path = query_ligand_root / pdb_id / "ligand_files" / f"{asym_id}.sdf"
             return custom_path if custom_path.is_file() else None
 
         if data_dir is not None:
@@ -1787,12 +1770,7 @@ def _custom_ligand_sdf_resolver(
             )
             if raw_path.is_file():
                 return raw_path
-        extracted = (
-            extracted_target_root
-            / pdb_id
-            / "ligand_files"
-            / f"{asym_id}.sdf"
-        )
+        extracted = extracted_target_root / pdb_id / "ligand_files" / f"{asym_id}.sdf"
         if extracted.is_file():
             return extracted
 
@@ -1867,8 +1845,7 @@ def calculate_custom_protein_similarity_scores(
         set(map(str, custom_chain_ids)) if custom_chain_ids is not None else None
     )
     source_to_alignment = {
-        f"apo_{backend}": path
-        for backend, path in protein_score_alignments.items()
+        f"apo_{backend}": path for backend, path in protein_score_alignments.items()
     }
     alignments = scorer.load_alignments(
         source_to_aln_file=source_to_alignment,
@@ -1993,17 +1970,16 @@ def write_custom_aligned_pocket_residues(
             assets,
             pdb_ids=_query_entry_ids(protein_score_alignments),
         )
-        pocket_membership: dict[
-            tuple[str, str, int], list[tuple[str, str, str]]
-        ] = {}
+        pocket_membership: dict[tuple[str, str, int], list[tuple[str, str, str]]] = {}
         for entry_id, entry in entries.items():
             for system in entry.systems.values():
                 for ligand in system.ligands.values():
                     if not ligand.is_proper:
                         continue
-                    for instance_chain, number_to_index in (
-                        ligand.pocket_residue_number_to_index.items()
-                    ):
+                    for (
+                        instance_chain,
+                        number_to_index,
+                    ) in ligand.pocket_residue_number_to_index.items():
                         asym_id = instance_chain.split(".", maxsplit=1)[-1]
                         for residue_number in number_to_index:
                             pocket_membership.setdefault(
@@ -2030,9 +2006,7 @@ def write_custom_aligned_pocket_residues(
                     column="target_selected_residue_numbers",
                 )
                 identities = bytes(row.selected_residue_identity)
-                if not (
-                    len(release_numbers) == len(custom_numbers) == len(identities)
-                ):
+                if not (len(release_numbers) == len(custom_numbers) == len(identities)):
                     raise ValueError(
                         "custom pocket residue alignment columns have different "
                         f"lengths for {release_entry} chain {release_chain}"
@@ -2086,9 +2060,7 @@ def write_custom_aligned_pocket_residues(
                 ],
                 ignore_index=True,
             )
-    result["plinder_residue_number"] = result["plinder_residue_number"].astype(
-        "Int64"
-    )
+    result["plinder_residue_number"] = result["plinder_residue_number"].astype("Int64")
     result["custom_residue_number"] = result["custom_residue_number"].astype("Int64")
     result["residue_identical"] = result["residue_identical"].astype("boolean")
     output_path = Path(output_path)
@@ -2222,12 +2194,9 @@ def calculate_custom_interface_similarity_scores(
         if missing:
             raise KeyError(f"unknown target interface system IDs: {sorted(missing)}")
         target_interfaces = {
-            interface_id: target_interfaces[interface_id]
-            for interface_id in selected
+            interface_id: target_interfaces[interface_id] for interface_id in selected
         }
-    alignment_frames = [
-        pd.read_parquet(path) for path in score_alignments.values()
-    ]
+    alignment_frames = [pd.read_parquet(path) for path in score_alignments.values()]
     alignments = (
         pd.concat(alignment_frames, ignore_index=True)
         if alignment_frames

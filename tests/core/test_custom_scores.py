@@ -72,9 +72,7 @@ def _write_index(root: Path) -> None:
 def test_resolve_custom_scoring_assets_accepts_ingest_layout(tmp_path):
     _write_index(tmp_path)
     for backend in custom.SEARCH_BACKENDS:
-        _write_search_bundle(
-            tmp_path / "dbs" / "subdbs" / f"holo_{backend}", backend
-        )
+        _write_search_bundle(tmp_path / "dbs" / "subdbs" / f"holo_{backend}", backend)
     archive = tmp_path / "ligand_archives" / "ab.parquet"
     archive.parent.mkdir()
     archive.touch()
@@ -93,9 +91,7 @@ def test_resolve_custom_scoring_assets_accepts_ingest_layout(tmp_path):
 def test_remote_resolution_requests_only_bounded_assets(tmp_path, monkeypatch):
     _write_index(tmp_path)
     for backend in custom.SEARCH_BACKENDS:
-        _write_search_bundle(
-            tmp_path / "search_databases" / f"holo_{backend}", backend
-        )
+        _write_search_bundle(tmp_path / "search_databases" / f"holo_{backend}", backend)
     archive = tmp_path / "ligand_archives" / "xy.parquet"
     archive.parent.mkdir()
     archive.touch()
@@ -126,9 +122,7 @@ def test_ligand_coordinates_are_not_resolved_before_targets_are_known(
 ):
     _write_index(tmp_path)
     for backend in custom.SEARCH_BACKENDS:
-        _write_search_bundle(
-            tmp_path / "search_databases" / f"holo_{backend}", backend
-        )
+        _write_search_bundle(tmp_path / "search_databases" / f"holo_{backend}", backend)
     requested: list[str] = []
 
     def get_plinder_path(*, rel: str) -> Path:
@@ -203,9 +197,7 @@ def test_missing_offline_asset_has_actionable_error(tmp_path, monkeypatch):
         custom.resolve_custom_scoring_assets(data_dir=tmp_path, backends=())
 
 
-def test_write_custom_query_files_uses_protein_label_asym_ids(
-    test_dir, tmp_path
-):
+def test_write_custom_query_files_uses_protein_label_asym_ids(test_dir, tmp_path):
     cif = test_dir / "interfaces/cm/pdb_00007cma/pdb_00007cma_xyz-enrich.cif.gz"
 
     inputs = custom.write_custom_query_files([cif], work_dir=tmp_path)
@@ -244,9 +236,7 @@ def test_write_custom_query_files_uses_protein_label_asym_ids(
     )
 
 
-def test_write_custom_query_files_accepts_coordinate_only_mmcif(
-    test_dir, tmp_path
-):
+def test_write_custom_query_files_accepts_coordinate_only_mmcif(test_dir, tmp_path):
     from plinder.data.annotations.cif_utils import read_mmcif_file
 
     source = test_dir / "interfaces/cm/pdb_00007cma/pdb_00007cma_xyz-enrich.cif.gz"
@@ -275,9 +265,7 @@ def test_write_custom_query_files_accepts_coordinate_only_mmcif(
     assert np.min(output_block["atom_site"]["label_seq_id"].as_array(int)) == 1
 
 
-def test_write_custom_query_files_reports_missing_coordinate_fields(
-    test_dir, tmp_path
-):
+def test_write_custom_query_files_reports_missing_coordinate_fields(test_dir, tmp_path):
     from plinder.data.annotations.cif_utils import read_mmcif_file
 
     source = test_dir / "interfaces/cm/pdb_00007cma/pdb_00007cma_xyz-enrich.cif.gz"
@@ -290,9 +278,7 @@ def test_write_custom_query_files_reports_missing_coordinate_fields(
         custom.write_custom_query_files([invalid], work_dir=tmp_path / "work")
 
 
-def test_write_pdb_query_files_reports_missing_assembly_fields(
-    test_dir, tmp_path
-):
+def test_write_pdb_query_files_reports_missing_assembly_fields(test_dir, tmp_path):
     from plinder.data.annotations.cif_utils import read_mmcif_file
 
     source = test_dir / "interfaces/cm/pdb_00007cma/pdb_00007cma_xyz-enrich.cif.gz"
@@ -349,9 +335,7 @@ def test_annotate_custom_cif_files_writes_bonded_ligands(
     monkeypatch.setattr(ligand_utils, "BINDING_AFFINITY", {})
 
     cif = test_dir / "custom_cif/boltz_8c3u_input_model_0.cif"
-    config = yaml.safe_load(
-        (test_dir / "custom_cif/boltz_8c3u_input.yaml").read_text()
-    )
+    config = yaml.safe_load((test_dir / "custom_cif/boltz_8c3u_input.yaml").read_text())
     smiles = next(
         sequence["ligand"]["smiles"]
         for sequence in config["sequences"]
@@ -383,9 +367,7 @@ def test_annotate_custom_cif_files_writes_bonded_ligands(
     )
 
 
-def test_annotate_custom_cif_files_keeps_interface_only_entries(
-    test_dir, tmp_path
-):
+def test_annotate_custom_cif_files_keeps_interface_only_entries(test_dir, tmp_path):
     cif = test_dir / "interfaces/cm/pdb_00007cma/pdb_00007cma_xyz-enrich.cif.gz"
 
     annotations = custom.annotate_custom_cif_files(
@@ -398,9 +380,7 @@ def test_annotate_custom_cif_files_keeps_interface_only_entries(
     entry = annotations.entries_by_structure["pdb_00007cma_xyz-enrich"]
 
     assert not entry.systems
-    assert set(entry.interfaces) == {
-        "pdb_00007cma_xyz-enrich__1__1.A--1.B"
-    }
+    assert set(entry.interfaces) == {"pdb_00007cma_xyz-enrich__1__1.A--1.B"}
     assert not pd.read_parquet(annotations.interface_annotations).empty
 
 
@@ -778,9 +758,7 @@ def test_prepare_custom_protein_score_alignments_reverses_direction(
     assert result.loc[0, "query_selected_residue_numbers"].tolist() == [
         target_numbers[0]
     ]
-    assert result.loc[0, "target_selected_residue_numbers"].tolist() == [
-        custom_number
-    ]
+    assert result.loc[0, "target_selected_residue_numbers"].tolist() == [custom_number]
     assert result.loc[0, "selected_residue_identity"] == b"\x01"
     assert result.loc[0, "fident_qcov"] == pytest.approx(0.75)
 
@@ -885,9 +863,7 @@ def _scoring_entry(
     )
     return EntryView(
         pdb_id=pdb_id,
-        chains={
-            chain_id: ChainView(asym_id=chain_id, auth_id=chain_id, length=2)
-        },
+        chains={chain_id: ChainView(asym_id=chain_id, auth_id=chain_id, length=2)},
         systems={system_id: system},
         author_to_asym={chain_id: chain_id},
     )
@@ -976,9 +952,7 @@ def test_calculate_custom_similarity_scores_reuses_release_metrics(
     assert scores["metric"].str.startswith("protein_").any()
 
 
-def test_calculate_custom_protein_scores_uses_plinder_pocket(
-    tmp_path, monkeypatch
-):
+def test_calculate_custom_protein_scores_uses_plinder_pocket(tmp_path, monkeypatch):
     plinder_entry = _scoring_entry(
         pdb_id="1abc",
         chain_id="B",
@@ -1027,9 +1001,7 @@ def test_calculate_custom_protein_scores_uses_plinder_pocket(
     assert pd.isna(pocket.iloc[0]["target_ligand_id"])
 
 
-def test_calculate_custom_protein_scores_reads_alignments_once(
-    tmp_path, monkeypatch
-):
+def test_calculate_custom_protein_scores_reads_alignments_once(tmp_path, monkeypatch):
     from plinder.data.annotations import get_similarity_scores
 
     release_entries = {
@@ -1197,9 +1169,7 @@ def test_write_custom_aligned_pocket_residues(tmp_path, monkeypatch):
     ]
 
 
-def test_calculate_custom_interface_scores_uses_compact_maps(
-    tmp_path, monkeypatch
-):
+def test_calculate_custom_interface_scores_uses_compact_maps(tmp_path, monkeypatch):
     query_interface = InterfaceView(
         id="model__1__1.A_1.C",
         pdb_id="model",

@@ -103,8 +103,7 @@ def score_cache_is_current(
     )
     if holo_protein_scores_mode is not None:
         current = current and (
-            metadata.get(HOLO_PROTEIN_SCORES_METADATA_KEY)
-            == holo_protein_scores_mode
+            metadata.get(HOLO_PROTEIN_SCORES_METADATA_KEY) == holo_protein_scores_mode
         )
     return current
 
@@ -1867,9 +1866,9 @@ class Scorer:
                 ),
             }
             if holo_protein_scores_mode is not None:
-                score_metadata[HOLO_PROTEIN_SCORES_METADATA_KEY] = (
-                    holo_protein_scores_mode
-                )
+                score_metadata[
+                    HOLO_PROTEIN_SCORES_METADATA_KEY
+                ] = holo_protein_scores_mode
             score_schema = schemas.PROTEIN_SIMILARITY_SCHEMA.with_metadata(
                 score_metadata
             )
