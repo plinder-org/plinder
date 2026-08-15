@@ -6,6 +6,7 @@ from functools import cache
 from pathlib import Path
 
 import pandas as pd
+import pyarrow as pa
 import pyarrow.parquet as pq
 
 from plinder.core.release import RELEASE_TABLES, PlinderRelease
@@ -319,9 +320,7 @@ def get_cluster_column_descriptions(
         ligand_level = parts[2] == "ligand"
         level = "ligand-level " if ligand_level else ""
         cover_kind = (
-            "directed set-cover"
-            if "__directed_set_cover__" in column
-            else "set-cover"
+            "directed set-cover" if "__directed_set_cover__" in column else "set-cover"
         )
         rows.append(
             (
@@ -376,9 +375,10 @@ def _model_description_lookup() -> dict[str, str]:
     )
     from plinder.data.annotations.ligand_utils import Ligand
     from plinder.data.annotations.protein_utils import Chain
+    from plinder.data.annotations.utils import DocBaseModel
 
     descriptions: dict[str, str] = {}
-    model_prefixes = [
+    model_prefixes: list[tuple[type[DocBaseModel], str]] = [
         (Entry, "entry"),
         (EntryValidation, "entry_validation"),
         (System, "system"),
@@ -421,7 +421,52 @@ def _base_description_lookup() -> dict[str, str]:
     return descriptions
 
 
-def get_table_column_descriptions(*, table_name: str, schema) -> pd.DataFrame:
+def _validate_published_cover_columns(*, table_name: str, names: list[str]) -> None:
+    """Reject cluster columns that the current finalizers do not publish."""
+    invalid: list[str] = []
+    if table_name == "annotation":
+        cover_names = [name for name in names if "__ligand__" in name]
+        for name in cover_names:
+            if "__component" in name or "__community" in name:
+                invalid.append(name)
+            elif name.startswith("tanimoto_similarity_ecfp4_1024__"):
+                if "__ligand__set_cover" not in name:
+                    invalid.append(name)
+            elif "__set_cover" in name and "__directed_set_cover" not in name:
+                invalid.append(name)
+    elif table_name == "interface_annotations":
+        cover_names = [
+            name
+            for name in names
+            if name.startswith(("interface_qcov__", "interface_side_qcov__"))
+        ]
+        invalid.extend(
+            name for name in cover_names if "__directed_set_cover" not in name
+        )
+    if invalid:
+        raise ValueError(
+            f"release table {table_name!r} has cover columns that are not "
+            f"published by the current pipeline: {invalid}"
+        )
+
+
+def _validate_table_grain(*, table_name: str, names: list[str]) -> None:
+    """Reject columns whose natural grain belongs to another release table."""
+    if table_name != "annotation":
+        return
+    repeated_entry_columns = sorted(
+        name for name in names if name.startswith("entry_") and name != "entry_pdb_id"
+    )
+    if repeated_entry_columns:
+        raise ValueError(
+            "release table 'annotation' repeats columns owned by "
+            f"'entry_metadata': {repeated_entry_columns}"
+        )
+
+
+def get_table_column_descriptions(
+    *, table_name: str, schema: pa.Schema
+) -> pd.DataFrame:
     """Build ordered descriptions for exactly the columns in one release table.
 
     The Arrow schema supplies the published names, order, and data types.  A
@@ -434,9 +479,17 @@ def get_table_column_descriptions(*, table_name: str, schema) -> pd.DataFrame:
 
     fields = list(schema)
     names = [field.name for field in fields]
+    _validate_table_grain(table_name=table_name, names=names)
+    _validate_published_cover_columns(table_name=table_name, names=names)
     descriptions = _base_description_lookup()
     cluster_rows = get_cluster_column_descriptions(pd.DataFrame(columns=names))
-    descriptions.update({name: description for name, _, description in cluster_rows})
+    descriptions.update(
+        {
+            name: description
+            for name, _, description in cluster_rows
+            if description is not None
+        }
+    )
     missing = [name for name in names if name not in descriptions]
     if missing:
         raise ValueError(

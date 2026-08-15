@@ -214,6 +214,56 @@ def test_table_descriptions_reject_missing_column_prose():
         )
 
 
+def test_annotation_descriptions_reject_repeated_entry_metadata():
+    import pyarrow as pa
+    import pytest
+
+    with pytest.raises(ValueError, match="columns owned by 'entry_metadata'"):
+        docs.get_table_column_descriptions(
+            table_name="annotation",
+            schema=pa.schema(
+                [
+                    ("entry_pdb_id", pa.string()),
+                    ("entry_resolution", pa.float64()),
+                ]
+            ),
+        )
+
+
+def test_table_descriptions_reject_retired_cover_modes():
+    import pyarrow as pa
+    import pytest
+
+    invalid_schemas = [
+        (
+            "annotation",
+            pa.schema(
+                [
+                    (
+                        "tanimoto_similarity_ecfp4_1024__50__ligand__"
+                        "directed_set_cover",
+                        pa.string(),
+                    )
+                ]
+            ),
+        ),
+        (
+            "annotation",
+            pa.schema([("pocket_qcov__50__ligand__community", pa.string())]),
+        ),
+        (
+            "interface_annotations",
+            pa.schema([("interface_qcov__50__component", pa.string())]),
+        ),
+    ]
+    for table_name, schema in invalid_schemas:
+        with pytest.raises(ValueError, match="not published by the current pipeline"):
+            docs.get_table_column_descriptions(
+                table_name=table_name,
+                schema=schema,
+            )
+
+
 def test_checked_in_descriptions_cover_every_table():
     from plinder.core.release import RELEASE_TABLES
 
@@ -225,6 +275,48 @@ def test_checked_in_descriptions_cover_every_table():
         assert not descriptions.empty
         assert list(descriptions.columns) == ["Name", "Type", "Description"]
         assert descriptions["Description"].notna().all()
+
+
+def test_checked_in_cluster_descriptions_match_published_cover_modes():
+    from plinder.core.scores.metrics import DEFAULT_CLUSTER_METRICS
+
+    ligand_names = docs.get_column_descriptions("annotation")["Name"].tolist()
+    metric_names = set(DEFAULT_CLUSTER_METRICS)
+    ligand_cluster_names = [
+        name for name in ligand_names if name.split("__", maxsplit=1)[0] in metric_names
+    ]
+    assert ligand_cluster_names
+    assert not any(
+        "__component" in name or "__community" in name for name in ligand_cluster_names
+    )
+    for name in ligand_cluster_names:
+        if name.startswith("tanimoto_similarity_ecfp4_1024__"):
+            assert "__ligand__set_cover" in name
+            assert "__directed_set_cover" not in name
+        else:
+            assert "__ligand__directed_set_cover" in name
+
+    interface_names = docs.get_column_descriptions("interface_annotations")[
+        "Name"
+    ].tolist()
+    interface_cluster_names = [
+        name
+        for name in interface_names
+        if name.startswith(("interface_qcov__", "interface_side_qcov__"))
+    ]
+    assert interface_cluster_names
+    assert all("directed_set_cover" in name for name in interface_cluster_names)
+    assert not any(
+        "__component" in name or "__community" in name
+        for name in interface_cluster_names
+    )
+
+
+def test_checked_in_annotation_keeps_only_the_entry_join_key():
+    annotation_names = docs.get_column_descriptions("annotation")["Name"].tolist()
+    entry_names = [name for name in annotation_names if name.startswith("entry_")]
+
+    assert entry_names == ["entry_pdb_id"]
 
 
 def test_linked_apo_descriptions_match_release_schema():

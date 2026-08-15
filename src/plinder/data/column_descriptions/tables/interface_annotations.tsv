@@ -20,16 +20,6 @@ prodigy_charged_apolar_contacts	double	PRODIGY-cryst count of charged-apolar con
 prodigy_polar_polar_contacts	double	PRODIGY-cryst count of polar-polar contacts
 prodigy_apolar_polar_contacts	double	PRODIGY-cryst count of apolar-polar contacts
 prodigy_apolar_apolar_contacts	double	PRODIGY-cryst count of apolar-apolar contacts
-interface_qcov__100__community	large_string	Cluster ID for greedy centroid community built from reciprocal-minimum interface_qcov with 100 threshold; each member meets the threshold in both directions to its centroid
-interface_qcov__30__community	large_string	Cluster ID for greedy centroid community built from reciprocal-minimum interface_qcov with 30 threshold; each member meets the threshold in both directions to its centroid
-interface_qcov__50__community	large_string	Cluster ID for greedy centroid community built from reciprocal-minimum interface_qcov with 50 threshold; each member meets the threshold in both directions to its centroid
-interface_qcov__70__community	large_string	Cluster ID for greedy centroid community built from reciprocal-minimum interface_qcov with 70 threshold; each member meets the threshold in both directions to its centroid
-interface_qcov__90__community	large_string	Cluster ID for greedy centroid community built from reciprocal-minimum interface_qcov with 90 threshold; each member meets the threshold in both directions to its centroid
-interface_qcov__100__component	large_string	Cluster ID for reciprocal-minimum component built from interface_qcov metric with 100 threshold
-interface_qcov__30__component	large_string	Cluster ID for reciprocal-minimum component built from interface_qcov metric with 30 threshold
-interface_qcov__50__component	large_string	Cluster ID for reciprocal-minimum component built from interface_qcov metric with 50 threshold
-interface_qcov__70__component	large_string	Cluster ID for reciprocal-minimum component built from interface_qcov metric with 70 threshold
-interface_qcov__90__component	large_string	Cluster ID for reciprocal-minimum component built from interface_qcov metric with 90 threshold
 interface_qcov__100__directed_set_cover	large_string	Cluster ID for directed set cover built from interface_qcov with 100 threshold; each member's query-to-centroid score meets the threshold
 interface_qcov__30__directed_set_cover	large_string	Cluster ID for directed set cover built from interface_qcov with 30 threshold; each member's query-to-centroid score meets the threshold
 interface_qcov__50__directed_set_cover	large_string	Cluster ID for directed set cover built from interface_qcov with 50 threshold; each member's query-to-centroid score meets the threshold
