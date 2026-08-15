@@ -135,7 +135,9 @@ interface_atoms = interface.interface_structure
 interface_cif = interface.interface_cif
 ```
 
-These objects are Biotite `AtomArray` instances. The two masks in
+`complex_atoms`, `side_1`, `side_2`, and `interface_atoms` are Biotite
+`AtomArray` instances; `interface_cif` is the `pathlib.Path` of the written
+mmCIF. The two masks in
 `interface.interface_residue_masks` select the annotated contact surface from
 `complex_atoms`, which is useful for residue-level featurization:
 

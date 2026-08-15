@@ -56,12 +56,15 @@ mode is enabled. Source PDB mmCIFs are separate: they are fetched per PDB entry
 during reconstruction and are not part of the bulk download.
 
 (annotation-table-target)=
+(annotation-tables-index)=
 
 ## Release tables
 
 The annotation table has one row per ligand, not one row per system. Values
-whose natural grain is an entry, chain, interface, or representative are stored
-once in narrower tables:
+whose natural grain is a chain, interface, or representative are stored once in
+narrower tables. Entry-level experimental, taxonomy, and validation fields are
+stored once in `entry_metadata.parquet`; `entry_pdb_id` is the join key retained
+on ligand and interface rows.
 
 - `annotation_table.parquet`: ligand annotations and reconstructable system IDs;
 - `entry_chains.parquet`: one polymer chain in a PDB entry;
@@ -326,6 +329,8 @@ interface_scores = reconstruct_interface_similarity_scores(
 
 The result is directional: swapping query and target can change interface
 coverage.
+
+(splits-splits)=
 
 ## Representative covers
 
