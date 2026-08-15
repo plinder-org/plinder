@@ -815,10 +815,12 @@ def _choose_ligand_smiles_by_heavy_atom_count(
     """
 
     def valid_candidate(smiles: str | None) -> tuple[str, int] | None:
-        mol = Chem.MolFromSmiles(smiles) if smiles else None
+        if not smiles:
+            return None
+        mol = Chem.MolFromSmiles(smiles)
         if mol is None:
             return None
-        return smiles, mol.GetNumHeavyAtoms()
+        return smiles, int(mol.GetNumHeavyAtoms())
 
     reference = valid_candidate(reference_smiles)
     resolved = valid_candidate(resolved_smiles)
@@ -1718,6 +1720,7 @@ class Ligand(DocBaseModel):
         res_names = _residues_in_order(lig_heavy)
         reference_fragments: list[str] = []
         for resname in res_names:
+            component_smiles: str | None
             # User-supplied SMILES takes precedence — when the caller
             # explicitly provided one, CCD is assumed to be wrong or a
             # generic placeholder (biotite returns one for some codes
@@ -2179,6 +2182,17 @@ class Ligand(DocBaseModel):
         elif lig_has_dummies(self.ccd_code):
             # check for dummy list including composites, too!
             self.is_artifact = True
+        elif self._is_multi_residue and any(
+            (
+                self.is_oligosaccharide,
+                self.is_oligonucleotide,
+                self.is_oligopeptide,
+            )
+        ):
+            # Small-molecule charge and linker cutoffs do not describe
+            # recognized oligomeric ligands.  For example, a short peptide can
+            # legitimately exceed the formal-charge cutoff through Lys/Arg.
+            self.is_artifact = False
         elif is_excluded_mol(self.smiles):
             self.is_artifact = True
         else:

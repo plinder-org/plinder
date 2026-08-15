@@ -886,16 +886,19 @@ def test_peptide_ligand_threshold(
         assert not stale_ligand_dir.exists()
 
 
-def test_annotation_without_systems_skips_validation_and_normalized_tables(
-    monkeypatch, tmp_path
-):
+def test_annotation_without_systems_writes_shared_sidecars(monkeypatch, tmp_path):
+    validation_calls = []
+
     class EmptyEntry:
         pdb_id = "1abc"
         systems: dict[str, object] = {}
         interfaces: list[object] = []
 
-        def set_validation(self, *_args, **_kwargs):
-            pytest.fail("empty entries must skip validation")
+        def set_validation(self, validation, cif):
+            validation_calls.append((validation, cif))
+
+        def metadata_to_df(self):
+            return pd.DataFrame({"entry_pdb_id": [self.pdb_id]})
 
     monkeypatch.setattr(
         Entry,
@@ -907,9 +910,20 @@ def test_annotation_without_systems_skips_validation_and_normalized_tables(
         Path("1abc_validation.xml.gz"),
         save_folder=tmp_path,
     )
+    writes = []
+    monkeypatch.setattr(
+        annotation,
+        "_write_shared_sidecars",
+        lambda path, table, *, replace_interfaces: writes.append(
+            (path, table.num_rows, replace_interfaces)
+        ),
+    )
 
     assert annotation.annotate() is None
-    assert not (tmp_path / "1abc").exists()
+    assert validation_calls == [
+        (Path("1abc_validation.xml.gz"), Path("1abc.cif")),
+    ]
+    assert writes == [(tmp_path / "1abc", 0, True)]
 
 
 def test_interface_only_annotation_materializes_normalized_tables(
@@ -1403,7 +1417,12 @@ def test_simple_covalency_detection_found(cif_7gj7, mock_alternative_datasets):
 
 def test_simple_ternary_detection(cif_2p1q, mock_alternative_datasets):
     entry_dir = mock_alternative_datasets("2p1q")
-    plinder_anno = GetPlinderAnnotation(cif_2p1q, "", save_folder=entry_dir)
+    plinder_anno = GetPlinderAnnotation(
+        cif_2p1q,
+        "",
+        save_folder=entry_dir,
+        data_dir=entry_dir.parent.parent,
+    )
     plinder_anno.annotate()
     df = plinder_anno.annotated_df
     assert sorted(set(df.ligand_ccd_code.to_list())) == ["IAC"]
@@ -1498,8 +1517,12 @@ def test_water_saving(cif_2p1q, mock_alternative_datasets):
     from plinder.data.annotations.cif_utils import read_mmcif_file
 
     entry_dir = mock_alternative_datasets("2p1q")
+    entry = Entry.from_cif_file(
+        cif_2p1q,
+        save_folder=entry_dir,
+        data_dir=entry_dir.parent.parent,
+    )
     system_tag = "2p1q__2__2.B_2.C__2.E"
-    entry = Entry.from_cif_file(cif_2p1q, save_folder=entry_dir)
     row = entry.to_df().query("system_id == @system_tag").iloc[0]
 
     output_dir = entry_dir / "reconstructed" / system_tag
@@ -1732,9 +1755,8 @@ def test_canonical_ligand_saving_and_system_reconstruction(
     annotation = entry.to_df()
     query_calls = []
 
-    def query_one_system(*, columns, splits, filters):
+    def query_one_system(*, columns, filters):
         assert columns == ["*"]
-        assert splits == ["*"]
         assert len(filters) == 1
         column, operator, value = filters[0]
         assert operator == "=="
@@ -2010,7 +2032,12 @@ def test_multi_ligand_system_grouping(cif_7fee, mock_alternative_datasets):
     classification. 9GF and 7IC must be in the same system.
     """
     entry_dir = mock_alternative_datasets("7fee")
-    plinder_anno = GetPlinderAnnotation(cif_7fee, "", save_folder=entry_dir)
+    plinder_anno = GetPlinderAnnotation(
+        cif_7fee,
+        "",
+        save_folder=entry_dir,
+        data_dir=entry_dir.parent.parent,
+    )
     plinder_anno.annotate()
 
     systems = plinder_anno.entry.systems
@@ -2050,7 +2077,12 @@ def test_cofactor_system_stays_holo(cif_1atp, mock_alternative_datasets):
     Uses GetPlinderAnnotation for full classification.
     """
     entry_dir = mock_alternative_datasets("1atp")
-    plinder_anno = GetPlinderAnnotation(cif_1atp, "", save_folder=entry_dir)
+    plinder_anno = GetPlinderAnnotation(
+        cif_1atp,
+        "",
+        save_folder=entry_dir,
+        data_dir=entry_dir.parent.parent,
+    )
     plinder_anno.annotate()
 
     systems = plinder_anno.entry.systems
@@ -2084,7 +2116,12 @@ def test_cofactor_system_holo_19hc(cif_19hc, mock_alternative_datasets):
     ACTs (C, P) form standalone artifact systems.
     """
     entry_dir = mock_alternative_datasets("19hc")
-    plinder_anno = GetPlinderAnnotation(cif_19hc, "", save_folder=entry_dir)
+    plinder_anno = GetPlinderAnnotation(
+        cif_19hc,
+        "",
+        save_folder=entry_dir,
+        data_dir=entry_dir.parent.parent,
+    )
     plinder_anno.annotate()
 
     systems = plinder_anno.entry.systems
@@ -2196,9 +2233,19 @@ def test_get_validation(
         },
         orient="index",
     ).T.infer_objects()
-    entry = GetPlinderAnnotation(cif_1qz5, validation_1qz5, save_folder=entry_dir)
+    entry = GetPlinderAnnotation(
+        cif_1qz5,
+        validation_1qz5,
+        save_folder=entry_dir,
+        data_dir=entry_dir.parent.parent,
+    )
     entry.annotate()
-    validation_df = entry.annotated_df[reference_df.columns]
+    validation_df = entry.annotated_df.merge(
+        entry.entry_metadata_df,
+        on="entry_pdb_id",
+        how="left",
+        validate="many_to_one",
+    )[reference_df.columns]
     validation_df = validation_df[
         validation_df["system_id"] == "1qz5__1__1.A__1.D"
     ].reset_index(drop=True)
@@ -2408,7 +2455,12 @@ def test_disconnected_ligand_fix(cif_4nhc, mock_alternative_datasets):
     """
     entry_dir = mock_alternative_datasets("4nhc")
     # Use threshold 20 so the 17-residue peptide is classified as ligand
-    entry = Entry.from_cif_file(cif_4nhc, save_folder=entry_dir, min_polymer_size=20)
+    entry = Entry.from_cif_file(
+        cif_4nhc,
+        save_folder=entry_dir,
+        data_dir=entry_dir.parent.parent,
+        min_polymer_size=20,
+    )
     lig = entry.systems["4nhc__1__1.A_1.B__1.C"].ligands[0]
     assert lig.is_invalid == False
     outsdffile = entry_dir / "4nhc" / "ligand_files" / "C.sdf"

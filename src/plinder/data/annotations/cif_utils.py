@@ -16,6 +16,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from math import prod
 from pathlib import Path
+from typing import TypedDict
 
 import biotite.structure as struc
 import biotite.structure.io.pdbx as pdbx
@@ -27,6 +28,16 @@ from plinder.core.structure.smallmols_utils import (
 )
 
 LOG = logging.getLogger(__name__)
+
+
+class EntryTaxonomy(TypedDict):
+    """Taxonomy fields extracted from deposited entry metadata."""
+
+    source_taxonomy_ids: list[int]
+    source_organism_names: list[str]
+    host_taxonomy_ids: list[int]
+    host_organism_names: list[str]
+
 
 # Single source of truth lives in ``plinder.core.structure.atoms`` so
 # both ``plinder.core`` and ``plinder.data`` filter H/D/T isotopes
@@ -349,7 +360,7 @@ def get_label_asym_sequences(block: pdbx.CIFBlock) -> dict[str, str]:
 
 def get_entry_taxonomy(
     block: pdbx.CIFBlock,
-) -> dict[str, list[int] | list[str]]:
+) -> EntryTaxonomy:
     """Extract distinct source and expression-host organisms for an entry."""
     source_taxonomy_ids: set[int] = set()
     source_organism_names: set[str] = set()

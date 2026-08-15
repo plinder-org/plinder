@@ -1633,6 +1633,7 @@ class Entry(DocBaseModel):
                 )
             if not include_ligands:
                 continue
+            assert spatial_index is not None
             if not primary_asym_ids:
                 continue
             water_chains = get_water_chain_ids(biounit)
@@ -2531,7 +2532,7 @@ class Entry(DocBaseModel):
                 else:
                     role = "receptor"
                 chain_counts = contact_counts.get(chain_instance, {})
-                row = {
+                row: dict[str, object] = {
                     "entry_pdb_id": self.pdb_id,
                     "biounit_id": str(biounit_id),
                     "chain_instance": chain_instance,
@@ -2568,7 +2569,7 @@ class Entry(DocBaseModel):
         pd.DataFrame
         """
         rows = []
-        entry_data = self.format()
+        entry_data = {"entry_pdb_id": self.pdb_id}
         for system in self.systems:
             annotation = self.systems[system]
             legacy_mapping = self.biounit_legacy_chain_ids.get(

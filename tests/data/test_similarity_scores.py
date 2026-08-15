@@ -629,6 +629,10 @@ def test_entry_views_accept_annotation_dataframe(
     monkeypatch.setattr(ligand_utils, "BINDING_AFFINITY", {})
     entry = Entry.from_cif_file(cif_2gdo)
     annotation = entry.to_df()
+    assert [column for column in annotation.columns if column.startswith("entry_")] == [
+        "entry_pdb_id"
+    ]
+    assert "entry_release_date" in entry.metadata_to_df().columns
     assert not any(column.startswith("entry_chains_") for column in annotation)
     entry_chains = entry.chains_to_df()
     assert len(entry_chains) <= len(entry.chains)
