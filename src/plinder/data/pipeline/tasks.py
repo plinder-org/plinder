@@ -2357,6 +2357,7 @@ def make_batch_scores(
             from plinder.core.scores.entries import load_entry_views
             from plinder.data.linked_apo import REQUIRED_SCORE_METRICS
 
+            score_metrics = REQUIRED_SCORE_METRICS if search_db == "apo" else None
             missing_entries = set(entry_ids).difference(scorer.entries)
             if missing_entries:
                 scorer.entries.update(
@@ -2402,7 +2403,7 @@ def make_batch_scores(
                         source_to_aln_file=source_to_aln_file,
                         defer_ligand_3d=False,
                         query_entry_alignments=query_alignments,
-                        score_metrics=REQUIRED_SCORE_METRICS,
+                        score_metrics=score_metrics,
                     )
             continue
         for pdb_id in tqdm(entry_ids):

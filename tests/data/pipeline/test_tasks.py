@@ -668,6 +668,43 @@ def test_make_batch_scores_reads_each_apo_alignment_shard_once(
     )
 
 
+def test_make_batch_scores_keeps_all_pred_metrics(tmp_path, monkeypatch) -> None:
+    score_calls = []
+
+    class FakeScorer:
+        shape_score_threads = 1
+        entries = {}
+
+        def load_alignments(self, **_kwargs):
+            return pd.DataFrame()
+
+        def get_score_df(self, *args, **kwargs):
+            score_calls.append((args, kwargs))
+
+    monkeypatch.setattr(
+        tasks.utils,
+        "get_scorer",
+        lambda **_kwargs: (FakeScorer(), ["1abc"], tmp_path / "batch"),
+    )
+    monkeypatch.setattr(
+        "plinder.core.scores.entries.load_entry_views",
+        lambda *, pdb_ids, data_dir, include_interfaces: {
+            pdb_id: object() for pdb_id in pdb_ids
+        },
+    )
+
+    tasks.make_batch_scores(
+        data_dir=tmp_path,
+        pdb_ids=["1abc"],
+        scorer_cfg=SimpleNamespace(sub_databases=["pred"]),
+        force_update=False,
+        scratch_dir=tmp_path / "scratch",
+    )
+
+    assert len(score_calls) == 1
+    assert score_calls[0][1]["score_metrics"] is None
+
+
 def test_make_entries_uses_shared_v3_batch(tmp_path, monkeypatch):
     calls = []
 
