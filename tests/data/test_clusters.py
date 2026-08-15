@@ -19,9 +19,9 @@ def _write_interface_cluster_universe(
     index_dir: Path, interface_ids: list[str]
 ) -> None:
     """Write identity representative metadata for focused cluster tests."""
-    pd.DataFrame(
-        {"representative_system_id": interface_ids}
-    ).to_parquet(index_dir / "interface_representatives.parquet", index=False)
+    pd.DataFrame({"representative_system_id": interface_ids}).to_parquet(
+        index_dir / "interface_representatives.parquet", index=False
+    )
     half_ids = [
         f"{system_id}::side={side}" for system_id in interface_ids for side in (1, 2)
     ]
@@ -616,11 +616,14 @@ def test_interface_node_universe_contains_only_scoring_representatives(tmp_path)
         metric="interface_qcov",
         entity_type="interface",
     )[0] == ["i1"]
-    assert component_node_universe(
-        data_dir=tmp_path,
-        metric="interface_side_qcov",
-        entity_type="interface",
-    )[0] == half_ids
+    assert (
+        component_node_universe(
+            data_dir=tmp_path,
+            metric="interface_side_qcov",
+            entity_type="interface",
+        )[0]
+        == half_ids
+    )
 
 
 def test_interface_side_clusters_use_independent_side_nodes(tmp_path):
@@ -980,9 +983,10 @@ def test_directed_cover_uses_stable_ids_for_ties_and_self_for_isolates():
         target_mask=np.asarray([True, False, False, True]),
     )
 
-    assert [
-        (nodes[item.representative], item.threshold) for item in selections
-    ] == [("higher-quality", 70), ("isolated", None)]
+    assert [(nodes[item.representative], item.threshold) for item in selections] == [
+        ("higher-quality", 70),
+        ("isolated", None),
+    ]
     assert [
         (nodes[item.query], nodes[item.representative]) for item in assignments
     ] == [("query", "higher-quality"), ("isolated", "isolated")]
@@ -1240,9 +1244,7 @@ def test_ligand_covers_are_merged_without_system_projection(tmp_path):
     ).to_parquet(directed_cover, index=False)
 
     finalized = finalize_index(data_dir=tmp_path)
-    ligand_column = (
-        "sucos_shape_pocket_qcov__50__ligand__directed_set_cover"
-    )
+    ligand_column = "sucos_shape_pocket_qcov__50__ligand__directed_set_cover"
     assert "sucos_shape_pocket_qcov__50__directed_set_cover" not in finalized
     finalized_labels = finalized.set_index("ligand_id")[ligand_column]
     assert finalized_labels[ligand_a1] == finalized_labels[ligand_b]

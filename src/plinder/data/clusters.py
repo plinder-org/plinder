@@ -40,9 +40,7 @@ SYMMETRIC_EDGE_BUCKET_COUNT = 64
 SYMMETRIC_EDGE_COLUMNS = ["query_node", "target_node", "similarity"]
 INTERFACE_CLUSTER_METRICS = frozenset({"interface_qcov", "interface_side_qcov"})
 INTERFACE_REPRESENTATIVES = Path("index/interface_representatives.parquet")
-INTERFACE_HALF_REPRESENTATIVES = Path(
-    "index/interface_half_representatives.parquet"
-)
+INTERFACE_HALF_REPRESENTATIVES = Path("index/interface_half_representatives.parquet")
 INTERFACE_MEMBERSHIP = Path("index/interface_membership.parquet")
 
 
@@ -2218,17 +2216,14 @@ def _greedy_set_cover(
     uncovered = set(range(size))
     centroids: list[int] = []
     selected: set[int] = set()
-    heap = [
-        (-(graph.degree(node) + 1), str(nodes[node]), node)
-        for node in range(size)
-    ]
+    heap = [(-(graph.degree(node) + 1), str(nodes[node]), node) for node in range(size)]
     heapq.heapify(heap)
     while uncovered:
         while heap:
             negative_count, node_id, centroid = heapq.heappop(heap)
             if centroid in selected:
                 continue
-            covered = ({centroid} if centroid in uncovered else set())
+            covered = {centroid} if centroid in uncovered else set()
             covered.update(
                 int(neighbor)
                 for neighbor in graph.iterNeighbors(centroid)
@@ -2280,9 +2275,7 @@ def _greedy_set_cover(
                 ),
             )
         groups[representative].append(str(ligand_id))
-    return [
-        (str(nodes[centroid]), groups[centroid]) for centroid in centroids
-    ]
+    return [(str(nodes[centroid]), groups[centroid]) for centroid in centroids]
 
 
 @dataclass(frozen=True)
@@ -2564,13 +2557,9 @@ def _greedy_directed_set_cover(
                 ),
             )
             assignment_graph = (
-                graph
-                if assignment_threshold == primary_threshold
-                else fallback_graph
+                graph if assignment_threshold == primary_threshold else fallback_graph
             )
-            similarity = 100.0 * float(
-                assignment_graph.weight(query, representative)
-            )
+            similarity = 100.0 * float(assignment_graph.weight(query, representative))
         assignments.append(
             _RepresentativeAssignment(
                 query=query,
@@ -2670,9 +2659,7 @@ def directed_set_cover_is_complete(
 ) -> bool:
     """Return whether a cached directed-cover artifact has the current schema."""
     centroid_column = (
-        "centroid_ligand_id"
-        if entity_type == "ligand"
-        else "centroid_system_id"
+        "centroid_ligand_id" if entity_type == "ligand" else "centroid_system_id"
     )
     required_columns = {
         _cluster_node_column(entity_type),
@@ -2690,9 +2677,7 @@ def directed_set_cover_is_complete(
         "directed",
     }
     try:
-        return path.is_file() and required_columns.issubset(
-            pq.read_schema(path).names
-        )
+        return path.is_file() and required_columns.issubset(pq.read_schema(path).names)
     except (OSError, ValueError):
         return False
 
@@ -2709,9 +2694,7 @@ def set_cover_is_complete(path: Path) -> bool:
         "directed",
     }
     try:
-        return path.is_file() and required_columns.issubset(
-            pq.read_schema(path).names
-        )
+        return path.is_file() and required_columns.issubset(pq.read_schema(path).names)
     except (OSError, ValueError):
         return False
 
@@ -2882,9 +2865,11 @@ def make_directed_set_cover(
                     f"directed-cover component validation failed for {metric} at "
                     f"{threshold}: {crossing_edges} crossing edges"
                 )
-            compact = pa.Table.from_batches([record_batch]).select(
-                staged_schema.names
-            ).cast(staged_schema, safe=False)
+            compact = (
+                pa.Table.from_batches([record_batch])
+                .select(staged_schema.names)
+                .cast(staged_schema, safe=False)
+            )
             writer.write_table(compact, row_group_size=1_000_000)
             staged_rows += len(record_batch)
             if batch_index % 20 == 0:
@@ -2968,9 +2953,7 @@ def make_directed_set_cover(
             assignments.append(
                 {
                     node_column: str(current_nodes[assignment.query]),
-                    "centroid_node": str(
-                        current_nodes[assignment.representative]
-                    ),
+                    "centroid_node": str(current_nodes[assignment.representative]),
                     "similarity_to_centroid": assignment.similarity,
                     "coverage_count": coverage_counts[assignment.query],
                     "coverage_fraction": coverage_counts[assignment.query]
@@ -3028,15 +3011,9 @@ def make_directed_set_cover(
                     )
                 assert current_graph is not None
                 assert current_primary_graph is not None
-                similarities = group["similarity"].to_numpy(
-                    dtype=float, copy=False
-                )
-                query_nodes = group["query_node"].to_numpy(
-                    dtype=np.uint, copy=False
-                )
-                target_nodes = group["target_node"].to_numpy(
-                    dtype=np.uint, copy=False
-                )
+                similarities = group["similarity"].to_numpy(dtype=float, copy=False)
+                query_nodes = group["query_node"].to_numpy(dtype=np.uint, copy=False)
+                target_nodes = group["target_node"].to_numpy(dtype=np.uint, copy=False)
                 weighted_edges = (
                     similarities / 100.0,
                     (query_nodes, target_nodes),
@@ -3095,9 +3072,7 @@ def make_directed_set_cover(
         ],
     )
     published["coverage_count"] = published["coverage_count"].astype("Int32")
-    published["coverage_fraction"] = published["coverage_fraction"].astype(
-        "Float32"
-    )
+    published["coverage_fraction"] = published["coverage_fraction"].astype("Float32")
     published["representative_selection_order"] = published[
         "representative_selection_order"
     ].astype("Int32")

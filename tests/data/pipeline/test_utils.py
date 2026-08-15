@@ -410,18 +410,13 @@ def test_finalize_index_adds_local_clusters(tmp_path):
     assert coverage_fractions.iloc[0] == pytest.approx(1.0)
     assert pd.isna(coverage_counts.iloc[1])
     assert pd.isna(coverage_fractions.iloc[1])
-    tanimoto_column = (
-        "tanimoto_similarity_ecfp4_1024__90__ligand__set_cover"
-    )
+    tanimoto_column = "tanimoto_similarity_ecfp4_1024__90__ligand__set_cover"
     assert finalized[tanimoto_column].tolist()[0] == "t0"
     assert pd.isna(finalized[tanimoto_column].iloc[1])
     assert bool(finalized[f"{tanimoto_column}__is_centroid"].iloc[0])
     assert finalized["ligand_tanimoto_ecfp4_1024_90_cluster"].iloc[0] == "t0"
     assert pd.isna(finalized["ligand_tanimoto_ecfp4_1024_90_cluster"].iloc[1])
-    assert (
-        finalized["ligand_tanimoto_ecfp4_1024_90_cluster_num_pdb_ids"].iloc[0]
-        == 1
-    )
+    assert finalized["ligand_tanimoto_ecfp4_1024_90_cluster_num_pdb_ids"].iloc[0] == 1
     assert finalized.loc[0, "ligand_smiles_id"] == 0
     assert pd.isna(finalized.loc[1, "ligand_smiles_id"])
     assert finalized["ligand_is_3d_score_able"].tolist() == [True, False]
@@ -430,9 +425,7 @@ def test_finalize_index_adds_local_clusters(tmp_path):
 
 def test_cluster_index_rejects_non_tanimoto_set_cover(tmp_path):
     cover_file = (
-        tmp_path
-        / "ligand_sampling/set_cover/metric=pli_qcov"
-        / "threshold=100.parquet"
+        tmp_path / "ligand_sampling/set_cover/metric=pli_qcov" / "threshold=100.parquet"
     )
     cover_file.parent.mkdir(parents=True)
     pd.DataFrame(
@@ -486,9 +479,11 @@ def test_tanimoto_90_set_cover_counts_distinct_pdb_ids(tmp_path):
         "c0",
         "c1",
     ]
-    assert result[
-        "ligand_tanimoto_ecfp4_1024_90_cluster_num_pdb_ids"
-    ].tolist() == [2, 2, 1]
+    assert result["ligand_tanimoto_ecfp4_1024_90_cluster_num_pdb_ids"].tolist() == [
+        2,
+        2,
+        1,
+    ]
 
 
 def test_cluster_index_marks_only_directed_cover_centroids(tmp_path):

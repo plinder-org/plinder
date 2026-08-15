@@ -488,9 +488,7 @@ def add_cluster_columns(*, index: pd.DataFrame, data_dir: Path) -> pd.DataFrame:
         if marker.get("status") == "requires_downstream_repair":
             repair_started_ns = marker_path.stat().st_mtime_ns
     set_cover_root = data_dir / "ligand_sampling" / "set_cover"
-    reciprocal_paths = sorted(
-        set_cover_root.glob("metric=*/threshold=*.parquet")
-    )
+    reciprocal_paths = sorted(set_cover_root.glob("metric=*/threshold=*.parquet"))
     directed_cover_paths = sorted(
         directed_cover_root.glob("metric=*/threshold=*.parquet")
     )
@@ -645,10 +643,7 @@ def add_cluster_columns(*, index: pd.DataFrame, data_dir: Path) -> pd.DataFrame:
             )
         aligned = labels.set_index(node_column)["label"].reindex(node_ids)
         cluster_columns[column] = aligned.astype("string[pyarrow]").array
-        if (
-            metric == "tanimoto_similarity_ecfp4_1024"
-            and artifact_threshold == 90
-        ):
+        if metric == "tanimoto_similarity_ecfp4_1024" and artifact_threshold == 90:
             if "entry_pdb_id" not in index.columns:
                 raise ValueError(
                     "the 90-percent Tanimoto set cover requires entry_pdb_id"
@@ -661,20 +656,18 @@ def add_cluster_columns(*, index: pd.DataFrame, data_dir: Path) -> pd.DataFrame:
                     "label": index.loc[proper & holo, node_column]
                     .astype(str)
                     .map(label_by_node),
-                    "entry_pdb_id": index.loc[
-                        proper & holo, "entry_pdb_id"
-                    ].astype(str),
+                    "entry_pdb_id": index.loc[proper & holo, "entry_pdb_id"].astype(
+                        str
+                    ),
                 }
             ).dropna(subset=["label"])
             pdb_counts = occurrences.groupby("label", observed=True)[
                 "entry_pdb_id"
             ].nunique()
-            cluster_columns[cluster_column] = aligned.astype(
-                "string[pyarrow]"
-            ).array
-            cluster_columns[count_column] = aligned.map(pdb_counts).astype(
-                "Int32"
-            ).array
+            cluster_columns[cluster_column] = aligned.astype("string[pyarrow]").array
+            cluster_columns[count_column] = (
+                aligned.map(pdb_counts).astype("Int32").array
+            )
         labels["centroid_ligand_id"] = labels["centroid_ligand_id"].astype(str)
         labels["is_centroid"] = labels[node_column].eq(labels["centroid_ligand_id"])
         centroid_counts = labels.groupby("label", observed=True)["is_centroid"].sum()
