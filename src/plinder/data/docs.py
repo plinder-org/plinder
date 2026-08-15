@@ -2,6 +2,7 @@
 # Distributed under the terms of the Apache License 2.0
 from __future__ import annotations
 
+import re
 from functools import cache
 from pathlib import Path
 
@@ -14,6 +15,11 @@ from plinder.data import column_descriptions
 
 TSV_DIR = Path(column_descriptions.__file__).parent
 TABLE_TSV_DIR = TSV_DIR / "tables"
+
+_PUBLISHED_INTERFACE_COVER_COLUMN = re.compile(
+    r"(?:interface_qcov__\d+__directed_set_cover|"
+    r"interface_side_qcov__\d+__chain_[12]_directed_set_cover)"
+)
 
 DERIVED_COLUMN_DESCRIPTIONS = {
     "chain_is_ligand_like": (
@@ -441,7 +447,9 @@ def _validate_published_cover_columns(*, table_name: str, names: list[str]) -> N
             if name.startswith(("interface_qcov__", "interface_side_qcov__"))
         ]
         invalid.extend(
-            name for name in cover_names if "__directed_set_cover" not in name
+            name
+            for name in cover_names
+            if _PUBLISHED_INTERFACE_COVER_COLUMN.fullmatch(name) is None
         )
     if invalid:
         raise ValueError(

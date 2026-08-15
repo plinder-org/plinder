@@ -255,6 +255,40 @@ def test_table_descriptions_reject_retired_cover_modes():
             "interface_annotations",
             pa.schema([("interface_qcov__50__component", pa.string())]),
         ),
+        (
+            "interface_annotations",
+            pa.schema(
+                [
+                    (
+                        "interface_qcov__50__directed_set_cover__is_centroid",
+                        pa.string(),
+                    )
+                ]
+            ),
+        ),
+        (
+            "interface_annotations",
+            pa.schema(
+                [
+                    (
+                        "interface_qcov__50__directed_set_cover__coverage_count",
+                        pa.int64(),
+                    )
+                ]
+            ),
+        ),
+        (
+            "interface_annotations",
+            pa.schema(
+                [
+                    (
+                        "interface_side_qcov__50__chain_1_directed_set_cover__"
+                        "coverage_fraction",
+                        pa.float64(),
+                    )
+                ]
+            ),
+        ),
     ]
     for table_name, schema in invalid_schemas:
         with pytest.raises(ValueError, match="not published by the current pipeline"):
@@ -262,6 +296,22 @@ def test_table_descriptions_reject_retired_cover_modes():
                 table_name=table_name,
                 schema=schema,
             )
+
+
+def test_table_descriptions_accept_published_interface_cover_columns():
+    import pyarrow as pa
+
+    names = [
+        "interface_qcov__50__directed_set_cover",
+        "interface_side_qcov__50__chain_1_directed_set_cover",
+        "interface_side_qcov__50__chain_2_directed_set_cover",
+    ]
+    descriptions = docs.get_table_column_descriptions(
+        table_name="interface_annotations",
+        schema=pa.schema([(name, pa.string()) for name in names]),
+    )
+
+    assert descriptions["Name"].tolist() == names
 
 
 def test_checked_in_descriptions_cover_every_table():
