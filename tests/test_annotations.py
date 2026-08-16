@@ -1817,10 +1817,7 @@ def test_canonical_ligand_saving_and_system_reconstruction(
         system_block["chem_comp"]["id"].as_array(str)
     )
     assert system_block["cell"]["entry_id"].as_item() == row["system_id"]
-    assert all(
-        asym_id.isalnum()
-        for asym_id in system_block["atom_site"]["label_asym_id"].as_array(str)
-    )
+    assert "1.B" in system_block["atom_site"]["label_asym_id"].as_array(str)
     assert "struct_conn_type" in system_block
     assert set(system_block["struct_conn"]["conn_type_id"].as_array(str)).issubset(
         system_block["struct_conn_type"]["id"].as_array(str)
@@ -1841,6 +1838,11 @@ def test_canonical_ligand_saving_and_system_reconstruction(
     assert set(system_atoms.chain_id) == set(
         _output_asym_ids(sorted(expected_chains)).values()
     )
+    receptor_atoms = pdbx.get_structure(read_mmcif_file(outputs.receptor_cif), model=1)
+    receptor_protein_chains = set(
+        receptor_atoms.chain_id[struc.filter_amino_acids(receptor_atoms)]
+    )
+    assert set(sequences) == receptor_protein_chains
 
     # FASTA reconstruction is part of the base package and must not import
     # pipeline validation or OpenStructure dependencies.

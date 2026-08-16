@@ -19,19 +19,13 @@ WaterSelection = Literal["none", "interacting", "all"]
 
 
 def _output_asym_ids(chain_ids: list[str]) -> dict[str, str]:
-    """Return unique alphanumeric mmCIF asym IDs for internal chain IDs."""
+    """Return unique mmCIF asym IDs while preserving assembly chain IDs."""
     output: dict[str, str] = {}
     used: set[str] = set()
     for chain_id in chain_ids:
         candidate = chain_id
-        instance_asym = chain_id.split(".", maxsplit=1)
-        if (
-            re.fullmatch(r"[A-Za-z0-9]+", candidate) is None
-            and len(instance_asym) == 2
-            and all(re.fullmatch(r"[A-Za-z0-9]+", part) for part in instance_asym)
-        ):
-            candidate = f"{instance_asym[1]}{instance_asym[0]}"
-        if re.fullmatch(r"[A-Za-z0-9]+", candidate) is None or candidate in used:
+        supported = re.fullmatch(r"(?:[A-Za-z0-9]+|[0-9]+\.[A-Za-z0-9]+)", candidate)
+        if supported is None or candidate in used:
             candidate = "C" + chain_id.encode("utf-8").hex()
         suffix = 2
         base = candidate
@@ -1046,6 +1040,9 @@ def save_reconstructed_system(
             biounit_chains,
             options,
         ).receptor
+        output_chain_ids = _output_asym_ids(
+            list(dict.fromkeys(reconstructed.receptor.chain_id.astype(str)))
+        )
         missing_sequences = sorted(
             chain_id
             for chain_id in receptor_chain_ids
@@ -1059,5 +1056,7 @@ def save_reconstructed_system(
         with requested["sequences_fasta"].open("w") as fasta:
             for chain_id in sorted(receptor_chain_ids):
                 asym_id = chain_id.split(".", maxsplit=1)[-1]
-                fasta.write(f">{chain_id}\n{asym_to_sequence[asym_id]}\n")
+                fasta.write(
+                    f">{output_chain_ids[chain_id]}\n" f"{asym_to_sequence[asym_id]}\n"
+                )
     return requested
