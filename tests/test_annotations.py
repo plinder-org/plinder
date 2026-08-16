@@ -588,6 +588,32 @@ def test_entry_validation_accepts_missing_optional_wwpdb_metrics():
     assert result.meanI_over_sigI_obs is None
 
 
+def test_entry_validation_accepts_unavailable_crystallographic_metrics():
+    entry = {
+        "PDB-resolution": "NotAvailable",
+        "PDB-Rfree": "NotAvailable",
+        "PDB-R": "NotAvailable",
+        "clashscore": None,
+    }
+    validation = SimpleNamespace(
+        getValidationXML=lambda: SimpleNamespace(getEntry=lambda: entry),
+        getReflectionsResolution=lambda: 2.4,
+        getMeanIOverSigIObs=lambda: None,
+        countAtoms=lambda: 100,
+        calcMolProbityOverallScore=lambda: 1.5,
+        calcMeanStructureBFactor=lambda: 20.0,
+        calcMedianStructureBFactor=lambda: 18.0,
+        getResolution=lambda: (_ for _ in ()).throw(KeyError("refine")),
+    )
+
+    result = EntryValidation.from_entry(validation)
+
+    assert np.isnan(result.r)
+    assert np.isnan(result.rfree)
+    assert np.isnan(result.resolution)
+    assert np.isnan(result.pdbx_resolution)
+
+
 def test_crystal_contact_fraction_is_undefined_without_heavy_atoms():
     from plinder.data.annotations.aggregate_annotations import System
     from plinder.data.annotations.ligand_utils import Ligand

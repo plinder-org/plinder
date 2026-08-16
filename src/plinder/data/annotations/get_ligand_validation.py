@@ -333,20 +333,35 @@ class EntryValidation(DocBaseModel):
     def from_entry(cls, doc: PDBValidation) -> EntryValidation:
         xml = doc.getValidationXML()
         entry = xml.getEntry()
+        unavailable = {None, "?", ".", "NotAvailable"}
+        resolution = entry.get("PDB-resolution")
+        if resolution in unavailable:
+            resolution = np.nan
         rfree = entry.get("PDB-Rfree")
-        if rfree == "NotAvailable":
+        if rfree in unavailable:
             rfree = np.nan
+        r = entry.get("PDB-R")
+        if r in unavailable:
+            r = np.nan
         try:
             reflns = doc.getReflectionsResolution()
         except KeyError:
             reflns = None
+        if reflns in unavailable:
+            reflns = None
+        try:
+            pdbx_resolution = doc.getResolution()
+        except KeyError:
+            pdbx_resolution = resolution
+        if pdbx_resolution in unavailable:
+            pdbx_resolution = np.nan
         meanI_over_sigI_obs = doc.getMeanIOverSigIObs()
-        if meanI_over_sigI_obs in {None, "?", ".", "NotAvailable"}:
+        if meanI_over_sigI_obs in unavailable:
             meanI_over_sigI_obs = None
         return cls(
-            resolution=entry.get("PDB-resolution"),
+            resolution=resolution,
             rfree=rfree,
-            r=entry.get("PDB-R"),
+            r=r,
             clashscore=entry.get("clashscore"),
             percent_rama_outliers=entry.get("percent-rama-outliers"),
             percent_rota_outliers=entry.get("percent-rota-outliers"),
@@ -356,7 +371,7 @@ class EntryValidation(DocBaseModel):
             molprobity=doc.calcMolProbityOverallScore(),
             mean_b_factor=doc.calcMeanStructureBFactor(),
             median_b_factor=doc.calcMedianStructureBFactor(),
-            pdbx_resolution=doc.getResolution(),
+            pdbx_resolution=pdbx_resolution,
             pdbx_reflns_resolution=reflns,
             meanI_over_sigI_obs=meanI_over_sigI_obs,
         )
