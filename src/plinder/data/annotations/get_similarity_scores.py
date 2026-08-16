@@ -2486,10 +2486,10 @@ class Scorer:
             )
         )
         for i, q_instance_chain in enumerate(query_protein_chains):
-            q_chain = q_instance_chain.split(".")[1]
+            q_chain = q_instance_chain.split(".", maxsplit=1)[1]
             q_chain_length = self.entries[query_system.pdb_id].chains[q_chain].length
             for j, t_instance_chain in enumerate(target_protein_chains):
-                t_chain = t_instance_chain.split(".")[1]
+                t_chain = t_instance_chain.split(".", maxsplit=1)[1]
                 try:
                     aln = query_target_entry_alignments.loc[(q_chain, t_chain)]
                 except KeyError:
@@ -2535,8 +2535,8 @@ class Scorer:
                 target_protein_chains[t_idx],
             )
             q_chain, t_chain = (
-                q_instance_chain.split(".")[1],
-                t_instance_chain.split(".")[1],
+                q_instance_chain.split(".", maxsplit=1)[1],
+                t_instance_chain.split(".", maxsplit=1)[1],
             )
             try:
                 aln = query_target_entry_alignments.loc[(q_chain, t_chain)]

@@ -952,7 +952,13 @@ def test_calculate_custom_similarity_scores_reuses_release_metrics(
     assert scores["metric"].str.startswith("protein_").any()
 
 
-def test_calculate_custom_protein_scores_uses_plinder_pocket(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    ("custom_chain", "target_system"),
+    [("A", "model_A"), ("1.A", "model_1.A")],
+)
+def test_calculate_custom_protein_scores_uses_plinder_pocket(
+    tmp_path, monkeypatch, custom_chain, target_system
+):
     plinder_entry = _scoring_entry(
         pdb_id="1abc",
         chain_id="B",
@@ -972,7 +978,7 @@ def test_calculate_custom_protein_scores_uses_plinder_pocket(tmp_path, monkeypat
                 "query_entry": "1abc",
                 "target_entry": "model",
                 "query_chain_mapped": "B",
-                "target_chain_mapped": "A",
+                "target_chain_mapped": custom_chain,
                 "source": "foldseek",
                 "qcov": 1.0,
                 "fident": 1.0,
@@ -989,7 +995,7 @@ def test_calculate_custom_protein_scores_uses_plinder_pocket(tmp_path, monkeypat
         {"foldseek": alignment},
         assets=_custom_assets(tmp_path),
         work_dir=tmp_path / "protein_score_work",
-        custom_chain_ids={"model_A"},
+        custom_chain_ids={target_system},
     )
 
     pocket = scores.loc[scores["metric"].astype(str) == "pocket_fident"]
@@ -997,7 +1003,7 @@ def test_calculate_custom_protein_scores_uses_plinder_pocket(tmp_path, monkeypat
     assert pocket.iloc[0]["similarity"] == 100
     assert pocket.iloc[0]["query_system"] == "1abc__1__1.B__1.Z"
     assert pocket.iloc[0]["query_ligand_id"] == "1abc__1__1.Z"
-    assert pocket.iloc[0]["target_system"] == "model_A"
+    assert pocket.iloc[0]["target_system"] == target_system
     assert pd.isna(pocket.iloc[0]["target_ligand_id"])
 
 
