@@ -84,3 +84,52 @@ def test_link_cli_uses_public_assets_and_auto_mode(tmp_path, monkeypatch):
     assert summary["outputs"]["protein_scores"]["rows"] == 2
     assert summary["outputs"]["aligned_pocket_residues"]["rows"] == 3
     assert Path(summary["summary"]).is_file()
+
+
+def test_link_cli_accepts_protein_fasta_for_mmseqs(tmp_path, monkeypatch):
+    fasta = tmp_path / "queries.faa"
+    fasta.write_text(">query-1\nACDEFGHIKLMNPQ\n")
+    output_dir = tmp_path / "links"
+    public_data = tmp_path / "public-release"
+    public_data.mkdir()
+    observed = {}
+
+    def fake_score(sequence_fasta, **kwargs):
+        observed["sequence_fasta"] = sequence_fasta
+        observed.update(kwargs)
+        kwargs["work_dir"].mkdir(parents=True)
+        paths = {
+            name: kwargs["work_dir"] / f"{name}.parquet"
+            for name in (
+                "protein_scores",
+                "aligned_pocket_residues",
+                "sequence_links",
+                "best_sequence_links",
+            )
+        }
+        for path in paths.values():
+            pd.DataFrame({"value": [1]}).to_parquet(path, index=False)
+        return SimpleNamespace(**paths)
+
+    monkeypatch.setattr(cli, "score_custom_sequence_file", fake_score)
+    args = cli.build_parser().parse_args(
+        [
+            str(fasta),
+            "--output-dir",
+            str(output_dir),
+            "--data-dir",
+            str(public_data),
+            "--backend",
+            "mmseqs",
+            "--save-aligned-pocket-residues",
+        ]
+    )
+    summary = cli._run_link(args)
+
+    assert observed["sequence_fasta"] == fasta
+    assert observed["backends"] == ("mmseqs",)
+    assert observed["data_dir"] == public_data
+    assert observed["store_aligned_pocket_residues"] is True
+    assert summary["input_files"] == [str(fasta)]
+    assert summary["score_modes"] == ["protein"]
+    assert summary["outputs"]["sequence_links"]["rows"] == 1

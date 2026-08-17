@@ -236,6 +236,34 @@ def test_write_custom_query_files_uses_protein_label_asym_ids(test_dir, tmp_path
     )
 
 
+def test_write_custom_sequence_query_files_preserves_fasta_ids(tmp_path):
+    source = tmp_path / "queries.faa"
+    source.write_text(
+        ">sample.with_symbols description\nACDEFGHIKLMNPQ\n"
+        ">second_sample\nRSTVWYACDEFGHI\n"
+    )
+
+    inputs = custom.write_custom_sequence_query_files(
+        source,
+        work_dir=tmp_path / "work",
+    )
+    manifest = pd.read_parquet(inputs.chain_manifest)
+
+    assert manifest["query_id"].tolist() == ["cq00000000", "cq00000001"]
+    assert manifest["structure_id"].tolist() == ["cq00000000", "cq00000001"]
+    assert manifest["sequence_id"].tolist() == [
+        "sample.with_symbols",
+        "second_sample",
+    ]
+    assert manifest["chain_asym_id"].tolist() == ["A", "A"]
+    assert manifest["sequence_source"].tolist() == ["polymer", "polymer"]
+    assert inputs.sequence_fasta.read_text().splitlines()[::2] == [
+        ">cq00000000",
+        ">cq00000001",
+    ]
+    assert not list(inputs.chain_cif_dir.iterdir())
+
+
 def test_write_custom_query_files_accepts_coordinate_only_mmcif(test_dir, tmp_path):
     from plinder.data.annotations.cif_utils import read_mmcif_file
 
@@ -1171,6 +1199,90 @@ def test_write_custom_aligned_pocket_residues(tmp_path, monkeypatch):
             "custom_residue_number": 42,
             "residue_identical": True,
             "source": "foldseek",
+        }
+    ]
+
+
+def test_write_custom_sequence_link_tables_adds_ligand_chemistry(tmp_path):
+    manifest = tmp_path / "query_chains.parquet"
+    pd.DataFrame(
+        {
+            "structure_id": ["cq00000000", "cq00000001"],
+            "chain_asym_id": ["A", "A"],
+            "sequence_id": ["sample-1", "sample-2"],
+            "sequence_length": [120, 80],
+        }
+    ).to_parquet(manifest, index=False)
+    protein_scores = tmp_path / "protein_scores.parquet"
+    pd.DataFrame(
+        [
+            {
+                "query_system": "1abc__1__1.B__1.Z",
+                "query_ligand_id": "1abc__1__1.Z",
+                "target_system": "cq00000000_A",
+                "protein_mapping": "1.B:0.A",
+                "protein_mapper": "mmseqs",
+                "source": "mmseqs",
+                "metric": "pocket_fident",
+                "similarity": 75,
+            }
+        ]
+    ).to_parquet(protein_scores, index=False)
+    annotation = tmp_path / "annotation.parquet"
+    pd.DataFrame(
+        [
+            {
+                "system_id": "1abc__1__1.B__1.Z",
+                "ligand_id": "1abc__1__1.Z",
+                "ligand_ccd_code": "ATP",
+                "ligand_unique_ccd_code": "ATP",
+                "ligand_rdkit_canonical_smiles": "Nc1ncnc2n(cnc12)C3OC(COP(=O)(O)O)C(O)C3O",
+            }
+        ]
+    ).to_parquet(annotation, index=False)
+
+    links, best = custom.write_custom_sequence_link_tables(
+        protein_scores=protein_scores,
+        chain_manifest=manifest,
+        annotation_table=annotation,
+        output_path=tmp_path / "sequence_links.parquet",
+        best_output_path=tmp_path / "best_sequence_links.parquet",
+    )
+
+    link_rows = pd.read_parquet(links)
+    assert link_rows.loc[0, "sequence_id"] == "sample-1"
+    assert link_rows.loc[0, "plinder_pdb_id"] == "1abc"
+    assert link_rows.loc[0, "plinder_ligand_ccd_code"] == "ATP"
+    assert link_rows.loc[0, "pocket_fident"] == 75
+    best_rows = pd.read_parquet(best)
+    assert best_rows["sequence_id"].tolist() == ["sample-1", "sample-2"]
+    assert pd.isna(best_rows.loc[1, "plinder_system_id"])
+
+
+def test_add_sequence_ids_to_aligned_pocket_residues(tmp_path):
+    manifest = tmp_path / "query_chains.parquet"
+    pd.DataFrame(
+        {"structure_id": ["cq00000000"], "sequence_id": ["original.sample"]}
+    ).to_parquet(manifest, index=False)
+    residues = tmp_path / "aligned_pocket_residues.parquet"
+    pd.DataFrame(
+        {
+            "custom_structure_id": ["cq00000000"],
+            "custom_residue_number": [42],
+        }
+    ).to_parquet(residues, index=False)
+
+    custom.add_sequence_ids_to_aligned_pocket_residues(
+        residues,
+        chain_manifest=manifest,
+    )
+
+    result = pd.read_parquet(residues)
+    assert result.to_dict("records") == [
+        {
+            "sequence_id": "original.sample",
+            "custom_structure_id": "cq00000000",
+            "custom_residue_number": 42,
         }
     ]
 
