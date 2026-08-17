@@ -196,6 +196,7 @@ _ChainInstanceMapping = str
 _ChainPairType = tuple[_ChainInstanceMapping, _ChainInstanceMapping]
 _SimilarityScoreDictType = dict[str, float]
 _Ligand3DCandidateType = dict[str, str | float | None]
+_LigandPairScoreType = dict[str, str | int]
 _PocketDataType = tuple[
     dict[str, dict[int, int]],
     dict[str, dict[int, Counter[str]]],
@@ -1791,6 +1792,13 @@ class Scorer:
             / f"shard={pdb_id[1:3]}"
             / f"{pdb_id}.parquet"
         )
+        ligand_pair_score_path = (
+            self.scores_dir
+            / "ligand_pair_scores"
+            / f"search_db={search_db}"
+            / f"shard={pdb_id[1:3]}"
+            / f"{pdb_id}.parquet"
+        )
         score_mode = b"deferred" if defer_ligand_3d else b"complete"
         holo_protein_scores_mode = b"excluded" if search_db == "holo" else None
         cached_score_is_current = False
@@ -1807,9 +1815,15 @@ class Scorer:
                 if defer_ligand_3d:
                     candidate_schema = pq.read_schema(candidate_path)
                     pq.read_metadata(candidate_path)
-                    cached_score_is_current = cached_score_is_current and set(
-                        schemas.LIGAND_3D_CANDIDATE_SCHEMA.names
-                    ).issubset(candidate_schema.names)
+                    ligand_pair_schema = pq.read_schema(ligand_pair_score_path)
+                    pq.read_metadata(ligand_pair_score_path)
+                    cached_score_is_current = (
+                        cached_score_is_current
+                        and set(schemas.LIGAND_3D_CANDIDATE_SCHEMA.names).issubset(
+                            candidate_schema.names
+                        )
+                        and ligand_pair_schema.equals(schemas.LIGAND_PAIR_SCORE_SCHEMA)
+                    )
             except (OSError, ValueError):
                 cached_score_is_current = False
         if overwrite or not cached_score_is_current:
@@ -1869,6 +1883,9 @@ class Scorer:
             ligand_3d_candidates: list[_Ligand3DCandidateType] | None = (
                 [] if defer_ligand_3d else None
             )
+            ligand_pair_scores: list[_LigandPairScoreType] | None = (
+                [] if defer_ligand_3d else None
+            )
             df = self.aggregate_scores(
                 pdb_id,
                 search_db=search_db,
@@ -1876,6 +1893,7 @@ class Scorer:
                 source_to_aln_file=source_to_aln_file,
                 query_entry_alignments=query_entry_alignments,
                 ligand_3d_candidates=ligand_3d_candidates,
+                ligand_pair_scores=ligand_pair_scores,
                 include_holo_protein_scores=search_db != "holo",
             )
             if df is not None and score_metrics is not None:
@@ -1915,6 +1933,9 @@ class Scorer:
             candidate_temporary = (
                 temporary_root / f"{search_db}-{pdb_id}.ligand-3d-candidates.parquet"
             )
+            ligand_pair_temporary = (
+                temporary_root / f"{search_db}-{pdb_id}.ligand-pair-scores.parquet"
+            )
             if ligand_3d_candidates is not None:
                 candidate_table = pa.Table.from_pylist(
                     ligand_3d_candidates,
@@ -1927,11 +1948,26 @@ class Scorer:
                 )
                 candidate_path.parent.mkdir(exist_ok=True, parents=True)
                 _atomic_copy_file(candidate_temporary, candidate_path)
+            if ligand_pair_scores is not None:
+                ligand_pair_table = pa.Table.from_pylist(
+                    ligand_pair_scores,
+                    schema=schemas.LIGAND_PAIR_SCORE_SCHEMA,
+                )
+                pq.write_table(
+                    ligand_pair_table,
+                    ligand_pair_temporary,
+                    compression="zstd",
+                )
+                ligand_pair_score_path.parent.mkdir(exist_ok=True, parents=True)
+                _atomic_copy_file(ligand_pair_temporary, ligand_pair_score_path)
             _atomic_copy_file(temporary, score_df_path)
             temporary.unlink(missing_ok=True)
             candidate_temporary.unlink(missing_ok=True)
+            ligand_pair_temporary.unlink(missing_ok=True)
             if ligand_3d_candidates is None:
                 candidate_path.unlink(missing_ok=True)
+            if ligand_pair_scores is None:
+                ligand_pair_score_path.unlink(missing_ok=True)
         except Exception as e:
             scratch = data_dir / "scratch" / "scores" / "aggregate_scores_failures"
             scratch.mkdir(exist_ok=True, parents=True)
@@ -1971,12 +2007,22 @@ class Scorer:
             / f"shard={pdb_id[1:3]}"
             / f"{pdb_id}.parquet"
         )
+        ligand_pair_score_path = (
+            self.scores_dir
+            / "ligand_pair_scores"
+            / f"search_db={search_db}"
+            / f"shard={pdb_id[1:3]}"
+            / f"{pdb_id}.parquet"
+        )
         if not allow_missing and (
-            not score_path.is_file() or not candidate_path.is_file()
+            not score_path.is_file()
+            or not candidate_path.is_file()
+            or not ligand_pair_score_path.is_file()
         ):
             raise FileNotFoundError(
-                f"targeted score repair requires existing score and candidate files: "
-                f"score={score_path.is_file()} candidates={candidate_path.is_file()}"
+                "targeted score repair requires existing score and pair files: "
+                f"score={score_path.is_file()} candidates={candidate_path.is_file()} "
+                f"ligand_pairs={ligand_pair_score_path.is_file()}"
             )
         existing_threshold_metadata = None
         if score_path.is_file():
@@ -2015,6 +2061,7 @@ class Scorer:
             for alignment_type in ["foldseek", "mmseqs"]
         }
         ligand_3d_candidates: list[_Ligand3DCandidateType] = []
+        ligand_pair_scores: list[_LigandPairScoreType] = []
         repaired = (
             self.aggregate_scores(
                 pdb_id,
@@ -2026,6 +2073,7 @@ class Scorer:
                 target_system_ids=target_system_ids,
                 target_ligand_ids=target_ligand_ids,
                 ligand_3d_candidates=ligand_3d_candidates,
+                ligand_pair_scores=ligand_pair_scores,
                 include_holo_protein_scores=False,
             )
             if target_system_ids
@@ -2093,10 +2141,31 @@ class Scorer:
                 f"targeted score repair produced duplicate candidates for {pdb_id}"
             )
 
+        pair_scores = (
+            pd.read_parquet(ligand_pair_score_path)
+            if ligand_pair_score_path.is_file()
+            else pd.DataFrame(columns=schemas.LIGAND_PAIR_SCORE_SCHEMA.names)
+        )
+        pair_scores = pair_scores[
+            ~pair_scores["target_entry"].astype(str).isin(affected_target_entries)
+        ]
+        if ligand_pair_scores:
+            repaired_pair_scores = pd.DataFrame(ligand_pair_scores)
+            pair_scores = (
+                repaired_pair_scores.reset_index(drop=True)
+                if pair_scores.empty
+                else pd.concat([pair_scores, repaired_pair_scores], ignore_index=True)
+            )
+        if pair_scores.duplicated(candidate_keys).any():
+            raise ValueError(
+                f"targeted score repair produced duplicate ligand pairs for {pdb_id}"
+            )
+
         temporary_root = scratch_dir or score_path.parent
         temporary_root.mkdir(exist_ok=True, parents=True)
         score_temporary = temporary_root / f"{pdb_id}.repair-scores.parquet"
         candidate_temporary = temporary_root / f"{pdb_id}.repair-candidates.parquet"
+        ligand_pair_temporary = temporary_root / f"{pdb_id}.repair-ligand-pairs.parquet"
         score_metadata = {
             b"plinder.ligand_3d": b"deferred",
             HOLO_PROTEIN_SCORES_METADATA_KEY: b"excluded",
@@ -2118,10 +2187,17 @@ class Scorer:
             index=False,
             schema=schemas.LIGAND_3D_CANDIDATE_SCHEMA,
         )
+        pair_scores.to_parquet(
+            ligand_pair_temporary,
+            index=False,
+            schema=schemas.LIGAND_PAIR_SCORE_SCHEMA,
+        )
         _atomic_copy_file(candidate_temporary, candidate_path)
+        _atomic_copy_file(ligand_pair_temporary, ligand_pair_score_path)
         _atomic_copy_file(score_temporary, score_path)
         score_temporary.unlink(missing_ok=True)
         candidate_temporary.unlink(missing_ok=True)
+        ligand_pair_temporary.unlink(missing_ok=True)
         return score_path
 
     def load_alignments(
@@ -2978,6 +3054,7 @@ class Scorer:
         query_entry_alignments: pd.DataFrame,
         data_dir: Path | None = None,
         ligand_3d_candidates: list[_Ligand3DCandidateType] | None = None,
+        ligand_pair_scores: list[_LigandPairScoreType] | None = None,
         query_ligand_ids: set[str] | None = None,
         target_system_ids: set[str] | None = None,
         target_ligand_ids: set[str] | None = None,
@@ -2989,6 +3066,7 @@ class Scorer:
                 query_entry_alignments,
                 data_dir=data_dir,
                 ligand_3d_candidates=ligand_3d_candidates,
+                ligand_pair_scores=ligand_pair_scores,
                 query_ligand_ids=query_ligand_ids,
                 target_system_ids=target_system_ids,
                 target_ligand_ids=target_ligand_ids,
@@ -3010,6 +3088,7 @@ class Scorer:
         query_entry_alignments: pd.DataFrame,
         data_dir: Path | None = None,
         ligand_3d_candidates: list[_Ligand3DCandidateType] | None = None,
+        ligand_pair_scores: list[_LigandPairScoreType] | None = None,
         query_ligand_ids: set[str] | None = None,
         target_system_ids: set[str] | None = None,
         target_ligand_ids: set[str] | None = None,
@@ -3212,6 +3291,36 @@ class Scorer:
                                 "target_ligand_id": target_ligand.id,
                             }
                         )
+                        if ligand_pair_scores is not None:
+                            compact_scores: dict[str, int] = {}
+                            for metric in (
+                                "pocket_qcov",
+                                "pocket_fident_qcov",
+                                "pli_qcov",
+                            ):
+                                value = combined.get(metric, 0.0)
+                                numeric = _finite_float_or_zero(value)
+                                if numeric < -1e-12 or numeric > 1.0 + 1e-12:
+                                    raise ValueError(
+                                        f"{metric} is outside [0, 1]: {numeric}"
+                                    )
+                                compact_scores[metric] = round(
+                                    min(1.0, max(0.0, numeric)) * 100
+                                )
+                            if any(compact_scores.values()):
+                                ligand_pair_scores.append(
+                                    {
+                                        "query_system": query_system.id,
+                                        "query_ligand_id": query_ligand.id,
+                                        "query_entry": query_ligand.pdb_id,
+                                        "query_ligand_asym_id": query_ligand.asym_id,
+                                        "target_system": target_system.id,
+                                        "target_ligand_id": target_ligand.id,
+                                        "target_entry": target_ligand.pdb_id,
+                                        "target_ligand_asym_id": target_ligand.asym_id,
+                                        **compact_scores,
+                                    }
+                                )
                         if (
                             ligand_3d_candidates is not None
                             and pocket_qcov > 0
@@ -3352,6 +3461,7 @@ class Scorer:
         target_system_ids: set[str] | None = None,
         target_ligand_ids: set[str] | None = None,
         ligand_3d_candidates: list[_Ligand3DCandidateType] | None = None,
+        ligand_pair_scores: list[_LigandPairScoreType] | None = None,
         include_holo_protein_scores: bool = False,
     ) -> Optional[pd.DataFrame]:
         if source_to_aln_file is None:
@@ -3400,6 +3510,7 @@ class Scorer:
                 query_entry_alignments,
                 data_dir=data_dir,
                 ligand_3d_candidates=ligand_3d_candidates,
+                ligand_pair_scores=ligand_pair_scores,
                 query_ligand_ids=query_ligand_ids,
                 target_system_ids=target_system_ids,
                 target_ligand_ids=target_ligand_ids,

@@ -23,6 +23,47 @@ from plinder.data.pipeline import io, tasks
 from plinder.data.pipeline.config import LigandConfig
 
 
+def _write_ligand_pair_scores(
+    data_dir: Path, pdb_id: str, candidates: list[dict]
+) -> Path:
+    output = (
+        data_dir
+        / "scores"
+        / "ligand_pair_scores"
+        / "search_db=holo"
+        / f"shard={pdb_id[1:3]}"
+        / f"{pdb_id}.parquet"
+    )
+    output.parent.mkdir(exist_ok=True, parents=True)
+    rows = []
+    for candidate in candidates:
+        rows.append(
+            {
+                key: candidate[key]
+                for key in [
+                    "query_system",
+                    "query_ligand_id",
+                    "query_entry",
+                    "query_ligand_asym_id",
+                    "target_system",
+                    "target_ligand_id",
+                    "target_entry",
+                    "target_ligand_asym_id",
+                ]
+            }
+            | {
+                "pocket_qcov": round(float(candidate["pocket_qcov"]) * 100),
+                "pocket_fident_qcov": 0,
+                "pli_qcov": 0,
+            }
+        )
+    pq.write_table(
+        pa.Table.from_pylist(rows, schema=schemas.LIGAND_PAIR_SCORE_SCHEMA),
+        output,
+    )
+    return output
+
+
 def _write_alignment_chain_lookup(data_dir: Path) -> None:
     index = data_dir / "index"
     index.mkdir(exist_ok=True, parents=True)
@@ -1793,8 +1834,13 @@ def test_score_repair_plans_full_and_target_only_queries(
     target_candidates = (
         tmp_path / "scores/ligand_3d_candidates/search_db=holo/shard=ab/1abc.parquet"
     )
+    target_ligand_pair_scores = (
+        tmp_path / "scores/ligand_pair_scores/search_db=holo/shard=ab/1abc.parquet"
+    )
     target_candidates.parent.mkdir(parents=True)
+    target_ligand_pair_scores.parent.mkdir(parents=True)
     target_candidates.touch()
+    target_ligand_pair_scores.touch()
     packed_candidates = tmp_path / "scores/ligand_3d_candidate_shards/shard=jk.parquet"
     packed_candidates.parent.mkdir(parents=True)
     pd.DataFrame({"query_entry": ["4jkl"]}).to_parquet(packed_candidates, index=False)
@@ -1958,10 +2004,15 @@ def test_bounded_score_repair_reverses_only_existing_target_candidates(
     candidate = (
         tmp_path / "scores/ligand_3d_candidates/search_db=holo/shard=de/2def.parquet"
     )
+    ligand_pair_scores = (
+        tmp_path / "scores/ligand_pair_scores/search_db=holo/shard=de/2def.parquet"
+    )
     score.parent.mkdir(parents=True)
     candidate.parent.mkdir(parents=True)
+    ligand_pair_scores.parent.mkdir(parents=True)
     score.touch()
     candidate.touch()
+    ligand_pair_scores.touch()
     assert published_scoring_query_ids(tmp_path) == {"1abc", "2def", "5mno"}
     invalid = tmp_path / "invalid-bounded.txt"
     invalid.write_text("3ghi\n")
@@ -2043,10 +2094,15 @@ def test_repair_batch_scores_drops_queries_that_are_no_longer_eligible(
     candidate = (
         tmp_path / "scores/ligand_3d_candidates/search_db=holo/shard=ab/1abc.parquet"
     )
+    ligand_pair_scores = (
+        tmp_path / "scores/ligand_pair_scores/search_db=holo/shard=ab/1abc.parquet"
+    )
     score.parent.mkdir(parents=True)
     candidate.parent.mkdir(parents=True)
+    ligand_pair_scores.parent.mkdir(parents=True)
     score.touch()
     candidate.touch()
+    ligand_pair_scores.touch()
 
     monkeypatch.setattr(
         tasks.utils,
@@ -2063,6 +2119,7 @@ def test_repair_batch_scores_drops_queries_that_are_no_longer_eligible(
 
     assert not score.exists()
     assert not candidate.exists()
+    assert not ligand_pair_scores.exists()
 
 
 def test_repair_target_remainders_drops_stalled_query_and_resumes_followers(
@@ -2079,14 +2136,19 @@ def test_repair_target_remainders_drops_stalled_query_and_resumes_followers(
             "repair_batch_index": [0, 0, 0],
         }
     ).to_parquet(repair_manifest, index=False)
-    score, candidate = score_pipeline._score_repair_query_paths(tmp_path, "1abc")
+    score, candidate, ligand_pair_scores = score_pipeline._score_repair_query_paths(
+        tmp_path, "1abc"
+    )
     score.parent.mkdir(parents=True)
     candidate.parent.mkdir(parents=True)
+    ligand_pair_scores.parent.mkdir(parents=True)
     score.touch()
     candidate.touch()
+    ligand_pair_scores.touch()
     completed_ns = repair_manifest.stat().st_mtime_ns + 1_000_000_000
     os.utime(score, ns=(completed_ns, completed_ns))
     os.utime(candidate, ns=(completed_ns, completed_ns))
+    os.utime(ligand_pair_scores, ns=(completed_ns, completed_ns))
     captured: list[dict[str, object]] = []
 
     def fake_repair_batch_scores(**kwargs) -> None:
@@ -2145,11 +2207,15 @@ def test_repair_target_remainders_removes_planned_drops_without_marking_them(
         }
     ).to_parquet(repair_manifest, index=False)
     for pdb_id in ["1abc", "2def"]:
-        score, candidate = score_pipeline._score_repair_query_paths(tmp_path, pdb_id)
+        score, candidate, ligand_pair_scores = score_pipeline._score_repair_query_paths(
+            tmp_path, pdb_id
+        )
         score.parent.mkdir(parents=True, exist_ok=True)
         candidate.parent.mkdir(parents=True, exist_ok=True)
+        ligand_pair_scores.parent.mkdir(parents=True, exist_ok=True)
         score.touch()
         candidate.touch()
+        ligand_pair_scores.touch()
     completed_ns = repair_manifest.stat().st_mtime_ns + 1_000_000_000
     for path in score_pipeline._score_repair_query_paths(tmp_path, "2def"):
         os.utime(path, ns=(completed_ns, completed_ns))
@@ -2193,16 +2259,21 @@ def test_finalize_score_repair_records_marked_targets_and_incomplete_full_querie
             "repair_mode": ["targets", "targets", "full"],
         }
     ).to_parquet(repair_manifest, index=False)
-    current_score, current_candidate = score_pipeline._score_repair_query_paths(
-        tmp_path, "1abc"
-    )
+    (
+        current_score,
+        current_candidate,
+        current_ligand_pair_scores,
+    ) = score_pipeline._score_repair_query_paths(tmp_path, "1abc")
     current_score.parent.mkdir(parents=True)
     current_candidate.parent.mkdir(parents=True)
+    current_ligand_pair_scores.parent.mkdir(parents=True)
     current_score.touch()
     current_candidate.touch()
+    current_ligand_pair_scores.touch()
     completed_ns = repair_manifest.stat().st_mtime_ns + 1_000_000_000
     os.utime(current_score, ns=(completed_ns, completed_ns))
     os.utime(current_candidate, ns=(completed_ns, completed_ns))
+    os.utime(current_ligand_pair_scores, ns=(completed_ns, completed_ns))
     marker_dir = score_pipeline._score_repair_marker_dir(tmp_path, repair_manifest)
     marker = marker_dir / "2def.json"
     marker.parent.mkdir(parents=True)
@@ -2583,12 +2654,18 @@ def test_ligand_3d_plan_deduplicates_positive_pocket_candidates(tmp_path) -> Non
         ),
         candidate_dir / "1abc.parquet",
     )
+    _write_ligand_pair_scores(
+        tmp_path,
+        "1abc",
+        pd.read_parquet(candidate_dir / "1abc.parquet").to_dict("records"),
+    )
     target_candidate_dir = candidate_dir.parent / "shard=de"
     target_candidate_dir.mkdir()
     pq.write_table(
         pa.Table.from_pylist([], schema=schemas.LIGAND_3D_CANDIDATE_SCHEMA),
         target_candidate_dir / "2def.parquet",
     )
+    _write_ligand_pair_scores(tmp_path, "2def", [])
     tasks.collate_ligand_3d_candidates(
         data_dir=tmp_path,
         shards=["ab", "de"],
@@ -2733,6 +2810,11 @@ def test_candidate_repair_patches_packed_shard_without_other_query_caches(
         ),
         packed,
     )
+    packed_ligand_pairs = tmp_path / "scores/ligand_pair_score_shards/shard=ab.parquet"
+    packed_ligand_pairs.parent.mkdir(parents=True)
+    packed_candidates = pd.read_parquet(packed).to_dict("records")
+    temporary_pair_path = _write_ligand_pair_scores(tmp_path, "1abc", packed_candidates)
+    copyfile(temporary_pair_path, packed_ligand_pairs)
     replacement = (
         tmp_path / "scores/ligand_3d_candidates/search_db=holo/shard=ab/1abc.parquet"
     )
@@ -2743,6 +2825,11 @@ def test_candidate_repair_patches_packed_shard_without_other_query_caches(
             schema=schemas.LIGAND_3D_CANDIDATE_SCHEMA,
         ),
         replacement,
+    )
+    _write_ligand_pair_scores(
+        tmp_path,
+        "1abc",
+        pd.read_parquet(replacement).to_dict("records"),
     )
 
     tasks.collate_ligand_3d_candidates(
@@ -2756,6 +2843,16 @@ def test_candidate_repair_patches_packed_shard_without_other_query_caches(
 
     repaired = pd.read_parquet(packed)
     assert set(zip(repaired["query_entry"], repaired["target_entry"])) == {
+        ("1abc", "2new"),
+        ("9abc", "8keep"),
+    }
+    repaired_ligand_pairs = pd.read_parquet(packed_ligand_pairs)
+    assert set(
+        zip(
+            repaired_ligand_pairs["query_entry"],
+            repaired_ligand_pairs["target_entry"],
+        )
+    ) == {
         ("1abc", "2new"),
         ("9abc", "8keep"),
     }
@@ -2927,6 +3024,7 @@ def test_finalize_ligand_3d_scores_validates_pair_and_packed_shards(
         pa.Table.from_pylist([candidate], schema=schemas.LIGAND_3D_CANDIDATE_SCHEMA),
         candidate_dir / "1abc.parquet",
     )
+    _write_ligand_pair_scores(tmp_path, "1abc", [candidate])
     tasks.collate_ligand_3d_candidates(
         data_dir=tmp_path,
         shards=["ab"],
@@ -3011,6 +3109,29 @@ def test_finalize_score_repair_accepts_refreshed_candidate_shards(tmp_path) -> N
         pa.Table.from_pylist([candidate], schema=schemas.LIGAND_3D_CANDIDATE_SCHEMA),
         candidate_path,
     )
+    ligand_pair_score_path = (
+        tmp_path / "scores/ligand_pair_score_shards/shard=ab.parquet"
+    )
+    ligand_pair_score_path.parent.mkdir(parents=True)
+    ligand_pair_score = {
+        key: candidate[key]
+        for key in [
+            "query_system",
+            "query_ligand_id",
+            "query_entry",
+            "query_ligand_asym_id",
+            "target_system",
+            "target_ligand_id",
+            "target_entry",
+            "target_ligand_asym_id",
+        ]
+    } | {"pocket_qcov": 50, "pocket_fident_qcov": 40, "pli_qcov": 30}
+    pq.write_table(
+        pa.Table.from_pylist(
+            [ligand_pair_score], schema=schemas.LIGAND_PAIR_SCORE_SCHEMA
+        ),
+        ligand_pair_score_path,
+    )
     pair_candidate_path = (
         tmp_path / "scores/ligand_3d_pair_candidate_shards/shard=ab.parquet"
     )
@@ -3032,6 +3153,7 @@ def test_finalize_score_repair_accepts_refreshed_candidate_shards(tmp_path) -> N
         pair_candidate_path,
     )
     candidate_stat = candidate_path.stat()
+    ligand_pair_score_stat = ligand_pair_score_path.stat()
     pair_candidate_stat = pair_candidate_path.stat()
     candidate_path.with_suffix(".json").write_text(
         json.dumps(
@@ -3048,6 +3170,12 @@ def test_finalize_score_repair_accepts_refreshed_candidate_shards(tmp_path) -> N
                     "path": str(pair_candidate_path.resolve()),
                     "size": pair_candidate_stat.st_size,
                     "mtime_ns": pair_candidate_stat.st_mtime_ns,
+                    "rows": 1,
+                },
+                "ligand_pair_output": {
+                    "path": str(ligand_pair_score_path.resolve()),
+                    "size": ligand_pair_score_stat.st_size,
+                    "mtime_ns": ligand_pair_score_stat.st_mtime_ns,
                     "rows": 1,
                 },
             }
@@ -3086,6 +3214,7 @@ def test_finalize_score_repair_accepts_refreshed_candidate_shards(tmp_path) -> N
     assert report["status"] == "complete"
     assert report["shard_count"] == 1
     assert report["candidate_rows"] == 1
+    assert report["ligand_pair_score_rows"] == 1
     assert report["pair_rows"] == 1
     assert (tmp_path / "scores/score_repair_manifest.json").is_file()
 

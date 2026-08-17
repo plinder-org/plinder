@@ -1895,6 +1895,21 @@ def test_get_score_df_defers_ligand_3d_and_writes_full_precision_candidates(
                 "pocket_qcov": 2 / 3,
             }
         )
+        kwargs["ligand_pair_scores"].append(
+            {
+                "query_system": "1abc_system",
+                "query_ligand_id": "1abc__1__1.B",
+                "query_entry": "1abc",
+                "query_ligand_asym_id": "B",
+                "target_system": "2def_system",
+                "target_ligand_id": "2def__1__1.Y",
+                "target_entry": "2def",
+                "target_ligand_asym_id": "Y",
+                "pocket_qcov": 27,
+                "pocket_fident_qcov": 19,
+                "pli_qcov": 11,
+            }
+        )
         return None
 
     monkeypatch.setattr(scorer, "aggregate_scores", candidate_scores)
@@ -1917,6 +1932,18 @@ def test_get_score_df_defers_ligand_3d_and_writes_full_precision_candidates(
 
     assert output.is_file()
     assert pd.read_parquet(candidates)["pocket_qcov"].item() == pytest.approx(2 / 3)
+    ligand_pair_scores = pd.read_parquet(
+        scorer.scores_dir
+        / "ligand_pair_scores"
+        / "search_db=holo"
+        / "shard=ab"
+        / "1abc.parquet"
+    )
+    assert ligand_pair_scores[
+        ["pocket_qcov", "pocket_fident_qcov", "pli_qcov"]
+    ].to_dict("records") == [
+        {"pocket_qcov": 27, "pocket_fident_qcov": 19, "pli_qcov": 11}
+    ]
     assert (scoring_module.pq.read_schema(output).metadata or {}).get(
         b"plinder.ligand_3d"
     ) == b"deferred"
@@ -2019,6 +2046,33 @@ def test_repair_score_df_targets_replaces_only_affected_target_rows(
         index=False,
         schema=scoring_module.schemas.LIGAND_3D_CANDIDATE_SCHEMA,
     )
+    ligand_pair_score_path = (
+        scorer.scores_dir / "ligand_pair_scores/search_db=holo/shard=ab/1abc.parquet"
+    )
+    ligand_pair_score_path.parent.mkdir(parents=True)
+
+    def ligand_pair_row(target_entry: str, target_system: str) -> dict[str, object]:
+        row = candidate_row(target_entry, target_system)
+        return {
+            key: value
+            for key, value in row.items()
+            if key not in {"protein_mapping", "protein_mapper", "pocket_qcov"}
+        } | {
+            "pocket_qcov": 60,
+            "pocket_fident_qcov": 50,
+            "pli_qcov": 40,
+        }
+
+    pd.DataFrame(
+        [
+            ligand_pair_row("2def", "2def__1__1.X__1.Y"),
+            ligand_pair_row("3ghi", "3ghi__1__1.X__1.Y"),
+        ]
+    ).to_parquet(
+        ligand_pair_score_path,
+        index=False,
+        schema=scoring_module.schemas.LIGAND_PAIR_SCORE_SCHEMA,
+    )
     entries = {
         "1abc": SimpleNamespace(systems={"1abc__1__1.A__1.B": object()}),
         "2def": SimpleNamespace(systems={"2def__2__1.X__1.Y": object()}),
@@ -2035,6 +2089,9 @@ def test_repair_score_df_targets_replaces_only_affected_target_rows(
         assert kwargs["target_system_ids"] == {"2def__2__1.X__1.Y"}
         kwargs["ligand_3d_candidates"].append(
             candidate_row("2def", "2def__2__1.X__1.Y")
+        )
+        kwargs["ligand_pair_scores"].append(
+            ligand_pair_row("2def", "2def__2__1.X__1.Y")
         )
         return pd.DataFrame([score_row("2def__2__1.X__1.Y", 80)])
 
@@ -2055,6 +2112,10 @@ def test_repair_score_df_targets_replaces_only_affected_target_rows(
     assert not repaired["metric"].str.startswith("protein_").any()
     candidates = pd.read_parquet(candidate_path)
     assert set(candidates["target_system"]) == {
+        "2def__2__1.X__1.Y",
+        "3ghi__1__1.X__1.Y",
+    }
+    assert set(pd.read_parquet(ligand_pair_score_path)["target_system"]) == {
         "2def__2__1.X__1.Y",
         "3ghi__1__1.X__1.Y",
     }
@@ -2117,6 +2178,18 @@ def test_repair_score_df_targets_can_create_bounded_query_outputs(
         assert kwargs["target_system_ids"] == {"2def__1__1.X__1.Y"}
         assert kwargs["target_ligand_ids"] == {"2def__1__1.Y"}
         kwargs["ligand_3d_candidates"].append(candidate_row)
+        kwargs["ligand_pair_scores"].append(
+            {
+                key: value
+                for key, value in candidate_row.items()
+                if key not in {"protein_mapping", "protein_mapper", "pocket_qcov"}
+            }
+            | {
+                "pocket_qcov": 75,
+                "pocket_fident_qcov": 65,
+                "pli_qcov": 55,
+            }
+        )
         return pd.DataFrame([score_row])
 
     monkeypatch.setattr(scorer, "aggregate_scores", repaired_scores)
@@ -2137,6 +2210,10 @@ def test_repair_score_df_targets_can_create_bounded_query_outputs(
         tmp_path / "scores/ligand_3d_candidates/search_db=holo/shard=ab/1abc.parquet"
     )
     assert pd.read_parquet(candidate_path)["pocket_qcov"].tolist() == [0.75]
+    ligand_pair_score_path = (
+        tmp_path / "scores/ligand_pair_scores/search_db=holo/shard=ab/1abc.parquet"
+    )
+    assert pd.read_parquet(ligand_pair_score_path)["pli_qcov"].tolist() == [55]
 
 
 def test_map_alignment_files_replaces_stale_schema_without_force(
@@ -2757,8 +2834,11 @@ def test_holo_scores_are_emitted_per_ligand_pair(tmp_path, monkeypatch) -> None:
             )
         ]
         return (
-            {"pocket_qcov_foldseek": qcov},
-            {},
+            {
+                "pocket_qcov_foldseek": qcov,
+                "pocket_fident_qcov_foldseek": 0.19 * qcov,
+            },
+            {"pli_qcov_foldseek": 0.11 * qcov},
             {"pocket_qcov_foldseek": mapping},
         )
 
@@ -2821,11 +2901,13 @@ def test_holo_scores_are_emitted_per_ligand_pair(tmp_path, monkeypatch) -> None:
     assert len(protein_calls) == 4
 
     candidates = []
+    ligand_pair_scores = []
     protein_only_scores = list(
         scorer.get_scores_holo(
             query_system,
             alignments,
             ligand_3d_candidates=candidates,
+            ligand_pair_scores=ligand_pair_scores,
         )
     )
 
@@ -2844,6 +2926,21 @@ def test_holo_scores_are_emitted_per_ligand_pair(tmp_path, monkeypatch) -> None:
             "protein_mapping": "1.A:1.X",
             "protein_mapper": "foldseek",
             "pocket_qcov": 1.0,
+        }
+    ]
+    assert ligand_pair_scores == [
+        {
+            "query_system": query_system.id,
+            "query_ligand_id": query_ligands[0].id,
+            "query_entry": "1abc",
+            "query_ligand_asym_id": "C",
+            "target_system": target_system.id,
+            "target_ligand_id": target_ligands[0].id,
+            "target_entry": "2def",
+            "target_ligand_asym_id": "Z",
+            "pocket_qcov": 100,
+            "pocket_fident_qcov": 19,
+            "pli_qcov": 11,
         }
     ]
 

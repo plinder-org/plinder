@@ -2260,13 +2260,23 @@ def scatter_missing_scores(
                 / f"shard={pdb_id[1:3]}"
                 / f"{pdb_id}.parquet"
             )
+            ligand_pair_score_path = (
+                data_dir
+                / "scores"
+                / "ligand_pair_scores"
+                / "search_db=holo"
+                / f"shard={pdb_id[1:3]}"
+                / f"{pdb_id}.parquet"
+            )
             try:
                 metadata = pq.read_schema(score_path).metadata or {}
+                ligand_pair_schema = pq.read_schema(ligand_pair_score_path)
             except (OSError, ValueError):
                 continue
             if (
                 metadata.get(b"plinder.ligand_3d") in {b"deferred", b"complete"}
                 and candidate_path.is_file()
+                and ligand_pair_schema.equals(schemas.LIGAND_PAIR_SCORE_SCHEMA)
             ):
                 complete_holo.append(pdb_id)
         present["holo"] = complete_holo
@@ -2478,6 +2488,14 @@ def repair_batch_scores(
                 / f"shard={pdb_id[1:3]}"
                 / f"{pdb_id}.parquet"
             ).unlink(missing_ok=True)
+            (
+                data_dir
+                / "scores"
+                / "ligand_pair_scores"
+                / "search_db=holo"
+                / f"shard={pdb_id[1:3]}"
+                / f"{pdb_id}.parquet"
+            ).unlink(missing_ok=True)
         elif mode == "full":
             if scorer is None:
                 raise RuntimeError("score repair unexpectedly lacks a scorer")
@@ -2556,6 +2574,10 @@ def _ligand_3d_pair_candidate_shard_path(data_dir: Path, shard: str) -> Path:
     )
 
 
+def _ligand_pair_score_shard_path(data_dir: Path, shard: str) -> Path:
+    return data_dir / "scores" / "ligand_pair_score_shards" / f"shard={shard}.parquet"
+
+
 def _ligand_3d_candidate_input_signatures(
     data_dir: Path, pdb_ids: Sequence[str]
 ) -> list[dict[str, int | str]]:
@@ -2576,6 +2598,35 @@ def _ligand_3d_candidate_input_signatures(
         )
         if missing:
             raise ValueError(f"candidate file {path} is missing columns {missing}")
+        signatures.append(
+            {
+                "pdb_id": pdb_id,
+                "path": str(path.resolve()),
+                "size": stat.st_size,
+                "mtime_ns": stat.st_mtime_ns,
+                "rows": pq.ParquetFile(path).metadata.num_rows,
+            }
+        )
+    return signatures
+
+
+def _ligand_pair_score_input_signatures(
+    data_dir: Path, pdb_ids: Sequence[str]
+) -> list[dict[str, int | str]]:
+    signatures: list[dict[str, int | str]] = []
+    for pdb_id in pdb_ids:
+        path = (
+            data_dir
+            / "scores"
+            / "ligand_pair_scores"
+            / "search_db=holo"
+            / f"shard={pdb_id[1:3]}"
+            / f"{pdb_id}.parquet"
+        )
+        stat = path.stat()
+        schema = pq.read_schema(path)
+        if not schema.equals(schemas.LIGAND_PAIR_SCORE_SCHEMA):
+            raise ValueError(f"ligand pair score file has unexpected schema: {path}")
         signatures.append(
             {
                 "pdb_id": pdb_id,
@@ -2646,18 +2697,24 @@ def collate_ligand_3d_candidates(
             continue
         try:
             inputs = _ligand_3d_candidate_input_signatures(data_dir, pdb_ids)
+            ligand_pair_inputs = _ligand_pair_score_input_signatures(data_dir, pdb_ids)
         except FileNotFoundError as exc:
             raise FileNotFoundError(
-                f"ligand 3D candidates are incomplete for shard {shard}: {exc}"
+                f"ligand score inputs are incomplete for shard {shard}: {exc}"
             ) from exc
         output, manifest = _ligand_3d_candidate_shard_paths(data_dir, shard)
         pair_output = _ligand_3d_pair_candidate_shard_path(data_dir, shard)
-        if patch_existing and not output.is_file():
+        ligand_pair_output = _ligand_pair_score_shard_path(data_dir, shard)
+        if patch_existing and (
+            not output.is_file() or not ligand_pair_output.is_file()
+        ):
             raise FileNotFoundError(
-                f"candidate patch requires existing shard: {output}"
+                "ligand score patch requires existing shards: "
+                f"candidates={output.is_file()} pairs={ligand_pair_output.is_file()}"
             )
         output_is_current = False
         pair_output_is_current = False
+        ligand_pair_output_is_current = False
         payload: dict[str, Any] = {}
         if not patch_existing and output.is_file() and manifest.is_file():
             try:
@@ -2689,11 +2746,32 @@ def collate_ligand_3d_candidates(
                         )
                         and payload.get("pair_output") == current_pair_output
                     )
+                if output_is_current and ligand_pair_output.is_file():
+                    ligand_pair_stat = ligand_pair_output.stat()
+                    current_ligand_pair_output = {
+                        "path": str(ligand_pair_output.resolve()),
+                        "size": ligand_pair_stat.st_size,
+                        "mtime_ns": ligand_pair_stat.st_mtime_ns,
+                        "rows": pq.ParquetFile(ligand_pair_output).metadata.num_rows,
+                    }
+                    ligand_pair_output_is_current = (
+                        payload.get("ligand_pair_inputs") == ligand_pair_inputs
+                        and payload.get("ligand_pair_output")
+                        == current_ligand_pair_output
+                        and pq.read_schema(ligand_pair_output).equals(
+                            schemas.LIGAND_PAIR_SCORE_SCHEMA
+                        )
+                    )
             except (OSError, TypeError, ValueError):
                 output_is_current = False
                 pair_output_is_current = False
+                ligand_pair_output_is_current = False
 
-        if output_is_current and pair_output_is_current:
+        if (
+            output_is_current
+            and pair_output_is_current
+            and ligand_pair_output_is_current
+        ):
             outputs.append(output)
             continue
 
@@ -2755,6 +2833,105 @@ def collate_ligand_3d_candidates(
             install.replace(output)
             temporary.unlink(missing_ok=True)
 
+        ligand_pair_temporary = scratch_dir / f"ligand-pair-shard={shard}.parquet"
+        if not ligand_pair_output_is_current:
+            ligand_pair_columns_sql = ", ".join(schemas.LIGAND_PAIR_SCORE_SCHEMA.names)
+            ligand_pair_source_paths = [
+                Path(str(item["path"])) for item in ligand_pair_inputs
+            ]
+            ligand_pair_paths_sql = ", ".join(
+                f"'{path.as_posix()}'" for path in ligand_pair_source_paths
+            )
+            ligand_pair_temporary.unlink(missing_ok=True)
+            if patch_existing:
+                connection.register(
+                    "ligand_pair_replacement_queries",
+                    pd.DataFrame({"query_entry": replaced_pdb_ids}),
+                )
+                ligand_pair_replacement_sql = (
+                    f"SELECT {ligand_pair_columns_sql} "
+                    f"FROM read_parquet([{ligand_pair_paths_sql}])"
+                    if ligand_pair_source_paths
+                    else f"SELECT {ligand_pair_columns_sql} FROM "
+                    f"read_parquet('{ligand_pair_output.as_posix()}') WHERE false"
+                )
+                ligand_pair_source_sql = f"""
+                    SELECT {ligand_pair_columns_sql}
+                    FROM read_parquet('{ligand_pair_output.as_posix()}') AS existing
+                    ANTI JOIN ligand_pair_replacement_queries USING (query_entry)
+                    UNION ALL BY NAME
+                    {ligand_pair_replacement_sql}
+                """
+            else:
+                ligand_pair_source_sql = (
+                    f"SELECT {ligand_pair_columns_sql} "
+                    f"FROM read_parquet([{ligand_pair_paths_sql}])"
+                )
+            connection.sql(
+                f"""
+                COPY (
+                    SELECT * FROM ({ligand_pair_source_sql})
+                    ORDER BY
+                        query_entry,
+                        query_ligand_asym_id,
+                        target_entry,
+                        target_ligand_asym_id,
+                        query_system,
+                        query_ligand_id,
+                        target_system,
+                        target_ligand_id
+                ) TO '{ligand_pair_temporary.as_posix()}' (
+                    FORMAT PARQUET,
+                    COMPRESSION ZSTD
+                )
+                """
+            )
+            observed_ligand_pair_rows = pq.ParquetFile(
+                ligand_pair_temporary
+            ).metadata.num_rows
+            expected_ligand_pair_rows = connection.sql(
+                f"SELECT count(*) FROM ({ligand_pair_source_sql})"
+            ).fetchone()[0]
+            duplicate_ligand_pairs = connection.sql(
+                f"""
+                SELECT count(*)
+                FROM (
+                    SELECT
+                        query_system,
+                        query_ligand_id,
+                        target_system,
+                        target_ligand_id
+                    FROM read_parquet('{ligand_pair_temporary.as_posix()}')
+                    GROUP BY ALL
+                    HAVING count(*) > 1
+                )
+                """
+            ).fetchone()[0]
+            if (
+                observed_ligand_pair_rows != expected_ligand_pair_rows
+                or duplicate_ligand_pairs
+            ):
+                connection.close()
+                raise ValueError(
+                    f"ligand pair score shard {shard} has "
+                    f"{observed_ligand_pair_rows}/{expected_ligand_pair_rows} rows "
+                    f"and {duplicate_ligand_pairs} duplicate pairs"
+                )
+            if not pq.read_schema(ligand_pair_temporary).equals(
+                schemas.LIGAND_PAIR_SCORE_SCHEMA
+            ):
+                connection.close()
+                raise ValueError(
+                    f"ligand pair score shard {shard} has an unexpected schema"
+                )
+            ligand_pair_output.parent.mkdir(exist_ok=True, parents=True)
+            ligand_pair_install = ligand_pair_output.with_suffix(
+                ligand_pair_output.suffix + ".tmp"
+            )
+            copyfile(ligand_pair_temporary, ligand_pair_install)
+            ligand_pair_install.replace(ligand_pair_output)
+            ligand_pair_temporary.unlink(missing_ok=True)
+
         pair_temporary = scratch_dir / f"pair-shard={shard}.parquet"
         pair_temporary.unlink(missing_ok=True)
         connection.sql(
@@ -2793,6 +2970,7 @@ def collate_ligand_3d_candidates(
         output_stat = output.stat()
         observed_rows = pq.ParquetFile(output).metadata.num_rows
         pair_output_stat = pair_output.stat()
+        ligand_pair_output_stat = ligand_pair_output.stat()
         payload = {
             "shard": shard,
             "inputs": (
@@ -2815,6 +2993,21 @@ def collate_ligand_3d_candidates(
                 "size": pair_output_stat.st_size,
                 "mtime_ns": pair_output_stat.st_mtime_ns,
                 "rows": pq.ParquetFile(pair_output).metadata.num_rows,
+            },
+            "ligand_pair_inputs": (
+                {
+                    "base": "existing packed ligand pair score shard",
+                    "replaced_query_ids": replaced_pdb_ids,
+                    "replacements": ligand_pair_inputs,
+                }
+                if patch_existing
+                else ligand_pair_inputs
+            ),
+            "ligand_pair_output": {
+                "path": str(ligand_pair_output.resolve()),
+                "size": ligand_pair_output_stat.st_size,
+                "mtime_ns": ligand_pair_output_stat.st_mtime_ns,
+                "rows": pq.ParquetFile(ligand_pair_output).metadata.num_rows,
             },
         }
         manifest.parent.mkdir(exist_ok=True, parents=True)

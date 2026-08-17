@@ -196,6 +196,22 @@ LIGAND_3D_CANDIDATE_SCHEMA = pa.schema(
     ]
 )
 
+LIGAND_PAIR_SCORE_SCHEMA = pa.schema(
+    [
+        ("query_system", pa.string()),
+        ("query_ligand_id", pa.string()),
+        ("query_entry", pa.string()),
+        ("query_ligand_asym_id", pa.string()),
+        ("target_system", pa.string()),
+        ("target_ligand_id", pa.string()),
+        ("target_entry", pa.string()),
+        ("target_ligand_asym_id", pa.string()),
+        ("pocket_qcov", pa.int8()),
+        ("pocket_fident_qcov", pa.int8()),
+        ("pli_qcov", pa.int8()),
+    ]
+)
+
 LIGAND_3D_PAIR_CANDIDATE_SCHEMA = pa.schema(
     [
         ("query_entry", pa.string()),

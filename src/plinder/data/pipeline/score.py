@@ -800,11 +800,15 @@ def _score_repair_batch(
     return cast(list[dict[str, Any]], selected.to_dict("records"))
 
 
-def _score_repair_query_paths(data_dir: Path, pdb_id: str) -> tuple[Path, Path]:
+def _score_repair_query_paths(data_dir: Path, pdb_id: str) -> tuple[Path, Path, Path]:
     return (
         data_dir / "dbs/subdbs/search_db=holo" / f"{pdb_id}.parquet",
         data_dir
         / "scores/ligand_3d_candidates/search_db=holo"
+        / f"shard={pdb_id[1:3]}"
+        / f"{pdb_id}.parquet",
+        data_dir
+        / "scores/ligand_pair_scores/search_db=holo"
         / f"shard={pdb_id[1:3]}"
         / f"{pdb_id}.parquet",
     )
@@ -813,11 +817,10 @@ def _score_repair_query_paths(data_dir: Path, pdb_id: str) -> tuple[Path, Path]:
 def _score_repair_query_is_current(
     data_dir: Path, pdb_id: str, *, repair_started_ns: int
 ) -> bool:
-    score_path, candidate_path = _score_repair_query_paths(data_dir, pdb_id)
     try:
-        return (
-            score_path.stat().st_mtime_ns > repair_started_ns
-            and candidate_path.stat().st_mtime_ns > repair_started_ns
+        return all(
+            path.stat().st_mtime_ns > repair_started_ns
+            for path in _score_repair_query_paths(data_dir, pdb_id)
         )
     except OSError:
         return False
@@ -1461,13 +1464,25 @@ def record_dropped_queries(
             / f"shard={pdb_id[1:3]}"
             / f"{pdb_id}.parquet"
         )
+        ligand_pair_score_path = (
+            data_dir
+            / "scores"
+            / "ligand_pair_scores"
+            / "search_db=holo"
+            / f"shard={pdb_id[1:3]}"
+            / f"{pdb_id}.parquet"
+        )
         try:
             metadata = pq.read_schema(score_path).metadata or {}
+            ligand_pair_schema = pq.read_schema(ligand_pair_score_path)
         except (OSError, ValueError):
             metadata = {}
+            ligand_pair_schema = None
         complete = (
             metadata.get(b"plinder.ligand_3d") in {b"deferred", b"complete"}
             and candidate_path.is_file()
+            and ligand_pair_schema is not None
+            and ligand_pair_schema.equals(schemas.LIGAND_PAIR_SCORE_SCHEMA)
         )
         if not complete:
             score_ids.add(pdb_id)
@@ -3673,20 +3688,30 @@ def finalize_score_repair_artifacts(
 
     repair_started_ns = repair_manifest.stat().st_mtime_ns
     candidate_dir = data_dir / "scores" / "ligand_3d_candidate_shards"
+    ligand_pair_score_dir = data_dir / "scores" / "ligand_pair_score_shards"
     pair_candidate_dir = data_dir / "scores" / "ligand_3d_pair_candidate_shards"
     pair_dir = data_dir / "scores" / "ligand_3d_by_query"
     score_dir = data_dir / "scores" / "search_db=holo"
     candidate_rows = 0
+    ligand_pair_score_rows = 0
     pair_rows = 0
     score_rows = 0
     started = perf_counter()
     for index, shard in enumerate(shards, start=1):
         candidate = candidate_dir / f"shard={shard}.parquet"
+        ligand_pair_score = ligand_pair_score_dir / f"shard={shard}.parquet"
         pair_candidate = pair_candidate_dir / f"shard={shard}.parquet"
         pair = pair_dir / f"{shard}.parquet"
         score = score_dir / f"{shard}.parquet"
         manifest_path = candidate.with_suffix(".json")
-        required_paths = [candidate, pair_candidate, pair, score, manifest_path]
+        required_paths = [
+            candidate,
+            ligand_pair_score,
+            pair_candidate,
+            pair,
+            score,
+            manifest_path,
+        ]
         missing_paths = [path for path in required_paths if not path.is_file()]
         if missing_paths:
             raise FileNotFoundError(
@@ -3700,8 +3725,12 @@ def finalize_score_repair_artifacts(
                 f"invalid ligand 3D candidate manifest: {manifest_path}"
             ) from exc
         candidate_stat = candidate.stat()
+        ligand_pair_score_stat = ligand_pair_score.stat()
         pair_candidate_stat = pair_candidate.stat()
         candidate_row_count = pq.ParquetFile(candidate).metadata.num_rows
+        ligand_pair_score_row_count = pq.ParquetFile(
+            ligand_pair_score
+        ).metadata.num_rows
         pair_candidate_row_count = pq.ParquetFile(pair_candidate).metadata.num_rows
         expected_candidate = {
             "path": str(candidate.resolve()),
@@ -3715,9 +3744,17 @@ def finalize_score_repair_artifacts(
             "mtime_ns": pair_candidate_stat.st_mtime_ns,
             "rows": pair_candidate_row_count,
         }
+        expected_ligand_pair_score = {
+            "path": str(ligand_pair_score.resolve()),
+            "size": ligand_pair_score_stat.st_size,
+            "mtime_ns": ligand_pair_score_stat.st_mtime_ns,
+            "rows": ligand_pair_score_row_count,
+        }
         if (
             candidate_manifest.get("shard") != shard
             or candidate_manifest.get("output") != expected_candidate
+            or candidate_manifest.get("ligand_pair_output")
+            != expected_ligand_pair_score
             or candidate_manifest.get("pair_output") != expected_pair_candidate
         ):
             raise ValueError(
@@ -3734,6 +3771,9 @@ def finalize_score_repair_artifacts(
                 pq.read_schema(pair_candidate).names
             )
         )
+        ligand_pair_score_schema_matches = pq.read_schema(ligand_pair_score).equals(
+            schemas.LIGAND_PAIR_SCORE_SCHEMA
+        )
         pair_missing = sorted(
             set(schemas.LIGAND_3D_SCORE_SCHEMA.names).difference(
                 pq.read_schema(pair).names
@@ -3748,6 +3788,10 @@ def finalize_score_repair_artifacts(
             name: columns
             for name, columns in [
                 ("candidate", candidate_missing),
+                (
+                    "ligand_pair_score",
+                    [] if ligand_pair_score_schema_matches else ["unexpected schema"],
+                ),
                 ("pair_candidate", pair_candidate_missing),
                 ("pair", pair_missing),
                 ("score", score_missing),
@@ -3763,6 +3807,7 @@ def finalize_score_repair_artifacts(
         newest_input_ns = max(
             repair_started_ns,
             candidate_stat.st_mtime_ns,
+            ligand_pair_score_stat.st_mtime_ns,
             pair_candidate_stat.st_mtime_ns,
             pair.stat().st_mtime_ns,
         )
@@ -3771,6 +3816,7 @@ def finalize_score_repair_artifacts(
                 f"repaired score shard {score} predates its current inputs"
             )
         candidate_rows += candidate_row_count
+        ligand_pair_score_rows += ligand_pair_score_row_count
         pair_rows += pq.ParquetFile(pair).metadata.num_rows
         score_rows += pq.ParquetFile(score).metadata.num_rows
         if index % 100 == 0 or index == len(shards):
@@ -3787,6 +3833,7 @@ def finalize_score_repair_artifacts(
         "repair_manifest": _source_signature(repair_manifest),
         "shard_count": len(shards),
         "candidate_rows": candidate_rows,
+        "ligand_pair_score_rows": ligand_pair_score_rows,
         "pair_rows": pair_rows,
         "score_rows": score_rows,
     }
