@@ -67,6 +67,18 @@ extensions = [
 nb_custom_formats = {".ipynb": ["jupytext.reads", {"fmt": "ipynb"}]}
 nb_execution_timeout = 720
 nb_kernel_rgx_aliases = {"plinder.*": "python3"}
+# TODO(docs-v3): these notebooks were migrated to the v3 schema (new cluster
+# column names, system_receptor_type, structure APIs) but the docs build
+# executes them against the published v2 dataset, so re-execution fails. Skip
+# executing them (committed outputs are rendered instead) until the v3 dataset
+# is published; then remove this list to restore live execution.
+nb_execution_excludepatterns = [
+    "examples/2_query_filter_index.ipynb",
+    "examples/3_access_system_files.ipynb",
+    "examples/4_align_mask_crop.ipynb",
+    "examples/5_dataset_and_loader.ipynb",
+    "tutorial/api.ipynb",
+]
 myst_enable_extensions = [
     "amsmath",
     "attrs_inline",
