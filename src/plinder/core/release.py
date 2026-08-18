@@ -36,14 +36,12 @@ RELEASE_PATHS = {
     "ligand_archives_manifest": "ligand_archives/manifest.json",
     "ligand_scores": "ligand_scores",
     "interface_scores": "interface_scores",
-    "ligand_clusters": "ligand_clusters",
     "ligand_sampling": "ligand_sampling",
-    "interface_clusters": "interface_clusters",
     "interface_sampling": "interface_sampling",
     "search_databases": "search_databases",
     "search_database": "search_databases/holo_{backend}",
-    "sucos_export": "exports/all_sucos_shape_pocket_qcov.parquet",
-    "exports": "exports",
+    "ligand_similarity_scores": "exports/ligand_similarity_scores.parquet",
+    "interface_similarity_scores": "exports/interface_similarity_scores.parquet",
 }
 
 

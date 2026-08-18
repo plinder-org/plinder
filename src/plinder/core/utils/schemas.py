@@ -94,7 +94,7 @@ INTERFACE_SCORE_SHARD_SCHEMA = pa.schema(
     ]
 )
 
-INTERFACE_QCOV_EXPORT_SCHEMA = pa.schema(
+INTERFACE_SIMILARITY_EXPORT_SCHEMA = pa.schema(
     [
         ("query_system", pa.string()),
         ("target_system", pa.string()),
@@ -209,6 +209,19 @@ LIGAND_PAIR_SCORE_SCHEMA = pa.schema(
         ("pocket_qcov", pa.int8()),
         ("pocket_fident_qcov", pa.int8()),
         ("pli_qcov", pa.int8()),
+    ]
+)
+
+LIGAND_SIMILARITY_EXPORT_SCHEMA = pa.schema(
+    [
+        ("query_system", pa.string()),
+        ("query_ligand_id", pa.string()),
+        ("target_system", pa.string()),
+        ("target_ligand_id", pa.string()),
+        ("pocket_qcov", pa.int8()),
+        ("pocket_fident_qcov", pa.int8()),
+        ("pli_qcov", pa.int8()),
+        ("sucos_shape", pa.int8()),
     ]
 )
 

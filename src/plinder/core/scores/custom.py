@@ -10,6 +10,7 @@ import re
 import shutil
 import subprocess
 from bisect import bisect_left
+from collections import Counter
 from collections.abc import Iterable as IterableABC
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -463,9 +464,7 @@ def write_custom_sequence_query_files(
         raise ValueError(f"protein FASTA contains no records: {source}")
     identifiers = [identifier for identifier, _ in records]
     duplicates = sorted(
-        identifier
-        for identifier in set(identifiers)
-        if identifiers.count(identifier) > 1
+        identifier for identifier, count in Counter(identifiers).items() if count > 1
     )
     if duplicates:
         raise ValueError(f"protein FASTA repeats identifiers: {duplicates[:10]}")
@@ -1980,6 +1979,7 @@ def calculate_custom_protein_similarity_scores(
         source_to_full_db_file={},
         db_dir=work_dir,
         scores_dir=work_dir,
+        include_pli_fident=True,
     )
     selected_plinder_systems = (
         set(map(str, plinder_system_ids)) if plinder_system_ids is not None else None
@@ -2244,18 +2244,38 @@ def write_custom_sequence_link_tables(
         raise ValueError("sequence manifest has ambiguous target-system IDs")
 
     scores = pd.read_parquet(protein_scores)
+    score_identity_columns = [
+        "query_system",
+        "query_ligand_id",
+        "target_system",
+        "protein_mapping",
+        "protein_mapper",
+        "source",
+    ]
+    score_pair_columns = [
+        "query_system",
+        "query_ligand_id",
+        "target_system",
+    ]
     pocket = scores.loc[
         scores["metric"].astype(str).eq("pocket_fident"),
         [
-            "query_system",
-            "query_ligand_id",
-            "target_system",
-            "protein_mapping",
-            "protein_mapper",
-            "source",
+            *score_identity_columns,
             "similarity",
         ],
     ].copy()
+    pli = scores.loc[
+        scores["metric"].astype(str).eq("pli_fident"),
+        [*score_pair_columns, "similarity"],
+    ].rename(columns={"similarity": "pli_fident"})
+    if pli.duplicated(score_pair_columns).any():
+        raise ValueError("protein scores contain duplicate PLI identity rows")
+    pocket = pocket.merge(
+        pli,
+        on=score_pair_columns,
+        how="left",
+        validate="one_to_one",
+    )
     pocket = pocket.merge(
         target_map,
         on="target_system",
@@ -2273,10 +2293,32 @@ def write_custom_sequence_link_tables(
         "ligand_unique_ccd_code",
         "ligand_rdkit_canonical_smiles",
     ]
-    chemistry = pd.read_parquet(
-        annotation_table,
-        columns=chemistry_columns,
-    ).drop_duplicates()
+    scored_pairs = (
+        pocket[["query_system", "query_ligand_id"]]
+        .drop_duplicates()
+        .rename(
+            columns={
+                "query_system": "system_id",
+                "query_ligand_id": "ligand_id",
+            }
+        )
+    )
+    scored_system_ids = scored_pairs["system_id"].astype(str).drop_duplicates().tolist()
+    chemistry = (
+        pd.read_parquet(
+            annotation_table,
+            columns=chemistry_columns,
+            filters=[("system_id", "in", scored_system_ids)],
+        ).drop_duplicates()
+        if scored_system_ids
+        else pd.DataFrame(columns=chemistry_columns)
+    )
+    chemistry = chemistry.merge(
+        scored_pairs,
+        on=["system_id", "ligand_id"],
+        how="inner",
+        validate="many_to_one",
+    )
     if chemistry.duplicated(["system_id", "ligand_id"]).any():
         raise ValueError("release annotation has conflicting ligand chemistry rows")
     pocket = pocket.merge(
@@ -2285,9 +2327,17 @@ def write_custom_sequence_link_tables(
         right_on=["system_id", "ligand_id"],
         how="left",
         validate="many_to_one",
+        indicator="_chemistry_merge",
     )
-    if not pocket.empty and pocket["ligand_rdkit_canonical_smiles"].isna().any():
-        raise ValueError("ligand chemistry is missing for a scored PLINDER pocket")
+    missing_chemistry = pocket["_chemistry_merge"].ne("both")
+    if missing_chemistry.any():
+        missing = pocket.loc[
+            missing_chemistry, ["query_system", "query_ligand_id"]
+        ].drop_duplicates()
+        raise ValueError(
+            "release annotation has no row for scored PLINDER ligands: "
+            f"{missing.head(10).to_dict('records')}"
+        )
     pocket["plinder_pdb_id"] = (
         pocket["query_system"].astype(str).str.split("__", n=1).str[0]
     )
@@ -2300,7 +2350,7 @@ def write_custom_sequence_link_tables(
             "ligand_unique_ccd_code": "plinder_ligand_unique_ccd_code",
             "ligand_rdkit_canonical_smiles": "plinder_ligand_smiles",
         }
-    ).drop(columns=["system_id", "ligand_id", "target_system"])
+    ).drop(columns=["system_id", "ligand_id", "target_system", "_chemistry_merge"])
     link_columns = [
         "sequence_id",
         "sequence_length",
@@ -2308,6 +2358,7 @@ def write_custom_sequence_link_tables(
         "plinder_system_id",
         "plinder_ligand_id",
         "pocket_fident",
+        "pli_fident",
         "protein_mapping",
         "protein_mapper",
         "source",
@@ -2515,6 +2566,7 @@ def calculate_custom_similarity_scores(
             data_dir=data_dir,
         ),
         shape_score_threads=shape_score_threads,
+        include_pli_fident=True,
     )
     selected_systems = (
         set(map(str, target_system_ids)) if target_system_ids is not None else None

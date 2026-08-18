@@ -1208,6 +1208,7 @@ class Scorer:
     max_query_protein_chains: int = 30
     max_query_proper_ligand_chains: int = 30
     shape_score_threads: int = 1
+    include_pli_fident: bool = False
     _ligand_mol_cache: dict[tuple[str, str], Chem.Mol | None] = field(
         default_factory=dict, init=False, repr=False
     )
@@ -2745,6 +2746,9 @@ class Scorer:
         has_target = target_pocket is not None
         target_pocket = target_pocket or {}
         target_interactions = target_interactions or {}
+        pli_residue_length = sum(
+            len(residues) for residues in query_interactions.values()
+        )
         # Compact maps contain only aligned selected query residue numbers,
         # selected target residue numbers (or -1), and amino-acid identity
         # flags. The scorer then filters that shared representation to this
@@ -2782,11 +2786,15 @@ class Scorer:
                         )
                         for position, query_number in aln_source["qrnum"].items()
                     )
+                if self.include_pli_fident and pli_residue_length:
+                    pli_scores.setdefault(f"pli_fident_{source}", 0.0)
                 for q_n, t_n, residues_are_identical in pocket_positions:
                     if q_n not in q_chain_pocket:
                         continue
                     if residues_are_identical:
                         pocket_scores[f"pocket_fident_{source}"] += 1
+                        if self.include_pli_fident and q_n in q_chain_interactions:
+                            pli_scores[f"pli_fident_{source}"] += 1
                     if has_target and t_n >= 0 and t_n in t_chain_pocket:
                         pocket_scores[f"pocket_qcov_{source}"] += 1
                         if residues_are_identical:
@@ -2808,7 +2816,10 @@ class Scorer:
         else:
             pocket_scores.clear()
         for score in list(pli_scores):
-            denominator = pli_unique_length if "unique" in score else pli_length
+            if score.startswith("pli_fident_"):
+                denominator = pli_residue_length
+            else:
+                denominator = pli_unique_length if "unique" in score else pli_length
             if denominator:
                 pli_scores[score] /= denominator
             else:
@@ -2999,7 +3010,7 @@ class Scorer:
             pli_length,
             unique_length,
         ) = self._ligand_protein_only_pocket_data(query_ligand)
-        return self._get_pocket_pli_scores(
+        pocket_scores, pli_scores = self._get_pocket_pli_scores(
             alns=alns,
             query_pocket=query_pocket,
             query_interactions=query_interactions,
@@ -3008,7 +3019,9 @@ class Scorer:
             pli_unique_length=unique_length,
             target_pocket=None,
             target_interactions=None,
-        )[0]
+        )
+        pocket_scores.update(pli_scores)
+        return pocket_scores
 
     def _ligand_protein_only_pocket_data(self, ligand: LigandView) -> _PocketDataType:
         """Cache immutable protein-only pocket inputs per ligand occurrence."""
@@ -3293,6 +3306,7 @@ class Scorer:
                         )
                         if ligand_pair_scores is not None:
                             compact_scores: dict[str, int] = {}
+                            has_positive_score = False
                             for metric in (
                                 "pocket_qcov",
                                 "pocket_fident_qcov",
@@ -3304,10 +3318,11 @@ class Scorer:
                                     raise ValueError(
                                         f"{metric} is outside [0, 1]: {numeric}"
                                     )
+                                has_positive_score = has_positive_score or numeric > 0
                                 compact_scores[metric] = round(
                                     min(1.0, max(0.0, numeric)) * 100
                                 )
-                            if any(compact_scores.values()):
+                            if has_positive_score:
                                 ligand_pair_scores.append(
                                     {
                                         "query_system": query_system.id,

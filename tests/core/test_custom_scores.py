@@ -2,6 +2,7 @@
 # Distributed under the terms of the Apache License 2.0
 import json
 import os
+from collections import Counter
 from pathlib import Path
 
 import numpy as np
@@ -262,6 +263,19 @@ def test_write_custom_sequence_query_files_preserves_fasta_ids(tmp_path):
         ">cq00000001",
     ]
     assert not list(inputs.chain_cif_dir.iterdir())
+
+
+def test_write_custom_sequence_query_files_rejects_duplicate_fasta_ids(tmp_path):
+    source = tmp_path / "queries.faa"
+    source.write_text(
+        ">repeated\nACDEFGHIKLMNPQ\n>repeated duplicate\nRSTVWYACDEFGHI\n"
+    )
+
+    with pytest.raises(ValueError, match="repeats identifiers: \\['repeated'\\]"):
+        custom.write_custom_sequence_query_files(
+            source,
+            work_dir=tmp_path / "work",
+        )
 
 
 def test_write_custom_query_files_accepts_coordinate_only_mmcif(test_dir, tmp_path):
@@ -863,6 +877,7 @@ def _scoring_entry(
     ligand_id: str,
     ligand_chain: str,
     pocket_number: int,
+    interaction: bool = False,
 ) -> EntryView:
     system_id = f"{pdb_id}__1__1.{chain_id}__1.{ligand_chain}"
     ligand = LigandView(
@@ -874,9 +889,14 @@ def _scoring_entry(
         is_proper=True,
         protein_chains_asym_id=[f"1.{chain_id}"],
         num_pocket_residues=1,
-        num_interactions=0,
-        num_unique_interactions=0,
+        num_interactions=int(interaction),
+        num_unique_interactions=int(interaction),
         pocket_residue_number_to_index={f"1.{chain_id}": {pocket_number: 1}},
+        interactions_counter=(
+            {f"1.{chain_id}": {pocket_number: Counter({"hydrogen_bond": 1})}}
+            if interaction
+            else {}
+        ),
     )
     system = SystemView(
         id=system_id,
@@ -993,6 +1013,7 @@ def test_calculate_custom_protein_scores_uses_plinder_pocket(
         ligand_id="1abc__1__1.Z",
         ligand_chain="Z",
         pocket_number=20,
+        interaction=True,
     )
     monkeypatch.setattr(
         custom,
@@ -1033,6 +1054,9 @@ def test_calculate_custom_protein_scores_uses_plinder_pocket(
     assert pocket.iloc[0]["query_ligand_id"] == "1abc__1__1.Z"
     assert pocket.iloc[0]["target_system"] == target_system
     assert pd.isna(pocket.iloc[0]["target_ligand_id"])
+    pli = scores.loc[scores["metric"].astype(str) == "pli_fident"]
+    assert len(pli) == 1
+    assert pli.iloc[0]["similarity"] == 100
 
 
 def test_calculate_custom_protein_scores_reads_alignments_once(tmp_path, monkeypatch):
@@ -1225,7 +1249,17 @@ def test_write_custom_sequence_link_tables_adds_ligand_chemistry(tmp_path):
                 "source": "mmseqs",
                 "metric": "pocket_fident",
                 "similarity": 75,
-            }
+            },
+            {
+                "query_system": "1abc__1__1.B__1.Z",
+                "query_ligand_id": "1abc__1__1.Z",
+                "target_system": "cq00000000_A",
+                "protein_mapping": "1.B:0.A",
+                "protein_mapper": "mmseqs",
+                "source": "mmseqs",
+                "metric": "pli_fident",
+                "similarity": 50,
+            },
         ]
     ).to_parquet(protein_scores, index=False)
     annotation = tmp_path / "annotation.parquet"
@@ -1236,8 +1270,22 @@ def test_write_custom_sequence_link_tables_adds_ligand_chemistry(tmp_path):
                 "ligand_id": "1abc__1__1.Z",
                 "ligand_ccd_code": "ATP",
                 "ligand_unique_ccd_code": "ATP",
-                "ligand_rdkit_canonical_smiles": "Nc1ncnc2n(cnc12)C3OC(COP(=O)(O)O)C(O)C3O",
-            }
+                "ligand_rdkit_canonical_smiles": None,
+            },
+            {
+                "system_id": "1abc__1__1.B__1.Z",
+                "ligand_id": "9zzz__1__1.Z",
+                "ligand_ccd_code": "LIG",
+                "ligand_unique_ccd_code": "LIG",
+                "ligand_rdkit_canonical_smiles": "CC",
+            },
+            {
+                "system_id": "1abc__1__1.B__1.Z",
+                "ligand_id": "9zzz__1__1.Z",
+                "ligand_ccd_code": "LIG",
+                "ligand_unique_ccd_code": "LIG",
+                "ligand_rdkit_canonical_smiles": "CCC",
+            },
         ]
     ).to_parquet(annotation, index=False)
 
@@ -1254,9 +1302,24 @@ def test_write_custom_sequence_link_tables_adds_ligand_chemistry(tmp_path):
     assert link_rows.loc[0, "plinder_pdb_id"] == "1abc"
     assert link_rows.loc[0, "plinder_ligand_ccd_code"] == "ATP"
     assert link_rows.loc[0, "pocket_fident"] == 75
+    assert link_rows.loc[0, "pli_fident"] == 50
+    assert pd.isna(link_rows.loc[0, "plinder_ligand_smiles"])
     best_rows = pd.read_parquet(best)
     assert best_rows["sequence_id"].tolist() == ["sample-1", "sample-2"]
     assert pd.isna(best_rows.loc[1, "plinder_system_id"])
+
+    missing_annotation = tmp_path / "missing_annotation.parquet"
+    missing_chemistry = pd.read_parquet(annotation)
+    missing_chemistry["system_id"] = "9zzz__1__1.B__1.Z"
+    missing_chemistry.to_parquet(missing_annotation, index=False)
+    with pytest.raises(ValueError, match="no row for scored PLINDER ligands"):
+        custom.write_custom_sequence_link_tables(
+            protein_scores=protein_scores,
+            chain_manifest=manifest,
+            annotation_table=missing_annotation,
+            output_path=tmp_path / "missing_sequence_links.parquet",
+            best_output_path=tmp_path / "missing_best_sequence_links.parquet",
+        )
 
 
 def test_add_sequence_ids_to_aligned_pocket_residues(tmp_path):

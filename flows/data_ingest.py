@@ -491,39 +491,39 @@ class PlinderDataIngestFlow(FlowSpec):
     @step
     def finalize_scores(self):
         self.pipeline.finalize_scores()
-        self.next(self.scatter_export_sucos_shape_pocket_qcov)
+        self.next(self.scatter_export_ligand_similarity_scores)
 
     @kubernetes(**K8S)
     @environment(**ENV)
     @retry
     @step
-    def scatter_export_sucos_shape_pocket_qcov(self):
-        self.chunks = self.pipeline.scatter_export_sucos_shape_pocket_qcov()
-        self.next(self.export_sucos_shape_pocket_qcov, foreach="chunks")
+    def scatter_export_ligand_similarity_scores(self):
+        self.chunks = self.pipeline.scatter_export_ligand_similarity_scores()
+        self.next(self.export_ligand_similarity_scores, foreach="chunks")
 
     @kubernetes(**{**K8S, **{"cpu": 4, "memory": 32000}})
     @environment(**ENV)
     @retry
     @step
-    def export_sucos_shape_pocket_qcov(self):
-        self.pipeline.export_sucos_shape_pocket_qcov(self.input)
-        self.next(self.join_export_sucos_shape_pocket_qcov)
+    def export_ligand_similarity_scores(self):
+        self.pipeline.export_ligand_similarity_scores(self.input)
+        self.next(self.join_export_ligand_similarity_scores)
 
     @kubernetes(**K8S)
     @environment(**ENV)
     @retry
     @step
-    def join_export_sucos_shape_pocket_qcov(self, inputs):
+    def join_export_ligand_similarity_scores(self, inputs):
         self.pipeline = inputs[0].pipeline
         self.merge_artifacts(inputs, exclude=["chunks"])
-        self.next(self.finalize_sucos_export)
+        self.next(self.finalize_ligand_similarity_scores)
 
     @kubernetes(**{**K8S, **LARGE_MEM})
     @environment(**ENV)
     @retry
     @step
-    def finalize_sucos_export(self):
-        self.pipeline.finalize_sucos_export()
+    def finalize_ligand_similarity_scores(self):
+        self.pipeline.finalize_ligand_similarity_scores()
         self.next(self.scatter_collate_partitions)
 
     @kubernetes(**K8S)

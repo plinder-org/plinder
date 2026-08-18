@@ -104,6 +104,30 @@ def test_download_cmd_does_not_fetch_source_mmcif_cache(mock_cpl, monkeypatch):
     assert not any(path.startswith("source_mmcifs") for path in requested)
 
 
+def test_default_download_includes_covers_but_not_complete_scores(
+    mock_cpl, monkeypatch
+):
+    from plinder.core.utils import cpl
+
+    requested = []
+
+    def track_path(**kwargs):
+        requested.append(kwargs.get("rel", ""))
+        return mock_path(**kwargs)
+
+    monkeypatch.setattr(cpl, "get_plinder_path", track_path)
+    monkeypatch.setattr("builtins.input", lambda prompt: "n")
+
+    utils.download_plinder_cmd(args=[])
+
+    assert "ligand_sampling" in requested
+    assert "interface_sampling" in requested
+    assert "exports/ligand_similarity_scores.parquet" not in requested
+    assert "exports/interface_similarity_scores.parquet" not in requested
+    assert "ligand_clusters" not in requested
+    assert "interface_clusters" not in requested
+
+
 def test_download_uses_only_release_artifacts(mock_cpl, monkeypatch):
     from plinder.core.utils import cpl
 

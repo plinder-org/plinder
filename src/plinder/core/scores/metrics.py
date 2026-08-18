@@ -21,6 +21,7 @@ LIGAND_SCORE_NAMES = (
     "pocket_qcov",
     "pocket_fident",
     "pocket_fident_qcov",
+    "pli_fident",
     "pli_qcov",
     "pli_unique_qcov",
     "shape",
@@ -35,6 +36,7 @@ GATED_LIGAND_DIAGNOSTIC_METRICS = frozenset({"shape", "color", "sucos_shape"})
 NON_CLUSTERING_LIGAND_METRICS = GATED_LIGAND_DIAGNOSTIC_METRICS | {
     "pocket_fident",
     "pocket_fident_qcov",
+    "pli_fident",
 }
 
 FOLDSEEK_ONLY_PROTEIN_SCORE_NAMES = frozenset({"protein_lddt", "protein_lddt_qcov"})

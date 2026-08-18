@@ -448,37 +448,37 @@ class IngestPipeline:
         finalize_ligand_3d_artifacts(self.plinder_dir)
 
     @utils.ingest_flow_control
-    def scatter_export_sucos_shape_pocket_qcov(self) -> list[list[str]]:
+    def scatter_export_ligand_similarity_scores(self) -> list[list[str]]:
         return tasks.scatter_ligand_3d_query_shards(
             data_dir=self.plinder_dir,
             batch_size=self.cfg.flow.collate_ligand_3d_scores_batch_size,
         )
 
     @utils.ingest_flow_control
-    def export_sucos_shape_pocket_qcov(self, shards: list[str]) -> None:
-        from plinder.data.pipeline.score import export_sucos_shape_pocket_qcov_batch
+    def export_ligand_similarity_scores(self, shards: list[str]) -> None:
+        from plinder.data.pipeline.score import export_ligand_similarity_scores_batch
 
-        export_sucos_shape_pocket_qcov_batch(
+        export_ligand_similarity_scores_batch(
             self.plinder_dir,
-            output_dir=(self.plinder_dir / "exports" / "all_sucos_shape_pocket_qcov"),
+            output_dir=(self.plinder_dir / "exports" / "ligand_similarity_scores"),
             shards=shards,
-            scratch_dir=Path(tempfile.gettempdir()) / "plinder-sucos-export",
+            scratch_dir=(
+                Path(tempfile.gettempdir()) / "plinder-ligand-similarity-export"
+            ),
             threads=self.cfg.flow.make_ligand_3d_scores_cpu,
         )
 
     @utils.ingest_flow_control
-    def finalize_sucos_export(self) -> None:
-        from plinder.data.pipeline.score import (
-            finalize_sucos_shape_pocket_qcov_export,
-        )
+    def finalize_ligand_similarity_scores(self) -> None:
+        from plinder.data.pipeline.score import finalize_ligand_similarity_scores
 
-        finalize_sucos_shape_pocket_qcov_export(
+        finalize_ligand_similarity_scores(
             self.plinder_dir,
-            source_dir=(self.plinder_dir / "exports" / "all_sucos_shape_pocket_qcov"),
-            output=(
-                self.plinder_dir / "exports" / "all_sucos_shape_pocket_qcov.parquet"
+            source_dir=(self.plinder_dir / "exports" / "ligand_similarity_scores"),
+            output=self.plinder_dir / "exports" / "ligand_similarity_scores.parquet",
+            scratch_dir=(
+                Path(tempfile.gettempdir()) / "plinder-ligand-similarity-finalize"
             ),
-            scratch_dir=Path(tempfile.gettempdir()) / "plinder-sucos-finalize",
             threads=self.cfg.flow.make_ligand_3d_scores_cpu,
         )
 
@@ -559,9 +559,9 @@ class IngestPipeline:
 
     @utils.ingest_flow_control
     def finalize_interface_scores(self) -> None:
-        from plinder.data.pipeline.score import finalize_interface_qcov_scores
+        from plinder.data.pipeline.score import finalize_interface_similarity_scores
 
-        finalize_interface_qcov_scores(
+        finalize_interface_similarity_scores(
             self.plinder_dir,
             scratch_dir=Path(tempfile.gettempdir()) / "plinder-interface-finalize",
             threads=self.cfg.flow.make_interface_scores_cpu,

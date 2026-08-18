@@ -1323,6 +1323,7 @@ def test_ligand_pair_pocket_scores_do_not_use_system_union(tmp_path) -> None:
         source_to_full_db_file={},
         db_dir=tmp_path / "db",
         scores_dir=tmp_path / "scores",
+        include_pli_fident=True,
     )
     alignments = {
         ("1.A", "1.X"): pd.DataFrame(
@@ -1376,6 +1377,8 @@ def test_ligand_pair_pocket_scores_do_not_use_system_union(tmp_path) -> None:
     assert partial_pocket["pocket_qcov_foldseek"] == pytest.approx(0.5)
     assert full_pli["pli_qcov_foldseek"] == pytest.approx(1.0)
     assert partial_pli["pli_qcov_foldseek"] == pytest.approx(0.5)
+    assert full_pli["pli_fident_foldseek"] == pytest.approx(1.0)
+    assert partial_pli["pli_fident_foldseek"] == pytest.approx(1.0)
 
 
 def test_ligand_pair_pocket_scores_ignore_null_compact_maps(tmp_path) -> None:
@@ -1406,6 +1409,44 @@ def test_ligand_pair_pocket_scores_ignore_null_compact_maps(tmp_path) -> None:
 
     assert pocket_scores == {}
     assert pli_scores == {}
+
+
+def test_ligand_pocket_scores_report_identity_over_all_pli_residues(tmp_path) -> None:
+    scorer = Scorer(
+        entries={},
+        source_to_full_db_file={},
+        db_dir=tmp_path / "db",
+        scores_dir=tmp_path / "scores",
+        include_pli_fident=True,
+    )
+    query = _ligand(
+        "1abc__1__1.B",
+        "1.B",
+        {"1.A": {10: 9, 20: 19, 30: 29}},
+        {
+            "1.A": {
+                10: Counter({"hydrogen_bond": 1}),
+                30: Counter({"hydrophobic": 1}),
+            }
+        },
+    )
+    alignments = {
+        ("1.A", "0.X"): pd.DataFrame(
+            [
+                {
+                    "query_selected_residue_numbers": [10, 20],
+                    "target_selected_residue_numbers": [100, 200],
+                    "selected_residue_identity": bytes([1, 1]),
+                }
+            ],
+            index=["mmseqs"],
+        )
+    }
+
+    scores = scorer.get_ligand_pocket_scores(alignments, query)
+
+    assert scores["pocket_fident_mmseqs"] == pytest.approx(2 / 3)
+    assert scores["pli_fident_mmseqs"] == pytest.approx(0.5)
 
 
 def test_ligand_pair_pocket_mapping_maximizes_coverage_before_similarity(
@@ -2798,6 +2839,7 @@ def test_holo_scores_are_emitted_per_ligand_pair(tmp_path, monkeypatch) -> None:
         )
     )
     protein_calls: list[tuple[tuple[str, ...], tuple[str, ...], int]] = []
+    pocket_qcov_value = 1.0
 
     def protein_scores(
         _alignments: pd.DataFrame,
@@ -2823,7 +2865,7 @@ def test_holo_scores_are_emitted_per_ligand_pair(tmp_path, monkeypatch) -> None:
         query_ligand: LigandView,
         target_ligand: LigandView,
     ) -> tuple[dict[str, float], dict[str, float], dict]:
-        qcov = float(
+        qcov = pocket_qcov_value * float(
             query_ligand.id == query_ligands[0].id
             and target_ligand.id == target_ligands[0].id
         )
@@ -2943,6 +2985,20 @@ def test_holo_scores_are_emitted_per_ligand_pair(tmp_path, monkeypatch) -> None:
             "pli_qcov": 11,
         }
     ]
+
+    pocket_qcov_value = 0.004
+    tiny_ligand_pair_scores = []
+    list(
+        scorer.get_scores_holo(
+            query_system,
+            alignments,
+            ligand_pair_scores=tiny_ligand_pair_scores,
+        )
+    )
+    assert len(tiny_ligand_pair_scores) == 1
+    assert tiny_ligand_pair_scores[0]["pocket_qcov"] == 0
+    assert tiny_ligand_pair_scores[0]["pocket_fident_qcov"] == 0
+    assert tiny_ligand_pair_scores[0]["pli_qcov"] == 0
 
 
 def test_holo_threaded_scoring_reuses_canonical_and_receptor_pairs(

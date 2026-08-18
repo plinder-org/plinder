@@ -296,8 +296,8 @@ sbatch \
 Each winning direct or swapped chain assignment retains `iface1_qcov` and
 `iface2_qcov` before multiplication. They are the coverages of the query
 interface's canonical first and second chain, respectively, under that winning
-assignment. The compact release file
-`exports/all_interface_qcov.parquet` contains the query and target interface
+assignment. The release file
+`exports/interface_similarity_scores.parquet` contains the query and target interface
 IDs, both side coverages, and the final directional 0--100 similarity. Positive
 scores below the lowest clustering threshold are retained. Interface clustering
 uses the whole-interface `interface_qcov` product; the two side coverages remain
@@ -432,30 +432,31 @@ sbatch \
 The merge computes `sucos_shape_pocket_qcov` from full-precision pocket
 coverage before converting retained similarities to the 0–100 integer schema.
 
-The complete `sucos_shape_pocket_qcov` edge table is a release artifact. Export
-it directly from the full-precision candidate and canonical-pair shards so that
-scores below the 30% clustering threshold are retained. Use the same query-shard
-array bound as ligand-3D collation, then validate and concatenate the shards:
+The complete ligand-pair score table is a release artifact. It retains
+`pocket_qcov`, `pocket_fident_qcov`, `pli_qcov`, and `sucos_shape` separately,
+including positive scores below the 30% clustering threshold. The combined
+SuCOS-pocket score can be derived by multiplying `sucos_shape` and
+`pocket_qcov`. Use the same query-shard array bound as ligand-3D collation,
+then validate and concatenate the shards:
 
 ```bash
 sbatch \
   --qos=30min --array=0-LAST_LIGAND_3D_SHARD_INDEX \
   --cpus-per-task=4 --mem=32G \
-  --output="${OUTPUT_ROOT}/logs/sucos-export-%A-%a.out" \
+  --output="${OUTPUT_ROOT}/logs/ligand-similarity-export-%A-%a.out" \
   --export=ALL,PLINDER_ENV_ROOT,PLINDER_REPO_ROOT \
-  scripts/slurm/score_v3.sbatch export-sucos-shards "${OUTPUT_ROOT}" 4
+  scripts/slurm/score_v3.sbatch export-ligand-similarity-shards "${OUTPUT_ROOT}" 4
 
 sbatch \
   --qos=6hours --cpus-per-task=8 --mem=64G \
-  --output="${OUTPUT_ROOT}/logs/sucos-export-finalize-%j.out" \
+  --output="${OUTPUT_ROOT}/logs/ligand-similarity-finalize-%j.out" \
   --export=ALL,PLINDER_ENV_ROOT,PLINDER_REPO_ROOT \
-  scripts/slurm/score_v3.sbatch finalize-sucos-export "${OUTPUT_ROOT}"
+  scripts/slurm/score_v3.sbatch finalize-ligand-similarity-scores "${OUTPUT_ROOT}"
 ```
 
-The default final path is
-`exports/all_sucos_shape_pocket_qcov.parquet`; set
-`PLINDER_SUCOS_EXPORT_DIR` and `PLINDER_SUCOS_EXPORT_OUTPUT` to override the
-temporary shard directory or final release location.
+The default final path is `exports/ligand_similarity_scores.parquet`; set
+`PLINDER_LIGAND_SIMILARITY_DIR` and `PLINDER_LIGAND_SIMILARITY_OUTPUT` to
+override the temporary shard directory or final release location.
 
 Targeted collation repairs deliberately leave `index/collation.json` in
 `requires_downstream_repair` state and remove the stale nonredundant index.
@@ -613,8 +614,8 @@ sbatch \
   scripts/slurm/score_v3.sbatch finalize-index "${OUTPUT_ROOT}"
 ```
 
-The release scoring artifacts are
-`alignments/search_db=holo/alignment_type=*/shard=*.parquet`, their validated
-manifest, and `exports/all_sucos_shape_pocket_qcov.parquet`. Per-PDB raw search
-files and the other derived score datasets are generation intermediates; mapped
-per-PDB files exist only transiently on node-local scratch.
+The release scoring artifacts are the two similarity tables in `exports/` and
+the validated alignment shards under
+`alignments/search_db=holo/alignment_type=*/shard=*.parquet`. Per-PDB raw
+search files and the other derived score datasets are generation intermediates;
+mapped per-PDB files exist only transiently on node-local scratch.

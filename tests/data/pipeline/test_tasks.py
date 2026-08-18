@@ -1011,13 +1011,13 @@ def test_scoring_finalization_stage_order_and_partitions():
         "finalize_scores"
     )
     assert tasks.STAGES.index("finalize_scores") < tasks.STAGES.index(
-        "export_sucos_shape_pocket_qcov"
+        "export_ligand_similarity_scores"
     )
-    assert tasks.STAGES.index("export_sucos_shape_pocket_qcov") < tasks.STAGES.index(
-        "finalize_sucos_export"
+    assert tasks.STAGES.index("export_ligand_similarity_scores") < tasks.STAGES.index(
+        "finalize_ligand_similarity_scores"
     )
-    assert tasks.STAGES.index("finalize_sucos_export") < tasks.STAGES.index(
-        "collate_partitions"
+    assert tasks.STAGES.index("finalize_ligand_similarity_scores") < (
+        tasks.STAGES.index("collate_partitions")
     )
     assert tasks.STAGES.index("collate_partitions") < tasks.STAGES.index(
         "make_linked_apo_structures"
@@ -1528,6 +1528,7 @@ def test_protein_scoring_plan_groups_queries_by_two_character_shard(tmp_path):
 
 def test_score_work_plan_balances_expensive_queries_into_fixed_batches(tmp_path):
     from plinder.data.pipeline.score import (
+        PLAN_RELATIVE,
         SCORE_WORK_RELATIVE,
         _score_batch,
         plan_protein_scoring,
@@ -1572,6 +1573,10 @@ def test_score_work_plan_balances_expensive_queries_into_fixed_batches(tmp_path)
         index / "annotation_table.parquet", index=False
     )
     plan_protein_scoring(tmp_path)
+    chain_path = index / "entry_chains.parquet"
+    chains = pd.read_parquet(chain_path)
+    chains["repair_note"] = "patched after search"
+    chains.to_parquet(chain_path, index=False)
     release = (
         tmp_path / "alignments/search_db=holo/alignment_type=foldseek/shard=aa.parquet"
     )
@@ -1583,6 +1588,16 @@ def test_score_work_plan_balances_expensive_queries_into_fixed_batches(tmp_path)
         }
     ).to_parquet(release, index=False)
 
+    with pytest.raises(ValueError, match="entry chain index changed"):
+        plan_score_batches(
+            tmp_path,
+            batch_size=2,
+            threads=1,
+            scratch_dir=tmp_path / "scratch",
+            max_query_protein_chains=5,
+            max_query_proper_ligand_chains=5,
+        )
+
     report = plan_score_batches(
         tmp_path,
         batch_size=2,
@@ -1590,9 +1605,13 @@ def test_score_work_plan_balances_expensive_queries_into_fixed_batches(tmp_path)
         scratch_dir=tmp_path / "scratch",
         max_query_protein_chains=5,
         max_query_proper_ligand_chains=5,
+        reuse_mapped_alignments=True,
     )
 
     assert report["batch_count"] == 2
+    assert json.loads((tmp_path / PLAN_RELATIVE).read_text())[
+        "score_reused_mapped_alignments"
+    ]
     work = pd.read_parquet(tmp_path / SCORE_WORK_RELATIVE)
     assert set(work["pdb_id"]) == set(pdb_ids[:4])
     assert work.groupby("score_batch_index").size().tolist() == [2, 2]
@@ -3069,6 +3088,8 @@ def test_finalize_ligand_3d_scores_validates_pair_and_packed_shards(
         "pair_batch_count": 1,
         "query_shard_count": 1,
         "query_count": 1,
+        "ligand_pair_score_shard_count": 1,
+        "ligand_pair_score_rows": 1,
     }
     assert (tmp_path / "scores/ligand_3d_pair_validation.json").is_file()
 
@@ -3080,6 +3101,11 @@ def test_finalize_ligand_3d_scores_validates_pair_and_packed_shards(
         lambda: pytest.fail("signature-matched pair validation was not reused"),
     )
     assert finalize_ligand_3d_artifacts(tmp_path) == report
+
+    ligand_pair_score = tmp_path / "scores/ligand_pair_score_shards/shard=ab.parquet"
+    ligand_pair_score.unlink()
+    with pytest.raises(FileNotFoundError, match="ligand_pair_score_shards"):
+        finalize_ligand_3d_artifacts(tmp_path)
 
 
 def test_finalize_score_repair_accepts_refreshed_candidate_shards(tmp_path) -> None:
@@ -4770,14 +4796,14 @@ def test_interface_cluster_plan_enforces_collated_ingest_threshold(tmp_path):
         plan_clustering(tmp_path, entity_type="interface")
 
 
-def test_sucos_release_export_retains_scores_below_cluster_cutoff(tmp_path):
+def test_ligand_similarity_export_retains_complete_factor_scores(tmp_path):
     from plinder.data.pipeline.score import (
         MANIFEST_RELATIVE,
         PLAN_RELATIVE,
         SCORE_WORK_RELATIVE,
         _source_signature,
-        export_sucos_shape_pocket_qcov_batch,
-        finalize_sucos_shape_pocket_qcov_export,
+        export_ligand_similarity_scores_batch,
+        finalize_ligand_similarity_scores,
     )
 
     manifest = tmp_path / MANIFEST_RELATIVE
@@ -4814,11 +4840,21 @@ def test_sucos_release_export_retains_scores_below_cluster_cutoff(tmp_path):
     ).to_parquet(index / "annotation_table.parquet", index=False)
 
     rows = [
-        ("ab", "1abc", "B", "2def", "Y", 0.2, 0.5),
-        ("de", "2def", "Y", "1abc", "B", 0.8, 0.5),
+        ("ab", "1abc", "B", "2def", "Y", 20, 15, 12, 0.5),
+        ("de", "2def", "Y", "1abc", "B", 80, 70, 60, 0.5),
     ]
-    for shard, query, query_asym, target, target_asym, qcov, sucos in rows:
-        candidate = {
+    for (
+        shard,
+        query,
+        query_asym,
+        target,
+        target_asym,
+        qcov,
+        fident_qcov,
+        pli_qcov,
+        sucos,
+    ) in rows:
+        pair_score = {
             "query_system": f"{query}_system",
             "query_ligand_id": f"{query}__1__1.{query_asym}",
             "query_entry": query,
@@ -4827,22 +4863,17 @@ def test_sucos_release_export_retains_scores_below_cluster_cutoff(tmp_path):
             "target_ligand_id": f"{target}__1__1.{target_asym}",
             "target_entry": target,
             "target_ligand_asym_id": target_asym,
-            "protein_mapping": "1.A:1.X",
-            "protein_mapper": "foldseek",
             "pocket_qcov": qcov,
+            "pocket_fident_qcov": fident_qcov,
+            "pli_qcov": pli_qcov,
         }
-        candidate_path = (
-            tmp_path
-            / "scores"
-            / "ligand_3d_candidate_shards"
-            / f"shard={shard}.parquet"
+        pair_score_path = (
+            tmp_path / "scores" / "ligand_pair_score_shards" / f"shard={shard}.parquet"
         )
-        candidate_path.parent.mkdir(parents=True, exist_ok=True)
+        pair_score_path.parent.mkdir(parents=True, exist_ok=True)
         pq.write_table(
-            pa.Table.from_pylist(
-                [candidate], schema=schemas.LIGAND_3D_CANDIDATE_SCHEMA
-            ),
-            candidate_path,
+            pa.Table.from_pylist([pair_score], schema=schemas.LIGAND_PAIR_SCORE_SCHEMA),
+            pair_score_path,
         )
         pair_path = tmp_path / "scores" / "ligand_3d_by_query" / f"{shard}.parquet"
         pair_path.parent.mkdir(parents=True, exist_ok=True)
@@ -4866,7 +4897,7 @@ def test_sucos_release_export_retains_scores_below_cluster_cutoff(tmp_path):
 
     shard_dir = tmp_path / "release-shards"
     for batch_index in range(2):
-        export_sucos_shape_pocket_qcov_batch(
+        export_ligand_similarity_scores_batch(
             tmp_path,
             output_dir=shard_dir,
             batch_index=batch_index,
@@ -4875,8 +4906,8 @@ def test_sucos_release_export_retains_scores_below_cluster_cutoff(tmp_path):
             threads=1,
             memory_limit="1GB",
         )
-    output = tmp_path / "exports" / "all_sucos_shape_pocket_qcov.parquet"
-    report = finalize_sucos_shape_pocket_qcov_export(
+    output = tmp_path / "exports" / "ligand_similarity_scores.parquet"
+    report = finalize_ligand_similarity_scores(
         tmp_path,
         source_dir=shard_dir,
         output=output,
@@ -4886,7 +4917,15 @@ def test_sucos_release_export_retains_scores_below_cluster_cutoff(tmp_path):
     )
 
     exported = pd.read_parquet(output)
-    assert sorted(exported["similarity"].tolist()) == [10, 40, 100, 100]
+    assert sorted(exported["pocket_qcov"].tolist()) == [20, 80, 100, 100, 100]
+    assert sorted(exported["pocket_fident_qcov"].tolist()) == [
+        15,
+        70,
+        100,
+        100,
+        100,
+    ]
+    assert sorted(exported["pli_qcov"].tolist()) == [12, 60, 100, 100, 100]
     self_rows = exported[
         exported["query_system"].eq(exported["target_system"])
         & exported["query_ligand_id"].eq(exported["target_ligand_id"])
@@ -4894,10 +4933,13 @@ def test_sucos_release_export_retains_scores_below_cluster_cutoff(tmp_path):
     assert sorted(self_rows["query_ligand_id"].tolist()) == [
         "1abc__1__1.B",
         "2def__1__1.Y",
+        "3ghi__1__1.Z",
     ]
-    assert report["row_count"] == 4
+    non_3d_self = self_rows[self_rows["query_ligand_id"].eq("3ghi__1__1.Z")]
+    assert non_3d_self["sucos_shape"].isna().all()
+    assert report["row_count"] == 5
     assert (
-        finalize_sucos_shape_pocket_qcov_export(
+        finalize_ligand_similarity_scores(
             tmp_path,
             source_dir=shard_dir,
             output=output,
@@ -4911,12 +4953,12 @@ def test_sucos_release_export_retains_scores_below_cluster_cutoff(tmp_path):
 
 def test_interface_score_shards_retain_side_coverages_and_compact_export(tmp_path):
     from plinder.data.pipeline.score import (
-        INTERFACE_QCOV_EXPORT_RELATIVE,
+        INTERFACE_SIMILARITY_EXPORT_RELATIVE,
         _interface_score_repair_task_batches,
         _interface_score_shard_batch,
         _source_signature,
-        finalize_interface_qcov_scores,
         finalize_interface_score_repair,
+        finalize_interface_similarity_scores,
         plan_interface_score_repair,
         plan_interface_scoring,
         plan_protein_scoring,
@@ -5178,13 +5220,13 @@ def test_interface_score_shards_retain_side_coverages_and_compact_export(tmp_pat
     assert pq.ParquetFile(empty).metadata.num_rows == 0
     assert pq.read_schema(empty).equals(schemas.INTERFACE_SCORE_SHARD_SCHEMA)
 
-    report = finalize_interface_qcov_scores(
+    report = finalize_interface_similarity_scores(
         tmp_path,
         scratch_dir=tmp_path / "finalize-scratch",
         threads=1,
         memory_limit="1GB",
     )
-    release = pd.read_parquet(tmp_path / INTERFACE_QCOV_EXPORT_RELATIVE)
+    release = pd.read_parquet(tmp_path / INTERFACE_SIMILARITY_EXPORT_RELATIVE)
     assert release.columns.tolist() == [
         "query_system",
         "target_system",
@@ -5595,9 +5637,9 @@ def test_metaflow_graph_uses_canonical_ligand_archive_stage():
     assert "self.pipeline.collate_ligand_3d_scores(self.input)" in flow
     assert "self.pipeline.merge_ligand_3d_scores(self.input)" in flow
     assert "self.pipeline.finalize_scores()" in flow
-    assert "self.next(self.scatter_export_sucos_shape_pocket_qcov)" in flow
-    assert "self.pipeline.export_sucos_shape_pocket_qcov(self.input)" in flow
-    assert "self.pipeline.finalize_sucos_export()" in flow
+    assert "self.next(self.scatter_export_ligand_similarity_scores)" in flow
+    assert "self.pipeline.export_ligand_similarity_scores(self.input)" in flow
+    assert "self.pipeline.finalize_ligand_similarity_scores()" in flow
     assert "self.next(self.make_linked_apo_structures)" in flow
     assert "self.pipeline.make_linked_apo_structures()" in flow
     assert "self.next(self.plan_clusters)" in flow
@@ -5716,8 +5758,8 @@ def test_ingest_configs_use_current_schema_and_stages():
             assert "plan_interface_scores" in cfg.flow.run_specific_stages
             assert "make_interface_scores" in cfg.flow.run_specific_stages
             assert "finalize_interface_scores" in cfg.flow.run_specific_stages
-            assert "export_sucos_shape_pocket_qcov" in cfg.flow.run_specific_stages
-            assert "finalize_sucos_export" in cfg.flow.run_specific_stages
+            assert "export_ligand_similarity_scores" in cfg.flow.run_specific_stages
+            assert "finalize_ligand_similarity_scores" in cfg.flow.run_specific_stages
             assert "map_batch_alignments" in cfg.flow.run_specific_stages
             assert cfg.flow.map_batch_alignments_batch_size == 1
             assert cfg.flow.make_interface_scores_batch_size == 1
