@@ -21,16 +21,9 @@ __all__ = ["sanitize"]
 from collections.abc import Callable
 from itertools import product
 
-import numpy as np
 import rdkit
 import rdkit.Chem.AllChem as Chem
-from numpy.typing import NDArray
 from rdkit.Chem.rdmolops import SanitizeFlags
-
-# biotite's ``element`` is a string, so filtering by ``element != "H"``
-# leaks deuterium ("D") and tritium ("T") atoms. Every heavy-atom filter
-# in the codebase should exclude all three.
-_HYDROGEN_ELEMENTS = ("H", "D", "T")
 
 # Main-group metals/metalloids that RDKit's SANITIZE_CLEANUP_ORGANOMETALLICS step
 # leaves alone (it dativises only transition-metal coordination). An over-valent
@@ -82,11 +75,6 @@ _REDUCED_BOND_ORDER = {
     Chem.BondType.DOUBLE: Chem.BondType.SINGLE,
     Chem.BondType.SINGLE: Chem.BondType.UNSPECIFIED,
 }
-
-
-def _is_hydrogen_isotope(elements: NDArray) -> NDArray:
-    """Bool mask for any hydrogen isotope atom (H/D/T)."""
-    return np.isin(elements, _HYDROGEN_ELEMENTS)
 
 
 def _has_no_valence_limit(atomic_num: int) -> bool:

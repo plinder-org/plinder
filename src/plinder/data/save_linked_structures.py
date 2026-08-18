@@ -10,9 +10,9 @@ from pathlib import Path
 import biotite.structure as struc
 import biotite.structure.io.pdbx as pdbx
 import pandas as pd
+from biotite.structure import filter_heavy
 
 from plinder.core import PlinderSystem, scores
-from plinder.core.structure.atoms import is_hydrogen_isotope
 from plinder.core.utils.log import setup_logger
 from plinder.data.annotations.cif_utils import (
     _cif_scalar,
@@ -75,7 +75,7 @@ def superpose_to_system(
     target_atoms = pdbx.get_structure(
         cif_file_obj, model=1, use_author_fields=False, include_bonds=True
     )
-    target_atoms = target_atoms[~is_hydrogen_isotope(target_atoms.element)]
+    target_atoms = target_atoms[filter_heavy(target_atoms)]
 
     if target_chain is not None:
         target_atoms = target_atoms[target_atoms.chain_id == target_chain]

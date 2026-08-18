@@ -298,7 +298,7 @@ def test_chain_from_cif_data_nucleotides(cif_8ufz):
     8ufz chain A is a 16-nt DNA strand (DA, DT, DC, DG residues).
     """
     import biotite.structure.io.pdbx as pdbx
-    from plinder.core.structure.atoms import is_hydrogen_isotope
+    from biotite.structure import filter_heavy
     from plinder.data.annotations.cif_utils import read_mmcif_file
     from plinder.data.annotations.protein_utils import Chain, get_seqres_from_cif
 
@@ -307,7 +307,7 @@ def test_chain_from_cif_data_nucleotides(cif_8ufz):
     atoms = pdbx.get_structure(
         cif_obj, model=1, use_author_fields=False, include_bonds=True
     )
-    atoms = atoms[~is_hydrogen_isotope(atoms.element)]
+    atoms = atoms[filter_heavy(atoms)]
     seqres = get_seqres_from_cif(block)
 
     chain_a_atoms = atoms[atoms.chain_id == "A"]
@@ -1225,7 +1225,7 @@ def test_smiles_from_nextgen(rcsb_ccd_reference_csv):
 def _build_resolved_mol(cif_path, chain_id):
     """Helper: build resolved mol from CIF chain using production code."""
     import biotite.structure.io.pdbx as pdbx
-    from plinder.core.structure.atoms import is_hydrogen_isotope
+    from biotite.structure import filter_heavy
     from plinder.data.annotations.cif_utils import (
         atoms_to_rdkit_mol,
         read_mmcif_file,
@@ -1235,7 +1235,7 @@ def _build_resolved_mol(cif_path, chain_id):
     atoms = pdbx.get_structure(
         cif_obj, model=1, use_author_fields=False, include_bonds=True
     )
-    atoms = atoms[~is_hydrogen_isotope(atoms.element)]
+    atoms = atoms[filter_heavy(atoms)]
     return atoms_to_rdkit_mol(atoms[atoms.chain_id == chain_id])
 
 
@@ -1477,14 +1477,14 @@ def test_nucleic_acid_receptor_detection(cif_8ufz):
     """
     import biotite.structure as struc
     import biotite.structure.io.pdbx as pdbx
-    from plinder.core.structure.atoms import is_hydrogen_isotope
+    from biotite.structure import filter_heavy
     from plinder.data.annotations.cif_utils import read_mmcif_file
 
     cif_obj = read_mmcif_file(cif_8ufz)
     atoms = pdbx.get_structure(
         cif_obj, model=1, use_author_fields=False, include_bonds=True
     )
-    atoms = atoms[~is_hydrogen_isotope(atoms.element)]
+    atoms = atoms[filter_heavy(atoms)]
 
     dna_chains = {"A", "B", "C", "D"}
     protein_chains = {"E", "F"}

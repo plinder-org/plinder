@@ -202,10 +202,10 @@ def test_known_compounds_not_flagged(boltz_cif):
     """Known CCD compounds like ATP should not be flagged as unknown."""
     # Inject fake ATP HETATMs into the CIF (enough to match CCD atom count)
     import biotite.structure.info as info
-    from plinder.core.structure.atoms import is_hydrogen_isotope
+    from biotite.structure import filter_heavy
 
     atp_ref = info.residue("ATP")
-    atp_heavy = atp_ref[~is_hydrogen_isotope(atp_ref.element)]
+    atp_heavy = atp_ref[filter_heavy(atp_ref)]
 
     f = pdbx.CIFFile.read(str(boltz_cif))
     block = list(f.values())[0]

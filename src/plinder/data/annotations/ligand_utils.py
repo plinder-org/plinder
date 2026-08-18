@@ -1434,10 +1434,10 @@ class Ligand(DocBaseModel):
 
         ccd_code = "-".join(_residues_in_order(lig_atoms))
         # Get SMILES from CCD template via biotite, fall back to structure
-        from plinder.core.structure.atoms import is_hydrogen_isotope
+        from biotite.structure import filter_heavy
 
         smiles = None
-        lig_heavy = lig_atoms[~is_hydrogen_isotope(lig_atoms.element)]
+        lig_heavy = lig_atoms[filter_heavy(lig_atoms)]
         # A components.cif-only code with no CIF _chem_comp_bond arrives without
         # its intra-residue bonds; borrow them from the CCD so the resolved-3D
         # mol below can still be built (no-op when bonds are already present).
