@@ -545,27 +545,26 @@ class PlinderSystem:
         Return the receptor structure as biotite AtomArray.
         """
         import biotite.structure.io.pdbx as pdbx
+        from biotite.structure import filter_heavy
 
-        from plinder.core.structure.atoms import is_hydrogen_isotope
         from plinder.data.annotations.cif_utils import read_mmcif_file
 
         cif_file = read_mmcif_file(self.receptor_cif)
         atoms = pdbx.get_structure(
             cif_file, model=1, use_author_fields=False, include_bonds=True
         )
-        return atoms[~is_hydrogen_isotope(atoms.element)]
+        return atoms[filter_heavy(atoms)]
 
     @cached_property
     def ligand_structures(self) -> dict[str, "struc.AtomArray"]:
         """Return heavy-atom ligand structures as Biotite atom arrays."""
+        from biotite.structure import filter_heavy
         from biotite.structure.io.mol import SDFile
-
-        from plinder.core.structure.atoms import is_hydrogen_isotope
 
         structures = {}
         for chain, ligand_sdf in self.ligand_sdfs.items():
             atoms = SDFile.read(ligand_sdf).record.get_structure()
-            structures[chain] = atoms[~is_hydrogen_isotope(atoms.element)]
+            structures[chain] = atoms[filter_heavy(atoms)]
         return structures
 
     @cached_property

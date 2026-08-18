@@ -579,8 +579,8 @@ def _query_chain_atoms(
 ) -> dict[str, Any]:
     """Return one coordinate representative per label asym protein chain."""
     import biotite.structure as struc
+    from biotite.structure import filter_heavy
 
-    from plinder.core.structure.atoms import is_hydrogen_isotope
     from plinder.data.annotations.cif_utils import (
         build_biounit,
         get_structure_with_altloc,
@@ -595,7 +595,7 @@ def _query_chain_atoms(
             use_author_fields=False,
             include_bonds=False,
         )
-        atoms = atoms[~is_hydrogen_isotope(atoms.element)]
+        atoms = atoms[filter_heavy(atoms)]
         return {
             str(chain_id): atoms[atoms.chain_id == chain_id]
             for chain_id in np.unique(atoms.chain_id)

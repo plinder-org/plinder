@@ -17,11 +17,11 @@ import networkit as nk
 import numpy as np
 import pandas as pd
 from biotite.file import DeserializationError, InvalidFileError
+from biotite.structure import filter_heavy
 from PDBValidation.ValidationFactory import ValidationFactory
 from pydantic import BeforeValidator, Field, PrivateAttr
 from rdkit import RDLogger
 
-from plinder.core.structure.atoms import is_hydrogen_isotope
 from plinder.core.utils.log import setup_logger
 from plinder.data.annotations.cif_utils import (
     apply_struct_conn_bonds,
@@ -1506,7 +1506,7 @@ class Entry(DocBaseModel):
         atoms = get_structure_with_altloc(
             cif_file_obj, model=1, use_author_fields=False, include_bonds=True
         )
-        atoms = atoms[~is_hydrogen_isotope(atoms.element)]
+        atoms = atoms[filter_heavy(atoms)]
         if atoms.bonds is None:
             raise ValueError(
                 f"{pdb_id}: biotite returned no bonds despite include_bonds=True"
@@ -2035,7 +2035,7 @@ class Entry(DocBaseModel):
         atoms = get_structure_with_altloc(
             cif_file_obj, model=1, use_author_fields=False, include_bonds=True
         )
-        atoms = atoms[~is_hydrogen_isotope(atoms.element)]
+        atoms = atoms[filter_heavy(atoms)]
         if atoms.bonds is None and include_ligands:
             # ``include_bonds=True`` returning ``None`` means biotite
             # derived **no bonds at all** for the structure — every

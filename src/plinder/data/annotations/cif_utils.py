@@ -42,7 +42,7 @@ class EntryTaxonomy(TypedDict):
 # Single source of truth lives in ``plinder.core.structure.atoms`` so
 # both ``plinder.core`` and ``plinder.data`` filter H/D/T isotopes
 # consistently.
-from plinder.core.structure.atoms import is_hydrogen_isotope  # noqa: E402
+from biotite.structure import filter_heavy  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Generic CIF I/O helpers
@@ -561,7 +561,7 @@ def build_biounit(
             include_bonds=True,
             extra_fields=["label_asym_id"],
         )
-        biounit = biounit[~is_hydrogen_isotope(biounit.element)]
+        biounit = biounit[filter_heavy(biounit)]
         if biounit.bonds is None:
             raise ValueError(
                 f"assembly {assembly_id}: biotite returned no bonds despite "
@@ -767,7 +767,7 @@ def atoms_to_rdkit_mol(
     # See plinder.core.utils.sanitize.
     from plinder.core.utils.sanitize import sanitize as peppr_sanitize
 
-    heavy = atoms[~is_hydrogen_isotope(atoms.element)]
+    heavy = atoms[filter_heavy(atoms)]
 
     # Multi-atom inputs must carry bonds; single atoms (ions) don't need any.
     if heavy.bonds is None or heavy.bonds.as_array().shape[0] == 0:
@@ -974,7 +974,7 @@ def _is_known_compound(comp_id: str, atom_names: set[str] | None = None) -> bool
         if ref is None:
             return False
         if atom_names is not None:
-            ref_heavy = ref[~is_hydrogen_isotope(ref.element)]
+            ref_heavy = ref[filter_heavy(ref)]
             ref_names = set(ref_heavy.atom_name)
             if not ref_names or not atom_names:
                 return False
@@ -1025,7 +1025,7 @@ def get_unknown_ligand_ids(cif_input: pdbx.CIFFile | Path | str) -> set[str]:
         )
         for comp_id in hetatm_ids:
             if elements is not None:
-                mask = (comp_ids == comp_id) & ~is_hydrogen_isotope(elements)
+                mask = (comp_ids == comp_id) & (elements != "H") & (elements != "D")
             else:
                 mask = comp_ids == comp_id
             atom_names_per_comp[comp_id] = set(a_names[mask])
@@ -1344,7 +1344,7 @@ def enrich_cif_with_ccd_bonds(
     atoms = pdbx.get_structure(
         cif_file, model=1, use_author_fields=False, include_bonds=False
     )
-    atoms = atoms[~is_hydrogen_isotope(atoms.element)]
+    atoms = atoms[filter_heavy(atoms)]
     bonds = _existing_chem_comp_bonds(
         block,
         replace_components=set(ligand_ccd_codes),
@@ -1373,7 +1373,7 @@ def enrich_cif_with_ccd_bonds(
                 f"{custom_comp_id!r} was not found in the Chemical Component "
                 "Dictionary"
             )
-        ccd_atoms = ccd_atoms[~is_hydrogen_isotope(ccd_atoms.element)]
+        ccd_atoms = ccd_atoms[filter_heavy(ccd_atoms)]
         if ccd_atoms.bonds is None or len(ccd_atoms.bonds.as_array()) == 0:
             raise ValueError(
                 f"CCD code {reference_code!r} has no heavy-atom bonds to assign "
@@ -1527,7 +1527,7 @@ def enrich_cif_with_smiles_bonds(
     atoms = pdbx.get_structure(
         cif_file, model=1, use_author_fields=False, include_bonds=True
     )
-    atoms = atoms[~is_hydrogen_isotope(atoms.element)]
+    atoms = atoms[filter_heavy(atoms)]
     bonds = _existing_chem_comp_bonds(block)
 
     for comp_id, smiles in to_process.items():

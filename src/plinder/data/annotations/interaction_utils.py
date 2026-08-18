@@ -21,10 +21,10 @@ import biotite.structure as struc
 import biotite.structure.io.pdbx as pdbx
 import numpy as np
 import peppr.contacts as peppr_contacts
+from biotite.structure import filter_heavy
 from numpy.typing import NDArray
 from rdkit import Chem
 
-from plinder.core.structure.atoms import is_hydrogen_isotope
 from plinder.core.utils.log import setup_logger
 
 log = setup_logger(__name__)
@@ -251,7 +251,7 @@ def get_symmetry_mate_contacts(
         # No symmetry information (NMR, computational models)
         return {}
     unit_cell = unit_cell[~struc.filter_solvent(unit_cell)]
-    unit_cell = unit_cell[~is_hydrogen_isotope(unit_cell.element)]
+    unit_cell = unit_cell[filter_heavy(unit_cell)]
 
     if unit_cell.box is None:
         return {}
@@ -272,7 +272,7 @@ def get_symmetry_mate_contacts(
     # Get ASU to determine atoms per symmetry copy
     asu = get_structure_with_altloc(cif_file, model=1, use_author_fields=False)
     asu = asu[~struc.filter_solvent(asu)]
-    asu = asu[~is_hydrogen_isotope(asu.element)]
+    asu = asu[filter_heavy(asu)]
     n_asu = len(asu)
     n_total = len(unit_cell)
     if n_total == n_asu:
