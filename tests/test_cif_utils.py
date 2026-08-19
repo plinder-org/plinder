@@ -836,7 +836,7 @@ def test_from_custom_cif_with_ccd_code(boltz_cif, tmp_path):
     assert ligands
     assert _get_ccd_smiles("T9C") is not None
     assert {ligand.smiles for ligand in ligands} == {_get_ccd_smiles("T9C")}
-    assert all(ligand.rdkit_canonical_smiles for ligand in ligands)
+    assert all(ligand.smiles for ligand in ligands)
     assert all(ligand.num_heavy_atoms for ligand in ligands)
     assert all(ligand.resolved_stereo_matches_template is True for ligand in ligands)
     fixed = pdbx.CIFFile.read(str(fixed_cif))

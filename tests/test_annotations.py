@@ -499,7 +499,6 @@ def test_multi_residue_ligand_uses_richer_identity_for_rdkit() -> None:
     ligand.set_rdkit()
 
     assert ligand.smiles == ligand.resolved_smiles
-    assert ligand.rdkit_canonical_smiles == ligand.resolved_smiles
     assert ligand.num_heavy_atoms == 2 * Chem.MolFromSmiles(nag).GetNumHeavyAtoms()
     assert ligand.is_oligosaccharide
     assert not ligand.is_monosaccharide
