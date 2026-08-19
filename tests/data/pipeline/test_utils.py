@@ -322,7 +322,7 @@ def test_scoreability_merge_reuses_complete_collated_column(tmp_path):
     assert str(result["ligand_is_3d_score_able"].dtype) == "boolean"
 
 
-def test_finalize_index_adds_local_clusters(tmp_path):
+def test_finalize_index_writes_local_clusters_to_sidecar(tmp_path):
     index_dir = tmp_path / "index"
     directed_cover_file = (
         tmp_path
@@ -394,16 +394,17 @@ def test_finalize_index_adds_local_clusters(tmp_path):
     ).to_parquet(tanimoto_cover_file, index=False)
     utils.finalize_index(data_dir=tmp_path)
     finalized = pd.read_parquet(index_dir / "annotation_table.parquet")
-    directed_labels = finalized["pli_qcov__100__ligand__directed_set_cover"]
+    clusters = pd.read_parquet(index_dir / "ligand_clusters.parquet")
+    directed_labels = clusters["pli_qcov__100__ligand__directed_set_cover"]
     assert directed_labels.iloc[0] == "d0"
     assert pd.isna(directed_labels.iloc[1])
-    centroid_flags = finalized["pli_qcov__100__ligand__directed_set_cover__is_centroid"]
+    centroid_flags = clusters["pli_qcov__100__ligand__directed_set_cover__is_centroid"]
     assert bool(centroid_flags.iloc[0])
     assert pd.isna(centroid_flags.iloc[1])
-    coverage_counts = finalized[
+    coverage_counts = clusters[
         "pli_qcov__100__ligand__directed_set_cover__coverage_count"
     ]
-    coverage_fractions = finalized[
+    coverage_fractions = clusters[
         "pli_qcov__100__ligand__directed_set_cover__coverage_fraction"
     ]
     assert coverage_counts.iloc[0] == 1
@@ -411,16 +412,18 @@ def test_finalize_index_adds_local_clusters(tmp_path):
     assert pd.isna(coverage_counts.iloc[1])
     assert pd.isna(coverage_fractions.iloc[1])
     tanimoto_column = "tanimoto_similarity_ecfp4_1024__90__ligand__set_cover"
-    assert finalized[tanimoto_column].tolist()[0] == "t0"
-    assert pd.isna(finalized[tanimoto_column].iloc[1])
-    assert bool(finalized[f"{tanimoto_column}__is_centroid"].iloc[0])
-    assert finalized["ligand_tanimoto_ecfp4_1024_90_cluster"].iloc[0] == "t0"
-    assert pd.isna(finalized["ligand_tanimoto_ecfp4_1024_90_cluster"].iloc[1])
-    assert finalized["ligand_tanimoto_ecfp4_1024_90_cluster_num_pdb_ids"].iloc[0] == 1
+    assert clusters[tanimoto_column].tolist()[0] == "t0"
+    assert pd.isna(clusters[tanimoto_column].iloc[1])
+    assert bool(clusters[f"{tanimoto_column}__is_centroid"].iloc[0])
+    assert clusters["ligand_tanimoto_ecfp4_1024_90_cluster"].iloc[0] == "t0"
+    assert pd.isna(clusters["ligand_tanimoto_ecfp4_1024_90_cluster"].iloc[1])
+    assert clusters["ligand_tanimoto_ecfp4_1024_90_cluster_num_pdb_ids"].iloc[0] == 1
     assert finalized.loc[0, "ligand_smiles_id"] == 0
     assert pd.isna(finalized.loc[1, "ligand_smiles_id"])
     assert finalized["ligand_is_3d_score_able"].tolist() == [True, False]
     assert "uniqueness" not in finalized.columns
+    assert not any("set_cover" in column for column in finalized)
+    assert "ligand_tanimoto_ecfp4_1024_90_cluster" not in finalized
 
 
 def test_cluster_index_rejects_non_tanimoto_set_cover(tmp_path):
@@ -445,7 +448,7 @@ def test_cluster_index_rejects_non_tanimoto_set_cover(tmp_path):
     )
 
     with pytest.raises(ValueError, match="invalid ligand set-cover modes"):
-        utils.add_cluster_columns(index=index, data_dir=tmp_path)
+        utils.build_ligand_cluster_table(index=index, data_dir=tmp_path)
 
 
 def test_tanimoto_90_set_cover_counts_distinct_pdb_ids(tmp_path):
@@ -472,7 +475,7 @@ def test_tanimoto_90_set_cover_counts_distinct_pdb_ids(tmp_path):
         }
     )
 
-    result = utils.add_cluster_columns(index=index, data_dir=tmp_path)
+    result = utils.build_ligand_cluster_table(index=index, data_dir=tmp_path)
 
     assert result["ligand_tanimoto_ecfp4_1024_90_cluster"].tolist() == [
         "c0",
@@ -511,7 +514,7 @@ def test_cluster_index_marks_only_directed_cover_centroids(tmp_path):
         }
     )
 
-    result = utils.add_cluster_columns(index=index, data_dir=tmp_path)
+    result = utils.build_ligand_cluster_table(index=index, data_dir=tmp_path)
 
     label_column = "pli_qcov__50__ligand__directed_set_cover"
     centroid_column = f"{label_column}__is_centroid"
@@ -552,7 +555,7 @@ def test_cluster_index_reads_legacy_cover_during_centrality_migration(tmp_path):
         }
     )
 
-    result = utils.add_cluster_columns(index=index, data_dir=tmp_path)
+    result = utils.build_ligand_cluster_table(index=index, data_dir=tmp_path)
 
     label_column = "pli_qcov__50__ligand__directed_set_cover"
     assert result[f"{label_column}__is_centroid"].tolist() == [False, True]

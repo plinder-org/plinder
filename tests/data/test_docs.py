@@ -176,12 +176,17 @@ def test_annotation_descriptions_follow_arrow_schema_order():
     from plinder.data.annotations.aggregate_annotations import System
     from plinder.data.annotations.ligand_utils import Ligand
 
-    schema = pa.schema(
+    annotation_schema = pa.schema(
         [
             ("ligand_id_legacy", pa.string()),
             ("ligand__members", pa.struct([("1.A", pa.list_(pa.int64()))])),
             ("ligand_member_asym_ids", pa.list_(pa.string())),
             ("system_id_legacy", pa.string()),
+        ]
+    )
+    cluster_schema = pa.schema(
+        [
+            ("ligand_id", pa.string()),
             (
                 "tanimoto_similarity_ecfp4_1024__50__ligand__set_cover",
                 pa.string(),
@@ -194,12 +199,19 @@ def test_annotation_descriptions_follow_arrow_schema_order():
     )
 
     descriptions = docs.get_table_column_descriptions(
-        table_name="annotation", schema=schema
+        table_name="annotation", schema=annotation_schema
+    )
+    cluster_descriptions = docs.get_table_column_descriptions(
+        table_name="ligand_clusters", schema=cluster_schema
     )
 
-    assert descriptions["Name"].tolist() == schema.names
-    assert descriptions["Type"].tolist() == [str(field.type) for field in schema]
+    assert descriptions["Name"].tolist() == annotation_schema.names
+    assert descriptions["Type"].tolist() == [
+        str(field.type) for field in annotation_schema
+    ]
     assert descriptions["Description"].str.len().gt(0).all()
+    assert cluster_descriptions["Name"].tolist() == cluster_schema.names
+    assert cluster_descriptions["Description"].str.len().gt(0).all()
     by_name = descriptions.set_index("Name")["Description"].to_dict()
     ligand_descriptions = {
         name: description
@@ -284,7 +296,7 @@ def test_table_descriptions_reject_retired_cover_modes():
 
     invalid_schemas = [
         (
-            "annotation",
+            "ligand_clusters",
             pa.schema(
                 [
                     (
@@ -296,15 +308,15 @@ def test_table_descriptions_reject_retired_cover_modes():
             ),
         ),
         (
-            "annotation",
+            "ligand_clusters",
             pa.schema([("pocket_qcov__50__ligand__community", pa.string())]),
         ),
         (
-            "interface_annotations",
+            "interface_clusters",
             pa.schema([("interface_qcov__50__component", pa.string())]),
         ),
         (
-            "interface_annotations",
+            "interface_clusters",
             pa.schema(
                 [
                     (
@@ -315,7 +327,7 @@ def test_table_descriptions_reject_retired_cover_modes():
             ),
         ),
         (
-            "interface_annotations",
+            "interface_clusters",
             pa.schema(
                 [
                     (
@@ -326,7 +338,7 @@ def test_table_descriptions_reject_retired_cover_modes():
             ),
         ),
         (
-            "interface_annotations",
+            "interface_clusters",
             pa.schema(
                 [
                     (
@@ -355,7 +367,7 @@ def test_table_descriptions_accept_published_interface_cover_columns():
         "interface_side_qcov__50__chain_2_directed_set_cover",
     ]
     descriptions = docs.get_table_column_descriptions(
-        table_name="interface_annotations",
+        table_name="interface_clusters",
         schema=pa.schema([(name, pa.string()) for name in names]),
     )
 
@@ -378,7 +390,7 @@ def test_checked_in_descriptions_cover_every_table():
 def test_checked_in_cluster_descriptions_match_published_cover_modes():
     from plinder.core.scores.metrics import DEFAULT_CLUSTER_METRICS
 
-    ligand_names = docs.get_column_descriptions("annotation")["Name"].tolist()
+    ligand_names = docs.get_column_descriptions("ligand_clusters")["Name"].tolist()
     metric_names = set(DEFAULT_CLUSTER_METRICS)
     ligand_cluster_names = [
         name for name in ligand_names if name.split("__", maxsplit=1)[0] in metric_names
@@ -394,7 +406,7 @@ def test_checked_in_cluster_descriptions_match_published_cover_modes():
         else:
             assert "__ligand__directed_set_cover" in name
 
-    interface_names = docs.get_column_descriptions("interface_annotations")[
+    interface_names = docs.get_column_descriptions("interface_clusters")[
         "Name"
     ].tolist()
     interface_cluster_names = [

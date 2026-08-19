@@ -54,6 +54,22 @@ def local_release(tmp_path: Path) -> PlinderRelease:
     )
     _write_table(
         release,
+        "interface_annotations",
+        {
+            "system_id": ["1abc__1__1.A--1.B", "2def__1__1.X--1.Y"],
+            "entry_pdb_id": ["1abc", "2def"],
+        },
+    )
+    _write_table(
+        release,
+        "interface_clusters",
+        {
+            "system_id": ["1abc__1__1.A--1.B", "2def__1__1.X--1.Y"],
+            "interface_qcov__50__directed_set_cover": ["interface_a", "interface_b"],
+        },
+    )
+    _write_table(
+        release,
         "entry_metadata",
         {
             "entry_pdb_id": ["1abc", "2def", "3ghi"],
@@ -68,6 +84,18 @@ def local_release(tmp_path: Path) -> PlinderRelease:
             "ligand_id": ["1abc__1__1.L", "2def__1__1.M"],
             "system_id": ["1abc__1__1.A__1.L", "2def__1__1.B__1.M"],
             "pocket_cluster": ["cluster_a", "cluster_b"],
+        },
+    )
+    _write_table(
+        release,
+        "ligand_clusters",
+        {
+            "ligand_id": ["1abc__1__1.L", "2def__1__1.M", "3ghi__1__1.N"],
+            "pocket_qcov__50__ligand__directed_set_cover": [
+                "cover_a",
+                "cover_a",
+                "cover_b",
+            ],
         },
     )
     _write_table(
@@ -92,6 +120,44 @@ def local_release(tmp_path: Path) -> PlinderRelease:
         },
     )
     return release
+
+
+def test_requested_cluster_column_is_joined_automatically(
+    local_release: PlinderRelease,
+) -> None:
+    cluster_column = "pocket_qcov__50__ligand__directed_set_cover"
+    result = query_table(
+        "annotation",
+        columns=["ligand_id", cluster_column],
+        filters=[(cluster_column, "==", "cover_b")],
+        release=local_release,
+    )
+
+    assert result.to_dict("records") == [
+        {
+            "ligand_id": "3ghi__1__1.N",
+            cluster_column: "cover_b",
+        }
+    ]
+
+
+def test_requested_interface_cluster_column_is_joined_automatically(
+    local_release: PlinderRelease,
+) -> None:
+    cluster_column = "interface_qcov__50__directed_set_cover"
+    result = query_table(
+        "interface_annotations",
+        columns=["system_id", cluster_column],
+        filters=[(cluster_column, "==", "interface_b")],
+        release=local_release,
+    )
+
+    assert result.to_dict("records") == [
+        {
+            "system_id": "2def__1__1.X--1.Y",
+            cluster_column: "interface_b",
+        }
+    ]
 
 
 def test_query_table_infers_related_tables_without_changing_ligand_rows(

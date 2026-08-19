@@ -23,10 +23,12 @@ RELEASE_PATHS = {
     "alignment_chain_lookup": "index/alignment_chain_lookup.parquet",
     "ligand_pocket_membership": "index/ligand_pocket_membership.parquet",
     "ligand_pocket_representatives": ("index/ligand_pocket_representatives.parquet"),
+    "ligand_clusters": "index/ligand_clusters.parquet",
     "ligand_mmp_pairs": "index/ligand_mmp_pairs.parquet",
     "interface_half_representatives": ("index/interface_half_representatives.parquet"),
     "interface_membership": "index/interface_membership.parquet",
     "interface_representatives": "index/interface_representatives.parquet",
+    "interface_clusters": "index/interface_clusters.parquet",
     "alignments": "alignments",
     "alignment_shard": (
         "alignments/search_db={search_db}/alignment_type={alignment_type}/"
@@ -102,6 +104,11 @@ RELEASE_TABLES: dict[str, dict[str, Any]] = {
         "row_description": "ligand-pocket representative",
         "primary_key": ("representative_ligand_id",),
     },
+    "ligand_clusters": {
+        "artifact": "ligand_clusters",
+        "row_description": "ligand cluster assignments",
+        "primary_key": ("ligand_id",),
+    },
     "ligand_mmp_pairs": {
         "artifact": "ligand_mmp_pairs",
         "row_description": "matched molecular pair and shared core",
@@ -126,6 +133,11 @@ RELEASE_TABLES: dict[str, dict[str, Any]] = {
         "artifact": "interface_representatives",
         "row_description": "protein-interface representative",
         "primary_key": ("representative_system_id",),
+    },
+    "interface_clusters": {
+        "artifact": "interface_clusters",
+        "row_description": "protein-interface cluster assignments",
+        "primary_key": ("system_id",),
     },
 }
 

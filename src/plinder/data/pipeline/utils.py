@@ -476,8 +476,8 @@ def _cluster_column_name(
     return f"{metric}__{threshold}{ligand_marker}__{kind}"
 
 
-def add_cluster_columns(*, index: pd.DataFrame, data_dir: Path) -> pd.DataFrame:
-    """Merge ligand Tanimoto and directed set-cover labels into the index."""
+def build_ligand_cluster_table(*, index: pd.DataFrame, data_dir: Path) -> pd.DataFrame:
+    """Build one queryable cluster-assignment row per ligand."""
     node_column = "ligand_id"
     directed_cover_root = data_dir / "ligand_sampling" / "directed_set_cover"
     marker_path = data_dir / "index" / "collation.json"
@@ -492,12 +492,14 @@ def add_cluster_columns(*, index: pd.DataFrame, data_dir: Path) -> pd.DataFrame:
     directed_cover_paths = sorted(
         directed_cover_root.glob("metric=*/threshold=*.parquet")
     )
-    if not reciprocal_paths and not directed_cover_paths:
-        if repair_started_ns is not None:
-            raise FileNotFoundError(
-                "targeted collation repair has no rebuilt ligand clusters"
-            )
-        return index
+    if (
+        not reciprocal_paths
+        and not directed_cover_paths
+        and repair_started_ns is not None
+    ):
+        raise FileNotFoundError(
+            "targeted collation repair has no rebuilt ligand clusters"
+        )
     set_cover_keys = {
         (
             next(
@@ -536,6 +538,8 @@ def add_cluster_columns(*, index: pd.DataFrame, data_dir: Path) -> pd.DataFrame:
         index[node_column].dropna().astype(str).unique(),
         name=node_column,
     )
+    if not reciprocal_paths and not directed_cover_paths:
+        return pd.DataFrame({node_column: node_ids.to_numpy()})
     proper = index["ligand_is_proper"].fillna(False).astype(bool)
     holo = index["system_type"].eq("holo")
     expected_score_nodes = set(
@@ -728,47 +732,18 @@ def add_cluster_columns(*, index: pd.DataFrame, data_dir: Path) -> pd.DataFrame:
         {node_column: node_ids.to_numpy(), **cluster_columns},
         copy=False,
     )
-    replacement_columns = set(wide.columns).difference({node_column})
-    stale_ligand_cluster_columns = {
-        column
-        for column in index.columns
-        if "__ligand__" in column
-        and column.endswith(
-            (
-                "__component",
-                "__community",
-                "__set_cover",
-                "__set_cover__is_centroid",
-                "__directed_set_cover",
-                "__directed_set_cover__is_centroid",
-                "__directed_set_cover__coverage_count",
-                "__directed_set_cover__coverage_fraction",
-            )
-        )
-    }
     LOG.info(
-        "merging %d ligand-level cluster columns into the annotation index",
-        len(replacement_columns),
-    )
-    result = index.drop(
-        columns=list(
-            replacement_columns.intersection(index.columns)
-            | stale_ligand_cluster_columns
-        )
-    ).merge(wide, on=node_column, how="left", validate="many_to_one")
-    LOG.info(
-        "cluster index merge complete: rows=%d columns=%d elapsed_seconds=%.1f",
-        len(result),
-        len(replacement_columns),
+        "ligand cluster table complete: rows=%d columns=%d elapsed_seconds=%.1f",
+        *wide.shape,
         time() - started,
     )
-    return result
+    return wide
 
 
-def add_interface_cluster_columns(
+def build_interface_cluster_table(
     *, index: pd.DataFrame, data_dir: Path
 ) -> pd.DataFrame:
-    """Expand representative interface-cluster labels into the full index."""
+    """Build one queryable cluster-assignment row per protein interface."""
     node_column = "system_id"
     directed_cover_root = data_dir / "interface_sampling" / "directed_set_cover"
     marker_path = data_dir / "index" / "collation.json"
@@ -790,7 +765,7 @@ def add_interface_cluster_columns(
             raise FileNotFoundError(
                 "non-empty interface annotation has no published interface clusters"
             )
-        return index
+        return pd.DataFrame({node_column: pd.Series(dtype="string")})
 
     node_ids = pd.Index(
         index[node_column].dropna().astype(str).unique(),
@@ -908,26 +883,12 @@ def add_interface_cluster_columns(
         {node_column: node_ids.to_numpy(), **cluster_columns},
         copy=False,
     )
-    replacement_columns = set(wide.columns).difference({node_column})
-    stale_columns = {
-        column
-        for column in index.columns
-        if column.startswith(("interface_qcov__", "interface_side_qcov__"))
-        and column.endswith(
-            ("component", "community", "set_cover", "directed_set_cover")
-        )
-    }
-    result = index.drop(
-        columns=list(replacement_columns.intersection(index.columns) | stale_columns)
-    ).merge(wide, on=node_column, how="left", validate="one_to_one")
     LOG.info(
-        "interface cluster index merge complete: rows=%d columns=%d "
-        "elapsed_seconds=%.1f",
-        len(result),
-        len(replacement_columns),
+        "interface cluster table complete: rows=%d columns=%d elapsed_seconds=%.1f",
+        *wide.shape,
         time() - started,
     )
-    return result
+    return wide
 
 
 def add_ligand_similarity_columns(
@@ -1134,8 +1095,37 @@ def add_aggregated_columns(*, index: pd.DataFrame) -> pd.DataFrame:
     return index
 
 
+def _is_ligand_cluster_column(column: str) -> bool:
+    """Return whether a column belongs in the ligand-cluster sidecar."""
+    return column in {
+        "ligand_tanimoto_ecfp4_1024_90_cluster",
+        "ligand_tanimoto_ecfp4_1024_90_cluster_num_pdb_ids",
+    } or (
+        "__ligand__" in column
+        and column.endswith(
+            (
+                "__component",
+                "__community",
+                "__set_cover",
+                "__set_cover__is_centroid",
+                "__directed_set_cover",
+                "__directed_set_cover__is_centroid",
+                "__directed_set_cover__coverage_count",
+                "__directed_set_cover__coverage_fraction",
+            )
+        )
+    )
+
+
+def _is_interface_cluster_column(column: str) -> bool:
+    """Return whether a column belongs in the interface-cluster sidecar."""
+    return column.startswith(("interface_qcov__", "interface_side_qcov__")) and (
+        "component" in column or "community" in column or "set_cover" in column
+    )
+
+
 def finalize_index(*, data_dir: Path) -> pd.DataFrame:
-    """Merge local cluster labels into the release annotation parquet."""
+    """Publish enriched annotations and separate cluster-assignment tables."""
     started = time()
     index_path = data_dir / "index" / "annotation_table.parquet"
     if not index_path.is_file():
@@ -1148,45 +1138,70 @@ def finalize_index(*, data_dir: Path) -> pd.DataFrame:
     LOG.info("merged ligand 3D-scoreability annotations")
     index = add_ligand_similarity_columns(index=index, data_dir=data_dir)
     LOG.info("merged ligand similarity annotations")
-    index = add_cluster_columns(index=index, data_dir=data_dir)
+    ligand_clusters = build_ligand_cluster_table(index=index, data_dir=data_dir)
+    index.drop(
+        columns=[column for column in index if _is_ligand_cluster_column(column)],
+        inplace=True,
+    )
     interface_path = data_dir / "index" / "interface_annotation_table.parquet"
     interface_index: pd.DataFrame | None = None
+    interface_clusters: pd.DataFrame | None = None
     if interface_path.is_file():
-        interface_index = add_interface_cluster_columns(
-            index=pd.read_parquet(interface_path),
+        interface_index = pd.read_parquet(interface_path)
+        interface_clusters = build_interface_cluster_table(
+            index=interface_index,
             data_dir=data_dir,
+        )
+        interface_index.drop(
+            columns=[
+                column
+                for column in interface_index
+                if _is_interface_cluster_column(column)
+            ],
+            inplace=True,
         )
 
     temporary = index_path.with_suffix(".tmp.parquet")
     temporary_interface = interface_path.with_suffix(".tmp.parquet")
+    ligand_clusters_path = data_dir / "index" / "ligand_clusters.parquet"
+    interface_clusters_path = data_dir / "index" / "interface_clusters.parquet"
+    temporary_ligand_clusters = ligand_clusters_path.with_suffix(".tmp.parquet")
+    temporary_interface_clusters = interface_clusters_path.with_suffix(".tmp.parquet")
     try:
-        LOG.info("staging enriched annotation indexes")
+        LOG.info("staging annotation and cluster tables")
         index.to_parquet(temporary, index=False)
+        ligand_clusters.to_parquet(temporary_ligand_clusters, index=False)
         if interface_index is not None:
             interface_index.to_parquet(temporary_interface, index=False)
-        if interface_index is None:
-            temporary.replace(index_path)
-        else:
-            # The primary annotation table is the readability marker for this
-            # generation. Install it last so an interrupted two-table update
-            # fails closed instead of exposing mixed ligand/interface tables.
-            index_path.unlink()
-            temporary_interface.replace(interface_path)
-            temporary.replace(index_path)
-    except BaseException:
+            assert interface_clusters is not None
+            interface_clusters.to_parquet(
+                temporary_interface_clusters,
+                index=False,
+            )
+        # The primary annotation table is the readability marker for this
+        # generation. Install it last so an interrupted update fails closed
+        # instead of exposing mismatched annotation and cluster tables.
+        index_path.unlink()
         if interface_index is not None:
-            index_path.unlink(missing_ok=True)
+            temporary_interface.replace(interface_path)
+            temporary_interface_clusters.replace(interface_clusters_path)
+        temporary_ligand_clusters.replace(ligand_clusters_path)
+        temporary.replace(index_path)
+    except BaseException:
+        index_path.unlink(missing_ok=True)
         raise
     finally:
         temporary.unlink(missing_ok=True)
         temporary_interface.unlink(missing_ok=True)
+        temporary_ligand_clusters.unlink(missing_ok=True)
+        temporary_interface_clusters.unlink(missing_ok=True)
     if interface_index is not None:
         LOG.info(
-            "wrote enriched interface index: rows=%d columns=%d",
+            "wrote interface annotations: rows=%d columns=%d",
             *interface_index.shape,
         )
     LOG.info(
-        "final index enrichment complete: rows=%d columns=%d elapsed_seconds=%.1f",
+        "final table publication complete: rows=%d columns=%d elapsed_seconds=%.1f",
         *index.shape,
         time() - started,
     )

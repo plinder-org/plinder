@@ -4453,9 +4453,7 @@ def test_finalize_index_preserves_current_alignment_lookup(
     assert tasks._completed_alignment_chain_lookup(tmp_path) is not None
 
 
-def test_interface_cluster_columns_merge_into_interface_annotation(
-    tmp_path, monkeypatch
-):
+def test_interface_cluster_columns_are_written_to_sidecar(tmp_path, monkeypatch):
     from plinder.data.pipeline import utils
 
     interfaces = pd.DataFrame(
@@ -4519,7 +4517,7 @@ def test_interface_cluster_columns_merge_into_interface_annotation(
         }
     ).to_parquet(side_cover, index=False)
 
-    result = utils.add_interface_cluster_columns(index=interfaces, data_dir=tmp_path)
+    result = utils.build_interface_cluster_table(index=interfaces, data_dir=tmp_path)
 
     assert result["interface_qcov__50__directed_set_cover"].tolist() == [
         "c0",
@@ -4554,7 +4552,7 @@ def test_interface_cluster_columns_merge_into_interface_annotation(
     )
     monkeypatch.setattr(
         utils,
-        "add_cluster_columns",
+        "build_ligand_cluster_table",
         lambda *, index, data_dir: index,
     )
 
@@ -4563,7 +4561,9 @@ def test_interface_cluster_columns_merge_into_interface_annotation(
     finalized_interfaces = pd.read_parquet(
         index_dir / "interface_annotation_table.parquet"
     )
-    assert finalized_interfaces["interface_qcov__50__directed_set_cover"].tolist() == [
+    finalized_clusters = pd.read_parquet(index_dir / "interface_clusters.parquet")
+    assert "interface_qcov__50__directed_set_cover" not in finalized_interfaces
+    assert finalized_clusters["interface_qcov__50__directed_set_cover"].tolist() == [
         "c0",
         "c0",
     ]
@@ -4582,10 +4582,10 @@ def test_interface_cluster_columns_merge_into_interface_annotation(
 
 
 def test_nonempty_interface_annotation_requires_cluster_artifacts(tmp_path):
-    from plinder.data.pipeline.utils import add_interface_cluster_columns
+    from plinder.data.pipeline.utils import build_interface_cluster_table
 
     with pytest.raises(FileNotFoundError, match="no published interface clusters"):
-        add_interface_cluster_columns(
+        build_interface_cluster_table(
             index=pd.DataFrame({"system_id": ["1abc__1__1.A--1.B"]}),
             data_dir=tmp_path,
         )

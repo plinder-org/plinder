@@ -4348,13 +4348,13 @@ def summarize_clusters(
 
 
 def finalize_index(*, data_dir: Path) -> None:
-    """Merge locally generated cluster IDs into the annotation indexes."""
+    """Publish annotation enrichment and queryable cluster sidecars."""
     lookup_was_current = _completed_alignment_chain_lookup(data_dir) is not None
     utils.finalize_index(data_dir=data_dir)
-    # finalize_index only adds ligand and cluster annotations; it preserves the
-    # entry, chain, pocket, and interface fields from which the normalized
-    # inputs were built. Refresh those source signatures so an otherwise valid
-    # mapped release does not become stale merely because clusters were published.
+    # finalize_index preserves the entry, chain, pocket, and interface fields
+    # used to build the representative inputs. Refresh those source signatures
+    # so an otherwise valid mapped release does not become stale merely because
+    # the final tables were published.
     if lookup_was_current:
         _refresh_representative_source_manifests(data_dir)
         _write_alignment_chain_lookup_manifest(data_dir)

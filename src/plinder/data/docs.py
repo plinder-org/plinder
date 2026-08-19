@@ -431,7 +431,24 @@ def _validate_published_cover_columns(*, table_name: str, names: list[str]) -> N
     """Reject cluster columns that the current finalizers do not publish."""
     invalid: list[str] = []
     if table_name == "annotation":
+        invalid.extend(
+            name
+            for name in names
+            if "__ligand__" in name
+            or name.startswith("ligand_tanimoto_ecfp4_1024_90_cluster")
+        )
+    elif table_name == "ligand_clusters":
         cover_names = [name for name in names if "__ligand__" in name]
+        allowed_fixed = {
+            "ligand_id",
+            "ligand_tanimoto_ecfp4_1024_90_cluster",
+            "ligand_tanimoto_ecfp4_1024_90_cluster_num_pdb_ids",
+        }
+        invalid.extend(
+            name
+            for name in names
+            if name not in allowed_fixed and name not in cover_names
+        )
         for name in cover_names:
             if "__component" in name or "__community" in name:
                 invalid.append(name)
@@ -441,11 +458,20 @@ def _validate_published_cover_columns(*, table_name: str, names: list[str]) -> N
             elif "__set_cover" in name and "__directed_set_cover" not in name:
                 invalid.append(name)
     elif table_name == "interface_annotations":
+        invalid.extend(
+            name
+            for name in names
+            if name.startswith(("interface_qcov__", "interface_side_qcov__"))
+        )
+    elif table_name == "interface_clusters":
         cover_names = [
             name
             for name in names
             if name.startswith(("interface_qcov__", "interface_side_qcov__"))
         ]
+        invalid.extend(
+            name for name in names if name != "system_id" and name not in cover_names
+        )
         invalid.extend(
             name
             for name in cover_names

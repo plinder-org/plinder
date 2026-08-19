@@ -35,6 +35,7 @@ TABLE_JOINS: dict[str, dict[str, JoinKeys]] = {
         "entry_metadata": (("entry_pdb_id", "entry_pdb_id"),),
         "entry_sources": (("entry_pdb_id", "entry_pdb_id"),),
         "ligand_pocket_membership": (("ligand_id", "ligand_id"),),
+        "ligand_clusters": (("ligand_id", "ligand_id"),),
     },
     "entry_chains": {
         "alignment_chain_lookup": (
@@ -59,6 +60,7 @@ TABLE_JOINS: dict[str, dict[str, JoinKeys]] = {
         "entry_metadata": (("entry_pdb_id", "entry_pdb_id"),),
         "entry_sources": (("entry_pdb_id", "entry_pdb_id"),),
         "interface_membership": (("system_id", "system_id"),),
+        "interface_clusters": (("system_id", "system_id"),),
     },
     "alignment_chain_lookup": {
         "entry_chains": (
@@ -69,8 +71,16 @@ TABLE_JOINS: dict[str, dict[str, JoinKeys]] = {
     "ligand_pocket_membership": {
         "annotation": (("ligand_id", "ligand_id"),),
         "system_validation": (("system_id", "system_id"),),
+        "ligand_clusters": (("ligand_id", "ligand_id"),),
+    },
+    "ligand_clusters": {
+        "annotation": (("ligand_id", "ligand_id"),),
     },
     "interface_membership": {
+        "interface_annotations": (("system_id", "system_id"),),
+        "interface_clusters": (("system_id", "system_id"),),
+    },
+    "interface_clusters": {
         "interface_annotations": (("system_id", "system_id"),),
     },
     "linked_apo_structures": {

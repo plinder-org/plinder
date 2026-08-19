@@ -1242,14 +1242,16 @@ def test_ligand_covers_are_merged_without_system_projection(tmp_path):
     ).to_parquet(directed_cover, index=False)
 
     finalized = finalize_index(data_dir=tmp_path)
+    cluster_table = pd.read_parquet(index_dir / "ligand_clusters.parquet")
     ligand_column = "sucos_shape_pocket_qcov__50__ligand__directed_set_cover"
     assert "sucos_shape_pocket_qcov__50__directed_set_cover" not in finalized
-    finalized_labels = finalized.set_index("ligand_id")[ligand_column]
+    assert ligand_column not in finalized
+    finalized_labels = cluster_table.set_index("ligand_id")[ligand_column]
     assert finalized_labels[ligand_a1] == finalized_labels[ligand_b]
     assert finalized_labels[ligand_a2] != finalized_labels[ligand_a1]
     assert pd.isna(finalized_labels[ligand_d])
     centroid_column = f"{ligand_column}__is_centroid"
-    finalized_centroids = finalized.set_index("ligand_id")[centroid_column]
+    finalized_centroids = cluster_table.set_index("ligand_id")[centroid_column]
     assert bool(finalized_centroids[ligand_a1])
     assert not bool(finalized_centroids[ligand_b])
     assert not bool(
