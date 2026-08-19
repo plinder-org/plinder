@@ -1,6 +1,7 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
 
+import pytest
 from plinder.data import docs
 
 
@@ -236,6 +237,38 @@ def test_annotation_descriptions_reject_repeated_entry_metadata():
                     ("entry_pdb_id", pa.string()),
                     ("entry_resolution", pa.float64()),
                 ]
+            ),
+        )
+
+
+@pytest.mark.parametrize(
+    "column",
+    [
+        "system_id_no_biounit",
+        "system_ligand_chains",
+        "system_protein_chains_auth_id",
+        "system_protein_chains_validation_average_rsr",
+        "system_ligand_validation_average_rsr",
+    ],
+)
+def test_annotation_descriptions_reject_moved_or_retired_columns(column: str):
+    import pyarrow as pa
+
+    with pytest.raises(ValueError, match="owned by sidecars or retired"):
+        docs.get_table_column_descriptions(
+            table_name="annotation",
+            schema=pa.schema([("ligand_id", pa.string()), (column, pa.string())]),
+        )
+
+
+def test_system_validation_descriptions_reject_unrelated_columns():
+    import pyarrow as pa
+
+    with pytest.raises(ValueError, match="non-validation columns"):
+        docs.get_table_column_descriptions(
+            table_name="system_validation",
+            schema=pa.schema(
+                [("system_id", pa.string()), ("ligand_smiles", pa.string())]
             ),
         )
 

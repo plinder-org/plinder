@@ -13,6 +13,7 @@ from plinder.core.utils.config import get_config
 
 RELEASE_PATHS = {
     "annotation_table": "index/annotation_table.parquet",
+    "system_validation": "index/system_validation.parquet",
     "entry_chains": "index/entry_chains.parquet",
     "entry_biounit_chains": "index/entry_biounit_chains.parquet",
     "entry_metadata": "index/entry_metadata.parquet",
@@ -50,6 +51,11 @@ RELEASE_TABLES: dict[str, dict[str, Any]] = {
         "artifact": "annotation_table",
         "row_description": "ligand",
         "primary_key": ("ligand_id",),
+    },
+    "system_validation": {
+        "artifact": "system_validation",
+        "row_description": "ligand-binding system validation summary",
+        "primary_key": ("system_id",),
     },
     "entry_chains": {
         "artifact": "entry_chains",

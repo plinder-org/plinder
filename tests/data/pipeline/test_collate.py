@@ -50,9 +50,17 @@ def _write_entry(
             "entry_pH": ph,
             "system_biounit_id": "1",
             "system_id": system_id,
+            "system_id_no_biounit": f"{pdb_id}__1.A__1.L",
+            "system_id_legacy": f"{pdb_id}__1__1.A__1.L",
             "system_type": "holo",
             "system_protein_chains_length": [100, 200],
+            "system_ligand_chains": ["1.L"],
+            "system_ligand_chains_asym_id": ["1.L"],
+            "system_ligand_validation_average_rsr": 0.1,
+            "system_pocket_validation_average_rsr": 0.2,
             "ligand_id": ligand["ligand_id"],
+            "ligand_id_legacy": ligand["ligand_id"],
+            "ligand_rdkit_canonical_smiles": "C",
             "ligand_unique_ccd_code": ligand["ccd"],
             "ligand_is_proper": ligand["proper"],
             "ligand_is_lipinski": ligand["proper"],
@@ -72,6 +80,19 @@ def _write_entry(
             "system_pocket_ECOD": "retired",
             "system_pocket_kinase_name": "retired",
         }
+        for prefix in (
+            "system_protein_chains_",
+            "system_ligand_chains_",
+            "ligand_protein_chains_",
+            "ligand_neighboring_ligand_chains_",
+            "ligand_interacting_ligand_chains_",
+        ):
+            row[f"{prefix}auth_id"] = ["A"]
+            row[f"{prefix}entity_id"] = ["1"]
+            row[f"{prefix}num_unresolved_residues"] = [0]
+            row[f"{prefix}validation_average_rsr"] = [0.1]
+            if f"{prefix}length" not in row:
+                row[f"{prefix}length"] = [100]
         annotation_rows.append(row)
     pd.DataFrame(annotation_rows).to_parquet(
         raw_root / f"{pdb_id}.parquet", index=False
@@ -255,6 +276,7 @@ def test_plan_shards_and_finalize_release_contract(tmp_path: Path) -> None:
     assert first == cached
     assert report["row_counts"] == {
         "annotation": 3,
+        "system_validation": 2,
         "entry_chains": 4,
         "entry_biounit_chains": 4,
         "entry_metadata": 2,
@@ -271,6 +293,35 @@ def test_plan_shards_and_finalize_release_contract(tmp_path: Path) -> None:
         for column in annotation.columns
         if any(marker in column.casefold() for marker in ("ecod", "kinase"))
     }
+    retired_annotation_columns = {
+        "system_id_no_biounit",
+        "system_ligand_chains",
+    }
+    assert retired_annotation_columns.isdisjoint(annotation.columns)
+    assert not any(
+        column.startswith(
+            (
+                "system_ligand_validation_",
+                "system_pocket_validation_",
+            )
+        )
+        for column in annotation.columns
+    )
+    for prefix in (
+        "system_protein_chains_",
+        "system_ligand_chains_",
+        "ligand_protein_chains_",
+        "ligand_neighboring_ligand_chains_",
+        "ligand_interacting_ligand_chains_",
+    ):
+        for suffix in (
+            "auth_id",
+            "entity_id",
+            "length",
+            "num_unresolved_residues",
+        ):
+            assert f"{prefix}{suffix}" not in annotation.columns
+    assert not any("_chains_validation_" in column for column in annotation.columns)
     first_entry = annotation[annotation["entry_pdb_id"] == "1abc"]
     assert first_entry["biounit_num_ligands"].tolist() == [2, 2]
     assert first_entry["biounit_num_unique_ccd_codes"].tolist() == [2, 2]
@@ -286,6 +337,15 @@ def test_plan_shards_and_finalize_release_contract(tmp_path: Path) -> None:
     }
     metadata = pd.read_parquet(tmp_path / "index/entry_metadata.parquet")
     assert metadata.set_index("entry_pdb_id").loc["2def", "entry_pH"] == 7.4
+    system_validation = pd.read_parquet(
+        tmp_path / "index/system_validation.parquet"
+    ).set_index("system_id")
+    assert system_validation.loc[
+        "1abc__1__1.A__1.L", "system_ligand_validation_average_rsr"
+    ] == pytest.approx(0.1)
+    assert system_validation.loc[
+        "1abc__1__1.A__1.L", "system_pocket_validation_average_rsr"
+    ] == pytest.approx(0.2)
     marker = json.loads((tmp_path / "index/collation.json").read_text())
     assert marker["status"] == "complete"
     assert marker["interface_min_residues"] == 7
@@ -367,6 +427,8 @@ def test_interface_only_collation_preserves_installed_ligand_annotation(
     annotation["release_only"] = "preserve"
     annotation.to_parquet(annotation_path, index=False)
     annotation_bytes = annotation_path.read_bytes()
+    system_validation_path = tmp_path / "index/system_validation.parquet"
+    system_validation_bytes = system_validation_path.read_bytes()
     legacy_chain_path = tmp_path / "raw_entries/ab/1abc/entry_chains.parquet"
     legacy_chains = pd.read_parquet(legacy_chain_path).drop(
         columns="chain_is_ligand_like"
@@ -389,6 +451,7 @@ def test_interface_only_collation_preserves_installed_ligand_annotation(
 
     assert report["include_ligand_annotations"] is False
     assert annotation_path.read_bytes() == annotation_bytes
+    assert system_validation_path.read_bytes() == system_validation_bytes
     assert report["interface_count"] == 2
     chains = pd.read_parquet(tmp_path / "index/entry_chains.parquet")
     assert chains.set_index(["entry_pdb_id", "chain_asym_id"]).loc[
@@ -625,6 +688,7 @@ def test_final_install_fails_closed_on_partial_replacement(
 ) -> None:
     names = (
         "annotation",
+        "system_validation",
         "entry_chains",
         "entry_biounit_chains",
         "entry_metadata",
@@ -655,6 +719,7 @@ def test_final_install_fails_closed_on_partial_replacement(
 
     assert not marker.exists()
     assert not final_paths["annotation"].exists()
+    assert not final_paths["system_validation"].exists()
 
 
 def test_plan_rejects_partial_materialized_entries(tmp_path: Path) -> None:

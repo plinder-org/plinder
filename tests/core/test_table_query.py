@@ -42,6 +42,18 @@ def local_release(tmp_path: Path) -> PlinderRelease:
     )
     _write_table(
         release,
+        "system_validation",
+        {
+            "system_id": [
+                "1abc__1__1.A__1.L",
+                "2def__1__1.B__1.M",
+                "3ghi__1__1.C__1.N",
+            ],
+            "system_pocket_validation_average_rscc": [0.95, 0.8, None],
+        },
+    )
+    _write_table(
+        release,
         "entry_metadata",
         {
             "entry_pdb_id": ["1abc", "2def", "3ghi"],
@@ -124,6 +136,24 @@ def test_requested_entry_metadata_is_joined_automatically(
 
     assert result["entry_resolution"].tolist()[:2] == [1.5, 2.5]
     assert pd.isna(result["entry_resolution"].iloc[2])
+
+
+def test_requested_system_validation_is_joined_automatically(
+    local_release: PlinderRelease,
+) -> None:
+    result = query_table(
+        "annotation",
+        columns=["ligand_id", "system_pocket_validation_average_rscc"],
+        filters=[("system_pocket_validation_average_rscc", ">=", 0.9)],
+        release=local_release,
+    )
+
+    assert result.to_dict("records") == [
+        {
+            "ligand_id": "1abc__1__1.L",
+            "system_pocket_validation_average_rscc": 0.95,
+        }
+    ]
 
 
 def test_sparse_sidecar_does_not_erase_base_identifiers(
@@ -290,7 +320,11 @@ def test_query_table_requires_a_choice_for_ambiguous_related_columns(
     _write_table(
         release,
         "entry_metadata",
-        {"entry_pdb_id": ["1abc"], "shared_value": [1]},
+        {
+            "entry_pdb_id": ["1abc"],
+            "metadata_only": [3],
+            "shared_value": [1],
+        },
     )
     _write_table(
         release,
@@ -304,6 +338,19 @@ def test_query_table_requires_a_choice_for_ambiguous_related_columns(
             columns=["ligand_id", "shared_value"],
             release=release,
         )
+
+    inferred = query_table(
+        "annotation",
+        columns=["ligand_id", "shared_value", "metadata_only"],
+        release=release,
+    )
+    assert inferred.to_dict("records") == [
+        {
+            "ligand_id": "1abc__1__1.L",
+            "shared_value": 1,
+            "metadata_only": 3,
+        }
+    ]
 
     selected = query_table(
         "annotation",

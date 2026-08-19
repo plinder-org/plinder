@@ -33,6 +33,11 @@ def test_ligand_mmp_pairs_are_a_release_table():
     )
 
 
+def test_system_validation_is_a_release_table():
+    assert RELEASE_PATHS["system_validation"] == "index/system_validation.parquet"
+    assert RELEASE_TABLES["system_validation"]["primary_key"] == ("system_id",)
+
+
 def test_path_does_not_require_artifact_to_exist(tmp_path):
     release = PlinderRelease(tmp_path)
     assert release.path("annotation_table") == (

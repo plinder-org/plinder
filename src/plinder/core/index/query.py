@@ -31,6 +31,7 @@ def _is_repeated_entry_column(column: str) -> bool:
 # unique. These joins therefore preserve the rows of the base table.
 TABLE_JOINS: dict[str, dict[str, JoinKeys]] = {
     "annotation": {
+        "system_validation": (("system_id", "system_id"),),
         "entry_metadata": (("entry_pdb_id", "entry_pdb_id"),),
         "entry_sources": (("entry_pdb_id", "entry_pdb_id"),),
         "ligand_pocket_membership": (("ligand_id", "ligand_id"),),
@@ -297,18 +298,22 @@ def query_table(
             for name in unresolved.intersection(visible):
                 candidate_owners[name].append(join_name)
 
-        for name, owners in candidate_owners.items():
+        uniquely_required = sorted(
+            {owners[0] for owners in candidate_owners.values() if len(owners) == 1}
+        )
+        selected_joins.extend(uniquely_required)
+        selected_joins = list(dict.fromkeys(selected_joins))
+        for name in sorted(candidate_owners):
+            owners = candidate_owners[name]
             selected_owners = [owner for owner in owners if owner in selected_joins]
             if len(selected_owners) == 1:
                 continue
             if len(selected_owners) > 1:
                 raise ValueError(
-                    f"column {name!r} is provided by explicitly joined tables "
+                    f"column {name!r} is provided by selected related tables "
                     f"{selected_owners}; select only one"
                 )
-            if len(owners) == 1:
-                selected_joins.append(owners[0])
-            elif len(owners) > 1:
+            if len(owners) > 1:
                 raise ValueError(
                     f"column {name!r} is available from multiple related "
                     f"tables {owners}; choose one with joins=[...]"

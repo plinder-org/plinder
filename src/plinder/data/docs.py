@@ -458,8 +458,25 @@ def _validate_published_cover_columns(*, table_name: str, names: list[str]) -> N
         )
 
 
-def _validate_table_grain(*, table_name: str, names: list[str]) -> None:
-    """Reject columns whose natural grain belongs to another release table."""
+def _validate_table_column_ownership(*, table_name: str, names: list[str]) -> None:
+    """Reject columns that belong to another release table."""
+    from plinder.data.pipeline.collate import (
+        SYSTEM_VALIDATION_PREFIXES,
+        _is_retired_annotation_column,
+    )
+
+    if table_name == "system_validation":
+        misplaced = sorted(
+            name
+            for name in names
+            if name != "system_id" and not name.startswith(SYSTEM_VALIDATION_PREFIXES)
+        )
+        if misplaced:
+            raise ValueError(
+                "release table 'system_validation' has non-validation columns: "
+                f"{misplaced}"
+            )
+        return
     if table_name != "annotation":
         return
     repeated_entry_columns = sorted(
@@ -469,6 +486,12 @@ def _validate_table_grain(*, table_name: str, names: list[str]) -> None:
         raise ValueError(
             "release table 'annotation' repeats columns owned by "
             f"'entry_metadata': {repeated_entry_columns}"
+        )
+    misplaced = sorted(name for name in names if _is_retired_annotation_column(name))
+    if misplaced:
+        raise ValueError(
+            "release table 'annotation' contains columns owned by sidecars or "
+            f"retired fields: {misplaced}"
         )
 
 
@@ -487,7 +510,7 @@ def get_table_column_descriptions(
 
     fields = list(schema)
     names = [field.name for field in fields]
-    _validate_table_grain(table_name=table_name, names=names)
+    _validate_table_column_ownership(table_name=table_name, names=names)
     _validate_published_cover_columns(table_name=table_name, names=names)
     descriptions = _base_description_lookup()
     cluster_rows = get_cluster_column_descriptions(pd.DataFrame(columns=names))
