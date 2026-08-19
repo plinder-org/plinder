@@ -10,7 +10,14 @@ duckdb to execute.
 """
 
 from .clusters import query_clusters
-from .custom import resolve_custom_scoring_assets, score_custom_cif_files
+from .custom import (
+    CustomProteinSearchConfig,
+    CustomScoringResult,
+    CustomSequenceScoringResult,
+    resolve_custom_scoring_assets,
+    score_custom_cif_files,
+    score_custom_sequence_file,
+)
 from .index import query_index
 from .ligand import cross_similarity as cross_ligand_similarity
 from .ligand import query_ligand_similarity
@@ -33,8 +40,12 @@ __all__ = [
     "cross_protein_similarity",
     "query_clusters",
     "query_index",
+    "CustomProteinSearchConfig",
+    "CustomScoringResult",
+    "CustomSequenceScoringResult",
     "resolve_custom_scoring_assets",
     "score_custom_cif_files",
+    "score_custom_sequence_file",
     "prefetch_similarity_alignments",
     "reconstruct_interface_similarity_scores",
     "reconstruct_similarity_scores",

@@ -8,6 +8,12 @@ from plinder.core.scores import ligand as ligand_module
 from plinder.core.scores.protein import multi_query_protein_similarity
 
 
+def test_custom_scoring_public_api():
+    assert callable(scores.score_custom_cif_files)
+    assert callable(scores.score_custom_sequence_file)
+    assert scores.CustomProteinSearchConfig().max_seqs == 10_000
+
+
 @pytest.fixture
 def current_ligand_scores(read_plinder_mount, tmp_path, monkeypatch):
     source = read_plinder_mount / "ligand_scores" / "ligand_scores.parquet"
