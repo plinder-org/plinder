@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import sqlite3
 import typing as ty
 from collections import Counter, defaultdict
 from dataclasses import dataclass
@@ -32,7 +31,6 @@ from plinder.data.annotations.utils import (
     description_excluded_from_flat_export,
 )
 
-_PRD_DB_PATH = str(BASE_DIR / "annotations/static_files/prdcc.chemlib")
 LOG = logging.getLogger(__name__)
 
 
@@ -435,9 +433,9 @@ def _fill_missing_ccd_bonds(atoms: "struc.AtomArray") -> "struc.AtomArray":
     when *both* miss: the component is newer than the bundled CCD **and** the
     structure's CIF did not spell out its ``_chem_comp_bond``.
 
-    We then recover the bonds from the *downloaded full* CCD dictionary
-    (``components.cif``, reached via :func:`_get_ccd_atomarray`), which defines
-    every component's bonds, matching them onto the residue by atom name. In
+    We then recover the bonds from biotite's bundled CCD (reached via
+    :func:`_get_ccd_atomarray`), which defines every component's bonds, matching
+    them onto the residue by atom name. In
     other words: the structure lacked the bonds, so we look the component up in
     the dictionary that does have them.
 
@@ -478,21 +476,6 @@ def _fill_missing_ccd_bonds(atoms: "struc.AtomArray") -> "struc.AtomArray":
             if index_i is not None and index_j is not None:
                 atoms.bonds.add_bond(index_i, index_j, int(order))
     return atoms
-
-
-def _get_prd_smiles(comp_id: str) -> str | None:
-    """Get SMILES from PRD library (SQLite)."""
-    try:
-        conn = sqlite3.connect(_PRD_DB_PATH)
-        cursor = conn.cursor()
-        cursor.execute("SELECT smiles FROM chem_compounds WHERE tlc = ?", (comp_id,))
-        row = cursor.fetchone()
-        conn.close()
-        if row and row[0]:
-            return str(row[0])
-    except Exception:
-        LOG.warning(f"Failed to fetch PRD SMILES for {comp_id}")
-    return None
 
 
 def lig_has_dummies(
@@ -768,7 +751,7 @@ def _reference_smiles(codes: set[str]) -> set[str]:
     Classifying cofactors / artifacts by this SMILES set (in addition to the CCD
     code) catches a ligand that is the *same molecule* under a different current
     CCD code — the real "synonym" case. Uses :func:`_get_ccd_smiles` (derived from
-    the CCD atoms), so it needs no ``components.cif`` descriptor column, and the
+    the CCD atoms), so it needs no external descriptor column, and the
     strings are directly comparable to a ligand's own ``self.smiles``.
     """
     smiles: set[str] = set()
@@ -1109,13 +1092,13 @@ class Ligand(DocBaseModel):
     plip_type: str = Field(
         default_factory=str, description="Ligand chain type classification"
     )
-    bird_id: str = Field(default_factory=str, description="Ligand BIRD id")
+    bird_id: str = Field(default_factory=str, description="Ligand BIRD (PRD) id")
     centroid: list[float] = Field(
         default_factory=list, description="Ligand center of geometry"
     )
     smiles: str = Field(
         default_factory=str,
-        description="Ligand SMILES from CCD/PRD lookup or resolved 3D; for composite ligands, the valid representation with more heavy atoms is used and resolved connectivity wins ties",
+        description="Ligand SMILES from CCD lookup or resolved 3D; for composite ligands, the valid representation with more heavy atoms is used and resolved connectivity wins ties",
     )
     resolved_smiles: str = Field(
         default_factory=str,
@@ -1621,9 +1604,9 @@ class Ligand(DocBaseModel):
 
         smiles = None
         lig_heavy = lig_atoms[filter_heavy(lig_atoms)]
-        # A components.cif-only code with no CIF _chem_comp_bond arrives without
-        # its intra-residue bonds; borrow them from the CCD so the resolved-3D
-        # mol below can still be built (no-op when bonds are already present).
+        # A code whose CIF lacks _chem_comp_bond arrives without its intra-residue
+        # bonds; borrow them from the bundled CCD so the resolved-3D mol below can
+        # still be built (no-op when bonds are already present).
         lig_heavy = _fill_missing_ccd_bonds(lig_heavy)
         res_names = _residues_in_order(lig_heavy)
         reference_fragments: list[str] = []
@@ -1632,7 +1615,7 @@ class Ligand(DocBaseModel):
             # User-supplied SMILES takes precedence — when the caller
             # explicitly provided one, CCD is assumed to be wrong or a
             # generic placeholder (biotite returns one for some codes
-            # like "LIG"). Fall through to CCD then PRD otherwise.
+            # like "LIG"). Fall through to CCD otherwise.
             if ligand_smiles_dict and resname in ligand_smiles_dict:
                 component_smiles = ligand_smiles_dict[resname]
             else:
@@ -1641,8 +1624,6 @@ class Ligand(DocBaseModel):
                     resname,
                 )
                 component_smiles = _get_ccd_smiles(reference_code)
-                if component_smiles is None and reference_code.startswith("PRD_"):
-                    component_smiles = _get_prd_smiles(reference_code)
             if component_smiles is None:
                 reference_fragments = []
                 break
@@ -1668,7 +1649,7 @@ class Ligand(DocBaseModel):
         # Build the resolved (from 3D) mol once. It drives:
         #   - resolved_smiles (bond orders from CCD, stereo from 3D coords)
         #   - stereo match check against the CCD template (or custom SMILES)
-        #   - fallback SMILES when the CCD/PRD/user-SMILES lookup failed
+        #   - fallback SMILES when the CCD/user-SMILES lookup failed
         resolved_smiles: str | None = None
         stereo_matches: bool | None = None
         try:
@@ -1700,6 +1681,9 @@ class Ligand(DocBaseModel):
             smiles = resolved_smiles
         # Centroid
         centroid = list(lig_atoms.coord.mean(axis=0))
+        # BIRD/PRD id straight from the enriched CIF: the mapping key is the PRD
+        # code (see cif_utils BIRD parse), a single canonical id for the ligand.
+        bird_id = next(iter(ligand_chain.mappings.get("BIRD", {})), "")
         ligand = cls(
             pdb_id=pdb_id,
             biounit_id=biounit_id,
@@ -1707,7 +1691,7 @@ class Ligand(DocBaseModel):
             instance=ligand_instance,
             ccd_code=ccd_code,
             plip_type=get_chain_type(ligand_chain.chain_type_str),
-            bird_id=list(ligand_chain.mappings.get("BIRD", {"": None}))[0],  # type: ignore
+            bird_id=bird_id,
             centroid=centroid,
             smiles=smiles or "",
             neighboring_residue_threshold=neighboring_residue_threshold,

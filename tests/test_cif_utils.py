@@ -1038,3 +1038,27 @@ def test_atoms_to_rdkit_mol_error():
         assert False, "Should have raised ValueError"
     except (ValueError, Exception):
         pass
+
+
+def test_bird_mapping_is_keyed_by_prd_id():
+    """A BIRD/PRD ligand chain is keyed by its PRD code, not the asym_id
+    (regression: the extraction previously requested only asym_id and keyed by
+    it, so bird_id was the chain letter instead of the PRD code)."""
+    import gzip
+    import io
+    from pathlib import Path
+
+    import biotite.structure.io.pdbx as pdbx
+    from plinder.data.annotations.cif_utils import get_chain_external_mappings
+
+    cif = (
+        Path(__file__).parent
+        / "test_data"
+        / "xx"
+        / "pdb_00006lu7"
+        / "pdb_00006lu7_xyz-enrich.cif.gz"
+    )
+    block = pdbx.CIFFile.read(io.StringIO(gzip.open(cif, "rt").read())).block
+    bird = get_chain_external_mappings(block)["B"]["BIRD"]
+
+    assert list(bird) == ["PRD_002214"]  # PRD code, not asym_id "B"

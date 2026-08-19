@@ -34,9 +34,9 @@ ligand_asym_id	string	Ligand chain asymmetric id
 ligand_instance	int64	Biounit instance ID
 ligand_ccd_code	string	Ligand Chemical Component Dictionary (CCD) code
 ligand_plip_type	string	Ligand chain type classification
-ligand_bird_id	string	Ligand BIRD id
+ligand_bird_id	string	BIRD/PRD reference-molecule id (PRD_xxxxxx) for multi-component ligands, from pdbx_molecule
 ligand_centroid	list<element: double>	Ligand center of geometry
-ligand_smiles	string	Ligand SMILES from CCD/PRD lookup or resolved 3D; for composite ligands, the valid representation with more heavy atoms is used and resolved connectivity wins ties
+ligand_smiles	string	Ligand SMILES from CCD lookup or resolved 3D; for composite ligands, the valid representation with more heavy atoms is used and resolved connectivity wins ties
 ligand_resolved_smiles	string	SMILES from resolved 3D coordinates: bond orders from CCD template, stereochemistry from 3D geometry
 ligand_resolved_stereo_matches_template	bool	Whether resolved 3D stereo matches CCD template (True if achiral; None if no template)
 ligand_molecular_weight	double	Molecular weight

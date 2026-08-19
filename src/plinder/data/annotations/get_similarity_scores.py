@@ -416,7 +416,7 @@ def compute_ligand_fingerprints(
     from plinder.data.annotations.ligand_utils import _get_ccd_smiles, parse_cofactors
 
     cofactor_codes = parse_cofactors(data_dir)
-    # RDKit SMILES from the CCD atoms (bt_info / components.cif), not the CCD
+    # RDKit SMILES from the CCD atoms (biotite's bundled bt_info), not the CCD
     # ``pdbx_chem_comp_descriptor`` column: same canonicalization as the ligands'
     # own ``rdkit_canonical_smiles``, and no ``components.parquet`` dependency.
     cofactor_smiles = {}

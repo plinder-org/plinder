@@ -685,11 +685,13 @@ def get_chain_external_mappings(
             )
         )
 
-    # BIRD entries with PRD codes
-    for row in _iter_category_rows(data, "pdbx_molecule", ["asym_id"]):
+    # BIRD/PRD ligands: key each chain's BIRD mapping by its PRD code (from
+    # pdbx_molecule), giving a multi-residue ligand one canonical id instead of
+    # a hyphen-joined component-code string.
+    for row in _iter_category_rows(data, "pdbx_molecule", ["asym_id", "prd_id"]):
         if row["asym_id"] not in per_chain:
             per_chain[row["asym_id"]] = defaultdict(lambda: defaultdict(set))
-        per_chain[row["asym_id"]]["BIRD"][row["asym_id"]].add(None)
+        per_chain[row["asym_id"]]["BIRD"][row["prd_id"]].add(None)
 
     per_chain_list: dict[str, dict[str, dict[str, list[tuple[str, str] | None]]]] = {}
     for chain in per_chain:
@@ -952,13 +954,11 @@ def _get_cif_bond_comp_ids(block: pdbx.CIFBlock) -> set[str]:
 def _is_known_compound(comp_id: str, atom_names: set[str] | None = None) -> bool:
     """Check if a component ID is known to the CCD compound library.
 
-    "Known" resolves via :func:`_get_ccd_atomarray`, so a code present only in
-    the downloaded ``components.cif`` (not biotite's bundled CCD) counts as
-    known — correct for reference SMILES/stereo. Note the biounit bond path
-    (biotite ``connect_via_residue_names``) is still bundled-CCD-based, so such
-    a code only gets its intra-residue bonds if the CIF carries
-    ``_chem_comp_bond`` (deposited entries always do) or via the components.cif
-    bond fallback in :func:`ligand_utils._fill_missing_ccd_bonds`.
+    "Known" resolves via :func:`_get_ccd_atomarray`, i.e. presence in biotite's
+    bundled CCD — correct for reference SMILES/stereo. Such a code only gets its
+    intra-residue bonds if the CIF carries ``_chem_comp_bond`` (deposited entries
+    always do) or via the bundled-CCD bond fallback in
+    :func:`ligand_utils._fill_missing_ccd_bonds`.
 
     If *atom_names* is provided, also verify that the CIF atom names
     overlap with the CCD entry. Bond assignment via
