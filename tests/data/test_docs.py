@@ -42,13 +42,17 @@ def test_tablegen_renders_checked_in_table_descriptions(tmp_path, monkeypatch):
     tablegen.generate_table(description_dir, output_path)
 
     html = output_path.read_text(encoding="utf-8")
-    assert "<code>alpha</code>" in html
-    assert "<code>entry&lt;id&gt;</code>" in html
-    assert "<code>list&lt;element: string&gt;</code>" in html
+    assert '<section class="release-column-table" id="columns-alpha">' in html
+    assert '<section class="release-column-table" id="columns-beta">' in html
+    assert "<h3>alpha</h3>" in html
+    assert "<h3>beta</h3>" in html
+    assert "<code>" not in html
+    assert ">entry&lt;id&gt;<" in html
+    assert ">list&lt;element: string&gt;<" in html
     assert "Apply &lt;operation&gt; &amp; keep metadata" in html
-    assert "<code>beta</code>" in html
-    assert "<code>score</code>" in html
+    assert ">score<" in html
     assert "Similarity score" in html
+    assert html.count("<table") == 2
     assert all(line.strip() for line in html.splitlines())
 
 
