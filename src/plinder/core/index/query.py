@@ -68,6 +68,7 @@ TABLE_JOINS: dict[str, dict[str, JoinKeys]] = {
     },
     "ligand_pocket_membership": {
         "annotation": (("ligand_id", "ligand_id"),),
+        "system_validation": (("system_id", "system_id"),),
     },
     "interface_membership": {
         "interface_annotations": (("system_id", "system_id"),),

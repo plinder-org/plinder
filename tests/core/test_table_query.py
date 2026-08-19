@@ -156,6 +156,25 @@ def test_requested_system_validation_is_joined_automatically(
     ]
 
 
+def test_pocket_membership_can_join_system_validation_directly(
+    local_release: PlinderRelease,
+) -> None:
+    result = query_table(
+        "ligand_pocket_membership",
+        columns=["ligand_id", "system_pocket_validation_average_rscc"],
+        filters=[("system_pocket_validation_average_rscc", ">=", 0.9)],
+        joins=["annotation"],
+        release=local_release,
+    )
+
+    assert result.to_dict("records") == [
+        {
+            "ligand_id": "1abc__1__1.L",
+            "system_pocket_validation_average_rscc": 0.95,
+        }
+    ]
+
+
 def test_sparse_sidecar_does_not_erase_base_identifiers(
     local_release: PlinderRelease,
 ) -> None:
