@@ -426,6 +426,51 @@ def test_finalize_index_writes_local_clusters_to_sidecar(tmp_path):
     assert "ligand_tanimoto_ecfp4_1024_90_cluster" not in finalized
 
 
+def test_finalize_index_preserves_annotation_when_staging_fails(tmp_path, monkeypatch):
+    index_dir = tmp_path / "index"
+    index_dir.mkdir(parents=True)
+    index_path = index_dir / "annotation_table.parquet"
+    original = pd.DataFrame(
+        {
+            "entry_pdb_id": ["1aaa"],
+            "system_id": ["1aaa__1__1.A__1.X"],
+            "system_type": ["holo"],
+            "ligand_id": ["1aaa__1__1.X"],
+            "ligand_is_proper": [False],
+            "ligand_smiles": [None],
+            "ligand_is_3d_score_able": [False],
+        }
+    )
+    original.to_parquet(index_path, index=False)
+    fingerprint_dir = tmp_path / "fingerprints"
+    fingerprint_dir.mkdir()
+    pd.DataFrame(
+        {
+            "ligand_rdkit_canonical_smiles": pd.Series(dtype="string"),
+            "ligand_smiles_id": pd.Series(dtype="Int32"),
+            "ligand_is_cofactor_like": pd.Series(dtype="boolean"),
+        }
+    ).to_parquet(
+        fingerprint_dir / "ligand_similarity_annotations.parquet",
+        index=False,
+    )
+
+    original_to_parquet = pd.DataFrame.to_parquet
+
+    def fail_cluster_staging(frame, path, *args, **kwargs):
+        if path.name == "ligand_clusters.tmp.parquet":
+            raise OSError("staging failed")
+        return original_to_parquet(frame, path, *args, **kwargs)
+
+    monkeypatch.setattr(pd.DataFrame, "to_parquet", fail_cluster_staging)
+
+    with pytest.raises(OSError, match="staging failed"):
+        utils.finalize_index(data_dir=tmp_path)
+
+    pd.testing.assert_frame_equal(pd.read_parquet(index_path), original)
+    assert not (index_dir / "annotation_table.tmp.parquet").exists()
+
+
 def test_cluster_index_rejects_non_tanimoto_set_cover(tmp_path):
     cover_file = (
         tmp_path / "ligand_sampling/set_cover/metric=pli_qcov" / "threshold=100.parquet"

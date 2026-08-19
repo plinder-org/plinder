@@ -1167,6 +1167,7 @@ def finalize_index(*, data_dir: Path) -> pd.DataFrame:
     interface_clusters_path = data_dir / "index" / "interface_clusters.parquet"
     temporary_ligand_clusters = ligand_clusters_path.with_suffix(".tmp.parquet")
     temporary_interface_clusters = interface_clusters_path.with_suffix(".tmp.parquet")
+    index_marker_removed = False
     try:
         LOG.info("staging annotation and cluster tables")
         index.to_parquet(temporary, index=False)
@@ -1182,13 +1183,15 @@ def finalize_index(*, data_dir: Path) -> pd.DataFrame:
         # generation. Install it last so an interrupted update fails closed
         # instead of exposing mismatched annotation and cluster tables.
         index_path.unlink()
+        index_marker_removed = True
         if interface_index is not None:
             temporary_interface.replace(interface_path)
             temporary_interface_clusters.replace(interface_clusters_path)
         temporary_ligand_clusters.replace(ligand_clusters_path)
         temporary.replace(index_path)
     except BaseException:
-        index_path.unlink(missing_ok=True)
+        if index_marker_removed:
+            index_path.unlink(missing_ok=True)
         raise
     finally:
         temporary.unlink(missing_ok=True)
