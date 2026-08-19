@@ -70,8 +70,10 @@ The score, sampling, and search-database directories contain:
 
 - `ligand_scores/`: sharded Tanimoto similarities computed from 1,024-bit
   ECFP4 fingerprints (Morgan radius 2) over unique canonical-SMILES nodes. Each
-  row stores the query `ligand_smiles_id`, target `ligand_smiles_id`, and
-  similarity; the SMILES lookup is in the ligand annotations.
+  row stores `query_ligand_id`, `target_ligand_id`, and
+  `tanimoto_similarity_ecfp4_1024`. Both ID columns refer to
+  `ligand_smiles_id` values in the ligand annotations, which provide the SMILES
+  lookup.
 - `interface_scores/`: directed protein-interface coverage rows sharded by the
   query PDB code. Rows retain the query and target interface IDs, chain mapping,
   Foldseek or MMseqs source, side-specific coverage, and combined similarity.
@@ -132,7 +134,9 @@ The checked-in column reference below is generated from these release tables.
 The tables can be read directly with any Parquet reader. The identifiers used
 to combine them are:
 
-- `entry_pdb_id` for entry metadata, source revisions, and chain tables;
+- `entry_pdb_id` for entry metadata and source revisions;
+- the pair (`entry_pdb_id`, `chain_asym_id`) between `entry_biounit_chains`
+  and `entry_chains`;
 - `system_id` for ligand systems, system validation, protein interfaces, and
   interface clusters;
 - `ligand_id` for ligand annotations, pocket-representative membership, and
