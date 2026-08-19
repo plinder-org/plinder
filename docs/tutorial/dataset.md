@@ -28,8 +28,10 @@ similarity scores, alignments, and custom-scoring search databases. When
 first needed.
 
 :::{note}
-The preprint releases remain available under v0-v2 of `gs://plinder/2024-04/`.
-They are no longer actively supported and their layout/APIs differ from the release described here.
+Historical releases remain available at `gs://plinder/2024-04/v0`,
+`gs://plinder/2024-04/v1`, and `gs://plinder/2024-06/v2`. They are no longer
+actively supported, and their layout and APIs differ from the release described
+here.
 :::
 
 ## Query ligands

@@ -79,6 +79,7 @@ exclude_patterns = [
     "examples/5_dataset_and_loader.ipynb",
     "examples/6_custom_split.ipynb",
     "examples/mlsb_challenge.md",
+    "tutorial/api.ipynb",
     "api/loader",
 ]
 source_suffix = {
