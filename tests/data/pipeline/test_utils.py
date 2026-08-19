@@ -346,7 +346,7 @@ def test_finalize_index_adds_local_clusters(tmp_path):
             "system_type": ["holo", "holo"],
             "ligand_id": ["1aaa__1__1.X", "1aaa__2__1.X"],
             "ligand_is_proper": [True, False],
-            "ligand_rdkit_canonical_smiles": ["CCO", "CCO"],
+            "ligand_smiles": ["CCO", "CCO"],
             "ligand_tanimoto_ecfp4_1024_90_cluster": ["legacy", "legacy"],
             "ligand_tanimoto_ecfp4_1024_90_cluster_num_pdb_ids": [1, 1],
         }
@@ -576,7 +576,7 @@ def test_ligand_similarity_rejects_stale_proper_smiles_universe(tmp_path):
         {
             "system_type": ["holo", "holo"],
             "ligand_is_proper": [True, True],
-            "ligand_rdkit_canonical_smiles": ["CC", "CCC"],
+            "ligand_smiles": ["CC", "CCC"],
         }
     )
 
@@ -593,7 +593,7 @@ def test_ligand_similarity_rejects_artifact_from_before_targeted_repair(
     index_dir.mkdir()
     pd.DataFrame(
         {
-            "ligand_rdkit_canonical_smiles": ["CC"],
+            "ligand_smiles": ["CC"],
             "ligand_smiles_id": [0],
         }
     ).to_parquet(

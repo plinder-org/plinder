@@ -1090,7 +1090,7 @@ def test_set_cover_stream_rejects_edges_crossing_components(tmp_path):
             "ligand_id": ["l1", "l2"],
             "system_type": ["holo", "holo"],
             "ligand_is_proper": [True, True],
-            "ligand_rdkit_canonical_smiles": ["CC", "CCC"],
+            "ligand_smiles": ["CC", "CCC"],
         }
     ).to_parquet(index_dir / "annotation_table.parquet", index=False)
     pd.DataFrame(
@@ -1168,7 +1168,7 @@ def test_ligand_covers_are_merged_without_system_projection(tmp_path):
             ],
             "system_biounit_id": ["1"] * 5,
             "ligand_id": [ligand_a1, ligand_a2, ligand_b, ligand_c, ligand_d],
-            "ligand_rdkit_canonical_smiles": [
+            "ligand_smiles": [
                 "CC",
                 "CCC",
                 "CCCC",
@@ -1209,9 +1209,7 @@ def test_ligand_covers_are_merged_without_system_projection(tmp_path):
     proper_annotation = annotation[annotation["ligand_is_proper"]]
     pd.DataFrame(
         {
-            "ligand_rdkit_canonical_smiles": proper_annotation[
-                "ligand_rdkit_canonical_smiles"
-            ],
+            "ligand_rdkit_canonical_smiles": proper_annotation["ligand_smiles"],
             "ligand_smiles_id": range(len(proper_annotation)),
         }
     ).to_parquet(fingerprint_dir / "ligand_similarity_annotations.parquet", index=False)
@@ -1275,7 +1273,7 @@ def test_finalize_index_rejects_stale_ligand_cover_universe(tmp_path):
             "system_type": ["holo", "holo"],
             "ligand_id": ["l1", "l2"],
             "ligand_is_proper": [True, True],
-            "ligand_rdkit_canonical_smiles": ["CC", "CCC"],
+            "ligand_smiles": ["CC", "CCC"],
         }
     ).to_parquet(index_dir / "annotation_table.parquet", index=False)
     pd.DataFrame(
@@ -1330,7 +1328,7 @@ def test_finalize_index_rejects_clusters_from_before_targeted_repair(tmp_path):
             "system_type": ["holo"],
             "ligand_id": ["l1"],
             "ligand_is_proper": [True],
-            "ligand_rdkit_canonical_smiles": ["CC"],
+            "ligand_smiles": ["CC"],
         }
     ).to_parquet(index_dir / "annotation_table.parquet", index=False)
     pd.DataFrame(
@@ -1458,7 +1456,7 @@ def test_tanimoto_set_cover_expands_unique_smiles_to_ligands(tmp_path):
                 "3ccc__1__1.W",
             ],
             "ligand_molecular_weight": [100.0, 200.0, 150.0, 100.0],
-            "ligand_rdkit_canonical_smiles": ["CC", "CCC", "CCCC", "CC"],
+            "ligand_smiles": ["CC", "CCC", "CCCC", "CC"],
             "ligand_is_proper": [True] * 4,
             "ligand_is_ion": [False] * 4,
             "ligand_is_artifact": [False] * 4,

@@ -1270,21 +1270,21 @@ def test_write_custom_sequence_link_tables_adds_ligand_chemistry(tmp_path):
                 "ligand_id": "1abc__1__1.Z",
                 "ligand_ccd_code": "ATP",
                 "ligand_unique_ccd_code": "ATP",
-                "ligand_rdkit_canonical_smiles": None,
+                "ligand_smiles": None,
             },
             {
                 "system_id": "1abc__1__1.B__1.Z",
                 "ligand_id": "9zzz__1__1.Z",
                 "ligand_ccd_code": "LIG",
                 "ligand_unique_ccd_code": "LIG",
-                "ligand_rdkit_canonical_smiles": "CC",
+                "ligand_smiles": "CC",
             },
             {
                 "system_id": "1abc__1__1.B__1.Z",
                 "ligand_id": "9zzz__1__1.Z",
                 "ligand_ccd_code": "LIG",
                 "ligand_unique_ccd_code": "LIG",
-                "ligand_rdkit_canonical_smiles": "CCC",
+                "ligand_smiles": "CCC",
             },
         ]
     ).to_parquet(annotation, index=False)

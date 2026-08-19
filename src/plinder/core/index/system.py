@@ -627,7 +627,6 @@ class PlinderSystem:
     def smiles(self) -> dict[str, str] | None:
         smiles_dict = {}
         try_smiles = [
-            "ligand_rdkit_canonical_smiles",
             "ligand_smiles",
             "ligand_resolved_smiles",
         ]

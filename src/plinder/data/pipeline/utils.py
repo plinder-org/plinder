@@ -953,19 +953,20 @@ def add_ligand_similarity_columns(
                 "ligand similarity annotations predate the targeted " "collation repair"
             )
     annotations = pd.read_parquet(annotation_path)
-    join_column = "ligand_rdkit_canonical_smiles"
-    if annotations[join_column].duplicated().any():
+    artifact_smiles_column = "ligand_rdkit_canonical_smiles"
+    index_smiles_column = "ligand_smiles"
+    if annotations[artifact_smiles_column].duplicated().any():
         raise ValueError("ligand similarity annotations contain duplicate SMILES")
     proper_holo = index["ligand_is_proper"].fillna(False).astype(bool) & index[
         "system_type"
     ].eq("holo")
     expected_smiles = set(
-        index.loc[proper_holo, join_column]
+        index.loc[proper_holo, index_smiles_column]
         .dropna()
         .astype(str)
         .loc[lambda values: values.ne("")]
     )
-    observed_smiles = set(annotations[join_column].dropna().astype(str))
+    observed_smiles = set(annotations[artifact_smiles_column].dropna().astype(str))
     if observed_smiles != expected_smiles:
         missing = sorted(expected_smiles.difference(observed_smiles))
         extra = sorted(observed_smiles.difference(expected_smiles))
@@ -973,7 +974,10 @@ def add_ligand_similarity_columns(
             "ligand similarity annotations do not cover the current proper "
             f"holo SMILES universe: missing={missing[:10]}, extra={extra[:10]}"
         )
-    replacement_columns = set(annotations.columns).difference({join_column})
+    annotations = annotations.rename(
+        columns={artifact_smiles_column: index_smiles_column}
+    )
+    replacement_columns = set(annotations.columns).difference({index_smiles_column})
     obsolete_columns = {
         "ligand_tanimoto_ecfp4_1024_90_cluster",
         "ligand_tanimoto_ecfp4_1024_90_cluster_num_pdb_ids",
@@ -985,11 +989,13 @@ def add_ligand_similarity_columns(
         )
     ).merge(
         annotations,
-        on=join_column,
+        on=index_smiles_column,
         how="left",
         validate="many_to_one",
     )
-    has_smiles = result[join_column].notna() & result[join_column].ne("")
+    has_smiles = result[index_smiles_column].notna() & result[index_smiles_column].ne(
+        ""
+    )
     eligible = has_smiles
     if "ligand_is_proper" in result:
         eligible &= result["ligand_is_proper"].fillna(False)

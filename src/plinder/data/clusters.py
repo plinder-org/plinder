@@ -2619,7 +2619,7 @@ def _expand_fingerprint_cover(
         data_dir / "index/annotation_table.parquet",
         columns=[
             "ligand_id",
-            "ligand_rdkit_canonical_smiles",
+            "ligand_smiles",
             "ligand_is_proper",
         ],
         filters=[("ligand_is_proper", "==", True)],
@@ -2630,7 +2630,7 @@ def _expand_fingerprint_cover(
             ligands_per_smiles["ligand_smiles_id"].astype(str),
         )
     )
-    annotation["node"] = annotation["ligand_rdkit_canonical_smiles"].map(smiles_to_id)
+    annotation["node"] = annotation["ligand_smiles"].map(smiles_to_id)
     annotation.dropna(subset=["node"], inplace=True)
     ligands_by_node = {
         str(node): tuple(sorted(set(group["ligand_id"].astype(str))))

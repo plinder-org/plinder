@@ -649,7 +649,7 @@ def test_ligand_scoring_inputs_include_only_proper_holo_ligands() -> None:
             "system_id": ["proper", "artifact", "ion-system"],
             "system_type": ["holo", "holo", "ion"],
             "ligand_is_proper": [True, False, True],
-            "ligand_rdkit_canonical_smiles": ["CCO", "O", "[Na+]"],
+            "ligand_smiles": ["CCO", "O", "[Na+]"],
             "ligand_unique_ccd_code": ["LIG", "HOH", "NA"],
             "ligand_id": ["1abc__1__1.L", "1abc__1__1.W", "1abc__1__1.N"],
             "ligand_asym_id": ["L", "W", "N"],
@@ -2667,7 +2667,7 @@ def test_ligand_similarity_pipeline_does_not_write_per_system_mapping(
             "system_id": ["1aaa_system", "2bbb_system", "3ccc_system"],
             "system_type": ["holo", "holo", "holo"],
             "ligand_is_proper": [True, True, True],
-            "ligand_rdkit_canonical_smiles": ["CCO", "CCO", "c1ccccc1"],
+            "ligand_smiles": ["CCO", "CCO", "c1ccccc1"],
             "ligand_unique_ccd_code": ["LIG", "LIG", "BEN"],
             "ligand_id": ["1aaa__1__1.L", "2bbb__1__1.L", "3ccc__1__1.L"],
             "ligand_asym_id": ["L", "L", "L"],
@@ -2732,7 +2732,7 @@ def test_ligand_similarity_pipeline_does_not_write_per_system_mapping(
 
     retained_score.write_bytes(b"changed fingerprint score basis")
     index = pd.read_parquet(index_dir / "annotation_table.parquet")
-    index.loc[index.index[-1], "ligand_rdkit_canonical_smiles"] = "CCN"
+    index.loc[index.index[-1], "ligand_smiles"] = "CCN"
     index.to_parquet(index_dir / "annotation_table.parquet", index=False)
     compute_ligand_fingerprints(data_dir=tmp_path)
     assert not list(score_dir.glob("*.parquet"))

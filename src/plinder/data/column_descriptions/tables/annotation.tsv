@@ -37,7 +37,6 @@ ligand_plip_type	string	Ligand chain type classification
 ligand_bird_id	string	Ligand BIRD id
 ligand_centroid	list<element: double>	Ligand center of geometry
 ligand_smiles	string	Ligand SMILES from CCD/PRD lookup or resolved 3D; for composite ligands, the valid representation with more heavy atoms is used and resolved connectivity wins ties
-ligand_rdkit_canonical_smiles	string	RDKit canonical SMILES (same as smiles; kept for schema compatibility)
 ligand_resolved_smiles	string	SMILES from resolved 3D coordinates: bond orders from CCD template, stereochemistry from 3D geometry
 ligand_resolved_stereo_matches_template	bool	Whether resolved 3D stereo matches CCD template (True if achiral; None if no template)
 ligand_molecular_weight	double	Molecular weight

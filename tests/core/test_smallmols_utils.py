@@ -75,7 +75,7 @@ def test_load_ligands_from_index_uses_proper_holo_ligand_rows():
             "system_id": ["1abc__1__A", "1abc__1__A", "2def__1__B"],
             "system_type": ["holo", "holo", "apo"],
             "ligand_is_proper": [True, False, True],
-            "ligand_rdkit_canonical_smiles": ["CCO", "CCO", "CCN"],
+            "ligand_smiles": ["CCO", "CCO", "CCN"],
             "ligand_unique_ccd_code": ["LIG", "LIG", "OTH"],
             "ligand_id": ["1abc__1__A__1.C", "1abc__1__A__1.C", "2def__1__B__1.D"],
             "ligand_asym_id": ["C", "C", "D"],

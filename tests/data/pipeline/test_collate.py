@@ -60,6 +60,7 @@ def _write_entry(
             "system_pocket_validation_average_rsr": 0.2,
             "ligand_id": ligand["ligand_id"],
             "ligand_id_legacy": ligand["ligand_id"],
+            "ligand_smiles": "C",
             "ligand_rdkit_canonical_smiles": "C",
             "ligand_unique_ccd_code": ligand["ccd"],
             "ligand_is_proper": ligand["proper"],
@@ -296,8 +297,10 @@ def test_plan_shards_and_finalize_release_contract(tmp_path: Path) -> None:
     retired_annotation_columns = {
         "system_id_no_biounit",
         "system_ligand_chains",
+        "ligand_rdkit_canonical_smiles",
     }
     assert retired_annotation_columns.isdisjoint(annotation.columns)
+    assert "ligand_smiles" in annotation.columns
     assert not any(
         column.startswith(
             (

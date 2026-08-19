@@ -246,6 +246,7 @@ def test_annotation_descriptions_reject_repeated_entry_metadata():
     [
         "system_id_no_biounit",
         "system_ligand_chains",
+        "ligand_rdkit_canonical_smiles",
         "system_protein_chains_auth_id",
         "system_protein_chains_validation_average_rsr",
         "system_ligand_validation_average_rsr",

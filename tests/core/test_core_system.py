@@ -39,6 +39,20 @@ def test_plinder_system_receptor_type():
     assert system.receptor_chain_types == {"1.A": "protein", "1.N": "dna"}
 
 
+def test_plinder_system_smiles_uses_published_ligand_smiles():
+    system = index.PlinderSystem.__new__(index.PlinderSystem)
+    system._system = pd.DataFrame(
+        {
+            "ligand_instance": [1],
+            "ligand_asym_id": ["L"],
+            "ligand_smiles": ["CCO"],
+            "ligand_resolved_smiles": ["CC"],
+        }
+    )
+
+    assert system.smiles == {"1.L": "CCO"}
+
+
 def test_plinder_system_system_files(cached_plinder_system):
     system_id = "1avd__1__1.A__1.C"
     s = cached_plinder_system(system_id)

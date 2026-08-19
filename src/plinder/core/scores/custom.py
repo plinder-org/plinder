@@ -2291,7 +2291,7 @@ def write_custom_sequence_link_tables(
         "ligand_id",
         "ligand_ccd_code",
         "ligand_unique_ccd_code",
-        "ligand_rdkit_canonical_smiles",
+        "ligand_smiles",
     ]
     scored_pairs = (
         pocket[["query_system", "query_ligand_id"]]
@@ -2348,7 +2348,7 @@ def write_custom_sequence_link_tables(
             "similarity": "pocket_fident",
             "ligand_ccd_code": "plinder_ligand_ccd_code",
             "ligand_unique_ccd_code": "plinder_ligand_unique_ccd_code",
-            "ligand_rdkit_canonical_smiles": "plinder_ligand_smiles",
+            "ligand_smiles": "plinder_ligand_smiles",
         }
     ).drop(columns=["system_id", "ligand_id", "target_system", "_chemistry_merge"])
     link_columns = [

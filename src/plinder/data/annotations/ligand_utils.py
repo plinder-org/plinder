@@ -1221,10 +1221,6 @@ class Ligand(DocBaseModel):
         "'{instance}.{asym_id}' to its residue numbers so every atom in the "
         "ligand can be selected. Single-chain ligands map their one instance-chain.",
     )
-    rdkit_canonical_smiles: str | None = Field(
-        default=None,
-        description="RDKit canonical SMILES (same as smiles; kept for schema compatibility)",
-    )
     molecular_weight: float | None = Field(default=None, description="Molecular weight")
     crippen_clogp: float | None = Field(
         default=None,
@@ -1409,8 +1405,6 @@ class Ligand(DocBaseModel):
                     self.resolved_smiles,
                 )
             rdkit_compatible_mol = Chem.MolFromSmiles(self.smiles)
-            # smiles is already canonical (from MolToSmiles); kept for schema compat
-            self.rdkit_canonical_smiles = self.smiles
             self.molecular_weight = rdMolDescriptors.CalcExactMolWt(
                 rdkit_compatible_mol
             )
@@ -1464,7 +1458,7 @@ class Ligand(DocBaseModel):
             else:
                 try:
                     polymer_classes = classify_ligand_polymer_classes(
-                        self.rdkit_canonical_smiles,
+                        self.smiles,
                         resolved_smiles=self.resolved_smiles,
                         is_multi_residue=self._is_multi_residue,
                     )

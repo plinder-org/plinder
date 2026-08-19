@@ -217,7 +217,7 @@ def load_ligands_from_index(*, annotation: pd.DataFrame) -> pd.DataFrame:
     columns = {
         "entry_pdb_id": "pdb_id",
         "system_id": "system_id",
-        "ligand_rdkit_canonical_smiles": "ligand_rdkit_canonical_smiles",
+        "ligand_smiles": "ligand_rdkit_canonical_smiles",
         "ligand_unique_ccd_code": "ligand_ccd_code",
         "ligand_id": "ligand_id",
         "ligand_asym_id": "ligand_asym_id",
@@ -243,7 +243,7 @@ def load_ligands_from_annotation_table(*, data_dir: Path) -> pd.DataFrame:
         "system_id",
         "system_type",
         "ligand_is_proper",
-        "ligand_rdkit_canonical_smiles",
+        "ligand_smiles",
         "ligand_unique_ccd_code",
         "ligand_id",
         "ligand_asym_id",
