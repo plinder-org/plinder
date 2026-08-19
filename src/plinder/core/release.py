@@ -48,57 +48,57 @@ RELEASE_PATHS = {
 RELEASE_TABLES: dict[str, dict[str, Any]] = {
     "annotation": {
         "artifact": "annotation_table",
-        "row_grain": "ligand",
+        "row_description": "ligand",
         "primary_key": ("ligand_id",),
     },
     "entry_chains": {
         "artifact": "entry_chains",
-        "row_grain": "polymer chain in a PDB entry",
+        "row_description": "polymer chain in a PDB entry",
         "primary_key": ("entry_pdb_id", "chain_asym_id"),
     },
     "entry_biounit_chains": {
         "artifact": "entry_biounit_chains",
-        "row_grain": "chain instance in a biological assembly",
+        "row_description": "chain instance in a biological assembly",
         "primary_key": ("entry_pdb_id", "biounit_id", "chain_instance"),
     },
     "entry_metadata": {
         "artifact": "entry_metadata",
-        "row_grain": "PDB entry",
+        "row_description": "PDB entry",
         "primary_key": ("entry_pdb_id",),
     },
     "entry_sources": {
         "artifact": "entry_sources",
-        "row_grain": "PDB entry",
+        "row_description": "PDB entry",
         "primary_key": ("entry_pdb_id",),
     },
     "linked_apo_structures": {
         "artifact": "linked_apo_structures",
-        "row_grain": "ranked apo chain linked to a holo system",
+        "row_description": "ranked apo chain linked to a holo ligand",
         "primary_key": ("reference_system_id", "rank"),
     },
     "interface_annotations": {
         "artifact": "interface_annotations",
-        "row_grain": "protein-chain interface in a biological assembly",
+        "row_description": "protein-chain interface in a biological assembly",
         "primary_key": ("system_id",),
     },
     "alignment_chain_lookup": {
         "artifact": "alignment_chain_lookup",
-        "row_grain": "protein chain in the release search databases",
+        "row_description": "protein chain in the release search databases",
         "primary_key": ("entry_pdb_id", "chain_asym_id"),
     },
     "ligand_pocket_membership": {
         "artifact": "ligand_pocket_membership",
-        "row_grain": "ligand directed-set-cover assignment",
+        "row_description": "ligand directed-set-cover assignment",
         "primary_key": ("ligand_id",),
     },
     "ligand_pocket_representatives": {
         "artifact": "ligand_pocket_representatives",
-        "row_grain": "ligand-pocket representative",
+        "row_description": "ligand-pocket representative",
         "primary_key": ("representative_ligand_id",),
     },
     "ligand_mmp_pairs": {
         "artifact": "ligand_mmp_pairs",
-        "row_grain": "matched molecular pair and shared core",
+        "row_description": "matched molecular pair and shared core",
         "primary_key": (
             "ligand_smiles_id_1",
             "ligand_smiles_id_2",
@@ -108,17 +108,17 @@ RELEASE_TABLES: dict[str, dict[str, Any]] = {
     },
     "interface_half_representatives": {
         "artifact": "interface_half_representatives",
-        "row_grain": "representative half-interface",
+        "row_description": "representative half-interface",
         "primary_key": ("half_interface_id",),
     },
     "interface_membership": {
         "artifact": "interface_membership",
-        "row_grain": "protein-interface representative assignment",
+        "row_description": "protein-interface representative assignment",
         "primary_key": ("system_id",),
     },
     "interface_representatives": {
         "artifact": "interface_representatives",
-        "row_grain": "protein-interface representative",
+        "row_description": "protein-interface representative",
         "primary_key": ("representative_system_id",),
     },
 }
@@ -170,7 +170,7 @@ class PlinderRelease:
         return path
 
     def table(self, name: str) -> dict[str, Any]:
-        """Return the path name, row grain, and key for a release table."""
+        """Return the path name, row description, and key for a release table."""
         try:
             return RELEASE_TABLES[name]
         except KeyError as exc:

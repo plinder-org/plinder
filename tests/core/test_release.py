@@ -14,12 +14,12 @@ def test_release_paths_are_relative_and_unique():
         assert ".." not in Path(path).parts
 
 
-def test_release_tables_have_artifact_grain_and_key():
-    assert RELEASE_TABLES["annotation"]["row_grain"] == "ligand"
+def test_release_tables_have_artifact_row_description_and_key():
+    assert RELEASE_TABLES["annotation"]["row_description"] == "ligand"
     assert RELEASE_TABLES["annotation"]["primary_key"] == ("ligand_id",)
     for table in RELEASE_TABLES.values():
         assert table["artifact"] in RELEASE_PATHS
-        assert table["row_grain"]
+        assert table["row_description"]
         assert table["primary_key"]
 
 

@@ -82,7 +82,7 @@ def local_release(tmp_path: Path) -> PlinderRelease:
     return release
 
 
-def test_query_table_filters_joined_fields_without_changing_ligand_grain(
+def test_query_table_infers_related_tables_without_changing_ligand_rows(
     local_release: PlinderRelease,
 ) -> None:
     result = query_table(
@@ -93,7 +93,6 @@ def test_query_table_filters_joined_fields_without_changing_ligand_grain(
             "entry_release_date",
             "pocket_cluster",
         ],
-        joins=["entry_metadata", "ligand_pocket_membership"],
         filters=[
             ("entry_resolution", "<=", 2.0),
             [
@@ -114,13 +113,12 @@ def test_query_table_filters_joined_fields_without_changing_ligand_grain(
     ]
 
 
-def test_joined_entry_metadata_supplies_entry_values(
+def test_requested_entry_metadata_is_joined_automatically(
     local_release: PlinderRelease,
 ) -> None:
     result = query_table(
         "annotation",
         columns=["ligand_id", "entry_resolution"],
-        joins=["entry_metadata"],
         release=local_release,
     )
 
@@ -134,7 +132,6 @@ def test_sparse_sidecar_does_not_erase_base_identifiers(
     result = query_table(
         "annotation",
         columns=["ligand_id", "system_id", "pocket_cluster"],
-        joins=["ligand_pocket_membership"],
         filters=[("system_id", "==", "3ghi__1__1.C__1.N")],
         release=local_release,
     )
@@ -154,7 +151,6 @@ def test_annotation_release_dates_come_from_entry_metadata(
     result = query_table(
         "annotation",
         columns=["ligand_id", "entry_release_date"],
-        joins=["entry_metadata"],
         filters=[("entry_release_date", ">=", "2022-01-01")],
         release=local_release,
     )
@@ -167,19 +163,20 @@ def test_annotation_release_dates_come_from_entry_metadata(
     ]
 
 
-def test_annotation_does_not_expose_entry_metadata_without_join(
+def test_annotation_adds_entry_metadata_only_when_requested(
     local_release: PlinderRelease,
 ) -> None:
     result = query_table("annotation", release=local_release)
 
     assert "entry_release_date" not in result.columns
     assert "entry_resolution" not in result.columns
-    with pytest.raises(ValueError, match="columns .* are unavailable"):
-        query_table(
-            "annotation",
-            columns=["entry_resolution"],
-            release=local_release,
-        )
+    requested = query_table(
+        "annotation",
+        columns=["ligand_id", "entry_resolution"],
+        release=local_release,
+    )
+    assert requested["entry_resolution"].tolist()[:2] == [1.5, 2.5]
+    assert pd.isna(requested["entry_resolution"].iloc[2])
 
 
 def test_annotation_binding_affinity_columns_are_disabled(
@@ -230,7 +227,6 @@ def test_query_linked_apo_with_source_entry_metadata(
     result = query_table(
         "linked_apo_structures",
         columns=["linked_structure_id", "entry_resolution"],
-        joins=["entry_metadata"],
         release=local_release,
     )
 
@@ -260,10 +256,10 @@ def test_query_ligand_mmp_pairs(local_release: PlinderRelease) -> None:
     ]
 
 
-def test_query_table_rejects_joins_that_would_change_row_grain(
+def test_query_table_rejects_unregistered_related_tables(
     local_release: PlinderRelease,
 ) -> None:
-    with pytest.raises(ValueError, match="grain-preserving joins"):
+    with pytest.raises(ValueError, match="available related tables"):
         query_table(
             "entry_metadata",
             joins=["annotation"],
@@ -280,3 +276,41 @@ def test_query_table_rejects_unavailable_columns(
             columns=["not_a_column"],
             release=local_release,
         )
+
+
+def test_query_table_requires_a_choice_for_ambiguous_related_columns(
+    tmp_path: Path,
+) -> None:
+    release = PlinderRelease(tmp_path)
+    _write_table(
+        release,
+        "annotation_table",
+        {"ligand_id": ["1abc__1__1.L"], "entry_pdb_id": ["1abc"]},
+    )
+    _write_table(
+        release,
+        "entry_metadata",
+        {"entry_pdb_id": ["1abc"], "shared_value": [1]},
+    )
+    _write_table(
+        release,
+        "entry_sources",
+        {"entry_pdb_id": ["1abc"], "shared_value": [2]},
+    )
+
+    with pytest.raises(ValueError, match="available from multiple related tables"):
+        query_table(
+            "annotation",
+            columns=["ligand_id", "shared_value"],
+            release=release,
+        )
+
+    selected = query_table(
+        "annotation",
+        columns=["ligand_id", "shared_value"],
+        joins=["entry_metadata"],
+        release=release,
+    )
+    assert selected.to_dict("records") == [
+        {"ligand_id": "1abc__1__1.L", "shared_value": 1}
+    ]

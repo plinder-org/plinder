@@ -1,6 +1,6 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
-"""Query published PLINDER tables, with optional grain-preserving joins."""
+"""Query published PLINDER tables, joining related tables when needed."""
 
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ def _is_repeated_entry_column(column: str) -> bool:
 
 
 # Every relationship points from a base table to a table whose join columns are
-# unique.  These joins therefore preserve the base table's documented row grain.
+# unique. These joins therefore preserve the rows of the base table.
 TABLE_JOINS: dict[str, dict[str, JoinKeys]] = {
     "annotation": {
         "entry_metadata": (("entry_pdb_id", "entry_pdb_id"),),
@@ -188,6 +188,28 @@ def _column_sql(alias: str, column: str) -> str:
     return f"{_quote_identifier(alias)}.{_quote_identifier(column)}"
 
 
+def _visible_schema_columns(
+    table_name: str,
+    schema: Iterable[str],
+    *,
+    side_key_columns: set[str] | None = None,
+) -> list[str]:
+    """Return columns exposed by a base table or joined side table."""
+    keys = side_key_columns or set()
+    return [
+        name
+        for name in schema
+        if name not in keys
+        and (
+            table_name != "annotation"
+            or (
+                name not in DISABLED_ANNOTATION_COLUMNS
+                and not _is_repeated_entry_column(name)
+            )
+        )
+    ]
+
+
 def query_table(
     table_name: str = "annotation",
     *,
@@ -196,12 +218,13 @@ def query_table(
     joins: list[str] | None = None,
     release: PlinderRelease | None = None,
 ) -> pd.DataFrame:
-    """Query one release table with optional grain-preserving sidecar joins.
+    """Query one release table and add related tables when columns require them.
 
-    Joined tables must be listed explicitly.  Their registered join columns are
-    unique, so joining never creates extra base rows. If a sidecar repeats a
-    non-key column from the base table, its non-null values take precedence and
-    unmatched base values are retained.
+    Requested output and filter columns select registered related tables
+    automatically. Their join columns are unique, so joining never creates
+    extra base rows. If a related table repeats a non-key column from the base
+    table, its non-null values take precedence and unmatched base values are
+    retained.
 
     Parameters
     ----------
@@ -212,7 +235,9 @@ def query_table(
     filters : list | None
         Conditions combined with AND. A nested list is an OR group.
     joins : list[str] | None
-        Registered sidecars to left-join to the base table.
+        Additional registered tables to left-join. Usually unnecessary; use it
+        to choose a source when the same requested column exists in more than
+        one related table.
     release : PlinderRelease | None
         Explicit local release, or the configured release when omitted.
     """
@@ -227,7 +252,7 @@ def query_table(
         choices = ", ".join(sorted(allowed_joins)) or "none"
         raise ValueError(
             f"table {table_name!r} cannot join {invalid_joins}; "
-            f"grain-preserving joins: {choices}"
+            f"available related tables: {choices}"
         )
 
     requested_filter_columns = _filter_columns(filters)
@@ -236,8 +261,8 @@ def query_table(
     disabled_requested = DISABLED_ANNOTATION_COLUMNS.intersection(
         requested_columns | requested_filter_columns
     )
-    annotation_is_available = (
-        table_name == "annotation" or "annotation" in selected_joins
+    annotation_is_available = table_name == "annotation" or (
+        "annotation" in selected_joins or "annotation" in allowed_joins
     )
     if annotation_is_available and disabled_requested:
         raise ValueError(
@@ -245,23 +270,58 @@ def query_table(
             f"{sorted(disabled_requested)}"
         )
 
+    paths = {table_name: release.fetch(str(RELEASE_TABLES[table_name]["artifact"]))}
+    schemas = {table_name: _schema_names(paths[table_name])}
+    output_order = _visible_schema_columns(table_name, schemas[table_name])
+
+    requested_names = requested_columns | requested_filter_columns
+    unresolved = requested_names.difference(output_order)
+    if unresolved:
+        candidate_owners: dict[str, list[str]] = {name: [] for name in unresolved}
+        for join_name, keys in allowed_joins.items():
+            if join_name not in paths:
+                try:
+                    paths[join_name] = release.fetch(
+                        str(RELEASE_TABLES[join_name]["artifact"])
+                    )
+                except FileNotFoundError:
+                    continue
+                schemas[join_name] = _schema_names(paths[join_name])
+            visible = set(
+                _visible_schema_columns(
+                    join_name,
+                    schemas[join_name],
+                    side_key_columns={side for _, side in keys},
+                )
+            )
+            for name in unresolved.intersection(visible):
+                candidate_owners[name].append(join_name)
+
+        for name, owners in candidate_owners.items():
+            selected_owners = [owner for owner in owners if owner in selected_joins]
+            if len(selected_owners) == 1:
+                continue
+            if len(selected_owners) > 1:
+                raise ValueError(
+                    f"column {name!r} is provided by explicitly joined tables "
+                    f"{selected_owners}; select only one"
+                )
+            if len(owners) == 1:
+                selected_joins.append(owners[0])
+            elif len(owners) > 1:
+                raise ValueError(
+                    f"column {name!r} is available from multiple related "
+                    f"tables {owners}; choose one with joins=[...]"
+                )
+
+    selected_joins = list(dict.fromkeys(selected_joins))
     table_names = [table_name, *selected_joins]
     aliases = {name: f"t{index}" for index, name in enumerate(table_names)}
-    paths = {
-        name: release.fetch(str(RELEASE_TABLES[name]["artifact"]))
-        for name in table_names
-    }
-    schemas = {name: _schema_names(path) for name, path in paths.items()}
+    for name in selected_joins:
+        if name not in paths:
+            paths[name] = release.fetch(str(RELEASE_TABLES[name]["artifact"]))
+            schemas[name] = _schema_names(paths[name])
 
-    output_order = [
-        name
-        for name in schemas[table_name]
-        if table_name != "annotation"
-        or (
-            name not in DISABLED_ANNOTATION_COLUMNS
-            and not _is_repeated_entry_column(name)
-        )
-    ]
     output_columns = {
         name: _column_sql(aliases[table_name], name) for name in output_order
     }
@@ -281,14 +341,7 @@ def query_table(
                 f"missing base columns {base_missing}, sidecar columns {join_missing}"
             )
         side_key_columns = {side_column for _, side_column in keys}
-        visible_columns = list(schemas[join_name])
-        if join_name == "annotation":
-            visible_columns = [
-                name
-                for name in visible_columns
-                if name not in DISABLED_ANNOTATION_COLUMNS
-                and not _is_repeated_entry_column(name)
-            ]
+        visible_columns = _visible_schema_columns(join_name, schemas[join_name])
         for name in visible_columns:
             if name in side_key_columns:
                 continue
