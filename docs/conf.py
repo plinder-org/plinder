@@ -20,7 +20,7 @@ import tablegen
 import viewcode
 
 # Pregeneration of files
-for package in ["plinder.core", "plinder.core.scores", "plinder.core.loader"]:
+for package in ["plinder.core", "plinder.core.scores"]:
     apidoc.generate_api_reference(package, DOC_PATH / "api" / package.split(".")[-1])
 tablegen.generate_table(COLUMN_REFERENCE_PATH, DOC_PATH / "table.html")
 
@@ -72,6 +72,15 @@ autosummary_generate = False
 linkcode_resolve = viewcode.linkcode_resolve
 
 templates_path = ["templates"]
+exclude_patterns = [
+    "_build",
+    # Deferred until their public APIs are revisited in focused PRs.
+    "evaluation.md",
+    "examples/5_dataset_and_loader.ipynb",
+    "examples/6_custom_split.ipynb",
+    "examples/mlsb_challenge.md",
+    "api/loader",
+]
 source_suffix = {
     ".rst": "restructuredtext",
     ".ipynb": "myst-nb",
