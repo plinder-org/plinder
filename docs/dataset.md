@@ -5,19 +5,19 @@ sd_hide_title: true
 # Dataset
 
 PLINDER, the **Protein & Ligand INteraction Dataset and Evaluation Resource**,
-publishes ligand systems and protein-protein interfaces from the same PDB ingest
-while keeping their distinct row grains and coordinate APIs.
+extracts protein-ligand systems and protein-protein interfaces from the PDB.
 
 ## Release layout
 
-PLINDER releases are addressed by an ingest month and a release number within
-that month. The public layout is:
+PLINDER releases are addressed by the month of the PDB release used and a
+release number within that month. The public layout is:
 
 ```text
 <ingest-month>/
 └── <release-number>/
     ├── index/
     │   ├── annotation_table.parquet
+    │   ├── system_validation.parquet
     │   ├── entry_chains.parquet
     │   ├── entry_biounit_chains.parquet
     │   ├── entry_metadata.parquet
@@ -27,10 +27,12 @@ that month. The public layout is:
     │   ├── linked_apo_structures.parquet
     │   ├── ligand_pocket_membership.parquet
     │   ├── ligand_pocket_representatives.parquet
+    │   ├── ligand_clusters.parquet
     │   ├── ligand_mmp_pairs.parquet
     │   ├── interface_half_representatives.parquet
     │   ├── interface_membership.parquet
-    │   └── interface_representatives.parquet
+    │   ├── interface_representatives.parquet
+    │   └── interface_clusters.parquet
     ├── ligand_archives/
     │   ├── {two_char_code}.parquet
     │   └── manifest.json
@@ -39,301 +41,194 @@ that month. The public layout is:
     │       └── alignment_type={foldseek,mmseqs}/
     │           └── shard={two_char_code}.parquet
     ├── ligand_scores/
+    │   └── {fragment}.parquet
     ├── interface_scores/
-    ├── ligand_clusters/
+    │   ├── shard={two_char_code}.parquet
+    │   └── shard={two_char_code}.json
     ├── ligand_sampling/
-    ├── interface_clusters/
+    │   ├── set_cover/metric={metric}/threshold={threshold}.parquet
+    │   └── directed_set_cover/metric={metric}/threshold={threshold}.parquet
     ├── interface_sampling/
+    │   └── directed_set_cover/metric=interface_qcov/threshold={threshold}.parquet
     ├── search_databases/
+    │   ├── manifest.json
+    │   ├── holo_foldseek/
+    │   └── holo_mmseqs/
     └── exports/
+        ├── ligand_similarity_scores.parquet
+        └── interface_similarity_scores.parquet
 ```
 
-`plinder_download` downloads the index tables, clustering diagnostics, and
-sampling tables by default. It asks before downloading the larger ligand,
-alignment, score, export, and search-database groups; `--yes` downloads every
+`plinder_download` downloads the index and representative-cover tables by
+default. It asks before downloading ligand archives, alignments, score shards,
+complete similarity exports, and search databases; `--yes` downloads every
 group. APIs fetch missing optional artifacts when they need them unless offline
 mode is enabled. Source PDB mmCIFs are separate: they are fetched per PDB entry
 during reconstruction and are not part of the bulk download.
+
+The score, sampling, and search-database directories contain:
+
+- `ligand_scores/`: sharded Tanimoto similarities computed from 1,024-bit
+  ECFP4 fingerprints (Morgan radius 2) over unique canonical-SMILES nodes. Each
+  row stores the query `ligand_smiles_id`, target `ligand_smiles_id`, and
+  similarity; the SMILES lookup is in the ligand annotations.
+- `interface_scores/`: directed protein-interface coverage rows sharded by the
+  query PDB code. Rows retain the query and target interface IDs, chain mapping,
+  Foldseek or MMseqs source, side-specific coverage, and combined similarity.
+  Each JSON file records the inputs and output signature for its Parquet shard.
+- `ligand_sampling/`: long-form ligand-to-representative assignments. Reciprocal
+  Tanimoto uses `set_cover`; pocket, interaction, and ligand-3D metrics use
+  `directed_set_cover`.
+- `interface_sampling/`: long-form interface-to-representative assignments from
+  directed interface coverage.
+- `search_databases/`: portable Foldseek structure and MMseqs sequence targets
+  for released ligand-receptor and protein-interface chains, plus the mappings
+  needed to expand hits from search representatives back to individual PLINDER
+  chains. These bundles are used for custom scoring.
 
 (annotation-table-target)=
 (annotation-tables-index)=
 
 ## Release tables
 
-The annotation table has one row per ligand, not one row per system. Values
-whose natural grain is a chain, interface, or representative are stored once in
-narrower tables. Entry-level experimental, taxonomy, and validation fields are
-stored once in `entry_metadata.parquet`; `entry_pdb_id` is the join key retained
-on ligand and interface rows.
+The following are all registered release tables available through
+`query_table()`. The main tables of interest are `annotation_table.parquet`,
+which has one row per ligand, and `interface_annotation_table.parquet`, which
+has one row per protein-protein interface. The remaining tables separate entry,
+chain, validation, cluster, and representative data so clients only load it
+when needed. `query_table()` can request columns across related tables in a
+single query and selects the required relationships from those columns.
 
 - `annotation_table.parquet`: ligand annotations and reconstructable system IDs;
+- `system_validation.parquet`: ligand and pocket validation summaries for each
+  system;
 - `entry_chains.parquet`: one polymer chain in a PDB entry;
 - `entry_biounit_chains.parquet`: one chain instance in a biological assembly;
 - `entry_metadata.parquet`: experimental and entry-validation metadata;
 - `entry_sources.parquet`: the source mmCIF revision used during ingest;
 - `interface_annotation_table.parquet`: one protein-chain interface;
-- `alignment_chain_lookup.parquet`: protein-chain search identifiers and residue mappings;
-- `linked_apo_structures.parquet`: ranked deposited apo chains linked to holo systems;
-- `ligand_pocket_membership.parquet`: ligand-to-pocket-representative assignments;
-- `ligand_pocket_representatives.parquet`: receptor, pocket, and interaction payloads for ligand-pocket representatives;
+- `alignment_chain_lookup.parquet`: protein-chain search identifiers and
+  residue mappings;
+- `linked_apo_structures.parquet`: ranked apo chains linked to holo ligands;
+- `ligand_pocket_membership.parquet`: ligand-to-pocket-representative
+  assignments;
+- `ligand_pocket_representatives.parquet`: the receptor chains, pocket
+  residues, and protein-ligand interactions for each selected representative;
+- `ligand_clusters.parquet`: query-friendly ligand cover labels, representative
+  indicators, and coverage statistics;
 - `ligand_mmp_pairs.parquet`: matched molecular pairs over unique ligand SMILES;
 - `interface_membership.parquet`: interface-to-representative assignments;
 - `interface_representatives.parquet`: representative full interfaces;
-- `interface_half_representatives.parquet`: representative interface sides.
+- `interface_half_representatives.parquet`: representative interface sides;
+- `interface_clusters.parquet`: query-friendly protein-interface cover labels.
 
 The checked-in column reference below is generated from these release tables.
 
 :::{include} table.html
 :::
 
-### Querying tables
+### Table relationships
 
-`query_table()` reads only the requested columns and rows. Optional joins are
-explicit and are limited to relationships that preserve the base table's row
-grain. This makes entry metadata or pocket membership available to a ligand
-query without duplicating or dropping ligand rows.
+The tables can be read directly with any Parquet reader. The identifiers used
+to combine them are:
 
-```python
-from plinder.core import query_table
+- `entry_pdb_id` for entry metadata, source revisions, and chain tables;
+- `system_id` for ligand systems, system validation, protein interfaces, and
+  interface clusters;
+- `ligand_id` for ligand annotations, pocket-representative membership, and
+  ligand clusters;
+- `representative_ligand_id` and `representative_system_id` for the compact
+  representative tables.
 
-ligands = query_table(
-    "annotation",
-    columns=[
-        "system_id",
-        "ligand_id",
-        "ligand_ccd_code",
-        "entry_resolution",
-        "representative_ligand_id",
-    ],
-    joins=["entry_metadata", "ligand_pocket_membership"],
-    filters=[
-        ("entry_resolution", "<=", 2.5),
-        ("system_pass_validation_criteria", "==", True),
-    ],
-)
-```
-
-Registered table names, row grains, and keys are available through
-`plinder.core.RELEASE_TABLES`. `PlinderRelease` resolves the corresponding local
-paths and can point at either the configured release or an explicit local copy.
-
-```python
-from pathlib import Path
-
-from plinder.core import PlinderRelease, query_table
-
-release = PlinderRelease(data_dir=Path("/data/plinder-release"))
-entries = query_table(
-    "entry_metadata",
-    columns=["entry_pdb_id", "entry_release_date", "entry_resolution"],
-    release=release,
-)
-```
+All registered relationships point from a table to rows that are unique on the
+join columns. Adding entry metadata, system validation, or representative
+membership therefore does not multiply the rows of the starting table. See
+{doc}`/tutorial/dataset` for Python examples that select the required tables
+automatically.
 
 ## Protein interfaces
 
-PLINDER publishes protein-protein interfaces in a dedicated table because their
-natural row is a chain pair, not a ligand. `interface_annotation_table.parquet`
-has one row for an unordered pair of protein-chain instances in a biological
-assembly. Its `system_id` has the form
+`interface_annotation_table.parquet` has one row for an unordered pair of
+protein-chain instances in a biological assembly. Its `system_id` has the form
 `<pdb>__<assembly>__<chain-instance-1>--<chain-instance-2>`.
 
-The annotation records both chains, the resolved residues on each side, the
-number of contacting residue pairs, and PRODIGY-cryst features. Join entry
-metadata and representative membership when selecting a working set:
-
-```python
-from plinder.core import query_table
-
-interfaces = query_table(
-    "interface_annotations",
-    columns=[
-        "system_id",
-        "entry_pdb_id",
-        "interface_chain_1",
-        "interface_chain_2",
-        "interface_num_contact_residue_pairs",
-        "prodigy_label",
-        "prodigy_probability_bio",
-        "entry_release_date",
-        "entry_resolution",
-        "entry_source_taxonomy_ids",
-        "representative_system_id",
-    ],
-    joins=["entry_metadata", "interface_membership"],
-    filters=[
-        ("interface_num_contact_residue_pairs", ">=", 10),
-        ("entry_resolution", "<=", 3.0),
-        ("prodigy_label", "==", "BIO"),
-    ],
-)
-```
-
-`PlinderInterface` is the coordinate-level interface API. It expands the
-deposited assembly and retains exactly the annotated two-chain pair. In-memory
-chain keys use the assembly-instance IDs from the table, so repeated copies of
-one asymmetric-unit chain remain distinct.
-
-```python
-from plinder.core import PlinderInterface
-
-interface = PlinderInterface(system_id=interfaces.iloc[0]["system_id"])
-
-annotation = interface.annotation
-sequences = interface.sequences
-complex_atoms = interface.atom_array
-chain_atoms = interface.chain_structures
-interface_atoms = interface.interface_structure
-interface_masks = interface.interface_residue_masks
-interface_cif = interface.interface_cif
-```
-
-`sequences` contains the full deposited polymer sequence for each side;
-`atom_array` contains resolved coordinates. Each value in
-`interface_residue_masks` is an atom mask over `atom_array`, derived from the
-stored resolved-residue indices. The written mmCIF is self-contained and
-contains only the two protein chains. The API does not assign a receptor and a
-ligand orientation because the annotated interface is unordered.
-
-An explicit `release=PlinderRelease(data_dir=...)` keeps reconstructed files
-under that release root. A caller may also supply `source_mmcif`, but its
-resolved residue numbering must match the release annotation; otherwise the
-interface-residue properties raise a descriptive error instead of selecting
-different residues.
+The table records both chain-instance IDs, resolved residue numbers and indices
+for each side, the number of contacting residue pairs, and PRODIGY-cryst
+features. Full deposited sequences and source taxonomies are in the chain and
+entry tables.
 
 `interface_representatives.parquet` stores the full-interface representatives,
 while `interface_half_representatives.parquet` stores individual interface
 sides. The latter is useful when one wants diverse protein surfaces without
-requiring both sides of the same complex. Detailed set-cover assignments live
-under `interface_sampling/`.
+requiring both sides of the same complex. `interface_clusters.parquet` provides
+the query-friendly cover labels, while detailed assignments are under
+`interface_sampling/`.
 
 ## Structure assets and reconstruction
 
-PLINDER stores one canonical asymmetric-unit SDF for each ligand chain in
+PLINDER stores one asymmetric-unit SDF for each ligand chain in
 `ligand_archives/{two_char_code}.parquet`. Assembly copies are not stored because
-they have the same conformation under a rigid-body transform. `PlinderSystem`
-extracts only the SDFs required for the requested system.
+they have the same conformation under a rigid-body transform. The archive stores
+the SDF together with the PDB entry ID and asymmetric-unit ligand ID.
 
-System and receptor mmCIFs are rebuilt from the deposited PDB mmCIF, the ligand
-rows, and `entry_biounit_chains.parquet`. The source revision recorded in
-`entry_sources.parquet` is fetched from the
+`PlinderSystem.reconstruct()` rebuilds selected system assets from the deposited
+PDB mmCIF, the ligand rows, and `entry_biounit_chains.parquet`. Accessing
+`PlinderSystem.system_cif` or `PlinderSystem.receptor_cif` performs
+reconstruction when the complete system or ligand-free receptor mmCIF is not
+already cached. Reconstruction options can include additional chains from the
+same PDB entry.
+
+`PlinderInterface.reconstruct()` similarly rebuilds a protein-protein interface,
+and `PlinderInterface.interface_cif` returns its standard mmCIF path. The source
+revision recorded in `entry_sources.parquet` is fetched from the
 [wwPDB versioned archive](https://www.wwpdb.org/ftp/pdb-versioned-ftp-site) and
-cached under the configured PLINDER directory. An explicit `source_mmcif`
-supplied to `PlinderSystem` takes precedence.
-
-```python
-from pathlib import Path
-
-from plinder.core import PlinderSystem
-
-system = PlinderSystem(system_id="2y4i__1__1.B__1.E_1.F")
-system_cif = Path(system.system_cif)
-receptor_cif = Path(system.receptor_cif)
-canonical_sdfs = system.canonical_ligand_sdfs
-assembly_sdfs = system.ligand_sdfs
-```
+cached separately from the bulk release. Source PDB mmCIFs are therefore not
+included by `plinder_download`; `download_pdb_mmcifs()` can prefetch selected
+source revisions for offline reconstruction.
 
 The reconstructed mmCIFs contain the atom, sequence, component, assembly, and
 bond information needed to read them as self-contained PDBx/mmCIF files.
-Canonical ligand SDFs preserve the curated bond orders; `ligand_sdfs` writes the
-corresponding assembly coordinates.
-
-For an offline workflow, fetch the required source files on an online node
-before enabling `PLINDER_OFFLINE=true`:
-
-```python
-from plinder.core import download_pdb_mmcifs
-
-download_pdb_mmcifs(["2y4i", "1a3b"])
-```
-
-Only the requested PDB entries are fetched. An offline request for an absent
-source file or release artifact raises an error with its expected cache path.
+Asymmetric ligand SDFs preserve the curated bond orders. Assembly-coordinate
+SDFs use the same chemistry with the recorded rigid-body transforms applied.
 
 ### Linked apo chains
 
-`linked_apo_structures.parquet` associates a holo system with ranked deposited
-apo protein chains. A candidate must pass the configured pocket and whole-chain
-similarity requirements for every proper ligand pocket in the holo system.
-Candidates from the same PDB entry are excluded.
+`linked_apo_structures.parquet` associates a holo ligand system with ranked
+deposited apo protein chains. A candidate must pass the configured pocket and
+whole-chain similarity requirements for every proper ligand pocket in the holo
+system. Candidates from the same PDB entry are excluded.
 
 Ranking prefers chains with no nearby ligand-like components, then ion-only,
 artifact, and other-ligand contacts. Resolution and similarity break later
-ties. The release stores the exact assembly chain instance that was scored; it
-does not store a copied or pre-fitted coordinate file.
-
-```python
-from plinder.core import PlinderSystem
-
-system = PlinderSystem(system_id="2y4i__1__1.B__1.E_1.F")
-links = system.linked_apo_structures
-
-# The highest-ranked link is used when no ID is supplied.
-apo_cif = system.reconstruct_linked_apo()
-
-# Fit the selected apo chain to a holo receptor chain when desired.
-fitted_apo_cif = system.superpose_linked_apo(reference_chain="1.B")
-```
-
-For a multichain receptor, `reference_chain` is required for fitting so that a
-chain is never selected arbitrarily.
+ties. The release stores the assembly chain instance that was scored;
+`PlinderSystem.reconstruct_linked_apo()` rebuilds its coordinates from the
+recorded source entry and assembly membership.
 
 ## Similarity artifacts
 
-### Ligand similarities
-
-`ligand_scores/` stores sharded BulkTanimoto edges over unique canonical-SMILES
-nodes. Every edge at or above the configured minimum is retained.
-
-`exports/all_sucos_shape_pocket_qcov.parquet` stores the complete published
-ligand-level SuCOS/pocket-coverage export, including values below the clustering
-threshold.
-
 ### Protein alignments
 
-The release publishes mapped Foldseek and MMseqs hits rather than the complete
-pairwise protein-score table. Alignment rows are ordered by query and target and
-stored in deterministic PDB two-character shards.
+The release publishes mapped Foldseek and MMseqs chain-level alignments in
+query-PDB shards. These alignments provide the chain and residue mappings used
+to calculate protein sequence and structure scores, ligand-pocket and
+protein-ligand interaction scores, and protein-interface scores.
 
-`reconstruct_similarity_scores()` filters those shards to a requested system
-cross-product and calculates directed ligand-level scores. Positive-pocket pairs
-load their canonical ligand SDFs for the gated 3D metrics.
+### Ligand similarities
 
-```python
-from plinder.core.scores import (
-    prefetch_similarity_alignments,
-    reconstruct_similarity_scores,
-)
+`exports/ligand_similarity_scores.parquet` stores the published directed
+ligand-pair table derived from the corresponding protein alignments and ligand
+comparisons. Each row contains `pocket_qcov`, `pocket_fident_qcov`, `pli_qcov`,
+and `sucos_shape`. Swapping query and target can change the values. Bulk
+Tanimoto edges are symmetric and remain in the sharded ligand score store used
+to build the reciprocal chemical covers.
 
-queries = ["2y4i__1__1.B__1.E_1.F"]
-targets = ["6cex__1__1.D__1.M"]
-prefetch_similarity_alignments(queries)
-scores = reconstruct_similarity_scores(queries, targets)
-```
+### Protein-interface similarities
 
-Prefetching downloads only the Foldseek/MMseqs shards required by the query PDB
-entries. Run reconstruction once while online as well if the annotation rows or
-positive-pocket ligand archives are not already cached.
-
-Protein-interface coverage can be rebuilt for a bounded interface cross-product
-from the same mapped alignments:
-
-```python
-from plinder.core.scores import reconstruct_interface_similarity_scores
-
-interface_scores = reconstruct_interface_similarity_scores(
-    query_interface_ids=["7cm8__1__1.A--2.A"],
-    target_interface_ids=["7cma__1__1.A--1.B"],
-)
-```
-
-The result is directional: swapping query and target can change interface
-coverage.
+`exports/interface_similarity_scores.parquet` contains the published directed
+interface table with `iface1_qcov`, `iface2_qcov`, and their combined
+`similarity` value. Swapping query and target can change the coverage.
 
 ## Representative covers
-
-Connectivity components are build-time helpers and are not public cluster
-labels. The release publishes greedy representative covers:
 
 - `ligand_sampling/set_cover/` contains an undirected set cover for reciprocal
   Tanimoto similarity;
@@ -343,8 +238,11 @@ labels. The release publishes greedy representative covers:
   interfaces.
 
 Each metric has files named `metric={metric}/threshold={threshold}.parquet`.
-Ligand cover labels are also merged into the annotation table. Tanimoto columns
-end in `__ligand__set_cover`; directional columns end in
+Finalization also writes one query-friendly row per ligand to
+`index/ligand_clusters.parquet` and one row per interface to
+`index/interface_clusters.parquet`. `query_table()` joins these columns to the
+corresponding annotation table when requested. Tanimoto columns end in
+`__ligand__set_cover`; directional ligand columns end in
 `__ligand__directed_set_cover`.
 
 The Tanimoto cover uses only reciprocal edges meeting the requested threshold.
@@ -362,20 +260,3 @@ node's potential coverage count and fraction.
 unique canonical ligand SMILES. Rows identify the two `ligand_smiles_id` values,
 both SMILES, the transformation and shared core, cut count, heavy-atom counts,
 and the fraction of each ligand contained in the shared core.
-
-```python
-from plinder.core import query_table
-
-pairs = query_table(
-    "ligand_mmp_pairs",
-    columns=[
-        "ligand_smiles_id_1",
-        "ligand_smiles_id_2",
-        "transformation",
-        "shared_core_smiles",
-        "ligand_1_shared_core_fraction",
-        "ligand_2_shared_core_fraction",
-    ],
-    filters=[("ligand_1_shared_core_fraction", ">=", 0.5)],
-)
-```
