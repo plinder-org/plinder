@@ -5,7 +5,6 @@ html_theme.sidebar_secondary.remove: true
 
 # PLINDER documentation
 
-
 ![plinder](/static/assets/general/plinder_logo.png){w=40em align=center}
 
 **PLINDER** is the **Protein & Ligand INteraction Dataset and Evaluation
@@ -13,72 +12,79 @@ Resource**: a comprehensive, annotated, high-quality resource for training and
 evaluating protein-ligand and protein-protein structure models.
 
 - \> 400k PLI systems across > 11k SCOP domains and > 50k unique small molecules
-- Ligand-level annotations plus compact entry, chain, interface, and representative tables
+- Ligand and protein-interface annotations plus compact entry, chain, and representative tables
 - Automated curation pipeline to keep up with the PDB
-- Reusable ligand, pocket, and protein-interface similarities and cluster assignments
-- Deposited apo protein chains linked to compatible _holo_ systems
-- Directed-cover assignments for choosing diverse training representatives
-- Robust evaluation harness to simplify and standard performance comparison between models.
+- Reusable ligand, pocket, and protein-interface similarities and representative assignments
+- Ranked deposited apo protein chains linked to _holo_ ligands
+- Python APIs for release queries, coordinate reconstruction, and custom scoring
 
+::::::{grid} 1 2 3 3
 
-::::::{grid} 1 1 2 2
-
-:::::{grid-item-card}
+:::::{grid-item-card} Getting started
 :link: tutorial/dataset
 :link-type: doc
+:class-card: home-card
 
-::::{grid} 2
+<div class="home-card-icon" aria-hidden="true"><i class="fa-solid fa-compass"></i></div>
 
-:::{grid-item}
-:columns: 3
-:class: main-button
-<svg class="main-button-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--!Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free Copyright 2024 Fonticons, Inc.--><path d="M0 64C0 28.7 28.7 0 64 0L224 0l0 128c0 17.7 14.3 32 32 32l128 0 0 288c0 35.3-28.7 64-64 64L64 512c-35.3 0-64-28.7-64-64L0 64zm384 64l-128 0L256 0 384 128z"/></svg>
-:::
-
-:::{grid-item}
-:columns: 9
-**Dataset access**
-
-Access ligand systems, protein interfaces, and their annotations directly
-:::
-::::
+Install PLINDER, select a release, query a ligand or interface, and reconstruct
+its coordinates.
 :::::
 
-
-:::::{grid-item-card}
-:link: tutorial/api
+:::::{grid-item-card} Data access
+:link: examples/2_query_filter_index
 :link-type: doc
+:class-card: home-card
 
-::::{grid} 2
+<div class="home-card-icon" aria-hidden="true"><i class="fa-solid fa-database"></i></div>
 
-:::{grid-item}
-:columns: 3
-:class: main-button
-<svg class="main-button-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--!Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free Copyright 2024 Fonticons, Inc.--><path d="M392.8 1.2c-17-4.9-34.7 5-39.6 22l-128 448c-4.9 17 5 34.7 22 39.6s34.7-5 39.6-22l128-448c4.9-17-5-34.7-22-39.6zm80.6 120.1c-12.5 12.5-12.5 32.8 0 45.3L562.7 256l-89.4 89.4c-12.5 12.5-12.5 32.8 0 45.3s32.8 12.5 45.3 0l112-112c12.5-12.5 12.5-32.8 0-45.3l-112-112c-12.5-12.5-32.8-12.5-45.3 0zm-306.7 0c-12.5-12.5-32.8-12.5-45.3 0l-112 112c-12.5 12.5-12.5 32.8 0 45.3l112 112c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L77.3 256l89.4-89.4c12.5-12.5 12.5-32.8 0-45.3z"/></svg>
-:::
+Download release artifacts and query columns across the ligand, interface,
+entry, chain, and representative tables.
+:::::
 
-:::{grid-item}
-:columns: 9
-**Python API**
+:::::{grid-item-card} Structures
+:link: examples/3_access_system_files
+:link-type: doc
+:class-card: home-card
 
-Use the dedicated Python package to explore the data
-:::
-::::
+<div class="home-card-icon" aria-hidden="true"><i class="fa-solid fa-cubes"></i></div>
+
+Work with ligand systems, linked apo chains, protein interfaces, atom masks,
+and self-contained mmCIF files.
+:::::
+
+:::::{grid-item-card} Similarity and scoring
+:link: examples/index
+:link-type: doc
+:class-card: home-card
+
+<div class="home-card-icon" aria-hidden="true"><i class="fa-solid fa-code-compare"></i></div>
+
+Use published pairwise scores and representative covers, or compare custom
+mmCIF and FASTA inputs with PLINDER.
+:::::
+
+:::::{grid-item-card} Data reference
+:link: dataset
+:link-type: doc
+:class-card: home-card
+
+<div class="home-card-icon" aria-hidden="true"><i class="fa-solid fa-book-open"></i></div>
+
+Inspect release artifacts, table relationships, column definitions, and
+coordinate provenance.
 :::::
 
 ::::::
-
-% TODO: re-add `contribution/index`
 
 :::{toctree}
 :maxdepth: 1
 :hidden:
 
 tutorial/index
+examples/index
 dataset
 api/index
-evaluation
-examples/index
 contribution/index
 citation
 :::

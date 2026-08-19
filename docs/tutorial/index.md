@@ -1,13 +1,11 @@
-# Tutorial
+# Getting started
 
-The following tutorials represent the two approaches to using PLINDER:
-The files from the dataset can be accessed directly using your preferred tooling.
-On the other side, the dedicated `plinder` Python package provides a simplified
-efficient way for working with the data.
+Start with the short guide below to install PLINDER, query ligand and interface
+annotations, and reconstruct coordinates. Continue with the
+{doc}`/examples/index` guides when you need a complete workflow.
 
 ```{toctree}
 :maxdepth: 1
 
 dataset
-api
 ```
