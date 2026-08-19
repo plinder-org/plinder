@@ -572,7 +572,7 @@ def cached_plinder_system(read_plinder_mount, tmp_path):
     from plinder.core import PlinderSystem
 
     def build(system_id: str) -> PlinderSystem:
-        source = read_plinder_mount / "systems" / system_id
+        source = test_asset_fp / "reconstructed_systems" / system_id
         reconstruction_dir = tmp_path / "reconstructed_systems" / system_id
         shutil.copytree(source, reconstruction_dir)
 

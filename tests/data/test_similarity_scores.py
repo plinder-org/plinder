@@ -57,9 +57,7 @@ SDF_FILE = (
 HEM_SDF_FILE = (
     Path(__file__).resolve().parents[1]
     / "test_data"
-    / "plinder"
-    / "mount"
-    / "systems"
+    / "reconstructed_systems"
     / "19hc__1__1.B__1.T"
     / "ligand_files"
     / "1.T.sdf"
