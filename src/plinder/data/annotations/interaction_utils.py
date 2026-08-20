@@ -425,8 +425,8 @@ def extract_ligand_links_to_neighbouring_chains(
 
 
 # ---------------------------------------------------------------------------
-# Bridged interaction detection (synced with peppr-internal)
-# TODO: remove once peppr >= 0.14 is released with these methods.
+# Bridged interaction detection
+# TODO: remove once a new peppr is released with these methods.
 # ---------------------------------------------------------------------------
 
 # Water bridge lower bound: 0.75 * VdW_sum (~2.28 A for O-O)
