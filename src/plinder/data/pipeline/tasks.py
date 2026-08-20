@@ -58,6 +58,7 @@ LIGAND_POCKET_REPRESENTATIVES_RELATIVE = Path(
     "index/ligand_pocket_representatives.parquet"
 )
 LIGAND_POCKET_MEMBERSHIP_RELATIVE = Path("index/ligand_pocket_membership.parquet")
+LIGAND_POCKET_RESIDUES_RELATIVE = Path("index/ligand_pocket_residues.parquet")
 LIGAND_POCKET_REPRESENTATIVES_MANIFEST_RELATIVE = Path(
     "index/ligand_pocket_representatives.manifest.json"
 )
@@ -861,6 +862,7 @@ def make_interface_representatives(
             ) TO '{temporary_paths["membership"].as_posix()}' (
                 FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 100000
             );
+
             """
         )
     )
@@ -971,6 +973,10 @@ def _completed_ligand_pocket_representatives(
             LIGAND_POCKET_MEMBERSHIP_RELATIVE,
             schemas.LIGAND_POCKET_MEMBERSHIP_SCHEMA,
         ),
+        "residues": (
+            LIGAND_POCKET_RESIDUES_RELATIVE,
+            schemas.LIGAND_POCKET_RESIDUE_SCHEMA,
+        ),
     }
     try:
         if manifest is None or manifest.get(
@@ -995,7 +1001,7 @@ def make_ligand_pocket_representatives(
     threads: int,
     force_update: bool = False,
 ) -> dict[str, Any]:
-    """Normalize exact protein-pocket copies while retaining ligand membership."""
+    """Group exact protein-pocket copies and retain ligand and residue mappings."""
     current = _completed_ligand_pocket_representatives(data_dir)
     if not force_update and current is not None:
         LOG.info(
@@ -1018,9 +1024,10 @@ def make_ligand_pocket_representatives(
     temporary_paths = {
         "representatives": working_root / LIGAND_POCKET_REPRESENTATIVES_RELATIVE.name,
         "membership": working_root / LIGAND_POCKET_MEMBERSHIP_RELATIVE.name,
+        "residues": working_root / LIGAND_POCKET_RESIDUES_RELATIVE.name,
     }
     started = time.monotonic()
-    LOG.info("make_ligand_pocket_representatives: normalizing ligand pockets")
+    LOG.info("make_ligand_pocket_representatives: grouping ligand pockets")
     connection = duckdb.connect()
     connection.sql(f"SET threads={max(1, threads)}")
     connection.sql("SET memory_limit='64GB'")
@@ -1030,7 +1037,7 @@ def make_ligand_pocket_representatives(
         dedent(
             f"""
             CREATE TEMP TABLE protein_receptors AS
-            SELECT entry_pdb_id, chain_asym_id
+            SELECT entry_pdb_id, chain_asym_id, chain_auth_id
             FROM read_parquet('{chains.as_posix()}')
             WHERE chain_receptor_type = 'protein';
 
@@ -1167,12 +1174,81 @@ def make_ligand_pocket_representatives(
             ) TO '{temporary_paths["membership"].as_posix()}' (
                 FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 100000
             );
+
+            COPY (
+                WITH interaction_residues AS (
+                    SELECT DISTINCT
+                        ligands.ligand_id,
+                        split_part(interaction, '_', 1) AS chain_instance,
+                        try_cast(split_part(interaction, '_', 2) AS INTEGER)
+                            AS residue_label_seq_id
+                    FROM eligible_ligands AS ligands,
+                         unnest(ligands.ligand_interactions)
+                            AS interaction_rows(interaction)
+                    WHERE try_cast(split_part(interaction, '_', 2) AS INTEGER)
+                        IS NOT NULL
+                ),
+                parsed_pockets AS (
+                    SELECT
+                        ligands.entry_pdb_id,
+                        ligands.system_id,
+                        ligands.ligand_id,
+                        split_part(neighbor, '_', 1) AS chain_instance,
+                        split_part(split_part(neighbor, '_', 1), '.', 2)
+                            AS chain_asym_id,
+                        try_cast(split_part(neighbor, '_', 2) AS INTEGER)
+                            AS residue_label_seq_id,
+                        try_cast(split_part(neighbor, '_', 3) AS INTEGER)
+                            AS residue_index,
+                        coalesce(
+                            nullif(split_part(neighbor, '_', 4), ''),
+                            split_part(neighbor, '_', 2)
+                        ) AS residue_auth_seq_id,
+                        coalesce(
+                            nullif(split_part(neighbor, '_', 5), ''), '.'
+                        ) AS residue_insertion_code
+                    FROM eligible_ligands AS ligands,
+                         unnest(ligands.ligand_neighboring_residues)
+                            AS pocket_rows(neighbor)
+                )
+                SELECT DISTINCT
+                    pockets.entry_pdb_id::VARCHAR AS entry_pdb_id,
+                    pockets.system_id::VARCHAR AS system_id,
+                    pockets.ligand_id::VARCHAR AS ligand_id,
+                    pockets.chain_instance::VARCHAR AS chain_instance,
+                    pockets.chain_asym_id::VARCHAR AS chain_asym_id,
+                    receptors.chain_auth_id::VARCHAR AS chain_auth_id,
+                    pockets.residue_label_seq_id::INTEGER
+                        AS residue_label_seq_id,
+                    pockets.residue_index::INTEGER AS residue_index,
+                    pockets.residue_auth_seq_id::VARCHAR AS residue_auth_seq_id,
+                    pockets.residue_insertion_code::VARCHAR
+                        AS residue_insertion_code,
+                    (interactions.ligand_id IS NOT NULL)::BOOLEAN AS is_pli
+                FROM parsed_pockets AS pockets
+                INNER JOIN protein_receptors AS receptors
+                  ON pockets.entry_pdb_id = receptors.entry_pdb_id
+                 AND pockets.chain_asym_id = receptors.chain_asym_id
+                LEFT JOIN interaction_residues AS interactions
+                  ON pockets.ligand_id = interactions.ligand_id
+                 AND pockets.chain_instance = interactions.chain_instance
+                 AND pockets.residue_label_seq_id
+                        = interactions.residue_label_seq_id
+                WHERE pockets.residue_label_seq_id IS NOT NULL
+                  AND pockets.residue_index IS NOT NULL
+                ORDER BY
+                    pockets.ligand_id,
+                    pockets.chain_instance,
+                    pockets.residue_label_seq_id
+            ) TO '{temporary_paths["residues"].as_posix()}' (
+                FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 100000
+            );
             """
         )
     )
     connection.close()
     LOG.info(
-        "make_ligand_pocket_representatives: DuckDB normalization complete "
+        "make_ligand_pocket_representatives: DuckDB grouping complete "
         "elapsed_seconds=%.1f",
         time.monotonic() - started,
     )
@@ -1185,6 +1261,10 @@ def make_ligand_pocket_representatives(
         "membership": (
             LIGAND_POCKET_MEMBERSHIP_RELATIVE,
             schemas.LIGAND_POCKET_MEMBERSHIP_SCHEMA,
+        ),
+        "residues": (
+            LIGAND_POCKET_RESIDUES_RELATIVE,
+            schemas.LIGAND_POCKET_RESIDUE_SCHEMA,
         ),
     }
     for key, (_, schema) in expected.items():
@@ -1199,6 +1279,7 @@ def make_ligand_pocket_representatives(
     representative_count = pq.ParquetFile(
         temporary_paths["representatives"]
     ).metadata.num_rows
+    pocket_residue_count = pq.ParquetFile(temporary_paths["residues"]).metadata.num_rows
     if _ligand_pocket_representative_source_signatures(data_dir) != sources:
         rmtree(working_root)
         raise RuntimeError("entry indexes changed while making ligand representatives")
@@ -1218,6 +1299,7 @@ def make_ligand_pocket_representatives(
         "outputs": outputs,
         "ligand_count": ligand_count,
         "representative_ligand_count": representative_count,
+        "pocket_residue_count": pocket_residue_count,
     }
     _write_json_atomic(
         data_dir / LIGAND_POCKET_REPRESENTATIVES_MANIFEST_RELATIVE,

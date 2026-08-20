@@ -74,6 +74,18 @@ TABLE_JOINS: dict[str, dict[str, JoinKeys]] = {
         "system_validation": (("system_id", "system_id"),),
         "ligand_clusters": (("ligand_id", "ligand_id"),),
     },
+    "ligand_pocket_residues": {
+        "annotation": (("ligand_id", "ligand_id"),),
+        "system_validation": (("system_id", "system_id"),),
+        "entry_chains": (
+            ("entry_pdb_id", "entry_pdb_id"),
+            ("chain_asym_id", "chain_asym_id"),
+        ),
+        "entry_metadata": (("entry_pdb_id", "entry_pdb_id"),),
+        "entry_sources": (("entry_pdb_id", "entry_pdb_id"),),
+        "ligand_pocket_membership": (("ligand_id", "ligand_id"),),
+        "ligand_clusters": (("ligand_id", "ligand_id"),),
+    },
     "ligand_clusters": {
         "annotation": (("ligand_id", "ligand_id"),),
     },

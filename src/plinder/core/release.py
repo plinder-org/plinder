@@ -22,6 +22,7 @@ RELEASE_PATHS = {
     "interface_annotations": "index/interface_annotation_table.parquet",
     "alignment_chain_lookup": "index/alignment_chain_lookup.parquet",
     "ligand_pocket_membership": "index/ligand_pocket_membership.parquet",
+    "ligand_pocket_residues": "index/ligand_pocket_residues.parquet",
     "ligand_pocket_representatives": ("index/ligand_pocket_representatives.parquet"),
     "ligand_clusters": "index/ligand_clusters.parquet",
     "ligand_mmp_pairs": "index/ligand_mmp_pairs.parquet",
@@ -98,6 +99,15 @@ RELEASE_TABLES: dict[str, dict[str, Any]] = {
         "artifact": "ligand_pocket_membership",
         "row_description": "ligand directed-set-cover assignment",
         "primary_key": ("ligand_id",),
+    },
+    "ligand_pocket_residues": {
+        "artifact": "ligand_pocket_residues",
+        "row_description": "receptor residue in a ligand pocket",
+        "primary_key": (
+            "ligand_id",
+            "chain_instance",
+            "residue_label_seq_id",
+        ),
     },
     "ligand_pocket_representatives": {
         "artifact": "ligand_pocket_representatives",

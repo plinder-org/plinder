@@ -155,6 +155,18 @@ DERIVED_COLUMN_DESCRIPTIONS = {
         "Representative protein-ligand interactions encoded with their receptor "
         "residue mapping and interaction type"
     ),
+    "residue_label_seq_id": ("Receptor residue number from _atom_site.label_seq_id"),
+    "residue_index": "Zero-based position among resolved residues in the chain",
+    "residue_auth_seq_id": (
+        "Depositor-provided receptor residue number from _atom_site.auth_seq_id"
+    ),
+    "residue_insertion_code": (
+        "Depositor-provided receptor residue insertion code, or . when absent"
+    ),
+    "is_pli": (
+        "Whether this pocket residue participates in a detected protein-ligand "
+        "interaction"
+    ),
     "half_interface_id": "Stable identifier for one representative interface side",
     "instance_chain_id": "Assembly-chain instance forming this half-interface",
     "residue_numbers": "Source-mmCIF residue numbers in this half-interface",

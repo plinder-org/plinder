@@ -145,6 +145,7 @@ def test_make_ligand_pocket_representatives_collapses_assembly_copies(
         {
             "entry_pdb_id": ["1abc", "1abc"],
             "chain_asym_id": ["A", "N"],
+            "chain_auth_id": ["X", "Y"],
             "chain_receptor_type": ["protein", "dna"],
         }
     ).to_parquet(index / "entry_chains.parquet", index=False)
@@ -168,8 +169,8 @@ def test_make_ligand_pocket_representatives_collapses_assembly_copies(
                 ["1.A"],
             ],
             "ligand_neighboring_residues": [
-                ["1.A_10_0_10", "1.N_20_0_20"],
-                ["2.A_10_0_10", "2.N_20_0_20"],
+                ["1.A_10_0_110_A", "1.N_20_0_220_."],
+                ["2.A_10_0_110_A", "2.N_20_0_220_."],
                 ["1.A_11_1_11"],
             ],
             "ligand_interactions": [
@@ -187,18 +188,63 @@ def test_make_ligand_pocket_representatives_collapses_assembly_copies(
     )
     assert report["ligand_count"] == 3
     assert report["representative_ligand_count"] == 2
+    assert report["pocket_residue_count"] == 3
     representatives = pd.read_parquet(
         tmp_path / tasks.LIGAND_POCKET_REPRESENTATIVES_RELATIVE
     ).set_index("representative_ligand_id")
     assert representatives.loc["ligand-1", "receptor_chain_asym_ids"] == ["A"]
     assert representatives.loc["ligand-1", "receptor_set_id"] == "ligand-1"
-    assert representatives.loc["ligand-1", "pocket_residues"] == ["A_10_0_10"]
+    assert representatives.loc["ligand-1", "pocket_residues"] == ["A_10_0_110_A"]
     assert representatives.loc["ligand-1", "interactions"] == ["A_10_hbond"]
     membership = pd.read_parquet(
         tmp_path / tasks.LIGAND_POCKET_MEMBERSHIP_RELATIVE
     ).set_index("ligand_id")
     assert membership.loc["ligand-2", "representative_ligand_id"] == "ligand-1"
     assert membership.loc["ligand-3", "representative_ligand_id"] == "ligand-3"
+    residues = pd.read_parquet(
+        tmp_path / tasks.LIGAND_POCKET_RESIDUES_RELATIVE
+    ).sort_values(["ligand_id", "residue_label_seq_id"])
+    assert residues.to_dict("records") == [
+        {
+            "entry_pdb_id": "1abc",
+            "system_id": "system-1",
+            "ligand_id": "ligand-1",
+            "chain_instance": "1.A",
+            "chain_asym_id": "A",
+            "chain_auth_id": "X",
+            "residue_label_seq_id": 10,
+            "residue_index": 0,
+            "residue_auth_seq_id": "110",
+            "residue_insertion_code": "A",
+            "is_pli": True,
+        },
+        {
+            "entry_pdb_id": "1abc",
+            "system_id": "system-2",
+            "ligand_id": "ligand-2",
+            "chain_instance": "2.A",
+            "chain_asym_id": "A",
+            "chain_auth_id": "X",
+            "residue_label_seq_id": 10,
+            "residue_index": 0,
+            "residue_auth_seq_id": "110",
+            "residue_insertion_code": "A",
+            "is_pli": True,
+        },
+        {
+            "entry_pdb_id": "1abc",
+            "system_id": "system-3",
+            "ligand_id": "ligand-3",
+            "chain_instance": "1.A",
+            "chain_asym_id": "A",
+            "chain_auth_id": "X",
+            "residue_label_seq_id": 11,
+            "residue_index": 1,
+            "residue_auth_seq_id": "11",
+            "residue_insertion_code": ".",
+            "is_pli": True,
+        },
+    ]
     assert (
         tasks.make_ligand_pocket_representatives(
             data_dir=tmp_path,
@@ -1348,6 +1394,7 @@ def test_protein_scoring_plan_and_alignment_finalization(tmp_path, monkeypatch) 
         {
             "entry_pdb_id": ["1abc", "1abc", "2def"],
             "chain_asym_id": ["A", "B", "N"],
+            "chain_auth_id": ["A", "B", "N"],
             "chain_receptor_type": [
                 "protein",
                 "protein",

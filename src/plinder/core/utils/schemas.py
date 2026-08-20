@@ -156,6 +156,22 @@ LIGAND_POCKET_MEMBERSHIP_SCHEMA = pa.schema(
     ]
 )
 
+LIGAND_POCKET_RESIDUE_SCHEMA = pa.schema(
+    [
+        ("entry_pdb_id", pa.string()),
+        ("system_id", pa.string()),
+        ("ligand_id", pa.string()),
+        ("chain_instance", pa.string()),
+        ("chain_asym_id", pa.string()),
+        ("chain_auth_id", pa.string()),
+        ("residue_label_seq_id", pa.int32()),
+        ("residue_index", pa.int32()),
+        ("residue_auth_seq_id", pa.string()),
+        ("residue_insertion_code", pa.string()),
+        ("is_pli", pa.bool_()),
+    ]
+)
+
 LIGAND_POCKET_SCORE_QUERY_SCHEMA = pa.schema(
     [
         ("entry_pdb_id", pa.string()),
