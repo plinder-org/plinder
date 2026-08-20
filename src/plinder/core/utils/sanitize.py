@@ -5,7 +5,7 @@
 .. warning::
 
     TEMPORARY. This is a local, hand-maintained copy of the modified
-    ``sanitize`` from *peppr-internal*. It carries boron-cage / main-group
+    ``sanitize`` from unreleased peppr version. It carries boron-cage / main-group
     over-valence tolerance and related valence/kekulization fixes that are
     **not yet in a released** ``peppr`` and are not pip-installable from the
     internal repo.
@@ -16,10 +16,10 @@
     back to ``from peppr import sanitize as peppr_sanitize``
     (grep the tree for ``peppr_sanitize`` to find all call sites).
 
-    Kept byte-for-byte in sync with ``peppr-internal`` ``src/peppr/sanitize.py``,
-    with two deliberate local deltas: this warning docstring, and ``bool(...)``
-    wraps on the predicate returns (plinder's minimal mypy env has no rdkit stubs,
-    so ``Chem`` is ``Any`` and ``strict``'s ``warn_return_any`` would flag them).
+    Deliberate local deltas from the upstream peppr body: this warning docstring; the
+    ``bool(...)`` wraps on the predicate returns (plinder's minimal mypy env has no rdkit
+    stubs, so ``Chem`` is ``Any`` and ``strict``'s ``warn_return_any`` would flag them);
+    and a trimmed ``_ORGANOMETALLIC_OMITTED_ELEMENTS`` comment (correctness, pending upstream).
 """
 
 __all__ = ["sanitize"]
@@ -31,13 +31,10 @@ import rdkit
 import rdkit.Chem.AllChem as Chem
 from rdkit.Chem.rdmolops import SanitizeFlags
 
-# Main-group metals/metalloids that RDKit's SANITIZE_CLEANUP_ORGANOMETALLICS step
-# leaves alone (it dativises only transition-metal coordination). An over-valent
-# *centre* of one of these is tolerated neutral (see :func:`_fix_valence` and
-# :func:`_is_tolerated_over_valence`), and a bond to one is a preferred zero-order
-# sink over a genuine covalent bond (see :func:`_fix_valence_by_reduced_bond_order`).
-# Stored as atomic numbers (compared against ``GetAtomicNum()`` at the call sites) but
-# built from element symbols so the membership stays legible.
+# Main-group metals/metalloids RDKit's SANITIZE_CLEANUP_ORGANOMETALLICS step leaves alone
+# (it dativises only transition metals). An over-valent centre of one is tolerated neutral
+# (:func:`_is_tolerated_over_valence`) and one counts as a coordinating metal when kekulizing
+# (:func:`_is_metal`). Built from symbols for legibility, stored/compared as atomic numbers.
 _ORGANOMETALLIC_OMITTED_ELEMENTS = frozenset(
     Chem.GetPeriodicTable().GetAtomicNumber(symbol)
     for symbol in (
