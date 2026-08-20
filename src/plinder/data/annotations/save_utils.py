@@ -274,7 +274,7 @@ def save_cif_file(
         atoms.set_annotation("charge", np.zeros(atoms.array_length(), dtype=int))
 
     cif_file = pdbx.CIFFile()
-    pdbx.set_structure(cif_file, atoms, data_block=name, include_bonds=True)
+    pdbx.set_structure(cif_file, atoms, data_block=name)
     block = cif_file[name]
     atom_site = block["atom_site"]
     # Keep biological-assembly copies distinct for readers that default to
