@@ -1104,12 +1104,13 @@ def _plinder_entry_subset(values: Iterable[str] | None) -> tuple[str, ...] | Non
 
 def _build_mmseqs_target_subset(
     entry_chains: Path,
+    interface_annotations: Path,
     *,
     entry_ids: Iterable[str],
     output_dir: Path,
     threads: int = 1,
 ) -> SearchDatabaseBundle:
-    """Build a small MMseqs target database from selected PLINDER entries."""
+    """Build an MMseqs target from scoreable chains in selected entries."""
     selected = _plinder_entry_subset(entry_ids)
     assert selected is not None
     if threads < 1:
@@ -1121,14 +1122,45 @@ def _build_mmseqs_target_subset(
         entry_chains,
         columns=[
             "entry_pdb_id",
+            "chain_asym_id",
             "chain_auth_id",
             "chain_receptor_type",
+            "chain_is_holo",
             "chain_sequence",
         ],
         filters=[("entry_pdb_id", "in", list(selected))],
     )
+    interfaces = pd.read_parquet(
+        interface_annotations,
+        columns=["entry_pdb_id", "interface_chain_1", "interface_chain_2"],
+        filters=[("entry_pdb_id", "in", list(selected))],
+    )
+    interface_keys = pd.concat(
+        [
+            interfaces[["entry_pdb_id", column]].rename(
+                columns={column: "chain_instance"}
+            )
+            for column in ["interface_chain_1", "interface_chain_2"]
+        ],
+        ignore_index=True,
+    )
+    interface_keys["chain_asym_id"] = (
+        interface_keys.pop("chain_instance").astype(str).str.split(".", n=1).str[-1]
+    )
+    interface_keys = interface_keys.drop_duplicates()
+    interface_keys["chain_is_interface"] = True
+    chains = chains.merge(
+        interface_keys,
+        on=["entry_pdb_id", "chain_asym_id"],
+        how="left",
+        validate="one_to_one",
+    )
     chains = chains.loc[
-        chains["chain_receptor_type"].astype(str).eq("protein")
+        chains["chain_receptor_type"].fillna("").astype(str).eq("protein")
+        & (
+            chains["chain_is_holo"].fillna(False).astype(bool)
+            | chains["chain_is_interface"].eq(True)
+        )
         & chains["chain_auth_id"].notna()
         & chains["chain_sequence"].notna()
     ].copy()
@@ -1136,7 +1168,8 @@ def _build_mmseqs_target_subset(
     missing = sorted(set(selected).difference(found))
     if missing:
         raise ValueError(
-            "selected PLINDER entries have no protein chains: " f"{missing[:10]}"
+            "selected PLINDER entries have no scoreable receptor or interface "
+            f"chains: {missing[:10]}"
         )
 
     chains["target_id"] = (
@@ -1206,6 +1239,7 @@ def _resolve_workflow_assets(
         return assets
     subset = _build_mmseqs_target_subset(
         assets.entry_chains,
+        assets.interface_annotations,
         entry_ids=plinder_entry_ids,
         output_dir=work_dir / "plinder_target_subset",
         threads=threads,
@@ -2571,9 +2605,10 @@ def score_custom_sequence_file(
 ) -> CustomSequenceScoringResult:
     """Search protein sequences and score PLINDER ligand-pocket identity.
 
-    ``plinder_entry_ids`` builds a small MMseqs target directly from the
-    selected release entries instead of fetching the complete search database.
-    This bounded mode currently requires ``backends=("mmseqs",)``.
+    ``plinder_entry_ids`` builds a small MMseqs target from the scoreable
+    receptor and interface chains in the selected release entries instead of
+    fetching the complete search database. This bounded mode currently requires
+    ``backends=("mmseqs",)``.
     """
     selected_backends = tuple(dict.fromkeys(backends))
     if not selected_backends:
@@ -2850,10 +2885,10 @@ def score_custom_cif_files(
     still yields protein metrics and ``pocket_fident``. Passing ``None`` for
     ligand or interface inclusion annotates that feature and emits its score
     table only when the custom structures contain a proper ligand or protein
-    interface, respectively. ``plinder_entry_ids`` builds a small MMseqs
-    target from selected release entries rather than fetching the complete
-    search database; this bounded mode currently requires
-    ``backends=("mmseqs",)``.
+    interface, respectively. ``plinder_entry_ids`` builds a small MMseqs target
+    from scoreable receptor and interface chains in selected release entries
+    rather than fetching the complete search database; this bounded mode
+    currently requires ``backends=("mmseqs",)``.
     """
     sources = tuple(Path(path) for path in cif_files)
     if not sources:

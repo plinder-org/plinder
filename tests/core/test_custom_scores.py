@@ -517,22 +517,41 @@ def test_create_custom_query_databases_only_requires_selected_backend(
     assert set(databases.databases) == {"mmseqs"}
 
 
-def test_build_mmseqs_target_subset_uses_selected_protein_chains(tmp_path, monkeypatch):
+def test_build_mmseqs_target_subset_uses_selected_scoreable_chains(
+    tmp_path, monkeypatch
+):
     entry_chains = tmp_path / "entry_chains.parquet"
     pd.DataFrame(
         {
-            "entry_pdb_id": ["1abc", "1abc", "2def"],
-            "chain_auth_id": ["X", "L", "Y"],
-            "chain_receptor_type": ["protein", "other", "protein"],
-            "chain_sequence": ["ACDE", "X", "FGHI"],
+            "entry_pdb_id": ["1abc", "1abc", "1abc", "1abc", "2def"],
+            "chain_asym_id": ["A", "B", "C", "L", "A"],
+            "chain_auth_id": ["X", "I", "Z", "L", "Y"],
+            "chain_receptor_type": [
+                "protein",
+                "protein",
+                "protein",
+                "other",
+                "protein",
+            ],
+            "chain_is_holo": [True, False, False, False, True],
+            "chain_sequence": ["ACDE", "FGHI", "KLMN", "X", "PQRS"],
         }
     ).to_parquet(entry_chains, index=False)
+    interface_annotations = tmp_path / "interface_annotations.parquet"
+    pd.DataFrame(
+        {
+            "entry_pdb_id": ["1abc"],
+            "interface_chain_1": ["1.A"],
+            "interface_chain_2": ["1.B"],
+        }
+    ).to_parquet(interface_annotations, index=False)
     commands: list[list[str]] = []
     monkeypatch.setattr(custom.shutil, "which", lambda _name: "/bin/mmseqs")
     monkeypatch.setattr(custom, "_run_command", commands.append)
 
     bundle = custom._build_mmseqs_target_subset(
         entry_chains,
+        interface_annotations,
         entry_ids=["1abc"],
         output_dir=tmp_path / "subset",
         threads=3,
@@ -541,7 +560,9 @@ def test_build_mmseqs_target_subset_uses_selected_protein_chains(tmp_path, monke
     assert bundle.backend == "mmseqs"
     assert bundle.search_target == bundle.conversion_target
     assert bundle.cluster_alignments is None
-    assert (bundle.root / "targets.fasta").read_text() == ">1abc_X\nACDE\n"
+    assert (bundle.root / "targets.fasta").read_text() == (
+        ">1abc_I\nFGHI\n>1abc_X\nACDE\n"
+    )
     assert commands == [
         [
             "mmseqs",
