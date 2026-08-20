@@ -5,7 +5,7 @@ import json
 import os
 import shutil
 import subprocess as sp
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from errno import EACCES, EPERM, EXDEV
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Optional
@@ -229,9 +229,20 @@ def _make_database_directory_portable(root: Path) -> dict[str, int]:
     return {"external_links_copied": copied, "internal_links_relativized": relativized}
 
 
-def _has_external_database_links(root: Path) -> bool:
+def _has_external_database_links(
+    root: Path,
+    *,
+    paths: Iterable[Path] | None = None,
+) -> bool:
+    """Return whether selected database paths contain non-portable links.
+
+    ``paths`` bounds the check to a release bundle.  This avoids recursively
+    walking large raw-alignment directories that are deliberately excluded
+    from published search databases.
+    """
     root_resolved = root.resolve()
-    for path in _database_bundle_paths(root):
+    candidates = _database_bundle_paths(root) if paths is None else paths
+    for path in candidates:
         if not path.is_symlink():
             continue
         if path.readlink().is_absolute():
@@ -243,6 +254,33 @@ def _has_external_database_links(root: Path) -> bool:
         if not target.is_relative_to(root_resolved):
             return True
     return False
+
+
+def _search_database_bundle_sources(
+    source_root: Path,
+    manifest: dict[str, Any],
+    aln_type: str,
+) -> set[Path]:
+    """Return only the files required by a published custom-search bundle."""
+    values = [manifest.get("search_target"), manifest.get("conversion_target")]
+    if aln_type == "mmseqs":
+        values.append(manifest.get("cluster_alignments"))
+    if any(
+        not isinstance(value, str) or not value or Path(value).name != value
+        for value in values
+    ):
+        raise ValueError(
+            f"unsafe database prefix in {source_root / 'exact_cluster.json'}"
+        )
+    prefixes = {value for value in values if isinstance(value, str)}
+    sources = {source_root / "exact_cluster.json"}
+    for prefix in prefixes:
+        sources.update(
+            path
+            for path in source_root.glob(f"{prefix}*")
+            if path.is_file() or path.is_symlink()
+        )
+    return sources
 
 
 def _link_or_copy_database_file(source: Path, destination: Path) -> None:
@@ -278,20 +316,8 @@ def publish_search_database_bundle(
     if manifest is None:
         raise ValueError(f"incomplete exact-cluster database: {source_root}")
 
-    prefixes = {
-        str(manifest["search_target"]),
-        str(manifest["conversion_target"]),
-    }
-    if aln_type == "mmseqs":
-        prefixes.add(str(manifest["cluster_alignments"]))
-    sources = {source_root / "exact_cluster.json"}
-    for prefix in prefixes:
-        sources.update(
-            path
-            for path in source_root.glob(f"{prefix}*")
-            if path.is_file() or path.is_symlink()
-        )
-    if _has_external_database_links(source_root):
+    sources = _search_database_bundle_sources(source_root, manifest, aln_type)
+    if _has_external_database_links(source_root, paths=sources):
         raise ValueError(f"non-portable database links in {source_root}")
 
     staging = target_root.parent / f".{target_root.name}.installing"
@@ -421,20 +447,30 @@ def _completed_exact_search_manifest(
     search_target = root / (
         "clustered" if aln_type == "foldseek" else "representatives"
     )
+    expected["search_target"] = search_target.name
+    expected["conversion_target"] = (
+        search_target.name if aln_type == "foldseek" else full_db.name
+    )
     expected_outputs = [
         search_target.with_suffix(".dbtype"),
         Path(f"{search_target}.idx.dbtype"),
     ]
     if aln_type == "mmseqs":
+        expected["cluster_alignments"] = "cluster_alignments"
         expected_outputs.append((root / "cluster_alignments").with_suffix(".dbtype"))
     if (
-        manifest is not None
-        and all(manifest.get(key) == value for key, value in expected.items())
-        and all(path.is_file() for path in expected_outputs)
-        and not _has_external_database_links(root)
+        manifest is None
+        or not all(manifest.get(key) == value for key, value in expected.items())
+        or not all(path.is_file() for path in expected_outputs)
     ):
-        return manifest
-    return None
+        return None
+    try:
+        sources = _search_database_bundle_sources(root, manifest, aln_type)
+    except (KeyError, TypeError, ValueError):
+        return None
+    if _has_external_database_links(root, paths=sources):
+        return None
+    return manifest
 
 
 def make_exact_search_db(
