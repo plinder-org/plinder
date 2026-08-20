@@ -4,6 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import biotite.structure as struc
+import biotite.structure.io.pdbx as pdbx
 import numpy as np
 import pandas as pd
 import pytest
@@ -810,6 +811,38 @@ def test_chain_from_cif_data_nucleotides(cif_8ufz):
         assert (
             residue.chem_type == "DNA Linking"
         ), f"Residue {residue.name} at {resnum}: expected 'DNA Linking', got '{residue.chem_type}'"
+
+
+def test_chain_from_cif_data_preserves_author_residue_ids():
+    block = pdbx.CIFBlock()
+    block["atom_site"] = pdbx.CIFCategory(
+        {
+            "label_asym_id": ["A", "A"],
+            "label_seq_id": ["1", "2"],
+            "auth_asym_id": ["X", "X"],
+            "auth_seq_id": ["101", "101"],
+            "pdbx_PDB_ins_code": [".", "A"],
+        }
+    )
+    atoms = struc.AtomArray(2)
+    atoms.chain_id = ["A", "A"]
+    atoms.res_id = [1, 2]
+    atoms.res_name = ["ALA", "GLY"]
+
+    chain = Chain.from_cif_data(
+        asym_id="A",
+        block=block,
+        atoms=atoms,
+        seqres_length=2,
+        entity_id="1",
+        chain_type_str="polypeptide(L)",
+    )
+
+    assert chain.auth_id == "X"
+    assert chain.residues[1].auth_number == "101"
+    assert chain.residues[1].insertion_code == "."
+    assert chain.residues[2].auth_number == "101"
+    assert chain.residues[2].insertion_code == "A"
 
 
 def test_covalent_linkage(cif_1qz5):

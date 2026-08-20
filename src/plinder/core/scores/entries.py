@@ -232,7 +232,7 @@ class EntryView:
 
 
 def _parse_neighboring_residue(s: str) -> tuple[str, int, int]:
-    """Parse ``{instance_chain}_{res_number}_{res_index}_{auth_number}`` strings."""
+    """Parse the label-asym residue coordinates from an encoded pocket row."""
     parts = s.split("_")
     # instance_chain has a dot ("1.A") so it doesn't collide with the _ separator
     return parts[0], int(parts[1]), int(parts[2])

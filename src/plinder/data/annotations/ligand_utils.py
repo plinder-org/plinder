@@ -2284,7 +2284,9 @@ class Ligand(DocBaseModel):
 
         Returns
         -------
-        List of residues in the format "<chain>_<residue_number>_<residue_index>_<auth_number>"
+        List of residues in the format
+        ``<instance>.<label_asym_id>_<label_seq_id>_<residue_index>_``
+        ``<auth_seq_id>_<insertion_code>``.
         dict[str, list[str]]
         """
         if residue_type == "interacting":
@@ -2296,7 +2298,7 @@ class Ligand(DocBaseModel):
             _, chain = instance_chain.split(".")
             for residue_number in residues[instance_chain]:
                 res.append(
-                    f"{instance_chain}_{residue_number}_{chains[chain].residues[residue_number].index}_{chains[chain].residues[residue_number].auth_number}"
+                    f"{instance_chain}_{residue_number}_{chains[chain].residues[residue_number].index}_{chains[chain].residues[residue_number].auth_number}_{chains[chain].residues[residue_number].insertion_code}"
                 )  # TODO: move some of this logic to Residue
         return {f"ligand_{residue_type}_residues": res}
 

@@ -60,6 +60,7 @@ from plinder.data.annotations.protein_utils import (
     _is_polynucleotide,
     _is_polypeptide,
     detect_ligand_chains,
+    get_atom_site_author_ids,
     get_receptor_type,
 )
 from plinder.data.annotations.save_utils import save_ligands
@@ -969,6 +970,7 @@ class Entry(DocBaseModel):
                     )
                 }
             )
+        auth_id_by_asym, residue_author_ids_by_asym = get_atom_site_author_ids(block)
         self.chains = {}
         # Chain metadata does not use bonds.  Temporarily detaching the global
         # BondList prevents every small chain slice from scanning and
@@ -1001,7 +1003,9 @@ class Entry(DocBaseModel):
                     chain_atoms,
                     len(self.chain_to_seqres.get(chain_id, "")),
                     entity_id=entity_id,
+                    auth_id=auth_id_by_asym.get(chain_id),
                     chain_type_str=chain_type,
+                    residue_author_ids=residue_author_ids_by_asym.get(chain_id, {}),
                 )
         finally:
             atoms.bonds = bonds
