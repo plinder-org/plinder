@@ -1317,7 +1317,7 @@ def create_index(*, data_dir: Path, force_update: bool = False) -> pd.DataFrame:
     if not index.exists() or force_update:
         dfs = []
         annotation_parts = data_dir / "raw_entries"
-        for i, path in enumerate(annotation_parts.glob("*/*.parquet")):
+        for i, path in enumerate(sorted(annotation_parts.glob("*/*.parquet"))):
             df = _drop_retired_enrichment_columns(pd.read_parquet(path))
             LOG.info(f"{i} {path.name} shape={df.shape}")
             if not df.empty:
