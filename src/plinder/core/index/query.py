@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, TypeAlias
 
 import duckdb
+import numpy as np
 import pandas as pd
 import pyarrow.dataset as ds
 
@@ -134,6 +135,8 @@ def _condition_sql(
     field = columns[column]
     operator = operator.casefold().strip()
     operator = {"==": "=", "not in": "not in"}.get(operator, operator)
+    if isinstance(value, np.generic):
+        value = value.item()
     if value is None:
         if operator in {"=", "is"}:
             return f"{field} IS NULL"
@@ -143,7 +146,9 @@ def _condition_sql(
     if operator in {"in", "not in"}:
         if isinstance(value, (str, bytes)) or not isinstance(value, Iterable):
             raise TypeError(f"operator {operator!r} requires a non-string iterable")
-        values = list(value)
+        values = [
+            item.item() if isinstance(item, np.generic) else item for item in value
+        ]
         if not values:
             return "FALSE" if operator == "in" else "TRUE"
         parameters.extend(values)

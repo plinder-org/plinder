@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 from plinder.core import PlinderRelease, query_table
@@ -334,6 +335,26 @@ def test_query_table_uses_bound_filter_parameters(
     )
 
     assert result.empty
+
+
+def test_query_table_accepts_numpy_filter_values(
+    local_release: PlinderRelease,
+) -> None:
+    scalar = query_table(
+        "ligand_mmp_pairs",
+        columns=["ligand_smiles_id_1"],
+        filters=[("ligand_smiles_id_1", "==", np.int32(0))],
+        release=local_release,
+    )
+    members = query_table(
+        "ligand_mmp_pairs",
+        columns=["ligand_smiles_id_1"],
+        filters=[("ligand_smiles_id_1", "in", np.array([0, 30], dtype=np.int32))],
+        release=local_release,
+    )
+
+    assert scalar["ligand_smiles_id_1"].tolist() == [0]
+    assert members["ligand_smiles_id_1"].tolist() == [0]
 
 
 def test_query_linked_apo_with_source_entry_metadata(
