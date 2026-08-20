@@ -97,11 +97,6 @@ exclude_patterns = [
     # Deferred until their APIs are revisited in focused PRs.
     "evaluation.md",
     "examples/5_dataset_and_loader.ipynb",
-    # Removed from the active guides; keep excluded until their archival move
-    # is committed with the remaining notebook updates.
-    "examples/6_custom_split.ipynb",
-    "examples/mlsb_challenge.md",
-    "tutorial/api.ipynb",
 ]
 source_suffix = {
     ".rst": "restructuredtext",

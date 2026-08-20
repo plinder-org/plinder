@@ -1,4 +1,4 @@
-# MLSB/P(L)INDER Challenge: Overview and details
+# Archived MLSB/P(L)INDER Challenge: Overview and details
 
 ## Objectives
 

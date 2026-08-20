@@ -1,8 +1,7 @@
 # Getting started
 
-Start with the short guide below to install PLINDER, query ligand and interface
-annotations, and reconstruct coordinates. Continue with the
-{doc}`/examples/index` guides when you need a complete workflow.
+Start with the short guide below to install PLINDER and select a release, then
+continue with the runnable {doc}`/examples/index` guides.
 
 ```{toctree}
 :maxdepth: 1

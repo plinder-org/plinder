@@ -27,8 +27,7 @@ evaluating protein-ligand and protein-protein structure models.
 
 <div class="home-card-icon" aria-hidden="true"><i class="fa-solid fa-compass"></i></div>
 
-Install PLINDER, select a release, query a ligand or interface, and reconstruct
-its coordinates.
+Install PLINDER, select a release, and continue to the runnable guides.
 :::::
 
 :::::{grid-item-card} Data access
@@ -38,7 +37,7 @@ its coordinates.
 
 <div class="home-card-icon" aria-hidden="true"><i class="fa-solid fa-database"></i></div>
 
-Download release artifacts and query columns across the ligand, interface,
+Download release files and query columns across the ligand, interface,
 entry, chain, and representative tables.
 :::::
 
@@ -60,7 +59,7 @@ and self-contained mmCIF files.
 
 <div class="home-card-icon" aria-hidden="true"><i class="fa-solid fa-code-compare"></i></div>
 
-Use published pairwise scores and representative covers, or compare custom
+Use pairwise scores and representative covers, or compare custom
 mmCIF and FASTA inputs with PLINDER.
 :::::
 
@@ -71,7 +70,7 @@ mmCIF and FASTA inputs with PLINDER.
 
 <div class="home-card-icon" aria-hidden="true"><i class="fa-solid fa-book-open"></i></div>
 
-Inspect release artifacts, table relationships, column definitions, and
+Inspect release files, table relationships, column definitions, and
 coordinate provenance.
 :::::
 
