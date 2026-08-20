@@ -80,6 +80,7 @@ def _write_alignment_chain_lookup(data_dir: Path) -> None:
                 ("ligand_is_3d_score_able", pa.bool_()),
                 ("ligand_protein_chains_asym_id", pa.list_(pa.string())),
                 ("ligand_neighboring_residues", pa.list_(pa.string())),
+                ("ligand_interacting_residues", pa.list_(pa.string())),
                 ("ligand_interactions", pa.list_(pa.string())),
             ]
         )
@@ -173,10 +174,15 @@ def test_make_ligand_pocket_representatives_collapses_assembly_copies(
                 ["2.A_10_0_110_A", "2.N_20_0_220_."],
                 ["1.A_11_1_11"],
             ],
+            "ligand_interacting_residues": [
+                ["1.A_10_0_110_A", "1.N_20_0_220_."],
+                ["2.A_10_0_110_A", "2.N_20_0_220_."],
+                ["1.A_11_1_11", "1.A_12_2_212_."],
+            ],
             "ligand_interactions": [
                 ["1.A_10_hbond", "1.N_20_hbond"],
                 ["2.A_10_hbond", "2.N_20_hbond"],
-                ["1.A_11_hydrophobic"],
+                ["1.A_11_hydrophobic", "1.A_12_water_bridge"],
             ],
         }
     ).to_parquet(index / "annotation_table.parquet", index=False)
@@ -188,7 +194,7 @@ def test_make_ligand_pocket_representatives_collapses_assembly_copies(
     )
     assert report["ligand_count"] == 3
     assert report["representative_ligand_count"] == 2
-    assert report["pocket_residue_count"] == 3
+    assert report["pocket_residue_count"] == 4
     representatives = pd.read_parquet(
         tmp_path / tasks.LIGAND_POCKET_REPRESENTATIVES_RELATIVE
     ).set_index("representative_ligand_id")
@@ -244,7 +250,28 @@ def test_make_ligand_pocket_representatives_collapses_assembly_copies(
             "residue_insertion_code": ".",
             "is_pli": True,
         },
+        {
+            "entry_pdb_id": "1abc",
+            "system_id": "system-3",
+            "ligand_id": "ligand-3",
+            "chain_instance": "1.A",
+            "chain_asym_id": "A",
+            "chain_auth_id": "X",
+            "residue_label_seq_id": 12,
+            "residue_index": 2,
+            "residue_auth_seq_id": "212",
+            "residue_insertion_code": ".",
+            "is_pli": True,
+        },
     ]
+    assert report["residue_selection"] == tasks.LIGAND_POCKET_RESIDUE_SELECTION
+    manifest_path = tmp_path / tasks.LIGAND_POCKET_REPRESENTATIVES_MANIFEST_RELATIVE
+    manifest = json.loads(manifest_path.read_text())
+    stale_manifest = dict(manifest)
+    stale_manifest.pop("residue_selection")
+    manifest_path.write_text(json.dumps(stale_manifest))
+    assert tasks._completed_ligand_pocket_representatives(tmp_path) is None
+    manifest_path.write_text(json.dumps(manifest))
     assert (
         tasks.make_ligand_pocket_representatives(
             data_dir=tmp_path,
@@ -4289,6 +4316,10 @@ def test_alignment_chain_lookup_compacts_mapping_inputs(tmp_path) -> None:
                 ["1.A_10_9_10", "1.A_11_10_11"],
                 ["1.A_99_98_99"],
             ],
+            "ligand_interacting_residues": [
+                ["1.A_10_9_10", "1.A_11_10_11"],
+                ["1.A_99_98_99"],
+            ],
             "ligand_interactions": [["1.A_contact"], []],
         }
     ).to_parquet(index / "annotation_table.parquet", index=False)
@@ -4389,6 +4420,7 @@ def test_alignment_chain_lookup_keeps_identity_when_only_system_rows_change(
             "ligand_is_3d_score_able": [True],
             "ligand_protein_chains_asym_id": [["1.A"]],
             "ligand_neighboring_residues": [["1.A_10_9_10"]],
+            "ligand_interacting_residues": [["1.A_10_9_10"]],
             "ligand_interactions": [["1.A_contact"]],
         }
     ).to_parquet(annotation, index=False)
@@ -4440,6 +4472,7 @@ def test_alignment_chain_lookup_replaces_a_legacy_schema(tmp_path: Path) -> None
             "ligand_is_3d_score_able": [True],
             "ligand_protein_chains_asym_id": [["1.A"]],
             "ligand_neighboring_residues": [["1.A_10_9_10"]],
+            "ligand_interacting_residues": [["1.A_10_9_10"]],
             "ligand_interactions": [["1.A_contact"]],
         }
     ).to_parquet(index / "annotation_table.parquet", index=False)

@@ -62,6 +62,7 @@ LIGAND_POCKET_RESIDUES_RELATIVE = Path("index/ligand_pocket_residues.parquet")
 LIGAND_POCKET_REPRESENTATIVES_MANIFEST_RELATIVE = Path(
     "index/ligand_pocket_representatives.manifest.json"
 )
+LIGAND_POCKET_RESIDUE_SELECTION = "neighboring_and_interacting"
 STAGES = [
     "download_rcsb_files",
     "download_alternative_datasets",
@@ -979,9 +980,12 @@ def _completed_ligand_pocket_representatives(
         ),
     }
     try:
-        if manifest is None or manifest.get(
-            "sources"
-        ) != _ligand_pocket_representative_source_signatures(data_dir):
+        if (
+            manifest is None
+            or manifest.get("residue_selection") != LIGAND_POCKET_RESIDUE_SELECTION
+            or manifest.get("sources")
+            != _ligand_pocket_representative_source_signatures(data_dir)
+        ):
             return None
         for key, (relative, schema) in expected.items():
             path = data_dir / relative
@@ -1051,6 +1055,7 @@ def make_ligand_pocket_representatives(
                     AS ligand_is_3d_score_able,
                 ligand_protein_chains_asym_id,
                 ligand_neighboring_residues,
+                ligand_interacting_residues,
                 ligand_interactions
             FROM read_parquet('{annotation.as_posix()}')
             WHERE system_type = 'holo' AND ligand_is_proper;
@@ -1193,23 +1198,31 @@ def make_ligand_pocket_representatives(
                         ligands.entry_pdb_id,
                         ligands.system_id,
                         ligands.ligand_id,
-                        split_part(neighbor, '_', 1) AS chain_instance,
-                        split_part(split_part(neighbor, '_', 1), '.', 2)
+                        split_part(residue, '_', 1) AS chain_instance,
+                        split_part(split_part(residue, '_', 1), '.', 2)
                             AS chain_asym_id,
-                        try_cast(split_part(neighbor, '_', 2) AS INTEGER)
+                        try_cast(split_part(residue, '_', 2) AS INTEGER)
                             AS residue_label_seq_id,
-                        try_cast(split_part(neighbor, '_', 3) AS INTEGER)
+                        try_cast(split_part(residue, '_', 3) AS INTEGER)
                             AS residue_index,
                         coalesce(
-                            nullif(split_part(neighbor, '_', 4), ''),
-                            split_part(neighbor, '_', 2)
+                            nullif(split_part(residue, '_', 4), ''),
+                            split_part(residue, '_', 2)
                         ) AS residue_auth_seq_id,
                         coalesce(
-                            nullif(split_part(neighbor, '_', 5), ''), '.'
+                            nullif(split_part(residue, '_', 5), ''), '.'
                         ) AS residue_insertion_code
                     FROM eligible_ligands AS ligands,
-                         unnest(ligands.ligand_neighboring_residues)
-                            AS pocket_rows(neighbor)
+                         unnest(list_concat(
+                             coalesce(
+                                 ligands.ligand_neighboring_residues,
+                                 []::VARCHAR[]
+                             ),
+                             coalesce(
+                                 ligands.ligand_interacting_residues,
+                                 []::VARCHAR[]
+                             )
+                         )) AS pocket_rows(residue)
                 )
                 SELECT DISTINCT
                     pockets.entry_pdb_id::VARCHAR AS entry_pdb_id,
@@ -1295,6 +1308,7 @@ def make_ligand_pocket_representatives(
     rmtree(working_root)
     payload = {
         "status": "complete",
+        "residue_selection": LIGAND_POCKET_RESIDUE_SELECTION,
         "sources": sources,
         "outputs": outputs,
         "ligand_count": ligand_count,
