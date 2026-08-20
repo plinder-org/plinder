@@ -101,13 +101,13 @@ def apply_mask(atoms: _AtomArrayOrStack, mask: NDArray[np.bool_]) -> _AtomArrayO
     ----------
     atoms : (AtomArray | AtomArrayStack)
         The atoms to be filtered.
-    mask : NDArray[np.bool_]
+    mask : ndarray
         The boolean mask that specifies which atoms to keep.
 
     Returns
     -------
-        AtomArray | AtomArrayStack:
-            The filtered atoms.
+    AtomArray | AtomArrayStack
+        The filtered atoms.
     """
     if isinstance(atoms, AtomArray):
         return atoms[mask]

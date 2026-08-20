@@ -46,9 +46,11 @@ def make_db(
     Parameters
     ----------
     input_dir : Path
-        location of input files for database
-        (foldseek: input_dir = adir [/ **/*-enrich.cif.gz] for apo/holo and [/AF-*-F1-model_v4.cif] for pred)
-        (mmseqs: input_dir = adir / seqres / pdb_seqres.txt.gz for apo/holo and / uniprot / pdb_uniprot.txt.gz for pred)
+        Input file or directory. Foldseek accepts coordinate files such as
+        ``*-enrich.cif.gz`` for apo/holo structures and
+        ``AF-*-F1-model_v4.cif`` for predicted structures. MMseqs accepts a
+        sequence file such as ``pdb_seqres.txt.gz`` or
+        ``pdb_uniprot.txt.gz``.
     output_dir : Path
         location of full final database (including file name)
     db : str

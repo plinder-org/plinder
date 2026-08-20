@@ -12,7 +12,7 @@ from multiprocessing import cpu_count
 from subprocess import check_output
 from typing import List, Optional
 
-logging.basicConfig(format="[MPQueue] %(levelname)s: %(message)s", level=logging.DEBUG)
+LOG = logging.getLogger(__name__)
 
 
 class Task:
@@ -50,12 +50,10 @@ class MPQueue(object):
             if self.num_processes < 1:
                 raise ValueError()
         except (ValueError, TypeError):
-            logging.warning(
-                "Number of cores not specified or incorrect. Using all cores."
-            )
+            LOG.warning("Number of cores not specified or incorrect. Using all cores.")
             self.num_processes = cpu_count() - 1
 
-        logging.info(f"MPQueue will use {self.num_processes} cores")
+        LOG.info(f"MPQueue will use {self.num_processes} cores")
 
         self.tasks = tasks
         self.num_tasks = len(tasks)
@@ -78,14 +76,17 @@ class MPQueue(object):
     @staticmethod
     def run_task(tup: tuple[tuple[int, Task], int]) -> None:
         (item, task), total = tup
-        logging.info(f"running task {item}/{total}: {task.command}")
+        LOG.info(f"running task {item}/{total}: {task.command}")
         t0 = time.time()
         task.run()
         t1 = time.time()
-        logging.info(f"running task {item}/{total} took {(t1 - t0):.2f}s")
+        LOG.info(f"running task {item}/{total} took {(t1 - t0):.2f}s")
 
 
 if __name__ == "__main__":
+    logging.basicConfig(
+        format="[MPQueue] %(levelname)s: %(message)s", level=logging.DEBUG
+    )
     parser = argparse.ArgumentParser(prog="mpqueue")
     parser.add_argument(
         "tasks_file_name",

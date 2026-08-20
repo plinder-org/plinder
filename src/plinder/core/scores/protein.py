@@ -143,14 +143,16 @@ def multi_query_protein_similarity(
     search_db : str
         the search database to search in
     filter_criteria : dict[str, int]
-        metric and threshold pairs
-        e.g {
-            "pocket_fident": 100,
-            "protein_fident_weighted_sum": 95,
-            "protein_fident_qcov_weighted_sum": 80,
-            "pocket_lddt": 20,
-            "protein_lddt_weighted_sum": 20,
-        }
+        Metric and threshold pairs. For example::
+
+            {
+                "pocket_fident": 100,
+                "protein_fident_weighted_sum": 95,
+                "protein_fident_qcov_weighted_sum": 80,
+                "pocket_lddt": 20,
+                "protein_lddt_weighted_sum": 20,
+            }
+
     Returns
     -------
     df : pd.DataFrame
