@@ -941,9 +941,10 @@ def run_alignment(
     # scratch-scoped operation from a clean prefix so Slurm retries work.
     remove_search_results()
 
+    expand_mmseqs_clusters = aln_type == "mmseqs" and cluster_alignment_db is not None
     representative_result = (
         search_db.parent / f"{search_db.name}_representatives"
-        if aln_type == "mmseqs"
+        if expand_mmseqs_clusters
         else search_db
     )
     search_commands = _alignment_search_command(
@@ -963,9 +964,8 @@ def run_alignment(
     if aln_type == "foldseek":
         format_output += ",lddt"
     subprocess.check_call(search_commands, stdout=subprocess.DEVNULL)
-    if aln_type == "mmseqs":
-        if cluster_alignment_db is None:
-            raise ValueError("MMseqs clustered search requires cluster alignments")
+    if expand_mmseqs_clusters:
+        assert cluster_alignment_db is not None
         expanded_result = search_db.parent / f"{search_db.name}_expanded"
         subprocess.check_call(
             [

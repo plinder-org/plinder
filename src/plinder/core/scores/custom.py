@@ -13,7 +13,7 @@ from bisect import bisect_left
 from collections import Counter
 from collections.abc import Iterable as IterableABC
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from gzip import open as gzip_open
 from pathlib import Path
 from threading import Lock
@@ -1080,6 +1080,137 @@ def create_custom_query_databases(
         databases=databases,
         identifier_map=identifier_map,
     )
+
+
+def _plinder_entry_subset(values: Iterable[str] | None) -> tuple[str, ...] | None:
+    if values is None:
+        return None
+    if isinstance(values, str):
+        values = (values,)
+    selected = tuple(
+        dict.fromkeys(
+            str(value).strip().lower() for value in values if str(value).strip()
+        )
+    )
+    if not selected:
+        raise ValueError("plinder_entry_ids must contain at least one PDB ID")
+    invalid = [
+        value for value in selected if re.fullmatch(r"[a-z0-9]{4}", value) is None
+    ]
+    if invalid:
+        raise ValueError(f"invalid PLINDER PDB IDs: {invalid[:10]}")
+    return selected
+
+
+def _build_mmseqs_target_subset(
+    entry_chains: Path,
+    *,
+    entry_ids: Iterable[str],
+    output_dir: Path,
+    threads: int = 1,
+) -> SearchDatabaseBundle:
+    """Build a small MMseqs target database from selected PLINDER entries."""
+    selected = _plinder_entry_subset(entry_ids)
+    assert selected is not None
+    if threads < 1:
+        raise ValueError("threads must be positive")
+    if shutil.which("mmseqs") is None:
+        raise FileNotFoundError("mmseqs executable is required for custom searches")
+
+    chains = pd.read_parquet(
+        entry_chains,
+        columns=[
+            "entry_pdb_id",
+            "chain_auth_id",
+            "chain_receptor_type",
+            "chain_sequence",
+        ],
+        filters=[("entry_pdb_id", "in", list(selected))],
+    )
+    chains = chains.loc[
+        chains["chain_receptor_type"].astype(str).eq("protein")
+        & chains["chain_auth_id"].notna()
+        & chains["chain_sequence"].notna()
+    ].copy()
+    found = set(chains["entry_pdb_id"].astype(str))
+    missing = sorted(set(selected).difference(found))
+    if missing:
+        raise ValueError(
+            "selected PLINDER entries have no protein chains: " f"{missing[:10]}"
+        )
+
+    chains["target_id"] = (
+        chains["entry_pdb_id"].astype(str) + "_" + chains["chain_auth_id"].astype(str)
+    )
+    duplicate_ids = chains.loc[
+        chains["target_id"].duplicated(keep=False), "target_id"
+    ].drop_duplicates()
+    if not duplicate_ids.empty:
+        raise ValueError(
+            "selected PLINDER chains have ambiguous author IDs: "
+            f"{duplicate_ids.tolist()[:10]}"
+        )
+
+    records: list[str] = []
+    for row in chains.sort_values("target_id").itertuples(index=False):
+        if any(character.isspace() for character in str(row.target_id)):
+            raise ValueError(f"invalid PLINDER target identifier: {row.target_id!r}")
+        sequence = _clean_protein_sequence(
+            str(row.chain_sequence),
+            context=f"{row.entry_pdb_id} chain {row.chain_auth_id}",
+        )
+        records.append(f">{row.target_id}\n{sequence}\n")
+
+    root = Path(output_dir) / "mmseqs"
+    if root.exists():
+        shutil.rmtree(root)
+    root.mkdir(exist_ok=True, parents=True)
+    fasta = root / "targets.fasta"
+    fasta.write_text("".join(records))
+    database = root / "targets"
+    _run_command(
+        [
+            "mmseqs",
+            "createdb",
+            str(fasta),
+            str(database),
+            "--threads",
+            str(threads),
+        ]
+    )
+    return SearchDatabaseBundle(
+        backend="mmseqs",
+        root=root,
+        search_target=database,
+        conversion_target=database,
+        cluster_alignments=None,
+        manifest={"plinder_entry_ids": list(selected)},
+    )
+
+
+def _resolve_workflow_assets(
+    *,
+    data_dir: Path | None,
+    backends: tuple[str, ...],
+    plinder_entry_ids: tuple[str, ...] | None,
+    work_dir: Path,
+    threads: int,
+) -> CustomScoringAssets:
+    if plinder_entry_ids is not None and backends != ("mmseqs",):
+        raise ValueError("plinder_entry_ids currently requires backends=('mmseqs',)")
+    assets = resolve_custom_scoring_assets(
+        data_dir=data_dir,
+        backends=() if plinder_entry_ids is not None else backends,
+    )
+    if plinder_entry_ids is None:
+        return assets
+    subset = _build_mmseqs_target_subset(
+        assets.entry_chains,
+        entry_ids=plinder_entry_ids,
+        output_dir=work_dir / "plinder_target_subset",
+        threads=threads,
+    )
+    return replace(assets, search_databases={"mmseqs": subset})
 
 
 def _parse_plinder_target_identifier(
@@ -2434,10 +2565,16 @@ def score_custom_sequence_file(
     data_dir: Path | None = None,
     search_config: CustomProteinSearchConfig | None = None,
     backends: Iterable[str] = SEQUENCE_SEARCH_BACKENDS,
+    plinder_entry_ids: Iterable[str] | None = None,
     threads: int = 1,
     store_aligned_pocket_residues: bool = False,
 ) -> CustomSequenceScoringResult:
-    """Search protein sequences and score PLINDER ligand-pocket identity."""
+    """Search protein sequences and score PLINDER ligand-pocket identity.
+
+    ``plinder_entry_ids`` builds a small MMseqs target directly from the
+    selected release entries instead of fetching the complete search database.
+    This bounded mode currently requires ``backends=("mmseqs",)``.
+    """
     selected_backends = tuple(dict.fromkeys(backends))
     if not selected_backends:
         raise ValueError("at least one sequence search backend is required")
@@ -2449,6 +2586,7 @@ def score_custom_sequence_file(
         )
     work_dir = Path(work_dir)
     work_dir.mkdir(exist_ok=True, parents=True)
+    selected_plinder_entries = _plinder_entry_subset(plinder_entry_ids)
     query_inputs = write_custom_sequence_query_files(
         Path(sequence_fasta),
         work_dir=work_dir,
@@ -2459,9 +2597,12 @@ def score_custom_sequence_file(
         backends=selected_backends,
         threads=threads,
     )
-    assets = resolve_custom_scoring_assets(
+    assets = _resolve_workflow_assets(
         data_dir=data_dir,
         backends=selected_backends,
+        plinder_entry_ids=selected_plinder_entries,
+        work_dir=work_dir,
+        threads=threads,
     )
     protein_hits = run_custom_protein_searches(
         query_databases=query_databases,
@@ -2688,6 +2829,7 @@ def score_custom_cif_files(
     interface_annotate_prodigy: bool = True,
     search_config: CustomProteinSearchConfig | None = None,
     backends: Iterable[str] = CIF_SEARCH_BACKENDS,
+    plinder_entry_ids: Iterable[str] | None = None,
     threads: int = 1,
     shape_score_threads: int = 1,
     store_aligned_pocket_residues: bool = False,
@@ -2708,13 +2850,17 @@ def score_custom_cif_files(
     still yields protein metrics and ``pocket_fident``. Passing ``None`` for
     ligand or interface inclusion annotates that feature and emits its score
     table only when the custom structures contain a proper ligand or protein
-    interface, respectively.
+    interface, respectively. ``plinder_entry_ids`` builds a small MMseqs
+    target from selected release entries rather than fetching the complete
+    search database; this bounded mode currently requires
+    ``backends=("mmseqs",)``.
     """
     sources = tuple(Path(path) for path in cif_files)
     if not sources:
         raise ValueError("at least one custom mmCIF is required")
     work_dir = Path(work_dir)
     work_dir.mkdir(exist_ok=True, parents=True)
+    selected_plinder_entries = _plinder_entry_subset(plinder_entry_ids)
     selected_backends = tuple(dict.fromkeys(backends))
     if not selected_backends:
         raise ValueError("at least one custom search backend is required")
@@ -2749,9 +2895,12 @@ def score_custom_cif_files(
         backends=selected_backends,
         threads=threads,
     )
-    assets = resolve_custom_scoring_assets(
+    assets = _resolve_workflow_assets(
         data_dir=data_dir,
         backends=selected_backends,
+        plinder_entry_ids=selected_plinder_entries,
+        work_dir=work_dir,
+        threads=threads,
     )
     protein_hits = run_custom_protein_searches(
         query_databases=query_databases,

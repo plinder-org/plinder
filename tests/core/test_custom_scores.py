@@ -517,6 +517,54 @@ def test_create_custom_query_databases_only_requires_selected_backend(
     assert set(databases.databases) == {"mmseqs"}
 
 
+def test_build_mmseqs_target_subset_uses_selected_protein_chains(tmp_path, monkeypatch):
+    entry_chains = tmp_path / "entry_chains.parquet"
+    pd.DataFrame(
+        {
+            "entry_pdb_id": ["1abc", "1abc", "2def"],
+            "chain_auth_id": ["X", "L", "Y"],
+            "chain_receptor_type": ["protein", "other", "protein"],
+            "chain_sequence": ["ACDE", "X", "FGHI"],
+        }
+    ).to_parquet(entry_chains, index=False)
+    commands: list[list[str]] = []
+    monkeypatch.setattr(custom.shutil, "which", lambda _name: "/bin/mmseqs")
+    monkeypatch.setattr(custom, "_run_command", commands.append)
+
+    bundle = custom._build_mmseqs_target_subset(
+        entry_chains,
+        entry_ids=["1abc"],
+        output_dir=tmp_path / "subset",
+        threads=3,
+    )
+
+    assert bundle.backend == "mmseqs"
+    assert bundle.search_target == bundle.conversion_target
+    assert bundle.cluster_alignments is None
+    assert (bundle.root / "targets.fasta").read_text() == ">1abc_X\nACDE\n"
+    assert commands == [
+        [
+            "mmseqs",
+            "createdb",
+            str(bundle.root / "targets.fasta"),
+            str(bundle.root / "targets"),
+            "--threads",
+            "3",
+        ]
+    ]
+
+
+def test_plinder_entry_subset_rejects_foldseek(tmp_path):
+    with pytest.raises(ValueError, match="requires backends"):
+        custom._resolve_workflow_assets(
+            data_dir=tmp_path,
+            backends=("foldseek",),
+            plinder_entry_ids=("1abc",),
+            work_dir=tmp_path / "work",
+            threads=1,
+        )
+
+
 def test_map_custom_alignment_hits_maps_query_and_target_chains(tmp_path):
     input_root = tmp_path / "query_inputs"
     input_root.mkdir()

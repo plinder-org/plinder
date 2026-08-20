@@ -303,6 +303,36 @@ def test_mmseqs_search_expands_and_realigns_exact_cluster_members(
     assert "--min-seq-id" not in commands[3]
 
 
+def test_mmseqs_search_accepts_an_unclustered_target(tmp_path, monkeypatch) -> None:
+    commands: list[list[str]] = []
+    monkeypatch.setattr(
+        scoring_module.subprocess,
+        "check_call",
+        lambda command, **_kwargs: commands.append(command),
+    )
+    monkeypatch.setattr(
+        scoring_module, "_stream_alignment_tsv_to_dataset", lambda *args, **kwargs: None
+    )
+
+    run_alignment(
+        aln_type="mmseqs",
+        query_db=tmp_path / "query",
+        target_db=tmp_path / "selected-targets",
+        search_target_db=tmp_path / "selected-targets",
+        cluster_alignment_db=None,
+        search_db=tmp_path / "search",
+        aln_file=tmp_path / "alignments.tsv",
+        alignment_config=MMSeqsConfig(min_seq_id=0.0),
+        tmp_dir=tmp_path / "scratch",
+        remove_tmp=False,
+        threads=2,
+    )
+
+    assert [command[1] for command in commands] == ["search", "convertalis"]
+    assert commands[0][3] == str(tmp_path / "selected-targets")
+    assert commands[1][3] == str(tmp_path / "selected-targets")
+
+
 def test_no_hit_search_writes_typed_empty_raw_and_mapped_checkpoints(
     tmp_path, monkeypatch
 ) -> None:
