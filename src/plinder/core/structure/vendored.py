@@ -843,5 +843,5 @@ def write_cif(arr: AtomArray, filepath: Path) -> None:
     from biotite.structure.io import pdbx
 
     cif_file = pdbx.CIFFile()
-    pdbx.set_structure(cif_file, arr, data_block=filepath.stem, include_bonds=True)
+    pdbx.set_structure(cif_file, arr, data_block=filepath.stem)
     cif_file.write(str(filepath))

@@ -143,7 +143,7 @@ def save_cif_file(
         Output path.
     """
     cif_file = pdbx.CIFFile()
-    pdbx.set_structure(cif_file, atoms, data_block=name, include_bonds=True)
+    pdbx.set_structure(cif_file, atoms, data_block=name)
     cif_file.write(str(output_cif_file))
 
 
