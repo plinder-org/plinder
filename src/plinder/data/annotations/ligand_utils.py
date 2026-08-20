@@ -807,20 +807,21 @@ def _choose_ligand_smiles_by_heavy_atom_count(
     reference_smiles: str | None,
     resolved_smiles: str | None,
 ) -> str:
-    """Choose the valid identity containing more represented heavy atoms.
+    """Choose the chemically useful identity, then the more complete one.
 
-    Prefer the resolved representation on a tie because it retains observed
-    inter-residue connectivity.  The reference wins only when it contributes
-    atoms absent from the coordinate-derived molecule.
+    A connected coordinate-derived molecule wins over disconnected
+    per-component CCD templates because only it encodes observed
+    inter-residue bonds. Otherwise, choose the representation containing more
+    heavy atoms and prefer the resolved representation on a tie.
     """
 
-    def valid_candidate(smiles: str | None) -> tuple[str, int] | None:
+    def valid_candidate(smiles: str | None) -> tuple[str, int, int] | None:
         if not smiles:
             return None
         mol = Chem.MolFromSmiles(smiles)
         if mol is None:
             return None
-        return smiles, int(mol.GetNumHeavyAtoms())
+        return smiles, int(mol.GetNumHeavyAtoms()), len(Chem.GetMolFrags(mol))
 
     reference = valid_candidate(reference_smiles)
     resolved = valid_candidate(resolved_smiles)
@@ -828,6 +829,8 @@ def _choose_ligand_smiles_by_heavy_atom_count(
         return resolved[0] if resolved is not None else (reference_smiles or "")
     if resolved is None:
         return reference[0]
+    if resolved[2] == 1 and reference[2] > 1:
+        return resolved[0]
     return reference[0] if reference[1] > resolved[1] else resolved[0]
 
 

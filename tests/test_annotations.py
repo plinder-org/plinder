@@ -1462,9 +1462,10 @@ def test_10sb_covalent_macrocycle_is_single_ligand(cif_10sb, mock_alternative_da
 def test_get_ccd_mol_components_cif_fallback(monkeypatch):
     """_get_ccd_mol falls back to components.cif for codes bt_info lacks.
 
-    A1C8P is a 5-char extended CCD code (from 10sb) that biotite's bundled
-    dictionary predates. When the downloaded components.cif is available, the
-    component must be read from there instead of failing.
+    Simulate a bundled-dictionary miss for the 5-character A1C8P component
+    from 10sb. When the downloaded components.cif is available, the component
+    must be read from there instead of failing. This remains meaningful when a
+    newer Biotite release starts bundling that component itself.
     """
     from pathlib import Path
 
@@ -1472,9 +1473,14 @@ def test_get_ccd_mol_components_cif_fallback(monkeypatch):
     import plinder.data.annotations.ligand_utils as lu
     from rdkit import Chem
 
-    # Precondition: the code is genuinely absent from the bundled CCD.
-    with pytest.raises(Exception):
-        bt_info.residue("A1C8P")
+    bundled_residue = bt_info.residue
+
+    def miss_a1c8p(comp_id, *args, **kwargs):
+        if comp_id == "A1C8P":
+            raise KeyError("simulated bundled CCD miss")
+        return bundled_residue(comp_id, *args, **kwargs)
+
+    monkeypatch.setattr(bt_info, "residue", miss_a1c8p)
 
     fixture = Path(__file__).parent / "test_data" / "mini_components.cif"
     monkeypatch.setattr(lu, "COMPONENTS_CCD_PATH", fixture)
