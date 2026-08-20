@@ -503,6 +503,9 @@ def read_plinder_eval_mount(monkeypatch, tmp_path):
     shutil.copytree(test_asset_fp / "eval", adir)
     annotation_path = adir / "index" / "annotation_table.parquet"
     annotation = pd.read_parquet(annotation_path)
+    annotation = annotation.rename(
+        columns={"ligand_rdkit_canonical_smiles": "ligand_smiles"}
+    )
     instance_chains = annotation["ligand_id"].str.rsplit("__", n=1).str[-1]
     annotation["ligand_instance_chain"] = instance_chains
     annotation["ligand_instance"] = instance_chains.str.split(".").str[0].astype(int)
