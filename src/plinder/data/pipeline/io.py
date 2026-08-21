@@ -10,6 +10,7 @@ the network.
 import json
 import os
 from concurrent.futures import ALL_COMPLETED, ThreadPoolExecutor, wait
+from datetime import date
 from pathlib import Path
 from subprocess import check_output
 from typing import Any, Literal, Optional, TypeVar
@@ -74,11 +75,38 @@ def download_cofactors(
     return obj
 
 
+# BindingDB publishes only month-stamped dumps (BindingDB_All_YYYYMM_tsv.zip) with no
+# stable "latest" alias, and prunes older months, so the newest is found by probing back
+# from the current month (see latest_bindingdb_tsv_url).
+BINDINGDB_DOWNLOADS = "https://www.bindingdb.org/rwd/bind/downloads"
+
+
+@retry
+def latest_bindingdb_tsv_url(max_lookback_months: int = 12) -> str:
+    """Resolve the URL of the newest ``BindingDB_All_*_tsv.zip`` dump.
+
+    BindingDB ships only month-stamped dumps with no stable "latest" alias and prunes
+    older months, so walk back month by month from the current one and return the first
+    URL that exists.
+    """
+    today = date.today()
+    year, month = today.year, today.month
+    for _ in range(max_lookback_months):
+        url = f"{BINDINGDB_DOWNLOADS}/BindingDB_All_{year}{month:02d}_tsv.zip"
+        if requests.head(url, allow_redirects=True).status_code == 200:
+            return url
+        year, month = (year, month - 1) if month > 1 else (year - 1, 12)
+    raise ValueError(
+        f"no BindingDB_All_*_tsv.zip found in the {max_lookback_months} months "
+        f"up to {today:%Y%m}"
+    )
+
+
 @retry
 def download_affinity_data(
     *,
     data_dir: Path,
-    bindingdb_url: str = "https://www.bindingdb.org/rwd/bind/downloads/BindingDB_All_202607_tsv.zip",
+    bindingdb_url: str | None = None,
     force_update: bool = False,
 ) -> Any:
     """
@@ -88,8 +116,10 @@ def download_affinity_data(
     ----------
     data_dir : Path
         the root plinder dir
-    bindingdb_url : str
-        bindingdb : url
+    bindingdb_url : str | None, default=None
+        direct URL to a ``BindingDB_All_*_tsv.zip`` dump; if None, the latest
+        published month is resolved from BindingDB's download page. Pass an
+        explicit URL to pin a specific release for a reproducible build.
     force_update : bool, default=False
         if True, re-download data
 
@@ -114,6 +144,8 @@ def download_affinity_data(
             or bindingdb_raw_affinity_path.stat().st_size == 0
             or force_update
         ):
+            if bindingdb_url is None:
+                bindingdb_url = latest_bindingdb_tsv_url()
             LOG.info(f"download_bindingdb_affinity_data: {bindingdb_url}...")
             with urlopen(bindingdb_url) as zipresp:
                 with ZipFile(BytesIO(zipresp.read())) as zfile:
