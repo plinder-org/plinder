@@ -90,12 +90,12 @@ def test_compare_stereo_to_template():
     ref_heavy.bonds = struc.connect_via_residue_names(ref_heavy)
     template = rdkit_interface.to_mol(ref_heavy)
     peppr_sanitize(template)
-    Chem.AssignAtomChiralTagsFromStructure(template)
 
-    # Resolved mol = same as template (exact match)
+    # Resolved mol = same as template (exact match). No manual chiral-tag
+    # assignment: compare_stereo_to_template perceives the template's stereo
+    # itself (from its coords) and reads only the resolved mol's coordinates.
     resolved = rdkit_interface.to_mol(ref_heavy)
     peppr_sanitize(resolved)
-    Chem.AssignAtomChiralTagsFromStructure(resolved)
     assert compare_stereo_to_template(resolved, template) is True
 
     # Invert the 3D geometry (improper reflection through the x=0 plane) →
@@ -122,6 +122,35 @@ def test_compare_stereo_to_template():
     assert (
         compare_stereo_to_template(dms_mol, dms_template) is True
     )  # achiral = no conflict
+
+
+def test_compare_stereo_to_template_ez():
+    """compare_stereo_to_template detects cis/trans (E/Z) double-bond mismatches."""
+    from plinder.core.structure.smallmols_utils import compare_stereo_to_template
+    from rdkit.Chem import AllChem
+
+    names = ["C1", "C2", "C3", "CL"]
+
+    def _mol(smiles, embed):
+        # stamp PDB names positionally so template and resolved map to each other
+        m = Chem.RemoveHs(Chem.MolFromSmiles(smiles), sanitize=False)
+        for atom, nm in zip(m.GetAtoms(), names):
+            info = Chem.AtomPDBResidueInfo()
+            info.SetName(nm)
+            info.SetResidueName("LIG")
+            info.SetResidueNumber(1)
+            atom.SetMonomerInfo(info)
+        if embed:
+            mh = Chem.AddHs(m)
+            AllChem.EmbedMolecule(mh, randomSeed=1)
+            m = Chem.RemoveHs(mh)
+        return m
+
+    trans_template = _mol("C/C=C/Cl", embed=False)  # SMILES tags, no conformer
+    match = compare_stereo_to_template(_mol("C/C=C/Cl", embed=True), trans_template)
+    flip = compare_stereo_to_template(_mol("C/C=C\\Cl", embed=True), trans_template)
+    assert match is True  # same E/Z geometry
+    assert flip is False  # inverted (cis vs trans) -> mismatch
 
 
 def test_sequences_match_core():

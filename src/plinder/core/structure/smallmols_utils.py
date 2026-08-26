@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 from pathlib import Path
 
+import biotite.structure as struc
 import numpy as np
 from numpy.typing import NDArray
 from rdkit import Chem
@@ -193,112 +194,91 @@ def compare_stereo_to_template(
     resolved_mol: Mol,
     template_mol: Mol,
 ) -> bool | None:
-    """Compare resolved 3D stereo against a template by CIP code.
+    """Check resolved 3D stereo against a template — tetrahedral R/S and E/Z.
 
-    The resolved mol's *own bonds are not trusted*: aromatic ring bonds can
-    arrive order-unspecified (which blocks CIP labelling entirely), and
-    even with the atom chiral tags in place there is no way to compute a
-    ``_CIPCode`` on such a mol. Instead we transplant the resolved 3D
-    coordinates onto the *template* graph — which carries correct bond
-    orders and matching PDB atom names — perceive tetrahedral chirality
-    there via :func:`Chem.AssignAtomChiralTagsFromStructure` (which keeps
-    quaternary centers that legacy perception drops), and CIP-label both the
-    transplanted probe and the template with the **same** algorithm
-    (:func:`Chem.AssignCIPLabels`) so the R/S codes are directly comparable.
+    Atoms are matched by PDB name. Template stereo is read from its tags via
+    :func:`Chem.FindPotentialStereo`; a template that ships ideal coordinates (CCD)
+    first has its atom + bond stereo perceived from them via
+    :func:`Chem.AssignStereochemistryFrom3D`, while SMILES templates already carry
+    tags — no conformer is generated either way. Each tetrahedral center's descriptor
+    (Tet_CW/Tet_CCW) fixes the sign of the signed volume of its ``controllingAtoms``;
+    each double bond's descriptor (Bond_Cis/Bond_Trans) fixes the dihedral of its
+    reference substituents. Both are checked against the resolved coordinates only —
+    no CIP priority, no conformer generation and no empty filled coordinates.
 
-    Only stereocenters that are (a) present in the template with a defined
-    CIP code and (b) fully resolved — the center *and* all its immediate
-    neighbors have coordinates — are compared. An unresolved neighbor makes
-    the perceived 3D chirality meaningless, so such centers are skipped.
-
-    Parameters
-    ----------
-    resolved_mol : Mol
-        RDKit Mol with a 3D conformer and PDB residue info on every atom.
-        Bond orders may be incomplete — only coordinates and atom names are
-        read from it.
-    template_mol : Mol
-        Template Mol (user SMILES or CCD) with correct bond orders, PDB atom
-        names, and reference stereo (from SMILES parity or ideal 3D).
-
-    Returns
-    -------
-    bool | None
-        True if all comparable centers match (or none are chiral), False if
-        any center differs, None if no atom could be resolved onto the
-        template.
+    Returns True if every fully-resolved stereo element matches (or the template has
+    none), False on any mismatch, None if nothing could be matched. Elements with
+    unresolved atoms or degenerate geometry are skipped.
     """
-    from rdkit.Geometry import Point3D
 
-    # Resolved 3D coordinates keyed by PDB atom name.
-    conf_r = resolved_mol.GetConformer()
-    coords: dict[str, Point3D] = {}
-    for atom in resolved_mol.GetAtoms():
+    def _name(atom: Chem.Atom) -> str | None:
         info = atom.GetPDBResidueInfo()
-        if info is None:
-            raise ValueError(
-                f"Atom {atom.GetIdx()} in resolved mol has no PDB residue info"
-            )
-        coords[info.GetName().strip()] = conf_r.GetAtomPosition(atom.GetIdx())
+        return info.GetName().strip() if info is not None else None
 
-    # Transplant those coordinates onto the template graph. Unresolved atoms
-    # are parked at the origin and excluded from comparison below.
-    probe = Chem.Mol(template_mol)
-    conf = Chem.Conformer(probe.GetNumAtoms())
-    resolved_names: set[str] = set()
-    for atom in probe.GetAtoms():
-        info = atom.GetPDBResidueInfo()
-        name = info.GetName().strip() if info is not None else None
-        if name is not None and name in coords:
-            conf.SetAtomPosition(atom.GetIdx(), coords[name])
-            resolved_names.add(name)
-        else:
-            conf.SetAtomPosition(atom.GetIdx(), Point3D(0.0, 0.0, 0.0))
-    if not resolved_names:
-        return None
-    conf.Set3D(True)
-    probe.RemoveAllConformers()
-    probe.AddConformer(conf, assignId=True)
+    # perceive full stereo (atom + bond) from a template's ideal coordinates (CCD) so
+    # double-bond E/Z is available; SMILES templates already carry their stereo tags
+    if template_mol.GetNumConformers() > 0:
+        template_mol = Chem.Mol(template_mol)
+        Chem.AssignStereochemistryFrom3D(template_mol)
 
-    # Perceive chirality from the transplanted geometry, then CIP-label the
-    # probe and the template with the same labeller for comparable R/S codes.
-    Chem.AssignAtomChiralTagsFromStructure(probe)
-    Chem.AssignCIPLabels(probe)
-    ref = Chem.Mol(template_mol)
-    Chem.AssignCIPLabels(ref)
+    conf = resolved_mol.GetConformer()
+    resolved_pos: dict[str, NDArray] = {
+        n: np.array(conf.GetAtomPosition(a.GetIdx()))
+        for a in resolved_mol.GetAtoms()
+        if (n := _name(a)) is not None
+    }
+    template_names = {n for a in template_mol.GetAtoms() if (n := _name(a)) is not None}
+    if not resolved_pos.keys() & template_names:
+        return None  # nothing maps onto the template
 
-    # Resolved CIP by name, only for fully-resolved centers (an unresolved
-    # neighbor makes the perceived 3D tag meaningless).
-    resolved_cip: dict[str, str] = {}
-    for atom in probe.GetAtoms():
-        info = atom.GetPDBResidueInfo()
-        if info is None or info.GetName().strip() not in resolved_names:
+    for si in Chem.FindPotentialStereo(template_mol):
+        if si.specified != Chem.StereoSpecified.Specified:
             continue
-        if any(
-            n.GetPDBResidueInfo() is None
-            or n.GetPDBResidueInfo().GetName().strip() not in resolved_names
-            for n in atom.GetNeighbors()
-        ):
-            continue
-        cip = atom.GetPropsAsDict().get("_CIPCode", "")
-        if cip:
-            resolved_cip[info.GetName().strip()] = cip
 
-    # Compare where the template defines a center and the resolved side has one.
-    for atom in ref.GetAtoms():
-        info = atom.GetPDBResidueInfo()
-        if info is None:
-            continue
-        template_cip = atom.GetPropsAsDict().get("_CIPCode", "")
-        if not template_cip:
-            continue
-        resolved_cip_val = resolved_cip.get(info.GetName().strip(), "")
-        if not resolved_cip_val:
-            continue
-        if resolved_cip_val != template_cip:
-            return False
+        if si.type == Chem.StereoType.Atom_Tetrahedral:
+            center = _name(template_mol.GetAtomWithIdx(si.centeredOn))
+            names = [
+                _name(template_mol.GetAtomWithIdx(i))
+                for i in list(si.controllingAtoms)[:3]
+            ]
+            if center is None or center not in resolved_pos or len(names) < 3:
+                continue
+            if any(n is None or n not in resolved_pos for n in names):
+                continue  # center or reference neighbours not resolved -> undefined
+            order = [n for n in names if n is not None]  # resolved; list[str] for mypy
+            # Tet_CW -> -1, Tet_CCW -> +1 signed volume of controllingAtoms (see tests)
+            ref = -1.0 if si.descriptor == Chem.StereoDescriptor.Tet_CW else 1.0
+            u, v, w = (resolved_pos[n] - resolved_pos[center] for n in order)
+            res = float(np.sign(np.dot(u, np.cross(v, w))))
+            if res != 0 and res != ref:  # resolved handedness opposes the template
+                return False
 
-    # No mismatches found (including achiral — no stereocenters = no conflict)
+        elif si.type == Chem.StereoType.Bond_Double:
+            ctrl = list(si.controllingAtoms)
+            if len(ctrl) < 3:
+                continue
+            bond = template_mol.GetBondWithIdx(si.centeredOn)
+            # controllingAtoms = [begin_ref, begin_ref, end_ref, end_ref]; the dihedral
+            # of one reference per end (ref_a1 - a1 - a2 - ref_a2) fixes cis/trans
+            quad = [
+                _name(template_mol.GetAtomWithIdx(i))
+                for i in (
+                    ctrl[0],
+                    bond.GetBeginAtomIdx(),
+                    bond.GetEndAtomIdx(),
+                    ctrl[2],
+                )
+            ]
+            if any(n is None or n not in resolved_pos for n in quad):
+                continue  # a reference or bond atom not resolved -> undefined
+            p = [resolved_pos[n] for n in quad if n is not None]  # 4 pts; list for mypy
+            dih = struc.dihedral(p[0], p[1], p[2], p[3])  # radians; nan if degenerate
+            if np.isnan(dih):
+                continue
+            # Bond_Cis -> ~0, Bond_Trans -> ~180 (biotite dihedral convention; see tests)
+            expected_cis = si.descriptor == Chem.StereoDescriptor.Bond_Cis
+            if (abs(dih) < np.pi / 2) != expected_cis:  # resolved E/Z opposes template
+                return False
     return True
 
 
