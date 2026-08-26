@@ -1906,17 +1906,20 @@ def test_canonical_ligand_saving_and_system_reconstruction(
 
 
 def test_smiles_from_nextgen(rcsb_ccd_reference_csv):
-    """Test CCD SMILES against RCSB ground truth.
+    """Validate CCD-derived structures against RCSB ground truth by InChIKey.
 
-    For each compound in the RCSB reference CSV, verify:
-    1. InChIKey from CCD ideal 3D matches RCSB InChIKey
-    2. Per-atom chirality matches via substructure match
+    The production ``_get_ccd_mol`` (stereo from ideal 3D) is compared to the RCSB
+    reference InChIKey, which is canonical and stereo-inclusive: it covers
+    connectivity and stereo, both tetrahedral R/S and double-bond E/Z. Metals and
+    stereo-underspecified CCD entries (same skeleton, differing stereo layer) are
+    tolerated.
     """
     from plinder.data.annotations.interaction_utils import _COORDINATION_METALS
     from plinder.data.annotations.ligand_utils import _get_ccd_mol
     from rdkit.Chem.inchi import MolToInchiKey
 
-    rcsb_df = pd.read_csv(rcsb_ccd_reference_csv)
+    # keep_default_na=False so the sodium comp_id "NA" reads as a string, not NaN
+    rcsb_df = pd.read_csv(rcsb_ccd_reference_csv, keep_default_na=False)
     assert len(rcsb_df) > 0, "Should have RCSB ground truth entries"
 
     mismatches = []
@@ -1948,7 +1951,8 @@ def test_smiles_from_nextgen(rcsb_ccd_reference_csv):
             if ccd_inchikey != rcsb_inchikey:
                 continue  # ambiguous stereo in CCD — skip
 
-        # Check InChIKey (primary — canonical across toolkits)
+        # InChIKey is canonical and stereo-inclusive (connectivity + tetrahedral
+        # R/S + double-bond E/Z), so this single check validates the full structure.
         if ccd_inchikey != rcsb_inchikey:
             mismatches.append(
                 (
@@ -1958,42 +1962,6 @@ def test_smiles_from_nextgen(rcsb_ccd_reference_csv):
                     f"expected {rcsb_inchikey}",
                 )
             )
-            continue
-
-        # Check chirality via substructure match between CCD and RCSB mols
-        rcsb_mol = Chem.MolFromSmiles(row["rcsb_smiles"])
-        if rcsb_mol is not None:
-            # Modern stereo API, matching production code: perceive the CCD
-            # mol's tetrahedral tags from 3D with AssignAtomChiralTagsFromStructure
-            # (which keeps all-carbon quaternary centers that legacy
-            # AssignStereochemistryFrom3D silently drops), then CIP-label both
-            # sides with AssignCIPLabels so R/S codes are directly comparable.
-            # Work on a copy so the @cache'd CCD mol is not mutated.
-            ccd_probe = Chem.Mol(ccd_mol)
-            try:
-                Chem.AssignAtomChiralTagsFromStructure(ccd_probe)
-                Chem.AssignCIPLabels(ccd_probe)
-                Chem.AssignCIPLabels(rcsb_mol)
-            except Exception:
-                continue  # unusual bonds prevent CIP labelling — skip stereo check
-            match = ccd_probe.GetSubstructMatch(rcsb_mol)
-            if match:
-                for rcsb_idx, ccd_idx in enumerate(match):
-                    rcsb_atom = rcsb_mol.GetAtomWithIdx(rcsb_idx)
-                    ccd_atom = ccd_probe.GetAtomWithIdx(ccd_idx)
-                    rcsb_cip = rcsb_atom.GetPropsAsDict().get("_CIPCode", "")
-                    ccd_cip = ccd_atom.GetPropsAsDict().get("_CIPCode", "")
-                    if rcsb_cip and ccd_cip and rcsb_cip != ccd_cip:
-                        info = ccd_atom.GetPDBResidueInfo()
-                        name = info.GetName().strip() if info else str(ccd_idx)
-                        mismatches.append(
-                            (
-                                comp_id,
-                                f"chirality@{name}",
-                                ccd_cip,
-                                f"expected {rcsb_cip}",
-                            )
-                        )
 
     assert len(mismatches) == 0, "CCD vs RCSB mismatches:\n" + "\n".join(
         f"  {m}" for m in mismatches
@@ -2068,9 +2036,9 @@ def test_stereo_check_partial_resolution(cif_1ngx):
     """Test _check_stereo_vs_template with a partially resolved ligand.
 
     JEF in 1ngx chain E has 28/41 heavy atoms resolved. compare_stereo_to_template
-    transplants the resolved 3D coordinates onto the template graph and only
-    compares stereocenters whose atom *and* immediate neighbors are all
-    resolved, so the resolved portion still yields a definite match/mismatch.
+    checks only the stereo elements whose atoms are all resolved (comparing the
+    template's descriptors against the resolved coordinates), so the resolved
+    portion still yields a definite match/mismatch.
     """
     from plinder.data.annotations.ligand_utils import _check_stereo_vs_template
 
@@ -2095,10 +2063,9 @@ def test_stereo_check_multi_residue(cif_6fx1):
 
     6fx1 chain M: NAG+BMA+MAN+FUC+C4W (25+ chiral centers).
 
-    Multi-residue ligands have inter-residue bonds (glycosidic) that
-    change CIP priorities vs isolated CCD residues.  The per-residue
-    comparison may report False for centers whose CIP changed due to
-    the glycosidic bond — this is a known limitation, not a bug.
+    The per-residue check compares chiral handedness (signed volume), which
+    is independent of CIP priority, so an inter-residue (glycosidic) bond does
+    not cause the spurious mismatches that changed CIP priorities once did.
 
     We verify:
     1. The function returns a definite result (not None)

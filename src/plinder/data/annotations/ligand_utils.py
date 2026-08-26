@@ -237,9 +237,8 @@ def _template_from_user_smiles(
         )
         return None
     # Stereo comes from the SMILES parity tags (@/@@), which MolFromSmiles
-    # records on the atoms and RemoveHs(sanitize=False) preserves. CIP codes
-    # are (re)computed with AssignCIPLabels inside compare_stereo_to_template
-    # so both template and resolved sides use the same labeller.
+    # records on the atoms and RemoveHs(sanitize=False) preserves;
+    # compare_stereo_to_template reads them to check chiral handedness.
     for atom, atom_name in zip(mol.GetAtoms(), cif_atom_names):
         info = Chem.AtomPDBResidueInfo()
         info.SetName(atom_name)
@@ -268,8 +267,8 @@ def _check_stereo_vs_template(
       4. Return ``None`` for this residue if neither source yields a
          template.
 
-    Delegates to :func:`compare_stereo_to_template` for the actual CIP
-    comparison. Handles multi-residue ligands (e.g. glycans) by
+    Delegates to :func:`compare_stereo_to_template` for the actual
+    handedness comparison. Handles multi-residue ligands (e.g. glycans) by
     checking each residue copy independently.
 
     Returns ``True`` if all residues match or are achiral, ``False`` if
