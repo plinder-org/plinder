@@ -80,17 +80,6 @@ def _superimpose_common_atoms(
         )
 
 
-def reverse_dict(mapping: dict[int, int]) -> dict[int, int]:
-    return {v: k for k, v in mapping.items()}
-
-
-def get_rdkit_mol(ligand: Path | str) -> Chem.rdchem.Mol:
-    if isinstance(ligand, Path):
-        return Chem.MolFromSmiles(ligand)
-    elif isinstance(ligand, Path):
-        return next(Chem.SDMolSupplier(ligand))
-
-
 class Structure(BaseModel):
     id: str
     protein_path: Path

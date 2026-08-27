@@ -60,4 +60,5 @@ ligand_fraction_atoms_with_crystal_contacts	float | None	Fraction of atoms in th
 ligand_num_pocket_residues	int	Number of residues in the ligand's binding pocket.
 ligand_id	str	Unique identifier for a given ligand.
 ligand_instance_chain	str	Instance chain for a given ligand.
+ligand_instance_chains	list[str]	All instance chains this ligand spans (several for a multi-chain covalent ligand); used to reconstruct the whole-molecule SDF from the source mmCIF.
 ligand_binding_affinity	float | None	Binding affinity (pKd or pKi) from BindingDB when available.          The affinity is only returned if the BindingDB target sequence         matches at least one receptor chain SEQRES with 100% identity         in the aligned core (terminal overhangs from tags/truncations         are tolerated).  This guards against BindingDB's 85% sequence         identity matching which can assign values to wrong complexes         (see `#94 <https://github.com/plinder-org/plinder/issues/94>`_).

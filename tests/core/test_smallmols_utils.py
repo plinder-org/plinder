@@ -8,8 +8,13 @@ from rdkit import Chem
 @pytest.mark.parametrize(
     ["smiles", "num_problems"],
     [
-        ["CC(=O)OCCN(C)(C)C", 0],  # AtomValenceException
-        ["c1ccnc1", 0],  # KekulizeException
+        # positive controls: peppr repairs the issue, so no problems remain
+        ["CC(=O)OCCN(C)(C)C", 0],  # AtomValenceException, fixed via onium charge
+        ["c1ccnc1", 0],  # KekulizeException, fixed by adding [nH]
+        # negative controls: peppr TOLERATES main-group over-valence (does not
+        # raise) but cannot neutralize it, so one residual problem is still found
+        ["[B]12[B]3[B]4[B]1[B]5[B]6[B]2[B]3[B]45C6", 1],  # boron cage: over-valent B
+        ["[Be](C)(C)(C)C", 1],  # over-valent beryllium centre, no 2-centre-bond fix
     ],
 )
 def test_valence_issue_handling(smiles, num_problems):
@@ -22,6 +27,51 @@ def test_valence_issue_handling(smiles, num_problems):
     peppr_sanitize(mol)
     problems = Chem.DetectChemistryProblems(mol)
     assert len(problems) == num_problems
+
+
+@pytest.mark.parametrize(
+    "smiles",
+    [
+        "[B]12[B]3[B]4[B]1[B]5[B]6[B]2[B]3[B]45C6",  # boron cage
+        "[Be](C)(C)(C)C",  # over-valent beryllium
+    ],
+)
+def test_mol_from_smiles_tolerates_overvalence(smiles):
+    """mol_from_smiles keeps over-valent main-group SMILES that strict rejects.
+
+    Strict ``Chem.MolFromSmiles`` returns None for these, which would silently
+    drop the ligand from descriptors/fingerprints; the tolerant helper keeps it.
+    """
+    from plinder.core.utils.sanitize import mol_from_smiles
+
+    assert Chem.MolFromSmiles(smiles) is None  # strict rejects
+    assert mol_from_smiles(smiles) is not None  # tolerant keeps
+
+
+@pytest.mark.parametrize(
+    ["smiles", "expected_stereo"],
+    [
+        ["O=C(O)/C=C/C(=O)O", Chem.BondStereo.STEREOE],  # fumarate (trans, E)
+        ["O=C(O)/C=C\\C(=O)O", Chem.BondStereo.STEREOZ],  # maleate (cis, Z)
+    ],
+)
+def test_mol_from_smiles_perceives_double_bond_ez(smiles, expected_stereo):
+    """mol_from_smiles perceives double-bond E/Z, matching Chem.MolFromSmiles.
+
+    The sanitize=False parse skips RDKit's assignStereochemistry finalization, so
+    the helper re-runs it — otherwise fumarate and maleate collapse to one
+    identity (their C=C would be Unspecified).
+    """
+    from plinder.core.utils.sanitize import mol_from_smiles
+
+    # the stereogenic C=C (there are also carbonyls, which stay STEREONONE)
+    ez = [
+        b.GetStereo()
+        for b in mol_from_smiles(smiles).GetBonds()
+        if b.GetBondType() == Chem.BondType.DOUBLE
+        and b.GetStereo() != Chem.BondStereo.STEREONONE
+    ]
+    assert ez == [expected_stereo]
 
 
 @pytest.mark.parametrize(

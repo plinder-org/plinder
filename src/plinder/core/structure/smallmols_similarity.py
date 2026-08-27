@@ -16,6 +16,8 @@ from rdkit.Chem import (
 from rdkit.Chem.rdchem import Mol
 from rdkit.rdBase import BlockLogs
 
+from plinder.core.utils.sanitize import mol_from_smiles
+
 # MHFP6 = MinHashed FingerPrint at radius 3 (ECFP diameter 6 equivalent).
 # Probst, D. & Reymond, J-L. "A probabilistic molecular fingerprint for big
 # data settings." J. Cheminform. 10, 8 (2018).
@@ -36,8 +38,12 @@ def smiles2nonstereo(smiles: str) -> str:
     (identity is stereo-insensitive — used for split stratification and MMP
     grouping) and no charge normalization is applied: the CCD representation is
     taken as-is, consistent with the exact-SMILES cofactor/artifact matching.
+
+    Parsing uses the tolerant :func:`mol_from_smiles` so over-valent ligands
+    (boron cages, hypervalent metals) still yield a canonical 2D graph key
+    instead of falling back to their raw, non-canonical SMILES.
     """
-    mol = Chem.MolFromSmiles(smiles)
+    mol = mol_from_smiles(smiles)
     if mol is None:
         return smiles
     with BlockLogs():
@@ -50,7 +56,7 @@ def mol2morgan_fp(
 ) -> DataStructs.ExplicitBitVect:
     """Convert an RDKit molecule or SMILES string to a Morgan fingerprint."""
     if isinstance(mol, str):
-        mol = Chem.MolFromSmiles(mol)
+        mol = mol_from_smiles(mol)
     if mol is None:
         raise ValueError("cannot fingerprint an invalid molecule")
     generator = rdFingerprintGenerator.GetMorganGenerator(radius=radius, fpSize=nbits)
@@ -83,7 +89,7 @@ def mol2mhfp6(mol: Mol | str) -> NDArray[np.uint32]:
     the result is a dense vector of ``MHFP6_N_PERMUTATIONS`` uint32 hashes.
     """
     if isinstance(mol, str):
-        mol = Chem.MolFromSmiles(mol)
+        mol = mol_from_smiles(mol)
     if mol is None:
         raise ValueError("cannot fingerprint an invalid molecule")
     encoded = _mhfp6_encoder().EncodeMol(mol, radius=MHFP6_RADIUS)

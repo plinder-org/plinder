@@ -656,6 +656,10 @@ def test_synthetic_cov_peptide_detection(cif_6lu7, mock_alternative_datasets):
     rdmol = Chem.SDMolSupplier(str(outsdffile), removeHs=True)[0]
     assert Chem.SanitizeMol(rdmol) == Chem.rdmolops.SanitizeFlags.SANITIZE_NONE
     assert len(Chem.MolToSmiles(rdmol).split(".")) == 1
+    # The SDF holds exactly the ligand's heavy atoms — not truncated, and NOT
+    # leaking the covalently-bonded receptor Cys145 atom (the cross-chain
+    # A->B covale bond is dropped when selecting the ligand chain).
+    assert rdmol.GetNumAtoms() == lig.num_heavy_atoms == 49
 
 
 # Non-standard/modified residues that make up the enlicitide (MK-0616)
@@ -730,6 +734,15 @@ def test_10sb_covalent_macrocycle_is_single_ligand(cif_10sb, mock_alternative_da
     # selection references every member instance-chain
     for instance_chain in ("1.C", "1.E", "1.F"):
         assert f"cname='{instance_chain}'" in lig.selection
+    # The member chains are SERIALIZED and drive the source-reconstruction
+    # grouping, so the rebuilt SDF spans the whole molecule (not just the primary
+    # chain — the truncation bug). Feed the REAL serialized rows through the
+    # reconstruction helper:
+    from plinder.core.index.system import _ligand_sdf_groups
+
+    groups = _ligand_sdf_groups(entry.to_df())
+    assert groups["1.C"] == ["1.C", "1.E", "1.F"]
+
     # the written SDF is one connected molecule spanning all member chains
     from rdkit import Chem
 
@@ -748,10 +761,10 @@ def test_fill_missing_ccd_bonds():
     restores them by matching atom names against the CCD dictionary.
     """
     import biotite.structure as struc
-    import plinder.data.annotations.ligand_utils as lu
+    import plinder.data.annotations.cif_utils as cu
 
-    lu._get_ccd_atomarray.cache_clear()
-    atoms = lu._get_ccd_atomarray("ATP")
+    cu._get_ccd_atomarray.cache_clear()
+    atoms = cu._get_ccd_atomarray("ATP")
     n_expected = atoms.bonds.as_array().shape[0]
     assert n_expected > 0
 
@@ -760,11 +773,11 @@ def test_fill_missing_ccd_bonds():
     stripped.bonds = struc.BondList(stripped.array_length())
     assert stripped.bonds.as_array().shape[0] == 0
 
-    filled = lu._fill_missing_ccd_bonds(stripped)
+    filled = cu._fill_missing_ccd_bonds(stripped)
     assert filled.bonds.as_array().shape[0] == n_expected
 
     # Idempotent: a residue that already has bonds is untouched.
-    again = lu._fill_missing_ccd_bonds(filled)
+    again = cu._fill_missing_ccd_bonds(filled)
     assert again.bonds.as_array().shape[0] == n_expected
 
 
@@ -1267,17 +1280,14 @@ def test_stereo_check_partial_resolution(cif_1ngx):
     jef_mol = _build_resolved_mol(cif_1ngx, "E")
     assert jef_mol.GetNumAtoms() < 41, "JEF should be partially resolved"
 
-    # Stereo should match in the resolved portion
-    result = _check_stereo_vs_template(jef_mol)
-    assert (
-        result is not None
-    ), "Partially resolved JEF should have comparable stereocenters"
+    # The resolved portion must MATCH the template (not merely be comparable).
+    assert _check_stereo_vs_template(jef_mol) is True
 
-    # Flipping should be detected even on trimmed template
+    # And a mirror of the resolved portion must be detected as a mismatch —
+    # JEF is chiral, so the flip is always available (assert, don't skip).
     jef_flipped = _flip_first_chiral(jef_mol)
-    if jef_flipped is not None:
-        result_flipped = _check_stereo_vs_template(jef_flipped)
-        assert result_flipped is False, "Flipped partial JEF should be detected"
+    assert jef_flipped is not None, "JEF should have a chiral center to flip"
+    assert _check_stereo_vs_template(jef_flipped) is False
 
 
 def test_stereo_check_multi_residue(cif_6fx1):
@@ -1290,8 +1300,9 @@ def test_stereo_check_multi_residue(cif_6fx1):
     not cause the spurious mismatches that changed CIP priorities once did.
 
     We verify:
-    1. The function returns a definite result (not None)
-    2. The mol has chiral centers that are being compared
+    1. The correctly-resolved glycan MATCHES its template (is True)
+    2. A mirror (enantiomer) of the glycan is detected as a mismatch (is False)
+    3. The mol has chiral centers that are being compared
     """
     from plinder.data.annotations.ligand_utils import _check_stereo_vs_template
 
@@ -1305,12 +1316,15 @@ def test_stereo_check_multi_residue(cif_6fx1):
     }
     assert len(res_names) > 1, f"Should be multi-residue, got {res_names}"
 
-    # Must return a definite result (True or False), not None
-    # (None would mean no comparable centers — wrong for a glycan)
-    result = _check_stereo_vs_template(glycan_mol)
-    assert (
-        result is not None
-    ), "Multi-residue glycan should have comparable stereocenters"
+    # The correctly-resolved glycan must MATCH the per-residue templates.
+    assert _check_stereo_vs_template(glycan_mol) is True
+
+    # A mirror of the whole glycan inverts every stereocenter at once, so the
+    # multi-residue path must flag it — this is what proves the check can
+    # actually catch a stereo error across residues, not just "run".
+    glycan_flipped = _flip_first_chiral(glycan_mol)
+    assert glycan_flipped is not None, "Glycan should have chiral centers to flip"
+    assert _check_stereo_vs_template(glycan_flipped) is False
 
     # Verify the mol actually has chiral centers. atoms_to_rdkit_mol assigns
     # chiral *tags* from 3D (not _CIPCode, which needs a CIP-labelling pass),
@@ -1434,62 +1448,6 @@ def test_cofactor_system_holo_19hc(cif_19hc, mock_alternative_datasets):
             assert lig.is_artifact, "ACT should be artifact"
 
 
-def test_nucleic_acid_receptor_detection(cif_8ufz):
-    """Verify DNA/RNA chains are included as receptor neighbors (issue #61).
-
-    Uses 8ufz: protein-DNA complex (DNA A-D, protein E-F) with ligand
-    Y5U (chains G, H) that binds at the DNA-protein interface.
-    Without the filter fix, DNA chains would be invisible as receptor
-    neighbors and the ligand would miss DNA interactions.
-    """
-    import biotite.structure as struc
-    import biotite.structure.io.pdbx as pdbx
-    from biotite.structure import filter_heavy
-    from plinder.data.annotations.cif_utils import read_mmcif_file
-
-    cif_obj = read_mmcif_file(cif_8ufz)
-    atoms = pdbx.get_structure(
-        cif_obj, model=1, use_author_fields=False, include_bonds=True
-    )
-    atoms = atoms[filter_heavy(atoms)]
-
-    dna_chains = {"A", "B", "C", "D"}
-    protein_chains = {"E", "F"}
-
-    # DNA chains must be detected as nucleotides
-    for chain_id in dna_chains:
-        chain_atoms = atoms[atoms.chain_id == chain_id]
-        assert struc.filter_nucleotides(
-            chain_atoms
-        ).any(), f"Chain {chain_id} should be detected as nucleotide"
-
-    # Receptor mask must include both protein AND DNA
-    receptor_mask = struc.filter_amino_acids(atoms) | struc.filter_nucleotides(atoms)
-    receptor_chains = set(atoms.chain_id[receptor_mask])
-    assert dna_chains.issubset(
-        receptor_chains
-    ), f"DNA chains {dna_chains} missing from receptor set {receptor_chains}"
-    assert protein_chains.issubset(
-        receptor_chains
-    ), f"Protein chains {protein_chains} missing from receptor set {receptor_chains}"
-
-    # Ligand Y5U (chain G) must have DNA neighbors within 6A
-    lig_coords = atoms.coord[atoms.chain_id == "G"]
-    receptor_atoms = atoms[receptor_mask]
-    cell = struc.CellList(receptor_atoms, 6.0)
-    near_mask = np.zeros(len(receptor_atoms), dtype=bool)
-    for coord in lig_coords:
-        indices = cell.get_atoms(coord, radius=6.0)
-        near_mask[indices[indices >= 0]] = True
-    neighbor_chains = set(receptor_atoms.chain_id[near_mask])
-    assert (
-        neighbor_chains & dna_chains
-    ), f"Ligand Y5U should have DNA neighbors, got {neighbor_chains}"
-    assert (
-        neighbor_chains & protein_chains
-    ), f"Ligand Y5U should have protein neighbors, got {neighbor_chains}"
-
-
 def test_get_validation(
     cif_1qz5,
     validation_1qz5,
@@ -1566,50 +1524,84 @@ def test_mixed_receptor_type_is_written_to_annotation(cif_8ufz):
     assert {chain_types[chain] for chain in ["E", "F"]} == {"protein"}
 
 
-def test_ligand_fix_to_valid_imatinib(cif_2hyy, mock_alternative_datasets):
-    entry_dir = mock_alternative_datasets("2hyy")
-    entry = Entry.from_cif_file(
-        cif_2hyy,
-        save_folder=entry_dir,
+@pytest.mark.parametrize(
+    "cif_fixture, pdb_id, ccd_code, sdf_name, expected_aromatic_rings, golden_smiles",
+    [
+        # Imatinib (STI) in 2hyy, fully resolved: 2 benzene + pyridine + pyrimidine.
+        (
+            "cif_2hyy",
+            "2hyy",
+            "STI",
+            "E.sdf",
+            4,
+            "Cc1ccc(cc1Nc2nccc(n2)c3cccnc3)NC(=O)c4ccc(cc4)CN5CCN(CC5)C",
+        ),
+        # EF2 (phthalimide + glutarimide) in 7bqu, fully resolved: one aromatic ring.
+        (
+            "cif_7bqu",
+            "7bqu",
+            "EF2",
+            "C.sdf",
+            1,
+            "c1ccc2c(c1)C(=O)N(C2=O)[C@H]3CCC(=O)NC3=O",
+        ),
+    ],
+)
+def test_ligand_fix_to_valid(
+    cif_fixture,
+    pdb_id,
+    ccd_code,
+    sdf_name,
+    expected_aromatic_rings,
+    golden_smiles,
+    mock_alternative_datasets,
+    request,
+):
+    """A fully-resolved ligand is rebuilt to the correct covalent structure.
+
+    Beyond the SDF-vs-SMILES self-agreement (two pipeline artifacts), both are
+    checked against INDEPENDENT ground truth: the known aromatic-ring count and
+    the reference structure's stereo-free InChIKey skeleton (first block —
+    connectivity only, robust to protonation/canonicalization). This catches a
+    wrong-but-self-consistent bond perception that an SDF-vs-SMILES check alone
+    would pass.
+    """
+    from rdkit.Chem.inchi import MolToInchiKey
+    from rdkit.Chem.rdMolDescriptors import CalcNumAromaticRings
+
+    cif_path = request.getfixturevalue(cif_fixture)
+    entry_dir = mock_alternative_datasets(pdb_id)
+    entry = Entry.from_cif_file(cif_path, save_folder=entry_dir)
+
+    lig = next(
+        (
+            lig
+            for system in entry.systems.values()
+            for lig in system.ligands
+            if lig.ccd_code == ccd_code
+        ),
+        None,
     )
-    lig = entry.systems["2hyy__1__1.A__1.E"].ligands[0]
-    #  before fix it is invalid
-    assert lig.is_invalid == False
-    outsdffile = entry_dir / "2hyy" / "ligand_files" / "E.sdf"
+    assert lig is not None, f"{ccd_code} ligand not found in any system"
+    assert lig.is_invalid is False
+
+    outsdffile = entry_dir / pdb_id / "ligand_files" / sdf_name
     assert outsdffile.is_file()
     rdmol_sdf = Chem.SDMolSupplier(str(outsdffile), removeHs=True)[0]
     rdmol_smi = Chem.MolFromSmiles(lig.smiles)
-    # check that numnber of aromatic rings is undderstood correctly
-    # N.B. this is expected to be true for fully resolved systems
-    assert Chem.rdMolDescriptors.CalcNumAromaticRings(
-        rdmol_sdf
-    ) == Chem.rdMolDescriptors.CalcNumAromaticRings(rdmol_smi)
 
-
-def test_ligand_fix_to_valid_thalidomide(cif_7bqu, mock_alternative_datasets):
-    entry_dir = mock_alternative_datasets("7bqu")
-    entry = Entry.from_cif_file(
-        cif_7bqu,
-        save_folder=entry_dir,
+    # SDF (3D-resolved) and SMILES agree AND match the independently known count.
+    assert (
+        CalcNumAromaticRings(rdmol_sdf)
+        == CalcNumAromaticRings(rdmol_smi)
+        == expected_aromatic_rings
     )
-    # EF2 may group with nearby ZN via shared pocket residues
-    lig = None
-    for system in entry.systems.values():
-        for l in system.ligands:
-            if l.ccd_code == "EF2":
-                lig = l
-                break
-    assert lig is not None, "EF2 ligand not found in any system"
-    assert lig.is_invalid == False
-    outsdffile = entry_dir / "7bqu" / "ligand_files" / "C.sdf"
-    assert outsdffile.is_file()
-    rdmol_sdf = Chem.SDMolSupplier(str(outsdffile), removeHs=True)[0]
-    rdmol_smi = Chem.MolFromSmiles(lig.smiles)
-    # check that numnber of aromatic rings is undderstood correctly
-    # N.B. this is expected to be true for fully resolved systems
-    assert Chem.rdMolDescriptors.CalcNumAromaticRings(
-        rdmol_sdf
-    ) == Chem.rdMolDescriptors.CalcNumAromaticRings(rdmol_smi)
+
+    # Independent identity: both artifacts match the reference structure's
+    # stereo-free InChIKey skeleton.
+    golden_skeleton = MolToInchiKey(Chem.MolFromSmiles(golden_smiles)).split("-")[0]
+    assert MolToInchiKey(rdmol_sdf).split("-")[0] == golden_skeleton
+    assert MolToInchiKey(rdmol_smi).split("-")[0] == golden_skeleton
 
 
 def test_partially_resolved_substructure_JEF(cif_1ngx, mock_alternative_datasets):

@@ -14,7 +14,9 @@
     DELETE this module and revert every import of the form
     ``from plinder.core.utils.sanitize import sanitize as peppr_sanitize``
     back to ``from peppr import sanitize as peppr_sanitize``
-    (grep the tree for ``peppr_sanitize`` to find all call sites).
+    (grep the tree for ``peppr_sanitize`` to find all call sites). Note that
+    :func:`mol_from_smiles` is a plinder wrapper, not part of upstream peppr —
+    RELOCATE it (e.g. to a core utils module) rather than deleting it.
 
     Deliberate local deltas from the upstream peppr body: this warning docstring; the
     ``bool(...)`` wraps on the predicate returns (plinder's minimal mypy env has no rdkit
@@ -22,14 +24,17 @@
     and a trimmed ``_ORGANOMETALLIC_OMITTED_ELEMENTS`` comment (correctness, pending upstream).
 """
 
-__all__ = ["sanitize"]
+__all__ = ["mol_from_smiles", "sanitize"]
 
+import logging
 from collections.abc import Callable
 from itertools import combinations, product
 
 import rdkit
 import rdkit.Chem.AllChem as Chem
 from rdkit.Chem.rdmolops import SanitizeFlags
+
+LOG = logging.getLogger(__name__)
 
 # Main-group metals/metalloids RDKit's SANITIZE_CLEANUP_ORGANOMETALLICS step leaves alone
 # (it dativises only transition metals). An over-valent centre of one is tolerated neutral
@@ -159,6 +164,49 @@ def sanitize(mol: Chem.Mol, max_fix_iterations: int = 100) -> None:
             mol,
             sanitizeOps=SanitizeFlags.SANITIZE_ALL ^ SanitizeFlags.SANITIZE_PROPERTIES,
         )
+
+
+def mol_from_smiles(smiles: str | None) -> "Chem.Mol | None":
+    """Parse a SMILES into a sanitized RDKit mol via the tolerant peppr sanitizer.
+
+    This is the canonical way to re-parse a *stored* ligand SMILES anywhere in
+    plinder. Plain ``Chem.MolFromSmiles`` applies strict valence sanitization and
+    returns ``None`` for the over-valent main-group centres (boron cages,
+    hypervalent metals) that the mol-building path accepts, so descriptors,
+    classification, fingerprints and identity keys must reparse the same way or
+    they silently drop those ligands. Here we parse without sanitizing and then
+    run :func:`sanitize`, which accepts exactly what the build path accepts.
+
+    For a valid organic molecule the result is chemically identical to
+    ``Chem.MolFromSmiles`` (``sanitize`` finishes with a full ``SANITIZE_ALL``
+    pass), so fingerprints/canonical SMILES do not drift. It is a faithful
+    tolerant drop-in: parsing with ``sanitize=False`` skips the parser's
+    ``assignStereochemistry`` finalisation that strict ``MolFromSmiles`` runs, so
+    we re-run it here — otherwise double-bond E/Z (parsed as bond directions but
+    never translated into bond stereo) would be left unperceived while atom
+    ``@``/``@@`` parity survived. Returns ``None`` for an empty/``None`` input or
+    a SMILES that cannot be parsed or repaired.
+    """
+    if not smiles:
+        return None
+    mol = Chem.MolFromSmiles(smiles, sanitize=False)
+    if mol is None:
+        return None
+    try:
+        sanitize(mol)
+    except Exception as exc:
+        LOG.warning("mol_from_smiles: peppr sanitize failed for %r (%s)", smiles, exc)
+        return None
+    # Perceive stereo (esp. double-bond E/Z from bond directions) to match
+    # Chem.MolFromSmiles. Best-effort: a valid mol without perceived stereo is
+    # still usable for descriptors/fingerprints, so keep it if this rare step fails.
+    try:
+        Chem.AssignStereochemistry(mol, cleanIt=True, force=True)
+    except Exception as exc:
+        LOG.warning(
+            "mol_from_smiles: stereo perception failed for %r (%s)", smiles, exc
+        )
+    return mol
 
 
 def _fix_valence(mol: Chem.Mol, problem: Exception) -> None:
