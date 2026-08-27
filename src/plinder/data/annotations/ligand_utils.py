@@ -10,17 +10,16 @@ from functools import cache, cached_property
 from pathlib import Path
 
 import biotite.structure as struc
-import biotite.structure.info as bt_info
 import numpy as np
 import numpy.typing as npt
 from pydantic import BeforeValidator, Field
 from rdkit import Chem, RDLogger
 from rdkit.Chem import QED, Crippen, rdMolDescriptors
-from rdkit.Chem import rdMolDescriptors as rdMD
 from rdkit.Chem.rdchem import Mol
 
 from plinder.core.utils.config import get_config
 from plinder.core.utils.constants import BASE_DIR
+from plinder.core.utils.sanitize import mol_from_smiles
 from plinder.data.annotations.interaction_utils import (
     extract_ligand_links_to_neighbouring_chains,
     run_peppr_interactions,
@@ -225,7 +224,11 @@ def _template_from_user_smiles(
     count disagrees with the CIF (the caller then falls back to ``None``
     for stereo_matches, matching pre-existing behaviour).
     """
-    mol = Chem.MolFromSmiles(smiles)
+    # Tolerant parse (over-valent boron/main-group centres), consistent with the
+    # rest of the ligand-SMILES pipeline; None (unparseable) falls back to no
+    # stereo check, as before. mol_from_smiles perceives stereo (atom @/@@ and
+    # double-bond E/Z), which compare_stereo_to_template reads.
+    mol = mol_from_smiles(smiles)
     if mol is None:
         return None
     mol = Chem.RemoveHs(mol, sanitize=False)
@@ -236,9 +239,9 @@ def _template_from_user_smiles(
             "skipping SMILES-based stereo check"
         )
         return None
-    # Stereo comes from the SMILES parity tags (@/@@), which MolFromSmiles
-    # records on the atoms and RemoveHs(sanitize=False) preserves;
-    # compare_stereo_to_template reads them to check chiral handedness.
+    # Stereo comes from the SMILES parity tags (@/@@ and /\), which the parse
+    # records on the atoms/bonds and RemoveHs(sanitize=False) preserves;
+    # compare_stereo_to_template reads them to check chiral handedness and E/Z.
     for atom, atom_name in zip(mol.GetAtoms(), cif_atom_names):
         info = Chem.AtomPDBResidueInfo()
         info.SetName(atom_name)
@@ -376,33 +379,17 @@ def _template_with_fragment_atom_names(
 
 
 @cache
-def _get_ccd_atomarray(comp_id: str) -> "struc.AtomArray | None":
-    """Return the CCD component atoms from biotite's bundled CCD (``bt_info``).
-
-    ``bt_info`` is the single CCD atom source. The pipeline keeps it current by
-    running biotite ``setup_ccd`` (see
-    :func:`plinder.data.pipeline.io.refresh_bundled_ccd`) during provisioning — it
-    pulls the same wwPDB dictionary, so the bundle carries up-to-date
-    representations (correct nitro charges, the 5-char extended codes, …). If that
-    sync has not run, the bundle is whatever biotite shipped, which may be stale.
-    Returns ``None`` if the component is absent.
-    """
-    try:
-        return bt_info.residue(comp_id, allow_missing_coord=True)
-    except Exception as bundled_error:
-        LOG.warning(f"CCD lookup failed for {comp_id}: {bundled_error}")
-        return None
-
-
-@cache
 def _get_ccd_mol(comp_id: str) -> "Chem.Mol | None":
     """Return a sanitized RDKit Mol for a CCD component, or None if absent.
 
-    Thin, None-safe wrapper over :func:`_get_ccd_atomarray`. biotite has no
-    chiral tags, so ``atoms_to_rdkit_mol`` assigns stereo from the ideal 3D
-    coordinates via ``AssignAtomChiralTagsFromStructure``.
+    Thin, None-safe wrapper over ``cif_utils._get_ccd_atomarray``. biotite has no
+    stereo tags, so ``atoms_to_rdkit_mol`` perceives stereo (R/S and E/Z) from the
+    ideal 3D coordinates via ``AssignStereochemistryFrom3D``.
     """
-    from plinder.data.annotations.cif_utils import atoms_to_rdkit_mol
+    from plinder.data.annotations.cif_utils import (
+        _get_ccd_atomarray,
+        atoms_to_rdkit_mol,
+    )
 
     atoms = _get_ccd_atomarray(comp_id)
     if atoms is None:
@@ -420,61 +407,6 @@ def _get_ccd_smiles(comp_id: str) -> str | None:
     if mol is None:
         return None
     return str(Chem.MolToSmiles(mol))
-
-
-def _fill_missing_ccd_bonds(atoms: "struc.AtomArray") -> "struc.AtomArray":
-    """Fill intra-residue bonds from the CCD for residues that arrived bond-less.
-
-    When biotite builds a structure with ``include_bonds=True``, a residue's
-    internal bonds come from the *structure's own* ``_chem_comp_bond`` category,
-    or — if that is absent — from biotite's *bundled* CCD via
-    ``connect_via_residue_names``. A residue arrives with no internal bonds only
-    when *both* miss: the component is newer than the bundled CCD **and** the
-    structure's CIF did not spell out its ``_chem_comp_bond``.
-
-    We then recover the bonds from biotite's bundled CCD (reached via
-    :func:`_get_ccd_atomarray`), which defines every component's bonds, matching
-    them onto the residue by atom name. In
-    other words: the structure lacked the bonds, so we look the component up in
-    the dictionary that does have them.
-
-    Existing bonds — including inter-residue ``struct_conn`` links — are left
-    untouched, and residues that already have internal bonds are skipped, so
-    this is a no-op for the overwhelming majority of ligands.
-    """
-    if atoms.array_length() < 2:
-        return atoms
-    if atoms.bonds is None:
-        atoms.bonds = struc.BondList(atoms.array_length())
-    existing = atoms.bonds.as_array()
-    residue_starts = struc.get_residue_starts(atoms, add_exclusive_stop=True)
-    for start, stop in zip(residue_starts[:-1], residue_starts[1:]):
-        if stop - start < 2:
-            continue
-        has_internal = bool(
-            np.any(
-                (existing[:, 0] >= start)
-                & (existing[:, 0] < stop)
-                & (existing[:, 1] >= start)
-                & (existing[:, 1] < stop)
-            )
-        )
-        if has_internal:
-            continue
-        ccd = _get_ccd_atomarray(str(atoms.res_name[start]))
-        if ccd is None or ccd.bonds is None:
-            continue
-        name_to_index = {
-            str(name): start + offset
-            for offset, name in enumerate(atoms.atom_name[start:stop])
-        }
-        ccd_names = ccd.atom_name
-        for ccd_i, ccd_j, order in ccd.bonds.as_array():
-            index_i = name_to_index.get(str(ccd_names[ccd_i]))
-            index_j = name_to_index.get(str(ccd_names[ccd_j]))
-            if index_i is not None and index_j is not None:
-                atoms.bonds.add_bond(index_i, index_j, int(order))
-    return atoms
 
 
 def lig_has_dummies(
@@ -616,6 +548,38 @@ def _peptide_unit_count(mol: Mol) -> int:
 
 
 @cache
+def _smiles_descriptors(smiles: str | None) -> dict[str, ty.Any] | None:
+    """Cached RDKit scalar descriptors for one canonical SMILES.
+
+    Descriptors are a pure function of the SMILES, so they are memoized here
+    (keyed on the string) instead of recomputed per ligand instance in
+    ``set_rdkit``. Parsing goes through :func:`~plinder.core.utils.sanitize.mol_from_smiles` so
+    over-valent ligands still yield descriptors rather than a silent ``None``.
+    """
+    mol = mol_from_smiles(smiles)
+    if mol is None:
+        return None
+    descriptors: dict[str, ty.Any] = {
+        "molecular_weight": rdMolDescriptors.CalcExactMolWt(mol),
+        "num_rot_bonds": rdMolDescriptors.CalcNumRotatableBonds(mol),
+        "num_hba": rdMolDescriptors.CalcNumHBA(mol),
+        "num_hbd": rdMolDescriptors.CalcNumHBD(mol),
+        "crippen_clogp": Crippen.MolLogP(mol),
+        "num_rings": rdMolDescriptors.CalcNumRings(mol),
+        "num_heavy_atoms": rdMolDescriptors.CalcNumHeavyAtoms(mol),
+        "tpsa": rdMolDescriptors.CalcTPSA(mol),
+    }
+    # QED internally re-runs RemoveHs/sanitization, which rejects the over-valent
+    # main-group centres (boron cages, hypervalent metals) that peppr.sanitize
+    # tolerates. Keep the other descriptors and leave qed unset in that case.
+    try:
+        descriptors["qed"] = QED.qed(mol)
+    except Exception:
+        descriptors["qed"] = None
+    return descriptors
+
+
+@cache
 def _classify_ligand_polymer_classes(
     smiles: str,
     sum_disconnected_units: bool = False,
@@ -625,9 +589,11 @@ def _classify_ligand_polymer_classes(
     Disconnected fragments are normally treated as a mixture, so two copies
     of a monomer do not become an oligomer.  The caller may sum their units
     when separate residue records are known to belong to one multi-residue
+    Parsing goes through :func:`~plinder.core.utils.sanitize.mol_from_smiles` so
+    over-valent ligands are still classified rather than silently skipped.
     ligand whose inter-residue bonds were absent from the deposited CIF.
     """
-    mol = Chem.MolFromSmiles(smiles) if smiles else None
+    mol = mol_from_smiles(smiles) if smiles else None
     unit_counts = {"saccharide": 0, "nucleotide": 0, "peptide": 0}
     oligo_matches = {family: False for family in unit_counts}
     if mol is not None:
@@ -716,7 +682,7 @@ def _choose_ligand_smiles_by_heavy_atom_count(
     def valid_candidate(smiles: str | None) -> tuple[str, int, int] | None:
         if not smiles:
             return None
-        mol = Chem.MolFromSmiles(smiles)
+        mol = mol_from_smiles(smiles)
         if mol is None:
             return None
         return smiles, int(mol.GetNumHeavyAtoms()), len(Chem.GetMolFrags(mol))
@@ -904,14 +870,6 @@ def get_binding_affinity(data_dir: Path) -> ty.Any:
     return download_affinity_data(data_dir=data_dir)
 
 
-def get_num_resolved_heavy_atoms(resolved_smiles: str) -> int:
-    """Count heavy atoms in the resolved SMILES (0 if unparseable)."""
-    matched_mol = Chem.MolFromSmiles(resolved_smiles, sanitize=False)
-    if matched_mol is None:
-        return 0
-    return int(rdMD.CalcNumHeavyAtoms(matched_mol))
-
-
 def get_len_of_longest_linear_hydrocarbon_linker(
     mol: Mol,
     max_count: int = 50,
@@ -1097,7 +1055,7 @@ class Ligand(DocBaseModel):
     )
     smiles: str = Field(
         default_factory=str,
-        description="Ligand SMILES from CCD lookup or resolved 3D; for composite ligands, the valid representation with more heavy atoms is used and resolved connectivity wins ties",
+        description="Ligand SMILES from CCD lookup (user-supplied SMILES wins for custom CIFs) or resolved 3D; for composite ligands, the valid representation with more heavy atoms is used and resolved connectivity wins ties",
     )
     resolved_smiles: str = Field(
         default_factory=str,
@@ -1184,6 +1142,13 @@ class Ligand(DocBaseModel):
                 "list[int]",
                 "Resolved ligand residue numbers used to reconstruct this ligand "
                 "from the source mmCIF",
+            ),
+            (
+                "instance_chains",
+                "list[str]",
+                "All instance chains this ligand spans (several for a multi-chain "
+                "covalent ligand); used to reconstruct the whole-molecule SDF from "
+                "the source mmCIF",
             ),
             (
                 "water_residues",
@@ -1302,32 +1267,33 @@ class Ligand(DocBaseModel):
                     self.smiles,
                     self.resolved_smiles,
                 )
-            rdkit_compatible_mol = Chem.MolFromSmiles(self.smiles)
-            self.molecular_weight = rdMolDescriptors.CalcExactMolWt(
-                rdkit_compatible_mol
-            )
-            self.num_rot_bonds = rdMolDescriptors.CalcNumRotatableBonds(
-                rdkit_compatible_mol
-            )
-            self.num_hba = rdMolDescriptors.CalcNumHBA(rdkit_compatible_mol)
-            self.num_hbd = rdMolDescriptors.CalcNumHBD(rdkit_compatible_mol)
-            self.crippen_clogp = Crippen.MolLogP(rdkit_compatible_mol)
-            self.num_rings = rdMolDescriptors.CalcNumRings(rdkit_compatible_mol)
-            self.num_heavy_atoms = rdMolDescriptors.CalcNumHeavyAtoms(
-                rdkit_compatible_mol
-            )
-            self.tpsa = rdMolDescriptors.CalcTPSA(rdkit_compatible_mol)
-            self.qed = QED.qed(rdkit_compatible_mol)
-            self.num_resolved_heavy_atoms = get_num_resolved_heavy_atoms(
-                self.resolved_smiles
-            )
-
-            if self.num_heavy_atoms and self.num_resolved_heavy_atoms:
-                self.num_unresolved_heavy_atoms = (
-                    self.num_heavy_atoms - self.num_resolved_heavy_atoms
-                )
-            # classify ligand based on above molecule
-            self.classify_ligand_type(rdkit_compatible_mol)
+            # Descriptors are a pure function of the SMILES, so they are looked up
+            # from the SMILES-keyed cache rather than recomputed per instance.
+            descriptors = _smiles_descriptors(self.smiles)
+            if descriptors is not None:
+                self.molecular_weight = descriptors["molecular_weight"]
+                self.num_rot_bonds = descriptors["num_rot_bonds"]
+                self.num_hba = descriptors["num_hba"]
+                self.num_hbd = descriptors["num_hbd"]
+                self.crippen_clogp = descriptors["crippen_clogp"]
+                self.num_rings = descriptors["num_rings"]
+                self.tpsa = descriptors["tpsa"]
+                self.qed = descriptors["qed"]
+                # The composite-ligand choice above may switch ``smiles`` to the
+                # resolved representation, so keep the heavy-atom count (set at
+                # construction from the reference SMILES) in step with it.
+                self.num_heavy_atoms = descriptors["num_heavy_atoms"]
+                if self.num_heavy_atoms and self.num_resolved_heavy_atoms:
+                    self.num_unresolved_heavy_atoms = (
+                        self.num_heavy_atoms - self.num_resolved_heavy_atoms
+                    )
+            # classify ligand based on the (tolerantly sanitized) molecule; skip
+            # when the SMILES is empty/unparseable so a structurally valid ligand
+            # that merely lost its SMILES (e.g. a multi-residue peptide) is not
+            # flagged invalid.
+            mol = mol_from_smiles(self.smiles)
+            if mol is not None:
+                self.classify_ligand_type(mol)
 
         except Exception as e:
             logging.warning(f"Error in setting rdkit for {self.id}: {e}")
@@ -1456,7 +1422,7 @@ class Ligand(DocBaseModel):
             Per-residue SMILES for components not in CCD (typically
             custom residues like Boltz's ``LIG``). When a residue's
             name appears in this dict, the user's SMILES takes
-            precedence over CCD/PRD for both the canonical ``smiles``
+            precedence over CCD for both the canonical ``smiles``
             field and the stereo template used by
             :func:`_check_stereo_vs_template` — the caller is assumed
             to know that the CCD entry is absent or a placeholder.
@@ -1603,10 +1569,6 @@ class Ligand(DocBaseModel):
 
         smiles = None
         lig_heavy = lig_atoms[filter_heavy(lig_atoms)]
-        # A code whose CIF lacks _chem_comp_bond arrives without its intra-residue
-        # bonds; borrow them from the bundled CCD so the resolved-3D mol below can
-        # still be built (no-op when bonds are already present).
-        lig_heavy = _fill_missing_ccd_bonds(lig_heavy)
         res_names = _residues_in_order(lig_heavy)
         reference_fragments: list[str] = []
         for resname in res_names:
@@ -1678,6 +1640,22 @@ class Ligand(DocBaseModel):
             )
         elif smiles is None:
             smiles = resolved_smiles
+        # Heavy-atom counts are structural (not rdkit descriptors): resolved is
+        # just the length of the heavy-atom biotite array (robust even if the
+        # rdkit mol build above failed), total comes from the SMILES-keyed
+        # descriptor cache, and unresolved is their difference.
+        num_resolved_heavy_atoms = lig_heavy.array_length()
+        reference_descriptors = _smiles_descriptors(smiles)
+        num_heavy_atoms = (
+            reference_descriptors["num_heavy_atoms"]
+            if reference_descriptors is not None
+            else None
+        )
+        num_unresolved_heavy_atoms = (
+            num_heavy_atoms - num_resolved_heavy_atoms
+            if num_heavy_atoms and num_resolved_heavy_atoms
+            else None
+        )
         # Centroid
         centroid = list(lig_atoms.coord.mean(axis=0))
         # BIRD/PRD id straight from the enriched CIF: the mapping key is the PRD
@@ -1697,6 +1675,9 @@ class Ligand(DocBaseModel):
             neighboring_ligand_threshold=neighboring_ligand_threshold,
             resolved_smiles=resolved_smiles or "",
             resolved_stereo_matches_template=stereo_matches,
+            num_heavy_atoms=num_heavy_atoms,
+            num_resolved_heavy_atoms=num_resolved_heavy_atoms,
+            num_unresolved_heavy_atoms=num_unresolved_heavy_atoms,
             residue_numbers=residue_numbers,
             member_residue_numbers=member_residue_numbers,
         )
@@ -2243,6 +2224,10 @@ class Ligand(DocBaseModel):
         # These internal selections are required to reconstruct a system
         # deterministically from the source mmCIF and an annotation row.
         data["ligand_residue_numbers"] = sorted(set(self.residue_numbers))
+        # Every instance-chain this ligand spans — a multi-chain covalent ligand
+        # spans several — so the source-reconstruction SDF covers the whole
+        # molecule, not just the primary chain.
+        data["ligand_instance_chains"] = sorted(self._members)
         data["ligand_water_residues"] = sorted(
             f"{chain_id}_{residue_number}"
             for chain_id, residue_numbers in self.waters.items()

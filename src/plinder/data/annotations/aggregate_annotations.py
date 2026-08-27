@@ -1857,6 +1857,7 @@ class Entry(DocBaseModel):
         """
         from plinder.data.annotations.cif_utils import (
             MissingBondOrderError,
+            check_cif_bond_orders,
             check_custom_mmcif_fields,
             enrich_cif_with_ccd_bonds,
             enrich_cif_with_smiles_bonds,
@@ -2014,6 +2015,10 @@ class Entry(DocBaseModel):
                     comp_id: effective_smiles[comp_id] for comp_id in unknown_ids
                 },
             )
+            # Postcondition: enrichment must have resolved every flagged ligand.
+            # Fail early/clearly if any unknown-without-bonds remain, rather than
+            # feeding a partially-bonded CIF into structure parsing.
+            check_cif_bond_orders(cif_file_obj)
             enrichment_applied = True
         ligand_smiles_dict = effective_smiles or None
 

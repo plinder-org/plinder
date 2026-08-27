@@ -14,11 +14,13 @@ import re
 from collections import defaultdict
 from collections.abc import Iterator
 from contextlib import contextmanager
+from functools import cache
 from math import prod
 from pathlib import Path
 from typing import TypedDict
 
 import biotite.structure as struc
+import biotite.structure.info as bt_info
 import biotite.structure.io.pdbx as pdbx
 import numpy as np
 from rdkit import Chem
@@ -26,6 +28,7 @@ from rdkit import Chem
 from plinder.core.structure.smallmols_utils import (
     mol_assigned_bond_orders_by_template,
 )
+from plinder.core.utils.sanitize import mol_from_smiles
 
 LOG = logging.getLogger(__name__)
 
@@ -708,25 +711,95 @@ def get_chain_external_mappings(
 # ---------------------------------------------------------------------------
 
 
+@cache
+def _get_ccd_atomarray(comp_id: str) -> "struc.AtomArray | None":
+    """Return the CCD component atoms from biotite's bundled CCD (``bt_info``).
+
+    ``bt_info`` is the single CCD atom source. The pipeline keeps it current by
+    running biotite ``setup_ccd`` (see
+    :func:`plinder.data.pipeline.io.refresh_bundled_ccd`) during provisioning — it
+    pulls the same wwPDB dictionary, so the bundle carries up-to-date
+    representations (correct nitro charges, the 5-char extended codes, …). If that
+    sync has not run, the bundle is whatever biotite shipped, which may be stale.
+    Returns ``None`` if the component is absent.
+    """
+    try:
+        return bt_info.residue(comp_id, allow_missing_coord=True)
+    except Exception as bundled_error:
+        LOG.warning(f"CCD lookup failed for {comp_id}: {bundled_error}")
+        return None
+
+
+def _fill_missing_ccd_bonds(atoms: "struc.AtomArray") -> "struc.AtomArray":
+    """Fill intra-residue bonds from the CCD for residues that arrived bond-less.
+
+    When biotite builds a structure with ``include_bonds=True``, a residue's
+    internal bonds come from the *structure's own* ``_chem_comp_bond`` category,
+    or — if that is absent — from biotite's *bundled* CCD via
+    ``connect_via_residue_names``. A residue arrives with no internal bonds only
+    when *both* miss: the component is newer than the bundled CCD **and** the
+    structure's CIF did not spell out its ``_chem_comp_bond``.
+
+    We then recover the bonds from biotite's bundled CCD (via
+    :func:`_get_ccd_atomarray`), matching them onto the residue by atom name.
+    Existing bonds — including inter-residue ``struct_conn`` links — are left
+    untouched, and residues that already have internal bonds are skipped, so this
+    is a no-op for the overwhelming majority of ligands.
+    """
+    if atoms.array_length() < 2:
+        return atoms
+    if atoms.bonds is None:
+        atoms.bonds = struc.BondList(atoms.array_length())
+    existing = atoms.bonds.as_array()
+    residue_starts = struc.get_residue_starts(atoms, add_exclusive_stop=True)
+    for start, stop in zip(residue_starts[:-1], residue_starts[1:]):
+        if stop - start < 2:
+            continue
+        has_internal = bool(
+            np.any(
+                (existing[:, 0] >= start)
+                & (existing[:, 0] < stop)
+                & (existing[:, 1] >= start)
+                & (existing[:, 1] < stop)
+            )
+        )
+        if has_internal:
+            continue
+        ccd = _get_ccd_atomarray(str(atoms.res_name[start]))
+        if ccd is None or ccd.bonds is None:
+            continue
+        name_to_index = {
+            str(name): start + offset
+            for offset, name in enumerate(atoms.atom_name[start:stop])
+        }
+        ccd_names = ccd.atom_name
+        for ccd_i, ccd_j, order in ccd.bonds.as_array():
+            index_i = name_to_index.get(str(ccd_names[ccd_i]))
+            index_j = name_to_index.get(str(ccd_names[ccd_j]))
+            if index_i is not None and index_j is not None:
+                atoms.bonds.add_bond(index_i, index_j, int(order))
+    return atoms
+
+
 def atoms_to_rdkit_mol(
     atoms: "struc.AtomArray",
     assign_stereo: bool = True,
 ) -> "Chem.Mol":
     """Convert a biotite AtomArray to a sanitized RDKit Mol.
 
-    Stereochemistry is, optionally, assigned from 3D coordinates before
-    the final ``RemoveAllHs`` so chiral tags are stamped on heavy atoms
-    and survive hydrogen removal.
+    Missing intra-residue bonds are recovered from the bundled CCD first, then
+    stereo (atom R/S *and* double-bond E/Z) is optionally assigned from the 3D
+    coordinates before ``RemoveAllHs`` so it survives hydrogen removal.
 
     Parameters
     ----------
     atoms : AtomArray
-        Atoms with bonds (e.g. from ``include_bonds=True`` or set
-        explicitly by the caller). Multi-atom inputs must carry
-        bonds — missing / empty bonds raise ``ValueError``. Single
-        atoms (ions) are allowed to have no bonds.
+        Atoms with bonds (``include_bonds=True`` or caller-set). Bonds missing
+        from a residue are filled from the CCD; a multi-atom input still
+        bond-less after that raises ``ValueError``. Single atoms (ions) need none.
     assign_stereo : bool
-        If True, call ``AssignAtomChiralTagsFromStructure`` on the result.
+        If True, perceive stereo from the coordinates via
+        ``AssignStereochemistryFrom3D`` (tetrahedral R/S and double-bond E/Z).
 
     Returns
     -------
@@ -737,53 +810,35 @@ def atoms_to_rdkit_mol(
     Raises
     ------
     ValueError
-        If the input has no bonds, or if RDKit conversion fails.
+        If a multi-atom input has no bonds (even after CCD fill), or conversion fails.
 
     Notes
     -----
-    Hydrogen atoms *and isotopes* (D, T) are removed. biotite's
-    ``element`` is a string, so a naive ``element != "H"`` filter would
-    leak deuterium/tritium into the mol; we pre-filter the common
-    mass-1 isotopes and additionally call ``RemoveAllHs`` as a
-    belt-and-braces catch for anything RDKit still classifies as
-    hydrogen via atomic number.
-
-    Warnings
-    --------
-    The input **must carry bonds** (``atoms.bonds`` non-empty for
-    multi-atom inputs). Callers are expected to have either loaded the
-    CIF with ``include_bonds=True`` (which reads ``_chem_comp_bond``
-    and ``_struct_conn``) or to have populated bonds themselves. The
-    function will not re-derive bonds via
-    ``connect_via_residue_names`` because that fallback silently drops
-    inter-residue peptide bonds for non-standard residues in
-    multi-residue ligands — better to fail loudly than hand back a
-    structurally-wrong mol.
+    H and its isotopes (D, T) are removed: the element-string pre-filter is
+    backed by ``RemoveAllHs`` (which keys on atomic number).
+    ``connect_via_residue_names`` is deliberately not used to derive bonds — it
+    silently drops inter-residue bonds for non-standard residues.
     """
     from biotite.interface import rdkit as rdkit_interface
     from biotite.structure import BondList
 
-    # TODO(peppr): temporary local sanitize carrying boron/main-group
-    # over-valence fixes not yet in a released peppr. Revert to
-    # `from peppr import sanitize as peppr_sanitize` once upstream.
-    # See plinder.core.utils.sanitize.
+    # TODO(peppr): local sanitize with boron/main-group over-valence fixes not yet
+    # in a released peppr; revert to `from peppr import sanitize` once upstream.
     from plinder.core.utils.sanitize import sanitize as peppr_sanitize
 
     heavy = atoms[filter_heavy(atoms)]
+    # Recover intra-residue bonds for residues that arrived bond-less (no-op when
+    # already bonded) so every caller shares one bond graph.
+    heavy = _fill_missing_ccd_bonds(heavy)
 
-    # Multi-atom inputs must carry bonds; single atoms (ions) don't need any.
+    # Multi-atom inputs must carry bonds; single atoms (ions) don't.
     if heavy.bonds is None or heavy.bonds.as_array().shape[0] == 0:
         if heavy.array_length() == 1:
-            # add empty bondlist for single atoms to convert to RDKit mol
             heavy.bonds = BondList(1)
         else:
             raise ValueError(
-                "atoms_to_rdkit_mol requires bonds on multi-atom inputs. "
-                "Load the CIF with include_bonds=True (which parses "
-                "_chem_comp_bond + _struct_conn) or populate atoms.bonds "
-                "before calling. A connect_via_residue_names fallback was "
-                "removed because it silently drops inter-residue peptide "
-                "bonds for non-standard residues in multi-residue ligands."
+                "atoms_to_rdkit_mol requires bonds on multi-atom inputs "
+                "(load the CIF with include_bonds=True or set atoms.bonds)."
             )
 
     mol = rdkit_interface.to_mol(heavy, kekulize=True, use_dative_bonds=True)
@@ -792,16 +847,11 @@ def atoms_to_rdkit_mol(
 
     peppr_sanitize(mol)
     if assign_stereo:
-        Chem.AssignAtomChiralTagsFromStructure(mol)
-    # RDKit's RemoveAllHs keys on atomic number, so it strips any
-    # hydrogen isotope atom that survived the element-string filter.
-    # Safe after stereo assignment — chiral tags live on heavy atoms.
-    #
-    # sanitize=False: peppr.sanitize already sanitized the mol and deliberately
-    # tolerates over-valent main-group centres (boron cages, Be, …) that RDKit's
-    # valence check rejects. RemoveAllHs re-sanitizes by default, which would
-    # re-raise AtomValenceException for those molecules and undo peppr's
-    # tolerance — so strip Hs without re-validating valence.
+        # From3D (not atom-only AssignAtomChiralTagsFromStructure) so double-bond
+        # E/Z is perceived too, not just R/S; keeps all-carbon quaternary centres.
+        Chem.AssignStereochemistryFrom3D(mol)
+    # sanitize=False: peppr already sanitized and tolerates over-valent main-group
+    # centres (boron cages, Be, …) that RemoveAllHs's default re-sanitize rejects.
     return Chem.RemoveAllHs(mol, sanitize=False)
 
 
@@ -958,7 +1008,7 @@ def _is_known_compound(comp_id: str, atom_names: set[str] | None = None) -> bool
     bundled CCD — correct for reference SMILES/stereo. Such a code only gets its
     intra-residue bonds if the CIF carries ``_chem_comp_bond`` (deposited entries
     always do) or via the bundled-CCD bond fallback in
-    :func:`ligand_utils._fill_missing_ccd_bonds`.
+    :func:`_fill_missing_ccd_bonds`.
 
     If *atom_names* is provided, also verify that the CIF atom names
     overlap with the CCD entry. Bond assignment via
@@ -968,8 +1018,6 @@ def _is_known_compound(comp_id: str, atom_names: set[str] | None = None) -> bool
     ``LIG``).
     """
     try:
-        from plinder.data.annotations.ligand_utils import _get_ccd_atomarray
-
         ref = _get_ccd_atomarray(comp_id)
         if ref is None:
             return False
@@ -1333,7 +1381,6 @@ def enrich_cif_with_ccd_bonds(
         Canonical CCD SMILES keyed by the custom component ID.
     """
     from plinder.data.annotations.ligand_utils import (
-        _get_ccd_atomarray,
         _get_ccd_mol,
         _get_ccd_smiles,
     )
@@ -1531,7 +1578,10 @@ def enrich_cif_with_smiles_bonds(
     bonds = _existing_chem_comp_bonds(block)
 
     for comp_id, smiles in to_process.items():
-        template = Chem.MolFromSmiles(smiles)
+        # Tolerant parse (over-valent boron/main-group centres) to stay
+        # consistent with the rest of the ligand-SMILES pipeline; still raises
+        # if even that fails, since a bond-order template is mandatory here.
+        template = mol_from_smiles(smiles)
         if template is None:
             raise ValueError(f"Invalid SMILES for {comp_id}: {smiles}")
         template_heavy = Chem.RemoveHs(template, sanitize=False)

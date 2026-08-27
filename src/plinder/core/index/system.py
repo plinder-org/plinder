@@ -31,6 +31,27 @@ from plinder.data.annotations.save_utils import (
 )
 
 
+def _ligand_sdf_groups(system_df: pd.DataFrame) -> dict[str, list[str]]:
+    """Map each ligand's primary instance-chain to all its member instance-chains.
+
+    A multi-chain covalent ligand spans several chains; its reconstructed SDF must
+    contain all of them (matching the ingest writer and the stored SMILES), so we
+    read the serialized ``ligand_instance_chains``. Falls back to the primary chain
+    alone when that list is absent (single-chain ligands / older indexes).
+    """
+    groups: dict[str, list[str]] = {}
+    for _, row in system_df.iterrows():
+        primary = row.get("ligand_instance_chain")
+        if not isinstance(primary, str) or not primary:
+            primary = f"{row['ligand_instance']}.{row['ligand_asym_id']}"
+        try:
+            members = [str(chain) for chain in row.get("ligand_instance_chains")]
+        except TypeError:  # missing column / NaN -> not iterable
+            members = []
+        groups[primary] = sorted(members) if members else [primary]
+    return groups
+
+
 def _extract_packed_ligand_sdfs(
     *, archive: Path, pdb_id: str, asym_ids: set[str]
 ) -> Path:
@@ -396,7 +417,14 @@ class PlinderSystem:
             if not (ligand_dir / f"{chain}.sdf").is_file()
         ]
         if missing:
-            save_ligands(self.reconstructed.biounit, missing, ligand_dir)
+            # Pass the member-spanning groups (not a bare chain list) so a
+            # multi-chain covalent ligand is written as one whole molecule.
+            groups = _ligand_sdf_groups(self.system)
+            save_ligands(
+                self.reconstructed.biounit,
+                {chain: groups.get(chain, [chain]) for chain in missing},
+                ligand_dir,
+            )
         ligands = {
             chain: (ligand_dir / f"{chain}.sdf").as_posix() for chain in instance_chains
         }

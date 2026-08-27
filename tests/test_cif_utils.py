@@ -888,6 +888,29 @@ def test_from_custom_cif_rejects_wrong_ccd_template(boltz_cif):
         )
 
 
+def test_from_custom_cif_post_enrichment_check_catches_silent_failure(
+    boltz_cif, monkeypatch
+):
+    """The post-enrichment check_cif_bond_orders guard must raise if enrichment
+    silently fails to add bond orders, rather than feed a partially-bonded CIF
+    into structure parsing.
+    """
+    from plinder.data.annotations import cif_utils
+    from plinder.data.annotations.aggregate_annotations import Entry
+
+    # Simulate a silent/partial enrichment that writes no bonds for LIG.
+    monkeypatch.setattr(cif_utils, "enrich_cif_with_smiles_bonds", lambda *a, **k: None)
+
+    # Without the postcondition check the un-enriched LIG would slip through;
+    # the guard re-scans and raises because LIG still has no _chem_comp_bond.
+    with pytest.raises(cif_utils.MissingBondOrderError):
+        Entry.from_custom_cif_file(
+            pdb_id="8c3u",
+            cif_file=boltz_cif,
+            ligand_smiles_dict={"LIG": LIGAND_SMILES},
+        )
+
+
 def test_from_custom_cif_user_smiles_takes_precedence(boltz_cif):
     """User-supplied SMILES wins over the CCD placeholder for custom residues.
 
@@ -1032,12 +1055,50 @@ def test_atoms_to_rdkit_mol_error():
     import biotite.structure as struc
     from plinder.data.annotations.cif_utils import atoms_to_rdkit_mol
 
-    empty = struc.AtomArray(0)
-    try:
-        atoms_to_rdkit_mol(empty)
-        assert False, "Should have raised ValueError"
-    except (ValueError, Exception):
-        pass
+    with pytest.raises(ValueError):
+        atoms_to_rdkit_mol(struc.AtomArray(0))
+
+
+def test_atoms_to_rdkit_mol_recovers_missing_ccd_bonds():
+    """A bond-less residue still builds: atoms_to_rdkit_mol refills intra-residue
+    bonds from the CCD, so the SDF writer and _get_ccd_mol share the same bond
+    graph as the resolved-SMILES path (no fragmented / raw-fallback SDF)."""
+    import biotite.structure as struc
+    from biotite.interface import rdkit as rdkit_interface
+    from biotite.structure import filter_heavy
+    from plinder.data.annotations.cif_utils import (
+        _get_ccd_atomarray,
+        atoms_to_rdkit_mol,
+    )
+
+    def bond_set(mol):
+        return {
+            (
+                min(b.GetBeginAtomIdx(), b.GetEndAtomIdx()),
+                max(b.GetBeginAtomIdx(), b.GetEndAtomIdx()),
+                b.GetBondTypeAsDouble(),
+            )
+            for b in mol.GetBonds()
+        }
+
+    # copy: _get_ccd_atomarray is cached and also supplies the refill reference
+    ref = _get_ccd_atomarray("A2G")
+    bonded = atoms_to_rdkit_mol(ref.copy())  # normal build, bonds present
+    stripped = ref.copy()
+    stripped.bonds = struc.BondList(stripped.array_length())  # wipe every bond
+
+    # negative control: without the CCD refill the bare biotite->rdkit interface
+    # cannot reconstruct the molecule — the bond-less array yields a disconnected
+    # mol, so the refill is doing real work (this is not a no-op assertion).
+    heavy = stripped[filter_heavy(stripped)]
+    raw = rdkit_interface.to_mol(heavy, kekulize=True, use_dative_bonds=True)
+    assert raw.GetNumBonds() == 0
+
+    recovered = atoms_to_rdkit_mol(stripped)  # must refill from the CCD
+    # the refill reproduces the EXACT bond graph of the un-stripped build, not
+    # merely the count (A2G: 15 heavy atoms, one pyranose ring -> 15 bonds)
+    assert recovered.GetNumBonds() == 15
+    assert bond_set(recovered) == bond_set(bonded)
 
 
 def test_bird_mapping_is_keyed_by_prd_id():
