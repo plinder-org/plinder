@@ -388,7 +388,7 @@ def extract_ligand_links_to_neighbouring_chains(
     link_type : str, optional
         Covalent linkage type in the dictionary. Options include ``"covale"``
         for a covalent linkage, ``"metalc"`` for a dative bond, and
-        ``"hydrogc"`` for a strong hydrogen bond in a nucleic acid. The
+        ``"hydrog"`` for a strong hydrogen bond in a nucleic acid. The
         default is ``"covale"``.
 
     Returns

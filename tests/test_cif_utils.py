@@ -11,6 +11,7 @@ These tests verify that:
 
 from __future__ import annotations
 
+import logging
 import shutil
 from pathlib import Path
 
@@ -21,7 +22,6 @@ import pytest
 import yaml
 from plinder.data.annotations.cif_utils import (
     MissingBondOrderError,
-    apply_struct_conn_bonds,
     assign_bond_orders_from_smiles,
     build_biounit,
     check_cif_bond_orders,
@@ -29,6 +29,7 @@ from plinder.data.annotations.cif_utils import (
     get_legacy_chain_instance_mapping,
     get_structure_with_altloc,
     get_unknown_ligand_ids,
+    remove_nonphysical_bonds,
 )
 
 CUSTOM_CIF_DIR = Path(__file__).parent / "test_data" / "custom_cif"
@@ -244,43 +245,65 @@ def test_legacy_chain_instance_mapping_uses_global_operation_order():
     }
 
 
-def test_apply_struct_conn_bonds_indexes_partners_per_assembly_instance():
-    atoms = struc.AtomArray(8)
-    atoms.chain_id = np.array(["1.A", "1.A", "1.B", "1.B", "2.A", "2.A", "2.B", "2.B"])
-    atoms.set_annotation(
-        "label_asym_id", np.array(["A", "A", "B", "B", "A", "A", "B", "B"])
-    )
-    atoms.set_annotation("sym_id", np.array([0, 0, 0, 0, 1, 1, 1, 1]))
-    atoms.res_id = np.array([1, 1, 2, 2, 1, 1, 2, 2])
-    atoms.atom_name = np.array(["C1", "X", "N1", "Y", "C1", "X", "N1", "Y"])
-    atoms.bonds = struc.BondList(len(atoms))
-    atoms.bonds.add_bond(0, 2, struc.BondType.DOUBLE)
+def test_branched_residue_numbering_patches_and_restores():
+    """Branched sugars (label_seq_id ".") get distinct numbering from
+    pdbx_branch_scheme.num inside the context, restored to "." on exit so
+    ligand-chain detection is unaffected."""
+    from plinder.data.annotations.cif_utils import _branched_residue_numbering
 
+    cif_file = pdbx.CIFFile()
     block = pdbx.CIFBlock()
-    block["struct_conn"] = pdbx.CIFCategory(
+    cif_file["test"] = block
+    block["atom_site"] = pdbx.CIFCategory(
         {
-            "conn_type_id": ["covale"],
-            "ptnr1_label_asym_id": ["A"],
-            "ptnr1_label_seq_id": ["1"],
-            "ptnr1_label_atom_id": ["C1"],
-            "ptnr1_label_comp_id": ["L1"],
-            "ptnr2_label_asym_id": ["B"],
-            "ptnr2_label_seq_id": ["2"],
-            "ptnr2_label_atom_id": ["N1"],
-            "ptnr2_label_comp_id": ["L2"],
-            "ptnr1_auth_seq_id": ["1"],
-            "ptnr2_auth_seq_id": ["2"],
+            "label_asym_id": ["B", "B", "B"],
+            "label_comp_id": ["GLC", "GLC", "GLC"],
+            "label_seq_id": [".", ".", "."],
+            "label_atom_id": ["C1", "C1", "C1"],
+            "auth_seq_id": ["1", "2", "3"],
+        }
+    )
+    block["pdbx_branch_scheme"] = pdbx.CIFCategory(
+        {
+            "asym_id": ["B", "B", "B"],
+            "auth_seq_num": ["1", "2", "3"],
+            "num": ["1", "2", "3"],
         }
     )
 
-    apply_struct_conn_bonds(atoms, block)
+    with _branched_residue_numbering(cif_file):
+        inside = block["atom_site"]["label_seq_id"].as_array(str).tolist()
+    after = block["atom_site"]["label_seq_id"].as_array(str).tolist()
 
-    neighbors0, bond_types0 = atoms.bonds.get_bonds(0)
-    assert list(neighbors0) == [2]
-    assert list(bond_types0) == [struc.BondType.DOUBLE]
-    neighbors4, bond_types4 = atoms.bonds.get_bonds(4)
-    assert list(neighbors4) == [6]
-    assert list(bond_types4) == [struc.BondType.SINGLE]
+    assert inside == ["1", "2", "3"]
+    assert after == [".", ".", "."]
+
+
+def test_remove_nonphysical_bonds_drops_long_bonds(caplog):
+    """Bonds longer than the element-pair covalent max are removed; the cause is
+    logged as a residue-ambiguity clash (same res_id) or inter-residue
+    inference (different res_id). Real-length bonds are kept."""
+    atoms = struc.AtomArray(4)
+    atoms.chain_id = np.array(["A", "A", "A", "A"])
+    atoms.res_id = np.array([1, 1, 2, 1])
+    atoms.res_name = np.array(["LIG", "LIG", "LIG", "LIG"])
+    atoms.atom_name = np.array(["C", "O", "N", "CX"])
+    atoms.element = np.array(["C", "O", "N", "C"])
+    atoms.coord = np.array(
+        [[0.0, 0, 0], [1.4, 0, 0], [5.0, 0, 0], [6.0, 0, 0]], dtype=np.float32
+    )
+    atoms.bonds = struc.BondList(4)
+    atoms.bonds.add_bond(0, 1, struc.BondType.SINGLE)  # C-O 1.4 A -> keep
+    atoms.bonds.add_bond(0, 2, struc.BondType.SINGLE)  # C-N 5 A, res 1<->2 -> inference
+    atoms.bonds.add_bond(0, 3, struc.BondType.SINGLE)  # C-C 6 A, same res 1 -> clash
+
+    with caplog.at_level(logging.WARNING, logger="plinder.data.annotations.cif_utils"):
+        remove_nonphysical_bonds(atoms)
+
+    kept = {frozenset((int(a), int(b))) for a, b, _ in atoms.bonds.as_array()}
+    assert kept == {frozenset((0, 1))}
+    assert "inter-residue inference" in caplog.text
+    assert "residue-ambiguity clash" in caplog.text
 
 
 @pytest.fixture

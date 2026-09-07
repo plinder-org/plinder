@@ -24,7 +24,6 @@ from rdkit import RDLogger
 
 from plinder.core.utils.log import setup_logger
 from plinder.data.annotations.cif_utils import (
-    apply_struct_conn_bonds,
     build_biounit,
     get_chain_external_mappings,
     get_entry_info,
@@ -32,6 +31,7 @@ from plinder.data.annotations.cif_utils import (
     get_label_asym_sequences,
     get_model_count,
     get_structure_with_altloc,
+    remove_nonphysical_bonds,
 )
 from plinder.data.annotations.get_ligand_validation import (
     EntryValidation,
@@ -847,7 +847,7 @@ class Entry(DocBaseModel):
         default_factory=dict,
         description="[EXCLUDE] All covalent interactions in the entry as defined by mmcif annotations. They types are separated by dictionary key and they include: "
         + "covale: actual covalent linkage, metalc: other dative bond interactions like metal-ligand dative bond, "
-        + "hydrogc: strong hydorogen bonding of nucleic acid. For the purpose of covalent annotations, we use only covale for downstream processing.",
+        + "hydrog: strong hydrogen bonding of nucleic acid. For the purpose of covalent annotations, we use only covale for downstream processing.",
     )
     chain_to_seqres: dict[str, str] = Field(
         default_factory=dict,
@@ -1511,7 +1511,7 @@ class Entry(DocBaseModel):
             raise ValueError(
                 f"{pdb_id}: biotite returned no bonds despite include_bonds=True"
             )
-        apply_struct_conn_bonds(atoms, cif_data)
+        remove_nonphysical_bonds(atoms)
         chain_to_seqres = get_label_asym_sequences(cif_data)
 
         entry.covalent_bonds = get_covalent_connections(cif_data)
@@ -2053,7 +2053,7 @@ class Entry(DocBaseModel):
                 "bond information (_chem_comp_bond, _struct_conn, and CCD "
                 "coverage are all absent)."
             )
-        apply_struct_conn_bonds(atoms, cif_data)
+        remove_nonphysical_bonds(atoms)
         chain_to_seqres = get_label_asym_sequences(cif_data)
 
         entry = cls(
