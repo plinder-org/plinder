@@ -1217,7 +1217,7 @@ class Ligand(DocBaseModel):
         ligand_like_chains : dict[str, str]
             Other ligand-like chains in the entry ``{chain_id: chain_type}``.
         all_covalent_dict : dict[str, list[tuple[str, str]]]
-            Covalent linkages by type (``"covale"``, ``"metalc"``, ``"hydrogc"``).
+            Covalent linkages by type (``"covale"``, ``"metalc"``, ``"hydrog"``).
         plip_complex_threshold : float
             Max distance (Å) for receptor atoms to include in interaction analysis.
         neighboring_residue_threshold : float
@@ -1314,10 +1314,13 @@ class Ligand(DocBaseModel):
             biounit, nearby_indices, include_bonds=True
         )
 
-        # Bonds propagate from biounit through array slicing;
-        # only re-derive if missing
+        # build_biounit guarantees bonds and they propagate through the slice;
+        # if not - fail loud!
         if nearby_atoms.bonds is None:
-            nearby_atoms.bonds = struc.connect_via_residue_names(nearby_atoms)
+            raise ValueError(
+                f"from_pli: pocket atoms for {ligand_instance_chain} arrived "
+                "without bonds; build_biounit must supply them."
+            )
 
         # Split into receptor/ligand/water/metal
         receptor_mask = struc.filter_amino_acids(

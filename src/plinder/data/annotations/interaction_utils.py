@@ -390,7 +390,7 @@ def extract_ligand_links_to_neighbouring_chains(
         options include:
             "covale": actual covalent linkage
             "metalc": other dative bond, eg. metal-ligand dative bond
-            "hydrogc": strong hydorogen bonding of nucleic acid
+            "hydrog": strong hydrogen bonding of nucleic acid
 
     Returns
     -------

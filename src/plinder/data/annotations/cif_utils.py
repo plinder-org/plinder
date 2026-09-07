@@ -40,7 +40,18 @@ from biotite.structure import filter_heavy  # noqa: E402
 
 
 def read_mmcif_file(mmcif_filename: Path | str) -> pdbx.CIFFile:
-    """Read an mmCIF file, handling .gz transparently."""
+    """Read an mmCIF file, handling ``.gz`` transparently.
+
+    Parameters
+    ----------
+    mmcif_filename : Path or str
+        Path to the mmCIF file (optionally gzip-compressed).
+
+    Returns
+    -------
+    pdbx.CIFFile
+        Parsed CIF file.
+    """
     import gzip
 
     path = str(mmcif_filename)
@@ -51,7 +62,18 @@ def read_mmcif_file(mmcif_filename: Path | str) -> pdbx.CIFFile:
 
 
 def read_mmcif_container(mmcif_filename: Path) -> pdbx.CIFBlock:
-    """Parse mmcif file and return the first data block."""
+    """Parse an mmCIF file and return its first data block.
+
+    Parameters
+    ----------
+    mmcif_filename : Path
+        Path to the mmCIF file.
+
+    Returns
+    -------
+    pdbx.CIFBlock
+        The first data block.
+    """
     cif_file = read_mmcif_file(mmcif_filename)
     return list(cif_file.values())[0]
 
@@ -120,6 +142,66 @@ def _alphabetic_altloc_ids(
             category[column_name] = original
 
 
+@contextmanager
+def _branched_residue_numbering(
+    cif_file: pdbx.CIFFile | pdbx.CIFBlock,
+) -> Iterator[None]:
+    """Temporarily number branched-entity residues from ``pdbx_branch_scheme``.
+
+    Restored on exit; a no-op when the CIF has no branched entities.
+
+    Notes
+    -----
+    Branched entities (glycans) leave ``atom_site.label_seq_id`` undefined
+    (``"."``), so biotite (``use_author_fields=False``) collapses all their
+    residues onto one ``res_id`` and cross-links the sugars. The deposited file
+    numbers them canonically in ``pdbx_branch_scheme.num``; we copy that into
+    ``label_seq_id`` so biotite builds distinct residues with correct bonds.
+
+    We restore ``label_seq_id`` on exit because ligand-chain detection keys on
+    the undefined value to tell polymers from branched ligands (see
+    ``protein_utils.detect_ligand_chains_from_cif``).
+    """
+    block = (
+        cif_file if isinstance(cif_file, pdbx.CIFBlock) else list(cif_file.values())[0]
+    )
+    if "pdbx_branch_scheme" not in block or "atom_site" not in block:
+        yield
+        return
+    branch = block["pdbx_branch_scheme"]
+    if not {"asym_id", "auth_seq_num", "num"}.issubset(branch):
+        yield
+        return
+
+    num_by_key = {
+        (asym_id, auth_seq_num): num
+        for asym_id, auth_seq_num, num in zip(
+            branch["asym_id"].as_array(str),
+            branch["auth_seq_num"].as_array(str),
+            branch["num"].as_array(str),
+        )
+    }
+    atom_site = block["atom_site"]
+    label_asym_ids = atom_site["label_asym_id"].as_array(str)
+    auth_seq_ids = atom_site["auth_seq_id"].as_array(str)
+    original = atom_site["label_seq_id"]
+    patched = original.as_array(str).copy()
+    changed = False
+    for index in range(len(label_asym_ids)):
+        num = num_by_key.get((label_asym_ids[index], auth_seq_ids[index]))
+        if num is not None:
+            patched[index] = num
+            changed = True
+    if not changed:
+        yield
+        return
+    try:
+        atom_site["label_seq_id"] = pdbx.CIFColumn(patched)
+        yield
+    finally:
+        atom_site["label_seq_id"] = original
+
+
 def get_structure_with_altloc(
     cif_file: pdbx.CIFFile | pdbx.CIFBlock,
     *,
@@ -130,6 +212,32 @@ def get_structure_with_altloc(
 ) -> struc.AtomArray:
     """Load one model using its deposited-first alternate conformers.
 
+    Parameters
+    ----------
+    cif_file : pdbx.CIFFile or pdbx.CIFBlock
+        Source mmCIF.
+    model : int, default=1
+        Model number to load.
+    use_author_fields : bool, default=False
+        Use author chain/residue numbering instead of the label fields.
+    include_bonds : bool, default=False
+        Read the bond graph (``_chem_comp_bond`` plus inferred inter-residue
+        bonds).
+    extra_fields : list[str] or None
+        Additional ``atom_site`` annotations to carry onto the array.
+
+    Returns
+    -------
+    struc.AtomArray
+        The single model, with a ``selected_altloc_id`` annotation.
+
+    Raises
+    ------
+    TypeError
+        If loading a single model does not return an ``AtomArray``.
+
+    Notes
+    -----
     Biotite only recognizes alphabetic alternate-location IDs while filtering.
     Non-alphabetic source IDs are therefore mapped temporarily, then restored
     on the returned ``selected_altloc_id`` annotation so validation can select
@@ -139,7 +247,10 @@ def get_structure_with_altloc(
     include_label_alt_id = "label_alt_id" in requested_extra_fields
     if not include_label_alt_id:
         requested_extra_fields.append("label_alt_id")
-    with _alphabetic_altloc_ids(cif_file) as mapping:
+    with (
+        _alphabetic_altloc_ids(cif_file) as mapping,
+        _branched_residue_numbering(cif_file),
+    ):
         atoms = pdbx.get_structure(
             cif_file,
             model=model,
@@ -182,7 +293,27 @@ def get_unit_cell_with_altloc(
     model: int = 1,
     use_author_fields: bool = False,
 ) -> struc.AtomArray:
-    """Build a unit cell using normalized deposited-first altlocs."""
+    """Build a unit cell using normalized deposited-first altlocs.
+
+    Parameters
+    ----------
+    cif_file : pdbx.CIFFile
+        Source mmCIF.
+    model : int, default=1
+        Model number to expand.
+    use_author_fields : bool, default=False
+        Use author chain/residue numbering instead of the label fields.
+
+    Returns
+    -------
+    struc.AtomArray
+        The unit-cell atoms.
+
+    Raises
+    ------
+    TypeError
+        If loading the unit cell does not return an ``AtomArray``.
+    """
     with _alphabetic_altloc_ids(cif_file):
         atoms = pdbx.get_unit_cell(
             cif_file,
@@ -198,6 +329,19 @@ def get_unit_cell_with_altloc(
 def get_label_asym_sequences(block: pdbx.CIFBlock) -> dict[str, str]:
     """Extract polymer sequences keyed by label asym ID.
 
+    Parameters
+    ----------
+    block : pdbx.CIFBlock
+        Source mmCIF data block.
+
+    Returns
+    -------
+    dict[str, str]
+        Canonical one-letter sequence keyed by ``label_asym_id`` (empty when the
+        required categories are absent).
+
+    Notes
+    -----
     ``entity_poly.pdbx_strand_id`` contains author chain IDs and therefore
     cannot be used for reconstructed biological assemblies, whose chain IDs
     are ``<instance>.<label_asym_id>``.  The stable mapping is
@@ -230,7 +374,24 @@ def get_label_asym_sequences(block: pdbx.CIFBlock) -> dict[str, str]:
 
 
 def get_mmcif_revision(block: pdbx.CIFBlock) -> tuple[int, int]:
-    """Return the latest structure-model major/minor revision in an mmCIF."""
+    """Return the latest structure-model major/minor revision in an mmCIF.
+
+    Parameters
+    ----------
+    block : pdbx.CIFBlock
+        Source mmCIF data block.
+
+    Returns
+    -------
+    tuple[int, int]
+        The ``(major, minor)`` revision of the latest structure-model entry.
+
+    Raises
+    ------
+    ValueError
+        If the revision-history category or its columns are missing, or it has
+        no structure-model revisions.
+    """
     category_name = "pdbx_audit_revision_history"
     if category_name not in block:
         raise ValueError(f"mmCIF has no {category_name} category")
@@ -255,7 +416,18 @@ def get_mmcif_revision(block: pdbx.CIFBlock) -> tuple[int, int]:
 
 
 def get_model_count(cif_file: pdbx.CIFFile) -> int:
-    """Return the number of models in a CIF (1 if no model column present)."""
+    """Return the number of models in a CIF (1 if no model column present).
+
+    Parameters
+    ----------
+    cif_file : pdbx.CIFFile
+        Source mmCIF.
+
+    Returns
+    -------
+    int
+        Number of models (0 if there is no ``atom_site`` category).
+    """
     block = list(cif_file.values())[0]
     if "atom_site" not in block:
         return 0
@@ -271,12 +443,37 @@ def build_biounit(
 ) -> struc.AtomArray:
     """Build a biological assembly with stable ``instance.asym`` chain IDs.
 
+    Parameters
+    ----------
+    cif_file : pdbx.CIFFile
+        Source mmCIF to build the assembly from.
+    assembly_id : str
+        Identifier of the biological assembly to construct.
+
+    Returns
+    -------
+    struc.AtomArray
+        Heavy-atom assembly with ``<instance>.<label_asym_id>`` chain IDs and an
+        intra/inter-residue bond graph.
+
+    Raises
+    ------
+    ValueError
+        If biotite returns no bonds despite ``include_bonds=True``.
+
+    Notes
+    -----
     Biotite's ``sym_id`` enumerates transformed copies independently for each
     source asym chain.  Using it avoids assuming that an assembly consists of
     complete, contiguous ASU-sized blocks, which is false when operators apply
     to only a subset of chains.
+
+    Branched entities are renumbered (:func:`_branched_residue_numbering`) before
+    building so biotite gives their residues distinct ``res_id``s, and any
+    non-physical bonds biotite's inference still emits are then dropped
+    (:func:`remove_nonphysical_bonds`).
     """
-    with _alphabetic_altloc_ids(cif_file):
+    with _alphabetic_altloc_ids(cif_file), _branched_residue_numbering(cif_file):
         biounit = pdbx.get_assembly(
             cif_file,
             assembly_id=assembly_id,
@@ -298,7 +495,7 @@ def build_biounit(
                 for sym_id, asym_id in zip(biounit.sym_id, biounit.label_asym_id)
             ]
         )
-        apply_struct_conn_bonds(biounit, list(cif_file.values())[0])
+        remove_nonphysical_bonds(biounit)
     return biounit
 
 
@@ -337,9 +534,13 @@ def get_entry_info(data: pdbx.CIFBlock) -> dict[str, str | None]:
     Parameters
     ----------
     data : pdbx.CIFBlock
+        Source mmCIF data block.
+
     Returns
     -------
     dict[str, str | None]
+        Entry-level metadata (oligomeric state, determination method, keywords,
+        pH, resolution); each value is ``None`` when absent.
     """
     entry_info = {}
     mappings = [
@@ -367,7 +568,18 @@ def get_entry_info(data: pdbx.CIFBlock) -> dict[str, str | None]:
 def get_chain_external_mappings(
     data: pdbx.CIFBlock,
 ) -> dict[str, dict[str, dict[str, list[tuple[str, str] | None]]]]:
-    """Get additional metadata directory from nextgen mmcif."""
+    """Get additional metadata directory from nextgen mmcif.
+
+    Parameters
+    ----------
+    data : pdbx.CIFBlock
+        Source mmCIF data block.
+
+    Returns
+    -------
+    dict[str, dict[str, dict[str, list[tuple[str, str] | None]]]]
+        Per-chain SIFTS / UniProt / BIRD mappings keyed by ``asym_id``.
+    """
     per_chain: dict[str, dict[str, dict[str, set[tuple[str, str] | None]]]] = {}
 
     # SIFTS mapping
@@ -425,15 +637,16 @@ def get_chain_external_mappings(
 
 @cache
 def _get_ccd_atomarray(comp_id: str) -> "struc.AtomArray | None":
-    """Return the CCD component atoms from biotite's bundled CCD (``bt_info``).
+    """Return the CCD component atoms from biotite's bundled CCD, or None.
 
+    Notes
+    -----
     ``bt_info`` is the single CCD atom source. The pipeline keeps it current by
     running biotite ``setup_ccd`` (see
     :func:`plinder.data.pipeline.io.refresh_bundled_ccd`) during provisioning — it
     pulls the same wwPDB dictionary, so the bundle carries up-to-date
     representations (correct nitro charges, the 5-char extended codes, …). If that
     sync has not run, the bundle is whatever biotite shipped, which may be stale.
-    Returns ``None`` if the component is absent.
     """
     try:
         return bt_info.residue(comp_id, allow_missing_coord=True)
@@ -443,20 +656,15 @@ def _get_ccd_atomarray(comp_id: str) -> "struc.AtomArray | None":
 
 
 def _fill_missing_ccd_bonds(atoms: "struc.AtomArray") -> "struc.AtomArray":
-    """Fill intra-residue bonds from the CCD for residues that arrived bond-less.
+    """Fill intra-residue bonds from the bundled CCD for bond-less residues.
 
-    When biotite builds a structure with ``include_bonds=True``, a residue's
-    internal bonds come from the *structure's own* ``_chem_comp_bond`` category,
-    or — if that is absent — from biotite's *bundled* CCD via
-    ``connect_via_residue_names``. A residue arrives with no internal bonds only
-    when *both* miss: the component is newer than the bundled CCD **and** the
-    structure's CIF did not spell out its ``_chem_comp_bond``.
-
-    We then recover the bonds from biotite's bundled CCD (via
-    :func:`_get_ccd_atomarray`), matching them onto the residue by atom name.
-    Existing bonds — including inter-residue ``struct_conn`` links — are left
-    untouched, and residues that already have internal bonds are skipped, so this
-    is a no-op for the overwhelming majority of ligands.
+    Notes
+    -----
+    A residue arrives without internal bonds when the structure's CIF omits its
+    ``_chem_comp_bond`` rows. We recover them from biotite's bundled CCD
+    (:func:`_get_ccd_atomarray`), matched by atom name. Existing bonds (including
+    inter-residue ``struct_conn`` links) and already-bonded residues are left
+    untouched — a no-op for most ligands.
     """
     if atoms.array_length() < 2:
         return atoms
@@ -499,10 +707,6 @@ def atoms_to_rdkit_mol(
 ) -> "Chem.Mol":
     """Convert a biotite AtomArray to a sanitized RDKit Mol.
 
-    Missing intra-residue bonds are recovered from the bundled CCD first, then
-    stereo (atom R/S *and* double-bond E/Z) is optionally assigned from the 3D
-    coordinates before ``RemoveAllHs`` so it survives hydrogen removal.
-
     Parameters
     ----------
     atoms : AtomArray
@@ -526,6 +730,10 @@ def atoms_to_rdkit_mol(
 
     Notes
     -----
+    Missing intra-residue bonds are recovered from the bundled CCD first, then
+    stereo (atom R/S *and* double-bond E/Z) is optionally assigned from the 3D
+    coordinates before ``RemoveAllHs`` so it survives hydrogen removal.
+
     H and its isotopes (D, T) are removed: the element-string pre-filter is
     backed by ``RemoveAllHs`` (which keys on atomic number).
     ``connect_via_residue_names`` is deliberately not used to derive bonds — it
@@ -568,14 +776,26 @@ def atoms_to_rdkit_mol(
 
 
 # ---------------------------------------------------------------------------
-# CIF ligand parsing
+# Structure bonds: struct_conn parsing and non-physical bond removal
 # ---------------------------------------------------------------------------
 
 
 def parse_struct_conn(
     block: pdbx.CIFBlock,
 ) -> list[dict[str, str]]:
-    """Parse ``_struct_conn`` into a list of connection dicts."""
+    """Parse ``_struct_conn`` into a list of connection dicts.
+
+    Parameters
+    ----------
+    block : pdbx.CIFBlock
+        Source mmCIF data block.
+
+    Returns
+    -------
+    list[dict[str, str]]
+        One dict per connection (empty when ``_struct_conn`` or a required
+        column is absent).
+    """
     if "struct_conn" not in block:
         return []
     conn = block["struct_conn"]
@@ -601,83 +821,91 @@ def parse_struct_conn(
     return [{k: arrays[k][i] for k in arrays} for i in range(n)]
 
 
-def apply_struct_conn_bonds(
-    atoms: "struc.AtomArray",
-    block: pdbx.CIFBlock,
-) -> None:
-    """Add inter-residue covalent bonds from ``_struct_conn`` in-place."""
+# Drop bonds longer than this fraction of the two atoms' van der Waals radii
+# sum: ~0.8x the vdW sum is the start of the non-bonded range, so a longer
+# "bond" is more likely a van der Waals contact than covalent.
+_NONPHYSICAL_BOND_VDW_FRACTION = 0.8
 
-    parsed_connections = parse_struct_conn(block)
-    connections = []
-    partner_keys: set[tuple[str, int, str]] = set()
-    for connection in parsed_connections:
-        if connection["conn_type"] != "covale":
-            continue
-        try:
-            res_id1 = int(connection["seq1"]) if connection["seq1"] != "." else -1
-            res_id2 = int(connection["seq2"]) if connection["seq2"] != "." else -1
-        except ValueError:
-            continue
-        key1 = (connection["chain1"], res_id1, connection["atom1"])
-        key2 = (connection["chain2"], res_id2, connection["atom2"])
-        connections.append((key1, key2))
-        partner_keys.update((key1, key2))
-    if not connections:
-        return
+
+def _max_bond_length(element1: str, element2: str) -> float:
+    """Distance above which an element pair can't be bonded (0.8 x vdW sum, Å)."""
+    try:
+        radii_sum = bt_info.vdw_radius_single(
+            element1.upper()
+        ) + bt_info.vdw_radius_single(element2.upper())
+    except Exception:
+        return float("inf")  # unknown element: never treat a bond as non-physical
+    return _NONPHYSICAL_BOND_VDW_FRACTION * radii_sum
+
+
+def remove_nonphysical_bonds(atoms: "struc.AtomArray") -> None:
+    """Drop bonds too long to be covalent, in-place, logging each removal.
+
+    Parameters
+    ----------
+    atoms : struc.AtomArray
+        Bonded structure cleaned in-place; ``atoms.bonds`` is replaced with the
+        pruned graph. A no-op when there are no bonds.
+
+    Notes
+    -----
+    ``get_assembly``/``get_structure`` with ``include_bonds=True`` can emit
+    chemically impossible bonds:
+
+    - a **residue-ambiguity clash**, where a ``res_id`` collision makes biotite
+      cross-link atoms of two different residues. Branched sugars are the usual
+      cause (undefined ``label_seq_id``); :func:`_branched_residue_numbering`
+      prevents that upstream, so this stays a backstop for any other collision.
+    - **inter-residue inference**, where ``connect_via_residue_names`` bonds
+      consecutive-but-spatially-distant residues (peptide ``C-N`` / nucleic
+      ``O3'-P``) without checking the distance.
+
+    Both are far longer than any real bond, so we drop any bond exceeding the
+    element pair's distance threshold (:func:`_max_bond_length`). Real bonds
+    (<=~2.4 Å, disulfides and carborane cages included) are kept.
+    """
     if atoms.bonds is None:
-        atoms.bonds = struc.BondList(atoms.array_length())
+        return
+    bond_array = atoms.bonds.as_array()
+    if bond_array.shape[0] == 0:
+        return
 
-    categories = set(atoms.get_annotation_categories())
-    if "label_asym_id" in categories:
-        label_ids = atoms.get_annotation("label_asym_id")
-    else:
-        label_ids = np.asarray(
-            [str(chain_id).split(".", maxsplit=1)[-1] for chain_id in atoms.chain_id]
-        )
-    if "sym_id" in categories:
-        instance_ids = atoms.get_annotation("sym_id")
-    else:
-        chain_parts = [
-            str(chain_id).split(".", maxsplit=1) for chain_id in atoms.chain_id
-        ]
-        instance_ids = np.asarray(
-            [parts[0] if len(parts) == 2 else "" for parts in chain_parts]
-        )
-
-    candidate_mask = (
-        np.isin(label_ids, [key[0] for key in partner_keys])
-        & np.isin(atoms.res_id, [key[1] for key in partner_keys])
-        & np.isin(atoms.atom_name, [key[2] for key in partner_keys])
+    index1 = bond_array[:, 0].astype(int)
+    index2 = bond_array[:, 1].astype(int)
+    distances = np.linalg.norm(atoms.coord[index1] - atoms.coord[index2], axis=1)
+    thresholds = np.fromiter(
+        (
+            _max_bond_length(str(element1), str(element2))
+            for element1, element2 in zip(atoms.element[index1], atoms.element[index2])
+        ),
+        dtype=float,
+        count=bond_array.shape[0],
     )
-    partner_indices: dict[tuple[str, int, str], dict[str, list[int]]] = defaultdict(
-        lambda: defaultdict(list)
-    )
-    for index in np.flatnonzero(candidate_mask):
-        key = (
-            str(label_ids[index]),
-            int(atoms.res_id[index]),
-            str(atoms.atom_name[index]),
-        )
-        if key in partner_keys:
-            partner_indices[key][str(instance_ids[index])].append(int(index))
+    remove_mask = distances > thresholds
+    if not remove_mask.any():
+        return
 
-    for key1, key2 in connections:
-        partner1 = partner_indices.get(key1, {})
-        partner2 = partner_indices.get(key2, {})
-        # A source row applies within each transformed copy, not to the
-        # Cartesian product of all biological-assembly copies.
-        for instance_id in set(partner1) & set(partner2):
-            for index1 in partner1[instance_id]:
-                bonded_indices, _ = atoms.bonds.get_bonds(index1)
-                existing_neighbors = set(int(index) for index in bonded_indices)
-                for index2 in partner2[instance_id]:
-                    if index2 not in existing_neighbors:
-                        atoms.bonds.add_bond(
-                            index1,
-                            index2,
-                            struc.BondType.SINGLE,
-                        )
-                        existing_neighbors.add(index2)
+    for row in np.flatnonzero(remove_mask):
+        first, second = int(index1[row]), int(index2[row])
+        same_residue = (
+            atoms.chain_id[first] == atoms.chain_id[second]
+            and atoms.res_id[first] == atoms.res_id[second]
+        )
+        cause = (
+            "residue-ambiguity clash (get_assembly res_id collision)"
+            if same_residue
+            else "inter-residue inference (get_assembly)"
+        )
+        LOG.warning(
+            "removing non-physical bond "
+            f"{atoms.atom_name[first]}@{atoms.res_name[first]}"
+            f"{int(atoms.res_id[first])} <-> "
+            f"{atoms.atom_name[second]}@{atoms.res_name[second]}"
+            f"{int(atoms.res_id[second])} "
+            f"({distances[row]:.2f} A > {thresholds[row]:.2f} A); likely {cause}."
+        )
+
+    atoms.bonds = struc.BondList(atoms.array_length(), bond_array[~remove_mask])
 
 
 # ---------------------------------------------------------------------------
@@ -691,9 +919,9 @@ class MissingBondOrderError(ValueError):
     pass
 
 
-# Minimum fraction of CCD heavy atoms that must be present in a CIF
-# for connect_via_residue_names to produce reliable bonds.
-_MIN_CCD_ATOM_OVERLAP = 0.5
+# Minimum fraction of a CCD entry's heavy atoms that must be matched by name
+# in the CIF for its bonds to be applied reliably.
+_MIN_CCD_ATOM_MATCH_FRACTION = 0.5
 
 
 def _get_hetatm_comp_ids(block: pdbx.CIFBlock) -> set[str]:
@@ -714,20 +942,16 @@ def _get_cif_bond_comp_ids(block: pdbx.CIFBlock) -> set[str]:
 
 
 def _is_known_compound(comp_id: str, atom_names: set[str] | None = None) -> bool:
-    """Check if a component ID is known to the CCD compound library.
+    """Return True if ``comp_id`` is in biotite's bundled CCD.
 
-    "Known" resolves via :func:`_get_ccd_atomarray`, i.e. presence in biotite's
-    bundled CCD — correct for reference SMILES/stereo. Such a code only gets its
-    intra-residue bonds if the CIF carries ``_chem_comp_bond`` (deposited entries
-    always do) or via the bundled-CCD bond fallback in
-    :func:`_fill_missing_ccd_bonds`.
-
-    If *atom_names* is provided, also verify that the CIF atom names
-    overlap with the CCD entry. Bond assignment via
-    ``connect_via_residue_names`` relies on atom-name matching, so a
-    compound whose names don't match CCD will get wrong bonds even if
-    the comp_id exists in the dictionary (e.g. Boltz ``LIG`` =/= CCD
-    ``LIG``).
+    Notes
+    -----
+    When *atom_names* (the CIF's heavy-atom names) is given, also require that the
+    CIF names agree with the CCD entry: every CIF name must be a CCD name, and the
+    CIF must cover at least ``_MIN_CCD_ATOM_MATCH_FRACTION`` of the CCD's heavy
+    atoms. This rejects a comp_id that collides with a CCD code but is chemically
+    different (e.g. Boltz ``LIG`` =/= CCD ``LIG``), which would otherwise be
+    treated as known and get wrong bonds from the CCD by atom-name lookup.
     """
     try:
         ref = _get_ccd_atomarray(comp_id)
@@ -742,8 +966,10 @@ def _is_known_compound(comp_id: str, atom_names: set[str] | None = None) -> bool
             unknown_names = atom_names - ref_names
             if unknown_names:
                 return False
-            # Enough CCD atoms must be present for reliable bond assignment
-            if len(atom_names & ref_names) < _MIN_CCD_ATOM_OVERLAP * len(ref_names):
+            # Enough CCD atoms must be matched for reliable bond assignment
+            if len(atom_names & ref_names) < _MIN_CCD_ATOM_MATCH_FRACTION * len(
+                ref_names
+            ):
                 return False
         return True
     except Exception as e:
@@ -804,6 +1030,8 @@ def get_unknown_ligand_ids(cif_input: pdbx.CIFFile | Path | str) -> set[str]:
 def _rdkit_bond_to_cif(bond: Chem.rdchem.Bond) -> tuple[str, str]:
     """Map an RDKit bond to ``(value_order, pdbx_aromatic_flag)``.
 
+    Notes
+    -----
     Biotite's ``_parse_intra_residue_bonds`` needs both columns; the
     ``(order, flag)`` pair keys into
     :data:`biotite.structure.io.pdbx.convert.COMP_BOND_ORDER_TO_TYPE`
@@ -850,15 +1078,18 @@ def _bonds_by_position(
 ) -> list[tuple[str, str, str, str]]:
     """Assign bonds by trusting positional atom-order correspondence.
 
-    Assumes CIF heavy atoms appear in the same order as heavy atoms in
-    the SMILES template (the convention used by Boltz, AlphaFold3,
-    Chai-1, etc.). Verifies by comparing elements at each position and
-    raises ``ValueError`` on any mismatch, pointing at the offending
-    position so the caller can diagnose it quickly.
+    Returns
+    -------
+    list[tuple[str, str, str, str]]
+        ``(atom_name_1, atom_name_2, value_order, pdbx_aromatic_flag)`` tuples
+        ready to be written to ``_chem_comp_bond``.
 
-    Returns a list of ``(atom_name_1, atom_name_2, value_order,
-    pdbx_aromatic_flag)`` tuples ready to be written to
-    ``_chem_comp_bond``.
+    Notes
+    -----
+    Assumes CIF heavy atoms appear in the same order as heavy atoms in the SMILES
+    template (the convention used by Boltz, AlphaFold3, Chai-1, etc.). Verifies by
+    comparing elements at each position and raises ``ValueError`` on any mismatch,
+    pointing at the offending position so the caller can diagnose it quickly.
     """
     n_template = template_heavy.GetNumAtoms()
     n_cif = lig_heavy.array_length()
@@ -898,21 +1129,6 @@ def _bonds_by_substructure_match(
 ) -> list[tuple[str, str, str, str]]:
     """Assign bonds via RDKit substructure matching.
 
-    Opt-in alternative to :func:`_bonds_by_position` for CIFs whose
-    atom order does not match SMILES parse order. Invoked only when
-    ``force_substructure_match=True`` is passed to
-    :func:`assign_bond_orders_from_smiles` — there is no automatic
-    fallback between the two paths.
-
-    Substructure matching needs CIF connectivity (RDKit can't search
-    a graph that has no edges). If ``lig_heavy.bonds`` is empty, bonds
-    are inferred from interatomic distances
-    (``connect_via_distances``); bond orders are then reassigned from
-    the SMILES template via ``AssignBondOrdersFromTemplate``. The
-    positional path doesn't need this fallback because it never reads
-    the CIF's bond list — it copies bonds straight from the SMILES
-    template using positional atom-name lookup.
-
     Raises
     ------
     ValueError
@@ -922,6 +1138,22 @@ def _bonds_by_substructure_match(
         ``AssignBondOrdersFromTemplate`` can silently match the wrong
         substructure. Better to fail loudly than to emit chemically
         wrong bond orders.
+
+    Notes
+    -----
+    Opt-in alternative to :func:`_bonds_by_position` for CIFs whose atom order
+    does not match SMILES parse order. Invoked only when
+    ``force_substructure_match=True`` is passed to
+    :func:`assign_bond_orders_from_smiles` — there is no automatic fallback
+    between the two paths.
+
+    Substructure matching needs CIF connectivity (RDKit can't search a graph that
+    has no edges). If ``lig_heavy.bonds`` is empty, bonds are inferred from
+    interatomic distances (``connect_via_distances``); bond orders are then
+    reassigned from the SMILES template via ``AssignBondOrdersFromTemplate``. The
+    positional path doesn't need this fallback because it never reads the CIF's
+    bond list — it copies bonds straight from the SMILES template using positional
+    atom-name lookup.
     """
     from biotite.interface import rdkit as rdkit_interface
 
@@ -976,14 +1208,6 @@ def enrich_cif_with_smiles_bonds(
 ) -> None:
     """Add ``_chem_comp_bond`` rows to a CIFFile in-memory.
 
-    Mutates ``cif_file`` by appending bond entries for unknown ligands
-    using the provided SMILES templates. Known CCD compounds are
-    skipped. Existing ``_chem_comp_bond`` rows are preserved.
-
-    See :func:`assign_bond_orders_from_smiles` for the full description
-    of the atom-order assumption and the ``force_substructure_match``
-    opt-in.
-
     Parameters
     ----------
     cif_file : pdbx.CIFFile
@@ -1007,6 +1231,14 @@ def enrich_cif_with_smiles_bonds(
         (mmCIF ``_chem_comp_bond`` is keyed by comp_id so all
         instances must share atom naming for biotite to apply the
         single bond definition correctly).
+
+    Notes
+    -----
+    Mutates ``cif_file`` by appending bond entries for unknown ligands using the
+    provided SMILES templates. Known CCD compounds are skipped and existing
+    ``_chem_comp_bond`` rows are preserved. See
+    :func:`assign_bond_orders_from_smiles` for the atom-order assumption and the
+    ``force_substructure_match`` opt-in.
     """
     block = list(cif_file.values())[0]
 
@@ -1145,34 +1377,6 @@ def assign_bond_orders_from_smiles(
 ) -> Path:
     """Disk-based wrapper around :func:`enrich_cif_with_smiles_bonds`.
 
-    Reads ``cif_path``, enriches the CIF in memory, and writes the
-    result to ``output_path`` (or overwrites ``cif_path`` when
-    ``output_path`` is ``None``). Callers that already have a
-    ``pdbx.CIFFile`` object in memory should use
-    :func:`enrich_cif_with_smiles_bonds` directly to avoid the read /
-    write round-trip.
-
-    Atom-order assumption
-    ---------------------
-    By default this function assumes that the heavy-atom order in the
-    CIF exactly matches the heavy-atom parse order of the SMILES. This
-    is the convention produced by structure-prediction tools that
-    accept SMILES input (e.g. Boltz, AlphaFold3, Chai-1): their output
-    CIF writes ligand atoms in the same order that the SMILES was
-    parsed. Under this assumption the mapping from CIF atom -> SMILES
-    atom is the identity, and bond orders can be copied directly from
-    the SMILES template with zero ambiguity.
-
-    The function verifies the assumption by comparing the element at
-    each position. If counts or elements don't match, ``ValueError``
-    is raised pointing at the first mismatch.
-
-    Set ``force_substructure_match=True`` to fully replace the default
-    path with RDKit substructure matching. This does NOT fall back on
-    failure — it is the only method used when the flag is set. Slower,
-    can be ambiguous for symmetric molecules, and should only be used
-    for CIFs from tools that don't preserve SMILES atom order.
-
     Parameters
     ----------
     cif_path : Path
@@ -1196,6 +1400,27 @@ def assign_bond_orders_from_smiles(
     MissingBondOrderError, ValueError
         Propagated from :func:`enrich_cif_with_smiles_bonds`. See
         that function's docstring for the full list of failure modes.
+
+    Notes
+    -----
+    Reads ``cif_path``, enriches the CIF in memory, and writes the result to
+    ``output_path`` (or overwrites ``cif_path`` when ``output_path`` is
+    ``None``). Callers that already hold a ``pdbx.CIFFile`` should use
+    :func:`enrich_cif_with_smiles_bonds` directly to avoid the read/write
+    round-trip.
+
+    **Atom-order assumption.** By default this assumes the CIF heavy-atom order
+    matches the SMILES heavy-atom parse order — the convention produced by
+    structure-prediction tools (e.g. Boltz, AlphaFold3, Chai-1). Under it the CIF
+    atom -> SMILES atom mapping is the identity, so bond orders copy directly from
+    the template; the function verifies this by comparing the element at each
+    position and raises ``ValueError`` at the first mismatch.
+
+    Set ``force_substructure_match=True`` to fully replace the default path with
+    RDKit substructure matching. This does NOT fall back on failure — it is the
+    only method used when the flag is set. Slower, can be ambiguous for symmetric
+    molecules, and should only be used for CIFs from tools that don't preserve
+    SMILES atom order.
     """
     if output_path is None:
         output_path = cif_path
