@@ -937,6 +937,10 @@ def is_excluded_mol(
         bool: should molecule be considered as artifact
     """
     mol = Chem.MolFromSmiles(smiles, sanitize=False)
+    # An empty or unparseable SMILES is not a molecule — exclude it (also
+    # avoids crashing on the None RDKit returns for invalid SMILES).
+    if mol is None:
+        return True
 
     # get heavy atom and carbon counts
     carbon = Chem.MolFromSmarts("[#6]")
@@ -1128,6 +1132,15 @@ class Ligand(DocBaseModel):
     interactions: dict[str, dict[int, list[str]]] = Field(
         default_factory=dict,
         description="[EXCLUDE] Dictionary of {instance}.{chain} to residue number to list of interaction hashes",
+    )
+    # TODO: consider surfacing this as an exported plindex column (drop the
+    # ``__`` prefix + wire column_descriptions/schema) so downstream can tell
+    # "0 because a detector crashed" from "0 because none found".
+    failed_interaction_types: list[str] = Field(
+        default_factory=list,
+        description="[EXCLUDE] Interaction types whose peppr detector raised for this "
+        "ligand; an empty result for a listed type means 'not computed', not "
+        "'none found'.",
     )
 
     @classmethod
@@ -1538,7 +1551,7 @@ class Ligand(DocBaseModel):
         # Chain mapping: chain_id is already in instance.asym format
         inv_mapping = {c: c for c in np.unique(nearby_atoms.chain_id)}
 
-        peppr_interactions, peppr_waters = run_peppr_interactions(
+        peppr_interactions, peppr_waters, peppr_failed_types = run_peppr_interactions(
             receptor_arr,
             ligand_arr,
             water_arr,
@@ -1756,6 +1769,7 @@ class Ligand(DocBaseModel):
             water_chains = get_water_chain_ids(biounit)
         # Populate interactions and waters from peppr results
         ligand.interactions = peppr_interactions
+        ligand.failed_interaction_types = peppr_failed_types
         ligand.waters = defaultdict(list)
         for w_chain, w_resnum in peppr_waters:
             ligand.waters[w_chain].append(w_resnum)

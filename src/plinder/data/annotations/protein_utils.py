@@ -566,7 +566,9 @@ class Chain(DocBaseModel):
             chain_type_str=chain_type_str,
             residues=residues,
             length=seqres_length,
-            num_unresolved_residues=seqres_length - len(residues),
+            # -1 sentinel (collation flags <0) when SEQRES is missing or
+            # shorter than the resolved residues — surface it
+            num_unresolved_residues=max(-1, seqres_length - len(residues)),
         )
 
     @cached_property

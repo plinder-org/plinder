@@ -609,6 +609,19 @@ def find_metal_bridges(
     return bridges
 
 
+# Canonical interaction-type names recorded when a peppr detector fails, so a
+# missing interaction type can be told apart from a genuinely absent one.
+PEPPR_INTERACTION_TYPES = (
+    "hydrogen_bonds",
+    "salt_bridges",
+    "pi_stacks",
+    "pi_cation",
+    "halogen_bonds",
+    "water_bridges",
+    "metal_complexes",
+)
+
+
 def run_peppr_interactions(
     receptor: struc.AtomArray,
     ligand: struc.AtomArray,
@@ -642,9 +655,14 @@ def run_peppr_interactions(
         {instance.chain: {residue_number: [interaction_strings]}}
     water_set : set
         {(instance.chain, residue_number)} of bridging waters.
+    failed_interaction_types : list[str]
+        Interaction types (from :data:`PEPPR_INTERACTION_TYPES`) whose peppr
+        detector raised, so an empty result for them means "not computed",
+        not "none found". A failure to build the complex records all types.
     """
     interaction_hashes: dict[str, dict[int, list[str]]] = {}
     water_set: set[tuple[str, int]] = set()
+    failed_interaction_types: list[str] = []
 
     try:
         cm = ContactMeasurement(receptor, ligand)
@@ -658,7 +676,8 @@ def run_peppr_interactions(
             components,
             e,
         )
-        return interaction_hashes, water_set
+        # No detector could run — every type is unknown, not absent.
+        return interaction_hashes, water_set, list(PEPPR_INTERACTION_TYPES)
 
     def _add(chain: str, resnr: int, attr: str) -> None:
         if chain == ligand_chain:
@@ -703,6 +722,7 @@ def run_peppr_interactions(
             )
     except Exception as e:
         log.warning(f"run_peppr_interactions: find_hbonds failed: {e}")
+        failed_interaction_types.append("hydrogen_bonds")
 
     # Salt bridges
     try:
@@ -712,6 +732,7 @@ def run_peppr_interactions(
             _add(c, int(receptor.res_id[ri]), "type:salt_bridges__protispos:True")
     except Exception as e:
         log.warning(f"run_peppr_interactions: find_salt_bridges failed: {e}")
+        failed_interaction_types.append("salt_bridges")
 
     # Pi-stacking (deduplicate per residue)
     try:
@@ -729,6 +750,7 @@ def run_peppr_interactions(
                 _add(c, int(receptor.res_id[ri]), f"type:pi_stacks__stack_type:{stype}")
     except Exception as e:
         log.warning(f"run_peppr_interactions: find_stacking_interactions failed: {e}")
+        failed_interaction_types.append("pi_stacks")
 
     # Pi-cation
     try:
@@ -750,6 +772,7 @@ def run_peppr_interactions(
                 )
     except Exception as e:
         log.warning(f"run_peppr_interactions: find_pi_cation_interactions failed: {e}")
+        failed_interaction_types.append("pi_cation")
 
     # Halogen bonds
     try:
@@ -770,6 +793,7 @@ def run_peppr_interactions(
             _add(c, int(receptor.res_id[ri]), f"type:halogen_bonds__sidechain:{sc}")
     except Exception as e:
         log.warning(f"run_peppr_interactions: halogen_bonds failed: {e}")
+        failed_interaction_types.append("halogen_bonds")
 
     # Water bridges (via plinder patch — peppr public doesn't have this yet)
     try:
@@ -801,6 +825,7 @@ def run_peppr_interactions(
                 water_set.add((w_chain, int(waters.res_id[wi])))
     except Exception as e:
         log.warning(f"run_peppr_interactions: find_water_bridges failed: {e}")
+        failed_interaction_types.append("water_bridges")
 
     # Metal bridges (via plinder patch — peppr public doesn't have this yet)
     try:
@@ -818,5 +843,6 @@ def run_peppr_interactions(
                 )
     except Exception as e:
         log.warning(f"run_peppr_interactions: find_metal_bridges failed: {e}")
+        failed_interaction_types.append("metal_complexes")
 
-    return interaction_hashes, water_set
+    return interaction_hashes, water_set, failed_interaction_types
