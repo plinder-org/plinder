@@ -1,7 +1,0 @@
-flow:
-  run_specific_stages: collate_partitions,plan_clusters,make_symmetric_edge_fragments,make_symmetric_edge_shards,make_component_reductions,merge_component_reductions,make_communities,make_directed_set_covers,summarize_clusters,finalize_index
-  make_components_force_update: true
-data:
-  plinder_mount: /plinder
-  plinder_release: 2024-06
-  plinder_iteration: v3

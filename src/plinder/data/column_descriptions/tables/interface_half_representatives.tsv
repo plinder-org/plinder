@@ -1,0 +1,7 @@
+Name	Type	Description
+half_interface_id	string	Stable identifier for one representative interface side
+entry_pdb_id	string	RCSB PDB ID. See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_entry.id.html
+instance_chain_id	string	Assembly-chain instance forming this half-interface
+chain_asym_id	string	Chain asymmetric id
+residue_numbers	list<element: int32>	Source-mmCIF residue numbers in this half-interface
+residue_indices	list<element: int32>	Zero-based resolved-chain indices corresponding positionally to residue_numbers

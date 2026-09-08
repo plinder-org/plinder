@@ -16,6 +16,7 @@ from plinder.data.annotations.interface_utils import (
 )
 from plinder.data.pipeline import collate as collate_module
 from plinder.data.pipeline.collate import (
+    COLLATION_VERSION,
     collate_shard,
     finalize_collation,
     finalize_collation_plan,
@@ -49,9 +50,18 @@ def _write_entry(
             "entry_pH": ph,
             "system_biounit_id": "1",
             "system_id": system_id,
+            "system_id_no_biounit": f"{pdb_id}__1.A__1.L",
+            "system_id_legacy": f"{pdb_id}__1__1.A__1.L",
             "system_type": "holo",
             "system_protein_chains_length": [100, 200],
+            "system_ligand_chains": ["1.L"],
+            "system_ligand_chains_asym_id": ["1.L"],
+            "system_ligand_validation_average_rsr": 0.1,
+            "system_pocket_validation_average_rsr": 0.2,
             "ligand_id": ligand["ligand_id"],
+            "ligand_id_legacy": ligand["ligand_id"],
+            "ligand_smiles": "C",
+            "ligand_rdkit_canonical_smiles": "C",
             "ligand_unique_ccd_code": ligand["ccd"],
             "ligand_is_proper": ligand["proper"],
             "ligand_is_lipinski": ligand["proper"],
@@ -71,6 +81,19 @@ def _write_entry(
             "system_pocket_ECOD": "retired",
             "system_pocket_kinase_name": "retired",
         }
+        for prefix in (
+            "system_protein_chains_",
+            "system_ligand_chains_",
+            "ligand_protein_chains_",
+            "ligand_neighboring_ligand_chains_",
+            "ligand_interacting_ligand_chains_",
+        ):
+            row[f"{prefix}auth_id"] = ["A"]
+            row[f"{prefix}entity_id"] = ["1"]
+            row[f"{prefix}num_unresolved_residues"] = [0]
+            row[f"{prefix}validation_average_rsr"] = [0.1]
+            if f"{prefix}length" not in row:
+                row[f"{prefix}length"] = [100]
         annotation_rows.append(row)
     pd.DataFrame(annotation_rows).to_parquet(
         raw_root / f"{pdb_id}.parquet", index=False
@@ -86,6 +109,7 @@ def _write_entry(
             "chain_entity_id": ["1", "2"],
             "chain_type": ["polypeptide(L)", "polypeptide(L)"],
             "chain_receptor_type": ["protein", "protein"],
+            "chain_sequence": ["A" * 300, "A" * 200],
             "chain_length": [300, 200],
             "chain_num_unresolved_residues": [0, 0],
             "chain_is_holo": [True, True],
@@ -100,6 +124,9 @@ def _write_entry(
             "chain_instance": ["1.A", "1.B"],
             "chain_asym_id": ["A", "B"],
             "chain_role": ["receptor", "receptor"],
+            "chain_num_contacting_ions": [0, 0],
+            "chain_num_contacting_artifacts": [0, 0],
+            "chain_num_contacting_other_ligands": [0, 0],
         }
     ).to_parquet(entry_dir / "entry_biounit_chains.parquet", index=False)
     pd.DataFrame(
@@ -210,6 +237,21 @@ def _write_interface_only_entry(data_dir: Path, pdb_id: str = "3ghi") -> None:
     )
 
 
+def _write_sidecar_only_entry(data_dir: Path, pdb_id: str = "4jkl") -> None:
+    _write_interface_only_entry(data_dir, pdb_id)
+    interface_path = (
+        data_dir / "raw_entries" / pdb_id[1:3] / pdb_id / "interfaces.parquet"
+    )
+    pq.write_table(
+        pa.Table.from_pylist([], schema=INTERFACE_ANNOTATION_SCHEMA), interface_path
+    )
+    _set_interface_threshold(interface_path, 7)
+    metrics = data_dir / "metrics" / pdb_id[1:3] / f"ingest-one-{pdb_id}.json"
+    payload = json.loads(metrics.read_text())
+    payload["counts"]["interface_rows"] = 0
+    metrics.write_text(json.dumps(payload))
+
+
 def _set_interface_threshold(path: Path, threshold: int) -> None:
     table = pq.read_table(path)
     metadata = dict(table.schema.metadata or {})
@@ -217,7 +259,7 @@ def _set_interface_threshold(path: Path, threshold: int) -> None:
     pq.write_table(table.replace_schema_metadata(metadata), path)
 
 
-def test_plan_shards_and_finalize_real_v3_contract(tmp_path: Path) -> None:
+def test_plan_shards_and_finalize_release_contract(tmp_path: Path) -> None:
     _write_release(tmp_path)
 
     plan = plan_collation(tmp_path)
@@ -235,6 +277,7 @@ def test_plan_shards_and_finalize_real_v3_contract(tmp_path: Path) -> None:
     assert first == cached
     assert report["row_counts"] == {
         "annotation": 3,
+        "system_validation": 2,
         "entry_chains": 4,
         "entry_biounit_chains": 4,
         "entry_metadata": 2,
@@ -243,11 +286,45 @@ def test_plan_shards_and_finalize_real_v3_contract(tmp_path: Path) -> None:
     }
     assert report["interface_count"] == 2
     annotation = pd.read_parquet(tmp_path / "index/annotation_table.parquet")
+    assert [column for column in annotation.columns if column.startswith("entry_")] == [
+        "entry_pdb_id"
+    ]
     assert not {
         column
         for column in annotation.columns
         if any(marker in column.casefold() for marker in ("ecod", "kinase"))
     }
+    retired_annotation_columns = {
+        "system_id_no_biounit",
+        "system_ligand_chains",
+        "ligand_rdkit_canonical_smiles",
+    }
+    assert retired_annotation_columns.isdisjoint(annotation.columns)
+    assert "ligand_smiles" in annotation.columns
+    assert not any(
+        column.startswith(
+            (
+                "system_ligand_validation_",
+                "system_pocket_validation_",
+            )
+        )
+        for column in annotation.columns
+    )
+    for prefix in (
+        "system_protein_chains_",
+        "system_ligand_chains_",
+        "ligand_protein_chains_",
+        "ligand_neighboring_ligand_chains_",
+        "ligand_interacting_ligand_chains_",
+    ):
+        for suffix in (
+            "auth_id",
+            "entity_id",
+            "length",
+            "num_unresolved_residues",
+        ):
+            assert f"{prefix}{suffix}" not in annotation.columns
+    assert not any("_chains_validation_" in column for column in annotation.columns)
     first_entry = annotation[annotation["entry_pdb_id"] == "1abc"]
     assert first_entry["biounit_num_ligands"].tolist() == [2, 2]
     assert first_entry["biounit_num_unique_ccd_codes"].tolist() == [2, 2]
@@ -261,9 +338,61 @@ def test_plan_shards_and_finalize_real_v3_contract(tmp_path: Path) -> None:
         "1abc__1__1.L": True,
         "1abc__1__1.Z": False,
     }
+    metadata = pd.read_parquet(tmp_path / "index/entry_metadata.parquet")
+    assert metadata.set_index("entry_pdb_id").loc["2def", "entry_pH"] == 7.4
+    system_validation = pd.read_parquet(
+        tmp_path / "index/system_validation.parquet"
+    ).set_index("system_id")
+    assert system_validation.loc[
+        "1abc__1__1.A__1.L", "system_ligand_validation_average_rsr"
+    ] == pytest.approx(0.1)
+    assert system_validation.loc[
+        "1abc__1__1.A__1.L", "system_pocket_validation_average_rsr"
+    ] == pytest.approx(0.2)
     marker = json.loads((tmp_path / "index/collation.json").read_text())
     assert marker["status"] == "complete"
     assert marker["interface_min_residues"] == 7
+
+
+def test_collate_shard_does_not_reuse_older_format(tmp_path: Path) -> None:
+    _write_release(tmp_path)
+    plan_collation(tmp_path)
+    collate_shard(tmp_path, "ab", memory_limit="1GB")
+    paths = collate_module._shard_paths(tmp_path, "ab")
+    stale = pd.read_parquet(paths["entry_biounit_chains"]).drop(
+        columns=[
+            "chain_num_contacting_ions",
+            "chain_num_contacting_artifacts",
+            "chain_num_contacting_other_ligands",
+        ]
+    )
+    stale.to_parquet(paths["entry_biounit_chains"], index=False)
+    metrics = json.loads(paths["metrics"].read_text())
+    metrics["version"] = COLLATION_VERSION - 1
+    paths["metrics"].write_text(json.dumps(metrics))
+
+    refreshed = collate_shard(tmp_path, "ab", memory_limit="1GB")
+
+    assert refreshed["version"] == COLLATION_VERSION
+    assert {
+        "chain_num_contacting_ions",
+        "chain_num_contacting_artifacts",
+        "chain_num_contacting_other_ligands",
+    }.issubset(pq.read_schema(paths["entry_biounit_chains"]).names)
+
+
+def test_collation_rejects_unknown_biounit_contact_counts(tmp_path: Path) -> None:
+    _write_release(tmp_path)
+    path = tmp_path / "raw_entries/ab/1abc/entry_biounit_chains.parquet"
+    frame = pd.read_parquet(path)
+    frame.loc[0, "chain_num_contacting_ions"] = None
+    frame.to_parquet(path, index=False)
+
+    with pytest.raises(
+        ValueError,
+        match="invalid biological-assembly ligand contact counts",
+    ):
+        run_collation(tmp_path, memory_limit="1GB")
 
 
 def test_distributed_plan_requires_and_merges_every_code_inventory(
@@ -273,12 +402,8 @@ def test_distributed_plan_requires_and_merges_every_code_inventory(
 
     build = start_collation_plan(tmp_path)
     assert build["code_count"] == 2
-    assert planned_inventory_code_batch(
-        tmp_path, batch_index=0, batch_size=1
-    ) == ["ab"]
-    assert planned_inventory_code_batch(
-        tmp_path, batch_index=1, batch_size=1
-    ) == ["de"]
+    assert planned_inventory_code_batch(tmp_path, batch_index=0, batch_size=1) == ["ab"]
+    assert planned_inventory_code_batch(tmp_path, batch_index=1, batch_size=1) == ["de"]
 
     inventory_collation_codes(tmp_path, ["ab"], threads=2)
     with pytest.raises(FileNotFoundError, match="incomplete for code de"):
@@ -305,6 +430,8 @@ def test_interface_only_collation_preserves_installed_ligand_annotation(
     annotation["release_only"] = "preserve"
     annotation.to_parquet(annotation_path, index=False)
     annotation_bytes = annotation_path.read_bytes()
+    system_validation_path = tmp_path / "index/system_validation.parquet"
+    system_validation_bytes = system_validation_path.read_bytes()
     legacy_chain_path = tmp_path / "raw_entries/ab/1abc/entry_chains.parquet"
     legacy_chains = pd.read_parquet(legacy_chain_path).drop(
         columns="chain_is_ligand_like"
@@ -327,6 +454,7 @@ def test_interface_only_collation_preserves_installed_ligand_annotation(
 
     assert report["include_ligand_annotations"] is False
     assert annotation_path.read_bytes() == annotation_bytes
+    assert system_validation_path.read_bytes() == system_validation_bytes
     assert report["interface_count"] == 2
     chains = pd.read_parquet(tmp_path / "index/entry_chains.parquet")
     assert chains.set_index(["entry_pdb_id", "chain_asym_id"]).loc[
@@ -350,6 +478,22 @@ def test_collation_retains_entries_with_only_protein_interfaces(
     assert set(metadata["entry_pdb_id"]) == {"1abc", "2def", "3ghi"}
     interfaces = pd.read_parquet(tmp_path / "index/interface_annotation_table.parquet")
     assert "3ghi__1__1.A--1.B" in set(interfaces["system_id"])
+
+
+def test_collation_retains_entries_with_only_chain_sidecars(tmp_path: Path) -> None:
+    _write_release(tmp_path)
+    _write_sidecar_only_entry(tmp_path)
+
+    report = run_collation(tmp_path, memory_limit="1GB")
+
+    assert report["entry_count"] == 3
+    assert report["interface_count"] == 2
+    annotation = pd.read_parquet(tmp_path / "index/annotation_table.parquet")
+    assert "4jkl" not in set(annotation["entry_pdb_id"])
+    metadata = pd.read_parquet(tmp_path / "index/entry_metadata.parquet")
+    assert set(metadata["entry_pdb_id"]) == {"1abc", "2def", "4jkl"}
+    chains = pd.read_parquet(tmp_path / "index/entry_chains.parquet")
+    assert "4jkl" in set(chains["entry_pdb_id"])
 
 
 def test_collation_rejects_interface_sidecars_from_failed_ingest(
@@ -434,25 +578,21 @@ def test_targeted_repair_preserves_unaffected_release_only_columns(
         {"1abc": "old", "2def": "keep"}
     )
     installed.to_parquet(tmp_path / "index/annotation_table.parquet", index=False)
-    installed.iloc[[0]].to_parquet(
-        tmp_path / "index/annotation_table_nonredundant.parquet",
-        index=False,
-    )
     chain_path = tmp_path / "index/entry_chains.parquet"
     before_chain_stat = chain_path.stat()
 
-    raw = pd.read_parquet(tmp_path / "raw_entries/ab/1abc.parquet")
-    raw["entry_pH"] = 6.5
-    raw.to_parquet(tmp_path / "raw_entries/ab/1abc.parquet", index=False)
+    metadata_path = tmp_path / "raw_entries/ab/1abc/entry_metadata.parquet"
+    metadata = pd.read_parquet(metadata_path)
+    metadata["entry_pH"] = 6.5
+    metadata.to_parquet(metadata_path, index=False)
 
     report = repair_collation(tmp_path, ["1ABC", "1abc"], threads=2, memory_limit="1GB")
 
     assert report["mode"] == "targeted_repair"
     assert report["status"] == "requires_downstream_repair"
     assert report["repaired_entry_count"] == 1
-    assert not (tmp_path / "index/annotation_table_nonredundant.parquet").exists()
     repaired = pd.read_parquet(tmp_path / "index/annotation_table.parquet")
-    assert repaired.loc[repaired["entry_pdb_id"].eq("1abc"), "entry_pH"].eq(6.5).all()
+    assert "entry_pH" not in repaired.columns
     assert (
         repaired.loc[repaired["entry_pdb_id"].eq("1abc"), "release_only"].isna().all()
     )
@@ -461,6 +601,8 @@ def test_targeted_repair_preserves_unaffected_release_only_columns(
         .eq("keep")
         .all()
     )
+    repaired_metadata = pd.read_parquet(tmp_path / "index/entry_metadata.parquet")
+    assert repaired_metadata.set_index("entry_pdb_id").loc["1abc", "entry_pH"] == 6.5
     repaired_chains = pd.read_parquet(tmp_path / "index/entry_chains.parquet")
     lengths = (
         repaired_chains[repaired_chains["chain_asym_id"].eq("A")]
@@ -479,12 +621,6 @@ def test_targeted_repair_preserves_unaffected_release_only_columns(
         before_chain_stat.st_mtime_ns,
     )
 
-    with pytest.raises(FileNotFoundError, match="nonredundant"):
-        finalize_repair_marker(tmp_path)
-    repaired.iloc[[0]].to_parquet(
-        tmp_path / "index/annotation_table_nonredundant.parquet",
-        index=False,
-    )
     finalized_report = finalize_repair_marker(tmp_path)
     assert finalized_report is not None
     assert finalized_report["status"] == "complete"
@@ -509,7 +645,7 @@ def test_shard_rejects_inputs_changed_after_plan(tmp_path: Path) -> None:
     plan_collation(tmp_path)
     annotation = tmp_path / "raw_entries/ab/1abc.parquet"
     frame = pd.read_parquet(annotation)
-    frame["entry_pH"] = 6.0
+    frame["ligand_unique_ccd_code"] = "CHANGED"
     frame.to_parquet(annotation, index=False)
 
     with pytest.raises(RuntimeError, match="changed after planning"):
@@ -540,16 +676,14 @@ def test_finalize_uses_frozen_shards_after_raw_inputs_change(tmp_path: Path) -> 
     collate_shard(tmp_path, "de", memory_limit="1GB")
     annotation = tmp_path / "raw_entries/ab/1abc.parquet"
     frame = pd.read_parquet(annotation)
-    frame["entry_pH"] = 6.0
+    frame["ligand_unique_ccd_code"] = "CHANGED"
     frame.to_parquet(annotation, index=False)
 
     report = finalize_collation(tmp_path, threads=2, memory_limit="1GB")
 
     assert report["status"] == "complete"
     installed = pd.read_parquet(tmp_path / "index/annotation_table.parquet")
-    assert set(installed.loc[installed["entry_pdb_id"] == "1abc", "entry_pH"]) != {
-        6.0
-    }
+    assert "CHANGED" not in set(installed["ligand_unique_ccd_code"])
 
 
 def test_final_install_fails_closed_on_partial_replacement(
@@ -557,6 +691,7 @@ def test_final_install_fails_closed_on_partial_replacement(
 ) -> None:
     names = (
         "annotation",
+        "system_validation",
         "entry_chains",
         "entry_biounit_chains",
         "entry_metadata",
@@ -587,6 +722,7 @@ def test_final_install_fails_closed_on_partial_replacement(
 
     assert not marker.exists()
     assert not final_paths["annotation"].exists()
+    assert not final_paths["system_validation"].exists()
 
 
 def test_plan_rejects_partial_materialized_entries(tmp_path: Path) -> None:
@@ -669,6 +805,17 @@ def test_final_validation_rejects_invalid_chain_sequence_metadata(
     chains.to_parquet(chain_path, index=False)
 
     with pytest.raises(ValueError, match=error_key):
+        run_collation(tmp_path, threads=1, memory_limit="1GB")
+
+
+def test_final_validation_rejects_missing_chain_sequence(tmp_path: Path) -> None:
+    _write_release(tmp_path)
+    chain_path = tmp_path / "raw_entries/ab/1abc/entry_chains.parquet"
+    chains = pd.read_parquet(chain_path)
+    chains.loc[0, "chain_sequence"] = ""
+    chains.to_parquet(chain_path, index=False)
+
+    with pytest.raises(ValueError, match="missing_sequences"):
         run_collation(tmp_path, threads=1, memory_limit="1GB")
 
 

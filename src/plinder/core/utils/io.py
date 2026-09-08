@@ -23,8 +23,9 @@ from biotite.database.rcsb import fetch
 from biotite.file import DeserializationError, InvalidFileError
 from biotite.structure.io.pdbx import CIFFile, get_structure, set_structure
 
+from plinder.core.release import PlinderRelease
 from plinder.core.utils.config import get_config
-from plinder.core.utils.cpl import get_plinder_path, is_offline
+from plinder.core.utils.cpl import is_offline
 from plinder.core.utils.log import setup_logger
 
 LOG = setup_logger(__name__)
@@ -53,8 +54,7 @@ def _normalize_pdb_id(pdb_or_system_id: str) -> str:
 def _entry_source_manifest_path(manifest_path: Path | str | None) -> Path:
     if manifest_path is not None:
         return Path(manifest_path)
-    cfg = get_config()
-    return get_plinder_path(rel=f"{cfg.data.index}/{cfg.data.entry_source_file}")
+    return PlinderRelease().fetch("entry_sources")
 
 
 def _get_pdb_revisions(

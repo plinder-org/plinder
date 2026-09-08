@@ -12,9 +12,56 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from plinder.core.utils import schemas
+from plinder.data.annotations.get_similarity_scores import (
+    SCORE_METRICS_METADATA_KEY,
+    SCORE_THRESHOLDS_METADATA_KEY,
+    score_metrics_metadata,
+    score_thresholds_metadata,
+)
 from plinder.data.annotations.interface_utils import INTERFACE_ANNOTATION_SCHEMA
 from plinder.data.pipeline import io, tasks
 from plinder.data.pipeline.config import LigandConfig
+
+
+def _write_ligand_pair_scores(
+    data_dir: Path, pdb_id: str, candidates: list[dict]
+) -> Path:
+    output = (
+        data_dir
+        / "scores"
+        / "ligand_pair_scores"
+        / "search_db=holo"
+        / f"shard={pdb_id[1:3]}"
+        / f"{pdb_id}.parquet"
+    )
+    output.parent.mkdir(exist_ok=True, parents=True)
+    rows = []
+    for candidate in candidates:
+        rows.append(
+            {
+                key: candidate[key]
+                for key in [
+                    "query_system",
+                    "query_ligand_id",
+                    "query_entry",
+                    "query_ligand_asym_id",
+                    "target_system",
+                    "target_ligand_id",
+                    "target_entry",
+                    "target_ligand_asym_id",
+                ]
+            }
+            | {
+                "pocket_qcov": round(float(candidate["pocket_qcov"]) * 100),
+                "pocket_fident_qcov": 0,
+                "pli_qcov": 0,
+            }
+        )
+    pq.write_table(
+        pa.Table.from_pylist(rows, schema=schemas.LIGAND_PAIR_SCORE_SCHEMA),
+        output,
+    )
+    return output
 
 
 def _write_alignment_chain_lookup(data_dir: Path) -> None:
@@ -33,6 +80,7 @@ def _write_alignment_chain_lookup(data_dir: Path) -> None:
                 ("ligand_is_3d_score_able", pa.bool_()),
                 ("ligand_protein_chains_asym_id", pa.list_(pa.string())),
                 ("ligand_neighboring_residues", pa.list_(pa.string())),
+                ("ligand_interacting_residues", pa.list_(pa.string())),
                 ("ligand_interactions", pa.list_(pa.string())),
             ]
         )
@@ -98,6 +146,7 @@ def test_make_ligand_pocket_representatives_collapses_assembly_copies(
         {
             "entry_pdb_id": ["1abc", "1abc"],
             "chain_asym_id": ["A", "N"],
+            "chain_auth_id": ["X", "Y"],
             "chain_receptor_type": ["protein", "dna"],
         }
     ).to_parquet(index / "entry_chains.parquet", index=False)
@@ -121,14 +170,19 @@ def test_make_ligand_pocket_representatives_collapses_assembly_copies(
                 ["1.A"],
             ],
             "ligand_neighboring_residues": [
-                ["1.A_10_0_10", "1.N_20_0_20"],
-                ["2.A_10_0_10", "2.N_20_0_20"],
+                ["1.A_10_0_110_A", "1.N_20_0_220_."],
+                ["2.A_10_0_110_A", "2.N_20_0_220_."],
                 ["1.A_11_1_11"],
+            ],
+            "ligand_interacting_residues": [
+                ["1.A_10_0_110_A", "1.N_20_0_220_."],
+                ["2.A_10_0_110_A", "2.N_20_0_220_."],
+                ["1.A_11_1_11", "1.A_12_2_212_."],
             ],
             "ligand_interactions": [
                 ["1.A_10_hbond", "1.N_20_hbond"],
                 ["2.A_10_hbond", "2.N_20_hbond"],
-                ["1.A_11_hydrophobic"],
+                ["1.A_11_hydrophobic", "1.A_12_water_bridge"],
             ],
         }
     ).to_parquet(index / "annotation_table.parquet", index=False)
@@ -140,18 +194,84 @@ def test_make_ligand_pocket_representatives_collapses_assembly_copies(
     )
     assert report["ligand_count"] == 3
     assert report["representative_ligand_count"] == 2
+    assert report["pocket_residue_count"] == 4
     representatives = pd.read_parquet(
         tmp_path / tasks.LIGAND_POCKET_REPRESENTATIVES_RELATIVE
     ).set_index("representative_ligand_id")
     assert representatives.loc["ligand-1", "receptor_chain_asym_ids"] == ["A"]
     assert representatives.loc["ligand-1", "receptor_set_id"] == "ligand-1"
-    assert representatives.loc["ligand-1", "pocket_residues"] == ["A_10_0_10"]
+    assert representatives.loc["ligand-1", "pocket_residues"] == ["A_10_0_110_A"]
     assert representatives.loc["ligand-1", "interactions"] == ["A_10_hbond"]
     membership = pd.read_parquet(
         tmp_path / tasks.LIGAND_POCKET_MEMBERSHIP_RELATIVE
     ).set_index("ligand_id")
     assert membership.loc["ligand-2", "representative_ligand_id"] == "ligand-1"
     assert membership.loc["ligand-3", "representative_ligand_id"] == "ligand-3"
+    residues = pd.read_parquet(
+        tmp_path / tasks.LIGAND_POCKET_RESIDUES_RELATIVE
+    ).sort_values(["ligand_id", "residue_label_seq_id"])
+    assert residues.to_dict("records") == [
+        {
+            "entry_pdb_id": "1abc",
+            "system_id": "system-1",
+            "ligand_id": "ligand-1",
+            "chain_instance": "1.A",
+            "chain_asym_id": "A",
+            "chain_auth_id": "X",
+            "residue_label_seq_id": 10,
+            "residue_index": 0,
+            "residue_auth_seq_id": "110",
+            "residue_insertion_code": "A",
+            "is_pli": True,
+        },
+        {
+            "entry_pdb_id": "1abc",
+            "system_id": "system-2",
+            "ligand_id": "ligand-2",
+            "chain_instance": "2.A",
+            "chain_asym_id": "A",
+            "chain_auth_id": "X",
+            "residue_label_seq_id": 10,
+            "residue_index": 0,
+            "residue_auth_seq_id": "110",
+            "residue_insertion_code": "A",
+            "is_pli": True,
+        },
+        {
+            "entry_pdb_id": "1abc",
+            "system_id": "system-3",
+            "ligand_id": "ligand-3",
+            "chain_instance": "1.A",
+            "chain_asym_id": "A",
+            "chain_auth_id": "X",
+            "residue_label_seq_id": 11,
+            "residue_index": 1,
+            "residue_auth_seq_id": "11",
+            "residue_insertion_code": ".",
+            "is_pli": True,
+        },
+        {
+            "entry_pdb_id": "1abc",
+            "system_id": "system-3",
+            "ligand_id": "ligand-3",
+            "chain_instance": "1.A",
+            "chain_asym_id": "A",
+            "chain_auth_id": "X",
+            "residue_label_seq_id": 12,
+            "residue_index": 2,
+            "residue_auth_seq_id": "212",
+            "residue_insertion_code": ".",
+            "is_pli": True,
+        },
+    ]
+    assert report["residue_selection"] == tasks.LIGAND_POCKET_RESIDUE_SELECTION
+    manifest_path = tmp_path / tasks.LIGAND_POCKET_REPRESENTATIVES_MANIFEST_RELATIVE
+    manifest = json.loads(manifest_path.read_text())
+    stale_manifest = dict(manifest)
+    stale_manifest.pop("residue_selection")
+    manifest_path.write_text(json.dumps(stale_manifest))
+    assert tasks._completed_ligand_pocket_representatives(tmp_path) is None
+    manifest_path.write_text(json.dumps(manifest))
     assert (
         tasks.make_ligand_pocket_representatives(
             data_dir=tmp_path,
@@ -494,16 +614,21 @@ def _write_alignment_mapping_manifest(
     data_dir: Path,
     shard: str,
     *,
+    search_db: str = "holo",
     skipped_queries: dict[str, dict[str, object]] | None = None,
 ) -> None:
     if tasks._completed_alignment_chain_lookup(data_dir) is None:
         _write_alignment_chain_lookup(data_dir)
-    inputs = tasks._alignment_input_signatures(data_dir=data_dir, shard=shard)
+    inputs = tasks._alignment_input_signatures(
+        data_dir=data_dir,
+        search_db=search_db,
+        shard=shard,
+    )
     outputs = {}
     for alignment_type, signatures in inputs.items():
         output = tasks._alignment_release_path(
             data_dir=data_dir,
-            search_db="holo",
+            search_db=search_db,
             alignment_type=alignment_type,
             shard=shard,
         )
@@ -516,11 +641,16 @@ def _write_alignment_mapping_manifest(
             "size": stat.st_size,
             "mtime_ns": stat.st_mtime_ns,
         }
-    manifest = tasks._alignment_mapping_manifest_path(data_dir=data_dir, shard=shard)
+    manifest = tasks._alignment_mapping_manifest_path(
+        data_dir=data_dir,
+        search_db=search_db,
+        shard=shard,
+    )
     manifest.parent.mkdir(exist_ok=True, parents=True)
     manifest.write_text(
         json.dumps(
             {
+                "search_db": search_db,
                 "shard": shard,
                 "alignment_chain_lookup": tasks._completed_alignment_chain_lookup(
                     data_dir
@@ -578,6 +708,115 @@ def test_make_batch_scores_threads_node_scratch_to_score_writer(tmp_path, monkey
             },
         )
     ]
+
+
+def test_make_batch_scores_reads_each_apo_alignment_shard_once(
+    tmp_path, monkeypatch
+) -> None:
+    load_calls = []
+    score_calls = []
+
+    class FakeScorer:
+        shape_score_threads = 1
+        entries = {}
+
+        def load_alignments(self, **kwargs):
+            load_calls.append(kwargs)
+            return pd.DataFrame(
+                {"qcov": [1.0, 1.0]},
+                index=pd.MultiIndex.from_tuples(
+                    [
+                        ("1abc", "3xyz", "A", "X", "foldseek"),
+                        ("2abc", "4xyz", "A", "Y", "foldseek"),
+                    ],
+                    names=[
+                        "query_entry",
+                        "target_entry",
+                        "query_chain_mapped",
+                        "target_chain_mapped",
+                        "source",
+                    ],
+                ),
+            )
+
+        def get_score_df(self, *args, **kwargs):
+            score_calls.append((args, kwargs))
+
+    fake_scorer = FakeScorer()
+    monkeypatch.setattr(
+        tasks.utils,
+        "get_scorer",
+        lambda **_kwargs: (fake_scorer, ["1abc", "2abc"], tmp_path / "batch"),
+    )
+    monkeypatch.setattr(
+        "plinder.core.scores.entries.load_entry_views",
+        lambda *, pdb_ids, data_dir, include_interfaces: (
+            {pdb_id: object() for pdb_id in pdb_ids}
+            if include_interfaces is False
+            else pytest.fail("linked-apo scoring must not load interface annotations")
+        ),
+    )
+
+    tasks.make_batch_scores(
+        data_dir=tmp_path,
+        pdb_ids=["1abc", "2abc"],
+        scorer_cfg=SimpleNamespace(sub_databases=["apo"]),
+        force_update=False,
+        scratch_dir=tmp_path / "scratch",
+        threads=2,
+    )
+
+    assert len(load_calls) == 1
+    assert load_calls[0]["query_entry_ids"] == {"1abc", "2abc"}
+    assert [call[0][1] for call in score_calls] == ["1abc", "2abc"]
+    assert all(len(call[1]["query_entry_alignments"]) == 1 for call in score_calls)
+    assert all(
+        set(call[1]["score_metrics"])
+        == {
+            "pocket_fident",
+            "protein_fident_weighted_sum",
+            "protein_fident_qcov_weighted_sum",
+            "protein_lddt_weighted_sum",
+        }
+        for call in score_calls
+    )
+
+
+def test_make_batch_scores_keeps_all_pred_metrics(tmp_path, monkeypatch) -> None:
+    score_calls = []
+
+    class FakeScorer:
+        shape_score_threads = 1
+        entries = {}
+
+        def load_alignments(self, **_kwargs):
+            return pd.DataFrame()
+
+        def get_score_df(self, *args, **kwargs):
+            score_calls.append((args, kwargs))
+
+    monkeypatch.setattr(
+        tasks.utils,
+        "get_scorer",
+        lambda **_kwargs: (FakeScorer(), ["1abc"], tmp_path / "batch"),
+    )
+    monkeypatch.setattr(
+        "plinder.core.scores.entries.load_entry_views",
+        lambda *, pdb_ids, data_dir, include_interfaces: {
+            pdb_id: object() for pdb_id in pdb_ids
+        },
+    )
+
+    tasks.make_batch_scores(
+        data_dir=tmp_path,
+        pdb_ids=["1abc"],
+        scorer_cfg=SimpleNamespace(sub_databases=["pred"]),
+        force_update=False,
+        scratch_dir=tmp_path / "scratch",
+    )
+
+    assert len(score_calls) == 1
+    assert score_calls[0][1]["score_metrics"] is None
 
 
 def test_make_entries_uses_shared_v3_batch(tmp_path, monkeypatch):
@@ -711,6 +950,7 @@ def test_entry_collation_tasks_use_shared_core(tmp_path, monkeypatch):
 def test_archive_scatter_pdb_ids_override_two_char_codes(tmp_path):
     for code in ("ab", "de"):
         (tmp_path / "raw_entries" / code).mkdir(parents=True)
+    (tmp_path / "raw_entries" / "de" / "2def.parquet").touch()
 
     chunks = tasks.scatter_make_canonical_ligand_archives(
         data_dir=tmp_path,
@@ -720,6 +960,19 @@ def test_archive_scatter_pdb_ids_override_two_char_codes(tmp_path):
     )
 
     assert chunks == [["de"]]
+
+
+def test_archive_scatter_drops_explicit_empty_raw_shards(tmp_path):
+    (tmp_path / "raw_entries" / "de").mkdir(parents=True)
+
+    chunks = tasks.scatter_make_canonical_ligand_archives(
+        data_dir=tmp_path,
+        batch_size=1,
+        two_char_codes=["de"],
+        pdb_ids=[],
+    )
+
+    assert chunks == []
 
 
 @pytest.mark.parametrize(
@@ -786,6 +1039,9 @@ def test_scoring_finalization_stage_order_and_partitions():
         "annotate_ligand_similarity"
     )
     assert tasks.STAGES.index("annotate_ligand_similarity") < tasks.STAGES.index(
+        "make_ligand_mmp_pairs"
+    )
+    assert tasks.STAGES.index("make_ligand_mmp_pairs") < tasks.STAGES.index(
         "make_sub_dbs"
     )
     assert tasks.STAGES.index("map_batch_alignments") < tasks.STAGES.index(
@@ -795,6 +1051,9 @@ def test_scoring_finalization_stage_order_and_partitions():
         "finalize_alignments"
     )
     assert tasks.STAGES.index("finalize_alignments") < tasks.STAGES.index(
+        "plan_score_batches"
+    )
+    assert tasks.STAGES.index("plan_score_batches") < tasks.STAGES.index(
         "plan_interface_scores"
     )
     assert tasks.STAGES.index("plan_interface_scores") < tasks.STAGES.index(
@@ -825,15 +1084,18 @@ def test_scoring_finalization_stage_order_and_partitions():
         "finalize_scores"
     )
     assert tasks.STAGES.index("finalize_scores") < tasks.STAGES.index(
-        "export_sucos_shape_pocket_qcov"
+        "export_ligand_similarity_scores"
     )
-    assert tasks.STAGES.index("export_sucos_shape_pocket_qcov") < tasks.STAGES.index(
-        "finalize_sucos_export"
+    assert tasks.STAGES.index("export_ligand_similarity_scores") < tasks.STAGES.index(
+        "finalize_ligand_similarity_scores"
     )
-    assert tasks.STAGES.index("finalize_sucos_export") < tasks.STAGES.index(
-        "collate_partitions"
+    assert tasks.STAGES.index("finalize_ligand_similarity_scores") < (
+        tasks.STAGES.index("collate_partitions")
     )
     assert tasks.STAGES.index("collate_partitions") < tasks.STAGES.index(
+        "make_linked_apo_structures"
+    )
+    assert tasks.STAGES.index("make_linked_apo_structures") < tasks.STAGES.index(
         "plan_clusters"
     )
     assert tasks.STAGES.index("plan_clusters") < tasks.STAGES.index(
@@ -849,9 +1111,9 @@ def test_scoring_finalization_stage_order_and_partitions():
         "merge_component_reductions"
     )
     assert tasks.STAGES.index("merge_component_reductions") < tasks.STAGES.index(
-        "make_communities"
+        "make_set_covers"
     )
-    assert tasks.STAGES.index("make_communities") < tasks.STAGES.index(
+    assert tasks.STAGES.index("make_set_covers") < tasks.STAGES.index(
         "make_directed_set_covers"
     )
     assert tasks.STAGES.index("make_directed_set_covers") < tasks.STAGES.index(
@@ -860,13 +1122,92 @@ def test_scoring_finalization_stage_order_and_partitions():
     assert tasks.STAGES.index("summarize_clusters") < tasks.STAGES.index(
         "finalize_index"
     )
-    assert tasks.STAGES.index("finalize_index") < tasks.STAGES.index("make_mmp_index")
+    assert tasks.STAGES[-1] == "finalize_index"
     partitions = tasks.scatter_collate_partitions()
     assert len(partitions) == 38
     assert ["0"] in partitions
     assert ["z"] in partitions
     assert ["apo"] in partitions
     assert ["pred"] in partitions
+
+
+def test_make_linked_apo_structures_publishes_compact_index(tmp_path):
+    index = tmp_path / "index"
+    score_dir = tmp_path / "scores/search_db=apo"
+    index.mkdir()
+    score_dir.mkdir(parents=True)
+    system_id = "1abc__1__1.A__1.L"
+    pd.DataFrame(
+        {
+            "system_id": [system_id, "2def__1__1.A__1.I"],
+            "ligand_id": ["1.L", "2def__1__1.I"],
+            "ligand_is_proper": [True, False],
+            "entry_pdb_id": ["1abc", "2def"],
+            "system_biounit_id": ["1", "1"],
+            "ligand_is_ion": [False, False],
+            "ligand_is_artifact": [False, False],
+            "ligand_neighboring_residues": [[], ["1.A_10_0_10"]],
+            "ligand_protein_chains_asym_id": [["1.A"], []],
+        }
+    ).to_parquet(index / "annotation_table.parquet", index=False)
+    pd.DataFrame(
+        {
+            "entry_pdb_id": ["2def"],
+            "chain_asym_id": ["A"],
+            "chain_auth_id": ["R"],
+            "chain_entity_id": ["1"],
+            "chain_receptor_type": ["protein"],
+            "chain_is_holo": [False],
+            "chain_is_ligand_like": [False],
+        }
+    ).to_parquet(index / "entry_chains.parquet", index=False)
+    pd.DataFrame(
+        {
+            "entry_pdb_id": ["2def", "2def", "2def"],
+            "biounit_id": ["1", "1", "2"],
+            "chain_instance": ["1.A", "1.I", "1.A"],
+            "chain_asym_id": ["A", "I", "A"],
+            "chain_role": ["receptor", "ligand", "receptor"],
+            "chain_num_contacting_ions": [0, 0, 0],
+            "chain_num_contacting_artifacts": [0, 0, 0],
+            "chain_num_contacting_other_ligands": [1, 0, 0],
+        }
+    ).to_parquet(index / "entry_biounit_chains.parquet", index=False)
+    pd.DataFrame({"entry_pdb_id": ["2def"], "entry_resolution": [1.8]}).to_parquet(
+        index / "entry_metadata.parquet", index=False
+    )
+    _write_empty_interface_index(index)
+    score_rows = [
+        {
+            "query_system": system_id,
+            "query_ligand_id": "1.L",
+            "target_system": "2def_A",
+            "metric": metric,
+            "similarity": 100,
+        }
+        for metric in [
+            "pocket_fident",
+            "protein_fident_weighted_sum",
+            "protein_fident_qcov_weighted_sum",
+            "protein_lddt_weighted_sum",
+        ]
+    ]
+    pd.DataFrame(score_rows).to_parquet(score_dir / "apo.parquet", index=False)
+
+    output = tasks.make_linked_apo_structures(
+        data_dir=tmp_path,
+        scratch_dir=tmp_path / "scratch",
+        threads=1,
+        memory_limit="1GB",
+    )
+
+    assert output == index / "linked_apo_structures.parquet"
+    links = pd.read_parquet(output)
+    assert links["reference_system_id"].tolist() == [system_id]
+    assert links["linked_structure_id"].tolist() == ["2def_A"]
+    assert links["source_biounit_id"].tolist() == ["2"]
+    candidates = pd.read_parquet(tmp_path / "manifests/apo_candidates.parquet")
+    assert candidates["source_num_contacting_other_ligands"].tolist() == [0]
 
 
 def test_directed_set_cover_scatter_skips_only_complete_outputs(tmp_path):
@@ -885,7 +1226,17 @@ def test_directed_set_cover_scatter_skips_only_complete_outputs(tmp_path):
         / "threshold=100.parquet"
     )
     output.parent.mkdir(parents=True)
-    output.touch()
+    pd.DataFrame(
+        {
+            "ligand_id": ["l1"],
+            "centroid_ligand_id": ["l1"],
+            "similarity_to_centroid": [100.0],
+            "label": ["c0"],
+            "metric": ["pocket_qcov"],
+            "threshold": [100],
+            "directed": [True],
+        }
+    ).to_parquet(output, index=False)
     work = tasks.scatter_make_directed_set_covers(
         data_dir=tmp_path,
         metrics=["pocket_qcov"],
@@ -893,9 +1244,30 @@ def test_directed_set_cover_scatter_skips_only_complete_outputs(tmp_path):
         stop_on_cluster=0,
         skip_existing=True,
     )
-    assert work == [[("pocket_qcov", 50)]]
+    assert work == [[("pocket_qcov", 100)], [("pocket_qcov", 50)]]
 
-    output.with_name("threshold=50.parquet").touch()
+    complete = pd.DataFrame(
+        {
+            "ligand_id": ["l1"],
+            "centroid_ligand_id": ["l1"],
+            "similarity_to_centroid": [100.0],
+            "coverage_count": pd.Series([1], dtype="Int32"),
+            "coverage_fraction": pd.Series([1.0], dtype="Float32"),
+            "representative_selection_order": pd.Series([0], dtype="Int32"),
+            "representative_selection_threshold": pd.Series([100], dtype="Int16"),
+            "representative_marginal_gain": pd.Series([1], dtype="Int32"),
+            "assignment_threshold": pd.Series([100], dtype="Int16"),
+            "label": ["c0"],
+            "metric": ["pocket_qcov"],
+            "threshold": [100],
+            "directed": [True],
+        }
+    )
+    complete.to_parquet(output, index=False)
+    complete.assign(threshold=50).to_parquet(
+        output.with_name("threshold=50.parquet"),
+        index=False,
+    )
     assert tasks.scatter_make_directed_set_covers(
         data_dir=tmp_path,
         metrics=["pocket_qcov"],
@@ -975,7 +1347,67 @@ def test_scatter_protein_scoring_uses_v3_chain_index(tmp_path) -> None:
     assert "interface_half_annotation" in plan
 
 
+def test_linked_apo_queries_use_only_proper_ligand_protein_receptors(
+    tmp_path,
+) -> None:
+    from plinder.data.pipeline.score import (
+        LINKED_APO_QUERY_MANIFEST_RELATIVE,
+        _query_batch,
+        plan_linked_apo_scoring,
+    )
+
+    index = tmp_path / "index"
+    index.mkdir()
+    pd.DataFrame(
+        {
+            "entry_pdb_id": ["1abc", "2def", "3ghi"],
+            "ligand_is_proper": [True, False, True],
+            "ligand_protein_chains_asym_id": [["1.A"], ["1.A"], ["1.N"]],
+        }
+    ).to_parquet(index / "annotation_table.parquet", index=False)
+    pd.DataFrame(
+        {
+            "entry_pdb_id": ["1abc", "1abc", "2def", "3ghi"],
+            "chain_asym_id": ["A", "B", "A", "N"],
+            "chain_auth_id": ["R", "I", "A", "N"],
+            "chain_receptor_type": ["protein", "protein", "protein", "dna"],
+        }
+    ).to_parquet(index / "entry_chains.parquet", index=False)
+
+    queries = tasks._linked_apo_query_chains(tmp_path)
+    assert queries.to_dict("records") == [
+        {
+            "entry_pdb_id": "1abc",
+            "chain_asym_id": "A",
+            "chain_auth_id": "R",
+        }
+    ]
+    assert tasks.scatter_protein_scoring(
+        data_dir=tmp_path,
+        batch_size=10,
+        two_char_codes=[],
+        pdb_ids=[],
+        search_dbs=["apo"],
+    ) == [["1abc"]]
+
+    report = plan_linked_apo_scoring(tmp_path, max_seqs=123)
+    assert report["query_count"] == 1
+    assert report["protein_chain_count"] == 1
+    assert report["max_seqs"] == 123
+    manifest = pd.read_parquet(tmp_path / LINKED_APO_QUERY_MANIFEST_RELATIVE)
+    assert manifest.to_dict("records") == [
+        {
+            "pdb_id": "1abc",
+            "shard": "ab",
+            "chain_asym_id": "A",
+            "chain_auth_id": "R",
+        }
+    ]
+    assert _query_batch(tmp_path, 0, 10, search_db="apo") == ["1abc"]
+
+
 def test_protein_scoring_plan_and_alignment_finalization(tmp_path, monkeypatch) -> None:
+    from plinder.core.scores.custom import resolve_search_database
     from plinder.data.pipeline.score import (
         _scoring_config_from_plan,
         finalize_alignment_artifacts,
@@ -989,6 +1421,7 @@ def test_protein_scoring_plan_and_alignment_finalization(tmp_path, monkeypatch) 
         {
             "entry_pdb_id": ["1abc", "1abc", "2def"],
             "chain_asym_id": ["A", "B", "N"],
+            "chain_auth_id": ["A", "B", "N"],
             "chain_receptor_type": [
                 "protein",
                 "protein",
@@ -1028,6 +1461,9 @@ def test_protein_scoring_plan_and_alignment_finalization(tmp_path, monkeypatch) 
         )
         for database in {search_target, conversion_target}:
             (backend / f"{database}.dbtype").touch()
+        (backend / f"{search_target}.idx.dbtype").touch()
+        if alignment_type == "mmseqs":
+            (backend / "cluster_alignments.dbtype").touch()
         (backend / "exact_cluster.json").write_text(
             json.dumps(
                 {
@@ -1035,6 +1471,8 @@ def test_protein_scoring_plan_and_alignment_finalization(tmp_path, monkeypatch) 
                     "identity": 1.0,
                     "coverage": 1.0,
                     "coverage_mode": 0,
+                    "portable": True,
+                    "compressed_search_target": False,
                     "source_index": {
                         "name": source_index.name,
                         "size": source_index.stat().st_size,
@@ -1042,6 +1480,11 @@ def test_protein_scoring_plan_and_alignment_finalization(tmp_path, monkeypatch) 
                     },
                     "search_target": search_target,
                     "conversion_target": conversion_target,
+                    **(
+                        {"cluster_alignments": "cluster_alignments"}
+                        if alignment_type == "mmseqs"
+                        else {}
+                    ),
                 }
             )
         )
@@ -1049,6 +1492,11 @@ def test_protein_scoring_plan_and_alignment_finalization(tmp_path, monkeypatch) 
         output.mkdir()
         (output / "1abc.parquet").touch()
         (output / "4qp3.tmp.parquet").touch()
+        # Raw search output is not part of the published database bundle and
+        # must not be traversed by its portability check.
+        external = tmp_path / f"{alignment_type}_raw_alignment"
+        external.touch()
+        (output / "external-link").symlink_to(external)
         release = (
             tmp_path / "alignments/search_db=holo" / f"alignment_type={alignment_type}"
         )
@@ -1087,6 +1535,15 @@ def test_protein_scoring_plan_and_alignment_finalization(tmp_path, monkeypatch) 
     assert report["target_clustering"]["expand_to_chain_level"] is True
     assert report["skipped_queries"] == {}
     assert (tmp_path / "alignments/manifest.json").is_file()
+    assert (tmp_path / "search_databases/manifest.json").is_file()
+    assert (tmp_path / "search_databases/holo_foldseek/clustered.dbtype").is_file()
+    assert (
+        tmp_path / "search_databases/holo_mmseqs/cluster_alignments.dbtype"
+    ).is_file()
+    assert not (tmp_path / "search_databases/holo_foldseek/aln").exists()
+    for alignment_type in ["foldseek", "mmseqs"]:
+        bundle = resolve_search_database(alignment_type, data_dir=tmp_path)
+        assert bundle.root == (tmp_path / "search_databases" / f"holo_{alignment_type}")
 
     skipped = {
         "1abc": {
@@ -1150,6 +1607,7 @@ def test_protein_scoring_plan_groups_queries_by_two_character_shard(tmp_path):
 
 def test_score_work_plan_balances_expensive_queries_into_fixed_batches(tmp_path):
     from plinder.data.pipeline.score import (
+        PLAN_RELATIVE,
         SCORE_WORK_RELATIVE,
         _score_batch,
         plan_protein_scoring,
@@ -1194,6 +1652,10 @@ def test_score_work_plan_balances_expensive_queries_into_fixed_batches(tmp_path)
         index / "annotation_table.parquet", index=False
     )
     plan_protein_scoring(tmp_path)
+    chain_path = index / "entry_chains.parquet"
+    chains = pd.read_parquet(chain_path)
+    chains["repair_note"] = "patched after search"
+    chains.to_parquet(chain_path, index=False)
     release = (
         tmp_path / "alignments/search_db=holo/alignment_type=foldseek/shard=aa.parquet"
     )
@@ -1205,6 +1667,16 @@ def test_score_work_plan_balances_expensive_queries_into_fixed_batches(tmp_path)
         }
     ).to_parquet(release, index=False)
 
+    with pytest.raises(ValueError, match="entry chain index changed"):
+        plan_score_batches(
+            tmp_path,
+            batch_size=2,
+            threads=1,
+            scratch_dir=tmp_path / "scratch",
+            max_query_protein_chains=5,
+            max_query_proper_ligand_chains=5,
+        )
+
     report = plan_score_batches(
         tmp_path,
         batch_size=2,
@@ -1212,9 +1684,13 @@ def test_score_work_plan_balances_expensive_queries_into_fixed_batches(tmp_path)
         scratch_dir=tmp_path / "scratch",
         max_query_protein_chains=5,
         max_query_proper_ligand_chains=5,
+        reuse_mapped_alignments=True,
     )
 
     assert report["batch_count"] == 2
+    assert json.loads((tmp_path / PLAN_RELATIVE).read_text())[
+        "score_reused_mapped_alignments"
+    ]
     work = pd.read_parquet(tmp_path / SCORE_WORK_RELATIVE)
     assert set(work["pdb_id"]) == set(pdb_ids[:4])
     assert work.groupby("score_batch_index").size().tolist() == [2, 2]
@@ -1450,9 +1926,22 @@ def test_score_repair_plans_full_and_target_only_queries(
             "target_entry": ["2def", "2def", "4jkl", "8nop", "2def"],
         }
     ).to_parquet(alignment, index=False)
-    inactive_score = tmp_path / "dbs/subdbs/search_db=holo/4jkl.parquet"
-    inactive_score.parent.mkdir(parents=True)
-    inactive_score.touch()
+    target_score = tmp_path / "dbs/subdbs/search_db=holo/1abc.parquet"
+    target_score.parent.mkdir(parents=True)
+    target_score.touch()
+    target_candidates = (
+        tmp_path / "scores/ligand_3d_candidates/search_db=holo/shard=ab/1abc.parquet"
+    )
+    target_ligand_pair_scores = (
+        tmp_path / "scores/ligand_pair_scores/search_db=holo/shard=ab/1abc.parquet"
+    )
+    target_candidates.parent.mkdir(parents=True)
+    target_ligand_pair_scores.parent.mkdir(parents=True)
+    target_candidates.touch()
+    target_ligand_pair_scores.touch()
+    packed_candidates = tmp_path / "scores/ligand_3d_candidate_shards/shard=jk.parquet"
+    packed_candidates.parent.mkdir(parents=True)
+    pd.DataFrame({"query_entry": ["4jkl"]}).to_parquet(packed_candidates, index=False)
     affected = tmp_path / "affected.txt"
     affected.write_text("2def\n4jkl\n")
     additional_full = tmp_path / "additional_full.txt"
@@ -1466,6 +1955,7 @@ def test_score_repair_plans_full_and_target_only_queries(
     )
 
     assert report["full_query_count"] == 2
+    assert report["cache_missing_full_query_count"] == 0
     assert report["additional_full_query_count"] == 1
     assert report["ignored_additional_full_query_count"] == 1
     assert report["dropped_query_count"] == 1
@@ -1490,6 +1980,70 @@ def test_score_repair_plans_full_and_target_only_queries(
     assert repair_by_query["3ghi"]["repair_mode"] == "full"
     assert repair_by_query["4jkl"]["repair_mode"] == "drop"
     assert list(repair_by_query["1abc"]["target_pdb_ids"]) == ["2def", "4jkl"]
+
+
+def test_score_repair_promotes_target_query_when_cache_is_missing(
+    tmp_path: Path,
+) -> None:
+    from plinder.data.pipeline.score import (
+        MANIFEST_RELATIVE,
+        PLAN_RELATIVE,
+        _source_signature,
+        plan_score_repair,
+    )
+
+    query_manifest = tmp_path / MANIFEST_RELATIVE
+    query_manifest.parent.mkdir(parents=True)
+    pd.DataFrame({"pdb_id": ["1abc", "2def"]}).to_parquet(query_manifest, index=False)
+    pd.DataFrame({"pdb_id": ["1abc", "2def"], "estimated_work": [1, 1]}).to_parquet(
+        tmp_path / "manifests/protein_scoring_work.parquet", index=False
+    )
+    (tmp_path / PLAN_RELATIVE).write_text(
+        json.dumps(
+            {
+                "manifest": _source_signature(query_manifest),
+                "score_max_query_protein_chains": 5,
+                "score_max_query_proper_ligand_chains": 5,
+            }
+        )
+    )
+    index = tmp_path / "index"
+    index.mkdir()
+    pd.DataFrame(
+        {
+            "entry_pdb_id": ["1abc", "2def"],
+            "system_id": ["1abc__1", "2def__1"],
+            "ligand_id": ["1abc__1__1.L", "2def__1__1.L"],
+            "system_type": ["holo", "holo"],
+            "system_protein_chains_asym_id": [["1.A"], ["1.A"]],
+            "ligand_is_proper": [True, True],
+        }
+    ).to_parquet(index / "annotation_table.parquet", index=False)
+    pd.DataFrame(
+        {
+            "entry_pdb_id": ["1abc", "2def"],
+            "chain_asym_id": ["A", "A"],
+            "chain_receptor_type": ["protein", "protein"],
+        }
+    ).to_parquet(index / "entry_chains.parquet", index=False)
+    alignment = (
+        tmp_path / "alignments/search_db=holo/alignment_type=foldseek/shard=ab.parquet"
+    )
+    alignment.parent.mkdir(parents=True)
+    pd.DataFrame({"query_entry": ["1abc"], "target_entry": ["2def"]}).to_parquet(
+        alignment, index=False
+    )
+    affected = tmp_path / "affected.txt"
+    affected.write_text("2def\n")
+
+    report = plan_score_repair(tmp_path, affected_manifest=affected)
+
+    assert report["full_query_count"] == 2
+    assert report["cache_missing_full_query_count"] == 1
+    assert report["target_only_query_count"] == 0
+    plan = pd.read_parquet(tmp_path / "manifests/score_repair.parquet")
+    assert set(plan["pdb_id"]) == {"1abc", "2def"}
+    assert set(plan["repair_mode"]) == {"full"}
 
 
 def test_bounded_score_repair_reverses_only_existing_target_candidates(
@@ -1548,10 +2102,15 @@ def test_bounded_score_repair_reverses_only_existing_target_candidates(
     candidate = (
         tmp_path / "scores/ligand_3d_candidates/search_db=holo/shard=de/2def.parquet"
     )
+    ligand_pair_scores = (
+        tmp_path / "scores/ligand_pair_scores/search_db=holo/shard=de/2def.parquet"
+    )
     score.parent.mkdir(parents=True)
     candidate.parent.mkdir(parents=True)
+    ligand_pair_scores.parent.mkdir(parents=True)
     score.touch()
     candidate.touch()
+    ligand_pair_scores.touch()
     assert published_scoring_query_ids(tmp_path) == {"1abc", "2def", "5mno"}
     invalid = tmp_path / "invalid-bounded.txt"
     invalid.write_text("3ghi\n")
@@ -1633,10 +2192,15 @@ def test_repair_batch_scores_drops_queries_that_are_no_longer_eligible(
     candidate = (
         tmp_path / "scores/ligand_3d_candidates/search_db=holo/shard=ab/1abc.parquet"
     )
+    ligand_pair_scores = (
+        tmp_path / "scores/ligand_pair_scores/search_db=holo/shard=ab/1abc.parquet"
+    )
     score.parent.mkdir(parents=True)
     candidate.parent.mkdir(parents=True)
+    ligand_pair_scores.parent.mkdir(parents=True)
     score.touch()
     candidate.touch()
+    ligand_pair_scores.touch()
 
     monkeypatch.setattr(
         tasks.utils,
@@ -1653,6 +2217,7 @@ def test_repair_batch_scores_drops_queries_that_are_no_longer_eligible(
 
     assert not score.exists()
     assert not candidate.exists()
+    assert not ligand_pair_scores.exists()
 
 
 def test_repair_target_remainders_drops_stalled_query_and_resumes_followers(
@@ -1669,14 +2234,19 @@ def test_repair_target_remainders_drops_stalled_query_and_resumes_followers(
             "repair_batch_index": [0, 0, 0],
         }
     ).to_parquet(repair_manifest, index=False)
-    score, candidate = score_pipeline._score_repair_query_paths(tmp_path, "1abc")
+    score, candidate, ligand_pair_scores = score_pipeline._score_repair_query_paths(
+        tmp_path, "1abc"
+    )
     score.parent.mkdir(parents=True)
     candidate.parent.mkdir(parents=True)
+    ligand_pair_scores.parent.mkdir(parents=True)
     score.touch()
     candidate.touch()
+    ligand_pair_scores.touch()
     completed_ns = repair_manifest.stat().st_mtime_ns + 1_000_000_000
     os.utime(score, ns=(completed_ns, completed_ns))
     os.utime(candidate, ns=(completed_ns, completed_ns))
+    os.utime(ligand_pair_scores, ns=(completed_ns, completed_ns))
     captured: list[dict[str, object]] = []
 
     def fake_repair_batch_scores(**kwargs) -> None:
@@ -1735,11 +2305,15 @@ def test_repair_target_remainders_removes_planned_drops_without_marking_them(
         }
     ).to_parquet(repair_manifest, index=False)
     for pdb_id in ["1abc", "2def"]:
-        score, candidate = score_pipeline._score_repair_query_paths(tmp_path, pdb_id)
+        score, candidate, ligand_pair_scores = score_pipeline._score_repair_query_paths(
+            tmp_path, pdb_id
+        )
         score.parent.mkdir(parents=True, exist_ok=True)
         candidate.parent.mkdir(parents=True, exist_ok=True)
+        ligand_pair_scores.parent.mkdir(parents=True, exist_ok=True)
         score.touch()
         candidate.touch()
+        ligand_pair_scores.touch()
     completed_ns = repair_manifest.stat().st_mtime_ns + 1_000_000_000
     for path in score_pipeline._score_repair_query_paths(tmp_path, "2def"):
         os.utime(path, ns=(completed_ns, completed_ns))
@@ -1783,16 +2357,21 @@ def test_finalize_score_repair_records_marked_targets_and_incomplete_full_querie
             "repair_mode": ["targets", "targets", "full"],
         }
     ).to_parquet(repair_manifest, index=False)
-    current_score, current_candidate = score_pipeline._score_repair_query_paths(
-        tmp_path, "1abc"
-    )
+    (
+        current_score,
+        current_candidate,
+        current_ligand_pair_scores,
+    ) = score_pipeline._score_repair_query_paths(tmp_path, "1abc")
     current_score.parent.mkdir(parents=True)
     current_candidate.parent.mkdir(parents=True)
+    current_ligand_pair_scores.parent.mkdir(parents=True)
     current_score.touch()
     current_candidate.touch()
+    current_ligand_pair_scores.touch()
     completed_ns = repair_manifest.stat().st_mtime_ns + 1_000_000_000
     os.utime(current_score, ns=(completed_ns, completed_ns))
     os.utime(current_candidate, ns=(completed_ns, completed_ns))
+    os.utime(current_ligand_pair_scores, ns=(completed_ns, completed_ns))
     marker_dir = score_pipeline._score_repair_marker_dir(tmp_path, repair_manifest)
     marker = marker_dir / "2def.json"
     marker.parent.mkdir(parents=True)
@@ -2173,12 +2752,18 @@ def test_ligand_3d_plan_deduplicates_positive_pocket_candidates(tmp_path) -> Non
         ),
         candidate_dir / "1abc.parquet",
     )
+    _write_ligand_pair_scores(
+        tmp_path,
+        "1abc",
+        pd.read_parquet(candidate_dir / "1abc.parquet").to_dict("records"),
+    )
     target_candidate_dir = candidate_dir.parent / "shard=de"
     target_candidate_dir.mkdir()
     pq.write_table(
         pa.Table.from_pylist([], schema=schemas.LIGAND_3D_CANDIDATE_SCHEMA),
         target_candidate_dir / "2def.parquet",
     )
+    _write_ligand_pair_scores(tmp_path, "2def", [])
     tasks.collate_ligand_3d_candidates(
         data_dir=tmp_path,
         shards=["ab", "de"],
@@ -2294,6 +2879,88 @@ def test_ligand_3d_plan_deduplicates_positive_pocket_candidates(tmp_path) -> Non
     assert set(work["estimated_work"]) == {200, 300}
     assert set(work["target_entry"]) == {"2def", "3ghi"}
     assert len(_ligand_3d_batch(tmp_path, 0, 2)) == 2
+
+
+def test_candidate_repair_patches_packed_shard_without_other_query_caches(
+    tmp_path: Path,
+) -> None:
+    def candidate(query_entry: str, target_entry: str, pocket_qcov: float) -> dict:
+        return {
+            "query_system": f"{query_entry}__1",
+            "query_ligand_id": f"{query_entry}__1__1.L",
+            "query_entry": query_entry,
+            "query_ligand_asym_id": "L",
+            "target_system": f"{target_entry}__1",
+            "target_ligand_id": f"{target_entry}__1__1.X",
+            "target_entry": target_entry,
+            "target_ligand_asym_id": "X",
+            "protein_mapping": "1.A:1.B",
+            "protein_mapper": "foldseek",
+            "pocket_qcov": pocket_qcov,
+        }
+
+    packed = tmp_path / "scores/ligand_3d_candidate_shards/shard=ab.parquet"
+    packed.parent.mkdir(parents=True)
+    pq.write_table(
+        pa.Table.from_pylist(
+            [candidate("1abc", "2old", 0.4), candidate("9abc", "8keep", 0.6)],
+            schema=schemas.LIGAND_3D_CANDIDATE_SCHEMA,
+        ),
+        packed,
+    )
+    packed_ligand_pairs = tmp_path / "scores/ligand_pair_score_shards/shard=ab.parquet"
+    packed_ligand_pairs.parent.mkdir(parents=True)
+    packed_candidates = pd.read_parquet(packed).to_dict("records")
+    temporary_pair_path = _write_ligand_pair_scores(tmp_path, "1abc", packed_candidates)
+    copyfile(temporary_pair_path, packed_ligand_pairs)
+    replacement = (
+        tmp_path / "scores/ligand_3d_candidates/search_db=holo/shard=ab/1abc.parquet"
+    )
+    replacement.parent.mkdir(parents=True)
+    pq.write_table(
+        pa.Table.from_pylist(
+            [candidate("1abc", "2new", 0.8)],
+            schema=schemas.LIGAND_3D_CANDIDATE_SCHEMA,
+        ),
+        replacement,
+    )
+    _write_ligand_pair_scores(
+        tmp_path,
+        "1abc",
+        pd.read_parquet(replacement).to_dict("records"),
+    )
+
+    tasks.collate_ligand_3d_candidates(
+        data_dir=tmp_path,
+        shards=["ab"],
+        scratch_dir=tmp_path / "scratch",
+        threads=1,
+        replacement_query_ids={"1abc"},
+        source_query_ids={"1abc"},
+    )
+
+    repaired = pd.read_parquet(packed)
+    assert set(zip(repaired["query_entry"], repaired["target_entry"])) == {
+        ("1abc", "2new"),
+        ("9abc", "8keep"),
+    }
+    repaired_ligand_pairs = pd.read_parquet(packed_ligand_pairs)
+    assert set(
+        zip(
+            repaired_ligand_pairs["query_entry"],
+            repaired_ligand_pairs["target_entry"],
+        )
+    ) == {
+        ("1abc", "2new"),
+        ("9abc", "8keep"),
+    }
+    pairs = pd.read_parquet(
+        tmp_path / "scores/ligand_3d_pair_candidate_shards/shard=ab.parquet"
+    )
+    assert set(zip(pairs["query_entry"], pairs["target_entry"])) == {
+        ("1abc", "2new"),
+        ("9abc", "8keep"),
+    }
 
 
 def test_make_ligand_3d_scores_writes_and_reuses_complete_batch(
@@ -2455,6 +3122,7 @@ def test_finalize_ligand_3d_scores_validates_pair_and_packed_shards(
         pa.Table.from_pylist([candidate], schema=schemas.LIGAND_3D_CANDIDATE_SCHEMA),
         candidate_dir / "1abc.parquet",
     )
+    _write_ligand_pair_scores(tmp_path, "1abc", [candidate])
     tasks.collate_ligand_3d_candidates(
         data_dir=tmp_path,
         shards=["ab"],
@@ -2499,6 +3167,8 @@ def test_finalize_ligand_3d_scores_validates_pair_and_packed_shards(
         "pair_batch_count": 1,
         "query_shard_count": 1,
         "query_count": 1,
+        "ligand_pair_score_shard_count": 1,
+        "ligand_pair_score_rows": 1,
     }
     assert (tmp_path / "scores/ligand_3d_pair_validation.json").is_file()
 
@@ -2510,6 +3180,11 @@ def test_finalize_ligand_3d_scores_validates_pair_and_packed_shards(
         lambda: pytest.fail("signature-matched pair validation was not reused"),
     )
     assert finalize_ligand_3d_artifacts(tmp_path) == report
+
+    ligand_pair_score = tmp_path / "scores/ligand_pair_score_shards/shard=ab.parquet"
+    ligand_pair_score.unlink()
+    with pytest.raises(FileNotFoundError, match="ligand_pair_score_shards"):
+        finalize_ligand_3d_artifacts(tmp_path)
 
 
 def test_finalize_score_repair_accepts_refreshed_candidate_shards(tmp_path) -> None:
@@ -2539,6 +3214,29 @@ def test_finalize_score_repair_accepts_refreshed_candidate_shards(tmp_path) -> N
         pa.Table.from_pylist([candidate], schema=schemas.LIGAND_3D_CANDIDATE_SCHEMA),
         candidate_path,
     )
+    ligand_pair_score_path = (
+        tmp_path / "scores/ligand_pair_score_shards/shard=ab.parquet"
+    )
+    ligand_pair_score_path.parent.mkdir(parents=True)
+    ligand_pair_score = {
+        key: candidate[key]
+        for key in [
+            "query_system",
+            "query_ligand_id",
+            "query_entry",
+            "query_ligand_asym_id",
+            "target_system",
+            "target_ligand_id",
+            "target_entry",
+            "target_ligand_asym_id",
+        ]
+    } | {"pocket_qcov": 50, "pocket_fident_qcov": 40, "pli_qcov": 30}
+    pq.write_table(
+        pa.Table.from_pylist(
+            [ligand_pair_score], schema=schemas.LIGAND_PAIR_SCORE_SCHEMA
+        ),
+        ligand_pair_score_path,
+    )
     pair_candidate_path = (
         tmp_path / "scores/ligand_3d_pair_candidate_shards/shard=ab.parquet"
     )
@@ -2560,6 +3258,7 @@ def test_finalize_score_repair_accepts_refreshed_candidate_shards(tmp_path) -> N
         pair_candidate_path,
     )
     candidate_stat = candidate_path.stat()
+    ligand_pair_score_stat = ligand_pair_score_path.stat()
     pair_candidate_stat = pair_candidate_path.stat()
     candidate_path.with_suffix(".json").write_text(
         json.dumps(
@@ -2576,6 +3275,12 @@ def test_finalize_score_repair_accepts_refreshed_candidate_shards(tmp_path) -> N
                     "path": str(pair_candidate_path.resolve()),
                     "size": pair_candidate_stat.st_size,
                     "mtime_ns": pair_candidate_stat.st_mtime_ns,
+                    "rows": 1,
+                },
+                "ligand_pair_output": {
+                    "path": str(ligand_pair_score_path.resolve()),
+                    "size": ligand_pair_score_stat.st_size,
+                    "mtime_ns": ligand_pair_score_stat.st_mtime_ns,
                     "rows": 1,
                 },
             }
@@ -2614,6 +3319,7 @@ def test_finalize_score_repair_accepts_refreshed_candidate_shards(tmp_path) -> N
     assert report["status"] == "complete"
     assert report["shard_count"] == 1
     assert report["candidate_rows"] == 1
+    assert report["ligand_pair_score_rows"] == 1
     assert report["pair_rows"] == 1
     assert (tmp_path / "scores/score_repair_manifest.json").is_file()
 
@@ -2737,6 +3443,112 @@ def test_merge_ligand_3d_scores_uses_full_precision_pocket_coverage(tmp_path) ->
         "sucos_shape_pocket_qcov": 31,
     }
     assert pd.read_parquet(score_path)["metric"].tolist() == ["pocket_qcov"]
+
+
+def test_score_repair_patches_packed_shard_without_other_query_caches(
+    tmp_path: Path,
+) -> None:
+    def candidate(query_entry: str, target_entry: str, pocket_qcov: float) -> dict:
+        return {
+            "query_system": f"{query_entry}__1",
+            "query_ligand_id": f"{query_entry}__1__1.L",
+            "query_entry": query_entry,
+            "query_ligand_asym_id": "L",
+            "target_system": f"{target_entry}__1",
+            "target_ligand_id": f"{target_entry}__1__1.X",
+            "target_entry": target_entry,
+            "target_ligand_asym_id": "X",
+            "protein_mapping": "1.A:1.B",
+            "protein_mapper": "foldseek",
+            "pocket_qcov": pocket_qcov,
+        }
+
+    candidate_path = tmp_path / "scores/ligand_3d_candidate_shards/shard=ab.parquet"
+    candidate_path.parent.mkdir(parents=True)
+    candidates = [candidate("1abc", "2new", 0.75), candidate("9abc", "8keep", 0.6)]
+    pq.write_table(
+        pa.Table.from_pylist(candidates, schema=schemas.LIGAND_3D_CANDIDATE_SCHEMA),
+        candidate_path,
+    )
+    pair_path = tmp_path / "scores/ligand_3d_by_query/ab.parquet"
+    pair_path.parent.mkdir(parents=True)
+    pq.write_table(
+        pa.Table.from_pylist(
+            [
+                {
+                    "query_entry": row["query_entry"],
+                    "query_ligand_asym_id": "L",
+                    "target_entry": row["target_entry"],
+                    "target_ligand_asym_id": "X",
+                    "shape": 0.8,
+                    "color": 0.6,
+                    "sucos_shape": 0.5,
+                }
+                for row in candidates
+            ],
+            schema=schemas.LIGAND_3D_SCORE_SCHEMA,
+        ),
+        pair_path,
+    )
+
+    def score(query_entry: str, metric: str, similarity: int) -> dict:
+        return {
+            "query_system": f"{query_entry}__1",
+            "query_ligand_id": f"{query_entry}__1__1.L",
+            "target_system": "2new__1",
+            "target_ligand_id": "2new__1__1.X",
+            "protein_mapping": "1.A:1.B",
+            "mapping": "1.A:1.B",
+            "protein_mapper": "foldseek",
+            "source": "foldseek",
+            "metric": metric,
+            "similarity": similarity,
+        }
+
+    replacement = tmp_path / "dbs/subdbs/search_db=holo/1abc.parquet"
+    replacement.parent.mkdir(parents=True)
+    pd.DataFrame([score("1abc", "pocket_qcov", 88)]).to_parquet(
+        replacement, index=False, schema=schemas.PROTEIN_SIMILARITY_SCHEMA
+    )
+    packed = tmp_path / "scores/search_db=holo/ab.parquet"
+    packed.parent.mkdir(parents=True)
+    pd.DataFrame(
+        [
+            score("1abc", "pocket_qcov", 11),
+            score("1abc", "shape", 12),
+            score("9abc", "pocket_qcov", 55),
+            score("9abc", "color", 42),
+            score("9abc", "protein_fident_weighted_sum", 91),
+        ]
+    ).to_parquet(packed, index=False, schema=schemas.PROTEIN_SIMILARITY_SCHEMA)
+    work = tmp_path / "manifests/protein_scoring_work.parquet"
+    work.parent.mkdir(parents=True)
+    pd.DataFrame({"pdb_id": ["1abc", "9abc"]}).to_parquet(work, index=False)
+
+    tasks.merge_ligand_3d_scores(
+        data_dir=tmp_path,
+        shards=["ab"],
+        scorer_cfg=SimpleNamespace(minimum_threshold=0.3, minimum_thresholds={}),
+        force_update=True,
+        scratch_dir=tmp_path / "scratch",
+        threads=1,
+        reuse_cached_pairs=True,
+        replacement_query_ids={"1abc"},
+    )
+
+    repaired = pd.read_parquet(packed)
+    preserved = repaired[repaired["query_system"].eq("9abc__1")]
+    assert dict(zip(preserved["metric"], preserved["similarity"])) == {
+        "pocket_qcov": 55,
+        "color": 42,
+    }
+    replacement_rows = repaired[repaired["query_system"].eq("1abc__1")]
+    replacement_scores = dict(
+        zip(replacement_rows["metric"], replacement_rows["similarity"])
+    )
+    assert replacement_scores["pocket_qcov"] == 88
+    assert replacement_scores["shape"] == 80
+    assert 11 not in replacement_rows["similarity"].tolist()
 
 
 def test_merge_ligand_3d_scores_fails_when_query_shard_is_not_ready(
@@ -2952,7 +3764,7 @@ def test_get_scorer_uses_configured_search_limits(tmp_path) -> None:
     assert scorer.get_config("holo", "mmseqs").min_seq_id == 0.2
     assert scorer.get_config("apo", "foldseek").min_seq_id == 0.9
     assert scorer.get_config("pred", "mmseqs").min_seq_id == 0.9
-    assert scorer.get_config("apo", "foldseek").coverage == 0.9
+    assert scorer.get_config("apo", "foldseek").coverage == 0.8
     assert scorer.get_config("pred", "mmseqs").coverage == 0.9
 
     from plinder.data.pipeline.score import _scoring_config
@@ -2960,6 +3772,15 @@ def test_get_scorer_uses_configured_search_limits(tmp_path) -> None:
     v3_scoring = _scoring_config(tmp_path, 10_000)
     assert v3_scoring.foldseek.min_seq_id == 0.0
     assert v3_scoring.mmseqs.min_seq_id == 0.0
+    apo_scoring = _scoring_config(
+        tmp_path,
+        10_000,
+        sub_databases=["apo"],
+    )
+    assert apo_scoring.scorer.sub_databases == ["apo"]
+    assert apo_scoring.scorer.minimum_thresholds == {
+        "protein_lddt_weighted_sum": pytest.approx(0.2)
+    }
 
 
 def test_run_batch_searches_skips_completed_backend_queries(
@@ -2988,11 +3809,7 @@ def test_run_batch_searches_skips_completed_backend_queries(
     monkeypatch.setattr(
         tasks.databases,
         "database_identifiers",
-        lambda path: (
-            {"pdb_00002def_A"}
-            if path.name.endswith("foldseek")
-            else {"1abc_A", "2def_A"}
-        ),
+        lambda _path: pytest.fail("query eligibility must not use target IDs"),
     )
     cfg = SimpleNamespace(sub_databases=["holo"])
 
@@ -3017,6 +3834,50 @@ def test_run_batch_searches_skips_completed_backend_queries(
     ]
 
 
+def test_run_batch_searches_uses_compact_linked_apo_query_chains(
+    tmp_path, monkeypatch
+) -> None:
+    calls = []
+    scorer_calls = []
+
+    class FakeScorer:
+        def run_alignments(self, **kwargs):
+            calls.append(kwargs)
+            output = tmp_path / "dbs/subdbs/apo_mmseqs/aln"
+            output.mkdir(parents=True, exist_ok=True)
+            for pdb_id in kwargs["entry_ids"]:
+                (output / f"{pdb_id}.parquet").touch()
+
+    def fake_get_scorer(**kwargs):
+        scorer_calls.append(kwargs)
+        scratch = tmp_path / "scratch" / "batch"
+        scratch.mkdir(parents=True)
+        return FakeScorer(), kwargs["pdb_ids"], scratch
+
+    monkeypatch.setattr(
+        tasks,
+        "_linked_apo_query_auth_ids",
+        lambda _data_dir, _pdb_ids: {"1abc": {"R", "S"}},
+    )
+    monkeypatch.setattr(tasks.utils, "get_scorer", fake_get_scorer)
+
+    tasks.run_batch_searches(
+        data_dir=tmp_path,
+        pdb_ids=["1abc", "2def"],
+        scorer_cfg=SimpleNamespace(sub_databases=["apo"]),
+        foldseek_cfg=SimpleNamespace(),
+        mmseqs_cfg=SimpleNamespace(),
+        cpu=4,
+        scratch_dir=tmp_path / "node-scratch",
+        alignment_types=["mmseqs"],
+    )
+
+    assert scorer_calls[0]["load_entries"] is False
+    assert scorer_calls[0]["pdb_ids"] == ["1abc"]
+    assert calls[0]["entry_ids"] == ["1abc"]
+    assert calls[0]["query_chain_auth_ids"] == {"1abc": {"R", "S"}}
+
+
 def test_run_batch_searches_rejects_missing_eligible_output(tmp_path, monkeypatch):
     class FakeScorer:
         def run_alignments(self, **_kwargs):
@@ -3035,7 +3896,7 @@ def test_run_batch_searches_rejects_missing_eligible_output(tmp_path, monkeypatc
         lambda _path: {"1abc_A"},
     )
 
-    with pytest.raises(RuntimeError, match="no output.*1 eligible"):
+    with pytest.raises(RuntimeError, match="no output.*1 query"):
         tasks.run_batch_searches(
             data_dir=tmp_path,
             pdb_ids=["1abc"],
@@ -3215,8 +4076,90 @@ def test_mapping_scatter_requires_current_shard_manifest(tmp_path):
     ) == [[]]
 
 
-def test_map_batch_alignments_publishes_atomic_shard(tmp_path, monkeypatch):
-    raw_dir = tmp_path / "dbs/subdbs/holo_foldseek/aln"
+def test_missing_score_scatter_includes_mapped_apo_queries(tmp_path) -> None:
+    scorer_cfg = SimpleNamespace(
+        minimum_threshold=0.3,
+        minimum_thresholds={"protein_lddt_weighted_sum": 0.2},
+    )
+    raw = tmp_path / "dbs/subdbs/apo_foldseek/aln/1abc.parquet"
+    raw.parent.mkdir(parents=True)
+    pd.DataFrame({"query": ["1abc_A"]}).to_parquet(raw, index=False)
+    release = tasks._alignment_release_path(
+        data_dir=tmp_path,
+        search_db="apo",
+        alignment_type="foldseek",
+        shard="ab",
+    )
+    release.parent.mkdir(parents=True)
+    pq.write_table(
+        pa.Table.from_pylist(
+            [], schema=schemas.mapped_alignment_schema(alignment_type="foldseek")
+        ),
+        release,
+    )
+    _write_alignment_mapping_manifest(
+        tmp_path,
+        "ab",
+        search_db="apo",
+    )
+
+    assert tasks.scatter_missing_scores(
+        data_dir=tmp_path,
+        batch_size=10,
+        scorer_cfg=scorer_cfg,
+        search_dbs=["apo"],
+    ) == [["1abc"]]
+
+    score = tmp_path / "dbs/subdbs/search_db=apo/1abc.parquet"
+    score.parent.mkdir(parents=True)
+    score.touch()
+    assert tasks.scatter_missing_scores(
+        data_dir=tmp_path,
+        batch_size=10,
+        scorer_cfg=scorer_cfg,
+        search_dbs=["apo"],
+    ) == [["1abc"]]
+
+    pq.write_table(
+        pa.Table.from_batches([], schema=schemas.PROTEIN_SIMILARITY_SCHEMA),
+        score,
+    )
+    assert tasks.scatter_missing_scores(
+        data_dir=tmp_path,
+        batch_size=10,
+        scorer_cfg=scorer_cfg,
+        search_dbs=["apo"],
+    ) == [["1abc"]]
+
+    current_schema = schemas.PROTEIN_SIMILARITY_SCHEMA.with_metadata(
+        {
+            b"plinder.ligand_3d": b"complete",
+            SCORE_THRESHOLDS_METADATA_KEY: score_thresholds_metadata(
+                scorer_cfg.minimum_threshold,
+                scorer_cfg.minimum_thresholds,
+            ),
+            SCORE_METRICS_METADATA_KEY: score_metrics_metadata(
+                {
+                    "pocket_fident",
+                    "protein_fident_weighted_sum",
+                    "protein_fident_qcov_weighted_sum",
+                    "protein_lddt_weighted_sum",
+                }
+            ),
+        }
+    )
+    pq.write_table(pa.Table.from_batches([], schema=current_schema), score)
+    assert tasks.scatter_missing_scores(
+        data_dir=tmp_path,
+        batch_size=10,
+        scorer_cfg=scorer_cfg,
+        search_dbs=["apo"],
+    ) == [[]]
+
+
+@pytest.mark.parametrize("search_db", ["holo", "apo"])
+def test_map_batch_alignments_publishes_atomic_shard(tmp_path, monkeypatch, search_db):
+    raw_dir = tmp_path / f"dbs/subdbs/{search_db}_foldseek/aln"
     raw_dir.mkdir(parents=True)
     pd.DataFrame({"query": ["1abc_A"], "target_pdb_id": ["1abc"]}).to_parquet(
         raw_dir / "1abc.parquet", index=False
@@ -3229,7 +4172,10 @@ def test_map_batch_alignments_publishes_atomic_shard(tmp_path, monkeypatch):
 
         def map_alignment_files(self, *_args, **kwargs):
             calls.append(kwargs)
-            output = kwargs["mapped_db_dir"] / "holo_foldseek/mapped_aln/1abc.parquet"
+            output = (
+                kwargs["mapped_db_dir"]
+                / f"{search_db}_foldseek/mapped_aln/1abc.parquet"
+            )
             output.parent.mkdir(parents=True)
             pd.DataFrame(
                 {
@@ -3258,28 +4204,34 @@ def test_map_batch_alignments_publishes_atomic_shard(tmp_path, monkeypatch):
     tasks.map_batch_alignments(
         data_dir=tmp_path,
         shards=["ab"],
-        scorer_cfg=SimpleNamespace(sub_databases=["holo"]),
+        scorer_cfg=SimpleNamespace(sub_databases=[search_db]),
         force_update=False,
         scratch_dir=scratch,
+        search_db=search_db,
     )
 
     release = tasks._alignment_release_path(
         data_dir=tmp_path,
-        search_db="holo",
+        search_db=search_db,
         alignment_type="foldseek",
         shard="ab",
     )
     assert pd.read_parquet(release)["query_entry"].tolist() == ["1abc"]
-    assert tasks.alignment_mapping_shard_is_current(data_dir=tmp_path, shard="ab")
-    assert not (tmp_path / "dbs/subdbs/holo_foldseek/mapped_aln").exists()
+    assert tasks.alignment_mapping_shard_is_current(
+        data_dir=tmp_path,
+        search_db=search_db,
+        shard="ab",
+    )
+    assert not (tmp_path / f"dbs/subdbs/{search_db}_foldseek/mapped_aln").exists()
     assert not any(scratch.iterdir())
 
     tasks.map_batch_alignments(
         data_dir=tmp_path,
         shards=["ab"],
-        scorer_cfg=SimpleNamespace(sub_databases=["holo"]),
+        scorer_cfg=SimpleNamespace(sub_databases=[search_db]),
         force_update=False,
         scratch_dir=scratch,
+        search_db=search_db,
     )
     assert len(calls) == 1
 
@@ -3361,6 +4313,10 @@ def test_alignment_chain_lookup_compacts_mapping_inputs(tmp_path) -> None:
             "ligand_is_3d_score_able": [True, False],
             "ligand_protein_chains_asym_id": [["1.A"], ["1.A"]],
             "ligand_neighboring_residues": [
+                ["1.A_10_9_10", "1.A_11_10_11"],
+                ["1.A_99_98_99"],
+            ],
+            "ligand_interacting_residues": [
                 ["1.A_10_9_10", "1.A_11_10_11"],
                 ["1.A_99_98_99"],
             ],
@@ -3464,6 +4420,7 @@ def test_alignment_chain_lookup_keeps_identity_when_only_system_rows_change(
             "ligand_is_3d_score_able": [True],
             "ligand_protein_chains_asym_id": [["1.A"]],
             "ligand_neighboring_residues": [["1.A_10_9_10"]],
+            "ligand_interacting_residues": [["1.A_10_9_10"]],
             "ligand_interactions": [["1.A_contact"]],
         }
     ).to_parquet(annotation, index=False)
@@ -3515,6 +4472,7 @@ def test_alignment_chain_lookup_replaces_a_legacy_schema(tmp_path: Path) -> None
             "ligand_is_3d_score_able": [True],
             "ligand_protein_chains_asym_id": [["1.A"]],
             "ligand_neighboring_residues": [["1.A_10_9_10"]],
+            "ligand_interacting_residues": [["1.A_10_9_10"]],
             "ligand_interactions": [["1.A_contact"]],
         }
     ).to_parquet(index / "annotation_table.parquet", index=False)
@@ -3573,9 +4531,6 @@ def test_finalize_index_preserves_current_alignment_lookup(
         )
 
     monkeypatch.setattr(tasks.utils, "finalize_index", enrich_index)
-    monkeypatch.setattr(
-        tasks.utils, "create_nonredundant_dataset", lambda *, data_dir: None
-    )
     tasks.finalize_index(data_dir=tmp_path)
 
     assert "example_cluster" in pd.read_parquet(annotation).columns
@@ -3583,9 +4538,7 @@ def test_finalize_index_preserves_current_alignment_lookup(
     assert tasks._completed_alignment_chain_lookup(tmp_path) is not None
 
 
-def test_interface_cluster_columns_merge_into_interface_annotation(
-    tmp_path, monkeypatch
-):
+def test_interface_cluster_columns_are_written_to_sidecar(tmp_path, monkeypatch):
     from plinder.data.pipeline import utils
 
     interfaces = pd.DataFrame(
@@ -3617,40 +4570,10 @@ def test_interface_cluster_columns_merge_into_interface_annotation(
             "system_id": [representative],
             "label": ["c0"],
             "metric": ["interface_qcov"],
-            "directed": [False],
+            "directed": [True],
             "threshold": [50],
         }
     )
-    for cluster in ["components", "communities"]:
-        path = (
-            tmp_path
-            / "interface_clusters"
-            / f"cluster={cluster}"
-            / "directed=False"
-            / "metric=interface_qcov"
-            / "threshold=50.parquet"
-        )
-        path.parent.mkdir(parents=True, exist_ok=True)
-        artifact_rows.assign(cluster=cluster).to_parquet(path, index=False)
-        side_path = (
-            tmp_path
-            / "interface_clusters"
-            / f"cluster={cluster}"
-            / "directed=False"
-            / "metric=interface_side_qcov"
-            / "threshold=50.parquet"
-        )
-        side_path.parent.mkdir(parents=True, exist_ok=True)
-        pd.DataFrame(
-            {
-                "system_id": side_nodes,
-                "label": ["c0", "c2"],
-                "metric": ["interface_side_qcov"] * 2,
-                "cluster": [cluster] * 2,
-                "directed": [False] * 2,
-                "threshold": [50] * 2,
-            }
-        ).to_parquet(side_path, index=False)
     cover = (
         tmp_path
         / "interface_sampling/directed_set_cover"
@@ -3658,7 +4581,6 @@ def test_interface_cluster_columns_merge_into_interface_annotation(
     )
     cover.parent.mkdir(parents=True)
     artifact_rows.assign(
-        directed=True,
         centroid_system_id=[representative],
         similarity_to_centroid=100.0,
     ).to_parquet(cover, index=False)
@@ -3680,23 +4602,20 @@ def test_interface_cluster_columns_merge_into_interface_annotation(
         }
     ).to_parquet(side_cover, index=False)
 
-    result = utils.add_interface_cluster_columns(index=interfaces, data_dir=tmp_path)
+    result = utils.build_interface_cluster_table(index=interfaces, data_dir=tmp_path)
 
-    assert result["interface_qcov__50__component"].tolist() == ["c0", "c0"]
-    assert result["interface_qcov__50__community"].tolist() == ["c0", "c0"]
     assert result["interface_qcov__50__directed_set_cover"].tolist() == [
         "c0",
         "c0",
     ]
-    for kind in ["component", "community", "directed_set_cover"]:
-        assert result[f"interface_side_qcov__50__chain_1_{kind}"].tolist() == [
-            "c0",
-            "c0",
-        ]
-        assert result[f"interface_side_qcov__50__chain_2_{kind}"].tolist() == [
-            "c2",
-            "c2",
-        ]
+    assert result["interface_side_qcov__50__chain_1_directed_set_cover"].tolist() == [
+        "c0",
+        "c0",
+    ]
+    assert result["interface_side_qcov__50__chain_2_directed_set_cover"].tolist() == [
+        "c2",
+        "c2",
+    ]
 
     pd.DataFrame({"system_id": ["ligand-system"]}).to_parquet(
         index_dir / "annotation_table.parquet",
@@ -3718,7 +4637,7 @@ def test_interface_cluster_columns_merge_into_interface_annotation(
     )
     monkeypatch.setattr(
         utils,
-        "add_cluster_columns",
+        "build_ligand_cluster_table",
         lambda *, index, data_dir: index,
     )
 
@@ -3727,7 +4646,9 @@ def test_interface_cluster_columns_merge_into_interface_annotation(
     finalized_interfaces = pd.read_parquet(
         index_dir / "interface_annotation_table.parquet"
     )
-    assert finalized_interfaces["interface_qcov__50__component"].tolist() == [
+    finalized_clusters = pd.read_parquet(index_dir / "interface_clusters.parquet")
+    assert "interface_qcov__50__directed_set_cover" not in finalized_interfaces
+    assert finalized_clusters["interface_qcov__50__directed_set_cover"].tolist() == [
         "c0",
         "c0",
     ]
@@ -3746,10 +4667,10 @@ def test_interface_cluster_columns_merge_into_interface_annotation(
 
 
 def test_nonempty_interface_annotation_requires_cluster_artifacts(tmp_path):
-    from plinder.data.pipeline.utils import add_interface_cluster_columns
+    from plinder.data.pipeline.utils import build_interface_cluster_table
 
     with pytest.raises(FileNotFoundError, match="no published interface clusters"):
-        add_interface_cluster_columns(
+        build_interface_cluster_table(
             index=pd.DataFrame({"system_id": ["1abc__1__1.A--1.B"]}),
             data_dir=tmp_path,
         )
@@ -3867,7 +4788,6 @@ def test_component_reduction_task_copies_generic_source_once(tmp_path, monkeypat
     )
 
     assert calls == [
-        ("reciprocal", "sucos_shape_pocket_qcov"),
         ("directed_cover", "sucos_shape_pocket_qcov"),
     ]
     assert list(scratch.iterdir()) == []
@@ -3889,7 +4809,7 @@ def test_component_reduction_metric_workers_must_be_positive(tmp_path):
 def test_clustering_plan_matches_slurm_array_bounds(tmp_path, monkeypatch):
     from plinder.data.pipeline.score import (
         _cluster_parameters,
-        _community_batch,
+        _cover_batch,
         plan_clustering,
     )
 
@@ -3912,22 +4832,25 @@ def test_clustering_plan_matches_slurm_array_bounds(tmp_path, monkeypatch):
         metrics=["pocket_qcov", "tanimoto_similarity_ecfp4_1024"],
         thresholds=[30, 100],
         source_batch_size=2,
-        community_batch_size=3,
+        cover_batch_size=3,
         symmetric_bucket_count=4,
     )
 
     assert plan["symmetric_fragment_batch_count"] == 3
     assert plan["symmetric_edge_shard_count"] == 8
     assert plan["component_reduction_batch_count"] == 8
-    assert plan["community_task_count"] == 4
-    assert plan["community_batch_count"] == 2
-    assert plan["directed_cover_batch_count"] == 2
-    assert _community_batch(
-        metrics=plan["metrics"],
+    assert plan["set_cover_task_count"] == 2
+    assert plan["set_cover_batch_count"] == 1
+    assert plan["directed_cover_batch_count"] == 1
+    assert _cover_batch(
+        metrics=["tanimoto_similarity_ecfp4_1024"],
         thresholds=plan["thresholds"],
-        batch_index=1,
+        batch_index=0,
         batch_size=3,
-    ) == [("tanimoto_similarity_ecfp4_1024", 30)]
+    ) == [
+        ("tanimoto_similarity_ecfp4_1024", 100),
+        ("tanimoto_similarity_ecfp4_1024", 30),
+    ]
     assert _cluster_parameters(
         metrics=None,
         thresholds=None,
@@ -3958,14 +4881,14 @@ def test_interface_cluster_plan_enforces_collated_ingest_threshold(tmp_path):
         plan_clustering(tmp_path, entity_type="interface")
 
 
-def test_sucos_release_export_retains_scores_below_cluster_cutoff(tmp_path):
+def test_ligand_similarity_export_retains_complete_factor_scores(tmp_path):
     from plinder.data.pipeline.score import (
         MANIFEST_RELATIVE,
         PLAN_RELATIVE,
         SCORE_WORK_RELATIVE,
         _source_signature,
-        export_sucos_shape_pocket_qcov_batch,
-        finalize_sucos_shape_pocket_qcov_export,
+        export_ligand_similarity_scores_batch,
+        finalize_ligand_similarity_scores,
     )
 
     manifest = tmp_path / MANIFEST_RELATIVE
@@ -4002,11 +4925,21 @@ def test_sucos_release_export_retains_scores_below_cluster_cutoff(tmp_path):
     ).to_parquet(index / "annotation_table.parquet", index=False)
 
     rows = [
-        ("ab", "1abc", "B", "2def", "Y", 0.2, 0.5),
-        ("de", "2def", "Y", "1abc", "B", 0.8, 0.5),
+        ("ab", "1abc", "B", "2def", "Y", 20, 15, 12, 0.5),
+        ("de", "2def", "Y", "1abc", "B", 80, 70, 60, 0.5),
     ]
-    for shard, query, query_asym, target, target_asym, qcov, sucos in rows:
-        candidate = {
+    for (
+        shard,
+        query,
+        query_asym,
+        target,
+        target_asym,
+        qcov,
+        fident_qcov,
+        pli_qcov,
+        sucos,
+    ) in rows:
+        pair_score = {
             "query_system": f"{query}_system",
             "query_ligand_id": f"{query}__1__1.{query_asym}",
             "query_entry": query,
@@ -4015,22 +4948,17 @@ def test_sucos_release_export_retains_scores_below_cluster_cutoff(tmp_path):
             "target_ligand_id": f"{target}__1__1.{target_asym}",
             "target_entry": target,
             "target_ligand_asym_id": target_asym,
-            "protein_mapping": "1.A:1.X",
-            "protein_mapper": "foldseek",
             "pocket_qcov": qcov,
+            "pocket_fident_qcov": fident_qcov,
+            "pli_qcov": pli_qcov,
         }
-        candidate_path = (
-            tmp_path
-            / "scores"
-            / "ligand_3d_candidate_shards"
-            / f"shard={shard}.parquet"
+        pair_score_path = (
+            tmp_path / "scores" / "ligand_pair_score_shards" / f"shard={shard}.parquet"
         )
-        candidate_path.parent.mkdir(parents=True, exist_ok=True)
+        pair_score_path.parent.mkdir(parents=True, exist_ok=True)
         pq.write_table(
-            pa.Table.from_pylist(
-                [candidate], schema=schemas.LIGAND_3D_CANDIDATE_SCHEMA
-            ),
-            candidate_path,
+            pa.Table.from_pylist([pair_score], schema=schemas.LIGAND_PAIR_SCORE_SCHEMA),
+            pair_score_path,
         )
         pair_path = tmp_path / "scores" / "ligand_3d_by_query" / f"{shard}.parquet"
         pair_path.parent.mkdir(parents=True, exist_ok=True)
@@ -4054,7 +4982,7 @@ def test_sucos_release_export_retains_scores_below_cluster_cutoff(tmp_path):
 
     shard_dir = tmp_path / "release-shards"
     for batch_index in range(2):
-        export_sucos_shape_pocket_qcov_batch(
+        export_ligand_similarity_scores_batch(
             tmp_path,
             output_dir=shard_dir,
             batch_index=batch_index,
@@ -4063,8 +4991,8 @@ def test_sucos_release_export_retains_scores_below_cluster_cutoff(tmp_path):
             threads=1,
             memory_limit="1GB",
         )
-    output = tmp_path / "exports" / "all_sucos_shape_pocket_qcov.parquet"
-    report = finalize_sucos_shape_pocket_qcov_export(
+    output = tmp_path / "exports" / "ligand_similarity_scores.parquet"
+    report = finalize_ligand_similarity_scores(
         tmp_path,
         source_dir=shard_dir,
         output=output,
@@ -4074,7 +5002,15 @@ def test_sucos_release_export_retains_scores_below_cluster_cutoff(tmp_path):
     )
 
     exported = pd.read_parquet(output)
-    assert sorted(exported["similarity"].tolist()) == [10, 40, 100, 100]
+    assert sorted(exported["pocket_qcov"].tolist()) == [20, 80, 100, 100, 100]
+    assert sorted(exported["pocket_fident_qcov"].tolist()) == [
+        15,
+        70,
+        100,
+        100,
+        100,
+    ]
+    assert sorted(exported["pli_qcov"].tolist()) == [12, 60, 100, 100, 100]
     self_rows = exported[
         exported["query_system"].eq(exported["target_system"])
         & exported["query_ligand_id"].eq(exported["target_ligand_id"])
@@ -4082,10 +5018,13 @@ def test_sucos_release_export_retains_scores_below_cluster_cutoff(tmp_path):
     assert sorted(self_rows["query_ligand_id"].tolist()) == [
         "1abc__1__1.B",
         "2def__1__1.Y",
+        "3ghi__1__1.Z",
     ]
-    assert report["row_count"] == 4
+    non_3d_self = self_rows[self_rows["query_ligand_id"].eq("3ghi__1__1.Z")]
+    assert non_3d_self["sucos_shape"].isna().all()
+    assert report["row_count"] == 5
     assert (
-        finalize_sucos_shape_pocket_qcov_export(
+        finalize_ligand_similarity_scores(
             tmp_path,
             source_dir=shard_dir,
             output=output,
@@ -4099,12 +5038,12 @@ def test_sucos_release_export_retains_scores_below_cluster_cutoff(tmp_path):
 
 def test_interface_score_shards_retain_side_coverages_and_compact_export(tmp_path):
     from plinder.data.pipeline.score import (
-        INTERFACE_QCOV_EXPORT_RELATIVE,
+        INTERFACE_SIMILARITY_EXPORT_RELATIVE,
         _interface_score_repair_task_batches,
         _interface_score_shard_batch,
         _source_signature,
-        finalize_interface_qcov_scores,
         finalize_interface_score_repair,
+        finalize_interface_similarity_scores,
         plan_interface_score_repair,
         plan_interface_scoring,
         plan_protein_scoring,
@@ -4366,13 +5305,13 @@ def test_interface_score_shards_retain_side_coverages_and_compact_export(tmp_pat
     assert pq.ParquetFile(empty).metadata.num_rows == 0
     assert pq.read_schema(empty).equals(schemas.INTERFACE_SCORE_SHARD_SCHEMA)
 
-    report = finalize_interface_qcov_scores(
+    report = finalize_interface_similarity_scores(
         tmp_path,
         scratch_dir=tmp_path / "finalize-scratch",
         threads=1,
         memory_limit="1GB",
     )
-    release = pd.read_parquet(tmp_path / INTERFACE_QCOV_EXPORT_RELATIVE)
+    release = pd.read_parquet(tmp_path / INTERFACE_SIMILARITY_EXPORT_RELATIVE)
     assert release.columns.tolist() == [
         "query_system",
         "target_system",
@@ -4602,35 +5541,11 @@ def test_interface_score_cli_exposes_plan_array_and_finalizer(tmp_path):
     assert interface_clusters.entity_type == "interface"
 
 
-def test_clustering_statistics_validate_complete_monotonic_artifacts(tmp_path):
+def test_clustering_statistics_validate_published_cover_artifacts(tmp_path):
     from plinder.data.pipeline.score import summarize_clustering_artifacts
-    from plinder.data.pipeline.utils import _read_local_cluster_rows
 
     metric = "pocket_qcov"
     for threshold, labels in [(100, ["c0", "c1"]), (50, ["c0", "c0"])]:
-        for cluster, directed in [
-            ("components", False),
-            ("communities", False),
-        ]:
-            path = (
-                tmp_path
-                / "ligand_clusters"
-                / f"cluster={cluster}"
-                / f"directed={directed}"
-                / f"metric={metric}"
-                / f"threshold={threshold}.parquet"
-            )
-            path.parent.mkdir(parents=True, exist_ok=True)
-            pd.DataFrame(
-                {
-                    "ligand_id": ["l1", "l2"],
-                    "label": labels,
-                    "metric": [metric, metric],
-                    "threshold": [threshold, threshold],
-                    "cluster": [cluster, cluster],
-                    "directed": [directed, directed],
-                }
-            ).to_parquet(path, index=False)
         directed_cover = (
             tmp_path
             / "ligand_sampling"
@@ -4658,49 +5573,30 @@ def test_clustering_statistics_validate_complete_monotonic_artifacts(tmp_path):
     )
 
     assert report["status"] == "complete"
-    assert report["artifact_count"] == 6
+    assert report["artifact_count"] == 2
     assert report["issues"] == []
     assert (tmp_path / "ligand_clusters" / "stats.json").is_file()
     stats = pd.read_parquet(tmp_path / "ligand_clusters" / "stats.parquet")
-    components = stats[stats["cluster"].eq("components")].set_index("threshold")
-    assert components.loc[100, "cluster_count"] == 2
-    assert components.loc[50, "cluster_count"] == 1
-    # The diagnostics live under the same root but are not cluster-label rows.
-    cluster_rows = _read_local_cluster_rows(
-        root=tmp_path / "ligand_clusters",
-        node_column="ligand_id",
-    )
-    assert len(cluster_rows) == 8
+    directed = stats[stats["cluster"].eq("directed_set_cover")].set_index("threshold")
+    assert directed.loc[100, "cluster_count"] == 2
+    assert directed.loc[50, "cluster_count"] == 1
 
-    component_50 = (
+    cover_50 = (
         tmp_path
-        / "ligand_clusters"
-        / "cluster=components"
-        / "directed=False"
+        / "ligand_sampling"
+        / "directed_set_cover"
         / f"metric={metric}"
         / "threshold=50.parquet"
     )
     pd.DataFrame(
         {
-            "ligand_id": ["l1", "l2"],
-            "label": ["c0", "c1"],
-            "metric": [metric, metric],
-            "threshold": [50, 50],
-            "cluster": ["components", "components"],
-            "directed": [False, False],
-        }
-    ).to_parquet(component_50, index=False)
-    component_100 = component_50.with_name("threshold=100.parquet")
-    pd.DataFrame(
-        {
-            "ligand_id": ["l1", "l2"],
+            "ligand_id": ["l1", "l1"],
             "label": ["c0", "c0"],
             "metric": [metric, metric],
-            "threshold": [100, 100],
-            "cluster": ["components", "components"],
-            "directed": [False, False],
+            "threshold": [50, 50],
+            "directed": [True, True],
         }
-    ).to_parquet(component_100, index=False)
+    ).to_parquet(cover_50, index=False)
     with pytest.raises(ValueError, match="invalid clustering artifacts"):
         summarize_clustering_artifacts(
             tmp_path,
@@ -4711,7 +5607,7 @@ def test_clustering_statistics_validate_complete_monotonic_artifacts(tmp_path):
         (tmp_path / "ligand_clusters" / "stats.json").read_text()
     )
     assert invalid_report["status"] == "invalid"
-    assert any("gains clusters" in issue for issue in invalid_report["issues"])
+    assert any("duplicate node IDs" in issue for issue in invalid_report["issues"])
 
 
 def test_v3_score_slurm_exposes_exact_clustering_stages():
@@ -4730,7 +5626,7 @@ def test_v3_score_slurm_exposes_exact_clustering_stages():
     assert "plan-bounded-score-repair)" in script
     assert "plan-clusters)" in script
     assert "symmetric-edge-fragments|symmetric-edge-shards" in script
-    assert "component-reductions|communities|directed-covers)" in script
+    assert "component-reductions|set-covers|directed-covers)" in script
     assert (
         "finalize-alignments|finalize-ligands|finalize-scores|"
         "finalize-ligand-3d-retries|finalize-index|merge-components|cluster-stats)"
@@ -4739,6 +5635,46 @@ def test_v3_score_slurm_exposes_exact_clustering_stages():
     assert "PLINDER_CLUSTER_METRICS" in script
     assert "PLINDER_CLUSTER_THRESHOLDS" in script
     assert "PLINDER_CLUSTER_ENTITY_TYPE" in script
+    assert "SEARCH_DB=${PLINDER_SEARCH_DB:-holo}" in script
+    assert 'ARGS+=(--search-db "${SEARCH_DB}")' in script
+
+
+def test_v3_score_cli_accepts_apo_search_database(tmp_path):
+    from plinder.data.pipeline.score import _parser
+
+    build = _parser().parse_args(
+        [
+            "make-sub-dbs",
+            str(tmp_path),
+            "--scratch-dir",
+            str(tmp_path / "scratch"),
+            "--search-db",
+            "holo",
+            "--search-db",
+            "apo",
+        ]
+    )
+    assert build.search_dbs == ["holo", "apo"]
+
+    for command in ["search", "map", "score", "score-pdbs"]:
+        arguments = [
+            command,
+            str(tmp_path),
+            "--batch-index",
+            "0",
+            "--batch-size",
+            "1",
+            "--scratch-dir",
+            str(tmp_path / "scratch"),
+            "--search-db",
+            "apo",
+        ]
+        if command == "search":
+            arguments.extend(["--alignment-type", "mmseqs"])
+        if command == "score-pdbs":
+            arguments.extend(["--pdb-manifest", str(tmp_path / "queries.parquet")])
+        parsed = _parser().parse_args(arguments)
+        assert parsed.search_db == "apo"
 
 
 def test_metaflow_graph_uses_canonical_ligand_archive_stage():
@@ -4762,11 +5698,15 @@ def test_metaflow_graph_uses_canonical_ligand_archive_stage():
     assert "self.pipeline.finalize_ligand_archives()" in flow
     assert "self.next(self.annotate_ligand_similarity)" in flow
     assert "self.pipeline.annotate_ligand_similarity()" in flow
+    assert "self.next(self.make_ligand_mmp_pairs)" in flow
+    assert "self.pipeline.make_ligand_mmp_pairs" in flow
     assert "self.next(self.scatter_collate_partitions)" in flow
     assert "self.next(self.scatter_collate_alignments)" in flow
     assert "self.pipeline.collate_alignments(self.input)" in flow
     assert "self.next(self.finalize_alignments)" in flow
     assert "self.pipeline.finalize_alignments()" in flow
+    assert "self.next(self.plan_score_batches)" in flow
+    assert "self.pipeline.plan_score_batches()" in flow
     assert "self.next(self.plan_interface_scores)" in flow
     assert "self.pipeline.plan_interface_scores()" in flow
     assert "self.next(self.scatter_make_interface_scores)" in flow
@@ -4782,9 +5722,11 @@ def test_metaflow_graph_uses_canonical_ligand_archive_stage():
     assert "self.pipeline.collate_ligand_3d_scores(self.input)" in flow
     assert "self.pipeline.merge_ligand_3d_scores(self.input)" in flow
     assert "self.pipeline.finalize_scores()" in flow
-    assert "self.next(self.scatter_export_sucos_shape_pocket_qcov)" in flow
-    assert "self.pipeline.export_sucos_shape_pocket_qcov(self.input)" in flow
-    assert "self.pipeline.finalize_sucos_export()" in flow
+    assert "self.next(self.scatter_export_ligand_similarity_scores)" in flow
+    assert "self.pipeline.export_ligand_similarity_scores(self.input)" in flow
+    assert "self.pipeline.finalize_ligand_similarity_scores()" in flow
+    assert "self.next(self.make_linked_apo_structures)" in flow
+    assert "self.pipeline.make_linked_apo_structures()" in flow
     assert "self.next(self.plan_clusters)" in flow
     assert "self.pipeline.plan_clusters()" in flow
     assert "self.next(self.scatter_make_symmetric_edge_fragments)" in flow
@@ -4793,13 +5735,15 @@ def test_metaflow_graph_uses_canonical_ligand_archive_stage():
     assert "self.pipeline.make_symmetric_edge_shards(self.input)" in flow
     assert "self.next(self.scatter_make_component_reductions)" in flow
     assert "self.pipeline.merge_component_reductions()" in flow
-    assert "self.next(self.scatter_make_communities)" in flow
+    assert "self.next(self.scatter_make_set_covers)" in flow
+    assert "self.pipeline.make_set_covers(self.input)" in flow
     assert "self.next(self.scatter_make_directed_set_covers)" in flow
     assert "self.pipeline.make_directed_set_covers(self.input)" in flow
     assert "self.next(self.summarize_clusters)" in flow
     assert "self.pipeline.summarize_clusters()" in flow
     assert "self.next(self.finalize_index)" in flow
     assert "self.pipeline.finalize_index()" in flow
+    assert "make_mmp_index" not in flow
 
     tree = ast.parse(flow)
     flow_class = next(
@@ -4873,11 +5817,11 @@ def test_v3_collation_slurm_uses_local_scratch_and_long_qos_for_global_steps():
     ) in documentation
 
 
-def test_v3_ingest_configs_use_current_schema_and_stages():
+def test_ingest_configs_use_current_schema_and_stages():
     from plinder.data.pipeline.config import get_config
 
     repository = Path(__file__).resolve().parents[3]
-    config_dir = repository / "flows" / "configs" / "v3"
+    config_dir = repository / "flows" / "configs" / "ingest"
     if not config_dir.is_dir():
         pytest.skip("ingest configs are not installed in wheel-only test layouts")
     ingest_configs = list(config_dir.glob("*.yaml"))
@@ -4886,15 +5830,21 @@ def test_v3_ingest_configs_use_current_schema_and_stages():
     for path in ingest_configs:
         cfg = get_config(config_file=path.as_posix(), cached=False)
         assert set(cfg.flow.run_specific_stages) <= set(tasks.STAGES)
-        assert cfg.data.plinder_iteration == "v3"
+        assert cfg.data.plinder_release == "2026-07"
+        assert cfg.data.plinder_release_number == "1"
         if path.name == "make_protein_scores.yaml":
+            assert cfg.scorer.sub_databases == ["holo", "apo"]
+            assert cfg.scorer.minimum_thresholds[
+                "protein_lddt_weighted_sum"
+            ] == pytest.approx(0.2)
             assert "collate_alignments" in cfg.flow.run_specific_stages
             assert "finalize_alignments" in cfg.flow.run_specific_stages
+            assert "plan_score_batches" in cfg.flow.run_specific_stages
             assert "plan_interface_scores" in cfg.flow.run_specific_stages
             assert "make_interface_scores" in cfg.flow.run_specific_stages
             assert "finalize_interface_scores" in cfg.flow.run_specific_stages
-            assert "export_sucos_shape_pocket_qcov" in cfg.flow.run_specific_stages
-            assert "finalize_sucos_export" in cfg.flow.run_specific_stages
+            assert "export_ligand_similarity_scores" in cfg.flow.run_specific_stages
+            assert "finalize_ligand_similarity_scores" in cfg.flow.run_specific_stages
             assert "map_batch_alignments" in cfg.flow.run_specific_stages
             assert cfg.flow.map_batch_alignments_batch_size == 1
             assert cfg.flow.make_interface_scores_batch_size == 1
@@ -4905,24 +5855,27 @@ def test_v3_ingest_configs_use_current_schema_and_stages():
             )
         if path.name == "make_components.yaml":
             assert "collate_partitions" in cfg.flow.run_specific_stages
+            assert "make_linked_apo_structures" in cfg.flow.run_specific_stages
             assert "plan_clusters" in cfg.flow.run_specific_stages
             assert "make_symmetric_edge_fragments" in cfg.flow.run_specific_stages
             assert "make_symmetric_edge_shards" in cfg.flow.run_specific_stages
             assert "make_component_reductions" in cfg.flow.run_specific_stages
             assert "merge_component_reductions" in cfg.flow.run_specific_stages
-            assert "make_communities" in cfg.flow.run_specific_stages
+            assert "make_set_covers" in cfg.flow.run_specific_stages
             assert "make_directed_set_covers" in cfg.flow.run_specific_stages
             assert "summarize_clusters" in cfg.flow.run_specific_stages
             assert "finalize_index" in cfg.flow.run_specific_stages
         if path.name == "make_entries_ligands.yaml":
             assert "collate_entries" in cfg.flow.run_specific_stages
             assert "finalize_ligand_archives" in cfg.flow.run_specific_stages
+            assert "make_ligand_mmp_pairs" in cfg.flow.run_specific_stages
             assert "make_ligands" not in cfg.flow.run_specific_stages
 
 
 def test_make_canonical_ligand_archives_only_archives_asu_sdfs(tmp_path):
     from plinder.data.pipeline.score import finalize_ligand_archives
 
+    (tmp_path / "raw_entries" / "cd").mkdir(parents=True)
     canonical = tmp_path / "raw_entries" / "ab" / "1abc" / "ligand_files"
     canonical.mkdir(parents=True)
     (canonical / "A.sdf").write_text("canonical")
@@ -4931,6 +5884,12 @@ def test_make_canonical_ligand_archives_only_archives_asu_sdfs(tmp_path):
     rotated.mkdir(parents=True)
     (rotated / "1.A.sdf").write_text("rotated")
 
+    assert tasks.scatter_make_canonical_ligand_archives(
+        data_dir=tmp_path,
+        two_char_codes=[],
+        pdb_ids=[],
+        batch_size=4,
+    ) == [["ab"]]
     tasks.make_canonical_ligand_archives(data_dir=tmp_path, two_char_codes=["ab"])
 
     archive = tmp_path / "ligand_archives" / "ab.parquet"
@@ -4953,7 +5912,51 @@ def test_make_canonical_ligand_archives_only_archives_asu_sdfs(tmp_path):
     }
 
 
-def test_make_sub_dbs_loads_normalized_entry_chain_index(tmp_path, monkeypatch):
+def test_finalize_ligand_archives_removes_stale_empty_archives(tmp_path):
+    from plinder.data.pipeline.score import finalize_ligand_archives
+
+    (tmp_path / "raw_entries" / "ab").mkdir(parents=True)
+    archive_dir = tmp_path / "ligand_archives"
+    archive_dir.mkdir()
+    stale = archive_dir / "ab.parquet"
+    pd.DataFrame(
+        {
+            "pdb_id": pd.Series(dtype="string"),
+            "ligand_asym_id": pd.Series(dtype="string"),
+            "sdf": pd.Series(dtype="object"),
+        }
+    ).to_parquet(stale, index=False)
+
+    report = finalize_ligand_archives(tmp_path)
+
+    assert report == {
+        "status": "complete",
+        "shard_count": 0,
+        "ligand_count": 0,
+        "compressed_bytes": 0,
+    }
+    assert not stale.exists()
+
+
+def test_finalize_ligand_archives_rejects_nonempty_extra_archives(tmp_path):
+    from plinder.data.pipeline.score import finalize_ligand_archives
+
+    (tmp_path / "raw_entries" / "ab").mkdir(parents=True)
+    archive_dir = tmp_path / "ligand_archives"
+    archive_dir.mkdir()
+    pd.DataFrame(
+        {
+            "pdb_id": ["1abc"],
+            "ligand_asym_id": ["A"],
+            "sdf": [b"ligand"],
+        }
+    ).to_parquet(archive_dir / "ab.parquet", index=False)
+
+    with pytest.raises(ValueError, match=r"extra=\['ab'\]"):
+        finalize_ligand_archives(tmp_path)
+
+
+def test_make_sub_dbs_loads_entry_chain_index(tmp_path, monkeypatch):
     from plinder.core.scores import entries as entry_views
 
     index_dir = tmp_path / "index"
@@ -4978,6 +5981,7 @@ def test_make_sub_dbs_loads_normalized_entry_chain_index(tmp_path, monkeypatch):
         return sentinel
 
     observed = {}
+    lookup_calls = []
     monkeypatch.setattr(entry_views, "entry_views_from_df", fake_entry_views)
     monkeypatch.setattr(tasks.utils, "get_db_sources", lambda **kwargs: {})
     monkeypatch.setattr(
@@ -4988,6 +5992,11 @@ def test_make_sub_dbs_loads_normalized_entry_chain_index(tmp_path, monkeypatch):
             kwargs=kwargs,
         ),
     )
+    monkeypatch.setattr(
+        tasks,
+        "make_alignment_chain_lookup",
+        lambda **kwargs: lookup_calls.append(kwargs),
+    )
 
     tasks.make_sub_dbs(data_dir=tmp_path, sub_databases=["holo", "apo", "pred"])
 
@@ -4997,6 +6006,7 @@ def test_make_sub_dbs_loads_normalized_entry_chain_index(tmp_path, monkeypatch):
         "tmp_dir": None,
         "threads": 1,
     }
+    assert lookup_calls == [{"data_dir": tmp_path, "scratch_dir": None, "threads": 1}]
 
 
 def test_make_holo_sub_dbs_selects_protein_receptor_and_interface_chains(
@@ -5062,4 +6072,116 @@ def test_make_holo_sub_dbs_selects_protein_receptor_and_interface_chains(
         },
         "holo_mmseqs": {"1abc_X", "1abc_Y"},
     }
+    assert lookup_calls == [{"data_dir": tmp_path, "scratch_dir": None, "threads": 1}]
+
+
+def test_make_holo_apo_sub_dbs_selects_apo_chains_from_chain_index(
+    tmp_path, monkeypatch
+):
+    index_dir = tmp_path / "index"
+    index_dir.mkdir()
+    (tmp_path / "dbs").mkdir()
+    pd.DataFrame(
+        {
+            "entry_pdb_id": ["1abc"] * 6,
+            "chain_asym_id": ["A", "B", "C", "N", "P", "Q"],
+            "chain_auth_id": ["X", "Y", "Z", "N", "P", "Q"],
+            "chain_entity_id": ["1", "2", "1", "3", "5", "6"],
+            "chain_receptor_type": [
+                "protein",
+                "protein",
+                "protein",
+                "dna",
+                "protein",
+                "protein",
+            ],
+            "chain_is_holo": [True, False, False, False, False, False],
+            "chain_is_ligand_like": [False, False, False, False, True, False],
+        }
+    ).to_parquet(index_dir / "entry_chains.parquet", index=False)
+    pd.DataFrame(
+        {
+            "entry_pdb_id": ["1abc", "1abc", "1abc"],
+            "chain_asym_id": ["B", "P", "Q"],
+            "chain_role": ["receptor", "ligand", "receptor"],
+        }
+    ).to_parquet(index_dir / "entry_biounit_chains.parquet", index=False)
+    pd.DataFrame(
+        {
+            "entry_pdb_id": ["1abc"],
+            "ligand_is_proper": [True],
+            "ligand_protein_chains_asym_id": [["1.A"]],
+        }
+    ).to_parquet(index_dir / "annotation_table.parquet", index=False)
+    pq.write_table(
+        pa.Table.from_pylist(
+            [
+                {
+                    "entry_pdb_id": "1abc",
+                    "system_id": "1abc__1__1.A--1.Q",
+                    "system_biounit_id": "1",
+                    "interface_chain_1": "1.A",
+                    "interface_chain_2": "1.Q",
+                    "interface_chain_1_residue_numbers": [1, 2, 3],
+                    "interface_chain_1_residue_indices": [0, 1, 2],
+                    "interface_chain_2_residue_numbers": [4, 5, 6],
+                    "interface_chain_2_residue_indices": [3, 4, 5],
+                    "interface_num_contact_residue_pairs": 3,
+                }
+            ],
+            schema=INTERFACE_ANNOTATION_SCHEMA,
+        ),
+        index_dir / "interface_annotation_table.parquet",
+    )
+
+    observed = {}
+    monkeypatch.setattr(tasks.utils, "get_db_sources", lambda **kwargs: {})
+    monkeypatch.setattr(
+        tasks.databases,
+        "make_sub_dbs",
+        lambda db_dir, db_sources, entries, **kwargs: observed.update(
+            entries=entries,
+            kwargs=kwargs,
+        ),
+    )
+    monkeypatch.setattr(tasks, "make_alignment_chain_lookup", lambda **kwargs: None)
+
+    tasks.make_sub_dbs(data_dir=tmp_path, sub_databases=["holo", "apo"])
+
+    assert observed["entries"] is None
+    assert observed["kwargs"]["identifiers_by_database"] == {
+        "holo_foldseek": {
+            "pdb_00001abc_xyz-enrich_Q",
+            "pdb_00001abc_xyz-enrich_X",
+        },
+        "holo_mmseqs": {"1abc_Q", "1abc_X"},
+        "apo_foldseek": {
+            "pdb_00001abc_xyz-enrich_Q",
+            "pdb_00001abc_xyz-enrich_Y",
+        },
+        "apo_mmseqs": {"1abc_Q", "1abc_Y"},
+    }
+
+
+def test_make_apo_sub_db_builds_alignment_chain_lookup(tmp_path, monkeypatch):
+    (tmp_path / "dbs").mkdir()
+    apo_chains = pd.DataFrame(
+        {
+            "entry_pdb_id": ["1abc"],
+            "chain_asym_id": ["A"],
+            "chain_auth_id": ["X"],
+        }
+    )
+    lookup_calls = []
+    monkeypatch.setattr(tasks, "_apo_scoring_chains", lambda _data_dir: apo_chains)
+    monkeypatch.setattr(tasks.utils, "get_db_sources", lambda **kwargs: {})
+    monkeypatch.setattr(tasks.databases, "make_sub_dbs", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        tasks,
+        "make_alignment_chain_lookup",
+        lambda **kwargs: lookup_calls.append(kwargs),
+    )
+
+    tasks.make_sub_dbs(data_dir=tmp_path, sub_databases=["apo"])
+
     assert lookup_calls == [{"data_dir": tmp_path, "scratch_dir": None, "threads": 1}]

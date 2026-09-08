@@ -13,6 +13,7 @@ DATA_DIR=${2:?"usage: sbatch score_v3.sbatch MODE DATA_DIR [BATCH_SIZE]"}
 BATCH_SIZE=${3:-1}
 BATCH_INDEX=${SLURM_ARRAY_TASK_ID:-0}
 JOB_ID=${SLURM_ARRAY_JOB_ID:-${SLURM_JOB_ID:-local}}
+SEARCH_DB=${PLINDER_SEARCH_DB:-holo}
 ENV_ROOT=${PLINDER_ENV_ROOT:?"set PLINDER_ENV_ROOT to the ingest Conda environment"}
 REPO_ROOT=${PLINDER_REPO_ROOT:-${SLURM_SUBMIT_DIR:-}}
 LOCAL_SCRATCH=${PLINDER_SCORE_SCRATCH:-${SLURM_TMPDIR:-${TMPDIR:-/scratch/${USER}/plinder-score-${SLURM_JOB_ID:-local}}}}
@@ -44,7 +45,7 @@ export OPENBLAS_NUM_THREADS=${SLURM_CPUS_PER_TASK:-1}
 export NUMEXPR_NUM_THREADS=${SLURM_CPUS_PER_TASK:-1}
 
 mkdir -p "${DATA_DIR}/metrics" "${TASK_SCRATCH}"
-echo "host=$(hostname) job_id=${JOB_ID} mode=${MODE} batch_index=${BATCH_INDEX} batch_size=${BATCH_SIZE} scratch=${TASK_SCRATCH}"
+echo "host=$(hostname) job_id=${JOB_ID} mode=${MODE} search_db=${SEARCH_DB} batch_index=${BATCH_INDEX} batch_size=${BATCH_SIZE} scratch=${TASK_SCRATCH}"
 echo "PLINDER offline mode is enabled; all sources and reference data must exist"
 
 monitor_scratch_usage() {
@@ -88,6 +89,7 @@ case "${MODE}" in
         ;;
     make-sub-dbs)
         ARGS+=(
+            --search-db "${SEARCH_DB}"
             --threads "${SLURM_CPUS_PER_TASK:-1}"
             --scratch-dir "${TASK_SCRATCH}"
         )
@@ -106,6 +108,9 @@ case "${MODE}" in
             --max-query-protein-chains "${PLINDER_MAX_QUERY_PROTEIN_CHAINS:-30}"
             --max-query-proper-ligand-chains "${PLINDER_MAX_QUERY_PROPER_LIGAND_CHAINS:-30}"
         )
+        if [[ "${PLINDER_REUSE_MAPPED_ALIGNMENTS:-0}" == "1" ]]; then
+            ARGS+=(--reuse-mapped-alignments)
+        fi
         ;;
     plan-ligand-3d)
         ARGS+=(
@@ -193,7 +198,7 @@ case "${MODE}" in
     plan-clusters)
         ARGS+=(
             --source-batch-size "${BATCH_SIZE}"
-            --community-batch-size "${PLINDER_COMMUNITY_BATCH_SIZE:-1}"
+            --cover-batch-size "${PLINDER_COVER_BATCH_SIZE:-1}"
             --symmetric-bucket-count "${PLINDER_SYMMETRIC_EDGE_BUCKET_COUNT:-64}"
         )
         ;;
@@ -201,10 +206,10 @@ case "${MODE}" in
         : "${PLINDER_DROPPED_QUERY_MANIFEST:?set PLINDER_DROPPED_QUERY_MANIFEST}"
         ARGS+=(--pdb-manifest "${PLINDER_DROPPED_QUERY_MANIFEST}")
         ;;
-    finalize-sucos-export)
+    finalize-ligand-similarity-scores)
         ARGS+=(
-            --source-dir "${PLINDER_SUCOS_EXPORT_DIR:-${DATA_DIR}/exports/all_sucos_shape_pocket_qcov}"
-            --output "${PLINDER_SUCOS_EXPORT_OUTPUT:-${DATA_DIR}/exports/all_sucos_shape_pocket_qcov.parquet}"
+            --source-dir "${PLINDER_LIGAND_SIMILARITY_DIR:-${DATA_DIR}/exports/ligand_similarity_scores}"
+            --output "${PLINDER_LIGAND_SIMILARITY_OUTPUT:-${DATA_DIR}/exports/ligand_similarity_scores.parquet}"
             --threads "${SLURM_CPUS_PER_TASK:-1}"
             --scratch-dir "${TASK_SCRATCH}"
             --memory-limit "${PLINDER_DUCKDB_MEMORY_LIMIT:-32GB}"
@@ -229,7 +234,7 @@ case "${MODE}" in
         ;;
     finalize-alignments|finalize-ligands|finalize-scores|finalize-ligand-3d-retries|finalize-index|merge-components|cluster-stats)
         ;;
-    search-foldseek|search-mmseqs|map|pack-ligands|score|score-pdbs|repair-score-pdbs|repair-score-target-remainders|repair-pack-ligands|repair-candidates|repair-ligand-3d|repair-merge-ligand-3d|repair-score-shards|repair-sucos-shards|collate-ligand-3d-candidates|score-ligand-3d|score-ligand-3d-retry|collate-ligand-3d|merge-ligand-3d|export-sucos-shards|score-ligand-pocket-shards|materialize-ligand-3d-candidates|score-interface-shards|score-interface-repair-batches|collate-alignments|collate-score-partitions|symmetric-edge-fragments|symmetric-edge-shards|component-reductions|communities|directed-covers)
+    search-foldseek|search-mmseqs|map|pack-ligands|score|score-pdbs|repair-score-pdbs|repair-score-target-remainders|repair-pack-ligands|repair-candidates|repair-ligand-3d|repair-merge-ligand-3d|repair-score-shards|repair-ligand-similarity-shards|collate-ligand-3d-candidates|score-ligand-3d|score-ligand-3d-retry|collate-ligand-3d|merge-ligand-3d|export-ligand-similarity-shards|score-ligand-pocket-shards|materialize-ligand-3d-candidates|score-interface-shards|score-interface-repair-batches|collate-alignments|collate-score-partitions|symmetric-edge-fragments|symmetric-edge-shards|component-reductions|set-covers|directed-covers)
         ARGS+=(
             --batch-index "${BATCH_INDEX}"
             --batch-size "${BATCH_SIZE}"
@@ -242,6 +247,9 @@ case "${MODE}" in
         if [[ "${MODE}" == "search-foldseek" || "${MODE}" == "search-mmseqs" ]]; then
             ARGS+=(--alignment-type "${MODE#search-}")
         fi
+        if [[ "${MODE}" == "search-foldseek" || "${MODE}" == "search-mmseqs" || "${MODE}" == "map" || "${MODE}" == "score" || "${MODE}" == "score-pdbs" ]]; then
+            ARGS+=(--search-db "${SEARCH_DB}")
+        fi
         if [[ "${MODE}" == "score-pdbs" ]]; then
             : "${PLINDER_SCORE_PDB_MANIFEST:?set PLINDER_SCORE_PDB_MANIFEST}"
             ARGS+=(--pdb-manifest "${PLINDER_SCORE_PDB_MANIFEST}")
@@ -250,9 +258,9 @@ case "${MODE}" in
             : "${PLINDER_SCORE_REPAIR_MANIFEST:?set PLINDER_SCORE_REPAIR_MANIFEST}"
             ARGS+=(--repair-manifest "${PLINDER_SCORE_REPAIR_MANIFEST}")
         fi
-        if [[ "${MODE}" == "export-sucos-shards" || "${MODE}" == "repair-sucos-shards" ]]; then
+        if [[ "${MODE}" == "export-ligand-similarity-shards" || "${MODE}" == "repair-ligand-similarity-shards" ]]; then
             ARGS+=(
-                --output-dir "${PLINDER_SUCOS_EXPORT_DIR:-${DATA_DIR}/exports/all_sucos_shape_pocket_qcov}"
+                --output-dir "${PLINDER_LIGAND_SIMILARITY_DIR:-${DATA_DIR}/exports/ligand_similarity_scores}"
                 --memory-limit "${PLINDER_DUCKDB_MEMORY_LIMIT:-16GB}"
             )
         fi
@@ -284,11 +292,11 @@ case "${MODE}" in
         ;;
 esac
 
-if [[ "${MODE}" == "plan-clusters" || "${MODE}" == "symmetric-edge-fragments" || "${MODE}" == "symmetric-edge-shards" || "${MODE}" == "component-reductions" || "${MODE}" == "merge-components" || "${MODE}" == "communities" || "${MODE}" == "directed-covers" || "${MODE}" == "cluster-stats" ]]; then
+if [[ "${MODE}" == "plan-clusters" || "${MODE}" == "symmetric-edge-fragments" || "${MODE}" == "symmetric-edge-shards" || "${MODE}" == "component-reductions" || "${MODE}" == "merge-components" || "${MODE}" == "set-covers" || "${MODE}" == "directed-covers" || "${MODE}" == "cluster-stats" ]]; then
     ARGS+=(--entity-type "${PLINDER_CLUSTER_ENTITY_TYPE:-ligand}")
 fi
 
-if [[ "${MODE}" == "plan-clusters" || "${MODE}" == "component-reductions" || "${MODE}" == "merge-components" || "${MODE}" == "communities" || "${MODE}" == "directed-covers" || "${MODE}" == "cluster-stats" ]]; then
+if [[ "${MODE}" == "plan-clusters" || "${MODE}" == "component-reductions" || "${MODE}" == "merge-components" || "${MODE}" == "set-covers" || "${MODE}" == "directed-covers" || "${MODE}" == "cluster-stats" ]]; then
     if [[ -n "${PLINDER_CLUSTER_METRICS:-}" ]]; then
         IFS=',' read -r -a CLUSTER_METRICS <<< "${PLINDER_CLUSTER_METRICS}"
         for METRIC in "${CLUSTER_METRICS[@]}"; do

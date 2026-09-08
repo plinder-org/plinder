@@ -1,6 +1,0 @@
-Name	Type	Description
-system_pocket_CATH	str	CATH domain for the pocket
-system_pocket_Pfam	str	Pfam domain for the pocket
-system_pocket_SCOP2	str	SCOP2 domain for the pocket
-system_pocket_SCOP2B	str	SCOP2B domain for the pocket
-system_pocket_UniProt	str	UniProt domain for the pocket

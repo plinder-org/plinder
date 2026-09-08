@@ -19,9 +19,9 @@ def _write_interface_cluster_universe(
     index_dir: Path, interface_ids: list[str]
 ) -> None:
     """Write identity representative metadata for focused cluster tests."""
-    pd.DataFrame(
-        {"representative_system_id": interface_ids}
-    ).to_parquet(index_dir / "interface_representatives.parquet", index=False)
+    pd.DataFrame({"representative_system_id": interface_ids}).to_parquet(
+        index_dir / "interface_representatives.parquet", index=False
+    )
     half_ids = [
         f"{system_id}::side={side}" for system_id in interface_ids for side in (1, 2)
     ]
@@ -368,6 +368,10 @@ def test_symmetric_edge_shards_take_minimum_of_directional_maxima(tmp_path):
             "ligand_id": ["l1", "l2", "l3", "l4"],
             "system_type": ["holo"] * 4,
             "ligand_is_proper": [True] * 4,
+            "system_proper_num_pocket_residues": [200, 20, 200, 20],
+            "system_proper_num_interactions": [1, 10, 1, 10],
+            "system_proper_ligand_max_molecular_weight": [100, 300, 100, 300],
+            "system_pass_validation_criteria": [True, False, True, False],
         }
     ).to_parquet(index_dir / "annotation_table.parquet", index=False)
     pd.DataFrame(
@@ -426,13 +430,13 @@ def test_symmetric_edge_shards_take_minimum_of_directional_maxima(tmp_path):
     make_directed_cover_component_reduction(
         data_dir=tmp_path,
         metric=metric,
-        thresholds=[50],
+        thresholds=[90],
         source_path=edge_path,
     )
     merge_directed_cover_component_reductions(
         data_dir=tmp_path,
         metric=metric,
-        thresholds=[50],
+        thresholds=[90],
     )
     cover_path = make_directed_set_cover(
         data_dir=tmp_path,
@@ -442,22 +446,41 @@ def test_symmetric_edge_shards_take_minimum_of_directional_maxima(tmp_path):
         threads=1,
     )
     cover = pd.read_parquet(cover_path).set_index("ligand_id")
-    assert cover.loc["l1", "centroid_ligand_id"] == "l3"
-    assert cover.loc["l1", "similarity_to_centroid"] == pytest.approx(90.0)
-    assert cover.loc["l2", "centroid_ligand_id"] == "l2"
+    assert cover.loc["l1", "centroid_ligand_id"] == "l1"
+    assert cover.loc["l1", "similarity_to_centroid"] == pytest.approx(100.0)
+    assert cover.loc["l1", "coverage_count"] == 2
+    assert cover.loc["l1", "coverage_fraction"] == pytest.approx(0.5)
+    assert cover.loc["l2", "centroid_ligand_id"] == "l1"
     assert cover.loc["l3", "centroid_ligand_id"] == "l3"
+    assert cover.loc["l3", "coverage_count"] == 3
+    assert cover.loc["l3", "coverage_fraction"] == pytest.approx(0.75)
     assert cover.loc["l4", "centroid_ligand_id"] == "l3"
     assert cover.loc["l4", "similarity_to_centroid"] == pytest.approx(85.0)
+    assert (
+        cover.loc["l3", "representative_selection_order"]
+        < cover.loc["l1", "representative_selection_order"]
+    )
+
+    relaxed_cover_path = make_directed_set_cover(
+        data_dir=tmp_path,
+        metric=metric,
+        threshold=90,
+        scratch_dir=tmp_path / "scratch-relaxed-cover",
+        threads=1,
+    )
+    relaxed_cover = pd.read_parquet(relaxed_cover_path).set_index("ligand_id")
+    assert relaxed_cover.loc["l4", "centroid_ligand_id"] == "l3"
+    assert relaxed_cover.loc["l4", "similarity_to_centroid"] == pytest.approx(85.0)
+    assert relaxed_cover.loc["l4", "assignment_threshold"] == 50
+    assert relaxed_cover.loc["l3", "representative_selection_threshold"] == 90
+    assert relaxed_cover.loc["l1", "representative_selection_threshold"] == 50
 
 
-def test_interface_clusters_reuse_reciprocal_and_directed_cover_pipeline(tmp_path):
+def test_interface_clusters_use_directed_cover_pipeline(tmp_path):
     from plinder.data.clusters import (
-        make_communities,
         make_directed_cover_component_reduction,
         make_directed_set_cover,
-        make_score_component_reduction,
         merge_directed_cover_component_reductions,
-        merge_score_component_reductions,
         prepare_component_node_universe,
         prepare_symmetric_edge_plan,
         write_symmetric_edge_fragment_batch,
@@ -517,13 +540,6 @@ def test_interface_clusters_reuse_reciprocal_and_directed_cover_pipeline(tmp_pat
     assert pd.isna(edges.loc[("i1", "i3"), "similarity"])
     assert edges.loc[("i1", "i3"), "maximum_similarity"] == pytest.approx(90.0)
 
-    make_score_component_reduction(
-        data_dir=tmp_path,
-        metric=metric,
-        thresholds=[50],
-        source_path=edge_path,
-        entity_type="interface",
-    )
     make_directed_cover_component_reduction(
         data_dir=tmp_path,
         metric=metric,
@@ -531,24 +547,10 @@ def test_interface_clusters_reuse_reciprocal_and_directed_cover_pipeline(tmp_pat
         source_path=edge_path,
         entity_type="interface",
     )
-    merge_score_component_reductions(
-        data_dir=tmp_path,
-        metric=metric,
-        thresholds=[50],
-        entity_type="interface",
-    )
     merge_directed_cover_component_reductions(
         data_dir=tmp_path,
         metric=metric,
         thresholds=[50],
-        entity_type="interface",
-    )
-    make_communities(
-        data_dir=tmp_path,
-        metric=metric,
-        threshold=50,
-        scratch_dir=tmp_path / "scratch-communities",
-        threads=1,
         entity_type="interface",
     )
     cover_path = make_directed_set_cover(
@@ -560,28 +562,10 @@ def test_interface_clusters_reuse_reciprocal_and_directed_cover_pipeline(tmp_pat
         entity_type="interface",
     )
 
-    components = pd.read_parquet(
-        tmp_path
-        / "interface_clusters/cluster=components/directed=False"
-        / f"metric={metric}/threshold=50.parquet"
-    )
-    communities = pd.read_parquet(
-        tmp_path
-        / "interface_clusters/cluster=communities/directed=False"
-        / f"metric={metric}/threshold=50.parquet"
-    )
-    assert set(components["system_id"]) == set(interfaces)
-    assert set(communities["system_id"]) == set(interfaces)
-    assert _component_partition(
-        components.rename(columns={"system_id": "ligand_id"})
-    ) == {
-        frozenset({"i1", "i2"}),
-        frozenset({"i3"}),
-        frozenset({"i4"}),
-    }
     cover = pd.read_parquet(cover_path).set_index("system_id")
-    assert cover.loc["i1", "centroid_system_id"] == "i3"
-    assert cover.loc["i1", "similarity_to_centroid"] == pytest.approx(90.0)
+    assert cover.loc["i1", "centroid_system_id"] == "i1"
+    assert cover.loc["i2", "centroid_system_id"] == "i1"
+    assert cover.loc["i2", "similarity_to_centroid"] == pytest.approx(60.0)
     assert cover.loc["i4", "centroid_system_id"] == "i3"
 
     from plinder.data.pipeline.score import summarize_clustering_artifacts
@@ -593,7 +577,7 @@ def test_interface_clusters_reuse_reciprocal_and_directed_cover_pipeline(tmp_pat
         entity_type="interface",
     )
     assert summary["entity_type"] == "interface"
-    assert summary["artifact_count"] == 3
+    assert summary["artifact_count"] == 1
 
 
 def test_interface_node_universe_contains_only_scoring_representatives(tmp_path):
@@ -632,11 +616,14 @@ def test_interface_node_universe_contains_only_scoring_representatives(tmp_path)
         metric="interface_qcov",
         entity_type="interface",
     )[0] == ["i1"]
-    assert component_node_universe(
-        data_dir=tmp_path,
-        metric="interface_side_qcov",
-        entity_type="interface",
-    )[0] == half_ids
+    assert (
+        component_node_universe(
+            data_dir=tmp_path,
+            metric="interface_side_qcov",
+            entity_type="interface",
+        )[0]
+        == half_ids
+    )
 
 
 def test_interface_side_clusters_use_independent_side_nodes(tmp_path):
@@ -708,14 +695,11 @@ def test_interface_side_clusters_use_independent_side_nodes(tmp_path):
     assert edges.loc[("i1::side=1", "i2::side=2"), "similarity"] == pytest.approx(60.0)
 
 
-def test_empty_interface_universe_publishes_typed_empty_clusters(tmp_path):
+def test_empty_interface_universe_publishes_typed_empty_cover(tmp_path):
     from plinder.data.clusters import (
-        make_communities,
         make_directed_cover_component_reduction,
         make_directed_set_cover,
-        make_score_component_reduction,
         merge_directed_cover_component_reductions,
-        merge_score_component_reductions,
         prepare_component_node_universe,
         prepare_symmetric_edge_plan,
         write_symmetric_edge_shard,
@@ -748,13 +732,6 @@ def test_empty_interface_universe_publishes_typed_empty_clusters(tmp_path):
         / "interface_clusters/symmetric_edges/metric=interface_qcov"
         / "bucket=000.parquet"
     )
-    make_score_component_reduction(
-        data_dir=tmp_path,
-        metric="interface_qcov",
-        thresholds=[50],
-        source_path=edge_path,
-        entity_type="interface",
-    )
     make_directed_cover_component_reduction(
         data_dir=tmp_path,
         metric="interface_qcov",
@@ -762,22 +739,10 @@ def test_empty_interface_universe_publishes_typed_empty_clusters(tmp_path):
         source_path=edge_path,
         entity_type="interface",
     )
-    merge_score_component_reductions(
-        data_dir=tmp_path,
-        metric="interface_qcov",
-        thresholds=[50],
-        entity_type="interface",
-    )
     merge_directed_cover_component_reductions(
         data_dir=tmp_path,
         metric="interface_qcov",
         thresholds=[50],
-        entity_type="interface",
-    )
-    make_communities(
-        data_dir=tmp_path,
-        metric="interface_qcov",
-        threshold=50,
         entity_type="interface",
     )
     cover = make_directed_set_cover(
@@ -787,18 +752,9 @@ def test_empty_interface_universe_publishes_typed_empty_clusters(tmp_path):
         entity_type="interface",
     )
 
-    component = (
-        tmp_path
-        / "interface_clusters/cluster=components/directed=False"
-        / "metric=interface_qcov/threshold=50.parquet"
-    )
-    community = component.as_posix().replace(
-        "cluster=components", "cluster=communities"
-    )
-    for path in [component, Path(community), cover]:
-        frame = pd.read_parquet(path)
-        assert frame.empty
-        assert "system_id" in frame.columns
+    frame = pd.read_parquet(cover)
+    assert frame.empty
+    assert "system_id" in frame.columns
 
     from plinder.data.pipeline.score import summarize_clustering_artifacts
 
@@ -809,7 +765,7 @@ def test_empty_interface_universe_publishes_typed_empty_clusters(tmp_path):
         entity_type="interface",
     )
     assert summary["status"] == "complete"
-    assert summary["artifact_count"] == 3
+    assert summary["artifact_count"] == 1
 
 
 def test_interface_cluster_plan_requires_scores_for_nonempty_universe(tmp_path):
@@ -893,122 +849,45 @@ def test_symmetric_edge_fragment_validation_can_be_scoped_to_one_bucket(tmp_path
     )
 
 
-def test_communities_use_greedy_cover_and_best_centroid_assignment(tmp_path):
-    from plinder.data.clusters import (
-        make_communities,
-        prepare_symmetric_edge_plan,
-        write_symmetric_edge_fragment_batch,
-        write_symmetric_edge_shard,
+def test_greedy_set_cover_assigns_members_to_the_best_representative():
+    from plinder.data.clusters import _greedy_set_cover
+
+    nodes = ["l1", "l2", "l3", "l4"]
+    graph = nk.Graph(len(nodes), weighted=True, directed=False)
+    graph.addEdges(
+        (
+            np.asarray([0.7, 0.9, 0.75]),
+            (
+                np.asarray([0, 1, 2], dtype=np.uint),
+                np.asarray([1, 2, 3], dtype=np.uint),
+            ),
+        )
     )
 
-    metric = "sucos_shape_pocket_qcov"
-    ligands = ["l1", "l2", "l3", "l4", "l5"]
-    systems = [f"s{index}" for index in range(len(ligands))]
-    index_dir = tmp_path / "index"
-    score_dir = tmp_path / "scores" / "search_db=holo"
-    component_dir = (
-        tmp_path
-        / "ligand_clusters"
-        / "reductions"
-        / f"metric={metric}"
-        / "labels"
-        / "directed=false"
-    )
-    index_dir.mkdir(parents=True)
-    score_dir.mkdir(parents=True)
-    component_dir.mkdir(parents=True)
-    pd.DataFrame(
-        {
-            "system_id": systems,
-            "ligand_id": ligands,
-            "system_type": ["holo"] * len(ligands),
-            "system_num_protein_chains": [1] * len(ligands),
-            "system_num_ligand_chains": [1] * len(ligands),
-            "ligand_is_proper": [True] * len(ligands),
-        }
-    ).to_parquet(index_dir / "annotation_table.parquet", index=False)
-    pd.DataFrame(
-        {
-            "query_system": [
-                systems[0],
-                systems[1],
-                systems[1],
-                systems[2],
-                systems[2],
-                systems[3],
-            ],
-            "query_ligand_id": ["l1", "l2", "l2", "l3", "l3", "l4"],
-            "target_system": [
-                systems[1],
-                systems[0],
-                systems[2],
-                systems[1],
-                systems[3],
-                systems[2],
-            ],
-            "target_ligand_id": ["l2", "l1", "l3", "l2", "l4", "l3"],
-            "metric": [metric] * 6,
-            "similarity": [80, 70, 90, 60, 85, 75],
-        }
-    ).to_parquet(score_dir / "part.parquet", index=False)
-    plan = prepare_symmetric_edge_plan(
-        data_dir=tmp_path,
-        metrics=[metric],
-        source_batch_size=1,
-        bucket_count=1,
-    )
-    write_symmetric_edge_fragment_batch(
-        data_dir=tmp_path,
-        batch=plan["batches"][0],
-        scratch_dir=tmp_path / "scratch-fragments",
-        threads=1,
-    )
-    write_symmetric_edge_shard(
-        data_dir=tmp_path,
-        metric=metric,
-        bucket=0,
-        scratch_dir=tmp_path / "scratch-shard",
-        threads=1,
-    )
-    connectivity_labels = pd.DataFrame(
-        {
-            "ligand_id": ligands,
-            "label": [
-                "component0",
-                "component0",
-                "component0",
-                "component0",
-                "component1",
-            ],
-        }
-    )
-    connectivity_labels.to_parquet(component_dir / "threshold=50.parquet", index=False)
+    assert _greedy_set_cover(graph, nodes) == [
+        ("l2", ["l1", "l2"]),
+        ("l3", ["l3", "l4"]),
+    ]
 
-    make_communities(
-        data_dir=tmp_path,
-        metric=metric,
-        threshold=50,
-        scratch_dir=tmp_path / "scratch",
-        threads=1,
+
+def test_greedy_set_cover_selects_the_largest_residual_gain():
+    from plinder.data.clusters import _greedy_set_cover
+
+    nodes = ["broad-other", "preferred-1", "preferred-2"]
+    graph = nk.Graph(len(nodes), weighted=True, directed=False)
+    graph.addEdges(
+        (
+            np.asarray([0.9, 0.9]),
+            (
+                np.asarray([0, 0], dtype=np.uint),
+                np.asarray([1, 2], dtype=np.uint),
+            ),
+        )
     )
 
-    communities = pd.read_parquet(
-        tmp_path
-        / "ligand_clusters"
-        / "cluster=communities"
-        / "directed=False"
-        / f"metric={metric}"
-        / "threshold=50.parquet"
-    )
-    assert set(communities["ligand_id"]) == set(ligands)
-    joined = communities.merge(connectivity_labels, on="ligand_id")
-    assert joined.groupby("label_x")["label_y"].nunique().max() == 1
-    assert _component_partition(communities) == {
-        frozenset({"l1", "l2"}),
-        frozenset({"l3", "l4"}),
-        frozenset({"l5"}),
-    }
-    assert set(communities["directed"]) == {False}
+    groups = _greedy_set_cover(graph, nodes)
+
+    assert groups == [("broad-other", nodes)]
 
 
 def test_directed_cover_uses_query_to_centroid_scores_and_reassigns():
@@ -1029,24 +908,170 @@ def test_directed_cover_uses_query_to_centroid_scores_and_reassigns():
     assignments = _greedy_directed_centroid_cover(graph, nodes)
 
     assert assignments == [
-        ("a", "b", pytest.approx(80.0)),
-        ("b", "b", 100.0),
-        ("c", "d", pytest.approx(90.0)),
-        ("d", "d", 100.0),
+        ("a", "b", pytest.approx(80.0), 1, pytest.approx(0.25)),
+        ("b", "b", 100.0, 3, pytest.approx(0.75)),
+        ("c", "d", pytest.approx(90.0), 1, pytest.approx(0.25)),
+        ("d", "d", 100.0, 2, pytest.approx(0.5)),
     ]
 
 
-def test_community_stream_rejects_edges_crossing_components(tmp_path):
+def test_directed_cover_falls_back_to_relaxed_edges_when_strict_gain_ends():
+    from plinder.data.clusters import _greedy_directed_set_cover
+
+    nodes = ["q1", "q2", "r1", "r2"]
+    graph = nk.Graph(len(nodes), weighted=True, directed=True)
+    graph.addEdges(
+        (
+            np.asarray([0.9, 0.55]),
+            (
+                np.asarray([0, 1], dtype=np.uint),
+                np.asarray([2, 3], dtype=np.uint),
+            ),
+        )
+    )
+    candidate_mask = np.asarray([False, False, True, True])
+    target_mask = np.asarray([True, True, False, False])
+
+    selections, assignments = _greedy_directed_set_cover(
+        graph,
+        nodes,
+        primary_threshold=90,
+        fallback_threshold=50,
+        candidate_mask=candidate_mask,
+        target_mask=target_mask,
+    )
+
+    assert [
+        (nodes[item.representative], item.threshold, item.marginal_gain)
+        for item in selections
+    ] == [("r1", 90, 1), ("r2", 50, 1)]
+    assert [
+        (
+            nodes[item.query],
+            nodes[item.representative],
+            item.similarity,
+            item.threshold,
+        )
+        for item in assignments
+    ] == [
+        ("q1", "r1", pytest.approx(90.0), 90),
+        ("q2", "r2", pytest.approx(55.0), 50),
+    ]
+
+
+def test_directed_cover_uses_stable_ids_for_ties_and_self_for_isolates():
+    from plinder.data.clusters import _greedy_directed_set_cover
+
+    nodes = ["query", "lower-quality", "higher-quality", "isolated"]
+    graph = nk.Graph(len(nodes), weighted=True, directed=True)
+    graph.addEdges(
+        (
+            np.asarray([0.8, 0.8]),
+            (
+                np.asarray([0, 0], dtype=np.uint),
+                np.asarray([1, 2], dtype=np.uint),
+            ),
+        )
+    )
+
+    selections, assignments = _greedy_directed_set_cover(
+        graph,
+        nodes,
+        primary_threshold=70,
+        fallback_threshold=50,
+        candidate_mask=np.asarray([False, True, True, False]),
+        target_mask=np.asarray([True, False, False, True]),
+    )
+
+    assert [(nodes[item.representative], item.threshold) for item in selections] == [
+        ("higher-quality", 70),
+        ("isolated", None),
+    ]
+    assert [
+        (nodes[item.query], nodes[item.representative]) for item in assignments
+    ] == [("query", "higher-quality"), ("isolated", "isolated")]
+
+
+def test_directed_cover_selects_the_largest_residual_gain():
+    from plinder.data.clusters import _greedy_directed_set_cover
+
+    nodes = ["q1", "q2", "q3", "preferred", "broad-other"]
+    graph = nk.Graph(len(nodes), weighted=True, directed=True)
+    graph.addEdges(
+        (
+            np.asarray([0.9, 0.9, 0.9, 0.9]),
+            (
+                np.asarray([0, 0, 1, 2], dtype=np.uint),
+                np.asarray([3, 4, 4, 4], dtype=np.uint),
+            ),
+        )
+    )
+
+    selections, assignments = _greedy_directed_set_cover(
+        graph,
+        nodes,
+        primary_threshold=90,
+        fallback_threshold=50,
+        candidate_mask=np.asarray([False, False, False, True, True]),
+        target_mask=np.asarray([True, True, True, False, False]),
+    )
+
+    assert [nodes[item.representative] for item in selections] == ["broad-other"]
+    assert {nodes[item.query] for item in assignments} == {"q1", "q2", "q3"}
+
+
+def test_symmetric_plan_checks_only_sources_for_the_requested_metric(tmp_path):
     from plinder.data.clusters import (
-        make_communities,
+        load_symmetric_edge_plan,
+        prepare_symmetric_edge_plan,
+    )
+
+    score_dir = tmp_path / "scores/search_db=holo"
+    chemical_dir = tmp_path / "ligand_scores"
+    score_dir.mkdir(parents=True)
+    chemical_dir.mkdir()
+    score_source = score_dir / "scores.parquet"
+    chemical_source = chemical_dir / "chemical.parquet"
+    score_source.write_text("score")
+    chemical_source.write_text("chemical")
+    prepare_symmetric_edge_plan(
+        data_dir=tmp_path,
+        metrics=[
+            "sucos_shape_pocket_qcov",
+            "tanimoto_similarity_ecfp4_1024",
+        ],
+        source_batch_size=1,
+        bucket_count=1,
+    )
+    chemical_source.unlink()
+
+    plan = load_symmetric_edge_plan(
+        tmp_path,
+        metrics=["sucos_shape_pocket_qcov"],
+    )
+    assert plan["metrics"] == [
+        "sucos_shape_pocket_qcov",
+        "tanimoto_similarity_ecfp4_1024",
+    ]
+    with pytest.raises(ValueError, match="raw score source changed"):
+        load_symmetric_edge_plan(
+            tmp_path,
+            metrics=["tanimoto_similarity_ecfp4_1024"],
+        )
+
+
+def test_set_cover_stream_rejects_edges_crossing_components(tmp_path):
+    from plinder.data.clusters import (
+        make_set_cover,
         prepare_symmetric_edge_plan,
         write_symmetric_edge_fragment_batch,
         write_symmetric_edge_shard,
     )
 
-    metric = "sucos_shape_pocket_qcov"
+    metric = "tanimoto_similarity_ecfp4_1024"
     index_dir = tmp_path / "index"
-    score_dir = tmp_path / "scores" / "search_db=holo"
+    score_dir = tmp_path / "ligand_scores"
+    fingerprint_dir = tmp_path / "fingerprints"
     component_dir = (
         tmp_path
         / "ligand_clusters"
@@ -1056,26 +1081,29 @@ def test_community_stream_rejects_edges_crossing_components(tmp_path):
         / "directed=false"
     )
     index_dir.mkdir(parents=True)
-    score_dir.mkdir(parents=True)
+    score_dir.mkdir()
+    fingerprint_dir.mkdir()
     component_dir.mkdir(parents=True)
     pd.DataFrame(
         {
             "system_id": ["s1", "s2"],
             "ligand_id": ["l1", "l2"],
             "system_type": ["holo", "holo"],
-            "system_num_protein_chains": [1, 1],
-            "system_num_ligand_chains": [1, 1],
             "ligand_is_proper": [True, True],
+            "ligand_smiles": ["CC", "CCC"],
         }
     ).to_parquet(index_dir / "annotation_table.parquet", index=False)
     pd.DataFrame(
         {
-            "query_system": ["s1", "s2"],
-            "query_ligand_id": ["l1", "l2"],
-            "target_system": ["s2", "s1"],
-            "target_ligand_id": ["l2", "l1"],
-            "metric": [metric, metric],
-            "similarity": [80, 70],
+            "ligand_smiles_id": [0, 1],
+            "ligand_rdkit_canonical_smiles": ["CC", "CCC"],
+        }
+    ).to_parquet(fingerprint_dir / "ligands_per_smiles.parquet", index=False)
+    pd.DataFrame(
+        {
+            "query_ligand_id": [0],
+            "target_ligand_id": [1],
+            metric: [80.0],
         }
     ).to_parquet(score_dir / "part.parquet", index=False)
     plan = prepare_symmetric_edge_plan(
@@ -1098,11 +1126,11 @@ def test_community_stream_rejects_edges_crossing_components(tmp_path):
         threads=1,
     )
     pd.DataFrame(
-        {"ligand_id": ["l1", "l2"], "label": ["component0", "component1"]}
+        {"ligand_id": ["0", "1"], "label": ["component0", "component1"]}
     ).to_parquet(component_dir / "threshold=50.parquet", index=False)
 
     with pytest.raises(ValueError, match="crossing edges"):
-        make_communities(
+        make_set_cover(
             data_dir=tmp_path,
             metric=metric,
             threshold=50,
@@ -1111,7 +1139,7 @@ def test_community_stream_rejects_edges_crossing_components(tmp_path):
         )
 
 
-def test_ligand_clusters_are_merged_without_system_projection(tmp_path):
+def test_ligand_covers_are_merged_without_system_projection(tmp_path):
     from plinder.data.pipeline.utils import finalize_index
 
     index_dir = tmp_path / "index"
@@ -1140,7 +1168,7 @@ def test_ligand_clusters_are_merged_without_system_projection(tmp_path):
             ],
             "system_biounit_id": ["1"] * 5,
             "ligand_id": [ligand_a1, ligand_a2, ligand_b, ligand_c, ligand_d],
-            "ligand_rdkit_canonical_smiles": [
+            "ligand_smiles": [
                 "CC",
                 "CCC",
                 "CCCC",
@@ -1181,9 +1209,7 @@ def test_ligand_clusters_are_merged_without_system_projection(tmp_path):
     proper_annotation = annotation[annotation["ligand_is_proper"]]
     pd.DataFrame(
         {
-            "ligand_rdkit_canonical_smiles": proper_annotation[
-                "ligand_rdkit_canonical_smiles"
-            ],
+            "ligand_rdkit_canonical_smiles": proper_annotation["ligand_smiles"],
             "ligand_smiles_id": range(len(proper_annotation)),
         }
     ).to_parquet(fingerprint_dir / "ligand_similarity_annotations.parquet", index=False)
@@ -1196,17 +1222,6 @@ def test_ligand_clusters_are_merged_without_system_projection(tmp_path):
         }
     ).to_parquet(ligand_dir / "part.parquet", index=False)
 
-    ligand_cluster = (
-        tmp_path / "ligand_clusters/cluster=components/directed=False/"
-        "metric=sucos_shape_pocket_qcov/threshold=50.parquet"
-    )
-    ligand_cluster.parent.mkdir(parents=True)
-    pd.DataFrame(
-        {
-            "ligand_id": [ligand_a1, ligand_a2, ligand_b, ligand_c],
-            "label": ["c0", "c1", "c0", "c2"],
-        }
-    ).to_parquet(ligand_cluster, index=False)
     directed_cover = (
         tmp_path
         / "ligand_sampling/directed_set_cover"
@@ -1217,46 +1232,42 @@ def test_ligand_clusters_are_merged_without_system_projection(tmp_path):
         {
             "ligand_id": [ligand_a1, ligand_a2, ligand_b, ligand_c],
             "label": ["d0", "d1", "d0", "d2"],
+            "centroid_ligand_id": [
+                ligand_a1,
+                ligand_a2,
+                ligand_a1,
+                ligand_c,
+            ],
         }
     ).to_parquet(directed_cover, index=False)
 
-    system_cluster = (
-        tmp_path
-        / "clusters/cluster=components/directed=True/metric=sucos_shape_pocket_qcov/threshold=50.parquet"
-    )
-    ligand_labels = pd.read_parquet(ligand_cluster).set_index("ligand_id")["label"]
-    assert not system_cluster.exists()
-    assert ligand_labels[ligand_a1] == ligand_labels[ligand_b]
-    assert ligand_labels[ligand_a2] != ligand_labels[ligand_a1]
-    assert ligand_labels[ligand_c] != ligand_labels[ligand_a1]
-    assert ligand_d not in ligand_labels
-
     finalized = finalize_index(data_dir=tmp_path)
-    ligand_column = "sucos_shape_pocket_qcov__50__ligand__component"
-    assert "sucos_shape_pocket_qcov__50__component" not in finalized
-    finalized_labels = finalized.set_index("ligand_id")[ligand_column]
+    cluster_table = pd.read_parquet(index_dir / "ligand_clusters.parquet")
+    ligand_column = "sucos_shape_pocket_qcov__50__ligand__directed_set_cover"
+    assert "sucos_shape_pocket_qcov__50__directed_set_cover" not in finalized
+    assert ligand_column not in finalized
+    finalized_labels = cluster_table.set_index("ligand_id")[ligand_column]
     assert finalized_labels[ligand_a1] == finalized_labels[ligand_b]
     assert finalized_labels[ligand_a2] != finalized_labels[ligand_a1]
+    assert pd.isna(finalized_labels[ligand_d])
+    centroid_column = f"{ligand_column}__is_centroid"
+    finalized_centroids = cluster_table.set_index("ligand_id")[centroid_column]
+    assert bool(finalized_centroids[ligand_a1])
+    assert not bool(finalized_centroids[ligand_b])
     assert not bool(
         finalized.set_index("ligand_id").loc[ligand_b, "ligand_is_3d_score_able"]
     )
 
 
-def test_finalize_index_rejects_stale_ligand_cluster_universe(tmp_path):
+def test_finalize_index_rejects_stale_ligand_cover_universe(tmp_path):
     from plinder.data.pipeline.utils import finalize_index
 
     index_dir = tmp_path / "index"
     ligand_dir = tmp_path / "ligands"
     fingerprint_dir = tmp_path / "fingerprints"
-    cluster_file = (
-        tmp_path
-        / "ligand_clusters/cluster=components/directed=False"
-        / "metric=sucos_shape_pocket_qcov/threshold=30.parquet"
-    )
     index_dir.mkdir(parents=True)
     ligand_dir.mkdir()
     fingerprint_dir.mkdir()
-    cluster_file.parent.mkdir(parents=True)
     pd.DataFrame(
         {
             "system_id": ["s1", "s2"],
@@ -1264,7 +1275,7 @@ def test_finalize_index_rejects_stale_ligand_cluster_universe(tmp_path):
             "system_type": ["holo", "holo"],
             "ligand_id": ["l1", "l2"],
             "ligand_is_proper": [True, True],
-            "ligand_rdkit_canonical_smiles": ["CC", "CCC"],
+            "ligand_smiles": ["CC", "CCC"],
         }
     ).to_parquet(index_dir / "annotation_table.parquet", index=False)
     pd.DataFrame(
@@ -1282,17 +1293,19 @@ def test_finalize_index_rejects_stale_ligand_cluster_universe(tmp_path):
         fingerprint_dir / "ligand_similarity_annotations.parquet",
         index=False,
     )
-    pd.DataFrame({"ligand_id": ["l1"], "label": ["c0"]}).to_parquet(
-        cluster_file,
-        index=False,
-    )
     directed_cover = (
         tmp_path
         / "ligand_sampling/directed_set_cover"
         / "metric=sucos_shape_pocket_qcov/threshold=30.parquet"
     )
     directed_cover.parent.mkdir(parents=True)
-    pd.DataFrame({"ligand_id": ["l1"], "label": ["d0"]}).to_parquet(
+    pd.DataFrame(
+        {
+            "ligand_id": ["l1"],
+            "centroid_ligand_id": ["l1"],
+            "label": ["d0"],
+        }
+    ).to_parquet(
         directed_cover,
         index=False,
     )
@@ -1307,15 +1320,9 @@ def test_finalize_index_rejects_clusters_from_before_targeted_repair(tmp_path):
     index_dir = tmp_path / "index"
     ligand_dir = tmp_path / "ligands"
     fingerprint_dir = tmp_path / "fingerprints"
-    cluster_file = (
-        tmp_path
-        / "ligand_clusters/cluster=components/directed=False"
-        / "metric=sucos_shape_pocket_qcov/threshold=30.parquet"
-    )
     index_dir.mkdir(parents=True)
     ligand_dir.mkdir()
     fingerprint_dir.mkdir()
-    cluster_file.parent.mkdir(parents=True)
     pd.DataFrame(
         {
             "system_id": ["s1"],
@@ -1323,7 +1330,7 @@ def test_finalize_index_rejects_clusters_from_before_targeted_repair(tmp_path):
             "system_type": ["holo"],
             "ligand_id": ["l1"],
             "ligand_is_proper": [True],
-            "ligand_rdkit_canonical_smiles": ["CC"],
+            "ligand_smiles": ["CC"],
         }
     ).to_parquet(index_dir / "annotation_table.parquet", index=False)
     pd.DataFrame(
@@ -1332,17 +1339,19 @@ def test_finalize_index_rejects_clusters_from_before_targeted_repair(tmp_path):
             "ligand_is_3d_score_able": [True],
         }
     ).to_parquet(ligand_dir / "part.parquet", index=False)
-    pd.DataFrame({"ligand_id": ["l1"], "label": ["c0"]}).to_parquet(
-        cluster_file,
-        index=False,
-    )
     directed_cover = (
         tmp_path
         / "ligand_sampling/directed_set_cover"
         / "metric=sucos_shape_pocket_qcov/threshold=30.parquet"
     )
     directed_cover.parent.mkdir(parents=True)
-    pd.DataFrame({"ligand_id": ["l1"], "label": ["d0"]}).to_parquet(
+    pd.DataFrame(
+        {
+            "ligand_id": ["l1"],
+            "centroid_ligand_id": ["l1"],
+            "label": ["d0"],
+        }
+    ).to_parquet(
         directed_cover,
         index=False,
     )
@@ -1419,8 +1428,15 @@ def test_component_node_universe_keeps_large_holo_targets_in_prepared_cache(
     assert systems == {"s1", "s2"}
 
 
-def test_tanimoto_clusters_expand_unique_smiles_to_ligands(tmp_path):
-    from plinder.data.clusters import expand_fingerprint_clusters_to_ligands
+def test_tanimoto_set_cover_expands_unique_smiles_to_ligands(tmp_path):
+    from plinder.data.clusters import (
+        make_score_component_reduction,
+        make_set_cover,
+        merge_score_component_reductions,
+        prepare_symmetric_edge_plan,
+        write_symmetric_edge_fragment_batch,
+        write_symmetric_edge_shard,
+    )
 
     index_dir = tmp_path / "index"
     fingerprint_dir = tmp_path / "fingerprints"
@@ -1442,7 +1458,7 @@ def test_tanimoto_clusters_expand_unique_smiles_to_ligands(tmp_path):
                 "3ccc__1__1.W",
             ],
             "ligand_molecular_weight": [100.0, 200.0, 150.0, 100.0],
-            "ligand_rdkit_canonical_smiles": ["CC", "CCC", "CCCC", "CC"],
+            "ligand_smiles": ["CC", "CCC", "CCCC", "CC"],
             "ligand_is_proper": [True] * 4,
             "ligand_is_ion": [False] * 4,
             "ligand_is_artifact": [False] * 4,
@@ -1462,19 +1478,59 @@ def test_tanimoto_clusters_expand_unique_smiles_to_ligands(tmp_path):
         }
     ).to_parquet(score_dir / "part.parquet", index=False)
 
-    labels = expand_fingerprint_clusters_to_ligands(
+    metric = "tanimoto_similarity_ecfp4_1024"
+    plan = prepare_symmetric_edge_plan(
         data_dir=tmp_path,
-        labeldf=pd.DataFrame(
-            {
-                "ligand_id": [0, 1, 2],
-                "label": ["c0", "c1", "c0"],
-            }
-        ),
-    ).set_index("ligand_id")["label"]
+        metrics=[metric],
+        source_batch_size=1,
+        bucket_count=1,
+    )
+    write_symmetric_edge_fragment_batch(
+        data_dir=tmp_path,
+        batch=plan["batches"][0],
+        scratch_dir=tmp_path / "scratch-fragments",
+        threads=1,
+    )
+    write_symmetric_edge_shard(
+        data_dir=tmp_path,
+        metric=metric,
+        bucket=0,
+        scratch_dir=tmp_path / "scratch-shard",
+        threads=1,
+    )
+    edge_path = (
+        tmp_path
+        / "ligand_clusters/symmetric_edges"
+        / f"metric={metric}/bucket=000.parquet"
+    )
+    make_score_component_reduction(
+        data_dir=tmp_path,
+        metric=metric,
+        thresholds=[90],
+        source_path=edge_path,
+    )
+    merge_score_component_reductions(
+        data_dir=tmp_path,
+        metric=metric,
+        thresholds=[90],
+    )
+    output = make_set_cover(
+        data_dir=tmp_path,
+        metric=metric,
+        threshold=90,
+        scratch_dir=tmp_path / "scratch-cover",
+        threads=1,
+    )
+    cover = pd.read_parquet(output).set_index("ligand_id")
+    labels = cover["label"]
     assert labels["1aaa__1__1.X"] == labels["2bbb__1__1.Z"]
     assert labels["3ccc__1__1.W"] == labels["2bbb__1__1.Z"]
     assert labels["1aaa__1__1.Y"] != labels["2bbb__1__1.Z"]
-    assert not (tmp_path / "clusters").exists()
+    assert cover.loc["1aaa__1__1.X", "centroid_ligand_id"] == "1aaa__1__1.X"
+    assert cover.loc["2bbb__1__1.Z", "centroid_ligand_id"] == "1aaa__1__1.X"
+    assert set(cover["cluster"]) == {"set_cover"}
+    assert not (tmp_path / "ligand_clusters/cluster=components").exists()
+    assert not (tmp_path / "ligand_clusters/cluster=communities").exists()
     assert not (fingerprint_dir / "ligands_per_system.parquet").exists()
 
 

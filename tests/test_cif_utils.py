@@ -25,6 +25,7 @@ from plinder.data.annotations.cif_utils import (
     assign_bond_orders_from_smiles,
     build_biounit,
     check_cif_bond_orders,
+    get_entry_taxonomy,
     get_legacy_chain_instance_mapping,
     get_structure_with_altloc,
     get_unknown_ligand_ids,
@@ -45,6 +46,85 @@ def _load_boltz_ligand_smiles() -> str:
 
 
 LIGAND_SMILES = _load_boltz_ligand_smiles()
+
+
+def test_get_entry_taxonomy_collects_all_source_categories_and_hosts():
+    block = pdbx.CIFBlock()
+    block["entity_src_gen"] = pdbx.CIFCategory(
+        {
+            "entity_id": ["1", "2"],
+            "pdbx_gene_src_ncbi_taxonomy_id": ["9606", "?"],
+            "pdbx_gene_src_scientific_name": ["Homo sapiens", "synthetic construct"],
+            "pdbx_host_org_ncbi_taxonomy_id": ["562", "562"],
+            "pdbx_host_org_scientific_name": ["Escherichia coli", "Escherichia coli"],
+        }
+    )
+    block["entity_src_nat"] = pdbx.CIFCategory(
+        {
+            "entity_id": ["3"],
+            "pdbx_ncbi_taxonomy_id": ["10090"],
+            "pdbx_organism_scientific": ["Mus musculus"],
+        }
+    )
+    block["pdbx_entity_src_syn"] = pdbx.CIFCategory(
+        {
+            "entity_id": ["4"],
+            "ncbi_taxonomy_id": ["32630"],
+            "organism_scientific": ["synthetic construct"],
+        }
+    )
+
+    assert get_entry_taxonomy(block) == {
+        "source_taxonomy_ids": [9606, 10090, 32630],
+        "source_organism_names": [
+            "Homo sapiens",
+            "Mus musculus",
+            "synthetic construct",
+        ],
+        "host_taxonomy_ids": [562],
+        "host_organism_names": ["Escherichia coli"],
+    }
+
+
+def _nucleotide_chain(residue_names: list[str]) -> struc.AtomArray:
+    atom_names: list[str] = []
+    res_ids: list[int] = []
+    expanded_residue_names: list[str] = []
+    for res_id, residue_name in enumerate(residue_names, start=1):
+        names = ["P", "C4'", "C3'", "O3'"]
+        if residue_name in {"A", "C", "G", "U", "I"}:
+            names.append("O2'")
+        atom_names.extend(names)
+        res_ids.extend([res_id] * len(names))
+        expanded_residue_names.extend([residue_name] * len(names))
+    atoms = struc.AtomArray(len(atom_names))
+    atoms.coord = np.arange(len(atom_names) * 3).reshape(-1, 3)
+    atoms.chain_id = np.array(["A"] * len(atom_names))
+    atoms.res_id = np.array(res_ids)
+    atoms.res_name = np.array(expanded_residue_names)
+    atoms.atom_name = np.array(atom_names)
+    atoms.element = np.array(["P" if name == "P" else name[0] for name in atom_names])
+    atoms.hetero = np.zeros(len(atom_names), dtype=bool)
+    return atoms
+
+
+@pytest.mark.parametrize(
+    ("residue_names", "expected"),
+    [
+        (["DA", "DC"], "polydeoxyribonucleotide"),
+        (["A", "C"], "polyribonucleotide"),
+        (
+            ["DA", "C"],
+            "polydeoxyribonucleotide/polyribonucleotide hybrid",
+        ),
+    ],
+)
+def test_coordinate_chain_type_distinguishes_dna_and_rna(residue_names, expected):
+    from plinder.data.annotations.aggregate_annotations import (
+        _chain_type_from_coordinates,
+    )
+
+    assert _chain_type_from_coordinates(_nucleotide_chain(residue_names)) == expected
 
 
 def test_deposited_first_altloc_accepts_numeric_ids():
@@ -286,8 +366,8 @@ def test_assign_bond_orders_from_smiles(boltz_cif):
 
     assert all(c == "LIG" for c in comp_ids)
     assert len(comp_ids) > 0
-    assert "SING" in orders or "AROM" in orders
-    assert "DOUB" in orders or "AROM" in orders
+    assert "sing" in orders or "arom" in orders
+    assert "doub" in orders or "arom" in orders
 
 
 def test_check_passes_after_enrichment(boltz_cif):
@@ -464,6 +544,182 @@ def test_assign_handles_multi_instance_comp_id(boltz_cif, tmp_path):
 # ---------------------------------------------------------------------------
 
 
+def test_custom_cif_modes_distinguish_assembled_from_deposited_pdb(test_dir):
+    from plinder.data.annotations.aggregate_annotations import Entry
+
+    cif = test_dir / "interfaces/cm/pdb_00007cm8/pdb_00007cm8_xyz-enrich.cif.gz"
+    assembled = Entry.from_custom_cif_file(
+        pdb_id="custom_7cm8",
+        cif_file=cif,
+        structure_mode="as_is",
+        include_ligands=False,
+        include_interfaces=True,
+        interface_annotate_prodigy=False,
+    )
+    deposited = Entry.from_custom_cif_file(
+        pdb_id=None,
+        cif_file=cif,
+        structure_mode="pdb",
+        assembly_ids=["1"],
+        include_ligands=False,
+        include_interfaces=True,
+        interface_annotate_prodigy=False,
+    )
+
+    assert assembled.pdb_id == "custom_7cm8"
+    assert assembled.interfaces == []
+    assert deposited.pdb_id == "7cm8"
+    assert [interface.system_id for interface in deposited.interfaces] == [
+        "7cm8__1__1.A--2.A"
+    ]
+    assert set(deposited.biounit_chain_ids) == {"1"}
+
+
+def test_custom_pdb_mode_reuses_optional_atom_site_defaults(test_dir, tmp_path):
+    from plinder.data.annotations.aggregate_annotations import Entry
+    from plinder.data.annotations.cif_utils import read_mmcif_file
+
+    source = test_dir / "interfaces/cm/pdb_00007cm8/pdb_00007cm8_xyz-enrich.cif.gz"
+    cif_file = read_mmcif_file(source)
+    atom_site = list(cif_file.values())[0]["atom_site"]
+    del atom_site["pdbx_PDB_model_num"]
+    del atom_site["pdbx_PDB_ins_code"]
+    minimal = tmp_path / "7cm8_without_optional_atom_site.cif"
+    cif_file.write(str(minimal))
+
+    entry = Entry.from_custom_cif_file(
+        pdb_id=None,
+        cif_file=minimal,
+        structure_mode="pdb",
+        assembly_ids=["1"],
+        include_ligands=False,
+        include_interfaces=True,
+        interface_annotate_prodigy=False,
+    )
+
+    assert entry.pdb_id == "7cm8"
+    assert set(entry.biounit_chain_ids) == {"1"}
+
+
+def test_custom_as_is_mode_detects_interface_in_supplied_coordinates(test_dir):
+    from plinder.data.annotations.aggregate_annotations import Entry
+
+    cif = test_dir / "interfaces/cm/pdb_00007cma/pdb_00007cma_xyz-enrich.cif.gz"
+    entry = Entry.from_custom_cif_file(
+        pdb_id="custom_7cma",
+        cif_file=cif,
+        structure_mode="as_is",
+        include_ligands=False,
+        include_interfaces=True,
+        interface_annotate_prodigy=False,
+    )
+
+    assert [interface.system_id for interface in entry.interfaces] == [
+        "custom_7cma__1__1.A--1.B"
+    ]
+
+
+def test_custom_interface_only_mode_preserves_saved_ligands(test_dir, tmp_path):
+    from plinder.data.annotations.aggregate_annotations import Entry
+
+    ligand_file = tmp_path / "custom_7cma/ligand_files/A.sdf"
+    ligand_file.parent.mkdir(parents=True)
+    ligand_file.write_text("existing canonical ligand")
+    cif = test_dir / "interfaces/cm/pdb_00007cma/pdb_00007cma_xyz-enrich.cif.gz"
+
+    Entry.from_custom_cif_file(
+        pdb_id="custom_7cma",
+        cif_file=cif,
+        structure_mode="as_is",
+        save_folder=tmp_path,
+        include_ligands=False,
+        include_interfaces=True,
+        interface_annotate_prodigy=False,
+    )
+
+    assert ligand_file.read_text() == "existing canonical ligand"
+
+
+def test_custom_pdb_output_does_not_infer_data_dir(cif_6i41, tmp_path, monkeypatch):
+    from plinder.data.annotations import aggregate_annotations as agg
+    from plinder.data.annotations.aggregate_annotations import Entry
+
+    def unexpected_reference_lookup(_data_dir):
+        pytest.fail("save_folder must not be interpreted as data_dir")
+
+    monkeypatch.setattr(agg, "get_artifact_codes", unexpected_reference_lookup)
+    Entry.from_custom_cif_file(
+        pdb_id=None,
+        cif_file=cif_6i41,
+        structure_mode="pdb",
+        assembly_ids=["1"],
+        save_folder=tmp_path / "standalone-output",
+        include_ligands=True,
+        include_interfaces=False,
+    )
+
+    assert list((tmp_path / "standalone-output/6i41/ligand_files").glob("*.sdf"))
+
+
+def test_custom_cif_rejects_legacy_pdb_path():
+    from plinder.data.annotations.aggregate_annotations import Entry
+
+    with pytest.raises(ValueError, match="must be mmCIF"):
+        Entry.from_custom_cif_file(
+            pdb_id="custom",
+            cif_file=Path("model.pdb"),
+            include_ligands=False,
+            include_interfaces=True,
+        )
+
+
+def test_custom_cif_reports_malformed_input(tmp_path):
+    from plinder.data.annotations.aggregate_annotations import Entry
+
+    malformed = tmp_path / "malformed.cif"
+    malformed.write_text("this is not an mmCIF")
+    with pytest.raises(ValueError, match="cannot parse custom mmCIF"):
+        Entry.from_custom_cif_file(
+            pdb_id="custom",
+            cif_file=malformed,
+            include_ligands=False,
+            include_interfaces=True,
+        )
+
+
+def test_custom_cif_rejects_assembly_selection_in_as_is_mode(boltz_cif):
+    from plinder.data.annotations.aggregate_annotations import Entry
+
+    with pytest.raises(ValueError, match="only valid in pdb mode"):
+        Entry.from_custom_cif_file(
+            pdb_id="custom",
+            cif_file=boltz_cif,
+            assembly_ids=["1"],
+        )
+
+
+def test_custom_pdb_mode_uses_deposited_entry_id(boltz_cif):
+    from plinder.data.annotations.aggregate_annotations import Entry
+
+    with pytest.raises(ValueError, match="pdb_id must be None"):
+        Entry.from_custom_cif_file(
+            pdb_id="alias",
+            cif_file=boltz_cif,
+            structure_mode="pdb",
+        )
+
+
+def test_selected_assembly_ids_validates_requested_subset():
+    from plinder.data.annotations.aggregate_annotations import _selected_assembly_ids
+
+    assert _selected_assembly_ids(["1", "2"], ["2", "2", "1"]) == ["2", "1"]
+    assert _selected_assembly_ids(["1", "2"], "2") == ["2"]
+    with pytest.raises(ValueError, match="absent from the mmCIF"):
+        _selected_assembly_ids(["1"], ["2"])
+    with pytest.raises(ValueError, match="must not be empty"):
+        _selected_assembly_ids(["1"], [])
+
+
 def test_from_custom_cif_warns_on_multi_model(boltz_cif, tmp_path, monkeypatch):
     """Multi-model CIFs (NMR ensembles, multi-sample) warn and use model 1."""
     from plinder.data.annotations import aggregate_annotations as agg
@@ -556,6 +812,80 @@ def test_from_custom_cif_with_smiles(boltz_cif):
     f = pdbx.CIFFile.read(str(boltz_cif))
     block = list(f.values())[0]
     assert "chem_comp_bond" not in block
+
+
+def test_from_custom_cif_with_ccd_code(boltz_cif, tmp_path):
+    """A generic LIG can borrow bonds and RDKit chemistry from a CCD entry."""
+    from plinder.data.annotations.aggregate_annotations import Entry
+    from plinder.data.annotations.ligand_utils import _get_ccd_smiles
+
+    fixed_cif = tmp_path / "ccd_bonds.cif"
+    entry = Entry.from_custom_cif_file(
+        pdb_id="8c3u",
+        cif_file=boltz_cif,
+        ligand_ccd_code_dict={"LIG": "T9C"},
+        save_fixed_cif=fixed_cif,
+    )
+    ligands = [
+        ligand
+        for system in entry.systems.values()
+        for ligand in system.ligands
+        if ligand.ccd_code == "T9C"
+    ]
+
+    assert ligands
+    assert _get_ccd_smiles("T9C") is not None
+    assert {ligand.smiles for ligand in ligands} == {_get_ccd_smiles("T9C")}
+    assert all(ligand.smiles for ligand in ligands)
+    assert all(ligand.num_heavy_atoms for ligand in ligands)
+    assert all(ligand.resolved_stereo_matches_template is True for ligand in ligands)
+    fixed = pdbx.CIFFile.read(str(fixed_cif))
+    fixed_block = list(fixed.values())[0]
+    bond_category = fixed_block["chem_comp_bond"]
+    ligand_bond_mask = bond_category["comp_id"].as_array(str) == "LIG"
+    assert np.count_nonzero(ligand_bond_mask) > 0
+    assert all(
+        order == order.lower()
+        for order in bond_category["value_order"].as_array(str)[ligand_bond_mask]
+    )
+    fixed_atoms = pdbx.get_structure(fixed, model=1, include_bonds=True)
+    ligand_atoms = fixed_atoms[fixed_atoms.res_name == "LIG"]
+    assert ligand_atoms.bonds is not None
+    assert len(ligand_atoms.bonds.as_array()) > 0
+
+
+def test_from_custom_cif_rejects_two_chemistry_sources(boltz_cif):
+    from plinder.data.annotations.aggregate_annotations import Entry
+
+    with pytest.raises(ValueError, match="either SMILES or a CCD code"):
+        Entry.from_custom_cif_file(
+            pdb_id="8c3u",
+            cif_file=boltz_cif,
+            ligand_smiles_dict={"LIG": LIGAND_SMILES},
+            ligand_ccd_code_dict={"LIG": "T9C"},
+        )
+
+
+def test_from_custom_cif_reports_missing_ccd_code(boltz_cif):
+    from plinder.data.annotations.aggregate_annotations import Entry
+
+    with pytest.raises(ValueError, match="NOT_A_CCD.*was not found"):
+        Entry.from_custom_cif_file(
+            pdb_id="8c3u",
+            cif_file=boltz_cif,
+            ligand_ccd_code_dict={"LIG": "not_a_ccd"},
+        )
+
+
+def test_from_custom_cif_rejects_wrong_ccd_template(boltz_cif):
+    from plinder.data.annotations.aggregate_annotations import Entry
+
+    with pytest.raises(ValueError, match="cannot map component 'LIG' to CCD code"):
+        Entry.from_custom_cif_file(
+            pdb_id="8c3u",
+            cif_file=boltz_cif,
+            ligand_ccd_code_dict={"LIG": "ATP"},
+        )
 
 
 def test_from_custom_cif_user_smiles_takes_precedence(boltz_cif):

@@ -14,36 +14,27 @@ if TYPE_CHECKING:
 
 from biotite.sequence.io.fasta import FastaFile
 
+from plinder.core.release import PlinderRelease
 from plinder.core.scores import query_index
-from plinder.core.scores.links import query_links
 from plinder.core.scores.query import FILTER
 from plinder.core.structure.structure import Structure
-from plinder.core.utils import cpl
 from plinder.core.utils.config import get_config
-from plinder.core.utils.cpl import get_plinder_path
-from plinder.core.utils.io import (
-    download_alphafold_cif_file,
-    download_pdb_chain_cif_file,
-    get_pdb_mmcif,
-)
-from plinder.core.utils.log import setup_logger
-from plinder.core.utils.unpack import get_zips_to_unpack
+from plinder.core.utils.io import get_pdb_mmcif
 from plinder.data.annotations.save_utils import (
     ReconstructedSystem,
     SystemReconstructionOptions,
     SystemReconstructionOutputs,
     reconstruct_system,
     save_ligands,
+    save_reconstructed_chain,
     save_reconstructed_system,
 )
 
-LOG = setup_logger(__name__)
 
-
-def _materialize_packed_ligand_sdfs(
+def _extract_packed_ligand_sdfs(
     *, archive: Path, pdb_id: str, asym_ids: set[str]
 ) -> Path:
-    """Materialize only one system's canonical SDFs from its shard Parquet."""
+    """Extract only one system's canonical SDFs from its shard parquet."""
     folder = archive.parent / pdb_id / "ligand_files"
     missing = {
         asym_id for asym_id in asym_ids if not (folder / f"{asym_id}.sdf").is_file()
@@ -71,14 +62,12 @@ def _materialize_packed_ligand_sdfs(
 class PlinderSystem:
     """
     Core class for interacting with a single system and its assets.
-    Annotation data is queried lazily for one entry or system. V3 structure
+    Annotation data is queried lazily for one entry or system. Release structure
     views are reconstructed from a deposited PDB mmCIF cached under the
     configured PLINDER directory; canonical ASU ligand SDFs are loaded from the
     ligand archive independently.  An explicit source mmCIF can override the
     managed cache.
 
-    Existing local V2 system archives remain readable as a transitional
-    fallback, but are never downloaded by this class.
     """
 
     def __repr__(self) -> str:
@@ -115,14 +104,12 @@ class PlinderSystem:
         self._entry: pd.DataFrame | None = None
         self._system: pd.DataFrame | None = None
         self._entry_chains: pd.DataFrame | None = None
+        self._linked_apo_structures: pd.DataFrame | None = None
         self._biounit_chains = (
             biounit_chains.copy() if biounit_chains is not None else None
         )
-        self._archive: Path | None = None
         self._reconstructed: ReconstructedSystem | None = None
         self._canonical_ligand_folder: Path | None = None
-        self._linked_structures: pd.DataFrame | None = None
-        self._linked_archive: Path | None = None
 
     @property
     def entry(self) -> pd.DataFrame:
@@ -138,7 +125,6 @@ class PlinderSystem:
             entry_pdb_id = self.system_id.split("__")[0]
             self._entry = query_index(
                 columns=["*"],
-                splits=["*"],
                 filters=[FILTER(("entry_pdb_id", "==", entry_pdb_id))],
             )
             if self._entry.empty:
@@ -160,7 +146,6 @@ class PlinderSystem:
         if self._system is None:
             self._system = query_index(
                 columns=["*"],
-                splits=["*"],
                 filters=[FILTER(("system_id", "==", self.system_id))],
             )
             if self._system.empty:
@@ -179,7 +164,8 @@ class PlinderSystem:
         values = self.system[column].dropna().astype(str).unique()
         if len(values) != 1 or not values[0]:
             raise ValueError(
-                f"Expected one receptor type for {self.system_id}, got {values.tolist()}"
+                f"Expected one receptor type for {self.system_id}, "
+                f"got {values.tolist()}"
             )
         return str(values[0])
 
@@ -187,10 +173,7 @@ class PlinderSystem:
     def receptor_chain_types(self) -> dict[str, str]:
         """Map each system receptor instance chain to its polymer type."""
         if self._entry_chains is None:
-            cfg = get_config()
-            path = cpl.get_plinder_path(
-                rel=f"{cfg.data.index}/{cfg.data.entry_chain_file}"
-            )
+            path = PlinderRelease().fetch("entry_chains")
             pdb_id = self.system_id.split("__", maxsplit=1)[0]
             self._entry_chains = pd.read_parquet(
                 path,
@@ -223,12 +206,9 @@ class PlinderSystem:
 
     @property
     def biounit_chains(self) -> pd.DataFrame:
-        """Return normalized chain membership for this biological assembly."""
+        """Return ingested chain membership for this biological assembly."""
         if self._biounit_chains is None:
-            cfg = get_config()
-            path = cpl.get_plinder_path(
-                rel=f"{cfg.data.index}/{cfg.data.entry_biounit_chain_file}"
-            )
+            path = PlinderRelease().fetch("entry_biounit_chains")
             row = self.system.iloc[0]
             self._biounit_chains = pd.read_parquet(
                 path,
@@ -243,28 +223,9 @@ class PlinderSystem:
             )
         return self._biounit_chains
 
-    def _reconstruction_biounit_chains(self) -> pd.DataFrame | None:
-        """Use normalized membership for V3 while leaving V2 assets unchanged."""
-        if self._biounit_chains is not None:
-            return self._biounit_chains
-        if str(get_config().data.plinder_iteration).lower() != "v3":
-            return None
-        return self.biounit_chains
-
-    def _legacy_archive(self) -> Path | None:
-        """Return an already-local V2 archive without fetching one."""
-        cfg = get_config()
-        root = Path(cpl.get_plinder_path(rel=cfg.data.systems, download=False))
-        extracted = root / self.system_id
-        if (extracted / "receptor.cif").is_file():
-            return extracted
-        zip_path = root / f"{self.system_id[1:3]}.zip"
-        if not zip_path.is_file():
-            return None
-        get_zips_to_unpack(kind="systems", system_ids=[self.system_id])
-        return extracted if (extracted / "receptor.cif").is_file() else None
-
-    def _require_source_mmcif(self) -> Path:
+    @property
+    def source_mmcif_path(self) -> Path:
+        """Return the explicit or release-cached deposited PDB mmCIF."""
         if self.source_mmcif is None:
             self.source_mmcif = get_pdb_mmcif(self.system_id)
         if not self.source_mmcif.is_file():
@@ -272,26 +233,13 @@ class PlinderSystem:
         return self.source_mmcif
 
     @property
-    def source_mmcif_path(self) -> Path:
-        """Return the explicit or release-cached deposited PDB mmCIF."""
-        return self._require_source_mmcif()
-
-    @property
-    def _uses_source_reconstruction(self) -> bool:
-        """Use source reconstruction for explicit inputs and V3 releases."""
-        return (
-            self.source_mmcif is not None
-            or str(get_config().data.plinder_iteration).lower() == "v3"
-        )
-
-    @property
     def reconstructed(self) -> ReconstructedSystem:
         """In-memory biological-assembly views reconstructed from source mmCIF."""
         if self._reconstructed is None:
             self._reconstructed = reconstruct_system(
-                self._require_source_mmcif(),
+                self.source_mmcif_path,
                 self.system.iloc[0],
-                biounit_chains=self._reconstruction_biounit_chains(),
+                biounit_chains=self.biounit_chains,
                 options=self.reconstruction_options,
             )
         return self._reconstructed
@@ -311,10 +259,10 @@ class PlinderSystem:
             else None
         )
         return save_reconstructed_system(
-            self._require_source_mmcif(),
+            self.source_mmcif_path,
             self.system.iloc[0],
             outputs=outputs,
-            biounit_chains=self._reconstruction_biounit_chains(),
+            biounit_chains=self.biounit_chains,
             options=selected_options,
             overwrite=overwrite,
             reconstructed=cached,
@@ -332,27 +280,17 @@ class PlinderSystem:
         return path
 
     @property
-    def archive(self) -> Path | None:
+    def archive(self) -> Path:
         """
         Return the path to the directory containing the plinder system
 
         Returns
         -------
-        Path | None
+        Path
             directory containing the plinder system
         """
-        if self._archive is None:
-            if self._uses_source_reconstruction:
-                self.reconstruction_dir.mkdir(parents=True, exist_ok=True)
-                self._archive = self.reconstruction_dir
-            else:
-                self._archive = self._legacy_archive()
-            if self._archive is None:
-                raise FileNotFoundError(
-                    f"No local V2 system archive found for {self.system_id}. "
-                    "Source-mmCIF reconstruction is enabled for V3 releases."
-                )
-        return self._archive
+        self.reconstruction_dir.mkdir(parents=True, exist_ok=True)
+        return self.reconstruction_dir
 
     @property
     def system_cif(self) -> str:
@@ -364,10 +302,7 @@ class PlinderSystem:
         str
             path
         """
-        if self._uses_source_reconstruction:
-            return self._ensure_standard_output("system.cif").as_posix()
-        assert self.archive is not None
-        return (self.archive / "system.cif").as_posix()
+        return self._ensure_standard_output("system.cif").as_posix()
 
     @property
     def receptor_cif(self) -> str:
@@ -379,10 +314,7 @@ class PlinderSystem:
         str
             path
         """
-        if self._uses_source_reconstruction:
-            return self._ensure_standard_output("receptor.cif").as_posix()
-        assert self.archive is not None
-        return (self.archive / "receptor.cif").as_posix()
+        return self._ensure_standard_output("receptor.cif").as_posix()
 
     @property
     def sequences_fasta(self) -> str:
@@ -394,10 +326,7 @@ class PlinderSystem:
         str
             path
         """
-        if self._uses_source_reconstruction:
-            return self._ensure_standard_output("sequences.fasta").as_posix()
-        assert self.archive is not None
-        return (self.archive / "sequences.fasta").as_posix()
+        return self._ensure_standard_output("sequences.fasta").as_posix()
 
     @cached_property
     def sequences(self) -> dict[str, str]:
@@ -420,12 +349,12 @@ class PlinderSystem:
             else:
                 pdb_id = self.system_id.split("__", maxsplit=1)[0]
                 asym_ids = set(self.system["ligand_asym_id"].astype(str))
-                cfg = get_config()
                 code = pdb_id[1:3]
-                archive = cpl.get_plinder_path(
-                    rel=f"{cfg.data.ligand_archives}/{code}.parquet"
+                archive = PlinderRelease().fetch(
+                    "ligand_archive",
+                    shard=code,
                 )
-                folder = _materialize_packed_ligand_sdfs(
+                folder = _extract_packed_ligand_sdfs(
                     archive=archive,
                     pdb_id=pdb_id,
                     asym_ids=asym_ids,
@@ -459,13 +388,6 @@ class PlinderSystem:
         dict[str, str]
             dictionary of ligand names to paths to ligand sdf files
         """
-        if not self._uses_source_reconstruction:
-            assert self.archive is not None
-            return {
-                ligand.stem: ligand.as_posix()
-                for ligand in (self.archive / "ligand_files/").glob("*.sdf")
-            }
-
         ligand_dir = self.reconstruction_dir / "ligand_files"
         instance_chains = list(self.canonical_ligand_sdfs)
         missing = [
@@ -493,89 +415,129 @@ class PlinderSystem:
         list[str]
             list of paths to structures
         """
-        assert self.archive is not None
         return [path.as_posix() for path in self.archive.rglob("*") if path.is_file()]
 
     @property
-    def linked_structures(self) -> pd.DataFrame | None:
+    def linked_apo_structures(self) -> pd.DataFrame:
+        """Return ranked deposited apo chains linked to this holo system."""
+        if self._linked_apo_structures is None:
+            path = PlinderRelease().fetch("linked_apo_structures")
+            self._linked_apo_structures = pd.read_parquet(
+                path,
+                filters=[("reference_system_id", "==", self.system_id)],
+            ).sort_values("rank", ignore_index=True)
+        return self._linked_apo_structures
+
+    def _linked_apo_row(self, linked_structure_id: str | None = None) -> pd.Series:
+        links = self.linked_apo_structures
+        if linked_structure_id is None:
+            selected = links.head(1)
+        else:
+            selected = links.loc[
+                links["linked_structure_id"].astype(str).eq(linked_structure_id)
+            ]
+        if selected.empty:
+            requested = linked_structure_id or "rank 1"
+            raise ValueError(
+                f"No linked apo structure {requested!r} for {self.system_id}"
+            )
+        if len(selected) != 1:
+            raise ValueError(
+                f"Linked apo ID {linked_structure_id!r} is not unique for "
+                f"{self.system_id}"
+            )
+        return selected.iloc[0]
+
+    @staticmethod
+    def _linked_apo_source_mmcif(
+        row: pd.Series, source_mmcif: Path | str | None
+    ) -> Path | str:
+        if source_mmcif is not None:
+            return source_mmcif
+        return get_pdb_mmcif(str(row["source_entry_id"]))
+
+    def reconstruct_linked_apo(
+        self,
+        linked_structure_id: str | None = None,
+        *,
+        output_cif: Path | str | None = None,
+        source_mmcif: Path | str | None = None,
+        overwrite: bool = False,
+    ) -> Path:
+        """Reconstruct one linked apo chain from its deposited source mmCIF.
+
+        When ``linked_structure_id`` is omitted, the highest-ranked link is
+        selected. The result contains the exact biological-assembly chain that
+        was scored, with source sequence and chemical-component metadata.
         """
-        Return a dataframe of linked structures for this system. Note
-        that the dataframe will include all of the scores for the linked
-        structures as well, so that particular alternatives can be chosen
-        accordingly.
+        row = self._linked_apo_row(linked_structure_id)
+        link_id = str(row["linked_structure_id"])
+        if output_cif is None:
+            output_cif = self.reconstruction_dir / "linked_apo" / f"{link_id}.cif"
+        return save_reconstructed_chain(
+            self._linked_apo_source_mmcif(row, source_mmcif),
+            assembly_id=str(row["source_biounit_id"]),
+            chain_instance=str(row["source_chain_instance"]),
+            source_asym_id=str(row["source_chain_asym_id"]),
+            output_cif=output_cif,
+            structure_id=link_id,
+            overwrite=overwrite,
+        )
 
-        Returns
-        -------
-        pd.DataFrame | None
-            dataframe of linked structures if present in plinder
+    def superpose_linked_apo(
+        self,
+        linked_structure_id: str | None = None,
+        *,
+        reference_chain: str | None = None,
+        output_cif: Path | str | None = None,
+        source_mmcif: Path | str | None = None,
+        overwrite: bool = False,
+    ) -> Path:
+        """Reconstruct and fit one linked apo chain to a holo receptor chain.
+
+        The reference chain is inferred when the holo receptor contains one
+        protein chain. Multichain receptors require ``reference_chain`` so the
+        fit is never chosen arbitrarily.
         """
-        if self._linked_structures is None:
-            links = query_links(filters=[("reference_system_id", "==", self.system_id)])
-            self._linked_structures = links
-        return self._linked_structures
+        import biotite.structure as struc
 
-    @property
-    def linked_archive(self) -> Path | None:
-        """
-        Path to linked structures archive if it exists
-
-        Returns
-        -------
-        Path | None
-            path to linked structures archive
-        """
-        if self._linked_archive is None:
-            zips = get_zips_to_unpack(kind="linked_structures")
-            if not len(zips):
-                LOG.info("no linked_structures found, downloading now, stand by")
-                get_plinder_path(rel="linked_structures")
-                zips = get_zips_to_unpack(kind="linked_structures")
-            archive = list(zips.keys())[0]
-            self._linked_archive = archive.parent
-
-        return self._linked_archive
-
-    def get_linked_structure(self, link_kind: str, link_id: str) -> str:
-        """
-        Get the path to the requested linked structure
-
-        Parameters
-        ----------
-        link_kind : str
-            kind of linked structure ('apo', 'pred', 'holo')
-        link_id : str
-            id of linked structure
-
-        Returns
-        -------
-        str
-            path to linked structure
-        """
-        if self.linked_archive is None:
-            raise ValueError("linked_archive is None!")
-        allowed = ["apo", "pred", "holo"]
-        assert link_kind in allowed, f"link_kind={link_kind} not in {allowed}"
-        structure = self.linked_archive / f"{link_id}.cif"
-        if not structure.is_file():
-            if link_kind == "apo":
-                pdb_id, chain_id = link_id.split("_")
-                try:
-                    download_pdb_chain_cif_file(pdb_id, chain_id, structure)
-                except Exception as e:
-                    raise ValueError(f"Unable to download {link_id}! {str(e)}")
-            elif link_kind == "pred":
-                uniprot_id = link_id.split("_")[0]
-                cif_file_path = download_alphafold_cif_file(
-                    uniprot_id, self.linked_archive
+        receptor = self.receptor_structure
+        ca_mask = struc.filter_amino_acids(receptor) & (
+            receptor.atom_name.astype(str) == "CA"
+        )
+        protein_chains = sorted(set(receptor.chain_id[ca_mask].astype(str)))
+        if reference_chain is None:
+            if len(protein_chains) != 1:
+                raise ValueError(
+                    "reference_chain is required when the holo receptor has "
+                    f"{len(protein_chains)} protein chains: {protein_chains}"
                 )
-                if cif_file_path is None:
-                    raise ValueError(f"Unable to download {link_id}")
-                cif_file_path.rename(structure)
-            elif link_kind == "holo":
-                structure = Path(PlinderSystem(system_id=link_id).receptor_cif)
-            if structure is None or not structure.is_file():
-                raise ValueError(f"structure={structure} does not exist!")
-        return structure.as_posix()
+            reference_chain = protein_chains[0]
+        if reference_chain not in protein_chains:
+            raise ValueError(
+                f"Reference chain {reference_chain!r} is not a protein chain in "
+                f"{self.system_id}; available chains are {protein_chains}"
+            )
+        reference_atoms = receptor[
+            receptor.chain_id.astype(str) == str(reference_chain)
+        ]
+
+        row = self._linked_apo_row(linked_structure_id)
+        link_id = str(row["linked_structure_id"])
+        if output_cif is None:
+            output_cif = (
+                self.reconstruction_dir / "linked_apo" / f"{link_id}_superposed.cif"
+            )
+        return save_reconstructed_chain(
+            self._linked_apo_source_mmcif(row, source_mmcif),
+            assembly_id=str(row["source_biounit_id"]),
+            chain_instance=str(row["source_chain_instance"]),
+            source_asym_id=str(row["source_chain_asym_id"]),
+            output_cif=output_cif,
+            structure_id=link_id,
+            superpose_to=reference_atoms,
+            overwrite=overwrite,
+        )
 
     @cached_property
     def receptor_structure(self) -> "struc.AtomArray":
@@ -647,29 +609,6 @@ class PlinderSystem:
         return len(self.system_id.split("__")[2].split("_"))
 
     @property
-    def alternate_structures(self) -> dict[str, Structure]:
-        """
-        load all alternate structures
-        """
-        # TODO: do we want to keep this as assertion?
-        # better if then raise?
-        assert self.linked_structures is not None
-
-        structures = {}
-        for id, kind in self.linked_structures[["id", "kind"]].values:
-            protein_path = self.get_linked_structure(
-                kind,
-                id,
-            )
-            structures[id] = Structure(
-                id=id,
-                protein_path=Path(protein_path),
-                protein_sequence=self.sequences,
-                structure_type=kind,
-            )
-        return structures
-
-    @property
     def holo_structure(self) -> Structure:
         """
         Load holo structure
@@ -688,7 +627,6 @@ class PlinderSystem:
     def smiles(self) -> dict[str, str] | None:
         smiles_dict = {}
         try_smiles = [
-            "ligand_rdkit_canonical_smiles",
             "ligand_smiles",
             "ligand_resolved_smiles",
         ]

@@ -44,7 +44,7 @@ def mapped_alignment_schema(*, alignment_type: str) -> pa.Schema:
 def mapped_alignment_schema_is_current(
     columns: set[str], *, alignment_type: str
 ) -> bool:
-    """Return whether a mapped alignment has the compact V3 schema."""
+    """Return whether a mapped alignment has the current compact schema."""
     required = MAPPED_ALIGNMENT_REQUIRED_COLUMNS
     if alignment_type == "foldseek":
         required = required | {"lddt"}
@@ -94,7 +94,7 @@ INTERFACE_SCORE_SHARD_SCHEMA = pa.schema(
     ]
 )
 
-INTERFACE_QCOV_EXPORT_SCHEMA = pa.schema(
+INTERFACE_SIMILARITY_EXPORT_SCHEMA = pa.schema(
     [
         ("query_system", pa.string()),
         ("target_system", pa.string()),
@@ -156,6 +156,22 @@ LIGAND_POCKET_MEMBERSHIP_SCHEMA = pa.schema(
     ]
 )
 
+LIGAND_POCKET_RESIDUE_SCHEMA = pa.schema(
+    [
+        ("entry_pdb_id", pa.string()),
+        ("system_id", pa.string()),
+        ("ligand_id", pa.string()),
+        ("chain_instance", pa.string()),
+        ("chain_asym_id", pa.string()),
+        ("chain_auth_id", pa.string()),
+        ("residue_label_seq_id", pa.int32()),
+        ("residue_index", pa.int32()),
+        ("residue_auth_seq_id", pa.string()),
+        ("residue_insertion_code", pa.string()),
+        ("is_pli", pa.bool_()),
+    ]
+)
+
 LIGAND_POCKET_SCORE_QUERY_SCHEMA = pa.schema(
     [
         ("entry_pdb_id", pa.string()),
@@ -193,6 +209,35 @@ LIGAND_3D_CANDIDATE_SCHEMA = pa.schema(
         ("protein_mapping", pa.string()),
         ("protein_mapper", pa.string()),
         ("pocket_qcov", pa.float64()),
+    ]
+)
+
+LIGAND_PAIR_SCORE_SCHEMA = pa.schema(
+    [
+        ("query_system", pa.string()),
+        ("query_ligand_id", pa.string()),
+        ("query_entry", pa.string()),
+        ("query_ligand_asym_id", pa.string()),
+        ("target_system", pa.string()),
+        ("target_ligand_id", pa.string()),
+        ("target_entry", pa.string()),
+        ("target_ligand_asym_id", pa.string()),
+        ("pocket_qcov", pa.int8()),
+        ("pocket_fident_qcov", pa.int8()),
+        ("pli_qcov", pa.int8()),
+    ]
+)
+
+LIGAND_SIMILARITY_EXPORT_SCHEMA = pa.schema(
+    [
+        ("query_system", pa.string()),
+        ("query_ligand_id", pa.string()),
+        ("target_system", pa.string()),
+        ("target_ligand_id", pa.string()),
+        ("pocket_qcov", pa.int8()),
+        ("pocket_fident_qcov", pa.int8()),
+        ("pli_qcov", pa.int8()),
+        ("sucos_shape", pa.int8()),
     ]
 )
 
@@ -271,6 +316,24 @@ TANIMOTO_SCORE_SCHEMA = pa.schema(
     ]
 )
 
+
+LIGAND_MMP_PAIR_SCHEMA = pa.schema(
+    [
+        ("ligand_smiles_id_1", pa.int32()),
+        ("ligand_smiles_id_2", pa.int32()),
+        ("ligand_smiles_1", pa.string()),
+        ("ligand_smiles_2", pa.string()),
+        ("transformation", pa.string()),
+        ("shared_core_smiles", pa.string()),
+        ("num_cuts", pa.int8()),
+        ("shared_core_num_heavy_atoms", pa.int16()),
+        ("ligand_1_num_heavy_atoms", pa.int16()),
+        ("ligand_2_num_heavy_atoms", pa.int16()),
+        ("ligand_1_shared_core_fraction", pa.float32()),
+        ("ligand_2_shared_core_fraction", pa.float32()),
+    ]
+)
+
 LEGACY_TANIMOTO_SCORE_SCHEMA = pa.schema(
     [
         pa.field("query_ligand_id", pa.int32()),
@@ -301,17 +364,25 @@ SPLIT_DATASET_SCHEMA = pa.schema(
 )
 
 
-# subject to criteria used in save_linked_structures.py
-# TODO: this schema is now out of date since addition of
-#       scores.json contents but it now contains >50 columns
 STRUCTURE_LINK_SCHEMA = pa.schema(
     [
-        ("query_system", pa.string()),
-        ("target_system", pa.string()),
-        ("protein_qcov_weighted_sum", pa.float32()),
-        ("protein_fident_weighted_sum", pa.float32()),
-        ("pocket_fident", pa.float32()),
-        ("target_id", pa.string()),
-        ("sort_score", pa.float32()),
+        ("reference_system_id", pa.string()),
+        ("linked_structure_id", pa.string()),
+        ("source_entry_id", pa.string()),
+        ("source_chain_asym_id", pa.string()),
+        ("source_chain_auth_id", pa.string()),
+        ("source_biounit_id", pa.string()),
+        ("source_chain_instance", pa.string()),
+        ("source_num_contacting_ions", pa.int16()),
+        ("source_num_contacting_artifacts", pa.int16()),
+        ("source_num_contacting_other_ligands", pa.int16()),
+        ("source_resolution", pa.float32()),
+        ("rank", pa.int16()),
+        ("num_ligand_pockets", pa.int16()),
+        ("min_pocket_fident", pa.int8()),
+        ("mean_pocket_fident", pa.float32()),
+        ("min_protein_fident_weighted_sum", pa.int8()),
+        ("min_protein_fident_qcov_weighted_sum", pa.int8()),
+        ("min_protein_lddt_weighted_sum", pa.int8()),
     ]
 )

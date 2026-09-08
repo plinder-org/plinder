@@ -1,6 +1,6 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
-"""Plan, shard, validate, and install the local V3 annotation index."""
+"""Plan, shard, validate, and install the local annotation index."""
 
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ from plinder.data.pipeline.ingest import (
     completed_interface_metrics,
 )
 
-COLLATION_VERSION = 2
+COLLATION_VERSION = 6
 STAGING_RELATIVE = Path("index/.staging/v3_collation")
 MANIFEST_NAME = "entries.parquet"
 PLAN_NAME = "plan.json"
@@ -38,6 +38,30 @@ PLAN_BUILD_NAME = "plan-build.json"
 PLAN_INVENTORY_DIRECTORY = "plan-inventory"
 REPAIR_REQUIRED_STATUS = "requires_downstream_repair"
 RETIRED_ENRICHMENT_MARKERS = ("ecod", "panther", "kinase")
+SYSTEM_VALIDATION_PREFIXES = (
+    "system_ligand_validation_",
+    "system_pocket_validation_",
+)
+CHAIN_SUMMARY_PREFIXES = (
+    "system_protein_chains_",
+    "system_ligand_chains_",
+    "ligand_protein_chains_",
+    "ligand_neighboring_ligand_chains_",
+    "ligand_interacting_ligand_chains_",
+)
+CHAIN_METADATA_SUFFIXES = (
+    "auth_id",
+    "entity_id",
+    "length",
+    "num_unresolved_residues",
+)
+RETIRED_ANNOTATION_COLUMNS = frozenset(
+    {
+        "system_id_no_biounit",
+        "system_ligand_chains",
+        "ligand_rdkit_canonical_smiles",
+    }
+)
 SYSTEM_LIGAND_FLAGS = (
     "lipinski",
     "cofactor",
@@ -64,6 +88,62 @@ AGGREGATED_COLUMNS = (
     "system_proper_unique_ccd_codes",
     "ligand_is_3d_score_able",
 )
+
+
+def _is_repeated_entry_column(column: str) -> bool:
+    """Return whether a ligand row repeats data owned by entry metadata."""
+    return column.startswith("entry_") and column != "entry_pdb_id"
+
+
+def _is_repeated_chain_column(column: str) -> bool:
+    """Return whether chain data is repeated on a ligand row."""
+    for prefix in CHAIN_SUMMARY_PREFIXES:
+        if not column.startswith(prefix):
+            continue
+        suffix = column.removeprefix(prefix)
+        return suffix in CHAIN_METADATA_SUFFIXES or suffix.startswith("validation_")
+    return False
+
+
+def _is_system_validation_column(column: str) -> bool:
+    """Return whether a field belongs in the system-validation table."""
+    return column.startswith(SYSTEM_VALIDATION_PREFIXES)
+
+
+def _is_retired_annotation_column(column: str) -> bool:
+    """Return whether a field is excluded from the published ligand table."""
+    return (
+        column in RETIRED_ANNOTATION_COLUMNS
+        or _is_repeated_chain_column(column)
+        or _is_system_validation_column(column)
+    )
+
+
+def _annotation_columns_to_publish(columns: Iterable[str]) -> list[str]:
+    """Drop fields that do not belong in the published ligand table."""
+    return [
+        column
+        for column in columns
+        if not _is_repeated_entry_column(column)
+        and not _is_retired_annotation_column(column)
+        and not any(
+            marker in column.casefold() for marker in RETIRED_ENRICHMENT_MARKERS
+        )
+    ]
+
+
+def _raw_annotation_columns_to_keep(columns: Iterable[str]) -> list[str]:
+    """Return working ligand fields, excluding recomputed aggregates."""
+    return [
+        column
+        for column in columns
+        if not _is_repeated_entry_column(column)
+        and not any(
+            marker in column.casefold() for marker in RETIRED_ENRICHMENT_MARKERS
+        )
+        and column not in AGGREGATED_COLUMNS
+    ]
+
 
 MANIFEST_SCHEMA = pa.schema(
     [
@@ -102,6 +182,7 @@ ENTRY_CHAIN_SCHEMA = pa.schema(
         ("chain_entity_id", pa.string()),
         ("chain_type", pa.string()),
         ("chain_receptor_type", pa.string()),
+        ("chain_sequence", pa.string()),
         ("chain_length", pa.int64()),
         ("chain_num_unresolved_residues", pa.int64()),
         ("chain_is_holo", pa.bool_()),
@@ -117,6 +198,9 @@ BIOUNIT_CHAIN_SCHEMA = pa.schema(
         ("chain_instance", pa.string()),
         ("chain_asym_id", pa.string()),
         ("chain_role", pa.string()),
+        ("chain_num_contacting_ions", pa.int64()),
+        ("chain_num_contacting_artifacts", pa.int64()),
+        ("chain_num_contacting_other_ligands", pa.int64()),
     ]
 )
 
@@ -256,16 +340,12 @@ def _entry_manifest_row(data_dir: Path, entry_dir: Path) -> dict[str, Any]:
         if pq.ParquetFile(annotation_path).metadata.num_rows < 1:
             raise ValueError(f"ligand annotation is empty for V3 entry {pdb_id}")
     else:
-        if pq.ParquetFile(paths["interface"]).metadata.num_rows < 1:
-            raise ValueError(
-                f"materialized V3 entry {pdb_id} has no ligand or interface rows"
-            )
         if (
             completed_entry_metrics(data_dir, pdb_id) is None
             and completed_interface_metrics(data_dir, pdb_id) is None
         ):
             raise ValueError(
-                f"interface-only V3 entry {pdb_id} has no successful ingest marker"
+                f"sidecar-only V3 entry {pdb_id} has no successful ingest marker"
             )
     row: dict[str, Any] = {
         "pdb_id": pdb_id,
@@ -316,8 +396,7 @@ def _entry_dirs_for_code(data_dir: Path, code: str) -> list[Path]:
     return sorted(
         path
         for path in code_dir.iterdir()
-        if path.is_dir()
-        and re.fullmatch(r"[0-9][a-z0-9]{3}", path.name.lower())
+        if path.is_dir() and re.fullmatch(r"[0-9][a-z0-9]{3}", path.name.lower())
     )
 
 
@@ -353,7 +432,9 @@ def _load_plan_build(data_dir: Path) -> dict[str, Any]:
     try:
         build = cast(dict[str, Any], json.loads(path.read_text()))
     except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
-        raise FileNotFoundError(f"missing or invalid collation plan build: {path}") from exc
+        raise FileNotFoundError(
+            f"missing or invalid collation plan build: {path}"
+        ) from exc
     if (
         build.get("version") != COLLATION_VERSION
         or build.get("status") != "inventorying"
@@ -723,14 +804,30 @@ def _build_annotation_view(
         *(f"ligand_is_{name}" for name in SYSTEM_LIGAND_FLAGS),
     }
     _require_columns(raw_columns, required, "raw annotation")
-    retained = [
-        column
-        for column in raw_columns
-        if column not in AGGREGATED_COLUMNS
-        and not any(
-            marker in column.casefold() for marker in RETIRED_ENRICHMENT_MARKERS
-        )
+    system_validation_columns = [
+        "system_id",
+        *(column for column in raw_columns if _is_system_validation_column(column)),
     ]
+    system_validation_select = ", ".join(
+        _quote_identifier(column) for column in system_validation_columns
+    )
+    connection.execute(
+        "CREATE OR REPLACE TEMP VIEW distinct_system_validation AS "
+        f"SELECT DISTINCT {system_validation_select} FROM raw_annotation"
+    )
+    conflicting_system_validation = connection.execute(
+        "SELECT system_id FROM distinct_system_validation GROUP BY system_id "
+        "HAVING count(*) > 1 LIMIT 10"
+    ).fetchall()
+    if conflicting_system_validation:
+        raise ValueError(
+            "conflicting system validation rows: " f"{conflicting_system_validation}"
+        )
+    connection.execute(
+        "CREATE OR REPLACE TEMP VIEW collated_system_validation AS "
+        "SELECT * FROM distinct_system_validation"
+    )
+    retained = _raw_annotation_columns_to_keep(raw_columns)
     selected = ", ".join(_quote_identifier(column) for column in retained)
     connection.execute(
         f"CREATE OR REPLACE TEMP VIEW base_annotation AS SELECT {selected} "
@@ -793,7 +890,10 @@ def _build_annotation_view(
         "FROM base_annotation WHERE coalesce(ligand_is_proper, false) "
         "GROUP BY system_id"
     )
-    raw_select = ", ".join(f"b.{_quote_identifier(column)}" for column in retained)
+    published_retained = _annotation_columns_to_publish(retained)
+    raw_select = ", ".join(
+        f"b.{_quote_identifier(column)}" for column in published_retained
+    )
     flag_select = ", ".join(
         f"s.system_ligand_has_{name}" for name in SYSTEM_LIGAND_FLAGS
     )
@@ -814,9 +914,7 @@ def _build_annotation_view(
     )
 
 
-def _normalize_arrow_table(
-    table: pa.Table, path: Path, schema: pa.Schema
-) -> pa.Table:
+def _normalize_arrow_table(table: pa.Table, path: Path, schema: pa.Schema) -> pa.Table:
     if table.num_rows and not set(schema.names).issubset(table.column_names):
         missing = sorted(set(schema.names).difference(table.column_names))
         raise ValueError(f"{path} is missing sidecar columns: {missing}")
@@ -925,6 +1023,7 @@ def _shard_paths(data_dir: Path, code: str) -> dict[str, Path]:
     root = staging_dir(data_dir)
     return {
         "annotation": root / "annotations" / f"{code}.parquet",
+        "system_validation": root / "system_validation" / f"{code}.parquet",
         "entry_chains": root / "entry_chains" / f"{code}.parquet",
         "entry_biounit_chains": root / "entry_biounit_chains" / f"{code}.parquet",
         "entry_metadata": root / "entry_metadata" / f"{code}.parquet",
@@ -943,7 +1042,7 @@ def _shard_output_names(plan: dict[str, Any]) -> tuple[str, ...]:
         "entry_sources",
     )
     if bool(plan.get("include_ligand_annotations", True)):
-        return ("annotation", *names)
+        return ("annotation", "system_validation", *names)
     return names
 
 
@@ -964,6 +1063,7 @@ def _completed_shard(
     outputs = [paths[name] for name in output_names]
     if (
         metrics.get("status") == "complete"
+        and metrics.get("version") == COLLATION_VERSION
         and metrics.get("signature") == signature
         and bool(metrics.get("include_ligand_annotations", True))
         == include_ligand_annotations
@@ -995,9 +1095,7 @@ def collate_shard(
         raise RuntimeError(f"manifest signature mismatch for shard {normalized}")
     _verify_manifest_inputs(rows, threads=threads)
     paths = _shard_paths(data_dir, normalized)
-    include_ligand_annotations = bool(
-        plan.get("include_ligand_annotations", True)
-    )
+    include_ligand_annotations = bool(plan.get("include_ligand_annotations", True))
     output_names = _shard_output_names(plan)
     if not force and (
         completed := _completed_shard(
@@ -1065,6 +1163,12 @@ def collate_shard(
                     paths["annotation"],
                     row_group_size=row_group_size,
                 )
+                _copy_query_atomic(
+                    connection,
+                    "SELECT * FROM collated_system_validation ORDER BY system_id",
+                    paths["system_validation"],
+                    row_group_size=row_group_size,
+                )
             finally:
                 connection.close()
         _collate_entry_chains(
@@ -1100,8 +1204,7 @@ def collate_shard(
             row_group_size=row_group_size,
         )
         metrics["counts"] = {
-            name: pq.ParquetFile(paths[name]).metadata.num_rows
-            for name in output_names
+            name: pq.ParquetFile(paths[name]).metadata.num_rows for name in output_names
         }
         metrics["status"] = "complete"
     except BaseException as exc:
@@ -1142,9 +1245,7 @@ def _load_completed_shards(
     # Changes to raw entries after a shard completes belong to a new plan.
 
     output_names = _shard_output_names(plan)
-    include_ligand_annotations = bool(
-        plan.get("include_ligand_annotations", True)
-    )
+    include_ligand_annotations = bool(plan.get("include_ligand_annotations", True))
     files: dict[str, list[Path]] = {name: [] for name in output_names}
     expected_counts = {name: 0 for name in files}
     for code in planned_codes:
@@ -1176,6 +1277,7 @@ def _install_final_tables_fail_closed(
     marker_path.unlink(missing_ok=True)
     if not preserve_annotation:
         final_paths["annotation"].unlink(missing_ok=True)
+        final_paths["system_validation"].unlink(missing_ok=True)
     try:
         for name in (
             "entry_chains",
@@ -1186,10 +1288,14 @@ def _install_final_tables_fail_closed(
         ):
             temporary_paths[name].replace(final_paths[name])
         if not preserve_annotation:
+            temporary_paths["system_validation"].replace(
+                final_paths["system_validation"]
+            )
             temporary_paths["annotation"].replace(final_paths["annotation"])
     except BaseException:
         if not preserve_annotation:
             final_paths["annotation"].unlink(missing_ok=True)
+            final_paths["system_validation"].unlink(missing_ok=True)
         raise
 
 
@@ -1227,6 +1333,10 @@ def _validate_final_tables(
                 "SELECT count(*) FROM (SELECT system_id, ligand_id FROM annotation "
                 "GROUP BY system_id, ligand_id HAVING count(*) > 1)"
             ),
+            "system_validation": (
+                "SELECT count(*) FROM (SELECT system_id FROM system_validation "
+                "GROUP BY system_id HAVING count(*) > 1)"
+            ),
             "entry_chains": (
                 "SELECT count(*) FROM (SELECT entry_pdb_id, chain_asym_id "
                 "FROM entry_chains GROUP BY entry_pdb_id, chain_asym_id "
@@ -1257,6 +1367,20 @@ def _validate_final_tables(
         if any(duplicates.values()):
             raise ValueError(f"duplicate keys in final collation: {duplicates}")
         invalid_chain_metadata = {
+            "missing_sequences": int(
+                _fetch_scalar(
+                    connection,
+                    "SELECT count(*) FROM entry_chains "
+                    "WHERE chain_sequence IS NULL OR length(trim(chain_sequence)) = 0",
+                )
+            ),
+            "sequence_length_mismatch": int(
+                _fetch_scalar(
+                    connection,
+                    "SELECT count(*) FROM entry_chains "
+                    "WHERE length(chain_sequence) != chain_length",
+                )
+            ),
             "nonpositive_lengths": int(
                 _fetch_scalar(
                     connection,
@@ -1283,6 +1407,23 @@ def _validate_final_tables(
         if any(invalid_chain_metadata.values()):
             raise ValueError(
                 "invalid entry-chain sequence metadata: " f"{invalid_chain_metadata}"
+            )
+        invalid_biounit_contacts = int(
+            _fetch_scalar(
+                connection,
+                "SELECT count(*) FROM entry_biounit_chains WHERE "
+                "chain_num_contacting_ions IS NULL OR "
+                "chain_num_contacting_artifacts IS NULL OR "
+                "chain_num_contacting_other_ligands IS NULL OR "
+                "chain_num_contacting_ions < 0 OR "
+                "chain_num_contacting_artifacts < 0 OR "
+                "chain_num_contacting_other_ligands < 0",
+            )
+        )
+        if invalid_biounit_contacts:
+            raise ValueError(
+                "invalid biological-assembly ligand contact counts: "
+                f"{invalid_biounit_contacts} rows"
             )
         invalid_interfaces = {
             "system_id": int(
@@ -1324,13 +1465,22 @@ def _validate_final_tables(
         if any(invalid_interfaces.values()):
             raise ValueError(f"invalid protein interfaces: {invalid_interfaces}")
         annotation_columns = _relation_columns(connection, "annotation")
+        repeated_entry_columns = sorted(
+            column for column in annotation_columns if _is_repeated_entry_column(column)
+        )
+        if repeated_entry_columns:
+            raise ValueError(
+                "entry metadata columns remain in ligand annotation: "
+                f"{repeated_entry_columns}"
+            )
         retired = sorted(
             column
             for column in annotation_columns
-            if any(marker in column.casefold() for marker in RETIRED_ENRICHMENT_MARKERS)
+            if _is_retired_annotation_column(column)
+            or any(marker in column.casefold() for marker in RETIRED_ENRICHMENT_MARKERS)
         )
         if retired:
-            raise ValueError(f"retired enrichment columns remain: {retired}")
+            raise ValueError(f"retired annotation columns remain: {retired}")
         _require_columns(
             annotation_columns,
             AGGREGATED_COLUMNS,
@@ -1341,6 +1491,13 @@ def _validate_final_tables(
                 connection,
                 "SELECT count(*) FROM (SELECT DISTINCT a.entry_pdb_id FROM annotation a "
                 "ANTI JOIN entry_sources s USING (entry_pdb_id))",
+            )
+        )
+        orphan_system_validation = int(
+            _fetch_scalar(
+                connection,
+                "SELECT count(*) FROM (SELECT DISTINCT system_id FROM annotation "
+                "ANTI JOIN system_validation USING (system_id))",
             )
         )
         orphan_chains = int(
@@ -1396,6 +1553,7 @@ def _validate_final_tables(
         )
         if (
             orphan_sources
+            or orphan_system_validation
             or orphan_chains
             or orphan_biounits
             or orphan_metadata
@@ -1404,7 +1562,9 @@ def _validate_final_tables(
         ):
             raise ValueError(
                 "referential-integrity failures: "
-                f"sources={orphan_sources}, chains={orphan_chains}, "
+                f"sources={orphan_sources}, "
+                f"system_validation={orphan_system_validation}, "
+                f"chains={orphan_chains}, "
                 f"biounits={orphan_biounits}, metadata={orphan_metadata}, "
                 f"interface_instances={orphan_interface_instances}, "
                 f"interface_chains={orphan_interface_chains}"
@@ -1492,26 +1652,31 @@ def finalize_collation(
     """Merge completed shards, validate them, and install final index files."""
     data_dir = data_dir.resolve()
     plan = load_plan(data_dir)
-    include_ligand_annotations = bool(
-        plan.get("include_ligand_annotations", True)
-    )
+    include_ligand_annotations = bool(plan.get("include_ligand_annotations", True))
     shard_files, expected_counts = _load_completed_shards(data_dir, plan)
     final_paths = {
         "annotation": data_dir / "index" / "annotation_table.parquet",
+        "system_validation": data_dir / "index" / "system_validation.parquet",
         "entry_chains": data_dir / "index" / "entry_chains.parquet",
         "entry_biounit_chains": data_dir / "index" / "entry_biounit_chains.parquet",
         "entry_metadata": data_dir / "index" / "entry_metadata.parquet",
         "interfaces": data_dir / "index" / "interface_annotation_table.parquet",
         "entry_sources": data_dir / "index" / "entry_sources.parquet",
     }
-    if not include_ligand_annotations and not final_paths["annotation"].is_file():
-        raise FileNotFoundError(
-            "interface-only collation requires an installed annotation table: "
-            f"{final_paths['annotation']}"
-        )
-    temporary_paths = {
-        name: _temporary_path(final_paths[name]) for name in shard_files
-    }
+    if not include_ligand_annotations:
+        required_ligand_tables = [
+            final_paths["annotation"],
+            final_paths["system_validation"],
+        ]
+        missing_ligand_tables = [
+            path for path in required_ligand_tables if not path.is_file()
+        ]
+        if missing_ligand_tables:
+            raise FileNotFoundError(
+                "interface-only collation requires installed ligand tables: "
+                f"{missing_ligand_tables}"
+            )
+    temporary_paths = {name: _temporary_path(final_paths[name]) for name in shard_files}
     for path in final_paths.values():
         path.parent.mkdir(parents=True, exist_ok=True)
     connection = duckdb.connect()
@@ -1524,6 +1689,7 @@ def finalize_collation(
         )
         sort_columns = {
             "annotation": "entry_pdb_id, system_id, ligand_id",
+            "system_validation": "system_id",
             "entry_chains": "entry_pdb_id, chain_asym_id",
             "entry_biounit_chains": "entry_pdb_id, biounit_id, chain_instance",
             "entry_metadata": "entry_pdb_id",
@@ -1546,8 +1712,12 @@ def finalize_collation(
         validation_paths = dict(temporary_paths)
         if not include_ligand_annotations:
             validation_paths["annotation"] = final_paths["annotation"]
+            validation_paths["system_validation"] = final_paths["system_validation"]
             expected_counts["annotation"] = pq.ParquetFile(
                 final_paths["annotation"]
+            ).metadata.num_rows
+            expected_counts["system_validation"] = pq.ParquetFile(
+                final_paths["system_validation"]
             ).metadata.num_rows
         validation = _validate_final_tables(
             validation_paths,
@@ -1610,6 +1780,7 @@ def repair_collation(
 
     final_paths = {
         "annotation": data_dir / "index" / "annotation_table.parquet",
+        "system_validation": data_dir / "index" / "system_validation.parquet",
         "entry_chains": data_dir / "index" / "entry_chains.parquet",
         "entry_biounit_chains": data_dir / "index" / "entry_biounit_chains.parquet",
         "entry_metadata": data_dir / "index" / "entry_metadata.parquet",
@@ -1650,12 +1821,17 @@ def repair_collation(
     _verify_manifest_inputs(rows, threads=threads)
     temporary_paths = {
         name: _temporary_path(final_paths[name])
-        for name in ("annotation", "entry_metadata", "interfaces")
+        for name in (
+            "annotation",
+            "system_validation",
+            "entry_metadata",
+            "interfaces",
+        )
     }
     replacement_paths = {
         name: _temporary_path(path.with_name(f"repair-{path.name}"))
         for name, path in final_paths.items()
-        if name != "annotation"
+        if name not in {"annotation", "system_validation"}
     }
 
     try:
@@ -1710,6 +1886,13 @@ def repair_collation(
             connection.read_parquet(str(final_paths["annotation"])).create_view(
                 "installed_annotation", replace=True
             )
+            installed_annotation_columns = _annotation_columns_to_publish(
+                _relation_columns(connection, "installed_annotation")
+            )
+            installed_annotation_select = ", ".join(
+                f"installed.{_quote_identifier(column)}"
+                for column in installed_annotation_columns
+            )
             repaired_annotation = (
                 "UNION ALL BY NAME SELECT * FROM collated_annotation"
                 if ligand_rows
@@ -1717,11 +1900,30 @@ def repair_collation(
             )
             _copy_query(
                 connection,
-                "SELECT * FROM (SELECT installed.* FROM installed_annotation "
+                f"SELECT * FROM (SELECT {installed_annotation_select} "
+                "FROM installed_annotation "
                 "AS installed ANTI JOIN repaired_entries USING (entry_pdb_id) "
                 f"{repaired_annotation}) "
                 "ORDER BY entry_pdb_id, system_id, ligand_id",
                 temporary_paths["annotation"],
+                row_group_size=row_group_size,
+            )
+            connection.read_parquet(str(final_paths["system_validation"])).create_view(
+                "installed_system_validation", replace=True
+            )
+            replacement_system_validation = (
+                "UNION ALL BY NAME SELECT * FROM collated_system_validation"
+                if ligand_rows
+                else ""
+            )
+            _copy_query(
+                connection,
+                "SELECT * FROM (SELECT installed.* FROM "
+                "installed_system_validation AS installed ANTI JOIN "
+                "repaired_entries ON split_part(installed.system_id, '__', 1) = "
+                "repaired_entries.entry_pdb_id "
+                f"{replacement_system_validation}) ORDER BY system_id",
+                temporary_paths["system_validation"],
                 row_group_size=row_group_size,
             )
             for name in (
@@ -1793,14 +1995,8 @@ def repair_collation(
         final_paths["annotation"].unlink(missing_ok=True)
         temporary_paths["entry_metadata"].replace(final_paths["entry_metadata"])
         temporary_paths["interfaces"].replace(final_paths["interfaces"])
+        temporary_paths["system_validation"].replace(final_paths["system_validation"])
         temporary_paths["annotation"].replace(final_paths["annotation"])
-        # The nonredundant index and every release-only ligand enrichment were
-        # derived from the pre-repair annotation.  Do not leave a stale
-        # nonredundant table looking publishable while scores, fingerprints,
-        # clusters, and final index enrichment are being repaired.
-        (data_dir / "index" / "annotation_table_nonredundant.parquet").unlink(
-            missing_ok=True
-        )
     finally:
         for path in [*temporary_paths.values(), *replacement_paths.values()]:
             path.unlink(missing_ok=True)
@@ -1823,7 +2019,6 @@ def repair_collation(
             "interface_scores",
             "interface_clusters",
             "interface_sampling",
-            "annotation_table_nonredundant",
         ],
         **validation,
     }
@@ -1842,12 +2037,6 @@ def finalize_repair_marker(data_dir: Path) -> dict[str, Any] | None:
         or report.get("status") != REPAIR_REQUIRED_STATUS
     ):
         return None
-    nonredundant = data_dir / "index" / "annotation_table_nonredundant.parquet"
-    if not nonredundant.is_file():
-        raise FileNotFoundError(
-            "targeted repair cannot be finalized before rebuilding "
-            "annotation_table_nonredundant.parquet"
-        )
     report["status"] = "complete"
     report["downstream_repair_complete"] = True
     _write_json_atomic(marker_path, report)

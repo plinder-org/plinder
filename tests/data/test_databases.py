@@ -186,6 +186,22 @@ def test_database_link_normalization_makes_directory_self_contained(tmp_path):
     assert not databases._has_external_database_links(root)
 
 
+def test_database_link_checks_skip_runtime_alignment_trees(tmp_path):
+    root = tmp_path / "database"
+    runtime = root / "aln"
+    runtime.mkdir(parents=True)
+    external_target = tmp_path / "completed-alignment.parquet"
+    external_target.write_text("alignment")
+    runtime_link = runtime / "1abc.parquet"
+    runtime_link.symlink_to(external_target)
+
+    report = databases._make_database_directory_portable(root)
+
+    assert report == {"external_links_copied": 0, "internal_links_relativized": 0}
+    assert runtime_link.is_symlink()
+    assert not databases._has_external_database_links(root)
+
+
 def test_database_identifiers_follow_selected_index_keys(tmp_path):
     database = tmp_path / "selected"
     database.with_suffix(".lookup").write_text(

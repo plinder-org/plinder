@@ -14,6 +14,18 @@ def test_get_config():
     assert cfg == {"data": asdict(ocfg), "context": asdict(ccfg)}
 
 
+def test_release_identifier_sets_local_and_remote_roots():
+    cfg = config.DataConfig(
+        plinder_release="2026-07",
+        plinder_release_number="1",
+        plinder_mount="/cache",
+        plinder_bucket="plinder",
+    )
+
+    assert cfg.plinder_dir == "/cache/plinder/2026-07/1"
+    assert cfg.plinder_remote == "gs://plinder/2026-07/1"
+
+
 def test_get_config_passed():
     cfg = config.get_config(
         config_args=[], config={"data": {"plinder_release": "test"}}, cached=False

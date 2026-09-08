@@ -38,14 +38,14 @@ class ChainView:
 
     @property
     def receptor_type(self) -> str:
-        """Normalized receptor polymer type derived from the CIF chain type."""
-        normalized = self.chain_type.lower()
+        """Receptor polymer category derived from the CIF chain type."""
+        chain_type = self.chain_type.lower()
         components = []
-        if "polypeptide" in normalized:
+        if "polypeptide" in chain_type:
             components.append("protein")
-        if "polydeoxyribonucleotide" in normalized:
+        if "polydeoxyribonucleotide" in chain_type:
             components.append("dna")
-        if "polyribonucleotide" in normalized:
+        if "polyribonucleotide" in chain_type:
             components.append("rna")
         return "+".join(components) or "other"
 
@@ -232,7 +232,7 @@ class EntryView:
 
 
 def _parse_neighboring_residue(s: str) -> tuple[str, int, int]:
-    """Parse ``{instance_chain}_{res_number}_{res_index}_{auth_number}`` strings."""
+    """Parse the label-asym residue coordinates from an encoded pocket row."""
     parts = s.split("_")
     # instance_chain has a dot ("1.A") so it doesn't collide with the _ separator
     return parts[0], int(parts[1]), int(parts[2])
@@ -249,7 +249,7 @@ def _parse_interaction(s: str) -> tuple[str, int, str]:
 
 
 def _as_list(value: Any) -> list[Any]:
-    """Normalize an array-valued cell (numpy array / None / NaN) to a list."""
+    """Convert an array-valued cell (numpy array / None / NaN) to a list."""
     if value is None:
         return []
     if isinstance(value, str):
@@ -263,7 +263,7 @@ def _entry_chains_from_rows(
     entry_rows: pd.DataFrame,
     chain_rows: pd.DataFrame | None = None,
 ) -> tuple[dict[str, ChainView], dict[str, str]]:
-    """Build chain views from the normalized chain table or holo fallback."""
+    """Build chain views from the chain table or holo fallback."""
     chains: dict[str, ChainView] = {}
     author_to_asym: dict[str, str] = {}
     if chain_rows is not None:
@@ -381,7 +381,7 @@ def _make_ligand_view(
 
 
 def _make_interface_view(row: pd.Series, *, pdb_id: str) -> InterfaceView:
-    """Build a protein-interface view from one normalized annotation row."""
+    """Build a protein-interface view from one annotation row."""
     chain_1_numbers = [
         int(value) for value in _as_list(row["interface_chain_1_residue_numbers"])
     ]
@@ -422,7 +422,7 @@ def entry_views_from_df(
     published annotation parquet — i.e. one row per
     ``(entry, system, ligand)`` triple. ``interface_annotations`` supplies the
     parallel one-row-per-protein-interface table and permits interface-only
-    entries. Pass the normalized one-row-per-chain table to retain receptor
+    entries. Pass the one-row-per-chain table to retain receptor
     types and apo/predicted alignment metadata.
     Without it, only protein-only holo chains present on system rows can be
     reconstructed. Annotation-only mixed or nucleic-acid receptors cannot be
@@ -443,6 +443,11 @@ def entry_views_from_df(
         dict.fromkeys(
             [str(value) for value in df.get("entry_pdb_id", [])]
             + [str(value) for value in interface_annotations.get("entry_pdb_id", [])]
+            + (
+                [str(value) for value in entry_chains.get("entry_pdb_id", [])]
+                if entry_chains is not None
+                else []
+            )
         )
     )
     views: dict[str, EntryView] = {}
@@ -574,61 +579,63 @@ def entry_views_from_df(
 
 
 def load_entry_views(
-    *, pdb_ids: Iterable[str], data_dir: Path | None = None
+    *,
+    pdb_ids: Iterable[str],
+    data_dir: Path | None = None,
+    include_interfaces: bool = True,
 ) -> dict[str, EntryView]:
-    """Load annotation and normalized chain rows for the requested entries.
+    """Load annotation and chain rows for the requested entries.
 
     ``data_dir`` selects a local ingest/release root. If omitted, the ligand,
     interface, and chain tables are resolved from the configured PLINDER
-    release cache. Production callers should use this loader so all normalized
-    rows come from the same release. Direct/custom DataFrames can use
+    release cache. Production callers should use this loader so all rows come
+    from the same release. Direct/custom DataFrames can use
     :func:`entry_views_from_df` instead.
     """
     pdb_ids = sorted(set(pdb_ids))
     if not pdb_ids:
         return {}
 
-    from plinder.core.utils import cpl
-    from plinder.core.utils.config import get_config
+    from plinder.core.release import PlinderRelease
 
-    cfg = get_config()
+    release = PlinderRelease(data_dir)
     if data_dir is None:
         df = query_index(
             columns=["*"],
-            splits=["*"],
             filters=[FILTER(("entry_pdb_id", "in", set(pdb_ids)))],
         )
-        chain_path = cpl.get_plinder_path(
-            rel=f"{cfg.data.index}/{cfg.data.entry_chain_file}"
-        )
-        interface_path = cpl.get_plinder_path(
-            rel=f"{cfg.data.index}/{cfg.data.interface_file}"
+        chain_path = release.fetch("entry_chains")
+        interface_path = (
+            release.fetch("interface_annotations") if include_interfaces else None
         )
     else:
-        index_dir = Path(data_dir) / cfg.data.index
-        annotation_path = index_dir / cfg.data.index_file
+        annotation_path = release.path("annotation_table")
         if not annotation_path.is_file():
             raise FileNotFoundError(f"missing annotation index: {annotation_path}")
         df = pd.read_parquet(
             annotation_path,
             filters=[("entry_pdb_id", "in", pdb_ids)],
         )
-        chain_path = index_dir / cfg.data.entry_chain_file
-        interface_path = index_dir / cfg.data.interface_file
+        chain_path = release.path("entry_chains")
+        interface_path = (
+            release.path("interface_annotations") if include_interfaces else None
+        )
 
     if not chain_path.is_file():
-        raise FileNotFoundError(f"missing normalized entry chain index: {chain_path}")
-    if not interface_path.is_file():
-        raise FileNotFoundError(
-            f"missing normalized interface annotation index: {interface_path}"
-        )
+        raise FileNotFoundError(f"missing entry chain index: {chain_path}")
+    if interface_path is not None and not interface_path.is_file():
+        raise FileNotFoundError(f"missing interface annotation index: {interface_path}")
     entry_chains = pd.read_parquet(
         chain_path,
         filters=[("entry_pdb_id", "in", pdb_ids)],
     )
-    interfaces = pd.read_parquet(
-        interface_path,
-        filters=[("entry_pdb_id", "in", pdb_ids)],
+    interfaces = (
+        pd.read_parquet(
+            interface_path,
+            filters=[("entry_pdb_id", "in", pdb_ids)],
+        )
+        if interface_path is not None
+        else pd.DataFrame(columns=["entry_pdb_id"])
     )
     LOG.info(
         "load_entry_views: %s ligand rows and %s interface rows for %s pdb_ids",

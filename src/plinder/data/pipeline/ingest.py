@@ -210,9 +210,6 @@ def _entry_outputs_complete(
         return False
     counts = metrics.get("counts", {})
     annotation_rows = int(counts.get("annotation_rows", 0))
-    interface_rows = int(counts.get("interface_rows", 0))
-    if annotation_rows < 1 and interface_rows < 1:
-        return False
     sidecars = {
         "entry_chains": entry_directory / "entry_chains.parquet",
         "entry_biounit_chains": entry_directory / "entry_biounit_chains.parquet",
@@ -243,7 +240,8 @@ def _entry_outputs_complete(
             "chain_receptor_type",
             "chain_is_ligand_like",
         },
-        sidecars["entry_biounit_chains"]: {
+        sidecars["entry_biounit_chains"]: BIOUNIT_CONTACT_COLUMNS
+        | {
             "entry_pdb_id",
             "biounit_id",
             "chain_instance",
@@ -264,11 +262,37 @@ def _entry_outputs_complete(
             }
         )
     try:
-        return all(
+        schemas_are_complete = all(
             columns.issubset(pq.read_schema(path).names)
             for path, columns in required_columns.items()
         )
+        return schemas_are_complete and _biounit_contacts_are_valid(
+            sidecars["entry_biounit_chains"]
+        )
     except Exception:
+        return False
+
+
+BIOUNIT_CONTACT_COLUMNS = {
+    "chain_num_contacting_ions",
+    "chain_num_contacting_artifacts",
+    "chain_num_contacting_other_ligands",
+}
+
+
+def _biounit_contacts_are_valid(path: Path) -> bool:
+    if not path.is_file():
+        return False
+    try:
+        if not BIOUNIT_CONTACT_COLUMNS.issubset(pq.read_schema(path).names):
+            return False
+        table = pq.read_table(path, columns=sorted(BIOUNIT_CONTACT_COLUMNS))
+        return all(
+            value is not None and value >= 0
+            for column in table.column_names
+            for value in table[column].to_pylist()
+        )
+    except (OSError, TypeError, ValueError):
         return False
 
 
@@ -307,7 +331,14 @@ def completed_entry_metrics(
         ):
             continue
         if metrics.get("status") == "skipped_no_ligands":
-            if expected_ingest_mode == "ligands":
+            entry_directory = metrics.get("outputs", {}).get("entry_directory")
+            if (
+                expected_ingest_mode == "ligands"
+                and entry_directory
+                and _biounit_contacts_are_valid(
+                    Path(entry_directory) / "entry_biounit_chains.parquet"
+                )
+            ):
                 return metrics_path
             continue
         if metrics.get("status") == "skipped_no_systems":
@@ -688,6 +719,7 @@ def ingest_one_pdb(
             annotation_options = dict(annotation_cfg or {})
             entry_options = dict(entry_cfg or {})
             entry_options.pop("save_folder", None)
+            entry_options.pop("data_dir", None)
             if entry_options:
                 annotation_options["entry_cfg"] = entry_options
             if interface_cfg:
@@ -696,6 +728,7 @@ def ingest_one_pdb(
                 cif_file,
                 validation_file,
                 save_folder=raw_entry_root,
+                data_dir=output_root,
                 **annotation_options,
             )
             annotation = (
@@ -732,12 +765,9 @@ def ingest_one_pdb(
         elif annotation.empty and interface_rows == 0:
             entry_parquet.unlink(missing_ok=True)
             ligand_parquet.unlink(missing_ok=True)
-            shutil.rmtree(entry_directory, ignore_errors=True)
-            summary["outputs"] = {
-                "entry_parquet": None,
-                "entry_directory": None,
-                "ligand_parquet": None,
-            }
+            shutil.rmtree(entry_directory / "ligand_files", ignore_errors=True)
+            summary["outputs"]["entry_parquet"] = None
+            summary["outputs"]["ligand_parquet"] = None
             summary["counts"] = {
                 "annotation_rows": 0,
                 "interface_rows": 0,
@@ -745,7 +775,7 @@ def ingest_one_pdb(
                 "ligand_ids": 0,
                 "canonical_ligand_sdfs": 0,
             }
-            summary["status"] = "skipped_no_systems"
+            summary["status"] = "complete"
         else:
             if not annotation.empty:
 

@@ -2,17 +2,14 @@
 # Distributed under the terms of the Apache License 2.0
 from __future__ import annotations
 
-import multiprocessing
 import shutil
 from functools import wraps
 from hashlib import md5
-from itertools import repeat
 from json import dumps, load
 from os import listdir
 from pathlib import Path
 from time import time
-from typing import TYPE_CHECKING, Any, Callable, Literal, Optional, TypeVar
-from zipfile import ZIP_DEFLATED, ZipFile
+from typing import TYPE_CHECKING, Any, Callable, Optional, TypeVar
 
 import pandas as pd
 import pyarrow.parquet as pq
@@ -105,6 +102,9 @@ def entry_exists(*, entry_dir: Path, pdb_id: str) -> bool:
             "chain_instance",
             "chain_asym_id",
             "chain_role",
+            "chain_num_contacting_ions",
+            "chain_num_contacting_artifacts",
+            "chain_num_contacting_other_ligands",
         }
         if not required_biounit_columns.issubset(
             pq.read_schema(entry_biounit_chains).names
@@ -469,61 +469,16 @@ def ingest_flow_control(func: Callable[..., T]) -> Callable[..., T]:
 def _cluster_column_name(
     *, metric: str, cluster: str, directed: bool, threshold: int, ligand: bool
 ) -> str:
-    if directed:
-        raise ValueError("ligand clusters must use reciprocal-minimum edges")
-    kind = "component" if cluster == "components" else "community"
+    if directed or cluster != "set_cover":
+        raise ValueError("published undirected clusters must be set covers")
+    kind = "set_cover"
     ligand_marker = "__ligand" if ligand else ""
     return f"{metric}__{threshold}{ligand_marker}__{kind}"
 
 
-def _read_local_cluster_rows(*, root: Path, node_column: str) -> pd.DataFrame:
-    columns = [
-        node_column,
-        "label",
-        "threshold",
-        "metric",
-        "cluster",
-        "directed",
-    ]
-    paths = sorted(root.glob("cluster=*/directed=*/metric=*/threshold=*.parquet"))
-    frames = [pd.read_parquet(path, columns=columns) for path in paths]
-    if not frames:
-        return pd.DataFrame(columns=columns)
-    return pd.concat(frames, ignore_index=True)
-
-
-def _pivot_cluster_rows(
-    clusters: pd.DataFrame, *, node_column: str, ligand: bool
-) -> pd.DataFrame:
-    if clusters.empty:
-        return pd.DataFrame(columns=[node_column])
-    clusters = clusters.copy()
-    clusters["directed"] = clusters["directed"].map(
-        lambda value: value if isinstance(value, bool) else str(value).lower() == "true"
-    )
-    wide = clusters.pivot_table(
-        values="label",
-        index=node_column,
-        columns=["metric", "cluster", "directed", "threshold"],
-        aggfunc="first",
-    )
-    wide.columns = [
-        _cluster_column_name(
-            metric=str(metric),
-            cluster=str(cluster),
-            directed=bool(directed),
-            threshold=int(threshold),
-            ligand=ligand,
-        )
-        for metric, cluster, directed, threshold in wide.columns
-    ]
-    return wide.reset_index()
-
-
-def add_cluster_columns(*, index: pd.DataFrame, data_dir: Path) -> pd.DataFrame:
-    """Merge reciprocal and directed ligand-level cluster labels into the index."""
+def build_ligand_cluster_table(*, index: pd.DataFrame, data_dir: Path) -> pd.DataFrame:
+    """Build one queryable cluster-assignment row per ligand."""
     node_column = "ligand_id"
-    cluster_root = data_dir / "ligand_clusters"
     directed_cover_root = data_dir / "ligand_sampling" / "directed_set_cover"
     marker_path = data_dir / "index" / "collation.json"
     repair_started_ns: int | None = None
@@ -532,23 +487,24 @@ def add_cluster_columns(*, index: pd.DataFrame, data_dir: Path) -> pd.DataFrame:
             marker = load(handle)
         if marker.get("status") == "requires_downstream_repair":
             repair_started_ns = marker_path.stat().st_mtime_ns
-    reciprocal_paths = sorted(
-        cluster_root.glob("cluster=*/directed=*/metric=*/threshold=*.parquet")
-    )
+    set_cover_root = data_dir / "ligand_sampling" / "set_cover"
+    reciprocal_paths = sorted(set_cover_root.glob("metric=*/threshold=*.parquet"))
     directed_cover_paths = sorted(
         directed_cover_root.glob("metric=*/threshold=*.parquet")
     )
-    if not reciprocal_paths and not directed_cover_paths:
-        if repair_started_ns is not None:
-            raise FileNotFoundError(
-                "targeted collation repair has no rebuilt ligand clusters"
-            )
-        return index
-    reciprocal_keys = {
+    if (
+        not reciprocal_paths
+        and not directed_cover_paths
+        and repair_started_ns is not None
+    ):
+        raise FileNotFoundError(
+            "targeted collation repair has no rebuilt ligand clusters"
+        )
+    set_cover_keys = {
         (
             next(
                 part.split("=", maxsplit=1)[1]
-                for part in path.relative_to(cluster_root).parts
+                for part in path.relative_to(set_cover_root).parts
                 if part.startswith("metric=")
             ),
             int(path.stem.split("=", maxsplit=1)[1]),
@@ -562,17 +518,28 @@ def add_cluster_columns(*, index: pd.DataFrame, data_dir: Path) -> pd.DataFrame:
         )
         for path in directed_cover_paths
     }
-    if directed_cover_keys != reciprocal_keys:
-        missing = sorted(reciprocal_keys.difference(directed_cover_keys))
-        extra = sorted(directed_cover_keys.difference(reciprocal_keys))
-        raise FileNotFoundError(
-            "directed set-cover matrix does not match reciprocal ligand "
-            f"clusters: missing={missing[:10]}, extra={extra[:10]}"
+    invalid_set_cover_metrics = sorted(
+        metric
+        for metric, _ in set_cover_keys
+        if metric != "tanimoto_similarity_ecfp4_1024"
+    )
+    invalid_directed_metrics = sorted(
+        metric
+        for metric, _ in directed_cover_keys
+        if metric == "tanimoto_similarity_ecfp4_1024"
+    )
+    if invalid_set_cover_metrics or invalid_directed_metrics:
+        raise ValueError(
+            "invalid ligand set-cover modes: "
+            f"undirected={invalid_set_cover_metrics}, "
+            f"directed={invalid_directed_metrics}"
         )
     node_ids = pd.Index(
         index[node_column].dropna().astype(str).unique(),
         name=node_column,
     )
+    if not reciprocal_paths and not directed_cover_paths:
+        return pd.DataFrame({node_column: node_ids.to_numpy()})
     proper = index["ligand_is_proper"].fillna(False).astype(bool)
     holo = index["system_type"].eq("holo")
     expected_score_nodes = set(
@@ -586,9 +553,9 @@ def add_cluster_columns(*, index: pd.DataFrame, data_dir: Path) -> pd.DataFrame:
         .dropna()
         .astype(str)
     )
-    artifacts: list[tuple[Path, str, str]] = []
+    artifacts: list[tuple[Path, str, str, bool]] = []
     for path in reciprocal_paths:
-        relative_parts = path.relative_to(cluster_root).parts
+        relative_parts = path.relative_to(set_cover_root).parts
         partitions = {
             key: value
             for key, value in (
@@ -603,11 +570,12 @@ def add_cluster_columns(*, index: pd.DataFrame, data_dir: Path) -> pd.DataFrame:
                 metric,
                 _cluster_column_name(
                     metric=metric,
-                    cluster=partitions["cluster"],
-                    directed=partitions["directed"].lower() == "true",
+                    cluster="set_cover",
+                    directed=False,
                     threshold=threshold,
                     ligand=True,
                 ),
+                False,
             )
         )
     for path in directed_cover_paths:
@@ -618,6 +586,7 @@ def add_cluster_columns(*, index: pd.DataFrame, data_dir: Path) -> pd.DataFrame:
                 path,
                 metric,
                 f"{metric}__{threshold}__ligand__directed_set_cover",
+                True,
             )
         )
     LOG.info(
@@ -627,7 +596,10 @@ def add_cluster_columns(*, index: pd.DataFrame, data_dir: Path) -> pd.DataFrame:
     )
     cluster_columns: dict[str, Any] = {}
     started = time()
-    for path_index, (path, metric, column) in enumerate(artifacts, start=1):
+    for path_index, (path, metric, column, is_directed_cover) in enumerate(
+        artifacts, start=1
+    ):
+        artifact_threshold = int(path.stem.split("=", maxsplit=1)[1])
         if (
             repair_started_ns is not None
             and path.stat().st_mtime_ns <= repair_started_ns
@@ -636,7 +608,26 @@ def add_cluster_columns(*, index: pd.DataFrame, data_dir: Path) -> pd.DataFrame:
                 "ligand cluster artifact predates the targeted collation "
                 f"repair: {path}"
             )
-        labels = pd.read_parquet(path, columns=[node_column, "label"])
+        columns = [node_column, "label", "centroid_ligand_id"]
+        has_coverage_centrality = False
+        if is_directed_cover:
+            coverage_columns = {"coverage_count", "coverage_fraction"}
+            available_columns = set(pq.read_schema(path).names)
+            available_coverage_columns = coverage_columns.intersection(
+                available_columns
+            )
+            if available_coverage_columns and (
+                available_coverage_columns != coverage_columns
+            ):
+                missing = sorted(coverage_columns.difference(available_columns))
+                raise ValueError(
+                    "directed ligand cover has a partial coverage-centrality "
+                    f"schema: {path}; missing={missing}"
+                )
+            has_coverage_centrality = available_coverage_columns == coverage_columns
+            if has_coverage_centrality:
+                columns.extend(sorted(coverage_columns))
+        labels = pd.read_parquet(path, columns=columns)
         if labels[node_column].duplicated().any():
             raise ValueError(f"duplicate ligand IDs in cluster artifact: {path}")
         labels[node_column] = labels[node_column].astype(str)
@@ -656,6 +647,77 @@ def add_cluster_columns(*, index: pd.DataFrame, data_dir: Path) -> pd.DataFrame:
             )
         aligned = labels.set_index(node_column)["label"].reindex(node_ids)
         cluster_columns[column] = aligned.astype("string[pyarrow]").array
+        if metric == "tanimoto_similarity_ecfp4_1024" and artifact_threshold == 90:
+            if "entry_pdb_id" not in index.columns:
+                raise ValueError(
+                    "the 90-percent Tanimoto set cover requires entry_pdb_id"
+                )
+            cluster_column = "ligand_tanimoto_ecfp4_1024_90_cluster"
+            count_column = f"{cluster_column}_num_pdb_ids"
+            label_by_node = labels.set_index(node_column)["label"]
+            occurrences = pd.DataFrame(
+                {
+                    "label": index.loc[proper & holo, node_column]
+                    .astype(str)
+                    .map(label_by_node),
+                    "entry_pdb_id": index.loc[proper & holo, "entry_pdb_id"].astype(
+                        str
+                    ),
+                }
+            ).dropna(subset=["label"])
+            pdb_counts = occurrences.groupby("label", observed=True)[
+                "entry_pdb_id"
+            ].nunique()
+            cluster_columns[cluster_column] = aligned.astype("string[pyarrow]").array
+            cluster_columns[count_column] = (
+                aligned.map(pdb_counts).astype("Int32").array
+            )
+        labels["centroid_ligand_id"] = labels["centroid_ligand_id"].astype(str)
+        labels["is_centroid"] = labels[node_column].eq(labels["centroid_ligand_id"])
+        centroid_counts = labels.groupby("label", observed=True)["is_centroid"].sum()
+        invalid_labels = centroid_counts[centroid_counts.ne(1)].index.tolist()
+        if invalid_labels:
+            raise ValueError(
+                "ligand set cover must have exactly one representative row "
+                f"per label: {path}; invalid={invalid_labels[:10]}"
+            )
+        centroid_column = f"{column}__is_centroid"
+        aligned_centroids = labels.set_index(node_column)["is_centroid"].reindex(
+            node_ids
+        )
+        cluster_columns[centroid_column] = aligned_centroids.astype("boolean").array
+        if is_directed_cover:
+            if has_coverage_centrality:
+                if labels[["coverage_count", "coverage_fraction"]].isna().any().any():
+                    raise ValueError(
+                        "directed ligand cover has missing coverage centrality: "
+                        f"{path}"
+                    )
+                if (
+                    labels["coverage_count"].lt(1).any()
+                    or (
+                        labels["coverage_fraction"].le(0)
+                        | labels["coverage_fraction"].gt(1)
+                    ).any()
+                ):
+                    raise ValueError(
+                        "directed ligand cover has invalid coverage centrality: "
+                        f"{path}"
+                    )
+                coverage_count_column = f"{column}__coverage_count"
+                coverage_fraction_column = f"{column}__coverage_fraction"
+                cluster_columns[coverage_count_column] = (
+                    labels.set_index(node_column)["coverage_count"]
+                    .reindex(node_ids)
+                    .astype("Int32")
+                    .array
+                )
+                cluster_columns[coverage_fraction_column] = (
+                    labels.set_index(node_column)["coverage_fraction"]
+                    .reindex(node_ids)
+                    .astype("Float32")
+                    .array
+                )
         if path_index % 10 == 0 or path_index == len(artifacts):
             elapsed = time() - started
             rate = path_index / elapsed
@@ -670,38 +732,19 @@ def add_cluster_columns(*, index: pd.DataFrame, data_dir: Path) -> pd.DataFrame:
         {node_column: node_ids.to_numpy(), **cluster_columns},
         copy=False,
     )
-    replacement_columns = set(wide.columns).difference({node_column})
-    stale_ligand_cluster_columns = {
-        column
-        for column in index.columns
-        if "__ligand__" in column
-        and column.endswith(("__component", "__community", "__directed_set_cover"))
-    }
     LOG.info(
-        "merging %d ligand-level cluster columns into the annotation index",
-        len(replacement_columns),
-    )
-    result = index.drop(
-        columns=list(
-            replacement_columns.intersection(index.columns)
-            | stale_ligand_cluster_columns
-        )
-    ).merge(wide, on=node_column, how="left", validate="many_to_one")
-    LOG.info(
-        "cluster index merge complete: rows=%d columns=%d elapsed_seconds=%.1f",
-        len(result),
-        len(replacement_columns),
+        "ligand cluster table complete: rows=%d columns=%d elapsed_seconds=%.1f",
+        *wide.shape,
         time() - started,
     )
-    return result
+    return wide
 
 
-def add_interface_cluster_columns(
+def build_interface_cluster_table(
     *, index: pd.DataFrame, data_dir: Path
 ) -> pd.DataFrame:
-    """Expand representative interface-cluster labels into the full index."""
+    """Build one queryable cluster-assignment row per protein interface."""
     node_column = "system_id"
-    cluster_root = data_dir / "interface_clusters"
     directed_cover_root = data_dir / "interface_sampling" / "directed_set_cover"
     marker_path = data_dir / "index" / "collation.json"
     repair_started_ns: int | None = None
@@ -710,13 +753,10 @@ def add_interface_cluster_columns(
             marker = load(handle)
         if marker.get("status") == "requires_downstream_repair":
             repair_started_ns = marker_path.stat().st_mtime_ns
-    reciprocal_paths = sorted(
-        cluster_root.glob("cluster=*/directed=*/metric=*/threshold=*.parquet")
-    )
     directed_cover_paths = sorted(
         directed_cover_root.glob("metric=*/threshold=*.parquet")
     )
-    if not reciprocal_paths and not directed_cover_paths:
+    if not directed_cover_paths:
         if repair_started_ns is not None:
             raise FileNotFoundError(
                 "targeted collation repair has no rebuilt interface clusters"
@@ -725,58 +765,7 @@ def add_interface_cluster_columns(
             raise FileNotFoundError(
                 "non-empty interface annotation has no published interface clusters"
             )
-        return index
-
-    reciprocal_artifact_keys = {
-        (
-            next(
-                part.split("=", maxsplit=1)[1]
-                for part in path.relative_to(cluster_root).parts
-                if part.startswith("metric=")
-            ),
-            int(path.stem.split("=", maxsplit=1)[1]),
-            next(
-                part.split("=", maxsplit=1)[1]
-                for part in path.relative_to(cluster_root).parts
-                if part.startswith("cluster=")
-            ),
-        )
-        for path in reciprocal_paths
-    }
-    reciprocal_keys = {
-        (metric, threshold) for metric, threshold, _ in reciprocal_artifact_keys
-    }
-    expected_reciprocal_artifacts = {
-        (metric, threshold, cluster)
-        for metric, threshold in reciprocal_keys
-        for cluster in ["components", "communities"]
-    }
-    if reciprocal_artifact_keys != expected_reciprocal_artifacts:
-        missing_reciprocal_artifacts = sorted(
-            expected_reciprocal_artifacts.difference(reciprocal_artifact_keys)
-        )
-        extra_reciprocal_artifacts = sorted(
-            reciprocal_artifact_keys.difference(expected_reciprocal_artifacts)
-        )
-        raise FileNotFoundError(
-            "interface reciprocal cluster matrix is incomplete: "
-            f"missing={missing_reciprocal_artifacts[:10]}, "
-            f"extra={extra_reciprocal_artifacts[:10]}"
-        )
-    directed_cover_keys = {
-        (
-            path.parent.name.split("=", maxsplit=1)[1],
-            int(path.stem.split("=", maxsplit=1)[1]),
-        )
-        for path in directed_cover_paths
-    }
-    if directed_cover_keys != reciprocal_keys:
-        missing = sorted(reciprocal_keys.difference(directed_cover_keys))
-        extra = sorted(directed_cover_keys.difference(reciprocal_keys))
-        raise FileNotFoundError(
-            "directed set-cover matrix does not match reciprocal interface "
-            f"clusters: missing={missing[:10]}, extra={extra[:10]}"
-        )
+        return pd.DataFrame({node_column: pd.Series(dtype="string")})
 
     node_ids = pd.Index(
         index[node_column].dropna().astype(str).unique(),
@@ -827,25 +816,9 @@ def add_interface_cluster_columns(
         membership["representative_system_id"].dropna().astype(str)
     )
     expected_half_representatives = set(
-        membership[
-            ["side_1_half_interface_id", "side_2_half_interface_id"]
-        ].stack()
+        membership[["side_1_half_interface_id", "side_2_half_interface_id"]].stack()
     )
     artifacts: list[tuple[Path, str, int, str]] = []
-    for path in reciprocal_paths:
-        partitions = {
-            key: value
-            for key, value in (
-                part.split("=", maxsplit=1)
-                for part in path.relative_to(cluster_root).parts[:-1]
-            )
-        }
-        if partitions["directed"].lower() != "false":
-            raise ValueError(f"interface reciprocal cluster must be undirected: {path}")
-        metric = partitions["metric"]
-        threshold = int(path.stem.split("=", maxsplit=1)[1])
-        kind = "component" if partitions["cluster"] == "components" else "community"
-        artifacts.append((path, metric, threshold, kind))
     for path in directed_cover_paths:
         metric = path.parent.name.split("=", maxsplit=1)[1]
         threshold = int(path.stem.split("=", maxsplit=1)[1])
@@ -890,8 +863,8 @@ def add_interface_cluster_columns(
                 cluster_columns[column] = aligned.astype("string[pyarrow]").array
         else:
             column = f"{metric}__{threshold}__{kind}"
-            aligned = membership["representative_system_id"].astype(str).map(
-                label_lookup
+            aligned = (
+                membership["representative_system_id"].astype(str).map(label_lookup)
             )
             cluster_columns[column] = aligned.astype("string[pyarrow]").array
         if path_index % 10 == 0 or path_index == len(artifacts):
@@ -910,30 +883,18 @@ def add_interface_cluster_columns(
         {node_column: node_ids.to_numpy(), **cluster_columns},
         copy=False,
     )
-    replacement_columns = set(wide.columns).difference({node_column})
-    stale_columns = {
-        column
-        for column in index.columns
-        if column.startswith(("interface_qcov__", "interface_side_qcov__"))
-        and column.endswith(("component", "community", "directed_set_cover"))
-    }
-    result = index.drop(
-        columns=list(replacement_columns.intersection(index.columns) | stale_columns)
-    ).merge(wide, on=node_column, how="left", validate="one_to_one")
     LOG.info(
-        "interface cluster index merge complete: rows=%d columns=%d "
-        "elapsed_seconds=%.1f",
-        len(result),
-        len(replacement_columns),
+        "interface cluster table complete: rows=%d columns=%d elapsed_seconds=%.1f",
+        *wide.shape,
         time() - started,
     )
-    return result
+    return wide
 
 
 def add_ligand_similarity_columns(
     *, index: pd.DataFrame, data_dir: Path
 ) -> pd.DataFrame:
-    """Merge unique-SMILES cofactor and frequency annotations into each ligand."""
+    """Merge unique-SMILES and cofactor annotations into each ligand."""
     annotation_path = (
         data_dir / "fingerprints" / "ligand_similarity_annotations.parquet"
     )
@@ -953,19 +914,20 @@ def add_ligand_similarity_columns(
                 "ligand similarity annotations predate the targeted " "collation repair"
             )
     annotations = pd.read_parquet(annotation_path)
-    join_column = "ligand_rdkit_canonical_smiles"
-    if annotations[join_column].duplicated().any():
+    artifact_smiles_column = "ligand_rdkit_canonical_smiles"
+    index_smiles_column = "ligand_smiles"
+    if annotations[artifact_smiles_column].duplicated().any():
         raise ValueError("ligand similarity annotations contain duplicate SMILES")
     proper_holo = index["ligand_is_proper"].fillna(False).astype(bool) & index[
         "system_type"
     ].eq("holo")
     expected_smiles = set(
-        index.loc[proper_holo, join_column]
+        index.loc[proper_holo, index_smiles_column]
         .dropna()
         .astype(str)
         .loc[lambda values: values.ne("")]
     )
-    observed_smiles = set(annotations[join_column].dropna().astype(str))
+    observed_smiles = set(annotations[artifact_smiles_column].dropna().astype(str))
     if observed_smiles != expected_smiles:
         missing = sorted(expected_smiles.difference(observed_smiles))
         extra = sorted(observed_smiles.difference(expected_smiles))
@@ -973,16 +935,28 @@ def add_ligand_similarity_columns(
             "ligand similarity annotations do not cover the current proper "
             f"holo SMILES universe: missing={missing[:10]}, extra={extra[:10]}"
         )
-    replacement_columns = set(annotations.columns).difference({join_column})
+    annotations = annotations.rename(
+        columns={artifact_smiles_column: index_smiles_column}
+    )
+    replacement_columns = set(annotations.columns).difference({index_smiles_column})
+    obsolete_columns = {
+        "ligand_tanimoto_ecfp4_1024_90_cluster",
+        "ligand_tanimoto_ecfp4_1024_90_cluster_num_pdb_ids",
+    }
     result = index.drop(
-        columns=list(replacement_columns.intersection(index.columns))
+        columns=list(
+            replacement_columns.intersection(index.columns)
+            | obsolete_columns.intersection(index.columns)
+        )
     ).merge(
         annotations,
-        on=join_column,
+        on=index_smiles_column,
         how="left",
         validate="many_to_one",
     )
-    has_smiles = result[join_column].notna() & result[join_column].ne("")
+    has_smiles = result[index_smiles_column].notna() & result[index_smiles_column].ne(
+        ""
+    )
     eligible = has_smiles
     if "ligand_is_proper" in result:
         eligible &= result["ligand_is_proper"].fillna(False)
@@ -997,9 +971,6 @@ def add_ligand_similarity_columns(
             result[column] = result[column].astype("boolean")
         result.loc[~eligible, column] = pd.NA
     result["ligand_smiles_id"] = result["ligand_smiles_id"].astype("Int32")
-    for column in result.columns:
-        if column.endswith("_cluster_num_pdb_ids"):
-            result[column] = result[column].astype("Int32")
     if "ligand_is_cofactor_like" in result:
         result["ligand_is_cofactor_like"] = result["ligand_is_cofactor_like"].astype(
             "boolean"
@@ -1124,68 +1095,116 @@ def add_aggregated_columns(*, index: pd.DataFrame) -> pd.DataFrame:
     return index
 
 
+def _is_ligand_cluster_column(column: str) -> bool:
+    """Return whether a column belongs in the ligand-cluster sidecar."""
+    return column in {
+        "ligand_tanimoto_ecfp4_1024_90_cluster",
+        "ligand_tanimoto_ecfp4_1024_90_cluster_num_pdb_ids",
+    } or (
+        "__ligand__" in column
+        and column.endswith(
+            (
+                "__component",
+                "__community",
+                "__set_cover",
+                "__set_cover__is_centroid",
+                "__directed_set_cover",
+                "__directed_set_cover__is_centroid",
+                "__directed_set_cover__coverage_count",
+                "__directed_set_cover__coverage_fraction",
+            )
+        )
+    )
+
+
+def _is_interface_cluster_column(column: str) -> bool:
+    """Return whether a column belongs in the interface-cluster sidecar."""
+    return column.startswith(("interface_qcov__", "interface_side_qcov__")) and (
+        "component" in column or "community" in column or "set_cover" in column
+    )
+
+
 def finalize_index(*, data_dir: Path) -> pd.DataFrame:
-    """Merge local cluster labels into the V3 annotation parquet."""
+    """Publish enriched annotations and separate cluster-assignment tables."""
     started = time()
     index_path = data_dir / "index" / "annotation_table.parquet"
     if not index_path.is_file():
         raise FileNotFoundError(index_path)
     LOG.info("loading annotation index for final enrichment: %s", index_path)
     index = pd.read_parquet(index_path)
+    index.drop(columns=["uniqueness"], errors="ignore", inplace=True)
     LOG.info("loaded annotation index: rows=%d columns=%d", *index.shape)
     index = add_ligand_3d_score_ability_column(index=index, data_dir=data_dir)
     LOG.info("merged ligand 3D-scoreability annotations")
     index = add_ligand_similarity_columns(index=index, data_dir=data_dir)
     LOG.info("merged ligand similarity annotations")
-    index = add_cluster_columns(index=index, data_dir=data_dir)
-    uniqueness_cluster = "pli_qcov__100__ligand__component"
-    if uniqueness_cluster in index.columns:
-        labels = (
-            index[uniqueness_cluster]
-            .astype("string")
-            .fillna(index["ligand_id"].astype("string"))
-        )
-        index["uniqueness"] = (
-            index["system_id_no_biounit"].astype("string") + "_" + labels
-        )
+    ligand_clusters = build_ligand_cluster_table(index=index, data_dir=data_dir)
+    index.drop(
+        columns=[column for column in index if _is_ligand_cluster_column(column)],
+        inplace=True,
+    )
     interface_path = data_dir / "index" / "interface_annotation_table.parquet"
     interface_index: pd.DataFrame | None = None
+    interface_clusters: pd.DataFrame | None = None
     if interface_path.is_file():
-        interface_index = add_interface_cluster_columns(
-            index=pd.read_parquet(interface_path),
+        interface_index = pd.read_parquet(interface_path)
+        interface_clusters = build_interface_cluster_table(
+            index=interface_index,
             data_dir=data_dir,
+        )
+        interface_index.drop(
+            columns=[
+                column
+                for column in interface_index
+                if _is_interface_cluster_column(column)
+            ],
+            inplace=True,
         )
 
     temporary = index_path.with_suffix(".tmp.parquet")
     temporary_interface = interface_path.with_suffix(".tmp.parquet")
+    ligand_clusters_path = data_dir / "index" / "ligand_clusters.parquet"
+    interface_clusters_path = data_dir / "index" / "interface_clusters.parquet"
+    temporary_ligand_clusters = ligand_clusters_path.with_suffix(".tmp.parquet")
+    temporary_interface_clusters = interface_clusters_path.with_suffix(".tmp.parquet")
+    index_marker_removed = False
     try:
-        LOG.info("staging enriched annotation indexes")
+        LOG.info("staging annotation and cluster tables")
         index.to_parquet(temporary, index=False)
+        ligand_clusters.to_parquet(temporary_ligand_clusters, index=False)
         if interface_index is not None:
             interface_index.to_parquet(temporary_interface, index=False)
-        if interface_index is None:
-            temporary.replace(index_path)
-        else:
-            # The primary annotation table is the readability marker for this
-            # generation. Install it last so an interrupted two-table update
-            # fails closed instead of exposing mixed ligand/interface tables.
-            index_path.unlink()
-            temporary_interface.replace(interface_path)
-            temporary.replace(index_path)
-    except BaseException:
+            assert interface_clusters is not None
+            interface_clusters.to_parquet(
+                temporary_interface_clusters,
+                index=False,
+            )
+        # The primary annotation table is the readability marker for this
+        # generation. Install it last so an interrupted update fails closed
+        # instead of exposing mismatched annotation and cluster tables.
+        index_path.unlink()
+        index_marker_removed = True
         if interface_index is not None:
+            temporary_interface.replace(interface_path)
+            temporary_interface_clusters.replace(interface_clusters_path)
+        temporary_ligand_clusters.replace(ligand_clusters_path)
+        temporary.replace(index_path)
+    except BaseException:
+        if index_marker_removed:
             index_path.unlink(missing_ok=True)
         raise
     finally:
         temporary.unlink(missing_ok=True)
         temporary_interface.unlink(missing_ok=True)
+        temporary_ligand_clusters.unlink(missing_ok=True)
+        temporary_interface_clusters.unlink(missing_ok=True)
     if interface_index is not None:
         LOG.info(
-            "wrote enriched interface index: rows=%d columns=%d",
+            "wrote interface annotations: rows=%d columns=%d",
             *interface_index.shape,
         )
     LOG.info(
-        "final index enrichment complete: rows=%d columns=%d elapsed_seconds=%.1f",
+        "final table publication complete: rows=%d columns=%d elapsed_seconds=%.1f",
         *index.shape,
         time() - started,
     )
@@ -1210,6 +1229,7 @@ def create_entry_chain_index(
         "chain_entity_id",
         "chain_type",
         "chain_receptor_type",
+        "chain_sequence",
         "chain_length",
         "chain_num_unresolved_residues",
         "chain_is_holo",
@@ -1297,7 +1317,7 @@ def create_index(*, data_dir: Path, force_update: bool = False) -> pd.DataFrame:
     if not index.exists() or force_update:
         dfs = []
         annotation_parts = data_dir / "raw_entries"
-        for i, path in enumerate(annotation_parts.glob("*/*.parquet")):
+        for i, path in enumerate(sorted(annotation_parts.glob("*/*.parquet"))):
             df = _drop_retired_enrichment_columns(pd.read_parquet(path))
             LOG.info(f"{i} {path.name} shape={df.shape}")
             if not df.empty:
@@ -1320,210 +1340,6 @@ def create_index(*, data_dir: Path, force_update: bool = False) -> pd.DataFrame:
     if update or force_update:
         df.to_parquet(index, index=False)
     return df
-
-
-def create_nonredundant_dataset(*, data_dir: Path) -> None:
-    """
-    This is called in make_mmp_index to ensure the existence of the index
-    and simultaneously generates a non-redundant index for various use
-    cases. The initial index is collated in ``join_make_entries``.
-    """
-    if not (data_dir / "index" / "annotation_table.parquet").exists():
-        df = create_index(data_dir=data_dir)
-    else:
-        df = pd.read_parquet(data_dir / "index" / "annotation_table.parquet")
-    if "uniqueness" not in df.columns:
-        raise RuntimeError(
-            "annotation index has no uniqueness column; run clustering and "
-            "finalize_index() before creating the nonredundant dataset"
-        )
-    df_nonredundant = df.sort_values("system_biounit_id").drop_duplicates("uniqueness")
-    df_nonredundant.to_parquet(
-        data_dir / "index" / "annotation_table_nonredundant.parquet", index=False
-    )
-
-
-def apo_file_from_link_id(
-    data_dir: Path,
-    output_dir: Path,
-    link_id: str,
-    force_update: bool = False,
-) -> dict[str, str] | None:
-    import biotite.structure.io.pdbx as pdbx
-
-    from plinder.data.annotations.cif_utils import read_mmcif_file
-    from plinder.data.annotations.save_utils import save_cif_file
-
-    if (output_dir / f"{link_id}.cif").exists() and not force_update:
-        LOG.info(f"skipping {link_id}.cif as it already exists")
-        return None
-
-    pdb_id, chain = link_id.split("_")
-    target_cif = (
-        data_dir
-        / "ingest"
-        / pdb_id[1:3]
-        / f"pdb_0000{pdb_id}"
-        / f"pdb_0000{pdb_id}_xyz-enrich.cif.gz"
-    )
-    if not target_cif.exists():
-        LOG.info(f"skipping {link_id} as {target_cif} does not exist")
-        return None
-
-    cif_file_obj = read_mmcif_file(target_cif)
-    atoms = pdbx.get_structure(
-        cif_file_obj, model=1, use_author_fields=False, include_bonds=True
-    )
-    atoms = atoms[atoms.chain_id == chain]
-    out_cif = output_dir / f"{pdb_id}_{chain}.cif"
-    LOG.info(f"saving {link_id} to {out_cif}")
-    save_cif_file(atoms, out_cif.stem, out_cif)
-    return None
-
-
-def pred_file_from_link_id(
-    data_dir: Path,
-    output_dir: Path,
-    link_id: str,
-    force_update: bool = False,
-) -> None:
-    import biotite.structure.io.pdbx as pdbx
-
-    from plinder.data.annotations.cif_utils import read_mmcif_file
-    from plinder.data.annotations.save_utils import save_cif_file
-
-    if (output_dir / f"{link_id}.cif").exists() and not force_update:
-        LOG.info(f"skipping {link_id}.cif as it already exists")
-        return None
-
-    uniprot_id, chain = link_id.split("_")
-    target_cif = data_dir / "dbs" / "alphafold" / f"AF-{uniprot_id}-F1-model_v4.cif"
-    if not target_cif.exists():
-        LOG.info(f"skipping {link_id} as {target_cif} does not exist")
-        return None
-
-    cif_file_obj = read_mmcif_file(target_cif)
-    atoms = pdbx.get_structure(
-        cif_file_obj, model=1, use_author_fields=False, include_bonds=True
-    )
-    atoms = atoms[atoms.chain_id == chain]
-    out_cif = output_dir / f"{uniprot_id}_{chain}.cif"
-    LOG.info(f"saving {link_id} to {out_cif}")
-    save_cif_file(atoms, out_cif.stem, out_cif)
-    return None
-    # chain_to_seqres = {c.name: c.string for c in seqres}
-    # return chain_to_seqres[chain]
-
-
-def pack_linked_structures(data_dir: Path, code: str, structures: bool = True) -> None:
-    """
-    Pack generated linked structures into a zip file for a particular
-    two character code.
-
-    Parameters
-    ----------
-    data_dir : Path
-        plinder root dir
-    code : str
-        two character code
-    structures : bool, default=True
-        if True, make structure archives
-    """
-    (data_dir / "links").mkdir(exist_ok=True, parents=True)
-    mode: Literal["r", "w"] = "w" if structures else "r"
-    with ZipFile(
-        data_dir / "links" / f"{code}.zip", mode, compression=ZIP_DEFLATED
-    ) as archive:
-        for search_db in ["apo", "pred"]:
-            jsons = []
-            root = data_dir / "linked_staging" / search_db
-            system_ids = [
-                system_id for system_id in listdir(root) if system_id[1:3] == code
-            ]
-            for system_id in system_ids:
-                link_ids = listdir(f"{root}/{system_id}")
-                for link_id in link_ids:
-                    link = f"{root}/{system_id}/{link_id}"
-                    try:
-                        with open(f"{link}/scores.json") as f:
-                            jsons.append(load(f))
-                    except Exception:
-                        pass
-                    if structures:
-                        try:
-                            archive.write(
-                                f"{link}/superposed.cif",
-                                f"{search_db}/{system_id}/{link_id}/superposed.cif",
-                            )
-                        except Exception:
-                            pass
-            df = pd.DataFrame(jsons).rename(
-                columns={"reference": "reference_system_id", "model": "id"}
-            )
-            df.to_parquet(
-                data_dir / "links" / f"{search_db}_{code}.parquet", index=False
-            )
-
-
-def mp_pack_linked_structures(*, data_dir: Path, structures: bool = True) -> None:
-    """
-    Use a process pool to pack linked structures into two character code archives.
-
-    Parameters
-    ----------
-    data_dir : Path
-        plinder root dir
-    """
-
-    with multiprocessing.get_context("spawn").Pool() as pool:
-        pool.starmap(
-            pack_linked_structures,
-            zip(repeat(data_dir), listdir(data_dir / "ingest"), repeat(structures)),
-        )
-
-
-def pack_source_structures(data_dir: Path, search_db: str) -> None:
-    (data_dir / "linked_structures").mkdir(exist_ok=True, parents=True)
-    with ZipFile(
-        data_dir / "linked_structures" / f"{search_db}.zip",
-        "w",
-        compression=ZIP_DEFLATED,
-    ) as archive:
-        source_structures = data_dir / "linked_staging" / "source" / search_db
-        for path in source_structures.rglob("*.cif"):
-            archive.write(path, path.name)
-
-
-def consolidate_linked_scores(*, data_dir: Path) -> None:
-    """
-    Consolidate linked scores into a single parquet file. Assumes
-    that pack_linked_structures has been run.
-
-    Parameters
-    ----------
-    data_dir : Path
-        plinder root dir
-    """
-    for search_db in ["apo", "pred"]:
-        paths = list((data_dir / "links").glob(f"{search_db}_*.parquet"))
-        dfs = []
-        for path in paths:
-            df = pd.read_parquet(path)
-            if not df.empty:
-                dfs.append(df)
-        ndf = pd.concat(dfs)
-        odf = pd.read_parquet(
-            data_dir / "linked_staging" / f"{search_db}_links.parquet"
-        )
-        drop = list(
-            set(odf.columns.intersection(ndf.columns))
-            - set(["reference_system_id", "id"])
-        )
-        df = pd.merge(odf.drop(columns=drop), ndf, on=["reference_system_id", "id"])
-        (data_dir / "links" / f"kind={search_db}").mkdir(exist_ok=True, parents=True)
-        df.to_parquet(
-            data_dir / "links" / f"kind={search_db}" / "links.parquet", index=False
-        )
 
 
 def rename_clusters(*, data_dir: Path) -> None:

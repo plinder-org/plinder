@@ -1,0 +1,42 @@
+Name	Type	Description
+system_id	string	ID of the system
+system_ligand_validation_num_residues	double	Number of residues in the list
+system_ligand_validation_num_processed_residues	double	Number of processed residues in the list
+system_ligand_validation_percent_processed_residues	double	Percentage of processed residues in the list
+system_ligand_validation_average_rsr	double	Average Real-Space R-value across all residues in the list
+system_ligand_validation_average_rsrz	double	Average Real-Space R-value Z-score across all residues in the list
+system_ligand_validation_average_rscc	double	Average Real-Space Correlation Coefficient across all residues in the list
+system_ligand_validation_average_occupancy	double	Average occupancy across all residues in the list
+system_ligand_validation_percent_rsr_under_threshold	double	Percentage of residues with RSR under the threshold
+system_ligand_validation_percent_rscc_over_threshold	double	Percentage of residues with RSCC over the threshold
+system_ligand_validation_percent_occupancy_over_threshold	double	Percentage of residues with occupancy over the threshold
+system_ligand_validation_average_b_factor	double	Average B factor across all residues in the list
+system_ligand_validation_unknown_residue_count	double	Number of unknown residues in the list
+system_ligand_validation_atom_count	double	Number of atoms across all residues in the list
+system_ligand_validation_heavy_atom_count	double	Number of heavy atoms across all residues in the list
+system_ligand_validation_num_unresolved_heavy_atoms	double	Number of unresolved heavy atoms across all residues in the list
+system_ligand_validation_max_alt_count	double	The highest number of configurations in a single residue in the list
+system_ligand_validation_percent_outliers_geometry	double	Percentage of residues with geometry outliers
+system_ligand_validation_percent_outliers_density	double	Percentage of residues with density outliers
+system_ligand_validation_percent_outliers_chirality	double	Percentage of residues with chirality outliers
+system_ligand_validation_percent_outliers_clashes	double	Percentage of residues with clashes outliers
+system_pocket_validation_num_residues	double	Number of residues in the list
+system_pocket_validation_num_processed_residues	double	Number of processed residues in the list
+system_pocket_validation_percent_processed_residues	double	Percentage of processed residues in the list
+system_pocket_validation_average_rsr	double	Average Real-Space R-value across all residues in the list
+system_pocket_validation_average_rsrz	double	Average Real-Space R-value Z-score across all residues in the list
+system_pocket_validation_average_rscc	double	Average Real-Space Correlation Coefficient across all residues in the list
+system_pocket_validation_average_occupancy	double	Average occupancy across all residues in the list
+system_pocket_validation_percent_rsr_under_threshold	double	Percentage of residues with RSR under the threshold
+system_pocket_validation_percent_rscc_over_threshold	double	Percentage of residues with RSCC over the threshold
+system_pocket_validation_percent_occupancy_over_threshold	double	Percentage of residues with occupancy over the threshold
+system_pocket_validation_average_b_factor	double	Average B factor across all residues in the list
+system_pocket_validation_unknown_residue_count	double	Number of unknown residues in the list
+system_pocket_validation_atom_count	double	Number of atoms across all residues in the list
+system_pocket_validation_heavy_atom_count	double	Number of heavy atoms across all residues in the list
+system_pocket_validation_num_unresolved_heavy_atoms	double	Number of unresolved heavy atoms across all residues in the list
+system_pocket_validation_max_alt_count	double	The highest number of configurations in a single residue in the list
+system_pocket_validation_percent_outliers_geometry	double	Percentage of residues with geometry outliers
+system_pocket_validation_percent_outliers_density	double	Percentage of residues with density outliers
+system_pocket_validation_percent_outliers_chirality	double	Percentage of residues with chirality outliers
+system_pocket_validation_percent_outliers_clashes	double	Percentage of residues with clashes outliers

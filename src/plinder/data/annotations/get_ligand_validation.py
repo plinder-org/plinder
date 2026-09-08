@@ -2,6 +2,7 @@
 # Distributed under the terms of the Apache License 2.0
 from __future__ import annotations
 
+import typing as ty
 from collections.abc import Collection
 from functools import cached_property
 
@@ -196,12 +197,25 @@ class ResidueListValidation(DocBaseModel):
         description="The highest number of configurations in a single residue in the list"
     )
     percent_outliers: dict[str, float] = Field(
-        description="__Percentage of outliers for each type of outlier"
+        description="[EXCLUDE] Percentage of outliers for each type of outlier"
     )
     # TODO: add thresholds in rerun
     # thresholds: ResidueValidationThresholds = Field(
     #     description="Thresholds used to determine if a residue is valid"
     # )
+
+    @classmethod
+    def document_properties(
+        cls, prefix: str
+    ) -> ty.Generator[tuple[str, str | None, str], ty.Any, ty.Any]:
+        """Describe the flat validation columns emitted by ``format()``."""
+        yield from super().document_properties(prefix)
+        for outlier_type in ("chirality", "clashes", "density", "geometry"):
+            yield (
+                f"{prefix}_percent_outliers_{outlier_type}",
+                "float",
+                f"Percentage of residues with {outlier_type} outliers",
+            )
 
     @classmethod
     def from_residues(
@@ -319,20 +333,35 @@ class EntryValidation(DocBaseModel):
     def from_entry(cls, doc: PDBValidation) -> EntryValidation:
         xml = doc.getValidationXML()
         entry = xml.getEntry()
+        unavailable = {None, "?", ".", "NotAvailable"}
+        resolution = entry.get("PDB-resolution")
+        if resolution in unavailable:
+            resolution = np.nan
         rfree = entry.get("PDB-Rfree")
-        if rfree == "NotAvailable":
+        if rfree in unavailable:
             rfree = np.nan
+        r = entry.get("PDB-R")
+        if r in unavailable:
+            r = np.nan
         try:
             reflns = doc.getReflectionsResolution()
         except KeyError:
             reflns = None
+        if reflns in unavailable:
+            reflns = None
+        try:
+            pdbx_resolution = doc.getResolution()
+        except KeyError:
+            pdbx_resolution = resolution
+        if pdbx_resolution in unavailable:
+            pdbx_resolution = np.nan
         meanI_over_sigI_obs = doc.getMeanIOverSigIObs()
-        if meanI_over_sigI_obs in {None, "?", ".", "NotAvailable"}:
+        if meanI_over_sigI_obs in unavailable:
             meanI_over_sigI_obs = None
         return cls(
-            resolution=entry.get("PDB-resolution"),
+            resolution=resolution,
             rfree=rfree,
-            r=entry.get("PDB-R"),
+            r=r,
             clashscore=entry.get("clashscore"),
             percent_rama_outliers=entry.get("percent-rama-outliers"),
             percent_rota_outliers=entry.get("percent-rota-outliers"),
@@ -342,7 +371,7 @@ class EntryValidation(DocBaseModel):
             molprobity=doc.calcMolProbityOverallScore(),
             mean_b_factor=doc.calcMeanStructureBFactor(),
             median_b_factor=doc.calcMedianStructureBFactor(),
-            pdbx_resolution=doc.getResolution(),
+            pdbx_resolution=pdbx_resolution,
             pdbx_reflns_resolution=reflns,
             meanI_over_sigI_obs=meanI_over_sigI_obs,
         )

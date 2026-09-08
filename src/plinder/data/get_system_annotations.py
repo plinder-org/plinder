@@ -27,6 +27,7 @@ class GetPlinderAnnotation:
         mmcif_file: Path,
         validation_xml: Path,
         save_folder: Optional[Path] = None,
+        data_dir: Optional[Path] = None,
         neighboring_residue_threshold: float = 6.0,
         neighboring_ligand_threshold: float = 4.0,
         min_polymer_size: int = 12,
@@ -37,7 +38,8 @@ class GetPlinderAnnotation:
     ) -> None:
         self.mmcif_file = mmcif_file
         self.validation_xml = Path(validation_xml)
-        self.save_folder = save_folder
+        self.save_folder = Path(save_folder) if save_folder is not None else None
+        self.data_dir = Path(data_dir) if data_dir is not None else None
         self.neighboring_residue_threshold = neighboring_residue_threshold
         self.neighboring_ligand_threshold = neighboring_ligand_threshold
         self.min_polymer_size = min_polymer_size
@@ -56,6 +58,7 @@ class GetPlinderAnnotation:
             min_polymer_size=self.min_polymer_size,
             min_shared_pocket_members=self.min_shared_pocket_members,
             save_folder=self.save_folder if include_ligands else None,
+            data_dir=self.data_dir if include_ligands else None,
             symmetry_mate_contact_threshold=self.symmetry_mate_contact_threshold,
             include_ligands=include_ligands,
             include_interfaces=include_interfaces,
@@ -65,6 +68,7 @@ class GetPlinderAnnotation:
         entry_cfg["include_ligands"] = include_ligands
         entry_cfg["include_interfaces"] = include_interfaces
         entry_cfg["save_folder"] = self.save_folder if include_ligands else None
+        entry_cfg["data_dir"] = self.data_dir if include_ligands else None
         interface_cfg = dict(self.interface_cfg or {})
         if interface_cfg:
             entry_cfg.update(
@@ -101,7 +105,7 @@ class GetPlinderAnnotation:
         replace_interfaces: bool = True,
         preserve_existing_shared: bool = False,
     ) -> None:
-        """Write sidecars for a newly materialized entry directory."""
+        """Write a new entry's sidecars or extend the preserved shared tables."""
         from plinder.data.annotations.cif_utils import (
             get_mmcif_revision,
             read_mmcif_container,
@@ -122,10 +126,25 @@ class GetPlinderAnnotation:
                 if not set(merge_keys).issubset(existing.columns):
                     missing = sorted(set(merge_keys).difference(existing.columns))
                     raise ValueError(f"{path} is missing merge keys: {missing}")
+                if not set(merge_keys).issubset(frame.columns):
+                    missing = sorted(set(merge_keys).difference(frame.columns))
+                    raise ValueError(
+                        f"incoming {path} is missing merge keys: {missing}"
+                    )
+                new_columns = [
+                    column for column in frame.columns if column not in existing.columns
+                ]
+                if new_columns:
+                    additions = frame.loc[:, [*merge_keys, *new_columns]]
+                    existing = existing.merge(
+                        additions,
+                        on=list(merge_keys),
+                        how="left",
+                        validate="one_to_one",
+                    )
                 # Preserve ligand-derived values for existing rows while
-                # adding protein chains discovered by interface-only ingest.
-                # Retaining the existing column set also keeps legacy schema
-                # normalization in the collation layer well-defined.
+                # adding newly available columns and protein chains discovered
+                # by interface-only ingest.
                 incoming = frame.reindex(columns=existing.columns)
                 existing_keys = pd.MultiIndex.from_frame(
                     existing.loc[:, list(merge_keys)]
@@ -134,7 +153,7 @@ class GetPlinderAnnotation:
                     incoming.loc[:, list(merge_keys)]
                 )
                 missing_rows = incoming.loc[~incoming_keys.isin(existing_keys)]
-                if missing_rows.empty:
+                if missing_rows.empty and not new_columns:
                     return
                 frame = pd.concat([existing, missing_rows], ignore_index=True)
             temporary = path.with_suffix(".parquet.tmp")
@@ -149,6 +168,7 @@ class GetPlinderAnnotation:
         write_dataframe(
             entry_folder / "entry_metadata.parquet",
             self.entry.metadata_to_df(),
+            merge_keys=("entry_pdb_id",),
         )
         interface_path = entry_folder / "interfaces.parquet"
         if replace_interfaces or not interface_path.is_file():
@@ -187,9 +207,6 @@ class GetPlinderAnnotation:
             **entry_cfg,
         )
         LOG.info(f"created entry for {self.mmcif_file}")
-        if not self.entry.systems and not self.entry.interfaces:
-            LOG.info(f"no ligand or interface systems for {self.mmcif_file}")
-            return None
         self.entry.set_validation(self.validation_xml, self.mmcif_file)
         interface_table = self._interface_table(entry_cfg)
         self.interface_df = interface_table.to_pandas()
@@ -204,6 +221,9 @@ class GetPlinderAnnotation:
                 interface_table,
                 replace_interfaces=include_interfaces,
             )
+        if not self.entry.systems and not self.entry.interfaces:
+            LOG.info(f"no ligand or interface systems for {self.mmcif_file}")
+            return None
         self.annotated_df = self.entry.to_df()
         return self.annotated_df
 
@@ -314,15 +334,19 @@ def cloud_save_annotation() -> None:
     entry_cfg = cast(Dict[str, Any], cfg.pop("entry"))
     annotation_cfg = cast(Dict[str, Any], cfg.pop("annotation"))
     interface_cfg = cast(Dict[str, Any], cfg.pop("interface"))
-    save_folder = entry_cfg.get("save_folder")
+    save_folder = entry_cfg.pop("save_folder", None)
+    data_dir = entry_cfg.pop("data_dir", None)
     if save_folder is not None:
         save_folder = Path(save_folder)
         save_folder.mkdir(exist_ok=True, parents=True)
-        entry_cfg["save_folder"] = save_folder
+    if data_dir is not None:
+        data_dir = Path(data_dir)
     LOG.info(f"annotating {cif}")
     gpa = GetPlinderAnnotation(
         cif,
         val,
+        save_folder=save_folder,
+        data_dir=data_dir,
         entry_cfg=entry_cfg,
         interface_cfg=interface_cfg,
         **annotation_cfg,

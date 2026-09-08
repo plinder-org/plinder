@@ -2,6 +2,7 @@
 # Distributed under the terms of the Apache License 2.0
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 from bisect import bisect_left
@@ -12,6 +13,7 @@ from functools import cache
 from pathlib import Path
 from time import perf_counter
 from typing import Any, Callable, Optional, Sequence, cast
+from uuid import uuid4
 
 import biotite.sequence.align as align
 import numpy as np
@@ -54,8 +56,89 @@ ECFP4_PARQUET_METADATA = {
     b"plinder.fingerprint.nbits": b"1024",
     b"plinder.fingerprint.include_chirality": b"false",
 }
+SCORE_THRESHOLDS_METADATA_KEY = b"plinder.scoring_thresholds"
+HOLO_PROTEIN_SCORES_METADATA_KEY = b"plinder.holo_protein_scores"
+SCORE_METRICS_METADATA_KEY = b"plinder.score_metrics"
 
 _NON_CANONICAL_AA = str.maketrans({"J": "L", "U": "C", "O": "K"})
+
+
+def score_thresholds_metadata(
+    minimum_threshold: float,
+    minimum_thresholds: dict[str, float],
+) -> bytes:
+    """Encode score-filter thresholds for Parquet completion metadata."""
+    return json.dumps(
+        {
+            "default": float(minimum_threshold),
+            "metrics": {
+                str(metric): float(threshold)
+                for metric, threshold in sorted(minimum_thresholds.items())
+            },
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+
+
+def score_metrics_metadata(metrics: abc.Collection[str] | None) -> bytes | None:
+    """Encode an optional retained-metric set for cache validation."""
+    if metrics is None:
+        return None
+    return json.dumps(sorted(set(metrics)), separators=(",", ":")).encode()
+
+
+def score_cache_is_current(
+    path: Path,
+    *,
+    ligand_3d_mode: bytes,
+    minimum_threshold: float,
+    minimum_thresholds: dict[str, float],
+    holo_protein_scores_mode: bytes | None = None,
+    score_metrics: abc.Collection[str] | None = None,
+) -> bool:
+    """Return whether a per-query score file matches the active filters."""
+    try:
+        schema = pq.read_schema(path)
+        pq.read_metadata(path)
+    except (OSError, ValueError):
+        return False
+    metadata = schema.metadata or {}
+    current = (
+        set(schemas.PROTEIN_SIMILARITY_SCHEMA.names).issubset(schema.names)
+        and metadata.get(b"plinder.ligand_3d") == ligand_3d_mode
+        and metadata.get(SCORE_THRESHOLDS_METADATA_KEY)
+        == score_thresholds_metadata(minimum_threshold, minimum_thresholds)
+        and metadata.get(SCORE_METRICS_METADATA_KEY)
+        == score_metrics_metadata(score_metrics)
+    )
+    if holo_protein_scores_mode is not None:
+        current = current and (
+            metadata.get(HOLO_PROTEIN_SCORES_METADATA_KEY) == holo_protein_scores_mode
+        )
+    return current
+
+
+def _atomic_copy_file(source: Path, target: Path) -> None:
+    """Install a file atomically without sharing a writer staging path."""
+    target.parent.mkdir(exist_ok=True, parents=True)
+    staging = target.with_name(f".{target.name}.{uuid4().hex}.tmp")
+    try:
+        shutil.copyfile(source, staging)
+        staging.replace(target)
+    finally:
+        staging.unlink(missing_ok=True)
+
+
+def _atomic_write_parquet(table: pa.Table, target: Path) -> None:
+    """Write a Parquet table atomically with a writer-private staging path."""
+    target.parent.mkdir(exist_ok=True, parents=True)
+    staging = target.with_name(f".{target.name}.{uuid4().hex}.tmp")
+    try:
+        pq.write_table(table, staging)
+        staging.replace(target)
+    finally:
+        staging.unlink(missing_ok=True)
 
 
 def _finite_float_or_zero(value: Any) -> float:
@@ -113,6 +196,7 @@ _ChainInstanceMapping = str
 _ChainPairType = tuple[_ChainInstanceMapping, _ChainInstanceMapping]
 _SimilarityScoreDictType = dict[str, float]
 _Ligand3DCandidateType = dict[str, str | float | None]
+_LigandPairScoreType = dict[str, str | int]
 _PocketDataType = tuple[
     dict[str, dict[int, int]],
     dict[str, dict[int, Counter[str]]],
@@ -133,7 +217,7 @@ def load_ligands_from_index(*, annotation: pd.DataFrame) -> pd.DataFrame:
     columns = {
         "entry_pdb_id": "pdb_id",
         "system_id": "system_id",
-        "ligand_rdkit_canonical_smiles": "ligand_rdkit_canonical_smiles",
+        "ligand_smiles": "ligand_rdkit_canonical_smiles",
         "ligand_unique_ccd_code": "ligand_ccd_code",
         "ligand_id": "ligand_id",
         "ligand_asym_id": "ligand_asym_id",
@@ -159,7 +243,7 @@ def load_ligands_from_annotation_table(*, data_dir: Path) -> pd.DataFrame:
         "system_id",
         "system_type",
         "ligand_is_proper",
-        "ligand_rdkit_canonical_smiles",
+        "ligand_smiles",
         "ligand_unique_ccd_code",
         "ligand_id",
         "ligand_asym_id",
@@ -392,111 +476,27 @@ def ligand_scores(
 def build_ligand_similarity_annotations(
     *,
     unique_ligands: pd.DataFrame,
-    ligand_occurrences: pd.DataFrame,
-    edges: pd.DataFrame,
-    cluster_threshold: float = 90.0,
 ) -> pd.DataFrame:
-    """Build deterministic Tanimoto components and PDB-frequency annotations."""
-    node_ids = unique_ligands["ligand_smiles_id"].astype(int).tolist()
-    parent = {node_id: node_id for node_id in node_ids}
-
-    def find(node_id: int) -> int:
-        while parent[node_id] != node_id:
-            parent[node_id] = parent[parent[node_id]]
-            node_id = parent[node_id]
-        return node_id
-
-    def union(left: int, right: int) -> None:
-        left_root = find(left)
-        right_root = find(right)
-        if left_root == right_root:
-            return
-        if left_root < right_root:
-            parent[right_root] = left_root
-        else:
-            parent[left_root] = right_root
-
-    selected_edges = edges[edges["tanimoto_similarity_ecfp4_1024"] >= cluster_threshold]
-    for left, right in selected_edges[
-        ["query_ligand_id", "target_ligand_id"]
-    ].itertuples(index=False, name=None):
-        left_id = int(left)
-        right_id = int(right)
-        if left_id not in parent or right_id not in parent:
-            raise ValueError(
-                f"ligand similarity edge references unknown node {left_id}, {right_id}"
-            )
-        union(left_id, right_id)
-
-    components: dict[int, list[int]] = {}
-    for node_id in node_ids:
-        components.setdefault(find(node_id), []).append(node_id)
-    ordered_components = sorted(
-        components.values(), key=lambda members: (-len(members), members)
-    )
-    cluster_by_node = {
-        node_id: f"c{cluster_index}"
-        for cluster_index, members in enumerate(ordered_components)
-        for node_id in members
-    }
-    pdb_ids_by_node = {
-        int(node_id): set(group["pdb_id"].astype(str))
-        for node_id, group in ligand_occurrences.groupby("ligand_smiles_id")
-    }
-    num_pdb_ids_by_node: dict[int, int] = {}
-    for members in ordered_components:
-        component_pdb_ids: set[str] = set()
-        for node_id in members:
-            component_pdb_ids.update(pdb_ids_by_node.get(node_id, set()))
-        for node_id in members:
-            num_pdb_ids_by_node[node_id] = len(component_pdb_ids)
-
-    threshold_label = f"{cluster_threshold:g}".replace(".", "p")
-    cluster_column = f"ligand_tanimoto_ecfp4_1024_{threshold_label}_cluster"
-    count_column = f"{cluster_column}_num_pdb_ids"
-    annotations = unique_ligands.drop(columns=["fingerprint"]).copy()
-    annotations[cluster_column] = annotations["ligand_smiles_id"].map(cluster_by_node)
-    annotations[count_column] = (
-        annotations["ligand_smiles_id"].map(num_pdb_ids_by_node).astype(np.int32)
-    )
-    return annotations
+    """Return public unique-SMILES annotations without fingerprint bytes."""
+    return unique_ligands.drop(columns=["fingerprint"]).copy()
 
 
-def annotate_ligand_similarity(
-    *, data_dir: Path, cluster_threshold: float = 90.0
-) -> Path:
-    """Collate score shards into ligand-level annotations for the final index."""
+def annotate_ligand_similarity(*, data_dir: Path) -> Path:
+    """Write unique-SMILES identifiers and cofactor annotations for the index."""
     fingerprint_dir = data_dir / "fingerprints"
     unique_ligands = pd.read_parquet(fingerprint_dir / "ligands_per_smiles.parquet")
-    ligand_occurrences = load_ligands_from_annotation_table(data_dir=data_dir).merge(
-        unique_ligands[["ligand_rdkit_canonical_smiles", "ligand_smiles_id"]],
-        on="ligand_rdkit_canonical_smiles",
-        how="inner",
-        validate="many_to_one",
-    )
     score_paths = sorted((data_dir / "ligand_scores").glob("*.parquet"))
     if len(unique_ligands) and not score_paths:
         raise FileNotFoundError("no BulkTanimoto score shards were generated")
-    frames = [
-        pd.read_parquet(
-            path,
-            filters=[("tanimoto_similarity_ecfp4_1024", ">=", cluster_threshold)],
-        )
-        for path in score_paths
-    ]
-    edges = (
-        pd.concat(frames, ignore_index=True)
-        if frames
-        else pd.DataFrame(
-            columns=[
-                "query_ligand_id",
-                "target_ligand_id",
-                "tanimoto_similarity_ecfp4_1024",
-            ]
-        )
-    )
     expected_query_ids = set(unique_ligands["ligand_smiles_id"].astype(int))
-    observed_query_ids = set(edges["query_ligand_id"].astype(int))
+    observed_query_ids: set[int] = set()
+    for path in score_paths:
+        self_scores = pd.read_parquet(
+            path,
+            columns=["query_ligand_id"],
+            filters=[("tanimoto_similarity_ecfp4_1024", "==", 100.0)],
+        )
+        observed_query_ids.update(self_scores["query_ligand_id"].astype(int))
     if observed_query_ids != expected_query_ids:
         missing = sorted(expected_query_ids.difference(observed_query_ids))
         extra = sorted(observed_query_ids.difference(expected_query_ids))
@@ -506,9 +506,6 @@ def annotate_ligand_similarity(
         )
     annotations = build_ligand_similarity_annotations(
         unique_ligands=unique_ligands,
-        ligand_occurrences=ligand_occurrences,
-        edges=edges,
-        cluster_threshold=cluster_threshold,
     )
     output_path = fingerprint_dir / "ligand_similarity_annotations.parquet"
     annotations.to_parquet(output_path, index=False)
@@ -944,9 +941,10 @@ def run_alignment(
     # scratch-scoped operation from a clean prefix so Slurm retries work.
     remove_search_results()
 
+    expand_mmseqs_clusters = aln_type == "mmseqs" and cluster_alignment_db is not None
     representative_result = (
         search_db.parent / f"{search_db.name}_representatives"
-        if aln_type == "mmseqs"
+        if expand_mmseqs_clusters
         else search_db
     )
     search_commands = _alignment_search_command(
@@ -966,9 +964,8 @@ def run_alignment(
     if aln_type == "foldseek":
         format_output += ",lddt"
     subprocess.check_call(search_commands, stdout=subprocess.DEVNULL)
-    if aln_type == "mmseqs":
-        if cluster_alignment_db is None:
-            raise ValueError("MMseqs clustered search requires cluster alignments")
+    if expand_mmseqs_clusters:
+        assert cluster_alignment_db is not None
         expanded_result = search_db.parent / f"{search_db.name}_expanded"
         subprocess.check_call(
             [
@@ -1033,6 +1030,7 @@ def run_alignment(
     _stream_alignment_tsv_to_dataset(
         aln_file.with_suffix(".tsv"),
         aln_file.with_suffix(".parquet"),
+        aln_type=aln_type,
         include_target_pdb_id=search_db != "pred",
     )
 
@@ -1095,9 +1093,10 @@ def _stream_alignment_tsv_to_dataset(
     tsv_path: Path,
     dataset_path: Path,
     *,
+    aln_type: str,
     include_target_pdb_id: bool,
 ) -> None:
-    """Convert an alignment TSV without materializing the full search batch."""
+    """Convert an alignment TSV without holding the full search batch in memory."""
     if dataset_path.exists():
         shutil.rmtree(dataset_path)
     reader = csv.open_csv(
@@ -1105,7 +1104,9 @@ def _stream_alignment_tsv_to_dataset(
         parse_options=csv.ParseOptions(delimiter="\t"),
         read_options=csv.ReadOptions(block_size=16 * 1024 * 1024),
     )
+    wrote_batch = False
     for batch_index, batch in enumerate(reader):
+        wrote_batch = True
         table = pyarrow.Table.from_batches([batch])
         table = table.append_column(
             "query_pdb_id",
@@ -1121,6 +1122,17 @@ def _stream_alignment_tsv_to_dataset(
             dataset_path,
             partition_cols=["query_pdb_id"],
             basename_template=f"batch-{batch_index}-{{i}}.parquet",
+        )
+    if not wrote_batch:
+        schema = _raw_alignment_schema(aln_type)
+        if not include_target_pdb_id:
+            schema = pa.schema(
+                field for field in schema if field.name != "target_pdb_id"
+            )
+        dataset_path.mkdir(parents=True)
+        pq.write_table(
+            pa.Table.from_pylist([], schema=schema),
+            dataset_path / "empty.parquet",
         )
 
 
@@ -1196,6 +1208,7 @@ class Scorer:
     max_query_protein_chains: int = 30
     max_query_proper_ligand_chains: int = 30
     shape_score_threads: int = 1
+    include_pli_fident: bool = False
     _ligand_mol_cache: dict[tuple[str, str], Chem.Mol | None] = field(
         default_factory=dict, init=False, repr=False
     )
@@ -1537,7 +1550,10 @@ class Scorer:
             config = replace(self.foldseek_config)
         else:
             config = replace(self.mmseqs_config)
-        if search_db in ["apo", "pred"]:
+        if search_db == "apo":
+            config.coverage = 0.8
+            config.min_seq_id = 0.9
+        elif search_db == "pred":
             config.coverage = 0.9
             config.min_seq_id = 0.9
         return config
@@ -1550,6 +1566,7 @@ class Scorer:
         overwrite: bool = False,
         threads: int = 1,
         alignment_types: Sequence[str] | None = None,
+        query_chain_auth_ids: abc.Mapping[str, abc.Collection[str]] | None = None,
     ) -> None:
         output_folder.mkdir(exist_ok=True)
         failures: list[str] = []
@@ -1560,20 +1577,39 @@ class Scorer:
         for aln_type in selected_alignment_types:
             sub_db = output_folder / search_db / aln_type
             sub_db.mkdir(exist_ok=True, parents=True)
-            db_ids = databases.get_db_ids(
-                self.entries, "holo", aln_type, entry_ids=entry_ids
-            )
+            if query_chain_auth_ids is None:
+                db_ids = databases.get_db_ids(
+                    self.entries, "holo", aln_type, entry_ids=entry_ids
+                )
+            elif aln_type == "foldseek":
+                db_ids = {
+                    f"pdb_0000{entry_id}_xyz-enrich_{auth_id}"
+                    for entry_id in entry_ids
+                    for auth_id in query_chain_auth_ids.get(entry_id, ())
+                }
+            else:
+                db_ids = {
+                    f"{entry_id}_{auth_id}"
+                    for entry_id in entry_ids
+                    for auth_id in query_chain_auth_ids.get(entry_id, ())
+                }
             missing_query_ids = databases.make_sub_db(
                 db_ids,
                 self.source_to_full_db_file[f"holo_{aln_type}"],
                 sub_db,
                 aln_type,
             )
+            aln_dir = self.db_dir / f"{search_db}_{aln_type}" / "aln"
+            aln_dir.mkdir(exist_ok=True, parents=True)
             if not db_ids or len(missing_query_ids) == len(db_ids):
                 LOG.warning(
                     f"no {aln_type} query chains are available for "
-                    f"{len(entry_ids)} entries"
+                    f"{len(entry_ids)} entries; writing empty search results"
                 )
+                empty = pa.Table.from_pylist([], schema=_raw_alignment_schema(aln_type))
+                for pdb_id in entry_ids:
+                    target = aln_dir / f"{pdb_id}.parquet"
+                    _atomic_write_parquet(empty, target)
                 continue
             tmp_dir = sub_db / f"tmp_{search_db}_{aln_type}"
             tmp_dir.mkdir(exist_ok=True, parents=True)
@@ -1613,8 +1649,6 @@ class Scorer:
                 LOG.error(f"scoring: Error for {search_db}_{aln_type}: {e}")
                 failures.append(f"{search_db}_{aln_type}: {e}")
                 continue
-            aln_dir = self.db_dir / f"{search_db}_{aln_type}" / "aln"
-            aln_dir.mkdir(exist_ok=True, parents=True)
             for pdb_id in tqdm(entry_ids):
                 pdb_id_file = (
                     aln_file.with_suffix(".parquet") / f"query_pdb_id={pdb_id}"
@@ -1641,9 +1675,7 @@ class Scorer:
                         ),
                         local_output,
                     )
-                install_path = target.with_suffix(target.suffix + ".tmp")
-                shutil.copyfile(local_output, install_path)
-                install_path.replace(target)
+                _atomic_copy_file(local_output, target)
                 local_output.unlink(missing_ok=True)
         if failures:
             raise RuntimeError("alignment searches failed: " + "; ".join(failures))
@@ -1722,9 +1754,7 @@ class Scorer:
                     f"{search_db}-{aln_type}-{pdb_id}.mapped.parquet"
                 )
                 mapped.to_parquet(temporary, index=True)
-                install_path = mapped_file.with_suffix(mapped_file.suffix + ".tmp")
-                shutil.copyfile(temporary, install_path)
-                install_path.replace(mapped_file)
+                _atomic_copy_file(temporary, mapped_file)
                 temporary.unlink(missing_ok=True)
                 mapped_files.append(mapped_file)
                 failure_file.unlink(missing_ok=True)
@@ -1746,6 +1776,8 @@ class Scorer:
         scratch_dir: Path | None = None,
         source_to_aln_file: dict[str, Path] | None = None,
         defer_ligand_3d: bool = False,
+        query_entry_alignments: pd.DataFrame | None = None,
+        score_metrics: abc.Collection[str] | None = None,
     ) -> Path:
         """
         Convert aligmnent results to mapped alignment results. Then
@@ -1761,26 +1793,38 @@ class Scorer:
             / f"shard={pdb_id[1:3]}"
             / f"{pdb_id}.parquet"
         )
+        ligand_pair_score_path = (
+            self.scores_dir
+            / "ligand_pair_scores"
+            / f"search_db={search_db}"
+            / f"shard={pdb_id[1:3]}"
+            / f"{pdb_id}.parquet"
+        )
         score_mode = b"deferred" if defer_ligand_3d else b"complete"
+        holo_protein_scores_mode = b"excluded" if search_db == "holo" else None
         cached_score_is_current = False
         if not overwrite and score_df_path.is_file():
             try:
-                cached_schema = pq.read_schema(score_df_path)
-                cached_columns = set(cached_schema.names)
-                pq.read_metadata(score_df_path)
-                cached_score_is_current = (
-                    set(schemas.PROTEIN_SIMILARITY_SCHEMA.names).issubset(
-                        cached_columns
-                    )
-                    and (cached_schema.metadata or {}).get(b"plinder.ligand_3d")
-                    == score_mode
+                cached_score_is_current = score_cache_is_current(
+                    score_df_path,
+                    ligand_3d_mode=score_mode,
+                    minimum_threshold=self.minimum_threshold,
+                    minimum_thresholds=self.minimum_thresholds,
+                    holo_protein_scores_mode=holo_protein_scores_mode,
+                    score_metrics=score_metrics,
                 )
                 if defer_ligand_3d:
                     candidate_schema = pq.read_schema(candidate_path)
                     pq.read_metadata(candidate_path)
-                    cached_score_is_current = cached_score_is_current and set(
-                        schemas.LIGAND_3D_CANDIDATE_SCHEMA.names
-                    ).issubset(candidate_schema.names)
+                    ligand_pair_schema = pq.read_schema(ligand_pair_score_path)
+                    pq.read_metadata(ligand_pair_score_path)
+                    cached_score_is_current = (
+                        cached_score_is_current
+                        and set(schemas.LIGAND_3D_CANDIDATE_SCHEMA.names).issubset(
+                            candidate_schema.names
+                        )
+                        and ligand_pair_schema.equals(schemas.LIGAND_PAIR_SCORE_SCHEMA)
+                    )
             except (OSError, ValueError):
                 cached_score_is_current = False
         if overwrite or not cached_score_is_current:
@@ -1797,26 +1841,28 @@ class Scorer:
             )
         else:
             entries_to_load = {pdb_id}
-            for aln_type in ["foldseek", "mmseqs"]:
-                source = f"{search_db}_{aln_type}"
-                mapped_file = (
-                    source_to_aln_file[source]
-                    if source_to_aln_file is not None and source in source_to_aln_file
-                    else self.db_dir / source / "mapped_aln" / f"{pdb_id}.parquet"
-                )
-                if mapped_file.is_file():
-                    target_entries = pd.read_parquet(
-                        mapped_file,
-                        columns=["target_entry"],
-                        filters=[("query_entry", "==", pdb_id)],
+            if search_db == "holo":
+                for aln_type in ["foldseek", "mmseqs"]:
+                    source = f"{search_db}_{aln_type}"
+                    mapped_file = (
+                        source_to_aln_file[source]
+                        if source_to_aln_file is not None
+                        and source in source_to_aln_file
+                        else self.db_dir / source / "mapped_aln" / f"{pdb_id}.parquet"
                     )
-                    if "target_entry" in target_entries.columns:
-                        target_values = target_entries["target_entry"]
-                    else:
-                        target_values = pd.Series(
-                            target_entries.index.get_level_values("target_entry")
+                    if mapped_file.is_file():
+                        target_entries = pd.read_parquet(
+                            mapped_file,
+                            columns=["target_entry"],
+                            filters=[("query_entry", "==", pdb_id)],
                         )
-                    entries_to_load.update(target_values.dropna().astype(str))
+                        if "target_entry" in target_entries.columns:
+                            target_values = target_entries["target_entry"]
+                        else:
+                            target_values = pd.Series(
+                                target_entries.index.get_level_values("target_entry")
+                            )
+                        entries_to_load.update(target_values.dropna().astype(str))
             entries_to_load.difference_update(self.entries)
             if entries_to_load:
                 LOG.info(
@@ -1838,13 +1884,21 @@ class Scorer:
             ligand_3d_candidates: list[_Ligand3DCandidateType] | None = (
                 [] if defer_ligand_3d else None
             )
+            ligand_pair_scores: list[_LigandPairScoreType] | None = (
+                [] if defer_ligand_3d else None
+            )
             df = self.aggregate_scores(
                 pdb_id,
                 search_db=search_db,
                 data_dir=None if defer_ligand_3d else data_dir,
                 source_to_aln_file=source_to_aln_file,
+                query_entry_alignments=query_entry_alignments,
                 ligand_3d_candidates=ligand_3d_candidates,
+                ligand_pair_scores=ligand_pair_scores,
+                include_holo_protein_scores=search_db != "holo",
             )
+            if df is not None and score_metrics is not None:
+                df = df[df["metric"].astype(str).isin(set(score_metrics))].copy()
             if df is None or df.empty:
                 df = pd.DataFrame(
                     {
@@ -1855,8 +1909,22 @@ class Scorer:
             temporary_root = scratch_dir or score_df_path.parent
             temporary_root.mkdir(exist_ok=True, parents=True)
             temporary = temporary_root / f"{search_db}-{pdb_id}.scores.parquet"
+            score_metadata = {
+                b"plinder.ligand_3d": score_mode,
+                SCORE_THRESHOLDS_METADATA_KEY: score_thresholds_metadata(
+                    self.minimum_threshold,
+                    self.minimum_thresholds,
+                ),
+            }
+            if holo_protein_scores_mode is not None:
+                score_metadata[
+                    HOLO_PROTEIN_SCORES_METADATA_KEY
+                ] = holo_protein_scores_mode
+            retained_metrics = score_metrics_metadata(score_metrics)
+            if retained_metrics is not None:
+                score_metadata[SCORE_METRICS_METADATA_KEY] = retained_metrics
             score_schema = schemas.PROTEIN_SIMILARITY_SCHEMA.with_metadata(
-                {b"plinder.ligand_3d": score_mode}
+                score_metadata
             )
             df.to_parquet(
                 temporary,
@@ -1865,6 +1933,9 @@ class Scorer:
             )
             candidate_temporary = (
                 temporary_root / f"{search_db}-{pdb_id}.ligand-3d-candidates.parquet"
+            )
+            ligand_pair_temporary = (
+                temporary_root / f"{search_db}-{pdb_id}.ligand-pair-scores.parquet"
             )
             if ligand_3d_candidates is not None:
                 candidate_table = pa.Table.from_pylist(
@@ -1877,18 +1948,27 @@ class Scorer:
                     compression="zstd",
                 )
                 candidate_path.parent.mkdir(exist_ok=True, parents=True)
-                candidate_install = candidate_path.with_suffix(
-                    candidate_path.suffix + ".tmp"
+                _atomic_copy_file(candidate_temporary, candidate_path)
+            if ligand_pair_scores is not None:
+                ligand_pair_table = pa.Table.from_pylist(
+                    ligand_pair_scores,
+                    schema=schemas.LIGAND_PAIR_SCORE_SCHEMA,
                 )
-                shutil.copyfile(candidate_temporary, candidate_install)
-                candidate_install.replace(candidate_path)
-            install_path = score_df_path.with_suffix(score_df_path.suffix + ".tmp")
-            shutil.copyfile(temporary, install_path)
-            install_path.replace(score_df_path)
+                pq.write_table(
+                    ligand_pair_table,
+                    ligand_pair_temporary,
+                    compression="zstd",
+                )
+                ligand_pair_score_path.parent.mkdir(exist_ok=True, parents=True)
+                _atomic_copy_file(ligand_pair_temporary, ligand_pair_score_path)
+            _atomic_copy_file(temporary, score_df_path)
             temporary.unlink(missing_ok=True)
             candidate_temporary.unlink(missing_ok=True)
+            ligand_pair_temporary.unlink(missing_ok=True)
             if ligand_3d_candidates is None:
                 candidate_path.unlink(missing_ok=True)
+            if ligand_pair_scores is None:
+                ligand_pair_score_path.unlink(missing_ok=True)
         except Exception as e:
             scratch = data_dir / "scratch" / "scores" / "aggregate_scores_failures"
             scratch.mkdir(exist_ok=True, parents=True)
@@ -1928,14 +2008,28 @@ class Scorer:
             / f"shard={pdb_id[1:3]}"
             / f"{pdb_id}.parquet"
         )
-        if (
-            not allow_missing
-            and (not score_path.is_file() or not candidate_path.is_file())
+        ligand_pair_score_path = (
+            self.scores_dir
+            / "ligand_pair_scores"
+            / f"search_db={search_db}"
+            / f"shard={pdb_id[1:3]}"
+            / f"{pdb_id}.parquet"
+        )
+        if not allow_missing and (
+            not score_path.is_file()
+            or not candidate_path.is_file()
+            or not ligand_pair_score_path.is_file()
         ):
             raise FileNotFoundError(
-                f"targeted score repair requires existing score and candidate files: "
-                f"score={score_path.is_file()} candidates={candidate_path.is_file()}"
+                "targeted score repair requires existing score and pair files: "
+                f"score={score_path.is_file()} candidates={candidate_path.is_file()} "
+                f"ligand_pairs={ligand_pair_score_path.is_file()}"
             )
+        existing_threshold_metadata = None
+        if score_path.is_file():
+            existing_threshold_metadata = (
+                pq.read_schema(score_path).metadata or {}
+            ).get(SCORE_THRESHOLDS_METADATA_KEY)
 
         requested_entries = {pdb_id, *affected_target_entries}
         requested_entries.difference_update(self.entries)
@@ -1968,6 +2062,7 @@ class Scorer:
             for alignment_type in ["foldseek", "mmseqs"]
         }
         ligand_3d_candidates: list[_Ligand3DCandidateType] = []
+        ligand_pair_scores: list[_LigandPairScoreType] = []
         repaired = (
             self.aggregate_scores(
                 pdb_id,
@@ -1979,6 +2074,8 @@ class Scorer:
                 target_system_ids=target_system_ids,
                 target_ligand_ids=target_ligand_ids,
                 ligand_3d_candidates=ligand_3d_candidates,
+                ligand_pair_scores=ligand_pair_scores,
+                include_holo_protein_scores=False,
             )
             if target_system_ids
             else None
@@ -1994,6 +2091,7 @@ class Scorer:
             if score_path.is_file()
             else pd.DataFrame(columns=schemas.PROTEIN_SIMILARITY_SCHEMA.names)
         )
+        scores = scores[~scores["metric"].astype(str).str.startswith("protein_")]
         scores = scores[unaffected_target(scores["target_system"])]
         if repaired is not None and not repaired.empty:
             scores = (
@@ -2031,9 +2129,7 @@ class Scorer:
             candidates = (
                 repaired_candidates.reset_index(drop=True)
                 if candidates.empty
-                else pd.concat(
-                    [candidates, repaired_candidates], ignore_index=True
-                )
+                else pd.concat([candidates, repaired_candidates], ignore_index=True)
             )
         candidate_keys = [
             "query_system",
@@ -2046,13 +2142,42 @@ class Scorer:
                 f"targeted score repair produced duplicate candidates for {pdb_id}"
             )
 
+        pair_scores = (
+            pd.read_parquet(ligand_pair_score_path)
+            if ligand_pair_score_path.is_file()
+            else pd.DataFrame(columns=schemas.LIGAND_PAIR_SCORE_SCHEMA.names)
+        )
+        pair_scores = pair_scores[
+            ~pair_scores["target_entry"].astype(str).isin(affected_target_entries)
+        ]
+        if ligand_pair_scores:
+            repaired_pair_scores = pd.DataFrame(ligand_pair_scores)
+            pair_scores = (
+                repaired_pair_scores.reset_index(drop=True)
+                if pair_scores.empty
+                else pd.concat([pair_scores, repaired_pair_scores], ignore_index=True)
+            )
+        if pair_scores.duplicated(candidate_keys).any():
+            raise ValueError(
+                f"targeted score repair produced duplicate ligand pairs for {pdb_id}"
+            )
+
         temporary_root = scratch_dir or score_path.parent
         temporary_root.mkdir(exist_ok=True, parents=True)
         score_temporary = temporary_root / f"{pdb_id}.repair-scores.parquet"
         candidate_temporary = temporary_root / f"{pdb_id}.repair-candidates.parquet"
-        score_schema = schemas.PROTEIN_SIMILARITY_SCHEMA.with_metadata(
-            {b"plinder.ligand_3d": b"deferred"}
+        ligand_pair_temporary = temporary_root / f"{pdb_id}.repair-ligand-pairs.parquet"
+        score_metadata = {
+            b"plinder.ligand_3d": b"deferred",
+            HOLO_PROTEIN_SCORES_METADATA_KEY: b"excluded",
+        }
+        current_threshold_metadata = score_thresholds_metadata(
+            self.minimum_threshold,
+            self.minimum_thresholds,
         )
+        if existing_threshold_metadata == current_threshold_metadata:
+            score_metadata[SCORE_THRESHOLDS_METADATA_KEY] = current_threshold_metadata
+        score_schema = schemas.PROTEIN_SIMILARITY_SCHEMA.with_metadata(score_metadata)
         scores.to_parquet(
             score_temporary,
             index=False,
@@ -2063,16 +2188,17 @@ class Scorer:
             index=False,
             schema=schemas.LIGAND_3D_CANDIDATE_SCHEMA,
         )
-        score_install = score_path.with_suffix(score_path.suffix + ".tmp")
-        candidate_install = candidate_path.with_suffix(candidate_path.suffix + ".tmp")
-        score_path.parent.mkdir(exist_ok=True, parents=True)
-        candidate_path.parent.mkdir(exist_ok=True, parents=True)
-        shutil.copyfile(score_temporary, score_install)
-        shutil.copyfile(candidate_temporary, candidate_install)
-        candidate_install.replace(candidate_path)
-        score_install.replace(score_path)
+        pair_scores.to_parquet(
+            ligand_pair_temporary,
+            index=False,
+            schema=schemas.LIGAND_PAIR_SCORE_SCHEMA,
+        )
+        _atomic_copy_file(candidate_temporary, candidate_path)
+        _atomic_copy_file(ligand_pair_temporary, ligand_pair_score_path)
+        _atomic_copy_file(score_temporary, score_path)
         score_temporary.unlink(missing_ok=True)
         candidate_temporary.unlink(missing_ok=True)
+        ligand_pair_temporary.unlink(missing_ok=True)
         return score_path
 
     def load_alignments(
@@ -2437,10 +2563,10 @@ class Scorer:
             )
         )
         for i, q_instance_chain in enumerate(query_protein_chains):
-            q_chain = q_instance_chain.split(".")[1]
+            q_chain = q_instance_chain.split(".", maxsplit=1)[1]
             q_chain_length = self.entries[query_system.pdb_id].chains[q_chain].length
             for j, t_instance_chain in enumerate(target_protein_chains):
-                t_chain = t_instance_chain.split(".")[1]
+                t_chain = t_instance_chain.split(".", maxsplit=1)[1]
                 try:
                     aln = query_target_entry_alignments.loc[(q_chain, t_chain)]
                 except KeyError:
@@ -2486,8 +2612,8 @@ class Scorer:
                 target_protein_chains[t_idx],
             )
             q_chain, t_chain = (
-                q_instance_chain.split(".")[1],
-                t_instance_chain.split(".")[1],
+                q_instance_chain.split(".", maxsplit=1)[1],
+                t_instance_chain.split(".", maxsplit=1)[1],
             )
             try:
                 aln = query_target_entry_alignments.loc[(q_chain, t_chain)]
@@ -2620,6 +2746,9 @@ class Scorer:
         has_target = target_pocket is not None
         target_pocket = target_pocket or {}
         target_interactions = target_interactions or {}
+        pli_residue_length = sum(
+            len(residues) for residues in query_interactions.values()
+        )
         # Compact maps contain only aligned selected query residue numbers,
         # selected target residue numbers (or -1), and amino-acid identity
         # flags. The scorer then filters that shared representation to this
@@ -2657,11 +2786,15 @@ class Scorer:
                         )
                         for position, query_number in aln_source["qrnum"].items()
                     )
+                if self.include_pli_fident and pli_residue_length:
+                    pli_scores.setdefault(f"pli_fident_{source}", 0.0)
                 for q_n, t_n, residues_are_identical in pocket_positions:
                     if q_n not in q_chain_pocket:
                         continue
                     if residues_are_identical:
                         pocket_scores[f"pocket_fident_{source}"] += 1
+                        if self.include_pli_fident and q_n in q_chain_interactions:
+                            pli_scores[f"pli_fident_{source}"] += 1
                     if has_target and t_n >= 0 and t_n in t_chain_pocket:
                         pocket_scores[f"pocket_qcov_{source}"] += 1
                         if residues_are_identical:
@@ -2683,7 +2816,10 @@ class Scorer:
         else:
             pocket_scores.clear()
         for score in list(pli_scores):
-            denominator = pli_unique_length if "unique" in score else pli_length
+            if score.startswith("pli_fident_"):
+                denominator = pli_residue_length
+            else:
+                denominator = pli_unique_length if "unique" in score else pli_length
             if denominator:
                 pli_scores[score] /= denominator
             else:
@@ -2874,7 +3010,7 @@ class Scorer:
             pli_length,
             unique_length,
         ) = self._ligand_protein_only_pocket_data(query_ligand)
-        return self._get_pocket_pli_scores(
+        pocket_scores, pli_scores = self._get_pocket_pli_scores(
             alns=alns,
             query_pocket=query_pocket,
             query_interactions=query_interactions,
@@ -2883,7 +3019,9 @@ class Scorer:
             pli_unique_length=unique_length,
             target_pocket=None,
             target_interactions=None,
-        )[0]
+        )
+        pocket_scores.update(pli_scores)
+        return pocket_scores
 
     def _ligand_protein_only_pocket_data(self, ligand: LigandView) -> _PocketDataType:
         """Cache immutable protein-only pocket inputs per ligand occurrence."""
@@ -2929,9 +3067,11 @@ class Scorer:
         query_entry_alignments: pd.DataFrame,
         data_dir: Path | None = None,
         ligand_3d_candidates: list[_Ligand3DCandidateType] | None = None,
+        ligand_pair_scores: list[_LigandPairScoreType] | None = None,
         query_ligand_ids: set[str] | None = None,
         target_system_ids: set[str] | None = None,
         target_ligand_ids: set[str] | None = None,
+        include_holo_protein_scores: bool = False,
     ) -> abc.Generator[dict[str, str | float | None], None, None]:
         if search_db == "holo":
             return self.get_scores_holo(
@@ -2939,9 +3079,11 @@ class Scorer:
                 query_entry_alignments,
                 data_dir=data_dir,
                 ligand_3d_candidates=ligand_3d_candidates,
+                ligand_pair_scores=ligand_pair_scores,
                 query_ligand_ids=query_ligand_ids,
                 target_system_ids=target_system_ids,
                 target_ligand_ids=target_ligand_ids,
+                include_protein_scores=include_holo_protein_scores,
             )
         elif search_db == "apo" or search_db == "pred":
             return self.get_scores_apo_pred(
@@ -2959,9 +3101,11 @@ class Scorer:
         query_entry_alignments: pd.DataFrame,
         data_dir: Path | None = None,
         ligand_3d_candidates: list[_Ligand3DCandidateType] | None = None,
+        ligand_pair_scores: list[_LigandPairScoreType] | None = None,
         query_ligand_ids: set[str] | None = None,
         target_system_ids: set[str] | None = None,
         target_ligand_ids: set[str] | None = None,
+        include_protein_scores: bool = False,
     ) -> abc.Generator[dict[str, str | float | None], None, None]:
         score_started = perf_counter()
         deferred_rows: list[
@@ -3044,19 +3188,15 @@ class Scorer:
                     and (target_ligand_ids is None or ligand.id in target_ligand_ids)
                 ]
                 for query_ligand in query_ligands:
-                    # Keep every receptor chain in the directed query
-                    # denominator. Chains without a hit remain zero-coverage
-                    # rows in get_protein_scores(); dropping them here would
-                    # inflate weighted similarities for partial alignments.
+                    # Restrict both workflows to polypeptide receptors. When
+                    # protein metrics are requested, this complete chain set
+                    # also supplies their directed query denominator.
                     query_protein_chains = self.get_protein_receptor_chains(
                         query_ligand.pdb_id,
                         query_ligand.protein_chains_asym_id,
                     )
                     if not query_protein_chains:
                         continue
-                    query_protein_length = self.get_protein_chain_length(
-                        query_system.pdb_id, query_protein_chains
-                    )
                     for target_ligand in target_ligands:
                         target_protein_chains = self.get_protein_receptor_chains(
                             target_ligand.pdb_id,
@@ -3065,36 +3205,41 @@ class Scorer:
                         if not target_protein_chains:
                             continue
                         q_t_scores: dict[str, float] = {}
+                        q_t_mappings: dict[str, list[_ChainPairType]] = {}
+                        protein_chain_mapper = ""
 
-                        # Protein scores and mappings are restricted to the
-                        # receptor chains belonging to this ligand pair. Many
-                        # systems reuse the same receptor-chain sets, so avoid
-                        # recomputing their assignment and aggregate scores.
-                        protein_cache_key = (
-                            query_system.pdb_id,
-                            str(target_entry),
-                            tuple(query_protein_chains),
-                            tuple(target_protein_chains),
-                        )
-                        if protein_cache_key not in self._protein_score_cache:
-                            self._protein_score_cache[
-                                protein_cache_key
-                            ] = self.get_protein_scores(
-                                query_target_entry_alignments,
-                                query_system,
-                                target_protein_chains,
-                                query_protein_length,
-                                query_protein_chains=query_protein_chains,
+                        if include_protein_scores:
+                            # Custom workflows may request receptor-level
+                            # metrics. Cache their chain assignment across
+                            # ligand pairs sharing the same receptors.
+                            query_protein_length = self.get_protein_chain_length(
+                                query_system.pdb_id, query_protein_chains
                             )
-                        (
-                            q_t_mappings,
-                            protein_scores,
-                            _protein_alns,
-                            protein_chain_mapper,
-                        ) = self._protein_score_cache[protein_cache_key]
-                        if not protein_scores:
-                            continue
-                        q_t_scores.update(protein_scores)
+                            protein_cache_key = (
+                                query_system.pdb_id,
+                                str(target_entry),
+                                tuple(query_protein_chains),
+                                tuple(target_protein_chains),
+                            )
+                            if protein_cache_key not in self._protein_score_cache:
+                                self._protein_score_cache[
+                                    protein_cache_key
+                                ] = self.get_protein_scores(
+                                    query_target_entry_alignments,
+                                    query_system,
+                                    target_protein_chains,
+                                    query_protein_length,
+                                    query_protein_chains=query_protein_chains,
+                                )
+                            (
+                                q_t_mappings,
+                                protein_scores,
+                                _protein_alns,
+                                protein_chain_mapper,
+                            ) = self._protein_score_cache[protein_cache_key]
+                            if not protein_scores:
+                                continue
+                            q_t_scores.update(protein_scores)
 
                         (
                             pocket_scores,
@@ -3159,6 +3304,38 @@ class Scorer:
                                 "target_ligand_id": target_ligand.id,
                             }
                         )
+                        if ligand_pair_scores is not None:
+                            compact_scores: dict[str, int] = {}
+                            has_positive_score = False
+                            for metric in (
+                                "pocket_qcov",
+                                "pocket_fident_qcov",
+                                "pli_qcov",
+                            ):
+                                value = combined.get(metric, 0.0)
+                                numeric = _finite_float_or_zero(value)
+                                if numeric < -1e-12 or numeric > 1.0 + 1e-12:
+                                    raise ValueError(
+                                        f"{metric} is outside [0, 1]: {numeric}"
+                                    )
+                                has_positive_score = has_positive_score or numeric > 0
+                                compact_scores[metric] = round(
+                                    min(1.0, max(0.0, numeric)) * 100
+                                )
+                            if has_positive_score:
+                                ligand_pair_scores.append(
+                                    {
+                                        "query_system": query_system.id,
+                                        "query_ligand_id": query_ligand.id,
+                                        "query_entry": query_ligand.pdb_id,
+                                        "query_ligand_asym_id": query_ligand.asym_id,
+                                        "target_system": target_system.id,
+                                        "target_ligand_id": target_ligand.id,
+                                        "target_entry": target_ligand.pdb_id,
+                                        "target_ligand_asym_id": target_ligand.asym_id,
+                                        **compact_scores,
+                                    }
+                                )
                         if (
                             ligand_3d_candidates is not None
                             and pocket_qcov > 0
@@ -3293,11 +3470,14 @@ class Scorer:
         search_db: str = "holo",
         data_dir: Path | None = None,
         source_to_aln_file: dict[str, Path] | None = None,
+        query_entry_alignments: pd.DataFrame | None = None,
         query_system_ids: set[str] | None = None,
         query_ligand_ids: set[str] | None = None,
         target_system_ids: set[str] | None = None,
         target_ligand_ids: set[str] | None = None,
         ligand_3d_candidates: list[_Ligand3DCandidateType] | None = None,
+        ligand_pair_scores: list[_LigandPairScoreType] | None = None,
+        include_holo_protein_scores: bool = False,
     ) -> Optional[pd.DataFrame]:
         if source_to_aln_file is None:
             source_to_aln_file = {
@@ -3307,20 +3487,31 @@ class Scorer:
                 / f"{pdb_id}.parquet"
                 for aln_type in ["foldseek", "mmseqs"]
             }
-        target_entry_ids = None
-        if target_system_ids is not None:
-            target_entry_ids = {
-                system_id.split("__", maxsplit=1)[0] for system_id in target_system_ids
-            }
-        alignments = self.load_alignments(
-            search_db=search_db,
-            source_to_aln_file=source_to_aln_file,
-            query_entry_ids={pdb_id},
-            target_entry_ids=target_entry_ids,
-        )
-        if alignments.empty:
+        if query_entry_alignments is None:
+            target_entry_ids = None
+            if target_system_ids is not None:
+                target_entry_ids = {
+                    (
+                        system_id.rsplit("_", maxsplit=1)[0]
+                        if search_db in {"apo", "pred"}
+                        else system_id.split("__", maxsplit=1)[0]
+                    )
+                    for system_id in target_system_ids
+                }
+            alignments = self.load_alignments(
+                search_db=search_db,
+                source_to_aln_file=source_to_aln_file,
+                query_entry_ids={pdb_id},
+                target_entry_ids=target_entry_ids,
+            )
+            if alignments.empty:
+                return None
+            try:
+                query_entry_alignments = alignments.loc[pdb_id]
+            except KeyError:
+                return None
+        if query_entry_alignments.empty:
             return None
-        query_entry_alignments = alignments.loc[pdb_id]
         column_mapr = self.get_column_mapr()
         pdb_vals = []
         for system in self.entries[pdb_id].systems.values():
@@ -3334,9 +3525,11 @@ class Scorer:
                 query_entry_alignments,
                 data_dir=data_dir,
                 ligand_3d_candidates=ligand_3d_candidates,
+                ligand_pair_scores=ligand_pair_scores,
                 query_ligand_ids=query_ligand_ids,
                 target_system_ids=target_system_ids,
                 target_ligand_ids=target_ligand_ids,
+                include_holo_protein_scores=include_holo_protein_scores,
             ):
                 # Keep nullable identifiers (notably target_ligand_id for
                 # apo/pred) present so every search database shares a schema.
@@ -3433,11 +3626,6 @@ class Scorer:
                     if (
                         target_system_ids is not None
                         and target_system_id not in target_system_ids
-                    ):
-                        continue
-                    if (
-                        target_entry in self.entries
-                        and t_chain in self.entries[target_entry].chains
                     ):
                         continue
                     q_t_scores: dict[str, float] = {}
