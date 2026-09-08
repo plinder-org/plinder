@@ -1469,6 +1469,26 @@ def test_10sb_modified_residues_preserved(cif_10sb, mock_alternative_datasets):
     assert not missing, f"modified residues standardized away / missing: {missing}"
 
 
+def test_10sb_auth_residue_numbers_are_author_not_label(
+    cif_10sb, mock_alternative_datasets
+):
+    """Integration: 10sb receptor chain A is label-numbered from 31 but author-
+    numbered from 61 (a constant +30 offset). ``Residue.auth_number`` must carry
+    the AUTHOR number (what RCSB / PyMOL show); before the fix it duplicated the
+    label number, since the atoms were loaded with ``use_author_fields=False``.
+    """
+    from plinder.data.annotations.aggregate_annotations import Entry
+
+    entry_dir = mock_alternative_datasets("10sb")
+    entry = Entry.from_cif_file(cif_10sb, save_folder=entry_dir)
+
+    chain = entry.chains["A"]
+    first_num, first_res = min(chain.residues.items())
+    assert (first_num, first_res.auth_number) == (31, "61")
+    # every residue carries the author number, distinct from its label number
+    assert not any(res.auth_number == str(num) for num, res in chain.residues.items())
+
+
 def test_10sb_covalent_macrocycle_is_single_ligand(cif_10sb, mock_alternative_datasets):
     """Enlicitide is one covalent macrocycle spanning chains C + E + F.
 
