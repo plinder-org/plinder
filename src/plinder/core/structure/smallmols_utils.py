@@ -411,3 +411,95 @@ def get_matched_template(template: Chem.Mol, mol: Chem.Mol) -> Chem.Mol:
         template, atom_map_template, bond_map_template
     )
     return matched_template_mol
+
+
+# Categorical ligand-atom descriptors, one vocabulary per column. A value
+# outside its vocabulary maps to a trailing "other" bucket (index
+# ``len(vocabulary)``), so the encoding is stable across RDKit versions and
+# exotic chemistry.
+LIGAND_ATOM_FEATURE_NAMES = (
+    "atomic_number",
+    "chiral_tag",
+    "total_degree",
+    "formal_charge",
+    "implicit_valence",
+    "total_hydrogens",
+    "radical_electrons",
+    "hybridization",
+    "is_aromatic",
+    "ring_count",
+    "in_ring_3",
+    "in_ring_4",
+    "in_ring_5",
+    "in_ring_6",
+    "in_ring_7",
+    "in_ring_8",
+)
+_ATOMIC_NUMBERS = tuple(range(1, 119))
+_CHIRAL_TAGS = (
+    "CHI_UNSPECIFIED",
+    "CHI_TETRAHEDRAL_CW",
+    "CHI_TETRAHEDRAL_CCW",
+    "CHI_OTHER",
+)
+_TOTAL_DEGREES = tuple(range(11))
+_FORMAL_CHARGES = tuple(range(-5, 6))
+_IMPLICIT_VALENCES = tuple(range(7))
+_HYDROGEN_COUNTS = tuple(range(9))
+_RADICAL_ELECTRONS = tuple(range(5))
+_HYBRIDIZATIONS = ("SP", "SP2", "SP3", "SP3D", "SP3D2")
+_RING_COUNTS = tuple(range(7))
+_RING_SIZES = (3, 4, 5, 6, 7, 8)
+
+
+def _bucket(vocabulary: tuple[int, ...] | tuple[str, ...], value: int | str) -> int:
+    """Return the index of ``value`` in ``vocabulary`` or the "other" bucket."""
+    try:
+        return vocabulary.index(value)
+    except ValueError:
+        return len(vocabulary)
+
+
+def ligand_atom_features(mol: Chem.Mol) -> NDArray[np.int64]:
+    """Encode every atom of ``mol`` as categorical vocabulary indices.
+
+    Columns follow :data:`LIGAND_ATOM_FEATURE_NAMES`: atomic number, chiral
+    tag, total degree, formal charge, implicit valence, total hydrogen count,
+    radical electrons, hybridization, aromaticity, number of rings the atom
+    belongs to, and membership in rings of size 3 to 8.  Chiral tags other
+    than the two tetrahedral ones collapse onto ``CHI_OTHER``.  Only graph
+    properties are used, so a 2D template without a conformer is sufficient.
+
+    Parameters
+    ----------
+    mol : Chem.Mol
+        Ligand with explicit atoms in the order the features should follow.
+
+    Returns
+    -------
+    NDArray[np.int64]
+        Array of shape ``(n_atoms, len(LIGAND_ATOM_FEATURE_NAMES))``.
+    """
+    ring_info = mol.GetRingInfo()
+    features = np.empty(
+        (mol.GetNumAtoms(), len(LIGAND_ATOM_FEATURE_NAMES)), dtype=np.int64
+    )
+    for row, atom in zip(features, mol.GetAtoms()):
+        index = atom.GetIdx()
+        chiral_tag = str(atom.GetChiralTag())
+        if chiral_tag not in _CHIRAL_TAGS:
+            chiral_tag = "CHI_OTHER"
+        row[:] = (
+            _bucket(_ATOMIC_NUMBERS, atom.GetAtomicNum()),
+            _CHIRAL_TAGS.index(chiral_tag),
+            _bucket(_TOTAL_DEGREES, atom.GetTotalDegree()),
+            _bucket(_FORMAL_CHARGES, atom.GetFormalCharge()),
+            _bucket(_IMPLICIT_VALENCES, atom.GetImplicitValence()),
+            _bucket(_HYDROGEN_COUNTS, atom.GetTotalNumHs()),
+            _bucket(_RADICAL_ELECTRONS, atom.GetNumRadicalElectrons()),
+            _bucket(_HYBRIDIZATIONS, str(atom.GetHybridization())),
+            int(atom.GetIsAromatic()),
+            _bucket(_RING_COUNTS, ring_info.NumAtomRings(index)),
+            *(int(ring_info.IsAtomInRingOfSize(index, size)) for size in _RING_SIZES),
+        )
+    return features

@@ -6,11 +6,11 @@ system_protein_chains_asym_id	list<element: string>	Chain asymmetric id
 system_num_pocket_residues	int64	Number of pocket residues of the system
 system_proper_num_pocket_residues	int64	Number of pocket residues of the system excluding ions and artifacts
 system_num_interactions	int64	Number of interactions of the system
-system_proper_num_interactions	int64	Number of interactions of the system
+system_proper_num_interactions	int64	Number of interactions of the system excluding ions and artifacts
 system_num_unique_interactions	int64	Number of unique interactions of the system
-system_proper_num_unique_interactions	int64	Number of unique interactions of the system
+system_proper_num_unique_interactions	int64	Number of unique interactions of the system excluding ions and artifacts
 system_num_covalent_ligands	int64	Number of covalent ligands of the system
-system_proper_num_covalent_ligands	int64	Number of covalent ligands of the system
+system_proper_num_covalent_ligands	int64	Number of covalent ligands of the system excluding ions and artifacts
 system_id	string	ID of the system
 system_type	string	Type of the system (one of: holo, ion, artifact)
 system_has_binding_affinity	bool	Whether any ligand in the system has a binding affinity from BindingDB
@@ -33,9 +33,8 @@ system_water_residues	list<element: string>	Interacting water residues encoded a
 ligand_asym_id	string	Ligand chain asymmetric id
 ligand_instance	int64	Biounit instance ID
 ligand_ccd_code	string	Ligand Chemical Component Dictionary (CCD) code
-ligand_plip_type	string	Ligand chain type classification
+ligand_molecule_type	string	Ligand molecule type derived from the mmCIF entity polymer type: SMALLMOLECULE, PEPTIDE, DNA, RNA, MIXED, SACCHARIDE, MACROCYCLES, or UNKNOWN
 ligand_bird_id	string	BIRD/PRD reference-molecule id (PRD_xxxxxx) for multi-component ligands, from pdbx_molecule
-ligand_centroid	list<element: double>	Ligand center of geometry
 ligand_smiles	string	Ligand SMILES from CCD lookup or resolved 3D; for composite ligands, the valid representation with more heavy atoms is used and resolved connectivity wins ties
 ligand_resolved_smiles	string	SMILES from resolved 3D coordinates: bond orders from CCD template, stereochemistry from 3D geometry
 ligand_resolved_stereo_matches_template	bool	Whether resolved 3D stereo matches CCD template (True if achiral; None if no template)

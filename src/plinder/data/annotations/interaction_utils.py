@@ -629,7 +629,7 @@ def run_peppr_interactions(
     metals: struc.AtomArray,
     ligand_chain: str,
     chain_mapping: dict[str, str],
-) -> tuple[dict[str, dict[int, list[str]]], set[tuple[str, int]]]:
+) -> tuple[dict[str, dict[int, list[str]]], set[tuple[str, int]], list[str]]:
     """Compute interaction hash using peppr ContactMeasurement.
 
     Parameters

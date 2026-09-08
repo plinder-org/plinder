@@ -761,7 +761,7 @@ def build_biounit(
     to only a subset of chains.
 
     Branched entities are renumbered (:func:`_branched_residue_numbering`) before
-    building so biotite gives their residues distinct ``res_id``s, and any
+    building so biotite gives their residues distinct ``res_id`` values, and any
     non-physical bonds biotite's inference still emits are then dropped
     (:func:`remove_nonphysical_bonds`).
     """

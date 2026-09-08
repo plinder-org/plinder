@@ -8,7 +8,7 @@ from plinder.core.structure.atoms import (
     _stack_atom_array_features,
     _stack_ligand_feat,
 )
-from plinder.core.structure.diffdock_utils import lig_atom_featurizer
+from plinder.core.structure.smallmols_utils import ligand_atom_features
 from plinder.core.structure.structure import Structure
 from plinder.core.utils import constants as pc
 
@@ -54,11 +54,10 @@ def structure_featurizer(structure: Structure, pad_value: int = -100) -> dict[st
             protein_structure_residue_type_arr, pc.AA_TO_INDEX, "UNK"
         )
     ]
-    # TODO: Fix issues with ligands conformer generation
-    # Featurize and stack ligand chains
-    # VO: try passing the 2D - does not need a conformer!
+    # Ligand atom features come from the 2D SMILES templates: they only use
+    # graph properties, so no conformer is needed.
     input_conformer_ligand_feat = {
-        ch: lig_atom_featurizer(ligand_mol)
+        ch: ligand_atom_features(ligand_mol)
         for ch, ligand_mol in input_ligand_templates.items()
     }
     # Stack in ligand_chain_order order

@@ -1,5 +1,6 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
+import numpy as np
 import pandas as pd
 import pytest
 from rdkit import Chem
@@ -346,3 +347,57 @@ def test_ecfp4_vs_mhfp6_on_sequence_isomer_edge_cases():
     assert mhfp6(gac, acg) > 0.99
     assert ecfp4(gac, acg) >= ecfp4(gac, ggc)
     assert mhfp6(gac, acg) >= mhfp6(gac, ggc)
+
+
+def test_ligand_atom_features_are_hand_checkable_vocabulary_indices():
+    from plinder.core.structure.smallmols_utils import (
+        LIGAND_ATOM_FEATURE_NAMES,
+        ligand_atom_features,
+    )
+
+    benzene = ligand_atom_features(Chem.MolFromSmiles("c1ccccc1"))
+
+    assert benzene.shape == (6, len(LIGAND_ATOM_FEATURE_NAMES))
+    assert benzene.dtype == np.int64
+    # Aromatic carbon: Z=6 -> 5, unspecified chirality, degree 3, charge 0 -> 5,
+    # one implicit H, one H, no radicals, SP2 -> 1, aromatic, in one ring, and
+    # only the six-membered ring flag set.
+    assert benzene.tolist() == [[5, 0, 3, 5, 1, 1, 0, 1, 1, 1, 0, 0, 0, 1, 0, 0]] * 6
+
+    alanine = ligand_atom_features(Chem.MolFromSmiles("C[C@H](N)C(=O)O"))
+    assert alanine.tolist() == [
+        [5, 0, 4, 5, 3, 3, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0],  # methyl carbon
+        [5, 2, 4, 5, 0, 1, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0],  # CCW alpha carbon
+        [6, 0, 3, 5, 2, 2, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0],  # amine nitrogen
+        [5, 0, 3, 5, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0],  # carbonyl carbon
+        [7, 0, 1, 5, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0],  # carbonyl oxygen
+        [7, 0, 2, 5, 1, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0],  # hydroxyl oxygen
+    ]
+
+    cyclopropane = ligand_atom_features(Chem.MolFromSmiles("C1CC1"))
+    assert (
+        cyclopropane.tolist() == [[5, 0, 4, 5, 2, 2, 0, 2, 0, 1, 1, 0, 0, 0, 0, 0]] * 3
+    )
+
+    # Hexafluorophosphate: P is Z=15 -> 14, degree 6, charge -1 -> 4, SP3D2 -> 4.
+    phosphorus = ligand_atom_features(Chem.MolFromSmiles("F[P-](F)(F)(F)(F)F"))[1]
+    assert phosphorus.tolist() == [14, 0, 6, 4, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0]
+
+
+def test_ligand_atom_features_bucket_out_of_vocabulary_values():
+    from plinder.core.structure.smallmols_utils import ligand_atom_features
+
+    # A dummy atom has Z=0 and no hybridization: both land in the "other"
+    # bucket after the 118 elements and the five hybridizations.
+    dummy = ligand_atom_features(Chem.MolFromSmiles("*C"))[0]
+    assert dummy.tolist() == [118, 0, 1, 5, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0]
+
+    ammonium = ligand_atom_features(Chem.MolFromSmiles("[NH4+]"))
+    assert ammonium.tolist() == [[6, 0, 4, 6, 0, 4, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0]]
+
+    # Chiral tags outside the tetrahedral pair collapse onto CHI_OTHER.
+    exotic = Chem.MolFromSmiles("C[C@H](N)C(=O)O")
+    exotic.GetAtomWithIdx(1).SetChiralTag(Chem.ChiralType.CHI_TETRAHEDRAL)
+    assert ligand_atom_features(exotic)[1, 1] == 3
+
+    assert ligand_atom_features(Chem.Mol()).shape == (0, 16)

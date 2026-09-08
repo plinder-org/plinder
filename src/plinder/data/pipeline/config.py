@@ -242,7 +242,7 @@ class EntryConfig:
     neighboring_residue_threshold: float = 6.0
     neighboring_ligand_threshold: float = 4.0
     min_polymer_size: int = 12
-    plip_complex_threshold: float = 10.0
+    interaction_search_threshold: float = 10.0
     min_shared_pocket_members: int = 3
     data_dir: Optional[str] = None
     save_folder: Optional[str] = None
@@ -283,15 +283,6 @@ class InterfaceConfig:
             raise ValueError("interface.min_chain_length must be positive")
         if self.min_interface_residues < 1:
             raise ValueError("interface.min_interface_residues must be positive")
-
-
-""" From
-OleinikovasV
-OleinikovasV commented Apr 22, 2024
-
-Added updated artifacts list and curation, please, review the logic!
-
-"""
 
 
 @dataclass

@@ -8,7 +8,7 @@ import biotite.structure as struc
 import numpy as np
 from numpy.typing import NDArray
 
-from plinder.core.structure.vendored import resn2seq
+from plinder.core.structure.atoms import resn2seq
 
 __all__ = ["superimpose_chain"]
 

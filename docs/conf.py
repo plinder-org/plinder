@@ -22,7 +22,6 @@ import viewcode
 # Modules that require dependencies outside the standard ``pip install plinder``.
 API_EXCLUDED_MODULES = {
     "plinder.core.loader",
-    "plinder.core.structure.diffdock_utils",
     "plinder.data._version",
     "plinder.data.annotations.aggregate_annotations",
     "plinder.data.annotations.get_ligand_validation",
@@ -77,6 +76,11 @@ nb_execution_excludepatterns = [
     "examples/3_access_system_files.ipynb",
     "examples/4_align_mask_crop.ipynb",
     "examples/5_dataset_and_loader.ipynb",
+    # TODO: v3-only: these fetch 2026-07 release artifacts (systems, interfaces,
+    # similarity exports) that are not published yet.
+    "examples/custom_scoring.ipynb",
+    "examples/protein_interfaces.ipynb",
+    "examples/similarity_and_representatives.ipynb",
     "tutorial/api.ipynb",
 ]
 myst_enable_extensions = [

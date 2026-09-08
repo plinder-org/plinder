@@ -342,7 +342,7 @@ class System(DocBaseModel):
     @cached_property
     def proper_num_interactions(self) -> int:
         """
-        Number of interactions of the system
+        Number of interactions of the system excluding ions and artifacts
         """
         return sum(l.num_interactions for l in self.proper_ligands())
 
@@ -356,7 +356,7 @@ class System(DocBaseModel):
     @cached_property
     def proper_num_unique_interactions(self) -> int:
         """
-        Number of unique interactions of the system
+        Number of unique interactions of the system excluding ions and artifacts
         """
         return sum(l.num_unique_interactions for l in self.proper_ligands())
 
@@ -370,7 +370,7 @@ class System(DocBaseModel):
     @cached_property
     def proper_num_covalent_ligands(self) -> int:
         """
-        Number of covalent ligands of the system
+        Number of covalent ligands of the system excluding ions and artifacts
         """
         return sum(ligand.is_covalent for ligand in self.proper_ligands())
 
@@ -1195,7 +1195,7 @@ class Entry(DocBaseModel):
         self,
         biounit: struc.AtomArray,
         biounit_id: str,
-        plip_complex_threshold: float,
+        interaction_search_threshold: float,
         neighboring_residue_threshold: float,
         neighboring_ligand_threshold: float,
         data_dir: Path | None,
@@ -1234,7 +1234,7 @@ class Entry(DocBaseModel):
             spatial_index = BiounitSpatialIndex.from_atoms(
                 biounit,
                 max(
-                    plip_complex_threshold,
+                    interaction_search_threshold,
                     neighboring_residue_threshold,
                     neighboring_ligand_threshold,
                 ),
@@ -1297,7 +1297,7 @@ class Entry(DocBaseModel):
                 residue_numbers=member_residue_numbers[primary_chain],
                 ligand_like_chains=self.ligand_like_chains,
                 all_covalent_dict=self.covalent_bonds,
-                plip_complex_threshold=plip_complex_threshold,
+                interaction_search_threshold=interaction_search_threshold,
                 neighboring_residue_threshold=neighboring_residue_threshold,
                 neighboring_ligand_threshold=neighboring_ligand_threshold,
                 data_dir=data_dir,
@@ -1665,7 +1665,7 @@ class Entry(DocBaseModel):
         include_ligands: bool,
         include_interfaces: bool,
         data_dir: Path | None,
-        plip_complex_threshold: float,
+        interaction_search_threshold: float,
         neighboring_residue_threshold: float,
         neighboring_ligand_threshold: float,
         min_shared_pocket_members: int,
@@ -1699,7 +1699,7 @@ class Entry(DocBaseModel):
         if include_ligands:
             spatial_radii.extend(
                 [
-                    plip_complex_threshold,
+                    interaction_search_threshold,
                     neighboring_residue_threshold,
                     neighboring_ligand_threshold,
                 ]
@@ -1744,7 +1744,7 @@ class Entry(DocBaseModel):
             return self._collect_ligands_from_biounit(
                 biounit,
                 biounit_id,
-                plip_complex_threshold,
+                interaction_search_threshold,
                 neighboring_residue_threshold,
                 neighboring_ligand_threshold,
                 data_dir,
@@ -1777,7 +1777,7 @@ class Entry(DocBaseModel):
             ion_instance_chains,
             min_shared_pocket_members=min_shared_pocket_members,
             neighboring_residue_threshold=neighboring_residue_threshold,
-            interaction_search_threshold=plip_complex_threshold,
+            interaction_search_threshold=interaction_search_threshold,
         )
         ion_ligands = collect(ligand_instance_chains=retained_ion_chains)
         non_artifact_ligands = [
@@ -1799,7 +1799,7 @@ class Entry(DocBaseModel):
         for ligand in non_artifact_ligands:
             ligand_indices = spatial_index.atom_indices_for_chain(ligand.instance_chain)
             nearby_indices = spatial_index.atom_indices_near(
-                biounit.coord[ligand_indices], plip_complex_threshold
+                biounit.coord[ligand_indices], interaction_search_threshold
             )
             referenced_artifact_chains.update(
                 str(chain)
@@ -1819,7 +1819,7 @@ class Entry(DocBaseModel):
         min_polymer_size: int = 12,
         data_dir: Path | None = None,
         save_folder: Path | None = None,
-        plip_complex_threshold: float = 10.0,
+        interaction_search_threshold: float = 10.0,
         symmetry_mate_contact_threshold: float = 5.0,
         min_shared_pocket_members: int = 3,
         interface_contact_radius: float = 10.0,
@@ -1853,8 +1853,11 @@ class Entry(DocBaseModel):
         save_folder : Path
             Root directory for one canonical ASU ligand SDF per chain.
             Files are written to ``<save_folder>/<pdb_id>/ligand_files``.
-        plip_complex_threshold : float
-            Maximum distance (Å) from ligand for interaction analysis
+        interaction_search_threshold : float
+            Receptor residues within this distance (Å) of a ligand form the
+            complex handed to peppr for interaction detection. Keep it at or
+            above peppr's 8 Å contact cutoff, which plinder leaves at its
+            default; a smaller value silently truncates the contact search.
         min_shared_pocket_members : int
             Minimum shared pocket residues to group non-artifact ligands.
         interface_contact_radius : float
@@ -1956,7 +1959,7 @@ class Entry(DocBaseModel):
                     include_ligands=include_ligands,
                     include_interfaces=include_interfaces,
                     data_dir=data_dir,
-                    plip_complex_threshold=plip_complex_threshold,
+                    interaction_search_threshold=interaction_search_threshold,
                     neighboring_residue_threshold=neighboring_residue_threshold,
                     neighboring_ligand_threshold=neighboring_ligand_threshold,
                     min_shared_pocket_members=min_shared_pocket_members,
@@ -1986,7 +1989,7 @@ class Entry(DocBaseModel):
         neighboring_residue_threshold: float = 6.0,
         neighboring_ligand_threshold: float = 4.0,
         min_polymer_size: int = 12,
-        plip_complex_threshold: float = 10.0,
+        interaction_search_threshold: float = 10.0,
         save_folder: Path | None = None,
         min_shared_pocket_members: int = 3,
         save_fixed_cif: Path | None = None,
@@ -2166,7 +2169,7 @@ class Entry(DocBaseModel):
                 min_polymer_size=min_polymer_size,
                 data_dir=data_dir,
                 save_folder=save_folder,
-                plip_complex_threshold=plip_complex_threshold,
+                interaction_search_threshold=interaction_search_threshold,
                 symmetry_mate_contact_threshold=symmetry_mate_contact_threshold,
                 min_shared_pocket_members=min_shared_pocket_members,
                 interface_contact_radius=interface_contact_radius,
@@ -2290,7 +2293,7 @@ class Entry(DocBaseModel):
             include_ligands=include_ligands,
             include_interfaces=include_interfaces,
             data_dir=data_dir,
-            plip_complex_threshold=plip_complex_threshold,
+            interaction_search_threshold=interaction_search_threshold,
             neighboring_residue_threshold=neighboring_residue_threshold,
             neighboring_ligand_threshold=neighboring_ligand_threshold,
             min_shared_pocket_members=min_shared_pocket_members,

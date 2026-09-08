@@ -5,104 +5,103 @@ from zipfile import ZipFile
 import biotite.structure as struc
 import numpy as np
 import pytest
-from biotite.structure.atoms import AtomArray
-from plinder.core.structure import vendored as atoms
-from plinder.core.structure.atoms import (
-    atom_array_from_cif_file,
-)
-from plinder.core.structure.models import BackboneDefinition
+from biotite.structure.atoms import AtomArray, AtomArrayStack
+from plinder.core.structure import atoms
 from plinder.core.structure.smallmols_utils import generate_input_conformer
 from plinder.core.structure.structure import Structure
 from rdkit import Chem
 
 
 def test_cif_loader(cif_1qz5_unzipped):
-    arr = atoms.atom_array_from_cif_file(cif_1qz5_unzipped)
+    arr = atoms.atom_array_from_cif_file(cif_1qz5_unzipped, use_author_fields=False)
 
     assert isinstance(arr, AtomArray)
     assert arr.shape == (3256,)
+    assert sorted(set(arr.chain_id)) == ["A", "B", "C", "D", "E"]
 
 
-def test_atom_masks(cif_atom_array):
-    print(cif_atom_array)
+def test_apply_mask(cif_atom_array):
     arr = cif_atom_array.copy()
-    mask = atoms.backbone_mask(arr, BackboneDefinition("dockq"))
-    assert mask.sum() == 1794
+    mask = arr.atom_name == "CA"
 
-    assert mask.shape == (3256,)
-    assert set(arr[mask].atom_name) == set(atoms.DOCKQ_BACKBONE_ATOMS)
+    assert mask.sum() == 360
+    assert atoms.apply_mask(arr, mask).shape == (360,)
+    stacked = atoms.apply_mask(struc.stack([arr, arr]), mask)
+    assert isinstance(stacked, AtomArrayStack)
+    assert stacked.shape == (2, 360)
+    with pytest.raises(TypeError, match="AtomArray or AtomArrayStack"):
+        atoms.apply_mask(mask, mask)
 
-    assert atoms.apply_mask(arr, mask).shape == arr[mask].shape
 
-    assert set(atoms.filter_atoms(arr, calpha_only=True).atom_name) == {"CA"}
+def test_resn2seq():
+    # MSE keeps its methionine letter; SEC and PYL fall back to C and K because
+    # biotite's protein alphabet lacks U and O; non-residues become X.
+    names = ["ALA", "MSE", "SEC", "PYL", "HOH", "GLY", "UNK"]
+
+    assert atoms.resn2seq(names) == "AMCKXGX"
+    assert atoms.resn2seq([]) == ""
 
 
-@pytest.mark.parametrize(
-    "backbone_only, calpha_only, expected_mask",
-    [
-        (True, True, 1794),
-        (True, False, 1794),
-        (False, True, 360),
-    ],
-)
-def test_get_backbone_atom_masks(
-    backbone_only, calpha_only, expected_mask, cif_atom_array
-):
-    arr = cif_atom_array.copy()
-    arr_mask, stack_mask = atoms.get_backbone_atom_masks(
-        arr, struc.stack([arr]), backbone_only=backbone_only, calpha_only=calpha_only
+def test_align_sequences_maps_matched_residues_only():
+    # Two-residue deletion in the subject: the reference numbering skips 4-5.
+    assert atoms.align_sequences("ACDEFGHIK", "ACDGHIK") == (
+        "ACDGHIK",
+        "ACDGHIK",
+        [1, 2, 3, 6, 7, 8, 9],
+        [1, 2, 3, 4, 5, 6, 7],
     )
-    assert arr_mask.shape[0] == 3256
-    assert arr_mask.shape == stack_mask.shape
-    assert arr_mask.sum() == stack_mask.sum() == expected_mask
+    # A substitution stays aligned and keeps both numberings.
+    assert atoms.align_sequences("ACDEFGHIK", "ACDQFGHIK") == (
+        "ACDEFGHIK",
+        "ACDQFGHIK",
+        list(range(1, 10)),
+        list(range(1, 10)),
+    )
+    # Unknown residues are aligned but never reported as matched.
+    assert atoms.align_sequences("ACDEF", "ACXEF") == (
+        "ACEF",
+        "ACEF",
+        [1, 2, 4, 5],
+        [1, 2, 4, 5],
+    )
+    # Caller-provided numbering is passed through.
+    assert atoms.align_sequences("AC", "AC", [7, 8], [30, 31]) == (
+        "AC",
+        "AC",
+        [7, 8],
+        [30, 31],
+    )
 
 
-def test_resn2seq(cif_atom_array):
-    assert atoms.resn2seq(cif_atom_array.res_name[0:5]) == "TTTTT"
-    structure, numbering, resn = atoms._get_structure_and_res_info(cif_atom_array)
-    assert isinstance(structure, AtomArray)
-    assert set(numbering) == set(cif_atom_array.res_id)
-    assert atoms.resn2seq(resn[0:2]) == "TT"
+def test_residue_index_mapping_mask(cif_atom_array):
+    chain_a = cif_atom_array[cif_atom_array.chain_id == "A"]
+    resolved = atoms.resn2seq(struc.get_residues(chain_a)[1])
+    assert len(resolved) == 359
+
+    # A reference with one extra tryptophan: only that position is unresolved.
+    reference = resolved[:10] + "W" + resolved[10:]
+    mask = atoms.get_residue_index_mapping_mask({"A": reference}, cif_atom_array)["A"]
+    assert mask.shape == (360,)
+    assert np.flatnonzero(mask == 0).tolist() == [10]
+
+    # A reference that starts five residues in is fully resolved.
+    mask = atoms.get_residue_index_mapping_mask({"A": resolved[5:]}, cif_atom_array)
+    assert mask["A"].shape == (354,)
+    assert mask["A"].all()
 
 
-def test_get_seq_alignments(cached_plinder_system):
-    cif = cached_plinder_system("1avd__1__1.A_2.A__1.D").receptor_cif
-    a = atoms.atom_array_from_cif_file(cif)
-    b = atoms.atom_array_from_cif_file(cif)
-    a_numbering, a_resn = struc.get_residues(a)
-    b_numbering, b_resn = struc.get_residues(b)
-    a_seq = atoms.resn2seq(a_resn).strip("X")
-    b_seq = atoms.resn2seq(b_resn).strip("X")
-    ident = atoms.get_seq_identity(a_seq, b_seq)
-    assert isinstance(ident, float)
-    assert ident == pytest.approx(1.0)
+def test_write_cif_roundtrip(cif_atom_array, tmp_path):
+    chain_a = cif_atom_array[cif_atom_array.chain_id == "A"]
+    output = tmp_path / "nested" / "chain_a.cif"
 
-    alns = atoms.get_seq_alignments(a_seq, b_seq)
-    mismatches, matches = atoms.calc_num_mismatches(alns)
-    assert mismatches == 0
-    assert matches == len(a_seq)
+    atoms.write_cif(chain_a, output)
+    reread = atoms.atom_array_from_cif_file(output, use_author_fields=False)
 
-    a_seq_aln, b_seq_aln, a_numbering, b_numbering = atoms.align_sequences(a_seq, b_seq)
-    assert a_seq_aln == b_seq_aln == a_seq == b_seq
-    assert a_numbering == list(range(1, len(a_seq) + 1))
-    assert b_numbering == list(range(1, len(b_seq) + 1))
-
-
-def test_buried_sasa(cached_plinder_system):
-    cif = cached_plinder_system("1avd__1__1.A_2.A__1.D").receptor_cif
-    arr = atoms.atom_array_from_cif_file(cif)
-    chains = sorted(set(arr.chain_id))
-    assert len(chains) >= 2, f"Need multi-chain receptor, got {chains}"
-    a = arr[arr.chain_id == chains[0]]
-    b = arr[arr.chain_id == chains[1]]
-    dsasa = atoms.get_buried_sasa(a, b)
-    assert isinstance(dsasa, int)
-    assert dsasa > 0
-
-
-def test_atom_array_from_cif_file(cif_1qz5_unzipped):
-    arr = atom_array_from_cif_file(cif_1qz5_unzipped)
-    assert isinstance(arr, AtomArray)
+    assert output.read_text().startswith("data_chain_a")
+    assert reread.shape == chain_a.shape
+    assert reread.res_name.tolist() == chain_a.res_name.tolist()
+    with pytest.raises(ValueError, match="must end in .cif"):
+        atoms.write_cif(chain_a, tmp_path / "chain_a.pdb")
 
 
 def test_remove_all_hs():

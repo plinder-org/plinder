@@ -727,8 +727,8 @@ def _reference_smiles(codes: set[str]) -> set[str]:
     return smiles
 
 
-def get_chain_type(chain_type_str: str) -> str:
-    """Classify chain type string into ligand category."""
+def get_molecule_type(chain_type_str: str) -> str:
+    """Collapse an mmCIF entity polymer type into the ligand molecule type."""
     ct = chain_type_str.lower()
     if "non-polymer" in ct:
         return "SMALLMOLECULE"
@@ -1048,15 +1048,15 @@ class Ligand(DocBaseModel):
         default_factory=str,
         description="Ligand Chemical Component Dictionary (CCD) code",
     )
-    # TODO: rename plip_type → chain_type; name kept for backward compatibility
-    # (PLIP tool is no longer used — replaced by peppr)
-    plip_type: str = Field(
-        default_factory=str, description="Ligand chain type classification"
+    molecule_type: str = Field(
+        default_factory=str,
+        description=(
+            "Ligand molecule type derived from the mmCIF entity polymer type: "
+            "SMALLMOLECULE, PEPTIDE, DNA, RNA, MIXED, SACCHARIDE, MACROCYCLES, "
+            "or UNKNOWN"
+        ),
     )
     bird_id: str = Field(default_factory=str, description="Ligand BIRD (PRD) id")
-    centroid: list[float] = Field(
-        default_factory=list, description="Ligand center of geometry"
-    )
     smiles: str = Field(
         default_factory=str,
         description="Ligand SMILES from CCD lookup (user-supplied SMILES wins for custom CIFs) or resolved 3D; for composite ligands, the valid representation with more heavy atoms is used and resolved connectivity wins ties",
@@ -1341,7 +1341,7 @@ class Ligand(DocBaseModel):
                     )
                     for field, value in polymer_classes.items():
                         setattr(self, field, value)
-                    if self.plip_type == "SACCHARIDE" and self._is_multi_residue:
+                    if self.molecule_type == "SACCHARIDE" and self._is_multi_residue:
                         self.is_monosaccharide = False
                         self.is_oligosaccharide = True
                 except RuntimeError:
@@ -1385,8 +1385,7 @@ class Ligand(DocBaseModel):
         residue_numbers: list[int],
         ligand_like_chains: dict[str, str],
         all_covalent_dict: dict[str, list[tuple[str, str]]],
-        # TODO: rename plip_complex_threshold -> complex_threshold
-        plip_complex_threshold: float = 10.0,
+        interaction_search_threshold: float = 10.0,
         neighboring_residue_threshold: float = 6.0,
         neighboring_ligand_threshold: float = 4.0,
         data_dir: ty.Optional[Path] = None,
@@ -1421,8 +1420,10 @@ class Ligand(DocBaseModel):
             Other ligand-like chains in the entry ``{chain_id: chain_type}``.
         all_covalent_dict : dict[str, list[tuple[str, str]]]
             Covalent linkages by type (``"covale"``, ``"metalc"``, ``"hydrog"``).
-        plip_complex_threshold : float
-            Max distance (Å) for receptor atoms to include in interaction analysis.
+        interaction_search_threshold : float
+            Receptor residues within this distance (Å) of the ligand form the
+            complex handed to peppr; keep it at or above peppr's 8 Å contact
+            cutoff, which plinder leaves at its default.
         neighboring_residue_threshold : float
             Max distance (Å) for neighboring receptor residue detection.
         neighboring_ligand_threshold : float
@@ -1487,7 +1488,7 @@ class Ligand(DocBaseModel):
             spatial_index = BiounitSpatialIndex.from_atoms(
                 biounit,
                 max(
-                    plip_complex_threshold,
+                    interaction_search_threshold,
                     neighboring_residue_threshold,
                     neighboring_ligand_threshold,
                 ),
@@ -1515,7 +1516,7 @@ class Ligand(DocBaseModel):
         # Find complete residues within threshold distance of ligand. Residue
         # starts and the whole-assembly CellList are shared by every ligand.
         nearby_indices = spatial_index.complete_residue_indices_near(
-            lig_coords, plip_complex_threshold
+            lig_coords, interaction_search_threshold
         )
         nearby_atoms = spatial_index.take_atoms(
             biounit, nearby_indices, include_bonds=True
@@ -1672,8 +1673,6 @@ class Ligand(DocBaseModel):
             if num_heavy_atoms and num_resolved_heavy_atoms
             else None
         )
-        # Centroid
-        centroid = list(lig_atoms.coord.mean(axis=0))
         # BIRD/PRD id straight from the enriched CIF: the mapping key is the PRD
         # code (see cif_utils BIRD parse), a single canonical id for the ligand.
         bird_id = next(iter(ligand_chain.mappings.get("BIRD", {})), "")
@@ -1683,9 +1682,8 @@ class Ligand(DocBaseModel):
             asym_id=ligand_chain.asym_id,
             instance=ligand_instance,
             ccd_code=ccd_code,
-            plip_type=get_chain_type(ligand_chain.chain_type_str),
+            molecule_type=get_molecule_type(ligand_chain.chain_type_str),
             bird_id=bird_id,
-            centroid=centroid,
             smiles=smiles or "",
             neighboring_residue_threshold=neighboring_residue_threshold,
             neighboring_ligand_threshold=neighboring_ligand_threshold,

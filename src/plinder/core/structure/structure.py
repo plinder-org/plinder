@@ -12,25 +12,19 @@ from numpy.typing import NDArray
 from pydantic import BaseModel, model_validator
 from rdkit import Chem
 
-from plinder.core.structure import surgery
 from plinder.core.structure.atoms import (
     _stack_atom_array_features,
     atom_array_from_cif_file,
     get_residue_index_mapping_mask,
     make_atom_mask,
+    resn2seq,
+    write_cif,
 )
 from plinder.core.structure.smallmols_utils import (
     generate_input_conformer,
     match_ligands,
 )
 from plinder.core.structure.superimpose import superimpose_chain
-from plinder.core.structure.vendored import (
-    get_per_chain_seq_alignments,
-    get_seq_aligned_structures,
-    invert_chain_seq_map,
-    resn2seq,
-    write_cif,
-)
 from plinder.core.utils import constants as pc
 from plinder.core.utils.dataclass import stringify_dataclass
 from plinder.core.utils.log import setup_logger
@@ -301,88 +295,6 @@ class Structure(BaseModel):
         self.protein_atom_array = self.protein_atom_array[atom_mask]
         return None
 
-    def get_per_chain_seq_alignments(
-        self,
-        other: Structure,
-    ) -> dict[str, dict[int, int]]:
-        self2other_seq: dict[str, dict[int, int]] = get_per_chain_seq_alignments(
-            other.protein_atom_array, self.protein_atom_array
-        )
-        return self2other_seq
-
-    def align_common_sequence(
-        self,
-        other: Structure,
-        copy: bool = True,
-        remove_differing_atoms: bool = True,
-        renumber_residues: bool = False,
-        remove_differing_annotations: bool = False,
-    ) -> tuple[Structure, Structure]:
-        assert (other.protein_atom_array is not None) and (
-            self.protein_atom_array is not None
-        )
-        ref_at = other.protein_atom_array.copy()
-        target_at = self.protein_atom_array.copy()
-        target2ref_seq = get_per_chain_seq_alignments(ref_at, target_at)
-        ref2target_seq = invert_chain_seq_map(target2ref_seq)
-        ref_at, target_at = get_seq_aligned_structures(ref_at, target_at)
-
-        if remove_differing_atoms:
-            # Even if atom counts are identical, annotation categories must be the same
-            # First modify annotation arrays to use struc.filter_intersection,
-            # then filter original structure with annotations to match res_id, res_name, atom_name
-            # of intersecting structure
-            ref_at_mod = ref_at.copy()
-            target_at_mod = target_at.copy()
-            ref_at_mod, target_at_mod = surgery.fix_annotation_mismatch(
-                ref_at_mod, target_at_mod, ["element", "ins_code", "b_factor"]
-            )
-            ref_target_mask = struc.filter_intersection(ref_at_mod, target_at_mod)
-            target_ref_mask = struc.filter_intersection(target_at_mod, ref_at_mod)
-            if remove_differing_annotations:
-                ref_at = ref_at_mod[ref_target_mask].copy()
-                target_at = target_at_mod[target_ref_mask].copy()
-            else:
-                ref_at = ref_at[ref_target_mask].copy()
-                target_at = target_at[target_ref_mask].copy()
-
-        if not renumber_residues:
-            target_at.res_id = np.array(
-                [ref2target_seq[at.chain_id][at.res_id] for at in target_at]
-            )
-
-        if copy:
-            self_struct = Structure(
-                id=self.id,
-                protein_path=self.protein_path,
-                protein_sequence=self.protein_sequence,
-                ligand_sdfs=self.ligand_sdfs,
-                ligand_smiles=self.ligand_smiles,
-                protein_atom_array=target_at,
-                ligand_mols=self.ligand_mols,
-                add_ligand_hydrogens=self.add_ligand_hydrogens,
-                skip_3d_confgen=self.skip_3d_confgen,
-                structure_type=self.structure_type,
-            )
-
-            other_struct = Structure(
-                id=other.id,
-                protein_path=other.protein_path,
-                protein_sequence=self.protein_sequence,
-                ligand_sdfs=other.ligand_sdfs,
-                ligand_smiles=other.ligand_smiles,
-                protein_atom_array=ref_at,
-                ligand_mols=other.ligand_mols,
-                add_ligand_hydrogens=other.add_ligand_hydrogens,
-                skip_3d_confgen=other.skip_3d_confgen,
-                structure_type=other.structure_type,
-            )
-
-            return self_struct, other_struct
-        other.protein_atom_array = ref_at
-        self.protein_atom_array = target_at
-        return self, other
-
     def set_chain(self, chain_id: str) -> None:
         if self.protein_atom_array is not None:
             self.protein_atom_array.chain_id = np.repeat(
@@ -554,10 +466,10 @@ class Structure(BaseModel):
         return {tag: mol_tuple[0] for tag, mol_tuple in self.ligand_mols.items()}
 
     @property
-    def protein_calpha_coords(self) -> NDArray[np.double]:
+    def protein_calpha_coords(self) -> list[NDArray[np.double]]:
+        """list[NDArray]: Per-chain coordinates of the protein C-alpha atoms."""
         assert self.protein_atom_array is not None
-        """list[NDArray]: The coordinates of the protein clapha atoms in the structure."""
-        protein_calpha_coords: list[NDArray] = [
+        protein_calpha_coords: list[NDArray[np.double]] = [
             coord
             for coord in _stack_atom_array_features(
                 self.protein_atom_array[self.protein_atom_array.atom_name == "CA"],

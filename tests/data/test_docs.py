@@ -534,3 +534,30 @@ def test_write_column_descriptions_uses_release_table_schemas(tmp_path, monkeypa
         "entry_source_taxonomy_ids",
     ]
     assert not stale_path.exists()
+
+
+def test_exported_column_descriptions_are_unique_within_each_model():
+    """Each exported column's description is its only user-facing explanation,
+    so two columns of one model must never share the same text. This catches
+    copy-pasted docstrings such as a ``proper_*`` property repeating its
+    unfiltered sibling, which the annotation table docs then publish verbatim."""
+    from collections import defaultdict
+
+    from plinder.data.annotations.aggregate_annotations import Entry, System
+    from plinder.data.annotations.get_ligand_validation import (
+        EntryValidation,
+        ResidueListValidation,
+    )
+    from plinder.data.annotations.ligand_utils import Ligand
+    from plinder.data.annotations.protein_utils import Chain
+
+    for model in (Entry, System, Ligand, Chain, ResidueListValidation, EntryValidation):
+        columns_by_description: dict[str, list[str]] = defaultdict(list)
+        for name, _, description in model.document_properties(model.__name__.lower()):
+            columns_by_description[description].append(name)
+        duplicated = {
+            description: names
+            for description, names in columns_by_description.items()
+            if len(names) > 1
+        }
+        assert not duplicated, f"{model.__name__}: {duplicated}"

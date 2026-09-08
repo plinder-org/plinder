@@ -3,23 +3,20 @@
 from __future__ import annotations
 
 import gzip
+from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import Any, Union
 
+import biotite.sequence as seq
+import biotite.sequence.align as align
 import numpy as np
 from biotite import TextFile
 from biotite.structure import get_residues
 from biotite.structure.atoms import AtomArray, AtomArrayStack
-from biotite.structure.io.pdbx import get_structure
+from biotite.structure.io.pdbx import CIFFile, get_structure, set_structure
 from numpy.typing import NDArray
 from rdkit.Chem import Mol
 
-from plinder.core.structure.vendored import (
-    _convert_resn_to_sequence_and_numbering,
-    _get_structure_and_res_info,
-    align_sequences,
-    apply_mask,
-)
 from plinder.core.utils import constants as pc
 from plinder.core.utils.log import setup_logger
 
@@ -99,32 +96,106 @@ def atom_array_from_cif_file(
     return structure
 
 
+def write_cif(arr: AtomArray, filepath: Path) -> None:
+    """Write an AtomArray to an mmCIF file whose data block is the file stem."""
+    filepath = Path(filepath)
+    if filepath.suffix != ".cif":
+        raise ValueError(f"mmCIF output must end in .cif, got {filepath}")
+    filepath.parent.mkdir(exist_ok=True, parents=True)
+    cif_file = CIFFile()
+    set_structure(cif_file, arr, data_block=filepath.stem)
+    cif_file.write(str(filepath))
+
+
+def apply_mask(atoms: _AtomArrayOrStack, mask: NDArray[np.bool_]) -> _AtomArrayOrStack:
+    """Filter the atoms of an AtomArray or AtomArrayStack with a boolean mask."""
+    if isinstance(atoms, AtomArray):
+        return atoms[mask]
+    if isinstance(atoms, AtomArrayStack):
+        return atoms[..., mask]
+    raise TypeError("atoms must be an AtomArray or AtomArrayStack")
+
+
+def resn2seq(resn: Iterable[str]) -> str:
+    """Convert residue names to one-letter code, with ``X`` for unknown names.
+
+    Selenocysteine and pyrrolysine become cysteine and lysine because
+    biotite's protein alphabet has no ``U`` or ``O``.
+    """
+    three_to_one = pc.three_to_one_noncanonical_mapping
+    substitutions = {"U": "C", "O": "K"}
+    return "".join(
+        substitutions.get(one, one)
+        for one in (three_to_one.get(three, "X") for three in resn)
+    )
+
+
+def align_sequences(
+    ref_seq: str,
+    subject_seq: str,
+    ref_numbering: Sequence[int] | None = None,
+    subject_numbering: Sequence[int] | None = None,
+) -> tuple[str, str, list[int], list[int]]:
+    """Globally align two sequences and return their matched residues.
+
+    The alignment uses BLOSUM62 with affine gap penalties and no terminal
+    penalty.  Only positions where both sequences carry a known residue are
+    kept, and returned as the two mapped sequences plus their residue
+    numbering (1-based unless numbering is given).
+    """
+    alignment = align.align_optimal(
+        seq.ProteinSequence(subject_seq),
+        seq.ProteinSequence(ref_seq),
+        align.SubstitutionMatrix.std_protein_matrix(),
+        gap_penalty=(-10.0, -1.0),
+        terminal_penalty=False,
+        local=False,
+        max_number=1,
+    )[0]
+    subject_symbols, ref_symbols = align.get_symbols(alignment)
+    if ref_numbering is None:
+        ref_numbering = list(range(1, len(ref_seq) + 1))
+    if subject_numbering is None:
+        subject_numbering = list(range(1, len(subject_seq) + 1))
+    ref_mapped = ""
+    subject_mapped = ""
+    ref_numbering_mapped: list[int] = []
+    subject_numbering_mapped: list[int] = []
+    ref_index = -1
+    subject_index = -1
+    for subject_symbol, ref_symbol in zip(subject_symbols, ref_symbols):
+        if ref_symbol:
+            ref_index += 1
+        if subject_symbol:
+            subject_index += 1
+        if ref_symbol and subject_symbol and "X" not in (ref_symbol, subject_symbol):
+            ref_numbering_mapped.append(int(ref_numbering[ref_index]))
+            subject_numbering_mapped.append(int(subject_numbering[subject_index]))
+            ref_mapped += ref_symbol
+            subject_mapped += subject_symbol
+    return ref_mapped, subject_mapped, ref_numbering_mapped, subject_numbering_mapped
+
+
 def get_residue_index_mapping_mask(
     ref_seqs: dict[str, str], subject_arr: _AtomArrayOrStack
-) -> dict[str, list[int]]:
+) -> dict[str, NDArray[np.float64]]:
+    """Mark which reference-sequence positions are resolved in each chain."""
     mask_map = {}
-    for reference_chain, ref_seq in ref_seqs.items():
-        # refernece and subject chain are the same
-        subject_chain = reference_chain
-        subject_mask = subject_arr.chain_id == subject_chain
-        subject_ch_arr = apply_mask(subject_arr, subject_mask)
-
-        subj_info = _get_structure_and_res_info(subject_ch_arr)
-        subj_seq, subj_numbering = _convert_resn_to_sequence_and_numbering(subj_info)
-        alignments = align_sequences(
-            ref_seq, subj_seq, ref_numbering=None, subject_numbering=subj_numbering
+    for chain, ref_seq in ref_seqs.items():
+        # The reference and subject chain IDs are the same.
+        subject_ch_arr = apply_mask(subject_arr, subject_arr.chain_id == chain)
+        subj_numbering, subj_resn = get_residues(subject_ch_arr)
+        _, _, ref_numbering_mapped, _ = align_sequences(
+            ref_seq,
+            resn2seq(subj_resn),
+            subject_numbering=subj_numbering.tolist(),
         )
-        (
-            _,
-            _,
-            ref_numbering_mapped,
-            _,
-        ) = alignments
+        resolved = set(ref_numbering_mapped)
         mask = np.zeros(len(ref_seq))
         for i in range(len(mask)):
-            if (i + 1) in ref_numbering_mapped:
+            if (i + 1) in resolved:
                 mask[i] = 1
-        mask_map[reference_chain] = mask
+        mask_map[chain] = mask
     return mask_map
 
 

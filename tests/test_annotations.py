@@ -490,7 +490,7 @@ def test_multi_residue_ligand_uses_richer_identity_for_rdkit() -> None:
     nag = "CC(=O)N[C@@H]1[C@@H](O)[C@H](O)[C@@H](CO)O[C@H]1O"
     ligand = Ligand(
         ccd_code="NAG-NAG",
-        plip_type="SACCHARIDE",
+        molecule_type="SACCHARIDE",
         smiles=nag,
         resolved_smiles=f"{nag}.{nag}",
         residue_numbers=[1, 2],
@@ -505,7 +505,7 @@ def test_multi_residue_ligand_uses_richer_identity_for_rdkit() -> None:
 
     partially_resolved = Ligand(
         ccd_code="NAG-NAG",
-        plip_type="SACCHARIDE",
+        molecule_type="SACCHARIDE",
         smiles=nag,
         resolved_smiles="CCO",
         residue_numbers=[1, 2],
@@ -723,9 +723,8 @@ def test_deferred_ions_are_retained_only_when_they_can_join_a_primary_system():
         asym_id="B",
         instance=1,
         ccd_code="LIG",
-        plip_type="SMALLMOLECULE",
+        molecule_type="SMALLMOLECULE",
         bird_id="",
-        centroid=[0.0, 0.0, 1.0],
         smiles="CCNCC",
         residue_numbers=[1],
         neighboring_residues={"1.A": [1, 2, 3]},
@@ -1095,9 +1094,8 @@ def test_entry_drops_systems_without_a_proper_ligand() -> None:
             asym_id=asym_id,
             instance=1,
             ccd_code="NA" if is_ion else "GOL" if is_artifact else "LIG",
-            plip_type="SMALLMOLECULE",
+            molecule_type="SMALLMOLECULE",
             bird_id="",
-            centroid=[0.0, 0.0, 0.0],
             smiles="[Na+]" if is_ion else "CCO",
             residue_numbers=[1],
             neighboring_residues={"1.A": [1, 2, 3]},
@@ -1227,9 +1225,8 @@ def test_entry_never_groups_ligands_across_biological_assemblies() -> None:
             asym_id=asym_id,
             instance=1,
             ccd_code="LIG",
-            plip_type="SMALLMOLECULE",
+            molecule_type="SMALLMOLECULE",
             bird_id="",
-            centroid=[0.0, 0.0, 0.0],
             smiles="CCO",
             residue_numbers=[1],
             neighboring_residues={"1.A": [1, 2, 3]},
@@ -1282,9 +1279,8 @@ def test_entry_validation_skips_chains_outside_retained_systems(
         asym_id="B",
         instance=1,
         ccd_code="LIG",
-        plip_type="SMALLMOLECULE",
+        molecule_type="SMALLMOLECULE",
         bird_id="",
-        centroid=[0.0, 0.0, 0.0],
         smiles="CCNCC",
         residue_numbers=[1],
         neighboring_residues={"1.A": [1, 2, 3]},
@@ -1701,7 +1697,7 @@ def test_simple_ternary_detection(cif_2p1q, mock_alternative_datasets):
     ].drop_duplicates().to_list() == [["B", "C"]]
 
 
-def test_plip_entry_binary(cif_4ci1, mock_alternative_datasets, lig_code="EF2"):
+def test_interactions_entry_binary(cif_4ci1, mock_alternative_datasets, lig_code="EF2"):
     entry_dir = mock_alternative_datasets("4ci1")
     entry = Entry.from_cif_file(
         cif_4ci1,
@@ -1734,7 +1730,9 @@ def test_plip_entry_binary(cif_4ci1, mock_alternative_datasets, lig_code="EF2"):
     assert ligand.interactions["1.B"] == expected_interactions
 
 
-def test_plip_entry_ternary(cif_2p1q, mock_alternative_datasets, lig_code="IAC"):
+def test_interactions_entry_ternary(
+    cif_2p1q, mock_alternative_datasets, lig_code="IAC"
+):
     entry_dir = mock_alternative_datasets("2p1q")
     entry = Entry.from_cif_file(
         cif_2p1q,
@@ -1820,7 +1818,7 @@ def test_water_saving(cif_2p1q, mock_alternative_datasets):
     assert len(set(zip(all_water_atoms.chain_id, all_water_atoms.res_id))) > 2
 
 
-def test_plip_same_hinge_binders(cif_2gdo, cif_4qyf, mock_alternative_datasets):
+def test_interactions_same_hinge_binders(cif_2gdo, cif_4qyf, mock_alternative_datasets):
     pdb_ids = ["2gdo", "4qyf"]
     mmcifs = [cif_2gdo, cif_4qyf]
     ccd_codes = ["12C", "3DV"]
@@ -1862,7 +1860,7 @@ def test_get_single_ligand_system_annotations(cif_6fx1, mock_alternative_dataset
     multi_residue_saccharides = [
         ligand
         for ligand in ligands
-        if ligand.plip_type == "SACCHARIDE" and "-" in ligand.ccd_code
+        if ligand.molecule_type == "SACCHARIDE" and "-" in ligand.ccd_code
     ]
     assert multi_residue_saccharides
     for ligand in multi_residue_saccharides:
