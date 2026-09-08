@@ -243,6 +243,8 @@ class EntryConfig:
     neighboring_ligand_threshold: float = 4.0
     min_polymer_size: int = 12
     interaction_search_threshold: float = 10.0
+    # heavy atoms; Voronota-LT needs ~2.2 KB/atom, skipped assemblies get null areas
+    tessellation_atom_limit: int = 2_000_000
     min_shared_pocket_members: int = 3
     data_dir: Optional[str] = None
     save_folder: Optional[str] = None

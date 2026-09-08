@@ -20,6 +20,7 @@ from rdkit.Chem.rdchem import Mol
 from plinder.core.utils.config import get_config
 from plinder.core.utils.constants import BASE_DIR
 from plinder.core.utils.sanitize import mol_from_smiles
+from plinder.data.annotations.contact_areas import partner_contact_areas
 from plinder.data.annotations.interaction_utils import (
     extract_ligand_links_to_neighbouring_chains,
     run_peppr_interactions,
@@ -1142,6 +1143,18 @@ class Ligand(DocBaseModel):
         "ligand; an empty result for a listed type means 'not computed', not "
         "'none found'.",
     )
+    contact_area: float | None = Field(
+        default=None,
+        description="Voronota-LT contact area in square angstroms between the ligand "
+        "and the receptor polymer chains of its biological assembly; null when the "
+        "assembly tessellation was skipped or failed",
+    )
+    chain_contact_areas: dict[str, float] = Field(
+        default_factory=dict,
+        description="[CUSTOM_EXPORT] Voronota-LT contact area in square angstroms "
+        "between the ligand and each {instance}.{chain} it touches, receptor and "
+        "ligand chains alike",
+    )
 
     @classmethod
     def document_properties(
@@ -1176,6 +1189,19 @@ class Ligand(DocBaseModel):
                 "number, and interaction type",
             ),
             ("auth_id", "str", "Author chain ID of the ligand"),
+            (
+                "contact_area_chains",
+                "list[str]",
+                "Instance chains in Voronota-LT contact with the ligand, receptor "
+                "and ligand chains alike, positionally aligned with "
+                "ligand_contact_area_values",
+            ),
+            (
+                "contact_area_values",
+                "list[float]",
+                "Voronota-LT contact area in square angstroms between the ligand "
+                "and each chain in ligand_contact_area_chains",
+            ),
         )
         for suffix, dtype, description in custom_columns:
             yield f"{prefix}_{suffix}", dtype, description
@@ -1395,6 +1421,7 @@ class Ligand(DocBaseModel):
         water_chains: set[str] | None = None,
         spatial_index: BiounitSpatialIndex | None = None,
         member_residue_numbers: dict[str, list[int]] | None = None,
+        chain_pair_contact_areas: ty.Mapping[tuple[str, str], float] | None = None,
     ) -> Ligand | None:
         """Build a Ligand from a biounit AtomArray and chain metadata.
 
@@ -1454,6 +1481,11 @@ class Ligand(DocBaseModel):
             several covalently-linked chains (a macrocycle deposited as
             separate chains). Defaults to the single primary chain
             (``{ligand_instance_chain: residue_numbers}``) when omitted.
+        chain_pair_contact_areas : Mapping[tuple[str, str], float] | None
+            Assembly-wide Voronota-LT areas keyed by sorted chain pair. When
+            given, ``chain_contact_areas`` and ``contact_area`` are filled from
+            the pairs involving the ligand's member chains; otherwise both stay
+            unset (``None`` / empty).
 
         Returns
         -------
@@ -1745,6 +1777,18 @@ class Ligand(DocBaseModel):
             )
         ligand.covalent_linkages = covalent_linkages
         ligand.is_covalent = len(ligand.covalent_linkages) > 0
+
+        # Contact areas from the assembly-wide tessellation: every partner chain
+        # keeps its own area; the receptor total excludes ligand-like partners.
+        if chain_pair_contact_areas is not None:
+            ligand.chain_contact_areas = partner_contact_areas(
+                chain_pair_contact_areas, set(member_instance_chains)
+            )
+            ligand.contact_area = sum(
+                area
+                for chain_id, area in ligand.chain_contact_areas.items()
+                if chain_id.split(".")[-1] not in ligand_like_chains
+            )
 
         # Find neighboring ligand chains
         near_lig_indices = spatial_index.atom_indices_near(
@@ -2251,6 +2295,9 @@ class Ligand(DocBaseModel):
 
         # interactions
         data.update(self.format_interactions())
+        # contact areas: one chain list and one aligned area list
+        data["ligand_contact_area_chains"] = list(self.chain_contact_areas)
+        data["ligand_contact_area_values"] = list(self.chain_contact_areas.values())
         # chains
         data.update(
             {"ligand_auth_id": chains[self.asym_id].auth_id}

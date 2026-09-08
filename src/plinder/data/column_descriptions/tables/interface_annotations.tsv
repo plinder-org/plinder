@@ -9,6 +9,7 @@ interface_chain_1_residue_indices	list<element: int32>	Zero-based resolved-chain
 interface_chain_2_residue_numbers	list<element: int32>	Source-mmCIF residue numbers at the interface on chain 2
 interface_chain_2_residue_indices	list<element: int32>	Zero-based resolved-chain indices corresponding positionally to chain 2 residue numbers
 interface_num_contact_residue_pairs	int64	Number of residue pairs in contact across the protein interface
+interface_contact_area	double	Voronota-LT contact area in square angstroms between the two chains in the full biological assembly; null when the assembly tessellation was skipped or failed
 prodigy_is_annotated	bool	Whether PRODIGY-cryst features and a biological/crystal label are available
 prodigy_label	string	PRODIGY-cryst BIO or XTAL interface label
 prodigy_probability_bio	float	PRODIGY-cryst probability that the interface is biological

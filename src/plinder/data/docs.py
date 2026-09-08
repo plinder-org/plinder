@@ -117,6 +117,11 @@ DERIVED_COLUMN_DESCRIPTIONS = {
     "interface_num_contact_residue_pairs": (
         "Number of residue pairs in contact across the protein interface"
     ),
+    "interface_contact_area": (
+        "Voronota-LT contact area in square angstroms between the two chains in "
+        "the full biological assembly; null when the assembly tessellation was "
+        "skipped or failed"
+    ),
     "prodigy_is_annotated": (
         "Whether PRODIGY-cryst features and a biological/crystal label are available"
     ),

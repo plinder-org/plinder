@@ -85,6 +85,9 @@ ligand_water_residues	list<element: string>	Interacting water residues encoded a
 ligand_interactions	list<element: string>	Protein-ligand interactions encoded by receptor chain, residue number, and interaction type
 ligand_auth_id	string	Author chain ID of the ligand
 ligand_interacting_residues	list<element: string>	Dictionary of interacting residues, with {instance}.{chain} key and residue number value
+ligand_contact_area	double	Voronota-LT contact area in square angstroms between the ligand and the receptor polymer chains of its biological assembly; null when the assembly tessellation was skipped or failed
+ligand_contact_area_chains	list<element: string>	Instance chains in Voronota-LT contact with the ligand, receptor and ligand chains alike, positionally aligned with ligand_contact_area_values
+ligand_contact_area_values	list<element: double>	Voronota-LT contact area in square angstroms between the ligand and each chain in ligand_contact_area_chains
 ligand_neighboring_residues	list<element: string>	Dictionary of neighboring residues, with {instance}.{chain} key and residue number value
 system_pocket_CATH	string	Most frequent CATH mapping among pocket residues
 system_pocket_SCOP2B	string	Most frequent SCOP2B mapping among pocket residues

@@ -33,6 +33,10 @@ from plinder.data.annotations.cif_utils import (
     get_structure_with_altloc,
     remove_nonphysical_bonds,
 )
+from plinder.data.annotations.contact_areas import (
+    chain_pair_contact_areas,
+    tessellation_atom_mask,
+)
 from plinder.data.annotations.get_ligand_validation import (
     EntryValidation,
     ResidueListValidation,
@@ -898,6 +902,12 @@ class Entry(DocBaseModel):
         description="[EXCLUDE] Biological-assembly IDs biotite could not build; their "
         "systems are absent from this entry.",
     )
+    failed_contact_area_biounit_ids: list[str] = Field(
+        default_factory=list,
+        description="[EXCLUDE] Biological-assembly IDs whose Voronota-LT tessellation "
+        "was skipped (too many atoms) or failed; their ligand and interface contact "
+        "areas are null.",
+    )
     symmetry_mate_contacts: SymmetryMateContacts = Field(
         default_factory=dict,
         description="[EXCLUDE] Symmetry mate contacts in the entry",
@@ -1205,6 +1215,7 @@ class Entry(DocBaseModel):
         ligand_instance_chains: set[str] | None = None,
         water_chains: set[str] | None = None,
         spatial_index: BiounitSpatialIndex | None = None,
+        chain_pair_contact_areas: ty.Mapping[tuple[str, str], float] | None = None,
     ) -> dict[str, "Ligand"]:
         """Create Ligand objects for every ligand chain in a single biounit.
 
@@ -1228,6 +1239,9 @@ class Entry(DocBaseModel):
 
         ``spatial_index`` shares the assembly CellList and atom hierarchy
         across every ligand and across the non-ion/ion passes.
+
+        ``chain_pair_contact_areas`` are the assembly-wide Voronota-LT chain
+        pair areas; ``None`` leaves every ligand's contact area unset.
         """
         ligands: dict[str, Ligand] = {}
         if spatial_index is None:
@@ -1307,6 +1321,7 @@ class Entry(DocBaseModel):
                 water_chains=water_chains,
                 spatial_index=spatial_index,
                 member_residue_numbers=member_residue_numbers,
+                chain_pair_contact_areas=chain_pair_contact_areas,
             )
             if ligand is not None:
                 ligands[ligand.id] = ligand
@@ -1656,6 +1671,38 @@ class Entry(DocBaseModel):
             monoatomic_ion_asym_ids, known_artifact_asym_ids, primary_asym_ids
         )
 
+    def _biounit_chain_pair_contact_areas(
+        self,
+        biounit: struc.AtomArray,
+        biounit_id: str,
+        *,
+        atom_limit: int,
+    ) -> dict[tuple[str, str], float] | None:
+        """Tessellate one assembly once; ``None`` records a skipped or failed run."""
+        atom_count = int(np.count_nonzero(tessellation_atom_mask(biounit)))
+        if atom_count > atom_limit:
+            LOG.warning(
+                "PDB %s assembly %s: skipping Voronota-LT tessellation, %d heavy "
+                "non-water atoms exceed tessellation_atom_limit=%d",
+                self.pdb_id,
+                biounit_id,
+                atom_count,
+                atom_limit,
+            )
+            self.failed_contact_area_biounit_ids.append(biounit_id)
+            return None
+        try:
+            return chain_pair_contact_areas(biounit)
+        except Exception as exc:
+            LOG.error(
+                "PDB %s assembly %s: Voronota-LT tessellation failed: %s",
+                self.pdb_id,
+                biounit_id,
+                exc,
+            )
+            self.failed_contact_area_biounit_ids.append(biounit_id)
+            return None
+
     def _annotate_biounit(
         self,
         biounit: struc.AtomArray,
@@ -1673,6 +1720,7 @@ class Entry(DocBaseModel):
         interface_min_chain_length: int,
         interface_min_residues: int,
         interface_annotate_prodigy: bool,
+        tessellation_atom_limit: int,
         ligand_smiles_dict: dict[str, str] | None = None,
         ligand_ccd_code_dict: dict[str, str] | None = None,
     ) -> dict[str, Ligand]:
@@ -1685,6 +1733,12 @@ class Entry(DocBaseModel):
         primary ligands first and only those deferred ions and known artifacts
         that connect to a proper primary ligand.  The biounit must carry a
         ``legacy_chain_id`` annotation.
+
+        The assembly is tessellated once with Voronota-LT so that ligands and
+        protein interfaces read their chain-pair contact areas from the same
+        exact computation; assemblies above ``tessellation_atom_limit`` heavy,
+        non-water atoms skip it and are recorded in
+        ``failed_contact_area_biounit_ids``.
         """
         self.biounit_chain_ids[biounit_id] = sorted(
             str(chain_id) for chain_id in np.unique(biounit.chain_id)
@@ -1711,6 +1765,18 @@ class Entry(DocBaseModel):
             if spatial_radii
             else None
         )
+        # Tessellate only when something consumes the areas: interfaces, or
+        # ligands that will actually be collected.
+        needs_contact_areas = include_interfaces or (
+            include_ligands and bool(ligand_classes.primary_asym_ids)
+        )
+        chain_pair_areas = (
+            self._biounit_chain_pair_contact_areas(
+                biounit, biounit_id, atom_limit=tessellation_atom_limit
+            )
+            if needs_contact_areas
+            else None
+        )
         if include_ligands:
             assert spatial_index is not None
             self._record_biounit_ligand_contact_counts(
@@ -1733,6 +1799,7 @@ class Entry(DocBaseModel):
                     min_interface_residues=interface_min_residues,
                     annotate_prodigy=interface_annotate_prodigy,
                     spatial_index=spatial_index,
+                    chain_pair_contact_areas=chain_pair_areas,
                 )
             )
         if not include_ligands or not ligand_classes.primary_asym_ids:
@@ -1752,6 +1819,7 @@ class Entry(DocBaseModel):
                 ligand_ccd_code_dict=ligand_ccd_code_dict,
                 water_chains=water_chains,
                 spatial_index=spatial_index,
+                chain_pair_contact_areas=chain_pair_areas,
                 **selection,
             )
 
@@ -1830,6 +1898,7 @@ class Entry(DocBaseModel):
         include_interfaces: bool = True,
         assembly_ids: ty.Iterable[str] | None = None,
         protein_only: bool = False,
+        tessellation_atom_limit: int = 2_000_000,
     ) -> Entry:
         """
         Load an entry object from mmCIF files in the pipeline
@@ -1878,6 +1947,13 @@ class Entry(DocBaseModel):
         protein_only : bool
             Permit chain and assembly extraction without ligand or interface
             annotation. Used by receptor-only custom scoring.
+        tessellation_atom_limit : int
+            Number of heavy, non-water atoms above which an assembly skips the
+            Voronota-LT contact-area tessellation; its ligand and interface
+            contact areas are null and the assembly ID is recorded in
+            ``failed_contact_area_biounit_ids``. The limit protects memory:
+            the tessellation needs about 2.2 KB and 9 µs per atom, so the
+            default of 2 million atoms costs roughly 4.5 GB and 20 s.
 
         Returns
         -------
@@ -1967,6 +2043,7 @@ class Entry(DocBaseModel):
                     interface_min_chain_length=interface_min_chain_length,
                     interface_min_residues=interface_min_residues,
                     interface_annotate_prodigy=interface_annotate_prodigy,
+                    tessellation_atom_limit=tessellation_atom_limit,
                 )
             )
         entry._finalize(
@@ -2004,6 +2081,7 @@ class Entry(DocBaseModel):
         include_interfaces: bool = True,
         data_dir: Path | None = None,
         ligand_ccd_code_dict: dict[str, str] | None = None,
+        tessellation_atom_limit: int = 2_000_000,
     ) -> Entry:
         """
         Create an entry from an already assembled or deposited PDB mmCIF.
@@ -2054,6 +2132,9 @@ class Entry(DocBaseModel):
             Whether to derive ligand systems and canonical ligand SDFs.
         include_interfaces : bool
             Whether to derive protein-protein interfaces.
+        tessellation_atom_limit : int
+            Skip the Voronota-LT tessellation above this many heavy, non-water
+            atoms (see :meth:`from_cif_file`).
 
         Returns
         -------
@@ -2180,6 +2261,7 @@ class Entry(DocBaseModel):
                 include_interfaces=include_interfaces,
                 assembly_ids=requested_assemblies,
                 protein_only=not include_ligands and not include_interfaces,
+                tessellation_atom_limit=tessellation_atom_limit,
             )
             if not entry.biounit_chain_ids:
                 raise ValueError(
@@ -2301,6 +2383,7 @@ class Entry(DocBaseModel):
             interface_min_chain_length=interface_min_chain_length,
             interface_min_residues=interface_min_residues,
             interface_annotate_prodigy=interface_annotate_prodigy,
+            tessellation_atom_limit=tessellation_atom_limit,
             ligand_smiles_dict=ligand_smiles_dict,
             ligand_ccd_code_dict=ligand_ccd_code_dict,
         )

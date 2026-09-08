@@ -260,7 +260,6 @@ def cif_2y4i_system():
     return test_asset_fp / "xx/pdb_00002y4i/pdb_00002y4i_xyz-enrich.cif.gz"
 
 
-# TODO: PLIP is no longer used — these fixtures test interaction detection (now via peppr)
 # CHK1 inhib 1
 @pytest.fixture(scope="session")
 def cif_2gdo():
