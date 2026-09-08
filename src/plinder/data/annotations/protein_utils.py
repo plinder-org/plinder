@@ -36,6 +36,98 @@ def _standard_na_names() -> set[str]:
     return {"A", "C", "G", "U", "DA", "DC", "DG", "DT", "DU"}
 
 
+@functools.cache
+def _ccd_parent_components() -> dict[str, str]:
+    """``comp_id -> mon_nstd_parent_comp_id`` from biotite's bundled CCD."""
+    from biotite.structure.info import ccd as bundled_ccd
+
+    chem_comp = bundled_ccd.get_ccd()["chem_comp"]
+    return dict(
+        zip(
+            chem_comp["id"].as_array(str),
+            chem_comp["mon_nstd_parent_comp_id"].as_array(str),
+        )
+    )
+
+
+_CANONICAL_MONOMERS = frozenset(
+    {
+        "ALA", "ARG", "ASN", "ASP", "CYS", "GLN", "GLU", "GLY", "HIS", "ILE",
+        "LEU", "LYS", "MET", "PHE", "PRO", "SER", "THR", "TRP", "TYR", "VAL",
+        "UNK", "A", "C", "G", "U", "I", "N", "DA", "DC", "DG", "DT", "DU", "DI", "DN",
+    }
+)  # fmt: skip
+
+
+def get_modified_residues(
+    block: pdbx.CIFBlock,
+    residue_author_ids: Mapping[str, Mapping[int, tuple[str, str]]] | None = None,
+) -> dict[str, list[str]]:
+    """Non-canonical SEQRES monomers per label asym.
+
+    Entries read ``{auth_seq}:{mon_id}:{asym}:{label_seq}>{parent}`` like the
+    covalent-link encoding, plus `` (details)`` from
+    ``pdbx_struct_mod_residue`` when present. Built from ``entity_poly_seq``,
+    so unresolved positions are included with ``?`` as ``auth_seq``. Parent
+    from ``pdbx_struct_mod_residue``, else the CCD, else ``?``.
+    """
+    from plinder.data.annotations.cif_utils import _iter_category_rows
+
+    if residue_author_ids is None:
+        _, residue_author_ids = get_atom_site_author_ids(block)
+    modified_by_entity: dict[str, list[tuple[int, str]]] = {}
+    for row in _iter_category_rows(
+        block, "entity_poly_seq", ["entity_id", "num", "mon_id"]
+    ):
+        if row["mon_id"] in _CANONICAL_MONOMERS:
+            continue
+        try:
+            number = int(row["num"])
+        except ValueError:
+            continue
+        modified_by_entity.setdefault(row["entity_id"], []).append(
+            (number, row["mon_id"])
+        )
+    if not modified_by_entity:
+        return {}
+    missing = {"", ".", "?"}
+    deposited: dict[tuple[str, int, str], tuple[str, str]] = {}
+    for row in _iter_category_rows(
+        block,
+        "pdbx_struct_mod_residue",
+        ["label_asym_id", "label_seq_id", "label_comp_id", "parent_comp_id", "details"],
+    ):
+        try:
+            key = (row["label_asym_id"], int(row["label_seq_id"]), row["label_comp_id"])
+        except ValueError:
+            continue
+        deposited[key] = (row["parent_comp_id"], row["details"])
+    ccd_parents = _ccd_parent_components()
+    modified: dict[str, list[str]] = {}
+    for row in _iter_category_rows(block, "struct_asym", ["id", "entity_id"]):
+        positions = modified_by_entity.get(row["entity_id"])
+        if not positions:
+            continue
+        asym_id = row["id"]
+        author_ids = residue_author_ids.get(asym_id, {})
+        entries = []
+        for number, mon_id in sorted(positions):
+            parent, details = deposited.get((asym_id, number, mon_id), ("", ""))
+            if parent in missing:
+                parent = ccd_parents.get(mon_id, "?")
+            if parent in missing:
+                parent = "?"
+            auth_seq, insertion = author_ids.get(number, ("?", "."))
+            if insertion not in missing:
+                auth_seq = f"{auth_seq}{insertion}"
+            entry = f"{auth_seq}:{mon_id}:{asym_id}:{number}>{parent}"
+            if details not in missing:
+                entry = f"{entry} ({details})"
+            entries.append(entry)
+        modified[asym_id] = entries
+    return modified
+
+
 def _get_chain_type_from_cif(block: pdbx.CIFBlock, entity_id: str) -> str:
     """Get chain type string from CIF entity/entity_poly categories."""
     # Try _entity_poly.type first
@@ -375,31 +467,10 @@ class Residue(DocBaseModel):
     chem_type: str
         residue chemical type
 
-    Attributes
-    ----------
-    is_ptm: bool
-        Does residue have post translational modification
-
     Examples
     --------
     TODO: Add example
     """
-
-    @cached_property
-    def is_modified(self) -> bool:
-        """Is this a modified residue (PTM for protein, modified base for NA)."""
-        ct = self.chem_type.lower()
-        if "peptide" in ct:
-            return self.name not in _standard_aa_names()
-        if "rna" in ct or "dna" in ct or "nucleotide" in ct:
-            return self.name not in _standard_na_names()
-        return False
-
-    @cached_property
-    def is_ptm(self) -> bool:
-        """Does the residue have a post-translational modification (protein only)."""
-        ct = self.chem_type.lower()
-        return "peptide" in ct and self.name not in _standard_aa_names()
 
 
 class Chain(DocBaseModel):
@@ -427,6 +498,10 @@ class Chain(DocBaseModel):
         default=None,
         description="[EXCLUDE] Crystal validation information for the residues in the chain",
     )
+    modified_residues: list[str] = Field(
+        default_factory=list,
+        description="[EXCLUDE] Non-canonical SEQRES monomers as {auth_seq}:{mon_id}:{asym}:{label_seq}>{parent} (details)",
+    )
 
     # Allow arbitrary types for cached properties
     model_config = ConfigDict(
@@ -445,6 +520,7 @@ class Chain(DocBaseModel):
         auth_id: str | None = None,
         chain_type_str: str | None = None,
         residue_author_ids: Mapping[int, tuple[str, str]] | None = None,
+        modified_residues: list[str] | None = None,
     ) -> "Chain":
         """Create Chain from biotite CIF data.
 
@@ -465,6 +541,8 @@ class Chain(DocBaseModel):
         residue_author_ids : mapping, optional
             Pre-indexed ``label_seq_id -> (auth_seq_id, insertion_code)``
             mapping for this label-asym chain.
+        modified_residues : list[str], optional
+            Pre-indexed :func:`get_modified_residues` entries for this chain.
         """
         import biotite.structure as struc
         import biotite.structure.info as info
@@ -569,6 +647,7 @@ class Chain(DocBaseModel):
             # -1 sentinel (collation flags <0) when SEQRES is missing or
             # shorter than the resolved residues — surface it
             num_unresolved_residues=max(-1, seqres_length - len(residues)),
+            modified_residues=list(modified_residues or []),
         )
 
     @cached_property

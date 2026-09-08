@@ -40,6 +40,15 @@ DERIVED_COLUMN_DESCRIPTIONS = {
         "Full polymer sequence in one-letter code, keyed by the source "
         "asymmetric-chain ID"
     ),
+    "chain_sequence_noncanonical": (
+        "Full polymer sequence from _entity_poly.pdbx_seq_one_letter_code, with "
+        "modified residues as (CCD) tokens"
+    ),
+    "chain_modified_residues": (
+        "Non-canonical SEQRES monomers as {auth_seq}:{mon_id}:{asym}:{label_seq}"
+        ">{parent} (details), including unresolved positions (auth_seq ?); "
+        "parent and details from _pdbx_struct_mod_residue, else the CCD parent"
+    ),
     "biounit_id": "Biological assembly identifier",
     "chain_instance": (
         "Assembly chain instance encoded as <operation>.<label_asym_id>"

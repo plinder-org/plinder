@@ -34,7 +34,7 @@ ligand_asym_id	string	Ligand chain asymmetric id
 ligand_instance	int64	Biounit instance ID
 ligand_ccd_code	string	Ligand Chemical Component Dictionary (CCD) code
 ligand_molecule_type	string	Ligand molecule type derived from the mmCIF entity polymer type: SMALLMOLECULE, PEPTIDE, DNA, RNA, MIXED, SACCHARIDE, MACROCYCLES, or UNKNOWN
-ligand_is_subject_of_investigation	bool	Whether a component of this ligand is a depositor-flagged SUBJECT OF INVESTIGATION (_pdbx_entity_instance_feature); null when absent
+ligand_is_subject_of_investigation	bool	Whether a component of this ligand is a depositor-flagged SUBJECT OF INVESTIGATION (_pdbx_entity_instance_feature); null when the entry lacks the annotation, i.e. most entries deposited before ~2019
 ligand_bird_id	string	BIRD/PRD reference-molecule id (PRD_xxxxxx) for multi-component ligands, from pdbx_molecule
 ligand_smiles	string	Ligand SMILES from CCD lookup or resolved 3D; for composite ligands, the valid representation with more heavy atoms is used and resolved connectivity wins ties
 ligand_resolved_smiles	string	SMILES from resolved 3D coordinates: bond orders from CCD template, stereochemistry from 3D geometry

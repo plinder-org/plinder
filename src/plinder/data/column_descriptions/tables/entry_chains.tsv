@@ -6,6 +6,8 @@ chain_entity_id	string	Chain entity id
 chain_type	string	Raw CIF receptor polymer type
 chain_receptor_type	string	Receptor polymer category: protein, dna, rna, or dna+rna
 chain_sequence	string	Full polymer sequence in one-letter code, keyed by the source asymmetric-chain ID
+chain_sequence_noncanonical	string	Full polymer sequence from _entity_poly.pdbx_seq_one_letter_code, with modified residues as (CCD) tokens
+chain_modified_residues	list<element: string>	Non-canonical SEQRES monomers as {auth_seq}:{mon_id}:{asym}:{label_seq}>{parent} (details), including unresolved positions (auth_seq ?); parent and details from _pdbx_struct_mod_residue, else the CCD parent
 chain_length	int64	SEQRES length
 chain_num_unresolved_residues	int64	Number of unresolved residues (SEQRES length - len(residues))
 chain_is_holo	bool	Whether the chain participates in a holo receptor or is excluded from the apo partition

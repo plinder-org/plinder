@@ -68,6 +68,7 @@ from plinder.data.annotations.protein_utils import (
     detect_ligand_chains,
     detect_ligand_chains_from_cif,
     get_atom_site_author_ids,
+    get_modified_residues,
     get_receptor_type,
 )
 from plinder.data.annotations.save_utils import save_ligands
@@ -844,7 +845,7 @@ class Entry(DocBaseModel):
     )
     has_ligand_of_interest: bool | None = Field(
         default=None,
-        description="Depositor flag _pdbx_entry_details.has_ligand_of_interest (Y true, N false); null when absent",
+        description="Depositor flag _pdbx_entry_details.has_ligand_of_interest (Y true, N false); null when absent, i.e. for most entries deposited before ~2019",
     )
     source_taxonomy_ids: list[int] = Field(
         default_factory=list,
@@ -883,6 +884,10 @@ class Entry(DocBaseModel):
         description="[EXCLUDE] All covalent interactions in the entry as defined by mmcif annotations. They types are separated by dictionary key and they include: "
         + "covale: actual covalent linkage, metalc: other dative bond interactions like metal-ligand dative bond, "
         + "hydrog: strong hydrogen bonding of nucleic acid. For the purpose of covalent annotations, we use only covale for downstream processing.",
+    )
+    chain_to_seqres_noncanonical: dict[str, str] = Field(
+        default_factory=dict,
+        description="[EXCLUDE] entity_poly.pdbx_seq_one_letter_code per asym; modified residues as (CCD)",
     )
     chain_to_seqres: dict[str, str] = Field(
         default_factory=dict,
@@ -1029,6 +1034,9 @@ class Entry(DocBaseModel):
                 }
             )
         auth_id_by_asym, residue_author_ids_by_asym = get_atom_site_author_ids(block)
+        modified_residues_by_asym = get_modified_residues(
+            block, residue_author_ids_by_asym
+        )
         self.chains = {}
         # Chain metadata does not use bonds.  Temporarily detaching the global
         # BondList prevents every small chain slice from scanning and
@@ -1064,6 +1072,7 @@ class Entry(DocBaseModel):
                     auth_id=auth_id_by_asym.get(chain_id),
                     chain_type_str=chain_type,
                     residue_author_ids=residue_author_ids_by_asym.get(chain_id, {}),
+                    modified_residues=modified_residues_by_asym.get(chain_id),
                 )
         finally:
             atoms.bonds = bonds
@@ -1619,6 +1628,9 @@ class Entry(DocBaseModel):
         entry._subject_of_investigation_comp_ids = subject_comp_ids
         entry.covalent_bonds = get_covalent_connections(cif_data)
         entry.chain_to_seqres = get_label_asym_sequences(cif_data)
+        entry.chain_to_seqres_noncanonical = get_label_asym_sequences(
+            cif_data, column="pdbx_seq_one_letter_code"
+        )
         return entry
 
     def _attach_chains(
@@ -2727,6 +2739,8 @@ class Entry(DocBaseModel):
             "chain_type",
             "chain_receptor_type",
             "chain_sequence",
+            "chain_sequence_noncanonical",
+            "chain_modified_residues",
             "chain_length",
             "chain_num_unresolved_residues",
             "chain_is_holo",
@@ -2750,6 +2764,10 @@ class Entry(DocBaseModel):
                     "chain_type": chain.chain_type_str,
                     "chain_receptor_type": get_receptor_type([chain.chain_type_str]),
                     "chain_sequence": self.chain_to_seqres.get(chain.asym_id, ""),
+                    "chain_sequence_noncanonical": (
+                        self.chain_to_seqres_noncanonical.get(chain.asym_id, "")
+                    ),
+                    "chain_modified_residues": list(chain.modified_residues),
                     "chain_length": chain.length,
                     "chain_num_unresolved_residues": chain.num_unresolved_residues,
                     "chain_is_holo": chain.holo,

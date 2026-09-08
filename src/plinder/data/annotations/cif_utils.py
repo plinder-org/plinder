@@ -472,19 +472,24 @@ def get_unit_cell_with_altloc(
     return atoms
 
 
-def get_label_asym_sequences(block: pdbx.CIFBlock) -> dict[str, str]:
+def get_label_asym_sequences(
+    block: pdbx.CIFBlock, column: str = "pdbx_seq_one_letter_code_can"
+) -> dict[str, str]:
     """Extract polymer sequences keyed by label asym ID.
 
     Parameters
     ----------
     block : pdbx.CIFBlock
         Source mmCIF data block.
+    column : str
+        ``entity_poly`` sequence column; the default is the canonical one-letter
+        code, ``pdbx_seq_one_letter_code`` keeps modified residues as ``(CCD)``.
 
     Returns
     -------
     dict[str, str]
-        Canonical one-letter sequence keyed by ``label_asym_id`` (empty when the
-        required categories are absent).
+        Sequence keyed by ``label_asym_id`` (empty when the required categories
+        are absent).
 
     Notes
     -----
@@ -499,14 +504,14 @@ def get_label_asym_sequences(block: pdbx.CIFBlock) -> dict[str, str]:
     entity_poly = block["entity_poly"]
     if not {"id", "entity_id"}.issubset(struct_asym):
         return {}
-    if not {"entity_id", "pdbx_seq_one_letter_code_can"}.issubset(entity_poly):
+    if not {"entity_id", column}.issubset(entity_poly):
         return {}
 
     entity_sequences = {
         str(entity_id): "".join(str(sequence).replace(";", "").split())
         for entity_id, sequence in zip(
             entity_poly["entity_id"].as_array(),
-            entity_poly["pdbx_seq_one_letter_code_can"].as_array(),
+            entity_poly[column].as_array(),
         )
     }
     return {

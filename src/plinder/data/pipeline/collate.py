@@ -183,6 +183,8 @@ ENTRY_CHAIN_SCHEMA = pa.schema(
         ("chain_type", pa.string()),
         ("chain_receptor_type", pa.string()),
         ("chain_sequence", pa.string()),
+        ("chain_sequence_noncanonical", pa.string()),
+        ("chain_modified_residues", pa.list_(pa.string())),
         ("chain_length", pa.int64()),
         ("chain_num_unresolved_residues", pa.int64()),
         ("chain_is_holo", pa.bool_()),

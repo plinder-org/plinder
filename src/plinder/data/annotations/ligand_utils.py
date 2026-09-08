@@ -1061,7 +1061,8 @@ class Ligand(DocBaseModel):
     is_subject_of_investigation: bool | None = Field(
         default=None,
         description="Whether a component of this ligand is a depositor-flagged "
-        "SUBJECT OF INVESTIGATION (_pdbx_entity_instance_feature); null when absent",
+        "SUBJECT OF INVESTIGATION (_pdbx_entity_instance_feature); null when the "
+        "entry lacks the annotation, i.e. most entries deposited before ~2019",
     )
     smiles: str = Field(
         default_factory=str,
