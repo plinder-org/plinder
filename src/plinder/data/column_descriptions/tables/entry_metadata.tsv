@@ -5,7 +5,10 @@ entry_oligomeric_state	string	Author's provided description of quaternary struct
 entry_determination_method	string	RCSB method of structure determination. See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_exptl.method.html
 entry_keywords	string	RCSB keywords describing the structure. See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_struct_keywords.pdbx_keywords.html
 entry_pH	string	pH at which structure is solved. See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_exptl_crystal_grow.pH.html
+entry_pH_min	double	Lowest crystallization pH parsed from _exptl_crystal_grow (pH, pdbx_pH_range, or pdbx_details); null when none parses
+entry_pH_max	double	Highest crystallization pH parsed from _exptl_crystal_grow (pH, pdbx_pH_range, or pdbx_details); null when none parses
 entry_resolution	double	RCSB structure resolution. See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_refine.ls_d_res_high.html
+entry_has_ligand_of_interest	bool	Depositor flag _pdbx_entry_details.has_ligand_of_interest (Y true, N false); null when absent
 entry_source_taxonomy_ids	list<element: int64>	Distinct NCBI taxonomy IDs of the deposited entities' source organisms
 entry_source_organism_names	list<element: string>	Distinct scientific names of the deposited entities' source organisms
 entry_host_taxonomy_ids	list<element: int64>	Distinct NCBI taxonomy IDs of recombinant expression hosts

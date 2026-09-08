@@ -27,8 +27,10 @@ from plinder.data.annotations.cif_utils import (
     build_biounit,
     get_chain_external_mappings,
     get_entry_info,
+    get_entry_ph_range,
     get_entry_taxonomy,
     get_label_asym_sequences,
+    get_ligand_of_interest,
     get_model_count,
     get_structure_with_altloc,
     remove_nonphysical_bonds,
@@ -799,6 +801,10 @@ class System(DocBaseModel):
 
 class Entry(DocBaseModel):
     _ligand_contacts_requested: bool = PrivateAttr(default=False)
+    # SUBJECT OF INVESTIGATION comp_ids; None when the category is absent
+    _subject_of_investigation_comp_ids: frozenset[str] | None = PrivateAttr(
+        default=None
+    )
 
     pdb_id: str = Field(
         default_factory=str,
@@ -824,9 +830,21 @@ class Entry(DocBaseModel):
         default_factory=str,
         description="pH at which structure is solved. See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_exptl_crystal_grow.pH.html",
     )
+    pH_min: float | None = Field(
+        default=None,
+        description="Lowest crystallization pH parsed from _exptl_crystal_grow (pH, pdbx_pH_range, or pdbx_details); null when none parses",
+    )
+    pH_max: float | None = Field(
+        default=None,
+        description="Highest crystallization pH parsed from _exptl_crystal_grow (pH, pdbx_pH_range, or pdbx_details); null when none parses",
+    )
     resolution: float | None = Field(
         default_factory=float,
         description="RCSB structure resolution. See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_refine.ls_d_res_high.html",
+    )
+    has_ligand_of_interest: bool | None = Field(
+        default=None,
+        description="Depositor flag _pdbx_entry_details.has_ligand_of_interest (Y true, N false); null when absent",
     )
     source_taxonomy_ids: list[int] = Field(
         default_factory=list,
@@ -1322,6 +1340,9 @@ class Entry(DocBaseModel):
                 spatial_index=spatial_index,
                 member_residue_numbers=member_residue_numbers,
                 chain_pair_contact_areas=chain_pair_contact_areas,
+                subject_of_investigation_comp_ids=(
+                    self._subject_of_investigation_comp_ids
+                ),
             )
             if ligand is not None:
                 ligands[ligand.id] = ligand
@@ -1592,6 +1613,10 @@ class Entry(DocBaseModel):
             resolution=r,
             **entry_taxonomy,
         )
+        entry.pH_min, entry.pH_max = get_entry_ph_range(cif_data)
+        has_ligand_of_interest, subject_comp_ids = get_ligand_of_interest(cif_data)
+        entry.has_ligand_of_interest = has_ligand_of_interest
+        entry._subject_of_investigation_comp_ids = subject_comp_ids
         entry.covalent_bonds = get_covalent_connections(cif_data)
         entry.chain_to_seqres = get_label_asym_sequences(cif_data)
         return entry
@@ -2674,7 +2699,10 @@ class Entry(DocBaseModel):
             "determination_method",
             "keywords",
             "pH",
+            "pH_min",
+            "pH_max",
             "resolution",
+            "has_ligand_of_interest",
             "source_taxonomy_ids",
             "source_organism_names",
             "host_taxonomy_ids",

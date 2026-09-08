@@ -384,10 +384,11 @@ def test_pinder_1bo0_monomer_has_no_protein_interface(test_dir: Path) -> None:
     [
         ("bd/pdb_00007bdu/pdb_00007bdu_xyz-enrich.cif.gz", 7, 7),
         ("km/pdb_00007kmx/pdb_00007kmx_xyz-enrich.cif.gz", 840, 14),
-        # Pinder's Gemmi path yielded 34 chains here. The deposited assembly
-        # applies four operators to all 13 listed asym IDs, so Plinder's
-        # Biotite path intentionally retains all 52 instances.
-        ("a7/pdb_00002a79/pdb_00002a79_xyz-enrich.cif.gz", 52, 13),
+        # The deposited assembly applies four operators to all 13 asym IDs
+        # (52 raw instances), but the six potassium ions sit on the symmetry
+        # axes and every operator maps them onto themselves; build_biounit
+        # keeps one copy of each, leaving 34 instances (Pinder's Gemmi count).
+        ("a7/pdb_00002a79/pdb_00002a79_xyz-enrich.cif.gz", 34, 13),
         ("rw/pdb_00006rw4/pdb_00006rw4_xyz-enrich.cif.gz", 125, 125),
         ("y2/pdb_00002y26/pdb_00002y26_xyz-enrich.cif.gz", 120, 40),
     ],

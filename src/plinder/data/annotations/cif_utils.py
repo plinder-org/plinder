@@ -729,6 +729,70 @@ def get_legacy_chain_instance_mapping(
     return mapping
 
 
+def drop_self_clashing_symmetry_copies(
+    assembly: struc.AtomArray,
+    *,
+    clash_distance: float = 1.0,
+    clash_ratio: float = 0.5,
+    context: str = "assembly",
+) -> struc.AtomArray:
+    """Drop non-polymer symmetry copies overlapping a lower ``sym_id`` copy.
+
+    Ligands on a symmetry axis expand into coincident copies of one
+    ``label_asym_id``. Copies are visited in ascending ``sym_id``; one is
+    dropped when more than ``clash_ratio`` of its atoms lie within
+    ``clash_distance`` of an already kept copy. Polymers and waters are
+    untouched. Requires the ``sym_id`` and ``label_asym_id`` annotations.
+    """
+    categories = set(assembly.get_annotation_categories())
+    if not {"sym_id", "label_asym_id"}.issubset(categories):
+        return assembly
+    polymer = struc.filter_amino_acids(assembly) | struc.filter_nucleotides(assembly)
+    candidates = (
+        ~polymer
+        & ~struc.filter_solvent(assembly)
+        & np.isfinite(assembly.coord).all(axis=1)
+    )
+    keep = np.ones(assembly.array_length(), dtype=bool)
+    for asym_id in np.unique(assembly.label_asym_id[candidates]):
+        indices = np.flatnonzero(candidates & (assembly.label_asym_id == asym_id))
+        copies = assembly[indices]
+        sym_ids = np.unique(copies.sym_id)
+        if len(sym_ids) < 2:
+            continue
+        cell_list = struc.CellList(copies, cell_size=max(clash_distance, 3.0))
+        kept: list[int] = []
+        dropped: list[tuple[int, float]] = []
+        for sym_id in sorted(int(value) for value in sym_ids):
+            copy_mask = copies.sym_id == sym_id
+            if kept:
+                neighbors = cell_list.get_atoms(
+                    copies.coord[copy_mask], radius=clash_distance
+                )
+                neighbor_syms = np.where(
+                    neighbors >= 0, copies.sym_id[np.clip(neighbors, 0, None)], -1
+                )
+                clashing = np.isin(neighbor_syms, kept).any(axis=1)
+                fraction = float(clashing.mean())
+                if fraction > clash_ratio:
+                    keep[indices[copy_mask]] = False
+                    dropped.append((sym_id, fraction))
+                    continue
+            kept.append(sym_id)
+        if dropped:
+            LOG.info(
+                "%s: dropped %d self-clashing symmetry copies of chain %s "
+                "(sym_id, clash fraction): %s",
+                context,
+                len(dropped),
+                asym_id,
+                [(sym_id, round(fraction, 2)) for sym_id, fraction in dropped],
+            )
+    if keep.all():
+        return assembly
+    return assembly[keep]
+
+
 def build_biounit(
     cif_file: pdbx.CIFFile,
     assembly_id: str,
@@ -763,7 +827,9 @@ def build_biounit(
     Branched entities are renumbered (:func:`_branched_residue_numbering`) before
     building so biotite gives their residues distinct ``res_id`` values, and any
     non-physical bonds biotite's inference still emits are then dropped
-    (:func:`remove_nonphysical_bonds`).
+    (:func:`remove_nonphysical_bonds`).  Non-polymer copies generated on top of
+    each other by a symmetry axis are reduced to one
+    (:func:`drop_self_clashing_symmetry_copies`).
     """
     with _alphabetic_altloc_ids(cif_file), _branched_residue_numbering(cif_file):
         biounit = pdbx.get_assembly(
@@ -776,6 +842,9 @@ def build_biounit(
             extra_fields=["label_asym_id"],
         )
         biounit = biounit[filter_heavy(biounit)]
+        biounit = drop_self_clashing_symmetry_copies(
+            biounit, context=f"assembly {assembly_id}"
+        )
         if biounit.bonds is None:
             raise ValueError(
                 f"assembly {assembly_id}: biotite returned no bonds despite "
@@ -828,6 +897,99 @@ def _iter_category_rows(
         arrays[col] = cat[col].as_array()
     n = len(next(iter(arrays.values())))
     return [{col: arrays[col][i] for col in columns} for i in range(n)]
+
+
+_PH_RANGE_SEPARATOR = re.compile(r"\s*(?:-|–|—|/|\bto\b|\band\b)\s*", re.IGNORECASE)
+_PH_PREFIX = re.compile(r"^p\s*h\s*(?:=|:|of|~)?\s*", re.IGNORECASE)
+_PH_MENTION = re.compile(
+    r"\bp\s*h\s*(?:range\s*)?(?:=|:|of|~)?\s*"
+    r"(\d{1,2}(?:\.\d+)?)(?:\s*(?:-|–|—|/|to)\s*(\d{1,2}(?:\.\d+)?))?",
+    re.IGNORECASE,
+)
+
+
+def _valid_ph(values: list[float]) -> tuple[float, float] | None:
+    in_range = [value for value in values if 0.0 <= value <= 14.0]
+    if not in_range:
+        return None
+    return (min(in_range), max(in_range))
+
+
+def parse_ph_range(text: str | None) -> tuple[float, float] | None:
+    """Parse ``"7.5"``, ``"7.0-8.0"``, ``"pH8.0"`` or ``"6.5 to 7.5"`` into
+    ``(low, high)``; ``None`` for ``?``/``.``, free text, or values outside 0-14."""
+    if text is None:
+        return None
+    value = _PH_PREFIX.sub("", text.strip())
+    if value in {"", ".", "?"}:
+        return None
+    numbers: list[float] = []
+    for part in _PH_RANGE_SEPARATOR.split(value):
+        try:
+            numbers.append(float(part))
+        except ValueError:
+            return None
+    return _valid_ph(numbers)
+
+
+def find_ph_mentions(text: str | None) -> tuple[float, float] | None:
+    """Return ``(low, high)`` over every ``pH <value>[-<value>]`` mention in text."""
+    values: list[float] = []
+    for match in _PH_MENTION.finditer(text or ""):
+        values.extend(float(group) for group in match.groups() if group is not None)
+    return _valid_ph(values)
+
+
+def get_entry_ph_range(block: pdbx.CIFBlock) -> tuple[float | None, float | None]:
+    """Crystallization pH range over ``exptl_crystal_grow`` rows.
+
+    Per row: ``pH``, else ``pdbx_pH_range``, else pH mentions in
+    ``pdbx_details``. Returns ``(None, None)`` when nothing parses.
+    """
+    if "exptl_crystal_grow" not in block:
+        return (None, None)
+    category = block["exptl_crystal_grow"]
+    row_count = category.row_count
+
+    def column(name: str) -> list[str | None]:
+        if name not in category:
+            return [None] * row_count
+        return [str(value) for value in category[name].as_array(str)]
+
+    lows: list[float] = []
+    highs: list[float] = []
+    for ph, ph_range, details in zip(
+        column("pH"), column("pdbx_pH_range"), column("pdbx_details")
+    ):
+        parsed = (
+            parse_ph_range(ph) or parse_ph_range(ph_range) or find_ph_mentions(details)
+        )
+        if parsed is not None:
+            lows.append(parsed[0])
+            highs.append(parsed[1])
+    if not lows:
+        return (None, None)
+    return (min(lows), max(highs))
+
+
+def get_ligand_of_interest(
+    block: pdbx.CIFBlock,
+) -> tuple[bool | None, frozenset[str] | None]:
+    """Return ``has_ligand_of_interest`` (Y/N -> bool, else None) and the
+    ``comp_id`` set flagged SUBJECT OF INVESTIGATION (None when absent)."""
+    flag = _cif_scalar(block, "pdbx_entry_details", "has_ligand_of_interest")
+    has_ligand_of_interest = {"Y": True, "N": False}.get(flag or "")
+    if "pdbx_entity_instance_feature" not in block:
+        return has_ligand_of_interest, None
+    subjects = frozenset(
+        row["comp_id"]
+        for row in _iter_category_rows(
+            block, "pdbx_entity_instance_feature", ["feature_type", "comp_id"]
+        )
+        if row["feature_type"] == "SUBJECT OF INVESTIGATION"
+        and row["comp_id"] not in {"?", "."}
+    )
+    return has_ligand_of_interest, subjects
 
 
 def get_entry_info(data: pdbx.CIFBlock) -> dict[str, str | None]:

@@ -1058,6 +1058,11 @@ class Ligand(DocBaseModel):
         ),
     )
     bird_id: str = Field(default_factory=str, description="Ligand BIRD (PRD) id")
+    is_subject_of_investigation: bool | None = Field(
+        default=None,
+        description="Whether a component of this ligand is a depositor-flagged "
+        "SUBJECT OF INVESTIGATION (_pdbx_entity_instance_feature); null when absent",
+    )
     smiles: str = Field(
         default_factory=str,
         description="Ligand SMILES from CCD lookup (user-supplied SMILES wins for custom CIFs) or resolved 3D; for composite ligands, the valid representation with more heavy atoms is used and resolved connectivity wins ties",
@@ -1422,6 +1427,7 @@ class Ligand(DocBaseModel):
         spatial_index: BiounitSpatialIndex | None = None,
         member_residue_numbers: dict[str, list[int]] | None = None,
         chain_pair_contact_areas: ty.Mapping[tuple[str, str], float] | None = None,
+        subject_of_investigation_comp_ids: ty.Collection[str] | None = None,
     ) -> Ligand | None:
         """Build a Ligand from a biounit AtomArray and chain metadata.
 
@@ -1486,6 +1492,9 @@ class Ligand(DocBaseModel):
             given, ``chain_contact_areas`` and ``contact_area`` are filled from
             the pairs involving the ligand's member chains; otherwise both stay
             unset (``None`` / empty).
+        subject_of_investigation_comp_ids : Collection[str] | None
+            Depositor-flagged SUBJECT OF INVESTIGATION comp_ids; ``None`` leaves
+            ``is_subject_of_investigation`` null.
 
         Returns
         -------
@@ -1716,6 +1725,14 @@ class Ligand(DocBaseModel):
             ccd_code=ccd_code,
             molecule_type=get_molecule_type(ligand_chain.chain_type_str),
             bird_id=bird_id,
+            is_subject_of_investigation=(
+                None
+                if subject_of_investigation_comp_ids is None
+                else any(
+                    component_id in subject_of_investigation_comp_ids
+                    for component_id in residue_component_ids
+                )
+            ),
             smiles=smiles or "",
             neighboring_residue_threshold=neighboring_residue_threshold,
             neighboring_ligand_threshold=neighboring_ligand_threshold,
