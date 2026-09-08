@@ -1012,7 +1012,7 @@ def make_ligand_pocket_representatives(
     if not force_update and current is not None:
         LOG.info(
             "make_ligand_pocket_representatives: reusing %d representatives "
-            "for %d scoreable ligands",
+            "for %d shape-comparable ligands",
             current["representative_ligand_count"],
             current["ligand_count"],
         )
@@ -1053,8 +1053,8 @@ def make_ligand_pocket_representatives(
                 system_id,
                 ligand_id,
                 ligand_asym_id,
-                coalesce(ligand_is_3d_score_able, false)
-                    AS ligand_is_3d_score_able,
+                coalesce(ligand_is_shape_comparable, false)
+                    AS ligand_is_shape_comparable,
                 ligand_protein_chains_asym_id,
                 ligand_neighboring_residues,
                 ligand_interacting_residues,
@@ -1120,7 +1120,7 @@ def make_ligand_pocket_representatives(
                 ligands.system_id,
                 ligands.ligand_id,
                 ligands.ligand_asym_id,
-                ligands.ligand_is_3d_score_able,
+                ligands.ligand_is_shape_comparable,
                 receptors.receptor_set_id,
                 receptors.receptor_chain_asym_ids,
                 coalesce(pockets.pocket_residues, []::VARCHAR[])
@@ -1138,7 +1138,7 @@ def make_ligand_pocket_representatives(
                 arg_min(system_id, ligand_id)::VARCHAR AS representative_system_id,
                 entry_pdb_id,
                 ligand_asym_id,
-                ligand_is_3d_score_able,
+                ligand_is_shape_comparable,
                 receptor_set_id,
                 receptor_chain_asym_ids,
                 pocket_residues,
@@ -1147,7 +1147,7 @@ def make_ligand_pocket_representatives(
             GROUP BY
                 entry_pdb_id,
                 ligand_asym_id,
-                ligand_is_3d_score_able,
+                ligand_is_shape_comparable,
                 receptor_set_id,
                 receptor_chain_asym_ids,
                 pocket_residues,
@@ -1170,8 +1170,8 @@ def make_ligand_pocket_representatives(
                 INNER JOIN representative_groups AS representatives
                   ON ligands.entry_pdb_id = representatives.entry_pdb_id
                  AND ligands.ligand_asym_id = representatives.ligand_asym_id
-                 AND ligands.ligand_is_3d_score_able
-                        = representatives.ligand_is_3d_score_able
+                 AND ligands.ligand_is_shape_comparable
+                        = representatives.ligand_is_shape_comparable
                  AND ligands.receptor_set_id = representatives.receptor_set_id
                  AND ligands.receptor_chain_asym_ids
                         = representatives.receptor_chain_asym_ids

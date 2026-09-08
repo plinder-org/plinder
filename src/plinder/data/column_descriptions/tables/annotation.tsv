@@ -111,7 +111,7 @@ system_ligand_has_ion	bool	Whether the system has an ion
 system_protein_chains_total_length	int64	Total length of all receptor polymer chains in the system
 system_unique_ccd_codes	string	Distinct ligand CCD codes in the system
 system_proper_unique_ccd_codes	string	Distinct CCD codes of proper ligands in the system
-ligand_is_3d_score_able	bool	Whether the canonical ligand SDF supports finite shape, color, and SuCOS self-scoring
+ligand_is_shape_comparable	bool	Whether the canonical ligand SDF supports finite shape, color, and SuCOS self-scoring
 ligand_interacting_ligand_chains_asym_id	list<element: string>	Chain asymmetric id
 system_pocket_SCOP2	string	Most frequent SCOP2 mapping among pocket residues
 ligand__members	struct<1.C: list<element: int64>, 1.D: list<element: int64>, 1.E: list<element: int64>, 1.F: list<element: int64>, 1.H: list<element: int64>, 1.I: list<element: int64>, 1.J: list<element: int64>, 1.K: list<element: int64>>	Residue numbers per member instance-chain (self, incl. covalent).          Falls back to the single primary chain for ligands built before         ``member_residue_numbers`` was populated.

@@ -1218,7 +1218,7 @@ def test_ligand_covers_are_merged_without_system_projection(tmp_path):
     pd.DataFrame(
         {
             "ligand_id": annotation["ligand_id"],
-            "ligand_is_3d_score_able": [True, True, False, True, False],
+            "ligand_is_shape_comparable": [True, True, False, True, False],
         }
     ).to_parquet(ligand_dir / "part.parquet", index=False)
 
@@ -1255,7 +1255,7 @@ def test_ligand_covers_are_merged_without_system_projection(tmp_path):
     assert bool(finalized_centroids[ligand_a1])
     assert not bool(finalized_centroids[ligand_b])
     assert not bool(
-        finalized.set_index("ligand_id").loc[ligand_b, "ligand_is_3d_score_able"]
+        finalized.set_index("ligand_id").loc[ligand_b, "ligand_is_shape_comparable"]
     )
 
 
@@ -1281,7 +1281,7 @@ def test_finalize_index_rejects_stale_ligand_cover_universe(tmp_path):
     pd.DataFrame(
         {
             "ligand_id": ["l1", "l2"],
-            "ligand_is_3d_score_able": [True, True],
+            "ligand_is_shape_comparable": [True, True],
         }
     ).to_parquet(ligand_dir / "part.parquet", index=False)
     pd.DataFrame(
@@ -1336,7 +1336,7 @@ def test_finalize_index_rejects_clusters_from_before_targeted_repair(tmp_path):
     pd.DataFrame(
         {
             "ligand_id": ["l1"],
-            "ligand_is_3d_score_able": [True],
+            "ligand_is_shape_comparable": [True],
         }
     ).to_parquet(ligand_dir / "part.parquet", index=False)
     directed_cover = (

@@ -245,7 +245,7 @@ def test_ingest_one_pdb_writes_entry_outputs_and_metrics(
     ) -> None:
         assert data_dir == output_root.resolve()
         assert len(annotation) == 1
-        annotation[["ligand_id"]].assign(ligand_is_3d_score_able=True).to_parquet(
+        annotation[["ligand_id"]].assign(ligand_is_shape_comparable=True).to_parquet(
             output_path, index=False
         )
 
@@ -590,7 +590,7 @@ def test_ligand_mode_skips_interfaces_and_preserves_interface_assets(
     ) -> None:
         del data_dir, annotation
         pd.DataFrame(
-            {"ligand_id": ["8grn__1.C"], "ligand_is_3d_score_able": [True]}
+            {"ligand_id": ["8grn__1.C"], "ligand_is_shape_comparable": [True]}
         ).to_parquet(output_path, index=False)
 
     monkeypatch.setattr(ingest, "_get_annotation_class", lambda: LigandAnnotation)
@@ -719,7 +719,7 @@ def test_ingest_one_pdb_retries_partial_outputs_without_force(
     def fake_save_ligand_batch(
         *, data_dir: Path, annotation: pd.DataFrame, output_path: Path
     ) -> None:
-        annotation[["ligand_id"]].assign(ligand_is_3d_score_able=True).to_parquet(
+        annotation[["ligand_id"]].assign(ligand_is_shape_comparable=True).to_parquet(
             output_path, index=False
         )
 
@@ -852,7 +852,7 @@ def test_batch_continues_after_failure_and_resumes_completed_entries(
         )
         _write_fake_sidecars(entry_directory, pdb_id)
         pd.DataFrame(
-            {"ligand_id": [f"{pdb_id}__1.L"], "ligand_is_3d_score_able": [True]}
+            {"ligand_id": [f"{pdb_id}__1.L"], "ligand_is_shape_comparable": [True]}
         ).to_parquet(ligand_path, index=False)
         metrics_path.write_text(
             json.dumps(
@@ -966,7 +966,7 @@ def test_completed_entry_metrics_invalidates_interface_cutoff_changes(
     )
     _write_fake_sidecars(entry_directory, "1abc")
     pd.DataFrame(
-        {"ligand_id": ["1abc__1.L"], "ligand_is_3d_score_able": [True]}
+        {"ligand_id": ["1abc__1.L"], "ligand_is_shape_comparable": [True]}
     ).to_parquet(ligand_path, index=False)
     metrics_path.write_text(
         json.dumps(

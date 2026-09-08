@@ -256,7 +256,7 @@ def _entry_outputs_complete(
         required_columns.update(
             {
                 entry_parquet: {"system_receptor_type"},
-                ligand_parquet: {"ligand_id", "ligand_is_3d_score_able"},
+                ligand_parquet: {"ligand_id", "ligand_is_shape_comparable"},
             }
         )
     try:

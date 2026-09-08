@@ -995,41 +995,43 @@ def add_ligand_similarity_columns(
 def add_ligand_3d_score_ability_column(
     *, index: pd.DataFrame, data_dir: Path
 ) -> pd.DataFrame:
-    """Merge occurrence-level canonical-SDF scoreability into the index."""
+    """Merge occurrence-level canonical-SDF shape-comparability into the index."""
     expected = index["ligand_id"].notna()
     if "system_type" in index:
         expected &= index["system_type"].eq("holo")
     if "ligand_is_proper" in index:
         expected &= index["ligand_is_proper"].fillna(False)
-    scoreability_column = "ligand_is_3d_score_able"
+    comparability_column = "ligand_is_shape_comparable"
     if (
-        scoreability_column in index
-        and not index.loc[expected, scoreability_column].isna().any()
+        comparability_column in index
+        and not index.loc[expected, comparability_column].isna().any()
     ):
-        abilities = index.loc[
-            index["ligand_id"].notna(), ["ligand_id", scoreability_column]
+        comparabilities = index.loc[
+            index["ligand_id"].notna(), ["ligand_id", comparability_column]
         ].drop_duplicates()
-        conflicts = abilities.groupby("ligand_id")[scoreability_column].nunique()
+        conflicts = comparabilities.groupby("ligand_id")[comparability_column].nunique()
         if (conflicts > 1).any():
-            raise ValueError("conflicting 3D-scoreability annotations for a ligand")
+            raise ValueError("conflicting shape-comparability annotations for a ligand")
         result = index.copy()
-        result.loc[~expected, scoreability_column] = False
-        result[scoreability_column] = result[scoreability_column].astype("boolean")
+        result.loc[~expected, comparability_column] = False
+        result[comparability_column] = result[comparability_column].astype("boolean")
         return result
 
     ligand_dataset = data_dir / "ligands"
     if not ligand_dataset.is_dir():
         raise FileNotFoundError(f"missing ligand annotation dataset: {ligand_dataset}")
-    abilities = pd.read_parquet(
+    comparabilities = pd.read_parquet(
         ligand_dataset,
-        columns=["ligand_id", "ligand_is_3d_score_able"],
+        columns=["ligand_id", "ligand_is_shape_comparable"],
     ).drop_duplicates()
-    conflicts = abilities.groupby("ligand_id")["ligand_is_3d_score_able"].nunique()
+    conflicts = comparabilities.groupby("ligand_id")[
+        "ligand_is_shape_comparable"
+    ].nunique()
     if (conflicts > 1).any():
-        raise ValueError("conflicting 3D-scoreability annotations for a ligand")
-    abilities = abilities.drop_duplicates(subset=["ligand_id"])
-    result = index.drop(columns=["ligand_is_3d_score_able"], errors="ignore").merge(
-        abilities,
+        raise ValueError("conflicting shape-comparability annotations for a ligand")
+    comparabilities = comparabilities.drop_duplicates(subset=["ligand_id"])
+    result = index.drop(columns=["ligand_is_shape_comparable"], errors="ignore").merge(
+        comparabilities,
         on="ligand_id",
         how="left",
         validate="many_to_one",
@@ -1039,17 +1041,19 @@ def add_ligand_3d_score_ability_column(
         expected &= result["system_type"].eq("holo")
     if "ligand_is_proper" in result:
         expected &= result["ligand_is_proper"].fillna(False)
-    if result.loc[expected, "ligand_is_3d_score_able"].isna().any():
-        raise ValueError("some proper holo ligands lack a 3D-scoreability annotation")
-    result.loc[~expected, "ligand_is_3d_score_able"] = False
-    result["ligand_is_3d_score_able"] = result["ligand_is_3d_score_able"].astype(
+    if result.loc[expected, "ligand_is_shape_comparable"].isna().any():
+        raise ValueError(
+            "some proper holo ligands lack a shape-comparability annotation"
+        )
+    result.loc[~expected, "ligand_is_shape_comparable"] = False
+    result["ligand_is_shape_comparable"] = result["ligand_is_shape_comparable"].astype(
         "boolean"
     )
     return result
 
 
 def update_index_ligand_3d_score_ability(*, data_dir: Path) -> None:
-    """Publish distributed 3D-scoreability annotations before protein scoring."""
+    """Publish distributed shape-comparability annotations before protein scoring."""
     index_path = data_dir / "index" / "annotation_table.parquet"
     index = pd.read_parquet(index_path)
     add_ligand_3d_score_ability_column(index=index, data_dir=data_dir).to_parquet(
@@ -1163,7 +1167,7 @@ def finalize_index(*, data_dir: Path) -> pd.DataFrame:
     index.drop(columns=["uniqueness"], errors="ignore", inplace=True)
     LOG.info("loaded annotation index: rows=%d columns=%d", *index.shape)
     index = add_ligand_3d_score_ability_column(index=index, data_dir=data_dir)
-    LOG.info("merged ligand 3D-scoreability annotations")
+    LOG.info("merged ligand shape-comparability annotations")
     index = add_ligand_similarity_columns(index=index, data_dir=data_dir)
     LOG.info("merged ligand similarity annotations")
     ligand_clusters = build_ligand_cluster_table(index=index, data_dir=data_dir)

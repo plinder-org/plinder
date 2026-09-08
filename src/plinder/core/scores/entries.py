@@ -64,7 +64,7 @@ class LigandView:
     num_pocket_residues: int
     num_interactions: int
     num_unique_interactions: int
-    is_3d_score_able: bool = True
+    is_shape_comparable: bool = True
     # receptor instance_chain -> {residue_number: residue_index}
     pocket_residue_number_to_index: dict[str, dict[int, int]] = field(
         default_factory=dict
@@ -355,12 +355,12 @@ def _make_ligand_view(
         for residues in interactions.values()
         for counter in residues.values()
     )
-    if "ligand_is_3d_score_able" in row:
-        score_ability = row["ligand_is_3d_score_able"]
-        is_3d_score_able = False if pd.isna(score_ability) else bool(score_ability)
+    if "ligand_is_shape_comparable" in row:
+        comparability = row["ligand_is_shape_comparable"]
+        is_shape_comparable = False if pd.isna(comparability) else bool(comparability)
     else:
         # V2 indexes predate this annotation; retain their runtime behavior.
-        is_3d_score_able = True
+        is_shape_comparable = True
     return LigandView(
         id=ligand_id,
         pdb_id=pdb_id,
@@ -372,7 +372,7 @@ def _make_ligand_view(
         num_pocket_residues=num_pocket_residues,
         num_interactions=num_interactions,
         num_unique_interactions=num_unique_interactions,
-        is_3d_score_able=is_3d_score_able,
+        is_shape_comparable=is_shape_comparable,
         pocket_residue_number_to_index={k: dict(v) for k, v in pocket_n2i.items()},
         interactions_counter={
             k: {r: Counter(c) for r, c in v.items()} for k, v in interactions.items()

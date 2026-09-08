@@ -200,7 +200,7 @@ DERIVED_COLUMN_DESCRIPTIONS = {
     "system_proper_unique_ccd_codes": (
         "Distinct CCD codes of proper ligands in the system"
     ),
-    "ligand_is_3d_score_able": (
+    "ligand_is_shape_comparable": (
         "Whether the canonical ligand SDF supports finite shape, color, and "
         "SuCOS self-scoring"
     ),
