@@ -128,6 +128,50 @@ def get_modified_residues(
     return modified
 
 
+def get_unobserved_atoms(
+    block: pdbx.CIFBlock,
+) -> (
+    tuple[dict[str, dict[int, list[str]]], dict[str, list[tuple[str, str, str]]]] | None
+):
+    """Model-1 rows of ``pdbx_unobs_or_zero_occ_atoms``, or ``None`` when absent.
+
+    Returns ``(asym -> label_seq_id -> atom names)`` for polymer residues and
+    ``(asym -> [(comp_id, auth_seq_id, atom name)])`` for every row.
+    """
+    from plinder.data.annotations.cif_utils import _iter_category_rows
+
+    if "pdbx_unobs_or_zero_occ_atoms" not in block:
+        return None
+    by_residue: dict[str, dict[int, list[str]]] = {}
+    by_chain: dict[str, list[tuple[str, str, str]]] = {}
+    for row in _iter_category_rows(
+        block,
+        "pdbx_unobs_or_zero_occ_atoms",
+        [
+            "PDB_model_num",
+            "label_asym_id",
+            "label_comp_id",
+            "label_seq_id",
+            "auth_seq_id",
+            "label_atom_id",
+        ],
+    ):
+        if row["PDB_model_num"] not in {"1", "?", "."}:
+            continue
+        asym_id = row["label_asym_id"]
+        by_chain.setdefault(asym_id, []).append(
+            (row["label_comp_id"], row["auth_seq_id"], row["label_atom_id"])
+        )
+        try:
+            number = int(row["label_seq_id"])
+        except ValueError:
+            continue
+        by_residue.setdefault(asym_id, {}).setdefault(number, []).append(
+            row["label_atom_id"]
+        )
+    return by_residue, by_chain
+
+
 def _get_chain_type_from_cif(block: pdbx.CIFBlock, entity_id: str) -> str:
     """Get chain type string from CIF entity/entity_poly categories."""
     # Try _entity_poly.type first
@@ -450,6 +494,10 @@ class Residue(DocBaseModel):
         exclude=True,
         description="[EXCLUDE] Deposited alternate conformer selected for this residue",
     )
+    unresolved_atom_names: list[str] = Field(
+        default_factory=list,
+        description="[EXCLUDE] Heavy atoms missing from the model (wwPDB unobserved-atom records, else CCD template minus resolved atoms)",
+    )
     """Single residue in a polymer chain.
 
     Parameters
@@ -521,6 +569,7 @@ class Chain(DocBaseModel):
         chain_type_str: str | None = None,
         residue_author_ids: Mapping[int, tuple[str, str]] | None = None,
         modified_residues: list[str] | None = None,
+        unresolved_atoms: Mapping[int, list[str]] | None = None,
     ) -> "Chain":
         """Create Chain from biotite CIF data.
 
@@ -543,9 +592,14 @@ class Chain(DocBaseModel):
             mapping for this label-asym chain.
         modified_residues : list[str], optional
             Pre-indexed :func:`get_modified_residues` entries for this chain.
+        unresolved_atoms : mapping, optional
+            ``label_seq_id -> atom names`` from the wwPDB unobserved-atom records;
+            ``None`` derives them from the CCD template of each residue instead.
         """
         import biotite.structure as struc
         import biotite.structure.info as info
+
+        from plinder.data.annotations.cif_utils import unresolved_atoms_from_template
 
         if auth_id is None or residue_author_ids is None:
             chain_auth_ids, author_residues_by_chain = get_atom_site_author_ids(block)
@@ -594,6 +648,15 @@ class Chain(DocBaseModel):
                 )
             else:
                 chem_type = "Non-Polymer"
+            if unresolved_atoms is not None:
+                unresolved = list(unresolved_atoms.get(resnum, []))
+            else:
+                unresolved = (
+                    unresolved_atoms_from_template(
+                        resname, atoms.atom_name[start:stop].tolist()
+                    )
+                    or []
+                )
             residues[resnum] = Residue(
                 chain=asym_id,
                 index=idx,
@@ -604,6 +667,7 @@ class Chain(DocBaseModel):
                 name=resname,
                 chem_type=chem_type,
                 selected_altcode=selected_altcode,
+                unresolved_atom_names=unresolved,
             )
 
         # Get entity_id from _struct_asym

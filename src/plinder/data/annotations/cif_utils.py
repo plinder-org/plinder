@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 import re
 from collections import defaultdict
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from functools import cache
 from math import prod
@@ -1407,6 +1407,41 @@ def _get_cif_bond_comp_ids(block: pdbx.CIFBlock) -> set[str]:
     if "chem_comp_bond" not in block:
         return set()
     return set(block["chem_comp_bond"]["comp_id"].as_array())
+
+
+@cache
+def ccd_heavy_atom_names(comp_id: str) -> tuple[frozenset[str], frozenset[str]] | None:
+    """Heavy atom names and leaving-group atom names of a CCD component."""
+    from biotite.structure.info import ccd as bundled_ccd
+
+    try:
+        chem_comp_atom = bundled_ccd.get_ccd()["chem_comp_atom"]
+    except Exception as exc:
+        LOG.warning(f"CCD atom table unavailable: {exc}")
+        return None
+    mask = chem_comp_atom["comp_id"].as_array(str) == comp_id
+    if not mask.any():
+        return None
+    names = chem_comp_atom["atom_id"].as_array(str)[mask]
+    elements = chem_comp_atom["type_symbol"].as_array(str)[mask]
+    leaving = chem_comp_atom["pdbx_leaving_atom_flag"].as_array(str)[mask] == "Y"
+    heavy = ~np.isin(elements, ["H", "D"])
+    return frozenset(names[heavy]), frozenset(names[leaving])
+
+
+def unresolved_atoms_from_template(
+    comp_id: str, resolved_atom_names: Iterable[str]
+) -> list[str] | None:
+    """CCD heavy atoms (leaving groups excluded) absent from ``resolved_atom_names``.
+
+    Returns ``None`` when ``comp_id`` is not in the CCD.
+    """
+    template = ccd_heavy_atom_names(comp_id)
+    if template is None:
+        return None
+    heavy, leaving = template
+    resolved = set(resolved_atom_names)
+    return sorted(heavy - leaving - resolved)
 
 
 def _is_known_compound(comp_id: str, atom_names: set[str] | None = None) -> bool:

@@ -70,6 +70,7 @@ from plinder.data.annotations.protein_utils import (
     get_atom_site_author_ids,
     get_modified_residues,
     get_receptor_type,
+    get_unobserved_atoms,
 )
 from plinder.data.annotations.save_utils import save_ligands
 from plinder.data.annotations.utils import (
@@ -806,6 +807,10 @@ class Entry(DocBaseModel):
     _subject_of_investigation_comp_ids: frozenset[str] | None = PrivateAttr(
         default=None
     )
+    # asym -> (comp_id, auth_seq_id, atom) unobserved-atom records; None when absent
+    _unobserved_atom_records: (
+        dict[str, list[tuple[str, str, str]]] | None
+    ) = PrivateAttr(default=None)
 
     pdb_id: str = Field(
         default_factory=str,
@@ -1037,6 +1042,8 @@ class Entry(DocBaseModel):
         modified_residues_by_asym = get_modified_residues(
             block, residue_author_ids_by_asym
         )
+        unobserved = get_unobserved_atoms(block)
+        self._unobserved_atom_records = None if unobserved is None else unobserved[1]
         self.chains = {}
         # Chain metadata does not use bonds.  Temporarily detaching the global
         # BondList prevents every small chain slice from scanning and
@@ -1073,6 +1080,9 @@ class Entry(DocBaseModel):
                     chain_type_str=chain_type,
                     residue_author_ids=residue_author_ids_by_asym.get(chain_id, {}),
                     modified_residues=modified_residues_by_asym.get(chain_id),
+                    unresolved_atoms=(
+                        None if unobserved is None else unobserved[0].get(chain_id, {})
+                    ),
                 )
         finally:
             atoms.bonds = bonds
@@ -1352,6 +1362,7 @@ class Entry(DocBaseModel):
                 subject_of_investigation_comp_ids=(
                     self._subject_of_investigation_comp_ids
                 ),
+                unobserved_atoms=self._unobserved_atom_records,
             )
             if ligand is not None:
                 ligands[ligand.id] = ligand

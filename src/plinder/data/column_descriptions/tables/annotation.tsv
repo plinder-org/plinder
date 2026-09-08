@@ -49,7 +49,8 @@ ligand_num_heavy_atoms	int64	Number of heavy atoms
 ligand_is_covalent	bool	Indicator of whether a ligand  is a covalent ligand
 ligand_covalent_linkages	list<element: string>	Ligand covalent linkages from _struct_conn (conn_type_id='covale'), format: {auth_seq}:{comp_id}:{chain}:{seq}:{atom}__{auth_seq}:{comp_id}:{chain}:{seq}:{atom}
 ligand_num_resolved_heavy_atoms	int64	Number of resolved heavy atoms in a ligand
-ligand_num_unresolved_heavy_atoms	double	Number of unresolved heavy atoms in a ligand
+ligand_num_unresolved_heavy_atoms	double	Number of unresolved heavy atoms in a ligand: wwPDB unobserved-atom records, else CCD template minus resolved atoms, else reference SMILES count minus resolved atoms
+ligand_unresolved_atoms	list<element: string>	Heavy atoms missing from the ligand model as {asym}:{comp_id}:{residue}:{atom}; residue is auth_seq_id from wwPDB unobserved-atom records, or the model residue number when derived from the CCD template; CCD leaving atoms excluded
 ligand_tpsa	double	Topological polar surface area
 ligand_qed	double	Ligand QED score, a measure of drug-likeness, see https://www.rdkit.org/new_docs/source/rdkit.Chem.QED.html
 ligand_is_ion	bool	Indicator of whether a ligand  is an ion
@@ -90,6 +91,7 @@ ligand_contact_area	double	Voronota-LT contact area in square angstroms between 
 ligand_contact_area_chains	list<element: string>	Instance chains in Voronota-LT contact with the ligand, receptor and ligand chains alike, positionally aligned with ligand_contact_area_values
 ligand_contact_area_values	list<element: double>	Voronota-LT contact area in square angstroms between the ligand and each chain in ligand_contact_area_chains
 ligand_neighboring_residues	list<element: string>	Dictionary of neighboring residues, with {instance}.{chain} key and residue number value
+ligand_pocket_unresolved_atoms	list<element: string>	Heavy atoms missing from pocket residues as {instance}.{asym}_{residue_number}_{atom}
 system_pocket_CATH	string	Most frequent CATH mapping among pocket residues
 system_pocket_SCOP2B	string	Most frequent SCOP2B mapping among pocket residues
 system_pocket_Pfam	string	Most frequent Pfam mapping among pocket residues

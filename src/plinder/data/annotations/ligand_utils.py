@@ -728,6 +728,53 @@ def _reference_smiles(codes: set[str]) -> set[str]:
     return smiles
 
 
+def _ligand_unresolved_atoms(
+    lig_heavy: "struc.AtomArray",
+    member_asym_ids: set[str],
+    unobserved_atoms: ty.Mapping[str, list[tuple[str, str, str]]] | None,
+    ccd_code_dict: dict[str, str] | None,
+) -> list[str] | None:
+    """Missing heavy atoms as ``{asym}:{comp_id}:{residue}:{atom}``.
+
+    From the wwPDB unobserved-atom records when the entry has them (residue is
+    ``auth_seq_id``), else from the CCD template of every ligand residue (model
+    residue number). ``None`` when neither source covers the ligand. Leaving
+    atoms are never reported.
+    """
+    from plinder.data.annotations.cif_utils import (
+        ccd_heavy_atom_names,
+        unresolved_atoms_from_template,
+    )
+
+    if unobserved_atoms is not None:
+        entries = []
+        for asym_id in sorted(member_asym_ids):
+            for comp_id, auth_seq_id, atom_name in unobserved_atoms.get(asym_id, []):
+                template = ccd_heavy_atom_names(comp_id)
+                if template is not None:
+                    heavy, leaving = template
+                    if atom_name in leaving or atom_name not in heavy:
+                        continue
+                entries.append(f"{asym_id}:{comp_id}:{auth_seq_id}:{atom_name}")
+        return entries
+    residues: dict[tuple[str, int, str], list[str]] = {}
+    for chain_id, res_id, res_name, atom_name in zip(
+        lig_heavy.chain_id, lig_heavy.res_id, lig_heavy.res_name, lig_heavy.atom_name
+    ):
+        residues.setdefault((str(chain_id), int(res_id), str(res_name)), []).append(
+            str(atom_name)
+        )
+    entries = []
+    for (chain_id, res_id, res_name), names in residues.items():
+        reference = (ccd_code_dict or {}).get(res_name, res_name)
+        missing = unresolved_atoms_from_template(reference, names)
+        if missing is None:
+            return None
+        asym_id = chain_id.split(".")[-1]
+        entries.extend(f"{asym_id}:{res_name}:{res_id}:{atom}" for atom in missing)
+    return entries
+
+
 def get_molecule_type(chain_type_str: str) -> str:
     """Collapse an mmCIF entity polymer type into the ligand molecule type."""
     ct = chain_type_str.lower()
@@ -1208,6 +1255,12 @@ class Ligand(DocBaseModel):
                 "Voronota-LT contact area in square angstroms between the ligand "
                 "and each chain in ligand_contact_area_chains",
             ),
+            (
+                "pocket_unresolved_atoms",
+                "list[str]",
+                "Heavy atoms missing from pocket residues as "
+                "{instance}.{asym}_{residue_number}_{atom}",
+            ),
         )
         for suffix, dtype, description in custom_columns:
             yield f"{prefix}_{suffix}", dtype, description
@@ -1224,7 +1277,16 @@ class Ligand(DocBaseModel):
         default=None, description="Number of resolved heavy atoms in a ligand"
     )
     num_unresolved_heavy_atoms: int | None = Field(
-        default=None, description="Number of unresolved heavy atoms in a ligand"
+        default=None,
+        description="Number of unresolved heavy atoms in a ligand: wwPDB unobserved-atom "
+        "records, else CCD template minus resolved atoms, else reference SMILES count "
+        "minus resolved atoms",
+    )
+    unresolved_atoms: list[str] = Field(
+        default_factory=list,
+        description="Heavy atoms missing from the ligand model as {asym}:{comp_id}:{residue}:{atom}; "
+        "residue is auth_seq_id from wwPDB unobserved-atom records, or the model residue "
+        "number when derived from the CCD template; CCD leaving atoms excluded",
     )
     tpsa: float | None = Field(
         default=None, description="Topological polar surface area"
@@ -1328,7 +1390,12 @@ class Ligand(DocBaseModel):
                 # resolved representation, so keep the heavy-atom count (set at
                 # construction from the reference SMILES) in step with it.
                 self.num_heavy_atoms = descriptors["num_heavy_atoms"]
-                if self.num_heavy_atoms and self.num_resolved_heavy_atoms:
+                if (
+                    not self.unresolved_atoms
+                    and self.num_unresolved_heavy_atoms is None
+                    and self.num_heavy_atoms
+                    and self.num_resolved_heavy_atoms
+                ):
                     self.num_unresolved_heavy_atoms = (
                         self.num_heavy_atoms - self.num_resolved_heavy_atoms
                     )
@@ -1429,6 +1496,7 @@ class Ligand(DocBaseModel):
         member_residue_numbers: dict[str, list[int]] | None = None,
         chain_pair_contact_areas: ty.Mapping[tuple[str, str], float] | None = None,
         subject_of_investigation_comp_ids: ty.Collection[str] | None = None,
+        unobserved_atoms: ty.Mapping[str, list[tuple[str, str, str]]] | None = None,
     ) -> Ligand | None:
         """Build a Ligand from a biounit AtomArray and chain metadata.
 
@@ -1496,6 +1564,9 @@ class Ligand(DocBaseModel):
         subject_of_investigation_comp_ids : Collection[str] | None
             Depositor-flagged SUBJECT OF INVESTIGATION comp_ids; ``None`` leaves
             ``is_subject_of_investigation`` null.
+        unobserved_atoms : Mapping[str, list[tuple[str, str, str]]] | None
+            wwPDB unobserved-atom records per asym; ``None`` falls back to the
+            CCD template diff, then to the reference SMILES count.
 
         Returns
         -------
@@ -1710,11 +1781,17 @@ class Ligand(DocBaseModel):
             if reference_descriptors is not None
             else None
         )
-        num_unresolved_heavy_atoms = (
-            num_heavy_atoms - num_resolved_heavy_atoms
-            if num_heavy_atoms and num_resolved_heavy_atoms
-            else None
+        unresolved_atoms = _ligand_unresolved_atoms(
+            lig_heavy, member_asym_ids, unobserved_atoms, ligand_ccd_code_dict
         )
+        if unresolved_atoms is not None:
+            num_unresolved_heavy_atoms: int | None = len(unresolved_atoms)
+        else:
+            num_unresolved_heavy_atoms = (
+                num_heavy_atoms - num_resolved_heavy_atoms
+                if num_heavy_atoms and num_resolved_heavy_atoms
+                else None
+            )
         # BIRD/PRD id straight from the enriched CIF: the mapping key is the PRD
         # code (see cif_utils BIRD parse), a single canonical id for the ligand.
         bird_id = next(iter(ligand_chain.mappings.get("BIRD", {})), "")
@@ -1742,6 +1819,7 @@ class Ligand(DocBaseModel):
             num_heavy_atoms=num_heavy_atoms,
             num_resolved_heavy_atoms=num_resolved_heavy_atoms,
             num_unresolved_heavy_atoms=num_unresolved_heavy_atoms,
+            unresolved_atoms=unresolved_atoms or [],
             residue_numbers=residue_numbers,
             member_residue_numbers=member_residue_numbers,
         )
@@ -2316,6 +2394,14 @@ class Ligand(DocBaseModel):
         # contact areas: one chain list and one aligned area list
         data["ligand_contact_area_chains"] = list(self.chain_contact_areas)
         data["ligand_contact_area_values"] = list(self.chain_contact_areas.values())
+        data["ligand_pocket_unresolved_atoms"] = sorted(
+            f"{instance_chain}_{residue_number}_{atom_name}"
+            for instance_chain, residue_numbers in self.neighboring_residues.items()
+            for residue_number in residue_numbers
+            for atom_name in chains[instance_chain.split(".")[-1]]
+            .residues[residue_number]
+            .unresolved_atom_names
+        )
         # chains
         data.update(
             {"ligand_auth_id": chains[self.asym_id].auth_id}
