@@ -408,18 +408,16 @@ def extract_ligand_links_to_neighbouring_chains(
             if len(chains) == 1:
                 # remove linkages that are to the same chain!
                 continue
-            if set(chains).intersection(ligand_asym_id):
-                # only if ligand is involved
-                # now check that one chain is neighbour and the other is ligand
-                # enforce receptor_ligand ordering
-                if neighboring_asym_ids.intersection([chain1]) and set(
-                    [chain2]
-                ).intersection(ligand_asym_id):
-                    covalent_linkages.add(f"{link1}__{link2}")
-                elif neighboring_asym_ids.intersection(chain2) and set(
-                    [chain1]
-                ).intersection(ligand_asym_id):
-                    covalent_linkages.add(f"{link2}__{link1}")
+            if ligand_asym_id not in chains:
+                # only if the ligand is involved
+                continue
+            # One chain is the ligand, the other a neighbouring (receptor)
+            # chain; emit as receptor__ligand. Match whole asym ids, which can be
+            # multi-character (e.g. "AA") once an entry has more than 26 chains.
+            if chain1 in neighboring_asym_ids and chain2 == ligand_asym_id:
+                covalent_linkages.add(f"{link1}__{link2}")
+            elif chain2 in neighboring_asym_ids and chain1 == ligand_asym_id:
+                covalent_linkages.add(f"{link2}__{link1}")
     return covalent_linkages
 
 

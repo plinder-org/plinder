@@ -15,7 +15,10 @@ from plinder.data.annotations.cif_utils import (
     read_mmcif_file,
 )
 from plinder.data.annotations.get_ligand_validation import EntryValidation
-from plinder.data.annotations.interaction_utils import get_covalent_connections
+from plinder.data.annotations.interaction_utils import (
+    extract_ligand_links_to_neighbouring_chains,
+    get_covalent_connections,
+)
 from plinder.data.annotations.interface_utils import (
     DEFAULT_MIN_INTERFACE_RESIDUES,
     INTERFACE_ANNOTATION_SCHEMA,
@@ -846,6 +849,69 @@ def test_covalent_linkage(cif_1qz5):
 
     assert (
         get_covalent_connections(read_mmcif_container(cif_1qz5))["covale"] == reference
+    )
+
+
+# link format: "auth_seq:comp:label_asym:label_seq:atom" (asym id at index 2)
+@pytest.mark.parametrize(
+    "covalent, ligand_asym_id, neighboring, expected",
+    [
+        # 2-letter asym (common once an entry has >26 chains) must be found,
+        # emitted as receptor__ligand — silently dropped by character iteration.
+        (
+            {"covale": [("1:LIG:AA:.:C1", "50:CYS:B:50:SG")]},
+            "AA",
+            {"B"},
+            {"50:CYS:B:50:SG__1:LIG:AA:.:C1"},
+        ),
+        # single-character asym still works
+        (
+            {"covale": [("1:LIG:C:.:C1", "50:CYS:A:50:SG")]},
+            "C",
+            {"A"},
+            {"50:CYS:A:50:SG__1:LIG:C:.:C1"},
+        ),
+        # covale not involving the ligand -> ignored
+        (
+            {"covale": [("1:LIG:AA:.:C1", "50:CYS:B:50:SG")]},
+            "ZZ",
+            {"B"},
+            set(),
+        ),
+        # ligand-ligand covale (no receptor neighbour) -> ignored
+        (
+            {"covale": [("1:L1:AA:.:C", "2:L2:AB:.:N")]},
+            "AA",
+            {"B"},
+            set(),
+        ),
+        # ligand "AB" is not in this A<->C bond; a shared character ("A") must
+        # not fabricate a spurious linkage.
+        (
+            {"covale": [("1:XXX:A:1:C", "2:YYY:C:2:N")]},
+            "AB",
+            {"C"},
+            set(),
+        ),
+    ],
+    ids=[
+        "multichar-found",
+        "singlechar-found",
+        "not-ligand",
+        "ligand-ligand",
+        "shared-char-false-positive",
+    ],
+)
+def test_extract_ligand_links_matches_whole_asym_ids(
+    covalent, ligand_asym_id, neighboring, expected
+):
+    """Covalent-linkage matching compares whole asym ids, so a shared character
+    neither drops a real multi-character linkage nor fabricates a spurious one."""
+    assert (
+        extract_ligand_links_to_neighbouring_chains(
+            covalent, ligand_asym_id, neighboring, link_type="covale"
+        )
+        == expected
     )
 
 
