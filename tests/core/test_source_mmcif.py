@@ -29,11 +29,11 @@ class _Response:
 
 
 @pytest.fixture
-def v3_cache(tmp_path, monkeypatch):
+def release_cache(tmp_path, monkeypatch):
     monkeypatch.setenv("PLINDER_MOUNT", tmp_path.as_posix())
     monkeypatch.setenv("PLINDER_BUCKET", "plinder")
     monkeypatch.setenv("PLINDER_RELEASE", "test")
-    monkeypatch.setenv("PLINDER_ITERATION", "v3")
+    monkeypatch.setenv("PLINDER_RELEASE_NUMBER", "")
     monkeypatch.delenv("PLINDER_OFFLINE", raising=False)
     monkeypatch.delenv("PLINDER_OFFLINE_MODE", raising=False)
     config._config._clear()
@@ -42,8 +42,8 @@ def v3_cache(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def source_manifest(v3_cache):
-    path = v3_cache / "index" / "entry_sources.parquet"
+def source_manifest(release_cache):
+    path = release_cache / "index" / "entry_sources.parquet"
     path.parent.mkdir(parents=True)
     pd.DataFrame(
         {
@@ -55,8 +55,8 @@ def source_manifest(v3_cache):
     return path
 
 
-def test_source_mmcif_download_cache_and_v3_system_resolution(
-    v3_cache, source_manifest, cif_2y4i, monkeypatch
+def test_source_mmcif_download_cache_and_system_resolution(
+    release_cache, source_manifest, cif_2y4i, monkeypatch
 ):
     calls = []
 
@@ -67,7 +67,7 @@ def test_source_mmcif_download_cache_and_v3_system_resolution(
     monkeypatch.setattr(core_io.requests, "get", get)
 
     path = core_io.get_pdb_mmcif("2Y4I", manifest_path=source_manifest)
-    expected = v3_cache / "source_mmcifs" / "y4" / "2y4i_v1-5.cif.gz"
+    expected = release_cache / "source_mmcifs" / "y4" / "2y4i_v1-5.cif.gz"
     assert path == expected
     assert path.is_file()
     assert calls == [
@@ -88,19 +88,27 @@ def test_source_mmcif_download_cache_and_v3_system_resolution(
         == expected
     )
     assert len(calls) == 1
+
+    manifest_requests = []
+
+    def fetch_release_artifact(_release, name, **parameters):
+        manifest_requests.append((name, parameters))
+        return source_manifest
+
     monkeypatch.setattr(
-        core_io,
-        "get_plinder_path",
-        lambda **kwargs: source_manifest,
+        core_io.PlinderRelease,
+        "fetch",
+        fetch_release_artifact,
     )
     assert (
         PlinderSystem(system_id="2y4i__1__1.B__1.E_1.F").source_mmcif_path == expected
     )
+    assert manifest_requests == [("entry_sources", {})]
     assert len(calls) == 1
 
 
 def test_source_mmcif_offline_mode_requires_valid_cache(
-    v3_cache, source_manifest, cif_2y4i, monkeypatch
+    release_cache, source_manifest, cif_2y4i, monkeypatch
 ):
     monkeypatch.setenv("PLINDER_OFFLINE_MODE", "true")
     assert is_offline()
@@ -132,7 +140,7 @@ def test_source_mmcif_offline_mode_requires_valid_cache(
 
 
 def test_source_mmcif_replaces_corrupt_online_cache(
-    v3_cache, source_manifest, cif_2y4i, monkeypatch
+    release_cache, source_manifest, cif_2y4i, monkeypatch
 ):
     expected = core_io.pdb_mmcif_cache_path(
         "2y4i",
@@ -152,7 +160,7 @@ def test_source_mmcif_replaces_corrupt_online_cache(
 
 
 def test_source_mmcif_reports_missing_versioned_entry(
-    v3_cache, source_manifest, monkeypatch
+    release_cache, source_manifest, monkeypatch
 ):
     calls = []
 
@@ -181,7 +189,7 @@ def test_source_mmcif_reports_missing_versioned_entry(
 
 
 def test_download_pdb_mmcifs_deduplicates_system_ids(
-    v3_cache, source_manifest, cif_2y4i, monkeypatch
+    release_cache, source_manifest, cif_2y4i, monkeypatch
 ):
     calls = []
 
@@ -211,7 +219,7 @@ def test_download_pdb_mmcifs_deduplicates_system_ids(
 
 
 def test_source_mmcif_retries_transient_http_status(
-    v3_cache, source_manifest, cif_2y4i, monkeypatch
+    release_cache, source_manifest, cif_2y4i, monkeypatch
 ):
     responses = [
         _Response(b"temporarily unavailable", status_code=503),
@@ -233,7 +241,7 @@ def test_source_mmcif_retries_transient_http_status(
 
 
 def test_batch_source_download_retries_timeout(
-    v3_cache, source_manifest, cif_2y4i, monkeypatch
+    release_cache, source_manifest, cif_2y4i, monkeypatch
 ):
     calls = 0
     waits = []
@@ -259,7 +267,7 @@ def test_batch_source_download_retries_timeout(
 
 
 def test_source_mmcif_transient_retries_are_bounded(
-    v3_cache, source_manifest, monkeypatch
+    release_cache, source_manifest, monkeypatch
 ):
     calls = 0
     waits = []
@@ -280,7 +288,7 @@ def test_source_mmcif_transient_retries_are_bounded(
 
 
 def test_parser_failure_replaces_cache_online(
-    v3_cache, source_manifest, cif_2y4i, monkeypatch
+    release_cache, source_manifest, cif_2y4i, monkeypatch
 ):
     expected = core_io.pdb_mmcif_cache_path(
         "2y4i",
@@ -311,7 +319,7 @@ def test_parser_failure_replaces_cache_online(
 
 
 def test_parser_failure_is_missing_cache_offline(
-    v3_cache, source_manifest, cif_2y4i, monkeypatch
+    release_cache, source_manifest, cif_2y4i, monkeypatch
 ):
     expected = core_io.pdb_mmcif_cache_path(
         "2y4i",
@@ -358,7 +366,7 @@ def test_offline_mode_alias_parsing(monkeypatch, value, expected):
     assert is_offline() is expected
 
 
-def test_source_mmcif_rejects_wrong_version(v3_cache, cif_2y4i, monkeypatch):
+def test_source_mmcif_rejects_wrong_version(release_cache, cif_2y4i, monkeypatch):
     monkeypatch.setattr(
         core_io.requests,
         "get",

@@ -25,6 +25,7 @@ from plinder.data.annotations.cif_utils import (
     assign_bond_orders_from_smiles,
     build_biounit,
     check_cif_bond_orders,
+    get_entry_taxonomy,
     get_legacy_chain_instance_mapping,
     get_structure_with_altloc,
     get_unknown_ligand_ids,
@@ -45,6 +46,44 @@ def _load_boltz_ligand_smiles() -> str:
 
 
 LIGAND_SMILES = _load_boltz_ligand_smiles()
+
+
+def test_get_entry_taxonomy_collects_all_source_categories_and_hosts():
+    block = pdbx.CIFBlock()
+    block["entity_src_gen"] = pdbx.CIFCategory(
+        {
+            "entity_id": ["1", "2"],
+            "pdbx_gene_src_ncbi_taxonomy_id": ["9606", "?"],
+            "pdbx_gene_src_scientific_name": ["Homo sapiens", "synthetic construct"],
+            "pdbx_host_org_ncbi_taxonomy_id": ["562", "562"],
+            "pdbx_host_org_scientific_name": ["Escherichia coli", "Escherichia coli"],
+        }
+    )
+    block["entity_src_nat"] = pdbx.CIFCategory(
+        {
+            "entity_id": ["3"],
+            "pdbx_ncbi_taxonomy_id": ["10090"],
+            "pdbx_organism_scientific": ["Mus musculus"],
+        }
+    )
+    block["pdbx_entity_src_syn"] = pdbx.CIFCategory(
+        {
+            "entity_id": ["4"],
+            "ncbi_taxonomy_id": ["32630"],
+            "organism_scientific": ["synthetic construct"],
+        }
+    )
+
+    assert get_entry_taxonomy(block) == {
+        "source_taxonomy_ids": [9606, 10090, 32630],
+        "source_organism_names": [
+            "Homo sapiens",
+            "Mus musculus",
+            "synthetic construct",
+        ],
+        "host_taxonomy_ids": [562],
+        "host_organism_names": ["Escherichia coli"],
+    }
 
 
 def _nucleotide_chain(residue_names: list[str]) -> struc.AtomArray:
@@ -797,7 +836,7 @@ def test_from_custom_cif_with_ccd_code(boltz_cif, tmp_path):
     assert ligands
     assert _get_ccd_smiles("T9C") is not None
     assert {ligand.smiles for ligand in ligands} == {_get_ccd_smiles("T9C")}
-    assert all(ligand.rdkit_canonical_smiles for ligand in ligands)
+    assert all(ligand.smiles for ligand in ligands)
     assert all(ligand.num_heavy_atoms for ligand in ligands)
     assert all(ligand.resolved_stereo_matches_template is True for ligand in ligands)
     fixed = pdbx.CIFFile.read(str(fixed_cif))

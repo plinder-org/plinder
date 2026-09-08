@@ -386,11 +386,10 @@ def extract_ligand_links_to_neighbouring_chains(
     neighboring_asym_ids : set[str]
         set of neighbour asymmetric identification strings
     link_type : str, optional
-        covalent linkage type in dictionary, by default "covale",
-        options include:
-            "covale": actual covalent linkage
-            "metalc": other dative bond, eg. metal-ligand dative bond
-            "hydrogc": strong hydorogen bonding of nucleic acid
+        Covalent linkage type in the dictionary. Options include ``"covale"``
+        for a covalent linkage, ``"metalc"`` for a dative bond, and
+        ``"hydrogc"`` for a strong hydrogen bond in a nucleic acid. The
+        default is ``"covale"``.
 
     Returns
     -------

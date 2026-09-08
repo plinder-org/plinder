@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import time
 from concurrent.futures import (
     ALL_COMPLETED,
@@ -27,10 +26,10 @@ import pyarrow.parquet as pq
 from omegaconf import DictConfig
 from tqdm import tqdm
 
-from plinder.core.utils import gcs, schemas
+from plinder.core.utils import schemas
 from plinder.core.utils.log import setup_logger
-from plinder.data import clusters, databases, splits
-from plinder.data.annotations import get_similarity_scores
+from plinder.data import clusters, databases
+from plinder.data.annotations import get_similarity_scores, mmpdb_utils
 from plinder.data.pipeline import collate, io, utils
 from plinder.data.pipeline.ingest import (
     balance_entries,
@@ -59,9 +58,11 @@ LIGAND_POCKET_REPRESENTATIVES_RELATIVE = Path(
     "index/ligand_pocket_representatives.parquet"
 )
 LIGAND_POCKET_MEMBERSHIP_RELATIVE = Path("index/ligand_pocket_membership.parquet")
+LIGAND_POCKET_RESIDUES_RELATIVE = Path("index/ligand_pocket_residues.parquet")
 LIGAND_POCKET_REPRESENTATIVES_MANIFEST_RELATIVE = Path(
     "index/ligand_pocket_representatives.manifest.json"
 )
+LIGAND_POCKET_RESIDUE_SELECTION = "neighboring_and_interacting"
 STAGES = [
     "download_rcsb_files",
     "download_alternative_datasets",
@@ -73,11 +74,13 @@ STAGES = [
     "compute_ligand_fingerprints",
     "make_ligand_scores",
     "annotate_ligand_similarity",
+    "make_ligand_mmp_pairs",
     "make_sub_dbs",
     "run_batch_searches",
     "map_batch_alignments",
     "collate_alignments",
     "finalize_alignments",
+    "plan_score_batches",
     "plan_interface_scores",
     "make_interface_scores",
     "finalize_interface_scores",
@@ -88,23 +91,19 @@ STAGES = [
     "collate_ligand_3d_scores",
     "merge_ligand_3d_scores",
     "finalize_scores",
-    "export_sucos_shape_pocket_qcov",
-    "finalize_sucos_export",
+    "export_ligand_similarity_scores",
+    "finalize_ligand_similarity_scores",
     "collate_partitions",
+    "make_linked_apo_structures",
     "plan_clusters",
     "make_symmetric_edge_fragments",
     "make_symmetric_edge_shards",
     "make_component_reductions",
     "merge_component_reductions",
-    "make_communities",
+    "make_set_covers",
     "make_directed_set_covers",
     "summarize_clusters",
     "finalize_index",
-    "make_mmp_index",
-    "make_splits",
-    "make_links",
-    "make_linked_structures",
-    "score_linked_structures",
 ]
 
 
@@ -428,6 +427,11 @@ def _selected_context_codes(two_char_codes: list[str], pdb_ids: list[str]) -> li
     return sorted(str(code).lower() for code in two_char_codes)
 
 
+def _has_completed_raw_entries(entry_dir: Path) -> bool:
+    """Return whether a raw-entry shard contains completed entry parquet files."""
+    return entry_dir.is_dir() and any(entry_dir.glob("*.parquet"))
+
+
 def scatter_collate_entries(
     *,
     data_dir: Path,
@@ -503,9 +507,17 @@ def scatter_make_canonical_ligand_archives(
     entry_dir = data_dir / "raw_entries"
     selected_codes = _selected_context_codes(two_char_codes, pdb_ids)
     if selected_codes:
-        codes = selected_codes
+        codes = [
+            code
+            for code in selected_codes
+            if _has_completed_raw_entries(entry_dir / code)
+        ]
     else:
-        codes = sorted(os.listdir(entry_dir.as_posix()))
+        codes = sorted(
+            path.name
+            for path in entry_dir.iterdir()
+            if _has_completed_raw_entries(path)
+        )
     LOG.info(
         "scatter_make_canonical_ligand_archives: "
         f"found {len(codes)} two character codes"
@@ -531,8 +543,12 @@ def make_canonical_ligand_archives(
         entry_dir = data_dir / "raw_entries" / code
         archive = data_dir / "ligand_archives" / f"{code}.parquet"
         archive.parent.mkdir(exist_ok=True, parents=True)
+        entry_parquets = sorted(entry_dir.glob("*.parquet"))
+        if not entry_parquets:
+            archive.unlink(missing_ok=True)
+            continue
         records = []
-        for entry_parquet in sorted(entry_dir.glob("*.parquet")):
+        for entry_parquet in entry_parquets:
             ligand_dir = entry_dir / entry_parquet.stem / "ligand_files"
             for ligand_file in sorted(ligand_dir.glob("*.sdf")):
                 records.append(
@@ -585,29 +601,34 @@ def make_sub_dbs(
     """
     entries = None
     identifiers_by_database = None
-    if set(sub_databases) == {"holo"}:
-        chains = _protein_scoring_chains(data_dir)
-        chain_auth_ids = pd.read_parquet(
-            data_dir / "index" / "entry_chains.parquet",
-            columns=["entry_pdb_id", "chain_asym_id", "chain_auth_id"],
-        )
-        chains = chains.merge(
-            chain_auth_ids,
-            on=["entry_pdb_id", "chain_asym_id"],
-            how="left",
-            validate="one_to_one",
-        )
-        chains = chains[chains["chain_auth_id"].notna()]
-        identifiers_by_database = {
-            "holo_foldseek": {
+    if set(sub_databases) <= {"holo", "apo"}:
+        identifiers_by_database = {}
+        for search_db in sub_databases:
+            chains = (
+                _protein_scoring_chains(data_dir)
+                if search_db == "holo"
+                else _apo_scoring_chains(data_dir)
+            )
+            if search_db == "holo":
+                chain_auth_ids = pd.read_parquet(
+                    data_dir / "index" / "entry_chains.parquet",
+                    columns=["entry_pdb_id", "chain_asym_id", "chain_auth_id"],
+                )
+                chains = chains.merge(
+                    chain_auth_ids,
+                    on=["entry_pdb_id", "chain_asym_id"],
+                    how="left",
+                    validate="one_to_one",
+                )
+            chains = chains[chains["chain_auth_id"].notna()]
+            identifiers_by_database[f"{search_db}_foldseek"] = {
                 f"pdb_0000{row.entry_pdb_id}_xyz-enrich_{row.chain_auth_id}"
                 for row in chains.itertuples(index=False)
-            },
-            "holo_mmseqs": {
+            }
+            identifiers_by_database[f"{search_db}_mmseqs"] = {
                 f"{row.entry_pdb_id}_{row.chain_auth_id}"
                 for row in chains.itertuples(index=False)
-            },
-        }
+            }
     else:
         from plinder.core.scores.entries import entry_views_from_df
 
@@ -627,7 +648,7 @@ def make_sub_dbs(
         tmp_dir=scratch_dir,
         threads=cpu,
     )
-    if set(sub_databases) == {"holo"}:
+    if set(sub_databases).intersection({"holo", "apo"}):
         make_alignment_chain_lookup(
             data_dir=data_dir,
             scratch_dir=scratch_dir,
@@ -671,19 +692,15 @@ def _completed_interface_representatives(
         ),
     }
     try:
-        if (
-            manifest is None
-            or manifest.get("source")
-            != _interface_representative_source_signature(data_dir)
-        ):
+        if manifest is None or manifest.get(
+            "source"
+        ) != _interface_representative_source_signature(data_dir):
             return None
         for key, (relative, schema) in expected.items():
             path = data_dir / relative
-            if (
-                not pq.read_schema(path).equals(schema)
-                or manifest.get("outputs", {}).get(key)
-                != _interface_representative_output_signature(path)
-            ):
+            if not pq.read_schema(path).equals(schema) or manifest.get(
+                "outputs", {}
+            ).get(key) != _interface_representative_output_signature(path):
                 return None
     except (OSError, TypeError, ValueError):
         return None
@@ -846,6 +863,7 @@ def make_interface_representatives(
             ) TO '{temporary_paths["membership"].as_posix()}' (
                 FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 100000
             );
+
             """
         )
     )
@@ -956,21 +974,24 @@ def _completed_ligand_pocket_representatives(
             LIGAND_POCKET_MEMBERSHIP_RELATIVE,
             schemas.LIGAND_POCKET_MEMBERSHIP_SCHEMA,
         ),
+        "residues": (
+            LIGAND_POCKET_RESIDUES_RELATIVE,
+            schemas.LIGAND_POCKET_RESIDUE_SCHEMA,
+        ),
     }
     try:
         if (
             manifest is None
+            or manifest.get("residue_selection") != LIGAND_POCKET_RESIDUE_SELECTION
             or manifest.get("sources")
             != _ligand_pocket_representative_source_signatures(data_dir)
         ):
             return None
         for key, (relative, schema) in expected.items():
             path = data_dir / relative
-            if (
-                not pq.read_schema(path).equals(schema)
-                or manifest.get("outputs", {}).get(key)
-                != _interface_representative_output_signature(path)
-            ):
+            if not pq.read_schema(path).equals(schema) or manifest.get(
+                "outputs", {}
+            ).get(key) != _interface_representative_output_signature(path):
                 return None
     except (OSError, TypeError, ValueError):
         return None
@@ -984,7 +1005,7 @@ def make_ligand_pocket_representatives(
     threads: int,
     force_update: bool = False,
 ) -> dict[str, Any]:
-    """Normalize exact protein-pocket copies while retaining ligand membership."""
+    """Group exact protein-pocket copies and retain ligand and residue mappings."""
     current = _completed_ligand_pocket_representatives(data_dir)
     if not force_update and current is not None:
         LOG.info(
@@ -1007,9 +1028,10 @@ def make_ligand_pocket_representatives(
     temporary_paths = {
         "representatives": working_root / LIGAND_POCKET_REPRESENTATIVES_RELATIVE.name,
         "membership": working_root / LIGAND_POCKET_MEMBERSHIP_RELATIVE.name,
+        "residues": working_root / LIGAND_POCKET_RESIDUES_RELATIVE.name,
     }
     started = time.monotonic()
-    LOG.info("make_ligand_pocket_representatives: normalizing ligand pockets")
+    LOG.info("make_ligand_pocket_representatives: grouping ligand pockets")
     connection = duckdb.connect()
     connection.sql(f"SET threads={max(1, threads)}")
     connection.sql("SET memory_limit='64GB'")
@@ -1019,7 +1041,7 @@ def make_ligand_pocket_representatives(
         dedent(
             f"""
             CREATE TEMP TABLE protein_receptors AS
-            SELECT entry_pdb_id, chain_asym_id
+            SELECT entry_pdb_id, chain_asym_id, chain_auth_id
             FROM read_parquet('{chains.as_posix()}')
             WHERE chain_receptor_type = 'protein';
 
@@ -1033,6 +1055,7 @@ def make_ligand_pocket_representatives(
                     AS ligand_is_3d_score_able,
                 ligand_protein_chains_asym_id,
                 ligand_neighboring_residues,
+                ligand_interacting_residues,
                 ligand_interactions
             FROM read_parquet('{annotation.as_posix()}')
             WHERE system_type = 'holo' AND ligand_is_proper;
@@ -1156,12 +1179,89 @@ def make_ligand_pocket_representatives(
             ) TO '{temporary_paths["membership"].as_posix()}' (
                 FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 100000
             );
+
+            COPY (
+                WITH interaction_residues AS (
+                    SELECT DISTINCT
+                        ligands.ligand_id,
+                        split_part(interaction, '_', 1) AS chain_instance,
+                        try_cast(split_part(interaction, '_', 2) AS INTEGER)
+                            AS residue_label_seq_id
+                    FROM eligible_ligands AS ligands,
+                         unnest(ligands.ligand_interactions)
+                            AS interaction_rows(interaction)
+                    WHERE try_cast(split_part(interaction, '_', 2) AS INTEGER)
+                        IS NOT NULL
+                ),
+                parsed_pockets AS (
+                    SELECT
+                        ligands.entry_pdb_id,
+                        ligands.system_id,
+                        ligands.ligand_id,
+                        split_part(residue, '_', 1) AS chain_instance,
+                        split_part(split_part(residue, '_', 1), '.', 2)
+                            AS chain_asym_id,
+                        try_cast(split_part(residue, '_', 2) AS INTEGER)
+                            AS residue_label_seq_id,
+                        try_cast(split_part(residue, '_', 3) AS INTEGER)
+                            AS residue_index,
+                        coalesce(
+                            nullif(split_part(residue, '_', 4), ''),
+                            split_part(residue, '_', 2)
+                        ) AS residue_auth_seq_id,
+                        coalesce(
+                            nullif(split_part(residue, '_', 5), ''), '.'
+                        ) AS residue_insertion_code
+                    FROM eligible_ligands AS ligands,
+                         unnest(list_concat(
+                             coalesce(
+                                 ligands.ligand_neighboring_residues,
+                                 []::VARCHAR[]
+                             ),
+                             coalesce(
+                                 ligands.ligand_interacting_residues,
+                                 []::VARCHAR[]
+                             )
+                         )) AS pocket_rows(residue)
+                )
+                SELECT DISTINCT
+                    pockets.entry_pdb_id::VARCHAR AS entry_pdb_id,
+                    pockets.system_id::VARCHAR AS system_id,
+                    pockets.ligand_id::VARCHAR AS ligand_id,
+                    pockets.chain_instance::VARCHAR AS chain_instance,
+                    pockets.chain_asym_id::VARCHAR AS chain_asym_id,
+                    receptors.chain_auth_id::VARCHAR AS chain_auth_id,
+                    pockets.residue_label_seq_id::INTEGER
+                        AS residue_label_seq_id,
+                    pockets.residue_index::INTEGER AS residue_index,
+                    pockets.residue_auth_seq_id::VARCHAR AS residue_auth_seq_id,
+                    pockets.residue_insertion_code::VARCHAR
+                        AS residue_insertion_code,
+                    (interactions.ligand_id IS NOT NULL)::BOOLEAN AS is_pli
+                FROM parsed_pockets AS pockets
+                INNER JOIN protein_receptors AS receptors
+                  ON pockets.entry_pdb_id = receptors.entry_pdb_id
+                 AND pockets.chain_asym_id = receptors.chain_asym_id
+                LEFT JOIN interaction_residues AS interactions
+                  ON pockets.ligand_id = interactions.ligand_id
+                 AND pockets.chain_instance = interactions.chain_instance
+                 AND pockets.residue_label_seq_id
+                        = interactions.residue_label_seq_id
+                WHERE pockets.residue_label_seq_id IS NOT NULL
+                  AND pockets.residue_index IS NOT NULL
+                ORDER BY
+                    pockets.ligand_id,
+                    pockets.chain_instance,
+                    pockets.residue_label_seq_id
+            ) TO '{temporary_paths["residues"].as_posix()}' (
+                FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 100000
+            );
             """
         )
     )
     connection.close()
     LOG.info(
-        "make_ligand_pocket_representatives: DuckDB normalization complete "
+        "make_ligand_pocket_representatives: DuckDB grouping complete "
         "elapsed_seconds=%.1f",
         time.monotonic() - started,
     )
@@ -1174,6 +1274,10 @@ def make_ligand_pocket_representatives(
         "membership": (
             LIGAND_POCKET_MEMBERSHIP_RELATIVE,
             schemas.LIGAND_POCKET_MEMBERSHIP_SCHEMA,
+        ),
+        "residues": (
+            LIGAND_POCKET_RESIDUES_RELATIVE,
+            schemas.LIGAND_POCKET_RESIDUE_SCHEMA,
         ),
     }
     for key, (_, schema) in expected.items():
@@ -1188,6 +1292,7 @@ def make_ligand_pocket_representatives(
     representative_count = pq.ParquetFile(
         temporary_paths["representatives"]
     ).metadata.num_rows
+    pocket_residue_count = pq.ParquetFile(temporary_paths["residues"]).metadata.num_rows
     if _ligand_pocket_representative_source_signatures(data_dir) != sources:
         rmtree(working_root)
         raise RuntimeError("entry indexes changed while making ligand representatives")
@@ -1203,10 +1308,12 @@ def make_ligand_pocket_representatives(
     rmtree(working_root)
     payload = {
         "status": "complete",
+        "residue_selection": LIGAND_POCKET_RESIDUE_SELECTION,
         "sources": sources,
         "outputs": outputs,
         "ligand_count": ligand_count,
         "representative_ligand_count": representative_count,
+        "pocket_residue_count": pocket_residue_count,
     }
     _write_json_atomic(
         data_dir / LIGAND_POCKET_REPRESENTATIVES_MANIFEST_RELATIVE,
@@ -1319,7 +1426,9 @@ def _refresh_representative_source_manifests(data_dir: Path) -> None:
     interface_manifest_path = data_dir / INTERFACE_REPRESENTATIVES_MANIFEST_RELATIVE
     interface_manifest = _read_json(interface_manifest_path)
     if ligand_manifest is None or interface_manifest is None:
-        raise RuntimeError("representative source manifests disappeared during finalization")
+        raise RuntimeError(
+            "representative source manifests disappeared during finalization"
+        )
     ligand_manifest["sources"] = _ligand_pocket_representative_source_signatures(
         data_dir
     )
@@ -1542,14 +1651,53 @@ def make_ligand_scores(
     )
 
 
-def annotate_ligand_similarity(
-    *, data_dir: Path, cluster_threshold: float = 90.0
-) -> None:
-    """Add 90%-component frequencies after all BulkTanimoto shards finish."""
-    get_similarity_scores.annotate_ligand_similarity(
+def annotate_ligand_similarity(*, data_dir: Path) -> None:
+    """Write ligand identifiers and cofactor annotations."""
+    get_similarity_scores.annotate_ligand_similarity(data_dir=data_dir)
+
+
+def make_ligand_mmp_pairs(
+    *,
+    data_dir: Path,
+    scratch_dir: Path,
+    threads: int,
+    force_update: bool = False,
+) -> Path:
+    """Write the unique-SMILES matched-molecular-pair release table."""
+    return mmpdb_utils.make_ligand_mmp_pairs(
         data_dir=data_dir,
-        cluster_threshold=cluster_threshold,
+        scratch_dir=scratch_dir,
+        threads=threads,
+        force_update=force_update,
     )
+
+
+def _interface_scoring_chain_keys(data_dir: Path) -> pd.DataFrame:
+    """Return entry/asym keys used by a published protein interface."""
+    interface_path = data_dir / "index" / "interface_annotation_table.parquet"
+    if not interface_path.is_file():
+        return pd.DataFrame(
+            columns=["entry_pdb_id", "chain_asym_id", "chain_is_interface"]
+        )
+    interfaces = pd.read_parquet(
+        interface_path,
+        columns=["entry_pdb_id", "interface_chain_1", "interface_chain_2"],
+    )
+    interface_keys = pd.concat(
+        [
+            interfaces[["entry_pdb_id", column]].rename(
+                columns={column: "instance_chain"}
+            )
+            for column in ["interface_chain_1", "interface_chain_2"]
+        ],
+        ignore_index=True,
+    )
+    interface_keys["chain_asym_id"] = (
+        interface_keys.pop("instance_chain").astype(str).str.split(".", n=1).str[-1]
+    )
+    interface_keys = interface_keys.drop_duplicates()
+    interface_keys["chain_is_interface"] = True
+    return interface_keys
 
 
 def _protein_scoring_chains(data_dir: Path) -> pd.DataFrame:
@@ -1564,35 +1712,8 @@ def _protein_scoring_chains(data_dir: Path) -> pd.DataFrame:
             "chain_is_holo",
         ],
     )
-    interface_path = data_dir / "index" / "interface_annotation_table.parquet"
-    interface_keys = pd.DataFrame(
-        columns=["entry_pdb_id", "chain_asym_id", "chain_is_interface"]
-    )
-    if interface_path.is_file():
-        interfaces = pd.read_parquet(
-            interface_path,
-            columns=[
-                "entry_pdb_id",
-                "interface_chain_1",
-                "interface_chain_2",
-            ],
-        )
-        interface_keys = pd.concat(
-            [
-                interfaces[["entry_pdb_id", column]].rename(
-                    columns={column: "instance_chain"}
-                )
-                for column in ["interface_chain_1", "interface_chain_2"]
-            ],
-            ignore_index=True,
-        )
-        interface_keys["chain_asym_id"] = (
-            interface_keys.pop("instance_chain").astype(str).str.split(".", n=1).str[-1]
-        )
-        interface_keys = interface_keys.drop_duplicates()
-        interface_keys["chain_is_interface"] = True
     chains = chains.merge(
-        interface_keys,
+        _interface_scoring_chain_keys(data_dir),
         on=["entry_pdb_id", "chain_asym_id"],
         how="left",
     )
@@ -1605,14 +1726,131 @@ def _protein_scoring_chains(data_dir: Path) -> pd.DataFrame:
     ].copy()
 
 
+def _linked_apo_query_chains(data_dir: Path) -> pd.DataFrame:
+    """Return proper-ligand protein receptor chains used as apo queries."""
+    from plinder.data.linked_apo import ligand_holo_chain_keys
+
+    holo_keys = ligand_holo_chain_keys(data_dir / "index" / "annotation_table.parquet")
+    chains = pd.read_parquet(
+        data_dir / "index" / "entry_chains.parquet",
+        columns=[
+            "entry_pdb_id",
+            "chain_asym_id",
+            "chain_auth_id",
+            "chain_receptor_type",
+        ],
+    )
+    chains = chains.merge(
+        holo_keys,
+        on=["entry_pdb_id", "chain_asym_id"],
+        how="inner",
+        validate="one_to_one",
+    )
+    return (
+        chains.loc[
+            chains["chain_receptor_type"]
+            .fillna("")
+            .astype(str)
+            .str.lower()
+            .eq("protein")
+            & chains["chain_auth_id"].notna(),
+            ["entry_pdb_id", "chain_asym_id", "chain_auth_id"],
+        ]
+        .drop_duplicates(ignore_index=True)
+        .sort_values(["entry_pdb_id", "chain_asym_id"], ignore_index=True)
+    )
+
+
+def _linked_apo_query_auth_ids(
+    data_dir: Path, pdb_ids: Sequence[str]
+) -> dict[str, set[str]]:
+    """Load planned linked-apo query chain IDs, with a direct-index fallback."""
+    from plinder.data.pipeline.score import LINKED_APO_QUERY_MANIFEST_RELATIVE
+
+    manifest = data_dir / LINKED_APO_QUERY_MANIFEST_RELATIVE
+    if manifest.is_file():
+        chains = pd.read_parquet(
+            manifest,
+            columns=["pdb_id", "chain_auth_id"],
+            filters=[("pdb_id", "in", list(pdb_ids))],
+        ).rename(columns={"pdb_id": "entry_pdb_id"})
+    else:
+        chains = _linked_apo_query_chains(data_dir)
+        chains = chains[chains["entry_pdb_id"].isin(pdb_ids)]
+    return {
+        str(pdb_id): set(rows["chain_auth_id"].astype(str))
+        for pdb_id, rows in chains.groupby("entry_pdb_id", sort=False)
+    }
+
+
+def _apo_scoring_chains(data_dir: Path) -> pd.DataFrame:
+    """Return reconstructable chains without a proper ligand receptor."""
+    from plinder.data.linked_apo import ligand_holo_chain_keys
+
+    chains = pd.read_parquet(
+        data_dir / "index" / "entry_chains.parquet",
+        columns=[
+            "entry_pdb_id",
+            "chain_asym_id",
+            "chain_auth_id",
+            "chain_entity_id",
+            "chain_receptor_type",
+            "chain_is_ligand_like",
+        ],
+    )
+    holo_keys = ligand_holo_chain_keys(data_dir / "index" / "annotation_table.parquet")
+    holo_keys["chain_is_holo"] = True
+    chains = chains.merge(
+        holo_keys,
+        on=["entry_pdb_id", "chain_asym_id"],
+        how="left",
+        validate="one_to_one",
+    )
+    holo = chains["chain_is_holo"].eq(True)
+    entity_ids = chains["chain_entity_id"].astype("string")
+    usable_entity = entity_ids.notna() & entity_ids.str.strip().ne("")
+    holo_entities = chains.loc[
+        holo & usable_entity, ["entry_pdb_id", "chain_entity_id"]
+    ].drop_duplicates()
+    holo_entities["entity_is_holo"] = True
+    chains = chains.merge(
+        holo_entities,
+        on=["entry_pdb_id", "chain_entity_id"],
+        how="left",
+        validate="many_to_one",
+    )
+    chains = chains.loc[
+        chains["chain_receptor_type"].fillna("").astype(str).eq("protein")
+        & ~holo
+        & ~chains["chain_is_ligand_like"].fillna(False).astype(bool)
+        & chains["entity_is_holo"].ne(True)
+        & chains["chain_auth_id"].notna()
+    ].copy()
+    receptor_chains = pd.read_parquet(
+        data_dir / "index" / "entry_biounit_chains.parquet",
+        columns=["entry_pdb_id", "chain_asym_id", "chain_role"],
+    )
+    receptor_chains = receptor_chains.loc[
+        receptor_chains["chain_role"].fillna("").astype(str).str.lower().eq("receptor"),
+        ["entry_pdb_id", "chain_asym_id"],
+    ].drop_duplicates()
+    return chains.merge(
+        receptor_chains,
+        on=["entry_pdb_id", "chain_asym_id"],
+        how="inner",
+        validate="one_to_one",
+    )
+
+
 def scatter_protein_scoring(
     *,
     data_dir: Path,
     batch_size: int,
     two_char_codes: list[str],
     pdb_ids: list[str],
+    search_dbs: Sequence[str] = ("holo",),
 ) -> list[list[str]]:
-    """Split protein-containing V3 entries into score-generation batches.
+    """Split protein-containing release entries into search batches.
 
     Parameters
     ----------
@@ -1632,7 +1870,11 @@ def scatter_protein_scoring(
     """
     if batch_size < 1:
         raise ValueError("batch_size must be positive")
-    chains = _protein_scoring_chains(data_dir)
+    chains = (
+        _linked_apo_query_chains(data_dir)
+        if set(search_dbs) == {"apo"}
+        else _protein_scoring_chains(data_dir)
+    )
     protein_entries = set(chains["entry_pdb_id"].astype(str))
     selected_pdb_ids = [normalize_pdb_id(pdb_id) for pdb_id in pdb_ids]
     if selected_pdb_ids:
@@ -1664,37 +1906,27 @@ def run_batch_searches(
     force_update: bool = False,
 ) -> None:
     selected_alignment_types = list(alignment_types or ["foldseek", "mmseqs"])
+    apo_query_chains: dict[str, set[str]] = {}
+    if "apo" in scorer_cfg.sub_databases:
+        apo_query_chains = _linked_apo_query_auth_ids(data_dir, pdb_ids)
     for search_db in scorer_cfg.sub_databases:
+        eligible_pdb_ids = (
+            [pdb_id for pdb_id in pdb_ids if pdb_id in apo_query_chains]
+            if search_db == "apo"
+            else pdb_ids
+        )
         for alignment_type in selected_alignment_types:
-            target_database = (
-                data_dir
-                / "dbs"
-                / "subdbs"
-                / f"{search_db}_{alignment_type}"
-                / f"{search_db}_{alignment_type}"
-            )
-            identifiers = databases.database_identifiers(target_database)
-            if alignment_type == "foldseek":
-                eligible_queries = {
-                    identifier.replace("pdb_0000", "", 1)[:4]
-                    for identifier in identifiers
-                }
-            else:
-                eligible_queries = {
-                    identifier.split("_", maxsplit=1)[0] for identifier in identifiers
-                }
             output_dir = (
                 data_dir / "dbs" / "subdbs" / f"{search_db}_{alignment_type}" / "aln"
             )
             pending = [
                 pdb_id
-                for pdb_id in pdb_ids
-                if pdb_id in eligible_queries
-                and (force_update or not (output_dir / f"{pdb_id}.parquet").is_file())
+                for pdb_id in eligible_pdb_ids
+                if force_update or not (output_dir / f"{pdb_id}.parquet").is_file()
             ]
             if not pending:
                 LOG.info(
-                    f"run_batch_searches: all {len(pdb_ids)} {search_db} "
+                    f"run_batch_searches: all {len(eligible_pdb_ids)} {search_db} "
                     f"{alignment_type} queries are complete"
                 )
                 continue
@@ -1706,7 +1938,7 @@ def run_batch_searches(
                 data_dir=data_dir,
                 pdb_ids=pending,
                 scorer_cfg=scorer_cfg,
-                load_entries=True,
+                load_entries=search_db != "apo",
                 foldseek_cfg=foldseek_cfg,
                 mmseqs_cfg=mmseqs_cfg,
                 scratch_dir=scratch_dir,
@@ -1719,6 +1951,9 @@ def run_batch_searches(
                     search_db=search_db,
                     threads=cpu,
                     alignment_types=[alignment_type],
+                    query_chain_auth_ids=(
+                        apo_query_chains if search_db == "apo" else None
+                    ),
                 )
             finally:
                 rmtree(batch_db_dir)
@@ -1730,7 +1965,7 @@ def run_batch_searches(
             if missing_outputs:
                 raise RuntimeError(
                     f"{search_db} {alignment_type} search produced no output for "
-                    f"{len(missing_outputs)} eligible query entries: "
+                    f"{len(missing_outputs)} query entries: "
                     f"{missing_outputs[:10]}"
                 )
         if search_db == "holo" and alignment_types is None:
@@ -1757,7 +1992,7 @@ def run_batch_searches(
 
 
 def scatter_missing_alignment_mappings(
-    *, data_dir: Path, batch_size: int
+    *, data_dir: Path, batch_size: int, search_db: str = "holo"
 ) -> list[list[str]]:
     """Scatter query shards whose raw alignments are not mapped and published."""
     if batch_size < 1:
@@ -1767,14 +2002,20 @@ def scatter_missing_alignment_mappings(
         {
             path.stem[1:3]
             for alignment_type in ["foldseek", "mmseqs"]
-            for path in (raw_root / f"holo_{alignment_type}" / "aln").glob("*.parquet")
+            for path in (raw_root / f"{search_db}_{alignment_type}" / "aln").glob(
+                "*.parquet"
+            )
             if not path.name.endswith(".tmp.parquet")
         }
     )
     missing = [
         shard
         for shard in shards
-        if not alignment_mapping_shard_is_current(data_dir=data_dir, shard=shard)
+        if not alignment_mapping_shard_is_current(
+            data_dir=data_dir,
+            search_db=search_db,
+            shard=shard,
+        )
     ]
     chunks = [
         missing[pos : pos + batch_size] for pos in range(0, len(missing), batch_size)
@@ -1783,11 +2024,13 @@ def scatter_missing_alignment_mappings(
 
 
 def _alignment_input_signatures(
-    *, data_dir: Path, shard: str
+    *, data_dir: Path, shard: str, search_db: str = "holo"
 ) -> dict[str, list[dict[str, int | str]]]:
     signatures: dict[str, list[dict[str, int | str]]] = {}
     for alignment_type in ["foldseek", "mmseqs"]:
-        source_dir = data_dir / "dbs" / "subdbs" / f"holo_{alignment_type}" / "aln"
+        source_dir = (
+            data_dir / "dbs" / "subdbs" / f"{search_db}_{alignment_type}" / "aln"
+        )
         sources = sorted(
             path
             for path in source_dir.glob("*.parquet")
@@ -1816,8 +2059,13 @@ def _alignment_release_path(
     )
 
 
-def _alignment_mapping_manifest_path(*, data_dir: Path, shard: str) -> Path:
-    return data_dir / "alignments" / "manifests" / f"shard={shard}.json"
+def _alignment_mapping_manifest_path(
+    *, data_dir: Path, shard: str, search_db: str = "holo"
+) -> Path:
+    root = data_dir / "alignments" / "manifests"
+    if search_db != "holo":
+        root = root / f"search_db={search_db}"
+    return root / f"shard={shard}.json"
 
 
 def _alignment_target_entry_ids(sources: Sequence[Path]) -> set[str]:
@@ -1836,19 +2084,30 @@ def _alignment_target_entry_ids(sources: Sequence[Path]) -> set[str]:
     return targets
 
 
-def alignment_mapping_shard_is_current(*, data_dir: Path, shard: str) -> bool:
+def alignment_mapping_shard_is_current(
+    *, data_dir: Path, shard: str, search_db: str = "holo"
+) -> bool:
     """Validate a shard manifest against raw inputs and published outputs."""
-    manifest_path = _alignment_mapping_manifest_path(data_dir=data_dir, shard=shard)
+    manifest_path = _alignment_mapping_manifest_path(
+        data_dir=data_dir,
+        search_db=search_db,
+        shard=shard,
+    )
     try:
         payload = json.loads(manifest_path.read_text())
     except (OSError, TypeError, ValueError):
         return False
-    inputs = _alignment_input_signatures(data_dir=data_dir, shard=shard)
+    inputs = _alignment_input_signatures(
+        data_dir=data_dir,
+        search_db=search_db,
+        shard=shard,
+    )
     lookup_signature = _completed_alignment_chain_lookup(data_dir)
     if lookup_signature is None:
         return False
     if (
         payload.get("shard") != shard
+        or (search_db != "holo" and payload.get("search_db") != search_db)
         or payload.get("inputs") != inputs
         or payload.get("alignment_chain_lookup") != lookup_signature
     ):
@@ -1859,7 +2118,7 @@ def alignment_mapping_shard_is_current(*, data_dir: Path, shard: str) -> bool:
     for alignment_type, source_signatures in inputs.items():
         output = _alignment_release_path(
             data_dir=data_dir,
-            search_db="holo",
+            search_db=search_db,
             alignment_type=alignment_type,
             shard=shard,
         )
@@ -1888,18 +2147,29 @@ def map_batch_alignments(
     scorer_cfg: DictConfig,
     force_update: bool,
     scratch_dir: Path | None = None,
+    search_db: str = "holo",
 ) -> None:
     """Map raw backend hits directly into atomic query-shard release files."""
-    if list(scorer_cfg.sub_databases) != ["holo"]:
-        raise ValueError("V3 sharded alignment mapping currently supports holo only")
+    if search_db not in scorer_cfg.sub_databases:
+        raise ValueError(f"alignment database is not enabled: {search_db}")
     maximum_rows = int(getattr(scorer_cfg, "max_alignment_rows_per_query", 5_000_000))
     for shard in shards:
         if not force_update and alignment_mapping_shard_is_current(
-            data_dir=data_dir, shard=shard
+            data_dir=data_dir,
+            search_db=search_db,
+            shard=shard,
         ):
-            LOG.info(f"map_batch_alignments: shard {shard} is complete")
+            LOG.info(
+                "map_batch_alignments: %s shard %s is complete",
+                search_db,
+                shard,
+            )
             continue
-        inputs = _alignment_input_signatures(data_dir=data_dir, shard=shard)
+        inputs = _alignment_input_signatures(
+            data_dir=data_dir,
+            search_db=search_db,
+            shard=shard,
+        )
         pdb_ids = sorted(
             {
                 Path(str(signature["name"])).stem
@@ -1911,7 +2181,9 @@ def map_batch_alignments(
             continue
         rows_by_query: dict[str, dict[str, int]] = {pdb_id: {} for pdb_id in pdb_ids}
         for alignment_type, signatures in inputs.items():
-            source_root = data_dir / "dbs" / "subdbs" / f"holo_{alignment_type}" / "aln"
+            source_root = (
+                data_dir / "dbs" / "subdbs" / f"{search_db}_{alignment_type}" / "aln"
+            )
             for signature in signatures:
                 source = source_root / str(signature["name"])
                 pdb_id = source.stem
@@ -1943,15 +2215,17 @@ def map_batch_alignments(
             )
         raw_root = data_dir / "dbs" / "subdbs"
         raw_sources = [
-            raw_root / f"holo_{alignment_type}" / "aln" / str(signature["name"])
+            raw_root / f"{search_db}_{alignment_type}" / "aln" / str(signature["name"])
             for alignment_type, signatures in inputs.items()
             for signature in signatures
             if Path(str(signature["name"])).stem not in skipped_queries
         ]
-        mapping_entry_ids = set(mapped_pdb_ids) | _alignment_target_entry_ids(
-            raw_sources
+        mapping_entry_ids = set(mapped_pdb_ids)
+        if search_db != "pred":
+            mapping_entry_ids.update(_alignment_target_entry_ids(raw_sources))
+        working_root = (scratch_dir or data_dir / "scratch" / "mapping") / (
+            f"{search_db}-{shard}"
         )
-        working_root = (scratch_dir or data_dir / "scratch" / "mapping") / shard
         if working_root.exists():
             rmtree(working_root)
         mapped_db_dir = working_root / "mapped"
@@ -1988,21 +2262,21 @@ def map_batch_alignments(
                 mapped = scorer.map_alignment_files(
                     data_dir,
                     pdb_id,
-                    "holo",
+                    search_db,
                     overwrite=True,
                     scratch_dir=working_root / "temporary",
                     mapped_db_dir=mapped_db_dir,
                 )
                 if len(mapped) != expected:
                     raise RuntimeError(
-                        f"holo alignment mapping for {pdb_id} produced "
+                        f"{search_db} alignment mapping for {pdb_id} produced "
                         f"{len(mapped)} of {expected} available backends"
                     )
             outputs: dict[str, dict[str, int | str] | None] = {}
             for alignment_type, source_signatures in inputs.items():
                 target = _alignment_release_path(
                     data_dir=data_dir,
-                    search_db="holo",
+                    search_db=search_db,
                     alignment_type=alignment_type,
                     shard=shard,
                 )
@@ -2011,9 +2285,9 @@ def map_batch_alignments(
                     outputs[alignment_type] = None
                     continue
                 local_sources = sorted(
-                    (mapped_db_dir / f"holo_{alignment_type}" / "mapped_aln").glob(
-                        "*.parquet"
-                    )
+                    (
+                        mapped_db_dir / f"{search_db}_{alignment_type}" / "mapped_aln"
+                    ).glob("*.parquet")
                 )
                 _write_alignment_release_shard(
                     sources=local_sources,
@@ -2029,12 +2303,17 @@ def map_batch_alignments(
                     "size": stat.st_size,
                     "mtime_ns": stat.st_mtime_ns,
                 }
-            manifest = _alignment_mapping_manifest_path(data_dir=data_dir, shard=shard)
+            manifest = _alignment_mapping_manifest_path(
+                data_dir=data_dir,
+                search_db=search_db,
+                shard=shard,
+            )
             manifest.parent.mkdir(exist_ok=True, parents=True)
             temporary_manifest = manifest.with_suffix(".tmp.json")
             temporary_manifest.write_text(
                 json.dumps(
                     {
+                        "search_db": search_db,
                         "shard": shard,
                         "alignment_chain_lookup": lookup_signature,
                         "inputs": inputs,
@@ -2056,6 +2335,8 @@ def scatter_missing_scores(
     *,
     data_dir: Path,
     batch_size: int,
+    scorer_cfg: DictConfig,
+    search_dbs: Sequence[str] = ("holo",),
 ) -> list[list[str]]:
     from plinder.data.pipeline.score import dropped_query_ids
 
@@ -2075,32 +2356,72 @@ def scatter_missing_scores(
                 / f"shard={pdb_id[1:3]}"
                 / f"{pdb_id}.parquet"
             )
+            ligand_pair_score_path = (
+                data_dir
+                / "scores"
+                / "ligand_pair_scores"
+                / "search_db=holo"
+                / f"shard={pdb_id[1:3]}"
+                / f"{pdb_id}.parquet"
+            )
             try:
                 metadata = pq.read_schema(score_path).metadata or {}
+                ligand_pair_schema = pq.read_schema(ligand_pair_score_path)
             except (OSError, ValueError):
                 continue
             if (
                 metadata.get(b"plinder.ligand_3d") in {b"deferred", b"complete"}
                 and candidate_path.is_file()
+                and ligand_pair_schema.equals(schemas.LIGAND_PAIR_SCORE_SCHEMA)
             ):
                 complete_holo.append(pdb_id)
         present["holo"] = complete_holo
-    mapped_queries: set[str] = set()
-    for manifest_path in sorted(
-        (data_dir / "alignments" / "manifests").glob("shard=*.json")
-    ):
-        shard = manifest_path.stem.removeprefix("shard=")
-        if not alignment_mapping_shard_is_current(data_dir=data_dir, shard=shard):
-            continue
-        payload = json.loads(manifest_path.read_text())
-        mapped_queries.update(
-            Path(str(signature["name"])).stem
-            for alignment_type in ["foldseek", "mmseqs"]
-            for signature in payload["inputs"][alignment_type]
+    rerun: set[str] = set()
+    dropped = dropped_query_ids(data_dir)
+    for search_db in search_dbs:
+        score_mode = b"deferred" if search_db == "holo" else b"complete"
+        score_metrics = None
+        if search_db == "apo":
+            from plinder.data.linked_apo import REQUIRED_SCORE_METRICS
+
+            score_metrics = REQUIRED_SCORE_METRICS
+        present[search_db] = [
+            pdb_id
+            for pdb_id in present.get(search_db, [])
+            if get_similarity_scores.score_cache_is_current(
+                data_dir
+                / "dbs"
+                / "subdbs"
+                / f"search_db={search_db}"
+                / f"{pdb_id}.parquet",
+                ligand_3d_mode=score_mode,
+                minimum_threshold=float(scorer_cfg.minimum_threshold),
+                minimum_thresholds=dict(scorer_cfg.minimum_thresholds),
+                holo_protein_scores_mode=(b"excluded" if search_db == "holo" else None),
+                score_metrics=score_metrics,
+            )
+        ]
+        manifest_root = data_dir / "alignments" / "manifests"
+        if search_db != "holo":
+            manifest_root = manifest_root / f"search_db={search_db}"
+        mapped_queries: set[str] = set()
+        for manifest_path in sorted(manifest_root.glob("shard=*.json")):
+            shard = manifest_path.stem.removeprefix("shard=")
+            if not alignment_mapping_shard_is_current(
+                data_dir=data_dir,
+                search_db=search_db,
+                shard=shard,
+            ):
+                continue
+            payload = json.loads(manifest_path.read_text())
+            mapped_queries.update(
+                Path(str(signature["name"])).stem
+                for alignment_type in ["foldseek", "mmseqs"]
+                for signature in payload["inputs"][alignment_type]
+            )
+        rerun.update(
+            mapped_queries.difference(present.get(search_db, [])).difference(dropped)
         )
-    rerun = mapped_queries.difference(present["holo"]).difference(
-        dropped_query_ids(data_dir)
-    )
     run = sorted(rerun)
     if score_work.is_file():
         planned = pd.read_parquet(
@@ -2138,6 +2459,59 @@ def make_batch_scores(
         raise ValueError("threads must be positive")
     scorer.shape_score_threads = threads
     for search_db in scorer_cfg.sub_databases:
+        if search_db != "holo":
+            from plinder.core.scores.entries import load_entry_views
+            from plinder.data.linked_apo import REQUIRED_SCORE_METRICS
+
+            score_metrics = REQUIRED_SCORE_METRICS if search_db == "apo" else None
+            missing_entries = set(entry_ids).difference(scorer.entries)
+            if missing_entries:
+                scorer.entries.update(
+                    load_entry_views(
+                        pdb_ids=missing_entries,
+                        data_dir=data_dir,
+                        include_interfaces=False,
+                    )
+                )
+            entries_by_shard: dict[str, list[str]] = {}
+            for pdb_id in entry_ids:
+                entries_by_shard.setdefault(pdb_id[1:3], []).append(pdb_id)
+            for shard, shard_entry_ids in entries_by_shard.items():
+                source_to_aln_file = {
+                    f"{search_db}_{alignment_type}": _alignment_release_path(
+                        data_dir=data_dir,
+                        search_db=search_db,
+                        alignment_type=alignment_type,
+                        shard=shard,
+                    )
+                    for alignment_type in ["foldseek", "mmseqs"]
+                }
+                alignments = scorer.load_alignments(
+                    source_to_aln_file=source_to_aln_file,
+                    search_db=search_db,
+                    query_entry_ids=set(shard_entry_ids),
+                )
+                for pdb_id in tqdm(shard_entry_ids):
+                    if alignments.empty:
+                        query_alignments = alignments
+                    else:
+                        try:
+                            query_alignments = alignments.loc[pdb_id]
+                        except KeyError:
+                            query_alignments = pd.DataFrame()
+                    scorer.get_score_df(
+                        data_dir,
+                        pdb_id,
+                        search_db=search_db,
+                        overwrite=force_update,
+                        map_alignments=False,
+                        scratch_dir=scratch_dir,
+                        source_to_aln_file=source_to_aln_file,
+                        defer_ligand_3d=False,
+                        query_entry_alignments=query_alignments,
+                        score_metrics=score_metrics,
+                    )
+            continue
         for pdb_id in tqdm(entry_ids):
             source_to_aln_file = {
                 f"{search_db}_{alignment_type}": _alignment_release_path(
@@ -2206,6 +2580,14 @@ def repair_batch_scores(
                 data_dir
                 / "scores"
                 / "ligand_3d_candidates"
+                / "search_db=holo"
+                / f"shard={pdb_id[1:3]}"
+                / f"{pdb_id}.parquet"
+            ).unlink(missing_ok=True)
+            (
+                data_dir
+                / "scores"
+                / "ligand_pair_scores"
                 / "search_db=holo"
                 / f"shard={pdb_id[1:3]}"
                 / f"{pdb_id}.parquet"
@@ -2288,6 +2670,10 @@ def _ligand_3d_pair_candidate_shard_path(data_dir: Path, shard: str) -> Path:
     )
 
 
+def _ligand_pair_score_shard_path(data_dir: Path, shard: str) -> Path:
+    return data_dir / "scores" / "ligand_pair_score_shards" / f"shard={shard}.parquet"
+
+
 def _ligand_3d_candidate_input_signatures(
     data_dir: Path, pdb_ids: Sequence[str]
 ) -> list[dict[str, int | str]]:
@@ -2320,6 +2706,35 @@ def _ligand_3d_candidate_input_signatures(
     return signatures
 
 
+def _ligand_pair_score_input_signatures(
+    data_dir: Path, pdb_ids: Sequence[str]
+) -> list[dict[str, int | str]]:
+    signatures: list[dict[str, int | str]] = []
+    for pdb_id in pdb_ids:
+        path = (
+            data_dir
+            / "scores"
+            / "ligand_pair_scores"
+            / "search_db=holo"
+            / f"shard={pdb_id[1:3]}"
+            / f"{pdb_id}.parquet"
+        )
+        stat = path.stat()
+        schema = pq.read_schema(path)
+        if not schema.equals(schemas.LIGAND_PAIR_SCORE_SCHEMA):
+            raise ValueError(f"ligand pair score file has unexpected schema: {path}")
+        signatures.append(
+            {
+                "pdb_id": pdb_id,
+                "path": str(path.resolve()),
+                "size": stat.st_size,
+                "mtime_ns": stat.st_mtime_ns,
+                "rows": pq.ParquetFile(path).metadata.num_rows,
+            }
+        )
+    return signatures
+
+
 def scatter_ligand_3d_candidate_shards(
     *, data_dir: Path, batch_size: int
 ) -> list[list[str]]:
@@ -2328,9 +2743,7 @@ def scatter_ligand_3d_candidate_shards(
 
     if batch_size < 1:
         raise ValueError("batch size must be positive")
-    shards = sorted(
-        {pdb_id[1:3] for pdb_id in published_scoring_query_ids(data_dir)}
-    )
+    shards = sorted({pdb_id[1:3] for pdb_id in published_scoring_query_ids(data_dir)})
     return [
         shards[start : start + batch_size]
         for start in range(0, len(shards), batch_size)
@@ -2343,15 +2756,26 @@ def collate_ligand_3d_candidates(
     shards: list[str],
     scratch_dir: Path,
     threads: int,
+    replacement_query_ids: set[str] | None = None,
+    source_query_ids: set[str] | None = None,
 ) -> list[Path]:
-    """Consolidate per-PDB positive-pocket candidates into query shards."""
+    """Consolidate or patch per-PDB positive-pocket candidate shards."""
     from plinder.data.pipeline.score import published_scoring_query_ids
 
     if threads < 1:
         raise ValueError("threads must be positive")
     import duckdb
 
-    active_queries = published_scoring_query_ids(data_dir)
+    patch_existing = replacement_query_ids is not None
+    if patch_existing:
+        replacement_query_ids = set(map(str, replacement_query_ids or set()))
+        active_queries = set(map(str, source_query_ids or set()))
+        if active_queries.difference(replacement_query_ids):
+            raise ValueError("candidate patch sources must be replacement queries")
+    elif source_query_ids is not None:
+        raise ValueError("source_query_ids requires replacement_query_ids")
+    else:
+        active_queries = published_scoring_query_ids(data_dir)
     scratch_dir.mkdir(exist_ok=True, parents=True)
     outputs: list[Path] = []
     for shard in shards:
@@ -2360,20 +2784,35 @@ def collate_ligand_3d_candidates(
         ):
             raise ValueError(f"invalid ligand 3D candidate shard: {shard!r}")
         pdb_ids = sorted(pdb_id for pdb_id in active_queries if pdb_id[1:3] == shard)
-        if not pdb_ids:
+        replaced_pdb_ids = sorted(
+            pdb_id for pdb_id in replacement_query_ids or set() if pdb_id[1:3] == shard
+        )
+        if patch_existing and not replaced_pdb_ids:
+            continue
+        if not patch_existing and not pdb_ids:
             continue
         try:
             inputs = _ligand_3d_candidate_input_signatures(data_dir, pdb_ids)
+            ligand_pair_inputs = _ligand_pair_score_input_signatures(data_dir, pdb_ids)
         except FileNotFoundError as exc:
             raise FileNotFoundError(
-                f"ligand 3D candidates are incomplete for shard {shard}: {exc}"
+                f"ligand score inputs are incomplete for shard {shard}: {exc}"
             ) from exc
         output, manifest = _ligand_3d_candidate_shard_paths(data_dir, shard)
         pair_output = _ligand_3d_pair_candidate_shard_path(data_dir, shard)
+        ligand_pair_output = _ligand_pair_score_shard_path(data_dir, shard)
+        if patch_existing and (
+            not output.is_file() or not ligand_pair_output.is_file()
+        ):
+            raise FileNotFoundError(
+                "ligand score patch requires existing shards: "
+                f"candidates={output.is_file()} pairs={ligand_pair_output.is_file()}"
+            )
         output_is_current = False
         pair_output_is_current = False
+        ligand_pair_output_is_current = False
         payload: dict[str, Any] = {}
-        if output.is_file() and manifest.is_file():
+        if not patch_existing and output.is_file() and manifest.is_file():
             try:
                 payload = json.loads(manifest.read_text())
                 stat = output.stat()
@@ -2403,11 +2842,32 @@ def collate_ligand_3d_candidates(
                         )
                         and payload.get("pair_output") == current_pair_output
                     )
+                if output_is_current and ligand_pair_output.is_file():
+                    ligand_pair_stat = ligand_pair_output.stat()
+                    current_ligand_pair_output = {
+                        "path": str(ligand_pair_output.resolve()),
+                        "size": ligand_pair_stat.st_size,
+                        "mtime_ns": ligand_pair_stat.st_mtime_ns,
+                        "rows": pq.ParquetFile(ligand_pair_output).metadata.num_rows,
+                    }
+                    ligand_pair_output_is_current = (
+                        payload.get("ligand_pair_inputs") == ligand_pair_inputs
+                        and payload.get("ligand_pair_output")
+                        == current_ligand_pair_output
+                        and pq.read_schema(ligand_pair_output).equals(
+                            schemas.LIGAND_PAIR_SCORE_SCHEMA
+                        )
+                    )
             except (OSError, TypeError, ValueError):
                 output_is_current = False
                 pair_output_is_current = False
+                ligand_pair_output_is_current = False
 
-        if output_is_current and pair_output_is_current:
+        if (
+            output_is_current
+            and pair_output_is_current
+            and ligand_pair_output_is_current
+        ):
             outputs.append(output)
             continue
 
@@ -2419,11 +2879,30 @@ def collate_ligand_3d_candidates(
             source_paths = [Path(str(item["path"])) for item in inputs]
             paths_sql = ", ".join(f"'{path.as_posix()}'" for path in source_paths)
             temporary.unlink(missing_ok=True)
+            if patch_existing:
+                connection.register(
+                    "replacement_queries",
+                    pd.DataFrame({"query_entry": replaced_pdb_ids}),
+                )
+                replacement_sql = (
+                    f"SELECT * FROM read_parquet([{paths_sql}])"
+                    if source_paths
+                    else f"SELECT * FROM read_parquet('{output.as_posix()}') "
+                    "WHERE false"
+                )
+                source_sql = f"""
+                    SELECT existing.*
+                    FROM read_parquet('{output.as_posix()}') AS existing
+                    ANTI JOIN replacement_queries USING (query_entry)
+                    UNION ALL BY NAME
+                    {replacement_sql}
+                """
+            else:
+                source_sql = f"SELECT * FROM read_parquet([{paths_sql}])"
             connection.sql(
                 f"""
                 COPY (
-                    SELECT *
-                    FROM read_parquet([{paths_sql}])
+                    SELECT * FROM ({source_sql})
                     ORDER BY
                         query_entry,
                         query_ligand_asym_id,
@@ -2435,7 +2914,9 @@ def collate_ligand_3d_candidates(
                 """
             )
             observed_rows = pq.ParquetFile(temporary).metadata.num_rows
-            expected_rows = sum(int(item["rows"]) for item in inputs)
+            expected_rows = connection.sql(
+                f"SELECT count(*) FROM ({source_sql})"
+            ).fetchone()[0]
             if observed_rows != expected_rows:
                 connection.close()
                 raise ValueError(
@@ -2447,6 +2928,105 @@ def collate_ligand_3d_candidates(
             copyfile(temporary, install)
             install.replace(output)
             temporary.unlink(missing_ok=True)
+
+        ligand_pair_temporary = scratch_dir / f"ligand-pair-shard={shard}.parquet"
+        if not ligand_pair_output_is_current:
+            ligand_pair_columns_sql = ", ".join(schemas.LIGAND_PAIR_SCORE_SCHEMA.names)
+            ligand_pair_source_paths = [
+                Path(str(item["path"])) for item in ligand_pair_inputs
+            ]
+            ligand_pair_paths_sql = ", ".join(
+                f"'{path.as_posix()}'" for path in ligand_pair_source_paths
+            )
+            ligand_pair_temporary.unlink(missing_ok=True)
+            if patch_existing:
+                connection.register(
+                    "ligand_pair_replacement_queries",
+                    pd.DataFrame({"query_entry": replaced_pdb_ids}),
+                )
+                ligand_pair_replacement_sql = (
+                    f"SELECT {ligand_pair_columns_sql} "
+                    f"FROM read_parquet([{ligand_pair_paths_sql}])"
+                    if ligand_pair_source_paths
+                    else f"SELECT {ligand_pair_columns_sql} FROM "
+                    f"read_parquet('{ligand_pair_output.as_posix()}') WHERE false"
+                )
+                ligand_pair_source_sql = f"""
+                    SELECT {ligand_pair_columns_sql}
+                    FROM read_parquet('{ligand_pair_output.as_posix()}') AS existing
+                    ANTI JOIN ligand_pair_replacement_queries USING (query_entry)
+                    UNION ALL BY NAME
+                    {ligand_pair_replacement_sql}
+                """
+            else:
+                ligand_pair_source_sql = (
+                    f"SELECT {ligand_pair_columns_sql} "
+                    f"FROM read_parquet([{ligand_pair_paths_sql}])"
+                )
+            connection.sql(
+                f"""
+                COPY (
+                    SELECT * FROM ({ligand_pair_source_sql})
+                    ORDER BY
+                        query_entry,
+                        query_ligand_asym_id,
+                        target_entry,
+                        target_ligand_asym_id,
+                        query_system,
+                        query_ligand_id,
+                        target_system,
+                        target_ligand_id
+                ) TO '{ligand_pair_temporary.as_posix()}' (
+                    FORMAT PARQUET,
+                    COMPRESSION ZSTD
+                )
+                """
+            )
+            observed_ligand_pair_rows = pq.ParquetFile(
+                ligand_pair_temporary
+            ).metadata.num_rows
+            expected_ligand_pair_rows = connection.sql(
+                f"SELECT count(*) FROM ({ligand_pair_source_sql})"
+            ).fetchone()[0]
+            duplicate_ligand_pairs = connection.sql(
+                f"""
+                SELECT count(*)
+                FROM (
+                    SELECT
+                        query_system,
+                        query_ligand_id,
+                        target_system,
+                        target_ligand_id
+                    FROM read_parquet('{ligand_pair_temporary.as_posix()}')
+                    GROUP BY ALL
+                    HAVING count(*) > 1
+                )
+                """
+            ).fetchone()[0]
+            if (
+                observed_ligand_pair_rows != expected_ligand_pair_rows
+                or duplicate_ligand_pairs
+            ):
+                connection.close()
+                raise ValueError(
+                    f"ligand pair score shard {shard} has "
+                    f"{observed_ligand_pair_rows}/{expected_ligand_pair_rows} rows "
+                    f"and {duplicate_ligand_pairs} duplicate pairs"
+                )
+            if not pq.read_schema(ligand_pair_temporary).equals(
+                schemas.LIGAND_PAIR_SCORE_SCHEMA
+            ):
+                connection.close()
+                raise ValueError(
+                    f"ligand pair score shard {shard} has an unexpected schema"
+                )
+            ligand_pair_output.parent.mkdir(exist_ok=True, parents=True)
+            ligand_pair_install = ligand_pair_output.with_suffix(
+                ligand_pair_output.suffix + ".tmp"
+            )
+            copyfile(ligand_pair_temporary, ligand_pair_install)
+            ligand_pair_install.replace(ligand_pair_output)
+            ligand_pair_temporary.unlink(missing_ok=True)
 
         pair_temporary = scratch_dir / f"pair-shard={shard}.parquet"
         pair_temporary.unlink(missing_ok=True)
@@ -2486,9 +3066,18 @@ def collate_ligand_3d_candidates(
         output_stat = output.stat()
         observed_rows = pq.ParquetFile(output).metadata.num_rows
         pair_output_stat = pair_output.stat()
+        ligand_pair_output_stat = ligand_pair_output.stat()
         payload = {
             "shard": shard,
-            "inputs": inputs,
+            "inputs": (
+                {
+                    "base": "existing packed candidate shard",
+                    "replaced_query_ids": replaced_pdb_ids,
+                    "replacements": inputs,
+                }
+                if patch_existing
+                else inputs
+            ),
             "output": {
                 "path": str(output.resolve()),
                 "size": output_stat.st_size,
@@ -2500,6 +3089,21 @@ def collate_ligand_3d_candidates(
                 "size": pair_output_stat.st_size,
                 "mtime_ns": pair_output_stat.st_mtime_ns,
                 "rows": pq.ParquetFile(pair_output).metadata.num_rows,
+            },
+            "ligand_pair_inputs": (
+                {
+                    "base": "existing packed ligand pair score shard",
+                    "replaced_query_ids": replaced_pdb_ids,
+                    "replacements": ligand_pair_inputs,
+                }
+                if patch_existing
+                else ligand_pair_inputs
+            ),
+            "ligand_pair_output": {
+                "path": str(ligand_pair_output.resolve()),
+                "size": ligand_pair_output_stat.st_size,
+                "mtime_ns": ligand_pair_output_stat.st_mtime_ns,
+                "rows": pq.ParquetFile(ligand_pair_output).metadata.num_rows,
             },
         }
         manifest.parent.mkdir(exist_ok=True, parents=True)
@@ -2603,9 +3207,7 @@ def scatter_ligand_3d_query_shards(
 
     if batch_size < 1:
         raise ValueError("batch size must be positive")
-    shards = sorted(
-        {pdb_id[1:3] for pdb_id in published_scoring_query_ids(data_dir)}
-    )
+    shards = sorted({pdb_id[1:3] for pdb_id in published_scoring_query_ids(data_dir)})
     return [
         shards[start : start + batch_size]
         for start in range(0, len(shards), batch_size)
@@ -2774,8 +3376,9 @@ def merge_ligand_3d_scores(
     scratch_dir: Path,
     threads: int = 1,
     reuse_cached_pairs: bool = False,
+    replacement_query_ids: set[str] | None = None,
 ) -> list[Path]:
-    """Publish complete V3 scores directly as immutable query shards."""
+    """Publish complete score shards or patch selected query entries."""
     from plinder.data.pipeline.score import published_scoring_query_ids
 
     if threads < 1:
@@ -2800,7 +3403,16 @@ def merge_ligand_3d_scores(
     scratch_dir.mkdir(exist_ok=True, parents=True)
     output_dir = data_dir / "scores" / "search_db=holo"
     output_dir.mkdir(exist_ok=True, parents=True)
-    active_queries = published_scoring_query_ids(data_dir)
+    published_queries = published_scoring_query_ids(data_dir)
+    patch_existing = replacement_query_ids is not None
+    replacement_query_ids = set(map(str, replacement_query_ids or set()))
+    if patch_existing and not reuse_cached_pairs:
+        raise ValueError("query replacement requires cached ligand-pair scores")
+    active_queries = (
+        published_queries.intersection(replacement_query_ids)
+        if patch_existing
+        else published_queries
+    )
     thresholds = {
         metric: float(
             scorer_cfg.minimum_thresholds.get(metric, scorer_cfg.minimum_threshold)
@@ -2814,7 +3426,16 @@ def merge_ligand_3d_scores(
         ):
             raise ValueError(f"invalid ligand 3D query shard: {shard!r}")
         output = output_dir / f"{shard}.parquet"
-        if output.is_file() and not force_update:
+        replaced_pdb_ids = sorted(
+            pdb_id for pdb_id in replacement_query_ids if pdb_id[1:3] == shard
+        )
+        if patch_existing and not replaced_pdb_ids:
+            continue
+        if patch_existing and not output.is_file():
+            raise FileNotFoundError(
+                f"score patch requires existing published shard: {output}"
+            )
+        if output.is_file() and not force_update and not patch_existing:
             schema = pq.read_schema(output)
             if set(schemas.PROTEIN_SIMILARITY_SCHEMA.names).issubset(schema.names):
                 outputs.append(output)
@@ -2865,12 +3486,23 @@ def merge_ligand_3d_scores(
         connection = duckdb.connect()
         connection.sql(f"SET threads={threads}")
         connection.sql(f"SET temp_directory='{shard_scratch.as_posix()}'")
+        if patch_existing:
+            connection.register(
+                "replacement_queries",
+                pd.DataFrame({"query_entry": replaced_pdb_ids}),
+            )
+            candidate_sql = f"""
+                SELECT candidates.*
+                FROM read_parquet('{candidate_path.as_posix()}') AS candidates
+                INNER JOIN replacement_queries USING (query_entry)
+            """
+        else:
+            candidate_sql = f"SELECT * FROM read_parquet('{candidate_path.as_posix()}')"
 
         validation = connection.sql(
             f"""
             WITH candidates AS (
-                SELECT *
-                FROM read_parquet('{candidate_path.as_posix()}')
+                {candidate_sql}
             ), pairs AS (
                 SELECT *
                 FROM read_parquet('{pair_path.as_posix()}')
@@ -2928,6 +3560,50 @@ def merge_ligand_3d_scores(
             )
         metric_union = "\nUNION ALL\n".join(metric_selects)
         excluded_metrics = ", ".join(f"'{metric}'" for metric in all_ligand_metrics)
+        if patch_existing:
+            replacement_base_sql = (
+                f"""
+                SELECT *
+                FROM read_parquet(
+                    [{base_paths_sql}],
+                    hive_partitioning = false
+                )
+                WHERE metric NOT IN ({excluded_metrics})
+                  AND NOT starts_with(cast(metric AS VARCHAR), 'protein_')
+                """
+                if base_paths
+                else f"""
+                SELECT *
+                FROM read_parquet(
+                    '{output.as_posix()}', hive_partitioning = false
+                )
+                WHERE false
+                """
+            )
+            base_scores_sql = f"""
+                SELECT existing.*
+                FROM read_parquet(
+                    '{output.as_posix()}', hive_partitioning = false
+                ) AS existing
+                ANTI JOIN replacement_queries
+                  ON split_part(existing.query_system, '__', 1)
+                   = replacement_queries.query_entry
+                WHERE NOT starts_with(
+                    cast(existing.metric AS VARCHAR), 'protein_'
+                )
+                UNION ALL BY NAME
+                {replacement_base_sql}
+            """
+        else:
+            base_scores_sql = f"""
+                SELECT *
+                FROM read_parquet(
+                    [{base_paths_sql}],
+                    hive_partitioning = false
+                )
+                WHERE metric NOT IN ({excluded_metrics})
+                  AND NOT starts_with(cast(metric AS VARCHAR), 'protein_')
+            """
         local_output = shard_scratch / f"{shard}.parquet"
         local_output.unlink(missing_ok=True)
         connection.sql(
@@ -2935,8 +3611,7 @@ def merge_ligand_3d_scores(
                 f"""
                 COPY (
                     WITH candidates AS (
-                        SELECT *
-                        FROM read_parquet('{candidate_path.as_posix()}')
+                        {candidate_sql}
                     ), pairs AS (
                         SELECT *
                         FROM read_parquet('{pair_path.as_posix()}')
@@ -2948,12 +3623,7 @@ def merge_ligand_3d_scores(
                     ), ligand_scores AS (
                         {metric_union}
                     ), base_scores AS (
-                        SELECT *
-                        FROM read_parquet(
-                            [{base_paths_sql}],
-                            hive_partitioning = false
-                        )
-                        WHERE metric NOT IN ({excluded_metrics})
+                        {base_scores_sql}
                     )
                     SELECT * FROM base_scores
                     UNION ALL
@@ -3197,6 +3867,62 @@ def collate_partitions(
     local_target.unlink(missing_ok=True)
 
 
+def make_linked_apo_structures(
+    *,
+    data_dir: Path,
+    scratch_dir: Path | None = None,
+    threads: int = 1,
+    memory_limit: str = "7GB",
+) -> Path:
+    """Publish ranked deposited apo-chain links for each holo system."""
+    from plinder.data.linked_apo import (
+        build_apo_candidate_manifest,
+        write_linked_apo_structure_table,
+    )
+
+    index_dir = data_dir / "index"
+    inputs = {
+        "protein_scores": data_dir / "scores/search_db=apo/apo.parquet",
+        "annotation": index_dir / "annotation_table.parquet",
+        "entry_chains": index_dir / "entry_chains.parquet",
+        "biounit_chains": index_dir / "entry_biounit_chains.parquet",
+        "entry_metadata": index_dir / "entry_metadata.parquet",
+    }
+    for path in inputs.values():
+        if not path.is_file():
+            raise FileNotFoundError(path)
+
+    candidates = build_apo_candidate_manifest(
+        inputs["entry_chains"],
+        biounit_chains=inputs["biounit_chains"],
+        entry_metadata=inputs["entry_metadata"],
+        annotation=inputs["annotation"],
+    )
+    manifest = data_dir / "manifests/apo_candidates.parquet"
+    manifest.parent.mkdir(exist_ok=True, parents=True)
+    temporary_manifest = manifest.with_suffix(manifest.suffix + ".tmp")
+    candidates.to_parquet(temporary_manifest, index=False)
+    temporary_manifest.replace(manifest)
+
+    output = index_dir / "linked_apo_structures.parquet"
+    write_linked_apo_structure_table(
+        inputs["protein_scores"],
+        annotation=inputs["annotation"],
+        candidates=manifest,
+        output_path=output,
+        scratch_dir=scratch_dir,
+        threads=threads,
+        memory_limit=memory_limit,
+    )
+    linked_rows = pq.ParquetFile(output).metadata.num_rows
+    LOG.info(
+        "make_linked_apo_structures: selected %d links from " "%d apo-chain candidates",
+        linked_rows,
+        len(candidates),
+    )
+    return output
+
+
 def scatter_component_reduction_sources(
     *,
     data_dir: Path,
@@ -3306,7 +4032,7 @@ def make_symmetric_edge_shards(
         )
 
 
-def scatter_make_communities(
+def scatter_make_set_covers(
     *,
     data_dir: Path,
     metrics: list[str],
@@ -3315,8 +4041,13 @@ def scatter_make_communities(
     skip_existing_clusters: bool,
     entity_type: clusters.ClusterEntity = "ligand",
 ) -> list[list[tuple[str, int]]]:
-    """Scatter centroid-clustering work after component reductions are available."""
-    values = [[(metric, threshold)] for metric in metrics for threshold in thresholds]
+    """Scatter ligand-Tanimoto set-cover work after component reduction."""
+    values = [
+        [(metric, threshold)]
+        for metric in metrics
+        if entity_type == "ligand" and metric == "tanimoto_similarity_ecfp4_1024"
+        for threshold in thresholds
+    ]
     if stop_on_cluster:
         values = values[:stop_on_cluster]
     if not skip_existing_clusters:
@@ -3325,13 +4056,12 @@ def scatter_make_communities(
     for item in values:
         metric, threshold = item[0]
         output = (
-            clusters._cluster_root(data_dir, entity_type)
-            / "cluster=communities"
-            / "directed=False"
+            clusters._sampling_root(data_dir, entity_type)
+            / "set_cover"
             / f"metric={metric}"
             / f"threshold={threshold}.parquet"
         )
-        if not output.is_file():
+        if not clusters.set_cover_is_complete(output):
             pending.append(item)
     return pending or [[]]
 
@@ -3346,7 +4076,12 @@ def scatter_make_directed_set_covers(
     entity_type: clusters.ClusterEntity = "ligand",
 ) -> list[list[tuple[str, int]]]:
     """Scatter directed centroid-cover work after connectivity publication."""
-    values = [[(metric, threshold)] for metric in metrics for threshold in thresholds]
+    values = [
+        [(metric, threshold)]
+        for metric in metrics
+        if metric != "tanimoto_similarity_ecfp4_1024"
+        for threshold in thresholds
+    ]
     if stop_on_cluster:
         values = values[:stop_on_cluster]
     if not skip_existing:
@@ -3383,34 +4118,42 @@ def _reduce_component_metric(metric_index: int, metric: str) -> dict[str, Any]:
     if context is None:
         raise RuntimeError("component reduction worker context is not initialized")
     metric_started = time.time()
-    manifest = clusters.make_score_component_reduction(
-        data_dir=context["data_dir"],
-        metric=metric,
-        thresholds=context["thresholds"],
-        source_path=context["source"],
-        read_path=context["local_source"],
-        all_nodes=context["nodes"],
-        eligible_systems=context["eligible_systems"],
-        force_update=context["force_update"],
-        entity_type=context["entity_type"],
-    )
-    cover_manifest = clusters.make_directed_cover_component_reduction(
-        data_dir=context["data_dir"],
-        metric=metric,
-        thresholds=context["thresholds"],
-        source_path=context["source"],
-        read_path=context["local_source"],
-        all_nodes=context["nodes"],
-        eligible_systems=context["eligible_systems"],
-        force_update=context["force_update"],
-        entity_type=context["entity_type"],
-    )
+    chemical = metric == "tanimoto_similarity_ecfp4_1024"
+    if chemical:
+        manifests = [
+            clusters.make_score_component_reduction(
+                data_dir=context["data_dir"],
+                metric=metric,
+                thresholds=context["thresholds"],
+                source_path=context["source"],
+                read_path=context["local_source"],
+                all_nodes=context["nodes"],
+                eligible_systems=context["eligible_systems"],
+                force_update=context["force_update"],
+                entity_type=context["entity_type"],
+            )
+        ]
+    else:
+        manifests = [
+            clusters.make_directed_cover_component_reduction(
+                data_dir=context["data_dir"],
+                metric=metric,
+                thresholds=context["thresholds"],
+                source_path=context["source"],
+                read_path=context["local_source"],
+                all_nodes=context["nodes"],
+                eligible_systems=context["eligible_systems"],
+                force_update=context["force_update"],
+                entity_type=context["entity_type"],
+            )
+        ]
     return {
         "metric_index": metric_index,
         "metric": metric,
         "output_rows": sum(
             int(output["rows"])
-            for output in manifest["outputs"] + cover_manifest["outputs"]
+            for manifest in manifests
+            for output in manifest["outputs"]
         ),
         "elapsed_seconds": time.time() - metric_started,
     }
@@ -3488,7 +4231,8 @@ def make_component_reductions(
                     eligible_systems=eligible_systems,
                     entity_type=entity_type,
                 )
-                and clusters.directed_cover_component_reduction_is_complete(
+                if is_chemical
+                else clusters.directed_cover_component_reduction_is_complete(
                     data_dir=data_dir,
                     metric=metric,
                     thresholds=thresholds,
@@ -3596,7 +4340,7 @@ def merge_component_reductions(
     thresholds: list[int],
     entity_type: clusters.ClusterEntity = "ligand",
 ) -> None:
-    """Merge every expected source reduction and publish ligand components."""
+    """Merge source reductions into internal connectivity labels."""
     started = time.time()
     for index, metric in enumerate(metrics, start=1):
         metric_started = time.time()
@@ -3606,18 +4350,20 @@ def merge_component_reductions(
             index,
             len(metrics),
         )
-        clusters.merge_score_component_reductions(
-            data_dir=data_dir,
-            metric=metric,
-            thresholds=thresholds,
-            entity_type=entity_type,
-        )
-        clusters.merge_directed_cover_component_reductions(
-            data_dir=data_dir,
-            metric=metric,
-            thresholds=thresholds,
-            entity_type=entity_type,
-        )
+        if metric == "tanimoto_similarity_ecfp4_1024":
+            clusters.merge_score_component_reductions(
+                data_dir=data_dir,
+                metric=metric,
+                thresholds=thresholds,
+                entity_type=entity_type,
+            )
+        else:
+            clusters.merge_directed_cover_component_reductions(
+                data_dir=data_dir,
+                metric=metric,
+                thresholds=thresholds,
+                entity_type=entity_type,
+            )
         elapsed = time.time() - started
         rate = index / elapsed
         LOG.info(
@@ -3629,7 +4375,7 @@ def merge_component_reductions(
         )
 
 
-def make_communities(
+def make_set_covers(
     *,
     data_dir: Path,
     metric_threshold: list[tuple[str, int]],
@@ -3638,12 +4384,12 @@ def make_communities(
     threads: int = 1,
     entity_type: clusters.ClusterEntity = "ligand",
 ) -> None:
-    """Compute one greedy centroid partition after component publication."""
+    """Compute one ligand-Tanimoto set cover after component reduction."""
     if not metric_threshold:
-        LOG.info("make_communities: all communities are cached")
+        LOG.info("make_set_covers: all set covers are cached")
         return
     [(metric, threshold)] = metric_threshold
-    clusters.make_communities(
+    clusters.make_set_cover(
         data_dir=data_dir,
         metric=metric,
         threshold=threshold,
@@ -3698,241 +4444,14 @@ def summarize_clusters(
 
 
 def finalize_index(*, data_dir: Path) -> None:
-    """Merge locally generated cluster IDs into the annotation indexes."""
+    """Publish annotation enrichment and queryable cluster sidecars."""
     lookup_was_current = _completed_alignment_chain_lookup(data_dir) is not None
     utils.finalize_index(data_dir=data_dir)
-    # finalize_index only adds ligand and cluster annotations; it preserves the
-    # entry, chain, pocket, and interface fields from which the normalized
-    # inputs were built. Refresh those source signatures so an otherwise valid
-    # mapped release does not become stale merely because clusters were published.
+    # finalize_index preserves the entry, chain, pocket, and interface fields
+    # used to build the representative inputs. Refresh those source signatures
+    # so an otherwise valid mapped release does not become stale merely because
+    # the final tables were published.
     if lookup_was_current:
         _refresh_representative_source_manifests(data_dir)
         _write_alignment_chain_lookup_manifest(data_dir)
-    utils.create_nonredundant_dataset(data_dir=data_dir)
     collate.finalize_repair_marker(data_dir)
-
-
-def make_mmp_index(
-    *,
-    data_dir: Path,
-) -> None:
-    """
-    Get the list of all pdb IDs to load all the entries
-    for mmp indexing.
-    Parameters
-    ----------
-    data_dir : Path
-        the root plinder dir
-    """
-
-    from plinder.data.annotations.mmpdb_utils import (
-        add_mmp_clusters_to_data,
-        make_mmp_index_from_annotation_table,
-    )
-
-    LOG.info("making annotation table (and non-redundant) indexes")
-    utils.create_nonredundant_dataset(data_dir=data_dir)
-
-    LOG.info("making mmp index for all entries")
-    annotation_index = data_dir / "index" / "annotation_table.parquet"
-    columns = ["system_id", "ligand_rdkit_canonical_smiles", "ligand_unique_ccd_code"]
-    annotation_df = pd.read_parquet(annotation_index, columns=columns)
-    mmp_df_path = make_mmp_index_from_annotation_table(data_dir, annotation_df)
-    load_mmp_df = pd.read_csv(mmp_df_path, compression="gzip", header=None, sep="\t")
-    load_mmp_df.columns = ["SMILES1", "SMILES2", "id1", "id2", "V1>>V2", "CONSTANT"]
-    mmp_data = add_mmp_clusters_to_data(
-        load_mmp_df,
-        annotation_df,
-        cluster_folder=data_dir / "clusters",
-    )
-    mmp_data.to_parquet(data_dir / "mmp" / "plinder_mmp_series.parquet", index=False)
-
-
-def scatter_make_splits(
-    *,
-    data_dir: Path,
-    split_config_dir: str,
-) -> list[list[tuple[DictConfig, str]]]:
-    # defaults to empty string so skip it
-    configs: list[list[tuple[DictConfig, str]]]
-    if not len(split_config_dir):
-        configs = [[]]
-    # allow configs living in cloud buckets configured by PLINDER_BUCKET
-    elif split_config_dir.startswith("gs:"):
-        bucket_name = Path(split_config_dir).parts[1]
-        configs = [
-            [
-                (
-                    splits.get_config(
-                        gcs.download_as_str(
-                            gcs_path=cloud_path,
-                            bucket_name=bucket_name,
-                        )
-                    ),
-                    cloud_path,
-                )
-            ]
-            for cloud_path in gcs.list_dir(
-                gcs_path=str(split_config_dir),
-                bucket_name=bucket_name,
-            )
-        ]
-    else:
-        # support relative local split_config_dir from data_dir
-        # and absolute split_config_dir
-        split_dir = Path(split_config_dir or "splits")
-        if not split_dir.is_absolute():
-            split_dir = data_dir / split_config_dir
-        configs = [
-            [
-                (
-                    splits.get_config(path.read_text()),
-                    path.as_posix(),
-                )
-            ]
-            for path in split_dir.rglob("*.yaml")
-        ]
-    for tup in configs:
-        if len(tup[0]):
-            LOG.info(f"scatter_make_splits: config={tup[0][1]}")
-    return configs
-
-
-def make_splits(
-    *,
-    data_dir: Path,
-    cfg_and_path: list[tuple[DictConfig, str]],
-) -> None:
-    [(cfg, path)] = cfg_and_path
-    splits.split(data_dir=data_dir, cfg=cfg, relpath=path)
-
-
-def scatter_make_links(
-    *,
-    data_dir: Path,
-    search_dbs: list[str],
-) -> list[list[str]]:
-    return [[obj] for obj in search_dbs]
-
-
-def make_links(
-    *,
-    data_dir: Path,
-    search_dbs: list[str],
-    cpu: int = 8,
-) -> None:
-    from plinder.data.save_linked_structures import make_linked_structures_data_file
-
-    save_dir = data_dir / "assignments"
-    linked_structures = data_dir / "linked_staging"
-    for search_db in search_dbs:
-        output_file = linked_structures / f"{search_db}_links.parquet"
-        make_linked_structures_data_file(
-            data_dir=data_dir,
-            search_db=search_db,
-            superposed_folder=save_dir,
-            output_file=output_file,
-            num_processes=cpu,
-        )
-
-
-def make_linked_structures(
-    *,
-    data_dir: Path,
-    search_dbs: list[str],
-    cpu: int = 8,
-    force_update: bool = False,
-) -> None:
-    import multiprocessing
-
-    linked_structures = data_dir / "linked_staging"
-    for search_db in search_dbs:
-        if search_db == "holo":
-            continue
-        source_structures = linked_structures / "source" / search_db
-        source_structures.mkdir(exist_ok=True, parents=True)
-        df = pd.read_parquet(
-            linked_structures / f"{search_db}_links.parquet", columns=["id"]
-        )
-        LOG.info(
-            f"make_linked_structures: collecting {df['id'].nunique()} {search_db} linked structures"
-        )
-        func = None
-        if search_db == "apo":
-            func = utils.apo_file_from_link_id
-        elif search_db == "pred":
-            func = utils.pred_file_from_link_id
-        if func is not None:
-            args = [
-                (data_dir, source_structures, link_id, force_update)
-                for link_id in df["id"].unique()
-            ]
-            with multiprocessing.get_context("spawn").Pool(cpu) as p:
-                p.starmap(func, args)
-        utils.pack_source_structures(data_dir, search_db)
-
-
-def scatter_score_linked_structures(
-    *,
-    data_dir: Path,
-    search_dbs: list[str],
-    batch_size: int,
-) -> list[list[tuple[str, str]]]:
-    items = []
-    for search_db in search_dbs:
-        links = pd.read_parquet(
-            data_dir / "linked_staging" / f"{search_db}_links.parquet"
-        )
-        items.extend(
-            [
-                (search_db, system_id)
-                for system_id in sorted(links["reference_system_id"])
-            ]
-        )
-    return [items[pos : pos + batch_size] for pos in range(0, len(items), batch_size)]
-
-
-def score_linked_structures(
-    *,
-    data_dir: Path,
-    search_dbs: list[str],
-    system_ids: list[tuple[str, str]],
-    cpu: int = 8,
-    force_update: bool = False,
-) -> None:
-    import multiprocessing
-
-    from plinder.data.save_linked_structures import (
-        system_save_and_score_representatives,
-    )
-
-    linked_structures = data_dir / "linked_staging"
-    grouped = {
-        search_db: [tup[1] for tup in system_ids if tup[0] == search_db]
-        for search_db in search_dbs
-    }
-    dfs = []
-    for search_db in search_dbs:
-        df = pd.read_parquet(linked_structures / f"{search_db}_links.parquet")
-        slc = df[df["reference_system_id"].isin(grouped[search_db])]
-        if not slc.empty:
-            dfs.append(slc.copy())
-            dfs[-1]["kind"] = search_db
-    if not len(dfs):
-        LOG.info("no linked structures to make")
-        return
-    links = pd.concat(dfs).reset_index(drop=True)
-
-    with multiprocessing.get_context("spawn").Pool(cpu) as p:
-        p.starmap(
-            system_save_and_score_representatives,
-            [
-                (system, group, data_dir, search_db, linked_structures, force_update)
-                for (search_db, system), group in links.groupby(
-                    [
-                        "kind",
-                        "reference_system_id",
-                    ]
-                )
-            ],
-        )

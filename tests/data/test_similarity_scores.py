@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 
@@ -56,9 +57,7 @@ SDF_FILE = (
 HEM_SDF_FILE = (
     Path(__file__).resolve().parents[1]
     / "test_data"
-    / "plinder"
-    / "mount"
-    / "systems"
+    / "reconstructed_systems"
     / "19hc__1__1.B__1.T"
     / "ligand_files"
     / "1.T.sdf"
@@ -88,6 +87,27 @@ def test_sequence_similarity_uses_cached_blosum_lookup(
 
 def test_sequence_similarity_helper_returns_zero_for_incompatible_alignment() -> None:
     assert scoring_module.get_sequence_similarity_helper("ACD", "AC") == 0
+
+
+def test_atomic_copy_file_allows_concurrent_writers(tmp_path: Path) -> None:
+    sources = [tmp_path / "first", tmp_path / "second"]
+    sources[0].write_bytes(b"first")
+    sources[1].write_bytes(b"second")
+    target = tmp_path / "score.parquet"
+    old_shared_staging = tmp_path / "score.parquet.tmp"
+    old_shared_staging.write_bytes(b"unrelated")
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [
+            executor.submit(scoring_module._atomic_copy_file, source, target)
+            for source in sources
+        ]
+        for future in futures:
+            future.result()
+
+    assert target.read_bytes() in {b"first", b"second"}
+    assert old_shared_staging.read_bytes() == b"unrelated"
+    assert not list(tmp_path.glob(".score.parquet.*.tmp"))
 
 
 def test_protein_pair_scores_choose_best_duplicate_backend_hit(tmp_path: Path) -> None:
@@ -283,6 +303,36 @@ def test_mmseqs_search_expands_and_realigns_exact_cluster_members(
     assert "--min-seq-id" not in commands[3]
 
 
+def test_mmseqs_search_accepts_an_unclustered_target(tmp_path, monkeypatch) -> None:
+    commands: list[list[str]] = []
+    monkeypatch.setattr(
+        scoring_module.subprocess,
+        "check_call",
+        lambda command, **_kwargs: commands.append(command),
+    )
+    monkeypatch.setattr(
+        scoring_module, "_stream_alignment_tsv_to_dataset", lambda *args, **kwargs: None
+    )
+
+    run_alignment(
+        aln_type="mmseqs",
+        query_db=tmp_path / "query",
+        target_db=tmp_path / "selected-targets",
+        search_target_db=tmp_path / "selected-targets",
+        cluster_alignment_db=None,
+        search_db=tmp_path / "search",
+        aln_file=tmp_path / "alignments.tsv",
+        alignment_config=MMSeqsConfig(min_seq_id=0.0),
+        tmp_dir=tmp_path / "scratch",
+        remove_tmp=False,
+        threads=2,
+    )
+
+    assert [command[1] for command in commands] == ["search", "convertalis"]
+    assert commands[0][3] == str(tmp_path / "selected-targets")
+    assert commands[1][3] == str(tmp_path / "selected-targets")
+
+
 def test_no_hit_search_writes_typed_empty_raw_and_mapped_checkpoints(
     tmp_path, monkeypatch
 ) -> None:
@@ -347,6 +397,87 @@ def test_no_hit_search_writes_typed_empty_raw_and_mapped_checkpoints(
         "selected_residue_identity",
     } <= set(mapped.columns)
     assert {"evalue", "bits", "tcov"}.isdisjoint(mapped.columns)
+
+
+def test_unavailable_query_backend_writes_typed_empty_checkpoint(
+    tmp_path, monkeypatch
+) -> None:
+    scorer = Scorer(
+        entries={"1abc": object()},
+        source_to_full_db_file={"holo_foldseek": tmp_path / "full"},
+        db_dir=tmp_path / "dbs" / "subdbs",
+        scores_dir=tmp_path / "scores",
+    )
+    monkeypatch.setattr(
+        scoring_module.databases,
+        "get_db_ids",
+        lambda *_args, **_kwargs: {"pdb_00001abc_xyz-enrich_A"},
+    )
+    monkeypatch.setattr(
+        scoring_module.databases,
+        "make_sub_db",
+        lambda db_ids, *_args, **_kwargs: db_ids,
+    )
+    monkeypatch.setattr(
+        scoring_module,
+        "run_alignment",
+        lambda **_kwargs: pytest.fail("an unavailable backend must not be searched"),
+    )
+
+    scorer.run_alignments(
+        entry_ids=["1abc"],
+        search_db="apo",
+        output_folder=tmp_path / "work",
+        alignment_types=["foldseek"],
+    )
+
+    raw = scorer.db_dir / "apo_foldseek" / "aln" / "1abc.parquet"
+    assert raw.is_file()
+    assert pd.read_parquet(raw).empty
+    assert pq.read_schema(raw).equals(scoring_module._raw_alignment_schema("foldseek"))
+
+
+@pytest.mark.parametrize(
+    ("alignment_type", "expected_ids"),
+    [
+        ("foldseek", {"pdb_00001abc_xyz-enrich_R", "pdb_00001abc_xyz-enrich_S"}),
+        ("mmseqs", {"1abc_R", "1abc_S"}),
+    ],
+)
+def test_run_alignments_accepts_explicit_query_chains_without_entry_views(
+    tmp_path, monkeypatch, alignment_type, expected_ids
+) -> None:
+    scorer = Scorer(
+        entries={},
+        source_to_full_db_file={f"holo_{alignment_type}": tmp_path / "full"},
+        db_dir=tmp_path / "dbs" / "subdbs",
+        scores_dir=tmp_path / "scores",
+    )
+    observed = []
+    monkeypatch.setattr(
+        scoring_module.databases,
+        "get_db_ids",
+        lambda *_args, **_kwargs: pytest.fail("explicit chains must avoid EntryView"),
+    )
+
+    def unavailable(ids, *_args, **_kwargs):
+        observed.append(ids)
+        return ids
+
+    monkeypatch.setattr(scoring_module.databases, "make_sub_db", unavailable)
+
+    scorer.run_alignments(
+        entry_ids=["1abc"],
+        search_db="apo",
+        output_folder=tmp_path / "work",
+        alignment_types=[alignment_type],
+        query_chain_auth_ids={"1abc": {"R", "S"}},
+    )
+
+    assert observed == [expected_ids]
+    assert pd.read_parquet(
+        scorer.db_dir / f"apo_{alignment_type}/aln/1abc.parquet"
+    ).empty
 
 
 def test_alignment_mapping_preserves_author_chain_ids_with_underscores(
@@ -510,12 +641,35 @@ def test_alignment_tsv_is_streamed_to_query_partitions(tmp_path) -> None:
     _stream_alignment_tsv_to_dataset(
         tsv_path,
         dataset_path,
+        aln_type="foldseek",
         include_target_pdb_id=True,
     )
 
     first = pd.read_parquet(dataset_path / "query_pdb_id=1abc")
     assert first["target_pdb_id"].tolist() == ["2def"]
     assert (dataset_path / "query_pdb_id=3ghi").is_dir()
+
+
+@pytest.mark.parametrize("aln_type", ["foldseek", "mmseqs"])
+def test_empty_alignment_tsv_writes_readable_dataset(tmp_path, aln_type) -> None:
+    columns = [field.name for field in scoring_module._raw_alignment_schema(aln_type)]
+    columns.remove("target_pdb_id")
+    tsv_path = tmp_path / "alignment.tsv"
+    tsv_path.write_text("\t".join(columns) + "\n")
+    dataset_path = tmp_path / "alignment.parquet"
+
+    _stream_alignment_tsv_to_dataset(
+        tsv_path,
+        dataset_path,
+        aln_type=aln_type,
+        include_target_pdb_id=True,
+    )
+
+    result = pd.read_parquet(dataset_path)
+    assert result.empty
+    assert result.columns.tolist() == [
+        field.name for field in scoring_module._raw_alignment_schema(aln_type)
+    ]
 
 
 def test_ligand_scoring_inputs_include_only_proper_holo_ligands() -> None:
@@ -525,7 +679,7 @@ def test_ligand_scoring_inputs_include_only_proper_holo_ligands() -> None:
             "system_id": ["proper", "artifact", "ion-system"],
             "system_type": ["holo", "holo", "ion"],
             "ligand_is_proper": [True, False, True],
-            "ligand_rdkit_canonical_smiles": ["CCO", "O", "[Na+]"],
+            "ligand_smiles": ["CCO", "O", "[Na+]"],
             "ligand_unique_ccd_code": ["LIG", "HOH", "NA"],
             "ligand_id": ["1abc__1__1.L", "1abc__1__1.W", "1abc__1__1.N"],
             "ligand_asym_id": ["L", "W", "N"],
@@ -546,13 +700,17 @@ def test_entry_views_accept_annotation_dataframe(
     monkeypatch.setattr(ligand_utils, "BINDING_AFFINITY", {})
     entry = Entry.from_cif_file(cif_2gdo)
     annotation = entry.to_df()
+    assert [column for column in annotation.columns if column.startswith("entry_")] == [
+        "entry_pdb_id"
+    ]
+    assert "entry_release_date" in entry.metadata_to_df().columns
     assert not any(column.startswith("entry_chains_") for column in annotation)
     entry_chains = entry.chains_to_df()
     assert len(entry_chains) <= len(entry.chains)
     assert entry_chains["chain_type"].str.lower().str.contains("polypeptide").all()
 
     # Exercise the Arrow representation used by the ingest pipeline,
-    # including the normalized nested UniProt accession lists.
+    # including the nested UniProt accession lists.
     index_dir = tmp_path / "index"
     index_dir.mkdir()
     annotation_path = index_dir / "annotation_table.parquet"
@@ -584,7 +742,7 @@ def test_entry_views_accept_annotation_dataframe(
     assert loaded.interfaces == view.interfaces
 
     chain_path.unlink()
-    with pytest.raises(FileNotFoundError, match="normalized entry chain index"):
+    with pytest.raises(FileNotFoundError, match="missing entry chain index"):
         load_entry_views(pdb_ids=[entry.pdb_id], data_dir=tmp_path)
 
 
@@ -834,6 +992,31 @@ def test_entry_views_support_interface_only_entries() -> None:
         "A": {9: 10, 10: 11, 11: 12},
         "B": {19: 20, 20: 21, 21: 22},
     }
+
+
+def test_entry_views_support_protein_chain_only_entries() -> None:
+    chains = pd.DataFrame(
+        {
+            "entry_pdb_id": ["model"],
+            "chain_asym_id": ["A"],
+            "chain_auth_id": ["X"],
+            "chain_entity_id": ["1"],
+            "chain_type": ["polypeptide(L)"],
+            "chain_length": [100],
+            "chain_is_holo": [True],
+            "chain_uniprot_ids": [[]],
+        }
+    )
+
+    entry = entry_views_from_df(
+        pd.DataFrame(columns=["entry_pdb_id"]),
+        entry_chains=chains,
+    )["model"]
+
+    assert not entry.systems
+    assert not entry.interfaces
+    assert set(entry.chains) == {"A"}
+    assert entry.chains["A"].length == 100
 
 
 def test_reconstruct_interface_scores_from_release_shard(tmp_path: Path) -> None:
@@ -1168,6 +1351,7 @@ def test_ligand_pair_pocket_scores_do_not_use_system_union(tmp_path) -> None:
         source_to_full_db_file={},
         db_dir=tmp_path / "db",
         scores_dir=tmp_path / "scores",
+        include_pli_fident=True,
     )
     alignments = {
         ("1.A", "1.X"): pd.DataFrame(
@@ -1221,6 +1405,8 @@ def test_ligand_pair_pocket_scores_do_not_use_system_union(tmp_path) -> None:
     assert partial_pocket["pocket_qcov_foldseek"] == pytest.approx(0.5)
     assert full_pli["pli_qcov_foldseek"] == pytest.approx(1.0)
     assert partial_pli["pli_qcov_foldseek"] == pytest.approx(0.5)
+    assert full_pli["pli_fident_foldseek"] == pytest.approx(1.0)
+    assert partial_pli["pli_fident_foldseek"] == pytest.approx(1.0)
 
 
 def test_ligand_pair_pocket_scores_ignore_null_compact_maps(tmp_path) -> None:
@@ -1251,6 +1437,44 @@ def test_ligand_pair_pocket_scores_ignore_null_compact_maps(tmp_path) -> None:
 
     assert pocket_scores == {}
     assert pli_scores == {}
+
+
+def test_ligand_pocket_scores_report_identity_over_all_pli_residues(tmp_path) -> None:
+    scorer = Scorer(
+        entries={},
+        source_to_full_db_file={},
+        db_dir=tmp_path / "db",
+        scores_dir=tmp_path / "scores",
+        include_pli_fident=True,
+    )
+    query = _ligand(
+        "1abc__1__1.B",
+        "1.B",
+        {"1.A": {10: 9, 20: 19, 30: 29}},
+        {
+            "1.A": {
+                10: Counter({"hydrogen_bond": 1}),
+                30: Counter({"hydrophobic": 1}),
+            }
+        },
+    )
+    alignments = {
+        ("1.A", "0.X"): pd.DataFrame(
+            [
+                {
+                    "query_selected_residue_numbers": [10, 20],
+                    "target_selected_residue_numbers": [100, 200],
+                    "selected_residue_identity": bytes([1, 1]),
+                }
+            ],
+            index=["mmseqs"],
+        )
+    }
+
+    scores = scorer.get_ligand_pocket_scores(alignments, query)
+
+    assert scores["pocket_fident_mmseqs"] == pytest.approx(2 / 3)
+    assert scores["pli_fident_mmseqs"] == pytest.approx(0.5)
 
 
 def test_ligand_pair_pocket_mapping_maximizes_coverage_before_similarity(
@@ -1639,6 +1863,76 @@ def test_get_score_df_atomically_replaces_stale_cache_and_marks_empty_completion
     assert calls == 1
 
 
+def test_get_score_df_retains_and_tracks_requested_metrics(
+    tmp_path, monkeypatch
+) -> None:
+    scorer = Scorer(
+        entries={"1abc": object()},
+        source_to_full_db_file={},
+        db_dir=tmp_path / "db",
+        scores_dir=tmp_path / "scores",
+    )
+    calls = 0
+
+    def scores(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        rows = []
+        for metric in ["pocket_fident", "protein_qcov_weighted_sum"]:
+            rows.append(
+                {
+                    "query_system": "1abc__1__1.A__1.L",
+                    "query_ligand_id": "1abc__1__1.L",
+                    "target_system": "2def_A",
+                    "target_ligand_id": None,
+                    "protein_mapping": "1.A:0.A",
+                    "mapping": "1.A:0.A",
+                    "protein_mapper": "foldseek",
+                    "source": "foldseek",
+                    "metric": metric,
+                    "similarity": 95,
+                }
+            )
+        return pd.DataFrame(rows)
+
+    monkeypatch.setattr(scorer, "aggregate_scores", scores)
+    output = scorer.get_score_df(
+        tmp_path,
+        "1abc",
+        "apo",
+        overwrite=False,
+        map_alignments=False,
+        score_metrics={"pocket_fident"},
+    )
+    assert pd.read_parquet(output)["metric"].astype(str).tolist() == ["pocket_fident"]
+    assert (pq.read_schema(output).metadata or {})[
+        scoring_module.SCORE_METRICS_METADATA_KEY
+    ] == scoring_module.score_metrics_metadata({"pocket_fident"})
+
+    scorer.get_score_df(
+        tmp_path,
+        "1abc",
+        "apo",
+        overwrite=False,
+        map_alignments=False,
+        score_metrics={"pocket_fident"},
+    )
+    assert calls == 1
+
+    scorer.get_score_df(
+        tmp_path,
+        "1abc",
+        "apo",
+        overwrite=False,
+        map_alignments=False,
+        score_metrics={"protein_qcov_weighted_sum"},
+    )
+    assert calls == 2
+    assert pd.read_parquet(output)["metric"].astype(str).tolist() == [
+        "protein_qcov_weighted_sum"
+    ]
+
+
 def test_get_score_df_defers_ligand_3d_and_writes_full_precision_candidates(
     tmp_path, monkeypatch
 ) -> None:
@@ -1654,6 +1948,7 @@ def test_get_score_df_defers_ligand_3d_and_writes_full_precision_candidates(
         nonlocal calls
         calls += 1
         assert kwargs["data_dir"] is None
+        assert kwargs["include_holo_protein_scores"] is False
         kwargs["ligand_3d_candidates"].append(
             {
                 "query_system": "1abc_system",
@@ -1667,6 +1962,21 @@ def test_get_score_df_defers_ligand_3d_and_writes_full_precision_candidates(
                 "protein_mapping": "1.A:1.X",
                 "protein_mapper": "foldseek",
                 "pocket_qcov": 2 / 3,
+            }
+        )
+        kwargs["ligand_pair_scores"].append(
+            {
+                "query_system": "1abc_system",
+                "query_ligand_id": "1abc__1__1.B",
+                "query_entry": "1abc",
+                "query_ligand_asym_id": "B",
+                "target_system": "2def_system",
+                "target_ligand_id": "2def__1__1.Y",
+                "target_entry": "2def",
+                "target_ligand_asym_id": "Y",
+                "pocket_qcov": 27,
+                "pocket_fident_qcov": 19,
+                "pli_qcov": 11,
             }
         )
         return None
@@ -1691,9 +2001,24 @@ def test_get_score_df_defers_ligand_3d_and_writes_full_precision_candidates(
 
     assert output.is_file()
     assert pd.read_parquet(candidates)["pocket_qcov"].item() == pytest.approx(2 / 3)
+    ligand_pair_scores = pd.read_parquet(
+        scorer.scores_dir
+        / "ligand_pair_scores"
+        / "search_db=holo"
+        / "shard=ab"
+        / "1abc.parquet"
+    )
+    assert ligand_pair_scores[
+        ["pocket_qcov", "pocket_fident_qcov", "pli_qcov"]
+    ].to_dict("records") == [
+        {"pocket_qcov": 27, "pocket_fident_qcov": 19, "pli_qcov": 11}
+    ]
     assert (scoring_module.pq.read_schema(output).metadata or {}).get(
         b"plinder.ligand_3d"
     ) == b"deferred"
+    assert (scoring_module.pq.read_schema(output).metadata or {}).get(
+        scoring_module.HOLO_PROTEIN_SCORES_METADATA_KEY
+    ) == b"excluded"
     scorer.get_score_df(
         tmp_path,
         "1abc",
@@ -1703,6 +2028,17 @@ def test_get_score_df_defers_ligand_3d_and_writes_full_precision_candidates(
         defer_ligand_3d=True,
     )
     assert calls == 1
+
+    scorer.minimum_thresholds["protein_lddt_weighted_sum"] = 0.2
+    scorer.get_score_df(
+        tmp_path,
+        "1abc",
+        "holo",
+        overwrite=False,
+        map_alignments=False,
+        defer_ligand_3d=True,
+    )
+    assert calls == 2
 
 
 def test_repair_score_df_targets_replaces_only_affected_target_rows(
@@ -1737,6 +2073,10 @@ def test_repair_score_df_targets_replaces_only_affected_target_rows(
         [
             score_row("2def__1__1.X__1.Y", 60),
             score_row("3ghi__1__1.X__1.Y", 70),
+            {
+                **score_row("3ghi__1__1.X__1.Y", 90),
+                "metric": "protein_fident_weighted_sum",
+            },
         ]
     ).to_parquet(
         score_path,
@@ -1775,6 +2115,33 @@ def test_repair_score_df_targets_replaces_only_affected_target_rows(
         index=False,
         schema=scoring_module.schemas.LIGAND_3D_CANDIDATE_SCHEMA,
     )
+    ligand_pair_score_path = (
+        scorer.scores_dir / "ligand_pair_scores/search_db=holo/shard=ab/1abc.parquet"
+    )
+    ligand_pair_score_path.parent.mkdir(parents=True)
+
+    def ligand_pair_row(target_entry: str, target_system: str) -> dict[str, object]:
+        row = candidate_row(target_entry, target_system)
+        return {
+            key: value
+            for key, value in row.items()
+            if key not in {"protein_mapping", "protein_mapper", "pocket_qcov"}
+        } | {
+            "pocket_qcov": 60,
+            "pocket_fident_qcov": 50,
+            "pli_qcov": 40,
+        }
+
+    pd.DataFrame(
+        [
+            ligand_pair_row("2def", "2def__1__1.X__1.Y"),
+            ligand_pair_row("3ghi", "3ghi__1__1.X__1.Y"),
+        ]
+    ).to_parquet(
+        ligand_pair_score_path,
+        index=False,
+        schema=scoring_module.schemas.LIGAND_PAIR_SCORE_SCHEMA,
+    )
     entries = {
         "1abc": SimpleNamespace(systems={"1abc__1__1.A__1.B": object()}),
         "2def": SimpleNamespace(systems={"2def__2__1.X__1.Y": object()}),
@@ -1792,6 +2159,9 @@ def test_repair_score_df_targets_replaces_only_affected_target_rows(
         kwargs["ligand_3d_candidates"].append(
             candidate_row("2def", "2def__2__1.X__1.Y")
         )
+        kwargs["ligand_pair_scores"].append(
+            ligand_pair_row("2def", "2def__2__1.X__1.Y")
+        )
         return pd.DataFrame([score_row("2def__2__1.X__1.Y", 80)])
 
     monkeypatch.setattr(scorer, "aggregate_scores", repaired_scores)
@@ -1808,11 +2178,19 @@ def test_repair_score_df_targets_replaces_only_affected_target_rows(
         "2def__2__1.X__1.Y",
         "3ghi__1__1.X__1.Y",
     }
+    assert not repaired["metric"].str.startswith("protein_").any()
     candidates = pd.read_parquet(candidate_path)
     assert set(candidates["target_system"]) == {
         "2def__2__1.X__1.Y",
         "3ghi__1__1.X__1.Y",
     }
+    assert set(pd.read_parquet(ligand_pair_score_path)["target_system"]) == {
+        "2def__2__1.X__1.Y",
+        "3ghi__1__1.X__1.Y",
+    }
+    assert scoring_module.SCORE_THRESHOLDS_METADATA_KEY not in (
+        scoring_module.pq.read_schema(score_path).metadata or {}
+    )
 
 
 def test_repair_score_df_targets_can_create_bounded_query_outputs(
@@ -1869,6 +2247,18 @@ def test_repair_score_df_targets_can_create_bounded_query_outputs(
         assert kwargs["target_system_ids"] == {"2def__1__1.X__1.Y"}
         assert kwargs["target_ligand_ids"] == {"2def__1__1.Y"}
         kwargs["ligand_3d_candidates"].append(candidate_row)
+        kwargs["ligand_pair_scores"].append(
+            {
+                key: value
+                for key, value in candidate_row.items()
+                if key not in {"protein_mapping", "protein_mapper", "pocket_qcov"}
+            }
+            | {
+                "pocket_qcov": 75,
+                "pocket_fident_qcov": 65,
+                "pli_qcov": 55,
+            }
+        )
         return pd.DataFrame([score_row])
 
     monkeypatch.setattr(scorer, "aggregate_scores", repaired_scores)
@@ -1886,10 +2276,13 @@ def test_repair_score_df_targets_can_create_bounded_query_outputs(
 
     assert pd.read_parquet(output)["similarity"].tolist() == [75]
     candidate_path = (
-        tmp_path
-        / "scores/ligand_3d_candidates/search_db=holo/shard=ab/1abc.parquet"
+        tmp_path / "scores/ligand_3d_candidates/search_db=holo/shard=ab/1abc.parquet"
     )
     assert pd.read_parquet(candidate_path)["pocket_qcov"].tolist() == [0.75]
+    ligand_pair_score_path = (
+        tmp_path / "scores/ligand_pair_scores/search_db=holo/shard=ab/1abc.parquet"
+    )
+    assert pd.read_parquet(ligand_pair_score_path)["pli_qcov"].tolist() == [55]
 
 
 def test_map_alignment_files_replaces_stale_schema_without_force(
@@ -2271,7 +2664,7 @@ def test_ligand_scores_use_bulk_tanimoto_for_unique_smiles(
     )
 
 
-def test_tanimoto_90_cluster_counts_distinct_pdb_ids() -> None:
+def test_ligand_similarity_annotations_exclude_fingerprint_bytes() -> None:
     unique_ligands = pd.DataFrame(
         {
             "ligand_smiles_id": [0, 1, 2],
@@ -2280,38 +2673,17 @@ def test_tanimoto_90_cluster_counts_distinct_pdb_ids() -> None:
             "ligand_is_cofactor_like": [True, False, False],
         }
     )
-    occurrences = pd.DataFrame(
-        {
-            "ligand_smiles_id": [0, 0, 1, 2],
-            "pdb_id": ["1aaa", "1aaa", "2bbb", "3ccc"],
-        }
-    )
-    edges = pd.DataFrame(
-        {
-            "query_ligand_id": [0, 0, 1, 2],
-            "target_ligand_id": [0, 1, 1, 2],
-            "tanimoto_similarity_ecfp4_1024": [100.0, 91.0, 100.0, 100.0],
-        }
-    )
 
     annotations = build_ligand_similarity_annotations(
         unique_ligands=unique_ligands,
-        ligand_occurrences=occurrences,
-        edges=edges,
-        cluster_threshold=90,
-    ).set_index("ligand_smiles_id")
+    )
 
-    assert (
-        annotations.loc[0, "ligand_tanimoto_ecfp4_1024_90_cluster"]
-        == annotations.loc[1, "ligand_tanimoto_ecfp4_1024_90_cluster"]
-    )
-    assert (
-        annotations.loc[2, "ligand_tanimoto_ecfp4_1024_90_cluster"]
-        != annotations.loc[0, "ligand_tanimoto_ecfp4_1024_90_cluster"]
-    )
-    assert annotations.loc[0, "ligand_tanimoto_ecfp4_1024_90_cluster_num_pdb_ids"] == 2
-    assert annotations.loc[1, "ligand_tanimoto_ecfp4_1024_90_cluster_num_pdb_ids"] == 2
-    assert annotations.loc[2, "ligand_tanimoto_ecfp4_1024_90_cluster_num_pdb_ids"] == 1
+    assert annotations.columns.tolist() == [
+        "ligand_smiles_id",
+        "ligand_rdkit_canonical_smiles",
+        "ligand_is_cofactor_like",
+    ]
+    assert annotations["ligand_smiles_id"].tolist() == [0, 1, 2]
 
 
 def test_ligand_similarity_pipeline_does_not_write_per_system_mapping(
@@ -2325,7 +2697,7 @@ def test_ligand_similarity_pipeline_does_not_write_per_system_mapping(
             "system_id": ["1aaa_system", "2bbb_system", "3ccc_system"],
             "system_type": ["holo", "holo", "holo"],
             "ligand_is_proper": [True, True, True],
-            "ligand_rdkit_canonical_smiles": ["CCO", "CCO", "c1ccccc1"],
+            "ligand_smiles": ["CCO", "CCO", "c1ccccc1"],
             "ligand_unique_ccd_code": ["LIG", "LIG", "BEN"],
             "ligand_id": ["1aaa__1__1.L", "2bbb__1__1.L", "3ccc__1__1.L"],
             "ligand_asym_id": ["L", "L", "L"],
@@ -2362,6 +2734,18 @@ def test_ligand_similarity_pipeline_does_not_write_per_system_mapping(
     retained_score.unlink()
 
     ligand_scores(
+        ligand_ids=[int(unique_ligands["ligand_smiles_id"].iloc[0])],
+        data_dir=tmp_path,
+        output_path=score_dir / "part.parquet",
+    )
+    with pytest.raises(
+        ValueError,
+        match="BulkTanimoto score shards do not cover the fingerprint set",
+    ):
+        annotate_ligand_similarity(data_dir=tmp_path)
+
+    (score_dir / "part.parquet").unlink()
+    ligand_scores(
         ligand_ids=unique_ligands["ligand_smiles_id"].tolist(),
         data_dir=tmp_path,
         output_path=score_dir / "part.parquet",
@@ -2372,17 +2756,13 @@ def test_ligand_similarity_pipeline_does_not_write_per_system_mapping(
     )
 
     assert bool(annotations.loc["CCO", "ligand_is_cofactor_like"])
-    assert (
-        annotations.loc["CCO", "ligand_tanimoto_ecfp4_1024_90_cluster_num_pdb_ids"] == 2
-    )
-    assert (
-        annotations.loc["c1ccccc1", "ligand_tanimoto_ecfp4_1024_90_cluster_num_pdb_ids"]
-        == 1
-    )
+    assert annotations.loc["CCO", "ligand_smiles_id"] == 0
+    assert annotations.loc["c1ccccc1", "ligand_smiles_id"] == 1
+    assert not any("cluster" in column for column in annotations.columns)
 
     retained_score.write_bytes(b"changed fingerprint score basis")
     index = pd.read_parquet(index_dir / "annotation_table.parquet")
-    index.loc[index.index[-1], "ligand_rdkit_canonical_smiles"] = "CCN"
+    index.loc[index.index[-1], "ligand_smiles"] = "CCN"
     index.to_parquet(index_dir / "annotation_table.parquet", index=False)
     compute_ligand_fingerprints(data_dir=tmp_path)
     assert not list(score_dir.glob("*.parquet"))
@@ -2487,6 +2867,7 @@ def test_holo_scores_are_emitted_per_ligand_pair(tmp_path, monkeypatch) -> None:
         )
     )
     protein_calls: list[tuple[tuple[str, ...], tuple[str, ...], int]] = []
+    pocket_qcov_value = 1.0
 
     def protein_scores(
         _alignments: pd.DataFrame,
@@ -2512,7 +2893,7 @@ def test_holo_scores_are_emitted_per_ligand_pair(tmp_path, monkeypatch) -> None:
         query_ligand: LigandView,
         target_ligand: LigandView,
     ) -> tuple[dict[str, float], dict[str, float], dict]:
-        qcov = float(
+        qcov = pocket_qcov_value * float(
             query_ligand.id == query_ligands[0].id
             and target_ligand.id == target_ligands[0].id
         )
@@ -2523,8 +2904,11 @@ def test_holo_scores_are_emitted_per_ligand_pair(tmp_path, monkeypatch) -> None:
             )
         ]
         return (
-            {"pocket_qcov_foldseek": qcov},
-            {},
+            {
+                "pocket_qcov_foldseek": qcov,
+                "pocket_fident_qcov_foldseek": 0.19 * qcov,
+            },
+            {"pli_qcov_foldseek": 0.11 * qcov},
             {"pocket_qcov_foldseek": mapping},
         )
 
@@ -2548,7 +2932,14 @@ def test_holo_scores_are_emitted_per_ligand_pair(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(scorer, "get_ligand_pair_pocket_pli_scores", pocket_scores)
     monkeypatch.setattr(scorer, "get_ligand_pair_shape_scores", shape_scores)
 
-    scores = list(scorer.get_scores_holo(query_system, alignments, data_dir=tmp_path))
+    scores = list(
+        scorer.get_scores_holo(
+            query_system,
+            alignments,
+            data_dir=tmp_path,
+            include_protein_scores=True,
+        )
+    )
 
     assert {
         (score["query_ligand_id"], score["target_ligand_id"]) for score in scores
@@ -2568,12 +2959,25 @@ def test_holo_scores_are_emitted_per_ligand_pair(tmp_path, monkeypatch) -> None:
     shape_row = next(score for score in scores if "shape" in score)
     assert shape_row["sucos_shape_pocket_qcov"] == pytest.approx(0.6)
 
+    ligand_scores = list(
+        scorer.get_scores_holo(
+            query_system,
+            alignments,
+            include_protein_scores=False,
+        )
+    )
+    assert all("protein_qcov_weighted_sum" not in score for score in ligand_scores)
+    assert any("pocket_qcov" in score for score in ligand_scores)
+    assert len(protein_calls) == 4
+
     candidates = []
+    ligand_pair_scores = []
     protein_only_scores = list(
         scorer.get_scores_holo(
             query_system,
             alignments,
             ligand_3d_candidates=candidates,
+            ligand_pair_scores=ligand_pair_scores,
         )
     )
 
@@ -2594,6 +2998,35 @@ def test_holo_scores_are_emitted_per_ligand_pair(tmp_path, monkeypatch) -> None:
             "pocket_qcov": 1.0,
         }
     ]
+    assert ligand_pair_scores == [
+        {
+            "query_system": query_system.id,
+            "query_ligand_id": query_ligands[0].id,
+            "query_entry": "1abc",
+            "query_ligand_asym_id": "C",
+            "target_system": target_system.id,
+            "target_ligand_id": target_ligands[0].id,
+            "target_entry": "2def",
+            "target_ligand_asym_id": "Z",
+            "pocket_qcov": 100,
+            "pocket_fident_qcov": 19,
+            "pli_qcov": 11,
+        }
+    ]
+
+    pocket_qcov_value = 0.004
+    tiny_ligand_pair_scores = []
+    list(
+        scorer.get_scores_holo(
+            query_system,
+            alignments,
+            ligand_pair_scores=tiny_ligand_pair_scores,
+        )
+    )
+    assert len(tiny_ligand_pair_scores) == 1
+    assert tiny_ligand_pair_scores[0]["pocket_qcov"] == 0
+    assert tiny_ligand_pair_scores[0]["pocket_fident_qcov"] == 0
+    assert tiny_ligand_pair_scores[0]["pli_qcov"] == 0
 
 
 def test_holo_threaded_scoring_reuses_canonical_and_receptor_pairs(
@@ -2662,7 +3095,14 @@ def test_holo_threaded_scoring_reuses_canonical_and_receptor_pairs(
     monkeypatch.setattr(scoring_module, "align_molecules", align_once)
     monkeypatch.setattr(scoring_module, "get_sucos_score", lambda *_args: 0.7)
 
-    scores = list(scorer.get_scores_holo(query_system, alignments, data_dir=tmp_path))
+    scores = list(
+        scorer.get_scores_holo(
+            query_system,
+            alignments,
+            data_dir=tmp_path,
+            include_protein_scores=True,
+        )
+    )
 
     assert len(scores) == 2
     assert protein_calls == 1
@@ -2723,7 +3163,13 @@ def test_holo_weighted_sum_retains_unmatched_query_receptor_length(
         lambda *_args: ({}, {}, {}),
     )
 
-    scores = list(scorer.get_scores_holo(query_system, alignments))
+    scores = list(
+        scorer.get_scores_holo(
+            query_system,
+            alignments,
+            include_protein_scores=True,
+        )
+    )
 
     assert len(scores) == 1
     assert scores[0]["protein_lddt_qcov_weighted_max"] == pytest.approx(0.5)
@@ -2747,6 +3193,14 @@ def test_apo_pred_scores_are_emitted_per_query_ligand(tmp_path, monkeypatch) -> 
         db_dir=tmp_path / "db",
         scores_dir=tmp_path / "scores",
     )
+    target_system = replace(
+        query_system,
+        id="model_a_system",
+        pdb_id="model_a",
+        protein_chains_asym_id=["0.X"],
+        ligands={},
+    )
+    scorer.entries["model_a"] = _entry("model_a", target_system)
     alignments = pd.DataFrame(
         index=pd.MultiIndex.from_tuples(
             [("model_a", "A", "X"), ("model_b", "B", "Y")],

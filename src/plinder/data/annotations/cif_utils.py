@@ -16,6 +16,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from math import prod
 from pathlib import Path
+from typing import TypedDict
 
 import biotite.structure as struc
 import biotite.structure.io.pdbx as pdbx
@@ -27,6 +28,16 @@ from plinder.core.structure.smallmols_utils import (
 )
 
 LOG = logging.getLogger(__name__)
+
+
+class EntryTaxonomy(TypedDict):
+    """Taxonomy fields extracted from deposited entry metadata."""
+
+    source_taxonomy_ids: list[int]
+    source_organism_names: list[str]
+    host_taxonomy_ids: list[int]
+    host_organism_names: list[str]
+
 
 # Single source of truth lives in ``plinder.core.structure.atoms`` so
 # both ``plinder.core`` and ``plinder.data`` filter H/D/T isotopes
@@ -344,6 +355,82 @@ def get_label_asym_sequences(block: pdbx.CIFBlock) -> dict[str, str]:
             struct_asym["entity_id"].as_array(),
         )
         if str(entity_id) in entity_sequences
+    }
+
+
+def get_entry_taxonomy(
+    block: pdbx.CIFBlock,
+) -> EntryTaxonomy:
+    """Extract distinct source and expression-host organisms for an entry."""
+    source_taxonomy_ids: set[int] = set()
+    source_organism_names: set[str] = set()
+    host_taxonomy_ids: set[int] = set()
+    host_organism_names: set[str] = set()
+
+    def add_values(
+        category_name: str,
+        taxonomy_column: str,
+        organism_column: str,
+        taxonomy_ids: set[int],
+        organism_names: set[str],
+    ) -> None:
+        if category_name not in block:
+            return
+        category = block[category_name]
+        if taxonomy_column in category:
+            for value in category[taxonomy_column].as_array(str):
+                text = str(value).strip()
+                if text in {"", ".", "?"}:
+                    continue
+                try:
+                    taxonomy_ids.add(int(text))
+                except ValueError:
+                    LOG.warning(
+                        "ignoring non-integer %s.%s value %r",
+                        category_name,
+                        taxonomy_column,
+                        text,
+                    )
+        if organism_column in category:
+            organism_names.update(
+                text
+                for value in category[organism_column].as_array(str)
+                if (text := str(value).strip()) not in {"", ".", "?"}
+            )
+
+    add_values(
+        "entity_src_gen",
+        "pdbx_gene_src_ncbi_taxonomy_id",
+        "pdbx_gene_src_scientific_name",
+        source_taxonomy_ids,
+        source_organism_names,
+    )
+    add_values(
+        "entity_src_nat",
+        "pdbx_ncbi_taxonomy_id",
+        "pdbx_organism_scientific",
+        source_taxonomy_ids,
+        source_organism_names,
+    )
+    add_values(
+        "pdbx_entity_src_syn",
+        "ncbi_taxonomy_id",
+        "organism_scientific",
+        source_taxonomy_ids,
+        source_organism_names,
+    )
+    add_values(
+        "entity_src_gen",
+        "pdbx_host_org_ncbi_taxonomy_id",
+        "pdbx_host_org_scientific_name",
+        host_taxonomy_ids,
+        host_organism_names,
+    )
+    return {
+        "source_taxonomy_ids": sorted(source_taxonomy_ids),
+        "source_organism_names": sorted(source_organism_names),
+        "host_taxonomy_ids": sorted(host_taxonomy_ids),
+        "host_organism_names": sorted(host_organism_names),
     }
 
 

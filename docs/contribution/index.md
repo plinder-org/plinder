@@ -5,23 +5,22 @@ SIB Swiss Institute of Bioinformatics, Proxima (formerly VantAI), NVIDIA, MIT CS
 and will be regularly updated.
 We highly welcome contributions!
 
-This guide gives an introduction about how to maintain and improve `plinder` as
-developer
+This guide introduces how to maintain and improve `plinder` as a developer.
 
-# Code organization
+## Code organization
 
-This code is split into 4 sub-packages
+The code is split into four subpackages:
 
 - `plinder.core`: Provides core data structures for interacting with
   and loading the dataset.
-  Parts of it are exposed as the [public API](/api/index).
 - `plinder.data`: Contains core code for generating the PLINDER dataset.
-- `plinder.eval`: Offers evaluation harness for the dataset that takes as an input
-  predicted and ground truth structures in a pre-determined folder structure an
-  returns a leaderboard-ready set of entries.
-  Parts of it are user-faced via [CLI scripts](/evaluation).
+- `plinder.eval`: Provides an evaluation harness that compares predicted and
+  ground-truth structures and produces leaderboard-ready results.
 - `plinder.methods`: Implements methods in the leaderboard that leverage
   PLINDER primitives for training and running.
+
+The modules included in a standard installation are listed in the
+[Python API reference](/api/index).
 
 :::{toctree}
 :maxdepth: 1

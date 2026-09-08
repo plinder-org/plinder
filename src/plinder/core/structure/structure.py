@@ -137,17 +137,11 @@ class Structure(BaseModel):
         Dictionary of ligand smiles with chain id as key and smiles as value
     protein_atom_array : AtomArray | None = None
         Protein Biotite atom array
-    ligand_mols : ligand_mols: Optional[
-        dict[
-            str,
-            tuple[Chem.Mol, Chem.Mol, Chem.Mol, tuple[NDArray, NDArray]]
-        ]
-    ]
-        Dictionary of ligand molecule id to
-            molecule loaded from smiles (2D),
-            template (random) conformer generated from 2D,
-            resolved (holo) mol conformer,
-            paired stacked arrays (template vs holo) mapping atom order by index
+    ligand_mols : dict, optional
+        Ligand molecules keyed by ligand ID. Each value contains the molecule
+        loaded from SMILES, a generated template conformer, the resolved
+        conformer, and paired atom-index arrays for the template and resolved
+        structures.
     add_ligand_hydrogens : bool = False
         Whether to add hydrogen to ligand or not
     skip_3d_confgen : bool = False

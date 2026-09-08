@@ -73,12 +73,12 @@ def compute_ligand_ecfp_max_similarities(
     if "fp" not in df.columns:
         smiles_fp_dict = {
             smi: smallmols_similarity.mol2morgan_fp(smi, radius=2, nbits=1024)
-            for smi in df["ligand_rdkit_canonical_smiles"].drop_duplicates().to_list()
+            for smi in df["ligand_smiles"].drop_duplicates().to_list()
         }
-        df["fp"] = df["ligand_rdkit_canonical_smiles"].map(smiles_fp_dict)
+        df["fp"] = df["ligand_smiles"].map(smiles_fp_dict)
 
     df_test = df.loc[df[split_label] == test_label][
-        ["system_id", "ligand_rdkit_canonical_smiles", "fp"]
+        ["system_id", "ligand_smiles", "fp"]
     ].copy()
 
     (
@@ -89,9 +89,7 @@ def compute_ligand_ecfp_max_similarities(
         df_test["fp"].to_list(),
     )
     # get most similar smiles in train
-    train_smiles = df.loc[
-        df[split_label] == train_label, "ligand_rdkit_canonical_smiles"
-    ].to_list()
+    train_smiles = df.loc[df[split_label] == train_label, "ligand_smiles"].to_list()
     df_test[f"tanimoto_most_similar_{train_label}_smiles"] = [
         train_smiles[idx] for idx in argmax_array
     ]
@@ -99,7 +97,7 @@ def compute_ligand_ecfp_max_similarities(
     df_test.drop("fp", axis=1).groupby(
         [
             "system_id",
-            "ligand_rdkit_canonical_smiles",
+            "ligand_smiles",
         ]
     ).agg("max").reset_index().to_parquet(output_file, index=False)
 
@@ -111,7 +109,7 @@ def compute_ligand_mmp_max_similarities(
     test_label: str,
     output_file: Path,
 ) -> None:
-    mmp_path = AnyPath(f"{cfg.data.plinder_remote}/mmp/plinder_mms.csv.gz")
+    mmp_path = AnyPath(f"{cfg.data.plinder_remote}/index/ligand_mmp_pairs.parquet")
     mmp_sim_dict: dict[
         str, dict[str, float]
     ] = smallmols_similarity.get_mmp_similarity_dict(mmp_path=mmp_path)
@@ -119,11 +117,11 @@ def compute_ligand_mmp_max_similarities(
     if "inchikey" not in df.columns:
         smi_inchikey_map = {
             smi: smallmols_similarity.smiles2inchikey(smi, remove_stereo=True)
-            for smi in df.ligand_rdkit_canonical_smiles.unique()
+            for smi in df.ligand_smiles.unique()
         }
-        df["inchikey"] = df.ligand_rdkit_canonical_smiles.map(smi_inchikey_map)
+        df["inchikey"] = df.ligand_smiles.map(smi_inchikey_map)
     df_test = df.loc[df[split_label] == test_label][
-        ["system_id", "ligand_rdkit_canonical_smiles", "inchikey"]
+        ["system_id", "ligand_smiles", "inchikey"]
     ].copy()
     train_inchikeys = (
         df[df.split == train_label]["inchikey"].drop_duplicates().to_list()
@@ -149,7 +147,7 @@ def compute_ligand_mmp_max_similarities(
         if max_similarity > 0:
             most_similar_smiles_in_train = df.loc[
                 (df[split_label] == train_label) & (df["inchikey"] == max_sim_inchikey),
-                "ligand_rdkit_canonical_smiles",
+                "ligand_smiles",
             ].iloc[0]
         else:
             most_similar_smiles_in_train = None
@@ -163,9 +161,9 @@ def compute_ligand_mmp_max_similarities(
         lambda x: test_train_sims[x][1]
     )
     # save
-    df_test.groupby(["system_id", "ligand_rdkit_canonical_smiles"]).agg(
-        "max"
-    ).reset_index().to_parquet(output_file, index=False)
+    df_test.groupby(["system_id", "ligand_smiles"]).agg("max").reset_index().to_parquet(
+        output_file, index=False
+    )
 
 
 @dataclass
@@ -296,15 +294,14 @@ class StratifiedTestSet:
                         df = query_index(
                             columns=[
                                 "system_id",
-                                "ligand_rdkit_canonical_smiles",
+                                "ligand_smiles",
                             ],
                             filters=[  # type: ignore
                                 ("system_id", "in", left.union(right)),
                                 ("ligand_is_ion", "==", False),
                                 ("ligand_is_artifact", "==", False),
                             ],
-                            splits=["*"],
-                        ).drop(columns=["split"])
+                        )
                         df = df.merge(self.split_df, on="system_id", how="left")
                     if metric == "tanimoto_similarity_ecfp4_1024":
                         compute_ligand_ecfp_max_similarities(
@@ -334,8 +331,8 @@ class StratifiedTestSet:
             df = df[df["system_id"].isin(right)].reset_index(drop=True)
             if "train_system_id" in df.columns:
                 df = df.drop(columns="train_system_id")
-            if "ligand_rdkit_canonical_smiles" in df.columns:
-                df = df.drop(columns="ligand_rdkit_canonical_smiles")
+            if "ligand_smiles" in df.columns:
+                df = df.drop(columns="ligand_smiles")
             per_metric_similarities.append(df.set_index("system_id"))
         self.max_similarities = pd.concat(
             per_metric_similarities, join="outer", axis=1
@@ -381,8 +378,7 @@ class StratifiedTestSet:
                 "system_id",
                 "system_pass_validation_criteria",
             ],
-            splits=["*"],
-        ).drop(columns=["split"])
+        )
         quality = dict(
             zip(df["system_id"], df["system_pass_validation_criteria"].fillna(False))
         )

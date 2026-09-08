@@ -19,9 +19,29 @@ import apidoc
 import tablegen
 import viewcode
 
-# Pregeneration of files
-for package in ["plinder.core", "plinder.core.scores", "plinder.core.loader"]:
-    apidoc.generate_api_reference(package, DOC_PATH / "api" / package.split(".")[-1])
+# Modules that require dependencies outside the standard ``pip install plinder``.
+API_EXCLUDED_MODULES = {
+    "plinder.core.loader",
+    "plinder.core.structure.diffdock_utils",
+    "plinder.data._version",
+    "plinder.data.annotations.aggregate_annotations",
+    "plinder.data.annotations.get_ligand_validation",
+    "plinder.data.annotations.ligand_utils",
+    "plinder.data.annotations.protein_utils",
+    "plinder.data.clusters",
+    "plinder.data.common._version",
+    "plinder.data.get_system_annotations",
+    "plinder.data.pipeline",
+}
+
+# Generate one reference page per module included in the standard installation.
+apidoc.clear_api_reference(DOC_PATH / "api")
+for package in ["plinder.core", "plinder.data"]:
+    apidoc.generate_api_reference(
+        package,
+        DOC_PATH / "api" / package.split(".")[-1],
+        excluded_modules=API_EXCLUDED_MODULES,
+    )
 tablegen.generate_table(COLUMN_REFERENCE_PATH, DOC_PATH / "table.html")
 
 #### Source code link ###
@@ -72,6 +92,12 @@ autosummary_generate = False
 linkcode_resolve = viewcode.linkcode_resolve
 
 templates_path = ["templates"]
+exclude_patterns = [
+    "_build",
+    # Deferred until their APIs are revisited in focused PRs.
+    "evaluation.md",
+    "examples/5_dataset_and_loader.ipynb",
+]
 source_suffix = {
     ".rst": "restructuredtext",
     ".ipynb": "myst-nb",
@@ -138,10 +164,3 @@ html_context = {
     "doc_path": "doc",
 }
 html_scaled_image_link = False
-
-
-#### App setup ####
-
-
-def setup(app):
-    app.connect("autodoc-skip-member", apidoc.skip_nonrelevant)

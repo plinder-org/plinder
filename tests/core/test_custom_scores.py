@@ -2,6 +2,7 @@
 # Distributed under the terms of the Apache License 2.0
 import json
 import os
+from collections import Counter
 from pathlib import Path
 
 import numpy as np
@@ -72,9 +73,7 @@ def _write_index(root: Path) -> None:
 def test_resolve_custom_scoring_assets_accepts_ingest_layout(tmp_path):
     _write_index(tmp_path)
     for backend in custom.SEARCH_BACKENDS:
-        _write_search_bundle(
-            tmp_path / "dbs" / "subdbs" / f"holo_{backend}", backend
-        )
+        _write_search_bundle(tmp_path / "dbs" / "subdbs" / f"holo_{backend}", backend)
     archive = tmp_path / "ligand_archives" / "ab.parquet"
     archive.parent.mkdir()
     archive.touch()
@@ -93,9 +92,7 @@ def test_resolve_custom_scoring_assets_accepts_ingest_layout(tmp_path):
 def test_remote_resolution_requests_only_bounded_assets(tmp_path, monkeypatch):
     _write_index(tmp_path)
     for backend in custom.SEARCH_BACKENDS:
-        _write_search_bundle(
-            tmp_path / "search_databases" / f"holo_{backend}", backend
-        )
+        _write_search_bundle(tmp_path / "search_databases" / f"holo_{backend}", backend)
     archive = tmp_path / "ligand_archives" / "xy.parquet"
     archive.parent.mkdir()
     archive.touch()
@@ -126,9 +123,7 @@ def test_ligand_coordinates_are_not_resolved_before_targets_are_known(
 ):
     _write_index(tmp_path)
     for backend in custom.SEARCH_BACKENDS:
-        _write_search_bundle(
-            tmp_path / "search_databases" / f"holo_{backend}", backend
-        )
+        _write_search_bundle(tmp_path / "search_databases" / f"holo_{backend}", backend)
     requested: list[str] = []
 
     def get_plinder_path(*, rel: str) -> Path:
@@ -203,9 +198,7 @@ def test_missing_offline_asset_has_actionable_error(tmp_path, monkeypatch):
         custom.resolve_custom_scoring_assets(data_dir=tmp_path, backends=())
 
 
-def test_write_custom_query_files_uses_protein_label_asym_ids(
-    test_dir, tmp_path
-):
+def test_write_custom_query_files_uses_protein_label_asym_ids(test_dir, tmp_path):
     cif = test_dir / "interfaces/cm/pdb_00007cma/pdb_00007cma_xyz-enrich.cif.gz"
 
     inputs = custom.write_custom_query_files([cif], work_dir=tmp_path)
@@ -244,9 +237,48 @@ def test_write_custom_query_files_uses_protein_label_asym_ids(
     )
 
 
-def test_write_custom_query_files_accepts_coordinate_only_mmcif(
-    test_dir, tmp_path
-):
+def test_write_custom_sequence_query_files_preserves_fasta_ids(tmp_path):
+    source = tmp_path / "queries.faa"
+    source.write_text(
+        ">sample.with_symbols description\nACDEFGHIKLMNPQ\n"
+        ">second_sample\nRSTVWYACDEFGHI\n"
+    )
+
+    inputs = custom.write_custom_sequence_query_files(
+        source,
+        work_dir=tmp_path / "work",
+    )
+    manifest = pd.read_parquet(inputs.chain_manifest)
+
+    assert manifest["query_id"].tolist() == ["cq00000000", "cq00000001"]
+    assert manifest["structure_id"].tolist() == ["cq00000000", "cq00000001"]
+    assert manifest["sequence_id"].tolist() == [
+        "sample.with_symbols",
+        "second_sample",
+    ]
+    assert manifest["chain_asym_id"].tolist() == ["A", "A"]
+    assert manifest["sequence_source"].tolist() == ["polymer", "polymer"]
+    assert inputs.sequence_fasta.read_text().splitlines()[::2] == [
+        ">cq00000000",
+        ">cq00000001",
+    ]
+    assert not list(inputs.chain_cif_dir.iterdir())
+
+
+def test_write_custom_sequence_query_files_rejects_duplicate_fasta_ids(tmp_path):
+    source = tmp_path / "queries.faa"
+    source.write_text(
+        ">repeated\nACDEFGHIKLMNPQ\n>repeated duplicate\nRSTVWYACDEFGHI\n"
+    )
+
+    with pytest.raises(ValueError, match="repeats identifiers: \\['repeated'\\]"):
+        custom.write_custom_sequence_query_files(
+            source,
+            work_dir=tmp_path / "work",
+        )
+
+
+def test_write_custom_query_files_accepts_coordinate_only_mmcif(test_dir, tmp_path):
     from plinder.data.annotations.cif_utils import read_mmcif_file
 
     source = test_dir / "interfaces/cm/pdb_00007cma/pdb_00007cma_xyz-enrich.cif.gz"
@@ -275,9 +307,7 @@ def test_write_custom_query_files_accepts_coordinate_only_mmcif(
     assert np.min(output_block["atom_site"]["label_seq_id"].as_array(int)) == 1
 
 
-def test_write_custom_query_files_reports_missing_coordinate_fields(
-    test_dir, tmp_path
-):
+def test_write_custom_query_files_reports_missing_coordinate_fields(test_dir, tmp_path):
     from plinder.data.annotations.cif_utils import read_mmcif_file
 
     source = test_dir / "interfaces/cm/pdb_00007cma/pdb_00007cma_xyz-enrich.cif.gz"
@@ -290,9 +320,7 @@ def test_write_custom_query_files_reports_missing_coordinate_fields(
         custom.write_custom_query_files([invalid], work_dir=tmp_path / "work")
 
 
-def test_write_pdb_query_files_reports_missing_assembly_fields(
-    test_dir, tmp_path
-):
+def test_write_pdb_query_files_reports_missing_assembly_fields(test_dir, tmp_path):
     from plinder.data.annotations.cif_utils import read_mmcif_file
 
     source = test_dir / "interfaces/cm/pdb_00007cma/pdb_00007cma_xyz-enrich.cif.gz"
@@ -339,14 +367,17 @@ def test_write_custom_query_files_derives_coordinate_only_sequences(
     assert set(chains["sequence_source"]) == {"coordinates"}
 
 
-def test_annotate_custom_cif_files_writes_bonded_ligands(test_dir, tmp_path):
+def test_annotate_custom_cif_files_writes_bonded_ligands(
+    test_dir, tmp_path, monkeypatch
+):
     import yaml
+    from plinder.data.annotations import ligand_utils
     from rdkit import Chem
 
+    monkeypatch.setattr(ligand_utils, "BINDING_AFFINITY", {})
+
     cif = test_dir / "custom_cif/boltz_8c3u_input_model_0.cif"
-    config = yaml.safe_load(
-        (test_dir / "custom_cif/boltz_8c3u_input.yaml").read_text()
-    )
+    config = yaml.safe_load((test_dir / "custom_cif/boltz_8c3u_input.yaml").read_text())
     smiles = next(
         sequence["ligand"]["smiles"]
         for sequence in config["sequences"]
@@ -378,9 +409,7 @@ def test_annotate_custom_cif_files_writes_bonded_ligands(test_dir, tmp_path):
     )
 
 
-def test_annotate_custom_cif_files_keeps_interface_only_entries(
-    test_dir, tmp_path
-):
+def test_annotate_custom_cif_files_keeps_interface_only_entries(test_dir, tmp_path):
     cif = test_dir / "interfaces/cm/pdb_00007cma/pdb_00007cma_xyz-enrich.cif.gz"
 
     annotations = custom.annotate_custom_cif_files(
@@ -393,10 +422,24 @@ def test_annotate_custom_cif_files_keeps_interface_only_entries(
     entry = annotations.entries_by_structure["pdb_00007cma_xyz-enrich"]
 
     assert not entry.systems
-    assert set(entry.interfaces) == {
-        "pdb_00007cma_xyz-enrich__1__1.A--1.B"
-    }
+    assert set(entry.interfaces) == {"pdb_00007cma_xyz-enrich__1__1.A--1.B"}
     assert not pd.read_parquet(annotations.interface_annotations).empty
+
+
+def test_annotate_custom_cif_files_keeps_protein_only_entries(test_dir, tmp_path):
+    cif = test_dir / "interfaces/cm/pdb_00007cma/pdb_00007cma_xyz-enrich.cif.gz"
+
+    annotations = custom.annotate_custom_cif_files(
+        [cif],
+        work_dir=tmp_path,
+        include_ligands=False,
+        include_interfaces=False,
+    )
+    entry = annotations.entries_by_structure["pdb_00007cma_xyz-enrich"]
+
+    assert not entry.systems
+    assert not entry.interfaces
+    assert {"A", "B"} <= set(entry.chains)
 
 
 def test_create_custom_query_databases_records_backend_identifiers(
@@ -472,6 +515,75 @@ def test_create_custom_query_databases_only_requires_selected_backend(
     assert executable_checks == ["mmseqs"]
     assert [command[0] for command in commands] == ["mmseqs"]
     assert set(databases.databases) == {"mmseqs"}
+
+
+def test_build_mmseqs_target_subset_uses_selected_scoreable_chains(
+    tmp_path, monkeypatch
+):
+    entry_chains = tmp_path / "entry_chains.parquet"
+    pd.DataFrame(
+        {
+            "entry_pdb_id": ["1abc", "1abc", "1abc", "1abc", "2def"],
+            "chain_asym_id": ["A", "B", "C", "L", "A"],
+            "chain_auth_id": ["X", "I", "Z", "L", "Y"],
+            "chain_receptor_type": [
+                "protein",
+                "protein",
+                "protein",
+                "other",
+                "protein",
+            ],
+            "chain_is_holo": [True, False, False, False, True],
+            "chain_sequence": ["ACDE", "FGHI", "KLMN", "X", "PQRS"],
+        }
+    ).to_parquet(entry_chains, index=False)
+    interface_annotations = tmp_path / "interface_annotations.parquet"
+    pd.DataFrame(
+        {
+            "entry_pdb_id": ["1abc"],
+            "interface_chain_1": ["1.A"],
+            "interface_chain_2": ["1.B"],
+        }
+    ).to_parquet(interface_annotations, index=False)
+    commands: list[list[str]] = []
+    monkeypatch.setattr(custom.shutil, "which", lambda _name: "/bin/mmseqs")
+    monkeypatch.setattr(custom, "_run_command", commands.append)
+
+    bundle = custom._build_mmseqs_target_subset(
+        entry_chains,
+        interface_annotations,
+        entry_ids=["1abc"],
+        output_dir=tmp_path / "subset",
+        threads=3,
+    )
+
+    assert bundle.backend == "mmseqs"
+    assert bundle.search_target == bundle.conversion_target
+    assert bundle.cluster_alignments is None
+    assert (bundle.root / "targets.fasta").read_text() == (
+        ">1abc_I\nFGHI\n>1abc_X\nACDE\n"
+    )
+    assert commands == [
+        [
+            "mmseqs",
+            "createdb",
+            str(bundle.root / "targets.fasta"),
+            str(bundle.root / "targets"),
+            "--threads",
+            "3",
+        ]
+    ]
+
+
+def test_plinder_entry_subset_rejects_foldseek(tmp_path):
+    with pytest.raises(ValueError, match="requires backends"):
+        custom._resolve_workflow_assets(
+            data_dir=tmp_path,
+            backends=("foldseek",),
+            plinder_entry_ids=("1abc",),
+            work_dir=tmp_path / "work",
+            threads=1,
+        )
 
 
 def test_map_custom_alignment_hits_maps_query_and_target_chains(tmp_path):
@@ -699,6 +811,69 @@ def test_prepare_custom_score_alignments_maps_selected_residues(
     assert result.loc[0, "seqsim"] == pytest.approx(1.0)
 
 
+@pytest.mark.parametrize(
+    ("backend", "target_numbers", "target_indices", "custom_number"),
+    [
+        ("foldseek", [20], [1], 200),
+        ("mmseqs", [2], [1], 2),
+    ],
+)
+def test_prepare_custom_protein_score_alignments_reverses_direction(
+    tmp_path,
+    backend,
+    target_numbers,
+    target_indices,
+    custom_number,
+):
+    query_entry = EntryView(
+        pdb_id="model",
+        chains={"A": ChainView(asym_id="A", auth_id="A", length=2)},
+        systems={},
+        author_to_asym={"A": "A"},
+    )
+    hit_path = tmp_path / f"{backend}_hits.parquet"
+    row = {
+        "structure_id": "model",
+        "query_chain_asym_id": "A",
+        "query_sequence_source": "polymer",
+        "query_resolved_residue_numbers": [100, 200],
+        "target_entry": "1abc",
+        "target_chain_asym_id": "B",
+        "target_selected_residue_numbers": target_numbers,
+        "target_selected_residue_indices": target_indices,
+        "qstart": 1,
+        "tstart": 1,
+        "qcov": 0.5,
+        "tcov": 0.75,
+        "fident": 1.0,
+        "qaln": "AC",
+        "taln": "AC",
+    }
+    if backend == "foldseek":
+        row["lddt"] = 0.9
+    pd.DataFrame([row]).to_parquet(hit_path, index=False)
+
+    outputs = custom.prepare_custom_protein_score_alignments(
+        {backend: hit_path},
+        entries_by_structure={"model": query_entry},
+        output_dir=tmp_path / "protein_score_alignments",
+    )
+    result = pd.read_parquet(outputs[backend])
+
+    assert result.loc[0, "query_entry"] == "1abc"
+    assert result.loc[0, "target_entry"] == "model"
+    assert result.loc[0, "query_chain_mapped"] == "B"
+    assert result.loc[0, "target_chain_mapped"] == "A"
+    assert result.loc[0, "qcov"] == pytest.approx(0.75)
+    assert result.loc[0, "tcov"] == pytest.approx(0.5)
+    assert result.loc[0, "query_selected_residue_numbers"].tolist() == [
+        target_numbers[0]
+    ]
+    assert result.loc[0, "target_selected_residue_numbers"].tolist() == [custom_number]
+    assert result.loc[0, "selected_residue_identity"] == b"\x01"
+    assert result.loc[0, "fident_qcov"] == pytest.approx(0.75)
+
+
 def test_prepare_custom_score_alignments_maps_coordinate_fasta_positions(tmp_path):
     query_ligand = LigandView(
         id="model__1__1.L",
@@ -771,6 +946,7 @@ def _scoring_entry(
     ligand_id: str,
     ligand_chain: str,
     pocket_number: int,
+    interaction: bool = False,
 ) -> EntryView:
     system_id = f"{pdb_id}__1__1.{chain_id}__1.{ligand_chain}"
     ligand = LigandView(
@@ -782,9 +958,14 @@ def _scoring_entry(
         is_proper=True,
         protein_chains_asym_id=[f"1.{chain_id}"],
         num_pocket_residues=1,
-        num_interactions=0,
-        num_unique_interactions=0,
+        num_interactions=int(interaction),
+        num_unique_interactions=int(interaction),
         pocket_residue_number_to_index={f"1.{chain_id}": {pocket_number: 1}},
+        interactions_counter=(
+            {f"1.{chain_id}": {pocket_number: Counter({"hydrogen_bond": 1})}}
+            if interaction
+            else {}
+        ),
     )
     system = SystemView(
         id=system_id,
@@ -799,9 +980,7 @@ def _scoring_entry(
     )
     return EntryView(
         pdb_id=pdb_id,
-        chains={
-            chain_id: ChainView(asym_id=chain_id, auth_id=chain_id, length=2)
-        },
+        chains={chain_id: ChainView(asym_id=chain_id, auth_id=chain_id, length=2)},
         systems={system_id: system},
         author_to_asym={chain_id: chain_id},
     )
@@ -887,11 +1066,360 @@ def test_calculate_custom_similarity_scores_reuses_release_metrics(
     assert pocket.iloc[0]["similarity"] == 100
     assert pocket.iloc[0]["query_ligand_id"] == "model__1__1.L"
     assert pocket.iloc[0]["target_ligand_id"] == "1abc__1__1.Z"
+    assert scores["metric"].str.startswith("protein_").any()
 
 
-def test_calculate_custom_interface_scores_uses_compact_maps(
-    tmp_path, monkeypatch
+@pytest.mark.parametrize(
+    ("custom_chain", "target_system"),
+    [("A", "model_A"), ("1.A", "model_1.A")],
+)
+def test_calculate_custom_protein_scores_uses_plinder_pocket(
+    tmp_path, monkeypatch, custom_chain, target_system
 ):
+    plinder_entry = _scoring_entry(
+        pdb_id="1abc",
+        chain_id="B",
+        ligand_id="1abc__1__1.Z",
+        ligand_chain="Z",
+        pocket_number=20,
+        interaction=True,
+    )
+    monkeypatch.setattr(
+        custom,
+        "_load_release_entry_views",
+        lambda _assets, *, pdb_ids: {"1abc": plinder_entry},
+    )
+    alignment = tmp_path / "reverse_foldseek.parquet"
+    pd.DataFrame(
+        [
+            {
+                "query_entry": "1abc",
+                "target_entry": "model",
+                "query_chain_mapped": "B",
+                "target_chain_mapped": custom_chain,
+                "source": "foldseek",
+                "qcov": 1.0,
+                "fident": 1.0,
+                "seqsim": 1.0,
+                "lddt": 0.9,
+                "query_selected_residue_numbers": [20],
+                "target_selected_residue_numbers": [-1],
+                "selected_residue_identity": b"\x01",
+            }
+        ]
+    ).to_parquet(alignment, index=False)
+
+    scores = custom.calculate_custom_protein_similarity_scores(
+        {"foldseek": alignment},
+        assets=_custom_assets(tmp_path),
+        work_dir=tmp_path / "protein_score_work",
+        custom_chain_ids={target_system},
+    )
+
+    pocket = scores.loc[scores["metric"].astype(str) == "pocket_fident"]
+    assert len(pocket) == 1
+    assert pocket.iloc[0]["similarity"] == 100
+    assert pocket.iloc[0]["query_system"] == "1abc__1__1.B__1.Z"
+    assert pocket.iloc[0]["query_ligand_id"] == "1abc__1__1.Z"
+    assert pocket.iloc[0]["target_system"] == target_system
+    assert pd.isna(pocket.iloc[0]["target_ligand_id"])
+    pli = scores.loc[scores["metric"].astype(str) == "pli_fident"]
+    assert len(pli) == 1
+    assert pli.iloc[0]["similarity"] == 100
+
+
+def test_calculate_custom_protein_scores_reads_alignments_once(tmp_path, monkeypatch):
+    from plinder.data.annotations import get_similarity_scores
+
+    release_entries = {
+        pdb_id: _scoring_entry(
+            pdb_id=pdb_id,
+            chain_id="B",
+            ligand_id=f"{pdb_id}__1__1.Z",
+            ligand_chain="Z",
+            pocket_number=20,
+        )
+        for pdb_id in ["1abc", "2def"]
+    }
+    monkeypatch.setattr(
+        custom,
+        "_load_release_entry_views",
+        lambda _assets, *, pdb_ids: {
+            pdb_id: release_entries[pdb_id] for pdb_id in pdb_ids
+        },
+    )
+    alignment = tmp_path / "reverse_foldseek.parquet"
+    pd.DataFrame(
+        [
+            {
+                "query_entry": pdb_id,
+                "target_entry": "model_with_underscore",
+                "query_chain_mapped": "B",
+                "target_chain_mapped": "A",
+                "source": "foldseek",
+                "qcov": 1.0,
+                "fident": 1.0,
+                "seqsim": 1.0,
+                "lddt": 0.9,
+                "query_selected_residue_numbers": [20],
+                "target_selected_residue_numbers": [-1],
+                "selected_residue_identity": b"\x01",
+            }
+            for pdb_id in release_entries
+        ]
+    ).to_parquet(alignment, index=False)
+    original_load = get_similarity_scores.Scorer.load_alignments
+    load_calls = []
+
+    def counted_load(self, *args, **kwargs):
+        load_calls.append((args, kwargs))
+        return original_load(self, *args, **kwargs)
+
+    monkeypatch.setattr(
+        get_similarity_scores.Scorer,
+        "load_alignments",
+        counted_load,
+    )
+
+    scores = custom.calculate_custom_protein_similarity_scores(
+        {"foldseek": alignment},
+        assets=_custom_assets(tmp_path),
+        work_dir=tmp_path / "protein_score_work",
+        custom_chain_ids={"model_with_underscore_A"},
+    )
+
+    assert len(load_calls) == 1
+    assert set(scores["query_system"]) == {
+        "1abc__1__1.B__1.Z",
+        "2def__1__1.B__1.Z",
+    }
+    assert set(scores["target_system"]) == {"model_with_underscore_A"}
+
+
+def test_write_custom_aligned_pocket_residues(tmp_path, monkeypatch):
+    plinder_entry = _scoring_entry(
+        pdb_id="1abc",
+        chain_id="B",
+        ligand_id="1abc__1__1.Z",
+        ligand_chain="Z",
+        pocket_number=20,
+    )
+    system = next(iter(plinder_entry.systems.values()))
+    ligand = next(iter(system.ligands.values()))
+    plinder_entry.chains["C"] = ChainView(asym_id="C", auth_id="C", length=2)
+    plinder_entry.author_to_asym["C"] = "C"
+    system.protein_chains_asym_id.append("1.C")
+    system.pocket_residue_number_to_index["1.C"] = {30: 1}
+    ligand.protein_chains_asym_id.append("1.C")
+    ligand.pocket_residue_number_to_index["1.C"] = {30: 1}
+    monkeypatch.setattr(
+        custom,
+        "_load_release_entry_views",
+        lambda _assets, *, pdb_ids: {"1abc": plinder_entry},
+    )
+    foldseek_alignment = tmp_path / "reverse_foldseek.parquet"
+    pd.DataFrame(
+        [
+            {
+                "query_entry": "1abc",
+                "target_entry": "model_with_underscore",
+                "query_chain_mapped": "B",
+                "target_chain_mapped": "A",
+                "source": "foldseek",
+                "query_selected_residue_numbers": [20],
+                "target_selected_residue_numbers": [42],
+                "selected_residue_identity": b"\x01",
+            },
+            {
+                "query_entry": "1abc",
+                "target_entry": "model_with_underscore",
+                "query_chain_mapped": "C",
+                "target_chain_mapped": "A",
+                "source": "foldseek",
+                "query_selected_residue_numbers": [30],
+                "target_selected_residue_numbers": [43],
+                "selected_residue_identity": b"\x00",
+            },
+        ]
+    ).to_parquet(foldseek_alignment, index=False)
+    mmseqs_alignment = tmp_path / "reverse_mmseqs.parquet"
+    pd.DataFrame(
+        [
+            {
+                "query_entry": "1abc",
+                "target_entry": "model_with_underscore",
+                "query_chain_mapped": "B",
+                "target_chain_mapped": "A",
+                "source": "mmseqs",
+                "query_selected_residue_numbers": [20],
+                "target_selected_residue_numbers": [142],
+                "selected_residue_identity": b"\x00",
+            }
+        ]
+    ).to_parquet(mmseqs_alignment, index=False)
+    protein_scores = tmp_path / "protein_scores.parquet"
+    pd.DataFrame(
+        [
+            {
+                "query_system": "1abc__1__1.B__1.Z",
+                "query_ligand_id": "1abc__1__1.Z",
+                "target_system": "model_with_underscore_A",
+                "protein_mapping": "1.B:0.A",
+                "source": "foldseek",
+                "metric": "pocket_fident",
+            }
+        ]
+    ).to_parquet(protein_scores, index=False)
+
+    output = custom.write_custom_aligned_pocket_residues(
+        {"foldseek": foldseek_alignment, "mmseqs": mmseqs_alignment},
+        protein_scores=protein_scores,
+        assets=_custom_assets(tmp_path),
+        output_path=tmp_path / "aligned_pocket_residues.parquet",
+    )
+    result = pd.read_parquet(output)
+
+    assert result.to_dict("records") == [
+        {
+            "plinder_system_id": "1abc__1__1.B__1.Z",
+            "plinder_ligand_id": "1abc__1__1.Z",
+            "plinder_entry_id": "1abc",
+            "plinder_chain_instance": "1.B",
+            "plinder_chain_asym_id": "B",
+            "plinder_residue_number": 20,
+            "custom_structure_id": "model_with_underscore",
+            "custom_chain_asym_id": "A",
+            "custom_residue_number": 42,
+            "residue_identical": True,
+            "source": "foldseek",
+        }
+    ]
+
+
+def test_write_custom_sequence_link_tables_adds_ligand_chemistry(tmp_path):
+    manifest = tmp_path / "query_chains.parquet"
+    pd.DataFrame(
+        {
+            "structure_id": ["cq00000000", "cq00000001"],
+            "chain_asym_id": ["A", "A"],
+            "sequence_id": ["sample-1", "sample-2"],
+            "sequence_length": [120, 80],
+        }
+    ).to_parquet(manifest, index=False)
+    protein_scores = tmp_path / "protein_scores.parquet"
+    pd.DataFrame(
+        [
+            {
+                "query_system": "1abc__1__1.B__1.Z",
+                "query_ligand_id": "1abc__1__1.Z",
+                "target_system": "cq00000000_A",
+                "protein_mapping": "1.B:0.A",
+                "protein_mapper": "mmseqs",
+                "source": "mmseqs",
+                "metric": "pocket_fident",
+                "similarity": 75,
+            },
+            {
+                "query_system": "1abc__1__1.B__1.Z",
+                "query_ligand_id": "1abc__1__1.Z",
+                "target_system": "cq00000000_A",
+                "protein_mapping": "1.B:0.A",
+                "protein_mapper": "mmseqs",
+                "source": "mmseqs",
+                "metric": "pli_fident",
+                "similarity": 50,
+            },
+        ]
+    ).to_parquet(protein_scores, index=False)
+    annotation = tmp_path / "annotation.parquet"
+    pd.DataFrame(
+        [
+            {
+                "system_id": "1abc__1__1.B__1.Z",
+                "ligand_id": "1abc__1__1.Z",
+                "ligand_ccd_code": "ATP",
+                "ligand_unique_ccd_code": "ATP",
+                "ligand_smiles": None,
+            },
+            {
+                "system_id": "1abc__1__1.B__1.Z",
+                "ligand_id": "9zzz__1__1.Z",
+                "ligand_ccd_code": "LIG",
+                "ligand_unique_ccd_code": "LIG",
+                "ligand_smiles": "CC",
+            },
+            {
+                "system_id": "1abc__1__1.B__1.Z",
+                "ligand_id": "9zzz__1__1.Z",
+                "ligand_ccd_code": "LIG",
+                "ligand_unique_ccd_code": "LIG",
+                "ligand_smiles": "CCC",
+            },
+        ]
+    ).to_parquet(annotation, index=False)
+
+    links, best = custom.write_custom_sequence_link_tables(
+        protein_scores=protein_scores,
+        chain_manifest=manifest,
+        annotation_table=annotation,
+        output_path=tmp_path / "sequence_links.parquet",
+        best_output_path=tmp_path / "best_sequence_links.parquet",
+    )
+
+    link_rows = pd.read_parquet(links)
+    assert link_rows.loc[0, "sequence_id"] == "sample-1"
+    assert link_rows.loc[0, "plinder_pdb_id"] == "1abc"
+    assert link_rows.loc[0, "plinder_ligand_ccd_code"] == "ATP"
+    assert link_rows.loc[0, "pocket_fident"] == 75
+    assert link_rows.loc[0, "pli_fident"] == 50
+    assert pd.isna(link_rows.loc[0, "plinder_ligand_smiles"])
+    best_rows = pd.read_parquet(best)
+    assert best_rows["sequence_id"].tolist() == ["sample-1", "sample-2"]
+    assert pd.isna(best_rows.loc[1, "plinder_system_id"])
+
+    missing_annotation = tmp_path / "missing_annotation.parquet"
+    missing_chemistry = pd.read_parquet(annotation)
+    missing_chemistry["system_id"] = "9zzz__1__1.B__1.Z"
+    missing_chemistry.to_parquet(missing_annotation, index=False)
+    with pytest.raises(ValueError, match="no row for scored PLINDER ligands"):
+        custom.write_custom_sequence_link_tables(
+            protein_scores=protein_scores,
+            chain_manifest=manifest,
+            annotation_table=missing_annotation,
+            output_path=tmp_path / "missing_sequence_links.parquet",
+            best_output_path=tmp_path / "missing_best_sequence_links.parquet",
+        )
+
+
+def test_add_sequence_ids_to_aligned_pocket_residues(tmp_path):
+    manifest = tmp_path / "query_chains.parquet"
+    pd.DataFrame(
+        {"structure_id": ["cq00000000"], "sequence_id": ["original.sample"]}
+    ).to_parquet(manifest, index=False)
+    residues = tmp_path / "aligned_pocket_residues.parquet"
+    pd.DataFrame(
+        {
+            "custom_structure_id": ["cq00000000"],
+            "custom_residue_number": [42],
+        }
+    ).to_parquet(residues, index=False)
+
+    custom.add_sequence_ids_to_aligned_pocket_residues(
+        residues,
+        chain_manifest=manifest,
+    )
+
+    result = pd.read_parquet(residues)
+    assert result.to_dict("records") == [
+        {
+            "sequence_id": "original.sample",
+            "custom_structure_id": "cq00000000",
+            "custom_residue_number": 42,
+        }
+    ]
+
+
+def test_calculate_custom_interface_scores_uses_compact_maps(tmp_path, monkeypatch):
     query_interface = InterfaceView(
         id="model__1__1.A_1.C",
         pdb_id="model",

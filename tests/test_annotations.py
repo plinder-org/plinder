@@ -4,6 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import biotite.structure as struc
+import biotite.structure.io.pdbx as pdbx
 import numpy as np
 import pandas as pd
 import pytest
@@ -31,8 +32,7 @@ from plinder.data.annotations.ligand_utils import (
     is_known_artifact_ligand,
     sort_ccd_codes,
 )
-from plinder.data.annotations.mmpdb_utils import add_mmp_clusters_to_data
-from plinder.data.annotations.protein_utils import get_receptor_type
+from plinder.data.annotations.protein_utils import Chain, get_receptor_type
 from plinder.data.annotations.save_utils import (
     SystemReconstructionOptions,
     SystemReconstructionOutputs,
@@ -203,8 +203,9 @@ def test_pinder_7cm8_homodimer_interface_regression(test_dir: Path) -> None:
 
 
 def test_interface_only_annotation_preserves_ligand_assets(
-    test_dir: Path, tmp_path: Path
+    test_dir: Path, tmp_path: Path, mock_alternative_datasets
 ) -> None:
+    mock_alternative_datasets("7cm8")
     cif = test_dir / "interfaces/cm/pdb_00007cm8/" "pdb_00007cm8_xyz-enrich.cif.gz"
     annotation = GetPlinderAnnotation(cif, "", save_folder=tmp_path)
     first = annotation.annotate_interfaces()
@@ -212,19 +213,33 @@ def test_interface_only_annotation_preserves_ligand_assets(
     assert first.column("prodigy_label").to_pylist() == ["BIO"]
 
     entry_folder = tmp_path / "7cm8"
+    biounit_path = entry_folder / "entry_biounit_chains.parquet"
+    contact_columns = {
+        "chain_num_contacting_ions",
+        "chain_num_contacting_artifacts",
+        "chain_num_contacting_other_ligands",
+    }
+    assert contact_columns.isdisjoint(pd.read_parquet(biounit_path).columns)
     interface_path = entry_folder / "interfaces.parquet"
     interface_bytes = interface_path.read_bytes()
-    assert annotation.annotate(include_interfaces=False) is None
+    ligand_table = annotation.annotate(include_interfaces=False)
+    assert ligand_table is not None
+    assert not ligand_table.empty
     assert annotation.entry.interfaces == []
     assert interface_path.read_bytes() == interface_bytes
 
     ligand_annotation = tmp_path / "7cm8.parquet"
     ligand_annotation.write_bytes(b"preserved ligand annotation")
     ligand_sdf = entry_folder / "ligand_files/1.C.sdf"
-    ligand_sdf.parent.mkdir()
+    ligand_sdf.parent.mkdir(exist_ok=True)
     ligand_sdf.write_bytes(b"preserved canonical ligand")
     metadata_path = entry_folder / "entry_metadata.parquet"
     metadata_path.unlink()
+    ligand_biounits = pd.read_parquet(biounit_path)
+    assert contact_columns.issubset(ligand_biounits.columns)
+    ligand_biounits.drop(columns=list(contact_columns)).to_parquet(
+        biounit_path, index=False
+    )
     preserved = [
         ligand_annotation,
         ligand_sdf,
@@ -238,6 +253,7 @@ def test_interface_only_annotation_preserves_ligand_assets(
 
     assert second.equals(first)
     assert {path: path.read_bytes() for path in preserved} == before
+    assert contact_columns.isdisjoint(pd.read_parquet(biounit_path).columns)
     assert pd.read_parquet(metadata_path)["entry_pdb_id"].tolist() == ["7cm8"]
 
 
@@ -272,24 +288,41 @@ def test_interface_only_annotation_adds_missing_shared_chain_rows(
     biounits = pd.read_parquet(biounit_path)
     expected_biounit_ids = set(biounits["chain_asym_id"])
     biounits.loc[biounits["chain_asym_id"] == "A", "chain_role"] = "ligand"
-    biounits.loc[biounits["chain_asym_id"] != "B"].to_parquet(
-        biounit_path, index=False
+    biounits.loc[biounits["chain_asym_id"] != "B"].to_parquet(biounit_path, index=False)
+    metadata_path = entry_folder / "entry_metadata.parquet"
+    metadata = pd.read_parquet(metadata_path).drop(
+        columns=[
+            "entry_source_taxonomy_ids",
+            "entry_source_organism_names",
+            "entry_host_taxonomy_ids",
+            "entry_host_organism_names",
+        ]
     )
+    metadata["ligand_only_metadata"] = "preserved"
+    metadata.to_parquet(metadata_path, index=False)
 
     annotation.annotate_interfaces()
 
     repaired_chains = pd.read_parquet(chain_path)
     repaired_biounits = pd.read_parquet(biounit_path)
+    repaired_metadata = pd.read_parquet(metadata_path)
     assert set(repaired_chains["chain_asym_id"]) == expected_chain_ids
     assert set(repaired_biounits["chain_asym_id"]) == expected_biounit_ids
     assert repaired_chains.set_index("chain_asym_id").loc["A", "chain_auth_id"] == (
         "preserved"
     )
     assert set(
-        repaired_biounits.loc[
-            repaired_biounits["chain_asym_id"] == "A", "chain_role"
-        ]
+        repaired_biounits.loc[repaired_biounits["chain_asym_id"] == "A", "chain_role"]
     ) == {"ligand"}
+    assert repaired_metadata["ligand_only_metadata"].tolist() == ["preserved"]
+    assert set(repaired_metadata).issuperset(
+        {
+            "entry_source_taxonomy_ids",
+            "entry_source_organism_names",
+            "entry_host_taxonomy_ids",
+            "entry_host_organism_names",
+        }
+    )
 
 
 def test_pinder_6wwe_enumerates_all_three_interfaces(test_dir: Path) -> None:
@@ -467,7 +500,6 @@ def test_multi_residue_ligand_uses_richer_identity_for_rdkit() -> None:
     ligand.set_rdkit()
 
     assert ligand.smiles == ligand.resolved_smiles
-    assert ligand.rdkit_canonical_smiles == ligand.resolved_smiles
     assert ligand.num_heavy_atoms == 2 * Chem.MolFromSmiles(nag).GetNumHeavyAtoms()
     assert ligand.is_oligosaccharide
     assert not ligand.is_monosaccharide
@@ -554,6 +586,32 @@ def test_entry_validation_accepts_missing_optional_wwpdb_metrics():
 
     assert result.clashscore is None
     assert result.meanI_over_sigI_obs is None
+
+
+def test_entry_validation_accepts_unavailable_crystallographic_metrics():
+    entry = {
+        "PDB-resolution": "NotAvailable",
+        "PDB-Rfree": "NotAvailable",
+        "PDB-R": "NotAvailable",
+        "clashscore": None,
+    }
+    validation = SimpleNamespace(
+        getValidationXML=lambda: SimpleNamespace(getEntry=lambda: entry),
+        getReflectionsResolution=lambda: 2.4,
+        getMeanIOverSigIObs=lambda: None,
+        countAtoms=lambda: 100,
+        calcMolProbityOverallScore=lambda: 1.5,
+        calcMeanStructureBFactor=lambda: 20.0,
+        calcMedianStructureBFactor=lambda: 18.0,
+        getResolution=lambda: (_ for _ in ()).throw(KeyError("refine")),
+    )
+
+    result = EntryValidation.from_entry(validation)
+
+    assert np.isnan(result.r)
+    assert np.isnan(result.rfree)
+    assert np.isnan(result.resolution)
+    assert np.isnan(result.pdbx_resolution)
 
 
 def test_crystal_contact_fraction_is_undefined_without_heavy_atoms():
@@ -755,6 +813,38 @@ def test_chain_from_cif_data_nucleotides(cif_8ufz):
         ), f"Residue {residue.name} at {resnum}: expected 'DNA Linking', got '{residue.chem_type}'"
 
 
+def test_chain_from_cif_data_preserves_author_residue_ids():
+    block = pdbx.CIFBlock()
+    block["atom_site"] = pdbx.CIFCategory(
+        {
+            "label_asym_id": ["A", "A"],
+            "label_seq_id": ["1", "2"],
+            "auth_asym_id": ["X", "X"],
+            "auth_seq_id": ["101", "101"],
+            "pdbx_PDB_ins_code": [".", "A"],
+        }
+    )
+    atoms = struc.AtomArray(2)
+    atoms.chain_id = ["A", "A"]
+    atoms.res_id = [1, 2]
+    atoms.res_name = ["ALA", "GLY"]
+
+    chain = Chain.from_cif_data(
+        asym_id="A",
+        block=block,
+        atoms=atoms,
+        seqres_length=2,
+        entity_id="1",
+        chain_type_str="polypeptide(L)",
+    )
+
+    assert chain.auth_id == "X"
+    assert chain.residues[1].auth_number == "101"
+    assert chain.residues[1].insertion_code == "."
+    assert chain.residues[2].auth_number == "101"
+    assert chain.residues[2].insertion_code == "A"
+
+
 def test_covalent_linkage(cif_1qz5):
     reference = [("72:GLU:A:72:C", "73:HIC:A:73:N"), ("73:HIC:A:73:C", "74:GLY:A:74:N")]
 
@@ -854,16 +944,19 @@ def test_peptide_ligand_threshold(
         assert not stale_ligand_dir.exists()
 
 
-def test_annotation_without_systems_skips_validation_and_normalized_tables(
-    monkeypatch, tmp_path
-):
+def test_annotation_without_systems_writes_shared_sidecars(monkeypatch, tmp_path):
+    validation_calls = []
+
     class EmptyEntry:
         pdb_id = "1abc"
         systems: dict[str, object] = {}
         interfaces: list[object] = []
 
-        def set_validation(self, *_args, **_kwargs):
-            pytest.fail("empty entries must skip validation")
+        def set_validation(self, validation, cif):
+            validation_calls.append((validation, cif))
+
+        def metadata_to_df(self):
+            return pd.DataFrame({"entry_pdb_id": [self.pdb_id]})
 
     monkeypatch.setattr(
         Entry,
@@ -875,9 +968,20 @@ def test_annotation_without_systems_skips_validation_and_normalized_tables(
         Path("1abc_validation.xml.gz"),
         save_folder=tmp_path,
     )
+    writes = []
+    monkeypatch.setattr(
+        annotation,
+        "_write_shared_sidecars",
+        lambda path, table, *, replace_interfaces: writes.append(
+            (path, table.num_rows, replace_interfaces)
+        ),
+    )
 
     assert annotation.annotate() is None
-    assert not (tmp_path / "1abc").exists()
+    assert validation_calls == [
+        (Path("1abc_validation.xml.gz"), Path("1abc.cif")),
+    ]
+    assert writes == [(tmp_path / "1abc", 0, True)]
 
 
 def test_interface_only_annotation_materializes_normalized_tables(
@@ -955,6 +1059,88 @@ def test_entry_drops_systems_without_a_proper_ligand() -> None:
     retained = next(iter(entry.systems.values()))
     assert retained.system_type == "holo"
     assert {item.ccd_code for item in retained.ligands} == {"LIG", "NA"}
+
+
+def test_biounit_membership_counts_standalone_ligand_contacts() -> None:
+    atoms = struc.AtomArray(3)
+    atoms.coord = np.array([[0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [3.0, 0.0, 0.0]])
+    atoms.chain_id = np.array(["1.A", "1.I", "1.G"])
+    atoms.res_id = np.array([1, 1, 1])
+    atoms.res_name = np.array(["ALA", "ZN", "GOL"])
+    atoms.atom_name = np.array(["CA", "ZN", "C1"])
+    atoms.element = np.array(["C", "ZN", "C"])
+    chains = {
+        asym_id: Chain(
+            asym_id=asym_id,
+            auth_id=asym_id,
+            entity_id=asym_id,
+            chain_type_str=chain_type,
+            residues={},
+            length=1,
+            num_unresolved_residues=0,
+        )
+        for asym_id, chain_type in {
+            "A": "polypeptide(L)",
+            "I": "non-polymer",
+            "G": "non-polymer",
+        }.items()
+    }
+    entry = Entry(
+        pdb_id="1abc",
+        chains=chains,
+        ligand_like_chains={"I": "non-polymer", "G": "non-polymer"},
+        biounit_chain_ids={"1": ["1.A", "1.I", "1.G"]},
+    )
+    entry._record_biounit_ligand_contact_counts(
+        atoms,
+        "1",
+        BiounitSpatialIndex.from_atoms(atoms, 6.0),
+        monoatomic_ion_asym_ids={"I"},
+        known_artifact_asym_ids={"G"},
+        contact_threshold=6.0,
+    )
+
+    membership = entry.biounit_chains_to_df().set_index("chain_instance")
+    assert membership.loc["1.A", "chain_num_contacting_ions"] == 1
+    assert membership.loc["1.A", "chain_num_contacting_artifacts"] == 1
+    assert membership.loc["1.A", "chain_num_contacting_other_ligands"] == 0
+
+
+def test_empty_ligand_biounit_table_keeps_contact_schema() -> None:
+    entry = Entry(pdb_id="1abc")
+    entry._ligand_contacts_requested = True
+
+    membership = entry.biounit_chains_to_df()
+
+    assert membership.empty
+    assert {
+        "chain_num_contacting_ions",
+        "chain_num_contacting_artifacts",
+        "chain_num_contacting_other_ligands",
+    }.issubset(membership.columns)
+
+
+def test_biounit_membership_preserves_serialized_contact_counts() -> None:
+    entry = Entry(
+        pdb_id="1abc",
+        biounit_chain_ids={"1": ["1.A"]},
+        biounit_ligand_contact_counts={
+            "1": {
+                "1.A": {
+                    "ions": 1,
+                    "artifacts": 2,
+                    "other_ligands": 3,
+                }
+            }
+        },
+    )
+    restored = Entry.model_validate_json(entry.model_dump_json())
+
+    membership = restored.biounit_chains_to_df().set_index("chain_instance")
+
+    assert membership.loc["1.A", "chain_num_contacting_ions"] == 1
+    assert membership.loc["1.A", "chain_num_contacting_artifacts"] == 2
+    assert membership.loc["1.A", "chain_num_contacting_other_ligands"] == 3
 
 
 def test_entry_never_groups_ligands_across_biological_assemblies() -> None:
@@ -1077,6 +1263,95 @@ def test_entry_validation_skips_chains_outside_retained_systems(
     assert set(validated) == {"A", "B"}
 
 
+def test_entry_to_df_computes_validation_before_formatting_systems(
+    monkeypatch, tmp_path
+) -> None:
+    from plinder.data.annotations.aggregate_annotations import System
+
+    ligand = Ligand(
+        pdb_id="1abc",
+        biounit_id="1",
+        asym_id="L",
+        instance=1,
+    )
+    system = System(
+        pdb_id="1abc",
+        biounit_id="1",
+        ligands=[ligand],
+        receptor_type="protein",
+    )
+    entry = Entry(
+        pdb_id="1abc",
+        determination_method="X-RAY DIFFRACTION",
+        chains={
+            "L": Chain(
+                asym_id="L",
+                auth_id="L",
+                entity_id="1",
+                chain_type_str="non-polymer",
+                residues={},
+                length=1,
+                num_unresolved_residues=0,
+            )
+        },
+        systems={system.id: system},
+    )
+    validation_path = tmp_path / "validation.xml.gz"
+    validation_path.touch()
+    validation = EntryValidation(
+        resolution=2.0,
+        rfree=0.24,
+        r=0.20,
+        clashscore=0.0,
+        percent_rama_outliers=0.0,
+        percent_rota_outliers=0.0,
+        data_completeness=100.0,
+        percent_RSRZ_outliers=0.0,
+        atom_count=1,
+        molprobity=1.0,
+        mean_b_factor=20.0,
+        median_b_factor=20.0,
+        pdbx_resolution=2.0,
+        pdbx_reflns_resolution=2.0,
+        meanI_over_sigI_obs=10.0,
+    )
+    observed_entry_criteria = []
+
+    monkeypatch.setattr(
+        "plinder.data.annotations.aggregate_annotations.ValidationFactory",
+        lambda *_args, **_kwargs: SimpleNamespace(getValidation=lambda: object()),
+    )
+    monkeypatch.setattr(
+        "plinder.data.annotations.aggregate_annotations.EntryValidation.from_entry",
+        lambda _doc: validation,
+    )
+    monkeypatch.setattr(Chain, "set_validation", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(System, "set_validation", lambda *_args, **_kwargs: None)
+
+    def format_system(_self, _chains, entry_pass_criteria, _criteria=None):
+        observed_entry_criteria.append(entry_pass_criteria)
+        return {"system_pass_validation_criteria": entry_pass_criteria}
+
+    monkeypatch.setattr(System, "format", format_system)
+    monkeypatch.setattr(
+        Ligand,
+        "format",
+        lambda self, _chains: {"ligand_id": self.id},
+    )
+
+    entry.set_validation(validation_path, Path("source.cif"))
+    assert entry.pass_criteria is None
+
+    annotation = entry.to_df()
+
+    assert entry.pass_criteria is True
+    assert observed_entry_criteria == [True]
+    assert annotation["system_pass_validation_criteria"].tolist() == [True]
+    assert [column for column in annotation if column.startswith("entry_")] == [
+        "entry_pdb_id"
+    ]
+
+
 def test_synthetic_cov_peptide_detection(cif_6lu7, mock_alternative_datasets):
     entry_dir = mock_alternative_datasets("6lu7")
     plinder_anno = GetPlinderAnnotation(cif_6lu7, "", save_folder=entry_dir)
@@ -1187,9 +1462,10 @@ def test_10sb_covalent_macrocycle_is_single_ligand(cif_10sb, mock_alternative_da
 def test_get_ccd_mol_components_cif_fallback(monkeypatch):
     """_get_ccd_mol falls back to components.cif for codes bt_info lacks.
 
-    A1C8P is a 5-char extended CCD code (from 10sb) that biotite's bundled
-    dictionary predates. When the downloaded components.cif is available, the
-    component must be read from there instead of failing.
+    Simulate a bundled-dictionary miss for the 5-character A1C8P component
+    from 10sb. When the downloaded components.cif is available, the component
+    must be read from there instead of failing. This remains meaningful when a
+    newer Biotite release starts bundling that component itself.
     """
     from pathlib import Path
 
@@ -1197,9 +1473,14 @@ def test_get_ccd_mol_components_cif_fallback(monkeypatch):
     import plinder.data.annotations.ligand_utils as lu
     from rdkit import Chem
 
-    # Precondition: the code is genuinely absent from the bundled CCD.
-    with pytest.raises(Exception):
-        bt_info.residue("A1C8P")
+    bundled_residue = bt_info.residue
+
+    def miss_a1c8p(comp_id, *args, **kwargs):
+        if comp_id == "A1C8P":
+            raise KeyError("simulated bundled CCD miss")
+        return bundled_residue(comp_id, *args, **kwargs)
+
+    monkeypatch.setattr(bt_info, "residue", miss_a1c8p)
 
     fixture = Path(__file__).parent / "test_data" / "mini_components.cif"
     monkeypatch.setattr(lu, "COMPONENTS_CCD_PATH", fixture)
@@ -1289,7 +1570,12 @@ def test_simple_covalency_detection_found(cif_7gj7, mock_alternative_datasets):
 
 def test_simple_ternary_detection(cif_2p1q, mock_alternative_datasets):
     entry_dir = mock_alternative_datasets("2p1q")
-    plinder_anno = GetPlinderAnnotation(cif_2p1q, "", save_folder=entry_dir)
+    plinder_anno = GetPlinderAnnotation(
+        cif_2p1q,
+        "",
+        save_folder=entry_dir,
+        data_dir=entry_dir.parent.parent,
+    )
     plinder_anno.annotate()
     df = plinder_anno.annotated_df
     assert sorted(set(df.ligand_ccd_code.to_list())) == ["IAC"]
@@ -1384,8 +1670,12 @@ def test_water_saving(cif_2p1q, mock_alternative_datasets):
     from plinder.data.annotations.cif_utils import read_mmcif_file
 
     entry_dir = mock_alternative_datasets("2p1q")
+    entry = Entry.from_cif_file(
+        cif_2p1q,
+        save_folder=entry_dir,
+        data_dir=entry_dir.parent.parent,
+    )
     system_tag = "2p1q__2__2.B_2.C__2.E"
-    entry = Entry.from_cif_file(cif_2p1q, save_folder=entry_dir)
     row = entry.to_df().query("system_id == @system_tag").iloc[0]
 
     output_dir = entry_dir / "reconstructed" / system_tag
@@ -1565,14 +1855,11 @@ def test_canonical_ligand_saving_and_system_reconstruction(
         system_block["chem_comp"]["id"].as_array(str)
     )
     assert system_block["cell"]["entry_id"].as_item() == row["system_id"]
-    assert all(
-        asym_id.isalnum()
-        for asym_id in system_block["atom_site"]["label_asym_id"].as_array(str)
-    )
+    assert "1.B" in system_block["atom_site"]["label_asym_id"].as_array(str)
     assert "struct_conn_type" in system_block
-    assert set(
-        system_block["struct_conn"]["conn_type_id"].as_array(str)
-    ).issubset(system_block["struct_conn_type"]["id"].as_array(str))
+    assert set(system_block["struct_conn"]["conn_type_id"].as_array(str)).issubset(
+        system_block["struct_conn_type"]["id"].as_array(str)
+    )
     assert all(
         value == value.lower()
         for value in system_block["chem_comp_bond"]["value_order"].as_array(str)
@@ -1589,6 +1876,11 @@ def test_canonical_ligand_saving_and_system_reconstruction(
     assert set(system_atoms.chain_id) == set(
         _output_asym_ids(sorted(expected_chains)).values()
     )
+    receptor_atoms = pdbx.get_structure(read_mmcif_file(outputs.receptor_cif), model=1)
+    receptor_protein_chains = set(
+        receptor_atoms.chain_id[struc.filter_amino_acids(receptor_atoms)]
+    )
+    assert set(sequences) == receptor_protein_chains
 
     # FASTA reconstruction is part of the base package and must not import
     # pipeline validation or OpenStructure dependencies.
@@ -1618,9 +1910,8 @@ def test_canonical_ligand_saving_and_system_reconstruction(
     annotation = entry.to_df()
     query_calls = []
 
-    def query_one_system(*, columns, splits, filters):
+    def query_one_system(*, columns, filters):
         assert columns == ["*"]
-        assert splits == ["*"]
         assert len(filters) == 1
         column, operator, value = filters[0]
         assert operator == "=="
@@ -1896,7 +2187,12 @@ def test_multi_ligand_system_grouping(cif_7fee, mock_alternative_datasets):
     classification. 9GF and 7IC must be in the same system.
     """
     entry_dir = mock_alternative_datasets("7fee")
-    plinder_anno = GetPlinderAnnotation(cif_7fee, "", save_folder=entry_dir)
+    plinder_anno = GetPlinderAnnotation(
+        cif_7fee,
+        "",
+        save_folder=entry_dir,
+        data_dir=entry_dir.parent.parent,
+    )
     plinder_anno.annotate()
 
     systems = plinder_anno.entry.systems
@@ -1936,7 +2232,12 @@ def test_cofactor_system_stays_holo(cif_1atp, mock_alternative_datasets):
     Uses GetPlinderAnnotation for full classification.
     """
     entry_dir = mock_alternative_datasets("1atp")
-    plinder_anno = GetPlinderAnnotation(cif_1atp, "", save_folder=entry_dir)
+    plinder_anno = GetPlinderAnnotation(
+        cif_1atp,
+        "",
+        save_folder=entry_dir,
+        data_dir=entry_dir.parent.parent,
+    )
     plinder_anno.annotate()
 
     systems = plinder_anno.entry.systems
@@ -1970,7 +2271,12 @@ def test_cofactor_system_holo_19hc(cif_19hc, mock_alternative_datasets):
     ACTs (C, P) form standalone artifact systems.
     """
     entry_dir = mock_alternative_datasets("19hc")
-    plinder_anno = GetPlinderAnnotation(cif_19hc, "", save_folder=entry_dir)
+    plinder_anno = GetPlinderAnnotation(
+        cif_19hc,
+        "",
+        save_folder=entry_dir,
+        data_dir=entry_dir.parent.parent,
+    )
     plinder_anno.annotate()
 
     systems = plinder_anno.entry.systems
@@ -2082,9 +2388,19 @@ def test_get_validation(
         },
         orient="index",
     ).T.infer_objects()
-    entry = GetPlinderAnnotation(cif_1qz5, validation_1qz5, save_folder=entry_dir)
+    entry = GetPlinderAnnotation(
+        cif_1qz5,
+        validation_1qz5,
+        save_folder=entry_dir,
+        data_dir=entry_dir.parent.parent,
+    )
     entry.annotate()
-    validation_df = entry.annotated_df[reference_df.columns]
+    validation_df = entry.annotated_df.merge(
+        entry.entry_metadata_df,
+        on="entry_pdb_id",
+        how="left",
+        validate="many_to_one",
+    )[reference_df.columns]
     validation_df = validation_df[
         validation_df["system_id"] == "1qz5__1__1.A__1.D"
     ].reset_index(drop=True)
@@ -2092,43 +2408,84 @@ def test_get_validation(
     pd.testing.assert_frame_equal(reference_df, validation_df)
 
 
-def test_mmp(mini_mmp_index, mini_mmp_data_annotation, mini_mmp_cluster_folder):
-    system_df = pd.read_csv(mini_mmp_data_annotation, sep="\t")
-    load_mmp_df = pd.read_csv(mini_mmp_index, compression="gzip", sep="\t", header=None)
-    load_mmp_df.columns = ["SMILES1", "SMILES2", "id1", "id2", "V1>>V2", "CONSTANT"]
-    mmp_data = add_mmp_clusters_to_data(
-        load_mmp_df,
-        system_df,
-        cluster_folder=mini_mmp_cluster_folder,
-        protein_metric="protein_fident_weighted_sum",
-        protein_threshold=95,
-        protein_directed=False,
-        pocket_metric="pocket_fident",
-        pocket_threshold=100,
-        pocket_directed=True,
-        min_constant_size=10,
+def test_mixed_receptor_type_is_written_to_annotation(cif_8ufz, monkeypatch):
+    from plinder.data.annotations import ligand_utils
+
+    monkeypatch.setattr(
+        ligand_utils,
+        "BINDING_AFFINITY",
+        {"pchembl": {}, "target_sequence": {}},
     )
-    # All have same pocket-protein id
-    assert list(mmp_data.prot_pocket_set_shared.unique()) == ["c1931_c55468"]
-
-    # Minimum constant size is greater than 10
-    assert mmp_data.const_size.min() == 18.0
-
-    # Number of unique congeneric ids is equal to number of unique constants
-    assert len(mmp_data.congeneric_id.unique()) == len(mmp_data.CONSTANT.unique())
-
-
-def test_mixed_receptor_type_is_written_to_annotation(cif_8ufz):
     entry = Entry.from_cif_file(cif_8ufz)
+    annotation = entry.to_df()
 
     assert entry.systems
     assert {system.receptor_type for system in entry.systems.values()} == {
         "protein+dna"
     }
-    assert set(entry.to_df()["system_receptor_type"]) == {"protein+dna"}
+    assert set(annotation["system_receptor_type"]) == {"protein+dna"}
+    assert {
+        "system_water_residues",
+        "ligand_residue_numbers",
+        "ligand_interactions",
+        "ligand__members",
+    }.issubset(annotation.columns)
+    assert {
+        "system_pdb_id",
+        "system_ligands",
+        "system_ligand_validation",
+        "system_pocket_validation",
+        "system_pocket_residues",
+        "system_interactions",
+        "system_interactions_counter",
+        "system_waters",
+        "ligand_pdb_id",
+        "ligand_biounit_id",
+        "ligand_member_residue_numbers",
+        "ligand_receptor_seqres",
+        "ligand_neighboring_residue_threshold",
+        "ligand_neighboring_ligand_threshold",
+        "ligand_crystal_contacts",
+        "ligand_waters",
+        "ligand_selection",
+        "ligand_pocket_residues",
+        "ligand_interactions_counter",
+    }.isdisjoint(annotation.columns)
     chain_types = entry.chains_to_df().set_index("chain_asym_id")["chain_receptor_type"]
     assert {chain_types[chain] for chain in ["A", "B", "C", "D"]} == {"dna"}
     assert {chain_types[chain] for chain in ["E", "F"]} == {"protein"}
+
+
+def test_entry_chain_table_includes_full_sequences(cif_8ufz):
+    entry = Entry.from_cif_file(cif_8ufz, include_ligands=False)
+    chain_rows = entry.chains_to_df().set_index("chain_asym_id")
+
+    assert chain_rows.loc["E", "chain_sequence"] == entry.chain_to_seqres["E"]
+    assert chain_rows.loc["E", "chain_sequence"]
+
+
+def test_entry_protein_only_mode_retains_chains_and_assemblies(cif_8ufz):
+    with pytest.raises(
+        ValueError,
+        match="entry ingest must include ligands, interfaces, or both",
+    ):
+        Entry.from_cif_file(
+            cif_8ufz,
+            include_ligands=False,
+            include_interfaces=False,
+        )
+
+    entry = Entry.from_cif_file(
+        cif_8ufz,
+        include_ligands=False,
+        include_interfaces=False,
+        protein_only=True,
+    )
+
+    assert entry.chains
+    assert entry.biounit_chain_ids
+    assert not entry.systems
+    assert not entry.interfaces
 
 
 def test_ligand_fix_to_valid_imatinib(cif_2hyy, mock_alternative_datasets):
@@ -2253,7 +2610,12 @@ def test_disconnected_ligand_fix(cif_4nhc, mock_alternative_datasets):
     """
     entry_dir = mock_alternative_datasets("4nhc")
     # Use threshold 20 so the 17-residue peptide is classified as ligand
-    entry = Entry.from_cif_file(cif_4nhc, save_folder=entry_dir, min_polymer_size=20)
+    entry = Entry.from_cif_file(
+        cif_4nhc,
+        save_folder=entry_dir,
+        data_dir=entry_dir.parent.parent,
+        min_polymer_size=20,
+    )
     lig = entry.systems["4nhc__1__1.A_1.B__1.C"].ligands[0]
     assert lig.is_invalid == False
     outsdffile = entry_dir / "4nhc" / "ligand_files" / "C.sdf"

@@ -3,18 +3,16 @@
 from __future__ import annotations
 
 from argparse import ArgumentParser
-from pathlib import Path
-from shutil import rmtree
 from textwrap import dedent
 from time import time
 
 import pandas as pd
 
+from plinder.core.release import RELEASE_PATHS, RELEASE_TABLES
 from plinder.core.utils import cpl
 from plinder.core.utils.config import get_config
 from plinder.core.utils.dec import timeit
 from plinder.core.utils.log import setup_logger
-from plinder.core.utils.unpack import get_zips_to_unpack
 
 LOG = setup_logger(__name__)
 
@@ -43,7 +41,7 @@ def get_plindex() -> pd.DataFrame:
 
     if _PLINDEX is not None:
         return _PLINDEX
-    _PLINDEX = query_index(columns=["*"], splits=["*"])
+    _PLINDEX = query_index(columns=["*"])
     return _PLINDEX
 
 
@@ -69,52 +67,68 @@ def get_manifest() -> pd.DataFrame:
 
     if _MANIFEST is not None:
         return _MANIFEST
-    _MANIFEST = query_index(columns=["system_id", "entry_pdb_id"], splits=["*"])
+    _MANIFEST = query_index(columns=["system_id", "entry_pdb_id"])
     return _MANIFEST
 
 
-def _remove_old_linked_structures(data_dir: Path) -> None:
-    zips = (data_dir / "linked_structures").glob("*zip")
-    for zip in zips:
-        if zip.stem in ["apo", "pred"]:
-            continue
-        zip.unlink()
-        done = zip.parent / (zip.stem + "_done")
-        if done.is_file():
-            done.unlink()
-    if (data_dir / "linked_structures" / "apo").is_dir():
-        LOG.info("found old apo linked structures, removing")
-        rmtree(data_dir / "linked_structures" / "apo")
-    if (data_dir / "linked_structures" / "pred").is_dir():
-        LOG.info("found old pred linked structures, removing")
-        rmtree(data_dir / "linked_structures" / "pred")
+_DOWNLOAD_GROUPS = (
+    (
+        "index tables",
+        tuple(
+            dict.fromkeys(str(table["artifact"]) for table in RELEASE_TABLES.values())
+        ),
+        False,
+    ),
+    (
+        "representative-cover tables",
+        ("ligand_sampling", "interface_sampling"),
+        False,
+    ),
+    (
+        "complete similarity exports",
+        ("ligand_similarity_scores", "interface_similarity_scores"),
+        True,
+    ),
+    ("canonical ligand archives", ("ligand_archives",), True),
+    ("ligand similarities", ("ligand_scores",), True),
+    ("protein-interface similarities", ("interface_scores",), True),
+    ("mapped protein alignments", ("alignments",), True),
+    ("custom-scoring search databases", ("search_databases",), True),
+)
 
 
 def download_plinder_cmd(args: list[str] | None = None) -> None:
     """
-    Download the full plinder dataset for the current configuration.
+    Download published PLINDER release artifacts for the current configuration.
+
+    Source PDB mmCIFs are not included. They are fetched and cached per PDB
+    entry when reconstruction needs them.
+
     Note that even though this is wrapped in a progress bar, the estimated
     completion time can vary wildly as it iterates over larger files vs.
     smaller ones.
     """
     t0 = time()
     parser = ArgumentParser(usage=download_plinder_cmd.__doc__)
-    parser.add_argument("--release", default=None, help="plinder release")
-    parser.add_argument("--iteration", default=None, help="plinder iteration")
+    parser.add_argument(
+        "--release",
+        default=None,
+        help="ingest month for the PLINDER release (YYYY-MM)",
+    )
+    parser.add_argument(
+        "--release-number",
+        default=None,
+        help="numbered release within the ingest month",
+    )
     parser.add_argument("-y", "--yes", action="store_true", help="skip confirmation")
-    ns, args = parser.parse_known_args(args=args)
+    ns = parser.parse_args(args=args)
     autodo = ns.yes
-    if len(args):
-        LOG.warning(f"ignoring arguments {args}")
-    kwargs = None
+    release_config = {}
     if ns.release is not None:
-        kwargs = dict(data=dict(plinder_release=ns.release))
-    if ns.iteration is not None:
-        if kwargs is None:
-            kwargs = dict(data=dict(plinder_iteration=ns.iteration))
-        else:
-            kwargs["data"]["plinder_iteration"] = ns.iteration
-    cfg = get_config(config=kwargs)
+        release_config["plinder_release"] = ns.release
+    if ns.release_number is not None:
+        release_config["plinder_release_number"] = ns.release_number
+    cfg = get_config(config={"data": release_config} if release_config else None)
     LOG.info(
         dedent(
             f"""
@@ -126,117 +140,44 @@ def download_plinder_cmd(args: list[str] | None = None) -> None:
             """
         )
     )
-    LOG.debug("cleaning up old linked structures")
-    _remove_old_linked_structures(Path(cfg.data.plinder_dir))
-    is_v3 = str(cfg.data.plinder_iteration).startswith("v3")
-    for attr in cfg.data:
-        if (
-            attr.startswith("plinder_")
-            or attr.endswith("_file")
-            or attr in ["ingest", "validation", "force_update", "source_mmcifs"]
-        ):
+    for label, artifact_names, large_download in _DOWNLOAD_GROUPS:
+        do_download = autodo or not large_download
+        if large_download and not autodo:
+            answer = input(f"Download {label}? [Y/n] ").strip().lower()
+            do_download = answer in {"", "y", "yes"}
+        if not do_download:
+            LOG.info(f"skipping {label}; its files are fetched when requested")
             continue
-        if is_v3 and attr in {"entries", "scores", "systems"}:
-            LOG.info(
-                f"skipping legacy {attr} dataset for V3; systems and bounded "
-                "similarity scores are reconstructed on demand"
-            )
-            continue
-        if not is_v3 and attr == "search_databases":
-            # Portable exact-clustered search targets are a V3 custom-scoring
-            # artifact. V2 releases expose only materialized score datasets.
-            continue
-        if not is_v3 and attr == "alignments":
-            # V2 releases distribute materialized scores instead.
-            continue
-        path = None
-        if attr == "scores":
-            do = (
-                input("Download the full scores dataset? [Y/n] ").lower()
-                in ["", "y", "yes"]
-                if not autodo
-                else True
-            )
-            if do:
-                for subdb in ["apo", "pred", "holo"]:
-                    msg = f"Syncing {getattr(cfg.data, attr)}/search_db={subdb}"
-                    if subdb == "holo":
-                        msg += ", this may take a while!"
-                    LOG.info(msg)
-                    if subdb == "holo":
-                        LOG.info(
-                            "Note that the tqdm progress bar for holo is not very useful, please be patient!"
-                        )
-                    cpl.get_plinder_path(
-                        rel=f"{getattr(cfg.data, attr)}/search_db={subdb}",
-                        force_progress=True,
-                    )
-            else:
-                LOG.info(
-                    "skipping scores download, plinder.core.scores will download it lazily on request!"
+        LOG.info(f"syncing {label}")
+        for artifact_name in artifact_names:
+            artifact_path = RELEASE_PATHS[artifact_name]
+            if "{" in artifact_path:
+                raise RuntimeError(
+                    f"bulk download cannot resolve parameterized artifact "
+                    f"{artifact_name}"
                 )
-        else:
-            msg = f"Syncing {getattr(cfg.data, attr)}"
-            do = True
-            if attr in [
-                "alignments",
-                "ligand_archives",
-                "linked_structures",
-                "search_databases",
-                "systems",
-            ]:
-                if not autodo:
-                    do = input(f"Download the {attr} dataset? [Y/n] ").lower() in [
-                        "",
-                        "y",
-                        "yes",
-                    ]
-                else:
-                    do = True
-                msg += ", this may take a while!"
-            if do:
-                LOG.info(msg)
-                path = cpl.get_plinder_path(
-                    rel=getattr(cfg.data, attr),
-                    force_progress=True,
-                )
-            else:
-                consumer = (
-                    "plinder.core.scores"
-                    if attr == "alignments"
-                    else "plinder.core.PlinderSystem"
-                )
-                LOG.info(f"skipping {attr} download; {consumer} fetches it lazily")
-        if path is not None and attr in ["linked_structures", "systems"]:
-            LOG.info(
-                f"extracting {getattr(cfg.data, attr)} archives, you may want to stretch your legs."
+            cpl.get_plinder_path(
+                rel=artifact_path,
+                force_progress=large_download,
             )
-            codes: list[str] | None = [p.stem for p in path.glob("*zip")]
-            if attr == "linked_structures":
-                codes = None
-            get_zips_to_unpack(kind=attr, two_char_codes=codes)
 
     t1 = time()
     total = t1 - t0
     timing = f"{total:.2f}s"
-    if total > 60:
-        timing = f"{total / 60:.2f}m"
-    elif total > 3600:
+    if total > 3600:
         timing = f"{total / 3600:.2f}h"
+    elif total > 60:
+        timing = f"{total / 60:.2f}m"
 
     LOG.info(
         dedent(
             f"""
             Sync complete in {timing}!
 
-            If you downloaded all of the data, you can run:
-
-                export PLINDER_OFFLINE=true
-
-            This will avoid checking that files are still in sync when using plinder.core.
-            If you didn't download all of the data, plinder.core will download it lazily when
-            it's needed. By default, plinder.core will check that files are still in sync
-            in case any of the files for an existing release need to be patched.
+            If you skipped large groups, plinder.core fetches their files when
+            requested unless offline mode is enabled. Use
+            plinder.core.download_pdb_mmcifs(...) if offline system reconstruction
+            is needed.
             """
         )
     )

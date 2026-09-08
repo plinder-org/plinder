@@ -1,25 +1,98 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
 
-from shutil import copytree
-
+import pytest
 from plinder.data import docs
+
+
+def _import_tablegen(monkeypatch):
+    import importlib
+    import sys
+    from pathlib import Path
+    from types import ModuleType
+
+    itables = ModuleType("itables")
+    itables.to_html_datatable = lambda frame, **_: frame.to_html(
+        index=False, escape=False
+    )
+    monkeypatch.setitem(sys.modules, "itables", itables)
+    monkeypatch.delitem(sys.modules, "tablegen", raising=False)
+    repository = Path(__file__).resolve().parents[2]
+    monkeypatch.syspath_prepend(str(repository / "docs"))
+    return importlib.import_module("tablegen")
+
+
+def test_tablegen_renders_checked_in_table_descriptions(tmp_path, monkeypatch):
+    tablegen = _import_tablegen(monkeypatch)
+
+    description_dir = tmp_path / "column_descriptions"
+    table_dir = description_dir / "tables"
+    table_dir.mkdir(parents=True)
+    (table_dir / "alpha.tsv").write_text(
+        "Name\tType\tDescription\n"
+        "entry<id>\tlist<element: string>\tApply <operation> & keep metadata\n",
+        encoding="utf-8",
+    )
+    (table_dir / "beta.tsv").write_text(
+        "Name\tType\tDescription\n" "score\tdouble\tSimilarity score\n",
+        encoding="utf-8",
+    )
+    output_path = tmp_path / "table.html"
+
+    tablegen.generate_table(description_dir, output_path)
+
+    html = output_path.read_text(encoding="utf-8")
+    assert '<section class="release-column-table" id="columns-alpha">' in html
+    assert '<section class="release-column-table" id="columns-beta">' in html
+    assert "<h3>alpha</h3>" in html
+    assert "<h3>beta</h3>" in html
+    assert "<code>" not in html
+    assert ">entry&lt;id&gt;<" in html
+    assert ">list&lt;element: string&gt;<" in html
+    assert "Apply &lt;operation&gt; &amp; keep metadata" in html
+    assert ">score<" in html
+    assert "Similarity score" in html
+    assert html.count("<table") == 2
+    assert all(line.strip() for line in html.splitlines())
+
+
+def test_tablegen_rejects_invalid_description_columns(tmp_path, monkeypatch):
+    import pytest
+
+    tablegen = _import_tablegen(monkeypatch)
+
+    description_dir = tmp_path / "column_descriptions"
+    table_dir = description_dir / "tables"
+    table_dir.mkdir(parents=True)
+    (table_dir / "broken.tsv").write_text(
+        "Name\tDescription\nentry_id\tStable entry identifier\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="must contain columns"):
+        tablegen.generate_table(description_dir, tmp_path / "table.html")
+
+
+def test_dataset_preserves_notebook_link_target():
+    from pathlib import Path
+
+    dataset_doc = (
+        Path(__file__).resolve().parents[2] / "docs" / "dataset.md"
+    ).read_text()
+
+    assert "(annotation-tables-index)=" in dataset_doc
 
 
 def test_ligand_cluster_column_descriptions():
     import pandas as pd
 
     columns = [
-        "shape__50__strong__component",
-        "shape__50__ligand__component",
-        "color__70__community",
-        "color__70__ligand__community",
+        "tanimoto_similarity_ecfp4_1024__70__ligand__set_cover",
+        "tanimoto_similarity_ecfp4_1024__70__ligand__set_cover__is_centroid",
         "pocket_qcov__50__ligand__directed_set_cover",
         "pocket_qcov__50__ligand__directed_set_cover__is_centroid",
         "pocket_qcov__50__ligand__directed_set_cover__coverage_count",
         "pocket_qcov__50__ligand__directed_set_cover__coverage_fraction",
-        "interface_side_qcov__70__chain_1_component",
-        "interface_side_qcov__70__chain_2_community",
         "interface_side_qcov__70__chain_1_directed_set_cover",
     ]
 
@@ -27,49 +100,385 @@ def test_ligand_cluster_column_descriptions():
 
     assert [row[0] for row in rows] == columns
     descriptions = {name: description for name, _, description in rows}
-    assert "ligand-level reciprocal-minimum component" in descriptions[columns[1]]
-    assert "ligand-level greedy centroid community" in descriptions[columns[3]]
-    assert "ligand-level directed set cover" in descriptions[columns[4]]
-    assert "query-to-centroid score" in descriptions[columns[4]]
-    assert "published centroid" in descriptions[columns[5]]
-    assert "Number of directed-cover query nodes" in descriptions[columns[6]]
-    assert "Fraction of its directed weak component" in descriptions[columns[7]]
-    assert "chain 1 reciprocal-minimum component" in descriptions[columns[8]]
-    assert "chain 2 greedy centroid community" in descriptions[columns[9]]
-    assert "chain 1 directed set cover" in descriptions[columns[10]]
+    assert "ligand-level set cover" in descriptions[columns[0]]
+    assert "direct threshold-qualified edge" in descriptions[columns[0]]
+    assert "published centroid" in descriptions[columns[1]]
+    assert "ligand-level directed set cover" in descriptions[columns[2]]
+    assert "query-to-centroid score" in descriptions[columns[2]]
+    assert "published centroid" in descriptions[columns[3]]
+    assert "Number of directed-cover query nodes" in descriptions[columns[4]]
+    assert "Fraction of its directed weak component" in descriptions[columns[5]]
+    assert "chain 1 directed set cover" in descriptions[columns[6]]
 
 
-def test_make_column_descriptions(read_plinder_mount, tmp_path, monkeypatch):
-    from plinder.core.scores import query_index
+def test_description_markers_are_explicit_and_independent():
+    from plinder.data.annotations.utils import (
+        DocBaseModel,
+        description_excluded_from_column_docs,
+        description_excluded_from_flat_export,
+    )
+    from pydantic import Field
 
-    generated_tsv_dir = tmp_path / "column_descriptions"
-    copytree(docs.TSV_DIR, generated_tsv_dir)
-    monkeypatch.setattr(docs, "TSV_DIR", generated_tsv_dir)
+    class Example(DocBaseModel):
+        visible: int = Field(description="Visible in both places")
+        excluded: int = Field(description="[EXCLUDE] Internal implementation detail")
+        custom_export: int = Field(
+            description="[CUSTOM_EXPORT] Emitted by a custom formatter"
+        )
 
-    df = query_index(columns=["*"], splits=["*"]).drop(columns=["split"])
-    legacy_posebusters = [
-        column for column in df.columns if column.startswith("ligand_posebusters_")
+    documented = {
+        name: description
+        for name, _, description in Example.document_properties(prefix="example")
+    }
+    assert documented == {
+        "example_visible": "Visible in both places",
+        "example_custom_export": "Emitted by a custom formatter",
+    }
+    assert description_excluded_from_column_docs(
+        Example.model_fields["excluded"].description
+    )
+    assert description_excluded_from_flat_export(
+        Example.model_fields["excluded"].description
+    )
+    assert description_excluded_from_flat_export(
+        Example.model_fields["custom_export"].description
+    )
+    assert not description_excluded_from_column_docs(
+        Example.model_fields["custom_export"].description
+    )
+
+
+def test_annotation_models_use_only_readable_description_markers():
+    from plinder.data.annotations.aggregate_annotations import Entry, System
+    from plinder.data.annotations.get_ligand_validation import ResidueListValidation
+    from plinder.data.annotations.ligand_utils import Ligand
+    from plinder.data.annotations.protein_utils import Chain, Residue
+
+    for model in (Entry, System, Ligand, Chain, Residue, ResidueListValidation):
+        descriptions = model.get_descriptions_and_types()
+        assert not any(
+            str(description).lstrip().startswith("__")
+            for description, _ in descriptions.values()
+        )
+        assert all(
+            not str(description).lstrip().startswith("[")
+            or str(description).lstrip().startswith(("[EXCLUDE]", "[CUSTOM_EXPORT]"))
+            for description, _ in descriptions.values()
+        )
+        assert all(
+            not description.startswith(("[EXCLUDE]", "[CUSTOM_EXPORT]"))
+            for _, _, description in model.document_properties(prefix="test")
+        )
+
+
+def test_annotation_descriptions_follow_arrow_schema_order():
+    import pyarrow as pa
+    from plinder.data.annotations.aggregate_annotations import System
+    from plinder.data.annotations.ligand_utils import Ligand
+
+    annotation_schema = pa.schema(
+        [
+            ("ligand_id_legacy", pa.string()),
+            ("ligand__members", pa.struct([("1.A", pa.list_(pa.int64()))])),
+            ("ligand_member_asym_ids", pa.list_(pa.string())),
+            ("system_id_legacy", pa.string()),
+        ]
+    )
+    cluster_schema = pa.schema(
+        [
+            ("ligand_id", pa.string()),
+            (
+                "tanimoto_similarity_ecfp4_1024__50__ligand__set_cover",
+                pa.string(),
+            ),
+            (
+                "pli_qcov__50__ligand__directed_set_cover__is_centroid",
+                pa.bool_(),
+            ),
+        ]
+    )
+
+    descriptions = docs.get_table_column_descriptions(
+        table_name="annotation", schema=annotation_schema
+    )
+    cluster_descriptions = docs.get_table_column_descriptions(
+        table_name="ligand_clusters", schema=cluster_schema
+    )
+
+    assert descriptions["Name"].tolist() == annotation_schema.names
+    assert descriptions["Type"].tolist() == [
+        str(field.type) for field in annotation_schema
     ]
-    removed_enrichment_columns = [
-        "ligand_is_kinase_inhibitor",
-        "system_has_kinase_inhibitor",
-        "system_pocket_ECOD",
-        "system_pocket_ECOD_t_name",
-        "system_pocket_PANTHER",
-        "system_pocket_kinase_name",
-        "ligand_num_neighboring_ppi_atoms_within_4A_of_gap",
-        "ligand_num_neighboring_ppi_atoms_within_8A_of_gap",
-        "ligand_num_missing_ppi_interface_residues",
-        "ligand_num_pli_atoms_within_4A_of_gap",
-        "ligand_num_pli_atoms_within_8A_of_gap",
-        "ligand_num_missing_pli_interface_residues",
-        "ligand_is_oligo",
-        "system_ligand_has_oligo",
-    ]
-    df = df.drop(columns=legacy_posebusters + removed_enrichment_columns)
+    assert descriptions["Description"].str.len().gt(0).all()
+    assert cluster_descriptions["Name"].tolist() == cluster_schema.names
+    assert cluster_descriptions["Description"].str.len().gt(0).all()
+    by_name = descriptions.set_index("Name")["Description"].to_dict()
+    ligand_descriptions = {
+        name: description
+        for name, _, description in Ligand.document_properties("ligand")
+    }
+    system_descriptions = {
+        name: description
+        for name, _, description in System.document_properties("system")
+    }
+    assert by_name["ligand_id_legacy"] == ligand_descriptions["ligand_id_legacy"]
+    assert by_name["ligand__members"] == ligand_descriptions["ligand__members"]
+    assert (
+        by_name["ligand_member_asym_ids"]
+        == ligand_descriptions["ligand_member_asym_ids"]
+    )
+    assert by_name["system_id_legacy"] == system_descriptions["system_id_legacy"]
 
-    schema = docs.get_all_column_descriptions(plindex=df)
-    columns = schema["Name"].to_list()
-    undocumented = df.columns.difference(columns).tolist()
-    assert not undocumented, undocumented
-    assert {row[0] for row in docs.DERIVED_LIGAND_COLUMNS}.issubset(columns)
+
+def test_table_descriptions_reject_missing_column_prose():
+    import pyarrow as pa
+    import pytest
+
+    with pytest.raises(ValueError, match="undocumented_column"):
+        docs.get_table_column_descriptions(
+            table_name="annotation",
+            schema=pa.schema([("undocumented_column", pa.string())]),
+        )
+
+
+def test_annotation_descriptions_reject_repeated_entry_metadata():
+    import pyarrow as pa
+    import pytest
+
+    with pytest.raises(ValueError, match="columns owned by 'entry_metadata'"):
+        docs.get_table_column_descriptions(
+            table_name="annotation",
+            schema=pa.schema(
+                [
+                    ("entry_pdb_id", pa.string()),
+                    ("entry_resolution", pa.float64()),
+                ]
+            ),
+        )
+
+
+@pytest.mark.parametrize(
+    "column",
+    [
+        "system_id_no_biounit",
+        "system_ligand_chains",
+        "ligand_rdkit_canonical_smiles",
+        "system_protein_chains_auth_id",
+        "system_protein_chains_validation_average_rsr",
+        "system_ligand_validation_average_rsr",
+    ],
+)
+def test_annotation_descriptions_reject_moved_or_retired_columns(column: str):
+    import pyarrow as pa
+
+    with pytest.raises(ValueError, match="owned by sidecars or retired"):
+        docs.get_table_column_descriptions(
+            table_name="annotation",
+            schema=pa.schema([("ligand_id", pa.string()), (column, pa.string())]),
+        )
+
+
+def test_system_validation_descriptions_reject_unrelated_columns():
+    import pyarrow as pa
+
+    with pytest.raises(ValueError, match="non-validation columns"):
+        docs.get_table_column_descriptions(
+            table_name="system_validation",
+            schema=pa.schema(
+                [("system_id", pa.string()), ("ligand_smiles", pa.string())]
+            ),
+        )
+
+
+def test_table_descriptions_reject_retired_cover_modes():
+    import pyarrow as pa
+    import pytest
+
+    invalid_schemas = [
+        (
+            "ligand_clusters",
+            pa.schema(
+                [
+                    (
+                        "tanimoto_similarity_ecfp4_1024__50__ligand__"
+                        "directed_set_cover",
+                        pa.string(),
+                    )
+                ]
+            ),
+        ),
+        (
+            "ligand_clusters",
+            pa.schema([("pocket_qcov__50__ligand__community", pa.string())]),
+        ),
+        (
+            "interface_clusters",
+            pa.schema([("interface_qcov__50__component", pa.string())]),
+        ),
+        (
+            "interface_clusters",
+            pa.schema(
+                [
+                    (
+                        "interface_qcov__50__directed_set_cover__is_centroid",
+                        pa.string(),
+                    )
+                ]
+            ),
+        ),
+        (
+            "interface_clusters",
+            pa.schema(
+                [
+                    (
+                        "interface_qcov__50__directed_set_cover__coverage_count",
+                        pa.int64(),
+                    )
+                ]
+            ),
+        ),
+        (
+            "interface_clusters",
+            pa.schema(
+                [
+                    (
+                        "interface_side_qcov__50__chain_1_directed_set_cover__"
+                        "coverage_fraction",
+                        pa.float64(),
+                    )
+                ]
+            ),
+        ),
+    ]
+    for table_name, schema in invalid_schemas:
+        with pytest.raises(ValueError, match="not published by the current pipeline"):
+            docs.get_table_column_descriptions(
+                table_name=table_name,
+                schema=schema,
+            )
+
+
+def test_table_descriptions_accept_published_interface_cover_columns():
+    import pyarrow as pa
+
+    names = [
+        "interface_qcov__50__directed_set_cover",
+        "interface_side_qcov__50__chain_1_directed_set_cover",
+        "interface_side_qcov__50__chain_2_directed_set_cover",
+    ]
+    descriptions = docs.get_table_column_descriptions(
+        table_name="interface_clusters",
+        schema=pa.schema([(name, pa.string()) for name in names]),
+    )
+
+    assert descriptions["Name"].tolist() == names
+
+
+def test_checked_in_descriptions_cover_every_table():
+    from plinder.core.release import RELEASE_TABLES
+
+    assert {path.stem for path in docs.TABLE_TSV_DIR.glob("*.tsv")} == set(
+        RELEASE_TABLES
+    )
+    for table_name in RELEASE_TABLES:
+        descriptions = docs.get_column_descriptions(table_name)
+        assert not descriptions.empty
+        assert list(descriptions.columns) == ["Name", "Type", "Description"]
+        assert descriptions["Description"].notna().all()
+
+
+def test_checked_in_cluster_descriptions_match_published_cover_modes():
+    from plinder.core.scores.metrics import DEFAULT_CLUSTER_METRICS
+
+    ligand_names = docs.get_column_descriptions("ligand_clusters")["Name"].tolist()
+    metric_names = set(DEFAULT_CLUSTER_METRICS)
+    ligand_cluster_names = [
+        name for name in ligand_names if name.split("__", maxsplit=1)[0] in metric_names
+    ]
+    assert ligand_cluster_names
+    assert not any(
+        "__component" in name or "__community" in name for name in ligand_cluster_names
+    )
+    for name in ligand_cluster_names:
+        if name.startswith("tanimoto_similarity_ecfp4_1024__"):
+            assert "__ligand__set_cover" in name
+            assert "__directed_set_cover" not in name
+        else:
+            assert "__ligand__directed_set_cover" in name
+
+    interface_names = docs.get_column_descriptions("interface_clusters")[
+        "Name"
+    ].tolist()
+    interface_cluster_names = [
+        name
+        for name in interface_names
+        if name.startswith(("interface_qcov__", "interface_side_qcov__"))
+    ]
+    assert interface_cluster_names
+    assert all("directed_set_cover" in name for name in interface_cluster_names)
+    assert not any(
+        "__component" in name or "__community" in name
+        for name in interface_cluster_names
+    )
+
+
+def test_checked_in_annotation_keeps_only_the_entry_join_key():
+    annotation_names = docs.get_column_descriptions("annotation")["Name"].tolist()
+    entry_names = [name for name in annotation_names if name.startswith("entry_")]
+
+    assert entry_names == ["entry_pdb_id"]
+
+
+def test_linked_apo_descriptions_match_release_schema():
+    from plinder.core.utils.schemas import STRUCTURE_LINK_SCHEMA
+
+    descriptions = docs.get_column_descriptions("linked_apo_structures")
+
+    assert descriptions["Name"].tolist() == STRUCTURE_LINK_SCHEMA.names
+    generated = docs.get_table_column_descriptions(
+        table_name="linked_apo_structures",
+        schema=STRUCTURE_LINK_SCHEMA,
+    )
+    assert generated["Name"].tolist() == STRUCTURE_LINK_SCHEMA.names
+
+
+def test_write_column_descriptions_uses_release_table_schemas(tmp_path, monkeypatch):
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    release_dir = tmp_path / "release"
+    table_path = release_dir / "index" / "entry_metadata.parquet"
+    table_path.parent.mkdir(parents=True)
+    pq.write_table(
+        pa.table(
+            {
+                "entry_pdb_id": ["1abc"],
+                "entry_source_taxonomy_ids": [[9606]],
+            }
+        ),
+        table_path,
+    )
+    monkeypatch.setattr(
+        docs,
+        "RELEASE_TABLES",
+        {
+            "entry_metadata": {
+                "artifact": "entry_metadata",
+                "row_grain": "PDB entry",
+                "primary_key": ("entry_pdb_id",),
+            }
+        },
+    )
+    output_dir = tmp_path / "descriptions"
+    output_dir.mkdir()
+    stale_path = output_dir / "stale.tsv"
+    stale_path.write_text("Name\tType\tDescription\n")
+
+    docs.write_column_descriptions(data_dir=release_dir, output_dir=output_dir)
+
+    written = docs.get_column_descriptions("entry_metadata", description_dir=output_dir)
+    assert written["Name"].tolist() == [
+        "entry_pdb_id",
+        "entry_source_taxonomy_ids",
+    ]
+    assert not stale_path.exists()

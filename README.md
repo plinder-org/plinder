@@ -1,7 +1,7 @@
 ![plinder](https://github.com/user-attachments/assets/05088c51-36c8-48c6-a7b2-8a69bd40fb44)
 
 <div align="center">
-    <h1>The Protein Ligand INteractions Dataset and Evaluation Resource</h1>
+    <h1>Protein &amp; Ligand INteraction Dataset and Evaluation Resource</h1>
 </div>
 
 ---
@@ -17,17 +17,16 @@
 
 # 📚 About
 
-**PLINDER**, short for **p**rotein **l**igand **in**teractions **d**ataset and
-**e**valuation **r**esource, is a comprehensive, annotated, high quality dataset and
-resource for training and evaluation of protein-ligand docking algorithms:
+**PLINDER** is the **Protein & Ligand INteraction Dataset and Evaluation
+Resource**: a comprehensive, annotated, high-quality resource for training and
+evaluating protein-ligand and protein-protein structure models.
 
 - \> 400k PLI systems across > 11k SCOP domains and > 50k unique small molecules
-- 750+ annotations for each system, including protein and ligand properties, quality,
-  matched molecular series and more
+- Ligand-level annotations plus compact entry, chain, interface, and representative tables
 - Automated curation pipeline to keep up with the PDB
-- 14 PLI metrics and over 20 billion similarity scores
-- Unbound \(_apo_\) and _predicted_ Alphafold2 structures linked to _holo_ systems
-- _train-val-test_ splits and ability to tune splitting based on the learning task
+- Reusable ligand, pocket, and protein-interface similarities and cluster assignments
+- Deposited apo protein chains linked to compatible _holo_ systems
+- Directed-cover assignments for choosing diverse training representatives
 - Robust evaluation harness to simplify and standard performance comparison between
   models.
 
@@ -47,7 +46,7 @@ More details about the competition and other helpful practical tips can be found
 We version the `plinder` dataset with two controls:
 
 - `PLINDER_RELEASE`: the month stamp of the last RCSB sync
-- `PLINDER_ITERATION`: value that enables iterative development within a release
+- `PLINDER_RELEASE_NUMBER`: numbered release within that ingest month
 
 We version the `plinder` application using an automated semantic
 versioning scheme based on the `git` commit history.
@@ -93,9 +92,9 @@ All fixed in WIP — will take effect after dataset regeneration.
 - 2024-04/v1: Version described in the preprint, with updated redundancy removal by protein pocket and ligand similarity.
 - 2024-04/v0: Version used to re-train DiffDock in the paper, with redundancy removal based on \<pdbid\>\_\<ligand ccd codes\>
 
-## 🏅 Gold standard benchmark sets
+## 🏅 Preprint benchmark sets
 
-As part of *PLINDER* resource we provide train, validation and test splits that are
+The historical `2024-04/v1` preprint release provides train, validation, and test splits that are
 curated to minimize the information leakage based on protein-ligand interaction
 similarity.
 In addition, we have prioritized the systems that has a linked experimental `apo`
@@ -121,16 +120,18 @@ The *PLINDER* dataset is provided in two ways:
 
 ## Downloading the dataset
 
-The dataset can be downloaded from the bucket with
-[gsutil](https://cloud.google.com/storage/docs/gsutil_install).
+After installing the package, download the index tables and cluster assignments
+for a release with:
 
 ```console
-$ export PLINDER_RELEASE=2024-06 # Current release
-$ export PLINDER_ITERATION=v2 # Current iteration
-$ mkdir -p ~/.local/share/plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/
-$ gsutil -m cp -r "gs://plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/*" ~/.local/share/plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/
+$ plinder_download --release 2026-07 --release-number 1
 ```
-For details on the sub-directories, see [Documentation](https://plinder-org.github.io/plinder/tutorial/dataset.html).
+
+The command offers the larger ligand, alignment, score, export, and search
+database groups separately. Missing optional artifacts are fetched when an API
+call needs them. Files can also be copied directly from the public bucket with
+[`gsutil`](https://cloud.google.com/storage/docs/gsutil_install).
+For details on the release paths, see [Documentation](https://plinder-org.github.io/plinder/tutorial/dataset.html).
 
 ## Installing the Python package
 

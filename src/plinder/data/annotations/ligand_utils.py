@@ -29,7 +29,10 @@ from plinder.data.annotations.interaction_utils import (
     run_peppr_interactions,
 )
 from plinder.data.annotations.protein_utils import Chain, sequences_match_core
-from plinder.data.annotations.utils import DocBaseModel
+from plinder.data.annotations.utils import (
+    DocBaseModel,
+    description_excluded_from_flat_export,
+)
 
 _PRD_DB_PATH = str(BASE_DIR / "annotations/static_files/prdcc.chemlib")
 LOG = logging.getLogger(__name__)
@@ -804,18 +807,21 @@ def _choose_ligand_smiles_by_heavy_atom_count(
     reference_smiles: str | None,
     resolved_smiles: str | None,
 ) -> str:
-    """Choose the valid identity containing more represented heavy atoms.
+    """Choose the chemically useful identity, then the more complete one.
 
-    Prefer the resolved representation on a tie because it retains observed
-    inter-residue connectivity.  The reference wins only when it contributes
-    atoms absent from the coordinate-derived molecule.
+    A connected coordinate-derived molecule wins over disconnected
+    per-component CCD templates because only it encodes observed
+    inter-residue bonds. Otherwise, choose the representation containing more
+    heavy atoms and prefer the resolved representation on a tie.
     """
 
-    def valid_candidate(smiles: str | None) -> tuple[str, int] | None:
-        mol = Chem.MolFromSmiles(smiles) if smiles else None
+    def valid_candidate(smiles: str | None) -> tuple[str, int, int] | None:
+        if not smiles:
+            return None
+        mol = Chem.MolFromSmiles(smiles)
         if mol is None:
             return None
-        return smiles, mol.GetNumHeavyAtoms()
+        return smiles, int(mol.GetNumHeavyAtoms()), len(Chem.GetMolFrags(mol))
 
     reference = valid_candidate(reference_smiles)
     resolved = valid_candidate(resolved_smiles)
@@ -823,6 +829,8 @@ def _choose_ligand_smiles_by_heavy_atom_count(
         return resolved[0] if resolved is not None else (reference_smiles or "")
     if resolved is None:
         return reference[0]
+    if resolved[2] == 1 and reference[2] > 1:
+        return resolved[0]
     return reference[0] if reference[1] > resolved[1] else resolved[0]
 
 
@@ -1167,9 +1175,12 @@ CrystalContacts = ty.Annotated[
 class Ligand(DocBaseModel):
     pdb_id: str = Field(
         default_factory=str,
-        description="__RCSB PDB ID, see https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_entry.id.html",
+        description="[EXCLUDE] RCSB PDB ID, see https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_entry.id.html",
     )
-    biounit_id: str = Field(default_factory=str, description="__Biounit id")
+    biounit_id: str = Field(
+        default_factory=str,
+        description="[EXCLUDE] Biounit id",
+    )
     id_legacy: str = Field(
         default="",
         description="Historical ligand ID using global assembly-operation chain instances",
@@ -1202,19 +1213,16 @@ class Ligand(DocBaseModel):
         description="Whether resolved 3D stereo matches CCD template (True if achiral; None if no template)",
     )
     residue_numbers: list[int] = Field(
-        default_factory=list, description="__Ligand residue numbers"
+        default_factory=list,
+        description="[EXCLUDE] Ligand residue numbers",
     )
     member_residue_numbers: dict[str, list[int]] = Field(
         default_factory=dict,
-        description="__Residue numbers per member instance-chain. A ligand may "
+        description="[EXCLUDE] Residue numbers per member instance-chain. A ligand may "
         "span several covalently-linked chains (e.g. a macrocycle whose parts "
         "are deposited as separate chains); this maps each member "
         "'{instance}.{asym_id}' to its residue numbers so every atom in the "
         "ligand can be selected. Single-chain ligands map their one instance-chain.",
-    )
-    rdkit_canonical_smiles: str | None = Field(
-        default=None,
-        description="RDKit canonical SMILES (same as smiles; kept for schema compatibility)",
     )
     molecular_weight: float | None = Field(default=None, description="Molecular weight")
     crippen_clogp: float | None = Field(
@@ -1244,36 +1252,68 @@ class Ligand(DocBaseModel):
     )
     neighboring_residues: dict[str, list[int]] = Field(
         default_factory=dict,
-        description="Dictionary of neighboring residues, with {instance}.{chain} key and residue number value",
+        description="[CUSTOM_EXPORT] Dictionary of neighboring residues, with {instance}.{chain} key and residue number value",
     )
     neighboring_ligands: list[str] = Field(
         default_factory=list,
-        description="__List of neighboring ligands {instance}.{chain}",
+        description="[EXCLUDE] List of neighboring ligands {instance}.{chain}",
     )
     receptor_seqres: dict[str, str] = Field(
         default_factory=dict,
-        description="__SEQRES sequences of neighboring receptor chains for affinity validation",
+        description="[EXCLUDE] SEQRES sequences of neighboring receptor chains for affinity validation",
     )
     interacting_residues: dict[str, list[int]] = Field(
         default_factory=dict,
-        description="Dictionary of interacting residues, with {instance}.{chain} key and residue number value",
+        description="[CUSTOM_EXPORT] Dictionary of interacting residues, with {instance}.{chain} key and residue number value",
     )
     interacting_ligands: list[str] = Field(
         default_factory=list,
-        description="__List of interacting ligands {instance}.{chain}",
+        description="[EXCLUDE] List of interacting ligands {instance}.{chain}",
     )
     # TODO: rename interactions description; hash format kept for backward compatibility
     # (now computed by peppr, not PLIP)
     interactions: dict[str, dict[int, list[str]]] = Field(
         default_factory=dict,
-        description="__Dictionary of {instance}.{chain} to residue number to list of interaction hashes",
+        description="[EXCLUDE] Dictionary of {instance}.{chain} to residue number to list of interaction hashes",
     )
+
+    @classmethod
+    def document_properties(
+        cls, prefix: str
+    ) -> ty.Generator[tuple[str, str | None, str], ty.Any, ty.Any]:
+        """Describe model fields plus the flat columns emitted by ``format()``."""
+        yield from super().document_properties(prefix)
+        custom_columns = (
+            (
+                "residue_numbers",
+                "list[int]",
+                "Resolved ligand residue numbers used to reconstruct this ligand "
+                "from the source mmCIF",
+            ),
+            (
+                "water_residues",
+                "list[str]",
+                "Interacting water residues encoded as "
+                "<instance>.<asym>_<residue_number>",
+            ),
+            (
+                "interactions",
+                "list[str]",
+                "Protein-ligand interactions encoded by receptor chain, residue "
+                "number, and interaction type",
+            ),
+            ("auth_id", "str", "Author chain ID of the ligand"),
+        )
+        for suffix, dtype, description in custom_columns:
+            yield f"{prefix}_{suffix}", dtype, description
+
     neighboring_residue_threshold: float = Field(
         default=6.0,
-        description="__Maximum distance to consider receptor residues (protein/NA) neighboring",
+        description="[EXCLUDE] Maximum distance to consider receptor residues (protein/NA) neighboring",
     )
     neighboring_ligand_threshold: float = Field(
-        default=4.0, description="__Maximum distance to consider ligands neighboring"
+        default=4.0,
+        description="[EXCLUDE] Maximum distance to consider ligands neighboring",
     )
     num_resolved_heavy_atoms: int | None = Field(
         default=None, description="Number of resolved heavy atoms in a ligand"
@@ -1346,11 +1386,11 @@ class Ligand(DocBaseModel):
     )
     crystal_contacts: CrystalContacts = Field(
         default_factory=dict,
-        description="__Dictionary of {chain} to residue number to set of interacting crystal contacts",
+        description="[EXCLUDE] Dictionary of {chain} to residue number to set of interacting crystal contacts",
     )
     waters: dict[str, list[int]] = Field(
         default_factory=dict,
-        description="__Dictionary of {instance}.{chain} to list of interacting water residue numbers",
+        description="[EXCLUDE] Dictionary of {instance}.{chain} to list of interacting water residue numbers",
     )
     """Ligand annotation dataclass.
 
@@ -1368,8 +1408,6 @@ class Ligand(DocBaseModel):
                     self.resolved_smiles,
                 )
             rdkit_compatible_mol = Chem.MolFromSmiles(self.smiles)
-            # smiles is already canonical (from MolToSmiles); kept for schema compat
-            self.rdkit_canonical_smiles = self.smiles
             self.molecular_weight = rdMolDescriptors.CalcExactMolWt(
                 rdkit_compatible_mol
             )
@@ -1423,7 +1461,7 @@ class Ligand(DocBaseModel):
             else:
                 try:
                     polymer_classes = classify_ligand_polymer_classes(
-                        self.rdkit_canonical_smiles,
+                        self.smiles,
                         resolved_smiles=self.resolved_smiles,
                         is_multi_residue=self._is_multi_residue,
                     )
@@ -1679,6 +1717,7 @@ class Ligand(DocBaseModel):
         res_names = _residues_in_order(lig_heavy)
         reference_fragments: list[str] = []
         for resname in res_names:
+            component_smiles: str | None
             # User-supplied SMILES takes precedence — when the caller
             # explicitly provided one, CCD is assumed to be wrong or a
             # generic placeholder (biotite returns one for some codes
@@ -1893,8 +1932,7 @@ class Ligand(DocBaseModel):
 
     @cached_property
     def selection(self) -> str:
-        """
-        __Selection string for ligand
+        """[EXCLUDE] Selection string for ligand
 
         Spans every member instance-chain so covalently-linked ligand chains
         (a macrocycle deposited as several chains) select all of their atoms.
@@ -1972,9 +2010,7 @@ class Ligand(DocBaseModel):
 
     @cached_property
     def pocket_residues(self) -> dict[str, dict[int, str]]:
-        """
-        __Residues in the ligand's binding pocket which includes neighboring and interacting residues.
-        """
+        """[EXCLUDE] Residues in the ligand's binding pocket which includes neighboring and interacting residues."""
         residues: dict[str, dict[int, str]] = {}
         for chain in self.neighboring_residues:
             if chain not in residues:
@@ -2082,9 +2118,7 @@ class Ligand(DocBaseModel):
 
     @cached_property
     def interactions_counter(self) -> dict[str, dict[int, ty.Counter[str]]]:
-        """
-        __Counter of interactions for a given ligand.
-        """
+        """[EXCLUDE] Counter of interactions for a given ligand."""
         interactions_counter: dict[str, dict[int, ty.Counter[str]]] = {}
         for chain in self.interactions:
             interactions_counter[chain] = {}
@@ -2145,6 +2179,17 @@ class Ligand(DocBaseModel):
         elif lig_has_dummies(self.ccd_code):
             # check for dummy list including composites, too!
             self.is_artifact = True
+        elif self._is_multi_residue and any(
+            (
+                self.is_oligosaccharide,
+                self.is_oligonucleotide,
+                self.is_oligopeptide,
+            )
+        ):
+            # Small-molecule charge and linker cutoffs do not describe
+            # recognized oligomeric ligands.  For example, a short peptide can
+            # legitimately exceed the formal-charge cutoff through Lys/Arg.
+            self.is_artifact = False
         elif is_excluded_mol(self.smiles):
             self.is_artifact = True
         else:
@@ -2242,7 +2287,9 @@ class Ligand(DocBaseModel):
 
         Returns
         -------
-        List of residues in the format "<chain>_<residue_number>_<residue_index>_<auth_number>"
+        List of residues in the format
+        ``<instance>.<label_asym_id>_<label_seq_id>_<residue_index>_``
+        ``<auth_seq_id>_<insertion_code>``.
         dict[str, list[str]]
         """
         if residue_type == "interacting":
@@ -2254,7 +2301,7 @@ class Ligand(DocBaseModel):
             _, chain = instance_chain.split(".")
             for residue_number in residues[instance_chain]:
                 res.append(
-                    f"{instance_chain}_{residue_number}_{chains[chain].residues[residue_number].index}_{chains[chain].residues[residue_number].auth_number}"
+                    f"{instance_chain}_{residue_number}_{chains[chain].residues[residue_number].index}_{chains[chain].residues[residue_number].auth_number}_{chains[chain].residues[residue_number].insertion_code}"
                 )  # TODO: move some of this logic to Residue
         return {f"ligand_{residue_type}_residues": res}
 
@@ -2282,21 +2329,8 @@ class Ligand(DocBaseModel):
     def format(self, chains: dict[str, Chain]) -> dict[str, ty.Any]:
         """Serialize ligand annotations to a flat dict for DataFrame export."""
         data: dict[str, ty.Any] = defaultdict(str)
-        ignore_fields = set(
-            [
-                "interactions",
-                "protein_chains",
-                "interacting_ligands",
-                "neighboring_ligands",
-                "interacting_residues",
-                "neighboring_residues",
-                "pocket_residues",
-            ]
-        )
-        for field, desc_type in self.get_descriptions_and_types().items():
-            # blacklist fields that will be added with custom formatters below or that we don't want to add to the plindex
-            descr = str(desc_type[0]).lstrip().replace("\n", " ")
-            if descr.startswith("__") or field in ignore_fields:
+        for field, (description, _) in self.get_descriptions_and_types().items():
+            if description_excluded_from_flat_export(description):
                 continue
             name = f"ligand_{field}"
             data[name] = getattr(self, field, None)

@@ -18,7 +18,7 @@ import numpy as np
 import pandas as pd
 from biotite.file import DeserializationError, InvalidFileError
 from PDBValidation.ValidationFactory import ValidationFactory
-from pydantic import BeforeValidator, Field
+from pydantic import BeforeValidator, Field, PrivateAttr
 from rdkit import RDLogger
 
 from plinder.core.structure.atoms import is_hydrogen_isotope
@@ -28,6 +28,7 @@ from plinder.data.annotations.cif_utils import (
     build_biounit,
     get_chain_external_mappings,
     get_entry_info,
+    get_entry_taxonomy,
     get_label_asym_sequences,
     get_model_count,
     get_structure_with_altloc,
@@ -59,10 +60,14 @@ from plinder.data.annotations.protein_utils import (
     _is_polynucleotide,
     _is_polypeptide,
     detect_ligand_chains,
+    get_atom_site_author_ids,
     get_receptor_type,
 )
 from plinder.data.annotations.save_utils import save_ligands
-from plinder.data.annotations.utils import DocBaseModel
+from plinder.data.annotations.utils import (
+    DocBaseModel,
+    description_excluded_from_flat_export,
+)
 
 LOG = setup_logger(__name__)
 RDLogger.DisableLog("rdApp.*")
@@ -201,13 +206,13 @@ class QualityCriteria:
 
 
 class System(DocBaseModel):
-    pdb_id: str = Field(description="__PDB ID")
+    pdb_id: str = Field(description="[EXCLUDE] PDB ID")
     biounit_id: str = Field(description="Biounit ID")
     id_legacy: str = Field(
         default="",
         description="Historical system ID using global assembly-operation chain instances",
     )
-    ligands: list[Ligand] = Field(description="__List of Ligands in a systems")
+    ligands: list[Ligand] = Field(description="[EXCLUDE] List of Ligands in a systems")
     receptor_type: str = Field(
         description=(
             "Receptor polymer composition: protein, DNA, RNA, other, or a "
@@ -216,13 +221,14 @@ class System(DocBaseModel):
     )
     ligand_validation: ResidueListValidation | None = Field(
         default=None,
-        description="__Validation object for the ligand residues in the system",
+        description="[EXCLUDE] Validation object for the ligand residues in the system",
     )
     pocket_validation: ResidueListValidation | None = Field(
-        default=None, description="__Validation object for the system's pocket residues"
+        default=None,
+        description="[EXCLUDE] Validation object for the system's pocket residues",
     )
     pass_criteria: bool | None = Field(
-        default=None, description="__Passes quality criteria"
+        default=None, description="Whether the system passes validation criteria"
     )  # TODO: remove as attribute and have as function
 
     """
@@ -230,6 +236,25 @@ class System(DocBaseModel):
     and its neighboring ligands and receptor residues
 
     """
+
+    @classmethod
+    def document_properties(
+        cls, prefix: str
+    ) -> ty.Generator[tuple[str, str | None, str], ty.Any, ty.Any]:
+        """Describe model fields plus the flat columns emitted by ``format()``."""
+        yield from super().document_properties(prefix)
+        yield (
+            f"{prefix}_water_residues",
+            "list[str]",
+            "Interacting water residues encoded as "
+            "<instance>.<asym>_<residue_number>",
+        )
+        for mapping_name in ("CATH", "Pfam", "SCOP2", "SCOP2B", "UniProt"):
+            yield (
+                f"{prefix}_pocket_{mapping_name}",
+                "str",
+                f"Most frequent {mapping_name} mapping among pocket residues",
+            )
 
     def proper_ligands(self) -> list[Ligand]:
         return [ligand for ligand in self.ligands if ligand.is_proper]
@@ -371,9 +396,7 @@ class System(DocBaseModel):
 
     @cached_property
     def pocket_residues(self) -> dict[str, dict[int, str]]:
-        """
-        __Pockets residues of the system
-        """
+        """[EXCLUDE] Pockets residues of the system"""
         all_residues: dict[str, dict[int, str]] = defaultdict(dict)
         for ligand in self.ligands:
             if not ligand.is_proper:
@@ -385,9 +408,7 @@ class System(DocBaseModel):
 
     @cached_property
     def interactions(self) -> dict[str, dict[int, list[str]]]:
-        """
-        __Interactions of the system
-        """
+        """[EXCLUDE] Interactions of the system"""
         all_interactions: dict[str, dict[int, list[str]]] = defaultdict(
             lambda: defaultdict(list)
         )
@@ -403,9 +424,7 @@ class System(DocBaseModel):
 
     @cached_property
     def interactions_counter(self) -> dict[str, dict[int, ty.Counter[str]]]:
-        """
-        __Counter of interactions of the system
-        """
+        """[EXCLUDE] Counter of interactions of the system"""
         interactions_counter: dict[str, dict[int, ty.Counter[str]]] = {}
         for chain in self.interactions:
             interactions_counter[chain] = {}
@@ -555,10 +574,8 @@ class System(DocBaseModel):
         criteria: QualityCriteria = QualityCriteria(),
     ) -> dict[str, ty.Any]:
         data: dict[str, ty.Any] = defaultdict(str)
-        for field, desc_type in self.get_descriptions_and_types().items():
-            # blacklist fields that will be added with custom formatters below or that we don't want to add to the plindex
-            descr = str(desc_type[0]).lstrip().replace("\n", " ")
-            if descr.startswith("__"):
+        for field, (description, _) in self.get_descriptions_and_types().items():
+            if description_excluded_from_flat_export(description):
                 continue
             if not field.startswith("system_"):
                 name = f"system_{field}"
@@ -581,9 +598,7 @@ class System(DocBaseModel):
 
     @cached_property
     def waters(self) -> dict[str, list[int]]:
-        """
-        __Waters interacting with any of the ligands in the system
-        """
+        """[EXCLUDE] Waters interacting with any of the ligands in the system"""
         waters: dict[str, list[int]] = defaultdict(list)
         for ligand in self.ligands:
             for chain in ligand.waters:
@@ -766,6 +781,8 @@ class System(DocBaseModel):
 
 
 class Entry(DocBaseModel):
+    _ligand_contacts_requested: bool = PrivateAttr(default=False)
+
     pdb_id: str = Field(
         default_factory=str,
         description="RCSB PDB ID. See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_entry.id.html",
@@ -794,50 +811,75 @@ class Entry(DocBaseModel):
         default_factory=float,
         description="RCSB structure resolution. See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_refine.ls_d_res_high.html",
     )
+    source_taxonomy_ids: list[int] = Field(
+        default_factory=list,
+        description="Distinct NCBI taxonomy IDs of the deposited entities' source organisms",
+    )
+    source_organism_names: list[str] = Field(
+        default_factory=list,
+        description="Distinct scientific names of the deposited entities' source organisms",
+    )
+    host_taxonomy_ids: list[int] = Field(
+        default_factory=list,
+        description="Distinct NCBI taxonomy IDs of recombinant expression hosts",
+    )
+    host_organism_names: list[str] = Field(
+        default_factory=list,
+        description="Distinct scientific names of recombinant expression hosts",
+    )
     chains: dict[str, Chain] = Field(
         default_factory=dict,
-        description="__Chains dictionary with chain name mapped to chain object",
+        description="[EXCLUDE] Chains dictionary with chain name mapped to chain object",
     )
     ligand_like_chains: dict[str, str] = Field(
         default_factory=dict,
-        description="__Chain: chain type for other ligand-like chains in the entry",
+        description="[EXCLUDE] Chain: chain type for other ligand-like chains in the entry",
     )
     systems: dict[str, System] = Field(
         default_factory=dict,
-        description="__System dictionary with system id mapped to system object",
+        description="[EXCLUDE] System dictionary with system id mapped to system object",
     )
     interfaces: list[ProteinInterface] = Field(
         default_factory=list,
-        description="__Protein-chain interfaces across deposited assemblies",
+        description="[EXCLUDE] Protein-chain interfaces across deposited assemblies",
     )
     covalent_bonds: dict[str, list[tuple[str, str]]] = Field(
         default_factory=dict,
-        description="__All covalent interactions in the entry as defined by mmcif annotations. They types are separated by dictionary key and they include: "
+        description="[EXCLUDE] All covalent interactions in the entry as defined by mmcif annotations. They types are separated by dictionary key and they include: "
         + "covale: actual covalent linkage, metalc: other dative bond interactions like metal-ligand dative bond, "
         + "hydrogc: strong hydorogen bonding of nucleic acid. For the purpose of covalent annotations, we use only covale for downstream processing.",
     )
     chain_to_seqres: dict[str, str] = Field(
-        default_factory=dict, description="__Chain to sequence mapping"
+        default_factory=dict,
+        description="[EXCLUDE] Chain to sequence mapping",
     )
     validation: EntryValidation | None = Field(
-        default=None, description="__Entry validation"
+        default=None, description="[EXCLUDE] Entry validation"
     )
     pass_criteria: bool | None = Field(
-        default=None, description="__Entry pass validation criteria"
+        default=None, description="Whether the entry passes validation criteria"
     )
     water_chains: list[str] = Field(
-        default_factory=list, description="__Water chains in the entry"
+        default_factory=list, description="[EXCLUDE] Water chains in the entry"
     )
     biounit_chain_ids: dict[str, list[str]] = Field(
         default_factory=dict,
-        description="__Resolved biological-assembly chain instances by assembly ID",
+        description="[EXCLUDE] Resolved biological-assembly chain instances by assembly ID",
     )
     biounit_legacy_chain_ids: dict[str, dict[str, str]] = Field(
         default_factory=dict,
-        description="__Canonical-to-historical chain instance IDs by assembly ID",
+        description="[EXCLUDE] Canonical-to-historical chain instance IDs by assembly ID",
+    )
+    biounit_ligand_contact_counts: dict[str, dict[str, dict[str, int]]] = Field(
+        default_factory=dict,
+        description=(
+            "[EXCLUDE] Counts of ion, artifact, and other ligand chains near "
+            "each biological-assembly receptor chain instance"
+        ),
     )
     symmetry_mate_contacts: SymmetryMateContacts = Field(
-        default_factory=dict, description="__Symmetry mate contacts in the entry"
+        default_factory=dict,
+        description="[EXCLUDE] Symmetry mate contacts in the entry",
     )
 
     def prune(
@@ -928,6 +970,7 @@ class Entry(DocBaseModel):
                     )
                 }
             )
+        auth_id_by_asym, residue_author_ids_by_asym = get_atom_site_author_ids(block)
         self.chains = {}
         # Chain metadata does not use bonds.  Temporarily detaching the global
         # BondList prevents every small chain slice from scanning and
@@ -960,7 +1003,9 @@ class Entry(DocBaseModel):
                     chain_atoms,
                     len(self.chain_to_seqres.get(chain_id, "")),
                     entity_id=entity_id,
+                    auth_id=auth_id_by_asym.get(chain_id),
                     chain_type_str=chain_type,
+                    residue_author_ids=residue_author_ids_by_asym.get(chain_id, {}),
                 )
         finally:
             atoms.bonds = bonds
@@ -1268,6 +1313,63 @@ class Entry(DocBaseModel):
                 retained.update(component_chains & deferred_instance_chains)
         return retained
 
+    def _record_biounit_ligand_contact_counts(
+        self,
+        biounit: struc.AtomArray,
+        biounit_id: str,
+        spatial_index: BiounitSpatialIndex,
+        *,
+        monoatomic_ion_asym_ids: set[str],
+        known_artifact_asym_ids: set[str],
+        contact_threshold: float,
+    ) -> None:
+        """Count every ligand-like chain contacting each receptor instance."""
+        self._ligand_contacts_requested = True
+        receptor_asym_ids = {
+            asym_id
+            for asym_id, chain in self.chains.items()
+            if asym_id not in self.ligand_like_chains
+            and (
+                _is_polypeptide(chain.chain_type_str)
+                or _is_polynucleotide(chain.chain_type_str)
+            )
+        }
+        counts: dict[str, Counter[str]] = defaultdict(Counter)
+        for ligand_instance in spatial_index.chain_ids:
+            if "." not in ligand_instance:
+                continue
+            ligand_asym_id = ligand_instance.split(".", maxsplit=1)[1]
+            if ligand_asym_id not in self.ligand_like_chains:
+                continue
+            ligand_indices = spatial_index.atom_indices_for_chain(ligand_instance)
+            if ligand_indices.size == 0:
+                continue
+            nearby = spatial_index.atom_indices_near(
+                biounit.coord[ligand_indices], contact_threshold
+            )
+            receptor_instances = {
+                str(chain_instance)
+                for chain_instance in np.unique(biounit.chain_id[nearby])
+                if "." in str(chain_instance)
+                and str(chain_instance).split(".", maxsplit=1)[1] in receptor_asym_ids
+            }
+            if ligand_asym_id in monoatomic_ion_asym_ids:
+                contact_type = "ions"
+            elif ligand_asym_id in known_artifact_asym_ids:
+                contact_type = "artifacts"
+            else:
+                contact_type = "other_ligands"
+            for receptor_instance in receptor_instances:
+                counts[receptor_instance][contact_type] += 1
+        self.biounit_ligand_contact_counts[str(biounit_id)] = {
+            chain_instance: {
+                "ions": int(chain_counts["ions"]),
+                "artifacts": int(chain_counts["artifacts"]),
+                "other_ligands": int(chain_counts["other_ligands"]),
+            }
+            for chain_instance, chain_counts in counts.items()
+        }
+
     @classmethod
     def from_cif_file(
         cls,
@@ -1287,6 +1389,7 @@ class Entry(DocBaseModel):
         include_ligands: bool = True,
         include_interfaces: bool = True,
         assembly_ids: ty.Iterable[str] | None = None,
+        protein_only: bool = False,
     ) -> Entry:
         """
         Load an entry object from mmCIF files in the pipeline
@@ -1329,13 +1432,16 @@ class Entry(DocBaseModel):
         assembly_ids : Iterable[str] | None
             Optional subset of deposited biological assemblies. By default all
             assemblies listed by the mmCIF are processed.
+        protein_only : bool
+            Permit chain and assembly extraction without ligand or interface
+            annotation. Used by receptor-only custom scoring.
 
         Returns
         -------
         Entry
             Entry object for the given pdbid
         """
-        if not include_ligands and not include_interfaces:
+        if not include_ligands and not include_interfaces and not protein_only:
             raise ValueError("entry ingest must include ligands, interfaces, or both")
 
         cif_file = Path(cif_file)
@@ -1350,6 +1456,7 @@ class Entry(DocBaseModel):
         cif_file_obj = read_mmcif_file(cif_file)
         cif_data = list(cif_file_obj.values())[0]
         entry_info = get_entry_info(cif_data)
+        entry_taxonomy = get_entry_taxonomy(cif_data)
 
         # Extract metadata from CIF block
         pdb_id = (_cif_scalar(cif_data, "entry", "id") or "").lower()
@@ -1387,7 +1494,9 @@ class Entry(DocBaseModel):
             if entry_info.get("entry_pH") is not None
             else None,
             resolution=r,
+            **entry_taxonomy,
         )
+        entry._ligand_contacts_requested = include_ligands
         # Load structure with biotite
         # Multi-model PDBs (e.g. NMR ensembles) silently use model 1 here;
         # warn so callers know other models are dropped.
@@ -1477,7 +1586,7 @@ class Entry(DocBaseModel):
             )
         if include_interfaces:
             spatial_radii.append(interface_contact_radius)
-        max_spatial_radius = max(spatial_radii)
+        max_spatial_radius = max(spatial_radii) if spatial_radii else None
 
         selected_assemblies = _selected_assembly_ids(
             pdbx.list_assemblies(cif_file_obj), assembly_ids
@@ -1497,10 +1606,21 @@ class Entry(DocBaseModel):
                     biounit.chain_id, biounit.legacy_chain_id
                 )
             }
-            spatial_index = BiounitSpatialIndex.from_atoms(
-                biounit,
-                max_spatial_radius,
+            spatial_index = (
+                BiounitSpatialIndex.from_atoms(biounit, max_spatial_radius)
+                if max_spatial_radius is not None
+                else None
             )
+            if include_ligands:
+                assert spatial_index is not None
+                entry._record_biounit_ligand_contact_counts(
+                    biounit,
+                    str(assembly_id),
+                    spatial_index,
+                    monoatomic_ion_asym_ids=monoatomic_ion_asym_ids,
+                    known_artifact_asym_ids=known_artifact_asym_ids,
+                    contact_threshold=neighboring_residue_threshold,
+                )
             if include_interfaces:
                 entry.interfaces.extend(
                     detect_protein_interfaces(
@@ -1517,6 +1637,7 @@ class Entry(DocBaseModel):
                 )
             if not include_ligands:
                 continue
+            assert spatial_index is not None
             if not primary_asym_ids:
                 continue
             water_chains = get_water_chain_ids(biounit)
@@ -1759,8 +1880,6 @@ class Entry(DocBaseModel):
                 f"invalid structure_mode {structure_mode!r}; "
                 f"expected one of {CUSTOM_STRUCTURE_MODES}"
             )
-        if not include_ligands and not include_interfaces:
-            raise ValueError("custom ingest must include ligands, interfaces, or both")
         if not include_ligands and (
             ligand_smiles_dict is not None or ligand_ccd_code_dict is not None
         ):
@@ -1827,6 +1946,7 @@ class Entry(DocBaseModel):
                 include_ligands=include_ligands,
                 include_interfaces=include_interfaces,
                 assembly_ids=requested_assemblies,
+                protein_only=not include_ligands and not include_interfaces,
             )
             if not entry.biounit_chain_ids:
                 raise ValueError(
@@ -1916,7 +2036,7 @@ class Entry(DocBaseModel):
             cif_file_obj, model=1, use_author_fields=False, include_bonds=True
         )
         atoms = atoms[~is_hydrogen_isotope(atoms.element)]
-        if atoms.bonds is None:
+        if atoms.bonds is None and include_ligands:
             # ``include_bonds=True`` returning ``None`` means biotite
             # derived **no bonds at all** for the structure — every
             # residue lookup failed. This is a fundamentally broken or
@@ -1935,8 +2055,32 @@ class Entry(DocBaseModel):
             pdb_id=pdb_id,
             chain_to_seqres=chain_to_seqres,
         )
+        entry._ligand_contacts_requested = include_ligands
         entry._populate_chains(atoms, cif_data)
         entry.ligand_like_chains = detect_ligand_chains(entry, min_polymer_size)
+        monoatomic_ion_mask = struc.filter_monoatomic_ions(atoms)
+        ion_only_chains = set(
+            str(chain) for chain in atoms.chain_id[monoatomic_ion_mask]
+        )
+        ion_only_chains.difference_update(
+            str(chain) for chain in atoms.chain_id[~monoatomic_ion_mask]
+        )
+        monoatomic_ion_asym_ids = set(entry.ligand_like_chains) & ion_only_chains
+        known_artifact_asym_ids: set[str] = set()
+        if data_dir is not None:
+            artifact_codes = get_artifact_codes(data_dir)
+            known_artifact_asym_ids = {
+                asym_id
+                for asym_id in entry.ligand_like_chains
+                if asym_id not in monoatomic_ion_asym_ids
+                and is_known_artifact_ligand(
+                    (
+                        residue.name
+                        for residue in entry.chains[asym_id].residues.values()
+                    ),
+                    artifact_codes,
+                )
+            }
         # Create one assembly without applying crystallographic transforms.
         biounit = atoms.copy()
         biounit.chain_id = np.array([f"1.{c}" for c in biounit.chain_id])
@@ -1957,7 +2101,21 @@ class Entry(DocBaseModel):
             )
         if include_interfaces:
             spatial_radii.append(interface_contact_radius)
-        spatial_index = BiounitSpatialIndex.from_atoms(biounit, max(spatial_radii))
+        spatial_index = (
+            BiounitSpatialIndex.from_atoms(biounit, max(spatial_radii))
+            if spatial_radii
+            else None
+        )
+        if include_ligands:
+            assert spatial_index is not None
+            entry._record_biounit_ligand_contact_counts(
+                biounit,
+                "1",
+                spatial_index,
+                monoatomic_ion_asym_ids=monoatomic_ion_asym_ids,
+                known_artifact_asym_ids=known_artifact_asym_ids,
+                contact_threshold=neighboring_residue_threshold,
+            )
         if include_interfaces:
             entry.interfaces.extend(
                 detect_protein_interfaces(
@@ -2127,9 +2285,7 @@ class Entry(DocBaseModel):
 
     @cached_property
     def author_to_asym(self) -> dict[str, str]:
-        """
-        __Map author chain id to asym id
-        """
+        """[EXCLUDE] Map author chain id to asym id"""
         return {
             c.auth_id: c.asym_id
             for c in self.chains.values()
@@ -2287,6 +2443,10 @@ class Entry(DocBaseModel):
             "keywords",
             "pH",
             "resolution",
+            "source_taxonomy_ids",
+            "source_organism_names",
+            "host_taxonomy_ids",
+            "host_organism_names",
         ]
         for field in columns:
             name = f"entry_{field}"
@@ -2298,7 +2458,7 @@ class Entry(DocBaseModel):
         return data
 
     def chains_to_df(self) -> pd.DataFrame:
-        """Return one normalized metadata row for each receptor polymer chain."""
+        """Return one metadata row for each receptor polymer chain."""
         columns = [
             "entry_pdb_id",
             "chain_asym_id",
@@ -2306,6 +2466,7 @@ class Entry(DocBaseModel):
             "chain_entity_id",
             "chain_type",
             "chain_receptor_type",
+            "chain_sequence",
             "chain_length",
             "chain_num_unresolved_residues",
             "chain_is_holo",
@@ -2328,6 +2489,7 @@ class Entry(DocBaseModel):
                     "chain_entity_id": chain.entity_id,
                     "chain_type": chain.chain_type_str,
                     "chain_receptor_type": get_receptor_type([chain.chain_type_str]),
+                    "chain_sequence": self.chain_to_seqres.get(chain.asym_id, ""),
                     "chain_length": chain.length,
                     "chain_num_unresolved_residues": chain.num_unresolved_residues,
                     "chain_is_holo": chain.holo,
@@ -2338,7 +2500,7 @@ class Entry(DocBaseModel):
         return pd.DataFrame(rows, columns=columns)
 
     def metadata_to_df(self) -> pd.DataFrame:
-        """Return one normalized row of entry-level annotations."""
+        """Return one row of entry-level annotations."""
         return pd.DataFrame([self.format()])
 
     def biounit_chains_to_df(self) -> pd.DataFrame:
@@ -2350,10 +2512,21 @@ class Entry(DocBaseModel):
             "chain_asym_id",
             "chain_role",
         ]
+        contact_columns = [
+            "chain_num_contacting_ions",
+            "chain_num_contacting_artifacts",
+            "chain_num_contacting_other_ligands",
+        ]
+        contacts_computed = self._ligand_contacts_requested or bool(
+            self.biounit_ligand_contact_counts
+        )
+        if contacts_computed:
+            columns.extend(contact_columns)
         rows = []
         water_chains = set(self.water_chains)
         ligand_chains = set(self.ligand_like_chains)
         for biounit_id, chain_instances in sorted(self.biounit_chain_ids.items()):
+            contact_counts = self.biounit_ligand_contact_counts.get(str(biounit_id), {})
             for chain_instance in sorted(set(chain_instances)):
                 asym_id = chain_instance.split(".", maxsplit=1)[-1]
                 if asym_id in water_chains:
@@ -2362,15 +2535,29 @@ class Entry(DocBaseModel):
                     role = "ligand"
                 else:
                     role = "receptor"
-                rows.append(
-                    {
-                        "entry_pdb_id": self.pdb_id,
-                        "biounit_id": str(biounit_id),
-                        "chain_instance": chain_instance,
-                        "chain_asym_id": asym_id,
-                        "chain_role": role,
-                    }
-                )
+                chain_counts = contact_counts.get(chain_instance, {})
+                row: dict[str, object] = {
+                    "entry_pdb_id": self.pdb_id,
+                    "biounit_id": str(biounit_id),
+                    "chain_instance": chain_instance,
+                    "chain_asym_id": asym_id,
+                    "chain_role": role,
+                }
+                if contacts_computed:
+                    row.update(
+                        {
+                            "chain_num_contacting_ions": int(
+                                chain_counts.get("ions", 0)
+                            ),
+                            "chain_num_contacting_artifacts": int(
+                                chain_counts.get("artifacts", 0)
+                            ),
+                            "chain_num_contacting_other_ligands": int(
+                                chain_counts.get("other_ligands", 0)
+                            ),
+                        }
+                    )
+                rows.append(row)
         return pd.DataFrame(rows, columns=columns)
 
     def to_df(self) -> pd.DataFrame:
@@ -2385,8 +2572,10 @@ class Entry(DocBaseModel):
         -------
         pd.DataFrame
         """
+        if self.validation is not None:
+            self.format_validation()
         rows = []
-        entry_data = self.format()
+        entry_data = {"entry_pdb_id": self.pdb_id}
         for system in self.systems:
             annotation = self.systems[system]
             legacy_mapping = self.biounit_legacy_chain_ids.get(

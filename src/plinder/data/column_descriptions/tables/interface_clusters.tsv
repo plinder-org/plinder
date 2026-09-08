@@ -1,0 +1,7 @@
+Name	Type	Description
+system_id	string	ID of the system
+interface_qcov__100__directed_set_cover	large_string	Cluster ID for directed set cover built from interface_qcov with 100 threshold; each member's query-to-centroid score meets the threshold
+interface_qcov__30__directed_set_cover	large_string	Cluster ID for directed set cover built from interface_qcov with 30 threshold; each member's query-to-centroid score meets the threshold
+interface_qcov__50__directed_set_cover	large_string	Cluster ID for directed set cover built from interface_qcov with 50 threshold; each member's query-to-centroid score meets the threshold
+interface_qcov__70__directed_set_cover	large_string	Cluster ID for directed set cover built from interface_qcov with 70 threshold; each member's query-to-centroid score meets the threshold
+interface_qcov__90__directed_set_cover	large_string	Cluster ID for directed set cover built from interface_qcov with 90 threshold; each member's query-to-centroid score meets the threshold

@@ -7,15 +7,11 @@ from typing import cast
 import pandas as pd
 from duckdb import sql
 
+from plinder.core.release import PlinderRelease
 from plinder.core.scores.query import FILTER, FILTERS, make_query
-from plinder.core.utils import cpl
-from plinder.core.utils.config import get_config
 from plinder.core.utils.dec import timeit
 from plinder.core.utils.log import setup_logger
-from plinder.core.utils.schemas import (
-    LEGACY_TANIMOTO_SCORE_SCHEMA,
-    TANIMOTO_SCORE_SCHEMA,
-)
+from plinder.core.utils.schemas import TANIMOTO_SCORE_SCHEMA
 
 LOG = setup_logger(__name__)
 
@@ -42,10 +38,8 @@ def query_ligand_similarity(
     df : pd.DataFrame | None
         the protein similarity results
     """
-    cfg = get_config()
-    dataset = cpl.get_plinder_path(rel=cfg.data.ligand_scores)
-    is_v3 = str(cfg.data.plinder_iteration).startswith("v3")
-    schema = TANIMOTO_SCORE_SCHEMA if is_v3 else LEGACY_TANIMOTO_SCORE_SCHEMA
+    dataset = PlinderRelease().fetch("ligand_scores")
+    schema = TANIMOTO_SCORE_SCHEMA
     metric = schema.names[-1]
     query = make_query(
         schema=schema,
@@ -81,32 +75,22 @@ def map_cross_similarity(
     idx = df.groupby("updated_query_ligand_id")[metric].idxmax()
     df = df.loc[idx]
 
-    cfg = get_config()
-    if str(cfg.data.plinder_iteration).startswith("v3"):
-        from plinder.core.scores.index import query_index
+    from plinder.core.scores.index import query_index
 
-        ligand_ids = set(df["query_ligand_id"].astype(int))
-        ligand_occurrences = query_index(
-            columns=["system_id", "ligand_smiles_id"],
-            filters=[
-                FILTER(
-                    (
-                        "ligand_smiles_id",
-                        "in",
-                        cast(set[str], ligand_ids),
-                    )
+    ligand_ids = set(df["query_ligand_id"].astype(int))
+    ligand_occurrences = query_index(
+        columns=["system_id", "ligand_smiles_id"],
+        filters=[
+            FILTER(
+                (
+                    "ligand_smiles_id",
+                    "in",
+                    cast(set[str], ligand_ids),
                 )
-            ],
-            splits=["*"],
-        )
-        id_column = "ligand_smiles_id"
-    else:
-        # V2 releases publish the occurrence mapping as a separate file.
-        dataset = cpl.get_plinder_path(
-            rel=f"{cfg.data.fingerprints}/{cfg.data.fingerprint_file}"
-        )
-        ligand_occurrences = pd.read_parquet(dataset)
-        id_column = "number_id_by_inchikeys"
+            )
+        ],
+    )
+    id_column = "ligand_smiles_id"
     ligand_to_system: dict[int, set[str]] = {}
     for ligand_id, group in ligand_occurrences.groupby(id_column):
         ligand_to_system[int(ligand_id)] = set(group["system_id"])
@@ -147,14 +131,10 @@ def cross_similarity(
     df : pd.DataFrame
         the cross similarity results
     """
-    cfg = get_config()
-    dataset = cpl.get_plinder_path(rel=cfg.data.ligand_scores)
-    is_v3 = str(cfg.data.plinder_iteration).startswith("v3")
-    schema = TANIMOTO_SCORE_SCHEMA if is_v3 else LEGACY_TANIMOTO_SCORE_SCHEMA
+    dataset = PlinderRelease().fetch("ligand_scores")
+    schema = TANIMOTO_SCORE_SCHEMA
     if metric is None:
-        metric = (
-            "tanimoto_similarity_ecfp4_1024" if is_v3 else "tanimoto_similarity_max"
-        )
+        metric = "tanimoto_similarity_ecfp4_1024"
     filters = [
         [
             FILTER(("query_ligand_id", "in", query_ligands)),

@@ -1,13 +1,34 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
 import json
+import os
 import shutil
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
 test_asset_fp = Path(__file__).absolute().parent / "test_data"
 test_output_fp = Path(__file__).absolute().parent / "xx/output"
+
+
+def _write_test_entry_metadata(release_dir: Path) -> None:
+    annotation = pd.read_parquet(release_dir / "index" / "annotation_table.parquet")
+    entry_columns = [column for column in annotation if column.startswith("entry_")]
+    metadata = annotation.loc[:, entry_columns].drop_duplicates()
+    if metadata["entry_pdb_id"].duplicated().any():
+        raise ValueError("test annotation has inconsistent entry metadata")
+    dates = pd.read_csv(
+        Path(__file__).resolve().parents[1]
+        / "src/plinder/data/annotations/static_files/dates.csv"
+    ).loc[:, ["entry_pdb_id", "entry_release_date"]]
+    metadata = metadata.drop(columns="entry_release_date", errors="ignore").merge(
+        dates,
+        on="entry_pdb_id",
+        how="left",
+        validate="one_to_one",
+    )
+    metadata.to_parquet(release_dir / "index" / "entry_metadata.parquet", index=False)
 
 
 @pytest.fixture(scope="session")
@@ -318,47 +339,16 @@ def mini_components_pqt():
     return test_asset_fp / "components.parquet"
 
 
-@pytest.fixture(scope="session")
-def mini_mmp_index():
-    return test_asset_fp / "mmp/tiny_mmp_index.csv.gz"
-
-
-@pytest.fixture(scope="session")
-def mini_mmp_data_annotation():
-    return test_asset_fp / "mmp/mmp_mini_data.tsv"
-
-
-@pytest.fixture(scope="session")
-def mmp_pocket_fident_data():
-    return (
-        test_asset_fp
-        / "mmp/mmp_test_pocket_fident_weighted_sum__1.0__strong__component.csv"
-    )
-
-
-@pytest.fixture(scope="session")
-def mini_mmp_cluster_folder():
-    return test_asset_fp / "mmp/mini_clusters"
-
-
-@pytest.fixture(scope="session")
-def mmp_protein_fident_data():
-    return (
-        test_asset_fp
-        / "mmp/mmp_test_protein_fident_weighted_sum__0.95__weak__component.csv"
-    )
-
-
 @pytest.fixture
 def test_env(tmp_path, monkeypatch):
     monkeypatch.setenv("PLINDER_MOUNT", tmp_path.as_posix())
     monkeypatch.setenv("PLINDER_BUCKET", "bucket")
     monkeypatch.setenv("PLINDER_RELEASE", "test")
-    monkeypatch.setenv("PLINDER_ITERATION", "v0")
+    monkeypatch.setenv("PLINDER_RELEASE_NUMBER", "")
     from plinder.core.utils import config
 
     config._config._clear()
-    return tmp_path / "bucket" / "test" / "v0"
+    return tmp_path / "bucket" / "test"
 
 
 @pytest.fixture
@@ -482,19 +472,22 @@ def mock_alternative_datasets(
 
 
 @pytest.fixture
-def read_plinder_mount(monkeypatch):
-    monkeypatch.setenv("PLINDER_MOUNT", test_asset_fp.as_posix())
+def read_plinder_mount(monkeypatch, tmp_path):
+    source = test_asset_fp / "plinder" / "mount"
+    adir = tmp_path / "plinder" / "mount"
+    shutil.copytree(source, adir, copy_function=os.symlink)
+    _write_test_entry_metadata(adir)
+
+    monkeypatch.setenv("PLINDER_MOUNT", tmp_path.as_posix())
     monkeypatch.setenv("PLINDER_RELEASE", "mount")
+    monkeypatch.setenv("PLINDER_RELEASE_NUMBER", "")
     monkeypatch.setenv("PLINDER_BUCKET", "plinder")
-    monkeypatch.setenv("PLINDER_ITERATION", "")
     monkeypatch.setenv("PLINDER_OFFLINE", "true")
     from plinder.core.utils import config, cpl
 
     config._config._clear()
     monkeypatch.setattr(cpl, "_CLIENTS", {})
-    plinder_mount = test_asset_fp
     cfg = config.get_config()
-    adir = plinder_mount / "plinder" / "mount"
     assert Path(cfg.data.plinder_dir) == adir
 
     for path in adir.rglob("*_done"):
@@ -508,10 +501,40 @@ def read_plinder_eval_mount(monkeypatch, tmp_path):
     plinder_mount = tmp_path / "plinder_mount"
     adir = plinder_mount / "eval"
     shutil.copytree(test_asset_fp / "eval", adir)
+    annotation_path = adir / "index" / "annotation_table.parquet"
+    annotation = pd.read_parquet(annotation_path)
+    annotation = annotation.rename(
+        columns={"ligand_rdkit_canonical_smiles": "ligand_smiles"}
+    )
+    instance_chains = annotation["ligand_id"].str.rsplit("__", n=1).str[-1]
+    annotation["ligand_instance_chain"] = instance_chains
+    annotation["ligand_instance"] = instance_chains.str.split(".").str[0].astype(int)
+    annotation["ligand_asym_id"] = instance_chains.str.rsplit(".", n=1).str[-1]
+    annotation.to_parquet(annotation_path, index=False)
+    for archive in ("a3.zip", "ai.zip"):
+        shutil.unpack_archive(
+            adir / "systems" / archive,
+            adir / "reconstructed_systems",
+        )
+    _write_test_entry_metadata(adir)
+    ligand_archive_dir = adir / "ligand_archives"
+    ligand_archive_dir.mkdir()
+    for system_id in ("1a3b__1__1.B__1.D", "1ai5__1__1.A_1.B__1.D"):
+        pdb_id = system_id[:4]
+        ligand_file = (
+            adir / "reconstructed_systems" / system_id / "ligand_files" / "1.D.sdf"
+        )
+        pd.DataFrame(
+            {
+                "pdb_id": [pdb_id],
+                "ligand_asym_id": ["D"],
+                "sdf": [ligand_file.read_bytes()],
+            }
+        ).to_parquet(ligand_archive_dir / f"{pdb_id[1:3]}.parquet", index=False)
     monkeypatch.setenv("PLINDER_MOUNT", plinder_mount.as_posix())
     monkeypatch.setenv("PLINDER_RELEASE", "")
+    monkeypatch.setenv("PLINDER_RELEASE_NUMBER", "")
     monkeypatch.setenv("PLINDER_BUCKET", "eval")
-    monkeypatch.setenv("PLINDER_ITERATION", "")
     monkeypatch.setenv("PLINDER_OFFLINE", True)
     from plinder.core.utils import config, cpl
 
@@ -530,8 +553,8 @@ def write_plinder_mount(monkeypatch, tmp_path):
     write_plinder_mount.mkdir(parents=True)
     monkeypatch.setenv("PLINDER_MOUNT", tmp_path.as_posix())
     monkeypatch.setenv("PLINDER_RELEASE", "mount")
+    monkeypatch.setenv("PLINDER_RELEASE_NUMBER", "")
     monkeypatch.setenv("PLINDER_BUCKET", "plinder")
-    monkeypatch.setenv("PLINDER_ITERATION", "")
     from plinder.core.utils import config, cpl
 
     config._config._clear()
@@ -542,7 +565,35 @@ def write_plinder_mount(monkeypatch, tmp_path):
         write_path = write_plinder_mount / path.relative_to(read_plinder_mount)
         write_path.parent.mkdir(exist_ok=True, parents=True)
         write_path.write_bytes(path.read_bytes())
+    _write_test_entry_metadata(write_plinder_mount)
     return write_plinder_mount
+
+
+@pytest.fixture
+def cached_plinder_system(read_plinder_mount, tmp_path):
+    """Build a system using explicit current-release cache locations."""
+    from plinder.core import PlinderSystem
+
+    def build(system_id: str) -> PlinderSystem:
+        source = test_asset_fp / "reconstructed_systems" / system_id
+        reconstruction_dir = tmp_path / "reconstructed_systems" / system_id
+        shutil.copytree(source, reconstruction_dir)
+
+        canonical_ligand_dir = tmp_path / "canonical_ligands" / system_id
+        canonical_ligand_dir.mkdir(parents=True)
+        for ligand_file in (source / "ligand_files").glob("*.sdf"):
+            asym_id = ligand_file.stem.rsplit(".", maxsplit=1)[-1]
+            target = canonical_ligand_dir / f"{asym_id}.sdf"
+            if not target.exists():
+                shutil.copyfile(ligand_file, target)
+
+        return PlinderSystem(
+            system_id=system_id,
+            reconstruction_dir=reconstruction_dir,
+            canonical_ligand_dir=canonical_ligand_dir,
+        )
+
+    return build
 
 
 @pytest.fixture(autouse=True)
@@ -621,8 +672,3 @@ def cif_atom_array(cif_1qz5_unzipped):
     )
     print(atom_array)
     return atom_array
-
-
-@pytest.fixture(scope="session")
-def split_plot_split_file():
-    return test_asset_fp / "split_plot_split.parquet"

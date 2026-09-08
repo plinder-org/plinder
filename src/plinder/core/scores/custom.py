@@ -10,8 +10,11 @@ import re
 import shutil
 import subprocess
 from bisect import bisect_left
+from collections import Counter
 from collections.abc import Iterable as IterableABC
-from dataclasses import dataclass
+from collections.abc import Iterator
+from dataclasses import dataclass, replace
+from gzip import open as gzip_open
 from pathlib import Path
 from threading import Lock
 from typing import Any, Iterable, Literal, Mapping
@@ -19,11 +22,13 @@ from typing import Any, Iterable, Literal, Mapping
 import numpy as np
 import pandas as pd
 
+from plinder.core.release import PlinderRelease
 from plinder.core.utils import cpl
-from plinder.core.utils.config import get_config
 
 LOG = logging.getLogger(__name__)
-SEARCH_BACKENDS = ("foldseek", "mmseqs")
+CIF_SEARCH_BACKENDS = ("foldseek", "mmseqs")
+SEQUENCE_SEARCH_BACKENDS = ("mmseqs",)
+SEARCH_BACKENDS = CIF_SEARCH_BACKENDS
 EXACT_CLUSTER_CONTRACT: Mapping[str, object] = {
     "identity": 1.0,
     "coverage": 1.0,
@@ -116,8 +121,32 @@ class CustomScoringResult:
     query_databases: CustomQueryDatabases
     protein_hits: Mapping[str, Path]
     score_alignments: Mapping[str, Path]
+    protein_score_alignments: Mapping[str, Path]
+    protein_scores: Path
+    aligned_pocket_residues: Path | None
     ligand_scores: Path | None
     interface_scores: Path | None
+
+
+@dataclass(frozen=True)
+class CustomSequenceScoringResult:
+    """Files produced by protein-sequence scoring against PLINDER pockets."""
+
+    query_inputs: CustomQueryInputs
+    query_databases: CustomQueryDatabases
+    protein_hits: Mapping[str, Path]
+    protein_score_alignments: Mapping[str, Path]
+    protein_scores: Path
+    aligned_pocket_residues: Path | None
+    sequence_links: Path
+    best_sequence_links: Path
+
+
+@dataclass(frozen=True)
+class _SequenceEntry:
+    """Small entry stand-in needed while reversing custom alignments."""
+
+    pdb_id: str
 
 
 def _require_file(path: Path, *, description: str) -> Path:
@@ -127,10 +156,26 @@ def _require_file(path: Path, *, description: str) -> Path:
     raise FileNotFoundError(f"missing {description} in {mode}: {path}")
 
 
-def _release_path(*, relative: str, data_dir: Path | None) -> Path:
+def _release_file(
+    name: str,
+    *,
+    data_dir: Path | None,
+    description: str,
+    **parameters: str,
+) -> Path:
+    release = PlinderRelease(data_dir)
     if data_dir is not None:
-        return Path(data_dir) / relative
-    return cpl.get_plinder_path(rel=relative)
+        return _require_file(
+            release.path(name, **parameters),
+            description=description,
+        )
+    try:
+        return release.fetch(name, **parameters)
+    except FileNotFoundError as exc:
+        mode = "offline cache" if cpl.is_offline() else "release cache"
+        raise FileNotFoundError(
+            f"missing {description} in {mode}: {release.path(name, **parameters)}"
+        ) from exc
 
 
 def _manifest_member(root: Path, value: object, *, field: str) -> Path:
@@ -150,7 +195,9 @@ def _require_database_prefix(
 ) -> None:
     _require_file(prefix.with_suffix(".dbtype"), description=description)
     if indexed:
-        _require_file(Path(f"{prefix}.idx.dbtype"), description=f"indexed {description}")
+        _require_file(
+            Path(f"{prefix}.idx.dbtype"), description=f"indexed {description}"
+        )
 
 
 def _validate_portable_links(root: Path) -> None:
@@ -170,8 +217,7 @@ def _validate_portable_links(root: Path) -> None:
 
 def _local_search_database_root(data_dir: Path, backend: str) -> Path:
     """Resolve either a published bundle or an unmodified ingest output."""
-    cfg = get_config()
-    published = data_dir / str(cfg.data.search_databases) / f"holo_{backend}"
+    published = PlinderRelease(data_dir).path("search_database", backend=backend)
     if published.is_dir():
         return published
     ingest = data_dir / "dbs" / "subdbs" / f"holo_{backend}"
@@ -188,10 +234,12 @@ def resolve_search_database(
         raise ValueError(
             f"unsupported search backend {backend!r}; expected one of {SEARCH_BACKENDS}"
         )
-    cfg = get_config()
     if data_dir is None:
-        root = cpl.get_plinder_path(
-            rel=f"{cfg.data.search_databases}/holo_{backend}"
+        root = _release_file(
+            "search_database",
+            data_dir=None,
+            description=f"{backend} search database",
+            backend=backend,
         )
     else:
         root = _local_search_database_root(Path(data_dir), backend)
@@ -276,14 +324,14 @@ def resolve_ligand_archives(
     data_dir: Path | None = None,
 ) -> dict[str, Path]:
     """Download or validate only ligand-coordinate shards needed by targets."""
-    cfg = get_config()
     codes = sorted({_pdb_shard(value) for value in pdb_or_system_ids})
     archives: dict[str, Path] = {}
     for code in codes:
-        relative = f"{cfg.data.ligand_archives}/{code}.parquet"
-        archives[code] = _require_file(
-            _release_path(relative=relative, data_dir=data_dir),
+        archives[code] = _release_file(
+            "ligand_archive",
+            data_dir=data_dir,
             description=f"canonical ligand archive for shard {code}",
+            shard=code,
         )
     return archives
 
@@ -291,7 +339,7 @@ def resolve_ligand_archives(
 def resolve_custom_scoring_assets(
     *,
     data_dir: Path | None = None,
-    backends: Iterable[str] = SEARCH_BACKENDS,
+    backends: Iterable[str] = CIF_SEARCH_BACKENDS,
     ligand_pdb_ids: Iterable[str] = (),
 ) -> CustomScoringAssets:
     """Download or validate the bounded asset set for custom scoring.
@@ -301,18 +349,17 @@ def resolve_custom_scoring_assets(
     the coordinate shards containing target ligands with positive pocket
     coverage.
     """
-    cfg = get_config()
-    index_files = {
-        "annotation_table": cfg.data.index_file,
-        "entry_chains": cfg.data.entry_chain_file,
-        "interface_annotations": cfg.data.interface_file,
-        "alignment_chain_lookup": cfg.data.alignment_chain_lookup_file,
-    }
+    index_files = (
+        "annotation_table",
+        "entry_chains",
+        "interface_annotations",
+        "alignment_chain_lookup",
+    )
     resolved_index: dict[str, Path] = {}
-    for name, filename in index_files.items():
-        relative = f"{cfg.data.index}/{filename}"
-        resolved_index[name] = _require_file(
-            _release_path(relative=relative, data_dir=data_dir),
+    for name in index_files:
+        resolved_index[name] = _release_file(
+            name,
+            data_dir=data_dir,
             description=name.replace("_", " "),
         )
 
@@ -354,6 +401,122 @@ def _clean_protein_sequence(sequence: str, *, context: str) -> str:
     if not cleaned or re.fullmatch(r"[A-Z]+", cleaned) is None:
         raise ValueError(f"invalid protein sequence for {context}: {sequence!r}")
     return cleaned
+
+
+def _fasta_records(path: Path) -> Iterator[tuple[str, str]]:
+    """Yield identifier and sequence pairs from a plain or gzipped FASTA."""
+    source = Path(path)
+    if not source.is_file():
+        raise FileNotFoundError(f"missing protein FASTA: {source}")
+    handle = (
+        gzip_open(source, mode="rt")
+        if source.name.lower().endswith(".gz")
+        else source.open()
+    )
+    with handle:
+        identifier: str | None = None
+        parts: list[str] = []
+        for line_number, line in enumerate(handle, start=1):
+            text = line.strip()
+            if not text:
+                continue
+            if text.startswith(">"):
+                if identifier is not None:
+                    yield identifier, "".join(parts)
+                header = text[1:].strip()
+                if not header:
+                    raise ValueError(
+                        f"empty FASTA header in {source} at line {line_number}"
+                    )
+                identifier = header.split(maxsplit=1)[0]
+                parts = []
+            else:
+                if identifier is None:
+                    raise ValueError(
+                        f"sequence precedes the first FASTA header in {source} "
+                        f"at line {line_number}"
+                    )
+                parts.append(text)
+        if identifier is not None:
+            yield identifier, "".join(parts)
+
+
+def write_custom_sequence_query_files(
+    sequence_fasta: Path,
+    *,
+    work_dir: Path,
+    min_chain_length: int = 12,
+) -> CustomQueryInputs:
+    """Write stable internal query IDs for a protein FASTA.
+
+    Each FASTA record represents one ligand-free protein chain. Original
+    identifiers remain in the manifest and generated result tables; internal
+    IDs keep search-database identifiers unambiguous.
+    """
+    if min_chain_length < 1:
+        raise ValueError("min_chain_length must be positive")
+    source = Path(sequence_fasta)
+    root = Path(work_dir) / "query_inputs"
+    if source.resolve().is_relative_to(root.resolve()):
+        raise ValueError("the protein FASTA must be outside the generated work tree")
+    records = list(_fasta_records(source))
+    if not records:
+        raise ValueError(f"protein FASTA contains no records: {source}")
+    identifiers = [identifier for identifier, _ in records]
+    duplicates = sorted(
+        identifier for identifier, count in Counter(identifiers).items() if count > 1
+    )
+    if duplicates:
+        raise ValueError(f"protein FASTA repeats identifiers: {duplicates[:10]}")
+
+    if root.exists():
+        shutil.rmtree(root)
+    chain_cif_dir = root / "chains"
+    chain_cif_dir.mkdir(parents=True)
+    written_fasta = root / "query_sequences.fasta"
+    chain_manifest = root / "query_chains.parquet"
+    rows: list[dict[str, Any]] = []
+    fasta_rows: list[str] = []
+    skipped: dict[str, str] = {}
+    for sequence_id, raw_sequence in records:
+        sequence = _clean_protein_sequence(
+            raw_sequence,
+            context=f"FASTA record {sequence_id}",
+        )
+        if len(sequence) < min_chain_length:
+            skipped[
+                sequence_id
+            ] = f"protein length {len(sequence)} is below {min_chain_length}"
+            continue
+        query_id = f"cq{len(rows):08d}"
+        rows.append(
+            {
+                "query_id": query_id,
+                "query_chain_id": f"{query_id}__A",
+                "structure_id": query_id,
+                "sequence_id": sequence_id,
+                "source_fasta": str(source.resolve()),
+                "chain_asym_id": "A",
+                "sequence": sequence,
+                "sequence_length": len(sequence),
+                "sequence_source": "polymer",
+                "resolved_residue_numbers": [],
+            }
+        )
+        fasta_rows.append(f">{query_id}\n{sequence}\n")
+    if not rows:
+        raise ValueError(
+            f"no protein sequences of at least {min_chain_length} residues were "
+            f"found; record diagnostics={skipped}"
+        )
+    written_fasta.write_text("".join(fasta_rows))
+    pd.DataFrame(rows).to_parquet(chain_manifest, index=False)
+    return CustomQueryInputs(
+        root=root,
+        chain_cif_dir=chain_cif_dir,
+        sequence_fasta=written_fasta,
+        chain_manifest=chain_manifest,
+    )
 
 
 def _protein_asym_sequences(block: Any) -> dict[str, str]:
@@ -441,9 +604,9 @@ def _query_chain_atoms(
         raise ValueError("structure_mode must be 'as_is' or 'pdb'")
 
     block = list(cif_file.values())[0]
-    available_assemblies = block["pdbx_struct_assembly_gen"][
-        "assembly_id"
-    ].as_array(str)
+    available_assemblies = block["pdbx_struct_assembly_gen"]["assembly_id"].as_array(
+        str
+    )
     selected = _select_assembly_ids(available_assemblies, assembly_ids)
     if not selected:
         raise ValueError("pdb mode requires at least one deposited assembly")
@@ -527,7 +690,9 @@ def write_custom_query_files(
         if not source.is_file():
             raise FileNotFoundError(f"missing custom mmCIF: {source}")
         if source.resolve().is_relative_to(resolved_root):
-            raise ValueError("custom input files must be outside the generated work tree")
+            raise ValueError(
+                "custom input files must be outside the generated work tree"
+            )
     if root.exists():
         shutil.rmtree(root)
     chain_cif_dir = root / "chains"
@@ -582,19 +747,17 @@ def write_custom_query_files(
                 )
                 sequence_source = "coordinates"
             if sequence is None:
-                skipped_chains[f"{structure_id}__{asym_id}"] = (
-                    "not identifiable as a protein"
-                )
+                skipped_chains[
+                    f"{structure_id}__{asym_id}"
+                ] = "not identifiable as a protein"
                 continue
             if len(sequence) < min_chain_length:
-                skipped_chains[f"{structure_id}__{asym_id}"] = (
-                    f"protein length {len(sequence)} is below {min_chain_length}"
-                )
+                skipped_chains[
+                    f"{structure_id}__{asym_id}"
+                ] = f"protein length {len(sequence)} is below {min_chain_length}"
                 continue
             atoms = atoms_by_asym[asym_id].copy()
-            residue_starts = struc.get_residue_starts(
-                atoms, add_exclusive_stop=False
-            )
+            residue_starts = struc.get_residue_starts(atoms, add_exclusive_stop=False)
             if len(residue_starts) < 1:
                 continue
             query_id = f"cq{len(rows):08d}"
@@ -608,9 +771,7 @@ def write_custom_query_files(
                         "resolved residue count does not match the emitted FASTA "
                         f"sequence for {structure_id} chain {asym_id}"
                     )
-                if len(set(resolved_residue_numbers)) != len(
-                    resolved_residue_numbers
-                ):
+                if len(set(resolved_residue_numbers)) != len(resolved_residue_numbers):
                     raise ValueError(
                         f"resolved residue numbers are ambiguous for {structure_id} "
                         f"chain {asym_id}; coordinate-derived FASTA positions cannot "
@@ -712,9 +873,7 @@ def annotate_custom_cif_files(
                 dict(ligand_smiles_dict) if ligand_smiles_dict is not None else None
             ),
             ligand_ccd_code_dict=(
-                dict(ligand_ccd_code_dict)
-                if ligand_ccd_code_dict is not None
-                else None
+                dict(ligand_ccd_code_dict) if ligand_ccd_code_dict is not None else None
             ),
             save_folder=ligand_sdf_root if include_ligands else None,
             structure_mode=structure_mode,
@@ -731,10 +890,14 @@ def annotate_custom_cif_files(
                 "score them in separate calls"
             )
         entry_ids.add(entry_id)
-        if not entry.systems and not entry.interfaces:
+        protein_chains = [
+            chain
+            for chain in entry.chains.values()
+            if "polypeptide" in str(chain.chain_type_str).lower()
+        ]
+        if not protein_chains:
             raise ValueError(
-                f"custom mmCIF {source} produced no ligand systems or "
-                "protein interfaces to score"
+                f"custom mmCIF {source} produced no protein chains to score"
             )
         annotated[structure_id] = entry
 
@@ -829,9 +992,7 @@ def _map_backend_query_identifiers(
         output[identifier] = query_id
         matched[query_id].append(identifier)
     invalid = {
-        query_id: values
-        for query_id, values in matched.items()
-        if len(values) != 1
+        query_id: values for query_id, values in matched.items() if len(values) != 1
     }
     if invalid:
         raise ValueError(
@@ -844,7 +1005,7 @@ def create_custom_query_databases(
     inputs: CustomQueryInputs,
     *,
     work_dir: Path,
-    backends: Iterable[str] = SEARCH_BACKENDS,
+    backends: Iterable[str] = CIF_SEARCH_BACKENDS,
     threads: int = 1,
 ) -> CustomQueryDatabases:
     """Create unindexed, scratch-local query DBs for selected search backends."""
@@ -910,15 +1071,180 @@ def create_custom_query_databases(
             for identifier, query_id in mapping.items()
         )
     identifier_map = root / "query_identifier_map.parquet"
-    pd.DataFrame(mapping_rows).sort_values(
-        ["backend", "query_id"]
-    ).to_parquet(identifier_map, index=False)
+    pd.DataFrame(mapping_rows).sort_values(["backend", "query_id"]).to_parquet(
+        identifier_map, index=False
+    )
     return CustomQueryDatabases(
         root=root,
         inputs=inputs,
         databases=databases,
         identifier_map=identifier_map,
     )
+
+
+def _plinder_entry_subset(values: Iterable[str] | None) -> tuple[str, ...] | None:
+    if values is None:
+        return None
+    if isinstance(values, str):
+        values = (values,)
+    selected = tuple(
+        dict.fromkeys(
+            str(value).strip().lower() for value in values if str(value).strip()
+        )
+    )
+    if not selected:
+        raise ValueError("plinder_entry_ids must contain at least one PDB ID")
+    invalid = [
+        value for value in selected if re.fullmatch(r"[a-z0-9]{4}", value) is None
+    ]
+    if invalid:
+        raise ValueError(f"invalid PLINDER PDB IDs: {invalid[:10]}")
+    return selected
+
+
+def _build_mmseqs_target_subset(
+    entry_chains: Path,
+    interface_annotations: Path,
+    *,
+    entry_ids: Iterable[str],
+    output_dir: Path,
+    threads: int = 1,
+) -> SearchDatabaseBundle:
+    """Build an MMseqs target from scoreable chains in selected entries."""
+    selected = _plinder_entry_subset(entry_ids)
+    assert selected is not None
+    if threads < 1:
+        raise ValueError("threads must be positive")
+    if shutil.which("mmseqs") is None:
+        raise FileNotFoundError("mmseqs executable is required for custom searches")
+
+    chains = pd.read_parquet(
+        entry_chains,
+        columns=[
+            "entry_pdb_id",
+            "chain_asym_id",
+            "chain_auth_id",
+            "chain_receptor_type",
+            "chain_is_holo",
+            "chain_sequence",
+        ],
+        filters=[("entry_pdb_id", "in", list(selected))],
+    )
+    interfaces = pd.read_parquet(
+        interface_annotations,
+        columns=["entry_pdb_id", "interface_chain_1", "interface_chain_2"],
+        filters=[("entry_pdb_id", "in", list(selected))],
+    )
+    interface_keys = pd.concat(
+        [
+            interfaces[["entry_pdb_id", column]].rename(
+                columns={column: "chain_instance"}
+            )
+            for column in ["interface_chain_1", "interface_chain_2"]
+        ],
+        ignore_index=True,
+    )
+    interface_keys["chain_asym_id"] = (
+        interface_keys.pop("chain_instance").astype(str).str.split(".", n=1).str[-1]
+    )
+    interface_keys = interface_keys.drop_duplicates()
+    interface_keys["chain_is_interface"] = True
+    chains = chains.merge(
+        interface_keys,
+        on=["entry_pdb_id", "chain_asym_id"],
+        how="left",
+        validate="one_to_one",
+    )
+    chains = chains.loc[
+        chains["chain_receptor_type"].fillna("").astype(str).eq("protein")
+        & (
+            chains["chain_is_holo"].fillna(False).astype(bool)
+            | chains["chain_is_interface"].eq(True)
+        )
+        & chains["chain_auth_id"].notna()
+        & chains["chain_sequence"].notna()
+    ].copy()
+    found = set(chains["entry_pdb_id"].astype(str))
+    missing = sorted(set(selected).difference(found))
+    if missing:
+        raise ValueError(
+            "selected PLINDER entries have no scoreable receptor or interface "
+            f"chains: {missing[:10]}"
+        )
+
+    chains["target_id"] = (
+        chains["entry_pdb_id"].astype(str) + "_" + chains["chain_auth_id"].astype(str)
+    )
+    duplicate_ids = chains.loc[
+        chains["target_id"].duplicated(keep=False), "target_id"
+    ].drop_duplicates()
+    if not duplicate_ids.empty:
+        raise ValueError(
+            "selected PLINDER chains have ambiguous author IDs: "
+            f"{duplicate_ids.tolist()[:10]}"
+        )
+
+    records: list[str] = []
+    for row in chains.sort_values("target_id").itertuples(index=False):
+        if any(character.isspace() for character in str(row.target_id)):
+            raise ValueError(f"invalid PLINDER target identifier: {row.target_id!r}")
+        sequence = _clean_protein_sequence(
+            str(row.chain_sequence),
+            context=f"{row.entry_pdb_id} chain {row.chain_auth_id}",
+        )
+        records.append(f">{row.target_id}\n{sequence}\n")
+
+    root = Path(output_dir) / "mmseqs"
+    if root.exists():
+        shutil.rmtree(root)
+    root.mkdir(exist_ok=True, parents=True)
+    fasta = root / "targets.fasta"
+    fasta.write_text("".join(records))
+    database = root / "targets"
+    _run_command(
+        [
+            "mmseqs",
+            "createdb",
+            str(fasta),
+            str(database),
+            "--threads",
+            str(threads),
+        ]
+    )
+    return SearchDatabaseBundle(
+        backend="mmseqs",
+        root=root,
+        search_target=database,
+        conversion_target=database,
+        cluster_alignments=None,
+        manifest={"plinder_entry_ids": list(selected)},
+    )
+
+
+def _resolve_workflow_assets(
+    *,
+    data_dir: Path | None,
+    backends: tuple[str, ...],
+    plinder_entry_ids: tuple[str, ...] | None,
+    work_dir: Path,
+    threads: int,
+) -> CustomScoringAssets:
+    if plinder_entry_ids is not None and backends != ("mmseqs",):
+        raise ValueError("plinder_entry_ids currently requires backends=('mmseqs',)")
+    assets = resolve_custom_scoring_assets(
+        data_dir=data_dir,
+        backends=() if plinder_entry_ids is not None else backends,
+    )
+    if plinder_entry_ids is None:
+        return assets
+    subset = _build_mmseqs_target_subset(
+        assets.entry_chains,
+        assets.interface_annotations,
+        entry_ids=plinder_entry_ids,
+        output_dir=work_dir / "plinder_target_subset",
+        threads=threads,
+    )
+    return replace(assets, search_databases={"mmseqs": subset})
 
 
 def _parse_plinder_target_identifier(
@@ -1002,8 +1328,7 @@ def _load_target_chain_mapping(
     ].tolist()
     if missing:
         raise ValueError(
-            "PLINDER alignment lookup cannot map target chains: "
-            f"{missing[:10]}"
+            "PLINDER alignment lookup cannot map target chains: " f"{missing[:10]}"
         )
     return mapped
 
@@ -1042,9 +1367,9 @@ def map_custom_alignment_hits(
             "target_chain_asym_id",
             "source",
         ]
-        pd.DataFrame({column: pd.Series(dtype="string") for column in columns}).to_parquet(
-            output_path, index=False
-        )
+        pd.DataFrame(
+            {column: pd.Series(dtype="string") for column in columns}
+        ).to_parquet(output_path, index=False)
         return output_path
     query_columns = query_mapping[
         [
@@ -1092,9 +1417,7 @@ def map_custom_alignment_hits(
         validate="many_to_one",
     )
     mapped["source"] = backend
-    mapped = mapped.drop(
-        columns=["query_pdb_id", "target_pdb_id"], errors="ignore"
-    )
+    mapped = mapped.drop(columns=["query_pdb_id", "target_pdb_id"], errors="ignore")
     leading = [
         "query_id",
         "query_chain_id",
@@ -1165,7 +1488,7 @@ def _selected_positions_for_custom_hit(
     target_alignment_positions = [
         position for position, residue in enumerate(taln) if residue != "-"
     ]
-    if backend == "mmseqs":
+    if backend in SEQUENCE_SEARCH_BACKENDS:
         query_numbers = set(query_index_to_number.values())
         if str(row.query_sequence_source) == "coordinates":
             resolved_numbers = _int_values(
@@ -1226,7 +1549,7 @@ def _selected_positions_for_custom_hit(
         target_index = target_start + bisect_left(
             target_alignment_positions, alignment_position
         )
-        if backend == "mmseqs":
+        if backend in SEQUENCE_SEARCH_BACKENDS:
             target_number = (
                 target_index + 1
                 if target_index + 1 in target_selected_numbers
@@ -1296,7 +1619,7 @@ def prepare_custom_score_alignments(
             continue
         backend_required = required | (
             {"query_sequence_source", "query_resolved_residue_numbers"}
-            if backend == "mmseqs"
+            if backend in SEQUENCE_SEARCH_BACKENDS
             else set()
         )
         missing = sorted(backend_required.difference(hits.columns))
@@ -1310,9 +1633,7 @@ def prepare_custom_score_alignments(
                 f"{backend} hits reference unknown custom structures: "
                 f"{unknown_structures}"
             )
-        hits = hits.loc[
-            ~hits["target_entry"].astype(str).isin(query_entry_ids)
-        ].copy()
+        hits = hits.loc[~hits["target_entry"].astype(str).isin(query_entry_ids)].copy()
         if hits.empty:
             pd.DataFrame(
                 {
@@ -1386,6 +1707,225 @@ def prepare_custom_score_alignments(
     return outputs
 
 
+def _release_positions_for_custom_hit(
+    row: Any,
+    *,
+    backend: str,
+) -> tuple[list[int], list[int], bytes]:
+    """Project PLINDER selected residues through a custom-chain alignment."""
+    qaln = str(row.qaln).upper()
+    taln = str(row.taln).upper()
+    alignment_length = min(len(qaln), len(taln))
+    qaln = qaln[:alignment_length]
+    taln = taln[:alignment_length]
+    if alignment_length == 0:
+        return [], [], b""
+
+    selected_numbers = _int_values(
+        row.target_selected_residue_numbers,
+        column="target_selected_residue_numbers",
+    )
+    selected_indices = _int_values(
+        row.target_selected_residue_indices,
+        column="target_selected_residue_indices",
+    )
+    if len(selected_numbers) != len(selected_indices):
+        raise ValueError(
+            "target selected-residue numbers and indices have different lengths "
+            f"for {row.target_entry} chain {row.target_chain_asym_id}"
+        )
+    if not selected_numbers:
+        return [], [], b""
+
+    target_start = int(row.tstart) - 1
+    query_start = int(row.qstart) - 1
+    query_alignment_positions = [
+        position for position, residue in enumerate(qaln) if residue != "-"
+    ]
+    resolved_numbers = _int_values(
+        row.query_resolved_residue_numbers,
+        column="query_resolved_residue_numbers",
+    )
+    target_alignment_positions = [
+        position for position, residue in enumerate(taln) if residue != "-"
+    ]
+    if backend in SEQUENCE_SEARCH_BACKENDS:
+        selected = [
+            (number - (target_start + 1), number) for number in selected_numbers
+        ]
+    else:
+        selected = [
+            (index - target_start, number)
+            for index, number in zip(
+                selected_indices,
+                selected_numbers,
+                strict=True,
+            )
+        ]
+
+    query_numbers: list[int] = []
+    custom_numbers: list[int] = []
+    residue_identity = bytearray()
+    for target_offset, target_number in sorted(selected):
+        if not 0 <= target_offset < len(target_alignment_positions):
+            continue
+        alignment_position = target_alignment_positions[target_offset]
+        if qaln[alignment_position] == "-":
+            continue
+        query_index = query_start + bisect_left(
+            query_alignment_positions, alignment_position
+        )
+        if backend == "foldseek" or str(row.query_sequence_source) == "coordinates":
+            custom_number = (
+                resolved_numbers[query_index]
+                if 0 <= query_index < len(resolved_numbers)
+                else None
+            )
+        elif str(row.query_sequence_source) == "polymer":
+            custom_number = query_index + 1
+        else:
+            raise ValueError(
+                "unknown query sequence source for "
+                f"{row.structure_id} chain {row.query_chain_asym_id}: "
+                f"{row.query_sequence_source!r}"
+            )
+        query_numbers.append(int(target_number))
+        custom_numbers.append(int(custom_number) if custom_number is not None else -1)
+        residue_identity.append(qaln[alignment_position] == taln[alignment_position])
+    return query_numbers, custom_numbers, bytes(residue_identity)
+
+
+def prepare_custom_protein_score_alignments(
+    protein_hits: Mapping[str, Path],
+    *,
+    entries_by_structure: Mapping[str, Any],
+    output_dir: Path,
+) -> dict[str, Path]:
+    """Write reverse compact alignments for PLINDER-to-custom protein scores."""
+    from plinder.data.annotations.get_similarity_scores import (
+        get_sequence_similarity_helper,
+    )
+
+    unsupported = sorted(set(protein_hits).difference(SEARCH_BACKENDS))
+    if unsupported:
+        raise ValueError(f"unsupported search backends: {unsupported}")
+    entry_id_by_structure = {
+        str(structure_id): str(entry.pdb_id)
+        for structure_id, entry in entries_by_structure.items()
+    }
+    if len(entry_id_by_structure) != len(set(entry_id_by_structure.values())):
+        raise ValueError("custom scoring entries must have distinct entry IDs")
+    output_dir = Path(output_dir)
+    output_dir.mkdir(exist_ok=True, parents=True)
+    outputs: dict[str, Path] = {}
+    required = {
+        "structure_id",
+        "query_chain_asym_id",
+        "query_sequence_source",
+        "query_resolved_residue_numbers",
+        "target_entry",
+        "target_chain_asym_id",
+        "target_selected_residue_numbers",
+        "target_selected_residue_indices",
+        "qstart",
+        "tstart",
+        "qcov",
+        "tcov",
+        "fident",
+        "qaln",
+        "taln",
+    }
+    empty_columns = (
+        "query_entry",
+        "target_entry",
+        "query_chain_mapped",
+        "target_chain_mapped",
+        "source",
+    )
+    for backend, hit_path in protein_hits.items():
+        hits = pd.read_parquet(hit_path)
+        output = output_dir / f"{backend}.parquet"
+        if hits.empty:
+            pd.DataFrame(
+                {column: pd.Series(dtype="string") for column in empty_columns}
+            ).to_parquet(output, index=False)
+            outputs[backend] = output
+            continue
+        missing = sorted(required.difference(hits.columns))
+        if missing:
+            raise ValueError(f"{backend} custom hit table is missing columns {missing}")
+        unknown_structures = sorted(
+            set(hits["structure_id"].astype(str)).difference(entry_id_by_structure)
+        )
+        if unknown_structures:
+            raise ValueError(
+                f"{backend} hits reference unknown custom structures: "
+                f"{unknown_structures}"
+            )
+        custom_entry_ids = hits["structure_id"].astype(str).map(entry_id_by_structure)
+        hits = hits.loc[
+            hits["target_entry"].astype(str).to_numpy() != custom_entry_ids.to_numpy()
+        ].copy()
+        if hits.empty:
+            pd.DataFrame(
+                {column: pd.Series(dtype="string") for column in empty_columns}
+            ).to_parquet(output, index=False)
+            outputs[backend] = output
+            continue
+
+        selected = [
+            _release_positions_for_custom_hit(row, backend=backend)
+            for row in hits.itertuples(index=False)
+        ]
+        custom_entries = hits["structure_id"].astype(str).map(entry_id_by_structure)
+        release_entries = hits["target_entry"].astype(str).copy()
+        custom_chains = hits["query_chain_asym_id"].astype(str).copy()
+        release_chains = hits["target_chain_asym_id"].astype(str).copy()
+        custom_coverage = hits["qcov"].copy()
+        hits["query_entry"] = release_entries
+        hits["target_entry"] = custom_entries
+        hits["query_chain_mapped"] = release_chains
+        hits["target_chain_mapped"] = custom_chains
+        hits["source"] = backend
+        hits["qcov"] = hits["tcov"]
+        hits["tcov"] = custom_coverage
+        hits["query_selected_residue_numbers"] = [value[0] for value in selected]
+        hits["target_selected_residue_numbers"] = [value[1] for value in selected]
+        hits["selected_residue_identity"] = [value[2] for value in selected]
+        hits["seqsim"] = [
+            get_sequence_similarity_helper(str(qaln).upper(), str(taln).upper())
+            for qaln, taln in zip(hits["qaln"], hits["taln"], strict=True)
+        ]
+        hits["fident_qcov"] = hits["fident"] * hits["qcov"]
+        hits["seqsim_qcov"] = hits["seqsim"] * hits["qcov"]
+        if backend == "foldseek":
+            if "lddt" not in hits:
+                raise ValueError("foldseek custom hit table is missing column lddt")
+            hits["lddt_qcov"] = hits["lddt"] * hits["qcov"]
+        hits = hits.drop(
+            columns=[
+                "qaln",
+                "taln",
+                "target_selected_residue_indices",
+            ],
+            errors="ignore",
+        )
+        leading = list(empty_columns)
+        hits = hits[leading + [column for column in hits if column not in leading]]
+        hits = hits.sort_values(
+            [
+                "query_entry",
+                "target_entry",
+                "query_chain_mapped",
+                "target_chain_mapped",
+            ],
+            ignore_index=True,
+        )
+        hits.to_parquet(output, index=False, compression="zstd")
+        outputs[backend] = output
+    return outputs
+
+
 def run_custom_protein_searches(
     *,
     query_databases: CustomQueryDatabases,
@@ -1393,7 +1933,7 @@ def run_custom_protein_searches(
     output_dir: Path,
     scratch_dir: Path,
     config: CustomProteinSearchConfig | None = None,
-    backends: Iterable[str] = SEARCH_BACKENDS,
+    backends: Iterable[str] = CIF_SEARCH_BACKENDS,
     threads: int = 1,
 ) -> dict[str, Path]:
     """Search custom protein chains and write backend-independent hit tables."""
@@ -1469,6 +2009,14 @@ def _target_entry_ids(score_alignments: Mapping[str, Path]) -> set[str]:
     return target_ids
 
 
+def _query_entry_ids(score_alignments: Mapping[str, Path]) -> set[str]:
+    query_ids: set[str] = set()
+    for path in score_alignments.values():
+        frame = pd.read_parquet(path, columns=["query_entry"])
+        query_ids.update(frame["query_entry"].dropna().astype(str))
+    return query_ids
+
+
 def _load_release_entry_views(
     assets: CustomScoringAssets,
     *,
@@ -1515,12 +2063,7 @@ def _custom_ligand_sdf_resolver(
         pdb_id = str(ligand.pdb_id)
         asym_id = str(ligand.asym_id)
         if pdb_id in query_entry_ids:
-            custom_path = (
-                query_ligand_root
-                / pdb_id
-                / "ligand_files"
-                / f"{asym_id}.sdf"
-            )
+            custom_path = query_ligand_root / pdb_id / "ligand_files" / f"{asym_id}.sdf"
             return custom_path if custom_path.is_file() else None
 
         if data_dir is not None:
@@ -1534,12 +2077,7 @@ def _custom_ligand_sdf_resolver(
             )
             if raw_path.is_file():
                 return raw_path
-        extracted = (
-            extracted_target_root
-            / pdb_id
-            / "ligand_files"
-            / f"{asym_id}.sdf"
-        )
+        extracted = extracted_target_root / pdb_id / "ligand_files" / f"{asym_id}.sdf"
         if extracted.is_file():
             return extracted
 
@@ -1550,11 +2088,11 @@ def _custom_ligand_sdf_resolver(
             if shard not in packed_sdf_cache:
                 archive = archive_cache.get(shard)
                 if archive is None:
-                    cfg = get_config()
-                    relative = f"{cfg.data.ligand_archives}/{shard}.parquet"
-                    archive = _require_file(
-                        _release_path(relative=relative, data_dir=data_dir),
+                    archive = _release_file(
+                        "ligand_archive",
+                        data_dir=data_dir,
                         description=f"canonical ligand archive for shard {shard}",
+                        shard=shard,
                     )
                     archive_cache[shard] = archive
                 packed = pd.read_parquet(
@@ -1580,6 +2118,588 @@ def _custom_ligand_sdf_resolver(
         return extracted
 
     return resolve
+
+
+def calculate_custom_protein_similarity_scores(
+    protein_score_alignments: Mapping[str, Path],
+    *,
+    assets: CustomScoringAssets,
+    work_dir: Path,
+    plinder_system_ids: Iterable[str] | None = None,
+    custom_chain_ids: Iterable[str] | None = None,
+    output_path: Path | None = None,
+) -> pd.DataFrame:
+    """Score PLINDER receptors and ligand pockets against custom protein chains."""
+    from plinder.core.utils.schemas import PROTEIN_SIMILARITY_SCHEMA
+    from plinder.data.annotations.get_similarity_scores import Scorer
+
+    entries = _load_release_entry_views(
+        assets,
+        pdb_ids=_query_entry_ids(protein_score_alignments),
+    )
+    work_dir = Path(work_dir)
+    work_dir.mkdir(exist_ok=True, parents=True)
+    scorer = Scorer(
+        entries=entries,
+        source_to_full_db_file={},
+        db_dir=work_dir,
+        scores_dir=work_dir,
+        include_pli_fident=True,
+    )
+    selected_plinder_systems = (
+        set(map(str, plinder_system_ids)) if plinder_system_ids is not None else None
+    )
+    selected_custom_chains = (
+        set(map(str, custom_chain_ids)) if custom_chain_ids is not None else None
+    )
+    source_to_alignment = {
+        f"apo_{backend}": path for backend, path in protein_score_alignments.items()
+    }
+    alignments = scorer.load_alignments(
+        source_to_aln_file=source_to_alignment,
+        search_db="apo",
+    )
+    alignments_by_query_entry = (
+        {
+            str(entry_id): group.droplevel("query_entry")
+            for entry_id, group in alignments.groupby(level="query_entry", sort=False)
+        }
+        if not alignments.empty
+        else {}
+    )
+    frames: list[pd.DataFrame] = []
+    for entry_id in sorted(entries):
+        query_entry_alignments = alignments_by_query_entry.get(entry_id)
+        if query_entry_alignments is None:
+            continue
+        frame = scorer.aggregate_scores(
+            entry_id,
+            search_db="apo",
+            source_to_aln_file=source_to_alignment,
+            query_entry_alignments=query_entry_alignments,
+            query_system_ids=selected_plinder_systems,
+            target_system_ids=selected_custom_chains,
+        )
+        if frame is not None and not frame.empty:
+            frames.append(frame)
+    result = (
+        pd.concat(frames, ignore_index=True)
+        if frames
+        else pd.DataFrame(columns=PROTEIN_SIMILARITY_SCHEMA.names)
+    )
+    if not result.empty:
+        result = result.sort_values(
+            [
+                "similarity",
+                "query_system",
+                "query_ligand_id",
+                "target_system",
+            ],
+            ascending=[False, True, True, True],
+            ignore_index=True,
+        )
+    if output_path is not None:
+        output_path = Path(output_path)
+        output_path.parent.mkdir(exist_ok=True, parents=True)
+        result.to_parquet(output_path, index=False, compression="zstd")
+    return result
+
+
+def write_custom_aligned_pocket_residues(
+    protein_score_alignments: Mapping[str, Path],
+    *,
+    protein_scores: Path,
+    assets: CustomScoringAssets,
+    output_path: Path,
+) -> Path:
+    """Write residue pairs supporting custom-chain pocket identity scores."""
+    columns = [
+        "plinder_system_id",
+        "plinder_ligand_id",
+        "plinder_entry_id",
+        "plinder_chain_instance",
+        "plinder_chain_asym_id",
+        "plinder_residue_number",
+        "custom_structure_id",
+        "custom_chain_asym_id",
+        "custom_residue_number",
+        "residue_identical",
+        "source",
+    ]
+    scores = pd.read_parquet(
+        protein_scores,
+        columns=[
+            "query_system",
+            "query_ligand_id",
+            "target_system",
+            "protein_mapping",
+            "source",
+            "metric",
+        ],
+    )
+    pocket_scores = scores.loc[
+        scores["metric"].astype(str).eq("pocket_fident"),
+        [
+            "query_system",
+            "query_ligand_id",
+            "target_system",
+            "protein_mapping",
+            "source",
+        ],
+    ].drop_duplicates()
+    accepted: set[tuple[str, str, str, str, str, str]] = set()
+    for score in pocket_scores.itertuples(index=False):
+        if not isinstance(score.protein_mapping, str):
+            continue
+        score_sources = (
+            tuple(protein_score_alignments)
+            if str(score.source) == "both"
+            else (str(score.source),)
+        )
+        for pair in score.protein_mapping.split(";"):
+            if ":" not in pair:
+                continue
+            release_instance, custom_instance = pair.split(":", maxsplit=1)
+            release_chain = release_instance.split(".", maxsplit=1)[-1]
+            custom_chain = custom_instance.split(".", maxsplit=1)[-1]
+            for source in score_sources:
+                accepted.add(
+                    (
+                        str(score.query_system),
+                        str(score.query_ligand_id),
+                        str(score.target_system),
+                        source,
+                        release_chain,
+                        custom_chain,
+                    )
+                )
+    if not accepted:
+        result = pd.DataFrame(columns=columns)
+    else:
+        entries = _load_release_entry_views(
+            assets,
+            pdb_ids=_query_entry_ids(protein_score_alignments),
+        )
+        pocket_membership: dict[tuple[str, str, int], list[tuple[str, str, str]]] = {}
+        for entry_id, entry in entries.items():
+            for system in entry.systems.values():
+                for ligand in system.ligands.values():
+                    if not ligand.is_proper:
+                        continue
+                    for (
+                        instance_chain,
+                        number_to_index,
+                    ) in ligand.pocket_residue_number_to_index.items():
+                        asym_id = instance_chain.split(".", maxsplit=1)[-1]
+                        for residue_number in number_to_index:
+                            pocket_membership.setdefault(
+                                (str(entry_id), asym_id, int(residue_number)), []
+                            ).append(
+                                (str(system.id), str(ligand.id), str(instance_chain))
+                            )
+
+        rows: list[dict[str, Any]] = []
+        for backend, alignment_path in protein_score_alignments.items():
+            alignments = pd.read_parquet(alignment_path)
+            for row in alignments.itertuples(index=False):
+                release_entry = str(row.query_entry)
+                release_chain = str(row.query_chain_mapped)
+                custom_entry = str(row.target_entry)
+                custom_chain = str(row.target_chain_mapped)
+                target_system = f"{custom_entry}_{custom_chain}"
+                release_numbers = _int_values(
+                    row.query_selected_residue_numbers,
+                    column="query_selected_residue_numbers",
+                )
+                custom_numbers = _int_values(
+                    row.target_selected_residue_numbers,
+                    column="target_selected_residue_numbers",
+                )
+                identities = bytes(row.selected_residue_identity)
+                if not (len(release_numbers) == len(custom_numbers) == len(identities)):
+                    raise ValueError(
+                        "custom pocket residue alignment columns have different "
+                        f"lengths for {release_entry} chain {release_chain}"
+                    )
+                for release_number, custom_number, identical in zip(
+                    release_numbers,
+                    custom_numbers,
+                    identities,
+                    strict=True,
+                ):
+                    for system_id, ligand_id, instance_chain in pocket_membership.get(
+                        (release_entry, release_chain, release_number), []
+                    ):
+                        if (
+                            system_id,
+                            ligand_id,
+                            target_system,
+                            backend,
+                            release_chain,
+                            custom_chain,
+                        ) not in accepted:
+                            continue
+                        rows.append(
+                            {
+                                "plinder_system_id": system_id,
+                                "plinder_ligand_id": ligand_id,
+                                "plinder_entry_id": release_entry,
+                                "plinder_chain_instance": instance_chain,
+                                "plinder_chain_asym_id": release_chain,
+                                "plinder_residue_number": release_number,
+                                "custom_structure_id": custom_entry,
+                                "custom_chain_asym_id": custom_chain,
+                                "custom_residue_number": (
+                                    custom_number if custom_number >= 0 else pd.NA
+                                ),
+                                "residue_identical": bool(identical),
+                                "source": backend,
+                            }
+                        )
+        result = pd.DataFrame.from_records(rows, columns=columns)
+        if not result.empty:
+            result = result.drop_duplicates().sort_values(
+                [
+                    "custom_structure_id",
+                    "custom_chain_asym_id",
+                    "plinder_system_id",
+                    "plinder_ligand_id",
+                    "source",
+                    "plinder_chain_instance",
+                    "plinder_residue_number",
+                ],
+                ignore_index=True,
+            )
+    result["plinder_residue_number"] = result["plinder_residue_number"].astype("Int64")
+    result["custom_residue_number"] = result["custom_residue_number"].astype("Int64")
+    result["residue_identical"] = result["residue_identical"].astype("boolean")
+    output_path = Path(output_path)
+    output_path.parent.mkdir(exist_ok=True, parents=True)
+    result.to_parquet(output_path, index=False, compression="zstd")
+    return output_path
+
+
+def write_custom_sequence_link_tables(
+    *,
+    protein_scores: Path,
+    chain_manifest: Path,
+    annotation_table: Path,
+    output_path: Path,
+    best_output_path: Path,
+) -> tuple[Path, Path]:
+    """Attach sequence IDs and ligand chemistry to pocket-identity scores."""
+    manifest = pd.read_parquet(
+        chain_manifest,
+        columns=[
+            "structure_id",
+            "chain_asym_id",
+            "sequence_id",
+            "sequence_length",
+        ],
+    )
+    manifest["target_system"] = (
+        manifest["structure_id"].astype(str)
+        + "_"
+        + manifest["chain_asym_id"].astype(str)
+    )
+    target_map = manifest[
+        ["target_system", "sequence_id", "sequence_length"]
+    ].drop_duplicates()
+    if target_map.duplicated("target_system").any():
+        raise ValueError("sequence manifest has ambiguous target-system IDs")
+
+    scores = pd.read_parquet(protein_scores)
+    score_identity_columns = [
+        "query_system",
+        "query_ligand_id",
+        "target_system",
+        "protein_mapping",
+        "protein_mapper",
+        "source",
+    ]
+    score_pair_columns = [
+        "query_system",
+        "query_ligand_id",
+        "target_system",
+    ]
+    pocket = scores.loc[
+        scores["metric"].astype(str).eq("pocket_fident"),
+        [
+            *score_identity_columns,
+            "similarity",
+        ],
+    ].copy()
+    pli = scores.loc[
+        scores["metric"].astype(str).eq("pli_fident"),
+        [*score_pair_columns, "similarity"],
+    ].rename(columns={"similarity": "pli_fident"})
+    if pli.duplicated(score_pair_columns).any():
+        raise ValueError("protein scores contain duplicate PLI identity rows")
+    pocket = pocket.merge(
+        pli,
+        on=score_pair_columns,
+        how="left",
+        validate="one_to_one",
+    )
+    pocket = pocket.merge(
+        target_map,
+        on="target_system",
+        how="left",
+        validate="many_to_one",
+    )
+    if pocket["sequence_id"].isna().any():
+        missing = pocket.loc[pocket["sequence_id"].isna(), "target_system"].unique()
+        raise ValueError(f"protein scores reference unknown sequences: {missing[:10]}")
+
+    chemistry_columns = [
+        "system_id",
+        "ligand_id",
+        "ligand_ccd_code",
+        "ligand_unique_ccd_code",
+        "ligand_smiles",
+    ]
+    scored_pairs = (
+        pocket[["query_system", "query_ligand_id"]]
+        .drop_duplicates()
+        .rename(
+            columns={
+                "query_system": "system_id",
+                "query_ligand_id": "ligand_id",
+            }
+        )
+    )
+    scored_system_ids = scored_pairs["system_id"].astype(str).drop_duplicates().tolist()
+    chemistry = (
+        pd.read_parquet(
+            annotation_table,
+            columns=chemistry_columns,
+            filters=[("system_id", "in", scored_system_ids)],
+        ).drop_duplicates()
+        if scored_system_ids
+        else pd.DataFrame(columns=chemistry_columns)
+    )
+    chemistry = chemistry.merge(
+        scored_pairs,
+        on=["system_id", "ligand_id"],
+        how="inner",
+        validate="many_to_one",
+    )
+    if chemistry.duplicated(["system_id", "ligand_id"]).any():
+        raise ValueError("release annotation has conflicting ligand chemistry rows")
+    pocket = pocket.merge(
+        chemistry,
+        left_on=["query_system", "query_ligand_id"],
+        right_on=["system_id", "ligand_id"],
+        how="left",
+        validate="many_to_one",
+        indicator="_chemistry_merge",
+    )
+    missing_chemistry = pocket["_chemistry_merge"].ne("both")
+    if missing_chemistry.any():
+        missing = pocket.loc[
+            missing_chemistry, ["query_system", "query_ligand_id"]
+        ].drop_duplicates()
+        raise ValueError(
+            "release annotation has no row for scored PLINDER ligands: "
+            f"{missing.head(10).to_dict('records')}"
+        )
+    pocket["plinder_pdb_id"] = (
+        pocket["query_system"].astype(str).str.split("__", n=1).str[0]
+    )
+    pocket = pocket.rename(
+        columns={
+            "query_system": "plinder_system_id",
+            "query_ligand_id": "plinder_ligand_id",
+            "similarity": "pocket_fident",
+            "ligand_ccd_code": "plinder_ligand_ccd_code",
+            "ligand_unique_ccd_code": "plinder_ligand_unique_ccd_code",
+            "ligand_smiles": "plinder_ligand_smiles",
+        }
+    ).drop(columns=["system_id", "ligand_id", "target_system", "_chemistry_merge"])
+    link_columns = [
+        "sequence_id",
+        "sequence_length",
+        "plinder_pdb_id",
+        "plinder_system_id",
+        "plinder_ligand_id",
+        "pocket_fident",
+        "pli_fident",
+        "protein_mapping",
+        "protein_mapper",
+        "source",
+        "plinder_ligand_ccd_code",
+        "plinder_ligand_unique_ccd_code",
+        "plinder_ligand_smiles",
+    ]
+    pocket = pocket[link_columns].sort_values(
+        ["sequence_id", "pocket_fident", "plinder_pdb_id", "plinder_ligand_id"],
+        ascending=[True, False, True, True],
+        ignore_index=True,
+    )
+    output_path = Path(output_path)
+    best_output_path = Path(best_output_path)
+    output_path.parent.mkdir(exist_ok=True, parents=True)
+    pocket.to_parquet(output_path, index=False, compression="zstd")
+
+    best_hits = pocket.drop_duplicates("sequence_id", keep="first")
+    best = manifest[["sequence_id", "sequence_length"]].merge(
+        best_hits.drop(columns="sequence_length"),
+        on="sequence_id",
+        how="left",
+        validate="one_to_one",
+    )
+    best = best[link_columns]
+    best.to_parquet(best_output_path, index=False, compression="zstd")
+    return output_path, best_output_path
+
+
+def add_sequence_ids_to_aligned_pocket_residues(
+    aligned_pocket_residues: Path,
+    *,
+    chain_manifest: Path,
+) -> Path:
+    """Add original FASTA identifiers to sequence-query residue mappings."""
+    path = Path(aligned_pocket_residues)
+    residues = pd.read_parquet(path)
+    identifiers = pd.read_parquet(
+        chain_manifest,
+        columns=["structure_id", "sequence_id"],
+    ).drop_duplicates()
+    if identifiers.duplicated("structure_id").any():
+        raise ValueError("sequence manifest has ambiguous structure IDs")
+    residues = residues.merge(
+        identifiers,
+        left_on="custom_structure_id",
+        right_on="structure_id",
+        how="left",
+        validate="many_to_one",
+    ).drop(columns="structure_id")
+    if not residues.empty and residues["sequence_id"].isna().any():
+        missing = residues.loc[
+            residues["sequence_id"].isna(), "custom_structure_id"
+        ].unique()
+        raise ValueError(
+            f"residue mappings reference unknown sequences: {missing[:10]}"
+        )
+    leading = ["sequence_id"]
+    residues = residues[
+        leading + [column for column in residues if column not in leading]
+    ]
+    temporary = path.with_suffix(".tmp.parquet")
+    residues.to_parquet(temporary, index=False, compression="zstd")
+    temporary.replace(path)
+    return path
+
+
+def score_custom_sequence_file(
+    sequence_fasta: Path,
+    *,
+    work_dir: Path,
+    scratch_dir: Path | None = None,
+    data_dir: Path | None = None,
+    search_config: CustomProteinSearchConfig | None = None,
+    backends: Iterable[str] = SEQUENCE_SEARCH_BACKENDS,
+    plinder_entry_ids: Iterable[str] | None = None,
+    threads: int = 1,
+    store_aligned_pocket_residues: bool = False,
+) -> CustomSequenceScoringResult:
+    """Search protein sequences and score PLINDER ligand-pocket identity.
+
+    ``plinder_entry_ids`` builds a small MMseqs target from the scoreable
+    receptor and interface chains in the selected release entries instead of
+    fetching the complete search database. This bounded mode currently requires
+    ``backends=("mmseqs",)``.
+    """
+    selected_backends = tuple(dict.fromkeys(backends))
+    if not selected_backends:
+        raise ValueError("at least one sequence search backend is required")
+    unsupported = sorted(set(selected_backends).difference(SEQUENCE_SEARCH_BACKENDS))
+    if unsupported:
+        raise ValueError(
+            f"unsupported sequence search backends: {unsupported}; "
+            f"expected a subset of {SEQUENCE_SEARCH_BACKENDS}"
+        )
+    work_dir = Path(work_dir)
+    work_dir.mkdir(exist_ok=True, parents=True)
+    selected_plinder_entries = _plinder_entry_subset(plinder_entry_ids)
+    query_inputs = write_custom_sequence_query_files(
+        Path(sequence_fasta),
+        work_dir=work_dir,
+    )
+    query_databases = create_custom_query_databases(
+        query_inputs,
+        work_dir=work_dir,
+        backends=selected_backends,
+        threads=threads,
+    )
+    assets = _resolve_workflow_assets(
+        data_dir=data_dir,
+        backends=selected_backends,
+        plinder_entry_ids=selected_plinder_entries,
+        work_dir=work_dir,
+        threads=threads,
+    )
+    protein_hits = run_custom_protein_searches(
+        query_databases=query_databases,
+        assets=assets,
+        output_dir=work_dir / "protein_hits",
+        scratch_dir=(
+            Path(scratch_dir) if scratch_dir is not None else work_dir / "scratch"
+        ),
+        config=search_config,
+        backends=selected_backends,
+        threads=threads,
+    )
+    manifest = pd.read_parquet(query_inputs.chain_manifest)
+    entries_by_structure = {
+        str(structure_id): _SequenceEntry(pdb_id=str(structure_id))
+        for structure_id in manifest["structure_id"]
+    }
+    protein_score_alignments = prepare_custom_protein_score_alignments(
+        protein_hits,
+        entries_by_structure=entries_by_structure,
+        output_dir=work_dir / "protein_score_alignments",
+    )
+    protein_score_path = work_dir / "protein_scores.parquet"
+    calculate_custom_protein_similarity_scores(
+        protein_score_alignments,
+        assets=assets,
+        work_dir=work_dir / "protein_score_work",
+        output_path=protein_score_path,
+    )
+    aligned_pocket_residue_path = (
+        work_dir / "aligned_pocket_residues.parquet"
+        if store_aligned_pocket_residues
+        else None
+    )
+    if aligned_pocket_residue_path is not None:
+        write_custom_aligned_pocket_residues(
+            protein_score_alignments,
+            protein_scores=protein_score_path,
+            assets=assets,
+            output_path=aligned_pocket_residue_path,
+        )
+        add_sequence_ids_to_aligned_pocket_residues(
+            aligned_pocket_residue_path,
+            chain_manifest=query_inputs.chain_manifest,
+        )
+    sequence_links, best_sequence_links = write_custom_sequence_link_tables(
+        protein_scores=protein_score_path,
+        chain_manifest=query_inputs.chain_manifest,
+        annotation_table=assets.annotation_table,
+        output_path=work_dir / "sequence_links.parquet",
+        best_output_path=work_dir / "best_sequence_links.parquet",
+    )
+    return CustomSequenceScoringResult(
+        query_inputs=query_inputs,
+        query_databases=query_databases,
+        protein_hits=protein_hits,
+        protein_score_alignments=protein_score_alignments,
+        protein_scores=protein_score_path,
+        aligned_pocket_residues=aligned_pocket_residue_path,
+        sequence_links=sequence_links,
+        best_sequence_links=best_sequence_links,
+    )
 
 
 def calculate_custom_similarity_scores(
@@ -1622,6 +2742,7 @@ def calculate_custom_similarity_scores(
             data_dir=data_dir,
         ),
         shape_score_threads=shape_score_threads,
+        include_pli_fident=True,
     )
     selected_systems = (
         set(map(str, target_system_ids)) if target_system_ids is not None else None
@@ -1643,6 +2764,7 @@ def calculate_custom_similarity_scores(
             source_to_aln_file=source_to_alignment,
             target_system_ids=selected_systems,
             target_ligand_ids=selected_ligands,
+            include_holo_protein_scores=True,
         )
         if frame is not None and not frame.empty:
             frames.append(frame)
@@ -1706,12 +2828,9 @@ def calculate_custom_interface_similarity_scores(
         if missing:
             raise KeyError(f"unknown target interface system IDs: {sorted(missing)}")
         target_interfaces = {
-            interface_id: target_interfaces[interface_id]
-            for interface_id in selected
+            interface_id: target_interfaces[interface_id] for interface_id in selected
         }
-    alignment_frames = [
-        pd.read_parquet(path) for path in score_alignments.values()
-    ]
+    alignment_frames = [pd.read_parquet(path) for path in score_alignments.values()]
     alignments = (
         pd.concat(alignment_frames, ignore_index=True)
         if alignment_frames
@@ -1739,14 +2858,16 @@ def score_custom_cif_files(
     assembly_ids: Iterable[str] | None = None,
     ligand_smiles_dict: Mapping[str, str] | None = None,
     ligand_ccd_code_dict: Mapping[str, str] | None = None,
-    include_ligands: bool = True,
-    include_interfaces: bool = True,
+    include_ligands: bool | None = True,
+    include_interfaces: bool | None = True,
     include_shape: bool = True,
     interface_annotate_prodigy: bool = True,
     search_config: CustomProteinSearchConfig | None = None,
-    backends: Iterable[str] = SEARCH_BACKENDS,
+    backends: Iterable[str] = CIF_SEARCH_BACKENDS,
+    plinder_entry_ids: Iterable[str] | None = None,
     threads: int = 1,
     shape_score_threads: int = 1,
+    store_aligned_pocket_residues: bool = False,
 ) -> CustomScoringResult:
     """Run custom-CIF annotation, protein search, and PLINDER scoring.
 
@@ -1757,14 +2878,24 @@ def score_custom_cif_files(
     pocket match, and each required archive shard is read at most once.
 
     The returned object points to the written custom annotation tables,
-    backend hit tables, compact score alignments, and the final ligand and/or
-    interface score parquet files under ``work_dir``.
+    backend hit tables, compact score alignments, and the final protein,
+    ligand, and/or interface score parquet files under ``work_dir``. Protein
+    scores use each PLINDER ligand pocket as the directed query and each
+    custom protein chain as a ligand-free target, so ``include_ligands=False``
+    still yields protein metrics and ``pocket_fident``. Passing ``None`` for
+    ligand or interface inclusion annotates that feature and emits its score
+    table only when the custom structures contain a proper ligand or protein
+    interface, respectively. ``plinder_entry_ids`` builds a small MMseqs target
+    from scoreable receptor and interface chains in selected release entries
+    rather than fetching the complete search database; this bounded mode
+    currently requires ``backends=("mmseqs",)``.
     """
     sources = tuple(Path(path) for path in cif_files)
     if not sources:
         raise ValueError("at least one custom mmCIF is required")
     work_dir = Path(work_dir)
     work_dir.mkdir(exist_ok=True, parents=True)
+    selected_plinder_entries = _plinder_entry_subset(plinder_entry_ids)
     selected_backends = tuple(dict.fromkeys(backends))
     if not selected_backends:
         raise ValueError("at least one custom search backend is required")
@@ -1773,6 +2904,8 @@ def score_custom_cif_files(
         if assembly_ids is not None and not isinstance(assembly_ids, str)
         else assembly_ids
     )
+    annotate_ligands = include_ligands is not False
+    annotate_interfaces = include_interfaces is not False
     annotations = annotate_custom_cif_files(
         sources,
         work_dir=work_dir,
@@ -1780,8 +2913,8 @@ def score_custom_cif_files(
         assembly_ids=requested_assemblies,
         ligand_smiles_dict=ligand_smiles_dict,
         ligand_ccd_code_dict=ligand_ccd_code_dict,
-        include_ligands=include_ligands,
-        include_interfaces=include_interfaces,
+        include_ligands=annotate_ligands,
+        include_interfaces=annotate_interfaces,
         interface_annotate_prodigy=interface_annotate_prodigy,
         data_dir=data_dir,
     )
@@ -1797,9 +2930,12 @@ def score_custom_cif_files(
         backends=selected_backends,
         threads=threads,
     )
-    assets = resolve_custom_scoring_assets(
+    assets = _resolve_workflow_assets(
         data_dir=data_dir,
         backends=selected_backends,
+        plinder_entry_ids=selected_plinder_entries,
+        work_dir=work_dir,
+        threads=threads,
     )
     protein_hits = run_custom_protein_searches(
         query_databases=query_databases,
@@ -1817,7 +2953,40 @@ def score_custom_cif_files(
         entries_by_structure=annotations.entries_by_structure,
         output_dir=work_dir / "score_alignments",
     )
-    ligand_score_path = work_dir / "ligand_scores.parquet" if include_ligands else None
+    protein_score_alignments = prepare_custom_protein_score_alignments(
+        protein_hits,
+        entries_by_structure=annotations.entries_by_structure,
+        output_dir=work_dir / "protein_score_alignments",
+    )
+    protein_score_path = work_dir / "protein_scores.parquet"
+    calculate_custom_protein_similarity_scores(
+        protein_score_alignments,
+        assets=assets,
+        work_dir=work_dir / "protein_score_work",
+        output_path=protein_score_path,
+    )
+    aligned_pocket_residue_path = (
+        work_dir / "aligned_pocket_residues.parquet"
+        if store_aligned_pocket_residues
+        else None
+    )
+    if aligned_pocket_residue_path is not None:
+        write_custom_aligned_pocket_residues(
+            protein_score_alignments,
+            protein_scores=protein_score_path,
+            assets=assets,
+            output_path=aligned_pocket_residue_path,
+        )
+    has_proper_ligands = any(
+        ligand.is_proper
+        for entry in annotations.entries_by_structure.values()
+        for system in entry.systems.values()
+        for ligand in system.ligands.values()
+    )
+    score_ligands = include_ligands is True or (
+        include_ligands is None and has_proper_ligands
+    )
+    ligand_score_path = work_dir / "ligand_scores.parquet" if score_ligands else None
     if ligand_score_path is not None:
         calculate_custom_similarity_scores(
             score_alignments,
@@ -1829,8 +2998,14 @@ def score_custom_cif_files(
             data_dir=data_dir,
             output_path=ligand_score_path,
         )
+    has_interfaces = any(
+        entry.interfaces for entry in annotations.entries_by_structure.values()
+    )
+    score_interfaces = include_interfaces is True or (
+        include_interfaces is None and has_interfaces
+    )
     interface_score_path = (
-        work_dir / "interface_scores.parquet" if include_interfaces else None
+        work_dir / "interface_scores.parquet" if score_interfaces else None
     )
     if interface_score_path is not None:
         calculate_custom_interface_similarity_scores(
@@ -1845,6 +3020,9 @@ def score_custom_cif_files(
         query_databases=query_databases,
         protein_hits=protein_hits,
         score_alignments=score_alignments,
+        protein_score_alignments=protein_score_alignments,
+        protein_scores=protein_score_path,
+        aligned_pocket_residues=aligned_pocket_residue_path,
         ligand_scores=ligand_score_path,
         interface_scores=interface_score_path,
     )

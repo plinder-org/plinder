@@ -3,6 +3,7 @@
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pandas as pd
 import pyarrow as pa
@@ -53,6 +54,9 @@ def _write_fake_sidecars(
             "chain_instance": ["1.A"],
             "chain_asym_id": ["A"],
             "chain_role": ["receptor"],
+            "chain_num_contacting_ions": [0],
+            "chain_num_contacting_artifacts": [0],
+            "chain_num_contacting_other_ligands": [0],
         }
     ).to_parquet(entry_dir / "entry_biounit_chains.parquet", index=False)
     pd.DataFrame({"entry_pdb_id": [pdb_id]}).to_parquet(
@@ -80,6 +84,47 @@ def _write_fake_sidecars(
     metadata = dict(table.schema.metadata or {})
     metadata[MIN_INTERFACE_RESIDUES_METADATA_KEY] = b"7"
     pq.write_table(table.replace_schema_metadata(metadata), interface_path)
+
+
+def test_empty_annotation_writes_shared_sidecars(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from plinder.data import get_system_annotations as annotation_module
+
+    validation_calls: list[tuple[Path, Path]] = []
+    entry = SimpleNamespace(
+        pdb_id="8grn",
+        systems={},
+        interfaces=[],
+        set_validation=lambda validation, cif: validation_calls.append(
+            (validation, cif)
+        ),
+        metadata_to_df=lambda: pd.DataFrame({"entry_pdb_id": ["8grn"]}),
+    )
+    monkeypatch.setattr(
+        annotation_module.Entry,
+        "from_cif_file",
+        lambda *_args, **_kwargs: entry,
+    )
+    annotator = annotation_module.GetPlinderAnnotation(
+        tmp_path / "8grn.cif",
+        tmp_path / "8grn_validation.xml.gz",
+        save_folder=tmp_path / "raw_entries",
+    )
+    writes: list[tuple[Path, int, bool]] = []
+    monkeypatch.setattr(
+        annotator,
+        "_write_shared_sidecars",
+        lambda path, table, *, replace_interfaces: writes.append(
+            (path, table.num_rows, replace_interfaces)
+        ),
+    )
+
+    assert annotator.annotate() is None
+    assert validation_calls == [
+        (tmp_path / "8grn_validation.xml.gz", tmp_path / "8grn.cif")
+    ]
+    assert writes == [(tmp_path / "raw_entries/8grn", 0, True)]
 
 
 def test_resolve_entry_paths_uses_managed_archive_layout(tmp_path: Path) -> None:
@@ -238,7 +283,7 @@ def test_ingest_one_pdb_writes_entry_outputs_and_metrics(
     assert (output_root / "ligands" / "8grn.parquet").is_file()
 
 
-def test_ingest_one_pdb_does_not_materialize_entries_without_systems(
+def test_ingest_one_pdb_retains_sidecars_for_entries_without_systems(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     output_root = tmp_path / "output"
@@ -262,9 +307,11 @@ def test_ingest_one_pdb_does_not_materialize_entries_without_systems(
             self.save_folder = save_folder
 
         def annotate(self) -> None:
-            stale_dir = self.save_folder / "8grn" / "ligand_files"
+            entry_dir = self.save_folder / "8grn"
+            stale_dir = entry_dir / "ligand_files"
             stale_dir.mkdir(parents=True)
             (stale_dir / "A.sdf").touch()
+            _write_fake_sidecars(entry_dir, "8grn")
             return None
 
     monkeypatch.setattr(ingest, "_get_annotation_class", lambda: EmptyAnnotation)
@@ -283,7 +330,7 @@ def test_ingest_one_pdb_does_not_materialize_entries_without_systems(
     )
 
     metrics = json.loads(metrics_path.read_text())
-    assert metrics["status"] == "skipped_no_systems"
+    assert metrics["status"] == "complete"
     assert metrics["counts"] == {
         "annotation_rows": 0,
         "interface_rows": 0,
@@ -294,12 +341,17 @@ def test_ingest_one_pdb_does_not_materialize_entries_without_systems(
     assert [stage["stage"] for stage in metrics["timings"]] == ["annotate_entry"]
     assert metrics["outputs"] == {
         "entry_parquet": None,
-        "entry_directory": None,
+        "entry_directory": str(output_root / "raw_entries" / "gr" / "8grn"),
         "ligand_parquet": None,
     }
     assert not entry_parquet.exists()
     assert not ligand_parquet.exists()
-    assert not (output_root / "raw_entries" / "gr" / "8grn").exists()
+    entry_dir = output_root / "raw_entries" / "gr" / "8grn"
+    assert entry_dir.is_dir()
+    assert not (entry_dir / "ligand_files").exists()
+    assert (entry_dir / "entry_chains.parquet").is_file()
+    assert (entry_dir / "entry_biounit_chains.parquet").is_file()
+    assert completed_entry_metrics(output_root, "8grn") == metrics_path
 
 
 def test_ingest_one_pdb_materializes_interface_only_entries(
@@ -936,6 +988,14 @@ def test_completed_entry_metrics_invalidates_interface_cutoff_changes(
         )
         == metrics_path
     )
+
+    biounit_path = entry_directory / "entry_biounit_chains.parquet"
+    biounits = pd.read_parquet(biounit_path)
+    biounits.loc[0, "chain_num_contacting_ions"] = None
+    biounits.to_parquet(biounit_path, index=False)
+    assert completed_entry_metrics(output_root, "1abc") is None
+    _write_fake_sidecars(entry_directory, "1abc")
+
     assert (
         completed_entry_metrics(
             output_root,
@@ -958,6 +1018,84 @@ def test_pre_interface_skip_is_not_considered_complete(tmp_path: Path) -> None:
     entry_metrics.write_text(json.dumps({"status": "skipped_no_systems"}))
 
     assert completed_entry_metrics(output_root, "1abc") is None
+
+
+def test_ligand_skip_requires_recorded_biounit_contacts(tmp_path: Path) -> None:
+    output_root = tmp_path / "output"
+    entry_directory = output_root / "raw_entries/ab/1abc"
+    entry_directory.mkdir(parents=True)
+    _write_fake_sidecars(entry_directory, "1abc")
+    biounit_path = entry_directory / "entry_biounit_chains.parquet"
+    contact_columns = [
+        "chain_num_contacting_ions",
+        "chain_num_contacting_artifacts",
+        "chain_num_contacting_other_ligands",
+    ]
+    pd.read_parquet(biounit_path).drop(columns=contact_columns).to_parquet(
+        biounit_path, index=False
+    )
+    metrics_path = output_root / "metrics/ab/ingest-one-1abc.json"
+    metrics_path.parent.mkdir(parents=True)
+    metrics_path.write_text(
+        json.dumps(
+            {
+                "status": "skipped_no_ligands",
+                "mode": "ligands",
+                "outputs": {"entry_directory": str(entry_directory)},
+            }
+        )
+    )
+
+    assert (
+        completed_entry_metrics(
+            output_root,
+            "1abc",
+            expected_ingest_mode="ligands",
+        )
+        is None
+    )
+
+    _write_fake_sidecars(entry_directory, "1abc")
+    biounits = pd.read_parquet(biounit_path)
+    biounits.loc[0, "chain_num_contacting_other_ligands"] = None
+    biounits.to_parquet(biounit_path, index=False)
+    assert (
+        completed_entry_metrics(
+            output_root,
+            "1abc",
+            expected_ingest_mode="ligands",
+        )
+        is None
+    )
+
+    _write_fake_sidecars(entry_directory, "1abc")
+    assert (
+        completed_entry_metrics(
+            output_root,
+            "1abc",
+            expected_ingest_mode="ligands",
+        )
+        == metrics_path
+    )
+
+    pd.DataFrame(
+        columns=[
+            "entry_pdb_id",
+            "biounit_id",
+            "chain_instance",
+            "chain_asym_id",
+            "chain_role",
+            *contact_columns,
+        ]
+    ).to_parquet(biounit_path, index=False)
+    assert (
+        completed_entry_metrics(
+            output_root,
+            "1abc",
+            expected_ingest_mode="ligands",
+        )
+        == metrics_path
+    )
 
 
 def test_discover_entries_tracks_optional_validation(tmp_path: Path) -> None:

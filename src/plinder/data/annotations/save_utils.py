@@ -19,19 +19,13 @@ WaterSelection = Literal["none", "interacting", "all"]
 
 
 def _output_asym_ids(chain_ids: list[str]) -> dict[str, str]:
-    """Return unique alphanumeric mmCIF asym IDs for internal chain IDs."""
+    """Return unique mmCIF asym IDs while preserving assembly chain IDs."""
     output: dict[str, str] = {}
     used: set[str] = set()
     for chain_id in chain_ids:
         candidate = chain_id
-        instance_asym = chain_id.split(".", maxsplit=1)
-        if (
-            re.fullmatch(r"[A-Za-z0-9]+", candidate) is None
-            and len(instance_asym) == 2
-            and all(re.fullmatch(r"[A-Za-z0-9]+", part) for part in instance_asym)
-        ):
-            candidate = f"{instance_asym[1]}{instance_asym[0]}"
-        if re.fullmatch(r"[A-Za-z0-9]+", candidate) is None or candidate in used:
+        supported = re.fullmatch(r"(?:[A-Za-z0-9]+|[0-9]+\.[A-Za-z0-9]+)", candidate)
+        if supported is None or candidate in used:
             candidate = "C" + chain_id.encode("utf-8").hex()
         suffix = 2
         base = candidate
@@ -246,9 +240,7 @@ def save_cif_file(
     ):
         source_polymer_metadata_ids = set(
             source_block["entity_poly"]["entity_id"].as_array(str)
-        ).intersection(
-            source_block["entity_poly_seq"]["entity_id"].as_array(str)
-        )
+        ).intersection(source_block["entity_poly_seq"]["entity_id"].as_array(str))
     for chain_id, sequence in protein_sequences.items():
         if chain_id not in chain_to_entity:
             raise ValueError(f"protein sequence refers to absent chain {chain_id!r}")
@@ -404,9 +396,7 @@ def save_cif_file(
                 struct_conn[seq_column] = pdbx.CIFColumn(
                     seq_id.data.array, mask=seq_mask
                 )
-    entity_poly = copy_source_rows(
-        "entity_poly", "entity_id", polymer_entity_ids
-    )
+    entity_poly = copy_source_rows("entity_poly", "entity_id", polymer_entity_ids)
     entity_poly_seq = copy_source_rows(
         "entity_poly_seq", "entity_id", polymer_entity_ids
     )
@@ -436,9 +426,7 @@ def save_cif_file(
             chain_id = entity_chains[0]
             chain = atoms[atoms.chain_id == chain_id]
             protein_sequence = protein_sequences.get(chain_id)
-            residue_starts = struc.get_residue_starts(
-                chain, add_exclusive_stop=False
-            )
+            residue_starts = struc.get_residue_starts(chain, add_exclusive_stop=False)
             residue_names = chain.res_name[residue_starts].astype(str).tolist()
             if protein_sequence is None:
                 if not np.any(struc.filter_amino_acids(chain)):
@@ -452,17 +440,13 @@ def save_cif_file(
                     THREE_TO_ONE.get(residue_name, "X")
                     for residue_name in residue_names
                 )
-            monomers = [
-                ONE_TO_THREE.get(symbol, "UNK") for symbol in protein_sequence
-            ]
+            monomers = [ONE_TO_THREE.get(symbol, "UNK") for symbol in protein_sequence]
             for residue_id, residue_name in zip(
                 chain.res_id[residue_starts], residue_names
             ):
                 if 1 <= residue_id <= len(monomers):
                     monomers[int(residue_id) - 1] = residue_name
-            poly_rows.append(
-                (entity_id, protein_sequence, ",".join(entity_chains))
-            )
+            poly_rows.append((entity_id, protein_sequence, ",".join(entity_chains)))
             sequence_rows.extend(
                 (entity_id, monomer, index, "n")
                 for index, monomer in enumerate(monomers, start=1)
@@ -472,9 +456,7 @@ def save_cif_file(
                 "entity_id": [row[0] for row in poly_rows],
                 "type": ["polypeptide(L)"] * len(poly_rows),
                 "nstd_linkage": ["no"] * len(poly_rows),
-                "nstd_monomer": [
-                    "yes" if "X" in row[1] else "no" for row in poly_rows
-                ],
+                "nstd_monomer": ["yes" if "X" in row[1] else "no" for row in poly_rows],
                 "pdbx_seq_one_letter_code": [row[1] for row in poly_rows],
                 "pdbx_seq_one_letter_code_can": [row[1] for row in poly_rows],
                 "pdbx_strand_id": [row[2] for row in poly_rows],
@@ -515,9 +497,7 @@ def save_cif_file(
     component_ids = set(atoms.res_name.astype(str))
     polymer_component_ids: set[str] = set()
     if "entity_poly_seq" in block:
-        polymer_component_ids.update(
-            block["entity_poly_seq"]["mon_id"].as_array(str)
-        )
+        polymer_component_ids.update(block["entity_poly_seq"]["mon_id"].as_array(str))
         component_ids.update(polymer_component_ids)
     source_component_types: dict[str, str] = {}
     if source_block is not None and "chem_comp" in source_block:
@@ -561,6 +541,146 @@ def save_cif_file(
         )
         block["struct_conn_type"] = pdbx.CIFCategory({"id": connection_types})
     cif_file.write(str(output_cif_file))
+
+
+def save_reconstructed_chain(
+    source_mmcif: Path | str,
+    *,
+    assembly_id: str,
+    chain_instance: str,
+    source_asym_id: str,
+    output_cif: Path | str,
+    structure_id: str,
+    superpose_to: struc.AtomArray | None = None,
+    overwrite: bool = False,
+) -> Path:
+    """Write one biological-assembly chain as a self-contained mmCIF.
+
+    If ``superpose_to`` is provided, the reconstructed chain is fitted to that
+    protein chain using sequence-matched C-alpha atoms before it is written.
+    """
+    from plinder.data.annotations.cif_utils import (
+        build_biounit,
+        get_label_asym_sequences,
+        read_mmcif_container,
+        read_mmcif_file,
+    )
+
+    if not assembly_id:
+        raise ValueError("assembly_id must not be empty")
+    if not chain_instance:
+        raise ValueError("chain_instance must not be empty")
+    if not source_asym_id:
+        raise ValueError("source_asym_id must not be empty")
+    output_cif = Path(output_cif)
+    if output_cif.exists() and not overwrite:
+        raise FileExistsError(
+            f"Refusing to overwrite reconstruction output: {output_cif}"
+        )
+
+    biounit = build_biounit(read_mmcif_file(source_mmcif), assembly_id)
+    chain_mask = biounit.chain_id.astype(str) == chain_instance
+    if not np.any(chain_mask):
+        available = sorted(set(biounit.chain_id.astype(str)))
+        raise ValueError(
+            f"Assembly {assembly_id!r} has no chain {chain_instance!r}; "
+            f"available chains are {available}"
+        )
+
+    source_block = read_mmcif_container(Path(source_mmcif))
+    source_sequences = get_label_asym_sequences(source_block)
+    protein_sequences = {}
+    if source_asym_id in source_sequences:
+        protein_sequences[chain_instance] = source_sequences[source_asym_id]
+    chain_atoms = biounit[chain_mask]
+    if superpose_to is not None:
+        from plinder.core.structure.superimpose import superimpose_chain
+
+        chain_atoms, _, _, _ = superimpose_chain(superpose_to, chain_atoms)
+    output_cif.parent.mkdir(parents=True, exist_ok=True)
+    save_cif_file(
+        chain_atoms,
+        structure_id,
+        output_cif,
+        source_block=source_block,
+        source_asym_ids={chain_instance: source_asym_id},
+        protein_sequences=protein_sequences,
+    )
+    return output_cif
+
+
+def reconstruct_interface(
+    source_mmcif: Path | str,
+    annotation: AnnotationRow,
+) -> struc.AtomArray:
+    """Rebuild one annotated protein-interface chain pair from a source mmCIF."""
+    from plinder.data.annotations.cif_utils import build_biounit, read_mmcif_file
+
+    assembly_id = str(annotation.get("system_biounit_id", ""))
+    chain_1 = str(annotation.get("interface_chain_1", ""))
+    chain_2 = str(annotation.get("interface_chain_2", ""))
+    if not assembly_id:
+        raise ValueError("interface annotation is missing system_biounit_id")
+    if not chain_1 or not chain_2:
+        raise ValueError("interface annotation is missing one or both chains")
+    if chain_1 == chain_2:
+        raise ValueError("an interface requires two distinct chain instances")
+
+    biounit = build_biounit(read_mmcif_file(source_mmcif), assembly_id)
+    selected_chains = {chain_1, chain_2}
+    _require_chains(biounit, selected_chains, view_name="interface")
+    return biounit[np.isin(biounit.chain_id, list(selected_chains))]
+
+
+def save_reconstructed_interface(
+    source_mmcif: Path | str,
+    annotation: AnnotationRow,
+    *,
+    output_cif: Path | str,
+    overwrite: bool = False,
+    reconstructed: struc.AtomArray | None = None,
+) -> Path:
+    """Write one annotated biological-assembly interface as a valid mmCIF."""
+    from plinder.data.annotations.cif_utils import (
+        get_label_asym_sequences,
+        read_mmcif_container,
+    )
+
+    output_cif = Path(output_cif)
+    if output_cif.exists() and not overwrite:
+        raise FileExistsError(
+            f"Refusing to overwrite reconstruction output: {output_cif}"
+        )
+    atoms = (
+        reconstruct_interface(source_mmcif, annotation)
+        if reconstructed is None
+        else reconstructed
+    )
+    chain_ids = [
+        str(annotation.get("interface_chain_1", "")),
+        str(annotation.get("interface_chain_2", "")),
+    ]
+    source_asym_ids = {
+        chain_id: chain_id.split(".", maxsplit=1)[-1] for chain_id in chain_ids
+    }
+    source_block = read_mmcif_container(Path(source_mmcif))
+    source_sequences = get_label_asym_sequences(source_block)
+    protein_sequences = {
+        chain_id: source_sequences[source_asym_id]
+        for chain_id, source_asym_id in source_asym_ids.items()
+        if source_asym_id in source_sequences
+    }
+    structure_id = str(annotation.get("system_id", "interface"))
+    output_cif.parent.mkdir(parents=True, exist_ok=True)
+    save_cif_file(
+        atoms,
+        structure_id,
+        output_cif,
+        source_block=source_block,
+        source_asym_ids=source_asym_ids,
+        protein_sequences=protein_sequences,
+    )
+    return output_cif
 
 
 def _string_list(value: Any) -> list[str]:
@@ -920,6 +1040,9 @@ def save_reconstructed_system(
             biounit_chains,
             options,
         ).receptor
+        output_chain_ids = _output_asym_ids(
+            list(dict.fromkeys(reconstructed.receptor.chain_id.astype(str)))
+        )
         missing_sequences = sorted(
             chain_id
             for chain_id in receptor_chain_ids
@@ -933,5 +1056,7 @@ def save_reconstructed_system(
         with requested["sequences_fasta"].open("w") as fasta:
             for chain_id in sorted(receptor_chain_ids):
                 asym_id = chain_id.split(".", maxsplit=1)[-1]
-                fasta.write(f">{chain_id}\n{asym_to_sequence[asym_id]}\n")
+                fasta.write(
+                    f">{output_chain_ids[chain_id]}\n" f"{asym_to_sequence[asym_id]}\n"
+                )
     return requested

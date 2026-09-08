@@ -209,9 +209,9 @@ class DataConfig:
     Attributes
     ----------
     plinder_release : str
-        the plinder dataset version
-    plinder_iteration : str
-        the plinder dataset iteration
+        the ingest month for the PLINDER release, formatted as ``YYYY-MM``
+    plinder_release_number : str
+        the numbered release for that ingest month
     plinder_mount : str, default="~/.local/share/plinder"
         the resting place for the plinder dataset
     plinder_bucket : str, default="plinder"
@@ -223,10 +223,10 @@ class DataConfig:
     """
 
     plinder_release: str = field(
-        default_factory=partial(_getenv_default, "PLINDER_RELEASE", "2024-06")
+        default_factory=partial(_getenv_default, "PLINDER_RELEASE", "2026-07")
     )
-    plinder_iteration: str = field(
-        default_factory=partial(_getenv_default, "PLINDER_ITERATION", "v2")
+    plinder_release_number: str = field(
+        default_factory=partial(_getenv_default, "PLINDER_RELEASE_NUMBER", "1")
     )
     plinder_mount: str = field(
         default_factory=partial(
@@ -239,43 +239,24 @@ class DataConfig:
     plinder_dir: str = field(init=False)
     plinder_remote: str = field(init=False)
 
-    ingest: str = "ingest"
-    alignments: str = "alignments"
-    search_databases: str = "search_databases"
-    validation: str = "validation"
     clusters: str = "clusters"
-    entries: str = "entries"
-    fingerprints: str = "fingerprints"
-    fingerprint_file: str = "ligands_per_system.parquet"
-    index: str = "index"
-    entry_chain_file: str = "entry_chains.parquet"
-    entry_biounit_chain_file: str = "entry_biounit_chains.parquet"
-    entry_source_file: str = "entry_sources.parquet"
-    alignment_chain_lookup_file: str = "alignment_chain_lookup.parquet"
-    interface_file: str = "interface_annotation_table.parquet"
-    ligand_archives: str = "ligand_archives"
-    ligand_scores: str = "ligand_scores"
-    ligands: str = "ligands"
-    links: str = "links"
-    linked_structures: str = "linked_structures"
-    mmp: str = "mmp"
     scores: str = "scores"
     source_mmcifs: str = "source_mmcifs"
-    splits: str = "splits"
-    split_file: str = "split.parquet"
-    systems: str = "systems"
-    index_file: str = "annotation_table.parquet"
     force_update: bool = False
 
     def __post_init__(self) -> None:
-        suffix = self.plinder_release
-        if self.plinder_iteration:
-            suffix = f"{self.plinder_release}/{self.plinder_iteration}"
+        suffix = self.plinder_release.strip("/")
+        release_number = str(self.plinder_release_number).strip("/")
+        if suffix and release_number:
+            suffix = f"{suffix}/{release_number}"
         if self.plinder_mount in ["/plinder", "/", ""]:
-            self.plinder_dir = f"{self.plinder_mount}/{suffix}"
+            root = Path(self.plinder_mount or "/")
         else:
-            self.plinder_dir = f"{self.plinder_mount}/{self.plinder_bucket}/{suffix}"
-        self.plinder_remote = f"gs://{self.plinder_bucket}/{suffix}"
+            root = Path(self.plinder_mount) / self.plinder_bucket
+        self.plinder_dir = (root / suffix).as_posix() if suffix else root.as_posix()
+        self.plinder_remote = f"gs://{self.plinder_bucket}"
+        if suffix:
+            self.plinder_remote += f"/{suffix}"
 
 
 @dataclass

@@ -47,11 +47,15 @@ def scoring_fixture(
 
     # Write the published-format index parquet so core.scores.entries.load_entry_views
     # (via core.scores.index.query_index) can read it back. Mirrors the layout
-    # the scoring pipeline expects: index/annotation_table.parquet + a splits
-    # parquet stub (load logic merges splits even though we don't filter on them).
+    # the scoring pipeline expects the ligand table, entry metadata, and a
+    # splits parquet stub (load logic merges splits even though we do not filter
+    # on them).
     rows = pd.concat([entry.to_df() for entry in entries.values()])
     (data_dir / "index").mkdir()
     rows.to_parquet(data_dir / "index" / "annotation_table.parquet", index=False)
+    pd.concat([entry.metadata_to_df() for entry in entries.values()]).to_parquet(
+        data_dir / "index" / "entry_metadata.parquet", index=False
+    )
     pd.concat([entry.chains_to_df() for entry in entries.values()]).to_parquet(
         data_dir / "index" / "entry_chains.parquet", index=False
     )
