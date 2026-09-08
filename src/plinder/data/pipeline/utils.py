@@ -529,14 +529,12 @@ def build_ligand_cluster_table(*, index: pd.DataFrame, data_dir: Path) -> pd.Dat
         for path in directed_cover_paths
     }
     invalid_set_cover_metrics = sorted(
-        metric
-        for metric, _ in set_cover_keys
-        if metric != "tanimoto_similarity_ecfp4_1024"
+        metric for metric, _ in set_cover_keys if not is_chemical_cluster_metric(metric)
     )
     invalid_directed_metrics = sorted(
         metric
         for metric, _ in directed_cover_keys
-        if metric == "tanimoto_similarity_ecfp4_1024"
+        if is_chemical_cluster_metric(metric)
     )
     if invalid_set_cover_metrics or invalid_directed_metrics:
         raise ValueError(

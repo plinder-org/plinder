@@ -2940,7 +2940,7 @@ def plan_clustering(
         [
             metric
             for metric in selected_metrics
-            if metric != "tanimoto_similarity_ecfp4_1024"
+            if not is_chemical_cluster_metric(metric)
         ]
     ) * len(selected_thresholds)
     return {
@@ -2985,7 +2985,7 @@ def summarize_clustering_artifacts(
     artifacts: list[tuple[str, int, str, bool, Path]] = []
     for metric in selected_metrics:
         for threshold in selected_thresholds:
-            if entity_type == "ligand" and metric == "tanimoto_similarity_ecfp4_1024":
+            if entity_type == "ligand" and is_chemical_cluster_metric(metric):
                 artifacts.append(
                     (
                         metric,
@@ -7343,14 +7343,11 @@ def main() -> None:
             metrics = [
                 metric
                 for metric in metrics
-                if args.entity_type == "ligand"
-                and metric == "tanimoto_similarity_ecfp4_1024"
+                if args.entity_type == "ligand" and is_chemical_cluster_metric(metric)
             ]
         else:
             metrics = [
-                metric
-                for metric in metrics
-                if metric != "tanimoto_similarity_ecfp4_1024"
+                metric for metric in metrics if not is_chemical_cluster_metric(metric)
             ]
         work = _cover_batch(
             metrics=metrics,

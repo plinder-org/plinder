@@ -3154,8 +3154,11 @@ def make_set_cover(
 ) -> Path:
     """Build an undirected greedy set cover on reciprocal-minimum edges."""
     started = time()
-    if entity_type != "ligand" or metric != "tanimoto_similarity_ecfp4_1024":
-        raise ValueError("undirected set cover is supported only for ligand Tanimoto")
+    if entity_type != "ligand" or not is_chemical_cluster_metric(metric):
+        raise ValueError(
+            "undirected set cover is supported only for ligand chemical "
+            "(fingerprint) metrics"
+        )
     if entity_type == "ligand" and metric in GATED_LIGAND_DIAGNOSTIC_METRICS:
         raise ValueError(
             f"{metric} is evaluated only for ligand pairs with positive pocket "

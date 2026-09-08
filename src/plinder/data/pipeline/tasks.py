@@ -4089,7 +4089,7 @@ def scatter_make_set_covers(
     values = [
         [(metric, threshold)]
         for metric in metrics
-        if entity_type == "ligand" and metric == "tanimoto_similarity_ecfp4_1024"
+        if entity_type == "ligand" and is_chemical_cluster_metric(metric)
         for threshold in thresholds
     ]
     if stop_on_cluster:
@@ -4123,7 +4123,7 @@ def scatter_make_directed_set_covers(
     values = [
         [(metric, threshold)]
         for metric in metrics
-        if metric != "tanimoto_similarity_ecfp4_1024"
+        if not is_chemical_cluster_metric(metric)
         for threshold in thresholds
     ]
     if stop_on_cluster:
@@ -4162,7 +4162,7 @@ def _reduce_component_metric(metric_index: int, metric: str) -> dict[str, Any]:
     if context is None:
         raise RuntimeError("component reduction worker context is not initialized")
     metric_started = time.time()
-    chemical = metric == "tanimoto_similarity_ecfp4_1024"
+    chemical = is_chemical_cluster_metric(metric)
     if chemical:
         manifests = [
             clusters.make_score_component_reduction(
@@ -4400,7 +4400,7 @@ def merge_component_reductions(
             index,
             len(metrics),
         )
-        if metric == "tanimoto_similarity_ecfp4_1024":
+        if is_chemical_cluster_metric(metric):
             clusters.merge_score_component_reductions(
                 data_dir=data_dir,
                 metric=metric,
