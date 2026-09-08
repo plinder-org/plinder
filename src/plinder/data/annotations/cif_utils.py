@@ -92,7 +92,10 @@ def _alphabetic_id(index: int) -> str:
 def _alphabetic_altloc_ids(
     cif_file: pdbx.CIFFile | pdbx.CIFBlock,
 ) -> Iterator[dict[str, str]]:
-    """Temporarily map non-alphabetic altloc IDs for Biotite filtering."""
+    """Temporarily map non-alphabetic altloc IDs for Biotite filtering.
+
+    Restored on exit; a no-op when all altloc IDs are already alphabetic.
+    """
     block = (
         cif_file if isinstance(cif_file, pdbx.CIFBlock) else list(cif_file.values())[0]
     )
@@ -314,7 +317,7 @@ def get_unit_cell_with_altloc(
     TypeError
         If loading the unit cell does not return an ``AtomArray``.
     """
-    with _alphabetic_altloc_ids(cif_file):
+    with _alphabetic_altloc_ids(cif_file), _branched_residue_numbering(cif_file):
         atoms = pdbx.get_unit_cell(
             cif_file,
             model=model,
@@ -825,17 +828,26 @@ def parse_struct_conn(
 # sum: ~0.8x the vdW sum is the start of the non-bonded range, so a longer
 # "bond" is more likely a van der Waals contact than covalent.
 _NONPHYSICAL_BOND_VDW_FRACTION = 0.8
+# RDKit's table covers every element (incl. Hg, U), unlike biotite's, so exotic
+# elements still get assessed rather than skipped.
+_PERIODIC_TABLE = Chem.GetPeriodicTable()
 
 
 def _max_bond_length(element1: str, element2: str) -> float:
     """Distance above which an element pair can't be bonded (0.8 x vdW sum, Å)."""
     try:
-        radii_sum = bt_info.vdw_radius_single(
-            element1.upper()
-        ) + bt_info.vdw_radius_single(element2.upper())
-    except Exception:
-        return float("inf")  # unknown element: never treat a bond as non-physical
-    return _NONPHYSICAL_BOND_VDW_FRACTION * radii_sum
+        # capitalize(): RDKit wants "Hg", biotite gives "HG".
+        radius1 = _PERIODIC_TABLE.GetRvdw(
+            _PERIODIC_TABLE.GetAtomicNumber(element1.capitalize())
+        )
+        radius2 = _PERIODIC_TABLE.GetRvdw(
+            _PERIODIC_TABLE.GetAtomicNumber(element2.capitalize())
+        )
+    except RuntimeError:
+        # Unrecognized element symbol (e.g. "X", "UNK"): can't assess, keep it.
+        return float("inf")
+    # float(): GetRvdw is untyped (Any), so cast at the boundary.
+    return _NONPHYSICAL_BOND_VDW_FRACTION * float(radius1 + radius2)
 
 
 def remove_nonphysical_bonds(atoms: "struc.AtomArray") -> None:
