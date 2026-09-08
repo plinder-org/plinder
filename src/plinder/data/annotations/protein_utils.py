@@ -599,7 +599,7 @@ class Chain(DocBaseModel):
         import biotite.structure as struc
         import biotite.structure.info as info
 
-        from plinder.data.annotations.cif_utils import unresolved_atoms_from_template
+        from plinder.core.structure.ccd_template import unresolved_atoms_from_template
 
         if auth_id is None or residue_author_ids is None:
             chain_auth_ids, author_residues_by_chain = get_atom_site_author_ids(block)

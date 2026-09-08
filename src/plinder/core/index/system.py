@@ -100,6 +100,7 @@ class PlinderSystem:
         system_id: str,
         prune: bool = True,
         skip_3d_confgen: bool = False,
+        complete_missing_atoms: bool = False,
         source_mmcif: Path | str | None = None,
         reconstruction_dir: Path | str | None = None,
         canonical_ligand_dir: Path | str | None = None,
@@ -111,6 +112,7 @@ class PlinderSystem:
         self.system_id: str = system_id
         self.prune: bool = prune
         self.skip_3d_confgen: bool = skip_3d_confgen
+        self.complete_missing_atoms: bool = complete_missing_atoms
         self.source_mmcif = Path(source_mmcif) if source_mmcif is not None else None
         cfg = get_config()
         self.reconstruction_dir = (
@@ -653,6 +655,7 @@ class PlinderSystem:
             ligand_smiles=self.smiles,
             skip_3d_confgen=self.skip_3d_confgen,
             structure_type="holo",
+            complete_missing_atoms=self.complete_missing_atoms,
         )
 
     @cached_property

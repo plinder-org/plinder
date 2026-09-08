@@ -741,7 +741,7 @@ def _ligand_unresolved_atoms(
     residue number). ``None`` when neither source covers the ligand. Leaving
     atoms are never reported.
     """
-    from plinder.data.annotations.cif_utils import (
+    from plinder.core.structure.ccd_template import (
         ccd_heavy_atom_names,
         unresolved_atoms_from_template,
     )

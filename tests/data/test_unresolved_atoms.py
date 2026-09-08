@@ -2,12 +2,12 @@
 # Distributed under the terms of the Apache License 2.0
 from __future__ import annotations
 
-from plinder.data.annotations.aggregate_annotations import Entry
-from plinder.data.annotations.cif_utils import (
+from plinder.core.structure.ccd_template import (
     ccd_heavy_atom_names,
-    read_mmcif_file,
     unresolved_atoms_from_template,
 )
+from plinder.data.annotations.aggregate_annotations import Entry
+from plinder.data.annotations.cif_utils import read_mmcif_file
 from plinder.data.annotations.protein_utils import get_unobserved_atoms
 
 CIF_8PN3 = "xx/pdb_00008pn3/pdb_00008pn3_xyz-enrich.cif.gz"
@@ -81,6 +81,8 @@ def test_ligand_unresolved_atoms_from_records_and_pocket_export(test_dir):
 
 
 def test_glycan_leaving_atoms_are_not_reported_as_unresolved(test_dir):
+    # TODO: 5lwx glycans are linked, so dropping O1 is right; an unlinked sugar
+    # with a missing O1 should be reported once the exclusion is link-aware.
     block = list(read_mmcif_file(test_dir / CIF_5LWX).values())[0]
     _, by_chain = get_unobserved_atoms(block)
     assert any(atom == "O1" for rows in by_chain.values() for _, _, atom in rows)
