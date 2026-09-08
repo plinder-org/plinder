@@ -655,6 +655,73 @@ def test_custom_pdb_mode_reuses_optional_atom_site_defaults(test_dir, tmp_path):
     assert set(entry.biounit_chain_ids) == {"1"}
 
 
+def test_custom_as_is_mode_mirrors_pdb_ingest_for_identity_assembly(test_dir):
+    """``as_is`` ingest runs the PDB ingest logic on the supplied coordinates.
+
+    1qz5 (ATP, KAB, and calcium ions) has one assembly built from the identity
+    operation alone, so both paths must agree on metadata, chains, deferred-ion
+    handling, systems, and ligand annotations; only the entry ID differs.
+    """
+    from plinder.data.annotations.aggregate_annotations import Entry
+
+    cif = test_dir / "xx/pdb_00001qz5/pdb_00001qz5_xyz-enrich.cif.gz"
+    deposited = Entry.from_cif_file(cif, include_interfaces=False)
+    assembled = Entry.from_custom_cif_file(
+        pdb_id="custom_1qz5",
+        cif_file=cif,
+        structure_mode="as_is",
+        include_interfaces=False,
+    )
+
+    def summary(entry):
+        prefix = f"{entry.pdb_id}__"
+        return {
+            "release_date": entry.release_date,
+            "resolution": entry.resolution,
+            "determination_method": entry.determination_method,
+            "chain_to_seqres": entry.chain_to_seqres,
+            "covalent_bonds": entry.covalent_bonds,
+            "chains": sorted(entry.chains),
+            "mappings": {
+                asym_id: chain.mappings for asym_id, chain in entry.chains.items()
+            },
+            "ligand_like_chains": sorted(entry.ligand_like_chains),
+            "biounit_chain_ids": entry.biounit_chain_ids,
+            "ligand_contact_counts": entry.biounit_ligand_contact_counts,
+            "systems": {
+                system_id.removeprefix(prefix): sorted(
+                    (
+                        ligand.instance_chain,
+                        ligand.ccd_code,
+                        ligand.smiles,
+                        ligand.is_ion,
+                        ligand.is_artifact,
+                        ligand.is_proper,
+                        ligand.is_covalent,
+                    )
+                    for ligand in system.ligands
+                )
+                for system_id, system in entry.systems.items()
+            },
+        }
+
+    assert deposited.pdb_id == "1qz5"
+    assert assembled.pdb_id == "custom_1qz5"
+    assert deposited.release_date
+    assert deposited.systems
+    assert summary(assembled) == summary(deposited)
+    # Deferred ions are retained only through a proper primary ligand.
+    ion_systems = [
+        system
+        for system in assembled.systems.values()
+        if any(ligand.is_ion for ligand in system.ligands)
+    ]
+    assert ion_systems
+    assert all(
+        any(ligand.is_proper for ligand in system.ligands) for system in ion_systems
+    )
+
+
 def test_custom_as_is_mode_detects_interface_in_supplied_coordinates(test_dir):
     from plinder.data.annotations.aggregate_annotations import Entry
 

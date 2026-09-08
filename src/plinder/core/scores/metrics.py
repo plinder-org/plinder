@@ -65,6 +65,15 @@ CHEMICAL_CLUSTER_METRICS = (
     "jaccard_similarity_mhfp6_2048",
 )
 
+# Each chemical metric also publishes one convenience cluster column from its
+# 90-percent reciprocal set cover, plus the distinct-PDB count of that cluster
+# under ``<column>_num_pdb_ids``.
+CHEMICAL_CLUSTER_SUMMARY_THRESHOLD = 90
+CHEMICAL_CLUSTER_SUMMARY_COLUMNS = {
+    "tanimoto_similarity_ecfp4_1024": "ligand_tanimoto_ecfp4_1024_90_cluster",
+    "jaccard_similarity_mhfp6_2048": "ligand_jaccard_mhfp6_2048_90_cluster",
+}
+
 DEFAULT_CLUSTER_METRICS = LIGAND_CLUSTER_METRICS + CHEMICAL_CLUSTER_METRICS
 
 

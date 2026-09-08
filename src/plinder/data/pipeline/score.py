@@ -2930,10 +2930,18 @@ def plan_clustering(
             if obsolete.exists():
                 rmtree(obsolete)
     symmetric_shard_count = len(selected_metrics) * symmetric_bucket_count
+    # TODO(mhfp6): MHFP6 is planned as a straight ECFP4 analog, so every
+    # chemical metric adds one reciprocal set cover per threshold (doubling the
+    # ligand set-cover array with the default metrics). Once MHFP6 clusters are
+    # validated on a release, consider extending it beyond this mirror: its own
+    # threshold list and cover batch sizing here, and the ECFP4-only consumers
+    # (eval stratification labels, ``cross_similarity`` default metric).
+    chemical_metric_count = len(
+        [metric for metric in selected_metrics if is_chemical_cluster_metric(metric)]
+    )
     set_cover_task_count = (
-        len(selected_thresholds)
+        chemical_metric_count * len(selected_thresholds)
         if entity_type == "ligand"
-        and "tanimoto_similarity_ecfp4_1024" in selected_metrics
         else 0
     )
     directed_cover_task_count = len(

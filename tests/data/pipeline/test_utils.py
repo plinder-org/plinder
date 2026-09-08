@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pandas as pd
 import pytest
+from plinder.core.scores.metrics import CHEMICAL_CLUSTER_SUMMARY_COLUMNS
 from plinder.data.pipeline import utils
 
 
@@ -501,11 +502,12 @@ def test_cluster_index_rejects_non_tanimoto_set_cover(tmp_path):
         utils.build_ligand_cluster_table(index=index, data_dir=tmp_path)
 
 
-def test_tanimoto_90_set_cover_counts_distinct_pdb_ids(tmp_path):
+@pytest.mark.parametrize(
+    "metric, column", sorted(CHEMICAL_CLUSTER_SUMMARY_COLUMNS.items())
+)
+def test_chemical_90_set_cover_counts_distinct_pdb_ids(tmp_path, metric, column):
     cover_file = (
-        tmp_path
-        / "ligand_sampling/set_cover/metric=tanimoto_similarity_ecfp4_1024"
-        / "threshold=90.parquet"
+        tmp_path / f"ligand_sampling/set_cover/metric={metric}" / "threshold=90.parquet"
     )
     cover_file.parent.mkdir(parents=True)
     pd.DataFrame(
@@ -527,12 +529,12 @@ def test_tanimoto_90_set_cover_counts_distinct_pdb_ids(tmp_path):
 
     result = utils.build_ligand_cluster_table(index=index, data_dir=tmp_path)
 
-    assert result["ligand_tanimoto_ecfp4_1024_90_cluster"].tolist() == [
+    assert result[column].tolist() == [
         "c0",
         "c0",
         "c1",
     ]
-    assert result["ligand_tanimoto_ecfp4_1024_90_cluster_num_pdb_ids"].tolist() == [
+    assert result[f"{column}_num_pdb_ids"].tolist() == [
         2,
         2,
         1,

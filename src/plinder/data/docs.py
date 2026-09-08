@@ -11,6 +11,10 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from plinder.core.release import RELEASE_TABLES, PlinderRelease
+from plinder.core.scores.metrics import (
+    CHEMICAL_CLUSTER_SUMMARY_COLUMNS,
+    is_chemical_cluster_metric,
+)
 from plinder.data import column_descriptions
 
 TSV_DIR = Path(column_descriptions.__file__).parent
@@ -230,14 +234,6 @@ DERIVED_COLUMN_DESCRIPTIONS = {
     "ligand_is_cofactor_like": (
         "Whether maximum similarity to a listed CCD cofactor is at least 90 percent"
     ),
-    "ligand_tanimoto_ecfp4_1024_90_cluster": (
-        "Cluster ID from the 90-percent ECFP4/1024 Tanimoto set cover; every "
-        "member has a direct threshold-qualified edge to its representative"
-    ),
-    "ligand_tanimoto_ecfp4_1024_90_cluster_num_pdb_ids": (
-        "Number of distinct PDB entries represented in the ligand's 90-percent "
-        "Tanimoto set-cover cluster"
-    ),
 }
 
 DERIVED_COLUMN_DESCRIPTIONS.update(
@@ -284,6 +280,20 @@ _METRIC_LABELS = {
         "MHFP6/2048 MinHash-estimated Jaccard similarity (Probst & Reymond 2018)"
     ),
 }
+_CHEMICAL_SUMMARY_LABELS = {
+    "tanimoto_similarity_ecfp4_1024": "ECFP4/1024 Tanimoto",
+    "jaccard_similarity_mhfp6_2048": "MHFP6/2048 Jaccard",
+}
+for _metric, _column in CHEMICAL_CLUSTER_SUMMARY_COLUMNS.items():
+    DERIVED_COLUMN_DESCRIPTIONS[_column] = (
+        f"Cluster ID from the 90-percent {_CHEMICAL_SUMMARY_LABELS[_metric]} set "
+        "cover; every member has a direct threshold-qualified edge to its "
+        "representative"
+    )
+    DERIVED_COLUMN_DESCRIPTIONS[f"{_column}_num_pdb_ids"] = (
+        "Number of distinct PDB entries represented in the ligand's 90-percent "
+        f"{_CHEMICAL_SUMMARY_LABELS[_metric]} set-cover cluster"
+    )
 
 
 def get_cluster_column_descriptions(
@@ -454,19 +464,19 @@ def _base_description_lookup() -> dict[str, str]:
 def _validate_published_cover_columns(*, table_name: str, names: list[str]) -> None:
     """Reject cluster columns that the current finalizers do not publish."""
     invalid: list[str] = []
+    summary_columns = tuple(CHEMICAL_CLUSTER_SUMMARY_COLUMNS.values())
     if table_name == "annotation":
         invalid.extend(
             name
             for name in names
-            if "__ligand__" in name
-            or name.startswith("ligand_tanimoto_ecfp4_1024_90_cluster")
+            if "__ligand__" in name or name.startswith(summary_columns)
         )
     elif table_name == "ligand_clusters":
         cover_names = [name for name in names if "__ligand__" in name]
         allowed_fixed = {
             "ligand_id",
-            "ligand_tanimoto_ecfp4_1024_90_cluster",
-            "ligand_tanimoto_ecfp4_1024_90_cluster_num_pdb_ids",
+            *summary_columns,
+            *(f"{column}_num_pdb_ids" for column in summary_columns),
         }
         invalid.extend(
             name
@@ -474,9 +484,11 @@ def _validate_published_cover_columns(*, table_name: str, names: list[str]) -> N
             if name not in allowed_fixed and name not in cover_names
         )
         for name in cover_names:
+            metric = name.split("__", maxsplit=1)[0]
             if "__component" in name or "__community" in name:
                 invalid.append(name)
-            elif name.startswith("tanimoto_similarity_ecfp4_1024__"):
+            elif is_chemical_cluster_metric(metric):
+                # Chemical metrics publish only reciprocal ligand set covers.
                 if "__ligand__set_cover" not in name:
                     invalid.append(name)
             elif "__set_cover" in name and "__directed_set_cover" not in name:

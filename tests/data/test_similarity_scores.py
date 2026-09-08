@@ -2766,6 +2766,69 @@ def test_ligand_similarity_annotations_exclude_fingerprint_bytes() -> None:
     assert annotations["ligand_smiles_id"].tolist() == [0, 1, 2]
 
 
+def test_annotate_ligand_similarity_requires_complete_mhfp6_shards(tmp_path):
+    from plinder.core.utils.schemas import TANIMOTO_SCORE_SCHEMA
+
+    fingerprint_dir = tmp_path / "fingerprints"
+    fingerprint_dir.mkdir()
+    smiles = ["CCO", "CCN", "c1ccccc1"]
+    unique_ligands = pd.DataFrame(
+        {
+            "ligand_smiles_id": np.arange(len(smiles), dtype=np.int32),
+            "ligand_rdkit_canonical_smiles": smiles,
+            "fingerprint": [b"", b"", b""],
+            "ligand_is_cofactor_like": [False, False, False],
+        }
+    )
+    unique_ligands.to_parquet(
+        fingerprint_dir / "ligands_per_smiles.parquet", index=False
+    )
+    ecfp4_dir = tmp_path / "ligand_scores"
+    ecfp4_dir.mkdir()
+    pq.write_table(
+        pa.Table.from_pylist(
+            [
+                {
+                    "query_ligand_id": node,
+                    "target_ligand_id": node,
+                    "tanimoto_similarity_ecfp4_1024": 100.0,
+                }
+                for node in range(len(smiles))
+            ],
+            schema=TANIMOTO_SCORE_SCHEMA,
+        ),
+        ecfp4_dir / "part.parquet",
+    )
+
+    # MHFP6 scoring is opt-in: no shards at all is acceptable.
+    annotate_ligand_similarity(data_dir=tmp_path)
+
+    scoring_module.write_mhfp6_fingerprints(
+        unique_ligands[["ligand_smiles_id", "ligand_rdkit_canonical_smiles"]],
+        fingerprint_dir,
+    )
+    mhfp6_dir = tmp_path / scoring_module.MHFP6_SCORES_DIR
+    mhfp6_dir.mkdir()
+    scoring_module.mhfp6_ligand_scores(
+        ligand_ids=[0],
+        data_dir=tmp_path,
+        output_path=mhfp6_dir / "part.parquet",
+    )
+    with pytest.raises(
+        ValueError, match="MHFP6 score shards do not cover the fingerprint set"
+    ):
+        annotate_ligand_similarity(data_dir=tmp_path)
+
+    scoring_module.mhfp6_ligand_scores(
+        ligand_ids=[0, 1, 2],
+        data_dir=tmp_path,
+        output_path=mhfp6_dir / "part.parquet",
+    )
+    annotation_path = annotate_ligand_similarity(data_dir=tmp_path)
+
+    assert pd.read_parquet(annotation_path)["ligand_smiles_id"].tolist() == [0, 1, 2]
+
+
 def test_ligand_similarity_pipeline_does_not_write_per_system_mapping(
     tmp_path, monkeypatch
 ) -> None:

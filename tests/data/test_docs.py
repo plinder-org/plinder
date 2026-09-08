@@ -358,6 +358,55 @@ def test_table_descriptions_reject_retired_cover_modes():
             )
 
 
+def test_table_descriptions_treat_every_chemical_metric_alike():
+    import pyarrow as pa
+    import pytest
+    from plinder.core.scores.metrics import (
+        CHEMICAL_CLUSTER_METRICS,
+        CHEMICAL_CLUSTER_SUMMARY_COLUMNS,
+    )
+
+    assert set(CHEMICAL_CLUSTER_SUMMARY_COLUMNS) == set(CHEMICAL_CLUSTER_METRICS)
+    fields = [("ligand_id", pa.string())]
+    for metric in CHEMICAL_CLUSTER_METRICS:
+        summary = CHEMICAL_CLUSTER_SUMMARY_COLUMNS[metric]
+        fields.extend(
+            [
+                (f"{metric}__90__ligand__set_cover", pa.string()),
+                (summary, pa.string()),
+                (f"{summary}_num_pdb_ids", pa.int32()),
+                (f"{metric}__90__ligand__set_cover__is_centroid", pa.bool_()),
+            ]
+        )
+
+    descriptions = docs.get_table_column_descriptions(
+        table_name="ligand_clusters", schema=pa.schema(fields)
+    )
+
+    assert descriptions["Name"].tolist() == [name for name, _ in fields]
+    by_name = descriptions.set_index("Name")["Description"]
+    assert (
+        "MHFP6/2048" in by_name["jaccard_similarity_mhfp6_2048__90__ligand__set_cover"]
+    )
+    assert "MHFP6/2048" in by_name["ligand_jaccard_mhfp6_2048_90_cluster"]
+    assert "ECFP4/1024" in by_name["ligand_tanimoto_ecfp4_1024_90_cluster"]
+    for metric in CHEMICAL_CLUSTER_METRICS:
+        with pytest.raises(ValueError, match="not published by the current pipeline"):
+            docs.get_table_column_descriptions(
+                table_name="ligand_clusters",
+                schema=pa.schema(
+                    [(f"{metric}__50__ligand__directed_set_cover", pa.string())]
+                ),
+            )
+        with pytest.raises(ValueError):
+            docs.get_table_column_descriptions(
+                table_name="annotation",
+                schema=pa.schema(
+                    [(CHEMICAL_CLUSTER_SUMMARY_COLUMNS[metric], pa.string())]
+                ),
+            )
+
+
 def test_table_descriptions_accept_published_interface_cover_columns():
     import pyarrow as pa
 
@@ -388,7 +437,10 @@ def test_checked_in_descriptions_cover_every_table():
 
 
 def test_checked_in_cluster_descriptions_match_published_cover_modes():
-    from plinder.core.scores.metrics import DEFAULT_CLUSTER_METRICS
+    from plinder.core.scores.metrics import (
+        DEFAULT_CLUSTER_METRICS,
+        is_chemical_cluster_metric,
+    )
 
     ligand_names = docs.get_column_descriptions("ligand_clusters")["Name"].tolist()
     metric_names = set(DEFAULT_CLUSTER_METRICS)
@@ -400,7 +452,7 @@ def test_checked_in_cluster_descriptions_match_published_cover_modes():
         "__component" in name or "__community" in name for name in ligand_cluster_names
     )
     for name in ligand_cluster_names:
-        if name.startswith("tanimoto_similarity_ecfp4_1024__"):
+        if is_chemical_cluster_metric(name.split("__", maxsplit=1)[0]):
             assert "__ligand__set_cover" in name
             assert "__directed_set_cover" not in name
         else:

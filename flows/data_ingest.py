@@ -194,6 +194,31 @@ class PlinderDataIngestFlow(FlowSpec):
     def join_make_ligand_scores(self, inputs):
         self.pipeline = inputs[0].pipeline
         self.merge_artifacts(inputs, exclude=["chunks"])
+        self.next(self.scatter_make_mhfp6_scores)
+
+    @kubernetes(**K8S)
+    @environment(**ENV)
+    @retry
+    @step
+    def scatter_make_mhfp6_scores(self):
+        self.chunks = self.pipeline.scatter_make_mhfp6_scores()
+        self.next(self.make_mhfp6_scores, foreach="chunks")
+
+    @kubernetes(**{**K8S, **WORKSTATION_MEM})
+    @environment(**ENV)
+    @retry
+    @step
+    def make_mhfp6_scores(self):
+        self.pipeline.make_mhfp6_scores(self.input)
+        self.next(self.join_make_mhfp6_scores)
+
+    @kubernetes(**K8S)
+    @environment(**ENV)
+    @retry
+    @step
+    def join_make_mhfp6_scores(self, inputs):
+        self.pipeline = inputs[0].pipeline
+        self.merge_artifacts(inputs, exclude=["chunks"])
         self.next(self.annotate_ligand_similarity)
 
     @kubernetes(**{**K8S, **DATABASES})

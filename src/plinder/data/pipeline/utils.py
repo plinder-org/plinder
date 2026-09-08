@@ -14,7 +14,11 @@ import pandas as pd
 import pyarrow.parquet as pq
 from omegaconf import DictConfig, OmegaConf
 
-from plinder.core.scores.metrics import is_chemical_cluster_metric
+from plinder.core.scores.metrics import (
+    CHEMICAL_CLUSTER_SUMMARY_COLUMNS,
+    CHEMICAL_CLUSTER_SUMMARY_THRESHOLD,
+    is_chemical_cluster_metric,
+)
 from plinder.core.utils import schemas
 from plinder.core.utils.log import setup_logger
 
@@ -655,12 +659,17 @@ def build_ligand_cluster_table(*, index: pd.DataFrame, data_dir: Path) -> pd.Dat
             )
         aligned = labels.set_index(node_column)["label"].reindex(node_ids)
         cluster_columns[column] = aligned.astype("string[pyarrow]").array
-        if metric == "tanimoto_similarity_ecfp4_1024" and artifact_threshold == 90:
+        summary_column = CHEMICAL_CLUSTER_SUMMARY_COLUMNS.get(metric)
+        if (
+            summary_column is not None
+            and artifact_threshold == CHEMICAL_CLUSTER_SUMMARY_THRESHOLD
+        ):
             if "entry_pdb_id" not in index.columns:
                 raise ValueError(
-                    "the 90-percent Tanimoto set cover requires entry_pdb_id"
+                    f"the {artifact_threshold}-percent {metric} set cover "
+                    "requires entry_pdb_id"
                 )
-            cluster_column = "ligand_tanimoto_ecfp4_1024_90_cluster"
+            cluster_column = summary_column
             count_column = f"{cluster_column}_num_pdb_ids"
             label_by_node = labels.set_index(node_column)["label"]
             occurrences = pd.DataFrame(
@@ -947,10 +956,7 @@ def add_ligand_similarity_columns(
         columns={artifact_smiles_column: index_smiles_column}
     )
     replacement_columns = set(annotations.columns).difference({index_smiles_column})
-    obsolete_columns = {
-        "ligand_tanimoto_ecfp4_1024_90_cluster",
-        "ligand_tanimoto_ecfp4_1024_90_cluster_num_pdb_ids",
-    }
+    obsolete_columns = _chemical_cluster_summary_columns()
     result = index.drop(
         columns=list(
             replacement_columns.intersection(index.columns)
@@ -1111,12 +1117,18 @@ def add_aggregated_columns(*, index: pd.DataFrame) -> pd.DataFrame:
     return index
 
 
+def _chemical_cluster_summary_columns() -> set[str]:
+    """Return the 90-percent cluster sidecar columns of every chemical metric."""
+    return {
+        name
+        for column in CHEMICAL_CLUSTER_SUMMARY_COLUMNS.values()
+        for name in (column, f"{column}_num_pdb_ids")
+    }
+
+
 def _is_ligand_cluster_column(column: str) -> bool:
     """Return whether a column belongs in the ligand-cluster sidecar."""
-    return column in {
-        "ligand_tanimoto_ecfp4_1024_90_cluster",
-        "ligand_tanimoto_ecfp4_1024_90_cluster_num_pdb_ids",
-    } or (
+    return column in _chemical_cluster_summary_columns() or (
         "__ligand__" in column
         and column.endswith(
             (

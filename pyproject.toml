@@ -110,8 +110,7 @@ namespaces = false
 plinder = [
     "**.yaml",
     "**.tsv",
-    # ship every static reference file (dates.csv is read by plinder.core; the
-    # csv/chemlib globs were previously missed, breaking pip/conda installs)
+    # ship every static reference file (dates.csv is temp patch by plinder.core)
     "plinder/data/annotations/static_files/*",
 ]
 

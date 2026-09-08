@@ -4806,6 +4806,41 @@ def test_component_reduction_metric_workers_must_be_positive(tmp_path):
         )
 
 
+def test_clustering_plan_counts_set_covers_per_chemical_metric(tmp_path, monkeypatch):
+    from plinder.core.scores.metrics import CHEMICAL_CLUSTER_METRICS
+    from plinder.data.pipeline.score import plan_clustering
+
+    monkeypatch.setattr(
+        "plinder.data.pipeline.score.clusters.prepare_component_node_universe",
+        lambda data_dir, **kwargs: {"status": "complete"},
+    )
+    monkeypatch.setattr(
+        "plinder.data.pipeline.score.clusters.prepare_symmetric_edge_plan",
+        lambda **kwargs: {"batches": [{}], "plan_hash": "test-plan"},
+    )
+    universe_manifest = (
+        tmp_path / "ligand_clusters" / "reductions" / "node_universe.json"
+    )
+    universe_manifest.parent.mkdir(parents=True)
+    universe_manifest.write_text(json.dumps({"universe_hash": "test-universe"}))
+
+    plan = plan_clustering(
+        tmp_path,
+        metrics=["pocket_qcov", *CHEMICAL_CLUSTER_METRICS],
+        thresholds=[30, 100],
+        source_batch_size=2,
+        cover_batch_size=3,
+        symmetric_bucket_count=4,
+    )
+
+    # ECFP4 and MHFP6 each get one reciprocal set cover per threshold, while the
+    # single score metric gets one directed cover per threshold.
+    assert len(CHEMICAL_CLUSTER_METRICS) == 2
+    assert plan["set_cover_task_count"] == 4
+    assert plan["set_cover_batch_count"] == 2
+    assert plan["directed_cover_task_count"] == 2
+
+
 def test_clustering_plan_matches_slurm_array_bounds(tmp_path, monkeypatch):
     from plinder.data.pipeline.score import (
         _cluster_parameters,
