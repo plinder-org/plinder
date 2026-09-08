@@ -404,7 +404,13 @@ class Chain(DocBaseModel):
         for idx, (start, stop) in enumerate(zip(res_starts[:-1], res_starts[1:])):
             resnum = int(atoms.res_id[start])
             resname = atoms.res_name[start]
-            auth_resnum = str(atoms.res_id[start])
+            # Author residue number (what users see in RCSB/PyMOL); falls back to
+            # the label number when the auth_seq_id extra field is not loaded.
+            auth_resnum = (
+                str(atoms.auth_seq_id[start])
+                if "auth_seq_id" in atoms.get_annotation_categories()
+                else str(atoms.res_id[start])
+            )
             selected_altcode = "."
             if hasattr(atoms, "selected_altloc_id"):
                 selected_altcode = next(

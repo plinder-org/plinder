@@ -1252,7 +1252,11 @@ class Entry(DocBaseModel):
         if n_models > 1:
             LOG.warning(f"PDB {pdb_id!r} has {n_models} models — using model 1 only.")
         atoms = get_structure_with_altloc(
-            cif_file_obj, model=1, use_author_fields=False, include_bonds=True
+            cif_file_obj,
+            model=1,
+            use_author_fields=False,
+            include_bonds=True,
+            extra_fields=["auth_seq_id"],
         )
         atoms = atoms[filter_heavy(atoms)]
         if atoms.bonds is None:
@@ -1589,7 +1593,11 @@ class Entry(DocBaseModel):
 
         cif_data = list(cif_file_obj.values())[0]
         atoms = get_structure_with_altloc(
-            cif_file_obj, model=1, use_author_fields=False, include_bonds=True
+            cif_file_obj,
+            model=1,
+            use_author_fields=False,
+            include_bonds=True,
+            extra_fields=["auth_seq_id"],
         )
         atoms = atoms[filter_heavy(atoms)]
         if atoms.bonds is None:
