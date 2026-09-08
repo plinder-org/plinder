@@ -3,7 +3,7 @@
 """CCD component templates: missing-atom detection and opt-in completion."""
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Collection, Iterable
 from functools import cache
 from typing import NamedTuple
 
@@ -72,25 +72,64 @@ def ccd_heavy_atom_names(comp_id: str) -> tuple[frozenset[str], frozenset[str]] 
     return frozenset(template.heavy), template.leaving
 
 
+def departed_leaving_atoms(
+    template: ComponentTemplate, linked_atom_names: Collection[str]
+) -> frozenset[str]:
+    """Leaving atoms whose anchor atom is bonded outside the residue, i.e. gone on linkage."""
+    return frozenset(
+        leaving
+        for name_a, name_b, _ in template.bonds
+        for leaving, anchor in ((name_a, name_b), (name_b, name_a))
+        if leaving in template.leaving and anchor in linked_atom_names
+    )
+
+
+def linked_atoms_by_residue(
+    atoms: AtomArray, starts: np.ndarray
+) -> dict[int, set[str]]:
+    """Residue start index -> names of its atoms bonded to another residue.
+
+    ``starts`` are residue starts with the exclusive stop appended.
+    """
+    linked: dict[int, set[str]] = {}
+    if atoms.bonds is None:
+        return linked
+    bonds = atoms.bonds.as_array()[:, :2]
+    residue_of = np.searchsorted(starts[:-1], bonds, side="right") - 1
+    crossing = residue_of[:, 0] != residue_of[:, 1]
+    for column in (0, 1):
+        for index, residue in zip(
+            bonds[crossing, column], residue_of[crossing, column]
+        ):
+            linked.setdefault(int(starts[residue]), set()).add(
+                str(atoms.atom_name[index])
+            )
+    return linked
+
+
 def unresolved_atoms_from_template(
-    comp_id: str, resolved_atom_names: Iterable[str]
+    comp_id: str,
+    resolved_atom_names: Iterable[str],
+    linked_atom_names: Collection[str] | None = None,
 ) -> list[str] | None:
-    """CCD heavy atoms (leaving groups excluded) absent from ``resolved_atom_names``.
+    """CCD heavy atoms absent from ``resolved_atom_names``.
 
-    Returns ``None`` when ``comp_id`` is not in the CCD.
-
-    TODO: leaving atoms are excluded unconditionally; for a residue that is not
-    covalently linked (free reducing-end sugar, C-terminal OXT) they are real
-    atoms and their absence should count. Needs the struct_conn links per residue.
+    Leaving atoms whose anchor is in ``linked_atom_names`` (atoms bonded outside
+    the residue) departed on linkage and are not missing; with
+    ``linked_atom_names=None`` every leaving atom is excluded. ``None`` when
+    ``comp_id`` is not in the CCD.
     """
     template = ccd_component_template(comp_id)
     if template is None:
         return None
+    excluded = (
+        template.leaving
+        if linked_atom_names is None
+        else departed_leaving_atoms(template, linked_atom_names)
+    )
     resolved = set(resolved_atom_names)
     return [
-        name
-        for name in template.heavy
-        if name not in template.leaving and name not in resolved
+        name for name in template.heavy if name not in excluded and name not in resolved
     ]
 
 
@@ -100,8 +139,10 @@ def add_missing_atoms(
     """Append CCD heavy atoms missing from each residue, with NaN coordinates.
 
     A residue is completed only when its CCD template is known and every
-    resolved heavy atom name is a template name; leaving atoms and hydrogens are
-    never added and fully unresolved residues are not created. Added atoms copy
+    resolved heavy atom name is a template name; hydrogens are never added,
+    leaving atoms only for a non-polymer residue not bonded through their anchor
+    (never when ``atoms`` has no bonds), and fully unresolved residues are not
+    created. Added atoms copy
     their residue's annotations, take ``element`` from the CCD, get
     ``occupancy``/``b_factor``/``charge`` 0 where present, and ``mask_annotation``
     True (deposited atoms get False). Existing bonds are kept and the template
@@ -111,6 +152,8 @@ def add_missing_atoms(
     starts = struc.get_residue_starts(atoms, add_exclusive_stop=True)
     solvent = struc.filter_solvent(atoms)
     hydrogen = np.isin(atoms.element, ["H", "D"])
+    linked = linked_atoms_by_residue(atoms, starts) if atoms.bonds is not None else None
+    polymer = struc.filter_amino_acids(atoms) | struc.filter_nucleotides(atoms)
     completed: list[tuple[int, int, list[str], ComponentTemplate]] = []
     mismatched = 0
     for start, stop in zip(starts[:-1], starts[1:]):
@@ -127,10 +170,15 @@ def add_missing_atoms(
         if not resolved <= set(template.heavy):
             mismatched += 1
             continue
+        excluded = (
+            template.leaving
+            if linked is None or polymer[start]
+            else departed_leaving_atoms(template, linked.get(int(start), set()))
+        )
         missing = [
             name
             for name in template.heavy
-            if name not in template.leaving and name not in resolved
+            if name not in excluded and name not in resolved
         ]
         if missing:
             completed.append((int(start), int(stop), missing, template))

@@ -332,9 +332,11 @@ def get_covalent_connections(
     Returns
     -------
     dict[str, list[tuple[str, str]]]
-        All covalent links as defined by mmcif annotations
+        ``conn_type -> [(end1, end2)]``; each end is a
+        :func:`~plinder.data.annotations.cif_utils.residue_address` with atom,
+        ``{auth_seq}:{comp_id}:{asym}:{label_seq}:{atom}``
     """
-    from plinder.data.annotations.cif_utils import parse_struct_conn
+    from plinder.data.annotations.cif_utils import parse_struct_conn, residue_address
 
     nucleobase_list = {"A", "C", "U", "G", "DA", "DC", "DG", "DT", "PSU"}
     valid_types = {"covale", "metalc", "hydrog"}
@@ -346,23 +348,11 @@ def get_covalent_connections(
         if c["conn_type"] == "hydrog":
             if c["comp1"].strip() not in nucleobase_list:
                 continue
-        link1 = ":".join(
-            [
-                c["auth_seq1"],
-                c["comp1"],
-                c["chain1"],
-                c["seq1"],
-                c["atom1"],
-            ]
+        link1 = residue_address(
+            c["auth_seq1"], c["comp1"], c["chain1"], c["seq1"], c["atom1"]
         )
-        link2 = ":".join(
-            [
-                c["auth_seq2"],
-                c["comp2"],
-                c["chain2"],
-                c["seq2"],
-                c["atom2"],
-            ]
+        link2 = residue_address(
+            c["auth_seq2"], c["comp2"], c["chain2"], c["seq2"], c["atom2"]
         )
         cov_dict[c["conn_type"]].append((link1, link2))
     return cov_dict
@@ -394,7 +384,7 @@ def extract_ligand_links_to_neighbouring_chains(
     Returns
     -------
     set[str]
-        set of covalent linkages in the entry between the ligand and its neighbours
+        Links between the ligand and its neighbours as ``receptor_end__ligand_end``
 
     Notes
     -----

@@ -45,8 +45,9 @@ DERIVED_COLUMN_DESCRIPTIONS = {
         "modified residues as (CCD) tokens"
     ),
     "chain_modified_residues": (
-        "Non-canonical SEQRES monomers as {auth_seq}:{mon_id}:{asym}:{label_seq}"
-        ">{parent} (details), including unresolved positions (auth_seq ?); "
+        "Non-canonical SEQRES monomers as {auth_seq}:{comp_id}:{asym}:{label_seq}"
+        ">{parent} (details), the residue address of ligand_covalent_linkages "
+        "(comp_id is entity_poly_seq.mon_id); unresolved positions have auth_seq ?; "
         "parent and details from _pdbx_struct_mod_residue, else the CCD parent"
     ),
     "biounit_id": "Biological assembly identifier",
@@ -635,7 +636,12 @@ def write_column_descriptions(
     data_dir: Path,
     output_dir: Path = TABLE_TSV_DIR,
 ) -> None:
-    """Write one complete description TSV per published parquet table."""
+    """Write one complete description TSV per published parquet table.
+
+    TODO: the checked-in TSVs are hand-edited; nothing regenerates them or checks
+    their prose against the model descriptions. Discuss: build from the static
+    schemas already in code, add a parity test, run as a pre-commit hook.
+    """
     release = PlinderRelease(data_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     expected: set[Path] = set()

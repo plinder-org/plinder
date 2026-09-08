@@ -6,7 +6,7 @@ import functools
 from collections import Counter
 from collections.abc import Iterable, Mapping
 from functools import cached_property
-from typing import Any
+from typing import Any, NamedTuple
 
 import biotite.structure as struc
 import biotite.structure.io.pdbx as pdbx
@@ -14,6 +14,7 @@ import numpy as np
 from PDBValidation.Validation import PDBValidation
 from pydantic import ConfigDict, Field
 
+from plinder.core.utils.log import setup_logger
 from plinder.data.annotations.get_ligand_validation import (
     ResidueListValidation,
     ResidueValidation,
@@ -50,6 +51,8 @@ def _ccd_parent_components() -> dict[str, str]:
     )
 
 
+LOG = setup_logger(__name__)
+
 _CANONICAL_MONOMERS = frozenset(
     {
         "ALA", "ARG", "ASN", "ASP", "CYS", "GLN", "GLU", "GLY", "HIS", "ILE",
@@ -65,13 +68,14 @@ def get_modified_residues(
 ) -> dict[str, list[str]]:
     """Non-canonical SEQRES monomers per label asym.
 
-    Entries read ``{auth_seq}:{mon_id}:{asym}:{label_seq}>{parent}`` like the
-    covalent-link encoding, plus `` (details)`` from
-    ``pdbx_struct_mod_residue`` when present. Built from ``entity_poly_seq``,
-    so unresolved positions are included with ``?`` as ``auth_seq``. Parent
-    from ``pdbx_struct_mod_residue``, else the CCD, else ``?``.
+    Entries are the :func:`~plinder.data.annotations.cif_utils.residue_address`
+    ``{auth_seq}:{comp_id}:{asym}:{label_seq}`` followed by ``>{parent}`` and
+    `` (details)`` from ``pdbx_struct_mod_residue`` when present. Built from
+    ``entity_poly_seq`` (``comp_id`` is its ``mon_id``), so unresolved positions
+    are included with ``?`` as ``auth_seq``. Parent from
+    ``pdbx_struct_mod_residue``, else the CCD, else ``?``.
     """
-    from plinder.data.annotations.cif_utils import _iter_category_rows
+    from plinder.data.annotations.cif_utils import _iter_category_rows, residue_address
 
     if residue_author_ids is None:
         _, residue_author_ids = get_atom_site_author_ids(block)
@@ -120,7 +124,7 @@ def get_modified_residues(
             auth_seq, insertion = author_ids.get(number, ("?", "."))
             if insertion not in missing:
                 auth_seq = f"{auth_seq}{insertion}"
-            entry = f"{auth_seq}:{mon_id}:{asym_id}:{number}>{parent}"
+            entry = f"{residue_address(auth_seq, mon_id, asym_id, number)}>{parent}"
             if details not in missing:
                 entry = f"{entry} ({details})"
             entries.append(entry)
@@ -128,39 +132,63 @@ def get_modified_residues(
     return modified
 
 
+class UnobservedAtom(NamedTuple):
+    """A ``pdbx_unobs_or_zero_occ_atoms`` row in ``residue_address`` fields."""
+
+    comp_id: str
+    auth_seq: str  # auth_seq_id with insertion code
+    label_seq: str  # label_seq_id; "." for non-polymer and branched residues
+    atom_name: str
+    zero_occupancy: bool  # occupancy_flag 0: modelled at zero occupancy, not absent
+
+
 def get_unobserved_atoms(
     block: pdbx.CIFBlock,
-) -> (
-    tuple[dict[str, dict[int, list[str]]], dict[str, list[tuple[str, str, str]]]] | None
-):
+) -> tuple[dict[str, dict[int, list[str]]], dict[str, list[UnobservedAtom]]] | None:
     """Model-1 rows of ``pdbx_unobs_or_zero_occ_atoms``, or ``None`` when absent.
 
     Returns ``(asym -> label_seq_id -> atom names)`` for polymer residues and
-    ``(asym -> [(comp_id, auth_seq_id, atom name)])`` for every row.
+    ``(asym -> [UnobservedAtom])`` for every row.
     """
     from plinder.data.annotations.cif_utils import _iter_category_rows
 
-    if "pdbx_unobs_or_zero_occ_atoms" not in block:
+    category = "pdbx_unobs_or_zero_occ_atoms"
+    if category not in block:
         return None
+    columns = [
+        "PDB_model_num",
+        "polymer_flag",
+        "label_asym_id",
+        "label_comp_id",
+        "label_seq_id",
+        "auth_seq_id",
+        "PDB_ins_code",
+        "label_atom_id",
+        "occupancy_flag",
+    ]
+    absent = [column for column in columns if column not in block[category]]
+    if absent:
+        LOG.warning(f"{category} lacks {absent}; ignoring the category")
+        return None
+    missing = {"", ".", "?"}
     by_residue: dict[str, dict[int, list[str]]] = {}
-    by_chain: dict[str, list[tuple[str, str, str]]] = {}
-    for row in _iter_category_rows(
-        block,
-        "pdbx_unobs_or_zero_occ_atoms",
-        [
-            "PDB_model_num",
-            "label_asym_id",
-            "label_comp_id",
-            "label_seq_id",
-            "auth_seq_id",
-            "label_atom_id",
-        ],
-    ):
+    by_chain: dict[str, list[UnobservedAtom]] = {}
+    for row in _iter_category_rows(block, category, columns):
         if row["PDB_model_num"] not in {"1", "?", "."}:
             continue
         asym_id = row["label_asym_id"]
+        auth_seq = row["auth_seq_id"]
+        if row["PDB_ins_code"] not in missing:
+            auth_seq = f"{auth_seq}{row['PDB_ins_code']}"
+        is_polymer = row["polymer_flag"] == "Y"
         by_chain.setdefault(asym_id, []).append(
-            (row["label_comp_id"], row["auth_seq_id"], row["label_atom_id"])
+            UnobservedAtom(
+                row["label_comp_id"],
+                auth_seq,
+                row["label_seq_id"] if is_polymer else ".",
+                row["label_atom_id"],
+                row["occupancy_flag"] == "0",
+            )
         )
         try:
             number = int(row["label_seq_id"])
@@ -496,7 +524,7 @@ class Residue(DocBaseModel):
     )
     unresolved_atom_names: list[str] = Field(
         default_factory=list,
-        description="[EXCLUDE] Heavy atoms missing from the model (wwPDB unobserved-atom records, else CCD template minus resolved atoms)",
+        description="[EXCLUDE] label_atom_id of heavy atoms missing from the model (wwPDB unobserved-atom records, else CCD template minus resolved atoms)",
     )
     """Single residue in a polymer chain.
 
@@ -548,7 +576,7 @@ class Chain(DocBaseModel):
     )
     modified_residues: list[str] = Field(
         default_factory=list,
-        description="[EXCLUDE] Non-canonical SEQRES monomers as {auth_seq}:{mon_id}:{asym}:{label_seq}>{parent} (details)",
+        description="[EXCLUDE] Non-canonical SEQRES monomers as {auth_seq}:{comp_id}:{asym}:{label_seq}>{parent} (details); residue address as in ligand_covalent_linkages",
     )
 
     # Allow arbitrary types for cached properties

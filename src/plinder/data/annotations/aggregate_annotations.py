@@ -63,6 +63,7 @@ from plinder.data.annotations.ligand_utils import (
 )
 from plinder.data.annotations.protein_utils import (
     Chain,
+    UnobservedAtom,
     _is_polynucleotide,
     _is_polypeptide,
     detect_ligand_chains,
@@ -807,10 +808,10 @@ class Entry(DocBaseModel):
     _subject_of_investigation_comp_ids: frozenset[str] | None = PrivateAttr(
         default=None
     )
-    # asym -> (comp_id, auth_seq_id, atom) unobserved-atom records; None when absent
-    _unobserved_atom_records: (
-        dict[str, list[tuple[str, str, str]]] | None
-    ) = PrivateAttr(default=None)
+    # asym -> pdbx_unobs_or_zero_occ_atoms rows; None when the category is absent
+    _unobserved_atom_records: dict[str, list[UnobservedAtom]] | None = PrivateAttr(
+        default=None
+    )
 
     pdb_id: str = Field(
         default_factory=str,

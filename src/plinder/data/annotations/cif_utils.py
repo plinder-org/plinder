@@ -836,6 +836,12 @@ def build_biounit(
     each other by a symmetry axis are reduced to one
     (:func:`drop_self_clashing_symmetry_copies`).
     """
+    block = (
+        cif_file if isinstance(cif_file, pdbx.CIFBlock) else list(cif_file.values())[0]
+    )
+    extra_fields = ["label_asym_id"]
+    if "auth_seq_id" in block["atom_site"]:
+        extra_fields.append("auth_seq_id")  # residue_address of unresolved atoms
     with _alphabetic_altloc_ids(cif_file), _branched_residue_numbering(cif_file):
         biounit = pdbx.get_assembly(
             cif_file,
@@ -844,7 +850,7 @@ def build_biounit(
             altloc="first",
             use_author_fields=False,
             include_bonds=True,
-            extra_fields=["label_asym_id"],
+            extra_fields=extra_fields,
         )
         biounit = biounit[filter_heavy(biounit)]
         biounit = drop_self_clashing_symmetry_copies(
@@ -1247,6 +1253,30 @@ def atoms_to_rdkit_mol(
 # ---------------------------------------------------------------------------
 # Structure bonds: struct_conn parsing and non-physical bond removal
 # ---------------------------------------------------------------------------
+
+
+def residue_address(
+    auth_seq: str,
+    comp_id: str,
+    asym_id: str,
+    label_seq: str | int,
+    atom_name: str | None = None,
+) -> str:
+    """``{auth_seq}:{comp_id}:{asym}:{label_seq}[:{atom}]`` in ``_struct_conn`` partner order.
+
+    ``auth_seq`` is ``auth_seq_id`` with insertion code (``?`` when unknown),
+    ``comp_id`` is ``label_comp_id`` (``entity_poly_seq.mon_id`` for polymers),
+    ``asym`` is ``label_asym_id``, ``label_seq`` is ``label_seq_id`` (``.`` for
+    non-polymer and branched residues) and ``atom`` is ``label_atom_id``. Shared
+    by covalent links, modified residues and unresolved atoms.
+    """
+    label = str(label_seq)
+    if label in {"", "?", "."}:
+        label = "."
+    parts = [str(auth_seq), str(comp_id), str(asym_id), label]
+    if atom_name is not None:
+        parts.append(str(atom_name))
+    return ":".join(parts)
 
 
 def parse_struct_conn(

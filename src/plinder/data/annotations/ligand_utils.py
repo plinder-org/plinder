@@ -25,7 +25,11 @@ from plinder.data.annotations.interaction_utils import (
     extract_ligand_links_to_neighbouring_chains,
     run_peppr_interactions,
 )
-from plinder.data.annotations.protein_utils import Chain, sequences_match_core
+from plinder.data.annotations.protein_utils import (
+    Chain,
+    UnobservedAtom,
+    sequences_match_core,
+)
 from plinder.data.annotations.utils import (
     DocBaseModel,
     description_excluded_from_flat_export,
@@ -729,50 +733,115 @@ def _reference_smiles(codes: set[str]) -> set[str]:
 
 
 def _ligand_unresolved_atoms(
-    lig_heavy: "struc.AtomArray",
+    biounit: "struc.AtomArray",
+    heavy_indices: "npt.NDArray[np.int_]",
     member_asym_ids: set[str],
-    unobserved_atoms: ty.Mapping[str, list[tuple[str, str, str]]] | None,
+    unobserved_atoms: ty.Mapping[str, list[UnobservedAtom]] | None,
     ccd_code_dict: dict[str, str] | None,
+    polymer_asym_ids: ty.Collection[str],
 ) -> list[str] | None:
-    """Missing heavy atoms as ``{asym}:{comp_id}:{residue}:{atom}``.
+    """Missing heavy atoms as ``residue_address`` with atom,
+    ``{auth_seq}:{comp_id}:{asym}:{label_seq}:{atom}``.
 
-    From the wwPDB unobserved-atom records when the entry has them (residue is
-    ``auth_seq_id``), else from the CCD template of every ligand residue (model
-    residue number). ``None`` when neither source covers the ligand. Leaving
-    atoms are never reported.
+    Every ligand residue is diffed against its CCD template by atom name; model
+    atoms the template does not define are logged. Leaving atoms of polymer
+    residues never count (linkage is implied by the sequence, as in the wwPDB
+    records); for other residues they count unless the residue is bonded outside
+    itself through their anchor (glycosidic or protein link) in the biounit. The
+    wwPDB unobserved-atom records, when the entry has them, provide the list and
+    their truly absent rows are checked against the template diff (zero-occupancy
+    atoms have coordinates); ``None`` when no template covers the ligand and
+    there are no records.
     """
     from plinder.core.structure.ccd_template import (
-        ccd_heavy_atom_names,
-        unresolved_atoms_from_template,
+        ccd_component_template,
+        departed_leaving_atoms,
     )
+    from plinder.data.annotations.cif_utils import residue_address
 
-    if unobserved_atoms is not None:
-        entries = []
-        for asym_id in sorted(member_asym_ids):
-            for comp_id, auth_seq_id, atom_name in unobserved_atoms.get(asym_id, []):
-                template = ccd_heavy_atom_names(comp_id)
-                if template is not None:
-                    heavy, leaving = template
-                    if atom_name in leaving or atom_name not in heavy:
-                        continue
-                entries.append(f"{asym_id}:{comp_id}:{auth_seq_id}:{atom_name}")
-        return entries
-    residues: dict[tuple[str, int, str], list[str]] = {}
-    for chain_id, res_id, res_name, atom_name in zip(
-        lig_heavy.chain_id, lig_heavy.res_id, lig_heavy.res_name, lig_heavy.atom_name
-    ):
-        residues.setdefault((str(chain_id), int(res_id), str(res_name)), []).append(
-            str(atom_name)
+    categories = biounit.get_annotation_categories()
+    has_auth = "auth_seq_id" in categories
+    residues: dict[tuple[str, int, str], dict[str, ty.Any]] = {}
+    for index in heavy_indices:
+        index = int(index)
+        key = (
+            str(biounit.chain_id[index]),
+            int(biounit.res_id[index]),
+            str(biounit.res_name[index]),
         )
-    entries = []
-    for (chain_id, res_id, res_name), names in residues.items():
-        reference = (ccd_code_dict or {}).get(res_name, res_name)
-        missing = unresolved_atoms_from_template(reference, names)
-        if missing is None:
-            return None
+        info = residues.setdefault(key, {"indices": [], "names": [], "linked": set()})
+        info["indices"].append(index)
+        info["names"].append(str(biounit.atom_name[index]))
+    template_entries: list[str] = []
+    by_author: dict[tuple[str, str], dict[str, ty.Any]] = {}
+    covered = True
+    for (chain_id, res_id, res_name), info in residues.items():
+        first = info["indices"][0]
+        auth_seq = str(biounit.auth_seq_id[first]) if has_auth else str(res_id)
+        if biounit.ins_code[first]:
+            auth_seq = f"{auth_seq}{biounit.ins_code[first]}"
         asym_id = chain_id.split(".")[-1]
-        entries.extend(f"{asym_id}:{res_name}:{res_id}:{atom}" for atom in missing)
-    return entries
+        label_seq = res_id if asym_id in polymer_asym_ids else "."
+        own = set(info["indices"])
+        for index in info["indices"] if biounit.bonds is not None else []:
+            partners, _ = biounit.bonds.get_bonds(index)
+            if any(int(partner) not in own for partner in partners):
+                info["linked"].add(str(biounit.atom_name[index]))
+        reference = (ccd_code_dict or {}).get(res_name, res_name)
+        template = ccd_component_template(reference)
+        info["template"] = template
+        by_author.setdefault((asym_id, auth_seq), info)
+        if template is None:
+            covered = False
+            continue
+        unknown = [name for name in info["names"] if name not in template.elements]
+        if unknown:
+            LOG.warning(
+                f"{chain_id}:{res_name}:{res_id}: atoms {unknown} are not in CCD "
+                f"template {reference}"
+            )
+        excluded = (
+            template.leaving
+            if asym_id in polymer_asym_ids or biounit.bonds is None
+            else departed_leaving_atoms(template, info["linked"])
+        )
+        template_entries.extend(
+            residue_address(auth_seq, res_name, asym_id, label_seq, name)
+            for name in template.heavy
+            if name not in excluded and name not in info["names"]
+        )
+    if unobserved_atoms is None:
+        return template_entries if covered else None
+    record_entries: list[str] = []
+    absent: set[str] = set()
+    for asym_id in sorted(member_asym_ids):
+        for row in unobserved_atoms.get(asym_id, []):
+            info = by_author.get((asym_id, row.auth_seq))
+            template = info["template"] if info else ccd_component_template(row.comp_id)
+            if template is not None:
+                if template.elements.get(row.atom_name) in {"H", "D"}:
+                    continue
+                excluded = (
+                    template.leaving
+                    if asym_id in polymer_asym_ids
+                    or info is None
+                    or biounit.bonds is None
+                    else departed_leaving_atoms(template, info["linked"])
+                )
+                if row.atom_name in excluded:
+                    continue
+            entry = residue_address(
+                row.auth_seq, row.comp_id, asym_id, row.label_seq, row.atom_name
+            )
+            record_entries.append(entry)
+            if info is not None and not row.zero_occupancy:
+                absent.add(entry)  # cross-check covers modelled residues only
+    if covered and absent != set(template_entries):
+        LOG.warning(
+            f"{sorted(member_asym_ids)}: wwPDB unobserved-atom records "
+            f"{sorted(absent ^ set(template_entries))} disagree with the CCD template diff"
+        )
+    return record_entries
 
 
 def get_molecule_type(chain_type_str: str) -> str:
@@ -1158,8 +1227,14 @@ class Ligand(DocBaseModel):
     )
     covalent_linkages: set[str] = Field(
         default_factory=set[str],
-        description="Ligand covalent linkages from _struct_conn (conn_type_id='covale'), "
-        + "format: {auth_seq}:{comp_id}:{chain}:{seq}:{atom}__{auth_seq}:{comp_id}:{chain}:{seq}:{atom}",
+        description=(
+            "Covalent links from _struct_conn (conn_type_id='covale') as "
+            "receptor_end__ligand_end; each end is "
+            "{auth_seq}:{comp_id}:{asym}:{label_seq}:{atom} (auth_seq_id with "
+            "insertion code, label_comp_id, label_asym_id, label_seq_id or '.' for "
+            "non-polymers, label_atom_id), the residue address shared with "
+            "ligand_unresolved_atoms and chain_modified_residues"
+        ),
     )
     neighboring_residues: dict[str, list[int]] = Field(
         default_factory=dict,
@@ -1259,7 +1334,8 @@ class Ligand(DocBaseModel):
                 "pocket_unresolved_atoms",
                 "list[str]",
                 "Heavy atoms missing from pocket residues as "
-                "{instance}.{asym}_{residue_number}_{atom}",
+                "{auth_seq}:{comp_id}:{asym}:{label_seq}:{atom}, the residue address "
+                "of ligand_covalent_linkages",
             ),
         )
         for suffix, dtype, description in custom_columns:
@@ -1278,15 +1354,17 @@ class Ligand(DocBaseModel):
     )
     num_unresolved_heavy_atoms: int | None = Field(
         default=None,
-        description="Number of unresolved heavy atoms in a ligand: wwPDB unobserved-atom "
-        "records, else CCD template minus resolved atoms, else reference SMILES count "
-        "minus resolved atoms",
+        description="Number of unresolved heavy atoms in a ligand: wwPDB unobserved or "
+        "zero-occupancy atom records, else CCD template minus resolved atoms, else "
+        "reference SMILES count minus resolved atoms",
     )
     unresolved_atoms: list[str] = Field(
         default_factory=list,
-        description="Heavy atoms missing from the ligand model as {asym}:{comp_id}:{residue}:{atom}; "
-        "residue is auth_seq_id from wwPDB unobserved-atom records, or the model residue "
-        "number when derived from the CCD template; CCD leaving atoms excluded",
+        description="Heavy atoms missing from the ligand model as "
+        "{auth_seq}:{comp_id}:{asym}:{label_seq}:{atom}, the residue address of "
+        "ligand_covalent_linkages; from wwPDB unobserved or zero-occupancy atom records, "
+        "else the CCD template minus resolved atoms; leaving atoms of polymer and linked "
+        "residues excluded",
     )
     tpsa: float | None = Field(
         default=None, description="Topological polar surface area"
@@ -1496,7 +1574,7 @@ class Ligand(DocBaseModel):
         member_residue_numbers: dict[str, list[int]] | None = None,
         chain_pair_contact_areas: ty.Mapping[tuple[str, str], float] | None = None,
         subject_of_investigation_comp_ids: ty.Collection[str] | None = None,
-        unobserved_atoms: ty.Mapping[str, list[tuple[str, str, str]]] | None = None,
+        unobserved_atoms: ty.Mapping[str, list[UnobservedAtom]] | None = None,
     ) -> Ligand | None:
         """Build a Ligand from a biounit AtomArray and chain metadata.
 
@@ -1698,7 +1776,9 @@ class Ligand(DocBaseModel):
         from biotite.structure import filter_heavy
 
         smiles = None
-        lig_heavy = lig_atoms[filter_heavy(lig_atoms)]
+        heavy_mask = filter_heavy(lig_atoms)
+        lig_heavy = lig_atoms[heavy_mask]
+        lig_heavy_indices = lig_indices[heavy_mask]
         res_names = _residues_in_order(lig_heavy)
         reference_fragments: list[str] = []
         for resname in res_names:
@@ -1782,7 +1862,12 @@ class Ligand(DocBaseModel):
             else None
         )
         unresolved_atoms = _ligand_unresolved_atoms(
-            lig_heavy, member_asym_ids, unobserved_atoms, ligand_ccd_code_dict
+            biounit,
+            lig_heavy_indices,
+            member_asym_ids,
+            unobserved_atoms,
+            ligand_ccd_code_dict,
+            chain_to_seqres or {},
         )
         if unresolved_atoms is not None:
             num_unresolved_heavy_atoms: int | None = len(unresolved_atoms)
@@ -2394,14 +2479,24 @@ class Ligand(DocBaseModel):
         # contact areas: one chain list and one aligned area list
         data["ligand_contact_area_chains"] = list(self.chain_contact_areas)
         data["ligand_contact_area_values"] = list(self.chain_contact_areas.values())
-        data["ligand_pocket_unresolved_atoms"] = sorted(
-            f"{instance_chain}_{residue_number}_{atom_name}"
-            for instance_chain, residue_numbers in self.neighboring_residues.items()
-            for residue_number in residue_numbers
-            for atom_name in chains[instance_chain.split(".")[-1]]
-            .residues[residue_number]
-            .unresolved_atom_names
-        )
+        from plinder.data.annotations.cif_utils import residue_address
+
+        # residue address as in covalent_linkages; an ASU fact, so no instance
+        pocket_unresolved: set[str] = set()
+        for instance_chain, residue_numbers in self.neighboring_residues.items():
+            asym_id = instance_chain.split(".")[-1]
+            for residue_number in residue_numbers:
+                residue = chains[asym_id].residues[residue_number]
+                auth_seq = residue.auth_number
+                if residue.insertion_code not in {"", ".", "?"}:
+                    auth_seq = f"{auth_seq}{residue.insertion_code}"
+                pocket_unresolved.update(
+                    residue_address(
+                        auth_seq, residue.name, asym_id, residue_number, atom_name
+                    )
+                    for atom_name in residue.unresolved_atom_names
+                )
+        data["ligand_pocket_unresolved_atoms"] = sorted(pocket_unresolved)
         # chains
         data.update(
             {"ligand_auth_id": chains[self.asym_id].auth_id}
