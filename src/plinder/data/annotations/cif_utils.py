@@ -379,6 +379,15 @@ def get_structure_with_altloc(
     Non-alphabetic source IDs are therefore mapped temporarily, then restored
     on the returned ``selected_altloc_id`` annotation so validation can select
     the exact same deposited conformer.
+
+    TODO: discuss switching to highest-occupancy selection (``altloc="occupancy"``)
+    instead of deposited-first. Occupancy is the crystallographer's quantitative
+    statement of the dominant conformer, so it may be more principled — but it is
+    a deliberate deposited-first choice today, and the switch would change
+    coordinates (hence bonds/interactions/validation) for altloc-heavy entries,
+    can stitch per-residue occupancy picks across correlated altloc states, and
+    biotite's ``altloc="occupancy"`` raises when a CIF has no occupancy column
+    (predicted/custom CIFs) so it must fall back to ``"first"`` there.
     """
     requested_extra_fields = list(extra_fields or [])
     include_label_alt_id = "label_alt_id" in requested_extra_fields
