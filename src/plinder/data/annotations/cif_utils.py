@@ -936,16 +936,6 @@ class MissingBondOrderError(ValueError):
 _MIN_CCD_ATOM_MATCH_FRACTION = 0.5
 
 
-def _get_hetatm_comp_ids(block: pdbx.CIFBlock) -> set[str]:
-    """Extract non-polymer component IDs from atom_site."""
-    if "atom_site" not in block:
-        return set()
-    atom_site = block["atom_site"]
-    group_pdb = atom_site["group_PDB"].as_array()
-    comp_ids = atom_site["label_comp_id"].as_array()
-    return {comp_ids[i] for i in range(len(group_pdb)) if group_pdb[i] == "HETATM"}
-
-
 def _get_cif_bond_comp_ids(block: pdbx.CIFBlock) -> set[str]:
     """Return the set of comp_ids that already have _chem_comp_bond entries."""
     if "chem_comp_bond" not in block:
@@ -1005,28 +995,50 @@ def get_unknown_ligand_ids(cif_input: pdbx.CIFFile | Path | str) -> set[str]:
     if not isinstance(cif_input, pdbx.CIFFile):
         cif_input = pdbx.CIFFile.read(str(cif_input))
     block = list(cif_input.values())[0]
+    if "atom_site" not in block:
+        return set()
+    atom_site = block["atom_site"]
 
-    hetatm_ids = _get_hetatm_comp_ids(block)
+    # Scan model 1 only — the sole model built downstream. A later-model-only
+    # component would otherwise falsely drive enrichment (or raise a spurious
+    # MissingBondOrderError) for a model that is never used.
+    if "pdbx_PDB_model_num" in atom_site:
+        model_nums = atom_site["pdbx_PDB_model_num"].as_array()
+        n_models = len(set(model_nums))
+        model_mask = model_nums == model_nums[0]
+    else:
+        n_models = 1
+        model_mask = np.ones(atom_site.row_count, dtype=bool)
+    if n_models > 1:
+        LOG.warning(
+            f"CIF has {n_models} models — scanning model 1 only for unknown "
+            "ligands; other models are not read."
+        )
+
+    group_pdb = atom_site["group_PDB"].as_array()[model_mask]
+    comp_ids = atom_site["label_comp_id"].as_array()[model_mask]
+    hetatm_ids = {
+        comp_ids[i] for i in range(len(group_pdb)) if group_pdb[i] == "HETATM"
+    }
     if not hetatm_ids:
         return set()
 
     cif_bond_ids = _get_cif_bond_comp_ids(block)
 
     # Collect heavy-atom names per comp_id for validation
+    a_names = atom_site["label_atom_id"].as_array()[model_mask]
+    elements = (
+        atom_site["type_symbol"].as_array()[model_mask]
+        if "type_symbol" in atom_site
+        else None
+    )
     atom_names_per_comp: dict[str, set[str]] = {}
-    if "atom_site" in block:
-        atom_site = block["atom_site"]
-        comp_ids = atom_site["label_comp_id"].as_array()
-        a_names = atom_site["label_atom_id"].as_array()
-        elements = (
-            atom_site["type_symbol"].as_array() if "type_symbol" in atom_site else None
-        )
-        for comp_id in hetatm_ids:
-            if elements is not None:
-                mask = (comp_ids == comp_id) & (elements != "H") & (elements != "D")
-            else:
-                mask = comp_ids == comp_id
-            atom_names_per_comp[comp_id] = set(a_names[mask])
+    for comp_id in hetatm_ids:
+        if elements is not None:
+            mask = (comp_ids == comp_id) & (elements != "H") & (elements != "D")
+        else:
+            mask = comp_ids == comp_id
+        atom_names_per_comp[comp_id] = set(a_names[mask])
 
     unknown = set()
     for comp_id in hetatm_ids:

@@ -18,6 +18,7 @@ from plinder.data.annotations.ligand_utils import (
     BiounitSpatialIndex,
     classify_ligand_polymer_classes,
     get_water_chain_ids,
+    is_excluded_mol,
     is_known_artifact_ligand,
 )
 from plinder.data.annotations.mmpdb_utils import add_mmp_clusters_to_data
@@ -838,6 +839,75 @@ def test_10sb_covalent_macrocycle_is_single_ligand(cif_10sb, mock_alternative_da
     assert mol is not None
     assert len(Chem.MolToSmiles(mol).split(".")) == 1
     assert mol.GetNumAtoms() == lig.num_heavy_atoms
+
+
+@pytest.mark.parametrize(
+    "fixture, holo_receptors, apo_proteins",
+    [
+        # 4ci1: chain B binds ligand D (one holo system); chain A is a
+        # second, unliganded copy of the same protein in the ASU.
+        ("cif_4ci1", {"B"}, {"A"}),
+        # 2p1q: chains B + C form the liganded receptor (ligands D, E);
+        # chain A is an apo copy that joins no system.
+        ("cif_2p1q", {"B", "C"}, {"A"}),
+    ],
+    ids=["4ci1-apo-copy", "2p1q-apo-copies"],
+)
+def test_label_chains_marks_holo_and_apo_protein_chains(
+    request, fixture, holo_receptors, apo_proteins
+):
+    """Entry.label_chains flags each protein chain holo/apo from the systems.
+
+    A protein chain that is the receptor of a holo system is ``holo=True``;
+    a protein chain that binds no ligand (e.g. a second, unliganded copy in
+    the asymmetric unit) is ``holo=False``. Ground truth read from the CIFs:
+
+    * 4ci1 - chain B binds ligand D; chain A is an apo copy.
+    * 2p1q - chains B and C form the liganded receptor; chain A is apo.
+
+    The second half corrupts every asserted flag and re-runs ``label_chains``
+    directly, proving the labels are (re)computed by that method from
+    ``entry.systems`` alone, not merely a leftover of the ingest pipeline.
+    """
+    cif = request.getfixturevalue(fixture)
+    # No save_folder: data_dir stays None so no artifact reclassification —
+    # matches the systems the labels below were read from.
+    entry = Entry.from_cif_file(cif)
+
+    # Labels produced by the pipeline (label_chains runs inside _finalize).
+    for chain in holo_receptors:
+        assert entry.chains[chain].holo is True, f"{chain} should be holo"
+    for chain in apo_proteins:
+        assert entry.chains[chain].holo is False, f"{chain} should be apo"
+
+    # Isolation: set every asserted flag to the WRONG value, re-run
+    # label_chains, and confirm it restores the correct labels. This
+    # exercises both branches — holo receptors flipped False must go True,
+    # apo chains flipped True must go False.
+    for chain in holo_receptors:
+        entry.chains[chain].holo = False
+    for chain in apo_proteins:
+        entry.chains[chain].holo = True
+    entry.label_chains()
+    for chain in holo_receptors:
+        assert entry.chains[chain].holo is True
+    for chain in apo_proteins:
+        assert entry.chains[chain].holo is False
+
+
+def test_is_excluded_mol_non_molecule_is_excluded():
+    """An empty or unparseable SMILES is not a molecule — exclude it.
+
+    A ligand we fail to characterize (CCD miss + RDKit failure) has no real
+    SMILES; excluding it is correct, and an invalid SMILES (RDKit returns
+    ``None``) must be excluded rather than crash the classifier.
+    """
+    assert is_excluded_mol("") is True  # empty -> not a molecule
+    assert is_excluded_mol("not a smiles") is True  # unparseable (None) -> excluded
+    # A genuine tiny fragment is also excluded (< 5 heavy atoms / < 2 carbons).
+    assert is_excluded_mol("O") is True
+    # A drug-like molecule is not excluded.
+    assert is_excluded_mol("CC(=O)Oc1ccccc1C(=O)O") is False  # aspirin
 
 
 def test_fill_missing_ccd_bonds():

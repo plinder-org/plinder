@@ -729,6 +729,14 @@ class Entry(DocBaseModel):
         default_factory=dict,
         description="__Resolved biological-assembly chain instances by assembly ID",
     )
+    # TODO: consider surfacing this as an exported plindex column (drop the
+    # ``__`` prefix + wire column_descriptions/schema) so a dropped assembly is
+    # visible downstream, not only in this in-memory metadata + the error log.
+    failed_assembly_ids: list[str] = Field(
+        default_factory=list,
+        description="__Biological-assembly IDs biotite could not build; their "
+        "systems are absent from this entry.",
+    )
     symmetry_mate_contacts: SymmetryMateContacts = Field(
         default_factory=dict, description="__Symmetry mate contacts in the entry"
     )
@@ -764,6 +772,7 @@ class Entry(DocBaseModel):
         if clear_non_pocket_residues:
             self.clear_non_pocket_residues()
         if load_for_scoring:
+            n_before = len(self.systems)
             self.systems = {
                 s.id: s
                 for s in self.systems.values()
@@ -771,6 +780,14 @@ class Entry(DocBaseModel):
                 and len(s.protein_chains_asym_id) <= max_protein_chains
                 and len(s.ligand_chains) <= max_ligand_chains
             }
+            n_dropped = n_before - len(self.systems)
+            if n_dropped:
+                LOG.info(
+                    f"{self.pdb_id}: prune(load_for_scoring) dropped {n_dropped} "
+                    f"of {n_before} systems (non-holo or exceeding "
+                    f"{max_protein_chains} protein / {max_ligand_chains} ligand "
+                    "chains)"
+                )
         return self
 
     def _populate_chains(
@@ -851,17 +868,143 @@ class Entry(DocBaseModel):
 
         self.water_chains = sorted(water_chains)
 
+    @staticmethod
+    def _clear_ligand_files(save_folder: Path | None, pdb_id: str) -> None:
+        """Remove ligand SDFs left by a prior annotation of this entry.
+
+        Re-ingest must never merge newly retained ligands with SDFs left in
+        ``<save_folder>/<pdb_id>/ligand_files`` by an earlier run; clear the
+        directory up front so even an early no-system return leaves it empty.
+        """
+        if save_folder is None:
+            return
+        ligand_dir = Path(save_folder) / pdb_id / "ligand_files"
+        if ligand_dir.exists():
+            shutil.rmtree(ligand_dir)
+
+    @staticmethod
+    def _load_clean_atoms(
+        cif_file_obj: pdbx.CIFFile,
+        *,
+        source: str,
+        no_bonds_error: str,
+        multimodel_note: str = "",
+    ) -> struc.AtomArray:
+        """Parse model 1 as a bond-clean, heavy-atom ``AtomArray``.
+
+        Shared by both ingest paths so their structure loading and bond
+        handling cannot drift apart. Loads model 1 with altlocs and
+        ``include_bonds=True``, drops hydrogens, and prunes non-physical
+        bonds.
+
+        Parameters
+        ----------
+        cif_file_obj : pdbx.CIFFile
+            Parsed CIF (already bond-enriched for custom structures).
+        source : str
+            Structure label for the multi-model warning, e.g.
+            ``"PDB '1abc'"`` or ``"Custom CIF"``.
+        no_bonds_error : str
+            Message for the ``ValueError`` raised when biotite derives no
+            bonds despite ``include_bonds=True``.
+        multimodel_note : str, optional
+            Extra guidance appended to the multi-model warning.
+
+        Returns
+        -------
+        struc.AtomArray
+            Heavy atoms of model 1 with a physical bond graph.
+
+        Raises
+        ------
+        ValueError
+            If biotite returns no bonds (``atoms.bonds is None``).
+
+        Notes
+        -----
+        ``use_author_fields=False`` keeps ligand-chain detection keyed on
+        label_seq_id, while ``auth_seq_id`` is loaded separately so author
+        residue numbers survive into :meth:`Chain.from_cif_data`. Only
+        model 1 is used; NMR ensembles and multi-sample predictions must be
+        processed one model at a time.
+        """
+        n_models = get_model_count(cif_file_obj)
+        if n_models > 1:
+            LOG.warning(
+                f"{source} has {n_models} models — using model 1 only."
+                f"{multimodel_note}"
+            )
+        atoms = get_structure_with_altloc(
+            cif_file_obj,
+            model=1,
+            use_author_fields=False,
+            include_bonds=True,
+            extra_fields=["auth_seq_id"],
+        )
+        atoms = atoms[filter_heavy(atoms)]
+        if atoms.bonds is None:
+            raise ValueError(no_bonds_error)
+        remove_nonphysical_bonds(atoms)
+        return atoms
+
     def _finalize(
         self,
         ligands: dict[str, Ligand],
+        atoms: struc.AtomArray,
+        *,
+        save_folder: Path | None = None,
         min_shared_pocket_members: int = 3,
+        cif_file_obj: pdbx.CIFFile | None = None,
+        symmetry_mate_contact_threshold: float = 5.0,
     ) -> None:
-        """Label crystal contacts and set systems."""
-        if self.symmetry_mate_contacts:
-            for ligand in ligands.values():
-                ligand.label_crystal_contacts(self.symmetry_mate_contacts)
+        """Set systems, label crystal contacts and chains, and save ligand SDFs.
+
+        The shared tail of both ingest paths.
+
+        Parameters
+        ----------
+        ligands : dict[str, Ligand]
+            Candidate ligands collected across all biounits.
+        atoms : struc.AtomArray
+            Heavy-atom model used to write the ligand SDFs.
+        save_folder : Path | None, optional
+            Root for canonical ASU ligand SDFs; ``None`` skips saving.
+        cif_file_obj : pdbx.CIFFile | None, optional
+            Parsed CIF used for crystal-contact detection; ``None`` skips it.
+        symmetry_mate_contact_threshold : float, optional
+            Distance (Å) for symmetry-mate contacts.
+
+        Notes
+        -----
+        Crystal contacts are computed only when ``cif_file_obj`` is given
+        (deposited structures with crystallographic symmetry) and only for
+        ligands that ended up in a system; custom/predicted CIFs pass
+        ``None`` to skip that step. One SDF is written per retained ligand,
+        keyed by its primary asym and spanning every member chain, so
+        covalently-linked ligand chains are saved as a single molecule.
+        """
         self.set_systems(ligands, min_shared_pocket_members=min_shared_pocket_members)
+        if self.systems and cif_file_obj is not None:
+            self.symmetry_mate_contacts = get_symmetry_mate_contacts(
+                cif_file_obj,
+                symmetry_mate_contact_threshold,
+            )
+            if self.symmetry_mate_contacts:
+                for system in self.systems.values():
+                    for ligand in system.ligands:
+                        ligand.label_crystal_contacts(self.symmetry_mate_contacts)
         self.label_chains()
+        retained_ligand_chain_groups = {
+            ligand.asym_id: ligand.member_asym_ids
+            for system in self.systems.values()
+            for ligand in system.ligands
+        }
+        if save_folder is not None and retained_ligand_chain_groups:
+            save_ligands(
+                atoms,
+                retained_ligand_chain_groups,
+                save_folder / self.pdb_id / "ligand_files",
+            )
 
     def _collect_ligands_from_biounit(
         self,
@@ -1199,13 +1342,7 @@ class Entry(DocBaseModel):
 
         # Extract metadata from CIF block
         pdb_id = (_cif_scalar(cif_data, "entry", "id") or "").lower()
-        if save_folder is not None:
-            # Re-ingest must never merge newly retained ligands with SDFs from
-            # a previous annotation of the same entry.  Clear this derived
-            # directory before any early no-system return as well.
-            ligand_dir = Path(save_folder) / pdb_id / "ligand_files"
-            if ligand_dir.exists():
-                shutil.rmtree(ligand_dir)
+        cls._clear_ligand_files(save_folder, pdb_id)
         release_date = _cif_scalar(
             cif_data, "pdbx_audit_revision_history", "revision_date"
         )
@@ -1245,25 +1382,13 @@ class Entry(DocBaseModel):
             )
             return entry
 
-        # Load structure with biotite
-        # Multi-model PDBs (e.g. NMR ensembles) silently use model 1 here;
-        # warn so callers know other models are dropped.
-        n_models = get_model_count(cif_file_obj)
-        if n_models > 1:
-            LOG.warning(f"PDB {pdb_id!r} has {n_models} models — using model 1 only.")
-        atoms = get_structure_with_altloc(
+        atoms = cls._load_clean_atoms(
             cif_file_obj,
-            model=1,
-            use_author_fields=False,
-            include_bonds=True,
-            extra_fields=["auth_seq_id"],
-        )
-        atoms = atoms[filter_heavy(atoms)]
-        if atoms.bonds is None:
-            raise ValueError(
+            source=f"PDB {pdb_id!r}",
+            no_bonds_error=(
                 f"{pdb_id}: biotite returned no bonds despite include_bonds=True"
-            )
-        remove_nonphysical_bonds(atoms)
+            ),
+        )
         chain_to_seqres = get_label_asym_sequences(cif_data)
 
         entry.covalent_bonds = get_covalent_connections(cif_data)
@@ -1334,7 +1459,13 @@ class Entry(DocBaseModel):
             try:
                 biounit = build_biounit(cif_file_obj, assembly_id)
             except Exception as e:
-                LOG.warning(f"Could not build assembly {assembly_id}: {e}")
+                # Skip this assembly but record it: its systems are silently
+                # missing from the entry otherwise. Other assemblies proceed.
+                LOG.error(
+                    f"Could not build assembly {assembly_id} for "
+                    f"{entry.pdb_id!r}: {e}"
+                )
+                entry.failed_assembly_ids.append(assembly_id)
                 continue
             entry.biounit_chain_ids[assembly_id] = sorted(
                 str(chain_id) for chain_id in np.unique(biounit.chain_id)
@@ -1435,33 +1566,14 @@ class Entry(DocBaseModel):
             ligands.update(primary_ligands)
             ligands.update(ion_ligands)
             ligands.update(artifact_ligands)
-        entry.set_systems(
+        entry._finalize(
             ligands,
+            atoms,
+            save_folder=save_folder,
             min_shared_pocket_members=min_shared_pocket_members,
+            cif_file_obj=cif_file_obj,
+            symmetry_mate_contact_threshold=symmetry_mate_contact_threshold,
         )
-        if entry.systems:
-            entry.symmetry_mate_contacts = get_symmetry_mate_contacts(
-                cif_file_obj,
-                symmetry_mate_contact_threshold,
-            )
-            if entry.symmetry_mate_contacts:
-                for system in entry.systems.values():
-                    for ligand in system.ligands:
-                        ligand.label_crystal_contacts(entry.symmetry_mate_contacts)
-        entry.label_chains()
-        # One SDF per ligand, keyed by primary asym, spanning every member
-        # chain so covalently-linked ligand chains are saved as one molecule.
-        retained_ligand_chain_groups = {
-            ligand.asym_id: ligand.member_asym_ids
-            for system in entry.systems.values()
-            for ligand in system.ligands
-        }
-        if save_folder is not None and retained_ligand_chain_groups:
-            save_ligands(
-                atoms,
-                retained_ligand_chain_groups,
-                save_folder / entry.pdb_id / "ligand_files",
-            )
         return entry
 
     @classmethod
@@ -1537,26 +1649,16 @@ class Entry(DocBaseModel):
             read_mmcif_file,
         )
 
-        if save_folder is not None:
-            ligand_dir = Path(save_folder) / pdb_id / "ligand_files"
-            if ligand_dir.exists():
-                shutil.rmtree(ligand_dir)
-
-        # Read CIF once into memory — we mutate this copy only, never the file on disk.
+        # Read CIF once into memory — we mutate this copy only, never the
+        # file on disk.
         cif_file_obj = read_mmcif_file(cif_file)
+        cif_data = list(cif_file_obj.values())[0]
+        cls._clear_ligand_files(save_folder, pdb_id)
+        entry = cls(pdb_id=pdb_id)
 
-        # Multi-model CIFs (NMR ensembles, Boltz multi-sample, PyMOL
-        # states) are processed using model 1 only — surface a warning
-        # so users know other models were dropped and can call this
-        # function per-model if they need ensemble analysis.
-        n_models = get_model_count(cif_file_obj)
-        if n_models > 1:
-            LOG.warning(
-                f"Custom CIF has {n_models} models — using model 1 only. "
-                "Call from_custom_cif_file once per model for ensemble analysis."
-            )
-
-        # Check for missing bond orders and enrich CIF in-memory if needed
+        # Custom CIFs may lack bond orders (typical of cofolding outputs);
+        # enrich the in-memory copy from CCD / supplied SMILES before any
+        # structure parsing. Deposited PDBs (from_cif_file) never need this.
         unknown_ids = get_unknown_ligand_ids(cif_file_obj)
         enrichment_applied = False
         if unknown_ids:
@@ -1591,37 +1693,25 @@ class Entry(DocBaseModel):
                 )
             cif_file_obj.write(str(save_fixed_cif))
 
-        cif_data = list(cif_file_obj.values())[0]
-        atoms = get_structure_with_altloc(
+        atoms = cls._load_clean_atoms(
             cif_file_obj,
-            model=1,
-            use_author_fields=False,
-            include_bonds=True,
-            extra_fields=["auth_seq_id"],
-        )
-        atoms = atoms[filter_heavy(atoms)]
-        if atoms.bonds is None:
-            # ``include_bonds=True`` returning ``None`` means biotite
-            # derived **no bonds at all** for the structure — every
-            # residue lookup failed. This is a fundamentally broken or
-            # corrupted CIF (post-enrichment, no _chem_comp_bond, no
-            # _struct_conn, and no CCD coverage for any residue).
-            raise ValueError(
+            source=f"Custom CIF {cif_file}",
+            no_bonds_error=(
                 f"Custom CIF {cif_file}: biotite returned no bonds at all "
                 "after enrichment — the CIF is corrupted or missing all "
                 "bond information (_chem_comp_bond, _struct_conn, and CCD "
                 "coverage are all absent)."
-            )
-        remove_nonphysical_bonds(atoms)
-        chain_to_seqres = get_label_asym_sequences(cif_data)
-
-        entry = cls(
-            pdb_id=pdb_id,
-            chain_to_seqres=chain_to_seqres,
+            ),
+            multimodel_note=(
+                " Call from_custom_cif_file once per model for ensemble analysis."
+            ),
         )
+        chain_to_seqres = get_label_asym_sequences(cif_data)
+        entry.chain_to_seqres = chain_to_seqres
         entry._populate_chains(atoms, cif_data)
         entry.ligand_like_chains = detect_ligand_chains(entry, min_polymer_size)
         # Create single biounit with "1." prefix on chain IDs
+        assembly_id = "1"  # single assembly; custom CIFs lack _pdbx_struct_assembly
         biounit = atoms.copy()
         biounit.chain_id = np.array([f"1.{c}" for c in biounit.chain_id])
         entry.biounit_chain_ids["1"] = sorted(
@@ -1638,7 +1728,7 @@ class Entry(DocBaseModel):
         water_chains = get_water_chain_ids(biounit)
         ligands = entry._collect_ligands_from_biounit(
             biounit,
-            "1",  # single assembly; custom CIFs lack _pdbx_struct_assembly
+            assembly_id,
             plip_complex_threshold,
             neighboring_residue_threshold,
             neighboring_ligand_threshold,
@@ -1649,21 +1739,10 @@ class Entry(DocBaseModel):
         )
         entry._finalize(
             ligands,
+            atoms,
+            save_folder=save_folder,
             min_shared_pocket_members=min_shared_pocket_members,
         )
-        # One SDF per ligand, keyed by primary asym, spanning every member
-        # chain so covalently-linked ligand chains are saved as one molecule.
-        retained_ligand_chain_groups = {
-            ligand.asym_id: ligand.member_asym_ids
-            for system in entry.systems.values()
-            for ligand in system.ligands
-        }
-        if save_folder is not None and retained_ligand_chain_groups:
-            save_ligands(
-                atoms,
-                retained_ligand_chain_groups,
-                save_folder / entry.pdb_id / "ligand_files",
-            )
         return entry
 
     def set_systems(
@@ -2061,6 +2140,7 @@ class Entry(DocBaseModel):
                     all_pocket_residues[chain.split(".")[1]].update(
                         ligand.pocket_residues[chain].keys()
                     )
+        n_before = sum(len(c.residues) for c in self.chains.values())
         for chain in self.chains:
             if chain in all_pocket_residues:
                 self.chains[chain].residues = {
@@ -2069,6 +2149,12 @@ class Entry(DocBaseModel):
                 }
             else:
                 self.chains[chain].residues = {}
+        n_dropped = n_before - sum(len(c.residues) for c in self.chains.values())
+        if n_dropped:
+            LOG.info(
+                f"{self.pdb_id}: clear_non_pocket_residues dropped {n_dropped} of "
+                f"{n_before} chain residues (kept pocket residues only)"
+            )
 
     def set_validation(
         self,
@@ -2100,6 +2186,10 @@ class Entry(DocBaseModel):
                     for system in self.systems.values()
                     for ligand in system.ligands
                 )
+                # TODO: consider per-chain / per-system try/except here. This
+                # entry-level catch is coarse: one bad chain or system abandons
+                # validation for the whole entry, leaving partial state. Per-
+                # residue validation already degrades gracefully.
                 for chain in system_chain_ids:
                     self.chains[chain].set_validation(doc, thresholds)
                 for system in self.systems:

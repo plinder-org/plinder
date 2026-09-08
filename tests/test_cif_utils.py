@@ -221,6 +221,37 @@ def test_unknown_ligand_ids_detects_lig(boltz_cif):
     assert "LIG" in unknown
 
 
+def test_unknown_ligand_ids_scans_model_1_only(boltz_cif):
+    """A component present only in a later model must not be flagged.
+
+    Only model 1 is built downstream, so the unknown-ligand gate scans
+    model 1 alone. Otherwise a later-model-only ligand would trigger a
+    spurious MissingBondOrderError, discarding the whole entry even though
+    the model actually used (model 1) is fine.
+    """
+    f = pdbx.CIFFile.read(str(boltz_cif))
+    block = list(f.values())[0]
+    atom_site = block["atom_site"]
+    columns = {col: list(atom_site[col].as_array()) for col in atom_site.keys()}
+    if "pdbx_PDB_model_num" not in columns:
+        columns["pdbx_PDB_model_num"] = ["1"] * len(columns["label_comp_id"])
+
+    # Duplicate every atom into a second model, relabelling the copies as a
+    # brand-new unknown HETATM component that exists ONLY in model 2.
+    n_orig = len(columns["label_comp_id"])
+    for i in range(n_orig):
+        for col in columns:
+            columns[col].append(columns[col][i])
+        columns["pdbx_PDB_model_num"][n_orig + i] = "2"
+        columns["group_PDB"][n_orig + i] = "HETATM"
+        columns["label_comp_id"][n_orig + i] = "ZZZ"
+    block["atom_site"] = pdbx.CIFCategory(columns)
+
+    unknown = get_unknown_ligand_ids(f)
+    assert "LIG" in unknown  # model-1 unknown still detected
+    assert "ZZZ" not in unknown  # model-2-only component ignored
+
+
 def test_known_compounds_not_flagged(boltz_cif):
     """Known CCD compounds like ATP should not be flagged as unknown."""
     # Inject fake ATP HETATMs into the CIF (enough to match CCD atom count)
