@@ -390,6 +390,12 @@ def get_structure_with_altloc(
     (predicted/custom CIFs) so it must fall back to ``"first"`` there.
     """
     requested_extra_fields = list(extra_fields or [])
+    block = cif_file if isinstance(cif_file, pdbx.CIFBlock) else cif_file.block
+    if (
+        "pdbx_formal_charge" in block["atom_site"]
+        and "charge" not in requested_extra_fields
+    ):
+        requested_extra_fields.append("charge")
     include_label_alt_id = "label_alt_id" in requested_extra_fields
     if not include_label_alt_id:
         requested_extra_fields.append("label_alt_id")

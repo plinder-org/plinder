@@ -293,8 +293,10 @@ class System(DocBaseModel):
         return "__".join(
             [
                 self.pdb_id,
-                "_".join(x.split(".")[1] for x in self.protein_chains_asym_id),
-                "_".join(x.split(".")[1] for x in self.ligand_chains),
+                "_".join(
+                    x.split(".", maxsplit=1)[1] for x in self.protein_chains_asym_id
+                ),
+                "_".join(x.split(".", maxsplit=1)[1] for x in self.ligand_chains),
             ]
         )
 
@@ -745,15 +747,15 @@ class System(DocBaseModel):
     ) -> None:
         self.ligand_validation = ResidueListValidation.from_residues(
             [
-                chains[c.split(".")[1]].residues[r].validation  # type: ignore
+                chains[c.split(".", maxsplit=1)[1]].residues[r].validation  # type: ignore
                 for c in self.ligand_chains
-                for r in chains[c.split(".")[1]].residues
+                for r in chains[c.split(".", maxsplit=1)[1]].residues
             ],
             thresholds,
         )
         self.pocket_validation = ResidueListValidation.from_residues(
             [
-                chains[c.split(".")[1]].residues[r].validation  # type: ignore
+                chains[c.split(".", maxsplit=1)[1]].residues[r].validation  # type: ignore
                 for c in self.pocket_residues
                 for r in self.pocket_residues[c]
             ],
@@ -768,7 +770,7 @@ class System(DocBaseModel):
             neighboring_chain,
             neighboring_residues_list,
         ) in self.pocket_residues.items():
-            neighboring_chain = neighboring_chain.split(".")[-1]
+            neighboring_chain = neighboring_chain.split(".", maxsplit=1)[-1]
             neighboring_residues_set = {int(i) for i in neighboring_residues_list}
             for mapping_name in chains_dict[neighboring_chain].mappings:
                 if mapping_name == "BIRD":
@@ -1242,8 +1244,11 @@ class Entry(DocBaseModel):
             c
             for c in spatial_index.chain_ids
             if "." in c
-            and c.split(".")[1] in self.ligand_like_chains
-            and (ligand_asym_ids is None or c.split(".")[1] in ligand_asym_ids)
+            and c.split(".", maxsplit=1)[1] in self.ligand_like_chains
+            and (
+                ligand_asym_ids is None
+                or c.split(".", maxsplit=1)[1] in ligand_asym_ids
+            )
             and (ligand_instance_chains is None or c in ligand_instance_chains)
         ]
         if not biounit_ligand_chains:
@@ -1285,7 +1290,7 @@ class Entry(DocBaseModel):
             # Primary chain (deterministic): the first sorted member. The
             # ligand is keyed on it, but its atoms span every member chain.
             primary_chain = sorted(group)[0]
-            primary_instance, primary_asym_id = primary_chain.split(".")
+            primary_instance, primary_asym_id = primary_chain.split(".", maxsplit=1)
             ligand = Ligand.from_pli(
                 pdb_id=self.pdb_id,
                 biounit_id=biounit_id,
@@ -1343,7 +1348,7 @@ class Entry(DocBaseModel):
         # copies reuse asym labels but are physically independent.
         by_instance: dict[str, dict[str, str]] = defaultdict(dict)
         for chain in biounit_ligand_chains:
-            instance, asym = chain.split(".")
+            instance, asym = chain.split(".", maxsplit=1)
             by_instance[instance][asym] = chain
         for asym_to_chain in by_instance.values():
             for edge in covale_edges:
@@ -2465,7 +2470,7 @@ class Entry(DocBaseModel):
         ), "chain_type must be 'apo', 'holo', or 'pred'"
         if chain_type == "holo":
             receptor_asym_ids = {
-                i_c.split(".")[1]
+                i_c.split(".", maxsplit=1)[1]
                 for system in self.systems.values()
                 if system.system_type == "holo"
                 for i_c in system.protein_chains_asym_id
@@ -2532,7 +2537,7 @@ class Entry(DocBaseModel):
         for system in self.systems.values():
             if system.system_type == "holo":
                 holo_chains.update(
-                    [c.split(".")[1] for c in system.protein_chains_asym_id]
+                    [c.split(".", maxsplit=1)[1] for c in system.protein_chains_asym_id]
                 )
         for interface in self.interfaces:
             holo_chains.update(
@@ -2771,7 +2776,7 @@ class Entry(DocBaseModel):
         for system in self.systems.values():
             for ligand in system.ligands:
                 for chain in ligand.pocket_residues:
-                    all_pocket_residues[chain.split(".")[1]].update(
+                    all_pocket_residues[chain.split(".", maxsplit=1)[1]].update(
                         ligand.pocket_residues[chain].keys()
                     )
         n_before = sum(len(c.residues) for c in self.chains.values())
