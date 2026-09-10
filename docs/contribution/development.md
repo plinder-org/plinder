@@ -36,10 +36,10 @@ $ pip install -e ".[dev]"
 
 ### Evaluation scoring (optional)
 
-`plinder.eval` requires [OpenStructure](https://openstructure.org/) for
-lDDT/RMSD scoring metrics. OpenStructure currently requires numpy<2, so it
-is installed from Bioconda by the repository's `environment.yml`. It is not a
-PyPI dependency. Install the remaining optional evaluation dependencies with:
+`plinder.eval` runs the [OpenStructure](https://openstructure.org/) command-line
+actions for ligand and protein-interface evaluation. OpenStructure 2.12.0 or
+newer is installed from Bioconda by the repository's `environment.yml`; it is
+not a PyPI dependency. Install the optional evaluation dependencies with:
 
 ```console
 $ pip install -e ".[eval]"

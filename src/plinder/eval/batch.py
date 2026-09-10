@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import multiprocessing
 import os
+import sys
 from collections.abc import Mapping, Sequence
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -106,8 +107,8 @@ def _references(
 
 
 def _ligand_rows(
-    result: dict, reference: _Reference, model_ids: dict[str, str]
-) -> list[dict]:
+    result: dict[str, Any], reference: _Reference, model_ids: dict[str, str]
+) -> list[dict[str, Any]]:
     """Keep each reference ligand and each metric's independent assignment."""
     reference_ids = {
         str(path.resolve()): ligand_id for ligand_id, path in reference.ligands.items()
@@ -143,14 +144,22 @@ def _ligand_rows(
 
 
 def _worker_threads() -> None:
+    from threadpoolctl import threadpool_limits
+
     # OST subprocesses inherit these limits; PoseBusters' own pool is disabled.
     for variable in (
         "OMP_NUM_THREADS",
         "OPENBLAS_NUM_THREADS",
         "MKL_NUM_THREADS",
+        "BLIS_NUM_THREADS",
         "NUMEXPR_NUM_THREADS",
     ):
         os.environ[variable] = "1"
+    # Spawn imports pandas/NumPy before the initializer. Limit their already
+    # loaded BLAS/OpenMP runtimes, not just libraries in future subprocesses.
+    threadpool_limits(limits=1)
+    if "numexpr" in sys.modules:
+        sys.modules["numexpr"].set_num_threads(1)
 
 
 def _evaluate_one(
@@ -158,16 +167,16 @@ def _evaluate_one(
     *,
     output_dir: Path,
     posebusters: bool,
-    ligand_smiles: dict,
-    ligand_ccd_codes: dict,
+    ligand_smiles: dict[str, str],
+    ligand_ccd_codes: dict[str, str],
     ligand_chains: tuple[str, ...],
     ligand_options: tuple[str, ...],
     interface_options: tuple[str, ...],
     ost_executable: str,
-) -> dict[str, list[dict]]:
+) -> dict[str, list[dict[str, Any]]]:
     model, prediction, references = task
     details = output_dir / "details" / prediction
-    results: dict[str, list[dict]] = {
+    results: dict[str, list[dict[str, Any]]] = {
         key: [] for key in ("ligands", "interfaces", "posebusters", "failures")
     }
 
@@ -323,7 +332,7 @@ def evaluate_predictions(
     predictions, output_dir = Path(predictions).resolve(), Path(output_dir).resolve()
     if not predictions.is_dir():
         raise NotADirectoryError(predictions)
-    tasks = []
+    tasks: list[tuple[Path, str, list[_Reference]]] = []
     collected: dict[str, list[dict[str, Any]]] = {
         key: [] for key in ("ligands", "interfaces", "posebusters", "failures")
     }

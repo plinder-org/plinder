@@ -1,7 +1,10 @@
 """Folder evaluation keeps failures, native assignments and bounded workers."""
 
 import json
+import multiprocessing
+import os
 import shutil
+from concurrent.futures import ProcessPoolExecutor
 from types import SimpleNamespace
 
 import pandas as pd
@@ -9,6 +12,46 @@ import pytest
 from plinder.core.release import PlinderRelease
 from plinder.eval import batch, evaluate_predictions
 from plinder.eval.batch import _ligand_rows, _Reference
+
+
+def _initialize_with_loaded_blas():
+    from threadpoolctl import threadpool_info, threadpool_limits
+
+    # pandas/NumPy were imported before the ProcessPool initializer. Ensure the
+    # loaded runtime really has more than one thread, independent of node defaults.
+    threadpool_limits(limits=2)
+    global _pools_before_initializer
+    _pools_before_initializer = threadpool_info()
+    batch._worker_threads()
+
+
+def _observe_worker_blas():
+    import numpy as np
+    from threadpoolctl import threadpool_info
+
+    values = np.ones((16, 16))
+    assert (values @ values).sum() == 4096
+    return _pools_before_initializer, threadpool_info()
+
+
+def test_worker_initializer_limits_already_loaded_blas():
+    from threadpoolctl import threadpool_info
+
+    parent_environment = dict(os.environ)
+    parent_pools = threadpool_info()
+    with ProcessPoolExecutor(
+        max_workers=1,
+        mp_context=multiprocessing.get_context("spawn"),
+        initializer=_initialize_with_loaded_blas,
+    ) as pool:
+        before, after = pool.submit(_observe_worker_blas).result(timeout=60)
+    before_blas = [entry for entry in before if entry["user_api"] == "blas"]
+    after_blas = [entry for entry in after if entry["user_api"] == "blas"]
+    assert before_blas and all(entry["num_threads"] == 2 for entry in before_blas)
+    assert after_blas and all(entry["num_threads"] == 1 for entry in after_blas)
+    assert all(entry["num_threads"] == 1 for entry in after)
+    assert os.environ == parent_environment
+    assert threadpool_info() == parent_pools
 
 
 @pytest.fixture

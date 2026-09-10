@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import biotite.structure as struc
+import biotite.structure.io.pdbx as pdbx
 import numpy as np
 from biotite.interface.rdkit import to_mol
 from rdkit.Chem import Mol
@@ -88,7 +89,7 @@ def prepare_prediction(
     """
     model, output_dir = Path(model), Path(output_dir)
     cif = read_mmcif_file(model)
-    block = next(iter(cif.values()))
+    block: pdbx.CIFBlock = next(iter(cif.values()))
     check_custom_mmcif_fields(
         block, source=model, structure_mode="as_is", require_label_ids=True
     )
@@ -146,7 +147,7 @@ def prepare_prediction(
     receptor_atoms = atoms[np.isin(atoms.chain_id, list(receptor_chains))]
 
     # Join covalently linked ligand chains, never through a receptor or metal.
-    neighbors = {chain: set() for chain in candidates}
+    neighbors: dict[str, set[str]] = {chain: set() for chain in candidates}
     for first, second, bond_type in atoms.bonds.as_array():
         if bond_type == struc.BondType.COORDINATION:
             continue

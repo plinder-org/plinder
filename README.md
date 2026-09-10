@@ -148,8 +148,10 @@ pip install plinder[eval]
 ```
 
 OpenStructure is not published on PyPI. Evaluation metrics backed by
-OpenStructure (including lDDT and RMSD) require a compatible Conda environment;
-the repository's `environment.yml` installs it from Bioconda.
+OpenStructure (including lDDT and RMSD) use its command-line actions and require
+OpenStructure 2.12.0 or newer; the repository's `environment.yml` installs it
+from Bioconda. See the [evaluation guide](docs/evaluation.md) for evaluating
+folders of ligand or protein-interface predictions.
 
 ## License
 Data curated by PLINDER are made available under the Apache License 2.0.

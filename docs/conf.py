@@ -31,11 +31,12 @@ API_EXCLUDED_MODULES = {
     "plinder.data.common._version",
     "plinder.data.get_system_annotations",
     "plinder.data.pipeline",
+    "plinder.eval.docking",
 }
 
 # Generate one reference page per module included in the standard installation.
 apidoc.clear_api_reference(DOC_PATH / "api")
-for package in ["plinder.core", "plinder.data"]:
+for package in ["plinder.core", "plinder.data", "plinder.eval"]:
     apidoc.generate_api_reference(
         package,
         DOC_PATH / "api" / package.split(".")[-1],
@@ -110,8 +111,7 @@ linkcode_resolve = viewcode.linkcode_resolve
 templates_path = ["templates"]
 exclude_patterns = [
     "_build",
-    # Deferred until their APIs are revisited in focused PRs.
-    "evaluation.md",
+    # Deferred until the loader API is revisited in a focused PR.
     "examples/5_dataset_and_loader.ipynb",
 ]
 source_suffix = {

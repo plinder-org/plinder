@@ -18,6 +18,6 @@ dependencies:
   - reduce
   - mmseqs2
   - foldseek
-  - bioconda::openstructure
+  - bioconda::openstructure>=2.12.0
   - pip:
     - keyrings.google-artifactregistry-auth==1.1.2
