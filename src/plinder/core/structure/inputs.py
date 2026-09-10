@@ -205,8 +205,8 @@ def write_search_structure(
     import numpy as np
     from biotite.interface.rdkit import from_mol
     from biotite.structure.io import pdbx
-    from rdkit import Chem
 
+    from plinder.core.utils.sanitize import sanitize as peppr_sanitize
     from plinder.data.annotations.save_utils import save_cif_file
 
     atoms, block = read_input_structure(structure.coordinates)
@@ -233,7 +233,7 @@ def write_search_structure(
     if include_ligands and structure.ligand_sdfs is not None:
         for index, ligand_path in enumerate(structure.ligand_sdfs, start=1):
             molecule = read_ligand_sdf(ligand_path)
-            Chem.SanitizeMol(molecule)
+            peppr_sanitize(molecule)
             ligand = from_mol(molecule, conformer_id=0, add_hydrogen=False)
             counter = index
             while f"L{counter:04d}" in used_chains | used_components:

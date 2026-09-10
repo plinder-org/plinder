@@ -113,6 +113,66 @@ def test_search_cif_preserves_separate_ligand_chemistry(test_dir, tmp_path):
     ]
 
 
+@pytest.mark.parametrize(
+    "smiles",
+    ["[B]12[B]3[B]4[B]1[B]5[B]6[B]2[B]3[B]45C6", "[Be](C)(C)(C)C"],
+    ids=["boron-cage", "beryllium"],
+)
+def test_search_accepts_supported_overvalent_sdfs(test_dir, tmp_path, smiles):
+    from biotite.interface.rdkit import from_mol
+    from plinder.core.utils.sanitize import sanitize
+    from plinder.data.annotations.cif_utils import (
+        get_structure_with_altloc,
+        read_mmcif_file,
+    )
+
+    molecule = Chem.MolFromSmiles(smiles, sanitize=False)
+    sanitize(molecule)
+    # These are supported by PLINDER but still rejected by strict RDKit checks.
+    with pytest.raises(Chem.AtomValenceException):
+        Chem.SanitizeMol(Chem.Mol(molecule))
+    coordinates = np.arange(molecule.GetNumAtoms() * 3).reshape(-1, 3).astype(float)
+    conformer = Chem.Conformer(molecule.GetNumAtoms())
+    for index, position in enumerate(coordinates):
+        conformer.SetAtomPosition(index, position)
+    molecule.AddConformer(conformer)
+    sdf = tmp_path / "pose.sdf"
+    with Chem.SDWriter(str(sdf)) as writer:
+        writer.write(molecule)
+    original = sdf.read_bytes()
+    receptor = test_dir / "reconstructed_systems/1avd__1__1.A__1.C/receptor.cif"
+    output = write_search_structure(
+        StructureInput(receptor, [sdf]), tmp_path / "query.cif", include_ligands=True
+    )
+    atoms = get_structure_with_altloc(read_mmcif_file(output), include_bonds=True)
+    ligand = atoms[atoms.chain_id == "L0001"]
+    expected = from_mol(molecule, conformer_id=0, add_hydrogen=False)
+    np.testing.assert_allclose(ligand.coord, coordinates, atol=1e-3)
+    np.testing.assert_array_equal(ligand.element, expected.element)
+    np.testing.assert_array_equal(ligand.charge, expected.charge)
+    np.testing.assert_array_equal(ligand.bonds.as_array(), expected.bonds.as_array())
+    assert sdf.read_bytes() == original
+
+
+def test_search_rejects_unrepairable_ligand_valence(test_dir, tmp_path):
+    molecule = Chem.MolFromSmiles("C(C)(C)(C)(C)C", sanitize=False)
+    molecule.UpdatePropertyCache(strict=False)
+    conformer = Chem.Conformer(molecule.GetNumAtoms())
+    for index in range(molecule.GetNumAtoms()):
+        conformer.SetAtomPosition(index, (float(index), 0.0, 0.0))
+    molecule.AddConformer(conformer)
+    sdf = tmp_path / "invalid.sdf"
+    with Chem.SDWriter(str(sdf)) as writer:
+        writer.write(molecule)
+    receptor = test_dir / "reconstructed_systems/1avd__1__1.A__1.C/receptor.cif"
+    with pytest.raises(Chem.AtomValenceException):
+        write_search_structure(
+            StructureInput(receptor, [sdf]),
+            tmp_path / "query.cif",
+            include_ligands=True,
+        )
+
+
 @pytest.mark.parametrize("suffix", [".pdb", ".PDB.gz"])
 @pytest.mark.parametrize("include_ligands", [False, True])
 def test_pdb_search_sequences_exclude_nonpolymers(
