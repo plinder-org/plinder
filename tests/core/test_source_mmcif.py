@@ -107,6 +107,7 @@ def test_source_mmcif_download_cache_and_system_resolution(
     assert len(calls) == 1
 
 
+@pytest.mark.usefixtures("release_cache")
 def test_system_source_mmcif_uses_explicit_release_cache(
     cif_2y4i, tmp_path, monkeypatch
 ):
