@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
-from plinder.core import PlinderSystem
+from plinder.core import PlinderRelease, PlinderSystem
 from plinder.core.utils import config
 from plinder.core.utils import io as core_io
 from plinder.core.utils.cpl import is_offline
@@ -105,6 +105,35 @@ def test_source_mmcif_download_cache_and_system_resolution(
     )
     assert manifest_requests == [("entry_sources", {})]
     assert len(calls) == 1
+
+
+def test_system_source_mmcif_uses_explicit_release_cache(
+    cif_2y4i, tmp_path, monkeypatch
+):
+    release_root = tmp_path / "release"
+    manifest = release_root / "index" / "entry_sources.parquet"
+    manifest.parent.mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "entry_pdb_id": ["2y4i"],
+            "source_mmcif_major_revision": [1],
+            "source_mmcif_minor_revision": [5],
+        }
+    ).to_parquet(manifest, index=False)
+    monkeypatch.setattr(
+        core_io.requests,
+        "get",
+        lambda *_args, **_kwargs: _Response(cif_2y4i.read_bytes()),
+    )
+
+    system = PlinderSystem(
+        system_id="2y4i__1__1.B__1.E_1.F",
+        release=PlinderRelease(data_dir=release_root),
+    )
+
+    assert system.source_mmcif_path == (
+        release_root / "source_mmcifs" / "y4" / "2y4i_v1-5.cif.gz"
+    )
 
 
 def test_source_mmcif_offline_mode_requires_valid_cache(

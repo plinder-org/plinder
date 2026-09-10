@@ -14,9 +14,8 @@ if TYPE_CHECKING:
 
 from biotite.sequence.io.fasta import FastaFile
 
+from plinder.core.index.query import query_table
 from plinder.core.release import PlinderRelease
-from plinder.core.scores import query_index
-from plinder.core.scores.query import FILTER
 from plinder.core.structure.structure import Structure
 from plinder.core.utils.config import get_config
 from plinder.core.utils.io import get_pdb_mmcif
@@ -98,6 +97,7 @@ class PlinderSystem:
         self,
         *,
         system_id: str,
+        release: PlinderRelease | None = None,
         prune: bool = True,
         skip_3d_confgen: bool = False,
         source_mmcif: Path | str | None = None,
@@ -109,14 +109,19 @@ class PlinderSystem:
         ),
     ) -> None:
         self.system_id: str = system_id
+        self.release = release or PlinderRelease()
         self.prune: bool = prune
         self.skip_3d_confgen: bool = skip_3d_confgen
         self.source_mmcif = Path(source_mmcif) if source_mmcif is not None else None
-        cfg = get_config()
+        default_reconstruction_root = (
+            Path(self.release.data_dir)
+            if self.release.data_dir is not None
+            else Path(get_config().data.plinder_dir)
+        )
         self.reconstruction_dir = (
             Path(reconstruction_dir)
             if reconstruction_dir is not None
-            else Path(cfg.data.plinder_dir) / "reconstructed_systems" / system_id
+            else default_reconstruction_root / "reconstructed_systems" / system_id
         )
         self.canonical_ligand_dir = (
             Path(canonical_ligand_dir) if canonical_ligand_dir is not None else None
@@ -144,9 +149,12 @@ class PlinderSystem:
         """
         if self._entry is None:
             entry_pdb_id = self.system_id.split("__")[0]
-            self._entry = query_index(
+            self._entry = query_table(
+                "annotation",
                 columns=["*"],
-                filters=[FILTER(("entry_pdb_id", "==", entry_pdb_id))],
+                filters=[("entry_pdb_id", "==", entry_pdb_id)],
+                joins=["entry_metadata"],
+                release=self.release,
             )
             if self._entry.empty:
                 raise ValueError(
@@ -165,9 +173,12 @@ class PlinderSystem:
             Annotation rows for the system.
         """
         if self._system is None:
-            self._system = query_index(
+            self._system = query_table(
+                "annotation",
                 columns=["*"],
-                filters=[FILTER(("system_id", "==", self.system_id))],
+                filters=[("system_id", "==", self.system_id)],
+                joins=["entry_metadata"],
+                release=self.release,
             )
             if self._system.empty:
                 raise ValueError(f"system_id={self.system_id} not found in the index")
@@ -194,7 +205,7 @@ class PlinderSystem:
     def receptor_chain_types(self) -> dict[str, str]:
         """Map each system receptor instance chain to its polymer type."""
         if self._entry_chains is None:
-            path = PlinderRelease().fetch("entry_chains")
+            path = self.release.fetch("entry_chains")
             pdb_id = self.system_id.split("__", maxsplit=1)[0]
             self._entry_chains = pd.read_parquet(
                 path,
@@ -229,7 +240,7 @@ class PlinderSystem:
     def biounit_chains(self) -> pd.DataFrame:
         """Return ingested chain membership for this biological assembly."""
         if self._biounit_chains is None:
-            path = PlinderRelease().fetch("entry_biounit_chains")
+            path = self.release.fetch("entry_biounit_chains")
             row = self.system.iloc[0]
             self._biounit_chains = pd.read_parquet(
                 path,
@@ -248,7 +259,17 @@ class PlinderSystem:
     def source_mmcif_path(self) -> Path:
         """Return the explicit or release-cached deposited PDB mmCIF."""
         if self.source_mmcif is None:
-            self.source_mmcif = get_pdb_mmcif(self.system_id)
+            manifest = self.release.fetch("entry_sources")
+            cache_dir = (
+                Path(self.release.data_dir) / get_config().data.source_mmcifs
+                if self.release.data_dir is not None
+                else None
+            )
+            self.source_mmcif = get_pdb_mmcif(
+                self.system_id,
+                cache_dir=cache_dir,
+                manifest_path=manifest,
+            )
         if not self.source_mmcif.is_file():
             raise FileNotFoundError(self.source_mmcif)
         return self.source_mmcif
@@ -371,7 +392,7 @@ class PlinderSystem:
                 pdb_id = self.system_id.split("__", maxsplit=1)[0]
                 asym_ids = set(self.system["ligand_asym_id"].astype(str))
                 code = pdb_id[1:3]
-                archive = PlinderRelease().fetch(
+                archive = self.release.fetch(
                     "ligand_archive",
                     shard=code,
                 )
@@ -449,7 +470,7 @@ class PlinderSystem:
     def linked_apo_structures(self) -> pd.DataFrame:
         """Return ranked deposited apo chains linked to this holo system."""
         if self._linked_apo_structures is None:
-            path = PlinderRelease().fetch("linked_apo_structures")
+            path = self.release.fetch("linked_apo_structures")
             self._linked_apo_structures = pd.read_parquet(
                 path,
                 filters=[("reference_system_id", "==", self.system_id)],
@@ -476,13 +497,22 @@ class PlinderSystem:
             )
         return selected.iloc[0]
 
-    @staticmethod
     def _linked_apo_source_mmcif(
-        row: pd.Series, source_mmcif: Path | str | None
+        self, row: pd.Series, source_mmcif: Path | str | None
     ) -> Path | str:
         if source_mmcif is not None:
             return source_mmcif
-        return get_pdb_mmcif(str(row["source_entry_id"]))
+        manifest = self.release.fetch("entry_sources")
+        cache_dir = (
+            Path(self.release.data_dir) / get_config().data.source_mmcifs
+            if self.release.data_dir is not None
+            else None
+        )
+        return get_pdb_mmcif(
+            str(row["source_entry_id"]),
+            cache_dir=cache_dir,
+            manifest_path=manifest,
+        )
 
     def reconstruct_linked_apo(
         self,

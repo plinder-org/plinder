@@ -209,7 +209,7 @@ def test_interface_only_annotation_preserves_ligand_assets(
     test_dir: Path, tmp_path: Path, mock_alternative_datasets
 ) -> None:
     mock_alternative_datasets("7cm8")
-    cif = test_dir / "interfaces/cm/pdb_00007cm8/" "pdb_00007cm8_xyz-enrich.cif.gz"
+    cif = test_dir / "interfaces/cm/pdb_00007cm8/pdb_00007cm8_xyz-enrich.cif.gz"
     annotation = GetPlinderAnnotation(cif, "", save_folder=tmp_path)
     first = annotation.annotate_interfaces()
     assert first.num_rows == 1
@@ -545,7 +545,12 @@ def test_save_ligands_falls_back_to_biotite_without_rdkit_sanitization(
     atoms.atom_name = np.array(["C1", "N1", "O1", "C1"])
     atoms.element = np.array(["C", "N", "O", "C"])
     atoms.coord = np.array(
-        [[0.0, 0.0, 0.0], [1.3, 0.0, 0.0], [5.0, 0.0, 0.0], [6.2, 0.0, 0.0]]
+        [
+            [0.0, 0.0, 0.0],
+            [1.3, 0.0, 0.0],
+            [5.0, 0.0, 0.0],
+            [6.2, 0.0, 0.0],
+        ]
     )
     atoms.bonds = struc.BondList(len(atoms))
     atoms.bonds.add_bond(0, 1, struc.BondType.AROMATIC_SINGLE)
@@ -935,7 +940,11 @@ def test_short_noncov_peptide_detection(cif_6i41, mock_alternative_datasets):
         "water",
     }
     assert not biounit_chain_df.duplicated(
-        ["entry_pdb_id", "biounit_id", "chain_instance"]
+        [
+            "entry_pdb_id",
+            "biounit_id",
+            "chain_instance",
+        ]
     ).any()
     source_df = pd.read_parquet(entry_dir / "6i41" / "entry_source.parquet")
     assert source_df["entry_pdb_id"].tolist() == ["6i41"]
@@ -1035,7 +1044,11 @@ def test_annotation_without_systems_writes_shared_sidecars(monkeypatch, tmp_path
         annotation,
         "_write_shared_sidecars",
         lambda path, table, *, replace_interfaces: writes.append(
-            (path, table.num_rows, replace_interfaces)
+            (
+                path,
+                table.num_rows,
+                replace_interfaces,
+            )
         ),
     )
 
@@ -1888,7 +1901,11 @@ def test_canonical_ligand_saving_and_system_reconstruction(
     assert entry.chains["A"].num_unresolved_residues >= 0
     assert entry.chains["B"].num_unresolved_residues >= 0
     entry.biounit_legacy_chain_ids["1"].update(
-        {"1.B": "2.B", "1.E": "2.E", "1.F": "2.F"}
+        {
+            "1.B": "2.B",
+            "1.E": "2.E",
+            "1.F": "2.F",
+        }
     )
 
     canonical_ligand_dir = entry_dir / "2y4i" / "ligand_files"
@@ -1907,7 +1924,10 @@ def test_canonical_ligand_saving_and_system_reconstruction(
         if column.startswith(("system_biounit_chains", "system_other_chains"))
         or column.startswith(("system_biounit_non_water", "system_biounit_water"))
         or column.startswith(
-            ("system_other_protein_chains", "system_other_ligand_chains")
+            (
+                "system_other_protein_chains",
+                "system_other_ligand_chains",
+            )
         )
     }
     assert not repeated_membership_columns
@@ -2023,15 +2043,17 @@ def test_canonical_ligand_saving_and_system_reconstruction(
     annotation = entry.to_df()
     query_calls = []
 
-    def query_one_system(*, columns, filters):
+    def query_one_system(table_name, *, columns, filters, joins, release):
+        assert table_name == "annotation"
         assert columns == ["*"]
+        assert joins == ["entry_metadata"]
+        assert release is plinder_system.release
         assert len(filters) == 1
         column, operator, value = filters[0]
         assert operator == "=="
         query_calls.append((column, value))
         return annotation[annotation[column] == value].copy()
 
-    monkeypatch.setattr("plinder.core.index.system.query_index", query_one_system)
     from plinder.core import PlinderSystem
 
     reconstructed_dir = output_dir / "from_plinder_system"
@@ -2046,6 +2068,7 @@ def test_canonical_ligand_saving_and_system_reconstruction(
             receptor_waters="none",
         ),
     )
+    monkeypatch.setattr("plinder.core.index.system.query_table", query_one_system)
     assert len(plinder_system.entry) == len(
         annotation[annotation["entry_pdb_id"] == "2y4i"]
     )
