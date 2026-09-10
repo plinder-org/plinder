@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
+import tomli
 from plinder.eval import cli
 
 
@@ -121,7 +122,5 @@ runpy.run_module('plinder.eval.cli', run_name='__main__')
 
 
 def test_packaged_command_uses_new_evaluator():
-    import tomllib
-
-    config = tomllib.loads((Path(__file__).parents[1] / "pyproject.toml").read_text())
+    config = tomli.loads((Path(__file__).parents[1] / "pyproject.toml").read_text())
     assert config["project"]["scripts"]["plinder_eval"] == "plinder.eval.cli:main"
