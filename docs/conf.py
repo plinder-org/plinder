@@ -79,6 +79,7 @@ nb_execution_excludepatterns = [
     # TODO: v3-only: these fetch 2026-07 release artifacts (systems, interfaces,
     # similarity exports) that are not published yet.
     "examples/custom_scoring.ipynb",
+    "examples/evaluation.ipynb",
     "examples/protein_interfaces.ipynb",
     "examples/similarity_and_representatives.ipynb",
     "tutorial/api.ipynb",

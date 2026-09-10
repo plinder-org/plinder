@@ -27,7 +27,7 @@ protein_interfaces
 4_align_mask_crop
 ```
 
-## Similarity and scoring
+## Similarity and search
 
 Inspect similarity scores and representative covers, or compare
 custom structures and protein sequences with PLINDER.
@@ -37,4 +37,14 @@ custom structures and protein sequences with PLINDER.
 
 similarity_and_representatives
 custom_scoring
+```
+
+## Evaluation
+
+Compare predicted ligand poses and protein interfaces with known references.
+
+```{toctree}
+:maxdepth: 1
+
+evaluation
 ```
