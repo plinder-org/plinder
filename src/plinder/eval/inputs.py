@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -13,6 +14,11 @@ import numpy as np
 from biotite.interface.rdkit import to_mol
 from rdkit.Chem import Mol
 
+from plinder.core.structure.inputs import (
+    StructureInput,
+    read_input_structure,
+    read_ligand_sdf,
+)
 from plinder.data.annotations.cif_utils import (
     check_cif_bond_orders,
     check_custom_mmcif_fields,
@@ -51,8 +57,8 @@ def reference_ligands(
 class PreparedPrediction:
     """Persistent receptor and ligand files, plus a receptor for PoseBusters.
 
-    Ligand keys are original label asym IDs. Covalently connected ligand chains
-    form one molecule, keyed by their lexically first asym ID.
+    Ligand keys are supplied SDF filenames or original label asym IDs. Covalently
+    connected mmCIF ligand chains form one molecule, keyed by their first asym ID.
     """
 
     receptor: Path
@@ -60,18 +66,46 @@ class PreparedPrediction:
     receptor_molecule: Mol
 
 
+def _prepare_receptor_and_sdfs(
+    model: Path, output_dir: Path, ligand_sdfs: Sequence[str | Path]
+) -> PreparedPrediction:
+    """Keep supplied poses and load the predicted receptor for PoseBusters."""
+    paths = [Path(path).resolve() for path in ligand_sdfs]
+    if len({path.name for path in paths}) != len(paths):
+        raise ValueError("Supplied ligand SDF filenames must be unique per prediction")
+    for path in paths:
+        read_ligand_sdf(path)
+    atoms, _ = read_input_structure(model)
+    receptor = to_mol(atoms[struc.filter_heavy(atoms)])
+    output_dir.mkdir(parents=True, exist_ok=True)
+    ligands = {}
+    for index, path in enumerate(paths):
+        destination = output_dir / f"ligand_{index:04d}.sdf"
+        if path != destination.resolve():
+            shutil.copyfile(path, destination)
+        ligands[path.name] = destination.resolve()
+    return PreparedPrediction(model.resolve(), ligands, receptor)
+
+
 def prepare_prediction(
-    model: str | Path,
+    model: str | Path | StructureInput,
     output_dir: str | Path,
     *,
+    ligand_sdfs: Sequence[str | Path] | None = None,
     ligand_smiles: Mapping[str, str] | None = None,
     ligand_ccd_codes: Mapping[str, str] | None = None,
     ligand_chains: Sequence[str] = (),
 ) -> PreparedPrediction:
-    """Split the first mmCIF model into a receptor and bonded ligand SDFs.
+    """Prepare a receptor with supplied SDFs, or extract poses from a full mmCIF.
 
-    All non-water, non-polymer chains are candidate ligands, irrespective of
-    their proximity to the receptor or artifact status. Protein and DNA/RNA
+    With ``ligand_sdfs``, ``model`` is the predicted receptor (PDB or mmCIF,
+    optionally gzip-compressed). Each SDF contains one ligand in that receptor's
+    coordinate frame and supplies its own chemistry. Result IDs use the SDF
+    filenames. An empty list represents a prediction with zero ligand poses.
+    Chemistry mappings and ``ligand_chains`` apply to complete-mmCIF extraction.
+
+    Complete-mmCIF extraction selects non-water, non-polymer chains as candidate
+    ligands, including distant poses, ions and artifacts. Protein and DNA/RNA
     polymers remain receptors. ``ligand_chains`` additionally selects polymer
     chains used as ligands, such as peptides, by their label asym IDs. Without
     entity metadata, chains containing amino-acid or nucleotide residues are
@@ -84,10 +118,23 @@ def prepare_prediction(
     the components requiring bond information. This function does not decide
     which ligands to evaluate: select proper ligands on the reference instead.
 
-    Files remain in ``output_dir``. The RDKit receptor retains residue metadata
-    for PoseBusters, without conversion to PDB or an SDF round trip.
+    Prepared SDFs and extracted receptors remain in ``output_dir``; supplied
+    receptors use their original paths. The RDKit receptor retains residue
+    metadata for PoseBusters.
     """
+    if isinstance(model, StructureInput):
+        if ligand_sdfs is not None:
+            raise ValueError("Supply ligand_sdfs in the StructureInput only")
+        ligand_sdfs = model.ligand_sdfs
+        model = model.coordinates
     model, output_dir = Path(model), Path(output_dir)
+    if ligand_sdfs is not None:
+        return _prepare_receptor_and_sdfs(model, output_dir, ligand_sdfs)
+    if model.name.lower().endswith((".pdb", ".pdb.gz")):
+        raise ValueError(
+            "Ligand preparation requires a complete mmCIF or a receptor with "
+            "ligand SDFs. Supply model.sdf or model.ligands/ beside model.pdb."
+        )
     cif = read_mmcif_file(model)
     block: pdbx.CIFBlock = next(iter(cif.values()))
     check_custom_mmcif_fields(

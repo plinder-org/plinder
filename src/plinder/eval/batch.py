@@ -20,6 +20,7 @@ from plinder.core.index.interface import PlinderInterface
 from plinder.core.index.query import query_table
 from plinder.core.index.system import PlinderSystem
 from plinder.core.release import PlinderRelease
+from plinder.core.structure.inputs import StructureInput, read_structure_table
 from plinder.eval.commands import run_openstructure, run_posebusters
 from plinder.eval.inputs import prepare_prediction, reference_ligands
 
@@ -163,7 +164,7 @@ def _worker_threads() -> None:
 
 
 def _evaluate_one(
-    task: tuple[Path, str, list[_Reference]],
+    task: tuple[Path | StructureInput, str, list[_Reference]],
     *,
     output_dir: Path,
     posebusters: bool,
@@ -174,7 +175,8 @@ def _evaluate_one(
     interface_options: tuple[str, ...],
     ost_executable: str,
 ) -> dict[str, list[dict[str, Any]]]:
-    model, prediction, references = task
+    source, prediction, references = task
+    model = Path(source.coordinates) if isinstance(source, StructureInput) else source
     details = output_dir / "details" / prediction
     results: dict[str, list[dict[str, Any]]] = {
         key: [] for key in ("ligands", "interfaces", "posebusters", "failures")
@@ -216,7 +218,9 @@ def _evaluate_one(
     prepared = None
     try:
         prepared = prepare_prediction(
-            model,
+            source
+            if isinstance(source, StructureInput)
+            else StructureInput.from_path(model),
             details / "model",
             ligand_smiles=ligand_smiles,
             ligand_ccd_codes=ligand_ccd_codes,
@@ -276,7 +280,7 @@ def _evaluate_one(
 
 
 def evaluate_predictions(
-    predictions: str | Path,
+    predictions: str | Path | pd.DataFrame,
     *,
     output_dir: str | Path,
     release: PlinderRelease | None = None,
@@ -291,12 +295,22 @@ def evaluate_predictions(
     interface_options: Sequence[str] = (),
     ost_executable: str | Path = "ost",
 ) -> dict[str, pd.DataFrame]:
-    """Evaluate ``predictions/<reference ID>/<model>.cif`` folders.
+    """Evaluate a CSV/TSV/Parquet input table or reference-ID prediction folders.
+
+    Tables use ``input_id``, ``structure_path``, ``reference_id`` and optional
+    ``ligand_path`` columns. Repeat an input row for multiple ligand SDFs.
+    Relative paths are resolved from the table directory; DataFrames use the
+    working directory. Table ``input_id`` values identify predictions in results.
 
     A reference ID is a PLINDER system/interface ID, or a four-character PDB ID
     to compare against all its systems/interfaces. Each mmCIF (also .mmcif or
-    gzip-compressed) is a separate prediction. ``mode`` selects ligand or
-    interface evaluation, or both. References come from the selected release.
+    gzip-compressed) is a separate prediction. Interface comparisons also accept
+    PDB files (.pdb or .pdb.gz), passed directly to OST. For ligand evaluation,
+    pair a receptor PDB/mmCIF with ``model.sdf`` or ``model.ligands/*.sdf``; each
+    SDF contains one ligand in the receptor's coordinate frame. An empty ligand
+    folder represents zero predicted poses. Otherwise ligands are extracted
+    from a complete mmCIF. ``mode`` selects ligand or interface evaluation, or
+    both. References come from the selected release.
 
     ``num_workers`` limits concurrent prediction processes. PoseBusters runs
     without its own process pool. When calling from a Python script, put the
@@ -329,43 +343,53 @@ def evaluate_predictions(
         raise ValueError("num_workers must be a positive integer")
     if mode not in {"ligands", "interfaces", "both"}:
         raise ValueError("mode must be ligands, interfaces, or both")
-    predictions, output_dir = Path(predictions).resolve(), Path(output_dir).resolve()
-    if not predictions.is_dir():
-        raise NotADirectoryError(predictions)
-    tasks: list[tuple[Path, str, list[_Reference]]] = []
+    output_dir = Path(output_dir).resolve()
+    groups: dict[str, list[tuple[Path | StructureInput, str]]] = {}
+    if isinstance(predictions, pd.DataFrame) or Path(predictions).is_file():
+        for input_id, structure in read_structure_table(
+            predictions, require_reference=True
+        ).items():
+            assert structure.reference_id is not None
+            groups.setdefault(structure.reference_id, []).append((structure, input_id))
+    else:
+        root = Path(predictions).resolve()
+        if not root.is_dir():
+            raise NotADirectoryError(root)
+        for folder in sorted(root.iterdir()):
+            if not folder.is_dir() or folder.name.startswith("."):
+                continue
+            groups[folder.name] = [
+                (path, str(path.relative_to(root)))
+                for path in sorted(folder.iterdir())
+                if path.is_file()
+                and path.name.lower().endswith(
+                    (".cif", ".mmcif", ".cif.gz", ".mmcif.gz", ".pdb", ".pdb.gz")
+                )
+            ]
+    tasks: list[tuple[Path | StructureInput, str, list[_Reference]]] = []
     collected: dict[str, list[dict[str, Any]]] = {
         key: [] for key in ("ligands", "interfaces", "posebusters", "failures")
     }
-    for folder in sorted(predictions.iterdir()):
-        if not folder.is_dir() or folder.name.startswith("."):
-            continue
-        models = [
-            path
-            for path in sorted(folder.iterdir())
-            if path.is_file()
-            and path.name.lower().endswith((".cif", ".mmcif", ".cif.gz", ".mmcif.gz"))
-        ]
+    for reference_id, models in groups.items():
         if not models:
             continue
         refs, failures = _references(
-            folder.name, mode, release or PlinderRelease(), include_all_ligands
+            reference_id, mode, release or PlinderRelease(), include_all_ligands
         )
         collected["failures"].extend(
             {
-                "prediction": str(model.relative_to(predictions)),
+                "prediction": prediction,
                 "stage": "reference",
                 **failure,
             }
-            for model in models
+            for _, prediction in models
             for failure in failures
         )
-        tasks.extend(
-            (model, str(model.relative_to(predictions)), refs)
-            for model in models
-            if refs
-        )
+        tasks.extend((model, prediction, refs) for model, prediction in models if refs)
     if not tasks and not collected["failures"]:
-        raise ValueError("No mmCIF predictions found in reference-ID subdirectories")
+        raise ValueError(
+            "No mmCIF or PDB predictions found in reference-ID subdirectories"
+        )
     output_dir.mkdir(parents=True, exist_ok=True)
     worker = partial(
         _evaluate_one,

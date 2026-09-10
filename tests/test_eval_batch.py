@@ -1,5 +1,6 @@
 """Folder evaluation keeps failures, native assignments and bounded workers."""
 
+import gzip
 import json
 import multiprocessing
 import os
@@ -208,6 +209,141 @@ def test_worker_failure_preserves_expected_rows(reference, tmp_path, monkeypatch
     assert tables["ligands"]["rmsd"].isna().all()
 
 
+@pytest.mark.skipif(shutil.which("ost") is None, reason="requires OpenStructure CLI")
+@pytest.mark.parametrize("suffix", [".pdb", ".PDB", ".pdb.gz", ".PDB.gz"])
+def test_native_pdb_interface_evaluation(test_dir, tmp_path, monkeypatch, suffix):
+    from biotite.structure.io import pdb
+    from plinder.data.annotations.cif_utils import (
+        get_structure_with_altloc,
+        read_mmcif_file,
+    )
+
+    reference = _Reference(
+        "interfaces",
+        "dimer",
+        test_dir / "reconstructed_systems/1avd__1__1.A_2.A__1.D/receptor.cif",
+    )
+    atoms = get_structure_with_altloc(read_mmcif_file(reference.receptor))
+    # PDB needs single-character chains; OST must map these to the reference.
+    atoms.chain_id = ["R" if chain == "1.A" else "L" for chain in atoms.chain_id]
+    model = pdb.PDBFile()
+    model.set_structure(atoms)
+    folder = tmp_path / "predictions" / "dimer"
+    folder.mkdir(parents=True)
+    path = folder / f"model{suffix}"
+    if suffix.endswith(".gz"):
+        with gzip.open(path, "wt") as stream:
+            model.write(stream)
+    else:
+        model.write(path)
+    original = path.read_bytes()
+    monkeypatch.setattr(batch, "_references", lambda *args: ([reference], []))
+    tables = evaluate_predictions(
+        folder.parent, output_dir=tmp_path / "evaluation", mode="interfaces"
+    )
+    assert tables["failures"].empty, tables["failures"].to_dict("records")
+    row = tables["interfaces"].iloc[0]
+    assert row["prediction"] == f"dimer/model{suffix}"
+    assert row["status"] == "success"
+    for metric in ("lddt", "ilddt", "qs_global", "qs_best", "dockq_ave_full"):
+        assert row[metric] == pytest.approx(1)
+    assert tables["ligands"].empty
+    assert tables["posebusters"].empty
+    assert path.read_bytes() == original
+    assert not list((tmp_path / "evaluation" / "details").rglob("*.cif"))
+
+
+def test_pdb_ligand_preparation_reports_format_error(reference, tmp_path, monkeypatch):
+    folder = tmp_path / "predictions" / "1avd"
+    folder.mkdir(parents=True)
+    (folder / "model.pdb").write_text("HEADER    PREDICTION\nEND\n")
+    monkeypatch.setattr(batch, "_references", lambda *args: ([reference], []))
+    tables = evaluate_predictions(
+        folder.parent, output_dir=tmp_path / "evaluation", mode="ligands"
+    )
+    assert tables["ligands"]["status"].tolist() == ["error"]
+    assert tables["ligands"]["rmsd"].isna().all()
+    assert tables["failures"]["stage"].tolist() == ["prepare"]
+    assert "receptor with ligand SDFs" in tables["failures"].iloc[0]["error"]
+
+
+@pytest.mark.skipif(shutil.which("ost") is None, reason="requires OpenStructure CLI")
+@pytest.mark.parametrize("suffix", [".pdb", ".cif"])
+def test_native_paired_ligand_evaluation(reference, tmp_path, monkeypatch, suffix):
+    from biotite.structure.io import pdb
+    from plinder.data.annotations.cif_utils import (
+        get_structure_with_altloc,
+        read_mmcif_file,
+    )
+    from rdkit import Chem
+
+    pytest.importorskip("posebusters")
+    folder = tmp_path / "predictions" / "1avd"
+    folder.mkdir(parents=True)
+    receptor = folder / f"close{suffix}"
+    if suffix == ".pdb":
+        atoms = get_structure_with_altloc(read_mmcif_file(reference.receptor))
+        atoms.chain_id[:] = "R"
+        model = pdb.PDBFile()
+        model.set_structure(atoms)
+        model.write(receptor)
+    else:
+        shutil.copyfile(reference.receptor, receptor)
+    for name in ("far", "missing", "different"):
+        shutil.copyfile(receptor, folder / f"{name}{suffix}")
+        (folder / f"{name}.ligands").mkdir()
+    original_sdf = reference.ligands["reference_ligand"]
+    shutil.copyfile(original_sdf, folder / "close.SDF")
+    molecule = next(Chem.SDMolSupplier(str(original_sdf), removeHs=False))
+    conformer = molecule.GetConformer()
+    for index in range(molecule.GetNumAtoms()):
+        position = conformer.GetAtomPosition(index)
+        conformer.SetAtomPosition(index, (position.x + 100, position.y, position.z))
+    with Chem.SDWriter(str(folder / "far.ligands/LIG.sdf")) as writer:
+        writer.write(molecule)
+    other = Chem.MolFromSmiles("CCO")
+    conformer = Chem.Conformer(other.GetNumAtoms())
+    for index in range(other.GetNumAtoms()):
+        conformer.SetAtomPosition(index, (100 + index * 1.5, 0, 0))
+    other.AddConformer(conformer)
+    with Chem.SDWriter(str(folder / "different.ligands/LIG.sdf")) as writer:
+        writer.write(other)
+    monkeypatch.setattr(batch, "_references", lambda *args: ([reference], []))
+    tables = evaluate_predictions(
+        folder.parent, output_dir=tmp_path / "evaluation", mode="ligands", num_workers=2
+    )
+    assert tables["failures"].empty, tables["failures"].to_dict("records")
+    rows = tables["ligands"].set_index("prediction")
+    assert len(rows) == 4
+    assert rows.loc[f"1avd/close{suffix}", "rmsd"] == pytest.approx(0, abs=1e-3)
+    assert rows.loc[f"1avd/close{suffix}", "lddt_pli"] == pytest.approx(1)
+    assert rows.loc[f"1avd/far{suffix}", "status"] == "success"
+    assert pd.isna(rows.loc[f"1avd/far{suffix}", "rmsd"])
+    assert rows.loc[f"1avd/far{suffix}", "rmsd_unassigned"] == "model_binding_site"
+    assert rows.loc[f"1avd/far{suffix}", "lddt_pli"] == pytest.approx(0)
+    assert rows.loc[f"1avd/far{suffix}", "lddt_pli_model_ligand"] == "LIG.sdf"
+    assert rows.loc[f"1avd/missing{suffix}", "status"] == "unassigned"
+    assert rows.loc[f"1avd/different{suffix}", "status"] == "unassigned"
+    assert rows.loc[f"1avd/different{suffix}", "rmsd_unassigned"] == "identity"
+    # Different chemistry with the same input filename stays prediction-specific.
+    prepared_other = (
+        tmp_path
+        / "evaluation"
+        / "details"
+        / "1avd"
+        / f"different{suffix}"
+        / "model"
+        / "ligand_0000.sdf"
+    )
+    assert Chem.MolToSmiles(next(Chem.SDMolSupplier(str(prepared_other)))) == "CCO"
+    checks = tables["posebusters"].set_index("prediction")
+    assert len(checks) == 3
+    assert checks["mol_cond_loaded"].all()
+    assert checks.loc[f"1avd/close{suffix}", "model_ligand"] == "close.SDF"
+    assert checks.loc[f"1avd/far{suffix}", "model_ligand"] == "LIG.sdf"
+    assert checks.loc[f"1avd/different{suffix}", "model_ligand"] == "LIG.sdf"
+
+
 def test_worker_count_is_bounded_and_results_do_not_reuse_old_files(
     reference, tmp_path, monkeypatch
 ):
@@ -311,3 +447,30 @@ def test_unavailable_references_produce_failure_table(tmp_path, monkeypatch):
     assert pd.read_csv(output / "failures.tsv", sep="\t")["prediction"].tolist() == [
         "1avd/prediction.cif"
     ]
+
+
+@pytest.mark.skipif(shutil.which("ost") is None, reason="requires OpenStructure CLI")
+def test_native_evaluation_from_shared_table(reference, tmp_path, monkeypatch):
+    folder = tmp_path / "inputs"
+    folder.mkdir()
+    shutil.copyfile(reference.receptor, folder / "receptor.cif")
+    shutil.copyfile(reference.ligands["reference_ligand"], folder / "pose.sdf")
+    table = folder / "inputs.tsv"
+    pd.DataFrame(
+        {
+            "input_id": ["prediction_1"],
+            "reference_id": ["1avd"],
+            "structure_path": ["receptor.cif"],
+            "ligand_path": ["pose.sdf"],
+        }
+    ).to_csv(table, sep="\t", index=False)
+    monkeypatch.setattr(batch, "_references", lambda *args: ([reference], []))
+    results = evaluate_predictions(
+        table, output_dir=tmp_path / "results", mode="ligands", posebusters=False
+    )
+    assert results["failures"].empty, results["failures"].to_dict("records")
+    row = results["ligands"].iloc[0]
+    assert row["prediction"] == "prediction_1"
+    assert row["rmsd_model_ligand"] == "pose.sdf"
+    assert row["rmsd"] == pytest.approx(0, abs=1e-3)
+    assert row["lddt_pli"] == pytest.approx(1)

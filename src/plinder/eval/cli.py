@@ -33,10 +33,12 @@ def _component_mapping(value: str) -> dict[str, str]:
 def main(argv: Sequence[str] | None = None) -> int:
     """Return zero on completion, one for recorded errors, two for invalid input."""
     parser = argparse.ArgumentParser(
-        description="Evaluate predictions/<reference ID>/<model>.cif with OpenStructure and PoseBusters. Reference IDs may be PLINDER system/interface IDs or four-character PDB IDs."
+        description="Evaluate an input table or predictions/<reference ID>/ folder with OpenStructure and PoseBusters. Tables use input_id, structure_path, reference_id and optional ligand_path. Reference IDs may be PLINDER system/interface IDs or four-character PDB IDs."
     )
     parser.add_argument(
-        "predictions", type=Path, help="Folder containing reference-ID subdirectories"
+        "predictions",
+        type=Path,
+        help="CSV/TSV/Parquet input table, or a folder with reference-ID subdirectories",
     )
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument(

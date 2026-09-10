@@ -9,7 +9,8 @@ import numpy as np
 import pandas as pd
 import pytest
 import yaml
-from biotite.structure.io import pdbx
+from biotite.structure.io import pdb, pdbx
+from plinder.core.structure.inputs import StructureInput
 from plinder.data.annotations.cif_utils import (
     MissingBondOrderError,
     _get_ccd_atomarray,
@@ -25,6 +26,95 @@ from rdkit import Chem
 @pytest.fixture
 def complete_model(test_dir):
     return test_dir / "reconstructed_systems/1avd__1__1.A__1.C/system.cif"
+
+
+@pytest.fixture
+def paired_receptor(complete_model, tmp_path, request):
+    suffix = request.param
+    original = complete_model.parent / "receptor.cif"
+    path = tmp_path / f"model{suffix}"
+    if ".pdb" in suffix.lower():
+        atoms = get_structure_with_altloc(read_mmcif_file(original))
+        atoms.chain_id[:] = "R"
+        model = pdb.PDBFile()
+        model.set_structure(atoms)
+        if suffix.endswith(".gz"):
+            with gzip.open(path, "wt") as stream:
+                model.write(stream)
+        else:
+            model.write(path)
+    elif suffix.endswith(".gz"):
+        with gzip.open(path, "wb") as stream:
+            stream.write(original.read_bytes())
+    else:
+        shutil.copyfile(original, path)
+    return path
+
+
+@pytest.mark.parametrize(
+    "paired_receptor", [".pdb", ".PDB.gz", ".cif", ".CIF.gz"], indirect=True
+)
+def test_prepare_supplied_sdfs_preserves_inputs(
+    paired_receptor, complete_model, tmp_path
+):
+    sdf = tmp_path / "pose.SDF"
+    shutil.copyfile(complete_model.parent / "ligand_files/1.C.sdf", sdf)
+    originals = {path: path.read_bytes() for path in (paired_receptor, sdf)}
+    prepared = prepare_prediction(
+        paired_receptor, tmp_path / "prepared", ligand_sdfs=[sdf]
+    )
+    assert prepared.receptor == paired_receptor.resolve()
+    assert set(prepared.ligands) == {"pose.SDF"}
+    assert prepared.ligands["pose.SDF"].suffix == ".sdf"
+    assert prepared.ligands["pose.SDF"].read_bytes() == originals[sdf]
+    assert all(path.read_bytes() == data for path, data in originals.items())
+    assert prepared.receptor_molecule.GetNumAtoms() > 0
+    expected_chain = "R" if ".pdb" in paired_receptor.name.lower() else "1.A"
+    assert {
+        atom.GetPDBResidueInfo().GetChainId()
+        for atom in prepared.receptor_molecule.GetAtoms()
+    } == {expected_chain}
+
+
+def test_ligand_sdf_pairing_is_specific_to_each_prediction(tmp_path):
+    one, two = tmp_path / "one.cif", tmp_path / "two.PDB.gz"
+    (tmp_path / "one.SDF").touch()
+    folder = tmp_path / "two.ligands"
+    folder.mkdir()
+    for name in ("LIG.sdf", "other.SDF", "readme.txt"):
+        (folder / name).touch()
+    assert StructureInput.from_path(one).ligand_sdfs == (tmp_path / "one.SDF",)
+    assert StructureInput.from_path(two).ligand_sdfs == (
+        folder / "LIG.sdf",
+        folder / "other.SDF",
+    )
+    assert StructureInput.from_path(tmp_path / "three.cif").ligand_sdfs is None
+    (tmp_path / "empty.ligands").mkdir()
+    assert StructureInput.from_path(tmp_path / "empty.cif").ligand_sdfs == ()
+    (tmp_path / "two.sdf").touch()
+    with pytest.raises(ValueError, match="Use either"):
+        StructureInput.from_path(two)
+    (tmp_path / "one.sdf").touch()
+    with pytest.raises(ValueError, match="Use either"):
+        StructureInput.from_path(one)
+
+
+@pytest.mark.parametrize("contents", ["invalid", "multiple"])
+def test_supplied_sdf_requires_one_readable_pose(complete_model, tmp_path, contents):
+    path = tmp_path / "pose.sdf"
+    text = (complete_model.parent / "ligand_files/1.C.sdf").read_text()
+    path.write_text("bad SDF" if contents == "invalid" else text + text)
+    with pytest.raises(ValueError, match="one readable ligand"):
+        prepare_prediction(complete_model, tmp_path / "prepared", ligand_sdfs=[path])
+
+
+def test_supplied_sdf_filenames_must_be_unique(complete_model, tmp_path):
+    with pytest.raises(ValueError, match="filenames must be unique"):
+        prepare_prediction(
+            complete_model,
+            tmp_path / "prepared",
+            ligand_sdfs=[tmp_path / "a/LIG.sdf", tmp_path / "b/LIG.sdf"],
+        )
 
 
 @pytest.mark.parametrize("displacement", [0, 100])
