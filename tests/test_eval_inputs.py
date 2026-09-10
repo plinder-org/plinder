@@ -129,7 +129,8 @@ def test_prepare_retains_nucleic_acid_receptors(tmp_path):
 
 
 @pytest.mark.parametrize("override", ["missing", "ccd", "both"])
-def test_prepare_unknown_ligand(complete_model, tmp_path, override):
+@pytest.mark.parametrize("record_type", ["ATOM", "HETATM"])
+def test_prepare_unknown_ligand(complete_model, tmp_path, override, record_type):
     atoms = get_structure_with_altloc(
         read_mmcif_file(complete_model), include_bonds=True
     )
@@ -148,6 +149,9 @@ def test_prepare_unknown_ligand(complete_model, tmp_path, override):
     assert "NAG" in names
     site["label_comp_id"] = np.where(names == "NAG", "XYZ", names)
     site["auth_comp_id"] = np.where(names == "NAG", "XYZ", names)
+    site["group_PDB"] = np.where(
+        names == "NAG", record_type, site["group_PDB"].as_array(str)
+    )
     if "chem_comp_bond" in cif.block:
         del cif.block["chem_comp_bond"]
     cif.write(model)
@@ -168,7 +172,8 @@ def test_prepare_unknown_ligand(complete_model, tmp_path, override):
         assert ligand is not None and ligand.GetNumBonds() > 0
 
 
-def test_prepare_positional_smiles(complete_model, tmp_path):
+@pytest.mark.parametrize("record_type", ["ATOM", "HETATM"])
+def test_prepare_positional_smiles(complete_model, tmp_path, record_type):
     atoms = get_structure_with_altloc(
         read_mmcif_file(complete_model), include_bonds=True
     )
@@ -184,6 +189,14 @@ def test_prepare_positional_smiles(complete_model, tmp_path):
     ligand.bonds = struc.BondList(3)
     model = tmp_path / "model.cif"
     save_cif_file(receptor + ligand, "prediction", model)
+    cif = read_mmcif_file(model)
+    site = cif.block["atom_site"]
+    site["group_PDB"] = np.where(
+        site["label_asym_id"].as_array(str) == "L",
+        record_type,
+        site["group_PDB"].as_array(str),
+    )
+    cif.write(model)
     prepared = prepare_prediction(
         model, tmp_path / "prepared", ligand_smiles={"XYZ": "CCO"}
     )
@@ -225,6 +238,48 @@ def test_prepare_groups_covalently_connected_ligand_chains(complete_model, tmp_p
     assert set(prepared.ligands) == {"E"}
     molecule = next(Chem.SDMolSupplier(str(prepared.ligands["E"])))
     assert Chem.MolToSmiles(molecule) == "OCCO"
+
+
+def test_preparation_does_not_group_ligands_through_a_metal(complete_model, tmp_path):
+    atoms = get_structure_with_altloc(
+        read_mmcif_file(complete_model), include_bonds=True
+    )
+    ligand = atoms[atoms.chain_id == "1.C"].copy()
+    ligand.chain_id[:] = "L"
+    ligand.coord += 10
+    metal = struc.AtomArray(1)
+    metal.chain_id[:] = "Z"
+    metal.res_id[:] = 1
+    metal.res_name[:] = "ZN"
+    metal.atom_name[:] = "ZN"
+    metal.element[:] = "Zn"
+    metal.hetero[:] = True
+    metal.coord[:] = [100, 100, 100]
+    metal.bonds = struc.BondList(1)
+    combined = atoms + ligand + metal
+    zinc = len(combined) - 1
+    original_ligand = int(np.flatnonzero(atoms.chain_id == "1.C")[0])
+    combined.bonds.add_bond(original_ligand, zinc, struc.BondType.COORDINATION)
+    combined.bonds.add_bond(len(atoms), zinc, struc.BondType.COORDINATION)
+    model = tmp_path / "coordinated.cif"
+    save_cif_file(combined, "prediction", model)
+    reread = get_structure_with_altloc(read_mmcif_file(model), include_bonds=True)
+    assert (
+        np.count_nonzero(reread.bonds.as_array()[:, 2] == struc.BondType.COORDINATION)
+        == 2
+    )
+    prepared = prepare_prediction(model, tmp_path / "prepared")
+    assert set(prepared.ligands) == {"1.C", "L", "Z"}
+    molecules = {
+        key: next(Chem.SDMolSupplier(str(path)))
+        for key, path in prepared.ligands.items()
+    }
+    assert molecules["Z"].GetNumAtoms() == 1
+    assert all(
+        atom.GetAtomicNum() != 30
+        for key in ("1.C", "L")
+        for atom in molecules[key].GetAtoms()
+    )
 
 
 def test_prepare_explicit_polymer_ligand(complete_model, tmp_path):

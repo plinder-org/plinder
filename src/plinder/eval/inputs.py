@@ -97,12 +97,7 @@ def prepare_prediction(
         raise ValueError(
             f"Provide either SMILES or CCD for each component: {sorted(overlap)}"
         )
-    if ligand_ccd_codes:
-        enrich_cif_with_ccd_bonds(cif, dict(ligand_ccd_codes))
-    if ligand_smiles:
-        enrich_cif_with_smiles_bonds(cif, dict(ligand_smiles))
-    check_cif_bond_orders(cif)
-    atoms = get_structure_with_altloc(cif, include_bonds=True)
+    atoms = get_structure_with_altloc(cif)
     atoms = atoms[struc.filter_heavy(atoms) & ~struc.filter_solvent(atoms)]
     chains = set(atoms.chain_id)
     extra_ligands = set(ligand_chains)
@@ -132,12 +127,29 @@ def prepare_prediction(
     }
     if not receptor_chains:
         raise ValueError(f"No protein or nucleic-acid receptor chains in {model}")
+    candidates = chains - receptor_chains
+    # The chemistry helpers scan HETATM records. Select by chain membership,
+    # not the input record spelling, so ATOM-labelled ligands are checked too.
+    site = block["atom_site"]
+    site["group_PDB"] = np.where(
+        np.isin(site["label_asym_id"].as_array(str), list(candidates)),
+        "HETATM",
+        site["group_PDB"].as_array(str),
+    )
+    if ligand_ccd_codes:
+        enrich_cif_with_ccd_bonds(cif, dict(ligand_ccd_codes))
+    if ligand_smiles:
+        enrich_cif_with_smiles_bonds(cif, dict(ligand_smiles))
+    check_cif_bond_orders(cif)
+    atoms = get_structure_with_altloc(cif, include_bonds=True)
+    atoms = atoms[struc.filter_heavy(atoms) & ~struc.filter_solvent(atoms)]
     receptor_atoms = atoms[np.isin(atoms.chain_id, list(receptor_chains))]
 
-    # Join covalently linked ligand chains, never through a receptor chain.
-    candidates = chains - receptor_chains
+    # Join covalently linked ligand chains, never through a receptor or metal.
     neighbors = {chain: set() for chain in candidates}
-    for first, second, _ in atoms.bonds.as_array():
+    for first, second, bond_type in atoms.bonds.as_array():
+        if bond_type == struc.BondType.COORDINATION:
+            continue
         a, b = atoms.chain_id[first], atoms.chain_id[second]
         if a != b and a in candidates and b in candidates:
             neighbors[a].add(b)
