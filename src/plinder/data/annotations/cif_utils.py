@@ -1063,7 +1063,16 @@ def atoms_to_rdkit_mol(
                 "(load the CIF with include_bonds=True or set atoms.bonds)."
             )
 
-    mol = rdkit_interface.to_mol(heavy, kekulize=True, use_dative_bonds=True)
+    # Keep explicit aromatic single/double orders for incomplete rings, but
+    # leave generic aromatic bonds for RDKit to resolve. Biotite's
+    # kekulize=True turns the latter into ANY, producing bond type 0 in SDFs.
+    generic_aromatic = heavy.bonds.as_array()[:, 2] == struc.BondType.AROMATIC
+    heavy.bonds.remove_aromaticity()
+    if generic_aromatic.any():
+        bonds = heavy.bonds.as_array()
+        bonds[generic_aromatic, 2] = struc.BondType.AROMATIC
+        heavy.bonds = BondList(len(heavy), bonds)
+    mol = rdkit_interface.to_mol(heavy, use_dative_bonds=True)
     if mol is None:
         raise ValueError("Failed to convert AtomArray to RDKit Mol")
 

@@ -8,6 +8,7 @@ import biotite.structure as struc
 import numpy as np
 import pandas as pd
 import pytest
+import yaml
 from biotite.structure.io import pdbx
 from plinder.data.annotations.cif_utils import (
     MissingBondOrderError,
@@ -202,6 +203,34 @@ def test_prepare_positional_smiles(complete_model, tmp_path, record_type):
     )
     molecule = next(Chem.SDMolSupplier(str(prepared.ligands["L"])))
     assert Chem.MolToSmiles(molecule) == "CCO"
+
+
+def test_prepare_boltz_preserves_aromatic_bonds(test_dir, tmp_path):
+    folder = test_dir / "custom_cif"
+    model = folder / "boltz_8c3u_input_model_0.cif"
+    config = yaml.safe_load((folder / "boltz_8c3u_input.yaml").read_text())
+    smiles = next(
+        item["ligand"]["smiles"] for item in config["sequences"] if "ligand" in item
+    )
+    original = model.read_bytes()
+    prepared = prepare_prediction(
+        model, tmp_path / "prepared", ligand_smiles={"LIG": smiles}
+    )
+    assert model.read_bytes() == original
+    assert set(prepared.ligands) == {"B"}
+    ligand = next(Chem.SDMolSupplier(str(prepared.ligands["B"])))
+    assert ligand is not None
+    assert all(bond.GetBondTypeAsDouble() > 0 for bond in ligand.GetBonds())
+    template = Chem.MolFromSmiles(smiles)
+    assert Chem.MolToSmiles(ligand) == Chem.MolToSmiles(template)
+    assert sum(b.GetIsAromatic() for b in ligand.GetBonds()) == sum(
+        b.GetIsAromatic() for b in template.GetBonds()
+    )
+    atoms = get_structure_with_altloc(read_mmcif_file(model))
+    expected = atoms.coord[(atoms.chain_id == "B") & struc.filter_heavy(atoms)]
+    np.testing.assert_allclose(
+        ligand.GetConformer().GetPositions(), expected, atol=1e-3
+    )
 
 
 @pytest.mark.skipif(shutil.which("ost") is None, reason="requires OpenStructure CLI")

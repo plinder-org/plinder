@@ -1180,6 +1180,38 @@ def test_atoms_to_rdkit_mol_error():
         atoms_to_rdkit_mol(struc.AtomArray(0))
 
 
+def test_atoms_to_rdkit_mol_keeps_generic_and_partial_aromatic_bonds():
+    from plinder.data.annotations.cif_utils import atoms_to_rdkit_mol
+    from rdkit import Chem
+
+    # A complete benzene ring has generic aromatic bonds; a separate resolved
+    # fragment has an explicit aromatic double bond but no complete ring.
+    atoms = struc.AtomArray(8)
+    atoms.element[:] = "C"
+    atoms.res_name[:] = "XYZ"
+    atoms.res_id[:] = 1
+    atoms.atom_name = [f"C{i}" for i in range(8)]
+    angle = np.arange(6) * np.pi / 3
+    atoms.coord[:6] = np.column_stack(
+        [1.4 * np.cos(angle), 1.4 * np.sin(angle), np.zeros(6)]
+    )
+    atoms.coord[6:] = [[10, 0, 0], [11.3, 0, 0]]
+    atoms.bonds = struc.BondList(
+        8,
+        np.array(
+            [[i, (i + 1) % 6, struc.BondType.AROMATIC] for i in range(6)]
+            + [[6, 7, struc.BondType.AROMATIC_DOUBLE]]
+        ),
+    )
+    original_bonds = atoms.bonds.as_array().copy()
+    molecule = atoms_to_rdkit_mol(atoms, assign_stereo=False)
+    assert Chem.MolToSmiles(molecule) == "C=C.c1ccccc1"
+    assert molecule.GetBondBetweenAtoms(6, 7).GetBondType() == Chem.BondType.DOUBLE
+    assert sum(b.GetIsAromatic() for b in molecule.GetBonds()) == 6
+    np.testing.assert_array_equal(atoms.bonds.as_array(), original_bonds)
+    np.testing.assert_allclose(molecule.GetConformer().GetPositions(), atoms.coord)
+
+
 def test_atoms_to_rdkit_mol_recovers_missing_ccd_bonds():
     """A bond-less residue still builds: atoms_to_rdkit_mol refills intra-residue
     bonds from the CCD, so the SDF writer and _get_ccd_mol share the same bond
