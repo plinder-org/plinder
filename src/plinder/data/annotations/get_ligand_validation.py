@@ -7,16 +7,15 @@ from collections.abc import Collection
 from functools import cached_property
 
 import numpy as np
-from PDBValidation.PDBXReader import ResidueNotFound
-from PDBValidation.Residue import Residue
-from PDBValidation.Validation import PDBValidation
-from PDBValidation.XML import ModelledSubgroupNotFound
 from pydantic import ConfigDict, Field, computed_field
 
 from plinder.core.utils.log import setup_logger
 from plinder.data.annotations.utils import DocBaseModel
 
 LOG = setup_logger(__name__)
+
+if ty.TYPE_CHECKING:
+    from PDBValidation.Validation import PDBValidation
 
 
 class ResidueValidationThresholds(DocBaseModel):
@@ -83,6 +82,11 @@ class ResidueValidation(DocBaseModel):
         *,
         preferred_altcode: str | None = None,
     ) -> ResidueValidation | None:
+        from PDBValidation.PDBXReader import ResidueNotFound
+        from PDBValidation.Residue import Residue
+        from PDBValidation.Validation import PDBValidation
+        from PDBValidation.XML import ModelledSubgroupNotFound
+
         try:
             residue_with_alts = Residue.CreateFromMmCIFPosition(
                 chain, resnum, str(entity), doc

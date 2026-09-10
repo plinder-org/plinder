@@ -1316,7 +1316,7 @@ def test_entry_validation_skips_chains_outside_retained_systems(
     validated: list[str] = []
 
     monkeypatch.setattr(
-        "plinder.data.annotations.aggregate_annotations.ValidationFactory",
+        "PDBValidation.ValidationFactory.ValidationFactory",
         lambda *_args, **_kwargs: SimpleNamespace(getValidation=lambda: object()),
     )
     monkeypatch.setattr(
@@ -1390,7 +1390,7 @@ def test_entry_to_df_computes_validation_before_formatting_systems(
     observed_entry_criteria = []
 
     monkeypatch.setattr(
-        "plinder.data.annotations.aggregate_annotations.ValidationFactory",
+        "PDBValidation.ValidationFactory.ValidationFactory",
         lambda *_args, **_kwargs: SimpleNamespace(getValidation=lambda: object()),
     )
     monkeypatch.setattr(

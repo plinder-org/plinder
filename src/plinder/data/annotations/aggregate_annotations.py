@@ -13,12 +13,10 @@ from pathlib import Path
 
 import biotite.structure as struc
 import biotite.structure.io.pdbx as pdbx
-import networkit as nk
 import numpy as np
 import pandas as pd
 from biotite.file import DeserializationError, InvalidFileError
 from biotite.structure import filter_heavy
-from PDBValidation.ValidationFactory import ValidationFactory
 from pydantic import BeforeValidator, Field, PrivateAttr
 from rdkit import RDLogger
 
@@ -1435,6 +1433,8 @@ class Entry(DocBaseModel):
         interaction_search_threshold: float,
     ) -> set[str]:
         """Keep deferred non-artifacts that may connect to a primary ligand."""
+        import networkit as nk
+
         if not deferred_instance_chains:
             return set()
         if min_shared_pocket_members <= 0:
@@ -2341,6 +2341,8 @@ class Entry(DocBaseModel):
         min_shared_pocket_members : int
             Minimum shared pocket members to group non-artifact ligands.
         """
+        import networkit as nk
+
         ligand_ids = list(ligands.keys())
         G = nk.Graph(len(ligand_ids))
 
@@ -2794,6 +2796,8 @@ class Entry(DocBaseModel):
         cif_file: Path,
         thresholds: ResidueValidationThresholds = ResidueValidationThresholds(),
     ) -> None:
+        from PDBValidation.ValidationFactory import ValidationFactory
+
         if self.determination_method != "X-RAY DIFFRACTION":
             LOG.warning(
                 f"set_validation: Skipping validation for {self.pdb_id} as method is not X-RAY DIFFRACTION"
