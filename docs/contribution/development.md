@@ -46,7 +46,7 @@ $ pip install -e ".[eval]"
 ```
 
 :::{note}
-The `eval` extra installs PoseBusters and Plotly. OpenStructure is Conda-only and
+The `eval` extra installs PoseBusters. OpenStructure is Conda-only and
 is installed by `mamba env create -f environment.yml` above.
 Data generation (`plinder.data`) does **not** require OpenStructure and
 works with numpy 2.

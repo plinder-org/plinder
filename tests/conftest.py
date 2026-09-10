@@ -471,56 +471,6 @@ def read_plinder_mount(monkeypatch, tmp_path):
 
 
 @pytest.fixture
-def read_plinder_eval_mount(monkeypatch, tmp_path):
-    plinder_mount = tmp_path / "plinder_mount"
-    adir = plinder_mount / "eval"
-    shutil.copytree(test_asset_fp / "eval", adir)
-    annotation_path = adir / "index" / "annotation_table.parquet"
-    annotation = pd.read_parquet(annotation_path)
-    annotation = annotation.rename(
-        columns={"ligand_rdkit_canonical_smiles": "ligand_smiles"}
-    )
-    instance_chains = annotation["ligand_id"].str.rsplit("__", n=1).str[-1]
-    annotation["ligand_instance_chain"] = instance_chains
-    annotation["ligand_instance"] = instance_chains.str.split(".").str[0].astype(int)
-    annotation["ligand_asym_id"] = instance_chains.str.rsplit(".", n=1).str[-1]
-    annotation.to_parquet(annotation_path, index=False)
-    for archive in ("a3.zip", "ai.zip"):
-        shutil.unpack_archive(
-            adir / "systems" / archive,
-            adir / "reconstructed_systems",
-        )
-    _write_test_entry_metadata(adir)
-    ligand_archive_dir = adir / "ligand_archives"
-    ligand_archive_dir.mkdir()
-    for system_id in ("1a3b__1__1.B__1.D", "1ai5__1__1.A_1.B__1.D"):
-        pdb_id = system_id[:4]
-        ligand_file = (
-            adir / "reconstructed_systems" / system_id / "ligand_files" / "1.D.sdf"
-        )
-        pd.DataFrame(
-            {
-                "pdb_id": [pdb_id],
-                "ligand_asym_id": ["D"],
-                "sdf": [ligand_file.read_bytes()],
-            }
-        ).to_parquet(ligand_archive_dir / f"{pdb_id[1:3]}.parquet", index=False)
-    monkeypatch.setenv("PLINDER_MOUNT", plinder_mount.as_posix())
-    monkeypatch.setenv("PLINDER_RELEASE", "")
-    monkeypatch.setenv("PLINDER_RELEASE_NUMBER", "")
-    monkeypatch.setenv("PLINDER_BUCKET", "eval")
-    monkeypatch.setenv("PLINDER_OFFLINE", True)
-    from plinder.core.utils import config, cpl
-
-    config._config._clear()
-    monkeypatch.setattr(cpl, "_CLIENTS", {})
-    cfg = config.get_config()
-    assert Path(cfg.data.plinder_dir) == adir
-
-    return adir
-
-
-@pytest.fixture
 def write_plinder_mount(monkeypatch, tmp_path):
     read_plinder_mount = test_asset_fp / "plinder" / "mount"
     write_plinder_mount = tmp_path / "plinder" / "mount"
@@ -588,31 +538,6 @@ def mock_ccd_lookups(monkeypatch):
         "plinder.data.annotations.ligand_utils.BINDING_AFFINITY",
         None,
     )
-
-
-@pytest.fixture(scope="session")
-def system_1a3b():
-    return "1a3b__1__1.B__1.D"
-
-
-@pytest.fixture(scope="session")
-def predicted_pose_1a3b():
-    return test_asset_fp / "eval/predicted_poses/1a3b__1__1.B__1.D/rank1.sdf"
-
-
-@pytest.fixture(scope="session")
-def predicted_named_pose_1a3b():
-    return test_asset_fp / "eval/predicted_poses/1a3b__1__1.B__1.D/rank1_named.sdf"
-
-
-@pytest.fixture(scope="session")
-def system_1ai5():
-    return "1ai5__1__1.A_1.B__1.D"
-
-
-@pytest.fixture(scope="session")
-def predicted_pose_1ai5():
-    return test_asset_fp / "eval/predicted_poses/1ai5__1__1.A_1.B__1.D/rank1.sdf"
 
 
 @pytest.fixture(autouse=True)

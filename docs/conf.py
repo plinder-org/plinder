@@ -31,7 +31,6 @@ API_EXCLUDED_MODULES = {
     "plinder.data.common._version",
     "plinder.data.get_system_annotations",
     "plinder.data.pipeline",
-    "plinder.eval.docking",
 }
 
 # Generate one reference page per module included in the standard installation.

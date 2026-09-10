@@ -70,7 +70,7 @@ All fixed in WIP — will take effect after dataset regeneration.
     - **Stereochemistry**: CCD ideal 3D coordinates used as stereo ground truth; new `resolved_stereo_matches_template` flag validates resolved structure chirality against CCD template (handles partial resolution via MCS trimming)
     - **Interactions**: water bridge and metal bridge detection via peppr; halogen bond sidechain flag now computed (was hardcoded)
     - **Binding affinity**: fixed BindingDB matching — target sequence now validated against PDB SEQRES with 100% core identity, terminal tags/truncations tolerated ([#94](https://github.com/plinder-org/plinder/issues/94)); updated code to get the latest BindingDB release
-    - **Optional eval**: PoseBusters and plotting dependencies moved to `pip install plinder[eval]`; OpenStructure-backed metrics use the Conda-only `openstructure` package; posebusters no longer runs during ingest
+    - **Optional eval**: `pip install plinder[eval]` adds PoseBusters ligand validation; OpenStructure-backed metrics use the Conda-only `openstructure` package; PoseBusters no longer runs during ingest
     - **PlinderSystem API**: new `receptor_structure` and `ligand_structures` (Biotite AtomArray) plus `ligand_mols` (RDKit Mol) properties; OpenStructure is confined to the evaluation implementation
     - **Chain type support**: `Chain.from_cif_data` now assigns proper one-letter codes and chem_types for nucleotides (`RNA Linking`, `DNA Linking`); new `Residue.is_modified` property covers both protein PTMs and modified nucleotide bases
     - **Save utils**: receptor/ligand chain naming generalized (`PDB_RECEPTOR_CHAINS`); system saving works for protein, NA, and mixed complexes
@@ -141,7 +141,7 @@ For details on the release paths, see [Documentation](https://plinder-org.github
 pip install plinder
 ```
 
-For pip-installable evaluation helpers such as PoseBusters and plotting:
+For PoseBusters ligand validation:
 
 ```
 pip install plinder[eval]

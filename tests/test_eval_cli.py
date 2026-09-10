@@ -124,3 +124,6 @@ runpy.run_module('plinder.eval.cli', run_name='__main__')
 def test_packaged_command_uses_new_evaluator():
     config = tomli.loads((Path(__file__).parents[1] / "pyproject.toml").read_text())
     assert config["project"]["scripts"]["plinder_eval"] == "plinder.eval.cli:main"
+    assert not {"plinder_stratify", "plinder_plot"} & config["project"][
+        "scripts"
+    ].keys()
