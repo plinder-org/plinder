@@ -14,7 +14,7 @@ system_ligand_validation_average_b_factor	double	Average B factor across all res
 system_ligand_validation_unknown_residue_count	double	Number of unknown residues in the list
 system_ligand_validation_atom_count	double	Number of atoms across all residues in the list
 system_ligand_validation_heavy_atom_count	double	Number of heavy atoms across all residues in the list
-system_ligand_validation_num_unresolved_heavy_atoms	double	Number of unresolved heavy atoms across all residues in the list
+system_ligand_validation_num_unresolved_heavy_atoms	double	Number of unresolved heavy atoms across all residues in the list; null if any residue's count is unavailable or inconsistent
 system_ligand_validation_max_alt_count	double	The highest number of configurations in a single residue in the list
 system_ligand_validation_percent_outliers_geometry	double	Percentage of residues with geometry outliers
 system_ligand_validation_percent_outliers_density	double	Percentage of residues with density outliers
@@ -34,7 +34,7 @@ system_pocket_validation_average_b_factor	double	Average B factor across all res
 system_pocket_validation_unknown_residue_count	double	Number of unknown residues in the list
 system_pocket_validation_atom_count	double	Number of atoms across all residues in the list
 system_pocket_validation_heavy_atom_count	double	Number of heavy atoms across all residues in the list
-system_pocket_validation_num_unresolved_heavy_atoms	double	Number of unresolved heavy atoms across all residues in the list
+system_pocket_validation_num_unresolved_heavy_atoms	double	Number of unresolved heavy atoms across all residues in the list; null if any residue's count is unavailable or inconsistent
 system_pocket_validation_max_alt_count	double	The highest number of configurations in a single residue in the list
 system_pocket_validation_percent_outliers_geometry	double	Percentage of residues with geometry outliers
 system_pocket_validation_percent_outliers_density	double	Percentage of residues with density outliers

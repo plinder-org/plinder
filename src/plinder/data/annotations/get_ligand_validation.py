@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import typing as ty
-from collections.abc import Collection
+from collections.abc import Collection, Sequence
 from functools import cached_property
 
 import numpy as np
@@ -60,12 +60,14 @@ class ResidueValidation(DocBaseModel):
     atom_count: int = Field(description="Number of atoms")
     unknown_atom_count: int = Field(description="Number of unknown atoms")
     heavy_atom_count: int = Field(description="Number of heavy atoms")
-    num_unresolved_heavy_atoms: int = Field(
-        description="Number of unresolved heavy atoms"
+    num_unresolved_heavy_atoms: int | None = Field(
+        description="Number of unresolved heavy atoms; null when the reference "
+        "is unavailable or the atom counts are inconsistent"
     )
     is_outlier: dict[str, bool] = Field(description="Whether the residue is an outlier")
-    is_atom_count_consistent: bool = Field(
-        description="Whether the atom count is consistent"
+    is_atom_count_consistent: bool | None = Field(
+        description="Whether the atom count is consistent; null when the reference "
+        "is unavailable"
     )
     has_clashing_partial_occupancy_atoms: bool = Field(
         description="Whether the residue has clashing partial occupancy atoms"
@@ -103,26 +105,13 @@ class ResidueValidation(DocBaseModel):
             residue = residue_with_alts.getAlt(alt)
             heavy_atom_count = residue.countAtomsHeavyPDBX()
             heavy_atom_count_conop = residue.countAtomsHeavyConop()
-            if heavy_atom_count_conop is None:
-                heavy_atom_count_conop = 0
-            if (
-                residue.isType("PolymerChainResidue")
-                and np.abs(heavy_atom_count - heavy_atom_count_conop) <= 1
-            ):
-                heavy_atom_count_conop = heavy_atom_count
-            num_unresolved_heavy_atoms = heavy_atom_count_conop - heavy_atom_count
-
-            # TODO: uncomment for rerun
-            #     # set -1 as value for cases where no reference was found
-            #     num_unresolved_heavy_atoms = -1
-            # else:
-            #     num_unresolved_heavy_atoms = heavy_atom_count_conop - heavy_atom_count
-            #     if (
-            #         residue.isType("PolymerChainResidue")
-            #         and num_unresolved_heavy_atoms >= 1
-            #     ):
-            #         # residues have one atom less when in polymer - adjust for it
-            #         num_unresolved_heavy_atoms -= 1
+            num_unresolved_heavy_atoms = None
+            if heavy_atom_count_conop is not None:
+                difference = heavy_atom_count_conop - heavy_atom_count
+                if residue.isType("PolymerChainResidue") and abs(difference) <= 1:
+                    difference = 0
+                if difference >= 0:
+                    num_unresolved_heavy_atoms = difference
 
             return cls(
                 altcode=residue.getAltCode(),
@@ -142,7 +131,11 @@ class ResidueValidation(DocBaseModel):
                     s: residue.isOutlier(s)
                     for s in ["geometry", "density", "chirality", "clashes"]
                 },
-                is_atom_count_consistent=residue.isAtomCountConsistent(),
+                is_atom_count_consistent=(
+                    residue.isAtomCountConsistent()
+                    if heavy_atom_count_conop is not None
+                    else None
+                ),
                 has_clashing_partial_occupancy_atoms=residue.hasClashingPartialOccupancyAtoms(),
             )
         except Exception as e:
@@ -194,8 +187,9 @@ class ResidueListValidation(DocBaseModel):
     heavy_atom_count: int = Field(
         description="Number of heavy atoms across all residues in the list"
     )
-    num_unresolved_heavy_atoms: int = Field(
-        description="Number of unresolved heavy atoms across all residues in the list"
+    num_unresolved_heavy_atoms: int | None = Field(
+        description="Number of unresolved heavy atoms across all residues in the list; "
+        "null if any residue's count is unavailable or inconsistent"
     )
     max_alt_count: int = Field(
         description="The highest number of configurations in a single residue in the list"
@@ -224,7 +218,7 @@ class ResidueListValidation(DocBaseModel):
     @classmethod
     def from_residues(
         cls,
-        residues: list[ResidueValidation],
+        residues: Sequence[ResidueValidation | None],
         residue_thresholds: ResidueValidationThresholds,
     ) -> ResidueListValidation | None:
         total_residues = len(residues)
@@ -232,6 +226,10 @@ class ResidueListValidation(DocBaseModel):
         num_processed = len(filtered)
         if num_processed == 0:
             return None
+        unresolved_counts = [residue.num_unresolved_heavy_atoms for residue in filtered]
+        known_counts = [
+            count for count in unresolved_counts if count is not None and count >= 0
+        ]
         return cls(
             num_residues=total_residues,
             num_processed_residues=num_processed,
@@ -265,8 +263,8 @@ class ResidueListValidation(DocBaseModel):
             ),
             atom_count=sum([residue.atom_count for residue in filtered]),
             heavy_atom_count=sum([residue.heavy_atom_count for residue in filtered]),
-            num_unresolved_heavy_atoms=sum(
-                [residue.num_unresolved_heavy_atoms for residue in filtered]
+            num_unresolved_heavy_atoms=(
+                sum(known_counts) if len(known_counts) == total_residues else None
             ),
             max_alt_count=max([residue.alt_count for residue in filtered]),
             percent_outliers={

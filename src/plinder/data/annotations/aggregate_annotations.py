@@ -747,7 +747,7 @@ class System(DocBaseModel):
     ) -> None:
         self.ligand_validation = ResidueListValidation.from_residues(
             [
-                chains[c.split(".", maxsplit=1)[1]].residues[r].validation  # type: ignore
+                chains[c.split(".", maxsplit=1)[1]].residues[r].validation
                 for c in self.ligand_chains
                 for r in chains[c.split(".", maxsplit=1)[1]].residues
             ],
@@ -755,7 +755,7 @@ class System(DocBaseModel):
         )
         self.pocket_validation = ResidueListValidation.from_residues(
             [
-                chains[c.split(".", maxsplit=1)[1]].residues[r].validation  # type: ignore
+                chains[c.split(".", maxsplit=1)[1]].residues[r].validation
                 for c in self.pocket_residues
                 for r in self.pocket_residues[c]
             ],
