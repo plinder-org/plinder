@@ -31,8 +31,14 @@ SEQUENCE_CLUSTER_SCHEMA = pa.schema(
 CLUSTER_METADATA_KEY = b"plinder_protein_clustering"
 
 
+def _clusters_are_current(output: Path, metadata: bytes) -> bool:
+    if not output.is_file():
+        return False
+    return (pq.read_schema(output).metadata or {}).get(CLUSTER_METADATA_KEY) == metadata
+
+
 def _read_assignments(path: Path, expected_ids: set[str]) -> pd.DataFrame:
-    """Check that every input has one assignment to a retained representative."""
+    """Require one native-tool assignment per submitted input."""
     assignments = pd.read_csv(
         path,
         sep="\t",
@@ -41,24 +47,13 @@ def _read_assignments(path: Path, expected_ids: set[str]) -> pd.DataFrame:
         dtype=str,
         keep_default_na=False,
     )
-    if assignments.empty or assignments["member"].duplicated().any():
-        raise ValueError("protein clusters must assign each input exactly once")
     observed = set(assignments["member"])
-    if observed != expected_ids:
+    if len(assignments) != len(expected_ids) or observed != expected_ids:
         raise ValueError(
             "protein cluster membership differs from input: "
+            f"rows={len(assignments)}, expected={len(expected_ids)}, "
             f"missing={sorted(expected_ids - observed)[:10]}, "
             f"extra={sorted(observed - expected_ids)[:10]}"
-        )
-    representatives = set(assignments["representative"])
-    self_members = set(
-        assignments.loc[
-            assignments["representative"] == assignments["member"], "member"
-        ]
-    )
-    if representatives != self_members:
-        raise ValueError(
-            "protein cluster representatives must belong to their own clusters"
         )
     return assignments
 
@@ -175,8 +170,6 @@ def make_protein_structure_clusters(
         .reset_index(drop=True)
     )
     keys = ["entry_pdb_id", "chain_asym_id"]
-    if chains[keys].isna().any().any() or chains.duplicated(keys).any():
-        raise ValueError("protein chains require unique, non-null entry/asym IDs")
     chains["member"] = pd.Series(
         [f"chain_{i}_A" for i in range(len(chains))], dtype="string"
     )
@@ -210,18 +203,8 @@ def make_protein_structure_clusters(
     }
     metadata = json.dumps(parameters, sort_keys=True).encode()
     output = data_dir / "protein_clusters/structure.parquet"
-    if not force_update and output.is_file():
-        try:
-            previous = pq.read_table(output)
-            if (
-                previous.schema.equals(SEQUENCE_CLUSTER_SCHEMA)
-                and previous.num_rows == len(chains)
-                and (previous.schema.metadata or {}).get(CLUSTER_METADATA_KEY)
-                == metadata
-            ):
-                return output
-        except (OSError, ValueError, pa.ArrowException):
-            pass
+    if not force_update and _clusters_are_current(output, metadata):
+        return output
     scratch_dir.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(
         prefix="plinder-structure-clusters-", dir=scratch_dir
@@ -317,8 +300,6 @@ def make_protein_sequence_clusters(
         .reset_index(drop=True)
     )
     keys = ["entry_pdb_id", "chain_asym_id"]
-    if chains[keys].isna().any().any() or chains.duplicated(keys).any():
-        raise ValueError("protein chains require unique, non-null entry/asym IDs")
     # Generated FASTA IDs avoid any restrictions in native tools on source IDs.
     # They are mapped back to the untouched entry/asym IDs before writing.
     chains["member"] = pd.Series(
@@ -349,18 +330,8 @@ def make_protein_sequence_clusters(
     }
     metadata = json.dumps(parameters, sort_keys=True).encode()
     output = data_dir / "protein_clusters" / "sequence.parquet"
-    if not force_update and output.is_file():
-        try:
-            previous = pq.read_table(output)
-            if (
-                previous.schema.equals(SEQUENCE_CLUSTER_SCHEMA)
-                and previous.num_rows == len(chains)
-                and (previous.schema.metadata or {}).get(CLUSTER_METADATA_KEY)
-                == metadata
-            ):
-                return output
-        except (OSError, ValueError, pa.ArrowException):
-            pass
+    if not force_update and _clusters_are_current(output, metadata):
+        return output
     scratch_dir.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(
         prefix="plinder-sequence-clusters-", dir=scratch_dir

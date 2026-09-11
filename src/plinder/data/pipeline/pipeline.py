@@ -8,6 +8,7 @@ import pandas as pd
 from omegaconf import DictConfig
 
 from plinder.core.utils.log import setup_logger
+from plinder.data import protein_clusters
 from plinder.data.pipeline import config, tasks, utils
 from plinder.data.pipeline.ingest import resolve_source_roots
 
@@ -102,10 +103,10 @@ class IngestPipeline:
 
     @utils.ingest_flow_control
     def make_protein_sequence_clusters(self) -> None:
-        tasks.make_protein_sequence_clusters(
+        protein_clusters.make_protein_sequence_clusters(
             data_dir=self.plinder_dir,
             scratch_dir=Path(tempfile.gettempdir()),
-            cpu=self.cfg.flow.protein_clustering_cpu,
+            threads=self.cfg.flow.protein_clustering_cpu,
             identity=self.cfg.flow.protein_sequence_cluster_identity,
             coverage=self.cfg.flow.protein_cluster_coverage,
             force_update=self.cfg.data.force_update,
@@ -114,11 +115,11 @@ class IngestPipeline:
     @utils.ingest_flow_control
     def make_protein_structure_clusters(self) -> None:
         cif_root, _ = self._entry_source_roots()
-        tasks.make_protein_structure_clusters(
+        protein_clusters.make_protein_structure_clusters(
             data_dir=self.plinder_dir,
             cif_root=cif_root,
             scratch_dir=Path(tempfile.gettempdir()),
-            cpu=self.cfg.flow.protein_clustering_cpu,
+            threads=self.cfg.flow.protein_clustering_cpu,
             lddt=self.cfg.flow.protein_structure_cluster_lddt,
             coverage=self.cfg.flow.protein_cluster_coverage,
             force_update=self.cfg.data.force_update,

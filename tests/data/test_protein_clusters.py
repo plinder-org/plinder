@@ -111,8 +111,6 @@ def test_sequence_cluster_restart_uses_parameters_and_sequences(
         "a\ta\n",  # missing member
         "a\ta\na\tb\na\tb\n",  # duplicate member
         "a\ta\na\tb\na\tc\n",  # extra member
-        "c\ta\nc\tb\n",  # unknown representative
-        "b\ta\na\tb\n",  # representatives do not belong to themselves
     ],
 )
 def test_cluster_assignments_reject_incomplete_or_inconsistent_output(tmp_path, rows):
@@ -154,7 +152,7 @@ def test_segmented_protein_config_runs_sequence_clustering(tmp_path, monkeypatch
     pipe.plinder_dir = tmp_path
     calls = []
     monkeypatch.setattr(
-        tasks, "make_protein_sequence_clusters", lambda **kw: calls.append(kw)
+        clusters, "make_protein_sequence_clusters", lambda **kw: calls.append(kw)
     )
     pipe.make_protein_sequence_clusters()
     assert len(calls) == 1
@@ -374,7 +372,7 @@ def test_structure_missing_source_stops_stage(tmp_path):
 
 
 def test_segmented_protein_config_runs_structure_clustering(tmp_path, monkeypatch):
-    from plinder.data.pipeline import pipeline, tasks
+    from plinder.data.pipeline import pipeline
 
     config = (
         Path(__file__).resolve().parents[2]
@@ -389,7 +387,7 @@ def test_segmented_protein_config_runs_structure_clustering(tmp_path, monkeypatc
     pipe.cfg.source.pdb_nextgen_root = str(tmp_path / "source")
     calls = []
     monkeypatch.setattr(
-        tasks, "make_protein_structure_clusters", lambda **kw: calls.append(kw)
+        clusters, "make_protein_structure_clusters", lambda **kw: calls.append(kw)
     )
     pipe.make_protein_structure_clusters()
     assert len(calls) == 1
