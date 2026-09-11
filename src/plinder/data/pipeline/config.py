@@ -33,12 +33,12 @@ class FlowConfig:
         if set, comma-separated list of specific stages to skip
     download_rcsb_files_batch_size: int
         Target number of two_char_codes per task batch.
-    annotation_batch_size : int, default=220
-        How many system annotations to generate in a given chunk
-    skip_existing_entries : bool, default=True
-        if the per-entry annotation parquet already exists, skip generation
-    make_entries_cpu : int, default=1
-        misguided experiments in multiprocessing over C++ libs (bad idea)
+    make_entries_batch_size : int, default=220
+        Number of entries per task batch.
+    make_entries_force_update : bool, default=False
+        Reprocess entries with completed annotations.
+    make_entries_cpu : int, default=4
+        Number of entry-processing workers.
     make_entries_mode : str, default="all"
         Generate ligands and interfaces, only ligands, or only interfaces.
     """
@@ -70,7 +70,6 @@ class FlowConfig:
     make_dbs_cpu: int = 4
 
     make_ligands_batch_size: int = 100
-    make_ligands_force_update: bool = False
 
     cluster_metrics: list[str] = field(default_factory=lambda: METRICS.copy())
     cluster_thresholds: list[int] = field(default_factory=lambda: [30, 50, 70, 90, 100])
@@ -166,15 +165,12 @@ class FoldseekConfig:
             raise ValueError("foldseek.max_seqs must be positive")
         if not 0 <= self.min_seq_id <= 1:
             raise ValueError("foldseek.min_seq_id must be in [0, 1]")
-        for attr, allowed in [
-            ("alignment_type", [1, 2]),
-            ("score_type", ["lddt", "alntmscore"]),
-        ]:
-            passed = getattr(self, attr, None)
-            if passed not in allowed:  # type: ignore
-                raise ValueError(
-                    f"{self.__class__.__name__}.{attr} must be in {allowed}"
-                )
+        if self.alignment_type not in {1, 2}:
+            raise ValueError("FoldseekConfig.alignment_type must be in [1, 2]")
+        if self.score_type not in {"lddt", "alntmscore"}:
+            raise ValueError(
+                "FoldseekConfig.score_type must be in ['lddt', 'alntmscore']"
+            )
 
 
 @dataclass
@@ -192,24 +188,12 @@ class MMSeqsConfig:
             raise ValueError("mmseqs.max_seqs must be positive")
         if not 0 <= self.min_seq_id <= 1:
             raise ValueError("mmseqs.min_seq_id must be in [0, 1]")
-        for attr, allowed in [
-            ("score_type", ["pident"]),
-        ]:
-            if getattr(self, attr) not in allowed:
-                raise ValueError(
-                    f"{self.__class__.__name__}.{attr} must be in {allowed}"
-                )
-
-
-@dataclass
-class GraphConfig:
-    pass
+        if self.score_type != "pident":
+            raise ValueError("MMSeqsConfig.score_type must be in ['pident']")
 
 
 @dataclass
 class ScorerConfig:
-    wipe_partition: bool = False
-    rerun_existing_batch: bool = False
     minimum_threshold: float = 0.3
     minimum_thresholds: dict[str, float] = field(default_factory=dict)
     max_alignment_rows_per_query: int = 5_000_000
@@ -313,7 +297,6 @@ SCHEMA = {
     "source": SourceConfig,
     "foldseek": FoldseekConfig,
     "mmseqs": MMSeqsConfig,
-    "graph": GraphConfig,
     "annotation": AnnotationConfig,
     "interface": InterfaceConfig,
     "entry": EntryConfig,

@@ -2233,7 +2233,7 @@ class Ligand(DocBaseModel):
             if description_excluded_from_flat_export(description):
                 continue
             name = f"ligand_{field}"
-            data[name] = getattr(self, field, None)
+            data[name] = getattr(self, field)
 
         # These internal selections are required to reconstruct a system
         # deterministically from the source mmCIF and an annotation row.

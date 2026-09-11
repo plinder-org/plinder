@@ -5814,7 +5814,11 @@ def test_metaflow_graph_uses_canonical_ligand_archive_stage():
                     edges[name].add(argument.attr)
 
     assert edges["start"] == {"scatter_make_entries"}
-    assert edges["join_collate_entries"] == {"make_dbs"}
+    assert edges["join_collate_entries"] == {"make_protein_sequence_clusters"}
+    assert edges["make_protein_sequence_clusters"] == {
+        "make_protein_structure_clusters"
+    }
+    assert edges["make_protein_structure_clusters"] == {"make_dbs"}
     assert edges["make_dbs"] == {"scatter_make_canonical_ligand_archives"}
 
     reachable = {"start"}

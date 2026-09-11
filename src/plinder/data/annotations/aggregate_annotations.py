@@ -594,7 +594,7 @@ class System(DocBaseModel):
                 name = f"system_{field}"
             else:
                 name = field
-            data[name] = getattr(self, field, None)
+            data[name] = getattr(self, field)
 
         pocket_mapping = self.get_pocket_domains(chains)
         for mapping in pocket_mapping:
@@ -2604,7 +2604,7 @@ class Entry(DocBaseModel):
         ]
         for field in columns:
             name = f"entry_{field}"
-            data[name] = getattr(self, field, None)
+            data[name] = getattr(self, field)
 
         if self.validation:
             data.update(self.format_validation(criteria))

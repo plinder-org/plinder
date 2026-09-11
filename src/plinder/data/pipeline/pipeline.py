@@ -151,8 +151,8 @@ class IngestPipeline:
             cpu=self.cfg.flow.make_dbs_cpu,
             cif_root=cif_root,
             seqres_path=self._seqres_source(),
-            scratch_dir=(scratch_root / "work" if scratch_root is not None else None),
-            build_dir=(scratch_root / "build" if scratch_root is not None else None),
+            scratch_dir=scratch_root / "work",
+            build_dir=scratch_root / "build",
             index=False,
             force_update=self.cfg.data.force_update,
         )

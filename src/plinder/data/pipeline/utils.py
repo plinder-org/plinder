@@ -2,7 +2,6 @@
 # Distributed under the terms of the Apache License 2.0
 from __future__ import annotations
 
-import shutil
 from functools import wraps
 from hashlib import md5
 from json import dumps, load
@@ -28,20 +27,6 @@ if TYPE_CHECKING:
 
 LOG = setup_logger(__name__)
 T = TypeVar("T")
-RETIRED_ENRICHMENT_MARKERS = ("ecod", "panther", "kinase")
-
-
-def _drop_retired_enrichment_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """Remove annotations sourced from retired third-party enrichments."""
-    retired = [
-        column
-        for column in df.columns
-        if any(marker in column.casefold() for marker in RETIRED_ENRICHMENT_MARKERS)
-    ]
-    if retired:
-        LOG.info(f"dropping retired enrichment columns: {sorted(retired)}")
-        return df.drop(columns=retired)
-    return df
 
 
 def timeit(func: Callable[..., T]) -> Callable[..., T]:
@@ -55,7 +40,6 @@ def timeit(func: Callable[..., T]) -> Callable[..., T]:
         mod = func.__module__
         log = setup_logger(".".join([mod, name]))
         ts = time()
-        result = None
         try:
             result = func(*args, **kwargs)
             log.info(f"runtime succeeded: {time() - ts:>9.2f}s")
@@ -66,57 +50,6 @@ def timeit(func: Callable[..., T]) -> Callable[..., T]:
         return result
 
     return wrapped
-
-
-def entry_exists(*, entry_dir: Path, pdb_id: str) -> bool:
-    """
-    Check if the per-entry annotation parquet exists.
-
-    Parameters
-    ----------
-    entry_dir : Path
-        the directory containing entries
-    pdb_id : str
-        the PDB ID
-    """
-    two_char_code = pdb_id[-3:-1]
-    output = entry_dir / two_char_code / (pdb_id + ".parquet")
-    output.parent.mkdir(exist_ok=True, parents=True)
-    entry_chains = entry_dir / two_char_code / pdb_id / "entry_chains.parquet"
-    entry_biounit_chains = (
-        entry_dir / two_char_code / pdb_id / "entry_biounit_chains.parquet"
-    )
-    entry_source = entry_dir / two_char_code / pdb_id / "entry_source.parquet"
-    if not (
-        output.is_file()
-        and entry_chains.is_file()
-        and entry_biounit_chains.is_file()
-        and entry_source.is_file()
-    ):
-        return False
-    try:
-        if "system_receptor_type" not in pq.read_schema(output).names:
-            return False
-        if "chain_receptor_type" not in pq.read_schema(entry_chains).names:
-            return False
-        required_biounit_columns = {
-            "entry_pdb_id",
-            "biounit_id",
-            "chain_instance",
-            "chain_asym_id",
-            "chain_role",
-            "chain_num_contacting_ions",
-            "chain_num_contacting_artifacts",
-            "chain_num_contacting_other_ligands",
-        }
-        if not required_biounit_columns.issubset(
-            pq.read_schema(entry_biounit_chains).names
-        ):
-            return False
-    except Exception:
-        LOG.info(f"invalidating stale entry annotation cache for {pdb_id}")
-        return False
-    return True
 
 
 def get_db_sources(
@@ -241,39 +174,6 @@ def hash_contents(contents: list[str]) -> str:
     return md5(dumps(sorted(contents)).encode("utf8")).hexdigest()
 
 
-def partition_batch_scores(*, partition_dir: Path, scores_dir: Path) -> None:
-    """
-    Consolidate individual pdb ID similarity scores parquet
-    files into a pre-partitioned dataset by similarity metric
-    and metric value. This partitioned dataset needs to be further
-    consolidated in a join step elsewhere.
-
-    Parameters
-    ----------
-    partition_dir : Path
-        destination directory for consolidated scores
-    scores_dir : Path
-        source directory for fragmented scores
-    """
-    # collect the fragmented parquets
-    dfs = []
-    for pqt in scores_dir.glob("*.parquet"):
-        if pqt.name.endswith(".tmp.parquet"):
-            continue
-        df = pd.read_parquet(pqt)
-        if not df.empty:
-            dfs.append(df)
-    if len(dfs):
-        df = pd.concat(dfs).reset_index(drop=True)
-        df.to_parquet(
-            partition_dir,
-            partition_cols=["metric", "similarity"],
-            index=False,
-            max_partitions=3939,
-            schema=schemas.PROTEIN_SIMILARITY_SCHEMA,
-        )
-
-
 def get_pdb_ids_in_scoring_dataset(*, data_dir: Path) -> dict[str, list[str]]:
     """
     Get all the pdb IDs that are present in the raw scoring dataset
@@ -291,36 +191,6 @@ def get_pdb_ids_in_scoring_dataset(*, data_dir: Path) -> dict[str, list[str]]:
             for path in (dbs / f"search_db={search_db}").glob("*parquet")
             if not path.name.endswith(".tmp.parquet")
         ]
-    return found
-
-
-def get_alns(
-    *, data_dir: Path, mapped: bool = False
-) -> dict[str, dict[str, list[str]]]:
-    """
-    Get all the pdb IDs that are present in the raw alignment dataset
-
-    Parameters
-    ----------
-    data_dir : Path
-        the root plinder dir
-    """
-    sub = "mapped_aln" if mapped else "aln"
-    found: dict[str, dict[str, list[str]]] = {}
-    dbs = data_dir / "dbs" / "subdbs"
-    for search_db in ["holo", "apo", "pred"]:
-        found.setdefault(search_db, {})
-        for aln_type in ["foldseek", "mmseqs"]:
-            found[search_db].setdefault(aln_type, [])
-            found[search_db][aln_type] = [
-                path.stem
-                for path in (dbs / f"{search_db}_{aln_type}/{sub}/").glob("*parquet")
-                if not path.name.endswith(".tmp.parquet")
-                and (
-                    not mapped
-                    or _mapped_alignment_file_is_current(path, alignment_type=aln_type)
-                )
-            ]
     return found
 
 
@@ -356,15 +226,7 @@ def should_run_stage(stage: str, run: list[str], skip: list[str]) -> bool:
     run : bool
         whether or not to run the function
     """
-    if len(run):
-        if stage in run and stage not in skip:
-            return True
-        return False
-    elif len(skip):
-        if stage in skip:
-            return False
-        return True
-    return True
+    return stage not in skip and (not run or stage in run)
 
 
 def ingest_flow_control(func: Callable[..., T]) -> Callable[..., T]:
@@ -408,23 +270,11 @@ def ingest_flow_control(func: Callable[..., T]) -> Callable[..., T]:
             return ret
         else:
             LOG.info(f"skipping {func.__name__}")
-            # Metaflow foreach joins need one no-op branch in order to remain
-            # reachable when a stage is excluded by run_specific_stages.
-            if is_scatter:
-                return [[]]
+        # Metaflow foreach joins need one no-op branch in order to remain
+        # reachable when a stage is excluded by run_specific_stages.
         return [[]]
 
     return inner
-
-
-def _cluster_column_name(
-    *, metric: str, cluster: str, directed: bool, threshold: int, ligand: bool
-) -> str:
-    if directed or cluster != "set_cover":
-        raise ValueError("published undirected clusters must be set covers")
-    kind = "set_cover"
-    ligand_marker = "__ligand" if ligand else ""
-    return f"{metric}__{threshold}{ligand_marker}__{kind}"
 
 
 def build_ligand_cluster_table(*, index: pd.DataFrame, data_dir: Path) -> pd.DataFrame:
@@ -517,13 +367,7 @@ def build_ligand_cluster_table(*, index: pd.DataFrame, data_dir: Path) -> pd.Dat
             (
                 path,
                 metric,
-                _cluster_column_name(
-                    metric=metric,
-                    cluster="set_cover",
-                    directed=False,
-                    threshold=threshold,
-                    ligand=True,
-                ),
+                f"{metric}__{threshold}__ligand__set_cover",
                 False,
             )
         )
@@ -994,66 +838,6 @@ def update_index_ligand_3d_score_ability(*, data_dir: Path) -> None:
     )
 
 
-def add_aggregated_columns(*, index: pd.DataFrame) -> pd.DataFrame:
-    """
-    Add aggregated columns to the annotation table
-    """
-    index["biounit_num_ligands"] = index.groupby(["entry_pdb_id", "system_biounit_id"])[
-        "system_id"
-    ].transform("count")
-    index["biounit_num_unique_ccd_codes"] = index.groupby(
-        [
-            "entry_pdb_id",
-            "system_biounit_id",
-        ]
-    )["ligand_unique_ccd_code"].transform("nunique")
-    index["biounit_num_proper_ligands"] = index.groupby(
-        [
-            "entry_pdb_id",
-            "system_biounit_id",
-        ]
-    )["ligand_is_proper"].transform("sum")
-    for n in [
-        "lipinski",
-        "cofactor",
-        "fragment",
-        # the single "oligo" flag was split into per-family mono/oligo columns;
-        # aggregate each to match the ligand_is_* annotation and the documented
-        # system_ligand_has_* schema (see column_descriptions/extra.tsv)
-        "monosaccharide",
-        "oligosaccharide",
-        "mononucleotide",
-        "oligonucleotide",
-        "monopeptide",
-        "oligopeptide",
-        "artifact",
-        "other",
-        "covalent",
-        "invalid",
-        "ion",
-    ]:
-        index[f"system_ligand_has_{n}"] = index.groupby("system_id")[
-            f"ligand_is_{n}"
-        ].transform("any")
-    index["system_protein_chains_total_length"] = index[
-        "system_protein_chains_length"
-    ].apply(sum)
-    ccd_dict = (
-        index.groupby("system_id")["ligand_unique_ccd_code"]
-        .agg(lambda x: "-".join(sorted(set(x))))
-        .to_dict()
-    )
-    index["system_unique_ccd_codes"] = index["system_id"].map(ccd_dict)
-    ccd_proper_dict = (
-        index[index["ligand_is_proper"]]
-        .groupby("system_id")["ligand_unique_ccd_code"]
-        .agg(lambda x: "-".join(sorted(set(x))))
-        .to_dict()
-    )
-    index["system_proper_unique_ccd_codes"] = index["system_id"].map(ccd_proper_dict)
-    return index
-
-
 def _chemical_cluster_summary_columns() -> set[str]:
     """Return the 90-percent cluster sidecar columns of every chemical metric."""
     return {
@@ -1174,156 +958,3 @@ def finalize_index(*, data_dir: Path) -> pd.DataFrame:
         time() - started,
     )
     return index
-
-
-def create_entry_chain_index(
-    *, data_dir: Path, force_update: bool = False
-) -> pd.DataFrame:
-    """Collate normalized per-entry chain metadata into one parquet."""
-    output = data_dir / "index" / "entry_chains.parquet"
-    output.parent.mkdir(exist_ok=True, parents=True)
-    if output.exists() and not force_update:
-        return pd.read_parquet(output)
-
-    parts = sorted((data_dir / "raw_entries").glob("*/*/entry_chains.parquet"))
-    frames = [pd.read_parquet(path) for path in parts]
-    columns = [
-        "entry_pdb_id",
-        "chain_asym_id",
-        "chain_auth_id",
-        "chain_entity_id",
-        "chain_type",
-        "chain_receptor_type",
-        "chain_sequence",
-        "chain_length",
-        "chain_num_unresolved_residues",
-        "chain_is_holo",
-        "chain_uniprot_ids",
-    ]
-    chains = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
-    chains = chains.reindex(columns=columns)
-    chains.to_parquet(output, index=False)
-    return chains
-
-
-def create_entry_source_index(
-    *, data_dir: Path, force_update: bool = False
-) -> pd.DataFrame:
-    """Collate one source-mmCIF revision row per PDB entry."""
-    output = data_dir / "index" / "entry_sources.parquet"
-    output.parent.mkdir(exist_ok=True, parents=True)
-    if output.exists() and not force_update:
-        return pd.read_parquet(output)
-
-    parts = sorted((data_dir / "raw_entries").glob("*/*/entry_source.parquet"))
-    columns = [
-        "entry_pdb_id",
-        "source_mmcif_major_revision",
-        "source_mmcif_minor_revision",
-    ]
-    sources = (
-        pd.concat([pd.read_parquet(path) for path in parts], ignore_index=True)
-        if parts
-        else pd.DataFrame(columns=columns)
-    )
-    if not sources.empty and sources["entry_pdb_id"].duplicated().any():
-        duplicates = sorted(
-            sources.loc[sources["entry_pdb_id"].duplicated(), "entry_pdb_id"].unique()
-        )
-        raise ValueError(f"duplicate entry source metadata: {duplicates}")
-    sources.to_parquet(output, index=False)
-    return sources
-
-
-def create_entry_biounit_chain_index(
-    *, data_dir: Path, force_update: bool = False
-) -> pd.DataFrame:
-    """Collate biological-assembly chain membership into one parquet."""
-    output = data_dir / "index" / "entry_biounit_chains.parquet"
-    output.parent.mkdir(exist_ok=True, parents=True)
-    if output.exists() and not force_update:
-        return pd.read_parquet(output)
-
-    parts = sorted((data_dir / "raw_entries").glob("*/*/entry_biounit_chains.parquet"))
-    columns = [
-        "entry_pdb_id",
-        "biounit_id",
-        "chain_instance",
-        "chain_asym_id",
-        "chain_role",
-    ]
-    chains = (
-        pd.concat([pd.read_parquet(path) for path in parts], ignore_index=True)
-        if parts
-        else pd.DataFrame(columns=columns)
-    ).reindex(columns=columns)
-    key = ["entry_pdb_id", "biounit_id", "chain_instance"]
-    if not chains.empty and chains.duplicated(key).any():
-        duplicates = chains.loc[chains.duplicated(key, keep=False), key]
-        raise ValueError(
-            "duplicate biological-assembly chain membership: "
-            f"{duplicates.drop_duplicates().to_dict(orient='records')}"
-        )
-    chains = chains.sort_values(key, ignore_index=True)
-    chains.to_parquet(output, index=False, row_group_size=100_000)
-    return chains
-
-
-def create_index(*, data_dir: Path, force_update: bool = False) -> pd.DataFrame:
-    """
-    Create the index
-    """
-    index = data_dir / "index" / "annotation_table.parquet"
-    index.parent.mkdir(exist_ok=True, parents=True)
-    create_entry_chain_index(data_dir=data_dir, force_update=force_update)
-    create_entry_biounit_chain_index(data_dir=data_dir, force_update=force_update)
-    create_entry_source_index(data_dir=data_dir, force_update=force_update)
-
-    if not index.exists() or force_update:
-        dfs = []
-        annotation_parts = data_dir / "raw_entries"
-        # sort for deterministic collation order; glob yields filesystem order
-        for i, path in enumerate(sorted(annotation_parts.glob("*/*.parquet"))):
-            df = _drop_retired_enrichment_columns(pd.read_parquet(path))
-            LOG.info(f"{i} {path.name} shape={df.shape}")
-            if not df.empty:
-                dfs.append(df)
-        if not dfs:
-            LOG.warning(
-                f"create_index: no parquet files in {annotation_parts}, "
-                "writing empty index"
-            )
-            pd.DataFrame().to_parquet(index, index=False)
-            return pd.read_parquet(index)
-        df = pd.concat(dfs).reset_index(drop=True)
-        df.to_parquet(index, index=False)
-    else:
-        df = pd.read_parquet(index)
-    old_columns = set(df.columns)
-    df = _drop_retired_enrichment_columns(df)
-    df = add_aggregated_columns(index=df)
-    update = old_columns != set(df.columns)
-    if update or force_update:
-        df.to_parquet(index, index=False)
-    return df
-
-
-def rename_clusters(*, data_dir: Path) -> None:
-    """
-    Rename cluster files to match the hive layout convention.
-
-    Parameters
-    ----------
-    data_dir : Path
-        plinder root dir
-    """
-    cluster_dir = data_dir / "ligand_clusters"
-    cluster_paths = [path for path in cluster_dir.rglob("*") if path.is_file()]
-    for path in cluster_paths:
-        if path.name == "data.parquet":
-            continue
-        base = path.parent
-        name = path.stem
-        apath = base / name / "data.parquet"
-        apath.parent.mkdir(exist_ok=True, parents=True)
-        shutil.move(path, apath)
