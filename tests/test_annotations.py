@@ -1335,6 +1335,125 @@ def test_entry_validation_skips_chains_outside_retained_systems(
     assert set(validated) == {"A", "B"}
 
 
+@pytest.mark.parametrize("failure", [None, "receptor", "ligand", "missing", "system"])
+def test_entry_validation_isolates_chain_and_system_failures(
+    monkeypatch, tmp_path, failure
+) -> None:
+    from plinder.data.annotations.aggregate_annotations import System
+    from plinder.data.annotations.get_ligand_validation import ResidueListValidation
+    from plinder.data.annotations.protein_utils import Residue
+
+    # Two systems share receptor A; the middle system is independent.
+    systems = [
+        System(
+            pdb_id="1abc",
+            biounit_id="1",
+            receptor_type="protein",
+            ligands=[
+                Ligand(
+                    pdb_id="1abc",
+                    biounit_id="1",
+                    asym_id=ligand,
+                    instance=1,
+                    neighboring_residues={f"1.{receptor}": [1]},
+                )
+            ],
+        )
+        for receptor, ligand in [("A", "L"), ("B", "M"), ("A", "N")]
+    ]
+    chains = {
+        asym_id: Chain(
+            asym_id=asym_id,
+            auth_id=asym_id,
+            entity_id=asym_id,
+            chain_type_str="polypeptide(L)" if asym_id in "AB" else "non-polymer",
+            residues={
+                1: Residue(
+                    chain=asym_id,
+                    index=0,
+                    number=1,
+                    auth_number="1",
+                    one_letter_code="A",
+                    name="ALA",
+                    chem_type="peptide linking",
+                )
+            },
+            length=1,
+            num_unresolved_residues=0,
+        )
+        for asym_id in "ABLMN"
+    }
+    if failure == "missing":
+        del chains["A"]
+    entry = Entry(
+        pdb_id="1abc",
+        determination_method="X-RAY DIFFRACTION",
+        chains=chains,
+        systems={system.id: system for system in systems},
+    )
+    validation_path = tmp_path / "validation.xml.gz"
+    validation_path.touch()
+    monkeypatch.setattr(
+        "PDBValidation.ValidationFactory.ValidationFactory",
+        lambda *_args, **_kwargs: SimpleNamespace(getValidation=lambda: object()),
+    )
+    monkeypatch.setattr(
+        EntryValidation, "from_entry", lambda _doc: SimpleNamespace(r=0.2)
+    )
+    validated_chains = []
+    validated_systems = []
+    result = ResidueListValidation.model_construct(num_residues=1)
+    for system in systems:
+        system.ligand_validation = result
+        system.pocket_validation = result
+        system.pass_criteria = True
+
+    def validate_chain(self, _doc, _thresholds):
+        validated_chains.append(self.asym_id)
+        self.validation = result
+        if (failure == "receptor" and self.asym_id == "A") or (
+            failure == "ligand" and self.asym_id == "L"
+        ):
+            self.residues[1].validation = SimpleNamespace(rscc=0.9)
+            raise ValueError("broken chain validation")
+
+    def validate_system(self, _chains, _thresholds):
+        validated_systems.append(self.id)
+        self.ligand_validation = result
+        if failure == "system" and self.id == systems[0].id:
+            raise ValueError("broken pocket validation")
+        self.pocket_validation = result
+
+    monkeypatch.setattr(Chain, "set_validation", validate_chain)
+    monkeypatch.setattr(System, "set_validation", validate_system)
+    entry.set_validation(validation_path, Path("source.cif"))
+
+    assert set(validated_chains) == set(chains)
+    failed_indices = (
+        {0, 2}
+        if failure in {"receptor", "missing"}
+        else {0}
+        if failure in {"ligand", "system"}
+        else set()
+    )
+    skipped_indices = failed_indices if failure != "system" else set()
+    assert validated_systems == [
+        system.id for i, system in enumerate(systems) if i not in skipped_indices
+    ]
+    for i, system in enumerate(systems):
+        assert system.pass_criteria is None
+        if i in failed_indices:
+            assert system.ligand_validation is None
+            assert system.pocket_validation is None
+        else:
+            assert system.ligand_validation is result
+            assert system.pocket_validation is result
+    if failure in {"receptor", "ligand"}:
+        chain = chains["A" if failure == "receptor" else "L"]
+        assert chain.validation is None
+        assert chain.residues[1].validation is None
+
+
 def test_entry_to_df_computes_validation_before_formatting_systems(
     monkeypatch, tmp_path
 ) -> None:

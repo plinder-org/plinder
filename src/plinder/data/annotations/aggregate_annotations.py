@@ -2816,29 +2816,58 @@ class Entry(DocBaseModel):
                 str(validation_file), mmcif_path=str(cif_file)
             ).getValidation()
             self.validation = EntryValidation.from_entry(doc)
-            if self.validation and self.validation.r is not None:
-                system_chain_ids = {
-                    instance_chain.split(".", maxsplit=1)[-1]
-                    for system in self.systems.values()
-                    for instance_chain in system.protein_chains_asym_id
-                }
-                system_chain_ids.update(
-                    ligand.asym_id
-                    for system in self.systems.values()
-                    for ligand in system.ligands
-                )
-                # TODO: consider per-chain / per-system try/except here. This
-                # entry-level catch is coarse: one bad chain or system abandons
-                # validation for the whole entry, leaving partial state. Per-
-                # residue validation already degrades gracefully.
-                for chain in system_chain_ids:
-                    self.chains[chain].set_validation(doc, thresholds)
-                for system in self.systems:
-                    self.systems[system].set_validation(self.chains, thresholds)
         except Exception as e:
             LOG.error(
                 f"set_validation: Error setting validation for {self.pdb_id}: {e}"
             )
+            return
+        if self.validation is None or self.validation.r is None:
+            return
+
+        system_chain_ids = {
+            system_id: {
+                instance_chain.split(".", maxsplit=1)[-1]
+                for instance_chain in system.protein_chains_asym_id
+            }
+            | {ligand.asym_id for ligand in system.ligands}
+            for system_id, system in self.systems.items()
+        }
+        failed_chains = set()
+        for chain_id in sorted(
+            {chain for chains in system_chain_ids.values() for chain in chains}
+        ):
+            try:
+                self.chains[chain_id].set_validation(doc, thresholds)
+            except Exception as e:
+                failed_chains.add(chain_id)
+                if chain_id in self.chains:
+                    chain = self.chains[chain_id]
+                    chain.validation = None
+                    for residue in chain.residues.values():
+                        residue.validation = None
+                LOG.error(
+                    f"set_validation: Error setting validation for "
+                    f"{self.pdb_id} chain {chain_id}: {e}"
+                )
+
+        for system_id, system in self.systems.items():
+            system.ligand_validation = None
+            system.pocket_validation = None
+            system.pass_criteria = None
+            if failed := system_chain_ids[system_id] & failed_chains:
+                LOG.warning(
+                    f"set_validation: Skipping validation for {system_id}: "
+                    f"failed chains {sorted(failed)}"
+                )
+                continue
+            try:
+                system.set_validation(self.chains, thresholds)
+            except Exception as e:
+                system.ligand_validation = None
+                system.pocket_validation = None
+                LOG.error(
+                    f"set_validation: Error setting validation for {system_id}: {e}"
+                )
 
 
 def document(output_dir: Path) -> None:
