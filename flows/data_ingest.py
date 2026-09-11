@@ -128,6 +128,14 @@ class PlinderDataIngestFlow(FlowSpec):
         self.pipeline = inputs[0].pipeline
         self.merge_artifacts(inputs, exclude=["chunks"])
         self.pipeline.join_collate_entries([None for _ in inputs])
+        self.next(self.make_protein_sequence_clusters)
+
+    @kubernetes(**{**K8S, **DATABASES})
+    @environment(**ENV)
+    @retry
+    @step
+    def make_protein_sequence_clusters(self):
+        self.pipeline.make_protein_sequence_clusters()
         self.next(self.make_dbs)
 
     @kubernetes(**K8S)

@@ -29,7 +29,7 @@ from tqdm import tqdm
 from plinder.core.scores.metrics import is_chemical_cluster_metric
 from plinder.core.utils import schemas
 from plinder.core.utils.log import setup_logger
-from plinder.data import clusters, databases
+from plinder.data import clusters, databases, protein_clusters
 from plinder.data.annotations import get_similarity_scores, mmpdb_utils
 from plinder.data.pipeline import collate, io, utils
 from plinder.data.pipeline.ingest import (
@@ -69,6 +69,7 @@ STAGES = [
     "download_alternative_datasets",
     "make_entries",
     "collate_entries",
+    "make_protein_sequence_clusters",
     "make_dbs",
     "make_canonical_ligand_archives",
     "finalize_ligand_archives",
@@ -241,6 +242,25 @@ def download_alternative_datasets(
             exc = future.exception()
             if exc is not None:
                 raise exc
+
+
+def make_protein_sequence_clusters(
+    *,
+    data_dir: Path,
+    scratch_dir: Path,
+    cpu: int,
+    identity: float,
+    coverage: float,
+    force_update: bool,
+) -> None:
+    protein_clusters.make_protein_sequence_clusters(
+        data_dir=data_dir,
+        scratch_dir=scratch_dir,
+        threads=cpu,
+        identity=identity,
+        coverage=coverage,
+        force_update=force_update,
+    )
 
 
 def make_dbs(

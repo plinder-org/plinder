@@ -61,6 +61,9 @@ class FlowConfig:
     finalize_entries_memory_limit: str = "32GB"
 
     make_sub_dbs_cpu: int = 4
+    protein_clustering_cpu: int = 4
+    protein_sequence_cluster_identity: float = 0.4
+    protein_cluster_coverage: float = 0.8
     make_scorers_cpu: int = 4
     download_alternative_datasets_threads: int = 10
     make_dbs_cpu: int = 4
