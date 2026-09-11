@@ -23,6 +23,7 @@ from rdkit.rdBase import BlockLogs
 
 from plinder.core.utils import schemas
 from plinder.core.utils.log import setup_logger
+from plinder.core.utils.sanitize import mol_from_smiles
 
 LOG = setup_logger(__name__)
 
@@ -41,7 +42,9 @@ def _empty_pair_table() -> pa.Table:
     )
 
 
-def _ligand_table(fingerprint_path: Path) -> pd.DataFrame:
+def _ligand_table(
+    fingerprint_path: Path,
+) -> tuple[pd.DataFrame, list[dict[str, int | str]]]:
     if not fingerprint_path.is_file():
         raise FileNotFoundError(
             "matched molecular pairs require the unique ligand fingerprint table: "
@@ -68,33 +71,49 @@ def _ligand_table(fingerprint_path: Path) -> pd.DataFrame:
         "ligand_rdkit_canonical_smiles"
     ].astype(str)
     heavy_atom_counts: list[int] = []
-    contains_dative_bond: list[bool] = []
+    included_rows: list[int] = []
+    exclusions: list[dict[str, int | str]] = []
     with BlockLogs():
-        for ligand_id, smiles in ligands[
-            ["ligand_smiles_id", "ligand_rdkit_canonical_smiles"]
-        ].itertuples(index=False, name=None):
-            mol = Chem.MolFromSmiles(smiles)
-            if mol is None:
-                raise ValueError(
-                    f"ligand_smiles_id {ligand_id} has invalid canonical SMILES"
-                )
-            heavy_atom_counts.append(mol.GetNumHeavyAtoms())
-            contains_dative_bond.append(
-                any(
-                    str(bond.GetBondType()).startswith("DATIVE")
-                    for bond in mol.GetBonds()
-                )
+        for row, (ligand_id, smiles) in enumerate(
+            ligands[["ligand_smiles_id", "ligand_rdkit_canonical_smiles"]].itertuples(
+                index=False, name=None
             )
+        ):
+            # mmpdb itself uses the strict parser. Do not rewrite stored chemistry
+            # to make it fragmentable, or reject the entire release for a molecule
+            # that the rest of ingest supports.
+            mol = Chem.MolFromSmiles(smiles)
+            reason = None
+            if mol is None:
+                if mol_from_smiles(smiles) is None:
+                    raise ValueError(
+                        f"ligand_smiles_id {ligand_id} has invalid canonical SMILES"
+                    )
+                reason = "unsupported_by_mmpdb_smiles_parser"
+            elif any(
+                str(bond.GetBondType()).startswith("DATIVE") for bond in mol.GetBonds()
+            ):
+                reason = "metal_dative_bonds"
+            if reason is not None:
+                exclusions.append(
+                    {
+                        "ligand_smiles_id": int(ligand_id),
+                        "smiles": smiles,
+                        "reason": reason,
+                    }
+                )
+                continue
+            included_rows.append(row)
+            heavy_atom_counts.append(mol.GetNumHeavyAtoms())
+    ligands = ligands.iloc[included_rows].reset_index(drop=True)
     ligands["num_heavy_atoms"] = pd.Series(heavy_atom_counts, dtype="int16")
-    if any(contains_dative_bond):
+    if exclusions:
         LOG.info(
-            "excluding %d ligand SMILES with metal-dative bonds from MMP generation",
-            sum(contains_dative_bond),
+            "excluding %d ligand SMILES from MMP generation; "
+            "IDs and reasons are recorded in the MMP manifest",
+            len(exclusions),
         )
-        ligands = ligands.loc[
-            ~pd.Series(contains_dative_bond, index=ligands.index)
-        ].reset_index(drop=True)
-    return ligands
+    return ligands, exclusions
 
 
 def _ligand_signature(ligands: pd.DataFrame) -> str:
@@ -395,16 +414,21 @@ def make_ligand_mmp_pairs(
     threads: int = 4,
     force_update: bool = False,
 ) -> Path:
-    """Generate matched molecular pairs for every unique proper-ligand SMILES."""
+    """Generate matched molecular pairs for supported unique proper-ligand SMILES.
+
+    The manifest records input exclusions for chemistry that mmpdb cannot handle.
+    These exclusions apply only to MMP generation, not to the other ligand tables.
+    """
     if threads < 1:
         raise ValueError("MMP generation threads must be positive")
     fingerprint_path = data_dir / "fingerprints" / "ligands_per_smiles.parquet"
     output_path = data_dir / "index" / "ligand_mmp_pairs.parquet"
     manifest_path = data_dir / "index" / "ligand_mmp_pairs.manifest.json"
-    ligands = _ligand_table(fingerprint_path)
+    ligands, exclusions = _ligand_table(fingerprint_path)
     manifest = {
         "mmpdb_version": _mmpdb_version(),
         "ligand_signature": _ligand_signature(ligands),
+        "input_exclusions": exclusions,
     }
     if not force_update and output_path.is_file() and manifest_path.is_file():
         try:
