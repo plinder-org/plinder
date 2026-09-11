@@ -590,11 +590,10 @@ def make_sub_dbs(
     scratch_dir: Path | None = None,
 ) -> None:
     """
-    Get the list of all pdb IDs to load all the entries
-    for full sub-database generation context. Explicitly
-    don't support two_char_codes forwarding to get_local_contents
-    to avoid an issue where sub dbs are created without full
-    context.
+    Build search databases from all eligible chains in the release.
+
+    This stage always uses the full release, even when other stages are
+    restricted to selected PDB IDs or two-character shards.
 
     Parameters
     ----------

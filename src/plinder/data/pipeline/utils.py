@@ -22,10 +22,6 @@ from plinder.core.scores.metrics import (
 from plinder.core.utils import schemas
 from plinder.core.utils.log import setup_logger
 
-# TODO(get_local_contents): only used by the quarantined get_local_contents below;
-# restore this import if that function is confirmed live.
-# from plinder.core.utils.unpack import expand_config_context
-
 if TYPE_CHECKING:
     from plinder.data.annotations.get_similarity_scores import Scorer
 
@@ -243,65 +239,6 @@ def hash_contents(contents: list[str]) -> str:
         unique string corresponding to contents
     """
     return md5(dumps(sorted(contents)).encode("utf8")).hexdigest()
-
-
-# TODO(get_local_contents): appears unused in-repo — zero callers on HEAD, and the
-# last consumer (make_sub_dbs) documents deliberately NOT routing through it. Its
-# only exercise is its own tests, which are order-flaky because the None-context
-# path reads the process-global cached config (leaks across the suite). Commented
-# out (with its tests) to unblock the pipeline suite. Confirm whether an external
-# metaflow flow references it: if stale -> delete; if used -> restore + add an
-# autouse config-cache reset so the None-context path is deterministic.
-# def get_local_contents(
-#     *,
-#     data_dir: Path,
-#     two_char_codes: Optional[list[str]] = None,
-#     pdb_ids: Optional[list[str]] = None,
-#     as_four_char_ids: bool = False,
-# ) -> list[str]:
-#     """
-#     Starting from a root directory, assume subdirectories
-#     of two character codes each containing subdirectories
-#     of individual files. The as_ids kludge is intended to
-#     support both fully qualified PDB (pdb_0000{pdb_id})
-#     and short PDB ({pdb_id})
-#
-#     Parameters
-#     ----------
-#     data_dir : Path
-#         directory containing two character code directories
-#     two_char_codes : list[str], default=None
-#         subset of two character codes
-#     pdb_ids : list[str], default=None
-#         subset of pdb IDs (overrides two_char_codes)
-#     as_four_char_ids : bool, default=False
-#         if True, return 4 character codes instead of nested
-#         subdirectories
-#
-#     Returns
-#     -------
-#     contents : list[str]
-#         list of directory-derived metadata contents
-#     """
-#     kind, values = expand_config_context(
-#         pdb_ids=pdb_ids,
-#         two_char_codes=two_char_codes,
-#     )
-#     if kind == "pdb_ids":
-#         return (
-#             values if as_four_char_ids else [f"pdb_0000{pdb_id}" for pdb_id in values]
-#         )
-#     codes = (
-#         values
-#         if kind == "two_char_codes" and len(values)
-#         else listdir(data_dir.as_posix())
-#     )
-#     contents = []
-#     for code in codes:
-#         contents.extend(listdir((data_dir / code).as_posix()))
-#     if as_four_char_ids:
-#         return sorted([c[-4:] for c in contents])
-#     return sorted(contents)
 
 
 def partition_batch_scores(*, partition_dir: Path, scores_dir: Path) -> None:
