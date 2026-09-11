@@ -65,7 +65,7 @@ def _write_cluster_table(
     output: Path,
     metadata: bytes,
     *,
-    missing_status: str,
+    missing_status: str | dict[str, str],
 ) -> None:
     representative_keys = chains[["member", "entry_pdb_id", "chain_asym_id"]].rename(
         columns={
@@ -84,7 +84,11 @@ def _write_cluster_table(
     missing = result["representative"].isna()
     result.loc[missing, "is_representative"] = pd.NA
     result["status"] = "clustered"
-    result.loc[missing, "status"] = missing_status
+    result.loc[missing, "status"] = (
+        result.loc[missing, "member"].map(missing_status)
+        if isinstance(missing_status, dict)
+        else missing_status
+    )
     table = pa.Table.from_pandas(
         result[SEQUENCE_CLUSTER_SCHEMA.names],
         schema=SEQUENCE_CLUSTER_SCHEMA,
@@ -100,8 +104,8 @@ def _write_cluster_table(
 
 def _prepare_structure_entry(
     cif_file: Path, chains: pd.DataFrame, input_dir: Path
-) -> set[str]:
-    """Write selected label-asym chains from one model, retaining all their atoms."""
+) -> dict[str, str]:
+    """Write usable label-asym chains and return each chain's preparation status."""
     import numpy as np
 
     from plinder.data.annotations.cif_utils import (
@@ -112,17 +116,22 @@ def _prepare_structure_entry(
 
     source = read_mmcif_file(cif_file)
     atoms = get_structure_with_altloc(source)
-    prepared = set()
+    statuses = {}
     for row in chains.itertuples(index=False):
         selected = atoms[atoms.chain_id == row.chain_asym_id].copy()
         ca = selected[(selected.atom_name == "CA") & (selected.element == "C")]
         # A 3Di description needs a local backbone neighbourhood.
         if len(ca) < 4:
+            statuses[row.member] = "insufficient_coordinates"
             continue
         if not np.isfinite(selected.coord).all():
             raise ValueError(
                 f"non-finite coordinates in {cif_file}, chain {row.chain_asym_id}"
             )
+        # Foldseek rejects chains whose resolved residues are all unknown.
+        if np.all(ca.res_name == "UNK"):
+            statuses[row.member] = "unknown_residues"
+            continue
         selected.chain_id[:] = "A"
         # With --chain-name-mode 1, Foldseek appends the internal chain ID.
         filename = row.member.removesuffix("_A")
@@ -133,8 +142,8 @@ def _prepare_structure_entry(
             source_block=source.block,
             source_asym_ids={"A": row.chain_asym_id},
         )
-        prepared.add(row.member)
-    return prepared
+        statuses[row.member] = "clustered"
+    return statuses
 
 
 def make_protein_structure_clusters(
@@ -152,6 +161,7 @@ def make_protein_structure_clusters(
     Coverage applies to both resolved chains. The first model and deposited-first
     alternate conformers match entry ingest. Chains with fewer than four resolved
     C-alpha atoms retain a null assignment and ``insufficient_coordinates`` status.
+    Chains whose resolved residues are all UNK have ``unknown_residues`` status.
     Missing source files and parsing failures stop the stage. Inputs and native
     clustering intermediates are temporary; only the chain table is retained.
     """
@@ -200,6 +210,7 @@ def make_protein_structure_clusters(
         "model": 1,
         "altloc": "first",
         "minimum_ca_atoms": 4,
+        "exclude_unknown_only_chains": True,
         "source_signature": digest.hexdigest(),
     }
     metadata = json.dumps(parameters, sort_keys=True).encode()
@@ -213,7 +224,7 @@ def make_protein_structure_clusters(
         work = Path(temporary)
         input_dir = work / "chains"
         input_dir.mkdir()
-        prepared: set[str] = set()
+        statuses: dict[str, str] = {}
         groups = iter(chains.groupby("entry_pdb_id", sort=False))
         with ThreadPoolExecutor(max_workers=threads) as executor:
             # Bound queued entries and memory use, including on Python < 3.14.
@@ -225,7 +236,10 @@ def make_protein_structure_clusters(
                     for pdb_id, group in batch
                 ]
                 for future in futures:
-                    prepared.update(future.result())
+                    statuses.update(future.result())
+        prepared = {
+            member for member, status in statuses.items() if status == "clustered"
+        }
         if prepared:
             run(
                 [
@@ -260,7 +274,7 @@ def make_protein_structure_clusters(
             assignments,
             output,
             metadata,
-            missing_status="insufficient_coordinates",
+            missing_status=statuses,
         )
     return output
 

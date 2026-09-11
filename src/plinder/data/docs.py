@@ -40,7 +40,8 @@ DERIVED_COLUMN_DESCRIPTIONS = {
     ),
     "status": (
         "Protein clustering outcome: clustered, missing_sequence (MMseqs), "
-        "or insufficient_coordinates (Foldseek)"
+        "insufficient_coordinates (Foldseek), or unknown_residues (Foldseek; "
+        "all resolved residues are UNK)"
     ),
     "chain_is_ligand_like": (
         "Whether this chain is ligand-like rather than an eligible receptor chain"

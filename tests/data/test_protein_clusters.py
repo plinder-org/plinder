@@ -237,7 +237,7 @@ def test_structure_input_keeps_full_first_model_and_selected_asym_only(tmp_path)
     input_dir.mkdir()
     chains = pd.DataFrame({"chain_asym_id": ["1.A"], "member": ["chain_0_A"]})
     assert clusters._prepare_structure_entry(paths[0], chains, input_dir) == {
-        "chain_0_A"
+        "chain_0_A": "clustered"
     }
     assert [path.name for path in input_dir.iterdir()] == ["chain_0.cif"]
     prepared = get_structure_with_altloc(read_mmcif_file(input_dir / "chain_0.cif"))
@@ -289,6 +289,66 @@ def test_structure_clusters_native_and_reusable(tmp_path, monkeypatch):
     assert clusters.make_protein_structure_clusters(**kwargs) == output
 
 
+@pytest.mark.parametrize(
+    ("unknown_only", "only_chain"), [(True, False), (False, False), (True, True)]
+)
+def test_structure_clusters_keep_unknown_chains_without_assignments(
+    tmp_path, unknown_only, only_chain
+):
+    import gzip
+
+    from biotite.structure.io import pdbx
+
+    source_root, paths, original = _write_structure_sources(tmp_path)
+    atoms = original.copy()
+    atoms.chain_id[:] = "B_2"
+    if unknown_only:
+        atoms.res_name[:] = "UNK"
+    else:
+        atoms.res_name[atoms.res_id > atoms.res_id[len(atoms) // 2]] = "UNK"
+    cif = pdbx.CIFFile()
+    pdbx.set_structure(cif, atoms)
+    with gzip.open(paths[1], "wt") as handle:
+        cif.write(handle)
+    source = tmp_path / "index/entry_chains.parquet"
+    if only_chain:
+        pd.read_parquet(source).iloc[[1]].to_parquet(source, index=False)
+
+    output = clusters.make_protein_structure_clusters(
+        data_dir=tmp_path,
+        cif_root=source_root,
+        scratch_dir=tmp_path / "scratch",
+        threads=2,
+    )
+    frame = pd.read_parquet(output).set_index("entry_pdb_id")
+    assert set(frame.index) == (
+        {"2def"} if only_chain else {"1abc", "2def", "3ghi", "4jkl"}
+    )
+    assert frame.loc["2def", "chain_asym_id"] == "B_2"
+    row = frame.loc["2def"]
+    if unknown_only:
+        assert row["status"] == "unknown_residues"
+        assert (
+            row[
+                [
+                    "representative_entry_pdb_id",
+                    "representative_chain_asym_id",
+                    "is_representative",
+                ]
+            ]
+            .isna()
+            .all()
+        )
+    else:
+        assert row["status"] == "clustered"
+        assert pd.notna(row["representative_chain_asym_id"])
+    if not only_chain:
+        assert frame.loc["1abc", "status"] == "clustered"
+        assert frame.loc["3ghi", "status"] == "clustered"
+        assert frame.loc["4jkl", "status"] == "insufficient_coordinates"
+    assert not list((tmp_path / "scratch").iterdir())
+
+
 @pytest.mark.parametrize("change", ["lddt", "coverage", "source", "force"])
 def test_structure_cluster_restart_checks_parameters_and_sources(
     tmp_path, monkeypatch, change
@@ -299,7 +359,14 @@ def test_structure_cluster_restart_checks_parameters_and_sources(
     calls = []
 
     def prepare(path, frame, input_dir):
-        return set(frame.loc[frame["entry_pdb_id"] != "4jkl", "member"])
+        return {
+            row.member: (
+                "insufficient_coordinates"
+                if row.entry_pdb_id == "4jkl"
+                else "clustered"
+            )
+            for row in frame.itertuples(index=False)
+        }
 
     def fake_run(command):
         calls.append(command)
