@@ -124,6 +124,8 @@ def test_default_download_includes_covers_but_not_complete_scores(
     assert "interface_sampling" in requested
     assert "index/ligand_clusters.parquet" in requested
     assert "index/interface_clusters.parquet" in requested
+    assert "protein_clusters/sequence.parquet" in requested
+    assert "protein_clusters/structure.parquet" in requested
     assert "exports/ligand_similarity_scores.parquet" not in requested
     assert "exports/interface_similarity_scores.parquet" not in requested
     assert "ligand_clusters" not in requested

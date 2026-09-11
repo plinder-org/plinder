@@ -30,6 +30,8 @@ RELEASE_PATHS = {
     "interface_membership": "index/interface_membership.parquet",
     "interface_representatives": "index/interface_representatives.parquet",
     "interface_clusters": "index/interface_clusters.parquet",
+    "protein_sequence_clusters": "protein_clusters/sequence.parquet",
+    "protein_structure_clusters": "protein_clusters/structure.parquet",
     "alignments": "alignments",
     "alignment_shard": (
         "alignments/search_db={search_db}/alignment_type={alignment_type}/"
@@ -148,6 +150,16 @@ RELEASE_TABLES: dict[str, dict[str, Any]] = {
         "artifact": "interface_clusters",
         "row_description": "protein-interface cluster assignments",
         "primary_key": ("system_id",),
+    },
+    "protein_sequence_clusters": {
+        "artifact": "protein_sequence_clusters",
+        "row_description": "protein-chain sequence cluster assignment from MMseqs",
+        "primary_key": ("entry_pdb_id", "chain_asym_id"),
+    },
+    "protein_structure_clusters": {
+        "artifact": "protein_structure_clusters",
+        "row_description": "protein-chain structure cluster assignment from Foldseek",
+        "primary_key": ("entry_pdb_id", "chain_asym_id"),
     },
 }
 

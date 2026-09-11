@@ -454,6 +454,18 @@ def test_checked_in_descriptions_cover_every_table():
         assert descriptions["Description"].notna().all()
 
 
+@pytest.mark.parametrize("kind", ["sequence", "structure"])
+def test_protein_cluster_descriptions_match_generated_schema(kind):
+    import pandas as pd
+    from plinder.data.protein_clusters import SEQUENCE_CLUSTER_SCHEMA
+
+    table_name = f"protein_{kind}_clusters"
+    generated = docs.get_table_column_descriptions(
+        table_name=table_name, schema=SEQUENCE_CLUSTER_SCHEMA
+    )
+    pd.testing.assert_frame_equal(docs.get_column_descriptions(table_name), generated)
+
+
 def test_checked_in_cluster_descriptions_match_published_cover_modes():
     from plinder.core.scores.metrics import (
         DEFAULT_CLUSTER_METRICS,

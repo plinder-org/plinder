@@ -142,6 +142,119 @@ def test_requested_cluster_column_is_joined_automatically(
     ]
 
 
+@pytest.fixture
+def protein_cluster_release(tmp_path: Path) -> PlinderRelease:
+    release = PlinderRelease(tmp_path)
+    keys = {
+        "entry_pdb_id": ["1abc", "1abc", "2def", "3ghi"],
+        "chain_asym_id": ["A", "B_2", "1.A", "D"],
+    }
+    _write_table(
+        release,
+        "entry_chains",
+        {
+            **keys,
+            "chain_sequence": ["AAAA", "BBBB", None, "ATGC"],
+            "chain_receptor_type": ["protein", "protein", "protein", "dna"],
+        },
+    )
+    for kind in ("sequence", "structure"):
+        _write_table(
+            release,
+            f"protein_{kind}_clusters",
+            {
+                "entry_pdb_id": keys["entry_pdb_id"][:3],
+                "chain_asym_id": keys["chain_asym_id"][:3],
+                "representative_entry_pdb_id": ["1abc", "1abc", None],
+                "representative_chain_asym_id": ["A", "B_2", None],
+                "is_representative": [True, True, None],
+                "status": [
+                    "clustered",
+                    "clustered",
+                    "missing_sequence"
+                    if kind == "sequence"
+                    else "insufficient_coordinates",
+                ],
+            },
+        )
+    _write_table(release, "alignment_chain_lookup", keys)
+    assembly_keys = {name: values + [values[0]] for name, values in keys.items()}
+    _write_table(
+        release,
+        "entry_biounit_chains",
+        {**assembly_keys, "chain_instance": ["1.A", "1.B_2", "1.1.A", "1.D", "2.A"]},
+    )
+    _write_table(
+        release,
+        "ligand_pocket_residues",
+        {**assembly_keys, "residue_label_seq_id": [10, 20, 30, 40, 50]},
+    )
+    return release
+
+
+@pytest.mark.parametrize("kind", ["sequence", "structure"])
+def test_protein_cluster_representatives_join_sequences(protein_cluster_release, kind):
+    result = query_table(
+        f"protein_{kind}_clusters",
+        columns=["entry_pdb_id", "chain_asym_id", "chain_sequence"],
+        filters=[("is_representative", "==", True)],
+        release=protein_cluster_release,
+    ).sort_values("chain_asym_id")
+    assert result.to_dict("records") == [
+        {"entry_pdb_id": "1abc", "chain_asym_id": "A", "chain_sequence": "AAAA"},
+        {"entry_pdb_id": "1abc", "chain_asym_id": "B_2", "chain_sequence": "BBBB"},
+    ]
+
+
+@pytest.mark.parametrize("kind", ["sequence", "structure"])
+@pytest.mark.parametrize(
+    "base",
+    [
+        "entry_chains",
+        "entry_biounit_chains",
+        "alignment_chain_lookup",
+        "ligand_pocket_residues",
+    ],
+)
+def test_protein_cluster_joins_preserve_chain_rows(protein_cluster_release, kind, base):
+    result = query_table(
+        base,
+        columns=[
+            "entry_pdb_id",
+            "chain_asym_id",
+            "representative_chain_asym_id",
+            "status",
+        ],
+        joins=[f"protein_{kind}_clusters"],
+        release=protein_cluster_release,
+    )
+    assert len(result) == (
+        5 if base in {"entry_biounit_chains", "ligand_pocket_residues"} else 4
+    )
+    assert set(
+        result.loc[result.chain_asym_id == "A", "representative_chain_asym_id"]
+    ) == {"A"}
+    assert (
+        result.loc[result.chain_asym_id == "B_2", "representative_chain_asym_id"].item()
+        == "B_2"
+    )
+    assert result.loc[result.entry_pdb_id == "3ghi", "status"].isna().all()
+    assert result.loc[result.entry_pdb_id == "2def", "status"].item() == (
+        "missing_sequence" if kind == "sequence" else "insufficient_coordinates"
+    )
+
+
+def test_chain_query_requires_choice_between_protein_cluster_tables(
+    protein_cluster_release
+):
+    with pytest.raises(ValueError, match="multiple related tables"):
+        query_table(
+            "entry_chains",
+            columns=["is_representative"],
+            release=protein_cluster_release,
+        )
+
+
 def test_requested_interface_cluster_column_is_joined_automatically(
     local_release: PlinderRelease,
 ) -> None:

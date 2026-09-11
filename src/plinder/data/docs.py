@@ -26,6 +26,22 @@ _PUBLISHED_INTERFACE_COVER_COLUMN = re.compile(
 )
 
 DERIVED_COLUMN_DESCRIPTIONS = {
+    "representative_entry_pdb_id": (
+        "PDB entry containing the protein-cluster representative; together with "
+        "representative_chain_asym_id identifies the cluster"
+    ),
+    "representative_chain_asym_id": (
+        "Source label_asym_id of the protein-cluster representative; missing "
+        "when the chain could not be clustered"
+    ),
+    "is_representative": (
+        "Whether this protein chain is its cluster representative; missing "
+        "when the chain could not be clustered"
+    ),
+    "status": (
+        "Protein clustering outcome: clustered, missing_sequence (MMseqs), "
+        "or insufficient_coordinates (Foldseek)"
+    ),
     "chain_is_ligand_like": (
         "Whether this chain is ligand-like rather than an eligible receptor chain"
     ),

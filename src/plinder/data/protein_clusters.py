@@ -16,6 +16,7 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from plinder.core.release import RELEASE_PATHS
 from plinder.data.databases import run
 
 SEQUENCE_CLUSTER_SCHEMA = pa.schema(
@@ -202,7 +203,7 @@ def make_protein_structure_clusters(
         "source_signature": digest.hexdigest(),
     }
     metadata = json.dumps(parameters, sort_keys=True).encode()
-    output = data_dir / "protein_clusters/structure.parquet"
+    output = data_dir / RELEASE_PATHS["protein_structure_clusters"]
     if not force_update and _clusters_are_current(output, metadata):
         return output
     scratch_dir.mkdir(parents=True, exist_ok=True)
@@ -329,7 +330,7 @@ def make_protein_sequence_clusters(
         "sequence_digest": digest.hexdigest(),
     }
     metadata = json.dumps(parameters, sort_keys=True).encode()
-    output = data_dir / "protein_clusters" / "sequence.parquet"
+    output = data_dir / RELEASE_PATHS["protein_sequence_clusters"]
     if not force_update and _clusters_are_current(output, metadata):
         return output
     scratch_dir.mkdir(parents=True, exist_ok=True)

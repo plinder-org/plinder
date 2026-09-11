@@ -103,6 +103,25 @@ TABLE_JOINS: dict[str, dict[str, JoinKeys]] = {
 }
 
 
+for cluster_table in ("protein_sequence_clusters", "protein_structure_clusters"):
+    chain_keys = (
+        ("entry_pdb_id", "entry_pdb_id"),
+        ("chain_asym_id", "chain_asym_id"),
+    )
+    TABLE_JOINS[cluster_table] = {
+        "entry_chains": chain_keys,
+        "entry_metadata": (("entry_pdb_id", "entry_pdb_id"),),
+        "entry_sources": (("entry_pdb_id", "entry_pdb_id"),),
+    }
+    for chain_table in (
+        "entry_chains",
+        "entry_biounit_chains",
+        "alignment_chain_lookup",
+        "ligand_pocket_residues",
+    ):
+        TABLE_JOINS[chain_table][cluster_table] = chain_keys
+
+
 def _quote_identifier(value: str) -> str:
     return f'"{value.replace(chr(34), chr(34) * 2)}"'
 
@@ -269,6 +288,12 @@ def query_table(
         one related table.
     release : PlinderRelease | None
         Explicit local release, or the configured release when omitted.
+
+    Protein clusters are available as ``protein_sequence_clusters`` (MMseqs)
+    and ``protein_structure_clusters`` (Foldseek). Query either table with
+    ``chain_sequence`` to include sequences automatically. When starting from
+    ``entry_chains``, choose the cluster table with ``joins=[...]``; both
+    cluster tables use the same representative column names.
     """
     if table_name not in RELEASE_TABLES:
         choices = ", ".join(sorted(RELEASE_TABLES))
