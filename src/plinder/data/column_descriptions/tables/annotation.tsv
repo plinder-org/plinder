@@ -71,6 +71,7 @@ ligand_num_interacting_residues	int64	Number of residues interacting with a give
 ligand_num_neighboring_residues	int64	Total count of receptor residues (protein/NA) within neighboring threshold.
 ligand_is_proper	bool	Check if ligand is a proper ligand (not an ion or artifact)
 ligand_num_interactions	int64	Number of interactions for a given ligand.
+ligand_failed_interaction_types	list<element: string>	Interaction types whose calculation failed for this ligand; counts for these types may be incomplete
 ligand_num_unique_interactions	int64	Number of unique interactions
 ligand_num_crystal_contacted_residues	int64	Number of residues from other symmetry mates which are in contact with this ligand.
 ligand_num_atoms_with_crystal_contacts	int64	Number of atoms in this ligand which are in contact with residues from other symmetry mates.

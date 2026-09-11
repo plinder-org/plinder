@@ -10,6 +10,7 @@ entry_source_taxonomy_ids	list<element: int64>	Distinct NCBI taxonomy IDs of the
 entry_source_organism_names	list<element: string>	Distinct scientific names of the deposited entities' source organisms
 entry_host_taxonomy_ids	list<element: int64>	Distinct NCBI taxonomy IDs of recombinant expression hosts
 entry_host_organism_names	list<element: string>	Distinct scientific names of recombinant expression hosts
+entry_failed_assembly_ids	list<element: string>	Biological-assembly IDs that could not be built; their systems and interfaces are absent from this entry
 entry_validation_resolution	double	Resolution of the PDB entry
 entry_validation_rfree	double	The similarity between the observed structure-factor amplitudes and those calculated from the model. Rfree should be higher than R because it is calculated using reflections not used in the refinement. See https://www.wwpdb.org/validation/XrayValidationReportHelp
 entry_validation_r	double	The similarity between the observed structure-factor amplitudes and those calculated from the model. See https://www.wwpdb.org/validation/XrayValidationReportHelp

@@ -209,6 +209,58 @@ def _write_release(data_dir: Path) -> None:
     )
 
 
+def test_collation_preserves_failure_diagnostics_and_unknown_older_rows(tmp_path):
+    from plinder.core import PlinderRelease, query_table
+
+    # Mix empty lists, recorded failures, and older rows without the columns,
+    # both within a shard and across shards.
+    for pdb_id, failures in [("1abc", []), ("2abd", ["2"]), ("3def", None)]:
+        _write_entry(
+            tmp_path,
+            pdb_id,
+            ligand_rows=[
+                {"ligand_id": f"{pdb_id}__1__1.L", "ccd": "ATP", "proper": True}
+            ],
+            scoreability={f"{pdb_id}__1__1.L": True},
+        )
+        if failures is None:
+            continue
+        raw_root = tmp_path / "raw_entries" / pdb_id[1:3]
+        metadata_path = raw_root / pdb_id / "entry_metadata.parquet"
+        metadata = pd.read_parquet(metadata_path)
+        metadata["entry_failed_assembly_ids"] = [failures]
+        metadata.to_parquet(metadata_path, index=False)
+        annotation_path = raw_root / f"{pdb_id}.parquet"
+        annotation = pd.read_parquet(annotation_path)
+        annotation["ligand_failed_interaction_types"] = [
+            ["water_bridge"] if failures else []
+        ]
+        annotation.to_parquet(annotation_path, index=False)
+
+    run_collation(tmp_path, threads=1, memory_limit="1GB")
+    result = query_table(
+        "annotation",
+        columns=[
+            "entry_pdb_id",
+            "entry_failed_assembly_ids",
+            "ligand_failed_interaction_types",
+        ],
+        release=PlinderRelease(data_dir=tmp_path),
+    ).set_index("entry_pdb_id")
+    assert result.loc["1abc", "entry_failed_assembly_ids"].tolist() == []
+    assert result.loc["1abc", "ligand_failed_interaction_types"].tolist() == []
+    assert result.loc["2abd", "entry_failed_assembly_ids"].tolist() == ["2"]
+    assert result.loc["2abd", "ligand_failed_interaction_types"].tolist() == [
+        "water_bridge"
+    ]
+    assert pd.isna(result.loc["3def", "entry_failed_assembly_ids"])
+    assert pd.isna(result.loc["3def", "ligand_failed_interaction_types"])
+    assert (
+        "entry_failed_assembly_ids"
+        not in pq.read_schema(tmp_path / "index/annotation_table.parquet").names
+    )
+
+
 def _write_interface_only_entry(data_dir: Path, pdb_id: str = "3ghi") -> None:
     _write_entry(
         data_dir,

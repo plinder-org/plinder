@@ -890,13 +890,10 @@ class Entry(DocBaseModel):
             "each biological-assembly receptor chain instance"
         ),
     )
-    # TODO: consider surfacing this as an exported plindex column (drop the
-    # ``__`` prefix + wire column_descriptions/schema) so a dropped assembly is
-    # visible downstream, not only in this in-memory metadata + the error log.
     failed_assembly_ids: list[str] = Field(
         default_factory=list,
-        description="[EXCLUDE] Biological-assembly IDs biotite could not build; their "
-        "systems are absent from this entry.",
+        description="Biological-assembly IDs that could not be built; their "
+        "systems and interfaces are absent from this entry",
     )
     symmetry_mate_contacts: SymmetryMateContacts = Field(
         default_factory=dict,
@@ -2603,6 +2600,7 @@ class Entry(DocBaseModel):
             "source_organism_names",
             "host_taxonomy_ids",
             "host_organism_names",
+            "failed_assembly_ids",
         ]
         for field in columns:
             name = f"entry_{field}"

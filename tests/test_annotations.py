@@ -1260,6 +1260,53 @@ def test_entry_never_groups_ligands_across_biological_assemblies() -> None:
         assert len(system.ligand_chains) == len(set(system.ligand_chains)) == 2
 
 
+@pytest.mark.parametrize("failures", [[], ["2", "3"]])
+def test_entry_metadata_preserves_assembly_failures(failures, tmp_path) -> None:
+    entry = Entry(pdb_id="1abc", failed_assembly_ids=failures)
+    restored = Entry.model_validate(entry.model_dump())
+    metadata = restored.metadata_to_df()
+    assert metadata.loc[0, "entry_failed_assembly_ids"] == failures
+    assert "entry_failed_assembly_ids" not in restored.to_df().columns
+    path = tmp_path / "entry_metadata.parquet"
+    metadata.to_parquet(path, index=False)
+    assert (
+        pd.read_parquet(path).loc[0, "entry_failed_assembly_ids"].tolist() == failures
+    )
+
+
+@pytest.mark.parametrize("failures", [[], ["hydrogen_bond", "water_bridge"]])
+def test_ligand_annotation_preserves_interaction_failures(
+    failures, tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setattr("plinder.data.annotations.ligand_utils.BINDING_AFFINITY", {})
+    ligand = Ligand(
+        pdb_id="1abc",
+        biounit_id="1",
+        asym_id="L",
+        instance=1,
+        failed_interaction_types=failures,
+    )
+    chain = Chain(
+        asym_id="L",
+        auth_id="L",
+        entity_id="1",
+        chain_type_str="non-polymer",
+        residues={},
+        length=1,
+        num_unresolved_residues=0,
+    )
+    restored = Ligand.model_validate(ligand.model_dump())
+    annotation = restored.format({"L": chain})
+    assert annotation["ligand_failed_interaction_types"] == failures
+    assert annotation["ligand_num_interactions"] == 0
+    path = tmp_path / "annotation.parquet"
+    pd.DataFrame([annotation]).to_parquet(path, index=False)
+    assert (
+        pd.read_parquet(path).loc[0, "ligand_failed_interaction_types"].tolist()
+        == failures
+    )
+
+
 def test_entry_validation_skips_chains_outside_retained_systems(
     monkeypatch, tmp_path
 ) -> None:

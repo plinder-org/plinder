@@ -1133,14 +1133,10 @@ class Ligand(DocBaseModel):
         default_factory=dict,
         description="[EXCLUDE] Dictionary of {instance}.{chain} to residue number to list of interaction hashes",
     )
-    # TODO: consider surfacing this as an exported plindex column (drop the
-    # ``__`` prefix + wire column_descriptions/schema) so downstream can tell
-    # "0 because a detector crashed" from "0 because none found".
     failed_interaction_types: list[str] = Field(
         default_factory=list,
-        description="[EXCLUDE] Interaction types whose peppr detector raised for this "
-        "ligand; an empty result for a listed type means 'not computed', not "
-        "'none found'.",
+        description="Interaction types whose calculation failed for this ligand; "
+        "counts for these types may be incomplete",
     )
 
     @classmethod

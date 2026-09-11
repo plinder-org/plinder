@@ -423,6 +423,24 @@ def test_table_descriptions_accept_published_interface_cover_columns():
     assert descriptions["Name"].tolist() == names
 
 
+@pytest.mark.parametrize(
+    ("table_name", "column"),
+    [
+        ("entry_metadata", "entry_failed_assembly_ids"),
+        ("annotation", "ligand_failed_interaction_types"),
+    ],
+)
+def test_failure_descriptions_match_model_fields(table_name, column):
+    import pyarrow as pa
+
+    generated = docs.get_table_column_descriptions(
+        table_name=table_name,
+        schema=pa.schema([(column, pa.list_(pa.field("element", pa.string())))]),
+    ).set_index("Name")
+    checked_in = docs.get_column_descriptions(table_name).set_index("Name")
+    assert checked_in.loc[column].to_dict() == generated.loc[column].to_dict()
+
+
 def test_checked_in_descriptions_cover_every_table():
     from plinder.core.release import RELEASE_TABLES
 
