@@ -1,6 +1,7 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
 import unittest.mock
+from dataclasses import asdict
 from textwrap import dedent
 
 import pytest
@@ -64,6 +65,77 @@ def test_default_config():
     assert cfg.interface.contact_radius == 10.0
     assert cfg.interface.min_chain_length == 12
     assert cfg.interface.min_interface_residues == 7
+
+
+def test_ingest_annotation_defaults_have_one_owner():
+    assert asdict(config.AnnotationConfig()) == {
+        "neighboring_residue_threshold": 6.0,
+        "neighboring_ligand_threshold": 4.0,
+        "min_polymer_size": 12,
+        "min_shared_pocket_members": 3,
+    }
+    assert asdict(config.EntryConfig()) == {
+        "interaction_search_threshold": 10.0,
+        "data_dir": None,
+        "save_folder": None,
+    }
+
+
+@pytest.mark.parametrize("source", ["yaml", "cli"])
+@pytest.mark.parametrize(
+    ("include_ligands", "include_interfaces"),
+    [(True, True), (True, False), (False, True)],
+)
+def test_annotation_overrides_reach_entry_reader(
+    tmp_path, source, include_ligands, include_interfaces
+):
+    from plinder.data.get_system_annotations import GetPlinderAnnotation
+
+    thresholds = {
+        "neighboring_residue_threshold": 7.0,
+        "neighboring_ligand_threshold": 5.0,
+        "min_polymer_size": 15,
+        "min_shared_pocket_members": 4,
+    }
+    if source == "yaml":
+        contents = "annotation:\n" + "".join(
+            f"  {name}: {value}\n" for name, value in thresholds.items()
+        )
+        contents += "entry:\n  interaction_search_threshold: 11.0\n"
+        cfg = config.get_config(config_contents=contents, config_args=[], cached=False)
+    else:
+        args = [f"annotation.{name}={value}" for name, value in thresholds.items()]
+        args.append("entry.interaction_search_threshold=11.0")
+        cfg = config.get_config(config_args=args, cached=False)
+
+    annotator = GetPlinderAnnotation(
+        tmp_path / "source.cif",
+        tmp_path / "validation.xml.gz",
+        entry_cfg=dict(cfg.entry),
+        **dict(cfg.annotation),
+    )
+    options = annotator._entry_options(
+        include_ligands=include_ligands, include_interfaces=include_interfaces
+    )
+    assert {name: options[name] for name in thresholds} == thresholds
+    assert options["interaction_search_threshold"] == 11.0
+    assert options["include_ligands"] is include_ligands
+    assert options["include_interfaces"] is include_interfaces
+
+
+@pytest.mark.parametrize("name", list(asdict(config.AnnotationConfig())))
+@pytest.mark.parametrize("source", ["yaml", "cli", "argv"])
+def test_shared_thresholds_are_rejected_in_entry_section(name, source, monkeypatch):
+    with pytest.raises(TypeError, match=name):
+        if source == "yaml":
+            config.get_config(
+                config_contents=f"entry:\n  {name}: 5\n", config_args=[], cached=False
+            )
+        elif source == "cli":
+            config.get_config(config_args=[f"entry.{name}=5"], cached=False)
+        else:
+            monkeypatch.setattr("sys.argv", ["ingest", f"entry.{name}=5"])
+            config.get_config(cached=False)
 
 
 @pytest.mark.parametrize(

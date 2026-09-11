@@ -1,10 +1,11 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
+import sys
 from dataclasses import dataclass, field
 from functools import partial
 from typing import Any, Optional
 
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 
 from plinder.core.scores.metrics import (
     CHEMICAL_CLUSTER_METRICS,
@@ -238,12 +239,9 @@ class ScorerConfig:
 
 @dataclass
 class EntryConfig:
-    # TODO-tjd: deduplicate with AnnotationConfig
-    neighboring_residue_threshold: float = 6.0
-    neighboring_ligand_threshold: float = 4.0
-    min_polymer_size: int = 12
+    """Entry-reader options; shared annotation thresholds live in AnnotationConfig."""
+
     interaction_search_threshold: float = 10.0
-    min_shared_pocket_members: int = 3
     data_dir: Optional[str] = None
     save_folder: Optional[str] = None
 
@@ -326,6 +324,13 @@ _get_config = partial(_config._config, schema=SCHEMA, package_schema="data")
 
 def get_config(**kwargs: Any) -> DictConfig:
     """Load and cross-validate the data-pipeline configuration."""
+    cli_args = kwargs.get("config_args")
+    if cli_args is None:
+        # Ignore host-program flags, but reject invalid ingest overrides before
+        # the shared reader's permissive CLI handling can discard them.
+        cli_args = [arg for arg in sys.argv[1:] if arg.split(".", 1)[0] in SCHEMA]
+    if cli_args:
+        _config._validate_cfg(cfg=OmegaConf.from_cli(cli_args), schema=SCHEMA)
     cfg = _get_config(**kwargs)
     unsupported_metrics = sorted(
         set(cfg.flow.cluster_metrics).difference(DEFAULT_CLUSTER_METRICS)
