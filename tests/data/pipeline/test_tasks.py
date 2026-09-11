@@ -4442,8 +4442,10 @@ def test_alignment_chain_lookup_compacts_mapping_inputs(tmp_path) -> None:
     assert tasks._completed_alignment_chain_lookup(tmp_path) is None
 
 
-def test_alignment_chain_lookup_keeps_identity_when_only_system_rows_change(
+@pytest.mark.parametrize("change", ["system_rows", "chain_annotations"])
+def test_alignment_chain_lookup_keeps_identity_when_metadata_changes(
     tmp_path: Path,
+    change: str,
 ) -> None:
     index = tmp_path / "index"
     index.mkdir()
@@ -4478,15 +4480,22 @@ def test_alignment_chain_lookup_keeps_identity_when_only_system_rows_change(
         threads=1,
     )
     original_stat = lookup.stat()
-    frame = pd.read_parquet(annotation)
-    frame["system_id"] = "1abc__2__1.A__1.B"
-    frame.to_parquet(annotation, index=False)
+    if change == "system_rows":
+        frame = pd.read_parquet(annotation)
+        frame["system_id"] = "1abc__2__1.A__1.B"
+        frame.to_parquet(annotation, index=False)
+    else:
+        chain_path = index / "entry_chains.parquet"
+        frame = pd.read_parquet(chain_path)
+        frame["chain_sequence_noncanonical"] = "(MSE)AA"
+        frame["chain_modified_residues"] = [["1:MSE:A:1"]]
+        frame.to_parquet(chain_path, index=False)
 
     tasks.make_alignment_chain_lookup(
         data_dir=tmp_path,
         scratch_dir=tmp_path / "scratch-2",
         threads=1,
-        force_update=True,
+        force_update=change == "system_rows",
     )
 
     refreshed_stat = lookup.stat()

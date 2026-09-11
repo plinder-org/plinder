@@ -692,17 +692,129 @@ def test_targeted_repair_preserves_unaffected_release_only_columns(
     assert finalized_report["downstream_repair_complete"] is True
 
 
-def test_targeted_repair_rejects_chain_metadata_changes(tmp_path: Path) -> None:
+@pytest.mark.parametrize("missing_installed_columns", [False, True])
+def test_targeted_repair_updates_chain_annotations(
+    tmp_path: Path, missing_installed_columns: bool
+) -> None:
+    _write_release(tmp_path)
+    run_collation(tmp_path, memory_limit="1GB")
+    path = tmp_path / "index/entry_chains.parquet"
+    installed = pd.read_parquet(path)
+    columns = ["chain_sequence_noncanonical", "chain_modified_residues"]
+    if missing_installed_columns:
+        installed = installed.drop(columns=columns)
+    installed["release_only"] = "keep"
+    installed.to_parquet(path, index=False)
+    replacement_path = tmp_path / "raw_entries/ab/1abc/entry_chains.parquet"
+    replacement = pd.read_parquet(replacement_path)
+    replacement.loc[0, "chain_sequence_noncanonical"] = "(MSE)" + "A" * 299
+    replacement.at[0, "chain_modified_residues"] = ["1:MSE:A:1"]
+    replacement.to_parquet(replacement_path, index=False)
+    metadata_path = tmp_path / "raw_entries/ab/1abc/entry_metadata.parquet"
+    metadata = pd.read_parquet(metadata_path)
+    metadata["entry_pH_min"] = 6.0
+    metadata["entry_pH_max"] = 7.0
+    metadata["entry_has_ligand_of_interest"] = True
+    metadata.to_parquet(metadata_path, index=False)
+    ligand_path = tmp_path / "raw_entries/ab/1abc.parquet"
+    ligands = pd.read_parquet(ligand_path)
+    ligands["ligand_contact_area"] = 42.0
+    ligands["ligand_unresolved_atoms"] = [["5:LIG:L:5:C1"] for _ in range(len(ligands))]
+    ligands.to_parquet(ligand_path, index=False)
+
+    report = repair_collation(tmp_path, ["1abc"], memory_limit="1GB")
+
+    assert report["status"] == "requires_downstream_repair"
+    repaired_metadata = pd.read_parquet(tmp_path / "index/entry_metadata.parquet")
+    metadata_columns = ["entry_pH_min", "entry_pH_max", "entry_has_ligand_of_interest"]
+    assert repaired_metadata.loc[
+        repaired_metadata.entry_pdb_id.eq("1abc"), metadata_columns
+    ].to_dict("records") == metadata[metadata_columns].to_dict("records")
+    repaired_ligands = pd.read_parquet(tmp_path / "index/annotation_table.parquet")
+    columns_to_check = ["ligand_contact_area", "ligand_unresolved_atoms"]
+    pd.testing.assert_frame_equal(
+        repaired_ligands.loc[
+            repaired_ligands.entry_pdb_id.eq("1abc"), columns_to_check
+        ].reset_index(drop=True),
+        ligands[columns_to_check].reset_index(drop=True),
+    )
+    repaired = pd.read_parquet(path)
+    selected = repaired.loc[repaired.entry_pdb_id.eq("1abc"), replacement.columns]
+    pd.testing.assert_frame_equal(selected.reset_index(drop=True), replacement)
+    untouched = repaired.loc[repaired.entry_pdb_id.eq("2def"), installed.columns]
+    pd.testing.assert_frame_equal(
+        untouched.reset_index(drop=True),
+        installed.loc[installed.entry_pdb_id.eq("2def")].reset_index(drop=True),
+    )
+    if missing_installed_columns:
+        assert (
+            repaired.loc[repaired.entry_pdb_id.eq("2def"), columns].isna().all().all()
+        )
+
+
+@pytest.mark.parametrize(
+    ("column", "value"),
+    [
+        ("chain_length", 301),
+        ("chain_sequence", "G" * 300),
+        ("chain_asym_id", "C"),
+        ("chain_auth_id", "Z"),
+        ("chain_is_ligand_like", True),
+    ],
+)
+def test_targeted_repair_rejects_chain_metadata_changes(
+    tmp_path: Path, column: str, value: object
+) -> None:
     _write_release(tmp_path)
     run_collation(tmp_path, memory_limit="1GB")
     chains = pd.read_parquet(tmp_path / "raw_entries/ab/1abc/entry_chains.parquet")
-    chains["chain_length"] = 301
+    chains[column] = value
     chains.to_parquet(
         tmp_path / "raw_entries/ab/1abc/entry_chains.parquet", index=False
     )
 
+    installed_paths = list((tmp_path / "index").glob("*.parquet")) + [
+        tmp_path / "index/collation.json"
+    ]
+    before = {path: path.read_bytes() for path in installed_paths}
     with pytest.raises(ValueError, match="changed entry_chains"):
         repair_collation(tmp_path, ["1abc"], memory_limit="1GB")
+    assert {path: path.read_bytes() for path in installed_paths} == before
+
+
+@pytest.mark.parametrize(
+    ("filename", "column", "value", "table"),
+    [
+        ("entry_source.parquet", "source_mmcif_minor_revision", 99, "entry_sources"),
+        (
+            "entry_biounit_chains.parquet",
+            "chain_instance",
+            "2.A",
+            "entry_biounit_chains",
+        ),
+    ],
+)
+def test_metadata_repair_preserves_release_when_scoring_sources_change(
+    tmp_path: Path, filename: str, column: str, value: object, table: str
+) -> None:
+    _write_release(tmp_path)
+    run_collation(tmp_path, memory_limit="1GB")
+    entry_dir = tmp_path / "raw_entries/ab/1abc"
+    chain_path = entry_dir / "entry_chains.parquet"
+    chains = pd.read_parquet(chain_path)
+    chains["chain_sequence_noncanonical"] = "(MSE)AA"
+    chains.to_parquet(chain_path, index=False)
+    source = entry_dir / filename
+    frame = pd.read_parquet(source)
+    frame.loc[0, column] = value
+    frame.to_parquet(source, index=False)
+    paths = list((tmp_path / "index").glob("*.parquet")) + [
+        tmp_path / "index/collation.json"
+    ]
+    before = {path: path.read_bytes() for path in paths}
+    with pytest.raises(ValueError, match=f"changed {table}"):
+        repair_collation(tmp_path, ["1abc"], memory_limit="1GB")
+    assert {path: path.read_bytes() for path in paths} == before
 
 
 def test_shard_rejects_inputs_changed_after_plan(tmp_path: Path) -> None:

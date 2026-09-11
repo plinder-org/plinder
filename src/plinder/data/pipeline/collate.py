@@ -25,6 +25,7 @@ from plinder.data.annotations.interface_utils import (
     min_interface_residues_from_schema,
 )
 from plinder.data.pipeline.ingest import (
+    CHAIN_MODIFICATION_COLUMNS,
     completed_entry_metrics,
     completed_interface_metrics,
 )
@@ -1759,6 +1760,31 @@ def finalize_collation(
     return report
 
 
+def _repair_rows_differ(
+    connection: duckdb.DuckDBPyConnection, name: str, columns: Sequence[str]
+) -> bool:
+    """Compare selected installed entries with their replacement rows."""
+    installed_columns = _relation_columns(connection, f"installed_{name}")
+    installed_select = ", ".join(
+        _quote_identifier(column) if column in installed_columns else "NULL"
+        for column in columns
+    )
+    replacement_select = ", ".join(_quote_identifier(column) for column in columns)
+    installed = (
+        f"SELECT {installed_select} FROM installed_{name} "
+        "INNER JOIN repaired_entries USING (entry_pdb_id)"
+    )
+    replacement = f"SELECT {replacement_select} FROM replacement_{name}"
+    return bool(
+        _fetch_scalar(
+            connection,
+            "SELECT count(*) FROM ("
+            f"({installed} EXCEPT ALL {replacement}) UNION ALL "
+            f"({replacement} EXCEPT ALL {installed}))",
+        )
+    )
+
+
 def repair_collation(
     data_dir: Path,
     pdb_ids: Sequence[str],
@@ -1772,7 +1798,9 @@ def repair_collation(
 
     This is intended for corrections that require re-annotating a bounded set of
     entries.  Unselected rows are read from the installed index, so release-only
-    columns are preserved without rebuilding every raw entry.
+    columns are preserved without rebuilding every raw entry. Chain modification
+    annotations can change; chain identities, sequences, assembly membership,
+    and source revisions must still match the protein scoring inputs.
     """
     data_dir = data_dir.resolve()
     selected = sorted({str(pdb_id).lower() for pdb_id in pdb_ids})
@@ -1842,6 +1870,7 @@ def repair_collation(
         if name not in {"annotation", "system_validation"}
     }
 
+    chain_annotations_changed = False
     try:
         for name, schema in SIDECAR_SCHEMAS.items():
             source_key = {
@@ -1945,28 +1974,35 @@ def repair_collation(
                 connection.read_parquet(str(replacement_paths[name])).create_view(
                     f"replacement_{name}", replace=True
                 )
-                differences = int(
-                    _fetch_scalar(
-                        connection,
-                        "SELECT count(*) FROM ("
-                        f"(SELECT installed.* FROM installed_{name} AS installed "
-                        "INNER JOIN repaired_entries USING (entry_pdb_id) "
-                        f"EXCEPT ALL SELECT * FROM replacement_{name}) "
-                        "UNION ALL "
-                        f"(SELECT * FROM replacement_{name} EXCEPT ALL "
-                        f"SELECT installed.* FROM installed_{name} AS installed "
-                        "INNER JOIN repaired_entries USING (entry_pdb_id)))",
-                    )
-                )
-                if differences:
+                columns = SIDECAR_SCHEMAS[name].names
+                protected_columns = [
+                    column
+                    for column in columns
+                    if name != "entry_chains"
+                    or column not in CHAIN_MODIFICATION_COLUMNS
+                ]
+                installed_columns = _relation_columns(connection, f"installed_{name}")
+                if not set(protected_columns).issubset(
+                    installed_columns
+                ) or _repair_rows_differ(connection, name, protected_columns):
                     raise ValueError(
                         f"targeted repair changed {name}; rebuild the protein "
                         "scoring inputs and mapped alignments instead"
                     )
-            for name, order_by in (
+                if name == "entry_chains":
+                    chain_annotations_changed = not set(columns).issubset(
+                        installed_columns
+                    ) or _repair_rows_differ(connection, name, columns)
+            replacements = [
                 ("entry_metadata", "entry_pdb_id"),
                 ("interfaces", "entry_pdb_id, system_id"),
-            ):
+            ]
+            if chain_annotations_changed:
+                temporary_paths["entry_chains"] = _temporary_path(
+                    final_paths["entry_chains"]
+                )
+                replacements.append(("entry_chains", "entry_pdb_id, chain_asym_id"))
+            for name, order_by in replacements:
                 connection.read_parquet(str(final_paths[name])).create_view(
                     f"installed_{name}", replace=True
                 )
@@ -2001,9 +2037,9 @@ def repair_collation(
         marker = data_dir / "index" / FINAL_MARKER_NAME
         marker.unlink(missing_ok=True)
         final_paths["annotation"].unlink(missing_ok=True)
-        temporary_paths["entry_metadata"].replace(final_paths["entry_metadata"])
-        temporary_paths["interfaces"].replace(final_paths["interfaces"])
-        temporary_paths["system_validation"].replace(final_paths["system_validation"])
+        for name, path in temporary_paths.items():
+            if name != "annotation":
+                path.replace(final_paths[name])
         temporary_paths["annotation"].replace(final_paths["annotation"])
     finally:
         for path in [*temporary_paths.values(), *replacement_paths.values()]:
