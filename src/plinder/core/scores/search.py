@@ -65,14 +65,9 @@ def search(
         store_aligned_pocket_residues=store_aligned_pocket_residues,
     )
     path = None if isinstance(inputs, pd.DataFrame) else Path(inputs).resolve()
-    if path is not None and path.name.lower().endswith((
-        ".fasta",
-        ".fa",
-        ".faa",
-        ".fasta.gz",
-        ".fa.gz",
-        ".faa.gz",
-    )):
+    if path is not None and path.name.lower().endswith(
+        (".fasta", ".fa", ".faa", ".fasta.gz", ".fa.gz", ".faa.gz")
+    ):
         if mode not in {"auto", "pockets"}:
             raise ValueError(
                 "FASTA inputs support pocket search; use structures for ligand/interface comparisons"
@@ -92,14 +87,9 @@ def search(
         files = sorted(path.iterdir()) if path.is_dir() else [path]
         rows = []
         for file in files:
-            if file.is_file() and file.name.lower().endswith((
-                ".pdb",
-                ".pdb.gz",
-                ".cif",
-                ".cif.gz",
-                ".mmcif",
-                ".mmcif.gz",
-            )):
+            if file.is_file() and file.name.lower().endswith(
+                (".pdb", ".pdb.gz", ".cif", ".cif.gz", ".mmcif", ".mmcif.gz")
+            ):
                 name = file.stem if file.suffix.lower() == ".gz" else file.name
                 rows.append({"input_id": Path(name).stem, "structure_path": str(file)})
         if not rows:

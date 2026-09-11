@@ -169,7 +169,7 @@ def read_ligand_sdf(path: str | Path) -> Mol:
 
 
 def read_input_structure(
-    path: str | Path,
+    path: str | Path
 ) -> tuple[struc.AtomArray, pdbx.CIFBlock | None]:
     """Read the first coordinate model and its mmCIF metadata where available."""
     from biotite.structure.io import pdb
@@ -263,8 +263,10 @@ def write_search_structure(
         cif.block["atom_site"]["auth_seq_id"] = author_numbers
         cif.write(destination)
     if mapping:
-        pd.DataFrame([
-            {"chain_id": chain, "ligand_path": value}
-            for chain, value in mapping.items()
-        ]).to_csv(destination.with_suffix(".ligands.tsv"), sep="\t", index=False)
+        pd.DataFrame(
+            [
+                {"chain_id": chain, "ligand_path": value}
+                for chain, value in mapping.items()
+            ]
+        ).to_csv(destination.with_suffix(".ligands.tsv"), sep="\t", index=False)
     return destination

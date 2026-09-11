@@ -592,9 +592,9 @@ class Structure(BaseModel):
         """torch.Tensor: The tokenized sequence representation of the structure sequence."""
         import torch
 
-        seq_encoding = torch.tensor([
-            pc.AA_TO_INDEX[x] for x in self.protein_sequence_from_structure
-        ])
+        seq_encoding = torch.tensor(
+            [pc.AA_TO_INDEX[x] for x in self.protein_sequence_from_structure]
+        )
         tokenized: torch.Tensor = seq_encoding.long()
         return tokenized
 

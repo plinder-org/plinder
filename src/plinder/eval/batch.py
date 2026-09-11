@@ -76,10 +76,9 @@ def _references(
                 release=release,
             )
         except Exception as exc:
-            failures.append({
-                "system_id": name,
-                "error": f"{table}: {type(exc).__name__}: {exc}",
-            })
+            failures.append(
+                {"system_id": name, "error": f"{table}: {type(exc).__name__}: {exc}"}
+            )
             continue
         for system_id in sorted(set(rows["system_id"])):
             try:
@@ -98,15 +97,13 @@ def _references(
                     )
                 references.append(reference)
             except Exception as exc:
-                failures.append({
-                    "system_id": system_id,
-                    "error": f"{type(exc).__name__}: {exc}",
-                })
+                failures.append(
+                    {"system_id": system_id, "error": f"{type(exc).__name__}: {exc}"}
+                )
     if not references and not failures:
-        failures.append({
-            "system_id": name,
-            "error": f"No {mode} references found for {name}",
-        })
+        failures.append(
+            {"system_id": name, "error": f"No {mode} references found for {name}"}
+        )
     return references, failures
 
 
@@ -186,12 +183,14 @@ def _evaluate_one(
     }
 
     def failure(stage: str, exc: Exception, system_id: str = "") -> None:
-        results["failures"].append({
-            "prediction": prediction,
-            "system_id": system_id,
-            "stage": stage,
-            "error": f"{type(exc).__name__}: {exc}",
-        })
+        results["failures"].append(
+            {
+                "prediction": prediction,
+                "system_id": system_id,
+                "stage": stage,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+        )
 
     # Interface comparisons do not depend on ligand chemistry or PoseBusters.
     for ref in references:
@@ -363,14 +362,9 @@ def evaluate_predictions(
                 (path, str(path.relative_to(root)))
                 for path in sorted(folder.iterdir())
                 if path.is_file()
-                and path.name.lower().endswith((
-                    ".cif",
-                    ".mmcif",
-                    ".cif.gz",
-                    ".mmcif.gz",
-                    ".pdb",
-                    ".pdb.gz",
-                ))
+                and path.name.lower().endswith(
+                    (".cif", ".mmcif", ".cif.gz", ".mmcif.gz", ".pdb", ".pdb.gz")
+                )
             ]
     tasks: list[tuple[Path | StructureInput, str, list[_Reference]]] = []
     collected: dict[str, list[dict[str, Any]]] = {
@@ -420,20 +414,24 @@ def evaluate_predictions(
                     collected[key].extend(rows)
             except Exception as exc:
                 _, prediction, refs = futures[future]
-                collected["failures"].append({
-                    "prediction": prediction,
-                    "system_id": "",
-                    "stage": "worker",
-                    "error": f"{type(exc).__name__}: {exc}",
-                })
+                collected["failures"].append(
+                    {
+                        "prediction": prediction,
+                        "system_id": "",
+                        "stage": "worker",
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
+                )
                 for ref in refs:
                     for ligand in ref.ligands if ref.kind == "ligands" else [None]:
-                        collected[ref.kind].append({
-                            "prediction": prediction,
-                            "system_id": ref.system_id,
-                            "status": "error",
-                            **({"ligand_id": ligand} if ligand is not None else {}),
-                        })
+                        collected[ref.kind].append(
+                            {
+                                "prediction": prediction,
+                                "system_id": ref.system_id,
+                                "status": "error",
+                                **({"ligand_id": ligand} if ligand is not None else {}),
+                            }
+                        )
     schemas = {
         "ligands": ["prediction", "system_id", "status", *_LIGAND_COLUMNS],
         "interfaces": ["prediction", "system_id", "status", *_INTERFACE_METRICS],
@@ -444,10 +442,9 @@ def evaluate_predictions(
     with TemporaryDirectory(dir=output_dir, prefix=".tables-") as temporary:
         for key, rows in collected.items():
             columns = list(
-                dict.fromkeys([
-                    *schemas[key],
-                    *(column for row in rows for column in row),
-                ])
+                dict.fromkeys(
+                    [*schemas[key], *(column for row in rows for column in row)]
+                )
             )
             frame = pd.DataFrame(rows).reindex(columns=columns)
             frame = frame.where(frame.notna(), None)

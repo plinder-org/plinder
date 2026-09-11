@@ -73,30 +73,32 @@ PRODIGY_AMINO_ACID_CLASSES = {
 # trees can be evaluated on every Python version supported by Plinder.
 _PRODIGY_MODEL_PATH = Path(__file__).parent / "static_files" / "prodigy_classifier.npz"
 
-INTERFACE_ANNOTATION_SCHEMA = pa.schema([
-    ("entry_pdb_id", pa.string()),
-    ("system_id", pa.string()),
-    ("system_biounit_id", pa.string()),
-    ("interface_chain_1", pa.string()),
-    ("interface_chain_2", pa.string()),
-    ("interface_chain_1_residue_numbers", pa.list_(pa.int32())),
-    ("interface_chain_1_residue_indices", pa.list_(pa.int32())),
-    ("interface_chain_2_residue_numbers", pa.list_(pa.int32())),
-    ("interface_chain_2_residue_indices", pa.list_(pa.int32())),
-    ("interface_num_contact_residue_pairs", pa.int64()),
-    ("interface_contact_area", pa.float64()),
-    ("prodigy_is_annotated", pa.bool_()),
-    ("prodigy_label", pa.string()),
-    ("prodigy_probability_bio", pa.float32()),
-    ("prodigy_link_density", pa.float32()),
-    ("prodigy_intermolecular_contacts", pa.int32()),
-    ("prodigy_charged_charged_contacts", pa.int32()),
-    ("prodigy_charged_polar_contacts", pa.int32()),
-    ("prodigy_charged_apolar_contacts", pa.int32()),
-    ("prodigy_polar_polar_contacts", pa.int32()),
-    ("prodigy_apolar_polar_contacts", pa.int32()),
-    ("prodigy_apolar_apolar_contacts", pa.int32()),
-])
+INTERFACE_ANNOTATION_SCHEMA = pa.schema(
+    [
+        ("entry_pdb_id", pa.string()),
+        ("system_id", pa.string()),
+        ("system_biounit_id", pa.string()),
+        ("interface_chain_1", pa.string()),
+        ("interface_chain_2", pa.string()),
+        ("interface_chain_1_residue_numbers", pa.list_(pa.int32())),
+        ("interface_chain_1_residue_indices", pa.list_(pa.int32())),
+        ("interface_chain_2_residue_numbers", pa.list_(pa.int32())),
+        ("interface_chain_2_residue_indices", pa.list_(pa.int32())),
+        ("interface_num_contact_residue_pairs", pa.int64()),
+        ("interface_contact_area", pa.float64()),
+        ("prodigy_is_annotated", pa.bool_()),
+        ("prodigy_label", pa.string()),
+        ("prodigy_probability_bio", pa.float32()),
+        ("prodigy_link_density", pa.float32()),
+        ("prodigy_intermolecular_contacts", pa.int32()),
+        ("prodigy_charged_charged_contacts", pa.int32()),
+        ("prodigy_charged_polar_contacts", pa.int32()),
+        ("prodigy_charged_apolar_contacts", pa.int32()),
+        ("prodigy_polar_polar_contacts", pa.int32()),
+        ("prodigy_apolar_polar_contacts", pa.int32()),
+        ("prodigy_apolar_apolar_contacts", pa.int32()),
+    ]
+)
 
 
 @dataclass(frozen=True)
@@ -193,12 +195,16 @@ class ProteinInterface:
             "prodigy_apolar_polar_contacts": "apolar_polar_contacts",
             "prodigy_apolar_apolar_contacts": "apolar_apolar_contacts",
         }
-        row.update({
-            column: (
-                getattr(self.prodigy, attribute) if self.prodigy is not None else None
-            )
-            for column, attribute in prodigy_fields.items()
-        })
+        row.update(
+            {
+                column: (
+                    getattr(self.prodigy, attribute)
+                    if self.prodigy is not None
+                    else None
+                )
+                for column, attribute in prodigy_fields.items()
+            }
+        )
         return row
 
 
@@ -308,10 +314,12 @@ def annotate_prodigy_crystal_interface(
         name_1 = residue_name_1[residue_1]
         name_2 = residue_name_2[residue_2]
         contact_type = "".join(
-            sorted((
-                PRODIGY_AMINO_ACID_CLASSES[name_1],
-                PRODIGY_AMINO_ACID_CLASSES[name_2],
-            ))
+            sorted(
+                (
+                    PRODIGY_AMINO_ACID_CLASSES[name_1],
+                    PRODIGY_AMINO_ACID_CLASSES[name_2],
+                )
+            )
         )
         bins[contact_type] += 1
         bins[name_1] += 1
@@ -516,9 +524,9 @@ def protein_interfaces_to_table(
     """Return a typed table with the ingest threshold in schema metadata."""
     if min_interface_residues < 1:
         raise ValueError("minimum interface residues must be positive")
-    schema = INTERFACE_ANNOTATION_SCHEMA.with_metadata({
-        MIN_INTERFACE_RESIDUES_METADATA_KEY: str(min_interface_residues).encode()
-    })
+    schema = INTERFACE_ANNOTATION_SCHEMA.with_metadata(
+        {MIN_INTERFACE_RESIDUES_METADATA_KEY: str(min_interface_residues).encode()}
+    )
     return pa.Table.from_pylist(
         [interface.to_row() for interface in interfaces],
         schema=schema,

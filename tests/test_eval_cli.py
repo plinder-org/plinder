@@ -8,7 +8,6 @@ from pathlib import Path
 import pandas as pd
 import pytest
 import tomli
-
 from plinder.eval import cli
 
 
@@ -26,31 +25,33 @@ def test_cli_forwards_options_and_reports_status(
         }
 
     monkeypatch.setattr(cli, "evaluate_predictions", evaluate)
-    code = cli.main([
-        str(tmp_path / "predictions"),
-        "--output-dir",
-        str(tmp_path / "results"),
-        "--mode",
-        "ligands",
-        "--num-workers",
-        "3",
-        "--data-dir",
-        str(tmp_path / "release"),
-        "--no-posebusters",
-        "--include-all-ligands",
-        "--ligand-smiles",
-        json.dumps({"LIG": "CCO"}),
-        "--ligand-ccd-codes",
-        json.dumps({"OTHER": "ATP"}),
-        "--ligand-chain",
-        "P",
-        "--ligand-chain",
-        "Q",
-        "--ligand-options=--min-pep-length 4",
-        "--interface-options=--custom-mapping 'A:long chain'",
-        "--ost-executable",
-        "/custom/bin/ost",
-    ])
+    code = cli.main(
+        [
+            str(tmp_path / "predictions"),
+            "--output-dir",
+            str(tmp_path / "results"),
+            "--mode",
+            "ligands",
+            "--num-workers",
+            "3",
+            "--data-dir",
+            str(tmp_path / "release"),
+            "--no-posebusters",
+            "--include-all-ligands",
+            "--ligand-smiles",
+            json.dumps({"LIG": "CCO"}),
+            "--ligand-ccd-codes",
+            json.dumps({"OTHER": "ATP"}),
+            "--ligand-chain",
+            "P",
+            "--ligand-chain",
+            "Q",
+            "--ligand-options=--min-pep-length 4",
+            "--interface-options=--custom-mapping 'A:long chain'",
+            "--ost-executable",
+            "/custom/bin/ost",
+        ]
+    )
     assert code == int(bool(failures))
     assert observed["predictions"] == tmp_path / "predictions"
     assert observed["output_dir"] == tmp_path / "results"
@@ -70,25 +71,23 @@ def test_cli_forwards_options_and_reports_status(
 @pytest.mark.parametrize("value", ["bad JSON", "[]", '{"LIG": 1}', '{"LIG": ""}'])
 def test_cli_rejects_invalid_chemistry_mapping(tmp_path, value):
     with pytest.raises(SystemExit) as exc:
-        cli.main([
-            str(tmp_path),
-            "--output-dir",
-            str(tmp_path / "out"),
-            "--ligand-smiles",
-            value,
-        ])
+        cli.main(
+            [
+                str(tmp_path),
+                "--output-dir",
+                str(tmp_path / "out"),
+                "--ligand-smiles",
+                value,
+            ]
+        )
     assert exc.value.code == 2
 
 
 def test_cli_rejects_invalid_workers_before_loading_release(tmp_path):
     with pytest.raises(SystemExit) as exc:
-        cli.main([
-            str(tmp_path),
-            "--output-dir",
-            str(tmp_path / "out"),
-            "--num-workers",
-            "0",
-        ])
+        cli.main(
+            [str(tmp_path), "--output-dir", str(tmp_path / "out"), "--num-workers", "0"]
+        )
     assert exc.value.code == 2
     assert not (tmp_path / "out").exists()
 
@@ -125,6 +124,6 @@ runpy.run_module('plinder.eval.cli', run_name='__main__')
 def test_packaged_command_uses_new_evaluator():
     config = tomli.loads((Path(__file__).parents[1] / "pyproject.toml").read_text())
     assert config["project"]["scripts"]["plinder_eval"] == "plinder.eval.cli:main"
-    assert (
-        not {"plinder_stratify", "plinder_plot"} & config["project"]["scripts"].keys()
-    )
+    assert not {"plinder_stratify", "plinder_plot"} & config["project"][
+        "scripts"
+    ].keys()

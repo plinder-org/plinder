@@ -20,7 +20,6 @@ import biotite.structure.io.pdbx as pdbx
 import numpy as np
 import pytest
 import yaml
-
 from plinder.data.annotations.cif_utils import (
     MissingBondOrderError,
     assign_bond_orders_from_smiles,
@@ -52,23 +51,29 @@ LIGAND_SMILES = _load_boltz_ligand_smiles()
 
 def test_get_entry_taxonomy_collects_all_source_categories_and_hosts():
     block = pdbx.CIFBlock()
-    block["entity_src_gen"] = pdbx.CIFCategory({
-        "entity_id": ["1", "2"],
-        "pdbx_gene_src_ncbi_taxonomy_id": ["9606", "?"],
-        "pdbx_gene_src_scientific_name": ["Homo sapiens", "synthetic construct"],
-        "pdbx_host_org_ncbi_taxonomy_id": ["562", "562"],
-        "pdbx_host_org_scientific_name": ["Escherichia coli", "Escherichia coli"],
-    })
-    block["entity_src_nat"] = pdbx.CIFCategory({
-        "entity_id": ["3"],
-        "pdbx_ncbi_taxonomy_id": ["10090"],
-        "pdbx_organism_scientific": ["Mus musculus"],
-    })
-    block["pdbx_entity_src_syn"] = pdbx.CIFCategory({
-        "entity_id": ["4"],
-        "ncbi_taxonomy_id": ["32630"],
-        "organism_scientific": ["synthetic construct"],
-    })
+    block["entity_src_gen"] = pdbx.CIFCategory(
+        {
+            "entity_id": ["1", "2"],
+            "pdbx_gene_src_ncbi_taxonomy_id": ["9606", "?"],
+            "pdbx_gene_src_scientific_name": ["Homo sapiens", "synthetic construct"],
+            "pdbx_host_org_ncbi_taxonomy_id": ["562", "562"],
+            "pdbx_host_org_scientific_name": ["Escherichia coli", "Escherichia coli"],
+        }
+    )
+    block["entity_src_nat"] = pdbx.CIFCategory(
+        {
+            "entity_id": ["3"],
+            "pdbx_ncbi_taxonomy_id": ["10090"],
+            "pdbx_organism_scientific": ["Mus musculus"],
+        }
+    )
+    block["pdbx_entity_src_syn"] = pdbx.CIFCategory(
+        {
+            "entity_id": ["4"],
+            "ncbi_taxonomy_id": ["32630"],
+            "organism_scientific": ["synthetic construct"],
+        }
+    )
 
     assert get_entry_taxonomy(block) == {
         "source_taxonomy_ids": [9606, 10090, 32630],
@@ -218,11 +223,13 @@ def test_build_biounit_normalizes_altlocs_and_uses_deposited_first(monkeypatch):
 
 def test_legacy_chain_instance_mapping_uses_global_operation_order():
     block = pdbx.CIFBlock()
-    block["pdbx_struct_assembly_gen"] = pdbx.CIFCategory({
-        "assembly_id": ["1", "1", "1", "2"],
-        "oper_expression": ["1", "(2-3)", "(4,5)(6-7)", "1"],
-        "asym_id_list": ["A,C", "B,C", "A", "A"],
-    })
+    block["pdbx_struct_assembly_gen"] = pdbx.CIFCategory(
+        {
+            "assembly_id": ["1", "1", "1", "2"],
+            "oper_expression": ["1", "(2-3)", "(4,5)(6-7)", "1"],
+            "asym_id_list": ["A,C", "B,C", "A", "A"],
+        }
+    )
 
     assert get_legacy_chain_instance_mapping(block, "1") == {
         "1.A": "1.A",
@@ -247,18 +254,22 @@ def test_branched_residue_numbering_patches_and_restores():
     cif_file = pdbx.CIFFile()
     block = pdbx.CIFBlock()
     cif_file["test"] = block
-    block["atom_site"] = pdbx.CIFCategory({
-        "label_asym_id": ["B", "B", "B"],
-        "label_comp_id": ["GLC", "GLC", "GLC"],
-        "label_seq_id": [".", ".", "."],
-        "label_atom_id": ["C1", "C1", "C1"],
-        "auth_seq_id": ["1", "2", "3"],
-    })
-    block["pdbx_branch_scheme"] = pdbx.CIFCategory({
-        "asym_id": ["B", "B", "B"],
-        "auth_seq_num": ["1", "2", "3"],
-        "num": ["1", "2", "3"],
-    })
+    block["atom_site"] = pdbx.CIFCategory(
+        {
+            "label_asym_id": ["B", "B", "B"],
+            "label_comp_id": ["GLC", "GLC", "GLC"],
+            "label_seq_id": [".", ".", "."],
+            "label_atom_id": ["C1", "C1", "C1"],
+            "auth_seq_id": ["1", "2", "3"],
+        }
+    )
+    block["pdbx_branch_scheme"] = pdbx.CIFCategory(
+        {
+            "asym_id": ["B", "B", "B"],
+            "auth_seq_num": ["1", "2", "3"],
+            "num": ["1", "2", "3"],
+        }
+    )
 
     with _branched_residue_numbering(cif_file):
         inside = block["atom_site"]["label_seq_id"].as_array(str).tolist()
@@ -577,9 +588,9 @@ def test_assign_handles_multi_instance_comp_id(boltz_cif, tmp_path):
 
     template = Chem.MolFromSmiles(LIGAND_SMILES)
     expected_bonds = Chem.RemoveHs(template, sanitize=False).GetNumBonds()
-    assert lig_bonds == expected_bonds, (
-        f"Expected {expected_bonds} LIG bonds (one per template bond), got {lig_bonds}"
-    )
+    assert (
+        lig_bonds == expected_bonds
+    ), f"Expected {expected_bonds} LIG bonds (one per template bond), got {lig_bonds}"
 
 
 # ---------------------------------------------------------------------------
@@ -872,9 +883,9 @@ def test_from_custom_cif_warns_on_multi_model(boltz_cif, tmp_path, monkeypatch):
     )
 
     # A warning was emitted naming the model count
-    assert any("2 models" in w for w in warnings), (
-        f"Expected warning about 2 models, got: {warnings}"
-    )
+    assert any(
+        "2 models" in w for w in warnings
+    ), f"Expected warning about 2 models, got: {warnings}"
     # Parsing succeeded using model 1 — entry has the same systems as
     # the single-model run.
     single_entry = Entry.from_custom_cif_file(
@@ -915,9 +926,9 @@ def test_from_custom_cif_with_smiles(boltz_cif):
     assert len(entry.systems) > 0, "Should detect at least one system"
 
     # Input file on disk must be byte-identical — no side effects
-    assert boltz_cif.read_bytes() == before_bytes, (
-        "from_custom_cif_file should not mutate the input CIF on disk"
-    )
+    assert (
+        boltz_cif.read_bytes() == before_bytes
+    ), "from_custom_cif_file should not mutate the input CIF on disk"
     # And the original CIF should still have no _chem_comp_bond (unknown LIG)
     f = pdbx.CIFFile.read(str(boltz_cif))
     block = list(f.values())[0]
@@ -1035,17 +1046,16 @@ def test_from_custom_cif_user_smiles_takes_precedence(boltz_cif):
     """
     import shutil
 
-    from rdkit import Chem
-
     from plinder.data.annotations.aggregate_annotations import Entry
     from plinder.data.annotations.ligand_utils import _get_ccd_smiles
+    from rdkit import Chem
 
     # Sanity: the biotite CCD placeholder for "LIG" is a different molecule
     placeholder = _get_ccd_smiles("LIG")
     canonical_user = Chem.MolToSmiles(Chem.MolFromSmiles(LIGAND_SMILES))
-    assert placeholder is not None and placeholder != canonical_user, (
-        "Expected the biotite LIG placeholder to differ from the user SMILES"
-    )
+    assert (
+        placeholder is not None and placeholder != canonical_user
+    ), "Expected the biotite LIG placeholder to differ from the user SMILES"
 
     assert "[C@@]" in LIGAND_SMILES, "YAML SMILES must have the stereo center"
     inverted = LIGAND_SMILES.replace("[C@@]", "[C@]")
@@ -1068,12 +1078,12 @@ def test_from_custom_cif_user_smiles_takes_precedence(boltz_cif):
         assert ligs, "LIG ligand not found in systems"
         for lig in ligs:
             expected_canonical = Chem.MolToSmiles(Chem.MolFromSmiles(smi))
-            assert lig.smiles == expected_canonical, (
-                f"lig.smiles should match user SMILES, got {lig.smiles}"
-            )
-            assert lig.smiles != placeholder, (
-                "lig.smiles fell back to CCD placeholder — user SMILES did not win"
-            )
+            assert (
+                lig.smiles == expected_canonical
+            ), f"lig.smiles should match user SMILES, got {lig.smiles}"
+            assert (
+                lig.smiles != placeholder
+            ), "lig.smiles fell back to CCD placeholder — user SMILES did not win"
             assert lig.resolved_stereo_matches_template is expected_stereo, (
                 f"expected stereo_matches={expected_stereo} for "
                 f"{'correct' if expected_stereo else 'inverted'} SMILES, "
@@ -1108,9 +1118,9 @@ def test_from_custom_cif_save_fixed_roundtrip(boltz_cif, tmp_path):
         save_fixed_cif=fixed_cif,
     )
     assert fixed_cif.is_file(), "save_fixed_cif target should be written"
-    assert boltz_cif.read_bytes() == input_bytes_before, (
-        "Input CIF must remain untouched"
-    )
+    assert (
+        boltz_cif.read_bytes() == input_bytes_before
+    ), "Input CIF must remain untouched"
 
     # 3. Reload the saved fixed CIF and confirm it's self-sufficient
     block = list(pdbx.CIFFile.read(str(fixed_cif)).values())[0]
@@ -1121,9 +1131,9 @@ def test_from_custom_cif_save_fixed_roundtrip(boltz_cif, tmp_path):
         pdb_id="8c3u",
         cif_file=fixed_cif,  # no ligand_smiles_dict needed — already enriched
     )
-    assert sorted(entry1.systems.keys()) == sorted(entry2.systems.keys()), (
-        "Systems from the round-tripped fixed CIF must match the original run"
-    )
+    assert sorted(entry1.systems.keys()) == sorted(
+        entry2.systems.keys()
+    ), "Systems from the round-tripped fixed CIF must match the original run"
 
 
 def test_save_fixed_cif_refuses_to_overwrite_input(boltz_cif):
@@ -1164,7 +1174,6 @@ def test_save_fixed_cif_refuses_to_overwrite_existing(boltz_cif, tmp_path):
 def test_atoms_to_rdkit_mol_error():
     """atoms_to_rdkit_mol raises ValueError on empty input."""
     import biotite.structure as struc
-
     from plinder.data.annotations.cif_utils import atoms_to_rdkit_mol
 
     with pytest.raises(ValueError):
@@ -1172,9 +1181,8 @@ def test_atoms_to_rdkit_mol_error():
 
 
 def test_atoms_to_rdkit_mol_keeps_generic_and_partial_aromatic_bonds():
-    from rdkit import Chem
-
     from plinder.data.annotations.cif_utils import atoms_to_rdkit_mol
+    from rdkit import Chem
 
     # A complete benzene ring has generic aromatic bonds; a separate resolved
     # fragment has an explicit aromatic double bond but no complete ring.
@@ -1184,11 +1192,13 @@ def test_atoms_to_rdkit_mol_keeps_generic_and_partial_aromatic_bonds():
     atoms.res_id[:] = 1
     atoms.atom_name = [f"C{i}" for i in range(8)]
     angle = np.arange(6) * np.pi / 3
-    atoms.coord[:6] = np.column_stack([
-        1.4 * np.cos(angle),
-        1.4 * np.sin(angle),
-        np.zeros(6),
-    ])
+    atoms.coord[:6] = np.column_stack(
+        [
+            1.4 * np.cos(angle),
+            1.4 * np.sin(angle),
+            np.zeros(6),
+        ]
+    )
     atoms.coord[6:] = [[10, 0, 0], [11.3, 0, 0]]
     atoms.bonds = struc.BondList(
         8,
@@ -1213,7 +1223,6 @@ def test_atoms_to_rdkit_mol_recovers_missing_ccd_bonds():
     import biotite.structure as struc
     from biotite.interface import rdkit as rdkit_interface
     from biotite.structure import filter_heavy
-
     from plinder.data.annotations.cif_utils import (
         _get_ccd_atomarray,
         atoms_to_rdkit_mol,
@@ -1258,7 +1267,6 @@ def test_bird_mapping_is_keyed_by_prd_id():
     from pathlib import Path
 
     import biotite.structure.io.pdbx as pdbx
-
     from plinder.data.annotations.cif_utils import get_chain_external_mappings
 
     cif = (
@@ -1305,7 +1313,6 @@ def test_build_biounit_drops_ligand_copies_on_symmetry_axes(test_dir):
 
 def test_drop_self_clashing_symmetry_copies_keeps_lowest_copy_and_polymers():
     import biotite.structure as struc
-
     from plinder.data.annotations.cif_utils import drop_self_clashing_symmetry_copies
 
     ligand = np.array([[0.0, 0.0, 0.0], [1.5, 0.0, 0.0], [0.0, 1.5, 0.0]])

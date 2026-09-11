@@ -115,9 +115,9 @@ def mhfp6_maxsim_and_argmax(
     long_matrix: NDArray[np.uint32], test_matrix: NDArray[np.uint32]
 ) -> tuple[NDArray[np.float64], NDArray[np.intp]]:
     """Calculate each test MHFP6 vector's max estimated Jaccard to a reference set."""
-    similarity_matrix = np.stack([
-        mhfp6_bulk_jaccard(row, long_matrix) for row in test_matrix
-    ])
+    similarity_matrix = np.stack(
+        [mhfp6_bulk_jaccard(row, long_matrix) for row in test_matrix]
+    )
     return (
         np.max(similarity_matrix, axis=1) * 100,
         np.argmax(similarity_matrix, axis=1),

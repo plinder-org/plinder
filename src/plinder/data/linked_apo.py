@@ -233,8 +233,7 @@ def build_apo_candidate_manifest(
     duplicate_chains = chains.duplicated(["entry_pdb_id", "chain_asym_id"], keep=False)
     if duplicate_chains.any():
         examples = (
-            chains
-            .loc[duplicate_chains, ["entry_pdb_id", "chain_asym_id"]]
+            chains.loc[duplicate_chains, ["entry_pdb_id", "chain_asym_id"]]
             .drop_duplicates()
             .head(10)
             .to_dict("records")
@@ -284,8 +283,7 @@ def build_apo_candidate_manifest(
     duplicate_membership = membership.duplicated(membership_key, keep=False)
     if duplicate_membership.any():
         examples = (
-            membership
-            .loc[duplicate_membership, membership_key]
+            membership.loc[duplicate_membership, membership_key]
             .drop_duplicates()
             .head(10)
             .to_dict("records")
@@ -294,8 +292,7 @@ def build_apo_candidate_manifest(
             f"biological-assembly membership has duplicate chain instances: {examples}"
         )
     receptor_membership = (
-        membership
-        .loc[
+        membership.loc[
             membership["chain_role"].str.lower().eq("receptor"),
             [
                 "entry_pdb_id",
@@ -560,14 +557,14 @@ def select_linked_apo_structures(
     ligand_metrics = ligand_metrics.dropna(subset=list(REQUIRED_SCORE_METRICS))
 
     expected_ligands = (
-        proper
-        .groupby("system_id", observed=True)["ligand_id"]
+        proper.groupby("system_id", observed=True)["ligand_id"]
         .nunique()
         .rename("expected_ligand_pockets")
     )
     summaries = (
-        ligand_metrics
-        .groupby(["query_system", "target_system"], observed=True, as_index=False)
+        ligand_metrics.groupby(
+            ["query_system", "target_system"], observed=True, as_index=False
+        )
         .agg(
             num_ligand_pockets=("query_ligand_id", "nunique"),
             min_pocket_fident=("pocket_fident", "min"),

@@ -71,16 +71,22 @@ class GetPlinderAnnotation:
         entry_cfg["data_dir"] = self.data_dir if include_ligands else None
         interface_cfg = dict(self.interface_cfg or {})
         if interface_cfg:
-            entry_cfg.update({
-                "interface_contact_radius": interface_cfg.get("contact_radius", 10.0),
-                "interface_min_chain_length": interface_cfg.get("min_chain_length", 12),
-                "interface_min_residues": interface_cfg.get(
-                    "min_interface_residues", DEFAULT_MIN_INTERFACE_RESIDUES
-                ),
-                "interface_annotate_prodigy": interface_cfg.get(
-                    "annotate_prodigy", True
-                ),
-            })
+            entry_cfg.update(
+                {
+                    "interface_contact_radius": interface_cfg.get(
+                        "contact_radius", 10.0
+                    ),
+                    "interface_min_chain_length": interface_cfg.get(
+                        "min_chain_length", 12
+                    ),
+                    "interface_min_residues": interface_cfg.get(
+                        "min_interface_residues", DEFAULT_MIN_INTERFACE_RESIDUES
+                    ),
+                    "interface_annotate_prodigy": interface_cfg.get(
+                        "annotate_prodigy", True
+                    ),
+                }
+            )
         return entry_cfg
 
     def _interface_table(self, entry_cfg: dict[str, Any]) -> pa.Table:
@@ -181,11 +187,13 @@ class GetPlinderAnnotation:
             )
             write_dataframe(
                 source_path,
-                pd.DataFrame({
-                    "entry_pdb_id": [self.entry.pdb_id],
-                    "source_mmcif_major_revision": [major_revision],
-                    "source_mmcif_minor_revision": [minor_revision],
-                }),
+                pd.DataFrame(
+                    {
+                        "entry_pdb_id": [self.entry.pdb_id],
+                        "source_mmcif_major_revision": [major_revision],
+                        "source_mmcif_minor_revision": [minor_revision],
+                    }
+                ),
             )
 
     def annotate(self, *, include_interfaces: bool = True) -> Optional[pd.DataFrame]:

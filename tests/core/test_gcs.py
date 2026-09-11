@@ -4,7 +4,6 @@ import os
 
 import pytest
 from omegaconf import DictConfig
-
 from plinder.core.utils import gcs
 
 
@@ -30,11 +29,13 @@ class _Bucket:
         return []
 
 
-CONF = DictConfig({
-    "data": {
-        "plinder_bucket": "plinder",
+CONF = DictConfig(
+    {
+        "data": {
+            "plinder_bucket": "plinder",
+        }
     }
-})
+)
 
 
 @pytest.fixture

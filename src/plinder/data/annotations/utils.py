@@ -25,10 +25,12 @@ def description_excluded_from_column_docs(description: str | None) -> bool:
 
 def description_excluded_from_flat_export(description: str | None) -> bool:
     """Return whether automatic flat export must skip a field."""
-    return _description_text(description).startswith((
-        EXCLUDE_DESCRIPTION_PREFIX,
-        CUSTOM_EXPORT_DESCRIPTION_PREFIX,
-    ))
+    return _description_text(description).startswith(
+        (
+            EXCLUDE_DESCRIPTION_PREFIX,
+            CUSTOM_EXPORT_DESCRIPTION_PREFIX,
+        )
+    )
 
 
 def column_description_text(description: str | None) -> str:

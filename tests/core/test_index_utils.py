@@ -4,17 +4,18 @@ import os
 from pathlib import Path
 
 import pytest
-
 from plinder.core.index import utils
 
 
 def mock_path(*, rel: str = "", download: bool = False, force_progress: bool = False):
     obj = Path(
-        "/".join([
-            str(os.getenv("PLINDER_MOUNT")),
-            str(os.getenv("PLINDER_BUCKET")),
-            str(os.getenv("PLINDER_RELEASE")),
-        ])
+        "/".join(
+            [
+                str(os.getenv("PLINDER_MOUNT")),
+                str(os.getenv("PLINDER_BUCKET")),
+                str(os.getenv("PLINDER_RELEASE")),
+            ]
+        )
     )
     return obj / rel if rel else obj
 

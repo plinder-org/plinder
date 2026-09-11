@@ -558,8 +558,7 @@ def build_ligand_cluster_table(*, index: pd.DataFrame, data_dir: Path) -> pd.Dat
         index.loc[proper & holo, node_column].dropna().astype(str)
     )
     expected_fingerprint_nodes = set(
-        index
-        .loc[
+        index.loc[
             proper & index["ligand_smiles_id"].notna(),
             node_column,
         ]
@@ -577,27 +576,31 @@ def build_ligand_cluster_table(*, index: pd.DataFrame, data_dir: Path) -> pd.Dat
         }
         threshold = int(path.stem.split("=", maxsplit=1)[1])
         metric = partitions["metric"]
-        artifacts.append((
-            path,
-            metric,
-            _cluster_column_name(
-                metric=metric,
-                cluster="set_cover",
-                directed=False,
-                threshold=threshold,
-                ligand=True,
-            ),
-            False,
-        ))
+        artifacts.append(
+            (
+                path,
+                metric,
+                _cluster_column_name(
+                    metric=metric,
+                    cluster="set_cover",
+                    directed=False,
+                    threshold=threshold,
+                    ligand=True,
+                ),
+                False,
+            )
+        )
     for path in directed_cover_paths:
         metric = path.parent.name.split("=", maxsplit=1)[1]
         threshold = int(path.stem.split("=", maxsplit=1)[1])
-        artifacts.append((
-            path,
-            metric,
-            f"{metric}__{threshold}__ligand__directed_set_cover",
-            True,
-        ))
+        artifacts.append(
+            (
+                path,
+                metric,
+                f"{metric}__{threshold}__ligand__directed_set_cover",
+                True,
+            )
+        )
     LOG.info(
         "loading %d published ligand-cluster artifacts for %d ligand IDs",
         len(artifacts),
@@ -669,13 +672,16 @@ def build_ligand_cluster_table(*, index: pd.DataFrame, data_dir: Path) -> pd.Dat
             cluster_column = summary_column
             count_column = f"{cluster_column}_num_pdb_ids"
             label_by_node = labels.set_index(node_column)["label"]
-            occurrences = pd.DataFrame({
-                "label": index
-                .loc[proper & holo, node_column]
-                .astype(str)
-                .map(label_by_node),
-                "entry_pdb_id": index.loc[proper & holo, "entry_pdb_id"].astype(str),
-            }).dropna(subset=["label"])
+            occurrences = pd.DataFrame(
+                {
+                    "label": index.loc[proper & holo, node_column]
+                    .astype(str)
+                    .map(label_by_node),
+                    "entry_pdb_id": index.loc[proper & holo, "entry_pdb_id"].astype(
+                        str
+                    ),
+                }
+            ).dropna(subset=["label"])
             pdb_counts = occurrences.groupby("label", observed=True)[
                 "entry_pdb_id"
             ].nunique()
@@ -716,15 +722,13 @@ def build_ligand_cluster_table(*, index: pd.DataFrame, data_dir: Path) -> pd.Dat
                 coverage_count_column = f"{column}__coverage_count"
                 coverage_fraction_column = f"{column}__coverage_fraction"
                 cluster_columns[coverage_count_column] = (
-                    labels
-                    .set_index(node_column)["coverage_count"]
+                    labels.set_index(node_column)["coverage_count"]
                     .reindex(node_ids)
                     .astype("Int32")
                     .array
                 )
                 cluster_columns[coverage_fraction_column] = (
-                    labels
-                    .set_index(node_column)["coverage_fraction"]
+                    labels.set_index(node_column)["coverage_fraction"]
                     .reindex(node_ids)
                     .astype("Float32")
                     .array
@@ -933,8 +937,7 @@ def add_ligand_similarity_columns(
         "system_type"
     ].eq("holo")
     expected_smiles = set(
-        index
-        .loc[proper_holo, index_smiles_column]
+        index.loc[proper_holo, index_smiles_column]
         .dropna()
         .astype(str)
         .loc[lambda values: values.ne("")]
@@ -1063,14 +1066,18 @@ def add_aggregated_columns(*, index: pd.DataFrame) -> pd.DataFrame:
     index["biounit_num_ligands"] = index.groupby(["entry_pdb_id", "system_biounit_id"])[
         "system_id"
     ].transform("count")
-    index["biounit_num_unique_ccd_codes"] = index.groupby([
-        "entry_pdb_id",
-        "system_biounit_id",
-    ])["ligand_unique_ccd_code"].transform("nunique")
-    index["biounit_num_proper_ligands"] = index.groupby([
-        "entry_pdb_id",
-        "system_biounit_id",
-    ])["ligand_is_proper"].transform("sum")
+    index["biounit_num_unique_ccd_codes"] = index.groupby(
+        [
+            "entry_pdb_id",
+            "system_biounit_id",
+        ]
+    )["ligand_unique_ccd_code"].transform("nunique")
+    index["biounit_num_proper_ligands"] = index.groupby(
+        [
+            "entry_pdb_id",
+            "system_biounit_id",
+        ]
+    )["ligand_is_proper"].transform("sum")
     for n in [
         "lipinski",
         "cofactor",
@@ -1097,8 +1104,7 @@ def add_aggregated_columns(*, index: pd.DataFrame) -> pd.DataFrame:
         "system_protein_chains_length"
     ].apply(sum)
     ccd_dict = (
-        index
-        .groupby("system_id")["ligand_unique_ccd_code"]
+        index.groupby("system_id")["ligand_unique_ccd_code"]
         .agg(lambda x: "-".join(sorted(set(x))))
         .to_dict()
     )
@@ -1126,16 +1132,18 @@ def _is_ligand_cluster_column(column: str) -> bool:
     """Return whether a column belongs in the ligand-cluster sidecar."""
     return column in _chemical_cluster_summary_columns() or (
         "__ligand__" in column
-        and column.endswith((
-            "__component",
-            "__community",
-            "__set_cover",
-            "__set_cover__is_centroid",
-            "__directed_set_cover",
-            "__directed_set_cover__is_centroid",
-            "__directed_set_cover__coverage_count",
-            "__directed_set_cover__coverage_fraction",
-        ))
+        and column.endswith(
+            (
+                "__component",
+                "__community",
+                "__set_cover",
+                "__set_cover__is_centroid",
+                "__directed_set_cover",
+                "__directed_set_cover__is_centroid",
+                "__directed_set_cover__coverage_count",
+                "__directed_set_cover__coverage_fraction",
+            )
+        )
     )
 
 

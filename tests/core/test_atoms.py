@@ -6,11 +6,10 @@ import biotite.structure as struc
 import numpy as np
 import pytest
 from biotite.structure.atoms import AtomArray, AtomArrayStack
-from rdkit import Chem
-
 from plinder.core.structure import atoms
 from plinder.core.structure.smallmols_utils import generate_input_conformer
 from plinder.core.structure.structure import Structure
+from rdkit import Chem
 
 
 def test_cif_loader(cif_1qz5_unzipped):

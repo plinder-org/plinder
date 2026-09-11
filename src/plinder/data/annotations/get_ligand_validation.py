@@ -239,9 +239,9 @@ class ResidueListValidation(DocBaseModel):
             average_rsr=nanmean_return_nan([residue.rsr for residue in filtered]),
             average_rsrz=nanmean_return_nan([residue.rsrz for residue in filtered]),
             average_rscc=nanmean_return_nan([residue.rscc for residue in filtered]),
-            average_occupancy=nanmean_return_nan([
-                residue.average_occupancy for residue in filtered
-            ]),
+            average_occupancy=nanmean_return_nan(
+                [residue.average_occupancy for residue in filtered]
+            ),
             percent_rsr_under_threshold=100
             * sum([residue.rsr <= residue_thresholds.max_rsr for residue in filtered])
             / total_residues,
@@ -249,22 +249,25 @@ class ResidueListValidation(DocBaseModel):
             * sum([residue.rscc > residue_thresholds.min_rscc for residue in filtered])
             / total_residues,
             percent_occupancy_over_threshold=100
-            * sum([
-                residue.average_occupancy >= residue_thresholds.min_average_occupancy
-                for residue in filtered
-            ])
+            * sum(
+                [
+                    residue.average_occupancy
+                    >= residue_thresholds.min_average_occupancy
+                    for residue in filtered
+                ]
+            )
             / total_residues,
             average_b_factor=float(
                 np.mean([residue.average_b_factor for residue in filtered])
             ),
-            unknown_residue_count=sum([
-                residue.unknown_residue for residue in filtered
-            ]),
+            unknown_residue_count=sum(
+                [residue.unknown_residue for residue in filtered]
+            ),
             atom_count=sum([residue.atom_count for residue in filtered]),
             heavy_atom_count=sum([residue.heavy_atom_count for residue in filtered]),
-            num_unresolved_heavy_atoms=sum([
-                residue.num_unresolved_heavy_atoms for residue in filtered
-            ]),
+            num_unresolved_heavy_atoms=sum(
+                [residue.num_unresolved_heavy_atoms for residue in filtered]
+            ),
             max_alt_count=max([residue.alt_count for residue in filtered]),
             percent_outliers={
                 s: 100

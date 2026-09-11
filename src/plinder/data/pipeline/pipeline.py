@@ -566,8 +566,7 @@ class IngestPipeline:
 
         plan = _load_interface_score_plan(self.plinder_dir)
         work = (
-            pd
-            .read_parquet(
+            pd.read_parquet(
                 self.plinder_dir / INTERFACE_SCORE_WORK_RELATIVE,
                 columns=["shard"],
             )["shard"]
@@ -708,10 +707,12 @@ class IngestPipeline:
             )
             for metric in plan["metrics"]:
                 for bucket in range(int(plan["bucket_count"])):
-                    work.append({
-                        "entity_type": entity_type,
-                        "metric_buckets": [(str(metric), bucket)],
-                    })
+                    work.append(
+                        {
+                            "entity_type": entity_type,
+                            "metric_buckets": [(str(metric), bucket)],
+                        }
+                    )
         return work or [{}]
 
     @utils.ingest_flow_control

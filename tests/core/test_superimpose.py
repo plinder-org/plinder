@@ -1,7 +1,6 @@
 from zipfile import ZipFile
 
 from biotite.sequence.io.fasta import FastaFile
-
 from plinder.core.structure.structure import Structure
 
 

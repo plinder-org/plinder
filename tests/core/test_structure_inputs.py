@@ -6,23 +6,24 @@ import importlib
 import numpy as np
 import pandas as pd
 import pytest
-from rdkit import Chem
-
 from plinder.core.structure.inputs import (
     StructureInput,
     read_structure_table,
     write_search_structure,
 )
+from rdkit import Chem
 
 
 @pytest.mark.parametrize("suffix", [".csv", ".tsv", ".parquet"])
 def test_table_groups_ligands_and_resolves_relative_paths(tmp_path, suffix):
-    frame = pd.DataFrame({
-        "input_id": ["one", "one", "two"],
-        "structure_path": ["one.pdb", "one.pdb", "two.cif"],
-        "ligand_path": ["a.sdf", "b.sdf", ""],
-        "reference_id": ["1avd", "1avd", "2e31"],
-    })
+    frame = pd.DataFrame(
+        {
+            "input_id": ["one", "one", "two"],
+            "structure_path": ["one.pdb", "one.pdb", "two.cif"],
+            "ligand_path": ["a.sdf", "b.sdf", ""],
+            "reference_id": ["1avd", "1avd", "2e31"],
+        }
+    )
     path = tmp_path / f"inputs{suffix}"
     if suffix == ".parquet":
         frame.to_parquet(path)
@@ -45,12 +46,14 @@ def test_table_groups_ligands_and_resolves_relative_paths(tmp_path, suffix):
     ],
 )
 def test_table_rejects_ambiguous_inputs(field, values, error):
-    frame = pd.DataFrame({
-        "input_id": ["one", "one"],
-        "structure_path": ["a.cif", "a.cif"],
-        "reference_id": ["1avd", "1avd"],
-        "ligand_path": ["a.sdf", "b.sdf"],
-    })
+    frame = pd.DataFrame(
+        {
+            "input_id": ["one", "one"],
+            "structure_path": ["a.cif", "a.cif"],
+            "reference_id": ["1avd", "1avd"],
+            "ligand_path": ["a.sdf", "b.sdf"],
+        }
+    )
     frame[field] = values
     with pytest.raises(ValueError, match=error):
         read_structure_table(frame)
@@ -117,7 +120,6 @@ def test_search_cif_preserves_separate_ligand_chemistry(test_dir, tmp_path):
 )
 def test_search_accepts_supported_overvalent_sdfs(test_dir, tmp_path, smiles):
     from biotite.interface.rdkit import from_mol
-
     from plinder.core.utils.sanitize import sanitize
     from plinder.data.annotations.cif_utils import (
         get_structure_with_altloc,
@@ -178,7 +180,6 @@ def test_pdb_search_sequences_exclude_nonpolymers(
 ):
     import biotite.structure as struc
     from biotite.structure.io import pdb
-
     from plinder.core.scores.custom import write_custom_query_files
     from plinder.data.annotations.cif_utils import (
         get_structure_with_altloc,
@@ -188,17 +189,9 @@ def test_pdb_search_sequences_exclude_nonpolymers(
     # Waters/ions share author chains with proteins; MSE is also HETATM.
     atoms = struc.AtomArray(9)
     atoms.chain_id = np.array(["A"] * 6 + ["B"] * 3)
-    atoms.res_name = np.array([
-        "ALA",
-        "HOH",
-        "MSE",
-        "ZN",
-        "GLY",
-        "HOH",
-        "SER",
-        "CL",
-        "THR",
-    ])
+    atoms.res_name = np.array(
+        ["ALA", "HOH", "MSE", "ZN", "GLY", "HOH", "SER", "CL", "THR"]
+    )
     atoms.res_id = np.array([10, 501, 10, 502, 20, 503, 40, 601, 45])
     atoms.ins_code[2] = "A"
     atoms.hetero = np.array([False, True, True, True, False, True, False, True, False])

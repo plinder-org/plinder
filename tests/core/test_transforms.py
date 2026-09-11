@@ -1,5 +1,4 @@
 import pytest
-
 from plinder.core.loader.transforms import (
     SelectAtomTypes,
     StructureTransform,

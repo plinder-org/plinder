@@ -40,7 +40,8 @@ def _output_asym_ids(chain_ids: list[str]) -> dict[str, str]:
 class AnnotationRow(Protocol):
     """Minimal interface shared by dicts and pandas Series."""
 
-    def get(self, key: str, default: Any = None) -> Any: ...
+    def get(self, key: str, default: Any = None) -> Any:
+        ...
 
 
 @dataclass(frozen=True)
@@ -190,9 +191,9 @@ def save_cif_file(
         chain_id_map.get(chain_id, chain_id): sequence
         for chain_id, sequence in (protein_sequences or {}).items()
     }
-    atoms.chain_id = np.asarray([
-        chain_id_map[str(chain_id)] for chain_id in atoms.chain_id
-    ])
+    atoms.chain_id = np.asarray(
+        [chain_id_map[str(chain_id)] for chain_id in atoms.chain_id]
+    )
     chain_ids = list(dict.fromkeys(atoms.chain_id.astype(str)))
 
     source_asym_to_entity: dict[str, str] = {}
@@ -282,10 +283,12 @@ def save_cif_file(
     if "cell" in block:
         block["cell"]["entry_id"] = [name]
     block["entry"] = pdbx.CIFCategory({"id": [name]})
-    block["struct_asym"] = pdbx.CIFCategory({
-        "id": chain_ids,
-        "entity_id": [chain_to_entity[chain_id] for chain_id in chain_ids],
-    })
+    block["struct_asym"] = pdbx.CIFCategory(
+        {
+            "id": chain_ids,
+            "entity_id": [chain_to_entity[chain_id] for chain_id in chain_ids],
+        }
+    )
 
     source_entity_types: dict[str, str] = {}
     if source_block is not None and "entity" in source_block:
@@ -315,10 +318,12 @@ def save_cif_file(
             ),
         )
     entity_ids = list(dict.fromkeys(chain_to_entity.values()))
-    block["entity"] = pdbx.CIFCategory({
-        "id": entity_ids,
-        "type": [entity_types[entity_id] for entity_id in entity_ids],
-    })
+    block["entity"] = pdbx.CIFCategory(
+        {
+            "id": entity_ids,
+            "type": [entity_types[entity_id] for entity_id in entity_ids],
+        }
+    )
 
     def copy_source_rows(
         category_name: str,
@@ -446,21 +451,25 @@ def save_cif_file(
                 (entity_id, monomer, index, "n")
                 for index, monomer in enumerate(monomers, start=1)
             )
-        block["entity_poly"] = pdbx.CIFCategory({
-            "entity_id": [row[0] for row in poly_rows],
-            "type": ["polypeptide(L)"] * len(poly_rows),
-            "nstd_linkage": ["no"] * len(poly_rows),
-            "nstd_monomer": ["yes" if "X" in row[1] else "no" for row in poly_rows],
-            "pdbx_seq_one_letter_code": [row[1] for row in poly_rows],
-            "pdbx_seq_one_letter_code_can": [row[1] for row in poly_rows],
-            "pdbx_strand_id": [row[2] for row in poly_rows],
-        })
-        block["entity_poly_seq"] = pdbx.CIFCategory({
-            "entity_id": [row[0] for row in sequence_rows],
-            "mon_id": [row[1] for row in sequence_rows],
-            "num": [row[2] for row in sequence_rows],
-            "hetero": [row[3] for row in sequence_rows],
-        })
+        block["entity_poly"] = pdbx.CIFCategory(
+            {
+                "entity_id": [row[0] for row in poly_rows],
+                "type": ["polypeptide(L)"] * len(poly_rows),
+                "nstd_linkage": ["no"] * len(poly_rows),
+                "nstd_monomer": ["yes" if "X" in row[1] else "no" for row in poly_rows],
+                "pdbx_seq_one_letter_code": [row[1] for row in poly_rows],
+                "pdbx_seq_one_letter_code_can": [row[1] for row in poly_rows],
+                "pdbx_strand_id": [row[2] for row in poly_rows],
+            }
+        )
+        block["entity_poly_seq"] = pdbx.CIFCategory(
+            {
+                "entity_id": [row[0] for row in sequence_rows],
+                "mon_id": [row[1] for row in sequence_rows],
+                "num": [row[2] for row in sequence_rows],
+                "hetero": [row[3] for row in sequence_rows],
+            }
+        )
 
     pdbx_entity_nonpoly = copy_source_rows(
         "pdbx_entity_nonpoly", "entity_id", nonpoly_entity_ids
@@ -477,11 +486,13 @@ def save_cif_file(
             )
             chain = atoms[atoms.chain_id == chain_id]
             nonpoly_rows.append((entity_id, str(chain.res_name[0])))
-        block["pdbx_entity_nonpoly"] = pdbx.CIFCategory({
-            "entity_id": [row[0] for row in nonpoly_rows],
-            "name": [row[1] for row in nonpoly_rows],
-            "comp_id": [row[1] for row in nonpoly_rows],
-        })
+        block["pdbx_entity_nonpoly"] = pdbx.CIFCategory(
+            {
+                "entity_id": [row[0] for row in nonpoly_rows],
+                "name": [row[1] for row in nonpoly_rows],
+                "comp_id": [row[1] for row in nonpoly_rows],
+            }
+        )
 
     component_ids = set(atoms.res_name.astype(str))
     polymer_component_ids: set[str] = set()
@@ -499,23 +510,25 @@ def save_cif_file(
                 )
             )
     sorted_component_ids = sorted(component_ids)
-    block["chem_comp"] = pdbx.CIFCategory({
-        "id": sorted_component_ids,
-        "type": [
-            source_component_types.get(
-                component_id,
-                "PEPTIDE LINKING"
-                if component_id == "GLY"
-                else "L-PEPTIDE LINKING"
-                if component_id in polymer_component_ids
-                else "NON-POLYMER",
-            )
-            for component_id in sorted_component_ids
-        ],
-    })
-    block["atom_type"] = pdbx.CIFCategory({
-        "symbol": sorted(set(atoms.element.astype(str)))
-    })
+    block["chem_comp"] = pdbx.CIFCategory(
+        {
+            "id": sorted_component_ids,
+            "type": [
+                source_component_types.get(
+                    component_id,
+                    "PEPTIDE LINKING"
+                    if component_id == "GLY"
+                    else "L-PEPTIDE LINKING"
+                    if component_id in polymer_component_ids
+                    else "NON-POLYMER",
+                )
+                for component_id in sorted_component_ids
+            ],
+        }
+    )
+    block["atom_type"] = pdbx.CIFCategory(
+        {"symbol": sorted(set(atoms.element.astype(str)))}
+    )
     if "chem_comp_bond" in block:
         bond_order = block["chem_comp_bond"]["value_order"]
         block["chem_comp_bond"]["value_order"] = pdbx.CIFColumn(
@@ -789,8 +802,7 @@ def _biounit_chain_roles(
         )
     if selected["chain_instance"].duplicated().any():
         duplicates = sorted(
-            selected
-            .loc[
+            selected.loc[
                 selected["chain_instance"].duplicated(keep=False),
                 "chain_instance",
             ]

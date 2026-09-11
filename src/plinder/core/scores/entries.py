@@ -215,12 +215,14 @@ class EntryView:
                 and chain.is_polypeptide
             )
         else:
-            uniprot_ids = sorted({
-                uniprot_id
-                for chain in self.chains.values()
-                if chain.holo and chain.is_polypeptide
-                for uniprot_id in chain.uniprot_ids
-            })
+            uniprot_ids = sorted(
+                {
+                    uniprot_id
+                    for chain in self.chains.values()
+                    if chain.holo and chain.is_polypeptide
+                    for uniprot_id in chain.uniprot_ids
+                }
+            )
             if aln_type == "foldseek":
                 return [f"AF-{uniprot_id}-F1-model_v4_A" for uniprot_id in uniprot_ids]
             return uniprot_ids

@@ -96,10 +96,12 @@ def _component_node_universe_sources(
 
 def _empty_component_edges() -> pd.DataFrame:
     """Return an empty, consistently typed component-edge table."""
-    return pd.DataFrame({
-        "query_node": pd.Series(dtype="int64"),
-        "target_node": pd.Series(dtype="int64"),
-    })
+    return pd.DataFrame(
+        {
+            "query_node": pd.Series(dtype="int64"),
+            "target_node": pd.Series(dtype="int64"),
+        }
+    )
 
 
 def _reduce_undirected_component_edges(edges: pd.DataFrame) -> pd.DataFrame:
@@ -120,10 +122,12 @@ def _reduce_undirected_component_edges(edges: pd.DataFrame) -> pd.DataFrame:
     edge_array = edge_array[edge_array[:, 0] != edge_array[:, 1]]
     if not len(edge_array):
         return _empty_component_edges()
-    edge_array = np.column_stack((
-        np.minimum(edge_array[:, 0], edge_array[:, 1]),
-        np.maximum(edge_array[:, 0], edge_array[:, 1]),
-    ))
+    edge_array = np.column_stack(
+        (
+            np.minimum(edge_array[:, 0], edge_array[:, 1]),
+            np.maximum(edge_array[:, 0], edge_array[:, 1]),
+        )
+    )
     edge_array = np.unique(edge_array, axis=0)
     nodes = np.unique(edge_array)
     query_codes = np.searchsorted(nodes, edge_array[:, 0]).astype(np.uint, copy=False)
@@ -146,10 +150,12 @@ def _reduce_undirected_component_edges(edges: pd.DataFrame) -> pd.DataFrame:
         target_parts.append(members[1:].astype(np.int64, copy=False))
     if not query_parts:
         return _empty_component_edges()
-    return pd.DataFrame({
-        "query_node": np.concatenate(query_parts),
-        "target_node": np.concatenate(target_parts),
-    })
+    return pd.DataFrame(
+        {
+            "query_node": np.concatenate(query_parts),
+            "target_node": np.concatenate(target_parts),
+        }
+    )
 
 
 def _reduce_directed_component_edges(edges: pd.DataFrame) -> pd.DataFrame:
@@ -205,19 +211,23 @@ def _reduce_directed_component_edges(edges: pd.DataFrame) -> pd.DataFrame:
     between_components = query_components != target_components
     if between_components.any():
         representatives_array = np.asarray(representatives, dtype=np.int64)
-        condensation_edges = np.column_stack((
-            representatives_array[query_components[between_components]],
-            representatives_array[target_components[between_components]],
-        ))
+        condensation_edges = np.column_stack(
+            (
+                representatives_array[query_components[between_components]],
+                representatives_array[target_components[between_components]],
+            )
+        )
         condensation_edges = np.unique(condensation_edges, axis=0)
         query_parts.append(condensation_edges[:, 0])
         target_parts.append(condensation_edges[:, 1])
     if not query_parts:
         return _empty_component_edges()
-    return pd.DataFrame({
-        "query_node": np.concatenate(query_parts),
-        "target_node": np.concatenate(target_parts),
-    })
+    return pd.DataFrame(
+        {
+            "query_node": np.concatenate(query_parts),
+            "target_node": np.concatenate(target_parts),
+        }
+    )
 
 
 class _ComponentEdgeAccumulator:
@@ -271,10 +281,12 @@ def _component_labels_from_edges(
 ) -> pd.DataFrame:
     """Assign deterministic size-ordered labels to a reduced edge table."""
     if not nodes:
-        return pd.DataFrame({
-            "ligand_id": pd.Series(dtype="object"),
-            "label": pd.Series(dtype="object"),
-        })
+        return pd.DataFrame(
+            {
+                "ligand_id": pd.Series(dtype="object"),
+                "label": pd.Series(dtype="object"),
+            }
+        )
     if edges.empty:
         graph = nk.Graph(len(nodes), directed=directed)
     else:
@@ -402,10 +414,12 @@ def reduce_threshold_component_edges(
         for threshold in ordered_thresholds:
             in_band = (similarity_array >= threshold) & (similarity_array < upper_bound)
             if in_band.any():
-                band_edges = pd.DataFrame({
-                    "query_node": query_array[in_band],
-                    "target_node": target_array[in_band],
-                })
+                band_edges = pd.DataFrame(
+                    {
+                        "query_node": query_array[in_band],
+                        "target_node": target_array[in_band],
+                    }
+                )
                 for directed in modes:
                     accumulators[directed][threshold].add(band_edges)
             upper_bound = threshold
@@ -609,14 +623,17 @@ def prepare_symmetric_edge_plan(
                     separators=(",", ":"),
                 ).encode()
             ).hexdigest()[:16]
-            batches.append({
-                "key": key,
-                "kind": kind,
-                "metrics": source_metrics,
-                "sources": [
-                    _component_source_signature(source) for source in selected_sources
-                ],
-            })
+            batches.append(
+                {
+                    "key": key,
+                    "kind": kind,
+                    "metrics": source_metrics,
+                    "sources": [
+                        _component_source_signature(source)
+                        for source in selected_sources
+                    ],
+                }
+            )
     payload: dict[str, Any] = {
         "version": 1,
         "entity_type": entity_type,
@@ -1259,13 +1276,15 @@ def write_component_reduction_shard(
                 compression="zstd",
             )
             temporary.replace(output)
-            outputs.append({
-                "directed": directed,
-                "threshold": threshold,
-                "path": relative.as_posix(),
-                "rows": len(reductions[directed][threshold]),
-                "size": output.stat().st_size,
-            })
+            outputs.append(
+                {
+                    "directed": directed,
+                    "threshold": threshold,
+                    "path": relative.as_posix(),
+                    "rows": len(reductions[directed][threshold]),
+                    "size": output.stat().st_size,
+                }
+            )
     manifest: dict[str, Any] = {
         "version": COMPONENT_REDUCTION_VERSION,
         "status": "complete",
@@ -1558,8 +1577,7 @@ def prepare_component_node_universe(
         half_representative_path = data_dir / INTERFACE_HALF_REPRESENTATIVES
         nodes = sorted(
             set(
-                pd
-                .read_parquet(
+                pd.read_parquet(
                     representative_path,
                     columns=["representative_system_id"],
                 )["representative_system_id"]
@@ -1569,8 +1587,7 @@ def prepare_component_node_universe(
         )
         side_nodes = sorted(
             set(
-                pd
-                .read_parquet(
+                pd.read_parquet(
                     half_representative_path,
                     columns=["half_interface_id"],
                 )["half_interface_id"]
@@ -1594,8 +1611,7 @@ def prepare_component_node_universe(
         annotation = _eligible_annotation(data_dir)
         nodes = sorted(
             set(
-                annotation
-                .loc[annotation["ligand_is_proper"], "ligand_id"]
+                annotation.loc[annotation["ligand_is_proper"], "ligand_id"]
                 .dropna()
                 .astype(str)
             )
@@ -1670,8 +1686,7 @@ def component_node_universe(
     if is_chemical_cluster_metric(metric):
         # Chemical metrics share the ECFP4 file's ligand_smiles_id node universe.
         nodes = (
-            pd
-            .read_parquet(
+            pd.read_parquet(
                 data_dir / "fingerprints" / "ligands_per_smiles.parquet",
                 columns=["ligand_smiles_id"],
             )["ligand_smiles_id"]
@@ -2647,8 +2662,7 @@ def _expand_fingerprint_cover(
         representative_by_node
     )
     return (
-        expanded
-        .dropna(subset=["ligand_id", "centroid_ligand_id"])
+        expanded.dropna(subset=["ligand_id", "centroid_ligand_id"])
         .explode("ligand_id")
         .reset_index(drop=True)
     )
@@ -2835,12 +2849,14 @@ def make_directed_set_cover(
         f"{metric}-{threshold}-{fallback_threshold}-directed-edges.parquet"
     )
     staged_edges.unlink(missing_ok=True)
-    staged_schema = pa.schema([
-        ("component", pa.uint32()),
-        ("query_node", pa.uint32()),
-        ("target_node", pa.uint32()),
-        ("similarity", pa.uint8()),
-    ])
+    staged_schema = pa.schema(
+        [
+            ("component", pa.uint32()),
+            ("query_node", pa.uint32()),
+            ("target_node", pa.uint32()),
+            ("similarity", pa.uint8()),
+        ]
+    )
     staged_rows = 0
     stage_started = time()
     writer = pq.ParquetWriter(
@@ -2866,8 +2882,7 @@ def make_directed_set_cover(
                     f"{threshold}: {crossing_edges} crossing edges"
                 )
             compact = (
-                pa.Table
-                .from_batches([record_batch])
+                pa.Table.from_batches([record_batch])
                 .select(staged_schema.names)
                 .cast(staged_schema, safe=False)
             )
@@ -2951,19 +2966,21 @@ def make_directed_set_cover(
         ]
         for assignment in component_assignments:
             selection = selection_by_node[assignment.representative]
-            assignments.append({
-                node_column: str(current_nodes[assignment.query]),
-                "centroid_node": str(current_nodes[assignment.representative]),
-                "similarity_to_centroid": assignment.similarity,
-                "coverage_count": coverage_counts[assignment.query],
-                "coverage_fraction": coverage_counts[assignment.query]
-                / len(current_nodes),
-                "representative_selection_order": representative_count
-                + selection.order,
-                "representative_selection_threshold": selection.threshold,
-                "representative_marginal_gain": selection.marginal_gain,
-                "assignment_threshold": assignment.threshold,
-            })
+            assignments.append(
+                {
+                    node_column: str(current_nodes[assignment.query]),
+                    "centroid_node": str(current_nodes[assignment.representative]),
+                    "similarity_to_centroid": assignment.similarity,
+                    "coverage_count": coverage_counts[assignment.query],
+                    "coverage_fraction": coverage_counts[assignment.query]
+                    / len(current_nodes),
+                    "representative_selection_order": representative_count
+                    + selection.order,
+                    "representative_selection_threshold": selection.threshold,
+                    "representative_marginal_gain": selection.marginal_gain,
+                    "assignment_threshold": assignment.threshold,
+                }
+            )
         representative_count += len(selections)
         processed_nodes.update(current_nodes)
 
@@ -3021,13 +3038,15 @@ def make_directed_set_cover(
                 if current_primary_graph is not current_graph:
                     primary_edges = similarities >= threshold
                     if primary_edges.any():
-                        current_primary_graph.addEdges((
-                            similarities[primary_edges] / 100.0,
+                        current_primary_graph.addEdges(
                             (
-                                query_nodes[primary_edges],
-                                target_nodes[primary_edges],
-                            ),
-                        ))
+                                similarities[primary_edges] / 100.0,
+                                (
+                                    query_nodes[primary_edges],
+                                    target_nodes[primary_edges],
+                                ),
+                            )
+                        )
         finish_component()
     finally:
         staged_edges.unlink(missing_ok=True)
@@ -3039,17 +3058,19 @@ def make_directed_set_cover(
                 "absent from edges"
             )
         for node in missing:
-            assignments.append({
-                node_column: node,
-                "centroid_node": node,
-                "similarity_to_centroid": 100.0,
-                "coverage_count": 1,
-                "coverage_fraction": 1.0,
-                "representative_selection_order": representative_count,
-                "representative_selection_threshold": None,
-                "representative_marginal_gain": 1,
-                "assignment_threshold": threshold,
-            })
+            assignments.append(
+                {
+                    node_column: node,
+                    "centroid_node": node,
+                    "similarity_to_centroid": 100.0,
+                    "coverage_count": 1,
+                    "coverage_fraction": 1.0,
+                    "representative_selection_order": representative_count,
+                    "representative_selection_threshold": None,
+                    "representative_marginal_gain": 1,
+                    "assignment_threshold": threshold,
+                }
+            )
             representative_count += 1
 
     published = pd.DataFrame.from_records(
@@ -3094,9 +3115,9 @@ def make_directed_set_cover(
         group_sizes.index.astype(str),
         key=lambda centroid: (-int(group_sizes.loc[centroid]), centroid),
     )
-    published["label"] = published["centroid_node"].map({
-        centroid: f"c{index}" for index, centroid in enumerate(ordered_centroids)
-    })
+    published["label"] = published["centroid_node"].map(
+        {centroid: f"c{index}" for index, centroid in enumerate(ordered_centroids)}
+    )
     published["metric"] = metric
     published["threshold"] = threshold
     published["directed"] = True

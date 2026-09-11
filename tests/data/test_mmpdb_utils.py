@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
-
 from plinder.core.structure.smallmols_similarity import (
     get_mmp_similarity_dict,
     smiles2nonstereo,
@@ -16,10 +15,12 @@ from plinder.data.annotations import mmpdb_utils
 
 def _write_ligands(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    pd.DataFrame({
-        "ligand_smiles_id": [0, 1],
-        "ligand_rdkit_canonical_smiles": ["CCO", "CCN"],
-    }).to_parquet(path, index=False)
+    pd.DataFrame(
+        {
+            "ligand_smiles_id": [0, 1],
+            "ligand_rdkit_canonical_smiles": ["CCO", "CCN"],
+        }
+    ).to_parquet(path, index=False)
 
 
 def _write_pair_file(path: Path) -> None:
@@ -103,10 +104,12 @@ def test_mmp_builder_reuses_output_for_the_same_smiles(
 
 def test_mmp_builder_rejects_duplicate_smiles_ids(tmp_path: Path):
     path = tmp_path / "ligands.parquet"
-    pd.DataFrame({
-        "ligand_smiles_id": [0, 0],
-        "ligand_rdkit_canonical_smiles": ["CCO", "CCN"],
-    }).to_parquet(path, index=False)
+    pd.DataFrame(
+        {
+            "ligand_smiles_id": [0, 0],
+            "ligand_rdkit_canonical_smiles": ["CCO", "CCN"],
+        }
+    ).to_parquet(path, index=False)
 
     with pytest.raises(ValueError, match="duplicate ligand_smiles_id"):
         mmpdb_utils._ligand_table(path)

@@ -253,10 +253,12 @@ def _entry_outputs_complete(
     if annotation_rows:
         if not entry_parquet.is_file() or not ligand_parquet.is_file():
             return False
-        required_columns.update({
-            entry_parquet: {"system_receptor_type"},
-            ligand_parquet: {"ligand_id", "ligand_is_shape_comparable"},
-        })
+        required_columns.update(
+            {
+                entry_parquet: {"system_receptor_type"},
+                ligand_parquet: {"ligand_id", "ligand_is_shape_comparable"},
+            }
+        )
     try:
         schemas_are_complete = all(
             columns.issubset(pq.read_schema(path).names)
@@ -1150,12 +1152,14 @@ def ingest_pdb_batch(
                 )
             )
             if completed is not None:
-                payload["entries"].append({
-                    "pdb_id": pdb_id,
-                    "status": "skipped_complete",
-                    "metrics": str(completed),
-                    "wall_seconds": time.perf_counter() - entry_started,
-                })
+                payload["entries"].append(
+                    {
+                        "pdb_id": pdb_id,
+                        "status": "skipped_complete",
+                        "metrics": str(completed),
+                        "wall_seconds": time.perf_counter() - entry_started,
+                    }
+                )
                 continue
             try:
                 entry_metrics = ingest_one_pdb(
@@ -1170,21 +1174,25 @@ def ingest_pdb_batch(
                     mode=mode,
                 )
                 entry_status = json.loads(entry_metrics.read_text()).get("status")
-                payload["entries"].append({
-                    "pdb_id": pdb_id,
-                    "status": entry_status,
-                    "metrics": str(entry_metrics),
-                    "wall_seconds": time.perf_counter() - entry_started,
-                })
+                payload["entries"].append(
+                    {
+                        "pdb_id": pdb_id,
+                        "status": entry_status,
+                        "metrics": str(entry_metrics),
+                        "wall_seconds": time.perf_counter() - entry_started,
+                    }
+                )
             except Exception as exc:
                 had_failures = True
-                payload["entries"].append({
-                    "pdb_id": pdb_id,
-                    "status": "failed",
-                    "error": repr(exc),
-                    "traceback": traceback.format_exc(),
-                    "wall_seconds": time.perf_counter() - entry_started,
-                })
+                payload["entries"].append(
+                    {
+                        "pdb_id": pdb_id,
+                        "status": "failed",
+                        "error": repr(exc),
+                        "traceback": traceback.format_exc(),
+                        "wall_seconds": time.perf_counter() - entry_started,
+                    }
+                )
             finally:
                 payload["total_wall_seconds"] = time.perf_counter() - started
                 _write_json(metrics_path, payload)

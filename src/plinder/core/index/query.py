@@ -19,10 +19,12 @@ Filter: TypeAlias = tuple[str, str, Any]
 Filters: TypeAlias = list[Filter | list[Filter]] | None
 JoinKeys: TypeAlias = tuple[tuple[str, str], ...]
 
-DISABLED_ANNOTATION_COLUMNS = frozenset({
-    "system_has_binding_affinity",
-    "ligand_binding_affinity",
-})
+DISABLED_ANNOTATION_COLUMNS = frozenset(
+    {
+        "system_has_binding_affinity",
+        "ligand_binding_affinity",
+    }
+)
 
 
 def _is_repeated_entry_column(column: str) -> bool:
@@ -327,9 +329,9 @@ def query_table(
             for name in unresolved.intersection(visible):
                 candidate_owners[name].append(join_name)
 
-        uniquely_required = sorted({
-            owners[0] for owners in candidate_owners.values() if len(owners) == 1
-        })
+        uniquely_required = sorted(
+            {owners[0] for owners in candidate_owners.values() if len(owners) == 1}
+        )
         selected_joins.extend(uniquely_required)
         selected_joins = list(dict.fromkeys(selected_joins))
         for name in sorted(candidate_owners):

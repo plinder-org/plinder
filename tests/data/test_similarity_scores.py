@@ -12,8 +12,6 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from rdkit import Chem
-
 from plinder.core.scores.entries import (
     ChainView,
     EntryView,
@@ -46,6 +44,7 @@ from plinder.data.annotations.get_similarity_scores import (
     write_ecfp4_fingerprint_table,
 )
 from plinder.data.pipeline.config import FoldseekConfig, MMSeqsConfig
+from rdkit import Chem
 
 SDF_FILE = (
     Path(__file__).resolve().parents[1]
@@ -207,16 +206,18 @@ def test_map_row_vectorizes_sparse_pocket_positions(
         db_dir=tmp_path / "db",
         scores_dir=tmp_path / "scores",
     )
-    row = pd.Series({
-        "query_entry": "query",
-        "target_entry": "target",
-        "query_chain_mapped": "A",
-        "target_chain_mapped": "B",
-        "qstart": qstart,
-        "tstart": tstart,
-        "qaln": "A-BCDEF",
-        "taln": "AB-CD-F",
-    })
+    row = pd.Series(
+        {
+            "query_entry": "query",
+            "target_entry": "target",
+            "query_chain_mapped": "A",
+            "target_chain_mapped": "B",
+            "qstart": qstart,
+            "tstart": tstart,
+            "qaln": "A-BCDEF",
+            "taln": "AB-CD-F",
+        }
+    )
 
     mapped = scorer.map_row(row, aln_type=alignment_type, search_db="holo")
 
@@ -510,25 +511,27 @@ def test_alignment_mapping_preserves_author_chain_ids_with_underscores(
         scores_dir=tmp_path / "scores",
     )
     raw = tmp_path / "raw.parquet"
-    pd.DataFrame({
-        "query": ["pdb_00002aaz_xyz-enrich_MODEL_1_AUTH_WITH_UNDERSCORES"],
-        "target": ["pdb_00001abc_xyz-enrich_TARGET_WITH_UNDERSCORES"],
-        "qlen": [1],
-        "fident": [1.0],
-        "alnlen": [1],
-        "qstart": [1],
-        "qend": [1],
-        "tstart": [1],
-        "tend": [1],
-        "evalue": [0.0],
-        "bits": [1],
-        "qcov": [1.0],
-        "tcov": [1.0],
-        "qaln": ["A"],
-        "taln": ["A"],
-        "lddt": [1.0],
-        "target_pdb_id": ["1abc"],
-    }).to_parquet(raw, index=False)
+    pd.DataFrame(
+        {
+            "query": ["pdb_00002aaz_xyz-enrich_MODEL_1_AUTH_WITH_UNDERSCORES"],
+            "target": ["pdb_00001abc_xyz-enrich_TARGET_WITH_UNDERSCORES"],
+            "qlen": [1],
+            "fident": [1.0],
+            "alnlen": [1],
+            "qstart": [1],
+            "qend": [1],
+            "tstart": [1],
+            "tend": [1],
+            "evalue": [0.0],
+            "bits": [1],
+            "qcov": [1.0],
+            "tcov": [1.0],
+            "qaln": ["A"],
+            "taln": ["A"],
+            "lddt": [1.0],
+            "target_pdb_id": ["1abc"],
+        }
+    ).to_parquet(raw, index=False)
 
     mapped = scorer.map_alignment_df(raw, "foldseek", "holo")
 
@@ -566,25 +569,27 @@ def test_foldseek_identifier_cleanup_does_not_remove_cif_from_pdb_id(
         scores_dir=tmp_path / "scores",
     )
     raw = tmp_path / "raw.parquet"
-    pd.DataFrame({
-        "query": ["pdb_00001cif_xyz-enrich_A"],
-        "target": ["pdb_00001abc_xyz-enrich_B"],
-        "qlen": [1],
-        "fident": [1.0],
-        "alnlen": [1],
-        "qstart": [1],
-        "qend": [1],
-        "tstart": [1],
-        "tend": [1],
-        "evalue": [0.0],
-        "bits": [1],
-        "qcov": [1.0],
-        "tcov": [1.0],
-        "qaln": ["A"],
-        "taln": ["A"],
-        "lddt": [1.0],
-        "target_pdb_id": ["1abc"],
-    }).to_parquet(raw, index=False)
+    pd.DataFrame(
+        {
+            "query": ["pdb_00001cif_xyz-enrich_A"],
+            "target": ["pdb_00001abc_xyz-enrich_B"],
+            "qlen": [1],
+            "fident": [1.0],
+            "alnlen": [1],
+            "qstart": [1],
+            "qend": [1],
+            "tstart": [1],
+            "tend": [1],
+            "evalue": [0.0],
+            "bits": [1],
+            "qcov": [1.0],
+            "tcov": [1.0],
+            "qaln": ["A"],
+            "taln": ["A"],
+            "lddt": [1.0],
+            "target_pdb_id": ["1abc"],
+        }
+    ).to_parquet(raw, index=False)
 
     mapped = scorer.map_alignment_df(raw, "foldseek", "holo")
 
@@ -668,16 +673,18 @@ def test_empty_alignment_tsv_writes_readable_dataset(tmp_path, aln_type) -> None
 
 
 def test_ligand_scoring_inputs_include_only_proper_holo_ligands() -> None:
-    annotation = pd.DataFrame({
-        "entry_pdb_id": ["1abc", "1abc", "1abc"],
-        "system_id": ["proper", "artifact", "ion-system"],
-        "system_type": ["holo", "holo", "ion"],
-        "ligand_is_proper": [True, False, True],
-        "ligand_smiles": ["CCO", "O", "[Na+]"],
-        "ligand_unique_ccd_code": ["LIG", "HOH", "NA"],
-        "ligand_id": ["1abc__1__1.L", "1abc__1__1.W", "1abc__1__1.N"],
-        "ligand_asym_id": ["L", "W", "N"],
-    })
+    annotation = pd.DataFrame(
+        {
+            "entry_pdb_id": ["1abc", "1abc", "1abc"],
+            "system_id": ["proper", "artifact", "ion-system"],
+            "system_type": ["holo", "holo", "ion"],
+            "ligand_is_proper": [True, False, True],
+            "ligand_smiles": ["CCO", "O", "[Na+]"],
+            "ligand_unique_ccd_code": ["LIG", "HOH", "NA"],
+            "ligand_id": ["1abc__1__1.L", "1abc__1__1.W", "1abc__1__1.N"],
+            "ligand_asym_id": ["L", "W", "N"],
+        }
+    )
 
     ligands = load_ligands_from_index(annotation=annotation)
 
@@ -823,65 +830,67 @@ def test_interface_scores_choose_swapped_assignment_and_best_backend() -> None:
         chain_2_residue_number_to_index={30: 29, 40: 39},
         num_contact_residue_pairs=4,
     )
-    alignments = pd.DataFrame([
-        # Foldseek's swapped assignment covers both interface sides.
-        {
-            "query_entry": "1abc",
-            "target_entry": "2def",
-            "query_chain_mapped": "A",
-            "target_chain_mapped": "Y",
-            "source": "foldseek",
-            "query_selected_residue_numbers": [1, 2],
-            "target_selected_residue_numbers": [30, 40],
-        },
-        {
-            "query_entry": "1abc",
-            "target_entry": "2def",
-            "query_chain_mapped": "B",
-            "target_chain_mapped": "X",
-            "source": "foldseek",
-            "query_selected_residue_numbers": [3, 4],
-            "target_selected_residue_numbers": [10, 20],
-        },
-        # MMseqs has a complete direct assignment but only 50% product.
-        {
-            "query_entry": "1abc",
-            "target_entry": "2def",
-            "query_chain_mapped": "A",
-            "target_chain_mapped": "X",
-            "source": "mmseqs",
-            "query_selected_residue_numbers": [1, 2],
-            "target_selected_residue_numbers": [10, -1],
-        },
-        {
-            "query_entry": "1abc",
-            "target_entry": "2def",
-            "query_chain_mapped": "B",
-            "target_chain_mapped": "Y",
-            "source": "mmseqs",
-            "query_selected_residue_numbers": [3, 4],
-            "target_selected_residue_numbers": [30, 40],
-        },
-        # Reverse coverage is directional and only 25%.
-        {
-            "query_entry": "2def",
-            "target_entry": "1abc",
-            "query_chain_mapped": "X",
-            "target_chain_mapped": "A",
-            "source": "foldseek",
-            "query_selected_residue_numbers": [10, 20],
-            "target_selected_residue_numbers": [1, -1],
-        },
-        {
-            "query_entry": "2def",
-            "target_entry": "1abc",
-            "query_chain_mapped": "Y",
-            "target_chain_mapped": "B",
-            "source": "foldseek",
-            "query_selected_residue_numbers": [30, 40],
-            "target_selected_residue_numbers": [3, -1],
-        },
-    ])
+    alignments = pd.DataFrame(
+        [
+            # Foldseek's swapped assignment covers both interface sides.
+            {
+                "query_entry": "1abc",
+                "target_entry": "2def",
+                "query_chain_mapped": "A",
+                "target_chain_mapped": "Y",
+                "source": "foldseek",
+                "query_selected_residue_numbers": [1, 2],
+                "target_selected_residue_numbers": [30, 40],
+            },
+            {
+                "query_entry": "1abc",
+                "target_entry": "2def",
+                "query_chain_mapped": "B",
+                "target_chain_mapped": "X",
+                "source": "foldseek",
+                "query_selected_residue_numbers": [3, 4],
+                "target_selected_residue_numbers": [10, 20],
+            },
+            # MMseqs has a complete direct assignment but only 50% product.
+            {
+                "query_entry": "1abc",
+                "target_entry": "2def",
+                "query_chain_mapped": "A",
+                "target_chain_mapped": "X",
+                "source": "mmseqs",
+                "query_selected_residue_numbers": [1, 2],
+                "target_selected_residue_numbers": [10, -1],
+            },
+            {
+                "query_entry": "1abc",
+                "target_entry": "2def",
+                "query_chain_mapped": "B",
+                "target_chain_mapped": "Y",
+                "source": "mmseqs",
+                "query_selected_residue_numbers": [3, 4],
+                "target_selected_residue_numbers": [30, 40],
+            },
+            # Reverse coverage is directional and only 25%.
+            {
+                "query_entry": "2def",
+                "target_entry": "1abc",
+                "query_chain_mapped": "X",
+                "target_chain_mapped": "A",
+                "source": "foldseek",
+                "query_selected_residue_numbers": [10, 20],
+                "target_selected_residue_numbers": [1, -1],
+            },
+            {
+                "query_entry": "2def",
+                "target_entry": "1abc",
+                "query_chain_mapped": "Y",
+                "target_chain_mapped": "B",
+                "source": "foldseek",
+                "query_selected_residue_numbers": [30, 40],
+                "target_selected_residue_numbers": [3, -1],
+            },
+        ]
+    )
 
     forward = calculate_interface_similarity_scores(
         alignments,
@@ -918,18 +927,20 @@ def test_interface_scores_choose_swapped_assignment_and_best_backend() -> None:
     )
     assert incomplete.empty
 
-    unrelated = pd.DataFrame([
-        {
-            "query_entry": "1abc",
-            "target_entry": "2def",
-            "query_chain_mapped": query_chain,
-            "target_chain_mapped": target_chain,
-            "source": "foldseek",
-            "query_selected_residue_numbers": [999],
-            "target_selected_residue_numbers": [999],
-        }
-        for query_chain, target_chain in (("A", "X"), ("B", "Y"))
-    ])
+    unrelated = pd.DataFrame(
+        [
+            {
+                "query_entry": "1abc",
+                "target_entry": "2def",
+                "query_chain_mapped": query_chain,
+                "target_chain_mapped": target_chain,
+                "source": "foldseek",
+                "query_selected_residue_numbers": [999],
+                "target_selected_residue_numbers": [999],
+            }
+            for query_chain, target_chain in (("A", "X"), ("B", "Y"))
+        ]
+    )
     assert calculate_interface_similarity_scores(
         unrelated,
         query_interfaces={query.id: query},
@@ -939,30 +950,34 @@ def test_interface_scores_choose_swapped_assignment_and_best_backend() -> None:
 
 def test_entry_views_support_interface_only_entries() -> None:
     interface_id = "1abc__1__1.A--2.B"
-    interfaces = pd.DataFrame([
+    interfaces = pd.DataFrame(
+        [
+            {
+                "entry_pdb_id": "1abc",
+                "system_id": interface_id,
+                "system_biounit_id": "1",
+                "interface_chain_1": "1.A",
+                "interface_chain_2": "2.B",
+                "interface_chain_1_residue_numbers": [10, 11, 12],
+                "interface_chain_1_residue_indices": [9, 10, 11],
+                "interface_chain_2_residue_numbers": [20, 21, 22],
+                "interface_chain_2_residue_indices": [19, 20, 21],
+                "interface_num_contact_residue_pairs": 5,
+            }
+        ]
+    )
+    chains = pd.DataFrame(
         {
-            "entry_pdb_id": "1abc",
-            "system_id": interface_id,
-            "system_biounit_id": "1",
-            "interface_chain_1": "1.A",
-            "interface_chain_2": "2.B",
-            "interface_chain_1_residue_numbers": [10, 11, 12],
-            "interface_chain_1_residue_indices": [9, 10, 11],
-            "interface_chain_2_residue_numbers": [20, 21, 22],
-            "interface_chain_2_residue_indices": [19, 20, 21],
-            "interface_num_contact_residue_pairs": 5,
+            "entry_pdb_id": ["1abc", "1abc"],
+            "chain_asym_id": ["A", "B"],
+            "chain_auth_id": ["X", "Y"],
+            "chain_entity_id": ["1", "2"],
+            "chain_type": ["polypeptide(L)", "polypeptide(L)"],
+            "chain_length": [100, 80],
+            "chain_is_holo": [True, True],
+            "chain_uniprot_ids": [[], []],
         }
-    ])
-    chains = pd.DataFrame({
-        "entry_pdb_id": ["1abc", "1abc"],
-        "chain_asym_id": ["A", "B"],
-        "chain_auth_id": ["X", "Y"],
-        "chain_entity_id": ["1", "2"],
-        "chain_type": ["polypeptide(L)", "polypeptide(L)"],
-        "chain_length": [100, 80],
-        "chain_is_holo": [True, True],
-        "chain_uniprot_ids": [[], []],
-    })
+    )
 
     entry = entry_views_from_df(
         pd.DataFrame(columns=["entry_pdb_id"]),
@@ -980,16 +995,18 @@ def test_entry_views_support_interface_only_entries() -> None:
 
 
 def test_entry_views_support_protein_chain_only_entries() -> None:
-    chains = pd.DataFrame({
-        "entry_pdb_id": ["model"],
-        "chain_asym_id": ["A"],
-        "chain_auth_id": ["X"],
-        "chain_entity_id": ["1"],
-        "chain_type": ["polypeptide(L)"],
-        "chain_length": [100],
-        "chain_is_holo": [True],
-        "chain_uniprot_ids": [[]],
-    })
+    chains = pd.DataFrame(
+        {
+            "entry_pdb_id": ["model"],
+            "chain_asym_id": ["A"],
+            "chain_auth_id": ["X"],
+            "chain_entity_id": ["1"],
+            "chain_type": ["polypeptide(L)"],
+            "chain_length": [100],
+            "chain_is_holo": [True],
+            "chain_uniprot_ids": [[]],
+        }
+    )
 
     entry = entry_views_from_df(
         pd.DataFrame(columns=["entry_pdb_id"]),
@@ -1008,16 +1025,18 @@ def test_reconstruct_interface_scores_from_release_shard(tmp_path: Path) -> None
     pd.DataFrame({"entry_pdb_id": pd.Series(dtype="string")}).to_parquet(
         index / "annotation_table.parquet", index=False
     )
-    pd.DataFrame({
-        "entry_pdb_id": ["1abc", "1abc", "2def", "2def"],
-        "chain_asym_id": ["A", "B", "X", "Y"],
-        "chain_auth_id": ["A", "B", "X", "Y"],
-        "chain_entity_id": ["1", "2", "1", "2"],
-        "chain_type": ["polypeptide(L)"] * 4,
-        "chain_length": [100] * 4,
-        "chain_is_holo": [True] * 4,
-        "chain_uniprot_ids": [[] for _ in range(4)],
-    }).to_parquet(index / "entry_chains.parquet", index=False)
+    pd.DataFrame(
+        {
+            "entry_pdb_id": ["1abc", "1abc", "2def", "2def"],
+            "chain_asym_id": ["A", "B", "X", "Y"],
+            "chain_auth_id": ["A", "B", "X", "Y"],
+            "chain_entity_id": ["1", "2", "1", "2"],
+            "chain_type": ["polypeptide(L)"] * 4,
+            "chain_length": [100] * 4,
+            "chain_is_holo": [True] * 4,
+            "chain_uniprot_ids": [[] for _ in range(4)],
+        }
+    ).to_parquet(index / "entry_chains.parquet", index=False)
     query_id = "1abc__1__1.A--1.B"
     target_id = "2def__1__1.X--1.Y"
     interface_rows = [
@@ -1136,28 +1155,30 @@ def test_entry_views_keep_ligand_pockets_separate() -> None:
         "ligand_num_interactions": 1,
         "ligand_num_unique_interactions": 1,
     }
-    rows = pd.DataFrame([
-        {
-            **common,
-            "ligand_id": "1abc__1__1.B",
-            "ligand_instance_chain": "1.B",
-            "ligand_asym_id": "B",
-            "ligand_num_pocket_residues": 2,
-            "ligand_is_shape_comparable": False,
-            "ligand_neighboring_residues": ["1.A_10_9_10", "1.A_20_19_20"],
-            "ligand_interactions": ["1.A_10_type:hydrogen_bonds"],
-        },
-        {
-            **common,
-            "ligand_id": "1abc__1__1.C",
-            "ligand_instance_chain": "1.C",
-            "ligand_asym_id": "C",
-            "ligand_num_pocket_residues": 1,
-            "ligand_is_shape_comparable": True,
-            "ligand_neighboring_residues": ["1.A_30_29_30"],
-            "ligand_interactions": ["1.A_30_type:hydrophobic_contacts"],
-        },
-    ])
+    rows = pd.DataFrame(
+        [
+            {
+                **common,
+                "ligand_id": "1abc__1__1.B",
+                "ligand_instance_chain": "1.B",
+                "ligand_asym_id": "B",
+                "ligand_num_pocket_residues": 2,
+                "ligand_is_shape_comparable": False,
+                "ligand_neighboring_residues": ["1.A_10_9_10", "1.A_20_19_20"],
+                "ligand_interactions": ["1.A_10_type:hydrogen_bonds"],
+            },
+            {
+                **common,
+                "ligand_id": "1abc__1__1.C",
+                "ligand_instance_chain": "1.C",
+                "ligand_asym_id": "C",
+                "ligand_num_pocket_residues": 1,
+                "ligand_is_shape_comparable": True,
+                "ligand_neighboring_residues": ["1.A_30_29_30"],
+                "ligand_interactions": ["1.A_30_type:hydrophobic_contacts"],
+            },
+        ]
+    )
 
     system = entry_views_from_df(rows)["1abc"].systems[common["system_id"]]
 
@@ -1173,45 +1194,49 @@ def test_entry_views_keep_ligand_pockets_separate() -> None:
 
 
 def test_entry_views_exclude_na_receptors_from_scoring(tmp_path) -> None:
-    rows = pd.DataFrame([
+    rows = pd.DataFrame(
+        [
+            {
+                "entry_pdb_id": "1abc",
+                "system_id": "1abc__1__1.A_1.N__1.L",
+                "system_type": "holo",
+                "system_receptor_type": "protein+dna",
+                "system_protein_chains_asym_id": ["1.A", "1.N"],
+                "system_protein_chains_auth_id": ["A", "N"],
+                "system_protein_chains_length": [100, 20],
+                "system_proper_num_pocket_residues": 2,
+                "system_proper_num_interactions": 2,
+                "system_proper_num_unique_interactions": 2,
+                "ligand_id": "1abc__1__1.L",
+                "ligand_instance_chain": "1.L",
+                "ligand_asym_id": "L",
+                "ligand_is_proper": True,
+                "ligand_protein_chains_asym_id": ["1.A", "1.N"],
+                "ligand_num_pocket_residues": 2,
+                "ligand_num_interactions": 2,
+                "ligand_num_unique_interactions": 2,
+                "ligand_neighboring_residues": ["1.A_10_9_10", "1.N_2_1_2"],
+                "ligand_interactions": [
+                    "1.A_10_type:hydrogen_bonds",
+                    "1.N_2_type:hydrogen_bonds",
+                ],
+            }
+        ]
+    )
+    entry_chains = pd.DataFrame(
         {
-            "entry_pdb_id": "1abc",
-            "system_id": "1abc__1__1.A_1.N__1.L",
-            "system_type": "holo",
-            "system_receptor_type": "protein+dna",
-            "system_protein_chains_asym_id": ["1.A", "1.N"],
-            "system_protein_chains_auth_id": ["A", "N"],
-            "system_protein_chains_length": [100, 20],
-            "system_proper_num_pocket_residues": 2,
-            "system_proper_num_interactions": 2,
-            "system_proper_num_unique_interactions": 2,
-            "ligand_id": "1abc__1__1.L",
-            "ligand_instance_chain": "1.L",
-            "ligand_asym_id": "L",
-            "ligand_is_proper": True,
-            "ligand_protein_chains_asym_id": ["1.A", "1.N"],
-            "ligand_num_pocket_residues": 2,
-            "ligand_num_interactions": 2,
-            "ligand_num_unique_interactions": 2,
-            "ligand_neighboring_residues": ["1.A_10_9_10", "1.N_2_1_2"],
-            "ligand_interactions": [
-                "1.A_10_type:hydrogen_bonds",
-                "1.N_2_type:hydrogen_bonds",
-            ],
+            "entry_pdb_id": ["1abc"],
+            "chain_asym_id": ["A"],
+            "chain_auth_id": ["A"],
+            "chain_entity_id": ["1"],
+            "chain_type": ["polypeptide(L)"],
+            "chain_receptor_type": ["protein"],
+            "chain_length": [100],
+            "chain_num_unresolved_residues": [0],
+            "chain_is_holo": [True],
+            "chain_uniprot_ids": [["P12345"]],
         }
-    ])
-    entry_chains = pd.DataFrame({
-        "entry_pdb_id": ["1abc"],
-        "chain_asym_id": ["A"],
-        "chain_auth_id": ["A"],
-        "chain_entity_id": ["1"],
-        "chain_type": ["polypeptide(L)"],
-        "chain_receptor_type": ["protein"],
-        "chain_length": [100],
-        "chain_num_unresolved_residues": [0],
-        "chain_is_holo": [True],
-        "chain_uniprot_ids": [["P12345"]],
-    })
+    )
 
     with pytest.raises(ValueError, match="entry_chains is required for 1abc"):
         entry_views_from_df(rows)
@@ -1238,42 +1263,46 @@ def test_entry_views_exclude_na_receptors_from_scoring(tmp_path) -> None:
 
 
 def test_na_only_entry_has_no_similarity_chains() -> None:
-    rows = pd.DataFrame([
+    rows = pd.DataFrame(
+        [
+            {
+                "entry_pdb_id": "1dna",
+                "system_id": "1dna__1__1.N__1.L",
+                "system_type": "holo",
+                "system_receptor_type": "dna",
+                "system_protein_chains_asym_id": ["1.N"],
+                "system_protein_chains_auth_id": ["N"],
+                "system_protein_chains_length": [20],
+                "system_proper_num_pocket_residues": 1,
+                "system_proper_num_interactions": 1,
+                "system_proper_num_unique_interactions": 1,
+                "ligand_id": "1dna__1__1.L",
+                "ligand_instance_chain": "1.L",
+                "ligand_asym_id": "L",
+                "ligand_is_proper": True,
+                "ligand_protein_chains_asym_id": ["1.N"],
+                "ligand_num_pocket_residues": 1,
+                "ligand_num_interactions": 1,
+                "ligand_num_unique_interactions": 1,
+                "ligand_neighboring_residues": ["1.N_2_1_2"],
+                "ligand_interactions": ["1.N_2_type:hydrogen_bonds"],
+            }
+        ]
+    )
+    entry_chains = pd.DataFrame(
         {
-            "entry_pdb_id": "1dna",
-            "system_id": "1dna__1__1.N__1.L",
-            "system_type": "holo",
-            "system_receptor_type": "dna",
-            "system_protein_chains_asym_id": ["1.N"],
-            "system_protein_chains_auth_id": ["N"],
-            "system_protein_chains_length": [20],
-            "system_proper_num_pocket_residues": 1,
-            "system_proper_num_interactions": 1,
-            "system_proper_num_unique_interactions": 1,
-            "ligand_id": "1dna__1__1.L",
-            "ligand_instance_chain": "1.L",
-            "ligand_asym_id": "L",
-            "ligand_is_proper": True,
-            "ligand_protein_chains_asym_id": ["1.N"],
-            "ligand_num_pocket_residues": 1,
-            "ligand_num_interactions": 1,
-            "ligand_num_unique_interactions": 1,
-            "ligand_neighboring_residues": ["1.N_2_1_2"],
-            "ligand_interactions": ["1.N_2_type:hydrogen_bonds"],
+            "entry_pdb_id": ["1dna"],
+            "chain_asym_id": ["N"],
+            "chain_auth_id": ["N"],
+            "chain_entity_id": ["1"],
+            "chain_type": ["polydeoxyribonucleotide"],
+            "chain_receptor_type": ["dna"],
+            "chain_length": [20],
+            "chain_num_unresolved_residues": [0],
+            "chain_is_holo": [True],
+            "chain_uniprot_ids": [[]],
         }
-    ])
-    entry_chains = pd.DataFrame({
-        "entry_pdb_id": ["1dna"],
-        "chain_asym_id": ["N"],
-        "chain_auth_id": ["N"],
-        "chain_entity_id": ["1"],
-        "chain_type": ["polydeoxyribonucleotide"],
-        "chain_receptor_type": ["dna"],
-        "chain_length": [20],
-        "chain_num_unresolved_residues": [0],
-        "chain_is_holo": [True],
-        "chain_uniprot_ids": [[]],
-    })
+    )
 
     entry = entry_views_from_df(rows, entry_chains=entry_chains)["1dna"]
     system = next(iter(entry.systems.values()))
@@ -1481,28 +1510,30 @@ def test_ligand_pair_pocket_mapping_maximizes_coverage_before_similarity(
         ("A", "X", "mmseqs", 1, 10, 0.95),
         ("B", "Y", "mmseqs", 2, 99, 0.9),
     ]
-    alignments = pd.DataFrame([
-        {
-            "query_chain_mapped": query_chain,
-            "target_chain_mapped": target_chain,
-            "source": source,
-            "query_selected_residue_numbers": [query_number],
-            "target_selected_residue_numbers": [target_number],
-            "selected_residue_identity": bytes([1]),
-            "qcov": 1.0,
-            "fident": similarity,
-            "fident_qcov": similarity,
-            "lddt_qcov": similarity,
-        }
-        for (
-            query_chain,
-            target_chain,
-            source,
-            query_number,
-            target_number,
-            similarity,
-        ) in rows
-    ]).set_index(["query_chain_mapped", "target_chain_mapped", "source"])
+    alignments = pd.DataFrame(
+        [
+            {
+                "query_chain_mapped": query_chain,
+                "target_chain_mapped": target_chain,
+                "source": source,
+                "query_selected_residue_numbers": [query_number],
+                "target_selected_residue_numbers": [target_number],
+                "selected_residue_identity": bytes([1]),
+                "qcov": 1.0,
+                "fident": similarity,
+                "fident_qcov": similarity,
+                "lddt_qcov": similarity,
+            }
+            for (
+                query_chain,
+                target_chain,
+                source,
+                query_number,
+                target_number,
+                similarity,
+            ) in rows
+        ]
+    ).set_index(["query_chain_mapped", "target_chain_mapped", "source"])
     alignments.sort_index(inplace=True)
 
     pocket_scores, _, mappings = scorer.get_ligand_pair_pocket_pli_scores(
@@ -1655,11 +1686,13 @@ def test_ligand_molecules_bulk_load_from_packed_sdf_parquet(
     ligand = _ligand("1abc__1__1.B", "1.B", {"1.A": {10: 9}}, {})
     archive = tmp_path / "ligand_archives" / "ab.parquet"
     archive.parent.mkdir()
-    pd.DataFrame({
-        "pdb_id": ["1abc"],
-        "ligand_asym_id": ["B"],
-        "sdf": [SDF_FILE.read_bytes()],
-    }).to_parquet(archive, index=False)
+    pd.DataFrame(
+        {
+            "pdb_id": ["1abc"],
+            "ligand_asym_id": ["B"],
+            "sdf": [SDF_FILE.read_bytes()],
+        }
+    ).to_parquet(archive, index=False)
     monkeypatch.setattr(
         scorer,
         "resolve_ligand_sdf",
@@ -1718,20 +1751,24 @@ def test_get_score_df_loads_mapped_targets_when_mapping_is_separate(
     )
     mapped_path = scorer.db_dir / "holo_foldseek" / "mapped_aln" / "1abc.parquet"
     mapped_path.parent.mkdir(parents=True)
-    pd.DataFrame({
-        "query_entry": ["1abc"] * 3,
-        "target_entry": ["2def", "3ghi", "2def"],
-        "query_chain_mapped": ["A"] * 3,
-        "target_chain_mapped": ["B"] * 3,
-        "source": ["foldseek"] * 3,
-        "qcov": [1.0] * 3,
-    }).set_index([
-        "query_entry",
-        "target_entry",
-        "query_chain_mapped",
-        "target_chain_mapped",
-        "source",
-    ]).to_parquet(mapped_path, index=True)
+    pd.DataFrame(
+        {
+            "query_entry": ["1abc"] * 3,
+            "target_entry": ["2def", "3ghi", "2def"],
+            "query_chain_mapped": ["A"] * 3,
+            "target_chain_mapped": ["B"] * 3,
+            "source": ["foldseek"] * 3,
+            "qcov": [1.0] * 3,
+        }
+    ).set_index(
+        [
+            "query_entry",
+            "target_entry",
+            "query_chain_mapped",
+            "target_chain_mapped",
+            "source",
+        ]
+    ).to_parquet(mapped_path, index=True)
     calls: list[tuple[set[str], Path]] = []
 
     def fake_load_entry_views(*, pdb_ids, data_dir):
@@ -1842,18 +1879,20 @@ def test_get_score_df_retains_and_tracks_requested_metrics(
         calls += 1
         rows = []
         for metric in ["pocket_fident", "protein_qcov_weighted_sum"]:
-            rows.append({
-                "query_system": "1abc__1__1.A__1.L",
-                "query_ligand_id": "1abc__1__1.L",
-                "target_system": "2def_A",
-                "target_ligand_id": None,
-                "protein_mapping": "1.A:0.A",
-                "mapping": "1.A:0.A",
-                "protein_mapper": "foldseek",
-                "source": "foldseek",
-                "metric": metric,
-                "similarity": 95,
-            })
+            rows.append(
+                {
+                    "query_system": "1abc__1__1.A__1.L",
+                    "query_ligand_id": "1abc__1__1.L",
+                    "target_system": "2def_A",
+                    "target_ligand_id": None,
+                    "protein_mapping": "1.A:0.A",
+                    "mapping": "1.A:0.A",
+                    "protein_mapper": "foldseek",
+                    "source": "foldseek",
+                    "metric": metric,
+                    "similarity": 95,
+                }
+            )
         return pd.DataFrame(rows)
 
     monkeypatch.setattr(scorer, "aggregate_scores", scores)
@@ -1910,32 +1949,36 @@ def test_get_score_df_defers_ligand_3d_and_writes_full_precision_candidates(
         calls += 1
         assert kwargs["data_dir"] is None
         assert kwargs["include_holo_protein_scores"] is False
-        kwargs["ligand_3d_candidates"].append({
-            "query_system": "1abc_system",
-            "query_ligand_id": "1abc__1__1.B",
-            "query_entry": "1abc",
-            "query_ligand_asym_id": "B",
-            "target_system": "2def_system",
-            "target_ligand_id": "2def__1__1.Y",
-            "target_entry": "2def",
-            "target_ligand_asym_id": "Y",
-            "protein_mapping": "1.A:1.X",
-            "protein_mapper": "foldseek",
-            "pocket_qcov": 2 / 3,
-        })
-        kwargs["ligand_pair_scores"].append({
-            "query_system": "1abc_system",
-            "query_ligand_id": "1abc__1__1.B",
-            "query_entry": "1abc",
-            "query_ligand_asym_id": "B",
-            "target_system": "2def_system",
-            "target_ligand_id": "2def__1__1.Y",
-            "target_entry": "2def",
-            "target_ligand_asym_id": "Y",
-            "pocket_qcov": 27,
-            "pocket_fident_qcov": 19,
-            "pli_qcov": 11,
-        })
+        kwargs["ligand_3d_candidates"].append(
+            {
+                "query_system": "1abc_system",
+                "query_ligand_id": "1abc__1__1.B",
+                "query_entry": "1abc",
+                "query_ligand_asym_id": "B",
+                "target_system": "2def_system",
+                "target_ligand_id": "2def__1__1.Y",
+                "target_entry": "2def",
+                "target_ligand_asym_id": "Y",
+                "protein_mapping": "1.A:1.X",
+                "protein_mapper": "foldseek",
+                "pocket_qcov": 2 / 3,
+            }
+        )
+        kwargs["ligand_pair_scores"].append(
+            {
+                "query_system": "1abc_system",
+                "query_ligand_id": "1abc__1__1.B",
+                "query_entry": "1abc",
+                "query_ligand_asym_id": "B",
+                "target_system": "2def_system",
+                "target_ligand_id": "2def__1__1.Y",
+                "target_entry": "2def",
+                "target_ligand_asym_id": "Y",
+                "pocket_qcov": 27,
+                "pocket_fident_qcov": 19,
+                "pli_qcov": 11,
+            }
+        )
         return None
 
     monkeypatch.setattr(scorer, "aggregate_scores", candidate_scores)
@@ -2026,19 +2069,21 @@ def test_repair_score_df_targets_replaces_only_affected_target_rows(
             "similarity": similarity,
         }
 
-    pd.DataFrame([
-        score_row("2def__1__1.X__1.Y", 60),
-        score_row("3ghi__1__1.X__1.Y", 70),
-        {
-            **score_row("3ghi__1__1.X__1.Y", 90),
-            "metric": "protein_fident_weighted_sum",
-        },
-    ]).to_parquet(
+    pd.DataFrame(
+        [
+            score_row("2def__1__1.X__1.Y", 60),
+            score_row("3ghi__1__1.X__1.Y", 70),
+            {
+                **score_row("3ghi__1__1.X__1.Y", 90),
+                "metric": "protein_fident_weighted_sum",
+            },
+        ]
+    ).to_parquet(
         score_path,
         index=False,
-        schema=PROTEIN_SIMILARITY_SCHEMA.with_metadata({
-            b"plinder.ligand_3d": b"deferred"
-        }),
+        schema=PROTEIN_SIMILARITY_SCHEMA.with_metadata(
+            {b"plinder.ligand_3d": b"deferred"}
+        ),
     )
     candidate_path = (
         scorer.scores_dir / "ligand_3d_candidates/search_db=holo/shard=ab/1abc.parquet"
@@ -2060,10 +2105,12 @@ def test_repair_score_df_targets_replaces_only_affected_target_rows(
             "pocket_qcov": 0.6,
         }
 
-    pd.DataFrame([
-        candidate_row("2def", "2def__1__1.X__1.Y"),
-        candidate_row("3ghi", "3ghi__1__1.X__1.Y"),
-    ]).to_parquet(
+    pd.DataFrame(
+        [
+            candidate_row("2def", "2def__1__1.X__1.Y"),
+            candidate_row("3ghi", "3ghi__1__1.X__1.Y"),
+        ]
+    ).to_parquet(
         candidate_path,
         index=False,
         schema=scoring_module.schemas.LIGAND_3D_CANDIDATE_SCHEMA,
@@ -2085,10 +2132,12 @@ def test_repair_score_df_targets_replaces_only_affected_target_rows(
             "pli_qcov": 40,
         }
 
-    pd.DataFrame([
-        ligand_pair_row("2def", "2def__1__1.X__1.Y"),
-        ligand_pair_row("3ghi", "3ghi__1__1.X__1.Y"),
-    ]).to_parquet(
+    pd.DataFrame(
+        [
+            ligand_pair_row("2def", "2def__1__1.X__1.Y"),
+            ligand_pair_row("3ghi", "3ghi__1__1.X__1.Y"),
+        ]
+    ).to_parquet(
         ligand_pair_score_path,
         index=False,
         schema=scoring_module.schemas.LIGAND_PAIR_SCORE_SCHEMA,
@@ -2377,12 +2426,14 @@ def test_canonical_ligand_pair_scoring_deduplicates_pairs(
         ligand_sdf_resolver=lambda _ligand: SDF_FILE,
         shape_score_threads=2,
     )
-    pairs = pd.DataFrame({
-        "query_entry": ["1abc", "1abc"],
-        "query_ligand_asym_id": ["B", "B"],
-        "target_entry": ["2def", "2def"],
-        "target_ligand_asym_id": ["Y", "Y"],
-    })
+    pairs = pd.DataFrame(
+        {
+            "query_entry": ["1abc", "1abc"],
+            "query_ligand_asym_id": ["B", "B"],
+            "target_entry": ["2def", "2def"],
+            "target_ligand_asym_id": ["Y", "Y"],
+        }
+    )
     align_calls = 0
 
     def align_once(*_args):
@@ -2468,11 +2519,13 @@ def test_ligand_3d_score_ability_uses_canonical_sdf_and_caches_by_path(
         return original(sdf_file)
 
     monkeypatch.setattr(scoring_module, "is_ligand_shape_comparable", observed)
-    ligands = pd.DataFrame({
-        "pdb_id": ["1abc", "1abc", "1abc"],
-        "ligand_asym_id": ["B", "B", "C"],
-        "ligand_id": ["first", "second", "missing"],
-    })
+    ligands = pd.DataFrame(
+        {
+            "pdb_id": ["1abc", "1abc", "1abc"],
+            "ligand_asym_id": ["B", "B", "C"],
+            "ligand_id": ["first", "second", "missing"],
+        }
+    )
 
     annotated = annotate_ligand_3d_score_ability(ligands, data_dir=tmp_path)
 
@@ -2517,19 +2570,20 @@ def test_ligand_3d_score_ability_reuses_success_for_same_molecular_graph(
 
 
 def test_cofactor_similarity_uses_ccd_reference_fingerprints() -> None:
+    from plinder.core.structure.smallmols_similarity import mol2morgan_fp
     from rdkit import DataStructs
 
-    from plinder.core.structure.smallmols_similarity import mol2morgan_fp
-
     smiles = ["CCO", "c1ccccc1"]
-    unique_ligands = pd.DataFrame({
-        "ligand_smiles_id": [0, 1],
-        "ligand_rdkit_canonical_smiles": smiles,
-        "fingerprint": [
-            DataStructs.BitVectToBinaryText(mol2morgan_fp(value, nbits=1024))
-            for value in smiles
-        ],
-    })
+    unique_ligands = pd.DataFrame(
+        {
+            "ligand_smiles_id": [0, 1],
+            "ligand_rdkit_canonical_smiles": smiles,
+            "fingerprint": [
+                DataStructs.BitVectToBinaryText(mol2morgan_fp(value, nbits=1024))
+                for value in smiles
+            ],
+        }
+    )
 
     annotated = annotate_cofactor_similarity(
         unique_ligands,
@@ -2546,21 +2600,22 @@ def test_cofactor_similarity_uses_ccd_reference_fingerprints() -> None:
 def test_ligand_scores_use_bulk_tanimoto_for_unique_smiles(
     tmp_path, monkeypatch
 ) -> None:
-    from rdkit import DataStructs
-
     from plinder.core.structure.smallmols_similarity import mol2morgan_fp
+    from rdkit import DataStructs
 
     fingerprint_dir = tmp_path / "fingerprints"
     fingerprint_dir.mkdir()
     smiles = ["CCO", "CCN", "c1ccccc1"]
-    fingerprint_table = pd.DataFrame({
-        "ligand_smiles_id": [0, 1, 2],
-        "ligand_rdkit_canonical_smiles": smiles,
-        "fingerprint": [
-            DataStructs.BitVectToBinaryText(mol2morgan_fp(value, nbits=1024))
-            for value in smiles
-        ],
-    })
+    fingerprint_table = pd.DataFrame(
+        {
+            "ligand_smiles_id": [0, 1, 2],
+            "ligand_rdkit_canonical_smiles": smiles,
+            "fingerprint": [
+                DataStructs.BitVectToBinaryText(mol2morgan_fp(value, nbits=1024))
+                for value in smiles
+            ],
+        }
+    )
     write_ecfp4_fingerprint_table(
         fingerprint_table,
         fingerprint_dir / "ligands_per_smiles.parquet",
@@ -2615,10 +2670,12 @@ def test_mhfp6_scores_use_minhash_jaccard_on_shared_node_universe(tmp_path) -> N
     # SMILES 0 and 3 are identical, so their MinHash Jaccard must be exactly 1.0;
     # the alkane/benzene pair must fall below the 30% threshold and be dropped.
     smiles = ["CCO", "CCN", "c1ccccc1", "CCO"]
-    unique_ligands = pd.DataFrame({
-        "ligand_smiles_id": np.arange(len(smiles), dtype=np.int32),
-        "ligand_rdkit_canonical_smiles": smiles,
-    })
+    unique_ligands = pd.DataFrame(
+        {
+            "ligand_smiles_id": np.arange(len(smiles), dtype=np.int32),
+            "ligand_rdkit_canonical_smiles": smiles,
+        }
+    )
     scoring_module.write_mhfp6_fingerprints(unique_ligands, fingerprint_dir)
 
     mhfp6_path = fingerprint_dir / scoring_module.MHFP6_FINGERPRINT_FILE
@@ -2668,11 +2725,13 @@ def test_mhfp6_scores_reject_non_mhfp6_fingerprint_metadata(tmp_path) -> None:
     # score the wrong fingerprint.
     fingerprint_dir = tmp_path / "fingerprints"
     fingerprint_dir.mkdir()
-    table = pd.DataFrame({
-        "ligand_smiles_id": np.array([0], dtype=np.int32),
-        "ligand_rdkit_canonical_smiles": ["CCO"],
-        "mhfp6": [b"\x00" * 4],
-    })
+    table = pd.DataFrame(
+        {
+            "ligand_smiles_id": np.array([0], dtype=np.int32),
+            "ligand_rdkit_canonical_smiles": ["CCO"],
+            "mhfp6": [b"\x00" * 4],
+        }
+    )
     scoring_module.pq.write_table(
         scoring_module.pa.Table.from_pandas(table, preserve_index=False),
         fingerprint_dir / scoring_module.MHFP6_FINGERPRINT_FILE,
@@ -2686,12 +2745,14 @@ def test_mhfp6_scores_reject_non_mhfp6_fingerprint_metadata(tmp_path) -> None:
 
 
 def test_ligand_similarity_annotations_exclude_fingerprint_bytes() -> None:
-    unique_ligands = pd.DataFrame({
-        "ligand_smiles_id": [0, 1, 2],
-        "ligand_rdkit_canonical_smiles": ["CCO", "CCN", "c1ccccc1"],
-        "fingerprint": [b"", b"", b""],
-        "ligand_is_cofactor_like": [True, False, False],
-    })
+    unique_ligands = pd.DataFrame(
+        {
+            "ligand_smiles_id": [0, 1, 2],
+            "ligand_rdkit_canonical_smiles": ["CCO", "CCN", "c1ccccc1"],
+            "fingerprint": [b"", b"", b""],
+            "ligand_is_cofactor_like": [True, False, False],
+        }
+    )
 
     annotations = build_ligand_similarity_annotations(
         unique_ligands=unique_ligands,
@@ -2711,12 +2772,14 @@ def test_annotate_ligand_similarity_requires_complete_mhfp6_shards(tmp_path):
     fingerprint_dir = tmp_path / "fingerprints"
     fingerprint_dir.mkdir()
     smiles = ["CCO", "CCN", "c1ccccc1"]
-    unique_ligands = pd.DataFrame({
-        "ligand_smiles_id": np.arange(len(smiles), dtype=np.int32),
-        "ligand_rdkit_canonical_smiles": smiles,
-        "fingerprint": [b"", b"", b""],
-        "ligand_is_cofactor_like": [False, False, False],
-    })
+    unique_ligands = pd.DataFrame(
+        {
+            "ligand_smiles_id": np.arange(len(smiles), dtype=np.int32),
+            "ligand_rdkit_canonical_smiles": smiles,
+            "fingerprint": [b"", b"", b""],
+            "ligand_is_cofactor_like": [False, False, False],
+        }
+    )
     unique_ligands.to_parquet(
         fingerprint_dir / "ligands_per_smiles.parquet", index=False
     )
@@ -2771,16 +2834,18 @@ def test_ligand_similarity_pipeline_does_not_write_per_system_mapping(
 ) -> None:
     index_dir = tmp_path / "index"
     index_dir.mkdir()
-    pd.DataFrame({
-        "entry_pdb_id": ["1aaa", "2bbb", "3ccc"],
-        "system_id": ["1aaa_system", "2bbb_system", "3ccc_system"],
-        "system_type": ["holo", "holo", "holo"],
-        "ligand_is_proper": [True, True, True],
-        "ligand_smiles": ["CCO", "CCO", "c1ccccc1"],
-        "ligand_unique_ccd_code": ["LIG", "LIG", "BEN"],
-        "ligand_id": ["1aaa__1__1.L", "2bbb__1__1.L", "3ccc__1__1.L"],
-        "ligand_asym_id": ["L", "L", "L"],
-    }).to_parquet(index_dir / "annotation_table.parquet", index=False)
+    pd.DataFrame(
+        {
+            "entry_pdb_id": ["1aaa", "2bbb", "3ccc"],
+            "system_id": ["1aaa_system", "2bbb_system", "3ccc_system"],
+            "system_type": ["holo", "holo", "holo"],
+            "ligand_is_proper": [True, True, True],
+            "ligand_smiles": ["CCO", "CCO", "c1ccccc1"],
+            "ligand_unique_ccd_code": ["LIG", "LIG", "BEN"],
+            "ligand_id": ["1aaa__1__1.L", "2bbb__1__1.L", "3ccc__1__1.L"],
+            "ligand_asym_id": ["L", "L", "L"],
+        }
+    ).to_parquet(index_dir / "annotation_table.parquet", index=False)
     from plinder.data.annotations import ligand_utils
 
     # A cofactor's reference SMILES now comes from the CCD via _get_ccd_smiles
@@ -2850,9 +2915,9 @@ def test_ligand_similarity_pipeline_does_not_write_per_system_mapping(
 
 
 def _system(pdb_id: str, ligands: list[LigandView]) -> SystemView:
-    protein_chains = sorted({
-        chain for ligand in ligands for chain in ligand.protein_chains_asym_id
-    })
+    protein_chains = sorted(
+        {chain for ligand in ligands for chain in ligand.protein_chains_asym_id}
+    )
     return SystemView(
         id=f"{pdb_id}_system",
         pdb_id=pdb_id,
@@ -2959,11 +3024,13 @@ def test_holo_scores_are_emitted_per_ligand_pair(tmp_path, monkeypatch) -> None:
     ) -> tuple[dict, dict, dict, str]:
         assert query_protein_chains is not None
         pair = (query_protein_chains[0], target_protein_chains[0])
-        protein_calls.append((
-            tuple(query_protein_chains),
-            tuple(target_protein_chains),
-            query_length,
-        ))
+        protein_calls.append(
+            (
+                tuple(query_protein_chains),
+                tuple(target_protein_chains),
+                query_length,
+            )
+        )
         return (
             {"protein_qcov_foldseek_weighted_sum": [pair]},
             {"protein_qcov_foldseek_weighted_sum": 0.75},
@@ -3351,23 +3418,25 @@ def test_aggregate_scores_keeps_ligand_ids_and_shape_metrics(
     monkeypatch.setattr(
         scorer,
         "get_scores",
-        lambda *_args, **_kwargs: iter([
-            {
-                "query_system": system.id,
-                "query_ligand_id": ligand.id,
-                "target_system": "2def_system",
-                "target_ligand_id": "2def__1__1.Z",
-                "protein_mapping": "1.A:1.X",
-                "protein_mapper": "foldseek",
-                "protein_qcov_weighted_sum": 0.1,
-                "protein_qcov_weighted_sum_source": "foldseek",
-                "protein_qcov_weighted_sum_mapping": "1.A:1.X",
-                "shape": 0.3,
-                "color": 0.31,
-                "sucos_shape": 0.32,
-                "sucos_shape_pocket_qcov": 0.33,
-            }
-        ]),
+        lambda *_args, **_kwargs: iter(
+            [
+                {
+                    "query_system": system.id,
+                    "query_ligand_id": ligand.id,
+                    "target_system": "2def_system",
+                    "target_ligand_id": "2def__1__1.Z",
+                    "protein_mapping": "1.A:1.X",
+                    "protein_mapper": "foldseek",
+                    "protein_qcov_weighted_sum": 0.1,
+                    "protein_qcov_weighted_sum_source": "foldseek",
+                    "protein_qcov_weighted_sum_mapping": "1.A:1.X",
+                    "shape": 0.3,
+                    "color": 0.31,
+                    "sucos_shape": 0.32,
+                    "sucos_shape_pocket_qcov": 0.33,
+                }
+            ]
+        ),
     )
 
     scores = scorer.aggregate_scores("1abc", data_dir=tmp_path)

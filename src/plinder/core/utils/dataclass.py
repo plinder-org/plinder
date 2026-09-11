@@ -7,11 +7,13 @@ from biotite.structure.atoms import AtomArray
 
 
 def atom_array_summary_markdown_repr(array: AtomArray) -> str:
-    df = pd.DataFrame({
-        k: array.get_annotation(k)
-        for k in array.get_annotation_categories()
-        if k not in ["element", "atom_id", "b_factor", "atom_name"]
-    }).drop_duplicates()
+    df = pd.DataFrame(
+        {
+            k: array.get_annotation(k)
+            for k in array.get_annotation_categories()
+            if k not in ["element", "atom_id", "b_factor", "atom_name"]
+        }
+    ).drop_duplicates()
     markdown: str = df.to_markdown(index=False)
     return markdown
 

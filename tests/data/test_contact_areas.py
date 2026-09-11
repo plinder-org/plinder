@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-
 from plinder.data.annotations.aggregate_annotations import Entry
 from plinder.data.annotations.cif_utils import build_biounit, read_mmcif_file
 from plinder.data.annotations.contact_areas import (

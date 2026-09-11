@@ -62,16 +62,21 @@ def scoring_fixture(
     from plinder.data.annotations.interface_utils import protein_interfaces_to_table
 
     pq.write_table(
-        pa.concat_tables([
-            protein_interfaces_to_table(entry.interfaces) for entry in entries.values()
-        ]),
+        pa.concat_tables(
+            [
+                protein_interfaces_to_table(entry.interfaces)
+                for entry in entries.values()
+            ]
+        ),
         data_dir / "index" / "interface_annotation_table.parquet",
     )
     (data_dir / "splits").mkdir()
-    pd.DataFrame({
-        "system_id": rows["system_id"].unique(),
-        "split": "train",
-    }).to_parquet(data_dir / "splits" / "split.parquet", index=False)
+    pd.DataFrame(
+        {
+            "system_id": rows["system_id"].unique(),
+            "split": "train",
+        }
+    ).to_parquet(data_dir / "splits" / "split.parquet", index=False)
 
     # Build a tiny seqres FASTA covering every chain in the two entries (not
     # just the ones chains_for_alignment returns) so that make_sub_db actually
@@ -151,8 +156,7 @@ def test_scoring_regression(scoring_fixture, tmp_path):
             dfs.append(pd.read_parquet(path))
     assert dfs, "Scorer produced no score parquets — check fixture wiring"
     df = (
-        pd
-        .concat(dfs)
+        pd.concat(dfs)
         .reset_index(drop=True)
         .sort_values(SORT_KEYS)
         .reset_index(drop=True)

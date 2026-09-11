@@ -10,8 +10,6 @@ import pandas as pd
 import pytest
 import yaml
 from biotite.structure.io import pdb, pdbx
-from rdkit import Chem
-
 from plinder.core.structure.inputs import StructureInput
 from plinder.data.annotations.cif_utils import (
     MissingBondOrderError,
@@ -22,6 +20,7 @@ from plinder.data.annotations.cif_utils import (
 from plinder.data.annotations.save_utils import save_cif_file
 from plinder.eval.commands import run_openstructure
 from plinder.eval.inputs import prepare_prediction, reference_ligands
+from rdkit import Chem
 
 
 @pytest.fixture
@@ -155,13 +154,9 @@ def test_preparation_keeps_ions_and_artifacts(complete_model, tmp_path):
     extra.element = ["Na", "C", "C", "O", "O"]
     extra.res_id = np.ones(5, dtype=int)
     extra.hetero[:] = True
-    extra.coord = np.array([
-        [100, 0, 0],
-        [200, 0, 0],
-        [201.5, 0, 0],
-        [198.6, 0, 0],
-        [202.9, 0, 0],
-    ])
+    extra.coord = np.array(
+        [[100, 0, 0], [200, 0, 0], [201.5, 0, 0], [198.6, 0, 0], [202.9, 0, 0]]
+    )
     extra.bonds = struc.BondList(5, np.array([[1, 2, 1], [1, 3, 1], [2, 4, 1]]))
     model = tmp_path / "model.cif"
     save_cif_file(atoms + extra, "prediction", model)
@@ -183,38 +178,38 @@ def test_prepare_retains_nucleic_acid_receptors(tmp_path):
     atoms.res_name = ["DA"] * 3 + ["A"] * 3
     atoms.atom_name = ["P", "O5'", "C5'"] * 2
     atoms.element = ["P", "O", "C"] * 2
-    atoms.coord = np.array([
-        [0, 0, 0],
-        [1.5, 0, 0],
-        [2.9, 0, 0],
-        [0, 10, 0],
-        [1.5, 10, 0],
-        [2.9, 10, 0],
-    ])
+    atoms.coord = np.array(
+        [
+            [0, 0, 0],
+            [1.5, 0, 0],
+            [2.9, 0, 0],
+            [0, 10, 0],
+            [1.5, 10, 0],
+            [2.9, 10, 0],
+        ]
+    )
     atoms.bonds = struc.BondList(
         6, np.array([[0, 1, 1], [1, 2, 1], [3, 4, 1], [4, 5, 1]])
     )
     model = tmp_path / "model.cif"
     metadata = pdbx.CIFBlock()
-    metadata["struct_asym"] = pdbx.CIFCategory({
-        "id": ["DNA", "RNA"],
-        "entity_id": ["1", "2"],
-    })
-    metadata["entity"] = pdbx.CIFCategory({
-        "id": ["1", "2"],
-        "type": ["polymer", "polymer"],
-    })
-    metadata["entity_poly"] = pdbx.CIFCategory({
-        "entity_id": ["1", "2"],
-        "type": ["polydeoxyribonucleotide", "polyribonucleotide"],
-        "pdbx_seq_one_letter_code": ["A", "A"],
-        "pdbx_seq_one_letter_code_can": ["A", "A"],
-    })
-    metadata["entity_poly_seq"] = pdbx.CIFCategory({
-        "entity_id": ["1", "2"],
-        "num": [1, 1],
-        "mon_id": ["DA", "A"],
-    })
+    metadata["struct_asym"] = pdbx.CIFCategory(
+        {"id": ["DNA", "RNA"], "entity_id": ["1", "2"]}
+    )
+    metadata["entity"] = pdbx.CIFCategory(
+        {"id": ["1", "2"], "type": ["polymer", "polymer"]}
+    )
+    metadata["entity_poly"] = pdbx.CIFCategory(
+        {
+            "entity_id": ["1", "2"],
+            "type": ["polydeoxyribonucleotide", "polyribonucleotide"],
+            "pdbx_seq_one_letter_code": ["A", "A"],
+            "pdbx_seq_one_letter_code_can": ["A", "A"],
+        }
+    )
+    metadata["entity_poly_seq"] = pdbx.CIFCategory(
+        {"entity_id": ["1", "2"], "num": [1, 1], "mon_id": ["DA", "A"]}
+    )
     save_cif_file(atoms, "prediction", model, source_block=metadata)
     prepared = prepare_prediction(model, tmp_path / "prepared")
     assert prepared.ligands == {}
@@ -440,12 +435,14 @@ def test_prepare_coordinate_only_model(complete_model, tmp_path):
 def test_select_reference_ligands_only_from_annotation(tmp_path, include_all):
     reference = SimpleNamespace(
         system_id="reference",
-        system=pd.DataFrame({
-            "ligand_id": ["proper", "ion", "artifact"],
-            "ligand_instance_chain": ["1.L", "1.I", "1.E"],
-            "ligand_instance_chains": [["1.L", "1.M"], ["1.I"], ["1.E"]],
-            "ligand_is_proper": [True, False, False],
-        }),
+        system=pd.DataFrame(
+            {
+                "ligand_id": ["proper", "ion", "artifact"],
+                "ligand_instance_chain": ["1.L", "1.I", "1.E"],
+                "ligand_instance_chains": [["1.L", "1.M"], ["1.I"], ["1.E"]],
+                "ligand_is_proper": [True, False, False],
+            }
+        ),
         ligand_sdfs={
             "1.L": str(tmp_path / "whole_molecule.sdf"),
             "1.I": str(tmp_path / "ion.sdf"),

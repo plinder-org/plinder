@@ -2,7 +2,6 @@
 # Distributed under the terms of the Apache License 2.0
 import pandas as pd
 import pytest
-
 from plinder.core import scores
 from plinder.core.scores import index as index_module
 from plinder.core.scores import ligand as ligand_module
@@ -49,10 +48,12 @@ def test_query_index_joins_entry_metadata(monkeypatch):
 
     def fake_query_table(table_name, **kwargs):
         calls.append((table_name, kwargs))
-        return pd.DataFrame({
-            "system_id": ["1abc__1__1.A__1.L"],
-            "entry_resolution": [1.5],
-        })
+        return pd.DataFrame(
+            {
+                "system_id": ["1abc__1__1.A__1.L"],
+                "entry_resolution": [1.5],
+            }
+        )
 
     monkeypatch.setattr(index_module, "query_table", fake_query_table)
 
@@ -192,18 +193,22 @@ def test_ligand_cross_similarity_maps_nodes_through_index(monkeypatch):
 
     def fake_query_index(*, columns, filters):
         calls.append((columns, filters))
-        return pd.DataFrame({
-            "system_id": ["1aaa__1__1.A__1.X", "2bbb__1__1.B__1.Y"],
-            "ligand_smiles_id": [0, 0],
-        })
+        return pd.DataFrame(
+            {
+                "system_id": ["1aaa__1__1.A__1.X", "2bbb__1__1.B__1.Y"],
+                "ligand_smiles_id": [0, 0],
+            }
+        )
 
     monkeypatch.setattr(index_module, "query_index", fake_query_index)
     result = ligand_module.map_cross_similarity(
-        pd.DataFrame({
-            "query_ligand_id": [0],
-            "target_ligand_id": [1],
-            "tanimoto_similarity_ecfp4_1024": [95.0],
-        }),
+        pd.DataFrame(
+            {
+                "query_ligand_id": [0],
+                "target_ligand_id": [1],
+                "tanimoto_similarity_ecfp4_1024": [95.0],
+            }
+        ),
         target_ligands={1},
         metric="tanimoto_similarity_ecfp4_1024",
     )

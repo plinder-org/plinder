@@ -91,9 +91,9 @@ class BiounitSpatialIndex:
             return np.array([], dtype=int)
         return ty.cast(
             npt.NDArray[np.int_],
-            np.concatenate([
-                np.arange(start, stop, dtype=int) for start, stop in segments
-            ]),
+            np.concatenate(
+                [np.arange(start, stop, dtype=int) for start, stop in segments]
+            ),
         )
 
     def atom_indices_near(
@@ -133,14 +133,16 @@ class BiounitSpatialIndex:
         )
         return ty.cast(
             npt.NDArray[np.int_],
-            np.concatenate([
-                np.arange(
-                    self.residue_starts[index],
-                    self.residue_starts[index + 1],
-                    dtype=int,
-                )
-                for index in residue_indices
-            ]),
+            np.concatenate(
+                [
+                    np.arange(
+                        self.residue_starts[index],
+                        self.residue_starts[index + 1],
+                        dtype=int,
+                    )
+                    for index in residue_indices
+                ]
+            ),
         )
 
     def take_atoms(
@@ -778,8 +780,8 @@ def _ligand_unresolved_atoms(
         auth_seq = str(biounit.auth_seq_id[first]) if has_auth else str(res_id)
         if biounit.ins_code[first]:
             auth_seq = f"{auth_seq}{biounit.ins_code[first]}"
-        asym_id = chain_id.split(".")[-1]
-        label_seq = res_id if asym_id in polymer_asym_ids else "."
+        asym_id = chain_id.split(".", maxsplit=1)[-1]  # asym ids may hold dots
+        label_seq: str | int = res_id if asym_id in polymer_asym_ids else "."
         own = set(info["indices"])
         for index in info["indices"] if biounit.bonds is not None else []:
             partners, _ = biounit.bonds.get_bonds(index)
@@ -814,17 +816,19 @@ def _ligand_unresolved_atoms(
     absent: set[str] = set()
     for asym_id in sorted(member_asym_ids):
         for row in unobserved_atoms.get(asym_id, []):
-            info = by_author.get((asym_id, row.auth_seq))
-            template = info["template"] if info else ccd_component_template(row.comp_id)
+            known = by_author.get((asym_id, row.auth_seq))
+            template = (
+                known["template"] if known else ccd_component_template(row.comp_id)
+            )
             if template is not None:
                 if template.elements.get(row.atom_name) in {"H", "D"}:
                     continue
                 excluded = (
                     template.leaving
                     if asym_id in polymer_asym_ids
-                    or info is None
+                    or known is None
                     or biounit.bonds is None
-                    else departed_leaving_atoms(template, info["linked"])
+                    else departed_leaving_atoms(template, known["linked"])
                 )
                 if row.atom_name in excluded:
                     continue
@@ -1970,7 +1974,7 @@ class Ligand(DocBaseModel):
             ligand.contact_area = sum(
                 area
                 for chain_id, area in ligand.chain_contact_areas.items()
-                if chain_id.split(".")[-1] not in ligand_like_chains
+                if chain_id.split(".", maxsplit=1)[-1] not in ligand_like_chains
             )
 
         # Find neighboring ligand chains
@@ -1981,13 +1985,15 @@ class Ligand(DocBaseModel):
             biounit, near_lig_indices, include_bonds=False
         )
 
-        ligand.neighboring_ligands = sorted({
-            c
-            for c in np.unique(near_all.chain_id)
-            if c not in member_instance_chains
-            and "." in c
-            and c.split(".", maxsplit=1)[1] in ligand_like_chains
-        })
+        ligand.neighboring_ligands = sorted(
+            {
+                c
+                for c in np.unique(near_all.chain_id)
+                if c not in member_instance_chains
+                and "." in c
+                and c.split(".", maxsplit=1)[1] in ligand_like_chains
+            }
+        )
         if water_chains is None:
             water_chains = get_water_chain_ids(biounit)
         # Populate interactions and waters from peppr results
@@ -2305,11 +2311,13 @@ class Ligand(DocBaseModel):
         elif lig_has_dummies(self.ccd_code):
             # check for dummy list including composites, too!
             self.is_artifact = True
-        elif self._is_multi_residue and any((
-            self.is_oligosaccharide,
-            self.is_oligonucleotide,
-            self.is_oligopeptide,
-        )):
+        elif self._is_multi_residue and any(
+            (
+                self.is_oligosaccharide,
+                self.is_oligonucleotide,
+                self.is_oligopeptide,
+            )
+        ):
             # Small-molecule charge and linker cutoffs do not describe
             # recognized oligomeric ligands.  For example, a short peptide can
             # legitimately exceed the formal-charge cutoff through Lys/Arg.
@@ -2334,21 +2342,23 @@ class Ligand(DocBaseModel):
             self.is_covalent = False
 
         # Indicator of whether a ligand type is not any recognized class.
-        self.is_other = not any([
-            self.is_invalid,
-            self.is_ion,
-            self.is_monosaccharide,
-            self.is_oligosaccharide,
-            self.is_mononucleotide,
-            self.is_oligonucleotide,
-            self.is_monopeptide,
-            self.is_oligopeptide,
-            self.is_artifact,
-            self.is_cofactor,
-            self.is_lipinski,
-            self.is_fragment,
-            self.is_covalent,
-        ])
+        self.is_other = not any(
+            [
+                self.is_invalid,
+                self.is_ion,
+                self.is_monosaccharide,
+                self.is_oligosaccharide,
+                self.is_mononucleotide,
+                self.is_oligonucleotide,
+                self.is_monopeptide,
+                self.is_oligopeptide,
+                self.is_artifact,
+                self.is_cofactor,
+                self.is_lipinski,
+                self.is_fragment,
+                self.is_covalent,
+            ]
+        )
 
     def format_chains(
         self,
@@ -2480,7 +2490,7 @@ class Ligand(DocBaseModel):
         # residue address as in covalent_linkages; an ASU fact, so no instance
         pocket_unresolved: set[str] = set()
         for instance_chain, residue_numbers in self.neighboring_residues.items():
-            asym_id = instance_chain.split(".")[-1]
+            asym_id = instance_chain.split(".", maxsplit=1)[-1]
             for residue_number in residue_numbers:
                 residue = chains[asym_id].residues[residue_number]
                 auth_seq = residue.auth_number
@@ -2494,9 +2504,9 @@ class Ligand(DocBaseModel):
                 )
         data["ligand_pocket_unresolved_atoms"] = sorted(pocket_unresolved)
         # chains
-        data.update({
-            "ligand_auth_id": chains[self.asym_id].auth_id
-        })  # not a cached_property b/c it needs chains!
+        data.update(
+            {"ligand_auth_id": chains[self.asym_id].auth_id}
+        )  # not a cached_property b/c it needs chains!
         for chain_type in [
             "protein",
             "interacting_ligand",

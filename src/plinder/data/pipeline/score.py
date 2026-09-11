@@ -118,8 +118,9 @@ def published_scoring_query_ids(data_dir: Path) -> set[str]:
     bounded = data_dir / BOUNDED_SCORE_REPAIR_RELATIVE
     if bounded.is_file():
         planned = set(
-            pd
-            .read_parquet(data_dir / SCORE_WORK_RELATIVE, columns=["pdb_id"])["pdb_id"]
+            pd.read_parquet(data_dir / SCORE_WORK_RELATIVE, columns=["pdb_id"])[
+                "pdb_id"
+            ]
             .dropna()
             .astype(str)
         )
@@ -165,10 +166,12 @@ def _packed_score_query_ids(
     """Return requested queries that have rows in the packed holo score store."""
     if not query_ids:
         return set()
-    paths = sorted({
-        data_dir / "scores/search_db=holo" / f"{pdb_id[1:3]}.parquet"
-        for pdb_id in query_ids
-    })
+    paths = sorted(
+        {
+            data_dir / "scores/search_db=holo" / f"{pdb_id[1:3]}.parquet"
+            for pdb_id in query_ids
+        }
+    )
     paths = [path for path in paths if path.is_file()]
     if not paths:
         return set()
@@ -208,10 +211,14 @@ def _packed_candidate_query_ids(
     """Return requested queries present in packed ligand-3D candidates."""
     if not query_ids:
         return set()
-    paths = sorted({
-        data_dir / "scores/ligand_3d_candidate_shards" / f"shard={pdb_id[1:3]}.parquet"
-        for pdb_id in query_ids
-    })
+    paths = sorted(
+        {
+            data_dir
+            / "scores/ligand_3d_candidate_shards"
+            / f"shard={pdb_id[1:3]}.parquet"
+            for pdb_id in query_ids
+        }
+    )
     paths = [path for path in paths if path.is_file()]
     if not paths:
         return set()
@@ -287,17 +294,19 @@ def _query_eligible_entry_ids(
     ]
     system_protein_counts = pd.Series(
         {
-            (entry_id, system_id): len({
-                str(instance_chain)
-                for instance_chain in (
-                    chains
-                    if isinstance(chains, Iterable)
-                    and not isinstance(chains, (str, bytes))
-                    else []
-                )
-                if (str(entry_id), str(instance_chain).split(".", 1)[-1])
-                in protein_chains
-            })
+            (entry_id, system_id): len(
+                {
+                    str(instance_chain)
+                    for instance_chain in (
+                        chains
+                        if isinstance(chains, Iterable)
+                        and not isinstance(chains, (str, bytes))
+                        else []
+                    )
+                    if (str(entry_id), str(instance_chain).split(".", 1)[-1])
+                    in protein_chains
+                }
+            )
             for (entry_id, system_id), chains in system_chains.items()
         },
         name="protein_chains",
@@ -306,15 +315,14 @@ def _query_eligible_entry_ids(
     systems = system_protein_counts.to_frame()
     proper = holo["ligand_is_proper"].fillna(False).astype(bool)
     proper_counts = (
-        holo
-        .loc[proper]
+        holo.loc[proper]
         .groupby(keys, observed=True, sort=False)["ligand_id"]
         .nunique()
         .rename("proper_ligand_chains")
     )
-    systems = systems.join(proper_counts, how="left").fillna({
-        "proper_ligand_chains": 0
-    })
+    systems = systems.join(proper_counts, how="left").fillna(
+        {"proper_ligand_chains": 0}
+    )
     eligible = systems[
         systems["protein_chains"].gt(0)
         & systems["protein_chains"].le(max_query_protein_chains)
@@ -643,8 +651,7 @@ def plan_bounded_score_repair(
         raise FileNotFoundError(dropped_path)
     dropped = pd.read_parquet(dropped_path, columns=["pdb_id", "stage"])
     derived_drops = set(
-        dropped
-        .loc[dropped["stage"].eq("derived_scoring"), "pdb_id"]
+        dropped.loc[dropped["stage"].eq("derived_scoring"), "pdb_id"]
         .dropna()
         .astype(str)
     )
@@ -903,11 +910,13 @@ def repair_target_score_remainders(
             "dropped_query": None,
             "resumed_query_count": 0,
         }
-    invalid_modes = sorted({
-        str(repair["repair_mode"])
-        for repair in incomplete
-        if str(repair["repair_mode"]) not in {"targets", "bounded"}
-    })
+    invalid_modes = sorted(
+        {
+            str(repair["repair_mode"])
+            for repair in incomplete
+            if str(repair["repair_mode"]) not in {"targets", "bounded"}
+        }
+    )
     if invalid_modes:
         raise ValueError(
             f"target remainder repair received non-target modes: {invalid_modes}"
@@ -1122,15 +1131,17 @@ def plan_score_repair_ligand_3d(
     ligand_sizes.unlink(missing_ok=True)
     shard_scratch = scratch_dir / "missing-shards"
     shard_scratch.mkdir(exist_ok=True)
-    output_schema = pa.schema([
-        ("query_entry", pa.string()),
-        ("query_ligand_asym_id", pa.string()),
-        ("target_entry", pa.string()),
-        ("target_ligand_asym_id", pa.string()),
-        ("estimated_work", pa.int64()),
-        ("shard", pa.string()),
-        ("repair_pair_batch_index", pa.int32()),
-    ])
+    output_schema = pa.schema(
+        [
+            ("query_entry", pa.string()),
+            ("query_ligand_asym_id", pa.string()),
+            ("target_entry", pa.string()),
+            ("target_ligand_asym_id", pa.string()),
+            ("estimated_work", pa.int64()),
+            ("shard", pa.string()),
+            ("repair_pair_batch_index", pa.int32()),
+        ]
+    )
     writer: pq.ParquetWriter | None = None
     pair_count = 0
     nonempty_shards = 0
@@ -1341,12 +1352,14 @@ def merge_score_repair_ligand_3d(
             )
         cached = data_dir / "scores/ligand_3d_by_query" / f"{shard}.parquet"
         paths_sql = ", ".join(f"'{path.as_posix()}'" for path in repair_paths)
-        keys = ", ".join([
-            "query_entry",
-            "query_ligand_asym_id",
-            "target_entry",
-            "target_ligand_asym_id",
-        ])
+        keys = ", ".join(
+            [
+                "query_entry",
+                "query_ligand_asym_id",
+                "target_entry",
+                "target_ligand_asym_id",
+            ]
+        )
         validation = connection.sql(
             f"""
             WITH expected AS (
@@ -1558,11 +1571,13 @@ def plan_protein_scoring(
     chains = tasks._protein_scoring_chains(data_dir)
     chains = chains[chains["entry_pdb_id"].isin(query_ids)]
     counts = chains.groupby("entry_pdb_id")["chain_asym_id"].nunique().to_dict()
-    manifest = pd.DataFrame({
-        "pdb_id": query_ids,
-        "shard": [pdb_id[1:3] for pdb_id in query_ids],
-        "protein_chain_count": [counts[pdb_id] for pdb_id in query_ids],
-    }).sort_values(["shard", "pdb_id"], ignore_index=True)
+    manifest = pd.DataFrame(
+        {
+            "pdb_id": query_ids,
+            "shard": [pdb_id[1:3] for pdb_id in query_ids],
+            "protein_chain_count": [counts[pdb_id] for pdb_id in query_ids],
+        }
+    ).sort_values(["shard", "pdb_id"], ignore_index=True)
     manifest_path = data_dir / MANIFEST_RELATIVE
     _atomic_parquet(manifest, manifest_path)
     payload: dict[str, Any] = {
@@ -2019,17 +2034,19 @@ def plan_score_batches(
     _atomic_parquet(work, output)
     plan.pop("score_max_protein_chains", None)
     plan.pop("score_max_ligand_chains", None)
-    plan.update({
-        "score_batch_size": batch_size,
-        "score_batch_count": batch_count,
-        "score_max_query_protein_chains": max_query_protein_chains,
-        "score_max_query_proper_ligand_chains": (max_query_proper_ligand_chains),
-        "score_reused_mapped_alignments": reuse_mapped_alignments,
-        "score_annotation": _source_signature(annotation),
-        "score_batch_estimated_work_min": min(loads),
-        "score_batch_estimated_work_max": max(loads),
-        "score_work": _source_signature(output),
-    })
+    plan.update(
+        {
+            "score_batch_size": batch_size,
+            "score_batch_count": batch_count,
+            "score_max_query_protein_chains": max_query_protein_chains,
+            "score_max_query_proper_ligand_chains": (max_query_proper_ligand_chains),
+            "score_reused_mapped_alignments": reuse_mapped_alignments,
+            "score_annotation": _source_signature(annotation),
+            "score_batch_estimated_work_min": min(loads),
+            "score_batch_estimated_work_max": max(loads),
+            "score_work": _source_signature(output),
+        }
+    )
     _atomic_json(plan, data_dir / PLAN_RELATIVE)
     return {
         "query_count": len(work),
@@ -2163,18 +2180,20 @@ def plan_ligand_3d_batches(
             if not source_pdb_id:
                 raise ValueError(f"invalid candidate input in {manifest_path}")
             manifested_pdb_ids.add(source_pdb_id)
-        candidate_signatures.append({
-            "shard": shard,
-            **output_signature,
-            "pair_path": pair_output_signature["path"],
-            "pair_size": pair_output_signature["size"],
-            "pair_mtime_ns": pair_output_signature["mtime_ns"],
-            "pair_rows": pair_output_signature["rows"],
-            "ligand_pair_path": ligand_pair_output_signature["path"],
-            "ligand_pair_size": ligand_pair_output_signature["size"],
-            "ligand_pair_mtime_ns": ligand_pair_output_signature["mtime_ns"],
-            "ligand_pair_rows": ligand_pair_output_signature["rows"],
-        })
+        candidate_signatures.append(
+            {
+                "shard": shard,
+                **output_signature,
+                "pair_path": pair_output_signature["path"],
+                "pair_size": pair_output_signature["size"],
+                "pair_mtime_ns": pair_output_signature["mtime_ns"],
+                "pair_rows": pair_output_signature["rows"],
+                "ligand_pair_path": ligand_pair_output_signature["path"],
+                "ligand_pair_size": ligand_pair_output_signature["size"],
+                "ligand_pair_mtime_ns": ligand_pair_output_signature["mtime_ns"],
+                "ligand_pair_rows": ligand_pair_output_signature["rows"],
+            }
+        )
     LOG.info(
         "ligand 3D planning: validated %d candidate shards in %.1fs",
         len(candidate_files),
@@ -2319,17 +2338,19 @@ def plan_ligand_3d_batches(
     install.replace(work_path)
     planned_path.unlink(missing_ok=True)
     _atomic_parquet(candidate_frame, candidate_manifest)
-    plan.update({
-        "ligand_3d_batch_size": batch_size,
-        "ligand_3d_batch_count": batch_count,
-        "ligand_3d_pair_count": pair_count,
-        "ligand_3d_plan_complete": True,
-        "ligand_3d_query_shard_count": query_shard_count,
-        "ligand_3d_estimated_work_min": estimated_work_min,
-        "ligand_3d_estimated_work_max": estimated_work_max,
-        "ligand_3d_candidate_manifest": _source_signature(candidate_manifest),
-        "ligand_3d_work": _source_signature(work_path),
-    })
+    plan.update(
+        {
+            "ligand_3d_batch_size": batch_size,
+            "ligand_3d_batch_count": batch_count,
+            "ligand_3d_pair_count": pair_count,
+            "ligand_3d_plan_complete": True,
+            "ligand_3d_query_shard_count": query_shard_count,
+            "ligand_3d_estimated_work_min": estimated_work_min,
+            "ligand_3d_estimated_work_max": estimated_work_max,
+            "ligand_3d_candidate_manifest": _source_signature(candidate_manifest),
+            "ligand_3d_work": _source_signature(work_path),
+        }
+    )
     for key in list(plan):
         if key.startswith("ligand_3d_retry_"):
             plan.pop(key)
@@ -2433,12 +2454,14 @@ def plan_ligand_3d_retries(
     )
     retry_path = data_dir / LIGAND_3D_RETRY_WORK_RELATIVE
     _atomic_parquet(retry_work, retry_path)
-    plan.update({
-        "ligand_3d_retry_batch_size": batch_size,
-        "ligand_3d_retry_batch_count": retry_index,
-        "ligand_3d_retry_original_batches": missing_original,
-        "ligand_3d_retry_work": _source_signature(retry_path),
-    })
+    plan.update(
+        {
+            "ligand_3d_retry_batch_size": batch_size,
+            "ligand_3d_retry_batch_count": retry_index,
+            "ligand_3d_retry_original_batches": missing_original,
+            "ligand_3d_retry_work": _source_signature(retry_path),
+        }
+    )
     _atomic_json(plan, data_dir / PLAN_RELATIVE)
     return {
         "status": "planned",
@@ -2913,17 +2936,21 @@ def plan_clustering(
     # validated on a release, consider extending it beyond this mirror: its own
     # threshold list and cover batch sizing here, and the ECFP4-only consumers
     # (eval stratification labels, ``cross_similarity`` default metric).
-    chemical_metric_count = len([
-        metric for metric in selected_metrics if is_chemical_cluster_metric(metric)
-    ])
+    chemical_metric_count = len(
+        [metric for metric in selected_metrics if is_chemical_cluster_metric(metric)]
+    )
     set_cover_task_count = (
         chemical_metric_count * len(selected_thresholds)
         if entity_type == "ligand"
         else 0
     )
-    directed_cover_task_count = len([
-        metric for metric in selected_metrics if not is_chemical_cluster_metric(metric)
-    ]) * len(selected_thresholds)
+    directed_cover_task_count = len(
+        [
+            metric
+            for metric in selected_metrics
+            if not is_chemical_cluster_metric(metric)
+        ]
+    ) * len(selected_thresholds)
     return {
         "status": "planned",
         "entity_type": entity_type,
@@ -2967,25 +2994,29 @@ def summarize_clustering_artifacts(
     for metric in selected_metrics:
         for threshold in selected_thresholds:
             if entity_type == "ligand" and is_chemical_cluster_metric(metric):
-                artifacts.append((
-                    metric,
-                    threshold,
-                    "set_cover",
-                    False,
-                    set_cover_dir
-                    / f"metric={metric}"
-                    / f"threshold={threshold}.parquet",
-                ))
+                artifacts.append(
+                    (
+                        metric,
+                        threshold,
+                        "set_cover",
+                        False,
+                        set_cover_dir
+                        / f"metric={metric}"
+                        / f"threshold={threshold}.parquet",
+                    )
+                )
             else:
-                artifacts.append((
-                    metric,
-                    threshold,
-                    "directed_set_cover",
-                    True,
-                    directed_sampling_dir
-                    / f"metric={metric}"
-                    / f"threshold={threshold}.parquet",
-                ))
+                artifacts.append(
+                    (
+                        metric,
+                        threshold,
+                        "directed_set_cover",
+                        True,
+                        directed_sampling_dir
+                        / f"metric={metric}"
+                        / f"threshold={threshold}.parquet",
+                    )
+                )
     expected_paths = {path for *_, path in artifacts}
     rows: list[dict[str, Any]] = []
     issues: list[str] = []
@@ -3000,21 +3031,25 @@ def summarize_clustering_artifacts(
         duplicate_nodes = int(frame[node_column].duplicated().sum())
         null_labels = int(frame["label"].isna().sum())
         sizes = frame["label"].dropna().astype(str).value_counts()
-        rows.append({
-            "metric": metric,
-            "threshold": threshold,
-            "cluster": cluster,
-            "directed": directed,
-            "node_count": len(frame),
-            "cluster_count": len(sizes),
-            "singleton_cluster_count": int((sizes == 1).sum()),
-            "largest_cluster_size": int(sizes.max()) if len(sizes) else 0,
-            "median_cluster_size": float(sizes.median()) if len(sizes) else 0.0,
-            "p95_cluster_size": (float(sizes.quantile(0.95)) if len(sizes) else 0.0),
-            "duplicate_node_count": duplicate_nodes,
-            "null_label_count": null_labels,
-            "file_size_bytes": path.stat().st_size,
-        })
+        rows.append(
+            {
+                "metric": metric,
+                "threshold": threshold,
+                "cluster": cluster,
+                "directed": directed,
+                "node_count": len(frame),
+                "cluster_count": len(sizes),
+                "singleton_cluster_count": int((sizes == 1).sum()),
+                "largest_cluster_size": int(sizes.max()) if len(sizes) else 0,
+                "median_cluster_size": float(sizes.median()) if len(sizes) else 0.0,
+                "p95_cluster_size": (
+                    float(sizes.quantile(0.95)) if len(sizes) else 0.0
+                ),
+                "duplicate_node_count": duplicate_nodes,
+                "null_label_count": null_labels,
+                "file_size_bytes": path.stat().st_size,
+            }
+        )
         if duplicate_nodes:
             issues.append(f"{path} contains {duplicate_nodes} duplicate node IDs")
         if null_labels:
@@ -3352,9 +3387,9 @@ def finalize_alignment_artifacts(data_dir: Path) -> dict[str, Any]:
         ):
             invalid_manifests.append(shard)
             continue
-        skipped_query_details.update({
-            str(key): value for key, value in shard_skipped.items()
-        })
+        skipped_query_details.update(
+            {str(key): value for key, value in shard_skipped.items()}
+        )
         for alignment_type in plan["alignment_types"]:
             signatures = inputs.get(alignment_type)
             if not isinstance(signatures, list):
@@ -3599,9 +3634,9 @@ def finalize_ligand_3d_artifacts(data_dir: Path) -> dict[str, Any]:
         and isinstance(cached_coverage, dict)
         and set(coverage_columns).issubset(cached_coverage)
     ):
-        coverage = pd.Series({
-            column: int(cached_coverage[column]) for column in coverage_columns
-        })
+        coverage = pd.Series(
+            {column: int(cached_coverage[column]) for column in coverage_columns}
+        )
         LOG.info(
             "score finalization: reusing signature-matched canonical-pair "
             f"validation counts={coverage.to_dict()}"
@@ -3628,18 +3663,19 @@ def finalize_ligand_3d_artifacts(data_dir: Path) -> dict[str, Any]:
         import duckdb
 
         connection = duckdb.connect()
-        pair_keys = ", ".join([
-            "query_entry",
-            "query_ligand_asym_id",
-            "target_entry",
-            "target_ligand_asym_id",
-        ])
+        pair_keys = ", ".join(
+            [
+                "query_entry",
+                "query_ligand_asym_id",
+                "target_entry",
+                "target_ligand_asym_id",
+            ]
+        )
         pair_paths_sql = ", ".join(f"'{path.as_posix()}'" for path in pair_paths)
         LOG.info("score finalization: starting canonical-pair coverage query")
         phase_started = perf_counter()
         coverage = (
-            connection
-            .sql(
+            connection.sql(
                 dedent(
                     f"""
                 WITH expected AS (
@@ -3975,9 +4011,9 @@ def score_ligand_pocket_qcov_representatives(
         connection.sql("SET preserve_insertion_order=false")
         connection.register(
             "query_representative_ids",
-            pa.table({
-                "representative_ligand_id": sorted(query_representative_ligand_ids)
-            }),
+            pa.table(
+                {"representative_ligand_id": sorted(query_representative_ligand_ids)}
+            ),
         )
         mapped_sql = "\nUNION ALL\n".join(alignment_selects)
         query = dedent(
@@ -4151,16 +4187,18 @@ def score_ligand_pocket_qcov_representatives(
                 if abs(value[0] - best_qcov) < 1e-12
             ]
             mapper = "foldseek" if "foldseek" in winners else winners[0]
-            records.append({
-                "query_system": current_pair[0],
-                "query_ligand_id": current_pair[1],
-                "target_system": current_pair[2],
-                "target_ligand_id": current_pair[3],
-                "protein_mapping": backend_results[mapper][1],
-                "protein_mapper": mapper,
-                "source": "both" if len(winners) == 2 else mapper,
-                "pocket_qcov": best_qcov,
-            })
+            records.append(
+                {
+                    "query_system": current_pair[0],
+                    "query_ligand_id": current_pair[1],
+                    "target_system": current_pair[2],
+                    "target_ligand_id": current_pair[3],
+                    "protein_mapping": backend_results[mapper][1],
+                    "protein_mapper": mapper,
+                    "source": "both" if len(winners) == 2 else mapper,
+                    "pocket_qcov": best_qcov,
+                }
+            )
             if len(records) >= 100_000:
                 flush_records()
 
@@ -4522,11 +4560,13 @@ def score_ligand_pocket_qcov_shards(
             shard=shard,
             inputs=inputs,
         ):
-            reports.append({
-                "shard": shard,
-                "status": "cached",
-                "row_count": pq.ParquetFile(score_path).metadata.num_rows,
-            })
+            reports.append(
+                {
+                    "shard": shard,
+                    "status": "cached",
+                    "row_count": pq.ParquetFile(score_path).metadata.num_rows,
+                }
+            )
             continue
         shard_scratch = scratch_dir / f"shard={shard}"
         score_report = score_ligand_pocket_qcov_representatives(
@@ -4609,11 +4649,13 @@ def materialize_ligand_3d_pair_candidates(
                     shard=shard,
                     pair_output=output,
                 )
-                reports.append({
-                    "shard": shard,
-                    "status": "cached",
-                    "row_count": pq.ParquetFile(output).metadata.num_rows,
-                })
+                reports.append(
+                    {
+                        "shard": shard,
+                        "status": "cached",
+                        "row_count": pq.ParquetFile(output).metadata.num_rows,
+                    }
+                )
                 continue
 
         import duckdb
@@ -4831,12 +4873,14 @@ def plan_interface_scoring(
             raise FileNotFoundError(
                 f"no mapped alignment backend is available for interface shard {shard}"
             )
-        records.append({
-            "shard": str(shard),
-            "query_entry_count": int(shard_interfaces["entry_pdb_id"].nunique()),
-            "query_representative_interface_count": len(shard_interfaces),
-            "alignment_rows": alignment_rows,
-        })
+        records.append(
+            {
+                "shard": str(shard),
+                "query_entry_count": int(shard_interfaces["entry_pdb_id"].nunique()),
+                "query_representative_interface_count": len(shard_interfaces),
+                "alignment_rows": alignment_rows,
+            }
+        )
     work = pd.DataFrame.from_records(
         records,
         columns=[
@@ -5283,14 +5327,16 @@ def score_interface_qcov_shards(
             connection.close()
         else:
             pq.write_table(
-                pa.table({
-                    "backend": pa.array([], type=pa.string()),
-                    "query_half": pa.array([], type=pa.string()),
-                    "target_half": pa.array([], type=pa.string()),
-                    "query_instance_chain": pa.array([], type=pa.string()),
-                    "target_instance_chain": pa.array([], type=pa.string()),
-                    "qcov": pa.array([], type=pa.float64()),
-                }),
+                pa.table(
+                    {
+                        "backend": pa.array([], type=pa.string()),
+                        "query_half": pa.array([], type=pa.string()),
+                        "target_half": pa.array([], type=pa.string()),
+                        "query_instance_chain": pa.array([], type=pa.string()),
+                        "target_instance_chain": pa.array([], type=pa.string()),
+                        "qcov": pa.array([], type=pa.float64()),
+                    }
+                ),
                 side_coverage_output,
                 compression="zstd",
             )
@@ -5748,8 +5794,7 @@ def plan_interface_score_repair(
                 f"{incomplete_selected[:20]}"
             )
     entry_work = (
-        representatives
-        .groupby(["shard", "entry_pdb_id"], as_index=False)
+        representatives.groupby(["shard", "entry_pdb_id"], as_index=False)
         .size()
         .rename(columns={"size": "query_representative_interface_count"})
     )
@@ -5781,14 +5826,16 @@ def plan_interface_score_repair(
             loads[selected] += int(row.query_representative_interface_count)
             counts[selected] += 1
         for row in shard_work.itertuples(index=False):
-            records.append({
-                "repair_batch_index": assignments[str(row.entry_pdb_id)],
-                "shard": str(shard),
-                "entry_pdb_id": str(row.entry_pdb_id),
-                "query_representative_interface_count": int(
-                    row.query_representative_interface_count
-                ),
-            })
+            records.append(
+                {
+                    "repair_batch_index": assignments[str(row.entry_pdb_id)],
+                    "shard": str(shard),
+                    "entry_pdb_id": str(row.entry_pdb_id),
+                    "query_representative_interface_count": int(
+                        row.query_representative_interface_count
+                    ),
+                }
+            )
         next_batch_index += batch_count
 
     repair = pd.DataFrame.from_records(
@@ -6127,8 +6174,7 @@ def finalize_interface_similarity_scores(
     output = (output or data_dir / INTERFACE_SIMILARITY_EXPORT_RELATIVE).resolve()
     score_root = data_dir / INTERFACE_SCORE_ROOT_RELATIVE
     expected_shards = (
-        pd
-        .read_parquet(
+        pd.read_parquet(
             data_dir / INTERFACE_SCORE_WORK_RELATIVE,
             columns=["shard"],
         )["shard"]
@@ -6157,11 +6203,13 @@ def finalize_interface_similarity_scores(
         )
         if payload is None or payload.get("shard") != shard:
             raise ValueError(f"stale interface score shard: {path}")
-        sources.append({
-            "shard": shard,
-            **_source_signature(path),
-            "rows": int(payload["rows"]),
-        })
+        sources.append(
+            {
+                "shard": shard,
+                **_source_signature(path),
+                "rows": int(payload["rows"]),
+            }
+        )
         if index % 100 == 0 or index == len(observed_paths):
             LOG.info(
                 "interface score finalization validation: shards=%d/%d",
@@ -6308,12 +6356,14 @@ def export_ligand_similarity_scores_batch(
     scratch_dir.mkdir(exist_ok=True, parents=True)
     import duckdb
 
-    pair_keys = ", ".join([
-        "query_entry",
-        "query_ligand_asym_id",
-        "target_entry",
-        "target_ligand_asym_id",
-    ])
+    pair_keys = ", ".join(
+        [
+            "query_entry",
+            "query_ligand_asym_id",
+            "target_entry",
+            "target_ligand_asym_id",
+        ]
+    )
     expected_schema = schemas.LIGAND_SIMILARITY_EXPORT_SCHEMA
     reports: list[dict[str, Any]] = []
     exported_rows = 0
@@ -6457,9 +6507,9 @@ def finalize_ligand_similarity_scores(
         raise ValueError(
             "final ligand similarity table must be outside its shard directory"
         )
-    expected_shards = sorted({
-        pdb_id[1:3] for pdb_id in published_scoring_query_ids(data_dir)
-    })
+    expected_shards = sorted(
+        {pdb_id[1:3] for pdb_id in published_scoring_query_ids(data_dir)}
+    )
     paths = sorted(source_dir.glob("*.parquet"))
     observed_shards = [path.stem for path in paths]
     if observed_shards != expected_shards:
@@ -6493,11 +6543,13 @@ def finalize_ligand_similarity_scores(
             raise ValueError(f"stale ligand similarity shard: {path}")
         if not pq.read_schema(path).equals(schemas.LIGAND_SIMILARITY_EXPORT_SCHEMA):
             raise ValueError(f"invalid ligand similarity shard schema: {path}")
-        sources.append({
-            "shard": shard,
-            **_source_signature(path),
-            "rows": int(payload["rows"]),
-        })
+        sources.append(
+            {
+                "shard": shard,
+                **_source_signature(path),
+                "rows": int(payload["rows"]),
+            }
+        )
         if index % 100 == 0 or index == len(paths):
             LOG.info(
                 "ligand similarity finalization validation progress: "
@@ -7400,8 +7452,7 @@ def main() -> None:
             result = {"status": "complete", "shards": shards}
         elif args.command == "repair-score-shards":
             replacement_query_ids = set(
-                pd
-                .read_parquet(args.repair_manifest.resolve(), columns=["pdb_id"])[
+                pd.read_parquet(args.repair_manifest.resolve(), columns=["pdb_id"])[
                     "pdb_id"
                 ]
                 .dropna()

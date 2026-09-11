@@ -7,7 +7,6 @@ import numpy as np
 import pandas as pd
 import pytest
 from biotite.structure.io import pdbx
-
 from plinder.core import PlinderSystem
 from plinder.core.release import PlinderRelease
 from plinder.data.annotations.cif_utils import read_mmcif_file
@@ -18,15 +17,17 @@ def test_reconstruct_linked_apo_writes_the_scored_assembly_chain(
 ):
     links_path = tmp_path / "index" / "linked_apo_structures.parquet"
     links_path.parent.mkdir()
-    pd.DataFrame({
-        "reference_system_id": ["1abc__1__1.A__1.Z"],
-        "linked_structure_id": ["2y4i_B"],
-        "source_entry_id": ["2y4i"],
-        "source_chain_asym_id": ["B"],
-        "source_biounit_id": ["1"],
-        "source_chain_instance": ["1.B"],
-        "rank": [1],
-    }).to_parquet(links_path, index=False)
+    pd.DataFrame(
+        {
+            "reference_system_id": ["1abc__1__1.A__1.Z"],
+            "linked_structure_id": ["2y4i_B"],
+            "source_entry_id": ["2y4i"],
+            "source_chain_asym_id": ["B"],
+            "source_biounit_id": ["1"],
+            "source_chain_instance": ["1.B"],
+            "rank": [1],
+        }
+    ).to_parquet(links_path, index=False)
 
     def fetch(_release, name, **parameters):
         assert name == "linked_apo_structures"
@@ -104,15 +105,17 @@ def test_reconstruct_linked_apo_reports_when_a_system_has_no_link(
     tmp_path, monkeypatch
 ):
     links_path = tmp_path / "linked_apo_structures.parquet"
-    pd.DataFrame({
-        "reference_system_id": pd.Series(dtype="string"),
-        "linked_structure_id": pd.Series(dtype="string"),
-        "source_entry_id": pd.Series(dtype="string"),
-        "source_chain_asym_id": pd.Series(dtype="string"),
-        "source_biounit_id": pd.Series(dtype="string"),
-        "source_chain_instance": pd.Series(dtype="string"),
-        "rank": pd.Series(dtype="int16"),
-    }).to_parquet(links_path, index=False)
+    pd.DataFrame(
+        {
+            "reference_system_id": pd.Series(dtype="string"),
+            "linked_structure_id": pd.Series(dtype="string"),
+            "source_entry_id": pd.Series(dtype="string"),
+            "source_chain_asym_id": pd.Series(dtype="string"),
+            "source_biounit_id": pd.Series(dtype="string"),
+            "source_chain_instance": pd.Series(dtype="string"),
+            "rank": pd.Series(dtype="int16"),
+        }
+    ).to_parquet(links_path, index=False)
     monkeypatch.setattr(PlinderRelease, "fetch", lambda *_args, **_kwargs: links_path)
 
     system = PlinderSystem(system_id="1abc__1__1.A__1.Z")

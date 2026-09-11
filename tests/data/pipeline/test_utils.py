@@ -4,7 +4,6 @@ from types import SimpleNamespace
 
 import pandas as pd
 import pytest
-
 from plinder.core.scores.metrics import CHEMICAL_CLUSTER_SUMMARY_COLUMNS
 from plinder.data.pipeline import utils
 
@@ -56,16 +55,18 @@ def test_entry_exists(expect, tmp_path):
         pd.DataFrame({"chain_receptor_type": ["protein"]}).to_parquet(
             chain_path, index=False
         )
-        pd.DataFrame({
-            "entry_pdb_id": ["aaaa"],
-            "biounit_id": ["1"],
-            "chain_instance": ["1.A"],
-            "chain_asym_id": ["A"],
-            "chain_role": ["receptor"],
-            "chain_num_contacting_ions": [0],
-            "chain_num_contacting_artifacts": [0],
-            "chain_num_contacting_other_ligands": [0],
-        }).to_parquet(chain_path.parent / "entry_biounit_chains.parquet", index=False)
+        pd.DataFrame(
+            {
+                "entry_pdb_id": ["aaaa"],
+                "biounit_id": ["1"],
+                "chain_instance": ["1.A"],
+                "chain_asym_id": ["A"],
+                "chain_role": ["receptor"],
+                "chain_num_contacting_ions": [0],
+                "chain_num_contacting_artifacts": [0],
+                "chain_num_contacting_other_ligands": [0],
+            }
+        ).to_parquet(chain_path.parent / "entry_biounit_chains.parquet", index=False)
         pd.DataFrame({"entry_pdb_id": ["aaaa"]}).to_parquet(
             chain_path.parent / "entry_source.parquet", index=False
         )
@@ -195,17 +196,21 @@ def test_create_index_collates_per_entry_parquets(tmp_path, monkeypatch):
     second = tmp_path / "raw_entries" / "bb" / "2bbb.parquet"
     first.parent.mkdir(parents=True)
     second.parent.mkdir(parents=True)
-    pd.DataFrame({
-        "system_id": ["1aaa__1__A"],
-        "system_pocket_ECOD": ["e1aaaA1"],
-        "system_pocket_PANTHER": ["PTHR00001"],
-        "system_pocket_kinase_name": ["example kinase"],
-    }).to_parquet(first, index=False)
-    pd.DataFrame({
-        "system_id": ["2bbb__1__B"],
-        "ligand_is_kinase_inhibitor": [True],
-        "system_has_kinase_inhibitor": [True],
-    }).to_parquet(second, index=False)
+    pd.DataFrame(
+        {
+            "system_id": ["1aaa__1__A"],
+            "system_pocket_ECOD": ["e1aaaA1"],
+            "system_pocket_PANTHER": ["PTHR00001"],
+            "system_pocket_kinase_name": ["example kinase"],
+        }
+    ).to_parquet(first, index=False)
+    pd.DataFrame(
+        {
+            "system_id": ["2bbb__1__B"],
+            "ligand_is_kinase_inhibitor": [True],
+            "system_has_kinase_inhibitor": [True],
+        }
+    ).to_parquet(second, index=False)
     chain_columns = {
         "chain_asym_id": ["A"],
         "chain_auth_id": ["A"],
@@ -224,21 +229,25 @@ def test_create_index_collates_per_entry_parquets(tmp_path, monkeypatch):
         pd.DataFrame({"entry_pdb_id": [pdb_id], **chain_columns}).to_parquet(
             chain_path, index=False
         )
-        pd.DataFrame({
-            "entry_pdb_id": [pdb_id],
-            "source_mmcif_major_revision": [1],
-            "source_mmcif_minor_revision": [0],
-        }).to_parquet(chain_path.parent / "entry_source.parquet", index=False)
-        pd.DataFrame({
-            "entry_pdb_id": [pdb_id],
-            "biounit_id": ["1"],
-            "chain_instance": ["1.A"],
-            "chain_asym_id": ["A"],
-            "chain_role": ["receptor"],
-            "chain_num_contacting_ions": [0],
-            "chain_num_contacting_artifacts": [0],
-            "chain_num_contacting_other_ligands": [0],
-        }).to_parquet(chain_path.parent / "entry_biounit_chains.parquet", index=False)
+        pd.DataFrame(
+            {
+                "entry_pdb_id": [pdb_id],
+                "source_mmcif_major_revision": [1],
+                "source_mmcif_minor_revision": [0],
+            }
+        ).to_parquet(chain_path.parent / "entry_source.parquet", index=False)
+        pd.DataFrame(
+            {
+                "entry_pdb_id": [pdb_id],
+                "biounit_id": ["1"],
+                "chain_instance": ["1.A"],
+                "chain_asym_id": ["A"],
+                "chain_role": ["receptor"],
+                "chain_num_contacting_ions": [0],
+                "chain_num_contacting_artifacts": [0],
+                "chain_num_contacting_other_ligands": [0],
+            }
+        ).to_parquet(chain_path.parent / "entry_biounit_chains.parquet", index=False)
     monkeypatch.setattr(utils, "add_aggregated_columns", lambda index: index)
 
     index = utils.create_index(data_dir=tmp_path, force_update=True)
@@ -301,12 +310,14 @@ def test_create_entry_biounit_chain_index_handles_empty_input(tmp_path):
 
 
 def test_comparability_merge_reuses_complete_collated_column(tmp_path):
-    index = pd.DataFrame({
-        "ligand_id": ["1aaa__1__1.X", "1aaa__1__1.Y", None],
-        "system_type": ["holo", "holo", "apo"],
-        "ligand_is_proper": [True, False, False],
-        "ligand_is_shape_comparable": [True, True, None],
-    })
+    index = pd.DataFrame(
+        {
+            "ligand_id": ["1aaa__1__1.X", "1aaa__1__1.Y", None],
+            "system_type": ["holo", "holo", "apo"],
+            "ligand_is_proper": [True, False, False],
+            "ligand_is_shape_comparable": [True, True, None],
+        }
+    )
 
     result = utils.add_ligand_3d_score_ability_column(
         index=index,
@@ -332,53 +343,61 @@ def test_finalize_index_writes_local_clusters_to_sidecar(tmp_path):
     index_dir.mkdir(parents=True)
     directed_cover_file.parent.mkdir(parents=True)
     tanimoto_cover_file.parent.mkdir(parents=True)
-    pd.DataFrame({
-        "entry_pdb_id": ["1aaa", "1aaa"],
-        "system_id": ["1aaa__1__1.A__1.X", "1aaa__2__1.A__1.X"],
-        "system_id_no_biounit": ["1aaa__1.A__1.X", "1aaa__1.A__1.X"],
-        "system_biounit_id": ["1", "2"],
-        "system_type": ["holo", "holo"],
-        "ligand_id": ["1aaa__1__1.X", "1aaa__2__1.X"],
-        "ligand_is_proper": [True, False],
-        "ligand_smiles": ["CCO", "CCO"],
-        "ligand_tanimoto_ecfp4_1024_90_cluster": ["legacy", "legacy"],
-        "ligand_tanimoto_ecfp4_1024_90_cluster_num_pdb_ids": [1, 1],
-    }).to_parquet(index_dir / "annotation_table.parquet", index=False)
+    pd.DataFrame(
+        {
+            "entry_pdb_id": ["1aaa", "1aaa"],
+            "system_id": ["1aaa__1__1.A__1.X", "1aaa__2__1.A__1.X"],
+            "system_id_no_biounit": ["1aaa__1.A__1.X", "1aaa__1.A__1.X"],
+            "system_biounit_id": ["1", "2"],
+            "system_type": ["holo", "holo"],
+            "ligand_id": ["1aaa__1__1.X", "1aaa__2__1.X"],
+            "ligand_is_proper": [True, False],
+            "ligand_smiles": ["CCO", "CCO"],
+            "ligand_tanimoto_ecfp4_1024_90_cluster": ["legacy", "legacy"],
+            "ligand_tanimoto_ecfp4_1024_90_cluster_num_pdb_ids": [1, 1],
+        }
+    ).to_parquet(index_dir / "annotation_table.parquet", index=False)
     fingerprint_dir = tmp_path / "fingerprints"
     fingerprint_dir.mkdir()
-    pd.DataFrame({
-        "ligand_rdkit_canonical_smiles": ["CCO"],
-        "ligand_smiles_id": [0],
-        "ligand_is_cofactor_like": [False],
-    }).to_parquet(
-        fingerprint_dir / "ligand_similarity_annotations.parquet", index=False
-    )
+    pd.DataFrame(
+        {
+            "ligand_rdkit_canonical_smiles": ["CCO"],
+            "ligand_smiles_id": [0],
+            "ligand_is_cofactor_like": [False],
+        }
+    ).to_parquet(fingerprint_dir / "ligand_similarity_annotations.parquet", index=False)
     ligand_dir = tmp_path / "ligands"
     ligand_dir.mkdir()
-    pd.DataFrame({
-        "ligand_id": ["1aaa__1__1.X"],
-        "ligand_is_shape_comparable": [True],
-    }).to_parquet(ligand_dir / "part.parquet", index=False)
-    pd.DataFrame({
-        "ligand_id": ["1aaa__1__1.X"],
-        "centroid_ligand_id": ["1aaa__1__1.X"],
-        "similarity_to_centroid": [100.0],
-        "coverage_count": [1],
-        "coverage_fraction": [1.0],
-        "label": ["d0"],
-        "metric": ["pli_qcov"],
-        "threshold": [100],
-        "directed": [True],
-    }).to_parquet(directed_cover_file, index=False)
-    pd.DataFrame({
-        "ligand_id": ["1aaa__1__1.X"],
-        "centroid_ligand_id": ["1aaa__1__1.X"],
-        "label": ["t0"],
-        "metric": ["tanimoto_similarity_ecfp4_1024"],
-        "cluster": ["set_cover"],
-        "threshold": [90],
-        "directed": [False],
-    }).to_parquet(tanimoto_cover_file, index=False)
+    pd.DataFrame(
+        {
+            "ligand_id": ["1aaa__1__1.X"],
+            "ligand_is_shape_comparable": [True],
+        }
+    ).to_parquet(ligand_dir / "part.parquet", index=False)
+    pd.DataFrame(
+        {
+            "ligand_id": ["1aaa__1__1.X"],
+            "centroid_ligand_id": ["1aaa__1__1.X"],
+            "similarity_to_centroid": [100.0],
+            "coverage_count": [1],
+            "coverage_fraction": [1.0],
+            "label": ["d0"],
+            "metric": ["pli_qcov"],
+            "threshold": [100],
+            "directed": [True],
+        }
+    ).to_parquet(directed_cover_file, index=False)
+    pd.DataFrame(
+        {
+            "ligand_id": ["1aaa__1__1.X"],
+            "centroid_ligand_id": ["1aaa__1__1.X"],
+            "label": ["t0"],
+            "metric": ["tanimoto_similarity_ecfp4_1024"],
+            "cluster": ["set_cover"],
+            "threshold": [90],
+            "directed": [False],
+        }
+    ).to_parquet(tanimoto_cover_file, index=False)
     utils.finalize_index(data_dir=tmp_path)
     finalized = pd.read_parquet(index_dir / "annotation_table.parquet")
     clusters = pd.read_parquet(index_dir / "ligand_clusters.parquet")
@@ -417,23 +436,27 @@ def test_finalize_index_preserves_annotation_when_staging_fails(tmp_path, monkey
     index_dir = tmp_path / "index"
     index_dir.mkdir(parents=True)
     index_path = index_dir / "annotation_table.parquet"
-    original = pd.DataFrame({
-        "entry_pdb_id": ["1aaa"],
-        "system_id": ["1aaa__1__1.A__1.X"],
-        "system_type": ["holo"],
-        "ligand_id": ["1aaa__1__1.X"],
-        "ligand_is_proper": [False],
-        "ligand_smiles": [None],
-        "ligand_is_shape_comparable": [False],
-    })
+    original = pd.DataFrame(
+        {
+            "entry_pdb_id": ["1aaa"],
+            "system_id": ["1aaa__1__1.A__1.X"],
+            "system_type": ["holo"],
+            "ligand_id": ["1aaa__1__1.X"],
+            "ligand_is_proper": [False],
+            "ligand_smiles": [None],
+            "ligand_is_shape_comparable": [False],
+        }
+    )
     original.to_parquet(index_path, index=False)
     fingerprint_dir = tmp_path / "fingerprints"
     fingerprint_dir.mkdir()
-    pd.DataFrame({
-        "ligand_rdkit_canonical_smiles": pd.Series(dtype="string"),
-        "ligand_smiles_id": pd.Series(dtype="Int32"),
-        "ligand_is_cofactor_like": pd.Series(dtype="boolean"),
-    }).to_parquet(
+    pd.DataFrame(
+        {
+            "ligand_rdkit_canonical_smiles": pd.Series(dtype="string"),
+            "ligand_smiles_id": pd.Series(dtype="Int32"),
+            "ligand_is_cofactor_like": pd.Series(dtype="boolean"),
+        }
+    ).to_parquet(
         fingerprint_dir / "ligand_similarity_annotations.parquet",
         index=False,
     )
@@ -459,17 +482,21 @@ def test_cluster_index_rejects_non_tanimoto_set_cover(tmp_path):
         tmp_path / "ligand_sampling/set_cover/metric=pli_qcov" / "threshold=100.parquet"
     )
     cover_file.parent.mkdir(parents=True)
-    pd.DataFrame({
-        "ligand_id": ["1aaa__1__1.X"],
-        "centroid_ligand_id": ["1aaa__1__1.X"],
-        "label": ["c0"],
-    }).to_parquet(cover_file, index=False)
-    index = pd.DataFrame({
-        "ligand_id": ["1aaa__1__1.X"],
-        "system_type": ["holo"],
-        "ligand_is_proper": [True],
-        "ligand_smiles_id": [0],
-    })
+    pd.DataFrame(
+        {
+            "ligand_id": ["1aaa__1__1.X"],
+            "centroid_ligand_id": ["1aaa__1__1.X"],
+            "label": ["c0"],
+        }
+    ).to_parquet(cover_file, index=False)
+    index = pd.DataFrame(
+        {
+            "ligand_id": ["1aaa__1__1.X"],
+            "system_type": ["holo"],
+            "ligand_is_proper": [True],
+            "ligand_smiles_id": [0],
+        }
+    )
 
     with pytest.raises(ValueError, match="invalid ligand set-cover modes"):
         utils.build_ligand_cluster_table(index=index, data_dir=tmp_path)
@@ -483,18 +510,22 @@ def test_chemical_90_set_cover_counts_distinct_pdb_ids(tmp_path, metric, column)
         tmp_path / f"ligand_sampling/set_cover/metric={metric}" / "threshold=90.parquet"
     )
     cover_file.parent.mkdir(parents=True)
-    pd.DataFrame({
-        "ligand_id": ["l1", "l2", "l3"],
-        "centroid_ligand_id": ["l1", "l1", "l3"],
-        "label": ["c0", "c0", "c1"],
-    }).to_parquet(cover_file, index=False)
-    index = pd.DataFrame({
-        "entry_pdb_id": ["1aaa", "2bbb", "1aaa"],
-        "ligand_id": ["l1", "l2", "l3"],
-        "system_type": ["holo", "holo", "holo"],
-        "ligand_is_proper": [True, True, True],
-        "ligand_smiles_id": [0, 1, 2],
-    })
+    pd.DataFrame(
+        {
+            "ligand_id": ["l1", "l2", "l3"],
+            "centroid_ligand_id": ["l1", "l1", "l3"],
+            "label": ["c0", "c0", "c1"],
+        }
+    ).to_parquet(cover_file, index=False)
+    index = pd.DataFrame(
+        {
+            "entry_pdb_id": ["1aaa", "2bbb", "1aaa"],
+            "ligand_id": ["l1", "l2", "l3"],
+            "system_type": ["holo", "holo", "holo"],
+            "ligand_is_proper": [True, True, True],
+            "ligand_smiles_id": [0, 1, 2],
+        }
+    )
 
     result = utils.build_ligand_cluster_table(index=index, data_dir=tmp_path)
 
@@ -517,19 +548,23 @@ def test_cluster_index_marks_only_directed_cover_centroids(tmp_path):
         / "threshold=50.parquet"
     )
     cover_file.parent.mkdir(parents=True)
-    pd.DataFrame({
-        "ligand_id": ["l1", "l2"],
-        "label": ["d0", "d0"],
-        "centroid_ligand_id": ["l2", "l2"],
-        "coverage_count": [1, 2],
-        "coverage_fraction": [0.5, 1.0],
-    }).to_parquet(cover_file, index=False)
-    index = pd.DataFrame({
-        "ligand_id": ["l1", "l2", "not-eligible"],
-        "system_type": ["holo", "holo", "apo"],
-        "ligand_is_proper": [True, True, False],
-        "ligand_smiles_id": [0, 1, pd.NA],
-    })
+    pd.DataFrame(
+        {
+            "ligand_id": ["l1", "l2"],
+            "label": ["d0", "d0"],
+            "centroid_ligand_id": ["l2", "l2"],
+            "coverage_count": [1, 2],
+            "coverage_fraction": [0.5, 1.0],
+        }
+    ).to_parquet(cover_file, index=False)
+    index = pd.DataFrame(
+        {
+            "ligand_id": ["l1", "l2", "not-eligible"],
+            "system_type": ["holo", "holo", "apo"],
+            "ligand_is_proper": [True, True, False],
+            "ligand_smiles_id": [0, 1, pd.NA],
+        }
+    )
 
     result = utils.build_ligand_cluster_table(index=index, data_dir=tmp_path)
 
@@ -556,17 +591,21 @@ def test_cluster_index_reads_legacy_cover_during_centrality_migration(tmp_path):
         / "threshold=50.parquet"
     )
     cover_file.parent.mkdir(parents=True)
-    pd.DataFrame({
-        "ligand_id": ["l1", "l2"],
-        "label": ["d0", "d0"],
-        "centroid_ligand_id": ["l2", "l2"],
-    }).to_parquet(cover_file, index=False)
-    index = pd.DataFrame({
-        "ligand_id": ["l1", "l2"],
-        "system_type": ["holo", "holo"],
-        "ligand_is_proper": [True, True],
-        "ligand_smiles_id": [0, 1],
-    })
+    pd.DataFrame(
+        {
+            "ligand_id": ["l1", "l2"],
+            "label": ["d0", "d0"],
+            "centroid_ligand_id": ["l2", "l2"],
+        }
+    ).to_parquet(cover_file, index=False)
+    index = pd.DataFrame(
+        {
+            "ligand_id": ["l1", "l2"],
+            "system_type": ["holo", "holo"],
+            "ligand_is_proper": [True, True],
+            "ligand_smiles_id": [0, 1],
+        }
+    )
 
     result = utils.build_ligand_cluster_table(index=index, data_dir=tmp_path)
 
@@ -579,18 +618,22 @@ def test_cluster_index_reads_legacy_cover_during_centrality_migration(tmp_path):
 def test_ligand_similarity_rejects_stale_proper_smiles_universe(tmp_path):
     fingerprint_dir = tmp_path / "fingerprints"
     fingerprint_dir.mkdir()
-    pd.DataFrame({
-        "ligand_rdkit_canonical_smiles": ["CC"],
-        "ligand_smiles_id": [0],
-    }).to_parquet(
+    pd.DataFrame(
+        {
+            "ligand_rdkit_canonical_smiles": ["CC"],
+            "ligand_smiles_id": [0],
+        }
+    ).to_parquet(
         fingerprint_dir / "ligand_similarity_annotations.parquet",
         index=False,
     )
-    index = pd.DataFrame({
-        "system_type": ["holo", "holo"],
-        "ligand_is_proper": [True, True],
-        "ligand_smiles": ["CC", "CCC"],
-    })
+    index = pd.DataFrame(
+        {
+            "system_type": ["holo", "holo"],
+            "ligand_is_proper": [True, True],
+            "ligand_smiles": ["CC", "CCC"],
+        }
+    )
 
     with pytest.raises(ValueError, match="proper holo SMILES universe"):
         utils.add_ligand_similarity_columns(index=index, data_dir=tmp_path)
@@ -603,21 +646,25 @@ def test_ligand_similarity_rejects_artifact_from_before_targeted_repair(
     index_dir = tmp_path / "index"
     fingerprint_dir.mkdir()
     index_dir.mkdir()
-    pd.DataFrame({
-        "ligand_smiles": ["CC"],
-        "ligand_smiles_id": [0],
-    }).to_parquet(
+    pd.DataFrame(
+        {
+            "ligand_smiles": ["CC"],
+            "ligand_smiles_id": [0],
+        }
+    ).to_parquet(
         fingerprint_dir / "ligand_similarity_annotations.parquet",
         index=False,
     )
     (index_dir / "collation.json").write_text(
         '{"status": "requires_downstream_repair"}'
     )
-    index = pd.DataFrame({
-        "system_type": ["holo"],
-        "ligand_is_proper": [True],
-        "ligand_rdkit_canonical_smiles": ["CC"],
-    })
+    index = pd.DataFrame(
+        {
+            "system_type": ["holo"],
+            "ligand_is_proper": [True],
+            "ligand_rdkit_canonical_smiles": ["CC"],
+        }
+    )
 
     with pytest.raises(ValueError, match="predate"):
         utils.add_ligand_similarity_columns(index=index, data_dir=tmp_path)

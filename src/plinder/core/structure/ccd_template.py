@@ -199,12 +199,12 @@ def add_missing_atoms(
             )
         return result
 
-    positions = np.concatenate([
-        np.full(len(missing), stop) for _, stop, missing, _ in completed
-    ])
-    sources = np.concatenate([
-        np.full(len(missing), start) for start, _, missing, _ in completed
-    ])
+    positions = np.concatenate(
+        [np.full(len(missing), stop) for _, stop, missing, _ in completed]
+    )
+    sources = np.concatenate(
+        [np.full(len(missing), start) for start, _, missing, _ in completed]
+    )
     new_names = np.array(
         [name for _, _, missing, _ in completed for name in missing], dtype=str
     )
@@ -256,9 +256,9 @@ def add_missing_atoms(
                 for i, name in zip(range(start, stop), atoms.atom_name[start:stop])
             }
             first_new = int(new_index[stop - 1]) + 1
-            index_by_name.update({
-                name: first_new + k for k, name in enumerate(missing)
-            })
+            index_by_name.update(
+                {name: first_new + k for k, name in enumerate(missing)}
+            )
             for name_a, name_b, order in template.bonds:
                 if (
                     (name_a in missing or name_b in missing)

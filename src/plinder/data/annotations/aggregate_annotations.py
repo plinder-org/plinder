@@ -125,10 +125,12 @@ def _chain_type_from_coordinates(atoms: struc.AtomArray) -> str:
             residue_name = str(residue.res_name[0]).upper()
             if residue_name in {"DA", "DC", "DG", "DT", "DU", "DI"}:
                 dna_residues += 1
-            elif residue_name in {"A", "C", "G", "U", "I"} or atom_names.intersection({
-                "O2'",
-                "O2*",
-            }):
+            elif residue_name in {"A", "C", "G", "U", "I"} or atom_names.intersection(
+                {
+                    "O2'",
+                    "O2*",
+                }
+            ):
                 rna_residues += 1
             else:
                 ambiguous_nucleotide_residues += 1
@@ -299,11 +301,15 @@ class System(DocBaseModel):
         """
         ID of the system without the biounit
         """
-        return "__".join([
-            self.pdb_id,
-            "_".join(x.split(".", maxsplit=1)[1] for x in self.protein_chains_asym_id),
-            "_".join(x.split(".", maxsplit=1)[1] for x in self.ligand_chains),
-        ])
+        return "__".join(
+            [
+                self.pdb_id,
+                "_".join(
+                    x.split(".", maxsplit=1)[1] for x in self.protein_chains_asym_id
+                ),
+                "_".join(x.split(".", maxsplit=1)[1] for x in self.ligand_chains),
+            ]
+        )
 
     @cached_property
     def ligand_chains(self) -> list[str]:
@@ -384,12 +390,14 @@ class System(DocBaseModel):
         """
         ID of the system
         """
-        return "__".join([
-            self.pdb_id,
-            self.biounit_id,
-            "_".join(self.protein_chains_asym_id),
-            "_".join(self.ligand_chains),
-        ])
+        return "__".join(
+            [
+                self.pdb_id,
+                self.biounit_id,
+                "_".join(self.protein_chains_asym_id),
+                "_".join(self.ligand_chains),
+            ]
+        )
 
     @cached_property
     def system_type(self) -> str:
@@ -1014,21 +1022,25 @@ class Entry(DocBaseModel):
         type_by_entity: dict[str, str] = {}
         if "entity" in block:
             entity = block["entity"]
-            type_by_entity.update({
-                str(entity_id): str(entity_type)
-                for entity_id, entity_type in zip(
-                    entity["id"].as_array(), entity["type"].as_array()
-                )
-            })
+            type_by_entity.update(
+                {
+                    str(entity_id): str(entity_type)
+                    for entity_id, entity_type in zip(
+                        entity["id"].as_array(), entity["type"].as_array()
+                    )
+                }
+            )
         if "entity_poly" in block:
             entity_poly = block["entity_poly"]
-            type_by_entity.update({
-                str(entity_id): str(entity_type)
-                for entity_id, entity_type in zip(
-                    entity_poly["entity_id"].as_array(),
-                    entity_poly["type"].as_array(),
-                )
-            })
+            type_by_entity.update(
+                {
+                    str(entity_id): str(entity_type)
+                    for entity_id, entity_type in zip(
+                        entity_poly["entity_id"].as_array(),
+                        entity_poly["type"].as_array(),
+                    )
+                }
+            )
         auth_id_by_asym, residue_author_ids_by_asym = get_atom_site_author_ids(block)
         modified_residues_by_asym = get_modified_residues(
             block, residue_author_ids_by_asym
@@ -1048,9 +1060,9 @@ class Entry(DocBaseModel):
                     start, stop = segments[0]
                     chain_atoms = atoms[start:stop]
                 else:
-                    chain_atoms = struc.concatenate([
-                        atoms[start:stop] for start, stop in segments
-                    ])
+                    chain_atoms = struc.concatenate(
+                        [atoms[start:stop] for start, stop in segments]
+                    )
                 entity_id = entity_by_asym.get(chain_id, "")
                 chain_type = type_by_entity.get(entity_id, "unknown")
                 if chain_type == "unknown":
@@ -1794,11 +1806,13 @@ class Entry(DocBaseModel):
         }
         spatial_radii: list[float] = []
         if include_ligands:
-            spatial_radii.extend([
-                interaction_search_threshold,
-                neighboring_residue_threshold,
-                neighboring_ligand_threshold,
-            ])
+            spatial_radii.extend(
+                [
+                    interaction_search_threshold,
+                    neighboring_residue_threshold,
+                    neighboring_ligand_threshold,
+                ]
+            )
         if include_interfaces:
             spatial_radii.append(interface_contact_radius)
         spatial_index = (
@@ -2539,11 +2553,13 @@ class Entry(DocBaseModel):
                     "system contains repeated ligand instance chains: "
                     f"{instance_chains}"
                 )
-            receptor_asym_ids = sorted({
-                instance_chain.split(".", maxsplit=1)[1]
-                for ligand in ligs
-                for instance_chain in ligand.protein_chains_asym_id
-            })
+            receptor_asym_ids = sorted(
+                {
+                    instance_chain.split(".", maxsplit=1)[1]
+                    for ligand in ligs
+                    for instance_chain in ligand.protein_chains_asym_id
+                }
+            )
             system = System(
                 pdb_id=self.pdb_id,
                 biounit_id=next(iter(biounit_ids)),
@@ -2652,14 +2668,16 @@ class Entry(DocBaseModel):
         holo_chains = set()
         for system in self.systems.values():
             if system.system_type == "holo":
-                holo_chains.update([
-                    c.split(".", maxsplit=1)[1] for c in system.protein_chains_asym_id
-                ])
+                holo_chains.update(
+                    [c.split(".", maxsplit=1)[1] for c in system.protein_chains_asym_id]
+                )
         for interface in self.interfaces:
-            holo_chains.update({
-                interface.chain_1.split(".", maxsplit=1)[-1],
-                interface.chain_2.split(".", maxsplit=1)[-1],
-            })
+            holo_chains.update(
+                {
+                    interface.chain_1.split(".", maxsplit=1)[-1],
+                    interface.chain_2.split(".", maxsplit=1)[-1],
+                }
+            )
         for chain in self.chains:
             self.chains[chain].holo = chain in holo_chains
 
@@ -2756,24 +2774,26 @@ class Entry(DocBaseModel):
                 or _is_polynucleotide(chain.chain_type_str)
             ):
                 continue
-            rows.append({
-                "entry_pdb_id": self.pdb_id,
-                "chain_asym_id": chain.asym_id,
-                "chain_auth_id": chain.auth_id,
-                "chain_entity_id": chain.entity_id,
-                "chain_type": chain.chain_type_str,
-                "chain_receptor_type": get_receptor_type([chain.chain_type_str]),
-                "chain_sequence": self.chain_to_seqres.get(chain.asym_id, ""),
-                "chain_sequence_noncanonical": (
-                    self.chain_to_seqres_noncanonical.get(chain.asym_id, "")
-                ),
-                "chain_modified_residues": list(chain.modified_residues),
-                "chain_length": chain.length,
-                "chain_num_unresolved_residues": chain.num_unresolved_residues,
-                "chain_is_holo": chain.holo,
-                "chain_is_ligand_like": chain_id in self.ligand_like_chains,
-                "chain_uniprot_ids": sorted(chain.mappings.get("UniProt", {})),
-            })
+            rows.append(
+                {
+                    "entry_pdb_id": self.pdb_id,
+                    "chain_asym_id": chain.asym_id,
+                    "chain_auth_id": chain.auth_id,
+                    "chain_entity_id": chain.entity_id,
+                    "chain_type": chain.chain_type_str,
+                    "chain_receptor_type": get_receptor_type([chain.chain_type_str]),
+                    "chain_sequence": self.chain_to_seqres.get(chain.asym_id, ""),
+                    "chain_sequence_noncanonical": (
+                        self.chain_to_seqres_noncanonical.get(chain.asym_id, "")
+                    ),
+                    "chain_modified_residues": list(chain.modified_residues),
+                    "chain_length": chain.length,
+                    "chain_num_unresolved_residues": chain.num_unresolved_residues,
+                    "chain_is_holo": chain.holo,
+                    "chain_is_ligand_like": chain_id in self.ligand_like_chains,
+                    "chain_uniprot_ids": sorted(chain.mappings.get("UniProt", {})),
+                }
+            )
         return pd.DataFrame(rows, columns=columns)
 
     def metadata_to_df(self) -> pd.DataFrame:
@@ -2821,15 +2841,19 @@ class Entry(DocBaseModel):
                     "chain_role": role,
                 }
                 if contacts_computed:
-                    row.update({
-                        "chain_num_contacting_ions": int(chain_counts.get("ions", 0)),
-                        "chain_num_contacting_artifacts": int(
-                            chain_counts.get("artifacts", 0)
-                        ),
-                        "chain_num_contacting_other_ligands": int(
-                            chain_counts.get("other_ligands", 0)
-                        ),
-                    })
+                    row.update(
+                        {
+                            "chain_num_contacting_ions": int(
+                                chain_counts.get("ions", 0)
+                            ),
+                            "chain_num_contacting_artifacts": int(
+                                chain_counts.get("artifacts", 0)
+                            ),
+                            "chain_num_contacting_other_ligands": int(
+                                chain_counts.get("other_ligands", 0)
+                            ),
+                        }
+                    )
                 rows.append(row)
         return pd.DataFrame(rows, columns=columns)
 
@@ -2862,12 +2886,14 @@ class Entry(DocBaseModel):
                 legacy_mapping.get(chain_id, chain_id)
                 for chain_id in annotation.ligand_chains
             )
-            annotation.id_legacy = "__".join([
-                annotation.pdb_id,
-                annotation.biounit_id,
-                "_".join(legacy_protein_chains),
-                "_".join(legacy_ligand_chains),
-            ])
+            annotation.id_legacy = "__".join(
+                [
+                    annotation.pdb_id,
+                    annotation.biounit_id,
+                    "_".join(legacy_protein_chains),
+                    "_".join(legacy_ligand_chains),
+                ]
+            )
             system_data = annotation.format(
                 self.chains,
                 self.pass_criteria,
@@ -2876,11 +2902,13 @@ class Entry(DocBaseModel):
                 legacy_instance_chain = legacy_mapping.get(
                     ligand.instance_chain, ligand.instance_chain
                 )
-                ligand.id_legacy = "__".join([
-                    ligand.pdb_id,
-                    ligand.biounit_id,
-                    legacy_instance_chain,
-                ])
+                ligand.id_legacy = "__".join(
+                    [
+                        ligand.pdb_id,
+                        ligand.biounit_id,
+                        legacy_instance_chain,
+                    ]
+                )
                 ligand_data = ligand.format(self.chains)
                 rows.append({**entry_data, **system_data, **ligand_data})
         return pd.DataFrame(rows)

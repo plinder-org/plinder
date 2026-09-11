@@ -59,10 +59,12 @@ def map_cross_similarity(
     df: pd.DataFrame, target_ligands: set[str], metric: str
 ) -> pd.DataFrame:
     if df.empty:
-        return pd.DataFrame({
-            "system_id": pd.Series(dtype="object"),
-            metric: pd.Series(dtype="float64"),
-        })
+        return pd.DataFrame(
+            {
+                "system_id": pd.Series(dtype="object"),
+                metric: pd.Series(dtype="float64"),
+            }
+        )
     updated_query_ligands = []
     for q, t in zip(df["query_ligand_id"], df["target_ligand_id"]):
         if t in target_ligands:
@@ -79,11 +81,13 @@ def map_cross_similarity(
     ligand_occurrences = query_index(
         columns=["system_id", "ligand_smiles_id"],
         filters=[
-            FILTER((
-                "ligand_smiles_id",
-                "in",
-                cast(set[str], ligand_ids),
-            ))
+            FILTER(
+                (
+                    "ligand_smiles_id",
+                    "in",
+                    cast(set[str], ligand_ids),
+                )
+            )
         ],
     )
     id_column = "ligand_smiles_id"
@@ -92,8 +96,7 @@ def map_cross_similarity(
         ligand_to_system[int(ligand_id)] = set(group["system_id"])
     df["query_system"] = df["query_ligand_id"].map(ligand_to_system)
     return (
-        df
-        .explode("query_system")
+        df.explode("query_system")
         .rename(
             columns={
                 "query_system": "system_id",

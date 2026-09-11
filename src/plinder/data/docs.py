@@ -251,35 +251,39 @@ DERIVED_COLUMN_DESCRIPTIONS = {
     ),
 }
 
-DERIVED_COLUMN_DESCRIPTIONS.update({
-    f"system_ligand_has_{name}": description
-    for name, description in {
-        "lipinski": "Whether the system has a Lipinski ligand",
-        "cofactor": "Whether the system has a cofactor ligand",
-        "fragment": "Whether the system has a fragment ligand",
-        "monosaccharide": (
-            "Whether the system has a ligand containing one saccharide unit"
-        ),
-        "oligosaccharide": (
-            "Whether the system has a ligand containing multiple saccharide units"
-        ),
-        "mononucleotide": (
-            "Whether the system has a ligand containing one nucleotide unit"
-        ),
-        "oligonucleotide": (
-            "Whether the system has a ligand containing multiple nucleotide units"
-        ),
-        "monopeptide": ("Whether the system has a ligand containing one peptide unit"),
-        "oligopeptide": (
-            "Whether the system has a ligand containing multiple peptide units"
-        ),
-        "artifact": "Whether the system has an artifact ligand",
-        "other": "Whether the system has a ligand classified as other",
-        "covalent": "Whether the system has a covalent ligand",
-        "invalid": "Whether the system has an invalid ligand",
-        "ion": "Whether the system has an ion",
-    }.items()
-})
+DERIVED_COLUMN_DESCRIPTIONS.update(
+    {
+        f"system_ligand_has_{name}": description
+        for name, description in {
+            "lipinski": "Whether the system has a Lipinski ligand",
+            "cofactor": "Whether the system has a cofactor ligand",
+            "fragment": "Whether the system has a fragment ligand",
+            "monosaccharide": (
+                "Whether the system has a ligand containing one saccharide unit"
+            ),
+            "oligosaccharide": (
+                "Whether the system has a ligand containing multiple saccharide units"
+            ),
+            "mononucleotide": (
+                "Whether the system has a ligand containing one nucleotide unit"
+            ),
+            "oligonucleotide": (
+                "Whether the system has a ligand containing multiple nucleotide units"
+            ),
+            "monopeptide": (
+                "Whether the system has a ligand containing one peptide unit"
+            ),
+            "oligopeptide": (
+                "Whether the system has a ligand containing multiple peptide units"
+            ),
+            "artifact": "Whether the system has an artifact ligand",
+            "other": "Whether the system has a ligand classified as other",
+            "covalent": "Whether the system has a covalent ligand",
+            "invalid": "Whether the system has an invalid ligand",
+            "ion": "Whether the system has an ion",
+        }.items()
+    }
+)
 
 
 # Human-readable labels for the fingerprint (chemical) clustering metrics.
@@ -321,14 +325,16 @@ def get_cluster_column_descriptions(
         metric, threshold = parts[:2]
         ligand_level = parts[2] == "ligand"
         level = "ligand-level " if ligand_level else ""
-        rows.append((
-            column,
-            "str",
-            f"Cluster ID for {level}set cover built from reciprocal-minimum "
-            f"{_METRIC_LABELS.get(metric, metric)} with {threshold} threshold; "
-            "each member has a direct threshold-qualified edge to its "
-            "representative",
-        ))
+        rows.append(
+            (
+                column,
+                "str",
+                f"Cluster ID for {level}set cover built from reciprocal-minimum "
+                f"{_METRIC_LABELS.get(metric, metric)} with {threshold} threshold; "
+                "each member has a direct threshold-qualified edge to its "
+                "representative",
+            )
+        )
     directed_cover_columns = [
         c for c in plindex.columns if c.endswith("directed_set_cover")
     ]
@@ -344,20 +350,24 @@ def get_cluster_column_descriptions(
             if half_interface
             else ""
         )
-        rows.append((
-            column,
-            "str",
-            f"Cluster ID for {level}directed set cover built from "
-            f"{_METRIC_LABELS.get(metric, metric)} with {threshold} threshold; "
-            "each member's query-to-centroid score meets the threshold",
-        ))
+        rows.append(
+            (
+                column,
+                "str",
+                f"Cluster ID for {level}directed set cover built from "
+                f"{_METRIC_LABELS.get(metric, metric)} with {threshold} threshold; "
+                "each member's query-to-centroid score meets the threshold",
+            )
+        )
     centroid_columns = [
         c
         for c in plindex.columns
-        if c.endswith((
-            "__set_cover__is_centroid",
-            "__directed_set_cover__is_centroid",
-        ))
+        if c.endswith(
+            (
+                "__set_cover__is_centroid",
+                "__directed_set_cover__is_centroid",
+            )
+        )
     ]
     for column in centroid_columns:
         parts = column.split("__")
@@ -367,21 +377,25 @@ def get_cluster_column_descriptions(
         cover_kind = (
             "directed set-cover" if "__directed_set_cover__" in column else "set-cover"
         )
-        rows.append((
-            column,
-            "bool | None",
-            f"Whether this row is the published centroid for its {level}"
-            f"{cover_kind} cluster built from {metric} with "
-            f"{threshold} threshold; missing means the row is outside the "
-            "clustering universe",
-        ))
+        rows.append(
+            (
+                column,
+                "bool | None",
+                f"Whether this row is the published centroid for its {level}"
+                f"{cover_kind} cluster built from {metric} with "
+                f"{threshold} threshold; missing means the row is outside the "
+                "clustering universe",
+            )
+        )
     directed_coverage_columns = [
         c
         for c in plindex.columns
-        if c.endswith((
-            "__directed_set_cover__coverage_count",
-            "__directed_set_cover__coverage_fraction",
-        ))
+        if c.endswith(
+            (
+                "__directed_set_cover__coverage_count",
+                "__directed_set_cover__coverage_fraction",
+            )
+        )
     ]
     for column in directed_coverage_columns:
         parts = column.split("__")
@@ -393,13 +407,15 @@ def get_cluster_column_descriptions(
             else "Fraction of its directed weak component this ligand could "
             "initially cover"
         )
-        rows.append((
-            column,
-            "int | None" if is_count else "float | None",
-            f"{quantity} at {metric} {threshold} threshold, including "
-            "itself; missing means the row is outside the clustering "
-            "universe",
-        ))
+        rows.append(
+            (
+                column,
+                "int | None" if is_count else "float | None",
+                f"{quantity} at {metric} {threshold} threshold, including "
+                "itself; missing means the row is outside the clustering "
+                "universe",
+            )
+        )
     column_order = {column: index for index, column in enumerate(plindex.columns)}
     return sorted(rows, key=lambda row: column_order[row[0]])
 
@@ -575,21 +591,25 @@ def get_table_column_descriptions(
     _validate_published_cover_columns(table_name=table_name, names=names)
     descriptions = _base_description_lookup()
     cluster_rows = get_cluster_column_descriptions(pd.DataFrame(columns=names))
-    descriptions.update({
-        name: description
-        for name, _, description in cluster_rows
-        if description is not None
-    })
+    descriptions.update(
+        {
+            name: description
+            for name, _, description in cluster_rows
+            if description is not None
+        }
+    )
     missing = [name for name in names if name not in descriptions]
     if missing:
         raise ValueError(
             f"release table {table_name!r} has undocumented columns: {missing}"
         )
-    return pd.DataFrame({
-        "Name": names,
-        "Type": [str(field.type) for field in fields],
-        "Description": [descriptions[name] for name in names],
-    })
+    return pd.DataFrame(
+        {
+            "Name": names,
+            "Type": [str(field.type) for field in fields],
+            "Description": [descriptions[name] for name in names],
+        }
+    )
 
 
 def get_column_descriptions(

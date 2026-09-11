@@ -284,10 +284,12 @@ def _one_hot_encode_stack(
     feat_array = []
     unknown_name_filler_value = feature_dict[unknown_name_filler]
     for per_chain_feat in stack:
-        feat_array_by_chain = np.zeros((
-            len(per_chain_feat),
-            len(set(list(feature_dict.values()))),
-        ))
+        feat_array_by_chain = np.zeros(
+            (
+                len(per_chain_feat),
+                len(set(list(feature_dict.values()))),
+            )
+        )
         for index, value in enumerate(per_chain_feat):
             feat_array_by_chain[
                 index, feature_dict.get(value, unknown_name_filler_value)

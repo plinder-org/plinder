@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pytest
-
 from plinder.core.structure.ccd_template import (
     ccd_heavy_atom_names,
     unresolved_atoms_from_template,

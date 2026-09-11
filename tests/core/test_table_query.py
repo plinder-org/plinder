@@ -7,7 +7,6 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
-
 from plinder.core import PlinderRelease, query_table
 from plinder.core.index.query import DISABLED_ANNOTATION_COLUMNS
 

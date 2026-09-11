@@ -290,9 +290,9 @@ def get_symmetry_mate_contacts(
         box=unit_cell.box,
     )
 
-    results: dict[tuple[str, int], dict[tuple[str, int], dict[int, set[int]]]] = (
-        defaultdict(lambda: defaultdict(lambda: defaultdict(set)))
-    )
+    results: dict[
+        tuple[str, int], dict[tuple[str, int], dict[int, set[int]]]
+    ] = defaultdict(lambda: defaultdict(lambda: defaultdict(set)))
 
     # For each atom in the ASU (image 0), find contacts with symmetry mates
     for i in range(n_asu):
@@ -422,24 +422,26 @@ def extract_ligand_links_to_neighbouring_chains(
 _WATER_BRIDGE_DISTANCE_SCALING = (0.75, 1.15)
 
 # Metals that form coordination bonds (not spectator ions like Na/Cl/K)
-_COORDINATION_METALS = frozenset({
-    "MG",
-    "CA",
-    "ZN",
-    "FE",
-    "FE2",  # Fe(II)
-    "MN",
-    "CO",
-    "CU",
-    "CU1",  # Cu(I)
-    "NI",
-    "CD",
-    "MO",
-    "4MO",  # Mo(IV)
-    "6MO",  # Mo(VI)
-    "W",
-    "V",
-})
+_COORDINATION_METALS = frozenset(
+    {
+        "MG",
+        "CA",
+        "ZN",
+        "FE",
+        "FE2",  # Fe(II)
+        "MN",
+        "CO",
+        "CU",
+        "CU1",  # Cu(I)
+        "NI",
+        "CD",
+        "MO",
+        "4MO",  # Mo(IV)
+        "6MO",  # Mo(VI)
+        "W",
+        "V",
+    }
+)
 _METAL_ACCEPTOR_PATTERN = (
     "["
     "$([O]),"
@@ -483,12 +485,12 @@ def _find_bridged_interactions(
     ligand_coords = cm._ligand.coord[ligand_matched]
     lo, hi = sorted(distance_scaling)
 
-    r_vdw = np.array([
-        info.vdw_radius_single(e) for e in cm._binding_site.element[receptor_matched]
-    ])
-    l_vdw = np.array([
-        info.vdw_radius_single(e) for e in cm._ligand.element[ligand_matched]
-    ])
+    r_vdw = np.array(
+        [info.vdw_radius_single(e) for e in cm._binding_site.element[receptor_matched]]
+    )
+    l_vdw = np.array(
+        [info.vdw_radius_single(e) for e in cm._ligand.element[ligand_matched]]
+    )
 
     bridges: list[tuple[NDArray[np.int_], NDArray[np.int_], NDArray[np.int_]]] = []
     for bi in range(bridge_atoms.array_length()):
@@ -513,11 +515,13 @@ def _find_bridged_interactions(
 
         for ri in r_contacts:
             for li in l_contacts:
-                bridges.append((
-                    cm._binding_site_indices[ri : ri + 1],
-                    np.array([li], dtype=int),
-                    np.array([bi], dtype=int),
-                ))
+                bridges.append(
+                    (
+                        cm._binding_site_indices[ri : ri + 1],
+                        np.array([li], dtype=int),
+                        np.array([bi], dtype=int),
+                    )
+                )
 
     return bridges
 
@@ -585,11 +589,13 @@ def find_metal_bridges(
             continue
         for ri in r_contacts:
             for li in l_contacts:
-                bridges.append((
-                    cm._binding_site_indices[ri : ri + 1],
-                    np.array([li], dtype=int),
-                    np.array([bi], dtype=int),
-                ))
+                bridges.append(
+                    (
+                        cm._binding_site_indices[ri : ri + 1],
+                        np.array([li], dtype=int),
+                        np.array([bi], dtype=int),
+                    )
+                )
     return bridges
 
 

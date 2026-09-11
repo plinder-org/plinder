@@ -91,10 +91,12 @@ def get_modified_residues(
             number = int(row["num"])
         except ValueError:
             continue
-        modified_by_entity.setdefault(row["entity_id"], []).append((
-            number,
-            row["mon_id"],
-        ))
+        modified_by_entity.setdefault(row["entity_id"], []).append(
+            (
+                number,
+                row["mon_id"],
+            )
+        )
     if not modified_by_entity:
         return {}
     missing = {"", ".", "?"}

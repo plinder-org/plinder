@@ -221,11 +221,13 @@ def _interface_side_index(
             start=1,
         ):
             asym_id = chain.split(".", maxsplit=1)[-1]
-            sides[(interface.pdb_id, asym_id)].append((
-                interface.id,
-                side,
-                frozenset(residues),
-            ))
+            sides[(interface.pdb_id, asym_id)].append(
+                (
+                    interface.id,
+                    side,
+                    frozenset(residues),
+                )
+            )
     return sides
 
 
@@ -340,21 +342,22 @@ def calculate_interface_similarity_scores(
             mapping_source = (
                 "foldseek" if "foldseek" in best_sources else best_sources[0]
             )
-            records.append({
-                "query_system": query.id,
-                "target_system": target.id,
-                "mapping": backend_scores[mapping_source][3],
-                "source": source,
-                "metric": "interface_qcov",
-                "iface1_qcov": backend_scores[mapping_source][1],
-                "iface2_qcov": backend_scores[mapping_source][2],
-                "similarity": max(0, min(100, round(best_score * 100))),
-            })
+            records.append(
+                {
+                    "query_system": query.id,
+                    "target_system": target.id,
+                    "mapping": backend_scores[mapping_source][3],
+                    "source": source,
+                    "metric": "interface_qcov",
+                    "iface1_qcov": backend_scores[mapping_source][1],
+                    "iface2_qcov": backend_scores[mapping_source][2],
+                    "similarity": max(0, min(100, round(best_score * 100))),
+                }
+            )
     if not records:
         return pd.DataFrame(columns=INTERFACE_SIMILARITY_SCHEMA.names)
     return (
-        pd.DataFrame
-        .from_records(records, columns=INTERFACE_SIMILARITY_SCHEMA.names)
+        pd.DataFrame.from_records(records, columns=INTERFACE_SIMILARITY_SCHEMA.names)
         .sort_values(
             ["similarity", "query_system", "target_system"],
             ascending=[False, True, True],
@@ -522,8 +525,7 @@ def reconstruct_similarity_scores(
     if not frames:
         return pd.DataFrame(columns=PROTEIN_SIMILARITY_SCHEMA.names)
     return (
-        pd
-        .concat(frames, ignore_index=True)
+        pd.concat(frames, ignore_index=True)
         .sort_values(
             [
                 "similarity",

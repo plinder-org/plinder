@@ -14,7 +14,6 @@ import numpy as np
 import pandas as pd
 import pytest
 from biotite.structure.io.pdbx import CIFFile, get_structure
-
 from plinder.core.structure.smallmols_similarity import smiles2nonstereo
 from plinder.data.annotations.ccd_ligand_dbs import (
     LOG,
@@ -121,11 +120,13 @@ def test_match_by_code_then_by_chemistry_against_the_real_universe(components):
         zip(components["ccd_id"], components["ligand_rdkit_canonical_smiles"])
     )
     nodes = dict(zip(components["ccd_id"], components["ligand_smiles_id"]))
-    ligands = pd.DataFrame({
-        "ligand_id": ["by_code", "by_chemistry", "composite", "ion", "novel"],
-        "ligand_ccd_code": [known, "ZZZZZ", f"{known}-{other}", "NA", "ZZZZZ"],
-        "ligand_smiles": [smiles[known], smiles[known], "CC", "[Na+]", "CCOCC"],
-    })
+    ligands = pd.DataFrame(
+        {
+            "ligand_id": ["by_code", "by_chemistry", "composite", "ion", "novel"],
+            "ligand_ccd_code": [known, "ZZZZZ", f"{known}-{other}", "NA", "ZZZZZ"],
+            "ligand_smiles": [smiles[known], smiles[known], "CC", "[Na+]", "CCOCC"],
+        }
+    )
     matches = _match_all(ligands, components)
     assert matches.loc["by_code", "match_kind"] == "exact"
     assert matches.loc["by_code", "ccd_node_ids"] == [nodes[known]]
@@ -165,17 +166,19 @@ def test_one_molecule_matches_however_it_was_deposited():
         canonical=False,
     )
     assert reordered != _ccd_smiles("LAT")
-    ligands = pd.DataFrame({
-        "ligand_id": ["one_code", "two_codes", "two_codes_no_stereo", "galactose"],
-        "ligand_ccd_code": ["LAT", "GAL-BGC", "GAL-BGC", "GAL"],
-        "ligand_smiles": [
-            _ccd_smiles("LAT"),
-            reordered,
-            reordered,
-            _ccd_smiles("GAL"),
-        ],
-        "ligand_resolved_smiles": [_ccd_smiles("LAT"), reordered, None, None],
-    })
+    ligands = pd.DataFrame(
+        {
+            "ligand_id": ["one_code", "two_codes", "two_codes_no_stereo", "galactose"],
+            "ligand_ccd_code": ["LAT", "GAL-BGC", "GAL-BGC", "GAL"],
+            "ligand_smiles": [
+                _ccd_smiles("LAT"),
+                reordered,
+                reordered,
+                _ccd_smiles("GAL"),
+            ],
+            "ligand_resolved_smiles": [_ccd_smiles("LAT"), reordered, None, None],
+        }
+    )
     matches = _match_all(ligands, components)
     assert matches.loc["two_codes", "match_kind"] == "exact"
     assert matches.loc["two_codes", "matched_ccd_ids"] == ["LAT"]
@@ -199,11 +202,13 @@ def test_make_ligand_ccd_match_joins_the_collated_annotation_table(
 
     known = components["ccd_id"].iloc[0]
     (tmp_path / "index").mkdir()
-    pd.DataFrame({
-        "ligand_id": ["a__1__1.A", "a__1__1.A", "b__1__1.B"],
-        "ligand_ccd_code": [known, known, "ZZZZZ"],
-        "ligand_smiles": ["C", "C", "CCOCC"],
-    }).to_parquet(tmp_path / "index" / "annotation_table.parquet", index=False)
+    pd.DataFrame(
+        {
+            "ligand_id": ["a__1__1.A", "a__1__1.A", "b__1__1.B"],
+            "ligand_ccd_code": [known, known, "ZZZZZ"],
+            "ligand_smiles": ["C", "C", "CCOCC"],
+        }
+    ).to_parquet(tmp_path / "index" / "annotation_table.parquet", index=False)
     ccd_dbs_dir(tmp_path).mkdir()
     components.to_parquet(ccd_dbs_dir(tmp_path) / "ccd_components.parquet", index=False)
 
@@ -283,9 +288,9 @@ def test_parity_scores_every_tanimoto_edge_once(tmp_path):
     small = ccd_component_table(limit=300)
     build_ccd_ecfp_db(small, ccd_fingerprint_path(tmp_path))
     scores_dir = build_ccd_tanimoto_scores(small, tmp_path, batch_size=100)
-    edges = pd.concat([
-        pd.read_parquet(shard) for shard in scores_dir.glob("*.parquet")
-    ])
+    edges = pd.concat(
+        [pd.read_parquet(shard) for shard in scores_dir.glob("*.parquet")]
+    )
     unordered = edges[edges["query_ligand_id"] < edges["target_ligand_id"]]
     parity = pd.read_parquet(build_ccd_parity_scores(small, tmp_path, threads=2))
     assert list(parity.columns) == [
@@ -352,9 +357,9 @@ def test_fragment_dictionary_reproduces_every_mmpdb_pair(ccd_dbs):
         ]
         # mmpdb writes the pair in canonical order; ours reads query >> component
         reversed_smirks = ">>".join(reversed(pair.transformation.split(">>")))
-        assert {pair.transformation, reversed_smirks} & set(hits["transformation"]), (
-            pair
-        )
+        assert {pair.transformation, reversed_smirks} & set(
+            hits["transformation"]
+        ), pair
     # a component never pairs with itself
     assert not (found["query_id"].astype(int) == found["ligand_smiles_id"]).any()
 
@@ -485,9 +490,9 @@ def test_tanimoto_rebuild_does_not_leave_stale_shards(tmp_path):
     build_ccd_ecfp_db(small, ccd_fingerprint_path(tmp_path))
     scores_dir = build_ccd_tanimoto_scores(small, tmp_path, batch_size=100)
 
-    edges = pd.concat([
-        pd.read_parquet(shard) for shard in scores_dir.glob("*.parquet")
-    ])
+    edges = pd.concat(
+        [pd.read_parquet(shard) for shard in scores_dir.glob("*.parquet")]
+    )
     assert edges["query_ligand_id"].max() < len(small)
 
 
@@ -629,7 +634,6 @@ def test_composite_parity_scores_mono_against_composite(atoms_2dty, sugar_table)
 def _linked_chain(codes, *, donor="C1", acceptors=None, leaving="O1"):
     """CCD residues linked donor(i) -> acceptor(i+1), each donor's leaving atom dropped."""
     import biotite.structure as struc
-
     from plinder.data.annotations.cif_utils import _get_ccd_atomarray
 
     units = []
@@ -837,9 +841,9 @@ def test_macrocycle_is_distinguished_from_the_real_linear_peptide(cyclic_peptide
 )
 def test_scrambled_macrocycle_matches_partially(cyclic_peptide, sequence, note):
     """A different ring order over the same residues is neither same nor unrelated."""
-    assert sequence not in {"AGSFL"[shift:] + "AGSFL"[:shift] for shift in range(5)}, (
-        "the scramble must not be a rotation"
-    )
+    assert sequence not in {
+        "AGSFL"[shift:] + "AGSFL"[:shift] for shift in range(5)
+    }, "the scramble must not be a rotation"
     scrambled = peptide_graph(sequence, cyclic=True)
     assert sorted(scrambled.labels) == sorted(cyclic_peptide.labels)
     assert 0.0 < composite_similarity(cyclic_peptide, scrambled) < 1.0

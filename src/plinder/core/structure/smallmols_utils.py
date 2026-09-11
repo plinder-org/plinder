@@ -183,12 +183,12 @@ def get_template_to_mol_matches(
                 results = results3
 
     # convert to atom order array stacks
-    template_atom_order_stack1 = np.array([
-        [ix_templ for _, ix_templ in match.atomMatches()] for match in results
-    ])
-    mol_atom_order_stack2 = np.array([
-        [ix_mol for ix_mol, _ in match.atomMatches()] for match in results
-    ])
+    template_atom_order_stack1 = np.array(
+        [[ix_templ for _, ix_templ in match.atomMatches()] for match in results]
+    )
+    mol_atom_order_stack2 = np.array(
+        [[ix_mol for ix_mol, _ in match.atomMatches()] for match in results]
+    )
     return template_atom_order_stack1, mol_atom_order_stack2
 
 

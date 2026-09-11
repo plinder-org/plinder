@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pytest
-
 from plinder.data.annotations.aggregate_annotations import Entry
 from plinder.data.annotations.cif_utils import (
     find_ph_mentions,
