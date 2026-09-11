@@ -6,6 +6,7 @@ Everything here runs against the real bundled CCD; no synthetic component ids.
 """
 
 import gzip
+import json
 import shutil
 from collections import Counter
 from pathlib import Path
@@ -33,6 +34,7 @@ from plinder.data.annotations.ccd_ligand_dbs import (
     ccd_dbs_dir,
     ccd_fingerprint_path,
     ccd_node_similarity,
+    ccd_parity_path,
     ccd_universe_signature,
     component_sequence_identity,
     composite_parity,
@@ -477,6 +479,67 @@ def test_make_ccd_ligand_dbs_builds_artifacts_and_caches(tmp_path):
         build_tanimoto_scores=False,
     )
     assert {path.name: path.stat().st_mtime_ns for path in paths} == before
+
+
+@needs_mmpdb
+def test_ccd_score_cache_tracks_similarity_cutoff(tmp_path):
+    def build(cutoff, *, scores=True):
+        return make_ccd_ligand_dbs(
+            data_dir=tmp_path,
+            scratch_dir=tmp_path / "scratch",
+            threads=2,
+            limit=12,
+            minimum_similarity=cutoff,
+            build_tanimoto_scores=scores,
+        )
+
+    def read_scores(output_dir):
+        edges = pd.concat(
+            [
+                pd.read_parquet(path)
+                for path in sorted((output_dir / "ligand_scores").glob("*.parquet"))
+            ],
+            ignore_index=True,
+        )
+        parity_pairs = pd.read_parquet(
+            ccd_parity_path(tmp_path),
+            columns=[
+                "ligand_smiles_id_1",
+                "ligand_smiles_id_2",
+                "tanimoto_similarity_ecfp4_1024",
+            ],
+        )
+        return edges, parity_pairs
+
+    output_dir = build(0.0)
+    all_edges, all_parity = read_scores(output_dir)
+    similarity = "tanimoto_similarity_ecfp4_1024"
+    assert all_parity[similarity].lt(100.0).any()
+
+    # A score-free run must not certify the older score files at a new cutoff.
+    build(100.0, scores=False)
+    build(100.0)
+    high_edges, high_parity = read_scores(output_dir)
+    for actual, original in [(high_edges, all_edges), (high_parity, all_parity)]:
+        pd.testing.assert_frame_equal(
+            actual,
+            original.loc[original[similarity].ge(100.0)].reset_index(drop=True),
+        )
+
+    build(0.0)
+    low_edges, low_parity = read_scores(output_dir)
+    pd.testing.assert_frame_equal(low_edges, all_edges)
+    pd.testing.assert_frame_equal(low_parity, all_parity)
+    manifest = json.loads((output_dir / "ccd_dbs.manifest.json").read_text())
+    assert manifest["minimum_similarity"] == 0.0
+    assert manifest["build_tanimoto_scores"] is True
+
+    paths = list((output_dir / "ligand_scores").glob("*.parquet")) + [
+        ccd_parity_path(tmp_path)
+    ]
+    modified = {path: path.stat().st_mtime_ns for path in paths}
+    build(0.0)
+    assert {path: path.stat().st_mtime_ns for path in paths} == modified
 
 
 @needs_mmpdb

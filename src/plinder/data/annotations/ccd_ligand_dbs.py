@@ -1298,7 +1298,7 @@ def make_ccd_ligand_dbs(
     build_tanimoto_scores: bool = True,
     minimum_similarity: float = 30.0,
 ) -> Path:
-    """Build the CCD-anchored MMP, ECFP4 and PARITY-like databases, cached by CCD version.
+    """Build CCD-anchored MMP, ECFP4 and PARITY-like databases with cached settings.
 
     Parameters
     ----------
@@ -1312,6 +1312,10 @@ def make_ccd_ligand_dbs(
         Rebuild even when the manifest matches.
     limit : int or None
         Restrict to the first *limit* released components (testing aid).
+    build_tanimoto_scores : bool
+        Build the Tanimoto edges and their PARITY-like scores.
+    minimum_similarity : float
+        ECFP4 Tanimoto percentage cutoff for pairs retained in both score tables.
 
     Returns
     -------
@@ -1320,9 +1324,8 @@ def make_ccd_ligand_dbs(
 
     Notes
     -----
-    The manifest keys on the derived component universe, so a rebuild happens
-    only when biotite's bundled CCD changes - the databases are effectively
-    build-once across releases while still sitting in the normal ingest DAG.
+    The manifest records the component universe, mmpdb version, and score
+    settings. Matching builds reuse their files; changed settings rebuild them.
     """
     import json
 
@@ -1347,6 +1350,8 @@ def make_ccd_ligand_dbs(
         "ccd_universe_signature": ccd_universe_signature(components),
         "num_components": int(len(components)),
         "mmpdb_version": _mmpdb_version(),
+        "minimum_similarity": minimum_similarity,
+        "build_tanimoto_scores": build_tanimoto_scores,
     }
 
     artifacts: tuple[Path, ...] = (
@@ -1364,7 +1369,7 @@ def make_ccd_ligand_dbs(
         except (OSError, ValueError):
             cached = None
         if cached == manifest:
-            LOG.info("make_ccd_ligand_dbs: artifacts already match the CCD universe")
+            LOG.info("make_ccd_ligand_dbs: artifacts already match the build settings")
             return output_dir
 
     temporary_components = components_path.with_suffix(".parquet.tmp")
