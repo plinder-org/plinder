@@ -5903,6 +5903,10 @@ def test_ingest_configs_use_current_schema_and_stages():
         if path.name == "make_entries_ligands.yaml":
             assert "collate_entries" in cfg.flow.run_specific_stages
             assert "finalize_ligand_archives" in cfg.flow.run_specific_stages
+            assert "compute_ligand_fingerprints" in cfg.flow.run_specific_stages
+            assert "make_ligand_scores" in cfg.flow.run_specific_stages
+            assert "make_mhfp6_scores" in cfg.flow.run_specific_stages
+            assert "annotate_ligand_similarity" in cfg.flow.run_specific_stages
             assert "make_ligand_mmp_pairs" in cfg.flow.run_specific_stages
             assert "make_ligands" not in cfg.flow.run_specific_stages
 
