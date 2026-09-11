@@ -1347,6 +1347,27 @@ def test_scatter_protein_scoring_uses_v3_chain_index(tmp_path) -> None:
     assert "interface_half_annotation" in plan
 
 
+def test_protein_plan_refreshes_recollated_interface_representatives(tmp_path):
+    from plinder.data.pipeline.score import _load_plan, plan_protein_scoring
+
+    _write_alignment_chain_lookup(tmp_path)
+    chain_path = tmp_path / "index/entry_chains.parquet"
+    pd.read_parquet(chain_path).assign(chain_is_holo=True).to_parquet(
+        chain_path, index=False
+    )
+    interface_path = tmp_path / "index/interface_annotation_table.parquet"
+    # Collation writes the table again even when its interface rows are unchanged.
+    pq.write_table(pq.read_table(interface_path), interface_path)
+    assert tasks._completed_interface_representatives(tmp_path) is None
+
+    plan = plan_protein_scoring(tmp_path)
+    # The later database/mapping stage must reuse the representatives in the plan.
+    tasks.make_interface_representatives(
+        data_dir=tmp_path, scratch_dir=tmp_path / "scratch", threads=1
+    )
+    assert _load_plan(tmp_path, recheck_source=True) == plan
+
+
 def test_linked_apo_queries_use_only_proper_ligand_protein_receptors(
     tmp_path,
 ) -> None:

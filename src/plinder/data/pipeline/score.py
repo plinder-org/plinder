@@ -1598,6 +1598,14 @@ def plan_protein_scoring(
     }
     half_interface_path = data_dir / tasks.INTERFACE_HALF_REPRESENTATIVES_RELATIVE
     interface_path = data_dir / tasks.INTERFACE_REPRESENTATIVES_RELATIVE
+    if interface_path.is_file():
+        # A resumed collation may have replaced the source interface table.
+        # Refresh existing representatives before freezing their signatures.
+        tasks.make_interface_representatives(
+            data_dir=data_dir,
+            scratch_dir=Path(os.environ.get("TMPDIR", data_dir / "scratch")),
+            threads=1,
+        )
     if half_interface_path.is_file():
         payload["interface_half_annotation"] = _source_signature(half_interface_path)
     if interface_path.is_file():
