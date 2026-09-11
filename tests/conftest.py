@@ -12,22 +12,15 @@ test_asset_fp = Path(__file__).absolute().parent / "test_data"
 test_output_fp = Path(__file__).absolute().parent / "xx/output"
 
 
+# TODO: tests/test_data/plinder/mount is a hand-curated slice of a released
+# index, so the static table cannot reflect code changes; it must be regenerated
+# with each release (a release-time CI job from the release artifacts).
 def _write_test_entry_metadata(release_dir: Path) -> None:
     annotation = pd.read_parquet(release_dir / "index" / "annotation_table.parquet")
     entry_columns = [column for column in annotation if column.startswith("entry_")]
     metadata = annotation.loc[:, entry_columns].drop_duplicates()
     if metadata["entry_pdb_id"].duplicated().any():
         raise ValueError("test annotation has inconsistent entry metadata")
-    dates = pd.read_csv(
-        Path(__file__).resolve().parents[1]
-        / "src/plinder/data/annotations/static_files/dates.csv"
-    ).loc[:, ["entry_pdb_id", "entry_release_date"]]
-    metadata = metadata.drop(columns="entry_release_date", errors="ignore").merge(
-        dates,
-        on="entry_pdb_id",
-        how="left",
-        validate="one_to_one",
-    )
     metadata.to_parquet(release_dir / "index" / "entry_metadata.parquet", index=False)
 
 
