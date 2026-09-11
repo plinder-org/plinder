@@ -106,6 +106,45 @@ def _validation(unresolved: int | None) -> ResidueValidation:
     )
 
 
+def test_validation_keeps_a_snapshot_of_calculation_thresholds():
+    thresholds = ResidueValidationThresholds(
+        min_rscc=0.95, max_rsr=0.05, min_average_occupancy=1.1
+    )
+    expected = thresholds.model_dump()
+    validation = ResidueListValidation.from_residues([_validation(0)], thresholds)
+    assert validation is not None
+    assert validation.thresholds is not thresholds
+    assert validation.percent_rscc_over_threshold == 0.0
+    assert validation.percent_rsr_under_threshold == 0.0
+    assert validation.percent_occupancy_over_threshold == 0.0
+    thresholds.min_rscc = 0.5
+    thresholds.max_rsr = 0.5
+    thresholds.min_average_occupancy = 0.5
+
+    restored = ResidueListValidation.model_validate_json(validation.model_dump_json())
+    assert restored.thresholds is not None
+    assert restored.thresholds.model_dump() == expected
+    assert restored.format() == validation.format()
+    assert "validation_thresholds" not in restored.format()
+    assert "system_ligand_validation_thresholds" not in {
+        name
+        for name, _, _ in ResidueListValidation.document_properties(
+            "system_ligand_validation"
+        )
+    }
+
+
+def test_older_validation_results_do_not_invent_thresholds():
+    validation = ResidueListValidation.from_residues(
+        [_validation(0)], ResidueValidationThresholds()
+    )
+    assert validation is not None
+    stored = validation.model_dump(exclude={"thresholds"})
+    restored = ResidueListValidation.model_validate(stored)
+    assert restored.thresholds is None
+    assert restored.format() == validation.format()
+
+
 @pytest.mark.parametrize(
     ("counts", "expected"),
     [

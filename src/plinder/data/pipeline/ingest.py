@@ -630,6 +630,10 @@ def ingest_one_pdb(
             entry_cfg=entry_cfg,
             interface_cfg=interface_cfg,
         )
+    from plinder.data.annotations.aggregate_annotations import QualityCriteria
+    from plinder.data.annotations.get_ligand_validation import (
+        ResidueValidationThresholds,
+    )
     from plinder.data.annotations.interface_utils import (
         DEFAULT_MIN_INTERFACE_RESIDUES,
     )
@@ -686,6 +690,12 @@ def ingest_one_pdb(
         "mode": mode,
         "interface_min_residues": expected_interface_min_residues,
         "interface_annotate_prodigy": expected_annotate_prodigy,
+        # Standard ligand ingest uses these defaults. Record the settings even
+        # when a validation report is unavailable; results track missing data.
+        "validation_settings": {
+            "residue_thresholds": ResidueValidationThresholds().model_dump(),
+            "quality_criteria": asdict(QualityCriteria()),
+        },
         "inputs": {
             "mmcif": str(cif_file),
             "validation_xml": str(validation_file),

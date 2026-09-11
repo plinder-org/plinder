@@ -197,10 +197,10 @@ class ResidueListValidation(DocBaseModel):
     percent_outliers: dict[str, float] = Field(
         description="[EXCLUDE] Percentage of outliers for each type of outlier"
     )
-    # TODO: add thresholds in rerun
-    # thresholds: ResidueValidationThresholds = Field(
-    #     description="Thresholds used to determine if a residue is valid"
-    # )
+    thresholds: ResidueValidationThresholds | None = Field(
+        default=None,
+        description="[EXCLUDE] Thresholds used to calculate residue validation percentages",
+    )
 
     @classmethod
     def document_properties(
@@ -273,8 +273,7 @@ class ResidueListValidation(DocBaseModel):
                 / total_residues
                 for s in ["geometry", "density", "chirality", "clashes"]
             },
-            # TODO: add thresholds in rerun
-            # thresholds=residue_thresholds,
+            thresholds=residue_thresholds.model_copy(deep=True),
         )
 
     def format(self) -> dict[str, float | int | None]:

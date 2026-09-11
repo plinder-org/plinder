@@ -197,6 +197,11 @@ def test_reference_data_check_reports_every_missing_file(tmp_path: Path) -> None
 def test_ingest_one_pdb_writes_entry_outputs_and_metrics(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from dataclasses import asdict
+    from inspect import signature
+
+    from plinder.data.annotations.aggregate_annotations import Entry, System
+
     output_root = tmp_path / "output"
     cif_root = tmp_path / "nextgen"
     validation_root = tmp_path / "validation"
@@ -260,6 +265,14 @@ def test_ingest_one_pdb_writes_entry_outputs_and_metrics(
     )
 
     metrics = json.loads(metrics_path.read_text())
+    assert metrics["validation_settings"] == {
+        "residue_thresholds": signature(Entry.set_validation)
+        .parameters["thresholds"]
+        .default.model_dump(),
+        "quality_criteria": asdict(
+            signature(System.format).parameters["criteria"].default
+        ),
+    }
     assert (
         metrics_path
         == output_root.resolve() / "metrics" / "gr" / "ingest-one-8grn.json"
