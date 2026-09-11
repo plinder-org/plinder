@@ -13,6 +13,7 @@ non-water atoms, 840 chains): about 13 s and 3.2 GB of peak memory, i.e. roughly
 that process arbitrary assemblies should cap the atom count (see
 ``tessellation_atom_limit`` on :class:`plinder.data.annotations.aggregate_annotations.Entry`).
 """
+
 from __future__ import annotations
 
 from collections.abc import Mapping

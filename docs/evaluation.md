@@ -2,145 +2,194 @@
 sd_hide_title: true
 ---
 
-# Evaluation tools
+# Evaluation
 
-## Evaluating docking poses across a stratified test set
+Compare predicted ligand poses and protein interfaces with PLINDER references
+using OpenStructure. PoseBusters checks the chemical and physical plausibility
+of predicted ligands.
 
-The `plinder.eval` subpackage allows (1) assessing protein-ligand complex predictions against reference `plinder` systems, and
-(2) correlating the performance of these predictions against the level of similarity of each test system to the corresponding training set.
+For a runnable walkthrough, see {doc}`examples/evaluation`.
 
-The output file from running the scripts `src/plinder/eval/docking/write_scores.py` and `src/plinder/eval/docking/stratify_test_set.py` generates the same evaluation metrics as the ones we have on the public leaderboard.
+## Installation
 
-The `plinder-eval` package allows
-
-1. assessing protein-ligand complex predictions against reference `plinder` systems, and
-2. correlating the performance of these predictions against the level of similarity of
-each test system to the corresponding training set.
-
-The output files from running `plinder-eval` will be used to populate the [MLSB leaderboard](https://www.mlsb.io/#challenge).
-
-### Input
-
-`predictions.csv` with each row representating a protein-ligand pose, and the following columns:
-
-- `id`: An identifier for the prediction (same across different ranked poses of the same prediction)
-- `reference_system_id`: `plinder` system ID to use as reference
-- `receptor_file`: Path to protein CIF file. Leave blank if rigid docking, the system's receptor file will be used.
-- `rank`: The rank of the pose (1-indexed)
-- `confidence`: Optional score associated with the pose
-- `ligand_file`: Path to the pose SDF file or directory of SDF files for multi ligand poses
-
-`split.parquet` with, at a minimum, `system_id` and `split` columns mapping PLINDER systems to `train`, or `test`.
-
-### Commands
-
-#### Write scores
+Install OpenStructure 2.12.0 or newer from Bioconda and the Python evaluation extra:
 
 ```bash
-plinder_eval --prediction_file tests/test_data/eval/predictions.csv --output_dir test_eval/ --num_processes 8
+conda install -c conda-forge -c bioconda 'openstructure>=2.12.0'
+pip install 'plinder[eval]'
 ```
 
-This calculates accuracy metrics for all predicted poses compared to the reference. JSON files of each pose are stored in `test_eval/scores` and the summary file across all poses is stored in `test_eval/scores.parquet`.
+The `ost` executable must be on your `PATH`. PLINDER calls its
+`compare-ligand-structures` and `compare-structures` actions directly.
+The evaluation tests use OpenStructure 2.12.0 and PoseBusters 0.6.5.
 
-The predicted pose is compared to the reference system and the following ligand scores are calculated per each ligand:
-- `lddt_pli`: lDDT-PLI for the matched ligand
-- `bisy_rmsd`: binding-site superposed symmetry-corrected RMSD for the matched ligand
-- `lddt_lp`: lDDT score for the residues in the matched ligand pocket
-- `best_rmsd_matched_reference_chain`: chain tag of the best `bisy_rmsd` matched ligand chain in reference (useful for mutli ligand systems)
-- `best_pli_matched_reference_chain`: chain tag of the best `lddt_pli` matched ligand chain in reference (useful for mutli ligand systems)
+(arrange-your-predictions)=
+## Arrange your predictions
 
-and in aggregate per system:
-- `fraction_reference_ligands_mapped`: Fraction of reference ligand chains with corresponding model chains
-- `fraction_model_ligands_mapped`: Fraction of model ligand chains mapped to corresponding reference chains
-- `lddt_pli_ave`: average lDDT-PLI across mapped ligands
-- `lddt_pli_wave`: average lDDT-PLI across mapped ligands weighted by number of atoms
-- `lddt_lp_ave`: average lDDT-LP score for the residues in the matched ligand pocket
-- `lddt_lp_wave`: average lDDT-LP across mapped ligands weighted by number of atoms
-- `bisy_rmsd_ave`: average binding-site superposed symmetry-corrected RMSD across mapped ligands
-- `bisy_rmsd_wave`: average binding-site superposed symmetry-corrected RMSD across mapped ligands weighted by number of atoms
+Search and evaluation accept the same CSV, TSV, Parquet or pandas input table:
 
-If `--score_receptor` flag is used, then protein in `receptor_file` is compared to the `reference` system receptor file and the following scores are calculated:
+| input_id | structure_path | ligand_path | reference_id |
+| --- | --- | --- | --- |
+| model_1 | models/receptor.pdb | models/pose.sdf | 8c3u__1__1.A__1.C |
+| model_2 | models/complex.cif | | 8c3u__1__1.A__1.C |
+| model_3 | models/interface.pdb | | 2e31__1__1.A--1.B |
 
-- `fraction_reference_proteins_mapped`: Fraction of reference protein chains with corresponding model chains
-- `fraction_model_proteins_mapped`: Fraction of model protein chains mapped to corresponding reference chains
-- `lddt`: all atom lDDT
-- `bb_lddt`: CA lDDT
-- `per_chain_lddt_ave`: average all atom lDDT across all mapped chains
-- `per_chain_lddt_wave`: average all atom lDDT across all mapped chains weighted by chain length
-- `per_chain_bb_lddt_ave`: average CA lDDT across all mapped chains
-- `per_chain_bb_lddt_wave`: average CA lDDT across all mapped chains weighted by chain length
+`input_id` identifies a prediction. For multiple ligand SDFs, repeat its row
+with a different `ligand_path`, or point `ligand_path` to a folder of SDFs.
+An empty ligand field selects a complete structure; an empty ligand folder
+represents zero predicted poses. Paths are relative to the table's directory;
+DataFrames use the working directory. Evaluation requires `reference_id`,
+which can be a PLINDER system/interface ID or a PDB ID. Search uses the remaining
+columns to find matches across PLINDER.
 
-For oligomeric complexes:
+Pass the table to `evaluate_predictions("inputs.tsv", output_dir="evaluation")`
+or `plinder_eval inputs.tsv --output-dir evaluation`. The search equivalent is
+`plinder.core.scores.search("inputs.tsv", output_dir="search_results")`;
+see {doc}`examples/custom_scoring` for a walkthrough.
 
-- `qs_global` - Global QS score
-- `qs_best` - Global QS-score - only computed on aligned residues
-- `dockq_ave` - Average of DockQ scores
-- `dockq_wave` - Same as dockq_ave, weighted by native contacts
+### Folder input
 
-If `score_posebusters` is True, all posebusters checks are saved.
+Put each prediction in a subdirectory named after its reference:
 
-You can inspect the results at `test_eval/scores.parquet`
-
-```python
->>> import pandas as pd
->>> df = pd.read_parquet("test_eval/scores.parquet")
->>> df.T
-                                                   0                      1
-model                              1a3b__1__1.B__1.D  1ai5__1__1.A_1.B__1.D
-reference                          1a3b__1__1.B__1.D  1ai5__1__1.A_1.B__1.D
-num_reference_ligands                              1                      1
-num_model_ligands                                  1                      1
-num_reference_proteins                             1                      2
-num_model_proteins                                 1                      2
-fraction_reference_ligands_mapped                1.0                    1.0
-fraction_model_ligands_mapped                    1.0                    1.0
-lddt_pli_ave                                 0.85815               0.510695
-lddt_pli_wave                                0.85815               0.510695
-bisy_rmsd_ave                               1.617184               3.665143
-bisy_rmsd_wave                              1.617184               3.665143
-rank                                               1                      1
+```text
+predictions/
+├── 8c3u__1__1.A__1.C/
+│   ├── model_1.pdb
+│   ├── model_1.sdf
+│   ├── model_2.cif
+│   └── model_2.ligands/
+│       ├── ligand_A.sdf
+│       └── ligand_B.sdf
+└── 8c3u/
+    └── model_1.cif
 ```
 
-#### Write test stratification data
+Use a ligand-system ID or protein-interface ID for a specific reference.
+A four-character PDB ID compares each prediction with all matching systems
+or interfaces from that entry. Each file is a separate prediction.
+Both `.cif` and `.mmcif` files are accepted, including gzip-compressed files;
+the first coordinate model in each file is used.
+For protein interfaces, `.pdb` and `.pdb.gz` predictions can also be used directly.
 
-(This command will not need to be run by a user, the `test_set.parquet` and `val_set.parquet` file will be provided with the split release)
+For ligand evaluation, supply a predicted receptor PDB/mmCIF with a matching
+`model_1.sdf`, or a `model_1.ligands/` folder containing one SDF per ligand.
+The receptor and ligand coordinates must describe the same predicted complex.
+Each SDF supplies its ligand's chemistry and coordinates. An empty
+`model_1.ligands/` folder represents a prediction with zero ligand poses.
+Choose either the single SDF or the ligand folder for each receptor.
+
+A complete predicted mmCIF can also be used on its own; PLINDER extracts its
+receptor and ligands for evaluation.
+
+## Run evaluation
 
 ```bash
-plinder_stratify --split_file split.csv --output_dir test_data
+plinder_eval predictions --output-dir evaluation --mode both --num-workers 8
 ```
 
-Makes `test_data/test_set.parquet` which
+Use `--mode ligands` or `--mode interfaces` to evaluate only one type.
+References come from your configured PLINDER release. To use a local release,
+add `--data-dir /path/to/release`. Reference coordinates are reconstructed
+from the release's recorded source structures as needed.
 
-- Labels the maximum similarity of each test system to the training set across all the similarity metrics
-- Stratifies the test set based on training set similarity into `novel_pocket_pli`, `novel_ligand_pli`, `novel_protein`, `novel_ligand`, `novel_all` and `not_novel`
-- Labels test systems with high quality.
+The equivalent Python function is
+`plinder.eval.evaluate_predictions(predictions, output_dir=..., mode="both", num_workers=8)`.
+It returns a dictionary of DataFrames as well as saving them to the output folder.
+In a standalone Python script, put the call inside
+`if __name__ == "__main__":`.
 
-To inspect the result of the run, do:
-```python
->>> import pandas as pd
->>> df = pd.read_parquet("test_eval/test_set.parquet")
->>> df.T
-                                                  0                      1
-system_id                         1a3b__1__1.B__1.D  1ai5__1__1.A_1.B__1.D
-pli_qcov                                        0.0                    0.0
-protein_seqsim_qcov_weighted_sum                0.0                    0.0
-protein_seqsim_weighted_sum                     0.0                    0.0
-protein_fident_qcov_weighted_sum                0.0                    0.0
-protein_fident_weighted_sum                     0.0                    0.0
-protein_lddt_qcov_weighted_sum                  0.0                    0.0
-protein_lddt_weighted_sum                       0.0                    0.0
-protein_qcov_weighted_sum                       0.0                    0.0
-pocket_fident_qcov                              0.0                    0.0
-pocket_fident                                   0.0                    0.0
-pocket_lddt_qcov                                0.0                    0.0
-pocket_lddt                                     0.0                    0.0
-pocket_qcov                                     0.0                    0.0
-tanimoto_similarity_ecfp4_1024                         0.0                    0.0
-passes_quality                                False                  False
-novel_pocket_pli                               True                   True
-novel_ligand                                   True                   True
-novel_protein                                  True                   True
-novel_all                                      True                   True
-not_novel                                     False                  False
->>>
+`num_workers` limits concurrent prediction processes. Each worker runs its
+comparisons and PoseBusters checks in sequence.
+
+## Ligand selection and bonds
+
+Ligand evaluation uses **proper reference ligands** by default: those marked
+`ligand_is_proper` in the annotation table. Add `--include-all-ligands` to
+also evaluate reference ions and artifacts. OST assigns predicted ligands to
+the selected references, including predicted ligands far from the receptor.
+
+For receptor + SDF inputs, chemistry comes from each prediction's own SDF files.
+Use this layout when different predictions use `LIG` for different molecules.
+Results identify these ligands by their original SDF filenames.
+
+For complete-mmCIF inputs, PLINDER prepares ligand SDFs from the prediction.
+Existing bonds and CCD chemistry are used where available. For an unfamiliar
+component name such as `LIG`, supply its CCD code or SMILES:
+
+```bash
+plinder_eval predictions --output-dir evaluation --mode ligands \
+    --ligand-ccd-codes '{"LIG": "ATP"}'
 ```
+
+Alternatively use `--ligand-smiles '{"LIG": "CCO"}'`.
+For SMILES, the heavy-atom order must match the CIF atom order. CCD templates
+use atom names or graph matching. These mappings apply to every prediction
+in the run that uses complete-mmCIF extraction. Use a shared mapping only when
+the component name refers to the same molecule across those predictions.
+Supply only one chemistry source per component.
+
+Protein and DNA/RNA polymers are treated as receptors. For a predicted peptide
+ligand, use `--ligand-chain B`, where `B` is its label asym ID; repeat the
+option for additional polymer ligand chains. DNA/RNA inputs need their mmCIF
+polymer sequence metadata. Covalently connected ligand chains stay together;
+ligands connected only by metal coordination are treated as separate molecules.
+
+PoseBusters is enabled for ligand evaluation. Use `--no-posebusters` to skip it.
+It checks each ligand against its paired predicted receptor, or the receptor
+extracted from the same complete mmCIF.
+The receptor's residue information is preserved in an RDKit molecule.
+
+Covalently bound ligands need care when interpreting these checks: separating
+the ligand and receptor can make their covalent attachment appear as a
+nonbonded clash. Such checks remain `False` in the results; inspect the attachment
+before interpreting it as a bad pose.
+
+## Results
+
+| File | Contents |
+| --- | --- |
+| `ligands.parquet` | One row per selected reference ligand and prediction |
+| `interfaces.parquet` | One row per reference interface and prediction |
+| `posebusters.parquet` | Plausibility checks per candidate predicted ligand |
+| `failures.tsv` | Reference-loading, preparation, or tool errors |
+| `details/` | Native OST results, PoseBusters CSVs, logs, and prepared structures |
+
+The Python return keys are `ligands`, `interfaces`, `posebusters`, and `failures`.
+`prediction` is the input path relative to the predictions folder;
+`system_id` and `ligand_id` identify the reference.
+
+Ligand metrics include `rmsd` (binding-site-superposed, symmetry-corrected RMSD),
+`bb_rmsd`, `lddt_lp`, `lddt_pli`, and the corresponding ligand coverage values.
+OST can choose different assignments for RMSD and lDDT-PLI. Their predicted
+ligand IDs are therefore stored separately as `rmsd_model_ligand` and
+`lddt_pli_model_ligand`.
+
+PoseBusters includes all candidate predicted ligands, including unmatched ones.
+To attach its checks to a reference-ligand result, join on `prediction` and
+the model-ligand ID for the metric you are analysing. The predicted IDs are
+SDF filenames for supplied poses, or label asym IDs for complete-mmCIF inputs;
+a covalent multi-chain group uses its lexically first asym ID.
+
+Interface metrics include `lddt`, `ilddt`, `qs_global`, `qs_best`,
+`dockq`, `dockq_ave_full`, and `dockq_wave_full`. The full DockQ aggregates
+include zero penalties for unmapped reference interfaces.
+
+Unmatched reference ligands have empty scores and a reason for each
+unassigned metric. `status="unassigned"` means both ligand metrics are unassigned.
+Include these rows as failures when calculating a pose-success fraction.
+`status="error"` indicates an execution problem; inspect `failures.tsv`
+and resolve it before interpreting results.
+`status="success"` means the comparison completed.
+
+OpenStructure 2.12 can reject modified receptor residues when its residue code
+disagrees with the sequence in the mmCIF, for example `CSK` in PDB entry `4agi`.
+This appears as a sequence-mismatch error in `failures.tsv`.
+Keep track of these cases when reporting how many predictions were evaluated.
+
+The command returns exit code 0 when comparisons complete, including those with
+unassigned ligands, and a nonzero code for execution errors. Each run recalculates
+results and replaces the summary tables.
+
+For additional OST settings, pass a quoted argument string with
+`--ligand-options='--flag value'` or `--interface-options='--flag value'`.
+The Python function accepts the corresponding lists of arguments.

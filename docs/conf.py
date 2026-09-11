@@ -35,7 +35,7 @@ API_EXCLUDED_MODULES = {
 
 # Generate one reference page per module included in the standard installation.
 apidoc.clear_api_reference(DOC_PATH / "api")
-for package in ["plinder.core", "plinder.data"]:
+for package in ["plinder.core", "plinder.data", "plinder.eval"]:
     apidoc.generate_api_reference(
         package,
         DOC_PATH / "api" / package.split(".")[-1],
@@ -79,6 +79,7 @@ nb_execution_excludepatterns = [
     # TODO: v3-only: these fetch 2026-07 release artifacts (systems, interfaces,
     # similarity exports) that are not published yet.
     "examples/custom_scoring.ipynb",
+    "examples/evaluation.ipynb",
     "examples/protein_interfaces.ipynb",
     "examples/similarity_and_representatives.ipynb",
     "tutorial/api.ipynb",
@@ -110,8 +111,7 @@ linkcode_resolve = viewcode.linkcode_resolve
 templates_path = ["templates"]
 exclude_patterns = [
     "_build",
-    # Deferred until their APIs are revisited in focused PRs.
-    "evaluation.md",
+    # Deferred until the loader API is revisited in a focused PR.
     "examples/5_dataset_and_loader.ipynb",
 ]
 source_suffix = {

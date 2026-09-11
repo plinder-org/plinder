@@ -9,6 +9,7 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+
 from plinder.data.annotations.interface_utils import (
     INTERFACE_ANNOTATION_SCHEMA,
     MIN_INTERFACE_RESIDUES_METADATA_KEY,
@@ -40,25 +41,21 @@ def _write_fake_sidecars(
     *,
     interfaces: list[dict[str, object]] | None = None,
 ) -> None:
-    pd.DataFrame(
-        {
-            "entry_pdb_id": [pdb_id],
-            "chain_receptor_type": ["protein"],
-            "chain_is_ligand_like": [False],
-        }
-    ).to_parquet(entry_dir / "entry_chains.parquet", index=False)
-    pd.DataFrame(
-        {
-            "entry_pdb_id": [pdb_id],
-            "biounit_id": ["1"],
-            "chain_instance": ["1.A"],
-            "chain_asym_id": ["A"],
-            "chain_role": ["receptor"],
-            "chain_num_contacting_ions": [0],
-            "chain_num_contacting_artifacts": [0],
-            "chain_num_contacting_other_ligands": [0],
-        }
-    ).to_parquet(entry_dir / "entry_biounit_chains.parquet", index=False)
+    pd.DataFrame({
+        "entry_pdb_id": [pdb_id],
+        "chain_receptor_type": ["protein"],
+        "chain_is_ligand_like": [False],
+    }).to_parquet(entry_dir / "entry_chains.parquet", index=False)
+    pd.DataFrame({
+        "entry_pdb_id": [pdb_id],
+        "biounit_id": ["1"],
+        "chain_instance": ["1.A"],
+        "chain_asym_id": ["A"],
+        "chain_role": ["receptor"],
+        "chain_num_contacting_ions": [0],
+        "chain_num_contacting_artifacts": [0],
+        "chain_num_contacting_other_ligands": [0],
+    }).to_parquet(entry_dir / "entry_biounit_chains.parquet", index=False)
     pd.DataFrame({"entry_pdb_id": [pdb_id]}).to_parquet(
         entry_dir / "entry_source.parquet", index=False
     )
@@ -96,9 +93,10 @@ def test_empty_annotation_writes_shared_sidecars(
         pdb_id="8grn",
         systems={},
         interfaces=[],
-        set_validation=lambda validation, cif: validation_calls.append(
-            (validation, cif)
-        ),
+        set_validation=lambda validation, cif: validation_calls.append((
+            validation,
+            cif,
+        )),
         metadata_to_df=lambda: pd.DataFrame({"entry_pdb_id": ["8grn"]}),
     )
     monkeypatch.setattr(
@@ -115,9 +113,11 @@ def test_empty_annotation_writes_shared_sidecars(
     monkeypatch.setattr(
         annotator,
         "_write_shared_sidecars",
-        lambda path, table, *, replace_interfaces: writes.append(
-            (path, table.num_rows, replace_interfaces)
-        ),
+        lambda path, table, *, replace_interfaces: writes.append((
+            path,
+            table.num_rows,
+            replace_interfaces,
+        )),
     )
 
     assert annotator.annotate() is None
@@ -232,13 +232,11 @@ def test_ingest_one_pdb_writes_entry_outputs_and_metrics(
             ligand_dir.mkdir(parents=True)
             (ligand_dir / "1.C.sdf").touch()
             _write_fake_sidecars(ligand_dir.parent, "8grn")
-            return pd.DataFrame(
-                {
-                    "system_id": ["8grn__1__1.A__1.C"],
-                    "ligand_id": ["8grn__1.C"],
-                    "system_receptor_type": ["protein"],
-                }
-            )
+            return pd.DataFrame({
+                "system_id": ["8grn__1__1.A__1.C"],
+                "ligand_id": ["8grn__1.C"],
+                "system_receptor_type": ["protein"],
+            })
 
     def fake_save_ligand_batch(
         *, data_dir: Path, annotation: pd.DataFrame, output_path: Path
@@ -464,34 +462,32 @@ def test_interface_mode_preserves_every_ligand_asset(
 
         def annotate_interfaces(self) -> pa.Table:
             interface = dict.fromkeys(INTERFACE_ANNOTATION_SCHEMA.names)
-            interface.update(
-                {
-                    "entry_pdb_id": "8grn",
-                    "system_id": "8grn__1__1.A--1.B",
-                    "system_biounit_id": "1",
-                    "interface_chain_1": "1.A",
-                    "interface_chain_2": "1.B",
-                    "interface_chain_1_residue_numbers": list(range(1, 8)),
-                    "interface_chain_1_residue_indices": list(range(7)),
-                    "interface_chain_2_residue_numbers": list(range(11, 18)),
-                    "interface_chain_2_residue_indices": list(range(7)),
-                    "interface_num_contact_residue_pairs": 8,
-                    "prodigy_is_annotated": True,
-                    "prodigy_label": "BIO",
-                    "prodigy_probability_bio": 0.9,
-                    "prodigy_link_density": 0.2,
-                    "prodigy_intermolecular_contacts": 8,
-                    "prodigy_charged_charged_contacts": 1,
-                    "prodigy_charged_polar_contacts": 1,
-                    "prodigy_charged_apolar_contacts": 2,
-                    "prodigy_polar_polar_contacts": 0,
-                    "prodigy_apolar_polar_contacts": 1,
-                    "prodigy_apolar_apolar_contacts": 3,
-                }
-            )
-            schema = INTERFACE_ANNOTATION_SCHEMA.with_metadata(
-                {MIN_INTERFACE_RESIDUES_METADATA_KEY: b"7"}
-            )
+            interface.update({
+                "entry_pdb_id": "8grn",
+                "system_id": "8grn__1__1.A--1.B",
+                "system_biounit_id": "1",
+                "interface_chain_1": "1.A",
+                "interface_chain_2": "1.B",
+                "interface_chain_1_residue_numbers": list(range(1, 8)),
+                "interface_chain_1_residue_indices": list(range(7)),
+                "interface_chain_2_residue_numbers": list(range(11, 18)),
+                "interface_chain_2_residue_indices": list(range(7)),
+                "interface_num_contact_residue_pairs": 8,
+                "prodigy_is_annotated": True,
+                "prodigy_label": "BIO",
+                "prodigy_probability_bio": 0.9,
+                "prodigy_link_density": 0.2,
+                "prodigy_intermolecular_contacts": 8,
+                "prodigy_charged_charged_contacts": 1,
+                "prodigy_charged_polar_contacts": 1,
+                "prodigy_charged_apolar_contacts": 2,
+                "prodigy_polar_polar_contacts": 0,
+                "prodigy_apolar_polar_contacts": 1,
+                "prodigy_apolar_apolar_contacts": 3,
+            })
+            schema = INTERFACE_ANNOTATION_SCHEMA.with_metadata({
+                MIN_INTERFACE_RESIDUES_METADATA_KEY: b"7"
+            })
             table = pa.Table.from_pylist([interface], schema=schema)
             pq.write_table(
                 table,
@@ -577,21 +573,20 @@ def test_ligand_mode_skips_interfaces_and_preserves_interface_assets(
             ligand_dir = self.save_folder / "8grn/ligand_files"
             ligand_dir.mkdir()
             (ligand_dir / "1.C.sdf").write_text("canonical ligand")
-            return pd.DataFrame(
-                {
-                    "system_id": ["8grn__1__1.A__1.C"],
-                    "ligand_id": ["8grn__1.C"],
-                    "system_receptor_type": ["protein"],
-                }
-            )
+            return pd.DataFrame({
+                "system_id": ["8grn__1__1.A__1.C"],
+                "ligand_id": ["8grn__1.C"],
+                "system_receptor_type": ["protein"],
+            })
 
     def save_ligands(
         *, data_dir: Path, annotation: pd.DataFrame, output_path: Path
     ) -> None:
         del data_dir, annotation
-        pd.DataFrame(
-            {"ligand_id": ["8grn__1.C"], "ligand_is_shape_comparable": [True]}
-        ).to_parquet(output_path, index=False)
+        pd.DataFrame({
+            "ligand_id": ["8grn__1.C"],
+            "ligand_is_shape_comparable": [True],
+        }).to_parquet(output_path, index=False)
 
     monkeypatch.setattr(ingest, "_get_annotation_class", lambda: LigandAnnotation)
     monkeypatch.setattr(ingest, "_save_ligand_batch", save_ligands)
@@ -637,9 +632,9 @@ def test_interface_mode_resumes_zero_interface_entries(
             calls += 1
             return pa.Table.from_pylist(
                 [],
-                schema=INTERFACE_ANNOTATION_SCHEMA.with_metadata(
-                    {MIN_INTERFACE_RESIDUES_METADATA_KEY: b"7"}
-                ),
+                schema=INTERFACE_ANNOTATION_SCHEMA.with_metadata({
+                    MIN_INTERFACE_RESIDUES_METADATA_KEY: b"7"
+                }),
             )
 
     monkeypatch.setattr(
@@ -708,13 +703,11 @@ def test_ingest_one_pdb_retries_partial_outputs_without_force(
             ligand_dir.mkdir(parents=True)
             (ligand_dir / "C.sdf").touch()
             _write_fake_sidecars(ligand_dir.parent, "8grn")
-            return pd.DataFrame(
-                {
-                    "system_id": ["8grn__1__1.A__1.C"],
-                    "ligand_id": ["8grn__1.C"],
-                    "system_receptor_type": ["protein"],
-                }
-            )
+            return pd.DataFrame({
+                "system_id": ["8grn__1__1.A__1.C"],
+                "ligand_id": ["8grn__1.C"],
+                "system_receptor_type": ["protein"],
+            })
 
     def fake_save_ligand_batch(
         *, data_dir: Path, annotation: pd.DataFrame, output_path: Path
@@ -753,19 +746,17 @@ def test_shared_ingest_cli_has_manifest_and_batch_commands() -> None:
     parser = build_parser()
 
     manifest_args = parser.parse_args(["manifest", "cif", "validation", "manifest.txt"])
-    batch_args = parser.parse_args(
-        [
-            "batch",
-            "manifest.txt",
-            "output",
-            "--batch-size",
-            "10",
-            "--cif-root",
-            "cif",
-            "--validation-root",
-            "validation",
-        ]
-    )
+    batch_args = parser.parse_args([
+        "batch",
+        "manifest.txt",
+        "output",
+        "--batch-size",
+        "10",
+        "--cif-root",
+        "cif",
+        "--validation-root",
+        "validation",
+    ])
 
     assert manifest_args.command == "manifest"
     assert manifest_args.output_path == Path("manifest.txt")
@@ -773,39 +764,35 @@ def test_shared_ingest_cli_has_manifest_and_batch_commands() -> None:
     assert batch_args.batch_size == 10
     assert batch_args.interface_min_residues is None
     assert batch_args.mode == "all"
-    ligand_only = parser.parse_args(
-        [
-            "batch",
-            "manifest.txt",
-            "output",
-            "--batch-size",
-            "10",
-            "--cif-root",
-            "cif",
-            "--validation-root",
-            "validation",
-            "--mode",
-            "ligands",
-        ]
-    )
+    ligand_only = parser.parse_args([
+        "batch",
+        "manifest.txt",
+        "output",
+        "--batch-size",
+        "10",
+        "--cif-root",
+        "cif",
+        "--validation-root",
+        "validation",
+        "--mode",
+        "ligands",
+    ])
     assert ligand_only.mode == "ligands"
-    configured = parser.parse_args(
-        [
-            "batch",
-            "manifest.txt",
-            "output",
-            "--batch-size",
-            "10",
-            "--cif-root",
-            "cif",
-            "--validation-root",
-            "validation",
-            "--interface-min-residues",
-            "9",
-            "--mode",
-            "interfaces",
-        ]
-    )
+    configured = parser.parse_args([
+        "batch",
+        "manifest.txt",
+        "output",
+        "--batch-size",
+        "10",
+        "--cif-root",
+        "cif",
+        "--validation-root",
+        "validation",
+        "--interface-min-residues",
+        "9",
+        "--mode",
+        "interfaces",
+    ])
     assert configured.interface_min_residues == 9
     assert configured.mode == "interfaces"
 
@@ -851,22 +838,21 @@ def test_batch_continues_after_failure_and_resumes_completed_entries(
             entry_path, index=False
         )
         _write_fake_sidecars(entry_directory, pdb_id)
-        pd.DataFrame(
-            {"ligand_id": [f"{pdb_id}__1.L"], "ligand_is_shape_comparable": [True]}
-        ).to_parquet(ligand_path, index=False)
+        pd.DataFrame({
+            "ligand_id": [f"{pdb_id}__1.L"],
+            "ligand_is_shape_comparable": [True],
+        }).to_parquet(ligand_path, index=False)
         metrics_path.write_text(
-            json.dumps(
-                {
-                    "status": "complete",
-                    "interface_annotate_prodigy": True,
-                    "counts": {"annotation_rows": 1, "interface_rows": 0},
-                    "outputs": {
-                        "entry_parquet": str(entry_path),
-                        "entry_directory": str(entry_directory),
-                        "ligand_parquet": str(ligand_path),
-                    },
-                }
-            )
+            json.dumps({
+                "status": "complete",
+                "interface_annotate_prodigy": True,
+                "counts": {"annotation_rows": 1, "interface_rows": 0},
+                "outputs": {
+                    "entry_parquet": str(entry_path),
+                    "entry_directory": str(entry_directory),
+                    "ligand_parquet": str(ligand_path),
+                },
+            })
         )
         return metrics_path
 
@@ -915,14 +901,12 @@ def test_batch_resumes_entries_previously_skipped_without_systems(
     entry_metrics = output_root / "metrics" / "ingest-one-1abc.json"
     entry_metrics.parent.mkdir(parents=True)
     entry_metrics.write_text(
-        json.dumps(
-            {
-                "status": "skipped_no_systems",
-                "interface_annotate_prodigy": True,
-                "counts": {"annotation_rows": 0, "interface_rows": 0},
-                "interface_min_residues": 7,
-            }
-        )
+        json.dumps({
+            "status": "skipped_no_systems",
+            "interface_annotate_prodigy": True,
+            "counts": {"annotation_rows": 0, "interface_rows": 0},
+            "interface_min_residues": 7,
+        })
     )
 
     def unexpected_ingest(**_kwargs: object) -> Path:
@@ -965,18 +949,17 @@ def test_completed_entry_metrics_invalidates_interface_cutoff_changes(
         entry_path, index=False
     )
     _write_fake_sidecars(entry_directory, "1abc")
-    pd.DataFrame(
-        {"ligand_id": ["1abc__1.L"], "ligand_is_shape_comparable": [True]}
-    ).to_parquet(ligand_path, index=False)
+    pd.DataFrame({
+        "ligand_id": ["1abc__1.L"],
+        "ligand_is_shape_comparable": [True],
+    }).to_parquet(ligand_path, index=False)
     metrics_path.write_text(
-        json.dumps(
-            {
-                "status": "complete",
-                "interface_annotate_prodigy": True,
-                "counts": {"annotation_rows": 1, "interface_rows": 0},
-                "outputs": {"entry_directory": str(entry_directory)},
-            }
-        )
+        json.dumps({
+            "status": "complete",
+            "interface_annotate_prodigy": True,
+            "counts": {"annotation_rows": 1, "interface_rows": 0},
+            "outputs": {"entry_directory": str(entry_directory)},
+        })
     )
 
     assert (
@@ -1036,13 +1019,11 @@ def test_ligand_skip_requires_recorded_biounit_contacts(tmp_path: Path) -> None:
     metrics_path = output_root / "metrics/ab/ingest-one-1abc.json"
     metrics_path.parent.mkdir(parents=True)
     metrics_path.write_text(
-        json.dumps(
-            {
-                "status": "skipped_no_ligands",
-                "mode": "ligands",
-                "outputs": {"entry_directory": str(entry_directory)},
-            }
-        )
+        json.dumps({
+            "status": "skipped_no_ligands",
+            "mode": "ligands",
+            "outputs": {"entry_directory": str(entry_directory)},
+        })
     )
 
     assert (

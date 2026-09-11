@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
+
 from plinder.core.scores import reconstruct
 from plinder.core.scores.entries import LigandView
 
@@ -20,9 +21,11 @@ def test_prefetch_resolves_only_requested_alignment_shards(tmp_path, monkeypatch
 
     monkeypatch.setattr(reconstruct.cpl, "get_plinder_path", get_plinder_path)
 
-    paths = reconstruct.prefetch_similarity_alignments(
-        ["1abc__1__1.A__1.L", "2abd__1__1.B__1.M", "3xyz__1__1.C__1.N"]
-    )
+    paths = reconstruct.prefetch_similarity_alignments([
+        "1abc__1__1.A__1.L",
+        "2abd__1__1.B__1.M",
+        "3xyz__1__1.C__1.N",
+    ])
 
     assert requested == [
         "alignments/search_db=holo/alignment_type=foldseek/shard=ab.parquet",
@@ -61,13 +64,11 @@ def test_prefetch_accepts_one_available_alignment_backend(tmp_path):
 def test_canonical_ligand_resolver_materializes_only_requested_member(tmp_path):
     archive = tmp_path / "ligand_archives" / "ab.parquet"
     archive.parent.mkdir(parents=True)
-    pd.DataFrame(
-        {
-            "pdb_id": ["1abc", "2abc"],
-            "ligand_asym_id": ["L", "M"],
-            "sdf": [b"requested", b"other"],
-        }
-    ).to_parquet(archive, index=False)
+    pd.DataFrame({
+        "pdb_id": ["1abc", "2abc"],
+        "ligand_asym_id": ["L", "M"],
+        "sdf": [b"requested", b"other"],
+    }).to_parquet(archive, index=False)
 
     ligand = LigandView(
         id="1abc__1__1.A__1.L__1.L",

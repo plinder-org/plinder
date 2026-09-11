@@ -221,13 +221,11 @@ def write_mhfp6_fingerprints(unique_ligands: pd.DataFrame, output_dir: Path) -> 
                 f"processed={index}/{total} rate={rate:.1f}/s "
                 f"eta_seconds={(total - index) / rate:.1f}"
             )
-    mhfp6_table = pd.DataFrame(
-        {
-            "ligand_smiles_id": unique_ligands["ligand_smiles_id"].to_numpy(),
-            smiles_column: unique_ligands[smiles_column].to_numpy(),
-            "mhfp6": minhash_blobs,
-        }
-    )
+    mhfp6_table = pd.DataFrame({
+        "ligand_smiles_id": unique_ligands["ligand_smiles_id"].to_numpy(),
+        smiles_column: unique_ligands[smiles_column].to_numpy(),
+        "mhfp6": minhash_blobs,
+    })
     table = pa.Table.from_pandas(mhfp6_table, preserve_index=False)
     metadata = {**(table.schema.metadata or {}), **MHFP6_PARQUET_METADATA}
     temporary_path = (output_dir / MHFP6_FINGERPRINT_FILE).with_suffix(".parquet.tmp")
@@ -287,7 +285,8 @@ def load_ligands_from_index(*, annotation: pd.DataFrame) -> pd.DataFrame:
     ].fillna(False)
     ligands = annotation.loc[eligible, list(columns)].rename(columns=columns)
     return (
-        ligands.dropna(subset=["ligand_id"])
+        ligands
+        .dropna(subset=["ligand_id"])
         .drop_duplicates(subset=["ligand_id"])
         .reset_index(drop=True)
         .sort_values("ligand_id")
@@ -375,8 +374,7 @@ def compute_ligand_fingerprints(
     ligands = load_ligands_from_annotation_table(data_dir=data_dir)
     for column in ligands.columns:
         LOG.info(
-            f"compute_ligand_fingerprints: unique {column}="
-            f"{ligands[column].nunique()}"
+            f"compute_ligand_fingerprints: unique {column}={ligands[column].nunique()}"
         )
 
     smiles_column = "ligand_rdkit_canonical_smiles"
@@ -583,13 +581,11 @@ def mhfp6_ligand_scores(
         similarities = mhfp6_bulk_jaccard(matrix[ligand_id], matrix)
         for target_id, similarity in enumerate(similarities):
             if similarity >= minimum_fraction:
-                rows.append(
-                    {
-                        "query_ligand_id": ligand_id,
-                        "target_ligand_id": target_id,
-                        MHFP6_METRIC: float(similarity) * 100.0,
-                    }
-                )
+                rows.append({
+                    "query_ligand_id": ligand_id,
+                    "target_ligand_id": target_id,
+                    MHFP6_METRIC: float(similarity) * 100.0,
+                })
     table = pa.Table.from_pylist(
         rows,
         schema=schemas.MHFP6_SCORE_SCHEMA.with_metadata(MHFP6_PARQUET_METADATA),
@@ -662,18 +658,16 @@ def annotate_ligand_similarity(*, data_dir: Path) -> Path:
     return output_path
 
 
-PHARMACOPHORE_FEATURES = frozenset(
-    {
-        "Donor",
-        "Acceptor",
-        "NegIonizable",
-        "PosIonizable",
-        "ZnBinder",
-        "Aromatic",
-        "Hydrophobe",
-        "LumpedHydrophobe",
-    }
-)
+PHARMACOPHORE_FEATURES = frozenset({
+    "Donor",
+    "Acceptor",
+    "NegIonizable",
+    "PosIonizable",
+    "ZnBinder",
+    "Aromatic",
+    "Hydrophobe",
+    "LumpedHydrophobe",
+})
 _PharmacophoreFeatures = tuple[Any, ...]
 # RDKit ShapeAlign supplies default radii for the usual organic elements but
 # raises for coordination metals such as HEM iron. Other elements receive a
@@ -1451,8 +1445,7 @@ class Scorer:
                 sdf_file = self.ligand_sdf_resolver(ligand)
             if sdf_file is None:
                 LOG.warning(
-                    "no ligand SDF found for "
-                    f"{ligand.id} (canonical key={cache_key})"
+                    f"no ligand SDF found for {ligand.id} (canonical key={cache_key})"
                 )
                 self._ligand_mol_cache[cache_key] = None
             else:
@@ -1488,14 +1481,12 @@ class Scorer:
             archive = archive_root / f"{shard}.parquet"
             if not archive.is_file():
                 continue
-            requested_pdb_ids = sorted(
-                {
-                    ligand.pdb_id
-                    for ligand in ligands
-                    if ligand.pdb_id[1:3] == shard
-                    and ligand.pdb_id not in self._loaded_ligand_archive_entries
-                }
-            )
+            requested_pdb_ids = sorted({
+                ligand.pdb_id
+                for ligand in ligands
+                if ligand.pdb_id[1:3] == shard
+                and ligand.pdb_id not in self._loaded_ligand_archive_entries
+            })
             # A shard is deliberately small (roughly one hundred PDB entries)
             # and normally one Parquet row group. Reading it once avoids
             # repeating the same NFS page read for later queries in this job.
@@ -1575,12 +1566,10 @@ class Scorer:
                     )
                 else:
                     if all(np.isfinite(value) for value in (shape, color)):
-                        base_scores.update(
-                            {
-                                "shape": float(np.clip(shape, 0, 1)),
-                                "color": float(np.clip(color, 0, 1)),
-                            }
-                        )
+                        base_scores.update({
+                            "shape": float(np.clip(shape, 0, 1)),
+                            "color": float(np.clip(color, 0, 1)),
+                        })
                         try:
                             sucos_shape = get_sucos_score(
                                 query_aligned,
@@ -1683,14 +1672,12 @@ class Scorer:
             scores = list(executor.map(score_pair, work))
         records = []
         for pair, score in zip(pair_frame.itertuples(index=False), scores):
-            records.append(
-                {
-                    **{column: getattr(pair, column) for column in pair_columns},
-                    "shape": score.get("shape"),
-                    "color": score.get("color"),
-                    "sucos_shape": score.get("sucos_shape"),
-                }
-            )
+            records.append({
+                **{column: getattr(pair, column) for column in pair_columns},
+                "shape": score.get("shape"),
+                "color": score.get("color"),
+                "sucos_shape": score.get("sucos_shape"),
+            })
         return pd.DataFrame.from_records(
             records, columns=schemas.LIGAND_3D_SCORE_SCHEMA.names
         )
@@ -2056,12 +2043,10 @@ class Scorer:
             if df is not None and score_metrics is not None:
                 df = df[df["metric"].astype(str).isin(set(score_metrics))].copy()
             if df is None or df.empty:
-                df = pd.DataFrame(
-                    {
-                        name: pd.Series(dtype="object")
-                        for name in schemas.PROTEIN_SIMILARITY_SCHEMA.names
-                    }
-                )
+                df = pd.DataFrame({
+                    name: pd.Series(dtype="object")
+                    for name in schemas.PROTEIN_SIMILARITY_SCHEMA.names
+                })
             temporary_root = scratch_dir or score_df_path.parent
             temporary_root.mkdir(exist_ok=True, parents=True)
             temporary = temporary_root / f"{search_db}-{pdb_id}.scores.parquet"
@@ -2073,9 +2058,9 @@ class Scorer:
                 ),
             }
             if holo_protein_scores_mode is not None:
-                score_metadata[
-                    HOLO_PROTEIN_SCORES_METADATA_KEY
-                ] = holo_protein_scores_mode
+                score_metadata[HOLO_PROTEIN_SCORES_METADATA_KEY] = (
+                    holo_protein_scores_mode
+                )
             retained_metrics = score_metrics_metadata(score_metrics)
             if retained_metrics is not None:
                 score_metadata[SCORE_METRICS_METADATA_KEY] = retained_metrics
@@ -2453,15 +2438,13 @@ class Scorer:
                 errors="ignore",
             )
             df["source"] = pd.Series(dtype="string")
-            return df.set_index(
-                [
-                    "query_entry",
-                    "target_entry",
-                    "query_chain_mapped",
-                    "target_chain_mapped",
-                    "source",
-                ]
-            )
+            return df.set_index([
+                "query_entry",
+                "target_entry",
+                "query_chain_mapped",
+                "target_chain_mapped",
+                "source",
+            ])
         if aln_type == "foldseek":
             query_replacements = [
                 "_xyz-enrich.cif.gz",
@@ -2532,13 +2515,11 @@ class Scorer:
             )
             for row in df.itertuples(index=False)
         ]
-        for index, column in enumerate(
-            (
-                "query_selected_residue_numbers",
-                "target_selected_residue_numbers",
-                "selected_residue_identity",
-            )
-        ):
+        for index, column in enumerate((
+            "query_selected_residue_numbers",
+            "target_selected_residue_numbers",
+            "selected_residue_identity",
+        )):
             df[column] = [mapping[index] for mapping in selected_mappings]
         # Retain only selected ligand-pocket/interface residue numbers and
         # equality flags, not complete alignment positions or amino-acid
@@ -2712,12 +2693,10 @@ class Scorer:
         query_system_length = self.get_protein_chain_length(
             query_system.pdb_id, query_protein_chains
         )
-        s_matrix = np.zeros(
-            (
-                len(query_protein_chains),
-                len(target_protein_chains),
-            )
-        )
+        s_matrix = np.zeros((
+            len(query_protein_chains),
+            len(target_protein_chains),
+        ))
         for i, q_instance_chain in enumerate(query_protein_chains):
             q_chain = q_instance_chain.split(".", maxsplit=1)[1]
             q_chain_length = self.entries[query_system.pdb_id].chains[q_chain].length
@@ -3280,15 +3259,13 @@ class Scorer:
         ]
         if not query_ligands:
             return
-        query_instance_chains = sorted(
-            {
-                chain.split(".", 1)[1]
-                for ligand in query_ligands
-                for chain in self.get_protein_receptor_chains(
-                    ligand.pdb_id, ligand.protein_chains_asym_id
-                )
-            }
-        )
+        query_instance_chains = sorted({
+            chain.split(".", 1)[1]
+            for ligand in query_ligands
+            for chain in self.get_protein_receptor_chains(
+                ligand.pdb_id, ligand.protein_chains_asym_id
+            )
+        })
         if not query_instance_chains:
             return
         for target_entry in query_entry_alignments.index.get_level_values(
@@ -3378,14 +3355,14 @@ class Scorer:
                                 tuple(target_protein_chains),
                             )
                             if protein_cache_key not in self._protein_score_cache:
-                                self._protein_score_cache[
-                                    protein_cache_key
-                                ] = self.get_protein_scores(
-                                    query_target_entry_alignments,
-                                    query_system,
-                                    target_protein_chains,
-                                    query_protein_length,
-                                    query_protein_chains=query_protein_chains,
+                                self._protein_score_cache[protein_cache_key] = (
+                                    self.get_protein_scores(
+                                        query_target_entry_alignments,
+                                        query_system,
+                                        target_protein_chains,
+                                        query_protein_length,
+                                        query_protein_chains=query_protein_chains,
+                                    )
                                 )
                             (
                                 q_t_mappings,
@@ -3452,14 +3429,12 @@ class Scorer:
                                     pocket_qcov,
                                 )
                             )
-                        combined.update(
-                            {
-                                "query_system": query_system.id,
-                                "query_ligand_id": query_ligand.id,
-                                "target_system": target_system.id,
-                                "target_ligand_id": target_ligand.id,
-                            }
-                        )
+                        combined.update({
+                            "query_system": query_system.id,
+                            "query_ligand_id": query_ligand.id,
+                            "target_system": target_system.id,
+                            "target_ligand_id": target_ligand.id,
+                        })
                         if ligand_pair_scores is not None:
                             compact_scores: dict[str, int] = {}
                             has_positive_score = False
@@ -3479,27 +3454,7 @@ class Scorer:
                                     min(1.0, max(0.0, numeric)) * 100
                                 )
                             if has_positive_score:
-                                ligand_pair_scores.append(
-                                    {
-                                        "query_system": query_system.id,
-                                        "query_ligand_id": query_ligand.id,
-                                        "query_entry": query_ligand.pdb_id,
-                                        "query_ligand_asym_id": query_ligand.asym_id,
-                                        "target_system": target_system.id,
-                                        "target_ligand_id": target_ligand.id,
-                                        "target_entry": target_ligand.pdb_id,
-                                        "target_ligand_asym_id": target_ligand.asym_id,
-                                        **compact_scores,
-                                    }
-                                )
-                        if (
-                            ligand_3d_candidates is not None
-                            and pocket_qcov > 0
-                            and query_ligand.is_shape_comparable
-                            and target_ligand.is_shape_comparable
-                        ):
-                            ligand_3d_candidates.append(
-                                {
+                                ligand_pair_scores.append({
                                     "query_system": query_system.id,
                                     "query_ligand_id": query_ligand.id,
                                     "query_entry": query_ligand.pdb_id,
@@ -3508,20 +3463,34 @@ class Scorer:
                                     "target_ligand_id": target_ligand.id,
                                     "target_entry": target_ligand.pdb_id,
                                     "target_ligand_asym_id": target_ligand.asym_id,
-                                    "protein_mapping": combined.get("protein_mapping"),
-                                    "protein_mapper": combined.get("protein_mapper"),
-                                    "pocket_qcov": pocket_qcov,
-                                }
-                            )
+                                    **compact_scores,
+                                })
+                        if (
+                            ligand_3d_candidates is not None
+                            and pocket_qcov > 0
+                            and query_ligand.is_shape_comparable
+                            and target_ligand.is_shape_comparable
+                        ):
+                            ligand_3d_candidates.append({
+                                "query_system": query_system.id,
+                                "query_ligand_id": query_ligand.id,
+                                "query_entry": query_ligand.pdb_id,
+                                "query_ligand_asym_id": query_ligand.asym_id,
+                                "target_system": target_system.id,
+                                "target_ligand_id": target_ligand.id,
+                                "target_entry": target_ligand.pdb_id,
+                                "target_ligand_asym_id": target_ligand.asym_id,
+                                "protein_mapping": combined.get("protein_mapping"),
+                                "protein_mapper": combined.get("protein_mapper"),
+                                "pocket_qcov": pocket_qcov,
+                            })
                         if defer_shape:
-                            deferred_rows.append(
-                                (
-                                    combined,
-                                    query_ligand,
-                                    target_ligand,
-                                    pocket_qcov,
-                                )
-                            )
+                            deferred_rows.append((
+                                combined,
+                                query_ligand,
+                                target_ligand,
+                                pocket_qcov,
+                            ))
                         else:
                             yield combined
 
@@ -3717,9 +3686,9 @@ class Scorer:
             (m, self.minimum_thresholds.get(m, self.minimum_threshold))
             for m in df["metric"].unique()
         ]
-        query = " or ".join(
-            [f"(metric=='{m}' and similarity>={t})" for (m, t) in all_thresholds]
-        )
+        query = " or ".join([
+            f"(metric=='{m}' and similarity>={t})" for (m, t) in all_thresholds
+        ])
         df = df.query(query).copy()
         df["protein_mapper"] = df["protein_mapper"].astype("category")
         for col in ["source", "metric"]:

@@ -91,9 +91,9 @@ class BiounitSpatialIndex:
             return np.array([], dtype=int)
         return ty.cast(
             npt.NDArray[np.int_],
-            np.concatenate(
-                [np.arange(start, stop, dtype=int) for start, stop in segments]
-            ),
+            np.concatenate([
+                np.arange(start, stop, dtype=int) for start, stop in segments
+            ]),
         )
 
     def atom_indices_near(
@@ -133,16 +133,14 @@ class BiounitSpatialIndex:
         )
         return ty.cast(
             npt.NDArray[np.int_],
-            np.concatenate(
-                [
-                    np.arange(
-                        self.residue_starts[index],
-                        self.residue_starts[index + 1],
-                        dtype=int,
-                    )
-                    for index in residue_indices
-                ]
-            ),
+            np.concatenate([
+                np.arange(
+                    self.residue_starts[index],
+                    self.residue_starts[index + 1],
+                    dtype=int,
+                )
+                for index in residue_indices
+            ]),
         )
 
     def take_atoms(
@@ -1673,7 +1671,9 @@ class Ligand(DocBaseModel):
         if member_residue_numbers is None:
             member_residue_numbers = {ligand_instance_chain: residue_numbers}
         member_instance_chains = set(member_residue_numbers)
-        member_asym_ids = {ic.split(".")[-1] for ic in member_instance_chains}
+        member_asym_ids = {
+            ic.split(".", maxsplit=1)[-1] for ic in member_instance_chains
+        }
 
         if spatial_index is None:
             spatial_index = BiounitSpatialIndex.from_atoms(
@@ -1927,19 +1927,21 @@ class Ligand(DocBaseModel):
                 continue
             # Skip chains classified as ligands — they belong in
             # neighboring_ligands/interacting_ligands, not neighboring_residues
-            asym = chain_id.split(".")[-1] if "." in chain_id else chain_id
+            asym = chain_id.split(".", maxsplit=1)[-1] if "." in chain_id else chain_id
             if asym in ligand_like_chains:
                 continue
             chain_atoms = near_prot[near_prot.chain_id == chain_id]
             resnums = list(dict.fromkeys(int(r) for r in chain_atoms.res_id))
             ligand.neighboring_residues[chain_id] = resnums
             # Store SEQRES for binding affinity validation
-            asym_id = chain_id.split(".")[-1] if "." in chain_id else chain_id
+            asym_id = (
+                chain_id.split(".", maxsplit=1)[-1] if "." in chain_id else chain_id
+            )
             if chain_to_seqres and asym_id in chain_to_seqres:
                 ligand.receptor_seqres[chain_id] = chain_to_seqres[asym_id]
 
         neighboring_asym_ids = {
-            c.split(".")[-1]
+            c.split(".", maxsplit=1)[-1]
             for c in np.unique(near_prot.chain_id)
             if c not in member_instance_chains
         }
@@ -1979,15 +1981,13 @@ class Ligand(DocBaseModel):
             biounit, near_lig_indices, include_bonds=False
         )
 
-        ligand.neighboring_ligands = sorted(
-            {
-                c
-                for c in np.unique(near_all.chain_id)
-                if c not in member_instance_chains
-                and "." in c
-                and c.split(".")[1] in ligand_like_chains
-            }
-        )
+        ligand.neighboring_ligands = sorted({
+            c
+            for c in np.unique(near_all.chain_id)
+            if c not in member_instance_chains
+            and "." in c
+            and c.split(".", maxsplit=1)[1] in ligand_like_chains
+        })
         if water_chains is None:
             water_chains = get_water_chain_ids(biounit)
         # Populate interactions and waters from peppr results
@@ -2003,7 +2003,7 @@ class Ligand(DocBaseModel):
                 continue
             if instance_chain in water_chains:
                 continue
-            if instance_chain.split(".")[1] in ligand_like_chains:
+            if instance_chain.split(".", maxsplit=1)[1] in ligand_like_chains:
                 ligand.interacting_ligands.append(instance_chain)
             else:
                 if instance_chain not in ligand.interacting_residues:
@@ -2045,7 +2045,7 @@ class Ligand(DocBaseModel):
     @property
     def member_asym_ids(self) -> list[str]:
         """Asym IDs of every chain this (possibly merged) ligand spans."""
-        return sorted({ic.split(".")[-1] for ic in self._members})
+        return sorted({ic.split(".", maxsplit=1)[-1] for ic in self._members})
 
     @cached_property
     def selection(self) -> str:
@@ -2149,9 +2149,9 @@ class Ligand(DocBaseModel):
         pocket_residues_set = defaultdict(set)
         for chain in self.pocket_residues:
             for residue_number in self.pocket_residues[chain]:
-                pocket_residues_set[(chain.split(".")[1], residue_number)].add(
-                    chain.split(".")[0]
-                )
+                pocket_residues_set[
+                    (chain.split(".", maxsplit=1)[1], residue_number)
+                ].add(chain.split(".")[0])
         return pocket_residues_set
 
     def label_crystal_contacts(
@@ -2305,13 +2305,11 @@ class Ligand(DocBaseModel):
         elif lig_has_dummies(self.ccd_code):
             # check for dummy list including composites, too!
             self.is_artifact = True
-        elif self._is_multi_residue and any(
-            (
-                self.is_oligosaccharide,
-                self.is_oligonucleotide,
-                self.is_oligopeptide,
-            )
-        ):
+        elif self._is_multi_residue and any((
+            self.is_oligosaccharide,
+            self.is_oligonucleotide,
+            self.is_oligopeptide,
+        )):
             # Small-molecule charge and linker cutoffs do not describe
             # recognized oligomeric ligands.  For example, a short peptide can
             # legitimately exceed the formal-charge cutoff through Lys/Arg.
@@ -2336,23 +2334,21 @@ class Ligand(DocBaseModel):
             self.is_covalent = False
 
         # Indicator of whether a ligand type is not any recognized class.
-        self.is_other = not any(
-            [
-                self.is_invalid,
-                self.is_ion,
-                self.is_monosaccharide,
-                self.is_oligosaccharide,
-                self.is_mononucleotide,
-                self.is_oligonucleotide,
-                self.is_monopeptide,
-                self.is_oligopeptide,
-                self.is_artifact,
-                self.is_cofactor,
-                self.is_lipinski,
-                self.is_fragment,
-                self.is_covalent,
-            ]
-        )
+        self.is_other = not any([
+            self.is_invalid,
+            self.is_ion,
+            self.is_monosaccharide,
+            self.is_oligosaccharide,
+            self.is_mononucleotide,
+            self.is_oligonucleotide,
+            self.is_monopeptide,
+            self.is_oligopeptide,
+            self.is_artifact,
+            self.is_cofactor,
+            self.is_lipinski,
+            self.is_fragment,
+            self.is_covalent,
+        ])
 
     def format_chains(
         self,
@@ -2383,7 +2379,7 @@ class Ligand(DocBaseModel):
         else:
             raise ValueError(f"chain_type={chain_type} not understood")
         sub_chains_data = [
-            chains[instance_chain.split(".")[-1]].format(
+            chains[instance_chain.split(".", maxsplit=1)[-1]].format(
                 int(instance_chain.split(".")[0])
             )
             for instance_chain in sub_chains
@@ -2424,7 +2420,7 @@ class Ligand(DocBaseModel):
             residues = self.neighboring_residues
         res = []
         for instance_chain in residues:
-            _, chain = instance_chain.split(".")
+            _, chain = instance_chain.split(".", maxsplit=1)
             for residue_number in residues[instance_chain]:
                 res.append(
                     f"{instance_chain}_{residue_number}_{chains[chain].residues[residue_number].index}_{chains[chain].residues[residue_number].auth_number}_{chains[chain].residues[residue_number].insertion_code}"
@@ -2498,9 +2494,9 @@ class Ligand(DocBaseModel):
                 )
         data["ligand_pocket_unresolved_atoms"] = sorted(pocket_unresolved)
         # chains
-        data.update(
-            {"ligand_auth_id": chains[self.asym_id].auth_id}
-        )  # not a cached_property b/c it needs chains!
+        data.update({
+            "ligand_auth_id": chains[self.asym_id].auth_id
+        })  # not a cached_property b/c it needs chains!
         for chain_type in [
             "protein",
             "interacting_ligand",

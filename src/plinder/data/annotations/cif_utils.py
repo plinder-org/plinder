@@ -390,6 +390,12 @@ def get_structure_with_altloc(
     (predicted/custom CIFs) so it must fall back to ``"first"`` there.
     """
     requested_extra_fields = list(extra_fields or [])
+    block = cif_file if isinstance(cif_file, pdbx.CIFBlock) else cif_file.block
+    if (
+        "pdbx_formal_charge" in block["atom_site"]
+        and "charge" not in requested_extra_fields
+    ):
+        requested_extra_fields.append("charge")
     include_label_alt_id = "label_alt_id" in requested_extra_fields
     if not include_label_alt_id:
         requested_extra_fields.append("label_alt_id")
@@ -408,9 +414,9 @@ def get_structure_with_altloc(
     if not isinstance(atoms, struc.AtomArray):
         raise TypeError("loading one mmCIF model must return an AtomArray")
     inverse_mapping = {mapped: source for source, mapped in mapping.items()}
-    source_altloc_ids = np.asarray(
-        [inverse_mapping.get(value, value) for value in atoms.label_alt_id]
-    )
+    source_altloc_ids = np.asarray([
+        inverse_mapping.get(value, value) for value in atoms.label_alt_id
+    ])
     # ``label_alt_id`` is atom-level: atoms shared by all conformers retain
     # ``.``.  Record the selected source conformer on every atom in the
     # residue so the choice survives subsequent hydrogen removal and can be
@@ -861,21 +867,16 @@ def build_biounit(
                 f"assembly {assembly_id}: biotite returned no bonds despite "
                 "include_bonds=True"
             )
-        biounit.chain_id = np.asarray(
-            [
-                f"{int(sym_id) + 1}.{asym_id}"
-                for sym_id, asym_id in zip(biounit.sym_id, biounit.label_asym_id)
-            ]
-        )
+        biounit.chain_id = np.asarray([
+            f"{int(sym_id) + 1}.{asym_id}"
+            for sym_id, asym_id in zip(biounit.sym_id, biounit.label_asym_id)
+        ])
         legacy_mapping = get_legacy_chain_instance_mapping(cif_file, assembly_id)
         biounit.set_annotation(
             "legacy_chain_id",
-            np.asarray(
-                [
-                    legacy_mapping.get(chain_id, chain_id)
-                    for chain_id in biounit.chain_id
-                ]
-            ),
+            np.asarray([
+                legacy_mapping.get(chain_id, chain_id) for chain_id in biounit.chain_id
+            ]),
         )
         remove_nonphysical_bonds(biounit)
     return biounit
@@ -1065,12 +1066,10 @@ def get_chain_external_mappings(
     ):
         if row["asym_id"] not in per_chain:
             per_chain[row["asym_id"]] = defaultdict(lambda: defaultdict(set))
-        per_chain[row["asym_id"]][row["xref_db"]][row["xref_db_acc"]].add(
-            (
-                row["seq_id_start"],
-                row["seq_id_end"],
-            )
-        )
+        per_chain[row["asym_id"]][row["xref_db"]][row["xref_db_acc"]].add((
+            row["seq_id_start"],
+            row["seq_id_end"],
+        ))
 
     # UniProt mapping
     for row in _iter_category_rows(
@@ -1080,12 +1079,10 @@ def get_chain_external_mappings(
     ):
         if row["asym_id"] not in per_chain:
             per_chain[row["asym_id"]] = defaultdict(lambda: defaultdict(set))
-        per_chain[row["asym_id"]]["UniProt"][row["unp_acc"]].add(
-            (
-                row["seq_id_start"],
-                row["seq_id_end"],
-            )
-        )
+        per_chain[row["asym_id"]]["UniProt"][row["unp_acc"]].add((
+            row["seq_id_start"],
+            row["seq_id_end"],
+        ))
 
     # BIRD/PRD ligands: key each chain's BIRD mapping by its PRD code (from
     # pdbx_molecule), giving a multi-residue ligand one canonical id instead of
@@ -1235,7 +1232,16 @@ def atoms_to_rdkit_mol(
                 "(load the CIF with include_bonds=True or set atoms.bonds)."
             )
 
-    mol = rdkit_interface.to_mol(heavy, kekulize=True, use_dative_bonds=True)
+    # Keep explicit aromatic single/double orders for incomplete rings, but
+    # leave generic aromatic bonds for RDKit to resolve. Biotite's
+    # kekulize=True turns the latter into ANY, producing bond type 0 in SDFs.
+    generic_aromatic = heavy.bonds.as_array()[:, 2] == struc.BondType.AROMATIC
+    heavy.bonds.remove_aromaticity()
+    if generic_aromatic.any():
+        bonds = heavy.bonds.as_array()
+        bonds[generic_aromatic, 2] = struc.BondType.AROMATIC
+        heavy.bonds = BondList(len(heavy), bonds)
+    mol = rdkit_interface.to_mol(heavy, use_dative_bonds=True)
     if mol is None:
         raise ValueError("Failed to convert AtomArray to RDKit Mol")
 
@@ -1812,15 +1818,13 @@ def _set_chem_comp_bonds(
     bonds: list[tuple[str, str, str, str, str]],
 ) -> None:
     """Write dictionary-valid component bond rows."""
-    block["chem_comp_bond"] = pdbx.CIFCategory(
-        {
-            "comp_id": [bond[0] for bond in bonds],
-            "atom_id_1": [bond[1] for bond in bonds],
-            "atom_id_2": [bond[2] for bond in bonds],
-            "value_order": [bond[3].lower() for bond in bonds],
-            "pdbx_aromatic_flag": [bond[4] for bond in bonds],
-        }
-    )
+    block["chem_comp_bond"] = pdbx.CIFCategory({
+        "comp_id": [bond[0] for bond in bonds],
+        "atom_id_1": [bond[1] for bond in bonds],
+        "atom_id_2": [bond[2] for bond in bonds],
+        "value_order": [bond[3].lower() for bond in bonds],
+        "pdbx_aromatic_flag": [bond[4] for bond in bonds],
+    })
 
 
 def enrich_cif_with_ccd_bonds(
@@ -1951,14 +1955,12 @@ def enrich_cif_with_ccd_bonds(
                         f"type {bond_type.name} for component {custom_comp_id!r}"
                     )
                 order, aromatic_flag = bond_type_to_cif[bond_type]
-                bonds_to_emit.append(
-                    (
-                        ccd_index_to_custom_name[int(atom_index_1)],
-                        ccd_index_to_custom_name[int(atom_index_2)],
-                        order,
-                        aromatic_flag,
-                    )
-                )
+                bonds_to_emit.append((
+                    ccd_index_to_custom_name[int(atom_index_1)],
+                    ccd_index_to_custom_name[int(atom_index_2)],
+                    order,
+                    aromatic_flag,
+                ))
         bonds.extend(
             (custom_comp_id, atom_1, atom_2, order, aromatic_flag)
             for atom_1, atom_2, order, aromatic_flag in bonds_to_emit
@@ -2055,15 +2057,13 @@ def enrich_cif_with_smiles_bonds(
             bonds_to_emit = _bonds_by_position(comp_id, template_heavy, lig_heavy)
 
         for atom_name_1, atom_name_2, value_order, aromatic_flag in bonds_to_emit:
-            bonds.append(
-                (
-                    comp_id,
-                    atom_name_1,
-                    atom_name_2,
-                    value_order,
-                    aromatic_flag,
-                )
-            )
+            bonds.append((
+                comp_id,
+                atom_name_1,
+                atom_name_2,
+                value_order,
+                aromatic_flag,
+            ))
 
     _set_chem_comp_bonds(block, bonds)
 

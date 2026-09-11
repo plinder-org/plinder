@@ -100,28 +100,24 @@ def create_db_index(
 ) -> None:
     """Index an existing Foldseek/MMseqs database."""
     full_db = str(output_dir / db)
-    run(
-        [
-            db,
-            "createindex",
-            full_db,
-            str(tmp_dir) + f"_{db}",
-            "--threads",
-            str(threads),
-        ]
-    )
+    run([
+        db,
+        "createindex",
+        full_db,
+        str(tmp_dir) + f"_{db}",
+        "--threads",
+        str(threads),
+    ])
 
 
 def _database_files_exist(database: Path, aln_type: str) -> bool:
     """Return whether the minimum files for a sequence/structure DB exist."""
     required = [database.with_suffix(".dbtype")]
     if aln_type == "foldseek":
-        required.extend(
-            [
-                Path(f"{database}_ss.dbtype"),
-                Path(f"{database}_ca.dbtype"),
-            ]
-        )
+        required.extend([
+            Path(f"{database}_ss.dbtype"),
+            Path(f"{database}_ca.dbtype"),
+        ])
     return all(path.is_file() for path in required)
 
 
@@ -526,75 +522,67 @@ def make_exact_search_db(
     manifest_path.unlink(missing_ok=True)
     tmp_dir.mkdir(exist_ok=True, parents=True)
 
-    run(
-        [
-            aln_type,
-            "linclust",
-            str(full_db),
-            str(clusters),
-            str(tmp_dir / "linclust"),
-            "--min-seq-id",
-            str(EXACT_CLUSTER_IDENTITY),
-            "-c",
-            str(EXACT_CLUSTER_COVERAGE),
-            "--cov-mode",
-            "0",
-            "--threads",
-            str(threads),
-        ]
-    )
+    run([
+        aln_type,
+        "linclust",
+        str(full_db),
+        str(clusters),
+        str(tmp_dir / "linclust"),
+        "--min-seq-id",
+        str(EXACT_CLUSTER_IDENTITY),
+        "-c",
+        str(EXACT_CLUSTER_COVERAGE),
+        "--cov-mode",
+        "0",
+        "--threads",
+        str(threads),
+    ])
     if aln_type == "foldseek":
         # Foldseek 10.941's cluster-search expansion segfaults in
         # mergeresultsbyset for compressed createclusearchdb targets.
-        run(
-            [
-                "foldseek",
-                "createclusearchdb",
-                str(full_db),
-                str(clusters),
-                str(clustered),
-                "--threads",
-                str(threads),
-                "--compressed",
-                "0",
-            ]
-        )
+        run([
+            "foldseek",
+            "createclusearchdb",
+            str(full_db),
+            str(clusters),
+            str(clustered),
+            "--threads",
+            str(threads),
+            "--compressed",
+            "0",
+        ])
         search_target = clustered
     else:
-        run(
-            [
-                "mmseqs",
-                "createsubdb",
-                str(clusters),
-                str(full_db),
-                str(representatives),
-                "--subdb-mode",
-                "0",
-            ]
-        )
+        run([
+            "mmseqs",
+            "createsubdb",
+            str(clusters),
+            str(full_db),
+            str(representatives),
+            "--subdb-mode",
+            "0",
+        ])
         # expandaln needs representative-to-member alignments, not only the
         # key-only cluster membership emitted by linclust.  Do not repeat the
         # exact-clustering thresholds here: linclust can cluster sequences
         # with terminal X residues that MMseqs cannot align at 100% coverage.
         # This database is only an expansion map; the post-expansion align
         # below applies the configured search e-value and coverage filters.
-        run(
-            [
-                "mmseqs",
-                "align",
-                str(representatives),
-                str(full_db),
-                str(clusters),
-                str(cluster_alignments),
-                "-a",
-                "-e",
-                "1e100",
-                "--add-self-matches",
-                "1",
-                "--threads",
-                str(threads),
-            ]
-        )
+        run([
+            "mmseqs",
+            "align",
+            str(representatives),
+            str(full_db),
+            str(clusters),
+            str(cluster_alignments),
+            "-a",
+            "-e",
+            "1e100",
+            "--add-self-matches",
+            "1",
+            "--threads",
+            str(threads),
+        ])
         search_target = representatives
 
     run(
@@ -671,27 +659,23 @@ def make_sub_db(
                     found.add(fields[1])
     # Create subdb
     if aln_type == "foldseek":
-        run(
-            [
-                "foldseek",
-                "createsubdb",
-                str(sub_db_lookup_file),
-                str(full_db),
-                str(database),
-                "--subdb-mode",
-                "0" if portable else "1",
-            ]
-        )
+        run([
+            "foldseek",
+            "createsubdb",
+            str(sub_db_lookup_file),
+            str(full_db),
+            str(database),
+            "--subdb-mode",
+            "0" if portable else "1",
+        ])
     elif aln_type == "mmseqs":
-        run(
-            [
-                "mmseqs",
-                "createsubdb",
-                str(sub_db_lookup_file),
-                str(full_db),
-                str(database),
-            ]
-        )
+        run([
+            "mmseqs",
+            "createsubdb",
+            str(sub_db_lookup_file),
+            str(full_db),
+            str(database),
+        ])
 
     missing = set(entry_chain_ids) - found
     return list(missing)

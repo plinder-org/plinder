@@ -318,8 +318,7 @@ def get_pdb_mmcif(
         revision=revision,
     )
     LOG.info(
-        f"cached wwPDB source mmCIF {pdb_id} revision {major}.{minor} "
-        f"at {destination}"
+        f"cached wwPDB source mmCIF {pdb_id} revision {major}.{minor} at {destination}"
     )
     return destination
 

@@ -484,25 +484,23 @@ def write_custom_sequence_query_files(
             context=f"FASTA record {sequence_id}",
         )
         if len(sequence) < min_chain_length:
-            skipped[
-                sequence_id
-            ] = f"protein length {len(sequence)} is below {min_chain_length}"
+            skipped[sequence_id] = (
+                f"protein length {len(sequence)} is below {min_chain_length}"
+            )
             continue
         query_id = f"cq{len(rows):08d}"
-        rows.append(
-            {
-                "query_id": query_id,
-                "query_chain_id": f"{query_id}__A",
-                "structure_id": query_id,
-                "sequence_id": sequence_id,
-                "source_fasta": str(source.resolve()),
-                "chain_asym_id": "A",
-                "sequence": sequence,
-                "sequence_length": len(sequence),
-                "sequence_source": "polymer",
-                "resolved_residue_numbers": [],
-            }
-        )
+        rows.append({
+            "query_id": query_id,
+            "query_chain_id": f"{query_id}__A",
+            "structure_id": query_id,
+            "sequence_id": sequence_id,
+            "source_fasta": str(source.resolve()),
+            "chain_asym_id": "A",
+            "sequence": sequence,
+            "sequence_length": len(sequence),
+            "sequence_source": "polymer",
+            "resolved_residue_numbers": [],
+        })
         fasta_rows.append(f">{query_id}\n{sequence}\n")
     if not rows:
         raise ValueError(
@@ -747,14 +745,14 @@ def write_custom_query_files(
                 )
                 sequence_source = "coordinates"
             if sequence is None:
-                skipped_chains[
-                    f"{structure_id}__{asym_id}"
-                ] = "not identifiable as a protein"
+                skipped_chains[f"{structure_id}__{asym_id}"] = (
+                    "not identifiable as a protein"
+                )
                 continue
             if len(sequence) < min_chain_length:
-                skipped_chains[
-                    f"{structure_id}__{asym_id}"
-                ] = f"protein length {len(sequence)} is below {min_chain_length}"
+                skipped_chains[f"{structure_id}__{asym_id}"] = (
+                    f"protein length {len(sequence)} is below {min_chain_length}"
+                )
                 continue
             atoms = atoms_by_asym[asym_id].copy()
             residue_starts = struc.get_residue_starts(atoms, add_exclusive_stop=False)
@@ -787,19 +785,17 @@ def write_custom_query_files(
                 source_asym_ids={"A": asym_id},
                 protein_sequences={"A": sequence},
             )
-            rows.append(
-                {
-                    "query_id": query_id,
-                    "query_chain_id": query_chain_id,
-                    "structure_id": structure_id,
-                    "source_mmcif": str(source.resolve()),
-                    "chain_asym_id": asym_id,
-                    "sequence": sequence,
-                    "sequence_length": len(sequence),
-                    "sequence_source": sequence_source,
-                    "resolved_residue_numbers": resolved_residue_numbers,
-                }
-            )
+            rows.append({
+                "query_id": query_id,
+                "query_chain_id": query_chain_id,
+                "structure_id": structure_id,
+                "source_mmcif": str(source.resolve()),
+                "chain_asym_id": asym_id,
+                "sequence": sequence,
+                "sequence_length": len(sequence),
+                "sequence_source": sequence_source,
+                "resolved_residue_numbers": resolved_residue_numbers,
+            })
             fasta_records.append(f">{query_id}\n{sequence}\n")
     if not rows:
         raise ValueError(
@@ -906,12 +902,10 @@ def annotate_custom_cif_files(
     annotation = (
         pd.concat(ligand_frames, ignore_index=True)
         if ligand_frames
-        else pd.DataFrame(
-            {
-                "entry_pdb_id": pd.Series(dtype="string"),
-                "system_id": pd.Series(dtype="string"),
-            }
-        )
+        else pd.DataFrame({
+            "entry_pdb_id": pd.Series(dtype="string"),
+            "system_id": pd.Series(dtype="string"),
+        })
     )
     entry_chains = pd.concat(
         [entry.chains_to_df() for entry in annotated.values()],
@@ -924,9 +918,9 @@ def annotate_custom_cif_files(
     ]
     interface_annotations = pd.DataFrame.from_records(interface_rows)
     if interface_annotations.empty:
-        interface_annotations = pd.DataFrame(
-            {"entry_pdb_id": pd.Series(dtype="string")}
-        )
+        interface_annotations = pd.DataFrame({
+            "entry_pdb_id": pd.Series(dtype="string")
+        })
 
     annotation_table = root / "annotation_table.parquet"
     entry_chain_table = root / "entry_chains.parquet"
@@ -1028,31 +1022,27 @@ def create_custom_query_databases(
     root.mkdir(parents=True)
     databases = {backend: root / backend for backend in selected}
     if "foldseek" in selected:
-        _run_command(
-            [
-                "foldseek",
-                "createdb",
-                str(inputs.chain_cif_dir),
-                str(databases["foldseek"]),
-                "--threads",
-                str(threads),
-                "--chain-name-mode",
-                "1",
-                "--coord-store-mode",
-                "2",
-            ]
-        )
+        _run_command([
+            "foldseek",
+            "createdb",
+            str(inputs.chain_cif_dir),
+            str(databases["foldseek"]),
+            "--threads",
+            str(threads),
+            "--chain-name-mode",
+            "1",
+            "--coord-store-mode",
+            "2",
+        ])
     if "mmseqs" in selected:
-        _run_command(
-            [
-                "mmseqs",
-                "createdb",
-                str(inputs.sequence_fasta),
-                str(databases["mmseqs"]),
-                "--threads",
-                str(threads),
-            ]
-        )
+        _run_command([
+            "mmseqs",
+            "createdb",
+            str(inputs.sequence_fasta),
+            str(databases["mmseqs"]),
+            "--threads",
+            str(threads),
+        ])
     manifest = pd.read_parquet(inputs.chain_manifest)
     query_ids = manifest["query_id"].astype(str).tolist()
     mapping_rows: list[dict[str, str]] = []
@@ -1201,16 +1191,14 @@ def _build_mmseqs_target_subset(
     fasta = root / "targets.fasta"
     fasta.write_text("".join(records))
     database = root / "targets"
-    _run_command(
-        [
-            "mmseqs",
-            "createdb",
-            str(fasta),
-            str(database),
-            "--threads",
-            str(threads),
-        ]
-    )
+    _run_command([
+        "mmseqs",
+        "createdb",
+        str(fasta),
+        str(database),
+        "--threads",
+        str(threads),
+    ])
     return SearchDatabaseBundle(
         backend="mmseqs",
         root=root,
@@ -1271,19 +1259,17 @@ def _parse_plinder_target_identifier(
 def _load_target_chain_mapping(
     lookup_path: Path, target_identifiers: Iterable[str], *, backend: str
 ) -> pd.DataFrame:
-    parsed = pd.DataFrame(
-        [
-            {
-                "target_backend_id": identifier,
-                "target_entry": entry_id,
-                "target_chain_auth_id": auth_id,
-            }
-            for identifier in sorted(set(target_identifiers))
-            for entry_id, auth_id in [
-                _parse_plinder_target_identifier(identifier, backend=backend)
-            ]
+    parsed = pd.DataFrame([
+        {
+            "target_backend_id": identifier,
+            "target_entry": entry_id,
+            "target_chain_auth_id": auth_id,
+        }
+        for identifier in sorted(set(target_identifiers))
+        for entry_id, auth_id in [
+            _parse_plinder_target_identifier(identifier, backend=backend)
         ]
-    )
+    ])
     if parsed.empty:
         return parsed.assign(
             target_chain_asym_id=pd.Series(dtype="string"),
@@ -1312,7 +1298,8 @@ def _load_target_chain_mapping(
     )
     key_columns = ["target_entry", "target_chain_auth_id"]
     ambiguous = (
-        lookup.groupby(key_columns, dropna=False)["target_chain_asym_id"]
+        lookup
+        .groupby(key_columns, dropna=False)["target_chain_asym_id"]
         .nunique()
         .loc[lambda values: values > 1]
     )
@@ -1328,7 +1315,7 @@ def _load_target_chain_mapping(
     ].tolist()
     if missing:
         raise ValueError(
-            "PLINDER alignment lookup cannot map target chains: " f"{missing[:10]}"
+            f"PLINDER alignment lookup cannot map target chains: {missing[:10]}"
         )
     return mapped
 
@@ -1367,9 +1354,9 @@ def map_custom_alignment_hits(
             "target_chain_asym_id",
             "source",
         ]
-        pd.DataFrame(
-            {column: pd.Series(dtype="string") for column in columns}
-        ).to_parquet(output_path, index=False)
+        pd.DataFrame({
+            column: pd.Series(dtype="string") for column in columns
+        }).to_parquet(output_path, index=False)
         return output_path
     query_columns = query_mapping[
         [
@@ -1603,18 +1590,16 @@ def prepare_custom_score_alignments(
         hits = pd.read_parquet(hit_path)
         output = output_dir / f"{backend}.parquet"
         if hits.empty:
-            pd.DataFrame(
-                {
-                    column: pd.Series(dtype="string")
-                    for column in (
-                        "query_entry",
-                        "target_entry",
-                        "query_chain_mapped",
-                        "target_chain_mapped",
-                        "source",
-                    )
-                }
-            ).to_parquet(output, index=False)
+            pd.DataFrame({
+                column: pd.Series(dtype="string")
+                for column in (
+                    "query_entry",
+                    "target_entry",
+                    "query_chain_mapped",
+                    "target_chain_mapped",
+                    "source",
+                )
+            }).to_parquet(output, index=False)
             outputs[backend] = output
             continue
         backend_required = required | (
@@ -1635,18 +1620,16 @@ def prepare_custom_score_alignments(
             )
         hits = hits.loc[~hits["target_entry"].astype(str).isin(query_entry_ids)].copy()
         if hits.empty:
-            pd.DataFrame(
-                {
-                    column: pd.Series(dtype="string")
-                    for column in (
-                        "query_entry",
-                        "target_entry",
-                        "query_chain_mapped",
-                        "target_chain_mapped",
-                        "source",
-                    )
-                }
-            ).to_parquet(output, index=False)
+            pd.DataFrame({
+                column: pd.Series(dtype="string")
+                for column in (
+                    "query_entry",
+                    "target_entry",
+                    "query_chain_mapped",
+                    "target_chain_mapped",
+                    "source",
+                )
+            }).to_parquet(output, index=False)
             outputs[backend] = output
             continue
         selected = [
@@ -1846,9 +1829,9 @@ def prepare_custom_protein_score_alignments(
         hits = pd.read_parquet(hit_path)
         output = output_dir / f"{backend}.parquet"
         if hits.empty:
-            pd.DataFrame(
-                {column: pd.Series(dtype="string") for column in empty_columns}
-            ).to_parquet(output, index=False)
+            pd.DataFrame({
+                column: pd.Series(dtype="string") for column in empty_columns
+            }).to_parquet(output, index=False)
             outputs[backend] = output
             continue
         missing = sorted(required.difference(hits.columns))
@@ -1867,9 +1850,9 @@ def prepare_custom_protein_score_alignments(
             hits["target_entry"].astype(str).to_numpy() != custom_entry_ids.to_numpy()
         ].copy()
         if hits.empty:
-            pd.DataFrame(
-                {column: pd.Series(dtype="string") for column in empty_columns}
-            ).to_parquet(output, index=False)
+            pd.DataFrame({
+                column: pd.Series(dtype="string") for column in empty_columns
+            }).to_parquet(output, index=False)
             outputs[backend] = output
             continue
 
@@ -2263,16 +2246,14 @@ def write_custom_aligned_pocket_residues(
             release_chain = release_instance.split(".", maxsplit=1)[-1]
             custom_chain = custom_instance.split(".", maxsplit=1)[-1]
             for source in score_sources:
-                accepted.add(
-                    (
-                        str(score.query_system),
-                        str(score.query_ligand_id),
-                        str(score.target_system),
-                        source,
-                        release_chain,
-                        custom_chain,
-                    )
-                )
+                accepted.add((
+                    str(score.query_system),
+                    str(score.query_ligand_id),
+                    str(score.target_system),
+                    source,
+                    release_chain,
+                    custom_chain,
+                ))
     if not accepted:
         result = pd.DataFrame(columns=columns)
     else:
@@ -2294,9 +2275,11 @@ def write_custom_aligned_pocket_residues(
                         for residue_number in number_to_index:
                             pocket_membership.setdefault(
                                 (str(entry_id), asym_id, int(residue_number)), []
-                            ).append(
-                                (str(system.id), str(ligand.id), str(instance_chain))
-                            )
+                            ).append((
+                                str(system.id),
+                                str(ligand.id),
+                                str(instance_chain),
+                            ))
 
         rows: list[dict[str, Any]] = []
         for backend, alignment_path in protein_score_alignments.items():
@@ -2339,23 +2322,21 @@ def write_custom_aligned_pocket_residues(
                             custom_chain,
                         ) not in accepted:
                             continue
-                        rows.append(
-                            {
-                                "plinder_system_id": system_id,
-                                "plinder_ligand_id": ligand_id,
-                                "plinder_entry_id": release_entry,
-                                "plinder_chain_instance": instance_chain,
-                                "plinder_chain_asym_id": release_chain,
-                                "plinder_residue_number": release_number,
-                                "custom_structure_id": custom_entry,
-                                "custom_chain_asym_id": custom_chain,
-                                "custom_residue_number": (
-                                    custom_number if custom_number >= 0 else pd.NA
-                                ),
-                                "residue_identical": bool(identical),
-                                "source": backend,
-                            }
-                        )
+                        rows.append({
+                            "plinder_system_id": system_id,
+                            "plinder_ligand_id": ligand_id,
+                            "plinder_entry_id": release_entry,
+                            "plinder_chain_instance": instance_chain,
+                            "plinder_chain_asym_id": release_chain,
+                            "plinder_residue_number": release_number,
+                            "custom_structure_id": custom_entry,
+                            "custom_chain_asym_id": custom_chain,
+                            "custom_residue_number": (
+                                custom_number if custom_number >= 0 else pd.NA
+                            ),
+                            "residue_identical": bool(identical),
+                            "source": backend,
+                        })
         result = pd.DataFrame.from_records(rows, columns=columns)
         if not result.empty:
             result = result.drop_duplicates().sort_values(

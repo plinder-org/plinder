@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pyarrow as pa
+
 from plinder.data.annotations.aggregate_annotations import Entry
 from plinder.data.annotations.cif_utils import read_mmcif_file
 from plinder.data.annotations.protein_utils import get_modified_residues

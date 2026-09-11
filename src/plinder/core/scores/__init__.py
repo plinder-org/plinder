@@ -32,8 +32,10 @@ from .reconstruct import (
     reconstruct_interface_similarity_scores,
     reconstruct_similarity_scores,
 )
+from .search import search
 
 __all__ = [
+    "search",
     "query_ligand_similarity",
     "cross_ligand_similarity",
     "query_protein_similarity",

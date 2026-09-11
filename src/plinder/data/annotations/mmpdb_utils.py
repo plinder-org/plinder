@@ -234,12 +234,10 @@ def _core_table(shared_cores: Sequence[str]) -> pd.DataFrame:
             "num_cuts",
             "shared_core_num_heavy_atoms",
         ],
-    ).astype(
-        {
-            "num_cuts": "int8",
-            "shared_core_num_heavy_atoms": "int16",
-        }
-    )
+    ).astype({
+        "num_cuts": "int8",
+        "shared_core_num_heavy_atoms": "int16",
+    })
 
 
 def _sql_paths(paths: Sequence[Path]) -> str:
@@ -298,7 +296,8 @@ def _write_pair_parquet(
         raise ValueError(f"mmpdb emitted {invalid_ids} non-integer ligand IDs")
 
     shared_cores = (
-        connection.execute(
+        connection
+        .execute(
             f"""
         SELECT DISTINCT shared_core_smiles
         FROM read_parquet('{raw_path_sql}')
@@ -383,8 +382,7 @@ def _write_pair_parquet(
     actual_schema = pq.read_schema(output_path)
     if not actual_schema.equals(schemas.LIGAND_MMP_PAIR_SCHEMA):
         raise ValueError(
-            "ligand MMP output schema differs from the release schema: "
-            f"{actual_schema}"
+            f"ligand MMP output schema differs from the release schema: {actual_schema}"
         )
 
 

@@ -2,6 +2,7 @@
 # Distributed under the terms of the Apache License 2.0
 
 import pytest
+
 from plinder.data import docs
 
 
@@ -34,7 +35,7 @@ def test_tablegen_renders_checked_in_table_descriptions(tmp_path, monkeypatch):
         encoding="utf-8",
     )
     (table_dir / "beta.tsv").write_text(
-        "Name\tType\tDescription\n" "score\tdouble\tSimilarity score\n",
+        "Name\tType\tDescription\nscore\tdouble\tSimilarity score\n",
         encoding="utf-8",
     )
     output_path = tmp_path / "table.html"
@@ -112,12 +113,13 @@ def test_ligand_cluster_column_descriptions():
 
 
 def test_description_markers_are_explicit_and_independent():
+    from pydantic import Field
+
     from plinder.data.annotations.utils import (
         DocBaseModel,
         description_excluded_from_column_docs,
         description_excluded_from_flat_export,
     )
-    from pydantic import Field
 
     class Example(DocBaseModel):
         visible: int = Field(description="Visible in both places")
@@ -173,30 +175,27 @@ def test_annotation_models_use_only_readable_description_markers():
 
 def test_annotation_descriptions_follow_arrow_schema_order():
     import pyarrow as pa
+
     from plinder.data.annotations.aggregate_annotations import System
     from plinder.data.annotations.ligand_utils import Ligand
 
-    annotation_schema = pa.schema(
-        [
-            ("ligand_id_legacy", pa.string()),
-            ("ligand__members", pa.struct([("1.A", pa.list_(pa.int64()))])),
-            ("ligand_member_asym_ids", pa.list_(pa.string())),
-            ("system_id_legacy", pa.string()),
-        ]
-    )
-    cluster_schema = pa.schema(
-        [
-            ("ligand_id", pa.string()),
-            (
-                "tanimoto_similarity_ecfp4_1024__50__ligand__set_cover",
-                pa.string(),
-            ),
-            (
-                "pli_qcov__50__ligand__directed_set_cover__is_centroid",
-                pa.bool_(),
-            ),
-        ]
-    )
+    annotation_schema = pa.schema([
+        ("ligand_id_legacy", pa.string()),
+        ("ligand__members", pa.struct([("1.A", pa.list_(pa.int64()))])),
+        ("ligand_member_asym_ids", pa.list_(pa.string())),
+        ("system_id_legacy", pa.string()),
+    ])
+    cluster_schema = pa.schema([
+        ("ligand_id", pa.string()),
+        (
+            "tanimoto_similarity_ecfp4_1024__50__ligand__set_cover",
+            pa.string(),
+        ),
+        (
+            "pli_qcov__50__ligand__directed_set_cover__is_centroid",
+            pa.bool_(),
+        ),
+    ])
 
     descriptions = docs.get_table_column_descriptions(
         table_name="annotation", schema=annotation_schema
@@ -248,12 +247,10 @@ def test_annotation_descriptions_reject_repeated_entry_metadata():
     with pytest.raises(ValueError, match="columns owned by 'entry_metadata'"):
         docs.get_table_column_descriptions(
             table_name="annotation",
-            schema=pa.schema(
-                [
-                    ("entry_pdb_id", pa.string()),
-                    ("entry_resolution", pa.float64()),
-                ]
-            ),
+            schema=pa.schema([
+                ("entry_pdb_id", pa.string()),
+                ("entry_resolution", pa.float64()),
+            ]),
         )
 
 
@@ -284,9 +281,10 @@ def test_system_validation_descriptions_reject_unrelated_columns():
     with pytest.raises(ValueError, match="non-validation columns"):
         docs.get_table_column_descriptions(
             table_name="system_validation",
-            schema=pa.schema(
-                [("system_id", pa.string()), ("ligand_smiles", pa.string())]
-            ),
+            schema=pa.schema([
+                ("system_id", pa.string()),
+                ("ligand_smiles", pa.string()),
+            ]),
         )
 
 
@@ -297,15 +295,12 @@ def test_table_descriptions_reject_retired_cover_modes():
     invalid_schemas = [
         (
             "ligand_clusters",
-            pa.schema(
-                [
-                    (
-                        "tanimoto_similarity_ecfp4_1024__50__ligand__"
-                        "directed_set_cover",
-                        pa.string(),
-                    )
-                ]
-            ),
+            pa.schema([
+                (
+                    "tanimoto_similarity_ecfp4_1024__50__ligand__directed_set_cover",
+                    pa.string(),
+                )
+            ]),
         ),
         (
             "ligand_clusters",
@@ -317,37 +312,31 @@ def test_table_descriptions_reject_retired_cover_modes():
         ),
         (
             "interface_clusters",
-            pa.schema(
-                [
-                    (
-                        "interface_qcov__50__directed_set_cover__is_centroid",
-                        pa.string(),
-                    )
-                ]
-            ),
+            pa.schema([
+                (
+                    "interface_qcov__50__directed_set_cover__is_centroid",
+                    pa.string(),
+                )
+            ]),
         ),
         (
             "interface_clusters",
-            pa.schema(
-                [
-                    (
-                        "interface_qcov__50__directed_set_cover__coverage_count",
-                        pa.int64(),
-                    )
-                ]
-            ),
+            pa.schema([
+                (
+                    "interface_qcov__50__directed_set_cover__coverage_count",
+                    pa.int64(),
+                )
+            ]),
         ),
         (
             "interface_clusters",
-            pa.schema(
-                [
-                    (
-                        "interface_side_qcov__50__chain_1_directed_set_cover__"
-                        "coverage_fraction",
-                        pa.float64(),
-                    )
-                ]
-            ),
+            pa.schema([
+                (
+                    "interface_side_qcov__50__chain_1_directed_set_cover__"
+                    "coverage_fraction",
+                    pa.float64(),
+                )
+            ]),
         ),
     ]
     for table_name, schema in invalid_schemas:
@@ -361,6 +350,7 @@ def test_table_descriptions_reject_retired_cover_modes():
 def test_table_descriptions_treat_every_chemical_metric_alike():
     import pyarrow as pa
     import pytest
+
     from plinder.core.scores.metrics import (
         CHEMICAL_CLUSTER_METRICS,
         CHEMICAL_CLUSTER_SUMMARY_COLUMNS,
@@ -370,14 +360,12 @@ def test_table_descriptions_treat_every_chemical_metric_alike():
     fields = [("ligand_id", pa.string())]
     for metric in CHEMICAL_CLUSTER_METRICS:
         summary = CHEMICAL_CLUSTER_SUMMARY_COLUMNS[metric]
-        fields.extend(
-            [
-                (f"{metric}__90__ligand__set_cover", pa.string()),
-                (summary, pa.string()),
-                (f"{summary}_num_pdb_ids", pa.int32()),
-                (f"{metric}__90__ligand__set_cover__is_centroid", pa.bool_()),
-            ]
-        )
+        fields.extend([
+            (f"{metric}__90__ligand__set_cover", pa.string()),
+            (summary, pa.string()),
+            (f"{summary}_num_pdb_ids", pa.int32()),
+            (f"{metric}__90__ligand__set_cover__is_centroid", pa.bool_()),
+        ])
 
     descriptions = docs.get_table_column_descriptions(
         table_name="ligand_clusters", schema=pa.schema(fields)
@@ -394,16 +382,16 @@ def test_table_descriptions_treat_every_chemical_metric_alike():
         with pytest.raises(ValueError, match="not published by the current pipeline"):
             docs.get_table_column_descriptions(
                 table_name="ligand_clusters",
-                schema=pa.schema(
-                    [(f"{metric}__50__ligand__directed_set_cover", pa.string())]
-                ),
+                schema=pa.schema([
+                    (f"{metric}__50__ligand__directed_set_cover", pa.string())
+                ]),
             )
         with pytest.raises(ValueError):
             docs.get_table_column_descriptions(
                 table_name="annotation",
-                schema=pa.schema(
-                    [(CHEMICAL_CLUSTER_SUMMARY_COLUMNS[metric], pa.string())]
-                ),
+                schema=pa.schema([
+                    (CHEMICAL_CLUSTER_SUMMARY_COLUMNS[metric], pa.string())
+                ]),
             )
 
 
@@ -502,12 +490,10 @@ def test_write_column_descriptions_uses_release_table_schemas(tmp_path, monkeypa
     table_path = release_dir / "index" / "entry_metadata.parquet"
     table_path.parent.mkdir(parents=True)
     pq.write_table(
-        pa.table(
-            {
-                "entry_pdb_id": ["1abc"],
-                "entry_source_taxonomy_ids": [[9606]],
-            }
-        ),
+        pa.table({
+            "entry_pdb_id": ["1abc"],
+            "entry_source_taxonomy_ids": [[9606]],
+        }),
         table_path,
     )
     monkeypatch.setattr(

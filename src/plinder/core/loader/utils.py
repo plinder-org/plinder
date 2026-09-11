@@ -89,9 +89,9 @@ def pad_and_stack(
                 output: (2, 7, 7, 3)
 
     """
-    assert (
-        len({t.ndim for t in tensors}) == 1
-    ), "All `tensors` must have the same number of dimensions."
+    assert len({t.ndim for t in tensors}) == 1, (
+        "All `tensors` must have the same number of dimensions."
+    )
 
     # Pad all dims if none are specified
     if dims_to_pad is None:

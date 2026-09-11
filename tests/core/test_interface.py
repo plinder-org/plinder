@@ -5,6 +5,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 from biotite.structure.io import pdbx
+
 from plinder.core import PlinderInterface, PlinderRelease
 from plinder.data.annotations.cif_utils import read_mmcif_file
 
@@ -14,27 +15,23 @@ def interface_release(tmp_path) -> PlinderRelease:
     index = tmp_path / "index"
     index.mkdir()
     system_id = "2y4i__1__1.A--1.B"
-    pd.DataFrame(
-        {
-            "entry_pdb_id": ["2y4i"],
-            "system_id": [system_id],
-            "system_biounit_id": ["1"],
-            "interface_chain_1": ["1.A"],
-            "interface_chain_2": ["1.B"],
-            "interface_chain_1_residue_numbers": [[22, 23]],
-            "interface_chain_1_residue_indices": [[0, 1]],
-            "interface_chain_2_residue_numbers": [[39]],
-            "interface_chain_2_residue_indices": [[0]],
-            "interface_num_contact_residue_pairs": [2],
-        }
-    ).to_parquet(index / "interface_annotation_table.parquet", index=False)
-    pd.DataFrame(
-        {
-            "entry_pdb_id": ["2y4i", "2y4i"],
-            "chain_asym_id": ["A", "B"],
-            "chain_sequence": ["AC", "DEF"],
-        }
-    ).to_parquet(index / "entry_chains.parquet", index=False)
+    pd.DataFrame({
+        "entry_pdb_id": ["2y4i"],
+        "system_id": [system_id],
+        "system_biounit_id": ["1"],
+        "interface_chain_1": ["1.A"],
+        "interface_chain_2": ["1.B"],
+        "interface_chain_1_residue_numbers": [[22, 23]],
+        "interface_chain_1_residue_indices": [[0, 1]],
+        "interface_chain_2_residue_numbers": [[39]],
+        "interface_chain_2_residue_indices": [[0]],
+        "interface_num_contact_residue_pairs": [2],
+    }).to_parquet(index / "interface_annotation_table.parquet", index=False)
+    pd.DataFrame({
+        "entry_pdb_id": ["2y4i", "2y4i"],
+        "chain_asym_id": ["A", "B"],
+        "chain_sequence": ["AC", "DEF"],
+    }).to_parquet(index / "entry_chains.parquet", index=False)
     return PlinderRelease(data_dir=tmp_path)
 
 

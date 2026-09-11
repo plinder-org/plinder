@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 import pytest
 from biotite.structure.io import pdbx
+
 from plinder.core.scores import custom
 from plinder.core.scores.entries import (
     ChainView,
@@ -371,8 +372,9 @@ def test_annotate_custom_cif_files_writes_bonded_ligands(
     test_dir, tmp_path, monkeypatch
 ):
     import yaml
-    from plinder.data.annotations import ligand_utils
     from rdkit import Chem
+
+    from plinder.data.annotations import ligand_utils
 
     monkeypatch.setattr(ligand_utils, "BINDING_AFFINITY", {})
 
@@ -521,30 +523,26 @@ def test_build_mmseqs_target_subset_uses_selected_scoreable_chains(
     tmp_path, monkeypatch
 ):
     entry_chains = tmp_path / "entry_chains.parquet"
-    pd.DataFrame(
-        {
-            "entry_pdb_id": ["1abc", "1abc", "1abc", "1abc", "2def"],
-            "chain_asym_id": ["A", "B", "C", "L", "A"],
-            "chain_auth_id": ["X", "I", "Z", "L", "Y"],
-            "chain_receptor_type": [
-                "protein",
-                "protein",
-                "protein",
-                "other",
-                "protein",
-            ],
-            "chain_is_holo": [True, False, False, False, True],
-            "chain_sequence": ["ACDE", "FGHI", "KLMN", "X", "PQRS"],
-        }
-    ).to_parquet(entry_chains, index=False)
+    pd.DataFrame({
+        "entry_pdb_id": ["1abc", "1abc", "1abc", "1abc", "2def"],
+        "chain_asym_id": ["A", "B", "C", "L", "A"],
+        "chain_auth_id": ["X", "I", "Z", "L", "Y"],
+        "chain_receptor_type": [
+            "protein",
+            "protein",
+            "protein",
+            "other",
+            "protein",
+        ],
+        "chain_is_holo": [True, False, False, False, True],
+        "chain_sequence": ["ACDE", "FGHI", "KLMN", "X", "PQRS"],
+    }).to_parquet(entry_chains, index=False)
     interface_annotations = tmp_path / "interface_annotations.parquet"
-    pd.DataFrame(
-        {
-            "entry_pdb_id": ["1abc"],
-            "interface_chain_1": ["1.A"],
-            "interface_chain_2": ["1.B"],
-        }
-    ).to_parquet(interface_annotations, index=False)
+    pd.DataFrame({
+        "entry_pdb_id": ["1abc"],
+        "interface_chain_1": ["1.A"],
+        "interface_chain_2": ["1.B"],
+    }).to_parquet(interface_annotations, index=False)
     commands: list[list[str]] = []
     monkeypatch.setattr(custom.shutil, "which", lambda _name: "/bin/mmseqs")
     monkeypatch.setattr(custom, "_run_command", commands.append)
@@ -590,16 +588,14 @@ def test_map_custom_alignment_hits_maps_query_and_target_chains(tmp_path):
     input_root = tmp_path / "query_inputs"
     input_root.mkdir()
     chain_manifest = input_root / "query_chains.parquet"
-    pd.DataFrame(
-        {
-            "query_id": ["cq00000000"],
-            "query_chain_id": ["model__A"],
-            "structure_id": ["model"],
-            "chain_asym_id": ["A"],
-            "sequence_source": ["polymer"],
-            "resolved_residue_numbers": [[1, 2]],
-        }
-    ).to_parquet(chain_manifest, index=False)
+    pd.DataFrame({
+        "query_id": ["cq00000000"],
+        "query_chain_id": ["model__A"],
+        "structure_id": ["model"],
+        "chain_asym_id": ["A"],
+        "sequence_source": ["polymer"],
+        "resolved_residue_numbers": [[1, 2]],
+    }).to_parquet(chain_manifest, index=False)
     inputs = custom.CustomQueryInputs(
         root=input_root,
         chain_cif_dir=input_root / "chains",
@@ -609,13 +605,11 @@ def test_map_custom_alignment_hits_maps_query_and_target_chains(tmp_path):
     database_root = tmp_path / "query_databases"
     database_root.mkdir()
     identifier_map = database_root / "query_identifier_map.parquet"
-    pd.DataFrame(
-        {
-            "backend": ["foldseek"],
-            "backend_query_id": ["cq00000000_A"],
-            "query_id": ["cq00000000"],
-        }
-    ).to_parquet(identifier_map, index=False)
+    pd.DataFrame({
+        "backend": ["foldseek"],
+        "backend_query_id": ["cq00000000_A"],
+        "query_id": ["cq00000000"],
+    }).to_parquet(identifier_map, index=False)
     databases = custom.CustomQueryDatabases(
         root=database_root,
         inputs=inputs,
@@ -623,29 +617,25 @@ def test_map_custom_alignment_hits_maps_query_and_target_chains(tmp_path):
         identifier_map=identifier_map,
     )
     raw = tmp_path / "raw.parquet"
-    pd.DataFrame(
-        {
-            "query": ["cq00000000_A"],
-            "target": ["pdb_00001abc_xyz-enrich.cif.gz_X"],
-            "qstart": [1],
-            "tstart": [2],
-            "qcov": [0.8],
-            "fident": [0.5],
-            "qaln": ["AC"],
-            "taln": ["AC"],
-            "lddt": [0.7],
-        }
-    ).to_parquet(raw, index=False)
+    pd.DataFrame({
+        "query": ["cq00000000_A"],
+        "target": ["pdb_00001abc_xyz-enrich.cif.gz_X"],
+        "qstart": [1],
+        "tstart": [2],
+        "qcov": [0.8],
+        "fident": [0.5],
+        "qaln": ["AC"],
+        "taln": ["AC"],
+        "lddt": [0.7],
+    }).to_parquet(raw, index=False)
     lookup = tmp_path / "alignment_chain_lookup.parquet"
-    pd.DataFrame(
-        {
-            "entry_pdb_id": ["1abc"],
-            "chain_asym_id": ["B"],
-            "chain_auth_id": ["X"],
-            "selected_residue_numbers": [[2, 4]],
-            "selected_residue_indices": [[1, 3]],
-        }
-    ).to_parquet(lookup, index=False)
+    pd.DataFrame({
+        "entry_pdb_id": ["1abc"],
+        "chain_asym_id": ["B"],
+        "chain_auth_id": ["X"],
+        "selected_residue_numbers": [[2, 4]],
+        "selected_residue_indices": [[1, 3]],
+    }).to_parquet(lookup, index=False)
     output = tmp_path / "mapped.parquet"
 
     custom.map_custom_alignment_hits(
@@ -906,26 +896,24 @@ def test_prepare_custom_score_alignments_maps_coordinate_fasta_positions(tmp_pat
         author_to_asym={"A": "A"},
     )
     hit_path = tmp_path / "mmseqs_hits.parquet"
-    pd.DataFrame(
-        [
-            {
-                "structure_id": "model",
-                "query_chain_asym_id": "A",
-                "query_sequence_source": "coordinates",
-                "query_resolved_residue_numbers": [10, 20, 40],
-                "target_entry": "1abc",
-                "target_chain_asym_id": "B",
-                "target_selected_residue_numbers": [3],
-                "target_selected_residue_indices": [2],
-                "qstart": 1,
-                "tstart": 1,
-                "qcov": 1.0,
-                "fident": 1.0,
-                "qaln": "ACD",
-                "taln": "ACD",
-            }
-        ]
-    ).to_parquet(hit_path, index=False)
+    pd.DataFrame([
+        {
+            "structure_id": "model",
+            "query_chain_asym_id": "A",
+            "query_sequence_source": "coordinates",
+            "query_resolved_residue_numbers": [10, 20, 40],
+            "target_entry": "1abc",
+            "target_chain_asym_id": "B",
+            "target_selected_residue_numbers": [3],
+            "target_selected_residue_indices": [2],
+            "qstart": 1,
+            "tstart": 1,
+            "qcov": 1.0,
+            "fident": 1.0,
+            "qaln": "ACD",
+            "taln": "ACD",
+        }
+    ]).to_parquet(hit_path, index=False)
 
     outputs = custom.prepare_custom_score_alignments(
         {"mmseqs": hit_path},
@@ -1034,24 +1022,22 @@ def test_calculate_custom_similarity_scores_reuses_release_metrics(
         lambda _assets, *, pdb_ids: {"1abc": target},
     )
     alignment = tmp_path / "foldseek.parquet"
-    pd.DataFrame(
-        [
-            {
-                "query_entry": "model",
-                "target_entry": "1abc",
-                "query_chain_mapped": "A",
-                "target_chain_mapped": "B",
-                "source": "foldseek",
-                "qcov": 1.0,
-                "fident": 1.0,
-                "seqsim": 1.0,
-                "lddt": 0.9,
-                "query_selected_residue_numbers": [2],
-                "target_selected_residue_numbers": [20],
-                "selected_residue_identity": b"\x01",
-            }
-        ]
-    ).to_parquet(alignment, index=False)
+    pd.DataFrame([
+        {
+            "query_entry": "model",
+            "target_entry": "1abc",
+            "query_chain_mapped": "A",
+            "target_chain_mapped": "B",
+            "source": "foldseek",
+            "qcov": 1.0,
+            "fident": 1.0,
+            "seqsim": 1.0,
+            "lddt": 0.9,
+            "query_selected_residue_numbers": [2],
+            "target_selected_residue_numbers": [20],
+            "selected_residue_identity": b"\x01",
+        }
+    ]).to_parquet(alignment, index=False)
 
     scores = custom.calculate_custom_similarity_scores(
         {"foldseek": alignment},
@@ -1090,24 +1076,22 @@ def test_calculate_custom_protein_scores_uses_plinder_pocket(
         lambda _assets, *, pdb_ids: {"1abc": plinder_entry},
     )
     alignment = tmp_path / "reverse_foldseek.parquet"
-    pd.DataFrame(
-        [
-            {
-                "query_entry": "1abc",
-                "target_entry": "model",
-                "query_chain_mapped": "B",
-                "target_chain_mapped": custom_chain,
-                "source": "foldseek",
-                "qcov": 1.0,
-                "fident": 1.0,
-                "seqsim": 1.0,
-                "lddt": 0.9,
-                "query_selected_residue_numbers": [20],
-                "target_selected_residue_numbers": [-1],
-                "selected_residue_identity": b"\x01",
-            }
-        ]
-    ).to_parquet(alignment, index=False)
+    pd.DataFrame([
+        {
+            "query_entry": "1abc",
+            "target_entry": "model",
+            "query_chain_mapped": "B",
+            "target_chain_mapped": custom_chain,
+            "source": "foldseek",
+            "qcov": 1.0,
+            "fident": 1.0,
+            "seqsim": 1.0,
+            "lddt": 0.9,
+            "query_selected_residue_numbers": [20],
+            "target_selected_residue_numbers": [-1],
+            "selected_residue_identity": b"\x01",
+        }
+    ]).to_parquet(alignment, index=False)
 
     scores = custom.calculate_custom_protein_similarity_scores(
         {"foldseek": alignment},
@@ -1149,25 +1133,23 @@ def test_calculate_custom_protein_scores_reads_alignments_once(tmp_path, monkeyp
         },
     )
     alignment = tmp_path / "reverse_foldseek.parquet"
-    pd.DataFrame(
-        [
-            {
-                "query_entry": pdb_id,
-                "target_entry": "model_with_underscore",
-                "query_chain_mapped": "B",
-                "target_chain_mapped": "A",
-                "source": "foldseek",
-                "qcov": 1.0,
-                "fident": 1.0,
-                "seqsim": 1.0,
-                "lddt": 0.9,
-                "query_selected_residue_numbers": [20],
-                "target_selected_residue_numbers": [-1],
-                "selected_residue_identity": b"\x01",
-            }
-            for pdb_id in release_entries
-        ]
-    ).to_parquet(alignment, index=False)
+    pd.DataFrame([
+        {
+            "query_entry": pdb_id,
+            "target_entry": "model_with_underscore",
+            "query_chain_mapped": "B",
+            "target_chain_mapped": "A",
+            "source": "foldseek",
+            "qcov": 1.0,
+            "fident": 1.0,
+            "seqsim": 1.0,
+            "lddt": 0.9,
+            "query_selected_residue_numbers": [20],
+            "target_selected_residue_numbers": [-1],
+            "selected_residue_identity": b"\x01",
+        }
+        for pdb_id in release_entries
+    ]).to_parquet(alignment, index=False)
     original_load = get_similarity_scores.Scorer.load_alignments
     load_calls = []
 
@@ -1218,58 +1200,52 @@ def test_write_custom_aligned_pocket_residues(tmp_path, monkeypatch):
         lambda _assets, *, pdb_ids: {"1abc": plinder_entry},
     )
     foldseek_alignment = tmp_path / "reverse_foldseek.parquet"
-    pd.DataFrame(
-        [
-            {
-                "query_entry": "1abc",
-                "target_entry": "model_with_underscore",
-                "query_chain_mapped": "B",
-                "target_chain_mapped": "A",
-                "source": "foldseek",
-                "query_selected_residue_numbers": [20],
-                "target_selected_residue_numbers": [42],
-                "selected_residue_identity": b"\x01",
-            },
-            {
-                "query_entry": "1abc",
-                "target_entry": "model_with_underscore",
-                "query_chain_mapped": "C",
-                "target_chain_mapped": "A",
-                "source": "foldseek",
-                "query_selected_residue_numbers": [30],
-                "target_selected_residue_numbers": [43],
-                "selected_residue_identity": b"\x00",
-            },
-        ]
-    ).to_parquet(foldseek_alignment, index=False)
+    pd.DataFrame([
+        {
+            "query_entry": "1abc",
+            "target_entry": "model_with_underscore",
+            "query_chain_mapped": "B",
+            "target_chain_mapped": "A",
+            "source": "foldseek",
+            "query_selected_residue_numbers": [20],
+            "target_selected_residue_numbers": [42],
+            "selected_residue_identity": b"\x01",
+        },
+        {
+            "query_entry": "1abc",
+            "target_entry": "model_with_underscore",
+            "query_chain_mapped": "C",
+            "target_chain_mapped": "A",
+            "source": "foldseek",
+            "query_selected_residue_numbers": [30],
+            "target_selected_residue_numbers": [43],
+            "selected_residue_identity": b"\x00",
+        },
+    ]).to_parquet(foldseek_alignment, index=False)
     mmseqs_alignment = tmp_path / "reverse_mmseqs.parquet"
-    pd.DataFrame(
-        [
-            {
-                "query_entry": "1abc",
-                "target_entry": "model_with_underscore",
-                "query_chain_mapped": "B",
-                "target_chain_mapped": "A",
-                "source": "mmseqs",
-                "query_selected_residue_numbers": [20],
-                "target_selected_residue_numbers": [142],
-                "selected_residue_identity": b"\x00",
-            }
-        ]
-    ).to_parquet(mmseqs_alignment, index=False)
+    pd.DataFrame([
+        {
+            "query_entry": "1abc",
+            "target_entry": "model_with_underscore",
+            "query_chain_mapped": "B",
+            "target_chain_mapped": "A",
+            "source": "mmseqs",
+            "query_selected_residue_numbers": [20],
+            "target_selected_residue_numbers": [142],
+            "selected_residue_identity": b"\x00",
+        }
+    ]).to_parquet(mmseqs_alignment, index=False)
     protein_scores = tmp_path / "protein_scores.parquet"
-    pd.DataFrame(
-        [
-            {
-                "query_system": "1abc__1__1.B__1.Z",
-                "query_ligand_id": "1abc__1__1.Z",
-                "target_system": "model_with_underscore_A",
-                "protein_mapping": "1.B:0.A",
-                "source": "foldseek",
-                "metric": "pocket_fident",
-            }
-        ]
-    ).to_parquet(protein_scores, index=False)
+    pd.DataFrame([
+        {
+            "query_system": "1abc__1__1.B__1.Z",
+            "query_ligand_id": "1abc__1__1.Z",
+            "target_system": "model_with_underscore_A",
+            "protein_mapping": "1.B:0.A",
+            "source": "foldseek",
+            "metric": "pocket_fident",
+        }
+    ]).to_parquet(protein_scores, index=False)
 
     output = custom.write_custom_aligned_pocket_residues(
         {"foldseek": foldseek_alignment, "mmseqs": mmseqs_alignment},
@@ -1298,65 +1274,59 @@ def test_write_custom_aligned_pocket_residues(tmp_path, monkeypatch):
 
 def test_write_custom_sequence_link_tables_adds_ligand_chemistry(tmp_path):
     manifest = tmp_path / "query_chains.parquet"
-    pd.DataFrame(
-        {
-            "structure_id": ["cq00000000", "cq00000001"],
-            "chain_asym_id": ["A", "A"],
-            "sequence_id": ["sample-1", "sample-2"],
-            "sequence_length": [120, 80],
-        }
-    ).to_parquet(manifest, index=False)
+    pd.DataFrame({
+        "structure_id": ["cq00000000", "cq00000001"],
+        "chain_asym_id": ["A", "A"],
+        "sequence_id": ["sample-1", "sample-2"],
+        "sequence_length": [120, 80],
+    }).to_parquet(manifest, index=False)
     protein_scores = tmp_path / "protein_scores.parquet"
-    pd.DataFrame(
-        [
-            {
-                "query_system": "1abc__1__1.B__1.Z",
-                "query_ligand_id": "1abc__1__1.Z",
-                "target_system": "cq00000000_A",
-                "protein_mapping": "1.B:0.A",
-                "protein_mapper": "mmseqs",
-                "source": "mmseqs",
-                "metric": "pocket_fident",
-                "similarity": 75,
-            },
-            {
-                "query_system": "1abc__1__1.B__1.Z",
-                "query_ligand_id": "1abc__1__1.Z",
-                "target_system": "cq00000000_A",
-                "protein_mapping": "1.B:0.A",
-                "protein_mapper": "mmseqs",
-                "source": "mmseqs",
-                "metric": "pli_fident",
-                "similarity": 50,
-            },
-        ]
-    ).to_parquet(protein_scores, index=False)
+    pd.DataFrame([
+        {
+            "query_system": "1abc__1__1.B__1.Z",
+            "query_ligand_id": "1abc__1__1.Z",
+            "target_system": "cq00000000_A",
+            "protein_mapping": "1.B:0.A",
+            "protein_mapper": "mmseqs",
+            "source": "mmseqs",
+            "metric": "pocket_fident",
+            "similarity": 75,
+        },
+        {
+            "query_system": "1abc__1__1.B__1.Z",
+            "query_ligand_id": "1abc__1__1.Z",
+            "target_system": "cq00000000_A",
+            "protein_mapping": "1.B:0.A",
+            "protein_mapper": "mmseqs",
+            "source": "mmseqs",
+            "metric": "pli_fident",
+            "similarity": 50,
+        },
+    ]).to_parquet(protein_scores, index=False)
     annotation = tmp_path / "annotation.parquet"
-    pd.DataFrame(
-        [
-            {
-                "system_id": "1abc__1__1.B__1.Z",
-                "ligand_id": "1abc__1__1.Z",
-                "ligand_ccd_code": "ATP",
-                "ligand_unique_ccd_code": "ATP",
-                "ligand_smiles": None,
-            },
-            {
-                "system_id": "1abc__1__1.B__1.Z",
-                "ligand_id": "9zzz__1__1.Z",
-                "ligand_ccd_code": "LIG",
-                "ligand_unique_ccd_code": "LIG",
-                "ligand_smiles": "CC",
-            },
-            {
-                "system_id": "1abc__1__1.B__1.Z",
-                "ligand_id": "9zzz__1__1.Z",
-                "ligand_ccd_code": "LIG",
-                "ligand_unique_ccd_code": "LIG",
-                "ligand_smiles": "CCC",
-            },
-        ]
-    ).to_parquet(annotation, index=False)
+    pd.DataFrame([
+        {
+            "system_id": "1abc__1__1.B__1.Z",
+            "ligand_id": "1abc__1__1.Z",
+            "ligand_ccd_code": "ATP",
+            "ligand_unique_ccd_code": "ATP",
+            "ligand_smiles": None,
+        },
+        {
+            "system_id": "1abc__1__1.B__1.Z",
+            "ligand_id": "9zzz__1__1.Z",
+            "ligand_ccd_code": "LIG",
+            "ligand_unique_ccd_code": "LIG",
+            "ligand_smiles": "CC",
+        },
+        {
+            "system_id": "1abc__1__1.B__1.Z",
+            "ligand_id": "9zzz__1__1.Z",
+            "ligand_ccd_code": "LIG",
+            "ligand_unique_ccd_code": "LIG",
+            "ligand_smiles": "CCC",
+        },
+    ]).to_parquet(annotation, index=False)
 
     links, best = custom.write_custom_sequence_link_tables(
         protein_scores=protein_scores,
@@ -1393,16 +1363,15 @@ def test_write_custom_sequence_link_tables_adds_ligand_chemistry(tmp_path):
 
 def test_add_sequence_ids_to_aligned_pocket_residues(tmp_path):
     manifest = tmp_path / "query_chains.parquet"
-    pd.DataFrame(
-        {"structure_id": ["cq00000000"], "sequence_id": ["original.sample"]}
-    ).to_parquet(manifest, index=False)
+    pd.DataFrame({
+        "structure_id": ["cq00000000"],
+        "sequence_id": ["original.sample"],
+    }).to_parquet(manifest, index=False)
     residues = tmp_path / "aligned_pocket_residues.parquet"
-    pd.DataFrame(
-        {
-            "custom_structure_id": ["cq00000000"],
-            "custom_residue_number": [42],
-        }
-    ).to_parquet(residues, index=False)
+    pd.DataFrame({
+        "custom_structure_id": ["cq00000000"],
+        "custom_residue_number": [42],
+    }).to_parquet(residues, index=False)
 
     custom.add_sequence_ids_to_aligned_pocket_residues(
         residues,
@@ -1466,23 +1435,21 @@ def test_calculate_custom_interface_scores_uses_compact_maps(tmp_path, monkeypat
         lambda _assets, *, pdb_ids: {"1abc": target},
     )
     alignment = tmp_path / "interface_foldseek.parquet"
-    pd.DataFrame(
-        [
-            {
-                "query_entry": "model",
-                "target_entry": "1abc",
-                "query_chain_mapped": query_chain,
-                "target_chain_mapped": target_chain,
-                "source": "foldseek",
-                "query_selected_residue_numbers": [query_number],
-                "target_selected_residue_numbers": [target_number],
-            }
-            for query_chain, target_chain, query_number, target_number in [
-                ("A", "B", 2, 20),
-                ("C", "D", 3, 30),
-            ]
+    pd.DataFrame([
+        {
+            "query_entry": "model",
+            "target_entry": "1abc",
+            "query_chain_mapped": query_chain,
+            "target_chain_mapped": target_chain,
+            "source": "foldseek",
+            "query_selected_residue_numbers": [query_number],
+            "target_selected_residue_numbers": [target_number],
+        }
+        for query_chain, target_chain, query_number, target_number in [
+            ("A", "B", 2, 20),
+            ("C", "D", 3, 30),
         ]
-    ).to_parquet(alignment, index=False)
+    ]).to_parquet(alignment, index=False)
 
     scores = custom.calculate_custom_interface_similarity_scores(
         {"foldseek": alignment},

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import biotite.structure as struc
 import numpy as np
+
 from plinder.core.structure.atoms import atom_array_from_cif_file
 from plinder.core.structure.ccd_template import (
     UNRESOLVED_ANNOTATION,
@@ -111,9 +112,14 @@ def test_add_missing_atoms_is_conservative():
     atoms.chain_id = np.array(["A"] * 6)
     atoms.res_id = np.array([1, 1, 1, 2, 2, 2])
     atoms.res_name = np.array(["ALA"] * 3 + ["NOTACCD"] * 3)
-    atoms.atom_name = np.array(
-        ["N", "CA", "CX", "C1", "C2", "C3"]
-    )  # CX is not an ALA atom
+    atoms.atom_name = np.array([
+        "N",
+        "CA",
+        "CX",
+        "C1",
+        "C2",
+        "C3",
+    ])  # CX is not an ALA atom
     atoms.element = np.array(["N", "C", "C", "C", "C", "C"])
     atoms.hetero = np.array([False] * 3 + [True] * 3)
 

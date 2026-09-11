@@ -539,13 +539,11 @@ def make_canonical_ligand_archives(
     scratch_dir: Path | None = None,
 ) -> None:
     """Pack canonical ASU ligand SDFs into one queryable Parquet per shard."""
-    schema = pa.schema(
-        [
-            pa.field("pdb_id", pa.string(), nullable=False),
-            pa.field("ligand_asym_id", pa.string(), nullable=False),
-            pa.field("sdf", pa.binary(), nullable=False),
-        ]
-    )
+    schema = pa.schema([
+        pa.field("pdb_id", pa.string(), nullable=False),
+        pa.field("ligand_asym_id", pa.string(), nullable=False),
+        pa.field("sdf", pa.binary(), nullable=False),
+    ])
     for code in two_char_codes:
         entry_dir = data_dir / "raw_entries" / code
         archive = data_dir / "ligand_archives" / f"{code}.parquet"
@@ -558,13 +556,11 @@ def make_canonical_ligand_archives(
         for entry_parquet in entry_parquets:
             ligand_dir = entry_dir / entry_parquet.stem / "ligand_files"
             for ligand_file in sorted(ligand_dir.glob("*.sdf")):
-                records.append(
-                    {
-                        "pdb_id": entry_parquet.stem,
-                        "ligand_asym_id": ligand_file.stem,
-                        "sdf": ligand_file.read_bytes(),
-                    }
-                )
+                records.append({
+                    "pdb_id": entry_parquet.stem,
+                    "ligand_asym_id": ligand_file.stem,
+                    "sdf": ligand_file.read_bytes(),
+                })
         table = pa.Table.from_pylist(records, schema=schema)
         temporary_root = scratch_dir or archive.parent
         temporary_root.mkdir(exist_ok=True, parents=True)
@@ -907,8 +903,7 @@ def make_interface_representatives(
     if membership_rows != source_rows:
         rmtree(working_root)
         raise ValueError(
-            "interface membership is incomplete: "
-            f"rows={membership_rows}/{source_rows}"
+            f"interface membership is incomplete: rows={membership_rows}/{source_rows}"
         )
     if _interface_representative_source_signature(data_dir) != source_signature:
         rmtree(working_root)
@@ -1292,8 +1287,7 @@ def make_ligand_pocket_representatives(
         if not observed.equals(schema):
             rmtree(working_root)
             raise ValueError(
-                f"ligand pocket representative {key} has unexpected schema: "
-                f"{observed}"
+                f"ligand pocket representative {key} has unexpected schema: {observed}"
             )
     ligand_count = pq.ParquetFile(temporary_paths["membership"]).metadata.num_rows
     representative_count = pq.ParquetFile(
@@ -1815,7 +1809,8 @@ def _linked_apo_query_chains(data_dir: Path) -> pd.DataFrame:
         validate="one_to_one",
     )
     return (
-        chains.loc[
+        chains
+        .loc[
             chains["chain_receptor_type"]
             .fillna("")
             .astype(str)
@@ -2066,16 +2061,14 @@ def scatter_missing_alignment_mappings(
     if batch_size < 1:
         raise ValueError("batch_size must be positive")
     raw_root = data_dir / "dbs" / "subdbs"
-    shards = sorted(
-        {
-            path.stem[1:3]
-            for alignment_type in ["foldseek", "mmseqs"]
-            for path in (raw_root / f"{search_db}_{alignment_type}" / "aln").glob(
-                "*.parquet"
-            )
-            if not path.name.endswith(".tmp.parquet")
-        }
-    )
+    shards = sorted({
+        path.stem[1:3]
+        for alignment_type in ["foldseek", "mmseqs"]
+        for path in (raw_root / f"{search_db}_{alignment_type}" / "aln").glob(
+            "*.parquet"
+        )
+        if not path.name.endswith(".tmp.parquet")
+    })
     missing = [
         shard
         for shard in shards
@@ -2238,13 +2231,11 @@ def map_batch_alignments(
             search_db=search_db,
             shard=shard,
         )
-        pdb_ids = sorted(
-            {
-                Path(str(signature["name"])).stem
-                for signatures in inputs.values()
-                for signature in signatures
-            }
-        )
+        pdb_ids = sorted({
+            Path(str(signature["name"])).stem
+            for signatures in inputs.values()
+            for signature in signatures
+        })
         if not pdb_ids:
             continue
         rows_by_query: dict[str, dict[str, int]] = {pdb_id: {} for pdb_id in pdb_ids}
@@ -2762,15 +2753,13 @@ def _ligand_3d_candidate_input_signatures(
         )
         if missing:
             raise ValueError(f"candidate file {path} is missing columns {missing}")
-        signatures.append(
-            {
-                "pdb_id": pdb_id,
-                "path": str(path.resolve()),
-                "size": stat.st_size,
-                "mtime_ns": stat.st_mtime_ns,
-                "rows": pq.ParquetFile(path).metadata.num_rows,
-            }
-        )
+        signatures.append({
+            "pdb_id": pdb_id,
+            "path": str(path.resolve()),
+            "size": stat.st_size,
+            "mtime_ns": stat.st_mtime_ns,
+            "rows": pq.ParquetFile(path).metadata.num_rows,
+        })
     return signatures
 
 
@@ -2791,15 +2780,13 @@ def _ligand_pair_score_input_signatures(
         schema = pq.read_schema(path)
         if not schema.equals(schemas.LIGAND_PAIR_SCORE_SCHEMA):
             raise ValueError(f"ligand pair score file has unexpected schema: {path}")
-        signatures.append(
-            {
-                "pdb_id": pdb_id,
-                "path": str(path.resolve()),
-                "size": stat.st_size,
-                "mtime_ns": stat.st_mtime_ns,
-                "rows": pq.ParquetFile(path).metadata.num_rows,
-            }
-        )
+        signatures.append({
+            "pdb_id": pdb_id,
+            "path": str(path.resolve()),
+            "size": stat.st_size,
+            "mtime_ns": stat.st_mtime_ns,
+            "rows": pq.ParquetFile(path).metadata.num_rows,
+        })
     return signatures
 
 
@@ -3804,13 +3791,11 @@ def _write_alignment_release_shard(
 def scatter_collate_alignments(*, data_dir: Path) -> list[list[str]]:
     """Return mapped alignment shards that require release collation."""
     mapped_files = (data_dir / "dbs" / "subdbs").glob("*_*/mapped_aln/*.parquet")
-    shards = sorted(
-        {
-            path.stem[-3:-1]
-            for path in mapped_files
-            if not path.name.endswith(".tmp.parquet")
-        }
-    )
+    shards = sorted({
+        path.stem[-3:-1]
+        for path in mapped_files
+        if not path.name.endswith(".tmp.parquet")
+    })
     # Preserve a join branch when there is no work, as required by Metaflow.
     return [[shard] for shard in shards] or [[]]
 
@@ -3984,7 +3969,7 @@ def make_linked_apo_structures(
     )
     linked_rows = pq.ParquetFile(output).metadata.num_rows
     LOG.info(
-        "make_linked_apo_structures: selected %d links from " "%d apo-chain candidates",
+        "make_linked_apo_structures: selected %d links from %d apo-chain candidates",
         linked_rows,
         len(candidates),
     )
@@ -4051,7 +4036,7 @@ def make_symmetric_edge_fragments(
                 copyfile(source, local_source)
                 local_sources.append(local_source)
             LOG.info(
-                "symmetric fragment batch copied: progress=%d/%d key=%s " "sources=%d",
+                "symmetric fragment batch copied: progress=%d/%d key=%s sources=%d",
                 batch_index + 1,
                 len(batches),
                 batch["key"],

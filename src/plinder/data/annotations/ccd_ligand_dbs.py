@@ -181,17 +181,15 @@ def ccd_component_table(
         if exclude_non_druglike and is_excluded_mol(smiles):
             skipped_non_druglike += 1
             continue
-        rows.append(
-            {
-                "ccd_id": comp_id,
-                "ligand_rdkit_canonical_smiles": smiles,
-                "ligand_identity": smiles2nonstereo(smiles),
-                "num_heavy_atoms": int(num_heavy),
-                # CCD ``type`` is mixed case in the bundle ("NON-POLYMER" vs
-                # "non-polymer"); normalise so consumers can group on it.
-                "ccd_type": ccd_type,
-            }
-        )
+        rows.append({
+            "ccd_id": comp_id,
+            "ligand_rdkit_canonical_smiles": smiles,
+            "ligand_identity": smiles2nonstereo(smiles),
+            "num_heavy_atoms": int(num_heavy),
+            # CCD ``type`` is mixed case in the bundle ("NON-POLYMER" vs
+            # "non-polymer"); normalise so consumers can group on it.
+            "ccd_type": ccd_type,
+        })
     LOG.info(
         f"ccd_component_table: kept {len(rows)}; skipped {skipped_no_smiles} "
         f"without SMILES, {skipped_non_druglike} non-druglike, "
@@ -489,7 +487,8 @@ def _fragment_dictionary(
         else pq.read_schema(fragments_path).empty_table().to_pandas()
     )
     nodes = (
-        pq.read_table(fragments_path, columns=["ligand_smiles_id", "normalized_smiles"])
+        pq
+        .read_table(fragments_path, columns=["ligand_smiles_id", "normalized_smiles"])
         .to_pandas()
         .drop_duplicates()
     )
@@ -648,17 +647,15 @@ def query_ccd_mmp_pairs(
             target_order,
             relabel_cache,
         )
-        rows.append(
-            {
-                "query_id": query_id,
-                "query_smiles": query_smiles,
-                "ligand_smiles_id": int(target_id),
-                "transformation": smirks,
-                "shared_core_smiles": shared_core,
-                "num_cuts": int(num_cuts),
-                "shared_core_num_heavy_atoms": int(constant_heavies),
-            }
-        )
+        rows.append({
+            "query_id": query_id,
+            "query_smiles": query_smiles,
+            "ligand_smiles_id": int(target_id),
+            "transformation": smirks,
+            "shared_core_smiles": shared_core,
+            "num_cuts": int(num_cuts),
+            "shared_core_num_heavy_atoms": int(constant_heavies),
+        })
 
     for query_id, record in records.items():
         for query in record.fragmentations:
@@ -929,16 +926,14 @@ def build_ligand_ccd_match(
             index,
             ligand_stereo_smiles=stereo if isinstance(stereo, str) else None,
         )
-        rows.append(
-            {
-                "ligand_id": ligand_id,
-                "ligand_ccd_code": ccd_code,
-                "match_kind": match["match_kind"],
-                "matched_ccd_ids": match["matched_ccd_ids"],
-                "ccd_node_ids": [int(node_by_ccd[c]) for c in match["matched_ccd_ids"]],
-                "component_ccd_ids": match["component_ccd_ids"],
-            }
-        )
+        rows.append({
+            "ligand_id": ligand_id,
+            "ligand_ccd_code": ccd_code,
+            "match_kind": match["match_kind"],
+            "matched_ccd_ids": match["matched_ccd_ids"],
+            "ccd_node_ids": [int(node_by_ccd[c]) for c in match["matched_ccd_ids"]],
+            "component_ccd_ids": match["component_ccd_ids"],
+        })
     matches = pd.DataFrame(rows)
     if output_path is not None:
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2164,8 +2159,7 @@ def residue_graph_features(graph: ResidueGraph, *, iterations: int = 2) -> Count
                 and node not in graph.donors_of(other)
             )
             refined[node] = (
-                f"{label}<{','.join(donors)}>{','.join(accepts)}"
-                f"~{','.join(undirected)}"
+                f"{label}<{','.join(donors)}>{','.join(accepts)}~{','.join(undirected)}"
             )
         labels = refined
         features.update(f"r:{label}" for label in labels.values())

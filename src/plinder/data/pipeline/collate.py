@@ -55,13 +55,11 @@ CHAIN_METADATA_SUFFIXES = (
     "length",
     "num_unresolved_residues",
 )
-RETIRED_ANNOTATION_COLUMNS = frozenset(
-    {
-        "system_id_no_biounit",
-        "system_ligand_chains",
-        "ligand_rdkit_canonical_smiles",
-    }
-)
+RETIRED_ANNOTATION_COLUMNS = frozenset({
+    "system_id_no_biounit",
+    "system_ligand_chains",
+    "ligand_rdkit_canonical_smiles",
+})
 SYSTEM_LIGAND_FLAGS = (
     "lipinski",
     "cofactor",
@@ -145,74 +143,66 @@ def _raw_annotation_columns_to_keep(columns: Iterable[str]) -> list[str]:
     ]
 
 
-MANIFEST_SCHEMA = pa.schema(
-    [
-        ("pdb_id", pa.string()),
-        ("code", pa.string()),
-        ("annotation_path", pa.string()),
-        ("chain_path", pa.string()),
-        ("biounit_chain_path", pa.string()),
-        ("metadata_path", pa.string()),
-        ("interface_path", pa.string()),
-        ("source_path", pa.string()),
-        ("ligand_path", pa.string()),
-        ("annotation_size", pa.int64()),
-        ("annotation_mtime_ns", pa.int64()),
-        ("chain_size", pa.int64()),
-        ("chain_mtime_ns", pa.int64()),
-        ("biounit_chain_size", pa.int64()),
-        ("biounit_chain_mtime_ns", pa.int64()),
-        ("metadata_size", pa.int64()),
-        ("metadata_mtime_ns", pa.int64()),
-        ("interface_size", pa.int64()),
-        ("interface_mtime_ns", pa.int64()),
-        ("source_size", pa.int64()),
-        ("source_mtime_ns", pa.int64()),
-        ("ligand_size", pa.int64()),
-        ("ligand_mtime_ns", pa.int64()),
-        ("interface_min_residues", pa.int64()),
-    ]
-)
+MANIFEST_SCHEMA = pa.schema([
+    ("pdb_id", pa.string()),
+    ("code", pa.string()),
+    ("annotation_path", pa.string()),
+    ("chain_path", pa.string()),
+    ("biounit_chain_path", pa.string()),
+    ("metadata_path", pa.string()),
+    ("interface_path", pa.string()),
+    ("source_path", pa.string()),
+    ("ligand_path", pa.string()),
+    ("annotation_size", pa.int64()),
+    ("annotation_mtime_ns", pa.int64()),
+    ("chain_size", pa.int64()),
+    ("chain_mtime_ns", pa.int64()),
+    ("biounit_chain_size", pa.int64()),
+    ("biounit_chain_mtime_ns", pa.int64()),
+    ("metadata_size", pa.int64()),
+    ("metadata_mtime_ns", pa.int64()),
+    ("interface_size", pa.int64()),
+    ("interface_mtime_ns", pa.int64()),
+    ("source_size", pa.int64()),
+    ("source_mtime_ns", pa.int64()),
+    ("ligand_size", pa.int64()),
+    ("ligand_mtime_ns", pa.int64()),
+    ("interface_min_residues", pa.int64()),
+])
 
-ENTRY_CHAIN_SCHEMA = pa.schema(
-    [
-        ("entry_pdb_id", pa.string()),
-        ("chain_asym_id", pa.string()),
-        ("chain_auth_id", pa.string()),
-        ("chain_entity_id", pa.string()),
-        ("chain_type", pa.string()),
-        ("chain_receptor_type", pa.string()),
-        ("chain_sequence", pa.string()),
-        ("chain_sequence_noncanonical", pa.string()),
-        ("chain_modified_residues", pa.list_(pa.string())),
-        ("chain_length", pa.int64()),
-        ("chain_num_unresolved_residues", pa.int64()),
-        ("chain_is_holo", pa.bool_()),
-        ("chain_is_ligand_like", pa.bool_()),
-        ("chain_uniprot_ids", pa.list_(pa.string())),
-    ]
-)
+ENTRY_CHAIN_SCHEMA = pa.schema([
+    ("entry_pdb_id", pa.string()),
+    ("chain_asym_id", pa.string()),
+    ("chain_auth_id", pa.string()),
+    ("chain_entity_id", pa.string()),
+    ("chain_type", pa.string()),
+    ("chain_receptor_type", pa.string()),
+    ("chain_sequence", pa.string()),
+    ("chain_sequence_noncanonical", pa.string()),
+    ("chain_modified_residues", pa.list_(pa.string())),
+    ("chain_length", pa.int64()),
+    ("chain_num_unresolved_residues", pa.int64()),
+    ("chain_is_holo", pa.bool_()),
+    ("chain_is_ligand_like", pa.bool_()),
+    ("chain_uniprot_ids", pa.list_(pa.string())),
+])
 
-BIOUNIT_CHAIN_SCHEMA = pa.schema(
-    [
-        ("entry_pdb_id", pa.string()),
-        ("biounit_id", pa.string()),
-        ("chain_instance", pa.string()),
-        ("chain_asym_id", pa.string()),
-        ("chain_role", pa.string()),
-        ("chain_num_contacting_ions", pa.int64()),
-        ("chain_num_contacting_artifacts", pa.int64()),
-        ("chain_num_contacting_other_ligands", pa.int64()),
-    ]
-)
+BIOUNIT_CHAIN_SCHEMA = pa.schema([
+    ("entry_pdb_id", pa.string()),
+    ("biounit_id", pa.string()),
+    ("chain_instance", pa.string()),
+    ("chain_asym_id", pa.string()),
+    ("chain_role", pa.string()),
+    ("chain_num_contacting_ions", pa.int64()),
+    ("chain_num_contacting_artifacts", pa.int64()),
+    ("chain_num_contacting_other_ligands", pa.int64()),
+])
 
-ENTRY_SOURCE_SCHEMA = pa.schema(
-    [
-        ("entry_pdb_id", pa.string()),
-        ("source_mmcif_major_revision", pa.int64()),
-        ("source_mmcif_minor_revision", pa.int64()),
-    ]
-)
+ENTRY_SOURCE_SCHEMA = pa.schema([
+    ("entry_pdb_id", pa.string()),
+    ("source_mmcif_major_revision", pa.int64()),
+    ("source_mmcif_minor_revision", pa.int64()),
+])
 
 SIDECAR_SCHEMAS = {
     "entry_chains": ENTRY_CHAIN_SCHEMA,
@@ -680,8 +670,7 @@ def _verify_manifest_row(row: dict[str, Any]) -> None:
             ) from exc
         if any(values[key] != row[key] for key in values):
             raise RuntimeError(
-                "collation input changed after planning; rerun the plan stage: "
-                f"{path}"
+                f"collation input changed after planning; rerun the plan stage: {path}"
             )
 
 
@@ -823,7 +812,7 @@ def _build_annotation_view(
     ).fetchall()
     if conflicting_system_validation:
         raise ValueError(
-            "conflicting system validation rows: " f"{conflicting_system_validation}"
+            f"conflicting system validation rows: {conflicting_system_validation}"
         )
     connection.execute(
         "CREATE OR REPLACE TEMP VIEW collated_system_validation AS "
@@ -975,9 +964,11 @@ def _collate_entry_chains(
             biounits = _normalize_table(biounit_path, BIOUNIT_CHAIN_SCHEMA)
             ligand_like = {
                 (str(row["entry_pdb_id"]), str(row["chain_asym_id"]))
-                for row in biounits.select(
-                    ["entry_pdb_id", "chain_asym_id", "chain_role"]
-                ).to_pylist()
+                for row in biounits.select([
+                    "entry_pdb_id",
+                    "chain_asym_id",
+                    "chain_role",
+                ]).to_pylist()
                 if row["chain_role"] == "ligand"
             }
             values = [
@@ -998,9 +989,10 @@ def _collate_entry_chains(
         else pa.Table.from_batches([], schema=ENTRY_CHAIN_SCHEMA)
     )
     if collated.num_rows:
-        collated = collated.sort_by(
-            [("entry_pdb_id", "ascending"), ("chain_asym_id", "ascending")]
-        )
+        collated = collated.sort_by([
+            ("entry_pdb_id", "ascending"),
+            ("chain_asym_id", "ascending"),
+        ])
     _write_table_atomic(collated, output, row_group_size=row_group_size)
 
 
@@ -1408,7 +1400,7 @@ def _validate_final_tables(
         }
         if any(invalid_chain_metadata.values()):
             raise ValueError(
-                "invalid entry-chain sequence metadata: " f"{invalid_chain_metadata}"
+                f"invalid entry-chain sequence metadata: {invalid_chain_metadata}"
             )
         invalid_biounit_contacts = int(
             _fetch_scalar(

@@ -10,6 +10,7 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+
 from plinder.data.annotations.interface_utils import (
     INTERFACE_ANNOTATION_SCHEMA,
     MIN_INTERFACE_RESIDUES_METADATA_KEY,
@@ -101,62 +102,54 @@ def _write_entry(
 
     entry_dir = raw_root / pdb_id
     entry_dir.mkdir()
-    pd.DataFrame(
-        {
-            "entry_pdb_id": [pdb_id, pdb_id],
-            "chain_asym_id": ["A", "B"],
-            "chain_auth_id": ["A", "B"],
-            "chain_entity_id": ["1", "2"],
-            "chain_type": ["polypeptide(L)", "polypeptide(L)"],
-            "chain_receptor_type": ["protein", "protein"],
-            "chain_sequence": ["A" * 300, "A" * 200],
-            "chain_sequence_noncanonical": ["A" * 300, "A" * 200],
-            "chain_modified_residues": [[], []],
-            "chain_length": [300, 200],
-            "chain_num_unresolved_residues": [0, 0],
-            "chain_is_holo": [True, True],
-            "chain_is_ligand_like": [False, False],
-            "chain_uniprot_ids": [["P12345"], ["Q12345"]],
-        }
-    ).to_parquet(entry_dir / "entry_chains.parquet", index=False)
-    pd.DataFrame(
-        {
-            "entry_pdb_id": [pdb_id, pdb_id],
-            "biounit_id": ["1", "1"],
-            "chain_instance": ["1.A", "1.B"],
-            "chain_asym_id": ["A", "B"],
-            "chain_role": ["receptor", "receptor"],
-            "chain_num_contacting_ions": [0, 0],
-            "chain_num_contacting_artifacts": [0, 0],
-            "chain_num_contacting_other_ligands": [0, 0],
-        }
-    ).to_parquet(entry_dir / "entry_biounit_chains.parquet", index=False)
-    pd.DataFrame(
-        {
-            "entry_pdb_id": [pdb_id],
-            "source_mmcif_major_revision": [1],
-            "source_mmcif_minor_revision": [0],
-        }
-    ).to_parquet(entry_dir / "entry_source.parquet", index=False)
+    pd.DataFrame({
+        "entry_pdb_id": [pdb_id, pdb_id],
+        "chain_asym_id": ["A", "B"],
+        "chain_auth_id": ["A", "B"],
+        "chain_entity_id": ["1", "2"],
+        "chain_type": ["polypeptide(L)", "polypeptide(L)"],
+        "chain_receptor_type": ["protein", "protein"],
+        "chain_sequence": ["A" * 300, "A" * 200],
+        "chain_sequence_noncanonical": ["A" * 300, "A" * 200],
+        "chain_modified_residues": [[], []],
+        "chain_length": [300, 200],
+        "chain_num_unresolved_residues": [0, 0],
+        "chain_is_holo": [True, True],
+        "chain_is_ligand_like": [False, False],
+        "chain_uniprot_ids": [["P12345"], ["Q12345"]],
+    }).to_parquet(entry_dir / "entry_chains.parquet", index=False)
+    pd.DataFrame({
+        "entry_pdb_id": [pdb_id, pdb_id],
+        "biounit_id": ["1", "1"],
+        "chain_instance": ["1.A", "1.B"],
+        "chain_asym_id": ["A", "B"],
+        "chain_role": ["receptor", "receptor"],
+        "chain_num_contacting_ions": [0, 0],
+        "chain_num_contacting_artifacts": [0, 0],
+        "chain_num_contacting_other_ligands": [0, 0],
+    }).to_parquet(entry_dir / "entry_biounit_chains.parquet", index=False)
+    pd.DataFrame({
+        "entry_pdb_id": [pdb_id],
+        "source_mmcif_major_revision": [1],
+        "source_mmcif_minor_revision": [0],
+    }).to_parquet(entry_dir / "entry_source.parquet", index=False)
     pd.DataFrame({"entry_pdb_id": [pdb_id], "entry_pH": [ph]}).to_parquet(
         entry_dir / "entry_metadata.parquet", index=False
     )
     interface_row = dict.fromkeys(INTERFACE_ANNOTATION_SCHEMA.names)
-    interface_row.update(
-        {
-            "entry_pdb_id": pdb_id,
-            "system_id": f"{pdb_id}__1__1.A--1.B",
-            "system_biounit_id": "1",
-            "interface_chain_1": "1.A",
-            "interface_chain_2": "1.B",
-            "interface_chain_1_residue_numbers": [1, 2, 3, 4, 5, 6, 7],
-            "interface_chain_1_residue_indices": [0, 1, 2, 3, 4, 5, 6],
-            "interface_chain_2_residue_numbers": [11, 12, 13, 14, 15, 16, 17],
-            "interface_chain_2_residue_indices": [0, 1, 2, 3, 4, 5, 6],
-            "interface_num_contact_residue_pairs": 7,
-            "prodigy_is_annotated": False,
-        }
-    )
+    interface_row.update({
+        "entry_pdb_id": pdb_id,
+        "system_id": f"{pdb_id}__1__1.A--1.B",
+        "system_biounit_id": "1",
+        "interface_chain_1": "1.A",
+        "interface_chain_2": "1.B",
+        "interface_chain_1_residue_numbers": [1, 2, 3, 4, 5, 6, 7],
+        "interface_chain_1_residue_indices": [0, 1, 2, 3, 4, 5, 6],
+        "interface_chain_2_residue_numbers": [11, 12, 13, 14, 15, 16, 17],
+        "interface_chain_2_residue_indices": [0, 1, 2, 3, 4, 5, 6],
+        "interface_num_contact_residue_pairs": 7,
+        "prodigy_is_annotated": False,
+    })
     pq.write_table(
         pa.Table.from_pylist([interface_row], schema=INTERFACE_ANNOTATION_SCHEMA),
         entry_dir / "interfaces.parquet",
@@ -164,19 +157,17 @@ def _write_entry(
     _set_interface_threshold(entry_dir / "interfaces.parquet", 7)
 
     proper = [row for row in ligand_rows if row["proper"]]
-    ligand_table = pd.DataFrame(
-        {
-            "pdb_id": [pdb_id for _ in proper],
-            "system_id": [system_id for _ in proper],
-            "ligand_rdkit_canonical_smiles": ["C" for _ in proper],
-            "ligand_ccd_code": [str(row["ccd"]) for row in proper],
-            "ligand_id": [str(row["ligand_id"]) for row in proper],
-            "ligand_asym_id": ["L" for _ in proper],
-            "ligand_is_shape_comparable": [
-                comparability[str(row["ligand_id"])] for row in proper
-            ],
-        }
-    )
+    ligand_table = pd.DataFrame({
+        "pdb_id": [pdb_id for _ in proper],
+        "system_id": [system_id for _ in proper],
+        "ligand_rdkit_canonical_smiles": ["C" for _ in proper],
+        "ligand_ccd_code": [str(row["ccd"]) for row in proper],
+        "ligand_id": [str(row["ligand_id"]) for row in proper],
+        "ligand_asym_id": ["L" for _ in proper],
+        "ligand_is_shape_comparable": [
+            comparability[str(row["ligand_id"])] for row in proper
+        ],
+    })
     ligand_root = data_dir / "ligands"
     ligand_root.mkdir(exist_ok=True)
     ligand_table.to_parquet(ligand_root / f"{pdb_id}.parquet", index=False)
@@ -223,19 +214,15 @@ def _write_interface_only_entry(data_dir: Path, pdb_id: str = "3ghi") -> None:
     metrics = data_dir / "metrics" / pdb_id[1:3] / f"ingest-one-{pdb_id}.json"
     metrics.parent.mkdir(parents=True, exist_ok=True)
     metrics.write_text(
-        json.dumps(
-            {
-                "status": "complete",
-                "counts": {"annotation_rows": 0, "interface_rows": 1},
-                "outputs": {
-                    "entry_directory": str(
-                        data_dir / "raw_entries" / pdb_id[1:3] / pdb_id
-                    ),
-                    "entry_parquet": None,
-                    "ligand_parquet": None,
-                },
-            }
-        )
+        json.dumps({
+            "status": "complete",
+            "counts": {"annotation_rows": 0, "interface_rows": 1},
+            "outputs": {
+                "entry_directory": str(data_dir / "raw_entries" / pdb_id[1:3] / pdb_id),
+                "entry_parquet": None,
+                "ligand_parquet": None,
+            },
+        })
     )
 
 
@@ -304,12 +291,10 @@ def test_plan_shards_and_finalize_release_contract(tmp_path: Path) -> None:
     assert retired_annotation_columns.isdisjoint(annotation.columns)
     assert "ligand_smiles" in annotation.columns
     assert not any(
-        column.startswith(
-            (
-                "system_ligand_validation_",
-                "system_pocket_validation_",
-            )
-        )
+        column.startswith((
+            "system_ligand_validation_",
+            "system_pocket_validation_",
+        ))
         for column in annotation.columns
     )
     for prefix in (
@@ -578,9 +563,10 @@ def test_targeted_repair_preserves_unaffected_release_only_columns(
     _write_release(tmp_path)
     run_collation(tmp_path, memory_limit="1GB")
     installed = pd.read_parquet(tmp_path / "index/annotation_table.parquet")
-    installed["release_only"] = installed["entry_pdb_id"].map(
-        {"1abc": "old", "2def": "keep"}
-    )
+    installed["release_only"] = installed["entry_pdb_id"].map({
+        "1abc": "old",
+        "2def": "keep",
+    })
     installed.to_parquet(tmp_path / "index/annotation_table.parquet", index=False)
     chain_path = tmp_path / "index/entry_chains.parquet"
     before_chain_stat = chain_path.stat()
@@ -601,7 +587,8 @@ def test_targeted_repair_preserves_unaffected_release_only_columns(
         repaired.loc[repaired["entry_pdb_id"].eq("1abc"), "release_only"].isna().all()
     )
     assert (
-        repaired.loc[repaired["entry_pdb_id"].eq("2def"), "release_only"]
+        repaired
+        .loc[repaired["entry_pdb_id"].eq("2def"), "release_only"]
         .eq("keep")
         .all()
     )
@@ -759,9 +746,12 @@ def test_shard_cli_selects_codes_from_pdb_manifest(tmp_path: Path) -> None:
 
     manifest = tmp_path / "affected.txt"
     manifest.write_text("1abc\n2abd\n3xyz\n")
-    args = build_parser().parse_args(
-        ["shard", str(tmp_path), "--pdb-manifest", str(manifest)]
-    )
+    args = build_parser().parse_args([
+        "shard",
+        str(tmp_path),
+        "--pdb-manifest",
+        str(manifest),
+    ])
 
     assert args.pdb_manifest == manifest
 

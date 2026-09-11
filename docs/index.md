@@ -83,6 +83,7 @@ coordinate provenance.
 tutorial/index
 examples/index
 dataset
+evaluation
 api/index
 contribution/index
 citation

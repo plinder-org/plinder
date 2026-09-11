@@ -13,12 +13,10 @@ from pathlib import Path
 
 import biotite.structure as struc
 import biotite.structure.io.pdbx as pdbx
-import networkit as nk
 import numpy as np
 import pandas as pd
 from biotite.file import DeserializationError, InvalidFileError
 from biotite.structure import filter_heavy
-from PDBValidation.ValidationFactory import ValidationFactory
 from pydantic import BeforeValidator, Field, PrivateAttr
 from rdkit import RDLogger
 
@@ -127,9 +125,10 @@ def _chain_type_from_coordinates(atoms: struc.AtomArray) -> str:
             residue_name = str(residue.res_name[0]).upper()
             if residue_name in {"DA", "DC", "DG", "DT", "DU", "DI"}:
                 dna_residues += 1
-            elif residue_name in {"A", "C", "G", "U", "I"} or atom_names.intersection(
-                {"O2'", "O2*"}
-            ):
+            elif residue_name in {"A", "C", "G", "U", "I"} or atom_names.intersection({
+                "O2'",
+                "O2*",
+            }):
                 rna_residues += 1
             else:
                 ambiguous_nucleotide_residues += 1
@@ -268,8 +267,7 @@ class System(DocBaseModel):
         yield (
             f"{prefix}_water_residues",
             "list[str]",
-            "Interacting water residues encoded as "
-            "<instance>.<asym>_<residue_number>",
+            "Interacting water residues encoded as <instance>.<asym>_<residue_number>",
         )
         for mapping_name in ("CATH", "Pfam", "SCOP2", "SCOP2B", "UniProt"):
             yield (
@@ -301,13 +299,11 @@ class System(DocBaseModel):
         """
         ID of the system without the biounit
         """
-        return "__".join(
-            [
-                self.pdb_id,
-                "_".join(x.split(".")[1] for x in self.protein_chains_asym_id),
-                "_".join(x.split(".")[1] for x in self.ligand_chains),
-            ]
-        )
+        return "__".join([
+            self.pdb_id,
+            "_".join(x.split(".", maxsplit=1)[1] for x in self.protein_chains_asym_id),
+            "_".join(x.split(".", maxsplit=1)[1] for x in self.ligand_chains),
+        ])
 
     @cached_property
     def ligand_chains(self) -> list[str]:
@@ -388,14 +384,12 @@ class System(DocBaseModel):
         """
         ID of the system
         """
-        return "__".join(
-            [
-                self.pdb_id,
-                self.biounit_id,
-                "_".join(self.protein_chains_asym_id),
-                "_".join(self.ligand_chains),
-            ]
-        )
+        return "__".join([
+            self.pdb_id,
+            self.biounit_id,
+            "_".join(self.protein_chains_asym_id),
+            "_".join(self.ligand_chains),
+        ])
 
     @cached_property
     def system_type(self) -> str:
@@ -756,15 +750,15 @@ class System(DocBaseModel):
     ) -> None:
         self.ligand_validation = ResidueListValidation.from_residues(
             [
-                chains[c.split(".")[1]].residues[r].validation  # type: ignore
+                chains[c.split(".", maxsplit=1)[1]].residues[r].validation  # type: ignore
                 for c in self.ligand_chains
-                for r in chains[c.split(".")[1]].residues
+                for r in chains[c.split(".", maxsplit=1)[1]].residues
             ],
             thresholds,
         )
         self.pocket_validation = ResidueListValidation.from_residues(
             [
-                chains[c.split(".")[1]].residues[r].validation  # type: ignore
+                chains[c.split(".", maxsplit=1)[1]].residues[r].validation  # type: ignore
                 for c in self.pocket_residues
                 for r in self.pocket_residues[c]
             ],
@@ -779,7 +773,7 @@ class System(DocBaseModel):
             neighboring_chain,
             neighboring_residues_list,
         ) in self.pocket_residues.items():
-            neighboring_chain = neighboring_chain.split(".")[-1]
+            neighboring_chain = neighboring_chain.split(".", maxsplit=1)[-1]
             neighboring_residues_set = {int(i) for i in neighboring_residues_list}
             for mapping_name in chains_dict[neighboring_chain].mappings:
                 if mapping_name == "BIRD":
@@ -1020,25 +1014,21 @@ class Entry(DocBaseModel):
         type_by_entity: dict[str, str] = {}
         if "entity" in block:
             entity = block["entity"]
-            type_by_entity.update(
-                {
-                    str(entity_id): str(entity_type)
-                    for entity_id, entity_type in zip(
-                        entity["id"].as_array(), entity["type"].as_array()
-                    )
-                }
-            )
+            type_by_entity.update({
+                str(entity_id): str(entity_type)
+                for entity_id, entity_type in zip(
+                    entity["id"].as_array(), entity["type"].as_array()
+                )
+            })
         if "entity_poly" in block:
             entity_poly = block["entity_poly"]
-            type_by_entity.update(
-                {
-                    str(entity_id): str(entity_type)
-                    for entity_id, entity_type in zip(
-                        entity_poly["entity_id"].as_array(),
-                        entity_poly["type"].as_array(),
-                    )
-                }
-            )
+            type_by_entity.update({
+                str(entity_id): str(entity_type)
+                for entity_id, entity_type in zip(
+                    entity_poly["entity_id"].as_array(),
+                    entity_poly["type"].as_array(),
+                )
+            })
         auth_id_by_asym, residue_author_ids_by_asym = get_atom_site_author_ids(block)
         modified_residues_by_asym = get_modified_residues(
             block, residue_author_ids_by_asym
@@ -1058,9 +1048,9 @@ class Entry(DocBaseModel):
                     start, stop = segments[0]
                     chain_atoms = atoms[start:stop]
                 else:
-                    chain_atoms = struc.concatenate(
-                        [atoms[start:stop] for start, stop in segments]
-                    )
+                    chain_atoms = struc.concatenate([
+                        atoms[start:stop] for start, stop in segments
+                    ])
                 entity_id = entity_by_asym.get(chain_id, "")
                 chain_type = type_by_entity.get(entity_id, "unknown")
                 if chain_type == "unknown":
@@ -1157,8 +1147,7 @@ class Entry(DocBaseModel):
         n_models = get_model_count(cif_file_obj)
         if n_models > 1:
             LOG.warning(
-                f"{source} has {n_models} models — using model 1 only."
-                f"{multimodel_note}"
+                f"{source} has {n_models} models — using model 1 only.{multimodel_note}"
             )
         atoms = get_structure_with_altloc(
             cif_file_obj,
@@ -1296,8 +1285,11 @@ class Entry(DocBaseModel):
             c
             for c in spatial_index.chain_ids
             if "." in c
-            and c.split(".")[1] in self.ligand_like_chains
-            and (ligand_asym_ids is None or c.split(".")[1] in ligand_asym_ids)
+            and c.split(".", maxsplit=1)[1] in self.ligand_like_chains
+            and (
+                ligand_asym_ids is None
+                or c.split(".", maxsplit=1)[1] in ligand_asym_ids
+            )
             and (ligand_instance_chains is None or c in ligand_instance_chains)
         ]
         if not biounit_ligand_chains:
@@ -1339,7 +1331,7 @@ class Entry(DocBaseModel):
             # Primary chain (deterministic): the first sorted member. The
             # ligand is keyed on it, but its atoms span every member chain.
             primary_chain = sorted(group)[0]
-            primary_instance, primary_asym_id = primary_chain.split(".")
+            primary_instance, primary_asym_id = primary_chain.split(".", maxsplit=1)
             ligand = Ligand.from_pli(
                 pdb_id=self.pdb_id,
                 biounit_id=biounit_id,
@@ -1402,7 +1394,7 @@ class Entry(DocBaseModel):
         # copies reuse asym labels but are physically independent.
         by_instance: dict[str, dict[str, str]] = defaultdict(dict)
         for chain in biounit_ligand_chains:
-            instance, asym = chain.split(".")
+            instance, asym = chain.split(".", maxsplit=1)
             by_instance[instance][asym] = chain
         for asym_to_chain in by_instance.values():
             for edge in covale_edges:
@@ -1492,6 +1484,8 @@ class Entry(DocBaseModel):
         interaction_search_threshold: float,
     ) -> set[str]:
         """Keep deferred non-artifacts that may connect to a primary ligand."""
+        import networkit as nk
+
         if not deferred_instance_chains:
             return set()
         if min_shared_pocket_members <= 0:
@@ -1800,13 +1794,11 @@ class Entry(DocBaseModel):
         }
         spatial_radii: list[float] = []
         if include_ligands:
-            spatial_radii.extend(
-                [
-                    interaction_search_threshold,
-                    neighboring_residue_threshold,
-                    neighboring_ligand_threshold,
-                ]
-            )
+            spatial_radii.extend([
+                interaction_search_threshold,
+                neighboring_residue_threshold,
+                neighboring_ligand_threshold,
+            ])
         if include_interfaces:
             spatial_radii.append(interface_contact_radius)
         spatial_index = (
@@ -2071,8 +2063,7 @@ class Entry(DocBaseModel):
                 # Skip this assembly but record it: its systems are silently
                 # missing from the entry otherwise. Other assemblies proceed.
                 LOG.error(
-                    f"Could not build assembly {assembly_id} for "
-                    f"{entry.pdb_id!r}: {e}"
+                    f"Could not build assembly {assembly_id} for {entry.pdb_id!r}: {e}"
                 )
                 entry.failed_assembly_ids.append(assembly_id)
                 continue
@@ -2473,6 +2464,8 @@ class Entry(DocBaseModel):
         min_shared_pocket_members : int
             Minimum shared pocket members to group non-artifact ligands.
         """
+        import networkit as nk
+
         ligand_ids = list(ligands.keys())
         G = nk.Graph(len(ligand_ids))
 
@@ -2546,13 +2539,11 @@ class Entry(DocBaseModel):
                     "system contains repeated ligand instance chains: "
                     f"{instance_chains}"
                 )
-            receptor_asym_ids = sorted(
-                {
-                    instance_chain.split(".", maxsplit=1)[1]
-                    for ligand in ligs
-                    for instance_chain in ligand.protein_chains_asym_id
-                }
-            )
+            receptor_asym_ids = sorted({
+                instance_chain.split(".", maxsplit=1)[1]
+                for ligand in ligs
+                for instance_chain in ligand.protein_chains_asym_id
+            })
             system = System(
                 pdb_id=self.pdb_id,
                 biounit_id=next(iter(biounit_ids)),
@@ -2595,7 +2586,7 @@ class Entry(DocBaseModel):
         ), "chain_type must be 'apo', 'holo', or 'pred'"
         if chain_type == "holo":
             receptor_asym_ids = {
-                i_c.split(".")[1]
+                i_c.split(".", maxsplit=1)[1]
                 for system in self.systems.values()
                 if system.system_type == "holo"
                 for i_c in system.protein_chains_asym_id
@@ -2661,16 +2652,14 @@ class Entry(DocBaseModel):
         holo_chains = set()
         for system in self.systems.values():
             if system.system_type == "holo":
-                holo_chains.update(
-                    [c.split(".")[1] for c in system.protein_chains_asym_id]
-                )
+                holo_chains.update([
+                    c.split(".", maxsplit=1)[1] for c in system.protein_chains_asym_id
+                ])
         for interface in self.interfaces:
-            holo_chains.update(
-                {
-                    interface.chain_1.split(".", maxsplit=1)[-1],
-                    interface.chain_2.split(".", maxsplit=1)[-1],
-                }
-            )
+            holo_chains.update({
+                interface.chain_1.split(".", maxsplit=1)[-1],
+                interface.chain_2.split(".", maxsplit=1)[-1],
+            })
         for chain in self.chains:
             self.chains[chain].holo = chain in holo_chains
 
@@ -2767,26 +2756,24 @@ class Entry(DocBaseModel):
                 or _is_polynucleotide(chain.chain_type_str)
             ):
                 continue
-            rows.append(
-                {
-                    "entry_pdb_id": self.pdb_id,
-                    "chain_asym_id": chain.asym_id,
-                    "chain_auth_id": chain.auth_id,
-                    "chain_entity_id": chain.entity_id,
-                    "chain_type": chain.chain_type_str,
-                    "chain_receptor_type": get_receptor_type([chain.chain_type_str]),
-                    "chain_sequence": self.chain_to_seqres.get(chain.asym_id, ""),
-                    "chain_sequence_noncanonical": (
-                        self.chain_to_seqres_noncanonical.get(chain.asym_id, "")
-                    ),
-                    "chain_modified_residues": list(chain.modified_residues),
-                    "chain_length": chain.length,
-                    "chain_num_unresolved_residues": chain.num_unresolved_residues,
-                    "chain_is_holo": chain.holo,
-                    "chain_is_ligand_like": chain_id in self.ligand_like_chains,
-                    "chain_uniprot_ids": sorted(chain.mappings.get("UniProt", {})),
-                }
-            )
+            rows.append({
+                "entry_pdb_id": self.pdb_id,
+                "chain_asym_id": chain.asym_id,
+                "chain_auth_id": chain.auth_id,
+                "chain_entity_id": chain.entity_id,
+                "chain_type": chain.chain_type_str,
+                "chain_receptor_type": get_receptor_type([chain.chain_type_str]),
+                "chain_sequence": self.chain_to_seqres.get(chain.asym_id, ""),
+                "chain_sequence_noncanonical": (
+                    self.chain_to_seqres_noncanonical.get(chain.asym_id, "")
+                ),
+                "chain_modified_residues": list(chain.modified_residues),
+                "chain_length": chain.length,
+                "chain_num_unresolved_residues": chain.num_unresolved_residues,
+                "chain_is_holo": chain.holo,
+                "chain_is_ligand_like": chain_id in self.ligand_like_chains,
+                "chain_uniprot_ids": sorted(chain.mappings.get("UniProt", {})),
+            })
         return pd.DataFrame(rows, columns=columns)
 
     def metadata_to_df(self) -> pd.DataFrame:
@@ -2834,19 +2821,15 @@ class Entry(DocBaseModel):
                     "chain_role": role,
                 }
                 if contacts_computed:
-                    row.update(
-                        {
-                            "chain_num_contacting_ions": int(
-                                chain_counts.get("ions", 0)
-                            ),
-                            "chain_num_contacting_artifacts": int(
-                                chain_counts.get("artifacts", 0)
-                            ),
-                            "chain_num_contacting_other_ligands": int(
-                                chain_counts.get("other_ligands", 0)
-                            ),
-                        }
-                    )
+                    row.update({
+                        "chain_num_contacting_ions": int(chain_counts.get("ions", 0)),
+                        "chain_num_contacting_artifacts": int(
+                            chain_counts.get("artifacts", 0)
+                        ),
+                        "chain_num_contacting_other_ligands": int(
+                            chain_counts.get("other_ligands", 0)
+                        ),
+                    })
                 rows.append(row)
         return pd.DataFrame(rows, columns=columns)
 
@@ -2879,14 +2862,12 @@ class Entry(DocBaseModel):
                 legacy_mapping.get(chain_id, chain_id)
                 for chain_id in annotation.ligand_chains
             )
-            annotation.id_legacy = "__".join(
-                [
-                    annotation.pdb_id,
-                    annotation.biounit_id,
-                    "_".join(legacy_protein_chains),
-                    "_".join(legacy_ligand_chains),
-                ]
-            )
+            annotation.id_legacy = "__".join([
+                annotation.pdb_id,
+                annotation.biounit_id,
+                "_".join(legacy_protein_chains),
+                "_".join(legacy_ligand_chains),
+            ])
             system_data = annotation.format(
                 self.chains,
                 self.pass_criteria,
@@ -2895,9 +2876,11 @@ class Entry(DocBaseModel):
                 legacy_instance_chain = legacy_mapping.get(
                     ligand.instance_chain, ligand.instance_chain
                 )
-                ligand.id_legacy = "__".join(
-                    [ligand.pdb_id, ligand.biounit_id, legacy_instance_chain]
-                )
+                ligand.id_legacy = "__".join([
+                    ligand.pdb_id,
+                    ligand.biounit_id,
+                    legacy_instance_chain,
+                ])
                 ligand_data = ligand.format(self.chains)
                 rows.append({**entry_data, **system_data, **ligand_data})
         return pd.DataFrame(rows)
@@ -2910,7 +2893,7 @@ class Entry(DocBaseModel):
         for system in self.systems.values():
             for ligand in system.ligands:
                 for chain in ligand.pocket_residues:
-                    all_pocket_residues[chain.split(".")[1]].update(
+                    all_pocket_residues[chain.split(".", maxsplit=1)[1]].update(
                         ligand.pocket_residues[chain].keys()
                     )
         n_before = sum(len(c.residues) for c in self.chains.values())
@@ -2935,6 +2918,8 @@ class Entry(DocBaseModel):
         cif_file: Path,
         thresholds: ResidueValidationThresholds = ResidueValidationThresholds(),
     ) -> None:
+        from PDBValidation.ValidationFactory import ValidationFactory
+
         if self.determination_method != "X-RAY DIFFRACTION":
             LOG.warning(
                 f"set_validation: Skipping validation for {self.pdb_id} as method is not X-RAY DIFFRACTION"

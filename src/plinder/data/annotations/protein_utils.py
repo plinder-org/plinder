@@ -6,12 +6,11 @@ import functools
 from collections import Counter
 from collections.abc import Iterable, Mapping
 from functools import cached_property
-from typing import Any, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 import biotite.structure as struc
 import biotite.structure.io.pdbx as pdbx
 import numpy as np
-from PDBValidation.Validation import PDBValidation
 from pydantic import ConfigDict, Field
 
 from plinder.core.utils.log import setup_logger
@@ -21,6 +20,9 @@ from plinder.data.annotations.get_ligand_validation import (
     ResidueValidationThresholds,
 )
 from plinder.data.annotations.utils import DocBaseModel
+
+if TYPE_CHECKING:
+    from PDBValidation.Validation import PDBValidation
 
 
 @functools.cache
@@ -89,9 +91,10 @@ def get_modified_residues(
             number = int(row["num"])
         except ValueError:
             continue
-        modified_by_entity.setdefault(row["entity_id"], []).append(
-            (number, row["mon_id"])
-        )
+        modified_by_entity.setdefault(row["entity_id"], []).append((
+            number,
+            row["mon_id"],
+        ))
     if not modified_by_entity:
         return {}
     missing = {"", ".", "?"}
