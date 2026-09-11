@@ -33,6 +33,15 @@ from plinder.data.pipeline.ingest import (
     write_manifest,
 )
 
+_LIGAND_ANNOTATIONS = {
+    "ligand_contact_area": [None],
+    "ligand_contact_area_chains": [[]],
+    "ligand_contact_area_values": [[]],
+    "ligand_unresolved_atoms": [[]],
+    "ligand_pocket_unresolved_atoms": [[]],
+    "ligand_is_subject_of_investigation": [None],
+}
+
 
 def _write_fake_sidecars(
     entry_dir: Path,
@@ -64,9 +73,14 @@ def _write_fake_sidecars(
     pd.DataFrame({"entry_pdb_id": [pdb_id]}).to_parquet(
         entry_dir / "entry_source.parquet", index=False
     )
-    pd.DataFrame({"entry_pdb_id": [pdb_id]}).to_parquet(
-        entry_dir / "entry_metadata.parquet", index=False
-    )
+    pd.DataFrame(
+        {
+            "entry_pdb_id": [pdb_id],
+            "entry_pH_min": [None],
+            "entry_pH_max": [None],
+            "entry_has_ligand_of_interest": [None],
+        }
+    ).to_parquet(entry_dir / "entry_metadata.parquet", index=False)
     interface_columns = [
         *INTERFACE_ANNOTATION_SCHEMA.names,
     ]
@@ -251,6 +265,7 @@ def test_ingest_one_pdb_writes_entry_outputs_and_metrics(
                     "system_id": ["8grn__1__1.A__1.C"],
                     "ligand_id": ["8grn__1.C"],
                     "system_receptor_type": ["protein"],
+                    **_LIGAND_ANNOTATIONS,
                 }
             )
 
@@ -604,6 +619,7 @@ def test_ligand_mode_skips_interfaces_and_preserves_interface_assets(
                     "system_id": ["8grn__1__1.A__1.C"],
                     "ligand_id": ["8grn__1.C"],
                     "system_receptor_type": ["protein"],
+                    **_LIGAND_ANNOTATIONS,
                 }
             )
 
@@ -738,6 +754,7 @@ def test_ingest_one_pdb_retries_partial_outputs_without_force(
                     "system_id": ["8grn__1__1.A__1.C"],
                     "ligand_id": ["8grn__1.C"],
                     "system_receptor_type": ["protein"],
+                    **_LIGAND_ANNOTATIONS,
                 }
             )
 
@@ -872,9 +889,9 @@ def test_batch_continues_after_failure_and_resumes_completed_entries(
         for path in (entry_path, ligand_path, metrics_path):
             path.parent.mkdir(parents=True, exist_ok=True)
         entry_directory.mkdir()
-        pd.DataFrame({"system_receptor_type": ["protein"]}).to_parquet(
-            entry_path, index=False
-        )
+        pd.DataFrame(
+            {"system_receptor_type": ["protein"], **_LIGAND_ANNOTATIONS}
+        ).to_parquet(entry_path, index=False)
         _write_fake_sidecars(entry_directory, pdb_id)
         pd.DataFrame(
             {
@@ -989,9 +1006,9 @@ def test_completed_entry_metrics_invalidates_interface_cutoff_changes(
     entry_directory.mkdir(parents=True)
     ligand_path.parent.mkdir(parents=True)
     metrics_path.parent.mkdir(parents=True)
-    pd.DataFrame({"system_receptor_type": ["protein"]}).to_parquet(
-        entry_path, index=False
-    )
+    pd.DataFrame(
+        {"system_receptor_type": ["protein"], **_LIGAND_ANNOTATIONS}
+    ).to_parquet(entry_path, index=False)
     _write_fake_sidecars(entry_directory, "1abc")
     pd.DataFrame(
         {
@@ -1044,19 +1061,26 @@ def test_completed_entry_metrics_invalidates_interface_cutoff_changes(
 @pytest.mark.parametrize("mode", ["all", "ligands", "interfaces"])
 @pytest.mark.parametrize("empty", [False, True])
 @pytest.mark.parametrize(
-    "missing_column", ["chain_sequence_noncanonical", "chain_modified_residues"]
+    ("filename", "missing_column"),
+    [
+        ("entry_chains.parquet", "chain_sequence_noncanonical"),
+        ("entry_chains.parquet", "chain_modified_residues"),
+        ("entry_metadata.parquet", "entry_pH_min"),
+        ("entry_metadata.parquet", "entry_pH_max"),
+        ("entry_metadata.parquet", "entry_has_ligand_of_interest"),
+    ],
 )
-def test_resume_requires_chain_modification_annotations(
-    tmp_path: Path, mode: str, empty: bool, missing_column: str
+def test_resume_requires_shared_annotations(
+    tmp_path: Path, mode: str, empty: bool, filename: str, missing_column: str
 ) -> None:
     entry_dir = tmp_path / "raw_entries/ab/1abc"
     entry_dir.mkdir(parents=True)
     _write_fake_sidecars(entry_dir, "1abc")
-    chain_path = entry_dir / "entry_chains.parquet"
-    chains = pd.read_parquet(chain_path)
+    table_path = entry_dir / filename
+    frame = pd.read_parquet(table_path)
     if empty:
-        chains = chains.iloc[:0]
-        chains.to_parquet(chain_path, index=False)
+        frame = frame.iloc[:0]
+        frame.to_parquet(table_path, index=False)
     if mode == "interfaces":
         marker = ingest.interface_metrics_path(tmp_path, "1abc")
         status = "complete"
@@ -1082,10 +1106,51 @@ def test_resume_requires_chain_modification_annotations(
         return completed_entry_metrics(tmp_path, "1abc", expected_ingest_mode=mode)
 
     assert completed() == marker
-    chains.drop(columns=missing_column).to_parquet(chain_path, index=False)
+    frame.drop(columns=missing_column).to_parquet(table_path, index=False)
     assert completed() is None
-    chains.to_parquet(chain_path, index=False)
+    frame.to_parquet(table_path, index=False)
     assert completed() == marker
+
+
+@pytest.mark.parametrize("mode", ["all", "ligands"])
+@pytest.mark.parametrize("missing_column", list(_LIGAND_ANNOTATIONS))
+def test_resume_requires_ligand_annotations(
+    tmp_path: Path, mode: str, missing_column: str
+) -> None:
+    entry_path = tmp_path / "raw_entries/ab/1abc.parquet"
+    entry_dir = entry_path.with_suffix("")
+    entry_dir.mkdir(parents=True)
+    _write_fake_sidecars(entry_dir, "1abc")
+    annotation = pd.DataFrame(
+        {"system_receptor_type": ["protein"], **_LIGAND_ANNOTATIONS}
+    )
+    annotation.to_parquet(entry_path, index=False)
+    ligand_path = tmp_path / "ligands/1abc.parquet"
+    ligand_path.parent.mkdir()
+    pd.DataFrame(
+        {"ligand_id": ["1abc__1.L"], "ligand_is_shape_comparable": [True]}
+    ).to_parquet(ligand_path, index=False)
+    marker = ingest.entry_metrics_paths(tmp_path, "1abc")[0]
+    marker.parent.mkdir(parents=True)
+    marker.write_text(
+        json.dumps(
+            {
+                "status": "complete",
+                "mode": mode,
+                "counts": {"annotation_rows": 1, "interface_rows": 0},
+                "outputs": {"entry_directory": str(entry_dir)},
+            }
+        )
+    )
+    assert (
+        completed_entry_metrics(tmp_path, "1abc", expected_ingest_mode=mode) == marker
+    )
+    annotation.drop(columns=missing_column).to_parquet(entry_path, index=False)
+    assert completed_entry_metrics(tmp_path, "1abc", expected_ingest_mode=mode) is None
+    annotation.to_parquet(entry_path, index=False)
+    assert (
+        completed_entry_metrics(tmp_path, "1abc", expected_ingest_mode=mode) == marker
+    )
 
 
 def test_pre_interface_skip_is_not_considered_complete(tmp_path: Path) -> None:

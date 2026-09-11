@@ -138,9 +138,15 @@ def _write_entry(
             "source_mmcif_minor_revision": [0],
         }
     ).to_parquet(entry_dir / "entry_source.parquet", index=False)
-    pd.DataFrame({"entry_pdb_id": [pdb_id], "entry_pH": [ph]}).to_parquet(
-        entry_dir / "entry_metadata.parquet", index=False
-    )
+    pd.DataFrame(
+        {
+            "entry_pdb_id": [pdb_id],
+            "entry_pH": [ph],
+            "entry_pH_min": [ph],
+            "entry_pH_max": [ph],
+            "entry_has_ligand_of_interest": [None],
+        }
+    ).to_parquet(entry_dir / "entry_metadata.parquet", index=False)
     interface_row = dict.fromkeys(INTERFACE_ANNOTATION_SCHEMA.names)
     interface_row.update(
         {

@@ -32,6 +32,20 @@ REQUIRED_REFERENCE_FILES = (
 )
 INGEST_MODES = ("all", "ligands", "interfaces")
 CHAIN_MODIFICATION_COLUMNS = {"chain_sequence_noncanonical", "chain_modified_residues"}
+ENTRY_METADATA_COLUMNS = {
+    "entry_pdb_id",
+    "entry_pH_min",
+    "entry_pH_max",
+    "entry_has_ligand_of_interest",
+}
+LIGAND_ANNOTATION_COLUMNS = {
+    "ligand_contact_area",
+    "ligand_contact_area_chains",
+    "ligand_contact_area_values",
+    "ligand_unresolved_atoms",
+    "ligand_pocket_unresolved_atoms",
+    "ligand_is_subject_of_investigation",
+}
 
 T = TypeVar("T")
 
@@ -248,7 +262,7 @@ def _entry_outputs_complete(
             "chain_asym_id",
             "chain_role",
         },
-        sidecars["entry_metadata"]: {"entry_pdb_id"},
+        sidecars["entry_metadata"]: ENTRY_METADATA_COLUMNS,
         sidecars["interfaces"]: set(INTERFACE_ANNOTATION_SCHEMA.names),
         sidecars["entry_source"]: {"entry_pdb_id"},
     }
@@ -257,7 +271,7 @@ def _entry_outputs_complete(
             return False
         required_columns.update(
             {
-                entry_parquet: {"system_receptor_type"},
+                entry_parquet: {"system_receptor_type"} | LIGAND_ANNOTATION_COLUMNS,
                 ligand_parquet: {"ligand_id", "ligand_is_shape_comparable"},
             }
         )
@@ -296,10 +310,12 @@ def _biounit_contacts_are_valid(path: Path) -> bool:
         return False
 
 
-def _chain_modifications_are_present(entry_directory: Path) -> bool:
+def _shared_annotations_are_present(entry_directory: Path) -> bool:
     try:
         return CHAIN_MODIFICATION_COLUMNS.issubset(
             pq.read_schema(entry_directory / "entry_chains.parquet").names
+        ) and ENTRY_METADATA_COLUMNS.issubset(
+            pq.read_schema(entry_directory / "entry_metadata.parquet").names
         )
     except (OSError, TypeError, ValueError):
         return False
@@ -344,7 +360,7 @@ def completed_entry_metrics(
             if (
                 expected_ingest_mode == "ligands"
                 and entry_directory
-                and _chain_modifications_are_present(Path(entry_directory))
+                and _shared_annotations_are_present(Path(entry_directory))
                 and _biounit_contacts_are_valid(
                     Path(entry_directory) / "entry_biounit_chains.parquet"
                 )
@@ -432,7 +448,7 @@ def completed_interface_metrics(
     )
     if not interface_path.is_file():
         return None
-    if not _chain_modifications_are_present(interface_path.parent):
+    if not _shared_annotations_are_present(interface_path.parent):
         return None
     try:
         from plinder.data.annotations.interface_utils import (
