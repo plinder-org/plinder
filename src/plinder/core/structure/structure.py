@@ -20,6 +20,10 @@ from plinder.core.structure.atoms import (
     resn2seq,
     write_cif,
 )
+from plinder.core.structure.ccd_template import (
+    UNRESOLVED_ANNOTATION,
+    add_missing_atoms,
+)
 from plinder.core.structure.smallmols_utils import (
     generate_input_conformer,
     match_ligands,
@@ -98,6 +102,7 @@ class Structure(BaseModel):
     add_ligand_hydrogens: bool = False
     skip_3d_confgen: bool = False
     structure_type: str = "holo"
+    complete_missing_atoms: bool = False
 
     """Initialize structure.
     This dataclass provides abstraction over plinder systems holo, apo and predicted structures.
@@ -131,6 +136,10 @@ class Structure(BaseModel):
         Use 2D coords instead of (default) 3D conformer generation
     structure_type : str = "holo"
         Structure type, "holo", "apo" or "pred"
+    complete_missing_atoms : bool = False
+        Append CCD-template heavy atoms missing from receptor residues with NaN
+        coordinates and an ``is_unresolved`` annotation (see
+        :func:`plinder.core.structure.ccd_template.add_missing_atoms`)
     """
 
     class Config:
@@ -140,6 +149,8 @@ class Structure(BaseModel):
     def initialize(self) -> Structure:
         if self.protein_atom_array is None:
             self.load_protein()
+        if self.complete_missing_atoms and self.protein_atom_array is not None:
+            self.protein_atom_array = add_missing_atoms(self.protein_atom_array)
         if self.protein_sequence is None:
             self.load_sequence()
         if self.ligand_sdfs is not None or self.ligand_smiles is not None:
@@ -464,6 +475,18 @@ class Structure(BaseModel):
         """Ligand 2D mol objects from input SMILES"""
         assert self.ligand_mols is not None
         return {tag: mol_tuple[0] for tag, mol_tuple in self.ligand_mols.items()}
+
+    @property
+    def protein_unresolved_atom_mask(self) -> list[NDArray[np.int_]]:
+        """Per chain, 1 for CCD-template atoms with NaN coordinates, 0 for deposited atoms."""
+        assert self.protein_atom_array is not None
+        atoms = self.protein_atom_array
+        mask = (
+            atoms.get_annotation(UNRESOLVED_ANNOTATION).astype(np.int64)
+            if UNRESOLVED_ANNOTATION in atoms.get_annotation_categories()
+            else np.zeros(atoms.array_length(), dtype=np.int64)
+        )
+        return [mask[atoms.chain_id == chain] for chain in self.protein_chain_ordered]
 
     @property
     def protein_calpha_coords(self) -> list[NDArray[np.double]]:

@@ -86,7 +86,7 @@ AGGREGATED_COLUMNS = (
     "system_protein_chains_total_length",
     "system_unique_ccd_codes",
     "system_proper_unique_ccd_codes",
-    "ligand_is_3d_score_able",
+    "ligand_is_shape_comparable",
 )
 
 
@@ -183,6 +183,8 @@ ENTRY_CHAIN_SCHEMA = pa.schema(
         ("chain_type", pa.string()),
         ("chain_receptor_type", pa.string()),
         ("chain_sequence", pa.string()),
+        ("chain_sequence_noncanonical", pa.string()),
+        ("chain_modified_residues", pa.list_(pa.string())),
         ("chain_length", pa.int64()),
         ("chain_num_unresolved_residues", pa.int64()),
         ("chain_is_holo", pa.bool_()),
@@ -678,8 +680,7 @@ def _verify_manifest_row(row: dict[str, Any]) -> None:
             ) from exc
         if any(values[key] != row[key] for key in values):
             raise RuntimeError(
-                "collation input changed after planning; rerun the plan stage: "
-                f"{path}"
+                f"collation input changed after planning; rerun the plan stage: {path}"
             )
 
 
@@ -790,7 +791,7 @@ def _build_annotation_view(
         annotation = annotation.filter("false")
         ligand = ligand.filter("false")
     annotation.create_view("raw_annotation", replace=True)
-    ligand.create_view("raw_ligand_ability", replace=True)
+    ligand.create_view("raw_ligand_comparability", replace=True)
     raw_columns = _relation_columns(connection, "raw_annotation")
     required = {
         "entry_pdb_id",
@@ -821,7 +822,7 @@ def _build_annotation_view(
     ).fetchall()
     if conflicting_system_validation:
         raise ValueError(
-            "conflicting system validation rows: " f"{conflicting_system_validation}"
+            f"conflicting system validation rows: {conflicting_system_validation}"
         )
     connection.execute(
         "CREATE OR REPLACE TEMP VIEW collated_system_validation AS "
@@ -833,33 +834,33 @@ def _build_annotation_view(
         f"CREATE OR REPLACE TEMP VIEW base_annotation AS SELECT {selected} "
         "FROM raw_annotation"
     )
-    ability_columns = _relation_columns(connection, "raw_ligand_ability")
+    comparability_columns = _relation_columns(connection, "raw_ligand_comparability")
     _require_columns(
-        ability_columns,
-        {"ligand_id", "ligand_is_3d_score_able"},
-        "ligand scoreability",
+        comparability_columns,
+        {"ligand_id", "ligand_is_shape_comparable"},
+        "ligand shape-comparability",
     )
     conflicts = connection.execute(
-        "SELECT ligand_id FROM raw_ligand_ability GROUP BY ligand_id "
-        "HAVING count(DISTINCT ligand_is_3d_score_able) > 1 LIMIT 10"
+        "SELECT ligand_id FROM raw_ligand_comparability GROUP BY ligand_id "
+        "HAVING count(DISTINCT ligand_is_shape_comparable) > 1 LIMIT 10"
     ).fetchall()
     if conflicts:
-        raise ValueError(f"conflicting 3D scoreability values: {conflicts}")
+        raise ValueError(f"conflicting shape-comparability values: {conflicts}")
     connection.execute(
-        "CREATE OR REPLACE TEMP VIEW ligand_ability AS "
-        "SELECT ligand_id, bool_or(ligand_is_3d_score_able) "
-        "AS ligand_is_3d_score_able FROM raw_ligand_ability GROUP BY ligand_id"
+        "CREATE OR REPLACE TEMP VIEW ligand_comparability AS "
+        "SELECT ligand_id, bool_or(ligand_is_shape_comparable) "
+        "AS ligand_is_shape_comparable FROM raw_ligand_comparability GROUP BY ligand_id"
     )
-    missing_abilities = _fetch_scalar(
+    missing_comparabilities = _fetch_scalar(
         connection,
         "SELECT count(*) FROM base_annotation AS b "
-        "LEFT JOIN ligand_ability AS a USING (ligand_id) "
+        "LEFT JOIN ligand_comparability AS a USING (ligand_id) "
         "WHERE b.system_type = 'holo' AND coalesce(b.ligand_is_proper, false) "
         "AND a.ligand_id IS NULL",
     )
-    if missing_abilities:
+    if missing_comparabilities:
         raise ValueError(
-            f"{missing_abilities} proper holo rows lack 3D-scoreability annotations"
+            f"{missing_comparabilities} proper holo rows lack shape-comparability annotations"
         )
 
     connection.execute(
@@ -905,12 +906,12 @@ def _build_annotation_view(
         "AS system_protein_chains_total_length, s.system_unique_ccd_codes, "
         "p.system_proper_unique_ccd_codes, "
         "CASE WHEN b.system_type = 'holo' AND coalesce(b.ligand_is_proper, false) "
-        "THEN a.ligand_is_3d_score_able ELSE false END "
-        "AS ligand_is_3d_score_able FROM base_annotation AS b "
+        "THEN a.ligand_is_shape_comparable ELSE false END "
+        "AS ligand_is_shape_comparable FROM base_annotation AS b "
         "JOIN biounit_aggregate AS u USING (entry_pdb_id, system_biounit_id) "
         "JOIN system_aggregate AS s USING (system_id) "
         "LEFT JOIN proper_system_aggregate AS p USING (system_id) "
-        "LEFT JOIN ligand_ability AS a USING (ligand_id)"
+        "LEFT JOIN ligand_comparability AS a USING (ligand_id)"
     )
 
 
@@ -974,7 +975,11 @@ def _collate_entry_chains(
             ligand_like = {
                 (str(row["entry_pdb_id"]), str(row["chain_asym_id"]))
                 for row in biounits.select(
-                    ["entry_pdb_id", "chain_asym_id", "chain_role"]
+                    [
+                        "entry_pdb_id",
+                        "chain_asym_id",
+                        "chain_role",
+                    ]
                 ).to_pylist()
                 if row["chain_role"] == "ligand"
             }
@@ -997,7 +1002,10 @@ def _collate_entry_chains(
     )
     if collated.num_rows:
         collated = collated.sort_by(
-            [("entry_pdb_id", "ascending"), ("chain_asym_id", "ascending")]
+            [
+                ("entry_pdb_id", "ascending"),
+                ("chain_asym_id", "ascending"),
+            ]
         )
     _write_table_atomic(collated, output, row_group_size=row_group_size)
 
@@ -1406,7 +1414,7 @@ def _validate_final_tables(
         }
         if any(invalid_chain_metadata.values()):
             raise ValueError(
-                "invalid entry-chain sequence metadata: " f"{invalid_chain_metadata}"
+                f"invalid entry-chain sequence metadata: {invalid_chain_metadata}"
             )
         invalid_biounit_contacts = int(
             _fetch_scalar(
@@ -1569,20 +1577,20 @@ def _validate_final_tables(
                 f"interface_instances={orphan_interface_instances}, "
                 f"interface_chains={orphan_interface_chains}"
             )
-        missing_abilities = int(
+        missing_comparabilities = int(
             _fetch_scalar(
                 connection,
                 "SELECT count(*) FROM annotation WHERE system_type = 'holo' "
                 "AND coalesce(ligand_is_proper, false) "
-                "AND ligand_is_3d_score_able IS NULL",
+                "AND ligand_is_shape_comparable IS NULL",
             )
         )
-        invalid_nonproper_abilities = int(
+        invalid_nonproper_comparabilities = int(
             _fetch_scalar(
                 connection,
                 "SELECT count(*) FROM annotation WHERE NOT (system_type = 'holo' "
                 "AND coalesce(ligand_is_proper, false)) "
-                "AND coalesce(ligand_is_3d_score_able, false)",
+                "AND coalesce(ligand_is_shape_comparable, false)",
             )
         )
         invalid_systems = int(
@@ -1602,15 +1610,15 @@ def _validate_final_tables(
             )
         )
         if (
-            missing_abilities
-            or invalid_nonproper_abilities
+            missing_comparabilities
+            or invalid_nonproper_comparabilities
             or invalid_systems
             or mismatched_biounits
         ):
             raise ValueError(
                 "annotation validation failed: "
-                f"missing_scoreability={missing_abilities}, "
-                f"nonproper_scoreability={invalid_nonproper_abilities}, "
+                f"missing_comparability={missing_comparabilities}, "
+                f"nonproper_comparability={invalid_nonproper_comparabilities}, "
                 f"all_ion_or_artifact_systems={invalid_systems}, "
                 f"mismatched_biounits={mismatched_biounits}"
             )

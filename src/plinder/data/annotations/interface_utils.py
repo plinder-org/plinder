@@ -85,6 +85,7 @@ INTERFACE_ANNOTATION_SCHEMA = pa.schema(
         ("interface_chain_2_residue_numbers", pa.list_(pa.int32())),
         ("interface_chain_2_residue_indices", pa.list_(pa.int32())),
         ("interface_num_contact_residue_pairs", pa.int64()),
+        ("interface_contact_area", pa.float64()),
         ("prodigy_is_annotated", pa.bool_()),
         ("prodigy_label", pa.string()),
         ("prodigy_probability_bio", pa.float32()),
@@ -143,6 +144,9 @@ class ProteinInterface:
     chain_2_residue_indices: tuple[int, ...]
     num_contact_residue_pairs: int
     prodigy: ProdigyCrystalAnnotation | None = None
+    # Voronota-LT contact area (Å²) between the two chains in the full
+    # assembly; None when the assembly tessellation was skipped or failed.
+    contact_area: float | None = None
 
     def __post_init__(self) -> None:
         if self.chain_1 >= self.chain_2:
@@ -176,6 +180,7 @@ class ProteinInterface:
             "interface_chain_2_residue_numbers": list(self.chain_2_residue_numbers),
             "interface_chain_2_residue_indices": list(self.chain_2_residue_indices),
             "interface_num_contact_residue_pairs": self.num_contact_residue_pairs,
+            "interface_contact_area": self.contact_area,
             "prodigy_is_annotated": self.prodigy is not None,
         }
         prodigy_fields = {
@@ -383,6 +388,7 @@ def detect_protein_interfaces(
     min_interface_residues: int = DEFAULT_MIN_INTERFACE_RESIDUES,
     annotate_prodigy: bool = True,
     spatial_index: BiounitSpatialIndex | None = None,
+    chain_pair_contact_areas: Mapping[tuple[str, str], float] | None = None,
 ) -> list[ProteinInterface]:
     """Detect protein-chain interfaces from backbone contacts.
 
@@ -392,6 +398,11 @@ def detect_protein_interfaces(
     backbone atom in another eligible assembly-chain instance.  Interfaces
     are retained only when both sides contain at least
     ``min_interface_residues`` resolved residues.
+
+    ``chain_pair_contact_areas`` are the assembly-wide Voronota-LT areas keyed
+    by sorted chain pair; when given, each interface records its pair's area
+    (0.0 for backbone-defined interfaces without atomic contact), otherwise
+    ``contact_area`` stays ``None``.
     """
     if contact_radius <= 0:
         raise ValueError("interface contact radius must be positive")
@@ -485,6 +496,11 @@ def detect_protein_interfaces(
                 chain_2_residue_numbers=chain_2_numbers,
                 chain_2_residue_indices=chain_2_indices,
                 num_contact_residue_pairs=len(residue_pairs),
+                contact_area=(
+                    None
+                    if chain_pair_contact_areas is None
+                    else float(chain_pair_contact_areas.get((chain_1, chain_2), 0.0))
+                ),
                 prodigy=(
                     annotate_prodigy_crystal_interface(
                         atoms,

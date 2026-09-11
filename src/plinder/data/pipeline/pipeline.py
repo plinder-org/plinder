@@ -296,6 +296,16 @@ class IngestPipeline:
         )
 
     @utils.ingest_flow_control
+    def make_ccd_ligand_dbs(self, *, threads: int | None = None) -> None:
+        tasks.make_ccd_ligand_dbs(
+            data_dir=self.plinder_dir,
+            scratch_dir=Path(tempfile.gettempdir()) / "plinder-ccd-dbs",
+            threads=threads or self.cfg.flow.clustering_cpu,
+            force_update=self.cfg.data.force_update,
+            minimum_similarity=self.cfg.ligand.minimum_similarity,
+        )
+
+    @utils.ingest_flow_control
     def scatter_make_canonical_ligand_archives(self) -> list[list[str]]:
         chunks: list[list[str]] = tasks.scatter_make_canonical_ligand_archives(
             data_dir=self.plinder_dir,

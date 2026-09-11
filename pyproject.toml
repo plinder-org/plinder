@@ -13,6 +13,7 @@ dependencies = [
     "google-cloud-storage",
     "gcsfs",
     "peppr>=0.13",
+    "voronotalt>=1.1",
     "rdkit>=2025.09.1",
     "pyarrow",
     "omegaconf",

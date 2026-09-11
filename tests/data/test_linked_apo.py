@@ -225,7 +225,10 @@ def test_candidate_manifest_uses_all_ligand_contact_counts() -> None:
         chains,
         biounit_chains=membership,
         entry_metadata=pd.DataFrame(
-            {"entry_pdb_id": ["2def"], "entry_resolution": [1.8]}
+            {
+                "entry_pdb_id": ["2def"],
+                "entry_resolution": [1.8],
+            }
         ),
         annotation=_holo_annotation(),
     )
@@ -263,7 +266,10 @@ def test_candidate_manifest_ranks_repeated_chain_instances_before_selection() ->
         chains,
         biounit_chains=membership,
         entry_metadata=pd.DataFrame(
-            {"entry_pdb_id": ["2def"], "entry_resolution": [1.8]}
+            {
+                "entry_pdb_id": ["2def"],
+                "entry_resolution": [1.8],
+            }
         ),
         annotation=_holo_annotation(),
     )
@@ -300,7 +306,10 @@ def test_candidate_manifest_uses_ligand_holo_rows_not_chain_flag() -> None:
         chains,
         biounit_chains=membership,
         entry_metadata=pd.DataFrame(
-            {"entry_pdb_id": ["2def"], "entry_resolution": [1.8]}
+            {
+                "entry_pdb_id": ["2def"],
+                "entry_resolution": [1.8],
+            }
         ),
         annotation=_holo_annotation("A"),
     )
@@ -437,7 +446,10 @@ def test_excludes_apo_chain_from_same_entry_as_holo_system() -> None:
 
 def test_limits_links_per_holo_system() -> None:
     candidates = pd.DataFrame(
-        [_candidate("2def_A", resolution=1.0), _candidate("3ghi_A", resolution=2.0)]
+        [
+            _candidate("2def_A", resolution=1.0),
+            _candidate("3ghi_A", resolution=2.0),
+        ]
     )
     scores = pd.concat(
         [_scores(target, {"ligand-1": {}}) for target in candidates["target_system"]],

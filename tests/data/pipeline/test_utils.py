@@ -47,13 +47,13 @@ def test_hash_contents(contents):
     utils.hash_contents(contents)
 
 
-def test_scoreability_merge_reuses_complete_collated_column(tmp_path):
+def test_comparability_merge_reuses_complete_collated_column(tmp_path):
     index = pd.DataFrame(
         {
             "ligand_id": ["1aaa__1__1.X", "1aaa__1__1.Y", None],
             "system_type": ["holo", "holo", "apo"],
             "ligand_is_proper": [True, False, False],
-            "ligand_is_3d_score_able": [True, True, None],
+            "ligand_is_shape_comparable": [True, True, None],
         }
     )
 
@@ -62,8 +62,8 @@ def test_scoreability_merge_reuses_complete_collated_column(tmp_path):
         data_dir=tmp_path,
     )
 
-    assert result["ligand_is_3d_score_able"].tolist() == [True, False, False]
-    assert str(result["ligand_is_3d_score_able"].dtype) == "boolean"
+    assert result["ligand_is_shape_comparable"].tolist() == [True, False, False]
+    assert str(result["ligand_is_shape_comparable"].dtype) == "boolean"
 
 
 def test_finalize_index_writes_local_clusters_to_sidecar(tmp_path):
@@ -109,7 +109,7 @@ def test_finalize_index_writes_local_clusters_to_sidecar(tmp_path):
     pd.DataFrame(
         {
             "ligand_id": ["1aaa__1__1.X"],
-            "ligand_is_3d_score_able": [True],
+            "ligand_is_shape_comparable": [True],
         }
     ).to_parquet(ligand_dir / "part.parquet", index=False)
     pd.DataFrame(
@@ -164,7 +164,7 @@ def test_finalize_index_writes_local_clusters_to_sidecar(tmp_path):
     assert clusters["ligand_tanimoto_ecfp4_1024_90_cluster_num_pdb_ids"].iloc[0] == 1
     assert finalized.loc[0, "ligand_smiles_id"] == 0
     assert pd.isna(finalized.loc[1, "ligand_smiles_id"])
-    assert finalized["ligand_is_3d_score_able"].tolist() == [True, False]
+    assert finalized["ligand_is_shape_comparable"].tolist() == [True, False]
     assert "uniqueness" not in finalized.columns
     assert not any("set_cover" in column for column in finalized)
     assert "ligand_tanimoto_ecfp4_1024_90_cluster" not in finalized
@@ -182,7 +182,7 @@ def test_finalize_index_preserves_annotation_when_staging_fails(tmp_path, monkey
             "ligand_id": ["1aaa__1__1.X"],
             "ligand_is_proper": [False],
             "ligand_smiles": [None],
-            "ligand_is_3d_score_able": [False],
+            "ligand_is_shape_comparable": [False],
         }
     )
     original.to_parquet(index_path, index=False)

@@ -103,6 +103,8 @@ def generate_input_conformer(
     if not addHs:
         # remove Hs if they should not be kept
         _mol = Chem.RemoveAllHs(_mol, sanitize=False)
+        # resanitize after RemoveAllHs
+        peppr_sanitize(_mol)
 
     return _mol
 

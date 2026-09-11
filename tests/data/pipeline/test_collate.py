@@ -36,7 +36,7 @@ def _write_entry(
     pdb_id: str,
     *,
     ligand_rows: list[dict[str, object]],
-    scoreability: dict[str, bool],
+    comparability: dict[str, bool],
     ph: float | None = None,
 ) -> None:
     code = pdb_id[1:3]
@@ -110,6 +110,8 @@ def _write_entry(
             "chain_type": ["polypeptide(L)", "polypeptide(L)"],
             "chain_receptor_type": ["protein", "protein"],
             "chain_sequence": ["A" * 300, "A" * 200],
+            "chain_sequence_noncanonical": ["A" * 300, "A" * 200],
+            "chain_modified_residues": [[], []],
             "chain_length": [300, 200],
             "chain_num_unresolved_residues": [0, 0],
             "chain_is_holo": [True, True],
@@ -170,8 +172,8 @@ def _write_entry(
             "ligand_ccd_code": [str(row["ccd"]) for row in proper],
             "ligand_id": [str(row["ligand_id"]) for row in proper],
             "ligand_asym_id": ["L" for _ in proper],
-            "ligand_is_3d_score_able": [
-                scoreability[str(row["ligand_id"])] for row in proper
+            "ligand_is_shape_comparable": [
+                comparability[str(row["ligand_id"])] for row in proper
             ],
         }
     )
@@ -198,13 +200,13 @@ def _write_release(data_dir: Path) -> None:
                 "ion": True,
             },
         ],
-        scoreability={"1abc__1__1.L": True},
+        comparability={"1abc__1__1.L": True},
     )
     _write_entry(
         data_dir,
         "2def",
         ligand_rows=[{"ligand_id": "2def__1__1.L", "ccd": "LIG", "proper": True}],
-        scoreability={"2def__1__1.L": False},
+        comparability={"2def__1__1.L": False},
         ph=7.4,
     )
 
@@ -221,7 +223,7 @@ def test_collation_preserves_failure_diagnostics_and_unknown_older_rows(tmp_path
             ligand_rows=[
                 {"ligand_id": f"{pdb_id}__1__1.L", "ccd": "ATP", "proper": True}
             ],
-            scoreability={f"{pdb_id}__1__1.L": True},
+            comparability={f"{pdb_id}__1__1.L": True},
         )
         if failures is None:
             continue
@@ -266,7 +268,7 @@ def _write_interface_only_entry(data_dir: Path, pdb_id: str = "3ghi") -> None:
         data_dir,
         pdb_id,
         ligand_rows=[],
-        scoreability={},
+        comparability={},
     )
     (data_dir / "raw_entries" / pdb_id[1:3] / f"{pdb_id}.parquet").unlink()
     (data_dir / "ligands" / f"{pdb_id}.parquet").unlink()
@@ -386,7 +388,9 @@ def test_plan_shards_and_finalize_release_contract(tmp_path: Path) -> None:
     assert first_entry["system_proper_unique_ccd_codes"].tolist() == ["ATP", "ATP"]
     assert first_entry["system_ligand_has_cofactor"].all()
     assert first_entry["system_ligand_has_ion"].all()
-    assert first_entry.set_index("ligand_id")["ligand_is_3d_score_able"].to_dict() == {
+    assert first_entry.set_index("ligand_id")[
+        "ligand_is_shape_comparable"
+    ].to_dict() == {
         "1abc__1__1.L": True,
         "1abc__1__1.Z": False,
     }
@@ -627,7 +631,10 @@ def test_targeted_repair_preserves_unaffected_release_only_columns(
     run_collation(tmp_path, memory_limit="1GB")
     installed = pd.read_parquet(tmp_path / "index/annotation_table.parquet")
     installed["release_only"] = installed["entry_pdb_id"].map(
-        {"1abc": "old", "2def": "keep"}
+        {
+            "1abc": "old",
+            "2def": "keep",
+        }
     )
     installed.to_parquet(tmp_path / "index/annotation_table.parquet", index=False)
     chain_path = tmp_path / "index/entry_chains.parquet"
@@ -808,7 +815,12 @@ def test_shard_cli_selects_codes_from_pdb_manifest(tmp_path: Path) -> None:
     manifest = tmp_path / "affected.txt"
     manifest.write_text("1abc\n2abd\n3xyz\n")
     args = build_parser().parse_args(
-        ["shard", str(tmp_path), "--pdb-manifest", str(manifest)]
+        [
+            "shard",
+            str(tmp_path),
+            "--pdb-manifest",
+            str(manifest),
+        ]
     )
 
     assert args.pdb_manifest == manifest
@@ -828,7 +840,7 @@ def test_final_validation_rejects_all_ion_or_artifact_systems(
                 "ion": True,
             }
         ],
-        scoreability={"1abc__1__1.I": False},
+        comparability={"1abc__1__1.I": False},
     )
 
     with pytest.raises(ValueError, match="all_ion_or_artifact_systems=1"):

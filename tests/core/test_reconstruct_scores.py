@@ -21,7 +21,11 @@ def test_prefetch_resolves_only_requested_alignment_shards(tmp_path, monkeypatch
     monkeypatch.setattr(reconstruct.cpl, "get_plinder_path", get_plinder_path)
 
     paths = reconstruct.prefetch_similarity_alignments(
-        ["1abc__1__1.A__1.L", "2abd__1__1.B__1.M", "3xyz__1__1.C__1.N"]
+        [
+            "1abc__1__1.A__1.L",
+            "2abd__1__1.B__1.M",
+            "3xyz__1__1.C__1.N",
+        ]
     )
 
     assert requested == [

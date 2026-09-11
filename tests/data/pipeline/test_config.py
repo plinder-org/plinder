@@ -76,6 +76,7 @@ def test_ingest_annotation_defaults_have_one_owner():
     }
     assert asdict(config.EntryConfig()) == {
         "interaction_search_threshold": 10.0,
+        "tessellation_atom_limit": 2_000_000,
         "data_dir": None,
         "save_folder": None,
     }

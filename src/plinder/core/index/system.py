@@ -100,6 +100,7 @@ class PlinderSystem:
         release: PlinderRelease | None = None,
         prune: bool = True,
         skip_3d_confgen: bool = False,
+        complete_missing_atoms: bool = False,
         source_mmcif: Path | str | None = None,
         reconstruction_dir: Path | str | None = None,
         canonical_ligand_dir: Path | str | None = None,
@@ -112,6 +113,7 @@ class PlinderSystem:
         self.release = release or PlinderRelease()
         self.prune: bool = prune
         self.skip_3d_confgen: bool = skip_3d_confgen
+        self.complete_missing_atoms: bool = complete_missing_atoms
         self.source_mmcif = Path(source_mmcif) if source_mmcif is not None else None
         default_reconstruction_root = (
             Path(self.release.data_dir)
@@ -683,6 +685,7 @@ class PlinderSystem:
             ligand_smiles=self.smiles,
             skip_3d_confgen=self.skip_3d_confgen,
             structure_type="holo",
+            complete_missing_atoms=self.complete_missing_atoms,
         )
 
     @cached_property

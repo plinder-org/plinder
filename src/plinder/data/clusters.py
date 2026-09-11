@@ -1412,8 +1412,7 @@ def merge_component_reduction_shards(
             directed=directed,
         )
         LOG.info(
-            "component merge: labeled directed=%s thresholds=%d "
-            "elapsed_seconds=%.1f",
+            "component merge: labeled directed=%s thresholds=%d elapsed_seconds=%.1f",
             directed,
             len(ordered_thresholds),
             time() - phase_started,
@@ -2730,7 +2729,7 @@ def make_directed_set_cover(
     started = time()
     if entity_type == "ligand" and metric in GATED_LIGAND_DIAGNOSTIC_METRICS:
         raise ValueError(
-            f"{metric} cannot be clustered directly; use " "sucos_shape_pocket_qcov"
+            f"{metric} cannot be clustered directly; use sucos_shape_pocket_qcov"
         )
     if threads < 1:
         raise ValueError("directed-cover threads must be positive")

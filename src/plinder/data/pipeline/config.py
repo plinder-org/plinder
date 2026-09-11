@@ -230,6 +230,8 @@ class EntryConfig:
     """Entry-reader options; shared annotation thresholds live in AnnotationConfig."""
 
     interaction_search_threshold: float = 10.0
+    # heavy atoms; Voronota-LT needs ~2.2 KB/atom, skipped assemblies get null areas
+    tessellation_atom_limit: int = 2_000_000
     data_dir: Optional[str] = None
     save_folder: Optional[str] = None
 

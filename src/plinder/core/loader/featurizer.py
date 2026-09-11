@@ -82,6 +82,7 @@ def structure_featurizer(structure: Structure, pad_value: int = -100) -> dict[st
         "sequence_atom_mask_feature": sequence_atom_mask_stacked,
         "input_sequence_residue_mask_feature": input_sequence_residue_mask_stacked,
         "protein_coordinates": protein_coordinates_stacked,
+        "protein_atom_unresolved_mask": structure.protein_unresolved_atom_mask,
         "protein_calpha_coordinates": protein_calpha_coordinates_stacked,
         "input_sequence_full_atom_feature": input_sequence_full_atom_feat_stack,
         "protein_structure_residue_feature": protein_structure_residue_type_stack,

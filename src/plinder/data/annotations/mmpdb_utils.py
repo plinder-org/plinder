@@ -402,8 +402,7 @@ def _write_pair_parquet(
     actual_schema = pq.read_schema(output_path)
     if not actual_schema.equals(schemas.LIGAND_MMP_PAIR_SCHEMA):
         raise ValueError(
-            "ligand MMP output schema differs from the release schema: "
-            f"{actual_schema}"
+            f"ligand MMP output schema differs from the release schema: {actual_schema}"
         )
 
 

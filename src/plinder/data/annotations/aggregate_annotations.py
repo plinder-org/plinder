@@ -25,11 +25,17 @@ from plinder.data.annotations.cif_utils import (
     build_biounit,
     get_chain_external_mappings,
     get_entry_info,
+    get_entry_ph_range,
     get_entry_taxonomy,
     get_label_asym_sequences,
+    get_ligand_of_interest,
     get_model_count,
     get_structure_with_altloc,
     remove_nonphysical_bonds,
+)
+from plinder.data.annotations.contact_areas import (
+    chain_pair_contact_areas,
+    tessellation_atom_mask,
 )
 from plinder.data.annotations.get_ligand_validation import (
     EntryValidation,
@@ -55,12 +61,15 @@ from plinder.data.annotations.ligand_utils import (
 )
 from plinder.data.annotations.protein_utils import (
     Chain,
+    UnobservedAtom,
     _is_polynucleotide,
     _is_polypeptide,
     detect_ligand_chains,
     detect_ligand_chains_from_cif,
     get_atom_site_author_ids,
+    get_modified_residues,
     get_receptor_type,
+    get_unobserved_atoms,
 )
 from plinder.data.annotations.save_utils import save_ligands
 from plinder.data.annotations.utils import (
@@ -117,7 +126,10 @@ def _chain_type_from_coordinates(atoms: struc.AtomArray) -> str:
             if residue_name in {"DA", "DC", "DG", "DT", "DU", "DI"}:
                 dna_residues += 1
             elif residue_name in {"A", "C", "G", "U", "I"} or atom_names.intersection(
-                {"O2'", "O2*"}
+                {
+                    "O2'",
+                    "O2*",
+                }
             ):
                 rna_residues += 1
             else:
@@ -257,8 +269,7 @@ class System(DocBaseModel):
         yield (
             f"{prefix}_water_residues",
             "list[str]",
-            "Interacting water residues encoded as "
-            "<instance>.<asym>_<residue_number>",
+            "Interacting water residues encoded as <instance>.<asym>_<residue_number>",
         )
         for mapping_name in ("CATH", "Pfam", "SCOP2", "SCOP2B", "UniProt"):
             yield (
@@ -795,6 +806,14 @@ class System(DocBaseModel):
 
 class Entry(DocBaseModel):
     _ligand_contacts_requested: bool = PrivateAttr(default=False)
+    # SUBJECT OF INVESTIGATION comp_ids; None when the category is absent
+    _subject_of_investigation_comp_ids: frozenset[str] | None = PrivateAttr(
+        default=None
+    )
+    # asym -> pdbx_unobs_or_zero_occ_atoms rows; None when the category is absent
+    _unobserved_atom_records: dict[str, list[UnobservedAtom]] | None = PrivateAttr(
+        default=None
+    )
 
     pdb_id: str = Field(
         default_factory=str,
@@ -820,9 +839,21 @@ class Entry(DocBaseModel):
         default_factory=str,
         description="pH at which structure is solved. See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_exptl_crystal_grow.pH.html",
     )
+    pH_min: float | None = Field(
+        default=None,
+        description="Lowest crystallization pH parsed from _exptl_crystal_grow (pH, pdbx_pH_range, or pdbx_details); null when none parses",
+    )
+    pH_max: float | None = Field(
+        default=None,
+        description="Highest crystallization pH parsed from _exptl_crystal_grow (pH, pdbx_pH_range, or pdbx_details); null when none parses",
+    )
     resolution: float | None = Field(
         default_factory=float,
         description="RCSB structure resolution. See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_refine.ls_d_res_high.html",
+    )
+    has_ligand_of_interest: bool | None = Field(
+        default=None,
+        description="Depositor flag _pdbx_entry_details.has_ligand_of_interest (Y true, N false); null when absent, i.e. for most entries deposited before ~2019",
     )
     source_taxonomy_ids: list[int] = Field(
         default_factory=list,
@@ -862,6 +893,10 @@ class Entry(DocBaseModel):
         + "covale: actual covalent linkage, metalc: other dative bond interactions like metal-ligand dative bond, "
         + "hydrog: strong hydrogen bonding of nucleic acid. For the purpose of covalent annotations, we use only covale for downstream processing.",
     )
+    chain_to_seqres_noncanonical: dict[str, str] = Field(
+        default_factory=dict,
+        description="[EXCLUDE] entity_poly.pdbx_seq_one_letter_code per asym; modified residues as (CCD)",
+    )
     chain_to_seqres: dict[str, str] = Field(
         default_factory=dict,
         description="[EXCLUDE] Chain to sequence mapping",
@@ -894,6 +929,12 @@ class Entry(DocBaseModel):
         default_factory=list,
         description="Biological-assembly IDs that could not be built; their "
         "systems and interfaces are absent from this entry",
+    )
+    failed_contact_area_biounit_ids: list[str] = Field(
+        default_factory=list,
+        description="[EXCLUDE] Biological-assembly IDs whose Voronota-LT tessellation "
+        "was skipped (too many atoms) or failed; their ligand and interface contact "
+        "areas are null.",
     )
     symmetry_mate_contacts: SymmetryMateContacts = Field(
         default_factory=dict,
@@ -998,6 +1039,11 @@ class Entry(DocBaseModel):
                 }
             )
         auth_id_by_asym, residue_author_ids_by_asym = get_atom_site_author_ids(block)
+        modified_residues_by_asym = get_modified_residues(
+            block, residue_author_ids_by_asym
+        )
+        unobserved = get_unobserved_atoms(block)
+        self._unobserved_atom_records = None if unobserved is None else unobserved[1]
         self.chains = {}
         # Chain metadata does not use bonds.  Temporarily detaching the global
         # BondList prevents every small chain slice from scanning and
@@ -1033,6 +1079,10 @@ class Entry(DocBaseModel):
                     auth_id=auth_id_by_asym.get(chain_id),
                     chain_type_str=chain_type,
                     residue_author_ids=residue_author_ids_by_asym.get(chain_id, {}),
+                    modified_residues=modified_residues_by_asym.get(chain_id),
+                    unresolved_atoms=(
+                        None if unobserved is None else unobserved[0].get(chain_id, {})
+                    ),
                 )
         finally:
             atoms.bonds = bonds
@@ -1106,8 +1156,7 @@ class Entry(DocBaseModel):
         n_models = get_model_count(cif_file_obj)
         if n_models > 1:
             LOG.warning(
-                f"{source} has {n_models} models — using model 1 only."
-                f"{multimodel_note}"
+                f"{source} has {n_models} models — using model 1 only.{multimodel_note}"
             )
         atoms = get_structure_with_altloc(
             cif_file_obj,
@@ -1202,6 +1251,7 @@ class Entry(DocBaseModel):
         ligand_instance_chains: set[str] | None = None,
         water_chains: set[str] | None = None,
         spatial_index: BiounitSpatialIndex | None = None,
+        chain_pair_contact_areas: ty.Mapping[tuple[str, str], float] | None = None,
     ) -> dict[str, "Ligand"]:
         """Create Ligand objects for every ligand chain in a single biounit.
 
@@ -1225,6 +1275,9 @@ class Entry(DocBaseModel):
 
         ``spatial_index`` shares the assembly CellList and atom hierarchy
         across every ligand and across the non-ion/ion passes.
+
+        ``chain_pair_contact_areas`` are the assembly-wide Voronota-LT chain
+        pair areas; ``None`` leaves every ligand's contact area unset.
         """
         ligands: dict[str, Ligand] = {}
         if spatial_index is None:
@@ -1307,6 +1360,11 @@ class Entry(DocBaseModel):
                 water_chains=water_chains,
                 spatial_index=spatial_index,
                 member_residue_numbers=member_residue_numbers,
+                chain_pair_contact_areas=chain_pair_contact_areas,
+                subject_of_investigation_comp_ids=(
+                    self._subject_of_investigation_comp_ids
+                ),
+                unobserved_atoms=self._unobserved_atom_records,
             )
             if ligand is not None:
                 ligands[ligand.id] = ligand
@@ -1579,8 +1637,15 @@ class Entry(DocBaseModel):
             resolution=r,
             **entry_taxonomy,
         )
+        entry.pH_min, entry.pH_max = get_entry_ph_range(cif_data)
+        has_ligand_of_interest, subject_comp_ids = get_ligand_of_interest(cif_data)
+        entry.has_ligand_of_interest = has_ligand_of_interest
+        entry._subject_of_investigation_comp_ids = subject_comp_ids
         entry.covalent_bonds = get_covalent_connections(cif_data)
         entry.chain_to_seqres = get_label_asym_sequences(cif_data)
+        entry.chain_to_seqres_noncanonical = get_label_asym_sequences(
+            cif_data, column="pdbx_seq_one_letter_code"
+        )
         return entry
 
     def _attach_chains(
@@ -1658,6 +1723,38 @@ class Entry(DocBaseModel):
             monoatomic_ion_asym_ids, known_artifact_asym_ids, primary_asym_ids
         )
 
+    def _biounit_chain_pair_contact_areas(
+        self,
+        biounit: struc.AtomArray,
+        biounit_id: str,
+        *,
+        atom_limit: int,
+    ) -> dict[tuple[str, str], float] | None:
+        """Tessellate one assembly once; ``None`` records a skipped or failed run."""
+        atom_count = int(np.count_nonzero(tessellation_atom_mask(biounit)))
+        if atom_count > atom_limit:
+            LOG.warning(
+                "PDB %s assembly %s: skipping Voronota-LT tessellation, %d heavy "
+                "non-water atoms exceed tessellation_atom_limit=%d",
+                self.pdb_id,
+                biounit_id,
+                atom_count,
+                atom_limit,
+            )
+            self.failed_contact_area_biounit_ids.append(biounit_id)
+            return None
+        try:
+            return chain_pair_contact_areas(biounit)
+        except Exception as exc:
+            LOG.error(
+                "PDB %s assembly %s: Voronota-LT tessellation failed: %s",
+                self.pdb_id,
+                biounit_id,
+                exc,
+            )
+            self.failed_contact_area_biounit_ids.append(biounit_id)
+            return None
+
     def _annotate_biounit(
         self,
         biounit: struc.AtomArray,
@@ -1675,6 +1772,7 @@ class Entry(DocBaseModel):
         interface_min_chain_length: int,
         interface_min_residues: int,
         interface_annotate_prodigy: bool,
+        tessellation_atom_limit: int,
         ligand_smiles_dict: dict[str, str] | None = None,
         ligand_ccd_code_dict: dict[str, str] | None = None,
     ) -> dict[str, Ligand]:
@@ -1687,6 +1785,12 @@ class Entry(DocBaseModel):
         primary ligands first and only those deferred ions and known artifacts
         that connect to a proper primary ligand.  The biounit must carry a
         ``legacy_chain_id`` annotation.
+
+        The assembly is tessellated once with Voronota-LT so that ligands and
+        protein interfaces read their chain-pair contact areas from the same
+        exact computation; assemblies above ``tessellation_atom_limit`` heavy,
+        non-water atoms skip it and are recorded in
+        ``failed_contact_area_biounit_ids``.
         """
         self.biounit_chain_ids[biounit_id] = sorted(
             str(chain_id) for chain_id in np.unique(biounit.chain_id)
@@ -1713,6 +1817,18 @@ class Entry(DocBaseModel):
             if spatial_radii
             else None
         )
+        # Tessellate only when something consumes the areas: interfaces, or
+        # ligands that will actually be collected.
+        needs_contact_areas = include_interfaces or (
+            include_ligands and bool(ligand_classes.primary_asym_ids)
+        )
+        chain_pair_areas = (
+            self._biounit_chain_pair_contact_areas(
+                biounit, biounit_id, atom_limit=tessellation_atom_limit
+            )
+            if needs_contact_areas
+            else None
+        )
         if include_ligands:
             assert spatial_index is not None
             self._record_biounit_ligand_contact_counts(
@@ -1735,6 +1851,7 @@ class Entry(DocBaseModel):
                     min_interface_residues=interface_min_residues,
                     annotate_prodigy=interface_annotate_prodigy,
                     spatial_index=spatial_index,
+                    chain_pair_contact_areas=chain_pair_areas,
                 )
             )
         if not include_ligands or not ligand_classes.primary_asym_ids:
@@ -1754,6 +1871,7 @@ class Entry(DocBaseModel):
                 ligand_ccd_code_dict=ligand_ccd_code_dict,
                 water_chains=water_chains,
                 spatial_index=spatial_index,
+                chain_pair_contact_areas=chain_pair_areas,
                 **selection,
             )
 
@@ -1832,6 +1950,7 @@ class Entry(DocBaseModel):
         include_interfaces: bool = True,
         assembly_ids: ty.Iterable[str] | None = None,
         protein_only: bool = False,
+        tessellation_atom_limit: int = 2_000_000,
     ) -> Entry:
         """
         Load an entry object from mmCIF files in the pipeline
@@ -1880,6 +1999,13 @@ class Entry(DocBaseModel):
         protein_only : bool
             Permit chain and assembly extraction without ligand or interface
             annotation. Used by receptor-only custom scoring.
+        tessellation_atom_limit : int
+            Number of heavy, non-water atoms above which an assembly skips the
+            Voronota-LT contact-area tessellation; its ligand and interface
+            contact areas are null and the assembly ID is recorded in
+            ``failed_contact_area_biounit_ids``. The limit protects memory:
+            the tessellation needs about 2.2 KB and 9 µs per atom, so the
+            default of 2 million atoms costs roughly 4.5 GB and 20 s.
 
         Returns
         -------
@@ -1948,8 +2074,7 @@ class Entry(DocBaseModel):
                 # Skip this assembly but record it: its systems are silently
                 # missing from the entry otherwise. Other assemblies proceed.
                 LOG.error(
-                    f"Could not build assembly {assembly_id} for "
-                    f"{entry.pdb_id!r}: {e}"
+                    f"Could not build assembly {assembly_id} for {entry.pdb_id!r}: {e}"
                 )
                 entry.failed_assembly_ids.append(assembly_id)
                 continue
@@ -1969,6 +2094,7 @@ class Entry(DocBaseModel):
                     interface_min_chain_length=interface_min_chain_length,
                     interface_min_residues=interface_min_residues,
                     interface_annotate_prodigy=interface_annotate_prodigy,
+                    tessellation_atom_limit=tessellation_atom_limit,
                 )
             )
         entry._finalize(
@@ -2006,6 +2132,7 @@ class Entry(DocBaseModel):
         include_interfaces: bool = True,
         data_dir: Path | None = None,
         ligand_ccd_code_dict: dict[str, str] | None = None,
+        tessellation_atom_limit: int = 2_000_000,
     ) -> Entry:
         """
         Create an entry from an already assembled or deposited PDB mmCIF.
@@ -2056,6 +2183,9 @@ class Entry(DocBaseModel):
             Whether to derive ligand systems and canonical ligand SDFs.
         include_interfaces : bool
             Whether to derive protein-protein interfaces.
+        tessellation_atom_limit : int
+            Skip the Voronota-LT tessellation above this many heavy, non-water
+            atoms (see :meth:`from_cif_file`).
 
         Returns
         -------
@@ -2182,6 +2312,7 @@ class Entry(DocBaseModel):
                 include_interfaces=include_interfaces,
                 assembly_ids=requested_assemblies,
                 protein_only=not include_ligands and not include_interfaces,
+                tessellation_atom_limit=tessellation_atom_limit,
             )
             if not entry.biounit_chain_ids:
                 raise ValueError(
@@ -2303,6 +2434,7 @@ class Entry(DocBaseModel):
             interface_min_chain_length=interface_min_chain_length,
             interface_min_residues=interface_min_residues,
             interface_annotate_prodigy=interface_annotate_prodigy,
+            tessellation_atom_limit=tessellation_atom_limit,
             ligand_smiles_dict=ligand_smiles_dict,
             ligand_ccd_code_dict=ligand_ccd_code_dict,
         )
@@ -2595,7 +2727,10 @@ class Entry(DocBaseModel):
             "determination_method",
             "keywords",
             "pH",
+            "pH_min",
+            "pH_max",
             "resolution",
+            "has_ligand_of_interest",
             "source_taxonomy_ids",
             "source_organism_names",
             "host_taxonomy_ids",
@@ -2621,6 +2756,8 @@ class Entry(DocBaseModel):
             "chain_type",
             "chain_receptor_type",
             "chain_sequence",
+            "chain_sequence_noncanonical",
+            "chain_modified_residues",
             "chain_length",
             "chain_num_unresolved_residues",
             "chain_is_holo",
@@ -2644,6 +2781,10 @@ class Entry(DocBaseModel):
                     "chain_type": chain.chain_type_str,
                     "chain_receptor_type": get_receptor_type([chain.chain_type_str]),
                     "chain_sequence": self.chain_to_seqres.get(chain.asym_id, ""),
+                    "chain_sequence_noncanonical": (
+                        self.chain_to_seqres_noncanonical.get(chain.asym_id, "")
+                    ),
+                    "chain_modified_residues": list(chain.modified_residues),
                     "chain_length": chain.length,
                     "chain_num_unresolved_residues": chain.num_unresolved_residues,
                     "chain_is_holo": chain.holo,
@@ -2760,7 +2901,11 @@ class Entry(DocBaseModel):
                     ligand.instance_chain, ligand.instance_chain
                 )
                 ligand.id_legacy = "__".join(
-                    [ligand.pdb_id, ligand.biounit_id, legacy_instance_chain]
+                    [
+                        ligand.pdb_id,
+                        ligand.biounit_id,
+                        legacy_instance_chain,
+                    ]
                 )
                 ligand_data = ligand.format(self.chains)
                 rows.append({**entry_data, **system_data, **ligand_data})

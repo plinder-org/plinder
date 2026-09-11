@@ -375,8 +375,7 @@ def compute_ligand_fingerprints(
     ligands = load_ligands_from_annotation_table(data_dir=data_dir)
     for column in ligands.columns:
         LOG.info(
-            f"compute_ligand_fingerprints: unique {column}="
-            f"{ligands[column].nunique()}"
+            f"compute_ligand_fingerprints: unique {column}={ligands[column].nunique()}"
         )
 
     smiles_column = "ligand_rdkit_canonical_smiles"
@@ -679,8 +678,8 @@ _PharmacophoreFeatures = tuple[Any, ...]
 # raises for coordination metals such as HEM iron. Other elements receive a
 # custom periodic-table radius without changing the molecule or canonical SDF.
 SHAPE_DEFAULT_ATOMIC_NUMBERS = frozenset({1, 6, 7, 8, 9, 15, 16, 17, 35, 53})
-LIGAND_3D_SCORE_ABILITY_CACHE_SIZE = 4096
-_LIGAND_3D_SCORE_ABILITY_CACHE: OrderedDict[str, bool] = OrderedDict()
+LIGAND_SHAPE_COMPARABILITY_CACHE_SIZE = 4096
+_LIGAND_SHAPE_COMPARABILITY_CACHE: OrderedDict[str, bool] = OrderedDict()
 
 
 @cache
@@ -902,7 +901,7 @@ def canonical_ligand_sdf_path(data_dir: Path, *, pdb_id: str, asym_id: str) -> P
     )
 
 
-def is_ligand_3d_score_able(sdf_file: Path) -> bool:
+def is_ligand_shape_comparable(sdf_file: Path) -> bool:
     """Test whether one canonical SDF supports shape, color, and SuCOS scoring."""
     molecule = load_sdf_molecule(sdf_file)
     if molecule is None:
@@ -927,9 +926,9 @@ def is_ligand_3d_score_able(sdf_file: Path) -> bool:
         )
     except Exception:
         cache_key = None
-    if cache_key is not None and cache_key in _LIGAND_3D_SCORE_ABILITY_CACHE:
-        _LIGAND_3D_SCORE_ABILITY_CACHE.move_to_end(cache_key)
-        return _LIGAND_3D_SCORE_ABILITY_CACHE[cache_key]
+    if cache_key is not None and cache_key in _LIGAND_SHAPE_COMPARABILITY_CACHE:
+        _LIGAND_SHAPE_COMPARABILITY_CACHE.move_to_end(cache_key)
+        return _LIGAND_SHAPE_COMPARABILITY_CACHE[cache_key]
 
     reference = Chem.Mol(prepared)
     mobile = Chem.Mol(prepared)
@@ -937,15 +936,18 @@ def is_ligand_3d_score_able(sdf_file: Path) -> bool:
         shape, color = align_molecules(reference, mobile)
         sucos = get_sucos_score(reference, mobile)
     except Exception as exc:
-        LOG.warning(f"ligand SDF is not 3D-scoreable ({sdf_file}): {exc}")
+        LOG.warning(f"ligand SDF is not shape-comparable ({sdf_file}): {exc}")
         return False
-    score_able = all(np.isfinite(value) for value in (shape, color, sucos))
-    if score_able and cache_key is not None:
-        _LIGAND_3D_SCORE_ABILITY_CACHE[cache_key] = True
-        _LIGAND_3D_SCORE_ABILITY_CACHE.move_to_end(cache_key)
-        while len(_LIGAND_3D_SCORE_ABILITY_CACHE) > LIGAND_3D_SCORE_ABILITY_CACHE_SIZE:
-            _LIGAND_3D_SCORE_ABILITY_CACHE.popitem(last=False)
-    return score_able
+    comparable = all(np.isfinite(value) for value in (shape, color, sucos))
+    if comparable and cache_key is not None:
+        _LIGAND_SHAPE_COMPARABILITY_CACHE[cache_key] = True
+        _LIGAND_SHAPE_COMPARABILITY_CACHE.move_to_end(cache_key)
+        while (
+            len(_LIGAND_SHAPE_COMPARABILITY_CACHE)
+            > LIGAND_SHAPE_COMPARABILITY_CACHE_SIZE
+        ):
+            _LIGAND_SHAPE_COMPARABILITY_CACHE.popitem(last=False)
+    return comparable
 
 
 def annotate_ligand_3d_score_ability(
@@ -957,8 +959,8 @@ def annotate_ligand_3d_score_ability(
     if missing:
         raise ValueError(f"missing ligand SDF identifiers: {sorted(missing)}")
     result = ligands.copy()
-    scoreability_by_sdf: dict[Path, bool] = {}
-    abilities = []
+    comparability_by_sdf: dict[Path, bool] = {}
+    comparabilities = []
     for pdb_id, asym_id in result[["pdb_id", "ligand_asym_id"]].itertuples(
         index=False, name=None
     ):
@@ -967,10 +969,10 @@ def annotate_ligand_3d_score_ability(
             pdb_id=str(pdb_id),
             asym_id=str(asym_id),
         )
-        if sdf_file not in scoreability_by_sdf:
-            scoreability_by_sdf[sdf_file] = is_ligand_3d_score_able(sdf_file)
-        abilities.append(scoreability_by_sdf[sdf_file])
-    result["ligand_is_3d_score_able"] = pd.array(abilities, dtype="boolean")
+        if sdf_file not in comparability_by_sdf:
+            comparability_by_sdf[sdf_file] = is_ligand_shape_comparable(sdf_file)
+        comparabilities.append(comparability_by_sdf[sdf_file])
+    result["ligand_is_shape_comparable"] = pd.array(comparabilities, dtype="boolean")
     return result
 
 
@@ -1448,8 +1450,7 @@ class Scorer:
                 sdf_file = self.ligand_sdf_resolver(ligand)
             if sdf_file is None:
                 LOG.warning(
-                    "no ligand SDF found for "
-                    f"{ligand.id} (canonical key={cache_key})"
+                    f"no ligand SDF found for {ligand.id} (canonical key={cache_key})"
                 )
                 self._ligand_mol_cache[cache_key] = None
             else:
@@ -1538,7 +1539,10 @@ class Scorer:
         """Shape-score one ligand pair after the pocket-coverage gate."""
         if not np.isfinite(pocket_qcov) or pocket_qcov <= 0:
             return {}
-        if not query_ligand.is_3d_score_able or not target_ligand.is_3d_score_able:
+        if (
+            not query_ligand.is_shape_comparable
+            or not target_ligand.is_shape_comparable
+        ):
             return {}
 
         query_key = (query_ligand.pdb_id, query_ligand.asym_id)
@@ -1639,7 +1643,7 @@ class Scorer:
                     instance_chain=f"0.{asym_id}",
                     asym_id=asym_id,
                     is_proper=True,
-                    is_3d_score_able=True,
+                    is_shape_comparable=True,
                     protein_chains_asym_id=[],
                     num_pocket_residues=0,
                     num_interactions=0,
@@ -3489,8 +3493,8 @@ class Scorer:
                         if (
                             ligand_3d_candidates is not None
                             and pocket_qcov > 0
-                            and query_ligand.is_3d_score_able
-                            and target_ligand.is_3d_score_able
+                            and query_ligand.is_shape_comparable
+                            and target_ligand.is_shape_comparable
                         ):
                             ligand_3d_candidates.append(
                                 {

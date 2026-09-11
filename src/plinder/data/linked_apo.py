@@ -289,8 +289,7 @@ def build_apo_candidate_manifest(
             .to_dict("records")
         )
         raise ValueError(
-            "biological-assembly membership has duplicate chain instances: "
-            f"{examples}"
+            f"biological-assembly membership has duplicate chain instances: {examples}"
         )
     receptor_membership = (
         membership.loc[

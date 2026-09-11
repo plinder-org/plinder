@@ -251,6 +251,14 @@ class PlinderDataIngestFlow(FlowSpec):
     @step
     def make_ligand_mmp_pairs(self):
         self.pipeline.make_ligand_mmp_pairs(threads=WORKSTATION["cpu"])
+        self.next(self.make_ccd_ligand_dbs)
+
+    @kubernetes(**{**K8S, **WORKSTATION})
+    @environment(**ENV)
+    @retry
+    @step
+    def make_ccd_ligand_dbs(self):
+        self.pipeline.make_ccd_ligand_dbs(threads=WORKSTATION["cpu"])
         self.next(self.make_sub_dbs)
 
     @kubernetes(**{**K8S, **DATABASES})

@@ -1328,7 +1328,7 @@ def _load_target_chain_mapping(
     ].tolist()
     if missing:
         raise ValueError(
-            "PLINDER alignment lookup cannot map target chains: " f"{missing[:10]}"
+            f"PLINDER alignment lookup cannot map target chains: {missing[:10]}"
         )
     return mapped
 
@@ -2295,7 +2295,11 @@ def write_custom_aligned_pocket_residues(
                             pocket_membership.setdefault(
                                 (str(entry_id), asym_id, int(residue_number)), []
                             ).append(
-                                (str(system.id), str(ligand.id), str(instance_chain))
+                                (
+                                    str(system.id),
+                                    str(ligand.id),
+                                    str(instance_chain),
+                                )
                             )
 
         rows: list[dict[str, Any]] = []

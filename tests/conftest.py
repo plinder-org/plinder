@@ -98,6 +98,12 @@ def sdf_5a7w_lig():
     return test_asset_fp / "xx/pdb_00005a7w/5a7w_A_35M.sdf"
 
 
+# To test branched glycans (chain E is a branched NAG-FUC-NAG)
+@pytest.fixture(scope="session")
+def cif_2dty():
+    return test_asset_fp / "xx/pdb_00002dty/pdb_00002dty_xyz-enrich.cif.gz"
+
+
 # To test fragmented ligands, carbs
 @pytest.fixture(scope="session")
 def cif_6fx1():
@@ -260,7 +266,6 @@ def cif_2y4i_system():
     return test_asset_fp / "xx/pdb_00002y4i/pdb_00002y4i_xyz-enrich.cif.gz"
 
 
-# TODO: PLIP is no longer used — these fixtures test interaction detection (now via peppr)
 # CHK1 inhib 1
 @pytest.fixture(scope="session")
 def cif_2gdo():

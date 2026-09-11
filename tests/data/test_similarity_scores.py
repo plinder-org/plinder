@@ -1163,7 +1163,7 @@ def test_entry_views_keep_ligand_pockets_separate() -> None:
                 "ligand_instance_chain": "1.B",
                 "ligand_asym_id": "B",
                 "ligand_num_pocket_residues": 2,
-                "ligand_is_3d_score_able": False,
+                "ligand_is_shape_comparable": False,
                 "ligand_neighboring_residues": ["1.A_10_9_10", "1.A_20_19_20"],
                 "ligand_interactions": ["1.A_10_type:hydrogen_bonds"],
             },
@@ -1173,7 +1173,7 @@ def test_entry_views_keep_ligand_pockets_separate() -> None:
                 "ligand_instance_chain": "1.C",
                 "ligand_asym_id": "C",
                 "ligand_num_pocket_residues": 1,
-                "ligand_is_3d_score_able": True,
+                "ligand_is_shape_comparable": True,
                 "ligand_neighboring_residues": ["1.A_30_29_30"],
                 "ligand_interactions": ["1.A_30_type:hydrophobic_contacts"],
             },
@@ -1187,8 +1187,8 @@ def test_entry_views_keep_ligand_pockets_separate() -> None:
         "1.A": {10: 9, 20: 19}
     }
     assert system.ligands["1.C"].pocket_residue_number_to_index == {"1.A": {30: 29}}
-    assert not system.ligands["1.B"].is_3d_score_able
-    assert system.ligands["1.C"].is_3d_score_able
+    assert not system.ligands["1.B"].is_shape_comparable
+    assert system.ligands["1.C"].is_shape_comparable
     # The existing system view remains the union for backward compatibility.
     assert system.pocket_residue_number_to_index == {"1.A": {10: 9, 20: 19, 30: 29}}
 
@@ -1590,10 +1590,10 @@ def test_ligand_pair_shape_scores_gate_sdf_access_and_cache(
     )
     assert resolved == []
 
-    query.is_3d_score_able = False
+    query.is_shape_comparable = False
     assert scorer.get_ligand_pair_shape_scores(tmp_path, query, target, 0.5) == {}
     assert resolved == []
-    query.is_3d_score_able = True
+    query.is_shape_comparable = True
 
     scores = scorer.get_ligand_pair_shape_scores(tmp_path, query, target, 0.5)
     assert set(scores) == {
@@ -2512,13 +2512,13 @@ def test_ligand_3d_score_ability_uses_canonical_sdf_and_caches_by_path(
     valid_sdf.parent.mkdir(parents=True)
     valid_sdf.write_bytes(SDF_FILE.read_bytes())
     calls: list[Path] = []
-    original = scoring_module.is_ligand_3d_score_able
+    original = scoring_module.is_ligand_shape_comparable
 
     def observed(sdf_file: Path) -> bool:
         calls.append(sdf_file)
         return original(sdf_file)
 
-    monkeypatch.setattr(scoring_module, "is_ligand_3d_score_able", observed)
+    monkeypatch.setattr(scoring_module, "is_ligand_shape_comparable", observed)
     ligands = pd.DataFrame(
         {
             "pdb_id": ["1abc", "1abc", "1abc"],
@@ -2529,7 +2529,7 @@ def test_ligand_3d_score_ability_uses_canonical_sdf_and_caches_by_path(
 
     annotated = annotate_ligand_3d_score_ability(ligands, data_dir=tmp_path)
 
-    assert annotated["ligand_is_3d_score_able"].tolist() == [True, True, False]
+    assert annotated["ligand_is_shape_comparable"].tolist() == [True, True, False]
     assert calls == [valid_sdf, valid_sdf.with_name("C.sdf")]
 
 
@@ -2540,7 +2540,7 @@ def test_ligand_3d_score_ability_reuses_success_for_same_molecular_graph(
     second_sdf = tmp_path / "second.sdf"
     first_sdf.write_bytes(SDF_FILE.read_bytes())
     second_sdf.write_bytes(SDF_FILE.read_bytes())
-    scoring_module._LIGAND_3D_SCORE_ABILITY_CACHE.clear()
+    scoring_module._LIGAND_SHAPE_COMPARABILITY_CACHE.clear()
     align_calls = 0
     sucos_calls = 0
     original_align = scoring_module.align_molecules
@@ -2560,10 +2560,10 @@ def test_ligand_3d_score_ability_reuses_success_for_same_molecular_graph(
     monkeypatch.setattr(scoring_module, "get_sucos_score", observed_sucos)
 
     try:
-        assert scoring_module.is_ligand_3d_score_able(first_sdf)
-        assert scoring_module.is_ligand_3d_score_able(second_sdf)
+        assert scoring_module.is_ligand_shape_comparable(first_sdf)
+        assert scoring_module.is_ligand_shape_comparable(second_sdf)
     finally:
-        scoring_module._LIGAND_3D_SCORE_ABILITY_CACHE.clear()
+        scoring_module._LIGAND_SHAPE_COMPARABILITY_CACHE.clear()
 
     assert align_calls == 1
     assert sucos_calls == 1
@@ -3025,7 +3025,11 @@ def test_holo_scores_are_emitted_per_ligand_pair(tmp_path, monkeypatch) -> None:
         assert query_protein_chains is not None
         pair = (query_protein_chains[0], target_protein_chains[0])
         protein_calls.append(
-            (tuple(query_protein_chains), tuple(target_protein_chains), query_length)
+            (
+                tuple(query_protein_chains),
+                tuple(target_protein_chains),
+                query_length,
+            )
         )
         return (
             {"protein_qcov_foldseek_weighted_sum": [pair]},

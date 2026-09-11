@@ -77,7 +77,7 @@ def _write_alignment_chain_lookup(data_dir: Path) -> None:
                 ("ligand_id", pa.string()),
                 ("ligand_asym_id", pa.string()),
                 ("ligand_is_proper", pa.bool_()),
-                ("ligand_is_3d_score_able", pa.bool_()),
+                ("ligand_is_shape_comparable", pa.bool_()),
                 ("ligand_protein_chains_asym_id", pa.list_(pa.string())),
                 ("ligand_neighboring_residues", pa.list_(pa.string())),
                 ("ligand_interacting_residues", pa.list_(pa.string())),
@@ -158,7 +158,7 @@ def test_make_ligand_pocket_representatives_collapses_assembly_copies(
             "ligand_id": ["ligand-1", "ligand-2", "ligand-3"],
             "ligand_asym_id": ["L"] * 3,
             "ligand_is_proper": [True] * 3,
-            "ligand_is_3d_score_able": [True] * 3,
+            "ligand_is_shape_comparable": [True] * 3,
             "ligand_protein_chains_asym_id": [
                 ["1.A", "1.N"],
                 ["2.A", "2.N"],
@@ -341,7 +341,7 @@ def test_ligand_pocket_qcov_uses_pocket_optimal_receptor_mapping(tmp_path):
                 "representative_system_id": "query-system",
                 "entry_pdb_id": "1abc",
                 "ligand_asym_id": "L",
-                "ligand_is_3d_score_able": True,
+                "ligand_is_shape_comparable": True,
                 "receptor_set_id": "query-receptors",
                 "receptor_chain_asym_ids": ["A", "B"],
                 "pocket_residues": ["A_1_0_1", "B_2_1_2"],
@@ -352,7 +352,7 @@ def test_ligand_pocket_qcov_uses_pocket_optimal_receptor_mapping(tmp_path):
                 "representative_system_id": "target-system",
                 "entry_pdb_id": "2def",
                 "ligand_asym_id": "M",
-                "ligand_is_3d_score_able": True,
+                "ligand_is_shape_comparable": True,
                 "receptor_set_id": "target-receptors",
                 "receptor_chain_asym_ids": ["X", "Y"],
                 "pocket_residues": ["X_10_0_10", "Y_20_1_20"],
@@ -1042,6 +1042,9 @@ def test_scoring_finalization_stage_order_and_partitions():
         "make_ligand_mmp_pairs"
     )
     assert tasks.STAGES.index("make_ligand_mmp_pairs") < tasks.STAGES.index(
+        "make_ccd_ligand_dbs"
+    )
+    assert tasks.STAGES.index("make_ccd_ligand_dbs") < tasks.STAGES.index(
         "make_sub_dbs"
     )
     assert tasks.STAGES.index("map_batch_alignments") < tasks.STAGES.index(
@@ -1653,7 +1656,7 @@ def test_score_work_plan_balances_expensive_queries_into_fixed_batches(tmp_path)
             "ligand_id": f"{pdb_id}__1__1.{ligand_asym_id}",
             "ligand_asym_id": ligand_asym_id,
             "ligand_is_proper": True,
-            "ligand_is_3d_score_able": True,
+            "ligand_is_shape_comparable": True,
             "system_type": "holo",
             "system_protein_chains_asym_id": ["1.A"],
             "system_num_protein_chains": 1,
@@ -1747,7 +1750,7 @@ def test_score_work_plan_ignores_nonproper_ligands_in_query_cap(tmp_path) -> Non
             "ligand_id": [f"1abc__1__1.{value}" for value in "LMNOPQ"],
             "ligand_asym_id": list("LMNOPQ"),
             "ligand_is_proper": [True, False, False, False, False, False],
-            "ligand_is_3d_score_able": [True] * 6,
+            "ligand_is_shape_comparable": [True] * 6,
             "system_type": ["holo"] * 6,
             "system_protein_chains_asym_id": [[f"1.{chain}" for chain in "ABCDEF"]] * 6,
             "system_num_protein_chains": [6] * 6,
@@ -1801,7 +1804,7 @@ def test_score_work_plan_keeps_over_cap_holo_systems_as_targets(tmp_path) -> Non
             "ligand_id": "1abc__1__1.L",
             "ligand_asym_id": "L",
             "ligand_is_proper": True,
-            "ligand_is_3d_score_able": True,
+            "ligand_is_shape_comparable": True,
             "system_type": "holo",
             "system_protein_chains_asym_id": ["1.A"],
             "system_num_protein_chains": 1,
@@ -2478,7 +2481,7 @@ def test_score_repair_scores_only_new_canonical_ligand_pairs(
             "ligand_asym_id": ["B", "Y", "Z"],
             "ligand_num_heavy_atoms": [10, 20, 30],
             "ligand_is_proper": [True, True, True],
-            "ligand_is_3d_score_able": [True, True, True],
+            "ligand_is_shape_comparable": [True, True, True],
             "system_type": ["holo", "holo", "holo"],
         }
     ).to_parquet(index / "annotation_table.parquet", index=False)
@@ -2727,7 +2730,7 @@ def test_ligand_3d_plan_deduplicates_positive_pocket_candidates(tmp_path) -> Non
             "ligand_asym_id": ["B", "Y", "Z"],
             "ligand_num_heavy_atoms": [10, 20, 30],
             "ligand_is_proper": [True] * 3,
-            "ligand_is_3d_score_able": [True] * 3,
+            "ligand_is_shape_comparable": [True] * 3,
             "system_type": ["holo"] * 3,
         }
     ).to_parquet(index / "annotation_table.parquet", index=False)
@@ -2804,7 +2807,7 @@ def test_ligand_3d_plan_deduplicates_positive_pocket_candidates(tmp_path) -> Non
             "representative_system_id": system_id,
             "entry_pdb_id": entry_id,
             "ligand_asym_id": asym_id,
-            "ligand_is_3d_score_able": True,
+            "ligand_is_shape_comparable": True,
             "receptor_set_id": f"{entry_id}-receptor",
             "receptor_chain_asym_ids": ["A"],
             "pocket_residues": ["A_1_0_1"],
@@ -3112,7 +3115,7 @@ def test_finalize_ligand_3d_scores_validates_pair_and_packed_shards(
             "ligand_asym_id": ["B", "Y"],
             "ligand_num_heavy_atoms": [10, 20],
             "ligand_is_proper": [True, True],
-            "ligand_is_3d_score_able": [True, True],
+            "ligand_is_shape_comparable": [True, True],
             "system_type": ["holo", "holo"],
         }
     ).to_parquet(index / "annotation_table.parquet", index=False)
@@ -3652,14 +3655,24 @@ def test_make_dbs_uses_configured_source_files(tmp_path, monkeypatch) -> None:
         tasks.databases,
         "create_db",
         lambda source, output, kind, threads: create_calls.append(
-            (source, output, kind, threads)
+            (
+                source,
+                output,
+                kind,
+                threads,
+            )
         ),
     )
     monkeypatch.setattr(
         tasks.databases,
         "create_db_index",
         lambda output, kind, tmp_dir, threads: index_calls.append(
-            (output, kind, tmp_dir, threads)
+            (
+                output,
+                kind,
+                tmp_dir,
+                threads,
+            )
         ),
     )
 
@@ -3734,7 +3747,12 @@ def test_make_dbs_rebuilds_foldseek_when_input_manifest_changes(
         tasks.databases,
         "create_db",
         lambda source, output, kind, threads: create_calls.append(
-            (source, output, kind, threads)
+            (
+                source,
+                output,
+                kind,
+                threads,
+            )
         ),
     )
 
@@ -4331,7 +4349,7 @@ def test_alignment_chain_lookup_compacts_mapping_inputs(tmp_path) -> None:
             "ligand_id": ["1abc__1__1.L", "1abc__1__1.M"],
             "ligand_asym_id": ["L", "M"],
             "ligand_is_proper": [True, False],
-            "ligand_is_3d_score_able": [True, False],
+            "ligand_is_shape_comparable": [True, False],
             "ligand_protein_chains_asym_id": [["1.A"], ["1.A"]],
             "ligand_neighboring_residues": [
                 ["1.A_10_9_10", "1.A_11_10_11"],
@@ -4438,7 +4456,7 @@ def test_alignment_chain_lookup_keeps_identity_when_only_system_rows_change(
             "ligand_id": ["1abc__1__1.B"],
             "ligand_asym_id": ["B"],
             "ligand_is_proper": [True],
-            "ligand_is_3d_score_able": [True],
+            "ligand_is_shape_comparable": [True],
             "ligand_protein_chains_asym_id": [["1.A"]],
             "ligand_neighboring_residues": [["1.A_10_9_10"]],
             "ligand_interacting_residues": [["1.A_10_9_10"]],
@@ -4490,7 +4508,7 @@ def test_alignment_chain_lookup_replaces_a_legacy_schema(tmp_path: Path) -> None
             "ligand_id": ["1abc__1__1.B"],
             "ligand_asym_id": ["B"],
             "ligand_is_proper": [True],
-            "ligand_is_3d_score_able": [True],
+            "ligand_is_shape_comparable": [True],
             "ligand_protein_chains_asym_id": [["1.A"]],
             "ligand_neighboring_residues": [["1.A_10_9_10"]],
             "ligand_interacting_residues": [["1.A_10_9_10"]],
@@ -4976,7 +4994,7 @@ def test_ligand_similarity_export_retains_complete_factor_scores(tmp_path):
             ],
             "system_type": ["holo"] * 4,
             "ligand_is_proper": [True, True, True, False],
-            "ligand_is_3d_score_able": [True, True, False, True],
+            "ligand_is_shape_comparable": [True, True, False, True],
         }
     ).to_parquet(index / "annotation_table.parquet", index=False)
 
@@ -5486,7 +5504,12 @@ def test_interface_score_cli_exposes_plan_array_and_finalizer(tmp_path):
     from plinder.data.pipeline.score import _parser
 
     planned = _parser().parse_args(
-        ["plan-interface-scores", str(tmp_path), "--batch-size", "3"]
+        [
+            "plan-interface-scores",
+            str(tmp_path),
+            "--batch-size",
+            "3",
+        ]
     )
     assert planned.batch_size == 3
     shard = _parser().parse_args(
@@ -5756,6 +5779,8 @@ def test_metaflow_graph_uses_canonical_ligand_archive_stage():
     assert "self.pipeline.annotate_ligand_similarity()" in flow
     assert "self.next(self.make_ligand_mmp_pairs)" in flow
     assert "self.pipeline.make_ligand_mmp_pairs" in flow
+    assert "self.next(self.make_ccd_ligand_dbs)" in flow
+    assert "self.pipeline.make_ccd_ligand_dbs" in flow
     assert "self.next(self.scatter_collate_partitions)" in flow
     assert "self.next(self.scatter_collate_alignments)" in flow
     assert "self.pipeline.collate_alignments(self.input)" in flow
@@ -5865,7 +5890,7 @@ def test_v3_collation_slurm_uses_local_scratch_and_long_qos_for_global_steps():
 
     assert "${SLURM_TMPDIR:-/scratch/${USER}/plinder-collate-" in script
     assert (
-        "sbatch \\\n  " '--output="${OUTPUT_ROOT}/logs/collate-plan-start-%j.out"'
+        'sbatch \\\n  --output="${OUTPUT_ROOT}/logs/collate-plan-start-%j.out"'
     ) in documentation
     assert (
         "sbatch \\\n  --array=0-LAST_PLAN_BATCH_INDEX "
@@ -5873,7 +5898,7 @@ def test_v3_collation_slurm_uses_local_scratch_and_long_qos_for_global_steps():
         '--output="${OUTPUT_ROOT}/logs/collate-plan-%A-%a.out"'
     ) in documentation
     assert (
-        "sbatch \\\n  --qos=6hours \\\n  " "--cpus-per-task=4 --mem=48G"
+        "sbatch \\\n  --qos=6hours \\\n  --cpus-per-task=4 --mem=48G"
     ) in documentation
 
 

@@ -222,7 +222,11 @@ def _interface_side_index(
         ):
             asym_id = chain.split(".", maxsplit=1)[-1]
             sides[(interface.pdb_id, asym_id)].append(
-                (interface.id, side, frozenset(residues))
+                (
+                    interface.id,
+                    side,
+                    frozenset(residues),
+                )
             )
     return sides
 

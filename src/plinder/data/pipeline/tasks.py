@@ -30,7 +30,11 @@ from plinder.core.scores.metrics import is_chemical_cluster_metric
 from plinder.core.utils import schemas
 from plinder.core.utils.log import setup_logger
 from plinder.data import clusters, databases
-from plinder.data.annotations import get_similarity_scores, mmpdb_utils
+from plinder.data.annotations import (
+    ccd_ligand_dbs,
+    get_similarity_scores,
+    mmpdb_utils,
+)
 from plinder.data.pipeline import collate, io, utils
 from plinder.data.pipeline.ingest import (
     balance_entries,
@@ -79,6 +83,7 @@ STAGES = [
     "make_mhfp6_scores",
     "annotate_ligand_similarity",
     "make_ligand_mmp_pairs",
+    "make_ccd_ligand_dbs",
     "make_sub_dbs",
     "run_batch_searches",
     "map_batch_alignments",
@@ -903,8 +908,7 @@ def make_interface_representatives(
     if membership_rows != source_rows:
         rmtree(working_root)
         raise ValueError(
-            "interface membership is incomplete: "
-            f"rows={membership_rows}/{source_rows}"
+            f"interface membership is incomplete: rows={membership_rows}/{source_rows}"
         )
     if _interface_representative_source_signature(data_dir) != source_signature:
         rmtree(working_root)
@@ -1013,7 +1017,7 @@ def make_ligand_pocket_representatives(
     if not force_update and current is not None:
         LOG.info(
             "make_ligand_pocket_representatives: reusing %d representatives "
-            "for %d scoreable ligands",
+            "for %d shape-comparable ligands",
             current["representative_ligand_count"],
             current["ligand_count"],
         )
@@ -1054,8 +1058,8 @@ def make_ligand_pocket_representatives(
                 system_id,
                 ligand_id,
                 ligand_asym_id,
-                coalesce(ligand_is_3d_score_able, false)
-                    AS ligand_is_3d_score_able,
+                coalesce(ligand_is_shape_comparable, false)
+                    AS ligand_is_shape_comparable,
                 ligand_protein_chains_asym_id,
                 ligand_neighboring_residues,
                 ligand_interacting_residues,
@@ -1121,7 +1125,7 @@ def make_ligand_pocket_representatives(
                 ligands.system_id,
                 ligands.ligand_id,
                 ligands.ligand_asym_id,
-                ligands.ligand_is_3d_score_able,
+                ligands.ligand_is_shape_comparable,
                 receptors.receptor_set_id,
                 receptors.receptor_chain_asym_ids,
                 coalesce(pockets.pocket_residues, []::VARCHAR[])
@@ -1139,7 +1143,7 @@ def make_ligand_pocket_representatives(
                 arg_min(system_id, ligand_id)::VARCHAR AS representative_system_id,
                 entry_pdb_id,
                 ligand_asym_id,
-                ligand_is_3d_score_able,
+                ligand_is_shape_comparable,
                 receptor_set_id,
                 receptor_chain_asym_ids,
                 pocket_residues,
@@ -1148,7 +1152,7 @@ def make_ligand_pocket_representatives(
             GROUP BY
                 entry_pdb_id,
                 ligand_asym_id,
-                ligand_is_3d_score_able,
+                ligand_is_shape_comparable,
                 receptor_set_id,
                 receptor_chain_asym_ids,
                 pocket_residues,
@@ -1171,8 +1175,8 @@ def make_ligand_pocket_representatives(
                 INNER JOIN representative_groups AS representatives
                   ON ligands.entry_pdb_id = representatives.entry_pdb_id
                  AND ligands.ligand_asym_id = representatives.ligand_asym_id
-                 AND ligands.ligand_is_3d_score_able
-                        = representatives.ligand_is_3d_score_able
+                 AND ligands.ligand_is_shape_comparable
+                        = representatives.ligand_is_shape_comparable
                  AND ligands.receptor_set_id = representatives.receptor_set_id
                  AND ligands.receptor_chain_asym_ids
                         = representatives.receptor_chain_asym_ids
@@ -1288,8 +1292,7 @@ def make_ligand_pocket_representatives(
         if not observed.equals(schema):
             rmtree(working_root)
             raise ValueError(
-                f"ligand pocket representative {key} has unexpected schema: "
-                f"{observed}"
+                f"ligand pocket representative {key} has unexpected schema: {observed}"
             )
     ligand_count = pq.ParquetFile(temporary_paths["membership"]).metadata.num_rows
     representative_count = pq.ParquetFile(
@@ -1715,6 +1718,25 @@ def make_ligand_mmp_pairs(
         threads=threads,
         force_update=force_update,
     )
+
+
+def make_ccd_ligand_dbs(
+    *,
+    data_dir: Path,
+    scratch_dir: Path,
+    threads: int,
+    force_update: bool = False,
+    minimum_similarity: float = 30.0,
+) -> Path:
+    """Build the CCD-anchored MMP/ECFP4 databases and the ligand-to-CCD match sidecar."""
+    ccd_ligand_dbs.make_ccd_ligand_dbs(
+        data_dir=data_dir,
+        scratch_dir=scratch_dir,
+        threads=threads,
+        force_update=force_update,
+        minimum_similarity=minimum_similarity,
+    )
+    return ccd_ligand_dbs.make_ligand_ccd_match(data_dir=data_dir)
 
 
 def _interface_scoring_chain_keys(data_dir: Path) -> pd.DataFrame:
@@ -3961,7 +3983,7 @@ def make_linked_apo_structures(
     )
     linked_rows = pq.ParquetFile(output).metadata.num_rows
     LOG.info(
-        "make_linked_apo_structures: selected %d links from " "%d apo-chain candidates",
+        "make_linked_apo_structures: selected %d links from %d apo-chain candidates",
         linked_rows,
         len(candidates),
     )
@@ -4028,7 +4050,7 @@ def make_symmetric_edge_fragments(
                 copyfile(source, local_source)
                 local_sources.append(local_source)
             LOG.info(
-                "symmetric fragment batch copied: progress=%d/%d key=%s " "sources=%d",
+                "symmetric fragment batch copied: progress=%d/%d key=%s sources=%d",
                 batch_index + 1,
                 len(batches),
                 batch["key"],

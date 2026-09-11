@@ -20,7 +20,10 @@ Filters: TypeAlias = list[Filter | list[Filter]] | None
 JoinKeys: TypeAlias = tuple[tuple[str, str], ...]
 
 DISABLED_ANNOTATION_COLUMNS = frozenset(
-    {"system_has_binding_affinity", "ligand_binding_affinity"}
+    {
+        "system_has_binding_affinity",
+        "ligand_binding_affinity",
+    }
 )
 
 
@@ -437,8 +440,7 @@ def query_table(
     missing = [name for name in requested if name not in output_columns]
     if missing:
         raise ValueError(
-            f"columns {missing} are unavailable; choose from: "
-            f"{', '.join(output_order)}"
+            f"columns {missing} are unavailable; choose from: {', '.join(output_order)}"
         )
     select_sql = ", ".join(
         f"{output_columns[name]} AS {_quote_identifier(name)}" for name in requested

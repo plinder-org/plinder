@@ -1218,7 +1218,11 @@ def test_atoms_to_rdkit_mol_keeps_generic_and_partial_aromatic_bonds():
     atoms.atom_name = [f"C{i}" for i in range(8)]
     angle = np.arange(6) * np.pi / 3
     atoms.coord[:6] = np.column_stack(
-        [1.4 * np.cos(angle), 1.4 * np.sin(angle), np.zeros(6)]
+        [
+            1.4 * np.cos(angle),
+            1.4 * np.sin(angle),
+            np.zeros(6),
+        ]
     )
     atoms.coord[6:] = [[10, 0, 0], [11.3, 0, 0]]
     atoms.bonds = struc.BondList(
@@ -1301,3 +1305,67 @@ def test_bird_mapping_is_keyed_by_prd_id():
     bird = get_chain_external_mappings(block)["B"]["BIRD"]
 
     assert list(bird) == ["PRD_002214"]  # PRD code, not asym_id "B"
+
+
+def test_build_biounit_drops_ligand_copies_on_symmetry_axes(test_dir):
+    from plinder.data.annotations.cif_utils import build_biounit, read_mmcif_file
+
+    cif_file = read_mmcif_file(
+        test_dir / "interfaces/a7/pdb_00002a79/pdb_00002a79_xyz-enrich.cif.gz"
+    )
+    raw = pdbx.get_assembly(
+        cif_file,
+        assembly_id="1",
+        model=1,
+        use_author_fields=False,
+        extra_fields=["label_asym_id"],
+    )
+    potassium = sorted(set(raw.label_asym_id[raw.res_name == "K"]))
+    assert potassium == ["F", "G", "H", "I", "J", "K"]
+    assert all(
+        len(set(raw.sym_id[raw.label_asym_id == asym_id])) == 4 for asym_id in potassium
+    )
+
+    chains = set(build_biounit(cif_file, "1").chain_id)
+
+    # the four operators map each axis ion onto itself: one copy survives
+    for asym_id in potassium:
+        assert {c for c in chains if c.endswith(f".{asym_id}")} == {f"1.{asym_id}"}
+    # protein copies are real and all kept
+    assert {c for c in chains if c.endswith(".A")} == {"1.A", "2.A", "3.A", "4.A"}
+    assert len(chains) == 34
+
+
+def test_drop_self_clashing_symmetry_copies_keeps_lowest_copy_and_polymers():
+    import biotite.structure as struc
+    from plinder.data.annotations.cif_utils import drop_self_clashing_symmetry_copies
+
+    ligand = np.array([[0.0, 0.0, 0.0], [1.5, 0.0, 0.0], [0.0, 1.5, 0.0]])
+    blocks = [
+        ("L", "LIG", 0, ligand),  # identity copy
+        ("L", "LIG", 1, ligand),  # coincident copy -> dropped
+        ("L", "LIG", 2, ligand + 20.0),  # genuine second copy -> kept
+        ("L", "LIG", 3, ligand + np.array([[0.0, 0.0, 0.0], [5.0, 0, 0], [5.0, 0, 0]])),
+        ("P", "ALA", 0, ligand),  # polymer copies are never touched
+        ("P", "ALA", 1, ligand),
+    ]
+    atoms = struc.AtomArray(sum(len(coord) for *_, coord in blocks))
+    atoms.coord = np.concatenate([coord for *_, coord in blocks])
+    for name, values in {
+        "label_asym_id": [asym for asym, _, _, coord in blocks for _ in coord],
+        "chain_id": [asym for asym, _, _, coord in blocks for _ in coord],
+        "res_name": [res for _, res, _, coord in blocks for _ in coord],
+        "sym_id": [sym for _, _, sym, coord in blocks for _ in coord],
+        "atom_name": ["N", "CA", "C"] * len(blocks),
+        "element": ["N", "C", "C"] * len(blocks),
+    }.items():
+        atoms.set_annotation(name, np.array(values))
+    atoms.res_id = np.ones(len(atoms), dtype=int)
+    atoms.hetero = atoms.res_name == "LIG"
+
+    kept = drop_self_clashing_symmetry_copies(atoms)
+
+    # copy 3 shares one of three atoms with copy 0 (33% < 50%) and stays
+    assert sorted(set(kept.sym_id[kept.label_asym_id == "L"])) == [0, 2, 3]
+    assert sorted(set(kept.sym_id[kept.label_asym_id == "P"])) == [0, 1]
+    assert drop_self_clashing_symmetry_copies(kept) is kept

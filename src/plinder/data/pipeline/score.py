@@ -659,7 +659,7 @@ def plan_bounded_score_repair(
     invalid = sorted(requested.difference(derived_drops))
     if invalid:
         raise ValueError(
-            "bounded repairs require derived-scoring query drops: " f"{invalid[:20]}"
+            f"bounded repairs require derived-scoring query drops: {invalid[:20]}"
         )
     request_signature = _source_signature(pdb_manifest)
     if not requested:
@@ -919,7 +919,7 @@ def repair_target_score_remainders(
     )
     if invalid_modes:
         raise ValueError(
-            "target remainder repair received non-target modes: " f"{invalid_modes}"
+            f"target remainder repair received non-target modes: {invalid_modes}"
         )
 
     stalled = incomplete[0]
@@ -1162,7 +1162,7 @@ def plan_score_repair_ligand_3d(
                 FROM read_parquet('{annotation.as_posix()}')
                 WHERE system_type = 'holo'
                   AND coalesce(ligand_is_proper, false)
-                  AND coalesce(ligand_is_3d_score_able, false)
+                  AND coalesce(ligand_is_shape_comparable, false)
                 GROUP BY entry_pdb_id, ligand_asym_id
             ) TO '{ligand_sizes.as_posix()}' (
                 FORMAT PARQUET, COMPRESSION ZSTD
@@ -1945,7 +1945,7 @@ def plan_score_batches(
                     )::DOUBLE AS proper_ligand_rows,
                     count(DISTINCT annotation.ligand_asym_id) FILTER (
                         WHERE coalesce(annotation.ligand_is_proper, false)
-                          AND coalesce(annotation.ligand_is_3d_score_able, false)
+                          AND coalesce(annotation.ligand_is_shape_comparable, false)
                     )::DOUBLE AS scoreable_canonical_ligands
                 FROM holo_annotation AS annotation
                 INNER JOIN target_systems USING (entry_pdb_id, system_id)
@@ -1958,7 +1958,7 @@ def plan_score_batches(
                     )::DOUBLE AS proper_ligand_rows,
                     count(DISTINCT annotation.ligand_asym_id) FILTER (
                         WHERE coalesce(annotation.ligand_is_proper, false)
-                          AND coalesce(annotation.ligand_is_3d_score_able, false)
+                          AND coalesce(annotation.ligand_is_shape_comparable, false)
                     )::DOUBLE AS scoreable_canonical_ligands
                 FROM holo_annotation AS annotation
                 INNER JOIN eligible_systems USING (entry_pdb_id, system_id)
@@ -2267,7 +2267,7 @@ def plan_ligand_3d_batches(
                     FROM read_parquet('{annotation.as_posix()}')
                     WHERE system_type = 'holo'
                       AND coalesce(ligand_is_proper, false)
-                      AND coalesce(ligand_is_3d_score_able, false)
+                      AND coalesce(ligand_is_shape_comparable, false)
                     GROUP BY entry_pdb_id, ligand_asym_id
                 ), scoreable_pairs AS (
                     SELECT candidate_pairs.*,
@@ -4688,7 +4688,7 @@ def materialize_ligand_3d_pair_candidates(
                                 entry_pdb_id,
                                 ligand_asym_id
                             FROM read_parquet('{representatives.as_posix()}')
-                            WHERE coalesce(ligand_is_3d_score_able, false)
+                            WHERE coalesce(ligand_is_shape_comparable, false)
                         )
                         SELECT
                             query.entry_pdb_id::VARCHAR AS query_entry,
@@ -5086,8 +5086,7 @@ def score_interface_qcov_shards(
             )
             if wrong_shard:
                 raise ValueError(
-                    f"query entries do not belong to shard {shard}: "
-                    f"{wrong_shard[:10]}"
+                    f"query entries do not belong to shard {shard}: {wrong_shard[:10]}"
                 )
             inputs = {**inputs, "query_entries": sorted(query_entries)}
         output = (
@@ -6154,8 +6153,7 @@ def finalize_interface_score_repair(
         _atomic_json(payload, output.with_suffix(".json"))
         reports.append(payload)
         LOG.info(
-            "interface repair finalization: shards=%d/%d shard=%s "
-            "entries=%d rows=%d",
+            "interface repair finalization: shards=%d/%d shard=%s entries=%d rows=%d",
             len(reports),
             int(plan["shard_count"]),
             shard,
@@ -6644,7 +6642,7 @@ def finalize_ligand_similarity_scores(
                     100::TINYINT AS pocket_fident_qcov,
                     100::TINYINT AS pli_qcov,
                     CASE
-                        WHEN coalesce(ligand_is_3d_score_able, false)
+                        WHEN coalesce(ligand_is_shape_comparable, false)
                         THEN 100::TINYINT
                         ELSE NULL::TINYINT
                     END AS sucos_shape

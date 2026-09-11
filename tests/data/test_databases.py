@@ -160,7 +160,7 @@ def test_make_sub_db_selects_only_first_model_per_chain(tmp_path, monkeypatch):
 
     assert missing == []
     assert (output / "ids.tsv").read_text() == (
-        "0 pdb_00001abc_xyz-enrich_A 0\n" "2 pdb_00001abc_xyz-enrich_B 1\n"
+        "0 pdb_00001abc_xyz-enrich_A 0\n2 pdb_00001abc_xyz-enrich_B 1\n"
     )
 
 

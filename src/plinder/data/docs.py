@@ -56,6 +56,16 @@ DERIVED_COLUMN_DESCRIPTIONS = {
         "Full polymer sequence in one-letter code, keyed by the source "
         "asymmetric-chain ID"
     ),
+    "chain_sequence_noncanonical": (
+        "Full polymer sequence from _entity_poly.pdbx_seq_one_letter_code, with "
+        "modified residues as (CCD) tokens"
+    ),
+    "chain_modified_residues": (
+        "Non-canonical SEQRES monomers as {auth_seq}:{comp_id}:{asym}:{label_seq}"
+        ">{parent} (details), the residue address of ligand_covalent_linkages "
+        "(comp_id is entity_poly_seq.mon_id); unresolved positions have auth_seq ?; "
+        "parent and details from _pdbx_struct_mod_residue, else the CCD parent"
+    ),
     "biounit_id": "Biological assembly identifier",
     "chain_instance": (
         "Assembly chain instance encoded as <operation>.<label_asym_id>"
@@ -132,6 +142,11 @@ DERIVED_COLUMN_DESCRIPTIONS = {
     ),
     "interface_num_contact_residue_pairs": (
         "Number of residue pairs in contact across the protein interface"
+    ),
+    "interface_contact_area": (
+        "Voronota-LT contact area in square angstroms between the two chains in "
+        "the full biological assembly; null when the assembly tessellation was "
+        "skipped or failed"
     ),
     "prodigy_is_annotated": (
         "Whether PRODIGY-cryst features and a biological/crystal label are available"
@@ -216,7 +231,7 @@ DERIVED_COLUMN_DESCRIPTIONS = {
     "system_proper_unique_ccd_codes": (
         "Distinct CCD codes of proper ligands in the system"
     ),
-    "ligand_is_3d_score_able": (
+    "ligand_is_shape_comparable": (
         "Whether the canonical ligand SDF supports finite shape, color, and "
         "SuCOS self-scoring"
     ),
@@ -637,7 +652,12 @@ def write_column_descriptions(
     data_dir: Path,
     output_dir: Path = TABLE_TSV_DIR,
 ) -> None:
-    """Write one complete description TSV per published parquet table."""
+    """Write one complete description TSV per published parquet table.
+
+    TODO: the checked-in TSVs are hand-edited; nothing regenerates them or checks
+    their prose against the model descriptions. Discuss: build from the static
+    schemas already in code, add a parity test, run as a pre-commit hook.
+    """
     release = PlinderRelease(data_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     expected: set[Path] = set()

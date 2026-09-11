@@ -72,7 +72,10 @@ def scoring_fixture(
     )
     (data_dir / "splits").mkdir()
     pd.DataFrame(
-        {"system_id": rows["system_id"].unique(), "split": "train"}
+        {
+            "system_id": rows["system_id"].unique(),
+            "split": "train",
+        }
     ).to_parquet(data_dir / "splits" / "split.parquet", index=False)
 
     # Build a tiny seqres FASTA covering every chain in the two entries (not

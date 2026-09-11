@@ -34,7 +34,7 @@ def test_tablegen_renders_checked_in_table_descriptions(tmp_path, monkeypatch):
         encoding="utf-8",
     )
     (table_dir / "beta.tsv").write_text(
-        "Name\tType\tDescription\n" "score\tdouble\tSimilarity score\n",
+        "Name\tType\tDescription\nscore\tdouble\tSimilarity score\n",
         encoding="utf-8",
     )
     output_path = tmp_path / "table.html"
@@ -285,7 +285,10 @@ def test_system_validation_descriptions_reject_unrelated_columns():
         docs.get_table_column_descriptions(
             table_name="system_validation",
             schema=pa.schema(
-                [("system_id", pa.string()), ("ligand_smiles", pa.string())]
+                [
+                    ("system_id", pa.string()),
+                    ("ligand_smiles", pa.string()),
+                ]
             ),
         )
 
@@ -300,8 +303,7 @@ def test_table_descriptions_reject_retired_cover_modes():
             pa.schema(
                 [
                     (
-                        "tanimoto_similarity_ecfp4_1024__50__ligand__"
-                        "directed_set_cover",
+                        "tanimoto_similarity_ecfp4_1024__50__ligand__directed_set_cover",
                         pa.string(),
                     )
                 ]

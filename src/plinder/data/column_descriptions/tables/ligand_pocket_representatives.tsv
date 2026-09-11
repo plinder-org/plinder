@@ -3,7 +3,7 @@ representative_ligand_id	string	Ligand ID selected as the representative for a l
 representative_system_id	string	System ID selected as the representative for a ligand pocket or protein interface
 entry_pdb_id	string	RCSB PDB ID. See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_entry.id.html
 ligand_asym_id	string	Ligand chain asymmetric id
-ligand_is_3d_score_able	bool	Whether the canonical ligand SDF supports finite shape, color, and SuCOS self-scoring
+ligand_is_shape_comparable	bool	Whether the canonical ligand SDF supports finite shape, color, and SuCOS self-scoring
 receptor_set_id	string	Stable identifier for the representative set of receptor chains
 receptor_chain_asym_ids	list<element: string>	Asymmetric-chain IDs in the representative receptor-chain set
 pocket_residues	list<element: string>	Representative pocket residues encoded as asym ID, residue number, and zero-based resolved-chain index

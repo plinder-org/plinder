@@ -788,9 +788,7 @@ def _biounit_chain_roles(
     }
     missing = required.difference(biounit_chains.columns)
     if missing:
-        raise ValueError(
-            "biounit-chain metadata is missing columns " f"{sorted(missing)}"
-        )
+        raise ValueError(f"biounit-chain metadata is missing columns {sorted(missing)}")
     pdb_id = str(annotation.get("entry_pdb_id", ""))
     biounit_id = str(annotation.get("system_biounit_id", ""))
     selected = biounit_chains[
@@ -1057,6 +1055,6 @@ def save_reconstructed_system(
             for chain_id in sorted(receptor_chain_ids):
                 asym_id = chain_id.split(".", maxsplit=1)[-1]
                 fasta.write(
-                    f">{output_chain_ids[chain_id]}\n" f"{asym_to_sequence[asym_id]}\n"
+                    f">{output_chain_ids[chain_id]}\n{asym_to_sequence[asym_id]}\n"
                 )
     return requested

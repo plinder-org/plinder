@@ -34,6 +34,7 @@ ligand_asym_id	string	Ligand chain asymmetric id
 ligand_instance	int64	Biounit instance ID
 ligand_ccd_code	string	Ligand Chemical Component Dictionary (CCD) code
 ligand_molecule_type	string	Ligand molecule type derived from the mmCIF entity polymer type: SMALLMOLECULE, PEPTIDE, DNA, RNA, MIXED, SACCHARIDE, MACROCYCLES, or UNKNOWN
+ligand_is_subject_of_investigation	bool	Whether a component of this ligand is a depositor-flagged SUBJECT OF INVESTIGATION (_pdbx_entity_instance_feature); null when the entry lacks the annotation, i.e. most entries deposited before ~2019
 ligand_bird_id	string	BIRD/PRD reference-molecule id (PRD_xxxxxx) for multi-component ligands, from pdbx_molecule
 ligand_smiles	string	Ligand SMILES from CCD lookup or resolved 3D; for composite ligands, the valid representation with more heavy atoms is used and resolved connectivity wins ties
 ligand_resolved_smiles	string	SMILES from resolved 3D coordinates: bond orders from CCD template, stereochemistry from 3D geometry
@@ -46,9 +47,10 @@ ligand_num_hba	int64	Number of hydrogen bond acceptors
 ligand_num_rings	int64	Number of rings
 ligand_num_heavy_atoms	int64	Number of heavy atoms
 ligand_is_covalent	bool	Indicator of whether a ligand  is a covalent ligand
-ligand_covalent_linkages	list<element: string>	Ligand covalent linkages from _struct_conn (conn_type_id='covale'), format: {auth_seq}:{comp_id}:{chain}:{seq}:{atom}__{auth_seq}:{comp_id}:{chain}:{seq}:{atom}
+ligand_covalent_linkages	list<element: string>	Covalent links from _struct_conn (conn_type_id='covale') as receptor_end__ligand_end; each end is {auth_seq}:{comp_id}:{asym}:{label_seq}:{atom} (auth_seq_id with insertion code, label_comp_id, label_asym_id, label_seq_id or '.' for non-polymers, label_atom_id), the residue address shared with ligand_unresolved_atoms and chain_modified_residues
 ligand_num_resolved_heavy_atoms	int64	Number of resolved heavy atoms in a ligand
-ligand_num_unresolved_heavy_atoms	double	Number of unresolved heavy atoms in a ligand
+ligand_num_unresolved_heavy_atoms	double	Number of unresolved heavy atoms in a ligand: wwPDB unobserved or zero-occupancy atom records, else CCD template minus resolved atoms, else reference SMILES count minus resolved atoms
+ligand_unresolved_atoms	list<element: string>	Heavy atoms missing from the ligand model as {auth_seq}:{comp_id}:{asym}:{label_seq}:{atom}, the residue address of ligand_covalent_linkages; from wwPDB unobserved or zero-occupancy atom records, else the CCD template minus resolved atoms; leaving atoms of polymer and linked residues excluded
 ligand_tpsa	double	Topological polar surface area
 ligand_qed	double	Ligand QED score, a measure of drug-likeness, see https://www.rdkit.org/new_docs/source/rdkit.Chem.QED.html
 ligand_is_ion	bool	Indicator of whether a ligand  is an ion
@@ -86,7 +88,11 @@ ligand_water_residues	list<element: string>	Interacting water residues encoded a
 ligand_interactions	list<element: string>	Protein-ligand interactions encoded by receptor chain, residue number, and interaction type
 ligand_auth_id	string	Author chain ID of the ligand
 ligand_interacting_residues	list<element: string>	Dictionary of interacting residues, with {instance}.{chain} key and residue number value
+ligand_contact_area	double	Voronota-LT contact area in square angstroms between the ligand and the receptor polymer chains of its biological assembly; null when the assembly tessellation was skipped or failed
+ligand_contact_area_chains	list<element: string>	Instance chains in Voronota-LT contact with the ligand, receptor and ligand chains alike, positionally aligned with ligand_contact_area_values
+ligand_contact_area_values	list<element: double>	Voronota-LT contact area in square angstroms between the ligand and each chain in ligand_contact_area_chains
 ligand_neighboring_residues	list<element: string>	Dictionary of neighboring residues, with {instance}.{chain} key and residue number value
+ligand_pocket_unresolved_atoms	list<element: string>	Heavy atoms missing from pocket residues as {auth_seq}:{comp_id}:{asym}:{label_seq}:{atom}, the residue address of ligand_covalent_linkages
 system_pocket_CATH	string	Most frequent CATH mapping among pocket residues
 system_pocket_SCOP2B	string	Most frequent SCOP2B mapping among pocket residues
 system_pocket_Pfam	string	Most frequent Pfam mapping among pocket residues
@@ -112,7 +118,7 @@ system_ligand_has_ion	bool	Whether the system has an ion
 system_protein_chains_total_length	int64	Total length of all receptor polymer chains in the system
 system_unique_ccd_codes	string	Distinct ligand CCD codes in the system
 system_proper_unique_ccd_codes	string	Distinct CCD codes of proper ligands in the system
-ligand_is_3d_score_able	bool	Whether the canonical ligand SDF supports finite shape, color, and SuCOS self-scoring
+ligand_is_shape_comparable	bool	Whether the canonical ligand SDF supports finite shape, color, and SuCOS self-scoring
 ligand_interacting_ligand_chains_asym_id	list<element: string>	Chain asymmetric id
 system_pocket_SCOP2	string	Most frequent SCOP2 mapping among pocket residues
 ligand__members	struct<1.C: list<element: int64>, 1.D: list<element: int64>, 1.E: list<element: int64>, 1.F: list<element: int64>, 1.H: list<element: int64>, 1.I: list<element: int64>, 1.J: list<element: int64>, 1.K: list<element: int64>>	Residue numbers per member instance-chain (self, incl. covalent).          Falls back to the single primary chain for ligands built before         ``member_residue_numbers`` was populated.

@@ -139,7 +139,7 @@ LIGAND_POCKET_REPRESENTATIVE_SCHEMA = pa.schema(
         ("representative_system_id", pa.string()),
         ("entry_pdb_id", pa.string()),
         ("ligand_asym_id", pa.string()),
-        ("ligand_is_3d_score_able", pa.bool_()),
+        ("ligand_is_shape_comparable", pa.bool_()),
         ("receptor_set_id", pa.string()),
         ("receptor_chain_asym_ids", pa.list_(pa.string())),
         ("pocket_residues", pa.list_(pa.string())),

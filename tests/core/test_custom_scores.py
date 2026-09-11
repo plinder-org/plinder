@@ -1394,7 +1394,10 @@ def test_write_custom_sequence_link_tables_adds_ligand_chemistry(tmp_path):
 def test_add_sequence_ids_to_aligned_pocket_residues(tmp_path):
     manifest = tmp_path / "query_chains.parquet"
     pd.DataFrame(
-        {"structure_id": ["cq00000000"], "sequence_id": ["original.sample"]}
+        {
+            "structure_id": ["cq00000000"],
+            "sequence_id": ["original.sample"],
+        }
     ).to_parquet(manifest, index=False)
     residues = tmp_path / "aligned_pocket_residues.parquet"
     pd.DataFrame(
