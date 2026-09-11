@@ -848,7 +848,8 @@ def get_entry_info(data: pdbx.CIFBlock) -> dict[str, str | None]:
     -------
     dict[str, str | None]
         Entry-level metadata (oligomeric state, determination method, keywords,
-        pH, resolution); each value is ``None`` when absent.
+        pH, resolution); each value is ``None`` when absent. Resolution uses
+        refinement metadata first, then EM reconstruction metadata.
     """
     entry_info = {}
     mappings = [
@@ -861,7 +862,7 @@ def get_entry_info(data: pdbx.CIFBlock) -> dict[str, str | None]:
         entry_info[key] = _cif_scalar(data, cat_name, col_name)
     resolution_options = [
         ("refine", "ls_d_res_high"),
-        # ("em_3d_reconstruction", "resolution"), # TODO: add this back for next annotation rerun
+        ("em_3d_reconstruction", "resolution"),
     ]
     resolution = None
     for cat_name, col_name in resolution_options:

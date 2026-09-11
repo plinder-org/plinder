@@ -25,6 +25,7 @@ from plinder.data.annotations.cif_utils import (
     assign_bond_orders_from_smiles,
     build_biounit,
     check_cif_bond_orders,
+    get_entry_info,
     get_entry_taxonomy,
     get_legacy_chain_instance_mapping,
     get_structure_with_altloc,
@@ -47,6 +48,30 @@ def _load_boltz_ligand_smiles() -> str:
 
 
 LIGAND_SMILES = _load_boltz_ligand_smiles()
+
+
+@pytest.mark.parametrize(
+    "refinement,em,expected",
+    [
+        (None, "3.2", "3.2"),
+        ("1.8", None, "1.8"),
+        ("1.8", "3.2", "1.8"),
+        ("?", "3.2", "3.2"),
+        (".", "3.2", "3.2"),
+        (None, "?", None),
+        (None, ".", None),
+        (None, None, None),
+    ],
+)
+def test_entry_resolution_uses_em_when_refinement_is_unavailable(
+    refinement, em, expected
+):
+    block = pdbx.CIFBlock()
+    if refinement is not None:
+        block["refine"] = pdbx.CIFCategory({"ls_d_res_high": [refinement]})
+    if em is not None:
+        block["em_3d_reconstruction"] = pdbx.CIFCategory({"resolution": [em]})
+    assert get_entry_info(block)["entry_resolution"] == expected
 
 
 def test_get_entry_taxonomy_collects_all_source_categories_and_hosts():
