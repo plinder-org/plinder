@@ -24,6 +24,7 @@ from rdkit.rdBase import BlockLogs
 from plinder.core.utils import schemas
 from plinder.core.utils.log import setup_logger
 from plinder.core.utils.sanitize import mol_from_smiles
+from plinder.core.utils.sanitize import sanitize as peppr_sanitize
 
 LOG = setup_logger(__name__)
 
@@ -238,8 +239,10 @@ def _core_table(shared_cores: Sequence[str]) -> pd.DataFrame:
     rows: list[tuple[str, int, int]] = []
     with BlockLogs():
         for shared_core in shared_cores:
-            mol = Chem.MolFromSmiles(shared_core)
-            if mol is None:
+            mol = Chem.MolFromSmiles(shared_core, sanitize=False)
+            if mol is not None:
+                peppr_sanitize(mol)
+            else:
                 mol = Chem.MolFromSmarts(shared_core)
             if mol is None:
                 raise ValueError(

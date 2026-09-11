@@ -3329,7 +3329,8 @@ class Scorer:
                     target_system_id == query_system.id
                     or not target_system_protein_chains
                     or all(
-                        target_instance_chain.split(".")[1] not in all_target_chains
+                        target_instance_chain.split(".", maxsplit=1)[-1]
+                        not in all_target_chains
                         for target_instance_chain in target_system_protein_chains
                     )
                 ):

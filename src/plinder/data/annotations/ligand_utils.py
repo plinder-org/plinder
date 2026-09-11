@@ -414,6 +414,14 @@ def _get_ccd_smiles(comp_id: str) -> str | None:
     return str(Chem.MolToSmiles(mol))
 
 
+CcdComponents = tuple[str, ...]
+
+
+def ccd_components(ccd_code: str | None) -> CcdComponents:
+    """A code's components, sorted, so list membership ignores traversal order."""
+    return tuple(sorted((ccd_code or "").split("-")))
+
+
 def lig_has_dummies(
     ligand_code: str,
     dummy_lig_list: list[str] = [
@@ -443,14 +451,14 @@ def lig_has_dummies(
 
 
 # lazy evaluate data fetches referenced as module globals
-COFACTORS: set[str] | None = None
+COFACTORS: set[CcdComponents] | None = None
 # RDKit canonical SMILES of the cofactor / artifact reference molecules. Matching
 # on structure (not CCD code) classifies a ligand that is the same molecule under
 # a *different current* code — the real "synonym" case. No "obsolete" codes.
 COFACTOR_SMILES: set[str] | None = None
 ARTIFACT_SMILES: set[str] | None = None
 # instantiate artifact list once and reuse variable
-ARTIFACTS: set[str] | None = None
+ARTIFACTS: set[CcdComponents] | None = None
 BINDING_AFFINITY: dict[str, ty.Any] | None = None
 
 
@@ -703,7 +711,7 @@ def _choose_ligand_smiles_by_heavy_atom_count(
     return reference[0] if reference[1] > resolved[1] else resolved[0]
 
 
-def get_artifact_codes(data_dir: Path) -> set[str]:
+def get_artifact_codes(data_dir: Path) -> set[CcdComponents]:
     """Load the artifact CCD set needed for cheap ingest preflight."""
     global ARTIFACTS, ARTIFACT_SMILES
 
@@ -715,7 +723,7 @@ def get_artifact_codes(data_dir: Path) -> set[str]:
     return artifacts
 
 
-def _reference_smiles(codes: set[str]) -> set[str]:
+def _reference_smiles(codes: set[CcdComponents]) -> set[str]:
     """RDKit canonical SMILES for a set of CCD codes (skipping unresolved ones).
 
     Classifying cofactors / artifacts by this SMILES set (in addition to the CCD
@@ -726,7 +734,7 @@ def _reference_smiles(codes: set[str]) -> set[str]:
     """
     smiles: set[str] = set()
     for code in codes:
-        smi = _get_ccd_smiles(code)
+        smi = _get_ccd_smiles("-".join(code))
         if smi:
             smiles.add(smi)
     return smiles
@@ -969,7 +977,7 @@ def parse_cofactors(data_dir: Path) -> set[str]:
 
 
 @cache
-def parse_artifacts() -> set[str]:
+def parse_artifacts() -> set[CcdComponents]:
     """Get and parse artifacts
     Returns:
         set[str]: set[str]
@@ -977,8 +985,7 @@ def parse_artifacts() -> set[str]:
     artifact_log = BASE_DIR / "annotations/static_files/artifacts_badlist.csv"
     with open(artifact_log, "r") as f:
         lines = f.readlines()
-    artifacts = {l.strip() for l in lines if not l.startswith("#")}
-    return artifacts
+    return {ccd_components(l.strip()) for l in lines if not l.startswith("#")}
 
 
 @cache
@@ -1083,7 +1090,7 @@ def is_excluded_mol(
 
 def is_known_artifact_ligand(
     residue_names: ty.Iterable[str],
-    artifact_codes: set[str],
+    artifact_codes: set[CcdComponents],
 ) -> bool:
     """Return whether a ligand chain is provably an artifact before assembly.
 
@@ -1097,7 +1104,7 @@ def is_known_artifact_ligand(
     if not names:
         return False
     ccd_code = "-".join(names)
-    if ccd_code in artifact_codes or lig_has_dummies(ccd_code):
+    if ccd_components(ccd_code) in artifact_codes or lig_has_dummies(ccd_code):
         return True
     if len(names) != 1:
         return False
@@ -1652,7 +1659,7 @@ class Ligand(DocBaseModel):
             global COFACTORS, ARTIFACTS, COFACTOR_SMILES, ARTIFACT_SMILES
             global BINDING_AFFINITY
             if COFACTORS is None:
-                COFACTORS = parse_cofactors(data_dir)
+                COFACTORS = {ccd_components(code) for code in parse_cofactors(data_dir)}
                 COFACTOR_SMILES = _reference_smiles(COFACTORS)
             if ARTIFACTS is None:
                 ARTIFACTS = parse_artifacts()
@@ -2290,11 +2297,11 @@ class Ligand(DocBaseModel):
         # COFACTOR_SMILES / ARTIFACT_SMILES are None if only the code sets were
         # populated (e.g. a test that patches COFACTORS/ARTIFACTS directly) —
         # fall back to code-only matching then.
-        if self.ccd_code in COFACTORS or (
+        if ccd_components(self.ccd_code) in COFACTORS or (
             COFACTOR_SMILES is not None and self.smiles in COFACTOR_SMILES
         ):
             self.is_cofactor = True
-        if self.ccd_code in ARTIFACTS or (
+        if ccd_components(self.ccd_code) in ARTIFACTS or (
             ARTIFACT_SMILES is not None and self.smiles in ARTIFACT_SMILES
         ):
             self.in_artifact_list = True

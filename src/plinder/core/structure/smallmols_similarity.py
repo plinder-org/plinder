@@ -63,6 +63,7 @@ def mol2morgan_fp(
     return generator.GetFingerprint(mol)
 
 
+# TODO: legacy - no live callers; superseded by mhfp6_maxsim_and_argmax.
 def tanimoto_maxsim_and_argmax(
     long_list: list[Any], test_list: list[Any]
 ) -> tuple[np.ndarray[float], np.ndarray[int]]:
@@ -124,6 +125,17 @@ def mhfp6_maxsim_and_argmax(
     )
 
 
+# TODO: legacy - no live callers (tests only); MMP pairs now come from
+# make_ligand_mmp_pairs and query_ccd_mmp_pairs.
+def _sanitized(smiles: str) -> Mol:
+    """Parse without RDKit's strict sanitizer, then sanitize the peppr way."""
+    from plinder.core.utils.sanitize import sanitize as peppr_sanitize
+
+    mol = Chem.MolFromSmiles(smiles, sanitize=False)
+    peppr_sanitize(mol)
+    return mol
+
+
 def get_mmp_similarity_dict(
     mmp_path: Path, min_constant_size: int = 5
 ) -> dict[str, dict[str, float]]:
@@ -159,7 +171,7 @@ def get_mmp_similarity_dict(
         }
         mmp_df["const_size"] = mmp_df.CONSTANT.map(const_size_map)
         smiles_size_map = {
-            smiles: Chem.MolFromSmiles(smiles).GetNumHeavyAtoms()
+            smiles: _sanitized(smiles).GetNumHeavyAtoms()
             for smiles in set(mmp_df.SMILES1.to_list() + mmp_df.SMILES2.to_list())
         }
         mmp_df["SMILES1_size"] = mmp_df.SMILES1.map(smiles_size_map)

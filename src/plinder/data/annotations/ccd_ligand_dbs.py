@@ -112,7 +112,11 @@ def ccd_component_table(
         Apply plinder's own :func:`~plinder.data.annotations.ligand_utils.is_excluded_mol`
         filter, the same rule that marks a dataset ligand an artifact. Keeps the
         CCD universe consistent with native ligand treatment rather than
-        inventing a second notion of "real ligand".
+        inventing a second notion of "real ligand". Of the dataset's four
+        exclusion sources (these chemistry rules, the artifact bad-list, the
+        cofactor list and the dummy codes) only this one applies here: listed
+        artifacts and cofactors stay nodes, since a ligand may still be related
+        to them; dummies and ions drop out for lacking a molecule.
     exclude_polymer_linking : bool, default=False
         Drop ``*-linking`` components (amino acids, nucleotides, saccharides).
         plinder treats these as polymer/receptor rather than ligand, so enable
@@ -124,10 +128,10 @@ def ccd_component_table(
     Returns
     -------
     pd.DataFrame
-        Columns ``ccd_id``, ``ligand_rdkit_canonical_smiles``,
-        ``ligand_identity`` (stereo-stripped canonical SMILES, plinder's ligand
-        identity key, so a ligand matches by chemistry whatever its code),
-        ``ligand_smiles_id``, ``num_heavy_atoms`` and ``ccd_type``. The
+        Columns ``ccd_id``, ``ligand_rdkit_canonical_smiles`` (stereo included,
+        the key the dataset deduplicates ligands on and the one chemistry
+        matching uses), ``ligand_smiles_id``, ``num_heavy_atoms`` and
+        ``ccd_type``. The
         ``ligand_*`` names intentionally match the unique-SMILES table so the
         MMP and ECFP4 builders can be reused.
 
@@ -139,7 +143,6 @@ def ccd_component_table(
     """
     from rdkit import Chem
 
-    from plinder.core.structure.smallmols_similarity import smiles2nonstereo
     from plinder.data.annotations.ligand_utils import is_excluded_mol, lig_has_dummies
 
     table = _ccd_chem_comp_table()
@@ -185,7 +188,6 @@ def ccd_component_table(
             {
                 "ccd_id": comp_id,
                 "ligand_rdkit_canonical_smiles": smiles,
-                "ligand_identity": smiles2nonstereo(smiles),
                 "num_heavy_atoms": int(num_heavy),
                 # CCD ``type`` is mixed case in the bundle ("NON-POLYMER" vs
                 # "non-polymer"); normalise so consumers can group on it.
@@ -766,32 +768,31 @@ class CcdIndex(NamedTuple):
     """Lookups over the universe that :func:`match_ligand_to_ccd` needs."""
 
     ccd_ids: frozenset[str]
-    identity_to_ccd_ids: dict[str, list[str]]  # stereo-stripped SMILES -> codes
-    stereo_smiles_to_ccd_ids: dict[str, list[str]]  # canonical SMILES -> codes
+    smiles_to_ccd_ids: dict[
+        str, list[str]
+    ]  # canonical SMILES, stereo included -> codes
     released_ids: frozenset[str]
 
 
 def ccd_index(components: pd.DataFrame) -> CcdIndex:
     """Build the matcher's lookups from :func:`ccd_component_table` output."""
-    identity: dict[str, list[str]] = {}
-    stereo: dict[str, list[str]] = {}
-    for ccd_id, key, smiles in zip(
+    # both sides through canonical_smiles: re-canonicalising is not idempotent
+    # for a few dative/cage SMILES, so the stored string alone would not match
+    by_smiles: dict[str, list[str]] = {}
+    for ccd_id, smiles in zip(
         components["ccd_id"].astype(str),
-        components["ligand_identity"].astype(str),
         components["ligand_rdkit_canonical_smiles"].astype(str),
     ):
-        identity.setdefault(key, []).append(ccd_id)
-        stereo.setdefault(smiles, []).append(ccd_id)
+        by_smiles.setdefault(canonical_smiles(smiles) or smiles, []).append(ccd_id)
     released = _ccd_chem_comp_table().query("pdbx_release_status == 'REL'")["id"]
     return CcdIndex(
         frozenset(components["ccd_id"].astype(str)),
-        identity,
-        stereo,
+        by_smiles,
         frozenset(released.astype(str)),
     )
 
 
-def _stereo_smiles(smiles: str | None) -> str | None:
+def canonical_smiles(smiles: str | None) -> str | None:
     """RDKit canonical SMILES with stereo, the form the CCD table stores."""
     from rdkit import Chem
 
@@ -804,27 +805,22 @@ def _stereo_smiles(smiles: str | None) -> str | None:
 
 
 def match_ligand_to_ccd(
-    ccd_code: str,
-    ligand_identity: str | None,
-    index: CcdIndex,
-    *,
-    ligand_stereo_smiles: str | None = None,
+    ccd_code: str, ligand_smiles: str | None, index: CcdIndex
 ) -> CcdMatch:
     """Resolve one ligand against the CCD universe by code, then by chemistry.
 
-    ``match_kind`` is one of
+    ``ligand_smiles`` must come through :func:`canonical_smiles`, as the index
+    keys do. ``match_kind`` is one of
 
     ``exact``
         The ligand is a universe component: its single code is one, or its
-        stereo-stripped whole-molecule SMILES equals a component's. The second
-        test is what lets one molecule match however it was deposited, e.g.
-        lactose as ``LAT`` or as the linked sugars ``GAL-BGC``. That key is
-        stereo-insensitive like plinder's other ligand keys, so for sugars it
-        collapses stereoisomers (lactose, cellobiose and maltose share one);
-        ``ligand_stereo_smiles`` (plinder's ``ligand_resolved_smiles``, stereo
-        from the coordinates) then narrows the candidates to the one whose CCD
-        SMILES it equals. Without it, or when the resolved stereo matches none,
-        every candidate is listed.
+        whole-molecule canonical SMILES equals a component's. The second test
+        is what lets one molecule match however it was deposited, e.g. lactose
+        as ``LAT`` or as the linked sugars ``GAL-BGC``. Stereo is part of the
+        identity, as in the dataset's own ligand key: the ligand's SMILES
+        carries the stereo perceived from its coordinates, the component's the
+        stereo of its ideal coordinates, so cellobiose and maltose never match
+        lactose.
     ``excluded``
         A single code that is a released CCD component the universe filters
         out (ions, artifacts, placeholders): known, not novel.
@@ -840,12 +836,8 @@ def match_ligand_to_ccd(
     matched: list[str] = []
     if len(codes) == 1 and codes[0] in index.ccd_ids:
         matched = [codes[0]]
-    elif ligand_identity:
-        matched = sorted(index.identity_to_ccd_ids.get(ligand_identity, []))
-        if len(matched) > 1:
-            stereo = _stereo_smiles(ligand_stereo_smiles)
-            exact = set(index.stereo_smiles_to_ccd_ids.get(stereo or "", []))
-            matched = [code for code in matched if code in exact] or matched
+    elif ligand_smiles:
+        matched = sorted(index.smiles_to_ccd_ids.get(ligand_smiles, []))
     if matched:
         kind = "exact"
     elif len(codes) == 1 and codes[0] in index.released_ids:
@@ -884,7 +876,6 @@ def build_ligand_ccd_match(
     ligands : pd.DataFrame
         ``ligand_id``, ``ligand_ccd_code`` and ``ligand_smiles`` (the
         whole-molecule SMILES; composites are one connected molecule), plus
-        ``ligand_resolved_smiles`` when available to resolve stereoisomers.
     components : pd.DataFrame
         Output of :func:`ccd_component_table`.
     output_path : Path or None
@@ -901,34 +892,19 @@ def build_ligand_ccd_match(
     Emitted as a sidecar join table rather than annotation columns, so building
     these databases never contends with the index schema.
     """
-    from plinder.core.structure.smallmols_similarity import smiles2nonstereo
-
     index = ccd_index(components)
     node_by_ccd = dict(
         zip(components["ccd_id"].astype(str), components["ligand_smiles_id"])
     )
-    stereo_of = (
-        ligands["ligand_resolved_smiles"]
-        if "ligand_resolved_smiles" in ligands
-        else pd.Series(None, index=ligands.index, dtype=object)
-    )
-    identity_of = {
-        smiles: smiles2nonstereo(smiles)
+    canonical_of = {
+        smiles: canonical_smiles(smiles)
         for smiles in ligands["ligand_smiles"].dropna().unique()
     }
     rows: list[dict[str, object]] = []
-    for ligand_id, ccd_code, smiles, stereo in zip(
-        ligands["ligand_id"],
-        ligands["ligand_ccd_code"],
-        ligands["ligand_smiles"],
-        stereo_of,
+    for ligand_id, ccd_code, smiles in zip(
+        ligands["ligand_id"], ligands["ligand_ccd_code"], ligands["ligand_smiles"]
     ):
-        match = match_ligand_to_ccd(
-            str(ccd_code),
-            identity_of.get(smiles),
-            index,
-            ligand_stereo_smiles=stereo if isinstance(stereo, str) else None,
-        )
+        match = match_ligand_to_ccd(str(ccd_code), canonical_of.get(smiles), index)
         rows.append(
             {
                 "ligand_id": ligand_id,
@@ -960,7 +936,6 @@ def make_ligand_ccd_match(*, data_dir: Path) -> Path:
         "ligand_id",
         "ligand_ccd_code",
         "ligand_smiles",
-        "ligand_resolved_smiles",
     ]
     available = set(pq.read_schema(annotation_path).names)
     ligands = pd.read_parquet(
@@ -1056,20 +1031,14 @@ def _ccd_named_mol(ccd_id: str) -> Mol | None:
     return _get_ccd_mol(ccd_id)
 
 
-@cache
 def _ccd_heavy_atoms(ccd_id: str) -> tuple[tuple[str, ...], frozenset[frozenset[str]]]:
     """Heavy-atom names of a CCD component and its bonds as name pairs."""
-    from plinder.data.annotations.cif_utils import _get_ccd_atomarray
+    from plinder.core.structure.ccd_template import ccd_component_template
 
-    atoms = _get_ccd_atomarray(ccd_id)
-    if atoms is None or atoms.bonds is None:
+    template = ccd_component_template(ccd_id)
+    if template is None:
         return (), frozenset()
-    heavy = atoms[~np.isin(atoms.element, ["H", "D"])]
-    names = tuple(str(name) for name in heavy.atom_name)
-    bonds = frozenset(
-        frozenset((names[i], names[j])) for i, j, _ in heavy.bonds.as_array()
-    )
-    return names, bonds
+    return template.heavy, frozenset(frozenset((a, b)) for a, b, _ in template.bonds)
 
 
 def _atom_names(mol: Mol) -> list[str]:

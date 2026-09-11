@@ -9,7 +9,6 @@ from functools import cache
 from typing import NamedTuple
 
 import biotite.structure as struc
-import biotite.structure.info as bt_info
 import numpy as np
 from biotite.structure.atoms import AtomArray
 
@@ -32,15 +31,13 @@ def ccd_component_template(comp_id: str) -> ComponentTemplate | None:
     """Heavy atoms, elements, leaving atoms and bonds of a CCD component."""
     from biotite.structure.info import ccd as bundled_ccd
 
-    try:
-        template = bt_info.residue(comp_id, allow_missing_coord=True)
-        chem_comp_atom = bundled_ccd.get_ccd()["chem_comp_atom"]
-    except Exception as exc:
-        LOG.warning(f"CCD lookup failed for {comp_id}: {exc}")
-        return None
+    from plinder.data.annotations.cif_utils import _get_ccd_atomarray
+
+    template = _get_ccd_atomarray(comp_id)  # the one CCD accessor; warns on failure
     if template is None:
         return None
-    heavy_mask = ~np.isin(template.element, ["H", "D"])
+    chem_comp_atom = bundled_ccd.get_ccd()["chem_comp_atom"]
+    heavy_mask = struc.filter_heavy(template)
     heavy = tuple(str(name) for name in template.atom_name[heavy_mask])
     elements = {
         str(name): str(element)
@@ -152,7 +149,7 @@ def add_missing_atoms(
     count = atoms.array_length()
     starts = struc.get_residue_starts(atoms, add_exclusive_stop=True)
     solvent = struc.filter_solvent(atoms)
-    hydrogen = np.isin(atoms.element, ["H", "D"])
+    hydrogen = ~struc.filter_heavy(atoms)
     linked = linked_atoms_by_residue(atoms, starts) if atoms.bonds is not None else None
     polymer = struc.filter_amino_acids(atoms) | struc.filter_nucleotides(atoms)
     completed: list[tuple[int, int, list[str], ComponentTemplate]] = []

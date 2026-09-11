@@ -646,6 +646,8 @@ class PlinderSystem:
             mol = next(supplier, None)
             if mol is not None:
                 peppr_sanitize(mol)
+                # ring info survives the removal here; a second sanitize is not
+                # free, it re-perceives stereo (drops centres on 1fbh ligands)
                 mol = Chem.RemoveAllHs(mol, sanitize=False)
                 mols[chain] = mol
         return mols

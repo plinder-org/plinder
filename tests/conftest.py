@@ -504,7 +504,7 @@ def cached_plinder_system(read_plinder_mount, tmp_path):
         canonical_ligand_dir = tmp_path / "canonical_ligands" / system_id
         canonical_ligand_dir.mkdir(parents=True)
         for ligand_file in (source / "ligand_files").glob("*.sdf"):
-            asym_id = ligand_file.stem.rsplit(".", maxsplit=1)[-1]
+            asym_id = ligand_file.stem.split(".", maxsplit=1)[-1]  # asym may hold dots
             target = canonical_ligand_dir / f"{asym_id}.sdf"
             if not target.exists():
                 shutil.copyfile(ligand_file, target)
@@ -524,13 +524,15 @@ def mock_ccd_lookups(monkeypatch):
     # so classification falls back to code-only matching in tests (the synonym
     # code->code map was retired — obsolete codes are never ingested).
     data = json.loads((test_asset_fp / "ccd_lookups.json").read_text())
+    from plinder.data.annotations.ligand_utils import ccd_components
+
     monkeypatch.setattr(
         "plinder.data.annotations.ligand_utils.COFACTORS",
-        set(data["cofactors"]),
+        {ccd_components(code) for code in data["cofactors"]},
     )
     monkeypatch.setattr(
         "plinder.data.annotations.ligand_utils.ARTIFACTS",
-        set(data["artifacts"]),
+        {ccd_components(code) for code in data["artifacts"]},
     )
     monkeypatch.setattr(
         "plinder.data.annotations.ligand_utils.BINDING_AFFINITY",

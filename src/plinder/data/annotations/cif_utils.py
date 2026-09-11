@@ -42,9 +42,8 @@ class EntryTaxonomy(TypedDict):
     host_organism_names: list[str]
 
 
-# Single source of truth lives in ``plinder.core.structure.atoms`` so
-# both ``plinder.core`` and ``plinder.data`` filter H/D/T isotopes
-# consistently.
+# biotite's heavy-atom filter (drops H and D) is the one definition used by
+# both ``plinder.core`` and ``plinder.data``.
 from biotite.structure import filter_heavy  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -1214,7 +1213,7 @@ def atoms_to_rdkit_mol(
     -----
     Missing intra-residue bonds are recovered from the bundled CCD first, then
     stereo (atom R/S *and* double-bond E/Z) is optionally assigned from the 3D
-    coordinates. H and its isotopes (D, T) are dropped by the element filter
+    coordinates. H and D are dropped by ``filter_heavy``
     before conversion, so the sanitized molecule, ring info included, is
     returned as is.
     ``connect_via_residue_names`` is deliberately not used to derive bonds — it
