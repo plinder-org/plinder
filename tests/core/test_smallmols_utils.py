@@ -401,3 +401,88 @@ def test_ligand_atom_features_bucket_out_of_vocabulary_values():
     assert ligand_atom_features(exotic)[1, 1] == 3
 
     assert ligand_atom_features(Chem.Mol()).shape == (0, 16)
+
+
+def test_rascal_parity_match_carries_the_mapping_behind_the_score():
+    from plinder.core.structure.smallmols_similarity import (
+        rascal_parity_match,
+        rascal_parity_score,
+    )
+
+    serine, cysteine = (
+        Chem.MolFromSmiles("N[C@@H](CO)C(=O)O"),
+        Chem.MolFromSmiles("N[C@@H](CS)C(=O)O"),
+    )
+    same = rascal_parity_match(serine, serine)
+    assert same.atoms == {i: i for i in range(serine.GetNumAtoms())}
+    assert same.bonds == serine.GetNumBonds() and same.opposed == 0
+    match = rascal_parity_match(serine, cysteine)
+    assert set(match.atoms) == {0, 1, 2, 4, 5, 6}  # everything but the O/S
+    assert match.score(serine, cysteine) == rascal_parity_score(serine, cysteine)
+    assert rascal_parity_match(serine, Chem.MolFromSmiles("CCCCCCCC")).atoms == {}
+    assert match.alternatives == ()
+    # all equally good fragments: distinct, injective, never bigger than the scored one
+    ring = rascal_parity_match(
+        Chem.MolFromSmiles("c1ccccc1"), Chem.MolFromSmiles("Cc1ccccc1"), all_best=True
+    )
+    assert len(ring.alternatives) == 11 and len(ring.atoms) == 6
+    fragments = [ring.atoms, *ring.alternatives]
+    assert len({tuple(sorted(f.items())) for f in fragments}) == len(fragments)
+    assert all(len(set(f.values())) == len(f) <= 6 for f in fragments)
+    assert fragments == sorted(fragments, key=lambda f: (-len(f), sorted(f.items())))
+    # the scored fragment is the best over every MCES of maximal size, not the first
+    chain, branched = (
+        Chem.MolFromSmiles("CCCCCCC(=O)O"),
+        Chem.MolFromSmiles("CC(C)CCCCC(=O)O"),
+    )
+    every = rascal_parity_match(chain, branched, all_best=True)
+    best = rascal_parity_match(chain, branched)
+    assert len(best.atoms) == max(len(f) for f in (every.atoms, *every.alternatives))
+    assert best.bonds == every.bonds and best.alternatives == ()
+
+
+def test_rascal_parity_score_sees_order_stereo_and_size():
+    from plinder.core.structure.smallmols_similarity import rascal_parity_score
+    from rdkit import Chem
+
+    peptide = Chem.MolFromSequence
+    score = rascal_parity_score
+    assert score(peptide("ACDEF"), peptide("ACDEF")) == 1.0
+    substitution = score(peptide("ACDEF"), peptide("ACDKF"))
+    shuffled = score(peptide("ACDEF"), peptide("DFACE"))
+    unrelated = score(peptide("ACDEF"), peptide("GHIKL"))
+    assert substitution > shuffled and substitution > unrelated
+    # an internal deletion splits the largest fragment; a terminal one does not
+    assert score(peptide("ACDEF"), peptide("ACDF")) < score(
+        peptide("ACDEF"), peptide("ACDE")
+    )
+    # stereo: lactose vs cellobiose differ at one centre, glucose vs galactose likewise
+    lactose = Chem.MolFromSmiles(
+        "OC[C@H]1O[C@@H](O[C@H]2[C@H](O)[C@@H](O)[C@H](O)O[C@@H]2CO)[C@H](O)[C@@H](O)[C@H]1O"
+    )
+    cellobiose = Chem.MolFromSmiles(
+        "OC[C@H]1O[C@@H](O[C@H]2[C@H](O)[C@@H](O)[C@H](O)O[C@@H]2CO)[C@H](O)[C@@H](O)[C@@H]1O"
+    )
+    glucose = Chem.MolFromSmiles("OC[C@H]1O[C@H](O)[C@H](O)[C@@H](O)[C@@H]1O")
+    galactose = Chem.MolFromSmiles("OC[C@H]1O[C@@H](O)[C@H](O)[C@@H](O)[C@H]1O")
+    assert score(lactose, lactose) == 1.0
+    assert 0.9 < score(lactose, cellobiose) < 1.0
+    assert 0.8 < score(glucose, galactose) < 1.0
+    assert score(lactose, cellobiose, stereo=False) == 1.0
+    # handedness is compared through the mapping, not by CIP label: L-serine and
+    # L-cysteine have opposite CIP labels (S vs R) but the same arrangement
+    l_serine, l_cysteine = (
+        Chem.MolFromSmiles("N[C@@H](CO)C(=O)O"),
+        Chem.MolFromSmiles("N[C@@H](CS)C(=O)O"),
+    )
+    d_serine = Chem.MolFromSmiles("N[C@H](CO)C(=O)O")
+    assert score(l_serine, l_cysteine) == score(l_serine, l_cysteine, stereo=False)
+    assert score(l_serine, d_serine) < score(l_serine, l_serine) == 1.0
+    # a swapped connecting atom keeps the bonds of both rings but splits the largest fragment
+    ether, methane = (
+        Chem.MolFromSmiles("c1ccccc1Oc1ccccc1"),
+        Chem.MolFromSmiles("c1ccccc1Cc1ccccc1"),
+    )
+    assert 0.4 < score(ether, methane) < 0.9
+    # below the pruning target nothing is searched
+    assert score(Chem.MolFromSmiles("CCO"), peptide("ACDEF")) == 0.0

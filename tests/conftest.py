@@ -98,6 +98,12 @@ def sdf_5a7w_lig():
     return test_asset_fp / "xx/pdb_00005a7w/5a7w_A_35M.sdf"
 
 
+# To test branched glycans (chain E is a branched NAG-FUC-NAG)
+@pytest.fixture(scope="session")
+def cif_2dty():
+    return test_asset_fp / "xx/pdb_00002dty/pdb_00002dty_xyz-enrich.cif.gz"
+
+
 # To test fragmented ligands, carbs
 @pytest.fixture(scope="session")
 def cif_6fx1():

@@ -1042,6 +1042,9 @@ def test_scoring_finalization_stage_order_and_partitions():
         "make_ligand_mmp_pairs"
     )
     assert tasks.STAGES.index("make_ligand_mmp_pairs") < tasks.STAGES.index(
+        "make_ccd_ligand_dbs"
+    )
+    assert tasks.STAGES.index("make_ccd_ligand_dbs") < tasks.STAGES.index(
         "make_sub_dbs"
     )
     assert tasks.STAGES.index("map_batch_alignments") < tasks.STAGES.index(
@@ -5735,6 +5738,8 @@ def test_metaflow_graph_uses_canonical_ligand_archive_stage():
     assert "self.pipeline.annotate_ligand_similarity()" in flow
     assert "self.next(self.make_ligand_mmp_pairs)" in flow
     assert "self.pipeline.make_ligand_mmp_pairs" in flow
+    assert "self.next(self.make_ccd_ligand_dbs)" in flow
+    assert "self.pipeline.make_ccd_ligand_dbs" in flow
     assert "self.next(self.scatter_collate_partitions)" in flow
     assert "self.next(self.scatter_collate_alignments)" in flow
     assert "self.pipeline.collate_alignments(self.input)" in flow

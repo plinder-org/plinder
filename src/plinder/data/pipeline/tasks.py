@@ -30,7 +30,11 @@ from plinder.core.scores.metrics import is_chemical_cluster_metric
 from plinder.core.utils import schemas
 from plinder.core.utils.log import setup_logger
 from plinder.data import clusters, databases
-from plinder.data.annotations import get_similarity_scores, mmpdb_utils
+from plinder.data.annotations import (
+    ccd_ligand_dbs,
+    get_similarity_scores,
+    mmpdb_utils,
+)
 from plinder.data.pipeline import collate, io, utils
 from plinder.data.pipeline.ingest import (
     balance_entries,
@@ -77,6 +81,7 @@ STAGES = [
     "make_mhfp6_scores",
     "annotate_ligand_similarity",
     "make_ligand_mmp_pairs",
+    "make_ccd_ligand_dbs",
     "make_sub_dbs",
     "run_batch_searches",
     "map_batch_alignments",
@@ -1714,6 +1719,25 @@ def make_ligand_mmp_pairs(
         threads=threads,
         force_update=force_update,
     )
+
+
+def make_ccd_ligand_dbs(
+    *,
+    data_dir: Path,
+    scratch_dir: Path,
+    threads: int,
+    force_update: bool = False,
+    minimum_similarity: float = 30.0,
+) -> Path:
+    """Build the CCD-anchored MMP/ECFP4 databases and the ligand-to-CCD match sidecar."""
+    ccd_ligand_dbs.make_ccd_ligand_dbs(
+        data_dir=data_dir,
+        scratch_dir=scratch_dir,
+        threads=threads,
+        force_update=force_update,
+        minimum_similarity=minimum_similarity,
+    )
+    return ccd_ligand_dbs.make_ligand_ccd_match(data_dir=data_dir)
 
 
 def _interface_scoring_chain_keys(data_dir: Path) -> pd.DataFrame:

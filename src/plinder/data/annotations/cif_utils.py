@@ -1207,10 +1207,9 @@ def atoms_to_rdkit_mol(
     -----
     Missing intra-residue bonds are recovered from the bundled CCD first, then
     stereo (atom R/S *and* double-bond E/Z) is optionally assigned from the 3D
-    coordinates before ``RemoveAllHs`` so it survives hydrogen removal.
-
-    H and its isotopes (D, T) are removed: the element-string pre-filter is
-    backed by ``RemoveAllHs`` (which keys on atomic number).
+    coordinates. H and its isotopes (D, T) are dropped by the element filter
+    before conversion, so the sanitized molecule, ring info included, is
+    returned as is.
     ``connect_via_residue_names`` is deliberately not used to derive bonds — it
     silently drops inter-residue bonds for non-standard residues.
     """
@@ -1245,9 +1244,7 @@ def atoms_to_rdkit_mol(
         # From3D (not atom-only AssignAtomChiralTagsFromStructure) so double-bond
         # E/Z is perceived too, not just R/S; keeps all-carbon quaternary centres.
         Chem.AssignStereochemistryFrom3D(mol)
-    # sanitize=False: peppr already sanitized and tolerates over-valent main-group
-    # centres (boron cages, Be, …) that RemoveAllHs's default re-sanitize rejects.
-    return Chem.RemoveAllHs(mol, sanitize=False)
+    return mol
 
 
 # ---------------------------------------------------------------------------

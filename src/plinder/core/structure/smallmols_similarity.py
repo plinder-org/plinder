@@ -2,7 +2,7 @@
 # Distributed under the terms of the Apache License 2.0
 from functools import cache
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import numpy as np
 import pandas as pd
@@ -185,14 +185,162 @@ def get_mmp_similarity_dict(
     return similarities
 
 
-def rdRascalMCES_similarity(mol1: Mol, mol2: Mol, sim_threshold: float = 0.4) -> float:
-    rascal_opts = rdRascalMCES.RascalOptions()
-    rascal_opts.allBestMCESs = False
-    rascal_opts.returnEmptyMCES = True
-    rascal_opts.completeAromaticRings = False
-    rascal_opts.ringMatchesRingOnly = False
-    rascal_opts.maxBondMatchPairs = 1000
-    rascal_opts.timeout = 2
-    rascal_opts.similarityThreshold = sim_threshold
-    result = rdRascalMCES.FindMCES(mol1, mol2, rascal_opts)
-    return float(result[0].tier2Sim if result else 0)
+Centres = dict[int, tuple[Chem.StereoDescriptor, list[int]]]
+
+
+def _stereo_centres(mol: Mol) -> Centres:
+    """Specified tetrahedral centres: descriptor and neighbours, padded to four."""
+    return {
+        si.centeredOn: (si.descriptor, (list(si.controllingAtoms) + [-1])[:4])
+        for si in Chem.FindPotentialStereo(mol)
+        if si.type == Chem.StereoType.Atom_Tetrahedral
+        and si.specified == Chem.StereoSpecified.Specified
+    }
+
+
+def _opposed_centres(
+    first: Centres, second: Centres, partner: dict[int, int], atoms: set[int]
+) -> int:
+    """Count matched tetrahedral centres of opposite handedness under the mapping.
+
+    Tet_CW/Tet_CCW is relative to each molecule's own neighbour order, so the
+    mapping between the two orders is a permutation and the descriptors are
+    equal only up to its parity. A centre needs three mapped neighbours; the
+    leftover slot on each side (fourth neighbour or implicit H, which RDKit
+    orders last) is taken as corresponding.
+    """
+    opposed = 0
+    for i in atoms & first.keys():
+        j = partner.get(i)
+        if j not in second:
+            continue
+        (descriptor, neighbours), (other_descriptor, other) = first[i], second[j]
+        # i's neighbour order translated into mol2 indices, next to j's own order
+        mapped = [partner.get(a, -1) for a in neighbours]
+        common = set(mapped) & set(other) - {-1}
+        if len(common) < 3:
+            continue
+        mapped, other = (
+            [a if a in common else -1 for a in ns] for ns in (mapped, other)
+        )
+        order = [other.index(a) for a in mapped]
+        odd = sum(order[x] > order[y] for x in range(4) for y in range(x + 1, 4)) % 2
+        opposed += (descriptor == other_descriptor) == bool(odd)
+    return opposed
+
+
+class RascalParityMatch(NamedTuple):
+    """One Rascal MCES reduced to what the PARITY-like score needs."""
+
+    atoms: dict[int, int]  # largest connected fragment, mol1 -> mol2 atom index
+    bonds: int  # matched bonds over all fragments
+    opposed: int  # fragment centres of opposite handedness under the mapping
+    alternatives: tuple[dict[int, int], ...] = ()  # fragments of the other best MCESs
+
+    def score(self, mol1: Mol, mol2: Mol, *, stereo: bool = True) -> float:
+        """PARITY-like similarity in [0, 1]; an opposed centre counts half an atom."""
+        atoms = len(self.atoms) - (0.5 * self.opposed if stereo else 0.0)
+        return parity_similarity(
+            atoms,
+            self.bonds,
+            mol1.GetNumAtoms() + mol2.GetNumAtoms(),
+            mol1.GetNumBonds() + mol2.GetNumBonds(),
+        )
+
+
+def parity_similarity(
+    atoms: float, bonds: float, atom_total: int, bond_total: int
+) -> float:
+    """Mean of the atom and bond Tanimotos; totals are both molecules' counts summed."""
+    if bonds <= 0:
+        return 0.0
+    return (atoms / (atom_total - atoms) + bonds / (bond_total - bonds)) / 2
+
+
+def rascal_parity_match(
+    mol1: Mol,
+    mol2: Mol,
+    *,
+    target: float = 0.3,
+    timeout: int = 2,
+    all_best: bool = False,
+) -> RascalParityMatch:
+    """Element-exact Rascal MCES with fragments allowed, pruned to a target bond similarity.
+
+    Pairs whose bond Tanimoto cannot reach ``target`` are pruned before the
+    clique search and come back empty. Rascal maximises matched bonds, and the
+    MCESs of that size differ in their largest fragment, so the bonds come from
+    one MCES and the fragment from a second run that keeps only the largest
+    fragment over all of them (``singleLargestFrag``). With ``all_best`` every
+    fragment is enumerated instead (a further 1.5x) and the one scoring best is
+    taken; the rest follow, best first and then in a fixed order.
+    """
+    options = rdRascalMCES.RascalOptions()
+    # tier screens use Johnson similarity; below (2t/(1+t))^2 no pair reaches bond Tanimoto t
+    options.similarityThreshold = (2 * target / (1 + target)) ** 2
+    # fewest matched bonds giving bond Tanimoto >= target; Rascal's bound is exclusive
+    options.minCliqueSize = max(
+        int(np.ceil(target * (mol1.GetNumBonds() + mol2.GetNumBonds()) / (1 + target)))
+        - 1,
+        0,
+    )
+    options.returnEmptyMCES = True
+    options.completeAromaticRings = False
+    options.ringMatchesRingOnly = False
+    options.maxBondMatchPairs = 5000
+    options.timeout = timeout
+    options.allBestMCESs = all_best
+    matches: dict[tuple[tuple[int, int], ...], dict[int, int]] = {}
+    bonds = 0
+    for result in rdRascalMCES.FindMCES(mol1, mol2, options):
+        matched = result.bondMatches()
+        if not matched:
+            continue
+        # largest connected fragment of the matched bonds, in mol1 atom indices
+        atom_map: dict[int, int] = {}
+        core = Chem.PathToSubmol(mol1, [i for i, _ in matched], atomMap=atom_map)
+        original = {new: old for old, new in atom_map.items()}
+        partner = dict(result.atomMatches())
+        fragment = {
+            original[i]: partner[original[i]]
+            for i in max(Chem.GetMolFrags(core), key=len)
+        }
+        matches.setdefault(tuple(sorted(fragment.items())), partner)
+        bonds = len(matched)
+    if not matches:
+        return RascalParityMatch({}, 0, 0)
+    if not all_best:
+        options.singleLargestFrag = True
+        best = rdRascalMCES.FindMCES(mol1, mol2, options)
+        if best and best[0].bondMatches():
+            fragment = dict(best[0].atomMatches())
+            matches = {tuple(sorted(fragment.items())): fragment}
+    centres_1, centres_2 = _stereo_centres(mol1), _stereo_centres(mol2)
+    opposed = {
+        key: _opposed_centres(centres_1, centres_2, partner, {i for i, _ in key})
+        for key, partner in matches.items()
+    }
+    ordered = sorted(matches, key=lambda key: (0.5 * opposed[key] - len(key), key))
+    return RascalParityMatch(
+        dict(ordered[0]),
+        bonds,
+        opposed[ordered[0]],
+        tuple(dict(key) for key in ordered[1:]),
+    )
+
+
+def rascal_parity_score(
+    mol1: Mol, mol2: Mol, *, target: float = 0.3, stereo: bool = True, timeout: int = 2
+) -> float:
+    """PARITY-like similarity from one Rascal MCES, in [0, 1].
+
+    Element-exact MCES with fragments allowed, scored as the mean of two
+    Tanimoto terms: atoms of the largest connected fragment over the atom union,
+    and all matched bonds over the bond union. The largest fragment carries
+    residue order (a shuffled peptide splits into one fragment per residue, a
+    substitution does not); the bonds keep credit for matches beyond a
+    substituted connecting atom. With ``stereo`` a matched tetrahedral centre of
+    opposite handedness counts half an atom.
+    """
+    match = rascal_parity_match(mol1, mol2, target=target, timeout=timeout)
+    return match.score(mol1, mol2, stereo=stereo)

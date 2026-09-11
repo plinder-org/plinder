@@ -11,7 +11,13 @@ def test_end_to_end(mock_alternative_datasets, monkeypatch):
     # already usable, so stub it out for the offline end-to-end run.
     monkeypatch.setattr(io, "refresh_bundled_ccd", lambda **kwargs: None)
 
-    stages = ",".join(tasks.STAGES[: tasks.STAGES.index("collate_partitions")])
+    # make_ccd_ligand_dbs builds the ~50k-component CCD universe once per CCD
+    # release, not per ingest; tests/data/test_ccd_ligand_dbs.py covers it.
+    stages = ",".join(
+        stage
+        for stage in tasks.STAGES[: tasks.STAGES.index("collate_partitions")]
+        if stage != "make_ccd_ligand_dbs"
+    )
     import sys
 
     print(stages, file=sys.stderr, flush=True)
