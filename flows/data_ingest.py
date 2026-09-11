@@ -136,6 +136,14 @@ class PlinderDataIngestFlow(FlowSpec):
     @step
     def make_protein_sequence_clusters(self):
         self.pipeline.make_protein_sequence_clusters()
+        self.next(self.make_protein_structure_clusters)
+
+    @kubernetes(**{**K8S, **DATABASES})
+    @environment(**ENV)
+    @retry
+    @step
+    def make_protein_structure_clusters(self):
+        self.pipeline.make_protein_structure_clusters()
         self.next(self.make_dbs)
 
     @kubernetes(**K8S)

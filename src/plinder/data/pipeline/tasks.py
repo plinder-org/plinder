@@ -70,6 +70,7 @@ STAGES = [
     "make_entries",
     "collate_entries",
     "make_protein_sequence_clusters",
+    "make_protein_structure_clusters",
     "make_dbs",
     "make_canonical_ligand_archives",
     "finalize_ligand_archives",
@@ -258,6 +259,27 @@ def make_protein_sequence_clusters(
         scratch_dir=scratch_dir,
         threads=cpu,
         identity=identity,
+        coverage=coverage,
+        force_update=force_update,
+    )
+
+
+def make_protein_structure_clusters(
+    *,
+    data_dir: Path,
+    cif_root: Path,
+    scratch_dir: Path,
+    cpu: int,
+    lddt: float,
+    coverage: float,
+    force_update: bool,
+) -> None:
+    protein_clusters.make_protein_structure_clusters(
+        data_dir=data_dir,
+        cif_root=cif_root,
+        scratch_dir=scratch_dir,
+        threads=cpu,
+        lddt=lddt,
         coverage=coverage,
         force_update=force_update,
     )

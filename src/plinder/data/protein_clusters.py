@@ -7,6 +7,8 @@ from __future__ import annotations
 import hashlib
 import json
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
+from itertools import islice
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -59,6 +61,224 @@ def _read_assignments(path: Path, expected_ids: set[str]) -> pd.DataFrame:
             "protein cluster representatives must belong to their own clusters"
         )
     return assignments
+
+
+def _write_cluster_table(
+    chains: pd.DataFrame,
+    assignments: pd.DataFrame,
+    output: Path,
+    metadata: bytes,
+    *,
+    missing_status: str,
+) -> None:
+    representative_keys = chains[["member", "entry_pdb_id", "chain_asym_id"]].rename(
+        columns={
+            "member": "representative",
+            "entry_pdb_id": "representative_entry_pdb_id",
+            "chain_asym_id": "representative_chain_asym_id",
+        }
+    )
+    result = chains.merge(assignments, on="member", how="left", validate="one_to_one")
+    result = result.merge(
+        representative_keys, on="representative", how="left", validate="many_to_one"
+    )
+    result["is_representative"] = (
+        result["member"].eq(result["representative"]).astype("boolean")
+    )
+    missing = result["representative"].isna()
+    result.loc[missing, "is_representative"] = pd.NA
+    result["status"] = "clustered"
+    result.loc[missing, "status"] = missing_status
+    table = pa.Table.from_pandas(
+        result[SEQUENCE_CLUSTER_SCHEMA.names],
+        schema=SEQUENCE_CLUSTER_SCHEMA,
+        preserve_index=False,
+    ).replace_schema_metadata({CLUSTER_METADATA_KEY: metadata})
+    output.parent.mkdir(parents=True, exist_ok=True)
+    # Stage beside the destination so replacement is atomic across filesystems.
+    with TemporaryDirectory(prefix=f".{output.stem}-", dir=output.parent) as staging:
+        staged = Path(staging) / output.name
+        pq.write_table(table, staged, compression="zstd")
+        staged.replace(output)
+
+
+def _prepare_structure_entry(
+    cif_file: Path, chains: pd.DataFrame, input_dir: Path
+) -> set[str]:
+    """Write selected label-asym chains from one model, retaining all their atoms."""
+    import numpy as np
+
+    from plinder.data.annotations.cif_utils import (
+        get_structure_with_altloc,
+        read_mmcif_file,
+    )
+    from plinder.data.annotations.save_utils import save_cif_file
+
+    source = read_mmcif_file(cif_file)
+    atoms = get_structure_with_altloc(source)
+    prepared = set()
+    for row in chains.itertuples(index=False):
+        selected = atoms[atoms.chain_id == row.chain_asym_id].copy()
+        ca = selected[(selected.atom_name == "CA") & (selected.element == "C")]
+        # A 3Di description needs a local backbone neighbourhood.
+        if len(ca) < 4:
+            continue
+        if not np.isfinite(selected.coord).all():
+            raise ValueError(
+                f"non-finite coordinates in {cif_file}, chain {row.chain_asym_id}"
+            )
+        selected.chain_id[:] = "A"
+        # With --chain-name-mode 1, Foldseek appends the internal chain ID.
+        filename = row.member.removesuffix("_A")
+        save_cif_file(
+            selected,
+            filename,
+            input_dir / f"{filename}.cif",
+            source_block=source.block,
+            source_asym_ids={"A": row.chain_asym_id},
+        )
+        prepared.add(row.member)
+    return prepared
+
+
+def make_protein_structure_clusters(
+    *,
+    data_dir: Path,
+    cif_root: Path,
+    scratch_dir: Path,
+    threads: int = 4,
+    lddt: float = 0.7,
+    coverage: float = 0.8,
+    force_update: bool = False,
+) -> Path:
+    """Cluster release protein chains with Foldseek easy-cluster.
+
+    Coverage applies to both resolved chains. The first model and deposited-first
+    alternate conformers match entry ingest. Chains with fewer than four resolved
+    C-alpha atoms retain a null assignment and ``insufficient_coordinates`` status.
+    Missing source files and parsing failures stop the stage. Inputs and native
+    clustering intermediates are temporary; only the chain table is retained.
+    """
+    from plinder.data.pipeline.ingest import resolve_entry_paths
+
+    if threads < 1:
+        raise ValueError("protein clustering threads must be positive")
+    if not 0 <= lddt <= 1 or not 0 <= coverage <= 1:
+        raise ValueError("protein clustering lDDT and coverage must be between 0 and 1")
+    chains = (
+        pd.read_parquet(
+            data_dir / "index/entry_chains.parquet",
+            columns=["entry_pdb_id", "chain_asym_id"],
+            filters=[("chain_receptor_type", "==", "protein")],
+        )
+        .sort_values(["entry_pdb_id", "chain_asym_id"])
+        .reset_index(drop=True)
+    )
+    keys = ["entry_pdb_id", "chain_asym_id"]
+    if chains[keys].isna().any().any() or chains.duplicated(keys).any():
+        raise ValueError("protein chains require unique, non-null entry/asym IDs")
+    chains["member"] = pd.Series(
+        [f"chain_{i}_A" for i in range(len(chains))], dtype="string"
+    )
+    digest = hashlib.sha256()
+    digest.update(chains[keys].to_json(orient="values").encode())
+    sources = {}
+    for pdb_id in chains["entry_pdb_id"].unique():
+        path, _ = resolve_entry_paths(
+            pdb_id, cif_root=cif_root, validation_root=cif_root
+        )
+        stat = path.stat()
+        sources[pdb_id] = path
+        digest.update(
+            json.dumps([str(path.resolve()), stat.st_size, stat.st_mtime_ns]).encode()
+        )
+        digest.update(b"\n")
+    parameters = {
+        "backend": "foldseek",
+        "version": subprocess.check_output(["foldseek", "version"], text=True).strip(),
+        "lddt": lddt,
+        "coverage": coverage,
+        "coverage_mode": 0,
+        "cluster_mode": 0,
+        "single_step_clustering": True,
+        "alignment_type": 2,
+        "chain_name_mode": 1,
+        "model": 1,
+        "altloc": "first",
+        "minimum_ca_atoms": 4,
+        "source_signature": digest.hexdigest(),
+    }
+    metadata = json.dumps(parameters, sort_keys=True).encode()
+    output = data_dir / "protein_clusters/structure.parquet"
+    if not force_update and output.is_file():
+        try:
+            previous = pq.read_table(output)
+            if (
+                previous.schema.equals(SEQUENCE_CLUSTER_SCHEMA)
+                and previous.num_rows == len(chains)
+                and (previous.schema.metadata or {}).get(CLUSTER_METADATA_KEY)
+                == metadata
+            ):
+                return output
+        except (OSError, ValueError, pa.ArrowException):
+            pass
+    scratch_dir.mkdir(parents=True, exist_ok=True)
+    with TemporaryDirectory(
+        prefix="plinder-structure-clusters-", dir=scratch_dir
+    ) as temporary:
+        work = Path(temporary)
+        input_dir = work / "chains"
+        input_dir.mkdir()
+        prepared: set[str] = set()
+        groups = iter(chains.groupby("entry_pdb_id", sort=False))
+        with ThreadPoolExecutor(max_workers=threads) as executor:
+            # Bound queued entries and memory use, including on Python < 3.14.
+            while batch := list(islice(groups, threads)):
+                futures = [
+                    executor.submit(
+                        _prepare_structure_entry, sources[pdb_id], group, input_dir
+                    )
+                    for pdb_id, group in batch
+                ]
+                for future in futures:
+                    prepared.update(future.result())
+        if prepared:
+            run(
+                [
+                    "foldseek",
+                    "easy-cluster",
+                    str(input_dir),
+                    str(work / "clusters"),
+                    str(work / "tmp"),
+                    "--lddt-threshold",
+                    str(lddt),
+                    "-c",
+                    str(coverage),
+                    "--cov-mode",
+                    "0",
+                    "--cluster-mode",
+                    "0",
+                    "--single-step-clustering",
+                    "1",
+                    "--alignment-type",
+                    "2",
+                    "--chain-name-mode",
+                    "1",
+                    "--threads",
+                    str(threads),
+                ]
+            )
+            assignments = _read_assignments(work / "clusters_cluster.tsv", prepared)
+        else:
+            assignments = pd.DataFrame(columns=["representative", "member"])
+        _write_cluster_table(
+            chains,
+            assignments,
+            output,
+            metadata,
+            missing_status="insufficient_coordinates",
+        )
+    return output
 
 
 def make_protein_sequence_clusters(
@@ -179,35 +399,7 @@ def make_protein_sequence_clusters(
             assignments = _read_assignments(
                 work / "clusters_cluster.tsv", set(sequences["member"])
             )
-        representative_keys = chains[["member", *keys]].rename(
-            columns={
-                "member": "representative",
-                "entry_pdb_id": "representative_entry_pdb_id",
-                "chain_asym_id": "representative_chain_asym_id",
-            }
+        _write_cluster_table(
+            chains, assignments, output, metadata, missing_status="missing_sequence"
         )
-        result = chains.merge(
-            assignments, on="member", how="left", validate="one_to_one"
-        )
-        result = result.merge(
-            representative_keys, on="representative", how="left", validate="many_to_one"
-        )
-        result["is_representative"] = (
-            result["member"].eq(result["representative"]).astype("boolean")
-        )
-        missing = result["representative"].isna()
-        result.loc[missing, "is_representative"] = pd.NA
-        result["status"] = "clustered"
-        result.loc[missing, "status"] = "missing_sequence"
-        table = pa.Table.from_pandas(
-            result[SEQUENCE_CLUSTER_SCHEMA.names],
-            schema=SEQUENCE_CLUSTER_SCHEMA,
-            preserve_index=False,
-        ).replace_schema_metadata({CLUSTER_METADATA_KEY: metadata})
-        output.parent.mkdir(parents=True, exist_ok=True)
-        # Stage beside the destination so replacement is atomic across filesystems.
-        with TemporaryDirectory(prefix=".sequence-", dir=output.parent) as staging:
-            staged = Path(staging) / output.name
-            pq.write_table(table, staged, compression="zstd")
-            staged.replace(output)
     return output

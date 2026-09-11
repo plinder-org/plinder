@@ -112,6 +112,19 @@ class IngestPipeline:
         )
 
     @utils.ingest_flow_control
+    def make_protein_structure_clusters(self) -> None:
+        cif_root, _ = self._entry_source_roots()
+        tasks.make_protein_structure_clusters(
+            data_dir=self.plinder_dir,
+            cif_root=cif_root,
+            scratch_dir=Path(tempfile.gettempdir()),
+            cpu=self.cfg.flow.protein_clustering_cpu,
+            lddt=self.cfg.flow.protein_structure_cluster_lddt,
+            coverage=self.cfg.flow.protein_cluster_coverage,
+            force_update=self.cfg.data.force_update,
+        )
+
+    @utils.ingest_flow_control
     def make_dbs(self) -> None:
         cif_root, _ = self._entry_source_roots()
         from plinder.data.pipeline.score import (
