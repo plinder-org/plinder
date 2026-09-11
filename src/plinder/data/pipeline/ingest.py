@@ -31,6 +31,7 @@ REQUIRED_REFERENCE_FILES = (
     Path("dbs/affinity/affinity.json"),
 )
 INGEST_MODES = ("all", "ligands", "interfaces")
+CHAIN_MODIFICATION_COLUMNS = {"chain_sequence_noncanonical", "chain_modified_residues"}
 
 T = TypeVar("T")
 
@@ -237,7 +238,8 @@ def _entry_outputs_complete(
         sidecars["entry_chains"]: {
             "chain_receptor_type",
             "chain_is_ligand_like",
-        },
+        }
+        | CHAIN_MODIFICATION_COLUMNS,
         sidecars["entry_biounit_chains"]: BIOUNIT_CONTACT_COLUMNS
         | {
             "entry_pdb_id",
@@ -294,6 +296,15 @@ def _biounit_contacts_are_valid(path: Path) -> bool:
         return False
 
 
+def _chain_modifications_are_present(entry_directory: Path) -> bool:
+    try:
+        return CHAIN_MODIFICATION_COLUMNS.issubset(
+            pq.read_schema(entry_directory / "entry_chains.parquet").names
+        )
+    except (OSError, TypeError, ValueError):
+        return False
+
+
 def _get_annotation_class() -> Any:
     """Import the data-generation stack only for actual entry annotation."""
     from plinder.data.get_system_annotations import GetPlinderAnnotation
@@ -333,6 +344,7 @@ def completed_entry_metrics(
             if (
                 expected_ingest_mode == "ligands"
                 and entry_directory
+                and _chain_modifications_are_present(Path(entry_directory))
                 and _biounit_contacts_are_valid(
                     Path(entry_directory) / "entry_biounit_chains.parquet"
                 )
@@ -419,6 +431,8 @@ def completed_interface_metrics(
         output_root / "raw_entries" / pdb_id[1:3] / pdb_id / "interfaces.parquet"
     )
     if not interface_path.is_file():
+        return None
+    if not _chain_modifications_are_present(interface_path.parent):
         return None
     try:
         from plinder.data.annotations.interface_utils import (

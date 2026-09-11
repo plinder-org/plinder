@@ -45,6 +45,8 @@ def _write_fake_sidecars(
             "entry_pdb_id": [pdb_id],
             "chain_receptor_type": ["protein"],
             "chain_is_ligand_like": [False],
+            "chain_sequence_noncanonical": ["A(MSE)G"],
+            "chain_modified_residues": [["A_2_MSE"]],
         }
     ).to_parquet(entry_dir / "entry_chains.parquet", index=False)
     pd.DataFrame(
@@ -1037,6 +1039,53 @@ def test_completed_entry_metrics_invalidates_interface_cutoff_changes(
     interface_table = pq.read_table(interface_path)
     pq.write_table(interface_table.replace_schema_metadata(None), interface_path)
     assert completed_entry_metrics(output_root, "1abc") is None
+
+
+@pytest.mark.parametrize("mode", ["all", "ligands", "interfaces"])
+@pytest.mark.parametrize("empty", [False, True])
+@pytest.mark.parametrize(
+    "missing_column", ["chain_sequence_noncanonical", "chain_modified_residues"]
+)
+def test_resume_requires_chain_modification_annotations(
+    tmp_path: Path, mode: str, empty: bool, missing_column: str
+) -> None:
+    entry_dir = tmp_path / "raw_entries/ab/1abc"
+    entry_dir.mkdir(parents=True)
+    _write_fake_sidecars(entry_dir, "1abc")
+    chain_path = entry_dir / "entry_chains.parquet"
+    chains = pd.read_parquet(chain_path)
+    if empty:
+        chains = chains.iloc[:0]
+        chains.to_parquet(chain_path, index=False)
+    if mode == "interfaces":
+        marker = ingest.interface_metrics_path(tmp_path, "1abc")
+        status = "complete"
+    else:
+        marker = ingest.entry_metrics_paths(tmp_path, "1abc")[0]
+        status = "skipped_no_ligands" if mode == "ligands" else "complete"
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(
+        json.dumps(
+            {
+                "status": status,
+                "mode": mode,
+                "interface_min_residues": 7,
+                "counts": {"annotation_rows": 0, "interface_rows": 0},
+                "outputs": {"entry_directory": str(entry_dir)},
+            }
+        )
+    )
+
+    def completed():
+        if mode == "interfaces":
+            return completed_interface_metrics(tmp_path, "1abc")
+        return completed_entry_metrics(tmp_path, "1abc", expected_ingest_mode=mode)
+
+    assert completed() == marker
+    chains.drop(columns=missing_column).to_parquet(chain_path, index=False)
+    assert completed() is None
+    chains.to_parquet(chain_path, index=False)
+    assert completed() == marker
 
 
 def test_pre_interface_skip_is_not_considered_complete(tmp_path: Path) -> None:
