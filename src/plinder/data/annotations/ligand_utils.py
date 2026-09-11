@@ -874,20 +874,23 @@ def get_len_of_longest_linear_hydrocarbon_linker(
     mol: Mol,
     max_count: int = 50,
     link_unit_smarts: str = "[#6D2R0]",
-) -> int:
+) -> int | None:
     """Estimate maximum linker length defined by link_unit_smarts, eg.
     unbranched hydrocarbons (default)
 
     Args:
         mol (Mol): RDKit molecule
         max_count (int, optional):
-            Max count for linker. Defaults to 50.
+            Positive search limit for linker length. Defaults to 50.
         link_unit_smarts (str, optional):
             Linker unit defined by SMARTS. Defaults to "[#6D2R0]".
 
     Returns:
-        int: maximum linker length defined by link_unit_smarts (default: unbranched hydrocarbon)
+        Maximum matching linker length, capped at max_count. A result equal
+        to max_count is a lower bound. Returns None if the calculation fails.
     """
+    if max_count < 1:
+        raise ValueError("max_count must be positive")
     try:
         # needs ring info!
         Chem.SanitizeMol(
@@ -895,17 +898,16 @@ def get_len_of_longest_linear_hydrocarbon_linker(
         )
         # length of longest hydrocarbon chain (excludes the ends and rings)
         for i in range(max_count):
-            # chain_smarts = "[#6D2R0,#6D1R0]" * (i+1) # includes the ends
             chain_smarts = "~".join([link_unit_smarts] * (i + 1))
-            if len(mol.GetSubstructMatches(Chem.MolFromSmarts(chain_smarts))) == 0:
+            if not mol.HasSubstructMatch(Chem.MolFromSmarts(chain_smarts)):
                 return i
-        # TODO: what to do if fails or not found? now returns -1
-        return max_count + 100
+        return max_count
     except Exception as e:
-        logging.warning(
-            f"Error in calculating longest linear hydrocarbon linker for {mol.GetProp('_Name')}: {e}"
+        name = mol.GetProp("_Name") if mol.HasProp("_Name") else "unnamed molecule"
+        LOG.warning(
+            "Error calculating longest linear hydrocarbon linker for %s: %s", name, e
         )
-        return max_count + 100
+        return None
 
 
 def is_excluded_mol(
@@ -954,13 +956,10 @@ def is_excluded_mol(
     charge = Chem.rdmolops.GetFormalCharge(mol)
     if abs(charge) > max_charge:
         return True
-    elif (
-        get_len_of_longest_linear_hydrocarbon_linker(mol)
-        > max_linear_hydrocarbon_linker
-    ):
-        return True
-    else:
-        return False
+    linker_length = get_len_of_longest_linear_hydrocarbon_linker(
+        mol, max_count=max_linear_hydrocarbon_linker + 1
+    )
+    return linker_length is None or linker_length > max_linear_hydrocarbon_linker
 
 
 def is_known_artifact_ligand(
