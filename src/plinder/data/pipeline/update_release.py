@@ -51,7 +51,7 @@ _BASE_ARTIFACT_ROOTS = (
     "scores",
     "search_databases",
 )
-_TRANSIENT_BASE_DIRECTORIES = {".staging"}
+_TRANSIENT_BASE_DIRECTORIES = {".staging", "ligand_3d_pair_repairs"}
 _TRANSIENT_BASE_SUFFIXES = (".installing", ".previous", ".tmp", ".tmp.parquet")
 
 _STAGES = (
@@ -521,6 +521,64 @@ def _write_pdb_manifest(path: Path, pdb_ids: Iterable[str]) -> Path:
     return path
 
 
+def _remove_affected_shape_scores(
+    data_dir: Path,
+    *,
+    shards: Iterable[str],
+    affected: set[str],
+    scratch_dir: Path,
+    threads: int,
+) -> int:
+    """Remove cached ligand-pair scores whose coordinates may have changed."""
+    if not affected:
+        return 0
+    scratch_dir.mkdir(parents=True, exist_ok=True)
+    affected_entries = pd.DataFrame({"pdb_id": sorted(affected)})
+    removed = 0
+    with duckdb.connect() as connection:
+        connection.sql(f"SET threads={threads}")
+        connection.sql(f"SET temp_directory='{scratch_dir.as_posix()}'")
+        connection.register("affected_entries", affected_entries)
+        for shard in sorted(set(map(str, shards))):
+            cached = data_dir / "scores/ligand_3d_by_query" / f"{shard}.parquet"
+            if not cached.is_file():
+                continue
+            temporary = scratch_dir / f"{shard}.parquet"
+            temporary.unlink(missing_ok=True)
+            previous_rows = pq.ParquetFile(cached).metadata.num_rows
+            connection.execute(
+                f"""
+                COPY (
+                    SELECT scores.*
+                    FROM read_parquet('{cached.as_posix()}') AS scores
+                    ANTI JOIN affected_entries AS query_entries
+                      ON scores.query_entry = query_entries.pdb_id
+                    ANTI JOIN affected_entries AS target_entries
+                      ON scores.target_entry = target_entries.pdb_id
+                    ORDER BY
+                        query_entry,
+                        query_ligand_asym_id,
+                        target_entry,
+                        target_ligand_asym_id
+                ) TO '{temporary.as_posix()}' (
+                    FORMAT PARQUET, COMPRESSION ZSTD
+                )
+                """
+            )
+            if not pq.read_schema(temporary).equals(schemas.LIGAND_3D_SCORE_SCHEMA):
+                temporary.unlink(missing_ok=True)
+                raise ValueError(
+                    f"shape-score cache has an unexpected schema: {cached}"
+                )
+            current_rows = pq.ParquetFile(temporary).metadata.num_rows
+            install = cached.with_suffix(cached.suffix + ".tmp")
+            copyfile(temporary, install)
+            install.replace(cached)
+            temporary.unlink(missing_ok=True)
+            removed += previous_rows - current_rows
+    return removed
+
+
 def repair_holo_scores(
     data_dir: Path,
     *,
@@ -535,6 +593,7 @@ def repair_holo_scores(
     ligand_batch_size: int,
 ) -> dict[str, Any]:
     """Repair ligand-pocket scores and cached ligand-pair shape scores."""
+    rmtree(data_dir / "scores/ligand_3d_pair_repairs", ignore_errors=True)
     holo_cfg = OmegaConf.merge(scorer_cfg, {"sub_databases": ["holo"]})
     score.plan_score_batches(
         data_dir,
@@ -637,6 +696,13 @@ def repair_holo_scores(
                 pa.Table.from_pylist([], schema=schemas.LIGAND_3D_SCORE_SCHEMA),
                 pair_cache,
             )
+    removed_shape_scores = _remove_affected_shape_scores(
+        data_dir,
+        shards=shards,
+        affected=affected,
+        scratch_dir=scratch_dir / "invalidate-ligand-3d",
+        threads=threads,
+    )
     ligand_plan = score.plan_score_repair_ligand_3d(
         data_dir,
         repair_manifest=repair_manifest,
@@ -712,6 +778,7 @@ def repair_holo_scores(
         **plan,
         "validation": repair_report,
         "pair_count": int(ligand_plan["pair_count"]),
+        "removed_shape_scores": removed_shape_scores,
         "repaired_shards": sorted(active_shards.intersection(shards)),
     }
 
@@ -1008,11 +1075,22 @@ def _refresh_chemical_score_shards(
     rmtree(stage, ignore_errors=True)
     stage.mkdir(parents=True)
     smiles_column = "ligand_rdkit_canonical_smiles"
+    fingerprint_column = "fingerprint" if directory == "ligand_scores" else "mhfp6"
+    fingerprint_file = (
+        "ligands_per_smiles.parquet"
+        if directory == "ligand_scores"
+        else get_similarity_scores.MHFP6_FINGERPRINT_FILE
+    )
     current_ligands = pd.read_parquet(
-        data_dir / "fingerprints/ligands_per_smiles.parquet",
-        columns=[number_id_col, smiles_column],
+        data_dir / "fingerprints" / fingerprint_file,
+        columns=[number_id_col, smiles_column, fingerprint_column],
     )
     for frame, label in ((prior_ligands, "prior"), (current_ligands, "current")):
+        missing = sorted(
+            {number_id_col, smiles_column, fingerprint_column}.difference(frame.columns)
+        )
+        if missing:
+            raise ValueError(f"{label} ligand fingerprints are missing {missing}")
         if (
             frame[number_id_col].duplicated().any()
             or frame[smiles_column].duplicated().any()
@@ -1021,7 +1099,7 @@ def _refresh_chemical_score_shards(
     active_ids = set(map(int, current_ligands[number_id_col]))
     id_mapping = prior_ligands.merge(
         current_ligands,
-        on=smiles_column,
+        on=[smiles_column, fingerprint_column],
         how="inner",
         suffixes=("_old", "_new"),
         validate="one_to_one",
@@ -1170,7 +1248,11 @@ def refresh_ligand_chemistry(
     fingerprint_path = data_dir / "fingerprints/ligands_per_smiles.parquet"
     prior_ligands = pd.read_parquet(
         fingerprint_path,
-        columns=["ligand_smiles_id", "ligand_rdkit_canonical_smiles"],
+        columns=[
+            "ligand_smiles_id",
+            "ligand_rdkit_canonical_smiles",
+            "fingerprint",
+        ],
     )
     number_id_col = str(cfg.ligand.number_id_col)
     minimum_similarity = float(cfg.ligand.minimum_similarity)
@@ -1183,6 +1265,14 @@ def refresh_ligand_chemistry(
     )
     use_mhfp6 = get_similarity_scores.MHFP6_METRIC in cfg.flow.cluster_metrics
     if use_mhfp6:
+        prior_mhfp6_ligands = pd.read_parquet(
+            data_dir / "fingerprints" / get_similarity_scores.MHFP6_FINGERPRINT_FILE,
+            columns=[
+                "ligand_smiles_id",
+                "ligand_rdkit_canonical_smiles",
+                "mhfp6",
+            ],
+        )
         prior_mhfp6_manifest = get_similarity_scores.ligand_score_manifest_payload(
             fingerprint_path=(
                 data_dir / "fingerprints" / get_similarity_scores.MHFP6_FINGERPRINT_FILE
@@ -1225,7 +1315,7 @@ def refresh_ligand_chemistry(
             number_id_col=number_id_col,
             minimum_similarity=minimum_similarity,
             scratch_dir=scratch_dir / "mhfp6",
-            prior_ligands=prior_ligands,
+            prior_ligands=prior_mhfp6_ligands,
             prior_manifest=prior_mhfp6_manifest,
             current_manifest=get_similarity_scores.ligand_score_manifest_payload(
                 fingerprint_path=(

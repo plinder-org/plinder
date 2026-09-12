@@ -11,6 +11,7 @@ from concurrent.futures import (
     ThreadPoolExecutor,
     wait,
 )
+from hashlib import sha256
 from pathlib import Path
 from shutil import copyfile, rmtree
 from string import ascii_lowercase, digits
@@ -119,6 +120,28 @@ STAGES = [
 def _file_content_signature(path: Path) -> dict[str, int | str]:
     """Return a stable signature for a createdb file manifest."""
     return {"size": path.stat().st_size, "sha256": file_sha256(path)}
+
+
+def _foldseek_manifest_signature(path: Path) -> dict[str, int | str]:
+    """Bind a Foldseek input manifest to the coordinate files it names."""
+    digest = sha256()
+    count = 0
+    with path.open() as handle:
+        for raw_line in handle:
+            value = raw_line.strip()
+            if not value:
+                continue
+            cif_path = Path(value.split("\t", maxsplit=1)[0])
+            stat = cif_path.stat()
+            digest.update(
+                f"{cif_path.resolve()}\0{stat.st_size}\0{stat.st_mtime_ns}\n".encode()
+            )
+            count += 1
+    return {
+        **_file_content_signature(path),
+        "referenced_cif_count": count,
+        "referenced_cifs_sha256": digest.hexdigest(),
+    }
 
 
 def scatter_download_rcsb_files(
@@ -272,7 +295,13 @@ def make_dbs(
         tmp_dir.mkdir(exist_ok=True, parents=True)
         database_path = output_dir / database_type
         complete = databases.created_database_is_complete(database_path, database_type)
-        source_signature = _file_content_signature(source) if source.is_file() else None
+        source_signature = None
+        if source.is_file():
+            source_signature = (
+                _foldseek_manifest_signature(source)
+                if database_type == "foldseek"
+                else _file_content_signature(source)
+            )
         input_marker = output_dir / f"{database_type}.createdb-input.json"
         source_is_current = (
             source_signature is None

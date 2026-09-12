@@ -3776,8 +3776,14 @@ def test_make_dbs_records_file_source_before_reusing_completed_output(
 
 
 def test_make_dbs_rebuilds_only_the_changed_file_input(tmp_path, monkeypatch) -> None:
+    cif_dir = tmp_path / "nextgen"
+    cif_dir.mkdir()
+    first_cif = cif_dir / "1abc.cif.gz"
+    second_cif = cif_dir / "2def.cif.gz"
+    first_cif.write_text("first")
+    second_cif.write_text("second")
     cif_manifest = tmp_path / "foldseek-inputs.tsv"
-    cif_manifest.write_text("/nextgen/ab/1abc.cif.gz\n")
+    cif_manifest.write_text(f"{first_cif}\n")
     seqres_path = tmp_path / "pdb_seqres.txt.gz"
     seqres_path.touch()
     create_calls = []
@@ -3809,12 +3815,15 @@ def test_make_dbs_rebuilds_only_the_changed_file_input(tmp_path, monkeypatch) ->
     }
     tasks.make_dbs(**kwargs)
     tasks.make_dbs(**kwargs)
-    cif_manifest.write_text("/nextgen/ab/1abc.cif.gz\n/nextgen/de/2def.cif.gz\n")
+    first_cif.write_text("revised coordinates")
+    tasks.make_dbs(**kwargs)
+    cif_manifest.write_text(f"{first_cif}\n{second_cif}\n")
     tasks.make_dbs(**kwargs)
 
     assert create_calls == [
         (cif_manifest, tmp_path / "dbs/foldseek", "foldseek", 2),
         (seqres_path, tmp_path / "dbs/mmseqs", "mmseqs", 2),
+        (cif_manifest, tmp_path / "dbs/foldseek", "foldseek", 2),
         (cif_manifest, tmp_path / "dbs/foldseek", "foldseek", 2),
     ]
 

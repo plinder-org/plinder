@@ -2,8 +2,11 @@ import json
 import os
 
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 from omegaconf import OmegaConf
 from plinder.core.structure.smallmols_similarity import mol2morgan_fp
+from plinder.core.utils import schemas
 from plinder.core.utils.files import file_sha256, write_json_atomic
 from plinder.data.annotations import get_similarity_scores
 from plinder.data.pipeline import update_release
@@ -86,6 +89,7 @@ def test_chemical_update_keeps_old_pairs_and_adds_both_directions(tmp_path):
             {
                 "ligand_smiles_id": [0, 1],
                 "ligand_rdkit_canonical_smiles": ["CCO", "CCC"],
+                "fingerprint": [_fingerprint("CCO"), _fingerprint("CCC")],
             }
         ),
         prior_manifest=prior_manifest,
@@ -117,6 +121,7 @@ def test_chemical_update_keeps_old_pairs_and_adds_both_directions(tmp_path):
             {
                 "ligand_smiles_id": [0, 2],
                 "ligand_rdkit_canonical_smiles": ["CCO", "c1ccccc1"],
+                "fingerprint": [_fingerprint("CCO"), _fingerprint("c1ccccc1")],
             }
         ),
         prior_manifest=current_manifest,
@@ -142,6 +147,7 @@ def test_chemical_update_keeps_old_pairs_and_adds_both_directions(tmp_path):
             {
                 "ligand_smiles_id": [0, 2],
                 "ligand_rdkit_canonical_smiles": ["CCO", "c1ccccc1"],
+                "fingerprint": [_fingerprint("CCO"), _fingerprint("c1ccccc1")],
             }
         ),
         prior_manifest=current_manifest,
@@ -153,6 +159,164 @@ def test_chemical_update_keeps_old_pairs_and_adds_both_directions(tmp_path):
         .sort_values(["query_ligand_id", "target_ligand_id"], ignore_index=True)
         .equals(result)
     )
+
+
+def test_chemical_update_rescores_changed_fingerprint(tmp_path):
+    fingerprints = tmp_path / "fingerprints"
+    fingerprints.mkdir()
+    fingerprint_path = fingerprints / "ligands_per_smiles.parquet"
+    prior_ligands = pd.DataFrame(
+        {
+            "ligand_smiles_id": [0],
+            "ligand_rdkit_canonical_smiles": ["CCO"],
+            "fingerprint": [_fingerprint("CCC")],
+        }
+    )
+    get_similarity_scores.write_ecfp4_fingerprint_table(prior_ligands, fingerprint_path)
+    scores = tmp_path / "ligand_scores"
+    scores.mkdir()
+    get_similarity_scores.ligand_scores(
+        ligand_ids=[0],
+        data_dir=tmp_path,
+        output_path=scores / "base.parquet",
+        minimum_similarity=0,
+    )
+    prior_manifest = get_similarity_scores.ligand_score_manifest_payload(
+        fingerprint_path=fingerprint_path,
+        fingerprint_col="fingerprint",
+        metric="tanimoto_similarity_ecfp4_1024",
+        minimum_similarity=0,
+        number_id_col="ligand_smiles_id",
+    )
+    write_json_atomic(
+        scores / get_similarity_scores.LIGAND_SCORE_MANIFEST,
+        prior_manifest,
+    )
+    get_similarity_scores.write_ecfp4_fingerprint_table(
+        pd.DataFrame(
+            {
+                "ligand_smiles_id": [0],
+                "ligand_rdkit_canonical_smiles": ["CCO"],
+                "fingerprint": [_fingerprint("CCO")],
+            }
+        ),
+        fingerprint_path,
+    )
+    current_manifest = get_similarity_scores.ligand_score_manifest_payload(
+        fingerprint_path=fingerprint_path,
+        fingerprint_col="fingerprint",
+        metric="tanimoto_similarity_ecfp4_1024",
+        minimum_similarity=0,
+        number_id_col="ligand_smiles_id",
+    )
+
+    report = update_release._refresh_chemical_score_shards(
+        data_dir=tmp_path,
+        directory="ligand_scores",
+        metric="tanimoto_similarity_ecfp4_1024",
+        batch_size=10,
+        number_id_col="ligand_smiles_id",
+        minimum_similarity=0,
+        scratch_dir=tmp_path / "scratch",
+        prior_ligands=prior_ligands,
+        prior_manifest=prior_manifest,
+        current_manifest=current_manifest,
+    )
+
+    assert report["new_query_scores"] == 1
+    assert pd.read_parquet(scores)[["query_ligand_id", "target_ligand_id"]].to_records(
+        index=False
+    ).tolist() == [(0, 0)]
+
+
+def test_remove_affected_shape_scores(tmp_path):
+    cache = tmp_path / "scores/ligand_3d_by_query/ab.parquet"
+    cache.parent.mkdir(parents=True)
+    pq.write_table(
+        pa.Table.from_pylist(
+            [
+                {
+                    "query_entry": "1abc",
+                    "query_ligand_asym_id": "L",
+                    "target_entry": "2def",
+                    "target_ligand_asym_id": "M",
+                    "shape": 0.5,
+                    "color": 0.4,
+                    "sucos_shape": 0.45,
+                },
+                {
+                    "query_entry": "2def",
+                    "query_ligand_asym_id": "M",
+                    "target_entry": "1abc",
+                    "target_ligand_asym_id": "L",
+                    "shape": 0.5,
+                    "color": 0.4,
+                    "sucos_shape": 0.45,
+                },
+                {
+                    "query_entry": "2def",
+                    "query_ligand_asym_id": "M",
+                    "target_entry": "3ghi",
+                    "target_ligand_asym_id": "N",
+                    "shape": 0.6,
+                    "color": 0.5,
+                    "sucos_shape": 0.55,
+                },
+            ],
+            schema=schemas.LIGAND_3D_SCORE_SCHEMA,
+        ),
+        cache,
+    )
+
+    removed = update_release._remove_affected_shape_scores(
+        tmp_path,
+        shards=["ab"],
+        affected={"1abc"},
+        scratch_dir=tmp_path / "scratch",
+        threads=1,
+    )
+
+    assert removed == 2
+    assert pd.read_parquet(cache)[["query_entry", "target_entry"]].to_dict(
+        "records"
+    ) == [{"query_entry": "2def", "target_entry": "3ghi"}]
+
+
+def test_holo_repair_discards_interrupted_shape_batches(tmp_path, monkeypatch):
+    partial = tmp_path / "scores/ligand_3d_pair_repairs/0.parquet"
+    partial.parent.mkdir(parents=True)
+    partial.write_text("partial")
+    monkeypatch.setattr(
+        update_release.score,
+        "plan_score_batches",
+        lambda *_args, **_kwargs: None,
+    )
+
+    def no_active_queries(*args, **kwargs):
+        raise ValueError("no active score queries are affected by the repair")
+
+    monkeypatch.setattr(update_release.score, "plan_score_repair", no_active_queries)
+
+    report = update_release.repair_holo_scores(
+        tmp_path,
+        base_data_dir=tmp_path / "base",
+        affected={"1abc"},
+        full_alignment_queries=set(),
+        scorer_cfg=OmegaConf.create(
+            {
+                "max_query_protein_chains": 40,
+                "max_query_proper_ligand_chains": 20,
+            }
+        ),
+        scratch_dir=tmp_path / "scratch",
+        threads=1,
+        memory_limit="1GB",
+        score_batch_size=10,
+        ligand_batch_size=10,
+    )
+
+    assert report == {"status": "complete", "query_count": 0, "pair_count": 0}
+    assert not partial.parent.exists()
 
 
 def test_ligand_score_export_removes_stale_shards(tmp_path, monkeypatch):
@@ -210,7 +374,8 @@ def test_base_reuse_skips_transient_staging_trees(tmp_path):
     stale = base / "index" / ".staging" / "old" / "entries.parquet"
     temporary = base / "index" / "annotation_table.parquet.tmp"
     installing = base / "dbs" / ".foldseek.installing" / "foldseek"
-    for path in (durable, stale, temporary, installing):
+    partial_shape = base / "scores/ligand_3d_pair_repairs/0.parquet"
+    for path in (durable, stale, temporary, installing, partial_shape):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(path.name)
 
@@ -220,6 +385,7 @@ def test_base_reuse_skips_transient_staging_trees(tmp_path):
     assert not (workspace / "index" / ".staging").exists()
     assert not (workspace / "index" / temporary.name).exists()
     assert not (workspace / "dbs" / ".foldseek.installing").exists()
+    assert not (workspace / "scores/ligand_3d_pair_repairs").exists()
 
 
 def test_alignment_repair_queries_are_saved_before_restart(tmp_path, monkeypatch):
