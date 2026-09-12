@@ -59,13 +59,32 @@ blocked plans contain reports but no executable PDB-ID lists. Successor IDs
 are recorded separately because a replacement can have different chains and
 ligands.
 
-This command only plans updates. Applying them will require replacing affected
-entry rows and both sides of their score pairs, searching changed entries
-against the updated dataset and unchanged entries against changed targets,
-then refreshing clusters and apo links. Changed search representatives and hit
-limits can require additional full-query searches. Independent changes to
-validation reports, NextGen enrichment, CCD data, or annotation settings need
-a separate refresh; this planner compares PDB coordinate revisions.
+Prepare the changed entries in a separate workspace with the original release's
+pipeline configuration:
+
+```bash
+python -m plinder.data.pipeline.update_entries /path/to/update-plan /path/to/update-workspace \
+  --validation-root /scicore/data/managed/PDB/latest/validation_reports \
+  --config /path/to/original-ingest-config.yaml \
+  --threads 4 --memory-limit 8GB
+```
+
+This processes added and revised entries, removes obsolete entries from the
+seven entry tables, and retains unaffected rows from the existing release.
+The updated tables are under `update-workspace/index/`; new per-entry data and
+ligand SDFs are under `update-workspace/.incoming/`. The existing release stays
+unchanged. Rerun the same command to resume failed entry processing or reuse
+completed tables. Use a new workspace if the plan, source release, or annotation
+settings change. Entry processing uses the sequential batch runner; `--threads`
+controls table processing.
+
+The workspace is marked `requires_downstream_repair`. Scores, complete canonical
+ligand archives, clusters, and apo links still need updating before it becomes
+a release. Search changes must cover both query and target directions; changed
+representatives and hit limits can require additional full-query searches.
+Independent changes to validation reports, NextGen enrichment, CCD data, or
+annotation settings need a separate refresh; the planner compares PDB coordinate
+revisions.
 
 ## Database creation
 

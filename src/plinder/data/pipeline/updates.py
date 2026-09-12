@@ -188,9 +188,13 @@ def compare_entries(
 
 
 def _signature(path: Path) -> dict[str, str]:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            digest.update(chunk)
     return {
         "path": str(path.resolve()),
-        "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        "sha256": digest.hexdigest(),
     }
 
 
@@ -249,7 +253,7 @@ def plan_update(
     status = (
         "blocked" if counts.get("blocked") else "ready" if changed else "no_changes"
     )
-    plan = {
+    plan: dict[str, Any] = {
         "status": status,
         "data_dir": str(data_dir),
         "nextgen_root": str(nextgen_root),
@@ -293,6 +297,10 @@ def plan_update(
     snapshot.to_parquet(output_dir / "snapshot.parquet", index=False)
     entries.to_parquet(output_dir / "entries.parquet", index=False)
     entries.to_csv(output_dir / "entries.tsv", sep="\t", index=False)
+    plan["reports"] = {
+        name: _signature(output_dir / name)["sha256"]
+        for name in ("snapshot.parquet", "entries.parquet")
+    }
     if status != "blocked":
         for name, actions in {
             "ingest": ["added", "revised"],

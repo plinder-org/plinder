@@ -3,8 +3,10 @@
 
 from __future__ import annotations
 
+import gzip
 import json
 from pathlib import Path
+from shutil import copy2, copytree
 
 import pandas as pd
 import pyarrow as pa
@@ -15,6 +17,7 @@ from plinder.data.annotations.interface_utils import (
     MIN_INTERFACE_RESIDUES_METADATA_KEY,
 )
 from plinder.data.pipeline import collate as collate_module
+from plinder.data.pipeline import update_entries, updates
 from plinder.data.pipeline.collate import (
     COLLATION_VERSION,
     collate_shard,
@@ -215,6 +218,328 @@ def _write_release(data_dir: Path) -> None:
         comparability={"2def__1__1.L": False},
         ph=7.4,
     )
+
+
+@pytest.fixture
+def entry_update_case(tmp_path, monkeypatch):
+    base = tmp_path / "base"
+    _write_release(base)
+    _write_entry(
+        base,
+        "3ghi",
+        ligand_rows=[{"ligand_id": "3ghi__1__1.L", "ccd": "ATP", "proper": True}],
+        comparability={"3ghi__1__1.L": True},
+    )
+    run_collation(base, memory_limit="1GB")
+    for relative in update_entries.REQUIRED_REFERENCE_FILES:
+        path = base / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{}")
+    root = tmp_path / "nextgen"
+    (root / "holdings").mkdir(parents=True)
+    revisions = {"1abc": (2, 0), "3ghi": (1, 0), "4jkl": (1, 0)}
+    for name, values in {
+        "current_file_holdings": {key: {"mmcif": [key]} for key in revisions},
+        "released_structures_last_modified_dates": {
+            key: "2026-07-01" for key in revisions
+        },
+    }.items():
+        with gzip.open(root / f"holdings/{name}.json.gz", "wt") as handle:
+            json.dump(values, handle)
+    monkeypatch.setattr(
+        updates,
+        "_read_revision",
+        lambda path: revisions[path.parent.name.removeprefix("pdb_0000")],
+    )
+    obsolete = tmp_path / "obsolete.dat"
+    obsolete.write_text("OBSLTE 01-JUL-26 2DEF 4JKL\n")
+    plan_dir = tmp_path / "plan"
+    updates.plan_update(
+        base, nextgen_root=root, obsolete_path=obsolete, output_dir=plan_dir
+    )
+    calls = []
+
+    def ingest(**kwargs):
+        calls.append(kwargs["pdb_ids"])
+        destination = kwargs["output_root"]
+        for pdb_id in kwargs["pdb_ids"]:
+            entry = destination / "raw_entries" / pdb_id[1:3] / pdb_id
+            if entry.exists():
+                continue
+            _write_entry(
+                destination,
+                pdb_id,
+                ligand_rows=[
+                    {"ligand_id": f"{pdb_id}__1__1.L", "ccd": "ADP", "proper": True}
+                ],
+                comparability={f"{pdb_id}__1__1.L": True},
+            )
+            pd.DataFrame(
+                {
+                    "entry_pdb_id": [pdb_id],
+                    "source_mmcif_major_revision": [revisions[pdb_id][0]],
+                    "source_mmcif_minor_revision": [revisions[pdb_id][1]],
+                }
+            ).to_parquet(entry / "entry_source.parquet", index=False)
+            chains = pd.read_parquet(entry / "entry_chains.parquet")
+            chains["chain_sequence"] = chains.chain_length.map(
+                lambda length: "C" * length
+            )
+            chains["chain_sequence_noncanonical"] = chains.chain_sequence
+            chains.to_parquet(entry / "entry_chains.parquet", index=False)
+            (entry / "ligand_files").mkdir()
+            (entry / "ligand_files/L.sdf").write_text("new ligand pose")
+        return destination / "metrics.json", False
+
+    monkeypatch.setattr(update_entries, "ingest_pdb_batch", ingest)
+    args = {
+        "plan_dir": plan_dir,
+        "output_dir": tmp_path / "updated",
+        "validation_root": tmp_path,
+        "annotation_cfg": {},
+        "entry_cfg": {},
+        "interface_cfg": {"min_interface_residues": 7, "annotate_prodigy": False},
+        "threads": 1,
+        "memory_limit": "1GB",
+    }
+    return base, args, calls
+
+
+def _index_bytes(root):
+    return {
+        path.name: path.read_bytes()
+        for path in (root / "index").glob("*")
+        if path.is_file()
+    }
+
+
+def test_weekly_entry_update_matches_full_collation(entry_update_case, tmp_path):
+    base, args, calls = entry_update_case
+    before = _index_bytes(base)
+    report = update_entries.apply_entry_update(**args)
+    assert report["status"] == "requires_downstream_repair"
+    assert report["ingested_pdb_ids"] == ["1abc", "4jkl"]
+    assert report["obsolete_pdb_ids"] == ["2def"]
+    assert calls == [["1abc", "4jkl"]]
+    assert _index_bytes(base) == before
+    output = args["output_dir"]
+    assert not (output / "scores").exists()
+    assert not (output / "ligand_sampling").exists()
+    assert (output / ".incoming/raw_entries/ab/1abc/ligand_files/L.sdf").is_file()
+    full = tmp_path / "full"
+    copytree(output / ".incoming/raw_entries", full / "raw_entries")
+    copytree(output / ".incoming/ligands", full / "ligands")
+    copytree(base / "raw_entries/gh", full / "raw_entries/gh")
+    copy2(base / "ligands/3ghi.parquet", full / "ligands/3ghi.parquet")
+    run_collation(full, memory_limit="1GB")
+    for filename, _ in update_entries.ENTRY_TABLES.values():
+        pd.testing.assert_frame_equal(
+            pd.read_parquet(output / "index" / filename),
+            pd.read_parquet(full / "index" / filename),
+        )
+    assert update_entries.apply_entry_update(**args) == report
+    assert calls == [["1abc", "4jkl"]]
+    assert (
+        json.loads((output / "index/collation.json").read_text())["status"]
+        == "requires_downstream_repair"
+    )
+
+
+def test_weekly_removal_only_needs_no_raw_entries(entry_update_case, tmp_path):
+    base, args, calls = entry_update_case
+    original_plan = json.loads((args["plan_dir"] / "plan.json").read_text())
+    plan_dir = tmp_path / "removal-plan"
+    updates.plan_update(
+        base,
+        output_dir=plan_dir,
+        nextgen_root=Path(original_plan["nextgen_root"]),
+        obsolete_path=Path(original_plan["inputs"]["obsolete"]["path"]),
+        pdb_ids=["2def"],
+    )
+    args["plan_dir"] = plan_dir
+    # Obsolete removals operate on the existing tables, not the old raw files.
+    from shutil import rmtree
+
+    rmtree(base / "raw_entries")
+    report = update_entries.apply_entry_update(**args)
+    assert report["ingested_pdb_ids"] == []
+    assert calls == []
+    for filename, _ in update_entries.ENTRY_TABLES.values():
+        frame = pd.read_parquet(args["output_dir"] / "index" / filename)
+        ids = (
+            frame.entry_pdb_id
+            if "entry_pdb_id" in frame
+            else frame.system_id.str.split("__").str[0]
+        )
+        assert set(ids) == {"1abc", "3ghi"}
+
+
+def test_weekly_update_failure_and_resume_preserve_base(entry_update_case, monkeypatch):
+    base, args, calls = entry_update_case
+    before = _index_bytes(base)
+    original = collate_module._validate_final_tables
+
+    def fail_staging(paths, **kwargs):
+        if paths["annotation"].parent.name == ".entry_tables":
+            raise ValueError("injected validation failure")
+        return original(paths, **kwargs)
+
+    monkeypatch.setattr(collate_module, "_validate_final_tables", fail_staging)
+    with pytest.raises(ValueError, match="injected"):
+        update_entries.apply_entry_update(**args)
+    assert _index_bytes(base) == before
+    assert not (args["output_dir"] / "index").exists()
+    monkeypatch.setattr(collate_module, "_validate_final_tables", original)
+    report = update_entries.apply_entry_update(**args)
+    assert report["status"] == "requires_downstream_repair"
+    assert _index_bytes(base) == before
+
+
+@pytest.mark.parametrize(
+    "change", ["base", "report", "settings", "unowned", "threshold"]
+)
+def test_weekly_update_rejects_changed_inputs(entry_update_case, change):
+    base, args, _ = entry_update_case
+    if change == "base":
+        path = base / "index/entry_sources.parquet"
+        frame = pd.read_parquet(path)
+        frame["source_mmcif_minor_revision"] = 9
+        frame.to_parquet(path, index=False)
+    elif change == "report":
+        path = args["plan_dir"] / "entries.parquet"
+        frame = pd.read_parquet(path)
+        frame["action"] = "obsolete"
+        frame.to_parquet(path, index=False)
+    elif change == "settings":
+        update_entries.apply_entry_update(**args)
+        args["annotation_cfg"] = {"min_polymer_size": 30}
+    elif change == "threshold":
+        args["interface_cfg"] = {"min_interface_residues": 8}
+    else:
+        args["output_dir"].mkdir()
+        (args["output_dir"] / "user-file.txt").write_text("keep")
+    before = _index_bytes(base)
+    with pytest.raises(ValueError):
+        update_entries.apply_entry_update(**args)
+    assert _index_bytes(base) == before
+
+
+def test_weekly_update_rejects_wrong_processed_revision(entry_update_case, monkeypatch):
+    base, args, _ = entry_update_case
+    original = update_entries.ingest_pdb_batch
+
+    def wrong_revision(**kwargs):
+        result = original(**kwargs)
+        path = kwargs["output_root"] / "raw_entries/ab/1abc/entry_source.parquet"
+        frame = pd.read_parquet(path)
+        frame["source_mmcif_major_revision"] = 3
+        frame.to_parquet(path, index=False)
+        return result
+
+    monkeypatch.setattr(update_entries, "ingest_pdb_batch", wrong_revision)
+    before = _index_bytes(base)
+    with pytest.raises(ValueError, match="revisions differ"):
+        update_entries.apply_entry_update(**args)
+    assert before == _index_bytes(base)
+    assert not (args["output_dir"] / "index").exists()
+
+
+def test_weekly_update_install_failure_can_resume(entry_update_case, monkeypatch):
+    base, args, _ = entry_update_case
+    before = _index_bytes(base)
+    replace = Path.replace
+
+    def fail_metadata(path, target):
+        if (
+            path.parent.name == ".entry_tables"
+            and path.name == "entry_metadata.parquet"
+        ):
+            raise OSError("injected installation failure")
+        return replace(path, target)
+
+    monkeypatch.setattr(Path, "replace", fail_metadata)
+    with pytest.raises(OSError, match="injected"):
+        update_entries.apply_entry_update(**args)
+    assert before == _index_bytes(base)
+    assert not (args["output_dir"] / "index/annotation_table.parquet").exists()
+    assert not (args["output_dir"] / "index/collation.json").exists()
+    monkeypatch.setattr(Path, "replace", replace)
+    assert (
+        update_entries.apply_entry_update(**args)["status"]
+        == "requires_downstream_repair"
+    )
+    assert before == _index_bytes(base)
+
+
+def test_weekly_update_entry_failure_keeps_workspace_resumable(
+    entry_update_case, monkeypatch
+):
+    base, args, _ = entry_update_case
+    original = update_entries.ingest_pdb_batch
+    before = _index_bytes(base)
+
+    def failed(**kwargs):
+        path, _ = original(**kwargs)
+        return path, True
+
+    monkeypatch.setattr(update_entries, "ingest_pdb_batch", failed)
+    with pytest.raises(RuntimeError, match="entry update failed"):
+        update_entries.apply_entry_update(**args)
+    assert before == _index_bytes(base)
+    assert not (args["output_dir"] / "index").exists()
+    monkeypatch.setattr(update_entries, "ingest_pdb_batch", original)
+    assert (
+        update_entries.apply_entry_update(**args)["status"]
+        == "requires_downstream_repair"
+    )
+
+
+def test_weekly_update_does_not_reuse_missing_marker(entry_update_case):
+    _, args, _ = entry_update_case
+    update_entries.apply_entry_update(**args)
+    (args["output_dir"] / "index/collation.json").unlink()
+    with pytest.raises(FileNotFoundError):
+        update_entries.apply_entry_update(**args)
+
+
+def test_weekly_update_preserves_nested_residue_mappings(
+    entry_update_case, monkeypatch
+):
+    base, args, _ = entry_update_case
+    path = base / "index/annotation_table.parquet"
+    frame = pd.read_parquet(path)
+    frame["ligand__members"] = [{"1.L": [3, 4]} for _ in range(len(frame))]
+    frame.to_parquet(path, index=False)
+    original = update_entries.ingest_pdb_batch
+
+    def new_chains(**kwargs):
+        result = original(**kwargs)
+        for pdb_id in kwargs["pdb_ids"]:
+            path = (
+                kwargs["output_root"]
+                / "raw_entries"
+                / pdb_id[1:3]
+                / f"{pdb_id}.parquet"
+            )
+            rows = pd.read_parquet(path)
+            rows["ligand__members"] = [{"2.NEW": [5, 6]} for _ in range(len(rows))]
+            rows.to_parquet(path, index=False)
+        return result
+
+    monkeypatch.setattr(update_entries, "ingest_pdb_batch", new_chains)
+    before = _index_bytes(base)
+    update_entries.apply_entry_update(**args)
+    rows = pd.read_parquet(args["output_dir"] / "index/annotation_table.parquet")
+    for row in rows.itertuples(index=False, name=None):
+        mapping = dict(zip(rows.columns, row))
+        residues = mapping["ligand__members"]
+        if mapping["entry_pdb_id"] == "3ghi":
+            assert list(residues["1.L"]) == [3, 4]
+            assert residues["2.NEW"] is None
+        else:
+            assert list(residues["2.NEW"]) == [5, 6]
+            assert residues["1.L"] is None
+    assert _index_bytes(base) == before
 
 
 def test_collation_preserves_failure_diagnostics_and_unknown_older_rows(tmp_path):
