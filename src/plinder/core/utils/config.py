@@ -35,10 +35,14 @@ def _validate_cfg(*, cfg: DictConfig, schema: dict[str, Any]) -> DictConfig:
         the validated config with post-init validation logic
     """
     keys = set(cfg.keys()).union(set(schema.keys()))
-    cfg = OmegaConf.to_container(cfg)
-    cfg.get("data", {}).pop("plinder_dir", None)
-    cfg.get("data", {}).pop("plinder_remote", None)
-    return DictConfig({str(k): schema[str(k)](**cfg.get(k, {})) for k in keys})
+    container = OmegaConf.to_container(cfg)
+    if not isinstance(container, dict):
+        raise TypeError("configuration root must be a mapping")
+    data = container.get("data")
+    if isinstance(data, dict):
+        data.pop("plinder_dir", None)
+        data.pop("plinder_remote", None)
+    return DictConfig({str(k): schema[str(k)](**container.get(k, {})) for k in keys})
 
 
 def _clean_sort_config(*, cfg: Any) -> Any:
@@ -205,9 +209,9 @@ class DataConfig:
     Attributes
     ----------
     plinder_release : str
-        the plinder dataset version
-    plinder_iteration : str
-        the plinder dataset iteration
+        the ingest month for the PLINDER release, formatted as ``YYYY-MM``
+    plinder_release_number : str
+        the numbered release for that ingest month
     plinder_mount : str, default="~/.local/share/plinder"
         the resting place for the plinder dataset
     plinder_bucket : str, default="plinder"
@@ -219,10 +223,10 @@ class DataConfig:
     """
 
     plinder_release: str = field(
-        default_factory=partial(_getenv_default, "PLINDER_RELEASE", "2024-06")
+        default_factory=partial(_getenv_default, "PLINDER_RELEASE", "2026-07")
     )
-    plinder_iteration: str = field(
-        default_factory=partial(_getenv_default, "PLINDER_ITERATION", "v2")
+    plinder_release_number: str = field(
+        default_factory=partial(_getenv_default, "PLINDER_RELEASE_NUMBER", "1")
     )
     plinder_mount: str = field(
         default_factory=partial(
@@ -235,34 +239,23 @@ class DataConfig:
     plinder_dir: str = field(init=False)
     plinder_remote: str = field(init=False)
 
-    ingest: str = "ingest"
-    validation: str = "validation"
-    clusters: str = "clusters"
-    entries: str = "entries"
-    fingerprints: str = "fingerprints"
-    fingerprint_file: str = "ligands_per_system.parquet"
-    index: str = "index"
-    ligand_scores: str = "ligand_scores"
-    ligands: str = "ligands"
-    links: str = "links"
-    linked_structures: str = "linked_structures"
-    mmp: str = "mmp"
     scores: str = "scores"
-    splits: str = "splits"
-    split_file: str = "split.parquet"
-    systems: str = "systems"
-    index_file: str = "annotation_table.parquet"
+    source_mmcifs: str = "source_mmcifs"
     force_update: bool = False
 
     def __post_init__(self) -> None:
-        suffix = self.plinder_release
-        if self.plinder_iteration:
-            suffix = f"{self.plinder_release}/{self.plinder_iteration}"
+        suffix = self.plinder_release.strip("/")
+        release_number = str(self.plinder_release_number).strip("/")
+        if suffix and release_number:
+            suffix = f"{suffix}/{release_number}"
         if self.plinder_mount in ["/plinder", "/", ""]:
-            self.plinder_dir = f"{self.plinder_mount}/{suffix}"
+            root = Path(self.plinder_mount or "/")
         else:
-            self.plinder_dir = f"{self.plinder_mount}/{self.plinder_bucket}/{suffix}"
-        self.plinder_remote = f"gs://{self.plinder_bucket}/{suffix}"
+            root = Path(self.plinder_mount) / self.plinder_bucket
+        self.plinder_dir = (root / suffix).as_posix() if suffix else root.as_posix()
+        self.plinder_remote = f"gs://{self.plinder_bucket}"
+        if suffix:
+            self.plinder_remote += f"/{suffix}"
 
 
 @dataclass

@@ -1,4 +1,0 @@
-ingest:
-  run_specific_stages: make_leakage
-  plinder_mount: /plinder
-  plinder_release: 2024-06

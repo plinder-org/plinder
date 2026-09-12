@@ -22,6 +22,24 @@ LOG = setup_logger(__name__)
 _CLIENTS: dict[str, GSClient] = {}
 
 
+def is_offline() -> bool:
+    """Return whether remote access is disabled.
+
+    ``PLINDER_OFFLINE`` remains the canonical setting.  The
+    ``PLINDER_OFFLINE_MODE`` alias is accepted for compatibility with cluster
+    launch environments that use the longer name.
+    """
+    values = (
+        os.getenv("PLINDER_OFFLINE"),
+        os.getenv("PLINDER_OFFLINE_MODE"),
+    )
+    return any(
+        value is not None
+        and value.strip().lower() not in {"", "0", "false", "no", "off"}
+        for value in values
+    )
+
+
 def _retry_decorator(retries: int) -> Callable[[Callable[..., T]], Callable[..., T]]:
     def decorator(func: Callable[..., T]) -> Callable[..., T]:
         @wraps(func)
@@ -42,13 +60,11 @@ def _retry_decorator(retries: int) -> Callable[[Callable[..., T]], Callable[...,
 
 
 @overload
-def retry(f: Callable[..., T]) -> Callable[..., T]:
-    ...
+def retry(f: Callable[..., T]) -> Callable[..., T]: ...
 
 
 @overload
-def retry(*, retries: int = 5) -> Callable[[Callable[..., T]], Callable[..., T]]:
-    ...
+def retry(*, retries: int = 5) -> Callable[[Callable[..., T]], Callable[..., T]]: ...
 
 
 def retry(
@@ -73,7 +89,7 @@ def thread_pool(func: Callable[..., None], iter: Iterable[T]) -> None:
 def _quiet_ping(path: GSPath) -> None:
     if isinstance(path, CloudPath):
         LOG.debug(f"_ping: type(path)={path.__class__.__name__} local={path._local}")
-        if not os.getenv("PLINDER_OFFLINE"):
+        if not is_offline():
             try:
                 path.fspath
             except OverwriteNewerLocalError:
@@ -97,7 +113,7 @@ def download_paths(*, paths: list[GSPath], force_progress: bool = False) -> None
     paths : list[GSPath]
         the paths to download
     """
-    if os.getenv("PLINDER_OFFLINE"):
+    if is_offline():
         return
     if len(paths) > 10 or force_progress:
         thread_map(_quiet_ping, paths)
@@ -153,7 +169,7 @@ def get_plinder_path(
         remote += f"/{rel}"
     path = GSPath(remote, client=client)
     LOG.debug(f"get_plinder_path: remote={path}")
-    if os.getenv("PLINDER_OFFLINE"):
+    if is_offline():
         return Path(path._local)
 
     if download:
@@ -166,14 +182,3 @@ def get_plinder_path(
             return Path(path._local)
         else:
             raise
-
-
-def get_plinder_paths(*, paths: list[Path]) -> list[Path]:
-    cfg = get_config()
-    client = _get_client(cfg)
-    remote = GSPath(cfg.data.plinder_remote, client=client)
-    LOG.debug(f"get_plinder_paths: remote={remote} npaths={len(paths)}")
-    anypaths = [remote / path.relative_to(cfg.data.plinder_dir) for path in paths]
-    if not os.getenv("PLINDER_OFFLINE"):
-        download_paths(paths=anypaths)
-    return anypaths

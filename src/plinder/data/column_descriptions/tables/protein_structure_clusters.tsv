@@ -1,0 +1,7 @@
+Name	Type	Description
+entry_pdb_id	string	RCSB PDB ID. See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_entry.id.html
+chain_asym_id	string	Chain asymmetric id
+representative_entry_pdb_id	string	PDB entry containing the protein-cluster representative; together with representative_chain_asym_id identifies the cluster
+representative_chain_asym_id	string	Source label_asym_id of the protein-cluster representative; missing when the chain could not be clustered
+is_representative	bool	Whether this protein chain is its cluster representative; missing when the chain could not be clustered
+status	string	Protein clustering outcome: clustered, missing_sequence (MMseqs), insufficient_coordinates (Foldseek), or unknown_residues (Foldseek; all resolved residues are UNK)

@@ -34,15 +34,34 @@ html[data-theme="dark"] {
     padding-bottom: 30px;
 }
 
-/* The tutorial buttons on the home page */
-.main-button {
-    padding-right: 20px;
-    align-self: center;
+/* Task cards on the home page */
+.home-card {
+    position: relative;
+    border-top: 3px solid transparent;
+    transition: transform 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
 }
 
-/* The tutorial button icons on the home page */
-svg.main-button-icon path {
-    fill: var(--pst-color-primary);
+.home-card:hover {
+    border-top-color: var(--pst-color-primary);
+    box-shadow: 0 0.5rem 1.2rem rgb(0 0 0 / 12%);
+    transform: translateY(-2px);
+}
+
+.home-card .sd-card-title {
+    padding-right: 2.75rem;
+}
+
+.home-card-icon {
+    color: var(--pst-color-primary);
+    pointer-events: none;
+    position: absolute;
+    right: 1rem;
+    top: 1rem;
+    width: 2rem;
+}
+
+.home-card-icon i {
+    font-size: 1.8rem;
 }
 
 /* The cross/check marks in the annotation table*/

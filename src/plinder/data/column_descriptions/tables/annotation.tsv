@@ -1,0 +1,131 @@
+Name	Type	Description
+entry_pdb_id	string	RCSB PDB ID. See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_entry.id.html
+system_biounit_id	string	Biounit ID
+system_receptor_type	string	Receptor polymer composition: protein, DNA, RNA, other, or a +-joined combination
+system_protein_chains_asym_id	list<element: string>	Chain asymmetric id
+system_num_pocket_residues	int64	Number of pocket residues of the system
+system_proper_num_pocket_residues	int64	Number of pocket residues of the system excluding ions and artifacts
+system_num_interactions	int64	Number of interactions of the system
+system_proper_num_interactions	int64	Number of interactions of the system excluding ions and artifacts
+system_num_unique_interactions	int64	Number of unique interactions of the system
+system_proper_num_unique_interactions	int64	Number of unique interactions of the system excluding ions and artifacts
+system_num_covalent_ligands	int64	Number of covalent ligands of the system
+system_proper_num_covalent_ligands	int64	Number of covalent ligands of the system excluding ions and artifacts
+system_id	string	ID of the system
+system_type	string	Type of the system (one of: holo, ion, artifact)
+system_has_binding_affinity	bool	Whether any ligand in the system has a binding affinity from BindingDB
+system_num_protein_chains	int64	Number of interacting receptor chains of the system.
+system_proper_num_protein_chains	int64	Number of interacting receptor chains excluding ions and artifacts.
+system_num_ligand_chains	int64	Number of ligand chains of the system
+system_proper_num_ligand_chains	int64	Number of ligand chains of the system excluding ions and artifacts
+system_num_crystal_contacted_residues	int64	Number of residues from other symmetry mates which are in contact with any ligand in the system.
+system_num_atoms_with_crystal_contacts	int64	Number of atoms in the system ligands which are in contact with residues from other symmetry mates.
+system_num_heavy_atoms	int64	Number of heavy atoms in the system ligands
+system_num_resolved_heavy_atoms	int64	Number of resolved heavy atoms in the system ligands
+system_ligand_max_qed	double	Maximum QED of the system ligands
+system_ligand_max_molecular_weight	double	Maximum molecular weight of the system ligands
+system_proper_ligand_max_molecular_weight	double	Maximum molecular weight of the system ligands excluding ions and artifacts
+system_num_unresolved_heavy_atoms	double	Number of unresolved heavy atoms in the system ligands
+system_fraction_atoms_with_crystal_contacts	double	Fraction of atoms in the system ligands which are in contact with residues from other symmetry mates.
+system_pass_validation_criteria	bool	Whether the system passes validation criteria
+system_ligand_chains_asym_id	list<element: string>	Chain asymmetric id
+system_water_residues	list<element: string>	Interacting water residues encoded as <instance>.<asym>_<residue_number>
+ligand_asym_id	string	Ligand chain asymmetric id
+ligand_instance	int64	Biounit instance ID
+ligand_ccd_code	string	Ligand Chemical Component Dictionary (CCD) code
+ligand_molecule_type	string	Ligand molecule type derived from the mmCIF entity polymer type: SMALLMOLECULE, PEPTIDE, DNA, RNA, MIXED, SACCHARIDE, MACROCYCLES, or UNKNOWN
+ligand_is_subject_of_investigation	bool	Whether a component of this ligand is a depositor-flagged SUBJECT OF INVESTIGATION (_pdbx_entity_instance_feature); null when the entry lacks the annotation, i.e. most entries deposited before ~2019
+ligand_bird_id	string	BIRD/PRD reference-molecule id (PRD_xxxxxx) for multi-component ligands, from pdbx_molecule
+ligand_smiles	string	Ligand SMILES from CCD lookup or resolved 3D; for composite ligands, the valid representation with more heavy atoms is used and resolved connectivity wins ties
+ligand_resolved_smiles	string	SMILES from resolved 3D coordinates: bond orders from CCD template, stereochemistry from 3D geometry
+ligand_resolved_stereo_matches_template	bool	Whether resolved 3D stereo matches CCD template (True if achiral; None if no template)
+ligand_molecular_weight	double	Molecular weight
+ligand_crippen_clogp	double	Ligand Crippen MlogP, see https://www.rdkit.org/docs/source/rdkit.Chem.Crippen.html
+ligand_num_rot_bonds	int64	Number of rotatable bonds
+ligand_num_hbd	int64	Number of hydrogen bond donors
+ligand_num_hba	int64	Number of hydrogen bond acceptors
+ligand_num_rings	int64	Number of rings
+ligand_num_heavy_atoms	int64	Number of heavy atoms
+ligand_is_covalent	bool	Indicator of whether a ligand  is a covalent ligand
+ligand_covalent_linkages	list<element: string>	Covalent links from _struct_conn (conn_type_id='covale') as receptor_end__ligand_end; each end is {auth_seq}:{comp_id}:{asym}:{label_seq}:{atom} (auth_seq_id with insertion code, label_comp_id, label_asym_id, label_seq_id or '.' for non-polymers, label_atom_id), the residue address shared with ligand_unresolved_atoms and chain_modified_residues
+ligand_num_resolved_heavy_atoms	int64	Number of resolved heavy atoms in a ligand
+ligand_num_unresolved_heavy_atoms	double	Number of unresolved heavy atoms in a ligand: wwPDB unobserved or zero-occupancy atom records, else CCD template minus resolved atoms, else reference SMILES count minus resolved atoms
+ligand_unresolved_atoms	list<element: string>	Heavy atoms missing from the ligand model as {auth_seq}:{comp_id}:{asym}:{label_seq}:{atom}, the residue address of ligand_covalent_linkages; from wwPDB unobserved or zero-occupancy atom records, else the CCD template minus resolved atoms; leaving atoms of polymer and linked residues excluded
+ligand_tpsa	double	Topological polar surface area
+ligand_qed	double	Ligand QED score, a measure of drug-likeness, see https://www.rdkit.org/new_docs/source/rdkit.Chem.QED.html
+ligand_is_ion	bool	Indicator of whether a ligand  is an ion
+ligand_is_lipinski	bool	Indicator of whether a ligand satisfies Lipinski Ro5
+ligand_is_fragment	bool	Indicator of whether a ligand satisfies fragment Ro3
+ligand_is_monosaccharide	bool	Indicator of whether a ligand contains one saccharide unit
+ligand_is_oligosaccharide	bool	Indicator of whether a ligand contains multiple saccharide units
+ligand_is_mononucleotide	bool	Indicator of whether a ligand contains one nucleotide unit
+ligand_is_oligonucleotide	bool	Indicator of whether a ligand contains multiple nucleotide units
+ligand_is_monopeptide	bool	Indicator of whether a ligand contains one peptide unit
+ligand_is_oligopeptide	bool	Indicator of whether a ligand contains multiple peptide units
+ligand_is_cofactor	bool	Indicator of whether a ligand is a cofactor
+ligand_in_artifact_list	bool	Indicator of whether a ligand is in the artifact list
+ligand_is_artifact	bool	Indicator of whether a ligand is an artifact
+ligand_is_other	bool	Indicator of whether a ligand type is not classified as any types of small molecule (Lipinski, Fragment or covalent), ion, cofactor, mono/oligo (peptide, saccharide or nucleotide) or artifact
+ligand_is_invalid	bool	Indicator of whether a ligand is invalid
+ligand_unique_ccd_code	string	Ligand representative CCD code after de-duplicating
+ligand_protein_chains_asym_id	list<element: string>	Chain asymmetric id
+ligand_num_interacting_residues	int64	Number of residues interacting with a given ligand.
+ligand_num_neighboring_residues	int64	Total count of receptor residues (protein/NA) within neighboring threshold.
+ligand_is_proper	bool	Check if ligand is a proper ligand (not an ion or artifact)
+ligand_num_interactions	int64	Number of interactions for a given ligand.
+ligand_failed_interaction_types	list<element: string>	Interaction types whose calculation failed for this ligand; counts for these types may be incomplete
+ligand_num_unique_interactions	int64	Number of unique interactions
+ligand_num_crystal_contacted_residues	int64	Number of residues from other symmetry mates which are in contact with this ligand.
+ligand_num_atoms_with_crystal_contacts	int64	Number of atoms in this ligand which are in contact with residues from other symmetry mates.
+ligand_fraction_atoms_with_crystal_contacts	double	Fraction of atoms in this ligand which are in contact with residues from other symmetry mates.
+ligand_num_pocket_residues	int64	Number of residues in the ligand's binding pocket.
+ligand_id	string	Unique identifier for a given ligand.
+ligand_instance_chain	string	Instance chain for a given ligand.
+ligand_binding_affinity	double	Binding affinity (pKd or pKi) from BindingDB when available.          The affinity is only returned if the BindingDB target sequence         matches at least one receptor chain SEQRES with 100% identity         in the aligned core (terminal overhangs from tags/truncations         are tolerated).  This guards against BindingDB's 85% sequence         identity matching which can assign values to wrong complexes         (see `#94 <https://github.com/plinder-org/plinder/issues/94>`_).
+ligand_residue_numbers	list<element: int64>	Resolved ligand residue numbers used to reconstruct this ligand from the source mmCIF
+ligand_instance_chains	list<element: string>	All instance chains this ligand spans (several for a multi-chain covalent ligand); used to reconstruct the whole-molecule SDF from the source mmCIF
+ligand_water_residues	list<element: string>	Interacting water residues encoded as <instance>.<asym>_<residue_number>
+ligand_interactions	list<element: string>	Protein-ligand interactions encoded by receptor chain, residue number, and interaction type
+ligand_auth_id	string	Author chain ID of the ligand
+ligand_interacting_residues	list<element: string>	Dictionary of interacting residues, with {instance}.{chain} key and residue number value
+ligand_contact_area	double	Voronota-LT contact area in square angstroms between the ligand and the receptor polymer chains of its biological assembly; null when the assembly tessellation was skipped or failed
+ligand_contact_area_chains	list<element: string>	Instance chains in Voronota-LT contact with the ligand, receptor and ligand chains alike, positionally aligned with ligand_contact_area_values
+ligand_contact_area_values	list<element: double>	Voronota-LT contact area in square angstroms between the ligand and each chain in ligand_contact_area_chains
+ligand_neighboring_residues	list<element: string>	Dictionary of neighboring residues, with {instance}.{chain} key and residue number value
+ligand_pocket_unresolved_atoms	list<element: string>	Heavy atoms missing from pocket residues as {auth_seq}:{comp_id}:{asym}:{label_seq}:{atom}, the residue address of ligand_covalent_linkages
+system_pocket_CATH	string	Most frequent CATH mapping among pocket residues
+system_pocket_SCOP2B	string	Most frequent SCOP2B mapping among pocket residues
+system_pocket_Pfam	string	Most frequent Pfam mapping among pocket residues
+system_pocket_UniProt	string	Most frequent UniProt mapping among pocket residues
+ligand_neighboring_ligand_chains_asym_id	list<element: string>	Chain asymmetric id
+biounit_num_ligands	int64	Number of ligands in the biological assembly
+biounit_num_unique_ccd_codes	int64	Number of distinct ligand CCD codes in the biological assembly
+biounit_num_proper_ligands	int64	Number of proper ligands in the biological assembly
+system_ligand_has_lipinski	bool	Whether the system has a Lipinski ligand
+system_ligand_has_cofactor	bool	Whether the system has a cofactor ligand
+system_ligand_has_fragment	bool	Whether the system has a fragment ligand
+system_ligand_has_monosaccharide	bool	Whether the system has a ligand containing one saccharide unit
+system_ligand_has_oligosaccharide	bool	Whether the system has a ligand containing multiple saccharide units
+system_ligand_has_mononucleotide	bool	Whether the system has a ligand containing one nucleotide unit
+system_ligand_has_oligonucleotide	bool	Whether the system has a ligand containing multiple nucleotide units
+system_ligand_has_monopeptide	bool	Whether the system has a ligand containing one peptide unit
+system_ligand_has_oligopeptide	bool	Whether the system has a ligand containing multiple peptide units
+system_ligand_has_artifact	bool	Whether the system has an artifact ligand
+system_ligand_has_other	bool	Whether the system has a ligand classified as other
+system_ligand_has_covalent	bool	Whether the system has a covalent ligand
+system_ligand_has_invalid	bool	Whether the system has an invalid ligand
+system_ligand_has_ion	bool	Whether the system has an ion
+system_protein_chains_total_length	int64	Total length of all receptor polymer chains in the system
+system_unique_ccd_codes	string	Distinct ligand CCD codes in the system
+system_proper_unique_ccd_codes	string	Distinct CCD codes of proper ligands in the system
+ligand_is_shape_comparable	bool	Whether the canonical ligand SDF supports finite shape, color, and SuCOS self-scoring
+ligand_interacting_ligand_chains_asym_id	list<element: string>	Chain asymmetric id
+system_pocket_SCOP2	string	Most frequent SCOP2 mapping among pocket residues
+ligand__members	struct<1.C: list<element: int64>, 1.D: list<element: int64>, 1.E: list<element: int64>, 1.F: list<element: int64>, 1.H: list<element: int64>, 1.I: list<element: int64>, 1.J: list<element: int64>, 1.K: list<element: int64>>	Residue numbers per member instance-chain (self, incl. covalent).          Falls back to the single primary chain for ligands built before         ``member_residue_numbers`` was populated.
+ligand_member_asym_ids	list<element: string>	Asym IDs of every chain this (possibly merged) ligand spans.
+system_id_legacy	string	Historical system ID using global assembly-operation chain instances
+ligand_id_legacy	string	Historical ligand ID using global assembly-operation chain instances
+ligand_smiles_id	int32	Integer node ID assigned to this exact canonical SMILES for ligand similarity scoring
+ligand_max_cofactor_similarity	float	Maximum ECFP4/1024 Tanimoto similarity, as a percentage, to any CCD structure in the cofactor list
+ligand_most_similar_cofactor	string	CCD code of the cofactor with maximum ECFP4/1024 Tanimoto similarity
+ligand_is_cofactor_like	bool	Whether maximum similarity to a listed CCD cofactor is at least 90 percent

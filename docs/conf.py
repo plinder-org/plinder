@@ -5,7 +5,9 @@ from pathlib import Path
 import plinder
 
 DOC_PATH = Path(__file__).parent
-COLUMN_REFERENCE_PATH = DOC_PATH.parent / "src" / "plinder" / "data" / "column_descriptions"
+COLUMN_REFERENCE_PATH = (
+    DOC_PATH.parent / "src" / "plinder" / "data" / "column_descriptions"
+)
 
 # Avoid verbose logs in rendered notebooks
 os.environ["PLINDER_LOG_LEVEL"] = "0"
@@ -17,9 +19,26 @@ import apidoc
 import tablegen
 import viewcode
 
-# Pregeneration of files
-for package in ["plinder.core", "plinder.core.scores", "plinder.core.loader"]:
-    apidoc.generate_api_reference(package, DOC_PATH / "api" / package.split(".")[-1])
+# Modules that require dependencies outside the standard ``pip install plinder``.
+API_EXCLUDED_MODULES = {
+    "plinder.core.loader",
+    "plinder.data.annotations.aggregate_annotations",
+    "plinder.data.annotations.get_ligand_validation",
+    "plinder.data.annotations.ligand_utils",
+    "plinder.data.annotations.protein_utils",
+    "plinder.data.clusters",
+    "plinder.data.get_system_annotations",
+    "plinder.data.pipeline",
+}
+
+# Generate one reference page per module included in the standard installation.
+apidoc.clear_api_reference(DOC_PATH / "api")
+for package in ["plinder.core", "plinder.data", "plinder.eval"]:
+    apidoc.generate_api_reference(
+        package,
+        DOC_PATH / "api" / package.split(".")[-1],
+        excluded_modules=API_EXCLUDED_MODULES,
+    )
 tablegen.generate_table(COLUMN_REFERENCE_PATH, DOC_PATH / "table.html")
 
 #### Source code link ###
@@ -45,6 +64,24 @@ extensions = [
 nb_custom_formats = {".ipynb": ["jupytext.reads", {"fmt": "ipynb"}]}
 nb_execution_timeout = 720
 nb_kernel_rgx_aliases = {"plinder.*": "python3"}
+# TODO(docs-v3): these notebooks were migrated to the v3 schema (new cluster
+# column names, system_receptor_type, structure APIs) but the docs build
+# executes them against the published v2 dataset, so re-execution fails. Skip
+# executing them (committed outputs are rendered instead) until the v3 dataset
+# is published; then remove this list to restore live execution.
+nb_execution_excludepatterns = [
+    "examples/2_query_filter_index.ipynb",
+    "examples/3_access_system_files.ipynb",
+    "examples/4_align_mask_crop.ipynb",
+    "examples/5_dataset_and_loader.ipynb",
+    # TODO: v3-only: these fetch 2026-07 release artifacts (systems, interfaces,
+    # similarity exports) that are not published yet.
+    "examples/custom_scoring.ipynb",
+    "examples/evaluation.ipynb",
+    "examples/protein_interfaces.ipynb",
+    "examples/similarity_and_representatives.ipynb",
+    "tutorial/api.ipynb",
+]
 myst_enable_extensions = [
     "amsmath",
     "attrs_inline",
@@ -70,6 +107,11 @@ autosummary_generate = False
 linkcode_resolve = viewcode.linkcode_resolve
 
 templates_path = ["templates"]
+exclude_patterns = [
+    "_build",
+    # Deferred until the loader API is revisited in a focused PR.
+    "examples/5_dataset_and_loader.ipynb",
+]
 source_suffix = {
     ".rst": "restructuredtext",
     ".ipynb": "myst-nb",
@@ -136,10 +178,3 @@ html_context = {
     "doc_path": "doc",
 }
 html_scaled_image_link = False
-
-
-#### App setup ####
-
-
-def setup(app):
-    app.connect("autodoc-skip-member", apidoc.skip_nonrelevant)

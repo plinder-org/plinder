@@ -1,45 +1,19 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
+import sys
 from dataclasses import dataclass, field
 from functools import partial
 from typing import Any, Optional
 
+from omegaconf import DictConfig, OmegaConf
+
+from plinder.core.scores.metrics import (
+    CHEMICAL_CLUSTER_METRICS,
+    DEFAULT_CLUSTER_METRICS,
+)
 from plinder.core.utils import config as _config
 
-METRICS = [
-    # pli_qcov:
-    "pli_qcov",
-    "pli_unique_qcov",
-    # seq_sim:
-    "protein_seqsim_qcov_max",
-    "protein_seqsim_qcov_weighted_max",
-    "protein_seqsim_qcov_weighted_sum",
-    "protein_seqsim_max",
-    "protein_seqsim_weighted_max",
-    "protein_seqsim_weighted_sum",
-    # protein
-    "protein_fident_qcov_max",
-    "protein_fident_qcov_weighted_max",
-    "protein_fident_qcov_weighted_sum",
-    "protein_fident_max",
-    "protein_fident_weighted_max",
-    "protein_fident_weighted_sum",
-    "protein_lddt_max",
-    "protein_lddt_qcov_max",
-    "protein_lddt_qcov_weighted_max",
-    "protein_lddt_qcov_weighted_sum",
-    "protein_lddt_weighted_max",
-    "protein_lddt_weighted_sum",
-    "protein_qcov_max",
-    "protein_qcov_weighted_max",
-    "protein_qcov_weighted_sum",
-    # pocket
-    "pocket_fident_qcov",
-    "pocket_fident",
-    "pocket_lddt_qcov",
-    "pocket_lddt",
-    "pocket_qcov",
-]
+METRICS = list(DEFAULT_CLUSTER_METRICS)
 
 
 @dataclass
@@ -59,12 +33,14 @@ class FlowConfig:
         if set, comma-separated list of specific stages to skip
     download_rcsb_files_batch_size: int
         Target number of two_char_codes per task batch.
-    annotation_batch_size : int, default=220
-        How many system annotations to generate in a given chunk
-    skip_existing_entries : bool, default=True
-        if the entry JSON already exists, skip generation
-    make_entries_cpu : int, default=1
-        misguided experiments in multiprocessing over C++ libs (bad idea)
+    make_entries_batch_size : int, default=220
+        Number of entries per task batch.
+    make_entries_force_update : bool, default=False
+        Reprocess entries with completed annotations.
+    make_entries_cpu : int, default=4
+        Number of entry-processing workers.
+    make_entries_mode : str, default="all"
+        Generate ligands and interfaces, only ligands, or only interfaces.
     """
 
     run_specific_stages: Any = ""
@@ -76,37 +52,74 @@ class FlowConfig:
     make_entries_batch_size: int = 220
     make_entries_force_update: bool = False
     make_entries_cpu: int = 4
+    make_entries_mode: str = "all"
 
-    structure_qc_force_update: bool = False
+    collate_entries_batch_size: int = 4
+    collate_entries_cpu: int = 2
+    collate_entries_memory_limit: str = "7GB"
+    finalize_entries_cpu: int = 4
+    finalize_entries_memory_limit: str = "32GB"
 
     make_sub_dbs_cpu: int = 4
+    protein_clustering_cpu: int = 4
+    protein_sequence_cluster_identity: float = 0.4
+    protein_structure_cluster_lddt: float = 0.7
+    protein_cluster_coverage: float = 0.8
     make_scorers_cpu: int = 4
     download_alternative_datasets_threads: int = 10
+    make_dbs_cpu: int = 4
 
     make_ligands_batch_size: int = 100
-    make_ligands_force_update: bool = False
 
     cluster_metrics: list[str] = field(default_factory=lambda: METRICS.copy())
-    cluster_thresholds: list[int] = field(default_factory=lambda: [50, 70, 95, 100])
+    cluster_thresholds: list[int] = field(default_factory=lambda: [30, 50, 70, 90, 100])
+    symmetric_edge_source_batch_size: int = 20
+    symmetric_edge_bucket_count: int = 64
+    component_reduction_source_batch_size: int = 1
+    component_reduction_metric_workers: int = 4
+    clustering_cpu: int = 4
     make_components_force_update: bool = True
     make_components_stop_on_cluster: int = 0
 
-    run_batch_searches_batch_size: int = 10050
+    run_batch_searches_batch_size: int = 5_000
+    map_batch_alignments_batch_size: int = 25
+    make_interface_scores_batch_size: int = 1
+    make_interface_scores_cpu: int = 4
+    make_interface_scores_memory_limit: str = "32GB"
     make_batch_scores_batch_size: int = 90
+    make_batch_scores_cpu: int = 4
     make_batch_scores_force_update: bool = False
-
-    make_links_cpu: int = 8
-    make_linked_structures_cpu: int = 8
-    make_linked_structures_force_update: bool = False
-    score_linked_structures_cpu: int = 8
-    score_linked_structures_batch_size: int = 100
-    score_linked_structures_force_update: bool = False
-    sub_databases: Any = "apo,pred"
-
-    split_config_dir: str = ""
-    test_leakage: bool = False
+    make_ligand_3d_scores_batch_size: int = 30_000
+    make_ligand_3d_scores_cpu: int = 1
+    collate_ligand_3d_candidates_batch_size: int = 4
+    collate_ligand_3d_scores_batch_size: int = 4
+    merge_ligand_3d_scores_batch_size: int = 4
+    collate_partitions_cpu: int = 4
+    collate_partitions_memory_limit: str = "7GB"
 
     def __post_init__(self) -> None:
+        if self.make_entries_mode not in {"all", "ligands", "interfaces"}:
+            raise ValueError(
+                "flow.make_entries_mode must be all, ligands, or interfaces"
+            )
+        if self.collate_entries_batch_size < 1:
+            raise ValueError("flow.collate_entries_batch_size must be positive")
+        if self.collate_entries_cpu < 1 or self.finalize_entries_cpu < 1:
+            raise ValueError("entry collation CPU counts must be positive")
+        for name in [
+            "component_reduction_metric_workers",
+            "symmetric_edge_source_batch_size",
+            "symmetric_edge_bucket_count",
+            "make_interface_scores_batch_size",
+            "make_interface_scores_cpu",
+            "make_ligand_3d_scores_batch_size",
+            "make_ligand_3d_scores_cpu",
+            "collate_ligand_3d_candidates_batch_size",
+            "collate_ligand_3d_scores_batch_size",
+            "merge_ligand_3d_scores_batch_size",
+        ]:
+            if getattr(self, name) < 1:
+                raise ValueError(f"flow.{name} must be positive")
         if isinstance(self.run_specific_stages, str):
             self.run_specific_stages = [
                 stage for stage in self.run_specific_stages.split(",") if stage
@@ -115,8 +128,25 @@ class FlowConfig:
             self.skip_specific_stages = [
                 stage for stage in self.skip_specific_stages.split(",") if stage
             ]
-        if isinstance(self.sub_databases, str):
-            self.sub_databases = [db for db in self.sub_databases.split(",") if db]
+
+
+@dataclass
+class SourceConfig:
+    """Locations of the source archives consumed by entry ingest.
+
+    Empty roots use ``PLINDER_PDB_NEXTGEN_ROOT`` and
+    ``PLINDER_VALIDATION_ROOT`` when set, then fall back to the Metaflow-local
+    ``ingest`` and ``reports`` directories.
+    """
+
+    pdb_nextgen_root: str = ""
+    validation_root: str = ""
+    seqres_path: str = ""
+    discovery_threads: int = 8
+
+    def __post_init__(self) -> None:
+        if self.discovery_threads < 1:
+            raise ValueError("source.discovery_threads must be positive")
 
 
 @dataclass
@@ -124,55 +154,52 @@ class FoldseekConfig:
     alignment_type: int = 2
     score_type: str = "lddt"
     evalue: float = 0.01  # pinder uses default=0.05
-    max_seqs: int = 5000  # pinder uses default=1000
+    max_seqs: int = 10_000
     sensitivity: float = 11.0  # pinder uses default=11.0
     min_seq_id: float = 0.2
     coverage: float = 0.0
     alignment_filename: str = "alignment.txt"
 
     def __post_init__(self) -> None:
-        for attr, allowed in [
-            ("alignment_type", [1, 2]),
-            ("score_type", ["lddt", "alntmscore"]),
-        ]:
-            passed = getattr(self, attr, None)
-            if passed not in allowed:  # type: ignore
-                raise ValueError(
-                    f"{self.__class__.__name__}.{attr} must be in {allowed}"
-                )
+        if self.max_seqs < 1:
+            raise ValueError("foldseek.max_seqs must be positive")
+        if not 0 <= self.min_seq_id <= 1:
+            raise ValueError("foldseek.min_seq_id must be in [0, 1]")
+        if self.alignment_type not in {1, 2}:
+            raise ValueError("FoldseekConfig.alignment_type must be in [1, 2]")
+        if self.score_type not in {"lddt", "alntmscore"}:
+            raise ValueError(
+                "FoldseekConfig.score_type must be in ['lddt', 'alntmscore']"
+            )
 
 
 @dataclass
 class MMSeqsConfig:
     score_type: str = "pident"
     evalue: float = 0.01  # pinder uses default=0.05
-    max_seqs: int = 5000  # pinder uses default=1000
+    max_seqs: int = 10_000
     sensitivity: float = 11.0  # pinder uses default=11.0
     min_seq_id: float = 0.2
     coverage: float = 0.0
     alignment_filename: str = "alignment.txt"
 
     def __post_init__(self) -> None:
-        for attr, allowed in [
-            ("score_type", ["pident"]),
-        ]:
-            if getattr(self, attr) not in allowed:
-                raise ValueError(
-                    f"{self.__class__.__name__}.{attr} must be in {allowed}"
-                )
-
-
-@dataclass
-class GraphConfig:
-    pass
+        if self.max_seqs < 1:
+            raise ValueError("mmseqs.max_seqs must be positive")
+        if not 0 <= self.min_seq_id <= 1:
+            raise ValueError("mmseqs.min_seq_id must be in [0, 1]")
+        if self.score_type != "pident":
+            raise ValueError("MMSeqsConfig.score_type must be in ['pident']")
 
 
 @dataclass
 class ScorerConfig:
-    wipe_partition: bool = False
-    rerun_existing_batch: bool = False
-    minimum_threshold: float = 0.2
-    sub_databases: Any = "holo,apo,pred"
+    minimum_threshold: float = 0.3
+    minimum_thresholds: dict[str, float] = field(default_factory=dict)
+    max_alignment_rows_per_query: int = 5_000_000
+    max_query_protein_chains: int = 30
+    max_query_proper_ligand_chains: int = 30
+    sub_databases: Any = "holo,apo"
 
     def __post_init__(self) -> None:
         if isinstance(self.sub_databases, str):
@@ -187,20 +214,26 @@ class ScorerConfig:
             raise ValueError(
                 f"{self.__class__.__name__}.minimum_threshold must be in [0, 1]"
             )
+        for metric, threshold in self.minimum_thresholds.items():
+            if threshold < 0 or threshold > 1:
+                raise ValueError(
+                    f"scorer.minimum_thresholds[{metric!r}] must be in [0, 1]"
+                )
+        if self.max_alignment_rows_per_query < 1:
+            raise ValueError("scorer.max_alignment_rows_per_query must be positive")
+        if self.max_query_protein_chains < 1 or self.max_query_proper_ligand_chains < 1:
+            raise ValueError("scorer query system chain limits must be positive")
 
 
 @dataclass
 class EntryConfig:
-    # TODO-tjd: deduplicate with AnnotationConfig
-    max_protein_chains_to_save: int = 5
-    max_ligand_chains_to_save: int = 5
-    neighboring_residue_threshold: float = 6.0
-    neighboring_ligand_threshold: float = 4.0
-    min_polymer_size: int = 10
-    max_non_small_mol_ligand_length: int = 20
-    plip_complex_threshold: float = 10.0
+    """Entry-reader options; shared annotation thresholds live in AnnotationConfig."""
+
+    interaction_search_threshold: float = 10.0
+    # heavy atoms; Voronota-LT needs ~2.2 KB/atom, skipped assemblies get null areas
+    tessellation_atom_limit: int = 2_000_000
+    data_dir: Optional[str] = None
     save_folder: Optional[str] = None
-    skip_save_systems: bool = False
 
 
 @dataclass
@@ -218,35 +251,56 @@ class AnnotationConfig:
 
     neighboring_residue_threshold: float = 6.0
     neighboring_ligand_threshold: float = 4.0
-    min_polymer_size: int = 10
+    min_polymer_size: int = 12
+    min_shared_pocket_members: int = 3
 
 
-""" From
-OleinikovasV
-OleinikovasV commented Apr 22, 2024
+@dataclass
+class InterfaceConfig:
+    """Protein-interface definitions used during entry ingest."""
 
-Added updated artifacts list and curation, please, review the logic!
+    contact_radius: float = 10.0
+    min_chain_length: int = 12
+    min_interface_residues: int = 7
+    annotate_prodigy: bool = True
 
-"""
+    def __post_init__(self) -> None:
+        if self.contact_radius <= 0:
+            raise ValueError("interface.contact_radius must be positive")
+        if self.min_chain_length < 1:
+            raise ValueError("interface.min_chain_length must be positive")
+        if self.min_interface_residues < 1:
+            raise ValueError("interface.min_interface_residues must be positive")
 
 
 @dataclass
 class LigandConfig:
-    radius: int = 2
-    nbits: int = 1024
-    ligand_id_split_char: str = "__"
-    save_top_k_similar_ligands: int = 5000
-    multiply_by: int = 100
-    number_id_col: str = "number_id_by_inchikeys"
-    score_name: str = "tanimoto_similarity_max"
+    minimum_similarity: float = 30.0
+    cofactor_similarity_threshold: float = 90.0
+    number_id_col: str = "ligand_smiles_id"
+
+    def __post_init__(self) -> None:
+        for name in [
+            "minimum_similarity",
+            "cofactor_similarity_threshold",
+        ]:
+            value = float(getattr(self, name))
+            if not 0 <= value <= 100:
+                raise ValueError(f"ligand.{name} must be between 0 and 100")
+        if self.minimum_similarity > 90:
+            raise ValueError(
+                "ligand.minimum_similarity must not exceed the fixed 90-percent "
+                "frequency cluster threshold"
+            )
 
 
 SCHEMA = {
     "flow": FlowConfig,
+    "source": SourceConfig,
     "foldseek": FoldseekConfig,
     "mmseqs": MMSeqsConfig,
-    "graph": GraphConfig,
     "annotation": AnnotationConfig,
+    "interface": InterfaceConfig,
     "entry": EntryConfig,
     "scorer": ScorerConfig,
     "ligand": LigandConfig,
@@ -254,4 +308,51 @@ SCHEMA = {
 
 SCHEMA.update(_config.SCHEMA)
 
-get_config = partial(_config._config, schema=SCHEMA, package_schema="data")
+_get_config = partial(_config._config, schema=SCHEMA, package_schema="data")
+
+
+def get_config(**kwargs: Any) -> DictConfig:
+    """Load and cross-validate the data-pipeline configuration."""
+    cli_args = kwargs.get("config_args")
+    if cli_args is None:
+        # Ignore host-program flags, but reject invalid ingest overrides before
+        # the shared reader's permissive CLI handling can discard them.
+        cli_args = [arg for arg in sys.argv[1:] if arg.split(".", 1)[0] in SCHEMA]
+    if cli_args:
+        _config._validate_cfg(cfg=OmegaConf.from_cli(cli_args), schema=SCHEMA)
+    cfg = _get_config(**kwargs)
+    unsupported_metrics = sorted(
+        set(cfg.flow.cluster_metrics).difference(DEFAULT_CLUSTER_METRICS)
+    )
+    if unsupported_metrics:
+        raise ValueError(
+            "unsupported release clustering metrics: "
+            f"{unsupported_metrics}; use sucos_shape_pocket_qcov instead of "
+            "raw shape, color, or SuCOS"
+        )
+    required_thresholds = [90.0]
+    if set(cfg.flow.cluster_metrics).intersection(CHEMICAL_CLUSTER_METRICS):
+        required_thresholds.extend(
+            float(value) for value in cfg.flow.cluster_thresholds
+        )
+    lowest_required_threshold = min(required_thresholds)
+    if cfg.ligand.minimum_similarity > lowest_required_threshold:
+        raise ValueError(
+            "ligand.minimum_similarity must not exceed the lowest requested "
+            "fingerprint (ECFP4/MHFP6) clustering threshold "
+            f"({lowest_required_threshold:g})"
+        )
+    derived_metrics = set(cfg.flow.cluster_metrics).difference(CHEMICAL_CLUSTER_METRICS)
+    lowest_cluster_threshold = min(
+        float(value) for value in cfg.flow.cluster_thresholds
+    )
+    if (
+        derived_metrics
+        and float(cfg.scorer.minimum_threshold) * 100 > lowest_cluster_threshold
+    ):
+        raise ValueError(
+            "scorer.minimum_threshold must not exceed the lowest requested "
+            "derived-score clustering threshold "
+            f"({lowest_cluster_threshold:g})"
+        )
+    return cfg

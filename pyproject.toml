@@ -2,29 +2,23 @@
 name = "plinder"
 dynamic = ["version"]
 dependencies = [
-    "biotite >= 1.0",
+    "biotite >= 1.2",
     "numpy",
+    "threadpoolctl>=3.6",
     "pandas",
-    "typing_extensions",
     "pydantic",
     "tqdm",
-    "plotly",
-    "nbformat",
     "google-cloud-storage",
     "gcsfs",
-    "gemmi",
-    "rdkit>=2024.03.6",
+    "peppr>=0.13",
+    "voronotalt>=1.1",
+    "rdkit>=2025.09.1",
     "pyarrow",
     "omegaconf",
-    "mmcif",
-    "eval_type_backport",
-    "posebusters",
     "duckdb",
     "cloudpathlib",
-    "mols2grid",
-    "six",
 ]
-description = "PLINDER: The Protein-Ligand INteraction Dataset and Evaluation Resource"
+description = "PLINDER: Protein & Ligand INteraction Dataset and Evaluation Resource"
 readme = "README.md"
 requires-python = ">=3.10"
 classifiers = [
@@ -39,13 +33,11 @@ Issues = "https://github.com/plinder-org/plinder/issues"
 
 [project.scripts]
 plinder_download = "plinder.core.index.utils:download_plinder_cmd"
-plinder_eval = "plinder.eval.docking.write_scores:evaluate_cmd"
-plinder_stratify = "plinder.eval.docking.stratify_test_set:stratify_cmd"
-plinder_plot = "plinder.eval.docking.make_plots:plot_cmd"
+plinder_eval = "plinder.eval.cli:main"
 
 [project.optional-dependencies]
 lint = [
-    "ruff == 0.1.2",
+    "ruff == 0.9.4",
     "pre-commit == 2.21.0",
 ]
 test = [
@@ -53,11 +45,12 @@ test = [
     "pytest == 7.2.0",
     "pytest-cov == 4.0.0",
     "pytest-xdist == 3.6.1",
+    "tomli>=2",
     "build",
     "setuptools_scm[toml]",
 ]
 type = [
-    "mypy==1.2.0",
+    "mypy==1.18.2",
     "types-PyYAML",
     "types-requests",
 ]
@@ -66,6 +59,9 @@ dev = [
 ]
 loader = [
     "torch",
+]
+eval = [
+    "posebusters>=0.6.5",
 ]
 plots = [
     "matplotlib",
@@ -111,11 +107,14 @@ namespaces = false
 plinder = [
     "**.yaml",
     "**.tsv",
-    "plinder/data/utils/annotations/static_files/artifacts_badlist.csv",
+    "plinder/data/annotations/static_files/*",
 ]
 
 [tool.ruff]
 line-length = 88
+preview = false
+
+[tool.ruff.lint]
 select = [
     "F",
     "I",
@@ -124,15 +123,29 @@ ignore = [
     "E",
     "W",
 ]
-preview = true
 
-[tool.ruff.flake8-tidy-imports]
+[tool.ruff.lint.flake8-tidy-imports]
 ban-relative-imports = "all"
 
 [tool.mypy]
 ignore_missing_imports = true
 strict = true
 disallow_untyped_decorators = false
+untyped_calls_exclude = ["pyarrow"]
+follow_imports_for_stubs = true
+
+[[tool.mypy.overrides]]
+module = ["rdkit", "rdkit.*"]
+follow_imports = "skip"
+
+[[tool.mypy.overrides]]
+module = ["pyarrow", "pyarrow.*"]
+follow_imports = "skip"
+
+[[tool.mypy.overrides]]
+module = "plinder.core.loader.dataset"
+# Torch is an optional dependency and is absent from the lightweight type-check job.
+disallow_subclassing_any = false
 
 [[tool.mypy.overrides]]
 module = "plinder._version"

@@ -4,6 +4,7 @@ import os
 
 import pytest
 from omegaconf import DictConfig
+
 from plinder.core.utils import gcs
 
 

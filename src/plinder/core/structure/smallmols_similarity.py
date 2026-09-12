@@ -1,332 +1,260 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
-from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional
+from functools import cache
+from typing import NamedTuple
 
 import numpy as np
-import pandas as pd
-import pyarrow as pa
-import pyarrow.parquet as pq
+from numpy.typing import NDArray
 from rdkit import Chem, DataStructs
-from rdkit.Chem import AllChem, rdFingerprintGenerator, rdRascalMCES
+from rdkit.Chem import (
+    rdFingerprintGenerator,
+    rdMHFPFingerprint,
+    rdRascalMCES,
+)
 from rdkit.Chem.rdchem import Mol
 from rdkit.rdBase import BlockLogs
-from scipy.spatial.distance import cdist
 
-from plinder.core.structure.smallmols_utils import uncharge_mol
-from plinder.core.utils import schemas
-from plinder.core.utils.log import setup_logger
+from plinder.core.utils.sanitize import mol_from_smiles
 
-if TYPE_CHECKING:
-    from plinder.data.utils.annotations.aggregate_annotations import Entry
+# MHFP6 = MinHashed FingerPrint at radius 3 (ECFP diameter 6 equivalent).
+# Probst, D. & Reymond, J-L. "A probabilistic molecular fingerprint for big
+# data settings." J. Cheminform. 10, 8 (2018).
+# https://doi.org/10.1186/s13321-018-0321-8
+MHFP6_RADIUS = 3
+MHFP6_N_PERMUTATIONS = 2048
+# A fixed permutation seed makes the MinHash vectors reproducible across runs
+# and machines; changing it invalidates every stored MHFP6 fingerprint.
+MHFP6_SEED = 42
 
-LOG = setup_logger(__name__)
 
+def smiles2nonstereo(smiles: str) -> str:
+    """Return a stereo-stripped RDKit canonical SMILES — the ligand identity key.
 
-def smiles2inchikey(smiles: str, remove_stereo: bool = False) -> str:
+    RDKit always yields a canonical SMILES from a parsed molecule, whereas InChIKey
+    generation fails for many CCD molecules (organometallics, exotic valences), so
+    canonical SMILES is the robust, uniform identifier. Stereochemistry is removed
+    (identity is stereo-insensitive — used for split stratification and MMP
+    grouping) and no charge normalization is applied: the CCD representation is
+    taken as-is, consistent with the exact-SMILES cofactor/artifact matching.
+
+    Parsing uses the tolerant :func:`mol_from_smiles` so over-valent ligands
+    (boron cages, hypervalent metals) still yield a canonical 2D graph key
+    instead of falling back to their raw, non-canonical SMILES.
     """
-    Gets inchikey. In case it fails, returns standardized smiles instead of as a unique specifier string.
-    Optional to remove stereo (default: False)
-    """
-    mol = Chem.MolFromSmiles(smiles)
+    mol = mol_from_smiles(smiles)
+    if mol is None:
+        return smiles
     with BlockLogs():
-        # TODO: this might be unnecesarry if done before
-        mol = uncharge_mol(mol)
-        if remove_stereo:
-            Chem.RemoveStereochemistry(mol)
-        inchikey = Chem.MolToInchiKey(mol)
-    if not inchikey:
-        inchikey = Chem.CanonSmiles(Chem.MolToSmiles(mol), useChiral=not remove_stereo)
-    return str(inchikey)
-
-
-def get_ecfp_fingerprint(
-    smiles: str, radius: int, nbits: int
-) -> Optional[np.ndarray[int, Any]]:
-    try:
-        mol = Chem.MolFromSmiles(smiles)
-        fp = AllChem.GetMorganFingerprintAsBitVect(mol, radius, nBits=nbits)
-        return np.array(fp)
-    except:
-        return None
+        Chem.RemoveStereochemistry(mol)
+        return str(Chem.MolToSmiles(mol))
 
 
 def mol2morgan_fp(
     mol: Mol | str, radius: int = 2, nbits: int = 2048
 ) -> DataStructs.ExplicitBitVect:
-    """Convert an RDKit molecule to a Morgan fingerprint
-    :param mol: RDKit molecule or SMILES str
-    :param radius: fingerprint radius
-    :param nbits: number of fingerprint bits
-    :return: RDKit Morgan fingerprint
+    """Convert an RDKit molecule or SMILES string to a Morgan fingerprint."""
+    if isinstance(mol, str):
+        mol = mol_from_smiles(mol)
+    if mol is None:
+        raise ValueError("cannot fingerprint an invalid molecule")
+    generator = rdFingerprintGenerator.GetMorganGenerator(radius=radius, fpSize=nbits)
+    return generator.GetFingerprint(mol)
+
+
+@cache
+def _mhfp6_encoder() -> rdMHFPFingerprint.MHFPEncoder:
+    """Return the shared, seeded MHFP6 encoder (permutations are seed-derived)."""
+    return rdMHFPFingerprint.MHFPEncoder(MHFP6_N_PERMUTATIONS, MHFP6_SEED)
+
+
+def mol2mhfp6(mol: Mol | str) -> NDArray[np.uint32]:
+    """Return the MHFP6 MinHash fingerprint of a molecule or SMILES string.
+
+    MHFP6 hashes the set of circular SMILES shingles (radii 1..3) and keeps the
+    per-permutation minima, so the fraction of matching positions between two
+    fingerprints estimates the Jaccard similarity of their shingle sets
+    (Probst & Reymond, J. Cheminform. 2018). Unlike a folded Morgan bit-vector,
+    the result is a dense vector of ``MHFP6_N_PERMUTATIONS`` uint32 hashes.
     """
-    if type(mol) == str:
-        mol = Chem.MolFromSmiles(mol)
-    mfpgen = rdFingerprintGenerator.GetMorganGenerator(radius=radius, fpSize=nbits)
-    fp = mfpgen.GetFingerprint(mol)
-    return fp
+    if isinstance(mol, str):
+        mol = mol_from_smiles(mol)
+    if mol is None:
+        raise ValueError("cannot fingerprint an invalid molecule")
+    encoded = _mhfp6_encoder().EncodeMol(mol, radius=MHFP6_RADIUS)
+    return np.asarray(encoded, dtype=np.uint32)
 
 
-def tanimoto_maxsim_and_argmax(
-    long_list: list[Any], test_list: list[Any]
-) -> tuple[np.ndarray[float], np.ndarray[int]]:
-    """Calculate maximum similarity for the fingerprint second list to the first fingerprint lists"""
-    similarity_matrix = [
-        DataStructs.BulkTanimotoSimilarity(fp, long_list) for fp in test_list
-    ]
-    return np.max(similarity_matrix, axis=1) * 100, np.argmax(similarity_matrix, axis=1)
+def mhfp6_bulk_jaccard(
+    query: NDArray[np.uint32], reference_matrix: NDArray[np.uint32]
+) -> NDArray[np.float64]:
+    """Estimate one MHFP6 vector's Jaccard similarity to every reference row.
 
-
-def get_mmp_similarity_dict(
-    mmp_path: Path, min_constant_size: int = 5
-) -> dict[str, dict[str, float]]:
-    mmp_df = pd.read_csv(
-        mmp_path,
-        sep="\t",
-        compression="gzip",
-        names=["SMILES1", "SMILES2", "id1", "id2", "V1>>V2", "CONSTANT"],
-    )
-
-    const_size_map = {
-        smarts: Chem.MolFromSmarts(smarts).GetNumHeavyAtoms()
-        for smarts in mmp_df.CONSTANT.drop_duplicates()
-    }
-    mmp_df["const_size"] = mmp_df.CONSTANT.map(const_size_map)
-    mmp_df = mmp_df[mmp_df["const_size"] >= min_constant_size]
-
-    # remove stereo as we only care for the graph here - proxy for common edge subgraphs
-    smiles_inchikey_map = {
-        smi: smiles2inchikey(smi, remove_stereo=True)
-        for smi in set(mmp_df.SMILES1.to_list() + mmp_df.SMILES2.to_list())
-    }
-    mmp_df["inchikey1"] = mmp_df.SMILES1.map(smiles_inchikey_map)
-    mmp_df["inchikey2"] = mmp_df.SMILES2.map(smiles_inchikey_map)
-
-    smiles_size_map = {
-        smi: Chem.MolFromSmiles(smi).GetNumHeavyAtoms()
-        for smi in set(mmp_df.SMILES1.to_list() + mmp_df.SMILES2.to_list())
-    }
-    mmp_df["SMILES1_size"] = mmp_df.SMILES1.map(smiles_size_map)
-    mmp_df["SMILES2_size"] = mmp_df.SMILES2.map(smiles_size_map)
-
-    # calculate similarities
-    mmp_df["sim_1_to_2"] = mmp_df["const_size"] / mmp_df["SMILES1_size"]
-    mmp_df["sim_2_to_1"] = mmp_df["const_size"] / mmp_df["SMILES2_size"]
-
-    mmp_sim_dict: dict[str, dict[str, float]] = {}
-    for inchik1, inchik2, sim12, sim21 in mmp_df[
-        ["inchikey1", "inchikey2", "sim_1_to_2", "sim_2_to_1"]
-    ].values:
-        if inchik1 not in mmp_sim_dict.keys():
-            mmp_sim_dict[inchik1] = {}
-        if inchik2 not in mmp_sim_dict.keys():
-            mmp_sim_dict[inchik2] = {}
-        mmp_sim_dict[inchik1][inchik2] = sim12 * 100
-        mmp_sim_dict[inchik2][inchik1] = sim21 * 100
-    return mmp_sim_dict
-
-
-def rdRascalMCES_similarity(mol1: Mol, mol2: Mol, sim_threshold: float = 0.4) -> float:
-    rascal_opts = rdRascalMCES.RascalOptions()
-    rascal_opts.allBestMCESs = False
-    rascal_opts.returnEmptyMCES = True
-    rascal_opts.completeAromaticRings = False
-    rascal_opts.ringMatchesRingOnly = False
-    rascal_opts.maxBondMatchPairs = 1000
-    rascal_opts.timeout = 2
-    rascal_opts.similarityThreshold = sim_threshold
-    res = rdRascalMCES.FindMCES(mol1, mol2, rascal_opts)
-    return float(res[0].tier2Sim if res else 0)
-
-
-def load_ligands_from_entry(
-    *,
-    entry: "Entry",
-    ccd_col: str = "unique_ccd_code",
-    smiles_col: str = "rdkit_canonical_smiles",
-) -> Optional[pd.DataFrame]:
+    Each reference row is a MinHash vector; the estimated Jaccard similarity is
+    the fraction of permutations at which the two vectors share the same minimum
+    hash -- the MinHash counterpart of ``BulkTanimotoSimilarity`` for bit-vectors.
     """
-    Load ligands from entries for tanimoto similarity calculations
+    if reference_matrix.ndim != 2 or reference_matrix.shape[1] != query.shape[0]:
+        raise ValueError("query and reference MinHash widths do not match")
+    matches = np.count_nonzero(reference_matrix == query, axis=1)
+    return np.asarray(matches / reference_matrix.shape[1], dtype=np.float64)
 
-    Parameters
-    ----------
-    entry : Entry
-        annotation entry
-    ccd_col : str
-        entry attribute where ccd code is fetched
-    smiles_col : str
-        entry attribute where smiles is fetched
+
+Centres = dict[int, tuple[Chem.StereoDescriptor, list[int]]]
+
+
+def _stereo_centres(mol: Mol) -> Centres:
+    """Specified tetrahedral centres: descriptor and neighbours, padded to four."""
+    return {
+        si.centeredOn: (si.descriptor, (list(si.controllingAtoms) + [-1])[:4])
+        for si in Chem.FindPotentialStereo(mol)
+        if si.type == Chem.StereoType.Atom_Tetrahedral
+        and si.specified == Chem.StereoSpecified.Specified
+    }
+
+
+def _opposed_centres(
+    first: Centres, second: Centres, partner: dict[int, int], atoms: set[int]
+) -> int:
+    """Count matched tetrahedral centres of opposite handedness under the mapping.
+
+    Tet_CW/Tet_CCW is relative to each molecule's own neighbour order, so the
+    mapping between the two orders is a permutation and the descriptors are
+    equal only up to its parity. A centre needs three mapped neighbours; the
+    leftover slot on each side (fourth neighbour or implicit H, which RDKit
+    orders last) is taken as corresponding.
     """
-    ligands = []
-    for system_id, system in entry.systems.items():
-        if system.system_type != "holo":
-            LOG.info(f"skipping {system_id} as it's not a holo system")
+    opposed = 0
+    for i in atoms & first.keys():
+        j = partner.get(i)
+        if j not in second:
             continue
-        for ligand in system.ligands:
-            smiles = getattr(ligand, smiles_col)
-            ccd_code = getattr(ligand, ccd_col)
-            if not smiles:
-                continue
-            ligand_id = f"{system_id}__{ligand.biounit_id}.{ligand.asym_id}"
-            ligands.append(
-                (
-                    entry.pdb_id,
-                    system_id,
-                    smiles,
-                    ccd_code,
-                    ligand_id,
-                )
-            )
-    LOG.info(f"{entry.pdb_id} loaded {len(ligands)} ligands")
-    if not len(ligands):
-        return None
-    df = (
-        pd.DataFrame(
-            ligands,
-            columns=[
-                "pdb_id",
-                "system_id",
-                "ligand_rdkit_canonical_smiles",
-                "ligand_ccd_code",
-                "ligand_id",
-            ],
+        (descriptor, neighbours), (other_descriptor, other) = first[i], second[j]
+        # i's neighbour order translated into mol2 indices, next to j's own order
+        mapped = [partner.get(a, -1) for a in neighbours]
+        common = set(mapped) & set(other) - {-1}
+        if len(common) < 3:
+            continue
+        mapped, other = (
+            [a if a in common else -1 for a in ns] for ns in (mapped, other)
         )
-        .dropna(subset="ligand_id")
-        .drop_duplicates(subset=["ligand_id"])
-        .reset_index(drop=True)
-        .sort_values(by="ligand_id")
-    )
-    LOG.info(f"after deduplication {len(df.index)} entries")
-    # aggregate multiple ligands into one:
-    df["inchikeys"] = df["ligand_rdkit_canonical_smiles"].apply(smiles2inchikey)
-    return df
+        order = [other.index(a) for a in mapped]
+        odd = sum(order[x] > order[y] for x in range(4) for y in range(x + 1, 4)) % 2
+        opposed += (descriptor == other_descriptor) == bool(odd)
+    return opposed
 
 
-def compute_ligand_fingerprints(
-    *, data_dir: Path, split_char: str = "__", radius: int = 2, nbits: int = 1024
-) -> None:
-    ligands = (
-        pd.read_parquet(data_dir / "ligands").drop_duplicates().reset_index(drop=True)
-    )
-    for col in ligands.columns:
-        nunique = ligands[col].nunique()
-        LOG.info(f"compute_ligand_fingerprints: unique {col}={nunique}")
+class RascalParityMatch(NamedTuple):
+    """One Rascal MCES reduced to what the PARITY-like score needs."""
 
-    ligands_unique = (
-        ligands[ligands["inchikeys"] != ""][
-            ["inchikeys", "ligand_rdkit_canonical_smiles"]
-        ]
-        .drop_duplicates(subset="inchikeys")
-        .sort_values(by="inchikeys")
-        .reset_index(drop=True)
-        .sort_values(by=["inchikeys"])
-    )
-    ids, _ = pd.factorize(ligands_unique["inchikeys"])
-    ids_str = [f"l{int(i)}" for i in ids]
-    ligands_unique["number_id_by_inchikeys"] = ids
-    ligands_unique["number_id_by_inchikeys_withl"] = ids_str
-    missing_inchi = ligands_unique[ligands_unique["number_id_by_inchikeys"] <= -1]
-    LOG.info(f"ligands missing inchikeys: {len(missing_inchi.index)}")
-    ligands_unique = ligands_unique[ligands_unique["number_id_by_inchikeys"] > -1]
-    output_dir = data_dir / "fingerprints"
-    output_dir.mkdir(exist_ok=True, parents=True)
-    ligands_unique.to_parquet(output_dir / "ligands_per_inchikey.parquet", index=False)
+    atoms: dict[int, int]  # largest connected fragment, mol1 -> mol2 atom index
+    bonds: int  # matched bonds over all fragments
+    opposed: int  # fragment centres of opposite handedness under the mapping
+    alternatives: tuple[dict[int, int], ...] = ()  # fragments of the other best MCESs
 
-    LOG.info(f"computing ECFP fingerprints with radius={radius} nbits={nbits}")
-    ligands_unique["ECFP4"] = ligands_unique["ligand_rdkit_canonical_smiles"].apply(
-        get_ecfp_fingerprint,
-        radius=radius,
-        nbits=nbits,
-    )
-    if ligands_unique["ECFP4"].isnull().any():
-        raise ValueError(f"found {ligands_unique['ECFP4'].isnull().sum()}")
-
-    ecfp = (
-        np.concatenate(ligands_unique.ECFP4.values).reshape(-1, nbits).astype(np.int8)
-    )
-    LOG.info(f"writing {output_dir}/ligands_per_inchikey_ecfp4.npy")
-    np.save(output_dir / "ligands_per_inchikey_ecfp4.npy", ecfp)
-
-    ligs = pd.merge(
-        ligands,
-        ligands_unique[
-            ["inchikeys", "number_id_by_inchikeys", "number_id_by_inchikeys_withl"]
-        ],
-        on="inchikeys",
-    )
-    # free up memory
-    ligands_unique = None
-    ecfp = None
-
-    # remove nan inchikeys entries
-    ligs = ligs[ligs["number_id_by_inchikeys"].notna()]
-    ligs["multi_number_id_by_inchikeys"] = ligs["number_id_by_inchikeys"]
-    ligs["multi_number_id_by_inchikeys_withl"] = ligs["number_id_by_inchikeys_withl"]
-
-    for aggcol in [
-        "multi_number_id_by_inchikeys",
-        "multi_number_id_by_inchikeys_withl",
-    ]:
-        ligs[aggcol] = ligs[aggcol].astype(str)
-        agg_df = ligs.groupby("system_id")[aggcol].agg(split_char.join).reset_index()
-        del ligs[aggcol]
-        ligs = pd.merge(ligs, agg_df, on="system_id", how="left")
-
-    LOG.info(f"writing {output_dir}/ligands_per_system.parquet")
-    ligs.to_parquet(output_dir / "ligands_per_system.parquet", index=False)
+    def score(self, mol1: Mol, mol2: Mol, *, stereo: bool = True) -> float:
+        """PARITY-like similarity in [0, 1]; an opposed centre counts half an atom."""
+        atoms = len(self.atoms) - (0.5 * self.opposed if stereo else 0.0)
+        return parity_similarity(
+            atoms,
+            self.bonds,
+            mol1.GetNumAtoms() + mol2.GetNumAtoms(),
+            mol1.GetNumBonds() + mol2.GetNumBonds(),
+        )
 
 
-def ligand_scores(
+def parity_similarity(
+    atoms: float, bonds: float, atom_total: int, bond_total: int
+) -> float:
+    """Mean of the atom and bond Tanimotos; totals are both molecules' counts summed."""
+    if bonds <= 0:
+        return 0.0
+    return (atoms / (atom_total - atoms) + bonds / (bond_total - bonds)) / 2
+
+
+def rascal_parity_match(
+    mol1: Mol,
+    mol2: Mol,
     *,
-    ligand_ids: list[int],
-    data_dir: Path,
-    output_path: Path,
-    number_id_col: str = "number_id_by_inchikeys",
-    # TODO: always save all ligands!!
-    save_top_k_similar_ligands: int = 5000,
-    multiply_by: int = 100,
-) -> None:
-    fp_dir = data_dir / "fingerprints"
-    all_ligs_ids = pd.read_parquet(fp_dir / "ligands_per_inchikey.parquet")
-    LOG.info(f"ligand_scores: loaded {len(all_ligs_ids.index)} ligands")
-    fingerprints = np.load(fp_dir / "ligands_per_inchikey_ecfp4.npy")
-    LOG.info(f"ligand_scores: loaded {fingerprints.shape[0]} fingerprints")
+    target: float = 0.3,
+    timeout: int = 2,
+    all_best: bool = False,
+) -> RascalParityMatch:
+    """Element-exact Rascal MCES with fragments allowed, pruned to a target bond similarity.
 
-    # make sure the shape match and the index is in order
-    if fingerprints.shape[0] != len(all_ligs_ids.index):
-        raise ValueError("ligands don't match fingerprints!")
-    if all_ligs_ids[number_id_col].min() != 0:
-        raise ValueError("inconsistency in ligand ids, no index=zero found!")
-    if all_ligs_ids[number_id_col].max() != all_ligs_ids.shape[0] - 1:
-        raise ValueError("inconsistency in ligand ids, max index != ids shape!")
+    Pairs whose bond Tanimoto cannot reach ``target`` are pruned before the
+    clique search and come back empty. Rascal maximises matched bonds, and the
+    MCESs of that size differ in their largest fragment, so the bonds come from
+    one MCES and the fragment from a second run that keeps only the largest
+    fragment over all of them (``singleLargestFrag``). With ``all_best`` every
+    fragment is enumerated instead (a further 1.5x) and the one scoring best is
+    taken; the rest follow, best first and then in a fixed order.
+    """
+    options = rdRascalMCES.RascalOptions()
+    # tier screens use Johnson similarity; below (2t/(1+t))^2 no pair reaches bond Tanimoto t
+    options.similarityThreshold = (2 * target / (1 + target)) ** 2
+    # fewest matched bonds giving bond Tanimoto >= target; Rascal's bound is exclusive
+    options.minCliqueSize = max(
+        int(np.ceil(target * (mol1.GetNumBonds() + mol2.GetNumBonds()) / (1 + target)))
+        - 1,
+        0,
+    )
+    options.returnEmptyMCES = True
+    options.completeAromaticRings = False
+    options.ringMatchesRingOnly = False
+    options.maxBondMatchPairs = 5000
+    options.timeout = timeout
+    options.allBestMCESs = all_best
+    matches: dict[tuple[tuple[int, int], ...], dict[int, int]] = {}
+    bonds = 0
+    for result in rdRascalMCES.FindMCES(mol1, mol2, options):
+        matched = result.bondMatches()
+        if not matched:
+            continue
+        # largest connected fragment of the matched bonds, in mol1 atom indices
+        atom_map: dict[int, int] = {}
+        core = Chem.PathToSubmol(mol1, [i for i, _ in matched], atomMap=atom_map)
+        original = {new: old for old, new in atom_map.items()}
+        partner = dict(result.atomMatches())
+        fragment = {
+            original[i]: partner[original[i]]
+            for i in max(Chem.GetMolFrags(core), key=len)
+        }
+        matches.setdefault(tuple(sorted(fragment.items())), partner)
+        bonds = len(matched)
+    if not matches:
+        return RascalParityMatch({}, 0, 0)
+    if not all_best:
+        options.singleLargestFrag = True
+        best = rdRascalMCES.FindMCES(mol1, mol2, options)
+        if best and best[0].bondMatches():
+            fragment = dict(best[0].atomMatches())
+            matches = {tuple(sorted(fragment.items())): fragment}
+    centres_1, centres_2 = _stereo_centres(mol1), _stereo_centres(mol2)
+    opposed = {
+        key: _opposed_centres(centres_1, centres_2, partner, {i for i, _ in key})
+        for key, partner in matches.items()
+    }
+    ordered = sorted(matches, key=lambda key: (0.5 * opposed[key] - len(key), key))
+    return RascalParityMatch(
+        dict(ordered[0]),
+        bonds,
+        opposed[ordered[0]],
+        tuple(dict(key) for key in ordered[1:]),
+    )
 
-    query_ecfp = fingerprints[ligand_ids]
-    # target_list = fingerprints
-    ecfp_distances = cdist(query_ecfp, fingerprints, metric="jaccard")
-    # change to similarity score
-    ecfp_distances = np.array(1 - ecfp_distances)
 
-    # For each i and j, the metric dist(u=XA[i], v=XB[j]) is computed
-    # and stored in the ith, jth entry of ecfp_distances = cdist
-    top_k_indices = np.argsort(ecfp_distances, axis=1)[:, -save_top_k_similar_ligands:][
-        ..., ::-1
-    ]
+def rascal_parity_score(
+    mol1: Mol, mol2: Mol, *, target: float = 0.3, stereo: bool = True, timeout: int = 2
+) -> float:
+    """PARITY-like similarity from one Rascal MCES, in [0, 1].
 
-    table = []
-    for row, cols in enumerate(top_k_indices):
-        LOG.info(f"row {ligand_ids[row]}")
-        query_list = [ligand_ids[row]] * len(cols)
-        target_list = cols
-        tani_topk = (np.round(ecfp_distances[row, cols], 2) * multiply_by).astype(int)
-        single_table = pa.table(
-            [
-                pa.array(query_list),
-                pa.array(target_list),
-                pa.array(tani_topk),
-            ],
-            schema=schemas.TANIMOTO_SCORE_SCHEMA,
-        )
-        table.append(single_table)
-    table = pa.concat_tables(table)
-    LOG.info(f"writing {output_path}")
-    pq.write_table(table, output_path)
+    Element-exact MCES with fragments allowed, scored as the mean of two
+    Tanimoto terms: atoms of the largest connected fragment over the atom union,
+    and all matched bonds over the bond union. The largest fragment carries
+    residue order (a shuffled peptide splits into one fragment per residue, a
+    substitution does not); the bonds keep credit for matches beyond a
+    substituted connecting atom. With ``stereo`` a matched tetrahedral centre of
+    opposite handedness counts half an atom.
+    """
+    match = rascal_parity_match(mol1, mol2, target=target, timeout=timeout)
+    return match.score(mol1, mol2, stereo=stereo)

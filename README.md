@@ -1,7 +1,7 @@
 ![plinder](https://github.com/user-attachments/assets/05088c51-36c8-48c6-a7b2-8a69bd40fb44)
 
 <div align="center">
-    <h1>The Protein Ligand INteractions Dataset and Evaluation Resource</h1>
+    <h1>Protein &amp; Ligand INteraction Dataset and Evaluation Resource</h1>
 </div>
 
 ---
@@ -17,17 +17,16 @@
 
 # 📚 About
 
-**PLINDER**, short for **p**rotein **l**igand **in**teractions **d**ataset and
-**e**valuation **r**esource, is a comprehensive, annotated, high quality dataset and
-resource for training and evaluation of protein-ligand docking algorithms:
+**PLINDER** is the **Protein & Ligand INteraction Dataset and Evaluation
+Resource**: a comprehensive, annotated, high-quality resource for training and
+evaluating protein-ligand and protein-protein structure models.
 
 - \> 400k PLI systems across > 11k SCOP domains and > 50k unique small molecules
-- 750+ annotations for each system, including protein and ligand properties, quality,
-  matched molecular series and more
+- Ligand-level annotations plus compact entry, chain, interface, and representative tables
 - Automated curation pipeline to keep up with the PDB
-- 14 PLI metrics and over 20 billion similarity scores
-- Unbound \(_apo_\) and _predicted_ Alphafold2 structures linked to _holo_ systems
-- _train-val-test_ splits and ability to tune splitting based on the learning task
+- Reusable ligand, pocket, and protein-interface similarities and cluster assignments
+- Deposited apo protein chains linked to compatible _holo_ systems
+- Directed-cover assignments for choosing diverse training representatives
 - Robust evaluation harness to simplify and standard performance comparison between
   models.
 
@@ -35,9 +34,7 @@ The *PLINDER* project is a community effort, launched by the University of Basel
 SIB Swiss Institute of Bioinformatics, Proxima (formerly VantAI), NVIDIA, MIT CSAIL,
 and will be regularly updated.
 
-To accelerate community adoption, PLINDER will be used as the field’s new Protein-Ligand
-interaction dataset standard as part of an exciting competition at the upcoming 2024
-[Machine Learning in Structural Biology (MLSB)](https://mlsb.io#challenge) Workshop at NeurIPS, one of the field's premiere academic gatherings.
+PLINDER set a new standard for the Protein-Ligand interaction datasets. It was first introduced as part of the 2024 Machine Learning in Structural Biology (MLSB) [Workshop challenge](https://www.mlsb.io/index_2024.html#challenge) at NeurIPS, one of the field's premiere academic gatherings.
 More details about the competition and other helpful practical tips can be found at our recent workshop repo:
 [Moving Beyond Memorization](https://github.com/plinder-org/moving_beyond_memorisation).
 
@@ -49,7 +46,7 @@ More details about the competition and other helpful practical tips can be found
 We version the `plinder` dataset with two controls:
 
 - `PLINDER_RELEASE`: the month stamp of the last RCSB sync
-- `PLINDER_ITERATION`: value that enables iterative development within a release
+- `PLINDER_RELEASE_NUMBER`: numbered release within that ingest month
 
 We version the `plinder` application using an automated semantic
 versioning scheme based on the `git` commit history.
@@ -57,14 +54,26 @@ The `plinder.data` package is responsible for generating a dataset
 release and the `plinder.core` package makes it easy to interact
 with the dataset.
 
-#### 🐛🐛🐛 Known bugs:
-- Source dataset contains incorrect `entry_release_date` dates, please, use `query_index` to get correct dates patched.
-- Complexes containing nucleic acid receptors may [not be saved corectly](https://github.com/plinder-org/plinder/issues/61).
-- `ligand_binding_affinity` queries have been disabled due to a [bug found parsing BindingDB](https://github.com/plinder-org/plinder/issues/94)
-
 #### Changelog:
 
-- 2024-06/v2 (Current):
+- WIP (Current — unreleased):
+    - **Major backend refactor**: replaced OST, gemmi, plip, openbabel with biotite + peppr for data generation; removed 6 dependencies from ingest pipeline
+    - **Nucleic acid support**: DNA/RNA chains now correctly included as receptor neighbors, mainchain/sidechain detection works for both protein and nucleic acids ([#61](https://github.com/plinder-org/plinder/issues/61))
+    - **Custom CIF support**: new `Entry.from_custom_cif_file` for structure-prediction outputs (Boltz, AlphaFold3, Chai-1) that ship CIFs without `_chem_comp_bond` ([#117](https://github.com/plinder-org/plinder/issues/117)). Bond orders come from `ligand_smiles_dict` via positional atom-order match (the convention these tools follow); element/count mismatches raise with the offending position, `force_substructure_match=True` opts into substructure matching when atom order isn't preserved. User SMILES win over CCD for both `smiles` and `resolved_stereo_matches_template` — closes a silent gap where biotite's `LIG` placeholder would pass any 3D conformer. Input CIFs are never mutated; optional `save_fixed_cif` persists the enriched copy.
+    - **Stricter CIF ingest**: H/D filtered consistently (biotite's `filter_heavy`); multi-model CIFs warn and use model 1; multi-instance custom comp_ids must share heavy-atom naming (since `_chem_comp_bond` is comp_id-keyed); silent `connect_via_residue_names` and half-sanitized substructure fallbacks replaced with `ValueError` so corrupt inputs fail loudly.
+    - **Stereochemistry**: CCD ideal 3D coordinates used as stereo ground truth; new `resolved_stereo_matches_template` flag validates resolved structure chirality against CCD template (handles partial resolution via MCS trimming)
+    - **Interactions**: water bridge and metal bridge detection via peppr; halogen bond sidechain flag now computed (was hardcoded)
+    - **Binding affinity**: fixed BindingDB matching — target sequence now validated against PDB SEQRES with 100% core identity, terminal tags/truncations tolerated ([#94](https://github.com/plinder-org/plinder/issues/94)); updated code to get the latest BindingDB release
+    - **Optional eval**: `pip install plinder[eval]` adds PoseBusters ligand validation; OpenStructure-backed metrics use the Conda-only `openstructure` package; PoseBusters no longer runs during ingest
+    - **PlinderSystem API**: new `receptor_structure` and `ligand_structures` (Biotite AtomArray) plus `ligand_mols` (RDKit Mol) properties; OpenStructure is confined to the evaluation implementation
+    - **Chain type support**: `Chain.from_cif_data` now assigns proper one-letter codes and chem_types for nucleotides (`RNA Linking`, `DNA Linking`); new `Residue.is_modified` property covers both protein PTMs and modified nucleotide bases
+    - **Save utils**: receptor/ligand chain naming generalized (`PDB_RECEPTOR_CHAINS`); system saving works for protein, NA, and mixed complexes
+    - **System definition**: unified `min_polymer_size=12` replaces separate `min_polymer_size`/`max_non_small_mol_ligand_length` — polymers ≥ 12 residues are receptor, shorter are ligands (threshold matches minimum MMseqs2/Foldseek search length); molecules with BIRD annotation are ligands irrespective of size; ligand chains no longer appear in both receptor and ligand parts of system IDs.
+    - **System grouping**: pocket-based grouping (≥ 3 shared receptor residues on the same chain instance) for adjacent binding sites (e.g. orthosteric + allosteric, cofactor + substrate in same active site); artifacts attach only via 4 Å proximity
+    - **Dead code removal**: removed unused OST-based functions, PDB string roundtrips, duplicate SMILES derivation paths, v1 template matching (consolidated to Rascal MCES `get_matched_template`)
+    - **License**: changed from GPL-2.0 to Apache-2.0 (GPL was only required by PLIP, now removed)
+
+- 2024-06/v2:
     - New systems added based on the 2024-06 RCSB sync
     - Updated system definition to be more stable and depend only on ligand distance rather than PLIP
     - Added annotations for crystal contacts
@@ -77,9 +86,9 @@ with the dataset.
 - 2024-04/v1: Version described in the preprint, with updated redundancy removal by protein pocket and ligand similarity.
 - 2024-04/v0: Version used to re-train DiffDock in the paper, with redundancy removal based on \<pdbid\>\_\<ligand ccd codes\>
 
-## 🏅 Gold standard benchmark sets
+## 🏅 Preprint benchmark sets
 
-As part of *PLINDER* resource we provide train, validation and test splits that are
+The historical `2024-04/v1` preprint release provides train, validation, and test splits that are
 curated to minimize the information leakage based on protein-ligand interaction
 similarity.
 In addition, we have prioritized the systems that has a linked experimental `apo`
@@ -105,16 +114,18 @@ The *PLINDER* dataset is provided in two ways:
 
 ## Downloading the dataset
 
-The dataset can be downloaded from the bucket with
-[gsutil](https://cloud.google.com/storage/docs/gsutil_install).
+After installing the package, download the index tables and cluster assignments
+for a release with:
 
 ```console
-$ export PLINDER_RELEASE=2024-06 # Current release
-$ export PLINDER_ITERATION=v2 # Current iteration
-$ mkdir -p ~/.local/share/plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/
-$ gsutil -m cp -r "gs://plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/*" ~/.local/share/plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/
+$ plinder_download --release 2026-07 --release-number 1
 ```
-For details on the sub-directories, see [Documentation](https://plinder-org.github.io/plinder/tutorial/dataset.html).
+
+The command offers the larger ligand, alignment, score, export, and search
+database groups separately. Missing optional artifacts are fetched when an API
+call needs them. Files can also be copied directly from the public bucket with
+[`gsutil`](https://cloud.google.com/storage/docs/gsutil_install).
+For details on the release paths, see [Documentation](https://plinder-org.github.io/plinder/tutorial/dataset.html).
 
 ## Installing the Python package
 
@@ -123,6 +134,18 @@ For details on the sub-directories, see [Documentation](https://plinder-org.gith
 ```
 pip install plinder
 ```
+
+For PoseBusters ligand validation:
+
+```
+pip install plinder[eval]
+```
+
+OpenStructure is not published on PyPI. Evaluation metrics backed by
+OpenStructure (including lDDT and RMSD) use its command-line actions and require
+OpenStructure 2.12.0 or newer; the repository's `environment.yml` installs it
+from Bioconda. See the [evaluation guide](docs/evaluation.md) for evaluating
+folders of ligand or protein-interface predictions.
 
 ## License
 Data curated by PLINDER are made available under the Apache License 2.0.

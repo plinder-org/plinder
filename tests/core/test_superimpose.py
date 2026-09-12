@@ -1,32 +1,38 @@
-from plinder.core.index import PlinderSystem
+from zipfile import ZipFile
+
+from biotite.sequence.io.fasta import FastaFile
+
 from plinder.core.structure.structure import Structure
 
 
-def test_superimpose_chain(read_plinder_mount):
+def test_superimpose_chain(read_plinder_mount, tmp_path):
     """
     Check if :func:`superimpose_chain()` can handle different scenarios.
     In all cases the superimposed structure should have the original number of atoms
     and a low RMSD to the fixed structure.
     """
-    # TODO: review if this test is still relevant
-    pass
-    system_id_1 = "19hc__1__1.A_1.B__1.G"
-    system_id_2 = "19hc__1__1.A_1.B__1.V_1.X_1.Y"
-    # system_dir_1 = read_plinder_mount / "systems" / system_id_1
-    # system_dir_2 = read_plinder_mount / "systems" / system_id_2
+    system_id_1 = "1avd__1__1.A_2.A__1.D"
+    system_id_2 = "1avd__1__1.A_2.A__2.D"
     chain_id_1 = "1.A"
-    # chain_id_2 = "1.A"
-    struct1 = PlinderSystem(system_id=system_id_1).holo_structure
-    struct2 = PlinderSystem(system_id=system_id_2).holo_structure
+    with ZipFile(read_plinder_mount / "systems" / "av.zip") as archive:
+        receptor_1 = archive.extract(f"{system_id_1}/receptor.cif", tmp_path)
+        receptor_2 = archive.extract(f"{system_id_2}/receptor.cif", tmp_path)
+        sequences_1 = archive.extract(f"{system_id_1}/sequences.fasta", tmp_path)
+        sequences_2 = archive.extract(f"{system_id_2}/sequences.fasta", tmp_path)
+    struct1 = Structure(
+        id=system_id_1,
+        protein_path=receptor_1,
+        protein_sequence=dict(FastaFile.read_iter(sequences_1)),
+    )
+    struct2 = Structure(
+        id=system_id_2,
+        protein_path=receptor_2,
+        protein_sequence=dict(FastaFile.read_iter(sequences_2)),
+    )
 
     chain_1_array = struct1.protein_atom_array[
         struct1.protein_atom_array.chain_id == chain_id_1
     ]
-    # # TODO: test assertions here
-    # chain_2_array = struct2.protein_atom_array[
-    #     struct2.protein_atom_array.chain_id == chain_id_2
-    # ]
-
     super_chain_1, raw_rmsd, refined_rmsd = struct1.superimpose(struct2)
     assert isinstance(super_chain_1, Structure)
     super_chain_1_array = super_chain_1.protein_atom_array[
