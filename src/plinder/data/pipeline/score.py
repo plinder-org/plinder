@@ -31,7 +31,7 @@ from plinder.core.utils.files import write_json_atomic
 from plinder.core.utils.log import setup_logger
 from plinder.data import clusters, databases
 from plinder.data.annotations.interface_utils import DEFAULT_MIN_INTERFACE_RESIDUES
-from plinder.data.pipeline import config, tasks
+from plinder.data.pipeline import collate, config, tasks
 
 LOG = setup_logger(__name__)
 
@@ -2588,16 +2588,26 @@ def _ligand_3d_shard_batch(
     return shards[start : start + batch_size]
 
 
-def finalize_ligand_archives(data_dir: Path) -> dict[str, Any]:
-    """Validate packed canonical SDF coverage against the collated index."""
-    expected_shards = sorted(
-        path.name
-        for path in (data_dir / "raw_entries").iterdir()
-        if path.is_dir() and any(path.glob("*.parquet"))
-    )
+def finalize_ligand_archives(
+    data_dir: Path,
+    *,
+    archive_dir: Path | None = None,
+    expected_shards: list[str] | None = None,
+    threads: int = 4,
+    memory_limit: str = "8GB",
+) -> dict[str, Any]:
+    """Validate canonical SDF coverage; updates can supply a staged archive folder."""
+    archive_dir = archive_dir or data_dir / "ligand_archives"
+    if expected_shards is None:
+        expected_shards = [
+            path.name
+            for path in (data_dir / "raw_entries").iterdir()
+            if path.is_dir() and any(path.glob("*.parquet"))
+        ]
+    expected_shards = sorted(expected_shards)
     expected_shard_set = set(expected_shards)
     archives = []
-    for path in sorted((data_dir / "ligand_archives").glob("*.parquet")):
+    for path in sorted(archive_dir.glob("*.parquet")):
         if path.stem not in expected_shard_set and pq.read_metadata(path).num_rows == 0:
             LOG.info(f"removing stale empty canonical ligand archive {path}")
             path.unlink()
@@ -2612,59 +2622,55 @@ def finalize_ligand_archives(data_dir: Path) -> dict[str, Any]:
         )
 
     if not archives:
+        annotation = data_dir / "index" / "annotation_table.parquet"
+        if annotation.is_file() and pq.read_metadata(annotation).num_rows:
+            raise ValueError(
+                "canonical ligand archives are empty but annotation has ligands"
+            )
         report = {
             "status": "complete",
             "shard_count": 0,
             "ligand_count": 0,
             "compressed_bytes": 0,
         }
-        write_json_atomic(data_dir / LIGAND_ARCHIVE_MANIFEST_RELATIVE, report)
+        write_json_atomic(archive_dir / "manifest.json", report)
         return report
 
     import duckdb
 
-    paths_sql = ", ".join(f"'{path.as_posix()}'" for path in archives)
     annotation = data_dir / "index" / "annotation_table.parquet"
-    connection = duckdb.connect()
-    archive_counts = connection.sql(
-        dedent(
-            f"""
+    with duckdb.connect() as connection:
+        collate._configure_duckdb(
+            connection, threads=threads, memory_limit=memory_limit, scratch_dir=None
+        )
+        connection.read_parquet(
+            [str(path) for path in archives], union_by_name=True
+        ).create_view("packed")
+        connection.read_parquet(str(annotation)).create_view("annotation")
+        row_count, unique_count, empty_count = connection.sql(
+            """
             SELECT
                 count(*)::BIGINT,
                 count(DISTINCT (pdb_id, ligand_asym_id))::BIGINT,
-                count(*) FILTER (WHERE octet_length(sdf) = 0)::BIGINT
-            FROM read_parquet([{paths_sql}], union_by_name=true)
+                count(*) FILTER (WHERE sdf IS NULL OR octet_length(sdf) = 0
+                    OR pdb_id IS NULL OR ligand_asym_id IS NULL)::BIGINT
+            FROM packed
             """
-        )
-    ).fetchone()
-    if archive_counts is None:
-        connection.close()
-        raise RuntimeError("failed to validate canonical ligand archives")
-    row_count, unique_count, empty_count = archive_counts
-    missing_result = connection.sql(
-        dedent(
-            f"""
+        ).fetchall()[0]
+        missing_count = connection.sql(
+            """
             WITH expected AS (
                 SELECT DISTINCT
                     entry_pdb_id AS pdb_id,
                     ligand_asym_id
-                FROM read_parquet('{annotation.as_posix()}')
+                FROM annotation
                 WHERE ligand_asym_id IS NOT NULL
-            ), packed AS (
-                SELECT pdb_id, ligand_asym_id
-                FROM read_parquet([{paths_sql}], union_by_name=true)
             )
             SELECT count(*)::BIGINT
             FROM expected
             ANTI JOIN packed USING (pdb_id, ligand_asym_id)
             """
-        )
-    ).fetchone()
-    if missing_result is None:
-        connection.close()
-        raise RuntimeError("failed to validate canonical ligand archive coverage")
-    missing_count = missing_result[0]
-    connection.close()
+        ).fetchall()[0][0]
     if row_count != unique_count:
         raise ValueError(
             f"packed canonical ligand keys are not unique: {row_count} rows, "
@@ -2681,7 +2687,7 @@ def finalize_ligand_archives(data_dir: Path) -> dict[str, Any]:
         "ligand_count": row_count,
         "compressed_bytes": sum(path.stat().st_size for path in archives),
     }
-    write_json_atomic(data_dir / LIGAND_ARCHIVE_MANIFEST_RELATIVE, report)
+    write_json_atomic(archive_dir / "manifest.json", report)
     return report
 
 

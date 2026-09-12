@@ -4,9 +4,25 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import shutil
+from errno import EACCES, EPERM, EXDEV
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
+
+
+def link_or_copy_file(source: Path, destination: Path) -> None:
+    """Reuse immutable files on one filesystem, copying across filesystems."""
+    if source.is_symlink():
+        destination.symlink_to(source.readlink())
+        return
+    try:
+        os.link(source, destination)
+    except OSError as exc:
+        if exc.errno not in {EACCES, EPERM, EXDEV}:
+            raise
+        shutil.copy2(source, destination)
 
 
 def file_sha256(path: Path) -> str:

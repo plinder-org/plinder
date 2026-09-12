@@ -6,13 +6,16 @@ import os
 import shutil
 import subprocess as sp
 from collections.abc import Iterable, Iterator
-from errno import EACCES, EPERM, EXDEV
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
 import pandas as pd
 
-from plinder.core.utils.files import read_json_cache, write_json_atomic
+from plinder.core.utils.files import (
+    link_or_copy_file,
+    read_json_cache,
+    write_json_atomic,
+)
 from plinder.core.utils.log import setup_logger
 
 if TYPE_CHECKING:
@@ -290,19 +293,6 @@ def _search_database_bundle_sources(
     return sources
 
 
-def _link_or_copy_database_file(source: Path, destination: Path) -> None:
-    """Install one database file without duplicating it on the ingest volume."""
-    if source.is_symlink():
-        destination.symlink_to(source.readlink())
-        return
-    try:
-        os.link(source, destination)
-    except OSError as exc:
-        if exc.errno not in {EACCES, EPERM, EXDEV}:
-            raise
-        shutil.copy2(source, destination)
-
-
 def publish_search_database_bundle(
     *,
     source_root: Path,
@@ -336,7 +326,7 @@ def publish_search_database_bundle(
     staging.mkdir()
     try:
         for source in sorted(sources):
-            _link_or_copy_database_file(source, staging / source.name)
+            link_or_copy_file(source, staging / source.name)
         if _has_external_database_links(staging):
             raise ValueError(f"published database bundle is not portable: {staging}")
         if target_root.exists():

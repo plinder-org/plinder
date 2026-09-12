@@ -78,8 +78,22 @@ completed tables. Use a new workspace if the plan, source release, or annotation
 settings change. Entry processing uses the sequential batch runner; `--threads`
 controls table processing.
 
-The workspace is marked `requires_downstream_repair`. Scores, complete canonical
-ligand archives, clusters, and apo links still need updating before it becomes
+Update the canonical ligand archives after preparing the entry tables:
+
+```bash
+python -m plinder.data.pipeline.update_archives /path/to/update-workspace \
+  --threads 4 --memory-limit 8GB
+```
+
+This replaces poses for revised entries, adds new poses, and removes obsolete
+entries. Only affected shards are rewritten. Unchanged shards use hard links
+on the same filesystem and copies otherwise; treat release files as immutable
+and replace them rather than editing them in place. The complete archive set
+is checked against the updated annotation table before installation. The same
+command can be rerun after a failure.
+
+The workspace remains marked `requires_downstream_repair`. Search databases,
+scores, clusters, and apo links still need updating before it becomes
 a release. Search changes must cover both query and target directions; changed
 representatives and hit limits can require additional full-query searches.
 Independent changes to validation reports, NextGen enrichment, CCD data, or
