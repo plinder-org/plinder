@@ -17,7 +17,6 @@ by setting the environment variable `PLINDER_OFFLINE=true`.
 from plinder.core.index.interface import PlinderInterface
 from plinder.core.index.query import query_table
 from plinder.core.index.system import PlinderSystem
-from plinder.core.index.utils import get_manifest, get_plindex
 from plinder.core.release import (
     RELEASE_PATHS,
     RELEASE_TABLES,
@@ -28,8 +27,6 @@ from plinder.core.utils.io import download_pdb_mmcifs, get_pdb_mmcif
 
 __all__ = [
     "get_config",
-    "get_plindex",
-    "get_manifest",
     "get_pdb_mmcif",
     "download_pdb_mmcifs",
     "PlinderInterface",

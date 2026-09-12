@@ -54,12 +54,6 @@ The `plinder.data` package is responsible for generating a dataset
 release and the `plinder.core` package makes it easy to interact
 with the dataset.
 
-#### 🐛🐛🐛 Known bugs:
-- ~~Source dataset contains incorrect `entry_release_date` dates, please, use `query_index` to get correct dates patched.~~
-- ~~Complexes containing nucleic acid receptors may [not be saved correctly](https://github.com/plinder-org/plinder/issues/61).~~
-- ~~`ligand_binding_affinity` queries have been disabled due to a [bug found parsing BindingDB](https://github.com/plinder-org/plinder/issues/94)~~
-All fixed in WIP — will take effect after dataset regeneration.
-
 #### Changelog:
 
 - WIP (Current — unreleased):

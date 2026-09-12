@@ -16,8 +16,7 @@ from typing import Any, Iterable
 
 import pandas as pd
 
-from plinder.core.scores.index import query_index
-from plinder.core.scores.query import FILTER
+from plinder.core.index.query import query_table
 from plinder.core.utils.log import setup_logger
 
 LOG = setup_logger(__name__)
@@ -601,9 +600,11 @@ def load_entry_views(
 
     release = PlinderRelease(data_dir)
     if data_dir is None:
-        df = query_index(
+        df = query_table(
+            "annotation",
             columns=["*"],
-            filters=[FILTER(("entry_pdb_id", "in", set(pdb_ids)))],
+            filters=[("entry_pdb_id", "in", pdb_ids)],
+            release=release,
         )
         chain_path = release.fetch("entry_chains")
         interface_path = (

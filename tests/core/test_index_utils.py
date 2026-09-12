@@ -22,7 +22,6 @@ def mock_path(*, rel: str = "", download: bool = False, force_progress: bool = F
 
 @pytest.fixture
 def mock_cpl(read_plinder_mount, monkeypatch):
-    # patch cpl at core.utils not core.index.utils because of unpack
     monkeypatch.setattr(
         "plinder.core.utils.cpl.get_plinder_path",
         mock_path,
@@ -36,17 +35,6 @@ def mock_cpl(read_plinder_mount, monkeypatch):
     from plinder.core.utils import config
 
     config._config._clear()
-
-
-def test_get_plindex(mock_cpl):
-    df = utils.get_plindex()
-    assert len(df.index) == 57
-    assert "pli_unique_qcov__50__strong__component" in df.columns
-
-
-def test_get_manifest(mock_cpl):
-    df = utils.get_manifest()
-    assert len(df.index) == 57
 
 
 @pytest.mark.parametrize(

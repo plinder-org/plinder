@@ -7,11 +7,10 @@ from typing import Any, Callable
 import torch
 from torch.utils.data import DataLoader, Dataset
 
+from plinder.core.index.query import Filters, query_table
 from plinder.core.index.system import PlinderSystem
 from plinder.core.loader.featurizer import structure_featurizer
 from plinder.core.loader.utils import collate_batch
-from plinder.core.scores import query_index
-from plinder.core.scores.query import FILTERS
 from plinder.core.structure.structure import Structure
 from plinder.core.utils.log import setup_logger
 
@@ -24,7 +23,7 @@ class PlinderDataset(Dataset):  # type: ignore
 
     Parameters
     ----------
-    filters: FILTERS, default=None
+    filters: Filters, default=None
         Index filter to select specific system ids
     system_factory: Callable[[str], PlinderSystem] | None, default=None
         Optional function that creates a system from its system ID
@@ -36,13 +35,13 @@ class PlinderDataset(Dataset):  # type: ignore
 
     def __init__(
         self,
-        filters: FILTERS = None,
+        filters: Filters = None,
         featurizer: Callable[
             [Structure], torch.Tensor | dict[str, torch.Tensor]
         ] = structure_featurizer,
         system_factory: Callable[[str], PlinderSystem] | None = None,
     ):
-        index = query_index(filters=filters)
+        index = query_table("annotation", columns=["system_id"], filters=filters)
         LOG.info(f"Loading {index.system_id.nunique()} systems")
         self._system_ids = index["system_id"].drop_duplicates().tolist()
         self._num_examples = len(self._system_ids)

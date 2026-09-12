@@ -6,69 +6,12 @@ from argparse import ArgumentParser
 from textwrap import dedent
 from time import time
 
-import pandas as pd
-
 from plinder.core.release import RELEASE_PATHS, RELEASE_TABLES
 from plinder.core.utils import cpl
 from plinder.core.utils.config import get_config
-from plinder.core.utils.dec import timeit
 from plinder.core.utils.log import setup_logger
 
 LOG = setup_logger(__name__)
-
-_PLINDEX = None
-_MANIFEST = None
-
-
-@timeit
-def get_plindex() -> pd.DataFrame:
-    """
-    Fetch the plindex and cache it
-
-    Parameters
-    ----------
-    cfg : DictConfig, default=None
-        the plinder-core config
-
-    Returns
-    -------
-    pd.DataFrame
-        the plindex
-    """
-    from plinder.core.scores import query_index
-
-    global _PLINDEX
-
-    if _PLINDEX is not None:
-        return _PLINDEX
-    _PLINDEX = query_index(columns=["*"])
-    return _PLINDEX
-
-
-def get_manifest() -> pd.DataFrame:
-    """
-    Fetch the manifest and cache it
-
-    Parameters
-    ----------
-    cfg : DictConfig, default=None
-        the plinder-core config
-    plindex : pd.DataFrame, default=None
-        the plindex
-
-    Returns
-    -------
-    pd.DataFrame
-        the manifest
-    """
-    from plinder.core.scores import query_index
-
-    global _MANIFEST
-
-    if _MANIFEST is not None:
-        return _MANIFEST
-    _MANIFEST = query_index(columns=["system_id", "entry_pdb_id"])
-    return _MANIFEST
 
 
 _DOWNLOAD_GROUPS = (

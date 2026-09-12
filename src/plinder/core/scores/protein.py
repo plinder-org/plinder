@@ -5,7 +5,7 @@ from __future__ import annotations
 import pandas as pd
 from duckdb import sql
 
-from plinder.core.scores.index import query_index
+from plinder.core.index.query import query_table
 from plinder.core.scores.query import FILTER, FILTERS, make_query
 from plinder.core.utils import cpl
 from plinder.core.utils.config import get_config
@@ -162,13 +162,9 @@ def multi_query_protein_similarity(
         columns=["query_system", "target_system"] + list(filter_criteria.keys())
     )
     if search_db == "holo":
-        target_systems_df = query_index(
-            columns=["system_id"],
-        )
-        if target_systems_df is None:
-            return empty_df
+        target_systems_df = query_table("annotation", columns=["system_id"])
         target_systems = set(target_systems_df["system_id"])
-        if len(target_systems) == 0:
+        if not target_systems:
             return empty_df
     filters = []
     for metric, threshold in filter_criteria.items():

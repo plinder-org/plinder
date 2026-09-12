@@ -17,7 +17,6 @@ from .custom import (
     score_custom_cif_files,
     score_custom_sequence_file,
 )
-from .index import query_index
 from .ligand import cross_similarity as cross_ligand_similarity
 from .ligand import query_ligand_similarity
 from .protein import (
@@ -39,7 +38,6 @@ __all__ = [
     "cross_ligand_similarity",
     "query_protein_similarity",
     "cross_protein_similarity",
-    "query_index",
     "CustomProteinSearchConfig",
     "CustomScoringResult",
     "CustomSequenceScoringResult",

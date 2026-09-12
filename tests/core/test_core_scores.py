@@ -2,8 +2,7 @@
 # Distributed under the terms of the Apache License 2.0
 import pandas as pd
 import pytest
-from plinder.core import scores
-from plinder.core.scores import index as index_module
+from plinder.core import query_table, scores
 from plinder.core.scores import ligand as ligand_module
 from plinder.core.scores.protein import multi_query_protein_similarity
 
@@ -37,52 +36,10 @@ def current_ligand_scores(read_plinder_mount, tmp_path, monkeypatch):
 
 
 @pytest.mark.usefixtures("read_plinder_mount")
-def test_query_index():
-    df = scores.query_index(columns=["system_id"])
+def test_query_annotation_table():
+    df = query_table("annotation", columns=["system_id"])
     assert len(df.index) == 57
     assert "split" not in df.columns
-
-
-def test_query_index_joins_entry_metadata(monkeypatch):
-    calls = []
-
-    def fake_query_table(table_name, **kwargs):
-        calls.append((table_name, kwargs))
-        return pd.DataFrame(
-            {
-                "system_id": ["1abc__1__1.A__1.L"],
-                "entry_resolution": [1.5],
-            }
-        )
-
-    monkeypatch.setattr(index_module, "query_table", fake_query_table)
-
-    result = index_module.query_index(
-        columns=["entry_resolution"],
-        filters=[("entry_resolution", "<=", 2.0)],
-    )
-
-    assert result["entry_resolution"].tolist() == [1.5]
-    assert calls == [
-        (
-            "annotation",
-            {
-                "columns": ["system_id", "entry_resolution"],
-                "filters": [("entry_resolution", "<=", 2.0)],
-                "joins": ["entry_metadata"],
-            },
-        )
-    ]
-
-    index_module.query_index(columns=["system_id"])
-    assert calls[-1] == (
-        "annotation",
-        {
-            "columns": ["system_id"],
-            "filters": None,
-            "joins": None,
-        },
-    )
 
 
 @pytest.mark.usefixtures("read_plinder_mount")
@@ -94,7 +51,8 @@ def test_query_index_joins_entry_metadata(monkeypatch):
     ],
 )
 def test_entry_release_date(system_id, correct_release_date):
-    df = scores.query_index(
+    df = query_table(
+        "annotation",
         columns=["entry_release_date"],
         filters=[("system_id", "==", system_id)],
     )
@@ -188,11 +146,11 @@ def test_query_ligand_cross_similarity(current_ligand_scores, monkeypatch):
     assert len(df.index)
 
 
-def test_ligand_cross_similarity_maps_nodes_through_index(monkeypatch):
+def test_ligand_cross_similarity_maps_nodes_through_annotation(monkeypatch):
     calls = []
 
-    def fake_query_index(*, columns, filters):
-        calls.append((columns, filters))
+    def fake_query_table(table_name, *, columns, filters):
+        calls.append((table_name, columns, filters))
         return pd.DataFrame(
             {
                 "system_id": ["1aaa__1__1.A__1.X", "2bbb__1__1.B__1.Y"],
@@ -200,7 +158,7 @@ def test_ligand_cross_similarity_maps_nodes_through_index(monkeypatch):
             }
         )
 
-    monkeypatch.setattr(index_module, "query_index", fake_query_index)
+    monkeypatch.setattr(ligand_module, "query_table", fake_query_table)
     result = ligand_module.map_cross_similarity(
         pd.DataFrame(
             {
@@ -217,16 +175,21 @@ def test_ligand_cross_similarity_maps_nodes_through_index(monkeypatch):
         "1aaa__1__1.A__1.X",
         "2bbb__1__1.B__1.Y",
     }
-    assert calls and calls[0][0] == ["system_id", "ligand_smiles_id"]
+    assert calls and calls[0][:2] == (
+        "annotation",
+        ["system_id", "ligand_smiles_id"],
+    )
 
 
-def test_ligand_cross_similarity_returns_empty_without_querying_index(
+def test_ligand_cross_similarity_returns_empty_without_querying_annotation(
     monkeypatch,
 ):
     monkeypatch.setattr(
-        index_module,
-        "query_index",
-        lambda **_kwargs: pytest.fail("empty similarities must not query the index"),
+        ligand_module,
+        "query_table",
+        lambda *_args, **_kwargs: pytest.fail(
+            "empty similarities must not query annotation"
+        ),
     )
 
     result = ligand_module.map_cross_similarity(

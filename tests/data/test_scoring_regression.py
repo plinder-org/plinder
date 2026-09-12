@@ -46,7 +46,7 @@ def scoring_fixture(
         entries[pdb_id] = anno.entry
 
     # Write the published-format index parquet so core.scores.entries.load_entry_views
-    # (via core.scores.index.query_index) can read it back. Mirrors the layout
+    # can read it back through query_table. Mirrors the layout
     # the scoring pipeline expects the ligand table, entry metadata, and a
     # splits parquet stub (load logic merges splits even though we do not filter
     # on them).

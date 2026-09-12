@@ -2,11 +2,10 @@
 # Distributed under the terms of the Apache License 2.0
 from __future__ import annotations
 
-from typing import cast
-
 import pandas as pd
 from duckdb import sql
 
+from plinder.core.index.query import query_table
 from plinder.core.release import PlinderRelease
 from plinder.core.scores.query import FILTER, FILTERS, make_query
 from plinder.core.utils.dec import timeit
@@ -75,20 +74,11 @@ def map_cross_similarity(
     idx = df.groupby("updated_query_ligand_id")[metric].idxmax()
     df = df.loc[idx]
 
-    from plinder.core.scores.index import query_index
-
     ligand_ids = set(df["query_ligand_id"].astype(int))
-    ligand_occurrences = query_index(
+    ligand_occurrences = query_table(
+        "annotation",
         columns=["system_id", "ligand_smiles_id"],
-        filters=[
-            FILTER(
-                (
-                    "ligand_smiles_id",
-                    "in",
-                    cast(set[str], ligand_ids),
-                )
-            )
-        ],
+        filters=[("ligand_smiles_id", "in", ligand_ids)],
     )
     id_column = "ligand_smiles_id"
     ligand_to_system: dict[int, set[str]] = {}
