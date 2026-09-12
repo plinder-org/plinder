@@ -11,6 +11,34 @@ from typing import Any
 from plinder.core.utils import cpl
 from plinder.core.utils.config import get_config
 
+
+def _require_file(path: Path, *, description: str) -> Path:
+    if path.is_file():
+        return path
+    mode = "offline cache" if cpl.is_offline() else "release cache"
+    raise FileNotFoundError(f"missing {description} in {mode}: {path}")
+
+
+def _release_file(
+    name: str,
+    *,
+    data_dir: Path | None,
+    description: str,
+    **parameters: str,
+) -> Path:
+    """Resolve a scoring file, preserving context in missing-file errors."""
+    release = PlinderRelease(data_dir)
+    if data_dir is not None:
+        return _require_file(release.path(name, **parameters), description=description)
+    try:
+        return release.fetch(name, **parameters)
+    except FileNotFoundError as exc:
+        mode = "offline cache" if cpl.is_offline() else "release cache"
+        raise FileNotFoundError(
+            f"missing {description} in {mode}: {release.path(name, **parameters)}"
+        ) from exc
+
+
 RELEASE_PATHS = {
     "annotation_table": "index/annotation_table.parquet",
     "system_validation": "index/system_validation.parquet",

@@ -27,6 +27,7 @@ from plinder.core.scores.metrics import (
     maximum_weight_bipartite_assignment,
 )
 from plinder.core.utils import schemas
+from plinder.core.utils.files import write_json_atomic
 from plinder.core.utils.log import setup_logger
 from plinder.data import clusters, databases
 from plinder.data.annotations.interface_utils import DEFAULT_MIN_INTERFACE_RESIDUES
@@ -70,13 +71,6 @@ LIGAND_POCKET_SCORE_PLAN_RELATIVE = Path("manifests/ligand_pocket_scoring_plan.j
 DEFAULT_CLUSTER_THRESHOLDS = (30, 50, 70, 90, 100)
 INTERFACE_CLUSTER_METRICS = ("interface_qcov",)
 MINIMUM_STORED_INTERFACE_SIDE_SIMILARITY = min(DEFAULT_CLUSTER_THRESHOLDS)
-
-
-def _atomic_json(payload: dict[str, Any], path: Path) -> None:
-    path.parent.mkdir(exist_ok=True, parents=True)
-    temporary = path.with_suffix(".tmp.json")
-    temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
-    temporary.replace(path)
 
 
 def _atomic_parquet(frame: pd.DataFrame, path: Path) -> None:
@@ -625,7 +619,7 @@ def plan_score_repair(
         "target_query_batch_count": target_batch_count,
         "batch_count": batch_count,
     }
-    _atomic_json(summary, output.with_suffix(".json"))
+    write_json_atomic(output.with_suffix(".json"), summary)
     return summary
 
 
@@ -784,7 +778,7 @@ def plan_bounded_score_repair(
         "batch_count": batch_count,
         "output": _source_signature(output),
     }
-    _atomic_json(report, output.with_suffix(".json"))
+    write_json_atomic(output.with_suffix(".json"), report)
     return report
 
 
@@ -929,7 +923,8 @@ def repair_target_score_remainders(
     marker = (
         _score_repair_marker_dir(data_dir, repair_manifest) / f"{stalled_pdb_id}.json"
     )
-    _atomic_json(
+    write_json_atomic(
+        marker,
         {
             "pdb_id": stalled_pdb_id,
             "repair_run_id": _score_repair_run_id(repair_manifest),
@@ -937,7 +932,6 @@ def repair_target_score_remainders(
             "repair_mode": str(stalled["repair_mode"]),
             "reason": "resource_limit",
         },
-        marker,
     )
     remainder = incomplete[1:]
     if remainder:
@@ -1061,7 +1055,7 @@ def finalize_score_repair_queries(
         **stage_counts,
         "total": len(dropped),
     }
-    _atomic_json(plan, plan_path)
+    write_json_atomic(plan_path, plan)
     dropped_report = {
         "new": len(newly_recorded),
         "derived_scoring": stage_counts.get("derived_scoring", 0),
@@ -1075,7 +1069,7 @@ def finalize_score_repair_queries(
         "preserved_query_drops": len(preserved_drops),
         "dropped_queries": dropped_report,
     }
-    _atomic_json(report, source.with_suffix(".json"))
+    write_json_atomic(source.with_suffix(".json"), report)
     return report
 
 
@@ -1293,7 +1287,7 @@ def plan_score_repair_ligand_3d(
         "batch_count": batch_count,
         "shard_count": nonempty_shards,
     }
-    _atomic_json(report, output.with_suffix(".json"))
+    write_json_atomic(output.with_suffix(".json"), report)
     return report
 
 
@@ -1534,7 +1528,7 @@ def record_dropped_queries(
         "derived_scoring": len(score_ids),
         "total": len(frame),
     }
-    _atomic_json(plan, data_dir / PLAN_RELATIVE)
+    write_json_atomic(data_dir / PLAN_RELATIVE, plan)
     return {
         "status": "complete",
         "alignment_mapping": len(mapping_ids),
@@ -1610,7 +1604,7 @@ def plan_protein_scoring(
         payload["interface_half_annotation"] = _source_signature(half_interface_path)
     if interface_path.is_file():
         payload["interface_annotation"] = _source_signature(interface_path)
-    _atomic_json(payload, data_dir / PLAN_RELATIVE)
+    write_json_atomic(data_dir / PLAN_RELATIVE, payload)
     return payload
 
 
@@ -1656,7 +1650,7 @@ def plan_linked_apo_scoring(
         "entry_chains": _source_signature(data_dir / "index" / "entry_chains.parquet"),
         "manifest": _source_signature(manifest_path),
     }
-    _atomic_json(payload, data_dir / LINKED_APO_PLAN_RELATIVE)
+    write_json_atomic(data_dir / LINKED_APO_PLAN_RELATIVE, payload)
     return payload
 
 
@@ -2055,7 +2049,7 @@ def plan_score_batches(
             "score_work": _source_signature(output),
         }
     )
-    _atomic_json(plan, data_dir / PLAN_RELATIVE)
+    write_json_atomic(data_dir / PLAN_RELATIVE, plan)
     return {
         "query_count": len(work),
         "batch_size": batch_size,
@@ -2362,7 +2356,7 @@ def plan_ligand_3d_batches(
     for key in list(plan):
         if key.startswith("ligand_3d_retry_"):
             plan.pop(key)
-    _atomic_json(plan, data_dir / PLAN_RELATIVE)
+    write_json_atomic(data_dir / PLAN_RELATIVE, plan)
     LOG.info(
         "ligand 3D planning: wrote %d pairs in %d batches (total %.1fs)",
         pair_count,
@@ -2470,7 +2464,7 @@ def plan_ligand_3d_retries(
             "ligand_3d_retry_work": _source_signature(retry_path),
         }
     )
-    _atomic_json(plan, data_dir / PLAN_RELATIVE)
+    write_json_atomic(data_dir / PLAN_RELATIVE, plan)
     return {
         "status": "planned",
         "missing_original_batch_count": len(missing_original),
@@ -2575,7 +2569,7 @@ def finalize_ligand_3d_retries(
         temporary.replace(output)
 
     plan["ligand_3d_retry_complete"] = True
-    _atomic_json(plan, data_dir / PLAN_RELATIVE)
+    write_json_atomic(data_dir / PLAN_RELATIVE, plan)
     return {
         "status": "complete",
         "retry_batch_count": int(plan["ligand_3d_retry_batch_count"]),
@@ -2624,7 +2618,7 @@ def finalize_ligand_archives(data_dir: Path) -> dict[str, Any]:
             "ligand_count": 0,
             "compressed_bytes": 0,
         }
-        _atomic_json(report, data_dir / LIGAND_ARCHIVE_MANIFEST_RELATIVE)
+        write_json_atomic(data_dir / LIGAND_ARCHIVE_MANIFEST_RELATIVE, report)
         return report
 
     import duckdb
@@ -2687,7 +2681,7 @@ def finalize_ligand_archives(data_dir: Path) -> dict[str, Any]:
         "ligand_count": row_count,
         "compressed_bytes": sum(path.stat().st_size for path in archives),
     }
-    _atomic_json(report, data_dir / LIGAND_ARCHIVE_MANIFEST_RELATIVE)
+    write_json_atomic(data_dir / LIGAND_ARCHIVE_MANIFEST_RELATIVE, report)
     return report
 
 
@@ -2926,7 +2920,7 @@ def plan_clustering(
             cluster_root / "stats.json",
         ]:
             diagnostics.unlink(missing_ok=True)
-        _atomic_json(cluster_selection, cluster_plan_path)
+        write_json_atomic(cluster_plan_path, cluster_selection)
     else:
         # Legacy published partitions are not part of the current release.
         for obsolete in [
@@ -3115,7 +3109,7 @@ def summarize_clustering_artifacts(
         "stats_path": stats_path.relative_to(data_dir).as_posix(),
         "elapsed_seconds": perf_counter() - started,
     }
-    _atomic_json(report, output_dir / "stats.json")
+    write_json_atomic(output_dir / "stats.json", report)
     if issues:
         raise ValueError(f"invalid clustering artifacts: {issues[:10]}")
     return report
@@ -3271,9 +3265,9 @@ def publish_search_database_bundles(
                 target_root=staging / f"holo_{alignment_type}",
                 aln_type=alignment_type,
             )
-        _atomic_json(
-            {"status": "complete", "bundles": reports},
+        write_json_atomic(
             staging / "manifest.json",
+            {"status": "complete", "bundles": reports},
         )
         if output.exists():
             output.rename(backup)
@@ -3502,7 +3496,7 @@ def finalize_alignment_artifacts(data_dir: Path) -> dict[str, Any]:
         "search_database_bundles": search_database_bundles,
         "skipped_queries": skipped_query_details,
     }
-    _atomic_json(report, data_dir / "alignments" / "manifest.json")
+    write_json_atomic(data_dir / "alignments" / "manifest.json", report)
     return report
 
 
@@ -3721,7 +3715,8 @@ def finalize_ligand_3d_artifacts(data_dir: Path) -> dict[str, Any]:
             for column in ["missing_rows", "extra_rows", "duplicate_rows"]
         ):
             raise ValueError(f"ligand 3D pair coverage mismatch: {coverage.to_dict()}")
-        _atomic_json(
+        write_json_atomic(
+            validation_path,
             {
                 "status": "complete",
                 "inputs": pair_validation_inputs,
@@ -3729,7 +3724,6 @@ def finalize_ligand_3d_artifacts(data_dir: Path) -> dict[str, Any]:
                     column: int(coverage[column]) for column in coverage.index
                 },
             },
-            validation_path,
         )
     report = {
         "status": "complete",
@@ -3740,7 +3734,7 @@ def finalize_ligand_3d_artifacts(data_dir: Path) -> dict[str, Any]:
         "ligand_pair_score_shard_count": candidate_count,
         "ligand_pair_score_rows": ligand_pair_score_rows,
     }
-    _atomic_json(report, data_dir / "scores" / "ligand_3d_manifest.json")
+    write_json_atomic(data_dir / "scores" / "ligand_3d_manifest.json", report)
     LOG.info(
         "score finalization complete: "
         f"elapsed_seconds={perf_counter() - started:.1f} report={report}"
@@ -3919,7 +3913,7 @@ def finalize_score_repair_artifacts(
         "pair_rows": pair_rows,
         "score_rows": score_rows,
     }
-    _atomic_json(report, data_dir / "scores" / "score_repair_manifest.json")
+    write_json_atomic(data_dir / "scores" / "score_repair_manifest.json", report)
     return report
 
 
@@ -4461,7 +4455,7 @@ def plan_ligand_pocket_scoring(
         "elapsed_seconds": perf_counter() - started,
         "work": _source_signature(output),
     }
-    _atomic_json(payload, plan_path)
+    write_json_atomic(plan_path, payload)
     return payload
 
 
@@ -4593,7 +4587,7 @@ def score_ligand_pocket_qcov_shards(
             "scores": _source_signature(score_path),
             "score_report": score_report,
         }
-        _atomic_json(manifest, manifest_path)
+        write_json_atomic(manifest_path, manifest)
         reports.append({"shard": shard, "status": "complete", **score_report})
         elapsed = perf_counter() - started
         LOG.info(
@@ -4796,7 +4790,7 @@ def _refresh_ligand_3d_pair_candidate_manifest(
     if payload.get("pair_output") == pair_signature:
         return
     payload["pair_output"] = pair_signature
-    _atomic_json(payload, manifest_path)
+    write_json_atomic(manifest_path, payload)
 
 
 def plan_interface_scoring(
@@ -4918,7 +4912,7 @@ def plan_interface_scoring(
         "interface_membership": _source_signature(membership_path),
         "work": _source_signature(work_path),
     }
-    _atomic_json(payload, data_dir / INTERFACE_SCORE_PLAN_RELATIVE)
+    write_json_atomic(data_dir / INTERFACE_SCORE_PLAN_RELATIVE, payload)
 
     # A new frozen plan replaces the previous query universe. Remove only
     # query-sharded interface outputs that the new plan no longer names so a
@@ -5705,7 +5699,7 @@ def score_interface_qcov_shards(
             "output": _source_signature(output),
             "rows": rows,
         }
-        _atomic_json(payload, manifest)
+        write_json_atomic(manifest, payload)
         reports.append(payload)
         LOG.info(
             "interface score progress: shards=%d/%d shard=%s rows=%d "
@@ -5877,7 +5871,7 @@ def plan_interface_score_repair(
         "interface_score_work": interface_plan["work"],
         "repair_manifest": _source_signature(repair_path),
     }
-    _atomic_json(payload, data_dir / INTERFACE_SCORE_REPAIR_PLAN_RELATIVE)
+    write_json_atomic(data_dir / INTERFACE_SCORE_REPAIR_PLAN_RELATIVE, payload)
     return payload
 
 
@@ -6150,7 +6144,7 @@ def finalize_interface_score_repair(
             "output": _source_signature(output),
             "rows": rows,
         }
-        _atomic_json(payload, output.with_suffix(".json"))
+        write_json_atomic(output.with_suffix(".json"), payload)
         reports.append(payload)
         LOG.info(
             "interface repair finalization: shards=%d/%d shard=%s entries=%d rows=%d",
@@ -6333,7 +6327,7 @@ def finalize_interface_similarity_scores(
         "target_interface_count": int(plan["target_interface_count"]),
         "output": _source_signature(output),
     }
-    _atomic_json(report, release_manifest)
+    write_json_atomic(release_manifest, report)
     return report
 
 
@@ -6480,7 +6474,7 @@ def export_ligand_similarity_scores_batch(
             "output": _source_signature(output),
             "rows": int(metadata.num_rows),
         }
-        _atomic_json(payload, manifest)
+        write_json_atomic(manifest, payload)
         reports.append(payload)
         exported_rows += int(payload["rows"])
         elapsed = perf_counter() - started
@@ -6688,7 +6682,7 @@ def finalize_ligand_similarity_scores(
         "row_count": expected_rows,
         "output": _source_signature(output),
     }
-    _atomic_json(report, release_manifest)
+    write_json_atomic(release_manifest, report)
     return report
 
 

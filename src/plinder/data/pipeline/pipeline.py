@@ -410,7 +410,7 @@ class IngestPipeline:
 
     @utils.ingest_flow_control
     def scatter_collate_ligand_3d_candidates(self) -> list[list[str]]:
-        return tasks.scatter_ligand_3d_candidate_shards(
+        return tasks.scatter_scoring_query_shards(
             data_dir=self.plinder_dir,
             batch_size=self.cfg.flow.collate_ligand_3d_candidates_batch_size,
         )
@@ -468,7 +468,7 @@ class IngestPipeline:
 
     @utils.ingest_flow_control
     def scatter_collate_ligand_3d_scores(self) -> list[list[str]]:
-        return tasks.scatter_ligand_3d_query_shards(
+        return tasks.scatter_scoring_query_shards(
             data_dir=self.plinder_dir,
             batch_size=self.cfg.flow.collate_ligand_3d_scores_batch_size,
         )
@@ -484,7 +484,7 @@ class IngestPipeline:
 
     @utils.ingest_flow_control
     def scatter_merge_ligand_3d_scores(self) -> list[list[str]]:
-        return tasks.scatter_ligand_3d_merge(
+        return tasks.scatter_scoring_query_shards(
             data_dir=self.plinder_dir,
             batch_size=self.cfg.flow.merge_ligand_3d_scores_batch_size,
         )
@@ -511,7 +511,7 @@ class IngestPipeline:
 
     @utils.ingest_flow_control
     def scatter_export_ligand_similarity_scores(self) -> list[list[str]]:
-        return tasks.scatter_ligand_3d_query_shards(
+        return tasks.scatter_scoring_query_shards(
             data_dir=self.plinder_dir,
             batch_size=self.cfg.flow.collate_ligand_3d_scores_batch_size,
         )

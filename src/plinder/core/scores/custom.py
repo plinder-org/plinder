@@ -22,8 +22,7 @@ from typing import Any, Iterable, Literal, Mapping
 import numpy as np
 import pandas as pd
 
-from plinder.core.release import PlinderRelease
-from plinder.core.utils import cpl
+from plinder.core.release import PlinderRelease, _release_file, _require_file
 
 LOG = logging.getLogger(__name__)
 CIF_SEARCH_BACKENDS = ("foldseek", "mmseqs")
@@ -147,35 +146,6 @@ class _SequenceEntry:
     """Small entry stand-in needed while reversing custom alignments."""
 
     pdb_id: str
-
-
-def _require_file(path: Path, *, description: str) -> Path:
-    if path.is_file():
-        return path
-    mode = "offline cache" if cpl.is_offline() else "release cache"
-    raise FileNotFoundError(f"missing {description} in {mode}: {path}")
-
-
-def _release_file(
-    name: str,
-    *,
-    data_dir: Path | None,
-    description: str,
-    **parameters: str,
-) -> Path:
-    release = PlinderRelease(data_dir)
-    if data_dir is not None:
-        return _require_file(
-            release.path(name, **parameters),
-            description=description,
-        )
-    try:
-        return release.fetch(name, **parameters)
-    except FileNotFoundError as exc:
-        mode = "offline cache" if cpl.is_offline() else "release cache"
-        raise FileNotFoundError(
-            f"missing {description} in {mode}: {release.path(name, **parameters)}"
-        ) from exc
 
 
 def _manifest_member(root: Path, value: object, *, field: str) -> Path:
@@ -552,25 +522,6 @@ def _protein_asym_sequences(block: Any) -> dict[str, str]:
     }
 
 
-def _select_assembly_ids(
-    available: Iterable[str], selected: Iterable[str] | None
-) -> list[str]:
-    available_ids = list(dict.fromkeys(str(value) for value in available))
-    if selected is None:
-        return available_ids
-    selected_values = [selected] if isinstance(selected, str) else selected
-    selected_ids = list(dict.fromkeys(str(value) for value in selected_values))
-    if not selected_ids:
-        raise ValueError("assembly_ids must not be empty when provided")
-    missing = sorted(set(selected_ids).difference(available_ids))
-    if missing:
-        raise ValueError(
-            f"requested assembly IDs are absent from the mmCIF: {missing}; "
-            f"available={available_ids}"
-        )
-    return selected_ids
-
-
 def _query_chain_atoms(
     cif_file: Any,
     *,
@@ -584,6 +535,7 @@ def _query_chain_atoms(
     from plinder.data.annotations.cif_utils import (
         build_biounit,
         get_structure_with_altloc,
+        select_assembly_ids,
     )
 
     if structure_mode == "as_is":
@@ -607,7 +559,7 @@ def _query_chain_atoms(
     available_assemblies = block["pdbx_struct_assembly_gen"]["assembly_id"].as_array(
         str
     )
-    selected = _select_assembly_ids(available_assemblies, assembly_ids)
+    selected = select_assembly_ids(available_assemblies, assembly_ids)
     if not selected:
         raise ValueError("pdb mode requires at least one deposited assembly")
     representatives: dict[str, Any] = {}

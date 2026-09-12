@@ -2,7 +2,6 @@
 # Distributed under the terms of the Apache License 2.0
 from __future__ import annotations
 
-import hashlib
 import json
 import time
 from concurrent.futures import (
@@ -28,6 +27,7 @@ from tqdm import tqdm
 
 from plinder.core.scores.metrics import is_chemical_cluster_metric
 from plinder.core.utils import schemas
+from plinder.core.utils.files import file_sha256, read_json_cache, write_json_atomic
 from plinder.core.utils.log import setup_logger
 from plinder.data import clusters, databases
 from plinder.data.annotations import (
@@ -118,26 +118,7 @@ STAGES = [
 
 def _file_content_signature(path: Path) -> dict[str, int | str]:
     """Return a stable signature for a createdb file manifest."""
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        while chunk := handle.read(1024 * 1024):
-            digest.update(chunk)
-    return {"size": path.stat().st_size, "sha256": digest.hexdigest()}
-
-
-def _read_json(path: Path) -> dict[str, Any] | None:
-    try:
-        payload = json.loads(path.read_text())
-    except (OSError, TypeError, ValueError, json.JSONDecodeError):
-        return None
-    return payload if isinstance(payload, dict) else None
-
-
-def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
-    temporary.replace(path)
+    return {"size": path.stat().st_size, "sha256": file_sha256(path)}
 
 
 def scatter_download_rcsb_files(
@@ -298,7 +279,8 @@ def make_dbs(
         )
         input_marker = output_dir / f"{database_type}.createdb-input.json"
         source_is_current = (
-            source_signature is None or _read_json(input_marker) == source_signature
+            source_signature is None
+            or read_json_cache(input_marker) == source_signature
         )
         rebuild = force_update or not complete or not source_is_current
         if create and rebuild:
@@ -311,7 +293,7 @@ def make_dbs(
                 threads=cpu,
             )
             if source_signature is not None:
-                _write_json_atomic(working_marker, source_signature)
+                write_json_atomic(working_marker, source_signature)
         elif create:
             LOG.info(f"make_dbs: reusing completed {database_path}")
         if index:
@@ -684,7 +666,7 @@ def _interface_representative_output_signature(path: Path) -> dict[str, int | st
 def _completed_interface_representatives(
     data_dir: Path,
 ) -> dict[str, Any] | None:
-    manifest = _read_json(data_dir / INTERFACE_REPRESENTATIVES_MANIFEST_RELATIVE)
+    manifest = read_json_cache(data_dir / INTERFACE_REPRESENTATIVES_MANIFEST_RELATIVE)
     expected = {
         "half_interfaces": (
             INTERFACE_HALF_REPRESENTATIVES_RELATIVE,
@@ -935,7 +917,7 @@ def make_interface_representatives(
             data_dir / INTERFACE_HALF_REPRESENTATIVES_RELATIVE
         ).metadata.num_rows,
     }
-    _write_json_atomic(data_dir / INTERFACE_REPRESENTATIVES_MANIFEST_RELATIVE, payload)
+    write_json_atomic(data_dir / INTERFACE_REPRESENTATIVES_MANIFEST_RELATIVE, payload)
     LOG.info(
         "make_interface_representatives: complete interfaces=%d "
         "representatives=%d half_representatives=%d reduction=%.2fx "
@@ -971,7 +953,9 @@ def _ligand_pocket_representative_source_signatures(
 def _completed_ligand_pocket_representatives(
     data_dir: Path,
 ) -> dict[str, Any] | None:
-    manifest = _read_json(data_dir / LIGAND_POCKET_REPRESENTATIVES_MANIFEST_RELATIVE)
+    manifest = read_json_cache(
+        data_dir / LIGAND_POCKET_REPRESENTATIVES_MANIFEST_RELATIVE
+    )
     expected = {
         "representatives": (
             LIGAND_POCKET_REPRESENTATIVES_RELATIVE,
@@ -1321,7 +1305,7 @@ def make_ligand_pocket_representatives(
         "representative_ligand_count": representative_count,
         "pocket_residue_count": pocket_residue_count,
     }
-    _write_json_atomic(
+    write_json_atomic(
         data_dir / LIGAND_POCKET_REPRESENTATIVES_MANIFEST_RELATIVE,
         payload,
     )
@@ -1428,9 +1412,9 @@ def _write_alignment_chain_lookup_manifest(data_dir: Path) -> None:
 def _refresh_representative_source_manifests(data_dir: Path) -> None:
     """Record index-only enrichments without rebuilding unchanged representatives."""
     ligand_manifest_path = data_dir / LIGAND_POCKET_REPRESENTATIVES_MANIFEST_RELATIVE
-    ligand_manifest = _read_json(ligand_manifest_path)
+    ligand_manifest = read_json_cache(ligand_manifest_path)
     interface_manifest_path = data_dir / INTERFACE_REPRESENTATIVES_MANIFEST_RELATIVE
-    interface_manifest = _read_json(interface_manifest_path)
+    interface_manifest = read_json_cache(interface_manifest_path)
     if ligand_manifest is None or interface_manifest is None:
         raise RuntimeError(
             "representative source manifests disappeared during finalization"
@@ -1439,8 +1423,8 @@ def _refresh_representative_source_manifests(data_dir: Path) -> None:
         data_dir
     )
     interface_manifest["source"] = _interface_representative_source_signature(data_dir)
-    _write_json_atomic(ligand_manifest_path, ligand_manifest)
-    _write_json_atomic(interface_manifest_path, interface_manifest)
+    write_json_atomic(ligand_manifest_path, ligand_manifest)
+    write_json_atomic(interface_manifest_path, interface_manifest)
 
 
 def make_alignment_chain_lookup(
@@ -2802,10 +2786,8 @@ def _ligand_pair_score_input_signatures(
     return signatures
 
 
-def scatter_ligand_3d_candidate_shards(
-    *, data_dir: Path, batch_size: int
-) -> list[list[str]]:
-    """Group protein-score query shards for candidate-file consolidation."""
+def scatter_scoring_query_shards(*, data_dir: Path, batch_size: int) -> list[list[str]]:
+    """Group published query shards for candidate collation and score merging."""
     from plinder.data.pipeline.score import published_scoring_query_ids
 
     if batch_size < 1:
@@ -3264,26 +3246,6 @@ def scatter_ligand_3d_score_batches(*, data_dir: Path) -> list[list[int]]:
     if "ligand_3d_batch_count" not in plan:
         raise ValueError("ligand 3D score batches have not been planned")
     return [[index] for index in range(int(plan["ligand_3d_batch_count"]))]
-
-
-def scatter_ligand_3d_query_shards(
-    *, data_dir: Path, batch_size: int
-) -> list[list[str]]:
-    """Group query shards that contain planned canonical ligand pairs."""
-    from plinder.data.pipeline.score import published_scoring_query_ids
-
-    if batch_size < 1:
-        raise ValueError("batch size must be positive")
-    shards = sorted({pdb_id[1:3] for pdb_id in published_scoring_query_ids(data_dir)})
-    return [
-        shards[start : start + batch_size]
-        for start in range(0, len(shards), batch_size)
-    ] or [[]]
-
-
-def scatter_ligand_3d_merge(*, data_dir: Path, batch_size: int) -> list[list[str]]:
-    """Group stable query shards for direct packed-score publication."""
-    return scatter_ligand_3d_query_shards(data_dir=data_dir, batch_size=batch_size)
 
 
 def collate_ligand_3d_scores(

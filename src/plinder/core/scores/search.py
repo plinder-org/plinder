@@ -18,7 +18,11 @@ from plinder.core.scores.custom import (
     score_custom_cif_files,
     score_custom_sequence_file,
 )
-from plinder.core.structure.inputs import read_structure_table, write_search_structure
+from plinder.core.structure.inputs import (
+    find_structure_files,
+    read_structure_table,
+    write_search_structure,
+)
 
 
 def search(
@@ -84,14 +88,10 @@ def search(
         if mode in {"ligands", "both"}:
             raise ValueError("Use an input table for ligand searches")
         assert path is not None
-        files = sorted(path.iterdir()) if path.is_dir() else [path]
         rows = []
-        for file in files:
-            if file.is_file() and file.name.lower().endswith(
-                (".pdb", ".pdb.gz", ".cif", ".cif.gz", ".mmcif", ".mmcif.gz")
-            ):
-                name = file.stem if file.suffix.lower() == ".gz" else file.name
-                rows.append({"input_id": Path(name).stem, "structure_path": str(file)})
+        for file in find_structure_files(path):
+            name = file.stem if file.suffix.lower() == ".gz" else file.name
+            rows.append({"input_id": Path(name).stem, "structure_path": str(file)})
         if not rows:
             raise ValueError(f"No PDB/mmCIF structures found in {path}")
         if len({row["input_id"] for row in rows}) != len(rows):

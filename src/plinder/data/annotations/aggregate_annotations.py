@@ -33,6 +33,9 @@ from plinder.data.annotations.cif_utils import (
     get_structure_with_altloc,
     remove_nonphysical_bonds,
 )
+from plinder.data.annotations.cif_utils import (
+    select_assembly_ids as _selected_assembly_ids,
+)
 from plinder.data.annotations.contact_areas import (
     chain_pair_contact_areas,
     tessellation_atom_mask,
@@ -168,27 +171,6 @@ class _LigandChainClasses(ty.NamedTuple):
     monoatomic_ion_asym_ids: set[str]
     known_artifact_asym_ids: set[str]
     primary_asym_ids: set[str]
-
-
-def _selected_assembly_ids(
-    available: ty.Iterable[str],
-    selected: ty.Iterable[str] | None,
-) -> list[str]:
-    """Return a validated assembly subset in caller-provided order."""
-    available_ids = list(dict.fromkeys(str(value) for value in available))
-    if selected is None:
-        return available_ids
-    selected_values = [selected] if isinstance(selected, str) else selected
-    selected_ids = list(dict.fromkeys(str(value) for value in selected_values))
-    if not selected_ids:
-        raise ValueError("assembly_ids must not be empty when provided")
-    missing = sorted(set(selected_ids).difference(available_ids))
-    if missing:
-        raise ValueError(
-            f"requested assembly IDs are absent from the mmCIF: {missing}; "
-            f"available={available_ids}"
-        )
-    return selected_ids
 
 
 def remove_alphabets(x: str) -> int:

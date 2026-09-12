@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 import pytest
 from biotite.structure.io import pdbx
+from plinder.core import release
 from plinder.core.scores import custom
 from plinder.core.scores.entries import (
     ChainView,
@@ -102,7 +103,7 @@ def test_remote_resolution_requests_only_bounded_assets(tmp_path, monkeypatch):
         requested.append(rel)
         return tmp_path / rel
 
-    monkeypatch.setattr(custom.cpl, "get_plinder_path", get_plinder_path)
+    monkeypatch.setattr(release.cpl, "get_plinder_path", get_plinder_path)
 
     assets = custom.resolve_custom_scoring_assets(ligand_pdb_ids=["3xyz"])
 
@@ -130,7 +131,7 @@ def test_ligand_coordinates_are_not_resolved_before_targets_are_known(
         requested.append(rel)
         return tmp_path / rel
 
-    monkeypatch.setattr(custom.cpl, "get_plinder_path", get_plinder_path)
+    monkeypatch.setattr(release.cpl, "get_plinder_path", get_plinder_path)
 
     assets = custom.resolve_custom_scoring_assets()
 
@@ -192,7 +193,7 @@ def test_search_database_rejects_absolute_internal_link(tmp_path):
 
 
 def test_missing_offline_asset_has_actionable_error(tmp_path, monkeypatch):
-    monkeypatch.setattr(custom.cpl, "is_offline", lambda: True)
+    monkeypatch.setattr(release.cpl, "is_offline", lambda: True)
 
     with pytest.raises(FileNotFoundError, match="offline cache"):
         custom.resolve_custom_scoring_assets(data_dir=tmp_path, backends=())

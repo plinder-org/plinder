@@ -16,6 +16,18 @@ if TYPE_CHECKING:
     from biotite.structure.io import pdbx
     from rdkit.Chem import Mol
 
+STRUCTURE_SUFFIXES = (".pdb", ".pdb.gz", ".cif", ".cif.gz", ".mmcif", ".mmcif.gz")
+
+
+def find_structure_files(path: Path) -> list[Path]:
+    """List PDB/mmCIF files in a folder, or select a single coordinate file."""
+    candidates = sorted(path.iterdir()) if path.is_dir() else [path]
+    return [
+        candidate
+        for candidate in candidates
+        if candidate.is_file() and candidate.name.lower().endswith(STRUCTURE_SUFFIXES)
+    ]
+
 
 @dataclass(frozen=True)
 class StructureInput:

@@ -112,19 +112,12 @@ def collate_complex(
     batch_features: list[dict[str, Tensor]],
     pad_value: int = PAD_VALUE,
 ) -> dict[str, Tensor]:
-    collated_and_padded_properties = {}
-    batch_size = len(batch_features)
-
-    feature_names = batch_features[0].keys()
-    for feat_name in feature_names:
-        collated_properties = []
-        for idx in range(batch_size):
-            feat = batch_features[idx][feat_name]
-            collated_properties.append(feat)
-        collated_and_padded_properties[feat_name] = pad_and_stack(
-            collated_properties, dim=0, value=pad_value
+    return {
+        name: pad_and_stack(
+            [features[name] for features in batch_features], dim=0, value=pad_value
         )
-    return collated_and_padded_properties
+        for name in batch_features[0]
+    }
 
 
 def collate_batch(batch: list[dict[str, Any]]) -> dict[str, Any]:

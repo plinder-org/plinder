@@ -10,14 +10,13 @@ from pathlib import Path
 
 import pandas as pd
 
-from plinder.core.release import PlinderRelease
+from plinder.core.release import _release_file
 from plinder.core.scores.entries import (
     EntryView,
     InterfaceView,
     LigandView,
     load_entry_views,
 )
-from plinder.core.utils import cpl
 from plinder.core.utils.log import setup_logger
 from plinder.core.utils.schemas import (
     INTERFACE_SIMILARITY_SCHEMA,
@@ -34,35 +33,6 @@ def _pdb_id(identifier: str) -> str:
 
 def _pdb_shard(pdb_id: str) -> str:
     return pdb_id[-3:-1]
-
-
-def _require_file(path: Path, *, description: str) -> Path:
-    if path.is_file():
-        return path
-    mode = "offline cache" if cpl.is_offline() else "release cache"
-    raise FileNotFoundError(f"missing {description} in {mode}: {path}")
-
-
-def _release_file(
-    name: str,
-    *,
-    data_dir: Path | None,
-    description: str,
-    **parameters: str,
-) -> Path:
-    release = PlinderRelease(data_dir)
-    if data_dir is not None:
-        return _require_file(
-            release.path(name, **parameters),
-            description=description,
-        )
-    try:
-        return release.fetch(name, **parameters)
-    except FileNotFoundError as exc:
-        mode = "offline cache" if cpl.is_offline() else "release cache"
-        raise FileNotFoundError(
-            f"missing {description} in {mode}: {release.path(name, **parameters)}"
-        ) from exc
 
 
 def prefetch_similarity_alignments(

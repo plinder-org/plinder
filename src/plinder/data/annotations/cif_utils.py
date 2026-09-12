@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 import re
 from collections import defaultdict
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from functools import cache
 from math import prod
@@ -49,6 +49,26 @@ from biotite.structure import filter_heavy  # noqa: E402
 # ---------------------------------------------------------------------------
 # Generic CIF I/O helpers
 # ---------------------------------------------------------------------------
+
+
+def select_assembly_ids(
+    available: Iterable[str], selected: Iterable[str] | None
+) -> list[str]:
+    """Return a validated assembly subset in caller-provided order."""
+    available_ids = list(dict.fromkeys(str(value) for value in available))
+    if selected is None:
+        return available_ids
+    selected_values = [selected] if isinstance(selected, str) else selected
+    selected_ids = list(dict.fromkeys(str(value) for value in selected_values))
+    if not selected_ids:
+        raise ValueError("assembly_ids must not be empty when provided")
+    missing = sorted(set(selected_ids).difference(available_ids))
+    if missing:
+        raise ValueError(
+            f"requested assembly IDs are absent from the mmCIF: {missing}; "
+            f"available={available_ids}"
+        )
+    return selected_ids
 
 
 def read_mmcif_file(mmcif_filename: Path | str) -> pdbx.CIFFile:

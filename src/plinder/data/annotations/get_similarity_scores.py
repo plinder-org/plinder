@@ -1193,18 +1193,6 @@ def run_alignment(
     remove_search_results()
 
 
-def _pdb_id_from_alignment_identifier(identifier: Any) -> str:
-    return (
-        str(identifier)
-        .replace("_xyz-enrich.cif.gz", "")
-        .replace("_xyz-enrich.cif", "")
-        .replace("_xyz-enrich", "")
-        .replace(".cif.gz", "")
-        .replace(".cif", "")
-        .replace("pdb_0000", "")[:4]
-    )
-
-
 def _pdb_ids_from_alignment_identifiers(identifiers: Any) -> Any:
     """Extract four-character PDB IDs without a Python loop over Arrow rows."""
     without_foldseek_prefix = pc.replace_substring(

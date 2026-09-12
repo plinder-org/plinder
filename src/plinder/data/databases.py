@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 
 import pandas as pd
 
+from plinder.core.utils.files import read_json_cache, write_json_atomic
 from plinder.core.utils.log import setup_logger
 
 if TYPE_CHECKING:
@@ -402,20 +403,6 @@ def database_identifiers(database: Path) -> set[str]:
     return selected
 
 
-def _read_json(path: Path) -> dict[str, Any] | None:
-    try:
-        payload = json.loads(path.read_text())
-    except (OSError, ValueError, TypeError):
-        return None
-    return payload if isinstance(payload, dict) else None
-
-
-def _write_json(path: Path, payload: dict[str, Any]) -> None:
-    temporary = path.with_suffix(".tmp.json")
-    temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
-    temporary.replace(path)
-
-
 def exact_search_database_paths(
     db_dir: Path,
     search_db: str,
@@ -436,7 +423,7 @@ def _completed_exact_search_manifest(
 ) -> dict[str, Any] | None:
     """Return a valid exact-cluster manifest without mutating its database."""
     root = full_db.parent
-    manifest = _read_json(root / "exact_cluster.json")
+    manifest = read_json_cache(root / "exact_cluster.json")
     try:
         source_signature = _path_signature(full_db.with_suffix(".index"), portable=True)
     except OSError:
@@ -625,7 +612,7 @@ def make_exact_search_db(
     }
     if expansion_db is not None:
         payload["cluster_alignments"] = expansion_db.name
-    _write_json(manifest_path, payload)
+    write_json_atomic(manifest_path, payload)
     return payload
 
 
@@ -787,7 +774,7 @@ def make_sub_dbs(
             "identifier_sha256": _identifier_digest(requested_ids),
             "source_lookup": _path_signature(source_lookup),
         }
-        cached = _read_json(selection_manifest)
+        cached = read_json_cache(selection_manifest)
         selected_database = subdb / subdb.name
         cluster_manifest = _completed_exact_search_manifest(selected_database, aln_type)
         complete = (
@@ -817,7 +804,7 @@ def make_sub_dbs(
                 )
             )
             working_selection = working_subdb / "selection.json"
-            _write_json(working_selection, {**selection, "missing": missing})
+            write_json_atomic(working_selection, {**selection, "missing": missing})
             working_database = working_subdb / working_subdb.name
             cluster_manifest = make_exact_search_db(
                 full_db=working_database,
@@ -839,4 +826,4 @@ def make_sub_dbs(
         cluster_report[search_db_aln_type] = cluster_manifest
     with (db_dir / "missing.json").open("w") as f:
         json.dump(report, f)
-    _write_json(db_dir / "exact_clusters.json", cluster_report)
+    write_json_atomic(db_dir / "exact_clusters.json", cluster_report)

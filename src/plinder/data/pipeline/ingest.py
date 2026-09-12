@@ -24,6 +24,8 @@ from typing import Any, Callable, Collection, Mapping, TypeVar
 import pandas as pd
 import pyarrow.parquet as pq
 
+from plinder.core.utils.files import write_json_atomic
+
 PDB_NEXTGEN_ROOT_ENV = "PLINDER_PDB_NEXTGEN_ROOT"
 VALIDATION_ROOT_ENV = "PLINDER_VALIDATION_ROOT"
 REQUIRED_REFERENCE_FILES = (
@@ -184,13 +186,6 @@ def _run_timed(
         if error is not None:
             timing["error"] = error
         timings.append(timing)
-
-
-def _write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
-    temporary.replace(path)
 
 
 def _entry_outputs_complete(
@@ -564,7 +559,7 @@ def _ingest_interfaces(
     finally:
         summary["total_wall_seconds"] = time.perf_counter() - total_started
         summary["final_resource_usage"] = _usage()
-        _write_json(metrics_path, summary)
+        write_json_atomic(metrics_path, summary)
     return metrics_path
 
 
@@ -859,7 +854,7 @@ def ingest_one_pdb(
     finally:
         summary["total_wall_seconds"] = time.perf_counter() - total_started
         summary["final_resource_usage"] = _usage()
-        _write_json(metrics_path, summary)
+        write_json_atomic(metrics_path, summary)
     return metrics_path
 
 
@@ -1223,11 +1218,11 @@ def ingest_pdb_batch(
                 )
             finally:
                 payload["total_wall_seconds"] = time.perf_counter() - started
-                _write_json(metrics_path, payload)
+                write_json_atomic(metrics_path, payload)
         payload["status"] = "completed_with_failures" if had_failures else "complete"
     finally:
         payload["total_wall_seconds"] = time.perf_counter() - started
-        _write_json(metrics_path, payload)
+        write_json_atomic(metrics_path, payload)
     return metrics_path, had_failures
 
 

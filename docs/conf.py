@@ -22,13 +22,11 @@ import viewcode
 # Modules that require dependencies outside the standard ``pip install plinder``.
 API_EXCLUDED_MODULES = {
     "plinder.core.loader",
-    "plinder.data._version",
     "plinder.data.annotations.aggregate_annotations",
     "plinder.data.annotations.get_ligand_validation",
     "plinder.data.annotations.ligand_utils",
     "plinder.data.annotations.protein_utils",
     "plinder.data.clusters",
-    "plinder.data.common._version",
     "plinder.data.get_system_annotations",
     "plinder.data.pipeline",
 }

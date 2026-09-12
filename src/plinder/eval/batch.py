@@ -20,7 +20,11 @@ from plinder.core.index.interface import PlinderInterface
 from plinder.core.index.query import query_table
 from plinder.core.index.system import PlinderSystem
 from plinder.core.release import PlinderRelease
-from plinder.core.structure.inputs import StructureInput, read_structure_table
+from plinder.core.structure.inputs import (
+    StructureInput,
+    find_structure_files,
+    read_structure_table,
+)
 from plinder.eval.commands import run_openstructure, run_posebusters
 from plinder.eval.inputs import prepare_prediction, reference_ligands
 
@@ -360,11 +364,7 @@ def evaluate_predictions(
                 continue
             groups[folder.name] = [
                 (path, str(path.relative_to(root)))
-                for path in sorted(folder.iterdir())
-                if path.is_file()
-                and path.name.lower().endswith(
-                    (".cif", ".mmcif", ".cif.gz", ".mmcif.gz", ".pdb", ".pdb.gz")
-                )
+                for path in find_structure_files(folder)
             ]
     tasks: list[tuple[Path | StructureInput, str, list[_Reference]]] = []
     collected: dict[str, list[dict[str, Any]]] = {

@@ -345,14 +345,6 @@ def get_receptor_type(chain_types: Iterable[str]) -> str:
     return "+".join(component for component in order if component in components)
 
 
-def _is_polysaccharide(chain_type_str: str) -> bool:
-    return (
-        "polysaccharide" in chain_type_str.lower()
-        or "oligosaccharide" in chain_type_str.lower()
-        or "branched" in chain_type_str.lower()
-    )
-
-
 def _is_water(chain_type_str: str) -> bool:
     return "water" in chain_type_str.lower()
 

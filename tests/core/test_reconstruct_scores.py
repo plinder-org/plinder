@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
+from plinder.core import release
 from plinder.core.scores import reconstruct
 from plinder.core.scores.entries import LigandView
 
@@ -18,7 +19,7 @@ def test_prefetch_resolves_only_requested_alignment_shards(tmp_path, monkeypatch
         path.touch()
         return path
 
-    monkeypatch.setattr(reconstruct.cpl, "get_plinder_path", get_plinder_path)
+    monkeypatch.setattr(release.cpl, "get_plinder_path", get_plinder_path)
 
     paths = reconstruct.prefetch_similarity_alignments(
         [
@@ -40,7 +41,7 @@ def test_prefetch_resolves_only_requested_alignment_shards(tmp_path, monkeypatch
 
 
 def test_prefetch_requires_requested_shard_in_offline_cache(tmp_path, monkeypatch):
-    monkeypatch.setattr(reconstruct.cpl, "is_offline", lambda: True)
+    monkeypatch.setattr(release.cpl, "is_offline", lambda: True)
 
     with pytest.raises(FileNotFoundError, match="offline cache"):
         reconstruct.prefetch_similarity_alignments(

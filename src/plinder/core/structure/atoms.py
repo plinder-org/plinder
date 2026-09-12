@@ -215,10 +215,6 @@ def make_one_hot_atom_features(atom_name: list[str]) -> list[int]:
     return [1 if striped_atom_name == atm else 0 for atm in allowed_atom_names]
 
 
-def _convert_pdb_atom_name_to_elem_symbol(atom_name: str) -> str:
-    return "".join(filter(lambda x: not x.isdigit(), atom_name))[0]
-
-
 def get_per_residue_mask(
     residue_reference_atom_list: list[str], atom_list: list[str]
 ) -> list[int]:
@@ -296,17 +292,3 @@ def _one_hot_encode_stack(
             ] = 1.0
         feat_array.append(feat_array_by_chain)
     return feat_array
-
-
-def _sequence_full_atom_type_array(
-    input_sequences: dict[str, str],
-) -> dict[str, NDArray]:
-    """Resolved sequence full atom features."""
-    seq_atom_dict = {}
-    for chain, sequence in input_sequences.items():
-        feat = []
-        for res in sequence:
-            for atom in pc.ORDERED_AA_FULL_ATOM[pc.ONE_TO_THREE[res]]:
-                feat.append(_convert_pdb_atom_name_to_elem_symbol(atom))
-        seq_atom_dict[chain] = np.array(feat)
-    return seq_atom_dict
