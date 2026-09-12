@@ -185,6 +185,10 @@ def test_completed_atoms_match_the_wwpdb_unobserved_records(test_dir):
         for chain in structure.protein_chain_ordered
     ]
     assert all(len(m) == len(c) for m, c in zip(per_chain, structure.protein_coords))
+    assert all(
+        coordinates.dtype == atoms.coord.dtype
+        for coordinates in structure.protein_coords + structure.protein_calpha_coords
+    )
     default = Structure(
         id="6m92", protein_path=test_dir / CIF_6M92, protein_sequence=sequences
     )

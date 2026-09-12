@@ -143,5 +143,10 @@ module = ["pyarrow", "pyarrow.*"]
 follow_imports = "skip"
 
 [[tool.mypy.overrides]]
+module = "plinder.core.loader.dataset"
+# Torch is an optional dependency and is absent from the lightweight type-check job.
+disallow_subclassing_any = false
+
+[[tool.mypy.overrides]]
 module = "plinder._version"
 ignore_errors = true

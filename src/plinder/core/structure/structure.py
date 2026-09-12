@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import tempfile
 from pathlib import Path
-from typing import TYPE_CHECKING, Iterable
+from typing import TYPE_CHECKING, Iterable, cast
 
 import biotite.structure as struc
 import numpy as np
@@ -437,12 +437,12 @@ class Structure(BaseModel):
             return []
 
     @property
-    def protein_coords(self) -> list[NDArray[np.float64]]:
+    def protein_coords(self) -> list[NDArray[np.float32]]:
         """list[NDArray]: The coordinates of the protein atoms in the structure."""
         assert self.protein_atom_array is not None
 
         protein_coords = [
-            np.asarray(coord, dtype=np.float64)
+            cast(NDArray[np.float32], coord)
             for coord in _stack_atom_array_features(
                 self.protein_atom_array, "coord", self.protein_chain_ordered
             )
@@ -489,11 +489,11 @@ class Structure(BaseModel):
         return [mask[atoms.chain_id == chain] for chain in self.protein_chain_ordered]
 
     @property
-    def protein_calpha_coords(self) -> list[NDArray[np.double]]:
+    def protein_calpha_coords(self) -> list[NDArray[np.float32]]:
         """list[NDArray]: Per-chain coordinates of the protein C-alpha atoms."""
         assert self.protein_atom_array is not None
         protein_calpha_coords = [
-            np.asarray(coord, dtype=np.float64)
+            cast(NDArray[np.float32], coord)
             for coord in _stack_atom_array_features(
                 self.protein_atom_array[self.protein_atom_array.atom_name == "CA"],
                 "coord",

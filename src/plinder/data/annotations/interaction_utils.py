@@ -148,7 +148,8 @@ def _bounded_find_resonance_charges(molecule: Chem.Mol) -> _ResonanceResult:
         atom.GetFormalCharge() != 0 for atom in molecule.GetAtoms()
     )
     if not is_large_and_charged:
-        return _ORIGINAL_FIND_RESONANCE_CHARGES(molecule)
+        result: _ResonanceResult = _ORIGINAL_FIND_RESONANCE_CHARGES(molecule)
+        return result
 
     key = _tautomer_cache_key(molecule)
     with _RESONANCE_CACHE_LOCK:
