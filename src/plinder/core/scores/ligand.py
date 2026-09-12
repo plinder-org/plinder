@@ -2,12 +2,21 @@
 # Distributed under the terms of the Apache License 2.0
 from __future__ import annotations
 
+from collections.abc import Iterable
+
 import pandas as pd
 
 from plinder.core.index.query import query_table
 from plinder.core.release import PlinderRelease
 from plinder.core.scores.query import Filter, Filters, read_score_table
 from plinder.core.utils.dec import timeit
+
+
+def _ligand_ids(values: Iterable[int | str]) -> set[int]:
+    try:
+        return {int(value) for value in values}
+    except (TypeError, ValueError) as exc:
+        raise ValueError("ligand IDs must be integers") from exc
 
 
 @timeit
@@ -42,7 +51,7 @@ def query_ligand_similarity(
 
 @timeit
 def map_cross_similarity(
-    df: pd.DataFrame, target_ligands: set[str], metric: str
+    df: pd.DataFrame, target_ligands: set[int], metric: str
 ) -> pd.DataFrame:
     if df.empty:
         return pd.DataFrame(
@@ -84,8 +93,8 @@ def map_cross_similarity(
 @timeit
 def cross_similarity(
     *,
-    query_ligands: set[str],
-    target_ligands: set[str],
+    query_ligands: Iterable[int | str],
+    target_ligands: Iterable[int | str],
     metric: str | None = None,
 ) -> pd.DataFrame:
     """
@@ -95,10 +104,10 @@ def cross_similarity(
 
     Parameters
     ----------
-    query_ligands : set[str]
-        the set of query ligands
-    target_ligands : set[str]
-        the set of target ligands
+    query_ligands : Iterable[int | str]
+        The query ligand IDs.
+    target_ligands : Iterable[int | str]
+        The target ligand IDs.
 
     Returns
     -------
@@ -108,14 +117,16 @@ def cross_similarity(
     dataset = PlinderRelease().fetch("ligand_scores")
     if metric is None:
         metric = "tanimoto_similarity_ecfp4_1024"
+    query_ids = _ligand_ids(query_ligands)
+    target_ids = _ligand_ids(target_ligands)
     filters: list[list[Filter]] = [
         [
-            ("query_ligand_id", "in", query_ligands),
-            ("target_ligand_id", "in", target_ligands),
+            ("query_ligand_id", "in", query_ids),
+            ("target_ligand_id", "in", target_ids),
         ],
         [
-            ("query_ligand_id", "in", target_ligands),
-            ("target_ligand_id", "in", query_ligands),
+            ("query_ligand_id", "in", target_ids),
+            ("target_ligand_id", "in", query_ids),
         ],
     ]
     columns = ["query_ligand_id", "target_ligand_id", metric]
@@ -124,4 +135,4 @@ def cross_similarity(
         columns=columns,
         filters=filters,
     )
-    return map_cross_similarity(similarities, target_ligands, metric)
+    return map_cross_similarity(similarities, target_ids, metric)

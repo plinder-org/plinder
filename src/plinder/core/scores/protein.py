@@ -2,6 +2,8 @@
 # Distributed under the terms of the Apache License 2.0
 from __future__ import annotations
 
+from typing import cast
+
 import pandas as pd
 
 from plinder.core.index.query import query_table
@@ -38,6 +40,12 @@ def query_protein_similarity(
     """
     if search_db not in ["apo", "holo", "pred"]:
         raise ValueError(f"search_db={search_db} not in ['apo', 'holo', 'pred']")
+    if filters and not isinstance(filters[0], list):
+        filters = [
+            condition
+            for condition in cast(list[Filter], filters)
+            if condition[0] != "search_db"
+        ]
     cfg = get_config()
     dataset = cpl.get_plinder_path(rel=f"{cfg.data.scores}/search_db={search_db}")
     return read_score_table(

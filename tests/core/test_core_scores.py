@@ -83,6 +83,19 @@ def test_query_protein_similarity_empty():
 
 
 @pytest.mark.usefixtures("read_plinder_mount")
+def test_query_protein_similarity_removes_search_db_without_mutating_filters():
+    filters = [
+        ("search_db", "==", "holo"),
+        ("metric", "==", "pocket_lddt"),
+        ("similarity", ">=", 90),
+    ]
+    df = scores.query_protein_similarity(search_db="holo", filters=filters)
+
+    assert len(df.index)
+    assert filters[0] == ("search_db", "==", "holo")
+
+
+@pytest.mark.usefixtures("read_plinder_mount")
 def test_query_protein_similarity_raises():
     with pytest.raises(ValueError):
         scores.query_protein_similarity(
@@ -128,9 +141,18 @@ def test_query_ligand_cross_similarity(current_ligand_scores, monkeypatch):
         lambda frame, _target_ligands, _metric: frame,
     )
     df = scores.cross_ligand_similarity(
-        query_ligands=[29, 51], target_ligands=[49918, 36689]
+        query_ligands=["29", "51"], target_ligands=["49918", "36689"]
     )
     assert len(df.index)
+
+
+def test_query_ligand_cross_similarity_rejects_non_numeric_ids(
+    current_ligand_scores,
+):
+    with pytest.raises(ValueError, match="ligand IDs must be integers"):
+        scores.cross_ligand_similarity(
+            query_ligands=["not-an-id"], target_ligands=["49918"]
+        )
 
 
 def test_ligand_cross_similarity_maps_nodes_through_annotation(monkeypatch):
