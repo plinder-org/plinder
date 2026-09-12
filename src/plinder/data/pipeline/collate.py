@@ -20,6 +20,7 @@ import duckdb
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from plinder.core.utils.files import write_json_atomic
 from plinder.data.annotations.interface_utils import (
     INTERFACE_ANNOTATION_SCHEMA,
     min_interface_residues_from_schema,
@@ -222,6 +223,27 @@ SIDECAR_SCHEMAS = {
     "entry_sources": ENTRY_SOURCE_SCHEMA,
 }
 
+ENTRY_TABLES = {
+    "annotation": ("annotation_table.parquet", "entry_pdb_id, system_id, ligand_id"),
+    "system_validation": ("system_validation.parquet", "system_id"),
+    "entry_chains": ("entry_chains.parquet", "entry_pdb_id, chain_asym_id"),
+    "entry_biounit_chains": (
+        "entry_biounit_chains.parquet",
+        "entry_pdb_id, biounit_id, chain_instance",
+    ),
+    "entry_metadata": ("entry_metadata.parquet", "entry_pdb_id"),
+    "interfaces": ("interface_annotation_table.parquet", "entry_pdb_id, system_id"),
+    "entry_sources": ("entry_sources.parquet", "entry_pdb_id"),
+}
+
+
+def entry_table_paths(data_dir: Path) -> dict[str, Path]:
+    """Return the seven collated entry tables used by builds, repairs, and updates."""
+    return {
+        name: data_dir / "index" / filename
+        for name, (filename, _) in ENTRY_TABLES.items()
+    }
+
 
 def staging_dir(data_dir: Path) -> Path:
     """Return the private collation workspace under the release directory."""
@@ -248,16 +270,6 @@ def plan_inventory_dir(data_dir: Path, generation: str) -> Path:
 
 def _temporary_path(path: Path) -> Path:
     return path.with_name(f".{path.name}.{os.getpid()}.{uuid4().hex}.tmp")
-
-
-def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = _temporary_path(path)
-    try:
-        temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
-        temporary.replace(path)
-    finally:
-        temporary.unlink(missing_ok=True)
 
 
 def _write_table_atomic(
@@ -426,7 +438,7 @@ def start_collation_plan(
     plan_inventory_dir(data_dir, str(build["generation"])).mkdir(
         parents=True, exist_ok=False
     )
-    _write_json_atomic(plan_build_path(data_dir), build)
+    write_json_atomic(plan_build_path(data_dir), build)
     return build
 
 
@@ -600,8 +612,8 @@ def finalize_collation_plan(data_dir: Path) -> dict[str, Any]:
         "interface_min_residues": interface_min_residues.pop(),
         "include_ligand_annotations": bool(build["include_ligand_annotations"]),
     }
-    _write_json_atomic(plan_path(data_dir), summary)
-    _write_json_atomic(
+    write_json_atomic(plan_path(data_dir), summary)
+    write_json_atomic(
         plan_build_path(data_dir),
         {**build, "status": "complete", "plan": str(plan_path(data_dir))},
     )
@@ -1024,6 +1036,13 @@ def _collate_entry_metadata(
     table = pa.concat_tables(tables, promote_options="default")
     if "entry_pdb_id" not in table.column_names:
         raise ValueError("entry metadata is missing entry_pdb_id")
+    # A wholly unknown depositor flag must stay boolean: DuckDB otherwise
+    # reads the Parquet null type as INTEGER and widens it during weekly joins.
+    flag = "entry_has_ligand_of_interest"
+    if flag in table.column_names:
+        table = table.set_column(
+            table.schema.get_field_index(flag), flag, table[flag].cast(pa.bool_())
+        )
     table = table.sort_by([("entry_pdb_id", "ascending")])
     _write_table_atomic(table, output, row_group_size=row_group_size)
 
@@ -1222,7 +1241,7 @@ def collate_shard(
         metrics["traceback"] = traceback.format_exc()
         raise
     finally:
-        _write_json_atomic(paths["metrics"], metrics)
+        write_json_atomic(paths["metrics"], metrics)
     return metrics
 
 
@@ -1663,15 +1682,7 @@ def finalize_collation(
     plan = load_plan(data_dir)
     include_ligand_annotations = bool(plan.get("include_ligand_annotations", True))
     shard_files, expected_counts = _load_completed_shards(data_dir, plan)
-    final_paths = {
-        "annotation": data_dir / "index" / "annotation_table.parquet",
-        "system_validation": data_dir / "index" / "system_validation.parquet",
-        "entry_chains": data_dir / "index" / "entry_chains.parquet",
-        "entry_biounit_chains": data_dir / "index" / "entry_biounit_chains.parquet",
-        "entry_metadata": data_dir / "index" / "entry_metadata.parquet",
-        "interfaces": data_dir / "index" / "interface_annotation_table.parquet",
-        "entry_sources": data_dir / "index" / "entry_sources.parquet",
-    }
+    final_paths = entry_table_paths(data_dir)
     if not include_ligand_annotations:
         required_ligand_tables = [
             final_paths["annotation"],
@@ -1696,22 +1707,13 @@ def finalize_collation(
             memory_limit=memory_limit,
             scratch_dir=scratch_dir,
         )
-        sort_columns = {
-            "annotation": "entry_pdb_id, system_id, ligand_id",
-            "system_validation": "system_id",
-            "entry_chains": "entry_pdb_id, chain_asym_id",
-            "entry_biounit_chains": "entry_pdb_id, biounit_id, chain_instance",
-            "entry_metadata": "entry_pdb_id",
-            "interfaces": "entry_pdb_id, system_id",
-            "entry_sources": "entry_pdb_id",
-        }
         for name, paths in shard_files.items():
             connection.read_parquet(
                 [str(path) for path in paths], union_by_name=True
             ).create_view(f"sharded_{name}", replace=True)
             _copy_query(
                 connection,
-                f"SELECT * FROM sharded_{name} ORDER BY {sort_columns[name]}",
+                f"SELECT * FROM sharded_{name} ORDER BY {ENTRY_TABLES[name][1]}",
                 temporary_paths[name],
                 row_group_size=row_group_size,
             )
@@ -1756,7 +1758,7 @@ def finalize_collation(
         "outputs": {name: str(path) for name, path in final_paths.items()},
         **validation,
     }
-    _write_json_atomic(data_dir / "index" / FINAL_MARKER_NAME, report)
+    write_json_atomic(data_dir / "index" / FINAL_MARKER_NAME, report)
     return report
 
 
@@ -1814,15 +1816,7 @@ def repair_collation(
     if not selected:
         raise ValueError("no PDB IDs selected for index repair")
 
-    final_paths = {
-        "annotation": data_dir / "index" / "annotation_table.parquet",
-        "system_validation": data_dir / "index" / "system_validation.parquet",
-        "entry_chains": data_dir / "index" / "entry_chains.parquet",
-        "entry_biounit_chains": data_dir / "index" / "entry_biounit_chains.parquet",
-        "entry_metadata": data_dir / "index" / "entry_metadata.parquet",
-        "interfaces": data_dir / "index" / "interface_annotation_table.parquet",
-        "entry_sources": data_dir / "index" / "entry_sources.parquet",
-    }
+    final_paths = entry_table_paths(data_dir)
     missing_final = [path for path in final_paths.values() if not path.is_file()]
     if missing_final:
         raise FileNotFoundError(f"missing installed index tables: {missing_final}")
@@ -1879,21 +1873,11 @@ def repair_collation(
                 "interfaces": "interface_path",
                 "entry_sources": "source_path",
             }[name]
-            sort_columns = {
-                "entry_chains": ("entry_pdb_id", "chain_asym_id"),
-                "entry_biounit_chains": (
-                    "entry_pdb_id",
-                    "biounit_id",
-                    "chain_instance",
-                ),
-                "interfaces": ("entry_pdb_id", "system_id"),
-                "entry_sources": ("entry_pdb_id",),
-            }[name]
             _collate_sidecars(
                 [Path(str(row[source_key])) for row in rows],
                 replacement_paths[name],
                 schema,
-                sort_columns=sort_columns,
+                sort_columns=tuple(ENTRY_TABLES[name][1].split(", ")),
                 row_group_size=row_group_size,
             )
         _collate_entry_metadata(
@@ -1993,16 +1977,13 @@ def repair_collation(
                     chain_annotations_changed = not set(columns).issubset(
                         installed_columns
                     ) or _repair_rows_differ(connection, name, columns)
-            replacements = [
-                ("entry_metadata", "entry_pdb_id"),
-                ("interfaces", "entry_pdb_id, system_id"),
-            ]
+            replacements = ["entry_metadata", "interfaces"]
             if chain_annotations_changed:
                 temporary_paths["entry_chains"] = _temporary_path(
                     final_paths["entry_chains"]
                 )
-                replacements.append(("entry_chains", "entry_pdb_id, chain_asym_id"))
-            for name, order_by in replacements:
+                replacements.append("entry_chains")
+            for name in replacements:
                 connection.read_parquet(str(final_paths[name])).create_view(
                     f"installed_{name}", replace=True
                 )
@@ -2014,7 +1995,7 @@ def repair_collation(
                     f"SELECT * FROM (SELECT installed.* FROM installed_{name} "
                     "AS installed ANTI JOIN repaired_entries USING (entry_pdb_id) "
                     f"UNION ALL BY NAME SELECT * FROM replacement_{name}) "
-                    f"ORDER BY {order_by}",
+                    f"ORDER BY {ENTRY_TABLES[name][1]}",
                     temporary_paths[name],
                     row_group_size=row_group_size,
                 )
@@ -2066,7 +2047,7 @@ def repair_collation(
         ],
         **validation,
     }
-    _write_json_atomic(data_dir / "index" / FINAL_MARKER_NAME, report)
+    write_json_atomic(data_dir / "index" / FINAL_MARKER_NAME, report)
     return report
 
 
@@ -2083,7 +2064,7 @@ def finalize_repair_marker(data_dir: Path) -> dict[str, Any] | None:
         return None
     report["status"] = "complete"
     report["downstream_repair_complete"] = True
-    _write_json_atomic(marker_path, report)
+    write_json_atomic(marker_path, report)
     return report
 
 
@@ -2095,9 +2076,12 @@ def run_collation(
     scratch_dir: Path | None = None,
     row_group_size: int = 100_000,
     force: bool = False,
+    include_ligand_annotations: bool = True,
 ) -> dict[str, Any]:
     """Run all collation phases locally; intended for tests and small releases."""
-    plan = plan_collation(data_dir, threads=threads)
+    plan = plan_collation(
+        data_dir, threads=threads, include_ligand_annotations=include_ligand_annotations
+    )
     for code in plan["codes"]:
         collate_shard(
             data_dir,

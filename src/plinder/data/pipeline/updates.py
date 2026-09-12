@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import argparse
 import gzip
-import hashlib
 import json
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
@@ -15,6 +14,7 @@ from typing import Any, Collection
 
 import pandas as pd
 
+from plinder.core.utils.files import file_sha256
 from plinder.data.pipeline.ingest import load_manifest, normalize_pdb_id
 
 REVISION_COLUMNS = ["source_mmcif_major_revision", "source_mmcif_minor_revision"]
@@ -130,17 +130,16 @@ def compare_entries(
     obsolete: dict[str, list[str]],
 ) -> pd.DataFrame:
     """Classify each entry without treating unexplained absences as removals."""
-    old = sources.set_index("entry_pdb_id", verify_integrity=True)
-    new = snapshot.set_index("entry_pdb_id", verify_integrity=True)
+    old = sources.set_index("entry_pdb_id", verify_integrity=True)[
+        REVISION_COLUMNS
+    ].T.to_dict("list")
+    new = snapshot.set_index("entry_pdb_id", verify_integrity=True).to_dict("index")
     rows = []
-    for pdb_id in sorted(set(old.index) | set(new.index)):
-        before = (
-            tuple(old.loc[pdb_id, REVISION_COLUMNS]) if pdb_id in old.index else None
-        )
-        after = (
-            tuple(new.loc[pdb_id, REVISION_COLUMNS]) if pdb_id in new.index else None
-        )
-        error = new.at[pdb_id, "error"] if after is not None else None
+    for pdb_id in sorted(old.keys() | new.keys()):
+        before = old.get(pdb_id)
+        current = new.get(pdb_id)
+        after = [current[column] for column in REVISION_COLUMNS] if current else None
+        error = current["error"] if current else None
         reason = ""
         if pdb_id in obsolete and after is not None:
             action, reason = "blocked", "entry is both current and obsolete"
@@ -188,14 +187,26 @@ def compare_entries(
 
 
 def _signature(path: Path) -> dict[str, str]:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        while chunk := handle.read(1024 * 1024):
-            digest.update(chunk)
     return {
         "path": str(path.resolve()),
-        "sha256": digest.hexdigest(),
+        "sha256": file_sha256(path),
     }
+
+
+def load_update_plan(plan_dir: Path) -> tuple[dict[str, Any], pd.DataFrame]:
+    """Read a ready plan and verify that its sources and reports still match."""
+    plan = json.loads((plan_dir / "plan.json").read_text())
+    if plan["status"] != "ready":
+        raise ValueError("entry updates require a ready plan with changes")
+    for source in plan["inputs"].values():
+        if _signature(Path(source["path"])) != source:
+            raise ValueError(f"update source changed after planning: {source['path']}")
+    for name in ("entries.parquet", "snapshot.parquet"):
+        if plan.get("reports", {}).get(name) != _signature(plan_dir / name)["sha256"]:
+            raise ValueError(
+                f"update report changed or lacks a signature; regenerate the plan: {name}"
+            )
+    return plan, pd.read_parquet(plan_dir / "entries.parquet")
 
 
 def plan_update(

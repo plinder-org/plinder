@@ -345,6 +345,72 @@ def test_weekly_entry_update_matches_full_collation(entry_update_case, tmp_path)
     )
 
 
+@pytest.mark.parametrize("with_interfaces", [True, False])
+def test_weekly_update_without_incoming_ligands(
+    entry_update_case, tmp_path, monkeypatch, with_interfaces
+):
+    base, args, _ = entry_update_case
+    before = _index_bytes(base)
+
+    def ingest(**kwargs):
+        root = kwargs["output_root"]
+        for pdb_id in kwargs["pdb_ids"]:
+            directory = root / "raw_entries" / pdb_id[1:3] / pdb_id
+            if directory.exists():
+                continue
+            writer = (
+                _write_interface_only_entry
+                if with_interfaces
+                else _write_sidecar_only_entry
+            )
+            writer(root, pdb_id)
+            source = pd.read_parquet(directory / "entry_source.parquet")
+            source["source_mmcif_major_revision"] = 2 if pdb_id == "1abc" else 1
+            source.to_parquet(directory / "entry_source.parquet", index=False)
+            chains = pd.read_parquet(directory / "entry_chains.parquet")
+            chains["chain_is_holo"] = False
+            chains.to_parquet(directory / "entry_chains.parquet", index=False)
+        return root / "metrics.json", False
+
+    monkeypatch.setattr(update_entries, "ingest_pdb_batch", ingest)
+    report = update_entries.apply_entry_update(**args)
+    output = args["output_dir"]
+    assert report["status"] == "requires_downstream_repair"
+    assert _index_bytes(base) == before
+    for name in ("annotation", "system_validation"):
+        filename = update_entries.ENTRY_TABLES[name][0]
+        incoming = output / ".incoming/index" / filename
+        assert pq.ParquetFile(incoming).metadata.num_rows == 0
+        assert pq.read_schema(incoming).equals(
+            pq.read_schema(base / "index" / filename)
+        )
+    assert set(
+        pd.read_parquet(output / "index/annotation_table.parquet").entry_pdb_id
+    ) == {"3ghi"}
+
+    full = tmp_path / "full"
+    copytree(base / "raw_entries/gh", full / "raw_entries/gh")
+    (full / "ligands").mkdir()
+    copy2(base / "ligands/3ghi.parquet", full / "ligands/3ghi.parquet")
+    ingest(output_root=full, pdb_ids=["1abc", "4jkl"])
+    run_collation(full, memory_limit="1GB")
+    for filename, _ in update_entries.ENTRY_TABLES.values():
+        pd.testing.assert_frame_equal(
+            pd.read_parquet(output / "index" / filename),
+            pd.read_parquet(full / "index" / filename),
+        )
+    assert update_entries.apply_entry_update(**args) == report
+
+
+def test_collation_keeps_unknown_ligand_interest_boolean(tmp_path):
+    _write_release(tmp_path)
+    run_collation(tmp_path, memory_limit="1GB")
+    table = pq.read_table(tmp_path / "index/entry_metadata.parquet")
+    flag = table["entry_has_ligand_of_interest"]
+    assert flag.type == pa.bool_()
+    assert flag.null_count == table.num_rows == 2
+
+
 def test_weekly_removal_only_needs_no_raw_entries(entry_update_case, tmp_path):
     base, args, calls = entry_update_case
     original_plan = json.loads((args["plan_dir"] / "plan.json").read_text())

@@ -13,30 +13,14 @@ from typing import Any, Mapping
 import duckdb
 import pandas as pd
 import pyarrow as pa
+import pyarrow.parquet as pq
 from omegaconf import OmegaConf
 
+from plinder.core.utils.files import write_json_atomic
 from plinder.data.pipeline import collate, config
+from plinder.data.pipeline.collate import ENTRY_TABLES, entry_table_paths
 from plinder.data.pipeline.ingest import REQUIRED_REFERENCE_FILES, ingest_pdb_batch
-from plinder.data.pipeline.updates import REVISION_COLUMNS, _signature
-
-ENTRY_TABLES = {
-    "annotation": ("annotation_table.parquet", "entry_pdb_id, system_id, ligand_id"),
-    "system_validation": ("system_validation.parquet", "system_id"),
-    "entry_chains": ("entry_chains.parquet", "entry_pdb_id, chain_asym_id"),
-    "entry_biounit_chains": (
-        "entry_biounit_chains.parquet",
-        "entry_pdb_id, biounit_id, chain_instance",
-    ),
-    "entry_metadata": ("entry_metadata.parquet", "entry_pdb_id"),
-    "interfaces": ("interface_annotation_table.parquet", "entry_pdb_id, system_id"),
-    "entry_sources": ("entry_sources.parquet", "entry_pdb_id"),
-}
-
-
-def _tables(root: Path) -> dict[str, Path]:
-    return {
-        name: root / "index" / filename for name, (filename, _) in ENTRY_TABLES.items()
-    }
+from plinder.data.pipeline.updates import REVISION_COLUMNS, _signature, load_update_plan
 
 
 def _file_stats(paths: Mapping[str, Path]) -> dict[str, dict[str, int]]:
@@ -44,21 +28,6 @@ def _file_stats(paths: Mapping[str, Path]) -> dict[str, dict[str, int]]:
         name: {"size": path.stat().st_size, "mtime_ns": path.stat().st_mtime_ns}
         for name, path in paths.items()
     }
-
-
-def _check_plan(plan_dir: Path) -> tuple[dict[str, Any], pd.DataFrame]:
-    plan = json.loads((plan_dir / "plan.json").read_text())
-    if plan["status"] != "ready":
-        raise ValueError("entry updates require a ready plan with changes")
-    for source in plan["inputs"].values():
-        if _signature(Path(source["path"])) != source:
-            raise ValueError(f"update source changed after planning: {source['path']}")
-    for name in ("entries.parquet", "snapshot.parquet"):
-        if plan.get("reports", {}).get(name) != _signature(plan_dir / name)["sha256"]:
-            raise ValueError(
-                f"update report changed or lacks a signature; regenerate the plan: {name}"
-            )
-    return plan, pd.read_parquet(plan_dir / "entries.parquet")
 
 
 def _combine_tables(
@@ -138,13 +107,13 @@ def apply_entry_update(
     if threads < 1:
         raise ValueError("threads must be positive")
     plan_dir = plan_dir.resolve(strict=True)
-    plan, entries = _check_plan(plan_dir)
+    plan, entries = load_update_plan(plan_dir)
     base = Path(plan["data_dir"]).resolve(strict=True)
     output_dir = output_dir.resolve()
     validation_root = validation_root.resolve(strict=True)
     if output_dir == base or base in output_dir.parents:
         raise ValueError("write entry updates outside the existing release")
-    base_tables = _tables(base)
+    base_tables = entry_table_paths(base)
     base_marker_path = base / "index" / collate.FINAL_MARKER_NAME
     base_marker = json.loads(base_marker_path.read_text())
     if base_marker["status"] != "complete":
@@ -173,7 +142,7 @@ def apply_entry_update(
     }
     marker_path = output_dir / "entry_update.json"
     prepared_paths = {
-        **_tables(output_dir),
+        **entry_table_paths(output_dir),
         "collation": output_dir / "index" / collate.FINAL_MARKER_NAME,
     }
     if output_dir.exists():
@@ -192,7 +161,7 @@ def apply_entry_update(
         "inputs": binding,
         "base_release": str(base),
     }
-    collate._write_json_atomic(marker_path, report)
+    write_json_atomic(marker_path, report)
     incoming = output_dir / ".incoming"
     if len(changed):
         for relative, source in reference_files.items():
@@ -213,11 +182,25 @@ def apply_entry_update(
             raise RuntimeError(
                 f"entry update failed; inspect {incoming / 'metrics'} and rerun"
             )
+        has_ligands = any(
+            (incoming / "raw_entries" / pdb_id[1:3] / f"{pdb_id}.parquet").is_file()
+            for pdb_id in changed.pdb_id
+        )
+        if not has_ligands:
+            # Sidecar-only changes still replace the entry's old ligand rows.
+            # Keep the base schemas, but none of its annotation or validation data.
+            for name in ("annotation", "system_validation"):
+                schema = pq.read_schema(base_tables[name])
+                collate._write_table_atomic(
+                    pa.Table.from_batches([], schema=schema),
+                    incoming / "index" / ENTRY_TABLES[name][0],
+                )
         collate.run_collation(
             incoming,
             threads=threads,
             memory_limit=memory_limit,
             scratch_dir=scratch_dir,
+            include_ligand_annotations=has_ligands,
         )
         observed = pd.read_parquet(incoming / "index/entry_sources.parquet").set_index(
             "entry_pdb_id"
@@ -253,7 +236,7 @@ def apply_entry_update(
         memory_limit=memory_limit,
         scratch_dir=scratch_dir,
     )
-    _check_plan(plan_dir)
+    load_update_plan(plan_dir)
     if binding["base_tables"] != _file_stats(base_tables) or binding[
         "base_marker"
     ] != _signature(base_marker_path):
@@ -261,7 +244,7 @@ def apply_entry_update(
     (output_dir / "index").mkdir(exist_ok=True)
     collate._install_final_tables_fail_closed(
         staged_tables,
-        _tables(output_dir),
+        entry_table_paths(output_dir),
         output_dir / "index" / collate.FINAL_MARKER_NAME,
     )
     report.update(
@@ -271,7 +254,7 @@ def apply_entry_update(
         obsolete_pdb_ids=entries.loc[entries.action == "obsolete", "pdb_id"].tolist(),
         **validation,
     )
-    collate._write_json_atomic(
+    write_json_atomic(
         output_dir / "index" / collate.FINAL_MARKER_NAME,
         {
             "status": collate.REPAIR_REQUIRED_STATUS,
@@ -281,7 +264,7 @@ def apply_entry_update(
         },
     )
     report["outputs"] = _file_stats(prepared_paths)
-    collate._write_json_atomic(marker_path, report)
+    write_json_atomic(marker_path, report)
     return report
 
 
