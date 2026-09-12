@@ -1990,50 +1990,6 @@ def composite_parity(
     )
 
 
-def match_composite_by_connectivity(
-    query: ResidueGraph,
-    reference_graphs: Mapping[str, ResidueGraph],
-    *,
-    min_similarity: float = 0.8,
-    node_similarity: Callable[[str, str], float] | None = None,
-) -> list[tuple[str, float]]:
-    """Rank reference composites by connectivity-following similarity.
-
-    The connectivity counterpart of :func:`match_composite_by_sequence`, and the
-    one to prefer whenever the query's structure is available: it is invariant
-    to residue order and sensitive to branch topology, neither of which a code
-    string can express.
-
-    Parameters
-    ----------
-    query : ResidueGraph
-        Query residue graph, from :func:`residue_graph_from_atoms`.
-    reference_graphs : mapping
-        ``{reference_id: ResidueGraph}`` to compare against.
-    min_similarity : float
-        Minimum score to report.
-    node_similarity : callable, optional
-        Residue-level kernel; defaults to exact CCD-code identity.
-
-    Returns
-    -------
-    list of (reference_id, similarity)
-        Sorted by descending similarity, ties broken by reference id.
-    """
-    if not query.labels:
-        return []
-    matches = [
-        (reference_id, score)
-        for reference_id, graph in reference_graphs.items()
-        if (
-            score := composite_similarity(query, graph, node_similarity=node_similarity)
-        )
-        >= min_similarity
-    ]
-    matches.sort(key=lambda item: (-item[1], item[0]))
-    return matches
-
-
 @lru_cache(maxsize=8192)
 def _ccd_component_fingerprint(ccd_id: str) -> Any | None:
     """ECFP4/1024 of one CCD component, cached; None when underivable.

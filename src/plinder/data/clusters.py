@@ -2134,65 +2134,6 @@ def count_crossing_component_edges(
     return crossings
 
 
-def make_nk_graph(
-    df: pd.DataFrame,
-    num_systems: int,
-    system_ids_cat: pd.CategoricalDtype,
-    directed: bool,
-    weighted: bool,
-    query_col: str = "query_system",
-    target_col: str = "target_system",
-    similarity_col: str = "similarity",
-) -> tuple[nk.graph.Graph, pd.CategoricalDtype]:
-    """
-    Make networkit graphs
-
-    Parameters
-    ----------
-    df : pd.DataFrame
-        Dataframe of edges
-    num_systems : int
-        Number of systems
-    system_ids_cat : pd.CategoricalDtype
-        system ids, must match exactly the entries in df
-    directed : bool
-        Whether to make directed graph
-
-    Returns
-    -------
-    graph
-    """
-    if df.empty:
-        return nk.Graph(
-            num_systems, weighted=weighted, directed=directed
-        ), system_ids_cat
-
-    df[[query_col, target_col]] = df[[query_col, target_col]].astype(system_ids_cat)
-    if weighted:
-        graph = nk.GraphFromCoo(
-            (
-                df[similarity_col].values / 100.0,
-                (
-                    df[query_col].cat.codes.to_numpy(dtype=np.uint, copy=False),
-                    df[target_col].cat.codes.to_numpy(dtype=np.uint, copy=False),
-                ),
-            ),
-            weighted=True,
-            n=num_systems,
-            directed=directed,
-        )
-    else:
-        graph = nk.GraphFromCoo(
-            (
-                df[query_col].cat.codes.to_numpy(dtype=np.uint, copy=False),
-                df[target_col].cat.codes.to_numpy(dtype=np.uint, copy=False),
-            ),
-            n=num_systems,
-            directed=directed,
-        )
-    return graph, system_ids_cat
-
-
 def _eligible_annotation(data_dir: Path) -> pd.DataFrame:
     columns = [
         "system_id",

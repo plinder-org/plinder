@@ -8,8 +8,6 @@ from collections.abc import Iterable, Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
-import pandas as pd
-
 from plinder.core.utils.files import (
     link_or_copy_file,
     read_json_cache,
@@ -671,11 +669,6 @@ def make_sub_db(
 
     missing = set(entry_chain_ids) - found
     return list(missing)
-
-
-def get_ids_in_db(data_dir: Path, search_db: str, aln_type: str) -> pd.DataFrame:
-    sub_db_file = data_dir / "dbs" / "subdbs" / f"{search_db}_{aln_type}" / "ids.tsv"
-    return pd.read_csv(sub_db_file, sep="\t", header=None)
 
 
 def get_db_ids(

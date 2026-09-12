@@ -264,50 +264,6 @@ LIGAND_3D_SCORE_SCHEMA = pa.schema(
 )
 
 
-NETWORKX_CLUSTER_SCHEMA = pa.schema(
-    [
-        ("system_id", pa.dictionary(pa.int32(), pa.string())),
-        ("component", pa.dictionary(pa.int32(), pa.string())),
-        ("community", pa.dictionary(pa.int32(), pa.string())),
-    ]
-)
-
-
-GRAPHTOOL_CLUSTER_SCHEMA = pa.schema(
-    [
-        ("system_id", pa.string()),
-        ("component", pa.dictionary(pa.int32(), pa.string())),
-        ("metric", pa.dictionary(pa.int32(), pa.string())),
-        ("directed", pa.dictionary(pa.int32(), pa.string())),
-        ("threshold", pa.int8()),
-    ]
-)
-
-
-CLUSTER_SCHEMA = pa.schema(
-    [
-        ("system_id", pa.string()),
-        ("label", pa.string()),
-        ("metric", pa.string()),
-        ("cluster", pa.string()),
-        ("directed", pa.bool_()),
-        ("threshold", pa.int8()),
-    ]
-)
-
-
-LIGAND_CLUSTER_SCHEMA = pa.schema(
-    [
-        ("ligand_id", pa.string()),
-        ("label", pa.string()),
-        ("metric", pa.string()),
-        ("cluster", pa.string()),
-        ("directed", pa.bool_()),
-        ("threshold", pa.int8()),
-    ]
-)
-
-
 TANIMOTO_SCORE_SCHEMA = pa.schema(
     [
         pa.field("query_ligand_id", pa.int32()),

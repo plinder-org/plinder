@@ -239,7 +239,6 @@ class DataConfig:
     plinder_dir: str = field(init=False)
     plinder_remote: str = field(init=False)
 
-    clusters: str = "clusters"
     scores: str = "scores"
     source_mmcifs: str = "source_mmcifs"
     force_update: bool = False

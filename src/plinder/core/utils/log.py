@@ -13,10 +13,6 @@ except ValueError:
     DEFAULT_LOGGING_LEVEL = logging.INFO
 
 
-class PlinderLoggingError(Exception):
-    pass
-
-
 def setup_logger(
     logger_name: str | None = None,
     log_level: int = DEFAULT_LOGGING_LEVEL,

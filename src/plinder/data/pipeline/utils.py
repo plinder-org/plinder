@@ -29,29 +29,6 @@ LOG = setup_logger(__name__)
 T = TypeVar("T")
 
 
-def timeit(func: Callable[..., T]) -> Callable[..., T]:
-    """
-    Simple function timer decorator
-    """
-
-    @wraps(func)
-    def wrapped(*args: Any, **kwargs: Any) -> Any:
-        name = func.__name__
-        mod = func.__module__
-        log = setup_logger(".".join([mod, name]))
-        ts = time()
-        try:
-            result = func(*args, **kwargs)
-            log.info(f"runtime succeeded: {time() - ts:>9.2f}s")
-        except Exception as e:
-            log.error(f"runtime failed: {time() - ts:>9.2f}s")
-            log.error(f"{name} failed with: {repr(e)}")
-            raise
-        return result
-
-    return wrapped
-
-
 def get_db_sources(
     *, data_dir: Path, sub_databases: list[str] | None = None
 ) -> dict[str, Path]:
@@ -829,15 +806,6 @@ def add_ligand_3d_score_ability_column(
         "boolean"
     )
     return result
-
-
-def update_index_ligand_3d_score_ability(*, data_dir: Path) -> None:
-    """Publish distributed shape-comparability annotations before protein scoring."""
-    index_path = data_dir / "index" / "annotation_table.parquet"
-    index = pd.read_parquet(index_path)
-    add_ligand_3d_score_ability_column(index=index, data_dir=data_dir).to_parquet(
-        index_path, index=False
-    )
 
 
 def _chemical_cluster_summary_columns() -> set[str]:

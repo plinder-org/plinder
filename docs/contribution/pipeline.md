@@ -328,18 +328,6 @@ parquet files with the following schema:
     target_ligand_id: int32
     tanimoto_similarity_ecfp4_1024: float
 
-The long-form ligand representative assignments are a collection of
-parquet files with the following schema:
-
-    >>> from plinder.core.utils.schemas import LIGAND_CLUSTER_SCHEMA
-    >>> LIGAND_CLUSTER_SCHEMA
-    ligand_id: string
-    label: string
-    metric: string
-    cluster: string
-    directed: bool
-    threshold: int8
-
 The `linked_apo_structures` table has the following schema:
 
     >>> from plinder.core.utils.schemas import STRUCTURE_LINK_SCHEMA

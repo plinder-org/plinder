@@ -9,7 +9,6 @@ the same pyarrow query filters used in pd.read_parquet into raw SQL for
 duckdb to execute.
 """
 
-from .clusters import query_clusters
 from .custom import (
     CustomProteinSearchConfig,
     CustomScoringResult,
@@ -40,7 +39,6 @@ __all__ = [
     "cross_ligand_similarity",
     "query_protein_similarity",
     "cross_protein_similarity",
-    "query_clusters",
     "query_index",
     "CustomProteinSearchConfig",
     "CustomScoringResult",

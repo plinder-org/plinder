@@ -6,10 +6,8 @@ dependencies = [
     "numpy",
     "threadpoolctl>=3.6",
     "pandas",
-    "typing_extensions",
     "pydantic",
     "tqdm",
-    "nbformat",
     "google-cloud-storage",
     "gcsfs",
     "peppr>=0.13",
@@ -19,7 +17,6 @@ dependencies = [
     "omegaconf",
     "duckdb",
     "cloudpathlib",
-    "six",
 ]
 description = "PLINDER: Protein & Ligand INteraction Dataset and Evaluation Resource"
 readme = "README.md"

@@ -15,7 +15,6 @@ from biotite.structure import get_residues
 from biotite.structure.atoms import AtomArray, AtomArrayStack
 from biotite.structure.io.pdbx import CIFFile, get_structure, set_structure
 from numpy.typing import NDArray
-from rdkit.Chem import Mol
 
 from plinder.core.utils import constants as pc
 from plinder.core.utils.log import setup_logger
@@ -197,22 +196,6 @@ def get_residue_index_mapping_mask(
                 mask[i] = 1
         mask_map[chain] = mask
     return mask_map
-
-
-def get_ligand_atom_index_mapping_mask(
-    ref_mol: Mol, matching_indices: tuple[int, ...]
-) -> NDArray[np._int]:
-    mask = np.zeros(len(ref_mol.GetAtoms()))
-    for atm_idx in range(len(mask)):
-        if atm_idx in matching_indices:
-            mask[atm_idx] = 1
-    return mask
-
-
-def make_one_hot_atom_features(atom_name: list[str]) -> list[int]:
-    allowed_atom_names = ["C", "N", "O", "S", "P"]
-    striped_atom_name = "".join(filter(lambda x: not x.isdigit(), atom_name))[0]
-    return [1 if striped_atom_name == atm else 0 for atm in allowed_atom_names]
 
 
 def get_per_residue_mask(

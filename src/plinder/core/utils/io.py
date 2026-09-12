@@ -19,9 +19,8 @@ from typing import Any, Callable, Optional, TypeVar
 
 import pandas as pd
 import requests
-from biotite.database.rcsb import fetch
 from biotite.file import DeserializationError, InvalidFileError
-from biotite.structure.io.pdbx import CIFFile, get_structure, set_structure
+from biotite.structure.io.pdbx import CIFFile
 
 from plinder.core.release import PlinderRelease
 from plinder.core.utils.config import get_config
@@ -390,23 +389,3 @@ def download_alphafold_cif_file(
         with open(cif_file_path, "w") as f:
             f.write(resp.text)
     return cif_file_path
-
-
-@retry
-def download_pdb_chain_cif_file(pdb_id: str, chain_id: str, filename: Path) -> Path:
-    structure = get_structure(
-        CIFFile.read(
-            fetch(
-                pdb_ids=pdb_id,
-                format="cif",
-                overwrite=False,
-            )
-        ),
-        model=1,
-        use_author_fields=False,
-        include_bonds=True,
-    )
-    write_file = CIFFile()
-    set_structure(write_file, structure[structure.chain_id == chain_id])
-    write_file.write(filename.as_posix())
-    return filename

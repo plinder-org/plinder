@@ -343,24 +343,6 @@ def get_missing_two_char_codes(
     return missing
 
 
-def get_missing_pdb_ids(
-    *,
-    kind: KIND_TYPES,
-    data_dir: Path,
-    two_char_code: str,
-) -> list[str]:
-    missing = []
-    glob = CIF_GLOB if kind == "cif" else VAL_GLOB
-    for pdb_id in list_rcsb(kind=kind, two_char_code=two_char_code):
-        pdb_dir = data_dir / two_char_code / pdb_id
-        if not pdb_dir.is_dir():
-            missing.append(pdb_id)
-            continue
-        if not len(list(pdb_dir.glob(glob))):
-            missing.append(pdb_id)
-    return missing
-
-
 @retry
 def download_alphafold_cif_files(
     *,

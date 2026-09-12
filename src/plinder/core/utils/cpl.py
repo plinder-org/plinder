@@ -184,14 +184,3 @@ def get_plinder_path(
             return Path(path._local)
         else:
             raise
-
-
-def get_plinder_paths(*, paths: list[Path]) -> list[Path]:
-    cfg = get_config()
-    client = _get_client(cfg)
-    remote = GSPath(cfg.data.plinder_remote, client=client)
-    LOG.debug(f"get_plinder_paths: remote={remote} npaths={len(paths)}")
-    anypaths = [remote / path.relative_to(cfg.data.plinder_dir) for path in paths]
-    if not is_offline():
-        download_paths(paths=anypaths)
-    return anypaths
