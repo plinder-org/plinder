@@ -1,7 +1,6 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
 import hashlib
-import json
 import os
 import shutil
 import subprocess as sp
@@ -814,6 +813,5 @@ def make_sub_dbs(
                 f"exact clustering did not complete for {search_db_aln_type}"
             )
         cluster_report[search_db_aln_type] = cluster_manifest
-    with (db_dir / "missing.json").open("w") as f:
-        json.dump(report, f)
+    write_json_atomic(db_dir / "missing.json", report)
     write_json_atomic(db_dir / "exact_clusters.json", cluster_report)

@@ -2,6 +2,7 @@
 # Distributed under the terms of the Apache License 2.0
 from __future__ import annotations
 
+import json
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
@@ -397,6 +398,59 @@ def test_no_hit_search_writes_typed_empty_raw_and_mapped_checkpoints(
         "selected_residue_identity",
     } <= set(mapped.columns)
     assert {"evalue", "bits", "tcov"}.isdisjoint(mapped.columns)
+
+
+def test_search_can_probe_an_alternate_target_without_writing_empty_results(
+    tmp_path, monkeypatch
+) -> None:
+    scorer = Scorer(
+        entries={},
+        source_to_full_db_file={"holo_mmseqs": tmp_path / "full"},
+        db_dir=tmp_path / "dbs" / "subdbs",
+        scores_dir=tmp_path / "scores",
+    )
+    monkeypatch.setattr(
+        scoring_module.databases,
+        "make_sub_db",
+        lambda *_args, **_kwargs: set(),
+    )
+    target_roots = []
+
+    def target_paths(root, *_args):
+        target_roots.append(root)
+        return root / "target", root / "selected", None
+
+    monkeypatch.setattr(
+        scoring_module.databases,
+        "exact_search_database_paths",
+        target_paths,
+    )
+
+    def search(**kwargs):
+        output = kwargs["aln_file"].with_suffix(".parquet") / "query_pdb_id=1abc"
+        output.mkdir(parents=True)
+        pd.DataFrame(
+            {"query": ["1abc_A"], "target": ["3ghi_A"], "target_pdb_id": ["3ghi"]}
+        ).to_parquet(output / "part.parquet", index=False)
+
+    monkeypatch.setattr(scoring_module, "run_alignment", search)
+    result_root = tmp_path / "probe-results"
+    hits = scorer.run_alignments(
+        entry_ids=["1abc", "2def"],
+        search_db="holo",
+        output_folder=tmp_path / "work",
+        alignment_types=["mmseqs"],
+        query_chain_auth_ids={"1abc": {"A"}, "2def": {"B"}},
+        target_database_dir=tmp_path / "changed-targets",
+        result_database_dir=result_root,
+        write_empty_results=False,
+    )
+
+    assert target_roots == [tmp_path / "changed-targets"]
+    assert hits == {"1abc"}
+    assert (result_root / "holo_mmseqs/aln/1abc.parquet").is_file()
+    assert not (result_root / "holo_mmseqs/aln/2def.parquet").exists()
+    assert not (scorer.db_dir / "holo_mmseqs/aln").exists()
 
 
 def test_unavailable_query_backend_writes_typed_empty_checkpoint(
@@ -2827,6 +2881,18 @@ def test_annotate_ligand_similarity_requires_complete_mhfp6_shards(tmp_path):
     annotation_path = annotate_ligand_similarity(data_dir=tmp_path)
 
     assert pd.read_parquet(annotation_path)["ligand_smiles_id"].tolist() == [0, 1, 2]
+    assert (
+        json.loads((ecfp4_dir / scoring_module.LIGAND_SCORE_MANIFEST).read_text())[
+            "fingerprint_column"
+        ]
+        == "fingerprint"
+    )
+    assert (
+        json.loads((mhfp6_dir / scoring_module.LIGAND_SCORE_MANIFEST).read_text())[
+            "fingerprint_column"
+        ]
+        == "mhfp6"
+    )
 
 
 def test_ligand_similarity_pipeline_does_not_write_per_system_mapping(
@@ -2906,9 +2972,17 @@ def test_ligand_similarity_pipeline_does_not_write_per_system_mapping(
     assert annotations.loc["c1ccccc1", "ligand_smiles_id"] == 1
     assert not any("cluster" in column for column in annotations.columns)
 
-    retained_score.write_bytes(b"changed fingerprint score basis")
     index = pd.read_parquet(index_dir / "annotation_table.parquet")
     index.loc[index.index[-1], "ligand_smiles"] = "CCN"
+    index.to_parquet(index_dir / "annotation_table.parquet", index=False)
+    compute_ligand_fingerprints(data_dir=tmp_path, retain_score_shards=True)
+    updated_ids = pd.read_parquet(
+        tmp_path / "fingerprints/ligands_per_smiles.parquet"
+    ).set_index("ligand_rdkit_canonical_smiles")["ligand_smiles_id"]
+    assert updated_ids.to_dict() == {"CCN": 0, "CCO": 1}
+    assert (score_dir / "part.parquet").is_file()
+
+    index.loc[index.index[-1], "ligand_smiles"] = "CCC"
     index.to_parquet(index_dir / "annotation_table.parquet", index=False)
     compute_ligand_fingerprints(data_dir=tmp_path)
     assert not list(score_dir.glob("*.parquet"))

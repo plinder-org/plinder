@@ -59,8 +59,29 @@ blocked plans contain reports but no executable PDB-ID lists. Successor IDs
 are recorded separately because a replacement can have different chains and
 ligands.
 
-Prepare the changed entries in a separate workspace with the original release's
+Apply a ready plan to a new release workspace with the original release's
 pipeline configuration:
+
+```bash
+python -m plinder.data.pipeline.update_release /path/to/update-plan /path/to/update-workspace \
+  --validation-root /scicore/data/managed/PDB/latest/validation_reports \
+  --config /path/to/original-ingest-config.yaml \
+  --scratch-dir /path/to/scratch \
+  --threads 8 --memory-limit 32GB
+```
+
+This updates entry tables and ligand archives, protein search databases and
+clusters, similarities in both directions, ligand chemistry, representative
+covers, and the final release tables. Alignment and score work follows the
+search databases enabled in the original configuration; linked apo chains are
+updated when `apo` is enabled. Unchanged files are hard linked on the same
+filesystem and copied otherwise. The existing release stays unchanged. Each
+completed stage is recorded in `weekly_update.json`; rerunning the same command
+resumes after the last completed stage. A completed update has `status:
+complete` in both `weekly_update.json` and `index/collation.json`.
+
+The lower-level commands below are useful when inspecting individual stages.
+Prepare only the changed entry tables with:
 
 ```bash
 python -m plinder.data.pipeline.update_entries /path/to/update-plan /path/to/update-workspace \
@@ -92,13 +113,26 @@ and replace them rather than editing them in place. The complete archive set
 is checked against the updated annotation table before installation. The same
 command can be rerun after a failure.
 
-The workspace remains marked `requires_downstream_repair`. Search databases,
-scores, clusters, and apo links still need updating before it becomes
-a release. Search changes must cover both query and target directions; changed
-representatives and hit limits can require additional full-query searches.
-Independent changes to validation reports, NextGen enrichment, CCD data, or
-annotation settings need a separate refresh; the planner compares PDB coordinate
-revisions.
+Prepare the scoring-input tables from the updated index:
+
+```bash
+python -m plinder.data.pipeline.score prepare-scoring-inputs /path/to/update-workspace \
+  --threads 4 --memory-limit 8GB
+```
+
+This builds ligand-pocket representatives, pocket residue mappings, interface
+representatives, their membership tables, and the alignment chain lookup. It
+reads the updated entry tables without loading coordinates or running searches.
+Completed tables are reused when their inputs are unchanged; `--force` rebuilds
+them. An optional `--scratch-dir` sets the location of temporary files.
+
+These lower-level commands leave the workspace marked
+`requires_downstream_repair`; finish it with the all-stage command above. Search
+changes cover both query and target directions. A small reverse search identifies
+existing queries that hit changed targets, and those queries are rerun against
+the complete current database so hit limits remain correct. Independent changes
+to validation reports, NextGen enrichment, CCD data, or annotation settings need
+a separate refresh; the planner compares PDB coordinate revisions.
 
 ## Database creation
 

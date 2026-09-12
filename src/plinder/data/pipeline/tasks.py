@@ -272,11 +272,7 @@ def make_dbs(
         tmp_dir.mkdir(exist_ok=True, parents=True)
         database_path = output_dir / database_type
         complete = databases.created_database_is_complete(database_path, database_type)
-        source_signature = (
-            _file_content_signature(source)
-            if database_type == "foldseek" and source.is_file()
-            else None
-        )
+        source_signature = _file_content_signature(source) if source.is_file() else None
         input_marker = output_dir / f"{database_type}.createdb-input.json"
         source_is_current = (
             source_signature is None
@@ -703,8 +699,9 @@ def make_interface_representatives(
     scratch_dir: Path | None,
     threads: int,
     force_update: bool = False,
+    memory_limit: str = "64GB",
 ) -> dict[str, Any]:
-    """Normalize exact assembly-copy interfaces before mapping and scoring."""
+    """Group exact assembly-copy interfaces before mapping and scoring."""
     current = _completed_interface_representatives(data_dir)
     if not force_update and current is not None:
         LOG.info(
@@ -731,10 +728,9 @@ def make_interface_representatives(
         "membership": working_root / INTERFACE_MEMBERSHIP_RELATIVE.name,
     }
     connection = duckdb.connect()
-    connection.sql(f"SET threads={max(1, threads)}")
-    connection.sql("SET memory_limit='64GB'")
-    connection.sql(f"SET temp_directory='{working_root.as_posix()}'")
-    connection.sql("SET preserve_insertion_order=false")
+    collate._configure_duckdb(
+        connection, threads=threads, memory_limit=memory_limit, scratch_dir=working_root
+    )
     connection.sql(
         dedent(
             f"""
@@ -995,6 +991,7 @@ def make_ligand_pocket_representatives(
     scratch_dir: Path | None,
     threads: int,
     force_update: bool = False,
+    memory_limit: str = "64GB",
 ) -> dict[str, Any]:
     """Group exact protein-pocket copies and retain ligand and residue mappings."""
     current = _completed_ligand_pocket_representatives(data_dir)
@@ -1024,10 +1021,9 @@ def make_ligand_pocket_representatives(
     started = time.monotonic()
     LOG.info("make_ligand_pocket_representatives: grouping ligand pockets")
     connection = duckdb.connect()
-    connection.sql(f"SET threads={max(1, threads)}")
-    connection.sql("SET memory_limit='64GB'")
-    connection.sql(f"SET temp_directory='{working_root.as_posix()}'")
-    connection.sql("SET preserve_insertion_order=false")
+    collate._configure_duckdb(
+        connection, threads=threads, memory_limit=memory_limit, scratch_dir=working_root
+    )
     connection.sql(
         dedent(
             f"""
@@ -1433,6 +1429,7 @@ def make_alignment_chain_lookup(
     scratch_dir: Path | None,
     threads: int,
     force_update: bool = False,
+    memory_limit: str = "64GB",
 ) -> Path:
     """Build the compact chain and selected-residue map used by every shard."""
     make_ligand_pocket_representatives(
@@ -1440,12 +1437,14 @@ def make_alignment_chain_lookup(
         scratch_dir=scratch_dir,
         threads=threads,
         force_update=force_update,
+        memory_limit=memory_limit,
     )
     make_interface_representatives(
         data_dir=data_dir,
         scratch_dir=scratch_dir,
         threads=threads,
         force_update=force_update,
+        memory_limit=memory_limit,
     )
     lookup = data_dir / ALIGNMENT_CHAIN_LOOKUP_RELATIVE
     if not force_update and _completed_alignment_chain_lookup(data_dir) is not None:
@@ -1468,10 +1467,9 @@ def make_alignment_chain_lookup(
     interfaces = (data_dir / INTERFACE_HALF_REPRESENTATIVES_RELATIVE).as_posix()
     chains = (data_dir / "index" / "entry_chains.parquet").as_posix()
     con = duckdb.connect()
-    con.sql(f"set threads={max(1, threads)};")
-    con.sql("set memory_limit='64GB';")
-    con.sql("set preserve_insertion_order=false;")
-    con.sql(f"set temp_directory='{working_root.as_posix()}';")
+    collate._configure_duckdb(
+        con, threads=threads, memory_limit=memory_limit, scratch_dir=working_root
+    )
     con.sql(
         dedent(
             f"""
@@ -1592,12 +1590,14 @@ def compute_ligand_fingerprints(
     *,
     data_dir: Path,
     cofactor_similarity_threshold: float = 90.0,
+    retain_score_shards: bool = False,
 ) -> None:
     """Fingerprint unique ligand SMILES and annotate cofactor similarity."""
     LOG.info("compute_ligand_fingerprints: running")
     get_similarity_scores.compute_ligand_fingerprints(
         data_dir=data_dir,
         cofactor_similarity_threshold=cofactor_similarity_threshold,
+        retain_score_shards=retain_score_shards,
     )
 
 
@@ -1683,9 +1683,18 @@ def make_mhfp6_scores(
     )
 
 
-def annotate_ligand_similarity(*, data_dir: Path) -> None:
+def annotate_ligand_similarity(
+    *,
+    data_dir: Path,
+    minimum_similarity: float = 30.0,
+    number_id_col: str = "ligand_smiles_id",
+) -> None:
     """Write ligand identifiers and cofactor annotations."""
-    get_similarity_scores.annotate_ligand_similarity(data_dir=data_dir)
+    get_similarity_scores.annotate_ligand_similarity(
+        data_dir=data_dir,
+        minimum_similarity=minimum_similarity,
+        number_id_col=number_id_col,
+    )
 
 
 def make_ligand_mmp_pairs(
@@ -3306,57 +3315,62 @@ def collate_ligand_3d_scores(
             raise FileNotFoundError(
                 f"missing ligand 3D pair batches for shard {shard}: {missing[:10]}"
             )
-        if not batch_paths:
-            connection.close()
-            continue
-        paths_sql = ", ".join(f"'{path.as_posix()}'" for path in batch_paths)
-        keys = ", ".join(pair_columns)
-        counts = connection.sql(
-            f"""
-            WITH expected AS (
-                SELECT {keys}
-                FROM read_parquet('{work_path.as_posix()}')
-                WHERE substr(query_entry, 2, 2) = '{shard}'
-                  AND query_entry IN ({query_values})
-            ), observed AS (
-                SELECT scored.*
-                FROM read_parquet([{paths_sql}]) AS scored
-                INNER JOIN expected USING ({keys})
-            )
-            SELECT
-                (SELECT count(*) FROM expected),
-                (SELECT count(*) FROM observed),
-                (SELECT count(*) - count(DISTINCT ({keys})) FROM observed)
-            """
-        ).fetchone()
-        if counts is None:
-            connection.close()
-            raise RuntimeError(f"failed to validate ligand 3D query shard {shard}")
-        if counts[0] != counts[1] or counts[2]:
-            connection.close()
-            raise ValueError(
-                f"ligand 3D query shard {shard} has invalid coverage: "
-                f"expected={counts[0]}, observed={counts[1]}, duplicates={counts[2]}"
-            )
         temporary = scratch_dir / f"{shard}.parquet"
         temporary.unlink(missing_ok=True)
-        connection.sql(
-            f"""
-            COPY (
+        if not batch_paths:
+            connection.close()
+            pq.write_table(
+                pa.Table.from_pylist([], schema=schemas.LIGAND_3D_SCORE_SCHEMA),
+                temporary,
+            )
+        else:
+            paths_sql = ", ".join(f"'{path.as_posix()}'" for path in batch_paths)
+            keys = ", ".join(pair_columns)
+            counts = connection.sql(
+                f"""
                 WITH expected AS (
                     SELECT {keys}
                     FROM read_parquet('{work_path.as_posix()}')
                     WHERE substr(query_entry, 2, 2) = '{shard}'
                       AND query_entry IN ({query_values})
+                ), observed AS (
+                    SELECT scored.*
+                    FROM read_parquet([{paths_sql}]) AS scored
+                    INNER JOIN expected USING ({keys})
                 )
-                SELECT scored.*
-                FROM read_parquet([{paths_sql}]) AS scored
-                INNER JOIN expected USING ({keys})
-                ORDER BY {keys}
-            ) TO '{temporary.as_posix()}' (FORMAT PARQUET, COMPRESSION ZSTD)
-            """
-        )
-        connection.close()
+                SELECT
+                    (SELECT count(*) FROM expected),
+                    (SELECT count(*) FROM observed),
+                    (SELECT count(*) - count(DISTINCT ({keys})) FROM observed)
+                """
+            ).fetchone()
+            if counts is None:
+                connection.close()
+                raise RuntimeError(f"failed to validate ligand 3D query shard {shard}")
+            if counts[0] != counts[1] or counts[2]:
+                connection.close()
+                raise ValueError(
+                    f"ligand 3D query shard {shard} has invalid coverage: "
+                    f"expected={counts[0]}, observed={counts[1]}, "
+                    f"duplicates={counts[2]}"
+                )
+            connection.sql(
+                f"""
+                COPY (
+                    WITH expected AS (
+                        SELECT {keys}
+                        FROM read_parquet('{work_path.as_posix()}')
+                        WHERE substr(query_entry, 2, 2) = '{shard}'
+                          AND query_entry IN ({query_values})
+                    )
+                    SELECT scored.*
+                    FROM read_parquet([{paths_sql}]) AS scored
+                    INNER JOIN expected USING ({keys})
+                    ORDER BY {keys}
+                ) TO '{temporary.as_posix()}' (FORMAT PARQUET, COMPRESSION ZSTD)
+                """
+            )
+            connection.close()
         output = output_dir / f"{shard}.parquet"
         install = output.with_suffix(output.suffix + ".tmp")
         copyfile(temporary, install)
@@ -3391,9 +3405,7 @@ def _ligand_3d_query_shard_is_ready(*, data_dir: Path, shard: str) -> bool:
         """
     ).fetchall()
     pair_dir = data_dir / "scores" / "ligand_3d_pairs"
-    return bool(batch_rows) and all(
-        (pair_dir / f"{int(row[0])}.parquet").is_file() for row in batch_rows
-    )
+    return all((pair_dir / f"{int(row[0])}.parquet").is_file() for row in batch_rows)
 
 
 def merge_ligand_3d_scores(

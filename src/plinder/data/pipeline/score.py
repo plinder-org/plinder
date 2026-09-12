@@ -2692,11 +2692,18 @@ def finalize_ligand_archives(
 
 
 def make_foldseek_input_manifest(data_dir: Path, cif_root: Path) -> Path:
-    """List only planned protein-entry CIFs without recursively walking PDB."""
+    """List release entries containing protein chains without walking PDB."""
     _load_plan(data_dir, recheck_source=True)
-    pdb_ids = pd.read_parquet(data_dir / MANIFEST_RELATIVE, columns=["pdb_id"])[
-        "pdb_id"
-    ].astype(str)
+    pdb_ids = (
+        pd.read_parquet(
+            data_dir / "index" / "entry_chains.parquet",
+            columns=["entry_pdb_id"],
+            filters=[("chain_receptor_type", "==", "protein")],
+        )["entry_pdb_id"]
+        .astype(str)
+        .drop_duplicates()
+        .sort_values()
+    )
     output = data_dir / FOLDSEEK_INPUT_RELATIVE
     output.parent.mkdir(exist_ok=True, parents=True)
     temporary = output.with_suffix(".tmp.tsv")
@@ -2709,6 +2716,48 @@ def make_foldseek_input_manifest(data_dir: Path, cif_root: Path) -> Path:
                 / f"pdb_0000{pdb_id}_xyz-enrich.cif.gz"
             )
             handle.write(f"{cif_path}\n")
+    temporary.replace(output)
+    return output
+
+
+def make_mmseqs_input_fasta(data_dir: Path) -> Path:
+    """Write all release protein chains using the PDB/auth-chain identifiers."""
+    chains = pd.read_parquet(
+        data_dir / "index" / "entry_chains.parquet",
+        columns=[
+            "entry_pdb_id",
+            "chain_auth_id",
+            "chain_receptor_type",
+            "chain_sequence",
+        ],
+        filters=[("chain_receptor_type", "==", "protein")],
+    )
+    chains = chains.loc[
+        chains["chain_auth_id"].notna()
+        & chains["chain_sequence"].notna()
+        & chains["chain_sequence"].ne("")
+    ].copy()
+    chains["identifier"] = (
+        chains["entry_pdb_id"].astype(str) + "_" + chains["chain_auth_id"].astype(str)
+    )
+    sequence_counts = chains.groupby("identifier", observed=True)[
+        "chain_sequence"
+    ].nunique()
+    conflicting = sequence_counts[sequence_counts.gt(1)].index.tolist()
+    if conflicting:
+        raise ValueError(
+            "auth-chain identifiers have conflicting protein sequences: "
+            f"{conflicting[:10]}"
+        )
+    chains = chains.drop_duplicates("identifier").sort_values("identifier")
+    if not chains["chain_sequence"].astype(str).str.fullmatch("[A-Za-z]+").all():
+        raise ValueError("protein sequences must contain one-letter amino-acid codes")
+    output = data_dir / "manifests" / "mmseqs_createdb_inputs.fasta"
+    output.parent.mkdir(exist_ok=True, parents=True)
+    temporary = output.with_suffix(".tmp.fasta")
+    with temporary.open("w") as handle:
+        for row in chains.itertuples(index=False):
+            handle.write(f">{row.identifier}\n{row.chain_sequence}\n")
     temporary.replace(output)
     return output
 
@@ -6750,6 +6799,16 @@ def _parser() -> argparse.ArgumentParser:
         choices=["holo", "apo", "pred"],
         help="database subset to build; repeat to build more than one",
     )
+    scoring_inputs = subparsers.add_parser(
+        "prepare-scoring-inputs",
+        help="build pocket/interface representatives and chain mappings from entry tables",
+    )
+    scoring_inputs.add_argument("data_dir", type=Path)
+    scoring_inputs.add_argument("--threads", type=int, default=4)
+    scoring_inputs.add_argument("--memory-limit", default="8GB")
+    scoring_inputs.add_argument("--scratch-dir", type=Path)
+    scoring_inputs.add_argument("--force", action="store_true")
+
     lookup_refresh = subparsers.add_parser("refresh-alignment-lookup")
     lookup_refresh.add_argument("data_dir", type=Path)
     lookup_refresh.add_argument("--threads", type=int, default=1)
@@ -7007,6 +7066,15 @@ def main() -> None:
             scratch_dir=args.scratch_dir.resolve(),
         )
         result = {"status": "complete"}
+    elif args.command == "prepare-scoring-inputs":
+        lookup = tasks.make_alignment_chain_lookup(
+            data_dir=data_dir,
+            scratch_dir=args.scratch_dir.resolve() if args.scratch_dir else None,
+            threads=args.threads,
+            memory_limit=args.memory_limit,
+            force_update=args.force,
+        )
+        result = {"status": "complete", "alignment_chain_lookup": str(lookup)}
     elif args.command == "refresh-alignment-lookup":
         lookup = data_dir / tasks.ALIGNMENT_CHAIN_LOOKUP_RELATIVE
         before = _source_signature(lookup) if lookup.is_file() else None

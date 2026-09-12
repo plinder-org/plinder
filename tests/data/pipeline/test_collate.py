@@ -343,6 +343,9 @@ def test_weekly_entry_update_matches_full_collation(entry_update_case, tmp_path)
         json.loads((output / "index/collation.json").read_text())["status"]
         == "requires_downstream_repair"
     )
+    assert json.loads((output / "index/collation.json").read_text())["mode"] == (
+        "targeted_repair"
+    )
 
 
 @pytest.mark.parametrize("with_interfaces", [True, False])

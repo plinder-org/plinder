@@ -3089,6 +3089,40 @@ def test_collate_ligand_3d_scores_repartitions_balanced_batches(tmp_path) -> Non
     assert observed["shape"].tolist() == [0.8, 0.8]
 
 
+def test_ligand_3d_score_shard_with_no_pairs_is_ready(tmp_path) -> None:
+    from plinder.data.pipeline.score import (
+        LIGAND_3D_WORK_RELATIVE,
+        SCORE_WORK_RELATIVE,
+    )
+
+    work_path = tmp_path / LIGAND_3D_WORK_RELATIVE
+    work_path.parent.mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "query_entry": pd.Series(dtype="str"),
+            "query_ligand_asym_id": pd.Series(dtype="str"),
+            "target_entry": pd.Series(dtype="str"),
+            "target_ligand_asym_id": pd.Series(dtype="str"),
+            "ligand_3d_batch_index": pd.Series(dtype="int64"),
+        }
+    ).to_parquet(work_path, index=False)
+    pd.DataFrame({"pdb_id": ["1abc"]}).to_parquet(
+        tmp_path / SCORE_WORK_RELATIVE, index=False
+    )
+
+    assert tasks._ligand_3d_query_shard_is_ready(data_dir=tmp_path, shard="ab")
+    outputs = tasks.collate_ligand_3d_scores(
+        data_dir=tmp_path,
+        shards=["ab"],
+        scratch_dir=tmp_path / "scratch",
+        threads=1,
+    )
+
+    assert outputs == [tmp_path / "scores/ligand_3d_by_query/ab.parquet"]
+    assert pq.read_schema(outputs[0]).equals(schemas.LIGAND_3D_SCORE_SCHEMA)
+    assert pq.ParquetFile(outputs[0]).metadata.num_rows == 0
+
+
 def test_finalize_ligand_3d_scores_validates_pair_and_packed_shards(
     tmp_path, monkeypatch
 ) -> None:
@@ -3704,7 +3738,9 @@ def test_make_dbs_uses_configured_source_files(tmp_path, monkeypatch) -> None:
     ]
 
 
-def test_make_dbs_reuses_completed_createdb_output(tmp_path, monkeypatch) -> None:
+def test_make_dbs_records_file_source_before_reusing_completed_output(
+    tmp_path, monkeypatch
+) -> None:
     cif_root = tmp_path / "nextgen"
     cif_root.mkdir()
     seqres_path = tmp_path / "pdb_seqres.txt.gz"
@@ -3714,13 +3750,16 @@ def test_make_dbs_reuses_completed_createdb_output(tmp_path, monkeypatch) -> Non
         "created_database_is_complete",
         lambda *_args: True,
     )
+    create_calls = []
     monkeypatch.setattr(
         tasks.databases,
         "create_db",
-        lambda *_args, **_kwargs: pytest.fail("completed database was rebuilt"),
+        lambda source, output, kind, threads: create_calls.append(
+            (source, output, kind, threads)
+        ),
     )
 
-    tasks.make_dbs(
+    kwargs = dict(
         data_dir=tmp_path,
         sub_databases=["holo"],
         cpu=2,
@@ -3728,11 +3767,15 @@ def test_make_dbs_reuses_completed_createdb_output(tmp_path, monkeypatch) -> Non
         seqres_path=seqres_path,
         index=False,
     )
+    tasks.make_dbs(**kwargs)
+    tasks.make_dbs(**kwargs)
+
+    assert create_calls == [
+        (seqres_path, tmp_path / "dbs/mmseqs", "mmseqs", 2),
+    ]
 
 
-def test_make_dbs_rebuilds_foldseek_when_input_manifest_changes(
-    tmp_path, monkeypatch
-) -> None:
+def test_make_dbs_rebuilds_only_the_changed_file_input(tmp_path, monkeypatch) -> None:
     cif_manifest = tmp_path / "foldseek-inputs.tsv"
     cif_manifest.write_text("/nextgen/ab/1abc.cif.gz\n")
     seqres_path = tmp_path / "pdb_seqres.txt.gz"
@@ -3771,6 +3814,7 @@ def test_make_dbs_rebuilds_foldseek_when_input_manifest_changes(
 
     assert create_calls == [
         (cif_manifest, tmp_path / "dbs/foldseek", "foldseek", 2),
+        (seqres_path, tmp_path / "dbs/mmseqs", "mmseqs", 2),
         (cif_manifest, tmp_path / "dbs/foldseek", "foldseek", 2),
     ]
 

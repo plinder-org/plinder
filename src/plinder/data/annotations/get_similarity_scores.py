@@ -2,6 +2,7 @@
 # Distributed under the terms of the Apache License 2.0
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 import subprocess
@@ -46,6 +47,7 @@ from plinder.core.structure.smallmols_similarity import (
     mol2morgan_fp,
 )
 from plinder.core.utils import schemas
+from plinder.core.utils.files import write_json_atomic
 from plinder.core.utils.log import setup_logger
 from plinder.data import databases
 from plinder.data.pipeline.config import FoldseekConfig, MMSeqsConfig
@@ -81,6 +83,7 @@ MHFP6_PARQUET_METADATA = {
     b"plinder.fingerprint.seed": b"42",
     b"plinder.fingerprint.similarity": b"minhash_jaccard",
 }
+LIGAND_SCORE_MANIFEST = "_manifest.json"
 
 _NON_CANONICAL_AA = str.maketrans({"J": "L", "U": "C", "O": "K"})
 
@@ -370,6 +373,7 @@ def compute_ligand_fingerprints(
     *,
     data_dir: Path,
     cofactor_similarity_threshold: float = 90.0,
+    retain_score_shards: bool = False,
 ) -> None:
     """Fingerprint the unique canonical SMILES in a completed ligand ingest."""
     ligands = load_ligands_from_annotation_table(data_dir=data_dir)
@@ -469,7 +473,7 @@ def compute_ligand_fingerprints(
     (output_dir / "ligand_similarity_annotations.parquet").unlink(missing_ok=True)
     if score_basis_is_unchanged:
         LOG.info("ligand fingerprint score basis is unchanged; retaining score shards")
-    else:
+    elif not retain_score_shards:
         # Fingerprints define both IDs and the node universe, so old scores are
         # usable only when the complete ordered score basis is identical.
         LOG.info("ligand fingerprint score basis changed; removing score shards")
@@ -493,7 +497,7 @@ def compute_ligand_fingerprints(
     write_mhfp6_fingerprints(ligands_unique, output_dir)
     if score_basis_is_unchanged and mhfp6_metadata_unchanged:
         LOG.info("MHFP6 fingerprint score basis is unchanged; retaining score shards")
-    else:
+    elif not retain_score_shards:
         LOG.info("MHFP6 fingerprint score basis changed; removing score shards")
         for path in (data_dir / MHFP6_SCORES_DIR).glob("*.parquet"):
             path.unlink()
@@ -522,14 +526,16 @@ def ligand_scores(
     if len(fingerprints) != len(all_ligands):
         raise ValueError("ligands don't match fingerprints")
     node_ids = all_ligands[number_id_col].astype(int).tolist()
-    if node_ids != list(range(len(all_ligands))):
-        raise ValueError("ligand IDs must match contiguous fingerprint row indices")
+    positions = {node_id: index for index, node_id in enumerate(node_ids)}
+    missing = sorted(set(ligand_ids).difference(positions))
+    if missing:
+        raise ValueError(f"unknown ligand IDs: {missing[:10]}")
 
     minimum_fraction = minimum_similarity / 100.0
     rows: list[dict[str, int | float]] = []
     for ligand_id in ligand_ids:
         similarities = DataStructs.BulkTanimotoSimilarity(
-            fingerprints[ligand_id], fingerprints
+            fingerprints[positions[ligand_id]], fingerprints
         )
         rows.extend(
             {
@@ -537,18 +543,20 @@ def ligand_scores(
                 "target_ligand_id": target_id,
                 "tanimoto_similarity_ecfp4_1024": similarity * 100.0,
             }
-            for target_id, similarity in enumerate(similarities)
+            for target_id, similarity in zip(node_ids, similarities, strict=True)
             if similarity >= minimum_fraction
         )
     table = pa.Table.from_pylist(
         rows,
         schema=schemas.TANIMOTO_SCORE_SCHEMA.with_metadata(ECFP4_PARQUET_METADATA),
     )
-    pq.write_table(table, output_path)
+    _atomic_write_parquet(table, output_path)
 
 
-def _load_mhfp6_matrix(data_dir: Path, *, number_id_col: str) -> NDArray[np.uint32]:
-    """Load the MHFP6 MinHash table as a contiguous, ID-ordered uint32 matrix."""
+def _load_mhfp6_matrix(
+    data_dir: Path, *, number_id_col: str
+) -> tuple[list[int], NDArray[np.uint32]]:
+    """Load ligand IDs and their ID-ordered MHFP6 MinHash matrix."""
     fingerprint_path = data_dir / "fingerprints" / MHFP6_FINGERPRINT_FILE
     fingerprint_metadata = pq.read_schema(fingerprint_path).metadata or {}
     if any(
@@ -558,12 +566,10 @@ def _load_mhfp6_matrix(data_dir: Path, *, number_id_col: str) -> NDArray[np.uint
         raise ValueError("ligand fingerprint metadata is not MHFP6/2048")
     all_ligands = pd.read_parquet(fingerprint_path)
     node_ids = all_ligands[number_id_col].astype(int).tolist()
-    if node_ids != list(range(len(all_ligands))):
-        raise ValueError("ligand IDs must match contiguous fingerprint row indices")
     matrix = np.frombuffer(b"".join(all_ligands["mhfp6"]), dtype=np.uint32).reshape(
         len(all_ligands), MHFP6_N_PERMUTATIONS
     )
-    return matrix
+    return node_ids, matrix
 
 
 def mhfp6_ligand_scores(
@@ -575,12 +581,16 @@ def mhfp6_ligand_scores(
     minimum_similarity: float = 30.0,
 ) -> None:
     """Write all MHFP6 MinHash-Jaccard edges above ``minimum_similarity``."""
-    matrix = _load_mhfp6_matrix(data_dir, number_id_col=number_id_col)
+    node_ids, matrix = _load_mhfp6_matrix(data_dir, number_id_col=number_id_col)
+    positions = {node_id: index for index, node_id in enumerate(node_ids)}
+    missing = sorted(set(ligand_ids).difference(positions))
+    if missing:
+        raise ValueError(f"unknown ligand IDs: {missing[:10]}")
     minimum_fraction = minimum_similarity / 100.0
     rows: list[dict[str, int | float]] = []
     for ligand_id in ligand_ids:
-        similarities = mhfp6_bulk_jaccard(matrix[ligand_id], matrix)
-        for target_id, similarity in enumerate(similarities):
+        similarities = mhfp6_bulk_jaccard(matrix[positions[ligand_id]], matrix)
+        for target_id, similarity in zip(node_ids, similarities, strict=True):
             if similarity >= minimum_fraction:
                 rows.append(
                     {
@@ -593,7 +603,7 @@ def mhfp6_ligand_scores(
         rows,
         schema=schemas.MHFP6_SCORE_SCHEMA.with_metadata(MHFP6_PARQUET_METADATA),
     )
-    pq.write_table(table, output_path)
+    _atomic_write_parquet(table, output_path)
 
 
 def build_ligand_similarity_annotations(
@@ -629,7 +639,57 @@ def _check_self_score_coverage(
         )
 
 
-def annotate_ligand_similarity(*, data_dir: Path) -> Path:
+def fingerprint_basis_sha256(
+    path: Path,
+    *,
+    number_id_col: str,
+    fingerprint_col: str,
+) -> str:
+    """Hash the ID-ordered fingerprint vectors that define chemical scores."""
+    digest = hashlib.sha256()
+    digest.update(number_id_col.encode())
+    digest.update(b"\0")
+    digest.update(fingerprint_col.encode())
+    parquet = pq.ParquetFile(path)
+    for batch in parquet.iter_batches(columns=[number_id_col, fingerprint_col]):
+        ids = batch.column(0).to_pylist()
+        fingerprints = batch.column(1).to_pylist()
+        for ligand_id, fingerprint in zip(ids, fingerprints, strict=True):
+            value = bytes(fingerprint)
+            digest.update(int(ligand_id).to_bytes(8, "little", signed=True))
+            digest.update(len(value).to_bytes(8, "little"))
+            digest.update(value)
+    return digest.hexdigest()
+
+
+def ligand_score_manifest_payload(
+    *,
+    fingerprint_path: Path,
+    fingerprint_col: str,
+    metric: str,
+    minimum_similarity: float,
+    number_id_col: str,
+) -> dict[str, str | float]:
+    """Describe the exact fingerprint basis and cutoff behind score shards."""
+    return {
+        "metric": metric,
+        "minimum_similarity": float(minimum_similarity),
+        "number_id_column": number_id_col,
+        "fingerprint_column": fingerprint_col,
+        "fingerprint_basis_sha256": fingerprint_basis_sha256(
+            fingerprint_path,
+            number_id_col=number_id_col,
+            fingerprint_col=fingerprint_col,
+        ),
+    }
+
+
+def annotate_ligand_similarity(
+    *,
+    data_dir: Path,
+    minimum_similarity: float = 30.0,
+    number_id_col: str = "ligand_smiles_id",
+) -> Path:
     """Write unique-SMILES identifiers and cofactor annotations for the index."""
     fingerprint_dir = data_dir / "fingerprints"
     unique_ligands = pd.read_parquet(fingerprint_dir / "ligands_per_smiles.parquet")
@@ -643,6 +703,16 @@ def annotate_ligand_similarity(*, data_dir: Path) -> Path:
         expected_query_ids=expected_query_ids,
         label="BulkTanimoto",
     )
+    write_json_atomic(
+        data_dir / "ligand_scores" / LIGAND_SCORE_MANIFEST,
+        ligand_score_manifest_payload(
+            fingerprint_path=fingerprint_dir / "ligands_per_smiles.parquet",
+            fingerprint_col="fingerprint",
+            metric="tanimoto_similarity_ecfp4_1024",
+            minimum_similarity=minimum_similarity,
+            number_id_col=number_id_col,
+        ),
+    )
     # MHFP6 scoring is opt-in, but once shards exist they must cover the same
     # unique-SMILES node universe as the ECFP4 shards.
     mhfp6_paths = sorted((data_dir / MHFP6_SCORES_DIR).glob("*.parquet"))
@@ -653,11 +723,23 @@ def annotate_ligand_similarity(*, data_dir: Path) -> Path:
             expected_query_ids=expected_query_ids,
             label="MHFP6",
         )
+        write_json_atomic(
+            data_dir / MHFP6_SCORES_DIR / LIGAND_SCORE_MANIFEST,
+            ligand_score_manifest_payload(
+                fingerprint_path=fingerprint_dir / MHFP6_FINGERPRINT_FILE,
+                fingerprint_col="mhfp6",
+                metric=MHFP6_METRIC,
+                minimum_similarity=minimum_similarity,
+                number_id_col=number_id_col,
+            ),
+        )
     annotations = build_ligand_similarity_annotations(
         unique_ligands=unique_ligands,
     )
     output_path = fingerprint_dir / "ligand_similarity_annotations.parquet"
-    annotations.to_parquet(output_path, index=False)
+    _atomic_write_parquet(
+        pa.Table.from_pandas(annotations, preserve_index=False), output_path
+    )
     return output_path
 
 
@@ -1709,9 +1791,19 @@ class Scorer:
         threads: int = 1,
         alignment_types: Sequence[str] | None = None,
         query_chain_auth_ids: abc.Mapping[str, abc.Collection[str]] | None = None,
-    ) -> None:
+        target_database_dir: Path | None = None,
+        result_database_dir: Path | None = None,
+        write_empty_results: bool = True,
+    ) -> set[str]:
+        """Search selected entries and return those with at least one hit.
+
+        The optional database roots let update jobs search the current query
+        database against a small changed-target database without touching the
+        release's existing raw alignments.
+        """
         output_folder.mkdir(exist_ok=True)
         failures: list[str] = []
+        hit_entries: set[str] = set()
         selected_alignment_types = list(alignment_types or ["mmseqs", "foldseek"])
         unsupported = sorted(set(selected_alignment_types) - {"foldseek", "mmseqs"})
         if unsupported:
@@ -1741,17 +1833,21 @@ class Scorer:
                 sub_db,
                 aln_type,
             )
-            aln_dir = self.db_dir / f"{search_db}_{aln_type}" / "aln"
+            result_root = result_database_dir or self.db_dir
+            aln_dir = result_root / f"{search_db}_{aln_type}" / "aln"
             aln_dir.mkdir(exist_ok=True, parents=True)
             if not db_ids or len(missing_query_ids) == len(db_ids):
                 LOG.warning(
                     f"no {aln_type} query chains are available for "
-                    f"{len(entry_ids)} entries; writing empty search results"
+                    f"{len(entry_ids)} entries"
                 )
-                empty = pa.Table.from_pylist([], schema=_raw_alignment_schema(aln_type))
-                for pdb_id in entry_ids:
-                    target = aln_dir / f"{pdb_id}.parquet"
-                    _atomic_write_parquet(empty, target)
+                if write_empty_results:
+                    empty = pa.Table.from_pylist(
+                        [], schema=_raw_alignment_schema(aln_type)
+                    )
+                    for pdb_id in entry_ids:
+                        target = aln_dir / f"{pdb_id}.parquet"
+                        _atomic_write_parquet(empty, target)
                 continue
             tmp_dir = sub_db / f"tmp_{search_db}_{aln_type}"
             tmp_dir.mkdir(exist_ok=True, parents=True)
@@ -1766,7 +1862,7 @@ class Scorer:
                     search_target_db,
                     cluster_alignment_db,
                 ) = databases.exact_search_database_paths(
-                    self.db_dir,
+                    target_database_dir or self.db_dir,
                     search_db,
                     aln_type,
                 )
@@ -1805,9 +1901,10 @@ class Scorer:
                 )
                 local_output.parent.mkdir(exist_ok=True, parents=True)
                 if pdb_id_file.exists():
+                    hit_entries.add(pdb_id)
                     pdb_id_df = pd.read_parquet(pdb_id_file)
                     pdb_id_df.to_parquet(local_output, index=False)
-                else:
+                elif write_empty_results:
                     # Short chains can legitimately have no hit after the
                     # E-value filter.  A typed empty file is their durable
                     # searched/no-hit completion marker.
@@ -1817,10 +1914,13 @@ class Scorer:
                         ),
                         local_output,
                     )
+                else:
+                    continue
                 _atomic_copy_file(local_output, target)
                 local_output.unlink(missing_ok=True)
         if failures:
             raise RuntimeError("alignment searches failed: " + "; ".join(failures))
+        return hit_entries
 
     def map_alignment_files(
         self,

@@ -1,3 +1,5 @@
+import os
+
 from plinder.data import databases
 
 
@@ -259,6 +261,10 @@ def test_make_sub_dbs_builds_complete_backend_in_scratch(tmp_path, monkeypatch):
     full_db.parent.mkdir()
     full_db.with_suffix(".lookup").write_text("0 pdb_00001abc_xyz-enrich_A 0\n")
     db_dir = tmp_path / "shared" / "subdbs"
+    db_dir.mkdir(parents=True)
+    original_missing = tmp_path / "original-missing.json"
+    original_missing.write_text('{"old": true}\n')
+    os.link(original_missing, db_dir / "missing.json")
     scratch = tmp_path / "scratch"
     build_paths = []
 
@@ -292,3 +298,5 @@ def test_make_sub_dbs_builds_complete_backend_in_scratch(tmp_path, monkeypatch):
     assert (target / "holo_foldseek.dbtype").is_file()
     assert (target / "selection.json").is_file()
     assert (target / "exact_cluster.json").is_file()
+    assert original_missing.read_text() == '{"old": true}\n'
+    assert not os.path.samefile(original_missing, db_dir / "missing.json")

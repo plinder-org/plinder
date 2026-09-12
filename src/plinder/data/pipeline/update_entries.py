@@ -258,6 +258,7 @@ def apply_entry_update(
         output_dir / "index" / collate.FINAL_MARKER_NAME,
         {
             "status": collate.REPAIR_REQUIRED_STATUS,
+            "mode": "targeted_repair",
             "interface_min_residues": min_residues,
             "entry_update": str(marker_path),
             **validation,

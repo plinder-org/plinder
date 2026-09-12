@@ -284,7 +284,11 @@ class IngestPipeline:
 
     @utils.ingest_flow_control
     def annotate_ligand_similarity(self) -> None:
-        tasks.annotate_ligand_similarity(data_dir=self.plinder_dir)
+        tasks.annotate_ligand_similarity(
+            data_dir=self.plinder_dir,
+            minimum_similarity=self.cfg.ligand.minimum_similarity,
+            number_id_col=self.cfg.ligand.number_id_col,
+        )
 
     @utils.ingest_flow_control
     def make_ligand_mmp_pairs(self, *, threads: int | None = None) -> None:
