@@ -37,7 +37,7 @@ T = TypeVar("T")
 ClusterEntity = Literal["ligand", "interface"]
 
 COMPONENT_EDGE_COLUMNS = ["query_node", "target_node"]
-COMPONENT_REDUCTION_VERSION = 3
+COMPONENT_REDUCTION_VERSION = 1
 COMPONENT_REDUCTION_DIRECTIONS = (False,)
 SYMMETRIC_EDGE_BUCKET_COUNT = 64
 SYMMETRIC_EDGE_COLUMNS = ["query_node", "target_node", "similarity"]
@@ -1513,7 +1513,7 @@ def _cached_component_node_universe(
         return None
     try:
         manifest = json.loads(manifest_path.read_text())
-        if manifest.get("version") != 3 or not manifest.get("universe_hash"):
+        if manifest.get("version") != 1 or not manifest.get("universe_hash"):
             return None
         if manifest.get("entity_type", "ligand") != entity_type:
             return None
@@ -1640,7 +1640,7 @@ def prepare_component_node_universe(
         universe_digest.update(str(node_id).encode())
         universe_digest.update(b"\n")
     manifest = {
-        "version": 3,
+        "version": 1,
         "entity_type": entity_type,
         "sources": _component_node_universe_sources(data_dir, entity_type),
         "cache_size": cache_path.stat().st_size,

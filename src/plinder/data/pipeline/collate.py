@@ -31,7 +31,7 @@ from plinder.data.pipeline.ingest import (
     completed_interface_metrics,
 )
 
-COLLATION_VERSION = 6
+COLLATION_VERSION = 1
 STAGING_RELATIVE = Path("index/.staging/v3_collation")
 MANIFEST_NAME = "entries.parquet"
 PLAN_NAME = "plan.json"
