@@ -155,6 +155,21 @@ def test_query_ligand_cross_similarity_rejects_non_numeric_ids(
         )
 
 
+@pytest.mark.parametrize(
+    ("query_ligands", "target_ligands"),
+    [("29", ["49918"]), (["29"], "49918")],
+)
+def test_query_ligand_cross_similarity_rejects_scalar_strings(
+    query_ligands,
+    target_ligands,
+):
+    with pytest.raises(TypeError, match="must be provided as a collection"):
+        scores.cross_ligand_similarity(
+            query_ligands=query_ligands,
+            target_ligands=target_ligands,
+        )
+
+
 def test_ligand_cross_similarity_maps_nodes_through_annotation(monkeypatch):
     calls = []
 

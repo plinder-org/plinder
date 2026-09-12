@@ -13,6 +13,8 @@ from plinder.core.utils.dec import timeit
 
 
 def _ligand_ids(values: Iterable[int | str]) -> set[int]:
+    if isinstance(values, (str, bytes)):
+        raise TypeError("ligand IDs must be provided as a collection")
     try:
         return {int(value) for value in values}
     except (TypeError, ValueError) as exc:
@@ -114,11 +116,11 @@ def cross_similarity(
     df : pd.DataFrame
         the cross similarity results
     """
+    query_ids = _ligand_ids(query_ligands)
+    target_ids = _ligand_ids(target_ligands)
     dataset = PlinderRelease().fetch("ligand_scores")
     if metric is None:
         metric = "tanimoto_similarity_ecfp4_1024"
-    query_ids = _ligand_ids(query_ligands)
-    target_ids = _ligand_ids(target_ligands)
     filters: list[list[Filter]] = [
         [
             ("query_ligand_id", "in", query_ids),
