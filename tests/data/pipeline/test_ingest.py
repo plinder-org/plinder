@@ -953,16 +953,20 @@ def test_batch_continues_after_failure_and_resumes_completed_entries(
     assert completed_entry_metrics(output_root, "1abc") is None
 
 
-def test_batch_resumes_entries_previously_skipped_without_systems(
+def test_batch_resumes_entries_with_only_chain_sidecars(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     output_root = tmp_path / "output"
+    entry_dir = output_root / "raw_entries/ab/1abc"
+    entry_dir.mkdir(parents=True)
+    _write_fake_sidecars(entry_dir, "1abc")
     entry_metrics = output_root / "metrics" / "ingest-one-1abc.json"
     entry_metrics.parent.mkdir(parents=True)
     entry_metrics.write_text(
         json.dumps(
             {
-                "status": "skipped_no_systems",
+                "status": "complete",
+                "outputs": {"entry_directory": str(entry_dir)},
                 "interface_annotate_prodigy": True,
                 "counts": {"annotation_rows": 0, "interface_rows": 0},
                 "interface_min_residues": 7,
@@ -1094,7 +1098,11 @@ def test_resume_requires_shared_annotations(
                 "status": status,
                 "mode": mode,
                 "interface_min_residues": 7,
-                "counts": {"annotation_rows": 0, "interface_rows": 0},
+                "counts": {
+                    "annotation_rows": 0,
+                    "interface_rows": 0,
+                    "entry_chain_rows": 0 if empty else 1,
+                },
                 "outputs": {"entry_directory": str(entry_dir)},
             }
         )
@@ -1153,13 +1161,42 @@ def test_resume_requires_ligand_annotations(
     )
 
 
-def test_pre_interface_skip_is_not_considered_complete(tmp_path: Path) -> None:
+@pytest.mark.parametrize("has_interface_counts", [False, True])
+def test_pre_interface_skip_is_not_considered_complete(
+    tmp_path: Path, has_interface_counts: bool
+) -> None:
     output_root = tmp_path / "output"
     entry_metrics = output_root / "metrics" / "ingest-one-1abc.json"
     entry_metrics.parent.mkdir(parents=True)
-    entry_metrics.write_text(json.dumps({"status": "skipped_no_systems"}))
+    payload = {"status": "skipped_no_systems"}
+    if has_interface_counts:
+        payload.update(
+            {
+                "counts": {"annotation_rows": 0, "interface_rows": 0},
+                "interface_min_residues": 7,
+            }
+        )
+    entry_metrics.write_text(json.dumps(payload))
 
     assert completed_entry_metrics(output_root, "1abc") is None
+
+
+def test_ligand_skip_requires_chain_extraction(tmp_path: Path) -> None:
+    entry_dir = tmp_path / "raw_entries/ab/1abc"
+    entry_dir.mkdir(parents=True)
+    _write_fake_sidecars(entry_dir, "1abc")
+    marker = ingest.entry_metrics_paths(tmp_path, "1abc")[0]
+    marker.parent.mkdir(parents=True)
+    payload = {
+        "status": "skipped_no_ligands",
+        "mode": "ligands",
+        "outputs": {"entry_directory": str(entry_dir)},
+    }
+    marker.write_text(json.dumps(payload))
+    assert completed_entry_metrics(tmp_path, "1abc") is None
+    payload["counts"] = {"entry_chain_rows": 1}
+    marker.write_text(json.dumps(payload))
+    assert completed_entry_metrics(tmp_path, "1abc") == marker
 
 
 def test_ligand_skip_requires_recorded_biounit_contacts(tmp_path: Path) -> None:
@@ -1183,6 +1220,7 @@ def test_ligand_skip_requires_recorded_biounit_contacts(tmp_path: Path) -> None:
             {
                 "status": "skipped_no_ligands",
                 "mode": "ligands",
+                "counts": {"entry_chain_rows": 1},
                 "outputs": {"entry_directory": str(entry_directory)},
             }
         )
@@ -1218,6 +1256,11 @@ def test_ligand_skip_requires_recorded_biounit_contacts(tmp_path: Path) -> None:
             expected_ingest_mode="ligands",
         )
         == metrics_path
+    )
+
+    assert completed_entry_metrics(output_root, "1abc") == metrics_path
+    assert (
+        completed_entry_metrics(output_root, "1abc", expected_ingest_mode="all") is None
     )
 
     pd.DataFrame(

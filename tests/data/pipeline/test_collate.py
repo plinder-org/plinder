@@ -542,9 +542,19 @@ def test_collation_retains_entries_with_only_protein_interfaces(
     assert "3ghi__1__1.A--1.B" in set(interfaces["system_id"])
 
 
-def test_collation_retains_entries_with_only_chain_sidecars(tmp_path: Path) -> None:
+@pytest.mark.parametrize("mode", ["all", "ligands"])
+def test_collation_retains_entries_with_only_chain_sidecars(
+    tmp_path: Path, mode: str
+) -> None:
     _write_release(tmp_path)
     _write_sidecar_only_entry(tmp_path)
+    marker = tmp_path / "metrics/jk/ingest-one-4jkl.json"
+    payload = json.loads(marker.read_text())
+    payload["mode"] = mode
+    if mode == "ligands":
+        payload["status"] = "skipped_no_ligands"
+        payload["counts"]["entry_chain_rows"] = 2
+    marker.write_text(json.dumps(payload))
 
     report = run_collation(tmp_path, memory_limit="1GB")
 
@@ -556,6 +566,13 @@ def test_collation_retains_entries_with_only_chain_sidecars(tmp_path: Path) -> N
     assert set(metadata["entry_pdb_id"]) == {"1abc", "2def", "4jkl"}
     chains = pd.read_parquet(tmp_path / "index/entry_chains.parquet")
     assert "4jkl" in set(chains["entry_pdb_id"])
+
+    # Targeted repairs must accept the same sidecar-only entries as a full build.
+    repaired = repair_collation(tmp_path, ["4jkl"], memory_limit="1GB")
+    assert repaired["status"] == "requires_downstream_repair"
+    pd.testing.assert_frame_equal(
+        pd.read_parquet(tmp_path / "index/entry_chains.parquet"), chains
+    )
 
 
 def test_collation_rejects_interface_sidecars_from_failed_ingest(

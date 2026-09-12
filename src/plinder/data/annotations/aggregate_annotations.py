@@ -1674,7 +1674,7 @@ class Entry(DocBaseModel):
             if chain in self.chains:
                 self.chains[chain].mappings = per_chain[chain]
         self.ligand_like_chains = detect_ligand_chains(self, min_polymer_size)
-        if not include_ligands:
+        if not include_ligands or not self.ligand_like_chains:
             return _LigandChainClasses(set(), set(), set())
         monoatomic_ion_mask = struc.filter_monoatomic_ions(atoms)
         ion_only_chains = set(
@@ -1801,6 +1801,11 @@ class Entry(DocBaseModel):
                 biounit.chain_id, biounit.legacy_chain_id
             )
         }
+        if include_ligands and not self.ligand_like_chains:
+            # The contacts are known to be zero; no spatial search is needed.
+            self._ligand_contacts_requested = True
+            self.biounit_ligand_contact_counts[str(biounit_id)] = {}
+            include_ligands = False
         spatial_radii: list[float] = []
         if include_ligands:
             spatial_radii.extend(
@@ -2032,28 +2037,19 @@ class Entry(DocBaseModel):
             cls._clear_ligand_files(save_folder, pdb_id)
         entry = cls._from_cif_block(cif_data, pdb_id=pdb_id)
         entry._ligand_contacts_requested = include_ligands
-        if include_ligands and not include_interfaces and not protein_only:
-            # Ligand-only ingest can skip loading the bonded structure when the
-            # entry has no ligand-like chains at all; interface and protein-only
-            # ingest still need the chains and assemblies.
-            ligand_preflight = detect_ligand_chains_from_cif(
-                cif_data,
-                min_polymer_size,
-            )
-            if ligand_preflight == {}:
-                LOG.info(
-                    f"PDB {pdb_id!r} has no ligand-like chains; skipping bonded "
-                    "structure loading"
-                )
-                return entry
-
+        # Unliganded entries still supply apo chains and assembly membership.
+        # They do not require a ligand bond graph (e.g. CA-only proteins).
+        require_ligand_bonds = (
+            include_ligands
+            and detect_ligand_chains_from_cif(cif_data, min_polymer_size) != {}
+        )
         atoms = cls._load_clean_atoms(
             cif_file_obj,
             source=f"PDB {pdb_id!r}",
             no_bonds_error=(
                 f"{pdb_id}: biotite returned no bonds despite include_bonds=True"
             ),
-            require_bonds=include_ligands,
+            require_bonds=require_ligand_bonds,
         )
         ligand_classes = entry._attach_chains(
             atoms,
@@ -2199,8 +2195,8 @@ class Entry(DocBaseModel):
         the single biological assembly ``1``: deposition metadata, covalent
         links, external chain mappings, ion and known-artifact deferral (the
         latter needs ``data_dir``), ligand contact counts, interfaces, and
-        ligand collection are identical.  Only the ligand-only preflight and
-        the crystal-contact labelling of deposited entries are skipped.
+        ligand collection are identical. The crystal-contact labelling of
+        deposited entries is skipped.
 
         Raises
         ------

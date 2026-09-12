@@ -358,33 +358,14 @@ def completed_entry_metrics(
         if metrics.get("status") == "skipped_no_ligands":
             entry_directory = metrics.get("outputs", {}).get("entry_directory")
             if (
-                expected_ingest_mode == "ligands"
+                metrics.get("mode") == "ligands"
+                # Older ligand-only skips returned before extracting any chains.
+                and "entry_chain_rows" in metrics.get("counts", {})
                 and entry_directory
                 and _shared_annotations_are_present(Path(entry_directory))
                 and _biounit_contacts_are_valid(
                     Path(entry_directory) / "entry_biounit_chains.parquet"
                 )
-            ):
-                return metrics_path
-            continue
-        if metrics.get("status") == "skipped_no_systems":
-            # A pre-interface-ingest skip may actually contain a protein-only
-            # interface and must be reconsidered. New skips explicitly record
-            # the zero interface count.
-            if "interface_rows" not in metrics.get("counts", {}):
-                continue
-            try:
-                stored_interface_min_residues = int(metrics["interface_min_residues"])
-            except (KeyError, TypeError, ValueError):
-                continue
-            if expected_annotate_prodigy is not None and (
-                bool(metrics.get("interface_annotate_prodigy"))
-                != expected_annotate_prodigy
-            ):
-                continue
-            if (
-                expected_interface_min_residues is None
-                or stored_interface_min_residues == expected_interface_min_residues
             ):
                 return metrics_path
             continue
@@ -795,6 +776,13 @@ def ingest_one_pdb(
                 "annotation_rows": 0,
                 "interface_rows": interface_rows,
                 "interface_rows_generated": 0,
+                "entry_chain_rows": (
+                    pq.ParquetFile(
+                        entry_directory / "entry_chains.parquet"
+                    ).metadata.num_rows
+                    if (entry_directory / "entry_chains.parquet").is_file()
+                    else 0
+                ),
                 "systems": 0,
                 "ligand_ids": 0,
                 "canonical_ligand_sdfs": 0,

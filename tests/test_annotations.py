@@ -1731,6 +1731,64 @@ def test_10sb_covalent_macrocycle_is_single_ligand(cif_10sb, mock_alternative_da
     assert mol.GetNumAtoms() == lig.num_heavy_atoms
 
 
+@pytest.mark.parametrize("ca_only", [False, True])
+@pytest.mark.parametrize("include_interfaces", [False, True])
+def test_ingest_retains_unliganded_chains_without_ligand_scans(
+    cif_4ci1, tmp_path, ca_only, include_interfaces, monkeypatch
+):
+    from plinder.data.annotations.protein_utils import detect_ligand_chains_from_cif
+
+    cif = read_mmcif_file(cif_4ci1)
+    atoms = cif.block["atom_site"]
+    selected = atoms["label_asym_id"].as_array() == "A"
+    if ca_only:
+        selected &= atoms["label_atom_id"].as_array() == "CA"
+    cif.block["atom_site"] = pdbx.CIFCategory(
+        {
+            name: pdbx.CIFColumn(column.as_array()[selected])
+            for name, column in atoms.items()
+        }
+    )
+    assert detect_ligand_chains_from_cif(cif.block) == {}
+    path = tmp_path / "unliganded.cif"
+    cif.write(path)
+
+    index_calls = []
+    original_from_atoms = BiounitSpatialIndex.from_atoms
+
+    def build_index(*args, **kwargs):
+        assert include_interfaces, "ligand-free ingest should not build a ligand index"
+        index_calls.append(True)
+        return original_from_atoms(*args, **kwargs)
+
+    def unexpected_ligand_scan(*args, **kwargs):
+        pytest.fail("ligand-free ingest should not scan ligand contacts")
+
+    monkeypatch.setattr(BiounitSpatialIndex, "from_atoms", staticmethod(build_index))
+    monkeypatch.setattr(
+        Entry, "_record_biounit_ligand_contact_counts", unexpected_ligand_scan
+    )
+    entry = Entry.from_cif_file(path, include_interfaces=include_interfaces)
+    assert bool(index_calls) == include_interfaces
+
+    assert not entry.systems
+    assert not entry.interfaces
+    chains = entry.chains_to_df()
+    assert chains.chain_asym_id.tolist() == ["A"]
+    assert chains.chain_length.gt(12).all()
+    assert not chains.chain_is_holo.any()
+    membership = entry.biounit_chains_to_df()
+    assert not membership.empty
+    assert set(membership.chain_asym_id) == {"A"}
+    assert set(membership.chain_role) == {"receptor"}
+    for column in [
+        "chain_num_contacting_ions",
+        "chain_num_contacting_artifacts",
+        "chain_num_contacting_other_ligands",
+    ]:
+        assert membership[column].eq(0).all()
+
+
 @pytest.mark.parametrize(
     "fixture, holo_receptors, apo_proteins",
     [
