@@ -3,24 +3,19 @@
 from __future__ import annotations
 
 import pandas as pd
-from duckdb import sql
 
 from plinder.core.index.query import query_table
 from plinder.core.release import PlinderRelease
-from plinder.core.scores.query import FILTER, FILTERS, make_query
+from plinder.core.scores.query import Filter, Filters, read_score_table
 from plinder.core.utils.dec import timeit
-from plinder.core.utils.log import setup_logger
-from plinder.core.utils.schemas import TANIMOTO_SCORE_SCHEMA
-
-LOG = setup_logger(__name__)
 
 
 @timeit
 def query_ligand_similarity(
     *,
     columns: list[str] | None = None,
-    filters: FILTERS = None,
-) -> pd.DataFrame | None:
+    filters: Filters = None,
+) -> pd.DataFrame:
     """
     Query the ligand similarity database
     and return the results.
@@ -34,23 +29,15 @@ def query_ligand_similarity(
 
     Returns
     -------
-    df : pd.DataFrame | None
-        the protein similarity results
+    df : pd.DataFrame
+        The ligand similarity results.
     """
     dataset = PlinderRelease().fetch("ligand_scores")
-    schema = TANIMOTO_SCORE_SCHEMA
-    metric = schema.names[-1]
-    query = make_query(
-        schema=schema,
-        dataset=dataset,
-        filters=filters,
+    return read_score_table(
+        dataset,
         columns=columns,
+        filters=filters,
     )
-    if query is None:
-        LOG.warning(f"try minimally passing filters=[('{metric}', '>', 50)]")
-        return None
-
-    return sql(query).to_df()
 
 
 @timeit
@@ -64,13 +51,10 @@ def map_cross_similarity(
                 metric: pd.Series(dtype="float64"),
             }
         )
-    updated_query_ligands = []
-    for q, t in zip(df["query_ligand_id"], df["target_ligand_id"]):
-        if t in target_ligands:
-            updated_query_ligands.append(t)
-        else:
-            updated_query_ligands.append(q)
-    df["updated_query_ligand_id"] = updated_query_ligands
+    target_is_requested = df["target_ligand_id"].isin(target_ligands)
+    df["updated_query_ligand_id"] = df["target_ligand_id"].where(
+        target_is_requested, df["query_ligand_id"]
+    )
     idx = df.groupby("updated_query_ligand_id")[metric].idxmax()
     df = df.loc[idx]
 
@@ -122,25 +106,22 @@ def cross_similarity(
         the cross similarity results
     """
     dataset = PlinderRelease().fetch("ligand_scores")
-    schema = TANIMOTO_SCORE_SCHEMA
     if metric is None:
         metric = "tanimoto_similarity_ecfp4_1024"
-    filters = [
+    filters: list[list[Filter]] = [
         [
-            FILTER(("query_ligand_id", "in", query_ligands)),
-            FILTER(("target_ligand_id", "in", target_ligands)),
+            ("query_ligand_id", "in", query_ligands),
+            ("target_ligand_id", "in", target_ligands),
         ],
         [
-            FILTER(("query_ligand_id", "in", target_ligands)),
-            FILTER(("target_ligand_id", "in", query_ligands)),
+            ("query_ligand_id", "in", target_ligands),
+            ("target_ligand_id", "in", query_ligands),
         ],
     ]
     columns = ["query_ligand_id", "target_ligand_id", metric]
-    query = make_query(
-        schema=schema,
-        dataset=dataset,
+    similarities = read_score_table(
+        dataset,
         columns=columns,
         filters=filters,
     )
-    assert query is not None
-    return map_cross_similarity(sql(query).to_df(), target_ligands, metric)
+    return map_cross_similarity(similarities, target_ligands, metric)

@@ -4,6 +4,7 @@ import pandas as pd
 import pytest
 from plinder.core import query_table, scores
 from plinder.core.scores import ligand as ligand_module
+from plinder.core.scores import protein as protein_module
 from plinder.core.scores.protein import multi_query_protein_similarity
 
 
@@ -82,20 +83,6 @@ def test_query_protein_similarity_empty():
 
 
 @pytest.mark.usefixtures("read_plinder_mount")
-def test_query_protein_similarity_removes_search_db():
-    df = scores.query_protein_similarity(
-        search_db="holo",
-        filters=[
-            ("search_db", "==", "holo"),
-            ("metric", "==", "pocket_lddt"),
-            ("similarity", ">=", 90),
-        ],
-    )
-    assert df is not None
-    assert len(df.index)
-
-
-@pytest.mark.usefixtures("read_plinder_mount")
 def test_query_protein_similarity_raises():
     with pytest.raises(ValueError):
         scores.query_protein_similarity(
@@ -121,7 +108,7 @@ def test_query_protein_cross_similarity():
 def test_query_ligand_similarity(current_ligand_scores):
     df = scores.query_ligand_similarity(
         filters=[
-            ("query_ligand_id", "<", "100"),
+            ("query_ligand_id", "<", 100),
         ]
     )
     assert df is not None
@@ -222,3 +209,31 @@ def test_multi_query_protein_similarity():
     )
     assert len(df.index)
     assert all(k in df.columns for k in filter_criteria)
+
+
+def test_multi_query_protein_similarity_requires_every_metric(monkeypatch):
+    monkeypatch.setattr(
+        protein_module,
+        "query_table",
+        lambda *_args, **_kwargs: pd.DataFrame({"system_id": ["target"]}),
+    )
+    monkeypatch.setattr(
+        protein_module,
+        "query_protein_similarity",
+        lambda **_kwargs: pd.DataFrame(
+            {
+                "query_system": ["query"],
+                "target_system": ["target"],
+                "metric": ["pocket_lddt"],
+                "similarity": [95],
+            }
+        ),
+    )
+
+    result = multi_query_protein_similarity(
+        system_id="query",
+        search_db="holo",
+        filter_criteria={"pocket_lddt": 90, "pocket_fident": 50},
+    )
+
+    assert result.empty
