@@ -29,6 +29,44 @@ end-to-end pipeline through task wrappers in `plinder.data.pipeline.tasks`.
     - `dbs/affinity/affinity.json`
     - `dbs/seqres/pdb_seqres.txt.gz`
 
+## Planning weekly updates
+
+Compare a release with a local PDB snapshot before changing its files:
+
+```bash
+python -m plinder.data.pipeline.updates /path/to/release /path/to/update-plan \
+  --nextgen-root /scicore/data/managed/PDB_NEXTGEN/latest/pdb_nextgen \
+  --obsolete /scicore/data/managed/PDB/latest/data/status/obsolete.dat \
+  --threads 8
+```
+
+On sciCORE, run this command in a Slurm job. The output directory must be new
+and outside the existing release. The command writes `entries.tsv` and
+`entries.parquet` with added, revised, obsolete, unchanged, or blocked entries,
+plus `plan.json` describing the downstream work. A ready plan also contains
+PDB-ID lists for entry processing, removals, and score replacement.
+
+Revisions are compared with `index/entry_sources.parquet`. The first run reads
+the current CIFs; subsequent runs can use
+`--previous-snapshot /path/to/earlier-plan/snapshot.parquet` to reuse revision
+reads when the holdings timestamps match. This inventory is a read cache, not
+a record of applied updates. Use `--pdb-manifest` with a newline-delimited list
+of PDB IDs for a small trial.
+
+Only `obsolete.dat` authorizes a removal. Missing sources, conflicting current
+and obsolete records, and revisions older than the release block the plan;
+blocked plans contain reports but no executable PDB-ID lists. Successor IDs
+are recorded separately because a replacement can have different chains and
+ligands.
+
+This command only plans updates. Applying them will require replacing affected
+entry rows and both sides of their score pairs, searching changed entries
+against the updated dataset and unchanged entries against changed targets,
+then refreshing clusters and apo links. Changed search representatives and hit
+limits can require additional full-query searches. Independent changes to
+validation reports, NextGen enrichment, CCD data, or annotation settings need
+a separate refresh; this planner compares PDB coordinate revisions.
+
 ## Database creation
 
 Once the raw data is downloaded, we need to create the `foldseek` and `mmseqs`
