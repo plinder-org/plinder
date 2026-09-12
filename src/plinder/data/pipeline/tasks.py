@@ -16,7 +16,7 @@ from pathlib import Path
 from shutil import copyfile, rmtree
 from string import ascii_lowercase, digits
 from textwrap import dedent
-from typing import Any, Sequence
+from typing import Any, Sequence, cast
 
 import pandas as pd
 import pyarrow as pa
@@ -3008,9 +3008,10 @@ def collate_ligand_3d_candidates(
                 """
             )
             observed_rows = pq.ParquetFile(temporary).metadata.num_rows
-            expected_rows = connection.sql(
-                f"SELECT count(*) FROM ({source_sql})"
-            ).fetchone()[0]
+            expected_rows = cast(
+                tuple[int],
+                connection.sql(f"SELECT count(*) FROM ({source_sql})").fetchone(),
+            )[0]
             if observed_rows != expected_rows:
                 connection.close()
                 raise ValueError(
@@ -3079,11 +3080,16 @@ def collate_ligand_3d_candidates(
             observed_ligand_pair_rows = pq.ParquetFile(
                 ligand_pair_temporary
             ).metadata.num_rows
-            expected_ligand_pair_rows = connection.sql(
-                f"SELECT count(*) FROM ({ligand_pair_source_sql})"
-            ).fetchone()[0]
-            duplicate_ligand_pairs = connection.sql(
-                f"""
+            expected_ligand_pair_rows = cast(
+                tuple[int],
+                connection.sql(
+                    f"SELECT count(*) FROM ({ligand_pair_source_sql})"
+                ).fetchone(),
+            )[0]
+            duplicate_ligand_pairs = cast(
+                tuple[int],
+                connection.sql(
+                    f"""
                 SELECT count(*)
                 FROM (
                     SELECT
@@ -3096,7 +3102,8 @@ def collate_ligand_3d_candidates(
                     HAVING count(*) > 1
                 )
                 """
-            ).fetchone()[0]
+                ).fetchone(),
+            )[0]
             if (
                 observed_ligand_pair_rows != expected_ligand_pair_rows
                 or duplicate_ligand_pairs

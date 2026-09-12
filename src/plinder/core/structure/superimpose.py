@@ -146,7 +146,10 @@ def superimpose_chain(
 
 
 def _get_ca_indices(atoms: Atoms) -> NDArray[np.int_]:
-    return np.where((struc.filter_amino_acids(atoms)) & (atoms.atom_name == "CA"))[0]
+    return np.asarray(
+        np.flatnonzero(struc.filter_amino_acids(atoms) & (atoms.atom_name == "CA")),
+        dtype=np.int_,
+    )
 
 
 def _find_matching_anchors(

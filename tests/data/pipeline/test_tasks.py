@@ -11,6 +11,7 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+
 from plinder.core.utils import schemas
 from plinder.data.annotations.get_similarity_scores import (
     SCORE_METRICS_METADATA_KEY,

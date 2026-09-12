@@ -17,7 +17,7 @@ from plinder.core.utils.log import setup_logger
 LOG = setup_logger(__name__)
 
 
-class PlinderDataset(Dataset):  # type: ignore
+class PlinderDataset(Dataset[dict[str, Any]]):
     """
     Creates a dataset from plinder systems
 
@@ -84,7 +84,7 @@ def get_torch_loader(
     num_workers: int = 1,
     collate_fn: Callable[[list[dict[str, Any]]], dict[str, Any]] = collate_batch,
     **kwargs: Any,
-) -> DataLoader[PlinderDataset]:
+) -> DataLoader[dict[str, Any]]:
     return DataLoader(
         dataset,
         batch_size=batch_size,

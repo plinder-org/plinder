@@ -2,6 +2,7 @@
 # Distributed under the terms of the Apache License 2.0
 
 import pytest
+
 from plinder.data import docs
 
 
@@ -112,12 +113,13 @@ def test_ligand_cluster_column_descriptions():
 
 
 def test_description_markers_are_explicit_and_independent():
+    from pydantic import Field
+
     from plinder.data.annotations.utils import (
         DocBaseModel,
         description_excluded_from_column_docs,
         description_excluded_from_flat_export,
     )
-    from pydantic import Field
 
     class Example(DocBaseModel):
         visible: int = Field(description="Visible in both places")
@@ -173,6 +175,7 @@ def test_annotation_models_use_only_readable_description_markers():
 
 def test_annotation_descriptions_follow_arrow_schema_order():
     import pyarrow as pa
+
     from plinder.data.annotations.aggregate_annotations import System
     from plinder.data.annotations.ligand_utils import Ligand
 
@@ -363,6 +366,7 @@ def test_table_descriptions_reject_retired_cover_modes():
 def test_table_descriptions_treat_every_chemical_metric_alike():
     import pyarrow as pa
     import pytest
+
     from plinder.core.scores.metrics import (
         CHEMICAL_CLUSTER_METRICS,
         CHEMICAL_CLUSTER_SUMMARY_COLUMNS,
@@ -459,6 +463,7 @@ def test_checked_in_descriptions_cover_every_table():
 @pytest.mark.parametrize("kind", ["sequence", "structure"])
 def test_protein_cluster_descriptions_match_generated_schema(kind):
     import pandas as pd
+
     from plinder.data.protein_clusters import SEQUENCE_CLUSTER_SCHEMA
 
     table_name = f"protein_{kind}_clusters"

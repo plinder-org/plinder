@@ -1146,9 +1146,12 @@ def write_symmetric_edge_shard(
         )
     )
     row_count = int(
-        connection.sql(
-            f"SELECT count(*) FROM read_parquet('{local_output.as_posix()}')"
-        ).fetchone()[0]
+        cast(
+            tuple[int],
+            connection.sql(
+                f"SELECT count(*) FROM read_parquet('{local_output.as_posix()}')"
+            ).fetchone(),
+        )[0]
     )
     connection.close()
     output.parent.mkdir(exist_ok=True, parents=True)
@@ -2347,7 +2350,7 @@ def _greedy_directed_set_cover(
                 str(nodes[node]),
                 node,
             )
-            for node in np.flatnonzero(heap_candidates)
+            for node in (int(index) for index in np.flatnonzero(heap_candidates))
         ]
         heapq.heapify(heap)
         return heap
@@ -2428,7 +2431,8 @@ def _greedy_directed_set_cover(
         # Representatives selected from stricter edges remain valid choices.
         # Before adding any new representative, let them cover all remaining
         # queries that reach them at the fallback threshold.
-        for representative in np.flatnonzero(selected):
+        for representative_index in np.flatnonzero(selected):
+            representative = int(representative_index)
             newly_covered = _incoming_cover(
                 fallback_graph,
                 int(representative),
@@ -2448,9 +2452,9 @@ def _greedy_directed_set_cover(
         )
 
     while uncovered.any():
-        remaining = np.flatnonzero(uncovered)
+        remaining = [int(index) for index in np.flatnonzero(uncovered)]
         representative = min(
-            map(int, remaining),
+            remaining,
             key=lambda node: str(nodes[node]),
         )
         selected[representative] = True
@@ -2468,8 +2472,7 @@ def _greedy_directed_set_cover(
         selection.representative: selection for selection in selections
     }
     assignments: list[_RepresentativeAssignment] = []
-    for query in np.flatnonzero(targets):
-        query = int(query)
+    for query in (int(index) for index in np.flatnonzero(targets)):
         if query in selection_by_node:
             representative = query
             similarity = 100.0

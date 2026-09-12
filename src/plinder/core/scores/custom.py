@@ -454,9 +454,9 @@ def write_custom_sequence_query_files(
             context=f"FASTA record {sequence_id}",
         )
         if len(sequence) < min_chain_length:
-            skipped[
-                sequence_id
-            ] = f"protein length {len(sequence)} is below {min_chain_length}"
+            skipped[sequence_id] = (
+                f"protein length {len(sequence)} is below {min_chain_length}"
+            )
             continue
         query_id = f"cq{len(rows):08d}"
         rows.append(
@@ -699,14 +699,14 @@ def write_custom_query_files(
                 )
                 sequence_source = "coordinates"
             if sequence is None:
-                skipped_chains[
-                    f"{structure_id}__{asym_id}"
-                ] = "not identifiable as a protein"
+                skipped_chains[f"{structure_id}__{asym_id}"] = (
+                    "not identifiable as a protein"
+                )
                 continue
             if len(sequence) < min_chain_length:
-                skipped_chains[
-                    f"{structure_id}__{asym_id}"
-                ] = f"protein length {len(sequence)} is below {min_chain_length}"
+                skipped_chains[f"{structure_id}__{asym_id}"] = (
+                    f"protein length {len(sequence)} is below {min_chain_length}"
+                )
                 continue
             atoms = atoms_by_asym[asym_id].copy()
             residue_starts = struc.get_residue_starts(atoms, add_exclusive_stop=False)

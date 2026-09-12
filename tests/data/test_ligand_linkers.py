@@ -2,8 +2,9 @@
 # Distributed under the terms of the Apache License 2.0
 
 import pytest
-from plinder.data.annotations import ligand_utils
 from rdkit import Chem
+
+from plinder.data.annotations import ligand_utils
 
 
 @pytest.mark.parametrize(

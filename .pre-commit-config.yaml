@@ -16,10 +16,9 @@ repos:
     - id: check-added-large-files
 # pinned ruff, so the hook does not depend on whichever ruff is first on PATH
 -   repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.1.2
+    rev: v0.9.4
     hooks:
     - id: ruff-format
-      args: [--preview]
       files: ^(src|tests)/
     - id: ruff
       args: [--fix]

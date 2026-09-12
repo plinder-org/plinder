@@ -13,6 +13,8 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from rdkit import Chem
+
 from plinder.core.scores.entries import (
     ChainView,
     EntryView,
@@ -45,7 +47,6 @@ from plinder.data.annotations.get_similarity_scores import (
     write_ecfp4_fingerprint_table,
 )
 from plinder.data.pipeline.config import FoldseekConfig, MMSeqsConfig
-from rdkit import Chem
 
 SDF_FILE = (
     Path(__file__).resolve().parents[1]
@@ -654,6 +655,7 @@ def test_foldseek_cluster_target_is_also_used_for_conversion(
     tmp_path, monkeypatch
 ) -> None:
     commands: list[list[str]] = []
+    stream_options = []
     monkeypatch.setattr(
         scoring_module.subprocess,
         "check_call",
@@ -662,7 +664,7 @@ def test_foldseek_cluster_target_is_also_used_for_conversion(
     monkeypatch.setattr(
         scoring_module,
         "_stream_alignment_tsv_to_dataset",
-        lambda *args, **kwargs: None,
+        lambda *_args, **kwargs: stream_options.append(kwargs),
     )
 
     run_alignment(
@@ -676,11 +678,13 @@ def test_foldseek_cluster_target_is_also_used_for_conversion(
         tmp_dir=tmp_path / "scratch",
         remove_tmp=False,
         threads=2,
+        include_target_pdb_id=False,
     )
 
     assert [command[1] for command in commands] == ["search", "convertalis"]
     assert "--cluster-search" in commands[0]
     assert commands[1][3] == str(tmp_path / "clustered")
+    assert stream_options == [{"aln_type": "foldseek", "include_target_pdb_id": False}]
 
 
 def test_alignment_tsv_is_streamed_to_query_partitions(tmp_path) -> None:
@@ -2624,8 +2628,9 @@ def test_ligand_3d_score_ability_reuses_success_for_same_molecular_graph(
 
 
 def test_cofactor_similarity_uses_ccd_reference_fingerprints() -> None:
-    from plinder.core.structure.smallmols_similarity import mol2morgan_fp
     from rdkit import DataStructs
+
+    from plinder.core.structure.smallmols_similarity import mol2morgan_fp
 
     smiles = ["CCO", "c1ccccc1"]
     unique_ligands = pd.DataFrame(
@@ -2654,8 +2659,9 @@ def test_cofactor_similarity_uses_ccd_reference_fingerprints() -> None:
 def test_ligand_scores_use_bulk_tanimoto_for_unique_smiles(
     tmp_path, monkeypatch
 ) -> None:
-    from plinder.core.structure.smallmols_similarity import mol2morgan_fp
     from rdkit import DataStructs
+
+    from plinder.core.structure.smallmols_similarity import mol2morgan_fp
 
     fingerprint_dir = tmp_path / "fingerprints"
     fingerprint_dir.mkdir()

@@ -2093,9 +2093,9 @@ def residue_graph_features(graph: ResidueGraph, *, iterations: int = 2) -> Count
                 if other not in graph.donors_of(node)
                 and node not in graph.donors_of(other)
             )
-            refined[
-                node
-            ] = f"{label}<{','.join(donors)}>{','.join(accepts)}~{','.join(undirected)}"
+            refined[node] = (
+                f"{label}<{','.join(donors)}>{','.join(accepts)}~{','.join(undirected)}"
+            )
         labels = refined
         features.update(f"r:{label}" for label in labels.values())
     return features

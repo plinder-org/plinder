@@ -5,6 +5,7 @@ from shutil import rmtree
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+
 from plinder.core.utils.files import file_sha256, write_json_atomic
 from plinder.data.pipeline import collate, tasks, update_archives
 from plinder.data.pipeline.score import finalize_ligand_archives

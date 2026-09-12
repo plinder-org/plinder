@@ -5,12 +5,13 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 from omegaconf import OmegaConf
+from rdkit import DataStructs
+
 from plinder.core.structure.smallmols_similarity import mol2morgan_fp
 from plinder.core.utils import schemas
 from plinder.core.utils.files import file_sha256, write_json_atomic
 from plinder.data.annotations import get_similarity_scores
 from plinder.data.pipeline import update_release
-from rdkit import DataStructs
 
 
 def _fingerprint(smiles: str) -> bytes:

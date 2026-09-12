@@ -5,6 +5,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 from biotite.structure.io import pdbx
+
 from plinder.core import PlinderInterface, PlinderRelease
 from plinder.data.annotations.cif_utils import read_mmcif_file
 

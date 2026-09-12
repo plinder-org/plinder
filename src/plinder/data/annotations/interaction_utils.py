@@ -115,7 +115,7 @@ def _cached_get_interchangeable_tautomers(molecule: Chem.Mol) -> list[Chem.Mol]:
 
 
 def _copy_resonance_result(result: _ResonanceResult) -> _ResonanceResult:
-    return tuple(array.copy() for array in result)  # type: ignore[return-value]
+    return result[0].copy(), result[1].copy(), result[2].copy()
 
 
 def _run_resonance_worker(molecule: Chem.Mol, connection: Connection) -> None:
@@ -148,7 +148,7 @@ def _bounded_find_resonance_charges(molecule: Chem.Mol) -> _ResonanceResult:
         atom.GetFormalCharge() != 0 for atom in molecule.GetAtoms()
     )
     if not is_large_and_charged:
-        return cast(_ResonanceResult, _ORIGINAL_FIND_RESONANCE_CHARGES(molecule))
+        return _ORIGINAL_FIND_RESONANCE_CHARGES(molecule)
 
     key = _tautomer_cache_key(molecule)
     with _RESONANCE_CACHE_LOCK:
@@ -290,9 +290,9 @@ def get_symmetry_mate_contacts(
         box=unit_cell.box,
     )
 
-    results: dict[
-        tuple[str, int], dict[tuple[str, int], dict[int, set[int]]]
-    ] = defaultdict(lambda: defaultdict(lambda: defaultdict(set)))
+    results: dict[tuple[str, int], dict[tuple[str, int], dict[int, set[int]]]] = (
+        defaultdict(lambda: defaultdict(lambda: defaultdict(set)))
+    )
 
     # For each atom in the ASU (image 0), find contacts with symmetry mates
     for i in range(n_asu):

@@ -10,6 +10,8 @@ import pandas as pd
 import pytest
 import yaml
 from biotite.structure.io import pdb, pdbx
+from rdkit import Chem
+
 from plinder.core.structure.inputs import StructureInput
 from plinder.data.annotations.cif_utils import (
     MissingBondOrderError,
@@ -20,7 +22,6 @@ from plinder.data.annotations.cif_utils import (
 from plinder.data.annotations.save_utils import save_cif_file
 from plinder.eval.commands import run_openstructure
 from plinder.eval.inputs import prepare_prediction, reference_ligands
-from rdkit import Chem
 
 
 @pytest.fixture

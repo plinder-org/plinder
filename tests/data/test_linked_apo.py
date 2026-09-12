@@ -3,6 +3,7 @@ from __future__ import annotations
 import pandas as pd
 import pyarrow.parquet as pq
 import pytest
+
 from plinder.core.utils.schemas import STRUCTURE_LINK_SCHEMA
 from plinder.data.linked_apo import (
     REQUIRED_SCORE_METRICS,

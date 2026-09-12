@@ -112,7 +112,7 @@ def generate_input_conformer(
 def match_ligands(
     input_smiles: str,
     resolved_sdf: str | Path,
-) -> tuple[Chem.Mol, Chem.Mol, tuple[NDArray, NDArray]]:
+) -> tuple[Chem.Mol, Chem.Mol, tuple[NDArray[np.int_], NDArray[np.int_]]]:
     template_mol = Chem.MolFromSmiles(input_smiles, sanitize=False)
     try:
         peppr_sanitize(template_mol)
@@ -129,7 +129,7 @@ def match_ligands(
 
 def get_template_to_mol_matches(
     template: Chem.Mol, mol: Chem.Mol
-) -> tuple[NDArray, NDArray]:
+) -> tuple[NDArray[np.int_], NDArray[np.int_]]:
     """
     Function that works a lot like get_matched_template but can better deal with fragmented molecules
     """
@@ -224,8 +224,8 @@ def compare_stereo_to_template(
         Chem.AssignStereochemistryFrom3D(template_mol)
 
     conf = resolved_mol.GetConformer()
-    resolved_pos: dict[str, NDArray] = {
-        n: np.array(conf.GetAtomPosition(a.GetIdx()))
+    resolved_pos: dict[str, NDArray[np.float64]] = {
+        n: np.asarray(conf.GetAtomPosition(a.GetIdx()), dtype=np.float64)
         for a in resolved_mol.GetAtoms()
         if (n := _name(a)) is not None
     }
@@ -298,7 +298,9 @@ def mol_assigned_bond_orders_by_template(template_mol: Mol, mol: Mol) -> Mol:
 
 
 def _remove_unmatched(
-    mol: Chem.Mol, matched_atoms: NDArray, matched_bonds: NDArray
+    mol: Chem.Mol,
+    matched_atoms: NDArray[np.int_],
+    matched_bonds: NDArray[np.int_],
 ) -> Chem.Mol:
     """Remove atoms and bonds in mol whose indices are not in match.
     Parameters

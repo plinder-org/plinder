@@ -486,7 +486,9 @@ def repair_alignments(
     full_queries = active.intersection(full_queries)
     inactive = affected.difference(active)
     _remove_inactive_queries(data_dir, search_db=search_db, pdb_ids=inactive)
-    selected_cfg = OmegaConf.merge(scorer_cfg, {"sub_databases": [search_db]})
+    selected_cfg = cast(
+        DictConfig, OmegaConf.merge(scorer_cfg, {"sub_databases": [search_db]})
+    )
     for start in range(0, len(full_queries), batch_size):
         tasks.run_batch_searches(
             data_dir=data_dir,
@@ -594,7 +596,9 @@ def repair_holo_scores(
 ) -> dict[str, Any]:
     """Repair ligand-pocket scores and cached ligand-pair shape scores."""
     rmtree(data_dir / "scores/ligand_3d_pair_repairs", ignore_errors=True)
-    holo_cfg = OmegaConf.merge(scorer_cfg, {"sub_databases": ["holo"]})
+    holo_cfg = cast(
+        DictConfig, OmegaConf.merge(scorer_cfg, {"sub_databases": ["holo"]})
+    )
     score.plan_score_batches(
         data_dir,
         batch_size=score_batch_size,
@@ -806,7 +810,9 @@ def repair_non_holo_scores(
         pd.read_parquet(query_manifest, columns=["pdb_id"])["pdb_id"].astype(str)
     )
     queries = sorted(full_alignment_queries.intersection(active))
-    selected_cfg = OmegaConf.merge(scorer_cfg, {"sub_databases": [search_db]})
+    selected_cfg = cast(
+        DictConfig, OmegaConf.merge(scorer_cfg, {"sub_databases": [search_db]})
+    )
     if queries:
         tasks.make_batch_scores(
             data_dir=data_dir,

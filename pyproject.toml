@@ -37,7 +37,7 @@ plinder_eval = "plinder.eval.cli:main"
 
 [project.optional-dependencies]
 lint = [
-    "ruff == 0.1.2",
+    "ruff == 0.9.4",
     "pre-commit == 2.21.0",
 ]
 test = [
@@ -50,7 +50,7 @@ test = [
     "setuptools_scm[toml]",
 ]
 type = [
-    "mypy==1.2.0",
+    "mypy==1.18.2",
     "types-PyYAML",
     "types-requests",
 ]
@@ -112,6 +112,9 @@ plinder = [
 
 [tool.ruff]
 line-length = 88
+preview = false
+
+[tool.ruff.lint]
 select = [
     "F",
     "I",
@@ -120,15 +123,24 @@ ignore = [
     "E",
     "W",
 ]
-preview = true
 
-[tool.ruff.flake8-tidy-imports]
+[tool.ruff.lint.flake8-tidy-imports]
 ban-relative-imports = "all"
 
 [tool.mypy]
 ignore_missing_imports = true
 strict = true
 disallow_untyped_decorators = false
+untyped_calls_exclude = ["pyarrow"]
+follow_imports_for_stubs = true
+
+[[tool.mypy.overrides]]
+module = ["rdkit", "rdkit.*"]
+follow_imports = "skip"
+
+[[tool.mypy.overrides]]
+module = ["pyarrow", "pyarrow.*"]
+follow_imports = "skip"
 
 [[tool.mypy.overrides]]
 module = "plinder._version"

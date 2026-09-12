@@ -199,7 +199,7 @@ def get_residue_index_mapping_mask(
 
 
 def get_per_residue_mask(
-    residue_reference_atom_list: list[str], atom_list: list[str]
+    residue_reference_atom_list: Sequence[str], atom_list: Sequence[str]
 ) -> list[int]:
     res_mask = [1 if i in atom_list else 0 for i in residue_reference_atom_list]
     return res_mask
@@ -208,13 +208,16 @@ def get_per_residue_mask(
 def get_per_residue_atoms(
     atom_array: _AtomArrayOrStack, resi: int, resn: str
 ) -> NDArray[np.str_]:
-    return atom_array[
-        (atom_array.res_id == resi) & (atom_array.res_name == resn)
-    ].atom_name
+    return np.asarray(
+        atom_array[
+            (atom_array.res_id == resi) & (atom_array.res_name == resn)
+        ].atom_name,
+        dtype=np.str_,
+    )
 
 
 def make_atom_mask(
-    atom_array: _AtomArrayOrStack, seq_res: str, seq_mask: list[int]
+    atom_array: _AtomArrayOrStack, seq_res: str, seq_mask: Sequence[int | float]
 ) -> list[int]:
     seq_res_three_aa = [pc.ONE_TO_THREE[aa] for aa in seq_res]
     resi, resn = get_residues(atom_array)
@@ -230,7 +233,7 @@ def make_atom_mask(
             atom_mask.append(
                 get_per_residue_mask(
                     pc.ORDERED_AA_FULL_ATOM[resn],
-                    get_per_residue_atoms(atom_array, resi, resn),
+                    get_per_residue_atoms(atom_array, resi, resn).tolist(),
                 )
             )
     return [atm for res in atom_mask for atm in res]
@@ -240,7 +243,7 @@ def _stack_atom_array_features(
     atom_arr: _AtomArrayOrStack,
     atom_arr_feat: str,
     chain_order_list: list[str] | None,
-) -> list[NDArray[np.int_ | np.str_ | np.float_]]:
+) -> list[NDArray[Any]]:
     assert chain_order_list is not None
     return [
         getattr(atom_arr[atom_arr.chain_id == chain], atom_arr_feat)
@@ -256,10 +259,10 @@ def _stack_ligand_feat(
 
 
 def _one_hot_encode_stack(
-    stack: list[NDArray],
+    stack: list[NDArray[Any]],
     feature_dict: dict[str, int],
     unknown_name_filler: str,
-) -> list[NDArray]:
+) -> list[NDArray[np.float64]]:
     feat_array = []
     unknown_name_filler_value = feature_dict[unknown_name_filler]
     for per_chain_feat in stack:
@@ -267,7 +270,8 @@ def _one_hot_encode_stack(
             (
                 len(per_chain_feat),
                 len(set(list(feature_dict.values()))),
-            )
+            ),
+            dtype=np.float64,
         )
         for index, value in enumerate(per_chain_feat):
             feat_array_by_chain[

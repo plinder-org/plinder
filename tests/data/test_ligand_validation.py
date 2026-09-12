@@ -6,6 +6,7 @@ from unittest.mock import Mock
 
 import pandas as pd
 import pytest
+
 from plinder.data.annotations.get_ligand_validation import (
     ResidueListValidation,
     ResidueValidation,

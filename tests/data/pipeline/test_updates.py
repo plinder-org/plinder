@@ -7,6 +7,7 @@ import sys
 
 import pandas as pd
 import pytest
+
 from plinder.data.pipeline import updates
 from plinder.data.pipeline.ingest import load_manifest
 

@@ -15,6 +15,7 @@ import numpy as np
 import pandas as pd
 import pytest
 from biotite.structure.io.pdbx import CIFFile, get_structure
+
 from plinder.core.structure.smallmols_similarity import smiles2nonstereo
 from plinder.data.annotations.ccd_ligand_dbs import (
     LOG,
@@ -354,9 +355,9 @@ def test_fragment_dictionary_reproduces_every_mmpdb_pair(ccd_dbs):
         ]
         # mmpdb writes the pair in canonical order; ours reads query >> component
         reversed_smirks = ">>".join(reversed(pair.transformation.split(">>")))
-        assert {pair.transformation, reversed_smirks} & set(
-            hits["transformation"]
-        ), pair
+        assert {pair.transformation, reversed_smirks} & set(hits["transformation"]), (
+            pair
+        )
     # a component never pairs with itself
     assert not (found["query_id"].astype(int) == found["ligand_smiles_id"]).any()
 
@@ -692,6 +693,7 @@ def test_composite_parity_scores_mono_against_composite(atoms_2dty, sugar_table)
 def _linked_chain(codes, *, donor="C1", acceptors=None, leaving="O1"):
     """CCD residues linked donor(i) -> acceptor(i+1), each donor's leaving atom dropped."""
     import biotite.structure as struc
+
     from plinder.data.annotations.cif_utils import _get_ccd_atomarray
 
     units = []
@@ -899,9 +901,9 @@ def test_macrocycle_is_distinguished_from_the_real_linear_peptide(cyclic_peptide
 )
 def test_scrambled_macrocycle_matches_partially(cyclic_peptide, sequence, note):
     """A different ring order over the same residues is neither same nor unrelated."""
-    assert sequence not in {
-        "AGSFL"[shift:] + "AGSFL"[:shift] for shift in range(5)
-    }, "the scramble must not be a rotation"
+    assert sequence not in {"AGSFL"[shift:] + "AGSFL"[:shift] for shift in range(5)}, (
+        "the scramble must not be a rotation"
+    )
     scrambled = peptide_graph(sequence, cyclic=True)
     assert sorted(scrambled.labels) == sorted(cyclic_peptide.labels)
     assert 0.0 < composite_similarity(cyclic_peptide, scrambled) < 1.0

@@ -60,13 +60,11 @@ def _retry_decorator(retries: int) -> Callable[[Callable[..., T]], Callable[...,
 
 
 @overload
-def retry(f: Callable[..., T]) -> Callable[..., T]:
-    ...
+def retry(f: Callable[..., T]) -> Callable[..., T]: ...
 
 
 @overload
-def retry(*, retries: int = 5) -> Callable[[Callable[..., T]], Callable[..., T]]:
-    ...
+def retry(*, retries: int = 5) -> Callable[[Callable[..., T]], Callable[..., T]]: ...
 
 
 def retry(

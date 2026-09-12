@@ -8,6 +8,8 @@ import biotite.structure.io.pdbx as pdbx
 import numpy as np
 import pandas as pd
 import pytest
+from rdkit import Chem
+
 from plinder.data.annotations.aggregate_annotations import Entry
 from plinder.data.annotations.cif_utils import (
     build_biounit,
@@ -45,7 +47,6 @@ from plinder.data.annotations.save_utils import (
     save_reconstructed_system,
 )
 from plinder.data.get_system_annotations import GetPlinderAnnotation
-from rdkit import Chem
 
 
 def _interface_test_chain(
@@ -791,6 +792,7 @@ def test_chain_from_cif_data_nucleotides(cif_8ufz):
     """
     import biotite.structure.io.pdbx as pdbx
     from biotite.structure import filter_heavy
+
     from plinder.data.annotations.cif_utils import read_mmcif_file
     from plinder.data.annotations.protein_utils import Chain, get_seqres_from_cif
 
@@ -814,14 +816,14 @@ def test_chain_from_cif_data_nucleotides(cif_8ufz):
     actual_seq = "".join(
         chain.residues[r].one_letter_code for r in sorted(chain.residues)
     )
-    assert (
-        actual_seq == expected_seq
-    ), f"DNA sequence mismatch: got '{actual_seq}', expected '{expected_seq}'"
+    assert actual_seq == expected_seq, (
+        f"DNA sequence mismatch: got '{actual_seq}', expected '{expected_seq}'"
+    )
 
     for resnum, residue in chain.residues.items():
-        assert (
-            residue.chem_type == "DNA Linking"
-        ), f"Residue {residue.name} at {resnum}: expected 'DNA Linking', got '{residue.chem_type}'"
+        assert residue.chem_type == "DNA Linking", (
+            f"Residue {residue.name} at {resnum}: expected 'DNA Linking', got '{residue.chem_type}'"
+        )
 
 
 def test_chain_from_cif_data_preserves_author_residue_ids():
@@ -1015,9 +1017,9 @@ def test_peptide_ligand_threshold(
         assert entry.chains["B"].holo
         assert "B" in entry.ligand_like_chains
     else:
-        assert (
-            len(entry.systems) == 0
-        ), f"13-residue peptide should be receptor with min_polymer_size={min_polymer_size}"
+        assert len(entry.systems) == 0, (
+            f"13-residue peptide should be receptor with min_polymer_size={min_polymer_size}"
+        )
         assert entry.interfaces
         assert not stale_ligand_dir.exists()
 
@@ -1694,9 +1696,9 @@ def test_10sb_covalent_macrocycle_is_single_ligand(cif_10sb, mock_alternative_da
     assert len(macrocycle_systems) == 1
     ligands = macrocycle_systems[0].ligands
 
-    assert (
-        len(ligands) == 1
-    ), f"expected 1 merged ligand, got {[lig.ccd_code for lig in ligands]}"
+    assert len(ligands) == 1, (
+        f"expected 1 merged ligand, got {[lig.ccd_code for lig in ligands]}"
+    )
     lig = ligands[0]
 
     components = set(lig.ccd_code.split("-"))
@@ -1873,6 +1875,7 @@ def test_fill_missing_ccd_bonds():
     restores them by matching atom names against the CCD dictionary.
     """
     import biotite.structure as struc
+
     import plinder.data.annotations.cif_utils as cu
 
     cu._get_ccd_atomarray.cache_clear()
@@ -2024,6 +2027,7 @@ def test_interactions_entry_ternary(
 def test_water_saving(cif_2p1q, mock_alternative_datasets):
     import biotite.structure as struc
     from biotite.structure.io import pdbx
+
     from plinder.data.annotations.cif_utils import read_mmcif_file
 
     entry_dir = mock_alternative_datasets("2p1q")
@@ -2122,6 +2126,7 @@ def test_canonical_ligand_saving_and_system_reconstruction(
     import biotite.structure as struc
     from biotite.sequence.io.fasta import FastaFile
     from biotite.structure.io import pdbx
+
     from plinder.data.annotations.cif_utils import read_mmcif_file
 
     entry_dir = mock_alternative_datasets("2y4i")
@@ -2337,9 +2342,10 @@ def test_smiles_from_nextgen(rcsb_ccd_reference_csv):
     stereo-underspecified CCD entries (same skeleton, differing stereo layer) are
     tolerated.
     """
+    from rdkit.Chem.inchi import MolToInchiKey
+
     from plinder.data.annotations.interaction_utils import _COORDINATION_METALS
     from plinder.data.annotations.ligand_utils import _get_ccd_mol
-    from rdkit.Chem.inchi import MolToInchiKey
 
     # keep_default_na=False so the sodium comp_id "NA" reads as a string, not NaN
     rcsb_df = pd.read_csv(rcsb_ccd_reference_csv, keep_default_na=False)
@@ -2395,6 +2401,7 @@ def _build_resolved_mol(cif_path, chain_id):
     """Helper: build resolved mol from CIF chain using production code."""
     import biotite.structure.io.pdbx as pdbx
     from biotite.structure import filter_heavy
+
     from plinder.data.annotations.cif_utils import (
         atoms_to_rdkit_mol,
         read_mmcif_file,

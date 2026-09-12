@@ -2,6 +2,7 @@
 # Distributed under the terms of the Apache License 2.0
 import pandas as pd
 import pytest
+
 from plinder.core import query_table, scores
 from plinder.core.scores import ligand as ligand_module
 from plinder.core.scores import protein as protein_module

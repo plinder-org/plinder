@@ -5,6 +5,7 @@ from shutil import copytree
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+
 from plinder.core.utils.files import file_sha256
 from plinder.data.annotations.interface_utils import INTERFACE_ANNOTATION_SCHEMA
 from plinder.data.pipeline import collate, score, tasks

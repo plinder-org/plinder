@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import biotite.structure as struc
 import numpy as np
+
 from plinder.core.structure.atoms import atom_array_from_cif_file
 from plinder.core.structure.ccd_template import (
     UNRESOLVED_ANNOTATION,

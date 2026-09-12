@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TypeAlias
+from typing import Any, TypeAlias
 
 import numpy as np
 import pandas as pd
@@ -72,7 +72,7 @@ def _sql_path(path: str | Path) -> str:
     return Path(path).resolve().as_posix().replace("'", "''")
 
 
-def _parquet_dataset(path: str | Path) -> ds.Dataset:
+def _parquet_dataset(path: str | Path) -> Any:
     source = Path(path)
     if source.is_dir():
         return ds.dataset(

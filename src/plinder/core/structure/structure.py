@@ -94,7 +94,7 @@ class Structure(BaseModel):
                 # tuple[NDArray, NDArray],
                 Chem.Mol,
                 # tuple[NDArray, NDArray],
-                tuple[NDArray, NDArray],
+                tuple[NDArray[np.int_], NDArray[np.int_]],
             ],
         ]
         | None
@@ -360,7 +360,7 @@ class Structure(BaseModel):
         )
 
     @property
-    def input_sequence_residue_mask_stacked(self) -> list[list[int]]:
+    def input_sequence_residue_mask_stacked(self) -> list[NDArray[np.float64]]:
         """Input sequence stacked by chain"""
         # TODO: do we want to keep this as assertion?
         # better if then raise?
@@ -423,7 +423,7 @@ class Structure(BaseModel):
             make_atom_mask(
                 self.protein_atom_array[self.protein_atom_array.chain_id == ch],
                 self.protein_sequence[ch],
-                seqres_masks[ch],
+                seqres_masks[ch].tolist(),
             )
             for ch in self.protein_chain_ordered
         ]
@@ -437,12 +437,12 @@ class Structure(BaseModel):
             return []
 
     @property
-    def protein_coords(self) -> list[NDArray]:
+    def protein_coords(self) -> list[NDArray[np.float64]]:
         """list[NDArray]: The coordinates of the protein atoms in the structure."""
         assert self.protein_atom_array is not None
 
-        protein_coords: list[NDArray] = [
-            coord
+        protein_coords = [
+            np.asarray(coord, dtype=np.float64)
             for coord in _stack_atom_array_features(
                 self.protein_atom_array, "coord", self.protein_chain_ordered
             )
@@ -492,8 +492,8 @@ class Structure(BaseModel):
     def protein_calpha_coords(self) -> list[NDArray[np.double]]:
         """list[NDArray]: Per-chain coordinates of the protein C-alpha atoms."""
         assert self.protein_atom_array is not None
-        protein_calpha_coords: list[NDArray[np.double]] = [
-            coord
+        protein_calpha_coords = [
+            np.asarray(coord, dtype=np.float64)
             for coord in _stack_atom_array_features(
                 self.protein_atom_array[self.protein_atom_array.atom_name == "CA"],
                 "coord",
@@ -528,7 +528,7 @@ class Structure(BaseModel):
     @property
     def ligand_template2resolved_atom_order_stacks(
         self,
-    ) -> dict[str, tuple[NDArray, NDArray]]:
+    ) -> dict[str, tuple[NDArray[np.int_], NDArray[np.int_]]]:
         """for every ligand this gets a pair of atom order array stacks providing index sort to match template atoms to holo conformer atoms"""
         return (
             {tag: mol_tuple[3] for tag, mol_tuple in self.ligand_mols.items()}

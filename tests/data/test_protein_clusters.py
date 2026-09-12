@@ -4,6 +4,7 @@ from pathlib import Path
 import pandas as pd
 import pyarrow.parquet as pq
 import pytest
+
 from plinder.data import protein_clusters as clusters
 
 SEQUENCE = "MTYKLILNGKTLKGETTTEAVDAATAEKVFKQYANDNGVDGEWTYDDATKTFTVTE"
@@ -173,6 +174,7 @@ def _write_structure_sources(root):
     import biotite.structure as struc
     import numpy as np
     from biotite.structure.io import pdbx
+
     from plinder.data.annotations.cif_utils import (
         get_structure_with_altloc,
         read_mmcif_file,
@@ -227,6 +229,7 @@ def _write_structure_sources(root):
 
 def test_structure_input_keeps_full_first_model_and_selected_asym_only(tmp_path):
     import numpy as np
+
     from plinder.data.annotations.cif_utils import (
         get_structure_with_altloc,
         read_mmcif_file,

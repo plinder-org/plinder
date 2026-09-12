@@ -20,6 +20,7 @@ from collections.abc import Mapping
 
 import biotite.structure as struc
 import numpy as np
+from numpy.typing import NDArray
 
 from plinder.core.utils.log import setup_logger
 
@@ -31,9 +32,11 @@ DEFAULT_PROBE_RADIUS = 1.4
 ChainPairAreas = Mapping[tuple[str, str], float]
 
 
-def tessellation_atom_mask(atoms: struc.AtomArray) -> np.ndarray:
+def tessellation_atom_mask(atoms: struc.AtomArray) -> NDArray[np.bool_]:
     """Select the atoms that take part in a tessellation: heavy, non-water."""
-    return struc.filter_heavy(atoms) & ~struc.filter_solvent(atoms)
+    return np.asarray(
+        struc.filter_heavy(atoms) & ~struc.filter_solvent(atoms), dtype=np.bool_
+    )
 
 
 def chain_pair_contact_areas(

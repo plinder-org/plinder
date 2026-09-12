@@ -13,7 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Sequence
+from typing import Sequence, cast
 
 import pandas as pd
 import pyarrow as pa
@@ -308,13 +308,16 @@ def _write_pair_parquet(
         (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 1_000_000)
         """
     )
-    invalid_ids = connection.execute(
-        f"""
+    invalid_ids = cast(
+        tuple[int],
+        connection.execute(
+            f"""
         SELECT count(*)
         FROM read_parquet('{raw_path_sql}')
         WHERE ligand_smiles_id_1 IS NULL OR ligand_smiles_id_2 IS NULL
         """
-    ).fetchone()[0]
+        ).fetchone(),
+    )[0]
     if invalid_ids:
         connection.close()
         raise ValueError(f"mmpdb emitted {invalid_ids} non-integer ligand IDs")
@@ -339,8 +342,10 @@ def _write_pair_parquet(
     )[["ligand_smiles_id", "ligand_smiles", "ligand_num_heavy_atoms"]]
     connection.register("ligand_lookup", ligand_lookup)
     connection.register("core_lookup", core_table)
-    missing_ids = connection.execute(
-        f"""
+    missing_ids = cast(
+        tuple[int],
+        connection.execute(
+            f"""
         SELECT count(*)
         FROM read_parquet('{raw_path_sql}') raw
         LEFT JOIN ligand_lookup ligand_1
@@ -350,7 +355,8 @@ def _write_pair_parquet(
         WHERE ligand_1.ligand_smiles_id IS NULL
            OR ligand_2.ligand_smiles_id IS NULL
         """
-    ).fetchone()[0]
+        ).fetchone(),
+    )[0]
     if missing_ids:
         connection.close()
         raise ValueError(

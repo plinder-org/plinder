@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 import pandas as pd
 import pytest
+
 from plinder.core.release import PlinderRelease
 from plinder.eval import batch, evaluate_predictions
 from plinder.eval.batch import _ligand_rows, _Reference
@@ -213,6 +214,7 @@ def test_worker_failure_preserves_expected_rows(reference, tmp_path, monkeypatch
 @pytest.mark.parametrize("suffix", [".pdb", ".PDB", ".pdb.gz", ".PDB.gz"])
 def test_native_pdb_interface_evaluation(test_dir, tmp_path, monkeypatch, suffix):
     from biotite.structure.io import pdb
+
     from plinder.data.annotations.cif_utils import (
         get_structure_with_altloc,
         read_mmcif_file,
@@ -271,11 +273,12 @@ def test_pdb_ligand_preparation_reports_format_error(reference, tmp_path, monkey
 @pytest.mark.parametrize("suffix", [".pdb", ".cif"])
 def test_native_paired_ligand_evaluation(reference, tmp_path, monkeypatch, suffix):
     from biotite.structure.io import pdb
+    from rdkit import Chem
+
     from plinder.data.annotations.cif_utils import (
         get_structure_with_altloc,
         read_mmcif_file,
     )
-    from rdkit import Chem
 
     pytest.importorskip("posebusters")
     folder = tmp_path / "predictions" / "1avd"

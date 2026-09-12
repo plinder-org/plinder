@@ -6,8 +6,9 @@ import time
 import biotite.structure as struc
 import biotite.structure.io.pdbx as pdbx
 import numpy as np
-from plinder.data.annotations import cif_utils, interaction_utils
 from rdkit import Chem
+
+from plinder.data.annotations import cif_utils, interaction_utils
 
 
 def test_peppr_tautomer_cache_requires_matching_atom_order(monkeypatch) -> None:

@@ -6,12 +6,13 @@ import importlib
 import numpy as np
 import pandas as pd
 import pytest
+from rdkit import Chem
+
 from plinder.core.structure.inputs import (
     StructureInput,
     read_structure_table,
     write_search_structure,
 )
-from rdkit import Chem
 
 
 @pytest.mark.parametrize("suffix", [".csv", ".tsv", ".parquet"])
@@ -120,6 +121,7 @@ def test_search_cif_preserves_separate_ligand_chemistry(test_dir, tmp_path):
 )
 def test_search_accepts_supported_overvalent_sdfs(test_dir, tmp_path, smiles):
     from biotite.interface.rdkit import from_mol
+
     from plinder.core.utils.sanitize import sanitize
     from plinder.data.annotations.cif_utils import (
         get_structure_with_altloc,
@@ -180,6 +182,7 @@ def test_pdb_search_sequences_exclude_nonpolymers(
 ):
     import biotite.structure as struc
     from biotite.structure.io import pdb
+
     from plinder.core.scores.custom import write_custom_query_files
     from plinder.data.annotations.cif_utils import (
         get_structure_with_altloc,

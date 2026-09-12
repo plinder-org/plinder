@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 import pytest
 from biotite.structure.io import pdbx
+
 from plinder.core import release
 from plinder.core.scores import custom
 from plinder.core.scores.entries import (
@@ -372,8 +373,9 @@ def test_annotate_custom_cif_files_writes_bonded_ligands(
     test_dir, tmp_path, monkeypatch
 ):
     import yaml
-    from plinder.data.annotations import ligand_utils
     from rdkit import Chem
+
+    from plinder.data.annotations import ligand_utils
 
     monkeypatch.setattr(ligand_utils, "BINDING_AFFINITY", {})
 

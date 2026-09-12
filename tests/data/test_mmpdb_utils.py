@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
+
 from plinder.core.utils import schemas
 from plinder.data.annotations import mmpdb_utils
 

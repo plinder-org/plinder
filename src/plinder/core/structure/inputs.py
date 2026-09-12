@@ -181,7 +181,7 @@ def read_ligand_sdf(path: str | Path) -> Mol:
 
 
 def read_input_structure(
-    path: str | Path
+    path: str | Path,
 ) -> tuple[struc.AtomArray, pdbx.CIFBlock | None]:
     """Read the first coordinate model and its mmCIF metadata where available."""
     from biotite.structure.io import pdb

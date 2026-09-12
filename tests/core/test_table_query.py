@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
+
 from plinder.core import PlinderRelease, query_table
 from plinder.core.index.query import DISABLED_ANNOTATION_COLUMNS
 
@@ -245,7 +246,7 @@ def test_protein_cluster_joins_preserve_chain_rows(protein_cluster_release, kind
 
 
 def test_chain_query_requires_choice_between_protein_cluster_tables(
-    protein_cluster_release
+    protein_cluster_release,
 ):
     with pytest.raises(ValueError, match="multiple related tables"):
         query_table(

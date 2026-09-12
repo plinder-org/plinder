@@ -96,7 +96,7 @@ def mhfp6_bulk_jaccard(
     if reference_matrix.ndim != 2 or reference_matrix.shape[1] != query.shape[0]:
         raise ValueError("query and reference MinHash widths do not match")
     matches = np.count_nonzero(reference_matrix == query, axis=1)
-    return matches / reference_matrix.shape[1]
+    return np.asarray(matches / reference_matrix.shape[1], dtype=np.float64)
 
 
 Centres = dict[int, tuple[Chem.StereoDescriptor, list[int]]]

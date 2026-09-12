@@ -6,6 +6,7 @@ from textwrap import dedent
 
 import pytest
 from omegaconf import OmegaConf
+
 from plinder.data.pipeline import config
 
 

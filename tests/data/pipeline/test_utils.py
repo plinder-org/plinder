@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pandas as pd
 import pytest
+
 from plinder.core.scores.metrics import CHEMICAL_CLUSTER_SUMMARY_COLUMNS
 from plinder.data.pipeline import utils
 
