@@ -118,7 +118,7 @@ STAGES = [
 
 
 def _file_content_signature(path: Path) -> dict[str, int | str]:
-    """Return a stable signature for a createdb file manifest."""
+    """Return a stable signature for a createdb input file."""
     return {"size": path.stat().st_size, "sha256": file_sha256(path)}
 
 
@@ -142,6 +142,13 @@ def _foldseek_manifest_signature(path: Path) -> dict[str, int | str]:
         "referenced_cif_count": count,
         "referenced_cifs_sha256": digest.hexdigest(),
     }
+
+
+def _foldseek_source_signature(path: Path) -> dict[str, int | str]:
+    """Hash a Foldseek coordinate directly or a TSV and its referenced files."""
+    if path.suffix.casefold() == ".tsv":
+        return _foldseek_manifest_signature(path)
+    return _file_content_signature(path)
 
 
 def scatter_download_rcsb_files(
@@ -298,7 +305,7 @@ def make_dbs(
         source_signature = None
         if source.is_file():
             source_signature = (
-                _foldseek_manifest_signature(source)
+                _foldseek_source_signature(source)
                 if database_type == "foldseek"
                 else _file_content_signature(source)
             )

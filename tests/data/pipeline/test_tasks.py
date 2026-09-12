@@ -3828,6 +3828,47 @@ def test_make_dbs_rebuilds_only_the_changed_file_input(tmp_path, monkeypatch) ->
     ]
 
 
+def test_make_dbs_hashes_direct_foldseek_coordinate_files(
+    tmp_path, monkeypatch
+) -> None:
+    cif_path = tmp_path / "1abc.cif.gz"
+    cif_path.write_bytes(b"initial coordinates")
+    seqres_path = tmp_path / "pdb_seqres.txt.gz"
+    seqres_path.touch()
+    create_calls = []
+    monkeypatch.setattr(
+        tasks.databases,
+        "created_database_is_complete",
+        lambda *_args: True,
+    )
+    monkeypatch.setattr(
+        tasks.databases,
+        "create_db",
+        lambda source, output, kind, threads: create_calls.append(
+            (source, output, kind, threads)
+        ),
+    )
+
+    kwargs = {
+        "data_dir": tmp_path,
+        "sub_databases": ["holo"],
+        "cpu": 2,
+        "cif_root": cif_path,
+        "seqres_path": seqres_path,
+        "index": False,
+    }
+    tasks.make_dbs(**kwargs)
+    tasks.make_dbs(**kwargs)
+    cif_path.write_bytes(b"revised coordinates")
+    tasks.make_dbs(**kwargs)
+
+    assert create_calls == [
+        (cif_path, tmp_path / "dbs/foldseek", "foldseek", 2),
+        (seqres_path, tmp_path / "dbs/mmseqs", "mmseqs", 2),
+        (cif_path, tmp_path / "dbs/foldseek", "foldseek", 2),
+    ]
+
+
 def test_get_scorer_uses_configured_search_limits(tmp_path) -> None:
     from plinder.data.pipeline import utils
     from plinder.data.pipeline.config import get_config
