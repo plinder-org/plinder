@@ -30,6 +30,7 @@ from plinder.data.annotations.interface_utils import (
 from plinder.data.annotations.ligand_utils import (
     BiounitSpatialIndex,
     Ligand,
+    ccd_components,
     classify_ligand_polymer_classes,
     get_water_chain_ids,
     is_excluded_mol,
@@ -641,12 +642,17 @@ def test_known_artifact_preflight_is_conservative(monkeypatch):
         lambda code: {"OHX": "[OH-]", "LIG": "CCNCC"}.get(code),
     )
 
-    assert is_known_artifact_ligand(["GOL"], {"GOL"})
+    assert is_known_artifact_ligand(["GOL"], {ccd_components("GOL")})
     # UNX is a dummy placeholder (DUM was retired -> UNX; obsolete, never ingested)
     assert is_known_artifact_ligand(["UNX"], set())
     assert is_known_artifact_ligand(["OHX"], set())
     assert not is_known_artifact_ligand(["LIG"], set())
     assert not is_known_artifact_ligand(["OHX", "OHX"], set())
+    # a listed composite matches whatever order its residues were traversed in
+    listed = {ccd_components("PEG-LIG")}
+    assert is_known_artifact_ligand(["LIG", "PEG"], listed)
+    assert is_known_artifact_ligand(["PEG", "LIG"], listed)
+    assert not is_known_artifact_ligand(["PEG"], listed)
 
 
 def test_biounit_spatial_index_expands_hits_to_complete_residues():

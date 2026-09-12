@@ -12,22 +12,15 @@ test_asset_fp = Path(__file__).absolute().parent / "test_data"
 test_output_fp = Path(__file__).absolute().parent / "xx/output"
 
 
+# TODO: tests/test_data/plinder/mount is a hand-curated slice of a released
+# index, so the static table cannot reflect code changes; it must be regenerated
+# with each release (a release-time CI job from the release artifacts).
 def _write_test_entry_metadata(release_dir: Path) -> None:
     annotation = pd.read_parquet(release_dir / "index" / "annotation_table.parquet")
     entry_columns = [column for column in annotation if column.startswith("entry_")]
     metadata = annotation.loc[:, entry_columns].drop_duplicates()
     if metadata["entry_pdb_id"].duplicated().any():
         raise ValueError("test annotation has inconsistent entry metadata")
-    dates = pd.read_csv(
-        Path(__file__).resolve().parents[1]
-        / "src/plinder/data/annotations/static_files/dates.csv"
-    ).loc[:, ["entry_pdb_id", "entry_release_date"]]
-    metadata = metadata.drop(columns="entry_release_date", errors="ignore").merge(
-        dates,
-        on="entry_pdb_id",
-        how="left",
-        validate="one_to_one",
-    )
     metadata.to_parquet(release_dir / "index" / "entry_metadata.parquet", index=False)
 
 
@@ -511,7 +504,7 @@ def cached_plinder_system(read_plinder_mount, tmp_path):
         canonical_ligand_dir = tmp_path / "canonical_ligands" / system_id
         canonical_ligand_dir.mkdir(parents=True)
         for ligand_file in (source / "ligand_files").glob("*.sdf"):
-            asym_id = ligand_file.stem.rsplit(".", maxsplit=1)[-1]
+            asym_id = ligand_file.stem.split(".", maxsplit=1)[-1]  # asym may hold dots
             target = canonical_ligand_dir / f"{asym_id}.sdf"
             if not target.exists():
                 shutil.copyfile(ligand_file, target)
@@ -531,13 +524,15 @@ def mock_ccd_lookups(monkeypatch):
     # so classification falls back to code-only matching in tests (the synonym
     # code->code map was retired — obsolete codes are never ingested).
     data = json.loads((test_asset_fp / "ccd_lookups.json").read_text())
+    from plinder.data.annotations.ligand_utils import ccd_components
+
     monkeypatch.setattr(
         "plinder.data.annotations.ligand_utils.COFACTORS",
-        set(data["cofactors"]),
+        {ccd_components(code) for code in data["cofactors"]},
     )
     monkeypatch.setattr(
         "plinder.data.annotations.ligand_utils.ARTIFACTS",
-        set(data["artifacts"]),
+        {ccd_components(code) for code in data["artifacts"]},
     )
     monkeypatch.setattr(
         "plinder.data.annotations.ligand_utils.BINDING_AFFINITY",

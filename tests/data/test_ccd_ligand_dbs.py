@@ -148,19 +148,19 @@ def test_match_by_code_then_by_chemistry_against_the_real_universe(components):
 def test_one_molecule_matches_however_it_was_deposited():
     """Lactose as one code (LAT) or as its linked sugars (GAL-BGC).
 
-    plinder's identity key is stereo-insensitive, so lactose, cellobiose and
-    maltose share it; the stereo-aware resolved SMILES picks the right one.
+    Chemistry matching uses the stereo-aware canonical SMILES, the dataset's own
+    ligand key, so cellobiose and maltose (same graph, other stereo) stay apart
+    and a ligand without stereo matches nothing rather than all three.
     """
     from rdkit import Chem
 
     codes = ["LAT", "CBI", "MAL", "GAL", "BGC"]
     components = pd.DataFrame({"ccd_id": codes})
     components["ligand_rdkit_canonical_smiles"] = [_ccd_smiles(c) for c in codes]
-    components["ligand_identity"] = components["ligand_rdkit_canonical_smiles"].map(
-        smiles2nonstereo
-    )
     components["ligand_smiles_id"] = range(len(codes))
-    assert len(set(components["ligand_identity"].iloc[:3])) == 1
+    stereo_free = components["ligand_rdkit_canonical_smiles"].map(smiles2nonstereo)
+    assert len(set(stereo_free.iloc[:3])) == 1, "three stereoisomers of one graph"
+    assert components["ligand_rdkit_canonical_smiles"].iloc[:3].is_unique
     # the composite's whole-molecule SMILES, written from a different atom order
     lactose = Chem.MolFromSmiles(_ccd_smiles("LAT"))
     reordered = Chem.MolToSmiles(
@@ -175,24 +175,19 @@ def test_one_molecule_matches_however_it_was_deposited():
             "ligand_smiles": [
                 _ccd_smiles("LAT"),
                 reordered,
-                reordered,
+                stereo_free.iloc[0],
                 _ccd_smiles("GAL"),
             ],
-            "ligand_resolved_smiles": [_ccd_smiles("LAT"), reordered, None, None],
         }
     )
     matches = _match_all(ligands, components)
     assert matches.loc["two_codes", "match_kind"] == "exact"
     assert matches.loc["two_codes", "matched_ccd_ids"] == ["LAT"]
     assert matches.loc["two_codes", "component_ccd_ids"] == ["GAL", "BGC"]
-    # no resolved stereo: every stereoisomer sharing the key is listed
-    assert matches.loc["two_codes_no_stereo", "matched_ccd_ids"] == [
-        "CBI",
-        "LAT",
-        "MAL",
-    ]
+    # no stereo means a different molecule as far as identity goes
+    assert matches.loc["two_codes_no_stereo", "match_kind"] == "novel"
     assert matches.loc["one_code", "matched_ccd_ids"] == ["LAT"]
-    # a code match is never overridden by the stereo-insensitive identity
+    # a code match is never overridden by chemistry
     assert matches.loc["galactose", "matched_ccd_ids"] == ["GAL"]
 
 
@@ -702,7 +697,7 @@ def _linked_chain(codes, *, donor="C1", acceptors=None, leaving="O1"):
     units = []
     for index, code in enumerate(codes):
         unit = _get_ccd_atomarray(code)
-        unit = unit[unit.element != "H"]
+        unit = unit[struc.filter_heavy(unit)]
         if index < len(codes) - 1:
             unit = unit[unit.atom_name != leaving]
         unit.res_id[:] = index + 1

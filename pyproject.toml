@@ -110,7 +110,6 @@ namespaces = false
 plinder = [
     "**.yaml",
     "**.tsv",
-    # ship every static reference file (dates.csv is temp patch by plinder.core)
     "plinder/data/annotations/static_files/*",
 ]
 
