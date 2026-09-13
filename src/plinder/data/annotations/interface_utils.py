@@ -21,6 +21,7 @@ PROTEIN_BACKBONE_ATOMS = frozenset({"N", "CA", "C", "O"})
 DEFAULT_MIN_INTERFACE_RESIDUES = 7
 MIN_INTERFACE_RESIDUES_METADATA_KEY = b"plinder.interface.min_interface_residues"
 PRODIGY_CONTACT_RADIUS = 5.0
+ProteinChainContacts = dict[tuple[str, str], set[tuple[int, int]]]
 PRODIGY_FEATURE_NAMES = (
     "CP",
     "AC",
@@ -377,6 +378,65 @@ def _residue_mappings(
     return numbers, indices
 
 
+def find_protein_chain_contacts(
+    atoms: struc.AtomArray,
+    *,
+    chains: Mapping[str, Chain],
+    contact_radius: float,
+    spatial_index: BiounitSpatialIndex,
+) -> ProteinChainContacts:
+    """Return residue contacts between every pair of polypeptide chains."""
+    if contact_radius <= 0:
+        raise ValueError("protein contact radius must be positive")
+    if spatial_index.max_radius < contact_radius:
+        raise ValueError(
+            "protein contact radius exceeds the biological-assembly index radius"
+        )
+    protein_chains = {
+        instance_chain
+        for instance_chain in spatial_index.chain_ids
+        if (chain := chains.get(_asym_id(instance_chain))) is not None
+        and "polypeptide" in chain.chain_type_str.lower()
+    }
+    if len(protein_chains) < 2:
+        return {}
+
+    protein_backbone = np.fromiter(
+        (
+            str(instance_chain) in protein_chains
+            and str(atom_name) in PROTEIN_BACKBONE_ATOMS
+            for instance_chain, atom_name in zip(atoms.chain_id, atoms.atom_name)
+        ),
+        dtype=bool,
+        count=len(atoms),
+    )
+    contacts: ProteinChainContacts = {}
+    for atom_index in np.flatnonzero(protein_backbone):
+        neighbors = np.asarray(
+            spatial_index.cell_list.get_atoms(
+                atoms.coord[atom_index], radius=contact_radius
+            ),
+            dtype=int,
+        ).reshape(-1)
+        neighbors = neighbors[(neighbors > atom_index) & (neighbors < len(atoms))]
+        neighbors = neighbors[protein_backbone[neighbors]]
+        query_chain = str(atoms.chain_id[atom_index])
+        query_residue = int(atoms.res_id[atom_index])
+        for target_index in neighbors:
+            target_chain = str(atoms.chain_id[target_index])
+            if target_chain == query_chain:
+                continue
+            target_residue = int(atoms.res_id[target_index])
+            if query_chain < target_chain:
+                key = (query_chain, target_chain)
+                residue_pair = (query_residue, target_residue)
+            else:
+                key = (target_chain, query_chain)
+                residue_pair = (target_residue, query_residue)
+            contacts.setdefault(key, set()).add(residue_pair)
+    return contacts
+
+
 def detect_protein_interfaces(
     atoms: struc.AtomArray,
     *,
@@ -389,6 +449,7 @@ def detect_protein_interfaces(
     annotate_prodigy: bool = True,
     spatial_index: BiounitSpatialIndex | None = None,
     chain_pair_contact_areas: Mapping[tuple[str, str], float] | None = None,
+    chain_contacts: ProteinChainContacts | None = None,
 ) -> list[ProteinInterface]:
     """Detect protein-chain interfaces from backbone contacts.
 
@@ -427,49 +488,21 @@ def detect_protein_interfaces(
     if len(eligible_chains) < 2:
         return []
 
-    eligible_backbone = np.fromiter(
-        (
-            str(instance_chain) in eligible_chains
-            and str(atom_name) in PROTEIN_BACKBONE_ATOMS
-            for instance_chain, atom_name in zip(atoms.chain_id, atoms.atom_name)
-        ),
-        dtype=bool,
-        count=len(atoms),
+    contacts = (
+        find_protein_chain_contacts(
+            atoms,
+            chains=chains,
+            contact_radius=contact_radius,
+            spatial_index=spatial_index,
+        )
+        if chain_contacts is None
+        else chain_contacts
     )
-    backbone_indices = np.flatnonzero(eligible_backbone)
-    if not len(backbone_indices):
-        return []
-
-    # Store residue-pair contacts in canonical chain order. Iterating each
-    # eligible backbone atom once avoids an O(number_of_chains^2) chain-pair
-    # scan for very large assemblies.
-    contacts: dict[tuple[str, str], set[tuple[int, int]]] = {}
-    for atom_index in backbone_indices:
-        neighbors = np.asarray(
-            spatial_index.cell_list.get_atoms(
-                atoms.coord[atom_index], radius=contact_radius
-            ),
-            dtype=int,
-        ).reshape(-1)
-        neighbors = neighbors[(neighbors > atom_index) & (neighbors < len(atoms))]
-        neighbors = neighbors[eligible_backbone[neighbors]]
-        query_chain = str(atoms.chain_id[atom_index])
-        query_residue = int(atoms.res_id[atom_index])
-        for target_index in neighbors:
-            target_chain = str(atoms.chain_id[target_index])
-            if target_chain == query_chain:
-                continue
-            target_residue = int(atoms.res_id[target_index])
-            if query_chain < target_chain:
-                key = (query_chain, target_chain)
-                residue_pair = (query_residue, target_residue)
-            else:
-                key = (target_chain, query_chain)
-                residue_pair = (target_residue, query_residue)
-            contacts.setdefault(key, set()).add(residue_pair)
 
     interfaces: list[ProteinInterface] = []
     for (chain_1, chain_2), residue_pairs in sorted(contacts.items()):
+        if chain_1 not in eligible_chains or chain_2 not in eligible_chains:
+            continue
         chain_1_numbers, chain_1_indices = _residue_mappings(
             instance_chain=chain_1,
             residue_numbers=(pair[0] for pair in residue_pairs),

@@ -69,6 +69,7 @@ def _write_fake_sidecars(
             "chain_num_contacting_ions": [0],
             "chain_num_contacting_artifacts": [0],
             "chain_num_contacting_other_ligands": [0],
+            "chain_num_contacting_proteins": [0],
         }
     ).to_parquet(entry_dir / "entry_biounit_chains.parquet", index=False)
     pd.DataFrame({"entry_pdb_id": [pdb_id]}).to_parquet(
@@ -671,12 +672,19 @@ def test_interface_mode_resumes_zero_interface_entries(
     calls = 0
 
     class EmptyInterfaceAnnotation:
-        def __init__(self, *_args: object, **_kwargs: object):
-            pass
+        def __init__(self, *_args: object, **kwargs: object):
+            save_folder = kwargs["save_folder"]
+            assert isinstance(save_folder, Path)
+            self.entry_dir = save_folder / "8grn"
 
         def annotate_interfaces(self) -> pa.Table:
             nonlocal calls
             calls += 1
+            if self.entry_dir.exists():
+                biounit_path = self.entry_dir / "entry_biounit_chains.parquet"
+                biounits = pd.read_parquet(biounit_path)
+                biounits["chain_num_contacting_proteins"] = 0
+                biounits.to_parquet(biounit_path, index=False)
             return pa.Table.from_pylist(
                 [],
                 schema=INTERFACE_ANNOTATION_SCHEMA.with_metadata(
@@ -709,6 +717,65 @@ def test_interface_mode_resumes_zero_interface_entries(
         "skipped_complete"
     )
     assert calls == 1
+
+    entry_dir = output_root / "raw_entries/gr/8grn"
+    entry_dir.mkdir(parents=True)
+    _write_fake_sidecars(entry_dir, "8grn")
+    biounit_path = entry_dir / "entry_biounit_chains.parquet"
+    biounits = pd.read_parquet(biounit_path).drop(
+        columns="chain_num_contacting_proteins"
+    )
+    biounits.to_parquet(biounit_path, index=False)
+    ligand_metrics_path = ingest.entry_metrics_paths(output_root, "8grn")[0]
+    ligand_metrics_path.parent.mkdir(parents=True, exist_ok=True)
+    ligand_metrics_path.write_text(
+        json.dumps(
+            {
+                "status": "skipped_no_ligands",
+                "mode": "ligands",
+                "counts": {"entry_chain_rows": 1},
+                "outputs": {"entry_directory": str(entry_dir)},
+            }
+        )
+    )
+    preserved = {
+        path.name: path.read_bytes()
+        for path in entry_dir.iterdir()
+        if path.name != "entry_biounit_chains.parquet"
+    }
+    assert completed_interface_metrics(output_root, "8grn") is None
+
+    refreshed_metrics = ingest_one_pdb(
+        pdb_id="8grn",
+        output_root=output_root,
+        cif_root=cif_root,
+        validation_root=validation_root,
+        mode="interfaces",
+    )
+
+    assert entry_dir.is_dir()
+    assert {
+        path.name: path.read_bytes()
+        for path in entry_dir.iterdir()
+        if path.name != "entry_biounit_chains.parquet"
+    } == preserved
+    refreshed_biounits = pd.read_parquet(biounit_path)
+    assert refreshed_biounits["chain_num_contacting_proteins"].eq(0).all()
+    assert (
+        refreshed_biounits[
+            [
+                "chain_num_contacting_ions",
+                "chain_num_contacting_artifacts",
+                "chain_num_contacting_other_ligands",
+            ]
+        ]
+        .eq(0)
+        .all()
+        .all()
+    )
+    assert json.loads(refreshed_metrics.read_text())["status"] == "complete"
+    assert completed_interface_metrics(output_root, "8grn") == refreshed_metrics
+    assert calls == 2
 
 
 def test_ingest_one_pdb_retries_partial_outputs_without_force(
@@ -1048,6 +1115,12 @@ def test_completed_entry_metrics_invalidates_interface_cutoff_changes(
     assert completed_entry_metrics(output_root, "1abc") is None
     _write_fake_sidecars(entry_directory, "1abc")
 
+    biounits = pd.read_parquet(biounit_path)
+    biounits.loc[0, "chain_num_contacting_proteins"] = None
+    biounits.to_parquet(biounit_path, index=False)
+    assert completed_entry_metrics(output_root, "1abc") is None
+    _write_fake_sidecars(entry_directory, "1abc")
+
     assert (
         completed_entry_metrics(
             output_root,
@@ -1119,6 +1192,36 @@ def test_resume_requires_shared_annotations(
     assert completed() is None
     frame.to_parquet(table_path, index=False)
     assert completed() == marker
+
+
+def test_interface_resume_requires_protein_contact_counts(tmp_path: Path) -> None:
+    entry_dir = tmp_path / "raw_entries/ab/1abc"
+    entry_dir.mkdir(parents=True)
+    _write_fake_sidecars(entry_dir, "1abc")
+    marker = ingest.interface_metrics_path(tmp_path, "1abc")
+    marker.parent.mkdir(parents=True)
+    marker.write_text(
+        json.dumps(
+            {
+                "status": "complete",
+                "mode": "interfaces",
+                "interface_min_residues": 7,
+                "counts": {"interface_rows": 0},
+                "outputs": {"entry_directory": str(entry_dir)},
+            }
+        )
+    )
+    biounit_path = entry_dir / "entry_biounit_chains.parquet"
+
+    assert completed_interface_metrics(tmp_path, "1abc") == marker
+    biounits = pd.read_parquet(biounit_path)
+    biounits.drop(columns="chain_num_contacting_proteins").to_parquet(
+        biounit_path, index=False
+    )
+    assert completed_interface_metrics(tmp_path, "1abc") is None
+    biounits["chain_num_contacting_proteins"] = None
+    biounits.to_parquet(biounit_path, index=False)
+    assert completed_interface_metrics(tmp_path, "1abc") is None
 
 
 @pytest.mark.parametrize("mode", ["all", "ligands"])

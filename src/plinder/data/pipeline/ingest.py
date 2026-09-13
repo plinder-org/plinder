@@ -207,9 +207,8 @@ def _entry_outputs_complete(
         return False
     if metrics.get("status") != "complete":
         return False
-    if expected_ingest_mode is not None and (
-        metrics.get("mode", "all") != expected_ingest_mode
-    ):
+    ingest_mode = str(metrics.get("mode", "all"))
+    if expected_ingest_mode is not None and (ingest_mode != expected_ingest_mode):
         return False
     if (
         expected_annotate_prodigy is not None
@@ -249,7 +248,7 @@ def _entry_outputs_complete(
             "chain_is_ligand_like",
         }
         | CHAIN_MODIFICATION_COLUMNS,
-        sidecars["entry_biounit_chains"]: BIOUNIT_CONTACT_COLUMNS
+        sidecars["entry_biounit_chains"]: _required_biounit_contact_columns(ingest_mode)
         | {
             "entry_pdb_id",
             "biounit_id",
@@ -276,26 +275,36 @@ def _entry_outputs_complete(
             for path, columns in required_columns.items()
         )
         return schemas_are_complete and _biounit_contacts_are_valid(
-            sidecars["entry_biounit_chains"]
+            sidecars["entry_biounit_chains"],
+            _required_biounit_contact_columns(ingest_mode),
         )
     except Exception:
         return False
 
 
-BIOUNIT_CONTACT_COLUMNS = {
+BIOUNIT_LIGAND_CONTACT_COLUMNS = {
     "chain_num_contacting_ions",
     "chain_num_contacting_artifacts",
     "chain_num_contacting_other_ligands",
 }
+BIOUNIT_PROTEIN_CONTACT_COLUMNS = {"chain_num_contacting_proteins"}
 
 
-def _biounit_contacts_are_valid(path: Path) -> bool:
+def _required_biounit_contact_columns(ingest_mode: str) -> set[str]:
+    if ingest_mode == "ligands":
+        return BIOUNIT_LIGAND_CONTACT_COLUMNS
+    if ingest_mode == "interfaces":
+        return BIOUNIT_PROTEIN_CONTACT_COLUMNS
+    return BIOUNIT_LIGAND_CONTACT_COLUMNS | BIOUNIT_PROTEIN_CONTACT_COLUMNS
+
+
+def _biounit_contacts_are_valid(path: Path, columns: set[str]) -> bool:
     if not path.is_file():
         return False
     try:
-        if not BIOUNIT_CONTACT_COLUMNS.issubset(pq.read_schema(path).names):
+        if not columns.issubset(pq.read_schema(path).names):
             return False
-        table = pq.read_table(path, columns=sorted(BIOUNIT_CONTACT_COLUMNS))
+        table = pq.read_table(path, columns=sorted(columns))
         return all(
             value is not None and value >= 0
             for column in table.column_names
@@ -359,7 +368,8 @@ def completed_entry_metrics(
                 and entry_directory
                 and _shared_annotations_are_present(Path(entry_directory))
                 and _biounit_contacts_are_valid(
-                    Path(entry_directory) / "entry_biounit_chains.parquet"
+                    Path(entry_directory) / "entry_biounit_chains.parquet",
+                    BIOUNIT_LIGAND_CONTACT_COLUMNS,
                 )
             ):
                 return metrics_path
@@ -416,7 +426,8 @@ def completed_interface_metrics(
         return None
     status = metrics.get("status")
     if status == "skipped_no_interfaces":
-        return metrics_path
+        entry_directory = output_root / "raw_entries" / pdb_id[1:3] / pdb_id
+        return None if entry_directory.exists() else metrics_path
     if status != "complete":
         return None
     interface_path = (
@@ -425,6 +436,11 @@ def completed_interface_metrics(
     if not interface_path.is_file():
         return None
     if not _shared_annotations_are_present(interface_path.parent):
+        return None
+    if not _biounit_contacts_are_valid(
+        interface_path.parent / "entry_biounit_chains.parquet",
+        BIOUNIT_PROTEIN_CONTACT_COLUMNS,
+    ):
         return None
     try:
         from plinder.data.annotations.interface_utils import (
@@ -487,7 +503,16 @@ def _ingest_interfaces(
             f"annotation={entry_parquet.is_file()}, ligand={ligand_parquet.is_file()}"
         )
     has_ligands = entry_parquet.is_file()
-    if not has_ligands and entry_directory.exists():
+    has_ligand_sidecars = (
+        completed_entry_metrics(
+            output_root,
+            pdb_id,
+            expected_ingest_mode="ligands",
+        )
+        is not None
+    )
+    preserve_ligand_outputs = has_ligands or has_ligand_sidecars
+    if not preserve_ligand_outputs and entry_directory.exists():
         # This directory is owned solely by an earlier interface-only attempt,
         # so a partial write can be rebuilt without touching ligand assets.
         shutil.rmtree(entry_directory)
@@ -535,7 +560,7 @@ def _ingest_interfaces(
             "annotate_interfaces", annotate_interfaces, timings
         )
         interface_rows = int(interface_table.num_rows)
-        if not interface_rows and not has_ligands:
+        if not interface_rows and not preserve_ligand_outputs:
             shutil.rmtree(entry_directory, ignore_errors=True)
             summary["status"] = "skipped_no_interfaces"
             summary["outputs"]["entry_directory"] = None

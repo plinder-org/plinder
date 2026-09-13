@@ -26,6 +26,7 @@ from plinder.data.annotations.interface_utils import (
     INTERFACE_ANNOTATION_SCHEMA,
     MIN_INTERFACE_RESIDUES_METADATA_KEY,
     detect_protein_interfaces,
+    find_protein_chain_contacts,
     interface_system_id,
     protein_interfaces_to_table,
 )
@@ -139,6 +140,37 @@ def test_detect_protein_interfaces_applies_eligibility_filters(
     assert interfaces == []
 
 
+def test_protein_contacts_include_short_polypeptide_partners() -> None:
+    atoms = _interface_test_atoms()
+    chains = {
+        "A": _interface_test_chain([1, 2, 3]),
+        "B": _interface_test_chain([10, 11, 12], length=3),
+    }
+    spatial_index = BiounitSpatialIndex.from_atoms(atoms, 1.5)
+
+    contacts = find_protein_chain_contacts(
+        atoms,
+        chains=chains,
+        contact_radius=1.5,
+        spatial_index=spatial_index,
+    )
+
+    assert set(contacts) == {("1.A", "2.B")}
+    assert (
+        detect_protein_interfaces(
+            atoms,
+            pdb_id="1abc",
+            biounit_id="1",
+            chains=chains,
+            contact_radius=1.5,
+            min_chain_length=12,
+            spatial_index=spatial_index,
+            chain_contacts=contacts,
+        )
+        == []
+    )
+
+
 def test_interface_system_id_is_unordered_and_rejects_self_interfaces():
     assert interface_system_id("1ABC", "2", "2.B", "1.A") == interface_system_id(
         "1abc", "2", "1.A", "2.B"
@@ -224,7 +256,9 @@ def test_interface_only_annotation_preserves_ligand_assets(
         "chain_num_contacting_artifacts",
         "chain_num_contacting_other_ligands",
     }
-    assert contact_columns.isdisjoint(pd.read_parquet(biounit_path).columns)
+    interface_biounits = pd.read_parquet(biounit_path)
+    assert contact_columns.isdisjoint(interface_biounits.columns)
+    assert "chain_num_contacting_proteins" in interface_biounits.columns
     interface_path = entry_folder / "interfaces.parquet"
     interface_bytes = interface_path.read_bytes()
     ligand_table = annotation.annotate(include_interfaces=False)
@@ -242,14 +276,23 @@ def test_interface_only_annotation_preserves_ligand_assets(
     metadata_path.unlink()
     ligand_biounits = pd.read_parquet(biounit_path)
     assert contact_columns.issubset(ligand_biounits.columns)
+    pd.testing.assert_series_equal(
+        ligand_biounits.set_index(["entry_pdb_id", "biounit_id", "chain_instance"])[
+            "chain_num_contacting_proteins"
+        ],
+        interface_biounits.set_index(["entry_pdb_id", "biounit_id", "chain_instance"])[
+            "chain_num_contacting_proteins"
+        ],
+    )
+    ligand_biounits["chain_num_contacting_proteins"] = 99
     ligand_biounits.drop(columns=list(contact_columns)).to_parquet(
         biounit_path, index=False
     )
+    biounit_before = pd.read_parquet(biounit_path)
     preserved = [
         ligand_annotation,
         ligand_sdf,
         entry_folder / "entry_chains.parquet",
-        entry_folder / "entry_biounit_chains.parquet",
         entry_folder / "entry_source.parquet",
     ]
     before = {path: path.read_bytes() for path in preserved}
@@ -258,7 +301,19 @@ def test_interface_only_annotation_preserves_ligand_assets(
 
     assert second.equals(first)
     assert {path: path.read_bytes() for path in preserved} == before
-    assert contact_columns.isdisjoint(pd.read_parquet(biounit_path).columns)
+    biounit_after = pd.read_parquet(biounit_path)
+    assert contact_columns.isdisjoint(biounit_after.columns)
+    pd.testing.assert_frame_equal(
+        biounit_after.drop(columns="chain_num_contacting_proteins"),
+        biounit_before.drop(columns="chain_num_contacting_proteins"),
+    )
+    protein_contacts = biounit_after["chain_num_contacting_proteins"]
+    contacting_chains = set(biounit_after.loc[protein_contacts.gt(0), "chain_instance"])
+    assert contacting_chains == {
+        first.column("interface_chain_1")[0].as_py(),
+        first.column("interface_chain_2")[0].as_py(),
+    }
+    assert protein_contacts[protein_contacts.gt(0)].eq(1).all()
     assert pd.read_parquet(metadata_path)["entry_pdb_id"].tolist() == ["7cm8"]
 
 
@@ -1203,6 +1258,38 @@ def test_empty_ligand_biounit_table_keeps_contact_schema() -> None:
     }.issubset(membership.columns)
 
 
+def test_biounit_membership_records_protein_contact_counts() -> None:
+    entry = Entry(
+        pdb_id="1abc",
+        biounit_chain_ids={"1": ["1.A", "1.B", "1.C"]},
+    )
+    entry._record_biounit_protein_contact_counts(
+        "1",
+        {
+            ("1.A", "1.B"): {(1, 2)},
+            ("1.A", "1.C"): {(1, 3)},
+        },
+    )
+
+    membership = entry.biounit_chains_to_df().set_index("chain_instance")
+
+    assert membership["chain_num_contacting_proteins"].to_dict() == {
+        "1.A": 2,
+        "1.B": 1,
+        "1.C": 1,
+    }
+
+
+def test_empty_interface_biounit_table_keeps_protein_contact_schema() -> None:
+    entry = Entry(pdb_id="1abc")
+    entry._protein_contacts_requested = True
+
+    membership = entry.biounit_chains_to_df()
+
+    assert membership.empty
+    assert "chain_num_contacting_proteins" in membership.columns
+
+
 def test_biounit_membership_preserves_serialized_contact_counts() -> None:
     entry = Entry(
         pdb_id="1abc",
@@ -1216,6 +1303,7 @@ def test_biounit_membership_preserves_serialized_contact_counts() -> None:
                 }
             }
         },
+        biounit_protein_contact_counts={"1": {"1.A": 2}},
     )
     restored = Entry.model_validate_json(entry.model_dump_json())
 
@@ -1224,6 +1312,7 @@ def test_biounit_membership_preserves_serialized_contact_counts() -> None:
     assert membership.loc["1.A", "chain_num_contacting_ions"] == 1
     assert membership.loc["1.A", "chain_num_contacting_artifacts"] == 2
     assert membership.loc["1.A", "chain_num_contacting_other_ligands"] == 3
+    assert membership.loc["1.A", "chain_num_contacting_proteins"] == 2
 
 
 def test_entry_never_groups_ligands_across_biological_assemblies() -> None:
@@ -1795,6 +1884,10 @@ def test_ingest_retains_unliganded_chains_without_ligand_scans(
         "chain_num_contacting_other_ligands",
     ]:
         assert membership[column].eq(0).all()
+    if include_interfaces:
+        assert membership["chain_num_contacting_proteins"].eq(0).all()
+    else:
+        assert "chain_num_contacting_proteins" not in membership
 
 
 @pytest.mark.parametrize(

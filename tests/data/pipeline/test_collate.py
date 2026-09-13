@@ -133,6 +133,7 @@ def _write_entry(
             "chain_num_contacting_ions": [0, 0],
             "chain_num_contacting_artifacts": [0, 0],
             "chain_num_contacting_other_ligands": [0, 0],
+            "chain_num_contacting_proteins": [1, 1],
         }
     ).to_parquet(entry_dir / "entry_biounit_chains.parquet", index=False)
     pd.DataFrame(
@@ -346,6 +347,48 @@ def test_weekly_entry_update_matches_full_collation(entry_update_case, tmp_path)
     )
     assert json.loads((output / "index/collation.json").read_text())["mode"] == (
         "targeted_repair"
+    )
+
+
+@pytest.mark.parametrize("legacy_schema", [False, True])
+def test_weekly_entry_update_preserves_partial_contact_coverage(
+    entry_update_case, legacy_schema
+):
+    base, args, _ = entry_update_case
+    biounit_path = base / "index/entry_biounit_chains.parquet"
+    biounits = pd.read_parquet(biounit_path)
+    marker_path = base / "index/collation.json"
+    marker = json.loads(marker_path.read_text())
+    if legacy_schema:
+        biounits = biounits.drop(columns="chain_num_contacting_proteins")
+        marker.pop("ligand_contacts_complete")
+        marker.pop("protein_contacts_complete")
+    else:
+        biounits["chain_num_contacting_proteins"] = None
+        marker["protein_contacts_complete"] = False
+    biounits.to_parquet(biounit_path, index=False)
+    marker_path.write_text(json.dumps(marker))
+
+    report = update_entries.apply_entry_update(**args)
+    output_biounits = pd.read_parquet(
+        args["output_dir"] / "index/entry_biounit_chains.parquet"
+    )
+    output_marker = json.loads(
+        (args["output_dir"] / "index/collation.json").read_text()
+    )
+
+    assert report["ligand_contacts_complete"] is True
+    assert report["protein_contacts_complete"] is False
+    assert output_marker["ligand_contacts_complete"] is True
+    assert output_marker["protein_contacts_complete"] is False
+    assert "chain_num_contacting_proteins" in output_biounits
+    assert (
+        output_biounits.loc[
+            output_biounits.entry_pdb_id.eq("3ghi"),
+            "chain_num_contacting_proteins",
+        ]
+        .isna()
+        .all()
     )
 
 
@@ -821,12 +864,10 @@ def test_collate_shard_does_not_reuse_older_format(tmp_path: Path) -> None:
             "chain_num_contacting_ions",
             "chain_num_contacting_artifacts",
             "chain_num_contacting_other_ligands",
+            "chain_num_contacting_proteins",
         ]
     )
     stale.to_parquet(paths["entry_biounit_chains"], index=False)
-    metrics = json.loads(paths["metrics"].read_text())
-    metrics["version"] = COLLATION_VERSION - 1
-    paths["metrics"].write_text(json.dumps(metrics))
 
     refreshed = collate_shard(tmp_path, "ab", memory_limit="1GB")
 
@@ -835,7 +876,69 @@ def test_collate_shard_does_not_reuse_older_format(tmp_path: Path) -> None:
         "chain_num_contacting_ions",
         "chain_num_contacting_artifacts",
         "chain_num_contacting_other_ligands",
+        "chain_num_contacting_proteins",
     }.issubset(pq.read_schema(paths["entry_biounit_chains"]).names)
+
+
+def test_ligand_only_sidecars_are_collatable(tmp_path: Path) -> None:
+    _write_release(tmp_path)
+    for path in tmp_path.glob("raw_entries/*/*/entry_biounit_chains.parquet"):
+        frame = pd.read_parquet(path).drop(columns="chain_num_contacting_proteins")
+        frame.to_parquet(path, index=False)
+
+    report = run_collation(tmp_path, memory_limit="1GB")
+    biounits = pd.read_parquet(tmp_path / "index/entry_biounit_chains.parquet")
+
+    assert report["ligand_contacts_complete"] is True
+    assert report["protein_contacts_complete"] is False
+    assert biounits["chain_num_contacting_proteins"].isna().all()
+
+    repaired = repair_collation(tmp_path, ["1abc"], memory_limit="1GB")
+    repaired_biounits = pd.read_parquet(tmp_path / "index/entry_biounit_chains.parquet")
+    assert repaired["ligand_contacts_complete"] is True
+    assert repaired["protein_contacts_complete"] is False
+    assert repaired_biounits["chain_num_contacting_proteins"].isna().all()
+
+
+def test_targeted_repair_adds_nullable_contacts_to_legacy_biounit_table(
+    tmp_path: Path,
+) -> None:
+    _write_release(tmp_path)
+    run_collation(tmp_path, memory_limit="1GB")
+    installed_path = tmp_path / "index/entry_biounit_chains.parquet"
+    installed = pd.read_parquet(installed_path).drop(
+        columns="chain_num_contacting_proteins"
+    )
+    installed.to_parquet(installed_path, index=False)
+    raw_path = tmp_path / "raw_entries/ab/1abc/entry_biounit_chains.parquet"
+    raw = pd.read_parquet(raw_path).drop(columns="chain_num_contacting_proteins")
+    raw.to_parquet(raw_path, index=False)
+    marker_path = tmp_path / "index/collation.json"
+    marker = json.loads(marker_path.read_text())
+    marker.pop("ligand_contacts_complete")
+    marker.pop("protein_contacts_complete")
+    marker_path.write_text(json.dumps(marker))
+
+    repaired = repair_collation(tmp_path, ["1abc"], memory_limit="1GB")
+    repaired_biounits = pd.read_parquet(installed_path)
+
+    assert repaired["ligand_contacts_complete"] is True
+    assert repaired["protein_contacts_complete"] is False
+    assert "chain_num_contacting_proteins" in repaired_biounits
+    assert repaired_biounits["chain_num_contacting_proteins"].isna().all()
+
+
+def test_collation_rejects_mixed_contact_availability(tmp_path: Path) -> None:
+    _write_release(tmp_path)
+    path = next(tmp_path.glob("raw_entries/*/*/entry_biounit_chains.parquet"))
+    frame = pd.read_parquet(path).drop(columns="chain_num_contacting_proteins")
+    frame.to_parquet(path, index=False)
+
+    with pytest.raises(
+        ValueError,
+        match="mixed biological-assembly contact schemas",
+    ):
+        plan_collation(tmp_path)
 
 
 def test_collation_rejects_unknown_biounit_contact_counts(tmp_path: Path) -> None:
@@ -847,7 +950,7 @@ def test_collation_rejects_unknown_biounit_contact_counts(tmp_path: Path) -> Non
 
     with pytest.raises(
         ValueError,
-        match="invalid biological-assembly ligand contact counts",
+        match="invalid biological-assembly contact counts",
     ):
         run_collation(tmp_path, memory_limit="1GB")
 

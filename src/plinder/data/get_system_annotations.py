@@ -117,7 +117,28 @@ class GetPlinderAnnotation:
             frame: pd.DataFrame,
             *,
             merge_keys: tuple[str, ...] | None = None,
+            carry_columns: tuple[str, ...] = (),
+            replace_columns: tuple[str, ...] = (),
         ) -> None:
+            if (
+                not preserve_existing_shared
+                and carry_columns
+                and merge_keys is not None
+                and path.is_file()
+            ):
+                existing = pd.read_parquet(path)
+                carried = [
+                    column
+                    for column in carry_columns
+                    if column in existing.columns and column not in frame.columns
+                ]
+                if carried:
+                    frame = frame.merge(
+                        existing.loc[:, [*merge_keys, *carried]],
+                        on=list(merge_keys),
+                        how="left",
+                        validate="one_to_one",
+                    )
             if preserve_existing_shared and path.is_file():
                 if merge_keys is None:
                     return
@@ -130,6 +151,7 @@ class GetPlinderAnnotation:
                     raise ValueError(
                         f"incoming {path} is missing merge keys: {missing}"
                     )
+                existing_columns = set(existing.columns)
                 new_columns = [
                     column for column in frame.columns if column not in existing.columns
                 ]
@@ -137,6 +159,18 @@ class GetPlinderAnnotation:
                     additions = frame.loc[:, [*merge_keys, *new_columns]]
                     existing = existing.merge(
                         additions,
+                        on=list(merge_keys),
+                        how="left",
+                        validate="one_to_one",
+                    )
+                refreshed = [
+                    column
+                    for column in replace_columns
+                    if column in existing_columns and column in frame.columns
+                ]
+                if refreshed:
+                    existing = existing.drop(columns=refreshed).merge(
+                        frame.loc[:, [*merge_keys, *refreshed]],
                         on=list(merge_keys),
                         how="left",
                         validate="one_to_one",
@@ -152,7 +186,7 @@ class GetPlinderAnnotation:
                     incoming.loc[:, list(merge_keys)]
                 )
                 missing_rows = incoming.loc[~incoming_keys.isin(existing_keys)]
-                if missing_rows.empty and not new_columns:
+                if missing_rows.empty and not new_columns and not refreshed:
                     return
                 frame = pd.concat([existing, missing_rows], ignore_index=True)
             temporary = path.with_suffix(".parquet.tmp")
@@ -178,6 +212,12 @@ class GetPlinderAnnotation:
             entry_folder / "entry_biounit_chains.parquet",
             self.entry.biounit_chains_to_df(),
             merge_keys=("entry_pdb_id", "biounit_id", "chain_instance"),
+            carry_columns=(
+                ("chain_num_contacting_proteins",) if not replace_interfaces else ()
+            ),
+            replace_columns=(
+                ("chain_num_contacting_proteins",) if preserve_existing_shared else ()
+            ),
         )
         source_path = entry_folder / "entry_source.parquet"
         if not preserve_existing_shared or not source_path.is_file():

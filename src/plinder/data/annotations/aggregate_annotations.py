@@ -52,8 +52,10 @@ from plinder.data.annotations.interaction_utils import (
 )
 from plinder.data.annotations.interface_utils import (
     DEFAULT_MIN_INTERFACE_RESIDUES,
+    ProteinChainContacts,
     ProteinInterface,
     detect_protein_interfaces,
+    find_protein_chain_contacts,
 )
 from plinder.data.annotations.ligand_utils import (
     BiounitSpatialIndex,
@@ -789,6 +791,7 @@ class System(DocBaseModel):
 
 class Entry(DocBaseModel):
     _ligand_contacts_requested: bool = PrivateAttr(default=False)
+    _protein_contacts_requested: bool = PrivateAttr(default=False)
     # SUBJECT OF INVESTIGATION comp_ids; None when the category is absent
     _subject_of_investigation_comp_ids: frozenset[str] | None = PrivateAttr(
         default=None
@@ -906,6 +909,13 @@ class Entry(DocBaseModel):
         description=(
             "[EXCLUDE] Counts of ion, artifact, and other ligand chains near "
             "each biological-assembly receptor chain instance"
+        ),
+    )
+    biounit_protein_contact_counts: dict[str, dict[str, int]] = Field(
+        default_factory=dict,
+        description=(
+            "[EXCLUDE] Number of other polypeptide chain instances contacting "
+            "each chain in a biological assembly"
         ),
     )
     failed_assembly_ids: list[str] = Field(
@@ -1580,6 +1590,19 @@ class Entry(DocBaseModel):
             for chain_instance, chain_counts in counts.items()
         }
 
+    def _record_biounit_protein_contact_counts(
+        self,
+        biounit_id: str,
+        contacts: ProteinChainContacts,
+    ) -> None:
+        """Count distinct polypeptide partners for each assembly-chain instance."""
+        self._protein_contacts_requested = True
+        counts: Counter[str] = Counter()
+        for chain_1, chain_2 in contacts:
+            counts[chain_1] += 1
+            counts[chain_2] += 1
+        self.biounit_protein_contact_counts[str(biounit_id)] = dict(counts)
+
     @classmethod
     def _from_cif_block(cls, cif_data: pdbx.CIFBlock, *, pdb_id: str) -> Entry:
         """Create an entry carrying the block's deposition metadata.
@@ -1828,6 +1851,17 @@ class Entry(DocBaseModel):
                 contact_threshold=neighboring_residue_threshold,
             )
         if include_interfaces:
+            assert spatial_index is not None
+            protein_contacts = find_protein_chain_contacts(
+                biounit,
+                chains=self.chains,
+                contact_radius=interface_contact_radius,
+                spatial_index=spatial_index,
+            )
+            self._record_biounit_protein_contact_counts(
+                biounit_id,
+                protein_contacts,
+            )
             self.interfaces.extend(
                 detect_protein_interfaces(
                     biounit,
@@ -1840,6 +1874,7 @@ class Entry(DocBaseModel):
                     annotate_prodigy=interface_annotate_prodigy,
                     spatial_index=spatial_index,
                     chain_pair_contact_areas=chain_pair_areas,
+                    chain_contacts=protein_contacts,
                 )
             )
         if not include_ligands or not ligand_classes.primary_asym_ids:
@@ -2020,6 +2055,7 @@ class Entry(DocBaseModel):
             cls._clear_ligand_files(save_folder, pdb_id)
         entry = cls._from_cif_block(cif_data, pdb_id=pdb_id)
         entry._ligand_contacts_requested = include_ligands
+        entry._protein_contacts_requested = include_interfaces
         # Unliganded entries still supply apo chains and assembly membership.
         # They do not require a ligand bond graph (e.g. CA-only proteins).
         require_ligand_bonds = (
@@ -2384,6 +2420,7 @@ class Entry(DocBaseModel):
         )
         entry = cls._from_cif_block(cif_data, pdb_id=pdb_id)
         entry._ligand_contacts_requested = include_ligands
+        entry._protein_contacts_requested = include_interfaces
         ligand_classes = entry._attach_chains(
             atoms,
             cif_data,
@@ -2791,16 +2828,25 @@ class Entry(DocBaseModel):
             "chain_num_contacting_artifacts",
             "chain_num_contacting_other_ligands",
         ]
+        protein_contact_column = "chain_num_contacting_proteins"
         contacts_computed = self._ligand_contacts_requested or bool(
             self.biounit_ligand_contact_counts
         )
         if contacts_computed:
             columns.extend(contact_columns)
+        protein_contacts_computed = self._protein_contacts_requested or bool(
+            self.biounit_protein_contact_counts
+        )
+        if protein_contacts_computed:
+            columns.append(protein_contact_column)
         rows = []
         water_chains = set(self.water_chains)
         ligand_chains = set(self.ligand_like_chains)
         for biounit_id, chain_instances in sorted(self.biounit_chain_ids.items()):
             contact_counts = self.biounit_ligand_contact_counts.get(str(biounit_id), {})
+            protein_contact_counts = self.biounit_protein_contact_counts.get(
+                str(biounit_id), {}
+            )
             for chain_instance in sorted(set(chain_instances)):
                 asym_id = chain_instance.split(".", maxsplit=1)[-1]
                 if asym_id in water_chains:
@@ -2830,6 +2876,10 @@ class Entry(DocBaseModel):
                                 chain_counts.get("other_ligands", 0)
                             ),
                         }
+                    )
+                if protein_contacts_computed:
+                    row[protein_contact_column] = int(
+                        protein_contact_counts.get(chain_instance, 0)
                     )
                 rows.append(row)
         return pd.DataFrame(rows, columns=columns)

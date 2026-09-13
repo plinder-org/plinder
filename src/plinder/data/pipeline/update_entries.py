@@ -64,7 +64,15 @@ def _combine_tables(
                 if name == "system_validation"
                 else "old_rows.entry_pdb_id = removed_entries.entry_pdb_id"
             )
-            retained = f"SELECT old_rows.* FROM old_rows ANTI JOIN removed_entries ON {condition}"
+            old_select = "old_rows.*"
+            if name == "entry_biounit_chains":
+                old_select = collate._biounit_select_with_nullable_contacts(
+                    "old_rows", collate._relation_columns(connection, "old_rows")
+                )
+            retained = (
+                f"SELECT {old_select} FROM old_rows "
+                f"ANTI JOIN removed_entries ON {condition}"
+            )
             query = retained
             if incoming is not None:
                 connection.read_parquet(str(incoming / "index" / filename)).create_view(
@@ -119,6 +127,11 @@ def apply_entry_update(
     if base_marker["status"] != "complete":
         raise ValueError("finish the existing release before preparing an update")
     min_residues = int(base_marker["interface_min_residues"])
+    ligand_contacts_complete, protein_contacts_complete = (
+        collate._release_contact_coverage(
+            base_marker, base_tables["entry_biounit_chains"]
+        )
+    )
     if int(interface_cfg["min_interface_residues"]) != min_residues:
         raise ValueError("update interface threshold differs from the existing release")
     changed = entries.loc[entries.action.isin(["added", "revised"])].copy()
@@ -232,6 +245,8 @@ def apply_entry_update(
         staged_tables,
         expected_counts=counts,
         min_interface_residues=min_residues,
+        require_ligand_contacts=ligand_contacts_complete,
+        require_protein_contacts=protein_contacts_complete,
         threads=threads,
         memory_limit=memory_limit,
         scratch_dir=scratch_dir,
@@ -252,6 +267,8 @@ def apply_entry_update(
         incoming_entries=str(incoming) if len(changed) else None,
         ingested_pdb_ids=changed.pdb_id.tolist(),
         obsolete_pdb_ids=entries.loc[entries.action == "obsolete", "pdb_id"].tolist(),
+        ligand_contacts_complete=ligand_contacts_complete,
+        protein_contacts_complete=protein_contacts_complete,
         **validation,
     )
     write_json_atomic(
@@ -260,6 +277,8 @@ def apply_entry_update(
             "status": collate.REPAIR_REQUIRED_STATUS,
             "mode": "targeted_repair",
             "interface_min_residues": min_residues,
+            "ligand_contacts_complete": ligand_contacts_complete,
+            "protein_contacts_complete": protein_contacts_complete,
             "entry_update": str(marker_path),
             **validation,
         },

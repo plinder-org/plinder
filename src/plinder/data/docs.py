@@ -82,6 +82,9 @@ DERIVED_COLUMN_DESCRIPTIONS = {
     "chain_num_contacting_other_ligands": (
         "Number of other ligand chains contacting this assembly-chain instance"
     ),
+    "chain_num_contacting_proteins": (
+        "Number of other polypeptide chains contacting this assembly-chain instance"
+    ),
     "source_mmcif_major_revision": (
         "Major revision number of the source PDB mmCIF used during ingest"
     ),
