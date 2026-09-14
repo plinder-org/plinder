@@ -4,14 +4,15 @@
 The plinder.core package collects useful functions and classes for interacting
 with the PLINDER dataset. It manages app configuration and will automatically
 download (and / or sync) the dataset to a local cache in a lazy manner, when
-particular assets are requested. One side effect of this is that plinder.core
-will (by default) compare the MD5 checksums of files on disk and files in cloud
-storage when they are accessed.
+particular assets are requested. Downloads are checked against the release
+manifest for size and MD5 before replacing a local file. Cached files with the
+expected size are reused without rehashing; force a refresh to repair same-size
+local corruption.
 
 Note
 ----
-You can disable the MD5 checksum comparison between local files and remote files
-by setting the environment variable `PLINDER_OFFLINE=true`.
+Set the environment variable `PLINDER_OFFLINE=true` to use local files without
+network access.
 """
 from plinder.core.index.system import PlinderSystem
 from plinder.core.index.utils import get_manifest, get_plindex

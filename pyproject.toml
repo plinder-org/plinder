@@ -20,7 +20,7 @@ dependencies = [
     "eval_type_backport",
     "posebusters",
     "duckdb",
-    "cloudpathlib",
+    "cloudpathlib>=0.25,<0.26",
     "mols2grid",
     "six",
 ]
@@ -58,6 +58,7 @@ test = [
 ]
 type = [
     "mypy==1.2.0",
+    "cloudpathlib>=0.25,<0.26",
     "types-PyYAML",
     "types-requests",
 ]
