@@ -2,46 +2,48 @@
 
 ## Getting the data
 
-The PLINDER data is accessible from a _Google Cloud Platform_
-[bucket](https://cloud.google.com/storage/docs/buckets), a container for cloud storage
-of data.
-The bucket URL of PLINDER is `gs://plinder`.
+The published `2024-06/v2` dataset is served from Cloudflare R2 at
+`https://plinderdata.org/2024-06/v2/`. Install `plinder` to download files with
+checksum verification and automatic retries; no Google Cloud SDK is required.
 
-The PLINDER dataset is versioned via two parameters:
+The dataset is versioned by `PLINDER_RELEASE` (RCSB sync) and
+`PLINDER_ITERATION` (development within a release). The public R2 downloader
+currently supports only `PLINDER_RELEASE=2024-06` and `PLINDER_ITERATION=v2`.
+The old `tutorial` iteration is not mirrored.
 
-- `PLINDER_RELEASE`: the time stamp of the last RCSB sync
-- `PLINDER_ITERATION`: iterative development within a release
+Downloaded files are checked against the release manifest's size and MD5 before
+replacing a local file. Cached files with the expected size are reused without
+rehashing. Missing or truncated files are downloaded again; same-size local
+corruption requires deleting the affected file or setting `data.force_update`.
+Interrupted downloads retry from the beginning, up to three attempts.
 
-There are two ways to obtain the data:
+Set `PLINDER_OFFLINE=1` to use local files without network requests. Unset it to
+return online: any nonempty value enables offline mode. `PLINDER_MIRROR_URL`
+can select an alternate HTTP(S) bucket root serving the same static release
+and its manifest.
 
-1. Use the `plinder` python package and corresponding API
-    - `pip install plinder`
-2. Use the `gsutil` command line tool directly
-   - [installing `gsutil`](https://cloud.google.com/storage/docs/gsutil_install)
+For selective access, the API downloads only the required files and archive
+shards:
 
-For the purpose of this tutorial we set `PLINDER_ITERATION` to `tutorial`, to download
-only a small manageable excerpt of the entries.
+```python
+from plinder.core import PlinderSystem
 
-Using the `plinder` package:
+system = PlinderSystem(system_id="1avd__1__1.A__1.C")
+print(system.receptor_cif)
+```
+
+To download the full dataset instead:
+
 ```bash
-# adding --yes will skip all confirmation prompts
-plinder_download --release 2024-06 --iteration tutorial --yes
+# Adding --yes skips confirmation prompts. Allow hundreds of GB for the data
+# and additional space for extracted archives.
+plinder_download --release 2024-06 --iteration v2
 ```
-
-Using `gsutil`:
-```console
-$ export PLINDER_RELEASE=2024-06
-$ export PLINDER_ITERATION=tutorial
-$ mkdir -p ~/.local/share/plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/
-$ gsutil -m cp -r "gs://plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/*" ~/.local/share/plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/
-```
-
-The full dataset (`PLINDER_ITERATION=v2`) has a size of hundreds of GB, so you are
-advised to have sufficient space for usage of the production dataset.
 
 :::{note}
-The versions used for the preprint are `gs://plinder/2024-04/v1` (full dataset) and `gs://plinder/2024-04/v0` (non-redundant set used to train DffDock). However, the current version with updated annotations to be used for the
-[MLSB challenge](https://www.mlsb.io/) is `gs://plinder/2024-06/v2`.
+The historical preprint releases `2024-04/v1` and `2024-04/v0` are not available
+through this downloader. The current release is `2024-06/v2`; existing local
+historical data can still be used with `PLINDER_OFFLINE=1`.
 :::
 
 ## Understanding the directory structure
@@ -50,7 +52,7 @@ The directory downloaded from the bucket has the following structure:
 
 ```bash
 2024-06/                     # The PLINDER release
-|-- tutorial                 # The PLINDER iteration
+|-- v2                       # The PLINDER iteration
 |   |-- clusters             # Pre-calculated cluster labels derived from the protein similarity dataset
 |   |-- dbs                  # TSVs containing the raw files and IDs in the foldseek and mmseqs sub-databases
 |   |-- entries              # Raw annotations prior to consolidation (split by `two_char_code` and zipped)
@@ -72,8 +74,10 @@ rest are for more curious users.
 
 To download specific directories of interest, for example `splits`, run:
 
-```bash
-$ gsutil -m cp -r gs://plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/splits ~/.local/share/plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/
+```python
+from plinder.core.utils.cpl import get_plinder_path
+
+splits = get_plinder_path(rel="splits")
 ```
 
 ## Unpacking the structure files
@@ -208,7 +212,8 @@ This means, all systems with the same cluster ID belong to the same cluster.
 The `splits` directory contains an index for _training-validation-test_ splits contained
 in a single parquet file.
 The _PL50_ split described in the [article](https://doi.org/10.1101/2024.07.17.603955)
-can be found in `gs://plinder/2024-04/v1/splits/plinder-pl50.parquet`.
+belongs to the historical `2024-04/v1` release, which is not mirrored on R2.
+The current split is `2024-06/v2/splits/split.parquet`.
 
 ```python
 >>> import pandas as pd
