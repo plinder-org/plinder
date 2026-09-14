@@ -66,6 +66,16 @@ def test_resn2seq(cif_atom_array):
     assert atoms.resn2seq(resn[0:2]) == "TT"
 
 
+def test_default_sequence_alignment():
+    assert atoms.align_sequences("ACDE", "ACDE") == (
+        "ACDE",
+        "ACDE",
+        [1, 2, 3, 4],
+        [1, 2, 3, 4],
+    )
+    assert atoms.get_seq_identity("ACDE", "ACDE") == pytest.approx(1.0)
+
+
 def test_get_seq_alignments(read_plinder_mount):
     pdb = PlinderSystem(system_id="19hc__1__1.A_1.B__1.K_1.M_1.N").receptor_pdb
     a = atoms.atom_array_from_pdb_file(pdb)
