@@ -23,8 +23,9 @@ from plinder.core.utils.io import download_alphafold_cif_file, retry
 from plinder.core.utils.log import setup_logger
 from plinder.data.pipeline import transform
 
-CIF_PATH = "rsync-nextgen.wwpdb.org::rsync/data/entries/divided"
+CIF_PATH = "rsync-nextgen.pdbj.org::ftp_nextgen/data/entries/divided"
 CIF_GLOB = "*-enrich.cif.gz"
+CIF_PORT = "873"
 VAL_PATH = "rsync.rcsb.org::ftp/validation_reports"
 VAL_GLOB = "*_validation.xml.gz"
 RCSB_PORT = "33444"
@@ -449,8 +450,9 @@ def rsync_rcsb(
     dest = f"{data_dir}/{two_char_code}/"
     Path(dest).mkdir(exist_ok=True, parents=True)
 
+    port = CIF_PORT if kind == "cif" else RCSB_PORT
     cmd = (
-        f"rsync -rlpt -z --delete --port={RCSB_PORT} --no-perms "
+        f"rsync -rlpt -z --delete --port={port} --no-perms "
         f'--include "*/" --include "{contents}" --exclude="*" '
         f"{server} {dest}"
     )
@@ -474,7 +476,8 @@ def list_rcsb(
             server = f"{server}{pdb_id}"
     else:
         server = f"{server}/"
-    cmd = f"rsync --port={RCSB_PORT} --list-only {server}"
+    port = CIF_PORT if kind == "cif" else RCSB_PORT
+    cmd = f"rsync --port={port} --list-only {server}"
     LOG.info(f"running: {cmd}")
     output = check_output(cmd, shell=True, text=True).splitlines()
     return [

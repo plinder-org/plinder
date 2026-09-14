@@ -185,21 +185,39 @@ def test_kinase_ligand(test_env, all_kinase_paths):
     )
 
 
-def test_rsync_rcsb(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    "kind, server, port",
+    [
+        ("cif", "rsync-nextgen.pdbj.org::ftp_nextgen/data/entries/divided", 873),
+        ("val", "rsync.rcsb.org::ftp/validation_reports", 33444),
+    ],
+)
+def test_rsync_rcsb(tmp_path, monkeypatch, kind, server, port):
+    commands = []
     monkeypatch.setattr(
         "plinder.data.pipeline.io.check_output",
-        lambda *_, **__: None,
+        lambda command, **kwargs: commands.append(command),
     )
-    io.rsync_rcsb(kind="cif", two_char_code="aa", data_dir=tmp_path)
+    io.rsync_rcsb(kind=kind, two_char_code="aa", data_dir=tmp_path)
+    assert f"--port={port}" in commands[0]
+    assert f"{server}/aa/" in commands[0]
 
 
-def test_list_rcsb(monkeypatch):
+@pytest.mark.parametrize("kind, port", [("cif", 873), ("val", 33444)])
+def test_list_rcsb(monkeypatch, kind, port):
+    commands = []
+
+    def list_directories(command, **kwargs):
+        commands.append(command)
+        return "d aaaa \nd baan"
+
     monkeypatch.setattr(
         "plinder.data.pipeline.io.check_output",
-        lambda *_, **__: "d aaaa \nd baan",
+        list_directories,
     )
-    pdbs = io.list_rcsb(kind="cif", two_char_code="aa")
+    pdbs = io.list_rcsb(kind=kind, two_char_code="aa")
     assert pdbs == ["aaaa", "baan"]
+    assert f"--port={port}" in commands[0]
 
 
 def test_downloads_components_cif_fetch(tmp_path, monkeypatch, mini_component_cif_gz):
