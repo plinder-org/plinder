@@ -297,3 +297,96 @@ def test_full_download_includes_database_metadata(tmp_path, monkeypatch):
     monkeypatch.setattr(utils, "get_zips_to_unpack", lambda **kwargs: {})
     utils.download_plinder_cmd(["--yes"])
     assert "dbs" in requested
+
+
+@pytest.mark.parametrize("resource", ["manifest", "object"])
+@pytest.mark.parametrize(
+    "failure", ["503", "stall_headers", "stall_body", "exhausted", "404", "malformed"]
+)
+def test_download_recovery(tmp_path, monkeypatch, resource, failure):
+    from http.server import BaseHTTPRequestHandler
+    from threading import Event
+    from urllib.error import HTTPError
+
+    payload = b"dataset"
+    listing = gzip.compress(
+        json.dumps(
+            {
+                "key": "data",
+                "size": len(payload),
+                "md5": base64.b64encode(hashlib.md5(payload).digest()).decode(),
+            }
+        ).encode()
+    )
+    release_stall = Event()
+    requests = []
+    original_timeout = dataset._TimeoutHandler.http_request
+
+    def short_timeout(self, request):
+        request = original_timeout(self, request)
+        assert request.timeout == 60
+        request.timeout = 0.1
+        return request
+
+    monkeypatch.setattr(dataset._TimeoutHandler, "http_request", short_timeout)
+    monkeypatch.setattr(dataset, "sleep", lambda _: None)
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_HEAD(self):
+            self.send_error(503)  # Bootstrap must use GET, not hide this as missing.
+
+        def do_GET(self):
+            is_manifest = self.path.endswith("manifest.jsonl.gz")
+            selected = is_manifest == (resource == "manifest")
+            if selected:
+                requests.append(self.path)
+            fail = selected and (len(requests) == 1 or failure in {"404", "exhausted"})
+            if fail and failure in {"503", "404", "exhausted"}:
+                self.send_error(503 if failure == "exhausted" else int(failure))
+                return
+            if fail and failure == "stall_headers":
+                release_stall.wait(5)
+                return
+            data = listing if is_manifest else payload
+            if fail and failure == "malformed":
+                data = b"invalid"  # Same length as the object: checksum must reject it.
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            if fail and failure == "stall_body":
+                release_stall.wait(5)
+                return
+            self.wfile.write(data)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    destination = tmp_path / "data"
+    destination.write_bytes(b"existing")
+
+    def download():
+        client = dataset.ReleaseClient(f"http://127.0.0.1:{server.server_port}")
+        client.path("data").download_to(destination)
+
+    try:
+        if failure in {"404", "malformed", "exhausted"}:
+            error = (
+                (ValueError, gzip.BadGzipFile) if failure == "malformed" else HTTPError
+            )
+            with pytest.raises(error):
+                download()
+            assert len(requests) == (3 if failure == "exhausted" else 1)
+            assert destination.read_bytes() == b"existing"
+        else:
+            download()
+            assert len(requests) == 2
+            assert destination.read_bytes() == payload
+    finally:
+        release_stall.set()
+        server.shutdown()
+        server.server_close()
+        thread.join()
+        dataset.manifest.cache_clear()

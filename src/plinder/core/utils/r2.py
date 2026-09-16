@@ -13,6 +13,7 @@ from time import sleep
 from typing import Iterator, TypedDict, TypeVar, cast
 from urllib.error import HTTPError
 from urllib.parse import quote, unquote
+from urllib.request import BaseHandler, Request
 
 from cloudpathlib import CloudPath as BaseCloudPath
 from cloudpathlib import HttpPath, HttpsClient, HttpsPath
@@ -32,12 +33,60 @@ def checked_key(key: str) -> str:
     return key
 
 
+class _TimeoutHandler(BaseHandler):
+    def http_request(self, request: Request) -> Request:
+        # Bound connection/read inactivity without limiting total transfer time.
+        request.timeout = 60
+        return request
+
+    https_request = http_request
+
+
+class _DownloadClient(HttpsClient):
+    def __init__(self) -> None:
+        super().__init__(auth=_TimeoutHandler())
+
+    def _download(
+        self,
+        path: HttpPath,
+        local_path: str | PathLike[str],
+        expected_size: int | None = None,
+    ) -> Path:
+        destination = Path(local_path)
+        for attempt in range(3):
+            try:
+                super()._download_file(path, destination)
+                if (
+                    expected_size is not None
+                    and destination.stat().st_size != expected_size
+                ):
+                    raise OSError("Incomplete dataset download")
+                break
+            except (OSError, HTTPException) as exc:
+                if isinstance(exc, HTTPError) and exc.code not in {
+                    408,
+                    429,
+                    500,
+                    502,
+                    503,
+                    504,
+                }:
+                    raise
+                if attempt == 2:
+                    raise
+                sleep(2**attempt)
+        return destination
+
+
 @lru_cache(maxsize=4)
 def manifest(remote: str) -> dict[str, ManifestRecord]:
     with TemporaryDirectory() as tmp:
         path = Path(tmp) / "manifest.jsonl.gz"
         path_class = HttpsPath if remote.startswith("https:") else HttpPath
-        path_class(remote + "/manifest.jsonl.gz").download_to(path)
+        client = _DownloadClient()
+        source = path_class(remote + "/manifest.jsonl.gz", client=client)
+        # A direct GET preserves transient errors hidden by cloudpathlib's HEAD check.
+        client._download(source, path)
         data = path.read_bytes()
     records: dict[str, ManifestRecord] = {}
     for line in gzip.decompress(data).splitlines():
@@ -51,7 +100,7 @@ def manifest(remote: str) -> dict[str, ManifestRecord]:
     return records
 
 
-class ReleaseClient(HttpsClient):
+class ReleaseClient(_DownloadClient):
     """Use the manifest where public HTTP lacks object listing; delegate transfers."""
 
     def __init__(self, remote: str):
@@ -106,25 +155,7 @@ class ReleaseClient(HttpsClient):
         record = self.records[self.key(path)]
         with TemporaryDirectory(dir=destination.parent) as tmp:
             temporary = Path(tmp) / "download"
-            for attempt in range(3):
-                try:
-                    super()._download_file(path, temporary)
-                    if temporary.stat().st_size != record["size"]:
-                        raise OSError("Incomplete dataset download")
-                    break
-                except (OSError, HTTPException) as exc:
-                    if isinstance(exc, HTTPError) and exc.code not in {
-                        408,
-                        429,
-                        500,
-                        502,
-                        503,
-                        504,
-                    }:
-                        raise
-                    if attempt == 2:
-                        raise
-                    sleep(2**attempt)
+            self._download(path, temporary, expected_size=record["size"])
             digest = hashlib.md5()
             with temporary.open("rb") as stream:
                 for chunk in iter(lambda: stream.read(1024 * 1024), b""):
