@@ -2,6 +2,7 @@
 # Distributed under the terms of the Apache License 2.0
 from __future__ import annotations
 
+import gzip
 import re
 import typing as ty
 from collections import Counter, defaultdict
@@ -1345,9 +1346,15 @@ class Entry(DocBaseModel):
             LOG.error(f"set_validation: Validation file not found {validation_file}")
             return
         try:
-            doc = ValidationFactory(
-                str(validation_file), mmcif_path=str(cif_file)
-            ).getValidation()
+            # libxml2 no longer decompresses gzip input by default.
+            with (
+                gzip.open(validation_file, "rb")
+                if validation_file.suffix == ".gz"
+                else validation_file.open("rb")
+            ) as validation_xml:
+                doc = ValidationFactory(
+                    validation_xml, mmcif_path=str(cif_file)
+                ).getValidation()
             self.validation = EntryValidation.from_entry(doc)
             if self.validation and self.validation.r is not None:
                 for chain in self.chains:
