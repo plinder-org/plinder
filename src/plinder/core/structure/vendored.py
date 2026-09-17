@@ -287,7 +287,7 @@ def stack_filter_intersect(
 def get_seq_alignments(
     ref_seq: str,
     subject_seq: str,
-    gap_penalty: tuple[float, float] = (-10.0, -1.0),
+    gap_penalty: tuple[int, int] = (-10, -1),
 ) -> list[Alignment]:
     """Generate optimal global alignments between two sequences using BLOSUM62 matrix.
 
@@ -297,7 +297,7 @@ def get_seq_alignments(
         The reference sequence.
     subject_seq : (str)
         The subject sequence.
-    gap_penalty : (tuple[float, float], optional)
+    gap_penalty : (tuple[int, int], optional)
         A tuple consisting of the gap open penalty and the gap extension penalty.
 
     Returns
@@ -331,7 +331,7 @@ def get_seq_identity(
     ref_seq: str | None = None,
     subject_seq: str | None = None,
     alignments: list[Alignment] | None = None,
-    gap_penalty: tuple[float, float] = (-10.0, -1.0),
+    gap_penalty: tuple[int, int] = (-10, -1),
 ) -> float:
     """Align an arbitrary sequence with the reference sequence
     Return sequence identity between the two.

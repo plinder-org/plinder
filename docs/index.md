@@ -81,5 +81,6 @@ api/index
 evaluation
 examples/index
 contribution/index
+migration/r2
 citation
 :::

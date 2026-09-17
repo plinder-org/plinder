@@ -7,13 +7,13 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from cloudpathlib import AnyPath
 from tqdm import tqdm
 
 import plinder.core.utils.config
 from plinder.core.scores.index import query_index
 from plinder.core.scores.protein import cross_similarity as protein_cross_similarity
 from plinder.core.structure import smallmols_similarity
+from plinder.core.utils.cpl import get_plinder_path
 from plinder.core.utils.log import setup_logger
 
 cfg = plinder.core.get_config()
@@ -108,7 +108,7 @@ def compute_ligand_mmp_max_similarities(
     test_label: str,
     output_file: Path,
 ) -> None:
-    mmp_path = AnyPath(f"{cfg.data.plinder_remote}/mmp/plinder_mms.csv.gz")
+    mmp_path = get_plinder_path(rel="mmp/plinder_mms.csv.gz")
     mmp_sim_dict: dict[
         str, dict[str, float]
     ] = smallmols_similarity.get_mmp_similarity_dict(mmp_path=mmp_path)

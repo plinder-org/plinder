@@ -110,7 +110,7 @@ def get_zips_to_unpack(
     root = cpl.get_plinder_path(rel=getattr(conf.data, kind), download=False)
     zips: dict[Path, list[str]] = {}
     if id_kind is None:
-        for zip in root.glob("*.zip"):
+        for zip in cpl.list_zip_paths(getattr(conf.data, kind)):
             zips.setdefault(zip, [])
     elif id_kind == "system_ids":
         for system_id in ids:
@@ -139,11 +139,7 @@ def get_zips_to_unpack(
                 LOG.error(f"removing malformed zip {path}")
                 path.unlink()
 
-    cpl.download_paths(
-        paths=cpl.get_plinder_paths(
-            paths=[path for path in paths if not path.is_file()]
-        )
-    )
+    cpl.download_paths(paths=paths)
 
     if kind in ["systems", "linked_structures"]:
         if len(paths) > 10:

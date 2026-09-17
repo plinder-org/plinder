@@ -237,6 +237,7 @@ class DataConfig:
 
     ingest: str = "ingest"
     validation: str = "validation"
+    dbs: str = "dbs"
     clusters: str = "clusters"
     entries: str = "entries"
     fingerprints: str = "fingerprints"
@@ -262,7 +263,8 @@ class DataConfig:
             self.plinder_dir = f"{self.plinder_mount}/{suffix}"
         else:
             self.plinder_dir = f"{self.plinder_mount}/{self.plinder_bucket}/{suffix}"
-        self.plinder_remote = f"gs://{self.plinder_bucket}/{suffix}"
+        base = getenv("PLINDER_MIRROR_URL", "https://plinderdata.org").rstrip("/")
+        self.plinder_remote = f"{base}/{suffix}"
 
 
 @dataclass

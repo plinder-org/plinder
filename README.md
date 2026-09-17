@@ -64,6 +64,16 @@ with the dataset.
 
 #### Changelog:
 
+Unreleased:
+- Public downloads for `2024-06/v2` now use `https://plinderdata.org` (Cloudflare R2).
+  The consumer no longer supports GCS or downloading older releases.
+- Downloads stream to disk and verify size and MD5 before atomic replacement.
+  Interrupted transfers retry from the start. Cached files with the expected size
+  are reused; offline access retains the existing cache layout. Use a forced
+  refresh to repair same-size local corruption.
+- Google storage dependencies are now optional: install `plinder[data]` for the
+  GCS data-generation utilities.
+
 - 2024-06/v2 (Current):
     - New systems added based on the 2024-06 RCSB sync
     - Updated system definition to be more stable and depend only on ligand distance rather than PLIP
@@ -105,16 +115,14 @@ The *PLINDER* dataset is provided in two ways:
 
 ## Downloading the dataset
 
-The dataset can be downloaded from the bucket with
-[gsutil](https://cloud.google.com/storage/docs/gsutil_install).
+Install the Python package below, then run `plinder_download` to download the
+published `2024-06/v2` release from Cloudflare R2. Dataset APIs also download
+required files lazily. No Google Cloud credentials or SDK are needed.
 
-```console
-$ export PLINDER_RELEASE=2024-06 # Current release
-$ export PLINDER_ITERATION=v2 # Current iteration
-$ mkdir -p ~/.local/share/plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/
-$ gsutil -m cp -r "gs://plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/*" ~/.local/share/plinder/${PLINDER_RELEASE}/${PLINDER_ITERATION}/
-```
-For details on the sub-directories, see [Documentation](https://plinder-org.github.io/plinder/tutorial/dataset.html).
+The default endpoint is `https://plinderdata.org`; `PLINDER_MIRROR_URL` can select
+another HTTP mirror. This release no longer falls back to GCS. Other release
+versions are unavailable through the public downloader. Existing cache paths and
+`PLINDER_OFFLINE` behavior are preserved.
 
 ## Installing the Python package
 

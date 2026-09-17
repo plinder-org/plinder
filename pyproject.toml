@@ -10,8 +10,6 @@ dependencies = [
     "tqdm",
     "plotly",
     "nbformat",
-    "google-cloud-storage",
-    "gcsfs",
     "gemmi",
     "rdkit>=2024.03.6",
     "pyarrow",
@@ -20,7 +18,7 @@ dependencies = [
     "eval_type_backport",
     "posebusters",
     "duckdb",
-    "cloudpathlib",
+    "cloudpathlib>=0.25,<0.26",
     "mols2grid",
     "six",
 ]
@@ -44,6 +42,7 @@ plinder_stratify = "plinder.eval.docking.stratify_test_set:stratify_cmd"
 plinder_plot = "plinder.eval.docking.make_plots:plot_cmd"
 
 [project.optional-dependencies]
+data = ["google-cloud-storage", "gcsfs"]
 lint = [
     "ruff == 0.1.2",
     "pre-commit == 2.21.0",
@@ -58,11 +57,12 @@ test = [
 ]
 type = [
     "mypy==1.2.0",
+    "cloudpathlib>=0.25,<0.26",
     "types-PyYAML",
     "types-requests",
 ]
 dev = [
-    "plinder[lint,test,type]",
+    "plinder[lint,test,type,data]",
 ]
 loader = [
     "torch",
@@ -75,6 +75,7 @@ plots = [
     "scipy",
 ]
 docs = [
+    "google-cloud-storage",
     "itables",
     "jupyter-sphinx",
     "jupyterlab_myst",
