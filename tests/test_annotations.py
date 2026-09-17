@@ -6652,11 +6652,20 @@ def test_smiles_from_nextgen(test_dir, smiles_sample_csv):
     pd.testing.assert_frame_equal(result_df, target_df)
 
 
+@pytest.mark.parametrize("compressed", [True, False])
 def test_get_validation(
     cif_1qz5,
     validation_1qz5,
     mock_alternative_datasets,
+    compressed,
+    tmp_path,
 ):
+    if not compressed:
+        import gzip
+
+        xml = tmp_path / "1qz5_validation.xml"
+        xml.write_bytes(gzip.decompress(validation_1qz5.read_bytes()))
+        validation_1qz5 = xml
     entry_dir = mock_alternative_datasets("1qz5")
     reference_df = pd.DataFrame.from_dict(
         {
