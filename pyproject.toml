@@ -2,7 +2,7 @@
 name = "plinder"
 dynamic = ["version"]
 dependencies = [
-    "biotite >= 1.0",
+    "biotite >= 1.2",
     "numpy",
     "pandas",
     "typing_extensions",
@@ -16,7 +16,7 @@ dependencies = [
     "omegaconf",
     "mmcif",
     "eval_type_backport",
-    "posebusters",
+    "posebusters>=0.6.4",
     "duckdb",
     "cloudpathlib>=0.25,<0.26",
     "mols2grid",

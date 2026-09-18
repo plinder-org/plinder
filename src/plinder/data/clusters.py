@@ -1,8 +1,15 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
+import os
+import sys
 from pathlib import Path
 from time import time
 from typing import Callable, TypeVar
+
+if sys.platform == "darwin":
+    # For macOS only: allow multiple OpenMP runtimes to coexist
+    # (needed on macOS with conda)
+    os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
 import networkit as nk
 import numpy as np
@@ -66,6 +73,9 @@ def make_nk_communities(
     tuple[list[tuple[int, str]], int]
     """
     assert not directed
+    if sys.platform == "darwin":
+        # For macOS only: limit to 1 thread to avoid segfault in PLM with multiple OMP runtimes
+        nk.setNumberOfThreads(1)
     communities = nk.community.detectCommunities(graph, nk.community.PLM(graph))
     community_list = [
         communities.getMembers(i) for i in range(communities.numberOfSubsets())

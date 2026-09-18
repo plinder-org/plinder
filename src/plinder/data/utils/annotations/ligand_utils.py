@@ -30,7 +30,9 @@ from plinder.data.utils.annotations.interaction_utils import (
     run_plip_on_split_structure,
 )
 from plinder.data.utils.annotations.protein_utils import Chain
-from plinder.data.utils.annotations.rdkit_utils import set_smiles_from_ligand_ost
+from plinder.data.utils.annotations.rdkit_utils import (
+    set_smiles_from_ligand_ost,
+)
 from plinder.data.utils.annotations.utils import DocBaseModel
 
 # TODO: replace above with below
@@ -668,12 +670,21 @@ def annotate_interface_gaps_per_chain(
 def validate_chain_residue(obj: dict[str, ty.Any]) -> dict[str, ty.Any]:
     clean = {}
     for k, v in obj.items():
-        key = tuple(k.split(",")) if isinstance(k, str) else k
+        if isinstance(k, str):
+            if "," in k:
+                key: ty.Any = tuple(k.split(","))
+            else:
+                try:
+                    key = int(k)
+                except ValueError:
+                    key = k
+        else:
+            key = k
         if isinstance(v, dict):
             clean[key] = validate_chain_residue(v)
         else:
             clean[key] = v
-    return clean  # type: ignore
+    return clean
 
 
 CrystalContacts = ty.Annotated[
@@ -842,7 +853,7 @@ class Ligand(DocBaseModel):
     )
     crystal_contacts: CrystalContacts = Field(
         default_factory=dict,
-        description="__Dictionary of {instance}.{chain} to residue number to set of interacting crystal contacts",
+        description="__Dictionary of {chain} to residue number to set of interacting crystal contacts",
     )
     waters: dict[str, list[int]] = Field(
         default_factory=dict,
@@ -1005,27 +1016,24 @@ class Ligand(DocBaseModel):
         data_dir : Path, optional
             location of plinder root
         """
-        global \
-            COFACTORS, \
-            ARTIFACTS, \
-            LIST_OF_CCD_SYNONYMS, \
-            CCD_SYNONYMS_DICT, \
-            KINASE_INHIBITORS, \
-            BINDING_AFFINITY
-        if LIST_OF_CCD_SYNONYMS is None or CCD_SYNONYMS_DICT is None:
-            if data_dir is None:
-                raise ValueError(
-                    "data_dir must be provided if CCD_SYNONYMS_DICT or LIST_OF_CCD_SYNONYMS is None"
-                )
-            LIST_OF_CCD_SYNONYMS, CCD_SYNONYMS_DICT = get_ccd_synonyms(data_dir)
-        if COFACTORS is None:
-            COFACTORS = parse_cofactors(data_dir)
-        if ARTIFACTS is None:
-            ARTIFACTS = parse_artifacts()
-        if KINASE_INHIBITORS is None:
-            KINASE_INHIBITORS = parse_kinase_inhibitors(data_dir)
-        if BINDING_AFFINITY is None:
-            BINDING_AFFINITY = get_binding_affinity(data_dir)
+        if data_dir is not None:
+            global \
+                COFACTORS, \
+                ARTIFACTS, \
+                LIST_OF_CCD_SYNONYMS, \
+                CCD_SYNONYMS_DICT, \
+                KINASE_INHIBITORS, \
+                BINDING_AFFINITY
+            if LIST_OF_CCD_SYNONYMS is None or CCD_SYNONYMS_DICT is None:
+                LIST_OF_CCD_SYNONYMS, CCD_SYNONYMS_DICT = get_ccd_synonyms(data_dir)
+            if COFACTORS is None:
+                COFACTORS = parse_cofactors(data_dir)
+            if ARTIFACTS is None:
+                ARTIFACTS = parse_artifacts()
+            if KINASE_INHIBITORS is None:
+                KINASE_INHIBITORS = parse_kinase_inhibitors(data_dir)
+            if BINDING_AFFINITY is None:
+                BINDING_AFFINITY = get_binding_affinity(data_dir)
         ligand_instance_chain = f"{ligand_instance}.{ligand_chain.asym_id}"
         residue_selection = " or ".join(f"rnum={rnum}" for rnum in residue_numbers)
         ligand_selection = f"cname={mol.QueryQuoteName(ligand_instance_chain)} and ({residue_selection})"
@@ -1153,10 +1161,11 @@ class Ligand(DocBaseModel):
             ligand.waters[plip_chain_mapping[plip_chain]].append(resnum)
         # add rdkit properties and type assignments
         ligand.set_rdkit()
-        # set is_artifact and is_cofactor and is_other
-        ligand.identify_artifacts_cofactors_and_other()
-        # unique code parsing!
-        ligand.unique_ccd_code = get_unique_ccd_longname(ligand.ccd_code)
+        if data_dir is not None:
+            # set is_artifact and is_cofactor and is_other
+            ligand.identify_artifacts_cofactors_and_other()
+            # unique code parsing!
+            ligand.unique_ccd_code = get_unique_ccd_longname(ligand.ccd_code)
 
         return ligand
 
@@ -1245,21 +1254,50 @@ class Ligand(DocBaseModel):
                 residues[chain][residue] = "interacting"
         return residues
 
-    def get_pocket_residues_set(self) -> set[tuple[str, int]]:
-        pocket_residues_set = set()
+    def get_pocket_residues_set(self) -> dict[tuple[str, int], set[str]]:
+        """
+        Get a dict of pocket residues in the format (chain_id, residue_number)
+        mapping to biounit instance set
+        """
+        pocket_residues_set = defaultdict(set)
         for chain in self.pocket_residues:
             for residue_number in self.pocket_residues[chain]:
-                pocket_residues_set.add((chain.split(".")[1], residue_number))
+                pocket_residues_set[(chain.split(".")[1], residue_number)].add(
+                    chain.split(".")[0]
+                )
         return pocket_residues_set
 
-    def set_crystal_contacts(
-        self, crystal_contacts: dict[tuple[str, int], set[int]]
+    def label_crystal_contacts(
+        self,
+        symmetry_mate_contacts: dict[
+            tuple[str, int], dict[tuple[str, int], dict[int, set[int]]]
+        ],
     ) -> None:
-        # exclude contacts from neighboring residues in same biounit
+        """
+        Label ligand contacts to chains that are not part of the biounit.
+        """
+        crystal_contacts: dict[tuple[str, int], set[int]] = defaultdict(set[int])
+
+        # get contacts from neigchboring chain residues within the biounit
         pocket_residues = self.get_pocket_residues_set()
-        self.crystal_contacts = {
-            x: y for x, y in crystal_contacts.items() if x not in pocket_residues
-        }
+
+        for residue_number in self.residue_numbers:
+            # get all inter-chain contacts for a given ligand
+            contacts = symmetry_mate_contacts.get(
+                (self.asym_id, residue_number), dict()
+            )
+            for x, y in contacts.items():
+                # x is a tuple rec (chain_id, residue_number)
+                # y is a dict of ligand atom_id : {image_idx} - set of symmetry operations
+                num_crystal_image_contacts = len(y.values())
+                # if detected contacts have more images than contact instances in the biounit pocket
+                # then we assume that this is a crystal contact with a symmetry mate
+                if num_crystal_image_contacts > len(pocket_residues.get(x, set())):
+                    # on the edge cases it may not be clear which atom is in contact with the symmetry mate, thus better to store all?
+                    for atom_id, image_idx in y.items():
+                        crystal_contacts[x] |= {atom_id}
+        # set crystal contacts
+        self.crystal_contacts = crystal_contacts
 
     @cached_property
     def num_crystal_contacted_residues(self) -> int:
@@ -1464,7 +1502,7 @@ class Ligand(DocBaseModel):
 
         Returns
         -------
-        List of residues in the format "<chain>_<residue_number>_<residue_index>"
+        List of residues in the format "<chain>_<residue_number>_<residue_index>_<auth_number>"
         dict[str, list[str]]
         """
         if residue_type == "interacting":
@@ -1476,7 +1514,7 @@ class Ligand(DocBaseModel):
             _, chain = instance_chain.split(".")
             for residue_number in residues[instance_chain]:
                 res.append(
-                    f"{instance_chain}_{residue_number}_{chains[chain].residues[residue_number].index}"
+                    f"{instance_chain}_{residue_number}_{chains[chain].residues[residue_number].index}_{chains[chain].residues[residue_number].auth_number}"
                 )  # TODO: move some of this logic to Residue
         return {f"ligand_{residue_type}_residues": res}
 
