@@ -567,7 +567,7 @@ def protein_interfaces_to_table(
 
 
 def min_interface_residues_from_schema(schema: pa.Schema) -> int:
-    """Read the frozen interface threshold from one V3 interface table."""
+    """Read the interface threshold recorded on an interface table."""
     metadata = schema.metadata or {}
     value = metadata.get(MIN_INTERFACE_RESIDUES_METADATA_KEY)
     if value is None:

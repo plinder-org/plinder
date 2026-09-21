@@ -360,7 +360,7 @@ def scatter_make_entries(
     interface_annotate_prodigy: bool = True,
     ingest_mode: str = "all",
 ) -> list[list[str]]:
-    """Discover and size-balance source entries for V3 annotation."""
+    """Discover and size-balance source entries for annotation."""
     ingest_mode = normalize_ingest_mode(ingest_mode)
     selected_pdb_ids = [normalize_pdb_id(pdb_id) for pdb_id in pdb_ids]
     selected_codes = _selected_context_codes(two_char_codes, selected_pdb_ids)
@@ -418,7 +418,7 @@ def make_entries(
     cpu: int = 1,
     ingest_mode: str = "all",
 ) -> list[str]:
-    """Run the same resumable V3 batch implementation used by Slurm."""
+    """Run the resumable batch implementation used by Slurm."""
     del cpu  # Entry annotation is intentionally sequential within each worker.
     normalized_ids = [normalize_pdb_id(pdb_id) for pdb_id in pdb_ids]
     hash_id = utils.hash_contents(normalized_ids)
@@ -479,7 +479,7 @@ def collate_entries(
     cpu: int,
     memory_limit: str,
 ) -> None:
-    """Collate one batch of V3 entry shards through the shared implementation."""
+    """Collate one batch of entry shards through the shared implementation."""
     for code in two_char_codes:
         collate.collate_shard(
             data_dir,
@@ -496,7 +496,7 @@ def finalize_entry_collation(
     cpu: int,
     memory_limit: str,
 ) -> dict[str, Any]:
-    """Validate and fail-closed install the sharded V3 annotation index."""
+    """Validate and install the sharded annotation index."""
     return collate.finalize_collation(
         data_dir,
         threads=cpu,
@@ -1404,15 +1404,7 @@ def _completed_alignment_chain_lookup(
     try:
         payload = json.loads(manifest.read_text())
     except (OSError, TypeError, ValueError):
-        # Allow an in-progress V3 release to adopt a lookup created before the
-        # input manifest existed, but only when both inputs are older. The next
-        # make_alignment_chain_lookup() call records exact signatures.
-        newest_input_mtime = max(
-            int(signature["mtime_ns"]) for signature in input_signatures.values()
-        )
-        if stat.st_mtime_ns < newest_input_mtime:
-            return None
-        return output
+        return None
     if payload.get("inputs") != input_signatures or payload.get("output") != output:
         return None
     return output

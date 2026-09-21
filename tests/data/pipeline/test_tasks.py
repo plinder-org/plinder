@@ -11,7 +11,6 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-
 from plinder.core.utils import schemas
 from plinder.data.annotations.get_similarity_scores import (
     SCORE_METRICS_METADATA_KEY,
@@ -4977,7 +4976,7 @@ def test_alignment_chain_lookup_keeps_identity_when_metadata_changes(
     assert tasks._completed_alignment_chain_lookup(tmp_path) is not None
 
 
-def test_alignment_chain_lookup_replaces_a_legacy_schema(tmp_path: Path) -> None:
+def test_alignment_chain_lookup_replaces_an_unexpected_schema(tmp_path: Path) -> None:
     index = tmp_path / "index"
     index.mkdir()
     pd.DataFrame(
@@ -5009,9 +5008,9 @@ def test_alignment_chain_lookup_replaces_a_legacy_schema(tmp_path: Path) -> None
         scratch_dir=tmp_path / "scratch-1",
         threads=1,
     )
-    legacy = pd.read_parquet(lookup)
-    legacy["legacy_extra"] = "obsolete"
-    legacy.to_parquet(lookup, index=False)
+    unexpected = pd.read_parquet(lookup)
+    unexpected["extra"] = "unexpected"
+    unexpected.to_parquet(lookup, index=False)
 
     tasks.make_alignment_chain_lookup(
         data_dir=tmp_path,

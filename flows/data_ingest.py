@@ -4,7 +4,7 @@
 The filestore instance name is: plinder-data-gen.
 
 TODO: The Metaflow pipeline still contains outdated V2 paths and has not been
-tested end-to-end for V3.
+tested end-to-end for the current release.
 
 """
 from __future__ import annotations

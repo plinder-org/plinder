@@ -302,15 +302,6 @@ MHFP6_SCORE_SCHEMA = pa.schema(
     ]
 )
 
-LEGACY_TANIMOTO_SCORE_SCHEMA = pa.schema(
-    [
-        pa.field("query_ligand_id", pa.int32()),
-        pa.field("target_ligand_id", pa.int32()),
-        pa.field("tanimoto_similarity_max", pa.int8()),
-    ]
-)
-
-
 CLUSTER_DATASET_SCHEMA = pa.schema(
     [
         ("metric", pa.string()),

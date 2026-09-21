@@ -35,19 +35,12 @@ def _ligand_sdf_groups(system_df: pd.DataFrame) -> dict[str, list[str]]:
 
     A multi-chain covalent ligand spans several chains; its reconstructed SDF must
     contain all of them (matching the ingest writer and the stored SMILES), so we
-    read the serialized ``ligand_instance_chains``. Falls back to the primary chain
-    alone when that list is absent (single-chain ligands / older indexes).
+    read the serialized ``ligand_instance_chains``.
     """
     groups: dict[str, list[str]] = {}
     for _, row in system_df.iterrows():
-        primary = row.get("ligand_instance_chain")
-        if not isinstance(primary, str) or not primary:
-            primary = f"{row['ligand_instance']}.{row['ligand_asym_id']}"
-        try:
-            members = [str(chain) for chain in row.get("ligand_instance_chains")]
-        except TypeError:  # missing column / NaN -> not iterable
-            members = []
-        groups[primary] = sorted(members) if members else [primary]
+        primary = str(row["ligand_instance_chain"])
+        groups[primary] = sorted(str(chain) for chain in row["ligand_instance_chains"])
     return groups
 
 

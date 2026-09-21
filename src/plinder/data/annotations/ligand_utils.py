@@ -1264,8 +1264,7 @@ class Ligand(DocBaseModel):
         default_factory=list,
         description="[EXCLUDE] List of interacting ligands {instance}.{chain}",
     )
-    # TODO: rename interactions description; hash format kept for backward compatibility
-    # (now computed by peppr, not PLIP)
+    # Interaction hashes are computed by PEPPR.
     interactions: dict[str, dict[int, list[str]]] = Field(
         default_factory=dict,
         description="[EXCLUDE] Dictionary of {instance}.{chain} to residue number to list of interaction hashes",
@@ -1746,16 +1745,12 @@ class Ligand(DocBaseModel):
             )
             return None
 
-        # Chain mapping: chain_id is already in instance.asym format
-        inv_mapping = {c: c for c in np.unique(nearby_atoms.chain_id)}
-
         peppr_interactions, peppr_waters, peppr_failed_types = run_peppr_interactions(
             receptor_arr,
             ligand_arr,
             water_arr,
             metal_arr,
             ligand_instance_chain,
-            inv_mapping,
         )
 
         # CCD codes, one per residue in atom order across all member chains.

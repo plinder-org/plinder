@@ -40,7 +40,8 @@ def _output_asym_ids(chain_ids: list[str]) -> dict[str, str]:
 class AnnotationRow(Protocol):
     """Minimal interface shared by dicts and pandas Series."""
 
-    def get(self, key: str, default: Any = None) -> Any: ...
+    def get(self, key: str, default: Any = None) -> Any:
+        ...
 
 
 @dataclass(frozen=True)
@@ -749,35 +750,9 @@ def _require_chains(
 
 def _biounit_chain_roles(
     annotation: AnnotationRow,
-    biounit_chains: pd.DataFrame | None,
+    biounit_chains: pd.DataFrame,
 ) -> dict[str, str]:
     """Return chain-instance roles for the annotation's biological assembly."""
-    if biounit_chains is None:
-        # Existing V2 rows carry repeated assembly membership. New V3 ingest
-        # never writes these columns, but retaining a read-only fallback keeps
-        # source reconstruction usable for already-published V2 data.
-        all_chains = set(
-            _annotation_chains(annotation, "system_biounit_chains_asym_id")
-        )
-        if not all_chains:
-            return {}
-        waters = set(
-            _annotation_chains(annotation, "system_biounit_water_chains_asym_id")
-        )
-        ligands = set(_annotation_chains(annotation, "system_ligand_chains"))
-        ligands.update(
-            _annotation_chains(annotation, "system_other_ligand_chains_asym_id")
-        )
-        return {
-            chain: (
-                "water"
-                if chain in waters
-                else "ligand"
-                if chain in ligands
-                else "receptor"
-            )
-            for chain in all_chains
-        }
     required = {
         "entry_pdb_id",
         "biounit_id",
@@ -834,7 +809,7 @@ def _biounit_chain_roles(
 
 def _select_chains(
     annotation: AnnotationRow,
-    biounit_chains: pd.DataFrame | None,
+    biounit_chains: pd.DataFrame,
     options: SystemReconstructionOptions,
 ) -> _ChainSelections:
     protein_chains = set(
@@ -891,7 +866,7 @@ def reconstruct_system(
     source_mmcif: Path | str,
     annotation: AnnotationRow,
     *,
-    biounit_chains: pd.DataFrame | None = None,
+    biounit_chains: pd.DataFrame,
     options: SystemReconstructionOptions = SystemReconstructionOptions(),
 ) -> ReconstructedSystem:
     """Rebuild system and receptor views from a PDB mmCIF and parquet row.
@@ -906,10 +881,8 @@ def reconstruct_system(
         Original PDB mmCIF used for annotation (plain or gzip-compressed).
     annotation : mapping-like
         A dictionary or pandas Series containing the system selection columns.
-    biounit_chains : pandas.DataFrame, optional
-        Normalized biological-assembly membership rows. Required when any
-        ``include_other_*`` option is enabled and used for assembly validation
-        when supplied.
+    biounit_chains : pandas.DataFrame
+        Biological-assembly membership rows for this entry.
     options : SystemReconstructionOptions
         Atom-content choices for the two returned views.
     """
@@ -956,7 +929,7 @@ def save_reconstructed_system(
     annotation: AnnotationRow,
     *,
     outputs: SystemReconstructionOutputs,
-    biounit_chains: pd.DataFrame | None = None,
+    biounit_chains: pd.DataFrame,
     options: SystemReconstructionOptions = SystemReconstructionOptions(),
     overwrite: bool = False,
     reconstructed: ReconstructedSystem | None = None,

@@ -291,9 +291,9 @@ def get_symmetry_mate_contacts(
         box=unit_cell.box,
     )
 
-    results: dict[tuple[str, int], dict[tuple[str, int], dict[int, set[int]]]] = (
-        defaultdict(lambda: defaultdict(lambda: defaultdict(set)))
-    )
+    results: dict[
+        tuple[str, int], dict[tuple[str, int], dict[int, set[int]]]
+    ] = defaultdict(lambda: defaultdict(lambda: defaultdict(set)))
 
     # For each atom in the ASU (image 0), find contacts with symmetry mates
     for i in range(n_asu):
@@ -619,7 +619,6 @@ def run_peppr_interactions(
     waters: struc.AtomArray,
     metals: struc.AtomArray,
     ligand_chain: str,
-    chain_mapping: dict[str, str],
 ) -> tuple[dict[str, dict[int, list[str]]], set[tuple[str, int]], list[str]]:
     """Compute interaction hash using peppr ContactMeasurement.
 
@@ -635,10 +634,6 @@ def run_peppr_interactions(
         Metal ion heavy atoms (used for metal bridge detection).
     ligand_chain : str
         Ligand chain identifier ({instance}.{chain}).
-    chain_mapping : dict[str, str]
-        Identity mapping over the chain IDs already in
-        ``{instance}.{chain}`` form (kept as a parameter for legacy
-        reasons; callers pass ``{c: c for c in np.unique(...)}``).
 
     Returns
     -------
@@ -696,7 +691,7 @@ def run_peppr_interactions(
     try:
         rec_donates, lig_donates = cm.find_hbonds()
         for ri, _li in rec_donates:
-            c = chain_mapping.get(receptor.chain_id[ri], receptor.chain_id[ri])
+            c = str(receptor.chain_id[ri])
             sc = _is_sidechain(ri)
             _add(
                 c,
@@ -704,7 +699,7 @@ def run_peppr_interactions(
                 f"type:hydrogen_bonds__protisdon:True__sidechain:{sc}",
             )
         for ri, _li in lig_donates:
-            c = chain_mapping.get(receptor.chain_id[ri], receptor.chain_id[ri])
+            c = str(receptor.chain_id[ri])
             sc = _is_sidechain(ri)
             _add(
                 c,
@@ -719,7 +714,7 @@ def run_peppr_interactions(
     try:
         salt_bridges = cm.find_salt_bridges()
         for ri, _li in salt_bridges:
-            c = chain_mapping.get(receptor.chain_id[ri], receptor.chain_id[ri])
+            c = str(receptor.chain_id[ri])
             _add(c, int(receptor.res_id[ri]), "type:salt_bridges__protispos:True")
     except Exception as e:
         log.warning(f"run_peppr_interactions: find_salt_bridges failed: {e}")
@@ -733,7 +728,7 @@ def run_peppr_interactions(
         seen_stacking: set[tuple[str, int, str]] = set()
         for rec_idx, _lig_idx, stack_type in stacking:
             ri = rec_idx[0]
-            c = chain_mapping.get(receptor.chain_id[ri], receptor.chain_id[ri])
+            c = str(receptor.chain_id[ri])
             stype = "T" if stack_type == PiStacking.PERPENDICULAR else "P"
             key = (c, int(receptor.res_id[ri]), stype)
             if key not in seen_stacking:
@@ -748,7 +743,7 @@ def run_peppr_interactions(
         pi_cation = cm.find_pi_cation_interactions()
         for rec_idx, _lig_idx, cation_in_receptor in pi_cation:
             ri = rec_idx[0]
-            c = chain_mapping.get(receptor.chain_id[ri], receptor.chain_id[ri])
+            c = str(receptor.chain_id[ri])
             if cation_in_receptor:
                 _add(
                     c,
@@ -779,7 +774,7 @@ def run_peppr_interactions(
             HALOGEN_DISTANCE_SCALING,
         )
         for ri, _li in halogen_bonds:
-            c = chain_mapping.get(receptor.chain_id[ri], receptor.chain_id[ri])
+            c = str(receptor.chain_id[ri])
             sc = _is_sidechain(ri)
             _add(c, int(receptor.res_id[ri]), f"type:halogen_bonds__sidechain:{sc}")
     except Exception as e:
@@ -806,13 +801,13 @@ def run_peppr_interactions(
                         bs_idx = j
                         break
                 protisdon = bs_idx in receptor_donors if bs_idx is not None else True
-                c = chain_mapping.get(receptor.chain_id[ri], receptor.chain_id[ri])
+                c = str(receptor.chain_id[ri])
                 _add(
                     c,
                     int(receptor.res_id[ri]),
                     f"type:water_bridges__protisdon:{protisdon}",
                 )
-                w_chain = chain_mapping.get(waters.chain_id[wi], waters.chain_id[wi])
+                w_chain = str(waters.chain_id[wi])
                 water_set.add((w_chain, int(waters.res_id[wi])))
     except Exception as e:
         log.warning(f"run_peppr_interactions: find_water_bridges failed: {e}")
@@ -825,7 +820,7 @@ def run_peppr_interactions(
             for rec_idx, _lig_idx, metal_idx in m_bridges:
                 ri = rec_idx[0]
                 mi = metal_idx[0]
-                c = chain_mapping.get(receptor.chain_id[ri], receptor.chain_id[ri])
+                c = str(receptor.chain_id[ri])
                 metal_elem = metals.element[mi]
                 _add(
                     c,

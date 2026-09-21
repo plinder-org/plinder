@@ -96,7 +96,7 @@ sbatch \
   --export=ALL,PLINDER_ENV_ROOT,PLINDER_REPO_ROOT \
   scripts/slurm/collate_v3_shards.sbatch plan-start "${OUTPUT_ROOT}"
 
-# Read code_count from index/.staging/v3_collation/plan-build.json. With a
+# Read code_count from index/.staging/collation/plan-build.json. With a
 # batch size of four, LAST_PLAN_BATCH_INDEX is ceil(code_count / 4) - 1.
 sbatch \
   --array=0-LAST_PLAN_BATCH_INDEX --cpus-per-task=4 --mem=8G \
@@ -117,7 +117,7 @@ installed `index/annotation_table.parquet` byte-for-byte and collates only the
 shared chain, entry, source, and interface tables. The setting is frozen in the
 plan, so later stages do not need the environment variable.
 
-Read `index/.staging/v3_collation/plan.json` after that job succeeds. With a
+Read `index/.staging/collation/plan.json` after that job succeeds. With a
 batch size of four, set `LAST_CODE_BATCH_INDEX` to
 `ceil(code_count / 4) - 1`, then submit the unthrottled shard array:
 

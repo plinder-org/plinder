@@ -355,12 +355,10 @@ def _make_ligand_view(
         for residues in interactions.values()
         for counter in residues.values()
     )
-    if "ligand_is_shape_comparable" in row:
-        comparability = row["ligand_is_shape_comparable"]
-        is_shape_comparable = False if pd.isna(comparability) else bool(comparability)
-    else:
-        # V2 indexes predate this annotation; retain their runtime behavior.
-        is_shape_comparable = True
+    # Freshly annotated custom structures have canonical SDFs but do not pass
+    # through the release table enrichment step that adds this column.
+    comparability = row.get("ligand_is_shape_comparable", True)
+    is_shape_comparable = False if pd.isna(comparability) else bool(comparability)
     return LigandView(
         id=ligand_id,
         pdb_id=pdb_id,

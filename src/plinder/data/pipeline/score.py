@@ -1,6 +1,6 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
-"""Shared CLI for sharded V3 protein search and derived scoring."""
+"""Shared CLI for sharded protein search and derived scoring."""
 
 from __future__ import annotations
 
@@ -1562,7 +1562,7 @@ def plan_protein_scoring(
     )
     query_ids = [pdb_id for chunk in chunks for pdb_id in chunk]
     if not query_ids:
-        raise ValueError("no protein-containing V3 entries were selected")
+        raise ValueError("no protein-containing entries were selected")
     chain_path = data_dir / "index" / "entry_chains.parquet"
     chains = tasks._protein_scoring_chains(data_dir)
     chains = chains[chains["entry_pdb_id"].isin(query_ids)]
