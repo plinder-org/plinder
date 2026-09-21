@@ -2868,7 +2868,7 @@ def _directed_cover_labels(
     )
     if not path.is_file():
         raise FileNotFoundError(
-            "directed-cover connectivity must be merged before covering: " f"{path}"
+            f"directed-cover connectivity must be merged before covering: {path}"
         )
     labels = pd.read_parquet(path, columns=[node_column, "label"])
     labels[node_column] = labels[node_column].astype(str)
@@ -3279,8 +3279,8 @@ def make_directed_set_covers(
         with ProcessPoolExecutor(
             max_workers=1,
             mp_context=get_context("spawn"),
-        ) as executor:
-            executor.submit(
+        ) as staging_executor:
+            staging_executor.submit(
                 _stage_directed_cover_edges,
                 data_dir=data_dir,
                 metric=metric,
@@ -3364,8 +3364,10 @@ def make_directed_set_covers(
                 entity_type=entity_type,
             )
 
-        with ThreadPoolExecutor(max_workers=min(threads, len(pending))) as executor:
-            published = list(executor.map(build_cover, pending))
+        with ThreadPoolExecutor(
+            max_workers=min(threads, len(pending))
+        ) as cover_executor:
+            published = list(cover_executor.map(build_cover, pending))
         gc.collect()
     finally:
         for path in temporary_paths:

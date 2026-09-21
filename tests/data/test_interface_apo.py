@@ -4,6 +4,7 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+
 from plinder.core.utils.schemas import (
     INTERFACE_APO_LINK_SCHEMA,
     mapped_alignment_schema,

@@ -291,9 +291,9 @@ def get_symmetry_mate_contacts(
         box=unit_cell.box,
     )
 
-    results: dict[
-        tuple[str, int], dict[tuple[str, int], dict[int, set[int]]]
-    ] = defaultdict(lambda: defaultdict(lambda: defaultdict(set)))
+    results: dict[tuple[str, int], dict[tuple[str, int], dict[int, set[int]]]] = (
+        defaultdict(lambda: defaultdict(lambda: defaultdict(set)))
+    )
 
     # For each atom in the ASU (image 0), find contacts with symmetry mates
     for i in range(n_asu):

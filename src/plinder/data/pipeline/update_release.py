@@ -1416,7 +1416,7 @@ def rebuild_similarity_covers(
     reports: dict[str, Any] = {}
     entities: list[tuple[clusters.ClusterEntity, list[str]]] = [
         ("ligand", list(cfg.flow.cluster_metrics)),
-        ("interface", list(score.INTERFACE_CLUSTER_METRICS)),
+        ("interface", list(clusters.INTERFACE_CLUSTER_METRICS)),
     ]
     thresholds = list(map(int, cfg.flow.cluster_thresholds))
     for entity_type, metrics in entities:

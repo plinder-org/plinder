@@ -40,8 +40,7 @@ def _output_asym_ids(chain_ids: list[str]) -> dict[str, str]:
 class AnnotationRow(Protocol):
     """Minimal interface shared by dicts and pandas Series."""
 
-    def get(self, key: str, default: Any = None) -> Any:
-        ...
+    def get(self, key: str, default: Any = None) -> Any: ...
 
 
 @dataclass(frozen=True)
