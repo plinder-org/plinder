@@ -13,8 +13,6 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from rdkit import Chem
-
 from plinder.core.scores.entries import (
     ChainView,
     EntryView,
@@ -47,6 +45,7 @@ from plinder.data.annotations.get_similarity_scores import (
     write_ecfp4_fingerprint_table,
 )
 from plinder.data.pipeline.config import FoldseekConfig, MMSeqsConfig
+from rdkit import Chem
 
 SDF_FILE = (
     Path(__file__).resolve().parents[1]
@@ -798,6 +797,10 @@ def test_entry_views_accept_annotation_dataframe(
     for system_id, system in entry.systems.items():
         expected = {ligand.instance_chain for ligand in system.ligands}
         assert set(view.systems[system_id].ligands) == expected
+        assert all(
+            ligand.is_shape_comparable is None
+            for ligand in view.systems[system_id].ligands.values()
+        )
     for chain_type in ["holo", "apo", "pred"]:
         for aln_type in ["foldseek", "mmseqs"]:
             assert sorted(view.chains_for_alignment(chain_type, aln_type)) == sorted(
@@ -2637,9 +2640,8 @@ def test_ligand_3d_score_ability_reuses_success_for_same_molecular_graph(
 
 
 def test_cofactor_similarity_uses_ccd_reference_fingerprints() -> None:
-    from rdkit import DataStructs
-
     from plinder.core.structure.smallmols_similarity import mol2morgan_fp
+    from rdkit import DataStructs
 
     smiles = ["CCO", "c1ccccc1"]
     unique_ligands = pd.DataFrame(
@@ -2668,9 +2670,8 @@ def test_cofactor_similarity_uses_ccd_reference_fingerprints() -> None:
 def test_ligand_scores_use_bulk_tanimoto_for_unique_smiles(
     tmp_path, monkeypatch
 ) -> None:
-    from rdkit import DataStructs
-
     from plinder.core.structure.smallmols_similarity import mol2morgan_fp
+    from rdkit import DataStructs
 
     fingerprint_dir = tmp_path / "fingerprints"
     fingerprint_dir.mkdir()

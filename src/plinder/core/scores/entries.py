@@ -64,7 +64,7 @@ class LigandView:
     num_pocket_residues: int
     num_interactions: int
     num_unique_interactions: int
-    is_shape_comparable: bool = True
+    is_shape_comparable: bool | None = None
     # receptor instance_chain -> {residue_number: residue_index}
     pocket_residue_number_to_index: dict[str, dict[int, int]] = field(
         default_factory=dict
@@ -355,10 +355,8 @@ def _make_ligand_view(
         for residues in interactions.values()
         for counter in residues.values()
     )
-    # Freshly annotated custom structures have canonical SDFs but do not pass
-    # through the release table enrichment step that adds this column.
-    comparability = row.get("ligand_is_shape_comparable", True)
-    is_shape_comparable = False if pd.isna(comparability) else bool(comparability)
+    comparability = row.get("ligand_is_shape_comparable")
+    is_shape_comparable = None if pd.isna(comparability) else bool(comparability)
     return LigandView(
         id=ligand_id,
         pdb_id=pdb_id,

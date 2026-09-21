@@ -1621,8 +1621,8 @@ class Scorer:
         if not np.isfinite(pocket_qcov) or pocket_qcov <= 0:
             return {}
         if (
-            not query_ligand.is_shape_comparable
-            or not target_ligand.is_shape_comparable
+            query_ligand.is_shape_comparable is False
+            or target_ligand.is_shape_comparable is False
         ):
             return {}
 
@@ -3608,8 +3608,8 @@ class Scorer:
                         if (
                             ligand_3d_candidates is not None
                             and pocket_qcov > 0
-                            and query_ligand.is_shape_comparable
-                            and target_ligand.is_shape_comparable
+                            and query_ligand.is_shape_comparable is not False
+                            and target_ligand.is_shape_comparable is not False
                         ):
                             ligand_3d_candidates.append(
                                 {
