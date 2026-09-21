@@ -91,7 +91,14 @@ DERIVED_COLUMN_DESCRIPTIONS = {
     "source_mmcif_minor_revision": (
         "Minor revision number of the source PDB mmCIF used during ingest"
     ),
-    "reference_system_id": "Holo PLINDER system linked to this apo chain",
+    "reference_system_id": "PLINDER system or interface linked to this apo chain",
+    "reference_side": "Interface side linked to this apo chain: 1 or 2",
+    "reference_chain_instance": (
+        "Assembly-chain instance on the corresponding reference interface side"
+    ),
+    "reference_chain_asym_id": (
+        "Source asymmetric-chain ID on the corresponding reference interface side"
+    ),
     "linked_structure_id": "Stable identifier for the linked apo chain",
     "source_entry_id": "PDB entry containing the linked apo chain",
     "source_chain_asym_id": "Source asymmetric-chain ID of the linked apo chain",
@@ -105,8 +112,11 @@ DERIVED_COLUMN_DESCRIPTIONS = {
     "source_num_contacting_other_ligands": (
         "Number of other ligand chains contacting the apo chain"
     ),
+    "source_num_contacting_proteins": (
+        "Number of other protein chains contacting the apo chain"
+    ),
     "source_resolution": "Experimental resolution of the apo source entry",
-    "rank": "Apo candidate rank within the reference holo system",
+    "rank": "Apo candidate rank within the reference ligand system or interface side",
     "num_ligand_pockets": "Number of holo ligand pockets matched by this apo chain",
     "min_pocket_fident": "Minimum pocket sequence identity across matched ligands",
     "mean_pocket_fident": "Mean pocket sequence identity across matched ligands",
@@ -119,6 +129,16 @@ DERIVED_COLUMN_DESCRIPTIONS = {
     ),
     "min_protein_lddt_weighted_sum": (
         "Minimum chain-length-weighted protein LDDT across matched ligands"
+    ),
+    "mmseqs_fident": "MMseqs sequence identity between reference and apo chains",
+    "mmseqs_query_coverage": (
+        "Fraction of the reference chain covered by the MMseqs alignment"
+    ),
+    "mmseqs_target_coverage": (
+        "Fraction of the apo chain covered by the MMseqs alignment"
+    ),
+    "foldseek_lddt": (
+        "Foldseek local-distance difference test score for the same chain pair"
     ),
     "selected_residue_numbers": (
         "Source-mmCIF residue numbers selected by any ligand pocket or protein "

@@ -41,6 +41,9 @@ def get_db_sources(
     if "apo" in sub_databases or not len(sub_databases):
         dbs["apo_foldseek"] = data_dir / "dbs" / "foldseek" / "foldseek"
         dbs["apo_mmseqs"] = data_dir / "dbs" / "mmseqs" / "mmseqs"
+    if "interface_apo" in sub_databases:
+        dbs["interface_apo_foldseek"] = data_dir / "dbs" / "foldseek" / "foldseek"
+        dbs["interface_apo_mmseqs"] = data_dir / "dbs" / "mmseqs" / "mmseqs"
     if "pred" in sub_databases or not len(sub_databases):
         dbs["pred_foldseek"] = data_dir / "dbs" / "pred_foldseek" / "foldseek"
         dbs["pred_mmseqs"] = data_dir / "dbs" / "pred_mmseqs" / "mmseqs"

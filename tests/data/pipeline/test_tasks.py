@@ -915,7 +915,7 @@ def test_entry_collation_tasks_use_shared_core(tmp_path, monkeypatch):
     monkeypatch.setattr(
         tasks.collate,
         "plan_collation",
-        lambda data_dir: {"codes": ["aa", "ab", "ac"]},
+        lambda data_dir, **_kwargs: {"codes": ["aa", "ab", "ac"]},
     )
     monkeypatch.setattr(
         tasks.collate,
@@ -1181,6 +1181,11 @@ def test_make_linked_apo_structures_publishes_compact_index(tmp_path):
         index / "entry_metadata.parquet", index=False
     )
     _write_empty_interface_index(index)
+    (index / "collation.json").write_text(
+        json.dumps(
+            {"ligand_contacts_computed": True, "protein_contacts_computed": True}
+        )
+    )
     score_rows = [
         {
             "query_system": system_id,
@@ -1212,6 +1217,168 @@ def test_make_linked_apo_structures_publishes_compact_index(tmp_path):
     assert links["source_biounit_id"].tolist() == ["2"]
     candidates = pd.read_parquet(tmp_path / "manifests/apo_candidates.parquet")
     assert candidates["source_num_contacting_other_ligands"].tolist() == [0]
+
+
+def test_make_linked_apo_structures_uses_completed_interface_apo_queries(
+    tmp_path, monkeypatch
+):
+    from plinder.data.pipeline.score import INTERFACE_APO_QUERY_MANIFEST_RELATIVE
+
+    index = tmp_path / "index"
+    index.mkdir()
+    pq.write_table(
+        pa.Table.from_pylist(
+            [
+                {
+                    "entry_pdb_id": "1abc",
+                    "ligand_is_proper": True,
+                    "ligand_protein_chains_asym_id": ["1.A"],
+                }
+            ],
+            schema=pa.schema(
+                [
+                    ("entry_pdb_id", pa.string()),
+                    ("ligand_is_proper", pa.bool_()),
+                    ("ligand_protein_chains_asym_id", pa.list_(pa.string())),
+                ]
+            ),
+        ),
+        index / "annotation_table.parquet",
+    )
+    pd.DataFrame(
+        {
+            "entry_pdb_id": ["1abc", "1abc", "2def"],
+            "chain_asym_id": ["A", "B", "X"],
+            "chain_auth_id": ["A", "B", "R"],
+            "chain_entity_id": ["1", "2", "1"],
+            "chain_receptor_type": ["protein", "protein", "protein"],
+            "chain_is_ligand_like": [False, False, False],
+        }
+    ).to_parquet(index / "entry_chains.parquet", index=False)
+    pd.DataFrame(
+        {
+            "entry_pdb_id": ["2def"],
+            "biounit_id": ["1"],
+            "chain_instance": ["1.X"],
+            "chain_asym_id": ["X"],
+            "chain_role": ["receptor"],
+            "chain_num_contacting_proteins": pd.Series([0], dtype="Int64"),
+            "chain_num_contacting_ions": pd.Series([pd.NA], dtype="Int64"),
+            "chain_num_contacting_artifacts": pd.Series([pd.NA], dtype="Int64"),
+            "chain_num_contacting_other_ligands": pd.Series([pd.NA], dtype="Int64"),
+        }
+    ).to_parquet(index / "entry_biounit_chains.parquet", index=False)
+    pd.DataFrame(
+        {"entry_pdb_id": ["1abc", "2def"], "entry_resolution": [2.0, 1.8]}
+    ).to_parquet(index / "entry_metadata.parquet", index=False)
+    pq.write_table(
+        pa.Table.from_pylist(
+            [
+                {
+                    "entry_pdb_id": "1abc",
+                    "system_id": "1abc__1__1.A--1.B",
+                    "system_biounit_id": "1",
+                    "interface_chain_1": "1.A",
+                    "interface_chain_2": "1.B",
+                },
+                {
+                    "entry_pdb_id": "3ghi",
+                    "system_id": "3ghi__1__1.C--1.D",
+                    "system_biounit_id": "1",
+                    "interface_chain_1": "1.C",
+                    "interface_chain_2": "1.D",
+                },
+            ],
+            schema=INTERFACE_ANNOTATION_SCHEMA,
+        ),
+        index / "interface_annotation_table.parquet",
+    )
+    (index / "collation.json").write_text(
+        json.dumps(
+            {"ligand_contacts_computed": False, "protein_contacts_computed": True}
+        )
+    )
+    pq.write_table(
+        pa.Table.from_pylist(
+            [{"reference_system_id": "existing-ligand-link"}],
+            schema=schemas.STRUCTURE_LINK_SCHEMA,
+        ),
+        index / "linked_apo_structures.parquet",
+    )
+    alignment_dir = (
+        tmp_path / "alignments/search_db=interface_apo/alignment_type=mmseqs"
+    )
+    alignment_dir.mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "query_entry": ["1abc"],
+            "target_entry": ["2def"],
+            "query_chain_mapped": ["A"],
+            "target_chain_mapped": ["X"],
+            "qcov": [1.0],
+            "tcov": [1.0],
+            "fident": [1.0],
+        }
+    ).to_parquet(alignment_dir / "shard=ab.parquet", index=False)
+    query_manifest = tmp_path / INTERFACE_APO_QUERY_MANIFEST_RELATIVE
+    query_manifest.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        {
+            "pdb_id": ["1abc", "1abc"],
+            "shard": ["ab", "ab"],
+            "chain_asym_id": ["A", "B"],
+            "chain_auth_id": ["A", "B"],
+        }
+    ).to_parquet(query_manifest, index=False)
+    mapping_manifest = tasks._alignment_mapping_manifest_path(
+        data_dir=tmp_path,
+        search_db="interface_apo",
+        shard="ab",
+    )
+    mapping_manifest.parent.mkdir(parents=True, exist_ok=True)
+    mapping = {
+        "inputs": {"foldseek": [], "mmseqs": [{"name": "1abc.parquet"}]},
+        "skipped_queries": {},
+    }
+    mapping_manifest.write_text(json.dumps(mapping))
+    monkeypatch.setattr(tasks, "alignment_mapping_shard_is_current", lambda **_: True)
+
+    output = tasks.make_linked_apo_structures(
+        data_dir=tmp_path,
+        scratch_dir=tmp_path / "scratch",
+        threads=1,
+        memory_limit="1GB",
+    )
+
+    assert pq.read_schema(output) == schemas.STRUCTURE_LINK_SCHEMA
+    assert pd.read_parquet(output)["reference_system_id"].tolist() == [
+        "existing-ligand-link"
+    ]
+    interface_links = pd.read_parquet(index / "interface_apo_structures.parquet")
+    assert interface_links["reference_side"].tolist() == [1]
+    assert interface_links["linked_structure_id"].tolist() == ["2def_X"]
+    assert pd.isna(interface_links["source_num_contacting_ions"].iloc[0])
+
+    mapping["inputs"]["mmseqs"] = []
+    mapping_manifest.write_text(json.dumps(mapping))
+    with pytest.raises(ValueError, match="interface apo queries were not mapped.*1abc"):
+        tasks.make_linked_apo_structures(
+            data_dir=tmp_path,
+            scratch_dir=tmp_path / "scratch",
+            threads=1,
+            memory_limit="1GB",
+        )
+
+    mapping["inputs"]["mmseqs"] = [{"name": "1abc.parquet"}]
+    mapping["skipped_queries"] = {"1abc": {"reason": "mapping row budget"}}
+    mapping_manifest.write_text(json.dumps(mapping))
+    with pytest.raises(ValueError, match="interface apo queries were not mapped.*1abc"):
+        tasks.make_linked_apo_structures(
+            data_dir=tmp_path,
+            scratch_dir=tmp_path / "scratch",
+            threads=1,
+            memory_limit="1GB",
+        )
 
 
 def test_directed_set_cover_scatter_skips_only_complete_outputs(tmp_path):
@@ -1372,10 +1539,11 @@ def test_protein_plan_refreshes_recollated_interface_representatives(tmp_path):
     assert _load_plan(tmp_path, recheck_source=True) == plan
 
 
-def test_linked_apo_queries_use_only_proper_ligand_protein_receptors(
+def test_linked_apo_queries_include_ligand_receptors_and_interface_chains(
     tmp_path,
 ) -> None:
     from plinder.data.pipeline.score import (
+        INTERFACE_APO_QUERY_MANIFEST_RELATIVE,
         LINKED_APO_QUERY_MANIFEST_RELATIVE,
         _query_batch,
         plan_linked_apo_scoring,
@@ -1398,6 +1566,24 @@ def test_linked_apo_queries_use_only_proper_ligand_protein_receptors(
             "chain_receptor_type": ["protein", "protein", "protein", "dna"],
         }
     ).to_parquet(index / "entry_chains.parquet", index=False)
+    pd.DataFrame({"entry_pdb_id": [], "chain_asym_id": []}).to_parquet(
+        index / "entry_biounit_chains.parquet", index=False
+    )
+    pq.write_table(
+        pa.Table.from_pylist(
+            [
+                {
+                    "entry_pdb_id": "1abc",
+                    "system_id": "1abc__1__1.A--1.B",
+                    "system_biounit_id": "1",
+                    "interface_chain_1": "1.A",
+                    "interface_chain_2": "1.B",
+                }
+            ],
+            schema=INTERFACE_ANNOTATION_SCHEMA,
+        ),
+        index / "interface_annotation_table.parquet",
+    )
 
     queries = tasks._linked_apo_query_chains(tmp_path)
     assert queries.to_dict("records") == [
@@ -1405,7 +1591,12 @@ def test_linked_apo_queries_use_only_proper_ligand_protein_receptors(
             "entry_pdb_id": "1abc",
             "chain_asym_id": "A",
             "chain_auth_id": "R",
-        }
+        },
+        {
+            "entry_pdb_id": "1abc",
+            "chain_asym_id": "B",
+            "chain_auth_id": "I",
+        },
     ]
     assert tasks.scatter_protein_scoring(
         data_dir=tmp_path,
@@ -1417,7 +1608,8 @@ def test_linked_apo_queries_use_only_proper_ligand_protein_receptors(
 
     report = plan_linked_apo_scoring(tmp_path, max_seqs=123)
     assert report["query_count"] == 1
-    assert report["protein_chain_count"] == 1
+    assert report["ligand_protein_chain_count"] == 1
+    assert report["interface_protein_chain_count"] == 2
     assert report["max_seqs"] == 123
     manifest = pd.read_parquet(tmp_path / LINKED_APO_QUERY_MANIFEST_RELATIVE)
     assert manifest.to_dict("records") == [
@@ -1426,9 +1618,46 @@ def test_linked_apo_queries_use_only_proper_ligand_protein_receptors(
             "shard": "ab",
             "chain_asym_id": "A",
             "chain_auth_id": "R",
-        }
+        },
+    ]
+    interface_manifest = pd.read_parquet(
+        tmp_path / INTERFACE_APO_QUERY_MANIFEST_RELATIVE
+    )
+    assert interface_manifest.to_dict("records") == [
+        {
+            "pdb_id": "1abc",
+            "shard": "ab",
+            "chain_asym_id": "A",
+            "chain_auth_id": "R",
+        },
+        {
+            "pdb_id": "1abc",
+            "shard": "ab",
+            "chain_asym_id": "B",
+            "chain_auth_id": "I",
+        },
     ]
     assert _query_batch(tmp_path, 0, 10, search_db="apo") == ["1abc"]
+
+
+def test_apo_query_auth_ids_accepts_an_empty_query_manifest(tmp_path) -> None:
+    from plinder.data.pipeline.score import INTERFACE_APO_QUERY_MANIFEST_RELATIVE
+
+    manifest = tmp_path / INTERFACE_APO_QUERY_MANIFEST_RELATIVE
+    manifest.parent.mkdir(parents=True)
+    pd.DataFrame(columns=["pdb_id", "chain_auth_id"]).to_parquet(manifest, index=False)
+
+    assert (
+        tasks._apo_query_auth_ids(tmp_path, ["1abc"], search_db="interface_apo") == {}
+    )
+
+
+def test_interface_apo_target_selection_skips_empty_interface_table(tmp_path) -> None:
+    index = tmp_path / "index"
+    index.mkdir()
+    _write_empty_interface_index(index)
+
+    assert tasks._interface_apo_scoring_chains(tmp_path).empty
 
 
 def test_protein_scoring_plan_and_alignment_finalization(tmp_path, monkeypatch) -> None:
@@ -1536,6 +1765,7 @@ def test_protein_scoring_plan_and_alignment_finalization(tmp_path, monkeypatch) 
             "target_selected_residue_numbers": [[1]],
             "selected_residue_identity": [bytes([1])],
             "qcov": [1.0],
+            "tcov": [1.0],
             "fident": [1.0],
             "seqsim": [1.0],
         }
@@ -3973,43 +4203,185 @@ def test_run_batch_searches_uses_compact_linked_apo_query_chains(
 ) -> None:
     calls = []
     scorer_calls = []
+    selected_query_chains = {"apo": {"R"}, "interface_apo": {"S"}}
+    selections = {}
+    for search_db in selected_query_chains:
+        selection = tmp_path / f"dbs/subdbs/{search_db}_mmseqs/selection.json"
+        selection.parent.mkdir(parents=True)
+        selection.write_text(
+            json.dumps(
+                {
+                    "identifier_sha256": f"{search_db}-1",
+                    "target_database": {"sha256": f"{search_db}-content-1"},
+                }
+            )
+        )
+        selections[search_db] = selection
 
     class FakeScorer:
         def run_alignments(self, **kwargs):
             calls.append(kwargs)
-            output = tmp_path / "dbs/subdbs/apo_mmseqs/aln"
+            output = tmp_path / f"dbs/subdbs/{kwargs['search_db']}_mmseqs/aln"
             output.mkdir(parents=True, exist_ok=True)
             for pdb_id in kwargs["entry_ids"]:
-                (output / f"{pdb_id}.parquet").touch()
+                table = pa.table({}).replace_schema_metadata(
+                    kwargs["output_metadata_by_entry"][pdb_id]
+                )
+                pq.write_table(table, output / f"{pdb_id}.parquet")
 
     def fake_get_scorer(**kwargs):
         scorer_calls.append(kwargs)
         scratch = tmp_path / "scratch" / "batch"
-        scratch.mkdir(parents=True)
+        scratch.mkdir(parents=True, exist_ok=True)
         return FakeScorer(), kwargs["pdb_ids"], scratch
 
     monkeypatch.setattr(
         tasks,
-        "_linked_apo_query_auth_ids",
-        lambda _data_dir, _pdb_ids: {"1abc": {"R", "S"}},
+        "_apo_query_auth_ids",
+        lambda _data_dir, _pdb_ids, *, search_db: {
+            "1abc": set(selected_query_chains[search_db])
+        },
     )
     monkeypatch.setattr(tasks.utils, "get_scorer", fake_get_scorer)
+    mmseqs_cfg = SimpleNamespace(
+        evalue=0.01,
+        sensitivity=11.0,
+        max_seqs=10_000,
+    )
 
     tasks.run_batch_searches(
         data_dir=tmp_path,
         pdb_ids=["1abc", "2def"],
         scorer_cfg=SimpleNamespace(sub_databases=["apo"]),
         foldseek_cfg=SimpleNamespace(),
-        mmseqs_cfg=SimpleNamespace(),
+        mmseqs_cfg=mmseqs_cfg,
         cpu=4,
         scratch_dir=tmp_path / "node-scratch",
         alignment_types=["mmseqs"],
     )
 
-    assert scorer_calls[0]["load_entries"] is False
-    assert scorer_calls[0]["pdb_ids"] == ["1abc"]
-    assert calls[0]["entry_ids"] == ["1abc"]
-    assert calls[0]["query_chain_auth_ids"] == {"1abc": {"R", "S"}}
+    assert [call["load_entries"] for call in scorer_calls] == [False, False]
+    assert [call["pdb_ids"] for call in scorer_calls] == [["1abc"], ["1abc"]]
+    assert [call["search_db"] for call in calls] == ["apo", "interface_apo"]
+    assert [call["query_chain_auth_ids"] for call in calls] == [
+        {"1abc": {"R"}},
+        {"1abc": {"S"}},
+    ]
+
+    # An unchanged apo search is reused.
+    tasks.run_batch_searches(
+        data_dir=tmp_path,
+        pdb_ids=["1abc"],
+        scorer_cfg=SimpleNamespace(sub_databases=["apo"]),
+        foldseek_cfg=SimpleNamespace(),
+        mmseqs_cfg=mmseqs_cfg,
+        cpu=4,
+        alignment_types=["mmseqs"],
+    )
+    assert len(calls) == 2
+
+    # Moving the same selected target database does not invalidate searches.
+    selections["apo"].write_text(
+        json.dumps(
+            {
+                "identifier_sha256": "apo-1",
+                "target_database": {"sha256": "apo-content-1"},
+                "source_lookup": {
+                    "path": "/another/release/full.lookup",
+                    "size": 123,
+                    "mtime_ns": 456,
+                },
+            }
+        )
+    )
+    tasks.run_batch_searches(
+        data_dir=tmp_path,
+        pdb_ids=["1abc"],
+        scorer_cfg=SimpleNamespace(sub_databases=["apo"]),
+        foldseek_cfg=SimpleNamespace(),
+        mmseqs_cfg=mmseqs_cfg,
+        cpu=4,
+        alignment_types=["mmseqs"],
+    )
+    assert len(calls) == 2
+
+    # A changed backend search setting invalidates both MMseqs result caches.
+    mmseqs_cfg.max_seqs = 20_000
+    tasks.run_batch_searches(
+        data_dir=tmp_path,
+        pdb_ids=["1abc"],
+        scorer_cfg=SimpleNamespace(sub_databases=["apo"]),
+        foldseek_cfg=SimpleNamespace(),
+        mmseqs_cfg=mmseqs_cfg,
+        cpu=4,
+        alignment_types=["mmseqs"],
+    )
+    assert len(calls) == 4
+
+    # Changed target content invalidates the result even when IDs are unchanged.
+    selections["apo"].write_text(
+        json.dumps(
+            {
+                "identifier_sha256": "apo-1",
+                "target_database": {"sha256": "apo-content-2"},
+            }
+        )
+    )
+    tasks.run_batch_searches(
+        data_dir=tmp_path,
+        pdb_ids=["1abc"],
+        scorer_cfg=SimpleNamespace(sub_databases=["apo"]),
+        foldseek_cfg=SimpleNamespace(),
+        mmseqs_cfg=mmseqs_cfg,
+        cpu=4,
+        alignment_types=["mmseqs"],
+    )
+    assert len(calls) == 5
+
+    # Expanding either side of the search invalidates the cached result.
+    selected_query_chains["apo"].add("T")
+    tasks.run_batch_searches(
+        data_dir=tmp_path,
+        pdb_ids=["1abc"],
+        scorer_cfg=SimpleNamespace(sub_databases=["apo"]),
+        foldseek_cfg=SimpleNamespace(),
+        mmseqs_cfg=mmseqs_cfg,
+        cpu=4,
+        alignment_types=["mmseqs"],
+    )
+    selections["apo"].write_text(
+        json.dumps(
+            {
+                "identifier_sha256": "apo-2",
+                "target_database": {"sha256": "apo-content-2"},
+            }
+        )
+    )
+    tasks.run_batch_searches(
+        data_dir=tmp_path,
+        pdb_ids=["1abc"],
+        scorer_cfg=SimpleNamespace(sub_databases=["apo"]),
+        foldseek_cfg=SimpleNamespace(),
+        mmseqs_cfg=mmseqs_cfg,
+        cpu=4,
+        alignment_types=["mmseqs"],
+    )
+    assert len(calls) == 7
+
+    # Forced repair bypasses malformed cache metadata and replaces the output.
+    pq.write_table(pa.table({}), tmp_path / "dbs/subdbs/apo_mmseqs/aln/1abc.parquet")
+    tasks.run_batch_searches(
+        data_dir=tmp_path,
+        pdb_ids=["1abc"],
+        scorer_cfg=SimpleNamespace(sub_databases=["apo"]),
+        foldseek_cfg=SimpleNamespace(),
+        mmseqs_cfg=mmseqs_cfg,
+        cpu=4,
+        alignment_types=["mmseqs"],
+        search_databases=["apo"],
+        force_update=True,
+    )
+    assert len(calls) == 8
 
 
 def test_run_batch_searches_rejects_missing_eligible_output(tmp_path, monkeypatch):
@@ -4075,6 +4447,7 @@ def test_alignment_release_shard_unifies_empty_and_populated_list_types(
         "target_chain_mapped": ["B"],
         "source": ["foldseek"],
         "qcov": [1.0],
+        "tcov": [1.0],
         "fident": [1.0],
         "seqsim": [1.0],
         "query_selected_residue_numbers": [[]],
@@ -4137,6 +4510,7 @@ def test_collate_alignments_writes_query_addressable_shards(tmp_path):
         "target_chain_mapped": ["D", "E", "F"],
         "source": ["foldseek"] * 3,
         "qcov": [1.0, 0.9, 0.8],
+        "tcov": [1.0, 0.9, 0.8],
         "fident": [1.0, 0.9, 0.8],
         "seqsim": [1.0, 0.9, 0.8],
         "query_selected_residue_numbers": [[1], [2], [3]],
@@ -4189,6 +4563,7 @@ def test_mapping_scatter_requires_current_shard_manifest(tmp_path):
         "target_chain_mapped": ["A"],
         "source": ["foldseek"],
         "qcov": [1.0],
+        "tcov": [1.0],
         "fident": [1.0],
         "seqsim": [1.0],
         "query_selected_residue_numbers": [[1]],
@@ -4319,6 +4694,7 @@ def test_map_batch_alignments_publishes_atomic_shard(tmp_path, monkeypatch, sear
                     "target_chain_mapped": ["B"],
                     "source": ["foldseek"],
                     "qcov": [1.0],
+                    "tcov": [1.0],
                     "fident": [1.0],
                     "seqsim": [1.0],
                     "query_selected_residue_numbers": [[1]],
@@ -5360,6 +5736,7 @@ def test_interface_score_shards_retain_side_coverages_and_compact_export(tmp_pat
                     "target_chain_mapped": target_chain,
                     "source": backend,
                     "qcov": 1.0,
+                    "tcov": 1.0,
                     "fident": 1.0,
                     "seqsim": 1.0,
                     "query_selected_residue_numbers": query_residues,
@@ -6184,6 +6561,13 @@ def test_make_sub_dbs_loads_entry_chain_index(tmp_path, monkeypatch):
     observed = {}
     lookup_calls = []
     monkeypatch.setattr(entry_views, "entry_views_from_df", fake_entry_views)
+    monkeypatch.setattr(
+        tasks,
+        "_interface_apo_scoring_chains",
+        lambda _data_dir: pd.DataFrame(
+            columns=["entry_pdb_id", "chain_asym_id", "chain_auth_id"]
+        ),
+    )
     monkeypatch.setattr(tasks.utils, "get_db_sources", lambda **kwargs: {})
     monkeypatch.setattr(
         tasks.databases,
@@ -6203,7 +6587,10 @@ def test_make_sub_dbs_loads_entry_chain_index(tmp_path, monkeypatch):
 
     assert observed["entries"] is sentinel
     assert observed["kwargs"] == {
-        "identifiers_by_database": None,
+        "identifiers_by_database": {
+            "interface_apo_foldseek": set(),
+            "interface_apo_mmseqs": set(),
+        },
         "tmp_dir": None,
         "threads": 1,
     }
@@ -6303,10 +6690,19 @@ def test_make_holo_apo_sub_dbs_selects_apo_chains_from_chain_index(
     pd.DataFrame(
         {
             "entry_pdb_id": ["1abc", "1abc", "1abc"],
+            "biounit_id": ["1", "1", "1"],
+            "chain_instance": ["1.B", "1.P", "1.Q"],
             "chain_asym_id": ["B", "P", "Q"],
             "chain_role": ["receptor", "ligand", "receptor"],
+            "chain_num_contacting_proteins": [0, 0, 1],
+            "chain_num_contacting_ions": [0, 0, 0],
+            "chain_num_contacting_artifacts": [0, 0, 0],
+            "chain_num_contacting_other_ligands": [0, 0, 0],
         }
     ).to_parquet(index_dir / "entry_biounit_chains.parquet", index=False)
+    pd.DataFrame({"entry_pdb_id": ["1abc"], "entry_resolution": [2.0]}).to_parquet(
+        index_dir / "entry_metadata.parquet", index=False
+    )
     pd.DataFrame(
         {
             "entry_pdb_id": ["1abc"],
@@ -6361,6 +6757,8 @@ def test_make_holo_apo_sub_dbs_selects_apo_chains_from_chain_index(
             "pdb_00001abc_xyz-enrich_Y",
         },
         "apo_mmseqs": {"1abc_Q", "1abc_Y"},
+        "interface_apo_foldseek": {"pdb_00001abc_xyz-enrich_Y"},
+        "interface_apo_mmseqs": {"1abc_Y"},
     }
 
 
@@ -6375,6 +6773,9 @@ def test_make_apo_sub_db_builds_alignment_chain_lookup(tmp_path, monkeypatch):
     )
     lookup_calls = []
     monkeypatch.setattr(tasks, "_apo_scoring_chains", lambda _data_dir: apo_chains)
+    monkeypatch.setattr(
+        tasks, "_interface_apo_scoring_chains", lambda _data_dir: apo_chains.iloc[:0]
+    )
     monkeypatch.setattr(tasks.utils, "get_db_sources", lambda **kwargs: {})
     monkeypatch.setattr(tasks.databases, "make_sub_dbs", lambda *args, **kwargs: None)
     monkeypatch.setattr(

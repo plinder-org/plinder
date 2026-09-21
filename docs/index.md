@@ -15,7 +15,7 @@ evaluating protein-ligand and protein-protein structure models.
 - Ligand and protein-interface annotations plus compact entry, chain, and representative tables
 - Automated curation pipeline to keep up with the PDB
 - Reusable ligand, pocket, and protein-interface similarities and representative assignments
-- Ranked deposited apo protein chains linked to _holo_ ligands
+- Ranked deposited apo protein chains linked to holo ligands and protein-interface sides
 - Python APIs for release queries, coordinate reconstruction, and custom scoring
 
 ::::::{grid} 1 2 3 3

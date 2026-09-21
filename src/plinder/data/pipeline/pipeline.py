@@ -130,6 +130,7 @@ class IngestPipeline:
         cif_root, _ = self._entry_source_roots()
         from plinder.data.pipeline.score import (
             make_foldseek_input_manifest,
+            plan_linked_apo_scoring,
             plan_protein_scoring,
         )
 
@@ -143,6 +144,13 @@ class IngestPipeline:
             two_char_codes=list(self.cfg.context.two_char_codes),
             max_seqs=self.cfg.foldseek.max_seqs,
         )
+        if "apo" in self.cfg.scorer.sub_databases:
+            plan_linked_apo_scoring(
+                self.plinder_dir,
+                pdb_ids=list(self.cfg.context.pdb_ids),
+                two_char_codes=list(self.cfg.context.two_char_codes),
+                max_seqs=self.cfg.foldseek.max_seqs,
+            )
         cif_root = make_foldseek_input_manifest(self.plinder_dir, cif_root)
         scratch_root = Path(tempfile.gettempdir()) / "plinder-full-search-dbs"
         tasks.make_dbs(
@@ -210,6 +218,7 @@ class IngestPipeline:
         return tasks.scatter_collate_entries(
             data_dir=self.plinder_dir,
             batch_size=self.cfg.flow.collate_entries_batch_size,
+            include_ligand_annotations=self.cfg.flow.make_entries_mode != "interfaces",
         )
 
     @utils.ingest_flow_control
@@ -367,7 +376,10 @@ class IngestPipeline:
     @utils.ingest_flow_control
     def scatter_map_batch_alignments(self) -> list[tuple[str, list[str]]]:
         work: list[tuple[str, list[str]]] = []
-        for search_db in self.cfg.scorer.sub_databases:
+        search_databases = list(self.cfg.scorer.sub_databases)
+        if "apo" in search_databases:
+            search_databases.insert(search_databases.index("apo") + 1, "interface_apo")
+        for search_db in search_databases:
             chunks = tasks.scatter_missing_alignment_mappings(
                 data_dir=self.plinder_dir,
                 batch_size=self.cfg.flow.map_batch_alignments_batch_size,

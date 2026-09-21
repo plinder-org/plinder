@@ -1,6 +1,6 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
-"""Discover, ingest, and resume V3 PDB entry batches."""
+"""Discover, ingest, and resume PDB entry batches."""
 
 from __future__ import annotations
 
@@ -58,7 +58,7 @@ def resolve_source_roots(
     cif_root: str | Path | None = None,
     validation_root: str | Path | None = None,
 ) -> tuple[Path, Path]:
-    """Resolve V3 source roots from config, environment, or local defaults.
+    """Resolve source roots from config, environment, or local defaults.
 
     Explicit arguments take precedence over environment variables. Relative
     configured paths are interpreted relative to the Plinder data directory so
@@ -98,12 +98,11 @@ def normalize_ingest_mode(value: str) -> str:
     return mode
 
 
-def entry_metrics_paths(output_root: Path, pdb_id: str) -> tuple[Path, Path]:
-    """Return the sharded metrics path followed by the legacy flat path."""
+def entry_metrics_path(output_root: Path, pdb_id: str) -> Path:
+    """Return the completion marker for one ligand or combined entry ingest."""
     pdb_id = normalize_pdb_id(pdb_id)
     filename = f"ingest-one-{pdb_id}.json"
-    metrics_root = output_root / "metrics"
-    return metrics_root / pdb_id[1:3] / filename, metrics_root / filename
+    return output_root / "metrics" / pdb_id[1:3] / filename
 
 
 def interface_metrics_path(output_root: Path, pdb_id: str) -> Path:
@@ -207,7 +206,9 @@ def _entry_outputs_complete(
         return False
     if metrics.get("status") != "complete":
         return False
-    ingest_mode = str(metrics.get("mode", "all"))
+    ingest_mode = metrics.get("mode")
+    if ingest_mode not in INGEST_MODES:
+        return False
     if expected_ingest_mode is not None and (ingest_mode != expected_ingest_mode):
         return False
     if (
@@ -288,6 +289,9 @@ BIOUNIT_LIGAND_CONTACT_COLUMNS = {
     "chain_num_contacting_other_ligands",
 }
 BIOUNIT_PROTEIN_CONTACT_COLUMNS = {"chain_num_contacting_proteins"}
+BIOUNIT_CONTACT_COLUMNS = (
+    BIOUNIT_LIGAND_CONTACT_COLUMNS | BIOUNIT_PROTEIN_CONTACT_COLUMNS
+)
 
 
 def _required_biounit_contact_columns(ingest_mode: str) -> set[str]:
@@ -295,7 +299,7 @@ def _required_biounit_contact_columns(ingest_mode: str) -> set[str]:
         return BIOUNIT_LIGAND_CONTACT_COLUMNS
     if ingest_mode == "interfaces":
         return BIOUNIT_PROTEIN_CONTACT_COLUMNS
-    return BIOUNIT_LIGAND_CONTACT_COLUMNS | BIOUNIT_PROTEIN_CONTACT_COLUMNS
+    return BIOUNIT_CONTACT_COLUMNS
 
 
 def _biounit_contacts_are_valid(path: Path, columns: set[str]) -> bool:
@@ -347,53 +351,45 @@ def completed_entry_metrics(
     expected_annotate_prodigy: bool | None = None,
     expected_ingest_mode: str | None = None,
 ) -> Path | None:
-    """Return the metrics file when one V3 entry has a complete output set."""
-    for metrics_path in entry_metrics_paths(output_root, pdb_id):
-        if not metrics_path.is_file():
-            continue
-        try:
-            metrics = json.loads(metrics_path.read_text())
-        except (OSError, json.JSONDecodeError):
-            continue
-        if expected_ingest_mode is not None and (
-            metrics.get("mode", "all") != expected_ingest_mode
-        ):
-            continue
-        if metrics.get("status") == "skipped_no_ligands":
-            entry_directory = metrics.get("outputs", {}).get("entry_directory")
-            if (
-                metrics.get("mode") == "ligands"
-                # Older ligand-only skips returned before extracting any chains.
-                and "entry_chain_rows" in metrics.get("counts", {})
-                and entry_directory
-                and _shared_annotations_are_present(Path(entry_directory))
-                and _biounit_contacts_are_valid(
-                    Path(entry_directory) / "entry_biounit_chains.parquet",
-                    BIOUNIT_LIGAND_CONTACT_COLUMNS,
-                )
-            ):
-                return metrics_path
-            continue
-        outputs = metrics.get("outputs", {})
-        entry_directory = outputs.get("entry_directory")
-        if not entry_directory:
-            continue
-        entry_parquet = outputs.get("entry_parquet") or (
-            output_root / "raw_entries" / pdb_id[1:3] / f"{pdb_id}.parquet"
-        )
-        ligand_parquet = outputs.get("ligand_parquet") or (
-            output_root / "ligands" / f"{pdb_id}.parquet"
-        )
-        if _entry_outputs_complete(
-            metrics_path=metrics_path,
-            entry_parquet=Path(entry_parquet),
-            entry_directory=Path(entry_directory),
-            ligand_parquet=Path(ligand_parquet),
-            expected_interface_min_residues=expected_interface_min_residues,
-            expected_annotate_prodigy=expected_annotate_prodigy,
-            expected_ingest_mode=expected_ingest_mode,
+    """Return the metrics file when one entry has a complete output set."""
+    pdb_id = normalize_pdb_id(pdb_id)
+    metrics_path = entry_metrics_path(output_root, pdb_id)
+    if not metrics_path.is_file():
+        return None
+    try:
+        metrics = json.loads(metrics_path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    ingest_mode = metrics.get("mode")
+    if ingest_mode not in INGEST_MODES:
+        return None
+    if expected_ingest_mode is not None and ingest_mode != expected_ingest_mode:
+        return None
+    entry_directory = output_root / "raw_entries" / pdb_id[1:3] / pdb_id
+    if metrics.get("status") == "skipped_no_ligands":
+        if (
+            ingest_mode == "ligands"
+            and "entry_chain_rows" in metrics.get("counts", {})
+            and _shared_annotations_are_present(entry_directory)
+            and _biounit_contacts_are_valid(
+                entry_directory / "entry_biounit_chains.parquet",
+                BIOUNIT_LIGAND_CONTACT_COLUMNS,
+            )
         ):
             return metrics_path
+        return None
+    entry_parquet = output_root / "raw_entries" / pdb_id[1:3] / f"{pdb_id}.parquet"
+    ligand_parquet = output_root / "ligands" / f"{pdb_id}.parquet"
+    if _entry_outputs_complete(
+        metrics_path=metrics_path,
+        entry_parquet=entry_parquet,
+        entry_directory=entry_directory,
+        ligand_parquet=ligand_parquet,
+        expected_interface_min_residues=expected_interface_min_residues,
+        expected_annotate_prodigy=expected_annotate_prodigy,
+        expected_ingest_mode=expected_ingest_mode,
+    ):
+        return metrics_path
     return None
 
 
@@ -645,7 +641,7 @@ def ingest_one_pdb(
     entry_parquet = raw_entry_root / f"{pdb_id}.parquet"
     entry_directory = raw_entry_root / pdb_id
     ligand_parquet = output_root / "ligands" / f"{pdb_id}.parquet"
-    metrics_path, legacy_metrics_path = entry_metrics_paths(output_root, pdb_id)
+    metrics_path = entry_metrics_path(output_root, pdb_id)
     if mode == "interfaces":
         return _ingest_interfaces(
             pdb_id=pdb_id,
@@ -677,21 +673,18 @@ def ingest_one_pdb(
     expected_annotate_prodigy = include_interfaces and bool(
         (interface_cfg or {}).get("annotate_prodigy", True)
     )
-    complete = any(
-        _entry_outputs_complete(
-            metrics_path=candidate,
-            entry_parquet=entry_parquet,
-            entry_directory=entry_directory,
-            ligand_parquet=ligand_parquet,
-            expected_interface_min_residues=(
-                expected_interface_min_residues if include_interfaces else None
-            ),
-            expected_annotate_prodigy=(
-                expected_annotate_prodigy if include_interfaces else None
-            ),
-            expected_ingest_mode=mode,
-        )
-        for candidate in (metrics_path, legacy_metrics_path)
+    complete = _entry_outputs_complete(
+        metrics_path=metrics_path,
+        entry_parquet=entry_parquet,
+        entry_directory=entry_directory,
+        ligand_parquet=ligand_parquet,
+        expected_interface_min_residues=(
+            expected_interface_min_residues if include_interfaces else None
+        ),
+        expected_annotate_prodigy=(
+            expected_annotate_prodigy if include_interfaces else None
+        ),
+        expected_ingest_mode=mode,
     )
     if complete and not force:
         raise FileExistsError(

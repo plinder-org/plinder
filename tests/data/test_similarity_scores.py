@@ -361,10 +361,12 @@ def test_no_hit_search_writes_typed_empty_raw_and_mapped_checkpoints(
         search_db="holo",
         output_folder=tmp_path / "work",
         alignment_types=["mmseqs"],
+        output_metadata_by_entry={"1abc": {b"test.search": b"inputs"}},
     )
 
     raw = scorer.db_dir / "holo_mmseqs" / "aln" / "1abc.parquet"
     assert pd.read_parquet(raw).empty
+    assert pq.read_schema(raw).metadata[b"test.search"] == b"inputs"
     assert set(scoring_module.pq.read_schema(raw).names) == {
         "query",
         "target",
@@ -398,7 +400,8 @@ def test_no_hit_search_writes_typed_empty_raw_and_mapped_checkpoints(
         "target_selected_residue_numbers",
         "selected_residue_identity",
     } <= set(mapped.columns)
-    assert {"evalue", "bits", "tcov"}.isdisjoint(mapped.columns)
+    assert {"evalue", "bits"}.isdisjoint(mapped.columns)
+    assert "tcov" in mapped.columns
 
 
 def test_search_can_probe_an_alternate_target_without_writing_empty_results(
@@ -484,12 +487,18 @@ def test_unavailable_query_backend_writes_typed_empty_checkpoint(
         search_db="apo",
         output_folder=tmp_path / "work",
         alignment_types=["foldseek"],
+        output_metadata_by_entry={"1abc": {b"test.search": b"inputs"}},
     )
 
     raw = scorer.db_dir / "apo_foldseek" / "aln" / "1abc.parquet"
     assert raw.is_file()
     assert pd.read_parquet(raw).empty
-    assert pq.read_schema(raw).equals(scoring_module._raw_alignment_schema("foldseek"))
+    assert (
+        pq.read_schema(raw)
+        .remove_metadata()
+        .equals(scoring_module._raw_alignment_schema("foldseek"))
+    )
+    assert pq.read_schema(raw).metadata[b"test.search"] == b"inputs"
 
 
 @pytest.mark.parametrize(
@@ -1247,7 +1256,7 @@ def test_entry_views_keep_ligand_pockets_separate() -> None:
     assert system.ligands["1.C"].pocket_residue_number_to_index == {"1.A": {30: 29}}
     assert not system.ligands["1.B"].is_shape_comparable
     assert system.ligands["1.C"].is_shape_comparable
-    # The existing system view remains the union for backward compatibility.
+    # System-level pocket scoring uses the union of its proper-ligand pockets.
     assert system.pocket_residue_number_to_index == {"1.A": {10: 9, 20: 19, 30: 29}}
 
 

@@ -66,6 +66,8 @@ ECFP4_PARQUET_METADATA = {
 SCORE_THRESHOLDS_METADATA_KEY = b"plinder.scoring_thresholds"
 HOLO_PROTEIN_SCORES_METADATA_KEY = b"plinder.holo_protein_scores"
 SCORE_METRICS_METADATA_KEY = b"plinder.score_metrics"
+APO_SEARCH_COVERAGE = 0.8
+APO_SEARCH_MIN_SEQ_ID = 0.9
 
 # MHFP6 MinHash fingerprints live in a sibling file with the same
 # ``ligand_smiles_id`` node universe as the ECFP4 table, so the two chemical
@@ -164,6 +166,14 @@ def _atomic_write_parquet(table: pa.Table, target: Path) -> None:
         staging.replace(target)
     finally:
         staging.unlink(missing_ok=True)
+
+
+def _with_parquet_metadata(
+    table: pa.Table, metadata: abc.Mapping[bytes, bytes] | None
+) -> pa.Table:
+    if not metadata:
+        return table
+    return table.replace_schema_metadata({**(table.schema.metadata or {}), **metadata})
 
 
 def _finite_float_or_zero(value: Any) -> float:
@@ -1775,9 +1785,9 @@ class Scorer:
             config = replace(self.foldseek_config)
         else:
             config = replace(self.mmseqs_config)
-        if search_db == "apo":
-            config.coverage = 0.8
-            config.min_seq_id = 0.9
+        if search_db in {"apo", "interface_apo"}:
+            config.coverage = APO_SEARCH_COVERAGE
+            config.min_seq_id = APO_SEARCH_MIN_SEQ_ID
         elif search_db == "pred":
             config.coverage = 0.9
             config.min_seq_id = 0.9
@@ -1792,6 +1802,9 @@ class Scorer:
         threads: int = 1,
         alignment_types: Sequence[str] | None = None,
         query_chain_auth_ids: abc.Mapping[str, abc.Collection[str]] | None = None,
+        output_metadata_by_entry: (
+            abc.Mapping[str, abc.Mapping[bytes, bytes]] | None
+        ) = None,
         target_database_dir: Path | None = None,
         result_database_dir: Path | None = None,
         write_empty_results: bool = True,
@@ -1843,10 +1856,16 @@ class Scorer:
                     f"{len(entry_ids)} entries"
                 )
                 if write_empty_results:
-                    empty = pa.Table.from_pylist(
-                        [], schema=_raw_alignment_schema(aln_type)
-                    )
                     for pdb_id in entry_ids:
+                        empty = pa.Table.from_pylist(
+                            [], schema=_raw_alignment_schema(aln_type)
+                        )
+                        empty = _with_parquet_metadata(
+                            empty,
+                            output_metadata_by_entry.get(pdb_id)
+                            if output_metadata_by_entry is not None
+                            else None,
+                        )
                         target = aln_dir / f"{pdb_id}.parquet"
                         _atomic_write_parquet(empty, target)
                 continue
@@ -1904,20 +1923,25 @@ class Scorer:
                 local_output.parent.mkdir(exist_ok=True, parents=True)
                 if pdb_id_file.exists():
                     hit_entries.add(pdb_id)
-                    pdb_id_df = pd.read_parquet(pdb_id_file)
-                    pdb_id_df.to_parquet(local_output, index=False)
+                    table = pa.Table.from_pandas(
+                        pd.read_parquet(pdb_id_file), preserve_index=False
+                    )
                 elif write_empty_results:
                     # Short chains can legitimately have no hit after the
                     # E-value filter.  A typed empty file is their durable
                     # searched/no-hit completion marker.
-                    pq.write_table(
-                        pa.Table.from_pylist(
-                            [], schema=_raw_alignment_schema(aln_type)
-                        ),
-                        local_output,
+                    table = pa.Table.from_pylist(
+                        [], schema=_raw_alignment_schema(aln_type)
                     )
                 else:
                     continue
+                table = _with_parquet_metadata(
+                    table,
+                    output_metadata_by_entry.get(pdb_id)
+                    if output_metadata_by_entry is not None
+                    else None,
+                )
+                pq.write_table(table, local_output)
                 _atomic_copy_file(local_output, target)
                 local_output.unlink(missing_ok=True)
         if failures:
@@ -2161,9 +2185,9 @@ class Scorer:
                 ),
             }
             if holo_protein_scores_mode is not None:
-                score_metadata[HOLO_PROTEIN_SCORES_METADATA_KEY] = (
-                    holo_protein_scores_mode
-                )
+                score_metadata[
+                    HOLO_PROTEIN_SCORES_METADATA_KEY
+                ] = holo_protein_scores_mode
             retained_metrics = score_metrics_metadata(score_metrics)
             if retained_metrics is not None:
                 score_metadata[SCORE_METRICS_METADATA_KEY] = retained_metrics
@@ -2490,9 +2514,9 @@ class Scorer:
             aln_df["seqsim_qcov"] = aln_df["seqsim"] * aln_df["qcov"]
             if aln_type == "foldseek":
                 aln_df["lddt_qcov"] = aln_df["lddt"] * aln_df["qcov"]
-            # Legacy mapped files used four position-keyed nested columns.
-            # Compact release shards already expose aligned residue arrays and
-            # identity bytes, so they require no Python dictionary expansion.
+            # Per-query mapped files use four position-keyed nested columns.
+            # Compact release shards expose aligned residue arrays and identity
+            # bytes, so they require no Python dictionary expansion.
             if "qrnum" in aln_df.columns:
                 for column in ["qrnum", "trnum"]:
                     aln_df[column] = aln_df[column].apply(
@@ -2536,7 +2560,7 @@ class Scorer:
             ]:
                 df[column] = pd.Series(dtype="object")
             df.drop(
-                columns=["qaln", "taln", "evalue", "bits", "tcov"],
+                columns=["qaln", "taln", "evalue", "bits"],
                 inplace=True,
                 errors="ignore",
             )
@@ -2633,7 +2657,7 @@ class Scorer:
         # letters. Raw search statistics remain private and are omitted from
         # the compact release representation.
         df.drop(
-            columns=["qaln", "taln", "evalue", "bits", "tcov"],
+            columns=["qaln", "taln", "evalue", "bits"],
             inplace=True,
             errors="ignore",
         )
@@ -3467,14 +3491,14 @@ class Scorer:
                                 tuple(target_protein_chains),
                             )
                             if protein_cache_key not in self._protein_score_cache:
-                                self._protein_score_cache[protein_cache_key] = (
-                                    self.get_protein_scores(
-                                        query_target_entry_alignments,
-                                        query_system,
-                                        target_protein_chains,
-                                        query_protein_length,
-                                        query_protein_chains=query_protein_chains,
-                                    )
+                                self._protein_score_cache[
+                                    protein_cache_key
+                                ] = self.get_protein_scores(
+                                    query_target_entry_alignments,
+                                    query_system,
+                                    target_protein_chains,
+                                    query_protein_length,
+                                    query_protein_chains=query_protein_chains,
                                 )
                             (
                                 q_t_mappings,

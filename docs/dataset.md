@@ -31,6 +31,7 @@ differ from the current release.
     │   ├── interface_annotation_table.parquet
     │   ├── alignment_chain_lookup.parquet
     │   ├── linked_apo_structures.parquet
+    │   ├── interface_apo_structures.parquet
     │   ├── ligand_pocket_membership.parquet
     │   ├── ligand_pocket_representatives.parquet
     │   ├── ligand_clusters.parquet
@@ -96,6 +97,8 @@ single query and selects the required relationships from those columns.
 - `alignment_chain_lookup`: protein-chain search identifiers and
   residue mappings;
 - `linked_apo_structures`: ranked apo chains linked to holo ligands;
+- `interface_apo_structures`: ranked apo chains linked to each side of a
+  protein interface;
 - `ligand_pocket_membership`: ligand-to-pocket-representative
   assignments;
 - `ligand_pocket_representatives`: the receptor chains, pocket
@@ -198,6 +201,13 @@ ties. The release stores the assembly chain instance that was scored;
 `PlinderSystem.reconstruct_linked_apo()` rebuilds its coordinates from the
 recorded source entry and assembly membership.
 
+`interface_apo_structures` applies the same idea to each side of a
+protein-protein interface. Here an apo candidate is a highly similar protein
+chain in a biological assembly where that chain contacts no other protein.
+MMseqs alignments must cover at least 80% of both chains. The table retains
+sequence identity, both coverage values, Foldseek lDDT when available, and the
+exact assembly-chain instance selected for reconstruction.
+
 (similarity-score-reference)=
 
 ## Similarity scores
@@ -205,7 +215,8 @@ recorded source entry and assembly membership.
 ### Protein alignments
 
 The release includes mapped Foldseek and MMseqs chain-level alignments grouped
-by query PDB code. These alignments provide the chain and residue mappings used
+by query PDB code. Query and target coverage are retained alongside the chain
+and residue mappings used
 to calculate protein sequence and structure scores, ligand-pocket and
 protein-ligand interaction scores, and protein-interface scores.
 

@@ -726,7 +726,7 @@ def test_interface_mode_resumes_zero_interface_entries(
         columns="chain_num_contacting_proteins"
     )
     biounits.to_parquet(biounit_path, index=False)
-    ligand_metrics_path = ingest.entry_metrics_paths(output_root, "8grn")[0]
+    ligand_metrics_path = ingest.entry_metrics_path(output_root, "8grn")
     ligand_metrics_path.parent.mkdir(parents=True, exist_ok=True)
     ligand_metrics_path.write_text(
         json.dumps(
@@ -971,6 +971,7 @@ def test_batch_continues_after_failure_and_resumes_completed_entries(
             json.dumps(
                 {
                     "status": "complete",
+                    "mode": "all",
                     "interface_annotate_prodigy": True,
                     "counts": {"annotation_rows": 1, "interface_rows": 0},
                     "outputs": {
@@ -1028,12 +1029,13 @@ def test_batch_resumes_entries_with_only_chain_sidecars(
     entry_dir = output_root / "raw_entries/ab/1abc"
     entry_dir.mkdir(parents=True)
     _write_fake_sidecars(entry_dir, "1abc")
-    entry_metrics = output_root / "metrics" / "ingest-one-1abc.json"
+    entry_metrics = output_root / "metrics" / "ab" / "ingest-one-1abc.json"
     entry_metrics.parent.mkdir(parents=True)
     entry_metrics.write_text(
         json.dumps(
             {
                 "status": "complete",
+                "mode": "all",
                 "outputs": {"entry_directory": str(entry_dir)},
                 "interface_annotate_prodigy": True,
                 "counts": {"annotation_rows": 0, "interface_rows": 0},
@@ -1092,6 +1094,7 @@ def test_completed_entry_metrics_invalidates_interface_cutoff_changes(
         json.dumps(
             {
                 "status": "complete",
+                "mode": "all",
                 "interface_annotate_prodigy": True,
                 "counts": {"annotation_rows": 1, "interface_rows": 0},
                 "outputs": {"entry_directory": str(entry_directory)},
@@ -1163,7 +1166,7 @@ def test_resume_requires_shared_annotations(
         marker = ingest.interface_metrics_path(tmp_path, "1abc")
         status = "complete"
     else:
-        marker = ingest.entry_metrics_paths(tmp_path, "1abc")[0]
+        marker = ingest.entry_metrics_path(tmp_path, "1abc")
         status = "skipped_no_ligands" if mode == "ligands" else "complete"
     marker.parent.mkdir(parents=True, exist_ok=True)
     marker.write_text(
@@ -1242,7 +1245,7 @@ def test_resume_requires_ligand_annotations(
     pd.DataFrame(
         {"ligand_id": ["1abc__1.L"], "ligand_is_shape_comparable": [True]}
     ).to_parquet(ligand_path, index=False)
-    marker = ingest.entry_metrics_paths(tmp_path, "1abc")[0]
+    marker = ingest.entry_metrics_path(tmp_path, "1abc")
     marker.parent.mkdir(parents=True)
     marker.write_text(
         json.dumps(
@@ -1265,31 +1268,11 @@ def test_resume_requires_ligand_annotations(
     )
 
 
-@pytest.mark.parametrize("has_interface_counts", [False, True])
-def test_pre_interface_skip_is_not_considered_complete(
-    tmp_path: Path, has_interface_counts: bool
-) -> None:
-    output_root = tmp_path / "output"
-    entry_metrics = output_root / "metrics" / "ingest-one-1abc.json"
-    entry_metrics.parent.mkdir(parents=True)
-    payload = {"status": "skipped_no_systems"}
-    if has_interface_counts:
-        payload.update(
-            {
-                "counts": {"annotation_rows": 0, "interface_rows": 0},
-                "interface_min_residues": 7,
-            }
-        )
-    entry_metrics.write_text(json.dumps(payload))
-
-    assert completed_entry_metrics(output_root, "1abc") is None
-
-
 def test_ligand_skip_requires_chain_extraction(tmp_path: Path) -> None:
     entry_dir = tmp_path / "raw_entries/ab/1abc"
     entry_dir.mkdir(parents=True)
     _write_fake_sidecars(entry_dir, "1abc")
-    marker = ingest.entry_metrics_paths(tmp_path, "1abc")[0]
+    marker = ingest.entry_metrics_path(tmp_path, "1abc")
     marker.parent.mkdir(parents=True)
     payload = {
         "status": "skipped_no_ligands",

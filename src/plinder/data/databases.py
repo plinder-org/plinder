@@ -368,6 +368,31 @@ def _identifier_digest(identifiers: set[str]) -> str:
     return digest.hexdigest()
 
 
+def _database_content_signature(database: Path) -> dict[str, int | str]:
+    """Hash the selected database files without including their location."""
+    files = sorted(
+        path for path in database.parent.glob(f"{database.name}*") if path.is_file()
+    )
+    if not files:
+        raise FileNotFoundError(f"missing selected database files: {database}")
+    digest = hashlib.sha256()
+    total_size = 0
+    for path in files:
+        size = path.stat().st_size
+        total_size += size
+        digest.update(path.name.removeprefix(database.name).encode())
+        digest.update(b"\0")
+        with path.open("rb") as handle:
+            while chunk := handle.read(1024 * 1024):
+                digest.update(chunk)
+        digest.update(b"\n")
+    return {
+        "file_count": len(files),
+        "size": total_size,
+        "sha256": digest.hexdigest(),
+    }
+
+
 def _database_entry_count(database: Path) -> int:
     with database.with_suffix(".index").open("rb") as handle:
         return sum(1 for _ in handle)
@@ -724,18 +749,18 @@ def make_sub_dbs(
     db_sources : Dict[str, Path]
         map of database name to path to full database
     entries : Dict[str, EntryView], optional
-        Map of entries used to derive identifiers for legacy apo/pred workflows.
+        Map of entries used to derive identifiers for scorer-managed databases.
     identifiers_by_database : dict[str, set[str]], optional
         Precomputed identifiers keyed by ``{search_db}_{alignment_type}``.
-        V3 holo scoring uses this to select protein receptor chains directly
-        from the normalized chain index without materializing all systems.
+        The release pipeline uses this to select protein receptor chains
+        directly from the chain index without constructing all systems.
     """
 
     db_dir.mkdir(exist_ok=True, parents=True)
     report = {}
     cluster_report = {}
     for search_db_aln_type, full_db in db_sources.items():
-        search_db, aln_type = search_db_aln_type.split("_")
+        search_db, aln_type = search_db_aln_type.rsplit("_", 1)
         subdb = db_dir / search_db_aln_type
         subdb.mkdir(exist_ok=True)
         if (
@@ -762,6 +787,7 @@ def make_sub_dbs(
         complete = (
             cached is not None
             and all(cached.get(key) == value for key, value in selection.items())
+            and isinstance(cached.get("target_database"), dict)
             and _database_files_exist(selected_database, aln_type)
             and cluster_manifest is not None
         )
@@ -785,14 +811,21 @@ def make_sub_dbs(
                     portable=True,
                 )
             )
-            working_selection = working_subdb / "selection.json"
-            write_json_atomic(working_selection, {**selection, "missing": missing})
             working_database = working_subdb / working_subdb.name
             cluster_manifest = make_exact_search_db(
                 full_db=working_database,
                 aln_type=aln_type,
                 tmp_dir=backend_tmp / "work",
                 threads=threads,
+            )
+            working_selection = working_subdb / "selection.json"
+            write_json_atomic(
+                working_selection,
+                {
+                    **selection,
+                    "target_database": _database_content_signature(working_database),
+                    "missing": missing,
+                },
             )
             if tmp_dir is not None:
                 install_database_directory(

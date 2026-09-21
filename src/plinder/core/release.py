@@ -47,6 +47,7 @@ RELEASE_PATHS = {
     "entry_metadata": "index/entry_metadata.parquet",
     "entry_sources": "index/entry_sources.parquet",
     "linked_apo_structures": "index/linked_apo_structures.parquet",
+    "interface_apo_structures": "index/interface_apo_structures.parquet",
     "interface_annotations": "index/interface_annotation_table.parquet",
     "alignment_chain_lookup": "index/alignment_chain_lookup.parquet",
     "ligand_pocket_membership": "index/ligand_pocket_membership.parquet",
@@ -114,6 +115,11 @@ RELEASE_TABLES: dict[str, dict[str, Any]] = {
         "artifact": "linked_apo_structures",
         "row_description": "ranked apo chain linked to a holo ligand",
         "primary_key": ("reference_system_id", "rank"),
+    },
+    "interface_apo_structures": {
+        "artifact": "interface_apo_structures",
+        "row_description": "ranked apo chain linked to one protein-interface side",
+        "primary_key": ("reference_system_id", "reference_side", "rank"),
     },
     "interface_annotations": {
         "artifact": "interface_annotations",

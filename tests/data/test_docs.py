@@ -531,6 +531,19 @@ def test_linked_apo_descriptions_match_release_schema():
     assert generated["Name"].tolist() == STRUCTURE_LINK_SCHEMA.names
 
 
+def test_interface_apo_descriptions_match_release_schema():
+    from plinder.core.utils.schemas import INTERFACE_APO_LINK_SCHEMA
+
+    descriptions = docs.get_column_descriptions("interface_apo_structures")
+
+    assert descriptions["Name"].tolist() == INTERFACE_APO_LINK_SCHEMA.names
+    generated = docs.get_table_column_descriptions(
+        table_name="interface_apo_structures",
+        schema=INTERFACE_APO_LINK_SCHEMA,
+    )
+    assert generated["Name"].tolist() == INTERFACE_APO_LINK_SCHEMA.names
+
+
 def test_write_column_descriptions_uses_release_table_schemas(tmp_path, monkeypatch):
     import pyarrow as pa
     import pyarrow.parquet as pq

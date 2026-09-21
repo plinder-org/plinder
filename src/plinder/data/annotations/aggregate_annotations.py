@@ -91,6 +91,11 @@ SymmetryMateContacts = ty.Annotated[
     Field(default_factory=dict),
 ]
 CUSTOM_STRUCTURE_MODES = ("as_is", "pdb")
+ENTRY_VALIDATION_COLUMNS = (
+    *(f"entry_validation_{name}" for name in EntryValidation.model_fields),
+    "entry_validation_r_minus_rfree",
+    "entry_pass_validation_criteria",
+)
 
 
 def _require_mmcif_path(path: Path) -> Path:
@@ -2757,9 +2762,9 @@ class Entry(DocBaseModel):
             name = f"entry_{field}"
             data[name] = getattr(self, field)
 
+        data.update(dict.fromkeys(ENTRY_VALIDATION_COLUMNS))
         if self.validation:
             data.update(self.format_validation(criteria))
-            data["entry_pass_validation_criteria"] = self.pass_criteria
         return data
 
     def chains_to_df(self) -> pd.DataFrame:

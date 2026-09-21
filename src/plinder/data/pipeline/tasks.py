@@ -69,6 +69,7 @@ LIGAND_POCKET_REPRESENTATIVES_MANIFEST_RELATIVE = Path(
     "index/ligand_pocket_representatives.manifest.json"
 )
 LIGAND_POCKET_RESIDUE_SELECTION = "neighboring_and_interacting"
+APO_SEARCH_METADATA_KEY = b"plinder.apo_search_inputs"
 STAGES = [
     "download_rcsb_files",
     "download_alternative_datasets",
@@ -459,11 +460,14 @@ def scatter_collate_entries(
     *,
     data_dir: Path,
     batch_size: int,
+    include_ligand_annotations: bool = True,
 ) -> list[list[str]]:
-    """Plan V3 collation and scatter deterministic two-character shards."""
+    """Plan collation and scatter deterministic two-character shards."""
     if batch_size < 1:
         raise ValueError("batch_size must be positive")
-    plan = collate.plan_collation(data_dir)
+    plan = collate.plan_collation(
+        data_dir, include_ligand_annotations=include_ligand_annotations
+    )
     codes = [str(code) for code in plan["codes"]]
     return [codes[pos : pos + batch_size] for pos in range(0, len(codes), batch_size)]
 
@@ -622,46 +626,61 @@ def make_sub_dbs(
         the root plinder dir
     """
     entries = None
-    identifiers_by_database = None
-    if set(sub_databases) <= {"holo", "apo"}:
-        identifiers_by_database = {}
-        for search_db in sub_databases:
-            chains = (
-                _protein_scoring_chains(data_dir)
-                if search_db == "holo"
-                else _apo_scoring_chains(data_dir)
+    identifiers_by_database: dict[str, set[str]] = {}
+    indexed_search_databases = (
+        sub_databases if set(sub_databases) <= {"holo", "apo"} else []
+    )
+    for search_db in indexed_search_databases:
+        chains = (
+            _protein_scoring_chains(data_dir)
+            if search_db == "holo"
+            else _apo_scoring_chains(data_dir)
+        )
+        if search_db == "holo":
+            chain_auth_ids = pd.read_parquet(
+                data_dir / "index" / "entry_chains.parquet",
+                columns=["entry_pdb_id", "chain_asym_id", "chain_auth_id"],
             )
-            if search_db == "holo":
-                chain_auth_ids = pd.read_parquet(
-                    data_dir / "index" / "entry_chains.parquet",
-                    columns=["entry_pdb_id", "chain_asym_id", "chain_auth_id"],
-                )
-                chains = chains.merge(
-                    chain_auth_ids,
-                    on=["entry_pdb_id", "chain_asym_id"],
-                    how="left",
-                    validate="one_to_one",
-                )
-            chains = chains[chains["chain_auth_id"].notna()]
-            identifiers_by_database[f"{search_db}_foldseek"] = {
-                f"pdb_0000{row.entry_pdb_id}_xyz-enrich_{row.chain_auth_id}"
-                for row in chains.itertuples(index=False)
-            }
-            identifiers_by_database[f"{search_db}_mmseqs"] = {
-                f"{row.entry_pdb_id}_{row.chain_auth_id}"
-                for row in chains.itertuples(index=False)
-            }
-    else:
+            chains = chains.merge(
+                chain_auth_ids,
+                on=["entry_pdb_id", "chain_asym_id"],
+                how="left",
+                validate="one_to_one",
+            )
+        chains = chains[chains["chain_auth_id"].notna()]
+        identifiers_by_database[f"{search_db}_foldseek"] = {
+            f"pdb_0000{row.entry_pdb_id}_xyz-enrich_{row.chain_auth_id}"
+            for row in chains.itertuples(index=False)
+        }
+        identifiers_by_database[f"{search_db}_mmseqs"] = {
+            f"{row.entry_pdb_id}_{row.chain_auth_id}"
+            for row in chains.itertuples(index=False)
+        }
+    if set(sub_databases).difference({"holo", "apo"}):
         from plinder.core.scores.entries import entry_views_from_df
 
         entries = entry_views_from_df(
             pd.read_parquet(data_dir / "index" / "annotation_table.parquet"),
             entry_chains=pd.read_parquet(data_dir / "index" / "entry_chains.parquet"),
         )
+    if "apo" in sub_databases:
+        interface_chains = _interface_apo_scoring_chains(data_dir)
+        identifiers_by_database["interface_apo_foldseek"] = {
+            f"pdb_0000{row.entry_pdb_id}_xyz-enrich_{row.chain_auth_id}"
+            for row in interface_chains.itertuples(index=False)
+        }
+        identifiers_by_database["interface_apo_mmseqs"] = {
+            f"{row.entry_pdb_id}_{row.chain_auth_id}"
+            for row in interface_chains.itertuples(index=False)
+        }
     db_dir = data_dir / "dbs" / "subdbs"
     db_dir.mkdir(exist_ok=True)
     LOG.info("making sub-databases for scoring")
     db_sources = utils.get_db_sources(data_dir=data_dir, sub_databases=sub_databases)
+    if "apo" in sub_databases:
+        db_sources.update(
+            utils.get_db_sources(data_dir=data_dir, sub_databases=["interface_apo"])
+        )
     databases.make_sub_dbs(
         db_dir,
         db_sources,
@@ -1822,7 +1841,7 @@ def _protein_scoring_chains(data_dir: Path) -> pd.DataFrame:
     ].copy()
 
 
-def _linked_apo_query_chains(data_dir: Path) -> pd.DataFrame:
+def _ligand_apo_query_chains(data_dir: Path) -> pd.DataFrame:
     """Return proper-ligand protein receptor chains used as apo queries."""
     from plinder.data.linked_apo import ligand_holo_chain_keys
 
@@ -1857,32 +1876,146 @@ def _linked_apo_query_chains(data_dir: Path) -> pd.DataFrame:
     )
 
 
-def _linked_apo_query_auth_ids(
-    data_dir: Path, pdb_ids: Sequence[str]
-) -> dict[str, set[str]]:
-    """Load planned linked-apo query chain IDs, with a direct-index fallback."""
-    from plinder.data.pipeline.score import LINKED_APO_QUERY_MANIFEST_RELATIVE
+def _linked_apo_query_chains(data_dir: Path) -> pd.DataFrame:
+    """Return the union of ligand-pocket and protein-interface apo queries."""
+    ligand_queries = _ligand_apo_query_chains(data_dir)
+    interface_queries = _interface_apo_query_chains(data_dir)
+    return (
+        pd.concat([ligand_queries, interface_queries], ignore_index=True)
+        .drop_duplicates(["entry_pdb_id", "chain_asym_id"], ignore_index=True)
+        .sort_values(["entry_pdb_id", "chain_asym_id"], ignore_index=True)
+    )
 
-    manifest = data_dir / LINKED_APO_QUERY_MANIFEST_RELATIVE
-    if manifest.is_file():
-        chains = pd.read_parquet(
-            manifest,
-            columns=["pdb_id", "chain_auth_id"],
-            filters=[("pdb_id", "in", list(pdb_ids))],
-        ).rename(columns={"pdb_id": "entry_pdb_id"})
-    else:
-        chains = _linked_apo_query_chains(data_dir)
-        chains = chains[chains["entry_pdb_id"].isin(pdb_ids)]
+
+def _interface_apo_query_chains(data_dir: Path) -> pd.DataFrame:
+    """Return protein chains used by a published protein interface."""
+    interface_keys = _interface_scoring_chain_keys(data_dir)
+    if interface_keys.empty:
+        return pd.DataFrame(columns=["entry_pdb_id", "chain_asym_id", "chain_auth_id"])
+    chains = pd.read_parquet(
+        data_dir / "index" / "entry_chains.parquet",
+        columns=[
+            "entry_pdb_id",
+            "chain_asym_id",
+            "chain_auth_id",
+            "chain_receptor_type",
+        ],
+    )
+    chains = chains.merge(
+        interface_keys[["entry_pdb_id", "chain_asym_id"]],
+        on=["entry_pdb_id", "chain_asym_id"],
+        how="inner",
+        validate="one_to_one",
+    )
+    return (
+        chains.loc[
+            chains["chain_receptor_type"]
+            .fillna("")
+            .astype(str)
+            .str.lower()
+            .eq("protein")
+            & chains["chain_auth_id"].notna(),
+            ["entry_pdb_id", "chain_asym_id", "chain_auth_id"],
+        ]
+        .drop_duplicates(ignore_index=True)
+        .sort_values(["entry_pdb_id", "chain_asym_id"], ignore_index=True)
+    )
+
+
+def _apo_query_auth_ids(
+    data_dir: Path, pdb_ids: Sequence[str], *, search_db: str
+) -> dict[str, set[str]]:
+    """Load query chain IDs for one of the two apo searches."""
+    from plinder.data.pipeline.score import (
+        INTERFACE_APO_QUERY_MANIFEST_RELATIVE,
+        LINKED_APO_QUERY_MANIFEST_RELATIVE,
+    )
+
+    relative = (
+        LINKED_APO_QUERY_MANIFEST_RELATIVE
+        if search_db == "apo"
+        else INTERFACE_APO_QUERY_MANIFEST_RELATIVE
+    )
+    manifest = data_dir / relative
+    if pq.ParquetFile(manifest).metadata.num_rows == 0:
+        return {}
+    chains = pd.read_parquet(
+        manifest,
+        columns=["pdb_id", "chain_auth_id"],
+        filters=[("pdb_id", "in", list(pdb_ids))],
+    ).rename(columns={"pdb_id": "entry_pdb_id"})
     return {
         str(pdb_id): set(rows["chain_auth_id"].astype(str))
         for pdb_id, rows in chains.groupby("entry_pdb_id", sort=False)
     }
 
 
+def _apo_search_signature(
+    data_dir: Path,
+    *,
+    pdb_id: str,
+    search_db: str,
+    alignment_type: str,
+    query_chain_auth_ids: set[str],
+    search_settings: dict[str, float | int],
+) -> dict[str, Any]:
+    """Describe the inputs and settings used by an apo search."""
+    selection_path = (
+        data_dir / "dbs" / "subdbs" / f"{search_db}_{alignment_type}" / "selection.json"
+    )
+    selection = read_json_cache(selection_path)
+    if not isinstance(selection, dict):
+        raise FileNotFoundError(
+            f"missing apo target selection metadata: {selection_path}"
+        )
+    target_database = selection.get("target_database")
+    if not isinstance(target_database, dict) or not target_database.get("sha256"):
+        raise ValueError(
+            f"apo target selection lacks a content fingerprint: {selection_path}"
+        )
+    target_selection = {
+        key: value for key, value in selection.items() if key != "source_lookup"
+    }
+    return {
+        "query_entry": pdb_id,
+        "query_chain_auth_ids": sorted(query_chain_auth_ids),
+        "search_settings": search_settings,
+        "target_selection": target_selection,
+    }
+
+
+def _apo_search_settings(config: DictConfig) -> dict[str, float | int]:
+    """Return the command settings that affect an apo alignment search."""
+    return {
+        "evalue": float(config.evalue),
+        "sensitivity": float(config.sensitivity),
+        "max_seqs": int(config.max_seqs),
+        "coverage": get_similarity_scores.APO_SEARCH_COVERAGE,
+        "min_seq_id": get_similarity_scores.APO_SEARCH_MIN_SEQ_ID,
+    }
+
+
+def _apo_search_metadata(signature: dict[str, Any]) -> bytes:
+    return json.dumps(signature, sort_keys=True, separators=(",", ":")).encode()
+
+
+def _apo_search_is_current(output: Path, signature: dict[str, Any]) -> bool:
+    metadata = pq.read_schema(output).metadata or {}
+    encoded = metadata.get(APO_SEARCH_METADATA_KEY)
+    if encoded is None:
+        raise ValueError(f"apo search output is missing input metadata: {output}")
+    stored = json.loads(encoded)
+    if not isinstance(stored, dict):
+        raise ValueError(f"apo search output has invalid input metadata: {output}")
+    return stored == signature
+
+
 def _apo_scoring_chains(data_dir: Path) -> pd.DataFrame:
-    """Return reconstructable chains without a proper ligand receptor."""
+    """Return candidate chains for ligand-relative apo links."""
     from plinder.data.linked_apo import ligand_holo_chain_keys
 
+    if _ligand_apo_query_chains(data_dir).empty:
+        return pd.DataFrame(columns=["entry_pdb_id", "chain_asym_id", "chain_auth_id"])
     chains = pd.read_parquet(
         data_dir / "index" / "entry_chains.parquet",
         columns=[
@@ -1930,11 +2063,38 @@ def _apo_scoring_chains(data_dir: Path) -> pd.DataFrame:
         receptor_chains["chain_role"].fillna("").astype(str).str.lower().eq("receptor"),
         ["entry_pdb_id", "chain_asym_id"],
     ].drop_duplicates()
-    return chains.merge(
+    ligand_apo = chains.merge(
         receptor_chains,
         on=["entry_pdb_id", "chain_asym_id"],
         how="inner",
         validate="one_to_one",
+    )
+    return ligand_apo[["entry_pdb_id", "chain_asym_id", "chain_auth_id"]].sort_values(
+        ["entry_pdb_id", "chain_asym_id"], ignore_index=True
+    )
+
+
+def _interface_apo_scoring_chains(data_dir: Path) -> pd.DataFrame:
+    """Return candidate chains for interface-relative apo links."""
+    from plinder.data.interface_apo import build_interface_apo_candidate_manifest
+
+    if _interface_apo_query_chains(data_dir).empty:
+        return pd.DataFrame(columns=["entry_pdb_id", "chain_asym_id", "chain_auth_id"])
+    candidates = build_interface_apo_candidate_manifest(
+        data_dir / "index" / "entry_chains.parquet",
+        biounit_chains=data_dir / "index" / "entry_biounit_chains.parquet",
+        entry_metadata=data_dir / "index" / "entry_metadata.parquet",
+    ).rename(
+        columns={
+            "source_entry_id": "entry_pdb_id",
+            "source_chain_asym_id": "chain_asym_id",
+            "source_chain_auth_id": "chain_auth_id",
+        }
+    )
+    return (
+        candidates[["entry_pdb_id", "chain_asym_id", "chain_auth_id"]]
+        .drop_duplicates(ignore_index=True)
+        .sort_values(["entry_pdb_id", "chain_asym_id"], ignore_index=True)
     )
 
 
@@ -1999,27 +2159,56 @@ def run_batch_searches(
     cpu: int,
     scratch_dir: Path | None = None,
     alignment_types: Sequence[str] | None = None,
+    search_databases: Sequence[str] | None = None,
     force_update: bool = False,
 ) -> None:
     selected_alignment_types = list(alignment_types or ["foldseek", "mmseqs"])
-    apo_query_chains: dict[str, set[str]] = {}
-    if "apo" in scorer_cfg.sub_databases:
-        apo_query_chains = _linked_apo_query_auth_ids(data_dir, pdb_ids)
-    for search_db in scorer_cfg.sub_databases:
+    selected_search_databases = list(search_databases or scorer_cfg.sub_databases)
+    if search_databases is None and "apo" in selected_search_databases:
+        selected_search_databases.insert(
+            selected_search_databases.index("apo") + 1, "interface_apo"
+        )
+    for search_db in selected_search_databases:
+        apo_query_chains = (
+            _apo_query_auth_ids(data_dir, pdb_ids, search_db=search_db)
+            if search_db in {"apo", "interface_apo"}
+            else {}
+        )
         eligible_pdb_ids = (
             [pdb_id for pdb_id in pdb_ids if pdb_id in apo_query_chains]
-            if search_db == "apo"
+            if search_db in {"apo", "interface_apo"}
             else pdb_ids
         )
         for alignment_type in selected_alignment_types:
+            search_config = foldseek_cfg if alignment_type == "foldseek" else mmseqs_cfg
             output_dir = (
                 data_dir / "dbs" / "subdbs" / f"{search_db}_{alignment_type}" / "aln"
             )
-            pending = [
-                pdb_id
-                for pdb_id in eligible_pdb_ids
-                if force_update or not (output_dir / f"{pdb_id}.parquet").is_file()
-            ]
+            apo_signatures = (
+                {
+                    pdb_id: _apo_search_signature(
+                        data_dir,
+                        pdb_id=pdb_id,
+                        search_db=search_db,
+                        alignment_type=alignment_type,
+                        query_chain_auth_ids=apo_query_chains[pdb_id],
+                        search_settings=_apo_search_settings(search_config),
+                    )
+                    for pdb_id in eligible_pdb_ids
+                }
+                if search_db in {"apo", "interface_apo"}
+                else {}
+            )
+            pending = []
+            for pdb_id in eligible_pdb_ids:
+                output = output_dir / f"{pdb_id}.parquet"
+                current = not force_update and output.is_file()
+                if current and search_db in {"apo", "interface_apo"}:
+                    current = current and _apo_search_is_current(
+                        output, apo_signatures[pdb_id]
+                    )
+                if not current:
+                    pending.append(pdb_id)
             if not pending:
                 LOG.info(
                     f"run_batch_searches: all {len(eligible_pdb_ids)} {search_db} "
@@ -2034,7 +2223,7 @@ def run_batch_searches(
                 data_dir=data_dir,
                 pdb_ids=pending,
                 scorer_cfg=scorer_cfg,
-                load_entries=search_db != "apo",
+                load_entries=search_db not in {"apo", "interface_apo"},
                 foldseek_cfg=foldseek_cfg,
                 mmseqs_cfg=mmseqs_cfg,
                 scratch_dir=scratch_dir,
@@ -2048,7 +2237,21 @@ def run_batch_searches(
                     threads=cpu,
                     alignment_types=[alignment_type],
                     query_chain_auth_ids=(
-                        apo_query_chains if search_db == "apo" else None
+                        apo_query_chains
+                        if search_db in {"apo", "interface_apo"}
+                        else None
+                    ),
+                    output_metadata_by_entry=(
+                        {
+                            pdb_id: {
+                                APO_SEARCH_METADATA_KEY: _apo_search_metadata(
+                                    apo_signatures[pdb_id]
+                                )
+                            }
+                            for pdb_id in pending
+                        }
+                        if search_db in {"apo", "interface_apo"}
+                        else None
                     ),
                 )
             finally:
@@ -2246,7 +2449,10 @@ def map_batch_alignments(
     search_db: str = "holo",
 ) -> None:
     """Map raw backend hits directly into atomic query-shard release files."""
-    if search_db not in scorer_cfg.sub_databases:
+    enabled = search_db in scorer_cfg.sub_databases or (
+        search_db == "interface_apo" and "apo" in scorer_cfg.sub_databases
+    )
+    if not enabled:
         raise ValueError(f"alignment database is not enabled: {search_db}")
     maximum_rows = int(getattr(scorer_cfg, "max_alignment_rows_per_query", 5_000_000))
     for shard in shards:
@@ -3765,6 +3971,7 @@ def _write_alignment_release_shard(
         "target_chain_mapped",
         "source",
         "qcov",
+        "tcov",
         "fident",
         "seqsim",
         "query_selected_residue_numbers",
@@ -3847,7 +4054,7 @@ def collate_alignments(
 
     scratch_root = scratch_dir or data_dir / "scratch" / "duckdb" / "alignments"
     temp_dir = scratch_root / shard
-    for search_db in ["holo", "apo", "pred"]:
+    for search_db in ["holo", "apo", "interface_apo", "pred"]:
         for alignment_type in ["foldseek", "mmseqs"]:
             source_dir = (
                 data_dir
@@ -3958,52 +4165,191 @@ def make_linked_apo_structures(
     threads: int = 1,
     memory_limit: str = "7GB",
 ) -> Path:
-    """Publish ranked deposited apo-chain links for each holo system."""
+    """Publish ranked deposited apo-chain links for ligands and interfaces."""
+    from plinder.data.interface_apo import (
+        CANDIDATE_COLUMNS,
+        build_interface_apo_candidate_manifest,
+        build_interface_apo_query_manifest,
+        write_interface_apo_structure_table,
+    )
     from plinder.data.linked_apo import (
+        APO_CANDIDATE_COLUMNS,
         build_apo_candidate_manifest,
+        ligand_holo_chain_keys,
         write_linked_apo_structure_table,
     )
+    from plinder.data.pipeline.score import INTERFACE_APO_QUERY_MANIFEST_RELATIVE
+
+    def write_empty_table(path: Path, schema: pa.Schema) -> None:
+        temporary = path.with_suffix(path.suffix + ".tmp")
+        pq.write_table(
+            pa.Table.from_pylist([], schema=schema), temporary, compression="zstd"
+        )
+        temporary.replace(path)
 
     index_dir = data_dir / "index"
     inputs = {
-        "protein_scores": data_dir / "scores/search_db=apo/apo.parquet",
         "annotation": index_dir / "annotation_table.parquet",
         "entry_chains": index_dir / "entry_chains.parquet",
         "biounit_chains": index_dir / "entry_biounit_chains.parquet",
         "entry_metadata": index_dir / "entry_metadata.parquet",
+        "interface_annotation": index_dir / "interface_annotation_table.parquet",
     }
     for path in inputs.values():
         if not path.is_file():
             raise FileNotFoundError(path)
+    collation_marker_path = index_dir / collate.FINAL_MARKER_NAME
+    collation_marker = read_json_cache(collation_marker_path)
+    if collation_marker is None:
+        raise ValueError(
+            f"missing or invalid collation marker: {collation_marker_path}"
+        )
+    ligand_contacts_computed = collation_marker.get("ligand_contacts_computed")
+    protein_contacts_computed = collation_marker.get("protein_contacts_computed")
+    if not isinstance(ligand_contacts_computed, bool) or not isinstance(
+        protein_contacts_computed, bool
+    ):
+        raise ValueError(f"invalid contact state in {collation_marker_path}")
 
-    candidates = build_apo_candidate_manifest(
-        inputs["entry_chains"],
-        biounit_chains=inputs["biounit_chains"],
-        entry_metadata=inputs["entry_metadata"],
-        annotation=inputs["annotation"],
+    interface_queries = build_interface_apo_query_manifest(
+        inputs["interface_annotation"]
     )
-    manifest = data_dir / "manifests/apo_candidates.parquet"
-    manifest.parent.mkdir(exist_ok=True, parents=True)
-    temporary_manifest = manifest.with_suffix(manifest.suffix + ".tmp")
-    candidates.to_parquet(temporary_manifest, index=False)
-    temporary_manifest.replace(manifest)
+    has_interfaces = not interface_queries.empty
+    if has_interfaces:
+        planned_interface_chains = pd.read_parquet(
+            data_dir / INTERFACE_APO_QUERY_MANIFEST_RELATIVE,
+            columns=["pdb_id", "chain_asym_id"],
+        ).rename(
+            columns={
+                "pdb_id": "query_entry",
+                "chain_asym_id": "reference_chain_asym_id",
+            }
+        )
+        interface_queries = interface_queries.merge(
+            planned_interface_chains,
+            on=["query_entry", "reference_chain_asym_id"],
+            how="inner",
+            validate="many_to_one",
+        )
+    has_ligand_queries = not ligand_holo_chain_keys(inputs["annotation"]).empty
 
+    manifest_dir = data_dir / "manifests"
+    manifest_dir.mkdir(exist_ok=True, parents=True)
     output = index_dir / "linked_apo_structures.parquet"
-    write_linked_apo_structure_table(
-        inputs["protein_scores"],
-        annotation=inputs["annotation"],
-        candidates=manifest,
-        output_path=output,
-        scratch_dir=scratch_dir,
-        threads=threads,
-        memory_limit=memory_limit,
-    )
-    linked_rows = pq.ParquetFile(output).metadata.num_rows
-    LOG.info(
-        "make_linked_apo_structures: selected %d links from %d apo-chain candidates",
-        linked_rows,
-        len(candidates),
-    )
+    if ligand_contacts_computed:
+        candidates = (
+            build_apo_candidate_manifest(
+                inputs["entry_chains"],
+                biounit_chains=inputs["biounit_chains"],
+                entry_metadata=inputs["entry_metadata"],
+                annotation=inputs["annotation"],
+            )
+            if has_ligand_queries
+            else pd.DataFrame(columns=APO_CANDIDATE_COLUMNS)
+        )
+        manifest = manifest_dir / "apo_candidates.parquet"
+        temporary_manifest = manifest.with_suffix(manifest.suffix + ".tmp")
+        candidates.to_parquet(temporary_manifest, index=False)
+        temporary_manifest.replace(manifest)
+
+        if has_ligand_queries:
+            protein_scores = data_dir / "scores/search_db=apo/apo.parquet"
+            if not protein_scores.is_file():
+                raise FileNotFoundError(protein_scores)
+            write_linked_apo_structure_table(
+                protein_scores,
+                annotation=inputs["annotation"],
+                candidates=manifest,
+                output_path=output,
+                scratch_dir=scratch_dir,
+                threads=threads,
+                memory_limit=memory_limit,
+            )
+        else:
+            write_empty_table(output, schemas.STRUCTURE_LINK_SCHEMA)
+        LOG.info(
+            "make_linked_apo_structures: selected %d links from %d "
+            "apo-chain candidates",
+            pq.ParquetFile(output).metadata.num_rows,
+            len(candidates),
+        )
+    elif has_ligand_queries:
+        if not output.is_file():
+            raise FileNotFoundError(
+                "interface-only collation requires the existing ligand apo table: "
+                f"{output}"
+            )
+        LOG.info("make_linked_apo_structures: retaining %s", output)
+    else:
+        write_empty_table(output, schemas.STRUCTURE_LINK_SCHEMA)
+
+    interface_output = index_dir / "interface_apo_structures.parquet"
+    if protein_contacts_computed:
+        for shard, rows in interface_queries.groupby(
+            interface_queries["query_entry"].str[1:3], sort=False
+        ):
+            if not alignment_mapping_shard_is_current(
+                data_dir=data_dir,
+                search_db="interface_apo",
+                shard=str(shard),
+            ):
+                raise ValueError(
+                    f"interface apo alignment mapping is incomplete for shard {shard}"
+                )
+            mapping_path = _alignment_mapping_manifest_path(
+                data_dir=data_dir,
+                search_db="interface_apo",
+                shard=str(shard),
+            )
+            mapping = cast(dict[str, Any], read_json_cache(mapping_path))
+            mapped_entries = {
+                Path(str(source["name"])).stem for source in mapping["inputs"]["mmseqs"]
+            }.difference(mapping["skipped_queries"])
+            missing_entries = sorted(
+                set(rows["query_entry"].astype(str)).difference(mapped_entries)
+            )
+            if missing_entries:
+                raise ValueError(
+                    f"interface apo queries were not mapped: {missing_entries[:10]}"
+                )
+        interface_candidates = (
+            build_interface_apo_candidate_manifest(
+                inputs["entry_chains"],
+                biounit_chains=inputs["biounit_chains"],
+                entry_metadata=inputs["entry_metadata"],
+            )
+            if not interface_queries.empty
+            else pd.DataFrame(columns=CANDIDATE_COLUMNS)
+        )
+        write_interface_apo_structure_table(
+            data_dir / "alignments/search_db=interface_apo/alignment_type=mmseqs",
+            foldseek_alignments=(
+                data_dir / "alignments/search_db=interface_apo/alignment_type=foldseek"
+            ),
+            queries=interface_queries,
+            candidates=interface_candidates,
+            output_path=interface_output,
+            scratch_dir=(
+                scratch_dir / "interfaces" if scratch_dir is not None else None
+            ),
+            threads=threads,
+            memory_limit=memory_limit,
+        )
+        LOG.info(
+            "make_linked_apo_structures: selected %d interface-side links from "
+            "%d protein-contact-free candidates",
+            pq.ParquetFile(interface_output).metadata.num_rows,
+            len(interface_candidates),
+        )
+    elif has_interfaces:
+        if not interface_output.is_file():
+            raise FileNotFoundError(
+                "ligand-only collation requires the existing interface apo table: "
+                f"{interface_output}"
+            )
+        LOG.info("make_linked_apo_structures: retaining %s", interface_output)
+    else:
+        write_empty_table(interface_output, schemas.INTERFACE_APO_LINK_SCHEMA)
     return output
 
 

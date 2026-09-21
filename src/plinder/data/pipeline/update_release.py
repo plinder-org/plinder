@@ -109,6 +109,8 @@ def _chains_by_entry(chains: pd.DataFrame) -> dict[str, set[str]]:
 def _scoring_chains(data_dir: Path, search_db: str) -> pd.DataFrame:
     if search_db == "apo":
         return tasks._apo_scoring_chains(data_dir)
+    if search_db == "interface_apo":
+        return tasks._interface_apo_scoring_chains(data_dir)
     chains = tasks._protein_scoring_chains(data_dir)
     auth_ids = pd.read_parquet(
         data_dir / "index" / "entry_chains.parquet",
@@ -123,11 +125,19 @@ def _scoring_chains(data_dir: Path, search_db: str) -> pd.DataFrame:
 
 
 def _query_chains(data_dir: Path, search_db: str) -> pd.DataFrame:
-    return (
-        tasks._linked_apo_query_chains(data_dir)
-        if search_db == "apo"
-        else _scoring_chains(data_dir, search_db)
-    )
+    if search_db == "apo":
+        return tasks._ligand_apo_query_chains(data_dir)
+    if search_db == "interface_apo":
+        return tasks._interface_apo_query_chains(data_dir)
+    return _scoring_chains(data_dir, search_db)
+
+
+def _query_manifest(data_dir: Path, search_db: str) -> Path:
+    if search_db == "apo":
+        return data_dir / score.LINKED_APO_QUERY_MANIFEST_RELATIVE
+    if search_db == "interface_apo":
+        return data_dir / score.INTERFACE_APO_QUERY_MANIFEST_RELATIVE
+    return data_dir / score.MANIFEST_RELATIVE
 
 
 def _database_identifiers(chains: pd.DataFrame, alignment_type: str) -> set[str]:
@@ -383,11 +393,7 @@ def _plan_alignment_repairs(
     batch_size: int,
 ) -> set[str]:
     """Find queries whose capped search can change in either direction."""
-    manifest_path = (
-        data_dir / score.LINKED_APO_QUERY_MANIFEST_RELATIVE
-        if search_db == "apo"
-        else data_dir / score.MANIFEST_RELATIVE
-    )
+    manifest_path = _query_manifest(data_dir, search_db)
     active = set(
         pd.read_parquet(manifest_path, columns=["pdb_id"])["pdb_id"].astype(str)
     )
@@ -475,19 +481,17 @@ def repair_alignments(
     batch_size: int,
 ) -> set[str]:
     """Replace the previously planned alignment queries and their mapped shards."""
-    manifest_path = (
-        data_dir / score.LINKED_APO_QUERY_MANIFEST_RELATIVE
-        if search_db == "apo"
-        else data_dir / score.MANIFEST_RELATIVE
-    )
+    manifest_path = _query_manifest(data_dir, search_db)
     active = set(
         pd.read_parquet(manifest_path, columns=["pdb_id"])["pdb_id"].astype(str)
     )
     full_queries = active.intersection(full_queries)
     inactive = affected.difference(active)
     _remove_inactive_queries(data_dir, search_db=search_db, pdb_ids=inactive)
+    configured_search_db = "apo" if search_db == "interface_apo" else search_db
     selected_cfg = cast(
-        DictConfig, OmegaConf.merge(scorer_cfg, {"sub_databases": [search_db]})
+        DictConfig,
+        OmegaConf.merge(scorer_cfg, {"sub_databases": [configured_search_db]}),
     )
     for start in range(0, len(full_queries), batch_size):
         tasks.run_batch_searches(
@@ -498,6 +502,7 @@ def repair_alignments(
             mmseqs_cfg=mmseqs_cfg,
             cpu=threads,
             scratch_dir=scratch_dir / f"full-{search_db}-{start // batch_size:05d}",
+            search_databases=[search_db],
             force_update=True,
         )
     touched_shards = {pdb_id[1:3] for pdb_id in full_queries | inactive}
@@ -877,6 +882,9 @@ def repair_apo_scores(
     return {
         **report,
         "linked_apo_structures": str(output),
+        "interface_apo_structures": str(
+            data_dir / RELEASE_PATHS["interface_apo_structures"]
+        ),
     }
 
 
@@ -1592,6 +1600,11 @@ def apply_release_update(
 
     cfg = _load_configuration(config_path)
     search_databases = list(dict.fromkeys(map(str, cfg.scorer.sub_databases)))
+    alignment_databases = list(search_databases)
+    if "apo" in alignment_databases:
+        alignment_databases.insert(
+            alignment_databases.index("apo") + 1, "interface_apo"
+        )
     pdb_search_databases = [
         search_db for search_db in search_databases if search_db in {"holo", "apo"}
     ]
@@ -1704,7 +1717,7 @@ def apply_release_update(
     if "alignments" not in completed:
         planned_queries = _load_or_plan_alignment_repairs(
             workspace,
-            search_databases=search_databases,
+            search_databases=alignment_databases,
             affected=affected,
             scorer_cfg=cfg.scorer,
             foldseek_cfg=cfg.foldseek,
@@ -1730,7 +1743,7 @@ def apply_release_update(
                     batch_size=search_batch_size,
                 )
             )
-            for search_db in search_databases
+            for search_db in alignment_databases
         }
         alignment_details: dict[str, Any] = {"full_queries": full_queries}
         if "holo" in search_databases:

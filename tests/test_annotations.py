@@ -1372,6 +1372,18 @@ def test_entry_metadata_preserves_assembly_failures(failures, tmp_path) -> None:
     )
 
 
+def test_entry_metadata_keeps_validation_columns_without_a_report() -> None:
+    metadata = Entry(pdb_id="1abc").metadata_to_df()
+    validation_columns = {
+        *(f"entry_validation_{name}" for name in EntryValidation.model_fields),
+        "entry_validation_r_minus_rfree",
+        "entry_pass_validation_criteria",
+    }
+
+    assert validation_columns.issubset(metadata.columns)
+    assert metadata[list(validation_columns)].isna().all().all()
+
+
 @pytest.mark.parametrize("failures", [[], ["hydrogen_bond", "water_bridge"]])
 def test_ligand_annotation_preserves_interaction_failures(
     failures, tmp_path, monkeypatch
@@ -2131,6 +2143,7 @@ def test_water_saving(cif_2p1q, mock_alternative_datasets):
     )
     system_tag = "2p1q__2__2.B_2.C__2.E"
     row = entry.to_df().query("system_id == @system_tag").iloc[0]
+    biounit_chains = entry.biounit_chains_to_df()
 
     output_dir = entry_dir / "reconstructed" / system_tag
     receptor_cif = output_dir / "receptor.cif"
@@ -2138,6 +2151,7 @@ def test_water_saving(cif_2p1q, mock_alternative_datasets):
         cif_2p1q,
         row,
         outputs=SystemReconstructionOutputs(receptor_cif=receptor_cif),
+        biounit_chains=biounit_chains,
     )
     assert receptor_cif.is_file()
     assert not (output_dir / "system.cif").exists()
@@ -2152,6 +2166,7 @@ def test_water_saving(cif_2p1q, mock_alternative_datasets):
         cif_2p1q,
         row,
         outputs=SystemReconstructionOutputs(receptor_cif=all_waters_cif),
+        biounit_chains=biounit_chains,
         options=SystemReconstructionOptions(receptor_waters="all"),
     )
     all_atoms = pdbx.get_structure(read_mmcif_file(all_waters_cif), model=1)
@@ -2362,6 +2377,7 @@ def test_canonical_ligand_saving_and_system_reconstruction(
         outputs=SystemReconstructionOutputs(
             sequences_fasta=dependency_free_fasta,
         ),
+        biounit_chains=biounit_chains,
         options=SystemReconstructionOptions(
             system_waters="none",
             receptor_waters="none",

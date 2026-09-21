@@ -1,3 +1,4 @@
+import json
 import os
 
 from plinder.data import databases
@@ -297,6 +298,10 @@ def test_make_sub_dbs_builds_complete_backend_in_scratch(tmp_path, monkeypatch):
     target = db_dir / "holo_foldseek"
     assert (target / "holo_foldseek.dbtype").is_file()
     assert (target / "selection.json").is_file()
+    selection = json.loads((target / "selection.json").read_text())
+    assert selection["target_database"]["file_count"] == 4
+    assert selection["target_database"]["size"] == 0
+    assert len(selection["target_database"]["sha256"]) == 64
     assert (target / "exact_cluster.json").is_file()
     assert original_missing.read_text() == '{"old": true}\n'
     assert not os.path.samefile(original_missing, db_dir / "missing.json")

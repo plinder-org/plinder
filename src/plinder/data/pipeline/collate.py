@@ -26,6 +26,7 @@ from plinder.data.annotations.interface_utils import (
     min_interface_residues_from_schema,
 )
 from plinder.data.pipeline.ingest import (
+    BIOUNIT_CONTACT_COLUMNS,
     BIOUNIT_LIGAND_CONTACT_COLUMNS,
     BIOUNIT_PROTEIN_CONTACT_COLUMNS,
     CHAIN_MODIFICATION_COLUMNS,
@@ -34,7 +35,7 @@ from plinder.data.pipeline.ingest import (
 )
 
 COLLATION_VERSION = 1
-STAGING_RELATIVE = Path("index/.staging/v3_collation")
+STAGING_RELATIVE = Path("index/.staging/collation")
 MANIFEST_NAME = "entries.parquet"
 PLAN_NAME = "plan.json"
 FINAL_MARKER_NAME = "collation.json"
@@ -175,8 +176,8 @@ MANIFEST_SCHEMA = pa.schema(
         ("ligand_size", pa.int64()),
         ("ligand_mtime_ns", pa.int64()),
         ("interface_min_residues", pa.int64()),
-        ("ligand_contacts_complete", pa.bool_()),
-        ("protein_contacts_complete", pa.bool_()),
+        ("ligand_contacts_computed", pa.bool_()),
+        ("protein_contacts_computed", pa.bool_()),
     ]
 )
 
@@ -211,9 +212,6 @@ BIOUNIT_CHAIN_SCHEMA = pa.schema(
         ("chain_num_contacting_other_ligands", pa.int64()),
         ("chain_num_contacting_proteins", pa.int64()),
     ]
-)
-BIOUNIT_OPTIONAL_CONTACT_COLUMNS = (
-    BIOUNIT_LIGAND_CONTACT_COLUMNS | BIOUNIT_PROTEIN_CONTACT_COLUMNS
 )
 
 ENTRY_SOURCE_SCHEMA = pa.schema(
@@ -318,42 +316,21 @@ def _row_signature(rows: Sequence[dict[str, Any]]) -> str:
     return digest.hexdigest()
 
 
-def _contact_columns_are_complete(path: Path, columns: set[str]) -> bool:
-    """Return whether a sidecar contains valid values for a contact group."""
-    try:
-        available = columns.intersection(pq.read_schema(path).names)
-        if not available:
-            return False
-        if available != columns:
-            raise ValueError(f"invalid biological-assembly contact columns in {path}")
-        table = pq.read_table(path, columns=sorted(columns))
-    except OSError:
+def _contact_columns_were_computed(path: Path, columns: set[str]) -> bool:
+    """Check whether one complete contact group is present in a sidecar."""
+    available = columns.intersection(pq.read_schema(path).names)
+    if not available:
         return False
-    valid = all(
-        value is not None and value >= 0
+    if available != columns:
+        raise ValueError(f"incomplete biological-assembly contact columns in {path}")
+    table = pq.read_table(path, columns=sorted(columns))
+    if any(
+        value is None or value < 0
         for column in table.column_names
         for value in table[column].to_pylist()
-    )
-    if not valid:
+    ):
         raise ValueError(f"invalid biological-assembly contact counts in {path}")
     return True
-
-
-def _release_contact_coverage(
-    marker: dict[str, Any], biounit_path: Path
-) -> tuple[bool, bool]:
-    """Read contact coverage from a release marker or its biounit table."""
-    ligand = marker.get("ligand_contacts_complete")
-    if not isinstance(ligand, bool):
-        ligand = _contact_columns_are_complete(
-            biounit_path, BIOUNIT_LIGAND_CONTACT_COLUMNS
-        )
-    protein = marker.get("protein_contacts_complete")
-    if not isinstance(protein, bool):
-        protein = _contact_columns_are_complete(
-            biounit_path, BIOUNIT_PROTEIN_CONTACT_COLUMNS
-        )
-    return ligand, protein
 
 
 def _entry_manifest_row(data_dir: Path, entry_dir: Path) -> dict[str, Any]:
@@ -377,7 +354,7 @@ def _entry_manifest_row(data_dir: Path, entry_dir: Path) -> dict[str, Any]:
     optional = {"annotation", "ligand"}
     if annotation_path.is_file() != ligand_path.is_file():
         raise FileNotFoundError(
-            f"incomplete V3 entry {pdb_id}; ligand outputs disagree: "
+            f"incomplete entry {pdb_id}; ligand outputs disagree: "
             f"annotation={annotation_path.is_file()}, ligand={ligand_path.is_file()}"
         )
     path_stats: dict[str, os.stat_result] = {}
@@ -396,17 +373,17 @@ def _entry_manifest_row(data_dir: Path, entry_dir: Path) -> dict[str, Any]:
         path_stats[name] = path_stat
     if missing:
         formatted = ", ".join(str(path) for path in missing)
-        raise FileNotFoundError(f"incomplete V3 entry {pdb_id}; missing: {formatted}")
+        raise FileNotFoundError(f"incomplete entry {pdb_id}; missing: {formatted}")
     if annotation_path.is_file():
         if pq.ParquetFile(annotation_path).metadata.num_rows < 1:
-            raise ValueError(f"ligand annotation is empty for V3 entry {pdb_id}")
+            raise ValueError(f"ligand annotation is empty for entry {pdb_id}")
     else:
         if (
             completed_entry_metrics(data_dir, pdb_id) is None
             and completed_interface_metrics(data_dir, pdb_id) is None
         ):
             raise ValueError(
-                f"sidecar-only V3 entry {pdb_id} has no successful ingest marker"
+                f"sidecar-only entry {pdb_id} has no successful ingest marker"
             )
     row: dict[str, Any] = {
         "pdb_id": pdb_id,
@@ -414,10 +391,10 @@ def _entry_manifest_row(data_dir: Path, entry_dir: Path) -> dict[str, Any]:
         "interface_min_residues": min_interface_residues_from_schema(
             pq.read_schema(paths["interface"])
         ),
-        "ligand_contacts_complete": _contact_columns_are_complete(
+        "ligand_contacts_computed": _contact_columns_were_computed(
             paths["biounit_chain"], BIOUNIT_LIGAND_CONTACT_COLUMNS
         ),
-        "protein_contacts_complete": _contact_columns_are_complete(
+        "protein_contacts_computed": _contact_columns_were_computed(
             paths["biounit_chain"], BIOUNIT_PROTEIN_CONTACT_COLUMNS
         ),
         **{f"{name}_path": str(path.resolve()) for name, path in paths.items()},
@@ -474,9 +451,7 @@ def start_collation_plan(
     data_dir = data_dir.resolve()
     codes = _raw_entry_codes(data_dir)
     if not codes:
-        raise ValueError(
-            f"no materialized V3 entries found in {data_dir / 'raw_entries'}"
-        )
+        raise ValueError(f"no entries found in {data_dir / 'raw_entries'}")
     build: dict[str, Any] = {
         "version": COLLATION_VERSION,
         "status": "inventorying",
@@ -635,17 +610,15 @@ def finalize_collation_plan(data_dir: Path) -> dict[str, Any]:
                 int(row["interface_min_residues"]) for row in rows
             )
             ligand_contact_states.update(
-                bool(row["ligand_contacts_complete"]) for row in rows
+                bool(row["ligand_contacts_computed"]) for row in rows
             )
             protein_contact_states.update(
-                bool(row["protein_contacts_complete"]) for row in rows
+                bool(row["protein_contacts_computed"]) for row in rows
             )
             total_entries += len(rows)
             writer.write_table(table)
         if total_entries == 0:
-            raise ValueError(
-                f"no materialized V3 entries found in {data_dir / 'raw_entries'}"
-            )
+            raise ValueError(f"no entries found in {data_dir / 'raw_entries'}")
         if len(interface_min_residues) != 1:
             raise ValueError(
                 "mixed interface.min_interface_residues values in ingest outputs: "
@@ -674,8 +647,8 @@ def finalize_collation_plan(data_dir: Path) -> dict[str, Any]:
         "code_entry_counts": code_counts,
         "code_signatures": code_signatures,
         "interface_min_residues": interface_min_residues.pop(),
-        "ligand_contacts_complete": ligand_contact_states.pop(),
-        "protein_contacts_complete": protein_contact_states.pop(),
+        "ligand_contacts_computed": ligand_contact_states.pop(),
+        "protein_contacts_computed": protein_contact_states.pop(),
         "include_ligand_annotations": bool(build["include_ligand_annotations"]),
     }
     write_json_atomic(plan_path(data_dir), summary)
@@ -692,7 +665,7 @@ def plan_collation(
     threads: int = 1,
     include_ligand_annotations: bool = True,
 ) -> dict[str, Any]:
-    """Inventory every materialized V3 entry and atomically publish a plan."""
+    """Inventory every entry and atomically write a collation plan."""
     build = start_collation_plan(
         data_dir,
         include_ligand_annotations=include_ligand_annotations,
@@ -715,10 +688,10 @@ def load_plan(data_dir: Path) -> dict[str, Any]:
         raise ValueError(f"invalid collation plan: {path}")
     if int(plan.get("interface_min_residues", 0)) < 1:
         raise ValueError(f"invalid interface threshold in collation plan: {path}")
-    if not isinstance(plan.get("ligand_contacts_complete"), bool) or not isinstance(
-        plan.get("protein_contacts_complete"), bool
+    if not isinstance(plan.get("ligand_contacts_computed"), bool) or not isinstance(
+        plan.get("protein_contacts_computed"), bool
     ):
-        raise ValueError(f"invalid contact coverage in collation plan: {path}")
+        raise ValueError(f"invalid contact state in collation plan: {path}")
     if not manifest_path(data_dir).is_file():
         raise FileNotFoundError(
             f"missing collation manifest: {manifest_path(data_dir)}"
@@ -859,27 +832,6 @@ def _require_columns(
     missing = sorted(set(required).difference(columns))
     if missing:
         raise ValueError(f"{label} is missing required columns: {missing}")
-
-
-def _biounit_select_with_nullable_contacts(
-    relation: str, columns: Iterable[str]
-) -> str:
-    """Select a biounit table, adding absent contact counts as nullable integers."""
-    available = set(columns)
-    required = set(BIOUNIT_CHAIN_SCHEMA.names).difference(
-        BIOUNIT_OPTIONAL_CONTACT_COLUMNS
-    )
-    _require_columns(available, required, "biological-assembly chain table")
-    missing_contacts = [
-        column
-        for column in BIOUNIT_CHAIN_SCHEMA.names
-        if column in BIOUNIT_OPTIONAL_CONTACT_COLUMNS and column not in available
-    ]
-    additions = [
-        f"CAST(NULL AS BIGINT) AS {_quote_identifier(column)}"
-        for column in missing_contacts
-    ]
-    return ", ".join([f"{relation}.*", *additions])
 
 
 def _build_annotation_view(
@@ -1076,80 +1028,19 @@ def _collate_sidecars(
     _write_table_atomic(table, output, row_group_size=row_group_size)
 
 
-def _collate_entry_chains(
-    chain_paths: Sequence[Path],
-    biounit_paths: Sequence[Path],
-    output: Path,
-    *,
-    row_group_size: int,
-) -> None:
-    """Collate chain metadata, deriving a legacy ligand-like flag exactly."""
-    if len(chain_paths) != len(biounit_paths):
-        raise ValueError("entry-chain and biological-unit sidecars are unpaired")
-    tables: list[pa.Table] = []
-    for chain_path, biounit_path in zip(chain_paths, biounit_paths):
-        table = pq.read_table(chain_path)
-        if "chain_is_ligand_like" not in table.column_names:
-            required = {"entry_pdb_id", "chain_asym_id"}
-            missing = sorted(required.difference(table.column_names))
-            if missing:
-                raise ValueError(
-                    f"{chain_path} cannot derive chain_is_ligand_like; "
-                    f"missing: {missing}"
-                )
-            biounits = _normalize_table(
-                biounit_path,
-                BIOUNIT_CHAIN_SCHEMA,
-                optional_columns=BIOUNIT_OPTIONAL_CONTACT_COLUMNS,
-            )
-            ligand_like = {
-                (str(row["entry_pdb_id"]), str(row["chain_asym_id"]))
-                for row in biounits.select(
-                    [
-                        "entry_pdb_id",
-                        "chain_asym_id",
-                        "chain_role",
-                    ]
-                ).to_pylist()
-                if row["chain_role"] == "ligand"
-            }
-            values = [
-                (str(entry_id), str(asym_id)) in ligand_like
-                for entry_id, asym_id in zip(
-                    table["entry_pdb_id"].to_pylist(),
-                    table["chain_asym_id"].to_pylist(),
-                )
-            ]
-            table = table.append_column(
-                "chain_is_ligand_like",
-                pa.array(values, type=pa.bool_()),
-            )
-        tables.append(_normalize_arrow_table(table, chain_path, ENTRY_CHAIN_SCHEMA))
-    collated = (
-        pa.concat_tables(tables)
-        if tables
-        else pa.Table.from_batches([], schema=ENTRY_CHAIN_SCHEMA)
-    )
-    if collated.num_rows:
-        collated = collated.sort_by(
-            [
-                ("entry_pdb_id", "ascending"),
-                ("chain_asym_id", "ascending"),
-            ]
-        )
-    _write_table_atomic(collated, output, row_group_size=row_group_size)
-
-
 def _collate_entry_metadata(
     paths: Sequence[Path],
     output: Path,
     *,
     row_group_size: int,
 ) -> None:
-    """Collate the evolving entry schema by column name."""
+    """Collate entry metadata with one consistent column set."""
     tables = [pq.read_table(path) for path in paths]
     if not tables:
         raise ValueError("cannot collate an empty entry-metadata shard")
+    columns = set(tables[0].column_names)
+    if any(set(table.column_names) != columns for table in tables[1:]):
+        raise ValueError("entry metadata sidecars have inconsistent columns")
     table = pa.concat_tables(tables, promote_options="default")
     if "entry_pdb_id" not in table.column_names:
         raise ValueError("entry metadata is missing entry_pdb_id")
@@ -1191,6 +1082,15 @@ def _shard_output_names(plan: dict[str, Any]) -> tuple[str, ...]:
     return names
 
 
+def _uncomputed_contact_columns(plan: dict[str, Any]) -> set[str]:
+    columns: set[str] = set()
+    if not plan["ligand_contacts_computed"]:
+        columns.update(BIOUNIT_LIGAND_CONTACT_COLUMNS)
+    if not plan["protein_contacts_computed"]:
+        columns.update(BIOUNIT_PROTEIN_CONTACT_COLUMNS)
+    return columns
+
+
 def _completed_shard(
     paths: dict[str, Path],
     *,
@@ -1206,12 +1106,6 @@ def _completed_shard(
     except (OSError, json.JSONDecodeError):
         return None
     outputs = [paths[name] for name in output_names]
-    try:
-        biounit_schema_is_current = pq.read_schema(
-            paths["entry_biounit_chains"]
-        ).equals(BIOUNIT_CHAIN_SCHEMA)
-    except OSError:
-        return None
     if (
         metrics.get("status") == "complete"
         and metrics.get("version") == COLLATION_VERSION
@@ -1219,7 +1113,6 @@ def _completed_shard(
         and bool(metrics.get("include_ligand_annotations", True))
         == include_ligand_annotations
         and all(path.is_file() for path in outputs)
-        and biounit_schema_is_current
     ):
         return metrics
     return None
@@ -1323,10 +1216,11 @@ def collate_shard(
                 )
             finally:
                 connection.close()
-        _collate_entry_chains(
+        _collate_sidecars(
             [Path(str(row["chain_path"])) for row in rows],
-            [Path(str(row["biounit_chain_path"])) for row in rows],
             paths["entry_chains"],
+            ENTRY_CHAIN_SCHEMA,
+            sort_columns=("entry_pdb_id", "chain_asym_id"),
             row_group_size=row_group_size,
         )
         _collate_entry_metadata(
@@ -1347,7 +1241,7 @@ def collate_shard(
             BIOUNIT_CHAIN_SCHEMA,
             sort_columns=("entry_pdb_id", "biounit_id", "chain_instance"),
             row_group_size=row_group_size,
-            optional_columns=BIOUNIT_OPTIONAL_CONTACT_COLUMNS,
+            optional_columns=_uncomputed_contact_columns(plan),
         )
         _collate_sidecars(
             [Path(str(row["source_path"])) for row in rows],
@@ -1457,8 +1351,8 @@ def _validate_final_tables(
     *,
     expected_counts: dict[str, int],
     min_interface_residues: int,
-    require_ligand_contacts: bool = True,
-    require_protein_contacts: bool = True,
+    ligand_contacts_computed: bool = True,
+    protein_contacts_computed: bool = True,
     threads: int,
     memory_limit: str,
     scratch_dir: Path | None,
@@ -1563,18 +1457,14 @@ def _validate_final_tables(
             raise ValueError(
                 f"invalid entry-chain sequence metadata: {invalid_chain_metadata}"
             )
-        null_contact_checks: list[str] = []
-        if require_ligand_contacts:
-            null_contact_checks.extend(
-                f"{column} IS NULL" for column in BIOUNIT_LIGAND_CONTACT_COLUMNS
-            )
-        if require_protein_contacts:
-            null_contact_checks.extend(
-                f"{column} IS NULL" for column in BIOUNIT_PROTEIN_CONTACT_COLUMNS
-            )
+        required_contact_columns: set[str] = set()
+        if ligand_contacts_computed:
+            required_contact_columns.update(BIOUNIT_LIGAND_CONTACT_COLUMNS)
+        if protein_contacts_computed:
+            required_contact_columns.update(BIOUNIT_PROTEIN_CONTACT_COLUMNS)
         invalid_contact_checks = [
-            *(f"{column} < 0" for column in BIOUNIT_OPTIONAL_CONTACT_COLUMNS),
-            *null_contact_checks,
+            *(f"{column} < 0" for column in BIOUNIT_CONTACT_COLUMNS),
+            *(f"{column} IS NULL" for column in required_contact_columns),
         ]
         invalid_biounit_contacts = int(
             _fetch_scalar(
@@ -1587,6 +1477,30 @@ def _validate_final_tables(
             raise ValueError(
                 "invalid biological-assembly contact counts: "
                 f"{invalid_biounit_contacts} rows"
+            )
+        uncomputed_contact_columns = BIOUNIT_CONTACT_COLUMNS.difference(
+            required_contact_columns
+        )
+        unexpected_biounit_contacts = (
+            int(
+                _fetch_scalar(
+                    connection,
+                    "SELECT count(*) FROM entry_biounit_chains WHERE "
+                    + " OR ".join(
+                        sorted(
+                            f"{column} IS NOT NULL"
+                            for column in uncomputed_contact_columns
+                        )
+                    ),
+                )
+            )
+            if uncomputed_contact_columns
+            else 0
+        )
+        if unexpected_biounit_contacts:
+            raise ValueError(
+                "unexpected biological-assembly contact counts: "
+                f"{unexpected_biounit_contacts} rows"
             )
         invalid_interfaces = {
             "system_id": int(
@@ -1869,8 +1783,8 @@ def finalize_collation(
             validation_paths,
             expected_counts=expected_counts,
             min_interface_residues=int(plan["interface_min_residues"]),
-            require_ligand_contacts=bool(plan["ligand_contacts_complete"]),
-            require_protein_contacts=bool(plan["protein_contacts_complete"]),
+            ligand_contacts_computed=bool(plan["ligand_contacts_computed"]),
+            protein_contacts_computed=bool(plan["protein_contacts_computed"]),
             threads=threads,
             memory_limit=memory_limit,
             scratch_dir=scratch_dir,
@@ -1891,8 +1805,8 @@ def finalize_collation(
         "manifest": str(manifest_path(data_dir)),
         "code_count": len(plan["codes"]),
         "interface_min_residues": int(plan["interface_min_residues"]),
-        "ligand_contacts_complete": bool(plan["ligand_contacts_complete"]),
-        "protein_contacts_complete": bool(plan["protein_contacts_complete"]),
+        "ligand_contacts_computed": bool(plan["ligand_contacts_computed"]),
+        "protein_contacts_computed": bool(plan["protein_contacts_computed"]),
         "include_ligand_annotations": include_ligand_annotations,
         "outputs": {name: str(path) for name, path in final_paths.items()},
         **validation,
@@ -1966,13 +1880,16 @@ def repair_collation(
         installed_interface_min_residues = int(
             installed_marker["interface_min_residues"]
         )
+        ligand_contacts_computed = installed_marker["ligand_contacts_computed"]
+        protein_contacts_computed = installed_marker["protein_contacts_computed"]
+        if not isinstance(ligand_contacts_computed, bool) or not isinstance(
+            protein_contacts_computed, bool
+        ):
+            raise TypeError("invalid contact state")
     except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
         raise ValueError(
             "targeted repair requires a collated interface threshold"
         ) from exc
-    installed_ligand_contacts, installed_protein_contacts = _release_contact_coverage(
-        installed_marker, final_paths["entry_biounit_chains"]
-    )
 
     rows = [
         _entry_manifest_row(
@@ -1981,6 +1898,14 @@ def repair_collation(
         )
         for pdb_id in selected
     ]
+    if {bool(row["ligand_contacts_computed"]) for row in rows} != {
+        ligand_contacts_computed
+    } or {bool(row["protein_contacts_computed"]) for row in rows} != {
+        protein_contacts_computed
+    }:
+        raise ValueError(
+            "targeted repair contact groups differ from the installed release"
+        )
     replacement_interface_thresholds = {
         int(row["interface_min_residues"]) for row in rows
     }
@@ -2000,13 +1925,6 @@ def repair_collation(
             "interfaces",
         )
     }
-    installed_biounit_columns = set(
-        pq.read_schema(final_paths["entry_biounit_chains"]).names
-    )
-    if not BIOUNIT_OPTIONAL_CONTACT_COLUMNS.issubset(installed_biounit_columns):
-        temporary_paths["entry_biounit_chains"] = _temporary_path(
-            final_paths["entry_biounit_chains"]
-        )
     replacement_paths = {
         name: _temporary_path(path.with_name(f"repair-{path.name}"))
         for name, path in final_paths.items()
@@ -2029,7 +1947,7 @@ def repair_collation(
                 sort_columns=tuple(ENTRY_TABLES[name][1].split(", ")),
                 row_group_size=row_group_size,
                 optional_columns=(
-                    BIOUNIT_OPTIONAL_CONTACT_COLUMNS
+                    _uncomputed_contact_columns(installed_marker)
                     if name == "entry_biounit_chains"
                     else frozenset()
                 ),
@@ -2048,21 +1966,6 @@ def repair_collation(
                 memory_limit=memory_limit,
                 scratch_dir=scratch_dir,
             )
-            if "entry_biounit_chains" in temporary_paths:
-                connection.read_parquet(
-                    str(final_paths["entry_biounit_chains"])
-                ).create_view("legacy_entry_biounit_chains", replace=True)
-                select = _biounit_select_with_nullable_contacts(
-                    "legacy_entry_biounit_chains",
-                    _relation_columns(connection, "legacy_entry_biounit_chains"),
-                )
-                _copy_query(
-                    connection,
-                    f"SELECT {select} FROM legacy_entry_biounit_chains "
-                    f"ORDER BY {ENTRY_TABLES['entry_biounit_chains'][1]}",
-                    temporary_paths["entry_biounit_chains"],
-                    row_group_size=row_group_size,
-                )
             connection.register(
                 "repaired_entries", pa.table({"entry_pdb_id": selected})
             )
@@ -2121,8 +2024,7 @@ def repair_collation(
                 "entry_biounit_chains",
                 "entry_sources",
             ):
-                installed_path = temporary_paths.get(name, final_paths[name])
-                connection.read_parquet(str(installed_path)).create_view(
+                connection.read_parquet(str(final_paths[name])).create_view(
                     f"installed_{name}", replace=True
                 )
                 connection.read_parquet(str(replacement_paths[name])).create_view(
@@ -2136,17 +2038,19 @@ def repair_collation(
                     or column not in CHAIN_MODIFICATION_COLUMNS
                 ]
                 installed_columns = _relation_columns(connection, f"installed_{name}")
-                if not set(protected_columns).issubset(
-                    installed_columns
-                ) or _repair_rows_differ(connection, name, protected_columns):
+                if not set(columns).issubset(installed_columns):
+                    raise ValueError(
+                        f"installed {name} does not have the current schema"
+                    )
+                if _repair_rows_differ(connection, name, protected_columns):
                     raise ValueError(
                         f"targeted repair changed {name}; rebuild the protein "
                         "scoring inputs and mapped alignments instead"
                     )
                 if name == "entry_chains":
-                    chain_annotations_changed = not set(columns).issubset(
-                        installed_columns
-                    ) or _repair_rows_differ(connection, name, columns)
+                    chain_annotations_changed = _repair_rows_differ(
+                        connection, name, columns
+                    )
             replacements = ["entry_metadata", "interfaces"]
             if chain_annotations_changed:
                 temporary_paths["entry_chains"] = _temporary_path(
@@ -2181,8 +2085,8 @@ def repair_collation(
             validation_paths,
             expected_counts=expected_counts,
             min_interface_residues=installed_interface_min_residues,
-            require_ligand_contacts=installed_ligand_contacts,
-            require_protein_contacts=installed_protein_contacts,
+            ligand_contacts_computed=ligand_contacts_computed,
+            protein_contacts_computed=protein_contacts_computed,
             threads=threads,
             memory_limit=memory_limit,
             scratch_dir=scratch_dir,
@@ -2204,8 +2108,8 @@ def repair_collation(
         "mode": "targeted_repair",
         "repaired_entry_count": len(selected),
         "interface_min_residues": installed_interface_min_residues,
-        "ligand_contacts_complete": installed_ligand_contacts,
-        "protein_contacts_complete": installed_protein_contacts,
+        "ligand_contacts_computed": ligand_contacts_computed,
+        "protein_contacts_computed": protein_contacts_computed,
         "repaired_entry_digest": hashlib.sha256(
             ("\n".join(selected) + "\n").encode("utf-8")
         ).hexdigest(),

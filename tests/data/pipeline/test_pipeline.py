@@ -31,6 +31,43 @@ def test_pipeline_clusters_whole_interfaces_only():
     assert ("interface", ["interface_qcov"]) in pipe._cluster_entities()
 
 
+def test_make_dbs_creates_the_requested_protein_search_plans(
+    tmp_path, monkeypatch
+) -> None:
+    from plinder.data.pipeline import score, tasks
+
+    cfg = config.get_config(cached=False)
+    cfg.scorer.sub_databases = ["holo", "apo"]
+    pipe = pipeline.IngestPipeline(conf=cfg)
+    pipe.plinder_dir = tmp_path
+    calls = []
+    monkeypatch.setattr(
+        pipe,
+        "_entry_source_roots",
+        lambda: (tmp_path / "cif", tmp_path / "validation"),
+    )
+    monkeypatch.setattr(
+        score,
+        "plan_protein_scoring",
+        lambda *_args, **_kwargs: calls.append("holo"),
+    )
+    monkeypatch.setattr(
+        score,
+        "plan_linked_apo_scoring",
+        lambda *_args, **_kwargs: calls.append("apo"),
+    )
+    monkeypatch.setattr(
+        score,
+        "make_foldseek_input_manifest",
+        lambda _data_dir, cif_root: cif_root,
+    )
+    monkeypatch.setattr(tasks, "make_dbs", lambda **_kwargs: None)
+
+    pipeline.IngestPipeline.make_dbs.__wrapped__(pipe)
+
+    assert calls == ["holo", "apo"]
+
+
 @pytest.mark.parametrize("mode", ["enabled", "metric_removed", "stage_skipped"])
 def test_segmented_ligand_ingest_runs_mhfp6_unless_disabled(tmp_path, mode):
     from plinder.data.annotations import get_similarity_scores as scoring

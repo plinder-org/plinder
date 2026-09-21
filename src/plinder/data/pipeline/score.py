@@ -38,6 +38,9 @@ LOG = setup_logger(__name__)
 MANIFEST_RELATIVE = Path("manifests/protein_scoring_queries.parquet")
 PLAN_RELATIVE = Path("manifests/protein_scoring_plan.json")
 LINKED_APO_QUERY_MANIFEST_RELATIVE = Path("manifests/linked_apo_queries.parquet")
+INTERFACE_APO_QUERY_MANIFEST_RELATIVE = Path(
+    "manifests/interface_apo_search_queries.parquet"
+)
 LINKED_APO_PLAN_RELATIVE = Path("manifests/linked_apo_plan.json")
 FOLDSEEK_INPUT_RELATIVE = Path("manifests/foldseek_createdb_inputs.tsv")
 SCORE_WORK_RELATIVE = Path("manifests/protein_scoring_work.parquet")
@@ -1614,7 +1617,7 @@ def plan_linked_apo_scoring(
     two_char_codes: list[str] | None = None,
     max_seqs: int = 10_000,
 ) -> dict[str, Any]:
-    """Freeze the proper-ligand receptor chains used as linked-apo queries."""
+    """Freeze the separate ligand-apo and interface-apo query chains."""
     if max_seqs < 1:
         raise ValueError("max_seqs must be positive")
     chunks = tasks.scatter_protein_scoring(
@@ -1624,30 +1627,52 @@ def plan_linked_apo_scoring(
         pdb_ids=pdb_ids or [],
         search_dbs=["apo"],
     )
-    query_ids = [pdb_id for chunk in chunks for pdb_id in chunk]
-    if not query_ids:
-        raise ValueError("no proper-ligand protein receptor chains were selected")
-    chains = tasks._linked_apo_query_chains(data_dir)
-    chains = chains[chains["entry_pdb_id"].isin(query_ids)].copy()
-    chains = chains.rename(columns={"entry_pdb_id": "pdb_id"})
-    chains["shard"] = chains["pdb_id"].str.slice(1, 3)
-    manifest = chains[
-        ["pdb_id", "shard", "chain_asym_id", "chain_auth_id"]
-    ].sort_values(["shard", "pdb_id", "chain_asym_id"], ignore_index=True)
-    manifest_path = data_dir / LINKED_APO_QUERY_MANIFEST_RELATIVE
-    _atomic_parquet(manifest, manifest_path)
+    selected_ids = {pdb_id for chunk in chunks for pdb_id in chunk}
+    if not selected_ids:
+        raise ValueError("no ligand-pocket or protein-interface chains were selected")
+
+    def write_queries(chains: pd.DataFrame, path: Path) -> pd.DataFrame:
+        selected = chains[chains["entry_pdb_id"].isin(selected_ids)].copy()
+        selected = selected.rename(columns={"entry_pdb_id": "pdb_id"})
+        selected["shard"] = selected["pdb_id"].str.slice(1, 3)
+        manifest = selected[
+            ["pdb_id", "shard", "chain_asym_id", "chain_auth_id"]
+        ].sort_values(["shard", "pdb_id", "chain_asym_id"], ignore_index=True)
+        _atomic_parquet(manifest, path)
+        return manifest
+
+    ligand_manifest_path = data_dir / LINKED_APO_QUERY_MANIFEST_RELATIVE
+    ligand_manifest = write_queries(
+        tasks._ligand_apo_query_chains(data_dir), ligand_manifest_path
+    )
+    interface_manifest_path = data_dir / INTERFACE_APO_QUERY_MANIFEST_RELATIVE
+    interface_manifest = write_queries(
+        tasks._interface_apo_query_chains(data_dir), interface_manifest_path
+    )
     payload = {
-        "query_count": int(manifest["pdb_id"].nunique()),
-        "protein_chain_count": len(manifest),
-        "shard_count": int(manifest["shard"].nunique()),
+        "query_count": len(selected_ids),
+        "ligand_query_count": int(ligand_manifest["pdb_id"].nunique()),
+        "ligand_protein_chain_count": len(ligand_manifest),
+        "interface_query_count": int(interface_manifest["pdb_id"].nunique()),
+        "interface_protein_chain_count": len(interface_manifest),
+        "shard_count": len(
+            set(ligand_manifest["shard"]).union(interface_manifest["shard"])
+        ),
         "max_seqs": max_seqs,
-        "search_database": "apo",
+        "search_databases": ["apo", "interface_apo"],
         "alignment_types": ["foldseek", "mmseqs"],
         "annotation": _source_signature(
             data_dir / "index" / "annotation_table.parquet"
         ),
         "entry_chains": _source_signature(data_dir / "index" / "entry_chains.parquet"),
-        "manifest": _source_signature(manifest_path),
+        "entry_biounit_chains": _source_signature(
+            data_dir / "index" / "entry_biounit_chains.parquet"
+        ),
+        "interface_annotations": _source_signature(
+            data_dir / "index" / "interface_annotation_table.parquet"
+        ),
+        "ligand_manifest": _source_signature(ligand_manifest_path),
+        "interface_manifest": _source_signature(interface_manifest_path),
     }
     write_json_atomic(data_dir / LINKED_APO_PLAN_RELATIVE, payload)
     return payload
@@ -1704,9 +1729,14 @@ def _load_linked_apo_plan(data_dir: Path) -> dict[str, Any]:
         raise FileNotFoundError(f"missing linked-apo scoring plan: {plan_path}")
     plan: dict[str, Any] = json.loads(plan_path.read_text())
     sources = {
-        "manifest": data_dir / LINKED_APO_QUERY_MANIFEST_RELATIVE,
+        "ligand_manifest": data_dir / LINKED_APO_QUERY_MANIFEST_RELATIVE,
+        "interface_manifest": data_dir / INTERFACE_APO_QUERY_MANIFEST_RELATIVE,
         "annotation": data_dir / "index" / "annotation_table.parquet",
         "entry_chains": data_dir / "index" / "entry_chains.parquet",
+        "entry_biounit_chains": data_dir / "index" / "entry_biounit_chains.parquet",
+        "interface_annotations": (
+            data_dir / "index" / "interface_annotation_table.parquet"
+        ),
     }
     for key, path in sources.items():
         if not path.is_file() or _source_signature(path) != plan.get(key):
@@ -1736,6 +1766,29 @@ def _query_batch(
     queries = queries.drop_duplicates("pdb_id", ignore_index=True)
     start = batch_index * batch_size
     values = queries["pdb_id"].iloc[start : start + batch_size].tolist()
+    return [str(value) for value in values]
+
+
+def _apo_search_query_batch(
+    data_dir: Path, batch_index: int, batch_size: int
+) -> list[str]:
+    """Select entries needed by either independently capped apo search."""
+    if batch_index < 0 or batch_size < 1:
+        raise ValueError("batch_index must be non-negative and batch_size positive")
+    _load_linked_apo_plan(data_dir)
+    queries = pd.concat(
+        [
+            pd.read_parquet(data_dir / relative, columns=["pdb_id"])
+            for relative in (
+                LINKED_APO_QUERY_MANIFEST_RELATIVE,
+                INTERFACE_APO_QUERY_MANIFEST_RELATIVE,
+            )
+        ],
+        ignore_index=True,
+    ).drop_duplicates("pdb_id")
+    values = queries.sort_values("pdb_id")["pdb_id"].iloc[
+        batch_index * batch_size : (batch_index + 1) * batch_size
+    ]
     return [str(value) for value in values]
 
 
@@ -2774,12 +2827,21 @@ def _shard_batch(
         _load_linked_apo_plan(data_dir)
     else:
         _load_plan(data_dir)
-    manifest_path = (
-        data_dir / LINKED_APO_QUERY_MANIFEST_RELATIVE
+    manifest_paths = (
+        [
+            data_dir / LINKED_APO_QUERY_MANIFEST_RELATIVE,
+            data_dir / INTERFACE_APO_QUERY_MANIFEST_RELATIVE,
+        ]
         if search_db == "apo"
-        else data_dir / MANIFEST_RELATIVE
+        else [data_dir / MANIFEST_RELATIVE]
     )
-    shards = sorted(pd.read_parquet(manifest_path, columns=["shard"])["shard"].unique())
+    shards = sorted(
+        {
+            str(shard)
+            for path in manifest_paths
+            for shard in pd.read_parquet(path, columns=["shard"])["shard"].unique()
+        }
+    )
     start = batch_index * batch_size
     return [str(value) for value in shards[start : start + batch_size]]
 
@@ -7629,14 +7691,18 @@ def main() -> None:
                 args.batch_size,
                 search_db=search_db,
             )
-            tasks.map_batch_alignments(
-                data_dir=data_dir,
-                shards=shards,
-                scorer_cfg=cfg.scorer,
-                force_update=args.force,
-                scratch_dir=scratch_dir,
-                search_db=search_db,
+            mapped_search_databases = (
+                ["apo", "interface_apo"] if search_db == "apo" else [search_db]
             )
+            for mapped_search_db in mapped_search_databases:
+                tasks.map_batch_alignments(
+                    data_dir=data_dir,
+                    shards=shards,
+                    scorer_cfg=cfg.scorer,
+                    force_update=args.force,
+                    scratch_dir=scratch_dir,
+                    search_db=mapped_search_db,
+                )
             result = {
                 "status": "complete",
                 "search_db": search_db,
@@ -7759,11 +7825,19 @@ def main() -> None:
                     args.batch_size,
                 )
             else:
-                pdb_ids = _query_batch(
-                    data_dir,
-                    args.batch_index,
-                    args.batch_size,
-                    search_db=search_db,
+                pdb_ids = (
+                    _apo_search_query_batch(
+                        data_dir,
+                        args.batch_index,
+                        args.batch_size,
+                    )
+                    if search_db == "apo"
+                    else _query_batch(
+                        data_dir,
+                        args.batch_index,
+                        args.batch_size,
+                        search_db=search_db,
+                    )
                 )
             if args.command == "search":
                 tasks.run_batch_searches(

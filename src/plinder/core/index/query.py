@@ -103,6 +103,14 @@ TABLE_JOINS: dict[str, dict[str, JoinKeys]] = {
         "entry_metadata": (("source_entry_id", "entry_pdb_id"),),
         "entry_sources": (("source_entry_id", "entry_pdb_id"),),
     },
+    "interface_apo_structures": {
+        "entry_chains": (
+            ("source_entry_id", "entry_pdb_id"),
+            ("source_chain_asym_id", "chain_asym_id"),
+        ),
+        "entry_metadata": (("source_entry_id", "entry_pdb_id"),),
+        "entry_sources": (("source_entry_id", "entry_pdb_id"),),
+    },
 }
 
 

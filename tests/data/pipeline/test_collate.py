@@ -348,48 +348,11 @@ def test_weekly_entry_update_matches_full_collation(entry_update_case, tmp_path)
     assert json.loads((output / "index/collation.json").read_text())["mode"] == (
         "targeted_repair"
     )
-
-
-@pytest.mark.parametrize("legacy_schema", [False, True])
-def test_weekly_entry_update_preserves_partial_contact_coverage(
-    entry_update_case, legacy_schema
-):
-    base, args, _ = entry_update_case
-    biounit_path = base / "index/entry_biounit_chains.parquet"
-    biounits = pd.read_parquet(biounit_path)
-    marker_path = base / "index/collation.json"
-    marker = json.loads(marker_path.read_text())
-    if legacy_schema:
-        biounits = biounits.drop(columns="chain_num_contacting_proteins")
-        marker.pop("ligand_contacts_complete")
-        marker.pop("protein_contacts_complete")
-    else:
-        biounits["chain_num_contacting_proteins"] = None
-        marker["protein_contacts_complete"] = False
-    biounits.to_parquet(biounit_path, index=False)
-    marker_path.write_text(json.dumps(marker))
-
-    report = update_entries.apply_entry_update(**args)
-    output_biounits = pd.read_parquet(
-        args["output_dir"] / "index/entry_biounit_chains.parquet"
-    )
-    output_marker = json.loads(
-        (args["output_dir"] / "index/collation.json").read_text()
-    )
-
-    assert report["ligand_contacts_complete"] is True
-    assert report["protein_contacts_complete"] is False
-    assert output_marker["ligand_contacts_complete"] is True
-    assert output_marker["protein_contacts_complete"] is False
-    assert "chain_num_contacting_proteins" in output_biounits
-    assert (
-        output_biounits.loc[
-            output_biounits.entry_pdb_id.eq("3ghi"),
-            "chain_num_contacting_proteins",
-        ]
-        .isna()
-        .all()
-    )
+    marker = json.loads((output / "index/collation.json").read_text())
+    assert marker["ligand_contacts_computed"] is True
+    assert marker["protein_contacts_computed"] is True
+    assert report["ligand_contacts_computed"] is True
+    assert report["protein_contacts_computed"] is True
 
 
 @pytest.mark.parametrize("with_interfaces", [True, False])
@@ -655,12 +618,10 @@ def test_weekly_update_preserves_nested_residue_mappings(
     assert _index_bytes(base) == before
 
 
-def test_collation_preserves_failure_diagnostics_and_unknown_older_rows(tmp_path):
+def test_collation_preserves_failure_diagnostics(tmp_path):
     from plinder.core import PlinderRelease, query_table
 
-    # Mix empty lists, recorded failures, and older rows without the columns,
-    # both within a shard and across shards.
-    for pdb_id, failures in [("1abc", []), ("2abd", ["2"]), ("3def", None)]:
+    for pdb_id, failures in [("1abc", []), ("2abd", ["2"]), ("3def", [])]:
         _write_entry(
             tmp_path,
             pdb_id,
@@ -669,8 +630,6 @@ def test_collation_preserves_failure_diagnostics_and_unknown_older_rows(tmp_path
             ],
             comparability={f"{pdb_id}__1__1.L": True},
         )
-        if failures is None:
-            continue
         raw_root = tmp_path / "raw_entries" / pdb_id[1:3]
         metadata_path = raw_root / pdb_id / "entry_metadata.parquet"
         metadata = pd.read_parquet(metadata_path)
@@ -693,14 +652,14 @@ def test_collation_preserves_failure_diagnostics_and_unknown_older_rows(tmp_path
         ],
         release=PlinderRelease(data_dir=tmp_path),
     ).set_index("entry_pdb_id")
-    assert result.loc["1abc", "entry_failed_assembly_ids"].tolist() == []
-    assert result.loc["1abc", "ligand_failed_interaction_types"].tolist() == []
-    assert result.loc["2abd", "entry_failed_assembly_ids"].tolist() == ["2"]
-    assert result.loc["2abd", "ligand_failed_interaction_types"].tolist() == [
+    assert list(result.loc["1abc", "entry_failed_assembly_ids"]) == []
+    assert list(result.loc["1abc", "ligand_failed_interaction_types"]) == []
+    assert list(result.loc["2abd", "entry_failed_assembly_ids"]) == ["2"]
+    assert list(result.loc["2abd", "ligand_failed_interaction_types"]) == [
         "water_bridge"
     ]
-    assert pd.isna(result.loc["3def", "entry_failed_assembly_ids"])
-    assert pd.isna(result.loc["3def", "ligand_failed_interaction_types"])
+    assert list(result.loc["3def", "entry_failed_assembly_ids"]) == []
+    assert list(result.loc["3def", "ligand_failed_interaction_types"]) == []
     assert (
         "entry_failed_assembly_ids"
         not in pq.read_schema(tmp_path / "index/annotation_table.parquet").names
@@ -722,6 +681,7 @@ def _write_interface_only_entry(data_dir: Path, pdb_id: str = "3ghi") -> None:
         json.dumps(
             {
                 "status": "complete",
+                "mode": "all",
                 "counts": {"annotation_rows": 0, "interface_rows": 1},
                 "outputs": {
                     "entry_directory": str(
@@ -868,6 +828,9 @@ def test_collate_shard_does_not_reuse_older_format(tmp_path: Path) -> None:
         ]
     )
     stale.to_parquet(paths["entry_biounit_chains"], index=False)
+    metrics = json.loads(paths["metrics"].read_text())
+    metrics["version"] = COLLATION_VERSION - 1
+    paths["metrics"].write_text(json.dumps(metrics))
 
     refreshed = collate_shard(tmp_path, "ab", memory_limit="1GB")
 
@@ -878,67 +841,6 @@ def test_collate_shard_does_not_reuse_older_format(tmp_path: Path) -> None:
         "chain_num_contacting_other_ligands",
         "chain_num_contacting_proteins",
     }.issubset(pq.read_schema(paths["entry_biounit_chains"]).names)
-
-
-def test_ligand_only_sidecars_are_collatable(tmp_path: Path) -> None:
-    _write_release(tmp_path)
-    for path in tmp_path.glob("raw_entries/*/*/entry_biounit_chains.parquet"):
-        frame = pd.read_parquet(path).drop(columns="chain_num_contacting_proteins")
-        frame.to_parquet(path, index=False)
-
-    report = run_collation(tmp_path, memory_limit="1GB")
-    biounits = pd.read_parquet(tmp_path / "index/entry_biounit_chains.parquet")
-
-    assert report["ligand_contacts_complete"] is True
-    assert report["protein_contacts_complete"] is False
-    assert biounits["chain_num_contacting_proteins"].isna().all()
-
-    repaired = repair_collation(tmp_path, ["1abc"], memory_limit="1GB")
-    repaired_biounits = pd.read_parquet(tmp_path / "index/entry_biounit_chains.parquet")
-    assert repaired["ligand_contacts_complete"] is True
-    assert repaired["protein_contacts_complete"] is False
-    assert repaired_biounits["chain_num_contacting_proteins"].isna().all()
-
-
-def test_targeted_repair_adds_nullable_contacts_to_legacy_biounit_table(
-    tmp_path: Path,
-) -> None:
-    _write_release(tmp_path)
-    run_collation(tmp_path, memory_limit="1GB")
-    installed_path = tmp_path / "index/entry_biounit_chains.parquet"
-    installed = pd.read_parquet(installed_path).drop(
-        columns="chain_num_contacting_proteins"
-    )
-    installed.to_parquet(installed_path, index=False)
-    raw_path = tmp_path / "raw_entries/ab/1abc/entry_biounit_chains.parquet"
-    raw = pd.read_parquet(raw_path).drop(columns="chain_num_contacting_proteins")
-    raw.to_parquet(raw_path, index=False)
-    marker_path = tmp_path / "index/collation.json"
-    marker = json.loads(marker_path.read_text())
-    marker.pop("ligand_contacts_complete")
-    marker.pop("protein_contacts_complete")
-    marker_path.write_text(json.dumps(marker))
-
-    repaired = repair_collation(tmp_path, ["1abc"], memory_limit="1GB")
-    repaired_biounits = pd.read_parquet(installed_path)
-
-    assert repaired["ligand_contacts_complete"] is True
-    assert repaired["protein_contacts_complete"] is False
-    assert "chain_num_contacting_proteins" in repaired_biounits
-    assert repaired_biounits["chain_num_contacting_proteins"].isna().all()
-
-
-def test_collation_rejects_mixed_contact_availability(tmp_path: Path) -> None:
-    _write_release(tmp_path)
-    path = next(tmp_path.glob("raw_entries/*/*/entry_biounit_chains.parquet"))
-    frame = pd.read_parquet(path).drop(columns="chain_num_contacting_proteins")
-    frame.to_parquet(path, index=False)
-
-    with pytest.raises(
-        ValueError,
-        match="mixed biological-assembly contact schemas",
-    ):
-        plan_collation(tmp_path)
 
 
 def test_collation_rejects_unknown_biounit_contact_counts(tmp_path: Path) -> None:
@@ -953,6 +855,46 @@ def test_collation_rejects_unknown_biounit_contact_counts(tmp_path: Path) -> Non
         match="invalid biological-assembly contact counts",
     ):
         run_collation(tmp_path, memory_limit="1GB")
+
+
+@pytest.mark.parametrize(
+    ("omitted", "ligand_computed", "protein_computed"),
+    [
+        (["chain_num_contacting_proteins"], True, False),
+        (
+            [
+                "chain_num_contacting_ions",
+                "chain_num_contacting_artifacts",
+                "chain_num_contacting_other_ligands",
+            ],
+            False,
+            True,
+        ),
+    ],
+)
+def test_collation_accepts_consistent_split_ingest_contact_schema(
+    tmp_path: Path,
+    omitted: list[str],
+    ligand_computed: bool,
+    protein_computed: bool,
+) -> None:
+    _write_release(tmp_path)
+    for pdb_id in ("1abc", "2def"):
+        path = (
+            tmp_path
+            / "raw_entries"
+            / pdb_id[1:3]
+            / pdb_id
+            / "entry_biounit_chains.parquet"
+        )
+        pd.read_parquet(path).drop(columns=omitted).to_parquet(path, index=False)
+
+    report = run_collation(tmp_path, memory_limit="1GB")
+    table = pd.read_parquet(tmp_path / "index/entry_biounit_chains.parquet")
+
+    assert report["ligand_contacts_computed"] is ligand_computed
+    assert report["protein_contacts_computed"] is protein_computed
+    assert table[omitted].isna().all().all()
 
 
 def test_distributed_plan_requires_and_merges_every_code_inventory(
@@ -992,16 +934,6 @@ def test_interface_only_collation_preserves_installed_ligand_annotation(
     annotation_bytes = annotation_path.read_bytes()
     system_validation_path = tmp_path / "index/system_validation.parquet"
     system_validation_bytes = system_validation_path.read_bytes()
-    legacy_chain_path = tmp_path / "raw_entries/ab/1abc/entry_chains.parquet"
-    legacy_chains = pd.read_parquet(legacy_chain_path).drop(
-        columns="chain_is_ligand_like"
-    )
-    legacy_chains.to_parquet(legacy_chain_path, index=False)
-    biounit_path = tmp_path / "raw_entries/ab/1abc/entry_biounit_chains.parquet"
-    biounits = pd.read_parquet(biounit_path)
-    biounits.loc[biounits["chain_asym_id"] == "B", "chain_role"] = "ligand"
-    biounits.to_parquet(biounit_path, index=False)
-
     build = start_collation_plan(
         tmp_path,
         include_ligand_annotations=False,
@@ -1016,10 +948,6 @@ def test_interface_only_collation_preserves_installed_ligand_annotation(
     assert annotation_path.read_bytes() == annotation_bytes
     assert system_validation_path.read_bytes() == system_validation_bytes
     assert report["interface_count"] == 2
-    chains = pd.read_parquet(tmp_path / "index/entry_chains.parquet")
-    assert chains.set_index(["entry_pdb_id", "chain_asym_id"]).loc[
-        ("1abc", "B"), "chain_is_ligand_like"
-    ]
 
 
 def test_collation_retains_entries_with_only_protein_interfaces(
@@ -1207,17 +1135,11 @@ def test_targeted_repair_preserves_unaffected_release_only_columns(
     assert finalized_report["downstream_repair_complete"] is True
 
 
-@pytest.mark.parametrize("missing_installed_columns", [False, True])
-def test_targeted_repair_updates_chain_annotations(
-    tmp_path: Path, missing_installed_columns: bool
-) -> None:
+def test_targeted_repair_updates_chain_annotations(tmp_path: Path) -> None:
     _write_release(tmp_path)
     run_collation(tmp_path, memory_limit="1GB")
     path = tmp_path / "index/entry_chains.parquet"
     installed = pd.read_parquet(path)
-    columns = ["chain_sequence_noncanonical", "chain_modified_residues"]
-    if missing_installed_columns:
-        installed = installed.drop(columns=columns)
     installed["release_only"] = "keep"
     installed.to_parquet(path, index=False)
     replacement_path = tmp_path / "raw_entries/ab/1abc/entry_chains.parquet"
@@ -1261,10 +1183,6 @@ def test_targeted_repair_updates_chain_annotations(
         untouched.reset_index(drop=True),
         installed.loc[installed.entry_pdb_id.eq("2def")].reset_index(drop=True),
     )
-    if missing_installed_columns:
-        assert (
-            repaired.loc[repaired.entry_pdb_id.eq("2def"), columns].isna().all().all()
-        )
 
 
 @pytest.mark.parametrize(
@@ -1421,14 +1339,14 @@ def test_plan_rejects_partial_materialized_entries(tmp_path: Path) -> None:
     _write_release(tmp_path)
     (tmp_path / "ligands/1abc.parquet").unlink()
 
-    with pytest.raises(FileNotFoundError, match="incomplete V3 entry 1abc"):
+    with pytest.raises(FileNotFoundError, match="incomplete entry 1abc"):
         plan_collation(tmp_path)
 
 
 def test_plan_rejects_empty_release(tmp_path: Path) -> None:
     (tmp_path / "raw_entries").mkdir()
 
-    with pytest.raises(ValueError, match="no materialized V3 entries"):
+    with pytest.raises(ValueError, match="no entries found"):
         plan_collation(tmp_path)
 
 

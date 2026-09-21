@@ -220,7 +220,8 @@ and `mmseqs` databases into sub-databases containing `holo` and `apo` chains.
   - This is a task that is called once
   - It uses the `foldseek` and `mmseqs` databases
   - Holo contains protein chains used by a ligand receptor or protein interface
-  - Apo contains deposited protein-chain candidates for linked-apo selection
+  - Apo contains deposited protein-chain candidates for ligand and interface
+    apo selection
   - Side effects include writing the following files:
     - `dbs/subdbs/holo_foldseek/**`
     - `dbs/subdbs/apo_foldseek/**`
@@ -263,12 +264,13 @@ canonical ligand structures.
 
 - `tasks.finalize_scores`: validates and publishes the score shards
 
-- `tasks.make_linked_apo_structures`: ranks matching deposited apo chains for each
-  holo system
+- `tasks.make_linked_apo_structures`: ranks matching deposited apo chains for
+  each holo ligand system and each side of a protein interface
   - It prefers candidates with fewer nearby ligands before using structure quality
     and similarity
   - Side effects include writing the following file:
     - `index/linked_apo_structures.parquet`
+    - `index/interface_apo_structures.parquet`
 
 ## MMP
 
@@ -350,3 +352,29 @@ The `linked_apo_structures` table has the following schema:
     min_protein_fident_weighted_sum: int8
     min_protein_fident_qcov_weighted_sum: int8
     min_protein_lddt_weighted_sum: int8
+
+The `interface_apo_structures` table has one ranked list for each interface
+side:
+
+    >>> from plinder.core.utils.schemas import INTERFACE_APO_LINK_SCHEMA
+    >>> INTERFACE_APO_LINK_SCHEMA
+    reference_system_id: string
+    reference_side: int8
+    reference_chain_instance: string
+    reference_chain_asym_id: string
+    linked_structure_id: string
+    source_entry_id: string
+    source_chain_asym_id: string
+    source_chain_auth_id: string
+    source_biounit_id: string
+    source_chain_instance: string
+    source_num_contacting_proteins: int16
+    source_num_contacting_ions: int16
+    source_num_contacting_artifacts: int16
+    source_num_contacting_other_ligands: int16
+    source_resolution: float
+    rank: int16
+    mmseqs_fident: float
+    mmseqs_query_coverage: float
+    mmseqs_target_coverage: float
+    foldseek_lddt: float

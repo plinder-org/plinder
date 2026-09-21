@@ -10,6 +10,7 @@ MAPPED_ALIGNMENT_REQUIRED_COLUMNS = frozenset(
         "target_chain_mapped",
         "source",
         "qcov",
+        "tcov",
         "fident",
         "seqsim",
         "query_selected_residue_numbers",
@@ -28,6 +29,7 @@ def mapped_alignment_schema(*, alignment_type: str) -> pa.Schema:
         pa.field("target_chain_mapped", pa.string()),
         pa.field("source", pa.string()),
         pa.field("qcov", pa.float64()),
+        pa.field("tcov", pa.float64()),
         pa.field("fident", pa.float64()),
         pa.field("seqsim", pa.float64()),
         pa.field("query_selected_residue_numbers", pa.list_(pa.int32())),
@@ -350,5 +352,30 @@ STRUCTURE_LINK_SCHEMA = pa.schema(
         ("min_protein_fident_weighted_sum", pa.int8()),
         ("min_protein_fident_qcov_weighted_sum", pa.int8()),
         ("min_protein_lddt_weighted_sum", pa.int8()),
+    ]
+)
+
+INTERFACE_APO_LINK_SCHEMA = pa.schema(
+    [
+        ("reference_system_id", pa.string()),
+        ("reference_side", pa.int8()),
+        ("reference_chain_instance", pa.string()),
+        ("reference_chain_asym_id", pa.string()),
+        ("linked_structure_id", pa.string()),
+        ("source_entry_id", pa.string()),
+        ("source_chain_asym_id", pa.string()),
+        ("source_chain_auth_id", pa.string()),
+        ("source_biounit_id", pa.string()),
+        ("source_chain_instance", pa.string()),
+        ("source_num_contacting_proteins", pa.int16()),
+        ("source_num_contacting_ions", pa.int16()),
+        ("source_num_contacting_artifacts", pa.int16()),
+        ("source_num_contacting_other_ligands", pa.int16()),
+        ("source_resolution", pa.float32()),
+        ("rank", pa.int16()),
+        ("mmseqs_fident", pa.float32()),
+        ("mmseqs_query_coverage", pa.float32()),
+        ("mmseqs_target_coverage", pa.float32()),
+        ("foldseek_lddt", pa.float32()),
     ]
 )
