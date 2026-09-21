@@ -8,19 +8,17 @@ dependencies = [
     "pandas",
     "pydantic",
     "tqdm",
-    "google-cloud-storage",
-    "gcsfs",
     "peppr>=0.13",
     "voronotalt>=1.1",
     "rdkit>=2025.09.1",
     "pyarrow",
     "omegaconf",
     "duckdb",
-    "cloudpathlib",
+    "cloudpathlib>=0.25,<0.26",
 ]
 description = "PLINDER: Protein & Ligand INteraction Dataset and Evaluation Resource"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: Apache Software License",
@@ -36,6 +34,7 @@ plinder_download = "plinder.core.index.utils:download_plinder_cmd"
 plinder_eval = "plinder.eval.cli:main"
 
 [project.optional-dependencies]
+data = ["google-cloud-storage", "gcsfs"]
 lint = [
     "ruff == 0.9.4",
     "pre-commit == 2.21.0",
@@ -51,11 +50,12 @@ test = [
 ]
 type = [
     "mypy==1.18.2",
+    "cloudpathlib>=0.25,<0.26",
     "types-PyYAML",
     "types-requests",
 ]
 dev = [
-    "plinder[lint,test,type]",
+    "plinder[lint,test,type,data]",
 ]
 loader = [
     "torch",
@@ -86,6 +86,27 @@ docs = [
     "mols2grid",
     "matplotlib",
 ]
+
+# Not published to PyPI; installed by default with `uv sync`.
+# Mirrors requirements_data.txt, which remains for pip-based installs.
+[dependency-groups]
+dev = [
+    "plinder[dev,eval,loader]",
+    "networkit>11.0",
+    "tabulate",
+    "pdb-validation",
+    "mmpdb",
+]
+
+[tool.uv.sources]
+pdb-validation = { git = "https://git.scicore.unibas.ch/schwede/ligand-validation.git" }
+mmpdb = { git = "https://github.com/rdkit/mmpdb.git" }
+torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
 
 [build-system]
 build-backend = "setuptools.build_meta"

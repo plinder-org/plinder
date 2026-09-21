@@ -28,7 +28,18 @@ $ mamba activate plinder
 
 ### Installing `plinder`
 
-The base install covers data generation and the core library (numpy 2 compatible):
+With [uv](https://docs.astral.sh/uv/), a single command installs `plinder` in
+editable mode with the `dev`, `eval` and `loader` extras and the data pipeline
+dependencies from `requirements_data.txt`:
+
+```console
+$ uv sync
+```
+
+No separate `pip install -r requirements_data.txt` step is needed.
+The Conda-only tools above are still required.
+
+With pip, the base install covers data generation and the core library (numpy 2 compatible):
 
 ```console
 $ pip install -e ".[dev]"
@@ -51,7 +62,8 @@ is installed by `mamba env create -f environment.yml` above.
 Data generation (`plinder.data`) does **not** require OpenStructure and
 works with numpy 2.
 
-For the full data pipeline, additional dependencies are needed:
+For the full data pipeline, pip installs need additional dependencies
+(`uv sync` already includes them):
 
 ```console
 $ pip install -r requirements_data.txt

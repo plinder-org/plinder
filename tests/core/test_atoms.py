@@ -91,6 +91,15 @@ def test_residue_index_mapping_mask(cif_atom_array):
     assert mask["A"].all()
 
 
+def test_default_sequence_alignment():
+    assert atoms.align_sequences("ACDE", "ACDE") == (
+        "ACDE",
+        "ACDE",
+        [1, 2, 3, 4],
+        [1, 2, 3, 4],
+    )
+
+
 def test_write_cif_roundtrip(cif_atom_array, tmp_path):
     chain_a = cif_atom_array[cif_atom_array.chain_id == "A"]
     output = tmp_path / "nested" / "chain_a.cif"

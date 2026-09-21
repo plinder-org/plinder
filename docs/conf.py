@@ -80,7 +80,6 @@ nb_execution_excludepatterns = [
     "examples/evaluation.ipynb",
     "examples/protein_interfaces.ipynb",
     "examples/similarity_and_representatives.ipynb",
-    "tutorial/api.ipynb",
 ]
 myst_enable_extensions = [
     "amsmath",

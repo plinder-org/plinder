@@ -146,7 +146,7 @@ def align_sequences(
         seq.ProteinSequence(subject_seq),
         seq.ProteinSequence(ref_seq),
         align.SubstitutionMatrix.std_protein_matrix(),
-        gap_penalty=(-10.0, -1.0),
+        gap_penalty=(-10, -1),
         terminal_penalty=False,
         local=False,
         max_number=1,

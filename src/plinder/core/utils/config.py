@@ -215,11 +215,12 @@ class DataConfig:
     plinder_mount : str, default="~/.local/share/plinder"
         the resting place for the plinder dataset
     plinder_bucket : str, default="plinder"
-        the plinder bucket
+        the local cache subdirectory name
     plinder_dir : str
         set automatically
     plinder_remote : str
-        set automatically
+        set automatically; the release root under ``PLINDER_MIRROR_URL``
+        (default ``https://plinderdata.org``)
     """
 
     plinder_release: str = field(
@@ -253,9 +254,8 @@ class DataConfig:
         else:
             root = Path(self.plinder_mount) / self.plinder_bucket
         self.plinder_dir = (root / suffix).as_posix() if suffix else root.as_posix()
-        self.plinder_remote = f"gs://{self.plinder_bucket}"
-        if suffix:
-            self.plinder_remote += f"/{suffix}"
+        base = getenv("PLINDER_MIRROR_URL", "https://plinderdata.org").rstrip("/")
+        self.plinder_remote = f"{base}/{suffix}" if suffix else base
 
 
 @dataclass

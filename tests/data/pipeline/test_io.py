@@ -72,25 +72,39 @@ def test_download_seqres_data_cached(tmp_path):
     assert raw_seqres_path.read_text() == "foo"
 
 
-def test_rsync_rcsb(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    "kind, server, port",
+    [
+        ("cif", "rsync-nextgen.pdbj.org::ftp_nextgen/data/entries/divided", 873),
+        ("val", "rsync.rcsb.org::ftp/validation_reports", 33444),
+    ],
+)
+def test_rsync_rcsb(tmp_path, monkeypatch, kind, server, port):
     commands = []
     monkeypatch.setattr(
         "plinder.data.pipeline.io.check_output",
-        lambda command, **_: commands.append(command),
+        lambda command, **kwargs: commands.append(command),
     )
-    io.rsync_rcsb(kind="cif", two_char_code="aa", data_dir=tmp_path)
-    assert len(commands) == 1
-    assert "--port=873" in commands[0]
-    assert "rsync-nextgen.pdbj.org::ftp_nextgen/data/entries/divided/aa/" in commands[0]
+    io.rsync_rcsb(kind=kind, two_char_code="aa", data_dir=tmp_path)
+    assert f"--port={port}" in commands[0]
+    assert f"{server}/aa/" in commands[0]
 
 
-def test_list_rcsb(monkeypatch):
+@pytest.mark.parametrize("kind, port", [("cif", 873), ("val", 33444)])
+def test_list_rcsb(monkeypatch, kind, port):
+    commands = []
+
+    def list_directories(command, **kwargs):
+        commands.append(command)
+        return "d aaaa \nd baan"
+
     monkeypatch.setattr(
         "plinder.data.pipeline.io.check_output",
-        lambda *_, **__: "d aaaa \nd baan",
+        list_directories,
     )
-    pdbs = io.list_rcsb(kind="cif", two_char_code="aa")
+    pdbs = io.list_rcsb(kind=kind, two_char_code="aa")
     assert pdbs == ["aaaa", "baan"]
+    assert f"--port={port}" in commands[0]
 
 
 def test_refresh_bundled_ccd_fails_loudly(monkeypatch):

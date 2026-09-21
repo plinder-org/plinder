@@ -455,10 +455,9 @@ def read_plinder_mount(monkeypatch, tmp_path):
     monkeypatch.setenv("PLINDER_RELEASE_NUMBER", "")
     monkeypatch.setenv("PLINDER_BUCKET", "plinder")
     monkeypatch.setenv("PLINDER_OFFLINE", "true")
-    from plinder.core.utils import config, cpl
+    from plinder.core.utils import config
 
     config._config._clear()
-    monkeypatch.setattr(cpl, "_CLIENTS", {})
     cfg = config.get_config()
     assert Path(cfg.data.plinder_dir) == adir
 
@@ -477,10 +476,9 @@ def write_plinder_mount(monkeypatch, tmp_path):
     monkeypatch.setenv("PLINDER_RELEASE", "mount")
     monkeypatch.setenv("PLINDER_RELEASE_NUMBER", "")
     monkeypatch.setenv("PLINDER_BUCKET", "plinder")
-    from plinder.core.utils import config, cpl
+    from plinder.core.utils import config
 
     config._config._clear()
-    monkeypatch.setattr(cpl, "_CLIENTS", {})
     for path in read_plinder_mount.rglob("*"):
         if path.is_dir() or path.name.endswith("_done"):
             continue

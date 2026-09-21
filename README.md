@@ -57,6 +57,7 @@ with the dataset.
 #### Changelog:
 
 - WIP (Current — unreleased):
+    - **Public downloads on Cloudflare R2**: `2024-06/v2` now downloads from `https://plinderdata.org` instead of GCS; `PLINDER_MIRROR_URL` selects another HTTP mirror. Downloads stream to disk and verify size and MD5 before atomic replacement, interrupted transfers retry from the start, and cached files with the expected size are reused (force a refresh to repair same-size local corruption). Google storage dependencies are now optional: install `plinder[data]` for the GCS data-generation utilities.
     - **Major backend refactor**: replaced OST, gemmi, plip, openbabel with biotite + peppr for data generation; removed 6 dependencies from ingest pipeline
     - **Nucleic acid support**: DNA/RNA chains now correctly included as receptor neighbors, mainchain/sidechain detection works for both protein and nucleic acids ([#61](https://github.com/plinder-org/plinder/issues/61))
     - **Custom CIF support**: new `Entry.from_custom_cif_file` for structure-prediction outputs (Boltz, AlphaFold3, Chai-1) that ship CIFs without `_chem_comp_bond` ([#117](https://github.com/plinder-org/plinder/issues/117)). Bond orders come from `ligand_smiles_dict` via positional atom-order match (the convention these tools follow); element/count mismatches raise with the offending position, `force_substructure_match=True` opts into substructure matching when atom order isn't preserved. User SMILES win over CCD for both `smiles` and `resolved_stereo_matches_template` — closes a silent gap where biotite's `LIG` placeholder would pass any 3D conformer. Input CIFs are never mutated; optional `save_fixed_cif` persists the enriched copy.
@@ -107,8 +108,7 @@ Moreover, as we enticipate this resource to be used for benchmarking a wide rang
 The *PLINDER* dataset is provided in two ways:
 
 - You can either use the files from the dataset directly using your preferred tooling
-  by downloading the data from the public
-  [bucket](https://cloud.google.com/storage/docs/buckets),
+  by downloading the data from `https://plinderdata.org` (Cloudflare R2),
 - or you can utilize the dedicated `plinder` Python package for interfacing the data.
 
 
@@ -118,13 +118,14 @@ After installing the package, download the index tables and cluster assignments
 for a release with:
 
 ```console
-$ plinder_download --release 2026-07 --release-number 1
+$ plinder_download --release 2024-06 --release-number v2
 ```
 
 The command offers the larger ligand, alignment, score, export, and search
-database groups separately. Missing optional artifacts are fetched when an API
-call needs them. Files can also be copied directly from the public bucket with
-[`gsutil`](https://cloud.google.com/storage/docs/gsutil_install).
+database groups separately, and dataset APIs also download required files
+lazily. No Google Cloud credentials or SDK are needed: `2024-06/v2` downloads
+from `https://plinderdata.org`; `PLINDER_MIRROR_URL` can select another HTTP
+mirror. Other release versions are unavailable through the public downloader.
 For details on the release paths, see [Documentation](https://plinder-org.github.io/plinder/tutorial/dataset.html).
 
 ## Installing the Python package

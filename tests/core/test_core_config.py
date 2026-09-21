@@ -23,7 +23,7 @@ def test_release_identifier_sets_local_and_remote_roots():
     )
 
     assert cfg.plinder_dir == "/cache/plinder/2026-07/1"
-    assert cfg.plinder_remote == "gs://plinder/2026-07/1"
+    assert cfg.plinder_remote == "https://plinderdata.org/2026-07/1"
 
 
 def test_get_config_passed():

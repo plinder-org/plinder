@@ -130,11 +130,10 @@ def test_plinder_system_system_files(cached_plinder_system):
 def test_plinder_system_extracts_canonical_ligand_archive(
     write_plinder_mount, monkeypatch
 ):
-    from plinder.core.utils import config, cpl
+    from plinder.core.utils import config
 
     monkeypatch.setenv("PLINDER_OFFLINE", "true")
     config._config._clear()
-    monkeypatch.setattr(cpl, "_CLIENTS", {})
     archive = write_plinder_mount / "ligand_archives" / "av.parquet"
     archive.parent.mkdir(parents=True)
     pd.DataFrame(
