@@ -479,7 +479,7 @@ def test_symmetric_edge_shards_take_minimum_of_directional_maxima(tmp_path):
 def test_interface_clusters_use_directed_cover_pipeline(tmp_path):
     from plinder.data.clusters import (
         make_directed_cover_component_reduction,
-        make_directed_set_cover,
+        make_directed_set_covers,
         merge_directed_cover_component_reductions,
         prepare_component_node_universe,
         prepare_symmetric_edge_plan,
@@ -543,26 +543,31 @@ def test_interface_clusters_use_directed_cover_pipeline(tmp_path):
     make_directed_cover_component_reduction(
         data_dir=tmp_path,
         metric=metric,
-        thresholds=[50],
+        thresholds=[30, 50],
         source_path=edge_path,
         entity_type="interface",
     )
     merge_directed_cover_component_reductions(
         data_dir=tmp_path,
         metric=metric,
-        thresholds=[50],
+        thresholds=[30, 50],
         entity_type="interface",
     )
-    cover_path = make_directed_set_cover(
+    cover_paths = make_directed_set_covers(
         data_dir=tmp_path,
         metric=metric,
-        threshold=50,
+        thresholds=[90, 50, 30],
         scratch_dir=tmp_path / "scratch-cover",
-        threads=1,
+        threads=3,
         entity_type="interface",
     )
 
-    cover = pd.read_parquet(cover_path).set_index("system_id")
+    assert [path.name for path in cover_paths] == [
+        "threshold=90.parquet",
+        "threshold=50.parquet",
+        "threshold=30.parquet",
+    ]
+    cover = pd.read_parquet(cover_paths[1]).set_index("system_id")
     assert cover.loc["i1", "centroid_system_id"] == "i1"
     assert cover.loc["i2", "centroid_system_id"] == "i1"
     assert cover.loc["i2", "similarity_to_centroid"] == pytest.approx(60.0)
@@ -573,11 +578,11 @@ def test_interface_clusters_use_directed_cover_pipeline(tmp_path):
     summary = summarize_clustering_artifacts(
         tmp_path,
         metrics=[metric],
-        thresholds=[50],
+        thresholds=[90, 50, 30],
         entity_type="interface",
     )
     assert summary["entity_type"] == "interface"
-    assert summary["artifact_count"] == 1
+    assert summary["artifact_count"] == 3
 
 
 def test_interface_node_universe_contains_only_scoring_representatives(tmp_path):
@@ -1241,6 +1246,8 @@ def test_ligand_covers_are_merged_without_system_projection(tmp_path):
                 ligand_a1,
                 ligand_c,
             ],
+            "coverage_count": [2, 1, 2, 1],
+            "coverage_fraction": [0.5, 0.25, 0.5, 0.25],
         }
     ).to_parquet(directed_cover, index=False)
 
@@ -1307,6 +1314,8 @@ def test_finalize_index_rejects_stale_ligand_cover_universe(tmp_path):
             "ligand_id": ["l1"],
             "centroid_ligand_id": ["l1"],
             "label": ["d0"],
+            "coverage_count": [1],
+            "coverage_fraction": [1.0],
         }
     ).to_parquet(
         directed_cover,

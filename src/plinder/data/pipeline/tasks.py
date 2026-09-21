@@ -4159,9 +4159,9 @@ def scatter_make_directed_set_covers(
     skip_existing: bool,
     entity_type: clusters.ClusterEntity = "ligand",
 ) -> list[list[tuple[str, int]]]:
-    """Scatter directed centroid-cover work after connectivity publication."""
+    """Scatter one shared directed-cover pass per metric."""
     values = [
-        [(metric, threshold)]
+        (metric, threshold)
         for metric in metrics
         if not is_chemical_cluster_metric(metric)
         for threshold in thresholds
@@ -4169,22 +4169,26 @@ def scatter_make_directed_set_covers(
     if stop_on_cluster:
         values = values[:stop_on_cluster]
     if not skip_existing:
-        return values
-    pending = []
-    for item in values:
-        metric, threshold = item[0]
-        output = (
-            clusters._sampling_root(data_dir, entity_type)
-            / "directed_set_cover"
-            / f"metric={metric}"
-            / f"threshold={threshold}.parquet"
-        )
-        if not clusters.directed_set_cover_is_complete(
-            output,
-            entity_type=entity_type,
-        ):
-            pending.append(item)
-    return pending or [[]]
+        pending = values
+    else:
+        pending = []
+    if skip_existing:
+        for metric, threshold in values:
+            output = (
+                clusters._sampling_root(data_dir, entity_type)
+                / "directed_set_cover"
+                / f"metric={metric}"
+                / f"threshold={threshold}.parquet"
+            )
+            if not clusters.directed_set_cover_is_complete(
+                output,
+                entity_type=entity_type,
+            ):
+                pending.append((metric, threshold))
+    grouped: dict[str, list[tuple[str, int]]] = {}
+    for metric, threshold in pending:
+        grouped.setdefault(metric, []).append((metric, threshold))
+    return list(grouped.values()) or [[]]
 
 
 _COMPONENT_REDUCTION_CONTEXT: dict[str, Any] | None = None
@@ -4499,20 +4503,23 @@ def make_directed_set_covers(
     threads: int = 1,
     entity_type: clusters.ClusterEntity = "ligand",
 ) -> None:
-    """Compute one directed cover for annotation and training-set sampling."""
+    """Compute requested directed covers, sharing work within each metric."""
     if not metric_threshold:
         LOG.info("make_directed_set_covers: all covers are cached")
         return
-    [(metric, threshold)] = metric_threshold
-    clusters.make_directed_set_cover(
-        data_dir=data_dir,
-        metric=metric,
-        threshold=threshold,
-        skip_existing=skip_existing,
-        scratch_dir=scratch_dir,
-        threads=threads,
-        entity_type=entity_type,
-    )
+    grouped: dict[str, list[int]] = {}
+    for metric, threshold in metric_threshold:
+        grouped.setdefault(metric, []).append(threshold)
+    for metric, thresholds in grouped.items():
+        clusters.make_directed_set_covers(
+            data_dir=data_dir,
+            metric=metric,
+            thresholds=thresholds,
+            skip_existing=skip_existing,
+            scratch_dir=scratch_dir,
+            threads=threads,
+            entity_type=entity_type,
+        )
 
 
 def summarize_clusters(

@@ -69,7 +69,6 @@ LIGAND_POCKET_SCORE_WORK_RELATIVE = Path(
 )
 LIGAND_POCKET_SCORE_PLAN_RELATIVE = Path("manifests/ligand_pocket_scoring_plan.json")
 DEFAULT_CLUSTER_THRESHOLDS = (30, 50, 70, 90, 100)
-INTERFACE_CLUSTER_METRICS = ("interface_qcov",)
 MINIMUM_STORED_INTERFACE_SIDE_SIMILARITY = min(DEFAULT_CLUSTER_THRESHOLDS)
 
 
@@ -2813,7 +2812,7 @@ def _cluster_parameters(
     defaults = (
         DEFAULT_CLUSTER_METRICS
         if entity_type == "ligand"
-        else INTERFACE_CLUSTER_METRICS
+        else sorted(clusters.INTERFACE_CLUSTER_METRICS)
     )
     selected_metrics = list(dict.fromkeys(metrics or defaults))
     selected_thresholds = sorted(
@@ -2824,7 +2823,7 @@ def _cluster_parameters(
     supported = (
         set(DEFAULT_CLUSTER_METRICS)
         if entity_type == "ligand"
-        else set(INTERFACE_CLUSTER_METRICS)
+        else set(clusters.INTERFACE_CLUSTER_METRICS)
     )
     unsupported = sorted(set(selected_metrics).difference(supported))
     if unsupported:
@@ -2953,6 +2952,7 @@ def plan_clustering(
     }
     if interface_min_residues is not None:
         cluster_selection["min_interface_residues"] = interface_min_residues
+    set_cover_root = sampling_root / "set_cover"
     prior_selection: dict[str, Any] | None = None
     if cluster_plan_path.is_file():
         try:
@@ -2960,13 +2960,8 @@ def plan_clustering(
         except (OSError, ValueError, json.JSONDecodeError):
             pass
     if prior_selection != cluster_selection:
-        for obsolete in [
-            cluster_root / "cluster=components",
-            cluster_root / "cluster=communities",
-            sampling_root / "set_cover",
-        ]:
-            if obsolete.exists():
-                rmtree(obsolete)
+        if set_cover_root.exists():
+            rmtree(set_cover_root)
         directed_cover_root = sampling_root / "directed_set_cover"
         for output_dir in directed_cover_root.glob("metric=*"):
             rmtree(output_dir)
@@ -2976,16 +2971,6 @@ def plan_clustering(
         ]:
             diagnostics.unlink(missing_ok=True)
         write_json_atomic(cluster_plan_path, cluster_selection)
-    else:
-        # Legacy published partitions are not part of the current release.
-        for obsolete in [
-            cluster_root / "cluster=components",
-            cluster_root / "cluster=communities",
-            cluster_root / "cluster=components/directed=True",
-            cluster_root / "cluster=communities/directed=True",
-        ]:
-            if obsolete.exists():
-                rmtree(obsolete)
     symmetric_shard_count = len(selected_metrics) * symmetric_bucket_count
     # TODO(mhfp6): MHFP6 is planned as a straight ECFP4 analog, so every
     # chemical metric adds one reciprocal set cover per threshold (doubling the
@@ -3007,7 +2992,7 @@ def plan_clustering(
             for metric in selected_metrics
             if not is_chemical_cluster_metric(metric)
         ]
-    ) * len(selected_thresholds)
+    )
     return {
         "status": "planned",
         "entity_type": entity_type,
@@ -3234,6 +3219,21 @@ def _cover_batch(
     work = [(metric, threshold) for metric in metrics for threshold in thresholds]
     start = batch_index * batch_size
     return work[start : start + batch_size]
+
+
+def _directed_cover_batch(
+    *,
+    metrics: list[str],
+    thresholds: list[int],
+    batch_index: int,
+    batch_size: int,
+) -> list[tuple[str, int]]:
+    """Return complete threshold groups for one batch of directed metrics."""
+    if batch_index < 0 or batch_size < 1:
+        raise ValueError("batch_index must be non-negative and batch_size positive")
+    start = batch_index * batch_size
+    selected = metrics[start : start + batch_size]
+    return [(metric, threshold) for metric in selected for threshold in thresholds]
 
 
 def _scoring_config(
@@ -7431,14 +7431,14 @@ def main() -> None:
             metrics = [
                 metric for metric in metrics if not is_chemical_cluster_metric(metric)
             ]
-        work = _cover_batch(
-            metrics=metrics,
-            thresholds=thresholds,
-            batch_index=args.batch_index,
-            batch_size=args.batch_size,
-        )
-        for metric_threshold in work:
-            if args.command == "set-covers":
+        if args.command == "set-covers":
+            work = _cover_batch(
+                metrics=metrics,
+                thresholds=thresholds,
+                batch_index=args.batch_index,
+                batch_size=args.batch_size,
+            )
+            for metric_threshold in work:
                 tasks.make_set_covers(
                     data_dir=data_dir,
                     metric_threshold=[metric_threshold],
@@ -7447,15 +7447,21 @@ def main() -> None:
                     threads=args.threads,
                     entity_type=args.entity_type,
                 )
-            else:
-                tasks.make_directed_set_covers(
-                    data_dir=data_dir,
-                    metric_threshold=[metric_threshold],
-                    skip_existing=not args.force,
-                    scratch_dir=args.scratch_dir.resolve(),
-                    threads=args.threads,
-                    entity_type=args.entity_type,
-                )
+        else:
+            work = _directed_cover_batch(
+                metrics=metrics,
+                thresholds=thresholds,
+                batch_index=args.batch_index,
+                batch_size=args.batch_size,
+            )
+            tasks.make_directed_set_covers(
+                data_dir=data_dir,
+                metric_threshold=work,
+                skip_existing=not args.force,
+                scratch_dir=args.scratch_dir.resolve(),
+                threads=args.threads,
+                entity_type=args.entity_type,
+            )
         result = {"status": "complete", "metric_thresholds": work}
     elif args.command == "pack-ligands":
         shards = _entry_shard_batch(data_dir, args.batch_index, args.batch_size)

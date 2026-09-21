@@ -323,37 +323,6 @@ def test_cluster_index_marks_only_directed_cover_centroids(tmp_path):
     assert str(result[fraction_column].dtype) == "Float32"
 
 
-def test_cluster_index_reads_legacy_cover_during_centrality_migration(tmp_path):
-    cover_file = (
-        tmp_path
-        / "ligand_sampling/directed_set_cover/metric=pli_qcov"
-        / "threshold=50.parquet"
-    )
-    cover_file.parent.mkdir(parents=True)
-    pd.DataFrame(
-        {
-            "ligand_id": ["l1", "l2"],
-            "label": ["d0", "d0"],
-            "centroid_ligand_id": ["l2", "l2"],
-        }
-    ).to_parquet(cover_file, index=False)
-    index = pd.DataFrame(
-        {
-            "ligand_id": ["l1", "l2"],
-            "system_type": ["holo", "holo"],
-            "ligand_is_proper": [True, True],
-            "ligand_smiles_id": [0, 1],
-        }
-    )
-
-    result = utils.build_ligand_cluster_table(index=index, data_dir=tmp_path)
-
-    label_column = "pli_qcov__50__ligand__directed_set_cover"
-    assert result[f"{label_column}__is_centroid"].tolist() == [False, True]
-    assert f"{label_column}__coverage_count" not in result
-    assert f"{label_column}__coverage_fraction" not in result
-
-
 def test_ligand_similarity_rejects_stale_proper_smiles_universe(tmp_path):
     fingerprint_dir = tmp_path / "fingerprints"
     fingerprint_dir.mkdir()

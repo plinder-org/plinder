@@ -379,24 +379,8 @@ def build_ligand_cluster_table(*, index: pd.DataFrame, data_dir: Path) -> pd.Dat
                 f"repair: {path}"
             )
         columns = [node_column, "label", "centroid_ligand_id"]
-        has_coverage_centrality = False
         if is_directed_cover:
-            coverage_columns = {"coverage_count", "coverage_fraction"}
-            available_columns = set(pq.read_schema(path).names)
-            available_coverage_columns = coverage_columns.intersection(
-                available_columns
-            )
-            if available_coverage_columns and (
-                available_coverage_columns != coverage_columns
-            ):
-                missing = sorted(coverage_columns.difference(available_columns))
-                raise ValueError(
-                    "directed ligand cover has a partial coverage-centrality "
-                    f"schema: {path}; missing={missing}"
-                )
-            has_coverage_centrality = available_coverage_columns == coverage_columns
-            if has_coverage_centrality:
-                columns.extend(sorted(coverage_columns))
+            columns.extend(["coverage_count", "coverage_fraction"])
         labels = pd.read_parquet(path, columns=columns)
         if labels[node_column].duplicated().any():
             raise ValueError(f"duplicate ligand IDs in cluster artifact: {path}")
@@ -462,35 +446,34 @@ def build_ligand_cluster_table(*, index: pd.DataFrame, data_dir: Path) -> pd.Dat
         )
         cluster_columns[centroid_column] = aligned_centroids.astype("boolean").array
         if is_directed_cover:
-            if has_coverage_centrality:
-                if labels[["coverage_count", "coverage_fraction"]].isna().any().any():
-                    raise ValueError(
-                        f"directed ligand cover has missing coverage centrality: {path}"
-                    )
-                if (
-                    labels["coverage_count"].lt(1).any()
-                    or (
-                        labels["coverage_fraction"].le(0)
-                        | labels["coverage_fraction"].gt(1)
-                    ).any()
-                ):
-                    raise ValueError(
-                        f"directed ligand cover has invalid coverage centrality: {path}"
-                    )
-                coverage_count_column = f"{column}__coverage_count"
-                coverage_fraction_column = f"{column}__coverage_fraction"
-                cluster_columns[coverage_count_column] = (
-                    labels.set_index(node_column)["coverage_count"]
-                    .reindex(node_ids)
-                    .astype("Int32")
-                    .array
+            if labels[["coverage_count", "coverage_fraction"]].isna().any().any():
+                raise ValueError(
+                    f"directed ligand cover has missing coverage centrality: {path}"
                 )
-                cluster_columns[coverage_fraction_column] = (
-                    labels.set_index(node_column)["coverage_fraction"]
-                    .reindex(node_ids)
-                    .astype("Float32")
-                    .array
+            if (
+                labels["coverage_count"].lt(1).any()
+                or (
+                    labels["coverage_fraction"].le(0)
+                    | labels["coverage_fraction"].gt(1)
+                ).any()
+            ):
+                raise ValueError(
+                    f"directed ligand cover has invalid coverage centrality: {path}"
                 )
+            coverage_count_column = f"{column}__coverage_count"
+            coverage_fraction_column = f"{column}__coverage_fraction"
+            cluster_columns[coverage_count_column] = (
+                labels.set_index(node_column)["coverage_count"]
+                .reindex(node_ids)
+                .astype("Int32")
+                .array
+            )
+            cluster_columns[coverage_fraction_column] = (
+                labels.set_index(node_column)["coverage_fraction"]
+                .reindex(node_ids)
+                .astype("Float32")
+                .array
+            )
         if path_index % 10 == 0 or path_index == len(artifacts):
             elapsed = time() - started
             rate = path_index / elapsed

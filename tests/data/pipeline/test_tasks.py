@@ -1222,7 +1222,7 @@ def test_directed_set_cover_scatter_skips_only_complete_outputs(tmp_path):
         stop_on_cluster=0,
         skip_existing=True,
     )
-    assert work == [[("pocket_qcov", 100)], [("pocket_qcov", 50)]]
+    assert work == [[("pocket_qcov", 100), ("pocket_qcov", 50)]]
 
     output = (
         tmp_path
@@ -1248,7 +1248,7 @@ def test_directed_set_cover_scatter_skips_only_complete_outputs(tmp_path):
         stop_on_cluster=0,
         skip_existing=True,
     )
-    assert work == [[("pocket_qcov", 100)], [("pocket_qcov", 50)]]
+    assert work == [[("pocket_qcov", 100), ("pocket_qcov", 50)]]
 
     complete = pd.DataFrame(
         {
@@ -4977,17 +4977,18 @@ def test_clustering_plan_counts_set_covers_per_chemical_metric(tmp_path, monkeyp
     )
 
     # ECFP4 and MHFP6 each get one reciprocal set cover per threshold, while the
-    # single score metric gets one directed cover per threshold.
+    # single score metric gets one shared directed-cover task.
     assert len(CHEMICAL_CLUSTER_METRICS) == 2
     assert plan["set_cover_task_count"] == 4
     assert plan["set_cover_batch_count"] == 2
-    assert plan["directed_cover_task_count"] == 2
+    assert plan["directed_cover_task_count"] == 1
 
 
 def test_clustering_plan_matches_slurm_array_bounds(tmp_path, monkeypatch):
     from plinder.data.pipeline.score import (
         _cluster_parameters,
         _cover_batch,
+        _directed_cover_batch,
         plan_clustering,
     )
 
@@ -5029,12 +5030,18 @@ def test_clustering_plan_matches_slurm_array_bounds(tmp_path, monkeypatch):
         ("tanimoto_similarity_ecfp4_1024", 100),
         ("tanimoto_similarity_ecfp4_1024", 30),
     ]
+    assert _directed_cover_batch(
+        metrics=["pocket_qcov"],
+        thresholds=plan["thresholds"],
+        batch_index=0,
+        batch_size=3,
+    ) == [("pocket_qcov", 100), ("pocket_qcov", 30)]
     assert _cluster_parameters(
         metrics=None,
         thresholds=None,
         entity_type="interface",
     ) == (
-        ["interface_qcov"],
+        ["interface_qcov", "interface_side_qcov"],
         [100, 90, 70, 50, 30],
     )
 
