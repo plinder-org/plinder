@@ -2149,7 +2149,7 @@ def run_batch_searches(
     foldseek_cfg: DictConfig,
     mmseqs_cfg: DictConfig,
     cpu: int,
-    scratch_dir: Path | None = None,
+    scratch_dir: Path,
     alignment_types: Sequence[str] | None = None,
     search_databases: Sequence[str] | None = None,
     force_update: bool = False,
@@ -2739,7 +2739,7 @@ def make_batch_scores(
     pdb_ids: list[str],
     scorer_cfg: DictConfig,
     force_update: bool,
-    scratch_dir: Path | None = None,
+    scratch_dir: Path,
     threads: int = 1,
     defer_ligand_3d: bool = True,
 ) -> None:
@@ -2748,6 +2748,7 @@ def make_batch_scores(
         pdb_ids=pdb_ids,
         scorer_cfg=scorer_cfg,
         load_entries=False,
+        scratch_dir=scratch_dir,
     )
     if threads < 1:
         raise ValueError("threads must be positive")
@@ -2851,6 +2852,7 @@ def repair_batch_scores(
             pdb_ids=pdb_ids,
             scorer_cfg=scorer_cfg,
             load_entries=False,
+            scratch_dir=scratch_dir,
         )
         scorer.shape_score_threads = threads
     started = time.perf_counter()

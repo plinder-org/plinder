@@ -56,9 +56,9 @@ def get_scorer(
     pdb_ids: list[str],
     scorer_cfg: DictConfig,
     load_entries: bool,
+    scratch_dir: Path,
     foldseek_cfg: DictConfig | None = None,
     mmseqs_cfg: DictConfig | None = None,
-    scratch_dir: Path | None = None,
 ) -> tuple["Scorer", list[str], Path]:
     from plinder.data.annotations.get_similarity_scores import Scorer
     from plinder.data.pipeline.config import FoldseekConfig, MMSeqsConfig
@@ -93,8 +93,7 @@ def get_scorer(
         entry_ids = pdb_ids
     scores_dir = data_dir / "scores"
     sub_db_dir = data_dir / "dbs" / "subdbs"
-    batch_db_root = scratch_dir or data_dir / "dbs" / "subdbs" / "batch_dbs"
-    batch_db_dir = batch_db_root / hashed_contents
+    batch_db_dir = scratch_dir / hashed_contents
     batch_db_dir.mkdir(exist_ok=True, parents=True)
     return (
         Scorer(

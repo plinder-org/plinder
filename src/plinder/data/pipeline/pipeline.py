@@ -363,15 +363,17 @@ class IngestPipeline:
 
     @utils.ingest_flow_control
     def run_batch_searches(self, pdb_ids: list[str]) -> None:
-        tasks.run_batch_searches(
-            data_dir=self.plinder_dir,
-            pdb_ids=pdb_ids,
-            scorer_cfg=self.cfg.scorer,
-            foldseek_cfg=self.cfg.foldseek,
-            mmseqs_cfg=self.cfg.mmseqs,
-            cpu=self.cfg.flow.make_scorers_cpu,
-            force_update=self.cfg.data.force_update,
-        )
+        with tempfile.TemporaryDirectory(prefix="plinder-search-") as scratch:
+            tasks.run_batch_searches(
+                data_dir=self.plinder_dir,
+                pdb_ids=pdb_ids,
+                scorer_cfg=self.cfg.scorer,
+                foldseek_cfg=self.cfg.foldseek,
+                mmseqs_cfg=self.cfg.mmseqs,
+                cpu=self.cfg.flow.make_scorers_cpu,
+                scratch_dir=Path(scratch),
+                force_update=self.cfg.data.force_update,
+            )
 
     @utils.ingest_flow_control
     def scatter_map_batch_alignments(self) -> list[tuple[str, list[str]]]:
@@ -415,14 +417,16 @@ class IngestPipeline:
         force_update = (
             self.cfg.data.force_update or self.cfg.flow.make_batch_scores_force_update
         )
-        tasks.make_batch_scores(
-            data_dir=self.plinder_dir,
-            pdb_ids=pdb_ids,
-            scorer_cfg=self.cfg.scorer,
-            force_update=force_update,
-            threads=self.cfg.flow.make_batch_scores_cpu,
-            defer_ligand_3d=True,
-        )
+        with tempfile.TemporaryDirectory(prefix="plinder-score-") as scratch:
+            tasks.make_batch_scores(
+                data_dir=self.plinder_dir,
+                pdb_ids=pdb_ids,
+                scorer_cfg=self.cfg.scorer,
+                force_update=force_update,
+                scratch_dir=Path(scratch),
+                threads=self.cfg.flow.make_batch_scores_cpu,
+                defer_ligand_3d=True,
+            )
 
     @utils.ingest_flow_control
     def scatter_collate_ligand_3d_candidates(self) -> list[list[str]]:

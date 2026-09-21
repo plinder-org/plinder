@@ -11,7 +11,6 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-
 from plinder.core.utils import schemas
 from plinder.data.annotations.get_similarity_scores import (
     SCORE_METRICS_METADATA_KEY,
@@ -4112,7 +4111,7 @@ def test_get_scorer_uses_configured_search_limits(tmp_path) -> None:
         },
         cached=False,
     )
-    scorer, _, _ = utils.get_scorer(
+    scorer, _, batch_db_dir = utils.get_scorer(
         data_dir=tmp_path,
         pdb_ids=[],
         scorer_cfg=cfg.scorer,
@@ -4130,6 +4129,9 @@ def test_get_scorer_uses_configured_search_limits(tmp_path) -> None:
     assert scorer.get_config("pred", "mmseqs").min_seq_id == 0.9
     assert scorer.get_config("apo", "foldseek").coverage == 0.8
     assert scorer.get_config("pred", "mmseqs").coverage == 0.9
+    assert batch_db_dir.parent == tmp_path / "scratch"
+    assert batch_db_dir.is_dir()
+    assert not (tmp_path / "dbs/subdbs/batch_dbs").exists()
 
     from plinder.data.pipeline.score import _scoring_config
 
@@ -4276,6 +4278,7 @@ def test_run_batch_searches_uses_compact_linked_apo_query_chains(
         foldseek_cfg=SimpleNamespace(),
         mmseqs_cfg=mmseqs_cfg,
         cpu=4,
+        scratch_dir=tmp_path / "node-scratch",
         alignment_types=["mmseqs"],
     )
     assert len(calls) == 2
@@ -4301,6 +4304,7 @@ def test_run_batch_searches_uses_compact_linked_apo_query_chains(
         foldseek_cfg=SimpleNamespace(),
         mmseqs_cfg=mmseqs_cfg,
         cpu=4,
+        scratch_dir=tmp_path / "node-scratch",
         alignment_types=["mmseqs"],
     )
     assert len(calls) == 2
@@ -4314,6 +4318,7 @@ def test_run_batch_searches_uses_compact_linked_apo_query_chains(
         foldseek_cfg=SimpleNamespace(),
         mmseqs_cfg=mmseqs_cfg,
         cpu=4,
+        scratch_dir=tmp_path / "node-scratch",
         alignment_types=["mmseqs"],
     )
     assert len(calls) == 4
@@ -4334,6 +4339,7 @@ def test_run_batch_searches_uses_compact_linked_apo_query_chains(
         foldseek_cfg=SimpleNamespace(),
         mmseqs_cfg=mmseqs_cfg,
         cpu=4,
+        scratch_dir=tmp_path / "node-scratch",
         alignment_types=["mmseqs"],
     )
     assert len(calls) == 5
@@ -4347,6 +4353,7 @@ def test_run_batch_searches_uses_compact_linked_apo_query_chains(
         foldseek_cfg=SimpleNamespace(),
         mmseqs_cfg=mmseqs_cfg,
         cpu=4,
+        scratch_dir=tmp_path / "node-scratch",
         alignment_types=["mmseqs"],
     )
     selections["apo"].write_text(
@@ -4364,6 +4371,7 @@ def test_run_batch_searches_uses_compact_linked_apo_query_chains(
         foldseek_cfg=SimpleNamespace(),
         mmseqs_cfg=mmseqs_cfg,
         cpu=4,
+        scratch_dir=tmp_path / "node-scratch",
         alignment_types=["mmseqs"],
     )
     assert len(calls) == 7
@@ -4377,6 +4385,7 @@ def test_run_batch_searches_uses_compact_linked_apo_query_chains(
         foldseek_cfg=SimpleNamespace(),
         mmseqs_cfg=mmseqs_cfg,
         cpu=4,
+        scratch_dir=tmp_path / "node-scratch",
         alignment_types=["mmseqs"],
         search_databases=["apo"],
         force_update=True,
@@ -4410,6 +4419,7 @@ def test_run_batch_searches_rejects_missing_eligible_output(tmp_path, monkeypatc
             foldseek_cfg=SimpleNamespace(),
             mmseqs_cfg=SimpleNamespace(),
             cpu=1,
+            scratch_dir=tmp_path / "node-scratch",
             alignment_types=["mmseqs"],
         )
 
