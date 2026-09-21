@@ -625,6 +625,7 @@ def _write_alignment_mapping_manifest(
         shard=shard,
     )
     outputs = {}
+    protein_score_outputs = {}
     for alignment_type, signatures in inputs.items():
         output = tasks._alignment_release_path(
             data_dir=data_dir,
@@ -634,6 +635,8 @@ def _write_alignment_mapping_manifest(
         )
         if not signatures:
             outputs[alignment_type] = None
+            if search_db == "holo":
+                protein_score_outputs[alignment_type] = None
             continue
         stat = output.stat()
         outputs[alignment_type] = {
@@ -641,6 +644,46 @@ def _write_alignment_mapping_manifest(
             "size": stat.st_size,
             "mtime_ns": stat.st_mtime_ns,
         }
+        if search_db == "holo":
+            frame = pd.read_parquet(output)
+            rows = [
+                {
+                    "query_entry": str(row.query_entry),
+                    "target_entry": str(row.target_entry),
+                    "query_chain_mapped": str(row.query_chain_mapped),
+                    "target_chain_mapped": str(row.target_chain_mapped),
+                    "source": str(row.source),
+                    "qcov": round(float(row.qcov) * 100),
+                    "tcov": round(float(row.tcov) * 100),
+                    "fident": round(float(row.fident) * 100),
+                    "seqsim": round(float(row.seqsim) * 100),
+                    "lddt": (
+                        round(float(row.lddt) * 100)
+                        if alignment_type == "foldseek"
+                        else None
+                    ),
+                }
+                for row in frame.itertuples(index=False)
+            ]
+            protein_scores = tasks._protein_similarity_score_path(
+                data_dir=data_dir,
+                alignment_type=alignment_type,
+                shard=shard,
+            )
+            protein_scores.parent.mkdir(parents=True, exist_ok=True)
+            pq.write_table(
+                pa.Table.from_pylist(
+                    rows,
+                    schema=schemas.PROTEIN_SIMILARITY_EXPORT_SCHEMA,
+                ),
+                protein_scores,
+            )
+            score_stat = protein_scores.stat()
+            protein_score_outputs[alignment_type] = {
+                "name": protein_scores.name,
+                "size": score_stat.st_size,
+                "mtime_ns": score_stat.st_mtime_ns,
+            }
     manifest = tasks._alignment_mapping_manifest_path(
         data_dir=data_dir,
         search_db=search_db,
@@ -657,6 +700,7 @@ def _write_alignment_mapping_manifest(
                 ),
                 "inputs": inputs,
                 "outputs": outputs,
+                "protein_score_outputs": protein_score_outputs,
                 "skipped_queries": skipped_queries or {},
             }
         )
@@ -4476,6 +4520,7 @@ def test_alignment_release_shard_unifies_empty_and_populated_list_types(
     populated["selected_residue_identity"] = [bytes([1])]
     pd.DataFrame(populated).to_parquet(populated_lists, index=False)
     target = tmp_path / "foldseek.parquet"
+    protein_scores = tmp_path / "protein_scores.parquet"
 
     tasks._write_alignment_release_shard(
         sources=[empty_lists, populated_lists],
@@ -4484,12 +4529,23 @@ def test_alignment_release_shard_unifies_empty_and_populated_list_types(
         temp_dir=tmp_path / "scratch",
         threads=1,
         memory_limit="1GB",
+        protein_scores_target=protein_scores,
     )
 
     result = pd.read_parquet(target)
     assert result["query_entry"].tolist() == ["1abc", "2abc"]
     assert result.loc[0, "query_selected_residue_numbers"].tolist() == []
     assert result.loc[1, "query_selected_residue_numbers"].tolist() == [1]
+    score_result = pd.read_parquet(protein_scores)
+    assert pq.read_schema(protein_scores).equals(
+        schemas.PROTEIN_SIMILARITY_EXPORT_SCHEMA
+    )
+    assert score_result[["qcov", "tcov", "fident", "seqsim", "lddt"]].to_dict(
+        "records"
+    ) == [
+        {"qcov": 100, "tcov": 100, "fident": 100, "seqsim": 100, "lddt": 100},
+        {"qcov": 100, "tcov": 100, "fident": 100, "seqsim": 100, "lddt": 100},
+    ]
 
 
 def test_ligand_score_threshold_must_cover_requested_chemical_clusters() -> None:

@@ -3486,6 +3486,7 @@ def finalize_alignment_artifacts(data_dir: Path) -> dict[str, Any]:
     release_shards_by_backend: dict[str, set[str]] = {
         alignment_type: set() for alignment_type in plan["alignment_types"]
     }
+    protein_score_sources: list[dict[str, Any]] = []
     invalid_manifests: list[str] = []
     for manifest_path in manifest_paths:
         shard = manifest_path.stem.removeprefix("shard=")
@@ -3496,12 +3497,14 @@ def finalize_alignment_artifacts(data_dir: Path) -> dict[str, Any]:
             continue
         inputs = shard_manifest.get("inputs")
         outputs = shard_manifest.get("outputs")
+        protein_score_outputs = shard_manifest.get("protein_score_outputs")
         shard_skipped = shard_manifest.get("skipped_queries")
         if (
             shard_manifest.get("shard") != shard
             or shard_manifest.get("alignment_chain_lookup") != lookup_signature
             or not isinstance(inputs, dict)
             or not isinstance(outputs, dict)
+            or not isinstance(protein_score_outputs, dict)
             or not isinstance(shard_skipped, dict)
         ):
             invalid_manifests.append(shard)
@@ -3522,8 +3525,9 @@ def finalize_alignment_artifacts(data_dir: Path) -> dict[str, Any]:
                 raw_queries.difference(shard_skipped)
             )
             expected_output = outputs.get(alignment_type)
+            expected_protein_scores = protein_score_outputs.get(alignment_type)
             if not signatures:
-                if expected_output is not None:
+                if expected_output is not None or expected_protein_scores is not None:
                     invalid_manifests.append(shard)
                 continue
             release = tasks._alignment_release_path(
@@ -3549,6 +3553,36 @@ def finalize_alignment_artifacts(data_dir: Path) -> dict[str, Any]:
             ):
                 invalid_manifests.append(shard)
                 continue
+            protein_scores = tasks._protein_similarity_score_path(
+                data_dir=data_dir,
+                alignment_type=alignment_type,
+                shard=shard,
+            )
+            if (
+                not isinstance(expected_protein_scores, dict)
+                or not protein_scores.is_file()
+                or not pq.read_schema(protein_scores).equals(
+                    schemas.PROTEIN_SIMILARITY_EXPORT_SCHEMA
+                )
+            ):
+                invalid_manifests.append(shard)
+                continue
+            score_stat = protein_scores.stat()
+            if expected_protein_scores != {
+                "name": protein_scores.name,
+                "size": score_stat.st_size,
+                "mtime_ns": score_stat.st_mtime_ns,
+            }:
+                invalid_manifests.append(shard)
+                continue
+            protein_score_sources.append(
+                {
+                    "alignment_type": alignment_type,
+                    "shard": shard,
+                    **_source_signature(protein_scores),
+                    "rows": int(pq.ParquetFile(protein_scores).metadata.num_rows),
+                }
+            )
             release_shards_by_backend[alignment_type].add(shard)
     if invalid_manifests:
         missing["invalid_mapping_manifests"] = sorted(set(invalid_manifests))[:100]
@@ -3612,8 +3646,19 @@ def finalize_alignment_artifacts(data_dir: Path) -> dict[str, Any]:
         "exact_cluster_manifests": cluster_manifests,
         "search_database_bundles": search_database_bundles,
         "skipped_queries": skipped_query_details,
+        "protein_similarity_score_rows": sum(
+            int(source["rows"]) for source in protein_score_sources
+        ),
     }
     write_json_atomic(data_dir / "alignments" / "manifest.json", report)
+    write_json_atomic(
+        data_dir / "exports" / "protein_similarity_scores.manifest.json",
+        {
+            "status": "complete",
+            "sources": protein_score_sources,
+            "row_count": report["protein_similarity_score_rows"],
+        },
+    )
     return report
 
 

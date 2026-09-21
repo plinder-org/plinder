@@ -68,6 +68,7 @@ LIGAND_POCKET_RESIDUES_RELATIVE = Path("index/ligand_pocket_residues.parquet")
 LIGAND_POCKET_REPRESENTATIVES_MANIFEST_RELATIVE = Path(
     "index/ligand_pocket_representatives.manifest.json"
 )
+PROTEIN_SIMILARITY_SCORES_RELATIVE = Path("exports/protein_similarity_scores")
 LIGAND_POCKET_RESIDUE_SELECTION = "neighboring_and_interacting"
 APO_SEARCH_METADATA_KEY = b"plinder.apo_search_inputs"
 STAGES = [
@@ -2350,6 +2351,17 @@ def _alignment_release_path(
     )
 
 
+def _protein_similarity_score_path(
+    *, data_dir: Path, alignment_type: str, shard: str
+) -> Path:
+    return (
+        data_dir
+        / PROTEIN_SIMILARITY_SCORES_RELATIVE
+        / f"alignment_type={alignment_type}"
+        / f"shard={shard}.parquet"
+    )
+
+
 def _alignment_mapping_manifest_path(
     *, data_dir: Path, shard: str, search_db: str = "holo"
 ) -> Path:
@@ -2406,6 +2418,9 @@ def alignment_mapping_shard_is_current(
     outputs = payload.get("outputs")
     if not isinstance(outputs, dict):
         return False
+    protein_score_outputs = payload.get("protein_score_outputs")
+    if search_db == "holo" and not isinstance(protein_score_outputs, dict):
+        return False
     for alignment_type, source_signatures in inputs.items():
         output = _alignment_release_path(
             data_dir=data_dir,
@@ -2415,6 +2430,11 @@ def alignment_mapping_shard_is_current(
         )
         if not source_signatures:
             if outputs.get(alignment_type) is not None:
+                return False
+            if (
+                search_db == "holo"
+                and protein_score_outputs.get(alignment_type) is not None
+            ):
                 return False
             continue
         if not output.is_file() or not utils._mapped_alignment_file_is_current(
@@ -2428,6 +2448,23 @@ def alignment_mapping_shard_is_current(
             "mtime_ns": stat.st_mtime_ns,
         }:
             return False
+        if search_db == "holo":
+            protein_scores = _protein_similarity_score_path(
+                data_dir=data_dir,
+                alignment_type=alignment_type,
+                shard=shard,
+            )
+            if not protein_scores.is_file() or not pq.read_schema(
+                protein_scores
+            ).equals(schemas.PROTEIN_SIMILARITY_EXPORT_SCHEMA):
+                return False
+            score_stat = protein_scores.stat()
+            if protein_score_outputs.get(alignment_type) != {
+                "name": protein_scores.name,
+                "size": score_stat.st_size,
+                "mtime_ns": score_stat.st_mtime_ns,
+            }:
+                return False
     return True
 
 
@@ -2567,6 +2604,7 @@ def map_batch_alignments(
                         f"{len(mapped)} of {expected} available backends"
                     )
             outputs: dict[str, dict[str, int | str] | None] = {}
+            protein_score_outputs: dict[str, dict[str, int | str] | None] = {}
             for alignment_type, source_signatures in inputs.items():
                 target = _alignment_release_path(
                     data_dir=data_dir,
@@ -2574,9 +2612,21 @@ def map_batch_alignments(
                     alignment_type=alignment_type,
                     shard=shard,
                 )
+                protein_scores_target = (
+                    _protein_similarity_score_path(
+                        data_dir=data_dir,
+                        alignment_type=alignment_type,
+                        shard=shard,
+                    )
+                    if search_db == "holo"
+                    else None
+                )
                 if not source_signatures:
                     target.unlink(missing_ok=True)
                     outputs[alignment_type] = None
+                    if protein_scores_target is not None:
+                        protein_scores_target.unlink(missing_ok=True)
+                        protein_score_outputs[alignment_type] = None
                     continue
                 local_sources = sorted(
                     (
@@ -2590,6 +2640,7 @@ def map_batch_alignments(
                     temp_dir=working_root / "collate" / alignment_type,
                     threads=1,
                     memory_limit="7GB",
+                    protein_scores_target=protein_scores_target,
                 )
                 stat = target.stat()
                 outputs[alignment_type] = {
@@ -2597,6 +2648,13 @@ def map_batch_alignments(
                     "size": stat.st_size,
                     "mtime_ns": stat.st_mtime_ns,
                 }
+                if protein_scores_target is not None:
+                    score_stat = protein_scores_target.stat()
+                    protein_score_outputs[alignment_type] = {
+                        "name": protein_scores_target.name,
+                        "size": score_stat.st_size,
+                        "mtime_ns": score_stat.st_mtime_ns,
+                    }
             manifest = _alignment_mapping_manifest_path(
                 data_dir=data_dir,
                 search_db=search_db,
@@ -2612,6 +2670,7 @@ def map_batch_alignments(
                         "alignment_chain_lookup": lookup_signature,
                         "inputs": inputs,
                         "outputs": outputs,
+                        "protein_score_outputs": protein_score_outputs,
                         "skipped_queries": skipped_queries,
                     },
                     indent=2,
@@ -3943,8 +4002,9 @@ def _write_alignment_release_shard(
     temp_dir: Path,
     threads: int,
     memory_limit: str,
+    protein_scores_target: Path | None = None,
 ) -> None:
-    """Sort and atomically install mapped parts as one query-shard Parquet."""
+    """Write mapped residues and compact protein statistics for one query shard."""
     import duckdb
 
     con = duckdb.connect()
@@ -3958,6 +4018,13 @@ def _write_alignment_release_shard(
     ]
     temporary = temp_dir / target.name
     temporary.unlink(missing_ok=True)
+    protein_scores_temporary = (
+        temp_dir / f"protein-scores-{target.name}"
+        if protein_scores_target is not None
+        else None
+    )
+    if protein_scores_temporary is not None:
+        protein_scores_temporary.unlink(missing_ok=True)
     release_columns = [
         "query_entry",
         "target_entry",
@@ -4003,6 +4070,39 @@ def _write_alignment_release_shard(
                 """
             )
         )
+        if protein_scores_temporary is not None:
+            lddt = (
+                "CAST(least(100, greatest(0, round(lddt * 100))) AS UTINYINT)"
+                if alignment_type == "foldseek"
+                else "NULL::UTINYINT"
+            )
+            con.sql(
+                dedent(
+                    f"""
+                    COPY (
+                        SELECT
+                            query_entry::VARCHAR AS query_entry,
+                            target_entry::VARCHAR AS target_entry,
+                            query_chain_mapped::VARCHAR AS query_chain_mapped,
+                            target_chain_mapped::VARCHAR AS target_chain_mapped,
+                            source::VARCHAR AS source,
+                            CAST(least(100, greatest(0, round(qcov * 100)))
+                                AS UTINYINT) AS qcov,
+                            CAST(least(100, greatest(0, round(tcov * 100)))
+                                AS UTINYINT) AS tcov,
+                            CAST(least(100, greatest(0, round(fident * 100)))
+                                AS UTINYINT) AS fident,
+                            CAST(least(100, greatest(0, round(seqsim * 100)))
+                                AS UTINYINT) AS seqsim,
+                            {lddt} AS lddt
+                        FROM read_parquet([{source_sql}], union_by_name = true)
+                        ORDER BY query_entry, target_entry,
+                                 query_chain_mapped, target_chain_mapped, source
+                    ) TO '{protein_scores_temporary.as_posix()}'
+                    (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 500_000);
+                    """
+                )
+            )
     else:
         pq.write_table(
             pa.Table.from_pylist(
@@ -4012,10 +4112,28 @@ def _write_alignment_release_shard(
             temporary,
             compression="zstd",
         )
+        if protein_scores_temporary is not None:
+            pq.write_table(
+                pa.Table.from_pylist(
+                    [],
+                    schema=schemas.PROTEIN_SIMILARITY_EXPORT_SCHEMA,
+                ),
+                protein_scores_temporary,
+                compression="zstd",
+            )
+    con.close()
     install_path = target.with_suffix(target.suffix + ".tmp")
     copyfile(temporary, install_path)
     install_path.replace(target)
     temporary.unlink(missing_ok=True)
+    if protein_scores_target is not None and protein_scores_temporary is not None:
+        protein_scores_target.parent.mkdir(exist_ok=True, parents=True)
+        install_path = protein_scores_target.with_suffix(
+            protein_scores_target.suffix + ".tmp"
+        )
+        copyfile(protein_scores_temporary, install_path)
+        install_path.replace(protein_scores_target)
+        protein_scores_temporary.unlink(missing_ok=True)
 
 
 def scatter_collate_alignments(*, data_dir: Path) -> list[list[str]]:
@@ -4077,6 +4195,15 @@ def collate_alignments(
                 temp_dir=temp_dir / f"{search_db}-{alignment_type}",
                 threads=threads,
                 memory_limit=memory_limit,
+                protein_scores_target=(
+                    _protein_similarity_score_path(
+                        data_dir=data_dir,
+                        alignment_type=alignment_type,
+                        shard=shard,
+                    )
+                    if search_db == "holo"
+                    else None
+                ),
             )
 
 

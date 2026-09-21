@@ -29,12 +29,15 @@ _DOWNLOAD_GROUPS = (
     ),
     (
         "complete similarity exports",
-        ("ligand_similarity_scores", "interface_similarity_scores"),
+        (
+            "protein_similarity_scores",
+            "ligand_similarity_scores",
+            "interface_similarity_scores",
+        ),
         True,
     ),
     ("canonical ligand archives", ("ligand_archives",), True),
     ("ligand similarities", ("ligand_scores",), True),
-    ("protein-interface similarities", ("interface_scores",), True),
     ("mapped protein alignments", ("alignments",), True),
     ("custom-scoring search databases", ("search_databases",), True),
 )

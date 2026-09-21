@@ -55,6 +55,22 @@ def mapped_alignment_schema_is_current(
     return required.issubset(columns)
 
 
+PROTEIN_SIMILARITY_EXPORT_SCHEMA = pa.schema(
+    [
+        ("query_entry", pa.string()),
+        ("target_entry", pa.string()),
+        ("query_chain_mapped", pa.string()),
+        ("target_chain_mapped", pa.string()),
+        ("source", pa.string()),
+        ("qcov", pa.uint8()),
+        ("tcov", pa.uint8()),
+        ("fident", pa.uint8()),
+        ("seqsim", pa.uint8()),
+        ("lddt", pa.uint8()),
+    ]
+)
+
+
 PROTEIN_SIMILARITY_SCHEMA = pa.schema(
     [
         ("query_system", pa.string()),

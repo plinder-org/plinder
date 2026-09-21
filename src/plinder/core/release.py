@@ -70,11 +70,11 @@ RELEASE_PATHS = {
     "ligand_archive": "ligand_archives/{shard}.parquet",
     "ligand_archives_manifest": "ligand_archives/manifest.json",
     "ligand_scores": "ligand_scores",
-    "interface_scores": "interface_scores",
     "ligand_sampling": "ligand_sampling",
     "interface_sampling": "interface_sampling",
     "search_databases": "search_databases",
     "search_database": "search_databases/holo_{backend}",
+    "protein_similarity_scores": "exports/protein_similarity_scores",
     "ligand_similarity_scores": "exports/ligand_similarity_scores.parquet",
     "interface_similarity_scores": "exports/interface_similarity_scores.parquet",
 }

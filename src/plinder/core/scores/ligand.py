@@ -26,10 +26,9 @@ def query_ligand_similarity(
     *,
     columns: list[str] | None = None,
     filters: Filters = None,
+    release: PlinderRelease | None = None,
 ) -> pd.DataFrame:
-    """
-    Query the ligand similarity database
-    and return the results.
+    """Query complete directed ligand-pair similarities.
 
     Parameters
     ----------
@@ -37,13 +36,15 @@ def query_ligand_similarity(
         the columns to return
     filters : list[tuple[str, str, str | set[str]]]
         the filters to apply
+    release : PlinderRelease | None
+        Explicit local release, or the configured release when omitted.
 
     Returns
     -------
     df : pd.DataFrame
         The ligand similarity results.
     """
-    dataset = PlinderRelease().fetch("ligand_scores")
+    dataset = (release or PlinderRelease()).fetch("ligand_similarity_scores")
     return read_score_table(
         dataset,
         columns=columns,
@@ -52,8 +53,23 @@ def query_ligand_similarity(
 
 
 @timeit
-def map_cross_similarity(
-    df: pd.DataFrame, target_ligands: set[int], metric: str
+def query_ligand_chemical_similarity(
+    *,
+    columns: list[str] | None = None,
+    filters: Filters = None,
+    release: PlinderRelease | None = None,
+) -> pd.DataFrame:
+    """Query ECFP4 Tanimoto similarities between canonical ligand SMILES."""
+    dataset = (release or PlinderRelease()).fetch("ligand_scores")
+    return read_score_table(dataset, columns=columns, filters=filters)
+
+
+@timeit
+def _map_cross_chemical_similarity(
+    df: pd.DataFrame,
+    target_ligands: set[int],
+    metric: str,
+    release: PlinderRelease | None,
 ) -> pd.DataFrame:
     if df.empty:
         return pd.DataFrame(
@@ -74,6 +90,7 @@ def map_cross_similarity(
         "annotation",
         columns=["system_id", "ligand_smiles_id"],
         filters=[("ligand_smiles_id", "in", ligand_ids)],
+        release=release,
     )
     id_column = "ligand_smiles_id"
     ligand_to_system: dict[int, set[str]] = {}
@@ -93,11 +110,12 @@ def map_cross_similarity(
 
 
 @timeit
-def cross_similarity(
+def cross_ligand_chemical_similarity(
     *,
     query_ligands: Iterable[int | str],
     target_ligands: Iterable[int | str],
     metric: str | None = None,
+    release: PlinderRelease | None = None,
 ) -> pd.DataFrame:
     """
     Query the ligand similarity database for
@@ -118,7 +136,7 @@ def cross_similarity(
     """
     query_ids = _ligand_ids(query_ligands)
     target_ids = _ligand_ids(target_ligands)
-    dataset = PlinderRelease().fetch("ligand_scores")
+    dataset = (release or PlinderRelease()).fetch("ligand_scores")
     if metric is None:
         metric = "tanimoto_similarity_ecfp4_1024"
     filters: list[list[Filter]] = [
@@ -137,4 +155,9 @@ def cross_similarity(
         columns=columns,
         filters=filters,
     )
-    return map_cross_similarity(similarities, target_ids, metric)
+    return _map_cross_chemical_similarity(
+        similarities,
+        target_ids,
+        metric,
+        release,
+    )

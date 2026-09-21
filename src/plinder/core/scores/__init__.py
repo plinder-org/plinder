@@ -17,14 +17,13 @@ from .custom import (
     score_custom_cif_files,
     score_custom_sequence_file,
 )
-from .ligand import cross_similarity as cross_ligand_similarity
-from .ligand import query_ligand_similarity
-from .protein import (
-    cross_similarity as cross_protein_similarity,
+from .interface import query_interface_similarity
+from .ligand import (
+    cross_ligand_chemical_similarity,
+    query_ligand_chemical_similarity,
+    query_ligand_similarity,
 )
-from .protein import (
-    query_protein_similarity,
-)
+from .protein import query_protein_similarity
 from .reconstruct import (
     prefetch_similarity_alignments,
     reconstruct_interface_similarity_scores,
@@ -35,9 +34,10 @@ from .search import search
 __all__ = [
     "search",
     "query_ligand_similarity",
-    "cross_ligand_similarity",
+    "query_ligand_chemical_similarity",
+    "cross_ligand_chemical_similarity",
+    "query_interface_similarity",
     "query_protein_similarity",
-    "cross_protein_similarity",
     "CustomProteinSearchConfig",
     "CustomScoringResult",
     "CustomSequenceScoringResult",
