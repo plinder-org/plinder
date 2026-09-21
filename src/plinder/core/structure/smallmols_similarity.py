@@ -161,6 +161,24 @@ class RascalParityMatch(NamedTuple):
             mol1.GetNumBonds() + mol2.GetNumBonds(),
         )
 
+    def coverage(
+        self, mol1: Mol, mol2: Mol, *, stereo: bool = True
+    ) -> tuple[float, float]:
+        """Fraction of each molecule matched, ``(mol1, mol2)``, in [0, 1].
+
+        Directional counterpart of :meth:`score`: the same atom and bond terms
+        (an opposed centre still counts half an atom), each averaged over one
+        molecule's own atom and bond counts instead of the union.
+        """
+        if self.bonds <= 0:
+            return 0.0, 0.0
+        atoms = len(self.atoms) - (0.5 * self.opposed if stereo else 0.0)
+
+        def fraction(mol: Mol) -> float:
+            return float(atoms / mol.GetNumAtoms() + self.bonds / mol.GetNumBonds()) / 2
+
+        return fraction(mol1), fraction(mol2)
+
 
 def parity_similarity(
     atoms: float, bonds: float, atom_total: int, bond_total: int
@@ -258,3 +276,32 @@ def rascal_parity_score(
     """
     match = rascal_parity_match(mol1, mol2, target=target, timeout=timeout)
     return match.score(mol1, mol2, stereo=stereo)
+
+
+def rascal_parity_coverage(
+    mol1: Mol, mol2: Mol, *, target: float = 0.3, stereo: bool = True, timeout: int = 2
+) -> tuple[float, float]:
+    """Directional PARITY-like coverage from one Rascal MCES.
+
+    Parameters
+    ----------
+    mol1, mol2 : Mol
+        The molecules to compare.
+    target : float, default=0.3
+        Bond Tanimoto below which a pair is pruned and scores zero. It is
+        symmetric, so a small molecule inside a much larger one is pruned
+        unless ``target`` is lowered.
+    stereo : bool, default=True
+        Count a matched centre of opposite handedness as half an atom.
+    timeout : int, default=2
+        Rascal timeout in seconds.
+
+    Returns
+    -------
+    tuple[float, float]
+        The fraction of ``mol1`` and of ``mol2`` covered by the match. A
+        fragment fully contained in a larger molecule gives ``(1.0, x)`` with
+        ``x < 1``, which the symmetric :func:`rascal_parity_score` cannot show.
+    """
+    match = rascal_parity_match(mol1, mol2, target=target, timeout=timeout)
+    return match.coverage(mol1, mol2, stereo=stereo)

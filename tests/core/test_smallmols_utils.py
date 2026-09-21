@@ -445,6 +445,27 @@ def test_rascal_parity_match_carries_the_mapping_behind_the_score():
     assert best.bonds == every.bonds and best.alternatives == ()
 
 
+def test_rascal_parity_coverage_is_directional():
+    from plinder.core.structure.smallmols_similarity import (
+        rascal_parity_coverage,
+        rascal_parity_match,
+        rascal_parity_score,
+    )
+
+    small, large = Chem.MolFromSmiles("CCO"), Chem.MolFromSmiles("CCOCCCCCC")
+    # the small molecule is fully inside the large one: symmetric score is low
+    inside, outside = rascal_parity_coverage(small, large, target=0.0)
+    assert inside == 1.0 and outside < 0.5
+    assert rascal_parity_coverage(large, small, target=0.0) == (outside, inside)
+    assert rascal_parity_score(small, large, target=0.0) < 0.5
+    # identical molecules are covered both ways; unrelated ones not at all
+    assert rascal_parity_coverage(small, small) == (1.0, 1.0)
+    assert rascal_parity_coverage(small, Chem.MolFromSmiles("BrBr")) == (0.0, 0.0)
+    # the coverage of each side never falls below the symmetric score
+    match = rascal_parity_match(small, large, target=0.0)
+    assert min(match.coverage(small, large)) >= match.score(small, large)
+
+
 def test_rascal_parity_score_sees_order_stereo_and_size():
     from rdkit import Chem
 

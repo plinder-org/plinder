@@ -296,6 +296,8 @@ def test_parity_scores_every_tanimoto_edge_once(tmp_path):
         "ligand_smiles_id_2",
         "tanimoto_similarity_ecfp4_1024",
         "parity_similarity",
+        "parity_coverage_1",
+        "parity_coverage_2",
         "fragment_atoms_1",
         "fragment_atoms_2",
     ]
@@ -313,6 +315,10 @@ def test_parity_scores_every_tanimoto_edge_once(tmp_path):
     assert (parity["ligand_smiles_id_1"] < parity["ligand_smiles_id_2"]).all()
     assert not parity.duplicated(["ligand_smiles_id_1", "ligand_smiles_id_2"]).any()
     assert parity["parity_similarity"].between(0.0, 100.0).all()
+    # each side's coverage is a fraction of that molecule, never below the union score
+    for side in ("parity_coverage_1", "parity_coverage_2"):
+        assert parity[side].between(0.0, 100.0).all()
+        assert (parity[side] >= parity["parity_similarity"] - 1e-9).all()
     # the graph score orders neighbours differently from the fingerprint
     assert (
         parity["parity_similarity"].corr(parity["tanimoto_similarity_ecfp4_1024"])
@@ -428,10 +434,13 @@ def test_novel_molecule_parity_extends_the_precompiled_table(ccd_dbs):
         "tanimoto_similarity_ecfp4_1024",
         "ccd_id",
         "parity_similarity",
+        "parity_coverage_1",
+        "parity_coverage_2",
     ]
     best = hits[hits["query_id"] == "self"].iloc[0]
     assert best["ccd_id"] == own["ccd_id"]
     assert best["parity_similarity"] == 100.0
+    assert best["parity_coverage_1"] == best["parity_coverage_2"] == 100.0
     assert (hits["tanimoto_similarity_ecfp4_1024"] >= 30.0).all()
     assert hits["parity_similarity"].between(0.0, 100.0).all()
     dpe = hits[hits["query_id"] == "dpe"]["parity_similarity"]
@@ -646,6 +655,43 @@ def test_parity_table_is_symmetric_and_identity_aware(sugar_table):
         sugar_table.similarity("NAG", "XYZ") == 0.0
         and sugar_table.mapping("NAG", "XYZ") == {}
     )
+
+
+def test_parity_table_resolves_direction_from_one_stored_pair(sugar_table):
+    # glucose sits inside its N-acetyl derivative: covered as query, not as target
+    inside, outside = (
+        sugar_table.coverage("GLC", "NAG"),
+        sugar_table.coverage("NAG", "GLC"),
+    )
+    assert inside > outside > 0
+    assert sugar_table.coverage("NAG", "NAG") == 1.0
+    assert sugar_table.coverage("NAG", "XYZ") == 0.0
+    directed = sugar_table.directed()
+    assert len(directed) == 2 * len(sugar_table._coverage)
+    row = directed.set_index(["query_ccd_id", "target_ccd_id"])
+    assert row.loc[("GLC", "NAG"), "parity_coverage"] == inside
+    assert row.loc[("NAG", "GLC"), "parity_coverage"] == outside
+    # the symmetric score is the same in both directions
+    assert (
+        row.loc[("GLC", "NAG"), "parity_similarity"]
+        == row.loc[("NAG", "GLC"), "parity_similarity"]
+        == sugar_table.similarity("GLC", "NAG")
+    )
+    # a table from before the coverage columns still loads but cannot answer
+    legacy = CcdParityTable(
+        pd.DataFrame(
+            {
+                "ccd_id_1": ["GLC"],
+                "ccd_id_2": ["NAG"],
+                "parity_similarity": [50.0],
+                "fragment_atoms_1": [[["C1"]]],
+                "fragment_atoms_2": [[["C1"]]],
+            }
+        )
+    )
+    assert legacy.similarity("GLC", "NAG") == 0.5
+    with pytest.raises(ValueError, match="rebuild"):
+        legacy.coverage("GLC", "NAG")
 
 
 def test_composite_parity_reassembles_the_whole_molecule_score(atoms_2dty, sugar_table):

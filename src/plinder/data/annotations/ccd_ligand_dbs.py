@@ -1053,11 +1053,11 @@ def _atom_names(mol: Mol) -> list[str]:
 def _parity_rows(
     pairs: Sequence[tuple[Mol | None, Mol | None, bool]], *, threads: int
 ) -> pd.DataFrame:
-    """PARITY-like score (percent) and largest-fragment atom names per molecule pair.
+    """PARITY-like score, per-side coverage and fragment atom names per molecule pair.
 
     Each pair is ``(first, second, keep_alternatives)``; the scored fragment is
     always the best of every equally good MCES, and with ``keep_alternatives``
-    the others are stored after it.
+    the others are stored after it. Score and coverages are percent.
     """
     from concurrent.futures import ThreadPoolExecutor
 
@@ -1065,15 +1065,18 @@ def _parity_rows(
 
     def row(
         pair: tuple[Mol | None, Mol | None, bool],
-    ) -> tuple[float, list[list[str]], list[list[str]]]:
+    ) -> tuple[float, float, float, list[list[str]], list[list[str]]]:
         first, second, keep_alternatives = pair
         if first is None or second is None:
-            return float("nan"), [], []
+            return float("nan"), float("nan"), float("nan"), [], []
         match = rascal_parity_match(first, second, all_best=keep_alternatives)
         names_1, names_2 = _atom_names(first), _atom_names(second)
         fragments = (match.atoms, *(match.alternatives if keep_alternatives else ()))
+        coverage_1, coverage_2 = match.coverage(first, second)
         return (
             match.score(first, second) * 100.0,
+            coverage_1 * 100.0,
+            coverage_2 * 100.0,
             [[names_1[i] for i in fragment] for fragment in fragments],
             [[names_2[j] for j in fragment.values()] for fragment in fragments],
         )
@@ -1081,16 +1084,39 @@ def _parity_rows(
     with ThreadPoolExecutor(threads) as pool:
         rows = list(pool.map(row, pairs))
     return pd.DataFrame(
-        rows, columns=["parity_similarity", "fragment_atoms_1", "fragment_atoms_2"]
+        rows,
+        columns=[
+            "parity_similarity",
+            "parity_coverage_1",
+            "parity_coverage_2",
+            "fragment_atoms_1",
+            "fragment_atoms_2",
+        ],
     )
 
 
 class CcdParityTable:
     """Mono-to-mono PARITY-like matches keyed by CCD code pair, for composite scoring.
 
-    Rows carry ``ccd_id_1``, ``ccd_id_2``, ``parity_similarity`` (percent) and
+    Rows carry ``ccd_id_1``, ``ccd_id_2``, ``parity_similarity`` (percent), the
+    directional ``parity_coverage_1`` and ``parity_coverage_2`` (percent) and
     the largest-fragment atom names ``fragment_atoms_1`` -> ``fragment_atoms_2``,
     one list per equally good fragment, the scored one first.
+
+    Notes
+    -----
+    Each unordered pair is stored once, so the symmetric score and the fragment
+    mapping are not duplicated. The direction is resolved on access: ``1 -> 2``
+    and ``2 -> 1`` read the same row, with the mapping inverted and the two
+    coverage columns swapped (:meth:`mapping`, :meth:`mappings`,
+    :meth:`coverage`). :meth:`directed` expands the table to one row per
+    direction in memory for joins on query and target.
+
+    The class API works in fractions in [0, 1]; the parquet stores percent.
+    Coverage is the mean of the atom and bond fractions of one molecule matched,
+    see :meth:`RascalParityMatch.coverage`. A table built before the coverage
+    columns existed still loads, but :meth:`coverage` and :meth:`directed` raise
+    until it is rebuilt with :func:`build_ccd_parity_scores`.
     """
 
     def __init__(self, rows: pd.DataFrame) -> None:
@@ -1110,6 +1136,23 @@ class CcdParityTable:
             ].itertuples(index=False, name=None)
             if score == score
         }
+        self._coverage: dict[tuple[str, str], tuple[float, float]] | None = (
+            {
+                (first, second): (one / 100.0, other / 100.0)
+                for first, second, score, one, other in rows[
+                    [
+                        "ccd_id_1",
+                        "ccd_id_2",
+                        "parity_similarity",
+                        "parity_coverage_1",
+                        "parity_coverage_2",
+                    ]
+                ].itertuples(index=False, name=None)
+                if score == score
+            }
+            if {"parity_coverage_1", "parity_coverage_2"} <= set(rows.columns)
+            else None
+        )
 
     @classmethod
     def load(cls, data_dir: Path) -> CcdParityTable:
@@ -1143,6 +1186,45 @@ class CcdParityTable:
         """Node kernel: 1 for identical codes, the table score, 0 when absent."""
         return 1.0 if first == second else self._lookup(first, second)[0]
 
+    def _coverages(self) -> dict[tuple[str, str], tuple[float, float]]:
+        if self._coverage is None:
+            raise ValueError(
+                "the parity table has no coverage columns; rebuild it with "
+                "build_ccd_parity_scores"
+            )
+        return self._coverage
+
+    def coverage(self, first: str, second: str) -> float:
+        """Fraction of *first* matched by *second*: 1 for identical codes, 0 when absent.
+
+        Directional, unlike :meth:`similarity`: a small molecule inside a larger
+        one is fully covered as *first* and only partly as *second*.
+        """
+        if first == second:
+            return 1.0
+        coverages = self._coverages()
+        if (first, second) in coverages:
+            return coverages[(first, second)][0]
+        return coverages.get((second, first), (0.0, 0.0))[1]
+
+    def directed(self) -> pd.DataFrame:
+        """One row per direction: ``query_ccd_id``, ``target_ccd_id``,
+        ``parity_similarity`` and the ``parity_coverage`` of the query, in [0, 1].
+        """
+        rows = []
+        for (first, second), (one, other) in self._coverages().items():
+            score = self._rows[(first, second)][0]
+            rows += [(first, second, score, one), (second, first, score, other)]
+        return pd.DataFrame(
+            rows,
+            columns=[
+                "query_ccd_id",
+                "target_ccd_id",
+                "parity_similarity",
+                "parity_coverage",
+            ],
+        )
+
     def mappings(self, first: str, second: str) -> list[dict[str, str]]:
         """Equally good largest fragments of *first* onto *second*, scored one first."""
         if first == second:
@@ -1170,7 +1252,9 @@ def build_ccd_parity_scores(
     -------
     Path
         Parquet with ``ligand_smiles_id_1 < ligand_smiles_id_2``,
-        ``tanimoto_similarity_ecfp4_1024``, ``parity_similarity`` (percent) and
+        ``tanimoto_similarity_ecfp4_1024``, ``parity_similarity`` (percent),
+        the directional ``parity_coverage_1`` and ``parity_coverage_2`` (percent
+        of each molecule matched, see :meth:`RascalParityMatch.coverage`) and
         the largest-fragment atom names ``fragment_atoms_1`` -> ``fragment_atoms_2``.
     """
     scores_dir = ccd_dbs_dir(data_dir) / "ligand_scores"
@@ -1231,8 +1315,9 @@ def query_ccd_parity(
     Returns
     -------
     pd.DataFrame
-        :func:`query_ccd_tanimoto` columns plus ``parity_similarity`` (percent);
-        best PARITY-like hit first.
+        :func:`query_ccd_tanimoto` columns plus ``parity_similarity`` and the
+        directional ``parity_coverage_1`` (query) and ``parity_coverage_2``
+        (universe molecule), all percent; best PARITY-like hit first.
     """
     hits = query_ccd_tanimoto(queries, data_dir, minimum_similarity=minimum_similarity)
     from plinder.core.utils.sanitize import mol_from_smiles
@@ -1247,9 +1332,9 @@ def query_ccd_parity(
             index=False, name=None
         )
     ]
-    hits["parity_similarity"] = _parity_rows(pairs, threads=threads)[
-        "parity_similarity"
-    ]
+    scored = _parity_rows(pairs, threads=threads)
+    for column in ("parity_similarity", "parity_coverage_1", "parity_coverage_2"):
+        hits[column] = scored[column]
     return hits.sort_values(
         ["query_id", "parity_similarity", "ligand_smiles_id"],
         ascending=[True, False, True],
