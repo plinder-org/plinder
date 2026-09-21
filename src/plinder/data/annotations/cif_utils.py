@@ -766,22 +766,19 @@ def drop_self_clashing_symmetry_copies(
     clash_ratio: float = 0.5,
     context: str = "assembly",
 ) -> struc.AtomArray:
-    """Drop non-polymer symmetry copies overlapping a lower ``sym_id`` copy.
+    """Drop symmetry copies overlapping a lower ``sym_id`` copy.
 
-    Ligands on a symmetry axis expand into coincident copies of one
+    Chains on a symmetry axis can expand into coincident copies of one
     ``label_asym_id``. Copies are visited in ascending ``sym_id``; one is
     dropped when more than ``clash_ratio`` of its atoms lie within
-    ``clash_distance`` of an already kept copy. Polymers and waters are
-    untouched. Requires the ``sym_id`` and ``label_asym_id`` annotations.
+    ``clash_distance`` of an already kept copy. Waters are untouched.
+    Requires the ``sym_id`` and ``label_asym_id`` annotations.
     """
     categories = set(assembly.get_annotation_categories())
     if not {"sym_id", "label_asym_id"}.issubset(categories):
         return assembly
-    polymer = struc.filter_amino_acids(assembly) | struc.filter_nucleotides(assembly)
-    candidates = (
-        ~polymer
-        & ~struc.filter_solvent(assembly)
-        & np.isfinite(assembly.coord).all(axis=1)
+    candidates = ~struc.filter_solvent(assembly) & np.isfinite(assembly.coord).all(
+        axis=1
     )
     keep = np.ones(assembly.array_length(), dtype=bool)
     for asym_id in np.unique(assembly.label_asym_id[candidates]):
@@ -857,8 +854,8 @@ def build_biounit(
     Branched entities are renumbered (:func:`_branched_residue_numbering`) before
     building so biotite gives their residues distinct ``res_id`` values, and any
     non-physical bonds biotite's inference still emits are then dropped
-    (:func:`remove_nonphysical_bonds`).  Non-polymer copies generated on top of
-    each other by a symmetry axis are reduced to one
+    (:func:`remove_nonphysical_bonds`).  Copies generated on top of each other
+    by a symmetry axis are reduced to one
     (:func:`drop_self_clashing_symmetry_copies`).
     """
     block = (

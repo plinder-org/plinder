@@ -1342,7 +1342,7 @@ def test_build_biounit_drops_ligand_copies_on_symmetry_axes(test_dir):
     assert len(chains) == 34
 
 
-def test_drop_self_clashing_symmetry_copies_keeps_lowest_copy_and_polymers():
+def test_drop_self_clashing_symmetry_copies_keeps_lowest_and_distant_copies():
     import biotite.structure as struc
 
     from plinder.data.annotations.cif_utils import drop_self_clashing_symmetry_copies
@@ -1353,8 +1353,9 @@ def test_drop_self_clashing_symmetry_copies_keeps_lowest_copy_and_polymers():
         ("L", "LIG", 1, ligand),  # coincident copy -> dropped
         ("L", "LIG", 2, ligand + 20.0),  # genuine second copy -> kept
         ("L", "LIG", 3, ligand + np.array([[0.0, 0.0, 0.0], [5.0, 0, 0], [5.0, 0, 0]])),
-        ("P", "ALA", 0, ligand),  # polymer copies are never touched
-        ("P", "ALA", 1, ligand),
+        ("P", "ALA", 0, ligand),  # identity polymer copy
+        ("P", "ALA", 1, ligand),  # coincident polymer copy -> dropped
+        ("P", "ALA", 2, ligand + 20.0),  # genuine polymer copy -> kept
     ]
     atoms = struc.AtomArray(sum(len(coord) for *_, coord in blocks))
     atoms.coord = np.concatenate([coord for *_, coord in blocks])
@@ -1374,5 +1375,5 @@ def test_drop_self_clashing_symmetry_copies_keeps_lowest_copy_and_polymers():
 
     # copy 3 shares one of three atoms with copy 0 (33% < 50%) and stays
     assert sorted(set(kept.sym_id[kept.label_asym_id == "L"])) == [0, 2, 3]
-    assert sorted(set(kept.sym_id[kept.label_asym_id == "P"])) == [0, 1]
+    assert sorted(set(kept.sym_id[kept.label_asym_id == "P"])) == [0, 2]
     assert drop_self_clashing_symmetry_copies(kept) is kept
