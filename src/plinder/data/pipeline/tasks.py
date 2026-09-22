@@ -69,7 +69,7 @@ LIGAND_POCKET_REPRESENTATIVES_MANIFEST_RELATIVE = Path(
     "index/ligand_pocket_representatives.manifest.json"
 )
 PROTEIN_SIMILARITY_SCORES_RELATIVE = Path("exports/protein_similarity_scores")
-LIGAND_POCKET_RESIDUE_SELECTION = "neighboring_and_interacting"
+LIGAND_POCKET_RESIDUE_SELECTION = "neighboring"
 APO_SEARCH_METADATA_KEY = b"plinder.apo_search_inputs"
 STAGES = [
     "download_rcsb_files",
@@ -1098,7 +1098,6 @@ def make_ligand_pocket_representatives(
                     AS ligand_is_shape_comparable,
                 ligand_protein_chains_asym_id,
                 ligand_neighboring_residues,
-                ligand_interacting_residues,
                 ligand_interactions
             FROM read_parquet('{annotation.as_posix()}')
             WHERE system_type = 'holo' AND ligand_is_proper;
@@ -1256,16 +1255,8 @@ def make_ligand_pocket_representatives(
                             nullif(split_part(residue, '_', 5), ''), '.'
                         ) AS residue_insertion_code
                     FROM eligible_ligands AS ligands,
-                         unnest(list_concat(
-                             coalesce(
-                                 ligands.ligand_neighboring_residues,
-                                 []::VARCHAR[]
-                             ),
-                             coalesce(
-                                 ligands.ligand_interacting_residues,
-                                 []::VARCHAR[]
-                             )
-                         )) AS pocket_rows(residue)
+                         unnest(ligands.ligand_neighboring_residues)
+                             AS pocket_rows(residue)
                 )
                 SELECT DISTINCT
                     pockets.entry_pdb_id::VARCHAR AS entry_pdb_id,

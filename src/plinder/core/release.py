@@ -143,7 +143,7 @@ RELEASE_TABLES: dict[str, dict[str, Any]] = {
     },
     "ligand_pocket_residues": {
         "artifact": "ligand_pocket_residues",
-        "row_description": "receptor residue in a ligand pocket",
+        "row_description": "receptor residue neighboring a proper ligand",
         "primary_key": (
             "ligand_id",
             "chain_instance",

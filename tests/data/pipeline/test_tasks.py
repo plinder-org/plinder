@@ -181,7 +181,7 @@ def test_make_ligand_pocket_representatives_collapses_assembly_copies(
             "ligand_neighboring_residues": [
                 ["1.A_10_0_110_A", "1.N_20_0_220_."],
                 ["2.A_10_0_110_A", "2.N_20_0_220_."],
-                ["1.A_11_1_11"],
+                ["1.A_11_1_11", "1.A_13_3_213_."],
             ],
             "ligand_interacting_residues": [
                 ["1.A_10_0_110_A", "1.N_20_0_220_."],
@@ -266,11 +266,11 @@ def test_make_ligand_pocket_representatives_collapses_assembly_copies(
             "chain_instance": "1.A",
             "chain_asym_id": "A",
             "chain_auth_id": "X",
-            "residue_label_seq_id": 12,
-            "residue_index": 2,
-            "residue_auth_seq_id": "212",
+            "residue_label_seq_id": 13,
+            "residue_index": 3,
+            "residue_auth_seq_id": "213",
             "residue_insertion_code": ".",
-            "is_pli": True,
+            "is_pli": False,
         },
     ]
     assert report["residue_selection"] == tasks.LIGAND_POCKET_RESIDUE_SELECTION
