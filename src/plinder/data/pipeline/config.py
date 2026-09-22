@@ -199,6 +199,7 @@ class ScorerConfig:
     max_alignment_rows_per_query: int = 5_000_000
     max_query_protein_chains: int = 30
     max_query_proper_ligand_chains: int = 30
+    publish_alignment_cigars: bool = False
     sub_databases: Any = "holo,apo"
 
     def __post_init__(self) -> None:

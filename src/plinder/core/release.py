@@ -66,6 +66,11 @@ RELEASE_PATHS = {
         "alignments/search_db={search_db}/alignment_type={alignment_type}/"
         "shard={shard}.parquet"
     ),
+    "alignment_cigars": "alignment_cigars",
+    "alignment_cigar_shard": (
+        "alignment_cigars/search_db={search_db}/alignment_type={alignment_type}/"
+        "shard={shard}.parquet"
+    ),
     "ligand_archives": "ligand_archives",
     "ligand_archive": "ligand_archives/{shard}.parquet",
     "ligand_archives_manifest": "ligand_archives/manifest.json",

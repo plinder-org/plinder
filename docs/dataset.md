@@ -47,6 +47,10 @@ differ from the current release.
     │   └── search_db=holo/
     │       └── alignment_type={foldseek,mmseqs}/
     │           └── shard={two_char_code}.parquet
+    ├── alignment_cigars/
+    │   └── search_db=holo/
+    │       └── alignment_type={foldseek,mmseqs}/
+    │           └── shard={two_char_code}.parquet
     ├── ligand_scores/
     │   └── {fragment}.parquet
     ├── interface_scores/
@@ -63,7 +67,10 @@ differ from the current release.
     │   └── holo_mmseqs/
     └── exports/
         ├── ligand_similarity_scores.parquet
-        └── interface_similarity_scores.parquet
+        ├── interface_similarity_scores.parquet
+        └── protein_similarity_scores/
+            └── alignment_type={foldseek,mmseqs}/
+                └── shard={two_char_code}.parquet
 ```
 
 `plinder_download` downloads the index and representative-cover tables by
@@ -229,6 +236,12 @@ zero means that no selected target residue was aligned.
 residue counts for either ligand pockets or protein interfaces on a requested
 pair of chains. It also reports the overlap fractions and the number of
 identical residues for each available alignment backend.
+
+Full-chain CIGARs are kept separately in the optional `alignment_cigars/`
+files. `plinder.core.scores.map_chain_alignment()` reads one chain pair and
+expands its CIGARs into residue positions. MMseqs rows use one-based SEQRES
+positions, while Foldseek rows use zero-based indices over the resolved
+coordinate residues. Gap rows can be retained or omitted.
 
 ### Ligand similarities
 

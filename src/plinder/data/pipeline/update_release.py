@@ -325,6 +325,12 @@ def _refresh_alignment_shards(
                 / f"alignment_type={alignment_type}"
                 / f"shard={shard}.parquet"
             ).unlink(missing_ok=True)
+            tasks._alignment_cigar_path(
+                data_dir=data_dir,
+                search_db=search_db,
+                alignment_type=alignment_type,
+                shard=shard,
+            ).unlink(missing_ok=True)
         manifest_root = data_dir / "alignments" / "manifests"
         if search_db != "holo":
             manifest_root = manifest_root / f"search_db={search_db}"
@@ -352,7 +358,13 @@ def _rebase_unchanged_alignment_manifests(
         if payload.get("inputs") != inputs:
             raise ValueError(f"untouched raw alignment inputs changed: {path}")
         outputs = payload.get("outputs")
-        if not isinstance(outputs, dict):
+        publishes_cigars = payload.get("publish_alignment_cigars")
+        cigar_outputs = payload.get("cigar_outputs")
+        if (
+            not isinstance(outputs, dict)
+            or not isinstance(publishes_cigars, bool)
+            or not isinstance(cigar_outputs, dict)
+        ):
             raise ValueError(f"invalid alignment report: {path}")
         for alignment_type, signatures in inputs.items():
             output = tasks._alignment_release_path(
@@ -364,6 +376,8 @@ def _rebase_unchanged_alignment_manifests(
             if not signatures:
                 if outputs.get(alignment_type) is not None:
                     raise ValueError(f"unexpected mapped alignment output: {output}")
+                if publishes_cigars and cigar_outputs.get(alignment_type) is not None:
+                    raise ValueError(f"unexpected alignment CIGAR output: {output}")
                 continue
             if not output.is_file() or not (
                 schemas.release_alignment_mapping_schema_is_current(
@@ -379,6 +393,24 @@ def _rebase_unchanged_alignment_manifests(
                 "mtime_ns": stat.st_mtime_ns,
             }:
                 raise ValueError(f"mapped alignment report changed: {output}")
+            if publishes_cigars:
+                cigars = tasks._alignment_cigar_path(
+                    data_dir=data_dir,
+                    search_db=search_db,
+                    alignment_type=alignment_type,
+                    shard=shard,
+                )
+                if not cigars.is_file() or not pq.read_schema(cigars).equals(
+                    schemas.ALIGNMENT_CIGAR_SCHEMA
+                ):
+                    raise ValueError(f"invalid alignment CIGAR output: {cigars}")
+                stat = cigars.stat()
+                if cigar_outputs.get(alignment_type) != {
+                    "name": cigars.name,
+                    "size": stat.st_size,
+                    "mtime_ns": stat.st_mtime_ns,
+                }:
+                    raise ValueError(f"alignment CIGAR report changed: {cigars}")
         payload["alignment_chain_lookup"] = lookup
         write_json_atomic(path, payload)
 

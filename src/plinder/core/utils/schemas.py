@@ -127,6 +127,20 @@ PROTEIN_SIMILARITY_EXPORT_SCHEMA = pa.schema(
 )
 
 
+ALIGNMENT_CIGAR_SCHEMA = pa.schema(
+    [
+        ("query_entry", pa.string()),
+        ("target_entry", pa.string()),
+        ("query_chain_mapped", pa.string()),
+        ("target_chain_mapped", pa.string()),
+        ("source", pa.string()),
+        ("query_start", pa.uint32()),
+        ("target_start", pa.uint32()),
+        ("cigar", pa.string()),
+    ]
+)
+
+
 PROTEIN_SIMILARITY_SCHEMA = pa.schema(
     [
         ("query_system", pa.string()),

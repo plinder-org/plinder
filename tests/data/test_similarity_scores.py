@@ -387,6 +387,7 @@ def test_no_hit_search_writes_typed_empty_raw_and_mapped_checkpoints(
         "bits",
         "qcov",
         "tcov",
+        "cigar",
         "qaln",
         "taln",
         "target_pdb_id",

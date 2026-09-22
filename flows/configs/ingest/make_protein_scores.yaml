@@ -19,6 +19,7 @@ data:
   plinder_release_number: "1"
 scorer:
   sub_databases: holo,apo
+  publish_alignment_cigars: true
   minimum_thresholds:
     protein_lddt_weighted_sum: 0.2
 foldseek:

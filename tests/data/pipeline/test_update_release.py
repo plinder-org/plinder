@@ -485,6 +485,8 @@ def test_unchanged_alignment_rebase_accepts_public_mapping_schema(
                 },
                 "mmseqs": None,
             },
+            "publish_alignment_cigars": False,
+            "cigar_outputs": {},
         },
     )
     lookup = {"name": "alignment_chain_lookup.parquet"}

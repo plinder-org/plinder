@@ -39,6 +39,7 @@ _DOWNLOAD_GROUPS = (
     ("canonical ligand archives", ("ligand_archives",), True),
     ("ligand similarities", ("ligand_scores",), True),
     ("mapped protein alignments", ("alignments",), True),
+    ("full protein alignment CIGARs", ("alignment_cigars",), True),
     ("custom-scoring search databases", ("search_databases",), True),
 )
 

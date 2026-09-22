@@ -9,6 +9,7 @@ the same pyarrow query filters used in pd.read_parquet into raw SQL for
 duckdb to execute.
 """
 
+from .alignment import expand_alignment_cigar, map_chain_alignment
 from .custom import (
     CustomProteinSearchConfig,
     CustomScoringResult,
@@ -33,6 +34,8 @@ from .search import search
 
 __all__ = [
     "search",
+    "expand_alignment_cigar",
+    "map_chain_alignment",
     "query_ligand_similarity",
     "query_ligand_chemical_similarity",
     "cross_ligand_chemical_similarity",

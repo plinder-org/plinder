@@ -3487,6 +3487,8 @@ def finalize_alignment_artifacts(data_dir: Path) -> dict[str, Any]:
         alignment_type: set() for alignment_type in plan["alignment_types"]
     }
     protein_score_sources: list[dict[str, Any]] = []
+    cigar_sources: list[dict[str, Any]] = []
+    cigar_states: set[bool] = set()
     invalid_manifests: list[str] = []
     for manifest_path in manifest_paths:
         shard = manifest_path.stem.removeprefix("shard=")
@@ -3498,6 +3500,8 @@ def finalize_alignment_artifacts(data_dir: Path) -> dict[str, Any]:
         inputs = shard_manifest.get("inputs")
         outputs = shard_manifest.get("outputs")
         protein_score_outputs = shard_manifest.get("protein_score_outputs")
+        publishes_cigars = shard_manifest.get("publish_alignment_cigars")
+        cigar_outputs = shard_manifest.get("cigar_outputs")
         shard_skipped = shard_manifest.get("skipped_queries")
         if (
             shard_manifest.get("shard") != shard
@@ -3505,10 +3509,13 @@ def finalize_alignment_artifacts(data_dir: Path) -> dict[str, Any]:
             or not isinstance(inputs, dict)
             or not isinstance(outputs, dict)
             or not isinstance(protein_score_outputs, dict)
+            or not isinstance(publishes_cigars, bool)
+            or not isinstance(cigar_outputs, dict)
             or not isinstance(shard_skipped, dict)
         ):
             invalid_manifests.append(shard)
             continue
+        cigar_states.add(publishes_cigars)
         skipped_query_details.update(
             {str(key): value for key, value in shard_skipped.items()}
         )
@@ -3526,8 +3533,13 @@ def finalize_alignment_artifacts(data_dir: Path) -> dict[str, Any]:
             )
             expected_output = outputs.get(alignment_type)
             expected_protein_scores = protein_score_outputs.get(alignment_type)
+            expected_cigars = cigar_outputs.get(alignment_type)
             if not signatures:
-                if expected_output is not None or expected_protein_scores is not None:
+                if (
+                    expected_output is not None
+                    or expected_protein_scores is not None
+                    or expected_cigars is not None
+                ):
                     invalid_manifests.append(shard)
                 continue
             release = tasks._alignment_release_path(
@@ -3583,7 +3595,39 @@ def finalize_alignment_artifacts(data_dir: Path) -> dict[str, Any]:
                     "rows": int(pq.ParquetFile(protein_scores).metadata.num_rows),
                 }
             )
+            if publishes_cigars:
+                cigars = tasks._alignment_cigar_path(
+                    data_dir=data_dir,
+                    search_db="holo",
+                    alignment_type=alignment_type,
+                    shard=shard,
+                )
+                if (
+                    not isinstance(expected_cigars, dict)
+                    or not cigars.is_file()
+                    or not pq.read_schema(cigars).equals(schemas.ALIGNMENT_CIGAR_SCHEMA)
+                ):
+                    invalid_manifests.append(shard)
+                    continue
+                cigar_stat = cigars.stat()
+                if expected_cigars != {
+                    "name": cigars.name,
+                    "size": cigar_stat.st_size,
+                    "mtime_ns": cigar_stat.st_mtime_ns,
+                }:
+                    invalid_manifests.append(shard)
+                    continue
+                cigar_sources.append(
+                    {
+                        "alignment_type": alignment_type,
+                        "shard": shard,
+                        **_source_signature(cigars),
+                        "rows": int(pq.ParquetFile(cigars).metadata.num_rows),
+                    }
+                )
             release_shards_by_backend[alignment_type].add(shard)
+    if len(cigar_states) > 1:
+        missing["inconsistent_cigar_publication"] = ["mixed shard settings"]
     if invalid_manifests:
         missing["invalid_mapping_manifests"] = sorted(set(invalid_manifests))[:100]
 
@@ -3649,6 +3693,8 @@ def finalize_alignment_artifacts(data_dir: Path) -> dict[str, Any]:
         "protein_similarity_score_rows": sum(
             int(source["rows"]) for source in protein_score_sources
         ),
+        "alignment_cigars_published": cigar_states == {True},
+        "alignment_cigar_rows": sum(int(source["rows"]) for source in cigar_sources),
     }
     write_json_atomic(data_dir / "alignments" / "manifest.json", report)
     write_json_atomic(

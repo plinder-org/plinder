@@ -1208,7 +1208,7 @@ def run_alignment(
     )
     format_output = (
         "query,target,qlen,fident,alnlen,qstart,qend,tstart,tend,evalue,bits,"
-        "qcov,tcov,qaln,taln"
+        "qcov,tcov,cigar,qaln,taln"
     )
     if aln_type == "foldseek":
         format_output += ",lddt"
@@ -1315,6 +1315,7 @@ def _raw_alignment_schema(aln_type: str) -> pa.Schema:
         pa.field("bits", pa.int64()),
         pa.field("qcov", pa.float64()),
         pa.field("tcov", pa.float64()),
+        pa.field("cigar", pa.string()),
         pa.field("qaln", pa.string()),
         pa.field("taln", pa.string()),
     ]

@@ -386,6 +386,7 @@ class IngestPipeline:
                 data_dir=self.plinder_dir,
                 batch_size=self.cfg.flow.map_batch_alignments_batch_size,
                 search_db=search_db,
+                publish_alignment_cigars=self.cfg.scorer.publish_alignment_cigars,
             )
             work.extend((search_db, shards) for shards in chunks if shards)
         return work or [(str(self.cfg.scorer.sub_databases[0]), [])]

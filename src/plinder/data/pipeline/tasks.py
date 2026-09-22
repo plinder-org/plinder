@@ -2284,7 +2284,11 @@ def run_batch_searches(
 
 
 def scatter_missing_alignment_mappings(
-    *, data_dir: Path, batch_size: int, search_db: str = "holo"
+    *,
+    data_dir: Path,
+    batch_size: int,
+    search_db: str = "holo",
+    publish_alignment_cigars: bool = False,
 ) -> list[list[str]]:
     """Scatter query shards whose raw alignments are not mapped and published."""
     if batch_size < 1:
@@ -2307,6 +2311,9 @@ def scatter_missing_alignment_mappings(
             data_dir=data_dir,
             search_db=search_db,
             shard=shard,
+            publish_alignment_cigars=(
+                publish_alignment_cigars if search_db == "holo" else False
+            ),
         )
     ]
     chunks = [
@@ -2362,6 +2369,18 @@ def _protein_similarity_score_path(
     )
 
 
+def _alignment_cigar_path(
+    *, data_dir: Path, search_db: str, alignment_type: str, shard: str
+) -> Path:
+    return (
+        data_dir
+        / "alignment_cigars"
+        / f"search_db={search_db}"
+        / f"alignment_type={alignment_type}"
+        / f"shard={shard}.parquet"
+    )
+
+
 def _alignment_mapping_manifest_path(
     *, data_dir: Path, shard: str, search_db: str = "holo"
 ) -> Path:
@@ -2388,7 +2407,11 @@ def _alignment_target_entry_ids(sources: Sequence[Path]) -> set[str]:
 
 
 def alignment_mapping_shard_is_current(
-    *, data_dir: Path, shard: str, search_db: str = "holo"
+    *,
+    data_dir: Path,
+    shard: str,
+    search_db: str = "holo",
+    publish_alignment_cigars: bool | None = None,
 ) -> bool:
     """Validate a shard manifest against raw inputs and published outputs."""
     manifest_path = _alignment_mapping_manifest_path(
@@ -2415,11 +2438,20 @@ def alignment_mapping_shard_is_current(
         or payload.get("alignment_chain_lookup") != lookup_signature
     ):
         return False
+    publishes_cigars = payload.get("publish_alignment_cigars")
+    if not isinstance(publishes_cigars, bool) or (
+        publish_alignment_cigars is not None
+        and publishes_cigars != publish_alignment_cigars
+    ):
+        return False
     outputs = payload.get("outputs")
     if not isinstance(outputs, dict):
         return False
     protein_score_outputs = payload.get("protein_score_outputs")
     if search_db == "holo" and not isinstance(protein_score_outputs, dict):
+        return False
+    cigar_outputs = payload.get("cigar_outputs")
+    if not isinstance(cigar_outputs, dict):
         return False
     for alignment_type, source_signatures in inputs.items():
         output = _alignment_release_path(
@@ -2435,6 +2467,8 @@ def alignment_mapping_shard_is_current(
                 search_db == "holo"
                 and protein_score_outputs.get(alignment_type) is not None
             ):
+                return False
+            if publishes_cigars and cigar_outputs.get(alignment_type) is not None:
                 return False
             continue
         if not output.is_file():
@@ -2471,6 +2505,24 @@ def alignment_mapping_shard_is_current(
                 "mtime_ns": score_stat.st_mtime_ns,
             }:
                 return False
+        if publishes_cigars:
+            cigar_path = _alignment_cigar_path(
+                data_dir=data_dir,
+                search_db=search_db,
+                alignment_type=alignment_type,
+                shard=shard,
+            )
+            if not cigar_path.is_file() or not pq.read_schema(cigar_path).equals(
+                schemas.ALIGNMENT_CIGAR_SCHEMA
+            ):
+                return False
+            cigar_stat = cigar_path.stat()
+            if cigar_outputs.get(alignment_type) != {
+                "name": cigar_path.name,
+                "size": cigar_stat.st_size,
+                "mtime_ns": cigar_stat.st_mtime_ns,
+            }:
+                return False
     return True
 
 
@@ -2490,11 +2542,15 @@ def map_batch_alignments(
     if not enabled:
         raise ValueError(f"alignment database is not enabled: {search_db}")
     maximum_rows = int(getattr(scorer_cfg, "max_alignment_rows_per_query", 5_000_000))
+    publish_cigars = search_db == "holo" and bool(
+        getattr(scorer_cfg, "publish_alignment_cigars", False)
+    )
     for shard in shards:
         if not force_update and alignment_mapping_shard_is_current(
             data_dir=data_dir,
             search_db=search_db,
             shard=shard,
+            publish_alignment_cigars=publish_cigars,
         ):
             LOG.info(
                 "map_batch_alignments: %s shard %s is complete",
@@ -2611,6 +2667,7 @@ def map_batch_alignments(
                     )
             outputs: dict[str, dict[str, int | str] | None] = {}
             protein_score_outputs: dict[str, dict[str, int | str] | None] = {}
+            cigar_outputs: dict[str, dict[str, int | str] | None] = {}
             for alignment_type, source_signatures in inputs.items():
                 target = _alignment_release_path(
                     data_dir=data_dir,
@@ -2627,12 +2684,23 @@ def map_batch_alignments(
                     if search_db == "holo"
                     else None
                 )
+                cigar_target = _alignment_cigar_path(
+                    data_dir=data_dir,
+                    search_db=search_db,
+                    alignment_type=alignment_type,
+                    shard=shard,
+                )
+                if not publish_cigars:
+                    cigar_target.unlink(missing_ok=True)
                 if not source_signatures:
                     target.unlink(missing_ok=True)
                     outputs[alignment_type] = None
                     if protein_scores_target is not None:
                         protein_scores_target.unlink(missing_ok=True)
                         protein_score_outputs[alignment_type] = None
+                    if publish_cigars:
+                        cigar_target.unlink(missing_ok=True)
+                        cigar_outputs[alignment_type] = None
                     continue
                 local_sources = sorted(
                     (
@@ -2647,6 +2715,7 @@ def map_batch_alignments(
                     threads=1,
                     memory_limit="7GB",
                     protein_scores_target=protein_scores_target,
+                    cigar_target=cigar_target if publish_cigars else None,
                 )
                 stat = target.stat()
                 outputs[alignment_type] = {
@@ -2660,6 +2729,13 @@ def map_batch_alignments(
                         "name": protein_scores_target.name,
                         "size": score_stat.st_size,
                         "mtime_ns": score_stat.st_mtime_ns,
+                    }
+                if publish_cigars:
+                    cigar_stat = cigar_target.stat()
+                    cigar_outputs[alignment_type] = {
+                        "name": cigar_target.name,
+                        "size": cigar_stat.st_size,
+                        "mtime_ns": cigar_stat.st_mtime_ns,
                     }
             manifest = _alignment_mapping_manifest_path(
                 data_dir=data_dir,
@@ -2677,6 +2753,8 @@ def map_batch_alignments(
                         "inputs": inputs,
                         "outputs": outputs,
                         "protein_score_outputs": protein_score_outputs,
+                        "publish_alignment_cigars": publish_cigars,
+                        "cigar_outputs": cigar_outputs,
                         "skipped_queries": skipped_queries,
                     },
                     indent=2,
@@ -4009,6 +4087,7 @@ def _write_alignment_release_shard(
     threads: int,
     memory_limit: str,
     protein_scores_target: Path | None = None,
+    cigar_target: Path | None = None,
 ) -> None:
     """Write mapped residues and compact protein statistics for one query shard."""
     import duckdb
@@ -4031,6 +4110,11 @@ def _write_alignment_release_shard(
     )
     if protein_scores_temporary is not None:
         protein_scores_temporary.unlink(missing_ok=True)
+    cigar_temporary = (
+        temp_dir / f"cigars-{target.name}" if cigar_target is not None else None
+    )
+    if cigar_temporary is not None:
+        cigar_temporary.unlink(missing_ok=True)
     if non_empty_sources:
         source_sql = ", ".join(f"'{path.as_posix()}'" for path in non_empty_sources)
         lddt = ", lddt" if alignment_type == "foldseek" else ""
@@ -4098,6 +4182,28 @@ def _write_alignment_release_shard(
                     """
                 )
             )
+        if cigar_temporary is not None:
+            con.sql(
+                dedent(
+                    f"""
+                    COPY (
+                        SELECT
+                            query_entry::VARCHAR AS query_entry,
+                            target_entry::VARCHAR AS target_entry,
+                            query_chain_mapped::VARCHAR AS query_chain_mapped,
+                            target_chain_mapped::VARCHAR AS target_chain_mapped,
+                            source::VARCHAR AS source,
+                            CAST(qstart AS UINTEGER) AS query_start,
+                            CAST(tstart AS UINTEGER) AS target_start,
+                            cigar::VARCHAR AS cigar
+                        FROM read_parquet([{source_sql}], union_by_name = true)
+                        ORDER BY query_entry, target_entry,
+                                 query_chain_mapped, target_chain_mapped, source
+                    ) TO '{cigar_temporary.as_posix()}'
+                    (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 500_000);
+                    """
+                )
+            )
     else:
         pq.write_table(
             pa.Table.from_pylist(
@@ -4118,6 +4224,12 @@ def _write_alignment_release_shard(
                 protein_scores_temporary,
                 compression="zstd",
             )
+        if cigar_temporary is not None:
+            pq.write_table(
+                pa.Table.from_pylist([], schema=schemas.ALIGNMENT_CIGAR_SCHEMA),
+                cigar_temporary,
+                compression="zstd",
+            )
     con.close()
     install_path = target.with_suffix(target.suffix + ".tmp")
     copyfile(temporary, install_path)
@@ -4131,6 +4243,12 @@ def _write_alignment_release_shard(
         copyfile(protein_scores_temporary, install_path)
         install_path.replace(protein_scores_target)
         protein_scores_temporary.unlink(missing_ok=True)
+    if cigar_target is not None and cigar_temporary is not None:
+        cigar_target.parent.mkdir(exist_ok=True, parents=True)
+        install_path = cigar_target.with_suffix(cigar_target.suffix + ".tmp")
+        copyfile(cigar_temporary, install_path)
+        install_path.replace(cigar_target)
+        cigar_temporary.unlink(missing_ok=True)
 
 
 def scatter_collate_alignments(*, data_dir: Path) -> list[list[str]]:

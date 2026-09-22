@@ -96,6 +96,23 @@ def similarity_release(tmp_path):
             "selected_residue_identity_bits": [b"\x05"],
         }
     ).to_parquet(alignment_shard, index=False)
+    cigar_shard = (
+        tmp_path
+        / "alignment_cigars/search_db=holo/alignment_type=mmseqs/shard=ab.parquet"
+    )
+    cigar_shard.parent.mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "query_entry": ["1abc"],
+            "target_entry": ["2def"],
+            "query_chain_mapped": ["A"],
+            "target_chain_mapped": ["B"],
+            "source": ["mmseqs"],
+            "query_start": [3],
+            "target_start": [5],
+            "cigar": ["2M1I1D1M"],
+        }
+    ).to_parquet(cigar_shard, index=False)
     ligand_scores = tmp_path / "ligand_scores"
     ligand_scores.mkdir()
     pd.DataFrame(
@@ -212,6 +229,62 @@ def test_query_chain_overlap_counts_selected_residues(
             **expected,
         }
     ]
+
+
+@pytest.mark.parametrize(
+    ("source", "query_column", "target_column", "expected_query", "expected_target"),
+    [
+        (
+            "mmseqs",
+            "query_seqres_position",
+            "target_seqres_position",
+            [3, 4, 5, None, 6],
+            [5, 6, None, 7, 8],
+        ),
+        (
+            "foldseek",
+            "query_coordinate_index",
+            "target_coordinate_index",
+            [2, 3, 4, None, 5],
+            [4, 5, None, 6, 7],
+        ),
+    ],
+)
+def test_expand_alignment_cigar_uses_backend_coordinate_space(
+    source, query_column, target_column, expected_query, expected_target
+):
+    result = scores.expand_alignment_cigar(
+        "2M1I1D1M",
+        query_start=3,
+        target_start=5,
+        source=source,
+    )
+
+    assert result["operation"].tolist() == ["M", "M", "I", "D", "M"]
+    query_values = (
+        result[query_column].astype(object).where(result[query_column].notna(), None)
+    )
+    target_values = (
+        result[target_column].astype(object).where(result[target_column].notna(), None)
+    )
+    assert query_values.tolist() == expected_query
+    assert target_values.tolist() == expected_target
+
+
+def test_map_chain_alignment_reads_optional_cigar_shard(similarity_release):
+    result = scores.map_chain_alignment(
+        "1abc",
+        "A",
+        "2def",
+        "B",
+        source="mmseqs",
+        include_gaps=False,
+        release=similarity_release,
+    )
+
+    assert result[
+        ["query_seqres_position", "target_seqres_position"]
+    ].values.tolist() == [[3, 5], [4, 6], [6, 8]]
 
 
 def test_query_interface_similarity_reads_complete_export(similarity_release):

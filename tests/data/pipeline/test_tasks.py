@@ -726,6 +726,8 @@ def _write_alignment_mapping_manifest(
                 "inputs": inputs,
                 "outputs": outputs,
                 "protein_score_outputs": protein_score_outputs,
+                "publish_alignment_cigars": False,
+                "cigar_outputs": {},
                 "skipped_queries": skipped_queries or {},
             }
         )
@@ -4805,6 +4807,9 @@ def test_map_batch_alignments_publishes_atomic_shard(tmp_path, monkeypatch, sear
                     "tcov": [1.0],
                     "fident": [1.0],
                     "seqsim": [1.0],
+                    "qstart": [1],
+                    "tstart": [1],
+                    "cigar": ["1M"],
                     "query_selected_residue_numbers": [[10]],
                     "target_selected_residue_numbers": [[10]],
                     "query_selected_residue_positions": [[1]],
@@ -4824,7 +4829,10 @@ def test_map_batch_alignments_publishes_atomic_shard(tmp_path, monkeypatch, sear
     tasks.map_batch_alignments(
         data_dir=tmp_path,
         shards=["ab"],
-        scorer_cfg=SimpleNamespace(sub_databases=[search_db]),
+        scorer_cfg=SimpleNamespace(
+            sub_databases=[search_db],
+            publish_alignment_cigars=search_db == "holo",
+        ),
         force_update=False,
         scratch_dir=scratch,
         search_db=search_db,
@@ -4837,6 +4845,27 @@ def test_map_batch_alignments_publishes_atomic_shard(tmp_path, monkeypatch, sear
         shard="ab",
     )
     assert pd.read_parquet(release)["query_entry"].tolist() == ["1abc"]
+    cigar = tasks._alignment_cigar_path(
+        data_dir=tmp_path,
+        search_db=search_db,
+        alignment_type="foldseek",
+        shard="ab",
+    )
+    if search_db == "holo":
+        assert pd.read_parquet(cigar).to_dict("records") == [
+            {
+                "query_entry": "1abc",
+                "target_entry": "1abc",
+                "query_chain_mapped": "A",
+                "target_chain_mapped": "A",
+                "source": "foldseek",
+                "query_start": 1,
+                "target_start": 1,
+                "cigar": "1M",
+            }
+        ]
+    else:
+        assert not cigar.exists()
     assert tasks.alignment_mapping_shard_is_current(
         data_dir=tmp_path,
         search_db=search_db,
@@ -4848,7 +4877,10 @@ def test_map_batch_alignments_publishes_atomic_shard(tmp_path, monkeypatch, sear
     tasks.map_batch_alignments(
         data_dir=tmp_path,
         shards=["ab"],
-        scorer_cfg=SimpleNamespace(sub_databases=[search_db]),
+        scorer_cfg=SimpleNamespace(
+            sub_databases=[search_db],
+            publish_alignment_cigars=search_db == "holo",
+        ),
         force_update=False,
         scratch_dir=scratch,
         search_db=search_db,
