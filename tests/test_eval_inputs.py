@@ -96,8 +96,11 @@ def test_ligand_sdf_pairing_is_specific_to_each_prediction(tmp_path):
     with pytest.raises(ValueError, match="Use either"):
         StructureInput.from_path(two)
     (tmp_path / "one.sdf").touch()
-    with pytest.raises(ValueError, match="Use either"):
-        StructureInput.from_path(one)
+    if not (tmp_path / "one.SDF").samefile(tmp_path / "one.sdf"):
+        # a case-insensitive filesystem (e.g. default macOS APFS) makes these
+        # the same file, so there is only ever one candidate to find
+        with pytest.raises(ValueError, match="Use either"):
+            StructureInput.from_path(one)
 
 
 @pytest.mark.parametrize("contents", ["invalid", "multiple"])
