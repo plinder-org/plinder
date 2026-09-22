@@ -3,19 +3,27 @@
 """
 The filestore instance name is: plinder-data-gen.
 
-TODO: The Metaflow pipeline still contains outdated V2 paths and has not been
-tested end-to-end for the current release.
+This flow has not been tested end-to-end for the current release. Set
+PLINDER_METAFLOW_IMAGE to an image built from the code being ingested.
 
 """
 
 from __future__ import annotations
 
+from os import getenv
+from pathlib import Path
+
 from metaflow import FlowSpec, Parameter, environment, kubernetes, retry, step
 
 MOUNT = "/plinder"
+IMAGE = getenv("PLINDER_METAFLOW_IMAGE")
+if not IMAGE:
+    raise RuntimeError(
+        "set PLINDER_METAFLOW_IMAGE to an ingest image built from this code"
+    )
 K8S = dict(
     cpu=1,
-    image="us-east1-docker.pkg.dev/vantai-analysis/metaflow/plinder:v0.2.2-63-g71bd2d22",
+    image=IMAGE,
     node_selector={
         "topology.kubernetes.io/zone": "us-east1-b",
     },
@@ -26,8 +34,6 @@ K8S = dict(
 ENV = dict(
     vars=dict(
         PLINDER_MOUNT=MOUNT,
-        PLINDER_RELEASE="2026-07",
-        PLINDER_RELEASE_NUMBER="1",
     )
 )
 DATABASES = dict(cpu=90, memory=82000)
@@ -60,12 +66,13 @@ class PlinderDataIngestFlow(FlowSpec):
         from plinder.data.pipeline.pipeline import IngestPipeline
 
         assert isinstance(self.config_file, str)
-        if not self.config_file.startswith("gs:"):
-            raise ValueError("--config_file must be a gs:// path")
         print(f"started data ingest run with config: {self.config_file}")
-        contents = gcs.download_as_str(
-            gcs_path=self.config_file, bucket_name="plinder-collab-bucket"
-        )
+        if self.config_file.startswith("gs://"):
+            contents = gcs.download_as_str(
+                gcs_path=self.config_file, bucket_name="plinder-collab-bucket"
+            )
+        else:
+            contents = Path(self.config_file).read_text()
         self.pipeline = IngestPipeline(conf=get_config(config_contents=contents))
         self.next(self.scatter_make_entries)
 

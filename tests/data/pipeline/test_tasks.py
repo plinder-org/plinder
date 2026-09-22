@@ -6517,6 +6517,9 @@ def test_metaflow_graph_uses_canonical_ligand_archive_stage():
     assert "self.next(self.finalize_index)" in flow
     assert "self.pipeline.finalize_index()" in flow
     assert "make_mmp_index" not in flow
+    assert "PLINDER_METAFLOW_IMAGE" in flow
+    assert "v0.2.2-63-g71bd2d22" not in flow
+    assert 'PLINDER_RELEASE="2026-07"' not in flow
 
     tree = ast.parse(flow)
     flow_class = next(
@@ -6533,6 +6536,29 @@ def test_metaflow_graph_uses_canonical_ligand_archive_stage():
             for decorator in node.decorator_list
         )
     }
+    pipeline_tree = ast.parse(
+        (repository / "src/plinder/data/pipeline/pipeline.py").read_text()
+    )
+    pipeline_class = next(
+        node
+        for node in pipeline_tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "IngestPipeline"
+    )
+    pipeline_methods = {
+        node.name for node in pipeline_class.body if isinstance(node, ast.FunctionDef)
+    }
+    called_methods = {
+        call.func.attr
+        for step_node in steps.values()
+        for call in ast.walk(step_node)
+        if isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Attribute)
+        and isinstance(call.func.value, ast.Attribute)
+        and isinstance(call.func.value.value, ast.Name)
+        and call.func.value.value.id == "self"
+        and call.func.value.attr == "pipeline"
+    }
+    assert called_methods <= pipeline_methods
     edges = {name: set() for name in steps}
     for name, node in steps.items():
         for call in (child for child in ast.walk(node) if isinstance(child, ast.Call)):
