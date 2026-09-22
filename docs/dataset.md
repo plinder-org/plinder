@@ -225,6 +225,11 @@ as compact chain-relative positions into `alignment_chain_lookup`, and residue
 identity flags are bit-packed. Positions are one-based; a target position of
 zero means that no selected target residue was aligned.
 
+`plinder.core.scores.query_chain_overlap()` reports the overlapping and total
+residue counts for either ligand pockets or protein interfaces on a requested
+pair of chains. It also reports the overlap fractions and the number of
+identical residues for each available alignment backend.
+
 ### Ligand similarities
 
 `exports/ligand_similarity_scores.parquet` stores the complete directed

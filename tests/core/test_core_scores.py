@@ -15,6 +15,33 @@ def test_custom_scoring_public_api():
 
 @pytest.fixture
 def similarity_release(tmp_path):
+    index = tmp_path / "index"
+    index.mkdir()
+    pd.DataFrame(
+        {
+            "entry_pdb_id": ["1abc", "2def"],
+            "chain_asym_id": ["A", "B"],
+            "chain_auth_id": ["A", "B"],
+            "selected_residue_numbers": [[10, 20, 30], [5, 6, 7, 8]],
+            "selected_residue_indices": [[0, 1, 2], [0, 1, 2, 3]],
+        }
+    ).to_parquet(index / "alignment_chain_lookup.parquet", index=False)
+    pd.DataFrame(
+        {
+            "entry_pdb_id": ["1abc", "1abc", "2def", "2def"],
+            "chain_asym_id": ["A", "A", "B", "B"],
+            "residue_label_seq_id": [10, 20, 6, 8],
+        }
+    ).to_parquet(index / "ligand_pocket_residues.parquet", index=False)
+    pd.DataFrame(
+        {
+            "entry_pdb_id": ["1abc", "2def"],
+            "interface_chain_1": ["1.A", "1.B"],
+            "interface_chain_1_residue_numbers": [[20, 30], [8]],
+            "interface_chain_2": ["1.C", "1.D"],
+            "interface_chain_2_residue_numbers": [[40], [9]],
+        }
+    ).to_parquet(index / "interface_annotation_table.parquet", index=False)
     exports = tmp_path / "exports"
     exports.mkdir()
     pd.DataFrame(
@@ -54,6 +81,21 @@ def similarity_release(tmp_path):
             "lddt": pd.Series([80], dtype="uint8"),
         }
     ).to_parquet(protein_scores / "shard=ab.parquet", index=False)
+    alignment_shard = (
+        tmp_path / "alignments/search_db=holo/alignment_type=mmseqs/shard=ab.parquet"
+    )
+    alignment_shard.parent.mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "query_entry": ["1abc"],
+            "target_entry": ["2def"],
+            "query_chain_mapped": ["A"],
+            "target_chain_mapped": ["B"],
+            "query_selected_residue_positions": [[1, 2, 3]],
+            "target_selected_residue_positions": [[2, 0, 4]],
+            "selected_residue_identity_bits": [b"\x05"],
+        }
+    ).to_parquet(alignment_shard, index=False)
     ligand_scores = tmp_path / "ligand_scores"
     ligand_scores.mkdir()
     pd.DataFrame(
@@ -116,6 +158,59 @@ def test_query_protein_similarity_reads_integer_scores(similarity_release):
 
     assert result.to_dict("records") == [
         {"target_entry": "2def", "fident": 70, "seqsim": 75, "lddt": 80}
+    ]
+
+
+@pytest.mark.parametrize(
+    ("kind", "expected"),
+    [
+        (
+            "pocket",
+            {
+                "overlapping_residues": 1,
+                "identical_overlapping_residues": 1,
+                "query_total_residues": 2,
+                "target_total_residues": 2,
+                "query_overlap_fraction": pytest.approx(1 / 2),
+                "target_overlap_fraction": pytest.approx(1 / 2),
+            },
+        ),
+        (
+            "interface",
+            {
+                "overlapping_residues": 1,
+                "identical_overlapping_residues": 1,
+                "query_total_residues": 2,
+                "target_total_residues": 1,
+                "query_overlap_fraction": pytest.approx(1 / 2),
+                "target_overlap_fraction": pytest.approx(1.0),
+            },
+        ),
+    ],
+)
+def test_query_chain_overlap_counts_selected_residues(
+    similarity_release, kind, expected
+):
+    result = scores.query_chain_overlap(
+        "1abc",
+        "A",
+        "2def",
+        "B",
+        kind=kind,
+        source="mmseqs",
+        release=similarity_release,
+    )
+
+    assert result.to_dict("records") == [
+        {
+            "query_entry": "1abc",
+            "query_chain": "A",
+            "target_entry": "2def",
+            "target_chain": "B",
+            "source": "mmseqs",
+            "kind": kind,
+            **expected,
+        }
     ]
 
 

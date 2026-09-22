@@ -23,7 +23,7 @@ from .ligand import (
     query_ligand_chemical_similarity,
     query_ligand_similarity,
 )
-from .protein import query_protein_similarity
+from .protein import query_chain_overlap, query_protein_similarity
 from .reconstruct import (
     prefetch_similarity_alignments,
     reconstruct_interface_similarity_scores,
@@ -37,6 +37,7 @@ __all__ = [
     "query_ligand_chemical_similarity",
     "cross_ligand_chemical_similarity",
     "query_interface_similarity",
+    "query_chain_overlap",
     "query_protein_similarity",
     "CustomProteinSearchConfig",
     "CustomScoringResult",
