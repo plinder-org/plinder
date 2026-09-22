@@ -365,8 +365,11 @@ def _rebase_unchanged_alignment_manifests(
                 if outputs.get(alignment_type) is not None:
                     raise ValueError(f"unexpected mapped alignment output: {output}")
                 continue
-            if not output.is_file() or not utils._mapped_alignment_file_is_current(
-                output, alignment_type=alignment_type
+            if not output.is_file() or not (
+                schemas.release_alignment_mapping_schema_is_current(
+                    set(pq.read_schema(output).names),
+                    alignment_type=alignment_type,
+                )
             ):
                 raise ValueError(f"invalid mapped alignment output: {output}")
             stat = output.stat()

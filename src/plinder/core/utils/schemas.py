@@ -15,13 +15,32 @@ MAPPED_ALIGNMENT_REQUIRED_COLUMNS = frozenset(
         "seqsim",
         "query_selected_residue_numbers",
         "target_selected_residue_numbers",
-        "selected_residue_identity",
+        "query_selected_residue_positions",
+        "target_selected_residue_positions",
+        "selected_residue_identity_bits",
+    }
+)
+
+RELEASE_ALIGNMENT_MAPPING_REQUIRED_COLUMNS = frozenset(
+    {
+        "query_entry",
+        "target_entry",
+        "query_chain_mapped",
+        "target_chain_mapped",
+        "source",
+        "qcov",
+        "tcov",
+        "fident",
+        "seqsim",
+        "query_selected_residue_positions",
+        "target_selected_residue_positions",
+        "selected_residue_identity_bits",
     }
 )
 
 
 def mapped_alignment_schema(*, alignment_type: str) -> pa.Schema:
-    """Return the compact release schema, including typed empty shards."""
+    """Return the per-query mapped-alignment schema."""
     fields = [
         pa.field("query_entry", pa.string()),
         pa.field("target_entry", pa.string()),
@@ -34,7 +53,9 @@ def mapped_alignment_schema(*, alignment_type: str) -> pa.Schema:
         pa.field("seqsim", pa.float64()),
         pa.field("query_selected_residue_numbers", pa.list_(pa.int32())),
         pa.field("target_selected_residue_numbers", pa.list_(pa.int32())),
-        pa.field("selected_residue_identity", pa.binary()),
+        pa.field("query_selected_residue_positions", pa.list_(pa.uint16())),
+        pa.field("target_selected_residue_positions", pa.list_(pa.uint16())),
+        pa.field("selected_residue_identity_bits", pa.binary()),
     ]
     if alignment_type == "foldseek":
         fields.append(pa.field("lddt", pa.float64()))
@@ -48,6 +69,41 @@ def mapped_alignment_schema_is_current(
 ) -> bool:
     """Return whether a mapped alignment has the current compact schema."""
     required = MAPPED_ALIGNMENT_REQUIRED_COLUMNS
+    if alignment_type == "foldseek":
+        required = required | {"lddt"}
+    elif alignment_type != "mmseqs":
+        raise ValueError(f"unknown alignment type: {alignment_type}")
+    return required.issubset(columns)
+
+
+def release_alignment_mapping_schema(*, alignment_type: str) -> pa.Schema:
+    """Return the compact public residue-mapping schema."""
+    fields = [
+        pa.field("query_entry", pa.string()),
+        pa.field("target_entry", pa.string()),
+        pa.field("query_chain_mapped", pa.string()),
+        pa.field("target_chain_mapped", pa.string()),
+        pa.field("source", pa.string()),
+        pa.field("qcov", pa.float64()),
+        pa.field("tcov", pa.float64()),
+        pa.field("fident", pa.float64()),
+        pa.field("seqsim", pa.float64()),
+        pa.field("query_selected_residue_positions", pa.list_(pa.uint16())),
+        pa.field("target_selected_residue_positions", pa.list_(pa.uint16())),
+        pa.field("selected_residue_identity_bits", pa.binary()),
+    ]
+    if alignment_type == "foldseek":
+        fields.append(pa.field("lddt", pa.float64()))
+    elif alignment_type != "mmseqs":
+        raise ValueError(f"unknown alignment type: {alignment_type}")
+    return pa.schema(fields)
+
+
+def release_alignment_mapping_schema_is_current(
+    columns: set[str], *, alignment_type: str
+) -> bool:
+    """Return whether a release shard uses chain-relative residue positions."""
+    required = RELEASE_ALIGNMENT_MAPPING_REQUIRED_COLUMNS
     if alignment_type == "foldseek":
         required = required | {"lddt"}
     elif alignment_type != "mmseqs":

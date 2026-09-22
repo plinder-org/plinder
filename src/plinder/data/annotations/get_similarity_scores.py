@@ -36,6 +36,10 @@ from plinder.core.scores.entries import (
     SystemView,
     load_entry_views,
 )
+from plinder.core.scores.mapping import (
+    expand_residue_positions,
+    unpack_residue_identities,
+)
 from plinder.core.scores.metrics import (
     SCORE_NAMES,
     maximum_weight_bipartite_assignment,
@@ -1423,6 +1427,7 @@ class Scorer:
     source_to_full_db_file: dict[str, Path]
     db_dir: Path
     scores_dir: Path
+    alignment_chain_lookup: Path | None = None
     ligand_sdf_resolver: Callable[[LigandView], Path | None] | None = field(
         default=None, repr=False
     )
@@ -2498,6 +2503,18 @@ class Scorer:
             aln_df = pd.read_parquet(aln_file, filters=filters or None)
             if aln_df.empty:
                 continue
+            if (
+                "query_selected_residue_positions" in aln_df.columns
+                and "query_selected_residue_numbers" not in aln_df.columns
+            ):
+                if self.alignment_chain_lookup is None:
+                    raise ValueError(
+                        "compact alignments require an alignment chain lookup"
+                    )
+                aln_df = expand_residue_positions(
+                    aln_df,
+                    chain_lookup=self.alignment_chain_lookup,
+                )
             # Per-entry mapped files written by pandas restore these fields as
             # a MultiIndex. Release shards written by DuckDB expose the same
             # fields as regular columns. Normalize both layouts here so shard
@@ -2556,7 +2573,9 @@ class Scorer:
             for column in [
                 "query_selected_residue_numbers",
                 "target_selected_residue_numbers",
-                "selected_residue_identity",
+                "query_selected_residue_positions",
+                "target_selected_residue_positions",
+                "selected_residue_identity_bits",
             ]:
                 df[column] = pd.Series(dtype="object")
             df.drop(
@@ -2648,14 +2667,15 @@ class Scorer:
             (
                 "query_selected_residue_numbers",
                 "target_selected_residue_numbers",
-                "selected_residue_identity",
+                "query_selected_residue_positions",
+                "target_selected_residue_positions",
+                "selected_residue_identity_bits",
             )
         ):
             df[column] = [mapping[index] for mapping in selected_mappings]
-        # Retain only selected ligand-pocket/interface residue numbers and
-        # equality flags, not complete alignment positions or amino-acid
-        # letters. Raw search statistics remain private and are omitted from
-        # the compact release representation.
+        # Retain only selected ligand-pocket/interface residue numbers,
+        # chain-lookup positions, and identity bits. Complete alignments and
+        # amino-acid strings are not needed downstream.
         df.drop(
             columns=["qaln", "taln", "evalue", "bits"],
             inplace=True,
@@ -2687,7 +2707,7 @@ class Scorer:
         taln: str,
         aln_type: str,
         search_db: str,
-    ) -> tuple[list[int], list[int], bytes]:
+    ) -> tuple[list[int], list[int], list[int], list[int], bytes]:
         """Map sparse selected query positions through one pairwise alignment."""
         # mmseqs operates on the SEQRES FASTA, so 1-based position
         #     equals the residue NUMBER (label_seq_id = Chain.residues key);
@@ -2695,6 +2715,8 @@ class Scorer:
         #     resolved-residue INDEX;
         query_numbers: list[int] = []
         target_numbers: list[int] = []
+        query_positions: list[int] = []
+        target_positions: list[int] = []
         residue_identity = bytearray()
         q_i, t_i = qstart - 1, tstart - 1
         q_entry = self.entries[query_entry]
@@ -2705,7 +2727,22 @@ class Scorer:
             t_i2n = t_entry.selected_index_to_number_per_chain.get(target_chain, {})
         alignment_length = min(len(qaln), len(taln))
         if not q_i2n or alignment_length == 0:
-            return query_numbers, target_numbers, bytes(residue_identity)
+            return (
+                query_numbers,
+                target_numbers,
+                query_positions,
+                target_positions,
+                bytes(residue_identity),
+            )
+
+        query_number_to_position = {
+            number: position
+            for position, (_, number) in enumerate(sorted(q_i2n.items()), start=1)
+        }
+        target_number_to_position = {
+            number: position
+            for position, (_, number) in enumerate(sorted(t_i2n.items()), start=1)
+        }
 
         qaln = qaln[:alignment_length]
         taln = taln[:alignment_length]
@@ -2749,10 +2786,24 @@ class Scorer:
                 target_number = t_i2n.get(target_index) if search_db != "pred" else None
             query_numbers.append(query_number)
             target_numbers.append(target_number if target_number is not None else -1)
-            residue_identity.append(
-                qaln[alignment_position] == taln[alignment_position]
+            query_positions.append(query_number_to_position[query_number])
+            target_positions.append(
+                target_number_to_position[target_number]
+                if target_number is not None
+                else 0
             )
-        return query_numbers, target_numbers, bytes(residue_identity)
+            identity_position = len(query_numbers) - 1
+            if identity_position % 8 == 0:
+                residue_identity.append(0)
+            if qaln[alignment_position] == taln[alignment_position]:
+                residue_identity[-1] |= 1 << (identity_position % 8)
+        return (
+            query_numbers,
+            target_numbers,
+            query_positions,
+            target_positions,
+            bytes(residue_identity),
+        )
 
     def map_row(self, parts: pd.Series, aln_type: str, search_db: str) -> pd.Series:
         """Map selected positions for callers operating on one pandas row."""
@@ -2772,7 +2823,9 @@ class Scorer:
             (
                 "query_selected_residue_numbers",
                 "target_selected_residue_numbers",
-                "selected_residue_identity",
+                "query_selected_residue_positions",
+                "target_selected_residue_positions",
+                "selected_residue_identity_bits",
             ),
             mapped,
         ):
@@ -3033,7 +3086,7 @@ class Scorer:
                     compact_values = (
                         aln_source["query_selected_residue_numbers"],
                         aln_source["target_selected_residue_numbers"],
-                        aln_source["selected_residue_identity"],
+                        aln_source["selected_residue_identity_bits"],
                     )
                     # Pandas represents null list/binary Parquet cells as
                     # scalar NaN values. Such an alignment has no mapped
@@ -3042,8 +3095,11 @@ class Scorer:
                         isinstance(value, abc.Iterable) for value in compact_values
                     ):
                         continue
+                    query_numbers, target_numbers, identities = compact_values
                     pocket_positions = zip(
-                        *compact_values,
+                        query_numbers,
+                        target_numbers,
+                        unpack_residue_identities(identities, len(query_numbers)),
                     )
                 else:
                     pocket_positions = (

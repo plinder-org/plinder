@@ -178,7 +178,7 @@ def _entry_with_pocket_map(
             1,
             [30, 50],
             [400, 500],
-            bytes([1, 1]),
+            bytes([3]),
         ),
         (
             "mmseqs",
@@ -225,7 +225,13 @@ def test_map_row_vectorizes_sparse_pocket_positions(
 
     assert mapped["query_selected_residue_numbers"] == query_numbers
     assert mapped["target_selected_residue_numbers"] == target_numbers
-    assert mapped["selected_residue_identity"] == identity
+    assert mapped["query_selected_residue_positions"] == [
+        {10: 1, 30: 2, 50: 3}[number] for number in query_numbers
+    ]
+    assert mapped["target_selected_residue_positions"] == [
+        {100: 1, 400: 2, 500: 3}[number] for number in target_numbers
+    ]
+    assert mapped["selected_residue_identity_bits"] == identity
 
 
 def test_search_uses_configured_zero_minimum_sequence_identity(tmp_path) -> None:
@@ -398,7 +404,9 @@ def test_no_hit_search_writes_typed_empty_raw_and_mapped_checkpoints(
         "seqsim",
         "query_selected_residue_numbers",
         "target_selected_residue_numbers",
-        "selected_residue_identity",
+        "query_selected_residue_positions",
+        "target_selected_residue_positions",
+        "selected_residue_identity_bits",
     } <= set(mapped.columns)
     assert {"evalue", "bits"}.isdisjoint(mapped.columns)
     assert "tcov" in mapped.columns
@@ -1160,9 +1168,9 @@ def test_reconstruct_interface_scores_from_release_shard(tmp_path: Path) -> None
             "qcov": 1.0,
             "fident": 1.0,
             "seqsim": 1.0,
-            "query_selected_residue_numbers": [1, 2, 3],
-            "target_selected_residue_numbers": [10, 20, 30],
-            "selected_residue_identity": bytes([1, 1, 1]),
+            "query_selected_residue_positions": [1, 2, 3],
+            "target_selected_residue_positions": [1, 2, 3],
+            "selected_residue_identity_bits": bytes([7]),
             "lddt": 1.0,
         },
         {
@@ -1174,21 +1182,33 @@ def test_reconstruct_interface_scores_from_release_shard(tmp_path: Path) -> None
             "qcov": 1.0,
             "fident": 1.0,
             "seqsim": 1.0,
-            "query_selected_residue_numbers": [4, 5, 6],
-            "target_selected_residue_numbers": [40, 50, 60],
-            "selected_residue_identity": bytes([1, 1, 1]),
+            "query_selected_residue_positions": [1, 2, 3],
+            "target_selected_residue_positions": [1, 2, 3],
+            "selected_residue_identity_bits": bytes([7]),
             "lddt": 1.0,
         },
     ]
-    from plinder.core.utils.schemas import mapped_alignment_schema
+    from plinder.core.utils.schemas import release_alignment_mapping_schema
 
     pq.write_table(
         pa.Table.from_pylist(
             alignment_rows,
-            schema=mapped_alignment_schema(alignment_type="foldseek"),
+            schema=release_alignment_mapping_schema(alignment_type="foldseek"),
         ),
         alignment,
     )
+    pd.DataFrame(
+        {
+            "entry_pdb_id": ["1abc", "1abc", "2def", "2def"],
+            "chain_asym_id": ["A", "B", "X", "Y"],
+            "selected_residue_numbers": [
+                [1, 2, 3],
+                [4, 5, 6],
+                [10, 20, 30],
+                [40, 50, 60],
+            ],
+        }
+    ).to_parquet(index / "alignment_chain_lookup.parquet", index=False)
 
     scores = reconstruct_interface_similarity_scores(
         [query_id],
@@ -1430,7 +1450,7 @@ def test_ligand_pair_pocket_scores_do_not_use_system_union(tmp_path) -> None:
                 {
                     "query_selected_residue_numbers": [10, 20],
                     "target_selected_residue_numbers": [110, 120],
-                    "selected_residue_identity": bytes([1, 1]),
+                    "selected_residue_identity_bits": bytes([3]),
                 }
             ],
             index=["foldseek"],
@@ -1493,7 +1513,7 @@ def test_ligand_pair_pocket_scores_ignore_null_compact_maps(tmp_path) -> None:
                 {
                     "query_selected_residue_numbers": np.nan,
                     "target_selected_residue_numbers": np.nan,
-                    "selected_residue_identity": np.nan,
+                    "selected_residue_identity_bits": np.nan,
                 }
             ],
             index=["foldseek"],
@@ -1535,7 +1555,7 @@ def test_ligand_pocket_scores_report_identity_over_all_pli_residues(tmp_path) ->
                 {
                     "query_selected_residue_numbers": [10, 20],
                     "target_selected_residue_numbers": [100, 200],
-                    "selected_residue_identity": bytes([1, 1]),
+                    "selected_residue_identity_bits": bytes([3]),
                 }
             ],
             index=["mmseqs"],
@@ -1589,7 +1609,7 @@ def test_ligand_pair_pocket_mapping_maximizes_coverage_before_similarity(
                 "source": source,
                 "query_selected_residue_numbers": [query_number],
                 "target_selected_residue_numbers": [target_number],
-                "selected_residue_identity": bytes([1]),
+                "selected_residue_identity_bits": bytes([1]),
                 "qcov": 1.0,
                 "fident": similarity,
                 "fident_qcov": similarity,

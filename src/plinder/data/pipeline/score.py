@@ -3548,7 +3548,7 @@ def finalize_alignment_artifacts(data_dir: Path) -> dict[str, Any]:
                 invalid_manifests.append(shard)
                 continue
             columns = set(pq.read_schema(release).names)
-            if not schemas.mapped_alignment_schema_is_current(
+            if not schemas.release_alignment_mapping_schema_is_current(
                 columns, alignment_type=alignment_type
             ):
                 invalid_manifests.append(shard)
@@ -4107,6 +4107,7 @@ def score_ligand_pocket_qcov_representatives(
     """Score pockets using an exact ligand-pair-specific chain assignment."""
     if threads < 1:
         raise ValueError("ligand pocket scoring threads must be positive")
+    chain_lookup = data_dir / tasks.ALIGNMENT_CHAIN_LOOKUP_RELATIVE
     alignment_selects: list[str] = []
     for backend in ["foldseek", "mmseqs"]:
         path = tasks._alignment_release_path(
@@ -4128,9 +4129,28 @@ def score_ligand_pocket_qcov_representatives(
                     query_chain_mapped,
                     target_chain_mapped,
                     (qcov * {identity})::DOUBLE AS mapper_score,
-                    query_selected_residue_numbers,
-                    target_selected_residue_numbers
-                FROM read_parquet('{path.as_posix()}')
+                    list_transform(
+                        query_selected_residue_positions,
+                        position -> list_extract(
+                            query_chain.selected_residue_numbers, position
+                        )
+                    ) AS query_selected_residue_numbers,
+                    list_transform(
+                        target_selected_residue_positions,
+                        position -> CASE
+                            WHEN position = 0 THEN -1
+                            ELSE list_extract(
+                                target_chain.selected_residue_numbers, position
+                            )
+                        END
+                    ) AS target_selected_residue_numbers
+                FROM read_parquet('{path.as_posix()}') AS alignment
+                INNER JOIN read_parquet('{chain_lookup.as_posix()}') AS query_chain
+                  ON alignment.query_entry = query_chain.entry_pdb_id
+                 AND alignment.query_chain_mapped = query_chain.chain_asym_id
+                INNER JOIN read_parquet('{chain_lookup.as_posix()}') AS target_chain
+                  ON alignment.target_entry = target_chain.entry_pdb_id
+                 AND alignment.target_chain_mapped = target_chain.chain_asym_id
                 """
             ).strip()
         )
@@ -5221,6 +5241,7 @@ def score_interface_qcov_shards(
     output_root.mkdir(exist_ok=True, parents=True)
     half_interface_path = data_dir / tasks.INTERFACE_HALF_REPRESENTATIVES_RELATIVE
     interface_path = data_dir / tasks.INTERFACE_REPRESENTATIVES_RELATIVE
+    chain_lookup = data_dir / tasks.ALIGNMENT_CHAIN_LOOKUP_RELATIVE
     reports: list[dict[str, Any]] = []
     started = perf_counter()
     for index, shard in enumerate(shards, start=1):
@@ -5275,7 +5296,7 @@ def score_interface_qcov_shards(
         query_filter = ""
         if query_entries is not None:
             selected = ", ".join(f"'{entry}'" for entry in sorted(query_entries))
-            query_filter = f"WHERE query_entry IN ({selected})"
+            query_filter = f"WHERE alignment.query_entry IN ({selected})"
         for alignment_type, signature in alignments.items():
             path = Path(str(signature["path"]))
             backend_selects.append(
@@ -5284,13 +5305,36 @@ def score_interface_qcov_shards(
                     SELECT
                         '{alignment_type}' AS backend,
                         row_number() OVER ()::BIGINT AS alignment_id,
-                        query_entry,
-                        target_entry,
-                        query_chain_mapped,
-                        target_chain_mapped,
-                        query_selected_residue_numbers,
-                        target_selected_residue_numbers
-                    FROM read_parquet('{path.as_posix()}')
+                        alignment.query_entry,
+                        alignment.target_entry,
+                        alignment.query_chain_mapped,
+                        alignment.target_chain_mapped,
+                        list_transform(
+                            alignment.query_selected_residue_positions,
+                            position -> list_extract(
+                                query_chain.selected_residue_numbers, position
+                            )
+                        ) AS query_selected_residue_numbers,
+                        list_transform(
+                            alignment.target_selected_residue_positions,
+                            position -> CASE
+                                WHEN position = 0 THEN -1
+                                ELSE list_extract(
+                                    target_chain.selected_residue_numbers, position
+                                )
+                            END
+                        ) AS target_selected_residue_numbers
+                    FROM read_parquet('{path.as_posix()}') AS alignment
+                    INNER JOIN read_parquet(
+                        '{chain_lookup.as_posix()}'
+                    ) AS query_chain
+                      ON alignment.query_entry = query_chain.entry_pdb_id
+                     AND alignment.query_chain_mapped = query_chain.chain_asym_id
+                    INNER JOIN read_parquet(
+                        '{chain_lookup.as_posix()}'
+                    ) AS target_chain
+                      ON alignment.target_entry = target_chain.entry_pdb_id
+                     AND alignment.target_chain_mapped = target_chain.chain_asym_id
                     {query_filter}
                     """
                 ).strip()

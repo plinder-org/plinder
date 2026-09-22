@@ -101,6 +101,7 @@ def get_scorer(
             source_to_full_db_file=db_sources,
             db_dir=sub_db_dir,
             scores_dir=scores_dir,
+            alignment_chain_lookup=data_dir / "index/alignment_chain_lookup.parquet",
             minimum_threshold=scorer_cfg.minimum_threshold,
             minimum_thresholds=dict(scorer_cfg.minimum_thresholds),
             max_query_protein_chains=scorer_cfg.max_query_protein_chains,

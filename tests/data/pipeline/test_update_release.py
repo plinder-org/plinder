@@ -451,6 +451,63 @@ def test_alignment_repair_queries_are_saved_before_restart(tmp_path, monkeypatch
     )
 
 
+def test_unchanged_alignment_rebase_accepts_public_mapping_schema(
+    tmp_path,
+    monkeypatch,
+):
+    inputs = {"foldseek": [{"name": "1abc.parquet"}], "mmseqs": []}
+    output = update_release.tasks._alignment_release_path(
+        data_dir=tmp_path,
+        search_db="holo",
+        alignment_type="foldseek",
+        shard="ab",
+    )
+    output.parent.mkdir(parents=True)
+    pq.write_table(
+        pa.Table.from_pylist(
+            [],
+            schema=schemas.release_alignment_mapping_schema(alignment_type="foldseek"),
+        ),
+        output,
+    )
+    stat = output.stat()
+    manifest = tmp_path / "alignments/manifests/shard=ab.json"
+    manifest.parent.mkdir(parents=True)
+    write_json_atomic(
+        manifest,
+        {
+            "inputs": inputs,
+            "outputs": {
+                "foldseek": {
+                    "name": output.name,
+                    "size": stat.st_size,
+                    "mtime_ns": stat.st_mtime_ns,
+                },
+                "mmseqs": None,
+            },
+        },
+    )
+    lookup = {"name": "alignment_chain_lookup.parquet"}
+    monkeypatch.setattr(
+        update_release.tasks,
+        "_completed_alignment_chain_lookup",
+        lambda _data_dir: lookup,
+    )
+    monkeypatch.setattr(
+        update_release.tasks,
+        "_alignment_input_signatures",
+        lambda **_kwargs: inputs,
+    )
+
+    update_release._rebase_unchanged_alignment_manifests(
+        tmp_path,
+        search_db="holo",
+        repaired_shards=set(),
+    )
+
+    assert json.loads(manifest.read_text())["alignment_chain_lookup"] == lookup
+
+
 def test_pred_alignment_repairs_only_changed_queries(tmp_path, monkeypatch):
     manifest = tmp_path / update_release.score.MANIFEST_RELATIVE
     manifest.parent.mkdir(parents=True)

@@ -2437,8 +2437,14 @@ def alignment_mapping_shard_is_current(
             ):
                 return False
             continue
-        if not output.is_file() or not utils._mapped_alignment_file_is_current(
-            output, alignment_type=alignment_type
+        if not output.is_file():
+            return False
+        try:
+            output_columns = set(pq.read_schema(output).names)
+        except (OSError, ValueError):
+            return False
+        if not schemas.release_alignment_mapping_schema_is_current(
+            output_columns, alignment_type=alignment_type
         ):
             return False
         stat = output.stat()
@@ -4025,44 +4031,33 @@ def _write_alignment_release_shard(
     )
     if protein_scores_temporary is not None:
         protein_scores_temporary.unlink(missing_ok=True)
-    release_columns = [
-        "query_entry",
-        "target_entry",
-        "query_chain_mapped",
-        "target_chain_mapped",
-        "source",
-        "qcov",
-        "tcov",
-        "fident",
-        "seqsim",
-        "query_selected_residue_numbers",
-        "target_selected_residue_numbers",
-        "selected_residue_identity",
-    ]
-    if alignment_type == "foldseek":
-        release_columns.append("lddt")
     if non_empty_sources:
         source_sql = ", ".join(f"'{path.as_posix()}'" for path in non_empty_sources)
-        select_columns = ", ".join(
-            (
-                f"CAST({column} AS INTEGER[]) AS {column}"
-                if column
-                in {
-                    "query_selected_residue_numbers",
-                    "target_selected_residue_numbers",
-                }
-                else f"CAST({column} AS BLOB) AS {column}"
-                if column == "selected_residue_identity"
-                else column
-            )
-            for column in release_columns
-        )
+        lddt = ", lddt" if alignment_type == "foldseek" else ""
         con.sql(
             dedent(
                 f"""
                 COPY (
-                    SELECT {select_columns}
-                    FROM read_parquet([{source_sql}], union_by_name = true)
+                    SELECT
+                        query_entry,
+                        target_entry,
+                        query_chain_mapped,
+                        target_chain_mapped,
+                        source,
+                        qcov,
+                        tcov,
+                        fident,
+                        seqsim,
+                        CAST(query_selected_residue_positions AS USMALLINT[])
+                            AS query_selected_residue_positions,
+                        CAST(target_selected_residue_positions AS USMALLINT[])
+                            AS target_selected_residue_positions,
+                        CAST(selected_residue_identity_bits AS BLOB)
+                            AS selected_residue_identity_bits
+                        {lddt}
+                    FROM read_parquet(
+                        [{source_sql}], union_by_name = true
+                    )
                     ORDER BY query_entry, target_entry,
                              query_chain_mapped, target_chain_mapped, source
                 ) TO '{temporary.as_posix()}'
@@ -4107,7 +4102,9 @@ def _write_alignment_release_shard(
         pq.write_table(
             pa.Table.from_pylist(
                 [],
-                schema=schemas.mapped_alignment_schema(alignment_type=alignment_type),
+                schema=schemas.release_alignment_mapping_schema(
+                    alignment_type=alignment_type
+                ),
             ),
             temporary,
             compression="zstd",

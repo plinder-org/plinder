@@ -146,7 +146,7 @@ def _alignment_row(
         "seqsim": fident,
         "query_selected_residue_numbers": [],
         "target_selected_residue_numbers": [],
-        "selected_residue_identity": b"",
+        "selected_residue_identity_bits": b"",
     }
     if lddt is not None:
         row["lddt"] = lddt

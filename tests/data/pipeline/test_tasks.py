@@ -11,6 +11,8 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+
+from plinder.core.scores.mapping import pack_residue_identities
 from plinder.core.utils import schemas
 from plinder.data.annotations.get_similarity_scores import (
     SCORE_METRICS_METADATA_KEY,
@@ -21,6 +23,13 @@ from plinder.data.annotations.get_similarity_scores import (
 from plinder.data.annotations.interface_utils import INTERFACE_ANNOTATION_SCHEMA
 from plinder.data.pipeline import io, tasks
 from plinder.data.pipeline.config import LigandConfig
+
+
+def _write_selected_residue_lookup(data_dir: Path, rows: list[dict]) -> Path:
+    path = data_dir / tasks.ALIGNMENT_CHAIN_LOOKUP_RELATIVE
+    path.parent.mkdir(exist_ok=True, parents=True)
+    pd.DataFrame(rows).to_parquet(path, index=False)
+    return path
 
 
 def _write_ligand_pair_scores(
@@ -367,6 +376,22 @@ def test_ligand_pocket_qcov_uses_pocket_optimal_receptor_mapping(tmp_path):
     work_path = tmp_path / SCORE_WORK_RELATIVE
     work_path.parent.mkdir(parents=True)
     pd.DataFrame({"pdb_id": ["1abc"]}).to_parquet(work_path, index=False)
+    _write_selected_residue_lookup(
+        tmp_path,
+        [
+            {
+                "entry_pdb_id": entry,
+                "chain_asym_id": chain,
+                "selected_residue_numbers": residues,
+            }
+            for entry, chain, residues in [
+                ("1abc", "A", [1]),
+                ("1abc", "B", [2]),
+                ("2def", "X", [10, 99]),
+                ("2def", "Y", [20, 99]),
+            ]
+        ],
+    )
 
     alignment_path = tasks._alignment_release_path(
         data_dir=tmp_path,
@@ -385,9 +410,9 @@ def test_ligand_pocket_qcov_uses_pocket_optimal_receptor_mapping(tmp_path):
             "qcov": 1.0,
             "fident": 1.0,
             "seqsim": 1.0,
-            "query_selected_residue_numbers": [1],
-            "target_selected_residue_numbers": [99],
-            "selected_residue_identity": bytes([1]),
+            "query_selected_residue_positions": [1],
+            "target_selected_residue_positions": [2],
+            "selected_residue_identity_bits": bytes([1]),
             # A missing whole-chain tie-break must not discard valid pocket
             # coverage or abort a production shard.
             "lddt": None,
@@ -401,9 +426,9 @@ def test_ligand_pocket_qcov_uses_pocket_optimal_receptor_mapping(tmp_path):
             "qcov": 1.0,
             "fident": 1.0,
             "seqsim": 1.0,
-            "query_selected_residue_numbers": [2],
-            "target_selected_residue_numbers": [99],
-            "selected_residue_identity": bytes([1]),
+            "query_selected_residue_positions": [1],
+            "target_selected_residue_positions": [2],
+            "selected_residue_identity_bits": bytes([1]),
             "lddt": 0.9,
         },
         {
@@ -415,9 +440,9 @@ def test_ligand_pocket_qcov_uses_pocket_optimal_receptor_mapping(tmp_path):
             "qcov": 1.0,
             "fident": 1.0,
             "seqsim": 1.0,
-            "query_selected_residue_numbers": [1],
-            "target_selected_residue_numbers": [20],
-            "selected_residue_identity": bytes([1]),
+            "query_selected_residue_positions": [1],
+            "target_selected_residue_positions": [1],
+            "selected_residue_identity_bits": bytes([1]),
             "lddt": 0.2,
         },
         {
@@ -429,16 +454,16 @@ def test_ligand_pocket_qcov_uses_pocket_optimal_receptor_mapping(tmp_path):
             "qcov": 1.0,
             "fident": 1.0,
             "seqsim": 1.0,
-            "query_selected_residue_numbers": [2],
-            "target_selected_residue_numbers": [10],
-            "selected_residue_identity": bytes([1]),
+            "query_selected_residue_positions": [1],
+            "target_selected_residue_positions": [1],
+            "selected_residue_identity_bits": bytes([1]),
             "lddt": 0.1,
         },
     ]
     pq.write_table(
         pa.Table.from_pylist(
             rows,
-            schema=schemas.mapped_alignment_schema(alignment_type="foldseek"),
+            schema=schemas.release_alignment_mapping_schema(alignment_type="foldseek"),
         ),
         alignment_path,
     )
@@ -459,9 +484,9 @@ def test_ligand_pocket_qcov_uses_pocket_optimal_receptor_mapping(tmp_path):
             "qcov": 1.0,
             "fident": 0.95,
             "seqsim": 0.95,
-            "query_selected_residue_numbers": [1],
-            "target_selected_residue_numbers": [10],
-            "selected_residue_identity": bytes([1]),
+            "query_selected_residue_positions": [1],
+            "target_selected_residue_positions": [1],
+            "selected_residue_identity_bits": bytes([1]),
         },
         {
             "query_entry": "1abc",
@@ -472,15 +497,15 @@ def test_ligand_pocket_qcov_uses_pocket_optimal_receptor_mapping(tmp_path):
             "qcov": 1.0,
             "fident": 0.9,
             "seqsim": 0.9,
-            "query_selected_residue_numbers": [2],
-            "target_selected_residue_numbers": [99],
-            "selected_residue_identity": bytes([1]),
+            "query_selected_residue_positions": [1],
+            "target_selected_residue_positions": [2],
+            "selected_residue_identity_bits": bytes([1]),
         },
     ]
     pq.write_table(
         pa.Table.from_pylist(
             mmseqs_rows,
-            schema=schemas.mapped_alignment_schema(alignment_type="mmseqs"),
+            schema=schemas.release_alignment_mapping_schema(alignment_type="mmseqs"),
         ),
         mmseqs_alignment_path,
     )
@@ -1804,9 +1829,9 @@ def test_protein_scoring_plan_and_alignment_finalization(tmp_path, monkeypatch) 
             "query_chain_mapped": ["A"],
             "target_chain_mapped": ["A"],
             "source": [alignment_type],
-            "query_selected_residue_numbers": [[1]],
-            "target_selected_residue_numbers": [[1]],
-            "selected_residue_identity": [bytes([1])],
+            "query_selected_residue_positions": [[1]],
+            "target_selected_residue_positions": [[1]],
+            "selected_residue_identity_bits": [bytes([1])],
             "qcov": [1.0],
             "tcov": [1.0],
             "fident": [1.0],
@@ -1861,7 +1886,9 @@ def test_protein_scoring_plan_and_alignment_finalization(tmp_path, monkeypatch) 
         pq.write_table(
             pa.Table.from_pylist(
                 [],
-                schema=schemas.mapped_alignment_schema(alignment_type=alignment_type),
+                schema=schemas.release_alignment_mapping_schema(
+                    alignment_type=alignment_type
+                ),
             ),
             release,
         )
@@ -4488,7 +4515,9 @@ def test_alignment_release_shard_preserves_typed_schema_when_all_hits_are_empty(
     )
 
     assert pq.ParquetFile(target).metadata.num_rows == 0
-    assert pq.read_schema(target).equals(schema)
+    assert pq.read_schema(target).equals(
+        schemas.release_alignment_mapping_schema(alignment_type=alignment_type)
+    )
 
 
 def test_alignment_release_shard_unifies_empty_and_populated_list_types(
@@ -4506,7 +4535,9 @@ def test_alignment_release_shard_unifies_empty_and_populated_list_types(
         "seqsim": [1.0],
         "query_selected_residue_numbers": [[]],
         "target_selected_residue_numbers": [[]],
-        "selected_residue_identity": [b""],
+        "query_selected_residue_positions": [[]],
+        "target_selected_residue_positions": [[]],
+        "selected_residue_identity_bits": [b""],
         "lddt": [1.0],
     }
     empty_lists = tmp_path / "mapped" / "1abc.parquet"
@@ -4517,7 +4548,9 @@ def test_alignment_release_shard_unifies_empty_and_populated_list_types(
     populated["query_entry"] = ["2abc"]
     populated["query_selected_residue_numbers"] = [[1]]
     populated["target_selected_residue_numbers"] = [[2]]
-    populated["selected_residue_identity"] = [bytes([1])]
+    populated["query_selected_residue_positions"] = [[1]]
+    populated["target_selected_residue_positions"] = [[1]]
+    populated["selected_residue_identity_bits"] = [bytes([1])]
     pd.DataFrame(populated).to_parquet(populated_lists, index=False)
     target = tmp_path / "foldseek.parquet"
     protein_scores = tmp_path / "protein_scores.parquet"
@@ -4534,8 +4567,9 @@ def test_alignment_release_shard_unifies_empty_and_populated_list_types(
 
     result = pd.read_parquet(target)
     assert result["query_entry"].tolist() == ["1abc", "2abc"]
-    assert result.loc[0, "query_selected_residue_numbers"].tolist() == []
-    assert result.loc[1, "query_selected_residue_numbers"].tolist() == [1]
+    assert result.loc[0, "query_selected_residue_positions"].tolist() == []
+    assert result.loc[1, "query_selected_residue_positions"].tolist() == [1]
+    assert result.loc[1, "target_selected_residue_positions"].tolist() == [1]
     score_result = pd.read_parquet(protein_scores)
     assert pq.read_schema(protein_scores).equals(
         schemas.PROTEIN_SIMILARITY_EXPORT_SCHEMA
@@ -4581,7 +4615,9 @@ def test_collate_alignments_writes_query_addressable_shards(tmp_path):
         "seqsim": [1.0, 0.9, 0.8],
         "query_selected_residue_numbers": [[1], [2], [3]],
         "target_selected_residue_numbers": [[11], [12], [13]],
-        "selected_residue_identity": [bytes([1])] * 3,
+        "query_selected_residue_positions": [[1], [1], [1]],
+        "target_selected_residue_positions": [[1], [1], [1]],
+        "selected_residue_identity_bits": [bytes([1])] * 3,
         "lddt": [1.0, 0.9, 0.8],
     }
     mapped_dir = tmp_path / "dbs/subdbs/holo_foldseek/mapped_aln"
@@ -4594,7 +4630,6 @@ def test_collate_alignments_writes_query_addressable_shards(tmp_path):
     pd.DataFrame(
         {column: [values[0]] for column, values in columns.items()}
     ).to_parquet(mapped_dir / "4qp3.tmp.parquet", index=False)
-
     assert tasks.scatter_collate_alignments(data_dir=tmp_path) == [["ab"], ["xy"]]
     tasks.collate_alignments(data_dir=tmp_path, partition=["ab"])
 
@@ -4603,7 +4638,13 @@ def test_collate_alignments_writes_query_addressable_shards(tmp_path):
     )
     assert shard["query_entry"].tolist() == ["1abc", "2abd"]
     assert "3xyz" not in set(shard["query_entry"])
-    assert set(shard.columns) == set(columns)
+    assert set(shard.columns) == set(
+        schemas.release_alignment_mapping_schema(alignment_type="foldseek").names
+    )
+    assert shard["query_selected_residue_positions"].tolist() == [
+        [1],
+        [1],
+    ]
 
 
 def test_empty_alignment_scatter_has_noop_branch(tmp_path):
@@ -4632,9 +4673,9 @@ def test_mapping_scatter_requires_current_shard_manifest(tmp_path):
         "tcov": [1.0],
         "fident": [1.0],
         "seqsim": [1.0],
-        "query_selected_residue_numbers": [[1]],
-        "target_selected_residue_numbers": [[1]],
-        "selected_residue_identity": [bytes([1])],
+        "query_selected_residue_positions": [[1]],
+        "target_selected_residue_positions": [[1]],
+        "selected_residue_identity_bits": [bytes([1])],
         "lddt": [1.0],
     }
     release = tasks._alignment_release_path(
@@ -4668,7 +4709,8 @@ def test_missing_score_scatter_includes_mapped_apo_queries(tmp_path) -> None:
     release.parent.mkdir(parents=True)
     pq.write_table(
         pa.Table.from_pylist(
-            [], schema=schemas.mapped_alignment_schema(alignment_type="foldseek")
+            [],
+            schema=schemas.release_alignment_mapping_schema(alignment_type="foldseek"),
         ),
         release,
     )
@@ -4755,17 +4797,19 @@ def test_map_batch_alignments_publishes_atomic_shard(tmp_path, monkeypatch, sear
             pd.DataFrame(
                 {
                     "query_entry": ["1abc"],
-                    "target_entry": ["2def"],
+                    "target_entry": ["1abc"],
                     "query_chain_mapped": ["A"],
-                    "target_chain_mapped": ["B"],
+                    "target_chain_mapped": ["A"],
                     "source": ["foldseek"],
                     "qcov": [1.0],
                     "tcov": [1.0],
                     "fident": [1.0],
                     "seqsim": [1.0],
-                    "query_selected_residue_numbers": [[1]],
-                    "target_selected_residue_numbers": [[2]],
-                    "selected_residue_identity": [bytes([1])],
+                    "query_selected_residue_numbers": [[10]],
+                    "target_selected_residue_numbers": [[10]],
+                    "query_selected_residue_positions": [[1]],
+                    "target_selected_residue_positions": [[1]],
+                    "selected_residue_identity_bits": [bytes([1])],
                     "lddt": [1.0],
                 }
             ).to_parquet(output, index=False)
@@ -5768,6 +5812,46 @@ def test_interface_score_shards_retain_side_coverages_and_compact_export(tmp_pat
         index / "interface_annotation_table.parquet",
     )
     plan_protein_scoring(tmp_path)
+    _write_selected_residue_lookup(
+        tmp_path,
+        [
+            {
+                "entry_pdb_id": "1abc",
+                "chain_asym_id": "A",
+                "selected_residue_numbers": [1, 2, 3, 4],
+            },
+            {
+                "entry_pdb_id": "1abc",
+                "chain_asym_id": "B",
+                "selected_residue_numbers": [5, 6],
+            },
+            {
+                "entry_pdb_id": "1abc",
+                "chain_asym_id": "C",
+                "selected_residue_numbers": [7, 8],
+            },
+            {
+                "entry_pdb_id": "2def",
+                "chain_asym_id": "X",
+                "selected_residue_numbers": [10, 20],
+            },
+            {
+                "entry_pdb_id": "2def",
+                "chain_asym_id": "Y",
+                "selected_residue_numbers": [30, 40, 50],
+            },
+            {
+                "entry_pdb_id": "3ghi",
+                "chain_asym_id": "C",
+                "selected_residue_numbers": [1, 2, 3],
+            },
+            {
+                "entry_pdb_id": "3ghi",
+                "chain_asym_id": "D",
+                "selected_residue_numbers": [4, 5, 6],
+            },
+        ],
+    )
 
     mapped_rows = {
         "ab": {
@@ -5791,6 +5875,13 @@ def test_interface_score_shards_retain_side_coverages_and_compact_export(tmp_pat
         },
         "gh": {"foldseek": []},
     }
+    lookup = pd.read_parquet(tmp_path / tasks.ALIGNMENT_CHAIN_LOOKUP_RELATIVE)
+    ordered_numbers = {
+        (str(row.entry_pdb_id), str(row.chain_asym_id)): list(
+            row.selected_residue_numbers
+        )
+        for row in lookup.itertuples(index=False)
+    }
     for shard, backends in mapped_rows.items():
         for backend, values in backends.items():
             query_entry = {"ab": "1abc", "de": "2def", "gh": "3ghi"}[shard]
@@ -5805,9 +5896,22 @@ def test_interface_score_shards_retain_side_coverages_and_compact_export(tmp_pat
                     "tcov": 1.0,
                     "fident": 1.0,
                     "seqsim": 1.0,
-                    "query_selected_residue_numbers": query_residues,
-                    "target_selected_residue_numbers": target_residues,
-                    "selected_residue_identity": bytes([1] * len(query_residues)),
+                    "query_selected_residue_positions": [
+                        ordered_numbers[(query_entry, query_chain)].index(residue) + 1
+                        for residue in query_residues
+                    ],
+                    "target_selected_residue_positions": [
+                        0
+                        if residue < 0
+                        else ordered_numbers[(target_entry, target_chain)].index(
+                            residue
+                        )
+                        + 1
+                        for residue in target_residues
+                    ],
+                    "selected_residue_identity_bits": pack_residue_identities(
+                        [True] * len(query_residues)
+                    ),
                     **({"lddt": 1.0} if backend == "foldseek" else {}),
                 }
                 for (
@@ -5828,7 +5932,9 @@ def test_interface_score_shards_retain_side_coverages_and_compact_export(tmp_pat
             pq.write_table(
                 pa.Table.from_pylist(
                     rows,
-                    schema=schemas.mapped_alignment_schema(alignment_type=backend),
+                    schema=schemas.release_alignment_mapping_schema(
+                        alignment_type=backend
+                    ),
                 ),
                 path,
             )

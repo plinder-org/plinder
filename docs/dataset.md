@@ -214,11 +214,16 @@ exact assembly-chain instance selected for reconstruction.
 
 ### Protein alignments
 
-The release includes mapped Foldseek and MMseqs chain-level alignments grouped
-by query PDB code. Query and target coverage are retained alongside the chain
-and residue mappings used
-to calculate protein sequence and structure scores, ligand-pocket and
-protein-ligand interaction scores, and protein-interface scores.
+`exports/protein_similarity_scores/` contains the Foldseek and MMseqs
+chain-pair scores, including query and target coverage, sequence identity,
+sequence similarity, and Foldseek lDDT. Percentage values are stored as
+integers from 0 to 100.
+
+The optional `alignments/` files contain the residue mappings used for pocket,
+protein-ligand interaction, and protein-interface scores. Residues are stored
+as compact chain-relative positions into `alignment_chain_lookup`, and residue
+identity flags are bit-packed. Positions are one-based; a target position of
+zero means that no selected target residue was aligned.
 
 ### Ligand similarities
 

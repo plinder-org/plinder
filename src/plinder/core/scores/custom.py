@@ -23,6 +23,10 @@ import numpy as np
 import pandas as pd
 
 from plinder.core.release import PlinderRelease, _release_file, _require_file
+from plinder.core.scores.mapping import (
+    pack_residue_identities,
+    unpack_residue_identities,
+)
 
 LOG = logging.getLogger(__name__)
 CIF_SEARCH_BACKENDS = ("foldseek", "mmseqs")
@@ -1491,7 +1495,7 @@ def _selected_positions_for_custom_hit(
 
     aligned_query_numbers: list[int] = []
     aligned_target_numbers: list[int] = []
-    residue_identity = bytearray()
+    residue_identity: list[bool] = []
     for query_offset, query_number in sorted(query_candidates):
         if not 0 <= query_offset < len(query_alignment_positions):
             continue
@@ -1514,7 +1518,11 @@ def _selected_positions_for_custom_hit(
             int(target_number) if target_number is not None else -1
         )
         residue_identity.append(qaln[alignment_position] == taln[alignment_position])
-    return aligned_query_numbers, aligned_target_numbers, bytes(residue_identity)
+    return (
+        aligned_query_numbers,
+        aligned_target_numbers,
+        pack_residue_identities(residue_identity),
+    )
 
 
 def prepare_custom_score_alignments(
@@ -1611,7 +1619,7 @@ def prepare_custom_score_alignments(
         ]
         hits["query_selected_residue_numbers"] = [value[0] for value in selected]
         hits["target_selected_residue_numbers"] = [value[1] for value in selected]
-        hits["selected_residue_identity"] = [value[2] for value in selected]
+        hits["selected_residue_identity_bits"] = [value[2] for value in selected]
         hits["query_entry"] = [
             str(entries_by_structure[str(value)].pdb_id)
             for value in hits["structure_id"]
@@ -1717,7 +1725,7 @@ def _release_positions_for_custom_hit(
 
     query_numbers: list[int] = []
     custom_numbers: list[int] = []
-    residue_identity = bytearray()
+    residue_identity: list[bool] = []
     for target_offset, target_number in sorted(selected):
         if not 0 <= target_offset < len(target_alignment_positions):
             continue
@@ -1744,7 +1752,7 @@ def _release_positions_for_custom_hit(
         query_numbers.append(int(target_number))
         custom_numbers.append(int(custom_number) if custom_number is not None else -1)
         residue_identity.append(qaln[alignment_position] == taln[alignment_position])
-    return query_numbers, custom_numbers, bytes(residue_identity)
+    return query_numbers, custom_numbers, pack_residue_identities(residue_identity)
 
 
 def prepare_custom_protein_score_alignments(
@@ -1843,7 +1851,7 @@ def prepare_custom_protein_score_alignments(
         hits["tcov"] = custom_coverage
         hits["query_selected_residue_numbers"] = [value[0] for value in selected]
         hits["target_selected_residue_numbers"] = [value[1] for value in selected]
-        hits["selected_residue_identity"] = [value[2] for value in selected]
+        hits["selected_residue_identity_bits"] = [value[2] for value in selected]
         hits["seqsim"] = [
             get_sequence_similarity_helper(str(qaln).upper(), str(taln).upper())
             for qaln, taln in zip(hits["qaln"], hits["taln"], strict=True)
@@ -2271,12 +2279,14 @@ def write_custom_aligned_pocket_residues(
                     row.target_selected_residue_numbers,
                     column="target_selected_residue_numbers",
                 )
-                identities = bytes(row.selected_residue_identity)
-                if not (len(release_numbers) == len(custom_numbers) == len(identities)):
+                if len(release_numbers) != len(custom_numbers):
                     raise ValueError(
                         "custom pocket residue alignment columns have different "
                         f"lengths for {release_entry} chain {release_chain}"
                     )
+                identities = unpack_residue_identities(
+                    row.selected_residue_identity_bits, len(release_numbers)
+                )
                 for release_number, custom_number, identical in zip(
                     release_numbers,
                     custom_numbers,

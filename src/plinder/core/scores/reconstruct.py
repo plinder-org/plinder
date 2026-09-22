@@ -17,6 +17,7 @@ from plinder.core.scores.entries import (
     LigandView,
     load_entry_views,
 )
+from plinder.core.scores.mapping import expand_residue_positions
 from plinder.core.utils.log import setup_logger
 from plinder.core.utils.schemas import (
     INTERFACE_SIMILARITY_SCHEMA,
@@ -144,6 +145,7 @@ def _load_interface_alignments(
     alignment_paths: Mapping[str, Mapping[str, Path]],
     *,
     target_pdb_ids: set[str],
+    chain_lookup: Path,
 ) -> pd.DataFrame:
     """Load only compact residue maps needed by an interface subset."""
     columns = [
@@ -152,8 +154,8 @@ def _load_interface_alignments(
         "query_chain_mapped",
         "target_chain_mapped",
         "source",
-        "query_selected_residue_numbers",
-        "target_selected_residue_numbers",
+        "query_selected_residue_positions",
+        "target_selected_residue_positions",
     ]
     frames: list[pd.DataFrame] = []
     targets = sorted(target_pdb_ids)
@@ -170,9 +172,15 @@ def _load_interface_alignments(
             if frame.empty:
                 continue
             frame["source"] = alignment_type
-            frames.append(frame)
+            frames.append(expand_residue_positions(frame, chain_lookup=chain_lookup))
     if not frames:
-        return pd.DataFrame(columns=columns)
+        return pd.DataFrame(
+            columns=[
+                *columns[:5],
+                "query_selected_residue_numbers",
+                "target_selected_residue_numbers",
+            ]
+        )
     return pd.concat(frames, ignore_index=True)
 
 
@@ -456,6 +464,11 @@ def reconstruct_similarity_scores(
         query_ligand_ids=query_ligands,
         target_ligand_ids=target_ligands,
     )
+    alignment_chain_lookup = _release_file(
+        "alignment_chain_lookup",
+        data_dir=data_dir,
+        description="alignment chain lookup",
+    )
 
     # Imported lazily so ordinary score parquet queries do not import ingest
     # machinery or RDKit shape-alignment code.
@@ -466,6 +479,7 @@ def reconstruct_similarity_scores(
         source_to_full_db_file={},
         db_dir=release_root,
         scores_dir=release_root,
+        alignment_chain_lookup=alignment_chain_lookup,
         ligand_sdf_resolver=_canonical_ligand_resolver(
             release_root=release_root,
             data_dir=data_dir,
@@ -545,6 +559,11 @@ def reconstruct_interface_similarity_scores(
     alignments = _load_interface_alignments(
         alignment_paths,
         target_pdb_ids={interface.pdb_id for interface in target_interfaces.values()},
+        chain_lookup=_release_file(
+            "alignment_chain_lookup",
+            data_dir=data_dir,
+            description="alignment chain lookup",
+        ),
     )
     return calculate_interface_similarity_scores(
         alignments,

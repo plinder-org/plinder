@@ -810,7 +810,7 @@ def test_prepare_custom_score_alignments_maps_selected_residues(
     assert result.loc[0, "target_selected_residue_numbers"].tolist() == [
         target_numbers[0]
     ]
-    assert result.loc[0, "selected_residue_identity"] == b"\x01"
+    assert result.loc[0, "selected_residue_identity_bits"] == b"\x01"
     assert result.loc[0, "seqsim"] == pytest.approx(1.0)
 
 
@@ -873,7 +873,7 @@ def test_prepare_custom_protein_score_alignments_reverses_direction(
         target_numbers[0]
     ]
     assert result.loc[0, "target_selected_residue_numbers"].tolist() == [custom_number]
-    assert result.loc[0, "selected_residue_identity"] == b"\x01"
+    assert result.loc[0, "selected_residue_identity_bits"] == b"\x01"
     assert result.loc[0, "fident_qcov"] == pytest.approx(0.75)
 
 
@@ -939,7 +939,7 @@ def test_prepare_custom_score_alignments_maps_coordinate_fasta_positions(tmp_pat
 
     assert result.loc[0, "query_selected_residue_numbers"].tolist() == [40]
     assert result.loc[0, "target_selected_residue_numbers"].tolist() == [3]
-    assert result.loc[0, "selected_residue_identity"] == b"\x01"
+    assert result.loc[0, "selected_residue_identity_bits"] == b"\x01"
 
 
 def _scoring_entry(
@@ -1051,7 +1051,7 @@ def test_calculate_custom_similarity_scores_reuses_release_metrics(
                 "lddt": 0.9,
                 "query_selected_residue_numbers": [2],
                 "target_selected_residue_numbers": [20],
-                "selected_residue_identity": b"\x01",
+                "selected_residue_identity_bits": b"\x01",
             }
         ]
     ).to_parquet(alignment, index=False)
@@ -1107,7 +1107,7 @@ def test_calculate_custom_protein_scores_uses_plinder_pocket(
                 "lddt": 0.9,
                 "query_selected_residue_numbers": [20],
                 "target_selected_residue_numbers": [-1],
-                "selected_residue_identity": b"\x01",
+                "selected_residue_identity_bits": b"\x01",
             }
         ]
     ).to_parquet(alignment, index=False)
@@ -1166,7 +1166,7 @@ def test_calculate_custom_protein_scores_reads_alignments_once(tmp_path, monkeyp
                 "lddt": 0.9,
                 "query_selected_residue_numbers": [20],
                 "target_selected_residue_numbers": [-1],
-                "selected_residue_identity": b"\x01",
+                "selected_residue_identity_bits": b"\x01",
             }
             for pdb_id in release_entries
         ]
@@ -1231,7 +1231,7 @@ def test_write_custom_aligned_pocket_residues(tmp_path, monkeypatch):
                 "source": "foldseek",
                 "query_selected_residue_numbers": [20],
                 "target_selected_residue_numbers": [42],
-                "selected_residue_identity": b"\x01",
+                "selected_residue_identity_bits": b"\x01",
             },
             {
                 "query_entry": "1abc",
@@ -1241,7 +1241,7 @@ def test_write_custom_aligned_pocket_residues(tmp_path, monkeypatch):
                 "source": "foldseek",
                 "query_selected_residue_numbers": [30],
                 "target_selected_residue_numbers": [43],
-                "selected_residue_identity": b"\x00",
+                "selected_residue_identity_bits": b"\x00",
             },
         ]
     ).to_parquet(foldseek_alignment, index=False)
@@ -1256,7 +1256,7 @@ def test_write_custom_aligned_pocket_residues(tmp_path, monkeypatch):
                 "source": "mmseqs",
                 "query_selected_residue_numbers": [20],
                 "target_selected_residue_numbers": [142],
-                "selected_residue_identity": b"\x00",
+                "selected_residue_identity_bits": b"\x00",
             }
         ]
     ).to_parquet(mmseqs_alignment, index=False)

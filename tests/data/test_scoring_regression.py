@@ -134,6 +134,24 @@ def test_scoring_regression(scoring_fixture, tmp_path):
             data_dir / "index" / "interface_annotation_table.parquet"
         ),
     )
+    pd.DataFrame(
+        [
+            {
+                "entry_pdb_id": entry.pdb_id,
+                "chain_asym_id": chain_asym_id,
+                "selected_residue_numbers": [
+                    number for _, number in sorted(index_to_number.items())
+                ],
+            }
+            for entry in entries.values()
+            for chain_asym_id, index_to_number in (
+                entry.selected_index_to_number_per_chain.items()
+            )
+        ]
+    ).to_parquet(
+        data_dir / tasks.ALIGNMENT_CHAIN_LOOKUP_RELATIVE,
+        index=False,
+    )
 
     db_sources = get_db_sources(data_dir=data_dir, sub_databases=["holo"])
     scorer = Scorer(
@@ -182,9 +200,9 @@ def test_scoring_regression(scoring_fixture, tmp_path):
     for release_shard in (data_dir / "alignments").rglob("*.parquet"):
         release_columns = set(pd.read_parquet(release_shard).columns)
         assert {
-            "query_selected_residue_numbers",
-            "target_selected_residue_numbers",
-            "selected_residue_identity",
+            "query_selected_residue_positions",
+            "target_selected_residue_positions",
+            "selected_residue_identity_bits",
         }.issubset(release_columns)
         assert {
             "qrnum",
