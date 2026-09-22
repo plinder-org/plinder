@@ -7,6 +7,7 @@ TODO: The Metaflow pipeline still contains outdated V2 paths and has not been
 tested end-to-end for the current release.
 
 """
+
 from __future__ import annotations
 
 from metaflow import FlowSpec, Parameter, environment, kubernetes, retry, step
@@ -30,6 +31,7 @@ ENV = dict(
     )
 )
 DATABASES = dict(cpu=90, memory=82000)
+PROTEIN_SEARCH = dict(cpu=32, memory=82000)
 WORKSTATION = dict(cpu=14, memory=14000)
 WORKSTATION_MEM = dict(cpu=5, memory=48000)
 LARGE_MEM = dict(
@@ -67,7 +69,7 @@ class PlinderDataIngestFlow(FlowSpec):
         self.pipeline = IngestPipeline(conf=get_config(config_contents=contents))
         self.next(self.scatter_make_entries)
 
-    @kubernetes(**{**K8S, **DATABASES})
+    @kubernetes(**{**K8S, **PROTEIN_SEARCH})
     @environment(**ENV)
     @retry
     @step
@@ -130,7 +132,7 @@ class PlinderDataIngestFlow(FlowSpec):
         self.pipeline.join_collate_entries([None for _ in inputs])
         self.next(self.make_protein_sequence_clusters)
 
-    @kubernetes(**{**K8S, **DATABASES})
+    @kubernetes(**{**K8S, **PROTEIN_SEARCH})
     @environment(**ENV)
     @retry
     @step
@@ -138,7 +140,7 @@ class PlinderDataIngestFlow(FlowSpec):
         self.pipeline.make_protein_sequence_clusters()
         self.next(self.make_protein_structure_clusters)
 
-    @kubernetes(**{**K8S, **DATABASES})
+    @kubernetes(**{**K8S, **PROTEIN_SEARCH})
     @environment(**ENV)
     @retry
     @step
@@ -261,7 +263,7 @@ class PlinderDataIngestFlow(FlowSpec):
         self.pipeline.make_ccd_ligand_dbs(threads=WORKSTATION["cpu"])
         self.next(self.make_sub_dbs)
 
-    @kubernetes(**{**K8S, **DATABASES})
+    @kubernetes(**{**K8S, **PROTEIN_SEARCH})
     @environment(**ENV)
     @retry
     @step
@@ -277,7 +279,7 @@ class PlinderDataIngestFlow(FlowSpec):
         self.chunks = self.pipeline.scatter_run_batch_searches()
         self.next(self.run_batch_searches, foreach="chunks")
 
-    @kubernetes(**{**K8S, **DATABASES})
+    @kubernetes(**{**K8S, **PROTEIN_SEARCH})
     @environment(**ENV)
     @retry
     @step

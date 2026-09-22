@@ -6611,6 +6611,10 @@ def test_ingest_configs_use_current_schema_and_stages():
         assert cfg.data.plinder_release_number == "1"
         if path.name == "make_protein_scores.yaml":
             assert cfg.scorer.sub_databases == ["holo", "apo"]
+            assert cfg.flow.make_dbs_cpu == 32
+            assert cfg.flow.make_sub_dbs_cpu == 32
+            assert cfg.flow.make_scorers_cpu == 32
+            assert cfg.flow.protein_clustering_cpu == 32
             assert cfg.scorer.minimum_thresholds[
                 "protein_lddt_weighted_sum"
             ] == pytest.approx(0.2)
