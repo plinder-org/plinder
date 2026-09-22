@@ -7,7 +7,7 @@ import re
 import shutil
 import typing as ty
 from collections import Counter, defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import cached_property
 from itertools import combinations
 from pathlib import Path
@@ -1797,10 +1797,9 @@ class Entry(DocBaseModel):
         that connect to a proper primary ligand.  The biounit must carry a
         ``legacy_chain_id`` annotation.
 
-        The assembly is tessellated once with Voronota-LT so that ligands and
-        protein interfaces read their chain-pair contact areas from the same
-        exact computation; assemblies above ``tessellation_atom_limit`` heavy,
-        non-water atoms skip it and are recorded in
+        Assemblies with a retained interface or a neighboring-residue ligand
+        pocket are tessellated once with Voronota-LT. Assemblies above
+        ``tessellation_atom_limit`` heavy, non-water atoms skip it and are recorded in
         ``failed_contact_area_biounit_ids``.
         """
         self.biounit_chain_ids[biounit_id] = sorted(
@@ -1833,18 +1832,6 @@ class Entry(DocBaseModel):
             if spatial_radii
             else None
         )
-        # Tessellate only when something consumes the areas: interfaces, or
-        # ligands that will actually be collected.
-        needs_contact_areas = include_interfaces or (
-            include_ligands and bool(ligand_classes.primary_asym_ids)
-        )
-        chain_pair_areas = (
-            self._biounit_chain_pair_contact_areas(
-                biounit, biounit_id, atom_limit=tessellation_atom_limit
-            )
-            if needs_contact_areas
-            else None
-        )
         if include_ligands:
             assert spatial_index is not None
             self._record_biounit_ligand_contact_counts(
@@ -1855,6 +1842,7 @@ class Entry(DocBaseModel):
                 known_artifact_asym_ids=ligand_classes.known_artifact_asym_ids,
                 contact_threshold=neighboring_residue_threshold,
             )
+        interfaces: list[ProteinInterface] = []
         if include_interfaces:
             assert spatial_index is not None
             protein_contacts = find_protein_chain_contacts(
@@ -1867,96 +1855,120 @@ class Entry(DocBaseModel):
                 biounit_id,
                 protein_contacts,
             )
-            self.interfaces.extend(
-                detect_protein_interfaces(
-                    biounit,
-                    pdb_id=self.pdb_id,
-                    biounit_id=biounit_id,
-                    chains=self.chains,
-                    contact_radius=interface_contact_radius,
-                    min_chain_length=interface_min_chain_length,
-                    min_interface_residues=interface_min_residues,
-                    annotate_prodigy=interface_annotate_prodigy,
-                    spatial_index=spatial_index,
-                    chain_pair_contact_areas=chain_pair_areas,
-                    chain_contacts=protein_contacts,
-                )
-            )
-        if not include_ligands or not ligand_classes.primary_asym_ids:
-            return {}
-        assert spatial_index is not None
-        water_chains = get_water_chain_ids(biounit)
-
-        def collect(**selection: set[str] | None) -> dict[str, Ligand]:
-            return self._collect_ligands_from_biounit(
+            interfaces = detect_protein_interfaces(
                 biounit,
-                biounit_id,
-                interaction_search_threshold,
-                neighboring_residue_threshold,
-                neighboring_ligand_threshold,
-                data_dir,
-                ligand_smiles_dict=ligand_smiles_dict,
-                ligand_ccd_code_dict=ligand_ccd_code_dict,
-                water_chains=water_chains,
+                pdb_id=self.pdb_id,
+                biounit_id=biounit_id,
+                chains=self.chains,
+                contact_radius=interface_contact_radius,
+                min_chain_length=interface_min_chain_length,
+                min_interface_residues=interface_min_residues,
+                annotate_prodigy=interface_annotate_prodigy,
                 spatial_index=spatial_index,
-                chain_pair_contact_areas=chain_pair_areas,
-                **selection,
+                chain_contacts=protein_contacts,
             )
+        ligands: dict[str, Ligand] = {}
+        if include_ligands and ligand_classes.primary_asym_ids:
+            assert spatial_index is not None
+            water_chains = get_water_chain_ids(biounit)
 
-        primary_ligands = collect(ligand_asym_ids=ligand_classes.primary_asym_ids)
-        proper_primary_ligands = [
-            ligand for ligand in primary_ligands.values() if ligand.is_proper
-        ]
-        if not proper_primary_ligands:
-            return primary_ligands
+            def collect(**selection: set[str] | None) -> dict[str, Ligand]:
+                return self._collect_ligands_from_biounit(
+                    biounit,
+                    biounit_id,
+                    interaction_search_threshold,
+                    neighboring_residue_threshold,
+                    neighboring_ligand_threshold,
+                    data_dir,
+                    ligand_smiles_dict=ligand_smiles_dict,
+                    ligand_ccd_code_dict=ligand_ccd_code_dict,
+                    water_chains=water_chains,
+                    spatial_index=spatial_index,
+                    **selection,
+                )
 
-        monoatomic_ion_asym_ids = ligand_classes.monoatomic_ion_asym_ids
-        known_artifact_asym_ids = ligand_classes.known_artifact_asym_ids
-        ion_instance_chains = {
-            chain
-            for chain in spatial_index.chain_ids
-            if "." in chain
-            and chain.split(".", maxsplit=1)[1] in monoatomic_ion_asym_ids
-        }
-        retained_ion_chains = self._connected_deferred_ligand_chains(
-            biounit,
-            spatial_index,
-            proper_primary_ligands,
-            ion_instance_chains,
-            min_shared_pocket_members=min_shared_pocket_members,
-            neighboring_residue_threshold=neighboring_residue_threshold,
-            interaction_search_threshold=interaction_search_threshold,
-        )
-        ion_ligands = collect(ligand_instance_chains=retained_ion_chains)
-        non_artifact_ligands = [
-            ligand
-            for ligand in (*primary_ligands.values(), *ion_ligands.values())
-            if not ligand.is_artifact
-        ]
-        referenced_artifact_chains = {
-            chain
-            for ligand in non_artifact_ligands
-            for chain in (ligand.neighboring_ligands + ligand.interacting_ligands)
-            if "." in chain
-            and chain.split(".", maxsplit=1)[1] in known_artifact_asym_ids
-        }
-        # Ligand interaction detection is not guaranteed to be symmetric
-        # for short polymer ligands.  Include every known artifact inside
-        # the interaction search radius as a conservative superset; the
-        # exact set_systems() graph drops any false-positive candidates.
-        for ligand in non_artifact_ligands:
-            ligand_indices = spatial_index.atom_indices_for_chain(ligand.instance_chain)
-            nearby_indices = spatial_index.atom_indices_near(
-                biounit.coord[ligand_indices], interaction_search_threshold
+            primary_ligands = collect(ligand_asym_ids=ligand_classes.primary_asym_ids)
+            ligands = primary_ligands
+            proper_primary_ligands = [
+                ligand for ligand in primary_ligands.values() if ligand.is_proper
+            ]
+            if proper_primary_ligands:
+                monoatomic_ion_asym_ids = ligand_classes.monoatomic_ion_asym_ids
+                known_artifact_asym_ids = ligand_classes.known_artifact_asym_ids
+                ion_instance_chains = {
+                    chain
+                    for chain in spatial_index.chain_ids
+                    if "." in chain
+                    and chain.split(".", maxsplit=1)[1] in monoatomic_ion_asym_ids
+                }
+                retained_ion_chains = self._connected_deferred_ligand_chains(
+                    biounit,
+                    spatial_index,
+                    proper_primary_ligands,
+                    ion_instance_chains,
+                    min_shared_pocket_members=min_shared_pocket_members,
+                    neighboring_residue_threshold=neighboring_residue_threshold,
+                    interaction_search_threshold=interaction_search_threshold,
+                )
+                ion_ligands = collect(ligand_instance_chains=retained_ion_chains)
+                non_artifact_ligands = [
+                    ligand
+                    for ligand in (*primary_ligands.values(), *ion_ligands.values())
+                    if not ligand.is_artifact
+                ]
+                referenced_artifact_chains = {
+                    chain
+                    for ligand in non_artifact_ligands
+                    for chain in (
+                        ligand.neighboring_ligands + ligand.interacting_ligands
+                    )
+                    if "." in chain
+                    and chain.split(".", maxsplit=1)[1] in known_artifact_asym_ids
+                }
+                # Ligand interaction detection is not guaranteed to be symmetric
+                # for short polymer ligands. Include every known artifact inside
+                # the interaction search radius; set_systems() drops false positives.
+                for ligand in non_artifact_ligands:
+                    ligand_indices = spatial_index.atom_indices_for_chain(
+                        ligand.instance_chain
+                    )
+                    nearby_indices = spatial_index.atom_indices_near(
+                        biounit.coord[ligand_indices], interaction_search_threshold
+                    )
+                    referenced_artifact_chains.update(
+                        str(chain)
+                        for chain in np.unique(biounit.chain_id[nearby_indices])
+                        if "." in str(chain)
+                        and str(chain).split(".", maxsplit=1)[1]
+                        in known_artifact_asym_ids
+                    )
+                artifact_ligands = collect(
+                    ligand_instance_chains=referenced_artifact_chains
+                )
+                ligands = {**primary_ligands, **ion_ligands, **artifact_ligands}
+
+        if interfaces or any(
+            ligand.neighboring_residues for ligand in ligands.values()
+        ):
+            chain_pair_areas = self._biounit_chain_pair_contact_areas(
+                biounit, biounit_id, atom_limit=tessellation_atom_limit
             )
-            referenced_artifact_chains.update(
-                str(chain)
-                for chain in np.unique(biounit.chain_id[nearby_indices])
-                if "." in str(chain)
-                and str(chain).split(".", maxsplit=1)[1] in known_artifact_asym_ids
-            )
-        artifact_ligands = collect(ligand_instance_chains=referenced_artifact_chains)
-        return {**primary_ligands, **ion_ligands, **artifact_ligands}
+            if chain_pair_areas is not None:
+                for ligand in ligands.values():
+                    ligand.set_contact_areas(chain_pair_areas, self.ligand_like_chains)
+                interfaces = [
+                    replace(
+                        interface,
+                        contact_area=float(
+                            chain_pair_areas.get(
+                                (interface.chain_1, interface.chain_2), 0.0
+                            )
+                        ),
+                    )
+                    for interface in interfaces
+                ]
+        self.interfaces.extend(interfaces)
+        return ligands
 
     @classmethod
     def from_cif_file(

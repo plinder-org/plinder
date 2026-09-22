@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-
 from plinder.data.annotations.aggregate_annotations import Entry
 from plinder.data.annotations.cif_utils import build_biounit, read_mmcif_file
 from plinder.data.annotations.contact_areas import (
@@ -169,6 +168,45 @@ def test_protein_interface_reports_its_contact_area(test_dir):
     assert table.column("interface_contact_area").to_pylist() == [
         interface.contact_area
     ]
+
+
+def test_no_retained_interface_skips_tessellation(test_dir, monkeypatch):
+    from plinder.data.annotations import aggregate_annotations
+
+    def explode(_atoms):
+        raise AssertionError("no retained interface needs contact areas")
+
+    monkeypatch.setattr(aggregate_annotations, "chain_pair_contact_areas", explode)
+    entry = Entry.from_custom_cif_file(
+        pdb_id="custom_7cma",
+        cif_file=test_dir / CIF_7CMA,
+        structure_mode="as_is",
+        include_ligands=False,
+        include_interfaces=True,
+        interface_min_residues=1000,
+        interface_annotate_prodigy=False,
+    )
+
+    assert entry.interfaces == []
+    assert entry.failed_contact_area_biounit_ids == []
+    assert entry.biounit_protein_contact_counts
+
+
+@pytest.mark.usefixtures("mock_alternative_datasets")
+def test_no_neighboring_ligand_pocket_skips_tessellation(test_dir, monkeypatch):
+    from plinder.data.annotations import aggregate_annotations
+
+    def explode(_atoms):
+        raise AssertionError("no neighboring-residue pocket needs contact areas")
+
+    monkeypatch.setattr(aggregate_annotations, "chain_pair_contact_areas", explode)
+    entry = Entry.from_cif_file(
+        test_dir / CIF_1QZ5,
+        include_interfaces=False,
+        neighboring_residue_threshold=0.1,
+    )
+
+    assert entry.failed_contact_area_biounit_ids == []
 
 
 @pytest.mark.usefixtures("mock_alternative_datasets")

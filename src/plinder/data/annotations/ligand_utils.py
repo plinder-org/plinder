@@ -1962,17 +1962,8 @@ class Ligand(DocBaseModel):
         ligand.covalent_linkages = covalent_linkages
         ligand.is_covalent = len(ligand.covalent_linkages) > 0
 
-        # Contact areas from the assembly-wide tessellation: every partner chain
-        # keeps its own area; the receptor total excludes ligand-like partners.
         if chain_pair_contact_areas is not None:
-            ligand.chain_contact_areas = partner_contact_areas(
-                chain_pair_contact_areas, set(member_instance_chains)
-            )
-            ligand.contact_area = sum(
-                area
-                for chain_id, area in ligand.chain_contact_areas.items()
-                if chain_id.split(".", maxsplit=1)[-1] not in ligand_like_chains
-            )
+            ligand.set_contact_areas(chain_pair_contact_areas, ligand_like_chains)
 
         # Find neighboring ligand chains
         near_lig_indices = spatial_index.atom_indices_near(
@@ -2025,6 +2016,21 @@ class Ligand(DocBaseModel):
             ligand.unique_ccd_code = ligand.ccd_code
 
         return ligand
+
+    def set_contact_areas(
+        self,
+        chain_pair_contact_areas: ty.Mapping[tuple[str, str], float],
+        ligand_like_chains: ty.Collection[str],
+    ) -> None:
+        """Assign partner and receptor areas from the assembly tessellation."""
+        self.chain_contact_areas = partner_contact_areas(
+            chain_pair_contact_areas, set(self._members)
+        )
+        self.contact_area = sum(
+            area
+            for chain_id, area in self.chain_contact_areas.items()
+            if chain_id.split(".", maxsplit=1)[-1] not in ligand_like_chains
+        )
 
     @property
     def _members(self) -> dict[str, list[int]]:
