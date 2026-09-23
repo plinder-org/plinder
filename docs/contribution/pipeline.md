@@ -26,7 +26,8 @@ end-to-end pipeline through task wrappers in `plinder.data.pipeline.tasks`.
   - Side effects include writing the following files:
     - `dbs/cofactors/cofactors.json`
     - `dbs/components/components.parquet`
-    - `dbs/affinity/affinity.json`
+    - `dbs/affinity/measurements.parquet`
+    - `dbs/affinity/candidates.parquet`
     - `dbs/seqres/pdb_seqres.txt.gz`
 
 ## Planning weekly updates

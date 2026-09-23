@@ -17,6 +17,7 @@ import pyarrow.parquet as pq
 from omegaconf import OmegaConf
 
 from plinder.core.utils.files import write_json_atomic
+from plinder.data.annotations.affinity import publish_affinity_tables
 from plinder.data.pipeline import collate, config
 from plinder.data.pipeline.collate import ENTRY_TABLES, entry_table_paths
 from plinder.data.pipeline.ingest import REQUIRED_REFERENCE_FILES, ingest_pdb_batch
@@ -146,6 +147,10 @@ def apply_entry_update(
     marker_path = output_dir / "entry_update.json"
     prepared_paths = {
         **entry_table_paths(output_dir),
+        "ligand_affinity": output_dir / "index" / "ligand_affinity.parquet",
+        "bindingdb_measurements": output_dir
+        / "index"
+        / "bindingdb_measurements.parquet",
         "collation": output_dir / "index" / collate.FINAL_MARKER_NAME,
     }
     if output_dir.exists():
@@ -250,6 +255,7 @@ def apply_entry_update(
         entry_table_paths(output_dir),
         output_dir / "index" / collate.FINAL_MARKER_NAME,
     )
+    publish_affinity_tables(output_dir, affinity_dir=base / "dbs" / "affinity")
     report.update(
         status=collate.REPAIR_REQUIRED_STATUS,
         incoming_entries=str(incoming) if len(changed) else None,

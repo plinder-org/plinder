@@ -9,7 +9,6 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-
 from plinder.data.annotations.interface_utils import (
     INTERFACE_ANNOTATION_SCHEMA,
     MIN_INTERFACE_RESIDUES_METADATA_KEY,
@@ -216,7 +215,8 @@ def test_reference_data_check_reports_every_missing_file(tmp_path: Path) -> None
 
     message = str(exc_info.value)
     assert "cofactors.json" in message
-    assert "affinity.json" in message
+    assert "candidates.parquet" in message
+    assert "measurements.parquet" in message
 
 
 def test_ingest_one_pdb_writes_entry_outputs_and_metrics(

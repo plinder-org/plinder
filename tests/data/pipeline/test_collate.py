@@ -12,7 +12,6 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-
 from plinder.data.annotations.interface_utils import (
     INTERFACE_ANNOTATION_SCHEMA,
     MIN_INTERFACE_RESIDUES_METADATA_KEY,
@@ -64,6 +63,8 @@ def _write_entry(
             "system_pocket_validation_average_rsr": 0.2,
             "ligand_id": ligand["ligand_id"],
             "ligand_id_legacy": ligand["ligand_id"],
+            "ligand_ccd_code": ligand["ccd"],
+            "ligand_protein_chains_asym_id": ["1.A"],
             "ligand_smiles": "C",
             "ligand_rdkit_canonical_smiles": "C",
             "ligand_unique_ccd_code": ligand["ccd"],
@@ -236,7 +237,15 @@ def entry_update_case(tmp_path, monkeypatch):
     for relative in update_entries.REQUIRED_REFERENCE_FILES:
         path = base / relative
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("{}")
+        if path.suffix == ".parquet":
+            columns = (
+                ["pdbid_ligid", "target_sequence", "endpoint", "pchembl", "count"]
+                if path.name == "candidates.parquet"
+                else ["source_row", "pdb_id", "ligand_het_id", "endpoint"]
+            )
+            pd.DataFrame(columns=columns).to_parquet(path, index=False)
+        else:
+            path.write_text("{}")
     root = tmp_path / "nextgen"
     (root / "holdings").mkdir(parents=True)
     revisions = {"1abc": (2, 0), "3ghi": (1, 0), "4jkl": (1, 0)}

@@ -19,13 +19,6 @@ Filter: TypeAlias = tuple[str, str, Any]
 Filters: TypeAlias = list[Filter | list[Filter]] | None
 JoinKeys: TypeAlias = tuple[tuple[str, str], ...]
 
-DISABLED_ANNOTATION_COLUMNS = frozenset(
-    {
-        "system_has_binding_affinity",
-        "ligand_binding_affinity",
-    }
-)
-
 
 def _is_repeated_entry_column(column: str) -> bool:
     return column.startswith("entry_") and column != "entry_pdb_id"
@@ -40,6 +33,7 @@ TABLE_JOINS: dict[str, dict[str, JoinKeys]] = {
         "entry_sources": (("entry_pdb_id", "entry_pdb_id"),),
         "ligand_pocket_membership": (("ligand_id", "ligand_id"),),
         "ligand_clusters": (("ligand_id", "ligand_id"),),
+        "ligand_affinity": (("ligand_id", "ligand_id"),),
     },
     "entry_chains": {
         "alignment_chain_lookup": (
@@ -76,6 +70,7 @@ TABLE_JOINS: dict[str, dict[str, JoinKeys]] = {
         "annotation": (("ligand_id", "ligand_id"),),
         "system_validation": (("system_id", "system_id"),),
         "ligand_clusters": (("ligand_id", "ligand_id"),),
+        "ligand_affinity": (("ligand_id", "ligand_id"),),
     },
     "ligand_pocket_residues": {
         "annotation": (("ligand_id", "ligand_id"),),
@@ -88,8 +83,13 @@ TABLE_JOINS: dict[str, dict[str, JoinKeys]] = {
         "entry_sources": (("entry_pdb_id", "entry_pdb_id"),),
         "ligand_pocket_membership": (("ligand_id", "ligand_id"),),
         "ligand_clusters": (("ligand_id", "ligand_id"),),
+        "ligand_affinity": (("ligand_id", "ligand_id"),),
     },
     "ligand_clusters": {
+        "annotation": (("ligand_id", "ligand_id"),),
+        "ligand_affinity": (("ligand_id", "ligand_id"),),
+    },
+    "ligand_affinity": {
         "annotation": (("ligand_id", "ligand_id"),),
     },
     "interface_membership": {
@@ -259,13 +259,7 @@ def _visible_schema_columns(
         name
         for name in schema
         if name not in keys
-        and (
-            table_name != "annotation"
-            or (
-                name not in DISABLED_ANNOTATION_COLUMNS
-                and not _is_repeated_entry_column(name)
-            )
-        )
+        and (table_name != "annotation" or not _is_repeated_entry_column(name))
     ]
 
 
@@ -323,18 +317,6 @@ def query_table(
     requested_filter_columns = _filter_columns(filters)
     requested_columns = set(columns or [])
     requested_columns.discard("*")
-    disabled_requested = DISABLED_ANNOTATION_COLUMNS.intersection(
-        requested_columns | requested_filter_columns
-    )
-    annotation_is_available = table_name == "annotation" or (
-        "annotation" in selected_joins or "annotation" in allowed_joins
-    )
-    if annotation_is_available and disabled_requested:
-        raise ValueError(
-            "binding_affinity columns are disabled in the current dataset: "
-            f"{sorted(disabled_requested)}"
-        )
-
     paths = {table_name: release.fetch(str(RELEASE_TABLES[table_name]["artifact"]))}
     schemas = {table_name: _schema_names(paths[table_name])}
     output_order = _visible_schema_columns(table_name, schemas[table_name])

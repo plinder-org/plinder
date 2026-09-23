@@ -1,133 +1,163 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
+import re
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 import pandas as pd
 
+AFFINITY_RECORD_COLUMNS = [
+    "pdbid_ligid",
+    "pdb_id",
+    "ligand_het_id",
+    "reactant_set_id",
+    "monomer_id",
+    "curation_source",
+    "article_doi",
+    "bindingdb_entry_doi",
+    "source_row",
+    "target_sequences",
+    "target_sequence",
+    "endpoint",
+    "raw_value",
+    "relation",
+    "value_nm",
+    "pchembl",
+]
 
-def transform_bindingdb_affinity_data(
+
+def transform_bindingdb_measurements(
     *, raw_affinity_path: Path, chunksize: int = 100_000
 ) -> pd.DataFrame:
-    """Parse BindingDB TSV into a per-(PDB, ligand) affinity table.
+    """Keep each Ki/Kd measurement linked to its source row and target.
 
-    Each row maps a ``pdbid_ligid`` key (e.g. ``"1ABC_ATP"``) to a
-    median pChEMBL value derived from Ki/Kd measurements, plus the
-    BindingDB target sequence for downstream validation.
-
-    The BindingDB field ``PDB ID(s) for Ligand-Target Complex`` lists
-    PDB IDs matched at 85% sequence identity, which can assign affinity
-    values to the wrong complex (see `#94`_).  To guard against this,
-    the target sequence is preserved so that callers can verify it
-    against the actual PDB chain sequence before accepting the value.
-
-    .. _#94: https://github.com/plinder-org/plinder/issues/94
-
-    Parameters
-    ----------
-    raw_affinity_path : Path
-        Path to the BindingDB TSV file.
-    chunksize : int, default=100000
-        Number of source rows processed at once. Rows without a PDB/ligand
-        mapping are discarded before chunks are combined.
-
-    Returns
-    -------
-    pd.DataFrame
-        Columns: ``pdbid_ligid``, ``pchembl``, ``target_sequence``.
+    PDB/CCD cross-references are candidate matches, not evidence that an
+    assay measured a particular deposited complex. ``relation`` applies to
+    the logarithmic pKi/pKd value, so a raw ``Ki > 100 nM`` is ``pKi < 7``.
     """
-
-    def calc_pchembl(affinity: float) -> Any:
-        # pchembl = -log10(affinity_M); naming follows the ChEMBL convention
-        # for the log-transformed value, NOT the ChEMBL database itself.
-        affinity = affinity * 10**-9
-        if affinity > 0:
-            return -1.0 * np.log10(affinity)
-        else:
-            return np.nan
-
-    # BindingDB renamed the target sequence column across releases:
-    #   old (<=2024): "BindingDB Target Chain  Sequence" (double space)
-    #   new (>=2025): "BindingDB Target Chain Sequence 1" (numbered)
-    _SEQ_COL_NEW = "BindingDB Target Chain Sequence 1"
-    _SEQ_COL_OLD = "BindingDB Target Chain  Sequence"
-    header = set(pd.read_csv(raw_affinity_path, sep="\t", nrows=0).columns)
-    if _SEQ_COL_NEW in header:
-        seq_col = _SEQ_COL_NEW
-    elif _SEQ_COL_OLD in header:
-        seq_col = _SEQ_COL_OLD
-    else:
-        raise ValueError(
-            "BindingDB TSV is missing target sequence column. "
-            f"Expected '{_SEQ_COL_NEW}' or '{_SEQ_COL_OLD}'. "
-            "Required for target sequence validation (#94)."
-        )
-    cols = [
+    header = pd.read_csv(raw_affinity_path, sep="\t", nrows=0).columns.tolist()
+    sequence_columns = [
+        column
+        for column in header
+        if re.fullmatch(r"BindingDB Target Chain\s+Sequence(?: \d+)?", column)
+    ]
+    if not sequence_columns:
+        raise ValueError("BindingDB TSV has no target-chain sequence columns")
+    required = [
         "Ligand HET ID in PDB",
         "PDB ID(s) for Ligand-Target Complex",
         "Ki (nM)",
         "Kd (nM)",
-        "EC50 (nM)",
-        seq_col,
     ]
-    parts = []
-    chunks = pd.read_csv(
+    missing = sorted(set(required).difference(header))
+    if missing:
+        raise ValueError(f"BindingDB TSV is missing columns: {missing}")
+    reactant_column = "BindingDB Reactant_set_id"
+    monomer_column = "BindingDB MonomerID"
+    source_columns = {
+        "curation_source": "Curation/DataSource",
+        "article_doi": "Article DOI",
+        "bindingdb_entry_doi": "BindingDB Entry DOI",
+    }
+    columns = required + sequence_columns
+    if reactant_column in header:
+        columns.append(reactant_column)
+    if monomer_column in header:
+        columns.append(monomer_column)
+    columns.extend(column for column in source_columns.values() if column in header)
+
+    parts: list[pd.DataFrame] = []
+    for chunk in pd.read_csv(
         raw_affinity_path,
         sep="\t",
-        usecols=cols,
-        dtype={
-            "Ligand HET ID in PDB": "string",
-            "PDB ID(s) for Ligand-Target Complex": "string",
-        },
-        low_memory=False,
+        usecols=columns,
+        dtype="string",
         chunksize=chunksize,
-    )
-    for chunk in chunks:
-        chunk = chunk[
-            chunk["Ligand HET ID in PDB"].notna()
-            & chunk["PDB ID(s) for Ligand-Target Complex"].notna()
+    ):
+        chunk = chunk.loc[
+            chunk[required[0]].notna() & chunk[required[1]].notna()
         ].copy()
         if chunk.empty:
             continue
-        chunk["pchembl"] = (
-            chunk[["Ki (nM)", "Kd (nM)"]]
-            .apply(set, axis=1)
-            .apply(lambda x: [i for i in x if str(i) != "nan"])
+        chunk["source_row"] = chunk.index
+        chunk["target_sequences"] = chunk[sequence_columns].apply(
+            lambda row: [
+                value.strip().upper()
+                for value in row
+                if isinstance(value, str) and value.strip()
+            ],
+            axis=1,
         )
-        chunk = chunk[chunk["pchembl"].apply(lambda x: x != [])].copy()
-        if chunk.empty:
-            continue
-        chunk["pchembl"] = chunk["pchembl"].apply(
-            lambda x: calc_pchembl(float(str(x[0]).replace(">", "").replace("<", "")))
+        chunk["target_sequence"] = chunk["target_sequences"].map(
+            lambda values: values[0] if len(values) == 1 else None
         )
-        chunk.rename(columns={seq_col: "target_sequence"}, inplace=True)
-        chunk = chunk[
-            [
-                "PDB ID(s) for Ligand-Target Complex",
-                "Ligand HET ID in PDB",
-                "target_sequence",
-                "pchembl",
-            ]
-        ].drop_duplicates()
-        chunk["pdb_id"] = chunk["PDB ID(s) for Ligand-Target Complex"].str.split(",")
-        chunk = chunk.explode("pdb_id").drop_duplicates()
-        chunk["pdbid_ligid"] = (
-            chunk["pdb_id"].str.strip().str.upper()
-            + "_"
-            + chunk["Ligand HET ID in PDB"].str.strip()
+        chunk["reactant_set_id"] = (
+            chunk[reactant_column] if reactant_column in chunk else pd.NA
         )
-        parts.append(
-            chunk[["pdbid_ligid", "pchembl", "target_sequence"]].drop_duplicates()
+        chunk["monomer_id"] = (
+            chunk[monomer_column] if monomer_column in chunk else pd.NA
         )
+        for output, source in source_columns.items():
+            chunk[output] = chunk[source] if source in chunk else pd.NA
+        for endpoint in ("Ki", "Kd"):
+            source = f"{endpoint} (nM)"
+            records = chunk.loc[chunk[source].notna()].copy()
+            records["raw_value"] = records[source].str.strip()
+            records = records.loc[records["raw_value"].ne("")].copy()
+            if records.empty:
+                continue
+            parsed = records["raw_value"].str.extract(
+                r"^(?P<bound><=|>=|<|>|=)?\s*"
+                r"(?P<value>(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][+-]?\d+)?)$"
+            )
+            records["value_nm"] = pd.to_numeric(parsed["value"], errors="coerce")
+            records.loc[records["value_nm"] <= 0, "value_nm"] = np.nan
+            records["relation"] = (
+                parsed["bound"]
+                .fillna("=")
+                .map({"=": "=", "<": ">", "<=": ">=", ">": "<", ">=": "<="})
+            )
+            records.loc[records["value_nm"].isna(), "relation"] = None
+            with np.errstate(divide="ignore", invalid="ignore"):
+                records["pchembl"] = 9 - np.log10(records["value_nm"])
+            records["endpoint"] = endpoint
+            records["pdb_id"] = records[required[1]].str.split(r"[,;]")
+            records = records.explode("pdb_id")
+            records["pdb_id"] = records["pdb_id"].str.strip().str.upper()
+            records = records.loc[records["pdb_id"].str.fullmatch(r"[A-Z0-9]{4}")]
+            records["ligand_het_id"] = records[required[0]].str.strip().str.upper()
+            records["pdbid_ligid"] = records["pdb_id"] + "_" + records["ligand_het_id"]
+            parts.append(records[AFFINITY_RECORD_COLUMNS])
 
     if not parts:
-        return pd.DataFrame(columns=["pdbid_ligid", "pchembl", "target_sequence"])
-    df = pd.concat(parts, ignore_index=True).drop_duplicates()
-
-    # Per pdbid_ligid: take median pchembl, keep first non-null target sequence
-    grouped = df.groupby("pdbid_ligid").agg(
-        pchembl=("pchembl", "median"),
-        target_sequence=("target_sequence", "first"),
+        return pd.DataFrame(columns=AFFINITY_RECORD_COLUMNS)
+    return pd.concat(parts, ignore_index=True).drop_duplicates(
+        ["source_row", "pdb_id", "ligand_het_id", "endpoint"]
     )
-    return grouped.reset_index()
+
+
+def strict_bindingdb_candidates(records: pd.DataFrame) -> pd.DataFrame:
+    """Summarize only comparable, uncensored measurements per target/endpoint."""
+    columns = ["pdbid_ligid", "target_sequence", "endpoint", "pchembl", "count"]
+    if records.empty:
+        return pd.DataFrame(columns=columns)
+    # Multi-chain or missing-target records cannot be checked against one
+    # receptor sequence; do not let them disappear before the ambiguity test.
+    unusable_keys = records.loc[
+        records["target_sequence"].isna(), "pdbid_ligid"
+    ].unique()
+    eligible = records.loc[~records["pdbid_ligid"].isin(unusable_keys)].copy()
+    if eligible.empty:
+        return pd.DataFrame(columns=columns)
+    eligible["valid"] = (
+        eligible["relation"].eq("=") & eligible["pchembl"].notna()
+    ).fillna(False)
+    grouped = eligible.groupby(["pdbid_ligid", "target_sequence"], sort=False).agg(
+        endpoint=("endpoint", "first"),
+        endpoint_count=("endpoint", "nunique"),
+        all_valid=("valid", "all"),
+        pchembl=("pchembl", "median"),
+        count=("pchembl", "size"),
+    )
+    grouped = grouped.loc[grouped["all_valid"] & grouped["endpoint_count"].eq(1)]
+    return grouped.reset_index()[columns]

@@ -20,6 +20,7 @@ from rdkit.Chem.rdchem import Mol
 from plinder.core.utils.config import get_config
 from plinder.core.utils.constants import BASE_DIR
 from plinder.core.utils.sanitize import mol_from_smiles
+from plinder.data.annotations.affinity import matched_affinity
 from plinder.data.annotations.contact_areas import partner_contact_areas
 from plinder.data.annotations.interaction_utils import (
     extract_ligand_links_to_neighbouring_chains,
@@ -28,7 +29,6 @@ from plinder.data.annotations.interaction_utils import (
 from plinder.data.annotations.protein_utils import (
     Chain,
     UnobservedAtom,
-    sequences_match_core,
 )
 from plinder.data.annotations.utils import (
     DocBaseModel,
@@ -990,7 +990,7 @@ def parse_artifacts() -> set[CcdComponents]:
 
 @cache
 def get_binding_affinity(data_dir: Path) -> ty.Any:
-    """Load BindingDB affinity data (pchembl values + target sequences)."""
+    """Load sequence-specific, endpoint-specific BindingDB candidates."""
     from plinder.data.pipeline.io import download_affinity_data
 
     return download_affinity_data(data_dir=data_dir)
@@ -1668,7 +1668,7 @@ class Ligand(DocBaseModel):
                     BINDING_AFFINITY = get_binding_affinity(data_dir)
                 except Exception as e:
                     LOG.warning(f"Failed to load binding affinity data: {e}")
-                    BINDING_AFFINITY = {"pchembl": {}, "target_sequence": {}}
+                    BINDING_AFFINITY = {}
 
         ligand_instance_chain = f"{ligand_instance}.{ligand_chain.asym_id}"
         # A ligand may span several covalently-linked chains. Default to the
@@ -2256,38 +2256,16 @@ class Ligand(DocBaseModel):
 
     @cached_property
     def binding_affinity(self) -> float | None:
-        """Binding affinity (pKd or pKi) from BindingDB when available.
-
-        The affinity is only returned if the BindingDB target sequence
-        matches at least one receptor chain SEQRES with 100% identity
-        in the aligned core (terminal overhangs from tags/truncations
-        are tolerated).  This guards against BindingDB's 85% sequence
-        identity matching which can assign values to wrong complexes
-        (see `#94 <https://github.com/plinder-org/plinder/issues/94>`_).
-        """
+        """Sequence-matched pKi or pKd when BindingDB evidence is unambiguous."""
         global BINDING_AFFINITY
         pdbid_ligid = f"{self.pdb_id}_{self.ccd_code}".upper()
         if BINDING_AFFINITY is None:
             data_dir = Path(get_config().data.plinder_dir)
             BINDING_AFFINITY = get_binding_affinity(data_dir)
-        pchembl = BINDING_AFFINITY.get("pchembl", {})
-        target_seqs = BINDING_AFFINITY.get("target_sequence", {})
-        affinity = pchembl.get(pdbid_ligid)
-        if affinity is None:
-            return None
-        # Validate: BindingDB target sequence must match a receptor chain
-        bdb_seq = target_seqs.get(pdbid_ligid)
-        if bdb_seq and self.receptor_seqres:
-            if not any(
-                sequences_match_core(bdb_seq, seq)
-                for seq in self.receptor_seqres.values()
-            ):
-                LOG.warning(
-                    f"binding_affinity: rejecting {pdbid_ligid} — "
-                    "BindingDB target sequence does not match any receptor chain"
-                )
-                return None
-        return float(affinity)
+        match = matched_affinity(
+            BINDING_AFFINITY.get(pdbid_ligid, []), self.receptor_seqres
+        )
+        return match[0] if match else None
 
     def identify_artifacts_cofactors_and_other(self) -> None:
         """Set ``is_artifact``, ``is_cofactor``, and ``is_other`` flags in-place."""

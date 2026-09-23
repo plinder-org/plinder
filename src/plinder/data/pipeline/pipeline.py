@@ -238,6 +238,7 @@ class IngestPipeline:
             cpu=self.cfg.flow.finalize_entries_cpu,
             memory_limit=self.cfg.flow.finalize_entries_memory_limit,
         )
+        tasks.publish_binding_affinity(data_dir=self.plinder_dir)
 
     @utils.ingest_flow_control
     def compute_ligand_fingerprints(self) -> None:

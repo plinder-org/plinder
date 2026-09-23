@@ -26,6 +26,41 @@ _PUBLISHED_INTERFACE_COVER_COLUMN = re.compile(
 )
 
 DERIVED_COLUMN_DESCRIPTIONS = {
+    "ligand_binding_affinity": (
+        "Median pKi or pKd for uncensored BindingDB measurements with one endpoint "
+        "and a target sequence matching this ligand's receptor; missing if ambiguous"
+    ),
+    "ligand_binding_affinity_endpoint": (
+        "BindingDB endpoint (Ki or Kd) used for ligand_binding_affinity"
+    ),
+    "ligand_binding_affinity_measurement_count": (
+        "Number of BindingDB measurements used for ligand_binding_affinity"
+    ),
+    "system_has_binding_affinity": (
+        "Whether any ligand in the system has an unambiguous, sequence-matched "
+        "BindingDB affinity"
+    ),
+    "pdbid_ligid": "PDB ID and ligand HET code reported in a BindingDB cross-reference",
+    "pdb_id": "PDB ID reported in a BindingDB ligand-target-complex cross-reference",
+    "ligand_het_id": "Ligand HET code reported by BindingDB",
+    "reactant_set_id": "BindingDB source reactant-set identifier, when provided",
+    "monomer_id": "BindingDB source monomer identifier, when provided",
+    "curation_source": "BindingDB curation or imported-data source",
+    "article_doi": "DOI of the source publication, when provided by BindingDB",
+    "bindingdb_entry_doi": "BindingDB DOI for the source entry, when provided",
+    "source_row": "Zero-based row number in the source BindingDB TSV",
+    "target_sequences": "All target-chain sequences reported for this measurement",
+    "target_sequence": (
+        "Target-chain sequence when exactly one was reported; otherwise missing"
+    ),
+    "endpoint": "Measured affinity endpoint: Ki or Kd",
+    "raw_value": "BindingDB affinity value in nM, including any inequality sign",
+    "relation": (
+        "Equality or inequality for the pKi/pKd value; reversed from the nM "
+        "inequality because the logarithmic scale is inverse"
+    ),
+    "value_nm": "Numeric affinity value in nM without its inequality sign",
+    "pchembl": "pKi or pKd (9 - log10 of nM value), before censoring checks",
     "representative_entry_pdb_id": (
         "PDB entry containing the protein-cluster representative; together with "
         "representative_chain_asym_id identifies the cluster"

@@ -54,6 +54,8 @@ RELEASE_PATHS = {
     "ligand_pocket_residues": "index/ligand_pocket_residues.parquet",
     "ligand_pocket_representatives": ("index/ligand_pocket_representatives.parquet"),
     "ligand_clusters": "index/ligand_clusters.parquet",
+    "ligand_affinity": "index/ligand_affinity.parquet",
+    "bindingdb_measurements": "index/bindingdb_measurements.parquet",
     "ligand_mmp_pairs": "index/ligand_mmp_pairs.parquet",
     "interface_half_representatives": ("index/interface_half_representatives.parquet"),
     "interface_membership": "index/interface_membership.parquet",
@@ -159,6 +161,16 @@ RELEASE_TABLES: dict[str, dict[str, Any]] = {
         "artifact": "ligand_clusters",
         "row_description": "ligand cluster assignments",
         "primary_key": ("ligand_id",),
+    },
+    "ligand_affinity": {
+        "artifact": "ligand_affinity",
+        "row_description": "ligand with sequence-checked BindingDB affinity",
+        "primary_key": ("ligand_id",),
+    },
+    "bindingdb_measurements": {
+        "artifact": "bindingdb_measurements",
+        "row_description": "BindingDB Ki or Kd measurement with a PDB ligand cross-reference",
+        "primary_key": ("source_row", "pdb_id", "ligand_het_id", "endpoint"),
     },
     "ligand_mmp_pairs": {
         "artifact": "ligand_mmp_pairs",

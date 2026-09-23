@@ -506,6 +506,14 @@ def finalize_entry_collation(
     )
 
 
+def publish_binding_affinity(*, data_dir: Path) -> None:
+    """Write sequence-checked ligand affinities and source measurements."""
+    from plinder.data.annotations.affinity import publish_affinity_tables
+
+    io.download_affinity_data(data_dir=data_dir)
+    publish_affinity_tables(data_dir)
+
+
 def scatter_make_canonical_ligand_archives(
     *,
     data_dir: Path,

@@ -15,11 +15,13 @@ from pathlib import Path
 from subprocess import check_output
 from typing import Any, Literal, Optional, TypeVar
 
+import pandas as pd
 import requests
 from tqdm import tqdm
 
 from plinder.core.utils.io import download_alphafold_cif_file, retry
 from plinder.core.utils.log import setup_logger
+from plinder.data.annotations.affinity import candidate_map
 from plinder.data.pipeline import transform
 
 # RCSB retired its NextGen rsync service in June 2026; PDBj remains an
@@ -108,9 +110,9 @@ def download_affinity_data(
     data_dir: Path,
     bindingdb_url: str | None = None,
     force_update: bool = False,
-) -> Any:
+) -> dict[str, list[dict[str, Any]]]:
     """
-    Download binding affinity data.
+    Prepare and read the BindingDB records and strict per-target candidates.
 
     Parameters
     ----------
@@ -125,19 +127,21 @@ def download_affinity_data(
 
     Returns
     -------
-    binding_affinity : dict[str, Any]
-        binding affinity data
+    dict[str, list[dict[str, Any]]]
+        Eligible measurements grouped by reported PDB ID and ligand HET code.
+        A ligand must still match the target sequence to its receptor chains.
     """
     from io import BytesIO
     from urllib.request import urlopen
     from zipfile import ZipFile
 
-    affinity_path = data_dir / "dbs" / "affinity" / "affinity.json"
-    bindingdb_raw_affinity_path = data_dir / "dbs" / "affinity" / "BindingDB_All.tsv"
+    affinity_dir = data_dir / "dbs" / "affinity"
+    bindingdb_raw_affinity_path = affinity_dir / "BindingDB_All.tsv"
+    measurements_path = affinity_dir / "measurements.parquet"
+    candidates_path = affinity_dir / "candidates.parquet"
 
-    # Make sub directories
-    bindingdb_raw_affinity_path.parent.mkdir(parents=True, exist_ok=True)
-    if not affinity_path.is_file() or force_update:
+    affinity_dir.mkdir(parents=True, exist_ok=True)
+    if force_update or not measurements_path.is_file() or not candidates_path.is_file():
         # Download BindingDB
         if (
             not bindingdb_raw_affinity_path.is_file()
@@ -151,31 +155,22 @@ def download_affinity_data(
                 with ZipFile(BytesIO(zipresp.read())) as zfile:
                     zfile.extractall(path=bindingdb_raw_affinity_path.parent)
 
-        LOG.info("transforming_affinity_data: extracting median affinity")
-        binding_db_affinity_df = transform.transform_bindingdb_affinity_data(
+        LOG.info("transforming_affinity_data: retaining Ki/Kd records")
+        measurements = transform.transform_bindingdb_measurements(
             raw_affinity_path=bindingdb_raw_affinity_path
         )
-        binding_db_affinity_df["preference"] = 1
-
-        all_affinity_df = binding_db_affinity_df.drop_duplicates()
-        all_affinity_df = all_affinity_df[all_affinity_df["pchembl"].notna()]
-
-        all_affinity_df = all_affinity_df.loc[
-            all_affinity_df.groupby("pdbid_ligid")["preference"].idxmin()
-        ]
-        all_affinity_df = all_affinity_df.set_index("pdbid_ligid")
-        obj = {
-            "pchembl": json.loads(all_affinity_df[["pchembl"]].to_json())["pchembl"],
-            "target_sequence": json.loads(
-                all_affinity_df[["target_sequence"]].to_json()
-            )["target_sequence"],
-        }
-        with affinity_path.open("w") as f:
-            json.dump(obj, f, indent=4)
-    else:
-        with affinity_path.open() as f:
-            obj = json.load(f)
-    return obj
+        candidates = transform.strict_bindingdb_candidates(measurements)
+        records_tmp = measurements_path.with_suffix(".parquet.tmp")
+        candidates_tmp = candidates_path.with_suffix(".parquet.tmp")
+        try:
+            measurements.to_parquet(records_tmp, index=False)
+            candidates.to_parquet(candidates_tmp, index=False)
+            records_tmp.replace(measurements_path)
+            candidates_tmp.replace(candidates_path)
+        finally:
+            records_tmp.unlink(missing_ok=True)
+            candidates_tmp.unlink(missing_ok=True)
+    return candidate_map(pd.read_parquet(candidates_path))
 
 
 def refresh_bundled_ccd(

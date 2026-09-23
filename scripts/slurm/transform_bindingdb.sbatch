@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=plinder-bindingdb
-#SBATCH --partition=scicore
-#SBATCH --qos=6hours
+#SBATCH --partition=scicore-fast,scicore,bigmem
+#SBATCH --qos=fast
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=32G
 
@@ -40,4 +40,6 @@ echo "PLINDER offline mode is enabled; transforming the existing BindingDB TSV"
     'from pathlib import Path; from plinder.data.pipeline.io import download_affinity_data; download_affinity_data(data_dir=Path(__import__("sys").argv[1]), force_update=False)' \
     "${OUTPUT_ROOT}"
 
-ls -lh "${OUTPUT_ROOT}/dbs/affinity/affinity.json"
+ls -lh \
+    "${OUTPUT_ROOT}/dbs/affinity/candidates.parquet" \
+    "${OUTPUT_ROOT}/dbs/affinity/measurements.parquet"

@@ -401,22 +401,45 @@ def cofactors_path(test_env):
 
 @pytest.fixture
 def affinity_path(test_env):
-    affinity_path = test_env / "dbs" / "affinity" / "affinity.json"
-    affinity_path.parent.mkdir(parents=True)
-    affinity = """\
-{
-"pchembl": {
-    "4JVM_XDI": 5.3979400087,
-    "4JVN_YUG": 7.638272164,
-    "4JVO_A5A": 5.7706810755,
-    "4JVP_SO4": 1.2732414543,
-    "4JVQ_1ML": 6.2006594505,
-    "4JVR_1MT": 8.0268721464}
-}"""
-    affinity = json.loads(affinity)
-    with open(affinity_path, "w") as f:
-        json.dump(affinity, f)
-    return affinity_path
+    affinity_dir = test_env / "dbs" / "affinity"
+    affinity_dir.mkdir(parents=True)
+    # Synthetic Ki record linked to the 4JVN receptor sequence in the CIF.
+    target_sequence = (
+        "MNSELDYYEKFEEVHGILMYKDFVKYWDNVEAFQARPDDLVIATYPKSGTTWVSEIVYMIYKEGDVEKCKEDVIFNRIPF"
+        "LECRKENLMNGVKQLDEMNSPRIVKTHLPPELLPASFWEKDCKIIYLCRNAKDVAVSFYYFFLMVAGHPNPGSFPEFVEK"
+        "FMQGQVPYGSWYKHVKSWWEKGKSPRVLFLFYEDLKEDIRKEVIKLIHFLERKPSEELVDRIIHHTSFQEMKNNPSTNYT"
+        "TLPDEIMNQKLSPFMRKGITGDWKNHFTEALNEKFDKHYEQQMKESTLKFRTEI"
+    )
+    pd.DataFrame(
+        {
+            "pdbid_ligid": ["4JVN_YUG"],
+            "target_sequence": [target_sequence],
+            "endpoint": ["Ki"],
+            "pchembl": [7.638272164],
+            "count": [1],
+        }
+    ).to_parquet(affinity_dir / "candidates.parquet", index=False)
+    pd.DataFrame(
+        {
+            "pdbid_ligid": ["4JVN_YUG"],
+            "pdb_id": ["4JVN"],
+            "ligand_het_id": ["YUG"],
+            "reactant_set_id": ["fixture"],
+            "monomer_id": ["fixture"],
+            "curation_source": ["synthetic test fixture"],
+            "article_doi": [None],
+            "bindingdb_entry_doi": [None],
+            "source_row": [0],
+            "target_sequences": [[target_sequence]],
+            "target_sequence": [target_sequence],
+            "endpoint": ["Ki"],
+            "raw_value": ["23"],
+            "relation": ["="],
+            "value_nm": [23.0],
+            "pchembl": [7.638272164],
+        }
+    ).to_parquet(affinity_dir / "measurements.parquet", index=False)
+    return affinity_dir / "candidates.parquet"
 
 
 @pytest.fixture

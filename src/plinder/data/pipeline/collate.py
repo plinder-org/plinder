@@ -65,6 +65,8 @@ RETIRED_ANNOTATION_COLUMNS = frozenset(
         "system_id_no_biounit",
         "system_ligand_chains",
         "ligand_rdkit_canonical_smiles",
+        "ligand_binding_affinity",
+        "system_has_binding_affinity",
     }
 )
 SYSTEM_LIGAND_FLAGS = (
@@ -2333,6 +2335,12 @@ def main() -> None:
             row_group_size=args.row_group_size,
             force=args.force,
         )
+    if args.command in {"finalize", "repair", "run"}:
+        from plinder.data.annotations.affinity import publish_affinity_tables
+        from plinder.data.pipeline.io import download_affinity_data
+
+        download_affinity_data(data_dir=args.data_dir)
+        publish_affinity_tables(args.data_dir)
     printable = result
     if args.command in {"plan", "plan-start", "plan-finish"}:
         printable = {

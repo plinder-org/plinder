@@ -18,8 +18,8 @@ Prepare shared reference data once on a node with internet access:
 python scripts/prepare_ingest_reference_data.py "${OUTPUT_ROOT}" --threads 4
 ```
 
-If the BindingDB TSV was downloaded but its derived `affinity.json` still needs
-to be built, it can be transformed on an offline Slurm node:
+If the BindingDB TSV was downloaded but its measurement and candidate Parquet
+files still need to be built, it can be transformed on an offline Slurm node:
 
 ```bash
 sbatch \

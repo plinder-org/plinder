@@ -30,7 +30,8 @@ PDB_NEXTGEN_ROOT_ENV = "PLINDER_PDB_NEXTGEN_ROOT"
 VALIDATION_ROOT_ENV = "PLINDER_VALIDATION_ROOT"
 REQUIRED_REFERENCE_FILES = (
     Path("dbs/cofactors/cofactors.json"),
-    Path("dbs/affinity/affinity.json"),
+    Path("dbs/affinity/candidates.parquet"),
+    Path("dbs/affinity/measurements.parquet"),
 )
 INGEST_MODES = ("all", "ligands", "interfaces")
 CHAIN_MODIFICATION_COLUMNS = {"chain_sequence_noncanonical", "chain_modified_residues"}

@@ -35,6 +35,8 @@ differ from the current release.
     │   ├── ligand_pocket_membership.parquet
     │   ├── ligand_pocket_representatives.parquet
     │   ├── ligand_clusters.parquet
+    │   ├── ligand_affinity.parquet
+    │   ├── bindingdb_measurements.parquet
     │   ├── ligand_mmp_pairs.parquet
     │   ├── interface_half_representatives.parquet
     │   ├── interface_membership.parquet
@@ -112,6 +114,10 @@ single query and selects the required relationships from those columns.
   residues, and protein-ligand interactions for each selected representative;
 - `ligand_clusters`: ligand cover labels, representative
   indicators, and coverage statistics;
+- `ligand_affinity`: sequence-checked pKi or pKd and the endpoint for each
+  ligand; ambiguous values are empty;
+- `bindingdb_measurements`: individual Ki and Kd records, including target
+  sequences and inequality signs;
 - `ligand_mmp_pairs`: matched molecular pairs over unique ligand SMILES;
 - `interface_membership`: interface-to-representative assignments;
 - `interface_representatives`: representative full interfaces;
@@ -119,6 +125,15 @@ single query and selects the required relationships from those columns.
 - `interface_clusters`: protein-interface cover labels.
 
 The checked-in column reference below is generated from these release tables.
+
+BindingDB's PDB/ligand cross-references can include similar, rather than exact,
+targets. `ligand_affinity` therefore requires a matching receptor sequence and
+one uncensored Ki or Kd endpoint before reporting a value. The individual
+records remain available in `bindingdb_measurements`.
+The table keeps BindingDB's curation source and DOIs so records imported from
+ChEMBL can be identified. BindingDB describes different reuse terms for its
+own curation and ChEMBL imports in its
+[data-availability statement](https://www.bindingdb.org/rwd/bind/gkae1075.pdf).
 
 :::{include} table.html
 :::

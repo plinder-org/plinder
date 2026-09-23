@@ -1,0 +1,6 @@
+Name	Type	Description
+ligand_id	string	Unique identifier of the ligand in the annotation table
+ligand_binding_affinity	double	Median pKi or pKd for uncensored BindingDB measurements with one endpoint and a target sequence matching this ligand's receptor; missing if ambiguous
+ligand_binding_affinity_endpoint	string	BindingDB endpoint (Ki or Kd) used for ligand_binding_affinity
+ligand_binding_affinity_measurement_count	int64	Number of BindingDB measurements used for ligand_binding_affinity
+system_has_binding_affinity	bool	Whether any ligand in the system has an unambiguous, sequence-matched BindingDB affinity

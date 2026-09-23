@@ -7,9 +7,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
-
 from plinder.core import PlinderRelease, query_table
-from plinder.core.index.query import DISABLED_ANNOTATION_COLUMNS
 
 
 def _write_table(
@@ -38,8 +36,17 @@ def local_release(tmp_path: Path) -> PlinderRelease:
             "entry_pdb_id": ["1abc", "2def", "3ghi"],
             "entry_resolution": [99.0, 99.0, 99.0],
             "entry_release_date": ["1900-01-01"] * 3,
+        },
+    )
+    _write_table(
+        release,
+        "ligand_affinity",
+        {
+            "ligand_id": ["1abc__1__1.L", "2def__1__1.M", "3ghi__1__1.N"],
+            "ligand_binding_affinity": [None, 8.0, None],
+            "ligand_binding_affinity_endpoint": [None, "Kd", None],
+            "ligand_binding_affinity_measurement_count": [None, 1, None],
             "system_has_binding_affinity": [False, True, False],
-            "ligand_binding_affinity": [None, "Kd=10nM", None],
         },
     )
     _write_table(
@@ -409,33 +416,26 @@ def test_annotation_adds_entry_metadata_only_when_requested(
     assert pd.isna(requested["entry_resolution"].iloc[2])
 
 
-def test_annotation_binding_affinity_columns_are_disabled(
+def test_annotation_binding_affinity_columns_join_from_sidecar(
     local_release: PlinderRelease,
 ) -> None:
     default = query_table("annotation", release=local_release)
-    assert DISABLED_ANNOTATION_COLUMNS.isdisjoint(default.columns)
-
-    with pytest.raises(ValueError, match="binding_affinity columns are disabled"):
-        query_table(
-            "annotation",
-            columns=["ligand_binding_affinity"],
-            release=local_release,
-        )
+    assert "ligand_binding_affinity" not in default.columns
+    result = query_table(
+        "annotation",
+        columns=["ligand_id", "ligand_binding_affinity"],
+        filters=[("system_has_binding_affinity", "==", True)],
+        release=local_release,
+    )
+    assert result["ligand_id"].tolist() == ["2def__1__1.M"]
+    assert result["ligand_binding_affinity"].tolist() == [8.0]
 
     joined = query_table(
         "ligand_pocket_membership",
-        joins=["annotation"],
+        columns=["ligand_id", "ligand_binding_affinity_endpoint"],
         release=local_release,
     )
-    assert DISABLED_ANNOTATION_COLUMNS.isdisjoint(joined.columns)
-
-    with pytest.raises(ValueError, match="binding_affinity columns are disabled"):
-        query_table(
-            "ligand_pocket_membership",
-            columns=["ligand_binding_affinity"],
-            joins=["annotation"],
-            release=local_release,
-        )
+    assert joined["ligand_binding_affinity_endpoint"].tolist() == [None, "Kd"]
 
 
 def test_query_table_uses_bound_filter_parameters(
