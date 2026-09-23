@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
+
 from plinder.data.pipeline.io import download_affinity_data
 from plinder.data.pipeline.transform import (
     strict_bindingdb_candidates,

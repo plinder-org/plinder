@@ -1872,7 +1872,11 @@ class Entry(DocBaseModel):
             assert spatial_index is not None
             water_chains = get_water_chain_ids(biounit)
 
-            def collect(**selection: set[str] | None) -> dict[str, Ligand]:
+            def collect(
+                *,
+                ligand_asym_ids: set[str] | None = None,
+                ligand_instance_chains: set[str] | None = None,
+            ) -> dict[str, Ligand]:
                 return self._collect_ligands_from_biounit(
                     biounit,
                     biounit_id,
@@ -1884,7 +1888,8 @@ class Entry(DocBaseModel):
                     ligand_ccd_code_dict=ligand_ccd_code_dict,
                     water_chains=water_chains,
                     spatial_index=spatial_index,
-                    **selection,
+                    ligand_asym_ids=ligand_asym_ids,
+                    ligand_instance_chains=ligand_instance_chains,
                 )
 
             primary_ligands = collect(ligand_asym_ids=ligand_classes.primary_asym_ids)

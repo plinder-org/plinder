@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
+
 from plinder.data.annotations.affinity import (
     build_ligand_affinity_table,
     matched_affinity,
