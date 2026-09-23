@@ -1,0 +1,17 @@
+Name	Type	Description
+pdbid_ligid	string	PDB ID and ligand HET code reported in a BindingDB cross-reference
+pdb_id	string	PDB ID reported in a BindingDB ligand-target-complex cross-reference
+ligand_het_id	string	Ligand HET code reported by BindingDB
+reactant_set_id	string	BindingDB source reactant-set identifier, when provided
+monomer_id	string	BindingDB source monomer identifier, when provided
+curation_source	string	BindingDB curation or imported-data source
+article_doi	string	DOI of the source publication, when provided by BindingDB
+bindingdb_entry_doi	string	BindingDB DOI for the source entry, when provided
+source_row	int64	Zero-based row number in the source BindingDB TSV
+target_sequences	list<element: string>	All target-chain sequences reported for this measurement
+target_sequence	string	Target-chain sequence when exactly one was reported; otherwise missing
+endpoint	string	Measured affinity endpoint: Ki or Kd
+raw_value	string	BindingDB affinity value in nM, including any inequality sign
+relation	string	Equality or inequality for the pKi/pKd value; reversed from the nM inequality because the logarithmic scale is inverse
+value_nm	double	Numeric affinity value in nM without its inequality sign
+pchembl	double	pKi or pKd (9 - log10 of nM value), before censoring checks

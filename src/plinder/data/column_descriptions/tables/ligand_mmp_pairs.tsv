@@ -1,0 +1,13 @@
+Name	Type	Description
+ligand_smiles_id_1	int32	Unique-SMILES node ID for the first MMP ligand
+ligand_smiles_id_2	int32	Unique-SMILES node ID for the second MMP ligand
+ligand_smiles_1	string	Canonical SMILES for the first MMP ligand
+ligand_smiles_2	string	Canonical SMILES for the second MMP ligand
+transformation	string	MMP transformation directed from ligand 1 to ligand 2
+shared_core_smiles	string	Shared MMP core with attachment points marked by *
+num_cuts	int8	Number of attachment points in the shared MMP core
+shared_core_num_heavy_atoms	int16	Number of heavy atoms in the shared MMP core
+ligand_1_num_heavy_atoms	int16	Number of heavy atoms in the first MMP ligand
+ligand_2_num_heavy_atoms	int16	Number of heavy atoms in the second MMP ligand
+ligand_1_shared_core_fraction	float	Fraction of the first ligand's heavy atoms contained in the shared core
+ligand_2_shared_core_fraction	float	Fraction of the second ligand's heavy atoms contained in the shared core

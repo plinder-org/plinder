@@ -8,24 +8,47 @@ pandas and pyarrow directly. The internal query API supports converting
 the same pyarrow query filters used in pd.read_parquet into raw SQL for
 duckdb to execute.
 """
-from .clusters import query_clusters
-from .index import query_index
-from .ligand import cross_similarity as cross_ligand_similarity
-from .ligand import query_ligand_similarity
-from .links import query_links
-from .protein import (
-    cross_similarity as cross_protein_similarity,
+
+from .alignment import expand_alignment_cigar, map_chain_alignment
+from .custom import (
+    CustomProteinSearchConfig,
+    CustomScoringResult,
+    CustomSequenceScoringResult,
+    resolve_custom_scoring_assets,
+    score_custom_cif_files,
+    score_custom_sequence_file,
 )
-from .protein import (
-    query_protein_similarity,
+from .interface import query_interface_similarity
+from .ligand import (
+    cross_ligand_chemical_similarity,
+    query_ligand_chemical_similarity,
+    query_ligand_similarity,
 )
+from .protein import query_chain_overlap, query_protein_similarity
+from .reconstruct import (
+    prefetch_similarity_alignments,
+    reconstruct_interface_similarity_scores,
+    reconstruct_similarity_scores,
+)
+from .search import search
 
 __all__ = [
+    "search",
+    "expand_alignment_cigar",
+    "map_chain_alignment",
     "query_ligand_similarity",
-    "cross_ligand_similarity",
+    "query_ligand_chemical_similarity",
+    "cross_ligand_chemical_similarity",
+    "query_interface_similarity",
+    "query_chain_overlap",
     "query_protein_similarity",
-    "cross_protein_similarity",
-    "query_clusters",
-    "query_links",
-    "query_index",
+    "CustomProteinSearchConfig",
+    "CustomScoringResult",
+    "CustomSequenceScoringResult",
+    "resolve_custom_scoring_assets",
+    "score_custom_cif_files",
+    "score_custom_sequence_file",
+    "prefetch_similarity_alignments",
+    "reconstruct_interface_similarity_scores",
+    "reconstruct_similarity_scores",
 ]

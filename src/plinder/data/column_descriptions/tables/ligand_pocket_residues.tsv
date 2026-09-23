@@ -1,0 +1,12 @@
+Name	Type	Description
+entry_pdb_id	string	RCSB PDB ID. See https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v50.dic/Items/_entry.id.html
+system_id	string	ID of the system
+ligand_id	string	Unique identifier for a given ligand.
+chain_instance	string	Assembly chain instance encoded as <operation>.<label_asym_id>
+chain_asym_id	string	Chain asymmetric id
+chain_auth_id	string	Chain author id
+residue_label_seq_id	int32	Receptor residue number from _atom_site.label_seq_id
+residue_index	int32	Zero-based position among resolved residues in the chain
+residue_auth_seq_id	string	Depositor-provided receptor residue number from _atom_site.auth_seq_id
+residue_insertion_code	string	Depositor-provided receptor residue insertion code, or . when absent
+is_pli	bool	Whether this pocket residue participates in a detected protein-ligand interaction

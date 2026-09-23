@@ -1,0 +1,21 @@
+Name	Type	Description
+reference_system_id	string	Protein-interface system linked to this apo chain
+reference_side	int8	Interface side linked to this apo chain: 1 or 2
+reference_chain_instance	string	Assembly-chain instance on the corresponding reference interface side
+reference_chain_asym_id	string	Source asymmetric-chain ID on the corresponding reference interface side
+linked_structure_id	string	Stable identifier for the linked apo chain
+source_entry_id	string	PDB entry containing the linked apo chain
+source_chain_asym_id	string	Source asymmetric-chain ID of the linked apo chain
+source_chain_auth_id	string	Author chain ID of the linked apo chain
+source_biounit_id	string	Source biological assembly containing the apo chain
+source_chain_instance	string	Exact biological-assembly chain instance that was scored
+source_num_contacting_proteins	int16	Number of other protein chains contacting the apo chain
+source_num_contacting_ions	int16	Number of ion chains contacting the apo chain
+source_num_contacting_artifacts	int16	Number of crystallization-artifact chains contacting the apo chain
+source_num_contacting_other_ligands	int16	Number of other ligand chains contacting the apo chain
+source_resolution	float	Experimental resolution of the apo source entry
+rank	int16	Apo candidate rank for this reference interface side
+mmseqs_fident	float	MMseqs sequence identity between reference and apo chains
+mmseqs_query_coverage	float	Fraction of the reference chain covered by the MMseqs alignment
+mmseqs_target_coverage	float	Fraction of the apo chain covered by the MMseqs alignment
+foldseek_lddt	float	Foldseek local-distance difference test score for the same chain pair

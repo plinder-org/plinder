@@ -2,7 +2,7 @@ ARG BASE_IMAGE
 ARG BASE_TAG
 FROM --platform=linux/amd64 ${BASE_IMAGE}:${BASE_TAG}
 ARG MAMBA_DOCKERFILE_ACTIVATE=1
-ARG DEPENDENCY_BLOCKS=test
+ARG DEPENDENCY_BLOCKS=test,eval
 
 WORKDIR /app
 COPY requirements_data.txt requirements_data.txt

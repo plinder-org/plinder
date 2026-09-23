@@ -1,0 +1,5 @@
+Name	Type	Description
+system_id	string	ID of the system
+representative_system_id	string	System ID selected as the representative for a ligand pocket or protein interface
+side_1_half_interface_id	string	Representative half-interface assigned to the first query side
+side_2_half_interface_id	string	Representative half-interface assigned to the second query side

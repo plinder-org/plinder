@@ -14,15 +14,26 @@ Note
 Set the environment variable `PLINDER_OFFLINE=true` to use local files without
 network access.
 """
+
+from plinder.core.index.interface import PlinderInterface
+from plinder.core.index.query import query_table
 from plinder.core.index.system import PlinderSystem
-from plinder.core.index.utils import get_manifest, get_plindex
-from plinder.core.split.utils import get_split
+from plinder.core.release import (
+    RELEASE_PATHS,
+    RELEASE_TABLES,
+    PlinderRelease,
+)
 from plinder.core.utils.config import get_config
+from plinder.core.utils.io import download_pdb_mmcifs, get_pdb_mmcif
 
 __all__ = [
     "get_config",
-    "get_plindex",
-    "get_manifest",
-    "get_split",
+    "get_pdb_mmcif",
+    "download_pdb_mmcifs",
+    "PlinderInterface",
     "PlinderSystem",
+    "query_table",
+    "PlinderRelease",
+    "RELEASE_PATHS",
+    "RELEASE_TABLES",
 ]

@@ -1,17 +1,23 @@
 #
 # Conda environment definition with dependencies
 #
+# For data generation and OpenStructure-backed eval/scoring:
+#   conda env create -f environment.yml
+#   pip install -e .
+#
+# For PoseBusters ligand validation:
+#   pip install -e ".[eval]"
+#
 name: plinder
 channels:
   - conda-forge
   - defaults
   - bioconda
 dependencies:
-  - python=3.10.*
+  - python=3.12.*
   - reduce
-  - openstructure
   - mmseqs2
   - foldseek
-  - plip=2.3.0
+  - bioconda::openstructure>=2.12.0
   - pip:
     - keyrings.google-artifactregistry-auth==1.1.2

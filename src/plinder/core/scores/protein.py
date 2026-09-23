@@ -1,203 +1,239 @@
 # Copyright (c) 2024, Plinder Development Team
 # Distributed under the terms of the Apache License 2.0
+"""Query compact chain-level protein similarities."""
+
 from __future__ import annotations
 
+from pathlib import Path
+from typing import Literal
+
 import pandas as pd
-from duckdb import sql
 
-from plinder.core.scores.index import query_index
-from plinder.core.scores.query import FILTER, FILTERS, make_query
-from plinder.core.utils import cpl
-from plinder.core.utils.config import get_config
+from plinder.core.release import PlinderRelease
+from plinder.core.scores.mapping import unpack_residue_identities
+from plinder.core.scores.query import Filters, read_score_table
 from plinder.core.utils.dec import timeit
-from plinder.core.utils.log import setup_logger
-from plinder.core.utils.schemas import PROTEIN_SIMILARITY_SCHEMA
 
-LOG = setup_logger(__name__)
+OVERLAP_COLUMNS = [
+    "query_entry",
+    "query_chain",
+    "target_entry",
+    "target_chain",
+    "source",
+    "kind",
+    "overlapping_residues",
+    "identical_overlapping_residues",
+    "query_total_residues",
+    "target_total_residues",
+    "query_overlap_fraction",
+    "target_overlap_fraction",
+]
 
 
 @timeit
 def query_protein_similarity(
     *,
-    search_db: str,
     columns: list[str] | None = None,
-    filters: FILTERS = None,
-) -> pd.DataFrame | None:
-    """
-    Query the protein similarity database for
-    a given search_db and return the results.
-
-    Parameters
-    ----------
-    search_db : str
-        the name of the search database
-    columns : list[str], default=None
-        the columns to return
-    filters : list[tuple[str, str, str | set[str]]]
-        the filters to apply
-
-    Returns
-    -------
-    df : pd.DataFrame | None
-        the protein similarity results
-    """
-    if search_db not in ["apo", "holo", "pred"]:
-        raise ValueError(f"search_db={search_db} not in ['apo', 'holo', 'pred']")
-    cfg = get_config()
-    if isinstance(filters, list):
-        if len(filters) and not isinstance(filters[0], list):
-            for i, (col, _, _) in enumerate(filters):
-                if col == "search_db":
-                    filters.pop(i)
-                    break
-    dataset = cpl.get_plinder_path(rel=f"{cfg.data.scores}/search_db={search_db}")
-    query = make_query(
-        schema=PROTEIN_SIMILARITY_SCHEMA,
-        dataset=dataset,
-        filters=filters,
-        columns=columns,
-    )
-    if query is None:
-        LOG.warning("try minimally passing filters=[('similarity', '>', 90)]")
-        return None
-    return sql(query).to_df()
-
-
-@timeit
-def map_cross_similarity(
-    df: pd.DataFrame, target_systems: set[str], metric: str
+    filters: Filters = None,
+    release: PlinderRelease | None = None,
 ) -> pd.DataFrame:
-    updated_query_systems = []
-    updated_target_systems = []
-    for q, t in zip(df["query_system"], df["target_system"]):
-        if t in target_systems:
-            updated_query_systems.append(t)
-            updated_target_systems.append(q)
-        else:
-            updated_query_systems.append(q)
-            updated_target_systems.append(t)
-    df["updated_query_system"] = updated_query_systems
-    df["updated_target_system"] = updated_target_systems
-    idx = df.groupby("updated_query_system")["similarity"].idxmax()
-    return df.loc[idx][
-        ["updated_query_system", "updated_target_system", "similarity"]
-    ].rename(
-        columns={
-            "updated_query_system": "query_system",
-            "updated_target_system": "target_system",
-            "similarity": metric,
-        }
-    )
+    """Query chain-level Foldseek and MMseqs similarities in integer percent."""
+    dataset = (release or PlinderRelease()).fetch("protein_similarity_scores")
+    return read_score_table(dataset, columns=columns, filters=filters)
 
 
-@timeit
-def cross_similarity(
+def _selected_residue_positions(
+    lookup: Path,
     *,
-    query_systems: set[str],
-    target_systems: set[str],
-    metric: str,
-) -> pd.DataFrame:
-    cfg = get_config()
-    dataset = cpl.get_plinder_path(rel=f"{cfg.data.scores}/search_db=holo")
-    filters: list[list[FILTER]] = [
-        [
-            FILTER(("metric", "==", metric)),
-            FILTER(("query_system", "in", query_systems)),
-            FILTER(("target_system", "in", target_systems)),
-        ],
-        [
-            FILTER(("metric", "==", metric)),
-            FILTER(("query_system", "in", target_systems)),
-            FILTER(("target_system", "in", query_systems)),
-        ],
-    ]
-    columns = ["query_system", "target_system", "similarity"]
-    query = make_query(
-        schema=PROTEIN_SIMILARITY_SCHEMA,
-        dataset=dataset,
-        columns=columns,
-        filters=filters,
+    entry: str,
+    chain: str,
+) -> dict[int, int]:
+    rows = pd.read_parquet(
+        lookup,
+        columns=["selected_residue_numbers"],
+        filters=[("entry_pdb_id", "==", entry), ("chain_asym_id", "==", chain)],
     )
-    assert query is not None
-    return map_cross_similarity(sql(query).to_df(), target_systems, metric)
-
-
-@timeit
-def multi_query_protein_similarity(
-    *,
-    system_id: str,
-    search_db: str,
-    filter_criteria: dict[str, int],
-    splits: list[str] | None = None,
-) -> pd.DataFrame:
-    """
-    Searches the protein similarity database for systems satisfying ALL filter criteria
-
-    Parameters
-    ----------
-    system_id : str
-        the system_id to search for
-    search_db : str
-        the search database to search in
-    filter_criteria : dict[str, int]
-        metric and threshold pairs
-        e.g {
-            "pocket_fident": 100,
-            "protein_fident_weighted_sum": 95,
-            "protein_fident_qcov_weighted_sum": 80,
-            "pocket_lddt": 20,
-            "protein_lddt_weighted_sum": 20,
-        }
-    splits : list[str] | None, default=None
-        the splits to search in (only used if search_db="holo")
-
-    Returns
-    -------
-    df : pd.DataFrame
-        the protein similarity results across all metrics in filter_criteria
-    """
-    if splits is None:
-        splits = ["train"]
-    empty_df = pd.DataFrame(
-        columns=["query_system", "target_system"] + list(filter_criteria.keys())
-    )
-    if search_db == "holo":
-        target_systems_df = query_index(
-            columns=["system_id"],
-            splits=splits,
+    if len(rows) != 1:
+        raise KeyError(f"unknown protein chain {entry}_{chain}")
+    return {
+        int(number): position
+        for position, number in enumerate(
+            rows.iloc[0]["selected_residue_numbers"], start=1
         )
-        if target_systems_df is None:
-            return empty_df
-        target_systems = set(target_systems_df["system_id"])
-        if len(target_systems) == 0:
-            return empty_df
-    filters = []
-    for metric, threshold in filter_criteria.items():
-        filter = [
-            ("metric", "==", metric),
-            ("similarity", ">=", threshold),
-            ("query_system", "==", system_id),
-        ]
-        if search_db == "holo":
-            filter.append(("target_system", "in", target_systems))
-        filters.append(filter)
-    links = query_protein_similarity(
-        search_db=search_db,
-        columns=["query_system", "target_system", "metric", "similarity"],
-        filters=filters,
+    }
+
+
+def _pocket_residue_numbers(
+    release: PlinderRelease,
+    *,
+    entry: str,
+    chain: str,
+) -> set[int]:
+    rows = pd.read_parquet(
+        release.fetch("ligand_pocket_residues"),
+        columns=["residue_label_seq_id"],
+        filters=[("entry_pdb_id", "==", entry), ("chain_asym_id", "==", chain)],
     )
-    if links is None or len(links) == 0:
-        return empty_df
-    links = links.iloc[
-        links.groupby(["query_system", "target_system", "metric"], observed=True)[
-            "similarity"
-        ].idxmax()
-    ]
-    links = links.pivot(
-        index=["query_system", "target_system"],
-        columns="metric",
-        values="similarity",
-    ).reset_index()
-    found_metrics = set(links.columns).intersection(filter_criteria.keys())
-    query = " and ".join([f"{m} >= {filter_criteria[m]}" for m in found_metrics])
-    return links.query(query)
+    return set(rows["residue_label_seq_id"].astype(int))
+
+
+def _interface_residue_numbers(
+    release: PlinderRelease,
+    *,
+    entry: str,
+    chain: str,
+) -> set[int]:
+    rows = pd.read_parquet(
+        release.fetch("interface_annotations"),
+        columns=[
+            "interface_chain_1",
+            "interface_chain_1_residue_numbers",
+            "interface_chain_2",
+            "interface_chain_2_residue_numbers",
+        ],
+        filters=[("entry_pdb_id", "==", entry)],
+    )
+    numbers: set[int] = set()
+    for row in rows.itertuples(index=False):
+        for instance_chain, residues in (
+            (row.interface_chain_1, row.interface_chain_1_residue_numbers),
+            (row.interface_chain_2, row.interface_chain_2_residue_numbers),
+        ):
+            if str(instance_chain).split(".", maxsplit=1)[-1] == chain:
+                numbers.update(int(number) for number in residues)
+    return numbers
+
+
+def _residue_positions(
+    release: PlinderRelease,
+    lookup: Path,
+    *,
+    entry: str,
+    chain: str,
+    kind: Literal["pocket", "interface"],
+) -> set[int]:
+    selected = _selected_residue_positions(lookup, entry=entry, chain=chain)
+    if kind == "pocket":
+        numbers = _pocket_residue_numbers(release, entry=entry, chain=chain)
+    else:
+        numbers = _interface_residue_numbers(release, entry=entry, chain=chain)
+    return {selected[number] for number in numbers}
+
+
+def _overlap_fraction(overlap: int, total: int) -> float:
+    return overlap / total if total else 0.0
+
+
+@timeit
+def query_chain_overlap(
+    query_entry: str,
+    query_chain: str,
+    target_entry: str,
+    target_chain: str,
+    *,
+    kind: Literal["pocket", "interface"],
+    source: Literal["foldseek", "mmseqs"] | None = None,
+    search_db: str = "holo",
+    release: PlinderRelease | None = None,
+) -> pd.DataFrame:
+    """Count aligned pocket or interface residues between two protein chains.
+
+    Chain IDs are label asym IDs. Residues are collected across all ligand
+    pockets or all protein interfaces involving each chain. One row is returned
+    per available search backend.
+    """
+    if kind not in {"pocket", "interface"}:
+        raise ValueError("kind must be 'pocket' or 'interface'")
+    selected_release = release or PlinderRelease()
+    lookup = selected_release.fetch("alignment_chain_lookup")
+    query_positions = _residue_positions(
+        selected_release,
+        lookup,
+        entry=query_entry,
+        chain=query_chain,
+        kind=kind,
+    )
+    target_positions = _residue_positions(
+        selected_release,
+        lookup,
+        entry=target_entry,
+        chain=target_chain,
+        kind=kind,
+    )
+    query_total = len(query_positions)
+    target_total = len(target_positions)
+
+    sources = (source,) if source is not None else ("foldseek", "mmseqs")
+    records: list[dict[str, object]] = []
+    for alignment_type in sources:
+        try:
+            shard = selected_release.fetch(
+                "alignment_shard",
+                search_db=search_db,
+                alignment_type=alignment_type,
+                shard=query_entry[-3:-1],
+            )
+        except FileNotFoundError:
+            if source is not None:
+                raise
+            continue
+        alignments = pd.read_parquet(
+            shard,
+            columns=[
+                "query_selected_residue_positions",
+                "target_selected_residue_positions",
+                "selected_residue_identity_bits",
+            ],
+            filters=[
+                ("query_entry", "==", query_entry),
+                ("query_chain_mapped", "==", query_chain),
+                ("target_entry", "==", target_entry),
+                ("target_chain_mapped", "==", target_chain),
+            ],
+        )
+        for row in alignments.itertuples(index=False):
+            aligned_query_positions = [
+                int(position) for position in row.query_selected_residue_positions
+            ]
+            aligned_target_positions = [
+                int(position) for position in row.target_selected_residue_positions
+            ]
+            identities = unpack_residue_identities(
+                row.selected_residue_identity_bits,
+                len(aligned_target_positions),
+            )
+            overlap_mask = [
+                query_position in query_positions
+                and target_position in target_positions
+                for query_position, target_position in zip(
+                    aligned_query_positions,
+                    aligned_target_positions,
+                    strict=True,
+                )
+            ]
+            overlap = sum(overlap_mask)
+            records.append(
+                {
+                    "query_entry": query_entry,
+                    "query_chain": query_chain,
+                    "target_entry": target_entry,
+                    "target_chain": target_chain,
+                    "source": alignment_type,
+                    "kind": kind,
+                    "overlapping_residues": overlap,
+                    "identical_overlapping_residues": sum(
+                        identity and overlaps
+                        for identity, overlaps in zip(
+                            identities, overlap_mask, strict=True
+                        )
+                    ),
+                    "query_total_residues": query_total,
+                    "target_total_residues": target_total,
+                    "query_overlap_fraction": _overlap_fraction(overlap, query_total),
+                    "target_overlap_fraction": _overlap_fraction(overlap, target_total),
+                }
+            )
+    return pd.DataFrame.from_records(records, columns=OVERLAP_COLUMNS)
+
+
+__all__ = ["query_chain_overlap", "query_protein_similarity"]
