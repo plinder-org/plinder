@@ -80,7 +80,20 @@ def mol2mhfp6(mol: Mol | str) -> NDArray[np.uint32]:
         mol = mol_from_smiles(mol)
     if mol is None:
         raise ValueError("cannot fingerprint an invalid molecule")
-    encoded = _mhfp6_encoder().EncodeMol(mol, radius=MHFP6_RADIUS)
+    try:
+        encoded = _mhfp6_encoder().EncodeMol(mol, radius=MHFP6_RADIUS)
+    except RuntimeError as exc:
+        if "bad bond stereo" not in str(exc):
+            raise
+        # RDKit can fail while creating fragments of a conjugated alkene even
+        # with isomeric=False. Clear only double-bond stereo; keep atom chirality.
+        mol = Chem.Mol(mol)
+        for bond in mol.GetBonds():
+            if bond.GetBondType() == Chem.BondType.DOUBLE:
+                bond.SetStereo(Chem.BondStereo.STEREONONE)
+            elif bond.GetBondDir() != Chem.BondDir.NONE:
+                bond.SetBondDir(Chem.BondDir.NONE)
+        encoded = _mhfp6_encoder().EncodeMol(mol, radius=MHFP6_RADIUS)
     return np.asarray(encoded, dtype=np.uint32)
 
 

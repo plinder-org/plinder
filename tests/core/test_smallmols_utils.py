@@ -128,7 +128,6 @@ def test_compare_stereo_to_template():
     import biotite.structure.info as bt_info
     from biotite.interface import rdkit as rdkit_interface
     from biotite.structure import filter_heavy
-
     from plinder.core.structure.smallmols_utils import compare_stereo_to_template
 
     # TODO(peppr): use the vendored sanitize the pipeline uses (boron/main-group
@@ -178,9 +177,8 @@ def test_compare_stereo_to_template():
 
 def test_compare_stereo_to_template_ez():
     """compare_stereo_to_template detects cis/trans (E/Z) double-bond mismatches."""
-    from rdkit.Chem import AllChem
-
     from plinder.core.structure.smallmols_utils import compare_stereo_to_template
+    from rdkit.Chem import AllChem
 
     names = ["C1", "C2", "C3", "CL"]
 
@@ -250,9 +248,21 @@ def test_mhfp6_fingerprint_is_deterministic_and_sized():
         mol2mhfp6("not a molecule")
 
 
+def test_mhfp6_handles_conjugated_alkene_stereo():
+    from plinder.core.structure.smallmols_similarity import (
+        MHFP6_N_PERMUTATIONS,
+        mol2mhfp6,
+    )
+
+    smiles = (
+        "C#CCCCCC(=O)O[C@H]1CC(=O)N(C)c2cc(cc(OC)c2Cl)"
+        "C/C(C)=C/C=C/[C@@H](OC)C2=NC(=O)O[C@@H](C2)[C@@H](C)[C@@H]2O[C@@]12C"
+    )
+    assert mol2mhfp6(smiles).shape == (MHFP6_N_PERMUTATIONS,)
+
+
 def test_mhfp6_bulk_jaccard_counts_matching_minima():
     import numpy as np
-
     from plinder.core.structure.smallmols_similarity import (
         MHFP6_N_PERMUTATIONS,
         mhfp6_bulk_jaccard,
@@ -300,13 +310,12 @@ def test_ecfp4_vs_mhfp6_on_sequence_isomer_edge_cases():
     molecule that a local-substructure fingerprint struggles to tell apart).
     """
     import numpy as np
-    from rdkit import DataStructs
-
     from plinder.core.structure.smallmols_similarity import (
         mhfp6_bulk_jaccard,
         mol2mhfp6,
         mol2morgan_fp,
     )
+    from rdkit import DataStructs
 
     def ecfp4(m1, m2):
         return DataStructs.TanimotoSimilarity(
@@ -467,9 +476,8 @@ def test_rascal_parity_coverage_is_directional():
 
 
 def test_rascal_parity_score_sees_order_stereo_and_size():
-    from rdkit import Chem
-
     from plinder.core.structure.smallmols_similarity import rascal_parity_score
+    from rdkit import Chem
 
     peptide = Chem.MolFromSequence
     score = rascal_parity_score
