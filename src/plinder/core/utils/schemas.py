@@ -28,12 +28,9 @@ RELEASE_ALIGNMENT_MAPPING_REQUIRED_COLUMNS = frozenset(
         "query_chain_mapped",
         "target_chain_mapped",
         "source",
-        "qcov",
-        "tcov",
-        "fident",
-        "seqsim",
-        "query_selected_residue_positions",
-        "target_selected_residue_positions",
+        "query_start",
+        "target_start",
+        "cigar",
         "selected_residue_identity_bits",
     }
 )
@@ -76,37 +73,25 @@ def mapped_alignment_schema_is_current(
     return required.issubset(columns)
 
 
-def release_alignment_mapping_schema(*, alignment_type: str) -> pa.Schema:
-    """Return the compact public residue-mapping schema."""
-    fields = [
-        pa.field("query_entry", pa.string()),
-        pa.field("target_entry", pa.string()),
-        pa.field("query_chain_mapped", pa.string()),
-        pa.field("target_chain_mapped", pa.string()),
-        pa.field("source", pa.string()),
-        pa.field("qcov", pa.float64()),
-        pa.field("tcov", pa.float64()),
-        pa.field("fident", pa.float64()),
-        pa.field("seqsim", pa.float64()),
-        pa.field("query_selected_residue_positions", pa.list_(pa.uint16())),
-        pa.field("target_selected_residue_positions", pa.list_(pa.uint16())),
-        pa.field("selected_residue_identity_bits", pa.binary()),
-    ]
-    if alignment_type == "foldseek":
-        fields.append(pa.field("lddt", pa.float64()))
-    elif alignment_type != "mmseqs":
+def release_alignment_mapping_schema(
+    *, alignment_type: str, include_scores: bool = True
+) -> pa.Schema:
+    """Return the CIGAR-based release alignment schema."""
+    if alignment_type not in {"foldseek", "mmseqs"}:
         raise ValueError(f"unknown alignment type: {alignment_type}")
-    return pa.schema(fields)
+    return ALIGNMENT_CIGAR_SCHEMA if include_scores else ALIGNMENT_CIGAR_ONLY_SCHEMA
 
 
 def release_alignment_mapping_schema_is_current(
-    columns: set[str], *, alignment_type: str
+    columns: set[str], *, alignment_type: str, include_scores: bool = True
 ) -> bool:
-    """Return whether a release shard uses chain-relative residue positions."""
+    """Check residue-mapping columns and, when requested, chain scores."""
     required = RELEASE_ALIGNMENT_MAPPING_REQUIRED_COLUMNS
-    if alignment_type == "foldseek":
-        required = required | {"lddt"}
-    elif alignment_type != "mmseqs":
+    if include_scores:
+        required = required | {"qcov", "tcov", "fident", "seqsim"}
+        if alignment_type == "foldseek":
+            required = required | {"lddt"}
+    if alignment_type not in {"foldseek", "mmseqs"}:
         raise ValueError(f"unknown alignment type: {alignment_type}")
     return required.issubset(columns)
 
@@ -137,6 +122,20 @@ ALIGNMENT_CIGAR_SCHEMA = pa.schema(
         ("query_start", pa.uint32()),
         ("target_start", pa.uint32()),
         ("cigar", pa.string()),
+        ("qcov", pa.float64()),
+        ("tcov", pa.float64()),
+        ("fident", pa.float64()),
+        ("seqsim", pa.float64()),
+        ("lddt", pa.float64()),
+        ("selected_residue_identity_bits", pa.binary()),
+    ]
+)
+
+ALIGNMENT_CIGAR_ONLY_SCHEMA = pa.schema(
+    [
+        field
+        for field in ALIGNMENT_CIGAR_SCHEMA
+        if field.name not in {"qcov", "tcov", "fident", "seqsim", "lddt"}
     ]
 )
 
@@ -188,6 +187,14 @@ INTERFACE_SIMILARITY_EXPORT_SCHEMA = pa.schema(
         ("target_system", pa.string()),
         ("iface1_qcov", pa.float32()),
         ("iface2_qcov", pa.float32()),
+        ("similarity", pa.int8()),
+    ]
+)
+
+INTERFACE_HALF_SIMILARITY_EXPORT_SCHEMA = pa.schema(
+    [
+        ("query_half_interface_id", pa.string()),
+        ("target_half_interface_id", pa.string()),
         ("similarity", pa.int8()),
     ]
 )
@@ -325,6 +332,8 @@ LIGAND_SIMILARITY_EXPORT_SCHEMA = pa.schema(
         ("pocket_qcov", pa.int8()),
         ("pocket_fident_qcov", pa.int8()),
         ("pli_qcov", pa.int8()),
+        ("shape", pa.int8()),
+        ("color", pa.int8()),
         ("sucos_shape", pa.int8()),
     ]
 )

@@ -4,7 +4,6 @@ import os
 from pathlib import Path
 
 import pytest
-
 from plinder.core.index import utils
 
 
@@ -118,6 +117,7 @@ def test_default_download_includes_covers_but_not_complete_scores(
     assert "protein_clusters/structure.parquet" in requested
     assert "exports/ligand_similarity_scores.parquet" not in requested
     assert "exports/interface_similarity_scores.parquet" not in requested
+    assert "exports/interface_half_similarity_scores.parquet" not in requested
     assert "ligand_clusters" not in requested
     assert "interface_clusters" not in requested
 
@@ -135,7 +135,7 @@ def test_download_uses_only_release_artifacts(mock_cpl, monkeypatch):
 
     utils.download_plinder_cmd(args=["-y"])
 
-    assert "alignments" in requested
+    assert "alignment_cigars" in requested
     assert "search_databases" in requested
     assert not any(path == "scores" or path.startswith("scores/") for path in requested)
     assert "entries" not in requested

@@ -17,7 +17,10 @@ from plinder.core.scores.entries import (
     LigandView,
     load_entry_views,
 )
-from plinder.core.scores.mapping import expand_residue_positions
+from plinder.core.scores.mapping import (
+    decode_cigar_residue_positions,
+    expand_residue_positions,
+)
 from plinder.core.utils.log import setup_logger
 from plinder.core.utils.schemas import (
     INTERFACE_SIMILARITY_SCHEMA,
@@ -66,7 +69,7 @@ def prefetch_similarity_alignments(
             if key not in resolved:
                 try:
                     resolved[key] = _release_file(
-                        "alignment_shard",
+                        "alignment_cigar_shard",
                         data_dir=data_dir,
                         description=(
                             f"{search_db} {alignment_type} mapped alignment "
@@ -154,8 +157,9 @@ def _load_interface_alignments(
         "query_chain_mapped",
         "target_chain_mapped",
         "source",
-        "query_selected_residue_positions",
-        "target_selected_residue_positions",
+        "query_start",
+        "target_start",
+        "cigar",
     ]
     frames: list[pd.DataFrame] = []
     targets = sorted(target_pdb_ids)
@@ -172,7 +176,12 @@ def _load_interface_alignments(
             if frame.empty:
                 continue
             frame["source"] = alignment_type
-            frames.append(expand_residue_positions(frame, chain_lookup=chain_lookup))
+            frames.append(
+                expand_residue_positions(
+                    decode_cigar_residue_positions(frame, chain_lookup=chain_lookup),
+                    chain_lookup=chain_lookup,
+                )
+            )
     if not frames:
         return pd.DataFrame(
             columns=[

@@ -2,7 +2,6 @@
 # Distributed under the terms of the Apache License 2.0
 import pandas as pd
 import pytest
-
 from plinder.core import PlinderRelease, query_table, scores
 from plinder.core.scores import ligand as ligand_module
 
@@ -65,6 +64,13 @@ def similarity_release(tmp_path):
             "similarity": [80, 30],
         }
     ).to_parquet(exports / "interface_similarity_scores.parquet", index=False)
+    pd.DataFrame(
+        {
+            "query_half_interface_id": ["query_interface::side=1"],
+            "target_half_interface_id": ["target_interface::side=2"],
+            "similarity": [75],
+        }
+    ).to_parquet(exports / "interface_half_similarity_scores.parquet", index=False)
     protein_scores = exports / "protein_similarity_scores/alignment_type=foldseek"
     protein_scores.mkdir(parents=True)
     pd.DataFrame(
@@ -208,6 +214,30 @@ def test_query_protein_similarity_reads_integer_scores(similarity_release):
 def test_query_chain_overlap_counts_selected_residues(
     similarity_release, kind, expected
 ):
+    # Selected residues 10 and 30 align to 6 and 8; residue 20 is in a gap.
+    pd.DataFrame(
+        [
+            {
+                "query_entry": "1abc",
+                "target_entry": "2def",
+                "query_chain_mapped": "A",
+                "target_chain_mapped": "B",
+                "source": "mmseqs",
+                "query_start": 10,
+                "target_start": 6,
+                "cigar": "1M19I1D1M",
+                "selected_residue_identity_bits": b"\x03",
+            }
+        ]
+    ).to_parquet(
+        similarity_release.path(
+            "alignment_cigar_shard",
+            search_db="holo",
+            alignment_type="mmseqs",
+            shard="ab",
+        ),
+        index=False,
+    )
     result = scores.query_chain_overlap(
         "1abc",
         "A",
@@ -287,6 +317,35 @@ def test_map_chain_alignment_reads_optional_cigar_shard(similarity_release):
     ].values.tolist() == [[3, 5], [4, 6], [6, 8]]
 
 
+@pytest.mark.parametrize("source", ["foldseek", "mmseqs"])
+def test_cigar_sparse_decoders_agree(similarity_release, source):
+    import duckdb
+    from plinder.core.scores.mapping import (
+        cigar_alignment_sql,
+        decode_cigar_residue_positions,
+    )
+
+    path = similarity_release.path(
+        "alignment_cigar_shard", search_db="holo", alignment_type="mmseqs", shard="ab"
+    )
+    frame = pd.read_parquet(path)
+    frame["source"] = source
+    frame["query_start"] = 1 if source == "foldseek" else 10
+    frame["target_start"] = 1 if source == "foldseek" else 5
+    frame["cigar"] = "2M1I1D1M"
+    frame.to_parquet(path, index=False)
+    lookup = similarity_release.path("alignment_chain_lookup")
+    decoded = decode_cigar_residue_positions(frame, chain_lookup=lookup)
+    con = duckdb.connect()
+    sql = con.execute(cigar_alignment_sql(path, lookup)).fetchdf()
+    con.close()
+    for column in [
+        "query_selected_residue_positions",
+        "target_selected_residue_positions",
+    ]:
+        assert sql.iloc[0][column].tolist() == decoded.iloc[0][column]
+
+
 def test_query_interface_similarity_reads_complete_export(similarity_release):
     result = scores.query_interface_similarity(
         columns=["target_system", "iface1_qcov", "iface2_qcov", "similarity"],
@@ -307,12 +366,28 @@ def test_query_interface_similarity_reads_complete_export(similarity_release):
     ]
 
 
+def test_query_half_interface_similarity_reads_complete_export(similarity_release):
+    result = scores.query_half_interface_similarity(
+        filters=[("query_half_interface_id", "==", "query_interface::side=1")],
+        release=similarity_release,
+    )
+
+    assert result.to_dict("records") == [
+        {
+            "query_half_interface_id": "query_interface::side=1",
+            "target_half_interface_id": "target_interface::side=2",
+            "similarity": 75,
+        }
+    ]
+
+
 @pytest.mark.parametrize(
     "query",
     [
         scores.query_protein_similarity,
         scores.query_ligand_similarity,
         scores.query_interface_similarity,
+        scores.query_half_interface_similarity,
     ],
 )
 def test_complete_similarity_queries_require_filters(query, similarity_release):

@@ -18,7 +18,7 @@ from .custom import (
     score_custom_cif_files,
     score_custom_sequence_file,
 )
-from .interface import query_interface_similarity
+from .interface import query_half_interface_similarity, query_interface_similarity
 from .ligand import (
     cross_ligand_chemical_similarity,
     query_ligand_chemical_similarity,
@@ -40,6 +40,7 @@ __all__ = [
     "query_ligand_chemical_similarity",
     "cross_ligand_chemical_similarity",
     "query_interface_similarity",
+    "query_half_interface_similarity",
     "query_chain_overlap",
     "query_protein_similarity",
     "CustomProteinSearchConfig",

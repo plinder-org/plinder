@@ -4,10 +4,115 @@
 
 from __future__ import annotations
 
+import re
+from bisect import bisect_left
 from collections.abc import Iterable
 from pathlib import Path
 
 import pandas as pd
+
+
+def cigar_alignment_sql(path: Path, chain_lookup: Path) -> str:
+    """DuckDB relation recovering sparse residue positions without a Python UDF."""
+    source = str(path).replace("'", "''")
+    lookup = str(chain_lookup).replace("'", "''")
+    return f"""WITH native AS (
+        SELECT a AS original,
+            CASE WHEN a.source='mmseqs' THEN q.selected_residue_numbers
+                ELSE list_transform(q.selected_residue_indices, i -> i+1) END AS qnative,
+            coalesce(CASE WHEN a.source='mmseqs' THEN t.selected_residue_numbers
+                ELSE list_transform(t.selected_residue_indices, i -> i+1) END, []) AS tnative,
+            regexp_extract_all(a.cigar, '([0-9]+)([MID=X])', 1)::BIGINT[] AS lengths,
+            regexp_extract_all(a.cigar, '([0-9]+)([MID=X])', 2) AS operations
+        FROM read_parquet('{source}') a
+        JOIN read_parquet('{lookup}') q
+            ON a.query_entry=q.entry_pdb_id AND a.query_chain_mapped=q.chain_asym_id
+        LEFT JOIN read_parquet('{lookup}') t
+            ON a.target_entry=t.entry_pdb_id AND a.target_chain_mapped=t.chain_asym_id
+    ), consumed AS (
+        SELECT *,
+            list_transform(list_zip(lengths, operations), r -> CASE WHEN r[2]='D' THEN 0 ELSE r[1] END) AS qlengths,
+            list_transform(list_zip(lengths, operations), r -> CASE WHEN r[2]='I' THEN 0 ELSE r[1] END) AS tlengths
+        FROM native
+    ), starts AS (
+        SELECT *,
+            list_transform(range(1, len(lengths)+1), i -> original.query_start + coalesce(list_sum(list_slice(qlengths, 1, i-1)), 0)) AS qstarts,
+            list_transform(range(1, len(lengths)+1), i -> original.target_start + coalesce(list_sum(list_slice(tlengths, 1, i-1)), 0)) AS tstarts
+        FROM consumed
+    ), matched AS (
+        SELECT *, list_transform(qnative, n -> list_position(
+            list_transform(range(1, len(lengths)+1), j ->
+                n >= qstarts[j] AND n < qstarts[j]+qlengths[j]
+                AND operations[j] IN ('M', '=', 'X')), true)) AS matching_runs
+        FROM starts
+    ), selected AS (
+        SELECT *, list_filter(list_grade_up(qnative), i -> matching_runs[i] IS NOT NULL) AS qpositions
+        FROM matched
+    ) SELECT original.*,
+        qpositions AS query_selected_residue_positions,
+        list_transform(qpositions, i -> coalesce(list_position(tnative,
+            tstarts[matching_runs[i]] + qnative[i] - qstarts[matching_runs[i]]), 0)) AS target_selected_residue_positions
+    FROM selected"""
+
+
+def decode_cigar_residue_positions(
+    alignments: pd.DataFrame, *, chain_lookup: Path
+) -> pd.DataFrame:
+    """Recover selected residue pairs from CIGARs and the chain lookup.
+
+    Only selected query residues are visited; target position zero denotes a
+    residue outside the target's selected pocket/interface residues.
+    """
+    entries = sorted(set(alignments.query_entry) | set(alignments.target_entry))
+    lookup = (
+        pd.read_parquet(
+            chain_lookup,
+            columns=[
+                "entry_pdb_id",
+                "chain_asym_id",
+                "selected_residue_numbers",
+                "selected_residue_indices",
+            ],
+            filters=[("entry_pdb_id", "in", entries)],
+        )
+        if entries
+        else pd.DataFrame()
+    )
+    maps: dict[tuple[str, str, str], tuple[list[int], dict[int, int]]] = {}
+    for row in lookup.itertuples(index=False):
+        for backend, numbers in (
+            ("mmseqs", [int(n) for n in row.selected_residue_numbers]),
+            ("foldseek", [int(i) + 1 for i in row.selected_residue_indices]),
+        ):
+            maps[(row.entry_pdb_id, row.chain_asym_id, backend)] = (
+                sorted(numbers),
+                {n: i for i, n in enumerate(numbers, start=1)},
+            )
+    queries, targets = [], []
+    for row in alignments.itertuples(index=False):
+        selected, qmap = maps[(row.query_entry, row.query_chain_mapped, row.source)]
+        _, tmap = maps.get(
+            (row.target_entry, row.target_chain_mapped, row.source), ([], {})
+        )
+        q, t = int(row.query_start), int(row.target_start)
+        query, target = [], []
+        for length_text, operation in re.findall(r"(\d+)([MID=X])", row.cigar):
+            length = int(length_text)
+            if operation in {"M", "=", "X"}:
+                lo, hi = bisect_left(selected, q), bisect_left(selected, q + length)
+                for number in selected[lo:hi]:
+                    query.append(qmap[number])
+                    target.append(tmap.get(t + number - q, 0))
+            if operation in {"M", "I", "=", "X"}:
+                q += length
+            if operation in {"M", "D", "=", "X"}:
+                t += length
+        queries.append(query)
+        targets.append(target)
+    result = alignments.copy()
+    result["query_selected_residue_positions"] = queries
+    result["target_selected_residue_positions"] = targets
+    return result
 
 
 def pack_residue_identities(values: Iterable[bool]) -> bytes:

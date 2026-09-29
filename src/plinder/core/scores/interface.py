@@ -23,4 +23,16 @@ def query_interface_similarity(
     return read_score_table(dataset, columns=columns, filters=filters)
 
 
-__all__ = ["query_interface_similarity"]
+@timeit
+def query_half_interface_similarity(
+    *,
+    columns: list[str] | None = None,
+    filters: Filters = None,
+    release: PlinderRelease | None = None,
+) -> pd.DataFrame:
+    """Query directed coverage between individual interface sides."""
+    dataset = (release or PlinderRelease()).fetch("interface_half_similarity_scores")
+    return read_score_table(dataset, columns=columns, filters=filters)
+
+
+__all__ = ["query_interface_similarity", "query_half_interface_similarity"]

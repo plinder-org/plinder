@@ -3,7 +3,6 @@
 from pathlib import Path
 
 import pytest
-
 from plinder.core.release import RELEASE_PATHS, RELEASE_TABLES, PlinderRelease
 
 
@@ -49,13 +48,13 @@ def test_path_does_not_require_artifact_to_exist(tmp_path):
 def test_parameterized_artifact_path(tmp_path):
     release = PlinderRelease(tmp_path)
     assert release.path(
-        "alignment_shard",
+        "alignment_cigar_shard",
         search_db="holo",
         alignment_type="foldseek",
         shard="ab",
     ) == (
         tmp_path
-        / "alignments"
+        / "alignment_cigars"
         / "search_db=holo"
         / "alignment_type=foldseek"
         / "shard=ab.parquet"
@@ -76,7 +75,7 @@ def test_parameterized_artifact_path(tmp_path):
 )
 def test_parameterized_artifact_rejects_missing_or_unsafe_values(tmp_path, parameters):
     with pytest.raises(ValueError):
-        PlinderRelease(tmp_path).path("alignment_shard", **parameters)
+        PlinderRelease(tmp_path).path("alignment_cigar_shard", **parameters)
 
 
 def test_fetch_checks_explicit_local_artifact(tmp_path):

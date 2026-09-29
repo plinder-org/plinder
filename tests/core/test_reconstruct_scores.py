@@ -4,7 +4,6 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
-
 from plinder.core import release
 from plinder.core.scores import reconstruct
 from plinder.core.scores.entries import LigandView
@@ -31,10 +30,10 @@ def test_prefetch_resolves_only_requested_alignment_shards(tmp_path, monkeypatch
     )
 
     assert requested == [
-        "alignments/search_db=holo/alignment_type=foldseek/shard=ab.parquet",
-        "alignments/search_db=holo/alignment_type=mmseqs/shard=ab.parquet",
-        "alignments/search_db=holo/alignment_type=foldseek/shard=xy.parquet",
-        "alignments/search_db=holo/alignment_type=mmseqs/shard=xy.parquet",
+        "alignment_cigars/search_db=holo/alignment_type=foldseek/shard=ab.parquet",
+        "alignment_cigars/search_db=holo/alignment_type=mmseqs/shard=ab.parquet",
+        "alignment_cigars/search_db=holo/alignment_type=foldseek/shard=xy.parquet",
+        "alignment_cigars/search_db=holo/alignment_type=mmseqs/shard=xy.parquet",
     ]
     assert paths["1abc"] == paths["2abd"]
     assert paths["1abc"] != paths["3xyz"]
@@ -52,7 +51,8 @@ def test_prefetch_requires_requested_shard_in_offline_cache(tmp_path, monkeypatc
 
 def test_prefetch_accepts_one_available_alignment_backend(tmp_path):
     foldseek = (
-        tmp_path / "alignments/search_db=holo/alignment_type=foldseek/shard=ab.parquet"
+        tmp_path
+        / "alignment_cigars/search_db=holo/alignment_type=foldseek/shard=ab.parquet"
     )
     foldseek.parent.mkdir(parents=True)
     foldseek.touch()

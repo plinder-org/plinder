@@ -10,7 +10,10 @@ from typing import Literal
 import pandas as pd
 
 from plinder.core.release import PlinderRelease
-from plinder.core.scores.mapping import unpack_residue_identities
+from plinder.core.scores.mapping import (
+    decode_cigar_residue_positions,
+    unpack_residue_identities,
+)
 from plinder.core.scores.query import Filters, read_score_table
 from plinder.core.utils.dec import timeit
 
@@ -168,7 +171,7 @@ def query_chain_overlap(
     for alignment_type in sources:
         try:
             shard = selected_release.fetch(
-                "alignment_shard",
+                "alignment_cigar_shard",
                 search_db=search_db,
                 alignment_type=alignment_type,
                 shard=query_entry[-3:-1],
@@ -180,8 +183,14 @@ def query_chain_overlap(
         alignments = pd.read_parquet(
             shard,
             columns=[
-                "query_selected_residue_positions",
-                "target_selected_residue_positions",
+                "query_entry",
+                "target_entry",
+                "query_chain_mapped",
+                "target_chain_mapped",
+                "source",
+                "query_start",
+                "target_start",
+                "cigar",
                 "selected_residue_identity_bits",
             ],
             filters=[
@@ -191,6 +200,7 @@ def query_chain_overlap(
                 ("target_chain_mapped", "==", target_chain),
             ],
         )
+        alignments = decode_cigar_residue_positions(alignments, chain_lookup=lookup)
         for row in alignments.itertuples(index=False):
             aligned_query_positions = [
                 int(position) for position in row.query_selected_residue_positions
