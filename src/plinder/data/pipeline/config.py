@@ -318,7 +318,12 @@ def get_config(**kwargs: Any) -> DictConfig:
     if cli_args is None:
         # Ignore host-program flags, but reject invalid ingest overrides before
         # the shared reader's permissive CLI handling can discard them.
-        cli_args = [arg for arg in sys.argv[1:] if arg.split(".", 1)[0] in SCHEMA]
+        cli_args = [
+            arg
+            for arg in sys.argv[1:]
+            if "=" in arg and arg.split("=", 1)[0].split(".", 1)[0] in SCHEMA
+        ]
+        kwargs["config_args"] = cli_args
     if cli_args:
         _config._validate_cfg(cfg=OmegaConf.from_cli(cli_args), schema=SCHEMA)
     cfg = _get_config(**kwargs)

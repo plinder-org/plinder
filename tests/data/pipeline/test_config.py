@@ -6,7 +6,6 @@ from textwrap import dedent
 
 import pytest
 from omegaconf import OmegaConf
-
 from plinder.data.pipeline import config
 
 
@@ -216,3 +215,11 @@ def test_get_config_cli():
     with unittest.mock.patch("sys.argv", test_args):
         cfg = config.get_config(cached=False)
         assert cfg.flow.download_rcsb_files_batch_size == 4
+
+
+@pytest.mark.parametrize("backend", ["foldseek", "mmseqs"])
+def test_get_config_ignores_search_backend_argument(backend):
+    test_args = ["score", "search", "--alignment-type", backend, "foldseek.max_seqs=42"]
+    with unittest.mock.patch("sys.argv", test_args):
+        cfg = config.get_config(cached=False)
+    assert cfg.foldseek.max_seqs == 42
