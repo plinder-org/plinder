@@ -334,6 +334,7 @@ def build_ccd_mmp_db(
     scratch_dir: Path,
     threads: int = 4,
     fragments_path: Path | None = None,
+    exclusions_path: Path | None = None,
 ) -> Path:
     """Write matched molecular pairs over the CCD universe.
 
@@ -375,6 +376,15 @@ def build_ccd_mmp_db(
             "PLINDER data dependencies"
         )
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    mmp_components, exclusions = _ccd_mmp_inputs(components)
+    if exclusions_path is not None:
+        exclusions_path.parent.mkdir(parents=True, exist_ok=True)
+        exclusions.to_csv(exclusions_path, sep="\t", index=False)
+    LOG.info(
+        "build_ccd_mmp_db: excluding %d of %d CCD components from mmpdb",
+        len(exclusions),
+        len(components),
+    )
     scratch_dir = Path(scratch_dir)
     scratch_dir.mkdir(parents=True, exist_ok=True)
     temporary_path = output_path.with_suffix(".parquet.tmp")
@@ -382,14 +392,14 @@ def build_ccd_mmp_db(
     with TemporaryDirectory(prefix="plinder-ccd-mmp-", dir=scratch_dir) as work:
         work_dir = Path(work)
         pair_files = _generate_pair_files(
-            ligands=components,
+            ligands=mmp_components,
             work_dir=work_dir,
             threads=threads,
             executable=executable,
         )
         _write_pair_parquet(
             pair_files=pair_files,
-            ligands=components,
+            ligands=mmp_components,
             output_path=temporary_path,
         )
         if fragments_path is not None:
@@ -397,6 +407,37 @@ def build_ccd_mmp_db(
     temporary_path.replace(output_path)
     LOG.info(f"build_ccd_mmp_db: wrote matched pairs to {output_path}")
     return output_path
+
+
+def _ccd_mmp_inputs(components: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Keep CCD chemistry mmpdb can fragment; retain every CCD in other scores."""
+    from rdkit import Chem
+    from rdkit.rdBase import BlockLogs
+
+    included = []
+    exclusions = []
+    with BlockLogs():
+        for row in components.itertuples(index=False):
+            smiles = row.ligand_rdkit_canonical_smiles
+            molecule = Chem.MolFromSmiles(smiles)
+            if molecule is None:
+                reason = "unsupported_by_mmpdb_smiles_parser"
+            elif any(
+                str(bond.GetBondType()).startswith("DATIVE")
+                for bond in molecule.GetBonds()
+            ):
+                reason = "metal_dative_bonds"
+            elif len(Chem.GetMolFrags(molecule)) != 1:
+                reason = "disconnected_components"
+            else:
+                included.append(row.ligand_smiles_id)
+                continue
+            exclusions.append((row.ccd_id, row.ligand_smiles_id, smiles, reason))
+    filtered = components[components["ligand_smiles_id"].isin(included)]
+    excluded = pd.DataFrame(
+        exclusions, columns=["ccd_id", "ligand_smiles_id", "smiles", "reason"]
+    )
+    return filtered, excluded
 
 
 def _export_fragmentations(work_dir: Path, fragments_path: Path) -> Path:
@@ -1061,6 +1102,8 @@ def _parity_rows(
     """
     from concurrent.futures import ThreadPoolExecutor
 
+    from rdkit import Chem
+
     from plinder.core.structure.smallmols_similarity import rascal_parity_match
 
     def row(
@@ -1069,6 +1112,9 @@ def _parity_rows(
         first, second, keep_alternatives = pair
         if first is None or second is None:
             return float("nan"), float("nan"), float("nan"), [], []
+        first, second = Chem.Mol(first), Chem.Mol(second)
+        first.RemoveAllConformers()
+        second.RemoveAllConformers()
         match = rascal_parity_match(first, second, all_best=keep_alternatives)
         names_1, names_2 = _atom_names(first), _atom_names(second)
         fragments = (match.atoms, *(match.alternatives if keep_alternatives else ()))
@@ -1081,6 +1127,7 @@ def _parity_rows(
             [[names_2[j] for j in fragment.values()] for fragment in fragments],
         )
 
+    # Clone only active worker inputs; cached CCD molecules remain shared read-only.
     with ThreadPoolExecutor(threads) as pool:
         rows = list(pool.map(row, pairs))
     return pd.DataFrame(
@@ -1237,7 +1284,11 @@ class CcdParityTable:
 
 
 def build_ccd_parity_scores(
-    components: pd.DataFrame, data_dir: Path, *, threads: int = 4
+    components: pd.DataFrame,
+    data_dir: Path,
+    *,
+    threads: int = 4,
+    batch_size: int = 5000,
 ) -> Path:
     """Score every ECFP4 edge of the CCD universe with :func:`rascal_parity_score`.
 
@@ -1279,22 +1330,52 @@ def build_ccd_parity_scores(
     edges = edges.sort_values(
         ["ligand_smiles_id_1", "ligand_smiles_id_2"], ignore_index=True
     )
-    pairs = [
-        (
-            _ccd_named_mol(codes[i]),
-            _ccd_named_mol(codes[j]),
-            bool(linking[i] and linking[j]),
-        )
-        for i, j in edges[["ligand_smiles_id_1", "ligand_smiles_id_2"]].itertuples(
-            index=False, name=None
-        )
-    ]
-    table = pd.concat([edges, _parity_rows(pairs, threads=threads)], axis=1)
     output_path = ccd_parity_path(data_dir)
     temporary_path = output_path.with_suffix(".parquet.tmp")
-    table.to_parquet(temporary_path, index=False)
+    temporary_path.unlink(missing_ok=True)
+    schema = pa.schema(
+        [
+            ("ligand_smiles_id_1", pa.int32()),
+            ("ligand_smiles_id_2", pa.int32()),
+            ("tanimoto_similarity_ecfp4_1024", pa.float32()),
+            ("parity_similarity", pa.float64()),
+            ("parity_coverage_1", pa.float64()),
+            ("parity_coverage_2", pa.float64()),
+            ("fragment_atoms_1", pa.list_(pa.list_(pa.string()))),
+            ("fragment_atoms_2", pa.list_(pa.list_(pa.string()))),
+        ]
+    )
+    try:
+        with pq.ParquetWriter(temporary_path, schema) as writer:
+            for start in range(0, len(edges), batch_size):
+                batch = edges.iloc[start : start + batch_size].reset_index(drop=True)
+                pairs = [
+                    (
+                        _ccd_named_mol(codes[i]),
+                        _ccd_named_mol(codes[j]),
+                        bool(linking[i] and linking[j]),
+                    )
+                    for i, j in batch[
+                        ["ligand_smiles_id_1", "ligand_smiles_id_2"]
+                    ].itertuples(index=False, name=None)
+                ]
+                scored = pd.concat(
+                    [batch, _parity_rows(pairs, threads=threads)], axis=1
+                )
+                writer.write_table(
+                    pa.Table.from_pandas(scored, schema=schema, preserve_index=False)
+                )
+                if (start // batch_size + 1) % 20 == 0:
+                    LOG.info(
+                        "build_ccd_parity_scores: scored %s/%s edges",
+                        min(start + batch_size, len(edges)),
+                        len(edges),
+                    )
+    except Exception:
+        temporary_path.unlink(missing_ok=True)
+        raise
     temporary_path.replace(output_path)
-    LOG.info(f"build_ccd_parity_scores: scored {len(table)} edges into {output_path}")
+    LOG.info(f"build_ccd_parity_scores: scored {len(edges)} edges into {output_path}")
     return output_path
 
 
@@ -1350,9 +1431,10 @@ def make_ccd_ligand_dbs(
     force_update: bool = False,
     limit: int | None = None,
     build_tanimoto_scores: bool = True,
+    build_parity_scores: bool = False,
     minimum_similarity: float = 30.0,
 ) -> Path:
-    """Build CCD-anchored MMP, ECFP4 and PARITY-like databases with cached settings.
+    """Build CCD-anchored MMP and ECFP4 databases, optionally scoring PARITY.
 
     Parameters
     ----------
@@ -1367,9 +1449,12 @@ def make_ccd_ligand_dbs(
     limit : int or None
         Restrict to the first *limit* released components (testing aid).
     build_tanimoto_scores : bool
-        Build the Tanimoto edges and their PARITY-like scores.
+        Build the Tanimoto edges.
+    build_parity_scores : bool
+        Also score every retained CCD pair with PARITY. This is an expensive
+        optional step; targeted PARITY queries remain available separately.
     minimum_similarity : float
-        ECFP4 Tanimoto percentage cutoff for pairs retained in both score tables.
+        ECFP4 Tanimoto percentage cutoff for retained pairs.
 
     Returns
     -------
@@ -1395,17 +1480,21 @@ def make_ccd_ligand_dbs(
     ecfp_path = ccd_fingerprint_path(data_dir)
     mmp_path = output_dir / "ccd_mmp_pairs.parquet"
     fragments_path = output_dir / "ccd_mmp_fragments.parquet"
+    exclusions_path = output_dir / "ccd_mmp_exclusions.tsv"
     manifest_path = output_dir / "ccd_dbs.manifest.json"
 
     components = ccd_component_table(limit=limit)
     if components.empty:
         raise ValueError("the CCD component universe is empty")
+    if build_parity_scores and not build_tanimoto_scores:
+        raise ValueError("PARITY scoring requires Tanimoto score shards")
     manifest = {
         "ccd_universe_signature": ccd_universe_signature(components),
         "num_components": int(len(components)),
         "mmpdb_version": _mmpdb_version(),
         "minimum_similarity": minimum_similarity,
         "build_tanimoto_scores": build_tanimoto_scores,
+        "build_parity_scores": build_parity_scores,
     }
 
     artifacts: tuple[Path, ...] = (
@@ -1413,9 +1502,15 @@ def make_ccd_ligand_dbs(
         ecfp_path,
         mmp_path,
         fragments_path,
+        exclusions_path,
         manifest_path,
     )
     if build_tanimoto_scores:
+        artifacts += tuple(
+            output_dir / "ligand_scores" / f"ccd_scores_{i:04d}.parquet"
+            for i in range((len(components) + 4_999) // 5_000)
+        )
+    if build_parity_scores:
         artifacts += (ccd_parity_path(data_dir),)
     if not force_update and all(path.is_file() for path in artifacts):
         try:
@@ -1438,6 +1533,7 @@ def make_ccd_ligand_dbs(
         scratch_dir=Path(scratch_dir),
         threads=threads,
         fragments_path=fragments_path,
+        exclusions_path=exclusions_path,
     )
     if build_tanimoto_scores:
         build_ccd_tanimoto_scores(
@@ -1445,6 +1541,7 @@ def make_ccd_ligand_dbs(
             data_dir,
             minimum_similarity=minimum_similarity,
         )
+    if build_parity_scores:
         build_ccd_parity_scores(components, data_dir, threads=threads)
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True))
     LOG.info(f"make_ccd_ligand_dbs: built {len(components)} components -> {output_dir}")

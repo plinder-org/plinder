@@ -23,6 +23,7 @@ from plinder.data.annotations.ccd_ligand_dbs import (
     ResidueGraph,
     _ccd_chem_comp_table,
     _ccd_heavy_atoms,
+    _ccd_mmp_inputs,
     _ccd_named_mol,
     _ccd_smiles,
     build_ccd_ecfp_db,
@@ -57,6 +58,28 @@ needs_mmpdb = pytest.mark.skipif(
     shutil.which("mmpdb") is None, reason="mmpdb executable not installed"
 )
 LIMIT = 1500
+
+
+def test_ccd_mmp_inputs_exclude_unsupported_chemistry() -> None:
+    components = pd.DataFrame(
+        {
+            "ccd_id": ["ETH", "MET", "SAL", "BAD"],
+            "ligand_smiles_id": [0, 1, 2, 3],
+            "ligand_rdkit_canonical_smiles": [
+                "CCO",
+                "N->[Cu+2]<-N",
+                "CCO.[Na+]",
+                "C1CC",
+            ],
+        }
+    )
+    included, excluded = _ccd_mmp_inputs(components)
+    assert included["ccd_id"].tolist() == ["ETH"]
+    assert dict(zip(excluded["ccd_id"], excluded["reason"])) == {
+        "MET": "metal_dative_bonds",
+        "SAL": "disconnected_components",
+        "BAD": "unsupported_by_mmpdb_smiles_parser",
+    }
 
 
 @pytest.fixture(scope="module")
@@ -290,7 +313,9 @@ def test_parity_scores_every_tanimoto_edge_once(tmp_path):
         [pd.read_parquet(shard) for shard in scores_dir.glob("*.parquet")]
     )
     unordered = edges[edges["query_ligand_id"] < edges["target_ligand_id"]]
-    parity = pd.read_parquet(build_ccd_parity_scores(small, tmp_path, threads=2))
+    parity = pd.read_parquet(
+        build_ccd_parity_scores(small, tmp_path, threads=2, batch_size=50)
+    )
     assert list(parity.columns) == [
         "ligand_smiles_id_1",
         "ligand_smiles_id_2",
@@ -324,6 +349,26 @@ def test_parity_scores_every_tanimoto_edge_once(tmp_path):
         parity["parity_similarity"].corr(parity["tanimoto_similarity_ecfp4_1024"])
         < 0.95
     )
+
+
+def test_parity_scores_write_multiple_batches(tmp_path):
+    components = ccd_component_table(limit=3)
+    ids = sorted(components["ligand_smiles_id"])
+    scores_dir = ccd_dbs_dir(tmp_path) / "ligand_scores"
+    scores_dir.mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "query_ligand_id": [ids[0], ids[0], ids[1]],
+            "target_ligand_id": [ids[1], ids[2], ids[2]],
+            "tanimoto_similarity_ecfp4_1024": [80.0, 70.0, 60.0],
+        }
+    ).to_parquet(scores_dir / "ccd_scores_0000.parquet", index=False)
+
+    path = build_ccd_parity_scores(components, tmp_path, threads=1, batch_size=1)
+    table = pd.read_parquet(path)
+    assert len(table) == 3
+    assert list(table["tanimoto_similarity_ecfp4_1024"]) == [80.0, 70.0, 60.0]
+    assert list(table.columns[-2:]) == ["fragment_atoms_1", "fragment_atoms_2"]
 
 
 @pytest.fixture(scope="module")
@@ -461,6 +506,7 @@ def test_make_ccd_ligand_dbs_builds_artifacts_and_caches(tmp_path):
         output_dir / "fingerprints" / "ligands_per_smiles.parquet",
         output_dir / "ccd_mmp_pairs.parquet",
         output_dir / "ccd_mmp_fragments.parquet",
+        output_dir / "ccd_mmp_exclusions.tsv",
         output_dir / "ccd_dbs.manifest.json",
     ]
     for path in paths:
@@ -496,6 +542,7 @@ def test_ccd_score_cache_tracks_similarity_cutoff(tmp_path):
             limit=12,
             minimum_similarity=cutoff,
             build_tanimoto_scores=scores,
+            build_parity_scores=scores,
         )
 
     def read_scores(output_dir):
@@ -538,6 +585,7 @@ def test_ccd_score_cache_tracks_similarity_cutoff(tmp_path):
     manifest = json.loads((output_dir / "ccd_dbs.manifest.json").read_text())
     assert manifest["minimum_similarity"] == 0.0
     assert manifest["build_tanimoto_scores"] is True
+    assert manifest["build_parity_scores"] is True
 
     paths = list((output_dir / "ligand_scores").glob("*.parquet")) + [
         ccd_parity_path(tmp_path)
@@ -545,6 +593,20 @@ def test_ccd_score_cache_tracks_similarity_cutoff(tmp_path):
     modified = {path: path.stat().st_mtime_ns for path in paths}
     build(0.0)
     assert {path: path.stat().st_mtime_ns for path in paths} == modified
+
+
+@needs_mmpdb
+def test_default_ccd_build_defers_parity(tmp_path):
+    output_dir = make_ccd_ligand_dbs(
+        data_dir=tmp_path,
+        scratch_dir=tmp_path / "scratch",
+        threads=2,
+        limit=12,
+    )
+    assert list((output_dir / "ligand_scores").glob("ccd_scores_*.parquet"))
+    assert not ccd_parity_path(tmp_path).exists()
+    manifest = json.loads((output_dir / "ccd_dbs.manifest.json").read_text())
+    assert manifest["build_parity_scores"] is False
 
 
 @needs_mmpdb
