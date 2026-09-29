@@ -11,7 +11,6 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-
 from plinder.core.scores.mapping import pack_residue_identities
 from plinder.core.utils import schemas
 from plinder.data.annotations.get_similarity_scores import (
@@ -25,9 +24,32 @@ from plinder.data.pipeline import io, tasks
 from plinder.data.pipeline.config import LigandConfig
 
 
+def test_foldseek_manifest_signature_reads_references_in_parallel(
+    tmp_path: Path,
+) -> None:
+    first = tmp_path / "first.cif"
+    second = tmp_path / "second.cif"
+    first.write_text("first")
+    second.write_text("second")
+    manifest = tmp_path / "coordinates.tsv"
+    manifest.write_text(f"{first}\tfirst\n{second}\tsecond\n")
+
+    serial = tasks._foldseek_manifest_signature(manifest, threads=1)
+    assert serial == tasks._foldseek_manifest_signature(manifest, threads=4)
+    assert serial["referenced_cif_count"] == 2
+
+    first.write_text("changed")
+    assert serial != tasks._foldseek_manifest_signature(manifest, threads=4)
+
+
 def _write_selected_residue_lookup(data_dir: Path, rows: list[dict]) -> Path:
     path = data_dir / tasks.ALIGNMENT_CHAIN_LOOKUP_RELATIVE
     path.parent.mkdir(exist_ok=True, parents=True)
+    for row in rows:
+        row.setdefault(
+            "selected_residue_indices",
+            list(range(len(row["selected_residue_numbers"]))),
+        )
     pd.DataFrame(rows).to_parquet(path, index=False)
     return path
 

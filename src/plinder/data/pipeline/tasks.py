@@ -124,21 +124,30 @@ def _file_content_signature(path: Path) -> dict[str, int | str]:
     return {"size": path.stat().st_size, "sha256": file_sha256(path)}
 
 
-def _foldseek_manifest_signature(path: Path) -> dict[str, int | str]:
+def _foldseek_manifest_signature(
+    path: Path, *, threads: int = 1
+) -> dict[str, int | str]:
     """Bind a Foldseek input manifest to the coordinate files it names."""
     digest = sha256()
     count = 0
-    with path.open() as handle:
-        for raw_line in handle:
-            value = raw_line.strip()
-            if not value:
-                continue
-            cif_path = Path(value.split("\t", maxsplit=1)[0])
-            stat = cif_path.stat()
-            digest.update(
-                f"{cif_path.resolve()}\0{stat.st_size}\0{stat.st_mtime_ns}\n".encode()
-            )
-            count += 1
+
+    def paths() -> Iterator[Path]:
+        with path.open() as handle:
+            for raw_line in handle:
+                value = raw_line.strip()
+                if value:
+                    yield Path(value.split("\t", maxsplit=1)[0])
+
+    def signature_row(cif_path: Path) -> bytes:
+        stat = cif_path.stat()
+        return (f"{cif_path.absolute()}\0{stat.st_size}\0{stat.st_mtime_ns}\n").encode()
+
+    source_paths = paths()
+    with ThreadPoolExecutor(max_workers=threads) as executor:
+        while batch := list(islice(source_paths, 4096)):
+            for row in executor.map(signature_row, batch):
+                digest.update(row)
+                count += 1
     return {
         **_file_content_signature(path),
         "referenced_cif_count": count,
@@ -146,10 +155,10 @@ def _foldseek_manifest_signature(path: Path) -> dict[str, int | str]:
     }
 
 
-def _foldseek_source_signature(path: Path) -> dict[str, int | str]:
+def _foldseek_source_signature(path: Path, *, threads: int = 1) -> dict[str, int | str]:
     """Hash a Foldseek coordinate directly or a TSV and its referenced files."""
     if path.suffix.casefold() == ".tsv":
-        return _foldseek_manifest_signature(path)
+        return _foldseek_manifest_signature(path, threads=threads)
     return _file_content_signature(path)
 
 
@@ -307,7 +316,7 @@ def make_dbs(
         source_signature = None
         if source.is_file():
             source_signature = (
-                _foldseek_source_signature(source)
+                _foldseek_source_signature(source, threads=cpu)
                 if database_type == "foldseek"
                 else _file_content_signature(source)
             )
@@ -1783,6 +1792,7 @@ def make_ccd_ligand_dbs(
         threads=threads,
         force_update=force_update,
         minimum_similarity=minimum_similarity,
+        build_parity_scores=False,
     )
     return ccd_ligand_dbs.make_ligand_ccd_match(data_dir=data_dir)
 
@@ -2161,6 +2171,9 @@ def run_batch_searches(
     alignment_types: Sequence[str] | None = None,
     search_databases: Sequence[str] | None = None,
     force_update: bool = False,
+    target_database_dir: Path | None = None,
+    query_database_dir: Path | None = None,
+    result_database_dir: Path | None = None,
 ) -> None:
     selected_alignment_types = list(alignment_types or ["foldseek", "mmseqs"])
     selected_search_databases = list(search_databases or scorer_cfg.sub_databases)
@@ -2182,7 +2195,9 @@ def run_batch_searches(
         for alignment_type in selected_alignment_types:
             search_config = foldseek_cfg if alignment_type == "foldseek" else mmseqs_cfg
             output_dir = (
-                data_dir / "dbs" / "subdbs" / f"{search_db}_{alignment_type}" / "aln"
+                (result_database_dir or data_dir / "dbs/subdbs")
+                / f"{search_db}_{alignment_type}"
+                / "aln"
             )
             apo_signatures = (
                 {
@@ -2236,6 +2251,9 @@ def run_batch_searches(
                     search_db=search_db,
                     threads=cpu,
                     alignment_types=[alignment_type],
+                    target_database_dir=target_database_dir,
+                    query_database_dir=query_database_dir,
+                    result_database_dir=result_database_dir,
                     query_chain_auth_ids=(
                         apo_query_chains
                         if search_db in {"apo", "interface_apo"}
