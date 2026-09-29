@@ -13,8 +13,6 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from rdkit import Chem
-
 from plinder.core.scores.entries import (
     ChainView,
     EntryView,
@@ -47,6 +45,7 @@ from plinder.data.annotations.get_similarity_scores import (
     write_ecfp4_fingerprint_table,
 )
 from plinder.data.pipeline.config import FoldseekConfig, MMSeqsConfig
+from rdkit import Chem
 
 SDF_FILE = (
     Path(__file__).resolve().parents[1]
@@ -56,6 +55,94 @@ SDF_FILE = (
     / "ligand_files"
     / "1.C.sdf"
 )
+
+
+def test_scorer_reads_scores_beside_compact_cigars(tmp_path: Path) -> None:
+    from plinder.core.utils import schemas
+
+    cigar = (
+        tmp_path
+        / "alignment_cigars/search_db=holo/alignment_type=foldseek/shard=ab.parquet"
+    )
+    scores = (
+        tmp_path
+        / "exports/protein_similarity_scores/alignment_type=foldseek/shard=ab.parquet"
+    )
+    cigar.parent.mkdir(parents=True)
+    scores.parent.mkdir(parents=True)
+    keys = {
+        "query_entry": "1abc",
+        "target_entry": "2def",
+        "query_chain_mapped": "A",
+        "target_chain_mapped": "B",
+        "source": "foldseek",
+    }
+    pq.write_table(
+        pa.Table.from_pylist(
+            [
+                keys
+                | {
+                    "query_start": 1,
+                    "target_start": 1,
+                    "cigar": "1M",
+                    "selected_residue_identity_bits": b"\x01",
+                }
+            ],
+            schema=schemas.release_alignment_mapping_schema(
+                alignment_type="foldseek", include_scores=False
+            ),
+        ),
+        cigar,
+    )
+    pq.write_table(
+        pa.Table.from_pylist(
+            [
+                keys
+                | {
+                    "qcov": 87,
+                    "tcov": 90,
+                    "fident": 75,
+                    "seqsim": 80,
+                    "lddt": 72,
+                }
+            ],
+            schema=schemas.PROTEIN_SIMILARITY_EXPORT_SCHEMA,
+        ),
+        scores,
+    )
+    lookup = tmp_path / "alignment_chain_lookup.parquet"
+    pd.DataFrame(
+        {
+            "entry_pdb_id": ["1abc", "2def"],
+            "chain_asym_id": ["A", "B"],
+            "selected_residue_numbers": [[1], [10]],
+            "selected_residue_indices": [[0], [0]],
+        }
+    ).to_parquet(lookup, index=False)
+    scorer = Scorer(
+        entries={},
+        source_to_full_db_file={},
+        db_dir=tmp_path / "dbs",
+        scores_dir=tmp_path / "scores",
+        alignment_chain_lookup=lookup,
+    )
+
+    loaded = scorer.load_alignments({"holo_foldseek": cigar}, query_entry_ids={"1abc"})
+
+    assert loaded.iloc[0]["qcov"] == pytest.approx(0.87)
+    assert loaded.iloc[0]["fident_qcov"] == pytest.approx(0.75 * 0.87)
+    assert loaded.iloc[0]["lddt"] == pytest.approx(0.72)
+    assert loaded.iloc[0]["query_selected_residue_numbers"] == [1]
+    assert loaded.iloc[0]["target_selected_residue_numbers"] == [10]
+
+    pq.write_table(
+        pa.Table.from_pylist([], schema=schemas.PROTEIN_SIMILARITY_EXPORT_SCHEMA),
+        scores,
+    )
+    with pytest.raises(ValueError, match="different row counts"):
+        scorer.load_alignments({"holo_foldseek": cigar}, query_entry_ids={"1abc"})
+
+
 HEM_SDF_FILE = (
     Path(__file__).resolve().parents[1]
     / "test_data"
@@ -1102,9 +1189,23 @@ def test_entry_views_support_protein_chain_only_entries() -> None:
 def test_reconstruct_interface_scores_from_release_shard(tmp_path: Path) -> None:
     index = tmp_path / "index"
     index.mkdir()
-    pd.DataFrame({"entry_pdb_id": pd.Series(dtype="string")}).to_parquet(
-        index / "annotation_table.parquet", index=False
+    empty_annotation_columns = (
+        "entry_pdb_id",
+        "system_id",
+        "system_type",
+        "system_receptor_type",
+        "system_protein_chains_asym_id",
+        "ligand_id",
+        "ligand_instance_chain",
+        "ligand_asym_id",
+        "ligand_is_proper",
+        "ligand_protein_chains_asym_id",
+        "ligand_neighboring_residues",
+        "ligand_interactions",
     )
+    pd.DataFrame(
+        {column: pd.Series(dtype="string") for column in empty_annotation_columns}
+    ).to_parquet(index / "annotation_table.parquet", index=False)
     pd.DataFrame(
         {
             "entry_pdb_id": ["1abc", "1abc", "2def", "2def"],
@@ -1129,7 +1230,7 @@ def test_reconstruct_interface_scores_from_release_shard(tmp_path: Path) -> None
             "interface_chain_1_residue_numbers": [1, 2, 3],
             "interface_chain_1_residue_indices": [0, 1, 2],
             "interface_chain_2_residue_numbers": [4, 5, 6],
-            "interface_chain_2_residue_indices": [3, 4, 5],
+            "interface_chain_2_residue_indices": [0, 1, 2],
             "interface_num_contact_residue_pairs": 3,
         },
         {
@@ -1139,9 +1240,9 @@ def test_reconstruct_interface_scores_from_release_shard(tmp_path: Path) -> None
             "interface_chain_1": "1.X",
             "interface_chain_2": "1.Y",
             "interface_chain_1_residue_numbers": [10, 20, 30],
-            "interface_chain_1_residue_indices": [9, 19, 29],
+            "interface_chain_1_residue_indices": [0, 1, 2],
             "interface_chain_2_residue_numbers": [40, 50, 60],
-            "interface_chain_2_residue_indices": [39, 49, 59],
+            "interface_chain_2_residue_indices": [0, 1, 2],
             "interface_num_contact_residue_pairs": 3,
         },
     ]
@@ -1153,7 +1254,7 @@ def test_reconstruct_interface_scores_from_release_shard(tmp_path: Path) -> None
     )
     alignment = (
         tmp_path
-        / "alignments"
+        / "alignment_cigars"
         / "search_db=holo"
         / "alignment_type=foldseek"
         / "shard=ab.parquet"
@@ -1169,6 +1270,9 @@ def test_reconstruct_interface_scores_from_release_shard(tmp_path: Path) -> None
             "qcov": 1.0,
             "fident": 1.0,
             "seqsim": 1.0,
+            "query_start": 1,
+            "target_start": 1,
+            "cigar": "3M",
             "query_selected_residue_positions": [1, 2, 3],
             "target_selected_residue_positions": [1, 2, 3],
             "selected_residue_identity_bits": bytes([7]),
@@ -1183,6 +1287,9 @@ def test_reconstruct_interface_scores_from_release_shard(tmp_path: Path) -> None
             "qcov": 1.0,
             "fident": 1.0,
             "seqsim": 1.0,
+            "query_start": 1,
+            "target_start": 1,
+            "cigar": "3M",
             "query_selected_residue_positions": [1, 2, 3],
             "target_selected_residue_positions": [1, 2, 3],
             "selected_residue_identity_bits": bytes([7]),
@@ -1208,6 +1315,7 @@ def test_reconstruct_interface_scores_from_release_shard(tmp_path: Path) -> None
                 [10, 20, 30],
                 [40, 50, 60],
             ],
+            "selected_residue_indices": [[0, 1, 2]] * 4,
         }
     ).to_parquet(index / "alignment_chain_lookup.parquet", index=False)
 
@@ -1642,6 +1750,168 @@ def test_ligand_pair_pocket_mapping_maximizes_coverage_before_similarity(
     ]
 
 
+def test_pocket_alignment_rows_reuse_duplicates_and_preserve_scores(tmp_path) -> None:
+    scorer = Scorer(
+        entries={},
+        source_to_full_db_file={},
+        db_dir=tmp_path / "db",
+        scores_dir=tmp_path / "scores",
+    )
+    query = _ligand("1abc__1__1.L", "1.L", {"1.A": {10: 9}}, {})
+    target = _ligand("2def__1__1.M", "1.M", {"1.X": {100: 99}}, {})
+    frame = pd.DataFrame(
+        [
+            {
+                "query_selected_residue_numbers": [10],
+                "target_selected_residue_numbers": [number],
+                "selected_residue_identity_bits": bytes([identity]),
+                "fident_qcov": similarity,
+                "qcov": 1.0,
+                "fident": similarity,
+            }
+            for number, identity, similarity in [(999, 1, 1.0), (100, 0, 0.5)]
+        ],
+        index=pd.MultiIndex.from_tuples(
+            [("A", "X", "mmseqs")] * 2,
+            names=["query_chain_mapped", "target_chain_mapped", "source"],
+        ),
+    )
+    rows = scorer._pocket_alignment_rows(frame, "A", "X", "mmseqs")
+    assert scorer._pocket_alignment_rows(frame, "A", "X", "mmseqs") is rows
+    assert len(rows) == 2
+    assert scorer._pocket_alignment_rows(frame, "A", "X", "foldseek") == []
+    assert frame.attrs == {}
+
+    pocket, pli, mappings = scorer.get_ligand_pair_pocket_pli_scores(
+        frame, query, target
+    )
+    selected = frame.iloc[[1]].droplevel([0, 1])
+    expected = scorer._get_ligand_pair_pocket_pli_scores_for_mapping(
+        {("1.A", "1.X"): selected}, query, target
+    )
+    assert (pocket, pli) == expected
+    assert pocket["pocket_qcov_mmseqs"] == 1.0
+    assert mappings["pocket_qcov_mmseqs"] == [("1.A", "1.X")]
+
+
+def test_repeated_asym_chains_reuse_pockets_but_keep_pli_and_mappings(tmp_path) -> None:
+    scorer = Scorer(
+        entries={},
+        source_to_full_db_file={},
+        db_dir=tmp_path / "db",
+        scores_dir=tmp_path / "scores",
+        include_pli_fident=True,
+    )
+    query = _ligand(
+        "1abc__1__1.L",
+        "1.L",
+        {"1.A": {10: 9}},
+        {"1.A": {10: Counter({"hbond": 1})}},
+    )
+    copy = _ligand(
+        "1abc__1__1.M",
+        "1.M",
+        {"1.B": {10: 9}},
+        {"1.B": {10: Counter({"hydrophobic": 1})}},
+    )
+    target = _ligand(
+        "2def__1__1.N",
+        "1.N",
+        {"1.X": {100: 99}},
+        {"1.X": {100: Counter({"hbond": 1})}},
+    )
+    target_copy = _ligand(
+        "2def__1__1.O",
+        "1.O",
+        {"1.Y": {100: 99}},
+        {"1.Y": {100: Counter({"hbond": 1})}},
+    )
+    row = {
+        "query_selected_residue_numbers": [10],
+        "target_selected_residue_numbers": [100],
+        "selected_residue_identity_bits": bytes([1]),
+        "fident_qcov": 1.0,
+        "qcov": 1.0,
+        "fident": 1.0,
+    }
+    frame = pd.DataFrame(
+        [row, row],
+        index=pd.MultiIndex.from_tuples(
+            [("A", "X", "mmseqs"), ("B", "Y", "mmseqs")],
+            names=["query_chain_mapped", "target_chain_mapped", "source"],
+        ),
+    )
+    first = scorer.get_ligand_pair_pocket_pli_scores(frame, query, target)
+    second = scorer.get_ligand_pair_pocket_pli_scores(frame, copy, target_copy)
+    assert first[0] == second[0]
+    assert first[1]["pli_qcov_mmseqs"] == 1.0
+    assert second[1]["pli_qcov_mmseqs"] == 0.0
+    assert first[2]["pocket_qcov_mmseqs"] == [("1.A", "1.X")]
+    assert second[2]["pocket_qcov_mmseqs"] == [("1.B", "1.Y")]
+    assert len(scorer._pocket_alignment_inputs) == 1
+    assert len(scorer._aligned_query_pockets) == 1
+    assert len(scorer._pocket_chain_matches) == 1
+    reference = scorer._get_ligand_pair_pocket_pli_scores_for_mapping(
+        {("1.B", "1.Y"): frame.iloc[[1]].droplevel([0, 1])}, copy, target_copy
+    )
+    assert second[:2] == reference
+
+    different_rank = frame.copy()
+    different_rank.at[("B", "Y", "mmseqs"), "fident_qcov"] = 0.9
+    same_mapping = scorer.get_ligand_pair_pocket_pli_scores(
+        different_rank, copy, target_copy
+    )
+    assert same_mapping == second
+    assert len(scorer._pocket_alignment_inputs) == 2
+    assert len(scorer._aligned_query_pockets) == 1
+    assert len(scorer._pocket_chain_matches) == 2
+
+    changed_frame = frame.copy()
+    changed_frame.at[("B", "Y", "mmseqs"), "selected_residue_identity_bits"] = bytes(
+        [0]
+    )
+    changed = scorer.get_ligand_pair_pocket_pli_scores(changed_frame, copy, target_copy)
+    assert "pocket_fident_mmseqs" not in changed[0]
+    assert changed[0]["pocket_qcov_mmseqs"] == 1.0
+    assert len(scorer._pocket_alignment_inputs) == 3
+    assert len(scorer._pocket_chain_matches) == 3
+
+
+def test_pocket_cache_eviction_preserves_alignment_selection(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "plinder.data.annotations.get_similarity_scores._POCKET_CACHE_MAX_ENTRIES", 2
+    )
+    scorer = Scorer(
+        entries={},
+        source_to_full_db_file={},
+        db_dir=tmp_path / "db",
+        scores_dir=tmp_path / "scores",
+    )
+    row = {
+        "pocket_input_key": b"alignment",
+        "pocket_mapping_key": b"mapping",
+        "query_selected_residue_numbers": [10, 20, 30],
+        "target_selected_residue_numbers": [100, 200, 300],
+        "selected_residue_identity_bits": bytes([5]),
+        "fident": 0.5,
+        "qcov": 1.0,
+    }
+    expected = scorer._best_pocket_chain_alignment([row], "fident", {10: 0}, {100: 0})
+    for number in (20, 30):
+        scorer._best_pocket_chain_alignment(
+            [row], "fident", {number: 0}, {number * 10: 0}
+        )
+    assert len(scorer._aligned_query_pockets) == 1
+    assert len(scorer._pocket_chain_matches) == 1
+    assert (
+        scorer._best_pocket_chain_alignment([row], "fident", {10: 0}, {100: 0})
+        == expected
+    )
+    assert scorer._aligned_query_pocket(row, {10: 0}) == ((10, 100, True),)
+    assert len(scorer._aligned_query_pockets) <= 2
+    assert len(scorer._pocket_chain_matches) <= 2
+
+
 def test_ligand_pair_shape_scores_gate_sdf_access_and_cache(
     tmp_path, monkeypatch
 ) -> None:
@@ -1861,10 +2131,10 @@ def test_get_score_df_loads_mapped_targets_when_mapping_is_separate(
             "source",
         ]
     ).to_parquet(mapped_path, index=True)
-    calls: list[tuple[set[str], Path]] = []
+    calls: list[tuple[set[str], Path, bool]] = []
 
-    def fake_load_entry_views(*, pdb_ids, data_dir):
-        calls.append((set(pdb_ids), data_dir))
+    def fake_load_entry_views(*, pdb_ids, data_dir, include_interfaces):
+        calls.append((set(pdb_ids), data_dir, include_interfaces))
         return {pdb_id: object() for pdb_id in pdb_ids}
 
     monkeypatch.setattr(scoring_module, "load_entry_views", fake_load_entry_views)
@@ -1876,7 +2146,7 @@ def test_get_score_df_loads_mapped_targets_when_mapping_is_separate(
 
     scorer.get_score_df(tmp_path, "1abc", "holo", map_alignments=False)
 
-    assert calls == [({"1abc", "2def", "3ghi"}, tmp_path)]
+    assert calls == [({"1abc", "2def", "3ghi"}, tmp_path, False)]
 
 
 def test_get_score_df_records_and_reraises_aggregation_failure(
@@ -2248,6 +2518,10 @@ def test_repair_score_df_targets_replaces_only_affected_target_rows(
 
     def repaired_scores(*_args, **kwargs):
         assert kwargs["target_system_ids"] == {"2def__2__1.X__1.Y"}
+        assert kwargs["source_to_aln_file"]["holo_foldseek"] == (
+            tmp_path
+            / "alignment_cigars/search_db=holo/alignment_type=foldseek/shard=ab.parquet"
+        )
         kwargs["ligand_3d_candidates"].append(
             candidate_row("2def", "2def__2__1.X__1.Y")
         )
@@ -2446,6 +2720,112 @@ def test_cached_reference_pharmacophore_features_preserve_score() -> None:
     )
 
     assert observed == pytest.approx(expected, abs=1e-12)
+
+
+@pytest.mark.parametrize("sdf", [SDF_FILE, HEM_SDF_FILE])
+def test_aligned_cached_features_match_fresh_detection(sdf):
+    reference = scoring_module.prepare_ligand_for_3d_scoring(
+        scoring_module.load_sdf_molecule(sdf)
+    )
+    original = Chem.Mol(reference)
+    aligned = Chem.Mol(original)
+    features = scoring_module._pharmacophore_features(original)
+    records = scoring_module._pharmacophore_records(features)
+    positions = aligned.GetConformer().GetPositions()
+    rotation = np.array([[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])
+    for index, position in enumerate(positions @ rotation + [1.2, -3.4, 5.6]):
+        aligned.GetConformer().SetAtomPosition(index, position)
+    transformed = scoring_module._aligned_pharmacophore_features(aligned, records)
+    fresh = scoring_module._pharmacophore_features(aligned)
+    assert [f.GetFamily() for f in transformed] == [f.GetFamily() for f in fresh]
+    assert np.array([list(f.GetPos()) for f in transformed]) == pytest.approx(
+        np.array([list(f.GetPos()) for f in fresh]), abs=1e-10
+    )
+    scoring_module.align_molecules(reference, aligned)
+    transformed = scoring_module._aligned_pharmacophore_features(aligned, records)
+    assert scoring_module.get_sucos_score(
+        reference, aligned, features_2=transformed
+    ) == pytest.approx(scoring_module.get_sucos_score(reference, aligned), abs=1e-10)
+
+
+@pytest.mark.parametrize("smiles", ["CC(=O)O", "CS", "CC(=O)NO", "CC(C)C"])
+def test_cached_feature_weights_match_rdkit(smiles):
+    molecule = Chem.MolFromSmiles(smiles)
+    conformer = Chem.Conformer(molecule.GetNumAtoms())
+    for index, position in enumerate(
+        np.random.default_rng(42).normal(size=(molecule.GetNumAtoms(), 3))
+    ):
+        conformer.SetAtomPosition(index, position)
+    molecule.AddConformer(conformer)
+    fresh = scoring_module._pharmacophore_features(molecule)
+    observed = scoring_module._aligned_pharmacophore_features(
+        molecule, scoring_module._pharmacophore_records(fresh)
+    )
+    assert [(f.GetFamily(), f.GetType()) for f in observed] == [
+        (f.GetFamily(), f.GetType()) for f in fresh
+    ]
+    assert np.array([list(f.GetPos()) for f in observed]) == pytest.approx(
+        np.array([list(f.GetPos()) for f in fresh]), abs=1e-12
+    )
+
+
+def test_packed_features_skip_chemical_detection(tmp_path, monkeypatch):
+    sdf = SDF_FILE.read_bytes()
+    records = scoring_module.ligand_pharmacophore_records(sdf, label="fixture")
+    archive_dir = tmp_path / "ligand_archives"
+    archive_dir.mkdir()
+    for pdb_id, asym_id in (("1abc", "B"), ("2def", "Y")):
+        table = pa.Table.from_pylist(
+            [
+                {
+                    "pdb_id": pdb_id,
+                    "ligand_asym_id": asym_id,
+                    "sdf": sdf,
+                    "pharmacophore_features": records,
+                }
+            ],
+            schema=pa.schema(
+                [
+                    ("pdb_id", pa.string()),
+                    ("ligand_asym_id", pa.string()),
+                    ("sdf", pa.binary()),
+                    (
+                        "pharmacophore_features",
+                        scoring_module.PHARMACOPHORE_FEATURE_TYPE,
+                    ),
+                ]
+            ),
+        )
+        pq.write_table(table, archive_dir / f"{pdb_id[1:3]}.parquet")
+    scorer = Scorer(
+        entries={},
+        source_to_full_db_file={},
+        db_dir=tmp_path / "db",
+        scores_dir=tmp_path / "scores",
+    )
+    pairs = pd.DataFrame(
+        [
+            {
+                "query_entry": "1abc",
+                "query_ligand_asym_id": "B",
+                "target_entry": "2def",
+                "target_ligand_asym_id": "Y",
+            }
+        ]
+    )
+    _, parameters = scoring_module._get_feature_scoring_context()
+
+    class NoDetection:
+        def GetFeaturesForMol(self, molecule):
+            raise AssertionError("packed features must skip chemical detection")
+
+    monkeypatch.setattr(
+        scoring_module,
+        "_get_feature_scoring_context",
+        lambda: (NoDetection(), parameters),
+    )
+    result = scorer.score_canonical_ligand_pairs(tmp_path, pairs)
+    assert result.sucos_shape.iloc[0] == pytest.approx(1.0, abs=1e-8)
 
 
 def test_align_molecules_passes_unmodified_mobile_to_shapealign(monkeypatch) -> None:
@@ -2662,9 +3042,8 @@ def test_ligand_3d_score_ability_reuses_success_for_same_molecular_graph(
 
 
 def test_cofactor_similarity_uses_ccd_reference_fingerprints() -> None:
-    from rdkit import DataStructs
-
     from plinder.core.structure.smallmols_similarity import mol2morgan_fp
+    from rdkit import DataStructs
 
     smiles = ["CCO", "c1ccccc1"]
     unique_ligands = pd.DataFrame(
@@ -2693,9 +3072,8 @@ def test_cofactor_similarity_uses_ccd_reference_fingerprints() -> None:
 def test_ligand_scores_use_bulk_tanimoto_for_unique_smiles(
     tmp_path, monkeypatch
 ) -> None:
-    from rdkit import DataStructs
-
     from plinder.core.structure.smallmols_similarity import mol2morgan_fp
+    from rdkit import DataStructs
 
     fingerprint_dir = tmp_path / "fingerprints"
     fingerprint_dir.mkdir()
@@ -3121,10 +3499,22 @@ def test_holo_scores_are_emitted_per_ligand_pair(tmp_path, monkeypatch) -> None:
         scores_dir=tmp_path / "scores",
     )
     alignments = pd.DataFrame(
+        {
+            "query_selected_residue_numbers": [[10], [20]],
+            "target_selected_residue_numbers": [[110], [120]],
+        },
         index=pd.MultiIndex.from_tuples(
-            [("2def", "A", "X"), ("2def", "B", "Y")],
-            names=["target_entry", "query_chain_mapped", "target_chain_mapped"],
-        )
+            [
+                ("2def", "A", "X", "foldseek"),
+                ("2def", "B", "Y", "foldseek"),
+            ],
+            names=[
+                "target_entry",
+                "query_chain_mapped",
+                "target_chain_mapped",
+                "source",
+            ],
+        ),
     )
     protein_calls: list[tuple[tuple[str, ...], tuple[str, ...], int]] = []
     pocket_qcov_value = 1.0
@@ -3230,6 +3620,9 @@ def test_holo_scores_are_emitted_per_ligand_pair(tmp_path, monkeypatch) -> None:
             include_protein_scores=False,
         )
     )
+    assert {
+        (score["query_ligand_id"], score["target_ligand_id"]) for score in ligand_scores
+    } == {(query.id, target.id) for query in query_ligands for target in target_ligands}
     assert all("protein_qcov_weighted_sum" not in score for score in ligand_scores)
     assert any("pocket_qcov" in score for score in ligand_scores)
     assert len(protein_calls) == 4
@@ -3291,6 +3684,283 @@ def test_holo_scores_are_emitted_per_ligand_pair(tmp_path, monkeypatch) -> None:
     assert tiny_ligand_pair_scores[0]["pocket_qcov"] == 0
     assert tiny_ligand_pair_scores[0]["pocket_fident_qcov"] == 0
     assert tiny_ligand_pair_scores[0]["pli_qcov"] == 0
+
+
+def test_holo_reuses_pocket_identity_for_nonoverlapping_ligands(
+    tmp_path, monkeypatch
+) -> None:
+    query_ligand = _ligand("1abc__1__1.C", "1.C", {"1.A": {10: 9}}, {})
+    target_ligands = [
+        _ligand(
+            f"2def__1__1.{chain}",
+            f"1.{chain}",
+            {"1.X": {number: number - 1}},
+            {},
+        )
+        for chain, number in zip("ZWV", (110, 120, 130), strict=True)
+    ]
+    query_system = _system("1abc", [query_ligand])
+    target_system = _system("2def", target_ligands)
+    scorer = Scorer(
+        entries={
+            "1abc": _entry("1abc", query_system),
+            "2def": _entry("2def", target_system),
+        },
+        source_to_full_db_file={},
+        db_dir=tmp_path / "db",
+        scores_dir=tmp_path / "scores",
+    )
+    alignments = pd.DataFrame(
+        [
+            {
+                "query_selected_residue_numbers": [10],
+                "target_selected_residue_numbers": [110],
+                "selected_residue_identity_bits": b"\x01",
+                "lddt_qcov": 1.0,
+                "qcov": 1.0,
+                "fident": 1.0,
+            }
+        ],
+        index=pd.MultiIndex.from_tuples(
+            [("2def", "A", "X", "foldseek")],
+            names=[
+                "target_entry",
+                "query_chain_mapped",
+                "target_chain_mapped",
+                "source",
+            ],
+        ),
+    )
+    original = scorer.get_ligand_pair_pocket_pli_scores
+    calls: list[str] = []
+
+    def counted(alns, query, target):
+        calls.append(target.id)
+        return original(alns, query, target)
+
+    monkeypatch.setattr(scorer, "get_ligand_pair_pocket_pli_scores", counted)
+    scores = list(scorer.get_scores_holo(query_system, alignments))
+
+    assert len(scores) == 3
+    assert calls == [target_ligands[0].id, target_ligands[1].id]
+    assert all(score["pocket_fident"] == pytest.approx(1.0) for score in scores)
+    assert scores[0]["pocket_qcov"] == pytest.approx(1.0)
+    assert all("pocket_qcov" not in score for score in scores[1:])
+    target_alignments = alignments.loc["2def"]
+    assert original(target_alignments, query_ligand, target_ligands[1]) == original(
+        target_alignments, query_ligand, target_ligands[2]
+    )
+
+
+def test_aligned_pocket_pairs_considers_both_search_backends() -> None:
+    query = _ligand("1abc__1__1.C", "1.C", {"1.A": {10: 9}}, {})
+    targets = [
+        _ligand(f"2def__1__{chain}.Z", f"{chain}.Z", {f"{chain}.X": {number: 0}}, {})
+        for chain, number in (("1", 110), ("2", 120), ("3", 130))
+    ]
+    alignments = pd.DataFrame(
+        {
+            "query_selected_residue_numbers": [[10], [10]],
+            "target_selected_residue_numbers": [[110], [120]],
+        },
+        index=pd.MultiIndex.from_tuples(
+            [("A", "X", "foldseek"), ("A", "X", "mmseqs")],
+            names=["query_chain_mapped", "target_chain_mapped", "source"],
+        ),
+    )
+
+    assert Scorer._aligned_pocket_pairs(alignments, [query], targets) == {
+        (query.id, targets[0].id),
+        (query.id, targets[1].id),
+    }
+
+
+def test_holo_reuses_aligned_pocket_scan_across_assembly_copies(
+    tmp_path, monkeypatch
+) -> None:
+    first = _ligand("1abc__1__1.C", "1.C", {"1.A": {10: 9}, "49.A": {20: 19}}, {})
+    second = _ligand("1abc__1__2.C", "2.C", {"10.A": {20: 19}, "2.A": {10: 9}}, {})
+    target = _ligand("2def__1__1.Z", "1.Z", {"1.X": {110: 109, 120: 119}}, {})
+    repeated_target = _ligand("2def__1__2.Z", "2.Z", {"2.X": {110: 109, 120: 119}}, {})
+    first_system = _system("1abc", [first])
+    second_system = replace(_system("1abc", [second]), id="1abc_system_2")
+    query_entry = _entry("1abc", first_system)
+    query_entry.systems[second_system.id] = second_system
+    target_entry = _entry("2def", _system("2def", [target]))
+    target_entry.systems["2def_system_2"] = replace(
+        _system("2def", [repeated_target]), id="2def_system_2"
+    )
+    scorer = Scorer(
+        entries={
+            "1abc": query_entry,
+            "2def": target_entry,
+        },
+        source_to_full_db_file={},
+        db_dir=tmp_path / "db",
+        scores_dir=tmp_path / "scores",
+    )
+    assert scorer._pocket_pattern(first) == scorer._pocket_pattern(second)
+    assert scorer._pocket_pattern(first) != scorer._pocket_pattern(
+        replace(
+            second,
+            id="1abc__1__3.C",
+            interactions_counter={"2.A": {10: Counter({"hbond": 1})}},
+        )
+    )
+    alignments = pd.DataFrame(
+        {
+            "query_selected_residue_numbers": [[10, 20]],
+            "target_selected_residue_numbers": [[110, 120]],
+            "selected_residue_identity_bits": [b"\x01"],
+            "lddt_qcov": [1.0],
+            "qcov": [1.0],
+            "fident": [1.0],
+        },
+        index=pd.MultiIndex.from_tuples(
+            [("2def", "A", "X", "foldseek")],
+            names=[
+                "target_entry",
+                "query_chain_mapped",
+                "target_chain_mapped",
+                "source",
+            ],
+        ),
+    )
+    original = scorer._aligned_pocket_pairs
+    calls = 0
+    original_pair_score = scorer.get_ligand_pair_pocket_pli_scores
+    pair_calls = 0
+
+    def counted(*args):
+        nonlocal calls
+        calls += 1
+        return original(*args)
+
+    def counted_pair_score(*args):
+        nonlocal pair_calls
+        pair_calls += 1
+        return original_pair_score(*args)
+
+    monkeypatch.setattr(scorer, "_aligned_pocket_pairs", counted)
+    monkeypatch.setattr(scorer, "get_ligand_pair_pocket_pli_scores", counted_pair_score)
+    scores = scorer.aggregate_scores(
+        "1abc", query_entry_alignments=alignments, search_db="holo"
+    )
+
+    assert scores is not None
+    assert set(scores.query_ligand_id) == {first.id, second.id}
+    assert set(scores.target_ligand_id) == {target.id, repeated_target.id}
+    assert calls == 1
+    assert pair_calls == 1
+    uncached = [
+        scorer.aggregate_scores(
+            "1abc",
+            query_entry_alignments=alignments,
+            query_system_ids={system_id},
+            search_db="holo",
+        )
+        for system_id in (first_system.id, second_system.id)
+    ]
+    assert all(frame is not None for frame in uncached)
+    expected = pd.concat(uncached, ignore_index=True)
+    columns = [
+        column
+        for column in (
+            "query_ligand_id",
+            "target_ligand_id",
+            "metric",
+            "similarity",
+            "mapping",
+            "protein_mapping",
+        )
+        if column in scores.columns
+    ]
+    pd.testing.assert_frame_equal(
+        scores[columns].sort_values(columns).reset_index(drop=True),
+        expected[columns].sort_values(columns).reset_index(drop=True),
+    )
+
+
+def test_holo_scans_target_alignments_once_for_distinct_query_pockets(
+    tmp_path, monkeypatch
+) -> None:
+    first = _ligand("1abc__1__1.C", "1.C", {"1.A": {10: 9}}, {})
+    second = _ligand("1abc__1__1.D", "1.D", {"1.A": {20: 19}}, {})
+    targets = [
+        _ligand("2def__1__1.Z", "1.Z", {"1.X": {110: 109}}, {}),
+        _ligand("2def__1__1.W", "1.W", {"1.X": {120: 119}}, {}),
+    ]
+    first_system = _system("1abc", [first])
+    second_system = replace(_system("1abc", [second]), id="1abc_system_2")
+    query_entry = _entry("1abc", first_system)
+    query_entry.systems[second_system.id] = second_system
+    scorer = Scorer(
+        entries={
+            "1abc": query_entry,
+            "2def": _entry("2def", _system("2def", targets)),
+        },
+        source_to_full_db_file={},
+        db_dir=tmp_path / "db",
+        scores_dir=tmp_path / "scores",
+    )
+    alignments = pd.DataFrame(
+        {
+            "query_selected_residue_numbers": [[10, 20]],
+            "target_selected_residue_numbers": [[110, 120]],
+            "selected_residue_identity_bits": [b"\x03"],
+            "lddt_qcov": [1.0],
+            "qcov": [1.0],
+            "fident": [1.0],
+        },
+        index=pd.MultiIndex.from_tuples(
+            [("2def", "A", "X", "foldseek")],
+            names=[
+                "target_entry",
+                "query_chain_mapped",
+                "target_chain_mapped",
+                "source",
+            ],
+        ),
+    )
+    original = scorer._aligned_pocket_pairs
+    calls = 0
+
+    def counted(*args):
+        nonlocal calls
+        calls += 1
+        return original(*args)
+
+    monkeypatch.setattr(scorer, "_aligned_pocket_pairs", counted)
+    scores = scorer.aggregate_scores("1abc", query_entry_alignments=alignments)
+
+    assert calls == 1
+    assert scores is not None
+    assert set(scores.query_ligand_id) == {first.id, second.id}
+    assert set(scores.target_ligand_id) == {target.id for target in targets}
+    assert scores.loc[scores.metric.eq("pocket_qcov")].shape[0] == 2
+    assert scores.loc[scores.metric.eq("pocket_fident")].shape[0] == 4
+    separate = [
+        scorer.aggregate_scores(
+            "1abc",
+            query_entry_alignments=alignments,
+            query_system_ids={system_id},
+        )
+        for system_id in (first_system.id, second_system.id)
+    ]
+    assert all(frame is not None for frame in separate)
+    expected = pd.concat(separate, ignore_index=True)
+    columns = [
+        "query_ligand_id",
+        "target_ligand_id",
+        "metric",
+        "similarity",
+        "mapping",
+        "protein_mapping",
+    ]
+    pd.testing.assert_frame_equal(
+        scores[columns].sort_values(columns).reset_index(drop=True),
+        expected[columns].sort_values(columns).reset_index(drop=True),
+    )
 
 
 def test_holo_threaded_scoring_reuses_canonical_and_receptor_pairs(

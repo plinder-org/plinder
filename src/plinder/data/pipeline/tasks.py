@@ -573,6 +573,10 @@ def make_canonical_ligand_archives(
             pa.field("pdb_id", pa.string(), nullable=False),
             pa.field("ligand_asym_id", pa.string(), nullable=False),
             pa.field("sdf", pa.binary(), nullable=False),
+            pa.field(
+                "pharmacophore_features",
+                get_similarity_scores.PHARMACOPHORE_FEATURE_TYPE,
+            ),
         ]
     )
     for code in two_char_codes:
@@ -587,11 +591,15 @@ def make_canonical_ligand_archives(
         for entry_parquet in entry_parquets:
             ligand_dir = entry_dir / entry_parquet.stem / "ligand_files"
             for ligand_file in sorted(ligand_dir.glob("*.sdf")):
+                sdf = ligand_file.read_bytes()
                 records.append(
                     {
                         "pdb_id": entry_parquet.stem,
                         "ligand_asym_id": ligand_file.stem,
-                        "sdf": ligand_file.read_bytes(),
+                        "sdf": sdf,
+                        "pharmacophore_features": get_similarity_scores.ligand_pharmacophore_records(
+                            sdf, label=str(ligand_file)
+                        ),
                     }
                 )
         table = pa.Table.from_pylist(records, schema=schema)

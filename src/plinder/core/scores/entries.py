@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 import pandas as pd
+import pyarrow.parquet as pq
 
 from plinder.core.index.query import query_table
 from plinder.core.utils.log import setup_logger
@@ -446,15 +447,33 @@ def entry_views_from_df(
             )
         )
     )
+    entry_groups = {
+        str(pdb_id): rows
+        for pdb_id, rows in df.groupby(df["entry_pdb_id"].astype(str), sort=False)
+    }
+    interface_groups = {
+        str(pdb_id): rows
+        for pdb_id, rows in interface_annotations.groupby(
+            interface_annotations["entry_pdb_id"].astype(str), sort=False
+        )
+    }
+    chain_groups = (
+        {
+            str(pdb_id): rows
+            for pdb_id, rows in entry_chains.groupby(
+                entry_chains["entry_pdb_id"].astype(str), sort=False
+            )
+        }
+        if entry_chains is not None
+        else {}
+    )
     views: dict[str, EntryView] = {}
     for pdb_id in pdb_ids:
-        entry_rows = df[df["entry_pdb_id"].astype(str) == pdb_id]
-        interface_rows = interface_annotations[
-            interface_annotations["entry_pdb_id"].astype(str) == pdb_id
-        ]
+        entry_rows = entry_groups.get(pdb_id, df.iloc[:0])
+        interface_rows = interface_groups.get(pdb_id, interface_annotations.iloc[:0])
         chain_rows = None
         if entry_chains is not None:
-            chain_rows = entry_chains[entry_chains["entry_pdb_id"] == pdb_id]
+            chain_rows = chain_groups.get(pdb_id, entry_chains.iloc[:0])
             if chain_rows.empty:
                 receptor_types = {
                     str(value)
@@ -595,10 +614,24 @@ def load_entry_views(
     from plinder.core.release import PlinderRelease
 
     release = PlinderRelease(data_dir)
+    annotation_columns = [
+        "entry_pdb_id",
+        "system_id",
+        "system_type",
+        "system_receptor_type",
+        "system_protein_chains_asym_id",
+        "ligand_id",
+        "ligand_instance_chain",
+        "ligand_asym_id",
+        "ligand_is_proper",
+        "ligand_protein_chains_asym_id",
+        "ligand_neighboring_residues",
+        "ligand_interactions",
+    ]
     if data_dir is None:
         df = query_table(
             "annotation",
-            columns=["*"],
+            columns=[*annotation_columns, "ligand_is_shape_comparable"],
             filters=[("entry_pdb_id", "in", pdb_ids)],
             release=release,
         )
@@ -610,8 +643,11 @@ def load_entry_views(
         annotation_path = release.path("annotation_table")
         if not annotation_path.is_file():
             raise FileNotFoundError(f"missing annotation index: {annotation_path}")
+        if "ligand_is_shape_comparable" in pq.read_schema(annotation_path).names:
+            annotation_columns.append("ligand_is_shape_comparable")
         df = pd.read_parquet(
             annotation_path,
+            columns=annotation_columns,
             filters=[("entry_pdb_id", "in", pdb_ids)],
         )
         chain_path = release.path("entry_chains")
