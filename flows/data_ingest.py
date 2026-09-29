@@ -82,7 +82,7 @@ class PlinderDataIngestFlow(FlowSpec):
     @step
     def make_dbs(self):
         self.pipeline.make_dbs()
-        self.next(self.scatter_make_canonical_ligand_archives)
+        self.next(self.make_protein_structure_clusters)
 
     @kubernetes(**K8S)
     @environment(**ENV)
@@ -145,7 +145,7 @@ class PlinderDataIngestFlow(FlowSpec):
     @step
     def make_protein_sequence_clusters(self):
         self.pipeline.make_protein_sequence_clusters()
-        self.next(self.make_protein_structure_clusters)
+        self.next(self.make_dbs)
 
     @kubernetes(**{**K8S, **PROTEIN_SEARCH})
     @environment(**ENV)
@@ -153,7 +153,7 @@ class PlinderDataIngestFlow(FlowSpec):
     @step
     def make_protein_structure_clusters(self):
         self.pipeline.make_protein_structure_clusters()
-        self.next(self.make_dbs)
+        self.next(self.scatter_make_canonical_ligand_archives)
 
     @kubernetes(**K8S)
     @environment(**ENV)

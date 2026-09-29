@@ -7,8 +7,6 @@ from __future__ import annotations
 import hashlib
 import json
 import subprocess
-from concurrent.futures import ThreadPoolExecutor
-from itertools import islice
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -38,7 +36,9 @@ def _clusters_are_current(output: Path, metadata: bytes) -> bool:
     return (pq.read_schema(output).metadata or {}).get(CLUSTER_METADATA_KEY) == metadata
 
 
-def _read_assignments(path: Path, expected_ids: set[str]) -> pd.DataFrame:
+def _read_assignments(
+    path: Path, expected_ids: set[str], foldseek_models: bool = False
+) -> pd.DataFrame:
     """Require one native-tool assignment per submitted input."""
     assignments = pd.read_csv(
         path,
@@ -48,6 +48,16 @@ def _read_assignments(path: Path, expected_ids: set[str]) -> pd.DataFrame:
         dtype=str,
         keep_default_na=False,
     )
+    if foldseek_models:
+        for column in ("representative", "member"):
+            original = assignments[column]
+            without_model = original.str.replace(
+                r"_xyz-enrich_MODEL_[0-9]+_", "_xyz-enrich_", n=1, regex=True
+            )
+            assignments[column] = original.mask(
+                ~original.isin(expected_ids) & without_model.isin(expected_ids),
+                without_model,
+            )
     observed = set(assignments["member"])
     if len(assignments) != len(expected_ids) or observed != expected_ids:
         raise ValueError(
@@ -102,70 +112,21 @@ def _write_cluster_table(
         staged.replace(output)
 
 
-def _prepare_structure_entry(
-    cif_file: Path, chains: pd.DataFrame, input_dir: Path
-) -> dict[str, str]:
-    """Write usable label-asym chains and return each chain's preparation status."""
-    import numpy as np
-
-    from plinder.data.annotations.cif_utils import (
-        get_structure_with_altloc,
-        read_mmcif_file,
-    )
-    from plinder.data.annotations.save_utils import save_cif_file
-
-    source = read_mmcif_file(cif_file)
-    atoms = get_structure_with_altloc(source)
-    statuses = {}
-    for row in chains.itertuples(index=False):
-        selected = atoms[atoms.chain_id == row.chain_asym_id].copy()
-        ca = selected[(selected.atom_name == "CA") & (selected.element == "C")]
-        # A 3Di description needs a local backbone neighbourhood.
-        if len(ca) < 4:
-            statuses[row.member] = "insufficient_coordinates"
-            continue
-        if not np.isfinite(selected.coord).all():
-            raise ValueError(
-                f"non-finite coordinates in {cif_file}, chain {row.chain_asym_id}"
-            )
-        # Foldseek rejects chains whose resolved residues are all unknown.
-        if np.all(ca.res_name == "UNK"):
-            statuses[row.member] = "unknown_residues"
-            continue
-        selected.chain_id[:] = "A"
-        # With --chain-name-mode 1, Foldseek appends the internal chain ID.
-        filename = row.member.removesuffix("_A")
-        save_cif_file(
-            selected,
-            filename,
-            input_dir / f"{filename}.cif",
-            source_block=source.block,
-            source_asym_ids={"A": row.chain_asym_id},
-        )
-        statuses[row.member] = "clustered"
-    return statuses
-
-
 def make_protein_structure_clusters(
     *,
     data_dir: Path,
-    cif_root: Path,
     scratch_dir: Path,
     threads: int = 4,
     lddt: float = 0.7,
     coverage: float = 0.8,
     force_update: bool = False,
 ) -> Path:
-    """Cluster release protein chains with Foldseek easy-cluster.
+    """Cluster release protein chains from the existing Foldseek search database.
 
-    Coverage applies to both resolved chains. The first model and deposited-first
-    alternate conformers match entry ingest. Chains with fewer than four resolved
-    C-alpha atoms retain a null assignment and ``insufficient_coordinates`` status.
-    Chains whose resolved residues are all UNK have ``unknown_residues`` status.
-    Missing source files and parsing failures stop the stage. Inputs and native
-    clustering intermediates are temporary; only the chain table is retained.
+    The search database contains all chains parsed from the deposited mmCIFs.
+    A temporary subdatabase selects the release protein chains, avoiding a
+    second read of every source structure and per-chain mmCIF exports.
     """
-    from plinder.data.pipeline.ingest import resolve_entry_paths
 
     if threads < 1:
         raise ValueError("protein clustering threads must be positive")
@@ -174,29 +135,38 @@ def make_protein_structure_clusters(
     chains = (
         pd.read_parquet(
             data_dir / "index/entry_chains.parquet",
-            columns=["entry_pdb_id", "chain_asym_id"],
+            columns=["entry_pdb_id", "chain_asym_id", "chain_auth_id"],
             filters=[("chain_receptor_type", "==", "protein")],
         )
         .sort_values(["entry_pdb_id", "chain_asym_id"])
         .reset_index(drop=True)
     )
-    keys = ["entry_pdb_id", "chain_asym_id"]
-    chains["member"] = pd.Series(
-        [f"chain_{i}_A" for i in range(len(chains))], dtype="string"
+    if chains["chain_auth_id"].isna().any():
+        raise ValueError("protein chains require author chain IDs for Foldseek lookup")
+    chains["member"] = (
+        "pdb_0000"
+        + chains["entry_pdb_id"].astype(str)
+        + "_xyz-enrich_"
+        + chains["chain_auth_id"].astype(str)
     )
+    if chains["member"].duplicated().any():
+        raise ValueError("protein chains have ambiguous Foldseek author chain IDs")
+    db = data_dir / "dbs/foldseek/foldseek"
+    lookup = Path(f"{db}.lookup")
+    source_manifest = Path(f"{db}.createdb-input.json")
+    for required in (db, lookup, source_manifest):
+        if not required.is_file():
+            raise FileNotFoundError(required)
     digest = hashlib.sha256()
-    digest.update(chains[keys].to_json(orient="values").encode())
-    sources = {}
-    for pdb_id in chains["entry_pdb_id"].unique():
-        path, _ = resolve_entry_paths(
-            pdb_id, cif_root=cif_root, validation_root=cif_root
-        )
+    digest.update(
+        chains[["entry_pdb_id", "chain_asym_id", "member"]]
+        .to_json(orient="values")
+        .encode()
+    )
+    digest.update(source_manifest.read_bytes())
+    for path in (db, lookup):
         stat = path.stat()
-        sources[pdb_id] = path
-        digest.update(
-            json.dumps([str(path.resolve()), stat.st_size, stat.st_mtime_ns]).encode()
-        )
-        digest.update(b"\n")
+        digest.update(f"{stat.st_size}:{stat.st_mtime_ns}".encode())
     parameters = {
         "backend": "foldseek",
         "version": subprocess.check_output(["foldseek", "version"], text=True).strip(),
@@ -206,12 +176,7 @@ def make_protein_structure_clusters(
         "cluster_mode": 0,
         "single_step_clustering": True,
         "alignment_type": 2,
-        "chain_name_mode": 1,
-        "model": 1,
-        "altloc": "first",
-        "minimum_ca_atoms": 4,
-        "exclude_unknown_only_chains": True,
-        "source_signature": digest.hexdigest(),
+        "source_database_signature": digest.hexdigest(),
     }
     metadata = json.dumps(parameters, sort_keys=True).encode()
     output = data_dir / RELEASE_PATHS["protein_structure_clusters"]
@@ -222,30 +187,24 @@ def make_protein_structure_clusters(
         prefix="plinder-structure-clusters-", dir=scratch_dir
     ) as temporary:
         work = Path(temporary)
-        input_dir = work / "chains"
-        input_dir.mkdir()
-        statuses: dict[str, str] = {}
-        groups = iter(chains.groupby("entry_pdb_id", sort=False))
-        with ThreadPoolExecutor(max_workers=threads) as executor:
-            # Bound queued entries and memory use, including on Python < 3.14.
-            while batch := list(islice(groups, threads)):
-                futures = [
-                    executor.submit(
-                        _prepare_structure_entry, sources[pdb_id], group, input_dir
-                    )
-                    for pdb_id, group in batch
-                ]
-                for future in futures:
-                    statuses.update(future.result())
-        prepared = {
-            member for member, status in statuses.items() if status == "clustered"
-        }
-        if prepared:
+        expected = set(chains["member"])
+        keys: dict[str, str] = {}
+        with lookup.open() as handle:
+            for line in handle:
+                key, name, _ = line.rstrip("\n").split("\t", 2)
+                if name in expected and name not in keys:
+                    # For NMR entries this is the first available model.
+                    keys[name] = key
+        if keys:
+            key_file = work / "keys.tsv"
+            key_file.write_text("".join(f"{key}\n" for key in keys.values()))
+            subdb = work / "subdb"
+            run(["foldseek", "createsubdb", str(key_file), str(db), str(subdb)])
             run(
                 [
                     "foldseek",
-                    "easy-cluster",
-                    str(input_dir),
+                    "cluster",
+                    str(subdb),
                     str(work / "clusters"),
                     str(work / "tmp"),
                     "--lddt-threshold",
@@ -260,13 +219,26 @@ def make_protein_structure_clusters(
                     "1",
                     "--alignment-type",
                     "2",
-                    "--chain-name-mode",
-                    "1",
                     "--threads",
                     str(threads),
                 ]
             )
-            assignments = _read_assignments(work / "clusters_cluster.tsv", prepared)
+            assignment_file = work / "clusters.tsv"
+            run(
+                [
+                    "foldseek",
+                    "createtsv",
+                    str(subdb),
+                    str(subdb),
+                    str(work / "clusters"),
+                    str(assignment_file),
+                    "--threads",
+                    str(threads),
+                ]
+            )
+            assignments = _read_assignments(
+                assignment_file, set(keys), foldseek_models=True
+            )
         else:
             assignments = pd.DataFrame(columns=["representative", "member"])
         _write_cluster_table(
@@ -274,7 +246,7 @@ def make_protein_structure_clusters(
             assignments,
             output,
             metadata,
-            missing_status=statuses,
+            missing_status="not_in_foldseek_db",
         )
     return output
 

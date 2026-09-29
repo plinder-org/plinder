@@ -114,10 +114,8 @@ class IngestPipeline:
 
     @utils.ingest_flow_control
     def make_protein_structure_clusters(self) -> None:
-        cif_root, _ = self._entry_source_roots()
         protein_clusters.make_protein_structure_clusters(
             data_dir=self.plinder_dir,
-            cif_root=cif_root,
             scratch_dir=Path(tempfile.gettempdir()),
             threads=self.cfg.flow.protein_clustering_cpu,
             lddt=self.cfg.flow.protein_structure_cluster_lddt,
