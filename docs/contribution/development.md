@@ -70,8 +70,6 @@ $ pip install -r requirements_data.txt
 ```
 
 This includes Linux pytorch (for the loader) and pipeline-specific tools.
-For Windows and MacOS users, please see the relevant
-[_Docker_](#docker-target) resources.
 :::
 
 ### Enabling Pre-commit hooks
@@ -81,20 +79,6 @@ Please install pre-commit hooks, that will run the same code quality checks as t
 ```console
 $ pre-commit install
 ```
-
-(docker-target)=
-### Alternative: Using a Docker container
-
-We also publish the `plinder` project as a
-[docker container](https://github.com/plinder-org/plinder/pkgs/container/plinder)
-as alternative to the _Conda_-based installation, to ensure the highest level of
-compatibility with non-Linux platforms.
-See the relevant docker resources here for more details:
-
-- `docker-compose.yml`: defines a `base` image, the `plinder` "app" and a `test`
-  container
-- `dockerfiles/base/`: contains the files for the `base` image
-- `dockerfiles/main/`: contains the files for the `plinder` "app" image
 
 ## Testing and linting
 

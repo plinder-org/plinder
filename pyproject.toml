@@ -13,7 +13,7 @@ dependencies = [
     "rdkit>=2025.09.1",
     "pyarrow",
     "omegaconf",
-    "duckdb",
+    "duckdb>=1.5",
     "cloudpathlib>=0.25,<0.26",
 ]
 description = "PLINDER: Protein & Ligand INteraction Dataset and Evaluation Resource"
