@@ -115,3 +115,79 @@ def test_build_ligand_affinity_table_keeps_empty_schema(tmp_path: Path) -> None:
     assert str(result["ligand_binding_affinity"].dtype) == "float64"
     assert str(result["ligand_binding_affinity_measurement_count"].dtype) == "Int64"
     assert str(result["system_has_binding_affinity"].dtype) == "bool"
+
+
+def test_updated_affinity_matches_full_rebuild(tmp_path: Path) -> None:
+    base = tmp_path / "base"
+    updated = tmp_path / "updated"
+    for root in (base, updated):
+        (root / "index").mkdir(parents=True)
+    affinity_dir = base / "dbs" / "affinity"
+    affinity_dir.mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "pdbid_ligid": ["1ABC_LIG", "2DEF_LIG", "3GHI_LIG"],
+            "target_sequence": ["ACDEFG", "HIJKLM", "NPQRST"],
+            "endpoint": ["Ki", "Ki", "Kd"],
+            "pchembl": [8.0, 9.0, 7.0],
+            "count": [1, 1, 1],
+        }
+    ).to_parquet(affinity_dir / "candidates.parquet", index=False)
+    pd.DataFrame({"source_row": [7]}).to_parquet(
+        affinity_dir / "measurements.parquet", index=False
+    )
+
+    def write_index(root: Path, entries: list[tuple[str, str, str]]) -> None:
+        pd.DataFrame(
+            {
+                "ligand_id": [ligand for _, ligand, _ in entries],
+                "system_id": [f"{pdb_id}__1" for pdb_id, _, _ in entries],
+                "entry_pdb_id": [pdb_id for pdb_id, _, _ in entries],
+                "ligand_ccd_code": ["LIG"] * len(entries),
+                "ligand_protein_chains_asym_id": [["1.A"]] * len(entries),
+            }
+        ).to_parquet(root / "index/annotation_table.parquet", index=False)
+        pd.DataFrame(
+            {
+                "entry_pdb_id": [pdb_id for pdb_id, _, _ in entries],
+                "chain_asym_id": ["A"] * len(entries),
+                "chain_sequence": [sequence for _, _, sequence in entries],
+            }
+        ).to_parquet(root / "index/entry_chains.parquet", index=False)
+
+    write_index(
+        base,
+        [
+            ("1abc", "old1", "ACDEFG"),
+            ("2def", "old2", "HIJKLM"),
+            ("4jkl", "old4", "AAAAAA"),
+        ],
+    )
+    publish_affinity_tables(base)
+    write_index(
+        updated,
+        [
+            ("1abc", "old1", "ACDEFG"),
+            ("2def", "new2", "HIJKLM"),
+            ("3ghi", "new3", "NPQRST"),
+        ],
+    )
+    publish_affinity_tables(
+        updated,
+        affinity_dir=affinity_dir,
+        base_dir=base,
+        changed_pdb_ids=["2def", "3ghi"],
+        removed_pdb_ids=["2def", "4jkl"],
+    )
+
+    expected = build_ligand_affinity_table(
+        updated / "index/annotation_table.parquet",
+        updated / "index/entry_chains.parquet",
+        affinity_dir / "candidates.parquet",
+    )
+    pd.testing.assert_frame_equal(
+        pd.read_parquet(updated / "index/ligand_affinity.parquet"), expected
+    )
+    assert pd.read_parquet(updated / "index/bindingdb_measurements.parquet")[
+        "source_row"
+    ].tolist() == [7]
