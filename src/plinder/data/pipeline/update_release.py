@@ -2639,6 +2639,9 @@ def apply_release_update(
         name: set(map(str, values))
         for name, values in report["alignments"]["full_queries"].items()
     }
+    holo_repair_queries = set(
+        map(str, report["alignment_repair_queries"].get("holo", []))
+    )
 
     completed = set(report["completed_stages"])
     if "scores" not in completed:
@@ -2649,9 +2652,9 @@ def apply_release_update(
                 base_data_dir=base,
                 affected=scoring_affected,
                 full_alignment_queries=full_query_sets["holo"],
-                targeted_alignment_queries=set(
-                    map(str, report["alignment_repair_queries"]["holo"])
-                ).difference(scoring_affected),
+                targeted_alignment_queries=holo_repair_queries.difference(
+                    scoring_affected
+                ),
                 scorer_cfg=cfg.scorer,
                 scratch_dir=scratch_dir / "holo-score-repair",
                 threads=threads,
@@ -2663,12 +2666,14 @@ def apply_release_update(
                 repair_interface_scores(
                     workspace,
                     affected=scoring_affected,
-                    full_alignment_queries=full_query_sets["holo"],
+                    full_alignment_queries=holo_repair_queries,
                     scratch_dir=scratch_dir / "interface-score-repair",
                     threads=threads,
                     memory_limit=memory_limit,
                 )
-                if _entries_with_interfaces(base, workspace, scoring_affected)
+                if _entries_with_interfaces(
+                    base, workspace, scoring_affected | holo_repair_queries
+                )
                 else {"reused_base": True}
             )
         if "apo" in search_databases:

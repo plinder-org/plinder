@@ -131,7 +131,9 @@ def extend_ligand_clusters(
             numeric=False,
         )
         direct["sucos_shape_pocket_qcov"] = np.floor(
-            direct["sucos_shape"] * direct["pocket_qcov"] / 100
+            direct["sucos_shape"].astype("Int32")
+            * direct["pocket_qcov"].astype("Int32")
+            / 100
         )
         smiles = current["ligand_smiles_id"].dropna().astype("int64")
         changed_smiles = smiles.loc[smiles.index.intersection(changed_ids)]

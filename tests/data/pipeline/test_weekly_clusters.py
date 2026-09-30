@@ -41,6 +41,7 @@ def test_weekly_ligands_join_existing_representatives(tmp_path: Path):
     (updated / "fingerprints").mkdir()
     direct_column = "pocket_qcov__90__ligand__directed_set_cover"
     direct_component = "pocket_qcov__90__ligand__reciprocal_component"
+    shape_column = "sucos_shape_pocket_qcov__90__ligand__directed_set_cover"
     chemical_column = "tanimoto_similarity_ecfp4_1024__90__ligand__set_cover"
     chemical_component = (
         "tanimoto_similarity_ecfp4_1024__90__ligand__reciprocal_component"
@@ -54,6 +55,8 @@ def test_weekly_ligands_join_existing_representatives(tmp_path: Path):
             f"{direct_column}__is_centroid": [True, True],
             f"{direct_column}__coverage_count": [2, 1],
             f"{direct_column}__coverage_fraction": [1.0, 1.0],
+            shape_column: ["c0", "c1"],
+            f"{shape_column}__is_centroid": [True, True],
             chemical_column: ["t0", "t1"],
             chemical_component: ["u0", "u1"],
             f"{chemical_column}__is_centroid": [True, True],
@@ -82,9 +85,9 @@ def test_weekly_ligands_join_existing_representatives(tmp_path: Path):
         {
             "query_ligand_id": ["3ccc__1__1.X"],
             "target_ligand_id": ["1aaa__1__1.X"],
-            "pocket_qcov": [95],
+            "pocket_qcov": pd.Series([100], dtype="int8"),
             "pli_qcov": [70],
-            "sucos_shape": [80],
+            "sucos_shape": pd.Series([100], dtype="int8"),
         }
     ).to_parquet(updated / "exports/ligand_similarity_scores/cc.parquet", index=False)
     pd.DataFrame(
@@ -100,6 +103,7 @@ def test_weekly_ligands_join_existing_representatives(tmp_path: Path):
     ).set_index("ligand_id")
 
     assert result.at["3ccc__1__1.X", direct_column] == "c0"
+    assert result.at["3ccc__1__1.X", shape_column] == "c0"
     assert result.at["3ccc__1__1.X", chemical_column] == "t0"
     assert pd.isna(result.at["3ccc__1__1.X", direct_component])
     assert pd.isna(result.at["3ccc__1__1.X", chemical_component])

@@ -1109,6 +1109,10 @@ def test_release_update_runs_only_configured_search_databases(tmp_path, monkeypa
     validation_root.mkdir()
     base = tmp_path / "base"
     base.mkdir()
+    (base / "index").mkdir()
+    pd.DataFrame({"entry_pdb_id": ["2def"]}).to_parquet(
+        base / "index/interface_annotation_table.parquet", index=False
+    )
     workspace = tmp_path / "workspace"
     (workspace / "index").mkdir(parents=True)
     state_path = workspace / "weekly_update.json"
@@ -1147,6 +1151,7 @@ def test_release_update_runs_only_configured_search_databases(tmp_path, monkeypa
         "plan": [],
         "alignments": [],
         "scores": [],
+        "interface_repair_queries": [],
     }
 
     monkeypatch.setattr(update_release, "_load_configuration", lambda _path: cfg)
@@ -1197,7 +1202,7 @@ def test_release_update_runs_only_configured_search_databases(tmp_path, monkeypa
 
     def plan_alignments(*_args, search_db, **_kwargs):
         calls["plan"].append(search_db)
-        return {"1abc"}
+        return {"1abc", "2def"} if search_db == "holo" else {"1abc"}
 
     def repair_alignments(*_args, search_db, full_queries, **_kwargs):
         calls["alignments"].append(search_db)
@@ -1218,7 +1223,9 @@ def test_release_update_runs_only_configured_search_databases(tmp_path, monkeypa
     monkeypatch.setattr(
         update_release,
         "repair_interface_scores",
-        lambda *_args, **_kwargs: {},
+        lambda *_args, **kwargs: calls["scores"].append("interface")
+        or calls["interface_repair_queries"].append(kwargs["full_alignment_queries"])
+        or {},
     )
     monkeypatch.setattr(
         update_release,
@@ -1275,7 +1282,8 @@ def test_release_update_runs_only_configured_search_databases(tmp_path, monkeypa
         "overlay": [["holo"]],
         "plan": ["holo", "pred"],
         "alignments": ["holo", "pred"],
-        "scores": ["holo", "pred"],
+        "scores": ["holo", "interface", "pred"],
+        "interface_repair_queries": [{"1abc", "2def"}],
     }
     assert result["alignments"]["full_queries"] == {
         "holo": ["1abc"],
